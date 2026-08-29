@@ -297,8 +297,24 @@ from oto_mcp.db import _schema, schema
 # y satisfait sans instantané. Aucune instruction SQL n'a bougé : l'assemblé grandit
 # de 634 caractères (148788 → 149422), exactement la taille des commentaires ajoutés, et
 # `test_les_tables_creees_sont_celles_qu_on_attend` le vérifie côté exécuté.
-EMPREINTE = "f298667e5c54b7cbce4cfd99c2ac181edba202f70c80c025e84b139d2396a1f7"
-LONGUEUR = 150306
+# 2026-09-09 (métrage par unité) : `tool_calls.quantity` — le nombre d'items TRAITÉS
+# par un appel, pour qu'un appel bulk ne compte plus comme un appel simple côté
+# facturation. ADDITIVE et NULLABLE : la prod qui tourne l'ancien code ne l'écrit ni
+# ne la lit, et l'ALTER d'`init_db` la pose sur la base PARTAGÉE sans réécrire une
+# ligne (colonne sans défaut). Pas d'index — cf. le commentaire de l'ALTER.
+# ⚠️ Valeurs RECALCULÉES sur le tronc du jour, jamais recopiées d'une version
+# antérieure de cette branche : elle a été rebasée deux fois, et chaque rebase
+# gèle un DDL différent. Recopier l'ancienne empreinte gèlerait un schéma mort.
+# ⚠️ Arithmétique vérifiée APRÈS REBASE sur le tronc du 09/09 (3ᵉ rebase de cette
+# branche, conflit avec planity #913 sur CES deux lignes) : le fragment `USAGE`
+# grandit de 843 caractères (11 292 → 12 135 — le commentaire de `quantity`, la
+# colonne, et la virgule ajoutée après `token_kind`) et l'assemblé part de 149 422
+# (le tronc, planity inclus) pour arriver à 150 265. Le delta tombe juste des deux
+# côtés : rien d'autre n'a bougé dans le DDL. Les deux empreintes du conflit —
+# dc84b4e2 (tronc seul) et 36834a62 (branche seule) — sont mortes : aucune ne décrit
+# le DDL fusionné, et c'est exactement le cas que l'avertissement ci-dessus vise.
+EMPREINTE = "c756be2bbbd31a46e997081fcf58d64f61176f5ccebc048f7a8314b2b2b08e98"
+LONGUEUR = 151166
 
 
 _CREATE_TABLE = re.compile(r"^CREATE TABLE IF NOT EXISTS (\w+)", re.M)

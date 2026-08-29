@@ -35,7 +35,7 @@ from fastmcp import FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, output_projection
+from .. import access, output_projection, session_org
 from ..connectors import verify as connector_verify
 
 # Ce qu'un balayage de sourcing lit sur une offre / une entreprise (`full=True` rend tout).
@@ -99,6 +99,20 @@ def _project(result: Any, fields: tuple, full: bool) -> Any:
     if full:
         return result
     return output_projection.project(result, items_path="data", fields=fields)
+
+
+def _trace_quantity(result: Any) -> None:
+    """Métrage par unité (billing Tulina, 21/08) — le nombre de records RENDUS
+    dans `data`, avant projection (`_project` ne change jamais la longueur de
+    la liste, seulement les clés de chaque item). C'est ce que TheirStack
+    facture réellement : 1 crédit API/offre sur jobs/search, 3/entreprise sur
+    companies/search — voir le docstring du module. Les deux tools résolvent
+    au MÊME connecteur (`namespace_of` = premier token, "theirstack" pour les
+    deux : aucun préfixe multi-token "theirstack_jobs"/"theirstack_companies"
+    n'est déclaré au registre) — c'est `tulina_usage/pricing.py` qui doit
+    donc distinguer les deux TAUX par nom de TOOL, pas par connecteur."""
+    if isinstance(result, dict) and isinstance(result.get("data"), list):
+        session_org.note_call_trace(quantity=len(result["data"]))
 
 
 def register(mcp: FastMCP) -> None:
@@ -179,6 +193,7 @@ def register(mcp: FastMCP) -> None:
             payload["job_country_code_or"] = list(job_country_code_or)
         payload = _merge_extra(payload, extra)
         result = _run(lambda: _client().search_jobs(payload))
+        _trace_quantity(result)
         return _project(result, _JOB_FIELDS, full)
 
     @mcp.tool()
@@ -235,4 +250,5 @@ def register(mcp: FastMCP) -> None:
             payload["company_country_code_or"] = list(company_country_code_or)
         payload = _merge_extra(payload, extra)
         result = _run(lambda: _client().search_companies(payload))
+        _trace_quantity(result)
         return _project(result, _COMPANY_FIELDS, full)

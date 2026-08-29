@@ -452,6 +452,10 @@ _SERVER_INSTRUCTIONS = instructions.render()
 # remonte qu'à ~35 jours, donc la trace disparaît alors que la valeur forcée reste —
 # la question a été posée et fermée en connaissance de cause. Le « qui » n'est pas
 # répété ici : le sink stampe déjà `sub` et `org_id`.
+#
+# `quantity` (21/08, billing Tulina) utilise le MÊME seam (`note_call_trace`) mais
+# N'EST PAS dans cette liste : elle a SA PROPRE colonne (`tool_calls.quantity`),
+# posée directement par `_calllog_sink` ci-dessous — voir ce bloc, pas ici.
 _TRACED_ARGS = ("ns_id", "doctrine_version", "instance", "readonly_forced")
 
 
@@ -756,6 +760,21 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
             if trace:
                 row["args"] = {**(row.get("args") or {}),
                                **{k: v for k, v in trace.items() if k in _TRACED_ARGS}}
+                # Quantité d'items TRAITÉS par cet appel (métrage/facturation, pas
+                # de debug) — SA PROPRE colonne, délibérément PAS fondue dans `args`
+                # via `_TRACED_ARGS`, qui reste la liste fermée déclarée plus haut.
+                # `note_call_trace(quantity=N)` est le seam ; un tool bulk
+                # (linkedin_aiark_search, fullenrich_enrich_linkedin,
+                # theirstack_*_search) l'appelle au point où N est connu.
+                # ⚠️ `>= 0`, PAS `> 0` : un zéro TRACÉ n'est pas un appel non tracé.
+                # Une recherche qui ne rend rien a bien traité zéro item, et la
+                # colonne doit le dire — NULL veut dire « ce tool ne trace pas »,
+                # que le consommateur lit comme 1. Confondre les deux fait facturer
+                # un item à une recherche vide (3 crédits pour zéro entreprise sur
+                # `theirstack_companies_search`).
+                quantity = trace.get("quantity")
+                if isinstance(quantity, int) and quantity >= 0:
+                    row["quantity"] = quantity
         # noqa: SILENT — dette déclarée : tout l'enrichissement du journal tombe d'un bloc (#424, verdict C)
         except Exception:
             pass

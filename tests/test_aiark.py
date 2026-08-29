@@ -365,3 +365,53 @@ def test_la_description_servie_dit_qu_un_echec_n_est_pas_une_absence():
     assert "never record a not-found" in d      # l'instruction, mot pour mot
     assert "retryable: true" in d               # le verdict machine, nommé
     assert "bill a second credit" in d          # le coût de la reprise, assumé
+
+# --- métrage par unité (billing Tulina, 21/08) ────────────────────────────────
+
+def _tool(name):
+    from fastmcp import FastMCP
+    from oto_mcp.tools import aiark
+
+    m = FastMCP("t")
+    aiark.register(m)
+    return asyncio.run(m.get_tool(name))
+
+
+def test_search_traces_the_returned_result_count_not_the_requested_size():
+    """`tool_calls.quantity` doit refléter ce qu'AI Ark a RENDU (et facture — "BILLS
+    CREDITS per returned record"), pas `size` demandé : une dernière page peut en
+    rendre moins."""
+    with patch("oto_mcp.access.resolve_api_key", return_value=("fake-key", False)), \
+         patch("oto_mcp.tools.aiark.session_org.note_call_trace") as trace, \
+         patch("oto.tools.aiark.client.AiArkClient") as client_cls:
+        client_cls.return_value.search_people.return_value = {
+            "content": [{"id": "1"}, {"id": "2"}, {"id": "3"}],
+            "totalElements": 3, "totalPages": 1,
+        }
+        _tool("linkedin_aiark_search").fn(op="people", size=50)
+
+    trace.assert_called_once_with(quantity=3)
+
+
+def test_search_companies_also_traces_by_returned_count():
+    with patch("oto_mcp.access.resolve_api_key", return_value=("fake-key", False)), \
+         patch("oto_mcp.tools.aiark.session_org.note_call_trace") as trace, \
+         patch("oto.tools.aiark.client.AiArkClient") as client_cls:
+        client_cls.return_value.search_companies.return_value = {
+            "content": [{"id": "1"}], "totalElements": 1, "totalPages": 1,
+        }
+        _tool("linkedin_aiark_search").fn(op="companies")
+
+    trace.assert_called_once_with(quantity=1)
+
+
+def test_search_does_not_trace_when_content_is_missing():
+    """Un payload sans `content` liste (forme inattendue) ne doit pas planter la
+    trace — juste ne rien poser (le consommateur traite l'absence comme 1)."""
+    with patch("oto_mcp.access.resolve_api_key", return_value=("fake-key", False)), \
+         patch("oto_mcp.tools.aiark.session_org.note_call_trace") as trace, \
+         patch("oto.tools.aiark.client.AiArkClient") as client_cls:
+        client_cls.return_value.search_people.return_value = {"error": "malformed"}
+        _tool("linkedin_aiark_search").fn(op="people")
+
+    trace.assert_not_called()

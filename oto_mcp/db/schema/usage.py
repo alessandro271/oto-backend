@@ -107,7 +107,19 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     -- NULL sur une session interactive (pas de jeton nommé) et sur tout
     -- l'historique. PAS d'index : enquête, pas chemin chaud.
     token_id BIGINT,
-    token_kind TEXT
+    token_kind TEXT,
+    -- Nombre d'items TRAITÉS par cet appel (extension OTO-LOCALE, 2026-08-21) —
+    -- un appel bulk (ex. linkedin_aiark_search jusqu'à 100 résultats,
+    -- fullenrich_enrich_linkedin jusqu'à 100 contacts SOUMIS) compte pour PLUS
+    -- qu'UN appel côté métrage/facturation. NULL = non tracé pour ce tool
+    -- (l'écrasante majorité — un consommateur doit traiter NULL comme 1, PAS
+    -- comme 0). Posé via le même seam que `_TRACED_ARGS`
+    -- (`session_org.note_call_trace(quantity=N)`), mais dans SA PROPRE colonne
+    -- plutôt que fondu dans `args` : c'est une donnée de premier ordre pour un
+    -- consommateur de facturation (tulina-usage), pas une trace de debug —
+    -- une colonne INTEGER indexable bat une extraction JSONB pour ce qu'un tel
+    -- consommateur en fait (sommer/filtrer par org/période).
+    quantity INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_tool_calls_created_at ON tool_calls(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tool_calls_sub ON tool_calls(sub);

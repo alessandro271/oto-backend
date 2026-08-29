@@ -16,7 +16,7 @@ from fastmcp import FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access
+from .. import access, session_org
 from ..connectors import verify as connector_verify
 
 _CREDITS_URL = "https://app.fullenrich.com/api/v1/account/credits"
@@ -97,6 +97,14 @@ def register(mcp: FastMCP) -> None:
             # NOMBRE de contacts, comptée en un seul geste (l'ancienne boucle faisait
             # une requête par contact — jusqu'à 100 par job).
             access.record_platform_usage("fullenrich", len(contacts))
+        # Métrage par unité (billing Tulina, 21/08) — INCONDITIONNEL (platform key
+        # OU BYO), contrairement à `record_platform_usage` ci-dessus (qui ne compte
+        # que le quota interne oto sur la clé plateforme) : `tool_calls.quantity`
+        # sert un consommateur EXTERNE (tulina-usage) qui facture l'org quel que
+        # soit le mode de clé. Compte les contacts SOUMIS, pas ceux effectivement
+        # enrichis/trouvés — ce dernier chiffre n'existe qu'après coup, dans
+        # `fullenrich_result` (job async), une ligne de journal SÉPARÉE.
+        session_org.note_call_trace(quantity=len(contacts))
         return {
             "enrichment_id": enrichment_id,
             "submitted": len(contacts),

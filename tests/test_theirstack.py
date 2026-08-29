@@ -168,6 +168,47 @@ def test_companies_search_empty_result_is_not_an_error():
     assert out == {"metadata": {"total_results": 0, "truncated_results": 0}, "data": []}
 
 
+# --- métrage par unité (billing Tulina, 21/08) ────────────────────────────────
+
+def test_jobs_search_traces_the_returned_job_count():
+    with patch("oto_mcp.tools.theirstack.session_org.note_call_trace") as trace, \
+         patch("oto.tools.theirstack.client.TheirStackClient") as cls:
+        cls.return_value.search_jobs.return_value = {
+            "metadata": {}, "data": [_JOB, _JOB, _JOB]}
+        _tool("theirstack_jobs_search").fn(company_names=["PUIG & FILS"])
+    trace.assert_called_once_with(quantity=3)
+
+
+def test_jobs_search_traces_by_returned_count_not_by_limit():
+    with patch("oto_mcp.tools.theirstack.session_org.note_call_trace") as trace, \
+         patch("oto.tools.theirstack.client.TheirStackClient") as cls:
+        cls.return_value.search_jobs.return_value = {"metadata": {}, "data": [_JOB]}
+        _tool("theirstack_jobs_search").fn(company_names=["PUIG & FILS"], limit=25)
+    trace.assert_called_once_with(quantity=1)  # not 25 (`limit`), what was ACTUALLY returned
+
+
+def test_companies_search_traces_the_returned_company_count():
+    with patch("oto_mcp.tools.theirstack.session_org.note_call_trace") as trace, \
+         patch("oto.tools.theirstack.client.TheirStackClient") as cls:
+        cls.return_value.search_companies.return_value = {
+            "metadata": {}, "data": [_COMPANY, _COMPANY]}
+        _tool("theirstack_companies_search").fn(company_names=["PUIG & FILS"])
+    trace.assert_called_once_with(quantity=2)
+
+
+def test_companies_search_traces_zero_on_an_empty_result():
+    """`data: []` is a NORMAL result (module docstring), not an error — the trace
+    call fires with `quantity=0`, and the sink STORES that zero (`>= 0`). A traced
+    zero is not an untraced call: NULL means "this tool doesn't trace", which a
+    billing consumer reads as 1. Dropping the zero would bill 3 credits for a
+    search that found no company."""
+    with patch("oto_mcp.tools.theirstack.session_org.note_call_trace") as trace, \
+         patch("oto.tools.theirstack.client.TheirStackClient") as cls:
+        cls.return_value.search_companies.return_value = {"metadata": {}, "data": []}
+        _tool("theirstack_companies_search").fn(company_names=["Inconnue SARL"])
+    trace.assert_called_once_with(quantity=0)
+
+
 def test_invalid_args_never_hit_the_client():
     with patch("oto.tools.theirstack.client.TheirStackClient") as cls:
         with pytest.raises(McpError):

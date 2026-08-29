@@ -20,7 +20,7 @@ from fastmcp import FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, output_projection
+from .. import access, output_projection, session_org
 from ..connectors import verify as connector_verify
 
 # ── Vue de tri d'une page de recherche ───────────────────────────────────────────
@@ -370,6 +370,14 @@ def register(mcp: FastMCP) -> None:
         else:
             raise McpError(ErrorData(code=INVALID_PARAMS,
                                      message="op doit être 'people' ou 'companies'"))
+        # Métrage par unité (billing Tulina, 21/08) : le nombre de records RENDUS
+        # dans cette page, pas `size` demandé (une page en fin de résultat peut en
+        # rendre moins). C'est ce qu'AI Ark facture réellement ("BILLS CREDITS per
+        # returned record", docstring ci-dessus) — le même axe que ce tool doit
+        # exposer à `tool_calls.quantity`.
+        content = result.get("content") if isinstance(result, dict) else None
+        if isinstance(content, list):
+            session_org.note_call_trace(quantity=len(content))
         return _shape(result, op, full, fields)
 
     @mcp.tool()

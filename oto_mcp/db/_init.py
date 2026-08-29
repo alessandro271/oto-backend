@@ -345,6 +345,15 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # le tableau de bord aurait affiché des vides qu'on aurait lus « ces outils ne
     # servent rien ». Un banc joue désormais ce scénario (DROP COLUMN puis init_db).
     conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS result_size INTEGER")
+    # Métrage par UNITÉ traitée (2026-08-21, consommateur de facturation
+    # tulina-usage) : un appel bulk (linkedin_aiark_search jusqu'à 100 résultats,
+    # fullenrich_enrich_linkedin jusqu'à 100 contacts soumis, theirstack_*_search)
+    # vaut plus qu'UN appel. Additif, NULL sur tout l'historique (non
+    # reconstructible — le compte n'existait dans aucune donnée déjà écrite).
+    # ⚠️ PAS d'index, même raisonnement que les trois colonnes de #117 ci-dessus :
+    # la somme par org/période est une lecture d'agrégat périodique, pas un chemin
+    # chaud, et un index de plus sur `tool_calls` se paie à CHAQUE appel journalisé.
+    conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS quantity INTEGER")
     # #493 : le journal de paiement porte le customer Mollie de la tentative. Le
     # miroir `org_subscriptions` n'est posé qu'à `confirm` — entre deux clics de
     # souscription il n'y avait donc RIEN à relire, et un second customer Mollie
