@@ -40,6 +40,7 @@ from ... import access
 from ...datastore import identite
 from ...datastore import schema as dsv2
 from ...datastore.core import NamespaceNotFound, NamespaceReadOnly, make_store
+from ...datastore.errors import SchemaDefinitionError
 from .._authz import SUB_ONLY
 from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .common import ns_not_found
@@ -181,10 +182,24 @@ def _set_schema(ctx: ResolvedCtx, inp: SetSchemaInput) -> dict:
         raise ns_not_found(ctx.sub, inp.namespace)
     except NamespaceReadOnly:
         raise AuthzDenied(403, "namespace_read_only")
+    except SchemaDefinitionError as e:
+        # ⚠️ **Le refus PARLE désormais, et c'était le défaut le plus cher de la
+        # nuit du 07→08/09/2026.** La route rendait `{"error":"invalid_schema"}` —
+        # vingt-six caractères — pour TOUT refus de pose. Une session a tâtonné sur
+        # cinq essais, conclu que `pattern` ne fonctionnait pas, et s'apprêtait à
+        # remonter une capacité manquante. Le message existait et disait exactement
+        # quoi corriger : « pattern exige max_length sur le même champ — le coût d'un
+        # motif se majore contre la longueur de ce qu'il lit ». Personne ne l'a vu.
+        #
+        # Le silence était délibéré, et sa raison était bonne : UN des refus de pose
+        # cite des valeurs de données (un échantillon de doublons de clé métier).
+        # Mais il a été appliqué à tous. `SchemaDefinitionError` marque ceux qui ne
+        # parlent que du schéma POSÉ — l'appelant l'a écrit, le lui rendre ne lui
+        # apprend rien qu'il n'ait déjà envoyé.
+        raise AuthzDenied(400, "invalid_schema", str(e))
     except ValueError:
-        # Le détail du refus n'était pas rendu par la route (`invalid_schema` nu) —
-        # inchangé ici : le message du store cite des valeurs de données (échantillon
-        # de doublons), et l'ouvrir serait un choix, pas une migration.
+        # Les autres refus restent muets : leur message cite des valeurs de LIGNES,
+        # et les ouvrir serait un choix de produit, pas une correction.
         raise AuthzDenied(400, "invalid_schema")
 
 

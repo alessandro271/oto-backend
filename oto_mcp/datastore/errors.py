@@ -45,6 +45,32 @@ class RowValidationError(ValueError):
         super().__init__(tete + " : " + " ; ".join(errors))
 
 
+class SchemaDefinitionError(ValueError):
+    """Le SCHÉMA lui-même est refusé — sa déclaration, jamais les données.
+
+    ⚠️ **Ce type existe pour une seule raison : rendre le message à l'appelant.**
+    La route REST de pose de schéma refusait tout `ValueError` par un `invalid_schema`
+    NU — vingt-six caractères, `{"error":"invalid_schema"}` — et le détail restait
+    côté serveur. Mesuré le 08/09/2026 : une session a tâtonné sur cinq essais, conclu
+    que `pattern` ne fonctionnait pas, et s'apprêtait à remonter une capacité
+    manquante. Le message existait, il disait exactement quoi corriger, et personne ne
+    l'a jamais vu.
+
+    Le silence était DÉLIBÉRÉ et sa raison était bonne : un des refus de pose cite des
+    valeurs de données (un échantillon de doublons de clé métier), et l'ouvrir aurait
+    été un choix, pas une correction. Mais il a été appliqué à TOUS, y compris à ceux
+    qui ne citent rien d'autre que la déclaration qu'on vient d'envoyer.
+
+    **D'où la ligne de partage, et elle est nette** : ce type porte les refus qui ne
+    parlent que du schéma POSÉ — l'appelant l'a écrit, il le connaît, le lui rendre ne
+    lui apprend rien qu'il n'ait déjà. Un refus qui cite des valeurs de LIGNES reste un
+    `ValueError` ordinaire, et reste muet sur la face publique.
+
+    Corollaire pour qui ajoute un refus ici : la question n'est pas « est-ce grave »,
+    c'est **« ce message cite-t-il autre chose que ce que l'appelant vient
+    d'envoyer ? »**"""
+
+
 class BusinessKeyRequired(ValueError):
     """Écriture refusée sur un tableau qui n'accepte que des écritures VISANT une
     ligne existante (`schema.key_required`, #516).

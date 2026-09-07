@@ -26,7 +26,7 @@ from typing import Optional
 from . import acces_agent as aga
 from . import schema as dsv2
 from .. import db
-from .errors import ColumnAbsent, RowValidationError
+from .errors import ColumnAbsent, RowValidationError, SchemaDefinitionError
 from .columns import _META_COLS
 
 
@@ -83,10 +83,10 @@ class SchemaOpsMixin:
         est celui qu'on apprend à ignorer."""
         ns_id = self._resolve(namespace, write=True)
         if schema is not None and not isinstance(schema, dict):
-            raise ValueError("schema doit être un objet {fields:[...]} ou null")
+            raise SchemaDefinitionError("schema doit être un objet {fields:[...]} ou null")
         def_errors = dsv2.validate_schema_def(schema)
         if def_errors:
-            raise ValueError("schéma invalide : " + " ; ".join(def_errors))
+            raise SchemaDefinitionError("schéma invalide : " + " ; ".join(def_errors))
         new_key = (schema or {}).get("key")
         new_key = new_key if isinstance(new_key, str) and new_key else None
         if new_key:
@@ -109,7 +109,7 @@ class SchemaOpsMixin:
         # par une seule garde — et elle tombe AVANT `set_datastore_schema`, rien n'est
         # écrit quand elle refuse.
         if (refus := aga.refus_de_schema(ancien, schema, geste=geste)):
-            raise ValueError(refus)
+            raise SchemaDefinitionError(refus)
         efface = dsv2.declarations_effacees(ancien, schema, retraits_annonces)
         db.set_datastore_schema(ns_id, schema)
         # Après l'écriture du schéma : la capture n'a de sens que si la déclaration
@@ -218,12 +218,12 @@ class SchemaOpsMixin:
         ns_id = self._resolve(namespace, write=True)
         current = self._schema_of(ns_id) or {}
         if not isinstance(current, dict):
-            raise ValueError("le schéma courant n'est pas un objet — repose-le avec "
+            raise SchemaDefinitionError("le schéma courant n'est pas un objet — repose-le avec "
                              "data_set_schema avant de le patcher")
         if (fields is None and remove is None and remove_attrs is None
                 and strict is None and key is None
                 and key_required is None and unknown_fields is None):
-            raise ValueError(
+            raise SchemaDefinitionError(
                 "rien à patcher : passe `fields` (fusion par clé), `remove` (retrait "
                 "d'une colonne), `remove_attrs` (retrait d'un attribut sur une "
                 "colonne qui reste), `strict`, `key`, `key_required` ou "
@@ -232,7 +232,7 @@ class SchemaOpsMixin:
         merged, added, updated = dsv2.merge_fields(merged, fields or [])
         merged, inconnus_attrs = dsv2.remove_field_attrs(merged, remove_attrs or {})
         if inconnus_attrs:
-            raise ValueError(
+            raise SchemaDefinitionError(
                 "`remove_attrs` nomme ce que le schéma ne porte pas : "
                 + ", ".join(f"`{k}`" for k in inconnus_attrs)
                 + ". Rien n'a été touché — un retrait silencieux sur une faute de "
@@ -240,7 +240,7 @@ class SchemaOpsMixin:
                 "`data_get_schema`.")
         merged, unknown = dsv2.remove_fields(merged, remove or [])
         if unknown:
-            raise ValueError(
+            raise SchemaDefinitionError(
                 "`remove` nomme des champs que le schéma ne déclare pas : "
                 + ", ".join(f"`{k}`" for k in unknown)
                 + ". Rien n'a été touché — vérifie l'orthographe (data_get_schema). "
