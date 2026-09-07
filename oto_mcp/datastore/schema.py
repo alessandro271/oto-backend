@@ -117,9 +117,11 @@ from .couches_exigees import (
     _A_QUOI_SERT_LA_COUCHE, required_layers_of, _refus_de_couche,
     _couches_exigees_errors, _couches_exigees_sous, couches_manquantes,
 )
+from .phrases_de_refus import (
+    _forme_attendue, _gated_by, _cause_required_when, _clause_aiguillage,
+)
 from .validation import (
-    _NUM_RE, _type_error, _forme_attendue, _gated_by, _cause_required_when,
-    _clause_aiguillage, _row_errors, validate_row,
+    _NUM_RE, _type_error, _row_errors, validate_row,
 )
 from .effacements import (
     merge_fields, remove_fields, remove_field_attrs, _DECL_STRUCTURELLES, _DECL_NOMMEES,
