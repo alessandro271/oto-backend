@@ -96,15 +96,36 @@ def test_une_ligne_AMPUTEE_qui_devient_invalide_refuse_tout():
 
 def test_un_PATCH_ne_se_fait_pas_amputer_ce_qu_il_n_ecrit_pas():
     """La valeur fautive vient de la base, pas du geste : l'écarter serait un
-    effacement silencieux. Le cran juge le geste, pas le passé qu'il hérite."""
+    effacement silencieux. Le cran juge le geste, pas le passé qu'il hérite.
+
+    ⚠️ **Ce banc exigeait un REFUS jusqu'au 07/09/2026, et son intention était
+    juste — c'est le moyen qui a changé.** Refuser garantissait qu'on n'efface pas
+    la valeur héritée ; c'était la seule garantie disponible à l'époque. Mais elle
+    en coûtait une autre : la ligne devenait **inécritable pour toujours**, y compris
+    pour corriger la valeur fautive, puisque corriger demande d'écrire.
+
+    La troisième issue existe désormais et sert l'intention mieux que les deux
+    autres : l'écriture **passe**, la valeur héritée est **préservée**, et l'écart
+    est **signalé** avec le refus qu'on aurait rendu. Ni gel, ni effacement, ni
+    silence — c'est le partage posé sur les sept contrôles de cette famille.
+    """
     schema = {"strict": True, "fields": [
         {"key": "statut", "type": "enum", "options": ["a", "b"]},
         {"key": "note", "type": "text"},
     ]}
     store = DatastorePg("sub-test")
-    with pytest.raises(Exception):
-        store._check_row(schema, {"statut": "hérité", "note": "neuve"},
-                         written={"note"})
+    ligne = {"statut": "hérité", "note": "neuve"}
+
+    store._check_row(schema, ligne, written={"note"})
+
+    # ni refus…
+    assert ligne["note"] == "neuve"
+    # …ni amputation : c'est ce que ce banc protège depuis le premier jour
+    assert ligne["statut"] == "hérité"
+    # …et pas de silence non plus
+    releve = store.off_schema_report()
+    assert "statut" in releve["hors_type"]
+    assert "hors options" in releve["hors_type"]["statut"]
 
 
 def test_le_relevé_reste_VIDE_quand_tout_est_conforme():
