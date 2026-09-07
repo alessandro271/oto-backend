@@ -16,6 +16,18 @@ on:
   workflow_dispatch: {}
 
 jobs:
+  # Chaque job porte un `timeout-minutes` : sans lui, le défaut de GitHub est de SIX
+  # heures. Ce workflow part à chaque poussée sur le tronc ET à chaque PR — c'est le
+  # plus exécuté du dépôt — et RIEN ne rattrape un job suspendu : il n'y a aucun
+  # `concurrency` de workflow, donc pas d'annulation du run précédent, et les runs
+  # suspendus s'empilent en parallèle. Pire pour les deux jobs auto-hébergés : le parc
+  # ne compte qu'UN runner `oto-platform`, celui dont la PROD a besoin (deploy.yml) ;
+  # et `deploy-preprod` sérialise sur un groupe `cancel-in-progress: false`, donc une
+  # suspension y met tous les déploiements suivants en file derrière elle.
+  # Plafonds calés sur 60 runs terminés (05→07/09/2026), durée d'exécution maximale
+  # observée par job — rappelée devant chaque valeur. Le 07/09, un job de tests s'est
+  # suspendu 45 min sans écrire une ligne, jusqu'à une annulation à la main.
+
   # La syntaxe est vérifiée sur le Python du SERVEUR, pas sur celui de la CI.
   # Le 27/08, un boot preprod est mort sur « f-string expression part cannot include
   # a backslash » : légal en 3.12 (CI) et en 3.13 (poste), SyntaxError en 3.10 (box).
@@ -26,6 +38,7 @@ jobs:
   # rejoue pas la suite, on vérifie que ça se COMPILE là où ça tournera.
   syntaxe-plancher:
     runs-on: ubuntu-latest
+    timeout-minutes: 10  # max observé 9 s
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -76,6 +89,7 @@ jobs:
   arbre-importable:
     name: L'arbre poussé s'importe
     runs-on: ubuntu-latest
+    timeout-minutes: 10  # max observé 1 min 13 s
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -96,6 +110,7 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20  # max observé 9 min 58 s — le plus long de la chaîne
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -114,6 +129,8 @@ jobs:
     # canari resté en arrière après un push failed, dispatch « success » sans effet).
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, oto-platform]
+    # max observé 1 min 16 s ; la marge couvre restart + healthcheck + rollback.
+    timeout-minutes: 15
     concurrency:
       group: deploy-preprod
       cancel-in-progress: false
@@ -139,6 +156,8 @@ jobs:
     needs: [deploy-preprod]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, oto-platform]
+    # max observé 15 s ; il clone un dépôt distant en SSH, donc il peut pendre au réseau.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -233,6 +252,7 @@ jobs:
     name: Contrat du front consommateur (avant fusion)
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 10  # max observé 54 s
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
