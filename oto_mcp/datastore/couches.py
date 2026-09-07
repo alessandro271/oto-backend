@@ -235,6 +235,72 @@ def layer_value(column: Any, layer: str) -> Any:
     return column.get(layer) if isinstance(column, dict) else None
 
 
+# --- `origine` devient une VERSION, pas une valeur nue (oto#140) --------------
+#
+# **Le défaut que ça ferme, et il est le cœur du contrat de refonte.** `origine`
+# gardait ce que la cliente avait remis — mais pas le FAIT qu'elle l'avait remis :
+# il n'existe qu'un seul emplacement de commentaire par colonne, celui de la valeur
+# COURANTE. Dès qu'un agent enrichit, il y écrit sa propre provenance, et celle de la
+# valeur de départ est écrasée. On conservait donc la donnée du client et on perdait
+# d'où elle venait — précisément la moitié qu'une restitution doit produire.
+#
+# Désormais `origine` peut porter les MÊMES sous-champs que la valeur courante :
+#
+#     "raison_sociale": {
+#       "valeur":  "Dupont SAS",
+#       "comment": "INSEE, SIREN 123456789",
+#       "origine": {"valeur": "DUPONT", "comment": "fichier de la cliente du 05/08"}
+#     }
+#
+# ⚠️ **Rétro-compatible dans les deux sens, et ce n'est pas négociable** : 431 colonnes
+# de production déclarent la capture, et un tableau de campagne porte 837 empreintes.
+# Une `origine` SCALAIRE déjà en base se lit comme une version réduite à sa valeur —
+# `"DUPONT"` ≡ `{"valeur": "DUPONT"}` — et rien n'a besoin d'être migré.
+#
+# ⚠️ **Et ce qui est SERVI ne bouge pas.** `champ.origine` continue de rendre la
+# VALEUR d'origine, scalaire, comme depuis toujours : un écran qui la lit ne voit
+# aucune différence. Les sous-champs de la version d'origine s'ajoutent à côté
+# (`champ.origine.comment`), ils ne la remplacent pas. Déplacer une clé servie aurait
+# cassé la garde d'un écran qui existe et qui protège une cliente.
+
+
+def version_origine(column: Any) -> dict:
+    """La version d'origine d'une colonne, sous sa forme d'OBJET — toujours un dict.
+
+    Le point unique de lecture : personne ne doit avoir à savoir si l'origine a été
+    écrite en scalaire (le socle) ou en version (le contrat). Rend `{}` quand il n'y
+    a pas d'origine du tout — l'absence se distingue d'une origine vide, qui est le
+    marqueur « rien n'avait été remis »."""
+    brut = layer_value(column, ORIGIN_LAYER)
+    if brut is None:
+        return {}
+    if isinstance(brut, dict):
+        return brut
+    return {VALUE_LAYER: brut}
+
+
+def valeur_origine(column: Any) -> Any:
+    """La VALEUR d'origine seule, quelle que soit la forme sous laquelle elle vit.
+
+    ⚠️ À employer partout où le code attendait un scalaire — sinon un objet arrive là
+    où une comparaison ou un test de vide attend une chaîne, et il est vrai par
+    accident : `{"valeur": ""}` n'est pas vide au sens de Python, alors que l'origine
+    qu'il porte l'est."""
+    v = version_origine(column)
+    return v.get(VALUE_LAYER) if v else None
+
+
+def origine_vide(column: Any) -> bool:
+    """L'origine porte-t-elle le marqueur « rien n'avait été remis » ?
+
+    Distinct de « pas d'origine du tout » : le premier a été posé délibérément à la
+    première écriture d'une case vide au départ, le second n'a jamais été renseigné.
+    Les confondre ferait recapturer la valeur du premier agent comme si elle venait
+    de la cliente — le défaut que `reserves.py` documente."""
+    v = version_origine(column)
+    return bool(v) and _is_empty(v.get(VALUE_LAYER))
+
+
 def flat_layers(key: str, value: Any) -> dict:
     """Les couches RENSEIGNÉES d'une colonne, aplaties en `clé.couche`.
 
@@ -243,8 +309,37 @@ def flat_layers(key: str, value: Any) -> dict:
     même chose — et c'est le consommateur qui paierait la différence."""
     if not isinstance(value, dict) or not any(k in LAYER_KEYS for k in value):
         return {}
-    return {f"{key}.{layer}": value[layer] for layer in LAYER_KEYS
-            if value.get(layer) not in (None, "")}
+    plat = {f"{key}.{layer}": value[layer] for layer in LAYER_KEYS
+            if value.get(layer) not in (None, "") and layer != ORIGIN_LAYER}
+
+    # ⚠️ `origine` est servie à part, et sa VALEUR garde exactement sa place d'avant.
+    #
+    # Depuis oto#140 elle peut porter ses propres sous-champs — d'où vient ce que la
+    # cliente a remis, et non plus seulement ce qu'elle a remis. Mais `champ.origine`
+    # est LU par un écran, qui s'en sert pour ne pas présenter une phrase de la
+    # plateforme comme la donnée d'une cliente. Y mettre un objet casserait cette
+    # garde-là, sur ce cas-là.
+    #
+    # Donc : `champ.origine` reste la valeur, scalaire ; ses sous-champs s'AJOUTENT à
+    # côté (`champ.origine.comment`). Aucun consommateur ne bouge aujourd'hui.
+    #
+    # ⚠️ **Ce n'est pas l'état final, et c'est délibéré.** Le contrat prévoit qu'à
+    # terme la lecture serve la version COURANTE seule, et que la version d'origine se
+    # DEMANDE (`versions=["origine"]`) — ce qui fait disparaître `champ.origine` du
+    # défaut. Faire les deux d'un coup obligerait les écrans à changer deux fois : une
+    # fois pour lire un objet, une fois pour ne plus le recevoir. On les fait changer
+    # une seule fois, à la bascule, avec préavis daté.
+    version = version_origine(value)
+    if version:
+        val = version.get(VALUE_LAYER)
+        if val not in (None, ""):
+            plat[f"{key}.{ORIGIN_LAYER}"] = val
+        for sous in LAYER_KEYS:
+            if sous == ORIGIN_LAYER:
+                continue                      # pas d'origine d'une origine
+            if version.get(sous) not in (None, ""):
+                plat[f"{key}.{ORIGIN_LAYER}.{sous}"] = version[sous]
+    return plat
 
 
 def layer_address(name: Any):

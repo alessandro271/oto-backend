@@ -498,7 +498,97 @@ def ignores_report(records: list) -> dict:
     return {"valeurs_ignorees": nommes, "valeurs_ignorees_hint": hint}
 
 
-def _merge_column(existing: Any, new: Any) -> Any:
+def _cle_d_item(champ: Any) -> Optional[str]:
+    """Le champ qui IDENTIFIE un élément d'une liste — `of.key`, ou `None`.
+
+    Même mot que la clé métier d'une ligne (`schema.key`), un cran plus bas et pour la
+    même raison : dire ce qui fait qu'un élément est « le même » d'une écriture à
+    l'autre. Sans elle, une liste se remplace en bloc, comme depuis toujours.
+
+    ⚠️ **C'est une identité de CRÉNEAU, pas de personne** (tranché le 08/09/2026). Le
+    bon candidat est une catégorie stable et fermée — `contact_rh`, `contact_paie` —
+    et surtout pas un email ou un nom. Que l'occupant d'un créneau change (Jane
+    remplacée par Doe après une passe d'agent) est le geste NORMAL que ce mécanisme
+    doit servir ; apparier des gens sur leur nom serait au contraire le mode d'échec
+    qu'on refuse."""
+    of = champ.get("of") if isinstance(champ, dict) else None
+    cle = of.get("key") if isinstance(of, dict) else None
+    return cle if isinstance(cle, str) and cle else None
+
+
+def _index_par_cle(items: Any, cle: str) -> dict:
+    """`{valeur d'identité: élément}` — et le premier gagne sur un doublon.
+
+    Le doublon est REFUSÉ un cran plus haut (`_merge_items`) : on ne peut pas
+    apparier deux éléments qui se disent le même, et choisir en silence serait
+    exactement l'appariement muet qu'on s'interdit."""
+    out: dict = {}
+    for it in items if isinstance(items, list) else []:
+        if not isinstance(it, dict):
+            continue
+        v = dsv2.unwrap(it.get(cle))
+        if v not in (None, "") and v not in out:
+            out[v] = it
+    return out
+
+
+def _merge_items(avant: Any, nouveaux: list, cle: str) -> list:
+    """Fusionne une liste ÉLÉMENT PAR ÉLÉMENT sur l'identité déclarée.
+
+    Ce que ça répare : une liste se fusionnait en bloc, donc un agent qui réémettait
+    ses contacts pour corriger UN email effaçait les couches de TOUS les éléments —
+    provenance et version d'origine comprises. Sur une colonne de premier niveau
+    l'origine survit à une écriture ; dans un élément de liste, elle ne survivait à
+    rien.
+
+    Trois règles, et les deux dernières existent pour que rien ne se fasse en silence :
+
+    - un élément dont l'identité correspond est FUSIONNÉ attribut par attribut, avec
+      la même règle que les colonnes — ses couches survivent ;
+    - un élément **sans** valeur d'identité n'est apparié à rien : il entre tel quel.
+      Deviner à quoi il correspond serait inventer ;
+    - une identité **en double** dans l'une des deux listes LÈVE, en nommant la valeur.
+      Deux éléments qui se disent le même ne sont pas départageables, et prendre le
+      premier apparierait au hasard des données de personnes.
+    """
+    for source, ou in ((avant, "en place"), (nouveaux, "posée")):
+        vues, doubles = set(), set()
+        for it in source if isinstance(source, list) else []:
+            if not isinstance(it, dict):
+                continue
+            v = dsv2.unwrap(it.get(cle))
+            if v in (None, ""):
+                continue
+            if v in vues:
+                doubles.add(v)
+            vues.add(v)
+        if doubles:
+            raise RowValidationError(
+                [f"`{cle}` en double dans la liste {ou} : "
+                 + ", ".join(repr(d) for d in sorted(doubles, key=str))
+                 + f" — deux éléments qui portent la même identité ne peuvent pas "
+                 f"être appariés. Donne à chacun une valeur de `{cle}` distincte, ou "
+                 f"retire `of.key` du schéma pour revenir au remplacement en bloc."])
+
+    index = _index_par_cle(avant, cle)
+    out = []
+    for it in nouveaux:
+        if not isinstance(it, dict):
+            out.append(it)
+            continue
+        v = dsv2.unwrap(it.get(cle))
+        ancien = index.get(v) if v not in (None, "") else None
+        if ancien is None:
+            out.append(it)
+            continue
+        fusionne = dict(ancien)
+        for k, val in it.items():
+            fusionne[k] = _merge_column(ancien.get(k), val)
+        out.append({k: v2 for k, v2 in fusionne.items() if v2 is not None})
+    return out
+
+
+def _merge_column(existing: Any, new: Any, champ: Any = None) -> Any:
     """Fusion d'UNE colonne. **Aucune couche ne s'écrit implicitement, dans aucun sens.**
 
     Une écriture ne touche QUE ce qu'elle nomme. C'est la protection contre
@@ -546,6 +636,12 @@ def _merge_column(existing: Any, new: Any) -> Any:
     vide DÉLIBÉRÉ, qui ne se confond pas avec l'absence. Ils se résolvent ICI et nulle
     part ailleurs : qu'un seul passe en aval et il serait stocké comme une valeur, puis
     servi à une cliente comme sa propre donnée."""
+    # Une LISTE dont le schéma déclare l'identité de ses éléments se fusionne
+    # élément par élément ; sans déclaration, elle se remplace en bloc, comme avant.
+    cle_item = _cle_d_item(champ)
+    if cle_item and isinstance(new, list):
+        return _merge_items(existing, new, cle_item)
+
     # ── Les mots réservés valent AUSSI sur une valeur nue (oto#140) ─────────
     #
     # ⚠️ **C'est le trou que ce lot aurait ouvert sans cette garde**, et il a été

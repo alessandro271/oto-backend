@@ -196,8 +196,12 @@ class EcritureMixin:
             # Colonne par colonne, pour que l'origine survive à une écriture
             # ordinaire. Un `update` en bloc l'emporterait avec le reste — et
             # silencieusement, puisque remplacer une valeur est le geste normal.
+            # ⚠️ Le champ DÉCLARÉ passe avec la valeur : sans lui, une liste qui
+            # nomme l'identité de ses éléments (`of.key`) se remplacerait quand même
+            # en bloc, et la déclaration serait une clé de plus que rien ne lit.
             for _k, _v in pose.items():
-                merged[_k] = _merge_column(merged.get(_k), _v)
+                merged[_k] = _merge_column(merged.get(_k), _v,
+                                           dsv2.champ_declare(schema, _k))
             # #586/#606 : ce que l'appelant n'écrit pas — jugé sur le geste ENTIER
             # (payload, ligne en place, résultat), sous le verrou, avant que quoi
             # que ce soit ne parte. Puis la plateforme pose l'origine qu'elle doit.
@@ -344,7 +348,7 @@ class EcritureMixin:
             # MÊME fusion que le batch : l'origine survit ici aussi. Elle avait été
             # câblée dans `_merge_into_row` seulement — donc un patch par `id`, le
             # geste le plus courant d'un agent, l'effaçait quand même.
-            data[k] = _merge_column(data.get(k), v)
+            data[k] = _merge_column(data.get(k), v, dsv2.champ_declare(schema, k))
             written.add(k)
         # #586/#606 : MÊME garde que la fusion — le patch par `id` est le geste le
         # plus courant d'un agent, et celui qui a écrasé les quatorze valeurs.

@@ -45,6 +45,22 @@ def _fields(schema: Optional[dict]) -> list[dict]:
     return [f for f in (schema or {}).get("fields") or [] if isinstance(f, dict)]
 
 
+def champ_declare(schema: Optional[dict], key: str) -> Optional[dict]:
+    """La DÉCLARATION d'une colonne de premier niveau, ou `None`.
+
+    Jumelle de `declares_field`, qui rend un booléen : celle-ci rend l'objet, pour qui
+    a besoin de LIRE ce que la colonne déclare — l'identité de ses éléments (`of.key`),
+    son type, ses options. Écrite ici plutôt que chez l'appelant pour la raison
+    habituelle : deux recherches de champ divergeraient au premier cas limite (un
+    `key` non-chaîne, un `fields` qui n'est pas une liste)."""
+    if not isinstance(key, str):
+        return None
+    for f in _fields(schema):
+        if isinstance(f, dict) and f.get("key") == key:
+            return f
+    return None
+
+
 def declares_field(schema: Optional[dict], key: str) -> bool:
     """Le schéma déclare-t-il un field top-level de cette clé ? La reconnaissance
     par DÉCLARATION (#354) : c'est elle qui distingue une colonne de données
