@@ -126,3 +126,43 @@ def test_le_requis_continue_de_se_juger_sur_la_ligne_ENTIERE():
     errors = dsv2.validate_row(schema, {"notes": "posée"}, written={"notes"})
 
     assert errors and "champ requis manquant" in errors[0]
+
+
+def test_un_etat_devenu_invalide_ne_gele_plus_la_ligne():
+    """Le SIXIÈME contrôle de la famille, et le seul que personne n'avait rapporté :
+    il est sorti d'une vérification faite en cherchant autre chose.
+
+    Une colonne d'état porte une valeur qu'on a depuis retirée de la liste déclarée.
+    Toute écriture sur la ligne était refusée « état inconnu », y compris une note
+    sans rapport — et pour toujours, puisque corriger l'état demandait d'écrire, ce
+    qui était justement refusé.
+
+    Même partage que ses cinq voisins : « cet état est-il permis » juge une VALEUR,
+    donc ce que l'appel écrit. La TRANSITION, elle, n'a pas besoin d'être gardée :
+    elle ne se juge que si l'état change, donc que si le geste l'écrit."""
+    schema = {"fields": [
+        {"key": "statut", "type": "enum", "role": "status",
+         "options": ["a_faire", "traite"],
+         "lifecycle": {"states": ["a_faire", "traite"],
+                       "transitions": {"a_faire": ["traite"]}}},
+        {"key": "notes", "type": "text"},
+    ]}
+    en_base = {"statut": "en_pause", "notes": "ancienne"}   # état retiré depuis
+    gelees: list = []
+
+    # écrire la note : passe, et l'état devenu invalide est signalé
+    assert dsv2.validate_row(schema, {**en_base, "notes": "neuve"},
+                             prev_status="en_pause", written={"notes"},
+                             gelees=gelees) == []
+    assert [g["champ"] for g in gelees] == ["statut"]
+    assert "état inconnu" in gelees[0]["refus"]
+
+    # écrire un état invalide refuse toujours
+    errs = dsv2.validate_row(schema, {**en_base, "statut": "n_importe_quoi"},
+                             prev_status="en_pause", written={"statut"})
+    assert errs and "état inconnu" in errs[0]
+
+    # et une transition interdite refuse toujours
+    errs = dsv2.validate_row(schema, {"statut": "a_faire", "notes": "x"},
+                             prev_status="traite", written={"statut"})
+    assert errs and "transition" in errs[0]

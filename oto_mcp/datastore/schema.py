@@ -2662,9 +2662,24 @@ def validate_row(schema: Optional[dict], merged: dict, *,
         new = unwrap(merged.get(key)) if key else None
         if new is not None:
             states = {str(s) for s in lc.get("states") or []}
+            # L'état est-il POSÉ par ce geste ? Même partage que le type et ses
+            # quatre voisins (07/09/2026) : « cet état est-il permis » juge une
+            # VALEUR, donc ce que l'appel écrit. Un état stocké devenu invalide —
+            # parce qu'on l'a retiré de la liste déclarée depuis — gelait sinon la
+            # ligne entière, y compris pour une écriture sans rapport, et pour
+            # toujours. C'était le SIXIÈME contrôle de la famille, et le seul que
+            # personne n'avait rapporté : il ne sortait pas d'un signalement mais
+            # d'une vérification faite en cherchant autre chose.
+            #
+            # La TRANSITION, elle, n'a pas besoin d'être gardée ici : elle ne se
+            # juge que si l'état change, donc que si le geste l'écrit.
+            pose_etat = written is None or key in written
             if states and str(new) not in states:
-                errors.append(
-                    f"{key}: état inconnu {new!r} (états: {sorted(states)})")
+                inconnu = f"{key}: état inconnu {new!r} (états: {sorted(states)})"
+                if pose_etat:
+                    errors.append(inconnu)
+                elif gelees is not None:
+                    gelees.append({"champ": str(key), "refus": inconnu})
             # L'état PRÉCÉDENT se déballe aussi : dès la deuxième écriture la ligne
             # porte des couches, donc le cas normal est un objet, pas un mot.
             elif prev_status is not None and str(unwrap(prev_status)) != str(new):
