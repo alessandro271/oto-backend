@@ -153,10 +153,61 @@ def test_le_schema_servi_a_un_agent_perd_la_colonne_et_le_perimetre(face_agent):
     assert "score_client" in cles          # `read` reste DÉCLARÉE, elle est lisible
     assert cles == ["ref", "etat", "note", "source", "score_client"]
     # `claimable` nomme des colonnes : le laisser intact rendrait la colonne masquée
-    # par la porte de derrière.
+    # par la porte de derrière. ⚠️ Au PREMIER NIVEAU, cette clé n'est lue par aucun
+    # moteur — l'assertion ci-dessous ne vaut donc que pour ce que la fonction copie.
+    # Le vrai périmètre est éprouvé par les deux bancs suivants.
     assert servi["claimable"] == {"etat": "a_faire"}
     # Le schéma STOCKÉ n'a pas bougé — masquer est une opération de SORTIE.
     assert len(SCHEMA["fields"]) == 6
+
+
+# ── La porte de derrière, à l'adresse où le moteur lit VRAIMENT (07/09/2026) ──
+#
+# ⚠️ **Le banc du dessus a gardé ce rinçage sans jamais l'exercer.** Sa fixture pose
+# `claimable` au PREMIER NIVEAU du schéma — une adresse que rien ne lit : le moteur
+# interroge `fields[role="status"].lifecycle.claimable`. Et le périmètre y nomme
+# `etat`, une colonne NON masquée. L'assertion était donc satisfaite par la simple
+# copie du schéma : en retirant entièrement la branche de rinçage, trente-deux bancs
+# sur trente-deux restaient VERTS.
+#
+# C'est le pire état d'un banc — vert en n'exerçant rien — et il gardait une porte
+# réellement ouverte : mesuré, une colonne `agent_access: "none"` ressortait dans le
+# périmètre servi à l'agent, avec son nom ET la valeur sur laquelle elle est filtrée.
+
+PERIMETRE_REEL = {
+    "fields": [
+        {"key": "statut", "type": "enum", "role": "status",
+         "options": ["froid", "chaud"],
+         "lifecycle": {"states": ["froid", "chaud"], "terminal": ["chaud"],
+                       "claimable": {"suivi_commercial": "chaud",
+                                     "statut": "froid"}}},
+        {"key": "suivi_commercial", "type": "text", "agent_access": "none"},
+    ],
+}
+
+
+def test_le_perimetre_de_reservation_perd_la_colonne_masquee(face_agent):
+    """L'assertion qui manquait, à l'adresse que le moteur lit."""
+    servi = aga.schema_servi(PERIMETRE_REEL)
+    ancre = [f for f in servi["fields"] if f["key"] == "statut"][0]
+
+    assert ancre["lifecycle"]["claimable"] == {"statut": "froid"}, (
+        "la colonne masquée ne doit pas ressortir par le périmètre")
+    # ⚠️ Et le reste du cycle de vie survit : rincer n'est pas amputer.
+    assert ancre["lifecycle"]["states"] == ["froid", "chaud"]
+    assert ancre["lifecycle"]["terminal"] == ["chaud"]
+
+
+def test_rincer_le_perimetre_ne_MUTE_pas_le_schema_stocke(face_agent):
+    """La contre-épreuve qui borne le correctif. Le validateur, lui, lit le schéma
+    ENTIER — le muter au passage lui retirerait la colonne masquée, et l'écriture d'un
+    agent y passerait alors comme un champ hors schéma : le contraire exact du but."""
+    import copy
+    avant = copy.deepcopy(PERIMETRE_REEL)
+
+    aga.schema_servi(PERIMETRE_REEL)
+
+    assert PERIMETRE_REEL == avant, "masquer est une opération de SORTIE, jamais d'entrée"
 
 
 def test_le_schema_servi_hors_face_agent_est_le_meme_objet():

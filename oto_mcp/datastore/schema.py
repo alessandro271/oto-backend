@@ -136,5 +136,5 @@ from .vocabulaire import (
 from .non_applique import (
     _options_already_enforced, unenforced_options, unenforced_options_warning,
     options_not_enforced, options_not_enforced_warning, json_fields_depth,
-    json_depth_warning,
+    json_depth_warning, lifecycle_hors_statut, lifecycle_hors_statut_warning,
 )

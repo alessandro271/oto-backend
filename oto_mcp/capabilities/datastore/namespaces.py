@@ -27,7 +27,9 @@ from __future__ import annotations
 
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from ...datastore.identite import Adresse
 
 from ... import db, roles
 from ...auth import token_scopes
@@ -46,7 +48,7 @@ class CreateNamespaceInput(BaseModel):
     # Défaut vide plutôt que champ requis : un nom manquant mérite le refus NOMMÉ
     # (`missing_namespace`) que cette route rend depuis toujours, pas l'`invalid_input`
     # générique de pydantic — le dashboard l'affiche tel quel.
-    namespace: str = ""
+    namespace: Adresse = ""
     # Classeur (ADR 0030) : `{type: 'org'|'group'|'user', id}`. Absent = PERSONNEL
     # (`type='user'`, l'appelant) — c'est ce que `_create_namespace` fait et ce que
     # `tests/datastore/test_datastore_namespaces_capability.py` fige (`("create_namespace",
@@ -59,11 +61,11 @@ class CreateNamespaceInput(BaseModel):
 
 
 class NamespaceRefInput(BaseModel):
-    namespace: str
+    namespace: Adresse
 
 
 class RenameNamespaceInput(BaseModel):
-    namespace: str
+    namespace: Adresse
     name: str = ""
 
 
@@ -72,7 +74,25 @@ class NamespaceEntry(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     id: int
-    namespace: str
+    # ⚠️ **Le MÊME nombre que `id`, sous le nom que tout le reste emploie** (07/09/2026).
+    # `data_rows` et `data_get_schema` rendent le numéro du tableau sous `ns_id`, et la
+    # description de `data_rows` est DIRECTIVE : « le NUMÉRO du tableau (`ns_id`) — la
+    # forme à employer ». Qui la suit cherche donc `ns_id` dans une réponse qui n'avait
+    # que `id`, et ne le trouve pas.
+    #
+    # Le coût mesuré n'est pas théorique : la confusion a produit ce soir une demande de
+    # SUPPRESSION visant un tableau qui n'avait rien à voir avec la mission — une base
+    # personnelle de plus de deux cents profils. Elle a été rattrapée parce qu'un humain
+    # a lu le schéma avant de répondre, pas par une garde.
+    #
+    # ⚠️ **On AJOUTE, on ne renomme pas.** Le tableau de bord lit `id` et construit ses
+    # liens dessus (`/data/<id>`) ; le renommer casserait un consommateur vivant pour
+    # réparer un vocabulaire. Deux clés portant le même nombre est le prix de la
+    # compatibilité — et c'est le sens de la lecture qui compte, pas l'économie d'octets.
+    # DÉRIVÉ de `id` juste en dessous, jamais fourni par l'appelant : deux clés
+    # stockées côte à côte finissent par diverger, une clé calculée ne le peut pas.
+    ns_id: int = 0
+    namespace: Adresse
     created_at: Optional[str] = Field(default=None, description=HORODATAGE)
     # Deep-link dashboard du tableau (`/data/<id>`) — dérivé de l'id, jamais stocké.
     url: str
@@ -93,13 +113,24 @@ class NamespaceEntry(BaseModel):
     declared_schema: Optional[dict] = Field(default=None, alias="schema",
                                             serialization_alias="schema")
 
+    @model_validator(mode="after")
+    def _le_numero_sous_les_deux_noms(self):
+        """`ns_id` recopie `id` — toujours, sans que la source ait à le savoir.
+
+        Ni un défaut ni un doublon paresseux : c'est ce qui rend l'égalité VRAIE au
+        lieu de la promettre. Un producteur qui poserait les deux pourrait en oublier
+        un le jour où il change ; ici il n'y a qu'un nombre, servi sous deux noms."""
+        if self.ns_id != self.id:
+            object.__setattr__(self, "ns_id", self.id)
+        return self
+
 
 class NamespaceList(BaseModel):
     namespaces: list[NamespaceEntry]
 
 
 class CreatedNamespace(BaseModel):
-    namespace: str
+    namespace: Adresse
     id: int
     url: str
     # QUI possède le tableau — donc qui le verra. La création rendait moins que la
@@ -116,14 +147,14 @@ class CreatedNamespace(BaseModel):
 
 class DeletedNamespace(BaseModel):
     ok: bool
-    namespace: str
+    namespace: Adresse
 
 
 class RenamedNamespace(BaseModel):
     ok: bool
     # Le NOUVEAU nom (l'id, l'URL et les partages, eux, ne bougent pas — ils sont
     # keyés par id).
-    namespace: str
+    namespace: Adresse
 
 
 class NamespaceUrl(BaseModel):

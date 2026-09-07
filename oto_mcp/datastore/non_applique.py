@@ -157,3 +157,64 @@ def json_depth_warning(champs: list[str]) -> Optional[str]:
             "mais il n'est ni filtrable ni agrégeable au-delà du premier niveau : "
             "`data_rows` ne sait pas interroger une clé imbriquée, et l'export ne la "
             "déplie pas.")
+
+
+# ── Un cycle de vie posé hors du champ de statut (07/09/2026) ────────────────
+#
+# Le troisième fait, et il coûte plus cher que les deux autres : `lifecycle_of` ne
+# cherche le cycle de vie QUE sur le champ portant `role: "status"`. Un `lifecycle`
+# déclaré sur n'importe quel autre champ est stocké, servi dans le schéma, et **jamais
+# lu** — donc aucun état terminal, aucun plafond de reprises, aucun état d'abandon,
+# aucun périmètre de réservation. La file tourne sans garde, et le schéma affiche le
+# contraire.
+#
+# ⚠️ **La pose est déjà refusée** (`_validate_reserved_def` : « lifecycle exige
+# role="status" »). Ça ne suffit pas, et c'est tout l'objet de ce relevé : **un schéma
+# déjà en base ne se repose jamais.** Le refus ne parle qu'à celui qui écrit un schéma
+# neuf ; celui qui a posé le sien avant la garde ne l'entendra jamais.
+#
+# Cas mesuré le 07/09/2026 sur un tableau de production d'une campagne vivante : la
+# colonne d'état portait un `lifecycle` complet avec `role: "badge"`, pendant qu'une
+# autre colonne portait `role: "status"` sans cycle de vie. Six semaines que la file
+# de ce tableau n'était gardée par rien, sans un mot. Découvert par un tiers, en
+# comparant un schéma avant et après un retrait d'attribut — pas par la plateforme.
+#
+# C'est le même incident que `required_layers` (posé, servi, sans lecteur) et que les
+# clés non interprétées (#316) : une déclaration que le moteur ignore en silence est
+# pire qu'une déclaration absente, parce que son auteur croit la garde armée.
+
+def lifecycle_hors_statut(schema: Optional[dict]) -> list[str]:
+    """Les champs portant un `lifecycle` que la plateforme ne lira jamais.
+
+    DÉRIVÉ de `status_field`, jamais d'une copie de sa règle : le jour où le cycle de
+    vie se lira ailleurs, ce relevé s'éteindra de lui-même."""
+    ancre = status_field(schema)
+    cle_ancre = str((ancre or {}).get("key") or "")
+    return sorted(
+        str(f.get("key")) for f in _walk_fields(_fields(schema))
+        if isinstance(f.get("lifecycle"), dict) and f.get("key")
+        and str(f.get("key")) != cle_ancre)
+
+
+def lifecycle_hors_statut_warning(champs: list[str],
+                                  schema: Optional[dict] = None) -> Optional[str]:
+    """La phrase dit la CONSÉQUENCE avant la correction — sans quoi elle se lit comme
+    un détail de style, alors qu'elle annonce une file de travail sans garde."""
+    if not champs:
+        return None
+    noms = ", ".join(f"`{c}`" for c in champs)
+    ancre = status_field(schema)
+    cle = (ancre or {}).get("key")
+    ou = (f"C'est `{cle}` qui porte `role: \"status\"` sur ce tableau, et "
+          + ("il n'a pas de cycle de vie." if not lifecycle_of(schema)
+             else "son cycle de vie est le seul que la file lit.")
+          ) if cle else ("Aucun champ ne porte `role: \"status\"` sur ce tableau : "
+                         "la file n'a donc aucune ancre.")
+    return (f"cycle de vie NON LU : {noms} — oto ne lit le `lifecycle` que sur le "
+            f"champ déclaré `role: \"status\"`. {ou} Tant que c'est le cas, ce "
+            "tableau n'a AUCUN état terminal, AUCUN plafond de reprises, AUCUN état "
+            "d'abandon et AUCUN périmètre de réservation : une ligne réservée n'est "
+            "pas relâchée quand elle se termine, et la file peut tourner à vide "
+            "indéfiniment. Déplace `role: \"status\"` sur la colonne qui porte le "
+            "cycle de vie, ou déplace le cycle de vie sur la colonne qui porte le "
+            "rôle — jamais pendant qu'une vague tourne.")

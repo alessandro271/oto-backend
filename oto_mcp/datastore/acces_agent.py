@@ -172,12 +172,61 @@ def schema_servi(schema: Optional[dict]) -> Optional[dict]:
     out = dict(schema)
     out["fields"] = [f for f in schema.get("fields") or []
                      if not (isinstance(f, dict) and f.get("key") in cachees)]
-    # Le périmètre de réservation NOMME des colonnes : le laisser intact rendrait la
-    # colonne masquée par la porte de derrière, sous un autre nom de clé.
-    perimetre = schema.get("claimable")
-    if isinstance(perimetre, dict):
-        out["claimable"] = {k: v for k, v in perimetre.items() if k not in cachees}
+    _rincer_le_perimetre(out, cachees)
     return out
+
+
+def _rincer_le_perimetre(servi: dict, cachees: set) -> None:
+    """Retire du périmètre de réservation les colonnes masquées à l'agent.
+
+    Le périmètre NOMME des colonnes et porte une de leurs VALEURS. Le laisser intact
+    rendrait par la porte de derrière ce que la porte d'entrée vient de retirer — le
+    nom d'une colonne que le propriétaire a déclarée invisible aux agents, et la
+    valeur sur laquelle elle est filtrée.
+
+    ⚠️ **Ce rinçage existait depuis l'origine et cherchait à la MAUVAISE ADRESSE.**
+    Il lisait `schema["claimable"]`, au premier niveau, où rien ne vit : l'adresse
+    réelle est `fields[role="status"].lifecycle.claimable`, celle que
+    `cycle_de_vie.claimable_of` interroge et que la pose valide. Mesuré le 07/09/2026
+    sur un schéma que `validate_schema_def` accepte sans une erreur — la colonne
+    disparaissait bien des `fields`, et ressortait entière dans le périmètre.
+
+    Et le banc qui gardait ce rinçage ne pouvait pas le voir : sa fixture posait
+    `claimable` au premier niveau, là où le moteur ne lit rien, et nommait une colonne
+    NON masquée. Son assertion était donc satisfaite par la copie du schéma — branche
+    retirée, trente-deux verts sur trente-deux. C'est le pire cas d'un banc : vert en
+    n'exerçant rien.
+
+    ⚠️ **L'adresse est DÉRIVÉE de `status_field`**, jamais réécrite ici : deux endroits
+    qui ne s'accordent pas sur l'endroit où vit le périmètre, c'est exactement le
+    défaut qu'on répare. Le rinçage du premier niveau est conservé — il ne coûte rien,
+    et un schéma qui porterait la clé là ne doit pas passer entre les mailles.
+    """
+    from .declaration import status_field
+
+    haut = servi.get("claimable")
+    if isinstance(haut, dict):
+        servi["claimable"] = {k: v for k, v in haut.items() if k not in cachees}
+
+    ancre = status_field(servi)
+    if not isinstance(ancre, dict):
+        return
+    cycle = ancre.get("lifecycle")
+    if not isinstance(cycle, dict):
+        return
+    perimetre = cycle.get("claimable")
+    if not isinstance(perimetre, dict):
+        return
+    propre = {k: v for k, v in perimetre.items() if k not in cachees}
+    if propre == perimetre:
+        return
+    # Copies neuves jusqu'à la clé touchée : le schéma d'entrée n'appartient pas à
+    # cette fonction, et le muter contaminerait le validateur, qui lit l'ENTIER.
+    servi["fields"] = [
+        {**f, "lifecycle": {**cycle, "claimable": propre}}
+        if f is ancre else f
+        for f in servi.get("fields") or []
+    ]
 
 
 # ── Ce qui est REFUSÉ, et où porter l'intention ──────────────────────────────

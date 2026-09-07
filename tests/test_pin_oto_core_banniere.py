@@ -53,8 +53,15 @@ def _faux_depot(tmp_path: Path, *tags: str, avec_skip_ordinaire: bool = False) -
     depot = tmp_path / "depot"
     (depot / "tests").mkdir(parents=True)
     (depot / "pyproject.toml").write_text(_manifeste(*tags), encoding="utf-8")
-    for nom in ("conftest.py", "_oto_core_pin.py", "_pg_hygiene.py"):
-        shutil.copy(TESTS / nom, depot / "tests" / nom)
+    # ⚠️ **Les aides sont DÉRIVÉES du disque, jamais énumérées.** Une liste en dur
+    # ici est une liste qu'on oublie d'étendre : le 07/09/2026, l'ajout d'un
+    # `tests/_jeton_de_suite.py` importé par `conftest` a fait tomber ces sept bancs
+    # sur un `ImportError` dans le faux dépôt — un échec qui n'avait rien à voir avec
+    # la bannière qu'ils gardent, et qui a coûté une enquête à une session voisine.
+    # Tout module d'aide de `tests/` (préfixe `_`) part donc avec le conftest.
+    shutil.copy(TESTS / "conftest.py", depot / "tests" / "conftest.py")
+    for aide in sorted(TESTS.glob("_*.py")):
+        shutil.copy(aide, depot / "tests" / aide.name)
     skip_ordinaire = ("""
         @pytest.mark.skip(reason="skip ORDINAIRE, sans rapport avec le pin")
         def test_skip_ordinaire():

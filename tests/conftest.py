@@ -37,6 +37,7 @@ import pytest
 
 from _oto_core_pin import (MARQUEUR, categorie_non_concluante, ecart,
                            lignes_de_banniere, skips_autorises)
+import _jeton_de_suite as jeton
 from _pg_hygiene import Guard, docker_available, run_args, sweep_orphans
 
 
@@ -210,6 +211,12 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config) -> None:
 
 @pytest.fixture(scope="session")
 def pg_box() -> Iterator[PgBox]:
+    # Le JETON d'abord, avant de toucher au serveur : au-delà de deux suites en
+    # parallèle sur ce poste, elles se fabriquent mutuellement de faux échecs (neuf
+    # simultanées le 07/09/2026). Pris ICI et pas au démarrage de la session — une
+    # exécution ciblée qui n'ouvre aucune base ne consomme aucune place, sinon la
+    # garde punirait le geste qu'elle veut encourager. Détail : `_jeton_de_suite`.
+    jeton.prendre()
     dsn = os.environ.get("OTO_TEST_PG_DSN")
     if dsn:
         yield PgBox(dsn, None)

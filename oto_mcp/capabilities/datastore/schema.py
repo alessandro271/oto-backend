@@ -28,6 +28,7 @@ trancher pour ses propres raisons.
 """
 from __future__ import annotations
 
+from ...datastore.identite import Adresse
 from ...datastore import cles_inconnues
 
 import warnings
@@ -46,7 +47,7 @@ from ..registry import CAPABILITIES
 
 
 class GetSchemaInput(BaseModel):
-    namespace: str
+    namespace: Adresse
 
 
 class SchemaOut(BaseModel):
@@ -59,7 +60,7 @@ class SchemaOut(BaseModel):
 
     # ⚠️ Le NOM CANONIQUE du tableau, plus l'écho de l'adresse reçue : lire le schéma
     # de `600` répondait `namespace: "600"` (cf. `datastore/identite.py`).
-    namespace: str
+    namespace: Adresse
     # Le NUMÉRO du tableau — la forme d'adresse à employer, le nom partant en retrait.
     ns_id: Optional[int] = Field(default=None, description=identite.DESCRIPTION)
     # `None` = aucun schéma déclaré. C'est l'état NORMAL d'un namespace (le datastore
@@ -107,9 +108,24 @@ def _get_schema(ctx: ResolvedCtx, inp: GetSchemaInput) -> dict:
     # s'engage à TRANSPORTER (les consommateurs y mettent les leurs) — et une
     # migration qui retouche des schémas se rejoue à chaque boot. Le résidu est
     # inerte : ce qui nuisait, c'était son silence.
-    avert = dsv2.unknown_keys_read_warning(dsv2.unknown_declaration_keys(schema))
-    if avert:
-        out["warning"] = avert
+    averts = [dsv2.unknown_keys_read_warning(dsv2.unknown_declaration_keys(schema)),
+              # 07/09/2026 — MÊME défaut, autre clé, et celui-ci coûte une file de
+              # travail entière. `lifecycle` n'est lu que sur le champ `role: "status"`
+              # : posé ailleurs, il est stocké, servi… et sans le moindre effet. Plus
+              # d'état terminal, plus de plafond de reprises, plus d'état d'abandon,
+              # plus de périmètre de réservation — et le schéma affiche le contraire.
+              #
+              # ⚠️ **La pose le refuse déjà, et c'est justement pourquoi il faut le
+              # dire ICI.** Le refus ne parle qu'à qui écrit un schéma NEUF ; celui
+              # qui a posé le sien avant la garde ne l'entendra jamais, puisqu'un
+              # schéma en base ne se repose pas. Cas trouvé sur un tableau de
+              # production d'une campagne vivante — par un tiers comparant deux
+              # schémas, pas par la plateforme.
+              dsv2.lifecycle_hors_statut_warning(
+                  dsv2.lifecycle_hors_statut(schema), schema)]
+    averts = [a for a in averts if a]
+    if averts:
+        out["warning"] = "\n".join(averts)
     return out
 
 
@@ -122,7 +138,7 @@ with warnings.catch_warnings():
     warnings.simplefilter("ignore", UserWarning)
 
     class SetSchemaInput(BaseModel):
-        namespace: str
+        namespace: Adresse
         # `null` (ou absent) = RETIRER le schéma, retour en table libre. Les deux se
         # confondent, et c'est le comportement de la route d'avant : `body.get("schema")`.
         schema: Optional[dict] = None
@@ -131,7 +147,7 @@ with warnings.catch_warnings():
 class SchemaPosed(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    namespace: str
+    namespace: Adresse
     declared_schema: Optional[dict] = Field(default=None, alias="schema",
                                             serialization_alias="schema")
     # #389 : les clés de validation que cette version applique — la seule parade au
