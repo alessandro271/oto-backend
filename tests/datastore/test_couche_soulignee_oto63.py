@@ -125,11 +125,27 @@ def test_les_deux_reservations_portent_layers():
 
 def test_la_face_agent_porte_layers_et_le_VALIDE():
     """Le tool sert `layers` et le passe au validateur commun — une valeur inconnue
-    doit être refusée en nommant le paramètre, pas ignorée."""
+    doit être refusée en nommant le paramètre, pas ignorée.
+
+    ⚠️ **Ce banc figeait le littéral `layers: str = "flat"` jusqu'au 07/09/2026, et
+    c'était un contresens.** Son intention est de garantir que la face agent SERT et
+    VALIDE le paramètre ; l'assertion sur le littéral n'y contribuait pas, et elle
+    gardait au contraire la divergence que `layers.py` promet d'éviter — « le défaut
+    se lit ici et nulle part ailleurs, pour qu'une bascule soit un seul geste ».
+
+    `data_claim_next` codait son défaut en dur, et c'est la lecture qu'un agent répète
+    le plus : la bascule de la forme servie l'aurait laissée derrière, à l'endroit où
+    l'écart se voit le moins. Le banc exige désormais le contraire — **aucun littéral
+    de défaut sur une surface**, la constante partagée et rien d'autre.
+    """
     from oto_mcp.tools import datastore as tools_ds
 
     src = inspect.getsource(tools_ds)
-    assert 'layers: str = "flat"' in src
+    assert 'layers: str = dsl.DEFAUT' in src, (
+        "la face agent doit prendre le défaut à la source commune")
+    assert 'layers: str = "flat"' not in src and "layers: str = 'flat'" not in src, (
+        "un défaut écrit en dur sur une surface dément la promesse de `layers.py` : "
+        "une bascule cesserait d'être un seul geste")
     assert "layers=dsl.check(layers)" in src, (
         "la face agent doit valider `layers`, pas le passer brut")
 

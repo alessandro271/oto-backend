@@ -896,7 +896,13 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     def data_claim_next(namespace: Adresse, worker: str, filter: Optional[dict] = None,
                         lease_s: int = 900, max_claims: Optional[int] = None,
-                        layers: str = "flat",
+                        # ⚠️ `dsl.DEFAUT`, jamais un littéral. `layers.py` promet que
+                        # « le défaut se lit ici et nulle part ailleurs, pour qu'une
+                        # bascule soit un seul geste » — cette surface le codait en dur
+                        # et démentait la promesse en silence. Elle est la lecture qu'un
+                        # agent répète le PLUS : la bascule l'aurait laissée derrière,
+                        # et le défaut aurait divergé là où ça se voit le moins.
+                        layers: str = dsl.DEFAUT,
                         filters: Optional[list] = None) -> dict:
         """Atomically claim the NEXT unprocessed row of a namespace (work queue).
 
@@ -957,6 +963,11 @@ def register(mcp: FastMCP) -> None:
         be expressed here. Same grammar as `data_rows`.
 
         `namespace` also accepts `slot:<name>` (table bound by the active project).
+
+        Args:
+            namespace: the table's NUMBER (`ns_id`, e.g. 174) — the form to use.
+                Its name still resolves and is being retired, not broken.
+                `slot:<name>` also works. It must already exist.
         """
         store = _acting_store()
         namespace = _ns(namespace)

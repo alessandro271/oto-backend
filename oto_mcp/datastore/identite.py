@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Mapping, Optional
 
-from pydantic import BeforeValidator
+from pydantic import BeforeValidator, WithJsonSchema
 
 # Le nom de la clé, écrit une fois : les deux faces et les tests le citent d'ici.
 CLE = "ns_id"
@@ -115,6 +115,28 @@ def _texte_de_l_adresse(v: Any) -> Any:
     return v
 
 
+# ⚠️ **Le SCHÉMA publié doit dire ce que la surface accepte, pas ce qu'elle stocke.**
+#
+# La coercition ci-dessus a fermé l'écart entre la description et le SERVEUR ; il en
+# restait un, remonté d'une couche, entre la description et le SCHÉMA. La description
+# ordonne « adresse le tableau par son NUMÉRO — la forme à employer », et le schéma
+# annonçait `{"type": "string"}`. Un agent consciencieux qui lit les deux ne peut pas
+# les concilier.
+#
+# Ce n'est pas théorique : mesuré le 08/09/2026, un client de campagne **validait contre
+# ce schéma et interceptait le nombre avant l'envoi**. Il ne pouvait donc ni reproduire
+# le défaut, ni bénéficier du correctif — pendant que les agents du même runner, qui ne
+# valident pas, l'envoyaient et se faisaient refuser. Le schéma décidait qui pouvait
+# suivre l'instruction et qui ne le pouvait pas.
+#
+# `WithJsonSchema` publie les deux formes SANS changer le type Python : l'aval continue
+# de recevoir du texte, un seul chemin de résolution, aucun appelant à adapter. Le
+# nombre est annoncé EN PREMIER — c'est la forme que la description prescrit, et l'ordre
+# d'une alternative est lu comme une préférence.
 #: L'adresse d'un tableau telle qu'une SURFACE l'accepte : son nom, ou son numéro —
 #: en texte comme en nombre. À employer partout où une entrée porte `namespace`.
-Adresse = Annotated[str, BeforeValidator(_texte_de_l_adresse)]
+Adresse = Annotated[
+    str,
+    BeforeValidator(_texte_de_l_adresse),
+    WithJsonSchema({"anyOf": [{"type": "integer"}, {"type": "string"}]}),
+]

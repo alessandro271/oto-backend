@@ -49,8 +49,23 @@ PARAMETRE = "readonly_override"
 MAX_RELEVE = 25
 MAX_VALEUR = 120
 
-# La phrase du palier, une seule fois : les deux refus la citent, la description servie
-# aussi. Deux formulations divergeraient le jour où le palier bouge.
+# La phrase du palier, citée par les deux REFUS.
+#
+# ⚠️ **Ce commentaire disait « une seule fois : […] la description servie aussi ». La
+# seconde moitié était fausse** (mesuré le 07/09/2026) : `PALIER` n'a AUCUNE référence
+# hors de ce fichier, et les deux descriptions servies re-rédigent le palier chacune de
+# son côté — l'une en anglais dans `tools/datastore.py` (« open to the OWNER of the
+# table (you, your org or your team) or to whoever GOVERNS it »), l'autre en français
+# dans `capabilities/datastore/rows.py` (« Réservé au propriétaire du tableau ou à qui
+# le gouverne »). Trois formulations, exactement le risque que la phrase annonçait
+# éviter — et une promesse creuse est pire qu'un doublon assumé, parce que celui qui
+# la lit croit n'avoir qu'un endroit à changer.
+#
+# ⚠️ **Donc : le jour où le palier bouge, TROIS endroits changent** — ici, la docstring
+# anglaise de `data_write` (face MCP), et `_FORCAGE` dans `rows.py` (face REST). Elles
+# ne se fusionnent pas telles quelles : deux sont dans des langues différentes, et les
+# descriptions d'outils MCP sont des docstrings littérales, non interpolées. Les unifier
+# demande de construire ces descriptions, ce qui est un lot, pas une retouche.
 PALIER = ("le PROPRIÉTAIRE du tableau (toi, ton org ou ton équipe) ou celui qui le "
           "GOUVERNE")
 

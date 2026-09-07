@@ -37,7 +37,8 @@ from .declaration import (
     validation_active,
     _walk_fields,
 )
-from .cycle_de_vie import lifecycle_of
+from .cycle_de_vie import (abandon_state_of, claimable_of, lifecycle_of,
+                           max_claims_of, terminal_states)
 
 # ── Options déclarées mais non appliquées (#319) ─────────────────────────────
 #
@@ -198,23 +199,78 @@ def lifecycle_hors_statut(schema: Optional[dict]) -> list[str]:
 
 def lifecycle_hors_statut_warning(champs: list[str],
                                   schema: Optional[dict] = None) -> Optional[str]:
-    """La phrase dit la CONSÉQUENCE avant la correction — sans quoi elle se lit comme
-    un détail de style, alors qu'elle annonce une file de travail sans garde."""
+    """La phrase dit la CONSÉQUENCE avant la correction — mais **seulement celle
+    qu'elle a constatée**.
+
+    ⚠️ **La première version affirmait « ce tableau n'a AUCUN état terminal, AUCUN
+    plafond, AUCUN état d'abandon, AUCUN périmètre ».** C'était faux, et signalé dans
+    l'heure par une campagne qui l'a vérifié avant de me le dire : sur son tableau, la
+    colonne d'ancrage portait bien des états terminaux — ce sont le plafond, l'abandon
+    et le périmètre qui manquaient. Le message décrivait le cycle de vie ORPHELIN et
+    concluait sur le tableau ENTIER.
+
+    Un lecteur pressé serait allé poser un état terminal qui existait déjà. **Un
+    avertissement qui déborde de son constat coûte plus qu'il ne rapporte** : il fait
+    agir sur ce qui va bien, et il perd la confiance qu'il faut pour être suivi sur ce
+    qui ne va pas.
+
+    Les manques sont donc MESURÉS un par un, sur ce que la file lit réellement.
+
+    ⚠️ Et le conseil ne suppose plus que l'ancre n'a pas de cycle de vie : quand les
+    DEUX colonnes en portent un — le cas rencontré —, « déplace le rôle sur la colonne
+    qui porte le cycle de vie » ne désigne rien.
+    """
     if not champs:
         return None
     noms = ", ".join(f"`{c}`" for c in champs)
     ancre = status_field(schema)
     cle = (ancre or {}).get("key")
-    ou = (f"C'est `{cle}` qui porte `role: \"status\"` sur ce tableau, et "
-          + ("il n'a pas de cycle de vie." if not lifecycle_of(schema)
-             else "son cycle de vie est le seul que la file lit.")
-          ) if cle else ("Aucun champ ne porte `role: \"status\"` sur ce tableau : "
-                         "la file n'a donc aucune ancre.")
+
+    if not cle:
+        return (f"cycle de vie NON LU : {noms} — oto ne lit le `lifecycle` que sur le "
+                "champ déclaré `role: \"status\"`, et **aucune colonne ne porte ce "
+                "rôle sur ce tableau**. La file n'a donc aucune ancre : rien de ce "
+                "cycle de vie n'est appliqué. Déclare `role: \"status\"` sur la "
+                "colonne qui porte l'état de travail — jamais pendant qu'une vague "
+                "tourne.")
+
+    # Ce que la file lit VRAIMENT, cran par cran. Dérivé des fonctions qui décident,
+    # jamais d'une hypothèse sur ce que l'ancre contient.
+    manques = [nom for nom, present in (
+        ("état terminal", bool(terminal_states(schema))),
+        ("plafond de reprises", max_claims_of(schema) is not None),
+        ("état d'abandon", abandon_state_of(schema) is not None),
+        ("périmètre de réservation", claimable_of(schema) is not None),
+    ) if not present]
+
+    lc_ancre = lifecycle_of(schema)
+    if not lc_ancre:
+        etat = (f"C'est `{cle}` qui porte `role: \"status\"`, et **il n'a aucun cycle "
+                "de vie** : rien n'est appliqué.")
+        conseil = (f"Déplace `role: \"status\"` sur la colonne qui porte le cycle de "
+                   f"vie, ou déplace le cycle de vie sur `{cle}`.")
+    else:
+        etat = (f"C'est `{cle}` qui porte `role: \"status\"`, et **son cycle de vie "
+                "est le seul appliqué**.")
+        conseil = (f"Les deux colonnes portent un cycle de vie : seul celui de `{cle}` "
+                   f"compte. Reporte sur `{cle}` ce que tu veux voir appliqué, ou "
+                   f"déplace le rôle si c'est {noms} qui décrit le vrai état de "
+                   "travail.")
+
+    if manques:
+        # « pas d'état », « pas de plafond » : l'élision se calcule, elle ne se
+        # devine pas — une phrase servie à un agent est lue par un humain derrière.
+        liste = ", ".join(("pas d'" if m[0] in "aeiouéè" else "pas de ") + m
+                          for m in manques)
+        consequence = "Ce tableau n'a donc " + liste + " : "
+        consequence += ("une ligne réservée n'est pas relâchée quand elle se termine, "
+                        "et la file peut tourner à vide indéfiniment."
+                        if "état terminal" in manques
+                        else "la file ne s'arrête pas d'elle-même sur ces crans.")
+    else:
+        consequence = ("Tous les crans de la file sont par ailleurs déclarés sur "
+                       f"`{cle}` : cette déclaration-ci est simplement inerte.")
+
     return (f"cycle de vie NON LU : {noms} — oto ne lit le `lifecycle` que sur le "
-            f"champ déclaré `role: \"status\"`. {ou} Tant que c'est le cas, ce "
-            "tableau n'a AUCUN état terminal, AUCUN plafond de reprises, AUCUN état "
-            "d'abandon et AUCUN périmètre de réservation : une ligne réservée n'est "
-            "pas relâchée quand elle se termine, et la file peut tourner à vide "
-            "indéfiniment. Déplace `role: \"status\"` sur la colonne qui porte le "
-            "cycle de vie, ou déplace le cycle de vie sur la colonne qui porte le "
-            "rôle — jamais pendant qu'une vague tourne.")
+            f"champ déclaré `role: \"status\"`. {etat} {consequence} {conseil} "
+            "Jamais pendant qu'une vague tourne.")
