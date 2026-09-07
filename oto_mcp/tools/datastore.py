@@ -496,7 +496,9 @@ def register(mcp: FastMCP) -> None:
         except NamespaceForbidden:
             raise McpError(ErrorData(code=INVALID_PARAMS,
                                      message=f"tu n'as pas le droit de supprimer `{namespace}`"))
-        return {"ok": True, "namespace": namespace}
+        # L'identité de ce qui vient d'être supprimé, pas l'écho de l'adresse : le
+        # tableau n'existe plus, donc c'est la SEULE trace que l'appelant en garde.
+        return {"ok": True, **identite.de_releve(store.dernier_tableau, namespace)}
 
     @mcp.tool()
     def data_rename_namespace(namespace: str, new_name: str) -> dict:
@@ -677,7 +679,7 @@ def register(mcp: FastMCP) -> None:
                 out = store.set_schema(namespace, schema)
             if semantic_search is not None:
                 out.update(store.set_semantic(namespace, semantic_search))
-            return out or {"namespace": namespace}
+            return out or identite.de_releve(store.dernier_tableau, namespace)
         except NamespaceNotFound as e:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=_inconnu(namespace, e)))
         except NamespaceReadOnly:
@@ -1351,7 +1353,11 @@ def register(mcp: FastMCP) -> None:
 
         # Le partage est une action de GOUVERNANCE (owner ∪ escalade roles.py).
         try:
-            ns_id = _store_for(sub).resolve_ns_id(namespace)
+            # Le store est gardé : la résolution y relève le tableau (numéro + nom
+            # canonique), et c'est ce que la réponse doit porter — pas l'écho de
+            # l'adresse reçue.
+            store_partage = _store_for(sub)
+            ns_id = store_partage.resolve_ns_id(namespace)
         except NamespaceNotFound as e:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=_inconnu(namespace, e)))
         if not ownership.can_govern(sub, "datastore_namespace", str(ns_id)):
@@ -1368,14 +1374,18 @@ def register(mcp: FastMCP) -> None:
             if not removed:
                 raise McpError(ErrorData(code=INVALID_PARAMS,
                                          message=f"pas de partage actif pour {cible} sur {namespace}"))
-            return {"ok": True, "namespace": namespace, "unshared_with": cible,
+            return {"ok": True,
+                    **identite.de_releve(store_partage.dernier_tableau, namespace),
+                    "unshared_with": cible,
                     "unshared_with_sub": recipient["sub"]}
 
         if permission not in ("read", "write"):
             raise McpError(ErrorData(code=INVALID_PARAMS, message="permission must be 'read' or 'write'"))
         ownership.grant("datastore_namespace", str(ns_id), "user", recipient["sub"],
                         permission, granted_by=sub)
-        return {"ok": True, "namespace": namespace, "shared_with": cible,
+        return {"ok": True,
+                **identite.de_releve(store_partage.dernier_tableau, namespace),
+                "shared_with": cible,
                 "shared_with_sub": recipient["sub"], "permission": permission}
 
     # --- MCP App : variante à interface rendue du datastore (SEP-1865) --------
