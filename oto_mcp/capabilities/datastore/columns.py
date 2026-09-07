@@ -111,6 +111,16 @@ class PatchSchemaInput(BaseModel):
         "Keys to take out of the SCHEMA (a key that is not there is refused, never "
         "silently ignored). It does not touch the rows' DATA — that is "
         "`data_drop_column`."))
+    # Le troisième geste, arrivé le 07/09/2026 : entre la fusion qui COMPLÈTE et le
+    # retrait qui enlève une COLONNE, rien ne savait enlever un ATTRIBUT. Il fallait
+    # reposer le schéma entier — le geste qui a détruit 78 notes de champ, puis 52.
+    remove_attrs: Optional[dict] = Field(default=None, description=(
+        "Attributes to take off columns that STAY: `{\"column\": [\"attr\", …]}`. "
+        "Merging only completes, and `remove` drops a whole column — without this, "
+        "taking one attribute off meant reposting the entire schema, which silently "
+        "drops every declaration you did not resend. An unknown column or attribute "
+        "is refused, never silently ignored. `key` cannot be taken off: it is the "
+        "column's identity, not one of its properties."))
     strict: Optional[bool] = None
     key: Optional[str] = None
     # #516 : le cran « écrire, jamais créer » se pose et se retire ICI — le poser
@@ -163,6 +173,7 @@ def _patch_schema(ctx: ResolvedCtx, inp: PatchSchemaInput) -> dict:
         # — le rater ici laisserait la classe ouverte sur la route la plus empruntée.
         return {**make_store(ctx.sub).patch_schema(
             namespace, fields=inp.fields, remove=inp.remove,
+            remove_attrs=inp.remove_attrs,
             strict=inp.strict, key=inp.key, key_required=inp.key_required,
             unknown_fields=inp.unknown_fields),
             **cles_inconnues.check({"fields": inp.fields or []})}
@@ -223,7 +234,11 @@ CAPABILITIES += [
             "keys are appended. `remove: [\"key\", …]` is the explicit deletion (a "
             "wrong key is refused, never silently ignored) — it takes the field out of "
             "the SCHEMA; to erase the column from the rows' DATA, that is "
-            "`data_drop_column`. `strict`/`key`/`key_required`/`unknown_fields` "
+            "`data_drop_column`. `remove_attrs: {\"column\": [\"attr\", …]}` takes "
+            "attributes off columns that STAY — merging only completes, so this is the "
+            "only way to drop one declaration without reposting the whole schema; an "
+            "unknown column or attribute is refused, and `key` cannot be dropped. "
+            "`strict`/`key`/`key_required`/`unknown_fields` "
             "change the head keys, untouched when omitted — `key_required: true` "
             "CLOSES the table (a write designating no existing row is refused), "
             "`false` reopens it. `unknown_fields` decides what happens to a column "

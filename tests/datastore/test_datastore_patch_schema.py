@@ -178,13 +178,15 @@ class _RestStore:
         self.current = current
         self.calls: list = []
 
-    def patch_schema(self, namespace, *, fields=None, remove=None, strict=None, key=None,
+    def patch_schema(self, namespace, *, fields=None, remove=None, remove_attrs=None,
+                     strict=None, key=None,
                      key_required=None, unknown_fields=None):
         self.calls.append((namespace, fields, remove, strict, key, key_required,
                            unknown_fields))
         merged, added, updated = dsv2.merge_fields(
             [f for f in self.current.get("fields") or [] if isinstance(f, dict)],
             fields or [])
+        merged, _ = dsv2.remove_field_attrs(merged, remove_attrs or {})
         return {"namespace": namespace, "schema": {**self.current, "fields": merged},
                "added": added, "updated": updated, "removed": list(remove or [])}
 

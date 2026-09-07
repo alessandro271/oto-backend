@@ -181,6 +181,7 @@ class SchemaOpsMixin:
 
     def patch_schema(self, namespace: str, *, fields: Optional[list] = None,
                      remove: Optional[list] = None,
+                     remove_attrs: Optional[dict] = None,
                      strict: Optional[bool] = None,
                      key: Optional[str] = None,
                      key_required: Optional[bool] = None,
@@ -197,7 +198,8 @@ class SchemaOpsMixin:
         appel qui réussit. Il faut un geste qui ne PEUT pas détruire.
 
         `fields` = fusion par clé (complète l'existant, ajoute l'inconnu) ; `remove`
-        = le retrait EXPLICITE, sans quoi on rendrait le nettoyage impossible ;
+        = le retrait EXPLICITE d'une COLONNE ; `remove_attrs` = `{colonne: [attribut,
+        …]}`, le retrait d'un ATTRIBUT sur une colonne qui reste ;
         `strict`/`key`/`key_required`/`unknown_fields` = les clés de tête, inchangées
         si omises. `unknown_fields` (#614/#678) se pose ICI en priorité : un tableau
         se ferme quand il a FINI d'être exploré, donc quand son schéma est long — et
@@ -218,13 +220,24 @@ class SchemaOpsMixin:
         if not isinstance(current, dict):
             raise ValueError("le schéma courant n'est pas un objet — repose-le avec "
                              "data_set_schema avant de le patcher")
-        if (fields is None and remove is None and strict is None and key is None
+        if (fields is None and remove is None and remove_attrs is None
+                and strict is None and key is None
                 and key_required is None and unknown_fields is None):
             raise ValueError(
                 "rien à patcher : passe `fields` (fusion par clé), `remove` (retrait "
-                "explicite), `strict`, `key`, `key_required` ou `unknown_fields`")
+                "d'une colonne), `remove_attrs` (retrait d'un attribut sur une "
+                "colonne qui reste), `strict`, `key`, `key_required` ou "
+                "`unknown_fields`")
         merged = [f for f in (current.get("fields") or []) if isinstance(f, dict)]
         merged, added, updated = dsv2.merge_fields(merged, fields or [])
+        merged, inconnus_attrs = dsv2.remove_field_attrs(merged, remove_attrs or {})
+        if inconnus_attrs:
+            raise ValueError(
+                "`remove_attrs` nomme ce que le schéma ne porte pas : "
+                + ", ".join(f"`{k}`" for k in inconnus_attrs)
+                + ". Rien n'a été touché — un retrait silencieux sur une faute de "
+                "frappe ferait croire au nettoyage. Relis le format avec "
+                "`data_get_schema`.")
         merged, unknown = dsv2.remove_fields(merged, remove or [])
         if unknown:
             raise ValueError(
@@ -249,7 +262,11 @@ class SchemaOpsMixin:
         # donc rien à en redire. Il reste tendu pour tout le reste — c'est le seul
         # moyen de voir une fusion qui laisserait échapper quelque chose.
         result = self.set_schema(namespace, out_schema, geste="patch",
-                                 retraits_annonces=[str(k) for k in (remove or [])])
+                                 retraits_annonces=(
+                                     [str(k) for k in (remove or [])]
+                                     + [f"{c}.{a}"
+                                        for c, aa in (remove_attrs or {}).items()
+                                        for a in (aa or [])]))
         return {**result, "added": added, "updated": updated,
                 "removed": [str(k) for k in (remove or [])]}
 

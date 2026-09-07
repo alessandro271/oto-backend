@@ -1091,6 +1091,57 @@ def remove_fields(current: list, keys: list) -> tuple[list, list[str]]:
     return kept, sorted(wanted - present)
 
 
+def remove_field_attrs(current: list, attrs: dict) -> tuple[list, list[str]]:
+    """Retire des ATTRIBUTS nommés sur des colonnes nommées → `(fields, inconnus)`.
+
+    ⚠️ **Le trou que ça ferme, et il était béant.** La fusion COMPLÈTE (`merge_fields`
+    : « les propriétés fournies écrasent, les autres sont préservées ») et le retrait
+    (`remove_fields`) enlève des COLONNES ENTIÈRES. Entre les deux, rien : pour
+    enlever un seul attribut d'une colonne — un `role` mort, une déclaration qu'on
+    décommissionne — le seul chemin était de reposer le schéma ENTIER. C'est-à-dire
+    le geste qui a détruit 78 notes de champ dans un incident, puis 52 dans un autre,
+    en silence (#388).
+
+    *On avait donc troqué la destruction accidentelle contre l'impossibilité de
+    retirer un mot* — exactement ce que `remove_fields` dit éviter, un cran plus bas.
+
+    `attrs` = `{colonne: [attribut, …]}`. Descend dans les composites déclarés comme
+    la fusion, par le même chemin — sans quoi on ne saurait pas nettoyer un
+    sous-champ.
+
+    Les inconnus sont RENDUS, jamais ignorés : sur une faute de frappe, un retrait
+    silencieux ferait croire au nettoyage — la moitié du travail d'une garde est de
+    refuser de mentir sur ce qu'elle a fait.
+
+    ⚠️ **`key` ne se retire pas** : c'est l'identité de la colonne, pas une de ses
+    propriétés. La retirer rendrait le field inadressable, et le schéma le porterait
+    sans que personne puisse le désigner pour le réparer."""
+    inconnus: list[str] = []
+    out: list = []
+    demande = {str(k): {str(a) for a in (v or [])} for k, v in (attrs or {}).items()}
+    vus: set = set()
+    for f in current:
+        if not isinstance(f, dict):
+            out.append(f)
+            continue
+        cle = f.get("key")
+        retirer = demande.get(str(cle))
+        if not retirer:
+            out.append(f)
+            continue
+        vus.add(str(cle))
+        if "key" in retirer:
+            raise ValueError(
+                f"`{cle}` : `key` ne se retire pas — c'est l'identité de la colonne, "
+                "pas une de ses propriétés. Pour retirer la colonne entière, c'est "
+                "`remove` ; pour la renommer, repose-la sous son nouveau nom.")
+        neuf = {k: v for k, v in f.items() if k not in retirer}
+        inconnus.extend(f"{cle}.{a}" for a in sorted(retirer) if a not in f)
+        out.append(neuf)
+    inconnus.extend(sorted(k for k in demande if k not in vus))
+    return out, sorted(inconnus)
+
+
 def off_schema_keys(schema: Optional[dict], data: dict) -> list[str]:
     """Clés de la row ÉCRITE qu'aucun field du schéma ne déclare (chemins pointés
     pour les sous-records : `contacts[].email_pro`) — le signal de l'issue #294.
@@ -2693,11 +2744,16 @@ def declarations_effacees(ancien: Optional[dict], nouveau: Optional[dict],
     premier est `schema.key`, la clé métier, qui porte un index UNIQUE partiel — la
     re-poster absente lève la contrainte sans que rien ne le signale.
 
-    `annonces` = les champs dont le retrait est DÉJÀ dit par l'appelant (le `remove`
-    d'un patch). Les taire n'affaiblit pas le filet : tout ce qui se perd en plus
-    reste relevé — c'est même le seul moyen de voir une fusion qui laisserait
-    échapper quelque chose. Et un avertissement qui crie sur un geste explicite est
-    celui qu'on apprend à ignorer, donc celui qui ruine les vrais.
+    `annonces` = ce dont le retrait est DÉJÀ dit par l'appelant. Deux formes, et la
+    seconde est arrivée avec le retrait d'attribut : un **nom de champ** tait le
+    retrait du champ entier (le `remove` d'un patch) ; un **`champ.attribut`** tait
+    la disparition de cette déclaration-là sur un champ qui, lui, reste
+    (`remove_attrs`).
+
+    Les taire n'affaiblit pas le filet : tout ce qui se perd en plus reste relevé —
+    c'est même le seul moyen de voir une fusion qui laisserait échapper quelque
+    chose. Et un avertissement qui crie sur un geste explicite est celui qu'on
+    apprend à ignorer, donc celui qui ruine les vrais.
 
     Seules les DISPARITIONS comptent, jamais les changements de valeur : réécrire une
     note est un geste qui se nomme lui-même ; la faire disparaître, non."""
@@ -2730,7 +2786,8 @@ def declarations_effacees(ancien: Optional[dict], nouveau: Optional[dict],
             continue
         fap = ap[chemin]
         manquantes = {k: v for k, v in fav.items()
-                      if k not in _DECL_STRUCTURELLES and k not in fap}
+                      if k not in _DECL_STRUCTURELLES and k not in fap
+                      and f"{chemin}.{k}" not in tus}
         if manquantes:
             sortie.append({"champ": chemin, "retire": False,
                            "declarations": manquantes})

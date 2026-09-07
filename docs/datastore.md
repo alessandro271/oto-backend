@@ -1040,6 +1040,19 @@ derrière un cache par run. La conclusion reposait donc sur un coût **supposé,
 mesuré**. *Une réserve de perf qu'on n'a pas mesurée est une opinion qui prend
 l'autorité d'un fait en étant écrite ici.*
 
+⚠️ **Le troisième geste a manqué un an, et son absence rendait une demande simple
+impossible.** Entre la fusion qui COMPLÈTE et le retrait qui enlève une COLONNE, rien ne
+savait enlever un ATTRIBUT — un `role` mort, une déclaration qu'on décommissionne. Le
+seul chemin était de reposer le schéma ENTIER, c'est-à-dire exactement le geste
+destructeur décrit ci-dessous. *On avait troqué la destruction accidentelle contre
+l'impossibilité de retirer un mot.* Découvert en cherchant à exécuter une demande du
+propriétaire — sortir du schéma des rôles que plus rien ne lit : la demande était
+simple, la plateforme ne savait pas la servir sans risquer tout le reste.
+
+Le relevé d'effacement suit : une annonce de la forme `champ.attribut` tait cette
+disparition-là, et **rien d'autre** — le filet reste tendu sur ce qui se perd en plus,
+seul moyen de voir une fusion qui laisserait échapper quelque chose.
+
 **Retoucher un schéma sans le détruire (#388).** `data_set_schema` REMPLACE — bon geste
 pour POSER un format, piège pour l'ÉDITER : deux appels indiscernables (même méthode,
 même succès, même réponse) n'ont pas le même effet selon que l'appelant a patché en
@@ -1054,6 +1067,8 @@ jamais rebrassé, il pilote le rendu) ; `remove` = le **retrait explicite**
 (`dsv2.remove_fields`), pendant OBLIGÉ de la fusion — sans lui on troquerait la
 destruction accidentelle contre l'impossibilité de nettoyer, et une clé inconnue y est
 REFUSÉE (un `remove` avalé sur une faute de frappe ferait croire au nettoyage) ;
+`remove_attrs` = `{colonne: [attribut, …]}`, le **retrait d'un ATTRIBUT sur une colonne
+qui reste** (`dsv2.remove_field_attrs`, 07/09/2026) ;
 `strict`/`key`/`key_required` = les clés de tête, inchangées si omises (`key_required`
 y entre le 29/08/2026, #516 : il ne se posait que par `set`) ; les crans de CHAMP
 `readonly` / `origine: "system"` (#586/#606) se posent et se lèvent par `fields`, `null`
