@@ -20,7 +20,6 @@ from __future__ import annotations
 import base64
 import json
 import logging
-import os
 import time
 from typing import Any, Literal, Optional
 
@@ -439,27 +438,6 @@ _SANS_PORTEUR = (
     "prêter : reprogramme-le, il partira au nom de qui le demande.")
 
 
-#: Le sondage fabrique-t-il le travail des campagnes ? **Désarmé par défaut.**
-#:
-#: ⚠️ Ce réglage est une GARDE, pas un confort. Trois choses le protégeaient au
-#: moment de la livraison — les workers tapant la production alors que le code
-#: n'était qu'en préproduction, les campagnes de l'org sensible en `draft`, et
-#: leurs tableaux différents de celui en cours. Aucune n'est un garde-fou : ce
-#: sont des ÉTATS qui se trouvaient être favorables. Deux tombent si quelqu'un
-#: arme une campagne, la troisième au premier tag de production.
-#:
-#: Et la garantie habituelle ne vaut pas ici : préproduction et production
-#: partagent la même base. Ce que le code CACHE est séparé entre les deux faces,
-#: ce que le code DÉCLENCHE ne l'est pas. Un mécanisme qui fabrique du travail
-#: n'est donc pas dans le même cas qu'un correctif qui change une réponse.
-#:
-#: Défaut à FAUX, et c'est délibéré : le mécanisme peut atteindre la production
-#: sans rien déclencher, et s'arme quand on le décide — sans déploiement, donc
-#: sans attendre une fenêtre. `OTO_CAMPAGNES_AU_SONDAGE=1` l'active.
-def _campagnes_au_sondage() -> bool:
-    return (os.environ.get("OTO_CAMPAGNES_AU_SONDAGE", "") or "").strip() in ("1", "true", "yes")
-
-
 #: Dernière cause signalée par org, pour ne pas répéter le même échec à chaque
 #: sondage — `{org_id: (cause, instant)}`. En mémoire de process : au pire un
 #: redémarrage rejournalise une fois, ce qui est le bon défaut.
@@ -498,8 +476,6 @@ def _produire_pour_une_campagne(org_id: int, bail_s: int) -> Optional[str]:
     Tant qu'elle manque, une campagne peut dépasser son budget déclaré. La garde
     d'armement ci-dessus est ce qui borne le risque en attendant.
     """
-    if not _campagnes_au_sondage():
-        return None
     try:
         # ⚠️ AVANT de servir : arrêter celles qui échouent en boucle. L'ordre
         # compte — une campagne épuisée doit être arrêtée, pas seulement sautée,

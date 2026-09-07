@@ -249,10 +249,6 @@ CAMPAGNE = {"id": 12, "sub": "celui-qui-a-declare", "label": "audiens",
 
 @pytest.fixture
 def campagne(monkeypatch, espion):
-    # La production est DÉSARMÉE par défaut (garde `OTO_CAMPAGNES_AU_SONDAGE`).
-    # Les bancs qui l'exercent doivent donc l'armer — et le fait de devoir
-    # l'écrire ici est le rappel qu'en production, elle ne part pas toute seule.
-    monkeypatch.setenv("OTO_CAMPAGNES_AU_SONDAGE", "1")
     monkeypatch.setattr(RJ.db, "campagne_a_servir",
                         lambda org_id: espion.update(cherchee=org_id) or CAMPAGNE)
     monkeypatch.setattr(RJ.db, "marquer_demarree",
@@ -282,7 +278,6 @@ def test_la_campagne_passe_a_running_au_premier_travail(campagne):
 
 
 def test_sans_campagne_le_sondage_rend_simplement_rien(monkeypatch, espion):
-    monkeypatch.setenv("OTO_CAMPAGNES_AU_SONDAGE", "1")
     monkeypatch.setattr(RJ.db, "campagne_a_servir", lambda org_id: None)
     monkeypatch.setattr(RJ.db, "marquer_demarree", lambda fid: None)
     assert _appel(_ctx(), op="claim") == {"job": None}
@@ -293,7 +288,6 @@ def test_une_campagne_illisible_ne_casse_PAS_le_sondage(monkeypatch, espion):
     """Fail-open : le sondage des workers est le chemin le plus fréquent de toute
     la plateforme. Une campagne mal formée ne doit pas l'arrêter pour l'org —
     le passage attendra le sondage suivant."""
-    monkeypatch.setenv("OTO_CAMPAGNES_AU_SONDAGE", "1")
     def _explose(org_id):
         raise RuntimeError("colonne manquante")
     monkeypatch.setattr(RJ.db, "campagne_a_servir", _explose)
@@ -314,7 +308,6 @@ def test_file_vide_ne_porte_aucune_panne(monkeypatch, espion):
     """Le pendant, sans lequel le champ ne prouve rien : une file réellement
     vide ne doit porter AUCUN signalement. Un champ toujours présent redevient
     du bruit, et on aurait juste déplacé le silence."""
-    monkeypatch.setenv("OTO_CAMPAGNES_AU_SONDAGE", "1")
     monkeypatch.setattr(RJ.db, "campagne_a_servir", lambda org_id: None)
     assert _appel(_ctx(), op="claim") == {"job": None}
 
@@ -324,7 +317,6 @@ def test_une_campagne_cassee_ne_journalise_QU_UNE_fois(monkeypatch, espion, capl
     noierait le journal sous des milliers de lignes identiques — et un journal
     noyé ne se lit pas, ce qui revient à ne rien dire. On veut le contraire :
     une ligne qui se voit."""
-    monkeypatch.setenv("OTO_CAMPAGNES_AU_SONDAGE", "1")
     RJ._CAMPAGNE_MUETTE.clear()
     def _explose(org_id):
         raise RuntimeError("colonne manquante")
@@ -339,7 +331,6 @@ def test_une_campagne_cassee_ne_journalise_QU_UNE_fois(monkeypatch, espion, capl
 def test_une_cause_DIFFERENTE_se_dit(monkeypatch, espion, caplog):
     """Ne pas répéter n'est pas se taire : une panne qui change de nature est une
     information neuve, et l'étouffer ferait manquer la seconde."""
-    monkeypatch.setenv("OTO_CAMPAGNES_AU_SONDAGE", "1")
     RJ._CAMPAGNE_MUETTE.clear()
     causes = iter(["colonne manquante", "colonne manquante", "table absente"])
     def _explose(org_id):
@@ -357,7 +348,6 @@ def test_les_campagnes_epuisees_sont_arretees_AVANT_d_en_servir_une(monkeypatch,
     lançait. Le sondage, lui, ne s'arrête jamais : une campagne qui échoue en
     boucle régénérerait du travail toute la nuit. Et il faut l'ARRÊTER, pas
     seulement la sauter — sinon elle reste `running` sans avancer."""
-    monkeypatch.setenv("OTO_CAMPAGNES_AU_SONDAGE", "1")
     ordre = []
     monkeypatch.setattr(RJ.db, "arreter_campagnes_epuisees",
                         lambda org_id: ordre.append("arret") or [77])
@@ -370,22 +360,3 @@ def test_les_campagnes_epuisees_sont_arretees_AVANT_d_en_servir_une(monkeypatch,
     assert any("campagne 77 arrêtée" in r.message for r in caplog.records), \
         "un arrêt automatique qui ne se dit pas est un silence de plus"
 
-
-def test_la_production_de_campagne_est_DESARMEE_par_defaut(monkeypatch, espion):
-    """La garde qui ne dépend pas de l'état des données.
-
-    Trois choses protégeaient au moment de la livraison — les workers tapant la
-    production quand le code n'était qu'en préproduction, les campagnes de l'org
-    sensible en brouillon, leurs tableaux différents de celui en cours. Aucune
-    n'est un garde-fou : ce sont des états qui se trouvaient être favorables, et
-    deux d'entre eux tombent dès que quelqu'un arme une campagne.
-
-    Ce banc fige la seule barrière qui ne dépend de rien : par défaut, le
-    sondage ne fabrique aucun travail. Le mécanisme peut donc atteindre la
-    production sans rien déclencher."""
-    monkeypatch.delenv("OTO_CAMPAGNES_AU_SONDAGE", raising=False)
-    appele = []
-    monkeypatch.setattr(RJ.db, "campagne_a_servir", lambda o: appele.append(o))
-    monkeypatch.setattr(RJ.db, "arreter_campagnes_epuisees", lambda o: appele.append(o))
-    assert _appel(_ctx(), op="claim") == {"job": None}
-    assert appele == [], "désarmé, le sondage ne doit RIEN demander aux campagnes"
