@@ -473,8 +473,21 @@ def _produire_pour_une_campagne(org_id: int, bail_s: int) -> Optional[str]:
     plateforme. Il faut donc un compteur tenu à l'écriture, pas une somme à la
     lecture ; ce n'est pas un oubli, c'est un travail qui n'est pas fait.
 
-    Tant qu'elle manque, une campagne peut dépasser son budget déclaré. La garde
-    d'armement ci-dessus est ce qui borne le risque en attendant.
+    Tant qu'elle manque, une campagne peut dépasser son budget déclaré.
+
+    ⚠️ Ce texte pointait « la garde d'armement ci-dessus », c'est-à-dire
+    l'interrupteur d'environnement retiré le 08/09/2026 — il désignait donc une
+    protection qui n'existe plus. Ce qui borne réellement le risque, et qui n'a
+    jamais dépendu d'un réglage :
+
+    - **une campagne ne produit rien tant que personne ne l'a ARMÉE** — la
+      clause `status IN ('armed', 'running')` de `campagne_a_servir`. C'est la
+      seule garde d'entrée, et c'est un geste humain explicite ;
+    - `max_rows`, compté dans la même requête, borne le NOMBRE de travaux ;
+    - `max_consecutive_failures` arrête une campagne qui échoue en boucle.
+
+    Ce qui n'est pas borné reste la dépense CUMULÉE, ci-dessus. Un passage armé
+    par erreur consomme donc jusqu'à `max_rows` travaux, pas au-delà.
     """
     try:
         # ⚠️ AVANT de servir : arrêter celles qui échouent en boucle. L'ordre
