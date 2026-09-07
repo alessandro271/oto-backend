@@ -73,7 +73,6 @@ from __future__ import annotations
 from typing import Any, Callable, Optional
 
 from . import schema as dsv2
-from .columns import _refuse_flat_writes
 from .errors import RowValidationError
 
 
@@ -250,14 +249,6 @@ def ranger_les_couches(schema: Optional[dict], user_data: Optional[dict], *,
       chemin nominal — l'immense majorité des écritures, dont les lots de 8 000 lignes
       — ne paie aucun aller-retour SQL supplémentaire.
 
-    ⚠️ **Un nom PROJETÉ n'est pas une colonne réelle.** `contact1_email` est servi en
-    lecture pendant une migration et n'est jamais stocké (oto#22 §6) : le ranger
-    fabriquerait la colonne libre que `_refuse_flat_writes` passe son temps à interdire.
-    On délègue donc à `_refuse_flat_writes`, qui le nomme mieux que nous — mais on
-    l'APPELLE (#728) au lieu de le supposer posé : `append_row` et le lot ne le posent
-    pas, et là où il manquait c'est le refus des noms pointés qui parlait, en annonçant
-    « n'est aucune colonne : ni dans cette écriture » d'un nom que le geste porte.
-
     ⚠️ **Une colonne déclarée `json` est une colonne comme une autre pour l'ADRESSE**
     (#728) : son exemption ne couvre que le CONTENU de l'objet (ci-dessous, `out`), pas
     le droit de l'annoter. La couvrir aussi laissait l'annotation pointée jusqu'à
@@ -280,17 +271,6 @@ def ranger_les_couches(schema: Optional[dict], user_data: Optional[dict], *,
     for cle in list(out):
         adresse = dsv2.layer_address(cle)
         if adresse is None:
-            continue
-        if (dsv2.resolve_flat_name(schema, adresse[0]) is not None
-                or dsv2.resolve_flat_name(schema, cle) is not None):
-            # Nom PROJETÉ (oto#22 §6) : servi en lecture, jamais stocké — son
-            # annotation n'a nulle part où aller. On appelle ICI le refus qui sait le
-            # dire, au lieu de laisser filer la clé : `_refuse_flat_writes` ne passe
-            # pas à toutes les portes (ni `append_row`, ni le lot), et là où il manque
-            # c'est `_refuse_dotted_names` qui parlait — en annonçant « ni dans cette
-            # écriture » d'un nom que le geste porte littéralement.
-            _refuse_flat_writes(schema, {cle: out[cle],
-                                         adresse[0]: out.get(adresse[0])})
             continue
         adresses.append((cle, adresse))
     if not adresses:
@@ -361,8 +341,7 @@ def traduire_les_entetes(schema: Optional[dict], entetes: list) -> dict:
         if "." not in entete:
             continue
         adresse = dsv2.layer_address(entete)
-        if (adresse is not None and adresse[0] in reelles
-                and dsv2.resolve_flat_name(schema, adresse[0]) is None):
+        if adresse is not None and adresse[0] in reelles:
             continue                                  # cas 1 : le store la rangera
         cible = entete.replace(".", "_")
         if cible in reelles or cible in cibles:
@@ -395,12 +374,11 @@ def _refuse_dotted_names(user_data: Optional[dict]) -> None:
 
     ⚠️ **Ce message AFFIRME trois lectures qu'il ne fait pas** — il ne reçoit que le
     payload ; ce sont celles de `ranger_les_couches`. Il n'est donc vrai que tant que
-    rien n'arrive ici avec une base connue, et le 2026-09-01 (#728) DEUX chemins y
-    arrivaient : une colonne déclarée `json` (exemptée de l'adressage) et un nom
-    projeté aux portes qui ne posent pas `_refuse_flat_writes`. Les deux se refusent
-    désormais en amont, avec leur vraie cause. **Si un troisième s'ouvre un jour, c'est
-    en amont qu'il se ferme — jamais en affadissant cette phrase, qui est ce qui rend
-    le refus actionnable.**"""
+    rien n'arrive ici avec une base connue, et le 2026-09-01 (#728) une colonne
+    déclarée `json` (exemptée de l'adressage) y arrivait. Elle se refuse désormais en
+    amont, avec sa vraie cause. **Si un autre chemin s'ouvre un jour, c'est en amont
+    qu'il se ferme — jamais en affadissant cette phrase, qui est ce qui rend le refus
+    actionnable.**"""
     for cle in user_data or {}:
         if "." not in cle:
             continue

@@ -397,7 +397,7 @@ def test_une_cible_de_couche_ne_declare_pas_de_colonne():
     son statut, ne se subdivise pas. Ces clés seraient LUES NULLE PART — la forme
     acceptée-inerte que #347 a fermée."""
     for cle, valeur in (("role", "status"), ("display", "title"),
-                        ("fields", [{"key": "x"}]), ("flat_alias", "q{n}_{attr}")):
+                        ("fields", [{"key": "x"}]), ("agent_access", "none")):
         errs = dsv2.validate_schema_def({"fields": [
             {"key": "qualification", "type": "text"},
             {"key": "qualification.comment", cle: valeur}]})

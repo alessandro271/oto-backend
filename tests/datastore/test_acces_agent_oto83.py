@@ -146,26 +146,6 @@ def test_la_ligne_servie_a_un_agent_perd_la_colonne_ET_ses_couches(face_agent):
     assert out["score_client"] == "A"
 
 
-def test_l_alias_plat_d_une_colonne_masquee_n_est_pas_fabrique():
-    """Une colonne-tableau en double-service (oto#22 §6) sert ses items sous des noms
-    plats DÉRIVÉS. Masquer le nom nu sans couper la dérivation servirait exactement la
-    même donnée sous `contact1_email`."""
-    from oto_mcp.datastore.core import DatastorePg
-    schema = {"fields": [
-        {"key": "contacts", "type": "list", "agent_access": "none",
-         "of": {"type": "object", "fields": [{"key": "email", "type": "text"}]},
-         "flat_alias": "contact{n}_{attr}"}]}
-    ligne = {"row_id": "r", "created_at": "t", "updated_at": "t",
-             "data": {"contacts": [{"email": "a@b.c"}]}}
-    assert DatastorePg._row_to_dict(dict(ligne), schema)["contact1_email"] == "a@b.c"
-    jeton = session_org.set_call_face(session_org.FACE_MCP)
-    try:
-        out = DatastorePg._row_to_dict(dict(ligne), schema)
-    finally:
-        session_org.reset_call_face(jeton)
-    assert "contacts" not in out and "contact1_email" not in out
-
-
 def test_le_schema_servi_a_un_agent_perd_la_colonne_et_le_perimetre(face_agent):
     servi = aga.schema_servi(SCHEMA)
     cles = [f["key"] for f in servi["fields"]]

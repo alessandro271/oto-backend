@@ -1,17 +1,14 @@
 """Lignes d'un nœud-tableau (lot ⑤) — curseur opaque, et la garde d'homonymie.
 
-⚠️ **Le double de store RÉSOUT les noms plats, comme le vrai.** `core.cursor_rows` et
-`core.count_rows` passent tous deux leurs clauses par `_resolve_filters` avant de bâtir
-leur SQL — un double qui ne le ferait pas rendrait vert un compte pris sur des noms non
-résolus, c'est-à-dire exactement le défaut #621. Le double appelle donc la VRAIE
-fonction de résolution, et les tests comparent ce que les deux chemins ont réellement
-poussé en SQL.
+⚠️ **Le double de store relève ce que CHAQUE chemin a poussé en SQL.** `core.cursor_rows`
+et `core.count_rows` doivent bâtir leur `WHERE` sur le même jeu de clauses — un pied de
+tableau qui compte autre chose que ce qu'il coiffe est le défaut #621, et il ne rougit
+jamais tout seul. Les tests comparent donc les deux relevés, pas une intention.
 """
 import pytest
 
 from oto_mcp.capabilities import node_rows as R
 from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
-from oto_mcp.datastore.columns import _resolve_filters
 from oto_mcp.datastore.errors import InvalidCursor
 from oto_mcp.db import datastore as db_datastore
 
@@ -25,13 +22,6 @@ TABLE = {"id": 5, "public_id": "nod_tbl", "parent_id": None, "kind": "tableau",
                        {"key": "score", "label": "Score", "type": "number"}]}},
          "created_at": "2026-08-01", "updated_at": "2026-08-01"}
 PAGE = {**TABLE, "kind": "page"}
-
-# Une colonne-tableau en DOUBLE SERVICE : `contact1_nom` est un nom servi en lecture,
-# `contacts[0].nom` le chemin réel (oto#22 §6). C'est le seul cas où compter avant de
-# résoudre se voit — et il existe en production.
-SCHEMA_ALIAS = {"fields": [{"key": "contacts", "type": "list",
-                            "flat_alias": "contact{n}_{attr}",
-                            "fields": [{"key": "nom"}]}]}
 
 
 class _Store:
@@ -54,13 +44,12 @@ class _Store:
         self.vu = dict(kw, namespace=namespace)
         if self.leve is not None:
             raise self.leve
-        self.filtres_page = _resolve_filters(self.schema, kw.get("filters"))
+        self.filtres_page = list(kw.get("filters") or [])
         return self.page
 
     def count_rows(self, namespace, *, filter=None, q=None, filters=None):
-        # `core.count_rows` : « le compte doit décrire le MÊME jeu que la page :
-        # mêmes noms résolus ».
-        self.filtres_compte = _resolve_filters(self.schema, filters)
+        # `core.count_rows` : « le compte doit décrire le MÊME jeu que la page ».
+        self.filtres_compte = list(filters or [])
         return self.total
 
 
@@ -213,23 +202,6 @@ def test_le_total_est_FILTRE_pas_le_volume_du_tableau(seams):
     # « 3 sur 12 000 » alors que l'écran en montre 3 sur 3.
     assert seams["store"].filtres_compte == [
         {"field": "statut", "op": "eq", "value": "clos"}]
-
-
-def test_le_total_compte_le_MEME_jeu_que_la_page_noms_PLATS_RESOLUS(seams):
-    """#621 — le compte partait sur les noms NON résolus, la page sur les résolus.
-
-    Sur un schéma à double service, `contact1_nom` est un nom SERVI en lecture : la
-    page le traduit en `contacts[0].nom` avant son SQL, le compte ne le traduisait pas.
-    Deux `WHERE` différents, un pied de tableau qui annonce un autre jeu que celui
-    qu'il coiffe — et rien qui échoue, jamais.
-    """
-    seams["store"] = _Store(schema=SCHEMA_ALIAS)
-    R._compose(CTX, R.NodeRowsInput(node_id="nod_tbl", filter=["contact1_nom:Acme"]))
-
-    st = seams["store"]
-    assert st.filtres_page == [
-        {"field": "contacts[0].nom", "op": "eq", "value": "Acme"}]
-    assert st.filtres_compte == st.filtres_page
 
 
 def test_les_cellules_sont_des_CHAINES_deja_rendues(seams):

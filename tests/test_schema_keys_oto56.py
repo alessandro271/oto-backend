@@ -55,7 +55,7 @@ _TYPES = ({"type": "text"}, {"type": "number"}, {"type": "list", "of": "text"},
 _VALEURS = {"readonly": True, "role": "status", "required": True,
             "max_items": 3, "options": ["a"], "max_length": 5, "pattern": "^a",
             "required_when": {"field": "x", "equals": 1}, "display": "title",
-            "lifecycle": {"states": ["a"], "transitions": {}}, "flat_alias": "x",
+            "lifecycle": {"states": ["a"], "transitions": {}},
             "origine": "manuel", "of": "text", "fields": [],
             "required_layers": ["comment"]}
 
@@ -175,17 +175,19 @@ def test_tout_ce_qui_est_declare_APPLIQUE_est_reellement_lu():
 
 
 def test_la_derivation_suit_les_CONSTANTES_pas_seulement_les_litteraux():
-    """`flat_alias` n'est jamais écrite en toutes lettres : elle est lue par sa
-    constante, en `f.get(FLAT_ALIAS)` ET en `f[FLAT_ALIAS]`. Une dérivation qui ne
-    regarde que les littéraux l'aurait accusée d'être morte — et le test du second
-    sens, bâti dessus, aurait exigé qu'on retire une clé parfaitement vivante. Un
-    garde-fou faux ne se contente pas de manquer un défaut : il fait supprimer du
-    code juste.
+    """`agent_access` n'est jamais écrite en toutes lettres côté `acces_agent` : elle
+    est lue par sa constante, en `f.get(CLE)`. Une dérivation qui ne regarde que les
+    littéraux l'accuserait d'être morte — et le test du second sens, bâti dessus,
+    exigerait qu'on retire une clé parfaitement vivante. Un garde-fou faux ne se
+    contente pas de manquer un défaut : il fait supprimer du code juste.
 
-    Les deux formes de lecture comptent : n'en résoudre qu'une laisserait le trou
-    ouvert sur l'autre, et `flat_alias` — lue par les deux — le masquerait."""
-    assert "flat_alias" in S.interpreted_keys()
-    assert "flat_alias" in K.LUES_PAR_LE_VALIDATEUR
+    ⚠️ **La dérivation résout DEUX formes, `f.get(CONSTANTE)` et `f[CONSTANTE]`, et
+    ce test n'en éprouve qu'une** — il faut le dire plutôt que laisser croire que le
+    nom couvre les deux. `flat_alias`, lue par les deux, était le seul témoin de la
+    seconde ; elle est retirée (07/09/2026, employée par zéro colonne de production).
+    Le jour où un attribut se lira en `f[CONSTANTE]`, c'est ici qu'il se nomme."""
+    assert "agent_access" in S.interpreted_keys()
+    assert "agent_access" in K.LUES_PAR_LE_VALIDATEUR
 
 
 #: Les clés qu'`enforced_keys()` applique AILLEURS que sur une colonne : à la racine

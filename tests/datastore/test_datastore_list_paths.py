@@ -6,8 +6,8 @@ jamais dans les items — il joint les cibles déclarées, comme au premier nive
 même mot qui changerait de sens selon la forme de sa cible serait de l'interprétation,
 sur un paramètre au lieu d'un nom.
 
-Un rang nommé (`contacts[0].email`) vise une fiche précise : c'est ce dont la
-projection d'une migration a besoin pour résoudre un ancien nom plat.
+Un rang nommé (`contacts[0].email`) vise une fiche précise, là où `[]` balaie toute
+la liste : deux questions distinctes, deux notations.
 
 Contre un VRAI PostgreSQL : le sujet est ce que la requête REND. `jsonb_array_elements`
 LÈVE sur une valeur qui n'est pas un tableau — et pendant une conversion, une partie
@@ -107,8 +107,7 @@ def test_several_declared_targets_still_join_at_the_target_level(pg):
 # --- un rang précis ----------------------------------------------------------------
 
 def test_a_named_rank_targets_one_item(pg):
-    """C'est ce dont la projection d'un ancien nom a besoin : `contact2_fonction`
-    résout vers le rang 1, et lui seul."""
+    """Un rang nommé vise le rang, et lui seul — sans jamais balayer la liste."""
     assert _ids([{"field": "contacts[1].fonction", "op": "eq",
                   "value": "DRH"}]) == ["avec_rh"]
     assert _ids([{"field": "contacts[0].fonction", "op": "eq", "value": "DRH"}]) == []
@@ -150,39 +149,15 @@ def _store(monkeypatch, schema):
     return s
 
 
-_ALIAS = {"fields": [
-    {"key": "contacts", "type": "list", "flat_alias": "contact{n}_{attr}",
+_LISTE = {"fields": [
+    {"key": "contacts", "type": "list",
      "of": {"type": "object", "fields": [{"key": "fonction", "type": "text"}]}}]}
-
-
-def test_the_facet_survives_the_migration(pg, monkeypatch):
-    """LE cas d'acceptation du consommateur : sa barre de facettes AGRÈGE sur
-    `contact1_categorie`. C'est la première chose qui casserait entre la conversion et
-    aujourd'hui — l'agrégat doit revivre à l'identique, par l'alias."""
-    s = _store(monkeypatch, _ALIAS)
-    res = s.aggregate("t", group_by="contact1_fonction", metrics=[{"op": "count"}])
-    par_valeur = {r["contact1_fonction"]: r["count"] for r in res}
-    assert par_valeur.get("Dirigeant") == 1, f"agrégat résolu attendu : {res}"
-    assert par_valeur.get("Commercial") == 1
-
-
-def test_the_three_verbs_resolve_the_same_name(pg, monkeypatch):
-    """Filtre, tri et agrégat partagent le point de résolution. Les séparer rouvrirait
-    le défaut du jour — le même nom répondant juste sur un verbe et faux sur les
-    autres — un cran plus haut."""
-    s = _store(monkeypatch, _ALIAS)
-    assert s.count_rows("t", filters=[
-        {"field": "contact2_fonction", "op": "eq", "value": "DRH"}]) == 1
-    page = s.page_rows("t", order_by="contact1_fonction", order_dir="asc",
-                       filters=[{"field": "contact1_fonction", "op": "not_empty"}])
-    assert [r["_id"] for r in page["rows"]] == ["sans_rh", "avec_rh"]
-    assert page["total"] == 2
 
 
 def test_sorting_across_all_items_is_refused_by_name(pg, monkeypatch):
     """Même famille que l'égalité sur la colonne entière : N valeurs ne se trient pas.
     Rendre le premier item donnerait un ordre reproductible et faux."""
-    s = _store(monkeypatch, _ALIAS)
+    s = _store(monkeypatch, _LISTE)
     with pytest.raises(ValueError) as e:
         s.page_rows("t", order_by="contacts[].fonction")
     assert "contacts[0].fonction" in str(e.value)

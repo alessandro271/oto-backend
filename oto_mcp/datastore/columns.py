@@ -1,8 +1,7 @@
 """La COLONNE côté Python : ce qu'une écriture touche, et sous quel nom on la désigne.
 
 Extrait du store (#325), déplacement pur. Le pendant Python de `db/paths` : là-bas on
-traduit un nom en SQL, ici on décide ce qu'une écriture modifie et ce qu'un ancien nom
-désigne encore.
+traduit un nom en SQL, ici on décide ce qu'une écriture modifie.
 
 La règle que ce module porte tient en une phrase — **une écriture ne touche QUE ce
 qu'elle nomme** — et elle a coûté deux défauts symétriques, l'un après l'autre :
@@ -14,9 +13,6 @@ qu'elle nomme** — et elle a coûté deux défauts symétriques, l'un après l'
 
 Deux correctifs symétriques auraient laissé passer le troisième. Une règle unique dont
 les deux découlent, non.
-
-S'y ajoute la traduction des anciens noms plats pendant une migration : elle vit ici
-parce qu'elle répond à la même question — de quelle colonne parle-t-on ?
 """
 from __future__ import annotations
 
@@ -52,49 +48,6 @@ def _existing_layers(existing: Any) -> dict:
             or all(k in dsv2.ALL_LAYER_KEYS for k in existing)):
         return dict(existing)
     return {} if existing is None else {dsv2.VALUE_LAYER: existing}
-
-
-def _to_path(schema: Optional[dict], nom):
-    """Un ancien nom plat → son chemin réel ; tout le reste, inchangé."""
-    if not isinstance(nom, str):
-        return nom
-    cible = dsv2.resolve_flat_name(schema, nom)
-    if cible is None:
-        return nom
-    colonne, rang, attr = cible
-    return f"{colonne}[{rang}].{attr}"
-
-
-def _resolve_filters(schema: Optional[dict], filters):
-    out = []
-    for f in filters or []:
-        if not isinstance(f, dict):
-            out.append(f)
-            continue
-        g = dict(f)
-        if g.get("field"):
-            g["field"] = _to_path(schema, g["field"])
-        if isinstance(g.get("fields"), list):
-            g["fields"] = [_to_path(schema, k) for k in g["fields"]]
-        if isinstance(g.get("where"), list):
-            g["where"] = _resolve_filters(schema, g["where"])
-        out.append(g)
-    return out
-
-
-def _resolve_metrics(schema: Optional[dict], metrics):
-    out = []
-    for m in metrics or []:
-        if not isinstance(m, dict):
-            out.append(m)
-            continue
-        g = dict(m)
-        if g.get("field"):
-            g["field"] = _to_path(schema, g["field"])
-        if isinstance(g.get("where"), list):
-            g["where"] = _resolve_filters(schema, g["where"])
-        out.append(g)
-    return out
 
 
 def _refuse_group_by_compose(group_by) -> None:
@@ -136,57 +89,6 @@ def _refuse_group_by_compose(group_by) -> None:
         "Le groupement croisé n'est pas encore servi : le jour où il le sera, il "
         "faudra d'abord décider sous quelle forme un groupe composite est rendu — clé "
         "jointe, tuple, ou objet — parce que ce choix-là ne se défait plus.")
-
-
-def _resolve_group_by(schema: Optional[dict], group_by):
-    _refuse_group_by_compose(group_by)
-    if isinstance(group_by, (list, tuple)):
-        return [_to_path(schema, k) for k in group_by]
-    return _to_path(schema, group_by)
-
-
-def _refuse_flat_writes(schema: Optional[dict], user_data: dict) -> None:
-    """Écrire sur un nom PROJETÉ est refusé, en nommant la cible neuve (oto#22 §6).
-
-    Pendant la migration, `contact1_nom` est servi en LECTURE — calculé depuis la
-    colonne-tableau, jamais stocké. L'accepter en écriture créerait une colonne libre
-    du même nom : la lecture continuerait de rendre la valeur PROJETÉE, et ce qui vient
-    d'être écrit serait invisible tout en ayant été accepté. C'est la forme exacte du
-    défaut qu'on passe la journée à fermer — un accusé de réception pour un travail qui
-    n'atteint rien.
-
-    Le refus dit où écrire : un message qui dit seulement « non » fait deviner.
-
-    ⚠️ **Il disait `contacts[0].nom`, et cette destination est REFUSÉE deux gardes plus
-    loin** (oto#121) : une adresse indexée n'est pas une clé d'écriture,
-    `_refuse_dotted_names` la rejette. Suivre l'indication coûtait un aller-retour
-    pour retomber sur un second refus, sans rien d'écrit — *une destination invalide
-    est pire que pas de destination du tout*. Il n'existe AUCUNE écriture au grain de
-    l'élément aujourd'hui ; le refus le dit franchement et nomme le seul geste qui
-    marche : reposer la colonne-liste entière, couches réémises (oto#120). Le jour où
-    une écriture d'élément existera, c'est ici qu'elle se nommera — pas avant."""
-    if not user_data:
-        return
-    for cle in user_data:
-        cible = dsv2.resolve_flat_name(schema, cle)
-        if cible is None:
-            continue
-        colonne, rang, attr = cible
-        # `attr` porte parfois la couche (`nom.comment`) : la composition du suffixe
-        # est le contrat de `resolve_flat_name`. On conseille sur l'ATTRIBUT, sinon
-        # la phrase prescrirait `nom.comment.comment`.
-        champ, _couche = dsv2.split_layer(attr)
-        raise RowValidationError([
-            f"{cle}: nom servi en lecture pendant la migration, il ne s'écrit pas "
-            f"(il est CALCULÉ depuis `{colonne}`, jamais stocké). Écrire UN ÉLÉMENT "
-            f"seul n'est pas possible aujourd'hui : une adresse indexée est une "
-            f"adresse de lecture, pas une clé d'écriture — elle serait refusée à son "
-            f"tour. Le geste : relis la ligne, puis repose `{colonne}` ENTIÈRE — "
-            f'{{"{colonne}": [{{"{champ}": …}}, …]}} — en corrigeant l\'élément de '
-            f"rang {rang} (l'adressage compte à partir de 0). Réémets les couches "
-            f"telles qu'elles t'ont été servies (`{champ}.comment` à côté de "
-            f"`{champ}`, dans le même élément) : reposer la liste remplace les "
-            f"éléments EN BLOC, et ce qui n'est pas réémis tombe."])
 
 
 def _scan_mixed(value: Any, path: str, errors: list) -> None:

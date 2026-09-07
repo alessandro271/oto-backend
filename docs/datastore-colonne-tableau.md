@@ -5,10 +5,10 @@ description: >-
   Comment une colonne de datastore porte une petite liste de fiches (les
   interlocuteurs d'une entreprise) et reste interrogeable : forme servie et garantie
   du nom nu, couches d'un attribut d'item, ce que déclare le schéma (`type: list`,
-  `of`, `max_items`, `flat_alias`), les quatre fonctions natives et les deux
-  non-définitions assumées, et le chemin de migration en double-service qui sert les
-  anciens noms `contactN_*` pendant la bascule. À charger avant de toucher aux
-  sous-tableaux, à la conversion (#332) ou aux étapes 5-6.
+  `of`, `max_items`), les quatre fonctions natives et les deux non-définitions
+  assumées. Le double-service qui servait les anciens noms `contactN_*` pendant une
+  bascule est RETIRÉ (07/09/2026, §6). À charger avant de toucher aux sous-tableaux,
+  à la conversion (#332) ou aux étapes 5-6.
 adr: [0046]
 ---
 
@@ -203,42 +203,47 @@ et la relecture du fichier redonne les mêmes items.
 Rien de plus que §1 + §2 : le point de lecture unique descend, la machinerie de
 chemins est la même. C'est la seule façon d'éviter deux vocabulaires.
 
-## 6. Le chemin de MIGRATION — double-service
+## 6. Le chemin de MIGRATION — double-service ~~servi~~ RETIRÉ le 07/09/2026
 
-Le premier tableau visé est regardé quotidiennement par une cliente. La bascule ne
-peut donc pas être un basculement.
+> ⚠️ **`flat_alias` n'existe plus.** Le double-service décrit ici a été livré le
+> 13/08/2026 puis retiré le 07/09/2026, sur mesure de production : **0 colonne sur
+> 5 615, 0 tableau sur 383**. Et la migration qu'il devait couvrir n'a jamais
+> commencé — la **conversion**, que ce paragraphe décrit comme le geste central,
+> n'a jamais été écrite.
+>
+> Le point qui a tranché n'est pas le non-emploi : c'est que l'attribut était
+> **déclaré lu par le FRONT** dans le registre servi (`GET
+> /api/datastore/schema/keys`), ce qui était faux. Une capacité non employée coûte
+> peu ; une capacité dont le contrat affirme qu'elle est consommée fait construire
+> dessus. Cf. le même arbitrage six jours plus tôt sur le cran de valeur `system` :
+> une capacité annoncée et jamais employée s'implémente pour de bon ou se dé-annonce.
 
-**La colonne-tableau devient la vérité ; une projection à plat reste SERVIE EN LECTURE
-pendant la fenêtre.** Les écrans, filtres et réglages qui parlent `contact1_nom`
-continuent de répondre ; chaque consommateur bascule à son rythme.
+**Ce que le besoin réclamait**, et qui reste vrai le jour où une bascule se présente :
+le premier tableau visé est regardé quotidiennement par une cliente, donc la bascule ne
+peut pas être un basculement sec. Il faudra alors une fenêtre pendant laquelle les
+écrans qui parlent `contact1_nom` continuent de répondre.
 
-```jsonc
-{"key": "contacts", "type": "list", "of": {…},
- "flat_alias": "contact{n}_{attr}"}     // ⟵ DÉCLARÉ, jamais deviné
-```
+**Ce qu'il faudra reprendre tel quel**, parce que ces trois points ont coûté leur revue
+et qu'ils ne dépendent pas de la forme retenue :
 
-> ⚠️ **C'est le point de conception le plus délicat, et il touche à la contrainte
-> ferme du barreau 1** : le serveur n'interprète aucun motif de nom. Résoudre
-> `contact1_nom` vers `contacts[0].nom` en le devinant rouvrirait exactement ce qu'on
-> a fermé. D'où `flat_alias` : celui qui migre DÉCLARE le gabarit, le serveur
-> l'applique. Exécuter une déclaration n'est pas deviner une convention.
+1. le gabarit est **DÉCLARÉ, jamais deviné** — résoudre `contact1_nom` vers
+   `contacts[0].nom` en interprétant un motif de nom rouvrirait exactement ce que le
+   barreau 1 a fermé, et il n'y a pas de défaut possible (`{key}{n}_{attr}` rend
+   `contacts1_nom`, pas `contact1_nom`) ;
+2. la projection est **calculée, jamais stockée** — la stocker ferait deux vérités à
+   réconcilier — donc en **lecture seule** : une écriture sur le nom projeté se refuse
+   en nommant une destination qui EXISTE (oto#121 — l'ancienne prescrivait
+   `contacts[0].nom`, refusée deux gardes plus loin) ;
+3. **la conversion est la moitié qui manquait, et c'est elle qu'il faut écrire
+   d'abord.** Elle lit les colonnes plates, écrit la liste en une passe idempotente
+   avec un compte avant/après par ligne, puis **supprime les colonnes plates
+   sources** — ordre non négociable : copier → **vérifier** → purger. Une purge avant
+   vérification transforme une conversion ratée en perte.
 
-La projection est **calculée, jamais stockée** (deux vérités à réconcilier sinon), en
-lecture seule — une écriture sur `contact1_nom` est **refusée en nommant la cible
-neuve**, plutôt que réécrite en douce. Fin de fenêtre = retrait du `flat_alias`, un
-tableau à la fois.
-
-**Conversion** : elle lit les colonnes plates existantes et écrit la liste, en une
-passe idempotente, avec un compte avant/après par ligne. Puis — et c'est la moitié qui
-manquait — **elle SUPPRIME les colonnes plates sources**, une fois la copie vérifiée
-(même geste que la purge de colonne morte). Les laisser ferait de `contact1_nom` deux
-choses à la fois : la colonne résiduelle ET l'alias calculé, donc deux vérités à
-réconcilier — exactement ce que la projection calculée-jamais-stockée évite par
-ailleurs. Après la conversion, l'alias est l'**unique** résolveur du nom.
-
-Ordre non négociable : copier → **vérifier** (compte par ligne) → purger. Une purge
-avant vérification transforme une conversion ratée en perte. Instruite, annoncée,
-jamais un soir sur un rapport.
+Le retrait de la fenêtre reste ce que la revue du 13/08 en disait (§10.1) : un geste
+**DISTINCT et annoncé**, jamais la suite mécanique de la purge — les consommateurs
+gardent des listes qui nomment des colonnes, et elles pointeraient dans le vide en
+silence.
 
 ## 7. L'homologue côté PAGES — la question, posée
 
@@ -261,7 +266,8 @@ forme.
    BOUTS** : la fiche d'écriture dit « rangs 0-indexés ; l'export les nomme
    1-indexés », et la réponse d'export le rappelle. Non écrite quelque part, elle
    devient un piège au lieu d'un choix ;
-3. **`flat_alias` déclaré** comme réponse à la migration (§6) ;
+3. ~~**`flat_alias` déclaré** comme réponse à la migration (§6)~~ — retiré le
+   07/09/2026, cf. §6 ;
 4. **couches exclues de l'export par défaut** ;
 5. **`max_items` porte double sens** (borne d'écriture + largeur d'export) plutôt que
    deux clés — une seule chose à déclarer, et elle est vraie des deux côtés.
@@ -272,7 +278,8 @@ Ce qui débloque la migration d'abord, l'exhaustivité ensuite :
 
 1. `unwrap` en profondeur + forme servie (§1, §2) — **rien ne marche sans ça** ;
 2. schéma : `max_items`, `description` servie, refus de clé métier sur liste (§3, §4) ;
-3. projection `flat_alias` en lecture + refus d'écriture dessus (§6) ;
+3. ~~projection `flat_alias` en lecture + refus d'écriture dessus (§6)~~ — fait le
+   13/08, retiré le 07/09 sans avoir jamais servi (§6) ;
 4. existence/agrégat `contacts[].attr` (§5.1) ;
 5. écriture par rang (§5.2) ;
 6. export à plat déterministe (§5.3) — le plus gros, il n'existe rien à étendre.
@@ -284,11 +291,11 @@ Ce qui débloque la migration d'abord, l'exhaustivité ensuite :
 
 La revue scout rend **GO**, tous les tranchages du §8 acceptés, avec cinq points qui amendent ce document :
 
-1. **(§6) La conversion nomme une étape « PRÉVENIR LES CONSOMMATEURS », et le retrait du `flat_alias` est un geste DISTINCT et annoncé** — jamais la suite mécanique de la purge. Fait mesuré qui l'impose : scout garde par tableau CINQ listes qui nomment des colonnes (`default_columns`, `hidden_fields`, `hidden_facets`, `composition`, `field_roles`) — au retrait de l'alias elles pointeraient dans le vide EN SILENCE (le piège payé à une migration client antérieure, ×5). Scout bascule ses listes lui-même ; l'étape doit être dans le chemin instruit, pas dans une mémoire.
+1. **(§6) La conversion nomme une étape « PRÉVENIR LES CONSOMMATEURS », et le retrait du double-service est un geste DISTINCT et annoncé** — jamais la suite mécanique de la purge. Fait mesuré qui l'impose : scout garde par tableau CINQ listes qui nomment des colonnes (`default_columns`, `hidden_fields`, `hidden_facets`, `composition`, `field_roles`) — au retrait de l'alias elles pointeraient dans le vide EN SILENCE (le piège payé à une migration client antérieure, ×5). Scout bascule ses listes lui-même ; l'étape doit être dans le chemin instruit, pas dans une mémoire.
 2. **(§5.1) Les DEUX comptes sont SERVIS sur les chemins de liste** : `count` (occurrences) ET `count_rows` (fiches) — comme au barreau 1 multi-colonnes. Exigence BLOQUANTE de scout : ses facettes affichent `count` comme un nombre de fiches — une fiche à deux DRH compterait double, le chiffre serait plausible et faux. À figer par un test à l'étape 4.
-3. **(§5.3) PAS de gabarit par défaut : `flat_alias` est OBLIGATOIRE dès qu'on migre.** Le défaut proposé (`{key}{n}_{attr}`) ne produit pas son propre exemple (`contacts` → `contacts1_nom` ≠ `contact1_nom`) — un défaut qui singularise la clé serait une devinette, ce que ce document interdit. Celui qui migre déclare, toujours.
-4. **(§6) L'alias PROJETTE les couches** : `contact1_email.comment` se résout vers `contacts[0].email.comment` — l'alias mappe le préfixe de chemin, le suffixe de couche compose. Sans ça, les marques de provenance disparaîtraient des écrans pendant toute la fenêtre, sans message.
-5. **(§8.2) L'asymétrie 0/1 a TROIS bouts, pas deux** : l'écriture (0-indexée), l'export (1-indexé), et le `{n}` du `flat_alias` (1-indexé — c'est l'humain qui le déclare et c'est là que la confusion coûterait le plus). Documentée aux trois.
+3. **(§5.3) PAS de gabarit par défaut : le gabarit est OBLIGATOIRE dès qu'on migre.** Le défaut proposé (`{key}{n}_{attr}`) ne produit pas son propre exemple (`contacts` → `contacts1_nom` ≠ `contact1_nom`) — un défaut qui singularise la clé serait une devinette, ce que ce document interdit. Celui qui migre déclare, toujours.
+4. **(§6) L'alias PROJETTAIT les couches** (retiré le 07/09 avec le double-service) : `contact1_email.comment` se résout vers `contacts[0].email.comment` — l'alias mappe le préfixe de chemin, le suffixe de couche compose. Sans ça, les marques de provenance disparaîtraient des écrans pendant toute la fenêtre, sans message.
+5. **(§8.2) L'asymétrie 0/1 avait TROIS bouts, pas deux** : l'écriture (0-indexée), l'export (1-indexé), et le `{n}` du gabarit de migration (1-indexé — c'est l'humain qui le déclare et c'est là que la confusion coûterait le plus). Le troisième est parti avec le double-service le 07/09 ; les deux autres restent, documentés.
 
 Revue superviseur (déjà intégrée au corps par `f3f60aa`) : le sort des colonnes plates (copier → vérifier ligne à ligne → PURGER), le rang vide servi `{}` jamais `null`, l'asymétrie documentée dans les fiches au moment où les surfaces existent.
 

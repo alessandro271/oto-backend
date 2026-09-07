@@ -24,9 +24,9 @@ refusait en retour : l'aller-retour était ouvert précisément là. Restent exe
 contenu de l'objet (`_ranger_les_items`) et la garde des couches mixtes (#329).
 
 Second front, même mensonge : `_refuse_dotted_names` AFFIRMAIT avoir regardé trois
-endroits alors qu'il n'en tient aucun — il ne reçoit que le payload. Un nom PROJETÉ
-(`contact1_email`, servi pendant une migration) prenait la même phrase, dans `add_row`
-où `_refuse_flat_writes` ne passe pas. Le refus ne dit plus que ce qu'il a vérifié.
+endroits alors qu'il n'en tient aucun — il ne reçoit que le payload. Le refus ne dit
+plus que ce qu'il a vérifié. (Un second chemin y arrivait aussi, le nom PROJETÉ d'une
+migration ; il est parti avec `flat_alias`, le 07/09/2026.)
 """
 from __future__ import annotations
 
@@ -202,27 +202,6 @@ def test_un_champ_de_l_objet_qui_PORTE_le_nom_d_une_couche(table):
 
 
 # ── Le refus ne dit que ce qu'il a VÉRIFIÉ ───────────────────────────────────
-
-def test_le_refus_ne_dit_JAMAIS_ni_dans_cette_ecriture_quand_elle_y_EST(table):
-    """Second front du même mensonge, par une autre porte : un nom PROJETÉ
-    (`contact1_email`, servi en lecture pendant une migration, jamais stocké) reste
-    pointé lui aussi. Dans `add_row`, `_refuse_flat_writes` ne passe pas — et le refus
-    des noms pointés récitait sa phrase à trois sources sur un nom qui est, lui,
-    littéralement dans l'écriture."""
-    from oto_mcp.datastore.core import RowValidationError
-    st, ns, _ = table
-    st.set_schema(ns, {**SCHEMA, "fields": SCHEMA["fields"] + [
-        {"key": "contacts", "type": "list", "flat_alias": "contact{n}_{attr}",
-         "of": {"fields": [{"key": "email", "type": "email"}]}}]})
-    with pytest.raises(RowValidationError) as e:
-        st.append_row(ns, {"siren": "1", "contact1_email": "jo@a.fr",
-                           "contact1_email.comment": "vérifié"})
-    msg = str(e.value)
-    assert "ni dans cette écriture" not in msg, (
-        "`contact1_email` EST dans l'écriture — le refus ne peut pas prétendre "
-        "l'avoir cherchée sans la trouver")
-    assert "`contacts`" in msg, "le refus dit d'où le nom est calculé"
-
 
 def test_une_colonne_ABSENTE_PARTOUT_garde_le_refus_a_TROIS_sources(table):
     """Le témoin négatif : la phrase à trois sources reste, et elle est désormais vraie

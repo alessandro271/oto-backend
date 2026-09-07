@@ -1594,8 +1594,8 @@ chronologiquement — l'ignorer donnait `10, 100, 2, 9` (livré v1.112.0). Il ne
 l'interprétation métier d'une VALEUR : que `20_49` soit une tranche INSEE qui suit
 `1_2` est le savoir du consommateur, jamais celui d'oto. Entre les deux, l'ordre des
 `options` déclarées au schéma **est honoré** — parce que c'est une DEMANDE adressée à
-oto, pas une compréhension qu'il aurait du métier. Même frontière que `flat_alias` :
-exécuter une déclaration n'est pas deviner une convention.
+oto, pas une compréhension qu'il aurait du métier. La frontière tient dans une phrase :
+**exécuter une déclaration n'est pas deviner une convention.**
 
 ## La face REST est 100 % DÉRIVÉE depuis le 2026-08-12 (#302)
 

@@ -75,12 +75,8 @@ from .columns import (  # noqa: E402,F401
     _META_COLS,
     _existing_layers,
     _merge_column,
-    _refuse_flat_writes,
+    _refuse_group_by_compose,
     _refuse_mixed_layers,
-    _resolve_filters,
-    _resolve_group_by,
-    _resolve_metrics,
-    _to_path,
     _writes_layers,
     arbitrer_les_vides,
     refuser_geste_sans_effet,
@@ -543,24 +539,6 @@ class DatastorePg(SchemaOpsMixin):
             # Les couches s'exposent dès qu'il y en a — même sans `valeur` posée
             # (import de socle sur un champ pas encore renseigné).
             out.update(dsv2.flat_layers(k, v))
-        # Double-service d'une migration (oto#22 §6) : les anciens noms plats sont
-        # SERVIS, calculés depuis la colonne-tableau et jamais stockés — deux vérités
-        # à réconcilier sinon. L'ordre des rangs est celui de la liste, qui est un
-        # CONTRAT : un écran affiche « le premier contact » comme cible d'appel, et un
-        # ordre instable ferait appeler quelqu'un d'autre entre deux ouvertures.
-        #
-        # Les couches suivent sans rien de plus : l'item est déjà servi, donc son
-        # `email.origine` devient `contact1_email.origine`.
-        for cle, gabarit in dsv2.flat_alias_of(schema).items():
-            if cle in cachees:
-                continue
-            items = out.get(cle)
-            if not isinstance(items, list):
-                continue
-            for rang, item in enumerate(items):
-                if isinstance(item, dict):
-                    for attr, val in item.items():
-                        out[dsv2.flat_name(gabarit, rang, attr)] = val
         # ⚠️ Un bail EXPIRÉ n'est pas une réservation — mesuré le 01/09/2026 sur un
         # fichier de production : **495 lignes sur 8 910 portaient `_claimed_by`, et
         # les 495 étaient expirées**, la plus ancienne depuis dix-huit jours, au nom
@@ -1373,7 +1351,6 @@ class DatastorePg(SchemaOpsMixin):
         mutuellement (last-writer-wins) et perdaient des champs silencieusement."""
         if schema is None:
             schema = self._schema_of(ns_id)
-        _refuse_flat_writes(schema, user_data)
         # La ligne visée est connue ICI : ses colonnes comptent pour « colonne réelle »,
         # ce qui rend `{"site_web.comment": …}` seul écrivable sur un tableau souple.
         # Lue paresseusement — le chemin nominal ne la demande jamais.
@@ -1728,11 +1705,9 @@ class DatastorePg(SchemaOpsMixin):
         ns_id = self._resolve(namespace)
         filters = _filter_clauses(filter, filters)
         # ⚠️ Le schéma se lit une fois par PAGE, et seulement quand il y a quelque chose
-        # à résoudre ou à servir : le lire dès l'entrée ferait payer une requête à un
-        # appel qui va refuser son curseur — un coût là où il n'y a même pas de résultat.
-        sch = self._schema_of(ns_id) if (filters or order_by) else None
-        filters = _resolve_filters(sch, filters)
-        order_by = _to_path(sch, order_by)
+        # à servir : le lire dès l'entrée ferait payer une requête à un appel qui va
+        # refuser son curseur — un coût là où il n'y a même pas de résultat.
+        sch = self._schema_of(ns_id) if order_by else None
         if order_by:
             offset = _decode_offset_cursor(cursor) if cursor else 0
             # Même résolution de type que `page_rows` : le tri d'un champ ne peut
@@ -1770,8 +1745,6 @@ class DatastorePg(SchemaOpsMixin):
         vivier sans charger 300+ lignes en contexte)."""
         ns_id = self._resolve(namespace)
         clauses = _filter_clauses(filter, filters)
-        # Le compte doit décrire le MÊME jeu que la page : mêmes noms résolus.
-        clauses = _resolve_filters(self._schema_of(ns_id), clauses) if clauses else clauses
         return db.datastore_count_rows(ns_id, q=q, filters=clauses)
 
     def aggregate(self, namespace: str, *, group_by=None,
@@ -1788,22 +1761,9 @@ class DatastorePg(SchemaOpsMixin):
         commun, une ligne comptant une occurrence par colonne renseignée."""
         ns_id = self._resolve(namespace)
         clauses = _filter_clauses(filter, filters)
-        demande = group_by
-        if clauses or group_by or metrics:
-            sch = self._schema_of(ns_id)
-            clauses = _resolve_filters(sch, clauses)
-            group_by = _resolve_group_by(sch, group_by)
-            metrics = _resolve_metrics(sch, metrics)
-        out = db.datastore_aggregate(
+        _refuse_group_by_compose(group_by)
+        return db.datastore_aggregate(
             ns_id, group_by=group_by, metrics=metrics, q=q, filters=clauses)
-        # L'appelant retrouve la clé sous le nom QU'IL A DEMANDÉ. Rendre le nom résolu
-        # obligerait chaque consommateur à connaître la traduction — donc à savoir
-        # qu'une migration est en cours, ce que le double-service existe pour lui
-        # épargner : sa facette doit revivre à l'identique, sans une ligne changée.
-        avant, apres = db.group_key(demande), db.group_key(group_by)
-        if avant != apres:
-            out = [{(avant if k == apres else k): v for k, v in r.items()} for r in out]
-        return out
 
     def page_rows(
         self,
@@ -1837,8 +1797,6 @@ class DatastorePg(SchemaOpsMixin):
         ns_id = self._resolve(namespace)
         clauses = _filter_clauses(filter, filters) or None
         sch = self._schema_of(ns_id)
-        clauses = _resolve_filters(sch, clauses) or None
-        order_by = _to_path(sch, order_by)
         # Le tri honore le TYPE déclaré (#336) — résolu ICI, où le schéma est connu :
         # la couche db reçoit un type générique, jamais le schéma.
         otype, oopts = dsv2.order_spec(sch, order_by)
@@ -1876,7 +1834,6 @@ class DatastorePg(SchemaOpsMixin):
         data = dict(existing.get("data") or {})
         ns = self._ns_of(ns_id)
         schema = ns.get("schema")
-        _refuse_flat_writes(schema, patch)
         # La ligne est déjà lue : ses colonnes sont « réelles » sans un aller-retour de
         # plus. C'est la porte du round-trip #390 — relire une fiche et la repousser —
         # donc celle où l'aller-retour DOIT se refermer.

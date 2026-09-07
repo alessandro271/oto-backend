@@ -103,7 +103,6 @@ CLES: tuple[Cle, ...] = (
     Cle("placeholder", ("front",), "le texte fantôme d'un champ vide"),
     Cle("display", ("validateur", "front"), "comment la colonne se rend", True),
     Cle("role", ("validateur", "front"), "le rôle métier (statut, clé…)", True),
-    Cle("flat_alias", ("validateur", "front"), "le nom à plat d'un sous-champ", True),
 )
 
 #: Tout ce qu'une colonne a le droit de porter. C'est CE nom que l'avertissement
