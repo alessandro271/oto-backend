@@ -60,6 +60,12 @@ def _faux_depot(tmp_path: Path, *tags: str, avec_skip_ordinaire: bool = False) -
     # la bannière qu'ils gardent, et qui a coûté une enquête à une session voisine.
     # Tout module d'aide de `tests/` (préfixe `_`) part donc avec le conftest.
     shutil.copy(TESTS / "conftest.py", depot / "tests" / "conftest.py")
+    # ⚠️ Le conftest de la RACINE part aussi : depuis le 08/09/2026 c'est LUI qui
+    # porte la bannière, le balai et le renommage de catégorie — parce que sous
+    # `pytest-xdist` le contrôleur ne collecte rien et ne charge donc jamais
+    # `tests/conftest.py`, si bien qu'une bannière écrite là-bas ne serait lue par
+    # personne. Un dépôt jouet sans lui n'exercerait plus le montage servi.
+    shutil.copy(RACINE / "conftest.py", depot / "conftest.py")
     for aide in sorted(TESTS.glob("_*.py")):
         shutil.copy(aide, depot / "tests" / aide.name)
     skip_ordinaire = ("""
@@ -84,6 +90,7 @@ def _run(depot: Path, *devant: Path, args: tuple[str, ...] = ()) -> str:
     chemin = os.pathsep.join([*(str(d) for d in devant), str(RACINE)])
     env = {**os.environ, "PYTHONPATH": chemin}
     env.pop("CI", None)          # on éprouve le comportement LOCAL
+    env["OTO_TEST_PARALLELE"] = "0"   # la bannière, pas la distribution
     r = subprocess.run(
         [sys.executable, "-m", "pytest", "tests", "-q", "-p", "no:randomly", *args],
         cwd=depot, capture_output=True, text=True, env=env)
@@ -97,6 +104,7 @@ def _run_filtre(depot: Path, filtre: str) -> str:
     chemin = os.pathsep.join([str(RACINE)])
     env = {**os.environ, "PYTHONPATH": chemin}
     env.pop("CI", None)
+    env["OTO_TEST_PARALLELE"] = "0"   # la bannière, pas la distribution
     cmd = f"{sys.executable} -m pytest tests -q -p no:randomly | {filtre}"
     r = subprocess.run(cmd, shell=True, cwd=depot, capture_output=True, text=True,
                         env=env)
