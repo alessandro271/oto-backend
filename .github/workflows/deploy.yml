@@ -26,6 +26,13 @@ on:
         type: string
 
 jobs:
+  # Chaque job porte un `timeout-minutes` : sans lui, le défaut de GitHub est de SIX
+  # heures. Le 07/09, un job de tests s'est suspendu sur un runner hébergé et n'a plus
+  # rien écrit pendant 45 min, jusqu'à une annulation à la main. Les 45 derniers
+  # déploiements de prod tiennent tous entre 6 et 10 min : les plafonds ci-dessous
+  # laissent une marge large et transforment une pendaison silencieuse en échec
+  # visible en quelques minutes.
+
   # La syntaxe est vérifiée sur le Python du SERVEUR, pas sur celui de la CI.
   # Le 27/08, un boot preprod est mort sur « f-string expression part cannot include
   # a backslash » : légal en 3.12 (CI) et en 3.13 (poste), SyntaxError en 3.10 (box).
@@ -36,6 +43,7 @@ jobs:
   # rejoue pas la suite, on vérifie que ça se COMPILE là où ça tournera.
   syntaxe-plancher:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -47,6 +55,7 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       DEPLOY_REF: ${{ inputs.tag || github.ref_name }}
     steps:
@@ -74,6 +83,8 @@ jobs:
   deploy:
     needs: [test, syntaxe-plancher]
     runs-on: [self-hosted, oto-platform]
+    # reset + réinstall oto-core + restart + healthcheck (~60 s) + rollback éventuel.
+    timeout-minutes: 15
     concurrency:
       group: deploy-prod
       cancel-in-progress: false
