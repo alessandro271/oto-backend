@@ -559,7 +559,7 @@ qu'un client puisse vérifier contre le serveur qui lui répond.
 **Une ligne créée sans la clé métier le DIT (#390, 3ᵉ demande).** Les deux premières
 sont servies depuis le 13-15/08 : le bail protège l'ÉCRITURE et pas seulement
 l'attribution (`_lease_guard` sous le verrou de ligne, `_assert_writable` sur les gestes
-qui n'en ouvrent pas, titulaire reconnu par son RUN ou par `writing_as`), et l'adresse
+qui n'en ouvrent pas, titulaire reconnu par son RUN — et par rien d'autre), et l'adresse
 égarée est traitée (`_id` dans `row` PROMU en adresse de fusion, un `id` nu non déclaré
 REFUSÉ en nommant la ligne fantôme). Restait le cas sans adresse du tout : une insertion
 franche sur un tableau dont le schéma déclare une clé métier, mais dont la ligne ne la

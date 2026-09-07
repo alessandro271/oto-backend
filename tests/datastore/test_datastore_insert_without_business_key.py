@@ -8,7 +8,7 @@ Aucune erreur, aucun avertissement — 28 champs repris à la main.
 
 Les deux premières demandes du signal sont servies depuis le 13-15/08 : le bail protège
 l'ÉCRITURE et pas seulement l'attribution (`_lease_guard`, `_assert_writable`,
-`writing_as`), et l'adresse égarée est refusée ou promue (`_id` dans `row` devient
+le titulaire étant reconnu par son run), et l'adresse égarée est refusée ou promue (`_id` dans `row` devient
 l'adresse de fusion ; un `id` nu non déclaré est refusé en nommant la ligne fantôme).
 
 Reste le troisième cas, celui qui n'a pas d'adresse du tout : une insertion FRANCHE sur

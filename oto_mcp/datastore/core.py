@@ -19,8 +19,6 @@ projection optionnelle, déférée à otomata#29.
 """
 from __future__ import annotations
 
-import contextlib
-import contextvars
 import copy
 
 import base64
@@ -167,37 +165,6 @@ def _ns_url(ns_id: int, sub: Optional[str] = None) -> Optional[str]:
     return links.link_for("table", sub=sub, id=int(ns_id))
 
 
-# Le worker au nom duquel l'appel courant écrit (#317) — la SECONDE façon dont le
-# titulaire d'un bail s'identifie, quand il écrit hors du run qui tient la ligne.
-# Un contextvar plutôt qu'un paramètre porté de surface en surface : l'écriture
-# traverse quatre couches, et un argument qu'on oublie de relayer une fois produit un
-# refus incompréhensible. Posé par `writing_as`, jamais lu ailleurs qu'au garde-fou.
-_WRITING_AS: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
-    "datastore_writing_as", default=None)
-
-
-@contextlib.contextmanager
-def writing_as(worker: Optional[str]):
-    """Déclare le worker au nom duquel on écrit, le temps d'un appel.
-
-    Sert le cas « le titulaire du bail écrit hors de son run » : sans lui, seul le
-    run identifie le titulaire, et un agent qui reprend son travail dans une autre
-    session se verrait refuser sa propre ligne.
-
-    ⚠️ **AUCUNE surface ne l'appelle aujourd'hui** (vérifié le 05/09/2026 : zéro
-    appelant dans `oto_mcp/`, trois fichiers de tests). Le cas qu'elle décrit est donc
-    décrit, pas servi — un agent qui reprend sa ligne depuis une autre session **se
-    verra bien refuser**, faute d'un chemin qui pose son worker.
-
-    Ce n'est pas du code mort à retirer : c'est une capacité non branchée, et la
-    brancher est une décision de produit (quelle surface déclare le worker, et sur
-    quelle foi). Ce qui serait fautif, c'est qu'un texte servi la présente à un agent
-    comme une issue disponible : elle ne l'est pas."""
-    token = _WRITING_AS.set((worker or "").strip() or None)
-    try:
-        yield
-    finally:
-        _WRITING_AS.reset(token)
 
 
 def indice_de_liberation(issue: dict) -> str:
@@ -1225,8 +1192,6 @@ class DatastorePg(SchemaOpsMixin):
         run = _current_run()
         if run and lease.get("claimed_run") == run:
             return
-        if _WRITING_AS.get() and _WRITING_AS.get() == lease.get("claimed_by"):
-            return
         raise RowLocked(row_id, lease.get("claimed_by"), lease.get("claimed_until"),
                         lease.get("claimed_run"))
 
@@ -1237,14 +1202,27 @@ class DatastorePg(SchemaOpsMixin):
         Le bail empêchait deux agents de PRENDRE la même ligne, pas d'ÉCRIRE dessus :
         il protégeait l'attribution, pas la donnée. Ici il protège les deux.
 
-        **Le titulaire s'identifie de deux façons qui se recouvrent** — parce qu'une
-        écriture ordinaire ne dit pas qui écrit, et que `claimed_by` est un libellé
-        libre (`'campagne-s8'`), jamais un compte :
+        **Le titulaire s'identifie par son RUN, et par rien d'autre** : écrire sous
+        le run qui tient la ligne, c'est être le titulaire. Rien à déclarer, le cas
+        nominal est transparent — et l'agent porte lui-même son `_run_id` d'appel en
+        appel, donc reprendre sa ligne depuis une AUTRE session marche déjà : il
+        repasse le même jeton.
 
-        - **par le RUN** : écrire sous le run qui tient la ligne, c'est être le
-          titulaire — rien à déclarer, le cas nominal est transparent ;
-        - **par le WORKER** rejoué (`_writing_as`) : la sortie explicite hors run,
-          et c'est déjà LA garde du release, donc aucun concept nouveau.
+        ⚠️ **Une seconde voie a existé ici jusqu'au 07/09/2026** — se réclamer du
+        `worker` inscrit au bail — et elle a été retirée pour trois raisons qui se
+        cumulent. Elle n'était **branchée sur rien** (aucune surface n'acceptait un
+        worker à l'écriture, elle était donc inatteignable) ; elle était **redondante**
+        avec le run, qui sert déjà la reprise hors session ; et elle aurait été
+        **fausse** si on l'avait branchée, parce que `claimed_by` n'est pas une
+        identité. Mesuré en base le 07/09 : 13 valeurs distinctes mêlant identifiants
+        d'agent, étiquettes de lot datées et adresses e-mail de personnes — le schéma
+        d'outil EXIGE un libellé, aucune procédure ne dit lequel, donc le modèle en
+        invente un. On ne fonde pas une garde sur une identité que le contrôlé
+        fabrique lui-même.
+
+        Le prix de son retrait n'était pas ses vingt lignes : c'était que ce
+        commentaire annonçait deux façons de prouver sa titularité, et qu'un lecteur
+        venu diagnostiquer un refus cherchait la seconde sans jamais la trouver.
 
         ⚠️ **Seul un bail ACTIF protège.** Un bail expiré ne protège rien : son
         titulaire est mort, la ligne est libre. Sans cette nuance, le bail zombie
@@ -1281,8 +1259,6 @@ class DatastorePg(SchemaOpsMixin):
             run = _current_run()
             if run and locked.get("claimed_run") == run:
                 return                       # le titulaire, par son run
-            if _WRITING_AS.get() and _WRITING_AS.get() == by:
-                return                       # le titulaire, par son worker
             raise RowLocked(row_id, by, until, locked.get("claimed_run"))
         return _guard
 

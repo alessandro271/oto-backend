@@ -180,21 +180,55 @@ def test_the_holder_writes_freely_through_its_run(table):
     assert db.datastore_get_row(ns_id, row["_id"])["data"]["societe"] == "Par son titulaire"
 
 
-def test_the_holder_writes_freely_through_its_worker(table):
-    """La seconde : la sortie explicite hors run — un agent qui reprend son travail
-    dans une autre session doit pouvoir écrire SA ligne."""
+def test_the_holder_writes_freely_from_ANOTHER_session(table):
+    """La reprise hors session — et elle passe par le RUN, pas par un second concept.
+
+    Ce banc gardait jusqu'au 07/09/2026 une seconde voie (`writing_as`, se réclamer du
+    `worker` du bail). Elle a été retirée : aucune surface ne l'atteignait, et elle
+    était **redondante** — c'est ce que ce banc démontre désormais.
+
+    Le point : `_run_id` n'est pas un état que le serveur détient, c'est un jeton que
+    l'AGENT porte d'appel en appel. Rien ne le lie à une session. Un agent qui a gardé
+    son jeton le rejoue d'où il veut et retrouve sa ligne — ici, la réservation et
+    l'écriture sont posées dans deux contextes séparés, comme deux sessions.
+    """
     from oto_mcp import db, session_org
-    from oto_mcp.datastore.core import writing_as
     ns, ns_id = table
+
+    # session 1 : il réserve, puis son contexte disparaît entièrement
+    t = session_org.set_call_run("run-y")
+    row = _store().claim_next(ns, worker="w1")
+    session_org.reset_call_run(t)
+    assert session_org.current_call_run() is None, "le contexte doit être vraiment parti"
+
+    # session 2 : un autre store, un autre contexte — le même jeton
+    t2 = session_org.set_call_run("run-y")
+    try:
+        _store().upsert_row(ns, row["_id"], {"societe": "Reprise"})
+    finally:
+        session_org.reset_call_run(t2)
+
+    assert db.datastore_get_row(ns_id, row["_id"])["data"]["societe"] == "Reprise"
+
+
+def test_a_DIFFERENT_run_is_refused(table):
+    """La contre-épreuve, sans laquelle le banc du dessus ne prouverait rien : ce qui
+    passe est le jeton, pas le simple fait d'en avoir un."""
+    import pytest
+    from oto_mcp import session_org
+    from oto_mcp.datastore.errors import RowLocked
+    ns, _ = table
 
     t = session_org.set_call_run("run-y")
     row = _store().claim_next(ns, worker="w1")
-    session_org.reset_call_run(t) if hasattr(session_org, "reset_call_run") else None
+    session_org.reset_call_run(t)
 
-    with writing_as("w1"):                      # hors du run, mais je suis w1
-        _store().upsert_row(ns, row["_id"], {"societe": "Reprise"})
-
-    assert db.datastore_get_row(ns_id, row["_id"])["data"]["societe"] == "Reprise"
+    t2 = session_org.set_call_run("run-z")
+    try:
+        with pytest.raises(RowLocked):
+            _store().upsert_row(ns, row["_id"], {"societe": "Un autre"})
+    finally:
+        session_org.reset_call_run(t2)
 
 
 def test_an_expired_lease_protects_nothing(table):
@@ -299,11 +333,13 @@ def test_writing_a_final_state_no_longer_frees_the_row(table):
     le verrou écoutait un champ que personne ne remplissait."""
     ns, ns_id = table
     _schema_lifecycle(ns_id)
-    row = _store().claim_next(ns, worker="w1")
-
-    from oto_mcp.datastore.core import writing_as
-    with writing_as("w1"):                       # le titulaire écrit son verdict
-        _store().upsert_row(ns, row["_id"], {"statut": "fait"})
+    from oto_mcp import session_org
+    jeton = session_org.set_call_run("run-verdict")
+    try:
+        row = _store().claim_next(ns, worker="w1")
+        _store().upsert_row(ns, row["_id"], {"statut": "fait"})   # le titulaire écrit
+    finally:
+        session_org.reset_call_run(jeton)
 
     assert _bail(ns_id, row["_id"])["claimed_by"] == "w1", \
         "l'état final ne libère plus — c'est le geste de fin de travail qui libère"
@@ -314,12 +350,14 @@ def test_the_change_is_announced_where_it_happens(table):
     moment actionnable, et son lecteur est le seul qui puisse agir."""
     ns, ns_id = table
     _schema_lifecycle(ns_id)
-    row = _store().claim_next(ns, worker="w1")
-
-    from oto_mcp.datastore.core import writing_as
+    from oto_mcp import session_org
     st = _store()
-    with writing_as("w1"):
+    jeton = session_org.set_call_run("run-annonce")
+    try:
+        row = _store().claim_next(ns, worker="w1")
         st.upsert_row(ns, row["_id"], {"statut": "fait"})
+    finally:
+        session_org.reset_call_run(jeton)
     notices = st.off_schema_report().get("notices") or []
 
     assert notices, "le changement doit être dit"
@@ -348,3 +386,70 @@ def test_a_free_row_hears_nothing_either(table):
     st = _store()
     st.upsert_row(ns, "r2", {"statut": "fait"})
     assert not (st.off_schema_report().get("notices") or [])
+
+
+# ── ④ le chemin de FUSION : la garde la plus fréquentée, et la moins gardée ──
+#
+# ⚠️ **Ces deux bancs ferment un trou mesuré le 07/09/2026.** Le magasin a DEUX gardes
+# de bail, sur deux chemins différents : `_assert_writable` pour le remplacement, la
+# mise à jour et la suppression ; `_lease_guard` pour la FUSION — l'écriture par clé
+# métier, c'est-à-dire le geste le plus fréquent d'une campagne (une fiche par SIREN).
+#
+# Sonde : en désarmant la branche « le titulaire écrit, reconnu par son run » de
+# `_lease_guard`, **1 238 bancs restent verts**. Personne n'écrivait sur une ligne
+# réservée par ce chemin-là. La conséquence d'une casse aurait été l'inverse de celle
+# qu'on redoute d'habitude : non pas une écriture qui passe sans droit, mais TOUS les
+# titulaires légitimes refusés sur le chemin principal, sans un banc pour le dire.
+
+def _table_a_cle(ns_id: int) -> None:
+    _store().set_schema(_ns_of(ns_id), {"key": "siren",
+                                        "fields": [{"key": "siren", "type": "text"},
+                                                   {"key": "societe", "type": "text"}]})
+
+
+def _ns_of(ns_id: int) -> str:
+    from oto_mcp.db._conn import _connect
+    with _connect() as conn:
+        r = conn.execute("SELECT namespace FROM user_datastores WHERE id = %s",
+                         (ns_id,)).fetchone()
+    return dict(r)["namespace"]
+
+
+def test_the_holder_MERGES_freely_through_its_run(table):
+    """Le titulaire écrit sur SA ligne par clé métier — le chemin de la fusion."""
+    from oto_mcp import db, session_org
+    ns, ns_id = table
+    _table_a_cle(ns_id)
+    db.datastore_insert_row(ns_id, "rk", {"siren": "123456789", "societe": "Avant"})
+
+    jeton = session_org.set_call_run("run-fusion")
+    try:
+        _store().claim_row(ns, "rk", worker="w1")     # SA ligne, désignée
+        _store().write_rows(ns, [{"siren": "123456789", "societe": "Après"}])
+    finally:
+        session_org.reset_call_run(jeton)
+
+    assert db.datastore_get_row(ns_id, "rk")["data"]["societe"] == "Après"
+
+
+def test_ANOTHER_run_is_refused_on_the_merge_path(table):
+    """La contre-épreuve : sans elle, le banc du dessus passerait aussi si la garde
+    ne gardait plus rien."""
+    from oto_mcp import db, session_org
+    from oto_mcp.datastore.errors import RowLocked
+    ns, ns_id = table
+    _table_a_cle(ns_id)
+    db.datastore_insert_row(ns_id, "rk", {"siren": "123456789", "societe": "Avant"})
+
+    jeton = session_org.set_call_run("run-titulaire")
+    try:
+        _store().claim_row(ns, "rk", worker="w1")
+    finally:
+        session_org.reset_call_run(jeton)
+
+    autre = session_org.set_call_run("run-intrus")
+    try:
+        with pytest.raises(RowLocked):
+            _store().write_rows(ns, [{"siren": "123456789", "societe": "Volée"}])
+    finally:
+        session_org.reset_call_run(autre)

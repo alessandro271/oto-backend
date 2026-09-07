@@ -19,6 +19,7 @@ mesurerait la représentation qu'on s'en fait, pas la file.
 from __future__ import annotations
 
 import logging
+import contextlib
 import uuid
 
 import pytest
@@ -82,11 +83,21 @@ def _store(sub="sub-agent"):
     return make_store(sub)
 
 
-def writing_as(worker: str):
-    """Le titulaire du bail s'identifie pour écrire (#317) — le geste que la
-    surface pose pour un agent qui traite la ligne qu'il tient."""
-    from oto_mcp.datastore.core import writing_as as _w
-    return _w(worker)
+@contextlib.contextmanager
+def sous_le_run(run_id: str):
+    """Le titulaire écrit SOUS SON RUN — la seule preuve de titularité (#317).
+
+    Remplace `writing_as` le 07/09/2026, retiré parce qu'aucune surface ne
+    l'atteignait. Le run doit couvrir la RÉSERVATION autant que l'écriture : c'est
+    au claim que le bail enregistre à quel run il appartient. Un banc qui ne
+    l'envelopperait qu'autour de l'écriture verrait un refus, et ce refus serait
+    juste."""
+    from oto_mcp import session_org
+    jeton = session_org.set_call_run(run_id)
+    try:
+        yield
+    finally:
+        session_org.reset_call_run(jeton)
 
 
 def _table(schema) -> tuple:
@@ -222,10 +233,10 @@ def test_une_ecriture_reussie_remet_le_compteur_a_zero(plafonne):
     doivent jamais atteindre le plafond."""
     st, ns, ns_id = plafonne
 
-    for _ in range(5):
-        row = st.claim_next(ns, worker="agent-1")
-        assert row is not None
-        with writing_as("agent-1"):       # le titulaire écrit sous son bail
+    for tour in range(5):
+        with sous_le_run(f"run-{tour}"):          # réservation ET écriture, même run
+            row = st.claim_next(ns, worker="agent-1")
+            assert row is not None
             st.update_row(ns, row["_id"], {"societe": "ENQUÊTE FAITE"})
         st.release_claim(ns, row["_id"], worker="agent-1")
 
@@ -347,12 +358,12 @@ def test_une_ligne_sous_bail_actif_n_est_pas_abandonnee(plafonne):
     st, ns, ns_id = plafonne
 
     _tourner_a_vide(st, ns, 2)
-    tenue = st.claim_next(ns, worker="agent-1")       # 3e réservation, en cours
+    with sous_le_run("run-3"):
+        tenue = st.claim_next(ns, worker="agent-1")   # 3e réservation, en cours
 
-    assert tenue is not None and tenue["_claims"] == 3
-    assert _brut(ns_id, tenue["_id"])["abandon_reason"] is None
-    with writing_as("agent-1"):
-        st.update_row(ns, tenue["_id"], {"statut": "traite"})   # il écrit : rien n'est perdu
+        assert tenue is not None and tenue["_claims"] == 3
+        assert _brut(ns_id, tenue["_id"])["abandon_reason"] is None
+        st.update_row(ns, tenue["_id"], {"statut": "traite"})  # il écrit : rien n'est perdu
     assert _brut(ns_id, tenue["_id"])["claims"] == 0
 
 
