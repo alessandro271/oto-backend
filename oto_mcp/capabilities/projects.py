@@ -1093,7 +1093,14 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
 #
 # `slots` en est absent à dessein, bien qu'inoffensif : c'est de la mécanique
 # d'exécution (quelle instance branchée où), pas la règle que le lecteur veut lire.
-_PROCEDURE_FIELDS = ("ref", "slug", "title", "version", "body_md")
+#
+# `description` y est entrée le 07/09/2026 (oto#118) — une DÉCISION, prise en changeant
+# ce test, comme cette allowlist l'exige. C'est la prose de l'auteur : le résumé qu'il
+# a saisi, corrigeable sans toucher au corps, et qui ne dit rien de l'exécution. Elle
+# manquait, et une application tierce affichait à sa lectrice un corps de quinze mille
+# caractères faute de pouvoir servir deux lignes. Servie « » (jamais `null`) quand
+# l'auteur n'en a pas écrit : l'absence de résumé n'est pas une anomalie.
+_PROCEDURE_FIELDS = ("ref", "slug", "title", "description", "version", "body_md")
 
 
 def _linked_procedures(sub: str, links: list[dict]) -> list[dict]:
@@ -1122,6 +1129,7 @@ def _linked_procedures(sub: str, links: list[dict]) -> list[dict]:
         if not instr:
             continue
         out.append({"ref": ref, "slug": instr["slug"], "title": instr["title"],
+                    "description": instr.get("description") or "",
                     "version": instr["version"], "body_md": instr["body_md"]})
     return out
 
@@ -1253,7 +1261,7 @@ class ProjectRead(BaseModel):
     # une feuille — vérifier `more`.
     spine: Optional[dict] = None
     # Présent SEULEMENT si `include=['procedures']` a été demandé (#313) — le CORPS
-    # des procédures liées : `{ref, slug, title, version, body_md}`, et rien d'autre
+    # des procédures liées : `{ref, slug, title, description, version, body_md}`, et rien d'autre
     # (cf. `_PROCEDURE_FIELDS` : aucune métadonnée d'exécution, jamais).
     # ⚠️ La liste peut être plus COURTE que les liens de type `procedure` : une
     # procédure liée mais inaccessible à l'appelant (partage cross-org) ou supprimée
@@ -1302,7 +1310,8 @@ CAPABILITIES += [
             "project and nothing else ({\"projects\": {\"12\": \"read\"}}), which the "
             "POST form cannot express — its target sits in the body. "
             "Optional ?include=procedures adds the BODY of the linked procedures "
-            "(title, version, body_md) so a reader can see the rule that produced a "
+            "(title, description = the author's own short summary, version, body_md) so "
+            "a reader can render the summary instead of the whole body, and see the rule that produced a "
             "record; omitted, the response is byte-for-byte unchanged. Ask for "
             "several with ONE comma-separated value (?include=spine,procedures) — "
             "repeating the parameter keeps only the last one."

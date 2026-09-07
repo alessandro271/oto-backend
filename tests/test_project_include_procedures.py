@@ -60,13 +60,16 @@ def test_procedure_payload_is_an_allowlist(store):
     EXACT des clés servies : toute colonne future est absente par construction, et
     l'ajouter au rendu demandera de changer ce test — c'est-à-dire de le décider.
 
-    Le stub porte exprès des champs à ne pas servir (`set_by`, `description`,
-    `slots`, les horodatages) : ils existent en base, ils ne sortent pas."""
+    `description` y est entrée le 07/09/2026 (oto#118), et ce test est l'endroit où
+    cette décision a été prise : c'est la prose de l'auteur, pas une métadonnée
+    d'exécution. Le stub porte exprès ce qui ne sort toujours PAS (`set_by`, `slots`,
+    les horodatages) : ces champs existent en base et n'ont aucun chemin vers le
+    client."""
     got = cap._linked_procedures("sub-lecteur", LIENS)
 
     assert len(got) == 1
     assert set(got[0]) == set(cap._PROCEDURE_FIELDS)
-    assert set(got[0]) == {"ref", "slug", "title", "version", "body_md"}
+    assert set(got[0]) == {"ref", "slug", "title", "description", "version", "body_md"}
     assert got[0]["body_md"] == "1. Vérifier le SIREN\n2. Noter"
     assert got[0]["version"] == 3
 
@@ -85,6 +88,31 @@ def test_execution_metadata_never_leaks_even_if_the_row_grows(store, monkeypatch
     rendu = repr(got)
     for interdit in ("model", "executed_by", "candidate", "cost"):
         assert interdit not in rendu, f"« {interdit} » a fuité : {rendu}"
+
+
+# ── oto#118 : le résumé de l'auteur, à côté du corps ─────────────────────────
+
+def test_le_resume_de_lauteur_est_servi(store):
+    """Le défaut, tel que vécu : l'allowlist s'arrêtait à `body_md`, donc une
+    application tierce affichait à sa lectrice un corps de quinze mille caractères
+    faute de pouvoir servir un résumé de deux lignes. `description` existe en base,
+    est saisie par l'auteur et se corrige sans toucher au corps — elle sort."""
+    [got] = cap._linked_procedures("sub-lecteur", LIENS)
+
+    assert got["description"] == "Comment qualifier"
+    assert got["body_md"] == "1. Vérifier le SIREN\n2. Noter"
+
+
+def test_sans_resume_le_champ_est_vide_jamais_null(store, monkeypatch):
+    """Une procédure sans résumé n'est pas une anomalie : la colonne est NULL en base
+    et le champ servi vaut `""`. Un client qui concatène ou mesure la longueur n'a
+    donc pas à distinguer « pas de résumé » de « champ absent »."""
+    monkeypatch.setattr(cap.org_store, "get_instruction_by_id",
+                        lambda i: {**PROCEDURE, "description": None})
+
+    [got] = cap._linked_procedures("sub-lecteur", LIENS)
+
+    assert got["description"] == ""
 
 
 # ── le droit, procédure par procédure ────────────────────────────────────────
@@ -269,6 +297,9 @@ async def test_la_requete_exacte_du_partenaire_aboutit(projet_lisible):
     assert code == 200, corps
     assert [p["slug"] for p in corps["procedures"]] == ["qualification"]
     assert corps["procedures"][0]["body_md"] == "1. Vérifier le SIREN\n2. Noter"
+    # oto#118 — et le RÉSUMÉ arrive par la même route, sur le même appel : c'est ce
+    # que le front tiers affiche à la place du corps entier.
+    assert corps["procedures"][0]["description"] == "Comment qualifier"
 
 
 @pytest.mark.asyncio
