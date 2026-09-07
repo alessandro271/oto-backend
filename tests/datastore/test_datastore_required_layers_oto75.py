@@ -132,13 +132,12 @@ def test_une_liste_fautive_ne_dit_pas_300_fois_la_meme_chose():
 
 @pytest.mark.parametrize("cran", [
     {"readonly": True},
-    {"system": "write.at"},
     {"role": "status"},
 ])
 def test_les_colonnes_que_l_appelant_n_ECRIT_pas_sont_hors_de_portee(cran):
     """Exiger une provenance de qui n'écrit pas la valeur ferait refuser des écritures
-    que personne ne peut corriger : la colonne du fichier source, l'estampille reposée
-    par la plateforme, et celle qui porte le cycle de vie."""
+    que personne ne peut corriger : la colonne du fichier source, et celle qui porte
+    le cycle de vie."""
     schema = {"fields": [{"key": "q", "type": "text",
                           "required_layers": ["comment"], **cran}]}
     assert dsv2.validate_row(schema, {"q": "x"}, written={"q"}) == []

@@ -606,7 +606,7 @@ def register(mcp: FastMCP) -> None:
           (`"col": {"valeur": …, "comment": "where it comes from"}`). A null or
           empty value, and a layer posted alone without a value, trigger nothing.
           Applies to sub-fields of objects and of list items too; never to
-          `readonly` / `system` / the lifecycle column; never to a column this
+          `readonly` nor the lifecycle column; never to a column this
           write does not name. It arms ITSELF — no `strict` needed. ⚠️ It does NOT
           make a comment TRUE: it forces you to NAME a source, which makes a lie
           checkable — the truth is still established on the documents.
@@ -627,11 +627,9 @@ def register(mcp: FastMCP) -> None:
           (layers stay open — what another source says goes in `<field>.comment`);
           `field.origine: "system"` has the platform keep the previous value in
           `<field>.origine` — the value AS IT STOOD when the format was declared
-          (`data_write` says what that does and does not mean); `field.system: "run.id"|"run.started_at"|"write.at"` has
-          the PLATFORM write the VALUE on every write — do not send that column, it
-          is stamped for you (a value you retype is what you believe, not what
-          happened). Re-sending the SAME value is never a write, so re-emitting a
-          record you just read always passes.
+          (`data_write` says what that does and does not mean). Re-sending the SAME
+          value is never a write, so re-emitting a record you just read always
+          passes.
           Bound the fields meant to hold ONE short value (a job title, a city): a
           column that collects reasoning stops being groupable/filterable. The
           bound applies to the keys a write actually SETS, so rows already over it
@@ -663,11 +661,10 @@ def register(mcp: FastMCP) -> None:
             namespace: target namespace (must exist; you must have write access).
             schema: the schema object, or null to clear it. Head key
                 `unknown_fields: "report"|"reject"` decides an undeclared column's
-                fate; a field may carry `readonly: true` (value locked, layers open),
-                `origine: "system"` (platform-kept `<field>.origine` — the value as
-                it stood WHEN THIS FORMAT WAS DECLARED, written onto every existing
-                row at that moment; the name says when, not who) or
-                `system: "<source>"` (platform-written value).
+                fate; a field may carry `readonly: true` (value locked, layers
+                open) or `origine: "system"` (platform-kept `<field>.origine` — the
+                value as it stood WHEN THIS FORMAT WAS DECLARED, written onto every
+                existing row at that moment; the name says when, not who).
             semantic_search: true/false to toggle semantic row search; null = leave as is.
         """
         store = _acting_store()

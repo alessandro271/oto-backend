@@ -52,7 +52,7 @@ class _Espion(dict):
 #: nommée dans le test ci-dessous, parce que la taire serait refaire la même faute.
 _TYPES = ({"type": "text"}, {"type": "number"}, {"type": "list", "of": "text"},
           {"type": "object", "fields": []}, {"type": "enum", "options": ["a"]})
-_VALEURS = {"readonly": True, "system": "now", "role": "status", "required": True,
+_VALEURS = {"readonly": True, "role": "status", "required": True,
             "max_items": 3, "options": ["a"], "max_length": 5, "pattern": "^a",
             "required_when": {"field": "x", "equals": 1}, "display": "title",
             "lifecycle": {"states": ["a"], "transitions": {}}, "flat_alias": "x",

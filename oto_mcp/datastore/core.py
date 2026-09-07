@@ -47,9 +47,7 @@ from .forcage import Forcage
 from .reserves import (
     iso_utc,
     poser_origine_systeme,
-    poser_valeurs_systeme,
     refuser_champs_reserves,
-    valeurs_systeme,
 )
 from .errors import (  # noqa: F401
     BusinessKeyRequired,
@@ -147,8 +145,8 @@ def _filter_clauses(filter: Optional[dict], filters: Optional[list]) -> list[dic
 
 
 def _now_iso() -> str:
-    # Même forme que toute estampille posée par la plateforme (#859) : les deux
-    # sources système d'une date en rendaient deux, et un tri les rangeait par
+    # Même forme que toute estampille posée par la plateforme (#859) : plusieurs
+    # sources d'une date en rendaient plusieurs, et un tri les rangeait par
     # l'alphabet. La règle vit à UN endroit — `reserves.iso_utc` — pour qu'elles
     # ne puissent plus diverger.
     return iso_utc(datetime.now(timezone.utc))
@@ -683,18 +681,6 @@ class DatastorePg(SchemaOpsMixin):
             if rid is not None:
                 return set((db.datastore_get_row(ns_id, rid) or {}).get("data") or {})
         return set()
-
-    @staticmethod
-    def _pose_systeme(schema: Optional[dict]) -> dict:
-        """Ce que la plateforme pose sur CE geste (#607) — `{}` quand le tableau ne
-        déclare aucune colonne `system:`, donc rien à payer pour qui ne s'en sert pas.
-
-        Calculée UNE fois par geste et passée aux deux temps qui en ont besoin (le
-        refus, puis la pose) : deux calculs encadrant la même écriture donneraient
-        deux horodatages, et l'appelant se ferait refuser une valeur identique à
-        celle qu'on venait de lui rendre — un refus impossible à comprendre et
-        impossible à reproduire."""
-        return valeurs_systeme(schema, run=_current_run(), maintenant=_now_iso())
 
     # --- forçage d'une colonne verrouillée (#658) -----------------------------
 
@@ -1231,14 +1217,9 @@ class DatastorePg(SchemaOpsMixin):
         # #586 : la couche d'origine d'un champ système ne s'écrit pas, création
         # comprise — jugée sur le payload seul (le readonly, lui, se juge contre la
         # ligne en place, donc dans la fusion). Refusé AVANT le lookup de clé.
-        # #607 : la colonne posée par la plateforme se juge du même geste, contre ce
-        # qu'on s'apprête à poser — sinon l'agent qui réémet l'estampille courante
-        # (le geste dominant) se ferait refuser sa propre lecture.
-        sys_pose = self._pose_systeme(schema)
         # #658 : tranché AVANT la fusion — c'est elle qui ouvre le verrou de ligne.
         forcage = self._forcage_readonly(ns_id, schema, readonly_override)
-        refuser_champs_reserves(schema, user_data, pose_systeme=sys_pose,
-                                agent=aga.appel_d_agent())
+        refuser_champs_reserves(schema, user_data, agent=aga.appel_d_agent())
         _relever_origine_module(self, ns_id, user_data, schema=schema,
                                 declare=origine_override)
         self._trace(trace, ns_id, ns)
@@ -1276,10 +1257,6 @@ class DatastorePg(SchemaOpsMixin):
                 f"sera rapprochée par personne — ni une réécriture, ni un lot qui "
                 f"dédouble sur cette clé. Si elle visait une ligne existante, c'est "
                 f"data_write(id=…) ; sinon renseigne `{key}`.")
-        # #607 : la plateforme pose AVANT la validation — une colonne `system:`
-        # déclarée `required` est satisfaite par ce qu'elle pose, jamais par ce que
-        # l'appelant aurait dû deviner.
-        poser_valeurs_systeme(schema, user_data, sys_pose)
         self._check_row(schema, user_data)
         try:
             row = db.datastore_insert_row(ns_id, _new_id(), user_data)
@@ -1407,9 +1384,6 @@ class DatastorePg(SchemaOpsMixin):
         _refuse_dotted_names(user_data)
         _refuse_mixed_layers(schema, user_data)
         sk = (dsv2.status_field(schema) or {}).get("key")
-        # #607 : calculée HORS du `_apply`, qui peut être rejoué par le verrou — deux
-        # tours donneraient deux horodatages pour une seule écriture.
-        sys_pose = self._pose_systeme(schema)
 
         def _apply(current: dict) -> dict:
             merged = dict(current or {})
@@ -1438,15 +1412,10 @@ class DatastorePg(SchemaOpsMixin):
             # (payload, ligne en place, résultat), sous le verrou, avant que quoi
             # que ce soit ne parte. Puis la plateforme pose l'origine qu'elle doit.
             refuser_champs_reserves(schema, pose, avant=current or {},
-                                    pose_systeme=sys_pose, forcage=forcage,
-                                    agent=aga.appel_d_agent())
+                                    forcage=forcage, agent=aga.appel_d_agent())
             _relever_origine_module(self, ns_id, pose, current or {}, schema=schema,
                                     declare=origine_override)
             poser_origine_systeme(schema, current, merged, set(pose))
-            # #607 : l'estampille est reposée sur CHAQUE écriture — c'est le point du
-            # cran. Après l'origine : sur une colonne qui porterait les deux, la
-            # capture doit voir la valeur d'avant, pas celle qu'on vient de poser.
-            poser_valeurs_systeme(schema, merged, sys_pose)
             # ⚠️ `written` reste l'ensemble des clés que l'appelant a NOMMÉES, pas
             # celles qu'on a retenues : une borne de longueur ou un motif ne doit pas
             # se réarmer sur une colonne préservée, dont la valeur n'a pas bougé.
@@ -1489,9 +1458,8 @@ class DatastorePg(SchemaOpsMixin):
         _refuse_dotted_names(user_data)
         _refuse_mixed_layers(schema, user_data)
         valide = dsv2.validation_active(schema) or dsv2.lifecycle_of(schema)
-        sys_pose = self._pose_systeme(schema)
         reserves = bool(dsv2.readonly_fields(schema)
-                        or dsv2.system_origin_fields(schema) or sys_pose)
+                        or dsv2.system_origin_fields(schema))
         prev = db.datastore_get_row(ns_id, row_id) if (valide or reserves) else None
         prev_data = dict((prev or {}).get("data") or {}) if prev else None
         if reserves:
@@ -1501,15 +1469,11 @@ class DatastorePg(SchemaOpsMixin):
             complet = {**{k: None for k in (prev_data or {}) if k not in user_data},
                        **user_data}
             refuser_champs_reserves(schema, complet, avant=prev_data,
-                                    pose_systeme=sys_pose,
                                     agent=aga.appel_d_agent())
             _relever_origine_module(self, ns_id, complet, prev_data, schema=schema,
                                     declare=origine_override)
             if prev_data is not None:
                 poser_origine_systeme(schema, prev_data, user_data, set(complet))
-        # #607 : hors du `if reserves` — un remplacement qui n'emporte QUE l'estampille
-        # doit quand même la reposer, et `sys_pose` vide ne fait rien.
-        poser_valeurs_systeme(schema, user_data, sys_pose)
         if valide:
             sk = (dsv2.status_field(schema) or {}).get("key")
             prev_status = (prev_data or {}).get(sk) if sk else None
@@ -1636,15 +1600,10 @@ class DatastorePg(SchemaOpsMixin):
                     continue
                 # #586 : la création dans le LOT (même chemin que l'upload signé) —
                 # la couche d'origine d'un champ système ne s'écrit pas.
-                # #607 : et l'estampille s'y pose comme partout ailleurs — c'est le
-                # chemin le plus volumineux, donc celui où un trou produirait le plus
-                # de lignes sans trace.
-                sys_pose = self._pose_systeme(schema)
-                refuser_champs_reserves(schema, user_data, pose_systeme=sys_pose,
+                refuser_champs_reserves(schema, user_data,
                                         agent=aga.appel_d_agent())
                 _relever_origine_module(self, ns_id, user_data, schema=schema,
                                         declare=origine_override)
-                poser_valeurs_systeme(schema, user_data, sys_pose)
                 self._check_row(schema, user_data)
                 try:
                     row = db.datastore_insert_row(ns_id, _new_id(), user_data)
@@ -1951,9 +1910,8 @@ class DatastorePg(SchemaOpsMixin):
             written.add(k)
         # #586/#606 : MÊME garde que la fusion — le patch par `id` est le geste le
         # plus courant d'un agent, et celui qui a écrasé les quatorze valeurs.
-        sys_pose = self._pose_systeme(schema)
         forcage = self._forcage_readonly(ns_id, schema, readonly_override)
-        refuser_champs_reserves(schema, pose, avant=avant, pose_systeme=sys_pose,
+        refuser_champs_reserves(schema, pose, avant=avant,
                                 forcage=forcage, agent=aga.appel_d_agent())
         # ⚠️ CE chemin-ci a déjà été oublié une fois, six lignes plus haut : l'origine
         # n'avait été câblée que dans `_merge_into_row`, et le patch par `id` — le
@@ -1964,9 +1922,6 @@ class DatastorePg(SchemaOpsMixin):
         _relever_origine_module(self, ns_id, pose, avant, schema=schema,
                                 declare=origine_override)
         poser_origine_systeme(schema, avant, data, written)
-        # #607 : le patch par `id` est le geste le plus courant d'un agent — donc
-        # celui où une estampille manquante se verrait le plus.
-        poser_valeurs_systeme(schema, data, sys_pose)
         # Validation sur le RÉSULTAT mergé (un patch partiel ne doit pas échouer
         # sur un requis déjà présent) + transition de cycle de vie (ADR 0046 B/C).
         # Seule la borne de longueur se limite aux clés du patch (#383).

@@ -691,11 +691,20 @@ donc geler aucune ligne existante. Un motif hérité qui ne passerait pas le gar
 INERTE à l'écriture (`pattern_of` est muette, comme `max_length_of` sur une borne mal
 formée) mais fait REFUSER la prochaine pose du schéma : c'est là qu'on peut encore corriger.
 
-**Les champs que l'appelant n'écrit pas (#586, #606, #607 ; 29/08 → 01/09/2026).** Trois
+**Les champs que l'appelant n'écrit pas (#586, #606 ; 29/08/2026).** **Deux**
 crans de colonne sous UNE garde (`dsv2.reserved_refusals`, le geste dans
-`datastore/reserves.py`), pour trois gestes mesurés sur la même campagne contre la
-donnée remise par le client — l'écraser, détruire sa copie de secours, et graver une
-déclaration à la place d'une trace. Même hiérarchie que #516 : le chemin n'existe pas >
+`datastore/reserves.py`), pour deux gestes mesurés sur la même campagne contre la
+donnée remise par le client — l'écraser, et détruire sa copie de secours.
+
+⚠️ **Un troisième cran a existé du 01/09 au 07/09/2026 et a été RETIRÉ** (#607) : la
+plateforme y reposait la VALEUR d'une colonne à chaque écriture, depuis une source
+qu'elle observe. Il a été livré, annoncé dans la description que les agents relisent à
+chaque appel — et déclaré par **zéro colonne sur les 5 615 de production**. Retiré pour
+cette raison, avec la règle qui va avec : *rien n'exige aujourd'hui qu'un premier usage
+réel existe avant qu'une capacité ne soit annoncée à des agents.* Le besoin qui l'avait
+motivé — une colonne que l'agent remplissait de mémoire et qui dérivait d'une fiche à
+l'autre — reste servi par le **pointeur** : le run sur la ligne, et ce que le run sait se
+lit au run. *Une valeur qu'on rejoint ne dérive pas, une valeur qu'on recopie dérive.* Même hiérarchie que #516 : le chemin n'existe pas >
 la machine refuse > un contrôle détecte > la consigne interdit ; jusqu'ici un contrôle
 de fin de passage détectait après coup.
 
@@ -802,41 +811,6 @@ de fin de passage détectait après coup.
   s'y écrit à la main), sous un sous-record, sur une cible de couche ; se combine avec
   `readonly` (valeur verrouillée ET couche d'origine fermée — la pose n'a jamais lieu
   tant que la valeur ne bouge pas, et joue le jour où le propriétaire lève `readonly`).
-- **`system: "<source>"` — la VALEUR posée par la plateforme (#607, 01/09/2026).** Une
-  colonne `modele` que l'agent remplissait de mémoire dérivait : `…2407` sur une fiche,
-  `…2511` sur une autre le lendemain, quand les 102 travaux enregistrés du run disaient
-  tous `…2512`. *Une valeur recopiée de mémoire est une déclaration, pas une trace.* Le
-  cran est le frère d'`origine: "system"` d'un cran plus haut : là la plateforme pose une
-  COUCHE une seule fois, ici elle pose la valeur de base **à chaque écriture**, sans que
-  l'appelant nomme la colonne — et toute écriture de l'appelant dessus est refusée en
-  nommant la source. Sources FERMÉES : `run.id`, `run.started_at`, `write.at`.
-  **Hors run, rien n'est posé et le refus reste** : une estampille devinée serait la
-  déclaration de mémoire qu'on remplace, avec le sceau de la plateforme en plus.
-  ⚠️ **`run.model` est REFUSÉ à la déclaration, et le refus dit pourquoi.** La source que
-  la demande visait n'existe nulle part côté serveur — `runs` n'a pas de colonne `model`,
-  `run_start` n'en reçoit pas, `runner_jobs.result` n'en porte pas, et le handshake ne
-  connaît qu'un nom de CLIENT (`claude.ai`, `Claude Code`), qui n'est pas un modèle. La
-  seule valeur disponible serait celle que l'appelant en dit : le cran aurait blanchi la
-  déclaration de mémoire au lieu de la remplacer. Ce qui est servi à la place est le
-  **pointeur** — `run.id` sur la ligne, et ce que le run sait se lit au run : *une valeur
-  qu'on rejoint ne dérive pas, une valeur qu'on recopie dérive.* Rouvrir `run.model`
-  demande d'abord une colonne `runs.model` et un point qui l'écrit ; c'est un lot, et il
-  traverse le contrat du runner.
-  **Une valeur identique reste un no-op**, comme pour ses deux sœurs — et il en faut
-  DEUX ici : celle qu'on s'apprête à poser (l'agent réémet l'estampille courante) et
-  celle DÉJÀ en base (une fiche lue sous le run A, réémise sous le run B — c'est notre
-  propre lecture qui revient). Refusée : celle qui ne vient d'aucune des deux.
-  Refusé à la pose sur un composite/`json`, sous un sous-record, sur la **clé métier**
-  (la plateforme déciderait de l'identité des lignes, et chaque écriture viserait une
-  ligne neuve) et **avec `readonly` sur la même colonne** : l'un dit « ne change
-  jamais », l'autre « reposée à chaque écriture » — ensemble l'un des deux ment, et le
-  schéma ne dit pas lequel. `run.started_at` lit `runs` une fois par run (cache borné,
-  même parti que `run_org`, la colonne étant immuable) ; `run.id` et `write.at` ne
-  coûtent aucune I/O.
-  ⚠️ **La pose n'entre pas dans les clés « écrites » que voit la validation** : la borne
-  de longueur et le motif se jugent sur ce que l'APPELANT pose, et un refus portant sur
-  une valeur qu'il ne contrôle pas serait inactionnable.
-
 ⚠️ **Le cran borne TOUT LE MONDE PAR DÉFAUT, faces humaine et REST comprises — et c'est
 dit.** Le store ne sait pas distinguer un agent d'un humain : il connaît un sub et une
 org, et le run n'est pas obligatoire sur toute écriture ; une exemption par défaut serait
@@ -914,9 +888,9 @@ sur pièces.
   éléments d'une `list` (une liste réémise remplace l'ancienne **en bloc**, couches
   comprises — c'est là que la perte est la plus lourde). Un sous-champ fautif se nomme
   **une fois** pour toute la colonne, sur le premier élément qui le porte ;
-- elle ne s'applique **ni** à `readonly`, **ni** à `system`, **ni** à la colonne qui porte
-  le cycle de vie : exiger une provenance de qui n'écrit pas la valeur refuserait des
-  écritures que personne ne peut corriger ;
+- elle ne s'applique **ni** à `readonly`, **ni** à la colonne qui porte le cycle de
+  vie : exiger une provenance de qui n'écrit pas la valeur refuserait des écritures que
+  personne ne peut corriger ;
 - sur une colonne `origine: "system"`, la couche `origine` est **retirée** de l'exigence —
   la plateforme la pose elle-même et REFUSE que l'appelant la nomme.
 
@@ -1058,13 +1032,12 @@ propriété du TABLEAU et se juge là où le schéma est connu. Les deux se comp
 jeton mal placé : « il s'écrit dans tel champ » ; champ réservé : « il ne s'écrit pas,
 voici où va la chose ».
 
-⚠️ **Ce paragraphe a dit le contraire jusqu'au 2026-09-01.** Il annonçait « #607 reste à
-son issue : la pose y lit le RUN à chaque écriture — une I/O sur le chemin chaud —, ce
-que cette garde n'accueille pas sans grossir ». **Les deux moitiés étaient fausses** :
-le run de l'appel est une ContextVar (`_current_run`, aucune I/O), et la seule source
-qui touche la base (`run.started_at`) se cache derrière un cache par run, la colonne
-étant immuable. La conclusion « c'est un autre lot » reposait donc sur un coût supposé,
-jamais mesuré. *Une réserve de perf qu'on n'a pas mesurée est une opinion qui prend
+⚠️ **La leçon de méthode qui reste de #607, son cran ayant été retiré le 07/09/2026.**
+Ce paragraphe a longtemps écarté un lot au motif que « la pose lit le RUN à chaque
+écriture — une I/O sur le chemin chaud ». Les deux moitiés étaient fausses : le run de
+l'appel est une ContextVar, sans I/O, et la seule source qui touchait la base se cachait
+derrière un cache par run. La conclusion reposait donc sur un coût **supposé, jamais
+mesuré**. *Une réserve de perf qu'on n'a pas mesurée est une opinion qui prend
 l'autorité d'un fait en étant écrite ici.*
 
 **Retoucher un schéma sans le détruire (#388).** `data_set_schema` REMPLACE — bon geste

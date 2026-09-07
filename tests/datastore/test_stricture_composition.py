@@ -1,6 +1,6 @@
-"""Datastore — les crans de stricture COMPOSENT (#614/#678, #606, #586, #607).
+"""Datastore — les crans de stricture COMPOSENT (#614/#678, #606, #586).
 
-Quatre déclarations, et le risque n'est pas qu'aucune ne marche : c'est qu'elles
+Trois déclarations, et le risque n'est pas qu'aucune ne marche : c'est qu'elles
 marchent chacune dans son coin et se contredisent sur un tableau réel. Ce banc
 décrit l'axe qui en fait une famille — **une seule question, posée dans un ordre
 fixe, à chaque écriture** :
@@ -8,7 +8,7 @@ fixe, à chaque écriture** :
 | # | la question | ce qui répond |
 |---|---|---|
 | 1 | la destination EXISTE-t-elle ? | `unknown_fields: "reject"` (#614/#678) |
-| 2 | est-elle À MOI ? | `readonly` (#606), `origine: "system"` (#586), `system:` (#607) |
+| 2 | est-elle À MOI ? | `readonly` (#606), `origine: "system"` (#586) |
 | 3 | la valeur est-elle recevable ? | types, bornes, options, cycle de vie |
 
 Trois propriétés en découlent, et ce sont elles qu'on vérifie ici :
@@ -16,10 +16,10 @@ Trois propriétés en découlent, et ce sont elles qu'on vérifie ici :
 - **les trois étages sont DISJOINTS** — une colonne non déclarée n'est jamais une
   colonne réservée, et réciproquement : aucun couple ne peut se disputer la même
   écriture, donc l'ordre ne peut pas produire deux verdicts contradictoires ;
-- **les couples impossibles sont refusés à la POSE**, pas arbitrés en silence à
-  l'écriture. Un schéma dont deux crans se contredisent ne dit pas lequel gagne,
-  et un arbitrage muet ferait de la lecture du schéma une devinette — exactement
-  ce que cette famille existe pour supprimer ;
+- **un cran qui ne pourrait pas s'appliquer est refusé à la POSE**, pas accepté
+  puis inerte. Un cran inerte est PIRE que son absence : on cesse de surveiller ce
+  qu'on croit gardé, et la lecture du schéma devient une devinette — exactement ce
+  que cette famille existe pour supprimer ;
 - **le geste dominant du terrain traverse les trois** : réémettre la fiche entière
   telle qu'on l'a lue. Il a déjà arrêté une campagne une fois (#623), et il la
   traverserait encore si un seul des crans refusait l'identique.
@@ -34,7 +34,7 @@ from oto_mcp.datastore.core import DatastorePg
 from oto_mcp.datastore.errors import RowValidationError
 
 
-# Un tableau qui porte les QUATRE crans à la fois.
+# Un tableau qui porte les TROIS crans à la fois.
 SCHEMA = {
     "strict": True, "key": "siren", "key_required": True,
     "unknown_fields": "reject",
@@ -42,20 +42,19 @@ SCHEMA = {
         {"key": "siren", "type": "text"},
         {"key": "adresse", "type": "text", "readonly": True},          # #606
         {"key": "naf", "type": "text", "origine": "system"},           # #586
-        {"key": "run", "type": "text", "system": "run.id"},            # #607
         {"key": "note", "type": "text"},
     ],
 }
 LIGNE = {"siren": "552081317", "adresse": "1 rue A", "naf": "62.01Z"}
 
 
-def test_le_tableau_aux_quatre_crans_est_un_schema_VALIDE():
+def test_le_tableau_aux_trois_crans_est_un_schema_VALIDE():
     """Le premier fait à établir : rien dans la famille ne s'exclut mutuellement
-    par construction. Les quatre tiennent sur une même déclaration."""
+    par construction. Les trois tiennent sur une même déclaration."""
     assert dsv2.validate_schema_def(SCHEMA) == []
 
 
-def test_les_quatre_s_annoncent_ensemble():
+def test_les_trois_s_annoncent_ensemble():
     """`enforced` est ce qui permet à un client de vérifier que ce qu'il déclare
     sera appliqué par le serveur qui lui répond — la seule parade au décalage
     entre le code écrit et la version servie."""
@@ -64,7 +63,7 @@ def test_les_quatre_s_annoncent_ensemble():
         annonce = set(dsv2.enforced_keys())
     finally:
         dsv2.reset_enforced_keys()
-    assert {"unknown_fields", "readonly", "origine", "system",
+    assert {"unknown_fields", "readonly", "origine",
             "key_required"} <= annonce
 
 
@@ -73,28 +72,17 @@ def test_les_deux_etages_sont_disjoints():
     `unknown_fields` ne l'est pas. Aucune écriture ne peut donc recevoir deux
     verdicts opposés — c'est ce qui rend l'ordre des étages sans conséquence."""
     reservees = (dsv2.readonly_fields(SCHEMA)
-                 | dsv2.system_origin_fields(SCHEMA)
-                 | set(dsv2.system_value_fields(SCHEMA)))
+                 | dsv2.system_origin_fields(SCHEMA))
     declarees = {f["key"] for f in SCHEMA["fields"]}
     assert reservees <= declarees
     assert dsv2.off_schema_keys(SCHEMA, {k: "v" for k in reservees}) == []
 
 
-# ── les couples impossibles, refusés à la POSE ───────────────────────────────
-
-@pytest.mark.parametrize("champ,attendu", [
-    ({"key": "x", "readonly": True, "system": "run.id"}, "se contredisent"),
-    ({"key": "x", "system": "run.model"}, "run.id"),
-    ({"key": "x", "system": "inconnue"}, "source inconnue"),
-])
-def test_un_couple_impossible_ne_passe_pas_la_pose(champ, attendu):
-    errs = dsv2.validate_schema_def({"fields": [champ]})
-    assert any(attendu in e for e in errs), errs
-
+# ── les crans qui ne pourraient pas s'appliquer, refusés à la POSE ──────────
 
 @pytest.mark.parametrize("schema,attendu", [
     ({"key": "k", "fields": [{"key": "k", "readonly": True}]}, "clé métier"),
-    ({"key": "k", "fields": [{"key": "k", "system": "run.id"}]}, "clé métier"),
+    ({"fields": [{"key": "x", "type": "json", "origine": "system"}]}, "scalaire"),
     ({"unknown_fields": "reject", "fields": [{"key": "k"}]}, "strict"),
     ({"strict": True, "unknown_fields": "reject", "fields": []}, "référentiel"),
 ])
@@ -120,7 +108,6 @@ def _fake_merge_locked(rows):
 
 @pytest.fixture()
 def banc(monkeypatch):
-    monkeypatch.setattr(dsm, "_current_run", lambda: "run-abc")
     st = DatastorePg("u", acting_org=35)
     etat = {"lignes": {"r1": dict(LIGNE)}, "creees": [], "maj": []}
     monkeypatch.setattr(st, "_resolve", lambda ns, write=False: 7)
@@ -153,25 +140,23 @@ def banc(monkeypatch):
     return st, etat
 
 
-def test_LE_GESTE_DOMINANT_traverse_les_quatre(banc):
-    """La fiche ENTIÈRE réémise telle qu'elle a été lue — colonnes verrouillées,
-    couche d'origine et estampille comprises. C'est 8 charges d'écriture sur 8 du
-    terrain, et le refuser arrêterait la flotte : #623 l'a fait une fois."""
+def test_LE_GESTE_DOMINANT_traverse_les_trois(banc):
+    """La fiche ENTIÈRE réémise telle qu'elle a été lue — colonnes verrouillées et
+    couche d'origine comprises. C'est 8 charges d'écriture sur 8 du terrain, et le
+    refuser arrêterait la flotte : #623 l'a fait une fois."""
     store, etat = banc
-    etat["lignes"]["r1"]["run"] = "run-abc"
     store.update_row("viviers", "r1", {
         "siren": "552081317", "adresse": "1 rue A", "naf": "62.01Z",
-        "run": "run-abc", "note": "vu"})
+        "note": "vu"})
     assert etat["lignes"]["r1"]["note"] == "vu"
 
 
 @pytest.mark.parametrize("patch,attendu", [
     # étage 1 : la destination n'existe pas
     ({"_liberation": "x"}, "aucune colonne déclarée"),
-    # étage 2 : elle existe, elle n'est pas à moi — trois façons
+    # étage 2 : elle existe, elle n'est pas à moi — deux façons
     ({"adresse": "2 rue B"}, "adresse.comment"),
     ({"naf": {"origine": "inventée"}}, "posée par le système"),
-    ({"run": "run-inventé"}, "run.id"),
 ])
 def test_chaque_etage_refuse_ET_N_ECRIT_RIEN(banc, patch, attendu):
     """Le refus arrive au moment où l'appelant peut encore corriger, il nomme la

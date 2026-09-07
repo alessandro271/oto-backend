@@ -192,8 +192,7 @@ def _destinations(schema: Optional[dict], sauf: str) -> list:
     secondes."""
     from . import schema as dsv2
     ro = dsv2.readonly_fields(schema)
-    sv = set(dsv2.system_value_fields(schema))
-    hors = fermees(schema) | ro | sv | {sauf}
+    hors = fermees(schema) | ro | {sauf}
     noms = [f["key"] for f in _champs(schema)
             if isinstance(f.get("key"), str) and f["key"] and f["key"] not in hors]
     return noms[:_DESTINATIONS_MAX]
@@ -218,8 +217,8 @@ def _ou_porter(schema: Optional[dict], cle: str, *, couche_ouverte: bool) -> str
 def refus(schema: Optional[dict], cle: str, acces: str) -> str:
     """Le texte servi quand un agent écrit une colonne qui ne lui appartient pas.
 
-    Il dit les trois mêmes choses que ses trois sœurs de la famille (`readonly`,
-    `origine`, `system`) : le champ, la raison, où va la chose — plus une quatrième que
+    Il dit les trois mêmes choses que ses deux sœurs de la famille (`readonly`,
+    `origine`) : le champ, la raison, où va la chose — plus une quatrième que
     l'incident a rendue nécessaire : **réessayer ne changera rien**. Le refus ne nomme
     ni le propriétaire ni le réglage à modifier : la sortie n'est pas d'ouvrir la
     colonne, elle est de porter l'intention ailleurs."""

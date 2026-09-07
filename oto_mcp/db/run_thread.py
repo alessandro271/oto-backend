@@ -73,10 +73,16 @@ def get_run_head(run_id: str) -> Optional[dict]:
     """`{sub, org_id, started_at}` du run — la base de l'autz du fil (le fil hérite
     des droits de SON run, aucun modèle de droits nouveau).
 
-    `started_at` est servi depuis #607 (une colonne `system: "run.started_at"` le
-    pose sur la ligne). Ajouté ICI plutôt que par une seconde lecture : les deux
-    appelants lisent la même ligne immuable, et deux requêtes sur la même clé
-    finissent par diverger sur ce qu'elles considèrent comme « le run »."""
+    ⚠️ **`started_at` n'a plus de consommateur** depuis le retrait du cran qui posait
+    la valeur d'une colonne depuis une source observée (#607, retiré le 07/09/2026) :
+    c'était son seul lecteur. La colonne reste sélectionnée — elle ne coûte rien sur
+    une ligne qu'on lit déjà, et la rendre ne demande aucune requête de plus — mais
+    **rien ne s'appuie dessus aujourd'hui**. Le dire plutôt que de la retirer : un
+    champ servi sans lecteur se remarque, un champ retiré se redemande.
+
+    Ajouté ICI plutôt que par une seconde lecture : les deux appelants lisent la même
+    ligne immuable, et deux requêtes sur la même clé finissent par diverger sur ce
+    qu'elles considèrent comme « le run »."""
     with _connect() as conn:
         row = conn.execute(
             "SELECT sub, org_id, started_at FROM runs WHERE run_id = %s", (run_id,)

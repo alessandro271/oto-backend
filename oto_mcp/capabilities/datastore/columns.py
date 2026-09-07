@@ -242,10 +242,8 @@ CAPABILITIES += [
             "drops that state's exits, `lifecycle: {transitions: null}` drops the whole "
             "table. "
             "`origine: \"system\"` "
-            "makes the platform keep the previous value in `<field>.origine`, and "
-            "`system: \"run.id\"|\"run.started_at\"|\"write.at\"` makes the PLATFORM "
-            "write the value on every write (the caller is refused, by name) — `null` "
-            "lifts any of them without touching the rows. Field ORDER "
+            "makes the platform keep the previous value in `<field>.origine` — `null` "
+            "lifts it without touching the rows. Field ORDER "
             "is never reshuffled. Returns the resulting schema "
             "plus `{added, updated, removed}` and any `warning` the schema raises."),
     ),

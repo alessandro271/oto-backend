@@ -593,56 +593,6 @@ def system_origin_fields(schema: Optional[dict]) -> set:
             and isinstance(f.get("key"), str) and f["key"]}
 
 
-# Les sources que la plateforme SAIT poser (#607) — fermé, et fermé pour une
-# raison : chacune est une chose que le serveur OBSERVE au moment de l'écriture.
-#   `run.id`         le run de l'appel courant (`_current_run`, ADR 0038) ;
-#   `run.started_at` l'ouverture de ce run, lue dans `runs` (immuable → cache) ;
-#   `write.at`       l'instant de CETTE écriture.
-SYSTEM_SOURCES = ("run.id", "run.started_at", "write.at")
-
-# ⚠️ Ce que la demande visait et que RIEN ne sert. Déclaré ici plutôt que passé
-# sous silence : le refus doit dire POURQUOI, sinon on le relit comme un caprice
-# de vocabulaire et on le redemande dans six mois.
-#
-# Le modèle d'un run n'existe nulle part côté serveur — `runs` n'a pas de colonne
-# `model`, `run_start` n'en reçoit pas, `runner_jobs.result` n'en porte pas, et le
-# handshake ne connaît qu'un nom de CLIENT (`claude.ai`, `Claude Code`), qui n'est
-# pas un modèle. La seule trace serait ce que l'appelant en dit — c'est-à-dire
-# exactement la déclaration de mémoire que ce cran existe pour remplacer.
-#
-# *Poser une source qu'on ne sait pas servir donnerait une colonne vide, ou pire
-# une devinette, sous un nom qui promet une trace.* Ce que la plateforme sert à la
-# place est le POINTEUR : `run.id` sur la ligne, et le modèle se lit au run — une
-# valeur qu'on rejoint ne dérive pas, une valeur qu'on recopie dérive.
-_SOURCES_SANS_ORIGINE = {
-    "run.model": (
-        "la plateforme n'enregistre le modèle d'aucun run — ni `runs`, ni le fil, "
-        "ni le handshake (qui ne connaît qu'un nom de CLIENT) ne le portent. La "
-        "seule valeur disponible serait celle que l'appelant en dit, soit "
-        "précisément la déclaration de mémoire que ce cran remplace. Pose "
-        "`system: \"run.id\"` : la ligne garde le POINTEUR vers le run, et ce que "
-        "le run sait se lit au run — une valeur qu'on rejoint ne dérive pas"),
-}
-
-
-def system_value_fields(schema: Optional[dict]) -> dict:
-    """Les colonnes dont la VALEUR est posée par la plateforme (#607) →
-    `{colonne: source}`.
-
-    Sœur de `system_origin_fields` (#586), d'un cran plus haut : là la plateforme
-    pose une COUCHE (`<champ>.origine`) une seule fois, ici elle pose la valeur de
-    base à CHAQUE écriture. Même parti dans les deux cas — l'appelant ne l'écrit
-    pas, et le refus le lui dit en nommant la source.
-
-    Ne rend que les sources SERVIES : une déclaration illisible est refusée à la
-    pose (`_validate_reserved_def`), donc une source inconnue ici ne peut venir que
-    d'une écriture hors surface. L'ignorer laisserait le champ ouvert à l'appelant
-    en silence, sous un nom qui annonce le contraire."""
-    return {f["key"]: f["system"] for f in _fields(schema)
-            if f.get("system") in SYSTEM_SOURCES
-            and isinstance(f.get("key"), str) and f["key"]}
-
-
 #: Le paramètre par lequel un appelant DÉCLARE qu'il pose l'origine en connaissance de
 #: cause. Nommé par cohérence stricte avec `readonly_override` (#658) : même famille de
 #: geste — un cran qu'on lève EXPLICITEMENT sur l'appel, jamais par un état qu'on laisse
@@ -862,7 +812,6 @@ def origine_posee(payload: Optional[dict], avant: Optional[dict] = None) -> list
 
 def reserved_refusals(schema: Optional[dict], payload: Optional[dict],
                       avant: Optional[dict] = None, *,
-                      pose_systeme: Optional[dict] = None,
                       forcage: Optional["fcg.Forcage"] = None,
                       agent: bool = False) -> tuple[list[str], dict]:
     """Les refus « champ que l'appelant n'écrit pas » → `(messages, details)`.
@@ -887,18 +836,8 @@ def reserved_refusals(schema: Optional[dict], payload: Optional[dict],
       colonne-clé ne se pose pas en `readonly` (refusé à la déclaration : elle se
       protège par `key_required`) ; un schéma legacy qui la porterait n'est pas
       fermé, puisque l'identique passe. **Un `forcage` TENU lève ce refus-là, pour
-      cet appel seulement** (#658, `forcage.py`) — les deux autres crans, eux, ne
-      se forcent pas : ils ferment ce que la PLATEFORME pose, pas ce que le client
-      a remis ;
-
-    - `system: "<source>"` — le payload NOMME la colonne que la PLATEFORME pose
-      (#607) avec une valeur qui n'est ni celle en place ni celle qu'on s'apprête
-      à poser → refus, en nommant la source. Deux formes passent, et il faut les
-      deux : la valeur qu'on va poser (l'agent réémet l'estampille du run courant)
-      et celle DÉJÀ en base (une fiche lue sous le run A, réémise sous le run B —
-      c'est notre propre lecture qui revient). Ce qui reste refusé est ce qui ne
-      vient d'aucune des deux : la valeur gravée de mémoire, `mistral-large-2407`
-      sur une fiche et `…2511` sur la suivante.
+      cet appel seulement** (#658, `forcage.py`) — l'autre cran, lui, ne se force
+      pas : il ferme ce que la PLATEFORME pose, pas ce que le client a remis ;
 
     - `agent_access: "read" | "none"` (oto#83) — la colonne appartient au PROPRIÉTAIRE
       du tableau et le geste vient d'un AGENT (`agent=True`, décidé par la face, jamais
@@ -924,7 +863,6 @@ def reserved_refusals(schema: Optional[dict], payload: Optional[dict],
     ⚠️ Ici et pas dans le registre des jetons (#602) : celui-ci juge AVANT la
     résolution, sans schéma ; un champ réservé est une propriété du TABLEAU."""
     ro, so = readonly_fields(schema), system_origin_fields(schema)
-    sv = system_value_fields(schema)
     # oto#83 : vides hors face agent — le cran ne borne que ce que la face a déclaré
     # être un appel de modèle. Deux ensembles disjoints : ce qui n'est pas servi du
     # tout, et ce qui est servi en lecture seule.
@@ -932,7 +870,7 @@ def reserved_refusals(schema: Optional[dict], payload: Optional[dict],
     lecture = (aga.fermees(schema) - masques) if agent else set()
     errors: list[str] = []
     details: dict = {}
-    if not ro and not so and not sv and not masques and not lecture:
+    if not ro and not so and not masques and not lecture:
         return errors, details
     for cle, neuf in (payload or {}).items():
         if cle in masques:
@@ -959,37 +897,14 @@ def reserved_refusals(schema: Optional[dict], payload: Optional[dict],
             # `arbitrer` rend `None` quand il passe (et relève la substitution pour
             # le journal), sinon le refus, qui nomme le geste dans les deux cas :
             # paramètre absent → comment le passer ; palier non tenu → à qui il est
-            # ouvert. Le forçage ne touche PAS les deux autres crans de la famille :
-            # `origine`/`system` sont posés par la plateforme, pas par le client, et
-            # il n'y a rien à y corriger de la main du propriétaire.
+            # ouvert. Le forçage ne touche PAS l'autre cran de la famille :
+            # `origine` est posée par la plateforme, pas par le client, et il n'y a
+            # rien à y corriger de la main du propriétaire.
             refus = fcg.arbitrer(forcage, cle, unwrap(avant.get(cle)), unwrap(neuf))
             if refus is not None:
                 errors.append(refus)
                 details["expected_column"] = f"{cle}.comment"
-        if cle in sv and not _valeur_systeme_admise(cle, neuf, avant, pose_systeme):
-            errors.append(
-                f"`{cle}` est posé par la plateforme depuis `{sv[cle]}` — il ne "
-                f"s'écrit pas, et rien n'a été écrit. Une valeur recopiée n'est pas "
-                f"une trace : elle dit ce que l'agent croit, quand la plateforme "
-                f"sait. Retire `{cle}` de ton corps — il est renseigné à chaque "
-                f"écriture.")
     return errors, details
-
-
-def _valeur_systeme_admise(cle: str, neuf: Any, avant: Optional[dict],
-                           pose_systeme: Optional[dict]) -> bool:
-    """Cette valeur-là, sur une colonne `system:`, est-elle un NON-GESTE ?
-
-    Deux formes le sont, et les deux ont coûté une campagne quand on les a
-    refusées (#623) : la valeur qu'on s'apprête à poser, et celle déjà en base.
-    Le geste dominant du terrain réémet la fiche ENTIÈRE, colonnes de plateforme
-    comprises — la moitié du temps telle qu'elle a été LUE, donc sous un run
-    précédent. Refuser l'une ou l'autre arrêterait la flotte sur un geste juste."""
-    valeur = unwrap(neuf)
-    if pose_systeme is not None and cle in pose_systeme \
-            and same_value(valeur, pose_systeme[cle]):
-        return True
-    return avant is not None and same_value(valeur, unwrap(avant.get(cle)))
 
 
 def _origine_attendue(avant: Optional[dict], cle: str, neuf: dict) -> Any:
@@ -1767,14 +1682,6 @@ def validate_schema_def(schema: Optional[dict]) -> list[str]:
             f"agent la lit pour désigner la ligne qu'il écrit, et sans elle il "
             f"écrirait à côté. Ferme les colonnes de SUIVI, pas celle qui identifie ; "
             f"un tableau entier se ferme en ne le partageant pas")
-    # #607, même raison d'un cran plus loin : sur la clé, une valeur POSÉE par la
-    # plateforme ferait décider au serveur de l'identité des lignes — chaque
-    # écriture viserait une ligne neuve, et le tableau se dédoublerait à chaque run.
-    if cle and cle in system_value_fields(schema):
-        errors.append(
-            f"`{cle}` est la clé métier : elle ne se pose pas par `system` — la "
-            f"plateforme déciderait de l'identité des lignes, et chaque écriture "
-            f"viserait une ligne neuve. Estampille une AUTRE colonne")
     errors.extend(_erreurs_unknown_fields(schema))
     for f in _fields(schema):
         gabarit = f.get(FLAT_ALIAS)
@@ -1917,34 +1824,6 @@ def _validate_reserved_def(f: dict, fpath: str, errors: list[str], *,
     celui qui peut corriger — jamais accepté-inerte (#347). `None` passe : c'est
     la forme par laquelle un patch LÈVE le cran sans réécrire le schéma."""
     ro, so, ftype = f.get("readonly"), f.get("origine"), f.get("type")
-    sv = f.get("system")
-    if sv is not None and sv not in SYSTEM_SOURCES:
-        motif = _SOURCES_SANS_ORIGINE.get(str(sv))
-        errors.append(
-            f"{fpath}: system: {sv!r} — {motif}" if motif else
-            f"{fpath}: system: source inconnue {sv!r} — la plateforme pose "
-            f"{', '.join(repr(s) for s in SYSTEM_SOURCES)}, et rien d'autre : "
-            f"chacune est une chose que le serveur OBSERVE au moment de l'écriture. "
-            f"Une source qu'il ne sait pas lire donnerait une colonne vide sous un "
-            f"nom qui promet une trace")
-    elif sv is not None and (ftype in COMPOSITE_TYPES or ftype == "json"):
-        errors.append(
-            f"{fpath}: system ne se pose que sur une colonne scalaire "
-            f"(type={ftype}) — la plateforme pose UNE valeur observée, pas une "
-            f"structure ; sur un composite elle rangerait un identifiant là où le "
-            f"format attend des items")
-    # ⚠️ Le seul couple CONTRADICTOIRE de la famille, et il se lit mal : `readonly`
-    # promet « la valeur ne change jamais par une écriture », `system` promet « la
-    # plateforme la repose à chaque écriture ». Ensemble, l'un des deux ment — et
-    # le schéma ne dit pas lequel. Refusé à la pose plutôt qu'arbitré en silence :
-    # un arbitrage muet ferait de la lecture du schéma une devinette, ce qui est
-    # exactement ce que cette famille de crans existe pour supprimer.
-    if ro is True and sv is not None:
-        errors.append(
-            f"{fpath}: readonly et system ensemble se contredisent — `readonly` dit "
-            f"que la valeur ne change JAMAIS, `system` que la plateforme la repose à "
-            f"CHAQUE écriture. Garde `system` pour une estampille, `readonly` pour "
-            f"une colonne du fichier source")
     if ro is not None and not isinstance(ro, bool):
         errors.append(
             f"{fpath}: readonly doit être true ou false (reçu {ro!r}) — `true` = "
@@ -1990,11 +1869,11 @@ def _validate_reserved_def(f: dict, fpath: str, errors: list[str], *,
             f"{fpath}: {aga.CLE} ne se pose qu'au premier niveau — sous un sous-record "
             f"ni le masquage ni le refus ne le lisent, et une déclaration que rien ne "
             f"lit n'est pas inerte, elle ment")
-    if not top and (ro is True or so == SYSTEM_ORIGIN or sv is not None):
+    if not top and (ro is True or so == SYSTEM_ORIGIN):
         errors.append(
-            f"{fpath}: readonly / origine: \"{SYSTEM_ORIGIN}\" / system ne se posent "
-            f"qu'au premier niveau — sous un sous-record la garde ne les lit pas, et "
-            f"une déclaration que rien ne lit n'est pas inerte, elle ment")
+            f"{fpath}: readonly / origine: \"{SYSTEM_ORIGIN}\" ne se posent qu'au "
+            f"premier niveau — sous un sous-record la garde ne les lit pas, et une "
+            f"déclaration que rien ne lit n'est pas inerte, elle ment")
 
 
 def _validate_fields_def(fields: list, path: str, errors: list[str]) -> None:
@@ -2613,13 +2492,11 @@ def _couches_exigees_errors(fields: list, data: dict, path: str,
             if written is not None and key not in written:
                 continue
             # Les exclusions de l'issue, et chacune ferme une colonne que l'appelant
-            # n'écrit pas : `readonly` (la valeur vient du fichier source), `system`
-            # (la plateforme la repose à chaque écriture), et celle qui porte le cycle
-            # de vie (un état n'est pas une observation, il se justifie par sa
-            # transition). Exiger une provenance de qui n'écrit pas la valeur ferait
-            # refuser des écritures que personne ne peut corriger.
-            if (f.get("readonly") is True or f.get("system") is not None
-                    or f.get("role") == "status"):
+            # n'écrit pas : `readonly` (la valeur vient du fichier source) et celle
+            # qui porte le cycle de vie (un état n'est pas une observation, il se
+            # justifie par sa transition). Exiger une provenance de qui n'écrit pas
+            # la valeur ferait refuser des écritures que personne ne peut corriger.
+            if f.get("readonly") is True or f.get("role") == "status":
                 continue
         brut = data.get(key)
         # Le VIDE ne déclenche rien — ni une valeur nulle, ni une couche posée seule
@@ -3017,11 +2894,6 @@ def enforced_keys() -> list[str]:
         if reserved_refusals({"fields": [{"key": "x", "origine": SYSTEM_ORIGIN}]},
                              {"x": {ORIGIN_LAYER: "y"}})[0]:
             vues.append("origine")
-        # #607 : la colonne posée par la plateforme. Même sonde que ses deux sœurs —
-        # on interroge la fonction qui DÉCIDE, pas une ligne de liste.
-        if reserved_refusals({"fields": [{"key": "x", "system": "run.id"}]},
-                             {"x": "inventé"}, {"x": "en place"})[0]:
-            vues.append("system")
         # oto#83 : le cran ne mord que sur la face agent — la sonde le dit donc
         # explicitement (`agent=True`), sinon elle mesurerait l'absence de contexte
         # d'appel et annoncerait « pas appliqué » sur un déploiement qui l'applique.
@@ -3162,13 +3034,6 @@ _NEAR_MISS = {
     "cle": "key", "name": "key", "nom": "key",
     "read_only": "readonly", "readOnly": "readonly", "writable_by": "readonly",
     "origin": "origine",
-    # ⚠️ `"system": "origine"` a été RETIRÉ le 2026-09-01 (#607) : `system` est
-    # devenu une clé LUE, avec son propre sens (la plateforme pose la VALEUR depuis
-    # une source déclarée), et une table de fautes de frappe qui renvoie une vraie
-    # clé vers une autre vraie clé ne signale plus une faute — elle en fabrique une.
-    # La confusion entre les deux crans voisins se traite désormais là où elle est
-    # actionnable : le refus de `_validate_reserved_def` nomme les sources servies.
-    "systeme": "system", "posed_by": "system",
 }
 
 
