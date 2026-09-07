@@ -244,6 +244,16 @@ class JobsOut(BaseModel):
             "complete: outcome of the release step — ok (count in rows_released), "
             "no_run (no run known to this job), failed (the release itself errored; "
             "the job is concluded anyway, the leases expire on their own)."))
+    # claim — la DIFFÉRENCE entre « rien à faire » et « je n'ai pas pu regarder ».
+    campaign_error: Optional[str] = Field(
+        None, description=(
+            "claim: set ONLY when `job` is null AND producing work from a running "
+            "campaign FAILED. Absent means the queue is genuinely empty. Without "
+            "this field the two are indistinguishable, and a campaign that cannot "
+            "produce reads as a campaign with nothing left to do — measured on "
+            "2026-09-07, a broken query made every poll answer 'no work' for days "
+            "while three workers polled and nothing ever ran. Log it: it names a "
+            "platform fault, never something the worker can fix."))
 
 
 def _curseur(dernier_id: int) -> str:
@@ -456,7 +466,7 @@ def _campagnes_au_sondage() -> bool:
 _CAMPAGNE_MUETTE: dict[int, tuple[str, float]] = {}
 
 
-def _produire_pour_une_campagne(org_id: int, bail_s: int) -> None:
+def _produire_pour_une_campagne(org_id: int, bail_s: int) -> Optional[str]:
     """Fabrique UN travail pour une campagne en cours de l'org, s'il y en a une.
 
     Un seul, et sans le réserver : l'appelant re-sonde juste après et le prendra
@@ -489,7 +499,7 @@ def _produire_pour_une_campagne(org_id: int, bail_s: int) -> None:
     d'armement ci-dessus est ce qui borne le risque en attendant.
     """
     if not _campagnes_au_sondage():
-        return
+        return None
     try:
         # ⚠️ AVANT de servir : arrêter celles qui échouent en boucle. L'ordre
         # compte — une campagne épuisée doit être arrêtée, pas seulement sautée,
@@ -499,7 +509,7 @@ def _produire_pour_une_campagne(org_id: int, bail_s: int) -> None:
                            "échoué (max_consecutive_failures)", fid)
         f = db.campagne_a_servir(org_id)
         if not f or not f.get("sub"):
-            return
+            return None
         message = (f.get("input") or "") \
             .replace("{namespace}", f.get("namespace") or "") \
             .replace("{filter}", json.dumps(f.get("row_filter") or {}, ensure_ascii=False))
@@ -514,6 +524,7 @@ def _produire_pour_une_campagne(org_id: int, bail_s: int) -> None:
                      "label": f"flotte {f.get('namespace')} — {f['procedure']}"},
             fleet_id=f["id"], sub=f["sub"])
         db.marquer_demarree(f["id"])
+        return None
     except Exception as e:
         # ⚠️ UNE fois par cause, pas à chaque sondage. Ce chemin tourne en boucle
         # sur chaque worker : journaliser sans retenue noierait le journal sous
@@ -528,6 +539,11 @@ def _produire_pour_une_campagne(org_id: int, bail_s: int) -> None:
             logger.warning("campagne : production de travail impossible pour l'org %s "
                            "— les passages de cette org n'avancent plus", org_id,
                            exc_info=True)
+        # Rendue à l'appelant, pas seulement journalisée ici : un journal serveur
+        # n'est lu que par qui SAIT déjà qu'il y a un problème. Le worker, lui,
+        # reçoit la réponse à chaque sondage — c'est le seul endroit où la panne
+        # atteint quelqu'un qui l'attendait.
+        return cause[:300]
 
 
 def _delegue(job: dict, bail_s: int, claimant: str) -> dict:
@@ -629,8 +645,13 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
             # Rien de tout cela n'a de raison d'être si le sondage du worker
             # suffit à faire avancer le passage — et il suffit, puisqu'il a
             # déjà lieu en boucle.
-            _produire_pour_une_campagne(ctx.org_id, bail)
+            panne = _produire_pour_une_campagne(ctx.org_id, bail)
             job = db.claim_next_job(ctx.org_id, ctx.sub, lease_seconds=bail)
+            if job is None and panne:
+                # « Rien à faire » et « je n'ai pas pu regarder » ne se disent
+                # pas de la même façon. Les confondre a coûté des jours de
+                # sondage à vide sans que personne ne le voie (07/09/2026).
+                return {"job": None, "campaign_error": panne}
         if job is None:
             return {"job": None}
         return {"job": _avec_cle(_delegue(job, bail, ctx.sub), inp.provider, ctx.sub)}

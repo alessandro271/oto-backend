@@ -297,6 +297,25 @@ def test_une_campagne_illisible_ne_casse_PAS_le_sondage(monkeypatch, espion):
     def _explose(org_id):
         raise RuntimeError("colonne manquante")
     monkeypatch.setattr(RJ.db, "campagne_a_servir", _explose)
+
+    # Ne CASSE pas — mais ne se tait pas non plus. Ce test affirmait
+    # `== {"job": None}`, c'est-à-dire exactement le silence qui a laissé le
+    # sondage répondre « rien à faire » pendant des jours alors qu'il n'avait
+    # jamais réussi à regarder (07/09/2026). Le worker reçoit la cause.
+    rendu = _appel(_ctx(), op="claim")
+
+    assert rendu["job"] is None, "une campagne illisible ne casse pas le sondage"
+    assert "RuntimeError" in rendu["campaign_error"], (
+        "et elle se DIT au worker : « rien à faire » et « je n'ai pas pu "
+        "regarder » ne sont pas la même réponse")
+
+
+def test_file_vide_ne_porte_aucune_panne(monkeypatch, espion):
+    """Le pendant, sans lequel le champ ne prouve rien : une file réellement
+    vide ne doit porter AUCUN signalement. Un champ toujours présent redevient
+    du bruit, et on aurait juste déplacé le silence."""
+    monkeypatch.setenv("OTO_CAMPAGNES_AU_SONDAGE", "1")
+    monkeypatch.setattr(RJ.db, "campagne_a_servir", lambda org_id: None)
     assert _appel(_ctx(), op="claim") == {"job": None}
 
 
