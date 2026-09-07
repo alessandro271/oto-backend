@@ -22,6 +22,11 @@ import time
 import pytest
 
 from oto_mcp.datastore import schema as S
+# ⚠️ Le remplacement vise le module qui PORTE la valeur, pas la façade
+# `schema` : depuis la coupe du 07/09/2026, celle-ci ré-exporte — remplacer
+# sur elle ne change rien à ce que l'implémentation lit. Le déplacement reste
+# pur pour les appelants ; seul le point de remplacement d'un banc change.
+from oto_mcp.datastore import motifs
 
 
 def _pose(schema) -> list[str]:
@@ -252,7 +257,7 @@ def test_le_verdict_est_le_meme_avec_le_parseur_de_la_box(monkeypatch):
     with _w.catch_warnings():
         _w.simplefilter("ignore", DeprecationWarning)
         import sre_parse
-    monkeypatch.setattr(S, "_re_parser", lambda: sre_parse)
+    monkeypatch.setattr(motifs, "_re_parser", lambda: sre_parse)
     assert S.pattern_refusal("^[a-z0-9_]+$", 60) is None
     assert S.pattern_refusal("(a+)+$", 250) is not None
     assert S.pattern_refusal(".*.*.*.*.*.*.*z", 250) is not None
@@ -260,5 +265,5 @@ def test_le_verdict_est_le_meme_avec_le_parseur_de_la_box(monkeypatch):
 
 def test_sans_parseur_aucun_motif_ne_passe(monkeypatch):
     """Fail-closed : ne plus savoir majorer un coût n'autorise pas à l'ignorer."""
-    monkeypatch.setattr(S, "_re_parser", lambda: None)
+    monkeypatch.setattr(motifs, "_re_parser", lambda: None)
     assert S.pattern_refusal("^a$", 60) is not None

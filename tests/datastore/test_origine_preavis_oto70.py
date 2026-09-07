@@ -25,6 +25,11 @@ from __future__ import annotations
 import pytest
 
 from oto_mcp.datastore import schema as dsv2
+# ⚠️ Le remplacement vise le module qui PORTE la valeur, pas la façade
+# `schema` : depuis la coupe du 07/09/2026, celle-ci ré-exporte — remplacer
+# sur elle ne change rien à ce que l'implémentation lit. Le déplacement reste
+# pur pour les appelants ; seul le point de remplacement d'un banc change.
+from oto_mcp.datastore import champs_reserves
 
 
 # ── ce que l'appel POSE, indépendamment du format ─────────────────────────────
@@ -80,7 +85,7 @@ def test_l_avertissement_NOMME_le_parametre_et_le_lit_dans_la_constante(monkeypa
     monkeypatch.delenv(dsv2.ENV_ORIGINE_REFUS_LE, raising=False)
     avant = dsv2.avertissement_origine(["prio"])
     assert dsv2.PARAMETRE_ORIGINE in avant
-    monkeypatch.setattr(dsv2, "PARAMETRE_ORIGINE", "zzz_sentinelle")
+    monkeypatch.setattr(champs_reserves, "PARAMETRE_ORIGINE", "zzz_sentinelle")
     apres = dsv2.avertissement_origine(["prio"])
     assert apres != avant, "AUCUNE substitution : la phrase recopie un littéral"
     assert "zzz_sentinelle" in apres

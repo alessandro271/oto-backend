@@ -108,7 +108,13 @@ def test_derivation_failure_stays_silent_rather_than_lying():
     plutôt que d'accuser toutes les clés du schéma — un avertissement massif et faux
     est pire que pas d'avertissement."""
     from unittest.mock import patch
-    with patch.object(dsv2, "interpreted_keys", return_value=frozenset()):
+
+    # Le remplacement vise le module qui APPELLE, pas la façade qui ré-exporte :
+    # `schema.interpreted_keys` est une seconde référence vers le même objet, et la
+    # remplacer laisse `unknown_declaration_keys` appeler l'originale (coupe du 07/09).
+    from oto_mcp.datastore import vocabulaire
+
+    with patch.object(vocabulaire, "interpreted_keys", return_value=frozenset()):
         assert dsv2.unknown_declaration_keys(
             {"fields": [{"key": "s", "enum": ["a"]}]}) == []
 

@@ -30,6 +30,11 @@ from datetime import date
 import pytest
 
 from oto_mcp.datastore import schema as dsv2
+# ⚠️ Le remplacement vise le module qui PORTE la valeur, pas la façade
+# `schema` : depuis la coupe du 07/09/2026, celle-ci ré-exporte — remplacer
+# sur elle ne change rien à ce que l'implémentation lit. Le déplacement reste
+# pur pour les appelants ; seul le point de remplacement d'un banc change.
+from oto_mcp.datastore import champs_reserves
 
 
 # ── la date : le code la porte, le réglage la déplace ─────────────────────────
@@ -90,7 +95,7 @@ def test_le_refus_et_l_avertissement_PARTAGENT_leur_corps(monkeypatch):
     demandé d'apprendre."""
     monkeypatch.delenv(dsv2.ENV_ORIGINE_REFUS_LE, raising=False)
     avant = (dsv2.avertissement_origine(["c"]), dsv2.refus_origine(["c"]))
-    monkeypatch.setattr(dsv2, "PARAMETRE_ORIGINE", "zzz_sentinelle")
+    monkeypatch.setattr(champs_reserves, "PARAMETRE_ORIGINE", "zzz_sentinelle")
     apres = (dsv2.avertissement_origine(["c"]), dsv2.refus_origine(["c"]))
     assert apres[0] != avant[0] and apres[1] != avant[1], "AUCUNE substitution"
     assert all("zzz_sentinelle" in t for t in apres)

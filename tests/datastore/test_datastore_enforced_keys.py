@@ -28,6 +28,12 @@ from __future__ import annotations
 import pytest
 
 from oto_mcp.datastore import schema as S
+# ⚠️ Le remplacement vise le module qui APPLIQUE la borne, pas la façade
+# `schema` : depuis la coupe du 07/09/2026, celle-ci ré-exporte, et la sonde
+# passe par `validation` — qui a lié le nom à l'import. Remplacer sur la façade
+# ne changerait rien à ce que la sonde exécute, et le banc se croirait vert en
+# ayant désarmé... rien. C'est ce qu'il existe pour interdire.
+from oto_mcp.datastore import validation
 
 
 @pytest.fixture(autouse=True)
@@ -60,7 +66,7 @@ def test_le_releve_TOMBE_quand_la_regle_tombe(monkeypatch):
     promettre une contrainte que plus rien n'exécute — c'est le défaut du signal."""
     assert "max_length" in S.enforced_keys()
     S.reset_enforced_keys()
-    monkeypatch.setattr(S, "max_length_of", lambda field: None)
+    monkeypatch.setattr(validation, "max_length_of", lambda field: None)
     assert "max_length" not in S.enforced_keys()
     # …et les autres tiennent : le relevé mesure clé par clé, il ne s'effondre pas.
     assert "required" in S.enforced_keys()
