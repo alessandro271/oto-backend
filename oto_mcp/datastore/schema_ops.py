@@ -164,6 +164,16 @@ class SchemaOpsMixin:
                                 # Et le fait, sur les champs `json` : stockés, rendus,
                                 # mais pas interrogeables en profondeur.
                                 dsv2.json_depth_warning(dsv2.json_fields_depth(schema)),
+                                # 08/09/2026 — deux gardes qui ont l'air de mordre et
+                                # ne mordent pas là où leur nom le laisse croire.
+                                # Signalées par une campagne qui les avait posées en
+                                # croyant fermer une porte : un motif ne contraint que
+                                # ce qui est écrit, et une couche exigée l'est en
+                                # PRÉSENCE, jamais en contenu.
+                                dsv2.motif_sans_obligation_warning(
+                                    dsv2.motif_sans_obligation(schema)),
+                                dsv2.couche_exigee_sans_forme_warning(
+                                    dsv2.couche_exigee_sans_forme(schema)),
                                 self._missing_required_warning(ns_id, schema),
                                 self._overlong_warning(ns_id, schema),
                                 self._offpattern_warning(ns_id, schema),

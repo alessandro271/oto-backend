@@ -138,4 +138,6 @@ from .non_applique import (
     _options_already_enforced, unenforced_options, unenforced_options_warning,
     options_not_enforced, options_not_enforced_warning, json_fields_depth,
     json_depth_warning, lifecycle_hors_statut, lifecycle_hors_statut_warning,
+    motif_sans_obligation, motif_sans_obligation_warning,
+    couche_exigee_sans_forme, couche_exigee_sans_forme_warning,
 )

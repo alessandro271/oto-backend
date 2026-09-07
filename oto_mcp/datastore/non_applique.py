@@ -274,3 +274,119 @@ def lifecycle_hors_statut_warning(champs: list[str],
     return (f"cycle de vie NON LU : {noms} — oto ne lit le `lifecycle` que sur le "
             f"champ déclaré `role: \"status\"`. {etat} {consequence} {conseil} "
             "Jamais pendant qu'une vague tourne.")
+
+
+# ── Deux gardes qui ont l'air de mordre, et qui ne mordent pas là (08/09/2026) ─
+#
+# Signalées par une campagne qui les avait posées en croyant fermer une porte, et
+# mesurées par elle avant de me le dire. Les deux sont exactes dans ce qu'elles font
+# et trompeuses dans ce que leur nom laisse croire — la pire forme de garde, parce
+# qu'elle produit une confiance qu'elle ne soutient pas.
+#
+# **Le contexte qui donne leur poids.** Cette campagne a mesuré que 44 de ses 122
+# travaux d'une passe **n'avaient appelé aucun outil de recherche et avaient écrit une
+# note qui en décrivait cinq** — le modèle narre au passé des appels qu'il n'a pas
+# faits. La parade décidée est d'exiger un jeton de preuve dans la note (`[serper:12]`)
+# et de REFUSER sans lui. C'est `pattern` qui porte cette parade ; le trou ci-dessous
+# la vide de la moitié de son effet, puisqu'un agent qui n'a rien cherché est aussi
+# celui qui peut ne rien écrire.
+
+
+def motif_sans_obligation(schema: Optional[dict]) -> list[str]:
+    """Les colonnes qui déclarent un `pattern` sans rien qui oblige à les remplir.
+
+    ⚠️ **Un motif contraint ce qui est ÉCRIT, jamais le fait d'écrire** — la phrase
+    est de la campagne qui l'a mesuré, et elle mérite d'être citée telle quelle. Un
+    champ absent ne passe par aucune vérification de forme ; un champ vide non plus.
+
+    Le remède existe et n'est pas nouveau : `required` ferme le trou mais refuse aussi
+    les lignes qui n'ont pas encore atteint l'étape, `required_when` le ferme en
+    laissant passer les autres. C'est la seconde qui convient à une file de travail où
+    les lignes avancent par paliers.
+    """
+    # ⚠️ Les couches DÉJÀ exigées par leur colonne parente sont exclues, et ce
+    # n'est pas un détail : `{"key": "sourcee.comment", "pattern": …}` sur une
+    # colonne qui déclare `required_layers: ["comment"]` est **exactement la forme
+    # qu'on recommande** deux relevés plus bas. La signaler ferait crier
+    # l'avertissement sur le remède qu'il préconise — et un avertissement qui crie à
+    # tort est celui qu'on apprend à ignorer, donc celui qui ruine les vrais.
+    exigees = set()
+    for f in _walk_fields(_fields(schema)):
+        if not isinstance(f, dict) or not f.get("key"):
+            continue
+        for couche in (f.get("required_layers") or []):
+            exigees.add(f"{f['key']}.{couche}")
+
+    dehors = []
+    for f in _walk_fields(_fields(schema)):
+        if not isinstance(f, dict) or not f.get("key"):
+            continue
+        if not f.get("pattern"):
+            continue
+        if f.get("required") is True or f.get("required_when"):
+            continue
+        if str(f["key"]) in exigees:
+            continue
+        dehors.append(str(f["key"]))
+    return sorted(dehors)
+
+
+def motif_sans_obligation_warning(champs: list[str]) -> Optional[str]:
+    """La phrase dit ce que la garde NE FAIT PAS, puis le geste qui la complète.
+
+    ⚠️ Elle ne dit pas « ton motif est mal posé » : il est bien posé, et il fait
+    exactement ce qu'un motif fait. Ce qui manque est à côté, et une phrase qui
+    accuserait la déclaration ferait chercher au mauvais endroit."""
+    if not champs:
+        return None
+    noms = ", ".join(f"`{c}`" for c in champs)
+    return (f"motif posé sans obligation de remplir : {noms} — un motif contraint ce "
+            "qui est ÉCRIT, jamais le fait d'écrire. Un champ absent, ou vide, passe "
+            "sans être vérifié. Si le motif sert de PREUVE (une source citée, un jeton "
+            "d'outil), ajoute `required_when: {<colonne>: [<valeur>]}` pour l'exiger à "
+            "l'étape où il compte — `required: true` l'exigerait aussi sur les lignes "
+            "qui n'y sont pas encore arrivées.")
+
+
+def couche_exigee_sans_forme(schema: Optional[dict]) -> list[str]:
+    """Les colonnes qui exigent une couche sans rien exiger de son CONTENU.
+
+    ⚠️ `required_layers` garde qu'une couche EXISTE, jamais ce qu'elle contient. « vu
+    quelque part » satisfait une exigence de provenance aussi bien qu'une référence de
+    registre. La garde a l'air de mordre et ne mord que sur la forme.
+
+    Mesuré le 08/09/2026 sur un tableau de production : quatre colonnes exigeaient la
+    provenance, aucune n'exigeait qu'elle dise quoi que ce soit.
+
+    Le remède, trouvé par la campagne elle-même : une couche se contraint en la
+    déclarant comme un champ à part entière — `{"key": "actualite.comment", "type":
+    "text", "max_length": 600, "pattern": …}`. Le vocabulaire existait déjà ; c'est son
+    emploi sur une couche qui n'était écrit nulle part.
+    """
+    formes = {str(f.get("key")) for f in _walk_fields(_fields(schema))
+              if isinstance(f, dict) and f.get("key")
+              and (f.get("pattern") or f.get("max_length") or f.get("options"))}
+    dehors = []
+    for f in _walk_fields(_fields(schema)):
+        if not isinstance(f, dict) or not f.get("key"):
+            continue
+        exigees = f.get("required_layers")
+        if not isinstance(exigees, list) or not exigees:
+            continue
+        cle = str(f["key"])
+        for couche in exigees:
+            if f"{cle}.{couche}" not in formes:
+                dehors.append(f"{cle}.{couche}")
+    return sorted(dehors)
+
+
+def couche_exigee_sans_forme_warning(champs: list[str]) -> Optional[str]:
+    if not champs:
+        return None
+    noms = ", ".join(f"`{c}`" for c in champs)
+    return (f"couche exigée sans forme : {noms} — `required_layers` garde qu'une "
+            "couche EXISTE, jamais ce qu'elle contient : « vu quelque part » y passe "
+            "aussi bien qu'une référence de registre. Pour contraindre le contenu, "
+            "déclare la couche comme une colonne à part entière — "
+            '`{"key": "<colonne>.comment", "type": "text", "max_length": …, '
+            '"pattern": …}` — et le refus nommera alors le champ et la valeur.')

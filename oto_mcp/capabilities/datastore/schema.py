@@ -123,7 +123,15 @@ def _get_schema(ctx: ResolvedCtx, inp: GetSchemaInput) -> dict:
               # production d'une campagne vivante — par un tiers comparant deux
               # schémas, pas par la plateforme.
               dsv2.lifecycle_hors_statut_warning(
-                  dsv2.lifecycle_hors_statut(schema), schema)]
+                  dsv2.lifecycle_hors_statut(schema), schema),
+              # 08/09/2026 — deux gardes qui ont l'air de mordre. Dites ICI autant
+              # qu'à la pose, et pour la même raison qu'au-dessus : un tableau de
+              # production ne repose pas son schéma, donc l'avertissement de la pose
+              # ne parlera jamais à celui qui en a le plus besoin — celui dont la
+              # garde est déjà posée et déjà trompeuse.
+              dsv2.motif_sans_obligation_warning(dsv2.motif_sans_obligation(schema)),
+              dsv2.couche_exigee_sans_forme_warning(
+                  dsv2.couche_exigee_sans_forme(schema))]
     averts = [a for a in averts if a]
     if averts:
         out["warning"] = "\n".join(averts)
