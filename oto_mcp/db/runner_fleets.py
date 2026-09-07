@@ -152,6 +152,46 @@ def campagne_a_servir(org_id: int) -> Optional[dict]:
         ).fetchone()
 
 
+def arreter_campagnes_epuisees(org_id: int) -> list[int]:
+    """Arrête les campagnes dont les N derniers travaux ont TOUS échoué.
+
+    ⚠️ Cette borne comptait avant, mais elle était portée par un ordonnanceur
+    qu'un humain lançait — et qui s'arrêtait donc de lui-même quand personne ne
+    le relançait. Maintenant que le sondage des workers fait avancer un passage,
+    **plus rien ne s'arrête tout seul** : une campagne qui échoue en boucle
+    régénérerait du travail indéfiniment, la nuit, sans que personne regarde.
+    C'est la combinaison qui coûte le plus cher — augmenter la cadence en
+    retirant le garde-fou.
+
+    ⚠️ Elle ARRÊTE, elle ne se contente pas d'exclure. Une campagne qu'on cesse
+    de servir sans le dire reste `running` et n'avance plus : un état qui ment,
+    et le genre de silence qu'on découvre trois semaines plus tard. Le motif est
+    écrit dans `stop_reason`, à l'endroit où on le cherchera.
+
+    Rend les ids arrêtés — pour que l'appelant puisse le journaliser.
+    """
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            UPDATE runner_fleets f
+               SET status = 'stopped', stopped_at = NOW(),
+                   stop_reason = 'max_consecutive_failures'
+             WHERE f.org_id = %s
+               AND f.status IN ('armed', 'running')
+               AND f.max_consecutive_failures IS NOT NULL
+               AND (SELECT COUNT(*) FROM (
+                        SELECT j.status FROM runner_jobs j
+                         WHERE j.fleet_id = f.id AND j.status IN ('done', 'failed')
+                         ORDER BY j.id DESC
+                         LIMIT f.max_consecutive_failures) d
+                     WHERE d.status = 'failed') >= f.max_consecutive_failures
+            RETURNING f.id
+            """,
+            (org_id,),
+        ).fetchall()
+    return [r["id"] for r in rows]
+
+
 def marquer_demarree(fleet_id: int) -> None:
     """`armed` → `running` au PREMIER travail produit — et seulement là.
 
