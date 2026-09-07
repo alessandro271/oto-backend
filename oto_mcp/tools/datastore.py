@@ -711,6 +711,21 @@ def register(mcp: FastMCP) -> None:
         and where the REST face differs: guide `datastore-semantics`
         (`oto_guide op=read slug=datastore-semantics`).
 
+        ⚠️ **Writing a value DROPS the `comment` and `link` that came with it** —
+        they described the OLD value. Two reserved words let you say otherwise,
+        without having to read the cell back first:
+
+            "raison_sociale": {"valeur": "ACME SAS", "comment": "@keep"}
+
+        `"@keep"` = leave that sub-field exactly as it is. `"@empty"` = empty it ON
+        PURPOSE, which is NOT the same as leaving it out: an empty `comment` says
+        "looked, found nothing", an absent one says "never looked".
+
+        **Use `@keep` whenever you fix a value without re-establishing where it came
+        from** — a typo, a formatting change, a case correction. Retyping the
+        provenance instead is how it drifts: you would not copy it, you would
+        rephrase it, and a little of the source is lost every time.
+
         ⚠️ **A write DESTROYS what is in the column.** On an open column there is no
         undo and no history: the previous value is gone the moment yours lands. If
         the value was supplied by the table's owner and you overwrite it, they get

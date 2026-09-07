@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from . import couches as dsl
 from . import schema as dsv2
 from .errors import RowValidationError
 
@@ -538,7 +539,35 @@ def _merge_column(existing: Any, new: Any) -> Any:
     divergence qu'un agent venait d'écrire dans `adresse.comment`. Une valeur
     identique n'est pas une réécriture ; le jugement est au TYPE près (`0` n'est pas
     `False`). Vaut aussi en couches : `{"valeur": <identique>, "comment": …}` écrit le
-    comment sans faire tomber le link — la valeur n'a pas changé, rien ne tombe."""
+    comment sans faire tomber le link — la valeur n'a pas changé, rien ne tombe.
+
+    ⚠️ **Deux mots réservés depuis oto#140** : `@keep` sur un sous-champ repose ce qui
+    était là — sans que l'appelant ait à le relire ni à le retaper —, `@empty` y pose un
+    vide DÉLIBÉRÉ, qui ne se confond pas avec l'absence. Ils se résolvent ICI et nulle
+    part ailleurs : qu'un seul passe en aval et il serait stocké comme une valeur, puis
+    servi à une cliente comme sa propre donnée."""
+    # ── Les mots réservés valent AUSSI sur une valeur nue (oto#140) ─────────
+    #
+    # ⚠️ **C'est le trou que ce lot aurait ouvert sans cette garde**, et il a été
+    # signalé par la campagne avant la mise en production, pas après : un agent
+    # recopie ce qu'on lui montre — mesuré, cinquante emplois pour un exemple — mais
+    # il peut le recopier AU MAUVAIS ENDROIT. `{"champ": "@keep"}` au lieu de
+    # `{"champ": {"valeur": …, "comment": "@keep"}}`, et sans cette résolution la
+    # chaîne `@keep` partait en base, puis chez la cliente comme sa propre donnée.
+    #
+    # On RÉSOUT plutôt que de refuser, parce que l'intention est claire dans les deux
+    # cas et qu'un refus ferait rejouer l'appel sans que l'agent comprenne : poser le
+    # mot sur toute la case dit la même chose que le poser sur son sous-champ.
+    #
+    # ⚠️ Le test est au mot ENTIER : `vu au registre @keep` reste du texte, et
+    # `contact@keepcool.fr` aussi. Une sentinelle qui mordrait au milieu d'une chaîne
+    # serait le défaut qu'on vient de passer la nuit à traquer — un motif plus large
+    # que ce qu'il prétend viser.
+    if not _writes_layers(new) and dsl.est_sentinelle(new):
+        if new == dsl.GARDE:
+            return existing                      # « n'y touche pas » : rien ne bouge
+        new = ""                                 # `@empty` : le vide DÉLIBÉRÉ
+
     if not _writes_layers(new):
         if dsv2.same_value(_existing_layers(existing).get(dsv2.VALUE_LAYER), new):
             return existing
@@ -567,12 +596,44 @@ def _merge_column(existing: Any, new: Any) -> Any:
             # attrapé une première correction trop large).
             return None if dsv2.est_vide(origine) else {dsv2.ORIGIN_LAYER: origine}
         return {dsv2.VALUE_LAYER: new, dsv2.ORIGIN_LAYER: origine}
-    out = _existing_layers(existing)
-    if dsv2.VALUE_LAYER in new and not dsv2.same_value(out.get(dsv2.VALUE_LAYER),
-                                                       new[dsv2.VALUE_LAYER]):
+    avant = _existing_layers(existing)
+
+    # ── Les deux mots réservés, résolus AVANT toute décision (oto#140, palier 1) ──
+    #
+    # `@keep` = « je n'y touche pas, sans avoir à le renvoyer » ; `@empty` = « je le
+    # vide, délibérément ». Résolus ici et nulle part ailleurs : l'aval ne doit jamais
+    # voir passer une sentinelle, sous peine de la stocker comme une valeur.
+    #
+    # ⚠️ `@keep` sur une couche ABSENTE ne crée rien — on garde le néant, ce qui est
+    # exactement ce que le mot promet. Poser `""` à la place inventerait un « vide
+    # délibéré » que l'appelant n'a pas demandé, et les deux ne se lisent pas pareil.
+    pose = {}
+    for cle, val in new.items():
+        if val == dsl.GARDE:
+            if cle in avant:
+                pose[cle] = avant[cle]
+        elif val == dsl.VIDE_DELIBERE:
+            pose[cle] = ""
+        else:
+            pose[cle] = val
+
+    out = dict(avant)
+    if dsv2.VALUE_LAYER in pose and not dsv2.same_value(out.get(dsv2.VALUE_LAYER),
+                                                        pose[dsv2.VALUE_LAYER]):
+        # ⚠️ La chute reste INCONDITIONNELLE, et c'est volontairement inchangé.
+        #
+        # J'avais d'abord écrit ici une garde « une couche nommée ne tombe pas ».
+        # **Elle était du code mort**, et c'est l'épreuve rouge du banc qui l'a montré :
+        # en la désarmant, les treize cas restaient verts. La raison est que `pose`
+        # repose juste après ce que `@keep` a rattrapé — faire tomber puis reposer
+        # donne le même résultat que ne pas faire tomber.
+        #
+        # Le comportement neuf vient donc ENTIÈREMENT de la résolution des sentinelles
+        # au-dessus, et de rien d'autre. Le dire ici évite qu'on croie demain que cette
+        # boucle porte la règle : elle ne porte que l'ancienne, intacte.
         for couche in dsv2.VALUE_BOUND_LAYERS:
             out.pop(couche, None)
-    out.update(new)
+    out.update(pose)
     out = {k: v for k, v in out.items() if v is not None}
     if not out:
         return None
