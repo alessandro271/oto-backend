@@ -224,9 +224,9 @@ portaient deux tiers du bail — à QUI (`_claimed_by`) et JUSQU'À QUAND
 (`_claimed_until`) — jamais POUR QUEL RUN, alors que `datastore_rows.claimed_run` le
 porte depuis #317. Une vue de surveillance voyait donc qu'un agent tenait une ligne et
 jamais **laquelle** : elle pouvait relier un travail à son TABLEAU, pas à sa LIGNE. Le
-serveur savait pourtant déjà répondre — l'alias `@claimed` résout run → ligne par cette
-même colonne — mais seulement au run **lui-même**, qui doit porter son jeton ; jamais à
-un tiers qui regarde la file.
+serveur savait pourtant déjà répondre : la colonne portait le fait depuis #317, elle
+n'était simplement servie à personne — et ce qu'un run sait de lui-même ne dit rien à un
+tiers qui regarde la file.
 
 `_claimed_run` est désormais rendu partout où `_claimed_by` l'est (liste, fiche par id,
 les deux curseurs, `queue`, et le claim lui-même). **Trois états, pas deux :**
@@ -1297,7 +1297,8 @@ enseigne. La contextualité d'un refus ne coûte pas ce que coûte celle d'un ef
 ⚠️ **Trois réserves, et la troisième est une déduction, pas une mesure.** Les arguments
 journalisés sont tronqués à 300 caractères par valeur : les listes vides des longues
 fiches réémises sont coupées, donc **sous-comptées**. 250 couples n'ont pas pu être
-résolus (`id=@claimed`, ou identifiant de table absent des arguments). Enfin, la valeur
+résolus (`id=@claimed` — le pronom d'alors, retiré depuis —, ou identifiant de table
+absent des arguments). Enfin, la valeur
 « en place » est relue **aujourd'hui** : une colonne vidée depuis se présente comme
 « rien à perdre », ce qui a d'abord fait conclure que le vide seul ne visait qu'**une**
 colonne peuplée. C'est faux. Neuf des dix lignes du 01/09 portent aujourd'hui une valeur
@@ -1665,111 +1666,110 @@ conversion la garantit : vérifier après conversion que le compte des origines 
 comme une perte de provenance.
 
 
-## Écrire « sur ma réservation » — l'alias `@claimed` (#517, 29/08)
+## `@claimed` — le pronom de la réservation, RETIRÉ le 07/09/2026 (#517, #599, #645)
 
-**Le geste** : `data_write(namespace=…, id="@claimed", row={…})`, et le même sur
-`data_release`. Le serveur relit le bail du run courant et écrit sur la ligne qu'il
-tient. Rien à recopier, rien à deviner.
+**Ce qu'il faisait**, du 29/08 au 07/09/2026 : `data_write(namespace=…, id="@claimed",
+row={…})`, et le même geste sur `data_release`, `data_rows`, `data_delete_row`,
+`data_url`, `data_aggregate`. Le serveur relisait le bail du run courant et écrivait sur
+la ligne qu'il tenait. `namespace="@claimed"` marchait aussi — la réservation porte le
+tableau autant que la ligne.
 
-**Pourquoi la plateforme change plutôt que la consigne.** Pour écrire sa fiche, un
-agent devait repasser les trente-deux caractères que sa réservation venait de lui
-rendre. Mesuré sur trois passages d'une campagne réelle, il en altère un
-(`…-7c06-…` pour `…-7c16-…`) ou en fabrique un dans une convention étrangère
-(un uuid v4, 24 hexadécimaux à la mode ObjectId, une chaîne fabriquée `temp_blocage_<date>`).
-**Recopier une chaîne aléatoire n'est pas une question de rigueur** : aucune consigne ne
-l'obtient, et l'agent a par ailleurs tout ce qu'il faut dans son bail.
+**Pourquoi il est né.** Pour écrire sa fiche, un agent devait repasser les trente-deux
+caractères que sa réservation venait de lui rendre. Mesuré sur trois passages d'une
+campagne réelle, il en altère un (`…-7c06-…` pour `…-7c16-…`) ou en fabrique un dans une
+convention étrangère (un uuid v4, 24 hexadécimaux à la mode ObjectId, une chaîne
+`temp_blocage_<date>`). **Recopier une chaîne aléatoire n'est pas une question de
+rigueur** : aucune consigne ne l'obtient. Et ce qui coûte n'est pas le refus, c'est ce
+qui le suit — l'agent refusé réessaie **sans identifiant**, et une écriture sans
+identifiant **crée** au lieu de corriger : le 29/08/2026, deux entreprises inexistantes
+sont nées ainsi dans un tableau d'évaluation ; la veille, cinq fiches d'essai dans le
+fichier d'une cliente et dans un livrable déjà remis. **Fréquence faible, et la seule
+famille qui fabrique de la donnée fausse.**
 
-⚠️ **Ce qui coûte n'est pas le refus, c'est ce qui le suit.** L'agent refusé réessaie
-**sans identifiant** — c'est la conduite qu'on lui écrit —, et une écriture sans
-identifiant **crée** au lieu de corriger. Le 29/08, deux entreprises inexistantes sont
-nées ainsi dans un tableau d'évaluation (deux raisons sociales absentes
-du lot, du fichier client **et** du registre national, avec une provenance attribuée à
-ce registre) ; la veille, cinq fiches d'essai étaient nées dans le fichier d'une
-cliente et dans un livrable déjà remis. **Fréquence faible — 4 refus sur 105 mesurés —
-mais c'est la seule famille qui fabrique de la donnée fausse.**
+**Pourquoi il est parti.** *Il se résolvait par le RUN courant, et un agent est sans
+état.* Il n'y a pas de « moi » stable auquel accrocher un pronom, et plusieurs runs d'un
+même compte coexistent : « la ligne que je tiens » était ambigu **par construction**, pas
+par accident d'implémentation. Chaque palier l'a montré sous une forme nouvelle — pas de
+run sur l'appel, le run tient ailleurs, le run tient plusieurs lignes (#517), le run est
+clos (#645 : **99 refus sur 200 écritures** d'un harnais qui écrivait après
+`run_finish`) — et chaque fois le correctif a été un refus mieux écrit, jamais une
+adresse moins ambiguë. Bilan à la mesure du retrait : **1 300 refus en 90 jours**, tous
+des agents qui l'emploient alors que leur run ne tient rien. Les tenants tiers ne
+l'employaient pas — toute cette famille de refus leur totalise quatorze cas en trois mois.
 
-### Trois refus, et chacun dit quoi faire
+> **Un pronom suppose un locuteur qui dure.** Sur une surface sans état, le raccourci qui
+> économise une recopie achète l'ambiguïté — et il la paie en refus, pas en données
+> fausses, ce qui le rend long à voir.
 
-| situation | ce que dit le refus |
-|---|---|
-| aucun run sur l'appel | passe `_run_id` — il n'est **pas** hérité (cf. #547) |
-| le run ne tient rien ici, mais tient ailleurs | **nomme le tableau réservé** — c'est le cas qui a écrit chez la cliente |
-| le run tient plusieurs lignes ici | les nomme, et refuse de choisir |
+**Ce qui reste, et qui répond au besoin d'origine.** L'agent ne recopie toujours rien de
+mémoire : `data_claim_next` lui rend la ligne ENTIÈRE, donc son `_id` **et** sa clé
+métier, et c'est cette réponse qu'il relit. Là où l'identifiant se perdait quand même,
+deux textes le lui rendent :
 
-Le deuxième est le plus utile : l'agent visait le mauvais tableau, **et sa réservation
-savait lequel était le bon**. L'information existait, elle ne sortait pas.
+- **le refus du pronom** (`jetons.JETONS_RETIRES`) ne dit jamais « inconnu » ni
+  « introuvable » : il dit que le raccourci a été retiré, pourquoi, et nomme les **deux**
+  façons d'adresser la ligne — par `_id`, ou par la clé métier. *Un jeton retiré ne
+  disparaît pas du trafic le jour où on le retire ; s'il repartait tel quel, le stockage
+  enverrait chercher une faute de frappe dans une chaîne parfaitement orthographiée.*
+- **la piste des refus d'adresse** (`DatastorePg.claimed_hint`) énonce l'identifiant que
+  le run tient, au moment où « introuvable » tombe — c'est-à-dire au seul instant où
+  l'agent peut encore corriger. Elle renvoyait vers le pronom ; elle rend l'identifiant.
 
-Le refus `row … introuvable` du chemin d'écriture porte désormais la même charge : la
-**forme** attendue d'un identifiant, le rappel que `data_claim_next` la rend telle
-quelle, et ce que le run tient déjà.
+### Les leçons du pronom, qui lui survivent
 
-### Le claim à vide, puis l'alias (29/08, 15:24) — ce que les refus ne disent PLUS
+Elles ne sont pas de lui : elles ont seulement été payées sur lui, et elles vivent
+maintenant dans du code qui reste.
 
-Trois appels d'un même travail, même `_run_id` à l'octet : `data_claim_next` ok, puis
-`data_write(namespace="@claimed")` refusé « ton travail ne tient aucune ligne », puis
-`data_write(id="<un id de ligne>")` refusé « introuvable ». Lu
-d'abord comme « le claim pose une identité que l'alias ne retrouve pas » — **faux**, et
-c'est figé par un test contre PostgreSQL sur le chemin réel (middleware + outil) : la
-réservation s'écrit sur le run (`claimed_run` = le `_run_id` de l'appel, posé par le
-middleware AVANT le dispatch) et l'alias se lit sur le run ; `worker` n'est qu'un libellé,
-et `data_write` n'en passe aucun. Le fait, relu dans le journal et dans les lignes : **le
-claim avait rendu `row: null`** — la dernière ligne « à enrichir » était sous le bail
-actif d'un pair, qui l'a écrite 71 ms plus tard. Le refus était juste. Sa **fin** ne
-l'était pas : « … ou écris avec un identifiant explicite », puis « un identifiant a la
-forme `01a04aef-…` (cinq groupes hexadécimaux) ». L'agent a fait exactement ce qu'on lui
-disait — un identifiant fabriqué sur le gabarit, douze X pour le groupe qu'il ne
-connaissait pas. Rien n'est passé (le second refus a tenu), mais c'est la plateforme qui
-avait soufflé le geste.
+- **Un exemple dans un refus est un gabarit à remplir.** Le 29/08 à 15:24, « un
+  identifiant a la forme `01a04aef-…` (cinq groupes hexadécimaux) » a produit
+  `6738f4c2-57c0-43b9-9d78-XXXXXXXXXXXX` — douze X pour le groupe inconnu. `_introuvable`
+  **décrit** désormais la forme sans en montrer une, et dit quand ce qui est reçu n'a pas
+  cette forme : c'est la preuve qu'il a été inventé, pas altéré.
+- **Une invitation à fournir un identifiant est une invitation à l'inventer.** Le cas
+  NORMAL derrière « ton travail ne tient rien » est la fin de file, pas une réservation
+  oubliée : le claim avait rendu `row: null` parce que la dernière ligne était sous le
+  bail d'un pair, qui l'a écrite 71 ms plus tard. Le rendu d'un claim à vide dit donc de
+  **n'écrire rien**, de n'inventer aucun identifiant, et de terminer son travail.
+- **Un refus juste qui n'est pas le bon refus coûte autant qu'un refus faux** (#645) : il
+  envoie chercher une réservation oubliée là où c'est l'ordre des gestes qui est en
+  cause. Deux heures perdues, sur un mécanisme découvert deux fois à douze heures d'écart.
+- **Quand un agent met la bonne valeur dans le mauvais champ, c'est une information sur
+  la façon dont il a compris ce qu'on lui a dit.** À sa première rencontre avec l'alias,
+  la flotte l'a posé dans `namespace` et non dans `id` — deux écritures refusées sur
+  cinq. On leur retirait un champ à recopier ; ils y mettaient le raccourci qu'on venait
+  de leur apprendre, et ils n'avaient pas tort : on leur avait dit « la réservation est
+  l'adresse », et une adresse commence par le tableau. *Refuser sur le champ voisin, c'est
+  refuser une demande qu'on sait satisfaire.* La couture `jetons.py` est née de là, et
+  elle reste — c'est elle qui porte aujourd'hui le refus du pronom.
+- **Un agent n'apprend pas une notion par verbe.** L'alias était accepté sur `data_write`
+  et `data_release`, refusé sur les quatre verbes voisins, sur le même objet et dans la
+  même session. Le geste d'adresse est depuis écrit **une fois** (`_adresse`) et servi à
+  tous : c'est ce qui fait que le refus du pronom, aujourd'hui, est le même partout.
 
-Quatre textes changent, **aucune description d'outil** (empreinte servie nulle) :
+⚠️ **Ce qui part avec le pronom, et ce qui ne part pas.** Partent : `CLAIMED_REF`,
+`est_ref_reservation`, `resolve_claimed_ref`, `resolve_claimed_target`, les refus qui les
+accompagnaient (`ClaimedRefUnresolved`, y compris celui de la clôture, #645), la lecture
+du bail restreinte par libellé de `worker`, et les paramètres `store` / `worker` / `ligne`
+de la couture d'adresse — aucun n'existait pour autre chose. **Ne partent pas** : le BAIL
+lui-même (`claimed_by`, `claimed_until`, `claimed_run`, `datastore_claimed_rows`,
+`data_claim_next`, `data_release`), qui n'a jamais été le pronom malgré le mot commun ;
+`slot:<nom>`, fonctionnalité produit vivante ; `*` ; la garde `PARAMETRES_D_APPEL` ; et
+`db.run_closed_at`, écrite pour le refus de #645 et qui n'a plus d'appelant — c'est
+**dit** plutôt que corrigé en la supprimant, parce qu'une lecture juste qui se voit se
+redemande, là où une lecture retirée se réécrit de travers.
 
-- le rendu d'un claim à vide dit qu'on ne tient rien et qu'on **n'écrit rien** ;
-- « ne tient aucune ligne » nomme la fin de file comme cas normal et la conduite (rien
-  à écrire, `run_finish`) — plus aucune invitation à fournir un identifiant ;
-- « introuvable » **décrit** la forme (UUID de 36 caractères, rendu par `data_write`/
-  `data_claim_next`, on ne l'invente pas) sans en montrer une — et dit quand ce qui est
-  reçu n'a pas cette forme ;
-- un `worker` rejoué différent de celui du claim n'est plus « aucune réservation
-  active » : le refus nomme le libellé tenu.
-
-⚠️ Pour savoir si un claim a rendu une ligne, lire les **lignes** (`claims`,
-`claimed_run`, `updated_at`), pas le relevé du runner : sur son chemin « conversations »
-il ne voit pas la sortie du claim et déclare `claims: 1` dès qu'un appel de travail a
-suivi. Le journal `tool_calls` ne porte pas non plus `_run_id` dans `args` (le middleware
-l'a retiré avant) : sa colonne `run_id` est la seule trace, et elle est la même source
-que le datastore.
-
-### Ce que l'alias n'est PAS
-
-**Il ne crée aucune propriété par identifiant.** La preuve d'appartenance reste le
-jeton de run (ADR 0038) — c'est le sens du refus de #546 : consoler l'appartenance par
-l'identifiant viderait la notion de run. Sans jeton, `@claimed` refuse ; il rend
-seulement lisible ce que le serveur sait déjà.
-
-**Et il ne pardonne rien.** Égalité exacte : `@claim`, `@claimed-2`, `@ma_ligne` partent
-tels quels et échouent comme avant. Un alias tolérant remplacerait une chaîne à recopier
-par une grammaire à deviner — la faute qu'on ferme, un cran plus haut.
-
-### Le bail lu comme une adresse
-
-`db.datastore_active_leases_of(run_id=…, worker=…)` ne rend que les baux **actifs**,
-contrairement à `datastore_claimed_rows` (qui sert la vue de supervision et inclut les
-baux échus). La différence est le sujet : ici la réponse **désigne une ligne où écrire**,
-et un bail échu ne désigne plus rien — la ligne est peut-être repartie à quelqu'un
-d'autre. Sans `run_id`, la fonction rend une liste vide : `worker` est une étiquette
-choisie par l'appelant, elle restreint, elle ne prouve pas.
-
-### Le run sait où il travaille (#631, 29/08 21:11)
+## Le run sait où il travaille (#631, 29/08 21:11)
 
 Dans un même travail, `data_claim_next(<nom>)` ok à 21:10:05, puis
 `data_write(<nom>, id=<ligne>)` refusé **« namespace inconnu »** à 21:11:23, puis
-`data_write("@claimed")` ok à 21:11:35 — 103 refus de cette famille sur la soirée. La
+`data_write("@claimed")` ok à 21:11:35 (ce pronom a été retiré le 07/09/2026 ; le
+diagnostic ci-dessous ne dépend pas de lui) — 103 refus de cette famille sur la soirée. La
 cause n'était pas dans le datastore : l'écriture refusée était le seul des trois appels
 **sans axe `_org=`**, donc résolue dans l'org MAISON de l'appelant, où le tableau n'existe
 pas. Le journal ne montre pas l'axe (le middleware le retire des arguments avant le sink) ;
 la preuve est la colonne `org_id` stampée — celle du tableau sur les deux appels ok, la
-maison sur le refus. Et `namespace="@claimed"` échouait pareil : l'alias relisait le NOM
-dans la réservation, puis le résolvait dans la mauvaise org.
+maison sur le refus. Le pronom échouait pareil, et pour la même raison : il relisait le
+NOM dans la réservation, puis le résolvait dans la mauvaise org.
 
 Deux gestes, sur le seul chemin qui échouait (`datastore/hors_org.py`) :
 
@@ -1778,8 +1778,8 @@ Deux gestes, sur le seul chemin qui échouait (`datastore/hors_org.py`) :
   LOCALISE, il ne donne aucun droit : `ownership.can_access` reste exigé, org-agnostique
   (un tiers qui connaît le jeton d'un run n'y gagne rien — testé).
 - **sinon le refus le dit** : « il existe dans une autre de tes organisations : org X
-  « … ». Cet appel a été résolu dans l'org Y « … » — passe `_org=X` ; et si ton travail
-  tient une ligne, `_run_id` + `id="@claimed"` suffisent ». La face REST le disait déjà
+  « … ». Cet appel a été résolu dans l'org Y « … » — passe `_org=X` ». La face REST le
+  disait déjà
   (`X-Oto-Org`, signal #316) : la face MCP répondait « inconnu » nu — **une divergence
   entre deux faces, pas un manque d'information**. La recherche est désormais commune
   (`hors_org.ou_existe`), chaque face phrase son remède.
@@ -1800,44 +1800,32 @@ dans le bon tableau, et le journal le stampe dans l'org du travail. La résoluti
 la réservation ci-dessus reste — elle couvre un run mal posé. Détail et mesure :
 `docs/org-context.md` §« L'org du run ».
 
-### `@claimed` s'écrit aussi en TABLEAU (29/08, premier contact avec des agents réels)
+## Les jetons réservés — où chacun s'écrit, et les trois issues (#517, 29/08)
 
-**Deux écritures refusées sur cinq, en « namespace `@claimed` inconnu ».** À sa première
-rencontre avec l'alias, la flotte l'a posé dans `namespace`, pas dans `id`.
+Deux jetons voyagent dans les appels du datastore. **Un seul endroit dit où chacun a
+un sens** — `oto_mcp/datastore/jetons.py` —, et les deux faces s'en servent.
 
-> **On leur retire un champ à recopier ; ils y mettent l'alias qu'on vient de leur
-> apprendre.** Et ils n'ont pas tort : on leur a enseigné « la réservation est
-> l'adresse », et une adresse commence par le tableau.
+| jeton | ce qu'il désigne | champs qui l'acceptent |
+|---|---|---|
+| `slot:<nom>` | le tableau bindé sous ce nom par le projet actif | `namespace` |
+| `*` | toutes les colonnes | `fields` |
 
-**La réservation porte les deux.** `namespace="@claimed"` résout donc le tableau **et** la
-ligne ; `namespace=<table>` + `id="@claimed"` reste la forme canonique ; les deux à
-`@claimed` désignent la même ligne. Sans réservation, refus nommé — jamais « inconnu ».
+Le même module tient une **seconde** liste, `JETONS_RETIRES`, et il n'y en a qu'une
+entrée : `@claimed`, retiré le 07/09/2026 (§ ci-dessus). Un jeton retiré n'est plus résolu
+nulle part et n'est accepté par aucun champ ; il reste nommé pour une seule raison — que
+celui qui l'écrit encore reçoive un refus qui NOMME le geste qui aboutit, au lieu du
+« tableau inconnu » du stockage. *La liste est faite pour se vider quand le trafic se sera
+tu.*
 
-⚠️ **Et `@claimed` posé dans le CONTENU d'une ligne est refusé en nommant la faute** :
-c'est une adresse, pas une donnée, et écrit dans `row` il finirait en clair dans un
-fichier client. *Un refus qui dit « inconnu » sur un jeton que l'outil reconnaît envoie
-chercher une faute de frappe là où il n'y en a pas — c'est ce qui a coûté les deux
-écritures.*
+**Trois issues, jamais une quatrième :** (et les champs réservés PAR LE SCHÉMA —
+`readonly`, `origine: "system"`, #586/#606 — ne sont pas des jetons : ils se jugent
+dans le store, là où le schéma est connu, cf. § `key_required` et suivants.)
 
-**La leçon dépasse l'alias** : quand un agent met la bonne valeur dans le mauvais champ,
-c'est d'abord une information sur la façon dont il a compris ce qu'on lui a dit. Refuser
-sur le champ voisin, c'est refuser une demande qu'on sait satisfaire.
-
-### L'alias vaut sur TOUS les verbes qui adressent, pas seulement l'écriture (29/08)
-
-L'inventaire des jetons réservés a montré le trou : `@claimed` était accepté sur
-`data_write` et `data_release`, refusé sur `data_rows`, `data_delete_row`, `data_url`
-et `data_aggregate` — les verbes voisins, sur le même objet, dans la même session.
-
-**Un agent n'apprend pas un alias par verbe, il l'apprend par notion.** À qui a compris
-« ma réservation est mon adresse », il est naturel de relire la ligne qu'il tient avant
-de l'écrire. Le refus tombait sur ce geste-là, et il disait « namespace inconnu » —
-donc envoyait chercher une faute d'orthographe dans une chaîne correcte.
-
-Les quatre verbes passent désormais par le **même** geste que l'écriture
-(`_adresse_reservee`) : `@claimed` en tableau, en ligne, ou les deux ; les mêmes trois
-refus, chacun portant sa conduite à tenir. `data_url` et `data_aggregate` n'adressent
-qu'un tableau — on n'y résout pas de ligne.
+| ce qu'on lit | ce qui se passe |
+|---|---|
+| jeton **accepté** par ce champ | résolu |
+| jeton **reconnu mais mal placé** | refus qui NOMME le champ où il s'écrit |
+| jeton **inconnu** ici | rien — la valeur part telle quelle |
 
 ### `fields=["*"]` demande TOUTES les colonnes
 
@@ -1851,27 +1839,6 @@ descriptions. C'est délibéré, et c'est la mesure du 27/08 qui le dicte (§ lo
 descriptions ↔ appels malformés). Ce lot ne rend possible que ce que les agents
 **tentaient déjà** ; il n'a donc rien à leur enseigner.
 
-## Les jetons réservés — où chacun s'écrit, et les trois issues (#517, 29/08)
-
-Trois jetons voyagent dans les appels du datastore. **Un seul endroit dit où chacun a
-un sens** — `oto_mcp/datastore/jetons.py` —, et les deux faces s'en servent.
-
-| jeton | ce qu'il désigne | champs qui l'acceptent |
-|---|---|---|
-| `@claimed` | la ligne que le run réserve, et son tableau — **tant que le run est ouvert** (#645) | `namespace`, `id` |
-| `slot:<nom>` | le tableau bindé sous ce nom par le projet actif | `namespace` |
-| `*` | toutes les colonnes | `fields` |
-
-**Trois issues, jamais une quatrième :** (et les champs réservés PAR LE SCHÉMA —
-`readonly`, `origine: "system"`, #586/#606 — ne sont pas des jetons : ils se jugent
-dans le store, là où le schéma est connu, cf. § `key_required` et suivants.)
-
-| ce qu'on lit | ce qui se passe |
-|---|---|
-| jeton **accepté** par ce champ | résolu |
-| jeton **reconnu mais mal placé** | refus qui NOMME le champ où il s'écrit |
-| jeton **inconnu** ici | rien — la valeur part telle quelle |
-
 ### Pourquoi une couture, et pas une garde de plus
 
 L'inventaire du 29/08 est parti chercher des jetons mal **nommés** ; il a trouvé que
@@ -1879,8 +1846,10 @@ les cas coûteux sont les jetons mal **placés**, et parmi eux **ceux que rien n
 refusait** :
 
 - `@claimed` écrit dans le **contenu** d'une ligne — accepté, gravé en clair dans un
-  fichier client ;
-- `_run_id` posé comme **colonne** — même famille : un contexte d'exécution (ADR 0038)
+  fichier client (le pronom étant retiré, ce cas est clos : ce n'est plus une adresse
+  mal placée, c'est une chaîne) ;
+- `_run_id` posé comme **colonne** — même famille, et **toujours vivante** : un contexte
+  d'exécution (ADR 0038)
   inscrit dans une fiche livrable ;
 - `slot:<nom>` sur une opération de **ligne** côté capacité — passé brut au stockage,
   qui répondait « namespace inconnu », **alors que les opérations de schéma de la même
@@ -1891,15 +1860,16 @@ refusait** :
 
 ### ⚠️ Ce que la couture ne fait PAS, et c'est délibéré
 
-**Elle ne devine pas.** La reconnaissance est exacte : `@claim`, `@claimed-2`,
-`slots:x` ne sont pas des jetons, partent tels quels et échouent comme avant. *Un alias
-qui pardonne remplace une chaîne à recopier par une grammaire à deviner — la même
-faute, un cran plus haut.*
+**Elle ne devine pas.** La reconnaissance est exacte : `slots:x` n'est pas un jeton, il
+part tel quel et échoue comme avant. *Un alias qui pardonne remplace une chaîne à recopier
+par une grammaire à deviner — la même faute, un cran plus haut.* La règle vaut aussi pour
+la liste des retirés : `@claim` et `@claimed-2` ne sont pas `@claimed`, et ne reçoivent
+donc pas son refus.
 
-**Elle ne regarde pas les mêmes jetons dans le contenu que dans l'adresse.** Seuls
-`@claimed` et les paramètres d'appel sont refusés dans une valeur de ligne, parce
-qu'ils n'ont **aucun** sens comme donnée. `slot:` et `*` sont des chaînes qu'une ligne
-peut légitimement porter — « slot: machine à café » est une note, pas une adresse.
+**Elle ne regarde pas les mêmes jetons dans le contenu que dans l'adresse.** Seuls les
+paramètres d'appel sont refusés dans une valeur de ligne, parce qu'ils n'ont **aucun** sens
+comme donnée. `slot:`, `*` et — depuis son retrait — `@claimed` sont des chaînes qu'une
+ligne peut porter — « slot: machine à café » est une note, pas une adresse.
 Les refuser là serait se protéger d'une faute qu'on ne sait pas distinguer d'un texte
 ordinaire ; un test existe pour l'empêcher de jamais devenir vrai.
 
@@ -1949,51 +1919,3 @@ sinon `bind_run`), best-effort, et rend `rows_released` avec **`0` explicite** �
 distingue « zéro ligne rendue » de « champ absent ». Détail et table des formes :
 `docs/runner-et-automatisations.md` § `complete`. Reste non couvert : l'agent
 conversationnel (hors runner) qui meurt — le bail seul.
-
-## `@claimed` après la clôture : un refus qui dit un MOMENT (#645, 30/08)
-
-**Suite directe du précédent, et son coût.** La clôture libère (#613) ; ce que personne
-n'avait dit, c'est que l'ADRESSE cesse de résoudre au même instant. Huitième passage du
-palier, 30/08/2026 : **99 refus sur 200 écritures**, tous « `@claimed` en tableau : ton
-travail ne tient aucune ligne en ce moment (aucune réservation active) » — émis sur des
-appels d'un harnais qui écrivait **après** `run_finish`. Le refus était exact et décrivait
-un **état** ; le problème était un **moment**.
-
-> **Un refus juste qui n'est pas le bon refus coûte autant qu'un refus faux** : il envoie
-> chercher une réservation oubliée là où c'est l'ordre des gestes qui est en cause. Deux
-> heures perdues, sur un mécanisme découvert deux fois à douze heures d'écart.
-
-**Ce qui change.** Quand le run de l'appel est clos, le refus le dit — « ton travail est
-CLOS depuis `<horodatage>` (`run_finish`), et sa clôture a libéré toutes ses lignes —
-l'alias ne désigne une ligne que TANT QUE le travail est ouvert, jamais après » — au lieu
-du texte de fin de file, qui reste servi quand le run est **ouvert** (c'est le cas normal,
-#517). L'heure y est parce que c'est elle qui fait le lien avec le geste précédent :
-« depuis 21:08:53 » se reconnaît dans un journal, « clos » ne se reconnaît pas.
-
-⚠️ **La clôture se lit du FAIT, jamais de l'index** — `db.run_closed_at` réutilise
-`_run_closure`, comme les lentilles. `runs.finished_at` est une écriture de confort que
-`finish_run` rate en silence quand l'index n'a pas été posé : un refus qui annoncerait
-une clôture d'après une colonne manquée mentirait exactement dans le cas qu'il est censé
-expliquer. Cas figés dans `tests/test_run_single_source.py`.
-
-⚠️ **Chemin d'ÉCHEC seulement**, et **le refus prime sur sa propre précision** : la
-requête n'est payée que lorsque le run ne tient rien (le nominal résout un bail sans y
-passer, test dédié), et si le journal est illisible on journalise puis on retombe sur le
-texte de fin de file — une erreur interne effacerait la conduite au moment précis où elle
-sert (`_adresse_reservee`).
-
-**Et la borne est dans la description servie**, là où le geste se construit : `data_write`
-la porte sur ses deux champs qui acceptent l'alias (`id` : « it resolves only while that
-run is OPEN, `run_finish` releases what it held » ; `namespace` : « open run only ») —
-l'asymétrie entre les deux est précisément ce qui avait coûté deux écritures le 29/08
-(#599) — et `data_release` sur sa phrase d'alias. Empreinte servie mesurée par
-`scripts/empreinte_servie.py --diff` : `data_release` description **+30**, `data_write`
-schéma **+72** ; aucune autre. Le refus ne prescrit **aucun outil de plus** : l'identifiant
-de la ligne est une valeur déjà reçue, pas un geste à exécuter (règle #613/#632,
-`docs/conventions.md`).
-
-Preuve de bout en bout dans `tests/datastore/test_claimed_run_clos_645.py` : réserver sous
-`_run_id=R`, clore R, écrire sous `@claimed` — contre PostgreSQL, par les outils montés
-par `register_all`, chaque appel dans sa propre session (le chemin de la flotte), avec un
-lecteur indépendant (`db.my_runs(open_only=True)`) qui atteste au passage que les faits
-écrits ont bien la forme d'une clôture.

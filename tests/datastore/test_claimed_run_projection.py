@@ -3,9 +3,9 @@
 Le bail servi disait à QUI (`_claimed_by`) et JUSQU'À QUAND (`_claimed_until`), jamais
 POUR QUEL RUN — alors que `datastore_rows.claimed_run` le porte depuis le verrou natif.
 Conséquence côté surveillance : on voyait qu'un agent tenait une ligne, jamais laquelle
-tenait laquelle. Le serveur savait pourtant déjà répondre — l'alias `@claimed` résout
-run → ligne par cette même colonne — mais seulement au run LUI-MÊME (il faut porter son
-jeton), donc jamais à un tiers qui regarde la file.
+tenait laquelle. Le serveur savait pourtant déjà répondre : la colonne est là. Elle
+n'était simplement servie à personne — et ce que le run sait de lui-même ne dit rien à un
+tiers qui regarde la file.
 
 Ce que ces tests verrouillent :
 

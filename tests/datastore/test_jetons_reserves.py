@@ -4,15 +4,28 @@ Inventaire du 29/08 sur trois passages d'une campagne réelle. Sa conclusion a r
 sa prémisse : on cherchait des jetons mal NOMMÉS, les cas coûteux sont les jetons mal
 PLACÉS — et parmi eux, ceux que rien ne refuse.
 
-- `@claimed` posé dans le contenu d'une ligne : accepté, écrit en clair dans un fichier
+- `_run_id` posé comme colonne : accepté, le jeton du run gravé dans la fiche d'un
   client. Aucun refus, aucune trace, une donnée fausse livrée.
-- `_run_id` posé comme colonne : même famille. Le jeton du run gravé dans la fiche.
 - `slot:<nom>` sur une opération de LIGNE côté capacité : passé brut au stockage, qui
   répond « namespace inconnu » — alors que les opérations de SCHÉMA, à côté, le
   résolvent depuis toujours.
 
 Et la garde qu'il ne faut pas construire : une chaîne qui commence par `slot:` DANS UNE
-VALEUR est une donnée légitime. Le dernier test de ce fichier existe pour ça.
+VALEUR est une donnée légitime. Un test de ce fichier existe pour ça.
+
+## Le pronom retiré (07/09/2026)
+
+`@claimed` — « la ligne que je tiens » — a été le troisième jeton de cette couture, du
+29/08 au 07/09/2026. Il a été RETIRÉ : il se résolvait par le run courant, et un agent
+est sans état — pas de « moi » stable auquel accrocher un pronom, plusieurs runs
+coexistent, donc une adresse ambiguë par construction (1 300 refus mesurés en 90 jours).
+
+Ce que les tests de la fin de ce fichier figent n'est pas sa disparition — c'est ce que
+reçoit **celui qui l'écrit encore**. Un jeton retiré ne disparaît pas du trafic le jour
+où on le retire ; s'il repartait tel quel, le stockage répondrait « tableau inconnu » ou
+« ligne introuvable » sur une chaîne parfaitement orthographiée, et l'agent irait
+chercher une faute de frappe. *Un refus qui nomme le geste qui aboutit est recopié à la
+lettre dans la minute ; un refus muet fait perdre la ligne deux fois sur trois.*
 """
 from __future__ import annotations
 
@@ -24,9 +37,11 @@ from oto_mcp.datastore import jetons
 # ── La reconnaissance est exacte, jamais indulgente ──────────────────────────
 
 @pytest.mark.parametrize("valeur,attendu", [
-    ("@claimed", "@claimed"),
     ("slot:vivier", "slot:"),
     ("*", "*"),
+    # Le pronom retiré n'est plus un jeton : il n'a plus de champ où s'écrire, et c'est
+    # `JETONS_RETIRES` — pas `jeton_de` — qui le reconnaît pour le refuser.
+    ("@claimed", None),
     ("@claim", None),
     ("@claimed-2", None),
     ("@ma_ligne", None),
@@ -42,8 +57,7 @@ def test_la_reconnaissance_d_un_jeton_est_exacte(valeur, attendu):
 # ── Trois issues, et jamais une quatrième ────────────────────────────────────
 
 def test_accepte_le_jeton_que_le_champ_accepte():
-    for champ, valeur in [("namespace", "@claimed"), ("id", "@claimed"),
-                          ("namespace", "slot:vivier"), ("fields", "*")]:
+    for champ, valeur in [("namespace", "slot:vivier"), ("fields", "*")]:
         jetons.verifier_adresse(champ, valeur)  # ne lève pas
 
 
@@ -70,17 +84,6 @@ def test_un_jeton_INCONNU_passe_sans_rien_dire():
 
 # ── Le contenu : seulement ce qui n'a AUCUN sens comme donnée ────────────────
 
-def test_l_alias_dans_une_valeur_de_ligne_est_refuse():
-    with pytest.raises(jetons.JetonMalPlace) as e:
-        jetons.verifier_contenu({"siren": "1", "statut": "@claimed"})
-    assert "ADRESSE" in str(e.value)
-
-
-def test_l_alias_est_trouve_meme_IMBRIQUE():
-    with pytest.raises(jetons.JetonMalPlace):
-        jetons.verifier_contenu({"contacts": [{"nom": {"valeur": "@claimed"}}]})
-
-
 def test_un_parametre_d_appel_pose_en_COLONNE_est_refuse():
     """Le cas qui grave un contexte d'exécution dans une fiche cliente."""
     for cle in ("_run_id", "_org", "_project", "_group", "_instance"):
@@ -100,9 +103,76 @@ def test_UNE_CHAINE_slot_DANS_UNE_VALEUR_reste_une_donnee_legitime():
     jetons.verifier_contenu({"libelle": "slot:vivier"})
 
 
+def test_le_pronom_RETIRE_dans_une_valeur_de_ligne_n_est_plus_qu_une_chaine():
+    """⚠️ Un choix daté, pas un oubli (07/09/2026).
+
+    Tant que `@claimed` était une ADRESSE, l'écrire dans le contenu d'une ligne était
+    refusé : il finissait en clair dans un fichier client. Retiré des adresses, il n'est
+    plus qu'une chaîne — et la règle du contenu ne refuse QUE ce qui n'a aucun sens comme
+    donnée (`PARAMETRES_D_APPEL`). Le garder ici rouvrirait la garde qu'on refuse de
+    construire : une valeur textuelle jugée sur sa ressemblance avec une syntaxe morte."""
+    jetons.verifier_contenu({"siren": "1", "statut": "@claimed"})
+    jetons.verifier_contenu({"contacts": [{"nom": {"valeur": "@claimed"}}]})
+
+
 def test_une_ligne_ordinaire_passe():
     jetons.verifier_contenu({"siren": "383701067", "raison_sociale": "ACME",
                              "contacts": [{"nom": "Dupont"}], "effectif": None})
+
+
+# ── Le jeton RETIRÉ : ce que reçoit celui qui l'écrit encore ─────────────────
+
+@pytest.mark.parametrize("champ", ["namespace", "id", "fields", "filter"])
+def test_le_pronom_retire_est_refuse_dans_TOUS_les_champs_d_adresse(champ):
+    with pytest.raises(jetons.JetonRetire):
+        jetons.verifier_adresse(champ, "@claimed")
+
+
+def test_le_refus_du_pronom_NOMME_le_geste_qui_aboutit():
+    """⚠️ L'exigence qui prime sur la propreté du retrait.
+
+    Le refus doit rendre la conduite : la ligne s'adresse par son `_id` ou par sa clé
+    métier, tous deux présents dans ce que `data_claim_next` a rendu. Et il ne doit
+    surtout PAS ressembler à « inconnu » / « introuvable » — le refus qui envoie chercher
+    une faute de frappe dans une chaîne juste."""
+    with pytest.raises(jetons.JetonRetire) as e:
+        jetons.verifier_adresse("id", "@claimed")
+    msg = str(e.value)
+    assert "RETIRÉ" in msg, "le refus doit dire que le raccourci n'existe plus"
+    assert "`_id`" in msg and "clé métier" in msg, \
+        "il doit nommer les DEUX façons d'adresser la ligne"
+    assert "data_claim_next" in msg, "et l'appel qui les lui a déjà rendues"
+    assert "`id`" in msg, "et le champ où l'identifiant se pose"
+    for muet in ("inconnu", "introuvable"):
+        assert muet not in msg.lower(), \
+            f"« {muet} » envoie chercher une faute de frappe là où il n'y en a pas"
+
+
+def test_le_refus_nomme_le_champ_OU_le_pronom_a_ete_pose():
+    """Les agents l'ont écrit dans les deux : le refus doit se reconnaître dans l'appel
+    qu'ils viennent de faire, pas décrire un cas général."""
+    with pytest.raises(jetons.JetonRetire) as e:
+        jetons.verifier_adresse("namespace", "@claimed")
+    assert "dans `namespace`" in str(e.value)
+
+
+def test_un_jeton_retire_est_une_famille_de_refus_deja_traduite_par_les_deux_faces():
+    """`JetonRetire` hérite de `JetonMalPlace` par CONTRAT : les deux faces traduisent
+    déjà cette famille (`INVALID_PARAMS` côté agent, `400 jeton_mal_place` côté REST).
+    Casser l'héritage ferait ressortir le refus en erreur interne — au moment précis où
+    il porte la seule chose utile."""
+    assert issubclass(jetons.JetonRetire, jetons.JetonMalPlace)
+    assert issubclass(jetons.JetonMalPlace, ValueError)
+
+
+def test_la_resolution_ne_touche_plus_au_store_pour_un_identifiant():
+    """`resoudre` ne lit plus le bail : elle vérifie l'adresse et résout le TABLEAU.
+
+    C'est le cœur du retrait — un pronom se résolvait par le run, un identifiant ne se
+    résout pas du tout."""
+    assert jetons.resoudre("vivier", "r1", resoudre_slot=lambda ns: ns) == ("vivier", "r1")
+    assert jetons.resoudre("slot:v", None, resoudre_slot=lambda ns: "vivier-2026") \
+        == ("vivier-2026", None)
 
 
 # ── Sur la surface MCP : le refus arrive AVANT le stockage ───────────────────
@@ -158,6 +228,30 @@ def test_MCP_un_slot_pose_dans_id_est_refuse_en_nommant_namespace(monkeypatch):
     assert st.vu == [], "rien ne doit atteindre le stockage"
 
 
+@pytest.mark.parametrize("adresse", [
+    {"namespace": "@claimed", "id": "@claimed"},
+    {"namespace": "@claimed"},
+    {"namespace": "copie-eval-palier100", "id": "@claimed"},
+])
+def test_MCP_le_pronom_retire_est_refuse_en_NOMMANT_la_conduite(monkeypatch, adresse):
+    """Les trois formes que les agents ont réellement écrites, sur le verbe qui les a
+    portées. Aucune n'atteint le stockage, et aucune ne revient « inconnu »."""
+    outil, st = _monte(monkeypatch, "data_write")
+    msg = _refus(outil, row={"statut": "enrichi"}, **adresse)
+    assert "RETIRÉ" in msg and "data_claim_next" in msg and "`_id`" in msg
+    assert "inconnu" not in msg.lower() and "introuvable" not in msg.lower()
+    assert st.vu == [], "rien ne doit atteindre le stockage"
+
+
+def test_MCP_le_pronom_retire_est_refuse_a_la_LECTURE_aussi(monkeypatch):
+    """L'agent qui l'a appris comme « la réservation est l'adresse » l'employait partout
+    où il donnait une adresse, y compris pour lire. Le refus doit être le MÊME."""
+    outil, st = _monte(monkeypatch, "data_rows")
+    msg = _refus(outil, namespace="@claimed")
+    assert "RETIRÉ" in msg and "data_claim_next" in msg
+    assert st.vu == []
+
+
 def test_MCP_un_parametre_d_appel_pose_en_colonne_est_refuse(monkeypatch):
     """Avant : `_run_id` s'écrivait comme une colonne, sans un mot."""
     outil, st = _monte(monkeypatch, "data_write")
@@ -173,6 +267,73 @@ def test_MCP_une_valeur_qui_RESSEMBLE_a_un_slot_passe(monkeypatch):
     asyncio.run(outil.run({"namespace": "vivier",
                            "row": {"note": "slot: machine à café"}}))
     assert st.vu, "l'écriture doit atteindre le stockage"
+
+
+# ── `*` demande TOUTES les colonnes, comme sur les autres surfaces ───────────
+#
+# Rapatriés le 07/09/2026 du banc de `@claimed`, où ils vivaient parce que l'inventaire
+# des jetons y avait commencé. Le jeton `*` n'a rien à voir avec le pronom : il reste.
+
+class _StoreLigne:
+    """Un store qui rend une ligne — de quoi éprouver une PROJECTION."""
+
+    ligne = {"_id": "r1", "siren": "1", "raison_sociale": "ACME"}
+
+    def __init__(self):
+        self.vu = {}
+
+    def get_row(self, namespace, row_id, *, layers="flat"):
+        self.vu["get"] = (namespace, row_id)
+        return self.ligne
+
+    def cursor_rows(self, namespace, **kw):
+        self.vu["cursor"] = (namespace, kw)
+        return {"rows": [self.ligne], "next_cursor": None}
+
+    def declared_key(self, namespace):
+        return None
+
+    def get_schema(self, namespace):
+        return {"columns": {"siren": {"type": "text"}}}
+
+    def off_schema_report(self):
+        return {}
+
+
+@pytest.fixture
+def rows_outil(monkeypatch):
+    outil, T = _tool("data_rows")
+    st = _StoreLigne()
+    monkeypatch.setattr(T, "_acting_store", lambda: st)
+    monkeypatch.setattr(T, "_ns", lambda ns: ns)
+    monkeypatch.setattr(T, "_project_hint", lambda ns: None)
+    return outil, st
+
+
+def _rendu(resultat) -> dict:
+    """Le dict que l'appelant reçoit — la face MCP l'emballe dans un `ToolResult`."""
+    return resultat.structured_content
+
+
+def _appel(outil, **kw):
+    import asyncio
+    return asyncio.run(outil.run(kw))
+
+
+def test_etoile_dans_fields_rend_la_ligne_ENTIERE(rows_outil):
+    """`fields=["*"]` est le chemin vers le brut sur `oto_doc` et sur le feed. Sur
+    `data_rows` il tombait dans « colonne inconnue » : l'agent croyait demander tout
+    et recevait une projection sur une colonne qui n'existe pas — donc `_id` seul."""
+    outil, st = rows_outil
+    out = _rendu(_appel(outil, namespace="ns", id="r1", fields=["*"]))
+    assert out == st.ligne, "aucune projection : la ligne entière"
+
+
+def test_etoile_ne_declenche_PAS_l_avertissement_de_colonne_inconnue(rows_outil):
+    outil, st = rows_outil
+    out = _rendu(_appel(outil, namespace="ns", fields=["*"]))
+    assert "inconnue" not in str(out.get("warning", "")).lower()
+    assert out["rows"] == [st.ligne], "et la ligne rendue reste ENTIÈRE"
 
 
 # ── Sur la face REST : LA MÊME couture, pas une seconde idée ─────────────────
@@ -227,14 +388,37 @@ def test_REST_un_slot_est_RÉSOLU_comme_sur_les_operations_de_schema(rest):
     assert st.vu and st.vu[0][1] == "vivier-2026"
 
 
-def test_REST_l_alias_dans_le_CORPS_est_refuse_et_n_atteint_pas_le_stockage(rest):
+def test_REST_le_pronom_retire_rend_400_avec_la_MEME_conduite_que_la_face_agent(rest):
+    """Une divergence entre les deux faces sur un jeton s'instruit pendant des jours :
+    le retrait vaut des deux côtés, et le refus y porte le même geste."""
     H, st = rest
     status, corps = H.call("me.datastore.update_row",
-                           path_params={"namespace": "vivier", "row_id": "r1"},
-                           body={"statut": "@claimed"})
-    assert status == 400, corps
-    assert corps["error"] == "jeton_mal_place"
+                           path_params={"namespace": "@claimed", "row_id": "r1"},
+                           body={"statut": "enrichi"})
+    assert (status, corps["error"]) == (400, "jeton_mal_place")
+    assert "RETIRÉ" in corps["detail"] and "data_claim_next" in corps["detail"]
+    assert st.vu == [], "rien ne doit atteindre le stockage"
+
+
+def test_REST_le_pronom_retire_dans_le_row_id_est_refuse_aussi(rest):
+    H, st = rest
+    status, corps = H.call("me.datastore.update_row",
+                           path_params={"namespace": "vivier", "row_id": "@claimed"},
+                           body={"statut": "enrichi"})
+    assert (status, corps["error"]) == (400, "jeton_mal_place")
+    assert "`_id`" in corps["detail"]
     assert st.vu == []
+
+
+def test_REST_le_pronom_dans_le_CORPS_n_est_plus_qu_une_donnee(rest):
+    """Le pendant REST du choix daté : retiré des adresses, il ne se refuse plus dans
+    une valeur de ligne."""
+    H, st = rest
+    status, _ = H.call("me.datastore.update_row",
+                       path_params={"namespace": "vivier", "row_id": "r1"},
+                       body={"statut": "@claimed"})
+    assert status == 200, "une valeur textuelle ne se juge pas sur une syntaxe morte"
+    assert st.vu, "l'écriture doit atteindre le stockage"
 
 
 def test_REST_un_parametre_d_appel_en_colonne_est_refuse(rest):

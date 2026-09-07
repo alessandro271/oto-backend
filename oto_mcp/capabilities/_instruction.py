@@ -45,6 +45,11 @@ def de_file(slug: str, namespace: Optional[str],
 
     Sans cible déclarée, il n'y a pas de file à décrire : on rend l'instruction
     nue plutôt qu'un protocole qui désignerait un tableau imaginaire.
+
+    ⚠️ Le protocole nomme l'`_id` que la réservation a rendu, jamais un pronom. Il a dit
+    « écris sur `@claimed` » jusqu'au 07/09/2026 : ce raccourci se résolvait par le run
+    courant, et un agent sans état n'en a pas un stable — l'instruction enseignait donc
+    un geste dont une part des exécutions ne pouvait pas aboutir.
     """
     if not namespace:
         return derivee(slug)
@@ -57,5 +62,6 @@ def de_file(slug: str, namespace: Optional[str],
         "SEULE ligne avec `data_claim_next` — jamais une deuxième, un autre "
         "agent prendra la suivante. Si la réservation ne rend rien, la file est "
         "vide : conclus et arrête-toi.\n"
-        "Écris ton résultat en un seul appel sur `@claimed`, relis-le, puis "
+        "Écris ton résultat en un seul appel sur la ligne que tu as réservée : "
+        "`data_claim_next` t'a rendu son `_id`, passe-le dans `id`. Relis-la, puis "
         f"{_BILAN}")

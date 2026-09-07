@@ -232,8 +232,10 @@ def test_les_faits_dun_run_ne_closent_pas_son_voisin(conn):
 
 # ── « ce run est-il clos ? » se lit à la MÊME source (#645) ──────────────────
 #
-# Le refus de `@claimed` a besoin d'une seule chose du run : sa clôture, et quand.
-# `run_closed_at` la lit par `_run_closure`, comme les lentilles — un second chemin
+# `run_closed_at` a été écrite pour un seul appelant, le refus du pronom `@claimed`,
+# qui avait besoin d'une seule chose du run : sa clôture, et quand. Ce pronom a été
+# RETIRÉ le 07/09/2026 et le lecteur n'a plus d'appelant — ces cas restent parce que la
+# règle qu'ils figent est celle de la SOURCE, pas celle de l'appelant : un second chemin
 # (par exemple `runs.finished_at`, l'index) rouvrirait la deuxième vérité, et le
 # ferait précisément dans un message qui explique à un agent ce qui vient de se
 # passer. Ces cas rejouent, sur ce lecteur-là, ce que les précédents figent sur les

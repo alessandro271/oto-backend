@@ -2,7 +2,8 @@
 par `data_write` dans le MÊME travail, 78 secondes plus tard.
 
 Mesuré en production le 29/08/2026 (un run de l'org 226) : réservation ok à 21:10:05,
-écriture refusée à 21:11:23, écriture par `@claimed` ok à 21:11:35 — 103 refus de cette
+écriture refusée à 21:11:23, écriture par le pronom `@claimed` ok à 21:11:35 (pronom
+retiré le 07/09/2026, sans rien changer au diagnostic) — 103 refus de cette
 famille sur la soirée, 82 sur sept jours, tous du même geste. La cause n'est pas dans le
 datastore : l'écriture refusée est le seul des trois appels SANS axe `_org`, donc résolue
 dans l'org MAISON de l'appelant, où le tableau n'existe pas. Le journal ne montre pas
@@ -187,20 +188,6 @@ def test_le_nom_reserve_par_le_run_s_ecrit_sans_axe_org(surface):
     assert _valeur(ns_id, ligne["_id"], "statut") == "fait"
 
 
-def test_claimed_en_tableau_s_ecrit_sans_axe_org(surface):
-    """21:11:10 le même soir : `namespace="@claimed"` refusé « namespace inconnu » —
-    l'alias avait bien relu le NOM dans la réservation, puis le résolvait dans l'org
-    maison. La réservation porte le tableau : elle doit suffire."""
-    ns, ns_id = _table(surface["travail"])
-    run = uuid.uuid4().hex
-    ligne = _reserver(ns, run, surface["travail"])
-
-    out = _ecrire({"namespace": "@claimed", "id": "@claimed",
-                   "row": {"statut": "fait"}, "_run_id": run})
-    assert out["_id"] == ligne["_id"], out
-    assert _valeur(ns_id, ligne["_id"], "statut") == "fait"
-
-
 def test_le_bail_localise_mais_ne_donne_aucun_droit(orgs, monkeypatch):
     """Un jeton de run n'est pas un axe de droits : un tiers qui le connaît ne lit ni
     n'écrit le tableau de l'org dont il n'est pas membre — même refus qu'avant."""
@@ -234,7 +221,6 @@ def test_sans_reservation_le_refus_nomme_les_deux_orgs_et_l_axe(surface):
     assert f"org {surface['travail']}" in msg and "Travail 631" in msg, msg
     assert f"org {surface['maison']}" in msg and "Maison 631" in msg, msg
     assert f"`_org={surface['travail']}`" in msg, msg
-    assert "@claimed" in msg, msg
 
 
 def test_un_nom_qui_n_existe_nulle_part_reste_un_refus_nu(surface):

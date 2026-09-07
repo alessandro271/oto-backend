@@ -34,7 +34,6 @@ from ...datastore import journal as datastore_journal
 from ...datastore import jetons
 from ...datastore import layers as dsl
 from ...datastore import schema as dsv2
-from ...datastore.errors import ClaimedRefUnresolved
 from ...datastore.core import (
     BusinessKeyRequired,
     NamespaceNotFound,
@@ -250,18 +249,24 @@ class ReleasedRow(BaseModel):
     hint: Optional[str] = None
 
 
-def _adresse(ctx: ResolvedCtx, namespace: str, row_id=None, *, ligne: bool = True):
+def _adresse(namespace: str, row_id=None):
     """La MÊME couture que la face agent (`oto_mcp/datastore/jetons.py`).
 
     ⚠️ Elle est ici parce que les deux faces avaient divergé, et en silence : les
     opérations de SCHÉMA de cette couche résolvaient `slot:<nom>` depuis toujours,
     celles de LIGNES le passaient brut au stockage, qui répondait « namespace inconnu »
     sur un jeton parfaitement valide. *Une divergence qui refuse est visible ; une
-    divergence qui répond une cause fausse s'instruit pendant des jours.*"""
+    divergence qui répond une cause fausse s'instruit pendant des jours.*
+
+    ⚠️ **Ne prend plus ni contexte, ni `ligne`** (07/09/2026) : ils n'existaient que pour
+    ouvrir un store et y lire le bail du run, ce que faisait `@claimed`. Le pronom
+    retiré, l'identifiant de ligne n'est plus que vérifié — et c'est cette vérification
+    qui rend `400 jeton_mal_place` avec la conduite qui aboutit, là où le stockage aurait
+    répondu « tableau inconnu » sur une chaîne correctement orthographiée."""
     try:
-        return jetons.resoudre(make_store(ctx.sub), namespace, row_id, ligne=ligne,
+        return jetons.resoudre(namespace, row_id,
                                resoudre_slot=access.resolve_namespace_ref)
-    except (jetons.JetonMalPlace, ClaimedRefUnresolved) as e:
+    except jetons.JetonMalPlace as e:
         raise AuthzDenied(400, "jeton_mal_place", str(e))
 
 
@@ -296,7 +301,7 @@ def _json_param(raw: Optional[str], code: str, *, expect=None):
 
 
 def _list_rows(ctx: ResolvedCtx, inp: ListRowsInput) -> dict:
-    ns, _ = _adresse(ctx, inp.namespace, ligne=False)
+    ns, _ = _adresse(inp.namespace)
     offset = max(0, inp.offset if inp.offset is not None else 0)
     limit = min(500, max(1, inp.limit if inp.limit is not None else 50))
     filter_eq = _json_param(inp.filter, "invalid_filter", expect=dict)
@@ -322,7 +327,7 @@ def _list_rows(ctx: ResolvedCtx, inp: ListRowsInput) -> dict:
 def _aggregate(ctx: ResolvedCtx, inp: AggregateInput) -> dict:
     """Agrégat serveur (ADR 0046 b1 — compteurs du cockpit) : COUNT/SUM/AVG/…
     groupés par un champ JSONB, sans rapatrier les lignes."""
-    ns, _ = _adresse(ctx, inp.namespace, ligne=False)
+    ns, _ = _adresse(inp.namespace)
     metrics = _json_param(inp.metrics, "invalid_metrics")
     filter_eq = _json_param(inp.filter, "invalid_filter", expect=dict)
     filters = _json_param(inp.filters, "invalid_filters", expect=list)
@@ -342,7 +347,7 @@ def _queue(ctx: ResolvedCtx, inp: NamespaceRefInput) -> dict:
     (`_claimed_by`/`_claimed_until`/`_claimed_run`), actif ou expiré. Lecture
     seule. `_claimed_run` est ce qui rend la vue ACTIONNABLE : sans lui elle dit
     qu'un travail tient une ligne, jamais lequel tient laquelle."""
-    ns, _ = _adresse(ctx, inp.namespace, ligne=False)
+    ns, _ = _adresse(inp.namespace)
     try:
         return {"rows": make_store(ctx.sub).queue(ns)}
     except NamespaceNotFound:
@@ -350,7 +355,7 @@ def _queue(ctx: ResolvedCtx, inp: NamespaceRefInput) -> dict:
 
 
 def _get_row(ctx: ResolvedCtx, inp: GetRowInput) -> dict:
-    ns, rid = _adresse(ctx, inp.namespace, inp.row_id)
+    ns, rid = _adresse(inp.namespace, inp.row_id)
     layers = _layers(inp.layers)
     try:
         return make_store(ctx.sub).get_row(ns, rid, layers=layers)
@@ -416,7 +421,7 @@ _ECRITURE_DETRUIT = (
 
 
 def _append_row(ctx: ResolvedCtx, inp: AppendRowInput) -> dict:
-    ns, _ = _adresse(ctx, inp.namespace, ligne=False)
+    ns, _ = _adresse(inp.namespace)
     _verifier_contenu(inp.row)
     trace: dict = {}
     store = make_store(ctx.sub)
@@ -445,7 +450,7 @@ def _update_row(ctx: ResolvedCtx, inp: UpdateRowInput) -> dict:
     # L'état AVANT vient du RELEVÉ de la mutation (`trace`) : c'est celui sur lequel la
     # transition a été validée. Le relire ici courrait avec un write concurrent → le
     # cockpit proposerait d'annuler vers un état que la ligne n'a jamais eu.
-    ns, rid = _adresse(ctx, inp.namespace, inp.row_id)
+    ns, rid = _adresse(inp.namespace, inp.row_id)
     _verifier_contenu(inp.patch)
     trace: dict = {}
     store = make_store(ctx.sub)
@@ -471,7 +476,7 @@ def _update_row(ctx: ResolvedCtx, inp: UpdateRowInput) -> dict:
 
 
 def _delete_row(ctx: ResolvedCtx, inp: RowRefInput) -> dict:
-    ns, rid = _adresse(ctx, inp.namespace, inp.row_id)
+    ns, rid = _adresse(inp.namespace, inp.row_id)
     trace: dict = {}
     try:
         make_store(ctx.sub).delete_row(ns, rid, trace=trace)
@@ -498,7 +503,7 @@ def _release_claim(ctx: ResolvedCtx, inp: ReleaseInput) -> dict:
     de n'importe qui » est le défaut, pas la supervision. Une session interactive
     garde le geste, elle en a la légitimité. Exige l'écriture dans les deux cas.
     """
-    ns, rid = _adresse(ctx, inp.namespace, inp.row_id)
+    ns, rid = _adresse(inp.namespace, inp.row_id)
     worker = (inp.worker or "").strip()
     if not worker and token_scopes.current() is not None:
         raise AuthzDenied(400, "worker_required",

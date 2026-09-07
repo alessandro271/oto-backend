@@ -338,7 +338,8 @@ rien ne rendait navigable et que rien ne tenait.
   **37,5 %** des écritures partaient sans jeton ; `data_write` annonçait
   `namespace="@claimed"` dans son préambule pendant que la description de `namespace`
   n'offrait que le nom de tableau — un agent qui lit le paramètre ne pouvait pas le
-  savoir. *Une permission écrite loin du champ où elle s'exerce n'est pas une
+  savoir. (Ce pronom a été retiré le 07/09/2026 ; la mesure et la règle qu'elle porte
+  ne dépendent pas de lui.) *Une permission écrite loin du champ où elle s'exerce n'est pas une
   permission, c'est une note de bas de page.* Une phrase par paramètre, et le delta
   passe par le script comme le reste — **le schéma d'entrée porte ces descriptions**,
   donc l'ajout se voit dans la colonne « schéma », pas dans « description ».

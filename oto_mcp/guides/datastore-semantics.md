@@ -148,9 +148,9 @@ déclarée ; sur une ligne seule, seule la clé déclarée joue.
 | partage | `data_share` | `GET`/`POST`/`DELETE …/share` |
 | activité | — | `GET …/activity` ; `GET …/rows/{row_id}/activity` |
 
-`{tableau}` est le nom du tableau ; `slot:<nom>` et `@claimed` sont compris des deux
-côtés. Le descriptif complet (entrées, réponses, codes) est `GET /api/openapi.json`,
-sans auth ; la face REST s'appelle avec le même jeton que `/mcp`, ou un jeton API.
+`{tableau}` est le nom du tableau ; `slot:<nom>` est compris des deux côtés. Le
+descriptif complet (entrées, réponses, codes) est `GET /api/openapi.json`, sans auth ;
+la face REST s'appelle avec le même jeton que `/mcp`, ou un jeton API.
 
 **Identique** sur les deux faces : le stockage, les couches à la lecture (`layers`),
 la clé métier, `readonly`, les refus de schéma — une ligne créée d'un côté se lit de

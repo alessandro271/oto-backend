@@ -2,7 +2,8 @@
 
 Vécu en production le 29/08/2026, dans un même travail : `data_claim_next(<nom>)` ok
 à 21:10:05, `data_write(<nom>, id=<ligne>)` refusé « namespace inconnu » à 21:11:23,
-`data_write("@claimed")` ok à 21:11:35 — 103 refus de cette famille sur la soirée,
+`data_write("@claimed")` ok à 21:11:35 (ce pronom a été retiré le 07/09/2026, sans
+rien changer au diagnostic ci-dessous) — 103 refus de cette famille sur la soirée,
 82 sur sept jours. Les deux appels ok portaient l'axe `_org=` (journal : `org_id` de
 l'org du tableau) ; le refusé ne le portait pas (`org_id` = l'org MAISON de l'appelant),
 et c'est là que le nom a été cherché. Le tableau n'y est pas ; il n'y a jamais été. Le
@@ -97,9 +98,7 @@ def indice_autre_org(sub: Optional[str], namespace: str,
         ici = (f"l'org {org_courante} « {_nom(org_courante)} »"
                if org_courante is not None else "ton espace perso (aucune org)")
         return (f"il existe dans une autre de tes organisations : {ou}. Cet appel a été "
-                f"résolu dans {ici} — passe `_org={ailleurs[0][0]}` sur l'appel ; et si "
-                f"ton travail tient une ligne de ce tableau, `_run_id` + `id=\"@claimed\"` "
-                "suffisent : la réservation porte le tableau.")
+                f"résolu dans {ici} — passe `_org={ailleurs[0][0]}` sur l'appel.")
     # noqa: SILENT — un indice est un bonus : absent plutôt que faux, jamais une erreur interne à la place du refus
     except Exception:  # noqa: BLE001
         return None

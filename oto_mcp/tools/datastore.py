@@ -24,7 +24,6 @@ from ..datastore import claimable, jetons
 from ..datastore import layers as dsl
 from ..datastore import schema as dsv2
 from ..datastore.core import (
-    ClaimedRefUnresolved,
     indice_de_liberation,
     InvalidCursor,
     NamespaceExists,
@@ -33,7 +32,6 @@ from ..datastore.core import (
     NamespaceReadOnly,
     RowLocked,
     RowNotFound,
-    est_ref_reservation,
     make_org_store,
     make_store,
 )
@@ -287,16 +285,16 @@ def _introuvable(row_id: object, piste: Optional[str]) -> str:
         forme = " (et ce n'est pas la forme d'un identifiant de ligne)"
     return (f"row `{row_id}` introuvable{forme} — un identifiant de ligne est un UUID de "
             "36 caractères rendu par `data_write`/`data_claim_next` : on ne l'invente "
-            "pas, on le relit dans la réponse qui l'a rendu. Pour écrire sur la ligne "
-            'que tu tiens, passe `id="@claimed"`'
+            "pas, on le relit dans la réponse qui l'a rendu"
             + (f" ; {piste}" if piste else ""))
 
 
 # Le rendu d'un claim À VIDE dit aussi ce qu'on ne fait PAS ensuite. Le 29/08 à 15:24,
-# un travail a reçu `row: null` puis a écrit quand même — `@claimed`, puis un identifiant
-# fabriqué. Rien n'est passé, mais le rendu du claim ne l'avait pas averti.
-_HINT_RIEN_TENU = (" — tu ne tiens AUCUNE ligne : n'écris rien (ni `@claimed`, ni "
-                   "un identifiant), termine ton travail (`run_finish`)")
+# un travail a reçu `row: null` puis a écrit quand même — le pronom d'alors (`@claimed`,
+# retiré depuis), puis un identifiant fabriqué. Rien n'est passé, mais le rendu du claim
+# ne l'avait pas averti.
+_HINT_RIEN_TENU = (" — tu ne tiens AUCUNE ligne : n'écris rien, n'invente aucun "
+                   "identifiant, termine ton travail (`run_finish`)")
 _HINT_FILE_VIDE = ("plus rien à claim (file vide pour ce filtre, ou tout est sous bail "
                    "actif)" + _HINT_RIEN_TENU)
 
@@ -348,24 +346,26 @@ def _project_row(row: dict, fields: list[str]) -> dict:
 TOUT = "*"  # `fields=["*"]` — « toutes les colonnes », le même jeton que sur oto_doc
 
 
-def _adresse_reservee(store, namespace: str, id=None, *, worker=None, ligne: bool = True):
-    """`@claimed` posé en tableau et/ou en ligne — le MÊME geste sur tous les verbes (#517).
+def _adresse(namespace: str, id=None):
+    """Les champs d'ADRESSE d'un appel : vérifiés, puis le tableau résolu — le MÊME
+    geste sur tous les verbes (#517).
 
-    Écrit une fois plutôt que six : l'alias a été enseigné comme « la réservation est
-    l'adresse », et un agent qui l'a compris l'emploie partout où il donne une adresse —
-    y compris pour LIRE. Le déclarer inconnu sur le verbe voisin de celui qui l'accepte
-    n'est pas une garde, c'est une incohérence.
+    Écrit une fois plutôt que six : les deux faces ont divergé exactement une fois, et
+    en silence — `slot:` était résolu par les opérations de schéma et passé brut par
+    celles de lignes, qui répondaient « namespace inconnu » sur un jeton parfaitement
+    valide.
 
-    `ligne=False` pour les verbes qui n'adressent qu'un TABLEAU (`data_url`,
-    `data_aggregate`) : y résoudre une ligne n'aurait aucun sens.
+    ⚠️ **Ne prend plus ni `store`, ni `worker`, ni `ligne`** (07/09/2026) : ces trois
+    paramètres n'existaient que pour `@claimed`, qui lisait le bail du run courant pour
+    transformer un pronom en identifiant. Le pronom retiré, `id` n'est plus que VÉRIFIÉ
+    — et le vérifier reste nécessaire, parce que c'est là que l'agent qui l'écrit encore
+    reçoit un refus qui nomme le geste qui aboutit, au lieu de « ligne introuvable ».
 
-    Le refus traverse la surface en `INVALID_PARAMS` — il PORTE la conduite à tenir
-    (« pose `_run_id` », « ta réservation est dans tel tableau »), et une erreur interne
-    l'effacerait au moment précis où elle sert."""
+    Le refus traverse la surface en `INVALID_PARAMS` — il PORTE la conduite à tenir, et
+    une erreur interne l'effacerait au moment précis où elle sert."""
     try:
-        return jetons.resoudre(store, namespace, id, worker=worker, ligne=ligne,
-                               resoudre_slot=_ns)
-    except (ClaimedRefUnresolved, jetons.JetonMalPlace) as e:
+        return jetons.resoudre(namespace, id, resoudre_slot=_ns)
+    except jetons.JetonMalPlace as e:
         raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
 
 
@@ -740,8 +740,8 @@ def register(mcp: FastMCP) -> None:
         = PARTIAL update of that row (only provided fields change). Returns the row
         (with `_id`/`_created_at`/`_updated_at`).
 
-        On a row you CLAIMED, pass `id="@claimed"` instead of retyping its `_id` —
-        `namespace="@claimed"` works too (the reservation carries the table).
+        On a row you CLAIMED, address it by the `_id` of the row data_claim_next
+        returned.
 
         BATCH (`rows` = list of dicts): write them all at once — for importing a
         dataset without round-tripping each row through your context. If a business
@@ -796,12 +796,10 @@ def register(mcp: FastMCP) -> None:
         the binding — otherwise an actionable error, never a fallback.
 
         Args:
-            namespace: target namespace (must already exist), `slot:<name>`, or
-                `@claimed` = the table your reservation is in (open run only).
+            namespace: target namespace (must already exist), or `slot:<name>`.
             row: single-row content as a dict (JSON-encoded automatically).
-            id: omit = append a new row ; provided = partial update of that `_id` ;
-                `"@claimed"` = the row your run holds — it resolves only while that
-                run is OPEN, `run_finish` releases what it held.
+            id: omit = append a new row ; provided = partial update of that `_id`
+                (the one data_write / data_claim_next returned for that row).
             rows: BATCH mode — a list of row dicts written in one call.
             key: business key field for batch upsert/dedup (else `schema.key`).
             readonly_override: `true` = overwrite the `readonly` columns THIS CALL
@@ -814,14 +812,12 @@ def register(mcp: FastMCP) -> None:
         """
         store = _acting_store()
         try:
-            # #517 : « la ligne que je tiens » plutôt que ses trente-deux caractères.
-            # Résolu ICI, avant tout le reste, pour que le refus éventuel sorte par le
-            # même chemin actionnable que les autres (ValueError → INVALID_PARAMS).
-            #
-            # `@claimed` en TABLEAU (29/08) : à leur première rencontre avec l'alias, les
-            # agents l'ont mis là — la réservation porte les deux, refuser ici serait
-            # refuser une demande qu'on sait satisfaire.
-            namespace, id = _adresse_reservee(store, namespace, id)
+            # Vérifié et résolu ICI, avant tout le reste, pour que le refus éventuel
+            # sorte par le même chemin actionnable que les autres (ValueError →
+            # INVALID_PARAMS). C'est aussi ce qui rend à l'agent qui écrit encore
+            # `@claimed` — retiré le 07/09/2026 — un refus qui NOMME le geste qui
+            # aboutit, plutôt que le « namespace inconnu » du stockage.
+            namespace, id = _adresse(namespace, id)
             jetons.verifier_contenu(row)
             jetons.verifier_contenu(rows)
             if rows is not None:
@@ -891,8 +887,7 @@ def register(mcp: FastMCP) -> None:
         workers never get the same row. Returns `{row: null}` when nothing is
         left to claim.
 
-        To write or release it, pass `id="@claimed"` rather than retyping the
-        returned `_id`.
+        Write your result and release it by the `_id` of the returned row.
 
         `worker` is a label YOU choose and REUSE verbatim on data_release — the
         guard so one agent cannot release another's claim.
@@ -957,8 +952,7 @@ def register(mcp: FastMCP) -> None:
     def data_release(namespace: str, id: str, worker: str) -> dict:
         """Release a claimed row — the NORMAL end of processing one row, and the
         counterpart of data_claim_next. Guarded by `worker` (same label as at claim
-        time). `id="@claimed"` (or `namespace="@claimed"`) releases the row your run
-        holds, without copying it — only while that run is OPEN.
+        time), and addressed by the `_id` that data_claim_next returned.
 
         ⚠️ Call it after EVERY row you finish, not only when abandoning: writing a
         "final" status no longer frees the row (#317). If you wrap your work in
@@ -966,7 +960,7 @@ def register(mcp: FastMCP) -> None:
         the safety net when you forget. `namespace` also accepts `slot:<name>`."""
         store = _acting_store()
         try:
-            namespace, id = _adresse_reservee(store, namespace, id, worker=worker)
+            namespace, id = _adresse(namespace, id)
             issue = store.release_claim(namespace, id, worker=worker)
         except ValueError as e:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
@@ -1021,11 +1015,9 @@ def register(mcp: FastMCP) -> None:
         rows let you pull far more per page.
 
         Args:
-            namespace: target namespace, `slot:<name>` = the table bound under
-                that slot name by the ACTIVE project (actionable error if unbound),
-                or `@claimed` = the table your reservation is in.
-            id: `_id` of one row, or `@claimed` = the row your run holds ; omit =
-                list rows.
+            namespace: target namespace, or `slot:<name>` = the table bound under
+                that slot name by the ACTIVE project (actionable error if unbound).
+            id: `_id` of one row ; omit = list rows.
             filter: dict `{column: value}` — exact match. A column may instead take
                 ONE operator: `{"posted_at": {"gte": "2026-06-01"}}`,
                 `{"author": {"contains": "sylvie"}}`, `{"status": {"ne": "traité"}}`,
@@ -1088,7 +1080,7 @@ def register(mcp: FastMCP) -> None:
                 on one shape.
         """
         store = _acting_store()
-        namespace, id = _adresse_reservee(store, namespace, id)
+        namespace, id = _adresse(namespace, id)
         try:
             jetons.verifier_champs(fields=fields, filter=filter, filters=filters)
             layers = dsl.check(layers)
@@ -1226,8 +1218,7 @@ def register(mcp: FastMCP) -> None:
               group_by=["contact1_fonction","contact2_fonction","contact3_fonction"]
 
         Args:
-            namespace: target namespace, `slot:<name>` (active project), or
-                `@claimed` = the table your reservation is in.
+            namespace: target namespace, or `slot:<name>` (active project).
             metrics: list of `{op, field?, where?, label?}` aggregations
                 (default = count of rows).
             group_by: column to group by, or a LIST of columns whose values are
@@ -1239,7 +1230,7 @@ def register(mcp: FastMCP) -> None:
                 search shows.
         """
         store = _acting_store()
-        namespace, _ = _adresse_reservee(store, namespace, ligne=False)
+        namespace, _ = _adresse(namespace)
         try:
             jetons.verifier_champs(filter=filter, filters=filters)
             results = store.aggregate(
@@ -1253,11 +1244,11 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def data_delete_row(namespace: str, id: str) -> dict:
-        """Delete a row by `_id`. `namespace` accepts `slot:<name>` (active project)
-        or `@claimed`; `id="@claimed"` deletes the row your run holds."""
+        """Delete a row by `_id`. `namespace` accepts `slot:<name>` (active
+        project)."""
         sub = access.current_user_sub_or_raise()
         store = _store_for(sub)
-        namespace, id = _adresse_reservee(store, namespace, id)
+        namespace, id = _adresse(namespace, id)
         try:
             store.delete_row(namespace, id)
         except NamespaceNotFound as e:
@@ -1278,11 +1269,10 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     def data_url(namespace: str) -> dict:
         """Return the dashboard URL of a namespace (for the user to open/edit in
-        browser). `namespace` accepts `slot:<name>` (active project) or `@claimed`
-        = the table your reservation is in."""
+        browser). `namespace` accepts `slot:<name>` (active project)."""
         sub = access.current_user_sub_or_raise()
         store = _store_for(sub)
-        namespace, _ = _adresse_reservee(store, namespace, ligne=False)
+        namespace, _ = _adresse(namespace)
         try:
             return {"url": store.get_url(namespace)}
         except NamespaceNotFound as e:

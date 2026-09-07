@@ -1,17 +1,17 @@
 """Les jetons réservés du datastore, et le SEUL endroit qui dit où chacun s'écrit.
 
-Trois jetons voyagent dans les appels : `@claimed` (la réservation du run), `slot:<nom>`
-(le tableau bindé par le projet actif) et `*` (toutes les colonnes). Chacun n'a de sens
-que dans certains champs — et jusqu'ici chaque outil décidait dans son coin, ce qui a
-produit exactement deux familles de défauts, toutes deux vécues sur une campagne réelle :
+Deux jetons voyagent dans les appels : `slot:<nom>` (le tableau bindé par le projet
+actif) et `*` (toutes les colonnes). Chacun n'a de sens que dans certains champs — et
+jusqu'ici chaque outil décidait dans son coin, ce qui a produit exactement deux familles
+de défauts, toutes deux vécues sur une campagne réelle :
 
-1. **Le jeton reconnu, refusé sur le champ voisin.** `@claimed` accepté à l'écriture et
-   « namespace inconnu » à la lecture (#517) ; `slot:` résolu par les opérations de
-   schéma et passé brut par celles de lignes. *Un refus qui dit « inconnu » sur un jeton
-   que la plateforme reconnaît envoie chercher une faute de frappe là où il n'y en a pas.*
+1. **Le jeton reconnu, refusé sur le champ voisin.** `slot:` était résolu par les
+   opérations de schéma et passé brut par celles de lignes, qui répondaient « namespace
+   inconnu ». *Un refus qui dit « inconnu » sur un jeton que la plateforme reconnaît
+   envoie chercher une faute de frappe là où il n'y en a pas.*
 2. **Le jeton mal placé, accepté en silence** — le cas le plus coûteux, parce qu'il ne
-   refuse rien : `@claimed` écrit dans le CONTENU d'une ligne finit en clair dans un
-   fichier client, et `_run_id` posé comme colonne y grave un identifiant de travail.
+   refuse rien : `_run_id` posé comme colonne grave un identifiant de travail dans le
+   fichier d'un client.
 
 D'où **trois** issues, et jamais une quatrième :
 
@@ -25,12 +25,28 @@ D'où **trois** issues, et jamais une quatrième :
 deviner. Une chaîne qui commence par `slot:` **dans une valeur de ligne** est une donnée
 parfaitement légitime (« slot: machine à café ») : seuls les jetons qui n'ont AUCUN sens
 comme donnée sont refusés dans le contenu.
+
+## Un jeton RETIRÉ, et pourquoi il reste écrit ici (07/09/2026)
+
+`@claimed` — « la ligne que je tiens », posé dans `namespace` et dans `id` — a vécu du
+29/08 au 07/09/2026. Il se résolvait par le RUN courant, et c'est ce qui l'a tué : **un
+agent est sans état**. Il n'y a pas de « moi » stable auquel accrocher un pronom, et
+plusieurs runs d'un même compte coexistent — « la ligne que je tiens » était donc ambigu
+par construction, pas par accident d'implémentation. Mesuré avant le retrait : **1 300
+refus en 90 jours**, tous des agents qui l'écrivent alors que leur run ne tient rien.
+
+Il reste NOMMÉ ici, et seulement ici, parce qu'un jeton retiré ne disparaît pas du trafic
+le jour où on le retire. Sans `JETONS_RETIRES`, la chaîne repartirait telle quelle
+jusqu'au stockage, qui répondrait « tableau inconnu » ou « ligne introuvable » sur un mot
+que la plateforme reconnaît parfaitement — le refus qui envoie chercher une faute de
+frappe dans une chaîne correctement orthographiée. *Un refus qui nomme le geste qui
+aboutit est recopié à la lettre dans la minute ; un refus muet fait perdre la ligne deux
+fois sur trois.* Cette liste est faite pour se vider le jour où le trafic se sera tu.
 """
 from __future__ import annotations
 
 from typing import Optional
 
-CLAIMED = "@claimed"
 SLOT = "slot:"
 TOUT = "*"
 
@@ -39,9 +55,23 @@ ADRESSE = ("namespace", "id", "fields", "filter", "filters", "group_by", "order_
 
 # jeton → (champs qui l'acceptent, ce qu'il désigne)
 JETONS: dict[str, tuple[tuple[str, ...], str]] = {
-    CLAIMED: (("namespace", "id"), "la ligne que ton run réserve (et son tableau)"),
     SLOT: (("namespace",), "le tableau bindé sous ce nom par le projet actif"),
     TOUT: (("fields",), "toutes les colonnes"),
+}
+
+# jeton retiré → (pourquoi il est parti, ce qui aboutit à sa place). Un jeton retiré
+# n'est plus résolu NULLE PART : il est refusé dans tous les champs d'adresse, et le
+# refus porte la conduite — c'est sa seule raison d'être encore écrit.
+JETONS_RETIRES: dict[str, tuple[str, str]] = {
+    "@claimed": (
+        "il se résolvait par le run courant, et un agent sans état n'a pas de « moi » "
+        "auquel accrocher un pronom — plusieurs runs coexistent, « la ligne que je "
+        "tiens » était ambigu par construction",
+        "adresse la ligne explicitement, avec ce que `data_claim_next` t'a rendu au "
+        "moment de la réservation : le nom du tableau dans `namespace`, et la ligne par "
+        "son `_id` dans `id` (ou par sa clé métier dans `filter`). L'un et l'autre sont "
+        "dans la réponse qui t'a réservé la ligne — il n'y a rien à inventer, ni de "
+        "faute de frappe à chercher"),
 }
 
 # Ce qui n'a AUCUN sens comme donnée : ces noms sont des paramètres d'appel (ADR 0038),
@@ -57,16 +87,26 @@ class JetonMalPlace(ValueError):
     une erreur interne effacerait la seule chose utile : où le jeton s'écrit."""
 
 
+class JetonRetire(JetonMalPlace):
+    """Jeton qui a existé et n'est plus résolu nulle part (`JETONS_RETIRES`).
+
+    Sous-classe de `JetonMalPlace` par CONTRAT, pas par commodité : les deux faces
+    traduisent déjà cette famille en refus actionnable (`INVALID_PARAMS` côté agent,
+    `400 jeton_mal_place` côté REST — documenté dans `docs/rest-api.md`), et un jeton
+    retiré EST un jeton reconnu qu'aucun champ n'accepte. Lui donner un troisième code
+    d'erreur changerait un contrat public sans rien apprendre à l'agent, qui lit le
+    message et pas le code. La classe existe pour que la prochaine lecture de ce module
+    sache pourquoi une chaîne retirée y est encore écrite."""
+
+
 def jeton_de(valeur: object) -> Optional[str]:
     """Le jeton que porte cette valeur, ou `None` — la reconnaissance est EXACTE.
 
-    `@claim`, `@claimed-2`, `slots:x` ne sont pas des jetons : ils partent tels quels et
-    échouent comme avant. *Un alias qui pardonne remplace une chaîne à recopier par une
-    grammaire à deviner — la même faute, un cran plus haut.*"""
+    `slots:x` n'est pas un jeton : il part tel quel et échoue comme avant. *Un alias qui
+    pardonne remplace une chaîne à recopier par une grammaire à deviner — la même faute,
+    un cran plus haut.*"""
     if not isinstance(valeur, str):
         return None
-    if valeur == CLAIMED:
-        return CLAIMED
     if valeur == TOUT:
         return TOUT
     if valeur.startswith(SLOT):
@@ -85,11 +125,32 @@ def _ou_il_s_ecrit(jeton: str) -> str:
     return f"`{jeton if jeton != SLOT else 'slot:<nom>'}` = {quoi} ; il s'écrit dans {ou}"
 
 
+def verifier_retire(champ: str, valeur: object) -> None:
+    """Refuse un jeton RETIRÉ, dans n'importe quel champ d'adresse.
+
+    Passe AVANT `jeton_de` : un jeton retiré n'est plus un jeton, il tomberait donc dans
+    l'issue « inconnu » (la valeur part telle quelle) et le stockage répondrait « tableau
+    inconnu » — le seul refus qu'on ne veut pas ici, parce qu'il envoie chercher une
+    faute de frappe dans une chaîne juste. Le refus NOMME le geste qui aboutit ; il ne se
+    contente pas de constater la disparition."""
+    if not isinstance(valeur, str):
+        return
+    retire = JETONS_RETIRES.get(valeur)
+    if retire is None:
+        return
+    pourquoi, conduite = retire
+    raise JetonRetire(
+        f"`{valeur}` a été RETIRÉ et n'est plus résolu : {pourquoi}. Tu l'as posé dans "
+        f"`{champ}` — {conduite}.")
+
+
 def verifier_adresse(champ: str, valeur: object) -> None:
-    """Refuse un jeton reconnu posé dans un champ d'adresse qui ne l'accepte pas.
+    """Refuse un jeton retiré, ou un jeton reconnu posé dans un champ d'adresse qui ne
+    l'accepte pas.
 
     Une valeur qui ne porte aucun jeton connu passe SANS RIEN DIRE : cette couture
     n'invente pas de garde sur les noms littéraux."""
+    verifier_retire(champ, valeur)
     jeton = jeton_de(valeur)
     if jeton is None or accepte(champ, jeton):
         return
@@ -98,19 +159,15 @@ def verifier_adresse(champ: str, valeur: object) -> None:
 
 
 def verifier_contenu(contenu: object) -> None:
-    """Refuse ce qui n'a aucun sens comme DONNÉE : l'alias en valeur, un paramètre
-    d'appel en nom de colonne.
+    """Refuse ce qui n'a aucun sens comme DONNÉE : un paramètre d'appel en nom de
+    colonne.
 
     ⚠️ Volontairement plus étroit que `verifier_adresse` : `slot:` et `*` sont des
     chaînes qu'une ligne peut légitimement porter, et les refuser ici casserait des
-    écritures justes pour se protéger d'une faute qu'on ne sait même pas distinguer."""
-    if isinstance(contenu, str):
-        if contenu == CLAIMED:
-            raise JetonMalPlace(
-                f"`{CLAIMED}` est une ADRESSE, pas une donnée : il s'écrit dans `id` "
-                "(ou dans `namespace`), jamais dans le contenu de la ligne — écrit "
-                "ici, il finirait en clair dans le fichier.")
-        return
+    écritures justes pour se protéger d'une faute qu'on ne sait même pas distinguer.
+    Un jeton RETIRÉ ne se refuse pas non plus ici : retiré des adresses, il n'est plus
+    qu'une chaîne — et une chaîne qu'aucune description ne propose plus n'arrive pas
+    dans une valeur de ligne par imitation."""
     if isinstance(contenu, dict):
         for cle, valeur in contenu.items():
             if cle in PARAMETRES_D_APPEL:
@@ -145,8 +202,7 @@ def verifier_champs(*, namespace=None, id=None, fields=None,
                 verifier_adresse("filter", cle)
 
 
-def resoudre(store, namespace, id=None, *, worker=None, ligne: bool = True,
-             resoudre_slot):
+def resoudre(namespace, id=None, *, resoudre_slot):
     """Vérifie PUIS résout les champs d'adresse — **le geste des deux faces**.
 
     C'est ici que la couture cesse d'être une garde et devient un seam : la face MCP et
@@ -157,15 +213,10 @@ def resoudre(store, namespace, id=None, *, worker=None, ligne: bool = True,
     `resoudre_slot` est injecté (la résolution d'un slot lit le projet actif, qui vit
     dans la couche d'accès) : cette couche-ci ne connaît que les jetons.
 
-    `ligne=False` pour les verbes qui n'adressent qu'un TABLEAU — y résoudre une ligne
-    n'aurait aucun sens."""
+    ⚠️ **`id` n'est plus résolu, il est seulement VÉRIFIÉ.** Tant que `@claimed` a vécu,
+    cette fonction lisait le store pour transformer un pronom en identifiant, et prenait
+    donc un `store` et un `worker` ; le pronom retiré (07/09/2026), il ne reste aucun
+    jeton qui s'écrive dans `id` — la vérification suffit, et le seul travail restant est
+    la résolution du tableau."""
     verifier_champs(namespace=namespace, id=id)
-    if namespace == CLAIMED:
-        table, reservee = store.resolve_claimed_target(worker=worker)
-        if ligne and (id is None or id == CLAIMED):
-            return table, reservee
-        return table, (id if ligne else None)
-    namespace = resoudre_slot(namespace)
-    if ligne and id == CLAIMED:
-        id = store.resolve_claimed_ref(namespace, worker=worker)
-    return namespace, id
+    return resoudre_slot(namespace), id

@@ -51,7 +51,6 @@ from .reserves import (
 )
 from .errors import (  # noqa: F401
     BusinessKeyRequired,
-    ClaimedRefUnresolved,
     InvalidCursor,
     NamespaceExists,
     NamespaceForbidden,
@@ -215,90 +214,9 @@ def indice_de_liberation(issue: dict) -> str:
             "t'appartient pas. Réserve-en une autre avec `data_claim_next`.")
 
 
-CLAIMED_REF = "@claimed"
-
-
-def est_ref_reservation(id_: object) -> bool:
-    """`@claimed` — « la ligne que je tiens », au lieu de ses trente-deux caractères.
-
-    ⚠️ Égalité EXACTE, jamais un préfixe ni une tolérance. Un identifiant qui commence
-    par « @ » sans être celui-là part tel quel et échoue comme avant : **deviner ce que
-    l'agent voulait dire sur un nom d'adresse est exactement la classe de faute que cet
-    alias supprime.** Un alias qui pardonne les approximations les encouragerait —
-    `@claim`, `@claimed-2`, `@ma_ligne` — et on aurait remplacé une chaîne à recopier
-    par une grammaire à deviner."""
-    return id_ == CLAIMED_REF
-
-
 def _backquote(noms) -> str:
     """`a`, `b` — une liste de noms rendue lisible au milieu d'un refus."""
     return ", ".join(f"`{n}`" for n in noms)
-
-
-def _refus_run_clos(ou: str, quand: object) -> ClaimedRefUnresolved:
-    """Le refus quand le travail est CLOS — un MOMENT, pas un état (#645).
-
-    Huitième passage, 30/08 : 99 refus sur 200 écritures, tous « ton travail ne tient
-    aucune ligne en ce moment ». Exact, et à côté de la question — les appels venaient
-    d'un harnais qui écrivait APRÈS `run_finish`, dont la clôture avait justement
-    libéré les baux. Le refus décrivait l'état constaté ; ce qu'il fallait dire est
-    **quand** la porte s'est fermée, parce que rien dans le nom de l'alias ni dans sa
-    description ne disait qu'il en avait une. Deux heures perdues, sur un mécanisme
-    découvert deux fois à douze heures d'écart.
-
-    > **Un refus juste qui n'est pas le bon refus coûte autant qu'un refus faux** : il
-    > envoie chercher une réservation oubliée là où c'est l'ordre des gestes qui est en
-    > cause.
-
-    L'heure y est parce que c'est elle qui fait le lien avec le geste précédent :
-    « depuis 21:08:53 » se reconnaît dans un journal, « clos » ne se reconnaît pas.
-    Et la sortie ne prescrit **aucun outil de plus** : l'identifiant de la ligne est
-    une valeur que l'appelant a déjà reçue (`docs/conventions.md`, la règle #613/#632)."""
-    return ClaimedRefUnresolved(
-        f"`{CLAIMED_REF}`{ou} : ton travail est CLOS depuis {str(quand)[:19]} "
-        "(`run_finish`), et sa clôture a libéré toutes ses lignes — l'alias ne désigne "
-        "une ligne que TANT QUE le travail est ouvert, jamais après. Il n'y a plus rien "
-        "à écrire sous cette adresse : si une écriture restait due, vise la ligne par "
-        "l'identifiant que `data_claim_next` t'avait rendu.")
-
-
-def _refus_rien_tenu(ou: str = "", *, run: Optional[str] = None) -> ClaimedRefUnresolved:
-    """Le refus « ton travail ne tient rien » — et ce qu'il ne dit PLUS.
-
-    Le 29/08 à 15:24, il finissait par « ou écris avec un identifiant explicite ». Le
-    travail venait de recevoir `row: null` (fin de file : la dernière ligne était sous
-    le bail d'un pair, écrite 71 ms plus tard) ; l'agent a pris la phrase au mot et a
-    fabriqué un identifiant sur le gabarit du refus suivant. Le cas NORMAL derrière ce
-    refus est la fin de file, pas une réservation oubliée : on le nomme, et la conduite
-    est de ne rien écrire — une invitation à fournir un identifiant, ici, est une
-    invitation à l'inventer.
-
-    ⚠️ **Sauf si le travail est CLOS** : la phrase ci-dessous serait alors vraie et
-    inutile (#645). On paie une requête pour le savoir, ici et nulle part ailleurs —
-    c'est un chemin d'échec, le nominal résout un bail sans y passer. `run=None` (hors
-    run) garde le texte de fin de file : sans run, il n'y a pas de clôture à raconter,
-    et c'est un autre refus, plus haut, qui parle.
-
-    ⚠️ **Et cette requête ne peut pas emporter le refus.** On est ici pour RENDRE une
-    conduite à l'agent (`_adresse_reservee` : « une erreur interne l'effacerait au
-    moment précis où elle sert ») ; une lecture de journal qui casse doit coûter la
-    précision du message, jamais le message. L'échec est journalisé — la dégradation
-    se voit — et on retombe sur le texte de fin de file, qui reste un refus juste."""
-    if run:
-        try:
-            clos = db.run_closed_at(run)
-        except Exception:  # noqa: BLE001 — le refus prime sur sa propre précision
-            logger.warning("clôture du run %s illisible : le refus `%s` retombe sur "
-                           "le texte de fin de file", run, CLAIMED_REF, exc_info=True)
-            clos = None
-        if clos is not None:
-            return _refus_run_clos(ou, clos)
-    return ClaimedRefUnresolved(
-        f"`{CLAIMED_REF}`{ou} : ton travail ne tient aucune ligne en ce moment (aucune "
-        "réservation active). Si `data_claim_next` t'a rendu `row: null`, la file est "
-        "vide pour ton filtre : il n'y a rien à écrire — n'invente pas d'identifiant, "
-        "termine ton travail (`run_finish`). Sinon, réserve une ligne avec "
-        "`data_claim_next` avant d'écrire.")
 
 
 def _current_run() -> Optional[str]:
@@ -2055,87 +1973,6 @@ class DatastorePg(SchemaOpsMixin):
                 "reason": "held_by_other" if bail else "no_lease",
                 "lease": bail}
 
-    def resolve_claimed_ref(self, namespace: str, *,
-                            worker: Optional[str] = None) -> str:
-        """`@claimed` → l'identifiant de la ligne que cet appel tient (#517).
-
-        La réservation porte déjà les deux choses que l'agent recopiait : la LIGNE et
-        le TABLEAU. Les lui faire repasser lui demandait trente-deux caractères
-        aléatoires, et il en altère un — ou en fabrique un dans une convention
-        étrangère. Ici le serveur les relit ; il ne reste rien à transcrire.
-
-        ⚠️ **L'appartenance se prouve par le jeton de run**, jamais par le seul
-        identifiant (#546, refusée : ça viderait la notion de run). Sans jeton on
-        refuse — mais le refus NOMME le paramètre absent, parce que c'est justement
-        celui que les agents omettent quand la description leur dit qu'il est hérité
-        (#547). `worker` ne prouve rien (c'est une étiquette choisie par l'appelant) :
-        il ne fait que restreindre, comme au relâchement.
-
-        Chaque refus dit quoi faire ensuite. Le silence coûte plus que le refus :
-        l'agent qui ne comprend pas réessaie **sans identifiant**, et une écriture
-        sans identifiant crée une ligne au lieu d'en corriger une."""
-        ici, ailleurs = self._baux_du_run(namespace, worker=worker)
-        if ici is None:
-            raise ClaimedRefUnresolved(
-                f"`{CLAIMED_REF}` désigne la ligne que TON travail tient, et cet appel "
-                "n'est rattaché à aucun travail : passe `_run_id` (celui de ton "
-                "`run_start`) sur cet appel — il n'est pas hérité —, ou écris avec "
-                "l'identifiant que `data_claim_next` t'a rendu.")
-        if not ici and not ailleurs:
-            # `ici is None` a déjà écarté le hors-run : il y a donc bien un travail, et
-            # la question qui reste est s'il est encore ouvert (#645).
-            raise _refus_rien_tenu(run=_current_run())
-        if len(ici) == 1:
-            return ici[0]
-        if not ici:
-            # LE cas qui a mis des fiches d'essai dans le fichier d'une cliente : la
-            # réservation savait quel tableau, l'agent visait l'autre. On le nomme.
-            raise ClaimedRefUnresolved(
-                f"`{CLAIMED_REF}` : ton travail ne tient rien dans `{namespace}` — sa "
-                f"réservation porte sur {', '.join('`' + n + '`' for n in ailleurs)}. "
-                "Écris dans le tableau que tu as réservé, ou réserve une ligne ici "
-                "d'abord. ⚠️ Ne réessaie pas sans identifiant : sur un tableau que tu "
-                "n'as pas réservé, une écriture sans identifiant CRÉE une ligne.")
-        raise ClaimedRefUnresolved(
-            f"`{CLAIMED_REF}` est ambigu : ton travail tient {len(ici)} lignes de "
-            f"`{namespace}` ({', '.join(ici)}). Nomme celle que tu écris — en deviner "
-            "une écrirait peut-être sur la mauvaise, ce qui ne se voit sur aucun écran.")
-
-    def resolve_claimed_target(self, *, worker: Optional[str] = None) -> tuple[str, str]:
-        """`@claimed` posé en TABLEAU → (tableau, ligne), tous deux lus dans la réservation.
-
-        **Pourquoi cette forme existe** : à sa première rencontre avec des agents réels
-        (29/08), `@claimed` est arrivé dans `namespace` et non dans `id` — deux écritures
-        refusées sur cinq, en « namespace inconnu ». On leur retire un champ à recopier ;
-        ils y mettent l'alias qu'on vient de leur apprendre. Et ils n'ont pas tort : on
-        leur a dit « la réservation est l'adresse », et une adresse commence par le
-        tableau.
-
-        > **La réservation porte les deux. Refuser sur le champ voisin, c'est refuser une
-        > demande qu'on sait satisfaire** — et envoyer chercher une faute de frappe là où
-        > il n'y en a pas.
-
-        L'ambiguïté se nomme ici sur DEUX dimensions : sans tableau donné, dire quelles
-        lignes sont tenues sans dire où elles sont laisserait l'agent aussi démuni."""
-        run = _current_run()
-        if not run:
-            raise ClaimedRefUnresolved(
-                f"`{CLAIMED_REF}` en tableau désigne la réservation de TON travail, et cet "
-                "appel n'est rattaché à aucun travail : passe `_run_id` (celui de ton "
-                "`run_start`) — il n'est pas hérité —, ou nomme le tableau.")
-        baux = self._baux_actifs(run, worker)
-        if not baux:
-            raise _refus_rien_tenu(" en tableau", run=run)
-        if len(baux) == 1:
-            b = baux[0]
-            return str(self._ns_of(b["ns_id"]).get("namespace") or b["ns_id"]), str(b["row_id"])
-        ou = ", ".join(f"`{b['row_id']}` dans "
-                       f"`{self._ns_of(b['ns_id']).get('namespace') or b['ns_id']}`"
-                       for b in baux)
-        raise ClaimedRefUnresolved(
-            f"`{CLAIMED_REF}` en tableau est ambigu : ton travail tient {len(baux)} "
-            f"lignes — {ou}. Nomme le tableau, ou la ligne, ou les deux.")
-
     def claimed_hint(self, namespace: str) -> Optional[str]:
         """Ce que le travail courant tient — dit au moment où une ADRESSE échoue (#517).
 
@@ -2144,6 +1981,13 @@ class DatastorePg(SchemaOpsMixin):
         corriger. À cet instant, le serveur sait ce que ce travail a réservé et
         l'agent, lui, l'a manifestement perdu. Le lui rendre coûte une requête.
 
+        ⚠️ **Elle REND l'identifiant, elle ne renvoie plus vers un pronom** (07/09/2026).
+        Tant que `@claimed` a vécu, cette piste finissait par « écris avec
+        `id="@claimed"` plutôt que de recopier » : elle envoyait vers un raccourci qui se
+        résolvait par le run, et qui a été retiré parce qu'un agent sans état n'en a pas
+        un stable. Ce qui reste est ce qui servait déjà — les identifiants eux-mêmes,
+        énoncés au seul moment où l'agent les cherche.
+
         None quand il n'y a rien d'utile à dire — hors run, ou aucune réservation :
         une piste vide vaut mieux qu'une phrase qui meuble."""
         ici, ailleurs = self._baux_du_run(namespace)
@@ -2151,42 +1995,28 @@ class DatastorePg(SchemaOpsMixin):
             return None
         if ici:
             return (f"ton travail tient {_backquote(ici)} dans `{namespace}` — "
-                    f'écris avec `id="{CLAIMED_REF}"` plutôt que de recopier')
+                    "c'est l'identifiant à passer dans `id`, sans le recopier de mémoire")
         return (f"ton travail ne tient rien dans `{namespace}`, mais tient une ligne "
                 f"dans {_backquote(ailleurs)} — c'est peut-être le tableau que tu visais")
 
-    @staticmethod
-    def _baux_actifs(run: str, worker: Optional[str]) -> list[dict]:
-        """Les baux actifs du run, restreints au libellé s'il est donné — et si le
-        libellé ne retrouve rien alors que le run tient bien des lignes, on le DIT.
-
-        Sans ça, un `data_release` rejoué avec un autre `worker` que celui du claim
-        recevait « aucune réservation active » : faux — la ligne était tenue, sous un
-        autre libellé — et un agent cru sans ligne en réserve une seconde pour
-        retrouver la première. Une requête de plus, sur le seul chemin d'échec."""
-        baux = db.datastore_active_leases_of(run_id=run, worker=worker)
-        if baux or worker is None:
-            return baux
-        sans_libelle = db.datastore_active_leases_of(run_id=run)
-        if not sans_libelle:
-            return []
-        tenus = sorted({str(b.get("claimed_by")) for b in sans_libelle})
-        raise ClaimedRefUnresolved(
-            f"`{CLAIMED_REF}` : ton travail tient bien une ligne, mais sous le libellé "
-            f"{_backquote(tenus)} — pas `{worker}`. Rejoue le `worker` donné à "
-            "`data_claim_next`, tel quel : c'est lui qui garde le relâchement.")
-
-    def _baux_du_run(self, namespace: str, *, worker: Optional[str] = None):
-        """Ce que le travail courant tient : ici, et ailleurs — source unique des deux
-        lectures du bail-comme-adresse (#517).
+    def _baux_du_run(self, namespace: str):
+        """Ce que le travail courant tient : ici, et ailleurs — source unique de la piste
+        rendue quand une adresse échoue (#517).
 
         `(None, [])` distingue « pas de travail sur cet appel » de « un travail qui ne
         tient rien » : le premier se répare en passant `_run_id`, le second en réservant
-        une ligne. Les confondre dirait à l'agent de faire ce qu'il a déjà fait."""
+        une ligne. Les confondre dirait à l'agent de faire ce qu'il a déjà fait.
+
+        ⚠️ **Plus de restriction par `worker`** (07/09/2026). Elle n'a jamais servi qu'à
+        `@claimed` posé sur `data_release`, seul verbe qui passait le libellé du claim :
+        un libellé qui ne retrouvait rien alors que le run tenait des lignes était nommé
+        comme tel. Le pronom retiré, le seul appelant restant est la piste, qui ne passe
+        aucun libellé — et un `data_release` au mauvais libellé reçoit déjà de
+        `release_claim` le refus qui NOMME qui tient la ligne."""
         run = _current_run()
         if not run:
             return None, []
-        baux = self._baux_actifs(run, worker)
+        baux = db.datastore_active_leases_of(run_id=run)
         if not baux:
             return [], []
         ns_id = self._resolve(namespace)

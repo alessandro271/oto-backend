@@ -225,10 +225,14 @@ def finish_run(run_id: str, outcome: str, note: Optional[str] = None,
 def run_closed_at(run_id: str) -> Optional[datetime]:
     """Quand ce run a été CLOS, ou `None` — encore ouvert, ou inconnu du journal.
 
-    Une seule question, un seul appelant : le refus de `@claimed`, qui décrivait un
-    ÉTAT (« aucune réservation active ») là où le problème est un MOMENT — l'appel
-    arrive APRÈS `run_finish`, qui a libéré les baux (#645). Pour le dire, il faut
-    savoir que le run est clos ; c'est tout ce que cette fonction rend.
+    Une seule question : celle du titre. ⚠️ **Plus aucun appelant depuis le
+    07/09/2026** — elle en avait un seul, le refus de `@claimed`, qui décrivait un ÉTAT
+    (« aucune réservation active ») là où le problème était un MOMENT : l'appel arrivait
+    APRÈS `run_finish`, qui avait libéré les baux (#645). Le pronom retiré, ce refus
+    n'existe plus. La fonction reste, et c'est dit ici plutôt que corrigé en la
+    supprimant : « quand ce run a-t-il été clos » est une question du journal, sa réponse
+    se lit du FAIT et non d'une colonne de confort (ci-dessous), et une lecture juste qui
+    se voit se redemande — une lecture retirée se réécrit de travers.
 
     ⚠️ Lu du FAIT (`run_finish`), jamais de `runs.finished_at` : cette colonne est une
     écriture de confort que `finish_run` rate **en silence** quand l'index n'a pas été
