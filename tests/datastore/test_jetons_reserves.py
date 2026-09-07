@@ -190,6 +190,9 @@ def _tool(name: str):
 
 class _StoreMuet:
     """Un store qui note ce qu'on lui demande — il ne doit RIEN recevoir."""
+    # Relevé de résolution du store (`DatastorePg.dernier_tableau`) : les
+    # remises y prennent l'IDENTITÉ du tableau — nom canonique + `ns_id`.
+    dernier_tableau = {"ns_id": 174, "namespace": "vivier"}
 
     def __init__(self):
         self.vu = []
@@ -276,6 +279,9 @@ def test_MCP_une_valeur_qui_RESSEMBLE_a_un_slot_passe(monkeypatch):
 
 class _StoreLigne:
     """Un store qui rend une ligne — de quoi éprouver une PROJECTION."""
+    # Relevé de résolution du store (`DatastorePg.dernier_tableau`) : les
+    # remises y prennent l'IDENTITÉ du tableau — nom canonique + `ns_id`.
+    dernier_tableau = {"ns_id": 174, "namespace": "vivier"}
 
     ligne = {"_id": "r1", "siren": "1", "raison_sociale": "ACME"}
 
@@ -348,6 +354,10 @@ def _rest():
 
 
 class _StoreREST:
+    # Relevé de résolution du store (`DatastorePg.dernier_tableau`) : les
+    # remises y prennent l'IDENTITÉ du tableau — nom canonique + `ns_id`.
+    dernier_tableau = {"ns_id": 174, "namespace": 'vivier'}
+
     def __init__(self):
         self.vu = []
 

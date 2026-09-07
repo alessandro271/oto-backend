@@ -115,6 +115,9 @@ def test_claims_report_the_configuration_that_breaks_auto_release(monkeypatch):
 
 class _Store:
     """Store de test : enregistre les appels, rejoue les réponses programmées."""
+    # Relevé de résolution du store (`DatastorePg.dernier_tableau`) : les
+    # remises y prennent l'IDENTITÉ du tableau — nom canonique + `ns_id`.
+    dernier_tableau = {"ns_id": 174, "namespace": "vivier"}
 
     def __init__(self, **outcomes):
         self.outcomes = outcomes
@@ -161,7 +164,9 @@ def test_claim_next_reserves_and_returns_the_row(monkeypatch):
     store = _Store(claim_next=ROW)
     out = _claim_next(monkeypatch, store, namespace="vivier", worker="sarah",
                       filter={"statut": "a-appeler"}, lease_s=300)
-    assert out == {"namespace": "vivier", "row": ROW}
+    # La remise porte l'IDENTITÉ du tableau : son nom canonique ET son numéro —
+    # c'est ici que l'agent apprend la forme d'adresse qui remplace le nom.
+    assert out == {"namespace": "vivier", "ns_id": 174, "row": ROW}
     _, kw = store.calls[0]
     assert (kw["worker"], kw["filter"], kw["lease_s"]) == ("sarah", {"statut": "a-appeler"}, 300)
 

@@ -60,6 +60,9 @@ def test_enum_options_ignore_the_free_ones():
 
 class _Store:
     """Store minimal : une page où AUCUNE ligne ne porte `notes_verification`."""
+    # Relevé de résolution du store (`DatastorePg.dernier_tableau`) : les
+    # remises y prennent l'IDENTITÉ du tableau — nom canonique + `ns_id`.
+    dernier_tableau = {"ns_id": 174, "namespace": "vivier"}
 
     def __init__(self, schema=_SCHEMA):
         self._schema = schema

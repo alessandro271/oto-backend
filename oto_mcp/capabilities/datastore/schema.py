@@ -36,6 +36,7 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from ... import access
+from ...datastore import identite
 from ...datastore import schema as dsv2
 from ...datastore.core import NamespaceNotFound, NamespaceReadOnly, make_store
 from .._authz import SUB_ONLY
@@ -56,7 +57,11 @@ class SchemaOut(BaseModel):
     # est généré `by_alias`, donc la face publique reste bien `schema`.
     model_config = ConfigDict(populate_by_name=True)
 
+    # ⚠️ Le NOM CANONIQUE du tableau, plus l'écho de l'adresse reçue : lire le schéma
+    # de `600` répondait `namespace: "600"` (cf. `datastore/identite.py`).
     namespace: str
+    # Le NUMÉRO du tableau — la forme d'adresse à employer, le nom partant en retrait.
+    ns_id: Optional[int] = Field(default=None, description=identite.DESCRIPTION)
     # `None` = aucun schéma déclaré. C'est l'état NORMAL d'un namespace (le datastore
     # est schema-free par défaut) — d'où un champ nullable plutôt qu'un 404, qui ne
     # saurait pas distinguer « pas de schéma » de « tableau inconnu ».
@@ -76,15 +81,19 @@ def _get_schema(ctx: ResolvedCtx, inp: GetSchemaInput) -> dict:
     # refusée là où tous les tools `data_*` l'acceptent. Le nom RÉSOLU est renvoyé :
     # l'appelant doit voir sur quel tableau il vient de lire.
     namespace = access.resolve_namespace_ref(inp.namespace)
+    store = make_store(ctx.sub)
     try:
-        schema = make_store(ctx.sub).get_schema(namespace)
+        schema = store.get_schema(namespace)
     except NamespaceNotFound:
         raise AuthzDenied(404, "namespace_not_found")
     # #389 : la liste des clés de validation que CETTE version exécute. Servie ICI
     # autant qu'à la pose — sans quoi il faudrait ÉCRIRE un schéma pour savoir ce que
     # le serveur applique, c'est-à-dire produire un effet de bord pour poser une
     # question.
-    out = {"namespace": namespace, "schema": schema,
+    # ⚠️ « Le nom RÉSOLU est renvoyé » ci-dessus ne valait que pour `slot:<nom>` : un
+    # numéro restait un numéro. C'est désormais l'IDENTITÉ du tableau — son nom
+    # canonique ET son numéro — quelle que soit la forme de l'adresse reçue.
+    out = {**identite.de_releve(store.dernier_tableau, namespace), "schema": schema,
            "enforced": dsv2.enforced_keys()}
     # #416 : le garde des clés non lues existait, mais UNIQUEMENT à la pose — et un
     # schéma déjà pollué ne se repose jamais. Mesuré en production le 28/08 : trois
@@ -191,8 +200,12 @@ CAPABILITIES += [
         rest=RestBinding(verb="GET", path="/api/datastore/namespaces/{namespace}/schema"),
         description=(
             "Read a namespace's declared TYPED schema (the one `data_set_schema` posts). "
-            "Returns `{namespace, schema, enforced}` — `schema` is null when none is declared, "
-            "which is a normal state, not an error. Read it BEFORE amending: "
+            "Returns `{namespace, ns_id, schema, enforced}` — `schema` is null when none "
+            "is declared, which is a normal state, not an error. "
+            "`ns_id` is the table's NUMBER (e.g. 174) and `namespace` its canonical name, "
+            "whatever form you addressed it by: pass the NUMBER as `namespace` from here "
+            "on — a name still resolves, it is being retired, not broken. Read it BEFORE "
+            "amending: "
             "`data_set_schema` posts the schema WHOLE, it does not merge, so adding one "
             "field means re-posting the existing definition plus that field. "
             "The work-queue rules live on the `role:\"status\"` field, under `lifecycle`: "

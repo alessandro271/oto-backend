@@ -10,6 +10,30 @@ la face REST (`/api/datastore/…`) à la place des outils `data_*`. Les deux fa
 au même stockage : ce guide dit ce que ce stockage fait d'une écriture, où les deux
 faces divergent, et ce qu'une réponse ne dit pas.
 
+## 0. Adresser un tableau : par son NUMÉRO
+
+Un tableau porte un **numéro** (`ns_id`, ex. `174`) et un **nom** (`edition-vivier`).
+Les deux résolvent, partout, avec le même contrôle de visibilité — `namespace: 174` et
+`namespace: "edition-vivier"` désignent le même tableau, sur les deux faces.
+
+**Emploie le numéro.** Le nom est en cours de retrait : il marche encore aujourd'hui, et
+rien n'est cassé, mais il n'est unique que par propriétaire, il change au renommage, et
+c'est le numéro que la plateforme enregistre.
+
+Où le trouver : `data_list_namespaces` le donne (`id`), et surtout **les réponses le
+rendent** — `ns_id` dans la réservation (`data_claim_next`), l'écriture (`data_write`),
+la libération (`data_release`), la lecture d'une page (`data_rows`) et la lecture du
+schéma (`data_get_schema`). Réserve, note le `ns_id`, adresse par lui ensuite.
+
+⚠️ La clé `namespace` d'une réponse est le **nom canonique** du tableau, jamais l'écho de
+ce que tu as envoyé : adresser `174` te répond `namespace: "edition-vivier"`, et non
+`"174"`. C'est ainsi qu'on lit *quel* tableau a été touché. (`data_write` sur une ligne
+seule fait exception et ne rend que `ns_id` : son corps **est** la ligne, une clé
+`namespace` y entrerait en collision avec une colonne.)
+
+`slot:<nom>` reste compris des deux côtés : c'est une référence de projet, pas un nom de
+tableau, et elle se résout vers l'un comme vers l'autre.
+
 ## 1. Toute colonne a quatre couches
 
 Vocabulaire fermé : `valeur` (la colonne elle-même) et trois couches qui la décrivent —
@@ -148,7 +172,8 @@ déclarée ; sur une ligne seule, seule la clé déclarée joue.
 | partage | `data_share` | `GET`/`POST`/`DELETE …/share` |
 | activité | — | `GET …/activity` ; `GET …/rows/{row_id}/activity` |
 
-`{tableau}` est le nom du tableau ; `slot:<nom>` est compris des deux côtés. Le
+`{tableau}` est le **numéro** du tableau (son nom marche encore, en cours de retrait —
+cf. §0) ; `slot:<nom>` est compris des deux côtés. Le
 descriptif complet (entrées, réponses, codes) est `GET /api/openapi.json`, sans auth ;
 la face REST s'appelle avec le même jeton que `/mcp`, ou un jeton API.
 
@@ -195,6 +220,9 @@ Un succès n'est pas un accusé de ce que tu crois avoir fait ; lis ce qui manqu
   déclarée au schéma mais renseignée nulle part rend des lignes `{_id}` **sans
   avertissement** — c'est voulu, pour ne pas accuser une faute d'orthographe qui n'en
   est pas ; le `warning` ne vient que pour un nom inconnu partout.
+- **Une réponse ne dit pas le tableau qu'elle n'a pas résolu.** `ns_id` est présent
+  dès que le tableau a été atteint ; un `ns_id: null` signale un chemin qui a rendu
+  sans résoudre, pas un tableau sans numéro.
 - **Un `200`/`201` d'écriture ne porte que ce qui a dévié.** `hors_schema`,
   `hors_options`, `valeurs_effacees`, `valeurs_ignorees`, `notices` sont absents quand
   tout est dans le format : leur absence est la réponse normale, leur présence est ce

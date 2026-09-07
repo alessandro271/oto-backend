@@ -144,6 +144,49 @@ clés **fermées** `server._TRACED_ARGS`). Index d'expression partiel `idx_tool_
 > dans le thread ne remonte JAMAIS au contexte appelant, la mutation du dict posé en
 > amont si (même objet). Garde-fou : `test_the_trace_survives_the_threadpool`.
 
+⚠️ **La REMISE aussi cite l'entité, depuis le 07/09/2026 (retrait des noms de
+tableau, palier 1).** Le même raisonnement que ci-dessus valait pour ce que le serveur
+REND, et il n'y était pas appliqué : `namespace` répétait la chaîne reçue — lire par
+numéro répondait `namespace: "600"`. Deux appelants sur le même tableau y lisaient donc
+deux valeurs, et la clé ne disait pas QUEL tableau avait été touché. Deux changements,
+au même endroit :
+
+- **`ns_id` s'ajoute** aux remises de la réservation (`data_claim_next`, + les deux
+  capacités REST `claim_next`/`claim_row`), de l'écriture (ligne seule et lot, MCP et
+  `POST`/`PATCH …/rows`), de la libération, de la page de lignes et de la lecture du
+  schéma. **Déclaré au contrat** (`ClaimResult`, `WrittenRow`, `RowPage`, `ReleasedRow`,
+  `SchemaOut`) et non seulement toléré par `extra="allow"` : une intégration qui génère
+  son client depuis l'`openapi.json` doit le voir. Nom de clé pris à l'existant, jamais
+  inventé — c'est déjà celui de `_resolve`, du relevé `trace`, de `_TRACED_ARGS`, de la
+  cible d'un upload signé, et il est **déjà servi** par `oto_search` (`ref: {ns_id,
+  row_id}`). `id` était pris : dans une remise de ligne il désigne la LIGNE.
+- **`namespace` devient le nom CANONIQUE** du tableau, quelle que soit la forme de
+  l'adresse reçue. **C'est le seul changement de comportement du palier** : un appelant
+  qui adressait par numéro (ou par `slot:`) et relisait cette clé pour se vérifier reçoit
+  désormais le nom du tableau. C'est ce que la clé prétendait dire.
+
+Le couple vient de `DatastorePg.dernier_tableau` — un relevé posé par `_resolve` dans la
+ligne `user_datastores` qu'il vient de lire, donc **sans une requête de plus** — et se met
+en forme par `datastore/identite.py` (source unique des deux clés, des deux faces). Sans
+résolution, `ns_id` vaut `null` et `namespace` retombe sur l'adresse reçue : **la présence
+du numéro est la preuve que le tableau a été atteint**.
+
+⚠️ **`data_rows(id=…)` et `GET …/rows/{row_id}` n'en portent RIEN, exprès.** Leur corps
+EST la ligne, et c'est l'objet même que la plateforme invite à relire puis republier tel
+quel (promotion de `_id`, #354/#390) : une clé de réponse posée dedans reviendrait en
+écriture — colonne fantôme sur un tableau libre, ligne entière perdue sur un tableau qui
+refuse l'inconnu. Pour la même raison, l'écriture d'une ligne seule gagne `ns_id` mais
+**pas** `namespace` : « namespace » est un nom de colonne trop plausible. Garde-fou :
+`tests/datastore/test_datastore_numero_de_tableau.py`.
+
+⚠️ **Aucune date de retrait du nom n'est arrêtée**, et les textes servis le disent : le
+nom résout encore, partout, avec le même contrôle de visibilité (`db.resolve_datastore_ns`
+matche `d.namespace = %(ns)s OR d.id = %(nsid)s`, le NOM gagnant en cas de collision).
+Ce qui a changé est ce qu'on MONTRE — descriptions de `data_claim_next`/`data_write`/
+`data_release`/`data_rows`/`data_get_schema`, instruction de flotte
+(`capabilities/_instruction.py`), guide `datastore-semantics` §0 — parce qu'un agent
+recopie l'exemple qu'on lui montre.
+
 L'axe NOM subsiste en **repli, borné au propriétaire** (`db._owner_clause` → `l.org_id`
 ou `l.sub`), pour l'historique écrit avant cette bascule — il s'éteint de lui-même avec
 la rétention 30 j. Même borne sur l'autre axe flou : la valeur de clé métier du parcours

@@ -33,6 +33,9 @@ ROW = {"namespace": "vivier", "row_id": "r1"}
 
 class _Store:
     """Enregistre l'appel, rend ce que le test a posé."""
+    # Relevé de résolution du store (`DatastorePg.dernier_tableau`) : les
+    # remises y prennent l'IDENTITÉ du tableau — nom canonique + `ns_id`.
+    dernier_tableau = {"ns_id": 174, "namespace": "vivier"}
 
     def __init__(self, **verdicts):
         self.v = verdicts

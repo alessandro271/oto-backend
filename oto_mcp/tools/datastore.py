@@ -20,7 +20,7 @@ from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access, db, ownership
-from ..datastore import claimable, jetons
+from ..datastore import claimable, identite, jetons
 from ..datastore import layers as dsl
 from ..datastore import schema as dsv2
 from ..datastore.core import (
@@ -790,13 +790,20 @@ def register(mcp: FastMCP) -> None:
         auto-created. New JSON KEYS within an existing namespace, however, do
         auto-create their columns.
 
+        ⚠️ **Address the table by its NUMBER.** The reply carries `ns_id` — the
+        table's number — and that is the form to pass as `namespace`:
+        `data_write(namespace=174, id=…)`. A name still resolves; it is being
+        retired, not broken.
+
         `namespace` also accepts `slot:<name>` = the table BOUND under that slot
         name by the ACTIVE project (procedures reference tables as <slot:name>;
         the project maps the name via its links). Requires an active project +
         the binding — otherwise an actionable error, never a fallback.
 
         Args:
-            namespace: target namespace (must already exist), or `slot:<name>`.
+            namespace: the table's NUMBER (`ns_id`, e.g. 174) — the form to use.
+                Its name still resolves and is being retired, not broken.
+                `slot:<name>` also works. It must already exist.
             row: single-row content as a dict (JSON-encoded automatically).
             id: omit = append a new row ; provided = partial update of that `_id`
                 (the one data_write / data_claim_next returned for that row).
@@ -826,10 +833,14 @@ def register(mcp: FastMCP) -> None:
                                              message="passer `rows` (batch) OU `row`/`id`, pas les deux"))
                 if not isinstance(rows, list):
                     raise McpError(ErrorData(code=INVALID_PARAMS, message="rows doit être une liste de dicts"))
-                out = {"namespace": namespace,
-                       **store.write_rows(namespace, rows, key=key,
-                                          readonly_override=readonly_override,
-                                          origine_override=origine_override)}
+                recap = store.write_rows(namespace, rows, key=key,
+                                         readonly_override=readonly_override,
+                                         origine_override=origine_override)
+                # Le lot a une ENVELOPPE (son corps n'est pas une ligne) : elle porte
+                # l'identité entière — le nom CANONIQUE, plus l'écho de la chaîne
+                # reçue, et le numéro à employer ensuite.
+                out = {**identite.de_releve(store.dernier_tableau, namespace),
+                       **recap}
             else:
                 if row is None:
                     raise McpError(ErrorData(code=INVALID_PARAMS,
@@ -845,7 +856,12 @@ def register(mcp: FastMCP) -> None:
                                           origine_override=origine_override)
             # Champs posés hors du format déclaré (#294) : l'écriture est acceptée (un
             # champ libre reste un droit du contrat), mais elle n'est plus silencieuse.
-            out = {**out, **store.off_schema_report()}
+            # Le NUMÉRO du tableau part avec (`ns_id`) : l'écriture est le geste que
+            # l'agent répète, et il doit pouvoir en relire l'adresse à employer. Le
+            # nom, lui, ne s'ajoute PAS ici — le corps d'une écriture de ligne seule
+            # EST la ligne, et `namespace` y serait en collision avec une colonne.
+            out = {**out, **store.off_schema_report(),
+                   **identite.numero(store.dernier_tableau)}
             hint = _project_hint(namespace)
             return {**out, "project_hint": hint} if hint else out
         except ValueError as e:
@@ -888,6 +904,17 @@ def register(mcp: FastMCP) -> None:
         left to claim.
 
         Write your result and release it by the `_id` of the returned row.
+
+        ⚠️ **Address the table by its NUMBER, not its name.** The reply carries
+        `ns_id` — the table's number (e.g. `174`) — beside `namespace`, its
+        canonical name. `ns_id` is the form to pass as `namespace` in every
+        following call: `data_write(namespace=174, id=…)`, `data_release
+        (namespace=174, …)`. A name still resolves — it is being retired, not
+        broken — but the number is what to carry: it survives a rename, it is
+        unique where a name is only unique per owner, and it is what the platform
+        records. `namespace` in the reply is the table's REAL name whatever form
+        you passed in, so reading `"600"` back from a claim on `600` no longer
+        happens.
 
         `worker` is a label YOU choose and REUSE verbatim on data_release — the
         guard so one agent cannot release another's claim.
@@ -944,7 +971,11 @@ def register(mcp: FastMCP) -> None:
         except NamespaceReadOnly:
             raise McpError(ErrorData(code=INVALID_PARAMS,
                                      message=f"namespace `{namespace}` partagé en lecture seule"))
-        return {"namespace": namespace, "row": row,
+        # L'IDENTITÉ du tableau, pas l'écho de l'adresse reçue (cf. `datastore/
+        # identite.py`) : `namespace` est son nom canonique et `ns_id` son NUMÉRO.
+        # C'est LA remise où le numéro compte — la boucle des agents part d'ici, et
+        # ce qu'ils relisent dans une réponse est ce qu'ils réemploient ensuite.
+        return {**identite.de_releve(store.dernier_tableau, namespace), "row": row,
                 **({"warning": warnings[0]} if warnings else {}),
                 **({} if row else {"hint": _hint_file_vide(perimetre, filter)})}
 
@@ -957,7 +988,11 @@ def register(mcp: FastMCP) -> None:
         ⚠️ Call it after EVERY row you finish, not only when abandoning: writing a
         "final" status no longer frees the row (#317). If you wrap your work in
         run_start / run_finish, closing the run frees everything it held — that is
-        the safety net when you forget. `namespace` also accepts `slot:<name>`."""
+        the safety net when you forget.
+
+        `namespace` = the table's NUMBER (`ns_id`, the one data_claim_next handed
+        you) — the form to use. Its name still resolves and is being retired, not
+        broken. `slot:<name>` also works."""
         store = _acting_store()
         try:
             namespace, id = _adresse(namespace, id)
@@ -974,7 +1009,8 @@ def register(mcp: FastMCP) -> None:
         # (échec). Une flotte a branché sa borne d'arrêt dessus et s'est coupée à cinq
         # fiches sur cent, le 29/08. La réponse porte donc la RAISON — vocabulaire
         # fermé, lisible par une machine — et l'indice dit LAQUELLE des deux.
-        return {"namespace": namespace, "id": id, "released": issue["released"],
+        return {**identite.de_releve(store.dernier_tableau, namespace),
+                "id": id, "released": issue["released"],
                 "reason": issue["reason"],
                 **({} if issue["released"] else {"hint": indice_de_liberation(issue)})}
 
@@ -994,7 +1030,11 @@ def register(mcp: FastMCP) -> None:
         `layers="nested"` returns the shape you write — guide `datastore-semantics`.
         The REST face `GET …/rows` pages by `offset` with a `total`, no cursor.
 
-        List mode returns `{rows, count, next_cursor}`. When `next_cursor` is not null
+        `namespace` = the table's NUMBER (`ns_id`, e.g. 174) — the form to use;
+        the reply carries it back. A name still resolves and is being retired,
+        not broken. `slot:<name>` also works.
+
+        List mode returns `{rows, count, next_cursor, ns_id}`. When `next_cursor` is not null
         there are MORE rows: call again with `cursor=<next_cursor>` (same namespace/
         filter/order) to get the next page — repeat until `next_cursor` is null.
 
@@ -1085,10 +1125,18 @@ def register(mcp: FastMCP) -> None:
             jetons.verifier_champs(fields=fields, filter=filter, filters=filters)
             layers = dsl.check(layers)
             if count_only:
-                return {"total": store.count_rows(namespace, filter=filter, q=q,
-                                                  filters=filters)}
+                total = store.count_rows(namespace, filter=filter, q=q,
+                                         filters=filters)
+                return {"total": total, **identite.numero(store.dernier_tableau)}
             if id is not None:
                 row = store.get_row(namespace, id, layers=layers)
+                # ⚠️ Le NUMÉRO ne s'ajoute PAS ici, et c'est délibéré : cette remise
+                # n'a pas d'enveloppe, son corps EST la ligne — et c'est exactement
+                # l'objet que la plateforme invite à relire puis republier tel quel
+                # (promotion de `_id`, #354/#390). Une clé de réponse posée dedans
+                # reviendrait en écriture et y créerait une colonne fantôme, ou
+                # ferait perdre la ligne sur un tableau qui refuse l'inconnu. La page
+                # ci-dessous, elle, a une enveloppe : le numéro y tient sans risque.
                 return _project_row(row, fields) if fields else row
             page = store.cursor_rows(namespace, filter=filter, limit=limit,
                                      cursor=cursor, q=q, filters=filters,
@@ -1096,7 +1144,8 @@ def register(mcp: FastMCP) -> None:
                                      layers=layers)
             rows = [_project_row(r, fields) for r in page["rows"]] if fields else page["rows"]
             out = {"rows": rows, "count": len(rows),
-                   "next_cursor": page["next_cursor"]}
+                   "next_cursor": page["next_cursor"],
+                   **identite.numero(store.dernier_tableau)}
             # Tri typé (#336) : l'écart (valeurs hors type/options, cases vides —
             # rangées en queue) se DIT, sinon le tri a l'air délibéré et ment.
             if page.get("order_health"):

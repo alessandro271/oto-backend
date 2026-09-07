@@ -29,9 +29,9 @@ from __future__ import annotations
 
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from ...datastore import claimable
+from ...datastore import claimable, identite
 from ...datastore import journal as datastore_journal
 from ...datastore.core import (
     NamespaceNotFound,
@@ -75,7 +75,15 @@ class ClaimRowInput(BaseModel):
 
 
 class ClaimResult(BaseModel):
+    # ⚠️ Le NOM CANONIQUE du tableau, plus l'écho de l'adresse reçue : réserver dans
+    # `600` répondait `namespace: "600"`, donc la clé répétait la question au lieu de
+    # dire quel tableau avait été touché (cf. `datastore/identite.py`).
     namespace: str
+    # Le NUMÉRO du tableau — la forme d'adresse à employer. Il n'était rendu nulle
+    # part sur ce chemin, alors que c'est ICI que la boucle d'un agent commence :
+    # sans lui, il ne pouvait adresser que par nom. `null` seulement si le tableau
+    # n'a pas été résolu (chemin d'erreur).
+    ns_id: Optional[int] = Field(default=None, description=identite.DESCRIPTION)
     # La ligne réservée, colonnes libres du tableau + son bail (`_claimed_by`,
     # `_claimed_until`, `_claimed_run`) + ce que la file sait d'elle (`_claims`, et
     # `_abandon` si le plafond de reprises l'en a sortie). `null` sur `claim_next`
@@ -108,8 +116,9 @@ def _claim_next(ctx: ResolvedCtx, inp: ClaimNextInput) -> dict:
     trace: dict = {}
     warnings: list = []
     perimetre: dict = {}
+    store = make_store(ctx.sub)
     try:
-        row = make_store(ctx.sub).claim_next(
+        row = store.claim_next(
             inp.namespace, worker=worker, filter=inp.filter,
             max_claims=inp.max_claims, warnings=warnings, trace=trace,
             perimetre=perimetre, layers=_layers(inp.layers), filters=inp.filters,
@@ -125,7 +134,7 @@ def _claim_next(ctx: ResolvedCtx, inp: ClaimNextInput) -> dict:
             datastore_journal.TOOL_CLAIM_NEXT, sub=ctx.sub,
             ctx=datastore_journal.from_trace(trace, inp.namespace), row_id=row.get("_id"))
     return {
-        "namespace": inp.namespace, "row": row,
+        **identite.de_releve(store.dernier_tableau, inp.namespace), "row": row,
         **({"warning": warnings[0]} if warnings else {}),
         # File vide ≠ erreur — mais ça se dit, sinon un `row: null` se lit comme un bug.
         # Et quand le tableau déclare un périmètre, c'est LUI qui se nomme (#517).
@@ -143,8 +152,9 @@ def _claim_row(ctx: ResolvedCtx, inp: ClaimRowInput) -> dict:
     worker = _worker(inp.worker)
     trace: dict = {}
     warnings: list = []
+    store = make_store(ctx.sub)
     try:
-        row = make_store(ctx.sub).claim_row(
+        row = store.claim_row(
             inp.namespace, inp.row_id, worker=worker,
             warnings=warnings, trace=trace, layers=_layers(inp.layers),
             **_lease(inp))
@@ -171,7 +181,7 @@ def _claim_row(ctx: ResolvedCtx, inp: ClaimRowInput) -> dict:
     datastore_journal.record(
         datastore_journal.TOOL_CLAIM, sub=ctx.sub,
         ctx=datastore_journal.from_trace(trace, inp.namespace), row_id=inp.row_id)
-    return {"namespace": inp.namespace, "row": row,
+    return {**identite.de_releve(store.dernier_tableau, inp.namespace), "row": row,
             **({"warning": warnings[0]} if warnings else {})}
 
 

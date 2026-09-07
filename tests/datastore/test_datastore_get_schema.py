@@ -70,6 +70,8 @@ def test_the_capability_exposes_both_faces():
 def test_an_unknown_namespace_is_a_404_not_a_crash(monkeypatch):
     def _boom(sub):
         class _S:
+            dernier_tableau = None  # rien n'a été résolu : le refus tombe avant
+
             def get_schema(self, ns):
                 raise D.NamespaceNotFound(ns)
         return _S()
@@ -93,6 +95,8 @@ def _lire(monkeypatch, schema):
     schéma contradictoire, et c'est donc lui qui doit porter l'avertissement — le
     vérifier sur le formateur seul laisserait le câblage non couvert."""
     class _S:
+        dernier_tableau = {"ns_id": 174, "namespace": "vivier"}
+
         def get_schema(self, ns):
             return schema
     monkeypatch.setattr(CAP, "make_store", lambda sub: _S())

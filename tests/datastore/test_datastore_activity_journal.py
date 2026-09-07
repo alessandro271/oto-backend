@@ -79,6 +79,9 @@ class _FakeStore:
     ⚠️ Les mutations remplissent le RELEVÉ `trace` comme le vrai store — c'est le
     seul canal du journal : l'état d'avant vient de la mutation, jamais d'une
     relecture faite par la route (qui courrait avec un write concurrent)."""
+    # Relevé de résolution du store (`DatastorePg.dernier_tableau`) : les
+    # remises y prennent l'IDENTITÉ du tableau — nom canonique + `ns_id`.
+    dernier_tableau = {"ns_id": 174, "namespace": "vivier"}
 
     NS_ID = 160
     NAME = "leads-clients"

@@ -33,6 +33,9 @@ def _tool(name: str):
 
 class _Store:
     """Capture ce que la surface transmet, et rend de quoi finir l'appel."""
+    # Relevé de résolution du store (`DatastorePg.dernier_tableau`) : les
+    # remises y prennent l'IDENTITÉ du tableau — nom canonique + `ns_id`.
+    dernier_tableau = {"ns_id": 174, "namespace": "vivier"}
 
     def __init__(self):
         self.vu: dict = {}
@@ -116,7 +119,7 @@ def test_the_count_path_carries_them_too(store):
     out = _tool("data_rows").fn(namespace="t", filters=spec, count_only=True)
     assert store.vu.get("_verbe") == "count_rows"
     assert store.vu.get("filters") == spec
-    assert out == {"total": 7}
+    assert out == {"total": 7, "ns_id": 174}
 
 
 def test_the_aggregate_carries_metrics_filters_and_pooled_grouping(store):

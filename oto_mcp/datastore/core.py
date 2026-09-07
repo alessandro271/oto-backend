@@ -311,6 +311,15 @@ class DatastorePg(SchemaOpsMixin):
                                               else {int(x) for x in allowed_ns_ids})
         self.read_only = bool(read_only)
         self._active_scope_cache: Optional[tuple[list[int], list[int]]] = None
+        # Le DERNIER tableau résolu par ce store : `{"ns_id", "namespace"}` — le
+        # numéro et le nom CANONIQUE, pris dans la ligne `user_datastores` que
+        # `_resolve` vient de lire, donc sans une requête de plus. C'est ce qui permet
+        # à une remise de porter l'IDENTITÉ du tableau au lieu de l'ÉCHO de l'adresse
+        # reçue (cf. `identite.py`) : `data_rows("600")` répondait `namespace: "600"`.
+        # Même portée que les relevés ci-dessous — un store par requête — et un geste
+        # du datastore résout UN tableau : le « dernier » est donc le sien. À lire
+        # juste après l'appel au store, jamais gardé d'un geste à l'autre.
+        self.dernier_tableau: Optional[dict] = None
         # Relevé des champs écrits HORS SCHÉMA par ce store (#294), union sur un lot :
         # rempli par `_check_row`, lu par les surfaces via `off_schema_report()`. Le
         # store est instancié par requête, donc la portée est celle du geste.
@@ -408,6 +417,11 @@ class DatastorePg(SchemaOpsMixin):
         # Consigné APRÈS les gardes (un namespace refusé ne laisse pas de trace) ;
         # no-op hors appel MCP — la face REST tient déjà son propre relevé.
         session_org.note_call_trace(ns_id=ns_id, ns_name=ns.get("namespace"))
+        # Le MÊME couple, gardé sur le store, pour les REMISES : le relevé d'appel
+        # ci-dessus est muet hors MCP (REST, stdio, tests) et n'alimente que le
+        # journal. Les deux valeurs sont dans la ligne déjà lue — l'identité ne coûte
+        # donc rien de plus que la résolution elle-même.
+        self.dernier_tableau = {"ns_id": ns_id, "namespace": ns.get("namespace")}
         return ns_id
 
     @staticmethod

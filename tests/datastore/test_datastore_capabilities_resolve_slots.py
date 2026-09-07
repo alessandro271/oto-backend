@@ -61,6 +61,10 @@ def test_drop_column_resolves_the_slot(monkeypatch, resolved):
 
 def test_get_schema_resolves_the_slot_and_answers_with_the_real_name(monkeypatch, resolved):
     class _Store:
+        # Ce que `_resolve` a relevé sur le vrai store : le nom CANONIQUE et le
+        # numéro du tableau atteint — l'identité, pas l'adresse reçue.
+        dernier_tableau = {"ns_id": 500, "namespace": "edition-echantillon-500"}
+
         def get_schema(self, namespace):
             assert namespace == "edition-echantillon-500"
             return {"strict": True, "fields": []}
@@ -69,4 +73,6 @@ def test_get_schema_resolves_the_slot_and_answers_with_the_real_name(monkeypatch
     out = sch._get_schema(_Ctx(), sch.GetSchemaInput(namespace="slot:vivier"))
     # le nom RÉSOLU revient : l'appelant doit voir sur quel tableau il a lu
     assert out["namespace"] == "edition-echantillon-500"
+    # et son NUMÉRO avec — la forme d'adresse qui remplace le nom
+    assert out["ns_id"] == 500
     assert out["schema"]["strict"] is True

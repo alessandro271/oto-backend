@@ -50,6 +50,13 @@ def de_file(slug: str, namespace: Optional[str],
     « écris sur `@claimed` » jusqu'au 07/09/2026 : ce raccourci se résolvait par le run
     courant, et un agent sans état n'en a pas un stable — l'instruction enseignait donc
     un geste dont une part des exécutions ne pouvait pas aboutir.
+
+    ⚠️ **La cible est nommée telle qu'elle a été DÉCLARÉE** — c'est ce que l'opérateur a
+    écrit, et le résoudre ici ferait échouer la déclaration d'une campagne sur un tableau
+    qu'on ne peut pas encore voir. Ce qui bascule l'usage, c'est la suite : la réservation
+    rend le `ns_id` du tableau, et le protocole dit d'employer CE numéro dans les appels
+    d'après. Un agent recopie la forme qu'on lui montre ; on lui montre donc la forme
+    d'arrivée, prise là où elle est vraie.
     """
     if not namespace:
         return derivee(slug)
@@ -62,6 +69,9 @@ def de_file(slug: str, namespace: Optional[str],
         "SEULE ligne avec `data_claim_next` — jamais une deuxième, un autre "
         "agent prendra la suivante. Si la réservation ne rend rien, la file est "
         "vide : conclus et arrête-toi.\n"
+        "La réservation te rend `ns_id`, le NUMÉRO du tableau : adresse-le par ce "
+        "numéro dans tous tes appels suivants (`namespace: 174`). Un nom marche "
+        "encore, il est en cours de retrait.\n"
         "Écris ton résultat en un seul appel sur la ligne que tu as réservée : "
         "`data_claim_next` t'a rendu son `_id`, passe-le dans `id`. Relis-la, puis "
         f"{_BILAN}")

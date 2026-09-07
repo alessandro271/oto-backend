@@ -65,6 +65,9 @@ class _Reg:
 class _Store:
     """Une page où la couche `origine` n'est renseignée NULLE PART — le seul cas où
     l'avertissement se déclenchait à tort."""
+    # Relevé de résolution du store (`DatastorePg.dernier_tableau`) : les
+    # remises y prennent l'IDENTITÉ du tableau — nom canonique + `ns_id`.
+    dernier_tableau = {"ns_id": 174, "namespace": "vivier"}
 
     def get_schema(self, namespace):
         return {"fields": [{"key": "ref", "type": "text"},

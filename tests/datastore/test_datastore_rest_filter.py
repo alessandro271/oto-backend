@@ -29,6 +29,9 @@ class _Ctx:
 
 class _Store:
     """Capture ce que le handler transmet — c'est tout l'objet du test."""
+    # Relevé de résolution du store (`DatastorePg.dernier_tableau`) : les
+    # remises y prennent l'IDENTITÉ du tableau — nom canonique + `ns_id`.
+    dernier_tableau = {"ns_id": 174, "namespace": "vivier"}
 
     def __init__(self):
         self.seen = {}

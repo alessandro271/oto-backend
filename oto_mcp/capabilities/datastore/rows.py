@@ -31,7 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from ... import access
 from ...auth import token_scopes
 from ...datastore import journal as datastore_journal
-from ...datastore import jetons
+from ...datastore import identite, jetons
 from ...datastore import layers as dsl
 from ...datastore import schema as dsv2
 from ...datastore.core import (
@@ -214,6 +214,12 @@ class WrittenRow(Row):
     # savoir que cette clé peut arriver. Absent quand la ligne est conforme.
     hors_type: Optional[dict] = None
     hors_type_hint: Optional[str] = None
+    # Le NUMÉRO du tableau écrit — la forme d'adresse à employer (le nom part en
+    # retrait). Déclaré et non seulement toléré : une intégration qui lit l'OpenAPI
+    # doit le voir. ⚠️ Le NOM, lui, ne s'ajoute pas ici : le corps de cette remise EST
+    # la ligne, et `namespace` y entrerait en collision avec une colonne parfaitement
+    # plausible. Le numéro n'a pas ce défaut. Cf. `datastore/identite.py`.
+    ns_id: Optional[int] = Field(default=None, description=identite.DESCRIPTION)
     # #317 : ce qui a CHANGÉ dans le comportement de la plateforme, dit à l'instant
     # où ça joue — aujourd'hui le retrait de la libération automatique sur état final.
     # Déclaré (et pas seulement toléré par `extra="allow"`) parce qu'un message de
@@ -225,6 +231,8 @@ class WrittenRow(Row):
 
 class RowPage(BaseModel):
     rows: list[Row]
+    # Le NUMÉRO du tableau lu — la forme d'adresse à employer.
+    ns_id: Optional[int] = Field(default=None, description=identite.DESCRIPTION)
     # Total du jeu FILTRÉ (pas du tableau) — c'est ce qui pagine le cockpit.
     total: int
     offset: int
@@ -252,7 +260,12 @@ class ReleasedRow(BaseModel):
     # 29/08) : « aucun bail » (bénin) et « bail d'un autre travail » (échec réel).
     # `reason` les sépare en vocabulaire fermé, `hint` dit laquelle en toutes lettres.
     released: bool
+    # ⚠️ `id` désigne la LIGNE, pas le tableau — c'est pourquoi le tableau se nomme
+    # `ns_id` ici et partout ailleurs : réutiliser `id` pour lui créerait un homonyme
+    # à l'endroit précis où l'appelant adresse.
     id: str
+    # Le NUMÉRO du tableau — la forme d'adresse à employer.
+    ns_id: Optional[int] = Field(default=None, description=identite.DESCRIPTION)
     reason: Optional[str] = None
     hint: Optional[str] = None
 
@@ -315,11 +328,13 @@ def _list_rows(ctx: ResolvedCtx, inp: ListRowsInput) -> dict:
     filter_eq = _json_param(inp.filter, "invalid_filter", expect=dict)
     filters = _json_param(inp.filters, "invalid_filters", expect=list)
     layers = _layers(inp.layers)
+    store = make_store(ctx.sub)
     try:
-        return make_store(ctx.sub).page_rows(
+        page = store.page_rows(
             ns, offset=offset, limit=limit,
             order_by=inp.order_by or None, order_dir=inp.order_dir,
             q=inp.q or None, filter=filter_eq, filters=filters, layers=layers)
+        return {**page, **identite.numero(store.dernier_tableau)}
     except NamespaceNotFound:
         raise ns_not_found(ctx.sub, ns)
     except ValueError as e:
@@ -450,8 +465,10 @@ def _append_row(ctx: ResolvedCtx, inp: AppendRowInput) -> dict:
         fields=list(inp.row.keys()), forced=store.off_forced,
         to_status=datastore_journal.status_of(created, nsctx))
     # Même relevé « hors schéma » que la face MCP (#294) : les deux faces ne doivent
-    # pas diverger sur ce qu'elles signalent d'une écriture.
-    return {**created, **store.off_schema_report()}
+    # pas diverger sur ce qu'elles signalent d'une écriture — le numéro du tableau
+    # non plus.
+    return {**created, **store.off_schema_report(),
+            **identite.numero(store.dernier_tableau)}
 
 
 def _update_row(ctx: ResolvedCtx, inp: UpdateRowInput) -> dict:
@@ -480,7 +497,8 @@ def _update_row(ctx: ResolvedCtx, inp: UpdateRowInput) -> dict:
         fields=list(inp.patch.keys()), forced=store.off_forced,
         from_status=trace.get("prev_status"),
         to_status=datastore_journal.status_of(updated, nsctx))
-    return {**updated, **store.off_schema_report()}
+    return {**updated, **store.off_schema_report(),
+            **identite.numero(store.dernier_tableau)}
 
 
 def _delete_row(ctx: ResolvedCtx, inp: RowRefInput) -> dict:
@@ -536,7 +554,8 @@ def _release_claim(ctx: ResolvedCtx, inp: ReleaseInput) -> dict:
             datastore_journal.TOOL_RELEASE, sub=ctx.sub,
             ctx=datastore_journal.from_trace(trace, ns), row_id=rid)
     return {
-        "ok": True, "released": released, "id": rid, "reason": issue["reason"],
+        "ok": True, "released": released, "id": rid,
+        **identite.numero(store.dernier_tableau), "reason": issue["reason"],
         **({} if released else {"hint": _indice_de_liberation(issue)}),
     }
 
