@@ -129,13 +129,34 @@ def _texte_de_l_adresse(v: Any) -> Any:
 # valident pas, l'envoyaient et se faisaient refuser. Le schéma décidait qui pouvait
 # suivre l'instruction et qui ne le pouvait pas.
 #
-# `WithJsonSchema` publie les deux formes SANS changer le type Python : l'aval continue
-# de recevoir du texte, un seul chemin de résolution, aucun appelant à adapter. Le
-# nombre est annoncé EN PREMIER — c'est la forme que la description prescrit, et l'ordre
-# d'une alternative est lu comme une préférence.
-#: L'adresse d'un tableau telle qu'une SURFACE l'accepte : son nom, ou son numéro —
-#: en texte comme en nombre. À employer partout où une entrée porte `namespace`.
-Adresse = Annotated[
+# ⚠️ **DEUX types, parce qu'il y a DEUX fils, et ils ne portent pas les mêmes formes.**
+#
+# Le fil MCP porte du JSON : un nombre y est un nombre, et annoncer l'alternative est
+# exact. **Un chemin d'URL, lui, ne porte que du texte** — `/namespaces/609/schema` est
+# une chaîne de caractères, il n'existe aucun entier à y mettre. Y publier une
+# alternative n'est pas seulement inutile : c'est FAUX.
+#
+# ⚠️ Et ce n'était pas une subtilité théorique — c'est ce qui a cassé la préproduction
+# le 08/09/2026. Le descriptif REST dérive le type d'un paramètre de chemin du champ
+# correspondant : une alternative n'a pas de clé `type`, donc six routes du datastore
+# ont vu leur paramètre `namespace` passer de « chaîne » à « rien » dans le contrat
+# servi. La garde du front l'a arrêté avant toute mise en production, et un pair a
+# annulé son propre déploiement plutôt que de passer outre sur mon commit.
+#
+# La leçon, et elle vaut au-delà de ce cas : **rendre un schéma plus honnête sur un fil
+# peut le rendre faux sur un autre.** Un type partagé par deux surfaces doit être jugé
+# sur les deux.
+
+#: L'adresse d'un tableau **à l'entrée d'une surface REST** : coercition du nombre vers
+#: le texte, mais publiée comme une CHAÎNE — c'est tout ce qu'un chemin d'URL peut
+#: porter. Un corps JSON qui enverrait un nombre est quand même accepté ; il est
+#: simplement sous-annoncé, ce qui est le bon côté de l'erreur.
+Adresse = Annotated[str, BeforeValidator(_texte_de_l_adresse)]
+
+#: La même, **pour le fil MCP**, où le JSON distingue vraiment un nombre d'une chaîne.
+#: Le nombre est annoncé EN PREMIER : c'est la forme que la description prescrit, et
+#: l'ordre d'une alternative se lit comme une préférence.
+AdresseJson = Annotated[
     str,
     BeforeValidator(_texte_de_l_adresse),
     WithJsonSchema({"anyOf": [{"type": "integer"}, {"type": "string"}]}),

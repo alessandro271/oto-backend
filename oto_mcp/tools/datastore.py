@@ -22,7 +22,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 from .. import access, db, ownership
 from ..datastore import claimable, identite, jetons
 from ..datastore import layers as dsl
-from ..datastore.identite import Adresse
+from ..datastore.identite import AdresseJson as Adresse
 from ..datastore import schema as dsv2
 from ..datastore.core import (
     indice_de_liberation,
