@@ -460,6 +460,20 @@ du serveur » ; coupée via `disabled_integrations=[MCPIntegration()]`. (2) La
 coupée via `ignore_logger("fastmcp.server.server")`. Les deux coupes ne perdent aucune
 information : le middleware capture déjà tout ce qui n'est pas une erreur gérée.
 
+**Troisième source, hors exception : les refus du registre de tenants** (`tenancy._refus`,
+07/09). Une ligne `tenants` refusée au boot — slug invalide ou réservé, émetteur ou host
+déjà tenu — laisse une déclaration **non chargée** : les jetons du tenant
+routent vers le verifier primaire, qui les rejette, donc rien n'échoue de notre côté et
+rien ne remonte. Le WARNING existait et est resté **sans destinataire** en préprod (un
+tenant non chargé toute une journée) : il part désormais AUSSI en `capture_message` de
+niveau `error`, tag `oto.registre_tenants=refus`, **texte identique à la ligne de
+journal** (slug + émetteur ⟹ une issue par conflit, pas un fourre-tout). Même précédent
+que `loop_watch` : une anomalie d'exploitation qui n'est pas une exception. ⚠️ Ce n'est
+pas un rapprochement « déclaré vs chargé » — celui-là existe, en LECTURE, sur
+`/platform/tenants` (`pending_restart`) : **un tenant déclaré APRÈS le boot, ou une ligne
+sans émetteur (écartée par le SQL), n'alerte toujours pas.** Une base illisible non plus
+(`load_tenants`) : elle ne reste pas silencieuse — tout ce qui la touche ensuite lève.
+
 ⚠️ **`include_local_variables=False` n'est pas un doublon de `send_default_pii=False`, et
 sans lui cette section était FAUSSE** (#564, corrigé le 2026-08-29). Elle affirmait
 « jamais les args d'appel dans l'event » : `send_default_pii` ne couvre que ce que le SDK

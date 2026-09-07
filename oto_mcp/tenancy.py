@@ -58,6 +58,36 @@ PRIMARY_SLUG = "oto"
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 
 
+def _refus(message: str, *args) -> None:
+    """Un refus du registre : au journal **et** au suivi d'erreurs (Sentry).
+
+    Chacun des trois refus du registre laisse une déclaration de tenant NON
+    CHARGÉE : les jetons du tenant routent vers le verifier primaire, qui les rejette — le
+    partenaire est injoignable sans qu'aucune requête n'échoue de notre côté, donc
+    sans rien à voir nulle part. Le journal système ne suffit pas : un tel
+    avertissement est resté sans destinataire en préprod le 2026-09-07, et le tenant
+    est resté non chargé toute la journée. Il manquait un DESTINATAIRE, pas un
+    message — d'où l'alerte, avec exactement le texte du journal.
+
+    Sentry est le canal déjà câblé (`sentry_setup`, gaté `OTO_SENTRY_DSN`, no-op
+    sans lui), et déjà employé pour une anomalie d'exploitation qui n'est pas une
+    exception (`loop_watch`, gel de l'event loop). Fail-open : le suivi d'erreurs ne
+    doit jamais empêcher un registre de se construire.
+    """
+    logger.warning(message, *args)
+    try:
+        import sentry_sdk
+        with sentry_sdk.new_scope() as scope:
+            # Clé de recherche stable (`has:oto.registre_tenants`) ; le TEXTE porte
+            # le slug et l'émetteur, donc une issue par conflit, pas un fourre-tout.
+            scope.set_tag("oto.registre_tenants", "refus")
+            sentry_sdk.capture_message(message % args if args else message,
+                                       level="error")
+    # noqa: SILENT — un boot ne casse pas parce que le suivi d'erreurs est indisponible
+    except Exception:
+        pass
+
+
 @dataclass(frozen=True)
 class TenantIssuer:
     """Une entrée du registre : un émetteur, le tenant qu'il désigne, son JWKS.
@@ -145,8 +175,8 @@ def build(primary_issuer: str, drain_issuers: Iterable[str] = (),
     tenant `oto` : le drain est un second émetteur du même tenant, pas un tenant.
     `tenants` vient de la base (lignes `slug`/`issuer`/`jwks_uri`).
 
-    Trois refus, tous loggés — chacun ferait qualifier un sub sous le mauvais
-    tenant, c'est-à-dire pointer la mauvaise serrure du coffre :
+    Trois refus, tous loggés ET alertés (`_refus`) — chacun ferait qualifier un
+    sub sous le mauvais tenant, c'est-à-dire pointer la mauvaise serrure du coffre :
 
     - une ligne qui réclame l'émetteur primaire (ou un drain) : **l'env gagne
       toujours**, sinon une écriture en base re-tenanterait les comptes existants ;
@@ -186,13 +216,13 @@ def build(primary_issuer: str, drain_issuers: Iterable[str] = (),
         if not iss:
             continue
         if not _SLUG_RE.match(slug) or slug == PRIMARY_SLUG:
-            logger.warning(
+            _refus(
                 "registre d'émetteurs : slug %r refusé (invalide, ou réservé au "
                 "tenant de la plateforme dont l'émetteur vient de l'env) — %s ignoré",
                 slug, iss)
             continue
         if iss in entries:
-            logger.warning(
+            _refus(
                 "registre d'émetteurs : %s réclamé par le tenant %r alors qu'il est "
                 "déjà tenu par %r — ligne ignorée", iss, slug, entries[iss].slug)
             continue
@@ -268,7 +298,7 @@ class IssuerRegistry:
             for host in entry.hosts:
                 held = self._by_host.get(host)
                 if held is not None and held.slug != entry.slug:
-                    logger.warning(
+                    _refus(
                         "registre d'émetteurs : le host %r est réclamé par le tenant "
                         "%r alors qu'il est déjà tenu par %r — réclamation ignorée",
                         host, entry.slug, held.slug)
@@ -414,6 +444,10 @@ def load_tenants() -> list:
         from . import db
         return list(db.list_tenant_issuers())
     except Exception:
+        # Pas d'alerte ici, contrairement aux refus de `build` : une base illisible
+        # ne reste pas silencieuse longtemps — tout ce qui la touche ensuite lève, et
+        # le suivi d'erreurs le voit. Ce qui n'avait AUCUN destinataire, c'est le refus
+        # d'une LIGNE au milieu d'un boot par ailleurs sain.
         logger.warning("registre d'émetteurs : lecture des tenants impossible — "
                        "seul l'émetteur de l'env est accepté", exc_info=True)
         return []
