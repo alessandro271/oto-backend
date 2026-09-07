@@ -52,8 +52,25 @@ class Plafond(NamedTuple):
 def plafond_de(ns_id: int, max_claims: Optional[int] = None) -> Optional[Plafond]:
     """La politique d'abandon d'un tableau, ou None = garde inactive.
 
-    `max_claims` (paramètre du claim) l'emporte sur la déclaration du schéma sans
-    la modifier : un ordonnanceur peut serrer plus que le tableau pour une passe.
+    `max_claims` (paramètre du claim) ne peut qu'ASSOUPLIR la déclaration du schéma,
+    jamais la serrer — et il n'arme rien sur un tableau qui n'en déclare aucune.
+
+    ⚠️ **Il l'emportait, et c'était le défaut** (#132). Deux raisons, et la seconde
+    est la pire :
+
+    - le paramètre vaut pour l'APPEL, l'abandon vaut pour la LIGNE, définitivement.
+      Un ordonnanceur qui « serre pour sa passe » sort des lignes de la file pour
+      toujours — la passe finit, l'abandon reste ;
+    - sur un tableau SANS plafond déclaré, la garde est inactive. Un appelant qui
+      passait une valeur l'ARMAIT donc pour tout le tableau, sur des lignes que
+      personne n'avait décidé de plafonner.
+
+    Mesuré : le plafond a été posé 219 fois par le modèle, **219 fois à la valeur
+    1** — jamais autre chose. Ni le runner ni la flotte ne le fixaient : c'est le
+    schéma de l'outil qui l'offre, et tout paramètre offert au modèle sera réglé
+    par lui. Une réservation sans écriture aboutie sortait alors la ligne au
+    premier tour, en silence.
+
     L'état d'abandon, lui, reste une affaire de SCHÉMA — c'est un état du cycle de
     vie du tableau, pas un choix d'appelant."""
     with _connect() as conn:
@@ -63,12 +80,20 @@ def plafond_de(ns_id: int, max_claims: Optional[int] = None) -> Optional[Plafond
     if not ns:
         return None
     schema = ns.get("schema")
+    declare = max_claims_of(schema)
     if max_claims is None:
-        valeur = max_claims_of(schema)
+        valeur = declare
     elif isinstance(max_claims, bool) or not isinstance(max_claims, int) or max_claims < 1:
         raise ValueError(f"max_claims doit être un entier >= 1 (reçu {max_claims!r})")
+    elif declare is None:
+        # Le tableau ne plafonne pas : un appel ne l'y contraint pas. La valeur est
+        # reçue sans erreur — refuser ferait échouer la réservation elle-même, or
+        # l'appelant n'a rien fait d'illégitime — mais elle n'arme rien.
+        valeur = None
     else:
-        valeur = max_claims
+        # Le paramètre assouplit, jamais l'inverse : ce qui est en jeu n'est pas la
+        # sévérité d'une passe mais la sortie DÉFINITIVE d'une ligne de la file.
+        valeur = max(declare, max_claims)
     if valeur is None:
         return None
     etat = abandon_state_of(schema)

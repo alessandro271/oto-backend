@@ -370,27 +370,46 @@ def test_sans_declaration_la_garde_est_inactive(live):
     assert _brut(ns_id, rid)["abandon_reason"] is None
 
 
-def test_le_parametre_du_claim_surcharge_le_plafond_declare(plafonne):
-    """Le driver d'une flotte veut parfois serrer plus que le tableau : le
-    paramètre l'emporte sur la déclaration, sans la modifier."""
-    st, ns, ns_id = plafonne
+def test_le_parametre_du_claim_ne_descend_jamais_sous_le_plafond_declare(plafonne):
+    """#132 — le paramètre ASSOUPLIT, il ne serre jamais.
 
-    row = st.claim_next(ns, worker="agent-1", max_claims=1)
-    st.release_claim(ns, row["_id"], worker="agent-1")
+    Il vaut pour l'APPEL ; l'abandon vaut pour la LIGNE, définitivement. « Serrer
+    pour une passe » sortait donc des lignes de la file pour toujours : la passe
+    finit, l'abandon reste. Mesuré en production : le plafond a été posé 219 fois
+    par le modèle, 219 fois à la valeur 1 — jamais autre chose."""
+    st, ns, ns_id = plafonne          # le tableau déclare 3
 
+    rid = ""
+    for tour in (1, 2, 3):
+        row = st.claim_next(ns, worker="agent-1", max_claims=1)
+        # Sous l'ancien comportement, le deuxième tour ne servait déjà plus rien.
+        assert row is not None, f"la ligne devait encore être servie au tour {tour}"
+        rid = row["_id"]
+        assert _brut(ns_id, rid)["abandon_reason"] is None
+        st.release_claim(ns, rid, worker="agent-1")
+
+    # C'est la déclaration du tableau qui décide, et elle finit par mordre.
     assert st.claim_next(ns, worker="agent-1", max_claims=1) is None
-    assert _brut(ns_id, row["_id"])["abandon_reason"] == \
-        "abandonnée après 1 réservations sans écriture, plafond 1"
+    assert _brut(ns_id, rid)["abandon_reason"] == \
+        "abandonnée après 3 réservations sans écriture, plafond 3"
 
 
-def test_un_plafond_sans_etat_d_abandon_est_refuse_au_claim(live):
-    """Pas de repli muet : un plafond sans état où verser la ligne ne peut pas
-    s'appliquer, et le claim le DIT au lieu de laisser la garde inerte."""
-    st, ns, _ = _table(_schema())
+def test_le_parametre_n_arme_rien_sur_un_tableau_qui_ne_plafonne_pas(live):
+    """#132, l'autre moitié — et c'est la pire : sur un tableau SANS plafond
+    déclaré la garde est inactive, et un appelant qui passait une valeur l'ARMAIT
+    pour tout le tableau. Des lignes que personne n'avait décidé de plafonner
+    sortaient de la file au premier faux départ.
 
-    with pytest.raises(ValueError) as e:
-        st.claim_next(ns, worker="agent-1", max_claims=2)
-    assert "abandon_state" in str(e.value)
+    La valeur est reçue sans erreur — refuser ferait échouer la réservation, or
+    l'appelant n'a rien fait d'illégitime : c'est l'outil qui lui offre le
+    paramètre. Elle n'arme simplement rien."""
+    st, ns, ns_id = _table(_schema())
+
+    rid = _tourner_a_vide(st, ns, 5)
+
+    encore = st.claim_next(ns, worker="agent-1", max_claims=1)
+    assert encore is not None and encore["_id"] == rid
+    assert _brut(ns_id, rid)["abandon_reason"] is None
 
 
 # ══ la déclaration se valide à la pose ══════════════════════════════════════
