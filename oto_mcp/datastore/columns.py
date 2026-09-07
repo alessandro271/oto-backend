@@ -155,7 +155,16 @@ def _refuse_flat_writes(schema: Optional[dict], user_data: dict) -> None:
     défaut qu'on passe la journée à fermer — un accusé de réception pour un travail qui
     n'atteint rien.
 
-    Le refus dit où écrire : un message qui dit seulement « non » fait deviner."""
+    Le refus dit où écrire : un message qui dit seulement « non » fait deviner.
+
+    ⚠️ **Il disait `contacts[0].nom`, et cette destination est REFUSÉE deux gardes plus
+    loin** (oto#121) : une adresse indexée n'est pas une clé d'écriture,
+    `_refuse_dotted_names` la rejette. Suivre l'indication coûtait un aller-retour
+    pour retomber sur un second refus, sans rien d'écrit — *une destination invalide
+    est pire que pas de destination du tout*. Il n'existe AUCUNE écriture au grain de
+    l'élément aujourd'hui ; le refus le dit franchement et nomme le seul geste qui
+    marche : reposer la colonne-liste entière, couches réémises (oto#120). Le jour où
+    une écriture d'élément existera, c'est ici qu'elle se nommera — pas avant."""
     if not user_data:
         return
     for cle in user_data:
@@ -163,10 +172,21 @@ def _refuse_flat_writes(schema: Optional[dict], user_data: dict) -> None:
         if cible is None:
             continue
         colonne, rang, attr = cible
+        # `attr` porte parfois la couche (`nom.comment`) : la composition du suffixe
+        # est le contrat de `resolve_flat_name`. On conseille sur l'ATTRIBUT, sinon
+        # la phrase prescrirait `nom.comment.comment`.
+        champ, _couche = dsv2.split_layer(attr)
         raise RowValidationError([
             f"{cle}: nom servi en lecture pendant la migration, il ne s'écrit pas "
-            f"(il est CALCULÉ depuis `{colonne}`, jamais stocké) — écrire "
-            f"`{colonne}[{rang}].{attr}`"])
+            f"(il est CALCULÉ depuis `{colonne}`, jamais stocké). Écrire UN ÉLÉMENT "
+            f"seul n'est pas possible aujourd'hui : une adresse indexée est une "
+            f"adresse de lecture, pas une clé d'écriture — elle serait refusée à son "
+            f"tour. Le geste : relis la ligne, puis repose `{colonne}` ENTIÈRE — "
+            f'{{"{colonne}": [{{"{champ}": …}}, …]}} — en corrigeant l\'élément de '
+            f"rang {rang} (l'adressage compte à partir de 0). Réémets les couches "
+            f"telles qu'elles t'ont été servies (`{champ}.comment` à côté de "
+            f"`{champ}`, dans le même élément) : reposer la liste remplace les "
+            f"éléments EN BLOC, et ce qui n'est pas réémis tombe."])
 
 
 def _scan_mixed(value: Any, path: str, errors: list) -> None:

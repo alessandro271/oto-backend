@@ -109,17 +109,31 @@ def test_writing_an_old_name_is_refused_and_says_where_to_write():
     """Accepter l'écriture créerait une colonne libre du même nom : la lecture
     continuerait de rendre la valeur PROJETÉE, et ce qui vient d'être écrit serait
     invisible tout en ayant été accepté — un accusé de réception pour un travail qui
-    n'atteint rien."""
+    n'atteint rien.
+
+    ⚠️ **Ce test exigeait `contacts[0].nom` dans le message, et gravait ainsi le
+    défaut oto#121** : cette forme est refusée deux gardes plus loin
+    (`_refuse_dotted_names` — une adresse indexée est une adresse de LECTURE), donc
+    l'assertion garantissait que le refus envoie dans un mur. Un test qui vérifie
+    qu'un message est PRÉSENT ne vérifie jamais que ce qu'il dit est vrai ; c'est
+    l'enchaînement réel des deux appels qui le fait, dans
+    `test_refus_destination_valide_oto121.py`."""
     with pytest.raises(RowValidationError) as e:
         _refuse_flat_writes(_schema(), {"contact1_nom": "Dupont"})
     msg = str(e.value)
-    assert "contacts[0].nom" in msg, f"le refus doit dire où écrire : {msg}"
+    assert "repose `contacts` ENTIÈRE" in msg, f"le refus doit dire où écrire : {msg}"
+    assert "contacts[0]" not in msg, "une destination refusée n'est pas une destination"
 
 
 def test_writing_a_layer_of_an_old_name_is_refused_too():
+    """Le suffixe de couche COMPOSE (`contact2_email.origine` → l'attribut
+    `email.origine`) : le conseil doit porter sur l'attribut NU, sinon il prescrit
+    `email.origine.origine`."""
     with pytest.raises(RowValidationError) as e:
         _refuse_flat_writes(_schema(), {"contact2_email.origine": "hunter"})
-    assert "contacts[1].email.origine" in str(e.value)
+    msg = str(e.value)
+    assert "repose `contacts` ENTIÈRE" in msg and "rang 1" in msg
+    assert "email.origine.origine" not in msg and "contacts[1]" not in msg
 
 
 def test_ordinary_columns_are_untouched():
