@@ -37,6 +37,7 @@ ownership) — un tableau hors périmètre répond 404, comme partout dans le da
 """
 from __future__ import annotations
 
+from ...datastore.identite import Adresse
 from ...datastore import cles_inconnues
 
 from typing import Optional
@@ -52,7 +53,7 @@ from ..registry import CAPABILITIES
 
 
 class DropColumnInput(BaseModel):
-    namespace: str
+    namespace: Adresse
     key: str = Field(description=(
         "The column to erase. A key still DECLARED in the schema is refused — take it "
         "out with `data_set_schema` first. An ANNOTATION (`site_web.comment`) is not a "
@@ -65,7 +66,7 @@ class DropColumnInput(BaseModel):
 
 
 class DropColumnResult(BaseModel):
-    namespace: str
+    namespace: Adresse
     key: str
     # Lignes qui PORTAIENT la colonne — TOUJOURS >= 1 (#680). Le zéro n'est plus une
     # réponse : une purge qui ne touche rien est un refus, parce que le même `0`
@@ -97,7 +98,7 @@ def _drop_column(ctx: ResolvedCtx, inp: DropColumnInput) -> dict:
 
 
 class PatchSchemaInput(BaseModel):
-    namespace: str
+    namespace: Adresse
     # Fusion PAR CLÉ : chaque entrée complète le field de même `key` (les propriétés
     # fournies écrasent, les autres sont préservées) ou l'ajoute s'il est inconnu.
     # Ce que le préambule autorise se répète ICI depuis le 2026-09-01 (#627) : jusque
@@ -141,7 +142,7 @@ class PatchSchemaResult(BaseModel):
     # `by_alias`.
     model_config = ConfigDict(populate_by_name=True)
 
-    namespace: str
+    namespace: Adresse
     # Le schéma RÉSULTANT, tel qu'il est désormais en base.
     declared_schema: Optional[dict] = Field(default=None, alias="schema",
                                             serialization_alias="schema")

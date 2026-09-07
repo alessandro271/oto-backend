@@ -22,6 +22,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 from .. import access, db, ownership
 from ..datastore import claimable, identite, jetons
 from ..datastore import layers as dsl
+from ..datastore.identite import Adresse
 from ..datastore import schema as dsv2
 from ..datastore.core import (
     indice_de_liberation,
@@ -442,7 +443,7 @@ def register(mcp: FastMCP) -> None:
     # puis exige que le texte servi nomme ce défaut-là — jamais l'inverse. C'est lui qui
     # a refusé de virer au vert quand le défaut a changé, avant que ce texte ne bouge.
     @mcp.tool()
-    def data_create_namespace(namespace: str) -> dict:
+    def data_create_namespace(namespace: Adresse) -> dict:
         """Create a new datastore namespace (PG-backed, schema-free).
 
         The table is PRIVATE: it belongs to you, and no one else can read it — not
@@ -483,7 +484,7 @@ def register(mcp: FastMCP) -> None:
             ))
 
     @mcp.tool()
-    def data_delete_namespace(namespace: str) -> dict:
+    def data_delete_namespace(namespace: Adresse) -> dict:
         """Delete a namespace and all its rows (irreversible). Owner (or org/platform
         admin governing it) only."""
         sub = access.current_user_sub_or_raise()
@@ -501,7 +502,7 @@ def register(mcp: FastMCP) -> None:
         return {"ok": True, **identite.de_releve(store.dernier_tableau, namespace)}
 
     @mcp.tool()
-    def data_rename_namespace(namespace: str, new_name: str) -> dict:
+    def data_rename_namespace(namespace: Adresse, new_name: str) -> dict:
         """Rename a namespace. Only the name changes — the id, URL/deeplink and shares
         stay stable (grants are keyed by id). Governance right required (owner, or the
         org/platform admin governing it). The new name must be free for the same owner.
@@ -533,7 +534,7 @@ def register(mcp: FastMCP) -> None:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
 
     @mcp.tool()
-    def data_set_schema(namespace: str, schema: Optional[dict] = None,
+    def data_set_schema(namespace: Adresse, schema: Optional[dict] = None,
                         semantic_search: Optional[bool] = None) -> dict:
         """Declare (or clear with schema=null) a namespace's TYPED schema (ADR 0032 §6).
 
@@ -693,7 +694,7 @@ def register(mcp: FastMCP) -> None:
     # capacité, ADR 0042 §Convergence des surfaces.
 
     @mcp.tool()
-    def data_write(namespace: str, row: dict | None = None, id: str | None = None,
+    def data_write(namespace: Adresse, row: dict | None = None, id: str | None = None,
                    rows: list | None = None, key: str | None = None,
                    readonly_override: bool = False,
                    origine_override: bool = False) -> dict:
@@ -893,7 +894,7 @@ def register(mcp: FastMCP) -> None:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=_row_locked_message(e)))
 
     @mcp.tool()
-    def data_claim_next(namespace: str, worker: str, filter: Optional[dict] = None,
+    def data_claim_next(namespace: Adresse, worker: str, filter: Optional[dict] = None,
                         lease_s: int = 900, max_claims: Optional[int] = None,
                         layers: str = "flat",
                         filters: Optional[list] = None) -> dict:
@@ -982,7 +983,7 @@ def register(mcp: FastMCP) -> None:
                 **({} if row else {"hint": _hint_file_vide(perimetre, filter)})}
 
     @mcp.tool()
-    def data_release(namespace: str, id: str, worker: str) -> dict:
+    def data_release(namespace: Adresse, id: str, worker: str) -> dict:
         """Release a claimed row — the NORMAL end of processing one row, and the
         counterpart of data_claim_next. Guarded by `worker` (same label as at claim
         time), and addressed by the `_id` that data_claim_next returned.
@@ -1018,7 +1019,7 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def data_rows(
-        namespace: str, id: str | None = None,
+        namespace: Adresse, id: str | None = None,
         filter: Optional[dict] = None, limit: int = 100,
         cursor: str | None = None, fields: Optional[list[str]] = None,
         count_only: bool = False, q: str | None = None,
@@ -1214,7 +1215,7 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def data_aggregate(
-        namespace: str,
+        namespace: Adresse,
         metrics: Optional[list[dict]] = None,
         group_by: str | list[str] | None = None,
         filter: Optional[dict] = None,
@@ -1294,7 +1295,7 @@ def register(mcp: FastMCP) -> None:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=_inconnu(namespace, e)))
 
     @mcp.tool()
-    def data_delete_row(namespace: str, id: str) -> dict:
+    def data_delete_row(namespace: Adresse, id: str) -> dict:
         """Delete a row by `_id`. `namespace` accepts `slot:<name>` (active
         project)."""
         sub = access.current_user_sub_or_raise()
@@ -1318,7 +1319,7 @@ def register(mcp: FastMCP) -> None:
         return {"ok": True, "id": id}
 
     @mcp.tool()
-    def data_url(namespace: str) -> dict:
+    def data_url(namespace: Adresse) -> dict:
         """Return the dashboard URL of a namespace (for the user to open/edit in
         browser). `namespace` accepts `slot:<name>` (active project)."""
         sub = access.current_user_sub_or_raise()
@@ -1331,7 +1332,7 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def data_share(
-        namespace: str, email: str = "", permission: str = "read", remove: bool = False,
+        namespace: Adresse, email: str = "", permission: str = "read", remove: bool = False,
         recipient_sub: str = "",
     ) -> dict:
         """Share (or with `remove=True`, unshare) a namespace with another oto user.
@@ -1583,7 +1584,7 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool(app=True)
     def data_app(
-        namespace: str | None = None,
+        namespace: Optional[Adresse] = None,
         filter: Optional[dict] = None,
         row: str | None = None,
         limit: int = 100,

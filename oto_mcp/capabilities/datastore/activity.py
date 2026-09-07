@@ -23,6 +23,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from ... import db
+from ...datastore.identite import Adresse
 from ...datastore import journal as datastore_journal
 from ...datastore.core import NamespaceNotFound, RowNotFound, make_store
 from .._authz import SUB_ONLY
@@ -36,12 +37,12 @@ RETENTION_DAYS = 30
 
 
 class RowActivityInput(BaseModel):
-    namespace: str
+    namespace: Adresse
     row_id: str
 
 
 class NamespaceActivityInput(BaseModel):
-    namespace: str
+    namespace: Adresse
     limit: int = 50
 
 

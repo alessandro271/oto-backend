@@ -30,7 +30,9 @@ exactement là où l'agent adresse.
 """
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional
+from typing import Annotated, Any, Mapping, Optional
+
+from pydantic import BeforeValidator
 
 # Le nom de la clé, écrit une fois : les deux faces et les tests le citent d'ici.
 CLE = "ns_id"
@@ -72,3 +74,47 @@ def numero(releve: Optional[Mapping]) -> dict:
     plausible en collision avec une vraie colonne. `ns_id` s'ajoute, `namespace` non.
     """
     return {CLE: identite((releve or {}).get("ns_id"))[CLE]}
+
+
+# ── L'ADRESSE d'un tableau à l'ENTRÉE — texte OU nombre (07/09/2026) ─────────
+#
+# Le pendant obligatoire de `CLE` : on ne peut pas RENDRE un numéro, dire à l'agent
+# « c'est la forme à employer », et refuser ce numéro quand il le repasse.
+#
+# ⚠️ **C'est exactement ce qui s'est produit, et ça a coûté cher.** Mesuré par une
+# campagne le 07/09/2026 sur dix lignes, juste après la mise en production : le modèle
+# lit `ns_id: 609` dans la réponse — un NOMBRE en JSON —, le repasse tel quel à
+# `data_write`, et se fait refuser « Input should be a valid string ». **7 écritures
+# refusées sur 13 (54 %)**, 3 lignes travaillées puis jamais écrites, et le coût par
+# fiche qui passe de 7,1 à 11,0 tours (+55 %). `data_rows` et `data_get_schema`
+# l'acceptaient ; `data_write` non. Deux outils du même module, deux contrats — et
+# l'écart ne se voit qu'à l'exécution.
+#
+# La leçon générale, au-delà du correctif : **une valeur qu'on sert doit être reprise
+# telle quelle par la porte d'entrée qui la réclame.** Un aller-retour dont les deux
+# moitiés ne s'accordent pas sur le TYPE est une promesse creuse, comme une clé
+# annoncée et jamais lue — sauf que celle-ci refuse au lieu de se taire.
+#
+# La résolution, elle, savait déjà faire : `db.resolve_datastore_ns` accepte le nom ET
+# le numéro (« id OU nom », même prédicat de visibilité, aucun IDOR). Il ne manquait
+# que la coercition à l'entrée. On normalise vers le texte pour ne rien changer en
+# aval — un seul chemin de résolution, pas deux.
+
+
+def _texte_de_l_adresse(v: Any) -> Any:
+    """Un entier est l'adresse par NUMÉRO : on la rend au format que tout le reste
+    manipule. Le reste passe intact, y compris ce qui est fautif — refuser proprement
+    est le travail du validateur, pas celui d'une coercition silencieuse.
+
+    ⚠️ `bool` est un `int` en Python : `data_write(namespace=True)` deviendrait le
+    tableau « True ». On le laisse donc au validateur, qui le refusera."""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, int):
+        return str(v)
+    return v
+
+
+#: L'adresse d'un tableau telle qu'une SURFACE l'accepte : son nom, ou son numéro —
+#: en texte comme en nombre. À employer partout où une entrée porte `namespace`.
+Adresse = Annotated[str, BeforeValidator(_texte_de_l_adresse)]

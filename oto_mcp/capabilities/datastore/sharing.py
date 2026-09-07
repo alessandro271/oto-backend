@@ -21,6 +21,8 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+from ...datastore.identite import Adresse
+
 from ... import db, ownership
 from .._authz import SUB_ONLY
 from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
@@ -39,7 +41,7 @@ _SUB = ("Identifiant du compte destinataire, quand une adresse en désigne "
 
 
 class ShareInput(BaseModel):
-    namespace: str
+    namespace: Adresse
     email: str = ""
     sub: str = Field(default="", description=_SUB)
     # ADR 0068 : partager sans préciser donnait l'ÉCRITURE. « Partager », dans la tête
@@ -48,13 +50,13 @@ class ShareInput(BaseModel):
 
 
 class UnshareInput(BaseModel):
-    namespace: str
+    namespace: Adresse
     email: str = ""
     sub: str = Field(default="", description=_SUB)
 
 
 class NamespaceRefInput(BaseModel):
-    namespace: str
+    namespace: Adresse
 
 
 class Share(BaseModel):
@@ -74,14 +76,14 @@ class ShareList(BaseModel):
 
 class Shared(BaseModel):
     ok: bool
-    namespace: str
+    namespace: Adresse
     shared_with: str
     permission: str
 
 
 class Unshared(BaseModel):
     ok: bool
-    namespace: str
+    namespace: Adresse
     removed: str
 
 

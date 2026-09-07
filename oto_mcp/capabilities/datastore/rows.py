@@ -30,6 +30,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ... import access
 from ...auth import token_scopes
+from ...datastore.identite import Adresse
 from ...datastore import journal as datastore_journal
 from ...datastore import identite, jetons
 from ...datastore import layers as dsl
@@ -67,7 +68,7 @@ def _tolerant_int(v):
 
 
 class ListRowsInput(BaseModel):
-    namespace: str
+    namespace: Adresse
     # `None` = le défaut du serveur (0 / 50) ; borné à [1, 500] pour `limit`.
     offset: Optional[int] = None
     limit: Optional[int] = None
@@ -88,7 +89,7 @@ class ListRowsInput(BaseModel):
 
 
 class AggregateInput(BaseModel):
-    namespace: str
+    namespace: Adresse
     group_by: Optional[str] = None
     # JSON encodé : `[{op: count|sum|avg|min|max, field?}]`.
     metrics: Optional[str] = None
@@ -101,11 +102,11 @@ class AggregateInput(BaseModel):
 
 
 class NamespaceRefInput(BaseModel):
-    namespace: str
+    namespace: Adresse
 
 
 class RowRefInput(BaseModel):
-    namespace: str
+    namespace: Adresse
     row_id: str
 
 
@@ -134,7 +135,7 @@ _ORIGINE = Field(default=False,
 
 
 class AppendRowInput(BaseModel):
-    namespace: str
+    namespace: Adresse
     # Le corps ENTIER (cf. `RestBinding.body_field`) : les colonnes du tableau.
     row: dict = Field(default_factory=dict)
     readonly_override: bool = _FORCAGE
@@ -142,7 +143,7 @@ class AppendRowInput(BaseModel):
 
 
 class UpdateRowInput(BaseModel):
-    namespace: str
+    namespace: Adresse
     row_id: str
     # Le corps ENTIER : les colonnes à écrire (patch partiel, jamais un remplacement).
     patch: dict = Field(default_factory=dict)
@@ -151,7 +152,7 @@ class UpdateRowInput(BaseModel):
 
 
 class ReleaseInput(BaseModel):
-    namespace: str
+    namespace: Adresse
     row_id: str
     # Vide = libération FORCÉE (supervision humaine) ; renseigné = libération GARDÉE.
     worker: str = ""

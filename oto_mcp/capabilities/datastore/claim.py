@@ -31,6 +31,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+from ...datastore.identite import Adresse
 from ...datastore import claimable, identite
 from ...datastore import journal as datastore_journal
 from ...datastore.core import (
@@ -48,7 +49,7 @@ from ._forme import _LAYERS, _layers
 
 
 class ClaimNextInput(BaseModel):
-    namespace: str
+    namespace: Adresse
     # oto#63 : la RÉSERVATION est le seul chemin qui alimente une boucle d'écriture,
     # et c'était le seul à ne pas porter la forme. Réutilise le champ des lectures —
     # même nom, même défaut, même refus nommé sur une valeur inconnue.
@@ -67,7 +68,7 @@ class ClaimNextInput(BaseModel):
 
 
 class ClaimRowInput(BaseModel):
-    namespace: str
+    namespace: Adresse
     row_id: str
     layers: str = _LAYERS
     worker: str = ""
@@ -78,7 +79,7 @@ class ClaimResult(BaseModel):
     # ⚠️ Le NOM CANONIQUE du tableau, plus l'écho de l'adresse reçue : réserver dans
     # `600` répondait `namespace: "600"`, donc la clé répétait la question au lieu de
     # dire quel tableau avait été touché (cf. `datastore/identite.py`).
-    namespace: str
+    namespace: Adresse
     # Le NUMÉRO du tableau — la forme d'adresse à employer. Il n'était rendu nulle
     # part sur ce chemin, alors que c'est ICI que la boucle d'un agent commence :
     # sans lui, il ne pouvait adresser que par nom. `null` seulement si le tableau
