@@ -120,3 +120,37 @@ def test_arreter_campagnes_epuisees_sexecute(org_neuve):
 
     assert isinstance(arretees, list)
     assert f["id"] not in arretees, "aucun échec : rien à arrêter"
+
+
+def test_arret_demande_devient_effectif_quand_plus_rien_ne_tourne(org_neuve):
+    """`stopping` → `stopped` : l'accusé que plus personne ne posait.
+
+    C'était le geste de l'ordonnanceur ; le renversement l'a supprimé sans le
+    remplacer, et une campagne arrêtée restait `stopping` indéfiniment (mesuré
+    le 07/09/2026). Un arrêt demandé qui n'est jamais constaté est un état qui
+    ment."""
+    from oto_mcp import db
+    f = _flotte(org_neuve["org"], org_neuve["sub"])
+    db.armer(f["id"], org_neuve["org"])
+    db.demander_arret(f["id"], org_neuve["org"], "essai")
+
+    accuses = db.accuser_arrets_effectifs(org_neuve["org"])
+
+    assert f["id"] in accuses
+    assert db.get_fleet(f["id"], org_neuve["org"])["status"] == "stopped"
+
+
+def test_arret_demande_ATTEND_les_travaux_encore_en_vol(org_neuve):
+    """L'autre bord, et c'est lui qui garde le sens du mot « effectif » : tant
+    qu'un travail reste à faire ou en cours, l'arrêt n'est pas un fait. Sans ce
+    test, on aurait remplacé un état qui ment par un autre — `stopped` posé sur
+    une campagne qui travaille encore."""
+    from oto_mcp import db
+    f = _flotte(org_neuve["org"], org_neuve["sub"])
+    db.armer(f["id"], org_neuve["org"])
+    db.enqueue_job(org_neuve["org"], "start", fleet_id=f["id"], sub=org_neuve["sub"])
+    db.demander_arret(f["id"], org_neuve["org"], "essai")
+
+    assert db.accuser_arrets_effectifs(org_neuve["org"]) == []
+    assert db.get_fleet(f["id"], org_neuve["org"])["status"] == "stopping", (
+        "un travail encore en file interdit de déclarer l'arrêt effectif")

@@ -159,6 +159,38 @@ def campagne_a_servir(org_id: int) -> Optional[dict]:
         ).fetchone()
 
 
+def accuser_arrets_effectifs(org_id: int) -> list[int]:
+    """`stopping` → `stopped` pour les campagnes dont plus AUCUN travail ne tourne.
+
+    ⚠️ Ce geste appartenait à l'ordonnanceur (`op=ack_stop`), et l'écart entre
+    « arrêt demandé » et « arrêt effectif » était le seul diagnostic d'un
+    ordonnanceur mort. Le renversement a supprimé l'ordonnanceur : **plus
+    personne n'accuse**, et l'écart ne diagnostique plus rien — il ne se referme
+    jamais. Mesuré le 07/09/2026 : une campagne arrêtée restait `stopping`
+    indéfiniment, c'est-à-dire qu'un arrêt demandé n'était jamais un fait.
+
+    Ce qu'on garde de l'ancienne règle, et qui est l'essentiel : `stopped` reste
+    un FAIT CONSTATÉ, jamais une intention recopiée. Le fait, ici, est
+    vérifiable sans rien juger du travail — aucun travail `pending` ni `claimed`
+    ne subsiste, donc le passage ne tourne plus. Un arrêt demandé pendant qu'un
+    agent travaille encore attend sa fin, exactement comme avant.
+
+    Rend les ids accusés, pour que l'appelant puisse le journaliser."""
+    with _connect() as conn:
+        lignes = conn.execute(
+            """
+            UPDATE runner_fleets f
+               SET status = 'stopped', stopped_at = NOW()
+             WHERE f.org_id = %s AND f.status = 'stopping'
+               AND NOT EXISTS (SELECT 1 FROM runner_jobs j
+                                WHERE j.fleet_id = f.id
+                                  AND j.status IN ('pending', 'claimed'))
+            RETURNING f.id
+            """,
+            (org_id,)).fetchall()
+    return [int(r["id"]) for r in lignes]
+
+
 def arreter_campagnes_epuisees(org_id: int) -> list[int]:
     """Arrête les campagnes dont les N derniers travaux ont TOUS échoué.
 
@@ -343,6 +375,12 @@ def accuser_arret(fleet_id: int, org_id: int, raison: Optional[str] = None) -> b
     ⚠️ C'est LUI qui pose ce statut, jamais l'opérateur — sans quoi l'écart entre
     « demandé » et « effectif » disparaîtrait, et avec lui le seul diagnostic d'un
     ordonnanceur mort : *un arrêt demandé qui ne devient jamais un arrêt effectif*.
+
+    ⚠️ Ce raisonnement valait TANT QU'UN ORDONNANCEUR EXISTAIT. Depuis le
+    renversement, plus personne n'appelle ce verbe et l'écart ne diagnostique
+    plus rien : il ne se referme jamais. `accuser_arrets_effectifs` le referme
+    au sondage, sur un fait constaté — plus aucun travail en vol — et non sur
+    une intention. Ce verbe-ci reste servi pour un ordonnanceur externe.
     """
     with _connect() as conn:
         row = conn.execute(

@@ -507,6 +507,15 @@ def _produire_pour_une_campagne(org_id: int, bail_s: int) -> Optional[str]:
         for fid in db.arreter_campagnes_epuisees(org_id):
             logger.warning("campagne %s arrêtée : ses derniers travaux ont tous "
                            "échoué (max_consecutive_failures)", fid)
+        # ⚠️ Et AVANT de servir aussi : accuser les arrêts devenus effectifs.
+        # `op=stop` met en `stopping` ; c'était l'ordonnanceur qui accusait, et
+        # il n'existe plus. Sans ce geste, un arrêt demandé n'est jamais un
+        # arrêt constaté et la campagne reste `stopping` pour toujours — un
+        # état qui ment, exactement ce que la ligne au-dessus évite pour les
+        # campagnes épuisées.
+        for fid in db.accuser_arrets_effectifs(org_id):
+            logger.info("campagne %s arrêtée pour de bon : plus aucun travail "
+                        "en attente ni en cours", fid)
         f = db.campagne_a_servir(org_id)
         if not f or not f.get("sub"):
             return None
