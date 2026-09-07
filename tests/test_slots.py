@@ -204,6 +204,8 @@ def _wire_link(monkeypatch, add=None):
         if add:
             add(slot)
         rec["slot"] = slot
+        # oto#119 — la vraie fonction rend l'effet du geste ; la doublure aussi.
+        return {"status": "created", "changed": []}
 
     monkeypatch.setattr(P.db, "add_project_link", _add)
     return P, rec

@@ -962,11 +962,12 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
                 slot = slots_mod.normalize_name(inp.slot)
             except ValueError as e:
                 _require(False, "invalid_slot", str(e), 400)
+        effet = None
         if inp.op == "link":
             try:
-                db.add_project_link(int(inp.project_id), inp.target_type, target_ref,
-                                    inp.label, role=inp.role, config=config,
-                                    identity_ref=identity_ref, slot=slot)
+                effet = db.add_project_link(int(inp.project_id), inp.target_type, target_ref,
+                                            inp.label, role=inp.role, config=config,
+                                            identity_ref=identity_ref, slot=slot)
             except ValueError as e:
                 code = "slot_taken" if str(e).startswith("slot_taken") else "bad_link"
                 _require(False, code, str(e), 409 if code == "slot_taken" else 400)
@@ -990,6 +991,17 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
                "links": db.list_project_links(int(inp.project_id))}
         if inp.op == "unlink":
             out["removed"] = removed
+        else:
+            # oto#119 — le link disait qu'il avait RÉUSSI, jamais ce qu'il avait FAIT :
+            # créer le lien et le reposer à l'identique rendaient la MÊME réponse (ok +
+            # la liste complète des liens). Un appelant automatique — « s'assurer que la
+            # ressource est rattachée, la rattacher sinon » — ne pouvait donc pas savoir
+            # s'il avait agi, et rapportait avoir corrigé ce qui n'avait rien à corriger.
+            # Le geste reste idempotent et rejouable ; c'est son compte rendu qui cesse
+            # d'être indistinct. `changed_fields` n'apparaît QUE sur une vraie réécriture.
+            out["link_status"] = effet["status"]
+            if effet["changed"]:
+                out["changed_fields"] = effet["changed"]
         # 0035 × 0046 — schéma CIBLE au binding d'un slot tableau : si une procédure
         # liée déclare ce slot avec un `schema`, un namespace vierge est PROVISIONNÉ
         # (le tableau naît avec son contrat — validation/lifecycle/clé) ; un schéma
@@ -1367,7 +1379,13 @@ CAPABILITIES += [
             "Slot names are a PROJECT-wide vocabulary (unique per project → 409 slot_taken; "
             "two linked procedures sharing `sortie` share the binding). "
             "Re-linking without role/config/slot preserves the "
-            "existing ones. unlink returns `removed` = how many bindings it actually took "
+            "existing ones. link says WHAT IT DID in `link_status`: `created` (the binding "
+            "did not exist), `unchanged` (it was already there and this call rewrote "
+            "nothing) or `updated` (it existed and this call changed it — `changed_fields` "
+            "then lists which of label/role/slot/config moved). Re-running a link is safe "
+            "and idempotent, so a caller told to ENSURE a resource is attached must read "
+            "`link_status` — not `ok` — to know whether it actually acted. "
+            "unlink returns `removed` = how many bindings it actually took "
             "out, and REFUSES (`link_not_found`) when it matched none — it never answers ok "
             "on a link it did not find. Give the `target_ref` as op=get renders it: an older "
             "link may still carry the NAME of its tableau (or the SLUG of its procedure) "

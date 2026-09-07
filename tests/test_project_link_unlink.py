@@ -69,7 +69,10 @@ def surface(monkeypatch):
                         lambda pid: dict(ROW) if pid == 59 else None)
     monkeypatch.setattr(P.db, "list_project_links", lambda pid: [dict(l) for l in etat["links"]])
     monkeypatch.setattr(P.db, "remove_project_link", _remove)
-    monkeypatch.setattr(P.db, "add_project_link", lambda *a, **k: None)
+    # oto#119 — la vraie fonction rend ce qu'elle a FAIT ; une doublure qui rendrait
+    # None ferait passer un handler cassé pour vert.
+    monkeypatch.setattr(P.db, "add_project_link",
+                        lambda *a, **k: {"status": "created", "changed": []})
     monkeypatch.setattr(P.db, "log_project_activity",
                         lambda pid, sub, action, detail=None: etat["activite"].append(action))
     monkeypatch.setattr(P.db, "get_datastore_namespace",

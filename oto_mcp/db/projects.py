@@ -342,10 +342,15 @@ def set_project_mcp_publication(project_id: int, *, slug: Optional[str],
         )
 
 
+# Les champs qu'un re-lien peut RÉÉCRIRE — donc les seuls dont la mise à jour est
+# observable, et le vocabulaire exact de `changed` (oto#119).
+_LINK_MUTABLES = ("label", "role", "slot", "config")
+
+
 def add_project_link(project_id: int, target_type: str, target_ref: str,
                      label: Optional[str] = None, role: Optional[str] = None,
                      config: Optional[dict] = None, identity_ref: Optional[str] = None,
-                     slot: Optional[str] = None) -> None:
+                     slot: Optional[str] = None) -> dict:
     """Lie une entité (tableau/procédure/connecteur/base) au projet. `identity_ref`
     (ADR 0032 §4 amendé, #57) = un BINDING distinct par identité — NULL = binding par
     défaut (un connecteur peut être lié N fois, une identité par binding). `slot`
@@ -353,19 +358,49 @@ def add_project_link(project_id: int, target_type: str, target_ref: str,
     (project_id, slot) ; un nom déjà bindé par un AUTRE lien lève
     `ValueError('slot_taken: …')` (traduite en 409 actionnable par la capacité).
     Idempotent par binding : re-lier met à jour le label ; `role`/`config`/`slot`
-    (surcharge préfaite) ne sont écrasés que s'ils sont fournis."""
+    (surcharge préfaite) ne sont écrasés que s'ils sont fournis.
+
+    **Renvoie CE QUI A EU LIEU** (oto#119) : `{"status": "created" | "updated" |
+    "unchanged", "changed": [champs]}`. L'idempotence du geste n'était pas en cause,
+    son COMPTE RENDU l'était : cette fonction ne rendait RIEN, donc la réponse servie
+    était identique que le lien vienne de naître ou qu'il existât depuis des heures.
+    Un appelant automatique chargé de « s'assurer qu'une ressource est rattachée, et
+    de la rattacher sinon » ne pouvait pas savoir s'il avait agi, et rapportait avoir
+    corrigé ce qui n'avait rien à corriger.
+
+    **D'où vient la distinction, et pourquoi elle est fiable** : la CTE `avant` et
+    l'`INSERT` vivent dans le MÊME ordre SQL, donc sous le MÊME snapshot — une
+    sous-requête `WITH` ne voit jamais l'effet de sa voisine modifiante (documenté).
+    `avant` rend donc l'état d'avant l'écriture, y compris son absence (`existait`
+    NULL = la ligne n'était pas là), et le `RETURNING` celui d'après : `changed` est
+    un delta de VALEURS, jamais une intention (un re-lien qui repose le même label ne
+    le déclare pas changé). `status` décrit l'effet de CET appel — d'où « unchanged »
+    et non « exists » : deux appels identiques rendent `created` puis `unchanged`."""
     cfg = json.dumps(config) if config is not None else None
     with _connect() as conn:
         try:
-            conn.execute(
-                "INSERT INTO project_links (project_id, target_type, target_ref, identity_ref, label, role, slot, config) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, COALESCE(%s::jsonb, '{}'::jsonb)) "
-                "ON CONFLICT (project_id, target_type, target_ref, identity_ref) DO UPDATE SET "
-                "label = EXCLUDED.label, role = COALESCE(EXCLUDED.role, project_links.role), "
-                "slot = COALESCE(EXCLUDED.slot, project_links.slot), "
-                "config = COALESCE(%s::jsonb, project_links.config)",
-                (project_id, target_type, target_ref, identity_ref, label, role, slot, cfg, cfg),
-            )
+            row = conn.execute(
+                "WITH avant AS ("
+                "  SELECT TRUE AS existait, label, role, slot, config FROM project_links "
+                "   WHERE project_id = %s AND target_type = %s AND target_ref = %s "
+                "     AND identity_ref IS NOT DISTINCT FROM %s"
+                "), pose AS ("
+                "  INSERT INTO project_links (project_id, target_type, target_ref, identity_ref, label, role, slot, config) "
+                "  VALUES (%s, %s, %s, %s, %s, %s, %s, COALESCE(%s::jsonb, '{}'::jsonb)) "
+                "  ON CONFLICT (project_id, target_type, target_ref, identity_ref) DO UPDATE SET "
+                "  label = EXCLUDED.label, role = COALESCE(EXCLUDED.role, project_links.role), "
+                "  slot = COALESCE(EXCLUDED.slot, project_links.slot), "
+                "  config = COALESCE(%s::jsonb, project_links.config) "
+                "  RETURNING label, role, slot, config"
+                ") "
+                "SELECT avant.existait, pose.label, pose.role, pose.slot, pose.config, "
+                "       avant.label AS avant_label, avant.role AS avant_role, "
+                "       avant.slot AS avant_slot, avant.config AS avant_config "
+                "  FROM pose LEFT JOIN avant ON TRUE",
+                (project_id, target_type, target_ref, identity_ref,
+                 project_id, target_type, target_ref, identity_ref,
+                 label, role, slot, cfg, cfg),
+            ).fetchone()
         except psycopg.errors.UniqueViolation as e:
             # Seul l'index partiel (project_id, slot) peut violer ICI (la clé de binding
             # est absorbée par ON CONFLICT) → message métier, jamais un 500.
@@ -373,6 +408,10 @@ def add_project_link(project_id: int, target_type: str, target_ref: str,
                 f"slot_taken: le slot `{slot}` est déjà bindé par un autre lien de ce "
                 "projet — délie-le d'abord, ou choisis un autre nom.") from e
         conn.execute("UPDATE projects SET updated_at = NOW() WHERE id = %s", (project_id,))
+    if not row["existait"]:
+        return {"status": "created", "changed": []}
+    changed = [c for c in _LINK_MUTABLES if row[c] != row[f"avant_{c}"]]
+    return {"status": "updated" if changed else "unchanged", "changed": changed}
 
 
 def update_project_link_ref(project_id: int, target_type: str,

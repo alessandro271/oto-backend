@@ -46,8 +46,13 @@ def seams(monkeypatch):
     monkeypatch.setattr(P.db, "archive_project", lambda pid: rec["archive"].append(pid))
     rec["link"] = []
     rec["unlink"] = []
-    monkeypatch.setattr(P.db, "add_project_link",
-                        lambda pid, tt, tr, label=None, role=None, config=None, identity_ref=None, slot=None: rec["link"].append((pid, tt, tr, label, role, config, identity_ref)))
+    def _add_link(pid, tt, tr, label=None, role=None, config=None, identity_ref=None,
+                  slot=None):
+        rec["link"].append((pid, tt, tr, label, role, config, identity_ref))
+        # oto#119 — la vraie fonction rend l'effet du geste ; la doublure aussi.
+        return {"status": "created", "changed": []}
+
+    monkeypatch.setattr(P.db, "add_project_link", _add_link)
     monkeypatch.setattr(P.db, "remove_project_link",
                         lambda pid, tt, tr, identity_ref=None: rec["unlink"].append((pid, tt, tr, identity_ref)) or 1)
     monkeypatch.setattr(P.db, "list_project_links",
