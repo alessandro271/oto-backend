@@ -287,3 +287,34 @@ def test_une_campagne_illisible_ne_casse_PAS_le_sondage(monkeypatch, espion):
         raise RuntimeError("colonne manquante")
     monkeypatch.setattr(RJ.db, "campagne_a_servir", _explose)
     assert _appel(_ctx(), op="claim") == {"job": None}
+
+
+def test_une_campagne_cassee_ne_journalise_QU_UNE_fois(monkeypatch, espion, caplog):
+    """Le sondage tourne en boucle sur chaque worker. Journaliser à chaque tour
+    noierait le journal sous des milliers de lignes identiques — et un journal
+    noyé ne se lit pas, ce qui revient à ne rien dire. On veut le contraire :
+    une ligne qui se voit."""
+    RJ._CAMPAGNE_MUETTE.clear()
+    def _explose(org_id):
+        raise RuntimeError("colonne manquante")
+    monkeypatch.setattr(RJ.db, "campagne_a_servir", _explose)
+    with caplog.at_level("WARNING"):
+        for _ in range(5):
+            _appel(_ctx(), op="claim")
+    lignes = [r for r in caplog.records if "production de travail impossible" in r.message]
+    assert len(lignes) == 1, f"5 sondages ont produit {len(lignes)} lignes de journal"
+
+
+def test_une_cause_DIFFERENTE_se_dit(monkeypatch, espion, caplog):
+    """Ne pas répéter n'est pas se taire : une panne qui change de nature est une
+    information neuve, et l'étouffer ferait manquer la seconde."""
+    RJ._CAMPAGNE_MUETTE.clear()
+    causes = iter(["colonne manquante", "colonne manquante", "table absente"])
+    def _explose(org_id):
+        raise RuntimeError(next(causes))
+    monkeypatch.setattr(RJ.db, "campagne_a_servir", _explose)
+    with caplog.at_level("WARNING"):
+        for _ in range(3):
+            _appel(_ctx(), op="claim")
+    lignes = [r for r in caplog.records if "production de travail impossible" in r.message]
+    assert len(lignes) == 2, "deux causes distinctes, deux lignes"

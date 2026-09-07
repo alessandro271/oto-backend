@@ -89,6 +89,12 @@ def list_fleets(org_id: int, statut: Optional[str] = None) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+# Espace de verrous consultatifs propre aux campagnes : `pg_try_advisory_xact_lock`
+# prend deux entiers, et le premier isole la famille — sans lui, l'id 12 d'une
+# campagne collisionnerait avec l'id 12 de n'importe quel autre verrou du produit.
+_VERROU_CAMPAGNE = 0x0704_0C41   # « oto campagne »
+
+
 def campagne_a_servir(org_id: int) -> Optional[dict]:
     """La campagne de l'org pour laquelle il faut produire un travail — ou None.
 
@@ -119,11 +125,20 @@ def campagne_a_servir(org_id: int) -> Optional[dict]:
     cher que de le demander à chaque battement de chaque worker.
     """
     with _connect() as conn:
+        # ⚠️ VERROU par campagne, le temps de la transaction. Sans lui, deux
+        # workers qui sondent au même instant lisent tous deux « aucun travail
+        # en attente » et en fabriquent chacun un : la régulation passive, qui
+        # repose entièrement sur cette lecture, serait contournée par la course
+        # qu'elle est censée borner. `try` et non bloquant — un worker qui
+        # arrive pendant qu'un autre produit n'attend pas, il repart les mains
+        # vides et re-sondera : c'est un sondage, pas une file d'attente.
+        conn.execute("SET LOCAL lock_timeout = '200ms'")
         return conn.execute(
             f"""
             SELECT {_COLS}
               FROM runner_fleets f
              WHERE f.org_id = %s
+               AND pg_try_advisory_xact_lock(%s, f.id)
                AND f.status IN ('armed', 'running')
                AND NOT EXISTS (SELECT 1 FROM runner_jobs j
                                 WHERE j.fleet_id = f.id AND j.status = 'pending')
@@ -133,7 +148,7 @@ def campagne_a_servir(org_id: int) -> Optional[dict]:
              ORDER BY f.armed_at NULLS LAST, f.id
              LIMIT 1
             """,
-            (org_id,),
+            (org_id, _VERROU_CAMPAGNE),
         ).fetchone()
 
 

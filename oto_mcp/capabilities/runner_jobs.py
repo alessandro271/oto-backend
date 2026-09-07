@@ -20,6 +20,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import time
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -427,6 +428,12 @@ _SANS_PORTEUR = (
     "prêter : reprogramme-le, il partira au nom de qui le demande.")
 
 
+#: Dernière cause signalée par org, pour ne pas répéter le même échec à chaque
+#: sondage — `{org_id: (cause, instant)}`. En mémoire de process : au pire un
+#: redémarrage rejournalise une fois, ce qui est le bon défaut.
+_CAMPAGNE_MUETTE: dict[int, tuple[str, float]] = {}
+
+
 def _produire_pour_une_campagne(org_id: int, bail_s: int) -> None:
     """Fabrique UN travail pour une campagne en cours de l'org, s'il y en a une.
 
@@ -461,9 +468,20 @@ def _produire_pour_une_campagne(org_id: int, bail_s: int) -> None:
                      "label": f"flotte {f.get('namespace')} — {f['procedure']}"},
             fleet_id=f["id"], sub=f["sub"])
         db.marquer_demarree(f["id"])
-    except Exception:
-        logger.warning("campagne : production de travail impossible pour l'org %s",
-                       org_id, exc_info=True)
+    except Exception as e:
+        # ⚠️ UNE fois par cause, pas à chaque sondage. Ce chemin tourne en boucle
+        # sur chaque worker : journaliser sans retenue noierait le journal sous
+        # des milliers de lignes identiques, et un journal noyé ne se lit pas —
+        # c'est l'autre façon de ne rien dire. On répète quand la cause change,
+        # ou après un quart d'heure, pour qu'une panne qui dure reste visible
+        # sans devenir du bruit.
+        cause = f"{type(e).__name__}: {e}"
+        vu, quand = _CAMPAGNE_MUETTE.get(org_id, (None, 0.0))
+        if cause != vu or time.monotonic() - quand > 900:
+            _CAMPAGNE_MUETTE[org_id] = (cause, time.monotonic())
+            logger.warning("campagne : production de travail impossible pour l'org %s "
+                           "— les passages de cette org n'avancent plus", org_id,
+                           exc_info=True)
 
 
 def _delegue(job: dict, bail_s: int, claimant: str) -> dict:
