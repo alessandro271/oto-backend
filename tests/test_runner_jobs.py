@@ -227,3 +227,63 @@ def test_le_resultat_fait_l_aller_retour_en_base(live):
     relu = d.get_job(job["id"], 226)
     assert relu["result"] == {"usage_tokens": 12345, "stopped": "end_turn"}
     assert relu["status"] == "done"
+
+
+# ── La campagne produit son travail au SONDAGE, sans ordonnanceur ────────────
+# Un worker ne connaît pas la notion de campagne : il demande du travail. Quand
+# la file est vide, c'est ICI qu'on décide s'il y en a un à fabriquer. Ce qui
+# remplace un ordonnanceur externe qu'un humain lançait à la main, qui prenait
+# la campagne, la découpait, et battait pour dire qu'il vivait.
+
+CAMPAGNE = {"id": 12, "sub": "celui-qui-a-declare", "label": "audiens",
+            "procedure": "enrichissement", "project_id": 220, "namespace": "tableau",
+            "tools": ["data_claim_next", "data_write"], "input": "file {namespace}",
+            "row_filter": {"statut": "a_enrichir"}, "max_steps": 40,
+            "max_tokens_per_row": 80000}
+
+
+@pytest.fixture
+def campagne(monkeypatch, espion):
+    monkeypatch.setattr(RJ.db, "campagne_a_servir",
+                        lambda org_id: espion.update(cherchee=org_id) or CAMPAGNE)
+    monkeypatch.setattr(RJ.db, "marquer_demarree",
+                        lambda fid: espion.update(demarree=fid))
+    return espion
+
+
+def test_une_file_vide_fait_produire_le_travail_de_la_campagne(campagne):
+    _appel(_ctx(), op="claim")
+    assert campagne["cherchee"] == 226, "la campagne se cherche dans l'org du worker"
+    assert campagne["fleet"] == 12, "le travail doit être rattaché à sa campagne"
+    assert campagne["kind"] == "start"
+
+
+def test_le_travail_porte_l_identite_du_DECLARANT_pas_du_worker(campagne):
+    """C'est la garde qui compte. Le worker n'est pas un pouvoir : il portera un
+    jeton émis au nom de quelqu'un d'autre. Prendre son propre `sub` ici ferait
+    agir la campagne sous l'identité de l'infrastructure."""
+    _appel(_ctx(sub="worker-campagne"), op="claim")
+    assert campagne["sub"] == "celui-qui-a-declare"
+    assert campagne["sub"] != "worker-campagne"
+
+
+def test_la_campagne_passe_a_running_au_premier_travail(campagne):
+    _appel(_ctx(), op="claim")
+    assert campagne["demarree"] == 12
+
+
+def test_sans_campagne_le_sondage_rend_simplement_rien(monkeypatch, espion):
+    monkeypatch.setattr(RJ.db, "campagne_a_servir", lambda org_id: None)
+    monkeypatch.setattr(RJ.db, "marquer_demarree", lambda fid: None)
+    assert _appel(_ctx(), op="claim") == {"job": None}
+    assert "fleet" not in espion, "aucun travail ne doit être fabriqué"
+
+
+def test_une_campagne_illisible_ne_casse_PAS_le_sondage(monkeypatch, espion):
+    """Fail-open : le sondage des workers est le chemin le plus fréquent de toute
+    la plateforme. Une campagne mal formée ne doit pas l'arrêter pour l'org —
+    le passage attendra le sondage suivant."""
+    def _explose(org_id):
+        raise RuntimeError("colonne manquante")
+    monkeypatch.setattr(RJ.db, "campagne_a_servir", _explose)
+    assert _appel(_ctx(), op="claim") == {"job": None}

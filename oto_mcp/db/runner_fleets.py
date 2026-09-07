@@ -89,6 +89,69 @@ def list_fleets(org_id: int, statut: Optional[str] = None) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def campagne_a_servir(org_id: int) -> Optional[dict]:
+    """La campagne de l'org pour laquelle il faut produire un travail — ou None.
+
+    ⚠️ C'est le cœur du modèle « oto décide, le runner demande ». Un worker ne
+    connaît pas la notion de campagne : il demande du travail, et c'est ICI
+    qu'on décide s'il y en a un à fabriquer. Rien ne tourne côté runner pour
+    dérouler un passage ; l'état du passage EST la règle qui produit ses
+    travaux, évaluée à chaque sondage.
+
+    Ce que « à servir » exige, dans l'ordre où ça se refuse :
+
+    - un statut qui accepte de produire (`armed` = demandée, `running` = déjà
+      commencée). `stopping` en est exclu : un arrêt demandé ne doit plus rien
+      engager, c'est toute la raison d'être de cet état ;
+    - **aucun travail déjà en attente** pour elle. C'est la régulation, et elle
+      est passive : N workers qui sondent obtiennent au plus N travaux en vol,
+      sans qu'aucun réglage ne le dise. Un `pending` non consommé signifie que
+      le parc est déjà servi ; en produire un second ne ferait qu'allonger une
+      file que personne ne tire plus vite.
+    - la borne de lignes (`max_rows`), comptée sur les travaux DÉJÀ produits
+      pour ce passage. Appliquée ici, elle ne se contourne pas : il n'existe
+      plus d'autre chemin pour enfiler.
+
+    Ce qu'elle NE regarde PAS : s'il reste des lignes dans le tableau. Ce compte
+    coûte une requête sur une table cliente à chaque sondage à vide, c'est-à-dire
+    dans le cas le plus fréquent. L'agent le découvre lui-même en réservant, et
+    un travail qui ne trouve rien se conclut en quelques secondes — bien moins
+    cher que de le demander à chaque battement de chaque worker.
+    """
+    with _connect() as conn:
+        return conn.execute(
+            f"""
+            SELECT {_COLS}
+              FROM runner_fleets f
+             WHERE f.org_id = %s
+               AND f.status IN ('armed', 'running')
+               AND NOT EXISTS (SELECT 1 FROM runner_jobs j
+                                WHERE j.fleet_id = f.id AND j.status = 'pending')
+               AND (f.max_rows IS NULL
+                    OR (SELECT COUNT(*) FROM runner_jobs j2
+                         WHERE j2.fleet_id = f.id) < f.max_rows)
+             ORDER BY f.armed_at NULLS LAST, f.id
+             LIMIT 1
+            """,
+            (org_id,),
+        ).fetchone()
+
+
+def marquer_demarree(fleet_id: int) -> None:
+    """`armed` → `running` au PREMIER travail produit — et seulement là.
+
+    L'état ne dit plus « un ordonnanceur m'a prise » (il n'y en a plus), il dit
+    « j'ai commencé à produire ». C'est la même information pour qui regarde un
+    écran, et elle ne dépend plus d'un processus qui doit se déclarer vivant.
+    """
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE runner_fleets SET status = 'running', started_at = NOW() "
+            " WHERE id = %s AND status = 'armed'",
+            (fleet_id,),
+        )
+
+
 def get_fleet(fleet_id: int, org_id: int) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(

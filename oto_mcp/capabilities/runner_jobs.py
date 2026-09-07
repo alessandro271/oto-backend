@@ -427,6 +427,45 @@ _SANS_PORTEUR = (
     "prêter : reprogramme-le, il partira au nom de qui le demande.")
 
 
+def _produire_pour_une_campagne(org_id: int, bail_s: int) -> None:
+    """Fabrique UN travail pour une campagne en cours de l'org, s'il y en a une.
+
+    Un seul, et sans le réserver : l'appelant re-sonde juste après et le prendra
+    comme n'importe quel autre. Deux workers qui produisent en même temps ne se
+    gênent pas — chacun fabrique le sien, et c'est exactement le parallélisme
+    voulu ; ce qui les borne est leur nombre, pas un réglage.
+
+    ⚠️ L'identité du travail est celle de QUI A DÉCLARÉ la campagne
+    (`fleet["sub"]`), jamais celle du worker qui sonde. C'est ce que `_delegue`
+    lira ensuite pour émettre le jeton : un travail produit ici agit au nom du
+    demandeur, comme un travail enfilé à la main.
+
+    Fail-open et tracé : une campagne illisible ne doit pas casser le sondage de
+    tous les workers de l'org. Le passage attend simplement le sondage suivant.
+    """
+    try:
+        f = db.campagne_a_servir(org_id)
+        if not f or not f.get("sub"):
+            return
+        message = (f.get("input") or "") \
+            .replace("{namespace}", f.get("namespace") or "") \
+            .replace("{filter}", json.dumps(f.get("row_filter") or {}, ensure_ascii=False))
+        db.enqueue_job(
+            org_id, "start",
+            payload={"procedure": f["procedure"], "tools": list(f.get("tools") or ()),
+                     "project_id": f.get("project_id"), "org_id": org_id,
+                     "namespace": f.get("namespace"), "fleet": f.get("label"),
+                     "max_steps": f.get("max_steps"),
+                     "max_tokens": f.get("max_tokens_per_row"),
+                     "input": message,
+                     "label": f"flotte {f.get('namespace')} — {f['procedure']}"},
+            fleet_id=f["id"], sub=f["sub"])
+        db.marquer_demarree(f["id"])
+    except Exception:
+        logger.warning("campagne : production de travail impossible pour l'org %s",
+                       org_id, exc_info=True)
+
+
 def _delegue(job: dict, bail_s: int, claimant: str) -> dict:
     """Le travail, augmenté du moyen d'agir AU NOM de son porteur.
 
@@ -514,6 +553,20 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
     if inp.op == "claim":
         bail = max(30, min(inp.lease_seconds, 3600))
         job = db.claim_next_job(ctx.org_id, ctx.sub, lease_seconds=bail)
+        if job is None:
+            # ⚠️ La file vide n'est pas la fin de l'histoire : une CAMPAGNE en
+            # cours est une règle qui produit des travaux, et c'est ici qu'on
+            # l'évalue. Le worker ne connaît pas cette notion — il demande du
+            # travail, on lui en fabrique un.
+            #
+            # Ce que ça remplace : un ordonnanceur externe qu'un humain lançait
+            # à la main sur la machine, qui prenait la campagne, la découpait,
+            # maintenait des travaux en vol et battait pour dire qu'il vivait.
+            # Rien de tout cela n'a de raison d'être si le sondage du worker
+            # suffit à faire avancer le passage — et il suffit, puisqu'il a
+            # déjà lieu en boucle.
+            _produire_pour_une_campagne(ctx.org_id, bail)
+            job = db.claim_next_job(ctx.org_id, ctx.sub, lease_seconds=bail)
         if job is None:
             return {"job": None}
         return {"job": _avec_cle(_delegue(job, bail, ctx.sub), inp.provider, ctx.sub)}
