@@ -138,7 +138,14 @@ def campagne_a_servir(org_id: int) -> Optional[dict]:
             SELECT {_COLS}
               FROM runner_fleets f
              WHERE f.org_id = %s
-               AND pg_try_advisory_xact_lock(%s, f.id)
+               -- `f.id::int` et non `f.id` : la colonne est BIGSERIAL, et
+               -- Postgres n'offre que `(bigint)` ou `(int, int)` — jamais
+               -- `(int, bigint)`. Sans le cast, la requête LÈVE
+               -- `UndefinedFunction`, le `try` de l'appelant l'avale, et le
+               -- sondage rend « aucun travail » pour toujours : mesuré le
+               -- 07/09/2026 sur le canari, la production de travail n'avait
+               -- jamais pu s'exécuter une seule fois.
+               AND pg_try_advisory_xact_lock(%s, f.id::int)
                AND f.status IN ('armed', 'running')
                AND NOT EXISTS (SELECT 1 FROM runner_jobs j
                                 WHERE j.fleet_id = f.id AND j.status = 'pending')
