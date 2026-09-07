@@ -88,6 +88,30 @@ def test_une_ligne_conforme_ne_signale_rien():
     assert dsv2.types_geles_warning(gelees) is None
 
 
+def test_la_borne_de_liste_suit_la_meme_regle():
+    """Alignée le 07/09/2026, et pour la même raison : c'est une propriété de la
+    valeur qu'on POSE. La laisser sur le mergé aurait gardé le défaut que le type
+    venait de quitter, sur son voisin immédiat — deux contrôles de la même famille
+    se comportant différemment, ce que personne n'aurait pu deviner."""
+    schema = {"strict": True, "fields": [
+        {"key": "contacts", "type": "list", "of": {"type": "text"}, "max_items": 2},
+        {"key": "notes", "type": "text"},
+    ]}
+    en_base = {"contacts": ["a", "b", "c", "d"], "notes": "ancienne"}
+    gelees: list = []
+
+    # écrire ailleurs : ça passe, et la liste trop longue est signalée
+    assert dsv2.validate_row(schema, {**en_base, "notes": "neuve"},
+                             written={"notes"}, gelees=gelees) == []
+    assert [g["champ"] for g in gelees] == ["contacts"]
+    assert "4 éléments, maximum 2" in gelees[0]["refus"]
+
+    # écrire LA liste : refusé, comme avant
+    errors = dsv2.validate_row(schema, {**en_base, "contacts": ["a", "b", "c"]},
+                               written={"contacts"})
+    assert errors and "3 éléments, maximum 2" in errors[0]
+
+
 def test_le_requis_continue_de_se_juger_sur_la_ligne_ENTIERE():
     """La ligne de partage que le correctif suit : ce qui juge la VALEUR QU'ON POSE
     se restreint au geste (type, longueur, motif, fermeture) ; ce qui juge l'ÉTAT DE

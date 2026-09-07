@@ -2318,7 +2318,17 @@ def _row_errors(fields: list, data: dict, path: str,
                 and isinstance(value, list) and len(value) > mi):
             # Même forme que la borne de longueur : le CONSTATÉ autant que la borne,
             # sinon le refus fait deviner de combien on dépasse.
-            errors.append(f"{fpath}: {len(value)} éléments, maximum {mi}")
+            #
+            # Et même RESTRICTION qu'elle, alignée le 07/09/2026 : c'est une propriété
+            # de la valeur qu'on POSE. Sur une colonne que le geste n'écrit pas, une
+            # liste déjà trop longue rendrait la ligne inécritable pour toujours, y
+            # compris sur un champ sans rapport — le défaut que le type venait de
+            # quitter, laissé sur son voisin immédiat.
+            trop = f"{fpath}: {len(value)} éléments, maximum {mi}"
+            if pose:
+                errors.append(trop)
+            elif gelees is not None:
+                gelees.append({"champ": fpath, "refus": trop})
         ml = max_length_of(f)
         trop_long = False
         if ml and pose:
