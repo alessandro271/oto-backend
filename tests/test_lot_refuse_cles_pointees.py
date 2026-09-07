@@ -160,17 +160,22 @@ def test_tout_chemin_qui_ECRIT_en_base_refuse_les_cles_pointees():
     import ast
     import inspect
 
-    from oto_mcp.datastore import core
+    from oto_mcp.datastore import core, ecriture, lots
 
     PORTES = {"datastore_insert_row", "datastore_upsert_row", "datastore_update_row"}
-    source = inspect.getsource(core)
-    arbre = ast.parse(source)
-    classe = next(n for n in ast.walk(arbre)
-                  if isinstance(n, ast.ClassDef) and n.name == "DatastorePg")
+    # ⚠️ Les modules qui EXÉCUTENT, jamais la porte d'entrée. Depuis la coupe du
+    # 07/09/2026 le store est un noyau qui COMPOSE des greffons : les chemins
+    # d'écriture vivent dans `ecriture` et `lots`, et sonder `core` seul ne voyait
+    # plus rien — c'est la garde `len(vues) >= 4` ci-dessous qui l'a dit.
+    methodes = []
+    for module in (core, ecriture, lots):
+        arbre = ast.parse(inspect.getsource(module))
+        for classe in [n for n in ast.walk(arbre) if isinstance(n, ast.ClassDef)]:
+            methodes += [n for n in classe.body
+                         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
 
     fautives, vues = [], []
-    for methode in [n for n in classe.body
-                    if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+    for methode in methodes:
         appels = {n.func.attr for n in ast.walk(methode)
                   if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)}
         appels |= {n.func.id for n in ast.walk(methode)

@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from oto_mcp.datastore import core as D
+from oto_mcp.datastore import lots as L
 
 
 class FakeDB:
@@ -62,7 +63,10 @@ def store(monkeypatch):
     def next_id():
         seq["n"] += 1
         return f"r{seq['n']}"
-    monkeypatch.setattr(D, "_new_id", next_id)
+    # Visé sur `lots`, le module qui EXÉCUTE : `core` le ré-exporte depuis la coupe
+    # du 07/09/2026, et une ré-exportation est une seconde référence — la remplacer
+    # laisserait ce banc vert en ne testant plus rien.
+    monkeypatch.setattr(L, "_new_id", next_id)
     s = D.DatastorePg("u1")
     s._fake = fake
     return s

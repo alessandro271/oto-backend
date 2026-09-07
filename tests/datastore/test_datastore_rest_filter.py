@@ -104,6 +104,10 @@ def test_le_store_convertit_le_filtre_en_clauses():
     `aggregate`/`claim_next`/`cursor_rows`, pour qu'il n'existe qu'une façon de
     filtrer côté SQL."""
     from oto_mcp.datastore import core as ds
+    # ⚠️ Le module qui EXÉCUTE `page_rows`, jamais la porte d'entrée : depuis la coupe
+    # du 07/09/2026 les lectures vivent dans `lecture`, et `core.db` n'est plus qu'une
+    # seconde référence vers le même module — la remplacer ne mordrait plus.
+    from oto_mcp.datastore import lecture as dsl
 
     captured = {}
 
@@ -122,12 +126,12 @@ def test_le_store_convertit_le_filtre_en_clauses():
     store._resolve = lambda ns, write=False: 1
     store._schema_of = lambda ns_id: None  # pas de schéma sur ce banc
     store._row_to_dict = lambda r: r
-    orig_db = ds.db
-    ds.db = _FakeDb
+    orig_db = dsl.db
+    dsl.db = _FakeDb
     try:
         store.page_rows("leads", filter={"status": "pending"})
     finally:
-        ds.db = orig_db
+        dsl.db = orig_db
 
     assert captured["list"]["filters"] == [{"field": "status", "op": "eq", "value": "pending"}]
     # Le total doit décrire le même jeu que la page, sinon la pagination ment.

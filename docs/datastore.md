@@ -1650,7 +1650,14 @@ mêmes fichiers en une semaine (gels en série, un incident de tree). Où poser 
 | `datastore/vocabulaire.py` | ce que CETTE version lit et fait respecter, dérivé du code |
 | `datastore/non_applique.py` | ce qu'un tableau déclare et que la plateforme laisse inerte |
 | `datastore/schema_ops.py` | poser/retoucher/nettoyer le FORMAT (mixin du store) |
-| `datastore/core.py` | le store qui COMPOSE |
+| `datastore/outils.py` | les fonctions LIBRES du store : curseurs, horodatage, `_new_id`, clauses de filtre, adresse du tableau |
+| `datastore/registre.py` | le REGISTRE des tableaux : lister, créer, renommer, supprimer, adresser (mixin) |
+| `datastore/lecture.py` | LIRE des lignes : une, une page, un curseur, un compte, un agrégat (mixin) |
+| `datastore/ecriture.py` | ÉCRIRE une ligne : ajouter, fusionner, remplacer, patcher, effacer (mixin) |
+| `datastore/lots.py` | écrire un LOT — le chemin des imports, et ses refus qui NOMMENT la ligne (mixin) |
+| `datastore/file_de_travail.py` | la FILE DE TRAVAIL : réserver, rendre, et les deux gardes du bail (mixin) |
+| `datastore/controles.py` | ce qu'une écriture a le DROIT de poser, ce qu'on en écarte, et le relevé rendu (mixin) |
+| `datastore/core.py` | le store qui COMPOSE — noyau d'identité (`__init__`, `_resolve`, `_row_to_dict`, `_trace`) + les sept greffons ci-dessus |
 
 Déplacements PURS : `db/datastore.py`, `datastore/schema.py` et `datastore/core.py`
 ré-exportent, la surface plate `db.<fn>` est figée par `tests/test_db_surface_frozen.py`
@@ -1658,8 +1665,10 @@ ré-exportent, la surface plate `db.<fn>` est figée par `tests/test_db_surface_
 des globals dans les branches rares — balayage figé par
 `tests/datastore/test_datastore_ns_duplicate.py`.
 
-⚠️ **Deux pièges que la coupe de `schema.py` a payés le 07/09/2026**, et qui frapperont
-la prochaine :
+⚠️ **Deux pièges que la coupe de `schema.py` a payés le 07/09/2026**, et que la coupe
+de `core.py`, le même jour, a repayés tous les deux — huit clés (`destination`,
+`permission`, `lease`, `claimed_run`…) seraient sorties du vocabulaire dérivé, deux
+bancs visaient encore la porte d'entrée. Ils frapperont la prochaine :
 
 - **`vocabulaire._read_keys` scanne une liste de FICHIERS**, pas de clés : c'est ainsi
   que le serveur établit ce qu'il interprète, en lisant son propre source. Un module

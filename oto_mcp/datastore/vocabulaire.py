@@ -216,11 +216,18 @@ def _read_keys() -> frozenset:
     # défaut que le paragraphe au-dessus annonce, déclenché par un déplacement qui ne
     # changeait aucun comportement. `schema.py` reste listé — il ne coûte rien et il
     # redeviendrait porteur si quoi que ce soit y revenait.
+    #
+    # ⚠️ **Le troisième cas est la COUPE de `core.py`** (07/09/2026) : les sept
+    # greffons ci-dessous en sont issus, et le noyau qui reste n'y a gardé qu'une
+    # poignée de lectures. Le même déplacement pur, le même dérivé qui rétrécit —
+    # d'où les sept noms ajoutés le jour même de la coupe.
     for nom in ("schema.py", "core.py", "acces_agent.py",
                 "couches.py", "motifs.py", "declaration.py", "cycle_de_vie.py",
                 "hors_schema.py", "champs_reserves.py", "definition.py",
                 "couches_exigees.py", "validation.py", "phrases_de_refus.py",
                 "effacements.py",
+                "outils.py", "controles.py", "registre.py", "lecture.py",
+                "ecriture.py", "lots.py", "file_de_travail.py",
                 "vocabulaire.py", "non_applique.py"):
         try:
             arbre = ast.parse((ici / nom).read_text(encoding="utf-8"))
