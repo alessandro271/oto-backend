@@ -317,6 +317,70 @@ def _sans_la_valeur(neuf: Any) -> Any:
     return reste or None
 
 
+# ── ce qu'une écriture de LISTE fait tomber d'un cran plus bas (oto#120) ────────
+#
+# La fusion se fait au grain de la COLONNE, jamais de l'élément : reposer une liste
+# la remplace en bloc. Les couches portées par ses éléments tombent donc toutes —
+# y compris celles des éléments dont la valeur n'a pas changé. **Ce comportement
+# n'est pas le défaut** (une liste n'a ni clé ni identité d'élément : rien ne
+# permettrait d'aligner l'ancien et le neuf sans inventer une convention) ; le
+# défaut était le SILENCE. Les trois relevés ci-dessus ne nomment que des colonnes
+# de premier niveau, et cette destruction-là n'apparaissait nulle part.
+#
+# Ampleur au 06/09/2026 : plus de mille couches vivent dans des éléments de listes
+# sur les tableaux en production, et une équipe a failli en effacer soixante-dix
+# en croyant enrichir — sauvée par le seul hasard d'un script qui réimbriquait
+# chaque élément.
+#
+# ⚠️ Le parcours MIROITE le lecteur (`served_value` / `_served_item` / `flat_layers`)
+# et pas la structure stockée : on ne descend que dans les LISTES, parce que c'est
+# exactement là que le lecteur aplatit. Un dict ordinaire est servi tel quel, donc
+# une réémission le repose tel quel et il n'y a rien à perdre. La conséquence est
+# ce qui rend le conseil vrai : ce qu'on relève est exactement ce qu'un aller-retour
+# « relire puis repousser » aurait conservé.
+
+
+def _couches_imbriquees(valeur: Any, chemin: str, out: dict) -> None:
+    """Les couches SERVIES à l'intérieur d'une valeur de liste, par adresse.
+
+    `out[("contacts[0].nom", "comment")] = "registre"`. On passe l'adresse COMPLÈTE
+    à `flat_layers` et on la recoupe : c'est elle qui décide ce qu'est une couche
+    renseignée, et une seconde copie de ce jugement divergerait un jour — le module
+    en a déjà payé le prix ailleurs."""
+    if not isinstance(valeur, list):
+        return
+    for i, item in enumerate(valeur):
+        if not isinstance(item, dict):
+            continue
+        for k, v in item.items():
+            adresse = f"{chemin}[{i}].{k}"
+            for plat, val in dsv2.flat_layers(adresse, v).items():
+                champ, _, couche = plat.rpartition(".")
+                out[(champ, couche)] = val
+            _couches_imbriquees(dsv2.unwrap(v), adresse, out)
+
+
+def _couches_perdues(ancienne: Any, posee: Any, cle: str,
+                     row_id: Optional[str]) -> list[dict]:
+    """Les couches d'éléments que cette écriture fait TOMBER, à leur adresse.
+
+    Une couche tombe quand la valeur posée ne la porte plus à la MÊME adresse :
+    c'est ce que fait le remplacement en bloc. Reposer la liste telle qu'elle a été
+    servie ne relève donc rien — le no-op de `_merge_column` non plus, puisque deux
+    valeurs identiques portent les mêmes adresses."""
+    if not isinstance(ancienne, list):
+        return []
+    avant: dict = {}
+    _couches_imbriquees(ancienne, cle, avant)
+    if not avant:
+        return []
+    apres: dict = {}
+    _couches_imbriquees(posee, cle, apres)
+    return [{"ligne": row_id, "champ": champ, "couche": couche, "valeur": val}
+            for (champ, couche), val in avant.items()
+            if (champ, couche) not in apres]
+
+
 def arbitrer_les_vides(existing: Optional[dict], user_data: Optional[dict],
                        row_id: Optional[str] = None) -> tuple:
     """`(ce que l'écriture pose VRAIMENT, ce qu'elle efface, ce qu'on a écarté)`.
@@ -331,6 +395,12 @@ def arbitrer_les_vides(existing: Optional[dict], user_data: Optional[dict],
     qu'un scalaire, et une colonne qui ne portait que son `origine` n'avait déjà
     pas de valeur à perdre.
 
+    ⚠️ **« Ce qu'elle efface » porte DEUX natures de destruction** (oto#120) : une
+    valeur de premier niveau nommée avec `null`, et les couches d'éléments qu'une
+    écriture de liste remplace en bloc. Même question, un cran plus bas, donc même
+    parcours — mais `effacements_report` les sépare en deux clés, parce que ce qu'on
+    fait pour les rétablir n'est pas le même geste.
+
     ⚠️ Ce parcours ne décide QUE de la valeur : le sort du GESTE — quand il n'a plus
     rien à poser — se juge après, sur ses trois sorties (`refuser_geste_sans_effet`)."""
     pose: dict = {}
@@ -338,10 +408,16 @@ def arbitrer_les_vides(existing: Optional[dict], user_data: Optional[dict],
     ignores: list[dict] = []
     for cle, neuf in (user_data or {}).items():
         touche, posee = _valeur_posee(neuf)
-        if (cle in _META_COLS or not touche or not dsv2._is_empty(posee)):
+        if cle in _META_COLS or not touche:
             pose[cle] = neuf
             continue
         ancienne = dsv2.unwrap((existing or {}).get(cle))
+        if not dsv2._is_empty(posee):
+            # La valeur est posée : rien ne tombe au premier niveau. Un cran plus
+            # bas, si — la liste est remplacée en bloc (oto#120).
+            effaces.extend(_couches_perdues(ancienne, posee, cle, row_id))
+            pose[cle] = neuf
+            continue
         if dsv2._is_empty(ancienne):
             pose[cle] = neuf              # rien à perdre : on ne fait pas de bruit
             continue
@@ -424,19 +500,59 @@ def effacements_report(records: list) -> dict:
 
     `{}` quand rien n'a été vidé — le cas normal ne porte pas de clé parasite.
 
+    **DEUX clés, parce que deux gestes de rétablissement** (oto#120) : une valeur de
+    premier niveau nommée avec `null` se réécrit à son nom ; une couche d'élément
+    tombée avec le remplacement en bloc d'une liste se réimbrique dans l'élément.
+    Les confondre ferait prescrire l'un pour l'autre — un aller-retour dépensé pour
+    rien, exactement ce que la famille de relevés existe pour éviter.
+
     ⚠️ Depuis #608, `null` est le SEUL vide qui arrive ici : la phrase ne cite donc
     pas les autres vides parmi les valeurs qui effacent, sous peine de prescrire un
     geste qui, lui, est REFUSÉ quand il est seul et ignoré quand il accompagne (#724)."""
+    out: dict = {}
+    valeurs = [r for r in records or [] if "couche" not in r]
+    if valeurs:
+        nommes, reste = _nommes(valeurs)
+        hint = ("un `null` NOMMÉ dans le payload EFFACE la valeur en place — ce n'est "
+                "PAS la même chose que ne pas nommer le champ, qui le laisse intact. Si "
+                "l'effacement n'était pas voulu (variable non peuplée, gabarit à demi "
+                "rempli), réécris les valeurs ci-dessus : elles ne sont plus en base.")
+        if reste:
+            hint += f" {len(valeurs)} effacements au total, {len(nommes)} nommés ici."
+        out["valeurs_effacees"] = nommes
+        out["valeurs_effacees_hint"] = hint
+    out.update(couches_effacees_report(
+        [r for r in records or [] if "couche" in r]))
+    return out
+
+
+def couches_effacees_report(records: list) -> dict:
+    """Le relevé des couches d'éléments tombées avec le remplacement d'une liste.
+
+    Même forme que `valeurs_effacees` — la ligne, le champ, la valeur perdue — plus
+    la couche, parce qu'ici l'adresse ne suffit pas à la désigner. `champ` porte le
+    RANG (`contacts[0].nom`) : sans lui, « trois `comment` sont tombés » ne se
+    rétablit pas.
+
+    ⚠️ Le conseil est le seul qui marche aujourd'hui, et il est étroit : **relire,
+    puis reposer la liste ENTIÈRE en réémettant les couches telles qu'elles ont été
+    servies**. Il n'y a pas d'écriture au grain de l'élément — une liste n'a pas
+    d'identité d'élément — donc pas de geste plus petit à prescrire."""
     if not records:
         return {}
     nommes, reste = _nommes(records)
-    hint = ("un `null` NOMMÉ dans le payload EFFACE la valeur en place — ce n'est "
-            "PAS la même chose que ne pas nommer le champ, qui le laisse intact. Si "
-            "l'effacement n'était pas voulu (variable non peuplée, gabarit à demi "
-            "rempli), réécris les valeurs ci-dessus : elles ne sont plus en base.")
+    hint = ("reposer une colonne-liste la remplace EN BLOC : la fusion se fait au "
+            "grain de la colonne, jamais de l'élément. Les couches ci-dessus étaient "
+            "portées par des éléments de la liste et ne sont PLUS en base — y compris "
+            "sur les éléments dont la valeur n'a pas changé. Il n'existe pas "
+            "d'écriture d'un élément seul : pour écrire dans une liste qui porte des "
+            "couches, relis la ligne et repose la liste entière en réémettant les "
+            "couches telles qu'elles t'ont été servies (`nom.comment` à côté de `nom`, "
+            "dans le même élément). Si la perte n'était pas voulue, réécris les "
+            "valeurs ci-dessus de cette façon.")
     if reste:
-        hint += f" {len(records)} effacements au total, {len(nommes)} nommés ici."
-    return {"valeurs_effacees": nommes, "valeurs_effacees_hint": hint}
+        hint += f" {len(records)} couches au total, {len(nommes)} nommées ici."
+    return {"couches_effacees": nommes, "couches_effacees_hint": hint}
 
 
 def ignores_report(records: list) -> dict:
