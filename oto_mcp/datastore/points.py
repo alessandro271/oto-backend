@@ -132,32 +132,85 @@ def _absorbe_ou_refuse(out: dict, cle: str, base: str, couche: str) -> bool:
     return True
 
 
-def _ranger_une_fiche(fiche: dict) -> dict:
+def _refus_de_couche_orpheline(chemin: str, cle: str, base: str,
+                               couche: str) -> RowValidationError:
+    """CAS 3, un cran plus bas (oto#122) — `champ.couche` seule dans un élément.
+
+    Elle n'était ni rangée ni refusée : stockée LITTÉRALEMENT sous ce nom, donc
+    invisible au filtre et au tri qui la nomment (ils lisent la couche,
+    `data->'champ'->>'couche'`, jamais l'attribut littéral) — et invisible au mode
+    strict, qui juge les colonnes de premier niveau. Même famille que la colonne
+    parasite de #117 : *une écriture qui réussit en fabriquant quelque chose que
+    personne ne cherchera jamais.*
+
+    ⚠️ **On refuse au lieu de ranger d'office.** Au premier niveau, poser
+    l'annotation seule est légitime parce qu'une SOURCE dit que la colonne existe
+    (le schéma, la ligne visée). Un élément n'a ni schéma ni identité : ranger
+    reviendrait à décider que `champ` est un attribut plutôt qu'une clé littérale,
+    c'est-à-dire à deviner. Le refus nomme les deux gestes qui, eux, sont sûrs."""
+    return RowValidationError([
+        f"`{cle}` dans `{chemin}` : cet élément ne porte pas `{base}`, et un élément "
+        f"de liste n'a ni schéma ni identité — il n'y a rien d'autre à consulter pour "
+        f"savoir si `{base}` est un attribut. Cette clé serait donc stockée "
+        f"LITTÉRALEMENT sous ce nom : invisible au filtre et au tri `{cle}`, qui "
+        f"lisent la couche `{couche}` de `{base}`, et invisible au mode strict. Rien "
+        f"n'a été écrit. Écris `{base}` dans le MÊME élément, à côté — ou nomme la "
+        f'couche en forme imbriquée, {{"{base}": {{"{couche}": …}}}}, si tu veux '
+        f"l'annoter seule."])
+
+
+def _refus_de_socle_opaque(chemin: str, cle: str, base: str, couche: str,
+                           socle: dict) -> RowValidationError:
+    """Le second silence de la même fonction (oto#122) : la base EST là, mais c'est
+    un objet que rien ne déclare fait de couches. La clé restait littérale, elle
+    aussi. Le premier niveau refuse déjà ce cas, mot pour mot — deux branches
+    silencieuses dans la même fonction, c'est la fonction qu'il faut fermer, pas la
+    branche qui s'est présentée."""
+    return RowValidationError([
+        f"`{cle}` veut annoter `{base}` dans `{chemin}`, mais cet élément écrit dans "
+        f"`{base}` un objet ({', '.join(sorted(map(str, socle))[:3])}…) qui n'est pas "
+        f"fait de couches : lui ajouter `{couche}` changerait sa forme stockée. Rien "
+        f"n'a été écrit. Écris l'attribut en couches, explicitement — "
+        f'{{"{base}": {{"valeur": {{…}}, "{couche}": …}}}} — ou déclare la colonne '
+        f"`json` (data_set_schema) si c'est un objet métier."])
+
+
+def _ranger_une_fiche(fiche: dict, chemin: str) -> dict:
     """Un item de colonne-tableau est une FICHE : ses attributs suivent la règle du
     premier niveau, un cran plus bas.
 
     `_served_item` sert `item["email.origine"]` à plat, exactement comme
     `row["email.origine"]` — donc il doit se réécrire tel quel, exactement pareil. Ici
     la colonne « réelle » ne peut venir que du GESTE : un item n'a ni schéma ni
-    identité, il n'y a rien d'autre à consulter."""
-    out = {k: _ranger_les_items(v) for k, v in fiche.items()}
+    identité, il n'y a rien d'autre à consulter.
+
+    ⚠️ **Ce qui n'est pas rangé est désormais REFUSÉ** (oto#122). Les deux `continue`
+    d'avant laissaient filer la clé pointée jusqu'au stockage, où elle devenait un
+    attribut littéral — le défaut que `_refuse_dotted_names` ferme au premier niveau,
+    resté ouvert un cran plus bas parce que rien ne repasse derrière : le refus du
+    premier niveau ne regarde que les clés de tête, jamais l'intérieur d'un item.
+    `chemin` n'existe que pour ça — un refus qui ne dit pas DANS QUEL élément se
+    corrige à l'aveugle sur une liste de vingt fiches."""
+    out = {k: _ranger_les_items(v, f"{chemin}.{k}") for k, v in fiche.items()}
     for cle in list(out):
         adresse = dsv2.layer_address(cle)
-        if adresse is None or adresse[0] not in out:
+        if adresse is None:
             continue
         base, couche = adresse
+        if base not in out:
+            raise _refus_de_couche_orpheline(chemin, cle, base, couche)
         if _absorbe_ou_refuse(out, cle, base, couche):
             continue
         socle = out[base]
         if not _socle_accueille_une_couche(socle):
-            continue
+            raise _refus_de_socle_opaque(chemin, cle, base, couche, socle)
         val = out.pop(cle)
         out[base] = ({**socle, couche: val} if dsv2.names_layers(socle)
                      else {dsv2.VALUE_LAYER: socle, couche: val})
     return out
 
 
-def _ranger_les_items(valeur: Any) -> Any:
+def _ranger_les_items(valeur: Any, chemin: str) -> Any:
     """Les fiches d'une colonne-tableau, rangées. Le reste traverse intact.
 
     On ne descend QUE dans les listes, parce que c'est exactement là que
@@ -165,16 +218,17 @@ def _ranger_les_items(valeur: Any) -> Any:
     à défaire dedans — et y toucher réécrirait des données `json` que personne n'a
     demandé de changer."""
     if isinstance(valeur, list):
-        return [_ranger_une_fiche(x) if isinstance(x, dict) else _ranger_les_items(x)
-                for x in valeur]
+        return [_ranger_une_fiche(x, f"{chemin}[{i}]") if isinstance(x, dict)
+                else _ranger_les_items(x, f"{chemin}[{i}]")
+                for i, x in enumerate(valeur)]
     return valeur
 
 
-def _ranger_la_colonne(valeur: Any) -> Any:
+def _ranger_la_colonne(cle: str, valeur: Any) -> Any:
     if dsv2.names_layers(valeur) and isinstance(valeur.get(dsv2.VALUE_LAYER), list):
         return {**valeur,
-                dsv2.VALUE_LAYER: _ranger_les_items(valeur[dsv2.VALUE_LAYER])}
-    return _ranger_les_items(valeur)
+                dsv2.VALUE_LAYER: _ranger_les_items(valeur[dsv2.VALUE_LAYER], cle)}
+    return _ranger_les_items(valeur, cle)
 
 
 def ranger_les_couches(schema: Optional[dict], user_data: Optional[dict], *,
@@ -220,7 +274,7 @@ def ranger_les_couches(schema: Optional[dict], user_data: Optional[dict], *,
         return dict(user_data or {})
     exemptes = {f.get("key") for f in dsv2._fields(schema)
                 if f.get("type") == "json" and f.get("key")}
-    out = {k: (v if k in exemptes else _ranger_la_colonne(v))
+    out = {k: (v if k in exemptes else _ranger_la_colonne(k, v))
            for k, v in user_data.items()}
     adresses = []
     for cle in list(out):
