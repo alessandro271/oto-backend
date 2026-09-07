@@ -1636,14 +1636,40 @@ mêmes fichiers en une semaine (gels en série, un incident de tree). Où poser 
 | `datastore/columns.py` | la colonne côté Python : fusion des couches, résolution des anciens noms |
 | `datastore/reserves.py` | les champs que l'appelant n'écrit pas : refuser, et poser l'origine à sa place (#586/#606) |
 | `datastore/claimable.py` | le périmètre de réservation déclaré (`lifecycle.claimable`, #517) : décision, clauses du pick, refus, phrase — **n'importe le moteur qu'à l'appel** |
-| `datastore/schema.py` | le FORMAT : le vocabulaire déclaré et sa validation |
+| `datastore/schema.py` | **une FAÇADE, plus un corps** : elle ré-exporte les douze modules ci-dessous et rien d'autre. Une cinquantaine de sites importent `datastore.schema` — ce contrat les tient tous |
+| `datastore/couches.py` | le vocabulaire des couches d'une cellule et leurs formes |
+| `datastore/motifs.py` | le COÛT d'un `pattern` — la garde qui empêche un motif de figer le serveur |
+| `datastore/declaration.py` | LIRE une déclaration : « que déclare ce schéma ? » |
+| `datastore/cycle_de_vie.py` | états, transitions, terminaux, plafond de reprises, périmètre |
+| `datastore/hors_schema.py` | une clé que la déclaration ne nomme pas — signalée en haut, refusée dessous |
+| `datastore/champs_reserves.py` | `readonly` / `origine: system` / `agent_access`, et le préavis daté |
+| `datastore/definition.py` | valider le SCHÉMA lui-même, à la pose |
+| `datastore/couches_exigees.py` | `required_layers` — ce que la valeur doit porter avec elle |
+| `datastore/validation.py` | VALIDER une ligne à l'écriture, et ses textes de refus |
+| `datastore/effacements.py` | fusionner / retirer un format, et le relevé de ce qui a disparu |
+| `datastore/vocabulaire.py` | ce que CETTE version lit et fait respecter, dérivé du code |
+| `datastore/non_applique.py` | ce qu'un tableau déclare et que la plateforme laisse inerte |
 | `datastore/schema_ops.py` | poser/retoucher/nettoyer le FORMAT (mixin du store) |
-| `datastore/core.py` | le store qui COMPOSE — gros par nature |
+| `datastore/core.py` | le store qui COMPOSE |
 
-Déplacements PURS : `db/datastore.py` et `datastore/core.py` ré-exportent, la surface plate
-`db.<fn>` est figée par `tests/test_db_surface_frozen.py` (cliquet : on peut ajouter,
-jamais retirer). ⚠️ Une scission fait dormir les noms hérités des globals dans les
-branches rares — balayage figé par `tests/datastore/test_datastore_ns_duplicate.py`.
+Déplacements PURS : `db/datastore.py`, `datastore/schema.py` et `datastore/core.py`
+ré-exportent, la surface plate `db.<fn>` est figée par `tests/test_db_surface_frozen.py`
+(cliquet : on peut ajouter, jamais retirer). ⚠️ Une scission fait dormir les noms hérités
+des globals dans les branches rares — balayage figé par
+`tests/datastore/test_datastore_ns_duplicate.py`.
+
+⚠️ **Deux pièges que la coupe de `schema.py` a payés le 07/09/2026**, et qui frapperont
+la prochaine :
+
+- **`vocabulaire._read_keys` scanne une liste de FICHIERS**, pas de clés : c'est ainsi
+  que le serveur établit ce qu'il interprète, en lisant son propre source. Un module
+  qui se met à lire un attribut de colonne doit y être ajouté — sinon le dérivé le
+  déclare mort et l'avertissement accuse une clé parfaitement lue. Un déplacement pur
+  suffit à déclencher ça, sans qu'aucun banc ne rougisse.
+- **Un banc qui remplace une fonction SUR LA FAÇADE ne mord plus.** Une ré-exportation
+  est une seconde référence vers le même objet : le module appelant, lui, a importé
+  l'originale. Cinq bancs ont rougi bruyamment ; le vrai danger est celui qui reste
+  VERT en ne testant plus rien. Viser le module qui EXÉCUTE, jamais la façade.
 
 ## Ce qu'oto SAIT d'un champ, et ce qu'il ne saura jamais (14/08)
 
