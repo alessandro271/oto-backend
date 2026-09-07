@@ -206,6 +206,14 @@ class WrittenRow(Row):
     # les listes — le cas normal, pas de clé parasite dans la réponse.
     hors_options: Optional[dict] = None
     hors_options_hint: Optional[str] = None
+    # #733 — colonnes dont la valeur DÉJÀ EN BASE ne respecte plus le type déclaré,
+    # rencontrées en écrivant ailleurs sur la même ligne. `{champ: le refus qu'on
+    # aurait rendu}`. L'écriture a réussi : ce n'est ni un refus ni le geste de
+    # l'appelant, c'est un fait sur la ligne dit à celui qui passe par là. Déclaré
+    # au contrat plutôt que toléré, parce qu'une intégration qui lit l'OpenAPI doit
+    # savoir que cette clé peut arriver. Absent quand la ligne est conforme.
+    hors_type: Optional[dict] = None
+    hors_type_hint: Optional[str] = None
     # #317 : ce qui a CHANGÉ dans le comportement de la plateforme, dit à l'instant
     # où ça joue — aujourd'hui le retrait de la libération automatique sur état final.
     # Déclaré (et pas seulement toléré par `extra="allow"`) parce qu'un message de

@@ -316,6 +316,10 @@ class DatastorePg(SchemaOpsMixin):
         # store est instancié par requête, donc la portée est celle du geste.
         self.off_schema: set = set()
         self.off_options: dict = {}
+        # Colonnes dont la valeur EN BASE ne passe plus le type déclaré, rencontrées
+        # en écrivant AILLEURS sur la même ligne. `{champ: refus}` — le refus qu'on
+        # aurait rendu, gardé pour que l'agent sache quoi y écrire s'il veut réparer.
+        self.off_geles: dict = {}
         self.off_notices: set = set()
         # Ce que ce geste a VIDÉ (#407/#408/#409) : les colonnes qu'il nomme avec un
         # `null` alors qu'elles portaient quelque chose, et la valeur perdue.
@@ -728,8 +732,15 @@ class DatastorePg(SchemaOpsMixin):
         # ne doit jamais avoir à faire.
         details: dict = {}
         hors: list = []
+        gelees: list = []
         errors = dsv2.validate_row(schema, merged, prev_status=prev_status,
-                                   written=written, details=details, hors=hors)
+                                   written=written, details=details, hors=hors,
+                                   gelees=gelees)
+        # Ce que ce geste n'écrit pas et qui ne passe plus le format déclaré. Relevé
+        # même quand l'écriture réussit — c'est justement le cas normal : l'appelant
+        # touche une autre colonne, et il est le seul à passer par cette ligne.
+        for g in gelees:
+            self.off_geles.setdefault(str(g["champ"]), str(g["refus"]))
         if errors:
             # #667 : une valeur hors options s'ÉCARTE, la fiche s'écrit. Tout autre
             # refus — et toute combinaison avec un autre refus — retombe ici.
@@ -851,6 +862,14 @@ class DatastorePg(SchemaOpsMixin):
         if self.off_options:
             out["hors_options"] = dict(sorted(self.off_options.items()))
             out["hors_options_hint"] = dsv2.unenforced_options_warning(self.off_options)
+        # #733 : le type ne gèle plus une ligne pour une colonne qu'on n'écrit pas —
+        # il la SIGNALE. Clé distincte des deux précédentes : là une colonne inconnue,
+        # là une valeur hors d'une liste, ici une valeur déjà en base devenue non
+        # conforme au format que le tableau déclare aujourd'hui.
+        if self.off_geles:
+            out["hors_type"] = dict(sorted(self.off_geles.items()))
+            out["hors_type_hint"] = dsv2.types_geles_warning(
+                [{"champ": k} for k in sorted(self.off_geles)])
         # #317 étape B : le changement de comportement, dit à l'instant où il joue.
         # Union sur un lot (comme `hors_schema`) — un batch de 500 lignes finies ne
         # répète pas 500 fois la même phrase.

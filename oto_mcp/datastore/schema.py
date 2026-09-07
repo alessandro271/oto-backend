@@ -1227,6 +1227,25 @@ def off_schema_warning(keys: list) -> Optional[str]:
             "réécris sous le bon nom ; si le champ est voulu, déclare-le au schéma.")
 
 
+def types_geles_warning(gelees: list) -> Optional[str]:
+    """La phrase qui accompagne le relevé des types déjà hors format.
+
+    ⚠️ **Ce n'est pas un reproche à l'appelant** : il n'a pas écrit ces colonnes, et
+    son écriture a réussi. C'est un fait sur la LIGNE, dit à celui qui est en train
+    de la toucher — le seul qui passera par là. Le refuser aurait gelé la ligne pour
+    toujours ; le taire l'aurait laissée pourrir sans témoin."""
+    if not gelees:
+        return None
+    noms = ", ".join(f"`{g['champ']}`" for g in gelees)
+    return (f"ton écriture est passée. Signalement sur une AUTRE partie de la ligne : "
+            f"{noms} — la valeur déjà en base n'y respecte plus le format déclaré. Ce "
+            "n'est pas ton geste et rien n'a été refusé : ces colonnes ont été écrites "
+            "avant que le format ne soit posé, ou le format a changé depuis. Tant "
+            "qu'elles restent ainsi, elles s'affichent et se lisent, mais toute "
+            "déclaration qui s'appuie dessus les ignore. Pour les remettre en règle, "
+            "écris-y une valeur conforme — le refus détaillé te dira laquelle.")
+
+
 # ── le TROISIÈME état de `strict` au premier niveau (#614/#678) ──────────────
 #
 # `strict` porte deux contrats sous un seul mot : rapporteur au premier niveau
@@ -2144,12 +2163,16 @@ def _row_errors(fields: list, data: dict, path: str,
                 strict: bool = False, closed: bool = False,
                 vus: Optional[set] = None,
                 details: Optional[dict] = None,
-                hors: Optional[list] = None) -> list[str]:
+                hors: Optional[list] = None,
+                gelees: Optional[list] = None) -> list[str]:
     """Erreurs d'un (sous-)record. `written` = clés effectivement RÉÉCRITES par ce
-    geste (None = toutes) : la borne de longueur, le motif et la fermeture d'un
-    composite s'y restreignent — eux seuls, cf. `validate_row`. La récursion dans un
-    sous-record repart à None — remplacer une clé de premier niveau réécrit tout ce
-    qu'elle contient.
+    geste (None = toutes) : la borne de longueur, le motif, la fermeture d'un
+    composite **et le TYPE** s'y restreignent — eux seuls, cf. `validate_row`. La
+    récursion dans un sous-record repart à None — remplacer une clé de premier niveau
+    réécrit tout ce qu'elle contient.
+
+    `gelees` = liste OUT (patron `hors`) où part le type qui échoue sur une colonne
+    que le geste **n'écrit pas**. Elle ne refuse plus : elle se DIT.
 
     `strict` = le tableau déclare `strict: true`. Il n'interdit rien ICI (une clé
     inconnue au premier niveau crée une colonne libre, droit du contrat 0016 : elle
@@ -2277,7 +2300,19 @@ def _row_errors(fields: list, data: dict, path: str,
                 # la destination, et l'écartement s'y refuse.
                 if hors and hors[-1].get("champ") == fpath:
                     hors[-1]["destination"] = str(cible.get("key"))
-            errors.extend(errs_type)
+            if errs_type and not pose:
+                # La colonne n'est pas écrite par ce geste. La refuser rendrait la
+                # ligne INÉCRITABLE pour toujours, sur n'importe quel champ — c'est
+                # exactement ce que la restriction de la borne et du motif a corrigé
+                # (23 lignes gelées chez un client), et le type y avait été oublié.
+                #
+                # ⚠️ On ne se tait pas pour autant : la valeur en base ne passe plus
+                # le format déclaré, et l'agent qui écrit à côté est le mieux placé
+                # pour le savoir. Refuser gèle, taire cache — on DIT.
+                if gelees is not None:
+                    gelees.append({"champ": fpath, "refus": errs_type[0]})
+            else:
+                errors.extend(errs_type)
         mi = f.get("max_items")
         if (isinstance(mi, int) and not isinstance(mi, bool) and mi > 0
                 and isinstance(value, list) and len(value) > mi):
@@ -2503,7 +2538,8 @@ def validate_row(schema: Optional[dict], merged: dict, *,
                  prev_status: Any = None,
                  written: Optional[set] = None,
                  details: Optional[dict] = None,
-                 hors: Optional[list] = None) -> list[str]:
+                 hors: Optional[list] = None,
+                 gelees: Optional[list] = None) -> list[str]:
     """Erreurs d'une row TELLE QU'ELLE SERA ÉCRITE (le résultat mergé, pas le
     patch) : required / required_when / types / structure imbriquée — si la
     validation est active — plus le cycle de vie (états + transitions) dès qu'un
@@ -2515,14 +2551,25 @@ def validate_row(schema: Optional[dict], merged: dict, *,
     `max_length`, et même raison.
 
     `written` = les clés que ce geste réécrit (None = la row entière, cas d'un
-    insert ou d'un remplacement). Trois contrôles s'y restreignent, et eux seuls :
-    la borne `max_length`, le motif `pattern` et la fermeture d'un composite — ce
-    sont des propriétés de la valeur qu'on POSE, pas de l'état final. Sans ça, une
-    valeur trop longue (ou un attribut hors format) déjà en base ferait échouer tout
-    patch ultérieur de la ligne, même portant sur un champ sans rapport (signal
-    #383, et les 23 lignes gelées d'oto-backend#284). Le reste continue de se juger
-    sur le mergé : un requis manquant est un défaut de la row, quel que soit le
-    geste qui l'y laisse.
+    insert ou d'un remplacement). **Quatre** contrôles s'y restreignent, et eux
+    seuls : la borne `max_length`, le motif `pattern`, la fermeture d'un composite
+    et le **TYPE** — ce sont des propriétés de la valeur qu'on POSE, pas de l'état
+    final. Sans ça, une valeur trop longue (ou hors format, ou hors type) déjà en
+    base ferait échouer tout patch ultérieur de la ligne, même portant sur un champ
+    sans rapport (signal #383, et les 23 lignes gelées d'oto-backend#284). Le reste
+    continue de se juger sur le mergé : un requis manquant est un défaut de la row,
+    quel que soit le geste qui l'y laisse.
+
+    ⚠️ **Le type est arrivé le 07/09/2026, et son absence était un OUBLI, pas un
+    choix.** La restriction des trois premiers cite en toutes lettres le défaut
+    qu'elle ferme — « une valeur déjà en base ferait échouer tout patch ultérieur,
+    même sur un champ sans rapport » — et le type produisait exactement ça, signalé
+    par un tenant sur des lignes de socle devenues inécritables. Il ne se TAIT pas
+    pour autant : ce qu'il ne refuse plus part dans `gelees`.
+
+    `gelees` = liste OUT : les colonnes dont la valeur EN BASE ne passe plus le type
+    déclaré, alors que ce geste ne les écrit pas. Ni refus ni silence — l'agent qui
+    écrit à côté est le mieux placé pour l'apprendre.
 
     `details` (dict mutable, optionnel) = le refus STRUCTURÉ, rempli en chemin —
     aujourd'hui `expected_column`, la colonne où la valeur aurait dû atterrir (#545).
@@ -2533,7 +2580,7 @@ def validate_row(schema: Optional[dict], merged: dict, *,
         # required_when se juge sur la row finale (le statut mergé, pas l'ancien)
         errors.extend(_row_errors(_fields(schema), merged, "", written,
                                   strict=bool(schema.get("strict")),
-                                  details=details, hors=hors))
+                                  details=details, hors=hors, gelees=gelees))
     # oto#75 barreau 1 : HORS du garde `validation_active`, comme le cycle de vie
     # ci-dessous — la déclaration `required_layers` s'arme elle-même.
     errors.extend(couches_manquantes(schema, merged, written=written))
