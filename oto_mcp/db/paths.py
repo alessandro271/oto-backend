@@ -91,7 +91,19 @@ FIELD_VALUE_PARAM_SQL = f"COALESCE(data->%s->>'{VALUE_LAYER}', data->>%s)"
 # Pas de COALESCE ici : une sous-clé n'a pas de forme plate à laquelle retomber. Sur
 # une colonne scalaire elle est NULL, et c'est la BONNE réponse — « cette valeur n'a
 # pas de source » est justement la question qu'on veut pouvoir poser.
-LAYER_VALUE_PARAM_SQL = "data->%s->>%s"
+# ⚠️ **Les DEUX formes, comme `FIELD_VALUE_PARAM_SQL` juste au-dessus** — et pour une
+# raison mesurée le 08/09/2026 : une couche peut vivre imbriquée (`data->'c'->>'link'`,
+# la forme normale) OU comme une clé LITTÉRALE pointée au premier niveau
+# (`data->>'c.link'`). Cette seconde forme est une RELIQUE : la garde qui l'empêche
+# d'entrer est posée sur les quatre chemins d'écriture depuis le 31/08, mais ce qui a
+# été écrit avant est toujours en base.
+#
+# Sans le `COALESCE`, un filtre sur `c.link` rendait **0 alors que la donnée existe** —
+# et ce n'est pas un défaut d'affichage : c'est le geste même dont on se sert pour
+# VÉRIFIER une destruction. Une campagne venait de purger trois colonnes de données de
+# personnes ; le filtre lui aurait dit qu'il ne restait rien, sur une ligne qui portait
+# encore la relique. Un instrument aveugle à cette place ne se rattrape pas.
+LAYER_VALUE_PARAM_SQL = "COALESCE(data->%s->>%s, data->>%s)"
 
 
 # Le blob RECONSTRUIT avec les valeurs à la place des enveloppes — pour tout ce qui
@@ -190,7 +202,8 @@ def field_read_sql(field: str) -> tuple:
         return leaf_read_sql(f"data->%s->{int(rang)}", [colonne], reste)
     base, layer = split_layer(field)
     if layer:
-        return LAYER_VALUE_PARAM_SQL, [base, layer]
+        # Le nom COMPLET en troisième paramètre : c'est la relique littérale.
+        return LAYER_VALUE_PARAM_SQL, [base, layer, field]
     return FIELD_VALUE_PARAM_SQL, [base, base]
 
 

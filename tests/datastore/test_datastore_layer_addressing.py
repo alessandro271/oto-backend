@@ -56,7 +56,9 @@ def _clause(field, op="eq", value="x"):
 def test_filtering_a_layer_reads_the_layer():
     clause, params = _clause("email.comment")
     assert clause == f"{dsdb.LAYER_VALUE_PARAM_SQL} = %s"
-    assert params == ["email", "comment", "x"]
+    # Trois paramètres depuis le 08/09/2026 : la couche imbriquée (`email`, `comment`)
+    # PUIS la clé littérale pointée (`email.comment`) — cf. le test ci-dessous.
+    assert params == ["email", "comment", "email.comment", "x"]
 
 
 def test_filtering_a_bare_name_still_reads_the_value():
@@ -75,13 +77,30 @@ def test_the_question_that_matters_is_expressible():
     assert params[:2] == ["email", "comment"]
 
 
-def test_a_layer_has_no_flat_fallback():
-    """Pas de COALESCE sur une couche : sur une colonne scalaire elle est NULL, et
-    c'est la BONNE réponse. Y retomber sur la valeur ferait répondre « la source est
-    l'email lui-même » — un mensonge, précisément là où on cherche la vérité."""
-    assert "COALESCE" not in dsdb.LAYER_VALUE_PARAM_SQL
-    clause, _ = _clause("email.comment")
-    assert "COALESCE" not in clause
+def test_a_layer_never_falls_back_on_the_VALUE():
+    """Une couche ne retombe JAMAIS sur la valeur de sa colonne : sur une colonne
+    scalaire elle est NULL, et c'est la BONNE réponse. Y retomber ferait répondre
+    « la source est l'email lui-même » — un mensonge, précisément là où on cherche la
+    vérité.
+
+    ⚠️ **Ce banc interdisait le mot `COALESCE`, pas le danger qu'il vise** — une garde
+    de FORME et non d'axe. Elle a mordu le 08/09/2026 sur un correctif qui ajoute un
+    repli d'une tout autre nature : la clé LITTÉRALE pointée (`data->>'email.comment'`),
+    une relique écrite au premier niveau avant la garde du 31/08, et dont il reste 765
+    occurrences en production. Sans ce repli, un filtre sur `email.comment` rend **0
+    sur une donnée présente** — y compris quand on s'en sert pour vérifier une
+    destruction.
+
+    `email.comment` ne peut pas être la valeur de `email` : le repli lit une autre
+    clé, pas la même sous un autre nom. **Le mensonge que ce banc protège reste
+    impossible** ; ce qui change, c'est qu'on regarde les deux endroits où la couche
+    peut vivre.
+
+    Le banc dit donc maintenant ce qu'il voulait dire : pas de repli sur la VALEUR."""
+    _, params = _clause("email.comment")
+    assert "email" not in params[2:3], (
+        "le repli ne doit JAMAIS viser la colonne nue — ce serait le mensonge")
+    assert params[2] == "email.comment", "il vise la clé littérale pointée"
 
 
 def test_layers_sort_and_aggregate_like_values():
