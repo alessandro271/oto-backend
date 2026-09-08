@@ -30,6 +30,7 @@ DESCRIPTION = (
     "bâti, transactions DVF (prix au m², comparables par adresse), risques et "
     "ICPE, DPE, productible solaire — et la consommation électrique annuelle "
     "des sites sur les DEUX étages du réseau, distribution (Enedis) et "
-    "transport (RTE), de quoi bâtir une liste de gros consommateurs."
+    "transport (RTE), le DPE tertiaire et les bilans GES déclarés — de quoi "
+    "bâtir une liste de gros consommateurs d'énergie et la qualifier."
 )
 LOGO_DOMAIN = "data.gouv.fr"

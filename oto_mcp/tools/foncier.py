@@ -101,7 +101,7 @@ _POSTCODE_RE = re.compile(r"\b\d{5}\b")
 # être acceptée sans être annoncée à l'agent, ni l'inverse.
 _SITE_OPS = ("parcelle", "bati", "solaire", "adresse")
 _DVF_OPS = ("prix_m2", "comparables", "comparables_adresse")
-_DPE_OPS = ("adresse", "stats")
+_DPE_OPS = ("adresse", "stats", "tertiaire")
 
 # `years` n'a PAS le même défaut selon l'op DVF (2 ans pour les mutations brutes
 # d'une commune, 3 pour les stats et le voisinage d'une adresse) : le paramètre
@@ -151,6 +151,8 @@ def register(mcp: FastMCP) -> None:
     ign = fod_foncier.ign
     enedis = fod_foncier.enedis
     odre = fod_foncier.odre
+    beges = fod_foncier.beges
+    dpe_tertiaire = fod_foncier.dpe_tertiaire
     dvf = fod_foncier.dvf
     dpe = fod_foncier.dpe
     sitadel = fod_foncier.sitadel
@@ -599,7 +601,7 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def foncier_dpe(
-        op: Literal["adresse", "stats"] = "adresse",
+        op: Literal["adresse", "stats", "tertiaire"] = "adresse",
         adresse: Optional[str] = None,
         code_commune: Optional[str] = None,
         radius_m: int = 200,
@@ -607,6 +609,8 @@ def register(mcp: FastMCP) -> None:
         etiquette: Optional[str] = None,
         surface_min: Optional[float] = None,
         surface_max: Optional[float] = None,
+        secteur: Optional[str] = None,
+        departement: Optional[str] = None,
         limit: int = 50,
     ) -> dict:
         """Energy performance diagnostics (DPE, ADEME open data) — raw records around
@@ -620,6 +624,15 @@ def register(mcp: FastMCP) -> None:
           type_batiment, adresse, date_dpe, distance_m, lat/lon. Needs `adresse`.
         - **"stats"**: DPE label distribution (A–G) for a commune — aggregated view of
           energy performance across all its dwellings. Needs `code_commune`.
+        - **"tertiaire"**: the NON-residential stock — hospitals, schools, offices,
+          shops, restaurants (~560k diagnostics). The other half of the building stock,
+          and the one electricity-consumption data describes without qualifying: Enedis
+          says HOW MUCH a site consumes, this says WHAT the building is (ERP sector,
+          SHON surface, label). Coordinates come back already in Lambert 93 under
+          `lambert_x`/`lambert_y`, so a row matches an establishment with no
+          intermediate geocoding. `sans_position` counts the ungeocoded ones — they are
+          never placed at the centre of their commune. Needs `code_commune` or
+          `departement`.
 
         Args:
             op: adresse (default) | stats.
@@ -629,6 +642,10 @@ def register(mcp: FastMCP) -> None:
             type_batiment: OPTIONAL "maison" | "appartement" | "immeuble" (both ops).
             etiquette: op="adresse" — OPTIONAL DPE label filter (A..G).
             surface_min / surface_max: op="adresse" — OPTIONAL surface habitable band m².
+                op="tertiaire" — `surface_min` applies to SHON instead.
+            secteur: op="tertiaire" — free text on the ERP sector label
+                ("hospital", "enseignement", "bureaux").
+            departement: op="tertiaire" — INSEE department code.
             limit: op="adresse" — max records, nearest first (default 50).
         """
         if op not in _DPE_OPS:
@@ -645,7 +662,61 @@ def register(mcp: FastMCP) -> None:
             return dpe.stats(code_commune=_need(code_commune, "code_commune", op),
                              type_batiment=type_batiment)
 
+        if op == "tertiaire":
+            if not (code_commune or departement):
+                raise _bad('op="tertiaire" needs code_commune or departement — the '
+                           "national stock is ~560k diagnostics.")
+            return dpe_tertiaire.diagnostics(
+                code_commune=code_commune, departement=departement, secteur=secteur,
+                etiquette=etiquette, surface_min=surface_min, size=limit)
+
         raise _bad(_ops_error(_DPE_OPS))
+
+    # --- bilans GES déclarés (BEGES, ADEME) ---------------------------------
+
+    @mcp.tool()
+    def foncier_beges(
+        siren: Optional[str] = None,
+        naf: Optional[str] = None,
+        annee: Optional[int] = None,
+        departement: Optional[str] = None,
+        obligee: Optional[bool] = None,
+        limit: int = 100,
+    ) -> dict:
+        """Declared greenhouse-gas inventories (BEGES, ADEME open data), keyed by SIREN.
+
+        ~11,800 published inventories, ~7,000 of them from organisations under the legal
+        obligation (art. L229-25: companies over 500 staff, communes over 50,000
+        inhabitants, the State). Each carries emissions per category, the reporting year,
+        headcount band, and a link to the full report.
+
+        WHY THIS EXISTS ALONGSIDE `foncier_conso_elec`. Consumption data is indexed by
+        ADDRESS or by IRIS: it describes a SITE that still has to be resolved to a
+        company, and it does not locate everything — on one métropole, 25 rows and
+        10,621 MWh carry no usable address at all. Here the key IS the SIREN, so the
+        inventory joins straight to the organisation. It reports DECLARED energy and
+        emissions rather than metered consumption: a different fact, not a better one.
+
+        ⚠️ The reporting year is not the publication year — an inventory published in
+        2026 may cover 2015. `annee` filters on the reporting year, which is the one
+        that makes two organisations comparable.
+
+        ⚠️ A missing emission post is not a zero. Totals sum only what was declared, and
+        each category carries `postes_declares` / `postes_absents` so a low total can be
+        told apart from a partial declaration.
+
+        Args:
+            siren: 9 digits. The source stores it as a NUMBER, so 150 rows lost their
+                leading zero — this is handled on both sides, pass the real SIREN.
+            naf: a full code ("8610Z") or a division prefix ("86"), which then covers
+                all its sub-classes.
+            annee: reporting year.
+            departement: INSEE department code.
+            obligee: True keeps only organisations under the legal obligation.
+            limit: max inventories returned (default 100).
+        """
+        return beges.bilans(siren=siren, naf=naf, annee=annee,
+                            departement=departement, obligee=obligee, size=limit)
 
     # --- MCP Apps : variantes à interface rendue (SEP-1865) ------------------
     # Quelques tools "flagship" *_app qui renvoient une UI (carte + table) rendue

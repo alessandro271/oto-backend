@@ -27,6 +27,13 @@ tout ce qui caractérise un **site** physique en france : géocodage, cadastre, 
 
 un périmètre (`dept`, `code_commune` ou `code_epci`) est obligatoire sur la distribution : avec `maille="site"` le seuil ne peut pas être poussé au serveur. l'étage transport en est dispensé, il tient en ~1 600 lignes nationales.
 
+## usage — ce que le compteur ne dit pas
+
+la consommation décrit un site sans le qualifier, et ne localise pas tout. deux sources prennent le problème par l'autre bout.
+
+- `foncier_dpe(op="tertiaire")(code_commune= | departement=)` — le parc **non résidentiel** : hôpitaux, enseignement, bureaux, commerces, restauration. enedis dit COMBIEN un site consomme, ce jeu dit CE QUE le bâtiment est — secteur erp, surface shon, étiquettes. ses coordonnées sortent **déjà en lambert 93**, donc une ligne se rapproche d'un établissement sans géocodage intermédiaire. `sans_position` compte les diagnostics non géocodés : ils ne sont jamais placés au centre de leur commune.
+- `foncier_beges(siren= | naf= | annee= | obligee=)` — les **bilans ges déclarés** (~11 800, dont ~7 000 obligés). ici la clé est le **siren**, pas l'adresse : le bilan se joint directement à l'organisation, y compris pour les sites qu'aucun réseau ne localise. ⚠️ l'année de reporting n'est pas l'année de publication — un bilan publié en 2026 peut porter sur 2015. ⚠️ un poste d'émission absent n'est pas un zéro : les totaux ne somment que le déclaré, et `postes_declares`/`postes_absents` disent sur quoi ils portent.
+
 ## usage — remonter d'un site à l'entreprise
 
 les deux étages rendent des adresses ou des iris, jamais un siret. la résolution se fait avec `fr_stock_search` (connecteur `sirene`) sur la commune insee et les **sous-classes naf à 5 caractères** — sirene ne sait pas lire une division à 2 chiffres.

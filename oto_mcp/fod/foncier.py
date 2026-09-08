@@ -5,7 +5,7 @@ PVGIS, permis Sit@del, conso Enedis, valorisation DVF+, DPE ADEME) est servi par
 service FOD dédié (box `fod-0`) — le backend ne les exécute plus in-process.
 
 Ce module expose des **objets proxy** (`ban`, `cadastre`, `bdtopo`, `pvgis`,
-`enedis`, `odre`, `dvf`, `dpe`, `sitadel`) qui **répliquent la surface des clients
+`enedis`, `odre`, `beges`, `dvf`, `dpe`, `dpe_tertiaire`, `sitadel`) qui **répliquent la surface des clients
 `france_opendata`** consommés par `tools/foncier.py` (mêmes noms/signatures/retours)
 → le tool ne change que la SOURCE de ses clients, ses corps restent identiques.
 
@@ -89,6 +89,25 @@ class _Enedis:
                       "min_mwh": min_mwh, "limit": limit})
 
 
+class _Beges:
+    def bilans(self, siren: Optional[str] = None, naf: Optional[str] = None,
+               annee: Optional[int] = None, departement: Optional[str] = None,
+               obligee: Optional[bool] = None, size: int = 100) -> dict[str, Any]:
+        return _post("/api/foncier/beges",
+                     {"siren": siren, "naf": naf, "annee": annee,
+                      "departement": departement, "obligee": obligee, "size": size})
+
+
+class _DpeTertiaire:
+    def diagnostics(self, code_commune: Optional[Any] = None, departement: Optional[str] = None,
+                    secteur: Optional[str] = None, etiquette: Optional[Any] = None,
+                    surface_min: Optional[float] = None, size: int = 100) -> dict[str, Any]:
+        return _post("/api/foncier/dpe/tertiaire",
+                     {"code_commune": code_commune, "departement": departement,
+                      "secteur": secteur, "etiquette": etiquette,
+                      "surface_min": surface_min, "size": size})
+
+
 class _Odre:
     def consommation_transport(self, annee: Any, dept: Optional[str] = None,
                                code_commune: Optional[Any] = None,
@@ -146,5 +165,7 @@ ign = _Ign()
 sitadel = _Sitadel()
 enedis = _Enedis()
 odre = _Odre()
+beges = _Beges()
+dpe_tertiaire = _DpeTertiaire()
 dvf = _Dvf()
 dpe = _Dpe()

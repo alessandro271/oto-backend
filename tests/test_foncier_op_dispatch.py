@@ -36,6 +36,8 @@ _READ_ONLY_SURFACE = {
     "sitadel": {"search"},
     "enedis": {"consommation_par_adresse", "sites_par_adresse"},
     "odre": {"consommation_transport", "annees_disponibles"},
+    "beges": {"bilans"},
+    "dpe_tertiaire": {"diagnostics"},
     "dvf": {"stats", "comparables", "comparables_by_address"},
     "dpe": {"by_address", "stats"},
     "georisques": {"installations_classees"},
@@ -68,6 +70,8 @@ def clients(monkeypatch):
     mocks["sitadel"].search.return_value = {"total": 3, "permis": []}
     # Le tool RELIT l'année du transport pour avertir du décalage de millésime.
     mocks["odre"].consommation_transport.return_value = {"total": 2, "annee": "2023", "signals": []}
+    mocks["beges"].bilans.return_value = {"total": 1, "bilans": []}
+    mocks["dpe_tertiaire"].diagnostics.return_value = {"total": 1, "sans_position": 0, "diagnostics": []}
     mocks["enedis"].sites_par_adresse.return_value = {"total": 1, "lignes_lues": 3, "signals": []}
     return mocks
 
@@ -96,10 +100,10 @@ def test_the_consolidated_surface_is_exactly_these_tools(clients):
     """Le comptage n'est pas le critère, mais un tool qui APPARAÎT ou DISPARAÎT sans
     qu'on le veuille (renommage manqué, corps oublié) doit casser ici."""
     assert _tool_names() == {
-        # 8 tools JSON
+        # 9 tools JSON
         "foncier_geocode", "foncier_site", "foncier_isochrone",
         "foncier_permis_search", "foncier_conso_elec", "foncier_icpe",
-        "foncier_dvf", "foncier_dpe",
+        "foncier_dvf", "foncier_dpe", "foncier_beges",
         # 3 MCP Apps, HORS consolidation (elles rendent un composant d'UI)
         "foncier_site_app", "foncier_comparables_app", "foncier_prix_m2_app",
     }
@@ -330,6 +334,8 @@ def test_no_op_reaches_a_non_read_method(clients, monkeypatch):
     dvf_t(op="comparables_adresse", adresse="44 la canebière", with_dpe=True)
     dpe_t(op="adresse", adresse="44 la canebière")
     dpe_t(op="stats", code_commune="13201")
+    dpe_t(op="tertiaire", code_commune="13201")
+    _tool("foncier_beges")(naf="86")
     _tool("foncier_geocode")("44 la canebière marseille")
     _tool("foncier_isochrone")(lat=43.29, lon=5.37, minutes=10)
     _tool("foncier_permis_search")(code_commune="13201")
@@ -366,6 +372,22 @@ def test_conso_elec_still_refuses_a_national_scan(clients):
     for scope in ({"dept": "13"}, {"code_commune": ["13201"]}, {"code_epci": "243300316"}):
         _tool("foncier_conso_elec")(annee="2024", **scope)
     assert clients["enedis"].consommation_par_adresse.call_count == 3
+
+
+def test_le_dpe_tertiaire_refuse_lui_aussi_un_scan_national(clients):
+    """~560k diagnostics : le stock national n'est pas une réponse."""
+    with pytest.raises(McpError, match="code_commune or departement"):
+        _tool("foncier_dpe")(op="tertiaire")
+    clients["dpe_tertiaire"].diagnostics.assert_not_called()
+    _tool("foncier_dpe")(op="tertiaire", departement="33")
+    clients["dpe_tertiaire"].diagnostics.assert_called_once()
+
+
+def test_beges_se_cherche_par_siren_pas_par_adresse(clients):
+    """C'est ce qui le distingue des réseaux : la clé est l'organisation."""
+    _tool("foncier_beges")(siren="095720314")
+    kw = clients["beges"].bilans.call_args.kwargs
+    assert kw["siren"] == "095720314"
 
 
 def test_transport_tier_is_exempt_from_the_perimeter_guard(clients):
