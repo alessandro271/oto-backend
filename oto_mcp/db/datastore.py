@@ -535,11 +535,26 @@ def datastore_ensure_key_index(ns_id: int, key: str, *, bornee: bool = True) -> 
                 n=_sql.Identifier(name)))
             conn.execute(_sql.SQL("ALTER INDEX {t} RENAME TO {n}").format(
                 t=tmp, n=_sql.Identifier(name)))
-        except (psycopg.errors.LockNotAvailable, psycopg.errors.QueryCanceled) as e:
-            # Un `CREATE INDEX CONCURRENTLY` coupé laisse son index INVALIDE derrière
-            # lui — et un unique invalide peut continuer d'imposer sa contrainte aux
+        except Exception as e:
+            # ⚠️ **On rattrape TOUTE interruption, pas une liste de causes.** Un
+            # `CREATE INDEX CONCURRENTLY` coupé laisse son index INVALIDE derrière lui
+            # — et un unique invalide peut continuer d'imposer sa contrainte aux
             # écritures suivantes. On le retire tout de suite : le laisser ferait
             # refuser des écritures au nom d'un index que personne ne sait nommer.
+            #
+            # ⚠️ **Ce bloc ne listait que deux causes, et il en manquait une vivante.**
+            # Constaté en production le 07/09/2026 à 23:40 UTC : un `DeadlockDetected`
+            # sur cette route. Il n'est PAS une sous-classe de `LockNotAvailable` ni de
+            # `QueryCanceled` — ce sont trois sœurs sous `OperationalError` — donc il
+            # traversait : l'appelant recevait une erreur interne, **et surtout le
+            # nettoyage ne tournait pas**. L'index invalide restait.
+            #
+            # La leçon est dans la FORME, pas dans la cause manquante : l'invariant
+            # est « toute interruption laisse un index à retirer », et une liste
+            # d'exceptions ne peut pas exprimer un invariant — elle ne peut
+            # qu'énumérer ce qu'on a rencontré jusqu'ici. Le nettoyage est donc
+            # inconditionnel ; seul le MESSAGE distingue les causes.
+            #
             # Best-effort ET COURT : ce DROP réclame un verrou exclusif, donc il se
             # heurte au même mur que ce qu'on vient de subir — le tenter au budget
             # plein doublerait le temps d'échec pour rien.
@@ -550,11 +565,34 @@ def datastore_ensure_key_index(ns_id: int, key: str, *, bornee: bool = True) -> 
             except Exception:
                 logger.warning("ds_bkey ns=%s : index temporaire non nettoyé",
                                ns_id, exc_info=True)
+
+            if not isinstance(e, _POSE_INTERROMPUE):
+                # Pas une contention : une vraie panne. Le nettoyage a eu lieu, et
+                # l'erreur remonte telle quelle — la traduire en « réessaie plus tard »
+                # ferait attendre un tir suivant qui échouera pareil.
+                raise
+
+            # La cause tient en un mot, et il change ce que l'appelant doit en penser :
+            # une transaction qui retenait le geste se résorbe seule, un interblocage
+            # dit que deux poses se sont croisées.
+            pourquoi = ("deux poses de schéma se sont croisées"
+                        if isinstance(e, psycopg.errors.DeadlockDetected)
+                        else "une transaction ouverte le retenait")
             raise KeyIndexUnavailable(
                 f"index d'unicité de `{key}` : la base ne l'a pas laissé se poser dans "
-                "sa borne — une transaction ouverte le retenait. Le schéma EST écrit et "
+                f"sa borne — {pourquoi}. Le schéma EST écrit et "
                 "la clé reste rapprochée à l'écriture ; c'est la garantie anti-course "
                 "qui manque, et la maintenance la repose au tir suivant.") from e
+
+
+#: Les interruptions qui disent « la base n'a pas pu poser l'index MAINTENANT »,
+#: par opposition à une vraie panne. Les trois sont sœurs sous `OperationalError` —
+#: aucune n'attrape les autres, et c'est ce qui a laissé passer l'interblocage.
+_POSE_INTERROMPUE = (
+    psycopg.errors.LockNotAvailable,
+    psycopg.errors.QueryCanceled,
+    psycopg.errors.DeadlockDetected,
+)
 
 
 def datastore_drop_key_index(ns_id: int) -> None:
