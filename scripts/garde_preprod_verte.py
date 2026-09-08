@@ -98,6 +98,57 @@ def _conclusion_lisible(run: dict) -> str:
     return "le run conclut « {} »".format(run.get("conclusion"))
 
 
+def _run_en_vol(rid, cree, jobs: list) -> str:
+    """Un run qui n'a pas conclu — mais TOUS les « pas conclu » ne se valent pas.
+
+    Rencontré en vrai le 08/09/2026 sur `324ef83c` : le job `test` était vert depuis
+    1 min 30, et le run tournait encore parce que `contrat-front` n'avait pas rendu son
+    verdict (15 s de plus). Lu vite, « le run est encore in_progress » se comprend « les
+    tests ne sont pas finis », donc « j'en ai pour huit minutes », donc « je contourne ».
+    La vraie réponse était « attends une minute ».
+
+    Cette forme de refus est dangereuse parce qu'elle RESSEMBLE aux deux autres. Le
+    message doit donc dire laquelle des deux on est en train de lire.
+    """
+    restants = [
+        str(j.get("name")) for j in jobs if j.get("status") != "completed"
+    ]
+    vise = [j for j in jobs if j.get("name") == JOB_EXIGE]
+    tete = "  - run {} du {} : le run n'a pas conclu".format(rid, cree)
+
+    if vise and vise[0].get("conclusion") == "success":
+        fin = vise[0].get("completed_at")
+        return (
+            "{}, MAIS LA SUITE A DÉJÀ PASSÉ — job « {} » : success{}. Ce qui reste à "
+            "conclure : {}. ⚠️ Ce n'est PAS « les tests ne sont pas finis » : l'attente "
+            "restante se compte en dizaines de secondes, pas en minutes. Attendre, "
+            "surtout pas contourner.".format(
+                tete,
+                JOB_EXIGE,
+                " (terminé à {})".format(fin) if fin else "",
+                ", ".join(restants) or "(rien d'identifiable)",
+            )
+        )
+    if vise and vise[0].get("conclusion") not in (None, "success"):
+        # Volontairement pas « le run finira rouge » : un `skipped` ne rend pas un run
+        # rouge. Ce qui est vrai dans les deux cas, c'est qu'aucun verdict vert sur la
+        # suite ne sortira de CE run — donc que patienter ne sert à rien.
+        return (
+            "{} et son job « {} » conclut DÉJÀ « {} » — aucun verdict vert sur la suite "
+            "ne sortira de ce run, inutile d'attendre.".format(
+                tete, JOB_EXIGE, vise[0].get("conclusion")
+            )
+        )
+    return (
+        "{} et la suite tourne ENCORE (job « {} » : {}). Compter ~9 min depuis le début "
+        "du run.".format(
+            tete,
+            JOB_EXIGE,
+            (vise[0].get("status") if vise else "pas encore démarré"),
+        )
+    )
+
+
 def juger(tag: str, sha: str, runs: list, jobs_de) -> Verdict:
     """Décide, à partir des runs déjà filtrés par l'API et d'un accès aux jobs.
 
@@ -134,7 +185,12 @@ def juger(tag: str, sha: str, runs: list, jobs_de) -> Verdict:
     for run in candidats:
         rid = run.get("id")
         cree = run.get("created_at")
-        if run.get("status") != "completed" or run.get("conclusion") != "success":
+        if run.get("status") != "completed":
+            # On consulte les jobs même pour un run en vol : « pas conclu » recouvre
+            # deux situations très différentes, et les confondre pousse à contourner.
+            constats.append(_run_en_vol(rid, cree, jobs_de(rid)))
+            continue
+        if run.get("conclusion") != "success":
             constats.append(
                 "  - run {} du {} : {}".format(rid, cree, _conclusion_lisible(run))
             )

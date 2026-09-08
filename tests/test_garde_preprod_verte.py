@@ -35,8 +35,20 @@ def run(rid, path=PREPROD, status="completed", conclusion="success", cree="2026-
 
 
 def jobs(**noms):
-    """`jobs(test="success", **{"deploy-preprod": "skipped"})` → la liste de l'API."""
-    return [{"name": nom, "conclusion": etat} for nom, etat in noms.items()]
+    """`jobs(test="success", **{"deploy-preprod": "skipped"})` → la liste de l'API.
+
+    Une conclusion `None` vaut « pas encore conclu » et donne `status: in_progress`,
+    comme l'API : c'est ce couple que la garde lit pour distinguer un job qui tourne
+    d'un job qui a rendu son verdict.
+    """
+    return [
+        {
+            "name": nom,
+            "conclusion": etat,
+            "status": "in_progress" if etat is None else "completed",
+        }
+        for nom, etat in noms.items()
+    ]
 
 
 def sans_jobs(_run_id):
@@ -121,10 +133,55 @@ def test_refuse_un_run_vert_sans_aucun_job_nomme_test():
 def test_refuse_un_run_encore_en_cours():
     """Un run qui tourne n'est pas un verdict — et le refus doit le distinguer d'une absence."""
     verdict = garde.juger(
-        TAG, SHA, [run(44, status="in_progress", conclusion=None)], sans_jobs
+        TAG,
+        SHA,
+        [run(44, status="in_progress", conclusion=None)],
+        lambda _: jobs(test=None),
     )
     assert not verdict.accepte
-    assert "in_progress" in verdict.message
+    assert "n'a pas conclu" in verdict.message
+    assert "tourne ENCORE" in verdict.message
+
+
+# ── 7 bis. LA TROISIÈME FORME DE REFUS, celle qui ressemble aux autres ──────────────
+#
+# Rencontrée en vrai le 08/09/2026 sur `324ef83c` : job `test` vert depuis 1 min 30,
+# run encore `in_progress` parce que `contrat-front` n'avait pas rendu (15 s de plus).
+# Lue vite, elle se comprend « les tests ne sont pas finis » → « j'en ai pour huit
+# minutes » → « je contourne ». La vraie réponse était « attends une minute ».
+# Le danger n'est pas que la garde se trompe : c'est qu'elle ait raison d'une manière
+# qu'on relaie de travers.
+
+
+def test_un_run_en_vol_dont_la_suite_est_DEJA_verte_le_dit():
+    verdict = garde.juger(
+        TAG,
+        SHA,
+        [run(34242622982, status="in_progress", conclusion=None)],
+        lambda _: [
+            {"name": "test", "conclusion": "success", "status": "completed",
+             "completed_at": "2026-09-08T15:13:05Z"},
+            {"name": "contrat-front", "conclusion": None, "status": "in_progress"},
+        ],
+    )
+    assert not verdict.accepte, "un run non conclu ne vaut pas verdict, même suite verte"
+    # Ce que le message DOIT porter pour ne pas être relayé de travers.
+    assert "LA SUITE A DÉJÀ PASSÉ" in verdict.message
+    assert "contrat-front" in verdict.message, "il faut nommer ce qui reste à conclure"
+    assert "dizaines de secondes" in verdict.message
+    assert "contourner" in verdict.message
+
+
+def test_un_run_en_vol_dont_la_suite_est_deja_rouge_ne_fait_pas_attendre():
+    """Inutile de faire patienter neuf minutes un run dont le verdict est déjà tombé."""
+    verdict = garde.juger(
+        TAG,
+        SHA,
+        [run(45, status="in_progress", conclusion=None)],
+        lambda _: jobs(test="failure", **{"contrat-front": None}),
+    )
+    assert not verdict.accepte
+    assert "inutile d'attendre" in verdict.message
 
 
 # ── 8. Plusieurs runs sur le même arbre ─────────────────────────────────────────────
