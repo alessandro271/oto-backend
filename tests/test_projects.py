@@ -872,8 +872,10 @@ def _wire_import(monkeypatch, *, src=_PUB, existing=None, dup_id=101):
     monkeypatch.setattr(P.db, "find_copied_project",
                         lambda ot, oid, sid: dict(existing) if existing else None)
 
-    def _dup(sid, name, ot, oid, copied_by=None, track_source=False):
-        calls["dup"].append((sid, name, ot, oid, copied_by, track_source))
+    def _dup(sid, name, ot, oid, copied_by=None, track_source=False,
+             context_org_id=None):
+        calls["dup"].append((sid, name, ot, oid, copied_by, track_source,
+                             context_org_id))
         return dup_id, []
     monkeypatch.setattr(P.db, "duplicate_project", _dup)
     monkeypatch.setattr(P.db, "log_project_activity",
@@ -887,8 +889,10 @@ def test_import_forks_published_project(monkeypatch):
     out = P._import_project(CTX, P.ImportProjectInput(slug="demo-x"))
     assert out["imported"] is True and out["project_id"] == 101
     assert out["copied_from"] == 42
-    # Forké dans l'org ACTIVE (99), en trackant la source (idempotence).
-    assert calls["dup"] == [(42, "Prospection FT", "org", "99", "u1", True)]
+    # ADR 0068 (08/09/2026) : forké chez la PERSONNE, pas chez l'org active — et
+    # RANGÉ dans l'org où l'on travaille (`context_org_id=99`), sinon la copie
+    # n'apparaitrait nulle part. `track_source` reste posé : c'est l'idempotence.
+    assert calls["dup"] == [(42, "Prospection FT", "user", "u1", "u1", True, 99)]
 
 
 def test_import_idempotent_returns_existing(monkeypatch):

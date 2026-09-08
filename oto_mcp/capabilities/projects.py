@@ -206,6 +206,24 @@ def _visible_to(row: dict) -> str:
     return prefix + "tout le monde sur la plateforme (projet bibliothèque)"
 
 
+def _portee_rendue(row: Optional[dict]) -> dict:
+    """Le propriétaire et sa CONSÉQUENCE, pour une réponse qui n'est pas une vue.
+
+    `_view` les porte déjà ; les réponses courtes (l'import) ne les portaient pas, et
+    c'est là que ça se paie : depuis le 08/09/2026, « Ajouter à mon Oto » fait naître
+    un projet PERSONNEL alors qu'il le posait chez l'org. La surprise change de camp —
+    hier le collègue voyait sans qu'on l'ait voulu, demain il ne voit plus sans qu'on
+    l'ait dit — et seule cette phrase-là empêche de la déplacer au lieu de la retirer.
+
+    Mêmes NOMS de champs que partout ailleurs (`owner_type`, `owner_id`,
+    `visible_to`) : un second vocabulaire pour la même information est une dette qui
+    se paie au premier lecteur qui compare deux réponses."""
+    if not row:
+        return {}
+    return {"owner_type": row.get("owner_type"), "owner_id": row.get("owner_id"),
+            "visible_to": _visible_to(row)}
+
+
 def _view(row: dict, sub: Optional[str] = None) -> dict:
     return {
         "id": row["id"], "name": row["name"], "icon": row.get("icon"),
@@ -1309,6 +1327,13 @@ class ImportedProject(BaseModel):
     copied_from: Optional[int] = None            # présent seulement sur une vraie copie
     # Ce que la duplication n'a pas pu reprendre (structure copiée, jamais de secret).
     warnings: Optional[list] = None
+    # QUI voit la copie — et depuis le 08/09/2026 la réponse est « toi seul » (ADR
+    # 0068). Le dire ICI parce que c'est le seul moment où quelqu'un regarde : un
+    # projet qui cesse d'être visible de l'équipe sans que rien ne le signale
+    # déplacerait la surprise au lieu de la supprimer.
+    owner_type: Optional[str] = None
+    owner_id: Optional[str] = None
+    visible_to: Optional[str] = None
 
 
 CAPABILITIES += [
@@ -1497,22 +1522,37 @@ def _import_project(ctx: ResolvedCtx, inp: ImportProjectInput) -> dict:
              "anonymous/secret).", 403)
     src_id = int(src["id"])
     org_id = ctx.org_id
-    # Déjà à moi : la source EST possédée par mon org active → rien à forker, on l'ouvre.
-    if src.get("owner_type") == "org" and str(src.get("owner_id")) == str(org_id):
+    # Déjà à moi : la source EST déjà mienne → rien à forker, on l'ouvre. Le cas
+    # PERSONNEL s'y ajoute depuis que l'import crée perso : sans lui, forker son
+    # propre projet importé en referait une copie à chaque clic.
+    deja_mien = ((src.get("owner_type") == "org" and str(src.get("owner_id")) == str(org_id))
+                 or (src.get("owner_type") == "user" and str(src.get("owner_id")) == str(ctx.sub)))
+    if deja_mien:
         return {"project_id": src_id, "imported": False, "reason": "own_project",
-                "name": src.get("name")}
-    # Idempotent : une copie déjà forkée dans cette org → on la récupère (« si déjà dans
-    # ton compte »), pas de doublon.
-    existing = db.find_copied_project("org", str(org_id), src_id)
+                "name": src.get("name"), **_portee_rendue(src)}
+    # Idempotent : une copie déjà forkée → on la récupère (« si déjà dans ton compte »),
+    # pas de doublon. On regarde MA copie perso d'abord, puis celle de l'org — les
+    # imports d'avant le 08/09/2026 sont possédés par l'org, et ne pas les reconnaître
+    # ferait réapparaître le bouton « importer » sur un projet déjà présent.
+    existing = (db.find_copied_project("user", str(ctx.sub), src_id)
+                or db.find_copied_project("org", str(org_id), src_id))
     if existing is not None:
         return {"project_id": int(existing["id"]), "imported": False,
-                "reason": "already_imported", "name": existing.get("name")}
+                "reason": "already_imported", "name": existing.get("name"),
+                **_portee_rendue(existing)}
+    # ADR 0068 : ce qui naît appartient à la personne qui l'a créé. L'import posait
+    # `("org", org_active)` en dur — le dernier chemin de CONTENU à hériter du contexte
+    # sans qu'aucun paramètre ne le demande (recensement du 08/09/2026). Les tableaux
+    # liés suivent : `duplicate_project` provisionne chez le propriétaire de la copie.
+    # `context_org_id` range la copie dans l'org où l'on travaille, sans l'y partager —
+    # exactement comme `op=copy` (sinon elle n'apparaîtrait nulle part).
     new_id, warnings = db.duplicate_project(
-        src_id, src.get("name") or "Projet importé", "org", str(org_id),
-        copied_by=ctx.sub, track_source=True)
+        src_id, src.get("name") or "Projet importé", "user", str(ctx.sub),
+        copied_by=ctx.sub, track_source=True, context_org_id=int(org_id))
     db.log_project_activity(new_id, ctx.sub, "project.import", f"from #{src_id} ({slug})")
     return {"project_id": new_id, "imported": True, "name": src.get("name"),
-            "copied_from": src_id, "warnings": warnings}
+            "copied_from": src_id, "warnings": warnings,
+            **_portee_rendue(db.get_project_by_id(new_id))}
 
 
 CAPABILITIES += [
