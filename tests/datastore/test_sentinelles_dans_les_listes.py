@@ -125,3 +125,38 @@ def test_une_liste_SANS_mot_reserve_traverse_intacte():
 def test_un_element_qui_n_est_pas_une_fiche_traverse():
     """Une liste de scalaires n'a pas d'attributs — elle ne doit pas casser."""
     assert _merge_column(["a"], ["a", "b"], SANS_CLE) == ["a", "b"]
+
+
+# ── le texte SERVI doit dire que le mot est SEUL ─────────────────────────────
+# Mesuré le 08/09/2026 : un agent de campagne a employé `@keep` de lui-même, alors
+# qu'AUCUNE de ses six procédures ne le mentionne — il l'avait lu dans la description
+# de `data_write`. Il a écrit `"@keep ; site de la maison — catalogue : …"`, voulant
+# dire « garde ce qui est là ET ajoute ceci », et la chaîne est partie en base.
+#
+# ⚠️ La garde au mot entier est JUSTE et ne bouge pas : mordre au milieu d'une chaîne
+# effacerait une valeur sur la foi d'une sous-chaîne (`contact@keepcool.fr`). C'est le
+# TEXTE qui était en cause — il montrait la forme sans dire qu'elle doit être seule.
+# Un exemple servi sera produit ; s'il ne dit pas ses bornes, il sera produit hors
+# d'elles.
+
+def test_le_texte_servi_dit_que_le_mot_doit_etre_SEUL():
+    import inspect
+
+    from oto_mcp.tools import datastore as face_mcp
+
+    src = inspect.getsource(face_mcp)
+    assert "must be the ENTIRE sub-field, alone" in src
+    assert "just text and get stored as such" in src
+
+
+def test_le_texte_servi_distingue_empty_de_rien_trouve():
+    """⚠️ Le contresens le plus coûteux : `@empty` sur une case remplie EFFACE. Un
+    agent qui veut dire « je n'ai rien trouvé » et l'emploie détruit la donnée de la
+    cliente. La forme juste — les couches seules, sans `valeur` — doit être servie."""
+    import inspect
+
+    from oto_mcp.tools import datastore as face_mcp
+
+    src = inspect.getsource(face_mcp)
+    assert 'does not mean "I found nothing"' in src
+    assert "write the layers ALONE, with no `valeur` key" in src

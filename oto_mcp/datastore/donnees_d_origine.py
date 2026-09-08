@@ -75,16 +75,35 @@ def _vide(valeur: Any) -> bool:
     return valeur is None or (isinstance(valeur, str) and valeur.strip() == "")
 
 
-def poser_les_deux_versions(user_data: dict, avant: Optional[dict] = None) -> list[str]:
+def poser_les_deux_versions(user_data: dict, avant: Optional[dict] = None,
+                            schema: Optional[dict] = None) -> list[str]:
     """Fige la version d'origine de chaque colonne apportée. `user_data` est modifiée
     en place ; rend les colonnes sur lesquelles une origine vient d'être posée.
 
     `avant` = la ligne déjà en base pour une mise à jour (ré-import retrouvé par sa
     clé métier), `None` pour une création. Il sert à une seule chose : ne pas toucher
     une origine déjà posée.
+
+    ⚠️ **`schema` écarte les colonnes qui portent DÉJÀ le cran `origine: "system"`**, et
+    c'est une collision que j'avais manquée en construisant ce geste : sur ces
+    colonnes-là, la plateforme interdit à QUICONQUE d'écrire la couche d'origine
+    (#586) — y compris à ce geste-ci, qui n'est pas moins un appelant que les autres.
+    Sans cet écart, un ré-import sur une ligne existante partait en `400`, et la
+    promesse « un ré-import est rejouable » était fausse dès qu'une colonne portait le
+    cran. Mesuré le 08/09/2026 sur le schéma réel d'une campagne, qui porte les deux.
+
+    Les écarter ne perd rien : sur ces colonnes le cran fait déjà le travail — la
+    valeur d'import EST l'origine, et la capture paresseuse la fige à la première
+    modification. **Deux mécanismes pour le même fait, celui qui était là d'abord
+    garde la main.**
     """
+    from . import declaration as dsdecl
+
+    a_cran = dsdecl.system_origin_fields(schema) if schema else frozenset()
     posees: list[str] = []
     for cle, colonne in list(user_data.items()):
+        if cle in a_cran:
+            continue
         couches = _couches_de(colonne)
         if _vide(couches.get(dsv2.VALUE_LAYER)):
             continue

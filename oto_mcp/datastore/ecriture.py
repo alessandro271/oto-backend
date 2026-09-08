@@ -158,7 +158,7 @@ class EcritureMixin:
         # les chemins auxquels on pense, absente de celui qu'on croyait couvert parce
         # qu'il ressemble aux autres.
         if donnees_d_origine:
-            poser_les_deux_versions(user_data)
+            poser_les_deux_versions(user_data, schema=schema)
         self._check_row(schema, user_data)
         try:
             row = db.datastore_insert_row(ns_id, _new_id(), user_data)
@@ -221,7 +221,7 @@ class EcritureMixin:
             # qui dit si une origine est déjà posée, et une origine posée ne se
             # réécrit jamais. Muter en place est sans risque, le geste est idempotent.
             if donnees_d_origine:
-                poser_les_deux_versions(user_data, avant=current)
+                poser_les_deux_versions(user_data, avant=current, schema=schema)
             pose, vidages, ecartes = arbitrer_les_vides(current, user_data, row_id)
             # #724 : préserver et le DIRE ne suffit pas quand l'écarté était TOUT ce
             # que l'écriture portait — l'appel n'a alors aucun effet et répond 200.
@@ -396,7 +396,7 @@ class EcritureMixin:
         # son propre corps. `avant` = l'état lu : c'est lui qui dit si une origine est
         # déjà posée, et une origine posée ne se réécrit jamais.
         if donnees_d_origine:
-            poser_les_deux_versions(patch, avant=data)
+            poser_les_deux_versions(patch, avant=data, schema=schema)
         pose, vidages, ecartes = arbitrer_les_vides(data, patch, row_id)
         # #724 : le patch par `id` est le chemin des dix retraits perdus du 01/09 —
         # un vide SEUL y était accepté sans effet, et le relevé qui nommait déjà la

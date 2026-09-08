@@ -149,7 +149,7 @@ class LotsMixin:
                 # règle « une origine déjà posée ne se réécrit pas » vaut quand même,
                 # car l'appelant peut avoir écrit `origine` lui-même (chemin déclaré).
                 if donnees_d_origine:
-                    poser_les_deux_versions(user_data)
+                    poser_les_deux_versions(user_data, schema=schema)
                 self._check_row(schema, user_data)
                 try:
                     row = db.datastore_insert_row(ns_id, _new_id(), user_data)

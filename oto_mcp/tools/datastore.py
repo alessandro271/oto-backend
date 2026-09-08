@@ -725,6 +725,18 @@ def register(mcp: FastMCP) -> None:
         PURPOSE, which is NOT the same as leaving it out: an empty `comment` says
         "looked, found nothing", an absent one says "never looked".
 
+        ⚠️ **Both words must be the ENTIRE sub-field, alone.** Mixed into a sentence
+        they are just text and get stored as such — `"@keep ; found on the imprint"`
+        lands in the cell verbatim, and a client reads it in their deliverable. To
+        keep what is there AND add something, you cannot do both in one write: keep
+        it (`"@keep"`) or replace it, but do not write the word next to your prose.
+
+        ⚠️ **`@empty` does not mean "I found nothing".** It means "what is there must
+        go" — it ERASES a value already in place. To record a fruitless search
+        without destroying anything, write the layers ALONE, with no `valeur` key:
+        `{"field": {"comment": "searched on …, nothing"}}`. The value survives, the
+        trace is added beside it.
+
         **Use `@keep` whenever you fix a value without re-establishing where it came
         from** — a typo, a formatting change, a case correction. Retyping the
         provenance instead is how it drifts: you would not copy it, you would

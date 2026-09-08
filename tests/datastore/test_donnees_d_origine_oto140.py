@@ -205,3 +205,57 @@ def test_le_texte_servi_dit_import_ET_pas_enrichissement():
         t = dsv2.description_donnees_d_origine(en=en)
         assert ("enrichissement" in t) or ("enrichment" in t)
         assert ("comment" in t)
+
+
+# ── la collision avec le cran `origine: "system"` ────────────────────────────
+# Mesurée le 08/09/2026 sur le schéma réel d'une campagne, qui porte les DEUX
+# mécanismes : le cran ancien et le geste déclaré.
+#
+# ⚠️ Le cran interdit à QUICONQUE d'écrire la couche d'origine (#586) — y compris à
+# ce geste-ci, qui n'est pas moins un appelant que les autres. Un ré-import sur une
+# ligne existante partait donc en refus, et la promesse « un ré-import est rejouable »
+# était fausse dès qu'une colonne portait le cran.
+#
+# Les écarter ne perd rien : sur ces colonnes le cran fait déjà le travail. **Deux
+# mécanismes pour le même fait — celui qui était là d'abord garde la main.**
+
+def _table_a_cran():
+    from oto_mcp import db
+    ns = "t-" + uuid.uuid4().hex[:6]
+    ns_id = db.create_datastore_namespace("user", "sub-test", ns)
+    st = _store()
+    st.set_schema(ns, {"key": "siren", "strict": True, "fields": [
+        {"key": "siren", "type": "text", "origine": "system"},
+        {"key": "libre", "type": "text"}]})
+    return st, ns, ns_id
+
+
+def test_un_RE_IMPORT_passe_sur_une_colonne_a_CRAN(live):
+    """Le cas de la campagne : ligne créée SANS le paramètre, puis ré-import AVEC.
+    Avant le correctif, le second appel partait en 400 sur `siren.origine`."""
+    st, ns, _ = _table_a_cran()
+    st.append_row(ns, {"siren": "1", "libre": "a"})
+    st.append_row(ns, {"siren": "1", "libre": "b"}, donnees_d_origine=True)
+
+    assert st.list_rows(ns)[0]["libre"] == "b"
+
+
+def test_le_cran_garde_la_main_sur_SA_colonne(live):
+    """L'écart ne doit pas être silencieux dans son effet : sur une colonne à cran, la
+    couche d'origine reste posée par le système — donc absente à la création, et figée
+    à la première modification, exactement comme avant ce lot."""
+    st, ns, ns_id = _table_a_cran()
+    ligne = st.append_row(ns, {"siren": "1", "libre": "a"}, donnees_d_origine=True)
+    col = _blob(ns_id, ligne["_id"])["siren"]
+
+    assert col == "1", "le geste déclaré ne pose RIEN sur une colonne à cran"
+
+
+def test_les_colonnes_SANS_cran_gardent_le_geste(live):
+    """⚠️ L'autre moitié : l'écart vise les colonnes à cran, pas la ligne entière. Une
+    correction trop large aurait désarmé le geste partout dès qu'une seule colonne
+    portait le cran."""
+    st, ns, ns_id = _table_a_cran()
+    ligne = st.append_row(ns, {"siren": "1", "libre": "a"}, donnees_d_origine=True)
+
+    assert _blob(ns_id, ligne["_id"])["libre"][dsv2.ORIGIN_LAYER] == {"valeur": "a"}

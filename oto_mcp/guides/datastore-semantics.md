@@ -227,6 +227,17 @@ une chose et son contraire selon l'endroit, et c'est ce qu'on retire.
 | vider délibérément | `{"champ": {"valeur": "@empty"}}` |
 | ne pas y toucher | **omets le champ** (ou `@keep`) |
 
+⚠️ **`@keep` et `@empty` doivent être la valeur ENTIÈRE du sous-champ, seuls.** Mélangés
+à une phrase, ce ne sont plus que du texte, stocké tel quel — `"@keep ; trouvé sur les
+mentions légales"` atterrit dans la case, et une cliente le lit dans son livrable. Pour
+garder ce qui est là ET ajouter quelque chose, il faut choisir : garder, ou remplacer.
+Les deux ne s'écrivent pas dans la même chaîne.
+
+⚠️ **Le mot ne mord qu'au mot entier, et c'est délibéré** : une sentinelle qui
+reconnaîtrait `@keep` au milieu d'un texte effacerait ou figerait une valeur sur la foi
+d'une sous-chaîne — `contact@keepcool.fr` en ferait les frais. Mieux vaut servir une
+chaîne visible qu'exécuter une intention devinée.
+
 ⚠️ **Si `null` voulait dire « cherché, rien trouvé » chez toi — c'est l'usage le plus
 courant — alors le geste juste est l'OMISSION, pas `@empty`.** Ne rien trouver n'est
 pas effacer. Traduire mécaniquement tes `null` en `@empty` détruirait des valeurs que
