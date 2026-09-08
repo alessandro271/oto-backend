@@ -5,7 +5,7 @@ PVGIS, permis Sit@del, conso Enedis, valorisation DVF+, DPE ADEME) est servi par
 service FOD dédié (box `fod-0`) — le backend ne les exécute plus in-process.
 
 Ce module expose des **objets proxy** (`ban`, `cadastre`, `bdtopo`, `pvgis`,
-`enedis`, `dvf`, `dpe`, `sitadel`) qui **répliquent la surface des clients
+`enedis`, `odre`, `dvf`, `dpe`, `sitadel`) qui **répliquent la surface des clients
 `france_opendata`** consommés par `tools/foncier.py` (mêmes noms/signatures/retours)
 → le tool ne change que la SOURCE de ses clients, ses corps restent identiques.
 
@@ -67,12 +67,39 @@ class _Sitadel:
 
 
 class _Enedis:
-    def consommation_par_adresse(self, annee: str, dept: str, secteur: Optional[str] = None,
+    def consommation_par_adresse(self, annee: str, dept: Optional[str] = None,
+                                 secteur: Optional[str] = None,
+                                 naf2: Optional[Any] = None,
+                                 code_commune: Optional[Any] = None,
+                                 code_epci: Optional[str] = None,
                                  min_mwh: Optional[float] = None, max_mwh: Optional[float] = None,
                                  limit: int = 200) -> dict[str, Any]:
         return _post("/api/foncier/enedis/conso",
                      {"annee": annee, "dept": dept, "secteur": secteur,
+                      "naf2": naf2, "code_commune": code_commune, "code_epci": code_epci,
                       "min_mwh": min_mwh, "max_mwh": max_mwh, "limit": limit})
+
+    def sites_par_adresse(self, annee: str, dept: Optional[str] = None,
+                          code_commune: Optional[Any] = None, code_epci: Optional[str] = None,
+                          naf2: Optional[Any] = None, secteur: Optional[str] = None,
+                          min_mwh: Optional[float] = None, limit: int = -1) -> dict[str, Any]:
+        return _post("/api/foncier/enedis/sites",
+                     {"annee": annee, "dept": dept, "code_commune": code_commune,
+                      "code_epci": code_epci, "naf2": naf2, "secteur": secteur,
+                      "min_mwh": min_mwh, "limit": limit})
+
+
+class _Odre:
+    def consommation_transport(self, annee: Any, dept: Optional[str] = None,
+                               code_commune: Optional[Any] = None,
+                               min_mwh: Optional[float] = None, site_unique: bool = True,
+                               limit: int = -1) -> dict[str, Any]:
+        return _post("/api/foncier/odre/conso",
+                     {"annee": annee, "dept": dept, "code_commune": code_commune,
+                      "min_mwh": min_mwh, "site_unique": site_unique, "limit": limit})
+
+    def annees_disponibles(self) -> dict[str, Any]:
+        return _get("/api/foncier/odre/annees", {})
 
 
 class _Dvf:
@@ -118,5 +145,6 @@ pvgis = _Pvgis()
 ign = _Ign()
 sitadel = _Sitadel()
 enedis = _Enedis()
+odre = _Odre()
 dvf = _Dvf()
 dpe = _Dpe()

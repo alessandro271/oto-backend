@@ -14,7 +14,9 @@ Deux invariants propres à ce connecteur :
   `test_no_op_reaches_a_non_read_method` énumère TOUTES les ops et fige l'ensemble
   des méthodes amont atteignables ; câbler une écriture demanderait d'y toucher.
 - **les gardes anti-scan** (le coût ici est le VOLUME balayé, pas un crédit) :
-  `foncier_permis_search` sans scope refuse, `foncier_conso_elec` exige `dept`.
+  `foncier_permis_search` sans scope refuse, `foncier_conso_elec` exige un PÉRIMÈTRE
+  (dept, commune ou EPCI) sur l'étage distribution. L'étage transport en est dispensé :
+  il tient en ~1 600 lignes nationales, un scan y est sans conséquence.
 """
 import asyncio
 import inspect
@@ -32,7 +34,8 @@ _READ_ONLY_SURFACE = {
     "pvgis": {"productible"},
     "ign": {"isochrone"},
     "sitadel": {"search"},
-    "enedis": {"consommation_par_adresse"},
+    "enedis": {"consommation_par_adresse", "sites_par_adresse"},
+    "odre": {"consommation_transport", "annees_disponibles"},
     "dvf": {"stats", "comparables", "comparables_by_address"},
     "dpe": {"by_address", "stats"},
     "georisques": {"installations_classees"},
@@ -63,6 +66,9 @@ def clients(monkeypatch):
     mocks["georisques"].installations_classees.return_value = {
         "results": 1, "page": 1, "total_pages": 1, "data": []}
     mocks["sitadel"].search.return_value = {"total": 3, "permis": []}
+    # Le tool RELIT l'année du transport pour avertir du décalage de millésime.
+    mocks["odre"].consommation_transport.return_value = {"total": 2, "annee": "2023", "signals": []}
+    mocks["enedis"].sites_par_adresse.return_value = {"total": 1, "lignes_lues": 3, "signals": []}
     return mocks
 
 
@@ -328,6 +334,8 @@ def test_no_op_reaches_a_non_read_method(clients, monkeypatch):
     _tool("foncier_isochrone")(lat=43.29, lon=5.37, minutes=10)
     _tool("foncier_permis_search")(code_commune="13201")
     _tool("foncier_conso_elec")(annee="2024", dept="13")
+    _tool("foncier_conso_elec")(annee="2024", dept="13", maille="site")
+    _tool("foncier_conso_elec")(annee="2024", dept="13", reseau="transport")
     _tool("foncier_icpe")(code_insee="13201")
 
     for name, mock in clients.items():
@@ -344,12 +352,34 @@ def test_permis_search_still_refuses_a_national_scan(clients):
     clients["sitadel"].search.assert_not_called()
 
 
-def test_conso_elec_still_requires_a_department(clients):
-    """Même raison : `dept` reste OBLIGATOIRE dans la signature (donc dans le schéma
-    MCP), un scan national ne peut pas être demandé par omission."""
+def test_conso_elec_still_refuses_a_national_scan(clients):
+    """La garde tient toujours, mais elle porte désormais sur le PÉRIMÈTRE, pas sur
+    `dept` : une commune ou un EPCI en sont un aussi, et `dept` seul les interdisait.
+    Elle se déplace donc de la signature vers le corps — et c'est ce test qui la tient."""
+    with pytest.raises(McpError, match="perimeter"):
+        _tool("foncier_conso_elec")(annee="2024")
+    clients["enedis"].consommation_par_adresse.assert_not_called()
+    # `annee` reste obligatoire dans le schéma : rien ne la devine.
     sig = inspect.signature(_tool("foncier_conso_elec"))
-    assert sig.parameters["dept"].default is inspect.Parameter.empty
     assert sig.parameters["annee"].default is inspect.Parameter.empty
+    # Un périmètre, quel qu'il soit, passe.
+    for scope in ({"dept": "13"}, {"code_commune": ["13201"]}, {"code_epci": "243300316"}):
+        _tool("foncier_conso_elec")(annee="2024", **scope)
+    assert clients["enedis"].consommation_par_adresse.call_count == 3
+
+
+def test_transport_tier_is_exempt_from_the_perimeter_guard(clients):
+    """L'étage transport tient en ~1 600 lignes nationales : le balayer est sans
+    conséquence, et l'exiger empêcherait de répondre « les plus gros sites de France »."""
+    _tool("foncier_conso_elec")(annee="2023", reseau="transport")
+    clients["odre"].consommation_transport.assert_called_once()
+    clients["enedis"].consommation_par_adresse.assert_not_called()
+
+
+def test_les_deux_avertit_du_decalage_de_millesime(clients):
+    """Sommer 2024 de distribution avec 2023 de transport est faux sans le dire."""
+    out = _tool("foncier_conso_elec")(annee="2024", dept="33", reseau="les_deux")
+    assert out["avertissement_millesime"] and "2023" in out["avertissement_millesime"]
 
 
 # --- les MCP Apps restent hors périmètre --------------------------------------
