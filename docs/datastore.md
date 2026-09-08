@@ -844,10 +844,25 @@ de fin de passage détectait après coup.
   RÉÉCRITURE, et la deuxième écriture aurait alors capturé la première valeur de l'agent
   comme si elle venait du client — exactement le défaut que ce marqueur existe pour
   empêcher. C'est un banc existant qui l'a attrapée, pas une relecture.
-  ⚠️ **La capture est PARESSEUSE, pas à la pose du schéma** : un format ne vaut que pour
-  l'avenir et ne réécrit aucune ligne (doctrine de `_overlong_warning` et consorts) — et
-  elle rend la MÊME valeur, puisque rien n'a bougé entre la pose et la première
-  modification. Refusé à la pose sur un composite ou un `json` (la capture rangerait
+  ⚠️ **La capture de la VALEUR est PARESSEUSE, pas à la pose du schéma** : un format ne
+  vaut que pour l'avenir (doctrine de `_overlong_warning` et consorts) — et elle rend la
+  MÊME valeur, puisque rien n'a bougé entre la pose et la première modification.
+  ⚠️ **Mais la pose n'est PAS neutre sur les lignes DÉJÀ LÀ.** À la déclaration, un
+  balayage écrit `<champ>.origine = "(origine inconnue)"` sur chaque ligne existante
+  (`datastore_capturer_origine`, oto#46). C'est un **aveu, pas une capture** : au moment
+  où le cran arrive, la valeur d'import a déjà pu être écrasée par un agent, et poser la
+  valeur courante la présenterait comme celle de la cliente — ce que la définition
+  interdit. Le marqueur rend l'ignorance explicite plutôt que muette : sans lui, « pas
+  d'origine » se confondrait avec « origine vide ».
+  ⚠️ **L'ORDRE DES GESTES décide de tout : déclarer le cran AVANT l'import, jamais
+  après.** Déclaré avant, la ligne n'existe pas encore, rien n'est balisé, et la capture
+  paresseuse fige la valeur de la cliente au premier enrichissement. Déclaré après, rien
+  ne se reconstitue — **mesuré le 08/09/2026 : 837 cellules sur 846 marquées** sur un
+  tableau de production, découvert trois semaines après la pose, à la veille d'une
+  restitution cliente. Ce n'est pas un défaut, c'est une inversion, et elle est évitable
+  à coût nul sur tout tableau neuf. La réponse à la pose rend le compte sous
+  `origines_capturees` — ⚠️ **nom trompeur : il compte des PERTES**, et un avertissement
+  posé à côté le dit explicitement (`marqueurs_poses_warning`). Refusé à la pose sur un composite ou un `json` (la capture rangerait
   l'objet entier dans la couche — ⚠️ **motif reformulé le 2026-09-01, #728** : il
   invoquait l'exemption `json` de la grammaire des couches, qui ne vaut plus pour
   l'adresse ; c'est la pose AUTOMATIQUE qui ne s'y déclare pas, l'annotation elle-même

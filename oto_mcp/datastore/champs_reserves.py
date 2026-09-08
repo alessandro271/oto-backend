@@ -38,6 +38,7 @@ from .couches import (
     layer_value,
     names_layers,
     ORIGIN_LAYER,
+    ORIGINE_INCONNUE,
     same_value,
     unwrap,
     VALUE_LAYER,
@@ -117,6 +118,17 @@ def description_parametre_origine(en: bool = False) -> str:
     la sortie n'était écrite nulle part, et deux agents ont réinventé « lever, écrire,
     remettre ».
 
+    ⚠️ **« l'origine est conservée » a été retiré le 08/09/2026 : c'était une promesse
+    INCONDITIONNELLE, et elle ne vaut que dans un sens de l'ordre des gestes.** La
+    plateforme ne conserve l'origine que si la colonne portait déjà le cran quand la
+    ligne est arrivée ; déclaré après coup, le cran ne reconstitue rien et les lignes
+    déjà là reçoivent le marqueur. Ce texte est servi sur la porte de l'IMPORT
+    (`uploads`) — précisément là où l'ordre se joue — et il a fait croire au
+    propriétaire du produit que des valeurs d'origine existaient. **Un texte servi est
+    cru davantage qu'une mesure** : celui qui lit n'a aucune raison d'aller vérifier ce
+    que la plateforme lui promet sur elle-même. La condition se dit donc DANS la
+    phrase, pas dans une documentation à côté.
+
     ⚠️ Une seule phrase pour les deux faces, dérivée comme le reste : la face REST et la
     face MCP décriraient sinon le même paramètre en deux termes, et l'écart se lirait
     comme deux paramètres différents.
@@ -138,16 +150,22 @@ def description_parametre_origine(en: bool = False) -> str:
         return (f"`{PARAMETRE_ORIGINE}=true` states that this call sets the "
                 f"`origine` layer (the value at the START, at import time) "
                 f"knowingly. Without it, writing an origin is refused from "
-                f"{date_refus()} on — write the value alone instead: the origin is "
-                f"kept, and the platform sets it when it is missing. There is "
+                f"{date_refus()} on — write the value alone instead: the platform "
+                f"freezes the origin at the first enrichment, PROVIDED the column "
+                f"already carried the flag when the row arrived. Declared "
+                f"afterwards it reconstructs nothing: rows already present get the "
+                f"marker \"{ORIGINE_INCONNUE}\". There is "
                 f"nobody to ask: the parameter is enough, and it applies to this "
                 f"call only. It does NOT lift the refusal on a column whose schema "
                 f"declares `origine: \"system\"`.")
     return (f"`{PARAMETRE_ORIGINE}=true` déclare que cet appel pose la couche "
             f"`origine` (la valeur du DÉPART, à l'import) en le sachant. Sans lui, une "
             f"écriture d'origine est refusée à partir du {date_refus_fr()} — écrivez "
-            f"alors la valeur seule, l'origine est conservée et posée par la plateforme "
-            f"quand elle manque. Rien à demander à personne : le paramètre suffit, et "
+            f"alors la valeur seule : la plateforme fige l'origine au premier "
+            f"enrichissement, mais SEULEMENT si la colonne portait déjà le cran quand la "
+            f"ligne est arrivée. Déclaré après coup, il ne reconstitue rien : les "
+            f"lignes déjà présentes reçoivent le marqueur « {ORIGINE_INCONNUE} ». "
+            f"Rien à demander à personne : le paramètre suffit, et "
             f"il ne vaut que pour cet appel. Il ne lève PAS le refus sur une colonne "
             f"dont le schéma déclare `origine: \"system\"`.")
 
@@ -259,6 +277,40 @@ def origine_posee(payload: Optional[dict], avant: Optional[dict] = None) -> list
             continue
         out.append(cle)
     return sorted(out)
+
+
+def marqueurs_poses_warning(combien: int) -> Optional[str]:
+    """Ce qu'une déclaration tardive du cran `origine: "system"` vient de faire.
+
+    ⚠️ **La clé servie s'appelle `origines_capturees`, et c'est l'inverse de ce qui
+    s'est passé.** Rien n'a été capturé : la plateforme a écrit le marqueur « origine
+    inconnue » sur des lignes dont la valeur de départ était déjà perdue. Un nombre
+    sous ce nom se lit comme un succès — « 837 origines capturées ! » — alors qu'il
+    compte des aveux.
+
+    Mesuré le 08/09/2026 : un tableau de production porte **837 marqueurs sur 846
+    couches d'origine**, et la restitution promise à une cliente y est muette. Le
+    nombre avait été rendu à la pose, personne n'avait de raison de le lire comme une
+    alerte, et la découverte s'est faite trois semaines plus tard.
+
+    ⚠️ **La clé n'est PAS renommée** — elle est servie, et un consommateur peut la
+    lire. On ajoute la phrase à côté, on ne déplace pas ce qui existe. Ce qui nuisait
+    n'était pas le nom seul, c'était le nom SANS phrase.
+
+    **Et la phrase dit le geste qui l'évite**, parce que c'est un ordre et non un
+    défaut : déclarer le cran AVANT l'import ne balise rien du tout.
+    """
+    if not combien:
+        return None
+    return (f"{combien} cellule(s) marquées « origine inconnue » — et c'est une PERTE, "
+            "pas une capture. Ces lignes existaient déjà quand le format d'origine a "
+            "été déclaré : leur valeur de départ avait pu être écrasée par un agent, "
+            "et la plateforme refuse de présenter le travail d'un agent comme la "
+            "donnée de la personne qui l'a fournie. Ce qui manque là ne se "
+            "reconstituera pas.\n"
+            "⚠️ L'ordre l'évite entièrement : sur un tableau NEUF, déclarer "
+            "`origine: \"system\"` AVANT d'importer ne marque aucune ligne — la "
+            "valeur importée devient l'origine au premier enrichissement.")
 
 
 def reserved_refusals(schema: Optional[dict], payload: Optional[dict],

@@ -171,15 +171,32 @@ def _bkey_index_name(ns_id: int) -> str:
 
 
 def datastore_capturer_origine(ns_id: int, champs: list[str]) -> int:
-    """Pose `<champ>.origine` = la valeur COURANTE sur les lignes existantes, pour
-    les colonnes qui viennent de gagner le format `origine: "system"`.
+    """Pose `<champ>.origine` = le MARQUEUR « origine inconnue » sur les lignes
+    existantes, pour les colonnes qui viennent de gagner le format `origine: "system"`.
 
-    Pourquoi à la DÉCLARATION et pas seulement à la première écriture
-    (otomata-tech/oto#46) : la capture paresseuse ne garde rien sur une ligne qui
-    existait déjà. Une valeur écrasée entre la création de la ligne et la première
-    écriture d'après la déclaration était perdue sans filet, et le nom `origine`
-    promettait davantage. Capturer ici rend la promesse exacte pour toute ligne,
-    au prix d'une écriture unique, à un moment choisi par celui qui déclare.
+    ⚠️ **Cette docstring annonçait « la valeur COURANTE » jusqu'au 08/09/2026, et
+    c'était faux depuis oto#70.** Le code pose le marqueur — le commentaire de la
+    requête, dix lignes plus bas, l'explique en détail. La docstring décrivait un
+    comportement retiré, et **elle est la racine d'une confusion qui est remontée
+    jusqu'au propriétaire du produit** : il a affirmé de bonne foi que les valeurs
+    d'origine étaient conservées, parce que c'est exactement ce que la plateforme
+    promettait ici. Un texte périmé ne se contente pas d'être inutile — il fabrique
+    une croyance, et il la fabrique chez ceux qui prennent la peine de lire.
+
+    **Ce que la fonction fait réellement** : sur chaque ligne existante d'une colonne
+    qui vient de gagner le cran, elle écrit `origine = "(origine inconnue)"`. C'est un
+    aveu, pas une capture. Au moment où la déclaration arrive, la valeur d'import a
+    déjà pu être écrasée par un agent, et poser la valeur courante la présenterait
+    comme celle de la cliente — ce que la définition interdit.
+
+    **Ce qui capture vraiment**, c'est l'ordre des gestes : déclarer le cran AVANT
+    l'import. La ligne n'existe alors pas encore, cette fonction ne balise rien, et la
+    capture paresseuse fige la valeur de la cliente au premier enrichissement.
+
+    Pourquoi baliser à la DÉCLARATION plutôt que de ne rien faire
+    (otomata-tech/oto#46) : sans ce passage, une ligne antérieure à la déclaration
+    n'aurait AUCUNE couche `origine`, et « pas d'origine » se confondrait avec
+    « origine vide ». Le marqueur rend l'ignorance explicite plutôt que muette.
 
     Trois règles, chacune fermant une porte :
 

@@ -146,6 +146,11 @@ class SchemaOpsMixin:
         # Un statut sans état terminal = file de travail qui ne libère rien : le dire
         # ICI, à l'auteur du schéma, au moment où il le pose (les deux faces l'ont).
         warnings = [w for w in (index_differe,
+                                # ⚠️ Le nombre rendu sous `origines_capturees`
+                                # se lit comme un succès alors qu'il compte
+                                # des pertes. La phrase dit ce qui s'est
+                                # vraiment passé, et l'ordre qui l'évite.
+                                dsv2.marqueurs_poses_warning(origines_posees),
                                 dsv2.queue_release_warning(schema),
                                 # Clés de déclaration qu'oto n'interprète PAS (#316) :
                                 # posées, stockées, rendues fidèlement… et jamais lues.
