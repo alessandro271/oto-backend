@@ -140,6 +140,45 @@ def ORG_MEMBER(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
     return ResolvedCtx(sub=sub, org_id=org_id, role=access.get_user_role(sub))
 
 
+#: La marque de compte qui dit « ceci est un WORKER du runner, pas un membre ».
+#: Elle existait déjà, mais pour une seule question — remettre ou non la clé de
+#: modèle d'une org. Elle sert désormais aussi de périmètre.
+OPTION_RUNNER_WORKER = "runner_worker"
+
+
+def WORKER_OR_ORG_MEMBER(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
+    """Un worker du runner — SANS org — ou, à défaut, un membre de son org active.
+
+    ⚠️ Ce que cette règle défait : la file du runner était déclarée `ORG_MEMBER`,
+    une règle écrite pour un HUMAIN qui navigue entre ses organisations. L'org
+    ACTIVE du porteur devenait donc le périmètre de la file, et il fallait un
+    worker par organisation. Ce n'était pas une conception, c'était un effet de
+    bord — et il a laissé des travaux sans personne pour les prendre.
+
+    Un worker n'a besoin d'aucun périmètre propre : il exécute, il ne décide de
+    rien. Le droit d'agir ne vient pas de lui mais du jeton DÉLÉGUÉ, émis à la
+    réservation au nom du DEMANDEUR du travail et borné au bail. Deux identités
+    distinctes, et c'est le sens de `org_id=None` ici : ce n'est pas une absence
+    de garde, c'est l'absence d'une notion qui n'a pas de sens pour une machine.
+
+    ⚠️ Le repli sur `ORG_MEMBER` n'est pas de la politesse : les workers en vol
+    ne portent PAS la marque (mesuré le 08/09/2026 — zéro clé de modèle remise
+    en vingt-quatre heures, un refus journalisé). Sans ce repli, poser cette
+    règle les ferait tomber tous les trois. Le lot est donc INERTE tant que
+    personne ne pose la marque, et son activation reste un geste d'admin visible
+    sur un compte — jamais un réglage caché.
+
+    ⚠️ Cran non encore fermé, dit ici pour qu'on le cherche ici : la garde porte
+    sur la MARQUE du compte, pas sur le GENRE du jeton présenté (`RawCtx` ne
+    transporte que le `sub`). Un compte marqué peut donc encore appeler avec son
+    jeton personnel. C'est le secret de machine qui referme ce cran.
+    """
+    sub = _require_sub(raw)
+    if access.user_has_option(sub, OPTION_RUNNER_WORKER):
+        return ResolvedCtx(sub=sub, org_id=None, role=access.get_user_role(sub))
+    return ORG_MEMBER(raw, inp)
+
+
 def ORG_ADMIN(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
     """Org-admin de l'org ACTIVE — écriture self-service scopée à l'org active
     (miroir écriture d'`ORG_MEMBER`). `org_id` injecté depuis l'état serveur, jamais

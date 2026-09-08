@@ -26,7 +26,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .. import access, db
-from ._authz import ORG_MEMBER
+from ._authz import BY_OP, OPTION_RUNNER_WORKER, ORG_MEMBER, WORKER_OR_ORG_MEMBER
 from ._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx,
                      RestBinding, cap_limit)
 from .registry import CAPABILITIES
@@ -357,7 +357,7 @@ def _cle_de_modele(org_id: int, depot: str) -> Optional[str]:
 # La marque qui dit « ce compte EST un de nos workers ». Un admin plateforme la
 # pose sur le compte de service du runner (`oto_admin_set_option`), et sur lui
 # seul.
-_OPTION_WORKER = "runner_worker"
+_OPTION_WORKER = OPTION_RUNNER_WORKER   # une seule définition, dans `_authz`
 
 
 def _depot_pose(org_id: int, depot: str) -> bool:
@@ -444,7 +444,7 @@ _SANS_PORTEUR = (
 _CAMPAGNE_MUETTE: dict[int, tuple[str, float]] = {}
 
 
-def _produire_pour_une_campagne(org_id: int, bail_s: int) -> Optional[str]:
+def _produire_pour_une_campagne(org_id: Optional[int], bail_s: int) -> Optional[str]:
     """Fabrique UN travail pour une campagne en cours de l'org, s'il y en a une.
 
     Un seul, et sans le réserver : l'appelant re-sonde juste après et le prendra
@@ -522,9 +522,11 @@ def _produire_pour_une_campagne(org_id: int, bail_s: int) -> Optional[str]:
             .replace("{namespace}", f.get("namespace") or "") \
             .replace("{filter}", json.dumps(f.get("row_filter") or {}, ensure_ascii=False))
         db.enqueue_job(
-            org_id, "start",
+            # L'org de la CAMPAGNE, jamais celle de l'appelant : un worker de
+            # plateforme n'en a pas, et un travail sans org serait orphelin.
+            f["org_id"], "start",
             payload={"procedure": f["procedure"], "tools": list(f.get("tools") or ()),
-                     "project_id": f.get("project_id"), "org_id": org_id,
+                     "project_id": f.get("project_id"), "org_id": f["org_id"],
                      "namespace": f.get("namespace"), "fleet": f.get("label"),
                      "max_steps": f.get("max_steps"),
                      "max_tokens": f.get("max_tokens_per_row"),
@@ -598,9 +600,18 @@ def _delegue(job: dict, bail_s: int, claimant: str) -> dict:
     return job
 
 
+#: Les opérations qui ONT BESOIN d'une organisation : celles d'un humain ou d'un
+#: écran — enfiler un travail, lire la file, ouvrir un travail. Les verbes du
+#: worker (`claim`, `bind_run`, `extend`, `complete`) n'en ont pas : il exécute,
+#: il ne décide de rien, et son droit d'agir vient du jeton délégué du demandeur.
+_OPS_ORG_SCOPEES = frozenset({"enqueue", "list", "get"})
+
+
 def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
-    if not ctx.org_id:
-        raise AuthzDenied(400, "org_required", "la file du runner est org-scopée")
+    if inp.op in _OPS_ORG_SCOPEES and not ctx.org_id:
+        raise AuthzDenied(400, "org_required",
+                          f"`{inp.op}` porte sur la file d'une organisation — "
+                          "choisis-en une avec oto_use_org.")
 
     if inp.op == "enqueue":
         if inp.kind is None:
@@ -746,7 +757,14 @@ CAPABILITIES += [
                           "`enqueue fleet_id=` désignant une flotte qui n'est pas "
                           "celle de l'org du porteur"),
         ),
-        authz=ORG_MEMBER,
+        # La règle par OPÉRATION : un humain enfile et lit dans SON org ; un
+        # worker réserve et conclut sans org du tout (cf. `WORKER_OR_ORG_MEMBER`).
+        # Déclaratif plutôt que dans le handler : l'autz se lit sur la capacité.
+        authz=BY_OP({
+            "enqueue": ORG_MEMBER, "list": ORG_MEMBER, "get": ORG_MEMBER,
+            "claim": WORKER_OR_ORG_MEMBER, "bind_run": WORKER_OR_ORG_MEMBER,
+            "extend": WORKER_OR_ORG_MEMBER, "complete": WORKER_OR_ORG_MEMBER,
+        }),
         mcp=None,   # worker-only : la plomberie d'exécution n'a pas de face agent
         rest=RestBinding(verb="POST", path="/api/me/runner/jobs"),
         description=(

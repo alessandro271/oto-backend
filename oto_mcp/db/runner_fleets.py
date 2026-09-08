@@ -95,7 +95,7 @@ def list_fleets(org_id: int, statut: Optional[str] = None) -> list[dict]:
 _VERROU_CAMPAGNE = 0x0704_0C41   # « oto campagne »
 
 
-def campagne_a_servir(org_id: int) -> Optional[dict]:
+def campagne_a_servir(org_id: Optional[int]) -> Optional[dict]:
     """La campagne de l'org pour laquelle il faut produire un travail — ou None.
 
     ⚠️ C'est le cœur du modèle « oto décide, le runner demande ». Un worker ne
@@ -137,7 +137,10 @@ def campagne_a_servir(org_id: int) -> Optional[dict]:
             f"""
             SELECT {_COLS}
               FROM runner_fleets f
-             WHERE f.org_id = %s
+             -- Org nulle = worker de PLATEFORME : n'importe quelle campagne en
+             -- cours, la plus anciennement armée d'abord. (Pas de marqueur de
+             -- paramètre dans ce commentaire : psycopg les compte AUSSI ici.)
+             WHERE (%s::bigint IS NULL OR f.org_id = %s)
                -- `f.id::int` et non `f.id` : la colonne est BIGSERIAL, et
                -- Postgres n'offre que `(bigint)` ou `(int, int)` — jamais
                -- `(int, bigint)`. Sans le cast, la requête LÈVE
@@ -155,11 +158,11 @@ def campagne_a_servir(org_id: int) -> Optional[dict]:
              ORDER BY f.armed_at NULLS LAST, f.id
              LIMIT 1
             """,
-            (org_id, _VERROU_CAMPAGNE),
+            (org_id, org_id, _VERROU_CAMPAGNE),
         ).fetchone()
 
 
-def accuser_arrets_effectifs(org_id: int) -> list[int]:
+def accuser_arrets_effectifs(org_id: Optional[int]) -> list[int]:
     """`stopping` → `stopped` pour les campagnes dont plus AUCUN travail ne tourne.
 
     ⚠️ Ce geste appartenait à l'ordonnanceur (`op=ack_stop`), et l'écart entre
@@ -181,17 +184,17 @@ def accuser_arrets_effectifs(org_id: int) -> list[int]:
             """
             UPDATE runner_fleets f
                SET status = 'stopped', stopped_at = NOW()
-             WHERE f.org_id = %s AND f.status = 'stopping'
+             WHERE (%s::bigint IS NULL OR f.org_id = %s) AND f.status = 'stopping'
                AND NOT EXISTS (SELECT 1 FROM runner_jobs j
                                 WHERE j.fleet_id = f.id
                                   AND j.status IN ('pending', 'claimed'))
             RETURNING f.id
             """,
-            (org_id,)).fetchall()
+            (org_id, org_id)).fetchall()
     return [int(r["id"]) for r in lignes]
 
 
-def arreter_campagnes_epuisees(org_id: int) -> list[int]:
+def arreter_campagnes_epuisees(org_id: Optional[int]) -> list[int]:
     """Arrête les campagnes dont les N derniers travaux ont TOUS échoué.
 
     ⚠️ Cette borne comptait avant, mais elle était portée par un ordonnanceur
@@ -215,7 +218,7 @@ def arreter_campagnes_epuisees(org_id: int) -> list[int]:
             UPDATE runner_fleets f
                SET status = 'stopped', stopped_at = NOW(),
                    stop_reason = 'max_consecutive_failures'
-             WHERE f.org_id = %s
+             WHERE (%s::bigint IS NULL OR f.org_id = %s)
                AND f.status IN ('armed', 'running')
                AND f.max_consecutive_failures IS NOT NULL
                AND (SELECT COUNT(*) FROM (
@@ -226,7 +229,7 @@ def arreter_campagnes_epuisees(org_id: int) -> list[int]:
                      WHERE d.status = 'failed') >= f.max_consecutive_failures
             RETURNING f.id
             """,
-            (org_id,),
+            (org_id, org_id),
         ).fetchall()
     return [r["id"] for r in rows]
 

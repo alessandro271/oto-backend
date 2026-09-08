@@ -304,4 +304,18 @@ CREATE TABLE IF NOT EXISTS runner_workers (
     last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (org_id, worker_sub)
 );
+
+-- Les workers de PLATEFORME : ceux qui servent toutes les organisations à la
+-- fois. Une table à part, et non un `org_id` nullable dans celle du dessus :
+-- « présent pour l'org 12 » et « présent pour tout le monde » ne sont pas la
+-- même information, et les mélanger obligerait chaque lecteur à connaître la
+-- convention du NULL. Ici le nom de la table dit la nature de la ligne.
+--
+-- ⚠️ Lue par `runner_arme` EN PLUS du témoin par org : sans elle, une org
+-- servie uniquement par un worker de plateforme se lirait « aucun runner »,
+-- et son premier déclencheur serait refusé pour rien.
+CREATE TABLE IF NOT EXISTS runner_platform_workers (
+    worker_sub TEXT PRIMARY KEY,
+    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 """

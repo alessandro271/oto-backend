@@ -154,3 +154,64 @@ def test_arret_demande_ATTEND_les_travaux_encore_en_vol(org_neuve):
     assert db.accuser_arrets_effectifs(org_neuve["org"]) == []
     assert db.get_fleet(f["id"], org_neuve["org"])["status"] == "stopping", (
         "un travail encore en file interdit de déclarer l'arrêt effectif")
+
+
+# ── Le worker de PLATEFORME : sans organisation, il les sert toutes ──────────
+# Ce que ces bancs ferment : la file était filtrée sur l'org ACTIVE du porteur
+# du jeton, parce que la capacité était déclarée pour un membre d'organisation.
+# Il fallait donc un worker par client — ce qui a laissé des travaux sans
+# personne pour les prendre. Un worker n'a pas d'org : il exécute, et son droit
+# d'agir vient du jeton délégué émis au nom du demandeur.
+#
+# ⚠️ La base est module-scope : ces bancs ne supposent JAMAIS qu'elle est vierge.
+# Ils comparent ce que voit une org fraîche (rien) à ce que voit un worker sans
+# org (quelque chose) — une différence, pas un état absolu.
+
+def _org_fraiche(sub):
+    from oto_mcp import org_store
+    return org_store.create_org("org_" + uuid.uuid4().hex[:8], created_by=sub)
+
+
+def test_sans_org_on_sert_la_campagne_d_une_AUTRE_organisation(org_neuve):
+    from oto_mcp import db
+    ailleurs = _org_fraiche(org_neuve["sub"])
+    f = _flotte(ailleurs, org_neuve["sub"])
+    db.armer(f["id"], ailleurs)
+
+    assert db.campagne_a_servir(org_neuve["org"]) is None, (
+        "une org fraîche n'a aucune campagne — c'est le point de comparaison")
+    assert db.campagne_a_servir(None) is not None, (
+        "sans org, le worker sert une campagne en cours, quel qu'en soit le client")
+
+
+def test_sans_org_on_reserve_le_travail_d_une_AUTRE_organisation(org_neuve):
+    from oto_mcp import db
+    ailleurs = _org_fraiche(org_neuve["sub"])
+    f = _flotte(ailleurs, org_neuve["sub"])
+    db.armer(f["id"], ailleurs)
+    db.enqueue_job(ailleurs, "start", fleet_id=f["id"], sub=org_neuve["sub"])
+
+    assert db.claim_next_job(org_neuve["org"], "w", lease_seconds=60) is None, (
+        "l'org fraîche du worker ne contient rien")
+
+    pris = db.claim_next_job(None, "worker-plateforme", lease_seconds=60)
+
+    assert pris is not None, "sans org, il prend le travail le plus ancien"
+    assert pris["org_id"] is not None, (
+        "le travail garde l'org de SON demandeur — c'est elle qui compte, pas "
+        "celle du worker, qui n'en a pas")
+
+
+def test_un_worker_de_plateforme_compte_comme_present_pour_chaque_org(org_neuve):
+    """Sans ce bras, une org servie uniquement par un worker de plateforme se
+    lirait « aucun runner » et son premier déclencheur serait refusé pour rien."""
+    import psycopg
+    from oto_mcp import db
+    with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as c:
+        c.execute("DELETE FROM runner_platform_workers")   # état de départ NOMMÉ
+
+    assert db.runner_arme(org_neuve["org"])["armed"] is False
+
+    db.claim_next_job(None, "worker-plateforme", lease_seconds=60)
+
+    assert db.runner_arme(org_neuve["org"])["armed"] is True

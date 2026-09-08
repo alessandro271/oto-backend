@@ -67,10 +67,29 @@ def test_le_claim_porte_lorg_et_le_sub_de_lappelant(espion):
         "le claim ne peut servir QUE la file de l'org du jeton, au nom du worker"
 
 
-def test_sans_org_active_la_file_refuse(espion):
-    with pytest.raises(AuthzDenied) as e:
-        _appel(ResolvedCtx(sub="w", org_id=None), op="claim")
-    assert e.value.code == "org_required"
+def test_un_worker_SANS_org_reserve_quand_meme(espion):
+    """Renversement du 08/09/2026. Ce banc exigeait `org_required` sur `claim`,
+    et c'est ce refus qui imposait un worker par organisation.
+
+    Un worker n'a pas d'organisation : il exécute, il ne décide de rien, et son
+    droit d'agir vient du jeton délégué émis au nom du demandeur. `org_id=None`
+    n'est pas une garde retirée, c'est l'absence d'une notion qui n'a pas de
+    sens pour une machine."""
+    _appel(ResolvedCtx(sub="w", org_id=None), op="claim")
+    assert espion["claim"][0] is None, (
+        "l'org du worker ne filtre plus la file : il prend le travail le plus "
+        "ancien, tous clients confondus")
+
+
+def test_les_verbes_D_HUMAIN_exigent_toujours_une_org(espion):
+    """L'autre bord, et sans lui on aurait ouvert bien plus que la file :
+    enfiler un travail, lire la file ou ouvrir un travail restent des gestes
+    d'organisation. Les libérer laisserait voir la file d'autrui."""
+    for op in ("enqueue", "list", "get"):
+        with pytest.raises(AuthzDenied) as e:
+            _appel(ResolvedCtx(sub="w", org_id=None), op=op, job_id=1, kind="start",
+                   payload={"procedure": "p"})
+        assert e.value.code == "org_required", op
 
 
 def test_le_bail_est_borne(espion):
@@ -240,7 +259,7 @@ def test_le_resultat_fait_l_aller_retour_en_base(live):
 # remplace un ordonnanceur externe qu'un humain lançait à la main, qui prenait
 # la campagne, la découpait, et battait pour dire qu'il vivait.
 
-CAMPAGNE = {"id": 12, "sub": "celui-qui-a-declare", "label": "audiens",
+CAMPAGNE = {"id": 12, "org_id": 7, "sub": "celui-qui-a-declare", "label": "audiens",
             "procedure": "enrichissement", "project_id": 220, "namespace": "tableau",
             "tools": ["data_claim_next", "data_write"], "input": "file {namespace}",
             "row_filter": {"statut": "a_enrichir"}, "max_steps": 40,
