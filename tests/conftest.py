@@ -258,3 +258,45 @@ def pg_box() -> Iterator[PgBox]:
 @pytest.fixture(scope="session")
 def pg_dsn(pg_box: PgBox) -> str:
     return pg_box.dsn
+
+
+@pytest.fixture(scope="module")
+def pg_module_dsn(pg_dsn: str) -> Iterator[str]:
+    """Une base neuve POUR CE MODULE, détruite à sa sortie — rend son DSN.
+
+    ⚠️ **`pg_dsn` est le SERVEUR, pas un bac à sable.** Sur ce poste il vient de
+    `OTO_TEST_PG_DSN`, qui désigne une base fixe (`postgres`) partagée par toutes
+    les sessions : un module qui y pose son DDL écrit chez tout le monde. Mesuré
+    le 08/09/2026 — quatre-vingts tables de familles étrangères y coexistaient,
+    un `DROP TABLE` sans `CASCADE` échouait dès qu'un voisin avait laissé une
+    dépendance, **y compris pour un fichier lancé seul** (le résidu survit à la
+    fin du run), et un module effaçait EN COURS DE VOL les lignes qu'un autre
+    venait d'écrire. Ces rouges-là ne ressemblent pas à un problème de base : ils
+    ressemblent à une régression métier, et c'est ce qui coûte cher.
+
+    Le mécanisme est celui, éprouvé, de la fixture `live` des bancs du datastore —
+    remonté ici pour que les modules hors `tests/datastore/` en disposent, et pour
+    qu'il n'existe qu'un seul exemplaire à corriger. `live` s'appuie désormais
+    dessus.
+
+    Le pool de `oto_mcp.db._conn` est **mémoïsé au module Python** : un module qui
+    détourne `_database_url` sans neutraliser le pool parlerait à la base d'un
+    voisin. Il est donc mis à neuf ici, et l'ancien remis à la sortie — sans quoi
+    l'isolement de la base serait vrai et celui du pool faux.
+    """
+    psycopg = pytest.importorskip("psycopg")
+    from oto_mcp.db import _conn as dbconn
+
+    nom = "oto_test_" + uuid.uuid4().hex[:8]
+    root = psycopg.connect(pg_dsn, autocommit=True)
+    root.execute(f'CREATE DATABASE "{nom}"')
+    pool_avant = dbconn._pool
+    dbconn._pool = None
+    try:
+        yield pg_dsn.rsplit("/", 1)[0] + "/" + nom
+    finally:
+        if dbconn._pool is not None:
+            dbconn._pool.close()
+        dbconn._pool = pool_avant
+        root.execute(f'DROP DATABASE IF EXISTS "{nom}" WITH (FORCE)')
+        root.close()

@@ -28,30 +28,25 @@ import pytest
 
 
 @pytest.fixture(scope="module")
-def live(pg_dsn):
-    psycopg = pytest.importorskip("psycopg")
-    from oto_mcp.db import _conn as dbconn
+def live(pg_module_dsn):
+    """Le schéma réel sur la base neuve du module, plus la clé maîtresse du coffre.
 
-    name = "oto_pause_" + uuid.uuid4().hex[:8]
-    root = psycopg.connect(pg_dsn, autocommit=True)
-    root.execute(f'CREATE DATABASE "{name}"')
-    dsn = pg_dsn.rsplit("/", 1)[0] + "/" + name
-
-    avant_url, avant_pool = os.environ.get("DATABASE_URL"), dbconn._pool
-    avant_key = os.environ.get("OTO_MCP_MASTER_KEY")
-    os.environ["DATABASE_URL"] = dsn
+    ⚠️ La création et la DESTRUCTION de la base vivent dans `pg_module_dsn`
+    (`conftest` racine). Cette fixture-ci créait la sienne et ne la supprimait
+    jamais : onze bases orphelines, 143 Mo, mesurés le 08/09/2026 — une fuite sans
+    fin, parce qu'un `finally` qui ne remet que des variables d'environnement ne
+    rend pas ce qu'il a pris au serveur.
+    """
+    avant = {cle: os.environ.get(cle)
+             for cle in ("DATABASE_URL", "OTO_MCP_MASTER_KEY")}
+    os.environ["DATABASE_URL"] = pg_module_dsn
     os.environ["OTO_MCP_MASTER_KEY"] = "4" * 64
-    dbconn._pool = None
     try:
         from oto_mcp.db import init_db
         init_db()
         yield
     finally:
-        if dbconn._pool is not None:
-            dbconn._pool.close()
-        dbconn._pool = avant_pool
-        for cle, valeur in (("DATABASE_URL", avant_url),
-                            ("OTO_MCP_MASTER_KEY", avant_key)):
+        for cle, valeur in avant.items():
             if valeur is None:
                 os.environ.pop(cle, None)
             else:

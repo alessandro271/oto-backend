@@ -35,14 +35,14 @@ def _ddl() -> str:
 
 
 @pytest.fixture()
-def store(pg_dsn, monkeypatch):
+def store(pg_module_dsn, monkeypatch):
     """Le vrai store sur une vraie table — seule la résolution de namespace est
     court-circuitée : le sujet est la traduction du filtre, pas la propriété."""
-    monkeypatch.setenv("DATABASE_URL", pg_dsn)
+    monkeypatch.setenv("DATABASE_URL", pg_module_dsn)
     from oto_mcp.db import _conn
-    monkeypatch.setattr(_conn, "_database_url", lambda: pg_dsn)
+    monkeypatch.setattr(_conn, "_database_url", lambda: pg_module_dsn)
     from oto_mcp.datastore.core import DatastorePg
-    with psycopg.connect(pg_dsn, autocommit=True) as c:
+    with psycopg.connect(pg_module_dsn, autocommit=True) as c:
         for table in reversed(_TABLES):
             c.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
         c.execute(_ddl())

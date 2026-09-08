@@ -27,11 +27,11 @@ def _ddl() -> str:
 
 
 @pytest.fixture()
-def pg(pg_dsn, monkeypatch):
-    monkeypatch.setenv("DATABASE_URL", pg_dsn)
+def pg(pg_module_dsn, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", pg_module_dsn)
     from oto_mcp.db import _conn
-    monkeypatch.setattr(_conn, "_database_url", lambda: pg_dsn)
-    with psycopg.connect(pg_dsn, autocommit=True) as c:
+    monkeypatch.setattr(_conn, "_database_url", lambda: pg_module_dsn)
+    with psycopg.connect(pg_module_dsn, autocommit=True) as c:
         c.execute("DROP TABLE IF EXISTS datastore_rows")
         c.execute(_ddl())
         for rid, data in [

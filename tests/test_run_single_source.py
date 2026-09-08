@@ -43,10 +43,10 @@ def _real_ddl(table: str) -> str:
 
 
 @pytest.fixture()
-def conn(pg_dsn, monkeypatch):
+def conn(pg_module_dsn, monkeypatch):
     psycopg = pytest.importorskip("psycopg")
     from psycopg.rows import dict_row
-    with psycopg.connect(pg_dsn, row_factory=dict_row, autocommit=True) as c:
+    with psycopg.connect(pg_module_dsn, row_factory=dict_row, autocommit=True) as c:
         for t in ("runs", "tool_calls", "users"):
             c.execute(f"DROP TABLE IF EXISTS {t}")
         for t in ("users", "tool_calls", "runs"):

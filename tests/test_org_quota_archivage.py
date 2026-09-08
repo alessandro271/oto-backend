@@ -93,12 +93,12 @@ def _real_orgs_migrations() -> list[str]:
 
 
 @pytest.fixture()
-def conn(pg_dsn):
+def conn(pg_module_dsn):
     psycopg = pytest.importorskip("psycopg")
     # La row factory RÉELLE : les rows du serveur sont des dicts dont les dates sont
     # déjà normalisées en chaînes. Un `dict_row` nu ferait diverger le banc du système
     # sur le seul type que le code historique suppose.
-    with psycopg.connect(pg_dsn, row_factory=_conn_mod._str_dict_row,
+    with psycopg.connect(pg_module_dsn, row_factory=_conn_mod._str_dict_row,
                          autocommit=True) as c:
         for t in reversed(_TABLES):
             c.execute(f"DROP TABLE IF EXISTS {t} CASCADE")

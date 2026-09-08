@@ -32,7 +32,7 @@ _CORPS = ("op=bulk_create a rendu success:true pour deux fiches qui étaient des
 
 
 @pytest.fixture()
-def live_signals(pg_dsn, monkeypatch):
+def live_signals(pg_module_dsn, monkeypatch):
     psycopg = pytest.importorskip("psycopg")
     from psycopg.rows import dict_row
 
@@ -42,7 +42,7 @@ def live_signals(pg_dsn, monkeypatch):
         assert m, f"DDL de `{table}` introuvable"
         return m.group(0)
 
-    with psycopg.connect(pg_dsn, row_factory=dict_row, autocommit=True) as c:
+    with psycopg.connect(pg_module_dsn, row_factory=dict_row, autocommit=True) as c:
         c.execute("DROP TABLE IF EXISTS usage_signals")
         c.execute(_ddl("usage_signals"))
 

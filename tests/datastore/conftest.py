@@ -14,39 +14,32 @@ il n'y a rien à importer, et la question de `sys.path` ne se pose jamais.
 from __future__ import annotations
 
 import os
-import uuid
 
 import pytest
 
 
 @pytest.fixture(scope="module")
-def live(pg_dsn):
-    """Une base PostgreSQL neuve pour le module, détruite à la sortie.
+def live(pg_module_dsn):
+    """Le schéma réel sur la base neuve du module (`pg_module_dsn`), pointé par
+    `DATABASE_URL`.
 
     Une vraie base plutôt qu'un double : ce qu'on vérifie ici, c'est ce que le
     STOCKAGE porte — un simulacre rendrait ce qu'on lui a appris à rendre.
-    """
-    psycopg = pytest.importorskip("psycopg")
-    from oto_mcp.db import _conn as dbconn
 
-    nom = "oto_org_" + uuid.uuid4().hex[:8]
-    root = psycopg.connect(pg_dsn, autocommit=True)
-    root.execute(f'CREATE DATABASE "{nom}"')
-    dsn = pg_dsn.rsplit("/", 1)[0] + "/" + nom
-    url_avant, pool_avant = os.environ.get("DATABASE_URL"), dbconn._pool
-    os.environ["DATABASE_URL"] = dsn
-    dbconn._pool = None
+    La création et la destruction de la base vivent une étape plus haut, dans la
+    fixture partagée du `conftest` racine : ce harnais-ci n'est plus que le
+    branchement du code sur cette base.
+    """
+    pytest.importorskip("psycopg")
+
+    url_avant = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = pg_module_dsn
     try:
         from oto_mcp.db import init_db
         init_db()
         yield
     finally:
-        if dbconn._pool is not None:
-            dbconn._pool.close()
-        dbconn._pool = pool_avant
         if url_avant is None:
             os.environ.pop("DATABASE_URL", None)
         else:
             os.environ["DATABASE_URL"] = url_avant
-        root.execute(f'DROP DATABASE IF EXISTS "{nom}" WITH (FORCE)')
-        root.close()

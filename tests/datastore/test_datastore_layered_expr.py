@@ -19,8 +19,8 @@ from oto_mcp.db import datastore as dsdb
 
 
 @pytest.fixture()
-def conn(pg_dsn):
-    with psycopg.connect(pg_dsn) as c:
+def conn(pg_module_dsn):
+    with psycopg.connect(pg_module_dsn) as c:
         c.execute("DROP TABLE IF EXISTS t_layers")
         c.execute("CREATE TABLE t_layers (id INT, data JSONB)")
         c.commit()

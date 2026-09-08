@@ -15,7 +15,7 @@ soigneux :
 Les trois échouent SILENCIEUSEMENT, dans deux directions opposées : deux ferment ce
 qui devait rester ouvert, une ouvre ce qui devait rester fermé. Aucune ne lève.
 
-Le test s'exerce contre un vrai PostgreSQL (fixture `pg_dsn`) parce que ce qui casse
+Le test s'exerce contre un vrai PostgreSQL (fixture `pg_module_dsn`) parce que ce qui casse
 ici est la PK : la sélection est keyée `(sub, org_id, connector)` et le fan-out
 INSÈRE — une paire qui porte déjà l'une des cibles doit garder SON état, pas faire
 échouer la migration. Un stub qui accepte tout passerait sans rien prouver ; c'est la
@@ -33,11 +33,11 @@ CANAUX = ("linkedin_unipile", "whatsapp", "telegram",
 
 
 @pytest.fixture()
-def conn(pg_dsn):
+def conn(pg_module_dsn):
     """Connexion sur les tables réelles (schémas de production, PK comprises)."""
     psycopg = pytest.importorskip("psycopg")
     from psycopg.rows import dict_row
-    with psycopg.connect(pg_dsn, row_factory=dict_row, autocommit=True) as c:
+    with psycopg.connect(pg_module_dsn, row_factory=dict_row, autocommit=True) as c:
         for t in ("user_selected_connectors", "connector_selection_seeded",
                   "connector_availability", "connector_acl"):
             c.execute(f"DROP TABLE IF EXISTS {t}")

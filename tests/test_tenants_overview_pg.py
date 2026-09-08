@@ -18,7 +18,7 @@ Ce qui se joue dans les assertions, au-delà des totaux :
   `tenancy.IssuerRegistry.tenant_of` sur les mêmes subs (deux implémentations, une
   seule règle : le préfixe déclaré, jamais une découpe).
 
-Sauté proprement sans PostgreSQL joignable (fixture `pg_dsn`).
+Sauté proprement sans PostgreSQL joignable (fixture `pg_module_dsn`).
 """
 from __future__ import annotations
 
@@ -30,16 +30,16 @@ from oto_mcp import tenancy
 
 
 @pytest.fixture()
-def base(pg_dsn, monkeypatch):
+def base(pg_module_dsn, monkeypatch):
     """Le VRAI schéma (`init_db`) + une population semée à la main.
 
     ⚠️ `init_db` sème le tenant `oto` (id 1) et pose `orgs.tenant_id` : on part donc
     de l'état réel d'une base neuve, pas d'un DDL reconstitué pour le test.
     """
-    monkeypatch.setenv("DATABASE_URL", pg_dsn)
+    monkeypatch.setenv("DATABASE_URL", pg_module_dsn)
     monkeypatch.setenv("OTO_CONFIG_DISABLE_SOPS", "1")
     from oto_mcp.db import _conn
-    monkeypatch.setattr(_conn, "_database_url", lambda: pg_dsn)
+    monkeypatch.setattr(_conn, "_database_url", lambda: pg_module_dsn)
     _conn._pool = None  # le pool est mémoïsé au module : le forcer sur CETTE base
     from oto_mcp import db
     db.init_db()
@@ -48,7 +48,7 @@ def base(pg_dsn, monkeypatch):
     # tuples, et les lectures par nom ci-dessous (`fetchone()["id"]`) lèvent
     # TypeError DANS LA FIXTURE — les 6 tests sortent alors en ERROR au setup,
     # sans avoir rien exercé. Convention du repo pour tout accès PG direct.
-    with psycopg.connect(pg_dsn, row_factory=dict_row, autocommit=True) as c:
+    with psycopg.connect(pg_module_dsn, row_factory=dict_row, autocommit=True) as c:
         for t in ("tool_calls", "org_members", "orgs", "users"):
             c.execute(f"DELETE FROM {t}")
         c.execute("DELETE FROM tenants WHERE slug <> 'oto'")

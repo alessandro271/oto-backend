@@ -18,12 +18,12 @@ import pytest
 
 
 @pytest.fixture()
-def pg(pg_dsn, monkeypatch):
+def pg(pg_module_dsn, monkeypatch):
     """Une table `datastore_rows` minimale + le module pointé sur cette base."""
-    monkeypatch.setenv("DATABASE_URL", pg_dsn)
+    monkeypatch.setenv("DATABASE_URL", pg_module_dsn)
     from oto_mcp.db import _conn
-    monkeypatch.setattr(_conn, "_database_url", lambda: pg_dsn)
-    with psycopg.connect(pg_dsn, autocommit=True) as c:
+    monkeypatch.setattr(_conn, "_database_url", lambda: pg_module_dsn)
+    with psycopg.connect(pg_module_dsn, autocommit=True) as c:
         c.execute("DROP TABLE IF EXISTS datastore_rows")
         c.execute("CREATE TABLE datastore_rows ("
                   " ns_id INT, row_id TEXT, data JSONB,"

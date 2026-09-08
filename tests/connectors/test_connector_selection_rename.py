@@ -10,7 +10,7 @@ la PK est `(sub, org_id, connector)`, donc un `UPDATE … SET connector` brut y 
 l'unicité. Un test naïf (une seule ligne à renommer) passe et ne prouve rien — d'où
 un exercice contre un **vrai PostgreSQL**, la seule instance qui applique la PK.
 
-Le test se saute proprement si aucun PostgreSQL n'est joignable (fixture `pg_dsn`,
+Le test se saute proprement si aucun PostgreSQL n'est joignable (fixture `pg_module_dsn`,
 `tests/conftest.py`) : le garde-fou d'ORDRE en fin de fichier, lui, reste actif
 partout — c'est l'ordre des trois gestes qui porte le correctif.
 """
@@ -24,11 +24,11 @@ from oto_mcp.connectors import selection as sel
 
 
 @pytest.fixture()
-def conn(pg_dsn):
+def conn(pg_module_dsn):
     """Connexion sur une table `user_selected_connectors` fraîche (schéma réel)."""
     psycopg = pytest.importorskip("psycopg")
     from psycopg.rows import dict_row
-    with psycopg.connect(pg_dsn, row_factory=dict_row, autocommit=True) as c:
+    with psycopg.connect(pg_module_dsn, row_factory=dict_row, autocommit=True) as c:
         c.execute("DROP TABLE IF EXISTS user_selected_connectors")
         c.execute("DROP TABLE IF EXISTS connector_selection_seeded")
         sel.init_schema(c)          # le VRAI schéma, PK comprise

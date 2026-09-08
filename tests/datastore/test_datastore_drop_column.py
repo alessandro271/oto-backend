@@ -158,14 +158,14 @@ def test_a_dotted_key_really_STORED_is_purged_not_refused(store):
 # ── le SQL, contre un vrai PostgreSQL ────────────────────────────────────────
 
 @pytest.fixture()
-def pg_rows(pg_dsn, monkeypatch):
+def pg_rows(pg_module_dsn, monkeypatch):
     """Une table `datastore_rows` minimale + `db.datastore._connect` redirigé
     dessus : c'est la VRAIE fonction et son vrai SQL qui s'exécutent."""
     psycopg = pytest.importorskip("psycopg")
     from psycopg.rows import dict_row
     from oto_mcp.db import datastore as dbds
 
-    conn = psycopg.connect(pg_dsn, row_factory=dict_row, autocommit=True)
+    conn = psycopg.connect(pg_module_dsn, row_factory=dict_row, autocommit=True)
     conn.execute("DROP TABLE IF EXISTS datastore_rows")
     conn.execute("CREATE TABLE datastore_rows ("
                  " ns_id BIGINT NOT NULL, row_id TEXT NOT NULL, data JSONB NOT NULL,"
