@@ -298,15 +298,15 @@ MOUNT_CONNECTORS: tuple = tuple(c for c in _REGISTRY_LIST if c.kind == "mount")
 # DÉRIVÉ du registre (fini la liste écrite à la main qui dérivait — reddit/culture
 # mentionnés, foncier/pennylane/apollo/sante… omis). Améliorer le blurb d'un
 # namespace = éditer le `help` du connecteur (source unique : catalogue + carte +
-# ce primer). Les concepts SPINE (hors registre connecteurs, chargés explicitement
-# dans register_all, non gatés) sont déclarés ici car ils ne portent pas de
-# `Connector` — datastore/facts/email/méta/boucle d'usage.
-SPINE_CONCEPTS: tuple[tuple[str, str], ...] = (
-    ("data_*", "datastore tabulaire per-user (PG natif, schéma libre) — data_write/data_rows/data_share"),
-    ("email_send", "envoi d'email per-org (transports scaleway/resend), différé + quiet-hours"),
-    ("oto_*", "méta : visibilité des outils (enable/disable), guide d'org, orgs & équipes"),
-    ("run_* / feedback", "boucle d'usage : run_start/run_finish encadrent un déroulé ; feedback(gap|tool_feedback) remonte les signaux"),
-)
+# ce primer).
+#
+# Le SOCLE (les capacités qu'oto porte lui-même, hors registre connecteurs) vit dans
+# `_spine.py` — même régime : une famille déclare sa ligne, et la couverture est
+# VÉRIFIÉE contre les outils réellement montés, si bien qu'aucune capacité ne peut
+# être passée sous silence. Elle l'était : quatre entrées écrites à la main que rien
+# ne faisait grandir, d'où l'absence d'`oto_resource`/`oto_doc`/`oto_kb` de la carte
+# qui s'annonce « complète » (signal #813 du 08/09/2026, arbitré le jour même).
+from ._spine import SPINE_FAMILIES, render_spine  # noqa: F401,E402 — surface publique
 
 
 def _availability_tag(c: "Connector") -> str:
@@ -318,11 +318,18 @@ def _availability_tag(c: "Connector") -> str:
     return f" ({'; '.join(bits)})" if bits else ""
 
 
-def render_namespace_catalog() -> str:
-    """Le bloc « namespaces » des instructions serveur, dérivé du registre + spine.
-    Une ligne par connecteur (ses namespaces groupés) + le bloc spine. Couvre TOUT
-    le registre → pas d'omission. Les transports email pur-credential (scaleway/
-    resend, aucun tool propre) sont présentés via le concept spine `email_send`."""
+def render_namespace_catalog(spine_tools=None) -> str:
+    """Le bloc « namespaces » des instructions serveur — les DEUX moitiés dérivées.
+
+    Connecteurs : une ligne par connecteur (ses namespaces groupés), sur tout
+    `_REGISTRY_LIST` → pas d'omission. Les transports email pur-credential
+    (scaleway/resend, aucun tool propre) sont présentés via la famille `email_send`.
+
+    Socle : une ligne par famille déclarée (`_spine.SPINE_FAMILIES`), puis une ligne
+    par outil spine que personne ne revendique. `spine_tools=None` = dérivation par
+    défaut (registre des capacités) ; le paramètre existe pour qu'un appelant qui
+    connaît l'inventaire réellement monté le passe, et pour que le test prouve le
+    mécanisme sans dépendre de ce qui est monté ce jour-là."""
     lines: list[str] = []
     for c in _REGISTRY_LIST:
         if c.name in EMAIL_CONNECTOR_TRANSPORT:   # credential-only → couvert par email_send
@@ -331,9 +338,8 @@ def render_namespace_catalog() -> str:
         desc = f"{c.label} : {c.help}" if c.help else c.label
         lines.append(f"• {ns} — {desc}{_availability_tag(c)}")
     lines.append("")
-    lines.append("Plateforme (spine — toujours dispo, non gaté) :")
-    for ns, desc in SPINE_CONCEPTS:
-        lines.append(f"• {ns} — {desc}")
+    lines.append("Plateforme (le socle — ce qu'oto porte lui-même, toujours monté) :")
+    lines += render_spine(spine_tools)
     return "\n".join(lines)
 
 

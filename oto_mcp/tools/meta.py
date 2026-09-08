@@ -66,9 +66,12 @@ def hint_zero_resultat(tb: Optional[dict]) -> str:
                 "donc les outils des connecteurs de l'org épinglée n'y sont pas listés. "
                 "Appelle-le par `oto_call(name=..., arguments={...})` avant de conclure "
                 "qu'une source est injoignable.")
-    return ("Aucun outil ne porte ces mots (recherche lexicale, docstrings en anglais). "
-            "Repère le domaine dans `namespaces`, ou relance sans `query` pour le "
-            "catalogue complet.")
+    return ("Aucun outil ne porte ces mots. La recherche est LEXICALE et les docstrings "
+            "sont en ANGLAIS : relance la même intention en anglais avant toute autre "
+            "conclusion — mesuré le 08/09/2026, « transférer propriétaire équipe "
+            "ressource » rend 0 outil et « transfer ownership resource team » rend "
+            "`oto_resource` en tête. Sinon, repère le domaine dans `namespaces`, ou "
+            "relance sans `query` pour le catalogue complet.")
 
 
 def _namespace_help(ns: str) -> str:
