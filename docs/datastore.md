@@ -872,6 +872,18 @@ de fin de passage détectait après coup.
   valeur courante la présenterait comme celle de la cliente — ce que la définition
   interdit. Le marqueur rend l'ignorance explicite plutôt que muette : sans lui, « pas
   d'origine » se confondrait avec « origine vide ».
+  ⚠️ **Fin de `null` (oto#140), en PRÉAVIS jusqu'au 1er décembre 2026.** `null`
+  efface dans le datastore alors qu'il veut dire « pas de valeur » partout ailleurs :
+  un jeton, deux sens opposés. Remplacé par `@empty` (vide délibéré) et l'omission
+  (= `@keep`). ⚠️ **Préavis et non retrait, parce que c'est mesuré** : 1 862
+  `"valeur": null` dans les journaux du plus gros écrivain, et le sens que ses agents
+  lui donnent est « cherché, rien trouvé » — l'exact opposé d'« efface ». Le texte servi
+  nomme donc l'OMISSION comme geste juste pour ce cas, sans quoi une traduction
+  mécanique vers `@empty` détruirait en masse. À la date, `null` est REFUSÉ en nommant
+  `@empty`, **jamais interprété en silence** : traduire « pour rendre service »
+  commettrait le dégât que le lot existe pour empêcher. Le refus PARTAGE son corps avec
+  l'avertissement — celui qui s'est préparé pendant le préavis ne doit pas découvrir
+  qu'on lui demandait autre chose.
   ⚠️ **`force: [chemins]` (oto#140)** remplace la portée « tout l'appel » du booléen :
   `force=["raison_sociale.origine"]` ne force que ce qui est nommé, colonne ou couche.
   Le nommer vaut demande — pas besoin de `readonly_override` en plus. ⚠️ **Ça change la

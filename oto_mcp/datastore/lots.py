@@ -22,6 +22,7 @@ from .controles import _relever_origine_module
 from .errors import BusinessKeyRequired, RowLocked, RowValidationError
 from .outils import _new_id, _refus_de_creation
 from .points import _refuse_dotted_names, ranger_les_couches
+from . import fin_du_null as fdn
 from .donnees_d_origine import poser_les_deux_versions
 from .reserves import refuser_champs_reserves
 
@@ -100,6 +101,13 @@ class LotsMixin:
                     schema, user_data,
                     colonnes_en_place=lambda: self._colonnes_de_la_ligne_visee(
                         ns_id, schema, user_data, key))
+                # oto#140 : préavis de `null`, sur le chemin des imports aussi —
+                # union sur le lot, donc une phrase et non cinq cents.
+                vises = fdn.nulls_nommes(user_data)
+                if vises:
+                    if fdn.refus_arme():
+                        raise ValueError(fdn.refus(vises))
+                    self.off_notices.add(fdn.avertissement(vises))
                 _refuse_dotted_names(user_data)
                 # ⚠️ DÉBALLÉ : une clé métier ANNOTÉE désigne la même ligne qu'une clé nue.
                 # `{"code": {"valeur": "A", "comment": "fichier source"}}` et

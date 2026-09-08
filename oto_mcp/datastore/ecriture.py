@@ -27,6 +27,7 @@ from .columns import (
 )
 from .controles import _relever_origine_module
 from .errors import NamespaceNotFound, RowNotFound
+from . import fin_du_null as fdn
 from .forcage import Forcage
 from .outils import _new_id, _now_iso, _refus_de_creation
 from .points import _refuse_dotted_names, ranger_les_couches
@@ -89,6 +90,17 @@ class EcritureMixin:
             schema, user_data,
             colonnes_en_place=lambda: self._colonnes_de_la_ligne_visee(
                 ns_id, schema, user_data))
+        # oto#140 : `null` efface ENCORE, mais il est en préavis. Dit à l'instant où
+        # l'ancien comportement joue — le seul moment actionnable, et le lecteur est
+        # celui qui peut agir. ⚠️ Refusé à la date, JAMAIS interprété en silence : un
+        # `null` traduit en `@empty` « pour rendre service » effacerait la valeur d'un
+        # agent qui voulait dire « cherché, rien trouvé » — le dégât même que ce lot
+        # existe pour empêcher, commis par la correction.
+        vises = fdn.nulls_nommes(user_data)
+        if vises:
+            if fdn.refus_arme():
+                raise ValueError(fdn.refus(vises))
+            self.off_notices.add(fdn.avertissement(vises))
         _refuse_dotted_names(user_data)
         _refuse_mixed_layers(schema, user_data)
         # #586 : la couche d'origine d'un champ système ne s'écrit pas, création
@@ -355,6 +367,17 @@ class EcritureMixin:
         # plus. C'est la porte du round-trip #390 — relire une fiche et la repousser —
         # donc celle où l'aller-retour DOIT se refermer.
         patch = ranger_les_couches(schema, patch, colonnes_en_place=lambda: set(data))
+        # oto#140 : `null` efface ENCORE, mais il est en préavis. Dit à l'instant où
+        # l'ancien comportement joue — le seul moment actionnable, et le lecteur est
+        # celui qui peut agir. ⚠️ Refusé à la date, JAMAIS interprété en silence : un
+        # `null` traduit en `@empty` « pour rendre service » effacerait la valeur d'un
+        # agent qui voulait dire « cherché, rien trouvé » — le dégât même que ce lot
+        # existe pour empêcher, commis par la correction.
+        vises = fdn.nulls_nommes(patch)
+        if vises:
+            if fdn.refus_arme():
+                raise ValueError(fdn.refus(vises))
+            self.off_notices.add(fdn.avertissement(vises))
         _refuse_dotted_names(patch)
         _refuse_mixed_layers(schema, patch)
         status_key = (dsv2.status_field(schema) or {}).get("key")

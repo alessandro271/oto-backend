@@ -216,6 +216,26 @@ Une colonne verrouillée absente de ta liste est refusée normalement, **et le r
 dit que c'est ta liste qui ne la nomme pas** — pas que tu manques d'un droit. La
 distinction compte : sans elle, tu partirais chercher une permission que tu as déjà.
 
+## 4 quinquies. ⚠️ `null` va cesser d'effacer — au 1er décembre 2026
+
+Aujourd'hui `{"champ": null}` EFFACE la valeur. Partout ailleurs — un schéma, une
+réponse, ton propre JSON — `null` veut dire « pas de valeur ». Le même jeton dit donc
+une chose et son contraire selon l'endroit, et c'est ce qu'on retire.
+
+| ce que tu veux | ce que tu écris |
+|---|---|
+| vider délibérément | `{"champ": {"valeur": "@empty"}}` |
+| ne pas y toucher | **omets le champ** (ou `@keep`) |
+
+⚠️ **Si `null` voulait dire « cherché, rien trouvé » chez toi — c'est l'usage le plus
+courant — alors le geste juste est l'OMISSION, pas `@empty`.** Ne rien trouver n'est
+pas effacer. Traduire mécaniquement tes `null` en `@empty` détruirait des valeurs que
+tu voulais seulement laisser en place.
+
+Jusqu'à la date, `null` efface encore et la réponse porte un avertissement. Après, il
+est **refusé** — jamais interprété en silence, parce qu'un `null` traduit « pour rendre
+service » ferait exactement le dégât qu'on cherche à empêcher.
+
 ## 5. Ce que `readonly: true` protège — et ne protège pas
 
 Une colonne `readonly` (schéma) verrouille la **valeur** d'une ligne en place : une
