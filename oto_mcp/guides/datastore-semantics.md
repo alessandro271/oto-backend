@@ -247,6 +247,24 @@ Jusqu'à la date, `null` efface encore et la réponse porte un avertissement. Ap
 est **refusé** — jamais interprété en silence, parce qu'un `null` traduit « pour rendre
 service » ferait exactement le dégât qu'on cherche à empêcher.
 
+## 4 sexies. `status_field` — la colonne d'état se déclare au schéma
+
+```json
+{"key": "siren", "status_field": "statut", "fields": [ … ]}
+```
+
+Symétrique de `key` pour la clé métier : **la colonne qui porte le cycle de vie se
+nomme une fois, au niveau du schéma**. Une colonne inexistante est refusée à la pose.
+
+⚠️ **Pourquoi, et ce que l'ancienne forme coûtait** : `role: "status"` est une
+étiquette, et une étiquette se pose autant de fois qu'on veut. Deux champs marqués, et
+c'est **l'ordre de déclaration** qui décide — en silence. Pire : un `lifecycle` posé
+sur une colonne qui n'a pas l'étiquette n'est **jamais lu**, et le schéma affiche le
+contraire. Mesuré sur un tableau de campagne où la garde ne gardait rien.
+
+`role: "status"` continue de valoir si `status_field` est absent — rien ne casse. Quand
+les deux sont là, la clé de schéma décide.
+
 ## 5. Ce que `readonly: true` protège — et ne protège pas
 
 Une colonne `readonly` (schéma) verrouille la **valeur** d'une ligne en place : une

@@ -894,6 +894,19 @@ de fin de passage détectait après coup.
   part chercher un droit qu'il possède déjà. `None` (rien demandé) et `[]` ne sont pas
   la même chose : le second est refusé, parce que le lire comme une absence désarmerait
   silencieusement le geste.
+  ⚠️ **`status_field` au niveau du schéma (oto#140)** — la colonne d'état se déclare
+  comme la clé métier, au lieu d'être désignée par l'étiquette `role: "status"`. Motif
+  mesuré le 08/09/2026 : `status_field()` rendait **le PREMIER champ trouvé**, donc
+  l'ordre de déclaration tranchait en silence ; et un `lifecycle` posé sur une colonne
+  sans l'étiquette n'est jamais lu, alors que le schéma affiche le contraire — une
+  campagne avait armé une garde qui ne gardait rien. Une clé de schéma ne désigne
+  qu'une colonne, et une colonne absente se refuse à la pose, en disant ce qu'on perd
+  (état terminal, plafond de reprises, périmètre de réservation). Même leçon que `key`,
+  et que `display: "title"` qui a déjà remplacé `role: "title"`. **Palier 1 : la clé
+  s'ajoute et gagne quand elle est là ; `role: "status"` continue de valoir.** ⚠️ Le
+  reste de `role` est de l'affichage — mesuré sur quatre tableaux : un seul rôle sur
+  les deux tableaux de PRODUCTION, dix-huit des dix-neuf autres décrivant comment un
+  écran rend une colonne. Son retrait complet viendra avec son préavis.
   ⚠️ **`versions` (oto#140) — palier 1 de la lecture à deux versions.** `current` et
   `origine` se nomment (`versions=["current","origine"]`), et la réponse déclare ce
   qu'elle a servi sous `versions_servies` : sans cette déclaration, « pas demandée » et

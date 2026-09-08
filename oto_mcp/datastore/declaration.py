@@ -206,8 +206,40 @@ def field_by_role(schema: Optional[dict], role: str) -> Optional[dict]:
     return None
 
 
+#: La clé de SCHÉMA qui nomme la colonne d'état — symétrique de `key` pour la clé
+#: métier. Palier 1 : elle s'ajoute, `role: "status"` continue de valoir.
+STATUS_KEY = "status_field"
+
+
 def status_field(schema: Optional[dict]) -> Optional[dict]:
-    """Le field déclaré `role="status"` (premier trouvé), ou None."""
+    """La colonne d'état : `schema.status_field` d'abord, sinon `role="status"`.
+
+    ⚠️ **Pourquoi une clé de SCHÉMA plutôt qu'une étiquette sur un champ** : parce
+    qu'une étiquette se pose autant de fois qu'on veut, et que c'est alors **le premier
+    champ trouvé** qui gagne — donc l'ORDRE DE DÉCLARATION, en silence. Une clé au
+    niveau du schéma ne peut désigner qu'une colonne, et une colonne inexistante se
+    refuse à la pose. C'est la même leçon que `key` pour la clé métier, et que
+    `display: "title"` qui a déjà remplacé `role: "title"` pour cette raison exacte.
+
+    Mesuré le 08/09/2026 sur quatre tableaux d'une campagne : **un seul rôle sur les
+    deux tableaux de production** (`status`), et dix-huit des dix-neuf autres, sur les
+    échantillons, décrivaient comment un écran affiche une colonne — pas ce qu'elle
+    contient. Le seul usage STRUCTUREL de `role` est celui-ci ; le reste appartient au
+    consommateur qui affiche.
+
+    Palier 1 : la clé s'ajoute et gagne quand elle est là. `role: "status"` continue de
+    valoir — rien ne casse, et le retrait viendra avec son préavis.
+    """
+    nomme = (schema or {}).get(STATUS_KEY) if isinstance(schema, dict) else None
+    if isinstance(nomme, str) and nomme:
+        for f in _fields(schema):
+            if f.get("key") == nomme:
+                return f
+        # Nommer une colonne absente est refusé À LA POSE (`validate_schema_def`) :
+        # arriver ici veut dire qu'un schéma l'a été avant la garde. On ne devine pas
+        # une autre colonne — le cycle de vie ne s'applique à rien, ce qui est le
+        # comportement le moins surprenant et le plus visible.
+        return None
     return field_by_role(schema, "status")
 
 
