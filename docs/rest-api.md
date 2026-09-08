@@ -475,11 +475,16 @@ ne disait pas, ou disait faux**. Tout est additif ; rien n'a changé de comporte
   effet constaté avant, pas découvert après.
   ⚠️ **En revanche la borne n'est PUBLIÉE que sur la face REST** — mesuré le 03/09 sur
   le montage réel : la face MCP sert `body_md` en `{anyOf: [string, null]}`, sans
-  `maxLength` ni description. La cause est écrite dans `capabilities/_types.py` :
-  l'aplatissement construit un `Field` NEUF et « rien d'autre ne voyage — ni examples,
-  ni json_schema_extra, ni les contraintes ». Un agent du connecteur découvre donc
-  toujours la borne en s'y cognant. `tests/test_param_description_servie.py` fige ce
-  manque plutôt que de le laisser croire comblé, et tombera le jour où il sera corrigé ; `DELETE /api/me/orgs/{id}/membership` → **404
+  `maxLength` ni description. ⚠️ **La cause n'est PAS l'aplatissement** (attribution
+  corrigée le 08/09/2026) : `oto_procedure` porte `ProcedureInput`, dont
+  `body_md` est un `Optional[str]` NU — il ne déclare la borne sur AUCUNE des deux
+  faces. Ce sont `InstrSetInput` / `InstrCreateInput` / `AdminInstrSetInput` qui la
+  portent, elles sont REST-only, et elles la déclarent en `json_schema_extra` — la
+  seule chose que l'aplatissement exclut toujours délibérément (#582). Faire voyager
+  les contraintes (08/09/2026) ne ferme donc pas ce manque : un agent du connecteur découvre
+  toujours la borne en s'y cognant, et la fermer demande de la déclarer sur
+  `ProcedureInput`. `tests/test_param_description_servie.py` fige le manque plutôt que
+  de le laisser croire comblé ; `DELETE /api/me/orgs/{id}/membership` → **404
   `unknown_org`, 409 `personal_org`, 404 `not_a_member`, 409 `last_org_admin`**, dans
   l'ordre des gardes. La liste d'une opération n'est pas exhaustive : les 400 de
   l'adaptateur (`invalid_input`, `unknown_fields`, `invalid_json`, `invalid_body`) valent

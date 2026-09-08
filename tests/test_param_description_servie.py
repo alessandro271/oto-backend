@@ -149,12 +149,19 @@ def test_la_face_MCP_ne_publie_PAS_la_borne_du_corps(monkeypatch):
     `body_md` en `{anyOf: [string, null], default: null}` — sans `maxLength` NI
     description. Un agent du connecteur découvre donc toujours la borne en s'y cognant.
 
-    La cause est écrite dans `_types.py` : l'aplatissement construit un `Field` NEUF
-    et « rien d'autre ne voyage — ni examples, ni json_schema_extra, ni les
-    contraintes ». Le commit `5e3f1cf2` a donc publié la borne sur la face REST
-    seulement, malgré son titre. Ce test FIGE le manque au lieu de le laisser croire
-    comblé : le jour où l'aplatissement fera voyager les contraintes, il tombera — et
-    ce sera le signal de le remplacer par son inverse.
+    ⚠️ **L'attribution d'origine était fausse, corrigée le 08/09/2026 en faisant
+    voyager les contraintes.** Ce test imputait le manque à l'aplatissement (« rien d'autre ne voyage »).
+    Or `oto_procedure` porte `ProcedureInput`, dont `body_md` est un `Optional[str]`
+    NU : il ne déclare la borne sur AUCUNE des deux faces, et la face REST ne la
+    publie pas davantage pour CE modèle. La borne vit sur `InstrSetInput` /
+    `InstrCreateInput` / `AdminInstrSetInput` — REST-only — et y est déclarée en
+    `json_schema_extra`, la seule chose que l'aplatissement exclut toujours
+    délibérément (#582). Faire voyager `f.metadata` n'a donc rien changé ici, et ce
+    test n'est pas tombé : *un test qui fige un manque en nommant la mauvaise cause
+    promet une alerte qu'il ne donnera pas.*
+
+    Fermer ce manque demande de déclarer la borne sur `ProcedureInput` lui-même, avec
+    un `Field(description=…)` (qui, lui, voyage depuis #627).
 
     ⚠️ Ne pas « réparer » ce test en le supprimant : c'est la seule trace exécutable
     que la borne n'est PAS servie de ce côté."""

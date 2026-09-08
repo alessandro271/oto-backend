@@ -280,21 +280,42 @@ def apply_flat_signature(fn: Callable, model: type[BaseModel]) -> Callable:
     du geste est celui que l'agent relit à chaque appel : une permission qui n'atteint
     pas le schéma servi est une consigne écrite dans le vide.*
 
-    ⚠️ **Rien d'autre ne voyage** — ni `examples`, ni `json_schema_extra`, ni les
-    contraintes de `f.metadata`. `tools/list` part à tout client MCP connecté, alors
-    que le document REST est un contrat d'intégration : ce qu'un champ porte pour le
-    second n'a pas à sortir par le premier (#582). On construit donc un `Field` NEUF
-    avec la seule description, au lieu de faire suivre le `FieldInfo` du modèle —
-    faire suivre l'objet emporterait tout ce qu'on vient d'exclure, et l'emporterait
-    encore quand un champ gagnera un attribut qu'on n'a pas prévu.
+    **Les contraintes de `f.metadata` voyagent aussi** (08/09/2026, retours
+    796-798). En pydantic v2, ce
+    qu'un `Annotated[…]` porte — `BeforeValidator`, `Ge`/`Le`, `pattern`,
+    `WithJsonSchema` — ne vit PAS dans `f.annotation` (qui rend le type nu) mais dans
+    `f.metadata`. Les laisser derrière rendait toute coercition ou borne déclarée sur
+    un `Input` **acceptée-inerte côté MCP** : elle mordait sur la face REST, qui
+    valide par l'`Input` lui-même, et se taisait sur la face agent. Mesuré en
+    production le 08/09/2026 — `data_write` (tool écrit à la main) acceptait le
+    numéro de tableau en entier, `data_get_schema` / `data_patch_schema` /
+    `data_drop_column` (portés par une capacité) le refusaient. *Deux outils du même
+    module au contrat divergent : chercher la cause dans le métier fait perdre du
+    temps, le partage est ici entre un tool et une capacité.*
+
+    ⚠️ **`examples` et `json_schema_extra`, eux, ne voyagent toujours pas.**
+    `tools/list` part à tout client MCP connecté, alors que le document REST est un
+    contrat d'intégration : ce qu'un champ porte pour le second n'a pas à sortir par
+    le premier (#582). Ces deux-là vivent sur le `FieldInfo`, pas dans `f.metadata` —
+    c'est pourquoi on continue de construire un `Field` NEUF avec la seule
+    description au lieu de faire suivre le `FieldInfo` du modèle : faire suivre
+    l'objet emporterait ce qu'on vient d'exclure, et l'emporterait encore quand un
+    champ gagnera un attribut qu'on n'a pas prévu.
+
+    Le cliquet est `tests/test_contraintes_servies_face_agent.py` : il parcourt le
+    REGISTRE, pas une liste d'outils, et prouve d'abord sur le montage réel qu'une
+    coercition déclarée mord bien à l'appel.
     """
     params = []
     annotations: dict = {}
     for name, f in model.model_fields.items():
         default = inspect.Parameter.empty if f.is_required() else f.default
-        annotation = f.annotation
+        # L'ordre est celui de la déclaration : les contraintes du champ d'abord
+        # (telles qu'`Annotated[…]` les portait), la description ajoutée après.
+        portees = list(f.metadata)
         if f.description:
-            annotation = Annotated[annotation, Field(description=f.description)]
+            portees.append(Field(description=f.description))
+        annotation = Annotated[(f.annotation, *portees)] if portees else f.annotation
         params.append(inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY,
                                         annotation=annotation, default=default))
         annotations[name] = annotation

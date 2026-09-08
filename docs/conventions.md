@@ -349,8 +349,13 @@ rien ne rendait navigable et que rien ne tenait.
   **accepté-inerte** — mesuré sur `data_patch_schema`, schéma servi 621 caractères avant,
   621 après. La face REST, elle, la publiait : *la même consigne était un contrat d'un
   côté et un commentaire de code de l'autre.* Corrigé le 2026-09-01 (`apply_flat_signature`
-  recopie la `description`, **et elle seule** — `tools/list` n'est pas le document REST) ;
-  cliquet `tests/test_param_description_servie.py`. **Un vide qui ne fait pas rougir un
+  recopie la `description`) ; cliquet `tests/test_param_description_servie.py`.
+  ⚠️ **Le même défaut, une couche plus bas, a duré jusqu'au 2026-09-08 (retours 796-798)** : les
+  CONTRAINTES d'un champ (coercition, borne, motif) vivent dans `f.metadata` et
+  n'étaient pas recopiées non plus — trois outils du datastore refusaient le numéro de
+  tableau en entier que leurs voisins écrits main acceptaient. `apply_flat_signature`
+  fait désormais voyager `f.metadata` ; restent exclus `examples` et
+  `json_schema_extra` (`tools/list` n'est pas le document REST, #582). **Un vide qui ne fait pas rougir un
   test rend une convention décorative sans que personne ne le voie**, parce que la façon
   normale de la vérifier — relire le code où la description est écrite — montre
   exactement ce qu'on voulait écrire.
