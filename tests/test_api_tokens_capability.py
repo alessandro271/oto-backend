@@ -152,6 +152,25 @@ def test_seul_le_palier_membre_refuse_un_tableau_invisible(monkeypatch, socle,
                 body={"scopes": portee})[0] == 200
 
 
+@pytest.mark.parametrize("portee", [{"projects": {"12": "read"}}, {"runner": True}])
+def test_une_portee_SANS_tableau_s_emet_quand_meme(monkeypatch, socle, portee):
+    """`parse` rend légitimement une portée qui ne nomme AUCUN tableau — `projects` ou
+    `runner` seuls. Or le contrôle de visibilité ne concerne QUE les tableaux : indexer
+    `namespaces` sans garde faisait un 500 d'une émission parfaitement valide.
+
+    Pourquoi ce test vit ici et pas dans le banc des portées : `test_portee_runner.py`
+    n'exerce que `parse` et `authorize` — la DÉCISION, jamais l'ÉMISSION. C'est ce trou
+    qui a laissé passer le défaut, donc on joue la ROUTE, et on vérifie que la portée
+    arrive INTACTE au stockage, pas seulement que le code de retour est bon.
+    """
+    stub_authz(monkeypatch)
+    code, out = call("me.token.create", body={"scopes": portee})
+    assert code == 201, f"une portée sans tableau ne s'émet plus : {code} {out}"
+    assert out["scopes"] == portee
+    assert socle[-1][0] == "create" and socle[-1][4] == portee, (
+        f"la portée n'est pas arrivée au stockage : {socle[-1]}")
+
+
 # --- 3. Le secret, et ce qui n'en sort pas ----------------------------------
 
 def test_le_secret_n_est_rendu_qu_a_la_creation(monkeypatch, socle):

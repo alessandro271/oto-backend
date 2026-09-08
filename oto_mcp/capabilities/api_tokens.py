@@ -277,14 +277,18 @@ def _my_list(ctx: ResolvedCtx, inp: TokenListInput) -> dict:
 def _my_create(ctx: ResolvedCtx, inp: TokenCreateInput) -> dict:
     label = _libelle(inp.label)
     scopes = _portee(inp.scopes)
-    if scopes is not None:
+    # ⚠️ La portée ne nomme pas forcément un tableau : `parse` rend légitimement
+    # `{"projects": …}` ou `{"runner": true}` seuls. L'indexer sans garde faisait un 500
+    # d'une émission valide — le contrôle ci-dessous ne concerne QUE les tableaux.
+    vises = (scopes or {}).get("namespaces") or {}
+    if vises:
         # Refuser un tableau que l'ÉMETTEUR ne voit pas : le jeton ne peut de toute façon
         # pas dépasser les droits du sub, mais une faute de frappe produirait un jeton
         # muet qu'on croirait branché. Ce garde-fou n'existe qu'ici — au palier admin, le
         # catalogue visé n'est pas celui de l'émetteur.
         from ..datastore.core import make_store
         visible = {n["namespace"] for n in make_store(ctx.sub).list_namespaces()}
-        missing = sorted(set(scopes["namespaces"]) - visible)
+        missing = sorted(vises.keys() - visible)
         if missing:
             raise AuthzDenied(400, "unknown_namespace",
                               f"Tableaux inconnus dans l'org active : {missing}")
