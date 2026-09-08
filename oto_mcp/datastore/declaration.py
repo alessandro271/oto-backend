@@ -211,31 +211,53 @@ def order_spec(schema: Optional[dict], key) -> tuple:
 # source : **elle ment pour le compte de ceux qui l'ont abandonnée.**
 
 
+#: Ce qui fait d'un `lifecycle` une FILE plutôt qu'une simple suite d'états : un
+#: périmètre de réservation, un plafond de reprises, un état d'abandon. Dérivé des
+#: schémas de production, pas décrété — c'est la distinction qu'ils portaient déjà.
+FILE_KEYS = ("claimable", "max_claims", "abandon_state", "lease", "claims")
+
+
 def status_field(schema: Optional[dict]) -> Optional[dict]:
-    """La colonne d'état : **celle qui porte un `lifecycle`**, ou None.
+    """La colonne de FILE : celle dont le `lifecycle` déclare un périmètre de
+    réservation (`claimable`, `max_claims`, `abandon_state`). À défaut, la seule qui
+    porte un bloc.
 
-    ⚠️ **Le bloc DÉSIGNE sa colonne — il n'y a plus rien à faire correspondre**
-    (décision produit, 08/09/2026). Ni étiquette `role: "status"`, ni clé de schéma :
-    le cycle de vie est posé sur une colonne, donc c'est celle-là.
+    ⚠️ **Un tableau peut porter PLUSIEURS cycles de vie, et c'est légitime** — corrigé
+    le 08/09/2026, avant la mise en production, sur signalement d'une campagne. J'avais
+    posé « un seul par tableau », ce qui aurait rendu quatre tableaux de production non
+    modifiables : ils portent **deux avancements pour deux acteurs** — `statut`, la
+    file que drainent les agents, et `suivi`, les états commerciaux qu'un humain suit
+    à l'écran. Ce n'est pas une ambiguïté, ce sont deux choses différentes sur la même
+    ligne.
 
-    **Ce que ça supprime** : il devient IMPOSSIBLE de poser un cycle de vie qui ne
-    s'applique pas. Avant, un `lifecycle` sur une colonne non étiquetée était stocké,
-    servi… et jamais lu — cinq tableaux étaient dans ce cas, dont quatre en production,
-    et leurs auteurs croyaient avoir armé une garde. Le défaut ne disparaît pas grâce à
-    une garde : il n'existe plus par construction.
+    **Ce qui les distingue est déjà dans les données** : mesuré sur le parc entier, les
+    blocs de file déclarent `claimable`/`max_claims`/`abandon_state`, les blocs d'états
+    humains ne portent que `states` et `terminal` — et **aucun tableau ne porte deux
+    blocs de file**. La règle n'a donc rien à deviner : elle lit ce que les schémas
+    disent déjà.
 
-    Deux colonnes qui en porteraient un sont refusées à la POSE, comme deux colonnes
-    `display: "title"` le sont déjà — sinon le premier trouvé gagnerait, et l'ordre de
-    déclaration trancherait en silence.
+    ⚠️ **Ce que ça ne fait pas encore, et qu'il faut savoir** : seule la colonne rendue
+    ici voit ses transitions validées. Un second bloc est stocké, servi, lu par son
+    consommateur — mais oto ne contrôle pas ses états. Valider chaque colonne sur son
+    propre bloc est la suite juste ; ce n'était pas le moment de l'improviser.
 
-    ⚠️ Trois mécanismes ont désigné cette colonne en une journée : l'étiquette, puis
-    une clé de schéma posée le matin, puis ceci. Le troisième est le seul qui n'ait
-    rien à synchroniser — **une chose déclarée à un endroit, jamais devinée à deux.**
+    ⚠️ Et le cas limite reste : un tableau avec deux blocs SANS file (un seul dans le
+    parc). Le premier déclaré gagne — c'est le comportement d'avant, conservé pour ne
+    rien casser, et c'est exactement la devinette silencieuse que ce lot voulait
+    supprimer. Elle sera fermée par la validation par colonne, pas par un refus qui
+    bloquerait un tableau vivant.
     """
-    for f in _fields(schema):
-        if isinstance(f.get("lifecycle"), dict) and isinstance(f.get("key"), str):
+    porteurs = [f for f in _fields(schema)
+                if isinstance(f.get("lifecycle"), dict) and isinstance(f.get("key"), str)]
+    if not porteurs:
+        return None
+    # La colonne de FILE d'abord : celle dont le bloc déclare un périmètre de
+    # réservation, un plafond de reprises ou un état d'abandon. C'est elle que
+    # `data_claim_next` réserve et que le bail libère.
+    for f in porteurs:
+        if any(k in f["lifecycle"] for k in FILE_KEYS):
             return f
-    return None
+    return porteurs[0]
 
 
 # La PRÉSENTATION d'une colonne — ce que sa valeur sert à l'écran, par opposition à

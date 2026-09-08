@@ -24,15 +24,22 @@ from oto_mcp.datastore import schema as dsv2
 from oto_mcp.datastore.declaration import status_field
 from oto_mcp.datastore.definition import validate_schema_def
 
+#: Un bloc d'ÉTATS HUMAINS : une suite d'états, sans file.
 _LC = {"states": ["a", "b"], "terminal": ["b"]}
+#: Un bloc de FILE : il déclare un périmètre de réservation. C'est celui que
+#: `data_claim_next` réserve, et il ne peut y en avoir qu'un.
+_FILE = {"states": ["a", "b"], "terminal": ["b"], "claimable": {"statut": "a"},
+         "max_claims": 3, "abandon_state": "b"}
 
 
-def _schema(*porteurs, **extra):
+def _schema(*porteurs, files=(), **extra):
     champs = [{"key": "siren", "type": "text"},
               {"key": "statut", "type": "text"},
               {"key": "suivi", "type": "text"}]
     for f in champs:
-        if f["key"] in porteurs:
+        if f["key"] in files:
+            f["lifecycle"] = dict(_FILE)
+        elif f["key"] in porteurs:
             f["lifecycle"] = dict(_LC)
     return {"key": "siren", "fields": champs, **extra}
 
@@ -70,20 +77,44 @@ def test_le_bloc_gagne_meme_si_l_etiquette_designe_une_AUTRE_colonne():
 
 # ── ce que la pose refuse ────────────────────────────────────────────────────
 
-def test_DEUX_cycles_de_vie_sont_refuses_a_la_pose():
-    """⚠️ Sinon le premier trouvé gagnerait, et l'ordre de déclaration trancherait en
-    silence — exactement ce que le retrait de l'étiquette supprime. Même refus que deux
-    colonnes `display: "title"`."""
-    erreurs = validate_schema_def(_schema("statut", "suivi"))
+def test_DEUX_files_sont_refusees_a_la_pose():
+    """Une seule colonne peut porter la file : c'est elle que `data_claim_next`
+    réserve, et deux feraient dépendre la réservation de l'ordre de déclaration."""
+    erreurs = validate_schema_def(_schema(files=("statut", "suivi")))
 
     assert erreurs
-    assert "une seule porte le cycle de vie" in erreurs[0]
+    assert "deux colonnes déclarent une FILE" in erreurs[0]
     assert "statut" in erreurs[0] and "suivi" in erreurs[0], "le refus NOMME les deux"
-    assert "stocké, servi, et jamais lu" in erreurs[0], "et dit ce qu'on éviterait"
+
+
+def test_PLUSIEURS_cycles_de_vie_sont_LEGITIMES():
+    """⚠️ Corrigé avant la mise en production, sur signalement d'une campagne. J'avais
+    posé « un seul par tableau » — ça aurait rendu QUATRE tableaux de production non
+    modifiables.
+
+    Ils portent **deux avancements pour deux acteurs** : `statut`, la file que drainent
+    les agents, et `suivi`, les états commerciaux qu'un humain suit à l'écran. Ce n'est
+    pas une ambiguïté, ce sont deux choses différentes sur la même ligne — et les
+    fusionner sous une règle unique, c'est décider que deux objets sont le même parce
+    qu'ils portent le même nom."""
+    assert validate_schema_def(_schema("suivi", files=("statut",))) == []
+
+
+def test_la_FILE_l_emporte_sur_les_etats_humains():
+    """Ce qui les distingue est DÉJÀ dans les données : mesuré sur le parc entier, les
+    blocs de file déclarent `claimable`/`max_claims`/`abandon_state`, les autres non —
+    et aucun tableau n'en porte deux. La règle ne devine rien, elle lit."""
+    sch = _schema("suivi", files=("statut",))
+    assert status_field(sch)["key"] == "statut"
+
+    # et l'ordre de déclaration n'y change rien
+    sch["fields"].reverse()
+    assert status_field(sch)["key"] == "statut"
 
 
 def test_UN_seul_bloc_est_valide():
     assert validate_schema_def(_schema("statut")) == []
+    assert validate_schema_def(_schema(files=("statut",))) == []
 
 
 def test_AUCUN_bloc_est_valide():

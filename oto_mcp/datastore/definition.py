@@ -35,6 +35,7 @@ from . import schema_keys
 from .couches import LAYER_KEYS, split_layer, SYSTEM_ORIGIN
 from .motifs import PATTERN_MAX_SUBJECT, pattern_refusal
 from .declaration import (
+    FILE_KEYS,
     COMPOSITE_TYPES,
     DISPLAY_TITLE,
     _fields,
@@ -70,15 +71,17 @@ def validate_schema_def(schema: Optional[dict]) -> list[str]:
     # Un seul cycle de vie par tableau : le bloc DÉSIGNE la colonne d'état, donc deux
     # blocs feraient dépendre l'état de l'ordre de déclaration — en silence. Même
     # refus que deux `display: "title"`, et pour la même raison.
-    porteurs = [str(f.get("key")) for f in _fields(schema)
-                if isinstance(f, dict) and isinstance(f.get("lifecycle"), dict)
-                and f.get("key")]
-    if len(porteurs) > 1:
+    files = [str(f.get("key")) for f in _fields(schema)
+             if isinstance(f, dict) and isinstance(f.get("lifecycle"), dict)
+             and f.get("key")
+             and any(k in f["lifecycle"] for k in FILE_KEYS)]
+    if len(files) > 1:
         errors.append(
-            f"`lifecycle` déclaré sur {len(porteurs)} colonnes "
-            f"({', '.join(porteurs)}) — une seule porte le cycle de vie du tableau, "
-            f"et c'est elle qui en est l'état. Garde celui qui compte et retire "
-            f"l'autre : un second bloc serait stocké, servi, et jamais lu.")
+            f"deux colonnes déclarent une FILE de travail ({', '.join(files)}) — "
+            f"`claimable`, `max_claims` ou `abandon_state` ne peuvent vivre que sur "
+            f"une seule, celle que `data_claim_next` réserve. Plusieurs cycles de vie "
+            f"sont permis (une file d'agents et des états humains, par exemple), mais "
+            f"une seule file.")
     # Une clé métier n'est JAMAIS un sous-tableau ni un sous-record (oto#22 §4). Elle
     # identifie la ligne : les écritures par lot dédupliquent dessus, et un index
     # d'unicité d'expression la compare. Une liste ne se réduit pas à une valeur —
