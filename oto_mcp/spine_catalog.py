@@ -1,6 +1,18 @@
 """Le SOCLE (spine) présenté à l'agent — déclaré ici, **peuplé par dérivation**.
 
-Pendant de `providers/<nom>.py` pour les connecteurs. Le connecteur déclare son
+⚠️ **Ce module a d'abord été posé dans `providers/`, et c'était une faute.** Le
+répertoire `providers/` n'est pas « là où vivent les déclarations », c'est le REGISTRE
+DES CONNECTEURS : `tests/test_providers_registry_snapshot.py` y tient l'invariant « un
+domicile, un seul » et lit tout fichier du paquet comme un connecteur à inscrire dans
+`_DECLARATIONS` — son allowlist d'infrastructure ne contient que `__init__` et `_model`,
+et le préfixe `_` n'exempte de rien. Un `providers/_spine.py` y était donc lu comme un
+connecteur livré que rien n'atteint : la suite complète est tombée sur le tronc le
+08/09/2026 et a bloqué une session cliente. Élargir l'allowlist aurait émoussé une garde
+qui protège du code livré et inatteignable — pour un fichier qui, lui, décrit ce que la
+plateforme porte elle-même, pas un fournisseur tiers. Le domicile était le problème.
+
+Le socle emprunte le RÉGIME des connecteurs, il n'habite pas leur maison : pendant de
+`providers/<nom>.py` par la forme, pas par le rangement. Le connecteur déclare son
 `label`/`help` à côté de lui-même et `render_namespace_catalog` en dérive une ligne :
 la moitié « connecteurs » de la carte couvre TOUT le registre, elle grandit seule.
 
@@ -28,8 +40,10 @@ Ajouter un outil DANS une famille existante : rien à faire, il est déjà décr
 Ajouter un outil hors des familles : la carte le dit d'elle-même, et le test le nomme
 pour qu'on lui écrive sa ligne.
 
-Module PUR (aucun import `oto_mcp` au niveau module), comme `providers/__init__.py` :
-la dérivation par défaut de `spine_tool_names()` importe en corps de fonction.
+Module PUR (aucun import `oto_mcp` au niveau module) : la dérivation par défaut de
+`spine_tool_names()` importe en corps de fonction. `providers/__init__.py` l'importe
+de la même façon — cet agrégateur-là DOIT rester pur (sa docstring dit pourquoi), donc
+il ne peut pas nous charger au niveau module.
 """
 from __future__ import annotations
 
@@ -181,7 +195,7 @@ def spine_tool_names() -> tuple[str, ...]:
     revendique.
     """
     try:
-        from ..capabilities import registry as _registry
+        from .capabilities import registry as _registry
     except Exception:   # noqa: SILENT — carte déclarée seule plutôt que boot cassé
         return ()
     noms = {c.mcp for c in _registry.caps_with_mcp() if c.mcp and c.is_exposed()}
@@ -197,8 +211,8 @@ def is_connector_tool(name: str) -> bool:
     `routine_fire`). Sans lui, ils apparaîtraient « non classés » au socle, donc
     DEUX FOIS dans la carte, dont une fois au mauvais endroit."""
     try:
-        from . import connector_for_namespace
-        from ..tool_visibility import namespace_of
+        from .providers import connector_for_namespace
+        from .tool_visibility import namespace_of
     except Exception:   # noqa: SILENT — sans registre, rien n'est un connecteur
         return False
     return connector_for_namespace(namespace_of(name)) is not None

@@ -301,12 +301,15 @@ MOUNT_CONNECTORS: tuple = tuple(c for c in _REGISTRY_LIST if c.kind == "mount")
 # ce primer).
 #
 # Le SOCLE (les capacités qu'oto porte lui-même, hors registre connecteurs) vit dans
-# `_spine.py` — même régime : une famille déclare sa ligne, et la couverture est
-# VÉRIFIÉE contre les outils réellement montés, si bien qu'aucune capacité ne peut
-# être passée sous silence. Elle l'était : quatre entrées écrites à la main que rien
-# ne faisait grandir, d'où l'absence d'`oto_resource`/`oto_doc`/`oto_kb` de la carte
-# qui s'annonce « complète » (signal #813 du 08/09/2026, arbitré le jour même).
-from ._spine import SPINE_FAMILIES, render_spine  # noqa: F401,E402 — surface publique
+# `oto_mcp/spine_catalog.py` — même régime : une famille déclare sa ligne, et la
+# couverture est VÉRIFIÉE contre les outils réellement montés, si bien qu'aucune
+# capacité ne peut être passée sous silence. Elle l'était : quatre entrées écrites à la
+# main que rien ne faisait grandir, d'où l'absence d'`oto_resource`/`oto_doc`/`oto_kb`
+# de la carte qui s'annonce « complète » (signal #813 du 08/09/2026, arbitré le jour
+# même). Il est HORS de ce paquet à dessein : `providers/` est le registre des
+# CONNECTEURS, et tout fichier qui y dort sans ligne dans `_DECLARATIONS` est un
+# connecteur inatteignable (`test_providers_registry_snapshot`). Il est importé en
+# corps de `render_namespace_catalog` — cet agrégateur reste PUR.
 
 
 def _availability_tag(c: "Connector") -> str:
@@ -325,7 +328,7 @@ def render_namespace_catalog(spine_tools=None) -> str:
     `_REGISTRY_LIST` → pas d'omission. Les transports email pur-credential
     (scaleway/resend, aucun tool propre) sont présentés via la famille `email_send`.
 
-    Socle : une ligne par famille déclarée (`_spine.SPINE_FAMILIES`), puis une ligne
+    Socle : une ligne par famille déclarée (`spine_catalog.SPINE_FAMILIES`), puis une ligne
     par outil spine que personne ne revendique. `spine_tools=None` = dérivation par
     défaut (registre des capacités) ; le paramètre existe pour qu'un appelant qui
     connaît l'inventaire réellement monté le passe, et pour que le test prouve le
@@ -339,6 +342,7 @@ def render_namespace_catalog(spine_tools=None) -> str:
         lines.append(f"• {ns} — {desc}{_availability_tag(c)}")
     lines.append("")
     lines.append("Plateforme (le socle — ce qu'oto porte lui-même, toujours monté) :")
+    from ..spine_catalog import render_spine   # module pur, import tardif (cf. supra)
     lines += render_spine(spine_tools)
     return "\n".join(lines)
 

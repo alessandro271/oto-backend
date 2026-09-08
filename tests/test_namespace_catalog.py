@@ -17,7 +17,7 @@ attendue. Un test qui figerait la liste actuelle serait à réécrire à chaque 
 ajoutée, donc abandonné, donc inutile.
 """
 from oto_mcp import providers
-from oto_mcp.providers import _spine
+from oto_mcp import spine_catalog as _spine
 
 
 def test_every_registry_namespace_is_presented():
@@ -73,7 +73,7 @@ def test_chaque_outil_spine_monte_est_couvert():
     orphelins = [n for n in _outils_spine_montes() if _spine.family_of(n) is None]
     assert not orphelins, (
         f"outils du socle qu'aucune famille ne décrit : {orphelins} — "
-        f"déclare-les dans providers/_spine.py")
+        f"déclare-les dans oto_mcp/spine_catalog.py")
 
 
 def test_aucune_famille_du_socle_n_est_morte():
