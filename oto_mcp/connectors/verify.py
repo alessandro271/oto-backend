@@ -29,13 +29,23 @@ from .. import providers
 Probe = Callable[[dict, dict], Union[None, dict, Awaitable[Union[None, dict]]]]
 
 #: Ce qu'une sonde peut RENDRE, en plus de lever sur échec : un dict de mesures.
-#: Aujourd'hui le solde, pour les sondes `auth+quota` — `{"quota": {...}}`.
+#: Le solde, pour les sondes `auth+quota` — `{"quota": {...}}` ; et `identity`, QUI
+#: la clé authentifie chez le fournisseur (aujourd'hui Slack).
+#:
+#: ⚠️ `identity` répond à une question qu'aucune autre surface ne pose : « est-ce
+#: toujours la même application qu'hier ? ». Une clé remplacée par celle d'une AUTRE
+#: application du même fournisseur authentifie parfaitement, et perd pourtant tout ce
+#: que la précédente avait acquis — les appartenances de canaux, pour Slack. Le coffre
+#: ne voit qu'une clé saine ; la sonde, elle, tient le seul corps de réponse où le
+#: fournisseur NOMME l'application. Le jeter, c'était rendre le changement
+#: indétectable : six jours d'illisibilité sur quatre canaux clients (signaux 802/814,
+#: 08/09/2026), et personne pour dire pourquoi.
 #:
 #: ⚠️ Rendre est FACULTATIF et le restera : les sondes qui ne mesurent qu'une
 #: authentification rendent `None`, comme avant. Exiger un retour de toutes aurait
 #: obligé à inventer une forme vide pour la quinzaine qui n'a rien à dire — et une
 #: forme vide finit par se lire comme une mesure à zéro.
-_CLES_DE_MESURE = ("quota",)
+_CLES_DE_MESURE = ("quota", "identity")
 
 
 def _mesures(rendu) -> dict:

@@ -23,14 +23,43 @@ from .. import access, file_content
 from ..connectors import verify as connector_verify
 
 
-def _verify(fields: dict, config: dict | None = None) -> None:  # noqa: ARG001 (config: contrat de sonde)
+#: Ce qui, dans le corps d'`auth.test`, IDENTIFIE l'application — et rien d'autre.
+#: Slack ne rend pas tous ces champs pour tous les jetons (`bot_id`/`app_id` n'existent
+#: que côté bot) : on relaie ce qu'il a RÉELLEMENT rendu, jamais une clé fabriquée à
+#: vide. Une valeur qu'on n'a pas ne se rend pas par son défaut.
+_IDENTITE = ("app_id", "bot_id", "team", "team_id", "url", "user", "user_id")
+
+
+def _verify(fields: dict, config: dict | None = None) -> dict:  # noqa: ARG001 (config: contrat de sonde)
     """Sonde « tester la connexion » Slack (signal #217) : un token peut être POSÉ,
     authentifier, et pourtant manquer les scopes de lecture → `slack_list_channels`
     échoue en `missing_scope` et tout le reste est inatteignable (pas d'ID de channel).
     Deux étages, message actionnable : (1) `auth.test` passe avec TOUT token vivant
     quels que soient ses scopes → sépare « token mort » de « token OK, scope manquant » ;
     (2) une lecture réelle de channels (`channels:read`) — son `missing_scope` est LE
-    diagnostic qui manquait."""
+    diagnostic qui manquait.
+
+    ⚠️ **Le corps d'`auth.test` est RENDU, plus jeté** (signaux 802/814, 08/09/2026).
+    Il était appelé pour son seul succès, et c'est la réponse qui portait le fait
+    manquant : l'identité de l'application. Un credential remplacé par les jetons d'une
+    AUTRE app Slack authentifie parfaitement — et repart de zéro sur les appartenances
+    de canaux, qui appartiennent à l'app, pas à la clé. Vécu sur l'org 196 : quatre
+    canaux clients privés illisibles six jours durant, un `not_in_channel` qui est le
+    MÊME code qu'un canal jamais rejoint, et un « a rejoint le canal » réécrit six fois
+    par jour dans le canal d'un client — le seul remède connu, faute de savoir que
+    l'app avait changé. La sonde ne juge pas ce changement : elle rend de quoi le
+    constater, ce qui n'existait nulle part.
+
+    ⚠️ **Un `auth.test` par jeton posé, chacun avec le sien.** L'appel unique d'avant
+    partait sur le jeton UTILISATEUR dès qu'il y en avait un (`default_as_user`) : il
+    n'identifiait donc JAMAIS l'app du bot, qui est précisément celle qui porte les
+    appartenances. Deux jetons = deux identités distinctes, et les confondre ferait
+    répondre « oui, même app » à un changement de bot.
+
+    ⚠️ **Conséquence assumée** : un jeton bot mort à côté d'un jeton utilisateur vivant
+    FAIT désormais échouer la sonde, là où elle passait au vert sans l'avoir regardé.
+    C'est un vert de moins, pas un rouge de plus — la moitié bot du credential n'était
+    tout simplement jamais testée, et c'est elle qui lit les canaux."""
     from oto.tools.slack.client import SlackClient, SlackError
 
     bot = (fields.get("bot_token") or "").strip() or None
@@ -45,11 +74,19 @@ def _verify(fields: dict, config: dict | None = None) -> None:  # noqa: ARG001 (
         raise ValueError("aucun token Slack posé (bot_token `xoxb-` ou user_token `xoxp-`)")
 
     client = SlackClient(bot_token=bot, user_token=user, default_as_user=bool(user))
-    try:
-        client._request("POST", "auth.test")
-    except SlackError as e:
-        raise ValueError(
-            f"token Slack invalide ({e.error}) — repose un `xoxb-`/`xoxp-` valide") from None
+    identite: dict = {}
+    for genre, jeton in (("bot", bot), ("user", user)):
+        if not jeton:
+            continue
+        try:
+            corps = client._request("POST", "auth.test", as_user=(genre == "user"))
+        except SlackError as e:
+            # Le genre est NOMMÉ : avec deux jetons posés, « token Slack invalide »
+            # tout court laisse chercher lequel des deux reposer.
+            raise ValueError(
+                f"token Slack invalide (`{genre}`, {e.error}) — repose un "
+                f"`{'xoxb-' if genre == 'bot' else 'xoxp-'}` valide") from None
+        identite[genre] = {c: corps[c] for c in _IDENTITE if corps.get(c)}
     try:
         client.list_channels(types="public_channel")
     except SlackError as e:
@@ -60,6 +97,7 @@ def _verify(fields: dict, config: dict | None = None) -> None:  # noqa: ARG001 (
                 "`slack_read_history` inatteignable). Réinstalle l'app Slack avec "
                 "`channels:read`, `groups:read`, `channels:history`, `groups:history`.") from None
         raise ValueError(f"lecture Slack échouée ({e.error})") from None
+    return {"identity": identite}
 
 
 # Où se donne un droit Slack. Écrit UNE fois : cette marche à suivre est longue,

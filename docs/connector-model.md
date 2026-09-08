@@ -268,6 +268,43 @@ volontaire : un connecteur non sélectionné reste **appelable par `oto_call`** 
 universel, ADR 0036). La sélection gouverne la **visibilité** des outils, jamais
 l'aptitude — les mélanger recréerait la confusion de #476 sous un autre nom.
 
+> Le coût de cette confusion, re-mesuré le **08/09/2026** (org 249, signal 800) : une
+> procédure lisait `state` comme un verdict de capacité et a traité Slack comme bloqué
+> **quatorze jours** — alors que la même procédure prescrivait `oto_call`, qui
+> contourne la sélection par construction. `state: not_selected` + `ready: true` +
+> `oto_call` qui passe est l'état NORMAL, et c'est celui qui a été lu comme une panne.
+
+### Une couche que rien ne regardait : QUI la clé authentifie
+
+Les trois couches disent si un appel **partirait**. Aucune ne dit **au nom de qui**. Une
+clé remplacée par celle d'une **autre application du même fournisseur** authentifie
+parfaitement : le coffre voit une clé saine, `ready` reste vrai, `verify` répond `ok` —
+et tout ce que l'application précédente avait acquis est perdu, parce que ça
+appartenait à l'app, pas à la clé.
+
+Vécu sur l'org 196 (signaux **802** et **814**, 3→8/09/2026) : le credential Slack
+reposé le 07/09 appartenait à une app créée la veille. Les quatre canaux clients
+**privés** sont devenus illisibles — `not_in_channel`, le **même code** qu'un canal
+jamais rejoint, donc indistinguable d'un problème de droits — et le seul remède
+disponible sur un canal public, re-rejoindre, écrivait « a rejoint le canal » **six
+fois par jour dans le canal d'un client**. Un canal privé, lui, ne se rejoint par
+aucune API : il faut qu'un humain tape `/invite`.
+
+Ce qui manquait n'était pas une sonde de plus : `_verify` **appelait déjà** `auth.test`
+et **jetait la réponse**. C'est le seul corps où le fournisseur NOMME son application.
+Il est maintenant rendu, sous `identity`, un bloc par jeton posé
+(`oto_instance op=verify` / `POST /api/me/connectors/{provider}/verify`) :
+
+```json
+"identity": {"bot":  {"app_id": "A0B…", "bot_id": "B0C…", "team": "…", "user_id": "U0C…"},
+             "user": {"team": "…", "user_id": "U0B…"}}
+```
+
+⚠️ **oto ne compare rien et ne garde aucun hier.** `identity` rend la question
+répondable, pas répondue : c'est à l'appelant de retenir la valeur et de la comparer.
+Un changement d'app est donc **constatable par qui regarde**, il ne se **signale** pas.
+Son absence veut dire « ce connecteur ne l'expose pas », jamais « rien n'a changé ».
+
 ### Purge silencieuse des mounts OAuth (atlassian/folk) — oto#25 lot (a), 2026-09-04
 
 Sixième forme, propre à la famille des connecteurs OAuth **fédérés « mount »**

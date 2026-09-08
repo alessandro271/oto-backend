@@ -84,6 +84,21 @@ class VerifyResult(BaseModel):
     # Absent quand tout va bien.
     next_step: Optional[str] = None
 
+    # QUI la clé authentifie chez le fournisseur — la seule surface qui le dise.
+    # Aujourd'hui Slack : `{"bot": {app_id, bot_id, team, team_id, url, user,
+    # user_id}, "user": {...}}`, un bloc par jeton posé, réduit à ce que le
+    # fournisseur a réellement rendu.
+    #
+    # ⚠️ Ce champ répond à « est-ce toujours la même application qu'hier ? », et à
+    # rien d'autre. La plateforme ne compare RIEN : elle n'a jamais gardé d'hier.
+    # Une clé remplacée par celle d'une autre application authentifie parfaitement et
+    # repart pourtant sans aucune des appartenances de canaux de la précédente — le
+    # coffre n'y voit qu'une clé saine. C'est à l'appelant de retenir cette valeur et
+    # de la comparer ; s'il ne le fait pas, personne ne le fera pour lui.
+    #
+    # ⚠️ Absent = ce connecteur ne l'expose pas, JAMAIS « l'identité n'a pas changé ».
+    identity: Optional[dict] = None
+
 
 class MemberProviderStatus(BaseModel):
     """Entrée `ProviderStatus` d'un membre pour un connecteur — la MÊME forme que
@@ -274,7 +289,14 @@ CAP_DOC = (
     "its scope; adding another one changes nothing), `no_quota` (the key is fine, the "
     "balance is empty: top up, do NOT reconnect), or `unknown` (the probe failed "
     "without saying why — read `error` as it stands). `next_step` spells out the move. "
-    "⚠️ `unknown` means 'I do not know', never 'nothing serious'."
+    "⚠️ `unknown` means 'I do not know', never 'nothing serious'. "
+    "⚠️ `identity` (Slack today) names WHO the key authenticates as at the provider — "
+    "app_id / bot_id / team / user, one block per token posed. It exists to answer "
+    "'is this still the same app as yesterday?', because a key swapped for ANOTHER "
+    "app's tokens authenticates fine and starts with none of the channel memberships "
+    "the previous one had — the vault only ever sees a healthy key. **oto compares "
+    "nothing and keeps no history**: record this value yourself if you want to notice "
+    "the change. Its absence means this connector does not expose it, never 'unchanged'."
 )
 
 class EffectForMemberInput(BaseModel):
