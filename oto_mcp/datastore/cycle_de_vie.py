@@ -88,12 +88,13 @@ def abandon_state_of(schema: Optional[dict]) -> Optional[str]:
     return str(v) if v is not None else None
 
 
-def claimable_of(schema: Optional[dict]) -> Optional[dict]:
+def claimable_of(schema: Optional[dict],
+                 ns_id: Optional[int] = None) -> Optional[dict]:
     """Le périmètre de réservation déclaré (`lifecycle.claimable`, #517), ou None.
     La décision et sa grammaire vivent dans `claimable.py` ; ici, l'accès depuis un
     schéma — à côté de `max_claims_of`, avec le même parti sur une valeur illisible
     (elle LÈVE, elle n'ouvre pas le tableau en silence)."""
-    return claimable.perimetre_of(lifecycle_of(schema))
+    return claimable.perimetre_of(lifecycle_of(schema), ns_id)
 
 
 def refus_de_transition(colonne: str, depuis: str, vers: str,

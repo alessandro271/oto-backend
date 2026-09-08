@@ -58,20 +58,41 @@ class RowOutsideClaimable(Exception):
             "l'appel.")
 
 
-def perimetre_of(lc: Optional[dict]) -> Optional[dict]:
+def perimetre_of(lc: Optional[dict], ns_id: Optional[int] = None) -> Optional[dict]:
     """Le périmètre déclaré sur un cycle de vie, ou None = non déclaré.
 
-    Une valeur présente mais inutilisable LÈVE (même parti que `max_claims_of`) : la
-    déclaration est refusée à la pose, donc une forme illisible ici ne peut venir que
-    d'une écriture hors surface — et l'ignorer rouvrirait le tableau en silence,
-    exactement le défaut que le périmètre existe pour fermer."""
+    Une valeur présente mais inutilisable LÈVE (même parti que `max_claims_of`) :
+    l'ignorer rouvrirait le tableau en silence, exactement le défaut que le périmètre
+    existe pour fermer.
+
+    ⚠️ **Le message NOMME sa destination depuis le 08/09/2026, et c'est tout le lot.**
+    Il décrivait la forme attendue du paramètre — donc un agent le lisait comme un
+    reproche sur SON appel. Mesuré par la session de flotte : **60 refus sur 81
+    appels, dix agents brûlant leurs tours à varier leur propre argument**, puis
+    concluant sereinement leur travail en expliquant « la structure exacte attendue ».
+    Aucun n'a compris qu'il n'y avait rien à corriger de son côté.
+
+    Le défaut n'est pas dans l'appel, il est dans le SCHÉMA du tableau — écrit par
+    quelqu'un d'autre, réparable par son propriétaire seul. Un refus qui ne dit pas OÙ
+    porter l'intention fait rejouer le même appel : ici huit fois par run.
+
+    ⚠️ Et la docstring affirmait qu'une forme illisible « ne peut venir que d'une
+    écriture hors surface », puisque la pose la refuse. **C'est démenti** : le schéma
+    fautif existe, et il est antérieur à la garde de pose. Un schéma déjà en base ne
+    se repose jamais — le raisonnement « c'est refusé à la pose, donc ça n'existe
+    pas » est faux pour toute garde ajoutée après coup."""
     if not isinstance(lc, dict) or lc.get(CLE) is None:
         return None
     p = lc[CLE]
     if not isinstance(p, dict) or not p:
+        ou = f"Le tableau {ns_id} déclare" if ns_id is not None else "Ce tableau déclare"
         raise ValueError(
-            f"lifecycle.claimable doit être un objet non vide {{col: val}} "
-            f"(déclaré : {p!r})")
+            f"{ou} `lifecycle.claimable` sous une forme invalide — reçu {p!r}, "
+            "attendu un objet non vide `{col: val}`. **Ton appel n'est pas en cause : "
+            "il n'y a rien à corriger dans tes arguments, et le réessayer échouera "
+            "pareil.** C'est le FORMAT du tableau qui est fautif, et son propriétaire "
+            "seul peut le réparer — `data_patch_schema` sur la colonne qui porte "
+            "`role: \"status\"`. Signale-le plutôt que de réessayer.")
     return dict(p)
 
 

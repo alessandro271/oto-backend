@@ -162,7 +162,7 @@ class FileDeTravailMixin:
         ns_id = self._resolve(namespace, write=True)
         ns = self._ns_of(ns_id)
         schema = ns.get("schema")
-        declare = dsv2.claimable_of(schema)
+        declare = dsv2.claimable_of(schema, ns_id)
         if perimetre is not None and declare:
             perimetre.update(declare)
         clauses = claimable.clauses(declare) + _filter_clauses(filter, filters)
@@ -197,7 +197,7 @@ class FileDeTravailMixin:
         ns_id = self._resolve(namespace, write=True)
         ns = self._ns_of(ns_id)
         schema = ns.get("schema")
-        declare = dsv2.claimable_of(schema)
+        declare = dsv2.claimable_of(schema, ns_id)
         clauses = claimable.clauses(declare)
         row = db.datastore_claim_row(ns_id, row_id, worker=worker,
                                      lease_seconds=int(lease_s), run_id=_current_run(),
