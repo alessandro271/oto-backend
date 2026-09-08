@@ -72,16 +72,38 @@ def register(mcp: FastMCP) -> None:
         key, is_platform = access.resolve_api_key("apollo")
         return ApolloClient(api_key=key), is_platform
 
-    def _client_byo() -> ApolloClient:
+    _BYO_ESPACE_PRIVE = (
+        "ceci ne concerne QUE les séquences/emails/conversations (tes propres "
+        "données) : la recherche et l'enrichissement Apollo restent utilisables "
+        "sans ta propre clé.")
+
+    # Le reveal de téléphone est byo-only pour une raison DIFFÉRENTE de tout le
+    # reste de ce module : ce n'est pas une frontière de données, c'est le COÛT.
+    # Apollo facture ~9 crédits un appel qui rend un mobile, là où un match nu en
+    # coûte 1, pendant que le compteur plateforme (`record_platform_usage`) débite
+    # 1 unité — vingt reveals videraient le pot commun neuf fois plus vite que ce
+    # que `platform_quota` annonce à l'appelant. Or ce champ existe précisément
+    # pour qu'un worker batch s'arrête AVANT le mur (oto-backend#710) : le laisser
+    # mentir casserait la seule mesure sur laquelle il s'appuie.
+    _BYO_REVEAL_TELEPHONE = (
+        "le reveal de téléphone ne passe JAMAIS par la clé plateforme (Apollo le "
+        "facture ~9 crédits quand un match nu en coûte 1) : pose ta propre clé "
+        "Apollo. La recherche et `apollo_match_person` continuent de marcher sans.")
+
+    def _client_byo(precision: str = _BYO_ESPACE_PRIVE) -> ApolloClient:
         """Client résolu SANS palier plateforme — pour tout appel qui écrit
-        (enrôlement, envoi) ou lit des données sensibles (conversations).
+        (enrôlement, envoi), lit des données sensibles (conversations) ou
+        engage une dépense hors barème (reveal de téléphone).
 
         Apollo est le premier connecteur à mélanger les deux régimes dans le
         MÊME module (recherche/enrichissement = platform_key_open, tout le
         reste = byo-only) : le message générique de `resolve_credential`
         (« Aucun credential configuré pour toi ») serait trompeur pour un
         user qui voit déjà apollo_search_organizations fonctionner via la clé
-        plateforme et ne comprendrait pas pourquoi CET appel-ci le refuse."""
+        plateforme et ne comprendrait pas pourquoi CET appel-ci le refuse.
+        D'où `precision` : le motif du refus n'est pas le même partout, et
+        servir « tes propres données » à qui bute sur un mur de COÛT l'enverrait
+        chercher au mauvais endroit."""
         try:
             return ApolloClient(api_key=access.resolve_credential("apollo", want="byo").key)
         except McpError as e:
@@ -91,11 +113,7 @@ def register(mcp: FastMCP) -> None:
                 # ambigu ici — les autres (multi-compte, compte introuvable) sont
                 # déjà précis et n'ont rien à voir avec platform vs byo.
                 raise McpError(ErrorData(
-                    code=INVALID_PARAMS,
-                    message=(
-                        f"{msg} — ceci ne concerne QUE les séquences/emails/"
-                        "conversations (tes propres données) : la recherche et "
-                        "l'enrichissement Apollo restent utilisables sans ta propre clé.")))
+                    code=INVALID_PARAMS, message=f"{msg} — {precision}"))
             raise
 
     @mcp.tool()
@@ -245,6 +263,7 @@ def register(mcp: FastMCP) -> None:
         name: Optional[str] = None,
         domain: Optional[str] = None,
         org_name: Optional[str] = None,
+        reveal_personal_emails: Optional[bool] = None,
     ) -> dict:
         """Match a single person (enrichment). Returns {} if no match.
 
@@ -268,13 +287,21 @@ def register(mcp: FastMCP) -> None:
         key, or fall back for THIS lead to hunter_email_finder (email) and
         kaspr_enrich_linkedin / fullenrich_enrich_linkedin (phone, LinkedIn history):
         different source, no credit burned on a call that would just fail.
+
+        ⚠️ NO MOBILE OR DIRECT DIAL HERE: Apollo never returns those synchronously.
+        apollo_reveal_phone orders them, on your own Apollo key.
+
+        Args:
+            reveal_personal_emails: also return PERSONAL emails (may cost extra;
+                withheld in GDPR regions, so empty is an answer, not a failure).
         """
         client, is_platform = _client()
         try:
             result = client.match_person(
                 person_id=person_id, linkedin_url=linkedin_url, email=email,
                 first_name=first_name, last_name=last_name, name=name,
-                domain=domain, org_name=org_name) or {}
+                domain=domain, org_name=org_name,
+                reveal_personal_emails=reveal_personal_emails) or {}
         except ValueError as e:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
         if is_platform:
@@ -283,6 +310,181 @@ def register(mcp: FastMCP) -> None:
             if quota is not None:
                 result = {**result, "platform_quota": quota}
         return result
+
+    # ------------------------------------------------------------------
+    # Téléphone direct — le seul geste de ce module qui ne rend PAS son
+    # résultat. Apollo vérifie les numéros de son côté et les POSTe à une URL
+    # quelques minutes plus tard ; la réponse immédiate ne porte qu'un
+    # `request_id`. Le sondage (`webhook_result/{id}`, 0 crédit, 30 jours)
+    # est ce qui permet de rendre le numéro À L'AGENT sans qu'oto héberge le
+    # moindre receveur — donc sans route entrante non authentifiée, et sans
+    # que le numéro ne quitte la boucle de travail.
+    #
+    # Forme submit + poll : celle de `fullenrich_enrich_linkedin`/
+    # `fullenrich_result`, née du signal #252 (un sondage in-process de 131-147 s
+    # survivait à aucun client MCP, et les crédits étaient déjà dépensés).
+    # ------------------------------------------------------------------
+
+    def _webhook_destination(url: str) -> str:
+        """Refuse une `webhook_url` à laquelle Apollo ne livrera jamais.
+
+        ⚠️ Ce n'est PAS la garde SSRF de `web.check_url_public`, et le risque
+        n'est pas le même : ici c'est APOLLO qui émet la requête, pas nous —
+        notre réseau n'est pas la cible. Ce qui se joue est le COÛT : le reveal
+        est facturé même quand le POST n'arrive nulle part, donc une URL
+        manifestement inatteignable se refuse AVANT les ~9 crédits, pas après.
+        """
+        import ipaddress
+        import os
+        import socket
+        from urllib.parse import urlsplit
+
+        parts = urlsplit((url or "").strip())
+        if parts.scheme != "https":
+            raise _bad(
+                "`webhook_url` must be https:// — Apollo only delivers to HTTPS "
+                f"endpoints, and would never POST to `{parts.scheme or url}`.")
+        host = parts.hostname
+        if not host:
+            raise _bad("`webhook_url` has no host.")
+
+        # oto n'est pas un receveur de webhook (même règle que `tally_webhook`) :
+        # pointer Apollo vers nous jette les numéros, et le crédit avec.
+        notres = {"mcp.oto.cx", "mcp.oto.ninja"}
+        base = urlsplit(os.environ.get("OTO_MCP_PUBLIC_URL", "")).hostname
+        if base:
+            notres.add(base)
+        h = host.lower()
+        if any(h == n or h.endswith(f".{n}") for n in notres):
+            raise _bad(
+                "oto is not itself a webhook receiver — pointing Apollo at "
+                f"`{host}` drops the numbers. Give a URL YOU control (an n8n or "
+                "Make endpoint, your own service), then read the result back "
+                "with apollo_reveal_phone_result.")
+
+        try:
+            ips = [ipaddress.ip_address(i[4][0])
+                   for i in socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)]
+        except OSError as e:
+            raise _bad(f"`{host}` does not resolve ({e}) — Apollo could not "
+                       "deliver there, and the reveal would be billed anyway.")
+        for ip in ips:
+            if not ip.is_global:
+                raise _bad(
+                    f"`{host}` resolves to {ip}, a non-public address — Apollo "
+                    "delivers from the internet and would never reach it. The "
+                    "reveal would be billed with nothing to collect.")
+        return url.strip()
+
+    @mcp.tool()
+    def apollo_reveal_phone(
+        webhook_url: str,
+        person_id: Optional[str] = None,
+        linkedin_url: Optional[str] = None,
+        email: Optional[str] = None,
+        first_name: Optional[str] = None,
+        last_name: Optional[str] = None,
+        name: Optional[str] = None,
+        domain: Optional[str] = None,
+        org_name: Optional[str] = None,
+    ) -> dict:
+        """Order someone's phone numbers, mobile and direct dial included (ASYNC).
+
+        Same identifiers as apollo_match_person — the surest is `person_id` from
+        apollo_search_people.
+
+        ⚠️ THE NUMBERS ARE NOT IN THIS RESPONSE. Apollo POSTs them to `webhook_url`
+        minutes later; what comes back here is a `request_id`. Pass it to
+        apollo_reveal_phone_result to read the same payload back, free, for 30 days
+        — and KEEP IT where the next agent will look (a datastore row, the run
+        journal). Lose it and the credits are spent with nothing to collect.
+
+        ⚠️ Your own Apollo key only: a reveal costs ~9 Apollo credits where a plain
+        match costs 1, so it never runs on the shared platform key.
+
+        Args:
+            webhook_url: HTTPS endpoint Apollo POSTs to — mandatory on its side.
+                oto is not a webhook receiver: give a URL YOU control. You need not
+                read it, apollo_reveal_phone_result returns the same payload.
+        """
+        client = _client_byo(_BYO_REVEAL_TELEPHONE)
+        destination = _webhook_destination(webhook_url)
+        try:
+            out = client.match_person(
+                person_id=person_id, linkedin_url=linkedin_url, email=email,
+                first_name=first_name, last_name=last_name, name=name,
+                domain=domain, org_name=org_name,
+                reveal_phone_number=True, webhook_url=destination) or {}
+        except ValueError as e:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
+
+        # ⚠️ APOLLO N'A TROUVÉ PERSONNE ≠ APOLLO A ACCEPTÉ LE REVEAL. Le client
+        # oto-core traduit le 404 en `None` (et un corps peut revenir sans
+        # `person`) : sans cette branche, les deux cas tombaient dans le même
+        # « accepté, mais sans request_id » — un mensonge dans le sens le plus
+        # cher, celui qui RASSURE. L'agent attendrait un POST qui ne partira
+        # jamais, rendrait le lead pour traité, et ne réessaierait pas avec un
+        # identifiant plus fort. Même règle que partout ici : introuvable se dit
+        # « introuvable », jamais un repli silencieux.
+        if not out.get("person"):
+            return {"matched": False, "next_step": (
+                "No Apollo match for these identifiers — nothing was ordered, no "
+                "credit spent, no webhook will fire. Retry with a stronger "
+                "identifier (person_id from apollo_search_people).")}
+
+        # `request_id` est un entier signé 64 bits (~7,2e17) : il DÉPASSE la
+        # précision d'un nombre JavaScript (2^53), et la réponse d'un tool
+        # traverse du JSON jusqu'à des clients qui en sont faits. Le rendre en
+        # nombre, c'est le rendre faux d'une unité ou deux sans que rien ne le
+        # dise — et un id faux ne sonde rien. On le sert en CHAÎNE.
+        rid = out.get("request_id")
+        result = {k: v for k, v in out.items() if k != "request_id"}
+        if rid is None:
+            # Apollo a bien rendu une personne, mais pas d'id : le sondage est
+            # alors impossible et les numéros n'arriveront QUE sur le webhook.
+            # On le dit — un `next_step` qui promet un outil inutilisable est
+            # pire que pas de `next_step` du tout.
+            result["next_step"] = (
+                "Apollo matched this person and accepted the reveal, but returned "
+                "no request_id: the numbers will only reach your webhook_url. "
+                "Nothing to poll.")
+            return result
+        result["request_id"] = str(rid)
+        result["next_step"] = (
+            f"Reveal ordered. Call apollo_reveal_phone_result('{rid}') in ~1-2min "
+            "(0 Apollo credits per check, result kept 30 days).")
+        return result
+
+    @mcp.tool()
+    def apollo_reveal_phone_result(request_id: str) -> dict:
+        """Collect the numbers ordered with apollo_reveal_phone. 0 Apollo credits.
+
+        `done: false` carries `retry_after_seconds` — wait that long, call again.
+        When done, the numbers are at `result.webhook_result.people[].phone_numbers[]`
+        (nested: `result` is Apollo's envelope, and `result.failure_reason` says why
+        if it never delivered). Each number carries `sanitized_number`, `type_cd`
+        ("mobile"/"work_direct") and `dnc_status_cd` (do-not-call: read it before
+        dialling). Apollo keeps a result 30 DAYS, then it is gone. Your own Apollo
+        key only.
+
+        Args:
+            request_id: the id from apollo_reveal_phone, AS A STRING — a signed
+                64-bit integer, too large for a JSON number to carry exactly.
+        """
+        client = _client_byo(_BYO_REVEAL_TELEPHONE)
+        try:
+            out = client.poll_webhook_result(request_id)
+        except ValueError as e:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
+        if not out.get("done"):
+            wait = out.get("retry_after_seconds")
+            return {
+                "done": False,
+                "retry_after_seconds": wait,
+                "next_step": ("Still verifying — call apollo_reveal_phone_result "
+                              f"again in ~{wait or 10}s."),
+            }
+        return {"done": True, "result": out.get("result") or {}}
 
     @mcp.tool()
     def apollo_job_postings(org_id: str) -> dict:
