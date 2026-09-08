@@ -35,7 +35,6 @@ from . import schema_keys
 from .couches import LAYER_KEYS, split_layer, SYSTEM_ORIGIN
 from .motifs import PATTERN_MAX_SUBJECT, pattern_refusal
 from .declaration import (
-    STATUS_KEY,
     COMPOSITE_TYPES,
     DISPLAY_TITLE,
     _fields,
@@ -68,22 +67,18 @@ def validate_schema_def(schema: Optional[dict]) -> list[str]:
         errors.append(
             f"display=\"title\" déclaré sur {len(titres)} colonnes ({', '.join(titres)}) "
             "— une seule nomme la ligne")
-    # `status_field` nomme la colonne d'état au niveau du SCHÉMA (oto#140), symétrique
-    # de `key`. Nommer une colonne absente est refusé ICI : sinon le cycle de vie ne
-    # s'appliquerait à rien, en silence — exactement le défaut qu'on vient de mesurer
-    # sur un `lifecycle` posé hors du champ d'état, et que personne n'avait vu.
-    nomme = schema.get(STATUS_KEY)
-    if nomme is not None:
-        if not isinstance(nomme, str) or not nomme:
-            errors.append(
-                f"{STATUS_KEY} doit être le NOM d'une colonne (une chaîne) — reçu "
-                f"{nomme!r}")
-        elif nomme not in {str(f.get("key")) for f in _fields(schema) if f.get("key")}:
-            errors.append(
-                f"{STATUS_KEY}=\"{nomme}\" ne désigne aucune colonne de ce schéma. "
-                f"C'est la colonne qui porte le cycle de vie — sans elle, aucun état "
-                f"terminal, aucun plafond de reprises, aucun périmètre de réservation "
-                f"ne s'applique.")
+    # Un seul cycle de vie par tableau : le bloc DÉSIGNE la colonne d'état, donc deux
+    # blocs feraient dépendre l'état de l'ordre de déclaration — en silence. Même
+    # refus que deux `display: "title"`, et pour la même raison.
+    porteurs = [str(f.get("key")) for f in _fields(schema)
+                if isinstance(f, dict) and isinstance(f.get("lifecycle"), dict)
+                and f.get("key")]
+    if len(porteurs) > 1:
+        errors.append(
+            f"`lifecycle` déclaré sur {len(porteurs)} colonnes "
+            f"({', '.join(porteurs)}) — une seule porte le cycle de vie du tableau, "
+            f"et c'est elle qui en est l'état. Garde celui qui compte et retire "
+            f"l'autre : un second bloc serait stocké, servi, et jamais lu.")
     # Une clé métier n'est JAMAIS un sous-tableau ni un sous-record (oto#22 §4). Elle
     # identifie la ligne : les écritures par lot dédupliquent dessus, et un index
     # d'unicité d'expression la compare. Une liste ne se réduit pas à une valeur —

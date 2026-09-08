@@ -198,8 +198,6 @@ def test_les_refus_DEJA_bons_du_lifecycle_ne_sont_pas_touches(live):
         ({"fields": [{"key": "s", "role": "status", "values": ["a"],
                       "lifecycle": {"states": ["a"], "max_claims": 3}}]},
          "abandon_state"),
-        ({"fields": [{"key": "s", "lifecycle": {"states": ["a"], "transitions": {}}}]},
-         'role="status"'),
         ({"fields": [{"key": "s", "role": "status", "values": ["a"],
                       "lifecycle": {"states": "a", "transitions": {}}}]},
          "liste non vide"),

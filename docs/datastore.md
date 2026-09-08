@@ -910,7 +910,19 @@ de fin de passage détectait après coup.
   part chercher un droit qu'il possède déjà. `None` (rien demandé) et `[]` ne sont pas
   la même chose : le second est refusé, parce que le lire comme une absence désarmerait
   silencieusement le geste.
-  ⚠️ **`status_field` au niveau du schéma (oto#140)** — la colonne d'état se déclare
+  ⚠️ **Le bloc `lifecycle` DÉSIGNE la colonne d'état (08/09/2026)** — plus d'étiquette
+  `role: "status"`, plus de clé de schéma. Trois mécanismes ont désigné cette colonne
+  en une journée ; le troisième est le seul qui n'ait rien à synchroniser. **Le défaut
+  disparaît par construction** : un `lifecycle` qui ne s'applique pas ne peut plus
+  exister — cinq tableaux, dont quatre en production, en portaient un jamais lu. Deux
+  blocs sont refusés à la pose (sinon l'ordre de déclaration trancherait en silence).
+  ⚠️ Et le silence de l'ancien incident #360 est repris sur le fait qui est maintenant
+  vrai : sans aucun bloc, le tableau n'a PAS de file, `claim_next` y rend `{}` sans
+  raison — l'avertissement le nomme, sans quoi j'aurais remplacé un avertissement par
+  rien. `role` reste servi et non interprété : ses 1 000+ autres colonnes (`note` 441,
+  `metric` 211, `qualif` 202…) décrivent de l'affichage et appartiennent au
+  consommateur.
+  ⚠️ **~~`status_field` au niveau du schéma~~ — RETIRÉ le jour même** — la colonne d'état se déclare
   comme la clé métier, au lieu d'être désignée par l'étiquette `role: "status"`. Motif
   mesuré le 08/09/2026 : `status_field()` rendait **le PREMIER champ trouvé**, donc
   l'ordre de déclaration tranchait en silence ; et un `lifecycle` posé sur une colonne

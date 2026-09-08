@@ -17,16 +17,32 @@ def _with_lifecycle(**lc):
     return {"fields": [{**_STATUS, "lifecycle": lc}]}
 
 
-def test_status_without_lifecycle_warns():
+def test_une_colonne_qui_RESSEMBLE_a_un_etat_sans_lifecycle_avertit():
+    """⚠️ Le fait a changé le 08/09/2026, le danger non.
+
+    La colonne d'état est désormais CELLE QUI PORTE le `lifecycle` : une colonne qui
+    n'en porte pas n'est pas un état, et le tableau n'a donc pas de file du tout —
+    `claim_next` y rend `{}`, sans ligne ni raison.
+
+    **C'est pire que l'incident #360, pas mieux** : là-bas la file existait et ne
+    libérait rien ; ici elle n'existe pas et ne le dit pas. L'avertissement porte donc
+    sur ce qui est vrai maintenant — une colonne avec ses options, ou l'ancienne
+    étiquette, RESSEMBLE à un état sans en être un."""
     w = dsv2.queue_release_warning({"fields": [_STATUS]})
-    assert w and "statut" in w and "AUCUN bail" in w
+
+    assert w and "statut" in w
+    assert "n'a PAS de file de travail" in w
+    assert "sans rien dire" in w, "le silence de `claim_next` doit être nommé"
+    assert "c'est le bloc `lifecycle` qui fait l'état" in w
 
 
 def test_lifecycle_without_derivable_terminal_warns():
     # tout état a une transition sortante ⇒ ensemble terminal dérivé VIDE
     schema = _with_lifecycle(states=["a", "b"], transitions={"a": ["b"], "b": ["a"]})
     assert dsv2.terminal_states(schema) == set()
-    assert dsv2.queue_release_warning(schema)
+    w = dsv2.queue_release_warning(schema)
+    assert w and "AUCUN bail" in w and "data_release" in w, (
+        "l'incident #360 lui-même : la file EXISTE et ne libère rien")
 
 
 def test_explicit_terminal_is_silent():
@@ -78,7 +94,10 @@ def test_claim_next_warns_the_worker(monkeypatch):
 
     warnings: list = []
     assert s.claim_next("vivier", worker="w-1", warnings=warnings)["_id"] == "r1"
-    assert len(warnings) == 1 and "data_release" in warnings[0]
+    # Le worker reçoit l'avertissement du schéma tel qu'il est : ici la colonne
+    # ressemble à un état sans en être un, donc le tableau n'a pas de file — et
+    # `claim_next` le lui dit au lieu de le laisser conclure de son silence.
+    assert len(warnings) == 1 and "n'a PAS de file de travail" in warnings[0]
 
     # schéma sain ⇒ silence ; et `warnings` reste optionnel (appelants historiques)
     monkeypatch.setattr(s, "_ns_of", lambda ns_id: {

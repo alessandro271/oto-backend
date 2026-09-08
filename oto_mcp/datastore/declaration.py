@@ -206,41 +206,31 @@ def field_by_role(schema: Optional[dict], role: str) -> Optional[dict]:
     return None
 
 
-#: La clé de SCHÉMA qui nomme la colonne d'état — symétrique de `key` pour la clé
-#: métier. Palier 1 : elle s'ajoute, `role: "status"` continue de valoir.
-STATUS_KEY = "status_field"
-
-
 def status_field(schema: Optional[dict]) -> Optional[dict]:
-    """La colonne d'état : `schema.status_field` d'abord, sinon `role="status"`.
+    """La colonne d'état : **celle qui porte un `lifecycle`**, ou None.
 
-    ⚠️ **Pourquoi une clé de SCHÉMA plutôt qu'une étiquette sur un champ** : parce
-    qu'une étiquette se pose autant de fois qu'on veut, et que c'est alors **le premier
-    champ trouvé** qui gagne — donc l'ORDRE DE DÉCLARATION, en silence. Une clé au
-    niveau du schéma ne peut désigner qu'une colonne, et une colonne inexistante se
-    refuse à la pose. C'est la même leçon que `key` pour la clé métier, et que
-    `display: "title"` qui a déjà remplacé `role: "title"` pour cette raison exacte.
+    ⚠️ **Le bloc DÉSIGNE sa colonne — il n'y a plus rien à faire correspondre**
+    (décision produit, 08/09/2026). Ni étiquette `role: "status"`, ni clé de schéma :
+    le cycle de vie est posé sur une colonne, donc c'est celle-là.
 
-    Mesuré le 08/09/2026 sur quatre tableaux d'une campagne : **un seul rôle sur les
-    deux tableaux de production** (`status`), et dix-huit des dix-neuf autres, sur les
-    échantillons, décrivaient comment un écran affiche une colonne — pas ce qu'elle
-    contient. Le seul usage STRUCTUREL de `role` est celui-ci ; le reste appartient au
-    consommateur qui affiche.
+    **Ce que ça supprime** : il devient IMPOSSIBLE de poser un cycle de vie qui ne
+    s'applique pas. Avant, un `lifecycle` sur une colonne non étiquetée était stocké,
+    servi… et jamais lu — cinq tableaux étaient dans ce cas, dont quatre en production,
+    et leurs auteurs croyaient avoir armé une garde. Le défaut ne disparaît pas grâce à
+    une garde : il n'existe plus par construction.
 
-    Palier 1 : la clé s'ajoute et gagne quand elle est là. `role: "status"` continue de
-    valoir — rien ne casse, et le retrait viendra avec son préavis.
+    Deux colonnes qui en porteraient un sont refusées à la POSE, comme deux colonnes
+    `display: "title"` le sont déjà — sinon le premier trouvé gagnerait, et l'ordre de
+    déclaration trancherait en silence.
+
+    ⚠️ Trois mécanismes ont désigné cette colonne en une journée : l'étiquette, puis
+    une clé de schéma posée le matin, puis ceci. Le troisième est le seul qui n'ait
+    rien à synchroniser — **une chose déclarée à un endroit, jamais devinée à deux.**
     """
-    nomme = (schema or {}).get(STATUS_KEY) if isinstance(schema, dict) else None
-    if isinstance(nomme, str) and nomme:
-        for f in _fields(schema):
-            if f.get("key") == nomme:
-                return f
-        # Nommer une colonne absente est refusé À LA POSE (`validate_schema_def`) :
-        # arriver ici veut dire qu'un schéma l'a été avant la garde. On ne devine pas
-        # une autre colonne — le cycle de vie ne s'applique à rien, ce qui est le
-        # comportement le moins surprenant et le plus visible.
-        return None
-    return field_by_role(schema, "status")
+    for f in _fields(schema):
+        if isinstance(f.get("lifecycle"), dict) and isinstance(f.get("key"), str):
+            return f
+    return None
 
 
 # La PRÉSENTATION d'une colonne — ce que sa valeur sert à l'écran, par opposition à

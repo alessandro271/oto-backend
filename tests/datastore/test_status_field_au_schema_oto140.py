@@ -1,100 +1,108 @@
-"""`status_field` — la colonne d'état se déclare au SCHÉMA, comme la clé métier.
+"""La colonne d'état est celle qui porte le `lifecycle` — rien d'autre à déclarer.
 
-Jusqu'ici, la colonne portant le cycle de vie se désignait par une étiquette sur le
-champ (`role: "status"`), et `status_field()` rendait **le premier champ trouvé**.
+Trois mécanismes ont désigné cette colonne en une journée :
 
-⚠️ **Une étiquette se pose autant de fois qu'on veut.** Deux champs marqués, et c'est
-l'ORDRE DE DÉCLARATION qui tranche — en silence, sans qu'aucun texte le dise. Une clé
-au niveau du schéma ne peut désigner qu'une colonne, et une colonne inexistante se
-refuse à la pose.
+1. `role: "status"` — une étiquette, qui se pose autant de fois qu'on veut ; le
+   PREMIER champ trouvé gagnait, donc l'ordre de déclaration tranchait en silence ;
+2. `status_field: "statut"` au niveau du schéma — mieux (une colonne absente se
+   refuse), mais **deux façons de dire un seul fait**, ce qui est le doublon qu'on
+   voulait supprimer ;
+3. **le bloc `lifecycle` désigne sa colonne** — il est déjà posé dessus.
 
-C'est la leçon déjà tirée deux fois dans ce dépôt : `key` pour la clé métier, et
-`display: "title"` qui a remplacé `role: "title"` pour cette raison exacte.
+⚠️ **Le troisième est le seul qui n'ait rien à synchroniser.** Et il fait disparaître
+un défaut au lieu de le garder : avant, un `lifecycle` posé sur une colonne non
+étiquetée était stocké, servi… et jamais lu. **Cinq tableaux étaient dans ce cas, dont
+quatre en production**, et leurs auteurs croyaient avoir armé une file de travail — ni
+état terminal, ni plafond de reprises, ni périmètre de réservation.
 
-**Ce qui l'a déclenché**, mesuré le 08/09/2026 sur quatre tableaux d'une campagne :
-un `lifecycle` posé sur une colonne SANS le rôle — donc jamais lu, jamais appliqué,
-et le schéma affichait le contraire. La garde qu'ils croyaient armer ne gardait rien.
-
-Palier 1 : la clé s'ajoute et gagne quand elle est là. `role: "status"` continue de
-valoir — rien ne casse, et son retrait viendra avec son préavis.
+Ce défaut n'existe plus **par construction**, pas grâce à une garde. C'est la
+différence entre empêcher une faute et la signaler.
 """
 from __future__ import annotations
 
 from oto_mcp.datastore import schema as dsv2
-from oto_mcp.datastore.declaration import STATUS_KEY, status_field
+from oto_mcp.datastore.declaration import status_field
 from oto_mcp.datastore.definition import validate_schema_def
 
-
-def _schema(**extra):
-    return {"key": "siren", "fields": [
-        {"key": "siren", "type": "text"},
-        {"key": "statut", "type": "text"},
-        {"key": "suivi", "type": "text"},
-    ], **extra}
+_LC = {"states": ["a", "b"], "terminal": ["b"]}
 
 
-# ── ce que la clé change ─────────────────────────────────────────────────────
+def _schema(*porteurs, **extra):
+    champs = [{"key": "siren", "type": "text"},
+              {"key": "statut", "type": "text"},
+              {"key": "suivi", "type": "text"}]
+    for f in champs:
+        if f["key"] in porteurs:
+            f["lifecycle"] = dict(_LC)
+    return {"key": "siren", "fields": champs, **extra}
 
-def test_la_cle_de_schema_designe_la_colonne():
-    assert status_field(_schema(status_field="suivi"))["key"] == "suivi"
+
+# ── ce que le bloc désigne ───────────────────────────────────────────────────
+
+def test_la_colonne_qui_porte_le_bloc_EST_l_etat():
+    assert status_field(_schema("statut"))["key"] == "statut"
+    assert status_field(_schema("suivi"))["key"] == "suivi"
 
 
-def test_elle_GAGNE_sur_l_etiquette():
-    """Palier 1 : les deux formes coexistent, la clé explicite décide. Sinon la
-    bascule dépendrait de l'ordre dans lequel un tableau est migré."""
-    sch = _schema(status_field="suivi")
-    sch["fields"][1]["role"] = "status"          # `statut` porte l'ancienne étiquette
+def test_sans_bloc_il_n_y_a_PAS_d_etat():
+    """Un tableau sans cycle de vie n'a pas de colonne d'état — et c'est le cas
+    normal : la plupart des tableaux n'en ont pas."""
+    assert status_field(_schema()) is None
+
+
+def test_l_ancienne_ETIQUETTE_ne_designe_plus_rien():
+    """⚠️ `role: "status"` n'est plus lu. Le porter sans bloc ne fait pas de cette
+    colonne un état — sinon on aurait gardé deux façons de dire la même chose."""
+    sch = _schema()
+    sch["fields"][1]["role"] = "status"
+
+    assert status_field(sch) is None
+
+
+def test_le_bloc_gagne_meme_si_l_etiquette_designe_une_AUTRE_colonne():
+    """Le cas exact des cinq tableaux : l'étiquette sur `statut`, le bloc sur `suivi`.
+    Avant, le bloc de `suivi` n'était jamais lu et personne ne le disait."""
+    sch = _schema("suivi")
+    sch["fields"][1]["role"] = "status"
 
     assert status_field(sch)["key"] == "suivi"
 
 
-def test_sans_la_cle_l_etiquette_vaut_TOUJOURS():
-    """⚠️ La moitié qui garantit que rien ne casse : les tableaux de production
-    n'ont pas la clé, et leur cycle de vie doit continuer de s'appliquer."""
-    sch = _schema()
-    sch["fields"][1]["role"] = "status"
+# ── ce que la pose refuse ────────────────────────────────────────────────────
 
-    assert status_field(sch)["key"] == "statut"
-
-
-def test_aucune_des_deux_rend_None():
-    assert status_field(_schema()) is None
-
-
-# ── ce que le refus attrape ──────────────────────────────────────────────────
-
-def test_nommer_une_colonne_ABSENTE_est_refuse_a_la_POSE():
-    """⚠️ Le cœur du gain. Une étiquette mal posée ne se voit jamais ; une clé qui
-    nomme une colonne inexistante se refuse au moment où on peut encore corriger.
-    Sans ce refus, le cycle de vie ne s'appliquerait à rien — le défaut exact qu'on
-    vient de mesurer sur un tableau de campagne."""
-    erreurs = validate_schema_def(_schema(status_field="inexistante"))
+def test_DEUX_cycles_de_vie_sont_refuses_a_la_pose():
+    """⚠️ Sinon le premier trouvé gagnerait, et l'ordre de déclaration trancherait en
+    silence — exactement ce que le retrait de l'étiquette supprime. Même refus que deux
+    colonnes `display: "title"`."""
+    erreurs = validate_schema_def(_schema("statut", "suivi"))
 
     assert erreurs
-    assert "ne désigne aucune colonne" in erreurs[0]
-    assert "aucun état terminal" in erreurs[0], "le refus dit ce qu'on perd"
+    assert "une seule porte le cycle de vie" in erreurs[0]
+    assert "statut" in erreurs[0] and "suivi" in erreurs[0], "le refus NOMME les deux"
+    assert "stocké, servi, et jamais lu" in erreurs[0], "et dit ce qu'on éviterait"
 
 
-def test_une_valeur_qui_n_est_pas_un_NOM_est_refusee():
-    erreurs = validate_schema_def(_schema(status_field={"key": "statut"}))
-
-    assert erreurs and "doit être le NOM d'une colonne" in erreurs[0]
+def test_UN_seul_bloc_est_valide():
+    assert validate_schema_def(_schema("statut")) == []
 
 
-def test_un_schema_SANS_la_cle_reste_valide():
-    """Le cas de tous les tableaux existants : la clé est facultative."""
+def test_AUCUN_bloc_est_valide():
+    """Le cas de loin le plus fréquent dans le parc."""
     assert validate_schema_def(_schema()) == []
 
 
-# ── ce que la lecture voit ───────────────────────────────────────────────────
+# ── ce que le cycle de vie lit ───────────────────────────────────────────────
 
-def test_l_avertissement_du_cycle_hors_statut_suit_la_cle():
-    """L'avertissement qui dit « ce `lifecycle` n'est pas lu » doit juger sur la MÊME
-    colonne que le mécanisme. Deux façons de désigner l'état, et il crierait sur la
-    bonne colonne ou se tairait sur la mauvaise."""
-    sch = _schema(status_field="suivi")
-    sch["fields"][1]["lifecycle"] = {"states": ["a", "b"]}      # sur `statut`
-    sch["fields"][2]["lifecycle"] = {"states": ["x", "y"]}      # sur `suivi`
+def test_le_cycle_se_lit_sur_la_colonne_qui_le_porte():
+    """La boucle est fermée : `lifecycle_of` passe par `status_field`, qui rend la
+    colonne portant le bloc. Plus rien à faire correspondre."""
+    assert dsv2.lifecycle_of(_schema("suivi")) == _LC
+    assert dsv2.terminal_states(_schema("suivi")) == {"b"}
 
-    hors = dsv2.lifecycle_hors_statut(sch)
-    assert hors == ["statut"], "c'est `suivi` qui porte l'état, donc `statut` est inerte"
+
+def test_l_avertissement_du_cycle_HORS_statut_n_a_plus_d_objet():
+    """⚠️ Il existait pour dire « ce bloc n'est pas lu ». Un bloc non lu ne peut plus
+    exister : soit il est seul et il EST l'état, soit il y en a deux et la pose refuse.
+    L'avertissement se tait donc, et c'est le signe que le défaut est fermé."""
+    assert dsv2.lifecycle_hors_statut(_schema("suivi")) == []
+    assert dsv2.lifecycle_hors_statut(_schema("statut")) == []

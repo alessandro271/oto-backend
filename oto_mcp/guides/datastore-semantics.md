@@ -243,25 +243,29 @@ Jusqu'à la date, `null` efface encore et la réponse porte un avertissement. Ap
 est **refusé** — jamais interprété en silence, parce qu'un `null` traduit « pour rendre
 service » ferait exactement le dégât qu'on cherche à empêcher.
 
-## 4 sexies. `status_field` — la colonne d'état se déclare au schéma
+## 4 sexies. Le `lifecycle` DÉSIGNE la colonne d'état
 
 ```json
-{"key": "siren", "status_field": "statut", "fields": [ … ]}
+{"key": "statut", "type": "enum", "lifecycle": {"states": [...], "terminal": [...]}}
 ```
 
-Symétrique de `key` pour la clé métier : **la colonne qui porte le cycle de vie se
-nomme une fois, au niveau du schéma**. Une colonne inexistante est refusée à la pose.
+**Rien d'autre à déclarer.** La colonne d'état est celle qui porte le bloc — pas
+d'étiquette `role: "status"`, pas de clé de schéma à faire correspondre.
 
-⚠️ **Pourquoi, et ce que l'ancienne forme coûtait** : `role: "status"` est une
-étiquette, et une étiquette se pose autant de fois qu'on veut. Deux champs marqués, et
-c'est **l'ordre de déclaration** qui décide — en silence. Pire : un `lifecycle` posé
-sur une colonne qui n'a pas l'étiquette n'est **jamais lu**, et le schéma affiche le
-contraire. Mesuré sur un tableau de campagne où la garde ne gardait rien.
+⚠️ **Ce que ça supprime** : il est désormais IMPOSSIBLE de poser un cycle de vie qui ne
+s'applique pas. Avant, un `lifecycle` sur une colonne non étiquetée était stocké,
+servi… et jamais lu — cinq tableaux étaient dans ce cas, dont quatre en production, et
+leurs auteurs croyaient avoir armé une file de travail.
 
-`role: "status"` continue de valoir si `status_field` est absent — rien ne casse. Quand
-les deux sont là, la clé de schéma décide.
+Deux colonnes qui porteraient un bloc sont **refusées à la pose** : sinon le premier
+trouvé gagnerait, et l'ordre de déclaration trancherait en silence.
 
-## 5. Ce que `readonly: true` protège — et ne protège pas
+⚠️ **Et si aucune colonne n'en porte, le tableau n'a PAS de file** : `data_claim_next`
+n'y réservera jamais rien. Une colonne avec ses `options`, ou l'ancienne étiquette,
+ressemble à un état sans en être un — la réponse te le dit plutôt que de te laisser
+conclure de son silence.
+
+## 5. Ce que `readonly: true` protège## 5. Ce que `readonly: true` protège — et ne protège pas
 
 Une colonne `readonly` (schéma) verrouille la **valeur** d'une ligne en place : une
 écriture qui la **change** (valeur nue, `null`, ou `{"valeur": …}`) est refusée en

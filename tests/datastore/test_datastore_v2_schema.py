@@ -79,10 +79,18 @@ def test_def_rejects_malformed_max_length():
         {"fields": [{"key": "a", "type": "text", "max_length": 60}]}) == []
 
 
-def test_def_rejects_lifecycle_on_non_status_field():
-    errs = dsv2.validate_schema_def({"fields": [
-        {"key": "etat", "lifecycle": {"states": ["a"]}}]})
-    assert any('role="status"' in e for e in errs)
+def test_un_lifecycle_seul_est_ACCEPTE_et_designe_sa_colonne():
+    """⚠️ Ce refus n'a plus d'objet depuis le 08/09/2026 : le bloc DÉSIGNE la colonne
+    d'état, il n'y a plus de correspondance à vérifier.
+
+    Et il ne protégeait pas : cinq tableaux de production portaient un `lifecycle` sur
+    une colonne non étiquetée — stocké, servi, jamais lu — alors que ce refus existait.
+    Une garde qu'on peut contourner sans le savoir est pire qu'une règle qui rend la
+    faute impossible."""
+    assert dsv2.validate_schema_def({"fields": [
+        {"key": "etat", "lifecycle": {"states": ["a"]}}]}) == []
+    assert dsv2.status_field({"fields": [
+        {"key": "etat", "lifecycle": {"states": ["a"]}}]})["key"] == "etat"
 
 
 # ── activation opt-in ─────────────────────────────────────────────────────────

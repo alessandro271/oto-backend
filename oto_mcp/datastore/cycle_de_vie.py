@@ -30,7 +30,7 @@ from typing import Any, Optional
 from . import claimable
 
 from .couches import unwrap
-from .declaration import status_field
+from .declaration import _fields, status_field
 
 def lifecycle_of(schema: Optional[dict]) -> Optional[dict]:
     sf = status_field(schema)
@@ -200,14 +200,34 @@ def queue_release_warning(schema: Optional[dict]) -> Optional[str]:
     vie — c'est exactement la configuration où l'agent croit tenir la garantie qu'il
     n'a pas. None = rien à signaler (pas de statut, ou terminaux dérivables)."""
     sf = status_field(schema)
-    if not sf or terminal_states(schema):
+    if sf is None:
+        # ⚠️ **Le cas de l'incident #360, sous sa forme d'après le 08/09/2026.**
+        # La colonne d'état est désormais CELLE QUI PORTE le `lifecycle` : une colonne
+        # qui n'en porte pas n'est pas un état, et il n'y a donc pas de file du tout.
+        #
+        # Sans ce que suit, le tableau du signal #360 serait devenu SILENCIEUX :
+        # `claim_next` y rend `{}` — ni ligne, ni raison — et l'auteur, qui voit une
+        # colonne d'états avec ses options, croit tenir une file. **J'aurais remplacé
+        # un avertissement par rien**, ce qui est le défaut que ce fichier existe pour
+        # fermer. On garde donc le dire, sur le fait qui est maintenant vrai.
+        candidates = [str(f.get("key")) for f in _fields(schema)
+                      if isinstance(f, dict) and f.get("key")
+                      and (f.get("role") == "status" or f.get("options"))]
+        if not candidates:
+            return None
+        noms = ", ".join(f"`{c}`" for c in candidates[:3])
+        return (f"aucune colonne ne porte de `lifecycle` : ce tableau n'a PAS de file "
+                f"de travail — `data_claim_next` n'y réservera jamais rien, et sans "
+                f"rien dire. {noms} ressemble(nt) à un état (options déclarées, ou "
+                f"l'ancienne étiquette `role: \"status\"`), mais **c'est le bloc "
+                f"`lifecycle` qui fait l'état** depuis le 08/09/2026. Déclare "
+                f"`lifecycle: {{states: [...], terminal: [...]}}` sur la colonne qui "
+                f"porte l'avancement. Cf. guide `work-queue`.")
+    if terminal_states(schema):
         return None
     key = sf.get("key") or "status"
-    cause = ("aucun `lifecycle`" if not lifecycle_of(schema)
-             else "un `lifecycle` sans état terminal dérivable "
-                  "(tout état a une transition sortante)")
-    return (f"champ `{key}` (role=status) : {cause} → la file de travail ne libérera "
-            "AUCUN bail à l'écriture du verdict (les lignes traitées restent "
-            "réservées jusqu'à expiration). Déclare "
-            f"`lifecycle: {{states: [...], terminal: [...]}}` sur `{key}`, ou appelle "
-            "`data_release` après chaque verdict. Cf. guide `work-queue`.")
+    return (f"champ `{key}` : un `lifecycle` sans état terminal dérivable (tout état a "
+            "une transition sortante) → la file de travail ne libérera AUCUN bail à "
+            "l'écriture du verdict (les lignes traitées restent réservées jusqu'à "
+            f"expiration). Déclare `terminal: [...]` sur le `lifecycle` de `{key}`, ou "
+            "appelle `data_release` après chaque verdict. Cf. guide `work-queue`.")
