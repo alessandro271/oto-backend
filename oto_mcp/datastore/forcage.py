@@ -95,10 +95,37 @@ class Forcage:
     demande: bool = False
     autorise: bool = False
     forcees: list = field(default_factory=list)
+    #: Les chemins nommés par `force: [...]` (oto#140). `None` = le geste vaut pour
+    #: TOUT l'appel — la forme historique du booléen.
+    #:
+    #: ⚠️ **Nommer par champ améliore la PORTÉE, pas la retenue, et le contrat le dit
+    #: lui-même** : mesuré sur 57 appels portant le forçage, 56 étaient à « oui ». Tout
+    #: paramètre offert au modèle sera réglé par lui. Ce qui TIENT un forçage, c'est
+    #: son palier — ce que nommer les cibles change, c'est qu'un lot de cinq cents
+    #: lignes cesse de forcer tout ce qu'il porte.
+    chemins: Optional[frozenset] = None
 
     @property
     def actif(self) -> bool:
+        """Le geste est-il tenu ? — sans regarder la cible. Utile pour savoir qu'un
+        forçage est en cours ; **ne décide d'aucune écriture** : c'est `actif_sur` qui
+        tranche, parce qu'un forçage peut être tenu et ne pas viser cette colonne."""
         return self.demande and self.autorise
+
+    def actif_sur(self, colonne: str) -> bool:
+        """Ce forçage vise-t-il CETTE colonne ?
+
+        Sans `force`, il vise tout (compatibilité du booléen). Avec, il ne vise que ce
+        qui est nommé — la colonne elle-même (`raison_sociale`) ou l'une de ses couches
+        (`raison_sociale.origine`), parce que forcer une valeur et forcer sa provenance
+        ne sont pas le même geste et ne devraient pas se demander ensemble.
+        """
+        if not self.actif:
+            return False
+        if self.chemins is None:
+            return True
+        return colonne in self.chemins or any(
+            c.split(".", 1)[0] == colonne for c in self.chemins)
 
     def relever(self, colonne: str, avant: Any, apres: Any) -> None:
         """Note une substitution. La LIGNE est agrafée après coup (`rattacher`) : la
@@ -143,9 +170,19 @@ def arbitrer(forcage: Optional[Forcage], colonne: str,
     exact mais sans issue fait deviner exactement comme un refus muet (#668)."""
     ou_va = (f"Ce que dit une autre source va dans `{colonne}.comment` "
              f"({{\"{colonne}\": {{\"comment\": …}}}})")
-    if forcage is not None and forcage.actif:
+    if forcage is not None and forcage.actif_sur(colonne):
         forcage.relever(colonne, avant, apres)
         return None
+    if forcage is not None and forcage.actif:
+        # Le geste est TENU mais ne vise pas cette colonne : le dire, plutôt que de
+        # rendre le refus général. Sans cette branche, l'appelant relit « forcer est
+        # réservé à … » alors qu'il A le palier — et il chercherait un droit qu'il
+        # possède déjà, au lieu de corriger sa liste.
+        return (
+            f"`{colonne}` est verrouillée (`readonly`) et ta liste `force` ne la "
+            f"nomme pas — rien n'a été écrit sur elle. Ajoute-la (`force=[…, "
+            f"\"{colonne}\"]`) si tu voulais la remplacer ; {ou_va} sinon. "
+            f"Ce que tu as nommé a été forcé normalement.")
     if forcage is not None and forcage.demande:
         # Le palier n'est pas tenu. Ne pas répéter « passe le paramètre » : il est
         # passé, et le redire enverrait chercher une manœuvre pour l'obtenir.
@@ -161,3 +198,54 @@ def arbitrer(forcage: Optional[Forcage], colonne: str,
         f"fichier. Pour la REMPLACER malgré le verrou : `{PARAMETRE}=true` sur CET "
         f"appel, ouvert à {PALIER}. Il ne vaut que pour cet appel — il n'y a rien à "
         f"rouvrir dans le schéma, donc rien à refermer.")
+
+
+#: Le nom servi du forçage par CIBLES (oto#140). Il coexiste avec le booléen pendant
+#: le préavis : nommer ses cibles est un geste plus précis, pas un droit différent.
+PARAMETRE_CIBLES = "force"
+
+
+def chemins_forces(value: Any) -> Optional[frozenset]:
+    """`force=[...]` validé, ou un refus qui NOMME le paramètre et sa forme.
+
+    Rend `None` quand rien n'est demandé — le forçage garde alors sa portée d'appel
+    entier, la forme historique du booléen.
+
+    ⚠️ Une liste VIDE est refusée, pas lue comme « rien ». `force=[]` est un geste
+    délibéré qui ne veut rien dire : le traiter comme une absence ferait passer une
+    écriture sur colonne verrouillée pour un refus ordinaire, et l'appelant chercherait
+    un droit qu'il vient de demander.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, (list, tuple)) or not value:
+        raise ValueError(
+            f"`{PARAMETRE_CIBLES}` attend une liste non vide de chemins — reçu "
+            f"{value!r}. Un chemin est une colonne (`raison_sociale`) ou l'une de ses "
+            f"couches (`raison_sociale.origine`). Nommer ce qu'on force évite qu'un "
+            f"lot de cinq cents lignes force tout ce qu'il porte.")
+    mauvais = [c for c in value if not isinstance(c, str) or not c.strip()]
+    if mauvais:
+        raise ValueError(
+            f"`{PARAMETRE_CIBLES}` : {mauvais!r} n'est pas un chemin. Attendu des "
+            f"chaînes — `\"raison_sociale\"` ou `\"raison_sociale.origine\"`.")
+    return frozenset(c.strip() for c in value)
+
+
+def description_parametre_cibles() -> str:
+    """Ce que les DEUX faces disent du paramètre. Une seule source, comme le reste.
+
+    ⚠️ Le texte dit ce que ça change ET ce que ça ne change PAS. Le contrat le note
+    lui-même : nommer par champ améliore la PORTÉE, pas la retenue — 56 des 57 appels
+    portant le forçage étaient à « oui ». Laisser croire qu'on a resserré un droit
+    ferait relâcher l'attention sur le seul mécanisme qui le tient vraiment, le palier.
+    """
+    return (f"`{PARAMETRE_CIBLES}=[\"colonne\", \"colonne.origine\"]` force les "
+            f"colonnes NOMMÉES sur cet appel, au lieu de tout ce qu'il porte. Le "
+            f"nommer suffit : pas besoin de `{PARAMETRE}` en plus. ⚠️ Ça change la "
+            f"PORTÉE, pas le droit — forcer reste réservé à {PALIER}, et un lot qui "
+            f"nomme ses cibles cesse seulement de forcer les cinq cents lignes qu'il "
+            f"transporte. Une colonne verrouillée absente de la liste est refusée "
+            f"normalement, et le refus le dit.")

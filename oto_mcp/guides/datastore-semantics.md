@@ -197,6 +197,25 @@ réinventerais un marqueur, en pire, puisque cette fois tu l'aurais deviné.
 Le défaut sert encore les deux. **Il basculera vers `current` seul, avec préavis daté**
 — si un écran chez toi lit la valeur de départ, nomme-la dès maintenant.
 
+## 4 quater. `force` — forcer ce qu'on NOMME, pas tout l'appel
+
+```
+data_write(namespace="…", id="…", force=["raison_sociale", "raison_sociale.origine"],
+           row={"raison_sociale": {"valeur": "Dupont SAS"}})
+```
+
+Le nommer suffit : pas besoin de `readonly_override` en plus. Un chemin est une colonne
+ou l'une de ses couches.
+
+⚠️ **Ça change la PORTÉE, pas le droit.** Forcer reste réservé au propriétaire du
+tableau ou à qui le gouverne — un accès en écriture partagé ne suffit pas, sinon le
+verrou ne protégerait de personne. Ce que nommer tes cibles change, c'est qu'un lot de
+cinq cents lignes cesse de forcer tout ce qu'il transporte.
+
+Une colonne verrouillée absente de ta liste est refusée normalement, **et le refus te
+dit que c'est ta liste qui ne la nomme pas** — pas que tu manques d'un droit. La
+distinction compte : sans elle, tu partirais chercher une permission que tu as déjà.
+
 ## 5. Ce que `readonly: true` protège — et ne protège pas
 
 Une colonne `readonly` (schéma) verrouille la **valeur** d'une ligne en place : une

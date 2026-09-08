@@ -33,6 +33,7 @@ from ...auth import token_scopes
 from ...datastore.identite import Adresse
 from ...datastore import journal as datastore_journal
 from ...datastore import identite, jetons
+from ...datastore import forcage as fcg
 from ...datastore import layers as dsl
 from ...datastore import schema as dsv2
 from ...datastore.core import (
@@ -127,6 +128,10 @@ _FORCAGE = Field(default=False, description=(
     "d'être refusé. Réservé au propriétaire du tableau ou à qui le gouverne ; ne vaut "
     "que pour cet appel ; journalisé (ligne, colonne, valeur remplacée)."))
 
+# oto#140 : le forçage par CIBLES. Il coexiste avec le booléen ci-dessus pendant le
+# préavis — nommer ses cibles est un geste plus précis, pas un droit différent.
+_FORCE = Field(default=None, description=fcg.description_parametre_cibles())
+
 # oto#70 lot 2 : la MÊME mécanique de passage que `_FORCAGE` (query, additif, publié
 # tel quel par l'OpenAPI) — mais pas le même objet. Le forçage demande un PALIER (qui
 # possède ou gouverne le tableau) ; celui-ci n'en demande aucun : ce n'est pas un droit
@@ -147,6 +152,7 @@ class AppendRowInput(BaseModel):
     # Le corps ENTIER (cf. `RestBinding.body_field`) : les colonnes du tableau.
     row: dict = Field(default_factory=dict)
     readonly_override: bool = _FORCAGE
+    force: Optional[list[str]] = _FORCE
     origine_override: bool = _ORIGINE
     donnees_d_origine: bool = _DONNEES_D_ORIGINE
 
@@ -157,6 +163,7 @@ class UpdateRowInput(BaseModel):
     # Le corps ENTIER : les colonnes à écrire (patch partiel, jamais un remplacement).
     patch: dict = Field(default_factory=dict)
     readonly_override: bool = _FORCAGE
+    force: Optional[list[str]] = _FORCE
     origine_override: bool = _ORIGINE
     donnees_d_origine: bool = _DONNEES_D_ORIGINE
 
@@ -466,7 +473,8 @@ def _append_row(ctx: ResolvedCtx, inp: AppendRowInput) -> dict:
         created = store.append_row(ns, inp.row, trace=trace,
                                    readonly_override=inp.readonly_override,
                                    origine_override=inp.origine_override,
-                                   donnees_d_origine=inp.donnees_d_origine)
+                                   donnees_d_origine=inp.donnees_d_origine,
+                                   force=fcg.chemins_forces(inp.force))
     except NamespaceNotFound:
         raise ns_not_found(ctx.sub, ns)
     except NamespaceReadOnly:
@@ -497,7 +505,8 @@ def _update_row(ctx: ResolvedCtx, inp: UpdateRowInput) -> dict:
         updated = store.update_row(ns, rid, inp.patch, trace=trace,
                                    readonly_override=inp.readonly_override,
                                    origine_override=inp.origine_override,
-                                   donnees_d_origine=inp.donnees_d_origine)
+                                   donnees_d_origine=inp.donnees_d_origine,
+                                   force=fcg.chemins_forces(inp.force))
     except NamespaceNotFound:
         raise ns_not_found(ctx.sub, ns)
     except NamespaceReadOnly:

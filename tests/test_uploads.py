@@ -159,7 +159,7 @@ def test_materialize_datastore_batch(monkeypatch):
     seen = {}
     class FakeStore:
         def _write_rows_to_ns(self, ns_id, rows, *, key, origine_override=False,
-                              donnees_d_origine=False):
+                              donnees_d_origine=False, **_):
             seen["ns_id"], seen["rows"], seen["key"] = ns_id, rows, key
             seen["donnees_d_origine"] = donnees_d_origine
             return {"inserted": 2, "updated": 0, "count": 2, "key": key, "ids": ["r1", "r2"]}

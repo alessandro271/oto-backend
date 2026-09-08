@@ -55,7 +55,8 @@ class LotsMixin:
     def _write_rows_to_ns(self, ns_id: int, rows: list, *, key: Optional[str],
                           readonly_override: bool = False,
                           origine_override: bool = False,
-                          donnees_d_origine: bool = False) -> dict:
+                          donnees_d_origine: bool = False,
+                          force: Optional[frozenset] = None) -> dict:
         """Cœur du batch, keyé par `ns_id` déjà résolu (réutilisable hors contexte
         d'org — matérialisation d'un upload signé, où l'org de session est absente).
         Le schéma v2 (validation/lifecycle, ADR 0046) s'applique à CHAQUE row du
@@ -66,7 +67,9 @@ class LotsMixin:
         nom_ns = ns.get("namespace") or f"#{ns_id}"
         # #658 : UN palier pour le lot entier, lu une seule fois — pas une lecture
         # d'ownership par ligne sur un import de huit mille.
-        forcage = self._forcage_readonly(ns_id, schema, readonly_override)
+        # `force` implique la demande : nommer une cible EST le geste.
+        forcage = self._forcage_readonly(
+            ns_id, schema, readonly_override or bool(force), force)
         inserted, updated, ids = 0, 0, []
         total = len(rows)
         for rang, data in enumerate(rows, 1):

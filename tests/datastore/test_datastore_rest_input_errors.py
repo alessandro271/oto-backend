@@ -43,11 +43,11 @@ class _Store:
         self.exc = exc or ValueError(self.MSG)
 
     def append_row(self, namespace, data, *, trace=None, readonly_override=False, origine_override=False,
-                   donnees_d_origine=False):
+                   donnees_d_origine=False, **_):
         raise self.exc
 
     def update_row(self, namespace, row_id, patch, *, trace=None, readonly_override=False, origine_override=False,
-                   donnees_d_origine=False):
+                   donnees_d_origine=False, **_):
         raise self.exc
 
     def off_schema_report(self):

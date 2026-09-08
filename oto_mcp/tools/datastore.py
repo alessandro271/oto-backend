@@ -21,6 +21,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access, db, ownership
 from ..datastore import claimable, identite, jetons
+from ..datastore import forcage as fcg
 from ..datastore import layers as dsl
 from ..datastore import versions as dsver
 from ..datastore.identite import AdresseJson as Adresse
@@ -699,7 +700,8 @@ def register(mcp: FastMCP) -> None:
                    rows: list | None = None, key: str | None = None,
                    readonly_override: bool = False,
                    origine_override: bool = False,
-                   donnees_d_origine: bool = False) -> dict:
+                   donnees_d_origine: bool = False,
+                   force: list | None = None) -> dict:
         """Write one row, or a BATCH of rows in a single call.
 
         ⚠️ **Provenance goes in `comment`, never in `origine`.** Put WHAT you
@@ -827,6 +829,12 @@ def register(mcp: FastMCP) -> None:
             row: single-row content as a dict (JSON-encoded automatically).
             id: omit = append a new row ; provided = partial update of that `_id`
                 (the one data_write / data_claim_next returned for that row).
+            force: force the NAMED columns on this call instead of everything it
+                carries — `["raison_sociale", "raison_sociale.origine"]`. Naming
+                them is enough; no need for `readonly_override` as well. ⚠️ It
+                changes the SCOPE, not the right: forcing stays reserved to the
+                table's owner or whoever governs it. A locked column absent from
+                the list is refused normally, and the refusal says so.
             donnees_d_origine: this call brings data AS THE CLIENT HANDED IT
                 OVER — an import. Each cell gets its `origine` version frozen at
                 the same time as its current value, carrying the same layers, so
@@ -854,6 +862,9 @@ def register(mcp: FastMCP) -> None:
             # `@claimed` — retiré le 07/09/2026 — un refus qui NOMME le geste qui
             # aboutit, plutôt que le « namespace inconnu » du stockage.
             namespace, id = _adresse(namespace, id)
+            # Refus qui NOMME le paramètre et sa forme, au moment où l'appelant peut
+            # encore corriger — jamais un `invalid_input` nu.
+            cibles = fcg.chemins_forces(force)
             jetons.verifier_contenu(row)
             jetons.verifier_contenu(rows)
             if rows is not None:
@@ -865,7 +876,8 @@ def register(mcp: FastMCP) -> None:
                 recap = store.write_rows(namespace, rows, key=key,
                                          readonly_override=readonly_override,
                                          origine_override=origine_override,
-                                         donnees_d_origine=donnees_d_origine)
+                                         donnees_d_origine=donnees_d_origine,
+                                         force=cibles)
                 # Le lot a une ENVELOPPE (son corps n'est pas une ligne) : elle porte
                 # l'identité entière — le nom CANONIQUE, plus l'écho de la chaîne
                 # reçue, et le numéro à employer ensuite.
@@ -880,12 +892,14 @@ def register(mcp: FastMCP) -> None:
                 out = store.append_row(namespace, row,
                                        readonly_override=readonly_override,
                                        origine_override=origine_override,
-                                       donnees_d_origine=donnees_d_origine) \
+                                       donnees_d_origine=donnees_d_origine,
+                                       force=cibles) \
                     if id is None \
                     else store.update_row(namespace, id, row,
                                           readonly_override=readonly_override,
                                           origine_override=origine_override,
-                                          donnees_d_origine=donnees_d_origine)
+                                          donnees_d_origine=donnees_d_origine,
+                                          force=cibles)
             # Champs posés hors du format déclaré (#294) : l'écriture est acceptée (un
             # champ libre reste un droit du contrat), mais elle n'est plus silencieuse.
             # Le NUMÉRO du tableau part avec (`ns_id`) : l'écriture est le geste que

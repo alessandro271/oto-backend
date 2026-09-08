@@ -872,6 +872,16 @@ de fin de passage détectait après coup.
   valeur courante la présenterait comme celle de la cliente — ce que la définition
   interdit. Le marqueur rend l'ignorance explicite plutôt que muette : sans lui, « pas
   d'origine » se confondrait avec « origine vide ».
+  ⚠️ **`force: [chemins]` (oto#140)** remplace la portée « tout l'appel » du booléen :
+  `force=["raison_sociale.origine"]` ne force que ce qui est nommé, colonne ou couche.
+  Le nommer vaut demande — pas besoin de `readonly_override` en plus. ⚠️ **Ça change la
+  PORTÉE, pas la retenue**, et le contrat le dit lui-même : mesuré, 56 appels sur 57
+  portant le forçage étaient à « oui ». Ce qui TIENT un forçage est son palier
+  (propriétaire ∪ gouvernant), inchangé. Le refus sur une colonne verrouillée absente
+  de la liste dit que c'est la LISTE qui ne la nomme pas — sinon celui qui a le palier
+  part chercher un droit qu'il possède déjà. `None` (rien demandé) et `[]` ne sont pas
+  la même chose : le second est refusé, parce que le lire comme une absence désarmerait
+  silencieusement le geste.
   ⚠️ **`versions` (oto#140) — palier 1 de la lecture à deux versions.** `current` et
   `origine` se nomment (`versions=["current","origine"]`), et la réponse déclare ce
   qu'elle a servi sous `versions_servies` : sans cette déclaration, « pas demandée » et

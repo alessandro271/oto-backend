@@ -55,7 +55,8 @@ class ControlesMixin:
     # --- forçage d'une colonne verrouillée (#658) -----------------------------
 
     def _forcage_readonly(self, ns_id: int, schema: Optional[dict],
-                          demande: bool) -> Optional[Forcage]:
+                          demande: bool,
+                          chemins: Optional[frozenset] = None) -> Optional[Forcage]:
         """Le forçage de CET appel — `None` quand rien ne le demande.
 
         ⚠️ Le palier est tranché ICI, **une fois par appel et hors de toute
@@ -70,8 +71,9 @@ class ControlesMixin:
         if not demande:
             return None
         if not dsv2.readonly_fields(schema):
-            return Forcage(demande=True, autorise=False)
-        return Forcage(demande=True, autorise=self._peut_forcer(ns_id))
+            return Forcage(demande=True, autorise=False, chemins=chemins)
+        return Forcage(demande=True, autorise=self._peut_forcer(ns_id),
+                       chemins=chemins)
 
     def _peut_forcer(self, ns_id: int) -> bool:
         """Le PALIER : propriétaire du tableau ∪ qui le gouverne. L'un des deux suffit.

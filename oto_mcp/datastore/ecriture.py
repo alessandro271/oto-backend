@@ -43,7 +43,8 @@ class EcritureMixin:
                    trace: Optional[dict] = None,
                    readonly_override: bool = False,
                    origine_override: bool = False,
-                   donnees_d_origine: bool = False) -> dict:
+                   donnees_d_origine: bool = False,
+                   force: Optional[frozenset] = None) -> dict:
         """Écrit UNE row. Si le namespace déclare une clé métier (`schema.key`),
         applique la MÊME dédup upsert que le batch `write_rows` : une row de même
         valeur de clé est MERGÉE (pas de doublon, l'index `ds_bkey_<ns>` la refuse) ;
@@ -94,7 +95,9 @@ class EcritureMixin:
         # comprise — jugée sur le payload seul (le readonly, lui, se juge contre la
         # ligne en place, donc dans la fusion). Refusé AVANT le lookup de clé.
         # #658 : tranché AVANT la fusion — c'est elle qui ouvre le verrou de ligne.
-        forcage = self._forcage_readonly(ns_id, schema, readonly_override)
+        # `force` implique la demande : nommer une cible EST le geste.
+        forcage = self._forcage_readonly(
+            ns_id, schema, readonly_override or bool(force), force)
         refuser_champs_reserves(schema, user_data, agent=aga.appel_d_agent())
         _relever_origine_module(self, ns_id, user_data, schema=schema,
                                 declare=origine_override)
@@ -314,7 +317,8 @@ class EcritureMixin:
     def write_rows(self, namespace: str, rows: list, *, key: Optional[str] = None,
                    readonly_override: bool = False,
                    origine_override: bool = False,
-                   donnees_d_origine: bool = False) -> dict:
+                   donnees_d_origine: bool = False,
+                   force: Optional[frozenset] = None) -> dict:
         """Écrit un LOT de rows en un appel. Si une clé métier est en vigueur (param
         `key` explicite, sinon `schema.key` déclarée), chaque row qui la porte fait un
         UPSERT (merge) sur la row existante de même valeur de clé — pas de doublon ;
@@ -324,13 +328,15 @@ class EcritureMixin:
         return self._write_rows_to_ns(ns_id, rows, key=key or self.declared_key(namespace),
                                       readonly_override=readonly_override,
                                       origine_override=origine_override,
-                                      donnees_d_origine=donnees_d_origine)
+                                      donnees_d_origine=donnees_d_origine,
+                                      force=force)
 
     def update_row(self, namespace: str, row_id: str, patch: dict, *,
                    trace: Optional[dict] = None,
                    readonly_override: bool = False,
                    origine_override: bool = False,
-                   donnees_d_origine: bool = False) -> dict:
+                   donnees_d_origine: bool = False,
+                   force: Optional[frozenset] = None) -> dict:
         """Patch partiel d'une row. `trace` (dict mutable, optionnel) = relevé pour
         le journal — dont l'état AVANT, celui-là même sur lequel la transition de
         cycle de vie est validée juste en dessous (cf. `_trace`).
@@ -387,7 +393,9 @@ class EcritureMixin:
             written.add(k)
         # #586/#606 : MÊME garde que la fusion — le patch par `id` est le geste le
         # plus courant d'un agent, et celui qui a écrasé les quatorze valeurs.
-        forcage = self._forcage_readonly(ns_id, schema, readonly_override)
+        # `force` implique la demande : nommer une cible EST le geste.
+        forcage = self._forcage_readonly(
+            ns_id, schema, readonly_override or bool(force), force)
         refuser_champs_reserves(schema, pose, avant=avant,
                                 forcage=forcage, agent=aga.appel_d_agent())
         # ⚠️ CE chemin-ci a déjà été oublié une fois, six lignes plus haut : l'origine

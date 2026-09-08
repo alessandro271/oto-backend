@@ -103,14 +103,14 @@ class _FakeStore:
         return dict(self.row)
 
     def update_row(self, namespace, row_id, patch, *, trace=None, readonly_override=False, origine_override=False,
-                   donnees_d_origine=False):
+                   donnees_d_origine=False, **_):
         self._fill(trace, prev_status=self.row.get("statut"))
         self.row = {**self.row, **patch}
         self.written = patch
         return dict(self.row)
 
     def append_row(self, namespace, data, *, trace=None, readonly_override=False, origine_override=False,
-                   donnees_d_origine=False):
+                   donnees_d_origine=False, **_):
         self._fill(trace)
         return {"_id": "row-2", **data}
 
@@ -242,7 +242,7 @@ def test_illegal_transition_is_a_400_not_a_500(monkeypatch):
 
     def _refuse(namespace, row_id, patch, *, trace=None,
                 readonly_override=False, origine_override=False,
-                   donnees_d_origine=False):
+                   donnees_d_origine=False, **_):
         raise RowValidationError(["statut: transition 'ecarte' → 'enrichi' interdite"])
 
     store.update_row = _refuse
