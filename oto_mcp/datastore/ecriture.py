@@ -102,7 +102,9 @@ class EcritureMixin:
         # La clé métier sort du MÊME schéma que ci-dessus (`declared_key` re-résolvait
         # le namespace et relisait la ligne pour le même résultat).
         key = self._declared_key_of(schema)
-        kv = user_data.get(key) if key else None
+        # ⚠️ DÉBALLÉ — une clé métier annotée est la MÊME identité qu'une clé nue
+        # (cf. `lots.py`). Enrichir la provenance ne change pas ce qu'une donnée est.
+        kv = dsv2.unwrap(user_data.get(key)) if key else None
         if key and kv is not None and str(kv) != "":
             existing_id = db.datastore_find_row_id_by_key(ns_id, key, kv)
             if existing_id is not None:
@@ -413,7 +415,7 @@ class EcritureMixin:
             # basculer silencieusement sur une autre row → erreur actionnable
             # (ValueError → INVALID_PARAMS), jamais un 500 opaque.
             dk = (schema or {}).get("key")
-            dkv = data.get(dk) if dk else None
+            dkv = dsv2.unwrap(data.get(dk)) if dk else None
             if dk and dkv is not None:
                 raise ValueError(
                     f"un autre enregistrement porte déjà {dk}={dkv} "

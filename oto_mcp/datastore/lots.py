@@ -98,7 +98,13 @@ class LotsMixin:
                     colonnes_en_place=lambda: self._colonnes_de_la_ligne_visee(
                         ns_id, schema, user_data, key))
                 _refuse_dotted_names(user_data)
-                kv = user_data.get(key) if key else None
+                # ⚠️ DÉBALLÉ : une clé métier ANNOTÉE désigne la même ligne qu'une clé nue.
+                # `{"code": {"valeur": "A", "comment": "fichier source"}}` et
+                # `{"code": "A"}` sont la MÊME identité — enrichir la provenance ne
+                # change pas ce qu'une donnée EST. Sans ce déballage, le lookup
+                # cherchait l'objet entier : ligne « introuvable », puis insertion,
+                # puis `UniqueViolation` sur l'index de clé. Mesuré le 08/09/2026.
+                kv = dsv2.unwrap(user_data.get(key)) if key else None
                 existing_id = None
                 if key and kv is not None and str(kv) != "":
                     existing_id = db.datastore_find_row_id_by_key(ns_id, key, kv)
@@ -109,7 +115,7 @@ class LotsMixin:
                 # tableau fermé refuserait une ligne qu'il porte déjà.
                 if existing_id is None and dsv2.key_required_of(schema):
                     dk = self._declared_key_of(schema)
-                    dkv = user_data.get(dk)
+                    dkv = dsv2.unwrap(user_data.get(dk))
                     if dk != key and dkv is not None and str(dkv) != "":
                         existing_id = db.datastore_find_row_id_by_key(ns_id, dk, dkv)
                     if existing_id is None:
@@ -145,7 +151,7 @@ class LotsMixin:
                     # qui peut différer d'un `key` explicite passé à l'appel.
                     dk = ((db.get_datastore_namespace_by_id(ns_id) or {}).get("schema")
                           or {}).get("key")
-                    dkv = user_data.get(dk) if dk else None
+                    dkv = dsv2.unwrap(user_data.get(dk)) if dk else None
                     existing_id = (db.datastore_find_row_id_by_key(ns_id, dk, dkv)
                                    if dk and dkv is not None else None)
                     if existing_id is None:

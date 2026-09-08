@@ -707,7 +707,26 @@ def _merge_column(existing: Any, new: Any, champ: Any = None) -> Any:
     cle_item = _cle_d_item(champ)
     if isinstance(new, list):
         if cle_item:
-            return _merge_items(existing, new, cle_item)
+            # ⚠️ **La colonne en place peut porter des COUCHES autour de sa liste** —
+            # `{"valeur": [...], "origine": {...}}` — depuis qu'un import déclaré
+            # (`donnees_d_origine`) fige la version d'origine de chaque case. Passer
+            # ce dict tel quel à `_merge_items` le faisait lire comme « rien en
+            # place » : la liste entière était remplacée, et l'origine partait avec.
+            #
+            # Mesuré le 08/09/2026 sur le geste le plus banal qui soit : importer un
+            # contact « RH / Alice / ancien email », puis corriger le seul email.
+            # Alice disparaissait, et la version d'origine aussi — c'est-à-dire
+            # exactement ce que la fusion par créneau existe pour empêcher.
+            #
+            # On déballe donc pour fusionner, et on REPOSE le résultat dans les
+            # couches qui étaient là. Deux gestes, parce que la liste est la valeur
+            # de la colonne, pas la colonne.
+            couches = _existing_layers(existing)
+            fusion = _merge_items(couches.get(dsv2.VALUE_LAYER), new, cle_item)
+            if len(couches) > 1 or dsv2.ORIGIN_LAYER in couches:
+                couches[dsv2.VALUE_LAYER] = fusion
+                return couches
+            return fusion
         # Remplacement en bloc : personne ne descend plus dans les éléments après
         # cette ligne, donc les deux mots réservés se règlent ICI ou jamais.
         nom = str((champ or {}).get("key") or "liste")
