@@ -259,7 +259,7 @@ def test_le_resultat_fait_l_aller_retour_en_base(live):
 # remplace un ordonnanceur externe qu'un humain lançait à la main, qui prenait
 # la campagne, la découpait, et battait pour dire qu'il vivait.
 
-CAMPAGNE = {"id": 12, "org_id": 7, "sub": "celui-qui-a-declare", "label": "audiens",
+CAMPAGNE = {"id": 12, "org_id": 7, "sub": "celui-qui-a-declare", "label": "passage-editeurs",
             "procedure": "enrichissement", "project_id": 220, "namespace": "tableau",
             "tools": ["data_claim_next", "data_write"], "input": "file {namespace}",
             "row_filter": {"statut": "a_enrichir"}, "max_steps": 40,
