@@ -98,24 +98,57 @@ def test_un_creneau_NEUF_n_herite_de_rien():
 
 # ── ⚠️ Le doublon LÈVE, il ne se départage pas au hasard ─────────────────────
 
-@pytest.mark.parametrize("ou,avant,pose", [
-    ("posée", None, [{"role": "contact_rh", "email": "a@x.fr"},
-                     {"role": "contact_rh", "email": "b@x.fr"}]),
-    ("en place", [{"role": "contact_rh", "email": "a@x.fr"},
-                  {"role": "contact_rh", "email": "b@x.fr"}],
-     [{"role": "contact_rh", "email": "c@x.fr"}]),
-])
-def test_une_identite_en_double_refuse_en_la_NOMMANT(ou, avant, pose):
+def test_une_identite_en_double_dans_la_liste_POSEE_refuse_en_la_NOMMANT():
     """Deux éléments qui se disent le même ne sont pas départageables. Prendre le
     premier apparierait au hasard — sur des données de personnes, c'est le seul mode
-    d'échec inacceptable, parce qu'il est SILENCIEUX."""
+    d'échec inacceptable, parce qu'il est SILENCIEUX.
+
+    ⚠️ Le refus porte sur la liste POSÉE, c'est-à-dire sur le geste de l'appelant, au
+    moment où il peut encore le corriger."""
     with pytest.raises(RowValidationError) as e:
-        _merge_column(avant if avant is not None else _avant(), pose, CHAMP)
+        _merge_column(None, [{"role": "contact_rh", "email": "a@x.fr"},
+                             {"role": "contact_rh", "email": "b@x.fr"}], CHAMP)
 
     msg = str(e.value)
     assert "contact_rh" in msg, "le refus doit nommer la valeur en cause"
-    assert ou in msg, "et dire de QUEL côté le doublon se trouve"
-    assert "of.key" in msg, "et rappeler comment revenir au remplacement en bloc"
+    assert "liste posée" in msg
+
+
+def test_un_doublon_DEJA_EN_PLACE_n_enferme_PAS_la_ligne():
+    """⚠️ **Correctif du 08/09/2026, et j'avais posé la faute en la citant.**
+
+    La liste EN PLACE levait aussi. Une ligne portant déjà un doublon n'acceptait donc
+    plus AUCUNE écriture — **y compris celle qui l'aurait réparée** : la validation
+    jugeait l'état, pas le geste. Le refus proposait deux sorties dont aucune ne
+    marchait : « donne des valeurs distinctes » (impossible, tout était refusé) et
+    « retire `of.key` » (qui ne se retire pas — mesuré). La fiche était dans une
+    impasse.
+
+    C'est exactement ce que ce module dénonce ailleurs : *une garde qui bloque le geste
+    qui la lèverait*. Trouvé par la campagne sur un tableau jetable, avant que ça
+    n'arrive sur une vraie fiche.
+
+    Quand l'état est ambigu on ne peut pas apparier — donc on REMPLACE en bloc, ce qui
+    est le comportement d'une liste sans clé. La liste envoyée, elle, est valide : le
+    geste répare au lieu d'échouer."""
+    avant = [{"role": "contact_rh", "email": "a@x.fr"},
+             {"role": "contact_rh", "email": "b@x.fr"}]
+    out = _merge_column(avant, [{"role": "contact_rh", "email": "c@x.fr"}], CHAMP)
+
+    assert out == [{"role": "contact_rh", "email": "c@x.fr"}], (
+        "la liste envoyée fait foi et la ligne est réparée")
+
+
+def test_le_refus_ne_conseille_PLUS_un_geste_qui_n_existe_pas():
+    """Le message renvoyait vers « retire `of.key` du schéma ». Mesuré : `of.key` ne
+    se retire pas — `remove_attrs` ne descend pas dans `of`, et réémettre `of` sans
+    `key` la conserve. Un refus qui nomme une sortie inexistante est pire qu'un refus
+    muet : il fait perdre du temps à celui qui le suit."""
+    with pytest.raises(RowValidationError) as e:
+        _merge_column(None, [{"role": "x", "email": "a"}, {"role": "x", "email": "b"}],
+                      CHAMP)
+
+    assert "of.key" not in str(e.value)
 
 
 # ── Sans déclaration, rien ne change ─────────────────────────────────────────

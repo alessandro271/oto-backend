@@ -26,8 +26,9 @@ from .columns import (
     refuser_geste_sans_effet,
 )
 from .controles import _relever_origine_module
-from .errors import NamespaceNotFound, RowNotFound
+from .errors import NamespaceNotFound, RowNotFound, RowValidationError
 from . import fin_du_null as fdn
+from . import reliques as rq
 from .forcage import Forcage
 from .outils import _new_id, _now_iso, _refus_de_creation
 from .points import _refuse_dotted_names, ranger_les_couches
@@ -220,6 +221,15 @@ class EcritureMixin:
             # ligne, donc `current` est la ligne vraie — indispensable ici : c'est LUI
             # qui dit si une origine est déjà posée, et une origine posée ne se
             # réécrit jamais. Muter en place est sans risque, le geste est idempotent.
+            # ⚠️ Un effacement qui ne détruit RIEN, annoncé comme un succès : le
+            # geste vise la couche imbriquée, mais la donnée est dans une relique
+            # littérale (`data->>"c.link"`) que rien ici ne touche. Un lecteur croit
+            # avoir retiré une donnée personnelle. Un zéro se met en doute ; un succès
+            # ne se met pas en doute — d'où un REFUS, et seulement sur l'effacement :
+            # l'écriture ordinaire vise l'imbriqué à juste titre.
+            vises = rq.effacements_sur_relique(user_data, current)
+            if vises:
+                raise RowValidationError([rq.refus(vises)])
             if donnees_d_origine:
                 poser_les_deux_versions(user_data, avant=current, schema=schema)
             pose, vidages, ecartes = arbitrer_les_vides(current, user_data, row_id)
@@ -395,6 +405,12 @@ class EcritureMixin:
         # courant d'un agent est aussi celui qu'on oublie, précisément parce qu'il a
         # son propre corps. `avant` = l'état lu : c'est lui qui dit si une origine est
         # déjà posée, et une origine posée ne se réécrit jamais.
+        # MÊME garde que la fusion, sur le chemin du patch par `id` — celui que le
+        # fichier dénonce trois fois comme « le geste le plus courant d'un agent »,
+        # et qui a son propre corps.
+        vises = rq.effacements_sur_relique(patch, data)
+        if vises:
+            raise RowValidationError([rq.refus(vises)])
         if donnees_d_origine:
             poser_les_deux_versions(patch, avant=data, schema=schema)
         pose, vidages, ecartes = arbitrer_les_vides(data, patch, row_id)

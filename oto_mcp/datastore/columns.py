@@ -532,7 +532,8 @@ def _index_par_cle(items: Any, cle: str) -> dict:
     return out
 
 
-def _merge_items(avant: Any, nouveaux: list, cle: str) -> list:
+def _merge_items(avant: Any, nouveaux: list, cle: str,
+                 nom: str = "liste") -> list:
     """Fusionne une liste ÉLÉMENT PAR ÉLÉMENT sur l'identité déclarée.
 
     Ce que ça répare : une liste se fusionnait en bloc, donc un agent qui réémettait
@@ -551,7 +552,7 @@ def _merge_items(avant: Any, nouveaux: list, cle: str) -> list:
       Deux éléments qui se disent le même ne sont pas départageables, et prendre le
       premier apparierait au hasard des données de personnes.
     """
-    for source, ou in ((avant, "en place"), (nouveaux, "posée")):
+    def _doublons(source) -> set:
         vues, doubles = set(), set()
         for it in source if isinstance(source, list) else []:
             if not isinstance(it, dict):
@@ -562,13 +563,36 @@ def _merge_items(avant: Any, nouveaux: list, cle: str) -> list:
             if v in vues:
                 doubles.add(v)
             vues.add(v)
-        if doubles:
-            raise RowValidationError(
-                [f"`{cle}` en double dans la liste {ou} : "
-                 + ", ".join(repr(d) for d in sorted(doubles, key=str))
-                 + f" — deux éléments qui portent la même identité ne peuvent pas "
-                 f"être appariés. Donne à chacun une valeur de `{cle}` distincte, ou "
-                 f"retire `of.key` du schéma pour revenir au remplacement en bloc."])
+        return doubles
+
+    # La liste ENVOYÉE : un doublon y est refusé, au moment où l'appelant peut encore
+    # le corriger — c'est SON geste, et deux éléments de même identité ne sont pas
+    # appariables.
+    doubles = _doublons(nouveaux)
+    if doubles:
+        raise RowValidationError(
+            [f"`{cle}` en double dans la liste posée : "
+             + ", ".join(repr(d) for d in sorted(doubles, key=str))
+             + f" — deux éléments qui portent la même identité ne peuvent pas être "
+             f"appariés. Donne à chacun une valeur de `{cle}` distincte."])
+
+    # ⚠️ **La liste EN PLACE ne refuse plus rien, et c'est un correctif.**
+    #
+    # Elle levait aussi — donc une ligne qui portait déjà un doublon n'acceptait plus
+    # AUCUNE écriture, **y compris celle qui l'aurait réparé** : la validation jugeait
+    # l'état, pas le geste. Le refus proposait deux sorties et aucune ne marchait —
+    # « donne des valeurs distinctes » (impossible, tout était refusé) et « retire
+    # `of.key` » (qui ne se retire pas). La fiche était dans une impasse.
+    #
+    # C'est exactement le défaut que ce module dénonce ailleurs — *une garde qui
+    # bloque le geste qui la lèverait* — et je l'ai posé en le citant. Signalé par la
+    # campagne le 08/09/2026, sur un tableau jetable, avant que ça n'arrive en vrai.
+    #
+    # Quand l'état est ambigu, on ne peut pas apparier : on REMPLACE en bloc, ce qui
+    # est le comportement d'une liste sans clé — et la liste envoyée, elle, est valide.
+    # Le geste répare au lieu d'échouer.
+    if _doublons(avant):
+        return _sentinelles_dans_les_items(nouveaux, nom)
 
     index = _index_par_cle(avant, cle)
     out = []
@@ -722,7 +746,8 @@ def _merge_column(existing: Any, new: Any, champ: Any = None) -> Any:
             # couches qui étaient là. Deux gestes, parce que la liste est la valeur
             # de la colonne, pas la colonne.
             couches = _existing_layers(existing)
-            fusion = _merge_items(couches.get(dsv2.VALUE_LAYER), new, cle_item)
+            fusion = _merge_items(couches.get(dsv2.VALUE_LAYER), new, cle_item,
+                                  str((champ or {}).get("key") or "liste"))
             if len(couches) > 1 or dsv2.ORIGIN_LAYER in couches:
                 couches[dsv2.VALUE_LAYER] = fusion
                 return couches
