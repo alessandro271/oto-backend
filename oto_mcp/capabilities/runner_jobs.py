@@ -486,8 +486,18 @@ def _produire_pour_une_campagne(org_id: int, bail_s: int) -> Optional[str]:
     - `max_rows`, compté dans la même requête, borne le NOMBRE de travaux ;
     - `max_consecutive_failures` arrête une campagne qui échoue en boucle.
 
-    Ce qui n'est pas borné reste la dépense CUMULÉE, ci-dessus. Un passage armé
-    par erreur consomme donc jusqu'à `max_rows` travaux, pas au-delà.
+    Ce qui n'est pas borné reste la SOMME sur la campagne. Mais le pire cas est
+    calculable, et le dire évite de présenter « non borné » là où il ne l'est
+    pas : `max_tokens_per_row` part avec le travail (`payload["max_tokens"]`,
+    plus bas) et l'AGENT l'applique — il s'arrête dessus, `stopped=max_tokens`.
+    Une campagne qui le déclare est donc bornée à `max_rows × max_tokens_per_row`
+    exactement. Sans lui, il ne reste que le plafond de TOURS (`max_steps`), une
+    borne en tours et non en jetons : c'est là, et seulement là, que « non
+    borné » est vrai.
+
+    ⚠️ Le parallélisme ne multiplie rien : la borne est `max_rows`, jamais
+    `max_rows × workers`. Plus de travailleurs concentrent la dépense dans le
+    temps, ils ne l'augmentent pas.
     """
     try:
         # ⚠️ AVANT de servir : arrêter celles qui échouent en boucle. L'ordre
