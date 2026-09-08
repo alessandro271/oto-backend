@@ -134,6 +134,9 @@ from .vocabulaire import (
     _READ_KEYS, interpreted_keys, vocabulaire_vivant, _NEAR_MISS,
     unknown_declaration_keys, unknown_keys_warning, unknown_keys_read_warning,
 )
+from .cles_jumelles import (
+    sont_jumelles, cles_libres_jumelles, cles_jumelles_warning,
+)
 from .non_applique import (
     _options_already_enforced, unenforced_options, unenforced_options_warning,
     options_not_enforced, options_not_enforced_warning, json_fields_depth,

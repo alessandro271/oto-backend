@@ -161,6 +161,14 @@ class SchemaOpsMixin:
                                 # déclarations, que le datastore transporte), on DIT.
                                 dsv2.unknown_keys_warning(
                                     dsv2.unknown_declaration_keys(schema)),
+                                # 08/09/2026 — l'angle MORT de l'avertissement
+                                # ci-dessus, montré par un consommateur : quand les
+                                # DEUX orthographes sont libres, aucune n'a de cousine
+                                # dans le vocabulaire d'oto, et la coquille sort dans
+                                # la même phrase que la clé voulue, indistincte.
+                                dsv2.cles_jumelles_warning(
+                                    dsv2.cles_libres_jumelles(
+                                        dsv2.unknown_declaration_keys(schema))),
                                 # #319 : des options déclarées mais qu'aucun régime ne
                                 # fait respecter — dit AU MOMENT où on pose le schéma,
                                 # pas six semaines plus tard devant des valeurs libres.

@@ -556,6 +556,24 @@ déjà servie depuis le 13/08 par `unknown_keys_warning` (#316, avec near-miss) 
 `options_not_enforced_warning` (#319). `enforced` en est la moitié positive, la seule
 qu'un client puisse vérifier contre le serveur qui lui répond.
 
+⚠️ **L'angle MORT de `unknown_keys_warning`, comblé le 08/09/2026 par
+`cles_jumelles_warning`** (`datastore/cles_jumelles.py`). Son near-miss compare une clé
+morte au vocabulaire d'oto : il est aveugle par construction quand les DEUX orthographes
+sont libres. Cas apporté par un consommateur : `proprietaire` sur une colonne,
+`propietaire` sur une autre — aucune n'a de cousine chez oto, les deux ressortent dans
+la même phrase, `near_miss` vide, rien ne distingue la clé voulue de la coquille. Ce que
+coûte la coquille : la colonne mal étiquetée n'est pas EN ERREUR devant le consommateur
+qui la regroupe, elle est **silencieusement ABSENTE** — un décompte servi devient faux et
+garde l'air juste. L'axe mesuré est la **coexistence**, pas l'orthographe : oto ne tient
+pas le dictionnaire de ses consommateurs, mais il peut constater que deux clés libres à
+un caractère l'une de l'autre vivent dans le même schéma. Seuil volontairement étroit —
+insertion/suppression et transposition SEULEMENT, jamais la substitution (`label_fr` /
+`label_en`, `seuil_min` / `seuil_max` sont sains), et cinq caractères minimum. ⚠️ Mesuré
+avant de servir, sur les **332 schémas du parc** : 204 portent des clés libres, **zéro
+paire signalée** — la garde est préventive et ne crie sur rien d'existant. Un faux
+positif dans un signal de qualité est pire que pas de signal : on apprend à l'ignorer,
+et il ne sert plus le jour où il a raison.
+
 **Une ligne créée sans la clé métier le DIT (#390, 3ᵉ demande).** Les deux premières
 sont servies depuis le 13-15/08 : le bail protège l'ÉCRITURE et pas seulement
 l'attribution (`_lease_guard` sous le verrou de ligne, `_assert_writable` sur les gestes

@@ -110,6 +110,12 @@ def _get_schema(ctx: ResolvedCtx, inp: GetSchemaInput) -> dict:
     # migration qui retouche des schémas se rejoue à chaque boot. Le résidu est
     # inerte : ce qui nuisait, c'était son silence.
     averts = [dsv2.unknown_keys_read_warning(dsv2.unknown_declaration_keys(schema)),
+              # 08/09/2026 — deux orthographes libres d'une même clé dans ce schéma.
+              # Servi au LECTEUR autant qu'à l'auteur : c'est le consommateur en aval
+              # qui découvre qu'une colonne manque à son regroupement, et lui seul
+              # sait laquelle des deux formes il lit vraiment.
+              dsv2.cles_jumelles_warning(
+                  dsv2.cles_libres_jumelles(dsv2.unknown_declaration_keys(schema))),
               # 07/09/2026 — MÊME défaut, autre clé, et celui-ci coûte une file de
               # travail entière. `lifecycle` n'est lu que sur le champ `role: "status"`
               # : posé ailleurs, il est stocké, servi… et sans le moindre effet. Plus
