@@ -28,7 +28,7 @@ CONNECTOR = _c(
                         help="Stripe Dashboard → Developers → API keys → « Create "
                              "restricted key » ; des permissions en LECTURE suffisent. "
                              "Une clé publiable `pk_…` est refusée : elle ne lit rien."),
-        CredentialField("api_version", "Version d'API (optionnel)", secret=False,
+        CredentialField("api_version", "Version d'API", secret=False,
                         required=False,
                         help="vide = la version par défaut du compte, celle que montre "
                              "son dashboard"),

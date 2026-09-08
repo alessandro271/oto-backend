@@ -27,7 +27,7 @@ CONNECTOR = _c(
         CredentialField("host", "Région / instance", secret=False, required=False,
                         help="https://us.posthog.com (défaut) ou "
                              "https://eu.posthog.com, ou l'URL de votre instance"),
-        CredentialField("project_id", "Projet par défaut (optionnel)", secret=False,
+        CredentialField("project_id", "Projet par défaut", secret=False,
                         required=False,
                         help="épingle la clé sur UN projet ; sinon résolu "
                              "automatiquement depuis la clé"),

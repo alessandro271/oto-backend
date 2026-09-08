@@ -56,7 +56,7 @@ CONNECTOR = _c(
                              "champs à remplir ensuite"),
         CredentialField("label", "Nom affiché", secret=False,
                         required=False, help="ex. « API Acme » — visible de ta seule org"),
-        CredentialField("doc_path", "Route de doc (optionnel)", secret=False,
+        CredentialField("doc_path", "Route de doc", secret=False,
                         required=False,
                         help="chemin relatif à base_url qui rend la documentation "
                              "de l'API (ex. /openapi.json) — sert le tool `http_doc`, "
@@ -81,7 +81,7 @@ CONNECTOR = _c(
                         when=("oauth2",), help="secret de l'application cliente"),
         CredentialField("scope", "Scope", secret=False,
                         when=("oauth2",), required=False,
-                        help="scopes demandés au serveur de token (optionnel)"),
+                        help="scopes demandés au serveur de token"),
     ),
 )
 
