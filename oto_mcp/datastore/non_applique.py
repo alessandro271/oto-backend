@@ -236,11 +236,26 @@ def lifecycle_hors_statut_warning(champs: list[str],
 
     # Ce que la file lit VRAIMENT, cran par cran. Dérivé des fonctions qui décident,
     # jamais d'une hypothèse sur ce que l'ancre contient.
+    # ⚠️ **Un diagnostic ne lève JAMAIS sur ce qu'il diagnostique.**
+    # `claimable_of` LÈVE quand le périmètre est déclaré sous une forme illisible —
+    # c'est juste sur le chemin de la file, où ignorer rouvrirait le tableau en
+    # silence. Mais ICI, cette levée faisait échouer la LECTURE ENTIÈRE du schéma :
+    # un tableau au périmètre mal formé devenait illisible, et mon avertissement —
+    # écrit pour signaler des déclarations inertes — cassait sur exactement le genre
+    # de déclaration qu'il existe pour signaler. Trouvé avant livraison, sur le
+    # schéma réel d'un banc de flotte.
+    def _perimetre_utilisable() -> bool:
+        try:
+            return claimable_of(schema) is not None
+        # noqa: SILENT — une forme illisible est signalée à part, ligne suivante
+        except Exception:
+            return False
+
     manques = [nom for nom, present in (
         ("état terminal", bool(terminal_states(schema))),
         ("plafond de reprises", max_claims_of(schema) is not None),
         ("état d'abandon", abandon_state_of(schema) is not None),
-        ("périmètre de réservation", claimable_of(schema) is not None),
+        ("périmètre de réservation", _perimetre_utilisable()),
     ) if not present]
 
     lc_ancre = lifecycle_of(schema)
