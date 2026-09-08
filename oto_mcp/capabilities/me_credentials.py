@@ -145,23 +145,118 @@ class CredentialCleared(BaseModel):
 
 # --- Garde partagée ---------------------------------------------------------
 
-def _credentialable(provider: str, scope: str = "member"):
-    """Connecteur qui accepte un credential SAISI à ce palier (registre, jamais une
-    liste en dur) : un schéma de saisie, plus l'éligibilité du palier — `byo_user`
-    au palier membre, org-partageable aux paliers équipe et org. Les flux dédiés
-    (session navigateur, OAuth) n'ont pas de formulaire et passent ailleurs.
+# Les paliers de cette surface, dans l'ordre où on les nomme à l'appelant.
+_PALIERS = ("member", "group", "org")
 
-    ⚠️ L'éligibilité était `byo_user` QUEL QUE SOIT le palier jusqu'au 2026-08-27 :
-    un connecteur purement `byo_org` — `http`, donc TOUS les ponts clients (ADR
-    0003/0037) — se faisait répondre « connecteur inconnu » en lecture comme en
-    retrait à l'échelle équipe ou org. C'est la racine du formulaire vide décrit
-    par oto-backend#448."""
+# La surface qui pose une clé d'ORG — citée par le refus de la POSE, qui n'a pas de
+# `scope` à proposer. Chemin littéral du binding de `org.secret.set` : un test le
+# confronte aux routes réellement servies, pour qu'un remède cité reste atteignable.
+_POSE_ORG = "/api/orgs/{id}/secrets/{provider}"
+
+
+def _palier_accepte(provider: str, scope: str) -> bool:
+    """Ce palier accepte-t-il une clé SAISIE pour ce connecteur ? — `byo_user` au
+    palier membre, org-partageable aux paliers équipe et org.
+
+    ⚠️ **Lue par la garde ET par son message.** C'est la même fonction qui refuse et
+    qui énumère les paliers à proposer : deux lecteurs séparés dériveraient, et le
+    refus se remettrait à nommer une cause qui n'est plus la sienne — précisément le
+    défaut corrigé le 2026-09-08."""
+    return (providers.is_org_shareable(provider) if scope in ("org", "group")
+            else providers.is_byo_user(provider))
+
+
+def _paliers_acceptes(provider: str) -> tuple[str, ...]:
+    return tuple(p for p in _PALIERS if _palier_accepte(provider, p))
+
+
+def _exiger_credentialable(provider: str, scope: str = "member", *,
+                           formulaire: bool = True, pose: bool = False):
+    """Le connecteur qui accepte un credential SAISI à ce palier — ou un refus qui dit
+    LAQUELLE des quatre raisons a mordu, et par où passer.
+
+    Ces quatre-là rendaient un `None` indistinct jusqu'au 2026-09-08, et les trois
+    appelants le traduisaient tous en `404 unknown_provider` / « Connecteur inconnu » :
+
+    1. le nom n'est pas au registre — le seul vrai « inconnu » ;
+    2. le connecteur DÉLÈGUE sa clé (`credential_of`) : whatsapp, telegram et les
+       autres canaux la posent sur `unipile` ;
+    3. il n'a aucun champ de saisie : sa connexion passe par un flux dédié (session
+       de navigateur, consentement OAuth) — il n'y a pas de formulaire à servir ;
+    4. il en a un, mais pas à CE palier — `http`, org-partageable et jamais
+       `byo_user`, refusé au palier membre qui est le DÉFAUT.
+
+    ⚠️ **Le coût était dans le TEXTE, pas dans le refus.** Le 2026-09-08, deux
+    sessions ont lu « Connecteur inconnu : `http` » et en ont déduit que la production
+    tournait une version antérieure au connecteur ; l'une est partie chercher un
+    arbitrage de déploiement qui n'existait pas. Un refus qui nomme la mauvaise cause
+    envoie chercher au mauvais endroit — c'est plus cher qu'un refus tout court. La
+    mesure du 2026-09-08 : **29 des connecteurs du registre** recevaient « inconnu »
+    au palier membre.
+
+    C'est le pendant du bug de comportement du 2026-08-27, où ce même chemin évaluait
+    l'éligibilité au mauvais palier et faisait échouer tous les ponts clients (ADR
+    0003/0037, oto-backend#448). Le comportement avait été corrigé ce jour-là ; le
+    message, lui, continuait de désigner le registre.
+
+    `formulaire=False` : le RETRAIT n'exige pas de champ de saisie (on efface aussi une
+    session de navigateur, brevo/crunchbase) — et il ne refuse pas non plus un
+    connecteur délégué, dont l'effacement est aujourd'hui un no-op accepté.
+    `pose=True` : la pose n'a pas de `scope`, son refus cite donc la route d'org.
+
+    ⚠️ **Ce que ce refus décrit est la règle de CETTE surface**, pas celle du coffre :
+    `providers.require_credential("group", …)` accepte `org_shareable OU byo_user` là
+    où `_palier_accepte` exige `org_shareable`. La divergence est antérieure et n'est
+    pas touchée ici (elle change ce qui est LU, pas ce qui est DIT) — mais elle est
+    la raison pour laquelle le texte ci-dessous dit « cette surface », jamais
+    « nulle part »."""
     c = providers.connector_for_provider(provider)
-    if c is None or not c.secret_fields:
-        return None
-    eligible = (providers.is_org_shareable(provider) if scope in ("org", "group")
-                else providers.is_byo_user(provider))
-    return c if eligible else None
+    if c is None:
+        raise AuthzDenied(
+            404, "unknown_provider",
+            f"Connecteur inconnu : `{provider}` n'est pas au registre "
+            f"(`GET /api/connectors` liste les noms servis).")
+    porteur = providers.credential_provider(provider)
+    if formulaire and porteur != provider:
+        raise AuthzDenied(
+            400, "credential_delegated",
+            f"`{provider}` ne porte pas de clé à lui : elle se pose sur `{porteur}`, "
+            f"un seul compte fournisseur pour toutes ses connexions. Rejoue sur "
+            f"`{porteur}`.")
+    if formulaire and not c.secret_fields:
+        raise AuthzDenied(
+            400, "no_credential_form",
+            f"`{provider}` est au registre, mais il n'a aucun champ de credential à "
+            f"saisir : sa connexion passe par un flux dédié — session de navigateur "
+            f"hébergée ou consentement OAuth — depuis sa carte de connecteur "
+            f"(`GET /api/connectors`).")
+    if not _palier_accepte(provider, scope):
+        raise AuthzDenied(400, "wrong_credential_scope",
+                          _refus_de_palier(provider, scope, pose=pose))
+    return c
+
+
+def _refus_de_palier(provider: str, scope: str, *, pose: bool = False) -> str:
+    """Le texte du refus de palier : la cause, puis la DESTINATION. Nommer la cause ne
+    suffit pas — « ce connecteur ne se pose qu'au palier organisation » dit quoi faire,
+    « connecteur inconnu » envoie chercher ailleurs."""
+    acceptes = _paliers_acceptes(provider)
+    debut = (f"`{provider}` est bien au registre, mais cette surface n'y sert pas de "
+             f"credential au palier `{scope}`")
+    if not acceptes:
+        return (f"{debut} : il n'accepte aucune clé apportée, à aucun palier — il est "
+                f"servi par la clé de la plateforme, il n'y a rien à poser.")
+    liste = " et ".join(f"`{p}`" for p in acceptes)
+    palier = ("palier " if len(acceptes) == 1 else "paliers ") + liste
+    if pose:
+        # La pose écrit TOUJOURS au palier membre (ADR 0033) : lui proposer un `scope`
+        # serait un remède inatteignable depuis sa propre face. On cite la surface qui,
+        # elle, pose la clé du palier visé.
+        return (f"{debut} : elle pose TA clé (palier `member`), et ce connecteur se "
+                f"pose au {palier}. Une clé d'org se pose par "
+                f"`PUT {_POSE_ORG}` (admin d'org requis).")
+    vise = "org" if "org" in acceptes else acceptes[0]
+    return (f"{debut} : il se pose au {palier}. Rejoue avec `scope={vise}`.")
 
 
 def _scoped_entity(ctx: ResolvedCtx, scope: str, org_id) -> tuple[str, str]:
@@ -218,9 +313,7 @@ def _get(ctx: ResolvedCtx, inp: CredentialGetInput) -> dict:
     aucune surface capable d'en rendre la `base_url` (oto-backend#448). Le formulaire
     vide n'était pas un choix d'UI : le backend n'avait rien à servir."""
     scope = (inp.scope or "member").strip() or "member"
-    c = _credentialable(inp.provider, scope)
-    if c is None:
-        raise AuthzDenied(404, "unknown_provider", f"Connecteur inconnu : `{inp.provider}`.")
+    c = _exiger_credentialable(inp.provider, scope)
     # Le refus AVANT toute lecture du coffre : demander la valeur n'est pas une requête
     # qu'on sert à moitié. Un 200 amputé se lirait « aucune clé posée ».
     if inp.reveal:
@@ -273,9 +366,7 @@ async def _set(ctx: ResolvedCtx, inp: CredentialSetInput) -> dict:
     from .. import status_hints
     from ..connectors import verify as connector_verify
 
-    c = _credentialable(inp.provider)
-    if c is None:
-        raise AuthzDenied(404, "unknown_provider", f"Connecteur inconnu : `{inp.provider}`.")
+    c = _exiger_credentialable(inp.provider, pose=True)
     # RBAC connecteur (ADR 0025) : aligner la POSE sur l'USAGE — un membre non autorisé
     # sur un connecteur RESTREINT dans son org ne peut pas poser de clé perso (sinon une
     # clé inerte serait posable hors UI). Même seam que la résolution.
@@ -364,15 +455,16 @@ async def _set(ctx: ResolvedCtx, inp: CredentialSetInput) -> dict:
 def _clear(ctx: ResolvedCtx, inp: CredentialClearInput) -> dict:
     # Effacer est générique : tout connecteur `byo_user`, y compris une session
     # navigateur sans champ de saisie (brevo/crunchbase) — on ne dépend donc PAS de
-    # `secret_fields` comme la lecture et la pose.
+    # `secret_fields` comme la lecture et la pose, d'où `formulaire=False`.
+    #
+    # ⚠️ L'éligibilité était RECOPIÉE ici jusqu'au 2026-09-08, et le refus avec elle :
+    # le même « Connecteur inconnu » mensonger vivait donc en double, et une correction
+    # d'un seul côté en aurait laissé un. Elle est maintenant lue par la fonction
+    # partagée — un palier qui change, change aux trois surfaces d'un coup.
     scope = (inp.scope or "member").strip() or "member"
-    if scope not in ("member", "group", "org"):
+    if scope not in _PALIERS:
         scope = "member"
-    c = providers.connector_for_provider(inp.provider)
-    eligible = (providers.is_org_shareable(inp.provider) if scope in ("org", "group")
-                else providers.is_byo_user(inp.provider))
-    if c is None or not eligible:
-        raise AuthzDenied(404, "unknown_provider", f"Connecteur inconnu : `{inp.provider}`.")
+    _exiger_credentialable(inp.provider, scope, formulaire=False)
     org_id = _org_of(ctx.sub)
     account = (inp.account or "").strip()
     entity_type, entity_id = _scoped_entity(ctx, scope, org_id)
@@ -469,8 +561,25 @@ _REFUS_DE_PALIER = (
                   "`scope=org` ou `group` sans être admin de ce palier — un membre "
                   "ne lit ni ne retire la clé partagée d'un autre"),
 )
+# Les quatre refus de CONNECTEUR, un par cause. Ils n'en faisaient qu'un jusqu'au
+# 2026-09-08 — `unknown_provider` pour les quatre — et le document promettait donc
+# « inconnu » à 29 connecteurs du registre. Un code par cause, parce qu'un client
+# généré s'y branche et qu'un agent n'a que ça pour choisir son geste suivant.
 _CONNECTEUR_INCONNU = DeclaredError(
-    404, "unknown_provider", "aucun connecteur de ce nom au registre")
+    404, "unknown_provider", "aucun connecteur de ce nom au registre — le seul cas où "
+    "chercher un nom ailleurs a un sens")
+_REFUS_DE_CONNECTEUR = (
+    _CONNECTEUR_INCONNU,
+    DeclaredError(400, "credential_delegated",
+                  "le connecteur existe mais ne porte pas de clé à lui : le refus "
+                  "nomme le connecteur porteur (un canal unipile → `unipile`)"),
+    DeclaredError(400, "no_credential_form",
+                  "le connecteur existe mais n'a aucun champ de credential : sa "
+                  "connexion passe par un flux dédié, pas par un formulaire"),
+    DeclaredError(400, "wrong_credential_scope",
+                  "le connecteur existe et prend bien une clé, mais pas au palier "
+                  "demandé — le refus nomme le ou les paliers qui l'acceptent"),
+)
 
 
 CAPABILITIES += [
@@ -478,7 +587,7 @@ CAPABILITIES += [
         key="me.credential.get", handler=_get, Input=CredentialGetInput,
         authz=SUB_ONLY, Output=CredentialState, description=_DOC_GET,
         mcp=None,   # un secret ne passe pas en argument d'outil
-        errors=(*_REFUS_DE_PALIER, _CONNECTEUR_INCONNU,
+        errors=(*_REFUS_DE_PALIER, *_REFUS_DE_CONNECTEUR,
                 DeclaredError(403, "secret_never_revealed",
                               "`reveal=true` — la valeur d'un credential ne se relit "
                               "à aucun palier ; la réponse porte de quoi la "
@@ -497,7 +606,7 @@ CAPABILITIES += [
         # la clé membre est posée DANS l'org de contexte, que le handler résout. Je
         # l'avais retiré le 01/09 sur la déduction « pas de scope ⟹ pas de contexte
         # d'org » ; le graphe d'appel dit l'inverse, et il a raison.
-        errors=(_CONNECTEUR_INCONNU, _REFUS_DE_PALIER[0],
+        errors=(*_REFUS_DE_CONNECTEUR, _REFUS_DE_PALIER[0],
                 DeclaredError(400, "single_account_connector",
                               "un `account` nommé sur un connecteur qui n'en gère "
                               "qu'un — la clé écraserait l'unique"),
@@ -525,7 +634,11 @@ CAPABILITIES += [
         key="me.credential.clear", handler=_clear, Input=CredentialClearInput,
         authz=SUB_ONLY, Output=CredentialCleared, description=_DOC_CLEAR,
         mcp=None,
-        errors=(*_REFUS_DE_PALIER, _CONNECTEUR_INCONNU),
+        # Ni `credential_delegated` ni `no_credential_form` : le retrait passe
+        # `formulaire=False` — il efface aussi une session de navigateur, et il
+        # n'oppose rien à un canal délégué (effacement no-op, inchangé).
+        errors=(*_REFUS_DE_PALIER, _CONNECTEUR_INCONNU,
+                _REFUS_DE_CONNECTEUR[3]),
         rest=RestBinding("DELETE", _PATH),
     ),
 ]

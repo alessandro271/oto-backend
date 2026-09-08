@@ -192,3 +192,115 @@ def test_reposer_une_cle_ne_reporte_jamais_une_sante_precedente(monkeypatch, vau
     assert meta is None or "health_ko" not in meta, (
         f"un `meta` qui reporterait `health_ko` empêcherait toute reconnexion de "
         f"démarquer une ligne rejetée : {meta!r}")
+
+
+# --- Le refus dit CE QUI CLOCHE, et OÙ aller (oto#…, 08/09/2026) -------------
+#
+# `_credentialable` rendait `None` pour QUATRE raisons distinctes et ses trois
+# appelants traduisaient les quatre en un seul « 404 Connecteur inconnu ». Le
+# 08/09/2026, deux sessions ont lu ce message sur `http` — org-partageable, jamais
+# `byo_user`, donc refusé au palier membre qui est le DÉFAUT — et en ont déduit que
+# la production tournait une version antérieure au connecteur. L'une est partie
+# chercher un arbitrage de déploiement qui n'existait pas.
+#
+# Un refus qui nomme la mauvaise cause envoie chercher au mauvais endroit : c'est
+# plus cher qu'un refus tout court. Ces tests exigent donc DEUX choses de chaque
+# refus — le bon code, et la DESTINATION (le palier, la route ou le porteur qui,
+# lui, accepterait). Et la destination nommée est ENCHAÎNÉE : on rejoue par où le
+# message envoie, et on prouve que ça passe.
+
+def test_le_palier_membre_sur_un_connecteur_org_ne_dit_pas_inconnu(monkeypatch, vault):
+    """`http` est au registre, avec 13 champs de credential : il n'est pas inconnu.
+    Ce qui cloche est le PALIER — il n'est pas `byo_user`."""
+    stub_authz(monkeypatch)
+    code, out = call("me.credential.get", path_params={"provider": "http"})
+    assert out["error"] != "unknown_provider", (
+        "`http` EST au registre : dire « connecteur inconnu » envoie chercher un "
+        "déploiement manquant. C'est le voyage qu'ont fait deux sessions le 08/09.")
+    assert code == 400 and out["error"] == "wrong_credential_scope"
+
+
+def test_ce_refus_de_palier_nomme_le_palier_qui_accepte(monkeypatch, vault):
+    """Nommer la cause ne suffit pas : le refus doit dire OÙ ça se pose."""
+    stub_authz(monkeypatch)
+    _, out = call("me.credential.get", path_params={"provider": "http"})
+    detail = out["detail"] or ""
+    assert "http" in detail and "org" in detail, detail
+    assert "scope=org" in detail, (
+        f"le refus doit porter le geste à rejouer, pas seulement son diagnostic : {detail!r}")
+
+
+def test_le_palier_nomme_par_le_refus_passe_vraiment(monkeypatch, vault):
+    """La destination est ENCHAÎNÉE, pas seulement citée : on rejoue au palier que
+    le message désigne et on vérifie qu'il franchit la garde d'éligibilité (il tombe
+    alors sur le coffre vide, `not_configured` — pas sur un refus de connecteur)."""
+    stub_authz(monkeypatch)
+    monkeypatch.setattr(mc.roles, "is_org_admin", lambda sub, org: True)
+    code, out = call("me.credential.get", path_params={"provider": "http"},
+                     query=b"scope=org")
+    assert (code, out["error"]) == (404, "not_configured"), (
+        f"le message envoie vers `scope=org` : ce palier doit passer la garde. {out!r}")
+
+
+def test_le_retrait_nomme_le_palier_lui_aussi(monkeypatch, vault):
+    """`_clear` recopiait l'éligibilité au lieu de la partager : le même mensonge y
+    vivait en double."""
+    stub_authz(monkeypatch)
+    code, out = call("me.credential.clear", path_params={"provider": "http"})
+    assert code == 400 and out["error"] == "wrong_credential_scope"
+    assert "scope=org" in (out["detail"] or "")
+
+
+def test_la_pose_envoie_vers_une_route_qui_existe(monkeypatch, vault):
+    """La pose n'a PAS de `scope` (ADR 0033 : elle écrit toujours au palier membre) —
+    lui dire « rejoue avec scope=org » serait un remède inatteignable depuis sa face.
+    Elle doit nommer la surface qui, elle, pose une clé d'org."""
+    stub_authz(monkeypatch)
+    code, out = _post({"base_url": "https://x"}, provider="http")
+    assert code == 400 and out["error"] == "wrong_credential_scope"
+    detail = out["detail"] or ""
+    routes = {b.path for c in mc.CAPABILITIES for b in c.rest_bindings()}
+    citees = [r for r in routes if r in detail]
+    assert citees, (
+        f"le refus doit citer une route SERVIE, pas un chemin plausible : {detail!r}")
+
+
+def test_un_connecteur_delegue_nomme_son_porteur(monkeypatch, vault):
+    """`whatsapp` n'a pas de clé à lui : elle se pose sur `unipile`. Le registre le
+    sait (`credential_of`) — le refus le disait « inconnu »."""
+    stub_authz(monkeypatch)
+    code, out = _post({"key": "K"}, provider="whatsapp")
+    assert code == 400 and out["error"] == "credential_delegated"
+    assert "unipile" in (out["detail"] or "")
+
+
+def test_un_connecteur_sans_formulaire_dit_son_flux(monkeypatch, vault):
+    """`crunchbase` est `byo_user` et bien au registre, mais sans aucun champ de
+    saisie : il se connecte par session navigateur. « Inconnu » est faux."""
+    stub_authz(monkeypatch)
+    code, out = call("me.credential.get", path_params={"provider": "crunchbase"})
+    assert code == 400 and out["error"] == "no_credential_form"
+    assert "crunchbase" in (out["detail"] or "")
+
+
+def test_AUCUN_connecteur_du_registre_ne_se_fait_dire_inconnu(monkeypatch, vault):
+    """Le garde-fou du MOTIF, pas du cas : on ÉNUMÈRE le registre entier plutôt que
+    de rejouer les trois noms qui ont mordu. `unknown_provider` doit rester réservé à
+    un nom absent du registre — sinon la surface renvoie chercher un déploiement."""
+    stub_authz(monkeypatch)
+    from oto_mcp import providers
+    coupables = []
+    for nom in sorted(providers.REGISTRY):
+        _, out = call("me.credential.get", path_params={"provider": nom})
+        if out.get("error") == "unknown_provider":
+            coupables.append(nom)
+    assert coupables == [], (
+        f"{len(coupables)} connecteurs du registre se font dire « inconnu » : {coupables}")
+
+
+def test_un_nom_absent_du_registre_reste_un_404_inconnu(monkeypatch, vault):
+    """Le pendant : à force de nommer les causes, `unknown_provider` doit rester
+    LEVÉ pour celle qui le mérite."""
+    stub_authz(monkeypatch)
+    code, out = call("me.credential.get", path_params={"provider": "pas-au-registre"})
+    assert code == 404 and out["error"] == "unknown_provider"

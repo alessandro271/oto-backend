@@ -144,7 +144,18 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   connecteur (publiés par `GET /api/connectors`), plus `account` — le nom du compte visé
   quand le connecteur en porte plusieurs (le mot d'usage est dans `auth.account_noun` :
   « workspace » pour Slack). D'où le cran `body_field` du binding : sans lui, la garde de
-  champ inconnu refuserait chaque clé de credential. Refus nommés : `404 unknown_provider`,
+  champ inconnu refuserait chaque clé de credential.
+  **Le refus de CONNECTEUR dit laquelle des quatre causes a mordu** (depuis le
+  2026-09-08 ; les quatre rendaient `404 unknown_provider` avant, et 29 connecteurs du
+  registre s'entendaient donc dire « inconnu » au palier membre — deux sessions y ont
+  lu, le 08/09, un déploiement manquant) : `404 unknown_provider` = le nom n'est pas au
+  registre, le seul cas où chercher ailleurs a un sens ; `400 credential_delegated` = il
+  ne porte pas de clé à lui, le refus **nomme le porteur** (un canal unipile →
+  `unipile`) ; `400 no_credential_form` = pas de champ de saisie, la connexion passe par
+  un flux dédié (session de navigateur, consentement OAuth) ; `400 wrong_credential_scope`
+  = il prend bien une clé, mais pas à ce palier — le refus **nomme le palier** qui
+  l'accepte (`http` : `scope=org`) et, pour le `POST` qui n'a pas de `scope`, la route
+  qui la pose (`PUT /api/orgs/{id}/secrets/{provider}`). Autres refus :
   `403 connector_restricted` (RBAC ADR 0025 — la pose suit l'usage), `400 missing_credentials`
   (le champ vide est NOMMÉ), `409 account_required` (pose anonyme là où des comptes nommés
   existent), `400 single_account_connector` (compte nommé sur un connecteur qui ne les
