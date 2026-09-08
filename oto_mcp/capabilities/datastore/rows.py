@@ -85,9 +85,26 @@ class ListRowsInput(BaseModel):
     # JSON encodé : liste de clauses `{field, op, value}`, combinées en ET.
     filters: Optional[str] = None
     layers: str = _LAYERS
-    versions: Optional[list[str]] = _VERSIONS
+    versions: Optional[list[str] | str] = _VERSIONS
 
     _coerce = field_validator("offset", "limit", mode="before")(_tolerant_int)
+
+    @field_validator("versions", mode="after")
+    @classmethod
+    def _versions_en_liste(cls, v):
+        """⚠️ **Une URL ne transporte que des chaînes.** Déclarer `list[str]` seul rend
+        le champ INATTEIGNABLE par la surface qui le porte : `?versions=a,b` sort en
+        `400 invalid_input`, et le paramètre a l'air servi sans l'être — c'est ce qui a
+        laissé `?include=` mort quinze jours (#367). Même patron que `node_rows.filter`
+        et `projects.include`, pour la même raison.
+
+        La virgule sépare une valeur unique ; la forme répétée (`?versions=a&versions=b`) arrive
+        déjà en liste depuis l'adaptateur. Les deux se combinent."""
+        if v is None:
+            return None
+        brut = v if isinstance(v, list) else str(v).split(",")
+        return [m for m in (str(x).strip() for x in brut) if m]
+
 
 
 class AggregateInput(BaseModel):
@@ -116,7 +133,19 @@ class GetRowInput(RowRefInput):
     """La lecture d'une ligne seule porte `layers` ; `RowRefInput` reste partagé avec
     la suppression, qui n'a pas de forme à choisir."""
     layers: str = _LAYERS
-    versions: Optional[list[str]] = _VERSIONS
+    versions: Optional[list[str] | str] = _VERSIONS
+
+    @field_validator("versions", mode="after")
+    @classmethod
+    def _versions_en_liste(cls, v):
+        """⚠️ **Une URL ne transporte que des chaînes.** Déclarer `list[str]` seul rend
+        le champ INATTEIGNABLE par la surface qui le porte : `?versions=a,b` sort en
+        `400 invalid_input`, et le paramètre a l'air servi sans l'être — ce qui a laissé
+        `?include=` mort quinze jours (#367). Même patron que `node_rows.filter`."""
+        if v is None:
+            return None
+        brut = v if isinstance(v, list) else str(v).split(",")
+        return [m for m in (str(x).strip() for x in brut) if m]
 
 
 # #658 : le corps EST la ligne (`RestBinding.body_field`) — le forçage ne peut donc
@@ -152,9 +181,26 @@ class AppendRowInput(BaseModel):
     # Le corps ENTIER (cf. `RestBinding.body_field`) : les colonnes du tableau.
     row: dict = Field(default_factory=dict)
     readonly_override: bool = _FORCAGE
-    force: Optional[list[str]] = _FORCE
+    force: Optional[list[str] | str] = _FORCE
     origine_override: bool = _ORIGINE
     donnees_d_origine: bool = _DONNEES_D_ORIGINE
+
+    @field_validator("force", mode="after")
+    @classmethod
+    def _force_en_liste(cls, v):
+        """⚠️ **Une URL ne transporte que des chaînes.** Déclarer `list[str]` seul rend
+        le champ INATTEIGNABLE par la surface qui le porte : `?force=a,b` sort en
+        `400 invalid_input`, et le paramètre a l'air servi sans l'être — c'est ce qui a
+        laissé `?include=` mort quinze jours (#367). Même patron que `node_rows.filter`
+        et `projects.include`, pour la même raison.
+
+        La virgule sépare une valeur unique ; la forme répétée (`?force=a&force=b`) arrive
+        déjà en liste depuis l'adaptateur. Les deux se combinent."""
+        if v is None:
+            return None
+        brut = v if isinstance(v, list) else str(v).split(",")
+        return [m for m in (str(x).strip() for x in brut) if m]
+
 
 
 class UpdateRowInput(BaseModel):
@@ -163,9 +209,26 @@ class UpdateRowInput(BaseModel):
     # Le corps ENTIER : les colonnes à écrire (patch partiel, jamais un remplacement).
     patch: dict = Field(default_factory=dict)
     readonly_override: bool = _FORCAGE
-    force: Optional[list[str]] = _FORCE
+    force: Optional[list[str] | str] = _FORCE
     origine_override: bool = _ORIGINE
     donnees_d_origine: bool = _DONNEES_D_ORIGINE
+
+    @field_validator("force", mode="after")
+    @classmethod
+    def _force_en_liste(cls, v):
+        """⚠️ **Une URL ne transporte que des chaînes.** Déclarer `list[str]` seul rend
+        le champ INATTEIGNABLE par la surface qui le porte : `?force=a,b` sort en
+        `400 invalid_input`, et le paramètre a l'air servi sans l'être — c'est ce qui a
+        laissé `?include=` mort quinze jours (#367). Même patron que `node_rows.filter`
+        et `projects.include`, pour la même raison.
+
+        La virgule sépare une valeur unique ; la forme répétée (`?force=a&force=b`) arrive
+        déjà en liste depuis l'adaptateur. Les deux se combinent."""
+        if v is None:
+            return None
+        brut = v if isinstance(v, list) else str(v).split(",")
+        return [m for m in (str(x).strip() for x in brut) if m]
+
 
 
 class ReleaseInput(BaseModel):

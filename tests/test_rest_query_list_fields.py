@@ -46,6 +46,11 @@ EXEMPLES: dict[tuple[str, str], str] = {
     ("me.project_read", "include"): "spine,procedures",
     ("me.search", "kinds"): "page,procedure",
     ("me.node.rows", "filter"): "statut:actif",
+    # oto#140 — les deux versions d'une case, demandées dans le MÊME appel : c'est
+    # exactement l'URL que tape l'écran des écarts, et deux appels ne seraient pas
+    # atomiques. Valeur métier, pas un `a,b` de façade.
+    ("me.datastore.list_rows", "versions"): "current,origine",
+    ("me.datastore.get_row", "versions"): "current,origine",
 }
 
 
