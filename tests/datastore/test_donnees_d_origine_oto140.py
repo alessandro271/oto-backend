@@ -21,9 +21,21 @@ import uuid
 import pytest
 
 from oto_mcp.datastore import schema as dsv2
-from tests.datastore.test_couche_origine_semantique import (  # noqa: F401
-    _blob, _store, live,
-)
+# `live` vient de `conftest.py` — pytest la découvre, rien à importer.
+
+def _store():
+    from oto_mcp.datastore.core import make_store
+    return make_store("sub-test")
+
+
+def _blob(ns_id: int, row_id: str) -> dict:
+    """Ce que porte la BASE, jamais ce que le store a bien voulu rendre."""
+    from oto_mcp.db._conn import _connect
+    with _connect() as conn:
+        r = conn.execute("SELECT data FROM datastore_rows WHERE ns_id=%s AND row_id=%s",
+                         (ns_id, row_id)).fetchone()
+    return dict((r or {}).get("data") or {})
+
 
 SCHEMA = {"key": "siren", "fields": [
     {"key": "siren", "type": "text"},
