@@ -56,7 +56,7 @@ def test_ecriture_ratee_ne_se_declare_pas_creee(client, monkeypatch):
     """L'annuaire a répondu, le PATCH a échoué : le callback n'y est pas, donc
     l'`/authorize` sera refusé. Annoncer 201 déplacerait le diagnostic chez un
     client qui ne lit pas nos journaux."""
-    def _echoue(app_id, redirects):
+    def _echoue(app_id, redirects, directory=None):
         raise RedirectRegistrationFailed("PATCH refusé")
     monkeypatch.setattr(facade, "_register_redirects", _echoue)
 
@@ -70,7 +70,7 @@ def test_annuaire_injoignable_laisse_le_client_s_installer(client, monkeypatch):
     """État INCONNU : un client déjà enregistré (Claude) doit continuer de
     s'installer pendant un incident de l'annuaire. C'est le régime voulu, et la
     seule branche où un 201 sans écriture reste juste."""
-    def _injoignable(app_id, redirects):
+    def _injoignable(app_id, redirects, directory=None):
         raise ConnectionError("annuaire injoignable")
     monkeypatch.setattr(facade, "_register_redirects", _injoignable)
 
@@ -83,12 +83,16 @@ def test_annuaire_injoignable_laisse_le_client_s_installer(client, monkeypatch):
 def test_enregistrement_reussi_rend_le_client(client, monkeypatch):
     vus = {}
     monkeypatch.setattr(facade, "_register_redirects",
-                        lambda app_id, redirects: vus.update(app=app_id, r=list(redirects)))
+                        lambda app_id, redirects, directory=None:
+                        vus.update(app=app_id, r=list(redirects), d=directory))
 
     r = client.post("/oauth/register", json=_CORPS)
 
     assert r.status_code == 201
     assert vus["r"] == _CORPS["redirect_uris"]
+    # …et sur NOTRE annuaire : le host de la plateforme ne doit jamais partir
+    # écrire chez un tenant, pas plus que l'inverse.
+    assert vus["d"].label == "oto"
 
 
 def test_rappel_inconnu_reste_refuse(client):

@@ -184,6 +184,57 @@ def test_a_tenant_without_an_issuer_does_not_authenticate(monkeypatch):
     assert t["pending_restart"] is False
 
 
+_MGMT = {"token_endpoint": "https://admin.acme.test",
+         "api_endpoint": "https://auth.acme.test",
+         "credential": "LOGTO_ACME_MGMT"}
+
+
+def _avec_mgmt(monkeypatch):
+    ligne = tenants_db._shape_tenant(dict(_TIERS, logto_mgmt=dict(_MGMT)))
+    monkeypatch.setattr(ta.db, "list_tenants_overview", lambda **kw: [ligne])
+    monkeypatch.setattr(tenancy, "_INSTALLED", _registry(
+        {"slug": "acme", "issuer": "https://auth.acme.test/oidc",
+         "hosts": ["mcp.acme.test"], "logto_mgmt": dict(_MGMT)}), raising=False)
+
+
+def test_un_acces_dannuaire_declare_sans_sa_cle_se_voit(monkeypatch):
+    """Déclaré en base ≠ utilisable par CE process. Sans cette confrontation, un refus
+    d'enregistrement (oto-backend#909) ne se rattache à rien de visible : la fiche
+    montrerait un accès posé et la façade refuserait quand même."""
+    _avec_mgmt(monkeypatch)
+    monkeypatch.delenv("LOGTO_ACME_MGMT_ID", raising=False)
+    monkeypatch.delenv("LOGTO_ACME_MGMT_SECRET", raising=False)
+
+    t = ta._tenants(CTX, ta.TenantsInput())["tenants"][0]
+
+    assert t["logto_mgmt"]["api_endpoint"] == "https://auth.acme.test"
+    assert t["directory_admin"] is False
+    # …et la fiche ne porte que le NOM du credential, jamais sa valeur.
+    assert t["logto_mgmt"]["credential"] == "LOGTO_ACME_MGMT"
+
+
+def test_un_acces_dannuaire_complet_est_administrable(monkeypatch):
+    _avec_mgmt(monkeypatch)
+    monkeypatch.setenv("LOGTO_ACME_MGMT_ID", "cid-de-test")
+    monkeypatch.setenv("LOGTO_ACME_MGMT_SECRET", "csec-de-test")
+
+    t = ta._tenants(CTX, ta.TenantsInput())["tenants"][0]
+
+    assert t["directory_admin"] is True
+    assert ta.TenantRow(**t).directory_admin is True
+
+
+def test_sans_declaration_lannuaire_nest_pas_administrable(monkeypatch):
+    """Le défaut, et il le reste : authentifier les comptes d'un tenant ne donne aucun
+    droit d'écrire dans son annuaire."""
+    monkeypatch.setattr(ta.db, "list_tenants_overview", lambda **kw: [dict(_TIERS)])
+    monkeypatch.setattr(tenancy, "_INSTALLED", _registry(
+        {"slug": "acme", "issuer": "https://auth.acme.test/oidc"}), raising=False)
+
+    t = ta._tenants(CTX, ta.TenantsInput())["tenants"][0]
+    assert t["directory_admin"] is False and t["logto_mgmt"] == {}
+
+
 def test_totals_are_summed_from_the_rows(monkeypatch):
     monkeypatch.setattr(ta.db, "list_tenants_overview", lambda **kw: [dict(_OTO), dict(_TIERS)])
     out = ta._tenants(CTX, ta.TenantsInput())

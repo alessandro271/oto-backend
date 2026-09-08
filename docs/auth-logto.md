@@ -8,7 +8,9 @@ description: >-
   qualification du sub par tenant (ADR 0052 — le tenant `oto` garde un sub NU, l'AAD
   du coffre en dérive), et façade DCR (auth/facade.py) qui émule le Dynamic
   Client Registration absent de Logto pour permettre l'auto-installation par Claude,
-  ChatGPT et Mistral sans client_id fixe. Inclut les variables d'environnement
+  ChatGPT et Mistral sans client_id fixe — y compris sur le host d'un TENANT, où le
+  rappel est enregistré dans SON annuaire (`tenants.logto_mgmt`) ou refusé en le
+  disant. Inclut les variables d'environnement
   requises (LOGTO_ENDPOINT, LOGTO_ENDPOINT_ALT, OTO_MCP_CLAUDE_APP_ID,
   OTO_MCP_LOGTO_M2M_*) et les garde-fous _redirect_ok ; à consulter dès qu'un 401 JWT
   ou un échec d'installation MCP est à diagnostiquer.
@@ -85,6 +87,55 @@ callback.mistral.ai, localhost) — pas un registrar ouvert. **Nouveau client qu
 échoue** : son redirect est loggé (`DCR refusé — redirect_uris=…` en journalctl) →
 ajouter son host à `_redirect_ok`. Fail-open : Management API en panne → `client_id`
 renvoyé quand même (Claude, redirect pré-enregistré, jamais cassé).
+
+### Sur le host d'un TENANT : enregistrer chez lui, ou dire qu'on ne l'a pas fait
+
+Un host réclamé par un tenant (`tenants.hosts`) est servi par la MÊME façade, mais
+l'annuaire visé est le sien. Deux choses en découlent, et il a manqué les deux jusqu'au
+2026-09-08 (oto-backend#909) :
+
+- **le client rendu est celui du tenant** (`tenants.oauth_client_id`) — c'est là que
+  l'utilisateur va s'authentifier ;
+- **le rappel doit être enregistré dans SON annuaire.** `_register_redirects` n'était
+  appelé que sur le host de la plateforme : sur `mcp.tulina.ai` la façade rendait **201
+  sans avoir rien posé**, et le client se faisait refuser deux secondes plus tard à
+  l'`/authorize` (`oidc.invalid_redirect_uri`), sans indice.
+
+Un tenant déclare donc où frapper, dans `tenants.logto_mgmt` (JSONB) :
+
+```json
+{"token_endpoint": "https://logto-<tenant>.oto.zone",
+ "api_endpoint":   "https://auth.<tenant>.ai",
+ "credential":     "LOGTO_<TENANT>_MGMT"}
+```
+
+⚠️ **Aucun secret en base** : `credential` est le NOM d'un couple de variables
+d'environnement (`<credential>_ID` / `<credential>_SECRET`) que le process lit à
+l'appel — même convention que le primaire (`OTO_MCP_LOGTO_M2M`), qui n'est donc pas un
+cas particulier mais le premier annuaire.
+
+⚠️ **Les deux endpoints sont un COUPLE, jamais dérivés l'un de l'autre** : chez Logto le
+jeton de management s'obtient sur l'endpoint d'ADMINISTRATION et les appels `/api` vont
+sur l'endpoint PRINCIPAL. L'inverse rend `401 aud check_failed`, très loin de sa cause.
+Sur notre annuaire les deux coïncident — ce qui est exactement ce qui a permis de vivre
+avec une base unique jusqu'au premier annuaire où ils diffèrent.
+
+⚠️ **Le cache de jeton est clefé par annuaire** (`facade._mgmt_toks`, un dict — c'était
+un singleton de module). Partagé, il servirait à l'un le jeton de l'autre : au mieux des
+refus intermittents, au pire une écriture dirigée vers le mauvais annuaire.
+
+**Ce que la façade refuse maintenant, en nommant sa destination** (503
+`temporarily_unavailable`, journal + Sentry `has:oto.dcr`) : pas de client OAuth déclaré
+pour le tenant ; pas d'accès d'annuaire déclaré (→ demander à l'administrateur du tenant
+d'ajouter le rappel à la main) ; accès déclaré mais credential absent de l'environnement
+du process (→ l'injecter). L'écran de suivi (`oto_admin_tenant op=list`) rend
+`logto_mgmt` (déclaré) et `directory_admin` (déclaré **et** clé présente ici) : c'est
+cette confrontation qui rattache un refus à sa cause.
+
+⚠️ **Ordre d'activation d'un tenant** : injecter le credential dans l'environnement du
+process AVANT que sa ligne ne porte `logto_mgmt`, sinon la façade refuse pendant la
+fenêtre. La colonne, elle, est posée par `init_db` au boot — et preprod et prod
+partagent la même base.
 
 **Onboarding actuel = self-serve ouvert.** Le tenant a sign-up activé par
 email magic link, sans allowlist. Quiconque trouve l'URL peut s'inscrire,

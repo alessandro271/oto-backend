@@ -107,6 +107,14 @@ class TenantIssuer:
     oauth_client_id: str = ""
     # Adresse du tableau de bord de ce tenant. Vide = la nôtre (cf. `config`).
     dashboard_url: str = ""
+    # Accès d'ADMINISTRATION de l'annuaire de ce tenant, quand c'est nous qui
+    # l'hébergeons : `{"token_endpoint", "api_endpoint", "credential"}`, ou None.
+    # ⚠️ **Jamais le secret** — `credential` est le NOM d'un couple de variables
+    # d'environnement (`<credential>_ID` / `<credential>_SECRET`), lu au moment de
+    # l'appel. La base dit OÙ frapper et SOUS QUEL nom, le process détient la clé.
+    # Absent = annuaire non administrable par la plateforme, et c'est le défaut :
+    # authentifier un tenant ne donne aucun droit d'écrire dans son annuaire.
+    logto_mgmt: Any = None
     # Chemins par TYPE de lien (`links.DEFAULT_PATHS` pour les types connus).
     # Type absent = ce tenant n'a pas cette vue ⟹ on ne rend AUCUN lien.
     link_paths: Any = None
@@ -187,7 +195,7 @@ def build(primary_issuer: str, drain_issuers: Iterable[str] = (),
 
     def _put(slug: str, issuer, jwks_uri=None, name="", hosts=(),
              oauth_client_id="", dashboard_url="", link_paths=None,
-             tool_prefix="", brand=None) -> None:
+             tool_prefix="", brand=None, logto_mgmt=None) -> None:
         iss = normalize_issuer(issuer)
         if not iss:
             return
@@ -201,7 +209,8 @@ def build(primary_issuer: str, drain_issuers: Iterable[str] = (),
                                     # Tel que DÉCLARÉ (cf. le slug juste au-dessus) :
                                     # `tool_alias.normalize_prefix` juge, il ne répare pas.
                                     tool_prefix=str(tool_prefix or ""),
-                                    brand=brand if isinstance(brand, dict) else None)
+                                    brand=brand if isinstance(brand, dict) else None,
+                                    logto_mgmt=_normalize_mgmt(logto_mgmt, slug))
 
     _put(PRIMARY_SLUG, primary_issuer)
     for drain in drain_issuers or ():
@@ -233,8 +242,56 @@ def build(primary_issuer: str, drain_issuers: Iterable[str] = (),
              dashboard_url=str((row or {}).get("dashboard_url") or ""),
              link_paths=(row or {}).get("link_paths"),
              tool_prefix=(row or {}).get("tool_prefix"),
-             brand=(row or {}).get("brand"))
+             brand=(row or {}).get("brand"),
+             logto_mgmt=(row or {}).get("logto_mgmt"))
     return entries
+
+
+# Le NOM d'un couple de variables d'environnement, pas une valeur. Contraint à la
+# forme d'un identifiant d'env en majuscules : une chaîne libre irait chercher
+# n'importe quelle variable du process, et ce qu'elle rapporterait servirait à
+# s'authentifier quelque part.
+_ENV_REF_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,60}$")
+
+
+def _normalize_mgmt(valeur, slug: str = "") -> Optional[dict]:
+    """Les accès d'administration d'un annuaire, ou **None** — jamais à moitié.
+
+    ⚠️ Les DEUX endpoints sont DÉCLARÉS, jamais dérivés l'un de l'autre : chez Logto
+    le jeton de management s'obtient sur l'endpoint d'ADMINISTRATION et les appels
+    `/api` vont sur l'endpoint PRINCIPAL — l'inverse rend `401 aud check_failed`,
+    très loin de sa cause. Deviner le second à partir du premier, c'est choisir un
+    endpoint à la place du partenaire.
+
+    Une déclaration incomplète ou illisible est REFUSÉE bruyamment (`_refus`) plutôt
+    que rabotée : silencieuse, elle ferait retomber la façade d'enregistrement sur
+    « annuaire non administrable » — c'est-à-dire exactement le défaut qu'elle vient
+    corriger (oto-backend#909), et sans destinataire.
+    """
+    if valeur in (None, "", {}):
+        return None
+    if isinstance(valeur, str):
+        try:
+            valeur = json.loads(valeur)
+        except ValueError:
+            valeur = None
+    if not isinstance(valeur, dict):
+        _refus("registre d'émetteurs : accès d'annuaire du tenant %r illisible — "
+               "son annuaire reste non administrable", slug)
+        return None
+    tok = str(valeur.get("token_endpoint") or "").strip().rstrip("/")
+    api = str(valeur.get("api_endpoint") or "").strip().rstrip("/")
+    cred = str(valeur.get("credential") or "").strip()
+    manque = [nom for nom, ok in (("token_endpoint", tok.startswith("https://")),
+                                  ("api_endpoint", api.startswith("https://")),
+                                  ("credential", bool(_ENV_REF_RE.match(cred))))
+              if not ok]
+    if manque:
+        _refus("registre d'émetteurs : accès d'annuaire du tenant %r refusé "
+               "(%s absent ou invalide) — son annuaire reste non administrable",
+               slug, ", ".join(manque))
+        return None
+    return {"token_endpoint": tok, "api_endpoint": api, "credential": cred}
 
 
 def _normalize_paths(valeur) -> dict:
@@ -399,11 +456,16 @@ class ForeignTenantDirectory(RuntimeError):
     pas du tenant `oto` — donc sur un annuaire qui n'est pas le nôtre.
 
     Connaître le tenant d'un sub suffit à l'**authentifier** (c'est ce que fait le
-    registre ci-dessus, et ça marche), mais pas à **agir dans son annuaire** : la
-    table `tenants` porte `slug`/`issuer`/`jwks_uri`/`hosts` et **aucun credential de
-    management**. Ce qui manque n'est pas l'information du tenant, ce sont les clés de
-    la maison du partenaire — question ouverte, à trancher au lot de provisioning
-    quand un partenaire en aura besoin (oto-backend#274).
+    registre ci-dessus, et ça marche), mais pas à **agir dans son annuaire** : ce qui
+    manque n'est pas l'information du tenant, ce sont les clés de la maison du
+    partenaire (oto-backend#274).
+
+    ⚠️ **`logto_mgmt` n'ouvre pas cette porte-là.** Un tenant dont NOUS hébergeons
+    l'annuaire peut déclarer des accès d'administration, et la façade
+    d'enregistrement s'en sert — mais pour poser un rappel sur une APPLICATION, un
+    objet qui n'appartient à aucun compte. Router un acte qui vise un UTILISATEUR
+    (email autoritatif, MFA) vers l'annuaire d'un tenant est une autre décision, que
+    personne n'a prise : ces chemins restent fermés, et disent pourquoi.
 
     Cette exception existe pour que l'échec DISE ça, au lieu de laisser notre Logto
     répondre « utilisateur inconnu » très loin de la cause.
@@ -422,9 +484,10 @@ def require_primary_tenant(sub: Optional[str], action: str) -> Optional[str]:
     if slug != PRIMARY_SLUG:
         raise ForeignTenantDirectory(
             f"{action} : le compte {sub!r} relève du tenant {slug!r}, pas de "
-            f"{PRIMARY_SLUG!r}. Il n'existe pas dans notre annuaire Logto, et nous "
-            f"n'avons aucun credential de management sur l'émetteur de {slug!r} — "
-            f"cet acte doit être porté par le tenant propriétaire du compte.")
+            f"{PRIMARY_SLUG!r}. Il n'existe pas dans notre annuaire Logto, et aucun "
+            f"acte de management visant un UTILISATEUR n'est routé vers l'émetteur "
+            f"de {slug!r} — cet acte doit être porté par le tenant propriétaire du "
+            f"compte.")
     return sub
 
 

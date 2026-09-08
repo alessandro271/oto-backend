@@ -173,6 +173,9 @@ def test_reconcile_ignore_un_compte_dun_tenant_tiers(registre_avec_un_tiers,
     with caplog.at_level("WARNING", logger=users.logger.name):
         assert users.reconcile_tenant_migration(_ETRANGER) is False
     # Le log dit le tenant ET ce qui manque — pas « lookup Logto échoué », qui
-    # laisserait croire à une panne.
+    # laisserait croire à une panne. ⚠️ Ce qui manque n'est plus « le credential » :
+    # un tenant dont nous hébergeons l'annuaire peut en déclarer un (façade DCR,
+    # oto-backend#909). Ce qui reste fermé, c'est le ROUTAGE d'un acte visant un
+    # utilisateur — décision que personne n'a prise.
     assert "ignorée" in caplog.text and "partenaire" in caplog.text
-    assert "credential de management" in caplog.text
+    assert "aucun acte de management visant un UTILISATEUR" in caplog.text

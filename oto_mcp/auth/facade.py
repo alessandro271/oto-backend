@@ -14,12 +14,19 @@ tokens restent émis et signés par Logto ; on ne fait que les vérifier.
 Le redirect URI de claude.ai est fixe et déjà enregistré sur l'app Logto pré-créée
 (`Claude (oto MCP)`), donc on peut renvoyer le même `client_id` à chaque
 enregistrement sans risque.
+
+⚠️ **« Partagé » vaut par ANNUAIRE, pas pour tout le monde.** Un host réclamé par un
+tenant (`tenants.hosts`) est servi par la même façade, mais l'annuaire visé est le
+sien : son client préparé (`tenants.oauth_client_id`), et le rappel posé chez LUI
+(`tenants.logto_mgmt` → `Directory`). Faute de quoi la façade rendait 201 sans rien
+enregistrer, et l'`/authorize` refusait deux secondes plus tard — oto-backend#909.
 """
 from __future__ import annotations
 
 import logging
 import os
 import time
+from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from pydantic import AnyHttpUrl
@@ -146,39 +153,116 @@ def _redirect_ok(uri: str) -> bool:
 
 
 # ── DCR réelle : enregistrement dynamique du redirect dans l'app Logto ────────
-# Le client_id reste partagé, mais on ÉTEND la liste de redirectUris de l'app
-# Logto à chaque DCR (le redirect de ChatGPT est propre à chaque connecteur →
-# impossible à pré-enregistrer). Ainsi N'IMPORTE QUEL user installe sans
+# Le client_id reste celui de l'annuaire visé, mais on ÉTEND la liste de
+# redirectUris de son app à chaque DCR (le redirect de ChatGPT est propre à chaque
+# connecteur → impossible à pré-enregistrer). Ainsi N'IMPORTE QUEL user installe sans
 # intervention manuelle. Les redirects sont déjà validés par _redirect_ok
 # (host allowlist) → on n'enregistre QUE des callbacks légitimes.
 _UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36"  # vs WAF Cloudflare (1010)
 _MGMT_RESOURCE = "https://default.logto.app/api"
-_mgmt_tok = {"value": None, "exp": 0.0}
+# Le credential de management de NOTRE annuaire, sous la même convention que celle
+# qu'un tenant déclare : `<credential>_ID` / `<credential>_SECRET`. Le primaire n'est
+# donc pas un cas particulier — c'est le premier annuaire, pas le seul.
+_PRIMARY_CREDENTIAL = "OTO_MCP_LOGTO_M2M"
+
+
+@dataclass(frozen=True)
+class Directory:
+    """Un annuaire Logto **administrable** : où prendre le jeton, où poser les appels
+    `/api`, et sous quel credential.
+
+    ⚠️ Les deux endpoints sont un COUPLE, pas une base unique. Chez Logto le jeton de
+    management s'obtient sur l'endpoint d'ADMINISTRATION et les appels `/api` vont sur
+    l'endpoint PRINCIPAL ; l'inverse rend `401 aud check_failed`. Sur notre annuaire
+    les deux coïncident, ce qui est précisément ce qui a permis de vivre longtemps
+    avec une seule variable — et ce qui l'aurait rendue fausse en silence au premier
+    annuaire où ils diffèrent (`auth.tulina.ai` / `logto-tulina.oto.zone`).
+
+    ⚠️ `credential` est le NOM d'un couple de variables d'environnement, jamais une
+    valeur : rien de secret n'entre dans cet objet, donc rien de secret ne peut sortir
+    par un log, une trace d'exception ou une fiche de suivi.
+    """
+    label: str            # le tenant, pour les messages — jamais pour la sélection
+    token_endpoint: str
+    api_endpoint: str
+    credential: str
+
+    @property
+    def key(self) -> str:
+        """L'identité de ce qui PRODUIT le jeton — la clé de son cache.
+
+        Le `label` en est exclu à dessein : deux tenants sur le même annuaire, sous le
+        même credential, partagent légitimement un jeton. Tout le reste y entre, y
+        compris l'endpoint d'API qui ne change pourtant pas le jeton : une différence
+        quelque part doit donner un slot différent, jamais un jeton réutilisé au
+        hasard d'une égalité partielle.
+        """
+        return f"{self.token_endpoint}|{self.api_endpoint}|{self.credential}"
+
+
+# ⚠️ Un dict CLEFÉ par annuaire, jamais un singleton. Le cache était
+# `{"value", "exp"}` au niveau du module, partagé par tous les appelants : brancher un
+# second annuaire dessus ferait servir à l'un le jeton de l'autre — au mieux des refus
+# intermittents, au pire une écriture dirigée vers le mauvais annuaire (oto#909).
+_mgmt_toks: dict = {}
 
 
 def _logto_base() -> str:
     return os.environ["LOGTO_ENDPOINT"].rstrip("/")
 
 
-def _mgmt_token() -> str:
+def _primary_directory() -> Directory:
+    """NOTRE annuaire — le défaut de tout appel de management non qualifié."""
+    from ..tenancy import PRIMARY_SLUG
+    base = _logto_base()
+    return Directory(PRIMARY_SLUG, base, base, _PRIMARY_CREDENTIAL)
+
+
+def directory_for_tenant(entry) -> "Directory | None":
+    """L'annuaire administrable d'un tenant, ou **None** s'il n'en déclare pas.
+
+    `None` est le défaut et le reste : authentifier les comptes d'un tenant ne donne
+    aucun droit d'écrire dans son annuaire. N'en rend un que pour un tenant qui a
+    DÉCLARÉ où frapper et sous quel nom — c'est-à-dire, en pratique, un tenant dont
+    nous hébergeons l'annuaire.
+    """
+    mgmt = getattr(entry, "logto_mgmt", None)
+    if not mgmt:
+        return None
+    return Directory(getattr(entry, "slug", "") or "?", mgmt["token_endpoint"],
+                     mgmt["api_endpoint"], mgmt["credential"])
+
+
+def _credential_present(d: Directory) -> bool:
+    """Le process détient-il la clé de cet annuaire ? Déclaré en base ≠ injecté ici :
+    l'écart est exactement ce qui doit se voir, pas se rattraper."""
+    return bool(os.environ.get(f"{d.credential}_ID")
+                and os.environ.get(f"{d.credential}_SECRET"))
+
+
+def _mgmt_token(directory: "Directory | None" = None) -> str:
     import requests
-    cid = os.environ.get("OTO_MCP_LOGTO_M2M_ID")
-    csec = os.environ.get("OTO_MCP_LOGTO_M2M_SECRET")
+    d = directory or _primary_directory()
+    cid = os.environ.get(f"{d.credential}_ID")
+    csec = os.environ.get(f"{d.credential}_SECRET")
     if not cid or not csec:
-        raise RuntimeError("M2M Logto non configuré (OTO_MCP_LOGTO_M2M_ID/SECRET)")
+        raise RuntimeError(
+            f"annuaire {d.label} : credential de management absent de "
+            f"l'environnement ({d.credential}_ID / {d.credential}_SECRET)")
     now = time.time()
-    if _mgmt_tok["value"] and _mgmt_tok["exp"] > now + 30:
-        return _mgmt_tok["value"]
+    slot = _mgmt_toks.get(d.key)
+    if slot and slot["value"] and slot["exp"] > now + 30:
+        return slot["value"]
     r = requests.post(
-        f"{_logto_base()}/oidc/token",
+        f"{d.token_endpoint}/oidc/token",
         data={"grant_type": "client_credentials", "resource": _MGMT_RESOURCE, "scope": "all"},
         auth=(cid, csec), headers={"User-Agent": _UA}, timeout=15,
     )
     r.raise_for_status()
     j = r.json()
-    _mgmt_tok["value"] = j["access_token"]
-    _mgmt_tok["exp"] = now + int(j.get("expires_in", 3600))
-    return _mgmt_tok["value"]
+    _mgmt_toks[d.key] = {"value": j["access_token"],
+                         "exp": now + int(j.get("expires_in", 3600))}
+    return _mgmt_toks[d.key]["value"]
 
 
 def logto_user_primary_email(sub: str) -> str | None:
@@ -299,13 +383,19 @@ class RedirectRegistrationFailed(RuntimeError):
     injoignable, où l'état reste inconnu — cf. `dcr`."""
 
 
-def _register_redirects(app_id: str, redirect_uris: list) -> None:
-    """Ajoute les `redirect_uris` (déjà validés) à l'app Logto partagée (dédup) +
+def _register_redirects(app_id: str, redirect_uris: list,
+                        directory: "Directory | None" = None) -> None:
+    """Ajoute les `redirect_uris` (déjà validés) à l'app Logto `app_id` (dédup) +
     l'origine CORS https correspondante. Idempotent ; no-op si tout est déjà là.
     Lève si la Management API échoue (l'appelant décide quoi en faire) —
-    `RedirectRegistrationFailed` quand l'échec porte sur l'écriture elle-même."""
+    `RedirectRegistrationFailed` quand l'échec porte sur l'écriture elle-même.
+
+    ⚠️ `app_id` et `directory` sont un COUPLE : une app d'un annuaire patchée dans un
+    autre vise, au mieux, une application inexistante. L'appelant les choisit
+    ensemble, ce module ne les rapproche jamais par défaut."""
     import requests
-    base, tok = _logto_base(), _mgmt_token()
+    d = directory or _primary_directory()
+    base, tok = d.api_endpoint, _mgmt_token(d)
     h = {"Authorization": f"Bearer {tok}", "User-Agent": _UA, "Content-Type": "application/json"}
     data = requests.get(f"{base}/api/applications/{app_id}", headers=h, timeout=15)
     data.raise_for_status()
@@ -332,7 +422,8 @@ def _register_redirects(app_id: str, redirect_uris: list) -> None:
     except Exception as exc:
         raise RedirectRegistrationFailed(
             f"app {app_id} — {len(new)} redirect(s) non enregistré(s)") from exc
-    _log.info("DCR: app %s — +%d redirect(s), cors=%s", app_id, len(new), cors)
+    _log.info("DCR: annuaire %s, app %s — +%d redirect(s), cors=%s",
+              d.label, app_id, len(new), cors)
 
 
 def ensure_api_resource(indicator: str, *, name: str | None = None) -> None:
@@ -420,6 +511,67 @@ def tenant_for_host(host: str):
     return tenancy.current().for_host(host)
 
 
+def _refus_annuaire(entry, directory: "Directory | None", requested: list):
+    """Ce que la façade REFUSE de promettre sur le host d'un tenant — ou `None` si la
+    voie est libre.
+
+    Le défaut historique tient en une phrase : sur un host de tenant, rien n'était
+    enregistré et on répondait **201 quand même** (oto-backend#909). Le client
+    recevait un succès puis `oidc.invalid_redirect_uri` deux secondes plus tard, à
+    l'`/authorize` — l'étape suivante, chez un annuaire qui n'est pas le nôtre, avec
+    un message qui n'accuse pas la bonne cause. Un 201 est une CRÉATION : ne pas le
+    rendre quand on sait n'avoir rien créé n'est pas une sévérité nouvelle, c'est
+    arrêter de mentir.
+
+    Le refus **nomme sa destination** : ce qui manque, et à qui le demander. Les trois
+    causes ne s'adressent pas au même monde — l'exploitant du tenant, son
+    administrateur d'annuaire, nous — donc elles ne partagent pas leur message. Le
+    JOURNAL porte le détail interne (slug, nom des variables d'environnement) ; le
+    corps servi porte ce que le demandeur peut faire, et rien de notre nomenclature.
+
+    503 partout : chacune de ces causes se lève par un geste d'exploitation, après
+    quoi le même appel réussit. C'est aussi le code de la branche voisine (écriture
+    ratée sur notre annuaire) — deux refus d'enregistrement, un seul code à connaître.
+    """
+    nom = getattr(entry, "name", "") or getattr(entry, "slug", "") or "ce domaine"
+    slug = getattr(entry, "slug", "") or "?"
+    uris = ", ".join(str(u) for u in requested)
+    cible = f"le rappel {uris}" if uris else "le rappel demandé"
+
+    if not getattr(entry, "oauth_client_id", ""):
+        _refus_dcr(
+            "DCR sur le host du tenant %r sans client OAuth déclaré — rien n'est "
+            "enregistré et l'appel est refusé (rappels=%r). Renseigner "
+            "`tenants.oauth_client_id`.", slug, requested)
+        detail = (f"aucun client OAuth n'est préparé sur le serveur d'autorisation de "
+                  f"{nom} : l'enregistrement automatique est impossible sur ce "
+                  f"domaine. Demander à l'exploitant de {nom} de le déclarer.")
+    elif directory is None:
+        _refus_dcr(
+            "DCR sur le host du tenant %r : aucun accès d'administration déclaré "
+            "(`tenants.logto_mgmt`) — les rappels %r ne sont pas enregistrés dans son "
+            "annuaire et l'appel est refusé.", slug, requested)
+        detail = (f"{cible} n'a pas été enregistré auprès du serveur d'autorisation "
+                  f"de {nom} : la plateforme n'a pas d'accès d'administration à cet "
+                  f"annuaire. Demander à l'administrateur de {nom} d'ajouter ce "
+                  f"rappel à l'application {entry.oauth_client_id}.")
+    elif not _credential_present(directory):
+        _refus_dcr(
+            "DCR sur le host du tenant %r : accès d'annuaire DÉCLARÉ mais credential "
+            "absent de l'environnement de ce process (%s_ID / %s_SECRET) — les "
+            "rappels %r ne sont pas enregistrés et l'appel est refusé.",
+            slug, directory.credential, directory.credential, requested)
+        detail = (f"{cible} n'a pas été enregistré auprès du serveur d'autorisation "
+                  f"de {nom} : l'accès d'administration de cet annuaire manque à ce "
+                  f"serveur. L'exploitant est alerté ; réessayer ensuite.")
+    else:
+        return None
+
+    return JSONResponse({"error": "temporarily_unavailable",
+                         "error_description": detail},
+                        status_code=503, headers=_cors())
+
+
 def make_routes(public_url: str, claude_app_id: str) -> list[Route]:
     public_url = public_url.rstrip("/")
 
@@ -493,8 +645,8 @@ def make_routes(public_url: str, claude_app_id: str) -> list[Route]:
                 status_code=400,
                 headers=_cors(),
             )
-        # DCR réelle : on enregistre dynamiquement le(s) redirect(s) dans l'app
-        # Logto partagée (le redirect de ChatGPT est propre à chaque connecteur).
+        # DCR réelle : on enregistre dynamiquement le(s) redirect(s) dans l'app Logto
+        # de l'annuaire visé (le redirect de ChatGPT est propre à chaque connecteur).
         # Deux échecs possibles, qui ne se valent pas :
         #  — l'annuaire est INJOIGNABLE : on ignore ce qui y est déjà posé, donc on
         #    rend le client_id (un client dont le redirect est déjà enregistré, comme
@@ -508,22 +660,18 @@ def make_routes(public_url: str, claude_app_id: str) -> list[Route]:
         # client se présenter chez l'un avec l'identité de l'autre — refus au
         # `/authorize`, et un message qui n'accuse pas la bonne cause.
         entry = tenant_for_host(_host_of(request))
-        app_id = (entry.oauth_client_id if entry is not None else "") or claude_app_id
-        if entry is not None and not entry.oauth_client_id:
-            _log.warning(
-                "DCR sur le host d'un tenant %r sans client OAuth déclaré : on rend "
-                "celui de la plateforme, l'authentification échouera au /authorize. "
-                "Renseigner `tenants.oauth_client_id`.", entry.slug)
+        if entry is None:
+            app_id, directory = claude_app_id, _primary_directory()
+        else:
+            app_id, directory = entry.oauth_client_id, directory_for_tenant(entry)
+            refus = _refus_annuaire(entry, directory, requested)
+            if refus is not None:
+                return refus
         try:
-            # ⚠️ N'enregistre les redirects que sur NOTRE annuaire : le faire chez un
-            # tenant demanderait ses accès d'administration, que la plateforme ne
-            # détient pas (oto-backend#274). Ses redirects sont donc posés à la main
-            # avec son application — d'où le fail-open ci-dessous, déjà le régime.
-            if entry is None:
-                # Hors boucle : la Management API est un appel HTTP synchrone
-                # (15 s), et cette route est `async def` — nûment, elle fige tout
-                # le processus le temps de la réponse (oto-backend#867).
-                await run_in_threadpool(_register_redirects, app_id, requested)
+            # Hors boucle : la Management API est un appel HTTP synchrone (15 s), et
+            # cette route est `async def` — nûment, elle fige tout le processus le
+            # temps de la réponse (oto-backend#867).
+            await run_in_threadpool(_register_redirects, app_id, requested, directory)
         except RedirectRegistrationFailed:
             _log.exception("DCR: enregistrement Logto échoué (redirects=%r)", requested)
             return JSONResponse(
@@ -535,7 +683,8 @@ def make_routes(public_url: str, claude_app_id: str) -> list[Route]:
             )
         except Exception:
             _log.exception("DCR: annuaire injoignable (redirects=%r)", requested)
-        # Logto valide le redirect contre l'app : on renvoie le client_id partagé.
+        # Logto valide le redirect contre l'app : on rend le client_id de l'annuaire
+        # où le rappel vient d'être posé — le nôtre, ou celui du tenant.
         return JSONResponse(
             {
                 "client_id": app_id,

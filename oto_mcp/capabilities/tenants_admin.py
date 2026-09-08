@@ -18,8 +18,9 @@ Trois partis pris, tous conséquences de ce que le tenant EST :
 - **Les deux sources restent séparées** (`orgs.tenant_id` d'un côté, la qualification
   du sub de l'autre) et l'écart est NOMMÉ (`orgs_desalignees`) — cf. `db/tenants.py`.
 - **`PLATFORM_ADMIN`**, comme les autres lentilles de supervision : on lit des
-  volumétries et de la configuration d'annuaire, jamais un secret (la table `tenants`
-  n'en porte aucun — pas même un credential de management, cf. `ForeignTenantDirectory`).
+  volumétries et de la configuration d'annuaire, jamais un secret. `logto_mgmt` ne fait
+  pas exception : il porte deux endpoints et le **nom** d'un couple de variables
+  d'environnement, jamais leur valeur — la clé reste dans le coffre du process.
 """
 from __future__ import annotations
 
@@ -28,6 +29,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field, field_validator
 
 from .. import db, tenancy, tool_alias
+from ..auth import facade
 from . import tenant_admins, tenant_grants, tenant_keys
 from ._authz import ADMIN_BY_OP, PLATFORM_ADMIN, SUPER_ADMIN, TENANT_ADMIN_OF
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding, cap_limit
@@ -62,8 +64,9 @@ class TenantRow(BaseModel):
     name: str
     created_at: Optional[str] = None
 
-    # Configuration d'annuaire. Aucun secret : la table `tenants` n'en porte pas
-    # (nous n'avons aucun credential de management sur l'émetteur d'un partenaire).
+    # Configuration d'annuaire. Aucun secret : la table `tenants` n'en porte pas —
+    # `logto_mgmt` désigne un credential par son NOM d'environnement, il ne le contient
+    # pas.
     issuer: Optional[str] = None
     jwks_uri: Optional[str] = None
     hosts: list[str] = Field(default_factory=list)
@@ -74,6 +77,13 @@ class TenantRow(BaseModel):
         default=None, description="Préfixe DÉCLARÉ des outils de la plateforme montrés "
                                   "à ses comptes (`oto_doc` → `<prefix>_doc`). null = "
                                   "les noms canoniques.")
+
+    logto_mgmt: dict = Field(
+        default_factory=dict,
+        description="Accès d'ADMINISTRATION de l'annuaire de ce tenant, tels que "
+                    "DÉCLARÉS : `token_endpoint`, `api_endpoint`, et `credential` (le "
+                    "NOM du couple de variables d'environnement, jamais sa valeur). "
+                    "Vide = annuaire non administrable par la plateforme.")
 
     primary: bool = Field(description="Le tenant de la plateforme (`oto`), dont "
                                       "l'émetteur vient de l'env, pas de la base.")
@@ -86,6 +96,12 @@ class TenantRow(BaseModel):
                                               ": ses jetons sont encore rejetés.")
     live_hosts: list[str] = Field(default_factory=list,
                                   description="Hosts effectivement servis par le process.")
+    directory_admin: bool = Field(
+        default=False,
+        description="Ce process peut administrer l'annuaire de ce tenant : accès "
+                    "DÉCLARÉ **et** credential présent dans son environnement. false "
+                    "⟹ la façade d'enregistrement refuse les rappels de ses clients "
+                    "au lieu de promettre une création qu'elle ne fait pas.")
     tool_prefix_effectif: Optional[str] = Field(
         default=None, description="Préfixe d'outils réellement APPLIQUÉ par ce process "
                                   "— null alors que `tool_prefix` est posé signifie "
@@ -164,7 +180,8 @@ def _live_registry() -> dict:
         live.setdefault(entry.slug, {"issuer": entry.issuer, "hosts": list(entry.hosts),
                                      "jwks_uri": entry.jwks_uri,
                                      "oauth_client_id": entry.oauth_client_id,
-                                     "tool_prefix": entry.tool_prefix})
+                                     "tool_prefix": entry.tool_prefix,
+                                     "entry": entry})
     return live
 
 
@@ -180,6 +197,11 @@ def _decorate(row: dict, live: dict) -> dict:
     # namespace, forme) : l'écran doit montrer ce qui s'applique, pas ce qui est écrit.
     row["tool_prefix_effectif"] = (
         tool_alias.normalize_prefix((entry or {}).get("tool_prefix")) or None)
+    # Déclaré ≠ utilisable : l'accès d'annuaire peut être posé en base sans que la clé
+    # soit injectée dans CE process. C'est le diagnostic qui manquait à #909 — sans
+    # lui, un refus d'enregistrement ne se rattache à rien de visible.
+    directory = facade.directory_for_tenant((entry or {}).get("entry"))
+    row["directory_admin"] = bool(directory and facade._credential_present(directory))
     return row
 
 

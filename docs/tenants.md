@@ -25,6 +25,24 @@ description: >-
 >   serveur (issuer = le host) et route autorisation/jeton/clés vers l'annuaire du tenant.
 >   Elle rend `tenants.oauth_client_id` — le client de l'annuaire VISÉ, sinon le client se
 >   présente chez l'un avec l'identité de l'autre.
+> - ⚠️ **Rendre le bon client ne suffisait pas : il fallait ENREGISTRER le rappel chez
+>   lui** (oto-backend#909, mesuré le 08/09). `_register_redirects` n'était appelé que sur
+>   le host de la plateforme : sur le host d'un tenant la façade rendait **201 sans rien
+>   poser**, puis `oidc.invalid_redirect_uri` deux secondes plus tard à l'`/authorize` —
+>   un succès annoncé, un échec ailleurs, aucun indice. Un tenant dont NOUS hébergeons
+>   l'annuaire déclare donc ses accès dans **`tenants.logto_mgmt`** (JSONB) :
+>   `{"token_endpoint", "api_endpoint", "credential"}`. ⚠️ **Aucun secret en base** —
+>   `credential` est le NOM d'un couple de variables d'environnement
+>   (`<credential>_ID`/`_SECRET`), même convention que le primaire. ⚠️ **Les deux
+>   endpoints sont un COUPLE** : chez Logto le jeton se prend sur l'endpoint
+>   d'administration et les appels `/api` vont sur l'endpoint principal, l'inverse rend
+>   `401 aud check_failed`. Sans déclaration — ou avec une clé absente du process — la
+>   façade **refuse en 503 et nomme sa destination** au lieu de promettre. L'écran
+>   `/platform/tenants` nomme l'écart `logto_mgmt` (déclaré) vs `directory_admin`
+>   (déclaré ET clé présente ici). ⚠️ **L'ordre compte** : injecter le credential dans
+>   l'environnement AVANT de poser la colonne, sinon la façade refuse pendant la fenêtre
+>   — et comme prod et preprod partagent la base (§Infra), la colonne posée vaut pour les
+>   deux d'un coup.
 > - ⚠️ **Pas de patron, pas de lien** (`links.py`, `tenants.link_paths`). Les chemins d'un
 >   partenaire ne ressemblent pas aux nôtres et certaines de nos vues n'ont **aucun**
 >   équivalent chez lui : coller nos chemins sous son domaine fabrique des liens morts, pire

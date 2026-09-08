@@ -227,6 +227,18 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # vers lequel on envoie l'utilisateur — sinon le client s'authentifie chez l'un
     # avec l'identité de l'autre. NULL = aucun host servi pour ce tenant.
     conn.execute("ALTER TABLE tenants ADD COLUMN IF NOT EXISTS oauth_client_id TEXT")
+    # (oto-backend#909) Les accès d'ADMINISTRATION de l'annuaire de ce tenant, quand
+    # c'est nous qui l'hébergeons : `{"token_endpoint", "api_endpoint", "credential"}`.
+    # Sans eux, la façade d'enregistrement ne pouvait rien poser sur le host d'un
+    # tenant — et répondait 201 quand même, donc un succès suivi d'un refus à
+    # l'`/authorize`.
+    # ⚠️ **Aucun secret ici** : `credential` est le NOM d'un couple de variables
+    # d'environnement (`<credential>_ID` / `<credential>_SECRET`) que le process lit à
+    # l'appel. La base dit OÙ frapper et SOUS QUEL nom ; la clé reste dans le coffre.
+    # ⚠️ Les DEUX endpoints sont déclarés : chez Logto le jeton se prend sur
+    # l'endpoint d'administration et les appels `/api` vont sur l'endpoint principal.
+    # NULL (le défaut) = annuaire non administrable, l'état d'avant à l'octet près.
+    conn.execute("ALTER TABLE tenants ADD COLUMN IF NOT EXISTS logto_mgmt JSONB")
     # Chantier runner R5 (fusion flotte) : le worker déclare le RÉSULTAT d'un job
     # à sa conclusion (usage_tokens, stopped, steps…) — c'est ce qui rend le coût
     # lisible par un ordonnanceur de flotte (garde budget) sans parser une note.
