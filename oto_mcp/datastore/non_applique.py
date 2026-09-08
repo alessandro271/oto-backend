@@ -284,11 +284,14 @@ def lifecycle_hors_statut_warning(champs: list[str],
                         else "la file ne s'arrête pas d'elle-même sur ces crans.")
     else:
         consequence = ("Tous les crans de la file sont par ailleurs déclarés sur "
-                       f"`{cle}` : cette déclaration-ci est simplement inerte.")
+                       f"`{cle}` : cette déclaration-ci n'a aucun effet POUR OTO.")
 
     return (f"cycle de vie NON LU : {noms} — oto ne lit le `lifecycle` que sur le "
             f"champ déclaré `role: \"status\"`. {etat} {consequence} {conseil} "
-            "Jamais pendant qu'une vague tourne.")
+            "Jamais pendant qu'une vague tourne. ⚠️ « Non lu par oto » ne veut pas dire "
+            "« lu par personne » : un consommateur en aval peut parfaitement s'en "
+            "servir, et la plateforme ne sait pas qui lit quoi. Ne le retire pas sur "
+            "la seule foi de ce message — demande à qui affiche ce tableau.")
 
 
 # ── Deux gardes qui ont l'air de mordre, et qui ne mordent pas là (08/09/2026) ─

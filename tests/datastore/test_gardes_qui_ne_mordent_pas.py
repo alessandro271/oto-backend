@@ -144,3 +144,48 @@ def test_les_deux_releves_se_TAISENT_sur_un_schema_ordinaire():
     assert na.couche_exigee_sans_forme(sch) == []
     assert na.motif_sans_obligation_warning([]) is None
     assert na.couche_exigee_sans_forme_warning([]) is None
+
+
+# ── « inerte » était plus catégorique que ce que je peux savoir ──────────────
+# Signalé le 08/09/2026 par le consommateur qui affiche ces tableaux, et il avait
+# raison : mon message disait « cette déclaration-ci est simplement inerte » d'un
+# `lifecycle` que SON serveur et SON écran lisent.
+#
+# ⚠️ Elle est inerte POUR OTO. Elle était vivante pour lui. Sur la foi de ce mot, le
+# bloc a été retiré ce matin sur deux tableaux, et il a fallu l'arrêter en route.
+# Quatre sessions ont tourné une journée autour de six lignes.
+#
+# La phrase qui manquait à tout le monde est « oto ne lit pas ce bloc, scout le lit »,
+# et **aucun des deux ne pouvait la dire seul** : je ne sais pas qui lit en aval, et
+# lui ne lisait pas mon avertissement. La même prudence était DÉJÀ écrite pour les
+# clés libres (« un consommateur peut parfaitement les lire ») — je ne l'avais pas
+# étendue ici, alors que le risque y est plus grand : ce bloc a l'air d'un mécanisme.
+
+def test_l_avertissement_ne_dit_PAS_inerte_tout_court():
+    from oto_mcp.datastore import schema as dsv2
+
+    sch = {"fields": [
+        {"key": "statut", "role": "status",
+         "lifecycle": {"states": ["a", "b"], "terminal": ["b"], "max_claims": 3,
+                       "abandon_state": "b", "claimable": ["a"]}},
+        {"key": "suivi", "lifecycle": {"states": ["x"]}}]}
+    phrase = dsv2.lifecycle_hors_statut_warning(dsv2.lifecycle_hors_statut(sch), sch)
+
+    # La réserve est dans le return, donc servie quelle que soit la branche — c'est
+    # ce qui compte : elle ne doit pas dépendre de l'état du reste du schéma.
+    assert "lu par personne" in phrase, "le message doit nommer le consommateur en aval"
+    assert "Ne le retire pas sur la seule foi de ce message" in phrase
+    assert "demande à qui affiche ce tableau" in phrase
+
+
+def test_la_branche_sans_manque_ne_dit_pas_INERTE_tout_court():
+    """L'autre branche — celle où tous les crans sont par ailleurs déclarés — disait
+    « simplement inerte ». C'est le mot exact sur lequel un consommateur a failli
+    retirer un bloc que son propre serveur lisait."""
+    import inspect
+
+    from oto_mcp.datastore import non_applique
+
+    src = inspect.getsource(non_applique)
+    assert "n'a aucun effet POUR OTO" in src
+    assert "est simplement inerte" not in src
