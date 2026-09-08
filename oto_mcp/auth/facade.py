@@ -122,11 +122,19 @@ def _redirect_ok(uri: str) -> bool:
     if p.scheme == "https" and host in (_ALLOWED_HTTPS_HOSTS | _extra_https_hosts()) \
             and p.path.startswith(_CALLBACK_PATH):
         return True
-    # ChatGPT (connecteurs MCP) : redirect `https://chatgpt.com/connector/oauth/<id>`
-    # où <id> est propre au connecteur (varie) → on matche le préfixe de path, pas
-    # l'URI exacte. Garde-fou réel = l'app Logto (redirect enregistré, exact).
-    if p.scheme == "https" and host == "chatgpt.com" \
-            and p.path.startswith("/connector/oauth/"):
+    # ChatGPT (connecteurs MCP) : DEUX formes de rappel, toutes deux documentées
+    # par OpenAI (developers.openai.com/plugins/build/auth). Ce n'est pas le mode de
+    # connexion qui tranche, c'est le serveur d'AUTORISATION : le rappel propre au
+    # connecteur `https://chatgpt.com/connector/oauth/<id>` (<id> varie → préfixe de
+    # path, pas l'URI exacte) quand l'AS n'annonce pas l'identification d'émetteur
+    # RFC 9207 ; le rappel STABLE `connector_platform_oauth_redirect` quand il
+    # l'annonce — et aussi pour tout connecteur créé avant l'apparition du premier,
+    # qui garde la forme stable. Refuser la seconde suffit à rendre le connecteur
+    # ininstallable, sans qu'aucune trace ne survive plus de 19 h.
+    # Garde-fou réel = l'app Logto (redirect enregistré, exact).
+    if p.scheme == "https" and host == "chatgpt.com" and (
+            p.path.startswith("/connector/oauth/")
+            or p.path == "/connector_platform_oauth_redirect"):
         return True
     # Mistral (Le Chat, connecteurs MCP) : redirect FIXE callback.mistral.ai.
     if p.scheme == "https" and host == "callback.mistral.ai" \
@@ -262,10 +270,40 @@ def magic_url(base_url: str, email: str, *, expires_in: int = 7 * 24 * 3600) -> 
     return f"{base_url}{sep}otl={quote(ott, safe='')}&login_hint={quote(email, safe='')}"
 
 
+def _refus_dcr(message: str, *args) -> None:
+    """Journalise un refus d'enregistrement ET le pousse au suivi d'erreurs.
+
+    Le journal systemd de la box tourne sur ~19 h et la lentille REST n'instrumente
+    que `/api/…` : un refus de DCR n'a AUCUNE trace durable. Or c'est le seul
+    événement qui NOMME un client qu'on ne sait pas encore accueillir — le perdre,
+    c'est rejouer le diagnostic à l'aveugle. Volume attendu : quelques unités.
+    """
+    _log.warning(message, *args)
+    try:
+        import sentry_sdk
+        with sentry_sdk.new_scope() as scope:
+            # Clé de recherche stable (`has:oto.dcr`) ; le TEXTE porte le redirect
+            # refusé, donc une issue par client inconnu, pas un fourre-tout.
+            scope.set_tag("oto.dcr", "refus")
+            sentry_sdk.capture_message(message % args if args else message,
+                                       level="warning")
+    # noqa: SILENT — une DCR ne casse pas parce que le suivi d'erreurs est indisponible
+    except Exception:
+        pass
+
+
+class RedirectRegistrationFailed(RuntimeError):
+    """L'annuaire a RÉPONDU, et le PATCH qui devait y poser un NOUVEAU redirect a
+    échoué. On ne suppose pas : on sait que le callback n'est pas enregistré, donc
+    que l'`/authorize` qui suivra sera refusé. À distinguer d'un annuaire
+    injoignable, où l'état reste inconnu — cf. `dcr`."""
+
+
 def _register_redirects(app_id: str, redirect_uris: list) -> None:
     """Ajoute les `redirect_uris` (déjà validés) à l'app Logto partagée (dédup) +
     l'origine CORS https correspondante. Idempotent ; no-op si tout est déjà là.
-    Lève si la Management API échoue (l'appelant décide quoi en faire)."""
+    Lève si la Management API échoue (l'appelant décide quoi en faire) —
+    `RedirectRegistrationFailed` quand l'échec porte sur l'écriture elle-même."""
     import requests
     base, tok = _logto_base(), _mgmt_token()
     h = {"Authorization": f"Bearer {tok}", "User-Agent": _UA, "Content-Type": "application/json"}
@@ -286,10 +324,14 @@ def _register_redirects(app_id: str, redirect_uris: list) -> None:
         return
     meta["redirectUris"] = cur + new
     custom["corsAllowedOrigins"] = cors
-    p = requests.patch(f"{base}/api/applications/{app_id}",
-                       json={"oidcClientMetadata": meta, "customClientMetadata": custom},
-                       headers=h, timeout=15)
-    p.raise_for_status()
+    try:
+        p = requests.patch(f"{base}/api/applications/{app_id}",
+                           json={"oidcClientMetadata": meta, "customClientMetadata": custom},
+                           headers=h, timeout=15)
+        p.raise_for_status()
+    except Exception as exc:
+        raise RedirectRegistrationFailed(
+            f"app {app_id} — {len(new)} redirect(s) non enregistré(s)") from exc
     _log.info("DCR: app %s — +%d redirect(s), cors=%s", app_id, len(new), cors)
 
 
@@ -443,8 +485,8 @@ def make_routes(public_url: str, claude_app_id: str) -> list[Route]:
         # évite de tendre un client public à un redirect non prévu.
         requested = body.get("redirect_uris") or []
         if not isinstance(requested, list) or any(not _redirect_ok(u) for u in requested):
-            _log.warning("DCR refusé — redirect_uris=%r client_name=%r grant_types=%r",
-                         requested, body.get("client_name"), body.get("grant_types"))
+            _refus_dcr("DCR refusé — redirect_uris=%r client_name=%r grant_types=%r",
+                       requested, body.get("client_name"), body.get("grant_types"))
             return JSONResponse(
                 {"error": "invalid_redirect_uri",
                  "error_description": "redirect_uri non autorisé pour ce serveur"},
@@ -453,10 +495,14 @@ def make_routes(public_url: str, claude_app_id: str) -> list[Route]:
             )
         # DCR réelle : on enregistre dynamiquement le(s) redirect(s) dans l'app
         # Logto partagée (le redirect de ChatGPT est propre à chaque connecteur).
-        # Fail-OPEN : si la Management API échoue, on renvoie quand même le
-        # client_id — Claude reste fonctionnel (son redirect est déjà enregistré) ;
-        # seul un NOUVEAU redirect (ChatGPT) serait alors refusé plus tard au
-        # /authorize, cas dégradé loggé, jamais une régression de l'existant.
+        # Deux échecs possibles, qui ne se valent pas :
+        #  — l'annuaire est INJOIGNABLE : on ignore ce qui y est déjà posé, donc on
+        #    rend le client_id (un client dont le redirect est déjà enregistré, comme
+        #    Claude, doit continuer de s'installer pendant un incident Logto) ;
+        #  — l'annuaire a répondu et l'ÉCRITURE a échoué : on sait que le callback
+        #    n'y est pas, donc que l'`/authorize` sera refusé. Rendre 201 serait
+        #    annoncer une création qui n'a pas eu lieu, et déplacer le diagnostic
+        #    d'un cran, chez un client qui ne lit pas nos journaux.
         # Sur le host d'un tenant, le client rendu doit être celui de SON annuaire :
         # c'est là que l'utilisateur va s'authentifier. Rendre le nôtre enverrait le
         # client se présenter chez l'un avec l'identité de l'autre — refus au
@@ -478,8 +524,17 @@ def make_routes(public_url: str, claude_app_id: str) -> list[Route]:
                 # (15 s), et cette route est `async def` — nûment, elle fige tout
                 # le processus le temps de la réponse (oto-backend#867).
                 await run_in_threadpool(_register_redirects, app_id, requested)
-        except Exception:
+        except RedirectRegistrationFailed:
             _log.exception("DCR: enregistrement Logto échoué (redirects=%r)", requested)
+            return JSONResponse(
+                {"error": "temporarily_unavailable",
+                 "error_description": "l'enregistrement du redirect_uri auprès du "
+                                      "serveur d'autorisation a échoué — réessayer"},
+                status_code=503,
+                headers=_cors(),
+            )
+        except Exception:
+            _log.exception("DCR: annuaire injoignable (redirects=%r)", requested)
         # Logto valide le redirect contre l'app : on renvoie le client_id partagé.
         return JSONResponse(
             {
