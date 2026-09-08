@@ -125,6 +125,51 @@ moment où le format a été déclaré.
 La face d'appel n'y change rien : ligne créée par `data_write` ou par `POST …/rows`,
 même comportement.
 
+## 4 bis. `donnees_d_origine: true` — quand TU apportes la donnée de la cliente
+
+Le format ci-dessus est un filet : il rattrape la valeur d'avant quand quelqu'un
+écrase. Ce paramètre-ci est l'inverse — **un geste, pas un filet**. Tu déclares que cet
+appel apporte la donnée **telle que la cliente l'a remise**, et chaque case fige sa
+version d'origine au moment où la valeur entre.
+
+```
+data_write(namespace="…", key="siren", donnees_d_origine=True,
+           rows=[{"siren": "123456789",
+                  "raison_sociale": {"valeur": "DUPONT",
+                                     "comment": "fichier de la cliente du 05/08/2026"}}])
+```
+
+**La provenance va dans `comment`** — il n'y a pas de paramètre séparé pour ça. Les
+couches que tu écris atterrissent dans les deux versions, parce qu'elles décrivent le
+même fait le jour de l'import.
+
+⚠️ **Réserve-le à l'IMPORT, jamais à l'enrichissement.** Ce qu'un agent établit est la
+version **courante**. Marquer d'origine ta propre trouvaille présenterait ton travail
+comme la donnée de la cliente — exactement ce que la définition de l'origine interdit,
+et le genre d'erreur qu'on ne découvre qu'à la restitution, devant elle.
+
+Trois règles qui te dispensent de précautions :
+
+- une **origine déjà posée n'est jamais réécrite**. Un ré-import du même fichier met à
+  jour la version courante et laisse l'origine du premier — tu peux rejouer un import
+  sans rien détruire ;
+- une **case vide ne reçoit rien**. « La cliente n'a rien remis » et « la cliente a
+  remis du vide » sont deux faits différents ; `0` et `false`, eux, sont des valeurs
+  remises et gardent leur origine ;
+- le **défaut ne change pas**. Sans ce paramètre, ton écriture est ordinaire et vise la
+  version courante, comme avant.
+
+**Pourquoi ce paramètre existe** : avant lui, avoir une origine dépendait d'un ORDRE DE
+GESTES — il fallait que `origine: "system"` ait été déclaré **avant** que la ligne
+n'existe, sans quoi la capture n'avait plus rien à figer. ⚠️ **Ce silence a coûté 837
+cellules sur 846** sur un tableau de campagne : cran déclaré après coup, valeurs de la
+cliente déjà écrasées par des agents, et un balayage qui n'a pu poser que
+`(origine inconnue)`. Un geste explicite ne se trompe pas d'ordre.
+
+**Sur un import en volume** (`oto_upload_url` → `PUT /api/upload/{token}`), déclare-le
+**au mint**, avec le reste : le `PUT` signé ne porte aucun paramètre, donc celui qui
+livre les octets ne peut pas décider que son fichier est la donnée de la cliente.
+
 ## 5. Ce que `readonly: true` protège — et ne protège pas
 
 Une colonne `readonly` (schéma) verrouille la **valeur** d'une ligne en place : une

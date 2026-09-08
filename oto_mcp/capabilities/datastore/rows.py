@@ -133,6 +133,12 @@ _FORCAGE = Field(default=False, description=(
 _ORIGINE = Field(default=False,
                  description=dsv2.description_parametre_origine())
 
+# oto#140 : la déclaration qui distingue un IMPORT d'une écriture ordinaire. Même
+# mécanique de passage que les deux au-dessus, et aucun palier non plus — ce n'est pas
+# un droit à obtenir, c'est un fait à déclarer sur ce que l'appel apporte.
+_DONNEES_D_ORIGINE = Field(default=False,
+                           description=dsv2.description_donnees_d_origine())
+
 
 class AppendRowInput(BaseModel):
     namespace: Adresse
@@ -140,6 +146,7 @@ class AppendRowInput(BaseModel):
     row: dict = Field(default_factory=dict)
     readonly_override: bool = _FORCAGE
     origine_override: bool = _ORIGINE
+    donnees_d_origine: bool = _DONNEES_D_ORIGINE
 
 
 class UpdateRowInput(BaseModel):
@@ -149,6 +156,7 @@ class UpdateRowInput(BaseModel):
     patch: dict = Field(default_factory=dict)
     readonly_override: bool = _FORCAGE
     origine_override: bool = _ORIGINE
+    donnees_d_origine: bool = _DONNEES_D_ORIGINE
 
 
 class ReleaseInput(BaseModel):
@@ -453,7 +461,8 @@ def _append_row(ctx: ResolvedCtx, inp: AppendRowInput) -> dict:
         refuser_un_lot(store, ns, inp.row)  # oto#48 : un lot enveloppé n'est pas une ligne
         created = store.append_row(ns, inp.row, trace=trace,
                                    readonly_override=inp.readonly_override,
-                                   origine_override=inp.origine_override)
+                                   origine_override=inp.origine_override,
+                                   donnees_d_origine=inp.donnees_d_origine)
     except NamespaceNotFound:
         raise ns_not_found(ctx.sub, ns)
     except NamespaceReadOnly:
@@ -483,7 +492,8 @@ def _update_row(ctx: ResolvedCtx, inp: UpdateRowInput) -> dict:
     try:
         updated = store.update_row(ns, rid, inp.patch, trace=trace,
                                    readonly_override=inp.readonly_override,
-                                   origine_override=inp.origine_override)
+                                   origine_override=inp.origine_override,
+                                   donnees_d_origine=inp.donnees_d_origine)
     except NamespaceNotFound:
         raise ns_not_found(ctx.sub, ns)
     except NamespaceReadOnly:

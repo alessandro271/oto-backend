@@ -134,6 +134,11 @@ from .vocabulaire import (
     _READ_KEYS, interpreted_keys, vocabulaire_vivant, _NEAR_MISS,
     unknown_declaration_keys, unknown_keys_warning, unknown_keys_read_warning,
 )
+from .donnees_d_origine import (
+    PARAMETRE as PARAMETRE_DONNEES_D_ORIGINE,
+    poser_les_deux_versions,
+    description_parametre as description_donnees_d_origine,
+)
 from .cles_jumelles import (
     sont_jumelles, cles_libres_jumelles, cles_jumelles_warning,
 )

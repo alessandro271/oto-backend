@@ -872,8 +872,20 @@ de fin de passage détectait après coup.
   valeur courante la présenterait comme celle de la cliente — ce que la définition
   interdit. Le marqueur rend l'ignorance explicite plutôt que muette : sans lui, « pas
   d'origine » se confondrait avec « origine vide ».
-  ⚠️ **L'ORDRE DES GESTES décide de tout : déclarer le cran AVANT l'import, jamais
-  après.** Déclaré avant, la ligne n'existe pas encore, rien n'est balisé, et la capture
+  ⚠️ **`donnees_d_origine: true` (oto#140) supprime cette dépendance à l'ordre**, et
+  c'est le remède de fond : au lieu d'un filet armé à l'avance, un GESTE explicite. Un
+  appel qui le porte déclare qu'il apporte la donnée telle que la cliente l'a remise,
+  et chaque case fige sa version d'origine **au moment où la valeur entre** — même
+  geste, donc plus d'avant ni d'après. La provenance voyage dans `<champ>.comment`
+  (pas de paramètre séparé : ce serait une deuxième façon d'écrire un commentaire).
+  Trois règles : une origine posée n'est jamais réécrite (un ré-import est rejouable),
+  une case vide ne reçoit rien (`0` et `false` sont des valeurs remises), et le défaut
+  ne bouge pas. Branché sur les QUATRE chemins d'écriture — ⚠️ j'en avais câblé trois,
+  et c'est le banc qui a trouvé le quatrième, celui qui ressemblait le plus aux autres.
+  Déclaré au MINT sur l'upload signé, comme `origine_override` : le `PUT` ne porte
+  aucun paramètre.
+  ⚠️ **Sans lui, l'ORDRE DES GESTES décide de tout : déclarer le cran AVANT l'import,
+  jamais après.** Déclaré avant, la ligne n'existe pas encore, rien n'est balisé, et la capture
   paresseuse fige la valeur de la cliente au premier enrichissement. Déclaré après, rien
   ne se reconstitue — **mesuré le 08/09/2026 : 837 cellules sur 846 marquées** sur un
   tableau de production, découvert trois semaines après la pose, à la veille d'une

@@ -285,7 +285,13 @@ def materialize(sub: str, target: dict, data: bytes, request_ct: Optional[str]) 
                 # comme n'importe quel autre écrivain — mais celui qui appelle le
                 # PUT ne peut pas se l'accorder lui-même, il ne fait que livrer des
                 # octets à une URL signée.
-                origine_override=bool(target.get("origine_override")))
+                origine_override=bool(target.get("origine_override")),
+                # oto#140 : déclaré au MINT lui aussi. Un fichier qui EST la donnée de
+                # la cliente fige la version d'origine de chaque case au moment où
+                # elle entre — plus d'ordre de gestes à respecter, plus de cran à
+                # déclarer avant, donc plus de « (origine inconnue) » à découvrir
+                # trois semaines plus tard.
+                donnees_d_origine=bool(target.get("donnees_d_origine")))
         except ValueError as e:
             raise UploadError(400, "bad_row", str(e))
         # Le chemin de bulk load est celui où le silence coûte le plus cher (#294) :

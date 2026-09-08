@@ -158,8 +158,10 @@ def test_parse_rows_rejects_bad_ndjson():
 def test_materialize_datastore_batch(monkeypatch):
     seen = {}
     class FakeStore:
-        def _write_rows_to_ns(self, ns_id, rows, *, key, origine_override=False):
+        def _write_rows_to_ns(self, ns_id, rows, *, key, origine_override=False,
+                              donnees_d_origine=False):
             seen["ns_id"], seen["rows"], seen["key"] = ns_id, rows, key
+            seen["donnees_d_origine"] = donnees_d_origine
             return {"inserted": 2, "updated": 0, "count": 2, "key": key, "ids": ["r1", "r2"]}
 
         def off_schema_report(self):
@@ -170,6 +172,13 @@ def test_materialize_datastore_batch(monkeypatch):
               "format": "ndjson", "key": "siren"}
     res = ut.materialize("u1", target, b'{"siren":"1"}\n{"siren":"2"}', None)
     assert seen["ns_id"] == 7 and seen["key"] == "siren" and len(seen["rows"]) == 2
+    # oto#140 : le drapeau vient du JETON, jamais du PUT — celui qui livre les octets
+    # ne peut pas décider que son fichier est la donnée de la cliente.
+    assert seen["donnees_d_origine"] is False, "absent du jeton ⟹ écriture ordinaire"
+
+    ut.materialize("u1", {**target, "donnees_d_origine": True},
+                   b'{"siren":"1"}', None)
+    assert seen["donnees_d_origine"] is True, "scellé au mint ⟹ transmis au store"
     # Le récap remonte AUSSI le relevé « hors schéma » (#294) : le bulk load est le
     # geste où un format renommé passe le plus facilement inaperçu.
     assert res == {"ok": True, "kind": "datastore", "namespace": "boites",
@@ -192,7 +201,11 @@ def test_mint_datastore_seals_resolved_ns_id(monkeypatch):
     # clé qui sortirait du sceau se lirait ici.
     assert p["target"] == {"kind": "datastore", "ns_id": 42, "namespace": "contacts",
                            "format": "ndjson", "key": "email",
-                           "origine_override": False}
+                           "origine_override": False,
+                           # oto#140 : scellé au mint pour la MÊME raison — le PUT ne
+                           # porte aucun paramètre, donc « ce fichier EST la donnée de
+                           # la cliente » se déclare par celui qui prépare l'import.
+                           "donnees_d_origine": False}
 
 
 def test_target_label():

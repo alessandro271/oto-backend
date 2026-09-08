@@ -30,6 +30,7 @@ from .errors import NamespaceNotFound, RowNotFound
 from .forcage import Forcage
 from .outils import _new_id, _now_iso, _refus_de_creation
 from .points import _refuse_dotted_names, ranger_les_couches
+from .donnees_d_origine import poser_les_deux_versions
 from .reserves import poser_origine_systeme, refuser_champs_reserves
 
 
@@ -41,7 +42,8 @@ class EcritureMixin:
     def append_row(self, namespace: str, data: dict, *,
                    trace: Optional[dict] = None,
                    readonly_override: bool = False,
-                   origine_override: bool = False) -> dict:
+                   origine_override: bool = False,
+                   donnees_d_origine: bool = False) -> dict:
         """Écrit UNE row. Si le namespace déclare une clé métier (`schema.key`),
         applique la MÊME dédup upsert que le batch `write_rows` : une row de même
         valeur de clé est MERGÉE (pas de doublon, l'index `ds_bkey_<ns>` la refuse) ;
@@ -65,7 +67,8 @@ class EcritureMixin:
             reste = {k: v for k, v in data.items() if k != "_id"}
             try:
                 return self.update_row(namespace, cible, reste, trace=trace,
-                                       readonly_override=readonly_override)
+                                       readonly_override=readonly_override,
+                                       donnees_d_origine=donnees_d_origine)
             except RowNotFound:
                 raise ValueError(
                     f"`_id` ({cible!r}) ne correspond à aucune ligne de "
@@ -106,7 +109,8 @@ class EcritureMixin:
                 return self._row_to_dict(
                     self._merge_into_row(ns_id, existing_id, user_data, schema=schema,
                                          forcage=forcage,
-                                         origine_override=origine_override),
+                                         origine_override=origine_override,
+                                         donnees_d_origine=donnees_d_origine),
                     schema)
         # #516 : sur un tableau FERMÉ, on ne crée pas — on vise. Le geste est arrivé
         # jusqu'ici sans désigner de ligne : ni par son `_id` (promu plus haut, et
@@ -130,6 +134,14 @@ class EcritureMixin:
                 f"sera rapprochée par personne — ni une réécriture, ni un lot qui "
                 f"dédouble sur cette clé. Si elle visait une ligne existante, c'est "
                 f"data_write(id=…) ; sinon renseigne `{key}`.")
+        # ⚠️ QUATRIÈME chemin, et celui que j'avais oublié — trouvé par le banc, pas
+        # par relecture. Les trois autres (lot, fusion, patch par `id`) étaient
+        # branchés ; la création unitaire, non. C'est exactement le défaut que ce
+        # fichier dénonce ailleurs sur la même famille de règles : une garde posée sur
+        # les chemins auxquels on pense, absente de celui qu'on croyait couvert parce
+        # qu'il ressemble aux autres.
+        if donnees_d_origine:
+            poser_les_deux_versions(user_data)
         self._check_row(schema, user_data)
         try:
             row = db.datastore_insert_row(ns_id, _new_id(), user_data)
@@ -151,7 +163,8 @@ class EcritureMixin:
     def _merge_into_row(self, ns_id: int, row_id: str, user_data: dict,
                         *, schema: Optional[dict] = None,
                         forcage: Optional[Forcage] = None,
-                        origine_override: bool = False) -> dict:
+                        origine_override: bool = False,
+                        donnees_d_origine: bool = False) -> dict:
         """MERGE `user_data` dans la row existante (dernier écrit gagne par champ),
         en appliquant le schéma v2 (ADR 0046) au résultat mergé : validation avec
         `prev_status` (transition de lifecycle) puis release du claim si l'état
@@ -184,6 +197,14 @@ class EcritureMixin:
             # #608) et les deux relevés. Posés sur le store seulement une fois la
             # validation passée — un refus n'a rien effacé, l'annoncer ferait
             # chercher un dégât imaginaire.
+            # `donnees_d_origine` : l'appel apporte la donnée telle qu'elle a été
+            # REMISE. On fige sa version d'origine AVANT l'arbitrage des vides, pour
+            # que ce qui est écarté le soit sur la forme définitive. Sous le verrou de
+            # ligne, donc `current` est la ligne vraie — indispensable ici : c'est LUI
+            # qui dit si une origine est déjà posée, et une origine posée ne se
+            # réécrit jamais. Muter en place est sans risque, le geste est idempotent.
+            if donnees_d_origine:
+                poser_les_deux_versions(user_data, avant=current)
             pose, vidages, ecartes = arbitrer_les_vides(current, user_data, row_id)
             # #724 : préserver et le DIRE ne suffit pas quand l'écarté était TOUT ce
             # que l'écriture portait — l'appel n'a alors aucun effet et répond 200.
@@ -290,7 +311,8 @@ class EcritureMixin:
 
     def write_rows(self, namespace: str, rows: list, *, key: Optional[str] = None,
                    readonly_override: bool = False,
-                   origine_override: bool = False) -> dict:
+                   origine_override: bool = False,
+                   donnees_d_origine: bool = False) -> dict:
         """Écrit un LOT de rows en un appel. Si une clé métier est en vigueur (param
         `key` explicite, sinon `schema.key` déclarée), chaque row qui la porte fait un
         UPSERT (merge) sur la row existante de même valeur de clé — pas de doublon ;
@@ -299,12 +321,14 @@ class EcritureMixin:
         ns_id = self._resolve(namespace, write=True)
         return self._write_rows_to_ns(ns_id, rows, key=key or self.declared_key(namespace),
                                       readonly_override=readonly_override,
-                                      origine_override=origine_override)
+                                      origine_override=origine_override,
+                                      donnees_d_origine=donnees_d_origine)
 
     def update_row(self, namespace: str, row_id: str, patch: dict, *,
                    trace: Optional[dict] = None,
                    readonly_override: bool = False,
-                   origine_override: bool = False) -> dict:
+                   origine_override: bool = False,
+                   donnees_d_origine: bool = False) -> dict:
         """Patch partiel d'une row. `trace` (dict mutable, optionnel) = relevé pour
         le journal — dont l'état AVANT, celui-là même sur lequel la transition de
         cycle de vie est validée juste en dessous (cf. `_trace`).
@@ -333,6 +357,15 @@ class EcritureMixin:
         # #409). Fait avant la boucle, sur l'état lu en base. Les deux chemins
         # d'écriture ont déjà divergé une fois sur cette famille de règles (#322) :
         # ils partagent donc la fonction, pas seulement l'intention.
+        # ⚠️ TROISIÈME branchement de ce chemin sur la même famille de règles, et le
+        # commentaire vingt lignes plus bas dit pourquoi : `update_row` a déjà été
+        # oublié DEUX fois — une fois pour la survie de l'origine, une fois pour son
+        # relevé — parce qu'il ne passe pas par `_merge_into_row`. Le geste le plus
+        # courant d'un agent est aussi celui qu'on oublie, précisément parce qu'il a
+        # son propre corps. `avant` = l'état lu : c'est lui qui dit si une origine est
+        # déjà posée, et une origine posée ne se réécrit jamais.
+        if donnees_d_origine:
+            poser_les_deux_versions(patch, avant=data)
         pose, vidages, ecartes = arbitrer_les_vides(data, patch, row_id)
         # #724 : le patch par `id` est le chemin des dix retraits perdus du 01/09 —
         # un vide SEUL y était accepté sans effet, et le relevé qui nommait déjà la

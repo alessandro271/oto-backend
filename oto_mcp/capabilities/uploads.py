@@ -47,6 +47,12 @@ class UploadUrlInput(BaseModel):
     #: de la même source que les deux autres faces.
     origine_override: bool = Field(
         default=False, description=dsv2.description_parametre_origine(en=True))
+    #: datastore — oto#140. Déclaré ICI comme le précédent, et pour la même raison :
+    #: le PUT ne porte aucun paramètre, donc celui qui livre les octets ne peut pas
+    #: s'accorder lui-même le droit de poser de la donnée d'origine. C'est celui qui
+    #: PRÉPARE l'import qui le déclare, et c'est scellé dans le jeton.
+    donnees_d_origine: bool = Field(
+        default=False, description=dsv2.description_donnees_d_origine(en=True))
 
 
 def _upload_url(ctx: ResolvedCtx, inp: UploadUrlInput) -> dict:
@@ -96,7 +102,8 @@ def _upload_url(ctx: ResolvedCtx, inp: UploadUrlInput) -> dict:
         eff_key = inp.key or store.declared_key(ns)
         target = {"kind": "datastore", "ns_id": ns_id, "namespace": ns,
                   "format": inp.format or "ndjson", "key": eff_key,
-                  "origine_override": bool(inp.origine_override)}
+                  "origine_override": bool(inp.origine_override),
+                  "donnees_d_origine": bool(inp.donnees_d_origine)}
 
     # Fail-fast : refuse tout de suite sans l'écriture sur la cible (l'autz est
     # RÉAPPLIQUÉE à la réception — le jeton ne fait pas foi seul). Pour datastore
@@ -156,7 +163,9 @@ CAPABILITIES += [
             "(dedup on `key`, else the namespace's schema.key ; pass "
             "`origine_override=true` HERE, at mint time, if the rows carry an `origine` "
             "layer — from 2026-10-01 on, setting it without saying so is refused, and "
-            "the signed PUT itself carries no parameter) ; target='image' publishes ONE "
+            "the signed PUT itself carries no parameter ; pass `donnees_d_origine=true` "
+            "HERE too when the file IS the client's own data, so each cell freezes its "
+            "`origine` version as it lands) ; target='image' publishes ONE "
             "image (png/jpeg/gif/webp by magic bytes, 2 MB max) at a PUBLIC, permanent, "
             "content-addressed URL — the receipt carries `url`; upload once, reuse it in "
             "every `email_send(image_url=…)`. Requires write access to the target."

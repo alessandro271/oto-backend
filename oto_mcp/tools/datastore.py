@@ -697,7 +697,8 @@ def register(mcp: FastMCP) -> None:
     def data_write(namespace: Adresse, row: dict | None = None, id: str | None = None,
                    rows: list | None = None, key: str | None = None,
                    readonly_override: bool = False,
-                   origine_override: bool = False) -> dict:
+                   origine_override: bool = False,
+                   donnees_d_origine: bool = False) -> dict:
         """Write one row, or a BATCH of rows in a single call.
 
         ⚠️ **Provenance goes in `comment`, never in `origine`.** Put WHAT you
@@ -825,6 +826,15 @@ def register(mcp: FastMCP) -> None:
             row: single-row content as a dict (JSON-encoded automatically).
             id: omit = append a new row ; provided = partial update of that `_id`
                 (the one data_write / data_claim_next returned for that row).
+            donnees_d_origine: this call brings data AS THE CLIENT HANDED IT
+                OVER — an import. Each cell gets its `origine` version frozen at
+                the same time as its current value, carrying the same layers, so
+                `comment` says where the data came from. Use it for the import
+                itself, NOT for enrichment: an agent's findings are the current
+                version. An origin already set is never overwritten (a re-import
+                updates the current version and leaves the origin alone), and an
+                empty cell gets nothing — the client handed over nothing there,
+                which is not the same as handing over an empty value.
             rows: BATCH mode — a list of row dicts written in one call.
             key: business key field for batch upsert/dedup (else `schema.key`).
             readonly_override: `true` = overwrite the `readonly` columns THIS CALL
@@ -853,7 +863,8 @@ def register(mcp: FastMCP) -> None:
                     raise McpError(ErrorData(code=INVALID_PARAMS, message="rows doit être une liste de dicts"))
                 recap = store.write_rows(namespace, rows, key=key,
                                          readonly_override=readonly_override,
-                                         origine_override=origine_override)
+                                         origine_override=origine_override,
+                                         donnees_d_origine=donnees_d_origine)
                 # Le lot a une ENVELOPPE (son corps n'est pas une ligne) : elle porte
                 # l'identité entière — le nom CANONIQUE, plus l'écho de la chaîne
                 # reçue, et le numéro à employer ensuite.
@@ -867,11 +878,13 @@ def register(mcp: FastMCP) -> None:
                     raise McpError(ErrorData(code=INVALID_PARAMS, message="row doit être un dict"))
                 out = store.append_row(namespace, row,
                                        readonly_override=readonly_override,
-                                       origine_override=origine_override) \
+                                       origine_override=origine_override,
+                                       donnees_d_origine=donnees_d_origine) \
                     if id is None \
                     else store.update_row(namespace, id, row,
                                           readonly_override=readonly_override,
-                                          origine_override=origine_override)
+                                          origine_override=origine_override,
+                                          donnees_d_origine=donnees_d_origine)
             # Champs posés hors du format déclaré (#294) : l'écriture est acceptée (un
             # champ libre reste un droit du contrat), mais elle n'est plus silencieuse.
             # Le NUMÉRO du tableau part avec (`ns_id`) : l'écriture est le geste que

@@ -165,7 +165,7 @@ def test_l_upload_signe_declare_au_MINT_et_le_PUT_ne_peut_pas_se_le_donner(monke
 
     class _Store:
         def _write_rows_to_ns(self, ns_id, rows, *, key=None, readonly_override=False,
-                              origine_override=False):
+                              origine_override=False, donnees_d_origine=False):
             vus["origine_override"] = origine_override
             return {"inserted": len(rows), "updated": 0, "count": len(rows)}
 

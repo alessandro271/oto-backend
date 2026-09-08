@@ -22,6 +22,7 @@ from .controles import _relever_origine_module
 from .errors import BusinessKeyRequired, RowLocked, RowValidationError
 from .outils import _new_id, _refus_de_creation
 from .points import _refuse_dotted_names, ranger_les_couches
+from .donnees_d_origine import poser_les_deux_versions
 from .reserves import refuser_champs_reserves
 
 
@@ -53,7 +54,8 @@ class LotsMixin:
 
     def _write_rows_to_ns(self, ns_id: int, rows: list, *, key: Optional[str],
                           readonly_override: bool = False,
-                          origine_override: bool = False) -> dict:
+                          origine_override: bool = False,
+                          donnees_d_origine: bool = False) -> dict:
         """Cœur du batch, keyé par `ns_id` déjà résolu (réutilisable hors contexte
         d'org — matérialisation d'un upload signé, où l'org de session est absente).
         Le schéma v2 (validation/lifecycle, ADR 0046) s'applique à CHAQUE row du
@@ -115,7 +117,8 @@ class LotsMixin:
                 if existing_id is not None:
                     self._merge_into_row(ns_id, existing_id, user_data, schema=schema,
                                          forcage=forcage,
-                                     origine_override=origine_override)
+                                         origine_override=origine_override,
+                                         donnees_d_origine=donnees_d_origine)
                     updated += 1
                     ids.append(existing_id)
                     continue
@@ -125,6 +128,11 @@ class LotsMixin:
                                         agent=aga.appel_d_agent())
                 _relever_origine_module(self, ns_id, user_data, schema=schema,
                                         declare=origine_override)
+                # CRÉATION : pas de ligne en base, donc rien à préserver — mais la
+                # règle « une origine déjà posée ne se réécrit pas » vaut quand même,
+                # car l'appelant peut avoir écrit `origine` lui-même (chemin déclaré).
+                if donnees_d_origine:
+                    poser_les_deux_versions(user_data)
                 self._check_row(schema, user_data)
                 try:
                     row = db.datastore_insert_row(ns_id, _new_id(), user_data)
