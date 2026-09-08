@@ -114,7 +114,7 @@ class _FakeStore:
         return [{"namespace": "leads", "schema": self._schema, "shared": False,
                  "url": "https://dash/leads"}]
 
-    def list_rows(self, namespace, filter=None, limit=100):
+    def list_rows(self, namespace, filter=None, limit=100, **_):
         rows = self._rows
         if filter:
             rows = [r for r in rows

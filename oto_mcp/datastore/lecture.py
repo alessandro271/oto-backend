@@ -11,6 +11,7 @@ from typing import Optional
 
 from .. import db
 from . import layers as dsl
+from . import versions as dsver
 from . import schema as dsv2
 from .columns import _refuse_group_by_compose
 from .errors import InvalidCursor, RowNotFound
@@ -40,18 +41,21 @@ class LectureMixin:
         return health if (health["off_type"] or health["empty"]) else None
 
     def get_row(self, namespace: str, row_id: str, *,
-                layers: str = dsl.DEFAUT) -> dict:
+                layers: str = dsl.DEFAUT,
+                versions: tuple = dsver.DEFAUT) -> dict:
         ns_id = self._resolve(namespace)
         row = db.datastore_get_row(ns_id, row_id)
         if not row:
             raise RowNotFound(row_id)
-        return self._row_to_dict(row, self._schema_of(ns_id), layers=layers)
+        return self._row_to_dict(row, self._schema_of(ns_id), layers=layers,
+                                 versions=versions)
 
     def list_rows(
         self,
         namespace: str,
         filter: Optional[dict] = None,
         limit: int = 100,
+        versions: tuple = dsver.DEFAUT,
     ) -> list[dict]:
         """Filtre exact k:v en Python (chemin MCP `data_rows`). Ordre stable plus
         ancien d'abord (compat historique)."""
@@ -59,7 +63,7 @@ class LectureMixin:
         sch = self._schema_of(ns_id)
         out: list[dict] = []
         for row in db.datastore_list_rows(ns_id, order_by="_created_at", order_dir="asc"):
-            record = self._row_to_dict(row, sch)
+            record = self._row_to_dict(row, sch, versions=versions)
             if filter and not all(str(record.get(k)) == str(v) for k, v in filter.items()):
                 continue
             out.append(record)
@@ -79,6 +83,7 @@ class LectureMixin:
         order_dir: str = "desc",
         filters: Optional[list] = None,
         layers: str = dsl.DEFAUT,
+        versions: tuple = dsver.DEFAUT,
     ) -> dict:
         """Page pour l'agent (chemin MCP `data_rows`), filtre/recherche/tri poussés en
         SQL. Renvoie `{rows, next_cursor}` — `next_cursor` non nul ⇒ il reste des lignes
@@ -115,8 +120,14 @@ class LectureMixin:
                            if len(rows) == limit else None)
             if sch is None and rows:
                 sch = self._schema_of(ns_id)
-            out = {"rows": [self._row_to_dict(r, sch, layers=layers) for r in rows],
-                   "next_cursor": next_cursor}
+            out = {"rows": [self._row_to_dict(r, sch, layers=layers, versions=versions) for r in rows],
+                   "next_cursor": next_cursor,
+            # ⚠️ La réponse DÉCLARE ce qu'elle sert (oto#140). Sans elle, « je ne
+            # l'ai pas demandée » et « elle n'existe pas sur cette case » se lisent
+            # pareil — et le lecteur réinventerait un marqueur, en pire, puisque cette
+            # fois il l'aurait deviné. Au niveau de la RÉPONSE, jamais de la cellule :
+            # coût nul par ligne, et l'enveloppe devient autoportante.
+                   "versions_servies": list(versions)}
             health = self._order_health(ns_id, order_by, otype, oopts, q, filters)
             if health:
                 out["order_health"] = health
@@ -128,9 +139,13 @@ class LectureMixin:
             ns_id, after_row_id=after, limit=limit, q=q, filters=filters)
         if sch is None and rows:
             sch = self._schema_of(ns_id)
-        out = [self._row_to_dict(r, sch, layers=layers) for r in rows]
+        out = [self._row_to_dict(r, sch, layers=layers, versions=versions) for r in rows]
         next_cursor = _encode_cursor(rows[-1]["row_id"]) if len(rows) == limit else None
-        return {"rows": out, "next_cursor": next_cursor}
+        # ⚠️ SECOND retour de cette méthode — le chemin du curseur simple. Le premier
+        # (trié) le déclarait déjà ; celui-ci non. Une fonction à deux sorties est une
+        # famille de deux chemins, et la question est « combien y en a-t-il ? ».
+        return {"rows": out, "next_cursor": next_cursor,
+                "versions_servies": list(versions)}
 
     def count_rows(self, namespace: str, *, filter: Optional[dict] = None,
                    q: Optional[str] = None, filters: Optional[list] = None) -> int:
@@ -171,6 +186,7 @@ class LectureMixin:
         filter: Optional[dict] = None,
         filters: Optional[list] = None,
         layers: str = dsl.DEFAUT,
+        versions: tuple = dsver.DEFAUT,
     ) -> dict:
         """Page server-side (tri/recherche/filtres SQL) + total — pour le dashboard.
         Deux formes de filtre CUMULABLES, comme `aggregate` : `filter` exact
@@ -199,11 +215,17 @@ class LectureMixin:
             order_dir=order_dir, q=q, filters=clauses,
             order_type=otype, order_options=oopts)
         out = {
-            "rows": [self._row_to_dict(r, sch, layers=layers) for r in rows],
+            "rows": [self._row_to_dict(r, sch, layers=layers, versions=versions) for r in rows],
             # Le total doit décrire le MÊME jeu que la page : filtré aussi, sinon la
             # pagination du dashboard annonce des lignes qu'elle ne servira jamais.
             "total": db.datastore_count_rows(ns_id, q=q, filters=clauses),
             "offset": offset, "limit": limit,
+            # ⚠️ La réponse DÉCLARE ce qu'elle sert (oto#140). Sans elle, « je ne
+            # l'ai pas demandée » et « elle n'existe pas sur cette case » se lisent
+            # pareil — et le lecteur réinventerait un marqueur, en pire, puisque cette
+            # fois il l'aurait deviné. Au niveau de la RÉPONSE, jamais de la cellule :
+            # coût nul par ligne, et l'enveloppe devient autoportante.
+            "versions_servies": list(versions),
         }
         health = self._order_health(ns_id, order_by, otype, oopts, q, clauses)
         if health:

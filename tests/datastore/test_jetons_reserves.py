@@ -288,7 +288,7 @@ class _StoreLigne:
     def __init__(self):
         self.vu = {}
 
-    def get_row(self, namespace, row_id, *, layers="flat"):
+    def get_row(self, namespace, row_id, *, layers="flat", versions=None):
         self.vu["get"] = (namespace, row_id)
         return self.ligne
 

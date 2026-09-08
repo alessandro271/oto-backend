@@ -170,6 +170,33 @@ cliente déjà écrasées par des agents, et un balayage qui n'a pu poser que
 **au mint**, avec le reste : le `PUT` signé ne porte aucun paramètre, donc celui qui
 livre les octets ne peut pas décider que son fichier est la donnée de la cliente.
 
+## 4 ter. `versions` — quelles versions tu veux LIRE
+
+Une case existe en deux versions : `current`, ce qu'on a établi, et `origine`, ce que
+la cliente a remis. Une écriture vise toujours la courante et n'a pas à le dire ; une
+lecture, elle, nomme ce qu'elle veut.
+
+```
+data_rows(namespace="…", versions=["current", "origine"])
+```
+
+⚠️ **Demande les DEUX dans le MÊME appel quand tu les compares.** Deux appels ne sont
+pas atomiques : une écriture entre les deux te ferait comparer l'avant d'un état à
+l'après d'un autre, et tu annoncerais « corrigé » sur une ligne que personne n'a
+touchée.
+
+⚠️ **Le nom NU porte toujours la version courante**, quelle que soit ta demande.
+`versions` décide seulement de ce qui s'AJOUTE à côté (`champ.origine` et ses
+sous-champs). Faire porter deux sens à `champ` selon un paramètre serait un piège, pas
+une commodité.
+
+**La réponse déclare ce qu'elle a servi**, dans `versions_servies`. C'est ce qui rend
+discernables « je ne l'ai pas demandée » et « cette case n'en a pas » — sans quoi tu
+réinventerais un marqueur, en pire, puisque cette fois tu l'aurais deviné.
+
+Le défaut sert encore les deux. **Il basculera vers `current` seul, avec préavis daté**
+— si un écran chez toi lit la valeur de départ, nomme-la dès maintenant.
+
 ## 5. Ce que `readonly: true` protège — et ne protège pas
 
 Une colonne `readonly` (schéma) verrouille la **valeur** d'une ligne en place : une

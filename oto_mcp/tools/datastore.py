@@ -22,6 +22,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 from .. import access, db, ownership
 from ..datastore import claimable, identite, jetons
 from ..datastore import layers as dsl
+from ..datastore import versions as dsver
 from ..datastore.identite import AdresseJson as Adresse
 from ..datastore import schema as dsv2
 from ..datastore.core import (
@@ -1064,12 +1065,24 @@ def register(mcp: FastMCP) -> None:
         count_only: bool = False, q: str | None = None,
         order_by: str | None = None, order_dir: str = "desc",
         filters: Optional[list[dict]] = None, layers: str = dsl.DEFAUT,
+        # ⚠️ `dsver.DEFAUT`, jamais un littéral — même promesse que `layers.DEFAUT` :
+        # le défaut se lit à un seul endroit pour qu'une bascule soit un seul geste.
+        versions: Optional[list[str]] = None,
     ) -> dict:
         """Read rows. WITH `id` = the single row (by `_id`). WITHOUT `id` = one PAGE
         of rows (`filter`/`q` narrow it, `order_by` sorts it) with a stable cursor.
 
         Layers come back FLAT by default (`champ.origine` beside the bare name);
         `layers="nested"` returns the shape you write — guide `datastore-semantics`.
+
+        `versions=["current","origine"]` picks which VERSIONS of each cell you get:
+        `current` is what we established, `origine` what the client handed over.
+        ⚠️ Ask for BOTH in ONE call when you compare them — two calls are not atomic,
+        and an write in between would make you compare the before of one state with
+        the after of another. The bare name ALWAYS carries the current version;
+        `versions` only decides what is added beside it. The reply states what it
+        served in `versions_servies`, so "I did not ask for it" never looks like
+        "this cell has none".
         The REST face `GET …/rows` pages by `offset` with a `total`, no cursor.
 
         `namespace` = the table's NUMBER (`ns_id`, e.g. 174) — the form to use;
@@ -1166,12 +1179,17 @@ def register(mcp: FastMCP) -> None:
         try:
             jetons.verifier_champs(fields=fields, filter=filter, filters=filters)
             layers = dsl.check(layers)
+            # Refus qui NOMME le paramètre, la valeur reçue et ce qui est admis — il
+            # traverse en INVALID_PARAMS comme les autres refus d'adresse, au seul
+            # moment où l'appelant peut encore corriger.
+            vers = dsver.check(versions)
             if count_only:
                 total = store.count_rows(namespace, filter=filter, q=q,
                                          filters=filters)
                 return {"total": total, **identite.numero(store.dernier_tableau)}
             if id is not None:
-                row = store.get_row(namespace, id, layers=layers)
+                row = store.get_row(namespace, id, layers=layers,
+                                    versions=vers)
                 # ⚠️ Le NUMÉRO ne s'ajoute PAS ici, et c'est délibéré : cette remise
                 # n'a pas d'enveloppe, son corps EST la ligne — et c'est exactement
                 # l'objet que la plateforme invite à relire puis republier tel quel
@@ -1183,10 +1201,17 @@ def register(mcp: FastMCP) -> None:
             page = store.cursor_rows(namespace, filter=filter, limit=limit,
                                      cursor=cursor, q=q, filters=filters,
                                      order_by=order_by, order_dir=order_dir,
-                                     layers=layers)
+                                     layers=layers, versions=vers)
             rows = [_project_row(r, fields) for r in page["rows"]] if fields else page["rows"]
             out = {"rows": rows, "count": len(rows),
                    "next_cursor": page["next_cursor"],
+                   # La réponse DÉCLARE ce qu'elle sert : « pas demandée » et « absente
+                   # de cette case » cessent de se ressembler.
+                   # ⚠️ Depuis `vers`, la valeur que CETTE face vient de valider — pas
+                   # depuis la réponse du store. Le relayer ferait dépendre la face
+                   # d'une clé qu'elle connaît déjà, et deux sources pour un même fait
+                   # finissent toujours par diverger.
+                   "versions_servies": list(vers),
                    **identite.numero(store.dernier_tableau)}
             # Tri typé (#336) : l'écart (valeurs hors type/options, cases vides —
             # rangées en queue) se DIT, sinon le tri a l'air délibéré et ment.

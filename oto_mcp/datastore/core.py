@@ -35,6 +35,7 @@ from psycopg.errors import UniqueViolation
 from . import acces_agent as aga
 from . import ecartes as dsec
 from . import layers as dsl
+from . import versions as dsver
 from . import schema as dsv2
 from . import claimable, hors_org
 # Les refus : extraits dans `errors` (#325), ré-importés ici pour que tout appelant
@@ -253,7 +254,8 @@ class DatastorePg(SchemaOpsMixin, RegistreMixin, LectureMixin, EcritureMixin,
 
     @staticmethod
     def _row_to_dict(row: dict, schema: Optional[dict] = None, *,
-                     bail_echu: str = "taire", layers: str = dsl.DEFAUT) -> dict:
+                     bail_echu: str = "taire", layers: str = dsl.DEFAUT,
+                     versions: tuple = dsver.DEFAUT) -> dict:
         """Ligne `datastore_rows` → row API (`_id`/`_created_at`/`_updated_at` à
         plat + champs user). Le bail de claim (ADR 0046 D) n'apparaît que s'il est
         posé (une ligne libre n'a aucune des trois clés `_claimed_*` → absentes,
@@ -262,6 +264,16 @@ class DatastorePg(SchemaOpsMixin, RegistreMixin, LectureMixin, EcritureMixin,
         `layers` (oto#53) : la forme des cellules à couches — `flat` (défaut) les
         aplatit à côté du nom nu, `nested` les rend comme elles s'écrivent. Le défaut
         vit dans `layers.DEFAUT`, pas ici.
+
+        `versions` (oto#140) : les VERSIONS servies — `current` (ce qu'on a établi) et
+        `origine` (ce que la cliente a remis). Le défaut vit dans `versions.DEFAUT`.
+
+        ⚠️ **Le NOM NU rend toujours la version courante, quelle que soit la demande.**
+        Faire porter deux sens à `champ` selon un paramètre serait exactement le piège
+        qu'on retire ailleurs du produit : un mot, deux choses. `versions` décide donc
+        de ce qui S'AJOUTE — demander `origine` fait apparaître `champ.origine` et ses
+        sous-champs, ne pas la demander les fait disparaître, et `champ` ne bouge
+        jamais.
 
         **Masquage agent (oto#83)** : les colonnes `agent_access: "none"` sont retirées
         ICI, au seul endroit par lequel passe TOUTE ligne servie par le store — treize
@@ -301,7 +313,15 @@ class DatastorePg(SchemaOpsMixin, RegistreMixin, LectureMixin, EcritureMixin,
             out[k] = dsv2.served_value(v)
             # Les couches s'exposent dès qu'il y en a — même sans `valeur` posée
             # (import de socle sur un champ pas encore renseigné).
-            out.update(dsv2.flat_layers(k, v))
+            plat = dsv2.flat_layers(k, v)
+            if not dsver.sert_l_origine(versions):
+                # Retiré ICI, à la projection, et pas en amont : `flat_layers` est le
+                # point unique qui fabrique ces noms, et un filtre posé ailleurs
+                # devrait connaître leur forme — donc la redire, donc diverger.
+                prefixe = f"{k}.{dsv2.ORIGIN_LAYER}"
+                plat = {n: val for n, val in plat.items()
+                        if n != prefixe and not n.startswith(prefixe + ".")}
+            out.update(plat)
         # ⚠️ Un bail EXPIRÉ n'est pas une réservation — mesuré le 01/09/2026 sur un
         # fichier de production : **495 lignes sur 8 910 portaient `_claimed_by`, et
         # les 495 étaient expirées**, la plus ancienne depuis dix-huit jours, au nom

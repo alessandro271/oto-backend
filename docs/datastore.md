@@ -872,6 +872,19 @@ de fin de passage détectait après coup.
   valeur courante la présenterait comme celle de la cliente — ce que la définition
   interdit. Le marqueur rend l'ignorance explicite plutôt que muette : sans lui, « pas
   d'origine » se confondrait avec « origine vide ».
+  ⚠️ **`versions` (oto#140) — palier 1 de la lecture à deux versions.** `current` et
+  `origine` se nomment (`versions=["current","origine"]`), et la réponse déclare ce
+  qu'elle a servi sous `versions_servies` : sans cette déclaration, « pas demandée » et
+  « absente de cette case » se lisent pareil. ⚠️ **Le nom NU garde toujours la version
+  courante** — faire porter deux sens à `champ` selon un paramètre serait le piège
+  qu'on retire ailleurs du produit. Le défaut sert encore les deux ; la bascule vers
+  `current` seul viendra avec préavis daté et 24 h d'annonce au consommateur dont
+  l'écran des écarts lit la valeur de départ. ⚠️ Cette bascule n'est pas une économie
+  de données : elle supprime la surface d'un incident — un écran s'apprêtait à annoncer
+  à une cliente « nous avons corrigé votre valeur » en lui montrant du texte de la
+  plateforme, et ce genre d'accident demande que la donnée soit là **sans qu'on l'ait
+  demandée**. Les deux versions arrivent dans le MÊME appel, jamais deux : deux appels
+  ne sont pas atomiques.
   ⚠️ **`donnees_d_origine: true` (oto#140) supprime cette dépendance à l'ordre**, et
   c'est le remède de fond : au lieu d'un filet armé à l'avance, un GESTE explicite. Un
   appel qui le porte déclare qu'il apporte la donnée telle que la cliente l'a remise,

@@ -98,7 +98,7 @@ def test_la_surface_n_ajoute_aucune_cle(monkeypatch):
     la surface enrichit chaque entrée (`row_title`, `email` résolu à la lecture). Une
     clé posée là échapperait aux deux tests ci-dessus."""
     class _Store:
-        def get_row(self, namespace, row_id):
+        def get_row(self, namespace, row_id, **_):
             return {"societe": "DEXXON GROUPE"}
 
         def declared_key(self, namespace):

@@ -49,7 +49,7 @@ from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .common import HORODATAGE, ns_not_found
 from .lot import refuser_un_lot
 from ..registry import CAPABILITIES
-from ._forme import _LAYERS, _layers
+from ._forme import _LAYERS, _VERSIONS, _layers, _versions
 
 
 def _tolerant_int(v):
@@ -84,6 +84,7 @@ class ListRowsInput(BaseModel):
     # JSON encodé : liste de clauses `{field, op, value}`, combinées en ET.
     filters: Optional[str] = None
     layers: str = _LAYERS
+    versions: Optional[list[str]] = _VERSIONS
 
     _coerce = field_validator("offset", "limit", mode="before")(_tolerant_int)
 
@@ -114,6 +115,7 @@ class GetRowInput(RowRefInput):
     """La lecture d'une ligne seule porte `layers` ; `RowRefInput` reste partagé avec
     la suppression, qui n'a pas de forme à choisir."""
     layers: str = _LAYERS
+    versions: Optional[list[str]] = _VERSIONS
 
 
 # #658 : le corps EST la ligne (`RestBinding.body_field`) — le forçage ne peut donc
@@ -342,7 +344,8 @@ def _list_rows(ctx: ResolvedCtx, inp: ListRowsInput) -> dict:
         page = store.page_rows(
             ns, offset=offset, limit=limit,
             order_by=inp.order_by or None, order_dir=inp.order_dir,
-            q=inp.q or None, filter=filter_eq, filters=filters, layers=layers)
+            q=inp.q or None, filter=filter_eq, filters=filters, layers=layers,
+            versions=_versions(inp.versions))
         return {**page, **identite.numero(store.dernier_tableau)}
     except NamespaceNotFound:
         raise ns_not_found(ctx.sub, ns)
@@ -390,7 +393,8 @@ def _get_row(ctx: ResolvedCtx, inp: GetRowInput) -> dict:
     ns, rid = _adresse(inp.namespace, inp.row_id)
     layers = _layers(inp.layers)
     try:
-        return make_store(ctx.sub).get_row(ns, rid, layers=layers)
+        return make_store(ctx.sub).get_row(ns, rid, layers=layers,
+                                           versions=_versions(inp.versions))
     except NamespaceNotFound:
         raise ns_not_found(ctx.sub, ns)
     except RowNotFound:

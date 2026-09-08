@@ -99,7 +99,7 @@ class _FakeStore:
     def resolve_ns_id(self, namespace):
         return self.NS_ID
 
-    def get_row(self, namespace, row_id):
+    def get_row(self, namespace, row_id, **_):
         return dict(self.row)
 
     def update_row(self, namespace, row_id, patch, *, trace=None, readonly_override=False, origine_override=False,

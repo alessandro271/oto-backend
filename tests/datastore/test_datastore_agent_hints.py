@@ -14,7 +14,7 @@ class _Store:
         ]
         self._key = key
 
-    def cursor_rows(self, namespace, filter=None, limit=100, cursor=None):
+    def cursor_rows(self, namespace, filter=None, limit=100, cursor=None, **_):
         rows = self._rows
         if filter:
             rows = [r for r in rows
