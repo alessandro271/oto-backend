@@ -1507,8 +1507,10 @@ class ImportProjectInput(BaseModel):
 
 
 def _import_project(ctx: ResolvedCtx, inp: ImportProjectInput) -> dict:
-    """« Ajouter à mon Oto » : forke un projet PUBLIÉ (résolu par slug) dans l'org ACTIVE
-    de l'appelant, ou RÉCUPÈRE la copie déjà présente (idempotent). Copie la STRUCTURE
+    """« Ajouter à mon Oto » : forke un projet PUBLIÉ (résolu par slug) chez L'APPELANT
+    — copie PERSONNELLE, rangée dans son org active sans y être partagée (ADR 0068,
+    08/09/2026 ; c'était l'org active qui la possédait) — ou RÉCUPÈRE la copie déjà
+    présente (idempotent). Copie la STRUCTURE
     (brief + docs + liens + fichiers ; un tableau d'une autre org est re-provisionné à
     vide par `duplicate_project` — anti-fuite) — JAMAIS les credentials (org-scopés). Le
     slug d'un partage `secret` est non devinable → le posséder = consentement au fork ;
@@ -1561,8 +1563,11 @@ CAPABILITIES += [
         Output=ImportedProject,
         authz=ORG_MEMBER,
         description=(
-            "« Add to my Oto »: FORK a PUBLISHED project (resolved by its share slug) into "
-            "your ACTIVE org, or RETURN the copy you already imported (idempotent). Copies the "
+            "« Add to my Oto »: FORK a PUBLISHED project (resolved by its share slug) to "
+            "YOURSELF — the copy is PRIVATE, visible to you alone, filed in your active org "
+            "without being shared with it (ADR 0068); share or transfer it afterwards if you "
+            "want your team to see it. The reply says so in `visible_to`. "
+            "Or RETURN the copy you already imported (idempotent). Copies the "
             "STRUCTURE (brief + docs + links + files; a tableau owned by another org is "
             "re-provisioned EMPTY) — NEVER credentials. Source stays intact. Powers the public "
             "share page's acquisition CTA; the dashboard calls it after login."

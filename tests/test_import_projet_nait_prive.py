@@ -151,3 +151,20 @@ def test_une_copie_PERSONNELLE_déjà_importée_n_est_pas_dupliquée(monde):
     out = P._import_project(CTX, P.ImportProjectInput(slug="demo-x"))
     assert out["imported"] is False and out["project_id"] == 56
     assert monde["projets"] == []
+
+
+def test_la_DESCRIPTION_SERVIE_de_l_import_ne_promet_plus_l_org():
+    """Le texte servi est du code de production — c'est toute la leçon du 08/09/2026.
+
+    Cette description-ci annonce « into your ACTIVE org » depuis toujours. Elle part
+    dans l'`openapi.json` public et dans le catalogue des capacités : la laisser
+    derrière le comportement, c'est refaire à l'identique le défaut qu'on vient de
+    fermer sur `data_create_namespace`, une heure plus tôt, dans le même dépôt."""
+    from oto_mcp.capabilities.registry import CAPABILITIES
+
+    cap = next(c for c in CAPABILITIES if c.key == "me.import_project")
+    d = " ".join((cap.description or "").split())
+    assert "into your ACTIVE org" not in d, (
+        "la copie n'appartient plus à l'org active mais à la personne (ADR 0068)")
+    assert "PRIVATE" in d or "private" in d, (
+        "ce que la copie devient doit être dit là où on le lit")
