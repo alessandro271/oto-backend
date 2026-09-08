@@ -604,7 +604,12 @@ ce cas : posé quand une org était *explicitement demandée* et que le tableau 
 personnel quand même. Il n'apparaît pas quand l'org active est simplement celle par
 défaut, sans quoi il sortirait à chaque création et ne serait plus lu.
 
-Le propriétaire **ne se change pas après coup** : il se décide à la création.
+Le propriétaire se décide **à la création** — c'est le geste normal, et le seul qui
+n'exige rien d'autre. Il se change ensuite par TRANSFERT (`oto_resource op=transfer`,
+réservé au propriétaire ou à un admin). ⚠️ Cette ligne disait « ne se change pas après
+coup » : c'était faux, et l'avertissement servi le répétait — sur la face agent, où
+`owner` n'existe pas, le transfert est même le SEUL geste disponible, et c'est donc lui
+que le message y nomme désormais (08/09/2026).
 
 Côté oto-core : `DatastoreClient.create_namespace(namespace, owner=None)` (v1.115.0 —
 avant, la lib ne permettait pas de créer un tableau d'org).

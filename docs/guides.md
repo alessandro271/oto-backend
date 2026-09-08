@@ -47,7 +47,12 @@ par id (réservé platform_admin). Autz conditionnelle dans `tools/orgs.py`
   from_version])` (base = slug omis ; nommée sinon ; `from_version` = revert) +
   `oto_procedure(op='delete', slug[, scope, org, group])`. Autz **par PALIER** (`scope`,
   #681 — 31/08/2026) :
-  - `scope='org'` (défaut) : `org` absent → org active, **org_admin** ; présent → autre org,
+  - `scope='user'` (**défaut** depuis l'ADR 0068, 04/09/2026) : procédure PERSONNELLE,
+    visible de toi seul, aucun droit d'org requis. ⚠️ Cette ligne annonçait `org` par
+    défaut alors que le code rendait déjà `user` (`_ECRIT_SCOPE`) : un agent y lisait
+    qu'il écrivait pour l'équipe en écrivant pour lui — l'objet introuvable, pas la
+    fuite, mais la même journée perdue (corrigé le 08/09/2026, texte servi compris) ;
+  - `scope='org'` : `org` absent → org active, **org_admin** ; présent → autre org,
     **platform_admin** (l'opérateur provisionne n'importe quelle org) ;
   - `scope='group'` : `group` absent → équipe active, présent → l'équipe nommée ; **chef
     d'équipe** requis (escalade `roles.can_admin_group` : org_admin parent, platform_admin).

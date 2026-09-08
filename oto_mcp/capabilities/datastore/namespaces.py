@@ -173,8 +173,14 @@ def _create_namespace(ctx: ResolvedCtx, inp: CreateNamespaceInput) -> dict:
     namespace = inp.namespace.strip()
     if not namespace:
         raise AuthzDenied(400, "missing_namespace")
+    # ⚠️ Le défaut n'est PAS restitué ici, et c'est le point du lot du 08/09/2026 :
+    # `owner_type=None` laisse le store appliquer `_default_owner` (ADR 0068). Le
+    # restater ici (`or "user"`) faisait vivre le même défaut à deux endroits — et
+    # surtout privait le store de la seule chose que la ROUTE sache : l'appelant
+    # a-t-il NOMMÉ un propriétaire ? C'est ce fait-là qui décide de l'avertissement,
+    # pas la valeur du propriétaire.
     owner = inp.owner or {}
-    owner_type = (owner.get("type") or "user").strip()
+    owner_type = ((owner.get("type") or "").strip() or None)
     owner_id = ctx.sub
     if owner_type == "org":
         try:
@@ -192,41 +198,17 @@ def _create_namespace(ctx: ResolvedCtx, inp: CreateNamespaceInput) -> dict:
         if not roles.can_read_group(ctx.sub, group_id):
             raise AuthzDenied(403, "not_group_member")
         owner_id = str(group_id)
-    elif owner_type != "user":
+    elif owner_type is not None and owner_type != "user":
         raise AuthzDenied(400, "invalid_owner_type")
     try:
-        cree = make_store(ctx.sub).create_namespace(
+        # Le propriétaire, son identifiant, `is_personal` et l'`avertissement` sont
+        # posés par le STORE et relayés tels quels — c'est ce qui interdit aux deux
+        # faces de diverger (elles l'ont fait du 05 au 08/09 : cette réponse-ci les
+        # portait, celle du tool MCP non, et sa description promettait le contraire).
+        return make_store(ctx.sub).create_namespace(
             namespace, owner_type=owner_type, owner_id=owner_id)
     except NamespaceExists:
         raise AuthzDenied(409, "namespace_exists")
-
-    personnel = owner_type == "user"
-    out = {**cree, "owner_type": owner_type, "owner_id": owner_id,
-           "is_personal": personnel}
-    # Le contexte d'org était posé (`X-Oto-Org` côté REST, `_org=` côté agent) et
-    # le tableau naît quand même personnel : c'est juste — le propriétaire ne se
-    # déduit JAMAIS du contexte (ADR 0068) — mais c'est le contraire de ce qu'on
-    # attend d'un en-tête que toute la doc du datastore recommande pour « agir dans
-    # l'org ». Sans cette phrase, tout marche sous cet en-tête et personne d'autre
-    # ne voit le tableau : l'erreur ne se découvre qu'au second agent.
-    # ⚠️ On regarde l'org EXPLICITEMENT demandée pour cet appel — la consultation
-    # `X-Oto-Org` (REST) ou l'org du jeton `_org=` (agent) — jamais `ctx.org_id`.
-    # Celui-ci vaut l'org ACTIVE, toujours posée puisqu'elle retombe sur la maison :
-    # avertir dessus, ce serait avertir à CHAQUE création, y compris quand personne
-    # n'a rien demandé de particulier. Un avertissement qui se déclenche toujours
-    # ne se lit plus.
-    from ... import session_org
-
-    demandee = session_org.current_view_org() or session_org.current_call_org()
-    if personnel and demandee and not (inp.owner or {}):
-        out["avertissement"] = (
-            f"Tableau créé PERSONNEL : toi seul le vois, même si l'organisation "
-            f"{demandee} était le contexte de cet appel. Le contexte d'org ne "
-            f"décide pas du propriétaire — seul `owner` le fait. Pour qu'il "
-            f"appartienne à l'organisation : `owner: {{\"type\": \"org\", "
-            f"\"id\": {demandee}}}` à la création (le propriétaire ne se change "
-            f"pas après coup).")
-    return out
 
 
 def _delete_namespace(ctx: ResolvedCtx, inp: NamespaceRefInput) -> dict:

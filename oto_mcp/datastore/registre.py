@@ -18,6 +18,46 @@ from .errors import NamespaceExists, NamespaceForbidden
 from .outils import _ns_url
 
 
+def _avertissement_de_portee(ns_id: int, owner_type: str, *,
+                             explicite: bool) -> Optional[str]:
+    """« Tu as posé un contexte d'org, et le tableau naît quand même personnel. »
+
+    C'est JUSTE (ADR 0068 : le propriétaire ne se déduit jamais du contexte), mais
+    c'est le contraire de ce qu'on attend d'un en-tête que toute la doc du datastore
+    recommande pour « agir dans l'org ». Sans cette phrase, tout marche sous cet
+    en-tête et personne d'autre ne voit le tableau : l'erreur ne se découvre qu'au
+    second agent.
+
+    ⚠️ On regarde l'org EXPLICITEMENT demandée pour cet appel — `X-Oto-Org` (REST) ou
+    l'org du jeton (`_org=`, agent) — jamais l'org ACTIVE, toujours posée puisqu'elle
+    retombe sur la maison. Avertir dessus, ce serait avertir à CHAQUE création, y
+    compris quand personne n'a rien demandé, et un avertissement qui se déclenche
+    toujours ne se lit plus.
+
+    ⚠️ **Le remède dépend de la FACE, parce que les deux faces n'ont pas le même
+    geste.** `owner` est un paramètre de la route REST ; le tool MCP ne l'a pas.
+    Prescrire `owner` à un agent, c'est lui faire dépenser un appel pour un refus —
+    le défaut même que cette phrase répare, retourné. Ce qu'un agent PEUT faire, lui,
+    c'est transférer après coup (`oto_resource op=transfer`).
+    """
+    if explicite or owner_type != "user":
+        return None
+    from .. import session_org
+
+    demandee = session_org.current_view_org() or session_org.current_call_org()
+    if not demandee:
+        return None
+    tete = (f"Tableau créé PERSONNEL : toi seul le vois, même si l'organisation "
+            f"{demandee} était le contexte de cet appel. Le contexte d'org ne décide "
+            f"pas du propriétaire — il se demande.")
+    if aga.appel_d_agent():
+        return (f"{tete} Pour qu'il appartienne à l'organisation : "
+                f"`oto_resource(op='transfer', resource_id='{ns_id}', "
+                f"new_owner_org={demandee})`.")
+    return (f"{tete} Pour qu'il appartienne à l'organisation : "
+            f"`owner: {{\"type\": \"org\", \"id\": {demandee}}}` à la création.")
+
+
 class RegistreMixin:
     """Le cycle de vie d'un namespace. Composé par `DatastorePg`."""
 
@@ -124,7 +164,16 @@ class RegistreMixin:
 
         Le contexte d'org de l'appel n'entre PAS dans ce choix : pour un classeur
         d'org ou d'équipe, passer `owner_type`/`owner_id`, dont l'autorisation
-        (appartenance) est vérifiée par l'appelant (capacité/route)."""
+        (appartenance) est vérifiée par l'appelant (capacité/route).
+
+        ⚠️ **La réponse porte le propriétaire, et c'est ICI qu'elle le porte** — pas
+        dans une face. Le 05/09 (`0e23177e`), `owner_type`/`owner_id`/`is_personal` et
+        l'avertissement ont été ajoutés dans la capacité REST seule, pendant que la
+        description servie du tool MCP promettait au modèle que « la réponse te dit le
+        propriétaire ». Deux faces, un seul geste, une promesse vraie d'un côté : le
+        créateur ne voit rien d'anormal, et l'écart se découvre au second agent. Le
+        store rend donc la forme complète et les deux faces la relaient (08/09/2026)."""
+        demande_explicite = owner_type is not None
         if owner_type is None:
             owner_type, owner_id = self._default_owner()
         oid = owner_id if owner_id is not None else self.sub
@@ -132,7 +181,14 @@ class RegistreMixin:
             ns_id = db.create_datastore_namespace(owner_type, oid, namespace)
         except ValueError as e:
             raise NamespaceExists(str(e))
-        return {"namespace": namespace, "id": ns_id, "url": _ns_url(ns_id, self.sub)}
+        out = {"namespace": namespace, "id": ns_id, "url": _ns_url(ns_id, self.sub),
+               "owner_type": owner_type, "owner_id": oid,
+               "is_personal": owner_type == "user"}
+        avertissement = _avertissement_de_portee(ns_id, owner_type,
+                                                 explicite=demande_explicite)
+        if avertissement:
+            out["avertissement"] = avertissement
+        return out
 
     def delete_namespace(self, namespace: str) -> None:
         ns_id = self._resolve(namespace)

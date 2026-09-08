@@ -16,6 +16,7 @@ import pytest
 from _datastore_rest import Boom, call as _call, cap as _cap, stub_authz
 
 from oto_mcp.capabilities.datastore import namespaces as dsn
+from oto_mcp.datastore import registre
 from oto_mcp.capabilities.registry import CAPABILITIES
 from oto_mcp.datastore.core import NamespaceExists, NamespaceForbidden, NamespaceNotFound
 
@@ -25,8 +26,17 @@ def _sans_db(monkeypatch):
     stub_authz(monkeypatch)
 
 
-class _Store:
-    """Le store, tel que les handlers l'appellent — chaque test injecte son verdict."""
+class _Store(registre.RegistreMixin):
+    """Le store, tel que les handlers l'appellent — chaque test injecte son verdict.
+
+    ⚠️ **Il HÉRITE de `RegistreMixin` pour `create_namespace`**, et pas par élégance :
+    depuis le 08/09/2026 c'est le STORE qui pose `owner_type`/`owner_id`/`is_personal`
+    et l'avertissement, et la route les RELAIE. Une doublure qui réécrirait cette forme
+    à la main resterait verte pendant que le vrai store change de contrat — le mode de
+    panne que ce fichier existe pour rendre bruyant, retourné contre lui.
+    """
+
+    sub = "u-1"
 
     def __init__(self, **verdicts):
         self.v = verdicts
@@ -44,8 +54,8 @@ class _Store:
 
     def create_namespace(self, namespace, *, owner_type=None, owner_id=None):
         self._out("create_namespace", namespace, owner_type, owner_id)
-        return {"namespace": namespace, "id": 42,
-                "url": "https://dashboard.oto.ninja/data/42"}
+        return registre.RegistreMixin.create_namespace(
+            self, namespace, owner_type=owner_type, owner_id=owner_id)
 
     def delete_namespace(self, namespace):
         return self._out("delete_namespace", namespace)
@@ -59,6 +69,11 @@ class _Store:
 
 @pytest.fixture
 def store(monkeypatch):
+    # Les deux seams que la vraie `create_namespace` touche — la base et l'URL.
+    monkeypatch.setattr(registre.db, "create_datastore_namespace",
+                        lambda ot, oid, ns: 42)
+    monkeypatch.setattr(registre, "_ns_url",
+                        lambda ns_id, sub: f"https://dashboard.oto.ninja/data/{ns_id}")
     s = _Store()
     monkeypatch.setattr(dsn, "make_store", lambda sub: s)
     return s
@@ -102,7 +117,10 @@ def test_la_creation_rend_201_et_le_tableau(store):
     assert "avertissement" not in corps, (
         "rien à signaler ⟹ pas de champ : un `null` de plus dans chaque "
         "réponse est du bruit, pas une information")
-    assert store.calls[0] == ("create_namespace", "vivier", "user", "u-1")
+    # `None` et non `"user"` : la route ne RESTATE plus le défaut, elle laisse le
+    # store l'appliquer. C'est ce qui lui permet de savoir si l'appelant a NOMMÉ
+    # un propriétaire — le fait dont dépend l'avertissement.
+    assert store.calls[0] == ("create_namespace", "vivier", None, "u-1")
 
 
 @pytest.fixture
