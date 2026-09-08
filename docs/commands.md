@@ -19,32 +19,8 @@ description: >-
 
 # Tests — le venv .venv N'A PAS pytest (extra `dev` non installé) et `uv run pytest`
 # crée un env éphémère SANS les deps projet (piège, ModuleNotFoundError). Recette :
-uv pip install --python .venv/bin/python "pytest>=8.0" "pytest-asyncio>=0.24" "pytest-xdist>=3.8"
+uv pip install --python .venv/bin/python "pytest>=8.0" "pytest-asyncio>=0.24"
 .venv/bin/python -m pytest -q
-
-# La suite est PARALLÈLE par défaut — mais seulement quand on ne nomme aucune cible.
-#   pytest -q                     → 4 workers  (11 252 cas ; série mesurée 4 min 51 s sur
-#                                               ce poste 28 cœurs le 08/09/2026)
-#   pytest -q tests/test_x.py     → série      (nommer une cible = série, et donc
-#                                               aucun conteneur, aucune place de jeton)
-#   OTO_TEST_PARALLELE=0 pytest -q → série, la SORTIE : un doute sur le parallélisme ne
-#                                    doit obliger personne à défaire quoi que ce soit
-#   OTO_TEST_PARALLELE=3 pytest -q → trois workers, même sur une exécution ciblée
-#   OTO_TEST_WORKERS=6 pytest -q   → change le défaut (4) sans changer la règle
-# ⚠️ **Le nombre de workers est CALIBRÉ, pas choisi.** Deux exécutions concurrentes
-# suffisent à fabriquer de faux échecs sur ce poste (07/09/2026, cf. `_jeton_de_suite`) :
-# un parallélisme trop large reproduit la MÊME contention à l'intérieur d'une seule suite.
-# Toucher au nombre ⟹ rejouer DEUX passes identiques et comparer les verdicts ; s'ils
-# divergent, c'est la contention, et il faut redescendre. Un gain de minutes payé en faux
-# rouges coûte l'enquête qui suit, qui vaut bien plus.
-# Un seul PostgreSQL est partagé par les workers (`tests/_pg_partage.py`) et une seule
-# place de jeton est prise pour la session entière ; TROIS fichiers restent sériels entre
-# eux, et le couple qui compte est un vrai conflit : `test_pg_fixture_hygiene` fabrique un
-# conteneur délibérément vieux sous l'étiquette `oto-test=1`, tandis que les pytest enfants
-# de `test_pin_oto_core_banniere` lancent le balai, qui énumère cette étiquette à l'échelle
-# de la MACHINE et retire ce qui a plus de deux heures — l'un efface donc le témoin de
-# l'autre. `test_empreinte_servie` les rejoint par précaution (sous-processus + relecture
-# de l'arbre git), sans conflit démontré. Cf. `tests/conftest.py`, `FICHIERS_EN_SERIE`.
 # ⚠️ **`/data/oto/backend/.venv` est PARTAGÉ entre N sessions parallèles** — ce qu'on y
 # installe, on l'installe chez les voisines, au milieu de leurs runs. Poser pytest est le
 # SEUL geste tolérable : additif, et il ne touche pas oto-core.
@@ -236,8 +212,7 @@ disputeraient les mêmes lignes.
 > ⚠️ **La bannière ne survit pas à `| grep passed`** (#790, mesuré le 01/09/2026 : elle
 > s'imprime sur des lignes à côté de celle qui contient ce mot, donc un filtre — le geste le
 > plus courant sur neuf mille tests — l'avale). Depuis, `pytest_report_teststatus`
-> (`conftest.py` de la RACINE — le contrôleur xdist ne charge pas celui de
-> `tests/`) range ces skips à part **dans le résumé final de pytest lui-même** — la SEULE
+> (`conftest.py`) range ces skips à part **dans le résumé final de pytest lui-même** — la SEULE
 > ligne garantie de contenir « passed ». `8924 passed, 103 skipped, …` devient
 > `8924 passed, 5 skipped, 98 non concluant(s) — venv ≠ pin oto-core vX.Y.Z, …` : le nombre ne
 > change pas, mais il **distingue** désormais les skips ordinaires des skips du pin, et **nomme**

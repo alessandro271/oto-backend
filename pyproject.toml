@@ -265,16 +265,6 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
-    # Parallélisation de la suite. 11 238 cas en série = 8-9 min ; à quatre workers,
-    # ~3 min — et sur une soirée à quatorze déploiements, ça se compte en heures.
-    # ⚠️ La distribution n'est PAS libre : `conftest.py` (racine) impose
-    # `--dist loadgroup` et pose un groupe par fichier, sans quoi les 100 fixtures de
-    # module qui créent chacune leur base seraient rejouées dans chaque worker
-    # recevant un morceau du même fichier. Le nombre de workers est CALIBRÉ, pas
-    # choisi : deux exécutions concurrentes suffisent à fabriquer de faux échecs sur
-    # un poste (07/09/2026), donc un parallélisme trop large reproduit la même
-    # contention à l'intérieur d'une seule suite. Sortie : `OTO_TEST_PARALLELE=0`.
-    "pytest-xdist>=3.8",
 ]
 
 [project.scripts]
@@ -282,20 +272,6 @@ dev = [
 # Il passe par `oto_mcp.cli` et non par `oto_mcp.server` parce qu'importer ce
 # dernier construit une instance MCP complète au niveau module (ADR 0065).
 oto-mcp = "oto_mcp.cli:main"
-
-[tool.pytest.ini_options]
-# ⚠️ **`--dist` DOIT vivre ici, pas dans un hook.** Un worker xdist ne reçoit pas les
-# options du contrôleur : `WorkerController.setup()` lui envoie un `option_dict` VIDE
-# (seul `basetemp` y est posé) et la ligne de commande D'ORIGINE, qu'il re-parse tout
-# seul. Un `config.option.dist = "loadgroup"` posé par un conftest vit donc dans le
-# contrôleur et nulle part ailleurs — le worker retombe sur le défaut, `no`, et le
-# groupage ne s'applique jamais (mesuré le 08/09/2026 : aucun nodeid ne portait son
-# suffixe `@groupe`, alors que le contrôleur, lui, distribuait bien en `loadgroup`).
-# Ce que fait ce mode : `conftest.py` (racine) pose un groupe par FICHIER — tout un
-# fichier part au même worker, ce dont dépendent les 100 fixtures de module qui créent
-# chacune leur base — plus un groupe COMMUN aux fichiers qui se disputent l'étiquette
-# docker `oto-test=1`, que `loadfile` ne sait pas exprimer. Sans `-n`, `--dist` seul ne distribue rien : la suite reste série.
-addopts = "--dist loadgroup"
 
 [build-system]
 requires = ["setuptools>=68"]
