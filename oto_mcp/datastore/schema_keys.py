@@ -102,7 +102,14 @@ CLES: tuple[Cle, ...] = (
     Cle("hint", ("front",), "l'indice court à côté du champ"),
     Cle("placeholder", ("front",), "le texte fantôme d'un champ vide"),
     Cle("display", ("validateur", "front"), "comment la colonne se rend", True),
-    Cle("role", ("validateur", "front"), "le rôle métier (statut, clé…)", True),
+    # ⚠️ `role` n'est plus lu par le validateur depuis le 08/09/2026 : `status` est
+    # désigné par le bloc `lifecycle`, `title` par `display: "title"`. Il reste servi
+    # et transporté fidèlement — un front l'interprète pour peindre ses colonnes — mais
+    # oto n'en fait RIEN. Le déclarer « validateur » recommanderait d'écrire une clé
+    # que la plateforme ignore, à quelqu'un qui lit cette liste justement pour savoir
+    # quoi écrire.
+    Cle("role", ("front",), "indication d'affichage, lue par un consommateur — oto "
+        "ne l'interprète pas", False),
 )
 
 #: Tout ce qu'une colonne a le droit de porter. C'est CE nom que l'avertissement

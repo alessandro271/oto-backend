@@ -132,7 +132,9 @@ def test_une_liste_fautive_ne_dit_pas_300_fois_la_meme_chose():
 
 @pytest.mark.parametrize("cran", [
     {"readonly": True},
-    {"role": "status"},
+    # ⚠️ La colonne d'état se reconnaît à son `lifecycle`, plus à `role: "status"`
+    # (08/09/2026) — l'exemption suit le bloc, pas l'étiquette.
+    {"lifecycle": {"states": ["a", "b"], "terminal": ["b"]}},
 ])
 def test_les_colonnes_que_l_appelant_n_ECRIT_pas_sont_hors_de_portee(cran):
     """Exiger une provenance de qui n'écrit pas la valeur ferait refuser des écritures
@@ -140,7 +142,8 @@ def test_les_colonnes_que_l_appelant_n_ECRIT_pas_sont_hors_de_portee(cran):
     le cycle de vie."""
     schema = {"fields": [{"key": "q", "type": "text",
                           "required_layers": ["comment"], **cran}]}
-    assert dsv2.validate_row(schema, {"q": "x"}, written={"q"}) == []
+    valeur = "a" if "lifecycle" in cran else "x"   # un état doit être valide
+    assert dsv2.validate_row(schema, {"q": valeur}, written={"q"}) == []
 
 
 def test_la_couche_posee_par_la_PLATEFORME_ne_se_reclame_pas():

@@ -212,14 +212,14 @@ def queue_release_warning(schema: Optional[dict]) -> Optional[str]:
         # fermer. On garde donc le dire, sur le fait qui est maintenant vrai.
         candidates = [str(f.get("key")) for f in _fields(schema)
                       if isinstance(f, dict) and f.get("key")
-                      and (f.get("role") == "status" or f.get("options"))]
+                      and f.get("options")]
         if not candidates:
             return None
         noms = ", ".join(f"`{c}`" for c in candidates[:3])
         return (f"aucune colonne ne porte de `lifecycle` : ce tableau n'a PAS de file "
                 f"de travail — `data_claim_next` n'y réservera jamais rien, et sans "
                 f"rien dire. {noms} ressemble(nt) à un état (options déclarées, ou "
-                f"l'ancienne étiquette `role: \"status\"`), mais **c'est le bloc "
+                f"`options` déclarées), mais **c'est le bloc "
                 f"`lifecycle` qui fait l'état** depuis le 08/09/2026. Déclare "
                 f"`lifecycle: {{states: [...], terminal: [...]}}` sur la colonne qui "
                 f"porte l'avancement. Cf. guide `work-queue`.")

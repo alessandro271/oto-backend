@@ -187,12 +187,12 @@ def validate_schema_def(schema: Optional[dict]) -> list[str]:
             strict=bool(schema.get("strict")), status_key=sf.get("key"),
             states={str(s) for s in (lc.get("states") or [])}
             if isinstance(lc.get("states"), list) else set()))
-    else:
-        # lifecycle posé sur un field non-status = erreur de placement (silencieux sinon)
-        for f in _fields(schema):
-            if isinstance(f.get("lifecycle"), dict) and f.get("role") != "status":
-                errors.append(
-                    f"field {f.get('key')!r}: lifecycle exige role=\"status\"")
+    # ⚠️ Il y avait ici un refus « lifecycle exige role="status" ». Retiré le
+    # 08/09/2026 avec l'étiquette : le bloc DÉSIGNE désormais sa colonne, il n'y a plus
+    # de placement à vérifier. Et ce refus n'avait pas protégé — cinq schémas de
+    # production portaient un `lifecycle` sur une colonne non étiquetée, stocké, servi
+    # et jamais lu, alors qu'il existait. Ce qui les arrête maintenant est plus haut :
+    # deux blocs sont refusés, et un bloc seul EST l'état.
     return errors
 
 

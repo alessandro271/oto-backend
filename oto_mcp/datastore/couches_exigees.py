@@ -142,7 +142,9 @@ def _couches_exigees_errors(fields: list, data: dict, path: str,
             # qui porte le cycle de vie (un état n'est pas une observation, il se
             # justifie par sa transition). Exiger une provenance de qui n'écrit pas
             # la valeur ferait refuser des écritures que personne ne peut corriger.
-            if f.get("readonly") is True or f.get("role") == "status":
+            # `role: "status"` a disparu (08/09/2026) : l'état est la colonne qui
+            # porte le `lifecycle`. L'exemption suit le bloc, pas l'étiquette.
+            if f.get("readonly") is True or isinstance(f.get("lifecycle"), dict):
                 continue
         brut = data.get(key)
         # Le VIDE ne déclenche rien — ni une valeur nulle, ni une couche posée seule

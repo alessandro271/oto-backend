@@ -9,7 +9,8 @@ couche que tout le reste interroge pour savoir de quoi il parle :
 - les contraintes portées par un champ (`max_length_of`, `pattern_of`) ;
 - ce que le premier niveau expose en bloc (`top_level_bounds`, `top_level_keys`,
   `top_level_enum_options`, `top_level_patterns`, `order_spec`) ;
-- les champs désignés par un RÔLE (`field_by_role`, `status_field`, `title_field`) ;
+- les champs désignés par leur STRUCTURE (`status_field` = qui porte le `lifecycle`,
+  `title_field` = qui porte `display: "title"`) ;
 - les crans qui décident d'un régime (`validation_active`, `key_required_of`,
   `readonly_fields`, `system_origin_fields`) ;
 - le vocabulaire des types (`SCALAR_TYPES`, `COMPOSITE_TYPES`).
@@ -198,12 +199,16 @@ def order_spec(schema: Optional[dict], key) -> tuple:
     return (None, None)
 
 
-def field_by_role(schema: Optional[dict], role: str) -> Optional[dict]:
-    """Le premier field déclarant ce `role` (`status`, `title`…), ou None."""
-    for f in _fields(schema):
-        if f.get("role") == role:
-            return f
-    return None
+# ⚠️ `field_by_role` est SUPPRIMÉE (08/09/2026). Elle n'avait plus aucun appelant —
+# `status` est désigné par le bloc `lifecycle`, `title` par `display: "title"` — mais
+# sa seule présence dans le source suffisait à faire déclarer `role` comme APPLIQUÉ
+# par `interpreted_keys()`, qui dérive du code plutôt que d'une liste.
+#
+# La plateforme annonçait donc appliquer une clé que plus personne ne lisait. Le module
+# l'avait prévu en toutes lettres : « c'est ce que `lifecycle` et `role` s'apprêtent à
+# faire — les figer laisserait la clé dans le vocabulaire après que le code aura cessé
+# de la lire ». Une fonction morte n'est pas neutre quand un inventaire se dérive du
+# source : **elle ment pour le compte de ceux qui l'ont abandonnée.**
 
 
 def status_field(schema: Optional[dict]) -> Optional[dict]:

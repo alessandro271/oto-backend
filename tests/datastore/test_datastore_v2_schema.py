@@ -404,8 +404,13 @@ def test_une_cible_de_couche_ne_declare_pas_de_colonne():
     """Une couche n'est pas une colonne : elle ne nomme pas la ligne, ne porte pas
     son statut, ne se subdivise pas. Ces clés seraient LUES NULLE PART — la forme
     acceptée-inerte que #347 a fermée."""
-    for cle, valeur in (("role", "status"), ("display", "title"),
-                        ("fields", [{"key": "x"}]), ("agent_access", "none")):
+    # ⚠️ `role` a quitté cette liste le 08/09/2026 : il n'est plus une clé du
+    # validateur, donc le refuser sur une couche n'aurait plus de sens — c'est
+    # l'avertissement des clés non interprétées qui le prend en charge, comme
+    # n'importe quelle déclaration de consommateur. `lifecycle` le remplace ici : il
+    # porte désormais l'état, et une couche n'en a pas.
+    for cle, valeur in (("display", "title"), ("fields", [{"key": "x"}]),
+                        ("agent_access", "none")):
         errs = dsv2.validate_schema_def({"fields": [
             {"key": "qualification", "type": "text"},
             {"key": "qualification.comment", cle: valeur}]})
