@@ -831,6 +831,22 @@ de fin de passage détectait après coup.
   couche, le paramètre n'a donc rien à y déclarer, et déclarer une destruction ne la
   rendrait pas réversible ; ces deux portes attendent le verrou humain.
 
+- ⚠️ **`origine: "system"` est SUPPRIMÉ (décision produit, 08/09/2026)** — remplacé
+  par `donnees_d_origine`, qui fige la version d'origine au moment où la valeur entre
+  au lieu d'armer un filet qui dépendait de l'ordre des gestes. **Plus rien ne capture
+  automatiquement** : une valeur qu'un agent écrase n'est plus retenue. Mesuré au
+  moment du retrait : 500 colonnes déclaraient le cran sur 10 tableaux, et 28 799
+  cases portaient une couche `origine` — **ces données ne bougent pas**, elles restent
+  lues et servies ; c'est le mécanisme qui part. Une déclaration qui subsiste devient
+  une clé non interprétée, signalée comme telle. `system_origin_fields()` est GARDÉE
+  et rendue vide plutôt que supprimée : ses six appelants s'éteignent d'eux-mêmes, au
+  lieu de disparaître un par un au risque d'en oublier un.
+  ⚠️ **Ce que le cran faisait encore la veille du retrait** : sur un tableau de
+  campagne, il avait retenu 39 valeurs d'agent qu'un geste nocturne emportait. C'est la
+  contrepartie assumée — l'origine cesse de dépendre de qui pense à déclarer un cran
+  avant l'import, et elle cesse d'être rattrapée quand personne ne l'a déclarée.
+
+  *Ce qui suit décrit le mécanisme retiré, gardé pour lire l'existant :*
 - **`origine: "system"` — la copie de secours posée par la plateforme.** Sur 41 fiches
   portant une couche `<champ>.origine` censée conserver la valeur remise, **une** l'a
   réécrite avec la valeur nouvelle (un homonyme adopté comme raison sociale, recopié

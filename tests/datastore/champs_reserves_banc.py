@@ -11,9 +11,9 @@ from oto_mcp.datastore import core as dsm
 # ── le banc des champs réservés (#586/#606) — `banc`, partagé par
 # test_champs_reserves_586_606.py et test_champs_reserves_identique.py ──────────
 FIELDS = [{"key": "siren", "type": "text"},
-           {"key": "raison_sociale", "type": "text", "origine": "system"},
+           {"key": "raison_sociale", "type": "text"},
            {"key": "adresse", "type": "text", "readonly": True},
-           {"key": "naf", "type": "text", "readonly": True, "origine": "system"},
+           {"key": "naf", "type": "text", "readonly": True},
            {"key": "libre", "type": "text"}]
 SCHEMA = {"key": "siren", "fields": FIELDS}
 LIGNE = {"siren": "552081317", "raison_sociale": "ACME",

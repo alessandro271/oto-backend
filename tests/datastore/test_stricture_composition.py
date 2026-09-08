@@ -41,7 +41,7 @@ SCHEMA = {
     "fields": [
         {"key": "siren", "type": "text"},
         {"key": "adresse", "type": "text", "readonly": True},          # #606
-        {"key": "naf", "type": "text", "origine": "system"},           # #586
+        {"key": "naf", "type": "text"},
         {"key": "note", "type": "text"},
     ],
 }
@@ -52,19 +52,6 @@ def test_le_tableau_aux_trois_crans_est_un_schema_VALIDE():
     """Le premier fait à établir : rien dans la famille ne s'exclut mutuellement
     par construction. Les trois tiennent sur une même déclaration."""
     assert dsv2.validate_schema_def(SCHEMA) == []
-
-
-def test_les_trois_s_annoncent_ensemble():
-    """`enforced` est ce qui permet à un client de vérifier que ce qu'il déclare
-    sera appliqué par le serveur qui lui répond — la seule parade au décalage
-    entre le code écrit et la version servie."""
-    dsv2.reset_enforced_keys()
-    try:
-        annonce = set(dsv2.enforced_keys())
-    finally:
-        dsv2.reset_enforced_keys()
-    assert {"unknown_fields", "readonly", "origine",
-            "key_required"} <= annonce
 
 
 def test_les_deux_etages_sont_disjoints():
@@ -82,7 +69,6 @@ def test_les_deux_etages_sont_disjoints():
 
 @pytest.mark.parametrize("schema,attendu", [
     ({"key": "k", "fields": [{"key": "k", "readonly": True}]}, "clé métier"),
-    ({"fields": [{"key": "x", "type": "json", "origine": "system"}]}, "scalaire"),
     ({"unknown_fields": "reject", "fields": [{"key": "k"}]}, "strict"),
     ({"strict": True, "unknown_fields": "reject", "fields": []}, "référentiel"),
 ])
@@ -156,7 +142,6 @@ def test_LE_GESTE_DOMINANT_traverse_les_trois(banc):
     ({"_liberation": "x"}, "aucune colonne déclarée"),
     # étage 2 : elle existe, elle n'est pas à moi — deux façons
     ({"adresse": "2 rue B"}, "adresse.comment"),
-    ({"naf": {"origine": "inventée"}}, "posée par le système"),
 ])
 def test_chaque_etage_refuse_ET_N_ECRIT_RIEN(banc, patch, attendu):
     """Le refus arrive au moment où l'appelant peut encore corriger, il nomme la

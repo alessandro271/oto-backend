@@ -143,31 +143,3 @@ def test_rien_ne_BLOQUE_au_premier_temps():
     gros = {f"c{i}": {"valeur": "x", "origine": "f"} for i in range(50)}
     assert len(dsv2.origine_posee(gros)) == 50   # relevé, pas refusé
 
-
-def test_le_releve_SEPARE_le_cas_suspect(monkeypatch):
-    """⚠️ LE discriminant. Sur une colonne sans format, la plateforme ne pose jamais
-    d'origine : celle-ci vient forcément de l'écrivain. Fondre les deux populations
-    ferait disparaître celle qu'on cherche (64) dans celle qui l'entoure (15 688)."""
-    from oto_mcp.datastore import core as C
-
-    releves: list = []
-    monkeypatch.setattr("oto_mcp.db.origine_ecritures.relever",
-                        lambda **kw: releves.append(kw) or len(kw.get("colonnes") or []))
-
-    class _Store:
-        sub, acting_org = "u1", None
-
-        def __init__(self):
-            self._origine_posee = set()
-
-    schema = {"fields": [{"key": "declaree", "origine": "system"}, {"key": "libre"}]}
-    # Déclarée : ce banc-ci mesure le TRI des populations, pas la garde — et depuis le
-    # barreau 2 une écriture non déclarée est refusée avant d'être relevée.
-    C._relever_origine_module(
-        _Store(), 42,
-        {"declaree": {"valeur": "x", "origine": "a"},
-         "libre": {"valeur": "y", "origine": "b"}},
-        schema=schema, declare=True)
-    par_cas = {r["format_declare"]: r["colonnes"] for r in releves if r["colonnes"]}
-    assert par_cas[False] == ["libre"], "le cas SUSPECT doit être relevé à part"
-    assert par_cas[True] == ["declaree"]

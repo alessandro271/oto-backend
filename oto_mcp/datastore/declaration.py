@@ -339,12 +339,29 @@ def readonly_fields(schema: Optional[dict]) -> set:
 
 
 def system_origin_fields(schema: Optional[dict]) -> set:
-    """Les colonnes dont la couche `origine` est posée par le SYSTÈME (#586) :
-    à la première écriture qui change la valeur, la plateforme y écrit la valeur
-    d'avant, une seule fois ; l'appelant ne l'écrit jamais."""
-    return {f["key"] for f in _fields(schema)
-            if f.get("origine") == SYSTEM_ORIGIN
-            and isinstance(f.get("key"), str) and f["key"]}
+    """TOUJOURS VIDE — `origine: "system"` est SUPPRIMÉ (décision produit, 08/09/2026).
+
+    Le cran armait une capture automatique : à la première écriture qui changeait une
+    valeur, la plateforme figeait la précédente comme origine. Il est remplacé par
+    `donnees_d_origine`, qui fige la version d'origine **au moment où la valeur entre**
+    — un geste déclaré au lieu d'un filet qui dépend d'un ordre de gestes.
+
+    ⚠️ **Ce que ce retrait change, et il faut le savoir** : plus rien ne capture
+    automatiquement. Une valeur écrasée par un agent sur une colonne qui portait le
+    cran n'est plus retenue par personne. Sur un tableau de campagne, ce filet avait
+    encore retenu 39 valeurs la nuit du 07 au 08/09. La contrepartie est que l'origine
+    cesse de dépendre de qui pense à déclarer un cran avant l'import.
+
+    ⚠️ **Les 28 799 couches `origine` déjà en base ne bougent pas** : elles restent
+    lues, servies et protégées. C'est le mécanisme qui part, pas la donnée.
+
+    La fonction est GARDÉE et rendue vide plutôt que supprimée : ses six appelants
+    s'éteignent alors d'eux-mêmes, au lieu de disparaître un par un au risque d'en
+    oublier un — c'est la leçon des quatre chemins d'écriture dont j'en avais branché
+    trois. Une déclaration `origine: "system"` qui subsiste dans un schéma devient une
+    clé qu'oto n'interprète pas, et l'avertissement des clés non interprétées la
+    signale déjà."""
+    return set()
 
 
 def top_level_patterns(schema: Optional[dict]) -> dict:

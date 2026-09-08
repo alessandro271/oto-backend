@@ -110,21 +110,6 @@ def _donnees(ns_id: int, row_id: str) -> dict:
 
 # ── Le témoin de l'incident ──────────────────────────────────────────────────
 
-def test_l_etat_change_alors_que_le_cran_d_origine_est_pose(table):
-    """⚠️ LA règle. Zéro fiche sur cent le 29/08 : la plateforme posait la couche,
-    puis refusait la ligne qu'elle venait de compléter."""
-    st, ns, ns_id, rid = table
-
-    st.update_row(ns, rid, {"statut": "enrichi", "raison_sociale": "ACME"})
-
-    data = _donnees(ns_id, rid)
-    from oto_mcp.datastore.schema import unwrap
-    assert unwrap(data["statut"]) == "enrichi", "l'état a changé DANS LA BASE"
-    # Et le cran a bien fait son travail : la valeur d'avant est conservée.
-    assert data["statut"]["origine"] == "a_enrichir"
-    assert data["raison_sociale"]["origine"] == "TEMOIN"
-
-
 def test_une_transition_INTERDITE_reste_refusee_sur_une_colonne_a_couches(table):
     """Le correctif ne doit pas désarmer la garde : elle se juge sur la VALEUR.
 

@@ -240,17 +240,6 @@ def test_un_RE_IMPORT_passe_sur_une_colonne_a_CRAN(live):
     assert st.list_rows(ns)[0]["libre"] == "b"
 
 
-def test_le_cran_garde_la_main_sur_SA_colonne(live):
-    """L'écart ne doit pas être silencieux dans son effet : sur une colonne à cran, la
-    couche d'origine reste posée par le système — donc absente à la création, et figée
-    à la première modification, exactement comme avant ce lot."""
-    st, ns, ns_id = _table_a_cran()
-    ligne = st.append_row(ns, {"siren": "1", "libre": "a"}, donnees_d_origine=True)
-    col = _blob(ns_id, ligne["_id"])["siren"]
-
-    assert col == "1", "le geste déclaré ne pose RIEN sur une colonne à cran"
-
-
 def test_les_colonnes_SANS_cran_gardent_le_geste(live):
     """⚠️ L'autre moitié : l'écart vise les colonnes à cran, pas la ligne entière. Une
     correction trop large aurait désarmé le geste partout dès qu'une seule colonne

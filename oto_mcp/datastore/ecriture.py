@@ -33,7 +33,7 @@ from .forcage import Forcage
 from .outils import _new_id, _now_iso, _refus_de_creation
 from .points import _refuse_dotted_names, ranger_les_couches
 from .donnees_d_origine import poser_les_deux_versions
-from .reserves import poser_origine_systeme, refuser_champs_reserves
+from .reserves import refuser_champs_reserves
 
 
 class EcritureMixin:
@@ -257,7 +257,6 @@ class EcritureMixin:
                                     forcage=forcage, agent=aga.appel_d_agent())
             _relever_origine_module(self, ns_id, pose, current or {}, schema=schema,
                                     declare=origine_override)
-            poser_origine_systeme(schema, current, merged, set(pose))
             # ⚠️ `written` reste l'ensemble des clés que l'appelant a NOMMÉES, pas
             # celles qu'on a retenues : une borne de longueur ou un motif ne doit pas
             # se réarmer sur une colonne préservée, dont la valeur n'a pas bougé.
@@ -314,8 +313,6 @@ class EcritureMixin:
                                     agent=aga.appel_d_agent())
             _relever_origine_module(self, ns_id, complet, prev_data, schema=schema,
                                     declare=origine_override)
-            if prev_data is not None:
-                poser_origine_systeme(schema, prev_data, user_data, set(complet))
         if valide:
             sk = (dsv2.status_field(schema) or {}).get("key")
             prev_status = (prev_data or {}).get(sk) if sk else None
@@ -445,7 +442,6 @@ class EcritureMixin:
         # exactement la population qu'il existe pour trouver.
         _relever_origine_module(self, ns_id, pose, avant, schema=schema,
                                 declare=origine_override)
-        poser_origine_systeme(schema, avant, data, written)
         # Validation sur le RÉSULTAT mergé (un patch partiel ne doit pas échouer
         # sur un requis déjà présent) + transition de cycle de vie (ADR 0046 B/C).
         # Seule la borne de longueur se limite aux clés du patch (#383).

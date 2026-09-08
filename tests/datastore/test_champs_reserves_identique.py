@@ -74,30 +74,6 @@ def test_comment_et_link_accompagnant_une_valeur_identique_sont_ECRITS(banc):
 
 # ── #586 : une `.origine` égale à ce que le système poserait est un no-op ─────
 
-def test_ecrire_l_origine_EGALE_a_la_valeur_en_place_est_acceptee(banc):
-    """Le geste dominant du terrain sur une colonne système :
-    `{"valeur": <identique>, "origine": <la même>}` — c'est exactement ce que le
-    système poserait. Accepté ; rien de perdu, rien de refusé."""
-    st, etat = banc
-    st.update_row("viviers", "r1", {"raison_sociale": {"comment": "c"}})
-    st.update_row("viviers", "r1", {"raison_sociale": {"valeur": "ACME", "origine": "ACME"}},
-                  origine_override=True)
-    assert etat["lignes"]["r1"]["raison_sociale"] == {"valeur": "ACME", "origine": "ACME",
-                                                     "comment": "c"}
-    # Puis l'agent modifie en réémettant l'origine STOCKÉE : accepté, jamais réécrite.
-    st.update_row("viviers", "r1", {"raison_sociale": {"valeur": "ACME HOLDING",
-                                                       "origine": "ACME"}},
-                  origine_override=True)
-    assert etat["lignes"]["r1"]["raison_sociale"] == {"valeur": "ACME HOLDING",
-                                                     "origine": "ACME"}
-    # Une origine DIFFÉRENTE reste refusée, avec le message existant.
-    with pytest.raises(RowValidationError, match="raison_sociale.origine"):
-        st.update_row("viviers", "r1", {"raison_sociale": {"valeur": "ACME GROUP",
-                                                           "origine": "ACME GROUP"}},
-                      origine_override=True)
-    assert etat["lignes"]["r1"]["raison_sociale"]["valeur"] == "ACME HOLDING"
-
-
 def test_a_la_creation_une_origine_egale_a_la_valeur_est_acceptee(banc):
     st, etat = banc
     st.append_row("viviers", {"siren": "389256712",

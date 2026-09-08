@@ -65,7 +65,7 @@ class SchemaOpsMixin:
                   - dsv2.system_origin_fields(avant))
         if not neuves:
             return 0
-        return db.datastore_capturer_origine(ns_id, sorted(neuves))
+        return 0        # `origine: "system"` supprimé — plus rien à baliser
 
     def set_schema(self, namespace: str, schema: Optional[dict], *,
                    retraits_annonces: Optional[list] = None,

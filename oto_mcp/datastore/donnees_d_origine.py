@@ -84,26 +84,19 @@ def poser_les_deux_versions(user_data: dict, avant: Optional[dict] = None,
     clé métier), `None` pour une création. Il sert à une seule chose : ne pas toucher
     une origine déjà posée.
 
-    ⚠️ **`schema` écarte les colonnes qui portent DÉJÀ le cran `origine: "system"`**, et
-    c'est une collision que j'avais manquée en construisant ce geste : sur ces
-    colonnes-là, la plateforme interdit à QUICONQUE d'écrire la couche d'origine
-    (#586) — y compris à ce geste-ci, qui n'est pas moins un appelant que les autres.
-    Sans cet écart, un ré-import sur une ligne existante partait en `400`, et la
-    promesse « un ré-import est rejouable » était fausse dès qu'une colonne portait le
-    cran. Mesuré le 08/09/2026 sur le schéma réel d'une campagne, qui porte les deux.
+    ⚠️ **`schema` n'écarte plus rien — `origine: "system"` est SUPPRIMÉ (08/09/2026).**
+    Ce paramètre est conservé pour ne pas casser les appelants ; il n'a plus d'effet.
 
-    Les écarter ne perd rien : sur ces colonnes le cran fait déjà le travail — la
-    valeur d'import EST l'origine, et la capture paresseuse la fige à la première
-    modification. **Deux mécanismes pour le même fait, celui qui était là d'abord
-    garde la main.**
+    L'histoire vaut d'être gardée : quand ce geste a été livré, il entrait en collision
+    avec le cran, qui interdisait à quiconque d'écrire la couche d'origine. J'ai résolu
+    le conflit en écartant les colonnes à cran — donc en donnant la priorité à l'ancien
+    mécanisme sur le nouveau, et en l'écrivant « celui qui était là d'abord garde la
+    main ». C'était l'inverse de la décision produit, et je l'ai justifié proprement,
+    ce qui est le pire. **Un conflit entre l'ancien et le nouveau ne se résout pas en
+    pérennisant l'ancien.**
     """
-    from . import declaration as dsdecl
-
-    a_cran = dsdecl.system_origin_fields(schema) if schema else frozenset()
     posees: list[str] = []
     for cle, colonne in list(user_data.items()):
-        if cle in a_cran:
-            continue
         couches = _couches_de(colonne)
         if _vide(couches.get(dsv2.VALUE_LAYER)):
             continue

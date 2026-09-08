@@ -98,32 +98,28 @@ historique ni annulation : la valeur précédente disparaît quand la tienne arr
 Ne pas nommer un champ le laisse intact ; le nommer avec `null` l'efface — un `null`
 glissé dans un gabarit à moitié rempli détruit une valeur en place.
 
-## 4. `origine: "system"` — quand la plateforme pose l'origine
+## 4. ⚠️ `origine: "system"` est SUPPRIMÉ
 
-Déclaré au schéma (`{"key": "adresse", "origine": "system"}`), ce format fait garder la
-valeur d'avant dans `adresse.origine`. Le filet est plus étroit qu'il n'y paraît :
+Ce cran armait une capture automatique : à la première écriture qui changeait une
+valeur, la plateforme figeait la précédente comme origine. **Il n'existe plus** (08/09/2026).
 
-**L'origine est la valeur posée AU DÉPART, à l'import** — pas celle qui traînait au
-moment où le format a été déclaré.
+Ce qui le remplace : **`donnees_d_origine`** (section suivante), qui fige la version
+d'origine **au moment où la valeur entre**. Un geste déclaré, au lieu d'un filet qui
+dépendait de l'ordre dans lequel on déclarait le cran et importait les données — c'est
+cet ordre inversé qui avait produit 837 cellules « origine inconnue » sur un tableau de
+production.
 
-- sur une ligne créée **après** la déclaration, la capture a lieu **une seule fois**, à
-  la première écriture qui change la valeur — jamais réécrite ensuite, et une valeur
-  identique ne capture rien ;
-- sur une ligne qui existait **déjà** quand le format a été déclaré, l'origine vaut
-  `(origine inconnue)`. ⚠️ **Ce n'est pas une valeur, c'est l'aveu qu'il n'y en a pas** :
-  personne ne peut dire si un agent avait écrit dans cette cellule depuis sa création.
-  Avant, on y mettait la valeur courante — donc, sur une ligne déjà travaillée, **celle
-  d'un agent**, et la vraie valeur d'import était perdue sans un mot. Ne traite jamais ce
-  marqueur comme une donnée métier ;
-- un champ **vide** au départ reçoit un marqueur vide au premier écrasement, que la
-  lecture ne sert pas : « vide à l'origine » et « jamais modifié » se lisent pareil, et
-  c'est juste — dans les deux cas il n'y a rien à rétablir ;
-- une colonne **sans** ce format ne garde rien : écraser est définitif ;
-- écrire soi-même une autre `origine` sur une telle colonne est **refusé** (création
-  comprise) ; la valeur que le système poserait est acceptée (no-op).
+⚠️ **Ce que le retrait change pour toi, et il faut le savoir** : plus rien ne capture
+automatiquement. Une valeur qu'un agent écrase n'est plus retenue par personne. Si tu
+veux garder ce que la cliente a remis, **déclare-le à l'import**.
 
-La face d'appel n'y change rien : ligne créée par `data_write` ou par `POST …/rows`,
-même comportement.
+⚠️ **Les couches `origine` déjà en base ne bougent pas** — 28 799 cases en portent une
+au moment du retrait. Elles restent lues, servies et jamais réécrites. C'est le
+mécanisme qui part, pas la donnée.
+
+Une déclaration `origine: "system"` qui subsiste dans un schéma est désormais une clé
+qu'oto n'interprète pas : elle est stockée, servie, et sans aucun effet. L'avertissement
+des clés non interprétées la signale.
 
 ## 4 bis. `donnees_d_origine: true` — quand TU apportes la donnée de la cliente
 
