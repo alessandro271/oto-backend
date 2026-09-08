@@ -124,6 +124,17 @@ git push origin main            # → PREPROD
 
 # Prod = acte explicite : taguer un commit de main + pousser le tag.
 git tag v1.2.3 && git push origin v1.2.3   # → PROD (tags v* immuables, ruleset)
+# ⚠️ Depuis le 08/09/2026 la prod NE REJOUE PLUS la suite : elle EXIGE qu'un run de
+# préproduction vert existe sur le sha exact du tag, et refuse sinon
+# (`scripts/garde_preprod_verte.py`). C'est la vérification qu'on faisait à la main,
+# devenue mécanique — et ~6 min 30 de moins entre le push du tag et la prod servie.
+# Donc : taguer un commit DÉJÀ poussé sur main ET dont le run « Deploy preprod » est
+# vert (jobs compris). Un refus nomme ce qu'il a lu — l'identifiant du run et sa
+# conclusion exacte —, il n'y a rien à deviner. Il n'y a RIEN de neuf à faire côté
+# préproduction : son run existe déjà à chaque poussée du tronc.
+# Porte de secours (run de préproduction purgé, incident GitHub) : lancer « Deploy
+# prod » en workflow_dispatch avec `sans_garde_preprod: true` — délibéré, tracé, et
+# hors d'atteinte d'une simple poussée de tag.
 # ⚠️ `canari` est DÉPRÉCIÉE (ne déploie plus) : un checkout encore dessus doit
 # passer sur main (`git checkout main`). guard-main + sync-main-to-canari retirés.
 

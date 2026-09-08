@@ -5,7 +5,20 @@ name: Deploy prod
 # tag `vX.Y.Z` sur le commit de main à promouvoir (`git tag vX.Y.Z && git push origin
 # vX.Y.Z`). Le tag est passé au script serveur root-restreint /opt/deploy/oto-backend.sh
 # (reset --hard <tag> + reinstall oto-core au tag pyproject + restart + healthcheck +
-# rollback). test → deploy (`needs: test`, ceinture+bretelles au tag). Cf. ADR 0020.
+# rollback). Cf. ADR 0020.
+#
+# 08/09/2026 — LA SUITE N'EST PLUS REJOUÉE AU TAG, SON VERDICT EST RÉUTILISÉ.
+# Ce workflow portait un job `test` en `needs`, identique mot pour mot à celui de
+# `deploy-canari.yml`, sur le même arbre. Mesuré sur les 100 dernières mises en
+# production (19/08 → 08/09, v1.129.0 → v1.240.0) : 98 `success`, 2 `cancelled`
+# (incidents de runner), **0 `failure`**. Le rejeu n'a jamais contredit la
+# préproduction, une seule fois — et sur `40227af8`, les deux runs rapportent
+# 11 423 passed / 2 skipped / 3 xfailed. Il coûtait 6 min 15 à 6 min 45 sur les
+# ~8 min qui séparaient le push du tag de la production servie.
+# À la place, `scripts/garde_preprod_verte.py` EXIGE qu'un run de préproduction vert
+# existe sur ce sha exact, et refuse sinon. Ce n'est pas un relâchement : c'est la
+# vérification qu'on faisait à la main avant chaque tag, rendue mécanique — donc
+# impossible à oublier. Le pourquoi de chaque filtre est dans l'en-tête du script.
 on:
   push:
     tags: ["v*"]
@@ -14,6 +27,11 @@ on:
       tag:
         description: "Tag à déployer en prod (ex: v1.2.3)"
         required: true
+      sans_garde_preprod:
+        description: >-
+          CONTOURNEMENT : déployer SANS exiger un run de préproduction vert sur ce sha.
+        type: boolean
+        default: false
   # Appelé par `release.yml`, qui pose la version puis déclenche le déploiement.
   # Nécessaire parce qu'un tag créé avec le GITHUB_TOKEN ne déclenche AUCUN
   # workflow (garde anti-récursion) : sans cet appel, la version serait posée et
@@ -24,14 +42,19 @@ on:
         description: "Tag à déployer en prod"
         required: true
         type: string
+      sans_garde_preprod:
+        description: "CONTOURNEMENT : déployer sans exiger un run de préproduction vert."
+        type: boolean
+        default: false
 
 jobs:
   # Chaque job porte un `timeout-minutes` : sans lui, le défaut de GitHub est de SIX
   # heures. Le 07/09, un job de tests s'est suspendu sur un runner hébergé et n'a plus
-  # rien écrit pendant 45 min, jusqu'à une annulation à la main. Les 45 derniers
-  # déploiements de prod tiennent tous entre 6 et 10 min : les plafonds ci-dessous
-  # laissent une marge large et transforment une pendaison silencieuse en échec
-  # visible en quelques minutes.
+  # rien écrit pendant 45 min, jusqu'à une annulation à la main. Depuis que la suite
+  # n'est plus rejouée ici, la chaîne complète tient en ~1 min 30 (garde ~5 s, script
+  # bleu/vert 49-69 s dont 20 s d'attente que la nouvelle couleur soit prête) : les
+  # plafonds ci-dessous laissent une marge très large et transforment une pendaison
+  # silencieuse en échec visible en quelques minutes.
 
   # La syntaxe est vérifiée sur le Python du SERVEUR, pas sur celui de la CI.
   # Le 27/08, un boot preprod est mort sur « f-string expression part cannot include
@@ -53,9 +76,20 @@ jobs:
       - name: Compiler sous le Python le plus ancien supporté
         run: python -m compileall -q oto_mcp
 
-  test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+  deploy:
+    needs: [syntaxe-plancher]
+    runs-on: [self-hosted, oto-platform]
+    # reset + réinstall oto-core + restart + healthcheck (~60 s) + rollback éventuel.
+    timeout-minutes: 15
+    concurrency:
+      group: deploy-prod
+      cancel-in-progress: false
+    # Le jeton n'a besoin de rien d'autre : lire l'arbre, et lire les runs de la
+    # préproduction. Déclaré ici plutôt que laissé au défaut du dépôt, pour que la
+    # garde ne se mette pas à échouer en 403 le jour où ce défaut se resserre.
+    permissions:
+      contents: read
+      actions: read
     env:
       DEPLOY_REF: ${{ inputs.tag || github.ref_name }}
     steps:
@@ -67,30 +101,47 @@ jobs:
             v[0-9]*) echo "tag ok: $DEPLOY_REF" ;;
             *) echo "tag invalide (attendu vX.Y.Z): $DEPLOY_REF" >&2; exit 1 ;;
           esac
+
+      # La garde vit dans le dépôt, donc il faut l'arbre. On extrait CELUI DU TAG :
+      # la garde voyage avec ce qu'elle autorise. Ça ne déplace aucune confiance —
+      # sur un `push` de tag, GitHub lit DÉJÀ ce fichier de workflow depuis le commit
+      # tagué, donc qui peut pousser un tag contrôle déjà ce qui s'exécute ici.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.tag || github.ref }}
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: "3.12"
-          cache: pip
-      - name: Install (deps + dev)
-        # Tire oto-core depuis le tag git pinné du pyproject (repo public, pas d'auth).
-        run: pip install -e ".[dev]"
-      - name: Tests
-        run: pytest -q
 
-  deploy:
-    needs: [test, syntaxe-plancher]
-    runs-on: [self-hosted, oto-platform]
-    # reset + réinstall oto-core + restart + healthcheck (~60 s) + rollback éventuel.
-    timeout-minutes: 15
-    concurrency:
-      group: deploy-prod
-      cancel-in-progress: false
-    env:
-      DEPLOY_REF: ${{ inputs.tag || github.ref_name }}
-    steps:
+      # ─────────────────────────────────────────────────────────────────────────
+      # LE VERDICT SE RÉUTILISE, IL NE SE REJOUE PAS.
+      #
+      # Exige un run de préproduction VERT sur le sha exact que ce tag désigne, et
+      # refuse sinon — en nommant ce qu'il a lu (identifiant du run, date, conclusion
+      # exacte). Un refus qui ne dit pas ce qu'il a constaté fait rejouer le même
+      # geste ; celui-ci ferme la question.
+      #
+      # Il n'y a RIEN à créer côté préproduction : le run existe déjà sur chaque
+      # poussée du tronc et porte le sha. Aucun tag, aucun artefact, aucune
+      # publication de plus.
+      #
+      # ⚠️ LE CONTOURNEMENT, ET POURQUOI IL EXISTE. Une garde qui interroge l'API
+      # des runs dépend de ce que l'API garde. Le jour où le run de préproduction
+      # d'un commit a disparu — purge de rétention, run supprimé, incident côté
+      # GitHub — la production serait bloquée par sa propre garde, au pire moment :
+      # celui où l'on veut justement déployer un correctif. `sans_garde_preprod`
+      # rouvre ce chemin. Il n'est PAS atteignable depuis une poussée de tag : il
+      # faut un `workflow_dispatch` délibéré, donc quelqu'un qui l'a voulu, et le
+      # journal garde qui a demandé quoi.
+      - name: Cet arbre a déjà un verdict vert en préproduction
+        if: ${{ inputs.sans_garde_preprod != true }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python3 scripts/garde_preprod_verte.py "$DEPLOY_REF"
+
+      - name: Contournement de la garde (demandé explicitement)
+        if: ${{ inputs.sans_garde_preprod == true }}
+        run: |
+          echo "::warning title=Garde de préproduction CONTOURNÉE::Le déploiement de $DEPLOY_REF a été demandé SANS exiger un run de préproduction vert sur son sha. Aucune vérification n'a été faite sur l'arbre déployé. Qui l'a demandé est dans l'en-tête du run."
+
       - name: Deploy prod (build serveur via script root-restreint)
         # Runner self-hosted sur la box dédiée (sudo NOPASSWD limité à
         # /opt/deploy/oto-backend.sh). Le tag validé est passé en argument via env.
