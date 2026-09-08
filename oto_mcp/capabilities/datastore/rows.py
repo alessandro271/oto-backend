@@ -295,6 +295,22 @@ class WrittenRow(Row):
     # savoir que cette clé peut arriver. Absent quand la ligne est conforme.
     hors_type: Optional[dict] = None
     hors_type_hint: Optional[str] = None
+    # ⚠️ **La face REST mangeait ce relevé** (#667, trouvé le 08/09/2026 par la
+    # campagne). Le store le PRODUIT — `{champ, motif, valeur_rejetee}` par valeur
+    # qu'un schéma armé a refusée — et la face MCP le sert ; ici il n'était pas
+    # déclaré, donc Pydantic le retirait de la réponse. Un intégrateur voyait donc
+    # une création réussie, sans le moindre signal, avec une colonne vide.
+    #
+    # Ce que ça a coûté, mesuré : une ligne d'essai née avec sa colonne d'étape à
+    # `null`, six passes qui l'ont trouvée hors de leur file, « zéro travail, zéro
+    # erreur » — et vingt minutes à chercher une panne de chaîne dont la cause était
+    # une valeur avalée deux minutes plus tôt.
+    #
+    # ⚠️ Distinct de `hors_options` juste au-dessus, et la nuance est tout le sujet :
+    # là une valeur ÉCRITE quand même (régime souple), ici une valeur PAS écrite. Les
+    # confondre ferait croire à une donnée en base qui n'y est pas.
+    valeurs_ecartees: Optional[list[dict]] = None
+    valeurs_ecartees_hint: Optional[str] = None
     # Le NUMÉRO du tableau écrit — la forme d'adresse à employer (le nom part en
     # retrait). Déclaré et non seulement toléré : une intégration qui lit l'OpenAPI
     # doit le voir. ⚠️ Le NOM, lui, ne s'ajoute pas ici : le corps de cette remise EST
