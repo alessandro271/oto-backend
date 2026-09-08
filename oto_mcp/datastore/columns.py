@@ -588,6 +588,72 @@ def _merge_items(avant: Any, nouveaux: list, cle: str) -> list:
     return out
 
 
+def _sentinelles_dans_les_items(nouveaux: Any, chemin: str) -> Any:
+    """Résout `@empty` et REFUSE `@keep` dans les éléments d'une liste remplacée.
+
+    ⚠️ **Le trou que ça ferme a atteint la production**, et il a été trouvé sur de la
+    donnée servie, pas dans un journal : `contacts[0].commentaire.comment` valait
+    littéralement `"@keep"` sur une fiche de campagne. L'agent avait écrit le mot au
+    bon endroit — c'est une couche d'un attribut d'élément, un endroit parfaitement
+    légitime — et la plateforme l'a pris pour du texte. Une ligne de plus et la
+    cliente lisait « @keep » dans le commentaire d'un contact.
+
+    **Pourquoi ce chemin échappait à la résolution.** Une liste sans identité d'élément
+    déclarée se REMPLACE en bloc : `_merge_column` ne descend pas dedans, donc rien n'y
+    résolvait les deux mots. Avec `of.key`, `_merge_items` fusionne attribut par
+    attribut et les résout — le défaut n'existe que sur le chemin du remplacement.
+
+    **Les deux mots ne se traitent pas pareil ici, et la raison est structurelle :**
+
+    - `@empty` **se résout** : « vide-le » ne demande aucun passé, donc il tient sans
+      identité d'élément ;
+    - `@keep` **se refuse** : « garde ce qui est là » exige de savoir QUEL élément
+      précédent correspond à celui-ci. Sans identité déclarée, on ne le sait pas — et
+      choisir au hasard sur des données de personnes est le mode d'échec qu'on s'est
+      interdit. Le laisser tomber en silence perdrait l'intention de l'agent ; le
+      stocker l'expédie chez la cliente. **Refuser en nommant le geste est la seule
+      des trois issues qui ne ment pas.**
+    """
+    if not isinstance(nouveaux, list):
+        return nouveaux
+
+    refus: list[str] = []
+
+    def _valeur(v: Any, ou: str) -> Any:
+        if v == dsl.GARDE:
+            refus.append(ou)
+            return v
+        return "" if v == dsl.VIDE_DELIBERE else v
+
+    out = []
+    for i, item in enumerate(nouveaux):
+        if not isinstance(item, dict):
+            out.append(item)
+            continue
+        propre = {}
+        for cle, val in item.items():
+            base = f"{chemin}[{i}].{cle}"
+            if isinstance(val, dict) and dsv2.names_layers(val):
+                propre[cle] = {c: _valeur(v, f"{base}.{c}" if c != dsv2.VALUE_LAYER
+                                          else base)
+                               for c, v in val.items()}
+            else:
+                propre[cle] = _valeur(val, base)
+        out.append(propre)
+
+    if refus:
+        raise RowValidationError(
+            [f"`{dsl.GARDE}` ne peut pas être tenu dans une liste sans identité "
+             f"d'élément : {', '.join('`' + r + '`' for r in refus)}. Une liste se "
+             "remplace en bloc, donc rien ne dit QUEL élément précédent correspond à "
+             f"celui-ci. Deux issues : déclarer `of.key` au schéma de `{chemin}` (le "
+             "nom d'un CRÉNEAU stable — `contact_rh`, jamais un nom de personne), et "
+             f"la fusion se fera élément par élément ; ou renvoyer le contenu au lieu "
+             f"de `{dsl.GARDE}`. `{dsl.VIDE_DELIBERE}`, lui, fonctionne ici — il ne "
+             "demande aucun passé."])
+    return out
+
+
 def _merge_column(existing: Any, new: Any, champ: Any = None) -> Any:
     """Fusion d'UNE colonne. **Aucune couche ne s'écrit implicitement, dans aucun sens.**
 
@@ -639,8 +705,13 @@ def _merge_column(existing: Any, new: Any, champ: Any = None) -> Any:
     # Une LISTE dont le schéma déclare l'identité de ses éléments se fusionne
     # élément par élément ; sans déclaration, elle se remplace en bloc, comme avant.
     cle_item = _cle_d_item(champ)
-    if cle_item and isinstance(new, list):
-        return _merge_items(existing, new, cle_item)
+    if isinstance(new, list):
+        if cle_item:
+            return _merge_items(existing, new, cle_item)
+        # Remplacement en bloc : personne ne descend plus dans les éléments après
+        # cette ligne, donc les deux mots réservés se règlent ICI ou jamais.
+        nom = str((champ or {}).get("key") or "liste")
+        new = _sentinelles_dans_les_items(new, nom)
 
     # ── Les mots réservés valent AUSSI sur une valeur nue (oto#140) ─────────
     #
