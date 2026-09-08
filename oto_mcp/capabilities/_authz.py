@@ -253,15 +253,15 @@ def RESOURCE_GOVERN(*, type_field: str = "resource_type", id_field: str = "resou
         # seule op qui saute cette règle. Partout ailleurs `can_govern` → `_kind`
         # levait un `ValueError` nu, que l'adaptateur REST sert en 500 : mesuré le
         # 2026-09-08 en production sur `resource_type="procedure"` (retour d'outil
-        # #809). Le refus ÉNUMÈRE les familles, parce que c'est la seule chose qui
-        # répare l'appelant — le nom d'une procédure est ici `doctrine`, vocabulaire
-        # que #519 a pourtant retiré du produit.
+        # #809). Le refus ÉNUMÈRE les familles acceptées — c'est la seule chose qui
+        # répare l'appelant, puisque le nom de stockage d'une procédure n'est pas
+        # celui que le produit lui apprend (#519). Le message est le MÊME que celui
+        # du handler (`resources._check_type`) : une même saisie fautive ne peut pas
+        # se lire de deux façons selon l'op.
         if rtype not in ownership.RESOURCE_KINDS:
             raise AuthzDenied(
                 400, "unsupported_resource_type",
-                f"type `{rtype}` non supporté ({list(ownership.RESOURCE_KINDS)}) — "
-                "une procédure (ou un guide) se gouverne sous `doctrine`, un tableau "
-                "sous `datastore_namespace`.")
+                f"type `{rtype}` non supporté ({list(ownership.RESOURCE_KINDS)}).")
         if not ownership.can_govern(sub, rtype, str(rid)):
             raise AuthzDenied(403, "forbidden",
                               "Gouvernance de cette ressource refusée.")

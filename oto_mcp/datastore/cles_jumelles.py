@@ -37,7 +37,7 @@ sur le métier.
 ## Seuil volontairement étroit
 
 ⚠️ Un faux positif dans un signal de qualité est pire que pas de signal : on apprend à
-l'ignorer, et il ne sert plus le jour où il a raison (doctrine de `cles_inconnues`,
+l'ignorer, et il ne sert plus le jour où il a raison (règle de `cles_inconnues`,
 payée sur `label`). Deux formes seulement sont retenues, parce qu'elles ne se
 choisissent jamais exprès :
 
