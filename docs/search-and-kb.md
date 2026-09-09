@@ -56,6 +56,14 @@ réindexe la fratrie ATOMIQUEMENT) + **épine** `oto_project(op=get, include=['s
 depth?)` bornée (N+2, plafond 200, compteurs `more`) — la carte que l'agent lit avant
 `oto_doc(op=get)`, jamais `op=list` de tout. **KB d'org ancrée PAR ID** (`orgs.kb_project_id`,
 claim optimiste anti-doublon, auto-réparation transfert/archive — le nom n'est plus un marqueur).
+⚠️ **Le concept se retire (09/09/2026) : le RECRUTEMENT est coupé.** Plus aucun texte
+servi n'envoie un agent écrire dans une « base de connaissance » — le savoir durable se
+capture en **doc, dans son projet** (`oto_doc op=create` + `project_id`). L'outil `oto_kb`
+et sa route RESTENT, le temps que l'existant se tasse : une KB est déjà un projet
+ordinaire (465 pages, 31 orgs), il n'y a rien à migrer ni à supprimer. Ne réintroduis pas
+la recommandation — ni dans une description d'outil, ni dans le socle, ni dans un guide,
+et sur AUCUN des deux canaux (le code, et la base qui l'écrase).
+
 ⚠️ **Le verbe qui CRÉE cette base s'appelle `create` depuis le 04/09 ; il s'appelait
 `ensure`, et le nom était le bug.** « ensure X » est un idiome de développeur —
 *get-or-create* — dont le mot ne porte aucune trace de l'écriture : un agent qui entend
