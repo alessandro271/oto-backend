@@ -11,6 +11,12 @@ no-auth n'est déclaré au registre : la branche est générique et sans consomm
 vivant. Le fixture est donc SYNTHÉTIQUE (un mount déclaré, dérivé sans auth) —
 c'est bien la branche `not connector.auth_modes` de `tools/mount.py` qui est
 exercée, pas un connecteur du catalogue.
+
+⚠️ Le mount de base était `planity` jusqu'au 2026-09-09, date à laquelle il est
+devenu un connecteur natif (`kind="tools"`, oto-backend#913) : `_mount()` aurait
+alors levé sur une assertion parlant d'auth, à mille lieues du sujet. Le fixture
+prend désormais `atlassian` — n'importe quel mount déclaré ferait l'affaire,
+puisque tout ce qui l'identifie est remplacé juste après.
 """
 import asyncio
 import dataclasses
@@ -30,7 +36,7 @@ def _mount(name):
 def _noauth_mount():
     """Mount no-auth synthétique : un mount déclaré, privé de tout mode d'auth."""
     return dataclasses.replace(
-        _mount("planity"),
+        _mount("atlassian"),
         name="noauth_probe",
         namespaces=("noauth_probe",),
         auth_modes=frozenset(),

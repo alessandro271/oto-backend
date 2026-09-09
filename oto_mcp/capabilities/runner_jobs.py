@@ -26,7 +26,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .. import access, db
-from ._authz import BY_OP, OPTION_RUNNER_WORKER, ORG_MEMBER, WORKER_OR_ORG_MEMBER
+from ._authz import ORG_MEMBER
 from ._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx,
                      RestBinding, cap_limit)
 from .registry import CAPABILITIES
@@ -357,7 +357,7 @@ def _cle_de_modele(org_id: int, depot: str) -> Optional[str]:
 # La marque qui dit « ce compte EST un de nos workers ». Un admin plateforme la
 # pose sur le compte de service du runner (`oto_admin_set_option`), et sur lui
 # seul.
-_OPTION_WORKER = OPTION_RUNNER_WORKER   # une seule définition, dans `_authz`
+_OPTION_WORKER = "runner_worker"
 
 
 def _depot_pose(org_id: int, depot: str) -> bool:
@@ -643,18 +643,16 @@ def _delegue(job: dict, bail_s: int, claimant: str) -> dict:
     return job
 
 
-#: Les opérations qui ONT BESOIN d'une organisation : celles d'un humain ou d'un
-#: écran — enfiler un travail, lire la file, ouvrir un travail. Les verbes du
-#: worker (`claim`, `bind_run`, `extend`, `complete`) n'en ont pas : il exécute,
-#: il ne décide de rien, et son droit d'agir vient du jeton délégué du demandeur.
-_OPS_ORG_SCOPEES = frozenset({"enqueue", "list", "get"})
-
-
 def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
-    if inp.op in _OPS_ORG_SCOPEES and not ctx.org_id:
+    # ⚠️ TOUTE opération porte sur la file d'une organisation, y compris les
+    # verbes du worker. Un worker nomme celle pour laquelle il sonde
+    # (`X-Oto-Org`), et son appartenance est vérifiée à chaque requête : c'est
+    # la voie applicative, sans privilège attaché à l'identité qui exécute.
+    if not ctx.org_id:
         raise AuthzDenied(400, "org_required",
                           f"`{inp.op}` porte sur la file d'une organisation — "
-                          "choisis-en une avec oto_use_org.")
+                          "nomme-la (`X-Oto-Org` côté REST, `_org` côté MCP), "
+                          "ou choisis-en une avec oto_use_org.")
 
     if inp.op == "enqueue":
         if inp.kind is None:
@@ -801,14 +799,12 @@ CAPABILITIES += [
                           "`enqueue fleet_id=` désignant une flotte qui n'est pas "
                           "celle de l'org du porteur"),
         ),
-        # La règle par OPÉRATION : un humain enfile et lit dans SON org ; un
-        # worker réserve et conclut sans org du tout (cf. `WORKER_OR_ORG_MEMBER`).
-        # Déclaratif plutôt que dans le handler : l'autz se lit sur la capacité.
-        authz=BY_OP({
-            "enqueue": ORG_MEMBER, "list": ORG_MEMBER, "get": ORG_MEMBER,
-            "claim": WORKER_OR_ORG_MEMBER, "bind_run": WORKER_OR_ORG_MEMBER,
-            "extend": WORKER_OR_ORG_MEMBER, "complete": WORKER_OR_ORG_MEMBER,
-        }),
+        # ⚠️ `ORG_MEMBER`, et c'est la voie APPLICATIVE : un worker nomme
+        # l'organisation pour laquelle il sonde (`X-Oto-Org`), dont
+        # l'appartenance est vérifiée à chaque requête. Aucun privilège n'est
+        # attaché à l'identité qui exécute — ce qui borne est l'appartenance,
+        # et elle se révoque sans toucher au code (arbitrage du 09/09/2026).
+        authz=ORG_MEMBER,
         mcp=None,   # worker-only : la plomberie d'exécution n'a pas de face agent
         rest=RestBinding(verb="POST", path="/api/me/runner/jobs"),
         description=(

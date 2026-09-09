@@ -178,8 +178,9 @@ def status_for(sub: str, *, org: "int | None | object" = scope._UNSET,
             out["providers"][delegant] = dict(entree)
 
     # Credentials byo_user à champs déclarés, hors KEY_PROVIDERS (modèle générique
-    # multi-champs, ADR 0011) : mounts basic_auth (planity) ET clients in-process
-    # multi-secrets (silae, zoho). Pas de quota ni de grant — le credential EST le
+    # multi-champs, ADR 0011) : clients in-process à credential `basic_auth`
+    # (planity) ou multi-secrets (silae, zoho), et tout mount qui en poserait un.
+    # Pas de quota ni de grant — le credential EST le
     # grant (cf. resolve_mount_token / resolve_credential_fields). Miroir de la
     # cascade byo user > groupe actif > org (un provider `fields` org-shareable
     # résout par le secret d'équipe/org — l'ex-check user-only affichait

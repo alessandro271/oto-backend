@@ -67,29 +67,20 @@ def test_le_claim_porte_lorg_et_le_sub_de_lappelant(espion):
         "le claim ne peut servir QUE la file de l'org du jeton, au nom du worker"
 
 
-def test_un_worker_SANS_org_reserve_quand_meme(espion):
-    """Renversement du 08/09/2026. Ce banc exigeait `org_required` sur `claim`,
-    et c'est ce refus qui imposait un worker par organisation.
+def test_sans_org_la_file_refuse_et_dit_comment_la_nommer():
+    """⚠️ Renversé DEUX FOIS, et la seconde annule la première. J'avais ouvert
+    `claim` aux workers sans organisation, armé par une marque posée sur un
+    compte. Alexis l'a refusé — « je ne veux pas que les workers aient des
+    droits de ce genre, ça doit être applicatif » — et il avait raison : la voie
+    applicative existait déjà. Un worker NOMME l'organisation pour laquelle il
+    sonde, et son appartenance est vérifiée à chaque requête. Ce qui borne est
+    l'appartenance, pas un privilège, et elle se révoque sans toucher au code.
 
-    Un worker n'a pas d'organisation : il exécute, il ne décide de rien, et son
-    droit d'agir vient du jeton délégué émis au nom du demandeur. `org_id=None`
-    n'est pas une garde retirée, c'est l'absence d'une notion qui n'a pas de
-    sens pour une machine."""
-    _appel(ResolvedCtx(sub="w", org_id=None), op="claim")
-    assert espion["claim"][0] is None, (
-        "l'org du worker ne filtre plus la file : il prend le travail le plus "
-        "ancien, tous clients confondus")
-
-
-def test_les_verbes_D_HUMAIN_exigent_toujours_une_org(espion):
-    """L'autre bord, et sans lui on aurait ouvert bien plus que la file :
-    enfiler un travail, lire la file ou ouvrir un travail restent des gestes
-    d'organisation. Les libérer laisserait voir la file d'autrui."""
-    for op in ("enqueue", "list", "get"):
-        with pytest.raises(AuthzDenied) as e:
-            _appel(ResolvedCtx(sub="w", org_id=None), op=op, job_id=1, kind="start",
-                   payload={"procedure": "p"})
-        assert e.value.code == "org_required", op
+    Le refus dit COMMENT nommer, sinon il fait relire le même appel."""
+    with pytest.raises(AuthzDenied) as e:
+        _appel(ResolvedCtx(sub="w", org_id=None), op="claim")
+    assert e.value.code == "org_required"
+    assert "_org" in e.value.message or "X-Oto-Org" in e.value.message
 
 
 def test_le_bail_est_borne(espion):

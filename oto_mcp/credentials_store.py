@@ -403,8 +403,10 @@ def pack_secret(connector: str, fields: dict) -> str:
     selon la forme déclarée par le provider (`Connector.secret_fields`) :
 
     - 1 champ (api_key) → la valeur brute (back-compat des données existantes) ;
-    - `basic_auth` → `base64("email:password")` (format de fil que le mount distant,
-      ex. planity-mcp, décode — NE PAS changer sans casser le bridge) ;
+    - `basic_auth` → `base64("email:password")` (le format était aussi celui du fil
+      vers un mount distant, qui le décodait ; plus aucun mount ne le consomme
+      depuis que `planity` est natif, mais des credentials sont stockés ainsi —
+      NE PAS changer sans réécrire ce qui est au coffre) ;
     - ≥2 champs (silae & co) → `json.dumps(fields)`.
 
     Inverse exact : `unpack_secret`."""

@@ -92,8 +92,12 @@ def resolve_mount_token(provider: str) -> str:
         from ..auth import folk as folk_oauth
         token = folk_oauth.access_token_for(sub)
     else:
-        # Mount non-oauth (basic_auth, ex. planity) : credential posé via la carte
-        # api-keys → scope membre (ADR 0033), comme sa pose.
+        # Mount non-oauth (basic_auth) : credential posé via la carte api-keys →
+        # scope membre (ADR 0033), comme sa pose. Branche GÉNÉRIQUE sans
+        # consommateur vivant depuis que `planity` est natif (2026-09-09,
+        # oto-backend#913) : les deux mounts déclarés sont OAuth. Gardée pour la
+        # même raison que la branche no-auth de `tools/mount.py` — elle ne coûte
+        # rien et le prochain mount à clé la retrouvera écrite.
         org = scope.current_org(sub)
         token = (credentials_store.get_credential(
                      credentials_store.MEMBER,

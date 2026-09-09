@@ -4,7 +4,7 @@ type: explanation
 description: >-
   Explique les deux mécanismes de fédération MCP coexistants dans oto-backend : mount
   (kind="mount", tools natifs du MCP distant, token OAuth per-user injecté par requête,
-  pilotes atlassian/planity)
+  pilotes atlassian/folkmcp)
   et remote (ADR 0003, tunnel <ns>_describe/<ns>_call data-driven, credential M2M d'org,
   pilote = un connecteur remote client). Détaille l'activation
   des mounts (connector_activation ∪ OTO_MCP_MOUNTS_ENABLED), et la limite catalogue figé
@@ -75,6 +75,10 @@ nettoyage est une opération distincte.
 - **Plus aucun mount monté d'office.** `_DEFAULT_ENABLED_MOUNTS` est **vide** ; un mount
   se monte via le régime commun `connector_activation` (master/override ON) ∪ env
   `OTO_MCP_MOUNTS_ENABLED` (`*` = tous, CSV = liste, `""` = kill-switch absolu). En prod :
-  master atlassian **OFF**, env = `planity` seul.
+  master atlassian **OFF**. ⚠️ L'env de prod a longtemps valu `planity` seul ; **`planity`
+  n'est plus un mount depuis le 2026-09-09** (natif, `kind="tools"`, oto-backend#913) et
+  un nom de connecteur non-mount dans cette liste n'a aucun effet — elle est filtrée sur
+  `MOUNT_CONNECTORS`. À nettoyer sur la box au passage : une liste qui nomme un
+  connecteur qu'elle ne peut plus monter se relit comme une configuration active.
 - Limite inchangée : catalogue mount figé au boot (≥1 credential connecté requis pour
   le charger).

@@ -144,9 +144,11 @@ def _fetch_catalog(connector: providers.Connector) -> list:
         if sub:
             token = _catalog_token(connector, sub)
         else:
-            # Mount non-oauth (basic_auth, ex. planity) : credential au scope
-            # MEMBRE depuis ADR 0033 (entity_id = "org:sub") — le catalogue étant
-            # partagé, n'importe quel credential connecté fait l'affaire.
+            # Mount non-oauth (basic_auth) : credential au scope MEMBRE depuis
+            # ADR 0033 (entity_id = "org:sub") — le catalogue étant partagé,
+            # n'importe quel credential connecté fait l'affaire. Sans consommateur
+            # vivant depuis que `planity` est natif (2026-09-09, oto-backend#913) :
+            # les deux mounts déclarés sont OAuth.
             eid = credentials_store.first_entity_with(
                 credentials_store.MEMBER, connector.name)
             if eid:

@@ -20,9 +20,9 @@ def _sans_logo() -> set[str]:
     2026-09-02, dans ses deux directions, et l'angle mort coûtait aux deux : côté
     oubli, `folkmcp` — le MCP *officiel* de Folk — est resté sans logo et sans
     éditeur déclaré, donc servi sous le défaut « Otomata » ; côté entrée morte, une
-    absence légitimement déclarée sur un mount (`planity`, dont le service monté est
-    le NÔTRE) se faisait accuser d'être périmée. Un mount est un connecteur comme un
-    autre du point de vue de la fiche : il n'y a rien à filtrer ici.
+    absence légitimement déclarée (`planity`, alors fédéré, dont le service rendu
+    est le NÔTRE) se faisait accuser d'être périmée. Un mount est un connecteur
+    comme un autre du point de vue de la fiche : il n'y a rien à filtrer ici.
     """
     return {
         n for n, c in providers.REGISTRY.items()
@@ -44,10 +44,12 @@ def test_la_liste_des_exceptions_ne_se_perime_pas():
     soit un connecteur supprimé, soit un logo ajouté sans nettoyer la liste — dans les
     deux cas la liste ment sur ce qu'elle protège.
 
-    ⚠️ Un connecteur FÉDÉRÉ a le droit de déclarer l'absence : `planity` monte NOTRE
-    serveur, la marque Planity n'est pas celle du service rendu (2026-09-02). Tant que
-    ce calcul excluait les mounts, ce ratchet accusait cette déclaration d'être morte
-    alors qu'elle décrit exactement le connecteur qu'elle nomme."""
+    ⚠️ Un connecteur FÉDÉRÉ a le droit de déclarer l'absence, et c'est ce qu'était
+    `planity` quand le trou a été trouvé : le service rendu était le NÔTRE, la marque
+    Planity n'est pas celle du service (2026-09-02). Tant que ce calcul excluait les
+    mounts, ce ratchet accusait cette déclaration d'être morte alors qu'elle décrit
+    exactement le connecteur qu'elle nomme. `planity` est natif depuis le 2026-09-09
+    et déclare toujours l'absence, pour exactement la même raison."""
     perimees = sorted(providers._SANS_LOGO_DE_MARQUE - _sans_logo())
     assert not perimees, (
         f"{perimees} : entrées mortes dans `_SANS_LOGO_DE_MARQUE` — à retirer.")

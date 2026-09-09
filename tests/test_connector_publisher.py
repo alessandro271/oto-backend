@@ -49,7 +49,7 @@ def test_tout_connecteur_declare_son_editeur():
         f"{muets} : connecteur sans éditeur déclaré. Ajoute `PUBLISHER = \"…\"` dans "
         "`oto_mcp/providers/<nom>.py`. La question qui donne la valeur est « à qui "
         "l'appel arrive-t-il ? » — une passerelle tierce se nomme (reddit → "
-        "`redditapis.com`), un service qu'on opère aussi (planity → `Otomata`). Ce "
+        "`redditapis.com`), un service qu'on écrit aussi (planity → `Otomata`). Ce "
         "n'est PAS « la marque est-elle la bonne ? » : cette question-là n'attrape "
         "aucune des trois fautes du 2026-09-02. Cf. `docs/connector-vault.md` "
         "§« Ce que la fiche DIT ».")
@@ -111,11 +111,11 @@ def test_les_cas_connus_du_2026_09_02():
     Rejoué sur les valeurs servies : c'est ce que l'utilisateur reçoit, pas ce que le
     source déclare. Les deux fautes vont dans des sens OPPOSÉS et une seule relecture
     les confond — `folkmcp` se créditait à nous, `planity` créditait un tiers de ce
-    qu'on opère."""
+    qu'on écrit et opère nous-mêmes."""
     attendus = {
         # Corrigées à la main le 2026-09-02 (PR #834), figées ici.
         "folkmcp": "Folk",              # le MCP officiel de Folk, servi « Otomata »
-        "planity": "Otomata",           # le mount est NOTRE serveur
+        "planity": "Otomata",           # le connecteur est le NÔTRE (natif depuis #913)
         "atlassian": "Atlassian",
         # Les six canaux hébergés : le message part chez Unipile, qui détient la
         # session du compte opéré. Déclaré une seule fois, chez le porteur de la clé.

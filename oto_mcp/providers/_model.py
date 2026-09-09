@@ -346,8 +346,10 @@ class Connector:
         `default` → panneau de connexion vide). Vécu avec `secret_then_oauth`,
         retiré le 29/07 : « il reste une étape » se dit par `status_hints`
         (pending_action), pas par une nouvelle méthode d'auth. NB : un MCP fédéré
-        (kind=mount) hérite de son `secret_kind`
-        (planity=basic_auth→secret, atlassian=oauth→oauth)."""
+        (kind=mount) hérite de son `secret_kind` comme n'importe quel autre
+        connecteur — `atlassian` (oauth→oauth) est le seul cas vivant ; le
+        `basic_auth` d'un mount (→secret) l'a été jusqu'à ce que `planity`
+        devienne natif."""
         if self.hosted_auth:
             return "hosted"
         if self.kind == "remote" and not self.credential_fields:

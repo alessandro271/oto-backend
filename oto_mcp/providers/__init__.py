@@ -113,6 +113,10 @@ _DECLARATIONS: tuple[str, ...] = (
     "gocardless",
     "atlassian",
     "folkmcp",
+    # `planity` reste ICI, entre les deux MCP fédérés et la suite, alors qu'il
+    # n'est plus fédéré (natif depuis le 2026-09-09, oto-backend#913) : cet ordre
+    # ne gouverne que l'AFFICHAGE, et le déplacer réordonnerait le catalogue sans
+    # rien réparer. Sa place se juge au voisinage montré, pas au `kind`.
     "planity",
     "cognism",
     "lighton",

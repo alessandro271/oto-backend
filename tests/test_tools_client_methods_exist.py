@@ -15,7 +15,13 @@ d'atteindre la prod.
 
 Portée = `def _client(...) -> <ClasseConcrète>` **ou** `-> tuple[<Classe>, …]`, et
 les appels sur le client, qu'il soit chaîné (`_client().m()`), lié à une variable
-(`client, _ = _client()` puis `client.m()`) ou passé à un dispatcher (`c.m()`).
+(`client, _ = _client()` puis `client.m()`) ou passé à un dispatcher (`c.m()`). La
+fabrique peut être `async def` : le premier connecteur dont le cœur est asynchrone
+(`planity`, 2026-09-09) serait sinon sorti de la sonde SANS que rien ne le dise —
+`ast.AsyncFunctionDef` n'est pas un `ast.FunctionDef`, donc l'annotation de retour
+ne se lisait pas, et `test_no_module_silently_uncovered` ne voyait même pas qu'il y
+avait un `_client`. Un angle mort qui s'ouvre au moment où un connecteur adopte une
+forme neuve est exactement celui qu'on ne trouve jamais par relecture.
 
 ⚠️ La portée a été élargie le 2026-07-31 après un trou vécu : `tools/apollo.py`
 déclare `def _client() -> tuple[ApolloClient, bool]` et appelle `client.m()` — les
@@ -87,7 +93,8 @@ def _client_class_name(tree: ast.Module) -> str | None:
     ou premier élément d'un `tuple[...]` (`-> tuple[ApolloClient, bool]`, la forme
     des connecteurs qui rendent aussi « clé plateforme ? »). None si absente."""
     for node in ast.walk(tree):
-        if not (isinstance(node, ast.FunctionDef) and node.name == "_client"):
+        if not (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == "_client"):
             continue
         ret = node.returns
         if isinstance(ret, ast.Name):
@@ -113,6 +120,11 @@ def _names_bound_to_client(tree: ast.Module) -> set[str]:
         if not isinstance(node, ast.Assign):
             continue
         val = node.value
+        # `client = await _client()` : l'attente enveloppe l'appel. Sans ce
+        # dépliage, une fabrique asynchrone ne lie plus rien et son connecteur
+        # ne tient sa couverture que par le nom conventionnel `c`.
+        if isinstance(val, ast.Await):
+            val = val.value
         if not (isinstance(val, ast.Call) and isinstance(val.func, ast.Name)
                 and val.func.id in _CLIENT_FACTORIES):
             continue
@@ -166,8 +178,8 @@ def _est_fabrique_partagee(stem: str, tree: ast.Module) -> bool:
     """
     if _methods_called_on_client(tree):
         return False
-    if not any(isinstance(n, ast.FunctionDef) and n.name in _CLIENT_FACTORIES
-               for n in ast.walk(tree)):
+    if not any(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+               and n.name in _CLIENT_FACTORIES for n in ast.walk(tree)):
         return False
     for autre in _TOOLS_DIR.glob("*.py"):
         if autre.stem == stem:
@@ -250,6 +262,11 @@ def test_convention_coverage_not_silently_shrinking():
     assert "apollo" in covered, (
         "apollo doit rester couvert : `_client() -> tuple[...]` + `client.m()` est "
         "le motif qui échappait à la sonde (trou vécu 2026-07-31)")
+    assert {"planity", "planity_stats"} <= covered, (
+        "les deux modules de planity doivent rester couverts : leur fabrique est "
+        "`async def _client()` — le motif qui sortait de la sonde sans un mot "
+        "(2026-09-09). C'est le connecteur qui en a le plus besoin : son cœur "
+        "vient d'oto-core, donc d'un autre dépôt et d'un autre rythme de tag.")
     assert len(_CASES) >= 20, f"couverture anormalement basse ({len(_CASES)} modules)"
 
 
@@ -264,8 +281,8 @@ def test_no_module_silently_uncovered():
         if path.name.startswith("_") or path.stem in covered:
             continue
         tree = ast.parse(path.read_text(), filename=str(path))
-        has_client = (any(isinstance(n, ast.FunctionDef) and n.name == "_client"
-                          for n in ast.walk(tree))
+        has_client = (any(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+                          and n.name == "_client" for n in ast.walk(tree))
                       or _fabrique_importee(tree) is not None)
         exempt = _NO_CLIENT_EXPECTED | _SUBOBJECT_CLIENTS | _DYNAMIC_DISPATCH_CLIENTS
         if has_client and path.stem not in exempt and not _est_fabrique_partagee(
