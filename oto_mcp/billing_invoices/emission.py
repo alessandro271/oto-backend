@@ -30,6 +30,23 @@ base (`billing_invoices`, `status='pending'`), sa cause est nommée (`error_code
 elle est journalisée en `error`, et la reprise horaire la rejoue jusqu'à ce qu'elle
 aboutisse. **Un `pending` qui dure est un incident visible, pas un oubli.**
 
+## Aucun e-mail ne part d'ici
+
+**Décision d'Alexis, 2026-09-09 : la plateforme n'envoie plus d'e-mail de facture.**
+Le module compose, émet, numérote et range le PDF ; le client le télécharge depuis
+son espace facturation. Il n'y a plus ni destinataire calculé, ni envoi, ni renvoi.
+
+Ce qui l'a décidée : la facture F-2026-09-7 est partie **une fois, au créateur de
+l'org — jamais au client**. `billing_identities.billing_email` valait la chaîne
+vide (donc fausse au sens de Python), le repli prenait le premier `org_admin` par
+ancienneté, et à l'onboarding ce premier admin est Otomata. Le correctif n'était
+pas de réparer le repli : plusieurs des adresses qu'il aurait servies n'avaient pas
+à recevoir ces documents.
+
+`billing_invoices.emailed_at` / `email_to` restent en base — la base est PARTAGÉE
+prod/preprod, on n'y touche pas — mais **plus rien ne les écrit** : elles datent les
+envois d'avant le 2026-09-09 et resteront `NULL` pour tout document postérieur.
+
 ## Ce qu'on refuse d'émettre
 
 - un paiement **sans décomposition fiscale** (`amount_ht IS NULL`) : ce sont les
@@ -47,11 +64,10 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from .. import billing, billing_vat, links, org_store
+from .. import billing, billing_vat
 from ..db import billing as db_billing
 from ..db import billing_invoices as db_invoices
-from ..db import users as db_users
-from . import mail, pennylane
+from . import pennylane
 from .pennylane import PennylaneUnavailable
 
 logger = logging.getLogger(__name__)
@@ -231,51 +247,11 @@ def _emettre(row: dict, payment_row: dict, *, kind: str, label: str,
     return db_invoices.get_billing_invoice(row["id"])
 
 
-# ── destinataire ─────────────────────────────────────────────────────────────
-
-def billing_contact(org_id: int, identity: Optional[dict] = None) -> Optional[str]:
-    """À qui part la facture : l'adresse déclarée sur l'identité, sinon le premier
-    org_admin (par ancienneté). Aucune des deux ⟹ personne, et on le dit — un
-    e-mail envoyé « au hasard » d'un membre serait pire qu'un e-mail non envoyé."""
-    identity = identity if identity is not None else db_billing.get_billing_identity(org_id)
-    if identity and identity.get("billing_email"):
-        return identity["billing_email"]
-    admins = [m["sub"] for m in org_store.list_org_members(org_id)
-              if m.get("org_role") == "org_admin"]
-    emails = db_users.emails_by_subs(admins)
-    for sub in admins:
-        if emails.get(sub):
-            return emails[sub]
-    return None
-
-
-def _notifier(row: dict, org_id: int) -> dict:
-    """Envoie l'e-mail une seule fois par document (`emailed_at`), et rend la ligne
-    À JOUR — l'envoi est un fait qui s'écrit, l'appelant ne doit pas rendre au
-    client une ligne qui l'ignore.
-
-    Best-effort : un e-mail non parti ne remet pas en cause la facture, qui est
-    émise, numérotée et téléchargeable. L'échec se lit à `emailed_at IS NULL`."""
-    if row.get("emailed_at") or row.get("status") != "issued":
-        return row
-    to = billing_contact(org_id)
-    if not to:
-        logger.warning("facturation: aucune adresse de facturation pour l'org %s — "
-                       "document %s non notifié", org_id, row.get("number") or row["id"])
-        return row
-    vue = dict(row)
-    vue["vat_mention"] = billing_vat.mention_for(row.get("vat_scheme") or "")
-    if not mail.send_invoice_email(to, vue, app_url=links.link_for("billing")):
-        return row
-    db_invoices.mark_billing_invoice_emailed(row["id"], to)
-    return db_invoices.get_billing_invoice(row["id"]) or row
-
-
 # ── facture ──────────────────────────────────────────────────────────────────
 
 def ensure_invoice_for_payment(payment_row: dict, *,
                                plan: Optional[str] = None) -> Optional[dict]:
-    """Le point d'entrée de tous les chemins : trace, émission, e-mail. NE LÈVE PAS.
+    """Le point d'entrée de tous les chemins : trace et émission. NE LÈVE PAS.
 
     Idempotent par construction — la trace est unique en base `(paiement, kind)`,
     et une ligne déjà `issued` ressort telle quelle sans toucher au fournisseur.
@@ -296,7 +272,7 @@ def ensure_invoice_for_payment(payment_row: dict, *,
     row = db_invoices.ensure_billing_invoice(org_id, row_id, kind="invoice",
                                              payment_ref=ref)
     if row["status"] == "issued":
-        return _notifier(row, org_id)
+        return row
 
     label_plan, interval = _plan_meta(org_id, plan)
     date = _paid_at(payment_row)
@@ -320,7 +296,7 @@ def ensure_invoice_for_payment(payment_row: dict, *,
         return db_invoices.get_billing_invoice(row["id"])
     logger.info("facturation: org %s — facture %s émise pour le paiement %s",
                 org_id, row.get("number"), row_id)
-    return _notifier(row, org_id)
+    return row
 
 
 # ── avoir ────────────────────────────────────────────────────────────────────
@@ -359,7 +335,7 @@ def ensure_credit_note_for_refund(payment_row: dict,
                          "%s centimes alors que l'avoir %s n'en couvre que %s : "
                          "avoir complémentaire à émettre À LA MAIN",
                          org_id, row_id, refunded_cents, row.get("number"), deja)
-        return _notifier(row, org_id)
+        return row
 
     if not facture or facture.get("status") != "issued":
         # Un avoir annule une facture : sans facture émise, il n'a rien à annuler.
@@ -401,7 +377,7 @@ def ensure_credit_note_for_refund(payment_row: dict,
         return db_invoices.get_billing_invoice(row["id"])
     logger.info("facturation: org %s — avoir %s émis (%s centimes) sur la facture %s",
                 org_id, row.get("number"), ttc, facture.get("number"))
-    return _notifier(row, org_id)
+    return row
 
 
 # ── les deux points d'appel du cycle de paiement ─────────────────────────────

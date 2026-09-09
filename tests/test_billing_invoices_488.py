@@ -16,9 +16,12 @@ vivent que dans le schéma, et un stub dirait oui à n'importe quoi.
 Le FOURNISSEUR, lui, est simulé (`_faux_pennylane`) : au niveau du CLIENT, pas des
 fonctions du seam. Le rapprochement du client, l'ordre brouillon → contrôle →
 finalisation, le choix du code de TVA et la traduction d'un refus en exception sont
-donc réellement exercés. Le mailer aussi est simulé — rien ne sort sur le réseau.
+donc réellement exercés. Le relais d'e-mail est capturé au niveau de son POST — rien
+ne sort sur le réseau, et `faux.emails` dit ce qui SERAIT parti.
 """
 from __future__ import annotations
+
+import pytest
 
 from _faux_pennylane import (FauxPennylane, _abonnement,  # noqa: F401
                             _identite, _org, _paiement, brancher, live)
@@ -63,9 +66,11 @@ def test_un_encaissement_produit_une_facture_finalisee(live, monkeypatch):
     assert db_invoices.get_billing_invoice_pdf(inv["id"])["pdf"].startswith(b"%PDF")
     assert inv["pdf_url"].endswith(".pdf")
 
-    # Et le contact de facturation a été prévenu, une fois.
-    assert faux.emails and faux.emails[0][0] == "compta@acme.test"
-    assert inv["emailed_at"] and inv["email_to"] == "compta@acme.test"
+    # Et RIEN n'est parti : la plateforme n'envoie plus de facture par e-mail
+    # (décision du 2026-09-09). Le contrôle de l'instrument est fait dans
+    # `test_aucun_email_ne_part_a_l_emission` — ici on lit son verdict.
+    assert faux.emails == []
+    assert inv["emailed_at"] is None and inv["email_to"] is None
 
 
 def test_le_client_pennylane_est_rapproche_sur_l_org(live, monkeypatch):
@@ -102,7 +107,76 @@ def test_un_webhook_rejoue_ne_cree_quune_facture(live, monkeypatch):
     assert premier["id"] == second["id"] and second["status"] == "issued"
     assert len([c for c in faux.calls if c[0] == "create_invoice"]) == 1
     assert len(db_invoices.list_billing_invoices(org)) == 1
-    assert len(faux.emails) == 1, "et l'e-mail ne part pas deux fois"
+    assert faux.emails == [], "aucun e-mail — ni au premier appel, ni au rejeu"
+
+
+# ── aucun e-mail de facture ──────────────────────────────────────────────────
+
+def test_aucun_email_ne_part_a_l_emission(live, monkeypatch):
+    """La facture ET l'avoir s'émettent sans qu'un seul e-mail parte (2026-09-09).
+
+    L'instrument est vérifié AVANT de mesurer : un envoi réel est joué à travers
+    `email._send`, le seul chemin par lequel ce dépôt atteint le relais
+    transactionnel, et il DOIT être vu. Sans ce contrôle, une liste vide ne
+    distinguerait pas « rien n'est parti » de « l'espion regarde à côté » — c'est
+    exactement ce qui rendrait le banc vert le jour où l'envoi reviendrait.
+
+    L'org est gréée avec une adresse de facturation valide et un `org_admin` : les
+    deux entrées de l'ancien destinataire sont donc disponibles, et aucune n'est
+    servie.
+    """
+    from oto_mcp import billing_invoices, email
+    from oto_mcp.db import billing_invoices as db_invoices
+    from oto_mcp.db._conn import _connect
+
+    faux = brancher(monkeypatch)
+    org = _org()
+    _identite(org)               # billing_email = compta@acme.test
+    _abonnement(org)
+    with _connect() as conn:
+        conn.execute("INSERT INTO org_members (org_id, sub, org_role) "
+                     "VALUES (%s, 'u-admin-facture', 'org_admin')", (org,))
+
+    # 1. Contrôle : l'espion voit un envoi réel.
+    assert email._send("temoin@exemple.test", "témoin", "<p>témoin</p>") is True
+    assert faux.emails == [("temoin@exemple.test", "témoin")], (
+        "l'espion doit voir passer un e-mail RÉEL, sinon il ne prouve rien")
+    faux.posts.clear()
+
+    # 2. Mesure : le cycle complet, facture puis avoir.
+    paiement = _paiement(org)
+    facture = billing_invoices.ensure_invoice_for_payment(paiement, plan="standard")
+    avoir = billing_invoices.ensure_credit_note_for_refund(paiement, 2280)
+
+    assert facture["status"] == "issued" and avoir["status"] == "issued"
+    assert faux.emails == [], "aucun e-mail de facture ne part, jamais"
+    for doc in (facture, avoir):
+        assert doc["emailed_at"] is None and doc["email_to"] is None
+
+    # 3. Et par l'AUTRE point d'entrée — celui qu'appelle le cycle de paiement
+    #    (`billing.confirm`, `process_webhook`), qui ne passe pas par les fonctions
+    #    ci-dessus mais par `facturer_encaissement`.
+    billing_invoices.facturer_encaissement(_paiement(org)["id"], plan="standard")
+
+    assert faux.emails == []
+    lignes = db_invoices.list_billing_invoices(org)
+    assert len(lignes) == 3 and all(l["emailed_at"] is None for l in lignes)
+
+
+def test_le_paquet_de_facturation_nexpose_plus_aucun_envoi():
+    """Le chemin a été RETIRÉ, pas neutralisé : ni destinataire, ni composition.
+
+    Un envoi qui reste dans le code, seulement plus appelé, revient au premier
+    refactor qui « répare » un appel manquant.
+    """
+    import importlib
+
+    from oto_mcp import billing_invoices
+
+    assert not hasattr(billing_invoices, "billing_contact")
+    assert "billing_contact" not in billing_invoices.__all__
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("oto_mcp.billing_invoices.mail")
 
 
 # ── les régimes de TVA portent leur mention ──────────────────────────────────

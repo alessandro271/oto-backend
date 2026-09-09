@@ -10,8 +10,12 @@ Il calcule les totaux comme le ferait Pennylane — HT × (1 + taux du code de T
 pour que le contrôle d'écart de montant ait quelque chose à contrôler. Sans ça, le
 test qui refuse une facture fausse ne prouverait rien.
 
-Le mailer est simulé au même endroit (`oto_mcp.billing_invoices.mail._send`) : rien
-ne part sur le réseau depuis la suite.
+L'ENVOI, lui, n'est plus simulé au niveau du template : depuis le 2026-09-09 la
+facturation n'envoie plus rien, et ce qu'il faut pouvoir prouver est qu'aucun e-mail
+ne part. L'espion se pose donc sur la DESTINATION — `httpx.post`, le seul geste par
+lequel `oto_mcp.email._send` atteint le relais transactionnel — et le bearer du
+relais est posé exprès : sans lui `_send` sort AVANT d'avoir rien tenté, et un
+espion vide ne prouverait plus rien (`faux.emails`).
 
 Il porte aussi la fixture `live` (une base PostgreSQL jetable) et le gréement des
 tests de facturation — org, identité, abonnement, ligne de journal encaissée. Ils
@@ -39,6 +43,8 @@ class FauxPennylane:
         self.customers: dict[int, dict] = {}
         self.documents: dict[int, dict] = {}
         self.calls: list[tuple] = []
+        # Tout `httpx.post` de la suite, posé par `brancher` : (url, corps JSON).
+        self.posts: list[tuple] = []
         self._seq = 100
         # Leviers de panne, posés par un test : `refus` fait échouer le client
         # comme le VRAI le fait — en levant `UpstreamHTTPError` (oto-core#77 :
@@ -61,6 +67,18 @@ class FauxPennylane:
         raise UpstreamHTTPError(int(statut) if str(statut).isdigit() else 500,
                                 refus.get("details") or refus.get("error") or "refus",
                                 service="pennylane")
+
+    @property
+    def emails(self) -> list[tuple]:
+        """Les e-mails RÉELLEMENT partis : les posts au relais transactionnel.
+
+        Se lit sur la destination, pas sur une fonction de composition — un envoi
+        réintroduit par un autre chemin (un template neuf, un `_send` importé par
+        valeur ailleurs) apparaîtrait ici quand même."""
+        from oto_mcp import email as relais
+
+        return [(corps.get("to"), corps.get("subject"))
+                for url, corps in self.posts if url == relais._MAILER_URL]
 
     def _id(self) -> int:
         self._seq += 1
@@ -165,7 +183,6 @@ def brancher(monkeypatch, faux: FauxPennylane | None = None) -> FauxPennylane:
     Rend le faux, pour que le test lise son journal d'appels."""
     import httpx
 
-    from oto_mcp.billing_invoices import mail
     from oto_mcp.billing_invoices import pennylane as seam
 
     faux = faux or FauxPennylane()
@@ -176,11 +193,16 @@ def brancher(monkeypatch, faux: FauxPennylane | None = None) -> FauxPennylane:
         content = b"%PDF-1.4 faux document"
 
     monkeypatch.setattr(httpx, "get", lambda *a, **k: _Reponse())
-    envoyes: list[tuple] = []
-    monkeypatch.setattr(mail, "_send",
-                        lambda to, subject, html, **k: envoyes.append((to, subject, html))
-                        or True)
-    faux.emails = envoyes
+
+    # Le relais est JOIGNABLE du point de vue du code (bearer posé), et tout post
+    # sortant est capturé : `faux.emails` ne peut donc pas être vide par accident.
+    monkeypatch.setenv("OTO_MAILER_SEND_BEARER", "bearer-de-suite")
+
+    def _post(url, *a, **k):
+        faux.posts.append((str(url), k.get("json") or {}))
+        return _Reponse()
+
+    monkeypatch.setattr(httpx, "post", _post)
     return faux
 
 # ── gréement des tests de facturation ────────────────────────────────────────

@@ -168,11 +168,11 @@ def get_billing_invoice_pdf(invoice_id: int) -> Optional[dict]:
     return row
 
 
-def mark_billing_invoice_emailed(invoice_id: int, to: str) -> None:
-    with _connect() as conn:
-        conn.execute(
-            "UPDATE billing_invoices SET emailed_at=NOW(), email_to=%s, "
-            "updated_at=NOW() WHERE id=%s", (to, invoice_id))
+# ⚠️ `emailed_at` / `email_to` n'ont PLUS d'écrivain depuis le 2026-09-09 : la
+# plateforme n'envoie plus de facture par e-mail (`billing_invoices/emission.py` dit
+# pourquoi). Les deux colonnes restent — la base est PARTAGÉE prod/preprod, aucun DDL
+# ne se joue ici — et datent les envois d'AVANT cette date ; elles sont `NULL` pour
+# tout document postérieur, et se lisent comme une archive, jamais comme un état.
 
 
 def pending_billing_invoices(limit: int = 50) -> list[dict]:

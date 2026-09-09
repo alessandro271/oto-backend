@@ -93,9 +93,11 @@ class Invoice(BaseModel):
                     "`has_pdf` est faux.")
     emailed_at: Optional[str] = Field(
         default=None,
-        description="Envoi au contact de facturation. `null` = non envoyé (adresse "
-                    "absente, ou relais indisponible) — le document reste "
-                    "téléchargeable, l'e-mail n'en conditionne rien.")
+        description="ARCHIVE. La plateforme n'envoie plus de facture par e-mail "
+                    "depuis le 2026-09-09 : ce champ date les envois d'AVANT, et "
+                    "vaut `null` sur tout document postérieur. Un `null` ne signale "
+                    "donc aucun échec et n'appelle aucun renvoi — la facture se "
+                    "récupère par `pdf_path`.")
     created_at: str = Field(description="Création de la ligne de suivi.")
 
 

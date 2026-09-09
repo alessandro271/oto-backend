@@ -551,9 +551,9 @@ ici : seule la relecture du plan comptable le peut. C'est une ligne à changer
 
 **Dans notre base**, colonne `pdf` (`BYTEA`), téléchargé à l'émission. L'URL rendue
 par Pennylane (`public_file_url`) **expire en 30 minutes** : la conserver comme
-« lien vers la facture » aurait donné un lien mort une demi-heure plus tard — dans
-un e-mail, on ne s'en apercevrait qu'en le voyant échouer chez le client. Elle est
-gardée comme trace de provenance, jamais servie.
+« lien vers la facture » aurait donné un lien mort une demi-heure plus tard, sans
+que rien chez nous ne le signale. Elle est gardée comme trace de provenance,
+jamais servie.
 
 Deux surfaces, et la seconde n'est pas une capacité :
 
@@ -563,9 +563,15 @@ Deux surfaces, et la seconde n'est pas une capacité :
   (`api/billing.py`), parce qu'un handler de capacité rend un `dict` que
   l'adaptateur emballe en JSON : il ne peut pas servir `application/pdf`. Même
   exception, même précédent que l'export ZIP d'un projet. Son autorisation porte sur
-  l'org **qui porte la facture**, pas sur l'org active — ce lien s'ouvre depuis un
-  e-mail, où rien ne garantit l'org de session. Un id d'une autre org rend **404**,
-  jamais 403 : un « interdit » confirmerait l'existence du document.
+  l'org **qui porte la facture**, pas sur l'org active — le lien s'ouvre hors de tout
+  contexte de session (un onglet rouvert, une URL collée), où rien ne garantit l'org
+  courante. Un id d'une autre org rend **404**, jamais 403 : un « interdit »
+  confirmerait l'existence du document.
+
+⚠️ Les deux réponses passent par `api/base.py::_file`, **jamais** par une `Response`
+construite à la main : le CORS de ce serveur se pose réponse par réponse, et un 200
+qui porte un fichier sans en-tête CORS est refusé par le navigateur alors que le
+serveur, lui, a bien répondu (mesuré en production le 2026-09-09).
 
 **Pourquoi la base et non l'objet.** `media_store` ne sert que des images, et il
 produit des URL **publiques** — inadapté à une facture. Un document pèse quelques
@@ -580,22 +586,30 @@ une 500 à la sérialisation, sur le chemin le moins emprunté de la surface. Le
 son getter dédié, et la liste ne le voit jamais. Même famille de piège que le
 `NUMERIC` qui ressort en `Decimal` (#486).
 
-### L'e-mail — et pourquoi le PDF n'y est PAS joint
+### Aucun e-mail — la facture se met à disposition
 
-Le document part au contact de facturation (`billing_identities.billing_email`,
-sinon le premier org_admin par ancienneté) via le relais transactionnel
-`otomata-mailer`. Best-effort : un e-mail non parti ne remet rien en cause, il se lit
-à `emailed_at IS NULL`.
+**Depuis le 2026-09-09, la plateforme n'envoie plus d'e-mail de facture.** Elle
+émet, numérote, range le PDF et le sert ; le client le télécharge depuis son espace
+facturation. Aucun destinataire n'est calculé, aucun envoi n'est tenté, aucun renvoi
+n'existe — `billing_invoices/mail.py` a été retiré, pas neutralisé.
 
-⚠️ **Le relais n'accepte pas de pièce jointe** : `POST mailer.oto.zone/api/send` ne
-prend que `{from, to, cc, replyTo, subject, html}` et son `sendMail` ne passe aucun
-`attachments` à nodemailer (`otomata-tech/otomata-auth-mailer`, `src/send.ts` +
-`src/index.ts`). L'e-mail porte donc le numéro, les montants, la période et un lien
-vers l'espace facturation. **Joindre le PDF demande une décision**, pas une
-correction au passage : ouvrir `attachments` sur le mailer (autre dépôt), ou laisser
-**Pennylane** l'envoyer lui-même (`POST customer_invoices/{id}/send_by_email`, déjà
-exposé par oto-core) au prix d'un expéditeur et d'un gabarit qui ne sont pas les
-nôtres.
+**Pourquoi.** La facture F-2026-09-7 est partie **une fois, au créateur de l'org, et
+jamais au client** : `billing_identities.billing_email` valait la chaîne vide, donc
+fausse au sens de Python, et le repli prenait le premier `org_admin` par ancienneté
+— à l'onboarding, c'est Otomata, arrivé quatre minutes avant l'admin du client.
+Réparer le repli n'était pas la bonne correction : plusieurs des adresses qu'il
+aurait servies n'avaient pas à recevoir ces documents.
+
+⚠️ **`emailed_at` et `email_to` n'ont plus d'écrivain.** Les colonnes restent (la
+base est PARTAGÉE prod/preprod : aucun DDL ne se joue pour ça) et la liste continue
+de les servir, mais elles datent désormais **les seuls envois d'avant le
+2026-09-09** ; tout document postérieur les porte à `NULL`. Elles se lisent comme
+une archive, jamais comme un état à rattraper — c'est ce que dit la description
+servie du champ dans `capabilities/billing_invoices.py`.
+
+Reste au backlog, non tranché : **qui, dans une org, a le droit de voir et de
+télécharger les factures**. Aujourd'hui c'est tout membre de l'org qui porte le
+document (`roles.is_org_member`).
 
 ### L'avoir sur remboursement
 
@@ -743,8 +757,8 @@ du 2ᵉ paiement et la révocation du mandat orphelin né du second customer.
 `billing.py` (le cycle), `billing_vat.py` (la règle de TVA, **pure** : ni base,
 ni réseau, ni horloge), `db/billing.py` (les trois tables + les files),
 `billing_invoices/` (le paquet de la FACTURE : `pennylane.py` = le seam fournisseur
-et la clé de la compta d'Otomata, `emission.py` = le cycle facture/avoir/reprise,
-`mail.py` = l'e-mail au contact de facturation), `db/billing_invoices.py` (la table
+et la clé de la compta d'Otomata, `emission.py` = le cycle facture/avoir/reprise —
+et **aucun e-mail**), `db/billing_invoices.py` (la table
 de trace), `capabilities/billing_invoices.py` (la liste) et la route de
 téléchargement du PDF dans `api/billing.py`,
 `mollie_client.py` (la surface PSP), `capabilities/billing.py` (les six capacités

@@ -7,7 +7,10 @@ même durée de vie ni les mêmes raisons de changer.
     pennylane.py   le seam FOURNISSEUR — la clé de la compta d'Otomata, la
                    traduction d'un échec en exception, les codes de TVA
     emission.py    le CYCLE — trace, facture, avoir, reprise
-    mail.py        l'E-MAIL au contact de facturation
+
+⚠️ **Aucun e-mail ne part de ce paquet** depuis le 2026-09-09 : la plateforme
+n'envoie plus de facture par courrier, elle la met à disposition. Le `mail.py` qui
+portait cet envoi a été retiré, pas neutralisé — et `emission.py` dit pourquoi.
 
 Ce qui vit ailleurs, et pourquoi :
 
@@ -27,7 +30,6 @@ from __future__ import annotations
 from .emission import (          # noqa: F401 — la façade EST la surface publique
     InvoiceRefused,
     avoir_remboursement,
-    billing_contact,
     ensure_credit_note_for_refund,
     ensure_invoice_for_payment,
     facturer_encaissement,
@@ -40,7 +42,6 @@ __all__ = [
     "PLATFORM_KEY_ENV",
     "PennylaneUnavailable",
     "avoir_remboursement",
-    "billing_contact",
     "ensure_credit_note_for_refund",
     "ensure_invoice_for_payment",
     "facturer_encaissement",
