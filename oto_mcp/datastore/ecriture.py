@@ -261,7 +261,7 @@ class EcritureMixin:
             # celles qu'on a retenues : une borne de longueur ou un motif ne doit pas
             # se réarmer sur une colonne préservée, dont la valeur n'a pas bougé.
             self._check_row(schema, merged, prev_status=prev_status,
-                            written=set(pose))
+                            written=set(pose), avant=current or None)
             self.off_erased.extend(vidages)
             self.off_ignored.extend(ecartes)
             return merged
@@ -316,7 +316,8 @@ class EcritureMixin:
         if valide:
             sk = (dsv2.status_field(schema) or {}).get("key")
             prev_status = (prev_data or {}).get(sk) if sk else None
-            self._check_row(schema, user_data, prev_status=prev_status)
+            self._check_row(schema, user_data, prev_status=prev_status,
+                            avant=prev_data)
         self._assert_writable(ns_id, row_id)
         row, inserted = db.datastore_upsert_row(ns_id, row_id, user_data)
         if not inserted:

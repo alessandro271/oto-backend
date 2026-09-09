@@ -75,7 +75,15 @@ def test_le_DOCUMENT_servi_regroupe_bien_les_routes_d_un_objet():
     # `me` et `org` ne disparaissent pas et ne doivent pas : les clés PLATES
     # (`org.update`, `me.profile`) n'ont pas de segment de ressource, leur portée est
     # ce qu'on a de plus juste. Ce qui compte est qu'elles ne dominent plus.
-    plus_grosse = max(par_section.items(), key=lambda kv: kv[1])[0]
+    # ⚠️ `_deprecated` est EXCLU du classement, et ce n'est pas une commodité : ce
+    # n'est ni une portée ni une ressource, c'est une catégorie TRANSITOIRE. Elle
+    # gonfle à chaque renommage doublé d'alias et se vide à chaque retrait daté — le
+    # 09/09/2026 elle est passée en tête avec les 24 chemins du renommage `namespace`
+    # → `datastore`, qui s'en vont le 08/11. La laisser concourir ferait dire à ce
+    # banc « le document est mal organisé » alors qu'il dit seulement « un préavis est
+    # en cours », et le ferait rougir à chaque renommage — donc au pire moment.
+    classables = {t: n for t, n in par_section.items() if t != "_deprecated"}
+    plus_grosse = max(classables.items(), key=lambda kv: kv[1])[0]
     assert plus_grosse == "datastore", (
         f"la plus grosse section est `{plus_grosse}` — si c'est une portée, le "
         f"premier segment a repris la main : {par_section}")

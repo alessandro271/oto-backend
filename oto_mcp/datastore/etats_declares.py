@@ -22,19 +22,27 @@ déclaration ne coûtait rien à faire respecter.
 compte les lignes lues (9 421) et les cellules pleines examinées (8 646). Une sonde qui
 n'aurait rien regardé aurait rendu le même zéro.
 
-**Ce que ce module ne fait PAS, et il faut le savoir avant de s'y fier.** Il juge
-l'APPARTENANCE d'un état à sa liste, jamais la TRANSITION. Une transition se juge entre
-deux valeurs, et l'état précédent n'est transmis que pour la colonne de file
-(`prev_status`) — le chemin d'écriture ne le relit pas pour les autres. Sur une colonne
-secondaire, passer directement de `nouveau` à `signé` sans étape intermédiaire reste
-donc permis, même si `transitions` l'interdit. Fermer ce cran demande de charger la
-ligne d'avant ; ce n'est pas un oubli, c'est un lot séparé.
+**Les TRANSITIONS aussi — et elles n'ont rien coûté.** Ce module ne jugeait d'abord que
+l'APPARTENANCE : une transition se juge entre deux valeurs, et seul l'état précédent de
+la file était transmis. J'avais donc annoncé un lot séparé. Deux mesures l'ont rendu
+inutile :
+
+    100 des 132 colonnes secondaires déclarent des `transitions`  → inertes
+    la ligne d'AVANT est DÉJÀ chargée par le chemin d'écriture    → rien à payer
+
+Le chemin charge la ligne dès qu'un `lifecycle` existe, et n'en extrayait **qu'une
+colonne**. Fermer ce cran n'ajoute aucune requête : il suffit de lire ce qui était là.
+
+⚠️ **Sans `avant`, le contrôle de transition ne s'arme pas, silencieusement — et c'est
+voulu.** Un appelant qui ne peut pas fournir l'état d'avant ne doit pas se voir refuser
+une transition qu'on est incapable de juger. L'appartenance, elle, reste vérifiée.
 """
 from __future__ import annotations
 
 from typing import Optional
 
 from .couches import unwrap
+from .cycle_de_vie import refus_de_transition
 from .declaration import _fields, status_field
 
 
@@ -60,7 +68,8 @@ def colonnes_a_etats(schema: Optional[dict], *, sauf: Optional[str] = None) -> l
 
 def etats_trahis(schema: Optional[dict], merged: dict, *,
                  written: Optional[set] = None,
-                 gelees: Optional[list] = None) -> list[str]:
+                 gelees: Optional[list] = None,
+                 avant: Optional[dict] = None) -> list[str]:
     """Les colonnes SECONDAIRES dont la valeur n'est pas dans leur propre liste.
 
     Le partage `posé / gelé` est celui de la colonne de file, et pour la même raison
@@ -89,6 +98,9 @@ def etats_trahis(schema: Optional[dict], merged: dict, *,
             continue
         etats = {str(s) for s in (f["lifecycle"].get("states") or [])}
         if not etats or str(valeur) in etats:
+            # L'état est connu : reste à savoir si on avait le DROIT d'y aller.
+            if etats and str(valeur) in etats:
+                errors.extend(_transition_refusee(f, cle, valeur, avant))
             continue
         refus = (f"{cle}: état inconnu {valeur!r} — cette colonne déclare ses états "
                  f"(états: {sorted(etats)}). Elle n'est pas la file de travail du "
@@ -99,3 +111,25 @@ def etats_trahis(schema: Optional[dict], merged: dict, *,
         elif gelees is not None:
             gelees.append({"champ": str(cle), "refus": refus})
     return errors
+
+
+def _transition_refusee(f: dict, cle: str, valeur, avant: Optional[dict]) -> list[str]:
+    """Le passage d'un état à l'autre est-il déclaré permis ?
+
+    ⚠️ **La valeur d'AVANT se déballe elle aussi.** Dès la deuxième écriture la ligne
+    porte des couches : le cas normal est un objet, pas un mot. C'est le défaut qui a
+    arrêté une campagne le 29/08 — deux gestes voisins qui lisent la même colonne
+    doivent la lire pareil.
+    """
+    if not isinstance(avant, dict):
+        return []
+    transitions = f["lifecycle"].get("transitions")
+    if not isinstance(transitions, dict) or not transitions:
+        return []
+    ancien = unwrap(avant.get(cle))
+    if ancien is None or str(ancien) == str(valeur):
+        return []
+    permis = {str(t) for t in (transitions.get(str(ancien)) or [])}
+    if str(valeur) in permis:
+        return []
+    return [refus_de_transition(str(cle), str(ancien), str(valeur), sorted(permis))]

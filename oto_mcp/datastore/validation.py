@@ -326,6 +326,7 @@ def _row_errors(fields: list, data: dict, path: str,
 
 
 def validate_row(schema: Optional[dict], merged: dict, *,
+                 avant: Optional[dict] = None,
                  prev_status: Any = None,
                  written: Optional[set] = None,
                  details: Optional[dict] = None,
@@ -384,7 +385,8 @@ def validate_row(schema: Optional[dict], merged: dict, *,
     # 131 colonnes du parc déclaraient une liste que personne n'appliquait. Mesuré
     # avant de brancher : zéro valeur hors liste sur 8 646 cellules — la garde ne
     # refuse rien d'existant, elle ferme la porte avant qu'on la pousse.
-    errors.extend(etats_trahis(schema, merged, written=written, gelees=gelees))
+    errors.extend(etats_trahis(schema, merged, written=written, gelees=gelees,
+                               avant=avant))
     lc = lifecycle_of(schema)
     if lc:
         sf = status_field(schema)
