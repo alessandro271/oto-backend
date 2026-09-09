@@ -51,9 +51,9 @@ def insert_tool_call(row: dict) -> None:
                 (server, kind, sub, email, tool, args, ok, error, duration_ms, session_id,
                  run_id, org_id, client_id, sentry_event_id,
                  request_id, call_uid, effective_sub, error_kind,
-                 token_id, token_kind, result_size)
+                 token_id, token_kind, result_size, quantity, key_mode)
             VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s)
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 row.get("server") or "oto", row.get("kind") or "mcp",
@@ -73,6 +73,12 @@ def insert_tool_call(row: dict) -> None:
                 # pas été mesurée : les échecs (le middleware ne la calcule que sur le
                 # chemin heureux) et les gestes REST, qui ne passent pas par lui.
                 row.get("result_size"),
+                # Métrage par unité (billing Tulina) — NULL = non tracé pour ce
+                # tool, un consommateur doit le traiter comme 1, pas 0.
+                row.get("quantity"),
+                # Mode du credential (billing Tulina) — NULL = non attribuable,
+                # donc non facturable ; l'inverse de la règle de `quantity`.
+                row.get("key_mode"),
             ),
         )
 
@@ -830,7 +836,8 @@ def list_tool_calls(
             f"""
             SELECT l.id, l.sub, u.email, u.name, l.tool AS tool_name, l.created_at AS called_at,
                    l.duration_ms, l.ok, l.error, l.session_id, l.run_id, l.org_id,
-                   l.sentry_event_id, {journal_calls.ARG_KEYS_SQL} AS arg_keys
+                   l.sentry_event_id, {journal_calls.ARG_KEYS_SQL} AS arg_keys,
+                   l.quantity, l.key_mode
             FROM tool_calls l
             LEFT JOIN users u ON u.sub = l.sub
             {where}
@@ -853,7 +860,7 @@ def get_tool_call(call_id: int) -> Optional[dict]:
                    u.name, l.tool, l.args, l.ok, l.error, l.error_kind, l.duration_ms,
                    l.created_at,
                    l.session_id, l.run_id, l.org_id, o.name AS org_name, l.client_id,
-                   l.sentry_event_id
+                   l.sentry_event_id, l.quantity, l.key_mode
             FROM tool_calls l
             LEFT JOIN users u ON u.sub = l.sub
             LEFT JOIN orgs o ON o.id = l.org_id
@@ -979,6 +986,68 @@ def export_tool_calls_for_org(
     cles = [r.pop("_keyset_at") for r in rows]
     return {"until_effectif": until, "total": total, "calls": rows,
             "next": (cles[-1], rows[-1]["id"]) if encore and rows else None}
+
+
+def list_billable_calls_for_org(
+    org_id: int, tool: str, *, since: Optional[str] = None,
+    until: Optional[str] = None, limit: int = 1000,
+    before: Optional[tuple[str, int]] = None,
+) -> dict:
+    """Les appels FACTURABLES d'un outil sous une org — la lentille membre du
+    relevé de consommation (`org.usage.calls`). Rend
+    `{until_effectif, total, calls, next}`, **même contrat que
+    `export_tool_calls_for_org`**, et pour les mêmes raisons :
+
+    - une seule construction de clauses (`_audit_window_clauses` + l'outil),
+      partagée par le compte et la page ;
+    - une transaction REPEATABLE READ, donc un seul snapshot pour les deux ;
+    - une borne haute TOUJOURS posée (gelée au premier appel, reportée par le
+      curseur) — la fenêtre est CLOSE, la concaténation des pages vaut son total.
+
+    ⚠️ C'est ce `total` qui rend un relevé VÉRIFIABLE : le consommateur compare
+    ce qu'il a lu à ce que la fenêtre contenait. `list_tool_calls` plafonne à
+    1000 en silence et sans curseur — une page tronquée y a l'air complète, et
+    sous-facture sans lever d'erreur. Le relevé ne doit JAMAIS repasser par là.
+
+    Projection ÉTROITE par construction : id, outil, date, quantité, mode de
+    clé. Ni `sub`, ni `email`, ni `error` — la lentille est lisible par tout
+    membre, et ce qu'il lit est ce que son org consomme, pas qui a fait quoi.
+    Seuls les appels `ok` : un échec n'a rien consommé chez le fournisseur."""
+    limit = max(1, min(int(limit), 5000))
+    with _connect() as conn:
+        conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        if not until:
+            until = conn.execute(
+                f"SELECT to_char(now() AT TIME ZONE 'UTC', {_ISO_US}) AS t"
+            ).fetchone()["t"]
+        clauses, params = _audit_window_clauses(org_id, since, until)
+        clauses += ["l.tool = %s", "l.ok = TRUE"]
+        params += [tool]
+        total = int(conn.execute(
+            f"SELECT count(*) AS n FROM tool_calls l WHERE {' AND '.join(clauses)}",
+            tuple(params),
+        ).fetchone()["n"])
+
+        page_clauses, page_params = list(clauses), list(params)
+        if before is not None:
+            page_clauses.append("(l.created_at, l.id) < (%s::timestamptz, %s)")
+            page_params += [before[0], int(before[1])]
+        rows = conn.execute(
+            f"""
+            SELECT l.id, l.tool, l.quantity, l.key_mode,
+                   {_AUDIT_KEYSET_AT} AS created_at
+            FROM tool_calls l
+            WHERE {' AND '.join(page_clauses)}
+            ORDER BY l.created_at DESC, l.id DESC
+            LIMIT %s
+            """,
+            tuple(page_params + [limit + 1]),
+        ).fetchall()
+
+    encore = len(rows) > limit
+    rows = [dict(r) for r in rows[:limit]]
+    return {"until_effectif": until, "total": total, "calls": rows,
+            "next": (rows[-1]["created_at"], rows[-1]["id"]) if encore and rows else None}
 
 
 def instruction_usage(

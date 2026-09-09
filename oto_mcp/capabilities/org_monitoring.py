@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from .. import db, deprecations
 from . import audit_log, monitoring
-from ._authz import ORG_ADMIN_OF
+from ._authz import ORG_ADMIN_OF, ORG_MEMBER_OF
 from ._types import cap_limit, AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
@@ -128,6 +128,15 @@ class CallRow(BaseModel):
     # vers le traceback. None sur un appel réussi (et sur une erreur gérée).
     sentry_event_id: Optional[str] = None
     arg_keys: list[str] = []
+    # Nombre d'items TRAITÉS par cet appel (billing Tulina, 21/08) — `None` = non
+    # tracé pour ce tool (l'écrasante majorité), à traiter comme 1 par un
+    # consommateur, JAMAIS comme 0. Posé aujourd'hui par `linkedin_aiark_search`
+    # (résultats rendus) et `fullenrich_enrich_linkedin` (contacts soumis) —
+    # voir `tool_calls.quantity`'s DDL comment pour la liste vivante.
+    quantity: Optional[int] = None
+    # Sous quelle clé l'appel est passé (`user|group|org|tenant|platform`).
+    # `None` = aucun credential résolu, ou ligne antérieure à la colonne.
+    key_mode: Optional[str] = None
 
 
 class OrgCalls(BaseModel):
@@ -594,6 +603,84 @@ def _console(ctx: ResolvedCtx, inp: OrgMonitoringInput) -> dict:
         org_id=oid, since=inp.since, until=inp.until, limit=inp.limit or 1000))
 
 
+# ── relevé de facturation, lentille MEMBRE ──────────────────────────────────
+#
+# Pourquoi une capacité SÉPARÉE et non `org.monitoring.calls` ouverte aux membres :
+# celle-ci rend `sub`, `email`, `name` et le texte d'`error` de chaque appel.
+# L'ouvrir aux membres donnerait à n'importe qui le moyen d'énumérer l'activité et
+# les échecs de tous ses collègues — un changement de confidentialité que personne
+# n'a demandé, et qui arriverait ici en effet de bord d'une page de facturation.
+#
+# Celle-ci ne rend QUE ce qu'un métrage doit sommer : l'id de l'appel (clé de
+# déduplication), l'outil, le nombre d'items, le mode de clé, la date. Aucune
+# identité, aucun message d'erreur. Le membre voit ce que SON ORG consomme, pas
+# qui a fait quoi.
+
+class BillableCallRow(BaseModel):
+    """Un appel tel qu'un consommateur de FACTURATION en a besoin — et rien de plus."""
+    call_id: int
+    tool: Optional[str] = None
+    created_at: Optional[str] = None
+    # Items réellement traités. `None` = ce tool ne trace pas de compte, à lire
+    # comme 1 — JAMAIS comme 0 (cf. le commentaire DDL de `tool_calls.quantity`).
+    quantity: Optional[int] = None
+    # `user|group|org|tenant|platform`. `None` = aucun credential résolu ou ligne
+    # antérieure à la colonne : non attribuable, donc à NE PAS facturer.
+    key_mode: Optional[str] = None
+
+
+class OrgBillableCalls(BaseModel):
+    """Une PAGE d'une fenêtre CLOSE — même contrat que l'export d'audit (#770).
+
+    `total` = la population de la fenêtre `[since, until_effectif]`, indépendante
+    de la page : c'est ce qui permet au consommateur de VÉRIFIER qu'il a tout lu
+    (somme des pages == total) au lieu de le supposer. `next` = la position de la
+    ligne suivante quand il en reste, à renvoyer telle quelle en
+    `before_at`/`before_id` avec le MÊME `until_effectif` — sans ce gel, un journal
+    alimenté en continu et trié récent d'abord servirait deux vérités successives.
+    ⚠️ Ne PAS rebâtir cette lentille sur `list_tool_calls` : il plafonne à 1000
+    en silence et sans curseur, et une page tronquée y a l'air complète."""
+    calls: list[BillableCallRow]
+    total: int
+    until_effectif: str
+    next_at: Optional[str] = None
+    next_id: Optional[int] = None
+
+
+class OrgBillableCallsInput(BaseModel):
+    org_id: int
+    # OBLIGATOIRE : le relevé se lit outil par outil. Le volume facturable d'une
+    # org est petit, son volume total non — l'outil est ce qui borne la fenêtre.
+    tool: str
+    since: Optional[str] = None
+    until: Optional[str] = None
+    limit: Optional[int] = None
+    before_at: Optional[str] = None
+    before_id: Optional[int] = None
+
+
+def _billable_calls(ctx: ResolvedCtx, inp: OrgBillableCallsInput) -> dict:
+    before = ((inp.before_at, inp.before_id)
+              if inp.before_at and inp.before_id is not None else None)
+    page = db.list_billable_calls_for_org(
+        inp.org_id, inp.tool, since=inp.since, until=inp.until,
+        limit=inp.limit or 1000, before=before)
+    nxt = page["next"]
+    return {
+        # Projection EXPLICITE, pas un `**row` : la lentille reste étroite même
+        # si la requête gagne des colonnes demain.
+        "calls": [{"call_id": r["id"], "tool": r["tool"], "created_at": r["created_at"],
+                   "quantity": r.get("quantity"), "key_mode": r.get("key_mode")}
+                  for r in page["calls"]],
+        "total": page["total"],
+        "until_effectif": page["until_effectif"],
+        "next_at": nxt[0] if nxt else None,
+        "next_id": nxt[1] if nxt else None,
+    }
+
+
+_MEMBER_OF = ORG_MEMBER_OF("org_id")
+
 _ADMIN_OF = ORG_ADMIN_OF("org_id")
 
 CAPABILITIES += [
@@ -603,6 +690,15 @@ CAPABILITIES += [
     Capability(key="org.monitoring.calls", handler=_calls, Input=OrgCallsInput,
                authz=_ADMIN_OF, mcp=None, Output=OrgCalls,
                rest=RestBinding("GET", "/api/orgs/{id}/monitoring/calls", _ID)),
+    # Lentille MEMBRE, volontairement distincte de celle du dessus (voir le bloc
+    # de commentaire au-dessus de `BillableCallRow`) : le relevé de consommation
+    # est une page que tout membre doit pouvoir lire, l'activité nominative de
+    # ses collègues non. `mcp=None` : c'est un tuyau de facturation, pas un outil
+    # d'agent.
+    Capability(key="org.usage.calls", handler=_billable_calls,
+               Input=OrgBillableCallsInput, authz=_MEMBER_OF, mcp=None,
+               Output=OrgBillableCalls,
+               rest=RestBinding("GET", "/api/orgs/{id}/usage/calls", _ID)),
     Capability(key="org.monitoring.call", handler=_call, Input=OrgCallInput,
                authz=_ADMIN_OF, mcp=None, Output=OrgCall,
                rest=RestBinding("GET", "/api/orgs/{id}/monitoring/calls/{call_id}", _ID)),

@@ -89,8 +89,19 @@ def _note_resolved_instance(rc: ResolvedCredential) -> ResolvedCredential:
         # sans ça il poste sur l'un de ses deux workspaces sans jamais savoir lequel.
         # Le connecteur est noté AVEC le compte : un outil composite peut résoudre un
         # credential auxiliaire, et l'écho ne doit annoncer que le connecteur appelé.
+        # `key_mode` = SOUS QUELLE CLÉ l'appel passe (`user|group|org|tenant|
+        # platform`). Posé ici, au résolveur UNIQUE, donc tout tool keyed le
+        # porte sans qu'aucun tool ait à y penser — et un connecteur ajouté
+        # demain l'aura gratuitement.
+        # Ce que ça décide : tulina-usage ne facture QUE le mode `platform`.
+        # Un client sur SA propre clé paie déjà le fournisseur ; lui compter des
+        # crédits en plus n'a pas de sens (Julien, 09/09).
+        # ⚠️ Le `mode` et pas `is_platform` : le booléen écrase user/group/org/
+        # tenant en un seul « non », alors que ce sont quatre origines qu'une
+        # facture peut avoir à distinguer.
         session_org.note_call_trace(instance=ref, resolved_connector=rc.provider,
-                                    resolved_account=rc.account)
+                                    resolved_account=rc.account,
+                                    key_mode=rc.mode)
     except Exception:  # noqa: BLE001
         logger.debug("relevé d'instance échoué", exc_info=True)
     return rc

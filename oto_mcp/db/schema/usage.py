@@ -107,7 +107,31 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     -- NULL sur une session interactive (pas de jeton nommé) et sur tout
     -- l'historique. PAS d'index : enquête, pas chemin chaud.
     token_id BIGINT,
-    token_kind TEXT
+    token_kind TEXT,
+    -- Nombre d'items TRAITÉS par cet appel (extension OTO-LOCALE, 2026-08-21) —
+    -- un appel bulk (ex. linkedin_aiark_search jusqu'à 100 résultats,
+    -- fullenrich_enrich_linkedin jusqu'à 100 contacts SOUMIS) compte pour PLUS
+    -- qu'UN appel côté métrage/facturation. NULL = non tracé pour ce tool
+    -- (l'écrasante majorité — un consommateur doit traiter NULL comme 1, PAS
+    -- comme 0). Posé via le même seam que `_TRACED_ARGS`
+    -- (`session_org.note_call_trace(quantity=N)`), mais dans SA PROPRE colonne
+    -- plutôt que fondu dans `args` : c'est une donnée de premier ordre pour un
+    -- consommateur de facturation (tulina-usage), pas une trace de debug —
+    -- une colonne INTEGER indexable bat une extraction JSONB pour ce qu'un tel
+    -- consommateur en fait (sommer/filtrer par org/période).
+    quantity INTEGER,
+    -- SOUS QUELLE CLÉ l'appel est passé — le `mode` du credential gagnant de la
+    -- cascade (`user|group|org|tenant|platform`, ADR 0024), posé au résolveur
+    -- unique donc valable pour tout tool keyed sans travail par tool.
+    -- Le `mode` et NON le booléen `is_platform` : celui-ci écrase quatre origines
+    -- distinctes en « pas plateforme », or une facture peut avoir à distinguer
+    -- une clé d'org d'une clé de membre.
+    -- NULL = aucun credential résolu (outil méta, open data) ou ligne antérieure
+    -- à cette colonne. ⚠️ Un consommateur de facturation ne doit RIEN facturer
+    -- sur NULL : contrairement à `quantity` (NULL = 1), ici l'absence signifie
+    -- « on ne sait pas à qui attribuer », et on ne facture pas ce qu'on ne sait
+    -- pas attribuer. Non reconstructible sur l'historique.
+    key_mode TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_tool_calls_created_at ON tool_calls(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tool_calls_sub ON tool_calls(sub);

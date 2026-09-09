@@ -168,6 +168,47 @@ def test_companies_search_empty_result_is_not_an_error():
     assert out == {"metadata": {"total_results": 0, "truncated_results": 0}, "data": []}
 
 
+# --- métrage par unité (billing Tulina, 21/08) ────────────────────────────────
+
+def test_jobs_search_traces_the_returned_job_count():
+    with patch("oto_mcp.tools.theirstack.session_org.note_call_trace") as trace, \
+         patch("oto.tools.theirstack.client.TheirStackClient") as cls:
+        cls.return_value.search_jobs.return_value = {
+            "metadata": {}, "data": [_JOB, _JOB, _JOB]}
+        _tool("theirstack_jobs_search").fn(company_names=["PUIG & FILS"])
+    trace.assert_called_once_with(quantity=3)
+
+
+def test_jobs_search_traces_by_returned_count_not_by_limit():
+    with patch("oto_mcp.tools.theirstack.session_org.note_call_trace") as trace, \
+         patch("oto.tools.theirstack.client.TheirStackClient") as cls:
+        cls.return_value.search_jobs.return_value = {"metadata": {}, "data": [_JOB]}
+        _tool("theirstack_jobs_search").fn(company_names=["PUIG & FILS"], limit=25)
+    trace.assert_called_once_with(quantity=1)  # not 25 (`limit`), what was ACTUALLY returned
+
+
+def test_companies_search_traces_the_returned_company_count():
+    with patch("oto_mcp.tools.theirstack.session_org.note_call_trace") as trace, \
+         patch("oto.tools.theirstack.client.TheirStackClient") as cls:
+        cls.return_value.search_companies.return_value = {
+            "metadata": {}, "data": [_COMPANY, _COMPANY]}
+        _tool("theirstack_companies_search").fn(company_names=["PUIG & FILS"])
+    trace.assert_called_once_with(quantity=2)
+
+
+def test_companies_search_traces_zero_on_an_empty_result():
+    """`data: []` is a NORMAL result (module docstring), not an error — the trace
+    call fires with `quantity=0`, and the sink STORES that zero (`>= 0`). A traced
+    zero is not an untraced call: NULL means "this tool doesn't trace", which a
+    billing consumer reads as 1. Dropping the zero would bill 3 credits for a
+    search that found no company."""
+    with patch("oto_mcp.tools.theirstack.session_org.note_call_trace") as trace, \
+         patch("oto.tools.theirstack.client.TheirStackClient") as cls:
+        cls.return_value.search_companies.return_value = {"metadata": {}, "data": []}
+        _tool("theirstack_companies_search").fn(company_names=["Inconnue SARL"])
+    trace.assert_called_once_with(quantity=0)
+
+
 def test_invalid_args_never_hit_the_client():
     with patch("oto.tools.theirstack.client.TheirStackClient") as cls:
         with pytest.raises(McpError):
@@ -205,3 +246,50 @@ def test_verify_probe_uses_the_free_credit_balance_call():
     cls.assert_called_once_with(api_key="k")
     cls.return_value.credit_balance.assert_called_once_with()
     cls.return_value.search_companies.assert_not_called()
+
+
+# --- clé plateforme (oto-backend#405 ; câblée ici le 2026-09-09) ---------------
+
+def _search_returning(n, monkeypatch, *, is_platform):
+    """Joue une recherche qui rend `n` records, sous le mode de clé demandé."""
+    from unittest.mock import patch
+    monkeypatch.setattr("oto_mcp.access.resolve_api_key",
+                        lambda provider, account=None: ("k", is_platform))
+    payload = {"data": [{"id": i} for i in range(n)], "metadata": {}}
+    with patch("oto.tools.theirstack.client.TheirStackClient") as cls, \
+         patch("oto_mcp.tools.theirstack.access.record_platform_usage") as rec, \
+         patch("oto_mcp.tools.theirstack.session_org.note_call_trace") as trace:
+        cls.return_value.search_jobs.return_value = payload
+        _tool("theirstack_jobs_search").fn(company_names=["acme"])
+    return rec, trace
+
+
+def test_une_cle_plateforme_debite_le_quota_oto_au_nombre_de_RECORDS(monkeypatch):
+    """TheirStack nous facture au record (1 crédit/offre), pas à l'appel : un
+    appel qui rend 50 offres doit débiter 50, sinon notre propre quota compte
+    des appels pendant que le fournisseur compte des records."""
+    rec, _ = _search_returning(50, monkeypatch, is_platform=True)
+    rec.assert_called_once_with("theirstack", 50)
+
+
+def test_une_cle_du_CLIENT_ne_debite_jamais_notre_quota(monkeypatch):
+    """Le client apporte sa clé : c'est SON quota chez TheirStack qui bouge."""
+    rec, _ = _search_returning(50, monkeypatch, is_platform=False)
+    rec.assert_not_called()
+
+
+def test_le_metrage_lui_est_INCONDITIONNEL(monkeypatch):
+    """`quantity` est tracé dans les deux modes — c'est `tool_calls.key_mode`,
+    posé au résolveur, qui dit sous quelle clé l'appel est passé. Séparer les
+    deux est ce qui permet à la facturation de ne retenir que la clé Tulina sans
+    que le tool ait à connaître la règle de facturation."""
+    for platform in (True, False):
+        _, trace = _search_returning(7, monkeypatch, is_platform=platform)
+        trace.assert_called_once_with(quantity=7)
+
+
+def test_une_page_vide_sur_cle_plateforme_ne_debite_rien(monkeypatch):
+    """Zéro record rendu = zéro crédit chez TheirStack, donc zéro chez nous."""
+    rec, trace = _search_returning(0, monkeypatch, is_platform=True)
+    rec.assert_called_once_with("theirstack", 0)
+    trace.assert_called_once_with(quantity=0)   # 0 TRACÉ ≠ non tracé
