@@ -37,6 +37,7 @@ from .declaration import (
     validation_active,
     _walk_fields,
 )
+from .couches import unwrap
 from .cycle_de_vie import (abandon_state_of, claimable_of, lifecycle_of,
                            max_claims_of, terminal_states)
 
@@ -95,8 +96,31 @@ def unenforced_options(schema: Optional[dict], data: dict) -> dict:
     for champ, opts in top_level_enum_options(schema).items():
         if champ in deja:
             continue
-        v = data.get(champ)
-        if v is not None and str(v) not in opts:
+        # ⚠️ **Déballer avant de comparer**, comme partout ailleurs où une valeur est
+        # jugée. Une cellule vaut `{"valeur": …, "comment": …}` dès qu'on la justifie
+        # en couches — geste NORMAL des agents. Comparée à sa liste SANS déballage,
+        # elle est fatalement « hors options » : le repr d'un dict n'est jamais une
+        # option. L'avertissement criait donc à tort sur une valeur légitime, en
+        # citant la structure Python au lieu de la valeur.
+        #
+        # Mesuré sur la production le 09/09/2026 avant de corriger : **0** cellule en
+        # couches sur les 22 331 cellules pleines des 151 tableaux souples à options.
+        # Le trou n'était atteint par rien — le correctif est donc GRATUIT, et c'est
+        # tout son intérêt : il ferme la porte avant qu'on la pousse. Le chemin de
+        # REFUS (régime strict) déballait déjà ; seul l'avertissement ne le faisait pas.
+        v = unwrap(data.get(champ))
+        # ⚠️ **Le VIDE n'est pas une valeur hors liste.** Une cellule vide n'a pas de
+        # valeur fautive à corriger, et « valeur hors des options déclarées : `status`
+        # = '' — elle est ÉCRITE quand même » envoie chercher ce qui n'existe pas.
+        # Ce qu'un geste vide est déjà dit, et mieux, par `off_erased`/`off_ignored`.
+        #
+        # Mesuré, lui, sur du vivant : **25 écritures** l'ont déclenché à tort, sur 4
+        # tableaux et 3 propriétaires (`account-management-reengagement/status` ×12,
+        # `prospection_unicoop_firenze_20260814/email_source` ×10). Même règle que
+        # `etats_trahis`, qui ignore `None` et `""` depuis sa première ligne.
+        if v is None or (isinstance(v, str) and not v.strip()):
+            continue
+        if str(v) not in opts:
             out[champ] = str(v)
     return out
 

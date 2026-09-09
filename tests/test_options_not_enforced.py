@@ -65,6 +65,47 @@ def test_an_absent_field_is_not_a_violation():
     assert dsv2.unenforced_options({"fields": [ENUM]}, {"autre": "x"}) == {}
 
 
+# ── ce que l'avertissement doit JUGER : la valeur, et seulement si elle existe ──
+
+def test_a_value_written_in_LAYERS_is_unwrapped_before_being_judged():
+    """⚠️ Une cellule vaut `{"valeur": …, "comment": …}` dès qu'un agent la justifie
+    en couches — geste NORMAL, et recommandé. Comparée à sa liste SANS déballage, elle
+    est fatalement « hors options » : le repr d'un dict n'est jamais une option.
+
+    L'avertissement criait donc à tort sur une valeur parfaitement légitime, et citait
+    la structure Python au lieu de la valeur. Le chemin de REFUS (régime strict)
+    déballait déjà depuis toujours ; seul l'avertissement ne le faisait pas.
+
+    ⚠️ **Mesuré avant de corriger** : 0 cellule en couches sur les 22 331 cellules
+    pleines des 151 tableaux souples à options de la production (09/09/2026). Le trou
+    n'était atteint par rien — ce qui rend le correctif gratuit, pas inutile : il ferme
+    la porte avant qu'on la pousse."""
+    schema = {"fields": [ENUM]}
+    assert dsv2.unenforced_options(
+        schema, {"priorite": {"valeur": "haute", "comment": "urgent"}}) == {}
+
+
+def test_a_LAYERED_value_really_outside_the_list_is_still_reported():
+    """Déballer ne veut pas dire fermer les yeux : c'est la VALEUR qu'on juge, et le
+    relevé la cite ELLE, jamais son enveloppe — sinon le message reste illisible."""
+    hors = dsv2.unenforced_options(
+        {"fields": [ENUM]}, {"priorite": {"valeur": "Moyenne", "comment": "x"}})
+    assert hors == {"priorite": "Moyenne"}, "la valeur, pas la structure"
+
+
+@pytest.mark.parametrize("vide", ["", "   ", {"valeur": ""}, {"comment": "sans valeur"}])
+def test_an_EMPTY_cell_is_not_a_value_outside_the_list(vide):
+    """⚠️ Une cellule vide n'a aucune valeur fautive à corriger. « valeur hors des
+    options déclarées : `status` = '' — elle est ÉCRITE quand même » envoie chercher
+    ce qui n'existe pas, et ce qu'un geste a vidé est déjà dit — mieux — par
+    `off_erased` / `off_ignored`.
+
+    Mesuré sur du vivant, celui-là : **25 écritures** l'ont déclenché à tort, sur 4
+    tableaux et 3 propriétaires. Même règle que `etats_trahis`, qui ignore `None` et
+    la chaîne vide depuis sa première ligne."""
+    assert dsv2.unenforced_options({"fields": [ENUM]}, {"priorite": vide}) == {}
+
+
 def test_an_enum_without_options_condemns_nothing():
     """Un enum sans liste est un enum LIBRE : il ne promet rien, donc ne ment pas."""
     schema = {"fields": [{"key": "p", "type": "enum"}]}
