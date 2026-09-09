@@ -22,7 +22,7 @@ tool par OBJET métier, le verbe en paramètre `op` — 14 tools JSON → 8.
 crédit consommé. Aucune op n'a d'effet de bord, donc les défauts d'`op` sont des
 lectures comme le reste. Ce qui coûte ici c'est le VOLUME balayé en amont : les
 deux gardes anti-scan national sont conservées telles quelles (`foncier_permis_search`
-exige un scope commune/dept/demandeur, `foncier_conso_elec` exige `dept`).
+exige un scope commune/dept/demandeur, `foncier_conso_elec` exige un périmètre).
 
 | avant                          | après                                    |
 | ------------------------------ | ---------------------------------------- |
@@ -50,7 +50,7 @@ des paramètres, pas le comptage) :
   `foncier_site` pour une seule op ;
 - `foncier_permis_search` : neuf paramètres, dont l'axe DEMANDEUR (`siren`/`siret`)
   qui n'existe nulle part ailleurs dans le namespace ;
-- `foncier_conso_elec` : scope année × département × bande de MWh, disjoint du reste ;
+- `foncier_conso_elec` : scope année × périmètre × bande de MWh, deux étages de réseau ;
 - `foncier_icpe` : clé `siret` ou `code_insee` (registre Géorisques, pagination
   propre), aucun paramètre partagé.
 
@@ -101,7 +101,7 @@ _POSTCODE_RE = re.compile(r"\b\d{5}\b")
 # être acceptée sans être annoncée à l'agent, ni l'inverse.
 _SITE_OPS = ("parcelle", "bati", "solaire", "adresse")
 _DVF_OPS = ("prix_m2", "comparables", "comparables_adresse")
-_DPE_OPS = ("adresse", "stats")
+_DPE_OPS = ("adresse", "stats", "tertiaire")
 
 # `years` n'a PAS le même défaut selon l'op DVF (2 ans pour les mutations brutes
 # d'une commune, 3 pour les stats et le voisinage d'une adresse) : le paramètre
@@ -150,6 +150,9 @@ def register(mcp: FastMCP) -> None:
     pvgis = fod_foncier.pvgis
     ign = fod_foncier.ign
     enedis = fod_foncier.enedis
+    odre = fod_foncier.odre
+    beges = fod_foncier.beges
+    dpe_tertiaire = fod_foncier.dpe_tertiaire
     dvf = fod_foncier.dvf
     dpe = fod_foncier.dpe
     sitadel = fod_foncier.sitadel
@@ -371,28 +374,87 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     def foncier_conso_elec(
         annee: str,
-        dept: str,
+        dept: Optional[str] = None,
         secteur: Optional[str] = None,
+        naf2: Optional[list[str]] = None,
+        code_commune: Optional[list[str]] = None,
+        code_epci: Optional[str] = None,
         min_mwh: Optional[float] = None,
         max_mwh: Optional[float] = None,
+        reseau: Literal["distribution", "transport", "les_deux"] = "distribution",
+        maille: Literal["ligne", "site"] = "ligne",
         limit: int = 200,
     ) -> dict:
-        """Annual electricity consumption signals by address (Enedis open data, N-1).
+        """Annual electricity consumption of French sites (open data, no key).
 
-        Band query → returns {total, signals[]} (address, MWh/year, NAF2, sector,
-        site count). `dept` is REQUIRED (a national scan is huge). Big consumers
-        are the best PV prospecting targets — filter with `min_mwh` (e.g. 150).
+        TWO GRID TIERS, and they are not interchangeable. `reseau="distribution"`
+        (default) reads Enedis: consumption per ADDRESS, with the NAF division.
+        `reseau="transport"` reads ODRE (RTE): the sites connected to the transmission
+        grid, which are ABSENT from Enedis entirely — and they are the largest consumers
+        in the country. Saint-Jean-de-Maurienne returns zero NAF-24 address on Enedis and
+        1,702,616 MWh on ODRE. A "heavy electricity user" list built on distribution
+        alone is a list without the heavy users: use `reseau="les_deux"` for a real one.
+
+        TWO GRAINS on the distribution tier. Enedis publishes ONE ROW PER ADDRESS AND PER
+        NAF DIVISION, so `maille="ligne"` (default, unchanged behaviour) returns rows, and
+        thresholding them one by one MISSES sites whose divisions are each below the bar
+        but whose total is above it. `maille="site"` sums an address's divisions and
+        applies `min_mwh` AFTER the sum — that is the grain almost every caller means.
+        A site then carries `naf2_principal`, `naf2_detail` and `multi_naf2`.
+
+        Rows Enedis publishes without an address are real consumption that cannot be
+        located: they are never returned as sites, and counted in `lignes_ignorees` /
+        `mwh_ignores` instead of being silently dropped.
 
         Args:
-            annee: reference year (e.g. "2024").
-            dept: INSEE department code (e.g. "59") — required.
-            secteur: "INDUSTRIE" | "TERTIAIRE" | "AGRICULTURE".
-            min_mwh / max_mwh: consumption band (MWh/year).
-            limit: max signals returned (default 200).
+            annee: reference year (e.g. "2024"). ODRE lags one year behind Enedis.
+            dept: INSEE department code (e.g. "59").
+            secteur: "INDUSTRIE" | "TERTIAIRE" | "AGRICULTURE" — coarse: a hospital and
+                an office tower are both TERTIAIRE. Prefer `naf2`.
+            naf2: NAF divisions, two digits (e.g. ["24", "23", "86"]) — the grain Enedis
+                actually publishes in. Ignored on the transport tier, which carries no NAF.
+            code_commune / code_epci: INSEE commune codes, or one EPCI (a métropole).
+            min_mwh / max_mwh: consumption band (MWh/year), never GW — no French open
+                data publishes subscribed POWER.
+            reseau: which grid tier(s) to read.
+            maille: "ligne" (as published) or "site" (divisions summed).
+            limit: max rows on the distribution tier (default 200).
         """
-        return enedis.consommation_par_adresse(
-            annee, dept=dept, secteur=secteur, min_mwh=min_mwh, max_mwh=max_mwh, limit=limit
-        )
+        if reseau not in ("distribution", "transport", "les_deux"):
+            raise _bad('reseau must be "distribution", "transport" or "les_deux"')
+        if not (dept or code_commune or code_epci) and reseau != "transport":
+            raise _bad(
+                "a perimeter is required (dept, code_commune or code_epci): a national "
+                "scan of the distribution tier is huge, and with maille=\"site\" the "
+                "threshold cannot be pushed to the server at all."
+            )
+
+        out: dict = {"annee": annee, "reseau": reseau, "maille": maille}
+        if reseau in ("distribution", "les_deux"):
+            if maille == "site":
+                out["distribution"] = enedis.sites_par_adresse(
+                    annee, dept=dept, code_commune=code_commune, code_epci=code_epci,
+                    naf2=naf2, secteur=secteur, min_mwh=min_mwh, limit=limit,
+                )
+            else:
+                out["distribution"] = enedis.consommation_par_adresse(
+                    annee, dept=dept, secteur=secteur, naf2=naf2,
+                    code_commune=code_commune, code_epci=code_epci,
+                    min_mwh=min_mwh, max_mwh=max_mwh, limit=limit,
+                )
+        if reseau in ("transport", "les_deux"):
+            # Le millésime retarde d'un an : on demande l'année voulue, le service rend
+            # ce qu'il a et l'annonce dans `annee` — jamais une année silencieusement autre.
+            out["transport"] = odre.consommation_transport(
+                annee, dept=dept, code_commune=code_commune, min_mwh=min_mwh, limit=limit,
+            )
+        if reseau == "les_deux":
+            d, t = out["distribution"], out["transport"]
+            out["avertissement_millesime"] = (
+                f"distribution {d.get('annee') or annee} vs transport {t.get('annee')} — "
+                "les deux étages ne sont pas alignés, ne pas sommer sans le dire"
+            ) if t.get("annee") and str(t.get("annee")) != str(annee) else None
+        return out
 
     # --- risques industriels / ICPE (Géorisques) — repris de `fr` ------------
 
@@ -539,7 +601,7 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def foncier_dpe(
-        op: Literal["adresse", "stats"] = "adresse",
+        op: Literal["adresse", "stats", "tertiaire"] = "adresse",
         adresse: Optional[str] = None,
         code_commune: Optional[str] = None,
         radius_m: int = 200,
@@ -547,6 +609,8 @@ def register(mcp: FastMCP) -> None:
         etiquette: Optional[str] = None,
         surface_min: Optional[float] = None,
         surface_max: Optional[float] = None,
+        secteur: Optional[str] = None,
+        departement: Optional[str] = None,
         limit: int = 50,
     ) -> dict:
         """Energy performance diagnostics (DPE, ADEME open data) — raw records around
@@ -560,6 +624,15 @@ def register(mcp: FastMCP) -> None:
           type_batiment, adresse, date_dpe, distance_m, lat/lon. Needs `adresse`.
         - **"stats"**: DPE label distribution (A–G) for a commune — aggregated view of
           energy performance across all its dwellings. Needs `code_commune`.
+        - **"tertiaire"**: the NON-residential stock — hospitals, schools, offices,
+          shops, restaurants (~560k diagnostics). The other half of the building stock,
+          and the one electricity-consumption data describes without qualifying: Enedis
+          says HOW MUCH a site consumes, this says WHAT the building is (ERP sector,
+          SHON surface, label). Coordinates come back already in Lambert 93 under
+          `lambert_x`/`lambert_y`, so a row matches an establishment with no
+          intermediate geocoding. `sans_position` counts the ungeocoded ones — they are
+          never placed at the centre of their commune. Needs `code_commune` or
+          `departement`.
 
         Args:
             op: adresse (default) | stats.
@@ -569,6 +642,10 @@ def register(mcp: FastMCP) -> None:
             type_batiment: OPTIONAL "maison" | "appartement" | "immeuble" (both ops).
             etiquette: op="adresse" — OPTIONAL DPE label filter (A..G).
             surface_min / surface_max: op="adresse" — OPTIONAL surface habitable band m².
+                op="tertiaire" — `surface_min` applies to SHON instead.
+            secteur: op="tertiaire" — free text on the ERP sector label
+                ("hospital", "enseignement", "bureaux").
+            departement: op="tertiaire" — INSEE department code.
             limit: op="adresse" — max records, nearest first (default 50).
         """
         if op not in _DPE_OPS:
@@ -585,7 +662,61 @@ def register(mcp: FastMCP) -> None:
             return dpe.stats(code_commune=_need(code_commune, "code_commune", op),
                              type_batiment=type_batiment)
 
+        if op == "tertiaire":
+            if not (code_commune or departement):
+                raise _bad('op="tertiaire" needs code_commune or departement — the '
+                           "national stock is ~560k diagnostics.")
+            return dpe_tertiaire.diagnostics(
+                code_commune=code_commune, departement=departement, secteur=secteur,
+                etiquette=etiquette, surface_min=surface_min, size=limit)
+
         raise _bad(_ops_error(_DPE_OPS))
+
+    # --- bilans GES déclarés (BEGES, ADEME) ---------------------------------
+
+    @mcp.tool()
+    def foncier_beges(
+        siren: Optional[str] = None,
+        naf: Optional[str] = None,
+        annee: Optional[int] = None,
+        departement: Optional[str] = None,
+        obligee: Optional[bool] = None,
+        limit: int = 100,
+    ) -> dict:
+        """Declared greenhouse-gas inventories (BEGES, ADEME open data), keyed by SIREN.
+
+        ~11,800 published inventories, ~7,000 of them from organisations under the legal
+        obligation (art. L229-25: companies over 500 staff, communes over 50,000
+        inhabitants, the State). Each carries emissions per category, the reporting year,
+        headcount band, and a link to the full report.
+
+        WHY THIS EXISTS ALONGSIDE `foncier_conso_elec`. Consumption data is indexed by
+        ADDRESS or by IRIS: it describes a SITE that still has to be resolved to a
+        company, and it does not locate everything — on one métropole, 25 rows and
+        10,621 MWh carry no usable address at all. Here the key IS the SIREN, so the
+        inventory joins straight to the organisation. It reports DECLARED energy and
+        emissions rather than metered consumption: a different fact, not a better one.
+
+        ⚠️ The reporting year is not the publication year — an inventory published in
+        2026 may cover 2015. `annee` filters on the reporting year, which is the one
+        that makes two organisations comparable.
+
+        ⚠️ A missing emission post is not a zero. Totals sum only what was declared, and
+        each category carries `postes_declares` / `postes_absents` so a low total can be
+        told apart from a partial declaration.
+
+        Args:
+            siren: 9 digits. The source stores it as a NUMBER, so 150 rows lost their
+                leading zero — this is handled on both sides, pass the real SIREN.
+            naf: a full code ("8610Z") or a division prefix ("86"), which then covers
+                all its sub-classes.
+            annee: reporting year.
+            departement: INSEE department code.
+            obligee: True keeps only organisations under the legal obligation.
+            limit: max inventories returned (default 100).
+        """
+        return beges.bilans(siren=siren, naf=naf, annee=annee,
+                            departement=departement, obligee=obligee, size=limit)
 
     # --- MCP Apps : variantes à interface rendue (SEP-1865) ------------------
     # Quelques tools "flagship" *_app qui renvoient une UI (carte + table) rendue
