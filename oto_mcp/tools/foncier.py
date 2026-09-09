@@ -925,6 +925,11 @@ def register(mcp: FastMCP) -> None:
         each category carries `postes_declares` / `postes_absents` so a low total can be
         told apart from a partial declaration.
 
+        ⚠️ `total` is the number of inventories RETURNED, not how many exist: it
+        saturates on `limit` (department 59 at limit=5 reports total 5, at limit=1000
+        reports 504). When it does, `tronque` is true and `avertissement_troncature`
+        says so — never read a saturated `total` as a count.
+
         Args:
             siren: 9 digits. The source stores it as a NUMBER, so 150 rows lost their
                 leading zero — this is handled on both sides, pass the real SIREN.
@@ -935,11 +940,6 @@ def register(mcp: FastMCP) -> None:
             obligee: True keeps only organisations under the legal obligation.
             limit: max inventories RETURNED (default 100); `limit=-1` means no ceiling
                 and lands on the source's hard cap of 10,000.
-
-        ⚠️ `total` is the number of inventories RETURNED, not how many exist: it
-        saturates on `limit` (department 59 at limit=5 reports total 5, at limit=1000
-        reports 504). When it does, `tronque` is true and `avertissement_troncature`
-        says so — never read a saturated `total` as a count.
         """
         borne = _borne(limit)
         res = beges.bilans(siren=siren, naf=naf, annee=annee,
