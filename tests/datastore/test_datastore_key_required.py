@@ -133,11 +133,17 @@ def test_incident_2_l_identifiant_INVENTE_ne_cree_toujours_rien(banc):
 
 def test_le_DEFAUT_cree_et_signale(banc):
     """Sans le cran, le comportement du 28/08 est intact : la ligne est écrite, et
-    le `notices` de #390 la signale."""
+    le relevé de #390 la signale.
+
+    ⚠️ Ce relevé a changé de PLACE le 09/09/2026 — de `notices` vers
+    `non_rapprochable`, au premier niveau. Son texte était exact et il n'a rien
+    empêché : servi dix fois en une soirée à une campagne qui lisait le statut et
+    l'`_id`. Un fait qui contredit le succès annoncé juste à côté ne se range pas dans
+    une liste qui sonne comme « informations diverses »."""
     st, etat = banc
     row = st.append_row("viviers", {"raison_sociale": "ACME"})
     assert row["raison_sociale"] == "ACME" and len(etat["creees"]) == 1
-    assert any("siren" in n for n in st.off_schema_report()["notices"])
+    assert st.off_schema_report()["non_rapprochable"] == ["siren"]
 
 
 def test_le_DEFAUT_cree_sur_une_cle_inconnue(banc):

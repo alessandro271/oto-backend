@@ -891,6 +891,25 @@ def register(mcp: FastMCP) -> None:
             cibles = fcg.chemins_forces(force)
             jetons.verifier_contenu(row)
             jetons.verifier_contenu(rows)
+            # ⚠️ **`key` n'a de sens QUE sur un lot** — il nomme la colonne de dédup de
+            # `write_rows`. Sur une écriture unitaire il n'était passé à rien : ni à
+            # `append_row`, ni à `update_row`. **Silencieusement ignoré.**
+            #
+            # Mesuré le 09/09/2026, et c'est ce que ça coûte : une campagne a écrit dix
+            # fois `data_write(datastore=…, key="@claimed", row={…})` en croyant viser
+            # la ligne qu'elle tenait. Les dix appels ont rendu 200 et créé dix lignes
+            # neuves sans clé métier ; les trois lignes réservées sont sorties en échec
+            # sans avoir jamais été écrites. **172 500 jetons pour un paramètre qui ne
+            # faisait rien.** Chez nous un paramètre offert SERA réglé — c'est la règle,
+            # pas l'accident.
+            #
+            # On vise l'AXE, pas la valeur : tout `key` inopérant sur ce chemin est
+            # refusé. Ne fermer que `@claimed` corrigerait un cas et laisserait la
+            # classe entière — le prochain agent écrirait `key="_id"` ou `key="siren"`
+            # et repartirait pour dix écritures muettes.
+            if key is not None and rows is None:
+                raise McpError(ErrorData(code=INVALID_PARAMS,
+                                         message=jetons.refus_de_key_sans_lot(key)))
             if rows is not None:
                 if row is not None or id is not None:
                     raise McpError(ErrorData(code=INVALID_PARAMS,

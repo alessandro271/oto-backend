@@ -345,6 +345,14 @@ class ControlesMixin:
         # #317 étape B : le changement de comportement, dit à l'instant où il joue.
         # Union sur un lot (comme `hors_schema`) — un batch de 500 lignes finies ne
         # répète pas 500 fois la même phrase.
+        # ⚠️ AVANT `notices`, et au premier niveau : une ligne que rien ne pourra
+        # rapprocher n'est pas un succès ordinaire. Le nom dit le FAIT — `notices`
+        # sonnait comme « informations diverses », et c'est précisément pour ça qu'il
+        # n'a pas été lu le 09/09/2026.
+        if self.off_non_rapprochables:
+            out["non_rapprochable"] = sorted(self.off_non_rapprochables)
+            out["non_rapprochable_hint"] = " ".join(
+                v for _, v in sorted(self.off_non_rapprochables.items()))
         if self.off_notices:
             out["notices"] = sorted(self.off_notices)
         # Ce que le geste a VIDÉ (#407/#408/#409). Clé DISTINCTE des précédentes : ce

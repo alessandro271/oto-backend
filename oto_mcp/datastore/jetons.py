@@ -144,6 +144,39 @@ def verifier_retire(champ: str, valeur: object) -> None:
         f"`{champ}` — {conduite}.")
 
 
+def refus_de_key_sans_lot(key: object) -> str:
+    """Le refus d'un `key=` posé sur une écriture UNITAIRE — il ne sert qu'au lot.
+
+    ⚠️ **Il lève d'abord si `key` porte un jeton RETIRÉ** : « `@claimed` a été retiré,
+    voici ce qui aboutit » est infiniment plus utile que « ce paramètre est inopérant ».
+    `key` n'est pas un champ d'ADRESSE, donc rien ne l'inspectait — un jeton retiré y
+    passait sans un mot, alors que ce module existe précisément pour ça.
+
+    **Pourquoi un refus et pas un avertissement.** Le paramètre était *silencieusement
+    ignoré* : ni `append_row` ni `update_row` ne le reçoivent. Mesuré le 09/09/2026 —
+    une campagne a écrit dix fois `data_write(key="@claimed", row={…})` en croyant viser
+    la ligne réservée ; dix `200`, dix lignes neuves orphelines, et **sept lignes
+    réservées qui n'ont jamais reçu leur écriture**. 172 500 jetons.
+
+    ⚠️ **Et l'avertissement avait été essayé.** Le relevé « ligne créée sans clé métier »
+    était servi, exact, en entier, nommant la colonne et le geste — dix fois. Le modèle
+    l'a ignoré dix fois. *Un refus qui nomme le geste qui aboutit est la seule forme qui
+    arrête ; un avertissement parfaitement délivré n'arrête rien.*
+
+    Le refus vise l'AXE — tout `key` inopérant sur ce chemin — et non la valeur
+    `@claimed` : ne fermer qu'elle corrigerait un cas et laisserait la classe entière.
+    """
+    verifier_retire("key", key)
+    return (
+        f"`key={key!r}` n'a aucun effet sur une écriture unitaire — il ne sert qu'au "
+        f"mode LOT, où il nomme la colonne de dédup de `rows`. Rien n'a été écrit.\n"
+        f"• pour VISER une ligne existante : `data_write(datastore=…, id=\"<le _id "
+        f"rendu par data_claim_next ou data_rows>\", row={{…}})` ;\n"
+        f"• pour la retrouver par sa CLÉ MÉTIER : mets la valeur dans `row` — "
+        f"l'écriture unitaire rapproche d'elle-même sur la clé déclarée du tableau ;\n"
+        f"• pour DÉDOUBLER un lot : `data_write(datastore=…, rows=[…], key={key!r})`.")
+
+
 def verifier_adresse(champ: str, valeur: object) -> None:
     """Refuse un jeton retiré, ou un jeton reconnu posé dans un champ d'adresse qui ne
     l'accepte pas.

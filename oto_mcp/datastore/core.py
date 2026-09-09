@@ -158,6 +158,23 @@ class DatastorePg(SchemaOpsMixin, RegistreMixin, LectureMixin, EcritureMixin,
         # aurait rendu, gardé pour que l'agent sache quoi y écrire s'il veut réparer.
         self.off_geles: dict = {}
         self.off_notices: set = set()
+        # ⚠️ **Un fait qui change la NATURE du résultat, pas un relevé de routine.**
+        # `{colonne: refus}` — la clé métier qu'une ligne CRÉÉE ne porte pas, donc que
+        # rien ne pourra jamais rapprocher.
+        #
+        # Il vivait dans `off_notices`, et le message y était exact : il nommait la
+        # colonne et le geste de remplacement. Mesuré le 09/09/2026 : servi DIX FOIS en
+        # une soirée, il n'a rien empêché — le consommateur lisait le statut et l'`_id`,
+        # comme n'importe quel consommateur raisonnable, et `notices` sonne comme
+        # « informations diverses ». **172 500 jetons pour un texte juste, rangé à un
+        # endroit que personne n'ouvre.**
+        #
+        # Le critère qui décide de la place, et il vaut pour la suite : *un consommateur
+        # qui ne lit que le statut et l'identifiant serait-il trompé ?* Ici oui — la
+        # réponse annonce un succès avec un `_id`, et cette ligne-là est orpheline. Les
+        # relevés de routine (`hors_schema`, `hors_type`, `hors_options`) ne trompent
+        # personne sur la nature du résultat : ils restent en annexe.
+        self.off_non_rapprochables: dict = {}
         # Ce que ce geste a VIDÉ (#407/#408/#409) : les colonnes qu'il nomme avec un
         # `null` alors qu'elles portaient quelque chose, et la valeur perdue.
         # Même portée que les relevés ci-dessus (un store par requête), même union

@@ -147,7 +147,11 @@ class EcritureMixin:
         # 197 tableaux à clé déclarée, 50 024 lignes, 3 sans clé. Elle ne parlera
         # quasiment jamais, et c'est ce qui la rendra lisible.
         if key and (kv is None or str(kv) == ""):
-            self.off_notices.add(
+            # ⚠️ **Remonté au premier niveau depuis le 09/09/2026**, et pas ajouté :
+            # ce message existait, exact, dans `notices` — et il n'a rien empêché,
+            # servi dix fois en une soirée. Ce n'est pas un relevé de routine, c'est
+            # une réserve qui contredit le succès annoncé juste à côté.
+            self.off_non_rapprochables[str(key)] = (
                 f"ligne créée SANS `{key}`, la clé métier de ce tableau : elle ne "
                 f"sera rapprochée par personne — ni une réécriture, ni un lot qui "
                 f"dédouble sur cette clé. Si elle visait une ligne existante, c'est "
