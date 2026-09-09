@@ -131,6 +131,10 @@ CREATE TABLE IF NOT EXISTS billing_identities (
     postal_code TEXT,
     city TEXT,
     billing_email TEXT,                     -- destinataire de la facture, si différent de l'admin
+    -- #917 : le client Pennylane de cette org, POSÉ À LA MAIN par un admin plateforme.
+    -- Jamais rapproché ni créé par le code ; NULL = pas de client désigné, donc pas
+    -- d'émission. Hors du formulaire côté org (qui remplace la ligne en bloc).
+    pennylane_customer_id BIGINT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

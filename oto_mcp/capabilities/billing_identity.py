@@ -128,21 +128,31 @@ def _identity_get(ctx: ResolvedCtx, inp: NoInput) -> dict:
     return _identity_view(ctx.org_id)
 
 
-def _identity_set(ctx: ResolvedCtx, inp: IdentityInput) -> dict:
+def write_identity(org_id: int, inp: IdentityInput) -> None:
+    """L'écriture de la fiche, commune au formulaire de l'org et à celui de l'admin
+    plateforme (#917) : même normalisation, même remplacement en bloc.
+
+    Le pays et le numéro sont NORMALISÉS et contrôlés en forme AVANT l'écriture
+    (`country_invalid`, `vat_number_invalid`) : une identité stockée doit être
+    exploitable telle quelle par la règle de TVA, sinon le refus surviendrait au
+    moment du paiement — c'est-à-dire trop tard pour être utile.
+
+    ⚠️ Ne touche PAS `pennylane_customer_id` : il appartient à l'admin plateforme,
+    et un formulaire côté org qui l'effacerait le ferait sans erreur ni trace."""
     from ..db import billing as db_billing
 
+    pays = billing_vat.normalize_country(inp.country_code)
+    tva = billing_vat.check_vat_number(pays, inp.vat_number)
+    db_billing.upsert_billing_identity(
+        org_id, legal_name=inp.legal_name.strip(), country_code=pays,
+        vat_number=tva, address_line=inp.address_line.strip(),
+        address_line2=inp.address_line2, postal_code=inp.postal_code.strip(),
+        city=inp.city.strip(), billing_email=inp.billing_email)
+
+
+def _identity_set(ctx: ResolvedCtx, inp: IdentityInput) -> dict:
     def call():
-        # Le pays et le numéro sont NORMALISÉS et contrôlés en forme AVANT l'écriture
-        # (`country_invalid`, `vat_number_invalid`) : une identité stockée doit être
-        # exploitable telle quelle par la règle de TVA, sinon le refus surviendrait au
-        # moment du paiement — c'est-à-dire trop tard pour être utile.
-        pays = billing_vat.normalize_country(inp.country_code)
-        tva = billing_vat.check_vat_number(pays, inp.vat_number)
-        db_billing.upsert_billing_identity(
-            ctx.org_id, legal_name=inp.legal_name.strip(), country_code=pays,
-            vat_number=tva, address_line=inp.address_line.strip(),
-            address_line2=inp.address_line2, postal_code=inp.postal_code.strip(),
-            city=inp.city.strip(), billing_email=inp.billing_email)
+        write_identity(ctx.org_id, inp)
         return _identity_view(ctx.org_id)
 
     return _domain(call)

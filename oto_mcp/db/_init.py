@@ -374,6 +374,15 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
                         ("vat_scheme", "TEXT")):
         conn.execute(f"ALTER TABLE billing_payments "
                      f"ADD COLUMN IF NOT EXISTS {_col} {_type}")
+    # #917 : le client Pennylane d'une org est POSÉ À LA MAIN par un admin plateforme,
+    # jamais rapproché ni créé par le code — le rapprochement par une référence
+    # frappée par oto a créé un second client chez le comptable (facture F-2026-09-7)
+    # dès que le client existait déjà, créé à la main. Additif et NULLABLE ; le code
+    # servi en prod ne nomme pas cette colonne (il fait `SELECT *` et un `UPSERT` par
+    # colonnes explicites), donc un retour au tag précédent la laisse en base sans
+    # la lire. NULL = aucun client désigné, donc aucune émission.
+    conn.execute("ALTER TABLE billing_identities "
+                 "ADD COLUMN IF NOT EXISTS pennylane_customer_id BIGINT")
     # #487 : le journal des acceptations. LOT A, ADDITIF — la table
     # `legal_acceptances` et sa PK `(sub, doc_slug)` restent INTACTES, parce que
     # le code servi en PRODUCTION y fait encore son `ON CONFLICT (sub, doc_slug)`

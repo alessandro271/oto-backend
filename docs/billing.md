@@ -536,6 +536,41 @@ Ce qu'il faut pour reprendre la main, et qui est là : la ligne `held` avec son
 montant et son paiement, `mark_billing_invoice_issued` et `set_billing_invoice_pdf`
 côté store, la liste servie et la route PDF.
 
+### Le client Pennylane se pose, il ne se devine pas (#917)
+
+Le doublon de F-2026-09-7 n'était pas un défaut d'heuristique : le seam retiré
+rapprochait le client par une **référence frappée par oto** (`oto-org-<id>`), qu'un
+client créé à la main chez le comptable ne porte pas — « introuvable », donc créé une
+seconde fois, mécaniquement, même TVA sur les deux fiches. Décision d'Alexis
+(2026-09-09) : **pas de rapprochement** par TVA ni SIREN (sur des pièces comptables,
+une fusion à tort est pire qu'un doublon visible). L'identifiant est **posé à la
+main** par un admin plateforme, et le code le respecte.
+
+Ce qui est en place :
+
+- **la colonne** `billing_identities.pennylane_customer_id` (BIGINT, NULL = aucun
+  client désigné), additive, posée par `_init.py` sur la base partagée ;
+- **la surface admin** `GET/PUT /api/admin/orgs/{org_id}/billing-identity`
+  (`capabilities/billing_identity_admin.py`, `PLATFORM_ADMIN`) : la fiche entière
+  plus l'id, dans le même geste — le formulaire admin est prérempli et reposte tout,
+  `pennylane_customer_id` omis RETIRE la désignation. Côté dashboard : la carte
+  « identité de facturation » de la fiche org admin (`/platform/orgs/:id`) ;
+- **le piège fermé** : `me.billing.identity.set` (formulaire côté org) remplace la
+  fiche en bloc et **ne connaît pas** la colonne — `upsert_billing_identity` ne la
+  nomme pas dans son `SET`. Un org_admin qui resauvegarde son formulaire laisse l'id
+  intact. `tests/test_billing_identity_pennylane_917.py` le prouve **par sa chute** :
+  mettre la colonne dans le `SET` rougit le test. L'org ne voit pas l'id (c'est un
+  lien vers la compta d'Otomata, pas une donnée du client).
+
+Ce qui reste, et où : **la lecture de l'id par le chemin d'émission**. Aujourd'hui
+aucun code ne crée ni ne cherche de client chez Pennylane, la règle « renseigné ⇒
+on l'utilise, absent ⇒ on n'émet pas » n'a donc pas encore de seam où se brancher.
+Elle se branche dans la capacité « émettre maintenant » quand elle naîtra (forme
+(b), tranchée le 2026-09-09 au soir) : première branche `pennylane_customer_id`
+renseigné ⇒ l'utiliser, **ne rien chercher ni créer** ; absent ⇒ la ligne reste
+`held` avec le motif `pennylane_customer_required`, jamais une création. Le manque
+doit rester visible dans la liste à valider, pas comblé en silence.
+
 ### La clé de la compta d'Otomata — plus lue par le backend
 
 ⚠️ **`OTO_PENNYLANE_API_KEY` n'a plus aucun lecteur dans ce dépôt** depuis le

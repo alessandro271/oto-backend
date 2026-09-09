@@ -328,8 +328,22 @@ from oto_mcp.db import _schema, schema
 # 150 323 : 17 caractères d'écart, et le tronc était ROUGE en arrivant ici — la garde
 # a fait exactement son travail. Le nombre ci-dessous est recalculé sur l'arbre
 # fusionné, il ne reconduit donc pas cet écart.
-EMPREINTE = "f2961d71beba070b27bfdfb2aa10df3ebd8b7025e87ecbcf07b3d9ce44dee276"
-LONGUEUR = 152004
+# 2026-09-09 (#917) : `billing_identities.pennylane_customer_id`, UNE colonne
+# NULLABLE — le client Pennylane de l'org, POSÉ À LA MAIN par un admin plateforme,
+# jamais rapproché ni créé par le code (le rapprochement par référence frappée par
+# oto faisait naître un second client chez le comptable dès que le premier avait été
+# créé à la main). ADDITIVE : le `CREATE TABLE` ne sert qu'aux installs vierges, la
+# base PARTAGÉE la reçoit par l'`ALTER … ADD COLUMN IF NOT EXISTS` de `_init.py`.
+# Réversible : le code du tag précédent fait `SELECT *` et un UPSERT par colonnes
+# nommées, il ne la lit ni ne l'écrit — un retour en arrière la laisse en base,
+# vide, sans effet.
+# ⚠️ Arithmétique vérifiée sur un `git archive` du sommet 1fb172cb (isolé, jamais le
+# tree partagé), APRÈS le dernier amendement de `schema/billing.py` : le fragment
+# IDENTITIES grandit de 287 caractères (1 314 → 1 601 — le commentaire SQL et la
+# colonne), l'assemblé d'exactement 287 aussi (152 004 → 152 291). Rien d'autre n'a
+# bougé dans le DDL.
+EMPREINTE = "2d22d7ff9dbfdada7c00dbae9372083dc2134021262d5ad39c024d512da38ea7"
+LONGUEUR = 152291
 
 
 _CREATE_TABLE = re.compile(r"^CREATE TABLE IF NOT EXISTS (\w+)", re.M)

@@ -440,7 +440,14 @@ def upsert_billing_identity(
     """Pose ou REMPLACE l'identité (c'est un formulaire, pas un journal) — un champ
     omis est donc effacé, et l'appelant poste toujours l'identité entière. Ce qui a
     déjà été facturé n'en dépend pas : `billing_payments` a figé sa propre
-    décomposition au moment du débit."""
+    décomposition au moment du débit.
+
+    ⚠️ `pennylane_customer_id` n'est PAS dans ce `SET`, et doit y rester absent
+    (#917) : il est posé par un admin plateforme via
+    `set_billing_identity_pennylane_customer_id`, et un org_admin qui resauvegarde
+    son formulaire ne doit pas l'effacer — sans erreur ni trace, ça ne se verrait
+    qu'à la facture suivante, en doublon chez le comptable. Le test
+    `test_billing_identity_pennylane_917.py` rougit si la colonne entre ici."""
     with _connect() as conn:
         conn.execute(
             """
@@ -462,6 +469,21 @@ def upsert_billing_identity(
             (org_id, legal_name, country_code, vat_number, address_line,
              address_line2, postal_code, city, billing_email),
         )
+
+
+def set_billing_identity_pennylane_customer_id(
+    org_id: int, customer_id: Optional[int],
+) -> bool:
+    """Désigne le client Pennylane de l'org (#917) — `None` retire la désignation.
+    Rend `False` si l'org n'a pas d'identité de facturation : l'id se pose SUR une
+    fiche, il ne la crée pas (une fiche réduite à un id n'a rien à facturer)."""
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE billing_identities SET pennylane_customer_id = %s, "
+            "updated_at = NOW() WHERE org_id = %s",
+            (customer_id, org_id),
+        )
+        return cur.rowcount == 1
 
 
 def last_customer_id_for_org(org_id: int) -> Optional[str]:
