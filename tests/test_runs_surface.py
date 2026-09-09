@@ -52,8 +52,13 @@ def test_armer_compte_les_lignes_visees_et_les_passe_a_la_transition(monkeypatch
             return 2000
 
     monkeypatch.setattr("oto_mcp.datastore.core.make_store", lambda sub: _Store())
+    # ⚠️ `update`, pas `setdefault` : `setdefault` REND la valeur posée, donc
+    # `2000 or {...}` rendait 2000 et la doublure servait un int à la place de la
+    # flotte. Inerte tant que le handler ne relisait pas son retour ; depuis qu'il
+    # y calcule le pire cas (`70f9ecb6`), il explose. Une doublure qui rend autre
+    # chose que son original ne prouve rien — elle attend le premier lecteur.
     monkeypatch.setattr(RF.db, "armer", lambda fid, oid, rows_at_launch=None:
-                        vus.setdefault("rows", rows_at_launch) or {"id": fid, "status": "armed"})
+                        vus.update(rows=rows_at_launch) or {"id": fid, "status": "armed"})
     monkeypatch.setattr("oto_mcp.roles.is_org_admin", lambda sub, org: True)
     monkeypatch.setattr(RF, "_run_courant", lambda: None)
 
