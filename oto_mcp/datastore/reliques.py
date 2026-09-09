@@ -57,8 +57,25 @@ def effacements_sur_relique(user_data: Optional[dict],
     """
     if not isinstance(avant, dict) or not avant:
         return []
-    pointees = {c for c in avant if isinstance(c, str) and "." in c
-                and not c.startswith("_")}
+    # ⚠️ **Une relique VIDE n'a rien à protéger** — et c'est le cas de l'immense
+    # majorité d'entre elles. Mesuré sur la production le 09/09/2026 : sur les 764
+    # clés littérales pointées du parc, **735 valent `None`** — 500
+    # `qualification.comment` et 235 `retraitement.comment` sur un seul tableau. Ce
+    # sont des coquilles, pas des données : rien ne survivrait à l'effacement, donc
+    # rien ne justifie de le refuser.
+    #
+    # Sans ce filtre la garde refusait un geste qui MARCHE, sur 96 % de ce qu'elle
+    # rencontre, avec un message qui affirme deux choses fausses dans ce cas : que la
+    # couche imbriquée est vide, et que la donnée resterait lisible. Et elle envoyait
+    # vers `data_drop_column`, qui frappe la colonne sur TOUTES les lignes du tableau
+    # — 500 lignes de la campagne en cours pour effacer une couche sur une seule.
+    #
+    # Le geste qu'elle existe pour attraper reste attrapé : 29 reliques portent
+    # réellement une donnée, et celles-là refusent toujours. C'est la même règle que
+    # partout ailleurs dans le datastore — le vide n'est pas une valeur.
+    pointees = {c for c, v in avant.items()
+                if isinstance(c, str) and "." in c and not c.startswith("_")
+                and not dsl.est_vide(v) and v != dsl.VIDE_DELIBERE}
     if not pointees:
         return []
 
@@ -89,9 +106,9 @@ def refus(noms: list[str]) -> str:
     return (
         f"{liste} : cet effacement ne détruirait RIEN — rien n'a été écrit. Ces "
         f"clés sont des reliques stockées au premier niveau de la ligne (avant le "
-        f"31/08/2026), pas des couches : ton écriture vise la couche imbriquée, qui "
-        f"est vide, et la relique reste. Elle serait donc encore lisible après un "
-        f"succès annoncé. Pour la détruire vraiment : "
+        f"31/08/2026), pas des couches : ton écriture vise la couche imbriquée, et "
+        f"la relique — qui porte une valeur — reste. Elle serait donc encore lisible "
+        f"après un succès annoncé. Pour la détruire vraiment : "
         f"`{GESTE}(<tableau>, \"{noms[0]}\", confirm=True)` — avec le nom LITTÉRAL, "
         f"point compris. Le compte `rows` qu'il rend est le seul témoin valable ici : "
         f"il refuse un nom qu'aucune ligne ne porte.")

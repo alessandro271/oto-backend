@@ -300,6 +300,37 @@ class DatastorePg(SchemaOpsMixin, RegistreMixin, LectureMixin, EcritureMixin,
         # reçoit un e-mail, qu'il y ait une provenance ou non. Les sous-champs
         # renseignés s'ajoutent à plat sous `champ.couche` — visibles sans être
         # imposés, et projetables par `fields` comme n'importe quelle colonne.
+        # ⚠️ **Une relique littérale VIDE ne doit pas masquer la couche du même nom.**
+        #
+        # Une clé littérale pointée (`{"qualification.comment": …}` au premier niveau,
+        # écrite avant la garde du 31/08/2026) porte EXACTEMENT le nom que `flat_layers`
+        # fabrique pour la couche. Les deux atterrissent donc sur la même clé de `out`,
+        # et la dernière écrite gagne — en JSONB les clés sont triées par LONGUEUR, donc
+        # `qualification` est parcourue avant `qualification.comment` : la relique
+        # écrase toujours la couche.
+        #
+        # Mesuré sur la production le 09/09/2026, et c'est le coût réel des reliques :
+        # **732 valeurs invisibles à leurs lecteurs** sur un tableau de campagne — 497
+        # `qualification.comment` et 235 `retraitement.comment`, ces dernières portant
+        # des traces de retrait pour conformité (« adresse retirée, source hors
+        # contrat »). Le texte est en base, servi `None`. Une trace qu'on ne peut pas
+        # lire ne prouve rien.
+        #
+        # ⚠️ **Une relique qui porte une VALEUR continue de gagner**, et c'est délibéré :
+        # c'est le comportement figé par le banc, et sur 23 cellules du parc la relique
+        # est la SEULE à porter la donnée — la masquer la perdrait. On ne corrige que
+        # le cas où l'écrasement remplace quelque chose par rien.
+        #
+        # Le pré-calcul ne coûte que là où le danger existe : deux tableaux du parc
+        # portent des reliques, tous les autres sortent sur le test de présence.
+        couches_servies: set = set()
+        if layers != dsl.NESTED and any(
+                isinstance(k, str) and "." in k for k in data):
+            for k, v in data.items():
+                if k in _META_COLS or k in cachees:
+                    continue
+                couches_servies.update(dsv2.flat_layers(k, v))
+
         for k, v in data.items():
             if k in _META_COLS or k in cachees:
                 continue
@@ -310,7 +341,9 @@ class DatastorePg(SchemaOpsMixin, RegistreMixin, LectureMixin, EcritureMixin,
                 continue
             # `served_value` descend dans une colonne-tableau : chaque attribut d'item
             # est une feuille, rendue comme telle (oto#22 §1).
-            out[k] = dsv2.served_value(v)
+            servie = dsv2.served_value(v)
+            if not (k in couches_servies and dsv2.est_vide(servie)):
+                out[k] = servie
             # Les couches s'exposent dès qu'il y en a — même sans `valeur` posée
             # (import de socle sur un champ pas encore renseigné).
             plat = dsv2.flat_layers(k, v)

@@ -106,6 +106,82 @@ def test_un_effacement_SANS_relique_passe(live):
     st.update_row(ns, rid, {"c": {"link": "@empty"}})   # ne lève pas
 
 
+# ── une relique VIDE n'est pas une relique (09/09/2026) ──────────────────────
+
+def test_une_relique_VIDE_ne_fait_pas_refuser_un_effacement_qui_marche():
+    """⚠️ La garde regardait le NOM, jamais la valeur. Or l'immense majorité des
+    reliques du parc sont des coquilles : mesuré le 09/09/2026, **735 des 764** clés
+    littérales pointées valent `None` — 500 `qualification.comment` et 235
+    `retraitement.comment` sur un seul tableau.
+
+    Refuser là est un faux refus sur 96 % de ce que la garde rencontre : il n'y a rien
+    à détruire, donc rien à protéger, et l'effacement de la couche aurait abouti. Pire,
+    le refus envoie vers `data_drop_column`, qui frappe la colonne sur TOUTES les
+    lignes du tableau — 500 lignes d'une campagne vivante pour effacer une couche sur
+    une seule."""
+    avant = {"qualification": {"valeur": "x", "comment": "utile"},
+             "qualification.comment": None}
+    assert rq.effacements_sur_relique({"qualification": {"comment": None}}, avant) == []
+
+
+def test_le_marqueur_d_effacement_delibere_ne_compte_pas_non_plus():
+    """`@empty` EST le geste qui vide : une relique qui le porte ne contient rien."""
+    avant = {"qualification": {"valeur": "x"}, "qualification.comment": "@empty"}
+    assert rq.effacements_sur_relique({"qualification": {"comment": None}}, avant) == []
+
+
+def test_la_relique_qui_porte_VRAIMENT_une_donnee_refuse_toujours():
+    """⚠️ La moitié qui garantit qu'on n'a pas désarmé la garde. 29 reliques du parc
+    portent une valeur, et sur 23 d'entre elles c'est la SEULE copie de la donnée."""
+    avant = {"qualification": {"valeur": "x"}, "qualification.comment": "la donnée"}
+    assert rq.effacements_sur_relique(
+        {"qualification": {"comment": None}}, avant) == ["qualification.comment"]
+
+
+# ── une relique VIDE ne masque pas la couche EN LECTURE (09/09/2026) ─────────
+
+def _sert(data: dict) -> dict:
+    from oto_mcp.datastore.core import DatastorePg
+    return DatastorePg._row_to_dict(
+        {"row_id": "r", "created_at": None, "updated_at": None, "data": data})
+
+
+def test_une_relique_VIDE_ne_masque_plus_la_couche_renseignee():
+    """⚠️ Le coût RÉEL des reliques, et il n'avait jamais été mesuré : une clé
+    littérale porte exactement le nom que `flat_layers` fabrique pour la couche. Les
+    deux atterrissent sur la même clé de la ligne servie, et en JSONB les clés sont
+    triées par LONGUEUR — `qualification` est donc parcourue avant
+    `qualification.comment`, et la relique écrase toujours.
+
+    Mesuré sur la production : **732 valeurs invisibles à leurs lecteurs** sur un
+    tableau de campagne (497 `qualification.comment`, 235 `retraitement.comment`), ces
+    dernières portant des traces de retrait pour conformité. Le texte est en base,
+    servi `None`. **Une trace qu'on ne peut pas lire ne prouve rien.**"""
+    servie = _sert({"qualification": {"valeur": "CEDIA", "comment": "texte utile"},
+                    "qualification.comment": None})
+    assert servie["qualification.comment"] == "texte utile"
+
+
+def test_une_relique_qui_PORTE_une_valeur_gagne_toujours():
+    """Le comportement figé par `test_QUAND_LES_DEUX_COEXISTENT…` ne bouge pas : sur
+    23 cellules du parc la relique est la seule à porter la donnée, et la masquer la
+    perdrait. On ne corrige que l'écrasement de quelque chose par RIEN."""
+    servie = _sert({"qualification": {"valeur": "x", "comment": "couche"},
+                    "qualification.comment": "relique"})
+    assert servie["qualification.comment"] == "relique"
+
+    seule = _sert({"qualification": {"valeur": "x"},
+                   "qualification.comment": "la seule donnée"})
+    assert seule["qualification.comment"] == "la seule donnée"
+
+
+def test_sans_relique_la_lecture_ne_change_pas():
+    """La correction ne coûte rien là où le danger n'existe pas — et le pré-calcul
+    qu'elle demande ne se fait même pas : aucune clé pointée dans la ligne."""
+    assert _sert({"qualification": {"valeur": "x", "comment": "couche"}}
+                 )["qualification.comment"] == "couche"
+
+
 # ── la primitive, sur ses deux formes et son silence ─────────────────────────
 
 def test_les_deux_formes_d_ecriture_sont_vues():
