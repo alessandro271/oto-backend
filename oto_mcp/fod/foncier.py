@@ -13,9 +13,20 @@ Pas de fallback in-process (ADR 0028) : FOD indisponible ⟹ erreur actionnable.
 """
 from __future__ import annotations
 
+import os
 from typing import Any, Optional
 
 from .http import get as _get, post as _post
+
+# DVF+ est servi par l'API Cerema `apidf-preprod.cerema.fr` — un hôte de PRÉPRODUCTION
+# d'un organisme public, qui est aussi la seule adresse que le Cerema documente (vérifié
+# le 2026-09-09 : aucun `apidf.cerema.fr`, NXDOMAIN). Personne ne s'est engagé à le
+# tenir, et il tombe : mesuré ce jour, 503 systématique, dont un après 60,2 s de silence.
+# Sans borne à nous, l'appel attendait la passerelle (~60 s) pour rendre une panne muette.
+# Une lecture qui échoue doit échouer VITE et NOMMER sa cause.
+# Le plafond n'est pas calibré sur un appel sain — la source est tombée, on ne peut pas
+# le mesurer : à revoir quand elle sera revenue, d'où la variable d'environnement.
+_DVF_TIMEOUT_S = float(os.environ.get("FOD_DVF_TIMEOUT_S", "20"))
 
 
 class _Ban:
@@ -124,7 +135,8 @@ class _Odre:
 class _Dvf:
     def stats(self, code_commune: str, type_local: Optional[str] = None, years: int = 3) -> dict[str, Any]:
         return _post("/api/foncier/dvf/stats",
-                     {"code_commune": code_commune, "type_local": type_local, "years": years})
+                     {"code_commune": code_commune, "type_local": type_local, "years": years},
+                     timeout=_DVF_TIMEOUT_S)
 
     def comparables(self, code_commune: str, type_local: Optional[str] = None,
                     surface_min: Optional[float] = None, surface_max: Optional[float] = None,
@@ -132,7 +144,8 @@ class _Dvf:
         return _post("/api/foncier/dvf/comparables",
                      {"code_commune": code_commune, "type_local": type_local,
                       "surface_min": surface_min, "surface_max": surface_max,
-                      "years": years, "limit": limit})
+                      "years": years, "limit": limit},
+                     timeout=_DVF_TIMEOUT_S)
 
     def comparables_by_address(self, adresse: str, radius_m: int = 500, type_local: Optional[str] = None,
                                surface_min: Optional[float] = None, surface_max: Optional[float] = None,
@@ -140,7 +153,8 @@ class _Dvf:
         return _post("/api/foncier/dvf/comparables_by_address",
                      {"adresse": adresse, "radius_m": radius_m, "type_local": type_local,
                       "surface_min": surface_min, "surface_max": surface_max,
-                      "years": years, "limit": limit})
+                      "years": years, "limit": limit},
+                     timeout=_DVF_TIMEOUT_S)
 
 
 class _Dpe:

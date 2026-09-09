@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import random
+import re
 import time
 from typing import Any, Optional
 
@@ -52,12 +53,48 @@ def _c() -> httpx.Client:
     return _client
 
 
+# Adresses privées (RFC 1918 / loopback) : le service FOD vit sur une IP interne, et
+# `FOD_BASE_URL` la porte. Un message d'erreur est SERVI à l'utilisateur — il ne nomme
+# jamais une adresse de notre réseau. Mesuré le 2026-09-09 : un 502 de FOD remontait en
+# « Server error '502 Bad Gateway' for url 'http://<ip-interne>:8000/api/foncier/…' ».
+_ADRESSE_PRIVEE_RE = re.compile(
+    r"(?:https?://)?"
+    r"(?:10\.\d{1,3}|127\.\d{1,3}|192\.168|169\.254|"
+    r"172\.(?:1[6-9]|2\d|3[01]))\.\d{1,3}\.\d{1,3}(?::\d+)?",
+    re.I,
+)
+_SERVICE = "le service de données interne"
+
+
+def _public(texte: str) -> str:
+    """Le texte tel qu'on accepte de le SERVIR : sans adresse de notre réseau.
+
+    Ce qui remonte d'ici finit dans une ligne de résultat d'agent, donc sous les yeux
+    d'un utilisateur et dans les journaux. Une IP interne n'y apprend rien à personne
+    d'utile, et en apprend à qui n'a rien à y faire.
+    """
+    net = _ADRESSE_PRIVEE_RE.sub(_SERVICE, texte or "")
+    if _BASE:
+        net = net.replace(_BASE, _SERVICE).replace(_BASE.rstrip("/"), _SERVICE)
+    return net
+
+
 def _detail(r: httpx.Response) -> str:
     try:
-        return r.json().get("detail", r.text)
+        brut = r.json().get("detail", r.text)
     # noqa: SILENT — corps non-JSON : le texte brut EST le détail rendu
     except Exception:
-        return r.text
+        brut = r.text
+    return _public(str(brut))[:400]
+
+
+def _chemin(r: httpx.Response) -> str:
+    """Le CHEMIN appelé, jamais l'URL absolue — celle-ci porte l'hôte interne."""
+    try:
+        return r.request.url.path
+    # noqa: SILENT — réponse construite sans requête (tests) : le chemin est inconnu
+    except Exception:
+        return "?"
 
 
 def _raise_for(r: httpx.Response) -> None:
@@ -75,7 +112,20 @@ def _raise_for(r: httpx.Response) -> None:
             f"Quota de l'API amont atteint, malgré {_RETRY_ATTEMPTS} reprises — "
             f"RÉESSAYABLE plus tard ou par lots plus petits ; ce n'est pas un fait "
             f"sur la donnée demandée ({_detail(r)})")
-    r.raise_for_status()
+    if r.status_code == 502:
+        # 502 = FOD a bien répondu, mais l'API PUBLIQUE qu'il interroge ne lui a rien
+        # rendu. Ce n'est ni notre panne ni un fait sur la donnée : le dire évite de
+        # lire « pas de mutation ici » là où il faut lire « source amont muette ».
+        raise RuntimeError(
+            f"Source amont indisponible ({_chemin(r)}) : l'API publique interrogée "
+            f"n'a pas répondu. Ce n'est pas un fait sur la donnée demandée — "
+            f"RÉESSAYABLE plus tard. ({_detail(r)})")
+    if r.status_code >= 400:
+        # JAMAIS `r.raise_for_status()` ici : httpx met l'URL ABSOLUE dans son message,
+        # donc l'hôte et le port de FOD — une adresse de notre réseau, servie telle
+        # quelle à l'utilisateur (mesuré le 2026-09-09 sur un 500 de `sitadel/search`).
+        raise RuntimeError(
+            f"FOD: {r.status_code} sur {_chemin(r)} ({_detail(r)})")
 
 
 # Attente maximale honorée sur un `Retry-After` amont. Au-delà, réessayer n'a plus
@@ -104,7 +154,8 @@ def _retry_after_s(r: "httpx.Response") -> Optional[float]:
 
 
 def _request(method: str, path: str, *, params: Optional[dict] = None,
-             json_body: Optional[dict] = None, headers: Optional[dict] = None) -> Any:
+             json_body: Optional[dict] = None, headers: Optional[dict] = None,
+             timeout: Optional[float] = None) -> Any:
     """Appel HTTP avec retry borné sur 503 (saturation du scan) et 429 (quota amont).
 
     Le 429 n'était PAS repris : il partait en exception, et le `Retry-After` que FOD
@@ -116,8 +167,23 @@ def _request(method: str, path: str, *, params: Optional[dict] = None,
     On honore le délai demandé quand l'amont le donne, sinon backoff exponentiel.
     """
     r: Optional[httpx.Response] = None
+    kw: dict[str, Any] = {}
+    if timeout is not None:
+        # Attente BORNÉE pour les lectures dont l'amont est connu pour tomber : sans
+        # elle, l'appel s'échoue au timeout de la passerelle (~60 s mesurées) et rend
+        # une panne lente et muette là où un refus nommé en quelques secondes suffit.
+        kw["timeout"] = httpx.Timeout(connect=5.0, read=timeout, write=10.0, pool=5.0)
     for attempt in range(_RETRY_ATTEMPTS + 1):
-        r = _c().request(method, path, params=params, json=json_body, headers=headers)
+        try:
+            r = _c().request(method, path, params=params, json=json_body,
+                             headers=headers, **kw)
+        except httpx.TimeoutException as exc:
+            raise RuntimeError(
+                f"Source amont indisponible ({path}) : pas de réponse en "
+                f"{timeout or _TIMEOUT.read:.0f} s. L'API publique interrogée ne "
+                f"répond pas — ce n'est pas un fait sur la donnée demandée, "
+                f"RÉESSAYABLE plus tard."
+            ) from exc
         if r.status_code not in (503, 429) or attempt == _RETRY_ATTEMPTS:
             break
         # Le délai DEMANDÉ prime sur le nôtre : l'amont sait quand son quota
@@ -130,9 +196,11 @@ def _request(method: str, path: str, *, params: Optional[dict] = None,
     return r.json()
 
 
-def get(path: str, params: Optional[dict] = None, headers: Optional[dict] = None) -> Any:
-    return _request("GET", path, params=params, headers=headers)
+def get(path: str, params: Optional[dict] = None, headers: Optional[dict] = None,
+        timeout: Optional[float] = None) -> Any:
+    return _request("GET", path, params=params, headers=headers, timeout=timeout)
 
 
-def post(path: str, body: Optional[dict] = None, headers: Optional[dict] = None) -> Any:
-    return _request("POST", path, json_body=body, headers=headers)
+def post(path: str, body: Optional[dict] = None, headers: Optional[dict] = None,
+         timeout: Optional[float] = None) -> Any:
+    return _request("POST", path, json_body=body, headers=headers, timeout=timeout)
