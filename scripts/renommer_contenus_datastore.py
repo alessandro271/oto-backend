@@ -39,6 +39,9 @@ sont des faits stables sur des documents identifiés.
 from __future__ import annotations
 
 import argparse
+import datetime
+import json
+import pathlib
 import re
 import sys
 
@@ -122,11 +125,16 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--appliquer", action="store_true",
                     help="ÉCRIT en base. Sans lui : à blanc, rien n'est modifié.")
+    ap.add_argument("--sauvegarde", default="/opt/oto-mcp/sauvegardes",
+                    help="Où écrire l'état AVANT. La sauvegarde est faite dans le "
+                         "MÊME geste que l'écriture — jamais une étape séparée qu'on "
+                         "peut oublier de lancer.")
     args = ap.parse_args(argv[1:])
 
     from oto_mcp.db._conn import _connect
 
     total = faits = gardes = exclus = docs = 0
+    avant: list[dict] = []
     with _connect() as c, c.cursor() as cur:
         for table, pk, cols in CIBLES:
             for col in cols:
@@ -144,11 +152,38 @@ def main(argv: list[str]) -> int:
                     gardes += g
                     if n:
                         docs += 1
-                        if args.appliquer:
-                            with _connect() as c2, c2.cursor() as cur2:
-                                cur2.execute(
-                                    f"UPDATE {table} SET {col} = %s WHERE {pk} = %s",
-                                    (neuf, r["pk"]))
+                        # ⚠️ On garde l'état d'AVANT, pas un diff : le remplacement
+                        # inverse ne serait PAS exact — 44 occurrences portent déjà
+                        # le mot `datastore` légitimement (`datastore_namespace`,
+                        # `target=datastore`). Rejouer `datastore` → `namespace`
+                        # les casserait. Seul le texte original permet de revenir.
+                        avant.append({"table": table, "col": col,
+                                      "pk": str(r["pk"]), "texte": texte})
+                        avant[-1]["neuf"] = neuf
+                        avant[-1]["pkcol"] = pk
+
+    # ⚠️ **La sauvegarde s'écrit AVANT le premier UPDATE, et le script est en DEUX
+    # TEMPS pour ça.** Une sauvegarde faite après la boucle ne protège de rien : un
+    # plantage au milieu laisserait des documents modifiés sans état d'avant. La
+    # première passe ne fait que lire et calculer ; rien n'a encore bougé ici.
+    if args.appliquer and avant:
+        rep = pathlib.Path(args.sauvegarde)
+        rep.mkdir(parents=True, exist_ok=True)
+        quand = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        f = rep / f"contenus-namespace-{quand}.json"
+        f.write_text(json.dumps(avant, ensure_ascii=False))
+        print(f"  ⤷ sauvegarde AVANT : {f} ({len(avant)} documents)")
+        if not f.exists() or f.stat().st_size == 0:
+            print("  ⛔ sauvegarde ILLISIBLE — rien n'est écrit en base.")
+            return 2
+        ecrits = 0
+        with _connect() as c2, c2.cursor() as cur2:
+            for d in avant:
+                cur2.execute(
+                    f'UPDATE {d["table"]} SET {d["col"]} = %s WHERE {d["pkcol"]} = %s',
+                    (d["neuf"], d["pk"]))
+                ecrits += 1
+        print(f"  ⤷ documents écrits : {ecrits}")
 
     mode = "APPLIQUÉ" if args.appliquer else "À BLANC — rien n'a été écrit"
     print(f"=== {mode} ===")
