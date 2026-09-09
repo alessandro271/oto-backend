@@ -55,7 +55,6 @@ from __future__ import annotations
 from typing import Optional
 
 from .couches import unwrap
-from .cycle_de_vie import refus_de_transition
 from .declaration import _fields, status_field
 
 
