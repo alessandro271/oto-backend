@@ -23,6 +23,17 @@ ne se lisait pas, et `test_no_module_silently_uncovered` ne voyait même pas qu'
 avait un `_client`. Un angle mort qui s'ouvre au moment où un connecteur adopte une
 forme neuve est exactement celui qu'on ne trouve jamais par relecture.
 
+⚠️ Élargie le 2026-09-09 à la méthode **confiée** : `instagram_meta` n'appelle
+jamais son client, il passe la méthode à un exécuteur qui la joue hors boucle
+(`await appeler("le profil", ig.get_profile)`). Le nom n'est alors PAS le `func`
+d'un `ast.Call` mais un argument, donc la sonde ne voyait aucune méthode et sortait
+le module de la couverture. C'est une forme qui va se répandre : dès qu'un cœur est
+synchrone et le serveur mono-loop, l'appel part à `asyncio.to_thread` ou à une
+enveloppe maison (`_run`, `appeler`, `functools.partial`) — le site d'appel n'est
+plus le site d'usage. La sonde compte donc aussi les méthodes **remises à un
+appelant**, quel que soit cet appelant : `minari` et `snitcher` y gagnent chacun une
+méthode qu'ils perdaient déjà en silence (`list_custom_fields`, `get_me`).
+
 ⚠️ La portée a été élargie le 2026-07-31 après un trou vécu : `tools/apollo.py`
 déclare `def _client() -> tuple[ApolloClient, bool]` et appelle `client.m()` — les
 DEUX motifs échappaient à la sonde, donc **le module entier sortait de la couverture
@@ -192,6 +203,25 @@ def _est_fabrique_partagee(stem: str, tree: ast.Module) -> bool:
     return False
 
 
+def _classe_et_arbre_fabrique(tree: ast.Module) -> tuple[str | None, ast.Module]:
+    """`(classe rendue par la fabrique, arbre où on l'a lue)`.
+
+    Une seule résolution pour les deux lecteurs — la couverture ET le diagnostic
+    du module non couvert. Séparées, elles divergent : le message d'échec disait
+    « type de retour de `_client()` non reconnu » pour `instagram_meta`, dont la
+    fabrique vit chez un frère et annonce très bien sa classe. Un garde-fou qui
+    nomme la mauvaise cause envoie corriger la mauvaise chose."""
+    cls = _client_class_name(tree)
+    if cls:
+        return cls, tree
+    socle = _fabrique_importee(tree)
+    chemin = _TOOLS_DIR / f"{socle}.py" if socle else None
+    if chemin and chemin.exists():
+        arbre = ast.parse(chemin.read_text(), filename=str(chemin))
+        return _client_class_name(arbre), arbre
+    return None, tree
+
+
 def _methods_called_on_client(tree: ast.Module) -> set[str]:
     """Méthodes appelées sur le client, quelle que soit la façon de le tenir :
 
@@ -199,25 +229,45 @@ def _methods_called_on_client(tree: ast.Module) -> set[str]:
     - **lié** `client, _ = _client()` puis `client.m()` (cf. `_names_bound_to_client`) ;
     - **passé** `_create_one(c, …)` puis `c.m()` — nom conventionnel du client dans
       un dispatcher partagé (ex. Folk factorise singulier/bulk) ; sans ce motif, un
-      connecteur qui factorise perd toute couverture version-skew.
+      connecteur qui factorise perd toute couverture version-skew ;
+    - **confié** `appeler(geste, ig.get_profile)` / `_run(client.get_me)` /
+      `asyncio.to_thread(client.m, …)` — la méthode est remise à un exécuteur qui
+      l'appellera ailleurs. Le nom est alors un ARGUMENT, jamais le `func` d'un
+      `Call` : sans ce motif, un connecteur dont le cœur est synchrone sur un
+      serveur mono-loop sort entièrement de la sonde (`instagram_meta`, 2026-09-09).
 
-    ⚠️ Seuls les attributs **appelés** comptent (`client.m(...)`), pas les accès nus.
-    Un client à sous-objets (`client.companies.list(…)`, Attio) porte ses datastores
-    en attributs d'INSTANCE : `hasattr(AttioClient, "companies")` est False sur la
-    classe, donc les compter produirait un faux « méthode absente » — un garde-fou
-    qui crie à tort finit ignoré.
+    ⚠️ Seuls les attributs **appelés** ou **confiés** comptent — jamais un attribut
+    du client lu sur place. Un client à sous-objets (`client.companies.list(…)`,
+    Attio) porte ses datastores en attributs d'INSTANCE : `hasattr(AttioClient,
+    "companies")` est False sur la classe, donc les compter produirait un faux
+    « méthode absente » — un garde-fou qui crie à tort finit ignoré. La position
+    d'argument est ce qui distingue les deux : `client.companies` n'y apparaît
+    jamais, il n'est que le receveur de l'attribut suivant.
     """
     bound = _names_bound_to_client(tree) | {"c"}
+
+    def _est_le_client(node: ast.expr) -> bool:
+        """Le client, chaîné (`_client()`) ou tenu par une variable (`ig`)."""
+        if isinstance(node, ast.Name):
+            return node.id in bound
+        return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id in _CLIENT_FACTORIES)
+
     methods: set[str] = set()
     for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+        if not isinstance(node, ast.Call):
             continue
-        recv = node.func.value
-        if (isinstance(recv, ast.Call) and isinstance(recv.func, ast.Name)
-                and recv.func.id in _CLIENT_FACTORIES):
+        # appelée ici : `client.m(...)`
+        if isinstance(node.func, ast.Attribute) and _est_le_client(node.func.value):
             methods.add(node.func.attr)
-        elif isinstance(recv, ast.Name) and recv.id in bound:
-            methods.add(node.func.attr)
+        # confiée à qui l'appellera : `appeler(geste, ig.m)`, `_run(client.m)`…
+        # ⚠️ En position d'ARGUMENT seulement. Compter tout attribut nu du client
+        # ferait entrer ses attributs d'INSTANCE (`c.session_id`, `client.host`,
+        # `client.companies` d'Attio) que `hasattr(Classe, …)` dit absents : la
+        # sonde crierait à tort, et un garde-fou qui crie à tort finit ignoré.
+        for arg in (*node.args, *(kw.value for kw in node.keywords)):
+            if isinstance(arg, ast.Attribute) and _est_le_client(arg.value):
+                methods.add(arg.attr)
     return methods
 
 
@@ -229,16 +279,9 @@ def _covered_modules() -> list[tuple[str, str, str, set[str]]]:
         if path.name.startswith("_"):
             continue
         tree = ast.parse(path.read_text(), filename=str(path))
-        cls = _client_class_name(tree)
         # La fabrique peut vivre dans un module frère (connecteur découpé) : on
         # y lit alors la classe ET son import.
-        arbre_fabrique = tree
-        if not cls:
-            socle = _fabrique_importee(tree)
-            chemin = _TOOLS_DIR / f"{socle}.py" if socle else None
-            if chemin and chemin.exists():
-                arbre_fabrique = ast.parse(chemin.read_text(), filename=str(chemin))
-                cls = _client_class_name(arbre_fabrique)
+        cls, arbre_fabrique = _classe_et_arbre_fabrique(tree)
         if not cls:
             continue
         methods = _methods_called_on_client(tree)
@@ -267,6 +310,11 @@ def test_convention_coverage_not_silently_shrinking():
         "`async def _client()` — le motif qui sortait de la sonde sans un mot "
         "(2026-09-09). C'est le connecteur qui en a le plus besoin : son cœur "
         "vient d'oto-core, donc d'un autre dépôt et d'un autre rythme de tag.")
+    assert "instagram_meta" in covered, (
+        "instagram_meta doit rester couvert : ses outils ne chaînent pas l'appel, "
+        "ils CONFIENT la méthode à un exécuteur (`appeler(geste, ig.get_profile)`) "
+        "— la méthode n'est alors jamais le `func` d'un appel, et le module sortait "
+        "entier de la sonde (2026-09-09).")
     assert len(_CASES) >= 20, f"couverture anormalement basse ({len(_CASES)} modules)"
 
 
@@ -287,7 +335,7 @@ def test_no_module_silently_uncovered():
         exempt = _NO_CLIENT_EXPECTED | _SUBOBJECT_CLIENTS | _DYNAMIC_DISPATCH_CLIENTS
         if has_client and path.stem not in exempt and not _est_fabrique_partagee(
                 path.stem, tree):
-            cls = _client_class_name(tree)
+            cls, _ = _classe_et_arbre_fabrique(tree)
             why = ("pas de méthode détectée sur le client" if cls
                    else "type de retour de `_client()` non reconnu")
             uncovered.append(f"{path.stem} ({why})")
