@@ -122,15 +122,17 @@ def test_comparer_un_etat_a_LUI_MEME_ne_montre_aucun_changement():
 # ── Un rapport nomme ce qu'il ne regarde pas ─────────────────────────────────
 
 def test_le_rapport_DELIMITE_sa_portee_en_tete():
-    """Tous les outils ne viennent pas du code : les connecteurs fédérés sont montés
-    d'après la base. Sans base, ils manquent — **et un rapport muet là-dessus se lit
-    comme s'il couvrait tout.** La ligne de portée est donc la première du rapport."""
+    """Un rapport muet sur sa portée se lit comme s'il couvrait tout. La ligne de
+    portée est donc la première du rapport.
+
+    ⚠️ Elle nommait les connecteurs fédérés montés d'après la base ; ils ont disparu
+    le 2026-09-09 (ADR 0069) et tous les outils servis viennent désormais du CODE. La
+    RÈGLE, elle, ne bouge pas : le rapport dit toujours ce qu'il a regardé."""
     r = subprocess.run([sys.executable, "scripts/empreinte_servie.py", "data_write"],
                        cwd=RACINE, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr[-1500:]
     tete = r.stdout.splitlines()[0]
     assert tete.startswith("portée :"), f"première ligne inattendue : {tete!r}"
-    assert "base" in tete
 
 
 def test_la_portee_est_aussi_dans_le_json():
@@ -138,6 +140,9 @@ def test_la_portee_est_aussi_dans_le_json():
     from scripts.empreinte_servie import portee
     p = portee()
     assert set(p) >= {"base", "connecteurs_montables", "connecteurs_montes", "non_regardes"}
+    # ⚠️ Les trois listes sont VIDES depuis le retrait de la fédération (ADR 0069) —
+    # les clés restent au contrat du rapport, leur contenu n'a plus d'objet.
+    assert p["connecteurs_montables"] == [] and p["non_regardes"] == []
     assert p["base"] in ("lue", "indisponible")
     # Ce qui n'est pas monté est exactement ce qui n'est pas regardé.
     assert set(p["non_regardes"]) == set(p["connecteurs_montables"]) - set(p["connecteurs_montes"])

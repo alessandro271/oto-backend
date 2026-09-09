@@ -43,7 +43,6 @@ def test_webflow_is_classic_keyed_connector():
     # folk/cognism (paste-the-token).
     c = providers.REGISTRY["webflow"]
     assert c.kind == "tools"
-    assert c.mount_url is None
     assert c.keyed is True
     assert c.secret_kind == "api_key"
     assert "webflow" in providers.KEY_PROVIDERS
@@ -65,10 +64,6 @@ def test_webflow_credential_fields_shape():
 def test_webflow_deny_by_default():
     c = providers.REGISTRY["webflow"]
     assert c.default_active is False
-
-
-def test_webflow_no_longer_a_mount():
-    assert all(c.name != "webflow" for c in providers.MOUNT_CONNECTORS)
 
 
 # --- surface MCP : CMS = UN SEUL tool visible ------------------------------

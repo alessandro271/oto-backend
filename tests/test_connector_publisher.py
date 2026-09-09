@@ -114,9 +114,12 @@ def test_les_cas_connus_du_2026_09_02():
     qu'on écrit et opère nous-mêmes."""
     attendus = {
         # Corrigées à la main le 2026-09-02 (PR #834), figées ici.
-        "folkmcp": "Folk",              # le MCP officiel de Folk, servi « Otomata »
+        # ⚠️ `folkmcp` et `atlassian` étaient ICI jusqu'au 2026-09-09 : partis avec
+        # la fédération MCP (ADR 0069). Le cas d'école qu'ils portaient — un DÉFAUT
+        # qui parle à la place d'une déclaration absente, et sert le produit d'un
+        # tiers sous notre nom — reste décrit dans `docs/connector-vault.md` ; la
+        # garde, elle, n'a pas de filtre de famille et couvre tout le registre.
         "planity": "Otomata",           # le connecteur est le NÔTRE (natif depuis #913)
-        "atlassian": "Atlassian",
         # Les six canaux hébergés : le message part chez Unipile, qui détient la
         # session du compte opéré. Déclaré une seule fois, chez le porteur de la clé.
         "linkedin_unipile": "Unipile",

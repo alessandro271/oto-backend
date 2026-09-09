@@ -43,8 +43,8 @@ _KNOWN: dict[str, str] = {
     # (302, sans en-tête d'auth). Hors contrat capacité (JSON + autz).
     "/api/zoho/oauth/callback": NATURE,
     "/api/google/oauth/callback": NATURE,
-    "/api/folkmcp/oauth/callback": NATURE,
-    "/api/atlassian/oauth/callback": NATURE,
+    # (`/api/atlassian/oauth/callback` et `/api/folkmcp/oauth/callback` ont quitté
+    # cette liste le 2026-09-09 : partis avec la fédération MCP, ADR 0069.)
     "/api/salesforce/oauth/callback": NATURE,
     # --- Webhooks : un tiers appelle, non authentifié côté Logto.
     # (`/api/unipile/webhook` a quitté cette liste le 2026-08-29, #581 : dormant depuis

@@ -44,8 +44,7 @@ def test_les_connecteurs_a_flux_sont_ceux_quon_attend():
     coïncidence, sans que rien ne l'impose et sans que ce garde-fou les voie (#300).
     """
     assert set(connector_flow.entries()) == {
-        "zoho", "zohodesk", "zohoanalytics", "salesforce",
-        "atlassian", "folkmcp", "google",
+        "zoho", "zohodesk", "zohoanalytics", "salesforce", "google",
         # Le compte `unipile` GARDE son flux multi-canal (code de production) ; le
         # split du 2026-08-28 ajoute un flux par canal, sans paramètre — le canal
         # est dérivé du connecteur au lieu d'être choisi dans une liste.
@@ -147,12 +146,14 @@ _NOMMES_TOLERES = {
     # dans la même fenêtre, donc pas mort — la mesure tranche route par route, jamais
     # par famille de connecteur.
     #
+    # ⚠️ `.status` d'atlassian/folkmcp est sorti à son tour le 2026-09-09, avec le
+    # MÉCANISME : la fédération MCP est retirée (ADR 0069). La dette de front ne
+    # porte donc plus que sur google.
+    #
     # ⚠️ `.disconnect` d'atlassian/folkmcp SORTI le même jour, même mesure : 0 appel/30j
     # AVANT et APRÈS le bascule dashboard vers `me.connector_disconnect` — zéro
     # indépendant du timing. `.status` des deux RESTE : trafic réel mesuré 3 jours avant
     # le bascule (folkmcp, 01/09) — remesure prévue après le 04/10/2026.
-    "me.federation.atlassian.status",
-    "me.federation.folkmcp.status",
     "me.federation.google.start",
     "me.federation.google.status",
     "me.federation.google.revoke",

@@ -107,13 +107,20 @@ def test_le_registre_expose_bien_la_doc():
 # --- les valeurs dérivées ------------------------------------------------------
 
 def test_lurl_de_rappel_suit_lenvironnement(monkeypatch):
-    """Le bug qu'on ne veut pas réintroduire en passant au fichier : la doc
-    d'atlassian et de folkmcp écrivait le domaine de PREPROD en dur, servi tel quel
-    aux clients de production — qui se prenaient un `redirect_uri_mismatch` dont le
-    message les accusait, eux."""
+    """Le bug qu'on ne veut pas réintroduire en passant au fichier : la doc de deux
+    connecteurs écrivait le domaine de PREPROD en dur, servi tel quel aux clients de
+    production — qui se prenaient un `redirect_uri_mismatch` dont le message les
+    accusait, eux.
+
+    ⚠️ **Sur un corps SYNTHÉTIQUE depuis le 2026-09-09.** Les deux seules fiches qui
+    portaient le marqueur (`atlassian`, `folkmcp`) sont parties avec la fédération MCP
+    (ADR 0069) ; `_resoudre` reste du code vivant, générique et sans consommateur au
+    catalogue. On exerce donc le résolveur lui-même : c'est LUI que le bug traversait,
+    et la fiche qui le rappellera un jour le trouvera verrouillé."""
     monkeypatch.setenv("OTO_MCP_PUBLIC_URL", "https://mcp.example.test")
-    corps = "\n".join(s.body_md for s in connector_docs.sections_for("atlassian"))
-    assert "https://mcp.example.test/api/atlassian/oauth/callback" in corps
+    corps = connector_docs._resoudre(
+        "Colle cette URL chez le fournisseur : {{callback:/api/exemple/oauth/callback}}")
+    assert "https://mcp.example.test/api/exemple/oauth/callback" in corps
     assert "{{callback" not in corps, "marqueur non résolu, servi tel quel à l'utilisateur"
 
 

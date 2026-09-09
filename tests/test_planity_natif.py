@@ -111,8 +111,6 @@ def _outil(coeur, nom):
 def test_planity_est_un_connecteur_natif_et_plus_un_mcp_federe():
     c = providers.REGISTRY["planity"]
     assert c.kind == "tools"
-    assert c.mount_url is None and c.mount_strip_prefix is None
-    assert c not in providers.MOUNT_CONNECTORS
     # `family` est DÉRIVÉE du kind : elle disait « federated », elle dit « api ».
     assert c.family == "api"
 

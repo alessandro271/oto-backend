@@ -54,7 +54,6 @@ def all_tools():
 def test_promptwatch_is_fields_credential_connector():
     c = providers.REGISTRY["promptwatch"]
     assert c.kind == "tools"
-    assert c.mount_url is None
     assert not c.keyed
     assert c.secret_kind == "fields"
     field_names = {f.name for f in c.credential_fields}
@@ -73,10 +72,6 @@ def test_promptwatch_is_byo_only_no_platform_mode():
 
 def test_promptwatch_deny_by_default():
     assert providers.REGISTRY["promptwatch"].default_active is False
-
-
-def test_promptwatch_not_a_mount():
-    assert all(c.name != "promptwatch" for c in providers.MOUNT_CONNECTORS)
 
 
 # --- surface MCP --------------------------------------------------------------

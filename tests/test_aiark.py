@@ -39,8 +39,7 @@ def all_tools():
 
 def test_aiark_is_classic_keyed_connector():
     c = providers.REGISTRY["aiark"]
-    assert c.kind == "tools"            # plus un mount fédéré
-    assert c.mount_url is None          # entrée mount retirée
+    assert c.kind == "tools"            # plus un MCP fédéré
     assert c.keyed and c.secret_kind == "api_key"
     assert "aiark" in providers.KEY_PROVIDERS
 
@@ -50,10 +49,6 @@ def test_aiark_supports_platform_mode():
     # mode plateforme désormais possible (record_platform_usage dans les handlers)
     assert "platform" in c.auth_modes
     assert c.auth_modes == frozenset({"byo_user", "byo_org", "platform"})
-
-
-def test_aiark_no_longer_a_mount():
-    assert all(c.name != "aiark" for c in providers.MOUNT_CONNECTORS)
 
 
 # --- surface MCP --------------------------------------------------------------

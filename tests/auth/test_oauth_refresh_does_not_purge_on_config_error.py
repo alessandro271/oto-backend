@@ -1,13 +1,12 @@
 """Un 4xx de CONFIGURATION ne doit pas détruire un credential valide.
 
-Les flux OAuth fédérés lèvent `*ReauthRequired` depuis `_refresh` quand — et
+Les flux OAuth lèvent `*ReauthRequired` depuis leur refresh quand — et
 SEULEMENT quand — le GRANT est mort (`oauth_flow.grant_is_dead`). L'appelant
 (`access_token_for`) réagit à cette exception : jusqu'au 2026-09-04 il PURGEAIT la
 ligne du coffre (`clear_credential`) ; depuis oto#25 lot (a), il la MARQUE rejetée
 (`update_meta` → `meta.health_ko`/`health_reason`, motif brut) et la laisse en
 place — purger rendait « révoqué » indiscernable de « jamais posé ». Ce
-comportement du CALLER est verrouillé par
-`test_oauth_dead_grant_marks_rejected.py`, pas ici.
+comportement du CALLER est verrouillé par `test_google_health_marking.py`, pas ici.
 
 Mais jusqu'ici, TOUT 400/401 levait cette exception. Or un serveur d'autorisation
 répond 400 aussi pour `invalid_client`, `invalid_request`, `unauthorized_client` :
@@ -17,8 +16,13 @@ et l'utilisateur devait tout reconnecter — pour une faute de frappe qui n'avai
 rien cassé côté fournisseur.
 
 La distinction vit dans `oauth_flow.grant_is_dead` (une règle, ses appelants).
-Ce fichier verrouille la règle ET le fait que `_refresh` lui-même (pas l'appelant,
-cf. plus haut) la respecte dans atlassian/folk.
+Ce fichier verrouille la règle ET le fait que le refresh lui-même (pas l'appelant,
+cf. plus haut) la respecte.
+
+⚠️ **Le tripwire portait sur `atlassian` et `folk` jusqu'au 2026-09-09** ; ils sont
+partis avec la fédération MCP (ADR 0069). Il porte désormais sur **google**, le
+consommateur vivant de `grant_is_dead` — même règle, même conséquence, et c'est
+le connecteur pour lequel une purge à tort ferait le plus de dégâts.
 """
 import pytest
 
@@ -71,43 +75,32 @@ class _Resp:
 
 
 def _patch_post(monkeypatch, mod, resp):
-    """Neutralise le réseau ET la résolution de client. ⚠️ `_client_id()` d'atlassian
-    et folk déclenche un enregistrement DCR si le client n'est pas connu — un test ne
-    doit jamais enregistrer un client OAuth chez un fournisseur."""
+    """Neutralise le réseau ET la résolution de client — un test ne doit jamais
+    joindre un fournisseur ni enregistrer un client OAuth chez lui."""
     import requests
     monkeypatch.setattr(requests, "post", lambda *a, **k: resp)
     if hasattr(mod, "_client_id"):
         monkeypatch.setattr(mod, "_client_id", lambda: "client-de-test")
+    if hasattr(mod, "_client_secret"):
+        monkeypatch.setattr(mod, "_client_secret", lambda: "secret-de-test")
     if hasattr(mod, "_basic_auth"):
         monkeypatch.setattr(mod, "_basic_auth", lambda: "dGVzdDp0ZXN0")
 
 
-@pytest.mark.parametrize("modname,excname", [
-    ("atlassian", "AtlassianReauthRequired"),
-    ("folk", "FolkReauthRequired"),
-])
-def test_dead_grant_still_raises_reauth(monkeypatch, modname, excname):
-    import importlib
-    mod = importlib.import_module(f"oto_mcp.auth.{modname}")
-    exc = getattr(mod, excname)
+def test_dead_grant_still_raises_reauth(monkeypatch):
+    from oto_mcp.auth import google as mod
     _patch_post(monkeypatch, mod, _Resp(400, '{"error":"invalid_grant"}'))
-    with pytest.raises(exc):
-        mod._refresh("tok")
+    with pytest.raises(mod.GoogleReauthRequired):
+        mod._refresh_access_token("tok")
 
 
-@pytest.mark.parametrize("modname,excname", [
-    ("atlassian", "AtlassianReauthRequired"),
-    ("folk", "FolkReauthRequired"),
-])
-def test_config_error_does_NOT_raise_reauth(monkeypatch, modname, excname):
+def test_config_error_does_NOT_raise_reauth(monkeypatch):
     """TRIPWIRE — le cœur du correctif : sur `invalid_client`, l'exception de réauth
     ne doit PAS être levée, sinon l'appelant purge. Une autre erreur remonte, c'est
     voulu : un incident de config doit se voir."""
-    import importlib
-    mod = importlib.import_module(f"oto_mcp.auth.{modname}")
-    exc = getattr(mod, excname)
+    from oto_mcp.auth import google as mod
     _patch_post(monkeypatch, mod, _Resp(400, '{"error":"invalid_client"}'))
     with pytest.raises(Exception) as e:
-        mod._refresh("tok")
-    assert not isinstance(e.value, exc), (
-        f"{modname}: un invalid_client lève encore la réauth → purge du credential")
+        mod._refresh_access_token("tok")
+    assert not isinstance(e.value, mod.GoogleReauthRequired), (
+        "google : un invalid_client lève encore la réauth → purge du credential")

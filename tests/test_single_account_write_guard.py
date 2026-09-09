@@ -81,12 +81,19 @@ def test_multi_field_credential_is_multi_account(name):
     assert con.secret_kind == "fields" and con.auth_multi_account is True
 
 
-@pytest.mark.parametrize("name", ["unipile", "atlassian", "crunchbase", "culture"])
+@pytest.mark.parametrize("name", ["unipile", "crunchbase", "culture"])
 def test_excluded_families_stay_single_account(name):
     """Les deux familles exclues pour une raison qui n'est PAS la forme du
     credential — porteur d'identité cross-org (barreau de cascade mono par
     construction) et flux à consentement OAuth/cookie (N comptes = N
-    consentements) — plus l'open-data, qui n'a pas de credential du tout."""
+    consentements) — plus l'open-data, qui n'a pas de credential du tout.
+
+    ⚠️ `atlassian` tenait la place du consentement **OAuth** mono-compte jusqu'au
+    2026-09-09 (parti avec la fédération MCP, ADR 0069). Il n'a PAS de remplaçant :
+    `crunchbase` couvre la moitié cookie, et le seul `secret_kind="oauth"` restant,
+    `google`, est multi-compte par construction. Cette moitié-là n'est donc plus
+    représentée — à re-couvrir le jour où un connecteur OAuth mono-compte arrive,
+    plutôt que de faire semblant avec un connecteur qui ne l'est pas."""
     assert providers.REGISTRY[name].auth_multi_account is False
 
 

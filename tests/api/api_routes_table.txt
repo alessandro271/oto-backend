@@ -56,8 +56,6 @@ GET,HEAD /api/fr/accords/themes -> themes
 OPTIONS /api/fr/accords/themes -> options_handler
 GET,HEAD /api/fr/accords/{id_or_numero} -> get_one
 OPTIONS /api/fr/accords/{id_or_numero} -> options_handler
-GET,HEAD /api/atlassian/oauth/callback -> callback
-GET,HEAD /api/folkmcp/oauth/callback -> callback
 GET,HEAD /api/zoho/oauth/callback -> callback
 GET,HEAD /api/salesforce/oauth/callback -> callback
 POST /api/me/orgs -> _handler
@@ -400,10 +398,6 @@ GET,HEAD /api/me/unipile -> _handler
 OPTIONS /api/me/unipile -> options_handler
 DELETE /api/me/unipile -> _handler
 OPTIONS /api/me/unipile -> options_handler
-GET,HEAD /api/atlassian/oauth/status -> _handler
-OPTIONS /api/atlassian/oauth/status -> options_handler
-GET,HEAD /api/folkmcp/oauth/status -> _handler
-OPTIONS /api/folkmcp/oauth/status -> options_handler
 GET,HEAD /api/google/oauth/start -> _handler
 OPTIONS /api/google/oauth/start -> options_handler
 GET,HEAD /api/google/oauth/status -> _handler

@@ -2,10 +2,19 @@
 
 `atlassian` et `folkmcp` n'ont jamais migré au scope membre (ADR 0033 — Google l'a
 fait en B3, commit 79759702 ; ces deux-là ont été laissés de côté, DÉLIBÉRÉMENT,
-au même moment). Leur credential vit à `("user", sub)`, un scope que le walker ne
+au même moment). Leur credential vivait à `("user", sub)`, un scope que le walker ne
 consultait pas du tout : une résolution générique (`connectors.verify` en
 `level=auto`) rendait « aucune clé configurée » alors que la clé existe et
 authentifie — vécu le 04/09/2026, script direct sur `access.resolve_credential`.
+
+⚠️ **Les deux occupants sont partis le 2026-09-09** avec la fédération MCP (ADR
+0069), et `LEGACY_USER_SCOPE_PROVIDERS` est désormais **vide** — mais le barreau,
+lui, est GARDÉ : le scope `("user", sub)` existe toujours en base, des lignes y
+dorment, et c'est sa seule marche de lecture. Un barreau gardé doit rester
+verrouillé, sinon il pourrit sans que rien ne le dise. Ce banc injecte donc un
+occupant **SYNTHÉTIQUE** dans la liste fermée (`zoho`, un connecteur réel qui n'y
+est pas) : ce qui est exercé est bien la mécanique du barreau, pas un connecteur
+du catalogue. Même parti que l'ancien banc du mount no-auth, pour la même raison.
 
 Ce fichier fige trois choses : le gate (liste FERMÉE, mono-compte, jamais
 cross-sub), le comportement par l'entrée PUBLIQUE réelle (`resolve_credential` —
@@ -24,6 +33,21 @@ from oto_mcp.connectors import link as connector_link
 from oto_mcp.auth import google as google_oauth  # noqa: F401,E402
 
 
+# Le connecteur SYNTHÉTIQUE injecté dans la liste fermée (cf. docstring) : réel au
+# registre, mais rangé au scope MEMBRE dans la vraie vie — il n'est là que pour
+# donner un occupant au barreau, jamais pour décrire le catalogue.
+_LEGACY_SYNTH = "planity"
+_HORS_LISTE = "slack"
+
+
+@pytest.fixture(autouse=True)
+def _occupant_synthetique(monkeypatch):
+    """La liste fermée est VIDE en vrai (ADR 0069) ; on lui donne un occupant pour
+    que la mécanique du barreau reste exercée. `access` propage l'écriture jusqu'à
+    `cascade` (façade `_Facade.__setattr__`), c'est ce qui rend l'injection réelle."""
+    monkeypatch.setattr(access, "LEGACY_USER_SCOPE_PROVIDERS", (_LEGACY_SYNTH,))
+
+
 # --- le barreau, en isolation (sondes injectées, pas de coffre) --------------
 
 def _probe(*, legacy=False):
@@ -36,7 +60,7 @@ def _probe(*, legacy=False):
 
 
 def test_legacy_rung_fires_for_a_closed_list_provider():
-    win = access.cascade_winner("u1", "atlassian", org=1, group=None,
+    win = access.cascade_winner("u1", _LEGACY_SYNTH, org=1, group=None,
                                 probe=_probe(legacy=True))
     assert win is not None
     assert win.mode == "user" and win.entity_type == credentials_store.USER
@@ -48,13 +72,13 @@ def test_legacy_rung_never_fires_off_the_closed_list():
     décide. Sinon un provider qui n'a jamais écrit à ce scope se mettrait à y
     être lu parce qu'une sonde répond `True` (bug de sonde, ou provider mal
     câblé) : le gate doit couper AVANT que la sonde ne soit même consultée."""
-    win = access.cascade_winner("u1", "zoho", org=1, group=None,
+    win = access.cascade_winner("u1", _HORS_LISTE, org=1, group=None,
                                 probe=_probe(legacy=True))
     assert win is None
 
 
 def test_legacy_rung_needs_an_identity():
-    win = access.cascade_winner(None, "atlassian", org=1, group=None,
+    win = access.cascade_winner(None, _LEGACY_SYNTH, org=1, group=None,
                                 probe=_probe(legacy=True))
     assert win is None
 
@@ -62,7 +86,7 @@ def test_legacy_rung_needs_an_identity():
 def test_legacy_rung_is_org_independent():
     """Ni `org=None` ni un changement d'org n'affectent ce barreau — c'est
     précisément le point du scope legacy : il n'a jamais porté de dimension org."""
-    win = access.cascade_winner("u1", "atlassian", org=None, group=None,
+    win = access.cascade_winner("u1", _LEGACY_SYNTH, org=None, group=None,
                                 probe=_probe(legacy=True))
     assert win is not None and win.mode == "user"
 
@@ -70,6 +94,11 @@ def test_legacy_rung_is_org_independent():
 # --- par l'entrée publique RÉELLE (resolve_credential), pas le walker seul --
 
 def _wire(monkeypatch, vault: dict, *, current_org=1):
+    # Mono-compte, comme l'étaient les deux occupants historiques du barreau : la
+    # cardinalité se lit en base (`connectors.cardinality`), et ce banc n'en a pas —
+    # le sujet ici est le barreau legacy, pas la sélection de compte.
+    from oto_mcp.access import cascade as _cascade
+    monkeypatch.setattr(_cascade, "_is_multi_account", lambda p, o=None: False)
     monkeypatch.setattr(access, "require_connector_access", lambda p, s=None: None)
     monkeypatch.setattr(access, "current_org", lambda sub: current_org)
     monkeypatch.setattr(access, "current_group", lambda sub: None)
@@ -84,9 +113,9 @@ def test_un_membre_avec_une_ligne_legacy_se_resout_par_un_appel_reel(monkeypatch
     """Le banc précis demandé sur #876 : membre A a une ligne `("user", "A",
     "atlassian")` posée — `resolve_credential` (l'entrée RÉELLE, celle que
     `connectors.verify` en `level=auto` emprunte) la trouve et la rend."""
-    vault = {("user", "A", "atlassian"): "REFRESH-A"}
+    vault = {("user", "A", _LEGACY_SYNTH): "REFRESH-A"}
     _wire(monkeypatch, vault)
-    rc = access.resolve_credential("atlassian", sub="A", want="auto",
+    rc = access.resolve_credential(_LEGACY_SYNTH, sub="A", want="auto",
                                    emit_on_failure=False)
     assert rc.key == "REFRESH-A"
     assert rc.mode == "user" and rc.entity_type == credentials_store.USER
@@ -94,10 +123,10 @@ def test_un_membre_avec_une_ligne_legacy_se_resout_par_un_appel_reel(monkeypatch
 
 
 def test_un_autre_membre_de_la_meme_org_ne_la_voit_pas(monkeypatch):
-    vault = {("user", "A", "atlassian"): "REFRESH-A"}
+    vault = {("user", "A", _LEGACY_SYNTH): "REFRESH-A"}
     _wire(monkeypatch, vault, current_org=1)   # même org que A
     with pytest.raises(McpError):
-        access.resolve_credential("atlassian", sub="B", want="auto",
+        access.resolve_credential(_LEGACY_SYNTH, sub="B", want="auto",
                                    emit_on_failure=False)
 
 
@@ -105,10 +134,10 @@ def test_un_org_admin_ne_la_voit_pas_non_plus(monkeypatch):
     """`resolve_credential` n'a pas de chemin dédié « pour un admin » — il résout
     toujours SOUS LE SUB de l'appel. Ce test fige que ce chemin ne rend jamais
     la ligne d'un membre à quelqu'un d'autre, admin compris."""
-    vault = {("user", "A", "atlassian"): "REFRESH-A"}
+    vault = {("user", "A", _LEGACY_SYNTH): "REFRESH-A"}
     _wire(monkeypatch, vault, current_org=1)
     with pytest.raises(McpError):
-        access.resolve_credential("atlassian", sub="admin-sub", want="auto",
+        access.resolve_credential(_LEGACY_SYNTH, sub="admin-sub", want="auto",
                                    emit_on_failure=False)
 
 
@@ -124,21 +153,25 @@ def test_un_org_admin_ne_la_voit_pas_non_plus(monkeypatch):
 _PLAFOND = 2
 
 
-def test_liste_fermee_ne_grandit_pas_en_silence():
+def test_la_liste_fermee_reelle_est_vide(monkeypatch):
+    """⚠️ Lit la liste RÉELLE, hors injection (`undo` de la fixture autouse) : depuis
+    le 2026-09-09 elle est VIDE, ses deux occupants étant partis avec la fédération
+    MCP (ADR 0069). Un nom qui y réapparaîtrait rendrait le scope legacy lisible pour
+    un connecteur qui n'y écrit pas — décision à relire (#876), jamais un ajout
+    silencieux. Si voulu, c'est ICI qu'on l'inscrit, dans le même commit."""
+    monkeypatch.undo()
     entries = access.LEGACY_USER_SCOPE_PROVIDERS
     assert len(entries) <= _PLAFOND, (
-        f"{entries!r} dépasse le plafond {_PLAFOND} — un provider de plus vient "
-        "d'atteindre le scope legacy (\"user\", sub) par le walker de cascade : "
-        "décision à relire (#876), pas un ajout silencieux. Si voulu, monte le "
-        "plafond ICI, dans le même commit.")
-    assert set(entries) == {"atlassian", "folkmcp"}, (
+        f"{entries!r} dépasse le plafond {_PLAFOND}.")
+    assert set(entries) == set(), (
         f"provider inattendu dans la liste fermée : {entries!r}")
 
 
-def test_liste_fermee_nest_pas_celle_de_connector_link():
+def test_liste_fermee_nest_pas_celle_de_connector_link(monkeypatch):
     """Ce n'est PAS `connectors.link.entries()` : `google` y est AUSSI (lecteur
     de lien pour `/api/me`), migré au scope membre depuis longtemps. Les
     confondre relirait le scope legacy pour un connecteur déjà migré, sur la
     foi d'une ligne pré-migration qui aurait pu ne pas être purgée."""
+    monkeypatch.undo()
     assert "google" in connector_link.entries()
     assert "google" not in access.LEGACY_USER_SCOPE_PROVIDERS

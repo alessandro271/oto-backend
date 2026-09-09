@@ -42,7 +42,6 @@ def all_tools():
 def test_cognism_is_classic_keyed_connector():
     c = providers.REGISTRY["cognism"]
     assert c.kind == "tools"
-    assert c.mount_url is None
     assert c.keyed and c.secret_kind == "api_key"
     assert "cognism" in providers.KEY_PROVIDERS
 
@@ -59,10 +58,6 @@ def test_cognism_platform_mode_is_grant_only():
 def test_cognism_deny_by_default():
     c = providers.REGISTRY["cognism"]
     assert c.default_active is False
-
-
-def test_cognism_no_longer_a_mount():
-    assert all(c.name != "cognism" for c in providers.MOUNT_CONNECTORS)
 
 
 # --- surface MCP --------------------------------------------------------------
