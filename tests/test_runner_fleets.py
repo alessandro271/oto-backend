@@ -288,14 +288,21 @@ def test_l_org_manquante_prime_sur_la_beta(monkeypatch):
     assert e.value.code == "org_required"
 
 
-# ── La borne par ligne : obligatoire, plafonnée, et son produit dit ──────────
-# Décision d'Alexis du 09/09/2026, après un incident : 52 campagnes déclaraient
-# 1 500 000 jetons par ligne. La somme cumulée n'étant pas appliquée, la seule
-# borne réelle d'un passage était `max_rows × max_tokens_per_row` — 150 millions.
+# ── La borne par ligne : POSABLE, et son produit dit à l'armement ───────────
+# ⚠️ Arbitrage d'Alexis, 09/09/2026, verbatim : « Une borne doit pouvoir être
+# posée, si pas de borne, tant pis pour le moment (ou plutôt : pour le moment ça
+# s'arrêtera à la fenêtre de contexte du LLM). »
 #
-# ⚠️ Le plafond vient d'une DISTRIBUTION, pas d'un ordre de grandeur plausible :
-# 4 520 travaux réels, médiane 786, p95 32 914, p99 60 004, MAXIMUM 128 902.
-# 200 000 = 1,55 × ce maximum, et zéro travail historique refusé.
+# Le serveur ne REFUSE donc rien : ni l'absence, ni une valeur haute. J'avais
+# livré un plafond à 200 000 — il aurait cassé 86 déclarations existantes à
+# 1,5 M, dont une de production. Une garde que personne n'a demandée, posée sur
+# une distribution mesurée, reste une garde posée de son chef.
+#
+# Ce qui reste : un champ qui borne quand il est posé, rien quand il ne l'est
+# pas, et le PRODUIT montré au moment où l'on engage — c'est la seule partie qui
+# aurait vraiment servi, celle qui aurait affiché les 150 millions à celui qui
+# armait.
+
 
 def _creation(**kw):
     base = dict(op="create", label="passage", procedure="p", tools=["data_rows"],
@@ -304,65 +311,48 @@ def _creation(**kw):
     return base
 
 
-def test_creer_SANS_borne_par_ligne_reste_permis(monkeypatch):
-    """⚠️ Arbitrage d'Alexis du 09/09/2026 : le plafond oui, l'obligation non.
-    Une campagne peut n'en déclarer aucune — elle n'a alors aucun plafond de
-    dépense, et c'est un choix assumé. Ce banc affirmait l'inverse ; il gravait
-    une décision qui n'avait pas été prise."""
+def test_creer_sans_borne_par_ligne_est_permis(monkeypatch):
     from oto_mcp import db
     monkeypatch.setattr(db, "create_fleet", lambda *a, **k: {"id": 1})
     _appel(_ctx(), **_creation(max_tokens_per_row=None))
 
 
-def test_une_borne_AU_DELA_du_plafond_est_refusee():
-    """C'est la valeur de l'incident : 1 500 000 par ligne, soit douze fois le
-    travail le plus cher jamais mesuré. Au-delà du plafond, ce n'est plus une
-    borne, c'est son absence déclarée en chiffres."""
-    with pytest.raises(AuthzDenied) as e:
-        _appel(_ctx(), **_creation(max_tokens_per_row=1_500_000))
-    assert e.value.code == "budget_par_ligne_trop_haut"
-    assert str(RF.MAX_TOKENS_PAR_LIGNE) in e.value.message
+def test_une_borne_HAUTE_est_permise(monkeypatch):
+    """Le bord qui compte après l'arbitrage : 1,5 M passe. Refuser aurait cassé
+    des déclarations vivantes, dont une de production."""
+    from oto_mcp import db
+    monkeypatch.setattr(db, "create_fleet", lambda *a, **k: {"id": 1})
+    _appel(_ctx(), **_creation(max_tokens_per_row=1_500_000))
 
 
-def test_le_plafond_ne_refuse_AUCUN_travail_historique():
-    """L'autre bord, et c'est lui qui dit si la garde est posée au bon endroit :
-    une borne qui refuserait du travail qui marchait serait un dégât, pas une
-    protection. Le maximum observé sur 4 520 travaux est 128 902."""
-    assert RF.MAX_TOKENS_PAR_LIGNE > 128_902, (
-        "le plafond doit laisser passer le travail le plus cher jamais mesuré")
-
-
-def test_armer_une_campagne_AU_DELA_du_plafond_est_refuse(monkeypatch):
-    """Une campagne déclarée avant ce plafond peut le dépasser, et c'est
-    l'armement qui engage la dépense — pas la déclaration. Le refus nomme sa
-    destination : sans elle, on relit le même appel."""
+def test_l_armement_MONTRE_le_pire_cas(monkeypatch):
+    """`max_rows × max_tokens_per_row` = la dépense maximale du passage, dite au
+    moment où on l'engage. Une borne invisible ne borne personne."""
     from oto_mcp import db, roles
     monkeypatch.setattr(roles, "is_org_admin", lambda *a, **k: True)
     monkeypatch.setattr(RF, "_run_courant", lambda: None)
-    monkeypatch.setattr(db, "get_fleet", lambda *a, **k: {
-        "id": 1, "status": "draft", "procedure": "p", "input": "x",
-        "max_tokens_per_row": 1_500_000})
-    with pytest.raises(AuthzDenied) as e:
-        _appel(_ctx(), op="launch", fleet_id=1)
-    assert e.value.code == "budget_par_ligne_invalide"
-    assert "op=update" in e.value.message
-
-
-def test_armer_SANS_borne_reste_permis(monkeypatch):
-    """Le bord de l'arbitrage : l'absence de borne ne bloque pas l'armement."""
-    from oto_mcp import db, roles
-    monkeypatch.setattr(roles, "is_org_admin", lambda *a, **k: True)
-    monkeypatch.setattr(RF, "_run_courant", lambda: None)
-    monkeypatch.setattr(db, "get_fleet", lambda *a, **k: {
-        "id": 1, "status": "draft", "procedure": "p", "input": "x",
-        "max_tokens_per_row": None})
     monkeypatch.setattr(RF, "_lignes_visees", lambda *a, **k: 0)
+    monkeypatch.setattr(db, "get_fleet", lambda *a, **k: {
+        "id": 1, "status": "draft", "procedure": "p", "input": "x"})
     monkeypatch.setattr(db, "armer", lambda *a, **k: {
-        "id": 1, "max_rows": None, "max_tokens_per_row": None})
-    rendu = _appel(_ctx(), op="launch", fleet_id=1)
-    assert rendu["budget_max_tokens"] is None, (
-        "sans borne il n'y a pas de pire cas — `null` le DIT, là où un nombre "
-        "fabriqué ferait croire à une protection")
+        "id": 1, "max_rows": 100, "max_tokens_per_row": 1_500_000})
+
+    assert _appel(_ctx(), op="launch", fleet_id=1)["budget_max_tokens"] == 150_000_000
+
+
+def test_sans_borne_le_pire_cas_est_NULL_et_non_un_nombre(monkeypatch):
+    """Sans borne il n'y a pas de pire cas. `null` le dit ; un nombre fabriqué
+    ferait croire à une protection qui n'existe pas."""
+    from oto_mcp import db, roles
+    monkeypatch.setattr(roles, "is_org_admin", lambda *a, **k: True)
+    monkeypatch.setattr(RF, "_run_courant", lambda: None)
+    monkeypatch.setattr(RF, "_lignes_visees", lambda *a, **k: 0)
+    monkeypatch.setattr(db, "get_fleet", lambda *a, **k: {
+        "id": 1, "status": "draft", "procedure": "p", "input": "x"})
+    monkeypatch.setattr(db, "armer", lambda *a, **k: {
+        "id": 1, "max_rows": 100, "max_tokens_per_row": None})
+
+    assert _appel(_ctx(), op="launch", fleet_id=1)["budget_max_tokens"] is None
 
 
 # ── La température : déclarée par PASSAGE, jamais posée dans l'environnement ──

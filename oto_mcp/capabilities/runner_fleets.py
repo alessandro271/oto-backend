@@ -107,56 +107,6 @@ def _bornes_valides(inp: "FleetInput") -> None:
 #: qui, faute d'application de la somme cumulée, faisait de `max_rows ×
 #: max_tokens_per_row` — 150 millions — la seule borne réelle d'un passage.
 #:
-#: ⚠️ La valeur vient d'une DISTRIBUTION, pas d'un ordre de grandeur plausible.
-#: Un plafond posé au jugé fait l'un des deux dégâts sans qu'on sache lequel
-#: avant qu'il morde : trop bas il refuse du travail légitime en pleine
-#: campagne, trop haut il ne protège de rien tout en donnant le sentiment
-#: d'avoir réglé la question.
-#:
-#: Mesuré sur 4 520 travaux réellement exécutés (journaux du 08-09/09/2026) :
-#:
-#:     médiane      786     p90   22 823     p95   32 914
-#:     p99       60 004     MAXIMUM OBSERVÉ  128 902
-#:
-#: La médiane est basse parce que des milliers de travaux de l'incident ont
-#: conclu « file vide » en quelques secondes ; c'est le MAXIMUM qui fait
-#: plancher pour un plafond, jamais un centile.
-#:
-#: 200 000 = 1,55 × le maximum observé, et **zéro travail historique refusé**
-#: (à 150 000 aussi, mais 16 % de marge est trop mince ; à 100 000, sept
-#: travaux tombaient). Il refuse en revanche les 52 déclarations à 1 500 000 de
-#: l'incident, qui faisaient de `max_rows × max_tokens_per_row` — 150 millions —
-#: la seule borne réelle d'un passage, la somme cumulée n'étant pas appliquée.
-#:
-#: ⚠️ Calibré sur le régime AVANT la jointure de la consigne au travail, qui
-#: retire le tour le plus cher d'un déroulé. Le régime suivant consommera moins,
-#: donc ce plafond restera valide en s'élargissant — l'erreur serait dans
-#: l'autre sens.
-MAX_TOKENS_PAR_LIGNE = 200_000
-
-
-def _borne_par_ligne_plafonnee(inp: "FleetInput") -> None:
-    """La borne par ligne, quand elle est déclarée, ne dépasse pas le plafond.
-
-    ⚠️ Elle n'est PAS obligatoire — arbitrage d'Alexis du 09/09/2026. Une
-    campagne peut n'en déclarer aucune : elle n'a alors aucun plafond de dépense,
-    puisque la somme cumulée (`max_tokens`) n'est pas appliquée sur ce chemin et
-    que `max_rows` borne un NOMBRE de travaux, jamais des jetons. C'est un choix
-    assumé, pas un oubli — et `budget_max_tokens` rendu à l'armement vaut alors
-    `null`, ce qui le dit plutôt que de le taire.
-
-    Ce qui est refusé, c'est une borne qui n'en est pas une : au-delà du plafond
-    serveur, déclarer un chiffre ne protège de rien tout en donnant le sentiment
-    d'avoir borné."""
-    v = inp.max_tokens_per_row
-    if v is not None and v > MAX_TOKENS_PAR_LIGNE:
-        raise AuthzDenied(
-            400, "budget_par_ligne_trop_haut",
-            f"`max_tokens_per_row`={v} dépasse le plafond serveur de "
-            f"{MAX_TOKENS_PAR_LIGNE}. Une ligne mesurée coûte 3 000 à 45 000 "
-            "jetons ; au-delà du plafond, ce n'est plus une borne, c'est son "
-            "absence. Baisse la valeur, ou découpe le passage.")
-
 class FleetInput(BaseModel):
     op: Literal["create", "list", "get", "state", "update", "launch", "stop",
                 "take", "beat", "ack_stop"]
@@ -337,7 +287,6 @@ def _fleets(ctx: ResolvedCtx, inp: FleetInput) -> dict:
                 400, "target_incomplete",
                 "`row_filter` sans `namespace` : un périmètre suppose un tableau. "
                 "Nomme la cible, ou n'en déclare aucune.")
-        _borne_par_ligne_plafonnee(inp)
         return {"fleet": db.create_fleet(
             ctx.org_id, ctx.sub, label=inp.label, procedure=inp.procedure,
             tools=inp.tools, namespace=inp.namespace, row_filter=inp.row_filter,
@@ -400,16 +349,6 @@ def _fleets(ctx: ResolvedCtx, inp: FleetInput) -> dict:
         # l'entrée. Une campagne déclarée avant cette garde, ou modifiée depuis,
         # n'a rien qui l'arrête ; et c'est l'armement qui engage la dépense, pas
         # la déclaration. Le refus nomme sa destination : `op=update`.
-        if avant is not None and avant.get("max_tokens_per_row") is not None:
-            v = int(avant["max_tokens_per_row"])
-            if v > MAX_TOKENS_PAR_LIGNE:
-                raise AuthzDenied(
-                    400, "budget_par_ligne_invalide",
-                    f"ce passage déclare `max_tokens_per_row`={v}, au-delà du "
-                    f"plafond serveur de {MAX_TOKENS_PAR_LIGNE}. Une campagne "
-                    "déclarée avant ce plafond peut le dépasser, et c'est "
-                    "l'armement qui engage la dépense — pas la déclaration. "
-                    "Corrige-la avec `op=update`, puis arme.")
         f = db.armer(inp.fleet_id, ctx.org_id,
                      rows_at_launch=_lignes_visees(ctx, inp.fleet_id))
         if not f:
