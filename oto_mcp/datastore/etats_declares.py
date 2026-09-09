@@ -22,20 +22,33 @@ déclaration ne coûtait rien à faire respecter.
 compte les lignes lues (9 421) et les cellules pleines examinées (8 646). Une sonde qui
 n'aurait rien regardé aurait rendu le même zéro.
 
-**Les TRANSITIONS aussi — et elles n'ont rien coûté.** Ce module ne jugeait d'abord que
-l'APPARTENANCE : une transition se juge entre deux valeurs, et seul l'état précédent de
-la file était transmis. J'avais donc annoncé un lot séparé. Deux mesures l'ont rendu
-inutile :
+**Les TRANSITIONS, elles, ne sont PAS jugées ici — et c'est une décision, pas un
+manque.** Je les avais branchées le 09/09/2026 après avoir mesuré que 100 des 132
+colonnes secondaires déclaraient des `transitions` inertes. La revue du tronc a demandé
+la mesure que je n'avais pas faite : combien de LIGNES sont assises dans un état sans
+sortie déclarée ?
 
-    100 des 132 colonnes secondaires déclarent des `transitions`  → inertes
-    la ligne d'AVANT est DÉJÀ chargée par le chemin d'écriture    → rien à payer
+    2 977 lignes · 62 tableaux · 15 propriétaires
 
-Le chemin charge la ligne dès qu'un `lifecycle` existe, et n'en extrayait **qu'une
-colonne**. Fermer ce cran n'ajoute aucune requête : il suffit de lire ce qui était là.
+⚠️ **Et leurs états disent pourquoi c'était faux** : `rejected`, `dropped`, `rejete`,
+`dead`, `skipped`. Ce sont exactement ceux d'où l'on doit pouvoir REVENIR. Refuser
+`signe → nouveau` n'interdit pas une transition métier : ça interdit de **réparer une
+erreur de saisie**. Une plateforme qui empêche de corriger une ligne classée à tort a un
+problème que la garde ne compense pas.
 
-⚠️ **Sans `avant`, le contrôle de transition ne s'arme pas, silencieusement — et c'est
-voulu.** Un appelant qui ne peut pas fournir l'état d'avant ne doit pas se voir refuser
-une transition qu'on est incapable de juger. L'appartenance, elle, reste vérifiée.
+**Le fond : `transitions` déclare le parcours NORMAL, pas la liste des gestes permis.**
+Lire « absent de `transitions` » comme « interdit » est une sur-interprétation — et sur
+un état terminal, dont la définition même est de n'avoir aucune sortie, elle rend le
+retour arrière impossible par construction.
+
+⚠️ **Un second défaut, aussi grave que le premier** : `avant` n'était transmis que sur
+DEUX chemins d'écriture sur trois — le patch par `_id` en était privé. Le même changement
+d'état était donc refusé ou accepté **selon la façon dont l'agent vise la ligne**. Une
+garde qui s'applique aux deux tiers n'empêche pas ce qu'elle vise : elle apprend à passer
+par le chemin qui ne contrôle pas.
+
+La colonne de FILE garde sa propre règle de transition : elle est antérieure, éprouvée,
+et son périmètre est le travail d'agents, pas la saisie humaine.
 """
 from __future__ import annotations
 
@@ -98,9 +111,6 @@ def etats_trahis(schema: Optional[dict], merged: dict, *,
             continue
         etats = {str(s) for s in (f["lifecycle"].get("states") or [])}
         if not etats or str(valeur) in etats:
-            # L'état est connu : reste à savoir si on avait le DROIT d'y aller.
-            if etats and str(valeur) in etats:
-                errors.extend(_transition_refusee(f, cle, valeur, avant))
             continue
         refus = (f"{cle}: état inconnu {valeur!r} — cette colonne déclare ses états "
                  f"(états: {sorted(etats)}). Elle n'est pas la file de travail du "
@@ -111,25 +121,3 @@ def etats_trahis(schema: Optional[dict], merged: dict, *,
         elif gelees is not None:
             gelees.append({"champ": str(cle), "refus": refus})
     return errors
-
-
-def _transition_refusee(f: dict, cle: str, valeur, avant: Optional[dict]) -> list[str]:
-    """Le passage d'un état à l'autre est-il déclaré permis ?
-
-    ⚠️ **La valeur d'AVANT se déballe elle aussi.** Dès la deuxième écriture la ligne
-    porte des couches : le cas normal est un objet, pas un mot. C'est le défaut qui a
-    arrêté une campagne le 29/08 — deux gestes voisins qui lisent la même colonne
-    doivent la lire pareil.
-    """
-    if not isinstance(avant, dict):
-        return []
-    transitions = f["lifecycle"].get("transitions")
-    if not isinstance(transitions, dict) or not transitions:
-        return []
-    ancien = unwrap(avant.get(cle))
-    if ancien is None or str(ancien) == str(valeur):
-        return []
-    permis = {str(t) for t in (transitions.get(str(ancien)) or [])}
-    if str(valeur) in permis:
-        return []
-    return [refus_de_transition(str(cle), str(ancien), str(valeur), sorted(permis))]

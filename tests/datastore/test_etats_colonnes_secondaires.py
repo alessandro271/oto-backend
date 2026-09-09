@@ -81,54 +81,44 @@ def test_une_colonne_a_bloc_SANS_liste_d_etats_ne_contraint_rien():
     assert dsv2.validate_row(schema, {"suivi": "n_importe_quoi"}) == []
 
 
-# ── les TRANSITIONS, sur les colonnes secondaires aussi ──────────────────────
+# ── les TRANSITIONS ne sont PAS jugées ici, et c'est mesuré ─────────────────
 
 TRANS = {"fields": [
     {"key": "statut", "lifecycle": {"states": ["a", "b"],
                                     "claimable": {"statut": "a"}}},
     {"key": "suivi", "lifecycle": {
         "states": ["nouveau", "relance", "signe"],
+        "terminal": ["signe"],
         "transitions": {"nouveau": ["relance"], "relance": ["signe"]}}},
 ]}
 
 
-def test_une_transition_declaree_permise_passe():
-    assert dsv2.validate_row(TRANS, {"suivi": "relance"},
-                             avant={"suivi": "nouveau"}) == []
+def test_revenir_d_un_etat_TERMINAL_reste_permis():
+    """⚠️ Garde branchée le 09/09/2026 puis RETIRÉE le même jour, sur la mesure qui
+    manquait. J'avais compté les DÉCLARATIONS — 100 colonnes sur 132 déclarent des
+    `transitions` inertes — sans compter les LIGNES que le refus atteindrait :
 
+        2 977 lignes · 62 tableaux · 15 propriétaires
 
-def test_un_saut_interdit_est_refuse_et_le_refus_dit_ce_qui_etait_permis():
-    """⚠️ Mesuré avant d'écrire : **100 des 132 colonnes secondaires du parc déclarent
-    des `transitions`** que rien ne vérifiait. Et la ligne d'avant était DÉJÀ chargée
-    par le chemin d'écriture — on n'en extrayait qu'une colonne. Fermer ce cran n'a
-    coûté aucune requête."""
-    errs = dsv2.validate_row(TRANS, {"suivi": "signe"}, avant={"suivi": "nouveau"})
-    assert errs and "transition" in errs[0]
-    assert "nouveau" in errs[0] and "signe" in errs[0]
-    assert "relance" in errs[0], "le refus doit nommer ce qui ÉTAIT permis"
+    Et leurs états disent pourquoi c'était faux : `rejected`, `dropped`, `rejete`,
+    `dead`, `skipped`. Refuser `signe → nouveau` n'interdit pas une transition métier :
+    ça interdit de **réparer une erreur de saisie**.
 
-
-def test_l_etat_d_avant_se_DEBALLE_lui_aussi():
-    """Dès la deuxième écriture la ligne porte des couches : le cas normal est un objet,
-    pas un mot. Lire la structure au lieu du contenu est le défaut qui a arrêté une
-    campagne le 29/08 — deux gestes voisins qui lisent la même colonne doivent la lire
-    pareil."""
-    assert dsv2.validate_row(
-        TRANS, {"suivi": "signe"},
-        avant={"suivi": {"valeur": "nouveau", "comment": "reçu"}}) != []
-    assert dsv2.validate_row(
-        TRANS, {"suivi": "relance"},
-        avant={"suivi": {"valeur": "nouveau", "comment": "reçu"}}) == []
-
-
-def test_SANS_l_etat_d_avant_la_transition_ne_s_arme_PAS():
-    """⚠️ Et c'est voulu : un appelant qui ne peut pas fournir l'état d'avant ne doit
-    pas se voir refuser une transition qu'on est incapable de juger. L'appartenance,
-    elle, reste vérifiée dans tous les cas."""
-    assert dsv2.validate_row(TRANS, {"suivi": "signe"}) == []
-    assert dsv2.validate_row(TRANS, {"suivi": "inconnu"}) != []
-
-
-def test_rester_dans_le_meme_etat_n_est_pas_une_transition():
+    `transitions` déclare le parcours NORMAL, pas la liste des gestes permis. Lire
+    « absent de `transitions` » comme « interdit » est une sur-interprétation — et sur
+    un état terminal, dont la définition est de n'avoir aucune sortie, elle rend le
+    retour arrière impossible par construction."""
     assert dsv2.validate_row(TRANS, {"suivi": "nouveau"},
+                             avant={"suivi": "signe"}) == []
+
+
+def test_un_saut_non_declare_reste_permis_lui_aussi():
+    assert dsv2.validate_row(TRANS, {"suivi": "signe"},
                              avant={"suivi": "nouveau"}) == []
+
+
+def test_mais_l_APPARTENANCE_reste_verifiee_dans_tous_les_cas():
+    """Ce qui a été retiré est le jugement du CHEMIN, pas celui de la valeur. Un état
+    hors de la liste déclarée reste refusé — c'est la garde gratuite, mesurée à zéro
+    violation sur 8 646 cellules."""
+    assert dsv2.validate_row(TRANS, {"suivi": "inconnu"}, avant={"suivi": "signe"}) != []
