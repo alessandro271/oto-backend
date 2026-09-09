@@ -28,7 +28,7 @@ from typing import Optional
 
 from ._conn import _connect
 from .query import _ds_filter_clauses
-from .rowabandon import abandonner_les_lignes_a_bout
+from .rowabandon import abandonner_les_lignes_a_bout, plafond_de
 
 # Les colonnes rendues avec une ligne réservée : son bail — À QUI, JUSQU'À QUAND et
 # POUR QUEL RUN —, et ce que la file sait d'elle : combien de fois elle a été prise
@@ -43,6 +43,69 @@ _RENDU = ("RETURNING row_id, created_at, updated_at, data, claimed_by, "
           "claimed_until, claimed_run, claims, abandon_reason, "
           "(claimed_until IS NOT NULL AND claimed_until > NOW())"
           "    AS claim_active")
+
+
+def _perimetre_reclamable(ns_id: int, filters: Optional[list],
+                          *, hors_plafond: Optional[int] = None) -> tuple:
+    """LA définition du périmètre réclamable — une seule, partagée.
+
+    `abandon_reason IS NULL` est un filet de PLATEFORME, indépendant du filtre du
+    client : une ligne sortie de la file ne se sert plus, même à un appelant qui ne
+    filtre sur rien. Le filtre dit ce que l'appelant VEUT ; ceci dit ce que le tableau
+    a le DROIT de servir.
+
+    ⚠️ **Extraite le 09/09/2026 pour que `claim_next` et `count_claimable` ne puissent
+    pas diverger.** La demande venait de l'ordonnanceur, et son motif est le bon : une
+    clause recopiée ailleurs *divergera* — c'est certain, pas probable — et une
+    divergence ferait arrêter une campagne qui a encore du travail. Une garde qui coupe
+    à tort est pire que pas de garde.
+
+    `hors_plafond` — voir `datastore_count_claimable` : c'est le seul écart entre les
+    deux appelants, et il est là parce que l'un écrit avant de lire et l'autre non.
+    """
+    fclauses, fparams = _ds_filter_clauses(filters)
+    where = ("WHERE ns_id = %s AND abandon_reason IS NULL "
+             "AND (claimed_until IS NULL OR claimed_until < NOW())")
+    params: list = [ns_id, *fparams]
+    for c in fclauses:
+        where += f" AND {c}"
+    if hors_plafond is not None:
+        where += " AND claims < %s"
+        params.append(int(hors_plafond))
+    return where, params
+
+
+def datastore_count_claimable(ns_id: int, *, filters: Optional[list] = None,
+                              max_claims: Optional[int] = None) -> int:
+    """Combien de lignes `claim_next` pourrait encore servir. Ne réserve rien, n'écrit
+    rien.
+
+    **Pourquoi il existe.** Une campagne dont la file est vide continuait de fabriquer
+    des travaux jusqu'à son plafond : la production ne regardait pas s'il restait
+    quelque chose. Mesuré le 09/09/2026 — 52 campagnes armées produisant en continu des
+    déroulés qui concluaient « file vide » en quelques secondes, jusqu'à ~50 refus
+    toutes les quatre minutes. Compter avant de fabriquer coûte un `COUNT` là où on
+    s'apprêtait à ouvrir un déroulé d'agent de plusieurs milliers de jetons.
+
+    ⚠️ **Ce comptage N'APPELLE PAS la passe d'abandon, et c'est délibéré : un comptage
+    qui écrit serait un piège.** Mais `claim_next`, lui, l'appelle avant de piocher —
+    elle marque `abandon_reason` sur les lignes à bout, qui sortent alors du périmètre.
+    Compter sans reproduire cet effet SUR-ESTIMERAIT, et sur-estimer est précisément le
+    défaut qu'on ferme : la campagne continuerait de produire pour des lignes que
+    `claim_next` refusera. D'où `claims < plafond`, qui exclut exactement ce que la
+    passe retirerait — sans rien écrire.
+
+    ⚠️ Le chiffre reste une PHOTO : entre le comptage et la réservation, un autre
+    worker peut avoir pris la dernière ligne. Il répond « reste-t-il du travail ? »,
+    jamais « cette réservation aboutira ».
+    """
+    where, params = _perimetre_reclamable(
+        ns_id, filters, hors_plafond=plafond_de(ns_id, max_claims))
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT count(*) AS n FROM datastore_rows {where}", tuple(params),
+        ).fetchone()
+    return int((row or {}).get("n") or 0)
 
 
 def datastore_claim_next(ns_id: int, *, worker: str, lease_seconds: int = 900,
@@ -62,16 +125,7 @@ def datastore_claim_next(ns_id: int, *, worker: str, lease_seconds: int = 900,
     ramasse les lignes à bout que personne n'a relâchées (agent mort, bail
     expiré) — le relâchement, lui, s'occupe du cas nominal."""
     abandonner_les_lignes_a_bout(ns_id, max_claims=max_claims)
-    fclauses, fparams = _ds_filter_clauses(filters)
-    # `abandon_reason IS NULL` est un filet de PLATEFORME, indépendant du filtre du
-    # client : une ligne sortie de la file ne se sert plus, même à un appelant qui
-    # ne filtre sur rien. Le filtre dit ce que l'appelant veut ; ceci dit ce que le
-    # tableau a le droit de servir.
-    where = ("WHERE ns_id = %s AND abandon_reason IS NULL "
-             "AND (claimed_until IS NULL OR claimed_until < NOW())")
-    params: list = [ns_id, *fparams]
-    for c in fclauses:
-        where += f" AND {c}"
+    where, params = _perimetre_reclamable(ns_id, filters)
     with _connect() as conn:
         picked = conn.execute(
             f"SELECT row_id FROM datastore_rows {where} "

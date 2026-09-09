@@ -102,6 +102,30 @@ def clauses(perimetre: Optional[dict]) -> list[dict]:
     était."""
     if not perimetre:
         return []
+    # ⚠️ **Le périmètre vient du SCHÉMA, pas de l'appel — et le refus doit le dire.**
+    #
+    # Incident du 09/09/2026 : un tableau portait `claimable: ["a_traiter"]` (une liste
+    # là où la grammaire de `filter` attend `{col: val}`). Posé avant que la pose ne
+    # garde cette forme, il est resté en base. À la réservation, cette fonction levait
+    # un `AttributeError` nu — `'list' object has no attribute 'items'`.
+    #
+    # Ce que ça a produit chez qui le reçoit est le vrai coût : **dix agents ont conclu
+    # que leur APPEL était fautif** et ont passé leur budget à varier leur formulation —
+    # 60 refus sur 81 appels, huit par travail, jusqu'au plafond de tours. Les dix se
+    # sont conclus « terminé » sans une seule écriture. Et la personne qui avait posé le
+    # schéma l'avait relu un quart d'heure plus tôt sans voir l'anomalie.
+    #
+    # Un refus qui décrit la FORME ATTENDUE d'un paramètre fait chercher la faute chez
+    # celui qui appelle. Quand la faute est dans une déclaration que l'appelant ne
+    # contrôle pas, le refus doit **dire où elle est et qui peut la corriger** — sans
+    # quoi il envoie tout le monde chercher au mauvais endroit, à chaque appel.
+    if not isinstance(perimetre, dict):
+        raise ValueError(
+            f"le tableau déclare un périmètre de réservation illisible dans SON SCHÉMA "
+            f"(`lifecycle.claimable` = {perimetre!r}, attendu {{colonne: valeur}}). "
+            f"⚠️ Ton appel n'y est pour rien : le réessayer autrement ne changera rien. "
+            f"C'est le schéma du tableau qui doit être corrigé, par qui le gouverne "
+            f"(`data_patch_schema`). Signale-le plutôt que d'insister.")
     from ..db.query import ds_filter_specs
     return ds_filter_specs(perimetre)
 
