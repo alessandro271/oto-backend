@@ -50,7 +50,7 @@ def _outils_spine_montes() -> list[str]:
     from oto_mcp.capabilities import _mcp_adapter, registry
 
     mcp = FastMCP("test-carte")
-    _tools.register_all(mcp, include_mounts=False)
+    _tools.register_all(mcp)
     _mcp_adapter.register(mcp, registry.caps_with_mcp())
     noms = [t.name for t in asyncio.run(mcp.list_tools())]
     return [n for n in noms if not _spine.is_connector_tool(n)]

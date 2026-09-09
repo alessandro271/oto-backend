@@ -28,8 +28,11 @@ Around the connectors, oto-mcp provides the platform plumbing:
   per-user keys, per-org/group shared secrets, and platform keys with quotas.
 - **Orgs, groups & roles** — `member < admin < super_admin`, org/team hierarchy, and a
   single key-resolution walker (`user > cross-org > team > org > tenant > platform`).
-- **Per-user tool visibility**, call monitoring, org guides and procedures, and MCP
-  federation (mount / remote bridge).
+- **Per-user tool visibility**, call monitoring, org guides and procedures.
+
+MCP federation (mounting a third-party MCP server into our surface) was **removed on
+2026-09-09** — three connectors were declared, none was ever used. A remote service is
+now reached through the generic `http` connector, or written as a native connector.
 
 ## Architecture
 
@@ -89,7 +92,7 @@ details are kept in a private infrastructure repository, not here.
 In-depth docs live under [`docs/`](docs/): `conventions.md` and `commands.md` first,
 then `architecture.md`, `connector-model.md`, `connector-vault.md`,
 `roles-and-resolution.md`, `auth-logto.md`, `rest-api.md`, `datastore.md`,
-`groups-and-roles.md`, `federation.md`, `guides.md`, `monitoring.md`, `usage-loop.md`.
+`groups-and-roles.md`, `guides.md`, `monitoring.md`, `usage-loop.md`.
 The security posture of the deployed service is in [`SECURITY.md`](SECURITY.md).
 
 Licensed [MIT](LICENSE). Pull requests require a signed CLA (`.github/workflows/cla.yml`);

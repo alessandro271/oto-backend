@@ -145,7 +145,7 @@ Open, dated, referenced. This list is the point of the document.
 | No per-session revocation: a stolen token stays valid until expiry, and blocking an account does not close its open sessions. No refresh-token rotation per application, and no step-up authentication — the identity provider does not expose the authentication level in the token | Open | internal security epic |
 | Account recovery is email-based and therefore effectively single-factor. Organization MFA is enforced at login, but the recovery paths have not been audited against it — do not read organization MFA as a complete second factor | Open | internal security epic |
 | Redaction covers the MCP face only; the REST face shares no rendering code with it and is not redacted | Gap acknowledged | §6 |
-| For federated Google connections, the short-lived access token is stored in cleartext metadata; only the refresh token is encrypted | Open | §5 |
+| For Google OAuth connections, the short-lived access token is stored in cleartext metadata; only the refresh token is encrypted | Open | §5 |
 | The dynamic client registration facade returns a client id even when the identity provider's management API is unreachable | Fail-open, deliberate | §4 |
 | Connector visibility gating fails open on infrastructure error; the call-time resolution behind it fails closed | By design | ADR 0025 |
 | Production and pre-production share one database — a pre-production write is a production write | Accepted trade-off | ADR 0040 |

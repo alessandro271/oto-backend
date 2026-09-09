@@ -1,11 +1,11 @@
-"""« Ce compte fédéré est-il lié ? » — déclaré par le module qui détient le credential.
+"""« Ce compte est-il lié ? » — déclaré par le module qui détient le credential.
 
 **Le trou que ça ferme.** `access.status_for` remplit `me.providers[…]` par TROIS boucles :
 les connecteurs keyés (`db.KEY_PROVIDERS`), ceux à champs (`secret_fields`), et ceux à
-session navigateur (`secret_kind == "cookie"`). Les connecteurs à credential OAuth
-FÉDÉRÉ — atlassian, folkmcp, google — ne sont dans aucune : `keyed=False`,
-`secret_fields=0`, `secret_kind='oauth'`. Ils n'avaient donc **aucune entrée**, et les
-conséquences en cascade n'étaient connues de personne :
+session navigateur (`secret_kind == "cookie"`). Les connecteurs à credential OAuth —
+google, et jusqu'au 2026-09-09 atlassian et folkmcp — ne sont dans aucune :
+`keyed=False`, `secret_fields=0`, `secret_kind='oauth'`. Ils n'avaient donc **aucune
+entrée**, et les conséquences en cascade n'étaient connues de personne :
 
 - la décoration `pending_action` itère les entrées existantes → un hook `status_hints`
   sur ces connecteurs aurait été **physiquement inatteignable** ;
@@ -13,15 +13,21 @@ conséquences en cascade n'étaient connues de personne :
 - le verdict de la fiche (`connectorVerdict`, dashboard) lit `me.providers[name]` → il
   n'avait rien à lire ;
 - **et c'est POURQUOI le front avait des noms de connecteurs dans ses URLs** :
-  `ConnectorFederatedWidget` appelle `/api/<name>/oauth/status` parce qu'il n'a pas
+  le widget du dashboard appelle `/api/<name>/oauth/status` parce qu'il n'a pas
   d'état à lire dans `/api/me`. Le nom-dans-l'URL n'était pas une négligence de style,
   c'était le contournement de ce trou.
 
-**Pourquoi un seam plutôt qu'une quatrième boucle qui lit le coffre.** Les trois ne
-rangent pas leur credential au même endroit : atlassian et folkmcp écrivent au scope
-LEGACY `("user", sub)`, google écrit une ligne PAR COMPTE (`account = email`) avec ses
-satellites dans `meta`. Une boucle générique qui irait lire le coffre elle-même se
-tromperait sur au moins l'un des trois, silencieusement. Chaque module sait, et le dit.
+**Pourquoi un seam plutôt qu'une quatrième boucle qui lit le coffre.** Ils ne rangent
+pas leur credential au même endroit : google écrit une ligne PAR COMPTE
+(`account = email`) avec ses satellites dans `meta`, là où atlassian et folkmcp
+écrivaient au scope LEGACY `("user", sub)`. Une boucle générique qui irait lire le
+coffre elle-même se tromperait sur au moins l'un d'eux, silencieusement. Chaque module
+sait, et le dit.
+
+⚠️ **Il ne reste qu'un seul déclarant depuis le retrait de la fédération MCP**
+(2026-09-09, ADR 0069) : google. Le seam ne se replie pas pour autant — c'est
+exactement le patron qu'un prochain connecteur OAuth réutilisera, et sa valeur
+n'a jamais tenu au nombre d'occupants.
 """
 from __future__ import annotations
 

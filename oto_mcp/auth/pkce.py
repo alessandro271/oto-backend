@@ -1,10 +1,10 @@
 """Helpers OAuth2 + PKCE génériques (state HMAC-signé, paire PKCE S256, expiry).
 
-Sans dépendance à un connecteur — partagés par les flows web fédérés d'oto.
+Sans dépendance à un connecteur — partagés par les flows web OAuth d'oto.
 
 Le `code_verifier` PKCE est porté DANS le `state` HMAC-signé (intégrité, pas
 confidentialité) plutôt que stocké côté serveur. Acceptable pour les flows web
-d'oto, y compris **client public** (Atlassian) : le `redirect_uri` est HTTPS et
+d'oto, y compris **client public** : le `redirect_uri` est HTTPS et
 contrôlé par oto — le code d'autorisation arrive directement au serveur, pas via
 un custom-scheme interceptable comme une app native — donc PKCE reste effectif.
 """

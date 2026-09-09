@@ -107,9 +107,6 @@ class Connector:
     # "tools" = module in-process (tools/<name>.py) ; "remote" = bridge distant
     # (ADR 0003) servi par le module générique tools/remote.py — le credential
     # d'org est alors {secret=token M2M, meta.base_url=endpoint du bridge} ;
-    # "mount" = MCP distant fédéré (otomata#16) monté via FastMCP proxy par le
-    # module générique tools/mount.py — credential per-user (token OAuth) injecté
-    # par requête, endpoint = `mount_url`.
     # "credential" = ne fournit AUCUN outil : l'objet ne sert qu'à porter une clé
     # que la plateforme utilise pour le compte de l'org (ex. la clé de modèle
     # qu'un agent programmé consomme). Tranché par Alexis le 03/09 : un type
@@ -126,15 +123,11 @@ class Connector:
     #
     # Un type distinct laisse l'écran le présenter pour ce qu'il est — « clé de
     # fournisseur », pas « connecteur » — au lieu de mentir par omission.
+    #
+    # ⚠️ La valeur `"mount"` (fédération d'un MCP tiers) a été RETIRÉE le
+    # 2026-09-09 avec le mécanisme (ADR 0069) : un service distant se joint par
+    # le connecteur `http` générique, ou s'écrit en connecteur natif.
     kind: str = "tools"
-    # Endpoint MCP du serveur distant à monter (kind="mount" uniquement).
-    mount_url: str | None = None
-    # Préfixe à retirer du NOM des tools distants avant le préfixe de namespace
-    # (kind="mount"). Évite la redondance quand le MCP distant préfixe déjà ses
-    # tools d'un mot proche du namespace oto — ex. folkmcp : distant `folk_*`
-    # monté `folkmcp_*` (strip="folk_") au lieu de `folkmcp_folk_*`. Le forward
-    # vers le distant garde le nom d'origine (ProxyTool). None = pas de strip.
-    mount_strip_prefix: str | None = None
     # Schéma de saisie EXPLICITE du credential (modèle générique multi-champs).
     # Vide → dérivé du secret_kind (cf. `secret_fields`). Renseigné pour les
     # credentials à >1 champ qui ne sont ni api_key ni basic_auth (ex. Silae :
@@ -239,11 +232,9 @@ class Connector:
     @property
     def family(self) -> str:
         """Nature de l'intégration (axe *builder*, ADR 0011) — DÉRIVÉE du credential
-        + runtime : open-data | api | browser | google | federated | bridge."""
+        + runtime : open-data | api | browser | google | bridge."""
         if self.kind == "remote":
             return "bridge"
-        if self.kind == "mount":
-            return "federated"
         if self.name in BROWSER_PROVIDERS:
             return "browser"
         if self.name == "google":
@@ -345,11 +336,7 @@ class Connector:
         valeur est une rupture de contrat cross-repo qui échoue en SILENCE (branche
         `default` → panneau de connexion vide). Vécu avec `secret_then_oauth`,
         retiré le 29/07 : « il reste une étape » se dit par `status_hints`
-        (pending_action), pas par une nouvelle méthode d'auth. NB : un MCP fédéré
-        (kind=mount) hérite de son `secret_kind` comme n'importe quel autre
-        connecteur — `atlassian` (oauth→oauth) est le seul cas vivant ; le
-        `basic_auth` d'un mount (→secret) l'a été jusqu'à ce que `planity`
-        devienne natif."""
+        (pending_action), pas par une nouvelle méthode d'auth."""
         if self.hosted_auth:
             return "hosted"
         if self.kind == "remote" and not self.credential_fields:
@@ -529,8 +516,7 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
        personal_session=False, secret_kind="none",
        default_quota=0, default_active=False,
        platform_key_open=False, label="", help="", href=None,
-       publisher="", logo_url=None, kind="tools", mount_url=None,
-       mount_strip_prefix=None,
+       publisher="", logo_url=None, kind="tools",
        credential_fields=(), modules=(), hosted_auth=False,
        personal_cross_org=False, cardinality="", account_axis_static=False,
        account_noun="",
@@ -547,7 +533,6 @@ def _c(name, namespaces, *, availability="self_serve", auth_modes=(), keyed=Fals
         default_active=default_active, platform_key_open=platform_key_open,
         label=label or name.capitalize(), help=help, href=href,
         publisher=publisher, logo_url=logo_url, kind=kind,
-        mount_url=mount_url, mount_strip_prefix=mount_strip_prefix,
         credential_fields=tuple(credential_fields),
         modules=tuple(modules), hosted_auth=hosted_auth,
         personal_cross_org=personal_cross_org, cardinality=cardinality,

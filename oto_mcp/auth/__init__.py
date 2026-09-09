@@ -5,7 +5,7 @@ Package sans surface propre. Deux sujets qui se répondent :
   Logto), `token_scopes` (la portée d'un jeton `oto_…`), `anon` (le shim OAuth des
   endpoints publics) ;
 - **sortant** — `flow` (la danse `authorization_code`, écrite UNE fois), `pkce` (les
-  helpers state/PKCE), puis un module par fournisseur : `atlassian`, `folk`,
+  helpers state/PKCE), puis un module par fournisseur :
   `google`, `salesforce`, `zoho`.
 
 Une famille se reconnaît ici au SUFFIXE (`*_oauth`) autant qu'au préfixe — cf.

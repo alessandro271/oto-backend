@@ -2,7 +2,7 @@
 Postman-style refresh-token acquisition (see salesforce_oauth.py's module
 docstring for the per-customer-Connected-App architecture this works around).
 
-Structure mirrors api/folk.py / api/atlassian.py:
+Structure (shared with the OAuth callback modules that preceded it):
 - `GET /api/salesforce/oauth/callback` (no auth, Salesforce redirects) → exchange + persist
 
 Le `/start` n'est PAS ici : c'est une capacité (`capabilities/salesforce_connect.py`,
@@ -11,7 +11,7 @@ descripteur. Seul le callback reste une route écrite à la main — un fourniss
 redirige le NAVIGATEUR, sans auth et avec un 302, ce qu'un contrat de capacité ne peut
 pas exprimer.
 
-Unlike Folk/Atlassian, there is no `/status`/`DELETE` here yet — the
+There is no `/status`/`DELETE` here yet — the
 existing generic `/api/settings/api-keys/salesforce` GET/DELETE already covers
 status/disconnect for this connector (it's still `secret_kind="fields"`,
 `secret_kind="fields"` — client_id/client_secret/login_url are

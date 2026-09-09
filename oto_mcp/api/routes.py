@@ -19,10 +19,11 @@ Les handlers vivent par DOMAINE, chacun une fonction de module appelable seule :
 | `api/uploads.py`    | réception d'un upload signé (`/api/upload/{token}`)   |
 
 Les modules ANTÉRIEURS à la découpe gardent leur forme : datastore, sirene,
-accords, atlassian, folk, zoho, salesforce, billing — ils exposent un
+accords, zoho, salesforce, billing — ils exposent un
 `make_routes(...)` qui reçoit les primitives en paramètres. (`api/connectors.py` a
 disparu le 2026-08-29 avec sa dernière route, le webhook de liaison messagerie :
-dormant depuis la v2 du fournisseur, #581.)
+dormant depuis la v2 du fournisseur, #581 ; `api/atlassian.py` et `api/folk.py` le
+2026-09-09 avec la fédération MCP, ADR 0069.)
 
 Ce fichier garde aussi les deux MIDDLEWARES ASGI de la face REST, dont l'ordre de
 pose (dans `server.py`) est un contrat dont dépendent des colonnes de monitoring :
@@ -53,10 +54,8 @@ from starlette.concurrency import run_in_threadpool
 
 from .. import db, journal_secrets, tenancy
 from . import (accords as api_routes_accords,
-               atlassian as api_routes_atlassian,
                billing as api_routes_billing,
                datastore as api_routes_datastore,
-               folk as api_routes_folk,
                salesforce as api_routes_salesforce,
                sirene as api_routes_sirene,
                zoho as api_routes_zoho)
@@ -386,22 +385,6 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         options_handler=options_handler,
     )
 
-    atlassian_routes = api_routes_atlassian.make_routes(
-        verifier=verifier,
-        authenticate=_authenticate,
-        json_response=_json,
-        json_error=_json_error,
-        options_handler=options_handler,
-    )
-
-    folk_routes = api_routes_folk.make_routes(
-        verifier=verifier,
-        authenticate=_authenticate,
-        json_response=_json,
-        json_error=_json_error,
-        options_handler=options_handler,
-    )
-
     # OAuth Zoho « server-based » — SECOND mode d'acquisition, le Self Client
     # restant intact et par défaut (les deux produisent le même credential).
     zoho_routes = api_routes_zoho.make_routes(
@@ -494,8 +477,6 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         *datastore_routes,
         *sirene_routes,
         *accords_routes,
-        *atlassian_routes,
-        *folk_routes,
         *zoho_routes,
         *salesforce_oauth_routes,
         *capability_routes,

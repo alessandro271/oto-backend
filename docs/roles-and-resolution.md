@@ -29,8 +29,9 @@ Le rôle (`users.role`) décide de l'accès à l'admin UI, sur **3 paliers**
   d'orgs tierces, création d'org, bypass namespace grant-only. Bootstrap env
   `OTO_MCP_ADMIN_SUB` → super_admin. Combinateur d'autz `SUPER_ADMIN`.
 - **admin** (palier OPÉRATIONNEL intermédiaire) : supervision plateforme —
-  monitoring, liste/fiche users, activation des connecteurs, refresh des mounts,
-  lectures d'orgs — **SANS** escalade en masse vers les orgs tierces.
+  monitoring, liste/fiche users, activation des connecteurs,
+  lectures d'orgs (le **refresh des mounts** en faisait partie jusqu'au 2026-09-09 :
+  `oto_admin_refresh_mount` est parti avec la fédération MCP, ADR 0069) — **SANS** escalade en masse vers les orgs tierces.
   Prédicat `access.is_platform_operator` (admin ∪ super) ; combinateur `PLATFORM_ADMIN`.
 - **member** : défaut, pas d'effet sur l'accès aux tools (`guest` retiré
   2026-06-15, migré → member).
@@ -95,7 +96,7 @@ près (cliquet `tests/test_access_surface_frozen.py`).
 | `access/cascade.py` | `walk_cascade`/`cascade_winner`, `CascadeRung`/`CascadeProbe`, `PRESENCE_PROBE`/`FETCH_PROBE`/`preloaded_presence_probe`, `group_secret_map`, le palier plateforme, `ORG_SHAREABLE_PROVIDERS` |
 | `access/rbac.py`    | `rbac_denied_connectors` (+ équipe), `org_admin_hidden_tools` (+ équipe), `require_connector_access`, `guard_instance_access`, `reachable_instances`(+`_map`, `_team_key`), `resolve_field_filter` |
 | `access/resolve.py` | `ResolvedCredential`, `resolve_credential` et son `_impl`, la résolution d'une instance épinglée, `_resolve_credential_anon`, `platform_quota_hint` (sonde en lecture seule du quota jour, sans consommer — oto-backend#710) |
-| `access/views.py`   | `resolve_api_key`, `resolve_credential_fields`, `resolve_mount_token`, `credential_mode_for`, `option_open`, `connector_resolvable_for_org`, `BYO_MODES` |
+| `access/views.py`   | `resolve_api_key`, `resolve_credential_fields`, `credential_mode_for`, `option_open`, `connector_resolvable_for_org`, `BYO_MODES` (⚠️ `resolve_mount_token` y a vécu jusqu'au 2026-09-09 — retiré avec la fédération MCP, ADR 0069) |
 | `access/status.py`  | `status_for` (le snapshot `/api/me`) et ses trois préchargements |
 
 Les dépendances **descendent**, sans cycle (garde dans le même fichier de test) :
@@ -245,9 +246,11 @@ datastore non plus (spine PG, aucun credential — ADR 0016).
 > — `org_id` = org de CONTEXTE du binding (la facturation des sièges plateforme a sa
 > colonne `platform_seat` ; les BYO ne comptent pas dans le plafond) ; migration PK
 > one-shot `db.backfill_unipile_member_scope()` (⚠️ le cycle de vie du PK lui appartient,
-> pas à `_init.py`). **Seuls les mounts oauth fédérés** (atlassian/folkmcp)
-> restent scope `('user', sub)` ; tripwire `test_member_credential_scope.py` interdit
-> toute autre écriture scope user. Migration coffre = `credentials_store.
+> pas à `_init.py`). Les **mounts oauth fédérés** (atlassian/folkmcp) restaient scope
+> `('user', sub)` jusqu'au **2026-09-09**, où ils sont partis avec la fédération MCP
+> (**ADR 0069**) : ⚠️ **plus aucun connecteur n'écrit à ce scope** — mais des lignes y
+> DORMENT toujours, jamais migrées ni purgées. Le tripwire
+> `test_member_credential_scope.py` interdit toujours toute écriture scope user. Migration coffre = `credentials_store.
 > backfill_member_scope()` au boot (re-chiffrement — l'AAD change, pas d'UPDATE ;
 > destination = org maison ; ligne indéchiffrable laissée inerte).
 
@@ -278,7 +281,8 @@ datastore non plus (spine PG, aucun credential — ADR 0016).
 
 > **Scope MEMBRE (ADR 0033)** : plus de credential per-user org-agnostique — la clé
 > BYO est keyée `(sub, org)` (coffre `entity_type='member'`, AAD lié à l'org ; google
-> + unipile inclus, seuls les mounts oauth fédérés restent scope user). L'org de scope
+> + unipile inclus ; les mounts oauth fédérés restaient scope user jusqu'à leur retrait
+> le 2026-09-09 — plus aucun écrivain depuis, des lignes dormantes toujours). L'org de scope
 > = seam `current_org`, à la pose comme à la résolution.
 > **Détail (helpers db, state HMAC google, migration) : `docs/roles-and-resolution.md` §Scope MEMBRE**.
 

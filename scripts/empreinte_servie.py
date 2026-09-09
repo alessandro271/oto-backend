@@ -79,10 +79,10 @@ def _monter() -> list:
 def portee() -> dict:
     """Ce que le relevé A REGARDÉ, et ce qu'il n'a PAS regardé.
 
-    Tous les outils ne viennent pas du code : les connecteurs fédérés sont montés
-    d'après la base (`connector_activation`, ADR 0010/0011). Sans base joignable, ils
-    ne sont pas montés — et le relevé les ignore **en silence**. Un rapport qui se tait
-    là-dessus se lit comme s'il couvrait tout.
+    Tous les outils ne viennent pas du code : l'exposition d'un connecteur est
+    gouvernée par la base (`connector_activation`, ADR 0010/0011). Sans base joignable,
+    le relevé l'ignore **en silence**. Un rapport qui se tait là-dessus se lit comme
+    s'il couvrait tout.
 
     > **Un rapport d'empreinte nomme ce qu'il ne regarde pas.** Un rapport qui délimite
     > sa portée vaut plus qu'un rapport « complet » — le second n'existe pas, il se
@@ -91,11 +91,9 @@ def portee() -> dict:
     ⚠️ Et c'est ce qui rend deux relevés COMPARABLES ou non : un `--diff` dont les deux
     côtés n'ont pas vu les mêmes connecteurs rend un delta qui mélange un changement de
     code avec un changement de périmètre."""
-    from oto_mcp import providers
-    from oto_mcp.tools import mount
-
-    montables = {c.name for c in providers.MOUNT_CONNECTORS}
-    montes = {k for k, v in mount._REGISTERED.items() if v}
+    # ⚠️ Le volet « connecteurs fédérés montés » a disparu le 2026-09-09 avec la
+    # fédération MCP (ADR 0069) : plus aucun outil servi ne vient d'un serveur tiers,
+    # donc plus rien à distinguer de ce que le code déclare.
     try:
         from oto_mcp.connectors import activation
         activation.list_activations()
@@ -105,9 +103,9 @@ def portee() -> dict:
     return {
         "base": base,
         "raison": raison,
-        "connecteurs_montables": sorted(montables),
-        "connecteurs_montes": sorted(montes),
-        "non_regardes": sorted(montables - montes),
+        "connecteurs_montables": [],
+        "connecteurs_montes": [],
+        "non_regardes": [],
     }
 
 
@@ -115,8 +113,8 @@ def _phrase_portee(p: dict) -> str:
     """La portée en une ligne, celle qui coiffe le rapport."""
     manque = p["non_regardes"]
     if not manque:
-        return (f"portée : outils du code + {len(p['connecteurs_montes'])} connecteur(s) "
-                f"monté(s) par la base — rien n'est laissé de côté")
+        return ("portée : tous les outils servis viennent du CODE — rien n'est laissé "
+                "de côté (plus aucun montage distant depuis l'ADR 0069)")
     detail = f" ({p['raison']})" if p["raison"] else ""
     return (f"portée : outils montés par le CODE. NON comparés : "
             f"{len(manque)} connecteur(s) monté(s) par la base — base {p['base']}{detail} : "

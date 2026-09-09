@@ -129,8 +129,11 @@ clé MEMBRE (BYO, scopée (sub, org))  >  secret groupe  >  secret org  >  clé 
 > elle suivait l'user partout et écrasait même la clé d'org). Vaut pour les clés API
 > keyed/fields, les sessions browser (Contexts Browserbase), les comptes **Google**
 > (l'org du start OAuth voyage dans le state) et les bindings **unipile**
-> (`unipile_accounts` PK `(sub, org_id, provider)`). Seuls les **mounts oauth fédérés**
-> (atlassian/folkmcp) restent `entity_type='user'`.
+> (`unipile_accounts` PK `(sub, org_id, provider)`). Les **mounts oauth fédérés**
+> (atlassian/folkmcp) en étaient la dernière exception — ils restaient `entity_type='user'`
+> jusqu'au **2026-09-09**, où ils sont partis avec la fédération MCP elle-même (**ADR 0069**).
+> ⚠️ **Plus aucun connecteur n'ÉCRIT à ce scope ; le scope, lui, existe toujours en base** —
+> des lignes `("user", sub)` y dorment, seuls leurs écrivains ont disparu.
 
 Deux notions à ne **pas** confondre :
 - **BYO** (*bring your own*) : l'entité **pose SA propre clé**, stockée chiffrée dans
@@ -152,7 +155,7 @@ Surfaces : fiche user `/platform/users/<sub>` carte « connector access » → *
 le tiers sépare audit et assignation : poser explicitement le champ **owner** par enregistrement
 (map *user oto → user tiers*) — ex. **Zoho CRM** `Owner` (le lead **appartient** au bon
 commercial, seul « Created By » reste le compte de service). Attribution **native par personne**
-⇒ il faut du **per-user** (BYO user, ou OAuth/mount per-user — cf. fédération MCP), pas un secret
+⇒ il faut du **per-user** (BYO user, ou credential OAuth per-user — google, zoho, salesforce), pas un secret
 partagé. (Noté 2026-06-24 — pertinent pour l'automatisation d'écriture Zoho (CRM client).)
 
 ## Couche 3 — Option de connecteur (unipile, linkedin hébergé)
@@ -307,52 +310,65 @@ Son absence veut dire « ce connecteur ne l'expose pas », jamais « rien n'a ch
 
 ### Purge silencieuse des mounts OAuth (atlassian/folk) — oto#25 lot (a), 2026-09-04
 
+> ⚠️ **Récit au passé.** Les deux connecteurs de cette section, `atlassian` et `folkmcp`,
+> ont été retirés le **2026-09-09** avec le mécanisme lui-même : la **fédération MCP**
+> (`kind="mount"`) ne fait plus partie de la plateforme (**ADR 0069** — trois connecteurs
+> fédérés déclarés, aucun jamais utilisé, zéro appel sur 40 jours). La leçon, elle, reste
+> vraie et transférable : **un credential rangé à un scope que le batch générique ne
+> regarde pas est un credential dont la santé n'est lisible nulle part.**
+
 Sixième forme, propre à la famille des connecteurs OAuth **fédérés « mount »**
-(atlassian, folkmcp — Rovo Remote MCP, MCP officiel Folk) : leur credential vit au
+(atlassian, folkmcp — Rovo Remote MCP, MCP officiel Folk) : leur credential vivait au
 scope **LEGACY** `("user", sub)`, pas au scope MEMBRE `(org, sub)` des connecteurs
 keyés (`connectors/link.py` explique pourquoi — un module par module, jamais une
-boucle générique qui devinerait le rangement). `access_token_for(sub)` rafraîchit
-l'access token de façon transparente à chaque appel ; jusqu'ici, un refresh token
+boucle générique qui devinerait le rangement). `access_token_for(sub)` rafraîchissait
+l'access token de façon transparente à chaque appel ; jusqu'à ce lot, un refresh token
 mort (`invalid_grant`) faisait **PURGER** la ligne (`clear_credential`) — le fait
 « ça a été révoqué » redevenait indiscernable de « jamais posé », un repli qui
 masque un problème plutôt que de le nommer.
 
-**Le correctif** réutilise le mécanisme déjà en place pour les connecteurs keyés :
+**Le correctif** réutilisait le mécanisme déjà en place pour les connecteurs keyés :
 la ligne reste, et se fait marquer via `credentials_store.update_meta(..., {
 "health_ko": True, "health_reason": <motif brut>})` — même paire de champs que
 `_record_health`, motif fournisseur **brut** en valeur de champ (`invalid_grant`),
-pas la seule catégorie opaque `credential_rejected`. Elle se lève en reposant la
+pas la seule catégorie opaque `credential_rejected`. Elle se levait en reposant la
 clé (reconnexion : `persist_token` écrase `meta`) ou par un futur refresh réussi
-(qui écrase `meta` lui aussi).
+(qui écrase `meta` lui aussi). **Ce patron-là n'est pas parti** : il reste celui des
+connecteurs keyés, et c'est lui qu'un prochain connecteur OAuth réutilisera.
 
-**Rendre la marque observable a demandé un second geste**, propre à cette famille :
+**Rendre la marque observable avait demandé un second geste**, propre à cette famille :
 le batch générique de `access.status_for` qui lit `health_ko`/`health_reason`
-(cf. #541 ci-dessus) **ne regarde que le palier MEMBRE** — il ne verra donc
+(cf. #541 ci-dessus) **ne regarde que le palier MEMBRE** — il ne voyait donc
 *jamais* une ligne `("user", sub)`. `connectors/link.py::LinkState` porte
-désormais `health_ko`/`health_reason` ; chaque module lit sa propre ligne dans
+toujours `health_ko`/`health_reason` ; chaque module lit sa propre ligne dans
 son `_link_state()` (il sait sous quel scope il range son credential, une boucle
 générique se tromperait), et la 4ᵉ boucle de `status_for` (celle qui ferme le
 trou « ces connecteurs n'ont aucune entrée dans `me.providers` ») relaie ces deux
 champs sur l'entrée `ProviderStatus` — c'est ce que lit la fiche `/api/me` du
-dashboard.
+dashboard. ⚠️ Depuis le 2026-09-09 ce seam n'a plus qu'**un seul déclarant, `google`**,
+et il ne se replie pas pour autant : sa valeur n'a jamais tenu au nombre d'occupants.
 
-✅ **Fermé depuis (oto-backend#876, 2026-09-05)** : le walker (`access/cascade.py`)
-porte désormais un barreau dédié au scope legacy `("user", sub)`, gaté par la
-liste FERMÉE `LEGACY_USER_SCOPE_PROVIDERS = ("atlassian", "folkmcp")` — à ne pas
-confondre avec `connectors.link.entries()` (google y est aussi, déjà migré au
-scope membre). `oto_instance op=verify` fonctionne maintenant pour `atlassian` :
-sa sonde relit `access_token_for` (refresh transparent, marque plutôt que purge)
-PUIS interroge réellement l'API Atlassian — un refresh qui réussit ne suffit pas
-à dire « connecté » si l'app a été révoquée côté Atlassian Admin. `folkmcp`
-profite du même barreau mais n'a pas encore de sonde enregistrée (aucune
-demande à ce jour). Détail et bancs : `tests/test_cascade_legacy_user_rung.py`,
-`tests/auth/test_atlassian_verify.py`. La migration ADR 0033 de ces deux
-connecteurs au scope membre (suivant Google, commit 79759702) reste une
-décision **séparée**, non prise ici — le walker élargi n'est pas un pari sur elle.
+✅ **Fermé le 2026-09-05 (oto-backend#876), puis rendu INERTE le 2026-09-09** : le
+walker (`access/cascade.py`) porte un barreau dédié au scope legacy `("user", sub)`,
+gaté par la liste FERMÉE `LEGACY_USER_SCOPE_PROVIDERS` — à ne pas confondre avec
+`connectors.link.entries()` (google y est aussi, migré au scope membre). Cette liste
+valait `("atlassian", "folkmcp")` ; elle est **vide** depuis le retrait de la
+fédération, donc le barreau ne se déclenche plus pour personne — il est **gardé, pas
+supprimé** : ⚠️ le scope legacy porte encore des **lignes en base**, seuls ses
+écrivains ont disparu, et c'est la seule marche du walker qui saurait les lire.
+`oto_instance op=verify` avait fonctionné pour `atlassian` : sa sonde relisait
+`access_token_for` (refresh transparent, marque plutôt que purge) PUIS interrogeait
+réellement l'API du fournisseur — leçon qui survit au retrait : **un refresh qui
+réussit ne suffit pas à dire « connecté »** si l'app a été révoquée côté admin du
+fournisseur. Le banc `tests/test_cascade_legacy_user_rung.py` porte encore l'histoire
+de ce barreau. La migration
+ADR 0033 de ces deux connecteurs au scope membre (suivant Google, commit 79759702)
+était restée une décision **séparée** ; elle est sans objet depuis leur retrait, mais
+les lignes dormantes, elles, n'ont jamais été migrées ni purgées.
 
-Changement de comportement **servi** : un connecteur qui, avant ce lot, semblait
-redevenir « à connecter » (purge muette) après un grant mort dira désormais
-`health_ko: true` sur sa fiche — à annoncer avant tag.
+Changement de comportement **servi** au moment du lot : un connecteur qui, avant lui,
+semblait redevenir « à connecter » (purge muette) après un grant mort disait ensuite
+`health_ko: true` sur sa fiche.
 
 ### La quatrième confusion : la boîte à outils n'est pas l'org de l'appel (#577)
 

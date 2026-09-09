@@ -105,7 +105,7 @@ class MemberProviderStatus(BaseModel):
     lit sa propre carte, rejouée par un org_admin.
 
     Le jeu de clés dépend de la FAMILLE du connecteur (keyed à quota, BYO à champs
-    déclarés, session navigateur, OAuth fédéré) : `quota_*` n'existe qu'avec un
+    déclarés, session navigateur, OAuth) : `quota_*` n'existe qu'avec un
     palier plateforme, `session_set_at`/`identity_*` seulement pour une session
     navigateur, etc. D'où l'ouverture aux champs additionnels — seuls `mode` et
     les quatre booléens de présence sont servis par toutes les familles."""
@@ -239,7 +239,7 @@ async def _verify(ctx: ResolvedCtx, inp: VerifyInput) -> dict:
     # La sonde EST le « health check » (read facile) → son verdict alimente le flag santé.
     # `record_health` = aide partagée (`connectors/health.py`, oto#25 lot b2) : mêmes
     # deux lignes qu'avant sous `_record_health`, extraites pour que d'autres modules
-    # (atlassian, folk, salesforce, zoho) réutilisent la MÊME garde de portée sans la
+    # (salesforce, zoho) réutilisent la MÊME garde de portée sans la
     # redéfinir chacun de leur côté.
     # ⚠️ Porteur normalisé (délégation, six canaux Unipile) : la ligne du coffre est
     # rangée sous `unipile`, jamais sous `linkedin_unipile` — écrire au nom NU

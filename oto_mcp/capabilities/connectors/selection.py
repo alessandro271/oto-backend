@@ -319,8 +319,8 @@ def _guide_refs_by_ns(org_id: int | None) -> dict[str, set]:
 # c'est le seul scalaire qui distingue « ce connecteur ne demande aucune clé »
 # (open data — `none`) de « il en demande une que tu n'as pas encore ». Sans lui
 # au chargement, un tableau ne peut pas le dire, et l'absence d'entrée dans
-# `providers` ne suffit PAS à trancher : `scaleway`, `http`, `atlassian` et
-# `folkmcp` en sont absents eux aussi tout en exigeant un credential. Le front
+# `providers` ne suffit PAS à trancher : `scaleway` et `http` en sont absents eux
+# aussi tout en exigeant un credential. Le front
 # affichait donc « Not connected » sur OpenStreetMap jusqu'à ce qu'on ouvre la
 # carte, où le verbeux disait « Included » (constaté en prod le 2026-08-29).
 # Scalaire déjà calculé, aucun coût : le compact évite `auth`/`credential_fields`

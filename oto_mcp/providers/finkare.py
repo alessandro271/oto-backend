@@ -23,13 +23,13 @@ from ._model import _c
 # `docs.finkare.io/mcp-server.md` décrit `https://mcp.finkare.io/mcp` (OAuth 2.1 +
 # PKCE + enregistrement dynamique, 21 outils) — vérifié le 2026-09-02 : **aucun
 # enregistrement DNS**, l'hôte ne résout pas. Si ce serveur existait, ce connecteur
-# n'aurait pas lieu d'être : on le monterait (`kind="mount"`, cf. docs/federation.md)
-# et leurs outils natifs remplaceraient les nôtres.
+# n'aurait pas lieu d'être : on le joindrait par le connecteur `http` générique
+# (ADR 0069 — la fédération MCP, elle, est retirée depuis le 2026-09-09).
 #
 # La note est ici, et pas dans une tête : un service qui annonce une porte inexistante
-# le fera croire à chaque agent qui lira sa doc. **Revérifier le DNS avant de
-# réécrire ce connecteur en mount** — c'est un lot de trente lignes le jour où il
-# répond, et le connecteur classique reste utile à côté (précédent `folk`/`folkmcp`).
+# le fera croire à chaque agent qui lira sa doc. ⚠️ **Et le jour où il répondrait,
+# ce ne serait PAS une raison de le fédérer** : c'est précisément ce que l'ADR 0069
+# a retiré. Le connecteur classique reste la voie.
 #
 # ⚠️ Leur `openapi.json` public n'est PAS non plus exploitable : c'est le gabarit
 # d'exemple de Mintlify (« OpenAPI Plant Store », deux chemins sur `/plants`). Les

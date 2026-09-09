@@ -570,16 +570,14 @@ def _prepare_database() -> None:
                 (time.monotonic() - debut) * 1000)
 
 
-def _build_mcp(transport: str, verifier: JWTVerifier | None = None, *,
-               include_mounts: bool = False) -> FastMCP:
-    """Construit le catalogue. Ne prépare PAS la base, ne va PAS chercher les
-    catalogues distants sauf demande explicite.
+def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
+    """Construit le catalogue. Ne prépare PAS la base.
 
-    Construire n'est pas démarrer. `main()` prépare la base puis demande les
-    catalogues distants ; un test, un script ou un outil qui veut seulement le
-    catalogue local n'a plus à payer — ni à subir — une entrée-sortie pour
-    l'obtenir. La fédération est derrière `include_mounts` parce qu'elle attend
-    un tiers, et qu'une attente n'a rien à faire dans un import (oto-backend#892).
+    Construire n'est pas démarrer : un test, un script ou un outil qui veut le
+    catalogue n'a rien à payer pour l'obtenir. ⚠️ Le paramètre `include_mounts`
+    a disparu avec la fédération MCP (2026-09-09, ADR 0069) — plus aucun montage
+    ne va chercher le catalogue d'un tiers au démarrage, donc plus rien à
+    différer (le motif d'oto-backend#892 n'a plus d'objet).
     """
     kwargs: dict = {}
     if transport in ("http", "streamable_http") and verifier is not None:
@@ -589,7 +587,7 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None, *,
     # manifeste « referenced_tools » sans se faire passer l'instance.
     from . import tool_registry
     tool_registry.bind(instance)
-    register_all(instance, include_mounts=include_mounts)
+    register_all(instance)
 
     # Couche capacité (ADR 0009) : monte un tool par capacité déclarée
     # (no-op tant que le registre est vide — canari). Après register_all pour
@@ -867,16 +865,13 @@ def main():
         # Instance MCP ANONYME (ADR 0032, `<slug>.mcp.oto.cx`) : sans auth, visibilité =
         # allowlist figée du preset de projet. On RÉUTILISE l'instance no-auth DÉJÀ
         # construite au niveau module (`mcp = _build_mcp("noauth")` en haut) au lieu d'en
-        # construire une 3ᵉ : un _build_mcp de plus (register_all + mounts + init_db/
+        # construire une 3ᵉ : un _build_mcp de plus (register_all + init_db/
         # backfill/seed) DOUBLAIT le temps de boot (~53 s) et dépassait la fenêtre du
         # healthcheck du deploy → KO + rollback avant que uvicorn ne bind (vécu 2026-07-01).
         # `mcp` pointe encore ici sur l'instance no-auth ; on la capture AVANT de le
         # réassigner à l'authentifiée (tool_registry.bind finit donc lié à l'authentifiée).
         from .anon_visibility import AnonymousVisibilityMiddleware
-        # Les catalogues distants sont demandés ICI, une fois la base prête —
-        # plus à l'import. `include_mounts=True` est le seul endroit du code qui
-        # accepte d'attendre un tiers, et c'est un démarrage, pas une collecte.
-        anon_mcp = _build_mcp("noauth", include_mounts=True)
+        anon_mcp = _build_mcp("noauth")
         anon_mcp.add_middleware(AnonymousVisibilityMiddleware())
         anon_app = anon_mcp.http_app()
         # Shim OAuth ANONYME (ADR 0032) : claude.ai/Mistral exigent un flux OAuth pour un
@@ -888,7 +883,7 @@ def main():
             anon_app.router.routes.insert(0, route)
 
         verifier = _build_verifier()
-        mcp = _build_mcp(transport, verifier, include_mounts=True)
+        mcp = _build_mcp(transport, verifier)
 
         # (Le `db.init_db()` qui était ici a été RETIRÉ — ADR 0065 lot 0. C'était le
         # TROISIÈME du boot : `_build_mcp` l'appelait déjà, deux fois, et il rejouait

@@ -1,4 +1,4 @@
-"""Les trois flux qui vivaient hors du point de passage (#300 §1).
+"""Le flux de connexion de google passe par le point de passage commun (#300 §1).
 
 Google, Atlassian et Folk fédéré démarraient leur connexion par une route REST
 écrite à la main. Elles rendaient `{auth_url}` — mais **par coïncidence** : rien ne
@@ -9,13 +9,16 @@ point de passage existe précisément pour qu'il n'ait pas à savoir lequel il b
 Ces flux sont désormais DÉCLARÉS. Les routes historiques restent en place et
 appellent le même constructeur d'URL — aucune rupture pour le front, qui pourra
 basculer sur le verbe commun quand il le voudra.
+
+⚠️ **Ce banc couvrait les TROIS jusqu'au 2026-09-09** ; `atlassian` et `folkmcp`
+sont partis avec la fédération MCP (ADR 0069), d'où le renommage du fichier. Ce
+qu'il verrouille pour `google` — un connecteur natif, vivant et très utilisé —
+n'a pas bougé d'une ligne : mêmes assertions, même point de passage.
 """
 from __future__ import annotations
 
 import pytest
 
-from oto_mcp.auth import atlassian as atlassian_oauth
-from oto_mcp.auth import folk as folk_oauth
 from oto_mcp.auth import google as google_oauth
 from oto_mcp.connectors import flow as connector_flow
 from oto_mcp.capabilities._types import AuthzDenied
@@ -26,53 +29,42 @@ class _Ctx:
     org_id = 2
 
 
-FEDERES = [
-    ("atlassian", atlassian_oauth),
-    ("folkmcp", folk_oauth),
-    ("google", google_oauth),
-]
+def test_le_flux_est_declare():
+    assert connector_flow.supports("google"), "google : geste « connecter » hors du seam"
 
 
-@pytest.mark.parametrize("name,module", FEDERES, ids=[n for n, _ in FEDERES])
-def test_le_flux_est_declare(name, module):
-    assert connector_flow.supports(name), f"{name} : geste « connecter » hors du seam"
-
-
-@pytest.mark.parametrize("name,module", FEDERES, ids=[n for n, _ in FEDERES])
 @pytest.mark.asyncio
-async def test_le_flux_rend_la_forme_commune(monkeypatch, name, module):
+async def test_le_flux_rend_la_forme_commune(monkeypatch):
     """Le point de passage VÉRIFIE le type de retour : un flux qui rendrait un dict
     maison lèverait ici. C'est tout l'objet de l'exercice."""
     # `return_app` depuis oto-backend#877 : le front qui a demandé la connexion
     # voyage jusqu'au state. Le double doit accepter la signature réelle, sinon il
     # valide un appel qui n'existe plus.
-    monkeypatch.setattr(module, "build_auth_url",
+    monkeypatch.setattr(google_oauth, "build_auth_url",
                         lambda sub, return_app="": f"https://exemple/{sub}")
-    out = await connector_flow.start(name, _Ctx(), {})
+    out = await connector_flow.start("google", _Ctx(), {})
     assert isinstance(out, connector_flow.FlowStart)
     assert out.as_dict() == {"auth_url": "https://exemple/user-1", "details": {}}
 
 
-@pytest.mark.parametrize("name,module", FEDERES, ids=[n for n, _ in FEDERES])
 @pytest.mark.asyncio
-async def test_le_flux_part_du_compte_appelant(monkeypatch, name, module):
+async def test_le_flux_part_du_compte_appelant(monkeypatch):
     """L'URL est liée au compte : c'est le `sub` du contexte qui doit la construire,
     jamais une valeur passée par l'appelant — sinon on signerait un état pour un tiers."""
     vus = []
-    monkeypatch.setattr(module, "build_auth_url",
+    monkeypatch.setattr(google_oauth, "build_auth_url",
                         lambda sub, return_app="": vus.append(sub) or "https://exemple/x")
-    await connector_flow.start(name, _Ctx(), {"sub": "quelquun-dautre"})
+    await connector_flow.start("google", _Ctx(), {"sub": "quelquun-dautre"})
     assert vus == ["user-1"]
 
 
 def test_le_descripteur_reste_muet_sur_les_chemins():
-    """Le catalogue est servi sans authentification : les trois nouveaux flux ne
-    doivent pas y publier d'URL ni de nom de capacité (contrat déjà gardé, mais ces
-    flux portent un `callback_path`, donc la vérification vaut d'être refaite ici)."""
-    for name, _ in FEDERES:
-        blob = repr(connector_flow.describe(name))
-        for interdit in ("http", "/api/", "me.", "oto_"):
-            assert interdit not in blob, f"{name} : « {interdit} » dans le descripteur"
+    """Le catalogue est servi sans authentification : le flux ne doit pas y publier
+    d'URL ni de nom de capacité (contrat déjà gardé, mais ce flux porte un
+    `callback_path`, donc la vérification vaut d'être refaite ici)."""
+    blob = repr(connector_flow.describe("google"))
+    for interdit in ("http", "/api/", "me.", "oto_"):
+        assert interdit not in blob, f"google : « {interdit} » dans le descripteur"
 
 
 @pytest.mark.asyncio

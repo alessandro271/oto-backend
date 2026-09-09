@@ -6,7 +6,7 @@ trois vagues de migration l'ont vidé de tout le reste :
 - **2026-08-12 (#302)** : les 17 routes du datastore sont devenues des capacités
   (`capabilities/datastore/*.py`) ;
 - **2026-08-27** : les VERBES Google OAuth (`start`, `status`, `DELETE`, `default`) →
-  `capabilities/federated_oauth.py` ;
+  `capabilities/federated_oauth.py` (google) ;
 - **2026-08-27** : les JETONS API (`/api/me/tokens*`) → `capabilities/api_tokens.py`,
   rendu possible par le cran `RestBinding.allow_api_token` (un jeton ne fabrique pas de
   jeton — c'est ce qui les retenait ici).

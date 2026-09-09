@@ -7,7 +7,7 @@ description: >-
   secret_fields dérivé), coffre chiffré unique connector_credentials (table 4-col PK
   entity_type/entity_id/connector/account, AES-256-GCM obligatoire via crypto.py,
   master key en Scaleway Secret Manager), et résolution access/ (resolve_api_key,
-  resolve_credential_fields, resolve_mount_token, status_for,
+  resolve_credential_fields, status_for,
   list_datastore_namespaces_granted_to).
   Inclut le packing multi-champs, Google multi-compte, LinkedIn/Crunchbase en coffre,
   l'instance comme OBJET (table connector_instances posée A COTE du coffre, id stable
@@ -37,11 +37,11 @@ Package pur (aucun import oto_mcp, comme `tool_visibility.py`). Une dataclass `C
 Tranché par Alexis le **2026-09-02** : *« dire la vérité sur les deux »*. Les champs curés décrivent le service **rendu**, jamais la marque dont on emprunte le nom :
 
 - **`PUBLISHER` = qui reçoit réellement l'appel.** Une passerelle tierce se nomme (`reddit` → `redditapis.com`, l'API de Reddit étant fermée en self-serve) ; un service qu'on écrit et opère soi-même se nomme aussi (`planity` → `Otomata`, le connecteur est le NÔTRE).
-- ⚠️ **Et un DÉFAUT ne parle pas à la place d'une déclaration absente — il n'y en a donc PLUS.** Jusqu'au 2026-09-02, sans constante `PUBLISHER`, `publisher_name` retombait sur « Otomata » : une omission était indiscernable du choix « connecteur maison ». C'est ce qui a fait servir le MCP **officiel de Folk** sous notre nom (`folkmcp`) pendant un mois, et les **six canaux de messagerie** hébergés — qui *envoient des messages* par une passerelle tierce — sous notre nom aussi. Le repli est retiré : sans déclaration, la fiche n'affiche **rien** — chaîne vide, jamais `None` ni un libellé de remplacement. Le choix `""` plutôt que `null` se tranche sur le CONTRAT, pas sur le rendu : mesuré le 2026-09-02 en rendant les composants, les cinq surfaces qui affichent l'éditeur traitent les deux à l'identique (elles masquent ou coercent, aucune ne rend « undefined »), mais oto-dashboard déclare `publisher: string` dans `types/api.ts` — `null` le ferait mentir sans rien gagner.
+- ⚠️ **Et un DÉFAUT ne parle pas à la place d'une déclaration absente — il n'y en a donc PLUS.** Jusqu'au 2026-09-02, sans constante `PUBLISHER`, `publisher_name` retombait sur « Otomata » : une omission était indiscernable du choix « connecteur maison ». C'est ce qui a fait servir le MCP **officiel de Folk** sous notre nom (`folkmcp` — connecteur retiré depuis, avec la fédération MCP, le 2026-09-09) pendant un mois, et les **six canaux de messagerie** hébergés — qui *envoient des messages* par une passerelle tierce — sous notre nom aussi. Le repli est retiré : sans déclaration, la fiche n'affiche **rien** — chaîne vide, jamais `None` ni un libellé de remplacement. Le choix `""` plutôt que `null` se tranche sur le CONTRAT, pas sur le rendu : mesuré le 2026-09-02 en rendant les composants, les cinq surfaces qui affichent l'éditeur traitent les deux à l'identique (elles masquent ou coercent, aucune ne rend « undefined »), mais oto-dashboard déclare `publisher: string` dans `types/api.ts` — `null` le ferait mentir sans rien gagner.
 
   > **Une absence se voit et se corrige ; une attribution fausse se croit.** *(Alexis, 2026-09-02)*
 
-  Corollaire : **un connecteur légitimement nôtre le DÉCLARE** (`PUBLISHER = "Otomata"`) au lieu d'y retomber — même valeur, mais elle devient un choix relisible. Les trois génériques/maison (`browser`, `web`, `http`) l'ont fait le 2026-09-02 ; les six canaux nomment désormais `Unipile`, la passerelle qui reçoit l'appel et détient la session du compte opéré — déclaré **une seule fois**, chez le porteur de la clé (`providers/unipile.channel`), parce que c'est une propriété du COMPTE et pas du canal. Cliquet : **`tests/test_connector_publisher.py`**, qui exige une déclaration pour **tout** le registre, lit la valeur **SERVIE** (`publisher_name` — donc les deux chemins de déclaration, constante de module *et* champ d'entrée), et refuse aussi la déclaration périmée. ⚠️ Il n'a **aucun filtre de famille**, et il le prouve **par mutation** : un test paramétré sur les familles présentes rend muet un connecteur réel de chacune et exige que le contrôle le voie — glisser `kind == "tools"` dans son calcul fait rougir la famille `mount`, nommément. Un test qui se contenterait de recalculer la population serait aveugle au même défaut.
+  Corollaire : **un connecteur légitimement nôtre le DÉCLARE** (`PUBLISHER = "Otomata"`) au lieu d'y retomber — même valeur, mais elle devient un choix relisible. Les trois génériques/maison (`browser`, `web`, `http`) l'ont fait le 2026-09-02 ; les six canaux nomment désormais `Unipile`, la passerelle qui reçoit l'appel et détient la session du compte opéré — déclaré **une seule fois**, chez le porteur de la clé (`providers/unipile.channel`), parce que c'est une propriété du COMPTE et pas du canal. Cliquet : **`tests/test_connector_publisher.py`**, qui exige une déclaration pour **tout** le registre, lit la valeur **SERVIE** (`publisher_name` — donc les deux chemins de déclaration, constante de module *et* champ d'entrée), et refuse aussi la déclaration périmée. ⚠️ Il n'a **aucun filtre de famille**, et il le prouve **par mutation** : un test paramétré sur les familles **présentes** rend muet un connecteur réel de chacune et exige que le contrôle le voie — glisser `kind == "tools"` dans son calcul faisait rougir la famille `mount`, nommément. ⚠️ Cette famille a disparu du registre le **2026-09-09** (retrait de la fédération MCP, **ADR 0069**) ; le test ne perd rien à son départ, précisément parce qu'il se paramètre sur les familles présentes — il couvre aujourd'hui `tools`, `credential` et `remote`, et couvrira la prochaine famille sans que personne y pense. Un test qui se contenterait de recalculer la population serait aveugle au même défaut.
 - **`help` dit qu'un intermédiaire existe**, en une clause et sans jargon — avant l'installation, pas après. Et quand la connexion se fait avec les **identifiants du service** (planity : email + mot de passe qu'oto rejoue lui-même, faute d'API publique chez Planity), l'aide le dit : c'est ce que la fiche engage de plus lourd.
 
   ⚠️ **L'éditeur ne dispense PAS de le dire dans l'aide** — les deux champs ne sont pas lus au même endroit. Le **bloc catalogue injecté au handshake** (`render_namespace_catalog`, ~10 400 c. à chaque session) ne sert que `« label : help »` : il ne porte **jamais** l'éditeur. Une fiche dont seul `PUBLISHER` nommerait la passerelle la tairait donc à l'agent, et à la personne au moment de décider. Les **six canaux hébergés** ont reçu la clause le 2026-09-02, la même pour les six — *« Ton compte se connecte chez Unipile, notre prestataire, qui détient la session. »* — au prix mesuré de **+486 c.** sur le bloc injecté (10 402 → 10 888) et d'une recopie par outil dans `oto_list_my_tools`. Cliquet : `tests/test_unipile_split.py`, sur une population **dérivée du registre** (`credential_of == "unipile"`), pas sur une liste écrite à la main — un septième canal y entre tout seul.
@@ -56,9 +56,9 @@ Tranché par Alexis le **2026-09-02** : *« dire la vérité sur les deux »*. L
 | `planity` | éditeur « Planity », logo planity.com | notre propre code, qui rejoue la connexion à `pro.planity.com` | on crédite un tiers de ce qu'on écrit — ça se lit comme une intégration officielle |
 | `folkmcp` | éditeur « Otomata » (le défaut) | `mcp.folk.app`, le MCP officiel de Folk | on se crédite du produit d'un tiers |
 
-Chercher « à qui l'appel arrive-t-il ? » attrape les trois ; chercher « la marque est-elle la bonne ? » n'en attrape aucune.
+Chercher « à qui l'appel arrive-t-il ? » attrape les trois ; chercher « la marque est-elle la bonne ? » n'en attrape aucune. *(`folkmcp` a été retiré le 2026-09-09 avec la fédération MCP, ADR 0069 ; `planity` est resté au catalogue, en connecteur NATIF — sa fiche, elle, ne bouge pas d'un iota, c'est toujours notre code qui rejoue la connexion.)*
 
-⚠️ Le ratchet `tests/test_connector_logos.py` a filtré `kind == "tools"` du 2026-08-02 au 2026-09-02, dans ses **deux** directions — donc aucun connecteur fédéré n'était jugé. L'angle mort a coûté aux deux sens : `folkmcp` est resté sans logo ni éditeur déclaré (servi « Otomata »), et la déclaration d'absence légitime de `planity` — alors fédéré — passait pour une entrée morte. Le filtre est retiré : du point de vue de la fiche, un mount est un connecteur comme un autre.
+⚠️ Le ratchet `tests/test_connector_logos.py` a filtré `kind == "tools"` du 2026-08-02 au 2026-09-02, dans ses **deux** directions — donc aucun connecteur fédéré n'était jugé. L'angle mort a coûté aux deux sens : `folkmcp` est resté sans logo ni éditeur déclaré (servi « Otomata »), et la déclaration d'absence légitime de `planity` — alors fédéré — passait pour une entrée morte. Le filtre est retiré : du point de vue de la fiche, la famille d'un connecteur ne change rien à ce qu'on exige de sa fiche. La leçon a survécu au mécanisme : les mounts sont partis le 2026-09-09, **le filtre n'est pas revenu sous un autre nom**.
 
 ### La cardinalité d'auth — dérivée, déclarée, et plus jamais listée
 
@@ -285,7 +285,7 @@ connector_credentials(entity_type, entity_id, connector, account, secret_enc,
 
 Store = `credentials_store.py` (calqué sur le palier org, réutilise `db._connect`, jamais d'import circulaire) :
 `get_credential` / `get_credential_with_meta` (secret+meta+set_at, déchiffre) / `credential_status` (présence+meta SANS déchiffrer, pour /api/me) / `has_credential` / `set_credential` (chiffre) / `clear_credential` / `update_meta` (merge JSONB sans re-chiffrer) / `list_accounts`.
-- **Packing multi-champs** : `pack_secret(connector, fields)` / `unpack_secret(connector, secret)` encodent les `secret_fields` dans l'unique `secret_enc` — 3 formats selon la forme : 1 champ (`api_key`) = valeur brute (back-compat) ; `basic_auth` = `base64("email:password")` (format qui servait aussi de fil vers un mount distant qui le décodait ; plus aucun mount ne le consomme, des credentials restent stockés ainsi) ; ≥2 champs = `json`. L'endpoint de saisie et `resolve_credential_fields` passent par là.
+- **Packing multi-champs** : `pack_secret(connector, fields)` / `unpack_secret(connector, secret)` encodent les `secret_fields` dans l'unique `secret_enc` — 3 formats selon la forme : 1 champ (`api_key`) = valeur brute (back-compat) ; `basic_auth` = `base64("email:password")` (format qui servait aussi de fil vers un serveur MCP **fédéré** distant qui le décodait — la fédération MCP est retirée depuis le **2026-09-09**, **ADR 0069** ; le format reste, sans consommateur distant, et des credentials restent stockés ainsi — dont ceux de `planity`, devenu natif le même jour sans qu'un octet du coffre bouge) ; ≥2 champs = `json`. L'endpoint de saisie et `resolve_credential_fields` passent par là.
 
 ## Chiffrement au repos — `crypto.py`
 
@@ -298,7 +298,7 @@ Enveloppe **AES-256-GCM**, **obligatoire** (`set_credential`/`_pk_encrypt` chiff
 
 `resolve_api_key(provider) -> (api_key, is_platform)` : (1) clé membre scopée (sub, org de contexte) (`get_member_api_key`→coffre, entity `member`/`{org}:{sub}`, ADR 0033) ; (2) org secret (si `byo_org` + org active) ; (3) platform grant + quota ; (4) McpError actionnable. Le connecteur **`bridge`** universel (ADR 0034) se résout par les **champs standard** (`resolve_credential_fields("bridge")` → `base_url`/`token`/`label`, cascade membre > groupe > org), raise actionnable si absent, **jamais de fallback SOPS serveur** — plus de `meta.base_url` (l'ex-`resolve_remote_credential` per-namespace retiré en B4).
 `resolve_credential_fields(provider) -> dict` : credential **multi-champs byo_user** (ex. `silae` : client_id/client_secret/subscription_key) — lit le coffre + `unpack_secret`. **byo-only, pas de platform key ni quota** (le credential EST le grant). Pour les clients in-process s'instanciant avec plusieurs secrets.
-`resolve_mount_token(provider)` : token per-user d'un MCP fédéré `kind="mount"` (OAuth atlassian/folkmcp ; la branche base64 `basic_auth` reste générique, sans consommateur vivant depuis que `planity` est natif), injecté en bearer par le proxy.
+⚠️ `resolve_mount_token(provider)` a été **retiré le 2026-09-09** (**ADR 0069**) : il rendait le token per-user d'un MCP fédéré `kind="mount"` (OAuth atlassian/folkmcp, ou la branche base64 `basic_auth`), que le proxy injectait en bearer. Plus aucun appelant, plus de fonction — ce qui suit ne le mentionne que pour qu'on cesse de le chercher.
 `status_for` = miroir exact (modes user/org/platform/over_quota/forbidden) — boucle aussi sur les byo_user à `secret_fields` hors `KEY_PROVIDERS` (planity, silae : `user`/`forbidden`) — `planity` y reste après son passage en natif, c'est la FORME du credential qui l'y met, pas son `kind`. `granted_namespaces_for`/`require_namespace` = gate des namespaces grant-only (deny-by-default), source unique consommée par middleware + meta-tools + REST.
 
 ## Palier org
@@ -312,7 +312,7 @@ Tables `orgs`/`org_members`(index partiel `org_members_one_active`)/`org_entitle
 
 ## Connecteurs remote — bridges (ADR 0003, pilote : un bridge back-office client)
 
-`kind="remote"` au registre = **aucun code ni credential client dans oto** : un bridge (service HTTP distant, ex. un bridge back-office client (repo privé)) détient le credential du système client ; oto-mcp = middleware générique `tools/remote.py` (tools `<ns>_describe` + `<ns>_call`, forward bearer M2M + `X-Oto-Sub` pour l'audit côté bridge). Le credential d'org = `secret` = token M2M + `meta.base_url` = endpoint (posé via `oto_admin_set_org_secret(..., base_url=…)`). Gating inchangé : grant-only + `require_namespace` au call-time. Contrat bridge (`/healthz`, `/describe`, `/call`) : ADR 0003 du meta-repo. Le mount MCP-to-MCP (`otomata#16`) = flavor complémentaire pour les remotes déjà-MCP.
+`kind="remote"` au registre = **aucun code ni credential client dans oto** : un bridge (service HTTP distant, ex. un bridge back-office client (repo privé)) détient le credential du système client ; oto-mcp = middleware générique `tools/remote.py` (tools `<ns>_describe` + `<ns>_call`, forward bearer M2M + `X-Oto-Sub` pour l'audit côté bridge). Le credential d'org = `secret` = token M2M + `meta.base_url` = endpoint (posé via `oto_admin_set_org_secret(..., base_url=…)`). Gating inchangé : grant-only + `require_namespace` au call-time. Contrat bridge (`/healthz`, `/describe`, `/call`) : ADR 0003 du meta-repo. ⚠️ Le flavor complémentaire envisagé pour les remotes **déjà-MCP** (« mount MCP-to-MCP », `otomata#16`) est **sans objet depuis le 2026-09-09** : la fédération MCP est retirée (**ADR 0069**). `kind="remote"`, lui, ne bouge pas — un service distant déjà-MCP se joint désormais par le connecteur `http` générique, ou s'écrit en connecteur natif.
 
 ## Projection instances (ADR 0038 B4)
 
@@ -375,8 +375,8 @@ d'identifiant. La pièce 2 ferme la fenêtre, et le fait **au fond**.
 existe **un seul `INSERT INTO connector_credentials`** et **un seul `DELETE`** dans tout
 le dépôt — `credentials_store._upsert` et `._delete`. Toutes les surfaces déclaratives
 (clé membre, clé d'org, clé d'équipe, clé plateforme, jeton d'API, session navigateur,
-flux OAuth google/zoho/salesforce/folk/atlassian) y aboutissent par `set_credential` /
-`clear_credential`. Accrocher la naissance aux surfaces aurait demandé une dizaine de
+flux OAuth google/zoho/salesforce — et folk/atlassian jusqu'au 2026-09-09, ADR 0069)
+y aboutissent par `set_credential` / `clear_credential`. Accrocher la naissance aux surfaces aurait demandé une dizaine de
 crochets pour le même effet, avec une chance sur dix d'en oublier un.
 
 | Geste sur le coffre | Effet sur l'instance |
@@ -662,12 +662,15 @@ Un refresh token révoqué (`invalid_grant`) n'efface plus la ligne du coffre �
 rendait indiscernable d'un credential jamais posé, un repli qui masque un problème
 plutôt que de le nommer. Elle se fait marquer (`meta.health_ko` + `meta.health_reason`
 = motif fournisseur **brut**, pas une catégorie opaque), même mécanisme que la sonde
-`verify` des connecteurs keyés. Concerne aujourd'hui les mounts OAuth fédérés au scope
-LEGACY `("user", sub)` (`auth/atlassian.py`, `auth/folk.py`) — récit complet, ce que ça
-rend observable (`/api/me` via `connectors/link.py::LinkState`) et ce que ça NE rend
-PAS observable (`oto_instance op=verify`, faute de sonde enregistrée et d'un walker qui
-sache lire ce scope) dans `connector-model.md` §« Purge silencieuse des mounts OAuth ».
-Changement de comportement **servi** — à annoncer avant tag.
+`verify` des connecteurs keyés. **La règle vaut toujours** ; ce qui a changé, c'est sa
+population. Le lot visait les mounts OAuth fédérés au scope LEGACY `("user", sub)`
+(`auth/atlassian.py`, `auth/folk.py`) — **retirés le 2026-09-09 avec la fédération MCP
+(ADR 0069)**, comme les deux modules. Les connecteurs OAuth restants (google,
+salesforce, zoho — lots b2 et b3 ci-dessous) portent le même mécanisme au palier
+MEMBRE. Récit complet, ce que ça rendait observable (`/api/me` via
+`connectors/link.py::LinkState`, seam intact) et ce que ça ne rendait PAS observable
+(`oto_instance op=verify`, faute de sonde enregistrée et d'un walker qui sache lire ce
+scope) dans `connector-model.md` §« Purge silencieuse des mounts OAuth ».
 
 ### L'aide partagée, généralisée à salesforce/zoho (oto#25 lot b2, 2026-09-04)
 
@@ -678,9 +681,13 @@ LEGACY `user` : aussi étroit que member, un seul utilisateur, jamais atteint pa
 cascade de `verify`) + `record_health` (utilisé par `verify.py`, démarque aussi sur
 succès) + `mark_rejected` (la façade neuve : un module qui connaît son ENTITÉ
 directement, sans passer par `ResolvedCtx`). `verify.py`, `auth/atlassian.py` et
-`auth/folk.py` appellent maintenant ce module au lieu de leurs anciennes
+`auth/folk.py` appelaient ce module au lieu de leurs anciennes
 définitions/appels directs à `credentials_store.update_meta` — même comportement,
-un seul endroit qui sait marquer une ligne rejetée.
+un seul endroit qui sait marquer une ligne rejetée. ⚠️ Les deux modules `auth/` sont
+partis le **2026-09-09** (ADR 0069) ; `FLAGGABLE_SCOPES` **garde** le scope LEGACY
+`user`, et c'est délibéré : plus aucun connecteur vivant n'y écrit, mais des lignes y
+dorment, et le retirer ferait d'un scope inatteignable un scope *interdit* — deux
+choses différentes.
 
 Deux connecteurs NEUFS rejoignent le mécanisme : `tools/salesforce.py` et
 `tools/zoho.py` marquent désormais leur ligne au refus du REFRESH
@@ -700,12 +707,13 @@ stabilisé, dans un lot séparé.
 ✅ **Fait dans ce lot séparé (2026-09-05, une fois oto-backend#877 poussé et
 tagué)** : `credentials_for` (le seul appelant de `_refresh_access_token`) marque
 sur `invalid_grant` (`GoogleReauthRequired`, même règle `oauth_flow.grant_is_dead`)
-puis **relève toujours** — contrairement à atlassian/folk, `credentials_for` n'a
+puis **relève toujours** — contrairement à atlassian/folk (alors encore au catalogue,
+retirés le 2026-09-09, ADR 0069), `credentials_for` n'a
 jamais rendu de `None` muet et ce lot ne change pas ce contrat. Démarque
 explicitement au refresh réussi : `update_google_access_token` MERGE le meta
 (`update_meta`, JSONB `||`), donc un `health_ko` posé plus tôt n'aurait jamais
 disparu tout seul (même raison que le point 3 ci-dessous pour Salesforce —
-contrairement à atlassian/folk, dont le remplacement total du meta démarque déjà
+contrairement à atlassian/folk, dont le remplacement total du meta démarquait déjà
 par accident). Bancs : `tests/auth/test_google_health_marking.py`.
 
 ### Le démarquage (oto#25 lot b3, 2026-09-05)
@@ -719,14 +727,15 @@ crierait au loup à tort sur un simple throttle passager :
    ACCIDENTEL qu'il fallait vérifier plutôt que supposer :
    `credentials_store.set_credential` REMPLACE tout le `meta` (jamais un merge, cf.
    son propre docstring) — poser une clé, quel que soit le chemin
-   (`persist_token` d'atlassian/folk, ou `capabilities/me_credentials.py::_set` pour
-   salesforce/zoho et tous les connecteurs keyés) écrit un `meta` neuf qui ne reporte
+   (`capabilities/me_credentials.py::_set` pour salesforce/zoho et tous les
+   connecteurs keyés ; `persist_token` d'atlassian/folk jusqu'au 2026-09-09) écrit un `meta` neuf qui ne reporte
    JAMAIS un `health_ko` d'avant. Figé par des tests dédiés
    (`tests/auth/test_oauth_dead_grant_marks_rejected.py`,
    `tests/test_me_credentials_capability.py`) plutôt que laissé implicite : une
    régression de `set_credential` vers un merge romprait cette garantie en silence.
 3. **Un refresh réussi** — le point qui manquait réellement :
-   - `atlassian`/`folk` : même mécanisme que le point 2 (`access_token_for` écrit
+   - `atlassian`/`folk` *(retirés le 2026-09-09, ADR 0069 — gardé pour le record)* :
+     même mécanisme que le point 2 (`access_token_for` écrivait
      `meta={access_token, expires_at}` au chemin nominal, un remplacement qui efface
      `health_ko` de la même façon).
    - `salesforce` : `on_refresh` (`_rotation_writer`) n'est invoqué qu'APRÈS un
@@ -762,7 +771,8 @@ Pas de framework de tests dans le repo → validation manuelle sur **PG16 jetabl
 #   RESP=$(curl -s -H "X-Auth-Token: $SCW_SECRET_KEY" \
 #     ".../secret-manager/v1beta1/regions/fr-par/secrets/<id>/versions/latest_enabled/access")
 #   export OTO_MCP_MASTER_KEY=$(echo "$RESP" | python3 -c 'import json,sys,base64; print(base64.b64decode(json.load(sys.stdin)["data"]).decode())')
-# Vécu 2026-06-22 (triage Sentry InvalidTag : 1 ligne de mount corrompue, écrite
+# Vécu 2026-06-22 (triage Sentry InvalidTag : 1 ligne de credential d'un connecteur
+# alors fédéré — « mount », famille retirée le 2026-09-09 — corrompue, écrite
 # avec une clé ≠ courante — les autres lignes déchiffraient → pas un souci de clé ;
 # fix = purge → re-OAuth). `status_for` doit utiliser `credential_status` (présence
 # sans déchiffrer), jamais `get_credential_with_meta`, pour ne pas 500 /api/me.

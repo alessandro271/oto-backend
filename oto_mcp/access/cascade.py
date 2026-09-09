@@ -30,8 +30,8 @@ from . import scope, secret_repr
 # whatsapp/crunchbase). Gate les barreaux groupe/org du walker.
 ORG_SHAREABLE_PROVIDERS = providers.ORG_SHAREABLE_PROVIDERS
 
-# Liste FERMÉE (#876) — PAS `connectors.link.entries()` (google, déjà migré, y est aussi).
-LEGACY_USER_SCOPE_PROVIDERS = ("atlassian", "folkmcp")
+# ⚠️ VIDE depuis le 09/09/2026 (ADR 0069) ; barreau gardé, des lignes dorment au scope.
+LEGACY_USER_SCOPE_PROVIDERS: tuple[str, ...] = ()
 
 
 def _is_multi_account(provider: str, org: "int | None" = None) -> bool:

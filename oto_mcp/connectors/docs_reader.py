@@ -68,7 +68,7 @@ def _resoudre(corps: str) -> str:
 
     Une doc ne doit JAMAIS écrire une URL de rappel en dur : elle dépend de
     l'environnement, donc une URL de prose ment dès qu'on la lit depuis l'autre. Bug
-    vécu : la doc d'atlassian et de folkmcp affichait le domaine de PREPROD à des
+    vécu : la doc de deux connecteurs affichait le domaine de PREPROD à des
     utilisateurs de production, et le `redirect_uri_mismatch` qui s'ensuivait accusait
     le client. Résolu à la LECTURE, jamais à l'import."""
     if "{{callback:" not in corps:

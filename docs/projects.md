@@ -232,7 +232,8 @@ Partage/transfert via **`oto_resource`** (resource_type=`project` ajouté au dis
 >
 > **Host-routing** (`subdomain_project.HostDispatch`, monté `root_app` dans `server.main`) : une **2ᵉ app
 > FastMCP sans auth** (`anon_mcp = mcp`, **réutilise l'instance no-auth module-level** — ne PAS en
-> re-build une 3ᵉ, doublait register_all/mounts/init_db → boot timeout) sert les sous-domaines anonymes ;
+> re-build une 3ᵉ, doublait `register_all`/`init_db` — et, jusqu'au 2026-09-09, le montage des
+> connecteurs fédérés → boot timeout) sert les sous-domaines anonymes ;
 > tout le reste → app authentifiée **inchangée**. **Même URL, 2 publics** : navigateur (`GET`+`Accept:
 > text/html`) → **landing HTML** rendue **live depuis la ligne projet** (`anon_landing.render`, name/brief_md/
 > mcp_tools) ; Claude/Mistral (`POST`) → MCP (rewrite path `/`→`/mcp`, `_root_to_mcp` — Claude tape la racine).

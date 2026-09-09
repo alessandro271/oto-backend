@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from ._model import _c
 
-# aiark : connecteur classique (kind="tools", ex-mount fédéré #152 → requalifié
+# aiark : connecteur classique (kind="tools", ex-MCP fédéré #152 → requalifié
 # #160). Client REST synchrone dans oto-core (`oto.tools.aiark`), tools curés
 # dans `tools/aiark.py` (contrat LLM), cascade de clé standard
 # (`resolve_api_key`) + `record_platform_usage` → mode plateforme possible.

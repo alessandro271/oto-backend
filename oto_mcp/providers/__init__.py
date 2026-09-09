@@ -62,11 +62,11 @@ from ._model import (  # noqa: F401  — surface publique historique du module
 #   migré bridge→http. Le concept « remote data-driven » (base_url sur un
 #   provider hors registre) subsiste dans `org_secret_meta`, sans entrée de
 #   catalogue ; l'identité client vit dans la CONFIG d'org, jamais en dur.
-# - `justicelibre` (mount no-auth vers justicelibre.org/mcp) RETIRÉ le
-#   2026-08-21 : la fédération MCP est en sommeil, son master était OFF en prod
-#   et le connecteur n'était plus qu'un reste. La branche « mount no-auth » de
-#   tools/mount.py (auth_modes VIDE) reste, générique et sans consommateur
-#   vivant — cf. docs/federation.md.
+# - `justicelibre` (mount no-auth) RETIRÉ le 2026-08-21, puis `atlassian` et
+#   `folkmcp` le 2026-09-09 avec le MÉCANISME lui-même : la fédération MCP
+#   (`kind="mount"`) est retirée de la plateforme (ADR 0069). Un service distant
+#   se joint désormais par le connecteur `http` générique, ou s'écrit en
+#   connecteur natif — ce qu'est devenu `planity`.
 # - `linkedin` déposé le 2026-08-10 (#231) : absorbé par `aiark` — même vendeur,
 #   même client, la distinction n'était qu'un mode d'auth, donc une INSTANCE.
 _DECLARATIONS: tuple[str, ...] = (
@@ -111,12 +111,9 @@ _DECLARATIONS: tuple[str, ...] = (
     "forager",
     # --- gocardless : keyed BYO self-serve -----------------------------------
     "gocardless",
-    "atlassian",
-    "folkmcp",
-    # `planity` reste ICI, entre les deux MCP fédérés et la suite, alors qu'il
-    # n'est plus fédéré (natif depuis le 2026-09-09, oto-backend#913) : cet ordre
-    # ne gouverne que l'AFFICHAGE, et le déplacer réordonnerait le catalogue sans
-    # rien réparer. Sa place se juge au voisinage montré, pas au `kind`.
+    # `planity` reste ICI, à la place qu'il occupait quand il était fédéré : cet
+    # ordre ne gouverne que l'AFFICHAGE, et le déplacer réordonnerait le catalogue
+    # sans rien réparer. Sa place se juge au voisinage montré, pas au `kind`.
     "planity",
     "cognism",
     "lighton",
@@ -295,7 +292,6 @@ DEFAULT_ACTIVE_CONNECTORS: frozenset = frozenset(
 # transport en DÉRIVE. `email_send` (spine) route sender→connecteur→transport.
 EMAIL_CONNECTOR_TRANSPORT: dict = {"scaleway": "scaleway", "resend": "resend"}
 REMOTE_CONNECTORS: tuple = tuple(c for c in _REGISTRY_LIST if c.kind == "remote")
-MOUNT_CONNECTORS: tuple = tuple(c for c in _REGISTRY_LIST if c.kind == "mount")
 
 
 # --- catalogue de namespaces présenté à l'agent (_SERVER_INSTRUCTIONS) -------

@@ -222,7 +222,7 @@ def _hors_de_portee_plateforme(all_names: set[str], role_plateforme: str) -> set
     inatteignable PAR CONSTRUCTION, jamais ce qui dépend d'une cible (une org, une
     équipe, une ressource) que le handshake ne connaît pas.
 
-    Repli par le NOM pour les outils écrits à la main (`oto_admin_refresh_mount`) :
+    Repli par le NOM pour les outils écrits à la main :
     leur garde vit dans leur handler, rien n'est déclaré ici, donc rien n'est
     dérivable — le préfixe reste le seul indice, au cran `operator` (ce que ce
     handler-là vérifie). Le jour où ils deviennent des capacités, ils tombent sous la

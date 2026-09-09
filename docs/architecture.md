@@ -28,7 +28,9 @@ oto_mcp/
 │                     #   Logto), token_scopes (portée d'un jeton `oto_…`), anon (shim
 │                     #   OAuth des endpoints publics). Sortant : flow (la danse
 │                     #   `authorization_code`, écrite UNE fois), pkce, puis un module
-│                     #   par fournisseur — atlassian, folk, google, salesforce, zoho.
+│                     #   par fournisseur — google, salesforce, zoho (atlassian et folk
+│                     #   ont vécu ici jusqu'au 2026-09-09 : retrait de la fédération
+│                     #   MCP, ADR 0069).
 ├── connectors/       # le connecteur côté PLATEFORME : activation, selection, identities,
 │                     #   link, flow, verify, field_schema, schema_store + `docs/` (la
 │                     #   fiche how-to en markdown) et `docs_reader`. ⚠️ trois voisins à
@@ -58,7 +60,7 @@ oto_mcp/
 │   ├── tenant_budget.py  # le budget par org de l'arête tenant→org (L-clés PR 2), appliqué à la résolution
 │   ├── resolve_anon.py  # l'endpoint MCP anonyme (ADR 0032), extrait de resolve le 29/08 — l'étage tenant n'y vient que d'une arête
 │   ├── resolve.py    #   la résolution réelle d'un credential (chemin chaud)
-│   ├── views.py      #   vues minces : resolve_api_key/_fields, mount, credential_mode_for, option_open
+│   ├── views.py      #   vues minces : resolve_api_key/_fields, credential_mode_for, option_open
 │   └── status.py     #   le snapshot par connecteur de /api/me
 ├── db/               # store PG (package) : _conn (pool/connexion), _schema (DDL), _init (migrations) + 1 module/domaine (users, keys, usage, datastore, projects, opendata…). Surface plate `db.<fn>` via __init__
 ├── org_store/        # palier ORG (package, découpé le 2026-08-27) : orgs (la fiche), members (appartenance + MAISON),

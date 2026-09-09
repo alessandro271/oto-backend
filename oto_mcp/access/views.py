@@ -1,10 +1,12 @@
 """Les vues MINCES sur la résolution — un contrat par usage.
 
 Un tool keyed veut une clé (`resolve_api_key`), un client multi-secrets veut ses
-champs (`resolve_credential_fields`), un mount fédéré veut son token OAuth
-(`resolve_mount_token`), le dashboard veut savoir SOUS QUELLE ORIGINE ça
-résoudrait sans rien déchiffrer (`credential_mode_for`), et l'endpoint publié
+champs (`resolve_credential_fields`), le dashboard veut savoir SOUS QUELLE ORIGINE
+ça résoudrait sans rien déchiffrer (`credential_mode_for`), et l'endpoint publié
 veut savoir si une org peut résoudre seule (`connector_resolvable_for_org`).
+
+⚠️ `resolve_mount_token` a vécu ici jusqu'au 2026-09-09 : c'était la vue du token
+OAuth per-user d'un MCP fédéré, et elle est partie avec le mécanisme (ADR 0069).
 
 Toutes dérivent de `resolve` ou du walker en sonde de présence : aucune ne
 recopie la cascade — une divergence ferait MENTIR une surface (vécu 2026-07-07 :
@@ -65,53 +67,10 @@ def resolve_credential_fields(provider: str, account: Optional[str] = None) -> d
     Pour les connecteurs in-process dont le client s'instancie avec plusieurs
     secrets (ex. Silae : client_id / client_secret / subscription_key, OAuth2
     client-credentials). **byo-only** : pas de clé plateforme ni de quota — le
-    credential EST le grant, comme un mount. Vue mince sur `resolve_credential`
+    credential EST le grant. Vue mince sur `resolve_credential`
     (cascade user > groupe > org, sans palier plateforme ; `account` sélectionne
     le compte en multi-compte)."""
     return resolve.resolve_credential(provider, want="byo", account=account).fields
-
-
-def resolve_mount_token(provider: str) -> str:
-    """Résout le **token OAuth per-user** d'un connecteur fédéré `kind="mount"`
-    (otomata#16) depuis le coffre — entité `user` = sub courant.
-
-    Contrairement à un remote (credential d'ORG = token M2M du bridge), un mount
-    fédère un MCP distant déjà authentifié par user (ex. atlassian, OAuth Rovo) :
-    chaque user porte SON token, résolu par requête et injecté en bearer dans le
-    proxy (cf. tools/mount.py). Lève une McpError actionnable si le user n'a pas
-    connecté ce service — le proxy traduit ça en « tools non visibles » (le
-    ProxyProvider warn+skip), pas en crash de session.
-    """
-    sub = scope.current_user_sub_or_raise()
-    # OAuth fédéré : token avec refresh transparent.
-    # Le résolveur connector-spécifique vit hors d'access (refresh = flow OAuth).
-    if provider == "atlassian":
-        from ..auth import atlassian as atlassian_oauth
-        token = atlassian_oauth.access_token_for(sub)
-    elif provider == "folkmcp":
-        from ..auth import folk as folk_oauth
-        token = folk_oauth.access_token_for(sub)
-    else:
-        # Mount non-oauth (basic_auth) : credential posé via la carte api-keys →
-        # scope membre (ADR 0033), comme sa pose. Branche GÉNÉRIQUE sans
-        # consommateur vivant depuis que `planity` est natif (2026-09-09,
-        # oto-backend#913) : les deux mounts déclarés sont OAuth. Gardée pour la
-        # même raison que la branche no-auth de `tools/mount.py` — elle ne coûte
-        # rien et le prochain mount à clé la retrouvera écrite.
-        org = scope.current_org(sub)
-        token = (credentials_store.get_credential(
-                     credentials_store.MEMBER,
-                     credentials_store.member_id(org, sub), provider)
-                 if org is not None else None)
-    if token:
-        return token
-    raise McpError(ErrorData(
-        code=INVALID_PARAMS,
-        message=(
-            f"Connecteur `{provider}` non connecté pour ton compte. "
-            f"Connecte-le depuis ton dashboard (manage.oto.cx)."
-        ),
-    ))
 
 
 def credential_mode_for(sub: str, provider: str, *,

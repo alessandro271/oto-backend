@@ -104,7 +104,8 @@ Deux défauts que seule la couche 2 (vraies clés) pouvait rendre :
 
 Consigner dans la PR : les comptes de tests unitaires (avant / après), les résultats de la couche MCP en
 lecture seule, le résultat de la boucle sur table jetable, et les questions laissées au mainteneur —
-typiquement : un mount capable d'écrire est-il acceptable pour ce connecteur ? quel tag oto-core épingler ?
+typiquement : un outil capable d'ÉCRIRE chez le tiers est-il acceptable pour ce connecteur ? quel tag
+oto-core épingler ?
 
 ⚠️ Les rouges de la suite complète se lisent **par différentiel avec le commit de base**, jamais en absolu :
 sur un poste sans Docker, la fixture testcontainers et `DATABASE_URL not set` produisent une grappe

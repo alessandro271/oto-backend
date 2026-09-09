@@ -9,7 +9,7 @@ from __future__ import annotations
 from fastmcp import FastMCP
 
 
-def register_all(mcp: FastMCP, *, include_mounts: bool = True) -> None:
+def register_all(mcp: FastMCP) -> None:
     import logging
 
     log = logging.getLogger("oto_mcp.tools")
@@ -61,23 +61,12 @@ def register_all(mcp: FastMCP, *, include_mounts: bool = True) -> None:
     from . import guide_run
     guide_run.register(mcp)
 
-    # Connecteurs mount (fédération MCP, otomata#16) — monte un MCP distant via
-    # proxy FastMCP, credential per-user injecté par requête. Inerte tant
-    # qu'aucun connecteur kind="mount" n'est déclaré au registre (canari).
-    # `include_mounts=False` : le catalogue LOCAL sans aller chercher les
-    # catalogues distants. Le fetch attend un tiers sans délai maximal propre
-    # (oto-backend#892) ; il n'a sa place qu'au démarrage, jamais dans un import.
-    if include_mounts:
-        from . import mount
-        mount.register(mcp)
-
     # Connecteurs — chargement DÉRIVÉ DU REGISTRE (ADR 0010/0011, #24). Fin de la
     # liste hardcodée : pour chaque provider `kind="tools"`, on importe ses
     # modules `tools/<m>.py` (`Connector.modules`, défaut = le nom du provider) et
     # on appelle `register(mcp)`. Le registre `providers/` est l'UNIQUE source.
     #
-    # - `kind="mount"` (atlassian/folkmcp) et `kind="remote"` sont EXCLUS : déjà
-    #   gérés par mount.register / remote.register (génériques) ci-dessus.
+    # - `kind="remote"` est EXCLU : géré par remote.register (générique).
     # - try/except par module (résilience uniforme) : un connecteur dont une dép
     #   optionnelle manque (oto-cli en retard, duckdb/o-browser absents, parquet
     #   introuvable…) se désactive en loggant un warning SANS faire tomber le

@@ -56,7 +56,7 @@ _SURFACE = """
     rbac_denied_connectors reachable_instances reachable_instances_map
     reachable_team_key record_platform_usage require_connector_access
     resolve_api_key resolve_credential resolve_credential_fields
-    resolve_field_filter resolve_mount_token resolve_datastore_ref
+    resolve_field_filter resolve_datastore_ref
     resolve_slot_tableau session_org status_for status_hints
     walk_cascade
 """.split()
@@ -83,11 +83,14 @@ def test_l_inventaire_n_est_pas_vide():
     """Un inventaire vidé par accident rendrait le test vert et inutile.
 
     92 → 91 le 05/09/2026 : `unipile_api_key_for` retiré, un seul nom, parce
-    qu'il n'a plus d'appelant (cf. l'entête). Ce compte n'est pas décoratif —
-    c'est lui qui oblige à écrire POURQUOI la surface bouge. Une baisse qu'on
-    ne peut pas justifier nom par nom est un rabotage, pas un nettoyage.
+    qu'il n'a plus d'appelant (cf. l'entête). 91 → 90 le 09/09/2026 :
+    `resolve_mount_token` retiré avec la fédération MCP (ADR 0069) — il résolvait
+    le token OAuth per-user d'un `kind="mount"`, et son seul appelant
+    (`tools/mount.py`) n'existe plus. Ce compte n'est pas décoratif — c'est lui
+    qui oblige à écrire POURQUOI la surface bouge. Une baisse qu'on ne peut pas
+    justifier nom par nom est un rabotage, pas un nettoyage.
     """
-    assert len(_SURFACE) == 91
+    assert len(_SURFACE) == 90
 
 
 def test_une_ecriture_sur_la_facade_traverse_les_sous_modules(monkeypatch):

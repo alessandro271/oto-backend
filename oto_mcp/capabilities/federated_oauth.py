@@ -1,47 +1,22 @@
-"""Les VERBES du consentement OAuth per-user : lire l'état, déconnecter (et, pour
-`google` seul, démarrer — voir plus bas pourquoi les trois n'ont pas le même sort).
+"""Les VERBES du consentement OAuth per-user de **google** : démarrer, lire l'état,
+révoquer, élire le compte par défaut.
 
-Dix routes écrites à la main jusqu'au 2026-08-27, portées en capacités (ADR 0009) —
-mêmes chemins, mêmes codes, même corps sur le fil :
+- `GET    /api/google/oauth/start`   → `{auth_url}` à ouvrir
+- `GET    /api/google/oauth/status`  → l'état du consentement (multi-compte)
+- `DELETE /api/google/oauth`         → révoque
+- `POST   /api/google/oauth/default` → élit le compte Google par défaut
 
-- `GET    /api/{atlassian,folkmcp,google}/oauth/start`  → `{auth_url}` à ouvrir
-- `GET    /api/{atlassian,folkmcp,google}/oauth/status` → l'état du consentement
-- `DELETE /api/{atlassian,folkmcp,google}/oauth`        → révoque
-- `POST   /api/google/oauth/default`                    → élit le compte Google par défaut
+⚠️ **Ce module a porté `atlassian` et `folkmcp` jusqu'au 2026-09-09** — d'où son nom
+et les clés de capacité `me.federation.google.*`, gardés tels quels : ce sont des
+identifiants servis, et les renommer serait une rupture de contrat sans contrepartie.
+La **fédération MCP est retirée de la plateforme** (ADR 0069, `kind="mount"`) ; il ne
+reste ici que google, qui n'a JAMAIS été fédéré — c'est un connecteur natif dont le
+credential s'acquiert par OAuth, exactement comme salesforce ou zoho.
 
-⚠️ **`.start` d'atlassian et folkmcp RETIRÉ le 2026-09-04 (oto-dashboard#125), celui de
-google GARDÉ.** Le dashboard démarre les trois par le chemin fixe générique depuis le
-01/09 (`POST /api/me/connectors/{name}/connect`, commit dashboard `433d563`), mais ce
-sont des routes REST PUBLIQUES : mesuré sur `tool_calls` (30 jours, toutes origines,
-`oto_admin_monitoring op=rest route=…`) avant tout retrait, PAS supposé sur la seule
-disparition de l'appelant chez nous. Résultat : `atlassian`/`folkmcp` à **0 appel**,
-`google` à **2** (2 utilisateurs, dernier le 02/09 — un jour après le cutover dashboard,
-compatible avec un cache navigateur pas encore rafraîchi, mais non confirmé). D'où le
-retrait des deux premiers et le maintien du troisième — la mesure décide route par
-route, jamais par famille.
-
-⚠️ **`.disconnect` d'atlassian et folkmcp RETIRÉ le 2026-09-04 (même lot, même mesure)**
-— `DELETE /api/{atlassian,folkmcp}/oauth` à **0 appel/30j, avant ET après** le bascule du
-dashboard vers `me.connector_disconnect` (`oto-dashboard v1.56.0`, `capabilities/
-connectors/oauth_status.py`) : zéro indépendant du timing, contrairement à `.status`
-(3 appels folkmcp le 01/09, 3 jours AVANT le bascule — trafic réel, pas un artefact,
-**gardé**, remesure prévue après le 04/10/2026 une fois 30 jours pleins écoulés depuis
-le bascule). `me.connector_disconnect` ne dépend PAS de cette capacité : il rappelle
-`atlassian_oauth.disconnect`/`folk_oauth.disconnect` directement
-(`capabilities/connectors/oauth_status.py`), donc son retrait ne change AUCUN
-comportement servi ailleurs.
-
-⚠️ **Les CALLBACKS ne migrent pas** (`…/oauth/callback`, un par fournisseur) : le
-fournisseur y redirige le NAVIGATEUR, sans en-tête d'auth, et la réponse est une **302**,
-pas du JSON. L'adaptateur REST authentifie toujours et répond toujours en JSON : ils sont
-hors du moule par construction, et restent classés par NATURE dans leurs modules.
-
-**Deux familles, pas trois.** `atlassian` et `folkmcp` fédèrent un MCP distant : leur
-jeton per-user vit au coffre et `tools/mount.py` l'injecte par requête. Leur surface est
-identique au champ près, d'où des `Input`/`Output` partagés — le dashboard les pilote
-d'ailleurs par un client GÉNÉRIQUE (`/api/${name}/oauth/…`), ce qui rend cette symétrie
-contractuelle et pas cosmétique. `google` est à part : il porte PLUSIEURS comptes,
-donc un statut plus riche et un verbe de plus (élire le défaut).
+⚠️ **Les CALLBACKS ne vivent pas ici** (`…/oauth/callback`) : le fournisseur y redirige
+le NAVIGATEUR, sans en-tête d'auth, et la réponse est une **302**, pas du JSON.
+L'adaptateur REST authentifie toujours et répond toujours en JSON : ils sont hors du
+moule par construction, et restent classés par NATURE dans leurs modules.
 
 **Pas de face MCP** (`mcp=None`) : ouvrir une page de consentement demande un
 navigateur, et le pendant agent générique existe déjà (`me.connector_connect`). Un
@@ -86,20 +61,14 @@ class OAuthStart(BaseModel):
     auth_url: str
 
 
-class FederationStatus(BaseModel):
-    """État d'une fédération MCP per-user. `set_at` = quand le jeton a été posé ; `null`
-    avec `connected: false` est l'état normal d'un compte jamais connecté."""
-    connected: bool
-    set_at: Optional[str] = None
-
-
 class FederationDisconnected(BaseModel):
     """`disconnected: false` = il n'y avait rien à déconnecter (idempotent), pas un échec.
 
-    ⚠️ Plus utilisée par une capacité DE CE FICHIER depuis le retrait de `.disconnect`
-    (2026-09-04, oto-dashboard#125) — importée telle quelle par
-    `capabilities/connectors/oauth_status.py::me.connector_disconnect`, qui la
-    réutilise comme contrat de sortie. Ne pas supprimer en la croyant morte."""
+    ⚠️ **Aucune capacité de CE fichier ne la produit** — elle est importée telle quelle
+    par `capabilities/connectors/oauth_status.py::me.connector_disconnect`, qui la
+    réutilise comme contrat de sortie. Ne pas supprimer en la croyant morte : le retrait
+    de la fédération (2026-09-09) n'y a rien changé, `me.connector_disconnect` sert
+    toujours google."""
     ok: bool
     disconnected: bool
 
@@ -131,46 +100,6 @@ class GoogleRevoked(BaseModel):
 class GoogleDefaultSet(BaseModel):
     ok: bool
     default: str
-
-
-# --- Fédérations MCP per-user (atlassian, folkmcp) --------------------------
-
-def _federation(nom: str, module_attr: str):
-    """Le seul verbe restant d'une fédération (`status`), branché sur SON module OAuth.
-
-    Le module est résolu à l'APPEL (import paresseux) : ces modules montent des clients
-    HTTP et lisent la config au chargement, on ne les tire pas à l'import du registre.
-
-    ⚠️ **Pas de `.start` ni de `.disconnect` ici** (retirés le 2026-09-04,
-    oto-dashboard#125) : mesurés sur `tool_calls` (30 jours, toutes origines,
-    `oto_admin_monitoring op=rest route=…`) à **0 appel** pour `atlassian` ET
-    `folkmcp`, avant ET après le bascule dashboard (`.disconnect` était déjà à zéro
-    dans les deux fenêtres — zéro indépendant du timing). `me.connector_disconnect`
-    (`capabilities/connectors/oauth_status.py`) ne dépend pas de la capacité retirée :
-    il rappelle `atlassian_oauth.disconnect`/`folk_oauth.disconnect` directement.
-    `.status`, lui, est GARDÉ : du trafic réel a été mesuré 3 jours avant le bascule
-    (folkmcp, 01/09) — remesure prévue après le 04/10/2026 (30 jours pleins depuis le
-    bascule dashboard) avant de trancher son sort. `google` reste à part : cf.
-    `_google_start` ci-dessous, la mesure décide route par route, jamais par famille."""
-    def _module():
-        from ..auth import atlassian as atlassian_oauth
-        from ..auth import folk as folk_oauth
-        return {"atlassian_oauth": atlassian_oauth, "folk_oauth": folk_oauth}[module_attr]
-
-    def _status(ctx: ResolvedCtx, inp: OAuthStatusInput) -> dict:
-        return _module().status_for(ctx.sub)
-
-    base = f"/api/{nom}/oauth"
-    return [
-        Capability(
-            key=f"me.federation.{nom}.status", handler=_status, Input=OAuthStatusInput,
-            authz=SUB_ONLY, Output=FederationStatus, mcp=None,
-            description=(f"Mon consentement {nom} est-il posé, et depuis quand. "
-                         "`connected: false` avec `set_at: null` est l'état normal d'un "
-                         "compte jamais connecté."),
-            rest=RestBinding("GET", base + "/status"),
-        ),
-    ]
 
 
 # --- Google (multi-compte) --------------------------------------------------
@@ -242,10 +171,7 @@ _DOC_G_DEFAULT = (
     "outils quand aucun compte n'est nommé à l'appel."
 )
 
-CAPABILITIES += (
-    _federation("atlassian", "atlassian_oauth")
-    + _federation("folkmcp", "folk_oauth")
-    + [
+CAPABILITIES += [
         Capability(
             key="me.federation.google.start", handler=_google_start,
             Input=OAuthStartInput, authz=SUB_ONLY, Output=OAuthStart, mcp=None,
@@ -270,5 +196,4 @@ CAPABILITIES += (
             description=_DOC_G_DEFAULT,
             rest=RestBinding("POST", "/api/google/oauth/default"),
         ),
-    ]
-)
+]

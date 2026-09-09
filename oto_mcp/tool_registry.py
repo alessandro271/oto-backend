@@ -163,18 +163,18 @@ def match(query: str, entries: list[dict]) -> list[dict]:
 
 
 def _entry(tool) -> dict:
-    """Entrée registre d'un tool MCP : nom + résumé d'une ligne (`blurb`) + source
-    native/federated."""
-    conn = providers.connector_for_namespace(namespace_of(tool.name))
-    federated = bool(conn and conn.kind == "mount")
-    e = {
+    """Entrée registre d'un tool MCP : nom + résumé d'une ligne (`blurb`) + source.
+
+    ⚠️ **`source` vaut désormais TOUJOURS `"native"`**, et le champ `mcp` n'est plus
+    jamais posé : la fédération MCP est retirée (2026-09-09, ADR 0069), donc plus
+    aucun outil servi ne vient d'un serveur tiers. Le champ SURVIT parce qu'il est
+    au contrat servi (dashboard), pas parce qu'il discrimine encore quelque chose —
+    le retirer est une rupture cross-repo, à faire côté front d'abord."""
+    return {
         "name": tool.name,
         "description": blurb(tool.description),
-        "source": "federated" if federated else "native",
+        "source": "native",
     }
-    if federated and conn:
-        e["mcp"] = conn.name
-    return e
 
 
 # Registre boot mis en cache, réchauffé au DÉMARRAGE hors de tout contexte de

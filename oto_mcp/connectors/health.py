@@ -3,8 +3,8 @@
 Extrait de `capabilities/connectors/verify.py` (seul écrivain jusqu'ici, sous les
 noms privés `_FLAGGABLE` / `_record_health`) pour que les modules qui RECONNAISSENT
 eux-mêmes un grant mort (le motif `invalid_grant` et ses équivalents — aujourd'hui
-atlassian, folk, salesforce, zoho ; google au refresh reste EXCLU, WIP concurrent
-sur son retour OAuth) marquent la ligne RÉELLEMENT servie sans dupliquer le geste
+salesforce et zoho ; google au refresh reste EXCLU, WIP concurrent sur son retour
+OAuth) marquent la ligne RÉELLEMENT servie sans dupliquer le geste
 ni sa garde. `verify.py` importe ce module à la place de ses définitions locales —
 refactor pur, son comportement ne change pas.
 
@@ -14,13 +14,14 @@ Deux éléments :
   utilisateur) de celui qui déclenche le marquage. `tenant` et `platform` en sont
   TOUJOURS exclus — partagés par des orgs entières (ou plusieurs tenants), le hoquet
   d'un seul appelant n'a pas à les peindre en rouge pour tout le monde. `USER` (scope
-  LEGACY `("user", sub)` d'avant ADR 0033, seule famille où il survit encore :
-  atlassian/folkmcp/google) y est aussi narrow que `MEMBER` — un seul utilisateur —
+  LEGACY `("user", sub)` d'avant ADR 0033 — plus aucun connecteur vivant n'y écrit
+  depuis le retrait de la fédération MCP, 2026-09-09, mais des lignes y DORMENT)
+  y est aussi narrow que `MEMBER` — un seul utilisateur —
   et n'atteint jamais `verify.py` (sa cascade ne produit que `MEMBER`/`group`/`org` :
   cf. `access/cascade.py`, qui yield `CascadeRung("user", credentials_store.MEMBER,
   …)` — la chaîne "user" y est un MODE, pas un `entity_type`). L'élargir ici ne
-  change donc rien à ce que `verify.py` marque, et permet à atlassian/folk d'utiliser
-  la MÊME garde sans en écrire une seconde.
+  change donc rien à ce que `verify.py` marque, et l'a laissé couvrir ce scope avec
+  la MÊME garde plutôt qu'une seconde.
 - `record_health(provider, scope, ok, error)` : persiste `meta.health_ko` +
   `meta.health_reason` (merge, best-effort). `scope=None` → no-op. C'est la fonction
   qu'utilise `verify.py`, qui gère elle-même le DÉMARQUAGE (`ok=True` efface

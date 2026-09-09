@@ -106,8 +106,11 @@ class RegistryEntry(BaseModel):
     (la 1ʳᵉ ligne de la docstring, écrêtée), pas la fiche — pour ça, `…/detail`."""
     name: str
     description: str
-    source: str                       # 'native' | 'federated'
-    # Nom du connecteur fédéré d'origine — absent pour un outil natif.
+    # ⚠️ TOUJOURS `"native"` depuis le retrait de la fédération MCP (2026-09-09,
+    # ADR 0069) : plus aucun outil servi ne vient d'un serveur tiers. Gardé au
+    # contrat (le dashboard le lit), pas parce qu'il discrimine encore.
+    source: str
+    # Jamais posé depuis le même retrait ; gardé pour la même raison.
     mcp: Optional[str] = None
 
 
@@ -135,7 +138,7 @@ class ToolDetailView(BaseModel):
     output_schema: Optional[dict] = None
     namespace: Optional[str] = None
     connector: Optional[ToolConnector] = None
-    source: str                       # 'native' | 'federated'
+    source: str                       # toujours 'native' (cf. RegistryEntry)
     enabled: bool
     protected: bool
     default_hidden: bool
@@ -244,7 +247,6 @@ async def _detail(ctx: ResolvedCtx, inp: ToolNameInput) -> dict:
     ns = namespace_of(inp.name)
     conn = providers.connector_for_namespace(ns)
     disabled = set(db.list_user_disabled_tools(ctx.sub, access.current_org(ctx.sub) or 0))
-    federated = bool(conn and conn.kind == "mount")
     return {
         "name": inp.name,
         "description": (tool.description or "").strip(),
@@ -252,7 +254,7 @@ async def _detail(ctx: ResolvedCtx, inp: ToolNameInput) -> dict:
         "output_schema": getattr(tool, "output_schema", None),
         "namespace": ns,
         "connector": ({"name": conn.name, "label": conn.label} if conn else None),
-        "source": "federated" if federated else "native",
+        "source": "native",
         "enabled": inp.name not in disabled,
         "protected": inp.name in PROTECTED_TOOLS,
         "default_hidden": is_default_hidden(inp.name),

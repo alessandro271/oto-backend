@@ -1,18 +1,22 @@
 """`me.connector_status` / `me.connector_disconnect` (oto-dashboard#125, items 2/3) —
 le couple symétrique de `me.connector_connect` : un chemin fixe qui ne nomme pas le
-connecteur, pour lire l'état d'un consentement OAuth fédéré et le révoquer.
+connecteur, pour lire l'état d'un consentement OAuth et le révoquer.
+
+⚠️ **Ils couvraient TROIS connecteurs jusqu'au 2026-09-09** (atlassian, folkmcp,
+google) ; les deux premiers sont partis avec la fédération MCP (ADR 0069). Le chemin
+reste GÉNÉRIQUE pour le seul google — c'est le contrat que le dashboard appelle, et
+il ne se replie pas parce que la liste a rétréci.
 
 Ce que ce fichier MORD :
 
 - **Contrainte 1** (bloquante, arbitrage du 04/09/2026) — `me.connector_status` ne doit
-  JAMAIS interroger `auth.atlassian`/`auth.folk`/`auth.google` en lecture : son état
-  vient d'`access.status_for`, la MÊME source que `/api/me`. Les tests patchent les
-  trois lecteurs `auth.*` pour qu'ils LÈVENT si on les appelle, et vérifient que la
-  capacité répond quand même — la preuve qu'elle ne passe jamais par là.
+  JAMAIS interroger `auth.google` en lecture : son état vient d'`access.status_for`, la
+  MÊME source que `/api/me`. Le test patche le lecteur `auth.*` pour qu'il LÈVE si on
+  l'appelle, et vérifie que la capacité répond quand même — la preuve qu'elle ne passe
+  jamais par là.
 - **Contrainte 2** (décision d'Alexis) — `me.connector_disconnect` appelle bien la
-  fonction de révocation déjà en production (`atlassian_oauth.disconnect`,
-  `folk_oauth.disconnect`, `google_oauth.revoke`) et rend `disconnected` fidèlement,
-  en un seul appel, idempotent sur le suivant.
+  fonction de révocation déjà en production (`google_oauth.revoke`) et rend
+  `disconnected` fidèlement, en un seul appel, idempotent sur le suivant.
 """
 from __future__ import annotations
 
@@ -20,8 +24,6 @@ import pytest
 
 from _datastore_rest import call, stub_authz
 
-from oto_mcp.auth import atlassian as atlassian_oauth
-from oto_mcp.auth import folk as folk_oauth
 from oto_mcp.auth import google as google_oauth
 from oto_mcp.capabilities.connectors import oauth_status
 from oto_mcp.capabilities.registry import CAPABILITIES
@@ -34,13 +36,16 @@ def _cap(key: str):
 
 # --- Inventaire du registre --------------------------------------------------
 
-def test_les_trois_connecteurs_oauth_federes_sont_couverts():
-    assert set(flow_status.entries()) == {"atlassian", "folkmcp", "google"}
+def test_seul_google_est_couvert():
+    """⚠️ La liste a RÉTRÉCI le 2026-09-09 : atlassian et folkmcp sont partis avec la
+    fédération MCP (ADR 0069). Ce test est ce qui empêche l'un des deux de revenir
+    par une déclaration oubliée."""
+    assert set(flow_status.entries()) == {"google"}
 
 
 def test_aucun_verbe_status_nest_cable_ici():
-    """Contrainte 1 : ce registre ne branche QUE `disconnect` — `status` reste `None`
-    pour les trois, sinon `me.connector_status` aurait un second chemin pour diverger
+    """Contrainte 1 : ce registre ne branche QUE `disconnect` — `status` reste `None`,
+    sinon `me.connector_status` aurait un second chemin pour diverger
     de `access.status_for`."""
     for nom, f in flow_status.entries().items():
         assert f.status is None, f"{nom} : un lecteur status est câblé — contrainte 1 violée"
@@ -84,11 +89,11 @@ def test_un_connecteur_non_couvert_est_refuse(monkeypatch):
 
 # --- Contrainte 1 : `me.connector_status` ne crée pas une seconde vérité ---------
 
-@pytest.mark.parametrize("nom", ["atlassian", "folkmcp", "google"])
-def test_le_statut_ne_touche_JAMAIS_un_module_auth(monkeypatch, nom):
-    """MORD sur la contrainte 1 : les trois lecteurs `auth.*` sont patchés pour LEVER
-    s'ils sont appelés — `me.connector_status` doit répondre quand même, en lisant
-    UNIQUEMENT `access.status_for`."""
+def test_le_statut_ne_touche_JAMAIS_un_module_auth(monkeypatch):
+    """MORD sur la contrainte 1 : le lecteur `auth.*` est patché pour LEVER s'il est
+    appelé — `me.connector_status` doit répondre quand même, en lisant UNIQUEMENT
+    `access.status_for`."""
+    nom = "google"
     stub_authz(monkeypatch)
 
     def _boom(*a, **k):
@@ -96,8 +101,6 @@ def test_le_statut_ne_touche_JAMAIS_un_module_auth(monkeypatch, nom):
             f"{nom} : un module auth.* a été appelé — la source doit être "
             "access.status_for seul (contrainte 1)")
 
-    monkeypatch.setattr(atlassian_oauth, "status_for", _boom)
-    monkeypatch.setattr(folk_oauth, "status_for", _boom)
     monkeypatch.setattr(google_oauth, "list_accounts", _boom)
     monkeypatch.setattr(oauth_status.access, "status_for", lambda sub: {
         "providers": {
@@ -114,7 +117,7 @@ def test_le_statut_ne_touche_JAMAIS_un_module_auth(monkeypatch, nom):
 def test_jamais_connecte_rend_connected_false_et_health_null(monkeypatch):
     stub_authz(monkeypatch)
     monkeypatch.setattr(oauth_status.access, "status_for", lambda sub: {"providers": {}})
-    code, out = call("me.connector_status", path_params={"name": "atlassian"})
+    code, out = call("me.connector_status", path_params={"name": "google"})
     assert code == 200
     assert out == {"connected": False, "set_at": None,
                    "health_ko": None, "health_reason": None}
@@ -122,26 +125,6 @@ def test_jamais_connecte_rend_connected_false_et_health_null(monkeypatch):
 
 
 # --- Contrainte 2 : déconnexion irréversible, un seul appel, idempotente --------
-
-@pytest.mark.parametrize("nom,mod", [("atlassian", atlassian_oauth), ("folkmcp", folk_oauth)])
-def test_la_deconnexion_appelle_la_revocation_et_est_idempotente(monkeypatch, nom, mod):
-    stub_authz(monkeypatch)
-    vus: list = []
-
-    def _disconnect_une_fois(sub):
-        # Miroir de `credentials_store.clear_credential` : True la première fois
-        # (une ligne existait et a été retirée), False ensuite (idempotent).
-        premiere = not vus
-        vus.append(sub)
-        return premiere
-
-    monkeypatch.setattr(mod, "disconnect", _disconnect_une_fois)
-    code, out = call("me.connector_disconnect", path_params={"name": nom})
-    assert (code, out) == (200, {"ok": True, "disconnected": True})
-    code, out = call("me.connector_disconnect", path_params={"name": nom})
-    assert (code, out) == (200, {"ok": True, "disconnected": False})
-    assert vus == ["u-1", "u-1"]
-
 
 def test_la_deconnexion_google_revoque_TOUS_les_comptes_en_un_appel(monkeypatch):
     """Pas de double étape (contrainte 2) : `account=None` — le même comportement,

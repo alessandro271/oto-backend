@@ -299,12 +299,15 @@ rien ne rendait navigable et que rien ne tenait.
   autrement » de « la moitié du correctif manque ». *Une convention qui demande un
   chiffre sans dire d'où il sort produit des chiffres différents chez chacun.* Le
   script mesure aussi le **schéma d'entrée**, qui pèse autant qu'une phrase.
-  ⚠️ **Et un rapport d'empreinte NOMME CE QU'IL NE REGARDE PAS.** Tous les outils ne
-  viennent pas du code : les connecteurs fédérés sont montés d'après la base, donc
-  absents d'un relevé pris sans elle — **en silence**. Le script coiffe sa sortie d'une
-  ligne de portée qui les nomme, et **refuse de soustraire deux relevés de portées
-  différentes** : un côté avec la base et l'autre sans rendrait des outils « RETIRÉS »
-  que personne n'a retirés. *Un rapport qui délimite sa portée vaut plus qu'un rapport
+  ⚠️ **Et un rapport d'empreinte NOMME CE QU'IL NE REGARDE PAS.** Le code ne décide pas
+  seul ce qui est servi : l'**exposition** d'un connecteur est gouvernée par la base
+  (`connector_activation`, ADR 0010/0011), donc un relevé pris sans base l'ignore
+  **en silence**. Le script coiffe sa sortie d'une ligne de portée qui le dit, et
+  **refuse de soustraire deux relevés de portées différentes** : un côté avec la base
+  et l'autre sans rendrait des outils « RETIRÉS » que personne n'a retirés.
+  *(Le volet « connecteurs fédérés montés d'après la base » de cette ligne de portée a
+  disparu le **2026-09-09** avec la fédération MCP, **ADR 0069** : plus aucun outil servi
+  ne vient d'un serveur tiers. La règle, elle, n'a pas bougé d'un mot.)* *Un rapport qui délimite sa portée vaut plus qu'un rapport
   « complet » — le second n'existe pas, il se contente de ne pas dire où il s'arrête.*
 - **Un CRAN s'éprouve sur une table jetable, dans le sens du GESTE RÉEL, avant de
   partir sur une campagne qui tourne (29/08, #586).** Deux appels suffisent : **la
@@ -438,7 +441,8 @@ rien ne rendait navigable et que rien ne tenait.
   provider ; renseigner `modules` si module ≠ nom, ou plusieurs modules par provider —
   ex. `sirene`→`fr`, `google`→`gmail`/`datastore`/`tasks`). Chaque import en
   try/except (un connecteur cassé ne fait pas tomber le serveur). `meta`/`orgs`
-  (spine) + `remote`/`mount` (génériques) restent chargés explicitement. ⚠️ Le
+  (spine) + `remote` (générique) restent chargés explicitement — `mount` l'était
+  aussi jusqu'au **2026-09-09**, retiré avec la fédération MCP (**ADR 0069**). ⚠️ Le
   namespace déclaré doit matcher `namespace_of(tool)` (1er token avant `_`) — pas de
   namespace multi-mot (`culture_spectacle`→`culture`), sinon fail-open du gate.
   Le garde-fou `test_tools_module_derivation_matches_filesystem` (`tests/test_capabilities_drift.py`)

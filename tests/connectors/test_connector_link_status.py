@@ -1,7 +1,11 @@
-"""Les connecteurs OAuth fédérés ont enfin une entrée dans `me.providers`.
+"""Les connecteurs OAuth ont enfin une entrée dans `me.providers`.
+
+⚠️ **Ils étaient TROIS jusqu'au 2026-09-09** (atlassian, folkmcp, google) ; les deux
+premiers sont partis avec la fédération MCP (ADR 0069). Le banc s'exerce désormais sur
+`google` — le connecteur vivant, et le seul restant à `secret_kind='oauth'`.
 
 `access.status_for` remplissait `me.providers` par TROIS boucles — keyés, à champs, à
-session navigateur. atlassian, folkmcp et google ne sont dans aucune (`keyed=False`,
+session navigateur. Ces connecteurs ne sont dans aucune (`keyed=False`,
 `secret_fields=0`, `secret_kind='oauth'`), donc ils n'avaient **aucune entrée**. Personne
 ne l'avait vu, et ça expliquait quatre choses d'un coup :
 
@@ -26,9 +30,7 @@ import pytest
 from oto_mcp import providers
 from oto_mcp.connectors import link as connector_link
 
-# L'import est CE qui déclare : ces modules s'enregistrent au niveau module.
-from oto_mcp.auth import atlassian as atlassian_oauth
-from oto_mcp.auth import folk as folk_oauth
+# L'import est CE qui déclare : ce module s'enregistre au niveau module.
 from oto_mcp.auth import google as google_oauth  # noqa: F401,E402
 
 
@@ -36,19 +38,20 @@ def _federated() -> set[str]:
     return {n for n, c in providers.REGISTRY.items() if c.secret_kind == "oauth"}
 
 
-def test_tout_connecteur_oauth_federe_declare_sa_lecture():
+def test_tout_connecteur_oauth_declare_sa_lecture():
     """TOTALITÉ. Sans déclaration, le connecteur retombe silencieusement dans le trou —
     exactement l'état d'avant. Un oubli doit casser la CI, pas disparaître."""
     manquants = sorted(_federated() - set(connector_link.entries()))
     assert not manquants, (
-        f"{manquants} : credential OAuth fédéré sans lecture d'état déclarée "
+        f"{manquants} : credential OAuth sans lecture d'état déclarée "
         "(`connector_link.register`) → aucune entrée dans me.providers, donc pas de "
         "verdict, pas de pending_action, pas de health_ko.")
 
 
 def test_le_perimetre_est_celui_quon_croit():
-    # Memento a été décommissionné le 30/07 : il était le quatrième.
-    assert _federated() == {"atlassian", "folkmcp", "google"}
+    # Memento a été décommissionné le 30/07 : il était le quatrième. atlassian et
+    # folkmcp sont partis le 2026-09-09 avec la fédération MCP (ADR 0069).
+    assert _federated() == {"google"}
 
 
 # --- la forme émise, contrat lu par le dashboard -------------------------------
@@ -70,7 +73,7 @@ def test_la_traduction_vers_provider_status_est_complete(monkeypatch, linked):
                         lambda name, sub: connector_link.LinkState(
                             linked=linked, set_at="2026-07-31 10:00:00",
                             accounts=1 if linked else 0))
-    entry = _entry_for(access, "atlassian")
+    entry = _entry_for(access, "google")
     assert set(entry) >= _CLES_ATTENDUES, f"clés manquantes : {_CLES_ATTENDUES - set(entry)}"
     assert entry["user_key_configured"] is linked
     # `forbidden` = « aucune clé ne résout » (état par défaut d'un BYO pas connecté),
@@ -88,7 +91,7 @@ def test_la_sante_legacy_est_relayee(monkeypatch):
                         lambda name, sub: connector_link.LinkState(
                             linked=True, set_at="2026-09-04 10:00:00", accounts=1,
                             health_ko=True, health_reason="invalid_grant"))
-    entry = _entry_for(access, "atlassian")
+    entry = _entry_for(access, "google")
     assert entry["health_ko"] is True
     assert entry["health_reason"] == "invalid_grant"
 
@@ -102,7 +105,7 @@ def test_la_sante_absente_ne_pose_rien(monkeypatch):
     monkeypatch.setattr(connector_link, "state",
                         lambda name, sub: connector_link.LinkState(
                             linked=True, set_at="2026-09-04 10:00:00", accounts=1))
-    entry = _entry_for(access, "atlassian")
+    entry = _entry_for(access, "google")
     assert "health_ko" not in entry
     assert "health_reason" not in entry
 
@@ -116,9 +119,9 @@ def test_une_lecture_en_echec_ne_casse_pas_api_me(monkeypatch):
     def _boom(sub):
         raise RuntimeError("fournisseur indisponible")
 
-    monkeypatch.setitem(connector_link._READERS, "atlassian", _boom)
-    assert connector_link.state("atlassian", "sub-x") is None
-    assert _entry_for(access, "atlassian") is None
+    monkeypatch.setitem(connector_link._READERS, "google", _boom)
+    assert connector_link.state("google", "sub-x") is None
+    assert _entry_for(access, "google") is None
 
 
 def _entry_for(access, name: str):

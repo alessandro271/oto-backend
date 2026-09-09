@@ -21,7 +21,8 @@ les scopes qui DÉCOUVRENT l'instance, dérivés de la chaîne d'accès par
 élargie ni restreinte, et un non-membre continue de voir « aucune clé configurée ».
 
 EXCLUSIONS (assumées, documentées) :
-- résidus `entity_type='user'` (mounts oauth fédérés atlassian/folkmcp)
+- résidus `entity_type='user'` (scope legacy des ex-fédérations atlassian/folkmcp,
+  retirées le 2026-09-09 — les lignes, elles, dorment toujours en base)
   — hors cascade de travail by design (ADR 0033) ;
 - grants de compte #55 (`connector_account_grants` = pointeurs d'identité
   satellites, déjà servis par `oto_account_access`) — repliés en

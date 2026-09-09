@@ -95,7 +95,7 @@ RETRAIT = _plus_de_mois(ANNONCE, PREAVIS_MOIS)
 # renommage de vocabulaire ci-dessus (#519) :
 # la query string du retour après consentement OAuth (`?connector=<nom>&connect=
 # connected|error|forbidden`, généralisée depuis la forme salesforce) remplace
-# cinq conventions locales — dont deux replis cassés (atlassian, folk). zoho et
+# cinq conventions locales — dont deux replis cassés, retirés depuis. zoho et
 # google servaient déjà un suffixe LU par le dashboard (`?zoho=connected`,
 # `?google=connected`) : il se double, à la manière de #519, le temps d'un
 # préavis — mais PAS le même préavis : celui-ci n'a pas encore commencé à être

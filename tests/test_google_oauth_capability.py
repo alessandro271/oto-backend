@@ -1,15 +1,18 @@
-"""Les verbes du consentement OAuth per-user, en capacités : mêmes chemins, mêmes codes.
+"""Les verbes du consentement OAuth per-user de google, en capacités : mêmes chemins,
+mêmes codes.
 
 Dix routes `/api/{atlassian,folkmcp,google}/oauth*` ont quitté `api/atlassian.py`,
 `api/folk.py` et `api/datastore.py` pour `capabilities/federated_oauth.py`
 (27/08). Les **callbacks** restent écrits à la main : le fournisseur y redirige le
 navigateur (302, sans auth), l'adaptateur REST authentifie toujours et répond en JSON.
 
+⚠️ **`atlassian` et `folkmcp` sont partis le 2026-09-09** avec la fédération MCP
+(ADR 0069) ; il ne reste ici que `google`, qui n'a jamais été fédéré. Ce banc ne
+perd rien de ce qu'il verrouillait pour lui — les mêmes assertions, sur les mêmes
+quatre routes vivantes.
+
 Ce que ce fichier garde :
 
-- **La symétrie atlassian ↔ folkmcp au champ près.** Le dashboard les pilote par un client
-  GÉNÉRIQUE (`/api/${name}/oauth/…`) : une divergence de forme entre les deux casserait
-  le widget pour l'un des deux sans qu'aucun test ne le voie.
 - **Les champs racine de `google/oauth/status` décrivent le compte PAR DÉFAUT**, pas
   l'union des comptes — héritage du mono-compte. Sans défaut posé, ils sont vides alors
   que `connected` est vrai : c'est cohérent, et c'est contre-intuitif.
@@ -17,6 +20,8 @@ Ce que ce fichier garde :
   réponse veut dire « tous », pas « aucun ».
 - **Le 500 `oauth_misconfigured:`** garde son format exact, espace compris : il signale
   une app OAuth mal configurée côté PLATEFORME, pas une erreur de l'appelant.
+- **Aucune clé `me.federation.{atlassian,folkmcp}.*` ne revient** : leur retour serait
+  une régression silencieuse du retrait, pas une amélioration à fêter.
 """
 from __future__ import annotations
 
@@ -25,8 +30,6 @@ import pytest
 from _datastore_rest import call, stub_authz
 
 from oto_mcp import db
-from oto_mcp.auth import atlassian as atlassian_oauth
-from oto_mcp.auth import folk as folk_oauth
 from oto_mcp.auth import google as google_oauth
 from oto_mcp.capabilities import federated_oauth as fo
 
@@ -41,13 +44,6 @@ _COMPTES = [
 @pytest.fixture()
 def socle(monkeypatch):
     vus: list = []
-    for mod, nom in ((atlassian_oauth, "atl"), (folk_oauth, "folk")):
-        monkeypatch.setattr(mod, "build_auth_url",
-                            (lambda n: lambda sub: f"https://{n}/auth?s={sub}")(nom))
-        monkeypatch.setattr(mod, "status_for",
-                            lambda sub: {"connected": True, "set_at": "2026-08-01"})
-        monkeypatch.setattr(mod, "disconnect",
-                            (lambda n: lambda sub: vus.append(("disc", n, sub)) or True)(nom))
     monkeypatch.setattr(google_oauth, "build_auth_url",
                         lambda sub: f"https://google/auth?s={sub}")
     monkeypatch.setattr(google_oauth, "list_accounts", lambda sub: list(_COMPTES))
@@ -59,50 +55,27 @@ def socle(monkeypatch):
     return vus
 
 
-# --- Les deux fédérations MCP, au champ près --------------------------------
+# --- Ce que le retrait de la fédération a emporté ---------------------------
 
 @pytest.mark.parametrize("nom", ["atlassian", "folkmcp"])
-def test_start_est_retire_mesure_a_zero(nom):
-    """oto-dashboard#125, 2026-09-04 : `.start` d'atlassian/folkmcp est SORTI du
-    registre (mesuré à 0 appel/30j, toutes origines — contrairement à
-    `me.federation.google.start`, resté). Un retour de cette clé serait une
-    régression silencieuse du retrait, pas une amélioration à fêter."""
+@pytest.mark.parametrize("verbe", ["start", "status", "disconnect"])
+def test_aucune_capacite_de_federation_ne_subsiste(nom, verbe):
+    """La fédération MCP est retirée (2026-09-09, ADR 0069) : plus AUCUNE clé
+    `me.federation.{atlassian,folkmcp}.*` au registre. `.start` et `.disconnect`
+    étaient déjà sortis le 04/09 (mesurés à 0 appel/30j, oto-dashboard#125) ;
+    `.status` part avec le mécanisme. Un retour de l'une d'elles serait une
+    régression silencieuse du retrait — c'est exactement ce que ce test attrape."""
     from oto_mcp.capabilities.registry import CAPABILITIES
-    assert f"me.federation.{nom}.start" not in {c.key for c in CAPABILITIES}
+    assert f"me.federation.{nom}.{verbe}" not in {c.key for c in CAPABILITIES}
 
 
-@pytest.mark.parametrize("nom", ["atlassian", "folkmcp"])
-def test_status_rend_les_deux_memes_champs(monkeypatch, socle, nom):
-    """La symétrie EST le contrat : le dashboard construit son URL à partir du nom du
-    connecteur et lit la même forme pour les deux. Une divergence casserait l'un des
-    deux widgets sans qu'aucun autre test ne le voie."""
-    stub_authz(monkeypatch)
-    code, out = call(f"me.federation.{nom}.status")
-    assert code == 200
-    assert set(out) == set(fo.FederationStatus.model_fields) == {"connected", "set_at"}
-
-
-@pytest.mark.parametrize("nom", ["atlassian", "folkmcp"])
-def test_jamais_connecte_rend_connected_false_et_set_at_null(monkeypatch, socle, nom):
-    stub_authz(monkeypatch)
-    mod = atlassian_oauth if nom == "atlassian" else folk_oauth
-    monkeypatch.setattr(mod, "status_for",
-                        lambda sub: {"connected": False, "set_at": None})
-    _, out = call(f"me.federation.{nom}.status")
-    assert out == {"connected": False, "set_at": None}
-
-
-@pytest.mark.parametrize("nom", ["atlassian", "folkmcp"])
-def test_disconnect_est_retire_mesure_a_zero(nom):
-    """oto-dashboard#125, 2026-09-04 : `.disconnect` d'atlassian/folkmcp est SORTI du
-    registre (mesuré à 0 appel/30j, AVANT et APRÈS le bascule dashboard — zéro
-    indépendant du timing, contrairement à `.status` qui reste). L'idempotence du
-    geste est désormais couverte par `me.connector_disconnect`
-    (`tests/connectors/test_oauth_status_capability.py`), qui rappelle directement
-    `atlassian_oauth.disconnect`/`folk_oauth.disconnect` sans dépendre de cette
-    capacité-ci. Un retour de cette clé serait une régression silencieuse du retrait."""
+def test_les_quatre_verbes_google_sont_TOUS_restes():
+    """Le pendant du test ci-dessus, et le vrai enjeu du lot : retirer la fédération
+    ne devait RIEN retirer à google. Les quatre clés servies sont là."""
     from oto_mcp.capabilities.registry import CAPABILITIES
-    assert f"me.federation.{nom}.disconnect" not in {c.key for c in CAPABILITIES}
+    cles = {c.key for c in CAPABILITIES}
+    for verbe in ("start", "status", "revoke", "set_default"):
+        assert f"me.federation.google.{verbe}" in cles, verbe
 
 
 # --- Google, multi-compte ---------------------------------------------------

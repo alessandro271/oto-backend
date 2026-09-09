@@ -135,13 +135,15 @@ plateforme) ; exceptions vers **Sentry** · ⚠️ ne trace ni la connexion d'un
   perso ; `oto_whoami` avant une action sensible (`docs/onboarding-et-profil.md`).
 - **Runner** : l'**état** ici (`run_messages`, `runner_jobs`, `runner_triggers`), la **boucle** dans `otomata-tech/oto-runner`
   · ⚠️ la reprise inter-agents lit le **journal**, jamais le fil (`docs/runner-et-automatisations.md`).
-- **Fédération, MCP Apps, veille** : **mount** (OAuth per-user) vs **remote** (bridge M2M d'org), aucun mount monté
-  d'office ; `prefab_ui` rend les `*_app` (`docs/federation.md`, `docs/mcp-apps.md`, `docs/mcp-spec-watch.md`).
+- **MCP Apps, veille** : `prefab_ui` rend les `*_app` (`docs/mcp-apps.md`, `docs/mcp-spec-watch.md`) · ⚠️ **la
+  fédération MCP (`kind="mount"`) est RETIRÉE** (2026-09-09, ADR 0069 du blueprint) : trois connecteurs déclarés,
+  zéro vivant. Un service distant se joint par le connecteur `http` générique, ou s'écrit en connecteur natif —
+  ce qu'est devenu `planity`. Ne pas la réintroduire sans remplacer l'ADR.
 
 ## Démarrage, silences & infra
 
 **Construire n'est pas démarrer** : `_build_mcp` monte le catalogue, `main()` seul prépare la base
-(`_prepare_database()`, une fois par process) et demande les catalogues fédérés (`include_mounts=True`). **Aucune
+(`_prepare_database()`, une fois par process). **Aucune
 instance au niveau module** — un import doit définir, pas travailler (`test_server_construction.py`) · **Au boot, le
 DDL additif et rien d'autre**, fail-open étape par étape : un backfill qui casse ne doit pas empêcher le serveur de
 répondre, mais il le **dit** dans le journal · ⚠️ **la fenêtre du healthcheck est finie (120 s)** : un travail one-shot
@@ -192,7 +194,6 @@ avatars/logos · ⚠️ **PROD et PREPROD partagent la MÊME base** : ce qu'on �
 - `browser-automation.md` — Browserbase, cookie-bound
 - `email.md` — envoi per-org, quiet hours
 - `relance-comptes.md` — relancer qui n'a jamais rien fait : le comptage, l'exclusion partenaire, l'absence de signal de langue
-- `federation.md` — mount vs remote/bridge
 - `mcp-apps.md` — `prefab_ui`, convention `*_app`
 - `mcp-spec-watch.md` — les SEP, pas les specs
 - `runner-et-automatisations.md` — l'état ici, la boucle ailleurs

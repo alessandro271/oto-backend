@@ -75,13 +75,15 @@ from . import platform_connectors  # noqa: F401 — platform.connector.{activati
 # authentifié par nature, gardé par un nonce).
 from . import unipile_me  # noqa: F401 — me.unipile.{connect,reconcile,status,disconnect}
 # VERBES du consentement OAuth per-user (#121) — démarrer / lire / déconnecter, pour les
-# deux fédérations MCP (atlassian, folkmcp) et Google (multi-compte). Ex-routes écrites
+# Google (multi-compte). ⚠️ Ce module a porté deux fédérations MCP (atlassian,
+# folkmcp) jusqu'au 2026-09-09 — d'où son nom, gardé avec les clés servies
+# `me.federation.google.*` (ADR 0069). Ex-routes écrites
 # à la main ; les CALLBACKS restent écrits à la main (302 sans auth, hors du moule).
-from . import federated_oauth  # noqa: F401 — me.federation.{atlassian,folkmcp,google}.*
+from . import federated_oauth  # noqa: F401 — me.federation.google.*
 # Statut/déconnexion OAuth GÉNÉRIQUES (oto-dashboard#125) — chemin fixe qui ne nomme pas
 # le connecteur, symétrique de `me.connector_connect` pour les items 2/3 de #125.
-# `me.federation.*` ci-dessus RESTE en place (retrait dans un lot séparé, après bascule
-# du dashboard) : import APRÈS, `oauth_status` réutilise `FederationDisconnected`.
+# `me.federation.google.*` ci-dessus RESTE en place : import APRÈS, `oauth_status`
+# réutilise `FederationDisconnected`.
 import oto_mcp.capabilities.connectors.oauth_status  # noqa: F401 — me.connector_{status,disconnect}
 # JETONS API `oto_` + CLÉS PLATEFORME (#121) — ex-routes écrites à la main. Les six
 # routes de jetons portent `RestBinding.allow_api_token=False` : un jeton ne fabrique

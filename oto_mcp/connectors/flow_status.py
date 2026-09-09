@@ -1,4 +1,4 @@
-"""Les verbes « lire l'état / déconnecter » d'un connecteur OAuth fédéré — déclarés
+"""Les verbes « lire l'état / déconnecter » d'un connecteur OAuth — déclarés
 par son module, dérivés partout. Décalque symétrique de `connector_flow` (`flow.py`,
 verbe « connecter ») pour le couple statut/déconnexion (oto-dashboard#125).
 
@@ -7,9 +7,13 @@ au niveau MODULE par chaque connecteur à flux : un seul chemin fixe, dérivé p
 Les deux autres moitiés du même geste — « suis-je connecté ? », « déconnecte-moi » —
 n'avaient pas d'équivalent : le dashboard construisait encore son URL à partir du NOM
 du connecteur (`/api/${name}/oauth/status`, `DELETE /api/${name}/oauth`), pour les
-trois connecteurs OAuth fédérés (atlassian, folkmcp, google). Ce module ferme la moitié
+connecteurs OAuth d'alors (atlassian, folkmcp, google). Ce module ferme la moitié
 `disconnect` ; `status` reste déclarable ICI (même forme que `declare`), mais rien ne
 l'appelle dans ce lot.
+
+⚠️ **Il ne reste qu'un déclarant depuis le 2026-09-09** : `google`. Atlassian et folkmcp
+sont partis avec la fédération MCP (ADR 0069). Le registre garde sa forme — un seam ne
+se replie pas parce qu'il n'a plus qu'un occupant.
 
 **Pourquoi `status` existe sans être câblé.** La contrainte 1 d'oto-dashboard#125
 (arbitrage du 04/09/2026) interdit à `me.connector_status` d'interroger un module
@@ -41,7 +45,7 @@ logger = logging.getLogger(__name__)
 class StatusFlow:
     connector: str
     # (ctx) -> dict, jamais appelé par ce lot (cf. docstring du module) — `None` =
-    # non déclaré, ce qui est le cas des trois connecteurs câblés aujourd'hui.
+    # non déclaré, ce qui est le cas du seul connecteur câblé aujourd'hui.
     status: Optional[Callable[..., dict]] = None
     # (ctx) -> dict — le seul verbe réellement branché par ce lot.
     disconnect: Optional[Callable[..., dict]] = None
@@ -52,7 +56,7 @@ _FLOWS: dict[str, StatusFlow] = {}
 
 def declare_status(connector: str, *, status: Optional[Callable[..., dict]] = None,
                     disconnect: Optional[Callable[..., dict]] = None) -> None:
-    """Déclare les verbes statut/déconnexion de ce connecteur OAuth fédéré. Appelé au
+    """Déclare les verbes statut/déconnexion de ce connecteur OAuth. Appelé au
     niveau MODULE (comme `connector_flow.declare`) : une déclaration pure, lisible dès
     l'import, sans attendre le montage FastMCP."""
     _FLOWS[connector] = StatusFlow(connector=connector, status=status, disconnect=disconnect)

@@ -179,9 +179,9 @@ def status_for(sub: str, *, org: "int | None | object" = scope._UNSET,
 
     # Credentials byo_user à champs déclarés, hors KEY_PROVIDERS (modèle générique
     # multi-champs, ADR 0011) : clients in-process à credential `basic_auth`
-    # (planity) ou multi-secrets (silae, zoho), et tout mount qui en poserait un.
+    # (planity) ou multi-secrets (silae, zoho).
     # Pas de quota ni de grant — le credential EST le
-    # grant (cf. resolve_mount_token / resolve_credential_fields). Miroir de la
+    # grant (cf. resolve_credential_fields). Miroir de la
     # cascade byo user > groupe actif > org (un provider `fields` org-shareable
     # résout par le secret d'équipe/org — l'ex-check user-only affichait
     # `forbidden` avec une clé d'org qui résolvait, l'UI mentait ; corrigé
@@ -265,7 +265,8 @@ def status_for(sub: str, *, org: "int | None | object" = scope._UNSET,
             "quota_daily": None,
         }
 
-    # 4e boucle — connecteurs à credential OAuth FÉDÉRÉ (atlassian, folkmcp, google).
+    # 4e boucle — connecteurs à credential OAuth (google ; atlassian et folkmcp y
+    # étaient jusqu'au 2026-09-09, partis avec la fédération MCP, ADR 0069).
     # Ils ne sont dans AUCUNE des trois boucles ci-dessus : `keyed=False`,
     # `secret_fields=0`, `secret_kind='oauth'`. Ils n'avaient donc pas d'entrée du tout —
     # et sans entrée, la décoration `pending_action` juste en dessous ne peut pas les
@@ -274,8 +275,8 @@ def status_for(sub: str, *, org: "int | None | object" = scope._UNSET,
     # connaître les connecteurs par leur nom.
     #
     # La LECTURE est déclarée par chaque module (`connector_link`) : les trois ne rangent
-    # pas leur credential au même endroit (scope legacy ("user", sub) pour atlassian et
-    # folkmcp, une ligne PAR COMPTE pour google). La TRADUCTION vers `ProviderStatus` —
+    # pas leur credential au même endroit (une ligne PAR COMPTE pour google, un scope
+    # legacy ("user", sub) pour les partants). La TRADUCTION vers `ProviderStatus` —
     # la forme que le dashboard lit — se fait ici, une fois.
     for c in providers.REGISTRY.values():
         if c.name in out["providers"] or c.secret_kind != "oauth":
@@ -320,7 +321,7 @@ def status_for(sub: str, *, org: "int | None | object" = scope._UNSET,
     # le « read facile » de chaque connecteur) : un « connecteur KO » (session expirée,
     # token révoqué…) reste signalé jusqu'à ce qu'un test/reconnexion le rétablisse.
     # Lu en UN batch sur les clés MEMBRE de l'acteur — générique (tout connecteur), fail-open.
-    # ⚠️ Ne couvre PAS les OAuth fédérés de la boucle ci-dessus (scope LEGACY `("user",
+    # ⚠️ Ne couvre PAS les OAuth de la boucle ci-dessus (scope LEGACY `("user",
     # sub)`, hors de ce batch) : ceux-là ont déjà posé `health_ko`/`health_reason` sur
     # leur entrée depuis leur propre `LinkState` — `m.get("health_ko")` y est absent,
     # donc cette passe ne les touche pas (oto#25 lot a).

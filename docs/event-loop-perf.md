@@ -24,8 +24,10 @@
   de `serper_scrape` gelant la boucle, `/.well-known` à 1,4–10,5 s sur une box à 0,2 de load).
   **CI-enforcé** : `tests/test_no_blocking_async_handlers.py` casse si un `@mcp.tool` async
   n'`await` rien dans son **propre scope** (AST own-scope, auto-maintenu, pas de whitelist) ;
-  un `client_factory` awaité par FastMCP (`mount.factory`) reste async — « pas d'await » ne
-  suffit pas, vérifier que c'est un handler, pas un callback. Bornes connexions PG posées au
+  ⚠️ **la règle vise les HANDLERS, pas tout ce qui est async** : un *callback* awaité par
+  FastMCP reste légitimement async — le cas d'école était le `client_factory` de la
+  fédération MCP (`mount.factory`), partie le 2026-09-09 (ADR 0069). « Pas d'await » ne
+  suffit donc pas à conclure : vérifier que c'est un handler, pas un callback. Bornes connexions PG posées au
   passage (`db._connect_options` : `idle_in_transaction_session_timeout` anti-zombie-lock).
   **2ᵉ mode de gel identifié + corrigé (2026-07-02, py-spy en flagrant délit)** : du DB
   sync dans un MIDDLEWARE de la loop (`_authenticate`, gate ViewAs) × un blip de la RDB

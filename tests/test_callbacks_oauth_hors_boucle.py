@@ -5,6 +5,19 @@ par un appel HTTP **synchrone** de 15 à 30 s, plus une écriture en base égale
 synchrone. Le callback Zoho, lui, était déjà protégé : la discipline existait,
 elle n'avait simplement pas été appliquée aux trois autres.
 
+⚠️ Deux des trois (`api/atlassian.py`, `api/folk.py`) ont disparu le 2026-09-09
+avec la fédération MCP (ADR 0069) : il ne reste ici que `salesforce`. Le contrôle
+statique garde sa valeur pour lui, et pour tout callback qui s'ajouterait.
+
+⚠️ **Ce qui est parti avec eux, et qu'il faudra refaire le jour où un callback
+compte à nouveau** : l'épreuve qui MONTAIT un vrai handler et observait le vrai
+thread. Les contrôles statiques ci-dessous lisent l'arbre — ils ne voient pas une
+panne d'exécution, et ils ont déjà laissé passer un import manquant : le handler
+levait un `NameError`, l'`except` du callback l'avalait, et TOUT retour OAuth
+partait en « échec » sans que rien ne bronche. Cette épreuve ne visait que les
+deux callbacks fédérés ; elle n'a donc rien à observer aujourd'hui, mais l'angle
+mort qu'elle couvrait, lui, n'a pas disparu.
+
 S'y ajoutent deux chemins d'enregistrement dynamique de client OAuth — traités au
 point de passage commun des flux de connexion, pas connecteur par connecteur.
 
@@ -141,7 +154,7 @@ def _echanges_sync_dans_une_async(source: str, noms: set[str]) -> list[int]:
     return sorted(lignes)
 
 
-@pytest.mark.parametrize("module", ["atlassian", "folk", "salesforce"])
+@pytest.mark.parametrize("module", ["salesforce"])
 def test_aucun_echange_de_code_ne_reste_dans_la_boucle(module):
     """⚠️ Contrôle STATIQUE, assumé : jouer un vrai callback demanderait un state
     signé, une base et un fournisseur. Il lit l'arbre, pas le texte — il tombera
@@ -192,73 +205,3 @@ def test_ce_controle_ne_crie_pas_sur_un_appel_deja_attendu():
     assert _echanges_sync_dans_une_async(
         "async def f(o):\n    return await o.persist_token('t')\n",
         {"persist_token"}) == []
-
-
-# --- l'observation, sur un callback réellement monté -----------------------
-#
-# Les contrôles statiques ci-dessus lisent l'arbre : ils ne montent pas le code,
-# donc ils ne voient pas une panne d'exécution. Ils ont d'ailleurs laissé passer
-# un import manquant — le handler levait un `NameError`, l'`except` du callback
-# l'avalait, et TOUT retour OAuth partait en « échec » sans que le contrôle
-# bronche. C'est la suite complète qui l'a attrapé.
-#
-# D'où cette épreuve : elle monte le vrai handler et observe le vrai thread.
-
-def _requete(path: str, query: str):
-    from starlette.requests import Request
-
-    async def _receive():
-        return {"type": "http.request", "body": b"", "more_body": False}
-
-    return Request({"type": "http", "method": "GET", "path": path, "headers": [],
-                    "query_string": query.encode(), "path_params": {}},
-                   receive=_receive)
-
-
-def _handler(module, path: str):
-    def _json_response(_r, payload, status=200):
-        return {"status": status, "body": payload}
-
-    def _json_error(_r, status, code, message=None):
-        return {"status": status, "error": code}
-
-    async def _options(_r):
-        return None
-
-    routes = module.make_routes(None, None, _json_response, _json_error, _options)
-    return next(r.endpoint for r in routes if r.path == path)
-
-
-@pytest.mark.parametrize("module_nom,oauth_nom,path", [
-    ("oto_mcp.api.atlassian", "atlassian_oauth", "/api/atlassian/oauth/callback"),
-    ("oto_mcp.api.folk", "folk_oauth", "/api/folkmcp/oauth/callback"),
-])
-def test_le_callback_monte_echange_le_code_hors_de_la_boucle(
-        monkeypatch, module_nom, oauth_nom, path):
-    import importlib
-
-    module = importlib.import_module(module_nom)
-    oauth = getattr(module, oauth_nom)
-    vu = {}
-
-    monkeypatch.setattr(oauth, "verify_state", lambda s: ("sub-1", "verifier"))
-    monkeypatch.setattr(oauth, "persist_token", lambda *a, **k: None)
-
-    def _echange(*a, **k):
-        vu["thread"] = threading.current_thread()
-        return {"access_token": "t"}
-
-    monkeypatch.setattr(oauth, "exchange_code", _echange)
-    handler = _handler(module, path)
-
-    async def _scenario():
-        vu["boucle"] = threading.current_thread()
-        return await handler(_requete(path, "code=c&state=s"))
-
-    reponse = asyncio.run(_scenario())
-    assert vu.get("thread") is not None, (
-        "l'échange n'a jamais eu lieu : le handler a échoué avant, et son `except` "
-        "l'a avalé — exactement la panne que les contrôles statiques ne voient pas.")
-    assert vu["thread"] is not vu["boucle"]
-    assert "connect=error" not in reponse.headers["location"], (
-        "le callback rend une erreur alors que l'échange a réussi.")

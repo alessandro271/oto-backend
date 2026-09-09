@@ -168,9 +168,13 @@ donc visibles de tous ; les douze autres restent au palier plateforme.
 de se déclarer rend son outil visible, jamais appelable. C'est le bon sens du fail : la
 visibilité est une gouvernance, pas une barrière (ADR 0031), donc l'erreur coûteuse est de
 CACHER un geste légitime, pas d'en montrer un de trop. Le **repli par le nom** subsiste
-pour les outils écrits à la main dont la garde vit dans le handler (`oto_admin_refresh_mount`) :
+pour les outils `oto_admin_*` écrits à la main dont la garde vit dans le handler :
 rien n'y est déclaré, rien n'est dérivable, le préfixe reste le seul indice — au cran
-`operator`. Garde : `tests/test_admin_tool_visibility_by_authz.py`, qui fige aussi
+`operator`. ⚠️ **Son dernier occupant, `oto_admin_refresh_mount`, est parti le
+2026-09-09** avec la fédération MCP (**ADR 0069**) : le repli n'a plus de porteur
+aujourd'hui, et il est **gardé quand même** — il vaut pour le prochain outil écrit à la
+main, et le retirer ferait de son absence une règle qu'on ne redécouvrirait qu'en la
+violant. Garde : `tests/test_admin_tool_visibility_by_authz.py`, qui fige aussi
 l'inventaire des planchers (poser un `oto_admin_*` neuf est une décision, pas un effet de bord).
 
 ## Refresh à chaud de la toolbox

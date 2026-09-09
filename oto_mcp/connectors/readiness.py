@@ -133,16 +133,14 @@ def diagnose(sub: str, connector: str, *, org, group) -> Optional[Diagnosis]:
     # `no_credential` à dessein — dire « rejetée » d'une clé qui n'existe pas enverrait
     # reposer ce qu'on n'a jamais posé.
     #
-    # ⚠️ `meta.health_ko` a SIX écrivains depuis le lot google (2026-09-05, cinq
-    # depuis oto#25 lot b2, trois depuis lot a) : la sonde `oto_instance op=verify`
-    # (couverture large, mais rien à lire tant que personne ne l'a rejouée —
-    # enregistrée pour `atlassian` depuis oto-backend#876, toujours PAS pour
-    # `folkmcp`) ; `access_token_for` d'`auth/atlassian.py` / `auth/folk.py`, qui
-    # marquent leur PROPRE ligne au refresh raté sans passer par `verify` ;
-    # `credentials_for` d'`auth/google.py`, même geste au scope MEMBRE ; et
+    # ⚠️ `meta.health_ko` a QUATRE écrivains depuis le retrait de la fédération
+    # MCP (2026-09-09, ADR 0069 — ils étaient six) : la sonde `oto_instance
+    # op=verify` (couverture large, mais rien à lire tant que personne ne l'a
+    # rejouée) ; `credentials_for` d'`auth/google.py`, qui marque sa PROPRE ligne
+    # au refresh raté sans passer par `verify`, au scope MEMBRE ; et
     # `tools/salesforce.py` / `tools/zoho.py`, qui marquent au refus du refresh
     # (`SalesforceAuthError`/`ZohoAuthError`) sur le tool lui-même, pas seulement
-    # sur leur sonde `verify`. Les six passent par la MÊME aide partagée et la
+    # sur leur sonde `verify`. Les quatre passent par la MÊME aide partagée et la
     # MÊME garde de portée (`connectors/health.py`). Ce diagnostic-ci lit le
     # résultat, quel qu'en soit l'écrivain : ça n'a jamais eu à changer pour ça, et
     # c'est le point.

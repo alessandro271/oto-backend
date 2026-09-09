@@ -7,7 +7,7 @@ faible au plus fort) :
   tools. L'accès se décide via les `user_grants` (cf. ci-dessous).
 - **admin** (palier OPÉRATIONNEL intermédiaire) : supervision plateforme —
   liste des users, fiche user, monitoring des appels, activation des
-  connecteurs, maintenance (refresh des mounts), lecture/admin opérationnelle
+  connecteurs, lecture/admin opérationnelle
   des orgs. **PAS** d'escalade en masse vers les orgs tierces.
 - **super_admin** (le tout-puissant) : tout l'opérationnel + escalade
   `org_admin` de TOUTES les orgs et `group_admin` de TOUS les groupes,
@@ -56,7 +56,7 @@ découpe est un **DÉPLACEMENT PUR** : aucun appelant ne change (cf.
 - `resolve_anon` — la résolution de l'endpoint MCP anonyme (ADR 0032), extraite de
               `resolve` le 29/08 (#584). L'étage tenant n'y vient que d'une arête.
 - `resolve` — la résolution réelle d'un credential (chemin chaud).
-- `views`   — les vues minces : clé, champs, mount, mode, option levée,
+- `views`   — les vues minces : clé, champs, mode, option levée,
               résolvabilité d'une org.
 - `status`  — le snapshot par connecteur de `/api/me`.
 
