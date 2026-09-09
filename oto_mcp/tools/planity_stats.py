@@ -3,21 +3,13 @@
 Module frère de `planity.py` (référentiel, clientes, agenda) : même connecteur,
 même namespace `planity_*`, même credential, même session (`planity_session`).
 Séparés parce que les vingt outils du connecteur ne tiennent pas dans un fichier,
-et que la ligne de partage qui a du sens est celle des sources : ici, presque tout
-vient des lambdas REST de Planity ; là-bas, presque tout vient du Realtime
-Database en WebSocket.
+et que la ligne de partage qui a du sens suit les deux familles de sources — les
+chiffres d'un côté, le référentiel et l'agenda de l'autre.
 
-⚠️ **Les lambdas de statistiques exigent des clés DOUBLÉES** (`userToken` ET
-`token`, `gte`/`lte` ET `start`/`end`) — en oublier une rend
-`MISSING_TOKEN_ERROR`, qui se lit comme un credential invalide alors que le
-credential est bon. Le payload est écrit une seule fois, dans oto-core
-(`rest_api.PlanityREST._stats_payload`) ; rien ici ne le reconstruit.
-
-⚠️ **`getBusinessRevenuesBySeller` rend `bySeller: []`** même quand on lui passe
-les collaboratrices — non résolu à ce jour. La ventilation par collaboratrice
-fiable est `planity_get_seller_stats`, qui passe par `getCalendarStats`. Un
-`by_seller` vide dans `planity_get_revenue_breakdown` n'est donc PAS un salon sans
-ventes : c'est cette limite-là.
+⚠️ **`planity_get_revenue_breakdown` peut rendre un `by_seller` VIDE**, et ce
+n'est PAS un salon sans ventes : Planity ne renseigne pas cette ventilation-là.
+La répartition par collaboratrice qui fait foi est `planity_get_seller_stats` —
+c'est elle qu'il faut lire, et c'est ce qu'il faut répondre à qui s'étonne.
 """
 from __future__ import annotations
 
@@ -25,11 +17,10 @@ from typing import Optional
 
 from fastmcp import FastMCP
 
-from .planity_session import _client, _eur
+from .planity_session import _client, _eur, fenetre, iso
 
 
 def register(mcp: FastMCP) -> None:
-    from oto.tools.planity import ms_to_iso, resolve_range
 
     @mcp.tool()
     async def planity_get_revenue_summary(
@@ -43,10 +34,10 @@ def register(mcp: FastMCP) -> None:
         Default: last 7 days. Use preset for quick ranges ("today", "week", "month", "30d"...).
         """
         c = await _client()
-        gte, lte = resolve_range(date_from, date_to, preset)
+        gte, lte = fenetre(date_from, date_to, preset)
         ki = await c.get_key_indicators(salon_id, gte, lte)
         return {
-            "from": ms_to_iso(gte), "to": ms_to_iso(lte),
+            "from": iso(gte), "to": iso(lte),
             "revenue_ttc_eur": _eur(ki.get("revenueWithVAT")),
             "revenue_ht_eur": _eur(ki.get("revenueWithoutVAT")),
             "ticket_count": ki.get("amountOfReceipts", 0),
@@ -66,12 +57,12 @@ def register(mcp: FastMCP) -> None:
         Useful for trend analysis or plotting.
         """
         c = await _client()
-        gte, lte = resolve_range(date_from, date_to, preset)
+        gte, lte = fenetre(date_from, date_to, preset)
         data = await c.get_revenues(salon_id, gte, lte)
         out = []
         for ts_str, bucket in sorted((data.get("all") or {}).items()):
             out.append({
-                "date": ms_to_iso(int(ts_str)),
+                "date": iso(int(ts_str)),
                 "revenue_ttc_eur": _eur(bucket.get("revenueWithVAT")),
                 "revenue_ht_eur": _eur(bucket.get("revenueWithoutVAT")),
                 "quantity": bucket.get("quantity", 0),
@@ -87,7 +78,7 @@ def register(mcp: FastMCP) -> None:
     ) -> dict:
         """Top-spending customers for a period (Planity's 'best customers' analysis)."""
         c = await _client()
-        gte, lte = resolve_range(date_from, date_to, preset)
+        gte, lte = fenetre(date_from, date_to, preset)
         return await c.get_best_customers(salon_id, gte, lte)
 
     @mcp.tool()
@@ -99,7 +90,7 @@ def register(mcp: FastMCP) -> None:
     ) -> dict:
         """Customers acquired for the first time during the period."""
         c = await _client()
-        gte, lte = resolve_range(date_from, date_to, preset)
+        gte, lte = fenetre(date_from, date_to, preset)
         return await c.get_new_customers(salon_id, gte, lte)
 
     @mcp.tool()
@@ -111,7 +102,7 @@ def register(mcp: FastMCP) -> None:
     ) -> dict:
         """Overall customer visit frequency distribution (who comes how often)."""
         c = await _client()
-        gte, lte = resolve_range(date_from, date_to, preset)
+        gte, lte = fenetre(date_from, date_to, preset)
         return await c.get_overall_frequencies(salon_id, gte, lte)
 
     @mcp.tool()
@@ -127,7 +118,7 @@ def register(mcp: FastMCP) -> None:
         All amounts in euros. Use this to answer "comment se décompose mon CA ?".
         """
         c = await _client()
-        gte, lte = resolve_range(date_from, date_to, preset)
+        gte, lte = fenetre(date_from, date_to, preset)
         raw = await c.get_revenue_breakdown(salon_id, gte, lte)
         totals = raw.get("totals") or {}
 
@@ -171,7 +162,7 @@ def register(mcp: FastMCP) -> None:
                     })
 
         return {
-            "from": ms_to_iso(gte), "to": ms_to_iso(lte),
+            "from": iso(gte), "to": iso(lte),
             "grand_total_eur": _eur(totals.get("totalRevenue")),
             "grand_total_ht_eur": _eur(totals.get("totalPriceVATExcluded")),
             "total_discount_eur": _eur(totals.get("totalDiscount")),
@@ -197,7 +188,7 @@ def register(mcp: FastMCP) -> None:
         Use this to compare one employee against the rest of the team.
         """
         c = await _client()
-        gte, lte = resolve_range(date_from, date_to, preset)
+        gte, lte = fenetre(date_from, date_to, preset)
         raw = await c.get_calendar_stats(salon_id, gte, lte)
         salon = await c.get_salon(salon_id)
         name_by_id = {e.id: e.name for e in salon.employees}
@@ -239,10 +230,10 @@ def register(mcp: FastMCP) -> None:
         hours and idle slots.
         """
         c = await _client()
-        gte, lte = resolve_range(date_from, date_to, preset)
+        gte, lte = fenetre(date_from, date_to, preset)
         raw = await c.get_occupancy_rate(salon_id, gte, lte)
         return {
-            "from": ms_to_iso(gte), "to": ms_to_iso(lte),
+            "from": iso(gte), "to": iso(lte),
             "matrix": raw.get("matrix"),
             "raw": raw,
         }
@@ -259,5 +250,5 @@ def register(mcp: FastMCP) -> None:
         Useful for "quelles prestations sont le mieux notées".
         """
         c = await _client()
-        gte, lte = resolve_range(date_from, date_to, preset)
+        gte, lte = fenetre(date_from, date_to, preset)
         return await c.get_reviews_stats(salon_id, gte, lte)

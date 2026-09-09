@@ -1,10 +1,8 @@
 """Planity — la SESSION par credential, socle des deux modules d'outils.
 
-Ouvrir une session Planity coûte cher : la chaîne d'auth fait trois allers-retours
-HTTP, puis chaque lecture du référentiel ouvre un WebSocket sur le Realtime
-Database (le REST de Firebase répond `permission_denied` sur presque tous les
-chemins — cf. `oto/tools/planity/README.md` dans oto-core). Rejouer tout ça à
-chaque appel d'outil rendrait le connecteur inutilisable.
+Ouvrir une session Planity coûte cher — plusieurs allers-retours réseau avant la
+première lecture utile. La rouvrir à chaque appel d'outil rendrait le connecteur
+inutilisable.
 
 Un client vivant est donc gardé **par credential**, clé = empreinte SHA-256 de
 `email:password` — jamais l'identifiant en clair, la clé de ce dictionnaire vit en
@@ -44,6 +42,155 @@ if TYPE_CHECKING:  # l'annotation seulement — jamais évaluée à l'exécution
 
 log = logging.getLogger("oto_mcp.tools.planity")
 
+#: Les trois coordonnées de l'application Planity, sous le connecteur `planity`
+#: dans `connector_settings`, scope PLATEFORME.
+#:
+#: ⚠️ **Elles sont publiques par conception, et ce ne sont pas des secrets** : tout
+#: navigateur qui ouvre `pro.planity.com` les reçoit. Elles
+#: identifient l'application Planity et n'autorisent rien à elles seules — ce qui
+#: autorise, c'est le mot de passe de la personne, qui vit au coffre CHIFFRÉ. Elles
+#: peuvent donc apparaître dans un message d'erreur ou un journal de débogage sans
+#: que ce soit une fuite.
+#:
+#: C'est aussi pourquoi elles ne sont PAS dans le coffre : y ranger trois
+#: identifiants publics, identiques pour tous, garantirait que le prochain lecteur
+#: les traite comme un secret — rotation, alerte, temps perdu. Le coffre refuse
+#: d'ailleurs une clé plateforme à un connecteur sans `platform` dans ses
+#: `auth_modes`, et le lui ajouter ferait annoncer à la fiche qu'une clé plateforme
+#: peut servir l'utilisatrice, ce qui est faux.
+#:
+#: Si elles ne sont pas en dur dans oto-core, c'est par GÉNÉRICITÉ : ce dépôt-là est
+#: public et open source, et un client qu'on y publie décrit un protocole — il
+#: n'embarque pas les coordonnées d'une entreprise tierce comme s'il était son
+#: intégration officielle. Elles appartiennent à Planity ; c'est l'exploitant de
+#: l'instance qui les pose et qui répond de ce qu'il appelle.
+_REGLAGES = ("firebase_api_key", "firebase_app_id", "rest_api")
+
+#: La commande qui les pose. Elle vit DANS le message de refus : un diagnostic qui
+#: n'indique pas le geste renvoie chercher, et c'est ainsi qu'on relance six fois
+#: une configuration valide.
+_COMMANDE = ('oto_admin_connector_setting(op="set", connector="planity", '
+             'key="<clé>", value="<valeur>")')
+
+
+def _reglages() -> dict:
+    """Les coordonnées posées en base, scope plateforme. `{}` si la base est muette.
+
+    Ce que protège la règle de `connector_settings` : **aucune lecture de cette
+    table sur le chemin chaud d'un appel d'outil**. Son premier lecteur, la
+    cardinalité, est consulté jusqu'à quatre fois par appel, sur un serveur
+    mono-loop, contre une base managée distante — une lecture par consultation y
+    serait le gel que `docs/event-loop-perf.md` documente, d'où l'instantané en
+    mémoire.
+
+    Cette lecture-ci y satisfait, et c'est mesurable : elle n'a lieu qu'à la
+    **construction d'un client** Planity — au plus une fois par credential et par
+    TTL du pool (30 min), jamais par appel — et elle part au fil d'exécution
+    (`asyncio.to_thread` dans `_client`), donc hors de la boucle. Un chemin froid,
+    hors boucle : les deux moitiés de la propriété.
+
+    Ce que ça achète : une écriture, et toutes les couleurs déployées (bleu, vert,
+    canari) la voient au client suivant — sans redémarrage ET sans `op=reload` par
+    processus, qu'un instantané en mémoire aurait exigé. Le réglage d'une instance
+    ne doit pas dépendre de qui pense à recharger quoi.
+    """
+    from ..db import connector_settings as store
+
+    return {r["key"]: (r["value"] or "").strip()
+            for r in store.list_connector_settings()
+            if r["scope_type"] == "platform" and r["connector"] == "planity"
+            and r["key"] in _REGLAGES}
+
+
+def coordonnees_manquantes() -> list[str]:
+    """Celles des trois clés qui manquent en base. Vide = tout est là."""
+    poses = _reglages()
+    return [nom for nom in _REGLAGES if not poses.get(nom)]
+
+
+def _coeur():
+    """Le paquet `oto.tools.planity` d'oto-core, importé À L'APPEL.
+
+    Importé ici et pas au chargement du module, pour une raison de PRODUIT : le
+    connecteur reste **enregistré** même quand l'extra `planity` d'oto-core manque
+    ou que les coordonnées ne sont pas posées. Il est alors visible, sélectionnable,
+    et chaque appel refuse en NOMMANT ce qui manque — au lieu de disparaître du
+    catalogue, ce qui ne se remarque pas et ne s'explique pas."""
+    # `importlib` et pas `import oto.tools.planity as …` : `oto` est un package
+    # d'espace de noms (PEP 420) partagé entre oto-core et oto-cli, et la forme
+    # `import a.b.c as x` y résout par attribut sur le parent — ce qui échoue
+    # quand le sous-paquet n'existe pas encore sur ce chemin. `import_module`
+    # passe par le mécanisme d'import normal et rend ce qui est déjà chargé.
+    import importlib
+
+    try:
+        coeur = importlib.import_module("oto.tools.planity")
+    except ImportError as e:
+        raise _bad(
+            f"Le connecteur `planity` n'est pas installé sur cette instance : il "
+            f"faut l'extra `planity` d'oto-core (`oto-core[planity]`), qui apporte "
+            f"`httpx` et `websockets`. C'est une configuration de l'instance, pas "
+            f"un problème de ton compte — préviens l'exploitant. Détail : {e}") from e
+    return coeur
+
+
+def endpoints():
+    """Les coordonnées de l'application Planity, ou un refus qui NOMME ce qui manque.
+
+    Le refus est le point : un connecteur non configuré doit dire lequel des deux
+    côtés est en cause. Sans ça, l'appel échoue plus loin sur un 400 de Firebase,
+    que la chaîne d'erreur traduit — correctement, mais faussement ici — en
+    « email ou mot de passe refusé ». L'utilisatrice reposerait alors un credential
+    parfaitement bon, en boucle. Et il nomme le GESTE, pas seulement le manque."""
+    poses = _reglages()
+    manquantes = [nom for nom in _REGLAGES if not poses.get(nom)]
+    if manquantes:
+        raise _bad(
+            f"Le connecteur `planity` n'est pas configuré sur cette instance : "
+            f"{', '.join(manquantes)} manquante(s). Ce n'est pas ton credential — "
+            f"il n'y a rien à reposer de ton côté : préviens l'exploitant de "
+            f"l'instance, qui les pose avec {_COMMANDE}.")
+    return _coeur().PlanityEndpoints(
+        firebase_api_key=poses["firebase_api_key"],
+        firebase_app_id=poses["firebase_app_id"],
+        rest_api=poses["rest_api"],
+    )
+
+
+def fenetre(date_from, date_to, preset):
+    """`(gte_ms, lte_ms)` — la fenêtre de dates, résolue par le cœur."""
+    return _coeur().resolve_range(date_from, date_to, preset)
+
+
+def iso(ms):
+    """Un horodatage Planity (millisecondes) en ISO Europe/Paris, ou `None`."""
+    return _coeur().ms_to_iso(ms)
+
+
+def avertir_au_demarrage() -> None:
+    """Dit AU BOOT ce qui empêchera le connecteur de servir. Ne lève jamais.
+
+    Le connecteur reste enregistré : sans cette ligne, un opérateur qui a oublié
+    une variable ne l'apprendrait qu'au premier appel d'une utilisatrice."""
+    try:
+        manquantes = coordonnees_manquantes()
+    except Exception as e:  # noqa: SILENT — au boot la base peut n'être pas prête ; l'appel, lui, dira tout
+        log.info("planity : configuration non vérifiable au démarrage (%s) — le "
+                 "premier appel tranchera.", type(e).__name__)
+        manquantes = []
+    if manquantes:
+        log.warning(
+            "planity : connecteur monté mais NON configuré — %s manquante(s). Les "
+            "outils `planity_*` refuseront en le disant. Poser : %s",
+            ", ".join(manquantes), _COMMANDE)
+    try:
+        _coeur()
+    except McpError as e:
+        log.warning(
+            "planity : connecteur monté mais le cœur n'est pas installable — "
+            "installer l'extra `oto-core[planity]` (httpx + websockets). Les "
+            "outils `planity_*` refuseront en le disant. Détail : %s", e)
+
 #: Un client sans usage depuis ce délai est fermé. Assez long pour qu'une
 #: conversation entière réutilise la même session, assez court pour ne pas tenir un
 #: WebSocket ouvert chez Planity toute la journée après un appel unique.
@@ -79,7 +226,19 @@ def _refus_planity(e: BaseException, geste: str) -> McpError:
     Le cas qui compte est le 400 de Firebase à l'étape 1 de la chaîne d'auth : il
     veut dire « cet email ou ce mot de passe ne va pas », et sans cette lecture il
     remonte comme un `HTTPStatusError` brut que l'agent interprète en panne de
-    service — donc en « réessaie », alors que réessayer ne peut pas aboutir."""
+    service — donc en « réessaie », alors que réessayer ne peut pas aboutir.
+
+    ⚠️ **Le texte d'une exception amont ne traverse JAMAIS cette frontière.** Ce
+    connecteur est le seul dont le credential est un MOT DE PASSE, et il le passe
+    en argument à trois fonctions : n'importe quelle exception construite avec ces
+    arguments — un `RuntimeError(f"... {email} / {password}")` d'une version
+    ultérieure du cœur, d'une lib intermédiaire, d'un cas d'erreur qu'on n'a pas
+    écrit — se serait retrouvée mot pour mot dans la réponse rendue à l'agent, donc
+    dans un transcript et dans le journal d'appels. Aucun cas réel ne le fait
+    aujourd'hui (httpx met l'URL dans ses messages, jamais le corps de la requête ;
+    mesuré) : c'est bien pour ça qu'il fallait fermer la porte AVANT d'avoir un
+    incident à raconter. On rend donc le TYPE et, s'il existe, le statut HTTP —
+    jamais le message. Ce qu'on perd au diagnostic, le journal serveur l'a."""
     if isinstance(e, McpError):
         return e            # déjà actionnable — la retraduire l'appauvrirait
     statut = getattr(getattr(e, "response", None), "status_code", None)
@@ -89,18 +248,21 @@ def _refus_planity(e: BaseException, geste: str) -> McpError:
             "du compte Planity qui ne convient pas, pas un argument de l'appel — "
             "rejouer à l'identique échouera pareil. Repose le credential `planity` "
             "sur ta page connecteurs, avec les identifiants de `pro.planity.com`.")
-    return _bad(f"Planity n'a pas répondu à {geste} : {e}")
+    porte = f" (HTTP {statut})" if statut else ""
+    log.warning("planity : %s a échoué — %s%s", geste, type(e).__name__, porte)
+    return _bad(
+        f"Planity n'a pas répondu à {geste} : {type(e).__name__}{porte}. Ce n'est "
+        "pas un refus d'identifiants — réessaie, et si ça dure, c'est chez Planity "
+        "que ça se passe.")
 
 
-async def _ouvrir(email: str, password: str) -> "PlanityClient":
+async def _ouvrir(email: str, password: str, coordonnees) -> "PlanityClient":
     """Construit un client et VALIDE le credential tout de suite.
 
     L'authentification est jouée ici, pas au premier appel métier : un credential
     faux doit échouer sur « connexion refusée », pas plus tard sur « ce salon n'est
     pas accessible », qui se lit comme un problème de droits chez Planity."""
-    from oto.tools.planity import PlanityClient
-
-    client = PlanityClient(email, password)
+    client = _coeur().PlanityClient(email, password, coordonnees)
     try:
         await client.auth.get_tokens()
     except BaseException:
@@ -130,8 +292,11 @@ async def _evincer_les_inactifs(boucle: asyncio.AbstractEventLoop) -> None:
             try:
                 await entree.ouverture.result().close()
             # noqa: SILENT — fermeture best-effort d'un client déjà retiré du pool
+            # Même règle qu'au-dessus : le TYPE, jamais le texte — cette
+            # exception naît sur un client construit avec le mot de passe.
             except Exception as e:
-                log.info("planity : fermeture d'une session inactive en échec (%s)", e)
+                log.info("planity : fermeture d'une session inactive en échec (%s)",
+                         type(e).__name__)
         log.info("planity : session inactive libérée (pool = %d)", len(_entrees))
 
 
@@ -149,6 +314,11 @@ async def _client(account: Optional[str] = None) -> PlanityClient:
     Le credential (email + mot de passe) est résolu au coffre par la cascade
     normale (`byo_user`, palier membre) : la résolution touche la base, donc elle
     part au fil d'exécution, jamais dans la boucle."""
+    # Les coordonnées de l'instance AVANT le credential : une instance non
+    # configurée doit le dire, pas accuser le mot de passe de l'utilisatrice.
+    # Les deux lectures partent au FIL D'EXÉCUTION : elles touchent la base, et ce
+    # serveur est mono-loop (`docs/event-loop-perf.md`).
+    coordonnees = await asyncio.to_thread(endpoints)
     fields = await asyncio.to_thread(
         access.resolve_credential_fields, "planity", account)
     email, password = fields.get("email"), fields.get("password")
@@ -163,8 +333,9 @@ async def _client(account: Optional[str] = None) -> PlanityClient:
     cle = hashlib.sha256(f"{email}:{password}".encode()).hexdigest()
     entree = _entrees.get(cle)
     if entree is None or entree.boucle is not boucle:
-        entree = _Entree(boucle, asyncio.ensure_future(_ouvrir(email, password)),
-                         time.monotonic())
+        entree = _Entree(
+            boucle, asyncio.ensure_future(_ouvrir(email, password, coordonnees)),
+            time.monotonic())
         _entrees[cle] = entree
     try:
         client = await entree.ouverture

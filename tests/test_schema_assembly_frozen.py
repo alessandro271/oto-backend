@@ -291,8 +291,14 @@ from oto_mcp.db import _schema, schema
 # ⚠️ Mis à jour SÉPARÉMENT du commit qui a changé le DDL — ce que le docstring
 # ci-dessus interdit, et pour cause : 4b23cb27 n'a pas rejoué cette garde, et le tronc
 # est resté rouge de 08h37 jusqu'ici, bloquant toute mise en production.
-EMPREINTE = "6332cc218edbfbac9dc3db2932a37d405be1d43ef1172f90bd0eee6a2678732e"
-LONGUEUR = 148788
+# ⚠️ 2026-09-09 (planity, oto-backend#913) : COMMENTAIRES SEULS. Le fragment
+# `schema/connectors.py` gagne une note sur ce que protège la règle « pas de lecture
+# sur le chemin chaud » — le lecteur froid et hors boucle qu'est `planity_session`
+# y satisfait sans instantané. Aucune instruction SQL n'a bougé : l'assemblé grandit
+# de 634 caractères (148788 → 149422), exactement la taille des commentaires ajoutés, et
+# `test_les_tables_creees_sont_celles_qu_on_attend` le vérifie côté exécuté.
+EMPREINTE = "dc84b4e2b7842bb1cf1193fbc978840a77a7b072c369337506ad3cc3372d30c8"
+LONGUEUR = 149422
 
 
 _CREATE_TABLE = re.compile(r"^CREATE TABLE IF NOT EXISTS (\w+)", re.M)

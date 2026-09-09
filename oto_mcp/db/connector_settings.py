@@ -5,11 +5,23 @@ son unique lecteur/écrivain. Il ne porte AUCUNE politique : qui a le droit de p
 surcharge est une affaire d'autorisation (`capabilities/`), et ce qu'une surcharge
 SIGNIFIE est une affaire de `connectors.cardinality`. Ici, des requêtes.
 
-⚠️ **Personne ne lit cette table à l'appel.** La lecture se fait au boot et sur
-rechargement explicite ; le chemin chaud lit un dictionnaire en mémoire
-(`connectors.cardinality`). Une lecture par appel serait le mode de panne que
-`docs/event-loop-perf.md` documente — la cardinalité est consultée jusqu'à quatre fois
-par appel d'outil, sur un serveur mono-loop.
+⚠️ **Cette table ne se lit pas sur le chemin CHAUD d'un appel d'outil** — c'est la
+propriété à tenir, et elle a un motif chiffré : la cardinalité est consultée jusqu'à
+quatre fois par appel, sur un serveur mono-loop, contre une base managée distante. Une
+lecture par consultation serait le mode de panne que `docs/event-loop-perf.md`
+documente ; d'où son instantané en mémoire (`connectors.cardinality`), chargé au boot
+et sur rechargement explicite.
+
+Un lecteur FROID et HORS BOUCLE satisfait la même propriété sans instantané :
+`tools/planity_session.py` lit les coordonnées de l'application Planity à la
+construction d'un client — au plus une fois par credential et par TTL de pool
+(30 min), via `asyncio.to_thread` — et jamais par appel. Il y gagne ce que
+l'instantané ne donne pas : une écriture que toutes les couleurs déployées voient au
+client suivant, sans que chacune ait à recharger.
+
+La question à poser en ajoutant un lecteur n'est donc pas « boot ou appel ? » mais
+**« à quelle fréquence, et dans la boucle ? »** — un lecteur chaud prend l'instantané,
+un lecteur froid hors boucle peut lire la table.
 """
 from __future__ import annotations
 

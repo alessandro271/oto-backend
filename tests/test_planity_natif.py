@@ -33,10 +33,36 @@ from oto_mcp import providers
 
 # ── Le cœur, moqué à sa frontière ───────────────────────────────────────────
 
+#: Coordonnées MANIFESTEMENT fictives. Elles appartiennent à Planity, sont
+#: publiques par conception (tout navigateur qui ouvre `pro.planity.com` les
+#: reçoit), et se
+#: posent par l'OPÉRATEUR de l'instance, en base (`connector_settings`, scope
+#: plateforme) : rien de tout ça ne vit dans le dépôt.
+_COORDONNEES = {
+    "firebase_api_key": "cle-firebase-fictive",
+    "firebase_app_id": "app-id-fictif",
+    "rest_api": "https://api.exemple.invalid",
+}
+
+
+def _lignes(poses: dict) -> list[dict]:
+    """La forme que rend `db.connector_settings.list_connector_settings`."""
+    return [{"scope_type": "platform", "scope_id": "platform",
+             "connector": "planity", "key": k, "value": v}
+            for k, v in poses.items()]
+
+
+def _poser(monkeypatch, poses: dict) -> None:
+    from oto_mcp.db import connector_settings as store
+    monkeypatch.setattr(store, "list_connector_settings",
+                        lambda key=None, conn=None: _lignes(poses))
+
+
 def _faux_coeur(client=None):
     """Un module `oto.tools.planity` réduit à ce que le backend en importe."""
     mod = types.ModuleType("oto.tools.planity")
     mod.PlanityClient = MagicMock(return_value=client or MagicMock())
+    mod.PlanityEndpoints = MagicMock(name="PlanityEndpoints")
     mod.resolve_range = MagicMock(return_value=(1_000, 2_000))
     mod.ms_to_iso = lambda ms: None if not ms else f"iso:{int(ms)}"
     return mod
@@ -82,6 +108,7 @@ def coeur(monkeypatch):
     client = _client_moque()
     mod = _faux_coeur(client)
     monkeypatch.setitem(sys.modules, "oto.tools.planity", mod)
+    _poser(monkeypatch, _COORDONNEES)
     monkeypatch.setattr(
         "oto_mcp.access.resolve_credential_fields",
         lambda provider, account=None: {"email": "demo@example.com",
@@ -171,12 +198,115 @@ def test_tous_les_outils_sont_dans_le_namespace_du_connecteur(coeur):
         assert t.name.split("_")[0] == ns
 
 
+# ── L'instance non configurée : présent, et refusant en le disant ───────────
+
+def test_les_outils_sont_montes_meme_sans_coordonnees(monkeypatch):
+    """⚠️ Le connecteur ne DISPARAÎT pas quand l'instance n'est pas configurée.
+
+    Un connecteur absent du catalogue ne se remarque pas et ne s'explique pas :
+    l'utilisatrice ne voit rien, ne peut rien demander, et personne ne sait
+    pourquoi. Présent et refusant en nommant la cause, elle lit le motif et
+    l'exploitant sait quoi poser. C'est l'inverse du réflexe « ne monte pas ce qui
+    ne marche pas », et c'est délibéré."""
+    mod = _faux_coeur(_client_moque())
+    monkeypatch.setitem(sys.modules, "oto.tools.planity", mod)
+    _poser(monkeypatch, {})
+
+    servis = sorted(t.name for t in asyncio.run(_serveur(None).list_tools()))
+    assert servis == _ATTENDUS, "les 20 outils restent montés, configurés ou non"
+
+
+def test_sans_coordonnees_l_appel_refuse_en_nommant_les_trois_variables(monkeypatch):
+    """Et le refus ne parle PAS du credential : sans les coordonnées, l'appel
+    partirait sur un 400 de Firebase, que la chaîne d'erreur traduirait — à raison
+    dans son contexte, à tort ici — en « email ou mot de passe refusé ».
+    L'utilisatrice reposerait alors un credential parfaitement bon, en boucle."""
+    from oto_mcp.mcp_errors import McpError
+
+    mod = _faux_coeur(_client_moque())
+    monkeypatch.setitem(sys.modules, "oto.tools.planity", mod)
+    monkeypatch.setattr("oto_mcp.access.resolve_credential_fields",
+                        lambda provider, account=None: {"email": "demo@example.com",
+                                                        "password": "s3cret"})
+    from oto_mcp.tools import planity_session
+    planity_session._entrees.clear()
+    _poser(monkeypatch, {})
+
+    outil = asyncio.run(_serveur(None).get_tool("planity_list_salons")).fn
+    with pytest.raises(McpError) as e:
+        asyncio.run(outil())
+    msg = str(e.value)
+    for nom in _COORDONNEES:
+        assert nom in msg, f"{nom} doit être nommée dans le refus"
+    assert "mot de passe" not in msg and "credential" in msg
+    assert "oto_admin_connector_setting" in msg, (
+        "un diagnostic qui ne dit pas le GESTE renvoie chercher — c'est ainsi "
+        "qu'on relance six fois une configuration valide")
+
+
+def test_une_seule_cle_manquante_est_nommee_seule(monkeypatch):
+    """Nommer les trois quand une seule manque envoie tout revérifier.
+
+    Une clé POSÉE mais vide compte comme absente : une ligne en base qu'on croit
+    configurée et que personne ne peut lire est le pire des deux états."""
+    from oto_mcp.mcp_errors import McpError
+    from oto_mcp.tools import planity_session
+
+    mod = _faux_coeur(_client_moque())
+    monkeypatch.setitem(sys.modules, "oto.tools.planity", mod)
+    _poser(monkeypatch, dict(_COORDONNEES, rest_api="   "))
+    planity_session._entrees.clear()
+
+    with pytest.raises(McpError) as e:
+        planity_session.endpoints()
+    msg = str(e.value)
+    assert "rest_api" in msg
+    assert "firebase_api_key" not in msg
+
+
+def test_sans_l_extra_du_coeur_l_appel_refuse_en_nommant_l_extra(monkeypatch):
+    """Même règle pour l'autre moitié de la configuration : le connecteur reste
+    monté, et le refus nomme l'extra d'oto-core au lieu de rendre « No module named
+    'httpx' » — vrai, et parfaitement inutile à qui le lit."""
+    from oto_mcp.mcp_errors import McpError
+    from oto_mcp.tools import planity_session
+
+    monkeypatch.delitem(sys.modules, "oto.tools.planity", raising=False)
+    _poser(monkeypatch, _COORDONNEES)
+    planity_session._entrees.clear()
+
+    servis = sorted(t.name for t in asyncio.run(_serveur(None).list_tools()))
+    assert servis == _ATTENDUS, "les 20 outils restent montés sans le cœur"
+
+    outil = asyncio.run(_serveur(None).get_tool("planity_list_salons")).fn
+    with pytest.raises(McpError) as e:
+        asyncio.run(outil())
+    assert "oto-core[planity]" in str(e.value)
+
+
+def test_le_demarrage_dit_ce_qui_manque(monkeypatch, caplog):
+    """Sans cette ligne au boot, un exploitant qui a oublié une variable ne
+    l'apprendrait qu'au premier appel d'une utilisatrice."""
+    from oto_mcp.tools import planity_session
+
+    _poser(monkeypatch, {})
+    with caplog.at_level("WARNING"):
+        planity_session.avertir_au_demarrage()
+    for nom in _COORDONNEES:
+        assert nom in caplog.text
+    assert "oto_admin_connector_setting" in caplog.text
+
+
 # ── La session par credential ───────────────────────────────────────────────
 
 def test_le_client_est_construit_avec_le_credential_du_coffre(coeur):
     _outil(coeur, "planity_list_salons")
     asyncio.run(_outil(coeur, "planity_list_salons")())
-    coeur.module.PlanityClient.assert_called_with("demo@example.com", "s3cret")
+    appel = coeur.module.PlanityClient.call_args
+    assert appel.args[:2] == ("demo@example.com", "s3cret")
+    assert appel.args[2] is coeur.module.PlanityEndpoints.return_value, (
+        "le client doit recevoir les coordonnées de l'instance — sans elles, "
+        "oto-core lève à la construction")
 
 
 def test_la_session_valide_le_credential_a_l_ouverture(coeur):
@@ -257,6 +387,39 @@ def test_un_refus_d_auth_de_planity_dit_de_reposer_le_credential(coeur):
         asyncio.run(_outil(coeur, "planity_list_salons")())
     msg = str(e.value)
     assert "mot de passe" in msg and "credential" in msg
+
+
+def test_aucun_refus_ne_recrache_le_credential(coeur):
+    """LE credential de ce connecteur est un MOT DE PASSE, et il est passé en
+    argument à trois fonctions : n'importe quelle exception construite avec ces
+    arguments se retrouverait mot pour mot dans la réponse rendue à l'agent — donc
+    dans un transcript, dans le journal d'appels, chez l'utilisateur suivant.
+
+    On exerce le PIRE cas, fabriqué exprès : une exception dont le texte porte
+    l'email et le mot de passe. Aucun amont ne fait ça aujourd'hui (httpx met
+    l'URL dans ses messages, jamais le corps) — c'est précisément pourquoi la
+    porte se ferme maintenant, pendant qu'il n'y a pas d'incident à raconter. Un
+    test qui n'exercerait que les exceptions réelles ne garderait rien."""
+    from oto_mcp.mcp_errors import McpError
+
+    coeur.client.auth.get_tokens.side_effect = RuntimeError(
+        "refus pour demo@example.com / s3cret")
+    with pytest.raises(McpError) as e:
+        asyncio.run(_outil(coeur, "planity_list_salons")())
+    msg = str(e.value)
+    assert "s3cret" not in msg and "demo@example.com" not in msg
+    assert "RuntimeError" in msg, "le type reste dit — sinon le refus n'aide plus"
+
+
+def test_le_journal_ne_porte_pas_le_credential(coeur, caplog):
+    """Même règle sur l'autre sortie : ce qui n'a pas le droit d'aller à l'agent
+    n'a pas plus le droit d'aller au journal, qui vit plus longtemps."""
+    coeur.client.auth.get_tokens.side_effect = RuntimeError(
+        "refus pour demo@example.com / s3cret")
+    with caplog.at_level("DEBUG"):
+        with pytest.raises(Exception):
+            asyncio.run(_outil(coeur, "planity_list_salons")())
+    assert "s3cret" not in caplog.text and "demo@example.com" not in caplog.text
 
 
 # ── Une famille d'outils à la fois, cœur moqué ──────────────────────────────
@@ -340,7 +503,7 @@ def test_chiffres_le_ca_est_rendu_en_euros_avec_ses_bornes(coeur):
 
 
 def test_chiffres_les_collaboratrices_sont_nommees_et_classees(coeur):
-    """`getCalendarStats` rend des TUPLES anonymes : le nom vient du référentiel,
+    """Les statistiques arrivent en TUPLES anonymes : le nom vient du référentiel,
     et une ligne trop courte est ignorée plutôt que lue de travers."""
     coeur.client.get_salon.return_value = _salon(
         employees=[_employe("emp-1", "Alex"), _employe("emp-2", "Camille")])

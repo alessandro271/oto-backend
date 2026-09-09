@@ -128,11 +128,21 @@ INSTANCES = """
 -- qu'on anticipe : une colonne `cardinality` aurait fait une migration au deuxième
 -- besoin, et le registre en a une douzaine de candidates.
 --
--- ⚠️ Elle est lue **au boot et sur rechargement explicite**, jamais à l'appel : la
--- cardinalité est consultée jusqu'à quatre fois par appel d'outil, sur un serveur
--- MONO-LOOP, contre une base managée distante (docs/event-loop-perf.md). Même patron
+-- ⚠️ Ce qu'elle protège : **aucune lecture sur le chemin CHAUD d'un appel d'outil**.
+-- La cardinalité est consultée jusqu'à quatre fois par appel, sur un serveur
+-- MONO-LOOP, contre une base managée distante (docs/event-loop-perf.md) — d'où son
+-- instantané en mémoire, chargé au boot et sur rechargement explicite. Même patron
 -- que le registre d'émetteurs — et même conséquence, à dire dans la doc : le
 -- rechargement est PAR PROCESS.
+--
+-- Une lecture FROIDE et HORS BOUCLE y satisfait, et n'a pas besoin de l'instantané :
+-- `tools/planity_session.py` lit ses trois coordonnées à la construction d'un client
+-- (au plus une fois par credential et par TTL de pool, via `asyncio.to_thread`), pas
+-- à chaque appel. Elle y gagne ce que l'instantané ne donne pas : une écriture que
+-- toutes les couleurs déployées voient sans `op=reload` chacune.
+--
+-- La question à se poser en ajoutant un lecteur n'est donc pas « boot ou appel ? »
+-- mais **« à quelle fréquence, et dans la boucle ? »**.
 CREATE TABLE IF NOT EXISTS connector_settings (
     -- Le scope de la surcharge. `platform` vaut pour tout le monde ; `org` ne vaut que
     -- dans le contexte de CETTE org — la même lecture que partout ailleurs, l'org du

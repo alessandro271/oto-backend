@@ -1,21 +1,18 @@
 """Planity — référentiel, clientes et agenda d'un salon (LECTURE SEULE).
 
-Planity n'a pas d'API publique : oto rejoue lui-même ce que fait la webapp
-`pro.planity.com`, avec l'email et le mot de passe que la personne a posés au
-coffre (`byo_user`, `secret_kind="basic_auth"`). Le cœur — chaîne d'auth Firebase
-en trois étapes, Realtime Database en WebSocket, lambdas REST, Algolia — vit dans
-oto-core (`oto.tools.planity`, et sa note de reverse). Ici il n'y a que des
-enveloppes minces : résoudre le credential, appeler le cœur, rendre du JSON propre.
+Le connecteur s'authentifie avec l'email et le mot de passe du compte Planity de
+la personne, posés au coffre (`byo_user`, `secret_kind="basic_auth"`). Le client
+vit dans oto-core (`oto.tools.planity`) ; ici il n'y a que des enveloppes minces :
+résoudre le credential, appeler le client, rendre du JSON propre.
 
 Les statistiques (chiffre d'affaires, collaboratrices, occupation, avis) sont dans
 le module frère `planity_stats.py` — même connecteur, même namespace, même clé.
 
-⚠️ **Le PIN admin de Planity n'est vérifié que côté client** : il ne déclenche
-aucun appel réseau. Quiconque détient l'email et le mot de passe du compte a le
-même accès en lecture que quiconque connaît le PIN — y compris aux pages que
-l'interface Planity garde derrière lui. C'est écrit dans la fiche du connecteur
-(`connectors/docs/planity.md`) parce que c'est ce que la pose du credential engage
-de plus lourd.
+⚠️ **Ce connecteur s'authentifie avec l'email et le mot de passe du compte
+Planity, et rien d'autre** — il n'emprunte aucun autre chemin d'authentification de
+l'application Planity. Ce qu'il peut lire est donc exactement ce que ce compte peut
+lire : le périmètre se règle en choisissant le compte, pas en configurant oto. La
+fiche du connecteur (`connectors/docs/planity.md`) le dit à qui pose le credential.
 
 Conventions de bord, héritées du serveur d'origine et inchangées (des agents et la
 fiche connaissent ces noms et ces schémas) :
@@ -25,12 +22,14 @@ fiche connaissent ces noms et ces schémas) :
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Optional
 
 from fastmcp import FastMCP
 
 from ..connectors import verify as connector_verify
-from .planity_session import _client, _eur
+from . import planity_session
+from .planity_session import _client, _eur, fenetre, iso
 
 
 async def _verify(fields: dict, config: dict | None = None) -> None:
@@ -47,9 +46,12 @@ async def _verify(fields: dict, config: dict | None = None) -> None:
     n'expose ni compteur de crédits ni quota documenté — donc `auth`, jamais
     `auth+quota` : on n'a mesuré aucun solde.
     """
-    from oto.tools.planity import PlanityClient
-
-    client = PlanityClient(fields["email"], fields["password"])
+    # Les coordonnées de l'instance AVANT tout : sonder sans elles produirait un
+    # 400 de Firebase, qu'on lirait comme « mauvais mot de passe » — et on ferait
+    # reposer un credential parfaitement bon.
+    coordonnees = await asyncio.to_thread(planity_session.endpoints)
+    client = planity_session._coeur().PlanityClient(
+        fields["email"], fields["password"], coordonnees)
     try:
         try:
             await client.auth.get_tokens()
@@ -70,8 +72,12 @@ async def _verify(fields: dict, config: dict | None = None) -> None:
 
 
 def register(mcp: FastMCP) -> None:
-    from oto.tools.planity import ms_to_iso, resolve_range
-
+    # ⚠️ AUCUN import du cœur ici. Le connecteur reste MONTÉ même quand l'extra
+    # `planity` d'oto-core manque ou que les coordonnées ne sont pas posées : il
+    # est alors visible, sélectionnable, et chaque appel refuse en nommant ce qui
+    # manque. Un connecteur qui disparaît du catalogue ne se remarque pas et ne
+    # s'explique pas — c'est l'utilisatrice qui paie la différence.
+    planity_session.avertir_au_demarrage()
     connector_verify.register("planity", _verify)
 
     # ═══════════════════════ Référentiel ═══════════════════════
@@ -210,7 +216,7 @@ def register(mcp: FastMCP) -> None:
                 "phone": h.get("phone"),
                 "email": h.get("email"),
                 "gender": h.get("gender"),
-                "created_at": ms_to_iso(h.get("createdAt")),
+                "created_at": iso(h.get("createdAt")),
             }
             for h in hits
         ]
@@ -235,7 +241,7 @@ def register(mcp: FastMCP) -> None:
             "city": p.get("city"),
             "gender": p.get("gender"),
             "comment": p.get("comment"),
-            "created_at": ms_to_iso(p.get("createdAt")),
+            "created_at": iso(p.get("createdAt")),
             "skip_marketing_sms": p.get("skipMarketingSMS"),
             "vevent_ids": list(vevents.keys()) if isinstance(vevents, dict) else [],
         }
@@ -283,7 +289,7 @@ def register(mcp: FastMCP) -> None:
             lines = r.get("lines") or []
             out.append({
                 "id": r.get("receiptId"),
-                "date": ms_to_iso(r.get("createdAt")),
+                "date": iso(r.get("createdAt")),
                 "total_eur": _eur(sum(l.get("price", 0) for l in lines)),
                 "lines": [
                     {
@@ -316,7 +322,7 @@ def register(mcp: FastMCP) -> None:
         Returns {count, vevents: [{id, start, end, customer_id, seller_id, services, status}]}.
         """
         c = await _client()
-        gte, lte = resolve_range(date_from, date_to, preset)
+        gte, lte = fenetre(date_from, date_to, preset)
         raw = await c.list_appointments(salon_id)
         out = []
         for vid, v in (raw or {}).items():
@@ -332,8 +338,8 @@ def register(mcp: FastMCP) -> None:
                 continue
             out.append({
                 "id": vid,
-                "start": ms_to_iso(start_ms),
-                "end": ms_to_iso(v.get("end")),
+                "start": iso(start_ms),
+                "end": iso(v.get("end")),
                 "customer_id": v.get("customer_id") or v.get("customerId"),
                 "seller_id": seller,
                 "services": v.get("services") or v.get("serviceIds"),
@@ -341,7 +347,7 @@ def register(mcp: FastMCP) -> None:
                 "title": v.get("title") or v.get("name"),
             })
         out.sort(key=lambda x: x.get("start") or "")
-        return {"count": len(out), "from": ms_to_iso(gte), "to": ms_to_iso(lte),
+        return {"count": len(out), "from": iso(gte), "to": iso(lte),
                 "vevents": out[:limit]}
 
     @mcp.tool()
@@ -353,8 +359,8 @@ def register(mcp: FastMCP) -> None:
             return {"error": "not_found"}
         return {
             "id": vevent_id,
-            "start": ms_to_iso(v.get("start")),
-            "end": ms_to_iso(v.get("end")),
+            "start": iso(v.get("start")),
+            "end": iso(v.get("end")),
             "customer_id": v.get("customer_id") or v.get("customerId"),
             "seller_id": v.get("seller_id") or v.get("sellerId") or v.get("child"),
             "services": v.get("services") or v.get("serviceIds"),

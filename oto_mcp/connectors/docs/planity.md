@@ -1,6 +1,6 @@
 ## prerequisite — l'email et le mot de passe de ton compte planity pro
 
-planity n'a pas d'api publique : oto rejoue ta connexion à [pro.planity.com](https://pro.planity.com) comme le ferait ton navigateur. renseigne l'**email** et le **mot de passe** de ton compte planity pro — ils sont chiffrés au coffre, jamais rendus en clair, et servent uniquement à ouvrir la session.
+oto se connecte à [pro.planity.com](https://pro.planity.com) avec tes identifiants, comme tu le ferais toi-même. renseigne l'**email** et le **mot de passe** de ton compte planity pro — ils sont chiffrés au coffre, jamais rendus en clair, et servent uniquement à ouvrir la session.
 - il faut un compte planity **pro** actif, rattaché à au moins un salon (agenda + caisse)
 - le compte est personnel : chacun pose le sien, et ne voit que les salons que planity lui ouvre
 - « tester la connexion » ouvre la session et liste tes salons — si aucun salon ne remonte, le compte s'authentifie mais n'est rattaché à rien
@@ -15,9 +15,19 @@ lecture seule. aucun rendez-vous n'est créé, modifié ni annulé.
 - chiffres — « quel est mon CA du mois ? » (`planity_get_revenue_summary`), le jour par jour (`planity_get_daily_revenue`), la décomposition prestations/produits (`planity_get_revenue_breakdown`), par collaboratrice (`planity_get_seller_stats`), le taux d'occupation (`planity_get_occupancy_rate`) et les avis (`planity_get_reviews_stats`)
 - clientèle — meilleures clientes, nouvelles clientes, fréquence de visite (`planity_get_best_customers`, `planity_get_new_customers`, `planity_get_customer_frequencies`)
 
-## note — le code pin administrateur de planity ne protège rien ici
+## note — ce avec quoi le connecteur s'authentifie
 
-dans planity, le **pin administrateur est vérifié dans l'interface seulement** : le saisir ne déclenche aucune vérification côté serveur. autrement dit, qui détient l'email et le mot de passe du compte a le même accès en lecture que qui connaît le pin — y compris aux écrans que planity garde derrière lui. c'est ce que la pose de ce credential engage de plus lourd, et ça ne dépend pas d'oto : c'est ainsi que planity est fait.
+le connecteur s'authentifie avec l'**email et le mot de passe** de ton compte planity pro, et rien d'autre : il n'utilise pas le code administrateur de l'application planity.
+- ce que le connecteur peut lire est donc ce que ce compte peut lire — c'est le compte, et lui seul, qui définit le périmètre
+- pour restreindre ce qu'oto voit, utilise un compte planity au périmètre plus étroit
+- tout est en lecture : aucun rendez-vous n'est créé, modifié ni annulé
+
+## note — ce connecteur demande une configuration de l'instance
+
+le connecteur a besoin, en plus de tes identifiants, de trois **coordonnées de l'application planity** posées une fois par l'exploitant de l'instance oto : `firebase_api_key`, `firebase_app_id`, `rest_api` (réglages de connecteur, scope plateforme).
+- si elles manquent, les outils `planity_*` restent visibles mais refusent en le disant, en nommant la clé absente et la commande qui la pose — ce n'est alors pas ton credential qui est en cause, et il n'y a rien à reposer de ton côté
+- **ce ne sont pas des secrets** : elles sont publiques par conception (tout navigateur qui ouvre `pro.planity.com` les reçoit), elles appartiennent à planity, et elles n'autorisent rien à elles seules — ce qui autorise, c'est ton mot de passe, qui vit au coffre chiffré. elles peuvent apparaître dans un message d'erreur ou un journal de débogage sans que ce soit une fuite
+- si elles ne sont pas dans le code, c'est parce que le client est publié en open source : un connecteur y décrit un protocole, il n'embarque pas les coordonnées d'une entreprise tierce comme s'il était son intégration officielle
 
 ## note — ce que planity ne rend pas
 
