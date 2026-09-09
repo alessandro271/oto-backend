@@ -304,13 +304,14 @@ def _creation(**kw):
     return base
 
 
-def test_creer_sans_borne_par_ligne_est_REFUSE_et_le_refus_dit_quoi_poser():
-    with pytest.raises(AuthzDenied) as e:
-        _appel(_ctx(), **_creation(max_tokens_per_row=None))
-    assert e.value.code == "budget_par_ligne_requis"
-    assert "max_tokens_per_row" in e.value.message
-    assert "3 000" in e.value.message or "45 000" in e.value.message, (
-        "le refus donne l'ordre de grandeur mesuré — sinon il fait deviner")
+def test_creer_SANS_borne_par_ligne_reste_permis(monkeypatch):
+    """⚠️ Arbitrage d'Alexis du 09/09/2026 : le plafond oui, l'obligation non.
+    Une campagne peut n'en déclarer aucune — elle n'a alors aucun plafond de
+    dépense, et c'est un choix assumé. Ce banc affirmait l'inverse ; il gravait
+    une décision qui n'avait pas été prise."""
+    from oto_mcp import db
+    monkeypatch.setattr(db, "create_fleet", lambda *a, **k: {"id": 1})
+    _appel(_ctx(), **_creation(max_tokens_per_row=None))
 
 
 def test_une_borne_AU_DELA_du_plafond_est_refusee():
@@ -331,20 +332,37 @@ def test_le_plafond_ne_refuse_AUCUN_travail_historique():
         "le plafond doit laisser passer le travail le plus cher jamais mesuré")
 
 
-def test_armer_une_campagne_SANS_borne_est_refuse_et_nomme_la_reparation(monkeypatch):
-    """Les campagnes déclarées avant cette garde n'ont rien qui les arrête, et
-    c'est l'armement qui engage la dépense — pas la déclaration. Le refus nomme
-    sa destination : sans elle, on relit le même appel."""
+def test_armer_une_campagne_AU_DELA_du_plafond_est_refuse(monkeypatch):
+    """Une campagne déclarée avant ce plafond peut le dépasser, et c'est
+    l'armement qui engage la dépense — pas la déclaration. Le refus nomme sa
+    destination : sans elle, on relit le même appel."""
+    from oto_mcp import db, roles
+    monkeypatch.setattr(roles, "is_org_admin", lambda *a, **k: True)
+    monkeypatch.setattr(RF, "_run_courant", lambda: None)
+    monkeypatch.setattr(db, "get_fleet", lambda *a, **k: {
+        "id": 1, "status": "draft", "procedure": "p", "input": "x",
+        "max_tokens_per_row": 1_500_000})
+    with pytest.raises(AuthzDenied) as e:
+        _appel(_ctx(), op="launch", fleet_id=1)
+    assert e.value.code == "budget_par_ligne_invalide"
+    assert "op=update" in e.value.message
+
+
+def test_armer_SANS_borne_reste_permis(monkeypatch):
+    """Le bord de l'arbitrage : l'absence de borne ne bloque pas l'armement."""
     from oto_mcp import db, roles
     monkeypatch.setattr(roles, "is_org_admin", lambda *a, **k: True)
     monkeypatch.setattr(RF, "_run_courant", lambda: None)
     monkeypatch.setattr(db, "get_fleet", lambda *a, **k: {
         "id": 1, "status": "draft", "procedure": "p", "input": "x",
         "max_tokens_per_row": None})
-    with pytest.raises(AuthzDenied) as e:
-        _appel(_ctx(), op="launch", fleet_id=1)
-    assert e.value.code == "budget_par_ligne_invalide"
-    assert "op=update" in e.value.message
+    monkeypatch.setattr(RF, "_lignes_visees", lambda *a, **k: 0)
+    monkeypatch.setattr(db, "armer", lambda *a, **k: {
+        "id": 1, "max_rows": None, "max_tokens_per_row": None})
+    rendu = _appel(_ctx(), op="launch", fleet_id=1)
+    assert rendu["budget_max_tokens"] is None, (
+        "sans borne il n'y a pas de pire cas — `null` le DIT, là où un nombre "
+        "fabriqué ferait croire à une protection")
 
 
 # ── La température : déclarée par PASSAGE, jamais posée dans l'environnement ──
