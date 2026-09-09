@@ -102,11 +102,6 @@ def _bornes_valides(inp: "FleetInput") -> None:
             + ", ".join(f"`{c}`={v}" for c, v in sorted(fautives.items())))
 
 
-#: Le plafond SERVEUR de la borne par ligne. Décision d'Alexis du 09/09/2026,
-#: après un incident : 52 campagnes déclaraient 1 500 000 jetons par ligne, ce
-#: qui, faute d'application de la somme cumulée, faisait de `max_rows ×
-#: max_tokens_per_row` — 150 millions — la seule borne réelle d'un passage.
-#:
 class FleetInput(BaseModel):
     op: Literal["create", "list", "get", "state", "update", "launch", "stop",
                 "take", "beat", "ack_stop"]
@@ -201,6 +196,13 @@ class FleetOut(BaseModel):
     beat_taken: Optional[bool] = None
     fleets: Optional[list[Fleet]] = None
     state: Optional[FleetState] = None
+    # `launch` : le PIRE CAS du passage, `max_rows × max_tokens_per_row`, dit au
+    # moment où l'on engage la dépense. `null` quand une des deux bornes manque —
+    # sans borne il n'y a pas de pire cas, et un nombre fabriqué ferait croire à
+    # une protection qui n'existe pas. Déclaré ici parce qu'il est SERVI : un
+    # champ rendu par le handler et absent du modèle de sortie ne figure dans
+    # aucun schéma, donc aucun front ne sait qu'il peut le lire.
+    budget_max_tokens: Optional[int] = None
 
 
 def _lignes_visees(ctx: ResolvedCtx, fleet_id: int) -> Optional[int]:

@@ -37,7 +37,7 @@ def espion(monkeypatch):
                         lambda org_id, kind, payload=None, run_id=None,
                         max_attempts=3, fleet_id=None, sub=None, **_:
                         vu.update(org=org_id, kind=kind, fleet=fleet_id,
-                                  sub=sub) or
+                                  sub=sub, payload=payload) or
                         {"id": 7, "status": "pending", "due_at": "2026-08-13",
                          "fleet_id": fleet_id})
     monkeypatch.setattr(RJ.db, "claim_next_job",
@@ -280,6 +280,37 @@ def test_le_travail_porte_l_identite_du_DECLARANT_pas_du_worker(campagne):
     _appel(_ctx(sub="worker-campagne"), op="claim")
     assert campagne["sub"] == "celui-qui-a-declare"
     assert campagne["sub"] != "worker-campagne"
+
+
+def test_la_borne_PAR_LIGNE_part_avec_le_travail(campagne):
+    """⚠️ C'est ICI que la borne par ligne devient réelle, et nulle part ailleurs.
+
+    Le serveur ne refuse plus rien à la déclaration (arbitrage du 09/09/2026 :
+    « une borne doit pouvoir être posée, si pas de borne, tant pis »). Une borne
+    posée n'est donc plus qu'une valeur en base — sauf si elle VOYAGE : elle part
+    dans `payload["max_tokens"]`, et c'est l'agent qui s'arrête dessus
+    (`stopped=max_tokens`). Sans ce transport, `max_tokens_per_row` serait un
+    champ décoratif que le dashboard affiche et que rien n'applique.
+
+    Le nom change au passage — `max_tokens_per_row` côté campagne, `max_tokens`
+    côté travail — et un renommage silencieux est exactement ce qui se casse sans
+    qu'un test le voie."""
+    _appel(_ctx(), op="claim")
+    assert campagne["payload"]["max_tokens"] == 80000, (
+        "la borne déclarée par la campagne doit atteindre le travail — sinon "
+        "elle ne borne rien")
+
+
+def test_sans_borne_le_travail_ne_porte_AUCUN_plafond_de_jetons(monkeypatch, espion):
+    """Le pendant, et il est assumé : sans borne, `max_tokens` vaut `None` et
+    l'agent n'a pas de plafond de jetons — il s'arrêtera sur sa fenêtre de
+    contexte, ou sur `max_steps`. Poser un défaut ici fabriquerait une borne que
+    personne n'a déclarée."""
+    monkeypatch.setattr(RJ.db, "campagne_a_servir",
+                        lambda org_id: {**CAMPAGNE, "max_tokens_per_row": None})
+    monkeypatch.setattr(RJ.db, "marquer_demarree", lambda fid: None)
+    _appel(_ctx(), op="claim")
+    assert espion["payload"]["max_tokens"] is None
 
 
 def test_la_campagne_passe_a_running_au_premier_travail(campagne):

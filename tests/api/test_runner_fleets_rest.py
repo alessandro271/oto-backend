@@ -31,7 +31,6 @@ import pytest
 from starlette.applications import Starlette
 from starlette.testclient import TestClient
 
-from oto_mcp.capabilities.runner_fleets import MAX_TOKENS_PAR_LIGNE as MAX_PAR_LIGNE
 
 ROUTE = "/api/me/runner/fleets"
 
@@ -278,78 +277,103 @@ def test_update_ne_peut_pas_annuler_ce_que_create_exige(client, org, flotte):
 
 # ── LA BORNE PAR LIGNE, REJOUÉE SUR LA ROUTE ─────────────────────────────────
 #
-# Décision d'Alexis du 09/09/2026 : `max_tokens_per_row` est OBLIGATOIRE et
-# plafonné à 200 000. La garde vit dans le handler et `tests/test_runner_fleets.py`
-# l'y éprouve ; ici on vérifie qu'elle est SERVIE — statut, code et phrase tels
-# qu'un front les reçoit. Une garde qui ne se rejoue pas sur la route est une
-# garde dont personne ne sait quel statut elle rend.
+# ⚠️ Arbitrage d'Alexis, 09/09/2026, verbatim : « Une borne doit pouvoir être
+# posée, si pas de borne, tant pis pour le moment (ou plutôt : pour le moment ça
+# s'arrêtera à la fenêtre de contexte du LLM). »
+#
+# Le serveur ne refuse donc plus rien ici : ni l'absence de borne, ni une valeur
+# haute. Les trois bancs qui rejouaient ces refus SUR LA ROUTE tombent avec eux —
+# garder un banc sur une garde retirée la rétablirait par la porte du test, et
+# c'est le test qui suit le code, jamais l'inverse.
+#
+# Ce qui reste à éprouver, et ce n'est pas rien : le champ est POSABLE, et une
+# borne posée est SERVIE. `budget_max_tokens`, rendu à l'armement, vaut
+# `max_rows × max_tokens_per_row` — le seul chiffre qui réponde à « combien ce
+# passage peut coûter », montré au moment où l'on engage la dépense. Sans borne
+# il vaut `null`, ce qui le DIT au lieu de fabriquer une protection.
+#
+# ⚠️ Le plancher générique tient toujours, lui : `max_tokens_per_row=0` est refusé
+# comme toute borne absurde (`test_une_borne_absurde_est_refusee_des_DEUX_cotes`).
 
 
-def test_declarer_sans_borne_par_ligne_est_refuse_SUR_LA_ROUTE(client, org):
-    """Sans cette borne, un passage n'a aucun plafond de dépense : la somme
-    cumulée (`max_tokens`) n'est pas appliquée sur ce chemin, donc `max_rows`
-    borne un NOMBRE de travaux, jamais des jetons."""
+def test_declarer_sans_borne_par_ligne_est_PERMIS_sur_la_route(client, org):
+    """L'absence de borne n'est plus un refus. Le passage n'a alors aucun plafond
+    de jetons — assumé : l'arrêt reste la fenêtre de contexte du modèle."""
     r = client.post(ROUTE, headers=_h(org["membre"]), json={
         "op": "create", "label": "sans-borne", "procedure": "p",
         "tools": ["oto_kb"]})
-    assert (r.status_code, r.json().get("error")) == (400, "budget_par_ligne_requis"), r.text
-    # ⚠️ Le refus doit dire la BORNE, pas seulement le champ manquant : un refus
-    # qui tait la valeur maximale acceptée fait deviner, donc fait rejouer.
-    assert str(MAX_PAR_LIGNE) in r.json().get("detail", ""), (
-        "un refus qui ne nomme pas le plafond oblige à deviner la valeur à poser")
+    assert r.status_code == 200, r.text
+    assert r.json()["fleet"]["max_tokens_per_row"] is None
 
 
-def test_une_borne_par_ligne_AU_DELA_du_plafond_est_refusee_SUR_LA_ROUTE(client, org):
-    """La valeur de l'incident : 1 500 000 par ligne, douze fois le travail le
-    plus cher jamais mesuré. Au-delà du plafond, ce n'est plus une borne."""
+def test_une_borne_HAUTE_est_PERMISE_sur_la_route(client, org):
+    """1,5 M par ligne : la valeur qu'un plafond serveur aurait refusée, et avec
+    elle 86 déclarations vivantes, dont une de production."""
     r = client.post(ROUTE, headers=_h(org["membre"]), json={
-        "op": "create", "label": "borne-trop-haute", "procedure": "p",
+        "op": "create", "label": "borne-haute", "procedure": "p",
         "tools": ["oto_kb"], "max_tokens_per_row": 1_500_000})
-    assert (r.status_code, r.json().get("error")) == (400, "budget_par_ligne_trop_haut"), r.text
-    assert str(MAX_PAR_LIGNE) in r.json().get("detail", ""), (
-        "le refus nomme le plafond servi, sinon on cherche la bonne valeur à tâtons")
+    assert r.status_code == 200, r.text
+    assert r.json()["fleet"]["max_tokens_per_row"] == 1_500_000
 
 
-def test_une_flotte_HISTORIQUE_sans_borne_reste_lisible_et_se_REPARE(client, org):
-    """⚠️ Le cas qui décide si la garde est un dégât ou une protection.
+def test_la_borne_POSEE_est_SERVIE_a_l_armement(client, org):
+    """⚠️ Ce qui reste de la question d'origine, et la seule part qui servait
+    vraiment : le pire cas, rendu PAR LA ROUTE au moment où l'on arme. C'est ce
+    nombre qui aurait affiché les 150 millions de jetons à celui qui armait.
 
-    Deux flottes déclarées AVANT la garde n'ont pas ce champ (mesuré le
-    09/09/2026 : 2 sur 101, toutes deux `stopped`). Une contrainte posée à
-    l'écriture qui rendrait l'existant illisible ou immodifiable serait le pire
-    cas — ici elle ne mord qu'à l'ARMEMENT, qui est le geste qui engage la
-    dépense, et le refus nomme une réparation qui MARCHE par la surface servie.
+    Il est rejoué ici parce qu'un champ calculé par le handler peut très bien ne
+    jamais atteindre le client — c'est toute la raison d'être de ce fichier."""
+    fid = client.post(ROUTE, headers=_h(org["membre"]), json={
+        "op": "create", "label": "pire-cas", "procedure": "p", "tools": ["oto_kb"],
+        "max_rows": 100, "max_tokens_per_row": 50_000}).json()["fleet"]["id"]
+    r = client.post(ROUTE, headers=_h(org["membre"]),
+                    json={"op": "launch", "fleet_id": fid})
+    assert r.status_code == 200, r.text
+    assert r.json()["budget_max_tokens"] == 5_000_000, (
+        "`max_rows × max_tokens_per_row` : la dépense maximale du passage")
 
-    L'état historique est reproduit EN BASE, pas par l'API : c'est justement un
-    état que l'API ne sait plus produire."""
+
+def test_sans_borne_l_armement_dit_NULL_et_arme_quand_meme(client, org):
+    """Les deux moitiés du même choix : armer sans borne reste PERMIS, et le pire
+    cas vaut `null`. Un nombre fabriqué ferait croire à une protection qui
+    n'existe pas."""
+    fid = client.post(ROUTE, headers=_h(org["membre"]), json={
+        "op": "create", "label": "arme-sans-borne", "procedure": "p",
+        "tools": ["oto_kb"], "max_rows": 100}).json()["fleet"]["id"]
+    r = client.post(ROUTE, headers=_h(org["membre"]),
+                    json={"op": "launch", "fleet_id": fid})
+    assert r.status_code == 200, r.text
+    assert r.json()["fleet"]["status"] == "armed"
+    assert r.json()["budget_max_tokens"] is None
+
+
+def test_une_flotte_HISTORIQUE_sans_borne_reste_lisible_et_S_ARME(client, org):
+    """Le cas qui avait motivé une garde à l'armement — deux flottes déclarées
+    avant le champ ne l'ont pas (mesuré le 09/09/2026 : 2 sur 101). Sans refus,
+    elles se lisent ET s'arment, et leur pire cas est `null`, ce qui est la
+    vérité.
+
+    L'état est reproduit EN BASE : par la route, `update max_tokens_per_row=None`
+    ne retire rien (un champ absent du corps n'est pas une remise à zéro)."""
     from oto_mcp.db import runner_fleets as dbf
 
     fid = client.post(ROUTE, headers=_h(org["membre"]), json={
         "op": "create", "label": "historique", "procedure": "p",
-        "tools": ["oto_kb"],
+        "tools": ["oto_kb"], "max_rows": 10,
         "max_tokens_per_row": 50_000}).json()["fleet"]["id"]
     dbf.update_fleet(fid, org["id"], {"max_tokens_per_row": None})
 
-    # elle reste LISIBLE — aucune garde sur get/list/state
     r = client.post(ROUTE, headers=_h(org["membre"]),
                     json={"op": "get", "fleet_id": fid})
     assert r.status_code == 200, r.text
     assert r.json()["fleet"]["max_tokens_per_row"] is None
 
-    # elle ne s'ARME pas, et le refus nomme sa réparation
-    r = client.post(ROUTE, headers=_h(org["membre"]),
-                    json={"op": "launch", "fleet_id": fid})
-    assert (r.status_code, r.json().get("error")) == (400, "budget_par_ligne_invalide"), r.text
-    assert "op=update" in r.json().get("detail", ""), (
-        "un refus qui ne nomme pas sa destination fait rejouer le même appel")
-
-    # et cette réparation est SERVIE : `max_tokens_per_row` est modifiable
-    r = client.post(ROUTE, headers=_h(org["membre"]), json={
-        "op": "update", "fleet_id": fid, "max_tokens_per_row": 50_000})
-    assert r.status_code == 200, r.text
     r = client.post(ROUTE, headers=_h(org["membre"]),
                     json={"op": "launch", "fleet_id": fid})
     assert r.status_code == 200, r.text
     assert r.json()["fleet"]["status"] == "armed"
+    assert r.json()["budget_max_tokens"] is None
+
 
 
 # ── LANCER et ARRÊTER : deux verbes, deux planchers, deux gardes ─────────────
