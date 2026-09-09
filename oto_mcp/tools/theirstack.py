@@ -1,8 +1,16 @@
 """TheirStack — offres d'emploi par employeur + technologies utilisées (ERP…).
 
 Wrappe `oto.tools.theirstack.client.TheirStackClient` (API v1, Bearer). keyed
-`api_key`, byo-only (pas de clé plateforme) : chaque user/org connecte SON compte —
-TheirStack se facture au crédit, au record rendu.
+`api_key`, **BYO ou clé plateforme** : `auth_modes = {byo_user, byo_org, platform}`
+depuis oto-backend#405 — TheirStack est une donnée-marchandise, donc revendable,
+contrairement aux CRM/ATS qui restent byo-only. TheirStack se facture au crédit,
+au record rendu.
+⚠️ Ce docstring a dit « byo-only » jusqu'au 2026-09-09, plusieurs semaines APRÈS
+que #405 ait ouvert le mode plateforme. Le registre (`providers.REGISTRY`) fait
+foi, pas ce texte — la contradiction a fait conclure à tort que les deux lignes
+TheirStack du site (« Get hiring signals », « tech stack ») étaient invendables.
+Le palier plateforme reste **grant-only** (`default_quota=0,
+platform_key_open=False`) : une org n'y accède que par un grant explicite.
 
 Deux gestes, lecture seule :
 - `theirstack_jobs_search` : les offres publiées par une ou des entreprises (ou par
@@ -115,15 +123,34 @@ def _trace_quantity(result: Any) -> None:
         session_org.note_call_trace(quantity=len(result["data"]))
 
 
+def _record_platform_usage(result, is_platform: bool) -> None:
+    """Débite le quota interne oto quand c'est NOTRE clé qui a servi.
+
+    Mêmes deux gestes que `aiark`/`fullenrich`, et la même séparation nette :
+    - `record_platform_usage` ne compte QUE le mode plateforme — c'est le quota
+      d'oto sur sa propre clé, sans objet quand le client apporte la sienne ;
+    - `note_call_trace(quantity=…)` ci-dessus est INCONDITIONNEL — c'est le
+      métrage, et `tool_calls.key_mode` dit séparément sous quelle clé l'appel
+      est passé, ce que le consommateur de facturation lit pour ne facturer que
+      la clé Tulina.
+    Compté au nombre de records RENDUS, pas au nombre d'appels : TheirStack nous
+    facture au record (1 crédit/offre, 3/entreprise), donc un appel qui rend 50
+    offres coûte 50, et une page vide coûte 0."""
+    if not is_platform:
+        return
+    if isinstance(result, dict) and isinstance(result.get("data"), list):
+        access.record_platform_usage("theirstack", len(result["data"]))
+
+
 def register(mcp: FastMCP) -> None:
     from oto.tools.common.errors import UpstreamHTTPError
     from oto.tools.theirstack.client import TheirStackClient
 
     connector_verify.register("theirstack", _verify)
 
-    def _client() -> TheirStackClient:
-        key, _ = access.resolve_api_key("theirstack")
-        return TheirStackClient(api_key=key)
+    def _client() -> tuple[TheirStackClient, bool]:
+        key, is_platform = access.resolve_api_key("theirstack")
+        return TheirStackClient(api_key=key), is_platform
 
     def _run(fn):
         """Traduit un refus de TheirStack en erreur d'outil actionnable."""
@@ -192,7 +219,9 @@ def register(mcp: FastMCP) -> None:
         if job_country_code_or:
             payload["job_country_code_or"] = list(job_country_code_or)
         payload = _merge_extra(payload, extra)
-        result = _run(lambda: _client().search_jobs(payload))
+        client, is_platform = _client()
+        result = _run(lambda: client.search_jobs(payload))
+        _record_platform_usage(result, is_platform)
         _trace_quantity(result)
         return _project(result, _JOB_FIELDS, full)
 
@@ -249,6 +278,8 @@ def register(mcp: FastMCP) -> None:
         if company_country_code_or:
             payload["company_country_code_or"] = list(company_country_code_or)
         payload = _merge_extra(payload, extra)
-        result = _run(lambda: _client().search_companies(payload))
+        client, is_platform = _client()
+        result = _run(lambda: client.search_companies(payload))
+        _record_platform_usage(result, is_platform)
         _trace_quantity(result)
         return _project(result, _COMPANY_FIELDS, full)
