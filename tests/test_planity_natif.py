@@ -8,129 +8,28 @@ plus** : ce sont les deux choses qu'un agent déjà écrit et une fiche déjà l
 tiennent pour acquises, et les deux qu'un changement de plomberie casserait sans
 que rien ne le dise.
 
-⚠️ **Le cœur est MOQUÉ ici, à sa frontière** (`oto.tools.planity` posé dans
-`sys.modules`), et pas par confort : le venv de ce dépôt porte une COPIE FIGÉE
-d'oto-core au tag épinglé, qui ne contient pas encore ce paquet. Un test qui
-importerait le vrai cœur mesurerait l'âge du venv, pas le code de ce dépôt. Ce
-qu'on vérifie ici est donc exactement le périmètre du backend : la déclaration au
-registre, la résolution du credential, la vie de la session, et le passage des
-arguments et des conversions à la frontière des outils.
+Le cœur est moqué à sa frontière ; le harnais vit dans `_planity_faux.py`, qui dit
+pourquoi. Ce fichier-ci tient trois choses : la déclaration au registre, la SURFACE
+servie (les noms d'outils, en dur), et le comportement d'une instance non
+configurée. La vie de la session est dans `test_planity_session_pool.py`, les
+projections et les bornes dans `test_planity_lectures.py`.
 
-⚠️ **Aucun appel réel à Planity n'a jamais été joué** : aucun identifiant Planity
-n'existe au coffre à l'écriture de ce fichier. Rien ici ne le prétend.
+⚠️ **Aucun test ne parle à Planity.** Rien ici n'ouvre de connexion.
 """
 from __future__ import annotations
 
 import asyncio
 import sys
 import types
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from _planity_faux import (_COORDONNEES, _client_moque, _employe, _faux_coeur,
+                           _iso, _outil, _poser, _salon, _serveur, coeur,
+                           exige_les_sous_modules)
 
 from oto_mcp import providers
 
-
-# ── Le cœur, moqué à sa frontière ───────────────────────────────────────────
-
-#: Coordonnées MANIFESTEMENT fictives. Elles appartiennent à Planity, sont
-#: publiques par conception (tout navigateur qui ouvre `pro.planity.com` les
-#: reçoit), et se
-#: posent par l'OPÉRATEUR de l'instance, en base (`connector_settings`, scope
-#: plateforme) : rien de tout ça ne vit dans le dépôt.
-_COORDONNEES = {
-    "firebase_api_key": "cle-firebase-fictive",
-    "firebase_app_id": "app-id-fictif",
-    "rest_api": "https://api.exemple.invalid",
-}
-
-
-def _lignes(poses: dict) -> list[dict]:
-    """La forme que rend `db.connector_settings.list_connector_settings`."""
-    return [{"scope_type": "platform", "scope_id": "platform",
-             "connector": "planity", "key": k, "value": v}
-            for k, v in poses.items()]
-
-
-def _poser(monkeypatch, poses: dict) -> None:
-    from oto_mcp.db import connector_settings as store
-    monkeypatch.setattr(store, "list_connector_settings",
-                        lambda key=None, conn=None: _lignes(poses))
-
-
-def _faux_coeur(client=None):
-    """Un module `oto.tools.planity` réduit à ce que le backend en importe."""
-    mod = types.ModuleType("oto.tools.planity")
-    mod.PlanityClient = MagicMock(return_value=client or MagicMock())
-    mod.PlanityEndpoints = MagicMock(name="PlanityEndpoints")
-    mod.resolve_range = MagicMock(return_value=(1_000, 2_000))
-    mod.ms_to_iso = lambda ms: None if not ms else f"iso:{int(ms)}"
-    return mod
-
-
-def _client_moque():
-    """Un `PlanityClient` dont chaque méthode est attendue (le cœur est async)."""
-    c = MagicMock()
-    for nom in ("list_salons", "get_salon", "list_services", "list_products",
-                "search_customers", "get_customer", "get_customer_stats",
-                "get_customer_receipts", "list_appointments", "get_appointment",
-                "get_key_indicators", "get_revenues", "get_best_customers",
-                "get_new_customers", "get_overall_frequencies",
-                "get_revenue_breakdown", "get_calendar_stats",
-                "get_occupancy_rate", "get_reviews_stats", "close"):
-        setattr(c, nom, AsyncMock(return_value={}))
-    c.auth = MagicMock(get_tokens=AsyncMock(return_value=object()))
-    return c
-
-
-def _salon(**kw):
-    s = MagicMock()
-    s.id = kw.get("id", "biz-un")
-    s.name = kw.get("name", "Salon Exemple")
-    s.slug = "salon-exemple"
-    s.phone = "0100000000"
-    s.opening_hours = "10:00-19:00"
-    s.db_shard = "fr-00"
-    s.calendars = kw.get("calendars", ["cal-1"])
-    s.employees = kw.get("employees", [])
-    return s
-
-
-def _employe(eid="emp-1", name="Alex"):
-    e = MagicMock()
-    e.id, e.name, e.color, e.calendar_id = eid, name, "#111", "cal-1"
-    return e
-
-
-@pytest.fixture
-def coeur(monkeypatch):
-    """Pose le faux cœur, un credential résolu, et une session vierge."""
-    client = _client_moque()
-    mod = _faux_coeur(client)
-    monkeypatch.setitem(sys.modules, "oto.tools.planity", mod)
-    _poser(monkeypatch, _COORDONNEES)
-    monkeypatch.setattr(
-        "oto_mcp.access.resolve_credential_fields",
-        lambda provider, account=None: {"email": "demo@example.com",
-                                        "password": "s3cret"})
-    from oto_mcp.tools import planity_session
-    planity_session._entrees.clear()
-    yield types.SimpleNamespace(module=mod, client=client)
-    planity_session._entrees.clear()
-
-
-def _serveur(coeur):
-    from fastmcp import FastMCP
-    from oto_mcp.tools import planity, planity_stats
-
-    m = FastMCP("t")
-    planity.register(m)
-    planity_stats.register(m)
-    return m
-
-
-def _outil(coeur, nom):
-    return asyncio.run(_serveur(coeur).get_tool(nom)).fn
+__all__ = ["coeur"]        # la fixture, importée pour être posée
 
 
 # ── La déclaration au registre ──────────────────────────────────────────────
@@ -162,13 +61,40 @@ def test_la_fiche_ne_renvoie_plus_vers_un_service_a_nous():
     assert c.publisher_name == "Otomata"
 
 
-def test_les_deux_modules_declares_sont_ceux_qui_montent_les_outils():
-    assert providers.REGISTRY["planity"].modules == ("planity", "planity_stats")
+def test_les_modules_declares_sont_ceux_qui_montent_les_outils():
+    """Le registre DÉRIVE le chargement de cette liste : un module d'outils ajouté
+    sans y figurer ne monte rien, et rien ne le dit."""
+    assert providers.REGISTRY["planity"].modules == (
+        "planity", "planity_stats", "planity_pos", "planity_stock")
 
 
 # ── La surface servie ───────────────────────────────────────────────────────
 
 _ATTENDUS = sorted([
+    "planity_list_salons", "planity_get_salon_info", "planity_list_employees",
+    "planity_list_services", "planity_list_products",
+    "planity_search_customers", "planity_get_customer",
+    "planity_get_customer_stats", "planity_get_customer_receipts",
+    "planity_list_appointments", "planity_get_appointment",
+    "planity_list_recurring_appointments",
+    "planity_get_revenue_summary", "planity_get_daily_revenue",
+    "planity_get_best_customers", "planity_get_new_customers",
+    "planity_get_customer_frequencies", "planity_get_revenue_breakdown",
+    "planity_get_seller_stats", "planity_get_occupancy_rate",
+    "planity_get_reviews_stats",
+    "planity_get_revenue_by_payment_method", "planity_get_revenue_by_vat",
+    "planity_get_service_stats",
+    "planity_list_pos_periods", "planity_get_pos_period",
+    "planity_get_receipt", "planity_list_payment_methods",
+    "planity_list_stock_movements", "planity_list_suppliers",
+    "planity_list_product_orders", "planity_list_mass_stock_removals",
+])
+
+#: Les vingt noms servis avant le 2026-09-09. Ils sont ici SÉPARÉMENT des trente-deux
+#: parce qu'ils portent une promesse différente : les ajouts peuvent bouger tant
+#: qu'ils ne sont pas sortis, ceux-là sont dans des agents déjà écrits et dans une
+#: fiche déjà lue. Un renommage se verrait ici et nulle part ailleurs.
+_HISTORIQUES = sorted([
     "planity_list_salons", "planity_get_salon_info", "planity_list_employees",
     "planity_list_services", "planity_list_products",
     "planity_search_customers", "planity_get_customer",
@@ -182,12 +108,19 @@ _ATTENDUS = sorted([
 ])
 
 
-def test_les_vingt_outils_gardent_exactement_leurs_noms(coeur):
+def test_les_outils_gardent_exactement_leurs_noms(coeur):
     """La liste EN DUR, pas dérivée du module : c'est le contrat qu'un agent déjà
     écrit tient pour acquis. Un renommage, un oubli ou un ajout se voit ici."""
     servis = sorted(t.name for t in asyncio.run(_serveur(coeur).list_tools()))
     assert servis == _ATTENDUS
-    assert len(servis) == 20
+    assert len(servis) == 32
+
+
+def test_les_vingt_noms_historiques_sont_tous_encore_servis(coeur):
+    """Les ajouts de 2026-09-09 sont ADDITIFS : aucun des noms d'avant n'a bougé."""
+    servis = {t.name for t in asyncio.run(_serveur(coeur).list_tools())}
+    assert set(_HISTORIQUES) <= servis
+    assert not set(_HISTORIQUES) - servis
 
 
 def test_tous_les_outils_sont_dans_le_namespace_du_connecteur(coeur):
@@ -271,12 +204,16 @@ def test_sans_l_extra_du_coeur_l_appel_refuse_en_nommant_l_extra(monkeypatch):
     from oto_mcp.mcp_errors import McpError
     from oto_mcp.tools import planity_session
 
-    monkeypatch.delitem(sys.modules, "oto.tools.planity", raising=False)
+    # `None` dans `sys.modules` FAIT LEVER l'import, quoi que porte le venv. Le
+    # geste d'avant — retirer l'entrée — ne simulait l'extra manquant que tant que
+    # l'oto-core installé n'avait pas le paquet : le jour où le pin l'apporte, il
+    # importerait pour de bon et ce test passerait au vert sur autre chose.
+    monkeypatch.setitem(sys.modules, "oto.tools.planity", None)
     _poser(monkeypatch, _COORDONNEES)
     planity_session._entrees.clear()
 
     servis = sorted(t.name for t in asyncio.run(_serveur(None).list_tools()))
-    assert servis == _ATTENDUS, "les 20 outils restent montés sans le cœur"
+    assert servis == _ATTENDUS, "tous les outils restent montés sans le cœur"
 
     outil = asyncio.run(_serveur(None).get_tool("planity_list_salons")).fn
     with pytest.raises(McpError) as e:
@@ -297,131 +234,6 @@ def test_le_demarrage_dit_ce_qui_manque(monkeypatch, caplog):
     assert "oto_admin_connector_setting" in caplog.text
 
 
-# ── La session par credential ───────────────────────────────────────────────
-
-def test_le_client_est_construit_avec_le_credential_du_coffre(coeur):
-    _outil(coeur, "planity_list_salons")
-    asyncio.run(_outil(coeur, "planity_list_salons")())
-    appel = coeur.module.PlanityClient.call_args
-    assert appel.args[:2] == ("demo@example.com", "s3cret")
-    assert appel.args[2] is coeur.module.PlanityEndpoints.return_value, (
-        "le client doit recevoir les coordonnées de l'instance — sans elles, "
-        "oto-core lève à la construction")
-
-
-def test_la_session_valide_le_credential_a_l_ouverture(coeur):
-    """L'auth est jouée à l'ouverture, pas au premier appel métier : un mot de passe
-    faux doit dire « connexion refusée », pas « salon inaccessible » plus tard."""
-    asyncio.run(_outil(coeur, "planity_list_salons")())
-    coeur.client.auth.get_tokens.assert_awaited()
-
-
-def test_deux_appels_du_meme_credential_partagent_la_meme_session(coeur):
-    """Une session Planity coûte trois allers-retours d'auth puis un WebSocket : la
-    rouvrir à chaque appel rendrait le connecteur inutilisable."""
-    outil = _outil(coeur, "planity_list_salons")
-
-    async def _deux():
-        await outil()
-        await outil()
-
-    asyncio.run(_deux())
-    assert coeur.module.PlanityClient.call_count == 1
-
-
-def test_un_autre_credential_ouvre_une_autre_session(coeur, monkeypatch):
-    outil = _outil(coeur, "planity_list_salons")
-    asyncio.run(outil())
-
-    comptes = iter([{"email": "a@example.com", "password": "p1"},
-                    {"email": "b@example.com", "password": "p2"}])
-    monkeypatch.setattr("oto_mcp.access.resolve_credential_fields",
-                        lambda provider, account=None: next(comptes))
-
-    async def _deux():
-        await outil()
-        await outil()
-
-    asyncio.run(_deux())
-    assert coeur.module.PlanityClient.call_count == 3
-
-
-def test_une_ouverture_en_echec_n_est_pas_mise_en_cache(coeur):
-    """Sinon un mot de passe corrigé continuerait d'échouer jusqu'à l'expiration."""
-    from oto_mcp.mcp_errors import McpError
-    from oto_mcp.tools import planity_session
-
-    coeur.client.auth.get_tokens.side_effect = RuntimeError("réseau")
-    outil = _outil(coeur, "planity_list_salons")
-    with pytest.raises(McpError):
-        asyncio.run(outil())
-    assert planity_session._entrees == {}
-
-    coeur.client.auth.get_tokens.side_effect = None
-    asyncio.run(outil())
-    assert coeur.module.PlanityClient.call_count == 2
-
-
-def test_un_credential_incomplet_est_refuse_en_le_disant(coeur, monkeypatch):
-    from oto_mcp.mcp_errors import McpError
-
-    monkeypatch.setattr("oto_mcp.access.resolve_credential_fields",
-                        lambda provider, account=None: {"email": "demo@example.com",
-                                                        "password": ""})
-    with pytest.raises(McpError) as e:
-        asyncio.run(_outil(coeur, "planity_list_salons")())
-    assert "mot de passe" in str(e.value)
-
-
-def test_un_refus_d_auth_de_planity_dit_de_reposer_le_credential(coeur):
-    """Un 400 de Firebase veut dire « cet email ou ce mot de passe ne va pas ».
-    Rendu brut, il se lit comme une panne de service — donc « réessaie », alors que
-    réessayer ne peut pas aboutir."""
-    from oto_mcp.mcp_errors import McpError
-
-    refus = RuntimeError("400")
-    refus.response = types.SimpleNamespace(status_code=400)
-    coeur.client.auth.get_tokens.side_effect = refus
-
-    with pytest.raises(McpError) as e:
-        asyncio.run(_outil(coeur, "planity_list_salons")())
-    msg = str(e.value)
-    assert "mot de passe" in msg and "credential" in msg
-
-
-def test_aucun_refus_ne_recrache_le_credential(coeur):
-    """LE credential de ce connecteur est un MOT DE PASSE, et il est passé en
-    argument à trois fonctions : n'importe quelle exception construite avec ces
-    arguments se retrouverait mot pour mot dans la réponse rendue à l'agent — donc
-    dans un transcript, dans le journal d'appels, chez l'utilisateur suivant.
-
-    On exerce le PIRE cas, fabriqué exprès : une exception dont le texte porte
-    l'email et le mot de passe. Aucun amont ne fait ça aujourd'hui (httpx met
-    l'URL dans ses messages, jamais le corps) — c'est précisément pourquoi la
-    porte se ferme maintenant, pendant qu'il n'y a pas d'incident à raconter. Un
-    test qui n'exercerait que les exceptions réelles ne garderait rien."""
-    from oto_mcp.mcp_errors import McpError
-
-    coeur.client.auth.get_tokens.side_effect = RuntimeError(
-        "refus pour demo@example.com / s3cret")
-    with pytest.raises(McpError) as e:
-        asyncio.run(_outil(coeur, "planity_list_salons")())
-    msg = str(e.value)
-    assert "s3cret" not in msg and "demo@example.com" not in msg
-    assert "RuntimeError" in msg, "le type reste dit — sinon le refus n'aide plus"
-
-
-def test_le_journal_ne_porte_pas_le_credential(coeur, caplog):
-    """Même règle sur l'autre sortie : ce qui n'a pas le droit d'aller à l'agent
-    n'a pas plus le droit d'aller au journal, qui vit plus longtemps."""
-    coeur.client.auth.get_tokens.side_effect = RuntimeError(
-        "refus pour demo@example.com / s3cret")
-    with caplog.at_level("DEBUG"):
-        with pytest.raises(Exception):
-            asyncio.run(_outil(coeur, "planity_list_salons")())
-    assert "s3cret" not in caplog.text and "demo@example.com" not in caplog.text
-
-
 # ── Une famille d'outils à la fois, cœur moqué ──────────────────────────────
 
 def test_referentiel_un_salon_est_rendu_avec_ses_compteurs(coeur):
@@ -433,16 +245,58 @@ def test_referentiel_un_salon_est_rendu_avec_ses_compteurs(coeur):
                     "employee_count": 2, "calendar_count": 1}]
 
 
+@exige_les_sous_modules
 def test_referentiel_les_prestations_sont_aplaties_et_en_euros(coeur):
     """Planity range les prestations sous des catégories et compte en CENTIMES.
-    Rendre 4500 au lieu de 45 € ne lève rien : ça se lit comme un tarif."""
+    Rendre 4500 au lieu de 45 € ne lève rien : ça se lit comme un tarif.
+
+    ⚠️ Et le prix vit dans `prices`, PAS dans `price` — qui n'existe sur aucune
+    prestation. L'avoir lu là a rendu tout un catalogue à `0.00`, ce qui ne lève
+    rien non plus : ça se lit comme une prestation offerte."""
     coeur.client.list_services.return_value = {
-        "cat-1": {"children": {"svc-1": {"name": " Coupe ", "price": 4500,
-                                         "duration": 30}}}}
+        "cat-1": {"name": "Coiffure", "children": {
+            "svc-1": {"name": " Coupe ", "prices": {"default": 4500},
+                      "duration": 30}}}}
     out = asyncio.run(_outil(coeur, "planity_list_services")(salon_id="biz-un"))
-    assert out == [{"id": "svc-1", "category_id": "cat-1", "name": "Coupe",
-                    "price_eur": 45.0, "duration_minutes": 30, "bookable": True,
-                    "description": ""}]
+    assert len(out) == 1
+    assert out[0]["id"] == "svc-1" and out[0]["name"] == "Coupe"
+    assert out[0]["duration_minutes"] == 30
+    assert out[0]["price"]["kind"] == "fixed"
+    assert out[0]["price"]["default_eur"] == 45.0
+    assert out[0]["price"]["default_cents"] == 4500
+
+
+@exige_les_sous_modules
+def test_referentiel_une_prestation_sans_prix_ne_vaut_pas_zero(coeur):
+    """`0.00` prétend savoir ; `null` dit qu'on ne sait pas. La moitié d'un
+    catalogue n'a pas de prix, et la moitié d'un catalogue n'est pas offerte."""
+    coeur.client.list_services.return_value = {
+        "cat-1": {"children": {"svc-1": {"name": "Sur mesure"},
+                               "svc-2": {"name": "Devis",
+                                         "prices": {"onQuotation": True}},
+                               "svc-3": {"name": "Couleur",
+                                         "prices": {"min": 3000, "max": 6000}}}}}
+    out = {s["id"]: s["price"] for s in asyncio.run(
+        _outil(coeur, "planity_list_services")(salon_id="biz-un"))}
+    assert out["svc-1"]["kind"] == "unpriced" and out["svc-1"]["default_eur"] is None
+    assert out["svc-2"]["kind"] == "on_quotation"
+    assert out["svc-3"]["kind"] == "range"
+    assert (out["svc-3"]["min_eur"], out["svc-3"]["max_eur"]) == (30.0, 60.0)
+
+
+@exige_les_sous_modules
+def test_referentiel_les_prestations_supprimees_sont_ecartees_par_defaut(coeur):
+    """Planity garde ce qu'on supprime. Un catalogue périmé se présenterait comme
+    une offre — et la suppression se porte AUSSI sur la catégorie."""
+    coeur.client.list_services.return_value = {
+        "cat-1": {"children": {"svc-1": {"name": "Vivante"},
+                               "svc-2": {"name": "Retirée", "deletedAt": 7}}},
+        "cat-2": {"deletedAt": 9, "children": {"svc-3": {"name": "Orpheline"}}}}
+    outil = _outil(coeur, "planity_list_services")
+    actives = asyncio.run(outil(salon_id="biz-un"))
+    assert [s["id"] for s in actives] == ["svc-1"]
+    toutes = asyncio.run(outil(salon_id="biz-un", include_deleted=True))
+    assert sorted(s["id"] for s in toutes) == ["svc-1", "svc-2", "svc-3"]
 
 
 def test_clientes_les_horodatages_passent_par_la_conversion_du_coeur(coeur):
@@ -450,7 +304,7 @@ def test_clientes_les_horodatages_passent_par_la_conversion_du_coeur(coeur):
         {"objectID": "cli-1", "name": " Cliente Exemple ", "createdAt": 1_700_000}]
     out = asyncio.run(_outil(coeur, "planity_search_customers")(salon_id="biz-un"))
     assert out[0]["id"] == "cli-1" and out[0]["name"] == "Cliente Exemple"
-    assert out[0]["created_at"] == "iso:1700000"
+    assert out[0]["created_at"] == _iso(1_700_000)
 
 
 def test_clientes_un_ticket_totalise_ses_lignes_en_euros(coeur):
@@ -464,31 +318,25 @@ def test_clientes_un_ticket_totalise_ses_lignes_en_euros(coeur):
     assert [l["price_eur"] for l in out[0]["lines"]] == [45.0, 12.0]
 
 
-def test_agenda_la_fenetre_de_dates_filtre_vraiment(coeur):
-    """Les rendez-vous arrivent tous ensemble du Realtime Database : c'est ICI que
-    la fenêtre s'applique. Sans ce filtre, `preset="today"` rendrait l'année."""
-    coeur.client.list_appointments.return_value = {
-        "v-dedans": {"start": 1_500, "end": 1_800, "sellerId": "emp-1"},
-        "v-avant": {"start": 10, "end": 20},
-        "v-apres": {"start": 9_000, "end": 9_100},
-    }
-    out = asyncio.run(_outil(coeur, "planity_list_appointments")(
+def test_agenda_la_fenetre_part_en_JOURS_pas_en_millisecondes(coeur):
+    """L'index de tri de Planity porte l'heure MURALE du salon, sans décalage : la
+    fenêtre se donne en jours. Convertir en millisecondes en perdrait ou en
+    gagnerait une selon la saison, et un rendez-vous de plus ou de moins ne se
+    remarque pas."""
+    asyncio.run(_outil(coeur, "planity_list_appointments")(
         salon_id="biz-un", preset="today"))
-    assert out["count"] == 1 and out["vevents"][0]["id"] == "v-dedans"
-    assert (out["from"], out["to"]) == ("iso:1000", "iso:2000")
     coeur.module.resolve_range.assert_called_with(None, None, "today")
+    coeur.client.list_appointments.assert_awaited_once_with(
+        "biz-un", _iso(1_000)[:10], _iso(2_000)[:10], employee_id=None)
 
 
-def test_agenda_le_filtre_par_collaboratrice_lit_les_trois_noms_de_champ(coeur):
-    """Planity nomme le vendeur `seller_id`, `sellerId` ou `child` selon l'âge de
-    l'enregistrement — n'en lire qu'un rend un agenda vide, pas une erreur."""
-    coeur.client.list_appointments.return_value = {
-        "a": {"start": 1_500, "child": "emp-1"},
-        "b": {"start": 1_500, "sellerId": "emp-2"},
-    }
-    out = asyncio.run(_outil(coeur, "planity_list_appointments")(
+def test_agenda_le_filtre_par_collaboratrice_descend_au_coeur(coeur):
+    """Le filtrage ne se refait pas ici : c'est le cœur qui sait quel enfant
+    d'agenda lire, et refiltrer au-dessus masquerait un mauvais balayage."""
+    asyncio.run(_outil(coeur, "planity_list_appointments")(
         salon_id="biz-un", employee_id="emp-1"))
-    assert [v["id"] for v in out["vevents"]] == ["a"]
+    _, kwargs = coeur.client.list_appointments.await_args
+    assert kwargs["employee_id"] == "emp-1"
 
 
 def test_chiffres_le_ca_est_rendu_en_euros_avec_ses_bornes(coeur):
@@ -499,7 +347,8 @@ def test_chiffres_le_ca_est_rendu_en_euros_avec_ses_bornes(coeur):
         salon_id="biz-un", preset="last_month"))
     assert out["revenue_ttc_eur"] == 1234.56 and out["revenue_ht_eur"] == 1028.8
     assert out["ticket_count"] == 12
-    assert (out["from"], out["to"]) == ("iso:1000", "iso:2000")
+    assert (out["from"], out["to"]) == (_iso(1_000), _iso(2_000))
+    assert out["period"]["timezone"] == "Europe/Paris"
 
 
 def test_chiffres_les_collaboratrices_sont_nommees_et_classees(coeur):

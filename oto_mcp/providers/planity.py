@@ -10,9 +10,9 @@ from ._model import _c
 # planity : agenda + caisse d'un salon, EN NATIF (kind=tools). Le connecteur
 # s'authentifie avec l'email et le mot de passe du compte Planity, posés au coffre
 # (`basic_auth`, palier membre). Le client vit dans oto-core
-# (`oto.tools.planity`), les vingt outils dans `tools/planity*.py` — les noms
-# `planity_*` et leurs schémas n'ont PAS bougé (des agents et la fiche les
-# connaissent).
+# (`oto.tools.planity`), les outils dans `tools/planity*.py` — les noms `planity_*`
+# et leurs schémas n'ont pas bougé (des agents et la fiche les connaissent) ; les
+# ajouts de 2026-09-09 sont additifs.
 #
 # ⚠️ Ce connecteur a été `kind="mount"` jusqu'au 2026-09-09 : les mêmes outils
 # étaient servis par un serveur MCP autonome que nous opérions, à qui le backend
@@ -28,10 +28,13 @@ from ._model import _c
 CONNECTOR = _c(
     "planity", ["planity"],
     auth_modes={"byo_user"}, secret_kind="basic_auth",
-    # Vingt outils : le référentiel, les clientes et l'agenda d'un côté, les
-    # chiffres de l'autre — la ligne de partage suit les deux familles de sources,
-    # pas un découpage de confort.
-    modules=("planity", "planity_stats"),
+    # Trente-deux outils en quatre modules. La ligne de partage suit les familles
+    # de SOURCES, pas un découpage de confort : le référentiel, les clientes et
+    # l'agenda (`planity`) ; les agrégats servis par les lambdas de statistiques
+    # (`planity_stats`) ; le détail de la caisse, ticket par ticket (`planity_pos`) ;
+    # ce qui bouge en stock (`planity_stock`). Et parce qu'un fichier de plus de
+    # cinq cents lignes ne se relit pas.
+    modules=("planity", "planity_stats", "planity_pos", "planity_stock"),
     label="Planity",
     help="agenda + caisse Planity (RDV, clients, CA, stats) — oto rejoue ta "
          "connexion Planity avec ton email et ton mot de passe",

@@ -17,7 +17,7 @@ from typing import Optional
 
 from fastmcp import FastMCP
 
-from .planity_session import _client, _eur, fenetre, iso
+from .planity_session import _client, _eur, _eur_ou_rien, fenetre, iso, periode
 
 
 def register(mcp: FastMCP) -> None:
@@ -32,11 +32,18 @@ def register(mcp: FastMCP) -> None:
         """Revenue KPIs for a period: total CA (TTC/HT), ticket count, VAT, average basket.
 
         Default: last 7 days. Use preset for quick ranges ("today", "week", "month", "30d"...).
+
+        ⚠️ Read `period` before projecting anything from these figures. Most presets
+        stop at NOW, not at the end of the day: `period.ends_today` true means the
+        last day is partial and `period.complete` is false, so a daily run rate
+        computed from `revenue_ttc_eur / period.days` comes out too low — and a
+        "at this pace, N days left" built on it comes out wrong.
         """
         c = await _client()
         gte, lte = fenetre(date_from, date_to, preset)
         ki = await c.get_key_indicators(salon_id, gte, lte)
         return {
+            "period": periode(gte, lte),
             "from": iso(gte), "to": iso(lte),
             "revenue_ttc_eur": _eur(ki.get("revenueWithVAT")),
             "revenue_ht_eur": _eur(ki.get("revenueWithoutVAT")),
@@ -51,23 +58,32 @@ def register(mcp: FastMCP) -> None:
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
         preset: Optional[str] = None,
-    ) -> list[dict]:
-        """Daily revenue breakdown: [{date, revenue_ttc_eur, revenue_ht_eur, quantity}].
+    ) -> dict:
+        """Daily revenue: {period, days: [{date, revenue_ttc_eur, revenue_ht_eur, quantity}]}.
 
         Useful for trend analysis or plotting.
+
+        ⚠️ `period` says what the series covers, and whether its LAST day is still
+        running (`ends_today` / `complete`). A day in progress is not a low day —
+        averaging it in, or extrapolating from it, is how a projection goes wrong
+        with nothing to show for it. Days with no takings are absent from the
+        series rather than present at zero: `len(days)` is not `period.days`.
         """
         c = await _client()
         gte, lte = fenetre(date_from, date_to, preset)
         data = await c.get_revenues(salon_id, gte, lte)
-        out = []
+        jours = []
         for ts_str, bucket in sorted((data.get("all") or {}).items()):
-            out.append({
-                "date": iso(int(ts_str)),
+            jour = iso(int(ts_str))
+            jours.append({
+                "date": (jour or "")[:10],
+                "timestamp": jour,
                 "revenue_ttc_eur": _eur(bucket.get("revenueWithVAT")),
                 "revenue_ht_eur": _eur(bucket.get("revenueWithoutVAT")),
                 "quantity": bucket.get("quantity", 0),
             })
-        return out
+        return {"period": periode(gte, lte), "days_with_revenue": len(jours),
+                "days": jours}
 
     @mcp.tool()
     async def planity_get_best_customers(
@@ -252,3 +268,93 @@ def register(mcp: FastMCP) -> None:
         c = await _client()
         gte, lte = fenetre(date_from, date_to, preset)
         return await c.get_reviews_stats(salon_id, gte, lte)
+
+    # ═══════════════════════ Caisse — ventilations ═══════════════════════
+
+    @mcp.tool()
+    async def planity_get_revenue_by_payment_method(
+        salon_id: str,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        preset: Optional[str] = None,
+    ) -> dict:
+        """Revenue split by payment method (card, cash, voucher…), total and per day.
+
+        Answers "combien en carte, combien en espèces". Method names are Planity's
+        own; `planity_list_payment_methods` gives the salon's table of them.
+
+        `revenue_eur` is money. `amount` is passed through UNCONVERTED and
+        uninterpreted: it is not the same magnitude as the revenue, and what it
+        counts has not been established — do not read it as euros.
+        """
+        c = await _client()
+        gte, lte = fenetre(date_from, date_to, preset)
+        brut = await c.get_revenue_by_payment_method(salon_id, gte, lte)
+        totaux: dict = {}
+        jours = []
+        for ts, methodes in sorted((brut or {}).items()):
+            if not isinstance(methodes, dict):
+                continue
+            ligne = {"date": (iso(int(ts)) or "")[:10], "methods": []}
+            for cle, m in methodes.items():
+                if not isinstance(m, dict):
+                    continue
+                nom = m.get("paymentMethodName") or cle
+                revenu = m.get("revenue")
+                ligne["methods"].append({
+                    "method": cle, "method_name": nom,
+                    "revenue_eur": _eur_ou_rien(revenu), "amount": m.get("amount")})
+                agg = totaux.setdefault(cle, {"method": cle, "method_name": nom,
+                                              "revenue_cents": 0})
+                agg["revenue_cents"] += revenu or 0
+            jours.append(ligne)
+        return {
+            "period": periode(gte, lte),
+            "by_method": sorted(
+                ({"method": t["method"], "method_name": t["method_name"],
+                  "revenue_eur": _eur(t["revenue_cents"])} for t in totaux.values()),
+                key=lambda t: -t["revenue_eur"]),
+            "by_day": jours,
+        }
+
+    @mcp.tool()
+    async def planity_get_revenue_by_vat(
+        salon_id: str,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        preset: Optional[str] = None,
+    ) -> dict:
+        """Revenue split by VAT rate, as Planity aggregates it.
+
+        Two views come back: `by_vat_id` (per rate, with its day series and totals)
+        and `by_period`. They are passed through with their own shape and their own
+        units — this tool does not reshape or convert them, because nothing here
+        establishes what each figure means, and a euro sign put on the wrong one
+        reads as a filed VAT amount.
+        """
+        c = await _client()
+        gte, lte = fenetre(date_from, date_to, preset)
+        brut = await c.get_revenue_by_vat(salon_id, gte, lte) or {}
+        return {"period": periode(gte, lte),
+                "by_vat_id": brut.get("byVatId"), "by_period": brut.get("byPeriod")}
+
+    @mcp.tool()
+    async def planity_get_service_stats(
+        salon_id: str,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        preset: Optional[str] = None,
+    ) -> dict:
+        """Per-service volume and revenue stats for a period.
+
+        `by_service` is keyed by service id — resolve the names with
+        `planity_list_services` (pass `include_deleted=true` for a service that has
+        since been removed from the catalogue). `rows` is Planity's own table, one
+        row per service, first column the service id; it carries ids and numbers
+        only, no names.
+        """
+        c = await _client()
+        gte, lte = fenetre(date_from, date_to, preset)
+        brut = await c.get_service_stats(salon_id, gte, lte) or {}
+        return {"period": periode(gte, lte),
+                "by_service": brut.get("byService"), "rows": brut.get("data")}

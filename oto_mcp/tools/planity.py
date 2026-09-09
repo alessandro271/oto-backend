@@ -19,6 +19,24 @@ fiche connaissent ces noms et ces schémas) :
 - les prix sont en centimes chez Planity, rendus en euros ;
 - les horodatages sont en millisecondes, rendus en ISO (Europe/Paris) ;
 - les outils temporels acceptent `date_from`/`date_to` (ISO ou preset), défaut 7 j.
+
+⚠️ **LISTE BLANCHE sur les données des clientes — exception assumée à « expose le
+brut, l'agent décide ».** Le parti pris du connecteur est de rendre ce que l'amont
+donne et de laisser l'agent composer. Elle s'arrête aux données personnelles d'un
+TIERS : la cliente d'un salon n'est ni l'utilisatrice de l'outil ni sa cliente à
+elle, elle n'a rien demandé, et son nom, son téléphone, son email, son adresse ou
+le commentaire qu'on a écrit sur elle n'ont pas à traverser un transcript pour
+répondre « combien de rendez-vous jeudi ».
+
+Donc : tout outil qui touche un rendez-vous, un ticket, un avis ou une fiche rend
+une liste blanche de champs NOMMÉS, jamais l'objet complet — et pour la cliente,
+un **identifiant seulement**. Les outils qui servent une cliente nommément
+(`planity_get_customer`, `planity_search_customers`) sont l'exception : c'est leur
+objet, l'appelant les a demandés, et l'agent compose à partir de l'identifiant.
+
+Ce n'est pas un oubli à corriger au nom du parti pris : c'est le parti pris, borné
+là où elle coûterait à quelqu'un qui n'est pas dans la conversation. Le cœur
+oto-core, lui, rend le brut — c'est une bibliothèque ; la frontière est ICI.
 """
 from __future__ import annotations
 
@@ -29,7 +47,45 @@ from fastmcp import FastMCP
 
 from ..connectors import verify as connector_verify
 from . import planity_session
-from .planity_session import _client, _eur, fenetre, iso
+from .planity_session import _client, _eur, _eur_ou_rien, fenetre, iso
+
+
+def _employe(e) -> dict:
+    """Un enfant d'agenda tel qu'il sort — suppression et nature comprises."""
+    return {"id": e.id, "name": e.name, "type": e.type, "title": e.title,
+            "color": e.color, "calendar_id": e.calendar_id,
+            "deleted": e.deleted, "deleted_at": iso(e.deleted_at)}
+
+
+def _rdv_public(v: dict) -> dict:
+    """Un rendez-vous réduit aux champs qui sortent — la LISTE BLANCHE.
+
+    Elle est écrite ici et une seule fois, plutôt que dans chaque outil : ce qui
+    protège une cliente ne doit pas dépendre de qui recopie quoi. Ce qui n'y est
+    pas ne s'oublie pas, il est REFUSÉ — le nom, le téléphone, l'email de la
+    cliente, le commentaire libre (il porte des noms), et l'objet brut.
+
+    Le commentaire et le titre sont ajoutés PAR `planity_get_appointment`, qui est
+    appelé pour un rendez-vous précis : c'est alors la note qu'on est venu
+    chercher, pas un champ qui passe par là dans une liste de cent."""
+    return {
+        "id": v["id"],
+        "employee_id": v["child_id"],
+        "date": v.get("date"),
+        "start": v.get("start"),
+        "end": v.get("end"),
+        "duration_minutes": v.get("duration_minutes"),
+        "customer_id": v.get("customer_id"),
+        "service_id": v.get("service_id"),
+        "price_eur": _eur_ou_rien(v.get("price_cents")),
+        "booked_via": v.get("booked_via"),
+        "cancelled": v.get("cancelled"),
+        "cancelled_at": iso(v.get("cancelled_at")),
+        "receipt_id": (v.get("receipt") or {}).get("id"),
+        "period_id": (v.get("receipt") or {}).get("period_id"),
+        "created_at": iso(v.get("created_at")),
+        "updated_at": iso(v.get("updated_at")),
+    }
 
 
 async def _verify(fields: dict, config: dict | None = None) -> None:
@@ -103,99 +159,124 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     async def planity_get_salon_info(salon_id: str) -> dict:
-        """Full salon metadata: contact info, opening hours, team, calendars."""
+        """Full salon metadata: contact info, opening hours, team, calendars.
+
+        `employees` lists the ACTIVE calendar children; `employees_deleted_count`
+        says how many more exist and are gone. Use `planity_list_employees` with
+        `include_deleted=true` to see them.
+        """
         c = await _client()
         s = await c.get_salon(salon_id)
         return {
             "id": s.id, "name": s.name, "slug": s.slug, "phone": s.phone,
             "opening_hours": s.opening_hours, "db_shard": s.db_shard,
             "calendars": s.calendars,
-            "employees": [
-                {"id": e.id, "name": e.name, "color": e.color, "calendar_id": e.calendar_id}
-                for e in s.employees
-            ],
+            "employees": [_employe(e) for e in s.employees if not e.deleted],
+            "employees_deleted_count": sum(1 for e in s.employees if e.deleted),
         }
 
     @mcp.tool()
-    async def planity_list_employees(salon_id: str) -> list[dict]:
-        """List employees (collaborateurs) of a salon: {id, name, color, calendar_id}."""
+    async def planity_list_employees(salon_id: str,
+                                     include_deleted: bool = False) -> list[dict]:
+        """Calendar children of a salon: {id, name, type, title, color, calendar_id,
+        deleted, deleted_at}.
+
+        Deleted children are EXCLUDED by default. Planity keeps them — their past
+        appointments live in their calendar — so counting them as staff announces a
+        team that has not existed for months. Pass `include_deleted=true` when you
+        are reading history, not staffing.
+
+        Not every child is a person: `type` and `title` are returned as Planity
+        stores them, so a room, a chair or any bookable resource can be told apart
+        from a colleague. They are passed through, not interpreted.
+        """
         c = await _client()
         s = await c.get_salon(salon_id)
-        return [
-            {"id": e.id, "name": e.name, "color": e.color, "calendar_id": e.calendar_id}
-            for e in s.employees
-        ]
+        return [_employe(e) for e in s.employees if include_deleted or not e.deleted]
 
     @mcp.tool()
-    async def planity_list_services(salon_id: str) -> list[dict]:
+    async def planity_list_services(salon_id: str,
+                                    include_deleted: bool = False) -> list[dict]:
         """Bookable services catalog (flattened children).
 
         Planity groups services under categories; each leaf child is the actual
-        bookable service. Returns: {id, category_id, name, price_eur, duration_minutes, bookable}.
+        bookable service. Returns {id, category_id, name, duration_minutes,
+        bookable, description, price: {kind, ...}}.
+
+        A service does NOT have one price. `price.kind` says which of four
+        situations you are in — `fixed`, `range` (min/max), `on_quotation`, or
+        `unpriced` (no price set at all, which is roughly half the catalogue).
+        Euros AND raw cents are both returned: a range has no single euro figure to
+        average, and rounding it would invent one.
+
+        Deleted services are EXCLUDED by default, and so are the live services of a
+        deleted CATEGORY — neither can be booked. Pass `include_deleted=true` to
+        resolve an old `service_id` found on a past appointment or receipt.
         """
         c = await _client()
-        raw = await c.list_services(salon_id)
+        coeur = planity_session._coeur()
         out = []
-        for cat_id, cat in raw.items():
-            if not isinstance(cat, dict):
+        for s in coeur.services.aplatir(await c.list_services(salon_id)):
+            if s["deleted"] and not include_deleted:
                 continue
-            children = cat.get("children") or {}
-            if not isinstance(children, dict):
-                continue
-            for child_id, s in children.items():
-                if not isinstance(s, dict):
-                    continue
-                price = s.get("price")
-                if isinstance(price, dict):
-                    price = price.get("default")
-                out.append({
-                    "id": child_id,
-                    "category_id": cat_id,
-                    "name": (s.get("name") or "").strip(),
-                    "price_eur": _eur(price),
-                    "duration_minutes": s.get("duration"),
-                    "bookable": s.get("bookable", True),
-                    "description": (s.get("description") or "")[:300],
-                })
+            prix = s.pop("prices")
+            s["deleted_at"] = iso(s["deleted_at"])
+            s["category_deleted_at"] = iso(s["category_deleted_at"])
+            out.append({
+                **s,
+                "price": {
+                    "kind": prix["kind"],
+                    "default_eur": _eur_ou_rien(prix["default_cents"]),
+                    "min_eur": _eur_ou_rien(prix["min_cents"]),
+                    "max_eur": _eur_ou_rien(prix["max_cents"]),
+                    "default_cents": prix["default_cents"],
+                    "min_cents": prix["min_cents"],
+                    "max_cents": prix["max_cents"],
+                },
+            })
         return out
 
     @mcp.tool()
-    async def planity_list_products(salon_id: str, in_stock_only: bool = False) -> list[dict]:
-        """Product catalog (shop items sold in the salon).
+    async def planity_list_products(salon_id: str, in_stock_only: bool = False,
+                                    include_deleted: bool = False) -> list[dict]:
+        """Product catalog (shop items sold in the salon), with stock and reorder data.
 
-        Returns leaf products flattened from categories:
-        {id, category_id, name, price_eur, ean, stock_total, deleted}.
+        Returns {id, category_id, name, price_eur, ean, brand, stock_total,
+        stock_lots, stock_threshold, stock_ceiling, supplier_id, deleted,
+        deleted_at}.
+
+        `stock_lots` is the point: stock is not a number but a list of purchase
+        lots, each with its own `purchase_price_eur`. Flatten it and the margin
+        disappears with it.
+
+        `stock_threshold` / `stock_ceiling` / `supplier_id` are `null` when the
+        salon does not use them — `null` is NOT `0`. A reorder rule that reads a
+        missing threshold as zero orders everything, every time.
         """
         c = await _client()
-        raw = await c.list_products(salon_id)
+        coeur = planity_session._coeur()
         out = []
-        for cat_id, cat in raw.items():
-            if not isinstance(cat, dict):
+        for p in coeur.stock.aplatir_produits(await c.list_products(salon_id)):
+            if p["deleted"] and not include_deleted:
                 continue
-            children = cat.get("children") or {}
-            if not isinstance(children, dict):
+            if in_stock_only and p["stock_total"] <= 0:
                 continue
-            for pid, p in children.items():
-                if not isinstance(p, dict):
-                    continue
-                stocks = p.get("stocks") or {}
-                stock_total = 0
-                if isinstance(stocks, dict):
-                    for s in stocks.values():
-                        if isinstance(s, dict):
-                            stock_total += int(s.get("quantity", 0) or 0)
-                deleted = bool(p.get("deletedAt"))
-                if in_stock_only and (stock_total <= 0 or deleted):
-                    continue
-                out.append({
-                    "id": pid,
-                    "category_id": cat_id,
-                    "name": (p.get("name") or "").strip(),
-                    "price_eur": _eur(p.get("price")),
-                    "ean": p.get("eanCode"),
-                    "stock_total": stock_total,
-                    "deleted": deleted,
-                })
+            out.append({
+                "id": p["id"], "category_id": p["category_id"], "name": p["name"],
+                "price_eur": _eur(p["price_cents"]), "ean": p["ean"],
+                "brand": p["brand"],
+                "stock_total": p["stock_total"],
+                "stock_lots": [
+                    {"quantity": l["quantity"],
+                     "purchase_price_eur": _eur_ou_rien(l["purchase_price_cents"]),
+                     "created_at": iso(l["created_at"])}
+                    for l in p["stock_lots"]
+                ],
+                "stock_threshold": p["stock_threshold"],
+                "stock_ceiling": p["stock_ceiling"],
+                "supplier_id": p["supplier_id"],
+                "deleted": p["deleted"], "deleted_at": iso(p["deleted_at"]),
+            })
         return out
 
     # ═══════════════════════ Clientes ═══════════════════════
@@ -315,57 +396,80 @@ def register(mcp: FastMCP) -> None:
         employee_id: Optional[str] = None,
         limit: int = 100,
     ) -> dict:
-        """List appointments (vevents) in a date range, optionally filtered by employee.
+        """List appointments in a date range, optionally for one employee.
 
-        Accepts presets: "today", "this_week", "7d", "30d", etc.
-        Default: last 7 days.
-        Returns {count, vevents: [{id, start, end, customer_id, seller_id, services, status}]}.
+        Accepts presets: "today", "this_week", "7d", "30d"... Default: last 7 days.
+        Reads every employee calendar of the salon unless `employee_id` narrows it.
+
+        Times are the salon's WALL CLOCK, as Planity stores them — no UTC offset is
+        added, because there is none to add and inventing one would be wrong half
+        the year.
+
+        A cancelled appointment is returned like any other, with `cancelled: true`
+        — Planity has no status field, only a deletion date, and hiding them would
+        hide cancellations from whoever is looking for them.
+
+        ⚠️ Returns an allow-list of fields, and for the customer an **id only** —
+        no name, no phone, no email, and not the free-text comment (it routinely
+        contains people's names). Use `planity_get_appointment` for the comment of
+        one appointment, and `planity_get_customer` to resolve an id. This is a
+        deliberate exception to "expose the raw" — see the module docstring — not
+        an omission to fix.
         """
         c = await _client()
         gte, lte = fenetre(date_from, date_to, preset)
-        raw = await c.list_appointments(salon_id)
-        out = []
-        for vid, v in (raw or {}).items():
-            if not isinstance(v, dict):
-                continue
-            start_ms = v.get("start")
-            if not isinstance(start_ms, (int, float)):
-                continue
-            if start_ms < gte or start_ms > lte:
-                continue
-            seller = v.get("seller_id") or v.get("sellerId") or v.get("child")
-            if employee_id and seller != employee_id:
-                continue
-            out.append({
-                "id": vid,
-                "start": iso(start_ms),
-                "end": iso(v.get("end")),
-                "customer_id": v.get("customer_id") or v.get("customerId"),
-                "seller_id": seller,
-                "services": v.get("services") or v.get("serviceIds"),
-                "status": v.get("status"),
-                "title": v.get("title") or v.get("name"),
-            })
-        out.sort(key=lambda x: x.get("start") or "")
-        return {"count": len(out), "from": iso(gte), "to": iso(lte),
-                "vevents": out[:limit]}
+        rdv = await c.list_appointments(salon_id, iso(gte)[:10], iso(lte)[:10],
+                                        employee_id=employee_id)
+        return {
+            "count": len(rdv), "from": iso(gte)[:10], "to": iso(lte)[:10],
+            "truncated": len(rdv) > limit,
+            "appointments": [_rdv_public(v) for v in rdv[:limit]],
+        }
 
     @mcp.tool()
-    async def planity_get_appointment(salon_id: str, vevent_id: str) -> dict:
-        """Full appointment detail for a single vevent."""
+    async def planity_get_appointment(salon_id: str, vevent_id: str,
+                                      employee_id: Optional[str] = None) -> dict:
+        """One appointment in full, including its free-text comment.
+
+        Without `employee_id`, every calendar of the salon is searched: an
+        appointment id does not say which calendar it belongs to.
+
+        ⚠️ Same allow-list as the listing, plus `comment` and `title` — this tool
+        is asked for ONE appointment, so its note is what was asked for. The
+        customer is still an **id only**; resolve it with `planity_get_customer`.
+        """
         c = await _client()
-        v = await c.get_appointment(salon_id, vevent_id)
-        if not v:
-            return {"error": "not_found"}
-        return {
-            "id": vevent_id,
-            "start": iso(v.get("start")),
-            "end": iso(v.get("end")),
-            "customer_id": v.get("customer_id") or v.get("customerId"),
-            "seller_id": v.get("seller_id") or v.get("sellerId") or v.get("child"),
-            "services": v.get("services") or v.get("serviceIds"),
-            "status": v.get("status"),
-            "title": v.get("title") or v.get("name"),
-            "notes": v.get("note") or v.get("comment"),
-            "raw": v,
-        }
+        v = await c.get_appointment(salon_id, vevent_id, employee_id=employee_id)
+        if v is None:
+            return {"error": "not_found", "vevent_id": vevent_id}
+        return {**_rdv_public(v),
+                "comment": v.get("comment"), "title": v.get("title"),
+                "sequence": v.get("sequence"),
+                "service_origin_id": v.get("service_origin_id")}
+
+    @mcp.tool()
+    async def planity_list_recurring_appointments(
+        salon_id: str, employee_id: Optional[str] = None, limit: int = 50,
+    ) -> list[dict]:
+        """Recurring appointments (standing bookings) of the salon.
+
+        They live in a separate node and appear in NO date-range listing: a
+        calendar that only holds recurrences reads as an empty calendar. Each one
+        carries an `rrule` (RFC 5545) rather than a date.
+
+        ⚠️ Same allow-list: customer id only, no name or contact details.
+        """
+        c = await _client()
+        out = []
+        for r in await c.list_recurring_appointments(salon_id, employee_id, limit):
+            out.append({
+                "id": r["id"], "employee_id": r["child_id"], "rrule": r["rrule"],
+                "duration_minutes": r["duration_minutes"],
+                "service_id": r["service_id"], "sequence": r["sequence"],
+                "price_eur": _eur_ou_rien(r["price_cents"]),
+                "customer_id": r["customer_id"],
+                "created_at": iso(r["created_at"]),
+                "updated_at": iso(r["updated_at"]),
+                "all_day": r["all_day"],
+            })
+        return out

@@ -167,6 +167,40 @@ def iso(ms):
     return _coeur().ms_to_iso(ms)
 
 
+def periode(gte_ms, lte_ms) -> dict:
+    """La fenêtre couverte, DITE — bornes, nombre de jours, fuseau, et si elle
+    s'arrête aujourd'hui.
+
+    Un chiffre d'affaires sans sa fenêtre invite à projeter dessus, et c'est là que
+    ça se casse : la plupart des presets s'arrêtent à MAINTENANT, pas à la fin de la
+    journée. Le dernier jour est donc partiel, un rythme calculé dessus est trop
+    bas, et « au rythme actuel il reste N jours » sort faux sans que rien ne le
+    signale. `ends_today` et `complete` sont là pour que l'agent le sache au lieu de
+    le supposer, et `days` pour qu'il ne recompte pas une durée qu'on lui donne."""
+    import time
+
+    debut, fin = iso(gte_ms), iso(lte_ms)
+    aujourdhui = iso(int(time.time() * 1000))[:10]
+    jours = None
+    if debut and fin:
+        from datetime import date
+
+        d, f = date.fromisoformat(debut[:10]), date.fromisoformat(fin[:10])
+        jours = (f - d).days + 1
+    finit_aujourdhui = bool(fin) and fin[:10] == aujourdhui
+    return {
+        "from": debut, "to": fin,
+        "from_date": debut[:10] if debut else None,
+        "to_date": fin[:10] if fin else None,
+        "days": jours,
+        "timezone": "Europe/Paris",
+        "ends_today": finit_aujourdhui,
+        # Le dernier jour n'est pas fini : tout rythme journalier calculé sur cette
+        # fenêtre le sous-estime, et une projection bâtie dessus avec.
+        "complete": not finit_aujourdhui,
+    }
+
+
 def avertir_au_demarrage() -> None:
     """Dit AU BOOT ce qui empêchera le connecteur de servir. Ne lève jamais.
 
@@ -214,10 +248,22 @@ def _bad(msg: str) -> McpError:
 def _eur(cents: int | float | None) -> float:
     """Planity compte en CENTIMES ; on rend des euros à la frontière de l'outil.
 
-    Vit ici parce que les deux modules d'outils en ont besoin : dupliquée, la
-    conversion finirait par diverger d'un facteur 100 dans un seul des deux, ce
+    Vit ici parce que les quatre modules d'outils en ont besoin : dupliquée, la
+    conversion finirait par diverger d'un facteur 100 dans un seul d'entre eux, ce
     qui se lit comme un chiffre d'affaires et pas comme un bug."""
     return round(float(cents or 0) / 100, 2)
+
+
+def _eur_ou_rien(cents: int | float | None) -> float | None:
+    """Comme `_eur`, mais un montant ABSENT reste absent au lieu de valoir zéro.
+
+    `_eur(None)` rend `0.0`, ce qui est juste quand le zéro est un vrai zéro et faux
+    partout ailleurs : une prestation sans prix devient offerte, un lot sans prix
+    d'achat devient gratuit, et on calcule une marge dessus. Un `None` qui traverse
+    dit « on ne sait pas » ; un `0.0` prétend savoir, et ne lève jamais."""
+    if cents is None:
+        return None
+    return round(float(cents) / 100, 2)
 
 
 def _refus_planity(e: BaseException, geste: str) -> McpError:
