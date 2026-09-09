@@ -54,6 +54,17 @@ _B3_VIA_FOD = (
     "client lib in-process"
 )
 
+# Clients foncier arrivés côté lib APRÈS l'extraction (B1) : le service FOD sert
+# déjà ces données, le backend n'a donc JAMAIS importé leur client lib — la classe
+# `*Client` naît orpheline au bump qui l'ajoute (vécu 2026-09-09 avec france_opendata
+# 0.45.0). Même situation que l'entrée `osm` (2026-07-08).
+_FONCIER_JAMAIS_PAR_LA_LIB = (
+    "client foncier consommé via le service FOD dédié en proxy HTTP live "
+    "(oto_mcp/fod/foncier.py → /api/foncier/*, ADR 0028 extraction totale) — "
+    "le tool foncier_* est exposé, mais le client lib est arrivé APRÈS "
+    "l'extraction : il n'a jamais tourné in-process côté backend"
+)
+
 FOD_NOT_EXPOSED = {
     "judilibre": "client Judilibre (jurisprudence) = source d'INGESTION du service "
                  "FOD (fod-0, épopée DILA) ; le backend consomme la jurisprudence "
@@ -76,6 +87,9 @@ FOD_NOT_EXPOSED = {
     "dvf": _FONCIER_VIA_FOD,
     "dpe": _FONCIER_VIA_FOD,
     "sitadel": _FONCIER_VIA_FOD,  # permis DiDo — via fod/foncier (B1) ; dernier ref lib (DIDO_PAGE_SIZES) inliné au B4
+    "beges": _FONCIER_JAMAIS_PAR_LA_LIB,  # bilans GES — tool foncier_beges → /api/foncier/beges
+    "dpe_tertiaire": _FONCIER_JAMAIS_PAR_LA_LIB,  # volet tertiaire de foncier_dpe → /api/foncier/dpe/tertiaire
+    "odre": _FONCIER_JAMAIS_PAR_LA_LIB,  # conso transport de foncier_conso_elec → /api/foncier/odre/conso
     # Clients « fr » (données entreprise) consommés via le service FOD (B2a) :
     # entreprises/BODACC/Egapro = proxy HTTP live, INPI = DuckDB parquet isolé.
     # oto_mcp/fod_fr.py → /api/fr/*. INSEE SIRENE (keyé) reste, lui, au backend.
