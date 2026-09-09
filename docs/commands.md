@@ -180,7 +180,19 @@ systemctl list-timers oto-mcp-maintenance.timer           # le prochain tir
 # première question devant une purge est « combien de lignes ? ».
 sudo -E env $(cat /opt/oto-mcp/.env | xargs) \
   /opt/oto-mcp/.venv/bin/oto-mcp maintenance retention --dry-run
-#   retention | blocks | key-indexes | all      les travaux du timer
+#   retention | blocks | key-indexes            les travaux du timer
+#   alertes-credential | all                    (idem : `all` joue le timer)
+#   instagram-tokens                            renouvelle les autorisations
+#                                               Instagram avant leur terme. ⚠️ Ce
+#                                               jeton ne se renouvelle que TANT
+#                                               QU'IL VIT (pas de refresh_token
+#                                               chez Meta) : sauter la passe assez
+#                                               longtemps ne dégrade pas la
+#                                               connexion, elle la PERD, et seule
+#                                               l'utilisatrice peut la refaire.
+#                                               Le timer ne tourne qu'en PROD :
+#                                               une connexion posée en preprod
+#                                               n'est renouvelée qu'à l'usage.
 #   check-boot                                  rejoue l'ORDRE du boot en transaction
 #                                               ANNULÉE — un diagnostic sans effet,
 #                                               jouable contre la base servie

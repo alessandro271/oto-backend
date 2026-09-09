@@ -408,8 +408,9 @@ _SETTINGS = "/api/admin/connectors/settings"
 class ConnectorSettingInput(BaseModel):
     op: str = "list"                         # list | set | clear | reload
     connector: Optional[str] = None          # set / clear
-    key: str = "cardinality"                 # la seule propriété surchargeable à ce jour
-    value: Optional[str] = None              # set : 'mono' | 'multi'
+    key: str = "cardinality"                 # cardinality, ou un réglage de connecteur
+                                             # (ex. instagram_meta.app_id/app_secret)
+    value: Optional[str] = None              # set : 'mono' | 'multi', ou la valeur du réglage
     org_id: Optional[int] = None             # None = surcharge PLATEFORME
 
 
@@ -424,6 +425,34 @@ class ConnectorSettingView(BaseModel):
     changed: Optional[bool] = None           # set / clear
 
 
+#: Suffixe des clés dont la VALEUR ne se relit pas. La table a d'abord porté des
+#: réglages publics par conception (les trois coordonnées de l'application Planity,
+#: que tout navigateur reçoit) ; `instagram_meta.app_secret` en 2026-09-09 est le
+#: premier VRAI secret qu'on y range, et `op="list"` rendait jusque-là toute valeur
+#: telle quelle — à un appelant qui est souvent un AGENT, donc dans un transcript.
+#:
+#: Redaction par SUFFIXE, pas par liste de clés : une liste indexée par nom serait
+#: à tenir à jour au prochain connecteur, et l'oubli n'échouerait nulle part — il
+#: publierait le secret. Un `_secret` final est une convention qu'on peut exiger de
+#: l'auteur d'un réglage, et qu'un test vérifie.
+_SUFFIXE_SECRET = "_secret"
+
+
+def _sans_les_secrets(lignes: list[dict]) -> list[dict]:
+    """Les lignes, valeurs des clés secrètes remplacées par un marqueur.
+
+    On rend la PRÉSENCE, jamais la valeur — même tronquée : savoir qu'une clé est
+    posée est ce dont l'admin a besoin pour diagnostiquer, la relire ne lui apporte
+    rien qu'il n'ait déjà eu au moment de la poser."""
+    out = []
+    for r in lignes:
+        ligne = dict(r)
+        if str(ligne.get("key", "")).endswith(_SUFFIXE_SECRET):
+            ligne["value"] = "(posée — valeur non rendue)" if ligne.get("value") else ""
+        out.append(ligne)
+    return out
+
+
 def _connector_setting(ctx: ResolvedCtx, inp: ConnectorSettingInput) -> dict:
     from ..connectors import cardinality
     from ..db import connector_settings as store
@@ -433,7 +462,8 @@ def _connector_setting(ctx: ResolvedCtx, inp: ConnectorSettingInput) -> dict:
                 for (s, i, c), v in cardinality.overrides_snapshot().items()}
 
     if inp.op == "list":
-        return {"op": "list", "rows": store.list_connector_settings(inp.key),
+        return {"op": "list",
+                "rows": _sans_les_secrets(store.list_connector_settings(inp.key)),
                 "active": _actives()}
     if inp.op == "reload":
         # Pas de repli : si la lecture échoue, l'appelant doit le SAVOIR — un reload

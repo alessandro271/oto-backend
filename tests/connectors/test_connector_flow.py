@@ -45,6 +45,11 @@ def test_les_connecteurs_a_flux_sont_ceux_quon_attend():
     """
     assert set(connector_flow.entries()) == {
         "zoho", "zohodesk", "zohoanalytics", "salesforce", "google",
+        # `instagram_meta` (2026-09-09) : flux Instagram Login hébergé par oto,
+        # déclaré dans `auth/instagram_meta.py` — importé au boot par `api.routes`,
+        # qui monte sa route de retour. C'est bien le chemin du boot, pas un import
+        # de complaisance (cf. la fixture ci-dessus).
+        "instagram_meta",
         # Le compte `unipile` GARDE son flux multi-canal (code de production) ; le
         # split du 2026-08-28 ajoute un flux par canal, sans paramètre — le canal
         # est dérivé du connecteur au lieu d'être choisi dans une liste.

@@ -46,6 +46,7 @@ _KNOWN: dict[str, str] = {
     # (`/api/atlassian/oauth/callback` et `/api/folkmcp/oauth/callback` ont quitté
     # cette liste le 2026-09-09 : partis avec la fédération MCP, ADR 0069.)
     "/api/salesforce/oauth/callback": NATURE,
+    "/api/instagram_meta/oauth/callback": NATURE,
     # --- Webhooks : un tiers appelle, non authentifié côté Logto.
     # (`/api/unipile/webhook` a quitté cette liste le 2026-08-29, #581 : dormant depuis
     #  la v2 du fournisseur — plus aucun appelant légitime, donc plus de route.)

@@ -115,6 +115,10 @@ _DECLARATIONS: tuple[str, ...] = (
     # ordre ne gouverne que l'AFFICHAGE, et le déplacer réordonnerait le catalogue
     # sans rien réparer. Sa place se juge au voisinage montré, pas au `kind`.
     "planity",
+    # Voisin de `planity` par la SITUATION, pas par le mécanisme : un connecteur
+    # métier que l'exploitant configure une fois (coordonnées d'application au
+    # palier plateforme) avant que quiconque puisse s'y connecter.
+    "instagram_meta",
     "cognism",
     "lighton",
     "promptwatch",

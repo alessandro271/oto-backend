@@ -12,8 +12,10 @@ Ils sont ici, chacun nommé, chacun jouable seul :
     oto-mcp maintenance retention     purge du fil des runs + des runs sans faits
     oto-mcp maintenance blocks        re-projection du corps des nœuds en blocs
     oto-mcp maintenance key-indexes   index d'unicité de clé métier par namespace
+    oto-mcp maintenance instagram-tokens  renouvellement des autorisations
+                                          Instagram avant leur terme
     oto-mcp maintenance check-boot    rejoue l'ordre du boot en transaction ANNULÉE
-    oto-mcp maintenance all           les trois premiers, dans l'ordre
+    oto-mcp maintenance all           ceux du timer quotidien, dans l'ordre
 
     oto-mcp maintenance key-index-rebuild   (#421 — voir plus bas, PAS dans `all`)
     oto-mcp maintenance journal-tokens      purge rétroactive des jetons écrits en
@@ -410,6 +412,32 @@ def alertes_credential(*, dry_run: bool = False) -> dict:
                      "tourne, l'effet attend une décision")}
 
 
+def instagram_tokens(*, dry_run: bool = False) -> dict:
+    """Renouvelle les autorisations Instagram qui approchent du terme.
+
+    **Le seul travail de cette liste qu'on ne peut pas se contenter de rattraper
+    plus tard.** Une purge sautée se rejoue ; celui-ci, non : un jeton Instagram
+    ne se renouvelle que TANT QU'IL VIT — Meta n'émet pas de `refresh_token` sur
+    ce produit. Un renouvellement seulement paresseux (à l'usage) meurt donc de
+    non-usage : une personne qui ne consulte pas ses statistiques pendant soixante
+    jours perd sa connexion sans avoir rien fait, et doit refaire un consentement
+    que personne ne peut faire à sa place.
+
+    C'est pour ça qu'il est ici et pas ailleurs : il fallait un déclencheur qui ne
+    dépende pas de l'utilisatrice, et ce timer en est un — il existe, il est
+    quotidien, et il tourne côté PROD seulement (la base est partagée : deux
+    exécutants se disputeraient les mêmes lignes).
+
+    Idempotent : une autorisation déjà renouvelée ce jour-là n'a plus besoin de
+    l'être, la passe suivante ne la touchera pas.
+    """
+    # Le balayage vit avec le reste du renouvellement (`tools/…_session.py`),
+    # pas ici : il partage son écriture de coffre avec le chemin d'appel, et
+    # les séparer aurait fait deux façons de réécrire une échéance.
+    from .tools import instagram_meta_session as ig
+    return ig.renouveler_les_jetons(dry_run=dry_run)
+
+
 _TRAVAUX: dict[str, Callable[..., dict]] = {
     "retention": retention,
     "blocks": blocks,
@@ -420,6 +448,7 @@ _TRAVAUX: dict[str, Callable[..., dict]] = {
     "residu-projete": residu_projete,
     "portee-observation": portee_observation,
     "alertes-credential": alertes_credential,
+    "instagram-tokens": instagram_tokens,
 }
 # Travaux dont l'écriture est un ACTE, pas une routine : à blanc par défaut, et
 # c'est `--apply` qui écrit. Ils ne sont dans aucun timer et jamais dans `all`.
@@ -428,7 +457,11 @@ _ACTES = ("journal-tokens", "residu-projete")
 # envoi est fermé par `OTO_ALERTE_CREDENTIAL`. Les deux ensemble sont le dispositif :
 # le mécanisme tourne dès le tag (on voit ce qui partirait), l'effet attend une
 # décision. Y mettre un travail qui écrit dehors ne se ferait pas autrement.
-_ALL = ("retention", "blocks", "key-indexes", "alertes-credential")
+# ⚠️ `instagram-tokens` DOIT rester dans `_ALL` : c'est le seul déclencheur de
+# renouvellement qui ne dépende pas de l'usage, et un jeton Instagram non
+# renouvelé n'est pas dégradé — il est perdu (cf. le docstring du travail).
+_ALL = ("retention", "blocks", "key-indexes", "alertes-credential",
+        "instagram-tokens")
 
 
 def run(noms: list[str], *, dry_run: bool = False, strict: bool = False) -> int:

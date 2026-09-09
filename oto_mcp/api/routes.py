@@ -56,6 +56,7 @@ from .. import db, journal_secrets, tenancy
 from . import (accords as api_routes_accords,
                billing as api_routes_billing,
                datastore as api_routes_datastore,
+               instagram_meta as api_routes_instagram_meta,
                salesforce as api_routes_salesforce,
                sirene as api_routes_sirene,
                zoho as api_routes_zoho)
@@ -403,6 +404,16 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         options_handler=options_handler,
     )
 
+    # Retour de consentement Instagram (statistiques) — le `/start` passe par le
+    # seam commun (`connectors/flow`), seul le callback est une route.
+    instagram_meta_routes = api_routes_instagram_meta.make_routes(
+        verifier=verifier,
+        authenticate=_authenticate,
+        json_response=_json,
+        json_error=_json_error,
+        options_handler=options_handler,
+    )
+
     # Couche capacité (ADR 0009) : routes REST dérivées du registre (no-op tant
     # qu'il est vide — canari). Même séquence autz→validation→handler que MCP.
     capability_routes = _cap_rest_adapter.make_routes(
@@ -479,6 +490,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         *accords_routes,
         *zoho_routes,
         *salesforce_oauth_routes,
+        *instagram_meta_routes,
         *capability_routes,
         *billing_webhook_routes,
         # EN DERNIER, et c'est la garde : un alias déprécié ne peut capturer que ce

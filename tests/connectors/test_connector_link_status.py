@@ -32,6 +32,7 @@ from oto_mcp.connectors import link as connector_link
 
 # L'import est CE qui déclare : ce module s'enregistre au niveau module.
 from oto_mcp.auth import google as google_oauth  # noqa: F401,E402
+from oto_mcp.auth import instagram_meta as instagram_meta_oauth  # noqa: F401,E402
 
 
 def _federated() -> set[str]:
@@ -50,8 +51,11 @@ def test_tout_connecteur_oauth_declare_sa_lecture():
 
 def test_le_perimetre_est_celui_quon_croit():
     # Memento a été décommissionné le 30/07 : il était le quatrième. atlassian et
-    # folkmcp sont partis le 2026-09-09 avec la fédération MCP (ADR 0069).
-    assert _federated() == {"google"}
+    # folkmcp sont partis le 2026-09-09 avec la fédération MCP (ADR 0069) — et
+    # `instagram_meta` est arrivé le même jour, premier connecteur OAuth écrit APRÈS
+    # la fermeture du trou : il déclare sa lecture d'état dès sa première ligne,
+    # ce que ce fichier existait pour obtenir.
+    assert _federated() == {"google", "instagram_meta"}
 
 
 # --- la forme émise, contrat lu par le dashboard -------------------------------
