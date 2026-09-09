@@ -32,7 +32,7 @@ from starlette.responses import PlainTextResponse, Response
 from starlette.routing import Route
 
 from .. import billing, mollie_client, roles
-from .base import AuthFn
+from .base import AuthFn, _file
 
 
 def make_routes(options_handler: Callable[[Request], Awaitable[Response]],
@@ -64,9 +64,10 @@ def make_routes(options_handler: Callable[[Request], Awaitable[Response]],
         """Le PDF d'une facture, en pièce téléchargeable.
 
         L'autorisation est l'appartenance à l'org QUI PORTE la facture, et non
-        l'org active : ce lien s'ouvre depuis un e-mail, où rien ne garantit que
-        l'org de session est celle qu'on facture. `roles.is_org_member` porte
-        l'escalade admin plateforme, comme la règle `ORG_MEMBER_OF` des capacités.
+        l'org active : le lien s'ouvre hors de tout contexte de session (un onglet
+        rouvert, une URL collée), où rien ne garantit que l'org courante est celle
+        qu'on facture. `roles.is_org_member` porte l'escalade admin plateforme,
+        comme la règle `ORG_MEMBER_OF` des capacités.
         """
         if not billing.is_enabled():
             # Billing dormant (dark launch ADR 0043) : la surface n'existe pas pour
@@ -95,14 +96,12 @@ def make_routes(options_handler: Callable[[Request], Awaitable[Response]],
             return json_error(request, 409, "pdf_not_available",
                               "Le PDF de ce document n'a pas encore été récupéré "
                               "auprès du fournisseur — il le sera automatiquement.")
-        # Le nom de fichier dérive d'une valeur venue du fournisseur (le numéro de
-        # facture) et atterrit dans un EN-TÊTE : on en retire guillemets et sauts de
-        # ligne. Même réflexe que `email._no_crlf` — une donnée d'amont ne compose
-        # pas un en-tête sans passer par un filtre.
-        brut = row.get("pdf_filename") or f"facture-{invoice_id}.pdf"
-        nom = "".join(c for c in brut if c not in '"\r\n\x00') or f"facture-{invoice_id}.pdf"
-        return Response(row["pdf"], media_type="application/pdf",
-                        headers={"Content-Disposition": f'attachment; filename="{nom}"'})
+        # `_file` et non une `Response` nue : c'est lui qui pose le CORS (sans quoi
+        # ce 200 part sur le fil et le navigateur le refuse — mesuré en production le
+        # 2026-09-09) et qui filtre le nom de fichier, qui dérive ici d'une valeur
+        # venue du fournisseur (le numéro de facture) et atterrit dans un en-tête.
+        return _file(request, row["pdf"], media_type="application/pdf",
+                     filename=row.get("pdf_filename") or f"facture-{invoice_id}.pdf")
 
     routes = [
         Route("/api/billing/webhook", webhook, methods=["POST"]),

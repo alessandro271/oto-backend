@@ -30,14 +30,13 @@ from __future__ import annotations
 
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from starlette.requests import Request
-from starlette.responses import (HTMLResponse, JSONResponse, PlainTextResponse,
-                                 Response)
+from starlette.responses import HTMLResponse, JSONResponse, Response
 
 from .. import (access, deprecations, providers, db, guide_store, openapi,
                 org_store, version as oto_version)
 from ..connectors import activation as connector_activation
 from ..connectors import cardinality as connector_cardinality
-from .base import _authenticate, _json, _json_error
+from .base import _authenticate, _file, _json, _json_error
 
 
 async def favicon(request: Request) -> Response:
@@ -49,7 +48,8 @@ async def favicon(request: Request) -> Response:
     deux chemins.
     """
     from .. import brand
-    return Response(
+    return _file(
+        request,
         brand.FAVICON_SVG,
         media_type="image/svg+xml",
         headers={"Cache-Control": "public, max-age=86400"},
@@ -308,8 +308,8 @@ async def public_doc_view(request: Request) -> Response:
                                "updated_at": doc.get("updated_at")})
     if "text/markdown" in accept:
         md = f"# {title}\n\n{body_md}" if title else body_md
-        return PlainTextResponse(md, media_type="text/markdown; charset=utf-8",
-                                 headers={"Cache-Control": "public, max-age=300"})
+        return _file(request, md, media_type="text/markdown; charset=utf-8",
+                     headers={"Cache-Control": "public, max-age=300"})
     html_page = public_doc_page.render(title=title, body_md=body_md,
                                        updated_at=doc.get("updated_at"))
     return HTMLResponse(html_page, headers={"Cache-Control": "public, max-age=300"})

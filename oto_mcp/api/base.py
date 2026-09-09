@@ -2,8 +2,9 @@
 
 Ce module ne déclare **aucune** route : il porte ce que les handlers de tous les
 domaines appellent — l'authentification (`_authenticate`), les en-têtes CORS, les
-deux fabriques de réponse JSON, le préflight `OPTIONS`, et `bind` (le passeur de
-dépendances explicites).
+deux fabriques de réponse JSON, `_file` (toute réponse qui n'est PAS du JSON — elle
+passe par là pour ne pas sortir sans CORS, cf. son docstring), le préflight
+`OPTIONS`, et `bind` (le passeur de dépendances explicites).
 
 **Pourquoi un module à part plutôt que `api/routes.py`.** Depuis la découpe du
 2026-08-27, les handlers vivent dans des `api_routes_<domaine>.py` que
@@ -80,7 +81,12 @@ def _cors_headers(origin: str | None) -> dict[str, str]:
             # ILLISIBLE au dashboard : un navigateur ne donne à `fetch` que les
             # en-têtes de réponse explicitement exposés. Un en-tête qu'aucun de nos
             # consommateurs ne peut lire ne date rien.
-            "Access-Control-Expose-Headers": "X-Oto-Version",
+            #
+            # `Content-Disposition` pour la même raison, mesurée le 2026-09-09 : les
+            # réponses fichier (PDF de facture, export ZIP) portent leur nom de
+            # fichier LÀ et nulle part ailleurs. Non exposé, le front télécharge un
+            # document qu'il ne peut pas nommer.
+            "Access-Control-Expose-Headers": "X-Oto-Version, Content-Disposition",
             "Access-Control-Max-Age": "600",
             "Vary": "Origin",
         }
@@ -305,6 +311,38 @@ def _json(request: Request, payload: dict, status: int = 200) -> JSONResponse:
     return JSONResponse(
         payload, status_code=status, headers=_cors_headers(request.headers.get("origin"))
     )
+
+
+def _file(request: Request, content, *, media_type: str,
+          filename: str | None = None,
+          headers: dict[str, str] | None = None,
+          status_code: int = 200) -> Response:
+    """La réponse qui n'est PAS du JSON — un PDF, un ZIP, une icône, du markdown.
+
+    **Le seul chemin.** Une `Response` construite à la main sort sans CORS, et le
+    navigateur la refuse. Mesuré le 2026-09-09 :
+    `GET /api/me/billing/invoices/{id}/pdf` répondait 200 en production et le
+    dashboard n'en voyait rien — « No Access-Control-Allow-Origin ». Le CORS de ce
+    serveur se pose réponse par réponse (aucun `CORSMiddleware`, cf. `_cors_headers`)
+    et seuls `_json`, `_json_error` et `options_handler` le posaient : le préflight
+    passait, les erreurs JSON passaient, **le 200 qui porte le fichier sortait nu**.
+    Trois routes avaient fait le même oubli, chacune de son côté — le défaut était
+    dans la FAÇON de poser le CORS, pas dans les trois appels.
+    `tests/api/test_reponses_binaires_cors.py` refuse le quatrième.
+
+    `filename` compose le `Content-Disposition` ICI parce que ce nom vient d'une
+    donnée d'amont (un numéro de facture, un nom de projet) et atterrit dans un
+    en-tête : le filtre CR/LF s'applique une fois, pour tous — même réflexe que
+    `email._no_crlf`. Un nom entièrement vidé par le filtre retombe sur `fichier` :
+    une pièce jointe garde un nom, elle ne perd pas son en-tête en silence.
+    """
+    entetes = dict(headers or {})
+    entetes.update(_cors_headers(request.headers.get("origin")))
+    if filename is not None:
+        nom = "".join(c for c in filename if c not in '"\r\n\x00') or "fichier"
+        entetes["Content-Disposition"] = f'attachment; filename="{nom}"'
+    return Response(content, media_type=media_type, status_code=status_code,
+                    headers=entetes)
 
 
 async def options_handler(request: Request) -> Response:

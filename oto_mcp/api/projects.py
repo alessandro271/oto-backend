@@ -26,7 +26,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from .. import access, db, doc_export, ownership
-from .base import _authenticate, _json, _json_error
+from .base import _authenticate, _file, _json, _json_error
 
 
 def _project_org_context_error(request: Request, sub: str, pid: int):
@@ -177,5 +177,6 @@ async def me_project_export(request: Request, *, verifier: JWTVerifier) -> Respo
     blob = await run_in_threadpool(doc_export.build_export, docs,
                                    doc_export._slug(proj.get("name") or "kb", pid))
     fname = f"{doc_export._slug(proj.get('name') or 'export', pid)}.zip"
-    return Response(blob, media_type="application/zip",
-                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+    # `_file` : même raison que le PDF de facture — une `Response` nue sort SANS
+    # CORS, et le ZIP n'arrive jamais au navigateur qui l'a demandé.
+    return _file(request, blob, media_type="application/zip", filename=fname)

@@ -762,6 +762,18 @@ https://mcp.oto.cx/api/mcp/catalog -H 'Origin: <x>'` → l'en-tête `Access-Cont
 revient si l'origine passe. ⚠️ Ne pas déduire « c'est la liste du code » du seul fait qu'une
 origine du défaut est acceptée : l'override en contient une copie.
 
+⚠️ **Le CORS se pose RÉPONSE PAR RÉPONSE — il n'y a pas de `CORSMiddleware`.** Une
+`Response` construite à la main sort donc sans en-tête, et le navigateur la jette
+alors que le serveur a répondu 200 : rien n'apparaît dans le journal serveur, tout
+apparaît côté client en « Failed to fetch ». Mesuré en production le 2026-09-09 sur
+`GET /api/me/billing/invoices/{id}/pdf`, où le préflight et les erreurs JSON
+passaient et où seul le 200 qui portait le fichier était nu. **Toute réponse non
+JSON passe désormais par `api/base.py::_file`** (PDF de facture, export ZIP,
+favicon, markdown public), qui pose le CORS et compose le `Content-Disposition` ;
+`tests/api/test_reponses_binaires_cors.py` refuse la prochaine `Response` écrite à
+la main. `Content-Disposition` est aussi dans `Access-Control-Expose-Headers` :
+sans quoi le front télécharge un fichier qu'il ne peut pas nommer.
+
 ⚠️ **Et le piège SYMÉTRIQUE, constaté le 03/09/2026 : conclure qu'une origine est
 BLOQUÉE sans le vérifier.** Un lot a retiré `POST /api/contact` en motivant le
 retrait par « la route était de toute façon morte, l'origine du site n'est pas dans
