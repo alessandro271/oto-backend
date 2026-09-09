@@ -988,6 +988,68 @@ def export_tool_calls_for_org(
             "next": (cles[-1], rows[-1]["id"]) if encore and rows else None}
 
 
+def list_billable_calls_for_org(
+    org_id: int, tool: str, *, since: Optional[str] = None,
+    until: Optional[str] = None, limit: int = 1000,
+    before: Optional[tuple[str, int]] = None,
+) -> dict:
+    """Les appels FACTURABLES d'un outil sous une org — la lentille membre du
+    relevé de consommation (`org.usage.calls`). Rend
+    `{until_effectif, total, calls, next}`, **même contrat que
+    `export_tool_calls_for_org`**, et pour les mêmes raisons :
+
+    - une seule construction de clauses (`_audit_window_clauses` + l'outil),
+      partagée par le compte et la page ;
+    - une transaction REPEATABLE READ, donc un seul snapshot pour les deux ;
+    - une borne haute TOUJOURS posée (gelée au premier appel, reportée par le
+      curseur) — la fenêtre est CLOSE, la concaténation des pages vaut son total.
+
+    ⚠️ C'est ce `total` qui rend un relevé VÉRIFIABLE : le consommateur compare
+    ce qu'il a lu à ce que la fenêtre contenait. `list_tool_calls` plafonne à
+    1000 en silence et sans curseur — une page tronquée y a l'air complète, et
+    sous-facture sans lever d'erreur. Le relevé ne doit JAMAIS repasser par là.
+
+    Projection ÉTROITE par construction : id, outil, date, quantité, mode de
+    clé. Ni `sub`, ni `email`, ni `error` — la lentille est lisible par tout
+    membre, et ce qu'il lit est ce que son org consomme, pas qui a fait quoi.
+    Seuls les appels `ok` : un échec n'a rien consommé chez le fournisseur."""
+    limit = max(1, min(int(limit), 5000))
+    with _connect() as conn:
+        conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        if not until:
+            until = conn.execute(
+                f"SELECT to_char(now() AT TIME ZONE 'UTC', {_ISO_US}) AS t"
+            ).fetchone()["t"]
+        clauses, params = _audit_window_clauses(org_id, since, until)
+        clauses += ["l.tool = %s", "l.ok = TRUE"]
+        params += [tool]
+        total = int(conn.execute(
+            f"SELECT count(*) AS n FROM tool_calls l WHERE {' AND '.join(clauses)}",
+            tuple(params),
+        ).fetchone()["n"])
+
+        page_clauses, page_params = list(clauses), list(params)
+        if before is not None:
+            page_clauses.append("(l.created_at, l.id) < (%s::timestamptz, %s)")
+            page_params += [before[0], int(before[1])]
+        rows = conn.execute(
+            f"""
+            SELECT l.id, l.tool, l.quantity, l.key_mode,
+                   {_AUDIT_KEYSET_AT} AS created_at
+            FROM tool_calls l
+            WHERE {' AND '.join(page_clauses)}
+            ORDER BY l.created_at DESC, l.id DESC
+            LIMIT %s
+            """,
+            tuple(page_params + [limit + 1]),
+        ).fetchall()
+
+    encore = len(rows) > limit
+    rows = [dict(r) for r in rows[:limit]]
+    return {"until_effectif": until, "total": total, "calls": rows,
+            "next": (rows[-1]["created_at"], rows[-1]["id"]) if encore and rows else None}
+
+
 def instruction_usage(
     subs: list[str], tool: str, slug: Optional[str], days: int = 30,
     *, slug_key: str = "slug",

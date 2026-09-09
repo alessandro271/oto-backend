@@ -630,31 +630,53 @@ class BillableCallRow(BaseModel):
 
 
 class OrgBillableCalls(BaseModel):
-    """⚠️ Mêmes limites que `OrgCalls` : `limit` est plafonné à 1000 côté store et
-    il n'y a pas de curseur. Un consommateur doit donc filtrer par `tool` (un appel
-    par outil tarifé) plutôt que tout tirer — le volume FACTURABLE d'une org est
-    petit, c'est le volume total qui ne l'est pas."""
+    """Une PAGE d'une fenêtre CLOSE — même contrat que l'export d'audit (#770).
+
+    `total` = la population de la fenêtre `[since, until_effectif]`, indépendante
+    de la page : c'est ce qui permet au consommateur de VÉRIFIER qu'il a tout lu
+    (somme des pages == total) au lieu de le supposer. `next` = la position de la
+    ligne suivante quand il en reste, à renvoyer telle quelle en
+    `before_at`/`before_id` avec le MÊME `until_effectif` — sans ce gel, un journal
+    alimenté en continu et trié récent d'abord servirait deux vérités successives.
+    ⚠️ Ne PAS rebâtir cette lentille sur `list_tool_calls` : il plafonne à 1000
+    en silence et sans curseur, et une page tronquée y a l'air complète."""
     calls: list[BillableCallRow]
+    total: int
+    until_effectif: str
+    next_at: Optional[str] = None
+    next_id: Optional[int] = None
 
 
 class OrgBillableCallsInput(BaseModel):
     org_id: int
-    days: Optional[int] = None
+    # OBLIGATOIRE : le relevé se lit outil par outil. Le volume facturable d'une
+    # org est petit, son volume total non — l'outil est ce qui borne la fenêtre.
+    tool: str
+    since: Optional[str] = None
+    until: Optional[str] = None
     limit: Optional[int] = None
-    tool: Optional[str] = None
+    before_at: Optional[str] = None
+    before_id: Optional[int] = None
 
 
 def _billable_calls(ctx: ResolvedCtx, inp: OrgBillableCallsInput) -> dict:
-    rows = db.list_tool_calls(limit=cap_limit(inp.limit or 1000),
-                              org_id=inp.org_id, tool_name=inp.tool,
-                              since_days=inp.days or 31, errors_only=False)
-    return {"calls": [
-        # Projection EXPLICITE, pas un `**row` filtré : la lentille doit rester
-        # étroite même si `list_tool_calls` gagne des colonnes demain.
-        {"call_id": r.get("id"), "tool": r.get("tool_name"),
-         "created_at": str(r["called_at"]) if r.get("called_at") else None,
-         "quantity": r.get("quantity"), "key_mode": r.get("key_mode")}
-        for r in rows if r.get("ok")]}
+    before = ((inp.before_at, inp.before_id)
+              if inp.before_at and inp.before_id is not None else None)
+    page = db.list_billable_calls_for_org(
+        inp.org_id, inp.tool, since=inp.since, until=inp.until,
+        limit=inp.limit or 1000, before=before)
+    nxt = page["next"]
+    return {
+        # Projection EXPLICITE, pas un `**row` : la lentille reste étroite même
+        # si la requête gagne des colonnes demain.
+        "calls": [{"call_id": r["id"], "tool": r["tool"], "created_at": r["created_at"],
+                   "quantity": r.get("quantity"), "key_mode": r.get("key_mode")}
+                  for r in page["calls"]],
+        "total": page["total"],
+        "until_effectif": page["until_effectif"],
+        "next_at": nxt[0] if nxt else None,
+        "next_id": nxt[1] if nxt else None,
+    }
 
 
 _MEMBER_OF = ORG_MEMBER_OF("org_id")
