@@ -581,19 +581,25 @@ def register(mcp: FastMCP) -> None:
         Nothing is invented to fill the hole — an absent year stays absent, it is only
         said out loud.
 
-        TWO GRAINS on the distribution tier. Enedis publishes ONE ROW PER ADDRESS AND PER
-        NAF DIVISION, so `maille="ligne"` (default, unchanged behaviour) returns rows, and
-        thresholding them one by one MISSES sites whose divisions are each below the bar
-        but whose total is above it. `maille="site"` sums an address's divisions and
-        applies `min_mwh` AFTER the sum — that is the grain almost every caller means.
-        A site then carries `naf2_principal`, `naf2_detail` and `multi_naf2`.
+        TWO GRAINS, and `maille` governs BOTH tiers with the same meaning: "site" =
+        one row is one site. On DISTRIBUTION, Enedis publishes ONE ROW PER ADDRESS AND
+        PER NAF DIVISION, so `maille="ligne"` (default) returns rows, and thresholding
+        them one by one MISSES sites whose divisions are each below the bar but whose
+        total is above it; `maille="site"` sums an address's divisions and applies
+        `min_mwh` AFTER the sum — the grain almost every caller means. A site then
+        carries `naf2_principal`, `naf2_detail` and `multi_naf2`. On TRANSPORT, "site"
+        keeps only the IRIS that hold a single delivery point, and "ligne" also returns
+        the aggregated ones. Filtering those out is how a query for the largest
+        consumers returns the small ones — see `maille` below.
 
         Rows Enedis publishes without an address are real consumption that cannot be
         located: they are never returned as sites, and counted in `lignes_ignorees` /
         `mwh_ignores` instead of being silently dropped.
 
         Args:
-            annee: reference year (e.g. "2024"). ODRE lags one year behind Enedis.
+            annee: reference year (e.g. "2024"). ODRE lags a year behind Enedis, so the
+                year that fits distribution may return nothing at all on transport —
+                `avertissement_millesime` says so rather than letting it pass for empty.
             dept: INSEE department code (e.g. "59").
             secteur: "INDUSTRIE" | "TERTIAIRE" | "AGRICULTURE" — coarse: a hospital and
                 an office tower are both TERTIAIRE. Prefer `naf2`.
