@@ -31,6 +31,8 @@ import pytest
 from starlette.applications import Starlette
 from starlette.testclient import TestClient
 
+from oto_mcp.capabilities.runner_fleets import MAX_TOKENS_PAR_LIGNE as MAX_PAR_LIGNE
+
 ROUTE = "/api/me/runner/fleets"
 
 
@@ -274,6 +276,82 @@ def test_update_ne_peut_pas_annuler_ce_que_create_exige(client, org, flotte):
     assert f["tools"] == ["oto_kb"]
 
 
+# ── LA BORNE PAR LIGNE, REJOUÉE SUR LA ROUTE ─────────────────────────────────
+#
+# Décision d'Alexis du 09/09/2026 : `max_tokens_per_row` est OBLIGATOIRE et
+# plafonné à 200 000. La garde vit dans le handler et `tests/test_runner_fleets.py`
+# l'y éprouve ; ici on vérifie qu'elle est SERVIE — statut, code et phrase tels
+# qu'un front les reçoit. Une garde qui ne se rejoue pas sur la route est une
+# garde dont personne ne sait quel statut elle rend.
+
+
+def test_declarer_sans_borne_par_ligne_est_refuse_SUR_LA_ROUTE(client, org):
+    """Sans cette borne, un passage n'a aucun plafond de dépense : la somme
+    cumulée (`max_tokens`) n'est pas appliquée sur ce chemin, donc `max_rows`
+    borne un NOMBRE de travaux, jamais des jetons."""
+    r = client.post(ROUTE, headers=_h(org["membre"]), json={
+        "op": "create", "label": "sans-borne", "procedure": "p",
+        "tools": ["oto_kb"]})
+    assert (r.status_code, r.json().get("error")) == (400, "budget_par_ligne_requis"), r.text
+    # ⚠️ Le refus doit dire la BORNE, pas seulement le champ manquant : un refus
+    # qui tait la valeur maximale acceptée fait deviner, donc fait rejouer.
+    assert str(MAX_PAR_LIGNE) in r.json().get("detail", ""), (
+        "un refus qui ne nomme pas le plafond oblige à deviner la valeur à poser")
+
+
+def test_une_borne_par_ligne_AU_DELA_du_plafond_est_refusee_SUR_LA_ROUTE(client, org):
+    """La valeur de l'incident : 1 500 000 par ligne, douze fois le travail le
+    plus cher jamais mesuré. Au-delà du plafond, ce n'est plus une borne."""
+    r = client.post(ROUTE, headers=_h(org["membre"]), json={
+        "op": "create", "label": "borne-trop-haute", "procedure": "p",
+        "tools": ["oto_kb"], "max_tokens_per_row": 1_500_000})
+    assert (r.status_code, r.json().get("error")) == (400, "budget_par_ligne_trop_haut"), r.text
+    assert str(MAX_PAR_LIGNE) in r.json().get("detail", ""), (
+        "le refus nomme le plafond servi, sinon on cherche la bonne valeur à tâtons")
+
+
+def test_une_flotte_HISTORIQUE_sans_borne_reste_lisible_et_se_REPARE(client, org):
+    """⚠️ Le cas qui décide si la garde est un dégât ou une protection.
+
+    Deux flottes déclarées AVANT la garde n'ont pas ce champ (mesuré le
+    09/09/2026 : 2 sur 101, toutes deux `stopped`). Une contrainte posée à
+    l'écriture qui rendrait l'existant illisible ou immodifiable serait le pire
+    cas — ici elle ne mord qu'à l'ARMEMENT, qui est le geste qui engage la
+    dépense, et le refus nomme une réparation qui MARCHE par la surface servie.
+
+    L'état historique est reproduit EN BASE, pas par l'API : c'est justement un
+    état que l'API ne sait plus produire."""
+    from oto_mcp.db import runner_fleets as dbf
+
+    fid = client.post(ROUTE, headers=_h(org["membre"]), json={
+        "op": "create", "label": "historique", "procedure": "p",
+        "tools": ["oto_kb"],
+        "max_tokens_per_row": 50_000}).json()["fleet"]["id"]
+    dbf.update_fleet(fid, org["id"], {"max_tokens_per_row": None})
+
+    # elle reste LISIBLE — aucune garde sur get/list/state
+    r = client.post(ROUTE, headers=_h(org["membre"]),
+                    json={"op": "get", "fleet_id": fid})
+    assert r.status_code == 200, r.text
+    assert r.json()["fleet"]["max_tokens_per_row"] is None
+
+    # elle ne s'ARME pas, et le refus nomme sa réparation
+    r = client.post(ROUTE, headers=_h(org["membre"]),
+                    json={"op": "launch", "fleet_id": fid})
+    assert (r.status_code, r.json().get("error")) == (400, "budget_par_ligne_invalide"), r.text
+    assert "op=update" in r.json().get("detail", ""), (
+        "un refus qui ne nomme pas sa destination fait rejouer le même appel")
+
+    # et cette réparation est SERVIE : `max_tokens_per_row` est modifiable
+    r = client.post(ROUTE, headers=_h(org["membre"]), json={
+        "op": "update", "fleet_id": fid, "max_tokens_per_row": 50_000})
+    assert r.status_code == 200, r.text
+    r = client.post(ROUTE, headers=_h(org["membre"]),
+                    json={"op": "launch", "fleet_id": fid})
+    assert r.status_code == 200, r.text
+    assert r.json()["fleet"]["status"] == "armed"
+
+
 # ── LANCER et ARRÊTER : deux verbes, deux planchers, deux gardes ─────────────
 #
 # ⚠️ Ils ne sont PAS symétriques, et c'est tout le point. Ils entrent par la même
@@ -292,7 +370,8 @@ def test_update_ne_peut_pas_annuler_ce_que_create_exige(client, org, flotte):
 @pytest.fixture(scope="module")
 def flotte_a_piloter(client, org):
     r = client.post(ROUTE, headers=_h(org["membre"]), json={
-        "op": "create", "label": "pilotage", "procedure": "p", "tools": ["oto_kb"]})
+        "op": "create", "label": "pilotage", "procedure": "p", "tools": ["oto_kb"],
+        "max_tokens_per_row": 50_000})
     assert r.status_code == 200, r.text
     return r.json()["fleet"]
 
@@ -354,7 +433,8 @@ def test_on_n_arrete_pas_ce_qui_ne_tourne_pas(client, org):
     arrêt sur un passage jamais lancé."""
     r = client.post(ROUTE, headers=_h(org["membre"]), json={
         "op": "create", "label": "jamais-lancee", "procedure": "p",
-        "tools": ["oto_kb"]})
+        "tools": ["oto_kb"],
+        "max_tokens_per_row": 50_000})
     fid = r.json()["fleet"]["id"]
     assert _refus(client, org, {"op": "stop", "fleet_id": fid}) == (409, "not_stoppable")
 
@@ -378,7 +458,8 @@ def test_un_simple_membre_ne_LANCE_pas(client, org, simple_membre):
     ce qui reste ouvert — un refus qui n'enseigne rien pousse à chercher un
     contournement."""
     r = client.post(ROUTE, headers=_h(org["membre"]), json={
-        "op": "create", "label": "plancher", "procedure": "p", "tools": ["oto_kb"]})
+        "op": "create", "label": "plancher", "procedure": "p", "tools": ["oto_kb"],
+        "max_tokens_per_row": 50_000})
     fid = r.json()["fleet"]["id"]
     rr = client.post(ROUTE, headers=_h(simple_membre),
                      json={"op": "launch", "fleet_id": fid})
@@ -396,7 +477,8 @@ def test_un_simple_membre_ARRÊTE(client, org, simple_membre):
     le mauvais échange."""
     r = client.post(ROUTE, headers=_h(org["membre"]), json={
         "op": "create", "label": "arret-par-membre", "procedure": "p",
-        "tools": ["oto_kb"]})
+        "tools": ["oto_kb"],
+        "max_tokens_per_row": 50_000})
     fid = r.json()["fleet"]["id"]
     assert client.post(ROUTE, headers=_h(org["membre"]),
                        json={"op": "launch", "fleet_id": fid}).status_code == 200
@@ -415,7 +497,8 @@ def test_un_simple_membre_ARRÊTE(client, org, simple_membre):
 @pytest.fixture(scope="module")
 def flotte_cycle(client, org):
     r = client.post(ROUTE, headers=_h(org["membre"]), json={
-        "op": "create", "label": "cycle", "procedure": "p", "tools": ["oto_kb"]})
+        "op": "create", "label": "cycle", "procedure": "p", "tools": ["oto_kb"],
+        "max_tokens_per_row": 50_000})
     return r.json()["fleet"]
 
 
@@ -449,7 +532,8 @@ def test_un_battement_sans_ordre_ne_dit_pas_qu_il_faut_s_arreter(client, org):
     lirait « arrête-toi » par défaut s'éteindrait en boucle."""
     fid = client.post(ROUTE, headers=_h(org["membre"]), json={
         "op": "create", "label": "battement", "procedure": "p",
-        "tools": ["oto_kb"]}).json()["fleet"]["id"]
+        "tools": ["oto_kb"],
+        "max_tokens_per_row": 50_000}).json()["fleet"]["id"]
     client.post(ROUTE, headers=_h(org["membre"]), json={"op": "launch", "fleet_id": fid})
     client.post(ROUTE, headers=_h(org["membre"]), json={"op": "take", "fleet_id": fid})
     beat = client.post(ROUTE, headers=_h(org["membre"]),
@@ -462,7 +546,8 @@ def test_deux_ordonnanceurs_ne_prennent_pas_la_meme_flotte(client, org):
     sinon le passage double et son état ne dit la vérité pour aucun des deux."""
     fid = client.post(ROUTE, headers=_h(org["membre"]), json={
         "op": "create", "label": "concurrence", "procedure": "p",
-        "tools": ["oto_kb"]}).json()["fleet"]["id"]
+        "tools": ["oto_kb"],
+        "max_tokens_per_row": 50_000}).json()["fleet"]["id"]
     client.post(ROUTE, headers=_h(org["membre"]), json={"op": "launch", "fleet_id": fid})
     assert client.post(ROUTE, headers=_h(org["membre"]),
                        json={"op": "take", "fleet_id": fid}).status_code == 200
@@ -474,7 +559,8 @@ def test_on_n_accuse_pas_un_arret_qui_n_a_pas_ete_demande(client, org):
     plus dire « l'ordonnanceur a obéi » mais « quelqu'un a écrit stopped »."""
     fid = client.post(ROUTE, headers=_h(org["membre"]), json={
         "op": "create", "label": "sans-demande", "procedure": "p",
-        "tools": ["oto_kb"]}).json()["fleet"]["id"]
+        "tools": ["oto_kb"],
+        "max_tokens_per_row": 50_000}).json()["fleet"]["id"]
     assert _refus(client, org, {"op": "ack_stop", "fleet_id": fid}
                   ) == (409, "nothing_to_acknowledge")
 
