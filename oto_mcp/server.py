@@ -775,6 +775,22 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
                 quantity = trace.get("quantity")
                 if isinstance(quantity, int) and quantity >= 0:
                     row["quantity"] = quantity
+                # SOUS QUELLE CLÉ l'appel est passé — `user|group|org|tenant|
+                # platform`, le `mode` du credential gagnant de la cascade. Posé
+                # au SEUL résolveur (`access.resolve._note_resolved_instance`,
+                # ADR 0024), donc tout tool keyed le porte sans travail par tool.
+                # ⚠️ Le `mode`, PAS le booléen `is_platform` : celui-ci écrase
+                # quatre origines distinctes en « pas plateforme », alors qu'un
+                # consommateur de facturation doit pouvoir les distinguer (une
+                # clé d'org n'est pas une clé de membre). Sa propre colonne pour
+                # la même raison que `quantity` : donnée de premier ordre qu'on
+                # filtre, pas trace de debug fondue dans `args`.
+                # NULL = appel sans credential résolu (outil méta, open data) ou
+                # antérieur à cette colonne — un consommateur ne doit RIEN en
+                # facturer, faute de pouvoir l'attribuer.
+                key_mode = trace.get("key_mode")
+                if isinstance(key_mode, str) and key_mode:
+                    row["key_mode"] = key_mode
         # noqa: SILENT — dette déclarée : tout l'enrichissement du journal tombe d'un bloc (#424, verdict C)
         except Exception:
             pass

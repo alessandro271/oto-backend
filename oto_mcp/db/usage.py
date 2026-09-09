@@ -51,9 +51,9 @@ def insert_tool_call(row: dict) -> None:
                 (server, kind, sub, email, tool, args, ok, error, duration_ms, session_id,
                  run_id, org_id, client_id, sentry_event_id,
                  request_id, call_uid, effective_sub, error_kind,
-                 token_id, token_kind, result_size, quantity)
+                 token_id, token_kind, result_size, quantity, key_mode)
             VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s)
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 row.get("server") or "oto", row.get("kind") or "mcp",
@@ -76,6 +76,9 @@ def insert_tool_call(row: dict) -> None:
                 # Métrage par unité (billing Tulina) — NULL = non tracé pour ce
                 # tool, un consommateur doit le traiter comme 1, pas 0.
                 row.get("quantity"),
+                # Mode du credential (billing Tulina) — NULL = non attribuable,
+                # donc non facturable ; l'inverse de la règle de `quantity`.
+                row.get("key_mode"),
             ),
         )
 
@@ -834,7 +837,7 @@ def list_tool_calls(
             SELECT l.id, l.sub, u.email, u.name, l.tool AS tool_name, l.created_at AS called_at,
                    l.duration_ms, l.ok, l.error, l.session_id, l.run_id, l.org_id,
                    l.sentry_event_id, {journal_calls.ARG_KEYS_SQL} AS arg_keys,
-                   l.quantity
+                   l.quantity, l.key_mode
             FROM tool_calls l
             LEFT JOIN users u ON u.sub = l.sub
             {where}
@@ -857,7 +860,7 @@ def get_tool_call(call_id: int) -> Optional[dict]:
                    u.name, l.tool, l.args, l.ok, l.error, l.error_kind, l.duration_ms,
                    l.created_at,
                    l.session_id, l.run_id, l.org_id, o.name AS org_name, l.client_id,
-                   l.sentry_event_id, l.quantity
+                   l.sentry_event_id, l.quantity, l.key_mode
             FROM tool_calls l
             LEFT JOIN users u ON u.sub = l.sub
             LEFT JOIN orgs o ON o.id = l.org_id

@@ -354,6 +354,10 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # la somme par org/période est une lecture d'agrégat périodique, pas un chemin
     # chaud, et un index de plus sur `tool_calls` se paie à CHAQUE appel journalisé.
     conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS quantity INTEGER")
+    # Sous quelle clé l'appel est passé (mode du credential gagnant). Additif,
+    # NULL sur tout l'historique — non reconstructible. Pas d'index : même
+    # raisonnement que `quantity`, agrégat périodique et non chemin chaud.
+    conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS key_mode TEXT")
     # #493 : le journal de paiement porte le customer Mollie de la tentative. Le
     # miroir `org_subscriptions` n'est posé qu'à `confirm` — entre deux clics de
     # souscription il n'y avait donc RIEN à relire, et un second customer Mollie

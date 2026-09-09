@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from .. import db, deprecations
 from . import audit_log, monitoring
-from ._authz import ORG_ADMIN_OF
+from ._authz import ORG_ADMIN_OF, ORG_MEMBER_OF
 from ._types import cap_limit, AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
@@ -134,6 +134,9 @@ class CallRow(BaseModel):
     # (résultats rendus) et `fullenrich_enrich_linkedin` (contacts soumis) —
     # voir `tool_calls.quantity`'s DDL comment pour la liste vivante.
     quantity: Optional[int] = None
+    # Sous quelle clé l'appel est passé (`user|group|org|tenant|platform`).
+    # `None` = aucun credential résolu, ou ligne antérieure à la colonne.
+    key_mode: Optional[str] = None
 
 
 class OrgCalls(BaseModel):
@@ -600,6 +603,62 @@ def _console(ctx: ResolvedCtx, inp: OrgMonitoringInput) -> dict:
         org_id=oid, since=inp.since, until=inp.until, limit=inp.limit or 1000))
 
 
+# ── relevé de facturation, lentille MEMBRE ──────────────────────────────────
+#
+# Pourquoi une capacité SÉPARÉE et non `org.monitoring.calls` ouverte aux membres :
+# celle-ci rend `sub`, `email`, `name` et le texte d'`error` de chaque appel.
+# L'ouvrir aux membres donnerait à n'importe qui le moyen d'énumérer l'activité et
+# les échecs de tous ses collègues — un changement de confidentialité que personne
+# n'a demandé, et qui arriverait ici en effet de bord d'une page de facturation.
+#
+# Celle-ci ne rend QUE ce qu'un métrage doit sommer : l'id de l'appel (clé de
+# déduplication), l'outil, le nombre d'items, le mode de clé, la date. Aucune
+# identité, aucun message d'erreur. Le membre voit ce que SON ORG consomme, pas
+# qui a fait quoi.
+
+class BillableCallRow(BaseModel):
+    """Un appel tel qu'un consommateur de FACTURATION en a besoin — et rien de plus."""
+    call_id: int
+    tool: Optional[str] = None
+    created_at: Optional[str] = None
+    # Items réellement traités. `None` = ce tool ne trace pas de compte, à lire
+    # comme 1 — JAMAIS comme 0 (cf. le commentaire DDL de `tool_calls.quantity`).
+    quantity: Optional[int] = None
+    # `user|group|org|tenant|platform`. `None` = aucun credential résolu ou ligne
+    # antérieure à la colonne : non attribuable, donc à NE PAS facturer.
+    key_mode: Optional[str] = None
+
+
+class OrgBillableCalls(BaseModel):
+    """⚠️ Mêmes limites que `OrgCalls` : `limit` est plafonné à 1000 côté store et
+    il n'y a pas de curseur. Un consommateur doit donc filtrer par `tool` (un appel
+    par outil tarifé) plutôt que tout tirer — le volume FACTURABLE d'une org est
+    petit, c'est le volume total qui ne l'est pas."""
+    calls: list[BillableCallRow]
+
+
+class OrgBillableCallsInput(BaseModel):
+    org_id: int
+    days: Optional[int] = None
+    limit: Optional[int] = None
+    tool: Optional[str] = None
+
+
+def _billable_calls(ctx: ResolvedCtx, inp: OrgBillableCallsInput) -> dict:
+    rows = db.list_tool_calls(limit=cap_limit(inp.limit or 1000),
+                              org_id=inp.org_id, tool_name=inp.tool,
+                              since_days=inp.days or 31, errors_only=False)
+    return {"calls": [
+        # Projection EXPLICITE, pas un `**row` filtré : la lentille doit rester
+        # étroite même si `list_tool_calls` gagne des colonnes demain.
+        {"call_id": r.get("id"), "tool": r.get("tool_name"),
+         "created_at": str(r["called_at"]) if r.get("called_at") else None,
+         "quantity": r.get("quantity"), "key_mode": r.get("key_mode")}
+        for r in rows if r.get("ok")]}
+
+
+_MEMBER_OF = ORG_MEMBER_OF("org_id")
+
 _ADMIN_OF = ORG_ADMIN_OF("org_id")
 
 CAPABILITIES += [
@@ -609,6 +668,15 @@ CAPABILITIES += [
     Capability(key="org.monitoring.calls", handler=_calls, Input=OrgCallsInput,
                authz=_ADMIN_OF, mcp=None, Output=OrgCalls,
                rest=RestBinding("GET", "/api/orgs/{id}/monitoring/calls", _ID)),
+    # Lentille MEMBRE, volontairement distincte de celle du dessus (voir le bloc
+    # de commentaire au-dessus de `BillableCallRow`) : le relevé de consommation
+    # est une page que tout membre doit pouvoir lire, l'activité nominative de
+    # ses collègues non. `mcp=None` : c'est un tuyau de facturation, pas un outil
+    # d'agent.
+    Capability(key="org.usage.calls", handler=_billable_calls,
+               Input=OrgBillableCallsInput, authz=_MEMBER_OF, mcp=None,
+               Output=OrgBillableCalls,
+               rest=RestBinding("GET", "/api/orgs/{id}/usage/calls", _ID)),
     Capability(key="org.monitoring.call", handler=_call, Input=OrgCallInput,
                authz=_ADMIN_OF, mcp=None, Output=OrgCall,
                rest=RestBinding("GET", "/api/orgs/{id}/monitoring/calls/{call_id}", _ID)),

@@ -313,8 +313,16 @@ from oto_mcp.db import _schema, schema
 # côtés : rien d'autre n'a bougé dans le DDL. Les deux empreintes du conflit —
 # dc84b4e2 (tronc seul) et 36834a62 (branche seule) — sont mortes : aucune ne décrit
 # le DDL fusionné, et c'est exactement le cas que l'avertissement ci-dessus vise.
-EMPREINTE = "c756be2bbbd31a46e997081fcf58d64f61176f5ccebc048f7a8314b2b2b08e98"
-LONGUEUR = 151166
+# 2026-09-09 (facturation par clé) : `tool_calls.key_mode` — sous quelle clé
+# l'appel est passé (`user|group|org|tenant|platform`), pour que le consommateur
+# de facturation ne compte QUE ce qui passe par une clé Tulina : un client sur sa
+# propre clé paie déjà le fournisseur. ADDITIVE et NULLABLE, posée par l'ALTER
+# d'`init_db` sur la base PARTAGÉE sans réécrire une ligne. Pas d'index.
+# ⚠️ Arithmétique vérifiée à nouveau, sur le tronc REBASÉ : le fragment `USAGE`
+# grandit de 838 caractères (12 135 → 12 973) et l'assemblé d'exactement 838 aussi
+# (150 265 → 151 103). Rien d'autre n'a bougé.
+EMPREINTE = "f2961d71beba070b27bfdfb2aa10df3ebd8b7025e87ecbcf07b3d9ce44dee276"
+LONGUEUR = 152004
 
 
 _CREATE_TABLE = re.compile(r"^CREATE TABLE IF NOT EXISTS (\w+)", re.M)
