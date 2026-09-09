@@ -531,15 +531,17 @@ def _write_refusal(e: Exception) -> AuthzDenied:
 _ECRITURE_DETRUIT = (
     " ⚠️ Une écriture DÉTRUIT ce qui est dans la colonne : sur une colonne "
     "ouverte il n'y a ni annulation ni historique, la valeur précédente "
-    "disparaît au moment où la vôtre arrive. Le filet est le format "
-    "`origine: \"system\"`, et ce qu'il garde est précis : la valeur TELLE "
-    "QU'ELLE ÉTAIT à la déclaration du format. Déclarer le format l'écrit "
-    "sur toutes les lignes existantes, une fois, dans une transaction ; "
-    "ensuite la couche ne bouge plus. Le nom dit QUAND, pas QUI : si des "
-    "agents avaient déjà écrit avant la déclaration, c'est leur valeur qui "
-    "est gardée. Une colonne sans ce format ne garde rien. La face d'appel "
-    "n'y change rien : une ligne créée ici et une ligne créée par l'outil "
-    "agent se comportent à l'identique.")
+    "disparaît au moment où la vôtre arrive. ⚠️ **Et il n'y a AUCUN filet "
+    "automatique** : le format `origine: \"system\"` a été SUPPRIMÉ le "
+    "08/09/2026 — il capturait la valeur précédente à la première écriture "
+    "qui la changeait, ce qui exigeait d'avoir été déclaré AVANT que la "
+    "ligne existe ; déclaré après coup il ne gardait rien. Ce qui le "
+    "remplace est un geste DÉCLARÉ, porté par l'appel qui apporte la "
+    "donnée : `donnees_d_origine=true` écrit les DEUX versions — la valeur "
+    "courante et l'origine — au moment où la valeur entre. Sans lui, un "
+    "écrasement est définitif et rien ne vous le dira après. La face "
+    "d'appel n'y change rien : une ligne créée ici et une ligne créée par "
+    "l'outil agent se comportent à l'identique.")
 
 
 def _append_row(ctx: ResolvedCtx, inp: AppendRowInput) -> dict:

@@ -6,10 +6,12 @@ dans le même ordre : *à qui appartient cette destination ?*
 - `readonly: true` — la colonne porte la valeur remise par le client ; une écriture
   qui la CHANGE en place est refusée en nommant la colonne, la raison et où porter la
   divergence (`report_to`). Le forçage sur l'appel est arbitré par `forcage.py` ;
-- `origine: "system"` — la couche `<champ>.origine` est posée par la PLATEFORME, une
-  seule fois, à la première écriture qui change la valeur ; elle est fermée à
-  l'appelant, parce que la lui laisser écrire revenait à lui laisser détruire l'unique
-  copie de la valeur d'import ;
+- `origine` — la couche `<champ>.origine` est fermée à l'appelant : la lui laisser
+  écrire revenait à lui laisser détruire l'unique copie de la valeur d'import.
+  ⚠️ Le cran `origine: "system"` qui la POSAIT automatiquement a été SUPPRIMÉ le
+  08/09/2026 (`declaration.system_origin_fields` rend `set()`) : plus rien ne capture
+  de lui-même. L'origine se pose désormais par `donnees_d_origine`, sur l'appel qui
+  apporte la donnée. Le refus d'écrire la couche, lui, reste — daté au 01/10/2026 ;
 - `agent_access` — délégué à `acces_agent.py`, dont ce module appelle les refus.
 
 La seconde moitié du fichier est un PRÉAVIS DATÉ, pas une règle : le paramètre
@@ -150,24 +152,29 @@ def description_parametre_origine(en: bool = False) -> str:
         return (f"`{PARAMETRE_ORIGINE}=true` states that this call sets the "
                 f"`origine` layer (the value at the START, at import time) "
                 f"knowingly. Without it, writing an origin is refused from "
-                f"{date_refus()} on — write the value alone instead: the platform "
-                f"freezes the origin at the first enrichment, PROVIDED the column "
-                f"already carried the flag when the row arrived. Declared "
-                f"afterwards it reconstructs nothing: rows already present get the "
-                f"marker \"{ORIGINE_INCONNUE}\". There is "
-                f"nobody to ask: the parameter is enough, and it applies to this "
-                f"call only. It does NOT lift the refusal on a column whose schema "
-                f"declares `origine: \"system\"`.")
+                f"{date_refus()} on. ⚠️ Nothing captures an origin automatically any "
+                f"more: `origine: \"system\"` was REMOVED on 2026-09-08, so writing "
+                f"the value alone keeps nothing — an overwrite is final. For a real "
+                f"IMPORT, prefer `donnees_d_origine=true`, which writes both versions "
+                f"— the current value and the origin — in the same gesture, at the "
+                f"moment the value enters. This parameter only says \"I know I am "
+                f"setting that layer\", and it applies to this call only. "
+                f"⚠️ You may still meet the marker \"{ORIGINE_INCONNUE}\" in an "
+                f"`origine` layer: it was left by the removed mechanism on rows it "
+                f"could not reconstruct. It is a LOSS, not a capture.")
     return (f"`{PARAMETRE_ORIGINE}=true` déclare que cet appel pose la couche "
             f"`origine` (la valeur du DÉPART, à l'import) en le sachant. Sans lui, une "
-            f"écriture d'origine est refusée à partir du {date_refus_fr()} — écrivez "
-            f"alors la valeur seule : la plateforme fige l'origine au premier "
-            f"enrichissement, mais SEULEMENT si la colonne portait déjà le cran quand la "
-            f"ligne est arrivée. Déclaré après coup, il ne reconstitue rien : les "
-            f"lignes déjà présentes reçoivent le marqueur « {ORIGINE_INCONNUE} ». "
-            f"Rien à demander à personne : le paramètre suffit, et "
-            f"il ne vaut que pour cet appel. Il ne lève PAS le refus sur une colonne "
-            f"dont le schéma déclare `origine: \"system\"`.")
+            f"écriture d'origine est refusée à partir du {date_refus_fr()}. "
+            f"⚠️ Plus rien ne capture une origine automatiquement : "
+            f"`origine: \"system\"` a été SUPPRIMÉ le 08/09/2026, donc écrire la "
+            f"valeur seule ne garde rien — un écrasement est définitif. Pour un vrai "
+            f"IMPORT, préférez `donnees_d_origine=true`, qui écrit les DEUX versions "
+            f"— la valeur courante et l'origine — dans le même geste, au moment où la "
+            f"valeur entre. Ce paramètre-ci dit seulement « je sais que je pose cette "
+            f"couche », et il ne vaut que pour cet appel. ⚠️ Vous pouvez encore "
+            f"rencontrer le marqueur « {ORIGINE_INCONNUE} » dans une couche "
+            f"`origine` : il a été laissé par le mécanisme retiré sur les lignes "
+            f"qu'il ne pouvait pas reconstituer. C'est une PERTE, pas une capture.")
 
 
 def _en_francais(quand: "_date") -> str:
@@ -280,7 +287,11 @@ def origine_posee(payload: Optional[dict], avant: Optional[dict] = None) -> list
 
 
 def marqueurs_poses_warning(combien: int) -> Optional[str]:
-    """Ce qu'une déclaration tardive du cran `origine: "system"` vient de faire.
+    """Ce qu'une déclaration tardive du cran `origine: "system"` faisait.
+
+    ⚠️ **Le cran est SUPPRIMÉ depuis le 08/09/2026** : cette fonction ne parle plus
+    d'aucun mécanisme vivant. Elle est gardée tant que `_capturer_origine_des_colonnes_neuves`
+    l'est — ce dernier rend `0` en nommant le retrait, et les deux s'éteindront ensemble.
 
     ⚠️ **La clé servie s'appelle `origines_capturees`, et c'est l'inverse de ce qui
     s'est passé.** Rien n'a été capturé : la plateforme a écrit le marqueur « origine
@@ -308,9 +319,11 @@ def marqueurs_poses_warning(combien: int) -> Optional[str]:
             "et la plateforme refuse de présenter le travail d'un agent comme la "
             "donnée de la personne qui l'a fournie. Ce qui manque là ne se "
             "reconstituera pas.\n"
-            "⚠️ L'ordre l'évite entièrement : sur un tableau NEUF, déclarer "
-            "`origine: \"system\"` AVANT d'importer ne marque aucune ligne — la "
-            "valeur importée devient l'origine au premier enrichissement.")
+            "⚠️ Le geste qui l'évite entièrement : porter `donnees_d_origine=true` sur "
+            "l'appel qui APPORTE la donnée — il pose la version d'origine au moment où "
+            "la valeur entre, donc il ne dépend d'aucun ordre. (L'ancien conseil "
+            "— déclarer `origine: \"system\"` avant d'importer — n'a plus d'objet : ce "
+            "cran est SUPPRIMÉ depuis le 08/09/2026.)")
 
 
 def reserved_refusals(schema: Optional[dict], payload: Optional[dict],
@@ -326,11 +339,14 @@ def reserved_refusals(schema: Optional[dict], payload: Optional[dict],
     dominant réémet la fiche entière, valeurs verrouillées comprises ; #623 refusait
     l'identique et aurait arrêté la campagne — une flotte à l'arrêt, pas un garde-fou).
 
-    - `origine: "system"` — la couche est NOMMÉE dans le payload avec une valeur
-      DIFFÉRENTE de ce que le système poserait → refus, création comprise. Ce que le
-      système poserait : l'origine déjà stockée ; sinon la valeur de base en place ;
-      à la création, la valeur écrite. Égale → acceptée, c'est un no-op (le geste
-      dominant du terrain : `{"valeur": <identique>, "origine": <la même>}`) ;
+    - `origine` — la couche est NOMMÉE dans le payload avec une valeur DIFFÉRENTE de
+      ce que le système poserait → refus, création comprise. Ce que le système
+      poserait : l'origine déjà stockée ; sinon la valeur de base en place ; à la
+      création, la valeur écrite. Égale → acceptée, c'est un no-op (le geste dominant
+      du terrain : `{"valeur": <identique>, "origine": <la même>}`).
+      ⚠️ Ce refus ne dépend PLUS d'un cran de schéma : `origine: "system"` est supprimé
+      depuis le 08/09/2026, la règle vaut pour toute colonne — et elle est datée au
+      01/10/2026 (`ORIGINE_REFUS_LE`), levable par `origine_override` ;
     - `readonly: true` — le payload NOMME la valeur (nue, `null`, ou `{"valeur": …}`)
       d'une ligne en place ET elle CHANGE → refus. Identique → no-op silencieux, les
       couches restent (substrat, `_merge_column`) ; `{"valeur": <identique>,

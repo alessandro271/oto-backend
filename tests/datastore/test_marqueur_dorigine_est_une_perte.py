@@ -35,14 +35,18 @@ def test_la_phrase_dit_une_PERTE_pas_une_capture():
         "l'irréversibilité doit être dite : c'est ce qui change la réaction du lecteur")
 
 
-def test_la_phrase_dit_l_ORDRE_qui_l_evite():
+def test_la_phrase_dit_LE_GESTE_qui_l_evite():
     """Sans ça, elle annonce un dégât sans issue — et un avertissement sans geste se
-    lit comme une fatalité. Ici l'inversion est évitable à coût nul sur tout tableau
-    neuf."""
+    lit comme une fatalité.
+
+    ⚠️ Le geste a CHANGÉ le 08/09/2026, l'exigence non. L'ancien conseil était un
+    ORDRE à respecter (déclarer le cran avant d'importer) ; le cran est supprimé, et
+    ce qui le remplace ne dépend d'aucun ordre — `donnees_d_origine` pose l'origine
+    au moment où la valeur entre. Ce banc garde l'exigence, pas la formulation."""
     phrase = dsv2.marqueurs_poses_warning(12)
 
-    assert "AVANT d'importer" in phrase
-    assert "ne marque aucune ligne" in phrase
+    assert "donnees_d_origine" in phrase, "un avertissement sans geste est une fatalité"
+    assert "SUPPRIMÉ" in phrase, "l'ancien conseil doit être désigné comme périmé"
 
 
 def test_elle_se_TAIT_quand_rien_n_a_ete_marque():
@@ -83,18 +87,23 @@ def test_la_description_servie_ne_promet_RIEN_d_inconditionnel():
         assert "the origin is kept" not in texte
 
 
-def test_la_description_servie_dit_la_CONDITION_et_le_marqueur():
-    """La condition doit tenir DANS la phrase, pas dans une documentation à côté —
-    celui qui importe ne lit que celle-là. Et le marqueur est cité LITTÉRALEMENT,
-    y compris sur la face anglaise : un agent qui cherchera la chaîne dans ses données
-    doit trouver celle qui y est écrite, pas sa traduction."""
-    fr = dsv2.description_parametre_origine()
-    assert "SEULEMENT si la colonne portait déjà le cran" in fr
-    assert "ne reconstitue rien" in fr
+def test_la_description_servie_cite_le_MARQUEUR_litteralement():
+    """⚠️ **L'exigence qui survit au retrait du mécanisme**, et j'ai failli la perdre
+    en corrigeant les textes : le marqueur est cité LITTÉRALEMENT sur les deux faces,
+    l'anglaise comprise. Un agent qui cherchera cette chaîne dans ses données doit
+    trouver celle qui y est écrite, pas sa traduction.
 
-    en = dsv2.description_parametre_origine(en=True)
-    assert "PROVIDED the column already carried the flag" in en
-    assert "reconstructs nothing" in en
-
+    ⚠️ La CONDITION, elle, a disparu avec le cran (`origine: "system"`, supprimé le
+    08/09/2026) : l'exiger encore ferait garder une phrase fausse. Ce qui reste vrai,
+    c'est que le marqueur est TOUJOURS EN BASE sur les lignes que le mécanisme n'a pas
+    su reconstituer — donc toujours rencontrable, donc toujours à expliquer."""
     from oto_mcp.datastore.couches import ORIGINE_INCONNUE
-    assert ORIGINE_INCONNUE in fr and ORIGINE_INCONNUE in en
+    fr = dsv2.description_parametre_origine()
+    en = dsv2.description_parametre_origine(en=True)
+
+    assert ORIGINE_INCONNUE in fr and ORIGINE_INCONNUE in en, (
+        "le marqueur doit rester citable tel qu'il est écrit dans les données")
+    # et il est présenté pour ce qu'il est
+    assert "PERTE" in fr and "LOSS" in en
+    # le remplaçant est nommé sur les deux faces
+    assert "donnees_d_origine" in fr and "donnees_d_origine" in en
