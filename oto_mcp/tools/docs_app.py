@@ -91,20 +91,21 @@ def register(mcp: FastMCP) -> None:
         """Rendered docs browser (MCP App / interactive card) — READ ONLY.
 
         Visual variant of `oto_doc` that renders pages INLINE instead of returning
-        JSON. WITHOUT arguments = the tree of the active org's KNOWLEDGE BASE
-        (whatever it is named — it is resolved by its anchor, see `oto_kb`). With
-        `project_id` = that project's pages tree
+        JSON. WITHOUT arguments = the tree of the active org's HISTORICAL docs
+        project (whatever it is named — resolved by its anchor, see `oto_kb`);
+        pass `project_id` to browse the docs of the project you actually mean.
+        With `project_id` = that project's pages tree
         (children indented under parents). With `doc_id` = ONE page, markdown
         rendered. With `query` (+ optional `project_id`) = full-text hits with
         snippets, accent-insensitive.
 
-        Use when the user wants to *see* a page or explore the docs/KB without
-        leaving the chat. For raw JSON or ANY write (create/update/move/share),
+        Use when the user wants to *see* a page or explore a project's docs
+        without leaving the chat. For raw JSON or ANY write (create/update/move/share),
         use `oto_doc`.
 
         Args:
             project_id: project whose pages to browse ; omit = the active org's
-                knowledge base (see `oto_kb`).
+                historical docs project (see `oto_kb`).
             doc_id: render ONE page (title + markdown body). Takes precedence.
             query: full-text search in the project's pages (title + body).
         """
@@ -131,8 +132,9 @@ def register(mcp: FastMCP) -> None:
         if pid is None:
             return _message_card(
                 "Aucun projet ciblé",
-                "Pas de base de connaissance dans ton org active — passe `project_id` "
-                "(cf. oto_project op=list) ou crée la KB via oto_kb.",
+                "Aucun projet de documents ancré dans ton org active — passe "
+                "`project_id` (cf. oto_project op=list) pour voir les documents du "
+                "projet que tu vises.",
             )
         project = db.get_project_by_id(pid)
         if project is None or not _can_read(sub, pid):

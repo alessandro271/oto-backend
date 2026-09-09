@@ -1445,7 +1445,7 @@ CAPABILITIES += [
             "each with its `run_id` — that is how you find a run you opened and lost "
             "the id of, so you can finally close it with run_finish. Across every org, "
             "since a run you cannot find is usually one you opened elsewhere. "
-            "lint (optional stale_days, default 90) = KB health of this project's pages: "
+            "lint (optional stale_days, default 90) = health of this project's pages: "
             "stale (untouched since), empty (trivial body), duplicate_titles (likely merges). "
             "publish_mcp (mcp_slug + mcp_access anonymous|secret|org + mcp_tools = the fixed "
             "tool allowlist) publishes the project as a dedicated MCP endpoint "

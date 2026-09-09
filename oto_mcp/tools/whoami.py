@@ -56,7 +56,8 @@ def register(mcp: FastMCP) -> None:
 
         Renvoie : `account` (sub, email, name, rôle plateforme), `org` (org active —
         id, name, rôle ; tu es TOUJOURS dans une org), `group` (groupe actif éventuel),
-        `knowledge` (KB native oto_kb : ancre kb_project_id), `connectors` (résumé des connecteurs
+        `knowledge` (l'ancre `kb_project_id` : l'id du projet de documents historique
+        de l'org, cf. `oto_kb`), `connectors` (résumé des connecteurs
         configurés — dont `platform_quotas`, le quota du jour `{used, limit,
         remaining}` des connecteurs plateforme au quota plafonné : regarde-le avant
         un lot d'appels qui dépensent, pour arbitrer sans découvrir la limite au

@@ -184,10 +184,11 @@ CAPABILITIES += [
         key="me.doc", handler=_doc, Input=DocInput, authz=PROJECT_SHARED_READ,
         description=(
             "Docs (markdown pages tree inside a project; inherit the project's access). "
-            "**This is also the org KNOWLEDGE BASE**: resolve it with oto_kb → project_id, "
-            "then read/search/write reference pages here (the dashboard « Documents » zone). "
-            "Prefer it over the web for org facts (processes, context, conventions), and "
-            "CAPTURE durable, sourced facts here (kind=source/note) as you learn them. "
+            "**This is where the org's durable knowledge lives**: a reference page is a "
+            "DOC, in the PROJECT it belongs to (that project's « Documents » zone in the "
+            "dashboard). Prefer it over the web for org facts (processes, context, "
+            "conventions), and CAPTURE durable, sourced facts as a doc in the project "
+            "concerned (kind=source/note) as you learn them. "
             "op=create (project_id, title; optional parent_id/body_md/kind) / bulk_create "
             "(project_id + `pages`=[{title, body_md?, kind?, parent_index?}] → N pages in ONE "
             "call, build a tree via parent_index = an earlier page in the batch) / list "
