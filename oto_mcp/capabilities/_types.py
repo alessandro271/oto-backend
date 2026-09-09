@@ -37,6 +37,11 @@ class ResolvedCtx:
     org_id: Optional[int] = None
     role: Optional[str] = None
     group_id: Optional[int] = None
+    # Vrai quand le principal est un worker de PLATEFORME authentifié par son
+    # secret de machine (`WORKER_OR_ORG_MEMBER`) : pas de compte, pas d'org —
+    # `org_id` est None et ce n'est pas un défaut. Le handler borne alors les
+    # verbes à ceux du worker. Aucune autre règle ne le pose.
+    platform_worker: bool = False
     # D'OÙ vient l'appel — `"mcp"` = un agent parle, `"rest"` = la face HTTP (le
     # dashboard, où un humain clique ; ou un intégrateur qui a écrit son code).
     #

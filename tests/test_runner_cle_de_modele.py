@@ -16,24 +16,22 @@ from __future__ import annotations
 
 import pytest
 
-from oto_mcp import access, providers
+from oto_mcp import providers
 from oto_mcp.capabilities import runner_jobs as RJ
 
 _WORKER = "svc-runner-worker"
 _MEMBRE = "un-membre-ordinaire"
 
 
-@pytest.fixture(autouse=True)
-def _marque_du_worker(monkeypatch):
-    """Seul `_WORKER` porte la marque `runner_worker`. C'est un don de COMPTE :
-    aucune org, aucun plan ne l'accorde (cf. `access.user_has_option`)."""
-    monkeypatch.setattr(access, "user_has_option",
-                        lambda sub, option: sub == _WORKER and option == "runner_worker")
-
-
 def _servi(job, depot, appelant=_WORKER):
-    """Le travail tel que servi au CLAIM, par défaut réservé par un worker."""
-    return RJ._avec_cle(job, depot, appelant)
+    """Le travail tel que servi au CLAIM, par défaut réservé par un worker.
+
+    ⚠️ Depuis le 09/09/2026, « être un worker » n'est plus une marque posée sur
+    un compte (lue par une option), c'est ce que la règle d'autorisation a
+    établi en vérifiant un secret de machine déclaré en base. Le banc le
+    modélise tel quel — `worker=` est un fait reçu, et `_MEMBRE` ne l'est
+    jamais, quoi qu'il porte."""
+    return RJ._avec_cle(job, depot, appelant, worker=(appelant == _WORKER))
 
 
 @pytest.fixture
@@ -276,31 +274,21 @@ def test_vingt_reservations_sans_depot_ne_laissent_aucune_ligne(_coffre, caplog)
         "veut garder")
 
 
-def test_la_marque_est_une_propriete_de_COMPTE_pas_d_ORG(monkeypatch, _coffre):
-    """⚠️ Le piège que la garde évite. `access.has_option` répond vrai dès que
-    l'ORG ACTIVE porte le don, ou que son plan inclut l'option : passer par lui
-    aurait servi la clé à TOUS les membres de cette org — la fuite même qu'on
-    ferme. La garde lit `user_has_option`, qui ne regarde que le compte."""
+def test_etre_worker_n_est_PAS_une_marque_de_compte():
+    """⚠️ Le piège que cette garde a porté deux jours : « ce compte est un de nos
+    workers » — une option posée sur un `users.sub`. Le compte marqué était un
+    compte personnel, et la flotte sondait son org active. Depuis le 09/09/2026
+    la garde ne consulte AUCUNE marque : le fait vient de la règle d'autorisation,
+    qui lit ce que l'authentification REST a posé après avoir vérifié un secret
+    de machine en base. Rien ici ne regarde un compte, et c'est le point."""
     import inspect
+    from oto_mcp.capabilities import _authz
     src = inspect.getsource(RJ._avec_cle)
-    assert "user_has_option" in src
-    assert "access.has_option(" not in src
-
-    # Et le seam lui-même ne consulte que le don de COMPTE. ⚠️ Lu sur le FICHIER :
-    # la façade `access` propage une écriture jusqu'au module porteur, donc le
-    # monkeypatch de ce banc remplace aussi `quotas.user_has_option` — inspecter
-    # l'objet rendrait la doublure et le contrôle ne verrait plus rien.
-    import pathlib
-    from oto_mcp.access import quotas
-    src_fichier = pathlib.Path(quotas.__file__).read_text()
-    corps = src_fichier.split("def user_has_option")[1].split("\ndef ")[0]
-    assert 'has_option_comp("user"' in corps
-    # L'APPEL, pas la mention : la docstring cite `org_has_option` pour dire de
-    # quoi elle est le miroir, et un contrôle qui confondrait les deux
-    # interdirait d'expliquer ce qu'on a fait.
-    assert "org_has_option(" not in corps
-    assert "current_org(" not in corps, "aucun contexte d'org ne doit entrer ici"
-
+    assert "has_option" not in src, "aucune marque de compte, ni d'org"
+    assert "worker" in inspect.signature(RJ._avec_cle).parameters
+    regle = inspect.getsource(_authz.WORKER_OR_ORG_MEMBER)
+    assert "platform_worker.current()" in regle, (
+        "le fait est LU de ce que l'auth a posé, jamais déduit d'un sub ou d'une option")
 
 def test_la_remise_a_un_worker_laisse_une_trace_sans_la_cle(_coffre, caplog):
     with caplog.at_level("INFO"):

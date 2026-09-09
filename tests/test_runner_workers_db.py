@@ -1,0 +1,105 @@
+"""Les workers de plateforme en base, exercés en SQL RÉEL.
+
+Déclarer, reconnaître, révoquer : trois requêtes, et un piège — la table
+servait déjà de témoin de PRÉSENCE (écrite par `claim_next_job(None, …)`), et
+l'upsert de présence ne doit pas effacer ce qu'on vient d'y déclarer. Patron de
+base éphémère repris de `test_campagne_a_servir_db.py`.
+"""
+from __future__ import annotations
+
+import os
+import uuid
+
+import pytest
+
+
+@pytest.fixture(scope="module")
+def live(pg_dsn):
+    psycopg = pytest.importorskip("psycopg")
+    from oto_mcp.db import _conn as dbconn
+
+    name = "oto_workers_" + uuid.uuid4().hex[:8]
+    root = psycopg.connect(pg_dsn, autocommit=True)
+    root.execute(f'CREATE DATABASE "{name}"')
+    dsn = pg_dsn.rsplit("/", 1)[0] + "/" + name
+    avant_url, avant_pool = os.environ.get("DATABASE_URL"), dbconn._pool
+    avant_key = os.environ.get("OTO_MCP_MASTER_KEY")
+    os.environ["DATABASE_URL"] = dsn
+    os.environ["OTO_MCP_MASTER_KEY"] = "4" * 64
+    dbconn._pool = None
+    try:
+        from oto_mcp.db import init_db
+        init_db()
+        yield
+    finally:
+        if dbconn._pool is not None:
+            dbconn._pool.close()
+        dbconn._pool = avant_pool
+        for cle, valeur in (("DATABASE_URL", avant_url),
+                            ("OTO_MCP_MASTER_KEY", avant_key)):
+            if valeur is None:
+                os.environ.pop(cle, None)
+            else:
+                os.environ[cle] = valeur
+        root.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+        root.close()
+
+
+def test_declarer_puis_reconnaitre(live):
+    from oto_mcp import db
+    w = db.create_platform_worker("banc 1")
+    assert w["secret"].startswith("otow_") and w["worker_sub"].startswith("worker:")
+
+    vu = db.verify_worker_secret(w["secret"])
+
+    assert vu == {"worker_sub": w["worker_sub"], "label": "banc 1"}
+
+
+def test_le_secret_n_est_pas_stocke_en_clair(live):
+    import psycopg
+    from oto_mcp import db
+    w = db.create_platform_worker("banc clair")
+    with psycopg.connect(os.environ["DATABASE_URL"]) as c:
+        row = c.execute("SELECT secret_hash FROM runner_platform_workers WHERE worker_sub=%s",
+                        (w["worker_sub"],)).fetchone()
+    assert row[0] != w["secret"] and len(row[0]) == 64
+
+
+def test_un_secret_inconnu_ou_sans_prefixe_ne_reconnait_personne(live):
+    from oto_mcp import db
+    assert db.verify_worker_secret("otow_" + "x" * 40) is None
+    assert db.verify_worker_secret("oto_" + "x" * 40) is None
+    assert db.verify_worker_secret("") is None
+
+
+def test_revoquer_ferme_l_authentification_et_ne_se_repete_pas(live):
+    from oto_mcp import db
+    w = db.create_platform_worker("banc révoqué")
+    assert db.revoke_platform_worker(w["worker_sub"]) is True
+    assert db.verify_worker_secret(w["secret"]) is None, "révoqué = inconnu pour l'auth"
+    assert db.revoke_platform_worker(w["worker_sub"]) is False, (
+        "une seconde révocation n'est pas un succès — c'est « déjà fait »")
+    assert db.revoke_platform_worker("worker:inconnu") is False
+
+
+def test_declare_mais_jamais_vu_ne_compte_PAS_comme_present(live):
+    """`runner_arme` lit `last_seen_at` : un worker déclaré il y a dix secondes
+    et jamais lancé aurait armé toutes les orgs pendant la fenêtre."""
+    from oto_mcp import db
+    db.create_platform_worker("banc jamais vu")
+    ligne = [w for w in db.list_platform_workers() if w["label"] == "banc jamais vu"][0]
+    # La couche db rend les dates en TEXTE : on lit l'année en tête.
+    assert str(ligne["last_seen_at"]).startswith("1970")
+    assert ligne["declared"] is True
+
+
+def test_la_presence_n_efface_pas_la_declaration(live):
+    """Le sondage écrit la présence par upsert sur la MÊME ligne : il ne doit
+    toucher que `last_seen_at`."""
+    from oto_mcp import db
+    w = db.create_platform_worker("banc présence")
+    db.claim_next_job(None, w["worker_sub"], lease_seconds=60)   # file vide : n'écrit que la présence
+    assert db.verify_worker_secret(w["secret"]) is not None, "le secret a survécu à l'upsert"
+    ligne = [x for x in db.list_platform_workers() if x["worker_sub"] == w["worker_sub"]][0]
+    assert not str(ligne["last_seen_at"]).startswith("1970")
+    assert ligne["label"] == "banc présence"

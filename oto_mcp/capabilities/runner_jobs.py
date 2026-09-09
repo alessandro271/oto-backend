@@ -25,8 +25,8 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .. import access, db
-from ._authz import ORG_MEMBER
+from .. import db
+from ._authz import WORKER_OR_ORG_MEMBER
 from ._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx,
                      RestBinding, cap_limit)
 from .registry import CAPABILITIES
@@ -357,7 +357,6 @@ def _cle_de_modele(org_id: int, depot: str) -> Optional[str]:
 # La marque qui dit « ce compte EST un de nos workers ». Un admin plateforme la
 # pose sur le compte de service du runner (`oto_admin_set_option`), et sur lui
 # seul.
-_OPTION_WORKER = "runner_worker"
 
 
 def _depot_pose(org_id: int, depot: str) -> bool:
@@ -421,7 +420,8 @@ def _avec_procedure(job: dict) -> dict:
     return {**job, "system": corps}
 
 
-def _avec_cle(job: dict, depot: Optional[str], appelant: str) -> dict:
+def _avec_cle(job: dict, depot: Optional[str], appelant: str, *,
+              worker: bool) -> dict:
     """Le travail, augmenté de la clé de modèle de son org — à la RÉSERVATION.
 
     Le worker fait partie du backend et a le droit de lire les clés que les orgs
@@ -429,20 +429,19 @@ def _avec_cle(job: dict, depot: Optional[str], appelant: str) -> dict:
     travail — jamais par un accès au coffre depuis le runner. Un worker qui
     saurait interroger le coffre pourrait lire autre chose que ce travail-ci.
 
-    ⚠️ **Mais la file n'est pas réservée aux workers** : cette capacité est
-    déclarée `ORG_MEMBER`, et rien, dans le protocole, ne distingue un worker
-    d'un membre — ils portent le même genre de jeton. Sans la garde ci-dessous,
-    n'importe quel membre enfilait un travail puis le réservait, et recevait la
-    clé de son org EN CLAIR. Un secret que le coffre ne rend à personne, et que
-    nous ne pouvons pas révoquer puisqu'il appartient au client.
+    ⚠️ **Mais la file n'est pas réservée aux workers** : un membre d'org peut
+    enfiler un travail puis le réserver. Sans la garde ci-dessous, il recevrait
+    la clé de son org EN CLAIR — un secret que le coffre ne rend à personne, et
+    que nous ne pouvons pas révoquer puisqu'il appartient au client.
 
-    La garde porte donc sur l'ACTEUR, et par `user_has_option` — jamais
-    `has_option`, qui répondrait vrai dès que l'ORG porte le don ou que son plan
-    inclut l'option, c'est-à-dire pour tous ses membres à la fois.
+    `worker` est ce que la règle d'autorisation a établi : le principal s'est
+    authentifié par un secret de machine déclaré en base. Ce n'était pas le cas
+    avant le 09/09/2026 — la garde lisait une MARQUE posée sur un compte, et
+    le compte marqué était un compte personnel.
     """
     if not depot or not job.get("org_id") or job.get("delegation_refusee"):
         return job
-    if not access.user_has_option(appelant, _OPTION_WORKER):
+    if not worker:
         # Silencieux POUR L'APPELANT — il reçoit son travail, sans clé : un refus
         # explicite apprendrait qu'il y a une clé à obtenir.
         #
@@ -456,9 +455,8 @@ def _avec_cle(job: dict, depot: Optional[str], appelant: str) -> dict:
         # la sonde qui aurait fabriqué son propre signal.
         if _depot_pose(job["org_id"], depot):
             logger.warning("clé de modèle `%s` REFUSÉE à %s (org %s, travail %s) : "
-                           "ce compte ne porte pas `%s`",
-                           depot, appelant, job["org_id"], job.get("id"),
-                           _OPTION_WORKER)
+                           "ce n'est pas un worker de plateforme",
+                           depot, appelant, job["org_id"], job.get("id"))
         return job
     cle = _cle_de_modele(job["org_id"], depot)
     if not cle:
@@ -586,6 +584,9 @@ def _produire_pour_une_campagne(org_id: Optional[int], bail_s: int) -> Optional[
         # ou après un quart d'heure, pour qu'une panne qui dure reste visible
         # sans devenir du bruit.
         cause = f"{type(e).__name__}: {e}"
+        # `org_id=None` = sondage d'un worker de plateforme : une seule entrée
+        # pour toutes les orgs, donc une cause peut en masquer une autre un
+        # quart d'heure. Assumé : le worker reçoit la sienne à chaque sondage.
         vu, quand = _CAMPAGNE_MUETTE.get(org_id, (None, 0.0))
         if cause != vu or time.monotonic() - quand > 900:
             _CAMPAGNE_MUETTE[org_id] = (cause, time.monotonic())
@@ -643,12 +644,26 @@ def _delegue(job: dict, bail_s: int, claimant: str) -> dict:
     return job
 
 
+#: Ce qu'un worker sait faire — et rien d'autre. Enfiler, lister, lire un
+#: travail sont des gestes d'organisation : ils exigent une org, et un worker
+#: n'en a pas.
+_VERBES_DU_WORKER = frozenset({"claim", "bind_run", "extend", "complete"})
+
+
 def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
-    # ⚠️ TOUTE opération porte sur la file d'une organisation, y compris les
-    # verbes du worker. Un worker nomme celle pour laquelle il sonde
-    # (`X-Oto-Org`), et son appartenance est vérifiée à chaque requête : c'est
-    # la voie applicative, sans privilège attaché à l'identité qui exécute.
-    if not ctx.org_id:
+    # Deux principaux, deux files. Un MEMBRE agit sur la file de SON org, et
+    # doit en avoir une. Un WORKER de plateforme n'en a aucune : il sonde, et
+    # c'est le backend qui choisit, parmi toutes les orgs, le travail à lui
+    # commander — il ne connaît que les verbes du bail, jamais ceux qui
+    # déclarent ou consultent une file (« tout doit être paramétrique, en base
+    # et depuis la commande du backend », 09/09/2026).
+    if ctx.platform_worker:
+        if inp.op not in _VERBES_DU_WORKER:
+            raise AuthzDenied(403, "worker_verbs_only",
+                              f"un worker de plateforme ne fait que "
+                              f"{', '.join(sorted(_VERBES_DU_WORKER))} — "
+                              f"`{inp.op}` est un geste d'organisation.")
+    elif not ctx.org_id:
         raise AuthzDenied(400, "org_required",
                           f"`{inp.op}` porte sur la file d'une organisation — "
                           "nomme-la (`X-Oto-Org` côté REST, `_org` côté MCP), "
@@ -715,7 +730,8 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
         if job is None:
             return {"job": None}
         return {"job": _avec_procedure(
-            _avec_cle(_delegue(job, bail, ctx.sub), inp.provider, ctx.sub))}
+            _avec_cle(_delegue(job, bail, ctx.sub), inp.provider, ctx.sub,
+                      worker=ctx.platform_worker))}
 
     if inp.op == "list":
         # Surveillance (page Automatisations) : lecture org-scopée, jamais un
@@ -799,12 +815,13 @@ CAPABILITIES += [
                           "`enqueue fleet_id=` désignant une flotte qui n'est pas "
                           "celle de l'org du porteur"),
         ),
-        # ⚠️ `ORG_MEMBER`, et c'est la voie APPLICATIVE : un worker nomme
-        # l'organisation pour laquelle il sonde (`X-Oto-Org`), dont
-        # l'appartenance est vérifiée à chaque requête. Aucun privilège n'est
-        # attaché à l'identité qui exécute — ce qui borne est l'appartenance,
-        # et elle se révoque sans toucher au code (arbitrage du 09/09/2026).
-        authz=ORG_MEMBER,
+        # Un WORKER de plateforme (secret de machine déclaré en base, aucun
+        # compte, aucune org) ou un MEMBRE d'org. Le worker ne nomme rien et ne
+        # déduit rien : le backend lui commande un travail complet — org, jeton
+        # délégué au nom du déclarant, clé, procédure. Trois conceptions ont
+        # précédé celle-ci en deux jours, chacune faisant PORTER ou DÉDUIRE
+        # quelque chose au worker ; c'est ce pli qui était faux (09/09/2026).
+        authz=WORKER_OR_ORG_MEMBER,
         mcp=None,   # worker-only : la plomberie d'exécution n'a pas de face agent
         rest=RestBinding(verb="POST", path="/api/me/runner/jobs"),
         description=(

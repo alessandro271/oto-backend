@@ -140,6 +140,30 @@ def ORG_MEMBER(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
     return ResolvedCtx(sub=sub, org_id=org_id, role=access.get_user_role(sub))
 
 
+def WORKER_OR_ORG_MEMBER(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
+    """Un worker de PLATEFORME — ou un membre d'org (`ORG_MEMBER`, inchangé).
+
+    Le worker est reconnu par ce que l'authentification REST a POSÉ après avoir
+    vérifié son secret de machine en base (`auth.platform_worker`), jamais par
+    une marque sur un compte ni par la forme de son `sub`. Il n'a pas d'org, et
+    `org_id=None` est ici un fait, pas un manque : c'est le backend qui choisit,
+    à chaque sondage, la campagne de n'importe quelle org à lui servir.
+
+    ⚠️ Le contexte ne peut pas être posé côté MCP (seule la face REST vérifie
+    un `otow_`) : par là, cette règle EST `ORG_MEMBER`.
+    """
+    from ..auth import platform_worker
+    w = platform_worker.current()
+    if w is not None:
+        if raw.sub != w["worker_sub"]:
+            # Deux vérités pour une requête : on ne choisit pas, on refuse.
+            raise AuthzDenied(401, "worker_identity_mismatch",
+                              "le principal authentifié n'est pas le worker posé.")
+        return ResolvedCtx(sub=w["worker_sub"], org_id=None,
+                           role="platform_worker", platform_worker=True)
+    return ORG_MEMBER(raw, inp)
+
+
 def ORG_ADMIN(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
     """Org-admin de l'org ACTIVE — écriture self-service scopée à l'org active
     (miroir écriture d'`ORG_MEMBER`). `org_id` injecté depuis l'état serveur, jamais

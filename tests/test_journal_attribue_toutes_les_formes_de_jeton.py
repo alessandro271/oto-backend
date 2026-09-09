@@ -120,6 +120,9 @@ def test_les_deux_chemins_d_authentification_PUBLIENT(monkeypatch):
               if isinstance(r.value, ast.Tuple)
               and not (isinstance(r.value.elts[0], ast.Constant)
                        and r.value.elts[0].value is None)]
-    assert len(succes) == 2, f"{len(succes)} chemins de succès — le banc doit suivre"
+    # Trois depuis le 09/09/2026 : jeton de compte `oto_`, session JWT, et le
+    # secret de MACHINE d'un worker de plateforme (`otow_`) — qui publie son
+    # `worker_sub`, pas un compte, mais publie.
+    assert len(succes) == 3, f"{len(succes)} chemins de succès — le banc doit suivre"
     src = inspect.getsource(ab._authenticate)
-    assert src.count("_publier_principal(") == 2
+    assert src.count("_publier_principal(") == 3

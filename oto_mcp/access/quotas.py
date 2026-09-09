@@ -69,11 +69,12 @@ def user_has_option(sub: str, option: str) -> bool:
     plan inclut l'option, donc il transforme une marque de compte en propriété
     d'espace, partagée par tous les membres.
 
-    ⚠️ C'est ce qui la rend indispensable pour `runner_worker` : la marque dit
-    « ce compte EST un de nos workers ». Passer par `has_option` aurait servi la
-    clé de modèle d'une org à **tous ses membres** dès qu'un don aurait été posé
-    sur l'org (ou qu'un plan l'aurait incluse) — soit exactement la fuite que la
-    garde existe pour fermer.
+    ⚠️ L'exemple qui l'a fait naître — la marque `runner_worker` sur un compte —
+    n'existe plus (09/09/2026) : un worker n'est plus un compte marqué, c'est un
+    secret de machine déclaré en base (`db.runner_workers`). La distinction
+    reste vraie pour toute autre marque d'ACTEUR : passer par `has_option`
+    la servirait à **tous les membres** de l'org dès qu'un don serait posé sur
+    l'org ou qu'un plan l'inclurait.
 
     L'échéance mord dans `has_option_comp`, comme pour toutes les autres surfaces.
     """

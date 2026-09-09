@@ -455,3 +455,46 @@ def test_une_lecture_de_procedure_qui_LEVE_ne_perd_pas_le_travail(monkeypatch, e
     job = _appel(_ctx(), op="claim")["job"]
 
     assert "system" not in job and job["id"] == 7
+
+
+# ── Le worker de PLATEFORME : aucune org, et ce n'est pas un manque ──────────
+# Ce que ces bancs ferment : un worker qui devait « nommer son org » sondait en
+# fait l'org ACTIVE du compte dont il portait le jeton — un compte personnel,
+# admin de quatorze organisations. Un worker n'a plus de compte : il
+# est un secret de machine, et `org_id=None` est le fait que la règle pose.
+
+def _worker():
+    return ResolvedCtx(sub="worker:ab12cd34", org_id=None,
+                       role="platform_worker", platform_worker=True)
+
+
+def test_un_worker_de_plateforme_sonde_SANS_org_et_le_backend_choisit(espion, monkeypatch):
+    monkeypatch.setattr(RJ, "_produire_pour_une_campagne", lambda org_id, bail: None)
+    out = _appel(_worker(), op="claim")
+    assert out == {"job": None}
+    assert espion["claim"][0] is None, (
+        "org None : c'est le backend qui choisit parmi TOUTES les orgs, pas le worker")
+    assert espion["claim"][1] == "worker:ab12cd34"
+
+
+def test_un_worker_ne_fait_que_les_verbes_du_bail(espion):
+    for op, kw in (("enqueue", {"kind": "start"}), ("list", {}), ("get", {"job_id": 1})):
+        with pytest.raises(AuthzDenied) as e:
+            _appel(_worker(), op=op, **kw)
+        assert e.value.code == "worker_verbs_only", op
+        assert "geste d'organisation" in e.value.message
+
+
+def test_un_membre_sans_org_est_TOUJOURS_refuse(espion):
+    """La voie du worker n'ouvre rien au membre : sans org, un membre reste au
+    refus d'avant, avec le même mot pour s'en sortir."""
+    with pytest.raises(AuthzDenied) as e:
+        _appel(ResolvedCtx(sub="u", org_id=None), op="claim")
+    assert e.value.code == "org_required"
+
+
+def test_les_verbes_du_bail_d_un_worker_passent_par_son_sub(espion, monkeypatch):
+    """`bind_run`/`extend`/`complete` filtrent par `claimed_by` : le worker
+    conclut ce qu'il a réservé, sans org — c'est tout ce que ces verbes exigent."""
+    monkeypatch.setattr(RJ.db, "bind_job_run", lambda j, s, r: s == "worker:ab12cd34")
+    assert _appel(_worker(), op="bind_run", job_id=3, run_id="r1") == {"ok": True}

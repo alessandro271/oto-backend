@@ -329,4 +329,15 @@ CREATE TABLE IF NOT EXISTS runner_platform_workers (
     worker_sub TEXT PRIMARY KEY,
     last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+-- 09/09/2026 : la table de présence devient la DÉCLARATION des workers. Un
+-- worker n'est pas un compte : il n'a ni ligne dans `users`, ni org, ni
+-- appartenance. Il porte un secret de machine (préfixe `otow_`, haché ici) et
+-- TOUT le reste — org, jeton délégué, clé, procédure — lui est commandé par le
+-- backend avec chaque travail. « Tout doit être paramétrique, en base et
+-- depuis la commande du backend » (arbitrage du 09/09/2026). `revoked_at` : la révocation est
+-- une date, pas une suppression — la ligne garde sa trace de présence.
+ALTER TABLE runner_platform_workers ADD COLUMN IF NOT EXISTS label TEXT;
+ALTER TABLE runner_platform_workers ADD COLUMN IF NOT EXISTS secret_hash TEXT UNIQUE;
+ALTER TABLE runner_platform_workers ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+ALTER TABLE runner_platform_workers ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ;
 """

@@ -31,7 +31,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from .. import db
-from ..auth import token_scopes
+from ..auth import platform_worker, token_scopes
 from ..tenant_migration import alias_drain_armed
 from .. import account_suspension
 
@@ -180,6 +180,26 @@ async def _authenticate(
         token = request.query_params.get("token")
     if not token:
         return None, _json_error(request, 401, "missing_bearer")
+
+    # Secret de MACHINE d'un worker de plateforme (`otow_`) : pas un compte.
+    # Aucune ligne `users`, aucune org, aucune pause à vérifier, aucun view-as —
+    # rien de ce qui s'applique à une identité. Le principal publié est son
+    # `worker_sub`, et la variable de contexte dit à la règle d'autorisation
+    # que CETTE requête est celle d'un worker. Posée à None d'abord : elle ne
+    # survit jamais d'une requête à l'autre par oubli.
+    platform_worker.set_current(None)
+    if token.startswith(db.WORKER_SECRET_PREFIX):
+        token_scopes.set_current(None)
+        if not allow_api_token:
+            return None, _json_error(
+                request, 403, "api_token_forbidden",
+                "La gestion des jetons demande une session interactive (JWT).")
+        row = await run_in_threadpool(db.verify_worker_secret, token)
+        if not row:
+            return None, _json_error(request, 401, "invalid_worker_secret")
+        platform_worker.set_current(row)
+        _publier_principal(request, row["worker_sub"], token_kind="worker")
+        return row["worker_sub"], None
 
     # API token long-lived (CLI) : préfixe `oto_` → lookup hash en DB.
     # Pas de upsert_user ici : la FK CASCADE garantit que si la row user a

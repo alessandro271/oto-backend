@@ -297,8 +297,8 @@ from oto_mcp.db import _schema, schema
 # y satisfait sans instantané. Aucune instruction SQL n'a bougé : l'assemblé grandit
 # de 634 caractères (148788 → 149422), exactement la taille des commentaires ajoutés, et
 # `test_les_tables_creees_sont_celles_qu_on_attend` le vérifie côté exécuté.
-EMPREINTE = "dc84b4e2b7842bb1cf1193fbc978840a77a7b072c369337506ad3cc3372d30c8"
-LONGUEUR = 149422
+EMPREINTE = "f298667e5c54b7cbce4cfd99c2ac181edba202f70c80c025e84b139d2396a1f7"
+LONGUEUR = 150306
 
 
 _CREATE_TABLE = re.compile(r"^CREATE TABLE IF NOT EXISTS (\w+)", re.M)

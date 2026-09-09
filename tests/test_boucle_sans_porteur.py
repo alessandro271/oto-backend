@@ -39,7 +39,8 @@ def test_un_travail_sans_porteur_est_refuse_et_la_raison_est_ecrite(_base):
 def test_il_n_emporte_ni_jeton_ni_cle(_base):
     """Les deux moyens d'agir tombent ensemble : sans user à impersonner, il n'y a
     ni identité à prêter, ni exécution à payer."""
-    job = RJ._avec_cle(RJ._delegue({"id": 8, "org_id": 42}, 600, "w"), "anthropic", "w")
+    job = RJ._avec_cle(RJ._delegue({"id": 8, "org_id": 42}, 600, "w"), "anthropic", "w",
+                       worker=True)
     assert "delegated_token" not in job and "model_key" not in job
 
 

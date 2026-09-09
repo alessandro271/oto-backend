@@ -184,6 +184,7 @@ PLANCHERS = {
     # plancher d'org ferait de la donnée personnelle d'un membre une lecture
     # ordinaire pour l'admin de son org, alors que le geste est un acte de litige.
     "oto_admin_legal_proof": "operator",
+    "oto_admin_runner_worker": "operator", # PLATFORM_ADMIN : les secrets de machine des workers
     "oto_admin_signal": "operator",
     "oto_admin_tenant": "operator",        # list/get PLATFORM, reload SUPER
     "oto_admin_unipile_seat": "super",

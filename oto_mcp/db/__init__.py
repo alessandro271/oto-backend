@@ -55,6 +55,7 @@ from . import (
     runner_jobs,
     runner_triggers,
     runner_fleets,
+    runner_workers,
     journal_calls,
     # NON aplati ci-dessous (comme `access_shadow`) : ses noms de domaine
     # (`audience`, `journal`…) sont trop communs pour la surface plate `db.*`.
@@ -74,7 +75,7 @@ _MODULES = (
     platform_instructions, visibility, emails, google, datastore, projects,
     tokens, upload_tokens, billing, billing_invoices, guides, legal, search, aux_embed,
     datastore_embed, run_thread, runner_jobs, runner_triggers, runner_fleets,
-    journal_calls,
+    runner_workers, journal_calls,
 )
 _g = globals()
 for _mod in _MODULES:
