@@ -2,7 +2,7 @@
 
 Deux choses seulement, et les deux existaient déjà dans les routes écrites à la main
 qu'elles remplacent (`api/datastore.py`) : le 404 qui dit OÙ vit un tableau, et
-la garde de gouvernance d'un namespace. Les recopier dans chaque module de capacité
+la garde de gouvernance d'un datastore. Les recopier dans chaque module de capacité
 aurait fait diverger le message d'erreur d'un chemin à l'autre — c'est exactement le
 drift que la couche capacité combat.
 
@@ -20,7 +20,7 @@ from typing import Optional
 
 from ... import ownership
 from ...datastore import hors_org
-from ...datastore.core import NamespaceNotFound, make_store
+from ...datastore.core import DatastoreNotFound, make_store
 from .._types import AuthzDenied
 
 # Phrase unique du champ de date des sorties datastore (cf. l'avertissement ci-dessus).
@@ -28,12 +28,12 @@ HORODATAGE = ("heure locale serveur, sans offset — `YYYY-MM-DD HH:MM:SS`, "
               "à ne pas parser comme de l'ISO UTC")
 
 
-def ns_not_found(sub: Optional[str], namespace: str) -> AuthzDenied:
+def ns_not_found(sub: Optional[str], datastore: str) -> AuthzDenied:
     """Le 404 qui dit OÙ vit le tableau quand il appartient à une autre org du user.
 
     L'API résout le store sur l'org ACTIVE ; viser le tableau d'une autre org demande
     l'en-tête `X-Oto-Org`, qui n'apparaissait ni dans la description des routes ni dans
-    le moindre message. Un namespace bien réel répondait donc « namespace_not_found »,
+    le moindre message. Un datastore bien réel répondait donc « datastore_not_found »,
     ce qui se lit comme « il n'existe pas » — temps perdu, et un faux diagnostic produit
     au passage (signal #316).
 
@@ -45,22 +45,22 @@ def ns_not_found(sub: Optional[str], namespace: str) -> AuthzDenied:
     """
     try:
         # La recherche est celle de la face MCP (#631) ; seul le remède diffère.
-        elsewhere = hors_org.ou_existe(sub, namespace)
+        elsewhere = hors_org.ou_existe(sub, datastore)
         if elsewhere:
             where = ", ".join(f"{nom or 'org'} (org {oid})" for oid, nom in elsewhere)
             first = elsewhere[0][0]
             return AuthzDenied(
-                404, "namespace_not_found",
-                f"« {namespace} » existe, mais dans une autre de tes organisations : "
+                404, "datastore_not_found",
+                f"« {datastore} » existe, mais dans une autre de tes organisations : "
                 f"{where}. Rejoue la requête avec l'en-tête « X-Oto-Org: {first} ».")
     # noqa: SILENT — suggestion de tableau voisin : absente plutôt que fausse
     except Exception:  # noqa: BLE001 — un indice ne doit jamais casser la réponse
         pass
-    return AuthzDenied(404, "namespace_not_found")
+    return AuthzDenied(404, "datastore_not_found")
 
 
-def govern_ns(sub: Optional[str], namespace: str) -> int:
-    """Résout le namespace par nom + vérifie le droit de GOUVERNANCE de l'acteur
+def govern_ns(sub: Optional[str], datastore: str) -> int:
+    """Résout le datastore par nom + vérifie le droit de GOUVERNANCE de l'acteur
     (owner ∪ escalade `roles.py`, ADR 0030 — jamais un simple rôle d'org).
 
     ⚠️ Le 404 est ici **nu**, sans l'indice cross-org ci-dessus : c'est le comportement
@@ -69,9 +69,9 @@ def govern_ns(sub: Optional[str], namespace: str) -> int:
     l'acteur n'a de toute façon pas le droit de faire ailleurs.
     """
     try:
-        ns_id = make_store(sub).resolve_ns_id(namespace)
-    except NamespaceNotFound:
-        raise AuthzDenied(404, "namespace_not_found")
-    if not ownership.can_govern(sub, "datastore_namespace", str(ns_id)):
+        ns_id = make_store(sub).resolve_ns_id(datastore)
+    except DatastoreNotFound:
+        raise AuthzDenied(404, "datastore_not_found")
+    if not ownership.can_govern(sub, ownership.TYPE_RESSOURCE_DATASTORE, str(ns_id)):
         raise AuthzDenied(403, "forbidden")
     return ns_id

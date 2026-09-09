@@ -2,7 +2,7 @@
 
 Mesuré en production le 29/08/2026 (#631/#638) : un `data_write` sans `_org`, fait dans
 un run ouvert sur l'org 226, a été résolu dans l'org 2 — l'org MAISON du sub — et refusé
-« namespace inconnu » sur un tableau que la réservation du même run venait de résoudre.
+« datastore inconnu » sur un tableau que la réservation du même run venait de résoudre.
 82 refus de cette famille sur sept jours, 109 sur les sept jours suivants, tous des
 `data_write` du runner. Décidé par Alexis le 30/08 : **l'org d'un appel qui porte un run
 et aucun `_org` est `runs.org_id`**, pas la maison.
@@ -117,7 +117,7 @@ def _outil(nom: str):
 def _table(org_id: int) -> tuple[str, int]:
     from oto_mcp import db
     ns = "campagne-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore_namespace("org", str(org_id), ns)
+    ns_id = db.create_datastore("org", str(org_id), ns)
     db.datastore_insert_row(ns_id, "r0", {"siren": "551110001", "statut": "a_faire"})
     return ns, ns_id
 
@@ -177,12 +177,12 @@ def _valeur(ns_id: int, row_id: str, champ: str):
 
 def test_sans_org_dans_un_run_l_appel_se_resout_dans_l_org_du_run(surface):
     """Le geste exact du 29/08 21:11:23, SANS réservation (le contournement de #638
-    ne joue pas) : `data_write(namespace=<nom>, id=<ligne>)` avec `_run_id` d'un run
+    ne joue pas) : `data_write(datastore=<nom>, id=<ligne>)` avec `_run_id` d'un run
     de l'org `travail`, par un sub dont la maison est `maison`."""
     ns, ns_id = _table(surface["travail"])
     run = _run(surface["travail"])
 
-    out = _ecrire({"namespace": ns, "id": "r0", "row": {"statut": "fait"},
+    out = _ecrire({"datastore": ns, "id": "r0", "row": {"statut": "fait"},
                    "_run_id": run})
     assert out["_id"] == "r0", out
     assert _valeur(ns_id, "r0", "statut") == "fait"
@@ -235,11 +235,11 @@ def test_l_axe_org_explicite_garde_la_priorite(surface):
     ns_travail, _ = _table(surface["travail"])
     run = _run(surface["travail"])
 
-    out = _ecrire({"namespace": ns_autre, "id": "r0", "row": {"statut": "fait"},
+    out = _ecrire({"datastore": ns_autre, "id": "r0", "row": {"statut": "fait"},
                    "_org": surface["autre"], "_run_id": run})
     assert out["_id"] == "r0" and _valeur(ns_id, "r0", "statut") == "fait"
 
-    msg = _refus({"namespace": ns_travail, "id": "r0", "row": {"statut": "fait"},
+    msg = _refus({"datastore": ns_travail, "id": "r0", "row": {"statut": "fait"},
                   "_org": surface["autre"], "_run_id": run})
     assert f"org {surface['autre']}" in msg and f"`_org={surface['travail']}`" in msg, msg
 
@@ -254,7 +254,7 @@ def test_un_sub_qui_n_est_pas_membre_de_l_org_du_run_est_refuse_nommement(orgs, 
     ns, ns_id = _table(orgs["travail"])
     run = _run(orgs["travail"])
 
-    msg = _refus({"namespace": ns, "id": "r0", "row": {"statut": "vole"},
+    msg = _refus({"datastore": ns, "id": "r0", "row": {"statut": "vole"},
                   "_run_id": run})
     assert f"org {orgs['travail']}" in msg and "membre" in msg, msg
     assert run in msg, msg
@@ -267,10 +267,10 @@ def test_hors_run_la_maison_reste_le_defaut(surface):
     ns_travail, _ = _table(surface["travail"])
     ns_maison, ns_id = _table(surface["maison"])
 
-    msg = _refus({"namespace": ns_travail, "id": "r0", "row": {"statut": "fait"}})
+    msg = _refus({"datastore": ns_travail, "id": "r0", "row": {"statut": "fait"}})
     assert f"`_org={surface['travail']}`" in msg, msg
 
-    out = _ecrire({"namespace": ns_maison, "id": "r0", "row": {"statut": "fait"}})
+    out = _ecrire({"datastore": ns_maison, "id": "r0", "row": {"statut": "fait"}})
     assert out["_id"] == "r0" and _valeur(ns_id, "r0", "statut") == "fait"
 
 
@@ -280,11 +280,11 @@ def test_un_run_inconnu_ou_sans_org_ne_pose_rien(surface):
     indice."""
     ns, _ = _table(surface["travail"])
 
-    msg = _refus({"namespace": ns, "id": "r0", "row": {"statut": "fait"},
+    msg = _refus({"datastore": ns, "id": "r0", "row": {"statut": "fait"},
                   "_run_id": uuid.uuid4().hex})
     assert f"`_org={surface['travail']}`" in msg, msg
 
-    msg = _refus({"namespace": ns, "id": "r0", "row": {"statut": "fait"},
+    msg = _refus({"datastore": ns, "id": "r0", "row": {"statut": "fait"},
                   "_run_id": _run(None)})
     assert f"`_org={surface['travail']}`" in msg, msg
 
@@ -301,8 +301,8 @@ def test_une_lecture_de_runs_par_run_pas_par_appel(surface, monkeypatch):
     vrai = db.get_run_head
     monkeypatch.setattr(db, "get_run_head", lambda r: lu.append(r) or vrai(r))
 
-    _ecrire({"namespace": ns, "id": "r0", "row": {"statut": "un"}, "_run_id": run})
-    _ecrire({"namespace": ns, "id": "r0", "row": {"statut": "deux"}, "_run_id": run})
+    _ecrire({"datastore": ns, "id": "r0", "row": {"statut": "un"}, "_run_id": run})
+    _ecrire({"datastore": ns, "id": "r0", "row": {"statut": "deux"}, "_run_id": run})
     assert _valeur(ns_id, "r0", "statut") == "deux"
     assert lu == [run], lu
 
@@ -314,7 +314,7 @@ async def test_oto_call_dispatche_aussi_dans_l_org_du_run(surface, monkeypatch):
     """`oto_call` rejoue les axes HORS middleware (ADR 0036) : un outil de connecteur
     dispatché avec `_run_id` dans `arguments` et sans `_org` se résout, lui aussi, dans
     l'org du run — sinon l'échappatoire aurait gardé l'ancien défaut. (`data_*` n'est
-    pas dispatchable par `oto_call` : la sonde porte le namespace d'un connecteur.)"""
+    pas dispatchable par `oto_call` : la sonde porte le datastore d'un connecteur.)"""
     from fastmcp import Client, FastMCP
 
     from oto_mcp import access

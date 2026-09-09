@@ -122,7 +122,7 @@ def key_indexes(*, dry_run: bool = False) -> dict:
     l'applicatif historique tant que son index n'est pas posé.
     """
     from .db import datastore as ds
-    targets = ds.datastore_namespaces_with_key()
+    targets = ds.datastores_with_key()
     manquants = [ns for ns in targets if not ds.datastore_has_key_index(ns["id"])]
     if dry_run:
         return {"namespaces": len(targets), "missing": len(manquants)}
@@ -161,7 +161,7 @@ def key_index_rebuild(*, dry_run: bool = False) -> dict:
     from .db import _init
     if dry_run:
         from .db import datastore as ds
-        return {"namespaces": len(ds.datastore_namespaces_with_key()),
+        return {"namespaces": len(ds.datastores_with_key()),
                 "note": "aucun index reconstruit (dry-run) — cf. oto-backend#421"}
     return {"rebuilt": _init.migrate_business_key_indexes()}
 

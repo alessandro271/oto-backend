@@ -7,7 +7,7 @@
     POST /api/resources {"op":"list","resource_type":"procedure"}
     → HTTP 400 {"error":"unsupported_resource_type",
                 "detail":"type `procedure` non supporté
-                          (['datastore_namespace','project','doctrine'])."}
+                          (['datastore','project','doctrine'])."}
 
 Deux réponses pour une même saisie fautive, et c'est la mauvaise qui sort sur les op
 qui comptent. Le mécanisme : `RESOURCE_GOVERN` s'exécute AVANT le handler, appelle

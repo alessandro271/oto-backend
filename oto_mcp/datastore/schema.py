@@ -1,6 +1,6 @@
 """Datastore v2 — schéma structuré : validation d'écriture + cycle de vie (ADR 0046).
 
-Module PUR (aucun I/O) : le schéma d'un namespace (colonne `user_datastores.schema`)
+Module PUR (aucun I/O) : le schéma d'un datastore (colonne `user_datastores.schema`)
 s'étend au-delà du rendu (0016) avec quatre couches OPT-IN :
 
 - **types imbriqués** : `type: "object"` (+ `fields: [...]`) et `type: "list"`

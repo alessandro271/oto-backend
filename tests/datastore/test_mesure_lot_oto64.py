@@ -84,7 +84,7 @@ def _table():
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
     ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore_namespace("user", "sub-lot", ns)
+    db.create_datastore("user", "sub-lot", ns)
     st = make_store("sub-lot")
     st.set_schema(ns, SCHEMA)
     return st, ns
@@ -175,7 +175,7 @@ def test_la_SORTIE_d_un_etat_terminal_est_DEJA_declarable(live):
     from oto_mcp.datastore.core import make_store
 
     ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore_namespace("user", "sub-lot", ns)
+    db.create_datastore("user", "sub-lot", ns)
     st = make_store("sub-lot")
     st.set_schema(ns, {"key": "ref", "fields": [
         {"key": "ref", "type": "text"},
@@ -212,7 +212,7 @@ def test_declarer_UNE_transition_laisse_les_AUTRES_en_place(live):
     from oto_mcp.datastore.core import make_store
 
     ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore_namespace("user", "sub-lot", ns)
+    db.create_datastore("user", "sub-lot", ns)
     st = make_store("sub-lot")
     st.set_schema(ns, SCHEMA)
 
@@ -241,7 +241,7 @@ def test_RETIRER_une_transition_est_explicite(live):
     from oto_mcp.datastore.core import make_store
 
     ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore_namespace("user", "sub-lot", ns)
+    db.create_datastore("user", "sub-lot", ns)
     st = make_store("sub-lot")
     st.set_schema(ns, SCHEMA)
 

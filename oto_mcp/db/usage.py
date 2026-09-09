@@ -1637,7 +1637,7 @@ def datastore_row_activity(row_id: str, key_value: Optional[str] = None,
         return [_ds_activity_entry(dict(r)) for r in rows]
 
 
-def datastore_namespace_activity(ns_id: int, namespace: Optional[str] = None,
+def datastore_activity(ns_id: int, namespace: Optional[str] = None,
                                  *, owner_type: Optional[str] = None,
                                  owner_id: Optional[str] = None,
                                  limit: int = 50) -> list[dict]:
@@ -1672,7 +1672,19 @@ def datastore_namespace_activity(ns_id: int, namespace: Optional[str] = None,
     name_bound = _owner_clause(owner_type, owner_id)
     if name_bound:
         sql, bound = name_bound
-        match.append(f"(l.args->>'namespace' = ANY(%s) AND {sql})")
+        # ⚠️ **Les DEUX noms, et ce n'est pas de la complaisance : c'est du STOCKAGE.**
+        # `tool_calls.args` garde les arguments tels qu'ils ont été reçus. Au 08/09/2026,
+        # 149 379 appels y portent la clé `namespace` et zéro `datastore` — l'ancien nom
+        # du paramètre. Après le renommage, les nouveaux appels écriront `datastore` et
+        # les anciens garderont `namespace` : chercher un seul des deux rend un journal
+        # amputé de la moitié de l'histoire, sans erreur ni trace. Le mode d'échec est
+        # un ensemble vide, et un journal vide se lit « rien ne s'est passé » — c'est
+        # exactement le symptôme qu'on cherchait à corriger sur cette route.
+        # Cette ligne n'a pas de date de péremption : elle en aura une le jour où la
+        # rétention aura effacé le dernier appel écrit sous l'ancien nom.
+        match.append(
+            f"(COALESCE(l.args->>'datastore', l.args->>'namespace') = ANY(%s) "
+            f"AND {sql})")
         params += [names, bound]
     params.append(limit)
     with _connect() as conn:

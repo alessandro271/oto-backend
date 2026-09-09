@@ -5,19 +5,19 @@ Deux défauts fermés ensemble, parce qu'ils vivent dans la même clé.
 **1. Rien ne donnait le numéro à l'agent.** Le tableau s'adresse indifféremment par
 son nom ou par son numéro — `db.resolve_datastore_ns` accepte les deux, avec le
 MÊME prédicat de visibilité — mais aucune remise ne rendait le numéro : un agent qui
-ne l'avait pas lu dans `data_list_namespaces` ne pouvait pas l'employer. Le nom part
+ne l'avait pas lu dans `data_list_datastores` ne pouvait pas l'employer. Le nom part
 en retrait ; l'usage ne bascule que si le numéro arrive DANS la réponse, au moment où
-l'agent en a besoin. D'où `ns_id`, servi à côté de `namespace`.
+l'agent en a besoin. D'où `ns_id`, servi à côté de `datastore`.
 
-**2. `namespace` était un ÉCHO, pas une identité.** La réponse répétait la chaîne
+**2. `datastore` était un ÉCHO, pas une identité.** La réponse répétait la chaîne
 reçue : adresser par nom rendait le nom, adresser par numéro rendait `"600"`. Elle
 répondait donc à la question posée au lieu de dire quel tableau a été touché — et deux
 appelants sur le même tableau lisaient deux valeurs différentes sans que rien ne le
-dise. Ici, `namespace` est le nom canonique lu dans `user_datastores`, quelle que soit
+dise. Ici, `datastore` est le nom canonique lu dans `user_datastores`, quelle que soit
 la forme de l'adresse.
 
 ⚠️ **Changement de comportement assumé, et le seul** : un appelant qui adressait par
-numéro (ou par `slot:<nom>`) et relisait `namespace` pour se vérifier reçoit désormais
+numéro (ou par `slot:<nom>`) et relisait `datastore` pour se vérifier reçoit désormais
 le nom du tableau, pas sa propre chaîne. C'est ce que la clé prétendait dire.
 
 Le nom de clé `ns_id` n'est pas neuf : c'est déjà celui de la résolution
@@ -40,38 +40,38 @@ CLE = "ns_id"
 # La phrase servie AVEC la clé, au contrat comme aux descriptions d'outils : une clé
 # neuve dont personne ne dit à quoi elle sert reste une clé que personne n'emploie.
 DESCRIPTION = (
-    "The table's NUMBER — the form to pass as `namespace` from here on. A name still "
+    "The table's NUMBER — the form to pass as `datastore` from here on. A name still "
     "resolves (same visibility check, no retirement date set), it is being retired, "
     "not broken. `null` only when no table was resolved.")
 
 
 def identite(ns_id: Any = None, nom: Optional[str] = None, *,
              adresse: str = "") -> dict:
-    """`{"namespace": <nom canonique>, "ns_id": <numéro>}` à fusionner dans une réponse.
+    """`{"datastore": <nom canonique>, "ns_id": <numéro>}` à fusionner dans une réponse.
 
     `adresse` = la chaîne que l'appelant a passée, gardée en DERNIER recours : un
     chemin qui a échoué avant de relever quoi que ce soit rend alors ce qu'il rendait
     avant, plutôt qu'un `null` à la place d'un nom. `ns_id` vaut `None` dans ce seul
     cas — sa présence est donc la preuve que le tableau a bien été résolu.
     """
-    return {"namespace": nom or adresse,
+    return {"datastore": nom or adresse,
             CLE: int(ns_id) if ns_id is not None else None}
 
 
 def de_releve(releve: Optional[Mapping], adresse: str = "") -> dict:
-    """La même, depuis un relevé `{ns_id, namespace}` — `DatastorePg.dernier_tableau`
+    """La même, depuis un relevé `{ns_id, datastore}` — `DatastorePg.dernier_tableau`
     ou le `trace` d'une mutation, qui portent tous deux ces deux clés."""
     releve = releve or {}
-    return identite(releve.get("ns_id"), releve.get("namespace"), adresse=adresse)
+    return identite(releve.get("ns_id"), releve.get("datastore"), adresse=adresse)
 
 
 def numero(releve: Optional[Mapping]) -> dict:
     """Le NUMÉRO seul : `{"ns_id": …}`, sans le nom.
 
     Pour les remises dont le corps EST la ligne (`data_write`, `POST …/rows`) : elles
-    ne servaient aucun `namespace`, il n'y a donc pas d'écho à corriger — et y poser
-    une clé `namespace` à côté des colonnes de l'utilisateur mettrait un mot très
-    plausible en collision avec une vraie colonne. `ns_id` s'ajoute, `namespace` non.
+    ne servaient aucun `datastore`, il n'y a donc pas d'écho à corriger — et y poser
+    une clé `datastore` à côté des colonnes de l'utilisateur mettrait un mot très
+    plausible en collision avec une vraie colonne. `ns_id` s'ajoute, `datastore` non.
     """
     return {CLE: identite((releve or {}).get("ns_id"))[CLE]}
 
@@ -106,7 +106,7 @@ def _texte_de_l_adresse(v: Any) -> Any:
     manipule. Le reste passe intact, y compris ce qui est fautif — refuser proprement
     est le travail du validateur, pas celui d'une coercition silencieuse.
 
-    ⚠️ `bool` est un `int` en Python : `data_write(namespace=True)` deviendrait le
+    ⚠️ `bool` est un `int` en Python : `data_write(datastore=True)` deviendrait le
     tableau « True ». On le laisse donc au validateur, qui le refusera."""
     if isinstance(v, bool):
         return v
@@ -132,14 +132,14 @@ def _texte_de_l_adresse(v: Any) -> Any:
 # ⚠️ **DEUX types, parce qu'il y a DEUX fils, et ils ne portent pas les mêmes formes.**
 #
 # Le fil MCP porte du JSON : un nombre y est un nombre, et annoncer l'alternative est
-# exact. **Un chemin d'URL, lui, ne porte que du texte** — `/namespaces/609/schema` est
+# exact. **Un chemin d'URL, lui, ne porte que du texte** — `/datastores/609/schema` est
 # une chaîne de caractères, il n'existe aucun entier à y mettre. Y publier une
 # alternative n'est pas seulement inutile : c'est FAUX.
 #
 # ⚠️ Et ce n'était pas une subtilité théorique — c'est ce qui a cassé la préproduction
 # le 08/09/2026. Le descriptif REST dérive le type d'un paramètre de chemin du champ
 # correspondant : une alternative n'a pas de clé `type`, donc six routes du datastore
-# ont vu leur paramètre `namespace` passer de « chaîne » à « rien » dans le contrat
+# ont vu leur paramètre `datastore` passer de « chaîne » à « rien » dans le contrat
 # servi. La garde du front l'a arrêté avant toute mise en production, et un pair a
 # annulé son propre déploiement plutôt que de passer outre sur mon commit.
 #

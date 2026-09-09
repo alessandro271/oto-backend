@@ -7,7 +7,7 @@ PLACÉS — et parmi eux, ceux que rien ne refuse.
 - `_run_id` posé comme colonne : accepté, le jeton du run gravé dans la fiche d'un
   client. Aucun refus, aucune trace, une donnée fausse livrée.
 - `slot:<nom>` sur une opération de LIGNE côté capacité : passé brut au stockage, qui
-  répond « namespace inconnu » — alors que les opérations de SCHÉMA, à côté, le
+  répond « datastore inconnu » — alors que les opérations de SCHÉMA, à côté, le
   résolvent depuis toujours.
 
 Et la garde qu'il ne faut pas construire : une chaîne qui commence par `slot:` DANS UNE
@@ -57,7 +57,7 @@ def test_la_reconnaissance_d_un_jeton_est_exacte(valeur, attendu):
 # ── Trois issues, et jamais une quatrième ────────────────────────────────────
 
 def test_accepte_le_jeton_que_le_champ_accepte():
-    for champ, valeur in [("namespace", "slot:vivier"), ("fields", "*")]:
+    for champ, valeur in [("datastore", "slot:vivier"), ("fields", "*")]:
         jetons.verifier_adresse(champ, valeur)  # ne lève pas
 
 
@@ -65,13 +65,13 @@ def test_refuse_un_jeton_RECONNU_mais_mal_place_en_NOMMANT_le_champ():
     with pytest.raises(jetons.JetonMalPlace) as e:
         jetons.verifier_adresse("id", "slot:vivier")
     msg = str(e.value)
-    assert "`namespace`" in msg, "le refus doit nommer OÙ le jeton s'écrit"
+    assert "`datastore`" in msg, "le refus doit nommer OÙ le jeton s'écrit"
     assert "slot:" in msg
 
 
 def test_refuse_l_etoile_hors_de_fields_en_nommant_fields():
     with pytest.raises(jetons.JetonMalPlace) as e:
-        jetons.verifier_adresse("namespace", "*")
+        jetons.verifier_adresse("datastore", "*")
     assert "`fields`" in str(e.value)
 
 
@@ -79,7 +79,7 @@ def test_un_jeton_INCONNU_passe_sans_rien_dire():
     """La troisième issue — celle qui empêche la couture de devenir une grammaire."""
     for valeur in ("copie-eval-palier100", "@claim", "slots:x", "", "01a04aef-26c0"):
         jetons.verifier_adresse("id", valeur)
-        jetons.verifier_adresse("namespace", valeur)
+        jetons.verifier_adresse("datastore", valeur)
 
 
 # ── Le contenu : seulement ce qui n'a AUCUN sens comme donnée ────────────────
@@ -122,7 +122,7 @@ def test_une_ligne_ordinaire_passe():
 
 # ── Le jeton RETIRÉ : ce que reçoit celui qui l'écrit encore ─────────────────
 
-@pytest.mark.parametrize("champ", ["namespace", "id", "fields", "filter"])
+@pytest.mark.parametrize("champ", ["datastore", "id", "fields", "filter"])
 def test_le_pronom_retire_est_refuse_dans_TOUS_les_champs_d_adresse(champ):
     with pytest.raises(jetons.JetonRetire):
         jetons.verifier_adresse(champ, "@claimed")
@@ -152,8 +152,8 @@ def test_le_refus_nomme_le_champ_OU_le_pronom_a_ete_pose():
     """Les agents l'ont écrit dans les deux : le refus doit se reconnaître dans l'appel
     qu'ils viennent de faire, pas décrire un cas général."""
     with pytest.raises(jetons.JetonRetire) as e:
-        jetons.verifier_adresse("namespace", "@claimed")
-    assert "dans `namespace`" in str(e.value)
+        jetons.verifier_adresse("datastore", "@claimed")
+    assert "dans `datastore`" in str(e.value)
 
 
 def test_un_jeton_retire_est_une_famille_de_refus_deja_traduite_par_les_deux_faces():
@@ -192,7 +192,7 @@ class _StoreMuet:
     """Un store qui note ce qu'on lui demande — il ne doit RIEN recevoir."""
     # Relevé de résolution du store (`DatastorePg.dernier_tableau`) : les
     # remises y prennent l'IDENTITÉ du tableau — nom canonique + `ns_id`.
-    dernier_tableau = {"ns_id": 174, "namespace": "vivier"}
+    dernier_tableau = {"ns_id": 174, "datastore": "vivier"}
 
     def __init__(self):
         self.vu = []
@@ -222,19 +222,19 @@ def _refus(outil, **kw):
     return str(e.value)
 
 
-def test_MCP_un_slot_pose_dans_id_est_refuse_en_nommant_namespace(monkeypatch):
+def test_MCP_un_slot_pose_dans_id_est_refuse_en_nommant_datastore(monkeypatch):
     """Avant : `slot:vivier` partait comme identifiant de ligne et revenait
     « row introuvable » — un refus qui désigne une cause fausse."""
     outil, st = _monte(monkeypatch, "data_write")
-    msg = _refus(outil, namespace="vivier", id="slot:vivier", row={"a": 1})
-    assert "`namespace`" in msg and "slot:" in msg
+    msg = _refus(outil, datastore="vivier", id="slot:vivier", row={"a": 1})
+    assert "`datastore`" in msg and "slot:" in msg
     assert st.vu == [], "rien ne doit atteindre le stockage"
 
 
 @pytest.mark.parametrize("adresse", [
-    {"namespace": "@claimed", "id": "@claimed"},
-    {"namespace": "@claimed"},
-    {"namespace": "copie-eval-palier100", "id": "@claimed"},
+    {"datastore": "@claimed", "id": "@claimed"},
+    {"datastore": "@claimed"},
+    {"datastore": "copie-eval-palier100", "id": "@claimed"},
 ])
 def test_MCP_le_pronom_retire_est_refuse_en_NOMMANT_la_conduite(monkeypatch, adresse):
     """Les trois formes que les agents ont réellement écrites, sur le verbe qui les a
@@ -250,7 +250,7 @@ def test_MCP_le_pronom_retire_est_refuse_a_la_LECTURE_aussi(monkeypatch):
     """L'agent qui l'a appris comme « la réservation est l'adresse » l'employait partout
     où il donnait une adresse, y compris pour lire. Le refus doit être le MÊME."""
     outil, st = _monte(monkeypatch, "data_rows")
-    msg = _refus(outil, namespace="@claimed")
+    msg = _refus(outil, datastore="@claimed")
     assert "RETIRÉ" in msg and "data_claim_next" in msg
     assert st.vu == []
 
@@ -258,7 +258,7 @@ def test_MCP_le_pronom_retire_est_refuse_a_la_LECTURE_aussi(monkeypatch):
 def test_MCP_un_parametre_d_appel_pose_en_colonne_est_refuse(monkeypatch):
     """Avant : `_run_id` s'écrivait comme une colonne, sans un mot."""
     outil, st = _monte(monkeypatch, "data_write")
-    msg = _refus(outil, namespace="vivier", row={"siren": "1", "_run_id": "abc"})
+    msg = _refus(outil, datastore="vivier", row={"siren": "1", "_run_id": "abc"})
     assert "`_run_id`" in msg and "PARAMÈTRE" in msg
     assert st.vu == []
 
@@ -267,7 +267,7 @@ def test_MCP_une_valeur_qui_RESSEMBLE_a_un_slot_passe(monkeypatch):
     """La couture ne doit pas casser une écriture juste pour se protéger d'un texte."""
     outil, st = _monte(monkeypatch, "data_write")
     import asyncio
-    asyncio.run(outil.run({"namespace": "vivier",
+    asyncio.run(outil.run({"datastore": "vivier",
                            "row": {"note": "slot: machine à café"}}))
     assert st.vu, "l'écriture doit atteindre le stockage"
 
@@ -281,25 +281,25 @@ class _StoreLigne:
     """Un store qui rend une ligne — de quoi éprouver une PROJECTION."""
     # Relevé de résolution du store (`DatastorePg.dernier_tableau`) : les
     # remises y prennent l'IDENTITÉ du tableau — nom canonique + `ns_id`.
-    dernier_tableau = {"ns_id": 174, "namespace": "vivier"}
+    dernier_tableau = {"ns_id": 174, "datastore": "vivier"}
 
     ligne = {"_id": "r1", "siren": "1", "raison_sociale": "ACME"}
 
     def __init__(self):
         self.vu = {}
 
-    def get_row(self, namespace, row_id, *, layers="flat", versions=None):
-        self.vu["get"] = (namespace, row_id)
+    def get_row(self, datastore, row_id, *, layers="flat", versions=None):
+        self.vu["get"] = (datastore, row_id)
         return self.ligne
 
-    def cursor_rows(self, namespace, **kw):
-        self.vu["cursor"] = (namespace, kw)
+    def cursor_rows(self, datastore, **kw):
+        self.vu["cursor"] = (datastore, kw)
         return {"rows": [self.ligne], "next_cursor": None}
 
-    def declared_key(self, namespace):
+    def declared_key(self, datastore):
         return None
 
-    def get_schema(self, namespace):
+    def get_schema(self, datastore):
         return {"columns": {"siren": {"type": "text"}}}
 
     def off_schema_report(self):
@@ -331,13 +331,13 @@ def test_etoile_dans_fields_rend_la_ligne_ENTIERE(rows_outil):
     `data_rows` il tombait dans « colonne inconnue » : l'agent croyait demander tout
     et recevait une projection sur une colonne qui n'existe pas — donc `_id` seul."""
     outil, st = rows_outil
-    out = _rendu(_appel(outil, namespace="ns", id="r1", fields=["*"]))
+    out = _rendu(_appel(outil, datastore="ns", id="r1", fields=["*"]))
     assert out == st.ligne, "aucune projection : la ligne entière"
 
 
 def test_etoile_ne_declenche_PAS_l_avertissement_de_colonne_inconnue(rows_outil):
     outil, st = rows_outil
-    out = _rendu(_appel(outil, namespace="ns", fields=["*"]))
+    out = _rendu(_appel(outil, datastore="ns", fields=["*"]))
     assert "inconnue" not in str(out.get("warning", "")).lower()
     assert out["rows"] == [st.ligne], "et la ligne rendue reste ENTIÈRE"
 
@@ -356,7 +356,7 @@ def _rest():
 class _StoreREST:
     # Relevé de résolution du store (`DatastorePg.dernier_tableau`) : les
     # remises y prennent l'IDENTITÉ du tableau — nom canonique + `ns_id`.
-    dernier_tableau = {"ns_id": 174, "namespace": 'vivier'}
+    dernier_tableau = {"ns_id": 174, "datastore": 'vivier'}
 
     def __init__(self):
         self.vu = []
@@ -385,7 +385,7 @@ def rest(monkeypatch):
     H.stub_authz(monkeypatch)
     monkeypatch.setattr(dsr, "make_store", lambda sub: st)
     monkeypatch.setattr(dsr.datastore_journal, "record", lambda *a, **k: None)
-    monkeypatch.setattr(dsr.access, "resolve_namespace_ref",
+    monkeypatch.setattr(dsr.access, "resolve_datastore_ref",
                         lambda ns: "vivier-2026" if ns.startswith("slot:") else ns)
     return H, st
 
@@ -393,9 +393,9 @@ def rest(monkeypatch):
 def test_REST_un_slot_est_RÉSOLU_comme_sur_les_operations_de_schema(rest):
     """⚠️ La divergence silencieuse de l'inventaire : les opérations de SCHÉMA de cette
     même couche résolvaient `slot:` depuis toujours, celles de LIGNES le passaient brut
-    au stockage — qui répondait « namespace inconnu » sur un jeton parfaitement valide."""
+    au stockage — qui répondait « datastore inconnu » sur un jeton parfaitement valide."""
     H, st = rest
-    H.call("me.datastore.append_row", path_params={"namespace": "slot:vivier"},
+    H.call("me.datastore.append_row", path_params={"datastore": "slot:vivier"},
            body={"a": 1})
     assert st.vu and st.vu[0][1] == "vivier-2026"
 
@@ -405,7 +405,7 @@ def test_REST_le_pronom_retire_rend_400_avec_la_MEME_conduite_que_la_face_agent(
     le retrait vaut des deux côtés, et le refus y porte le même geste."""
     H, st = rest
     status, corps = H.call("me.datastore.update_row",
-                           path_params={"namespace": "@claimed", "row_id": "r1"},
+                           path_params={"datastore": "@claimed", "row_id": "r1"},
                            body={"statut": "enrichi"})
     assert (status, corps["error"]) == (400, "jeton_mal_place")
     assert "RETIRÉ" in corps["detail"] and "data_claim_next" in corps["detail"]
@@ -415,7 +415,7 @@ def test_REST_le_pronom_retire_rend_400_avec_la_MEME_conduite_que_la_face_agent(
 def test_REST_le_pronom_retire_dans_le_row_id_est_refuse_aussi(rest):
     H, st = rest
     status, corps = H.call("me.datastore.update_row",
-                           path_params={"namespace": "vivier", "row_id": "@claimed"},
+                           path_params={"datastore": "vivier", "row_id": "@claimed"},
                            body={"statut": "enrichi"})
     assert (status, corps["error"]) == (400, "jeton_mal_place")
     assert "`_id`" in corps["detail"]
@@ -427,7 +427,7 @@ def test_REST_le_pronom_dans_le_CORPS_n_est_plus_qu_une_donnee(rest):
     une valeur de ligne."""
     H, st = rest
     status, _ = H.call("me.datastore.update_row",
-                       path_params={"namespace": "vivier", "row_id": "r1"},
+                       path_params={"datastore": "vivier", "row_id": "r1"},
                        body={"statut": "@claimed"})
     assert status == 200, "une valeur textuelle ne se juge pas sur une syntaxe morte"
     assert st.vu, "l'écriture doit atteindre le stockage"
@@ -436,7 +436,7 @@ def test_REST_le_pronom_dans_le_CORPS_n_est_plus_qu_une_donnee(rest):
 def test_REST_un_parametre_d_appel_en_colonne_est_refuse(rest):
     H, st = rest
     status, corps = H.call("me.datastore.append_row",
-                           path_params={"namespace": "vivier"},
+                           path_params={"datastore": "vivier"},
                            body={"siren": "1", "_run_id": "abc"})
     assert (status, corps["error"]) == (400, "jeton_mal_place")
     assert st.vu == []
@@ -444,6 +444,6 @@ def test_REST_un_parametre_d_appel_en_colonne_est_refuse(rest):
 
 def test_REST_une_valeur_qui_ressemble_a_un_slot_passe(rest):
     H, st = rest
-    H.call("me.datastore.append_row", path_params={"namespace": "vivier"},
+    H.call("me.datastore.append_row", path_params={"datastore": "vivier"},
            body={"note": "slot: machine à café"})
     assert st.vu, "une donnée légitime ne doit pas être refusée"

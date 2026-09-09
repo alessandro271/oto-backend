@@ -85,8 +85,8 @@ def test_il_se_combine_avec_des_tableaux(_porte):
     L'un n'annule pas l'autre."""
     p = ts.parse({"runner": True, "namespaces": {"edition-vivier": "read"}})
     assert ts.authorize(p, "POST", "/api/me/runner/jobs") is True
-    assert ts.authorize(p, "GET", "/api/datastore/namespaces/edition-vivier/rows") is True
-    assert ts.authorize(p, "GET", "/api/datastore/namespaces/autre/rows") is False
+    assert ts.authorize(p, "GET", "/api/datastores/edition-vivier/rows") is True
+    assert ts.authorize(p, "GET", "/api/datastores/autre/rows") is False
     assert ts.authorize(p, "GET", "/api/admin/users") is False
 
 

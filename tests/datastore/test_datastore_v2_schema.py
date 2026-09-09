@@ -124,9 +124,28 @@ def test_max_length_alone_activates_validation():
 
 # ── validation de row ─────────────────────────────────────────────────────────
 
-def test_soft_schema_validates_nothing():
+def test_soft_schema_ne_valide_plus_RIEN_le_type_declare_s_arme_seul():
+    """⚠️ Ce banc s'appelait `test_soft_schema_validates_nothing` et il disait vrai
+    jusqu'au 08/09/2026 : sans `strict` ni requis, la validation d'écriture était
+    entièrement inerte, `type` compris.
+
+    Ce n'est plus le cas, et le motif est mesuré. Sur le parc entier : 88 tableaux
+    avaient la validation active et portaient ZÉRO valeur trahissant son type ; 248 ne
+    l'avaient pas et en portaient 118. La règle était juste partout où elle tournait —
+    elle ne tournait simplement pas là où on en avait besoin. Un `type` déclaré s'arme
+    donc lui-même, comme `required_layers` et le cycle de vie avant lui.
+
+    **Ce qui reste souple le reste** : `required`, `options`, les bornes. Le schéma
+    ci-dessous ne devient pas strict — il fait seulement respecter ce qu'il déclare.
+    """
     schema = {"fields": [{"key": "mwh", "type": "number"}]}  # 0016 : soft
-    assert dsv2.validate_row(schema, {"mwh": "pas-un-nombre"}) == []
+    assert dsv2.validate_row(schema, {"mwh": "pas-un-nombre"}) != []
+    assert dsv2.validate_row(schema, {"mwh": "42"}) == []
+    # la souplesse d'un schéma sans `strict` : une colonne INCONNUE passe toujours,
+    # et des `options` déclarées ne contraignent toujours pas.
+    assert dsv2.validate_row(schema, {"inconnue": "x"}) == []
+    libre = {"fields": [{"key": "s", "type": "enum", "options": ["a"]}]}
+    assert dsv2.validate_row(libre, {"s": "hors-liste"}) == []
 
 
 def test_required_missing():

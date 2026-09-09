@@ -144,8 +144,8 @@ def _resource_name(resource_type: str, rid: str) -> Optional[str]:
             r = db.get_project_by_id(int(rid))
             return r.get("name") if r else None
         if resource_type == "datastore_namespace":
-            r = db.get_datastore_namespace_by_id(int(rid))
-            return r.get("namespace") if r else None
+            r = db.get_datastore_by_id(int(rid))
+            return r.get("datastore") if r else None
         if resource_type == "doctrine":
             r = org_store.get_instruction_by_id(int(rid))
             return (r.get("title") or r.get("slug")) if r else None
@@ -202,7 +202,7 @@ def _enrich_datastore(row: dict) -> dict:
     return {
         "resource_type": "datastore_namespace",
         "resource_id": str(ns_id),
-        "namespace": row["namespace"],
+        "datastore": row["datastore"],
         "owner_type": row.get("owner_type"),
         "owner_id": row.get("owner_id"),
         "owner_label": _owner_label(row.get("owner_type"), row.get("owner_id")),
@@ -249,9 +249,9 @@ def _enrich_guide(row: dict) -> dict:
 # le monkeypatch de db.X est vu).
 _OPS: dict[str, dict] = {
     "datastore_namespace": {
-        "list_all": lambda: db.list_all_datastore_namespaces(),
-        "list_for_owners": lambda owners: db.list_datastore_namespaces_for_owners(owners),
-        "get_by_id": lambda i: db.get_datastore_namespace_by_id(i),
+        "list_all": lambda: db.list_all_datastores(),
+        "list_for_owners": lambda owners: db.list_datastores_for_owners(owners),
+        "get_by_id": lambda i: db.get_datastore_by_id(i),
         "enrich": _enrich_datastore,
     },
     "project": {

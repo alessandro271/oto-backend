@@ -107,7 +107,7 @@ def store(monkeypatch):
     st = DatastorePg("u", acting_org=35)
     monkeypatch.setattr(st, "_resolve", lambda ns, write=False: 7)
     posed = {}
-    monkeypatch.setattr(dsm.db, "get_datastore_namespace_by_id",
+    monkeypatch.setattr(dsm.db, "get_datastore_by_id",
                         lambda ns_id: {"id": ns_id, "schema": CURRENT})
     # `set_schema` est réutilisé tel quel : on stubbe ce qu'IL appelle, pas lui —
     # c'est ainsi que le patch hérite de ses gardes et de ses avertissements.
@@ -178,16 +178,16 @@ class _RestStore:
         self.current = current
         self.calls: list = []
 
-    def patch_schema(self, namespace, *, fields=None, remove=None, remove_attrs=None,
+    def patch_schema(self, datastore, *, fields=None, remove=None, remove_attrs=None,
                      strict=None, key=None,
                      key_required=None, unknown_fields=None):
-        self.calls.append((namespace, fields, remove, strict, key, key_required,
+        self.calls.append((datastore, fields, remove, strict, key, key_required,
                            unknown_fields))
         merged, added, updated = dsv2.merge_fields(
             [f for f in self.current.get("fields") or [] if isinstance(f, dict)],
             fields or [])
         merged, _ = dsv2.remove_field_attrs(merged, remove_attrs or {})
-        return {"namespace": namespace, "schema": {**self.current, "fields": merged},
+        return {"datastore": datastore, "schema": {**self.current, "fields": merged},
                "added": added, "updated": updated, "removed": list(remove or [])}
 
 
@@ -203,7 +203,7 @@ def test_rest_patch_turns_a_text_column_into_a_select(monkeypatch):
     monkeypatch.setattr(dcc, "make_store", lambda sub: store)
     status, corps = call(
         "me.datastore.patch_schema",
-        path_params={"namespace": "vivier"},
+        path_params={"datastore": "vivier"},
         body={"fields": [{"key": "statut", "type": "enum",
                           "options": ["ouvert", "gagné", "perdu"]}]},
     )
@@ -212,7 +212,7 @@ def test_rest_patch_turns_a_text_column_into_a_select(monkeypatch):
     f = next(x for x in corps["schema"]["fields"] if x["key"] == "statut")
     assert f["type"] == "enum" and f["options"] == ["ouvert", "gagné", "perdu"]
     # le path param NOMME le tableau — jamais le corps (voir call() ci-dessus,
-    # qui ne poste pas `namespace`) : le champ ne s'y confond pas avec la clé
+    # qui ne poste pas `datastore`) : le champ ne s'y confond pas avec la clé
     # métier `key` de `PatchSchemaInput`, prise ici pour ce qu'elle est.
     assert store.calls[0][0] == "vivier"
 
@@ -224,7 +224,7 @@ def test_rest_patch_refuses_an_unknown_field_rather_than_dropping_it(monkeypatch
     monkeypatch.setattr(dcc, "make_store", lambda sub: store)
     status, corps = call(
         "me.datastore.patch_schema",
-        path_params={"namespace": "vivier"},
+        path_params={"datastore": "vivier"},
         body={"type": "enum"},  # forme fautive : `type` n'est pas un champ d'Input
     )
     assert status == 400

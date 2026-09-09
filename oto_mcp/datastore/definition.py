@@ -259,25 +259,23 @@ def _validate_reserved_def(f: dict, fpath: str, errors: list[str], *,
             f"{fpath}: readonly doit être true ou false (reçu {ro!r}) — `true` = "
             f"colonne du fichier source, dont la valeur ne change pas par une "
             f"écriture (ses couches `comment`/`link` restent ouvertes)")
-    if so is not None and so != SYSTEM_ORIGIN:
-        errors.append(
-            f"{fpath}: origine — la seule valeur est \"{SYSTEM_ORIGIN}\" (la couche "
-            f"`{f.get('key')}.origine` est alors posée par la plateforme, à partir de "
-            f"la valeur en place) ; reçu {so!r}. Une origine écrite par l'agent ne se "
-            f"déclare pas : c'est le défaut de départ")
-    elif so == SYSTEM_ORIGIN and (ftype in COMPOSITE_TYPES or ftype == "json"):
-        # ⚠️ Motif REFORMULÉ le 2026-09-01 (#728) : il invoquait l'exemption `json` de
-        # la grammaire des couches, qui ne vaut plus pour l'ADRESSE — `brut.comment`
-        # s'écrit désormais. Le refus, lui, ne bouge pas : ce qui le fonde est la
-        # CAPTURE, pas l'exemption. Un motif qui survit à sa raison est un mensonge en
-        # attente.
-        errors.append(
-            f"{fpath}: origine: \"{SYSTEM_ORIGIN}\" ne se pose que sur une colonne "
-            f"scalaire (type={ftype}) — la garde capture la valeur d'AVANT comme point "
-            f"de départ, et sur un objet libre elle rangerait l'objet entier dans la "
-            f"couche ; un composite, lui, se pose par item, ce que la garde ne lit "
-            f"pas. La couche `{f.get('key')}.origine` s'écrit à la main sur une "
-            f"colonne `json` : c'est sa pose AUTOMATIQUE qui ne s'y déclare pas")
+    # ⚠️ **`origine` n'est PLUS validée ici, et son absence est le correctif.**
+    #
+    # Ces deux refus décrivaient la CAPTURE : « la couche est alors posée par la
+    # plateforme, à partir de la valeur en place ». Le cran `origine: "system"` a été
+    # supprimé le 08/09/2026 au profit de `donnees_d_origine`, déclaré à l'import — et
+    # plus rien ne pose cette couche. Les refus survivaient donc à leur raison : ils
+    # exigeaient la bonne forme d'un attribut devenu inerte, et leur MOTIF promettait
+    # un mécanisme mort. C'est exactement ce qu'un des deux commentaires ci-dessous
+    # nommait, un mois plus tôt, sans se l'appliquer : *un motif qui survit à sa raison
+    # est un mensonge en attente.*
+    #
+    # La clé n'est pas refusée pour autant — 500 colonnes de production la portent, et
+    # un refus à la pose gèlerait dix tableaux vivants. Elle est déclarée **non
+    # appliquée** dans `schema_keys`, ce qui la fait nommer par l'avertissement des
+    # clés que la plateforme ne lit pas. Dire « je ne m'en sers pas » est le seul geste
+    # honnête pour un attribut qu'on ne peut ni appliquer ni retirer.
+
     # oto#83 — quatrième cran de la famille : à QUI la colonne est servie.
     # ⚠️ La valeur inconnue est REFUSÉE, et c'est le point du cran. Le vocabulaire des
     # CLÉS reste ouvert (on signale, on n'empêche pas) ; celui d'une VALEUR que le

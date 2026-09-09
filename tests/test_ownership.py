@@ -8,7 +8,7 @@ import pytest
 
 from oto_mcp import ownership
 
-RT = "datastore_namespace"
+RT = "datastore"
 RID = "7"
 
 
@@ -114,7 +114,7 @@ def test_group_grant_non_member_denied(monkeypatch):
 
 
 def test_group_owned_member_reads_admin_governs(monkeypatch):
-    # Ressource POSSÉDÉE par un groupe (namespace d'équipe REST) : membre = contenu,
+    # Ressource POSSÉDÉE par un groupe (datastore d'équipe REST) : membre = contenu,
     # chef d'équipe = gouvernance.
     _wire(monkeypatch, owner=("group", "5"), group_read_of={5})
     assert ownership.can_access("m", RT, RID, "write")

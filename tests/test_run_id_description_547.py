@@ -68,7 +68,7 @@ def _outils_servis(ctx) -> dict[str, dict]:
     m = FastMCP("t")
 
     @m.tool()
-    def data_write(x: int) -> dict:      # namespace `data` ⇒ porte l'axe `_run_id`
+    def data_write(x: int) -> dict:      # datastore `data` ⇒ porte l'axe `_run_id`
         return {}
 
     tools = asyncio.run(m.list_tools(run_middleware=False))
@@ -160,7 +160,7 @@ def live(pg_dsn):
 def table(live):
     from oto_mcp import db
     ns = "camp-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore_namespace("user", "sub-agent", ns)
+    ns_id = db.create_datastore("user", "sub-agent", ns)
     for i in range(3):
         db.datastore_insert_row(ns_id, f"r{i}", {"siren": f"5511100{i}", "statut": "a_faire"})
     return ns, ns_id

@@ -398,7 +398,7 @@ def _resolve_tableau_id(row: dict, ref: str) -> Optional[str]:
     if not ref or ref.isdigit():
         return ref or None
     for otype, oid in _tableau_owner_candidates(row):
-        ns = db.get_datastore_namespace(otype, oid, ref)
+        ns = db.get_datastore(otype, oid, ref)
         if ns and ns.get("id") is not None:
             return str(ns["id"])
     return None

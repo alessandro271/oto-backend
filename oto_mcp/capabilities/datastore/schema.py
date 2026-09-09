@@ -1,7 +1,7 @@
 """Capacités du schéma d'un tableau : le relire, et le POSER (#302).
 
 Un schéma se posait sans pouvoir se relire. Pour connaître l'existant il fallait
-`data_list_namespaces` puis filtrer soi-même sur l'id — une jointure imposée à
+`data_list_datastores` puis filtrer soi-même sur l'id — une jointure imposée à
 l'appelant, et toute la liste ramenée en contexte pour un seul tableau.
 
 Ce n'est pas qu'une gêne : `set_schema` pose le schéma **entier**, il ne fusionne
@@ -20,7 +20,7 @@ par le store (org active + ownership), jamais par le nom passé en path — un t
 hors périmètre répond 404, comme partout ailleurs dans le datastore.
 
 **La POSE rejoint la lecture ici** (#302, ex-route écrite à la main) : même chemin
-`PUT …/{namespace}/schema`, mêmes réponses. ⚠️ Une asymétrie la traverse et n'est PAS
+`PUT …/{datastore}/schema`, mêmes réponses. ⚠️ Une asymétrie la traverse et n'est PAS
 corrigée dans ce lot : la lecture résout les références `slot:<nom>` (ADR 0035 B3), la
 pose non — elle prend le nom littéral, comme avant. La corriger ferait passer un appel
 qui rendait 404, ce qui est un changement de comportement déguisé en migration ; à
@@ -39,7 +39,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ... import access
 from ...datastore import identite
 from ...datastore import schema as dsv2
-from ...datastore.core import NamespaceNotFound, NamespaceReadOnly, make_store
+from ...datastore.core import DatastoreNotFound, DatastoreReadOnly, make_store
 from ...datastore.errors import SchemaDefinitionError
 from .._authz import SUB_ONLY
 from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
@@ -48,7 +48,7 @@ from ..registry import CAPABILITIES
 
 
 class GetSchemaInput(BaseModel):
-    namespace: Adresse
+    datastore: Adresse
 
 
 class SchemaOut(BaseModel):
@@ -60,11 +60,11 @@ class SchemaOut(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     # ⚠️ Le NOM CANONIQUE du tableau, plus l'écho de l'adresse reçue : lire le schéma
-    # de `600` répondait `namespace: "600"` (cf. `datastore/identite.py`).
-    namespace: Adresse
+    # de `600` répondait `datastore: "600"` (cf. `datastore/identite.py`).
+    datastore: Adresse
     # Le NUMÉRO du tableau — la forme d'adresse à employer, le nom partant en retrait.
     ns_id: Optional[int] = Field(default=None, description=identite.DESCRIPTION)
-    # `None` = aucun schéma déclaré. C'est l'état NORMAL d'un namespace (le datastore
+    # `None` = aucun schéma déclaré. C'est l'état NORMAL d'un datastore (le datastore
     # est schema-free par défaut) — d'où un champ nullable plutôt qu'un 404, qui ne
     # saurait pas distinguer « pas de schéma » de « tableau inconnu ».
     declared_schema: Optional[dict] = Field(default=None, alias="schema",
@@ -82,12 +82,12 @@ def _get_schema(ctx: ResolvedCtx, inp: GetSchemaInput) -> dict:
     # résolution la référence passait pour un nom littéral et rendait 404 — une lecture
     # refusée là où tous les tools `data_*` l'acceptent. Le nom RÉSOLU est renvoyé :
     # l'appelant doit voir sur quel tableau il vient de lire.
-    namespace = access.resolve_namespace_ref(inp.namespace)
+    datastore = access.resolve_datastore_ref(inp.datastore)
     store = make_store(ctx.sub)
     try:
-        schema = store.get_schema(namespace)
-    except NamespaceNotFound:
-        raise AuthzDenied(404, "namespace_not_found")
+        schema = store.get_schema(datastore)
+    except DatastoreNotFound:
+        raise AuthzDenied(404, "datastore_not_found")
     # #389 : la liste des clés de validation que CETTE version exécute. Servie ICI
     # autant qu'à la pose — sans quoi il faudrait ÉCRIRE un schéma pour savoir ce que
     # le serveur applique, c'est-à-dire produire un effet de bord pour poser une
@@ -95,7 +95,7 @@ def _get_schema(ctx: ResolvedCtx, inp: GetSchemaInput) -> dict:
     # ⚠️ « Le nom RÉSOLU est renvoyé » ci-dessus ne valait que pour `slot:<nom>` : un
     # numéro restait un numéro. C'est désormais l'IDENTITÉ du tableau — son nom
     # canonique ET son numéro — quelle que soit la forme de l'adresse reçue.
-    out = {**identite.de_releve(store.dernier_tableau, namespace), "schema": schema,
+    out = {**identite.de_releve(store.dernier_tableau, datastore), "schema": schema,
            "enforced": dsv2.enforced_keys()}
     # #416 : le garde des clés non lues existait, mais UNIQUEMENT à la pose — et un
     # schéma déjà pollué ne se repose jamais. Mesuré en production le 28/08 : trois
@@ -153,7 +153,7 @@ with warnings.catch_warnings():
     warnings.simplefilter("ignore", UserWarning)
 
     class SetSchemaInput(BaseModel):
-        namespace: Adresse
+        datastore: Adresse
         # `null` (ou absent) = RETIRER le schéma, retour en table libre. Les deux se
         # confondent, et c'est le comportement de la route d'avant : `body.get("schema")`.
         schema: Optional[dict] = None
@@ -162,7 +162,7 @@ with warnings.catch_warnings():
 class SchemaPosed(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    namespace: Adresse
+    datastore: Adresse
     declared_schema: Optional[dict] = Field(default=None, alias="schema",
                                             serialization_alias="schema")
     # #389 : les clés de validation que cette version applique — la seule parade au
@@ -190,12 +190,12 @@ def _set_schema(ctx: ResolvedCtx, inp: SetSchemaInput) -> dict:
         # L'avertissement se calcule sur ce que l'appelant a ENVOYÉ, pas sur ce que le
         # store rend : c'est son texte à lui qui porte la faute de frappe, et le store
         # peut normaliser (oto#56).
-        return {**make_store(ctx.sub).set_schema(inp.namespace, inp.schema),
+        return {**make_store(ctx.sub).set_schema(inp.datastore, inp.schema),
                 **cles_inconnues.check(inp.schema)}
-    except NamespaceNotFound:
-        raise ns_not_found(ctx.sub, inp.namespace)
-    except NamespaceReadOnly:
-        raise AuthzDenied(403, "namespace_read_only")
+    except DatastoreNotFound:
+        raise ns_not_found(ctx.sub, inp.datastore)
+    except DatastoreReadOnly:
+        raise AuthzDenied(403, "datastore_read_only")
     except SchemaDefinitionError as e:
         # ⚠️ **Le refus PARLE désormais, et c'était le défaut le plus cher de la
         # nuit du 07→08/09/2026.** La route rendait `{"error":"invalid_schema"}` —
@@ -226,7 +226,7 @@ CAPABILITIES += [
         authz=SUB_ONLY,
         mcp=None,  # `data_set_schema` tient déjà la face agent
         rest=RestBinding(verb="PUT",
-                         path="/api/datastore/namespaces/{namespace}/schema"),
+                         path="/api/datastores/{datastore}/schema"),
         description=(
             "Pose (ou retire, avec `schema: null`) le schéma typé d'un tableau. "
             "Le schéma est posé ENTIER — relire avant d'amender. La réponse porte "
@@ -242,13 +242,13 @@ CAPABILITIES += [
         Output=SchemaOut,
         authz=SUB_ONLY,
         mcp="data_get_schema",
-        rest=RestBinding(verb="GET", path="/api/datastore/namespaces/{namespace}/schema"),
+        rest=RestBinding(verb="GET", path="/api/datastores/{datastore}/schema"),
         description=(
-            "Read a namespace's declared TYPED schema (the one `data_set_schema` posts). "
-            "Returns `{namespace, ns_id, schema, enforced}` — `schema` is null when none "
+            "Read a datastore's declared TYPED schema (the one `data_set_schema` posts). "
+            "Returns `{datastore, ns_id, schema, enforced}` — `schema` is null when none "
             "is declared, which is a normal state, not an error. "
-            "`ns_id` is the table's NUMBER (e.g. 174) and `namespace` its canonical name, "
-            "whatever form you addressed it by: pass the NUMBER as `namespace` from here "
+            "`ns_id` is the table's NUMBER (e.g. 174) and `datastore` its canonical name, "
+            "whatever form you addressed it by: pass the NUMBER as `datastore` from here "
             "on — a name still resolves, it is being retired, not broken. Read it BEFORE "
             "amending: "
             "`data_set_schema` posts the schema WHOLE, it does not merge, so adding one "

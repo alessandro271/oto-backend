@@ -2,7 +2,7 @@
 
 ⚠️ Le défaut : `if not vals: return None, []` — la clause DISPARAISSAIT, et la requête
 rendait alors **tout le tableau** au lieu de rien. C'est l'inverse exact de ce que
-`IN ()` veut dire, et ça a moissonné un namespace entier les 15-16/08/2026.
+`IN ()` veut dire, et ça a moissonné un datastore entier les 15-16/08/2026.
 
 ⚠️ **Pourquoi refuser plutôt que rendre zéro ligne**, alors que zéro serait la
 sémantique SQL juste — arbitré par Alexis le 05/09 : une liste vide est presque

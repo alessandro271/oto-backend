@@ -601,7 +601,7 @@ def _tableau_entries(project: dict, links: list) -> list[dict]:
             out.append({"id": int(ref), "role": l.get("role"),
                         "label": l.get("label") or l.get("namespace") or f"#{ref}"})
         elif owner_id:
-            ns = db.get_datastore_namespace(owner_type, owner_id, ref)
+            ns = db.get_datastore(owner_type, owner_id, ref)
             if ns:
                 out.append({"id": int(ns["id"]), "role": l.get("role"),
                             "label": l.get("label") or l.get("namespace") or ref})
@@ -676,13 +676,13 @@ def build_page(project: dict, path: str, *, offset: int = 0,
 
         if section == "data":
             allowed = {t["id"] for t in _tableau_entries(project, links)}
-            ns = db.get_datastore_namespace_by_id(rid) if (show_data and rid in allowed) else None
+            ns = db.get_datastore_by_id(rid) if (show_data and rid in allowed) else None
             if not ns:
                 return render_not_found(), 404
             total = db.datastore_count_rows(rid)
             rows = db.datastore_list_rows(rid, offset=max(0, offset), limit=_DATA_PAGE)
             columns = _derive_columns(ns.get("schema"), rows)
-            return render_data(name=project.get("name") or "", namespace=ns.get("namespace") or "tableau",
+            return render_data(name=project.get("name") or "", namespace=ns.get("datastore") or "tableau",
                                columns=columns, rows=rows, total=total, offset=max(0, offset)), 200
 
         if section == "docs":

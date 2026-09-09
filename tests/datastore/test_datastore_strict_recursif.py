@@ -161,7 +161,7 @@ def store(monkeypatch):
     st = DatastorePg("u", acting_org=35)
     monkeypatch.setattr(st, "_resolve", lambda ns, write=False: 7)
     calls: dict = {"insert": []}
-    monkeypatch.setattr(dsm.db, "get_datastore_namespace_by_id",
+    monkeypatch.setattr(dsm.db, "get_datastore_by_id",
                         lambda ns_id: {"id": ns_id, "schema": STRICT})
     monkeypatch.setattr(dsm.db, "datastore_insert_row",
                         lambda ns_id, rid, data, *a, **k: (

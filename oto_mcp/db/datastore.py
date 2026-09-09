@@ -39,18 +39,18 @@ from ._conn import _connect, _connect_autocommit
 # pour que la surface plate `db.<fn>` et tous les appelants restent inchangés.
 from .datastore_ns import (  # noqa: F401
     count_datastore_rows_for_ns,
-    create_datastore_namespace,
-    delete_datastore_namespace_by_id,
-    get_datastore_namespace,
-    get_datastore_namespace_by_id,
+    create_datastore,
+    delete_datastore_by_id,
+    get_datastore,
+    get_datastore_by_id,
     get_resource_grant,
     grant_resource,
-    list_all_datastore_namespaces,
-    list_datastore_namespaces_for_owners,
-    list_datastore_namespaces_granted_to,
+    list_all_datastores,
+    list_datastores_for_owners,
+    list_datastores_granted_to,
     list_resource_grants,
-    rename_datastore_namespace_by_id,
-    reparent_datastore_namespace,
+    rename_datastore_by_id,
+    reparent_datastore,
     resolve_datastore_ns,
     revoke_resource_grant,
     set_datastore_schema,
@@ -632,7 +632,7 @@ def datastore_has_key_index(ns_id: int) -> bool:
         return row is not None
 
 
-def datastore_namespaces_with_key() -> list[dict]:
+def datastores_with_key() -> list[dict]:
     """Namespaces dont le schéma déclare une clé métier — `[{id, key}]` (migration
     boot #109 ch.3 : matérialiser la clé en contrainte sur l'existant)."""
     with _connect() as conn:

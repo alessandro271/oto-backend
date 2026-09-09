@@ -36,7 +36,7 @@ def _ddl() -> str:
 
 @pytest.fixture()
 def store(pg_module_dsn, monkeypatch):
-    """Le vrai store sur une vraie table — seule la résolution de namespace est
+    """Le vrai store sur une vraie table — seule la résolution de datastore est
     court-circuitée : le sujet est la traduction du filtre, pas la propriété."""
     monkeypatch.setenv("DATABASE_URL", pg_module_dsn)
     from oto_mcp.db import _conn
@@ -55,7 +55,7 @@ def store(pg_module_dsn, monkeypatch):
                 (f"r{i}", json.dumps({"posted_at": jour, "statut": "ouvert"})))
         s = DatastorePg("u-1")
         monkeypatch.setattr(s, "_resolve", lambda ns, write=False: 1)
-        monkeypatch.setattr(s, "_ns_of", lambda ns_id: {"schema": None, "namespace": "t"})
+        monkeypatch.setattr(s, "_ns_of", lambda ns_id: {"schema": None, "datastore": "t"})
         monkeypatch.setattr(s, "_after_claim", lambda *a, **k: None)
         yield s
         for table in reversed(_TABLES):

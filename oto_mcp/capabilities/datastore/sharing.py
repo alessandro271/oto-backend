@@ -1,6 +1,6 @@
 """Capacités « partager un tableau » : lister, accorder, retirer un accès nominatif (#302).
 
-Trois verbes sur un même chemin (`…/namespaces/{ns}/share`), qui vivaient en routes
+Trois verbes sur un même chemin (`…/datastores/{ns}/share`), qui vivaient en routes
 écrites à la main. Le dashboard passe aujourd'hui par la surface générique
 `oto_resource` (ADR 0048), mais ces chemins restent le contrat du client HTTP
 d'`oto-core` (`DatastoreClient.share`/`unshare`) : ils ne bougent pas, ils gagnent
@@ -41,7 +41,7 @@ _SUB = ("Identifiant du compte destinataire, quand une adresse en désigne "
 
 
 class ShareInput(BaseModel):
-    namespace: Adresse
+    datastore: Adresse
     email: str = ""
     sub: str = Field(default="", description=_SUB)
     # ADR 0068 : partager sans préciser donnait l'ÉCRITURE. « Partager », dans la tête
@@ -50,13 +50,13 @@ class ShareInput(BaseModel):
 
 
 class UnshareInput(BaseModel):
-    namespace: Adresse
+    datastore: Adresse
     email: str = ""
     sub: str = Field(default="", description=_SUB)
 
 
-class NamespaceRefInput(BaseModel):
-    namespace: Adresse
+class DatastoreRefInput(BaseModel):
+    datastore: Adresse
 
 
 class Share(BaseModel):
@@ -76,14 +76,14 @@ class ShareList(BaseModel):
 
 class Shared(BaseModel):
     ok: bool
-    namespace: Adresse
+    datastore: Adresse
     shared_with: str
     permission: str
 
 
 class Unshared(BaseModel):
     ok: bool
-    namespace: Adresse
+    datastore: Adresse
     removed: str
 
 
@@ -140,39 +140,39 @@ def _share(ctx: ResolvedCtx, inp: ShareInput) -> dict:
         raise AuthzDenied(400, "permission must be 'read' or 'write'")
     recipient = _destinataire(inp.email, inp.sub)
     email = (inp.email or "").strip() or recipient["sub"]
-    ns_id = govern_ns(ctx.sub, inp.namespace)
-    ownership.grant("datastore_namespace", str(ns_id), "user", recipient["sub"],
+    ns_id = govern_ns(ctx.sub, inp.datastore)
+    ownership.grant(ownership.TYPE_RESSOURCE_DATASTORE, str(ns_id), "user", recipient["sub"],
                     permission, granted_by=ctx.sub)
-    return {"ok": True, "namespace": inp.namespace, "shared_with": email,
+    return {"ok": True, "datastore": inp.datastore, "shared_with": email,
             "permission": permission}
 
 
 def _unshare(ctx: ResolvedCtx, inp: UnshareInput) -> dict:
     recipient = _destinataire(inp.email, inp.sub)
     email = (inp.email or "").strip() or recipient["sub"]
-    ns_id = govern_ns(ctx.sub, inp.namespace)
-    if not ownership.revoke("datastore_namespace", str(ns_id), "user", recipient["sub"]):
-        raise AuthzDenied(404, f"no active share for {email} on {inp.namespace}")
-    return {"ok": True, "namespace": inp.namespace, "removed": email}
+    ns_id = govern_ns(ctx.sub, inp.datastore)
+    if not ownership.revoke(ownership.TYPE_RESSOURCE_DATASTORE, str(ns_id), "user", recipient["sub"]):
+        raise AuthzDenied(404, f"no active share for {email} on {inp.datastore}")
+    return {"ok": True, "datastore": inp.datastore, "removed": email}
 
 
-def _list_shares(ctx: ResolvedCtx, inp: NamespaceRefInput) -> dict:
-    ns_id = govern_ns(ctx.sub, inp.namespace)
+def _list_shares(ctx: ResolvedCtx, inp: DatastoreRefInput) -> dict:
+    ns_id = govern_ns(ctx.sub, inp.datastore)
     return {"shares": [
         {"email": s.get("email"), "permission": s.get("permission"),
          "principal_type": s.get("principal_type"), "principal_id": s.get("principal_id"),
          "created_at": s.get("granted_at")}
-        for s in ownership.list_grants("datastore_namespace", str(ns_id))
+        for s in ownership.list_grants(ownership.TYPE_RESSOURCE_DATASTORE, str(ns_id))
     ]}
 
 
-_SHARE = "/api/datastore/namespaces/{namespace}/share"
+_SHARE = "/api/datastores/{datastore}/share"
 
 CAPABILITIES += [
     Capability(
         key="me.datastore.list_shares",
         handler=_list_shares,
-        Input=NamespaceRefInput,
+        Input=DatastoreRefInput,
         Output=ShareList,
         authz=SUB_ONLY,
         mcp=None,  # la face agent du partage est `oto_resource op=share` (ADR 0048)

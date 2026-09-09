@@ -165,8 +165,8 @@ def banc(monkeypatch):
             "lignes": {"r1": {"siren": "552081317", "adresse": "1 rue A"}},
             "creees": [], "maj": []}
     monkeypatch.setattr(st, "_resolve", lambda ns, write=False: 7)
-    monkeypatch.setattr(dsm.db, "get_datastore_namespace_by_id",
-                        lambda ns_id: {"id": ns_id, "namespace": "viviers",
+    monkeypatch.setattr(dsm.db, "get_datastore_by_id",
+                        lambda ns_id: {"id": ns_id, "datastore": "viviers",
                                        "schema": etat["schema"]})
 
     def find(ns_id, key, kv):
@@ -285,7 +285,7 @@ def test_le_cran_se_pose_sans_reecrire_le_schema(monkeypatch):
     monkeypatch.setattr(store, "_schema_of", lambda ns_id: dict(REPORT))
     monkeypatch.setattr(store, "set_schema",
                         lambda ns, sch, **k: vu.update(schema=sch) or
-                        {"namespace": ns, "schema": sch, "enforced": []})
+                        {"datastore": ns, "schema": sch, "enforced": []})
     store.patch_schema("viviers", unknown_fields="reject")
     assert vu["schema"]["unknown_fields"] == "reject"
     assert vu["schema"]["fields"] == FIELDS      # rien d'autre n'a bougé

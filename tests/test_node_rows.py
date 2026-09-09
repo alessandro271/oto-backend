@@ -32,22 +32,22 @@ class _Store:
         # dise si le pied du tableau décrit la page servie.
         self.filtres_page = self.filtres_compte = None
 
-    def _resolve(self, namespace):
+    def _resolve(self, datastore):
         if self.ns_id is None:
-            raise RuntimeError("NamespaceNotFound")
+            raise RuntimeError("DatastoreNotFound")
         return self.ns_id
 
     def _schema_of(self, ns_id):
         return self.schema
 
-    def cursor_rows(self, namespace, **kw):
-        self.vu = dict(kw, namespace=namespace)
+    def cursor_rows(self, datastore, **kw):
+        self.vu = dict(kw, datastore=datastore)
         if self.leve is not None:
             raise self.leve
         self.filtres_page = list(kw.get("filters") or [])
         return self.page
 
-    def count_rows(self, namespace, *, filter=None, q=None, filters=None):
+    def count_rows(self, datastore, *, filter=None, q=None, filters=None):
         # `core.count_rows` : « le compte doit décrire le MÊME jeu que la page ».
         self.filtres_compte = list(filters or [])
         return self.total
@@ -115,7 +115,7 @@ def test_un_noeud_sans_cle_legacy_prend_le_chemin_NATIF(seams, monkeypatch):
     Ce test disait l'inverse jusqu'ici — « la garde ne doit pas le refuser au motif
     qu'elle ne peut pas le vérifier » — et il avait raison tant qu'un seul chemin
     existait. Depuis que la nouvelle surface écrit ses propres tableaux, un tableau
-    né ici n'a AUCUN namespace à résoudre : ses lignes sont ses enfants. Le faire
+    né ici n'a AUCUN datastore à résoudre : ses lignes sont ses enfants. Le faire
     passer par le store chercherait un nom qui n'y existe pas et refuserait la
     lecture d'un tableau parfaitement lisible.
     """

@@ -49,7 +49,7 @@ def store(monkeypatch):
     db = _Db()
     s = DatastorePg("u-1")
     monkeypatch.setattr(s, "_resolve", lambda ns, write=False: 1)
-    monkeypatch.setattr(s, "_ns_of", lambda ns_id: {"schema": None, "namespace": "t"})
+    monkeypatch.setattr(s, "_ns_of", lambda ns_id: {"schema": None, "datastore": "t"})
     monkeypatch.setattr(s, "_schema_of", lambda ns_id: None)
     monkeypatch.setattr(s, "_assert_writable", lambda *a, **k: None)
     monkeypatch.setattr(s, "_trace", lambda *a, **k: None)

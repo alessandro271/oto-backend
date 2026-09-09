@@ -163,7 +163,7 @@ import oto_mcp.capabilities.datastore.schema  # noqa: F401 — me.datastore.{get
 import oto_mcp.capabilities.datastore.sharing  # noqa: F401 — me.datastore.{list_shares,share,unshare}
 # Le tableau lui-même (#302) — lister/créer/renommer/supprimer/ouvrir, ex-routes écrites
 # à la main : mêmes chemins, entrée ET sortie déclarées.
-import oto_mcp.capabilities.datastore.namespaces  # noqa: F401 — me.datastore.{list,create,delete,rename}_namespace + url
+import oto_mcp.capabilities.datastore.datastores  # noqa: F401 — me.datastore.{list,create,delete,rename}_namespace + url
 # Les lignes (#302) — page/fiche/écriture/suppression/file/agrégat, ex-routes écrites
 # à la main. Deux corps LIBRES (les colonnes du tableau), déclarés comme tels.
 import oto_mcp.capabilities.datastore.rows  # noqa: F401 — me.datastore.{list_rows,append_row,get_row,update_row,delete_row,release_claim,queue,aggregate}

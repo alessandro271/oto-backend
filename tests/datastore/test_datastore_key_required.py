@@ -64,8 +64,8 @@ def banc(monkeypatch):
             "lignes": {"r-existante": {"siren": "552081317", "raison_sociale": "ACME"}},
             "creees": []}
     monkeypatch.setattr(st, "_resolve", lambda ns, write=False: 7)
-    monkeypatch.setattr(dsm.db, "get_datastore_namespace_by_id",
-                        lambda ns_id: {"id": ns_id, "namespace": "viviers",
+    monkeypatch.setattr(dsm.db, "get_datastore_by_id",
+                        lambda ns_id: {"id": ns_id, "datastore": "viviers",
                                        "schema": etat["schema"]})
 
     def find(ns_id, key, kv):

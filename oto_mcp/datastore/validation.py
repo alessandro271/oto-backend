@@ -25,6 +25,7 @@ from typing import Any, Optional
 from .couches import _is_empty, LAYER_KEYS, layer_value, split_layer, unknown_layers, unwrap
 from .motifs import _pattern_re
 from .declaration import _fields, max_length_of, pattern_of, status_field, validation_active
+from .types_declares import types_trahis
 from .cycle_de_vie import lifecycle_of, refus_de_transition
 from .hors_schema import _unknown_subkey_refusal, _unknown_subkeys
 from .couches_exigees import couches_manquantes
@@ -373,6 +374,10 @@ def validate_row(schema: Optional[dict], merged: dict, *,
     # oto#75 barreau 1 : HORS du garde `validation_active`, comme le cycle de vie
     # ci-dessous — la déclaration `required_layers` s'arme elle-même.
     errors.extend(couches_manquantes(schema, merged, written=written))
+    # 08/09/2026 — même raison, même place : un `type` déclaré s'arme lui-même. Le
+    # contrôle existait sous `validation_active` et n'y voyait rien passer (0 violation
+    # sur 88 tableaux) pendant que 248 tableaux sans validation en portaient 118.
+    errors.extend(types_trahis(schema, merged))
     lc = lifecycle_of(schema)
     if lc:
         sf = status_field(schema)

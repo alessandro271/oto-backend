@@ -74,10 +74,15 @@ def required_layers_of(field: Any) -> tuple[str, ...]:
     declarees = field.get("required_layers")
     if not isinstance(declarees, (list, tuple)) or not declarees:
         return ()
-    couches = tuple(c for c in declarees if isinstance(c, str) and c in LAYER_KEYS)
-    if field.get("origine") == SYSTEM_ORIGIN:
-        couches = tuple(c for c in couches if c != ORIGIN_LAYER)
-    return couches
+    # ⚠️ **L'exemption `origine: "system"` est SUPPRIMÉE ici (08/09/2026).**
+    # Elle retirait `origine` des couches exigées au motif que « la plateforme la pose
+    # elle-même et refuse que l'appelant la nomme ». Elle ne la pose plus : le cran a
+    # été remplacé par `donnees_d_origine`. L'exemption désarmait donc une exigence que
+    # plus rien ne satisfaisait — une colonne pouvait déclarer `required_layers:
+    # ["origine"]` et n'exiger rien du tout, en silence. Mesuré avant de retirer :
+    # ZÉRO colonne du parc combine les deux, le piège vivait dans le code et pas dans
+    # les données.
+    return tuple(c for c in declarees if isinstance(c, str) and c in LAYER_KEYS)
 
 
 def _refus_de_couche(fpath: str, cle: str, manquantes: tuple,

@@ -14,14 +14,14 @@ class _Store:
         ]
         self._key = key
 
-    def cursor_rows(self, namespace, filter=None, limit=100, cursor=None, **_):
+    def cursor_rows(self, datastore, filter=None, limit=100, cursor=None, **_):
         rows = self._rows
         if filter:
             rows = [r for r in rows
                     if all(str(r.get(k)) == str(v) for k, v in filter.items())]
         return {"rows": rows[:limit], "next_cursor": None}
 
-    def declared_key(self, namespace):
+    def declared_key(self, datastore):
         return self._key
 
 
@@ -35,7 +35,7 @@ def test_known_filter_key_not_flagged():
     assert _unknown_filter_keys(_Store(), "ns", {"nom": "Gamma"}) == set()
 
 
-def test_empty_namespace_never_warns():
+def test_empty_datastore_never_warns():
     assert _unknown_filter_keys(_Store(rows=[]), "ns", {"x": 1}) == set()
 
 

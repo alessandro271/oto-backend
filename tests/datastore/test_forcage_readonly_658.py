@@ -58,8 +58,8 @@ def acteurs(monkeypatch):
     """
     from oto_mcp import group_store, org_store, roles
 
-    monkeypatch.setattr(dsm.db, "get_datastore_namespace_by_id",
-                        lambda ns_id: {"id": ns_id, "namespace": "viviers",
+    monkeypatch.setattr(dsm.db, "get_datastore_by_id",
+                        lambda ns_id: {"id": ns_id, "datastore": "viviers",
                                        "owner_type": "org",
                                        "owner_id": str(ORG_PROPRIETAIRE),
                                        "schema": SCHEMA})
@@ -349,7 +349,7 @@ def test_le_releve_MCP_passe_l_allowlist_et_atteint_les_args_de_la_ligne():
     assert "readonly_forced" in server._TRACED_ARGS
     trace = {"readonly_forced": [{"row": "r1", "col": "adresse", "was": "1 rue A"}],
              "ns_id": 7, "interne": "jamais journalisé"}
-    args = {**{"namespace": "viviers"},
+    args = {**{"datastore": "viviers"},
             **{k: v for k, v in trace.items() if k in server._TRACED_ARGS}}
     assert args["readonly_forced"] == trace["readonly_forced"]
     assert "interne" not in args

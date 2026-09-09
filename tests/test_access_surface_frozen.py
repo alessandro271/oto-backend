@@ -56,7 +56,7 @@ _SURFACE = """
     rbac_denied_connectors reachable_instances reachable_instances_map
     reachable_team_key record_platform_usage require_connector_access
     resolve_api_key resolve_credential resolve_credential_fields
-    resolve_field_filter resolve_mount_token resolve_namespace_ref
+    resolve_field_filter resolve_mount_token resolve_datastore_ref
     resolve_slot_tableau session_org status_for status_hints
     walk_cascade
 """.split()

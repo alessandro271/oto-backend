@@ -65,7 +65,7 @@ class LotsMixin:
         la ligne autant que le champ (#412), et en disant ce qui est déjà écrit."""
         ns = self._ns_of(ns_id)
         schema = ns.get("schema")
-        nom_ns = ns.get("namespace") or f"#{ns_id}"
+        nom_ns = ns.get("datastore") or f"#{ns_id}"
         # #658 : UN palier pour le lot entier, lu une seule fois — pas une lecture
         # d'ownership par ligne sur un import de huit mille.
         # `force` implique la demande : nommer une cible EST le geste.
@@ -158,9 +158,9 @@ class LotsMixin:
                     # write concurrent vient d'insérer la même clé entre le lookup et
                     # l'insert — c'est PRÉCISÉMENT le doublon que la contrainte empêche.
                     # On converge en update (même merge que le chemin nominal). La clé
-                    # violée est la clé DÉCLARÉE du namespace (l'index ne porte qu'elle),
+                    # violée est la clé DÉCLARÉE du datastore (l'index ne porte qu'elle),
                     # qui peut différer d'un `key` explicite passé à l'appel.
-                    dk = ((db.get_datastore_namespace_by_id(ns_id) or {}).get("schema")
+                    dk = ((db.get_datastore_by_id(ns_id) or {}).get("schema")
                           or {}).get("key")
                     dkv = dsv2.unwrap(user_data.get(dk)) if dk else None
                     existing_id = (db.datastore_find_row_id_by_key(ns_id, dk, dkv)
@@ -190,7 +190,7 @@ class LotsMixin:
                 # change. Cette clause DOIT précéder `except ValueError` — dont
                 # `BusinessKeyRequired` dérive, pour être actionnable côté MCP.
                 raise BusinessKeyRequired(
-                    e.motif, key=e.key, namespace=e.namespace, value=e.value,
+                    e.motif, key=e.key, datastore=e.datastore, value=e.value,
                     row=self._designation_de_lot(rang, total, key, data,
                                                  inserted + updated)) from None
             except RowValidationError as e:

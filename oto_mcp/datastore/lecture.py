@@ -40,10 +40,10 @@ class LectureMixin:
             q=q, filters=filters)
         return health if (health["off_type"] or health["empty"]) else None
 
-    def get_row(self, namespace: str, row_id: str, *,
+    def get_row(self, datastore: str, row_id: str, *,
                 layers: str = dsl.DEFAUT,
                 versions: tuple = dsver.DEFAUT) -> dict:
-        ns_id = self._resolve(namespace)
+        ns_id = self._resolve(datastore)
         row = db.datastore_get_row(ns_id, row_id)
         if not row:
             raise RowNotFound(row_id)
@@ -52,14 +52,14 @@ class LectureMixin:
 
     def list_rows(
         self,
-        namespace: str,
+        datastore: str,
         filter: Optional[dict] = None,
         limit: int = 100,
         versions: tuple = dsver.DEFAUT,
     ) -> list[dict]:
         """Filtre exact k:v en Python (chemin MCP `data_rows`). Ordre stable plus
         ancien d'abord (compat historique)."""
-        ns_id = self._resolve(namespace)
+        ns_id = self._resolve(datastore)
         sch = self._schema_of(ns_id)
         out: list[dict] = []
         for row in db.datastore_list_rows(ns_id, order_by="_created_at", order_dir="asc"):
@@ -73,7 +73,7 @@ class LectureMixin:
 
     def cursor_rows(
         self,
-        namespace: str,
+        datastore: str,
         *,
         filter: Optional[dict] = None,
         limit: int = 100,
@@ -101,7 +101,7 @@ class LectureMixin:
         Repasser le curseur d'un régime dans l'autre lève `InvalidCursor` plutôt que de
         rendre une page fausse — un curseur d'offset relu comme un `row_id` cadrerait
         silencieusement sur les mauvaises lignes."""
-        ns_id = self._resolve(namespace)
+        ns_id = self._resolve(datastore)
         filters = _filter_clauses(filter, filters)
         # ⚠️ Le schéma se lit une fois par PAGE, et seulement quand il y a quelque chose
         # à servir : le lire dès l'entrée ferait payer une requête à un appel qui va
@@ -147,16 +147,16 @@ class LectureMixin:
         return {"rows": out, "next_cursor": next_cursor,
                 "versions_servies": list(versions)}
 
-    def count_rows(self, namespace: str, *, filter: Optional[dict] = None,
+    def count_rows(self, datastore: str, *, filter: Optional[dict] = None,
                    q: Optional[str] = None, filters: Optional[list] = None) -> int:
         """Nombre de lignes (mêmes `filter`/`filters`/`q` que `cursor_rows`), poussé en
         SQL (`COUNT(*)`) — sans rapatrier les lignes (feedback #191 : stats d'un gros
         vivier sans charger 300+ lignes en contexte)."""
-        ns_id = self._resolve(namespace)
+        ns_id = self._resolve(datastore)
         clauses = _filter_clauses(filter, filters)
         return db.datastore_count_rows(ns_id, q=q, filters=clauses)
 
-    def aggregate(self, namespace: str, *, group_by=None,
+    def aggregate(self, datastore: str, *, group_by=None,
                   metrics: Optional[list] = None, filter: Optional[dict] = None,
                   q: Optional[str] = None, filters: Optional[list] = None) -> list[dict]:
         """Agrégat serveur (feedback #191) : COUNT/SUM/AVG/MIN/MAX sur des champs JSONB,
@@ -168,7 +168,7 @@ class LectureMixin:
 
         `group_by` accepte une LISTE de colonnes (oto#22) : leurs valeurs sont mises en
         commun, une ligne comptant une occurrence par colonne renseignée."""
-        ns_id = self._resolve(namespace)
+        ns_id = self._resolve(datastore)
         clauses = _filter_clauses(filter, filters)
         _refuse_group_by_compose(group_by)
         return db.datastore_aggregate(
@@ -176,7 +176,7 @@ class LectureMixin:
 
     def page_rows(
         self,
-        namespace: str,
+        datastore: str,
         *,
         offset: int = 0,
         limit: int = 50,
@@ -204,7 +204,7 @@ class LectureMixin:
         sens (bloc alphabétique), les cases vides tout au bout — et quand il y
         en a, la réponse porte `order_health: {off_type, empty}` (compté sur le
         jeu filtré entier, absent quand tout est conforme)."""
-        ns_id = self._resolve(namespace)
+        ns_id = self._resolve(datastore)
         clauses = _filter_clauses(filter, filters) or None
         sch = self._schema_of(ns_id)
         # Le tri honore le TYPE déclaré (#336) — résolu ICI, où le schéma est connu :

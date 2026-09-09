@@ -45,14 +45,14 @@ def _wire(monkeypatch, *, src):
     monkeypatch.setattr(MS, "copy_object", lambda src_key, prefix, owner_id: f"{prefix}/{owner_id}/copied/{src_key.split('/')[-1]}")
 
     # Seams datastore (provisioning tableau, ADR 0032 §6) — store en mémoire.
-    ns_store = {n["id"]: n for n in src.get("namespaces", [])}
+    ns_store = {n["id"]: n for n in src.get("datastores", [])}
     ns_rows = src.get("ns_rows", {})
     counter["ns"] = 500
     provisioned = created["provisioned_ns"] = []
     created["schemas_set"] = []
     created["rows_inserted"] = []
 
-    def create_namespace(ot, oid, name):
+    def create_datastore(ot, oid, name):
         if any(p["key"] == (ot, oid, name) for p in provisioned):
             raise ValueError("exists")          # simule l'unicité (owner, name)
         counter["ns"] += 1
@@ -60,8 +60,8 @@ def _wire(monkeypatch, *, src):
                             "owner": (ot, oid), "name": name})
         return counter["ns"]
 
-    monkeypatch.setattr(PJ, "get_datastore_namespace_by_id", lambda nid: ns_store.get(nid))
-    monkeypatch.setattr(PJ, "create_datastore_namespace", create_namespace)
+    monkeypatch.setattr(PJ, "get_datastore_by_id", lambda nid: ns_store.get(nid))
+    monkeypatch.setattr(PJ, "create_datastore", create_datastore)
     monkeypatch.setattr(PJ, "set_datastore_schema",
                         lambda nid, schema: created["schemas_set"].append((nid, schema)))
     monkeypatch.setattr(PJ, "datastore_list_rows",
@@ -133,29 +133,29 @@ def test_duplicate_provisions_empty_tableau(monkeypatch):
     links = [{"target_type": "tableau", "target_ref": "5", "label": "Vivier",
               "role": "leads", "config": {"provision": "empty"}}]
     src = {"project": {"id": 7, "brief_md": ""}, "docs": [], "links": links, "files": [],
-           "namespaces": [{"id": 5, "namespace": "vivier",
+           "datastores": [{"id": 5, "datastore": "vivier",
                            "schema": {"fields": [{"key": "name"}]}}],
            "ns_rows": {5: [{"row_id": "r1", "data": {"name": "A"}}]}}
     created = _wire(monkeypatch, src=src)
     PJ.duplicate_project(7, "Campagne 1", "org", "42")
-    # Namespace frais possédé par la copie (org 42), nom dérivé du source.
+    # Datastore frais possédé par la copie (org 42), nom dérivé du source.
     assert len(created["provisioned_ns"]) == 1
     new_ns = created["provisioned_ns"][0]
     assert new_ns["owner"] == ("org", "42") and new_ns["name"] == "vivier"
     # Schéma cloné, rows NON copiées (mode empty).
     assert created["schemas_set"] == [(new_ns["id"], {"fields": [{"key": "name"}]})]
     assert created["rows_inserted"] == []
-    # Le lien pointe sur le NOUVEAU namespace, pas la source "5" ; config.provision préservé.
+    # Le lien pointe sur le NOUVEAU datastore, pas la source "5" ; config.provision préservé.
     assert created["links"] == [
         (101, "tableau", str(new_ns["id"]), "Vivier", "leads", {"provision": "empty"})]
 
 
 def test_duplicate_seeds_tableau(monkeypatch):
-    # Mode seeded : schéma ET rows d'amorce recopiés dans le namespace frais.
+    # Mode seeded : schéma ET rows d'amorce recopiés dans le datastore frais.
     links = [{"target_type": "tableau", "target_ref": "5", "label": "Réf",
               "role": None, "config": {"provision": "seeded"}}]
     src = {"project": {"id": 7, "brief_md": ""}, "docs": [], "links": links, "files": [],
-           "namespaces": [{"id": 5, "namespace": "ref", "schema": {"fields": []}}],
+           "datastores": [{"id": 5, "datastore": "ref", "schema": {"fields": []}}],
            "ns_rows": {5: [{"row_id": "r1", "data": {"k": 1}},
                            {"row_id": "r2", "data": {"k": 2}}]}}
     created = _wire(monkeypatch, src=src)
@@ -168,11 +168,11 @@ def test_duplicate_seeds_tableau(monkeypatch):
 
 def test_duplicate_shared_tableau_stays_pointer(monkeypatch):
     # Défaut (provision absent) MÊME propriétaire : le lien reste un pointeur vers le
-    # MÊME namespace (réutilisation intra-org intentionnelle).
+    # MÊME datastore (réutilisation intra-org intentionnelle).
     links = [{"target_type": "tableau", "target_ref": "5", "label": "Commun",
               "role": None, "config": {}}]
     src = {"project": {"id": 7, "brief_md": ""}, "docs": [], "links": links, "files": [],
-           "namespaces": [{"id": 5, "namespace": "suppression", "schema": None,
+           "datastores": [{"id": 5, "datastore": "suppression", "schema": None,
                            "owner_type": "org", "owner_id": "42"}]}
     created = _wire(monkeypatch, src=src)
     new_id, warnings = PJ.duplicate_project(7, "Copie", "org", "42")
@@ -182,35 +182,35 @@ def test_duplicate_shared_tableau_stays_pointer(monkeypatch):
 
 
 def test_duplicate_reprovisions_cross_owner_tableau(monkeypatch):
-    # Fuite inter-org (oto-backend#112) : un lien `shared` vers un namespace d'un AUTRE
+    # Fuite inter-org (oto-backend#112) : un lien `shared` vers un datastore d'un AUTRE
     # propriétaire (org 2) copié dans l'org 42 → NE pointe PAS vers la source, il est
     # re-provisionné à vide (schéma cloné, 0 row) + warning.
     links = [{"target_type": "tableau", "target_ref": "5", "label": "Réseau N1",
               "role": "leads", "config": {}}]
     src = {"project": {"id": 7, "brief_md": ""}, "docs": [], "links": links, "files": [],
-           "namespaces": [{"id": 5, "namespace": "reseau-n1", "owner_type": "org",
+           "datastores": [{"id": 5, "datastore": "reseau-n1", "owner_type": "org",
                            "owner_id": "2", "schema": {"fields": [{"key": "urn"}]}}],
            "ns_rows": {5: [{"row_id": "r1", "data": {"urn": "secret"}}]}}
     created = _wire(monkeypatch, src=src)
     new_id, warnings = PJ.duplicate_project(7, "Copie", "org", "42")
-    # Un namespace frais possédé par l'org 42, schéma cloné, AUCUNE row de la source.
+    # Un datastore frais possédé par l'org 42, schéma cloné, AUCUNE row de la source.
     assert len(created["provisioned_ns"]) == 1
     new_ns = created["provisioned_ns"][0]
     assert new_ns["owner"] == ("org", "42")
     assert created["schemas_set"] == [(new_ns["id"], {"fields": [{"key": "urn"}]})]
     assert created["rows_inserted"] == []                # zéro donnée de l'org source
-    # Le lien pointe sur le NOUVEAU namespace, jamais "5" (celui de l'org 2).
+    # Le lien pointe sur le NOUVEAU datastore, jamais "5" (celui de l'org 2).
     assert created["links"] == [(101, "tableau", str(new_ns["id"]), "Réseau N1", "leads", None)]
     assert len(warnings) == 1 and "autre org" in warnings[0]
 
 
 def test_duplicate_skips_dead_tableau_link(monkeypatch):
-    # Lien mort dans la source (namespace disparu) : NON répliqué (pas de dead_link hérité)
+    # Lien mort dans la source (datastore disparu) : NON répliqué (pas de dead_link hérité)
     # + warning — oto-backend#112.
     links = [{"target_type": "tableau", "target_ref": "5", "label": "Fantôme",
               "role": None, "config": {}}]
     src = {"project": {"id": 7, "brief_md": ""}, "docs": [], "links": links, "files": [],
-           "namespaces": []}                              # ns 5 n'existe plus
+           "datastores": []}                              # ns 5 n'existe plus
     created = _wire(monkeypatch, src=src)
     new_id, warnings = PJ.duplicate_project(7, "Copie", "org", "42")
     assert created["links"] == []                         # lien mort non copié
@@ -219,18 +219,18 @@ def test_duplicate_skips_dead_tableau_link(monkeypatch):
 
 
 def test_apply_tableau_names_resolves_by_id():
-    # Adressage par rôle (ADR 0032 §6) : un lien tableau porte le NOM de son namespace.
+    # Adressage par rôle (ADR 0032 §6) : un lien tableau porte le NOM de son datastore.
     links = [
         {"target_type": "tableau", "target_ref": "6"},        # résolu
         {"target_type": "tableau", "target_ref": "nope"},     # ref non numérique → ignoré
-        {"target_type": "tableau", "target_ref": "99"},       # namespace disparu → pas de clé
+        {"target_type": "tableau", "target_ref": "99"},       # datastore disparu → pas de clé
         {"target_type": "connecteur", "target_ref": "6"},     # pas un tableau → ignoré
     ]
     PJ._apply_tableau_names(links, {6: "vivier-6"})
     assert links[0]["namespace"] == "vivier-6"
-    assert "namespace" not in links[1]
-    assert "namespace" not in links[2]
-    assert "namespace" not in links[3]
+    assert "datastore" not in links[1]
+    assert "datastore" not in links[2]
+    assert "datastore" not in links[3]
 
 
 def test_apply_procedure_titles_resolves_by_id():

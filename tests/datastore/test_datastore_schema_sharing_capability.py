@@ -20,9 +20,9 @@ from _datastore_rest import Boom, call, cap, stub_authz
 
 from oto_mcp.capabilities.datastore import schema as dss
 from oto_mcp.capabilities.datastore import sharing as dsh
-from oto_mcp.datastore.core import NamespaceNotFound, NamespaceReadOnly
+from oto_mcp.datastore.core import DatastoreNotFound, DatastoreReadOnly
 
-NS = {"namespace": "vivier"}
+NS = {"datastore": "vivier"}
 SCHEMA = {"fields": [{"key": "societe", "role": "title"}], "key": "siren"}
 
 
@@ -38,9 +38,9 @@ class _SchemaStore:
         self.calls: list = []
         self.out = out
 
-    def set_schema(self, namespace, schema):
-        self.calls.append((namespace, schema))
-        return self.out or {"namespace": namespace, "schema": schema}
+    def set_schema(self, datastore, schema):
+        self.calls.append((datastore, schema))
+        return self.out or {"datastore": datastore, "schema": schema}
 
 
 def test_le_schema_part_tel_quel_et_revient_tel_quel(monkeypatch):
@@ -53,7 +53,7 @@ def test_le_schema_part_tel_quel_et_revient_tel_quel(monkeypatch):
     # `None` quand il n'y a rien à dire : la clé constante est ce qui permet à un
     # client de distinguer « rien à signaler » d'un serveur trop vieux. Le schéma,
     # lui, part et revient inchangé — c'est ce que ce banc garde.
-    assert corps == {"namespace": "vivier", "schema": SCHEMA,
+    assert corps == {"datastore": "vivier", "schema": SCHEMA,
                      "unknown_keys_warning": None}
     assert store.calls == [("vivier", SCHEMA)]
 
@@ -72,14 +72,14 @@ def test_lavertissement_de_configuration_remonte_a_lauteur(monkeypatch):
     """Un statut sans état terminal rend la file de travail incapable de libérer :
     ça se dit à celui qui pose le schéma, au moment où il le pose."""
     monkeypatch.setattr(dss, "make_store", lambda sub: _SchemaStore(
-        {"namespace": "vivier", "schema": SCHEMA, "warning": "statut sans état terminal"}))
+        {"datastore": "vivier", "schema": SCHEMA, "warning": "statut sans état terminal"}))
     corps = call("me.datastore.set_schema", path_params=NS, body={"schema": SCHEMA})[1]
     assert corps["warning"] == "statut sans état terminal"
 
 
 @pytest.mark.parametrize("exc,status,code", [
-    (NamespaceNotFound("v"), 404, "namespace_not_found"),
-    (NamespaceReadOnly("v"), 403, "namespace_read_only"),
+    (DatastoreNotFound("v"), 404, "datastore_not_found"),
+    (DatastoreReadOnly("v"), 403, "datastore_read_only"),
     (ValueError("schema.key='siren' refusée : 3 valeurs en DOUBLON"), 400,
      "invalid_schema"),
 ])
@@ -127,7 +127,7 @@ def test_le_partage_rend_ok_et_ce_qui_a_ete_accorde(monkeypatch, gouvernance):
                         lambda *a, **k: vus.append((a, k)))
     assert call("me.datastore.share", path_params=NS,
                 body={"email": "sarah@x.fr", "permission": "read"}) == (
-        200, {"ok": True, "namespace": "vivier", "shared_with": "sarah@x.fr",
+        200, {"ok": True, "datastore": "vivier", "shared_with": "sarah@x.fr",
               "permission": "read"})
     (rt, rid, ptype, pid, perm), kw = vus[0]
     assert (rt, rid, ptype, pid, perm) == ("datastore_namespace", "42", "user",
@@ -147,7 +147,7 @@ def test_le_partage_defaut_est_la_LECTURE(monkeypatch, gouvernance):
     d'être seul à décider de ce qu'il contient.
 
     ⚠️ C'est une rupture de comportement pour les appelants de `data_share` et de
-    `POST /api/datastore/namespaces/{ns}/share` : un partage cessera de permettre
+    `POST /api/datastores/{ns}/share` : un partage cessera de permettre
     l'écriture. Le sens du changement est RESTRICTIF — l'effet se voit (un refus
     d'écriture), il ne se cache pas."""
     monkeypatch.setattr(dsh.ownership, "grant", lambda *a, **k: None)
@@ -191,7 +191,7 @@ def test_le_retrait_lit_bien_le_corps_du_delete(monkeypatch, gouvernance):
     monkeypatch.setattr(dsh.ownership, "revoke", lambda *a: True)
     assert call("me.datastore.unshare", path_params=NS,
                 body={"email": "sarah@x.fr"}) == (
-        200, {"ok": True, "namespace": "vivier", "removed": "sarah@x.fr"})
+        200, {"ok": True, "datastore": "vivier", "removed": "sarah@x.fr"})
 
 
 def test_retirer_un_partage_inexistant_est_un_404_qui_le_dit(monkeypatch, gouvernance):

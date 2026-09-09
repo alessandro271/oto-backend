@@ -81,7 +81,7 @@ class _FakeStore:
     relecture faite par la route (qui courrait avec un write concurrent)."""
     # Relevé de résolution du store (`DatastorePg.dernier_tableau`) : les
     # remises y prennent l'IDENTITÉ du tableau — nom canonique + `ns_id`.
-    dernier_tableau = {"ns_id": 174, "namespace": "vivier"}
+    dernier_tableau = {"ns_id": 174, "datastore": "vivier"}
 
     NS_ID = 160
     NAME = "leads-clients"
@@ -92,33 +92,33 @@ class _FakeStore:
 
     def _fill(self, trace, prev_status=None):
         if trace is not None:
-            trace.update({"ns_id": self.NS_ID, "namespace": self.NAME,
+            trace.update({"ns_id": self.NS_ID, "datastore": self.NAME,
                           "status_key": "statut", "title_key": "societe",
                           "prev_status": prev_status})
 
-    def resolve_ns_id(self, namespace):
+    def resolve_ns_id(self, datastore):
         return self.NS_ID
 
-    def get_row(self, namespace, row_id, **_):
+    def get_row(self, datastore, row_id, **_):
         return dict(self.row)
 
-    def update_row(self, namespace, row_id, patch, *, trace=None, readonly_override=False, origine_override=False,
+    def update_row(self, datastore, row_id, patch, *, trace=None, readonly_override=False, origine_override=False,
                    donnees_d_origine=False, **_):
         self._fill(trace, prev_status=self.row.get("statut"))
         self.row = {**self.row, **patch}
         self.written = patch
         return dict(self.row)
 
-    def append_row(self, namespace, data, *, trace=None, readonly_override=False, origine_override=False,
+    def append_row(self, datastore, data, *, trace=None, readonly_override=False, origine_override=False,
                    donnees_d_origine=False, **_):
         self._fill(trace)
         return {"_id": "row-2", **data}
 
-    def delete_row(self, namespace, row_id, *, trace=None):
+    def delete_row(self, datastore, row_id, *, trace=None):
         self._fill(trace, prev_status=self.row.get("statut"))
         return None
 
-    def declared_key(self, namespace):
+    def declared_key(self, datastore):
         return "societe"
 
     # #658 : la surface REST relit ce relevé pour sa ligne de journal.
@@ -131,8 +131,8 @@ class _FakeStore:
 def _wire_journal(monkeypatch) -> list[dict]:
     """Capture les lignes `tool_calls` posées, sans DB ni event loop."""
     written: list[dict] = []
-    monkeypatch.setattr(datastore_journal.db, "get_datastore_namespace_by_id",
-                        lambda ns_id: {"namespace": _FakeStore.NAME, "schema": SCHEMA,
+    monkeypatch.setattr(datastore_journal.db, "get_datastore_by_id",
+                        lambda ns_id: {"datastore": _FakeStore.NAME, "schema": SCHEMA,
                                        "owner_type": "org", "owner_id": "35"})
 
     def _insert(row):
@@ -157,7 +157,7 @@ def test_rest_transition_journals_from_and_to_status(monkeypatch):
     _mount(monkeypatch, store)
 
     status, payload = call("me.datastore.update_row",
-                           path_params={"namespace": "160", "row_id": "row-1"},
+                           path_params={"datastore": "160", "row_id": "row-1"},
                            body={"statut": "ecarte"})
 
     assert status == 200
@@ -172,7 +172,7 @@ def test_rest_transition_journals_from_and_to_status(monkeypatch):
     assert args["to_status"] == "ecarte"
     assert args["id"] == "row-1"
     assert args["fields"] == ["statut"]        # vrai tableau JSON, pas une chaîne
-    assert args["namespace"] == "leads-clients"  # nom canonique, même appelé par id
+    assert args["datastore"] == "leads-clients"  # nom canonique, même appelé par id
     assert args["ns_id"] == 160
 
 
@@ -182,7 +182,7 @@ def test_rest_delete_journals_previous_status(monkeypatch):
     _mount(monkeypatch, store)
 
     call("me.datastore.delete_row",
-         path_params={"namespace": "leads-clients", "row_id": "row-1"})
+         path_params={"datastore": "leads-clients", "row_id": "row-1"})
 
     assert written[0]["tool"] == "data_delete_row"
     assert written[0]["args"]["from_status"] == "enrichi"
@@ -200,7 +200,7 @@ def test_from_status_comes_from_the_mutation_not_a_reread(monkeypatch):
     _mount(monkeypatch, store)
 
     call("me.datastore.update_row",
-         path_params={"namespace": "160", "row_id": "row-1"}, body={"statut": "ecarte"})
+         path_params={"datastore": "160", "row_id": "row-1"}, body={"statut": "ecarte"})
 
     assert written[0]["args"]["from_status"] == "enrichi"  # pas "en_cours"
 
@@ -214,19 +214,19 @@ def test_journal_failure_never_breaks_the_write(monkeypatch):
     _mount(monkeypatch, store)
 
     status, _ = call("me.datastore.update_row",
-                     path_params={"namespace": "160", "row_id": "row-1"},
+                     path_params={"datastore": "160", "row_id": "row-1"},
                      body={"statut": "ecarte"})
     assert status == 200
 
 
-def test_namespace_lookup_failure_never_breaks_the_read(monkeypatch):
+def test_datastore_lookup_failure_never_breaks_the_read(monkeypatch):
     """Best-effort de bout en bout (D2) : la résolution du contexte de journal ne
     doit pas pouvoir faire échouer l'appelant — un hoquet du pool PG sur la lecture
     du tableau rendait un 500 sur un geste qui aurait abouti."""
     def _boom(ns_id):
         raise RuntimeError("pool timeout")
 
-    monkeypatch.setattr(datastore_journal.db, "get_datastore_namespace_by_id", _boom)
+    monkeypatch.setattr(datastore_journal.db, "get_datastore_by_id", _boom)
     ctx = datastore_journal.context(_FakeStore(), "160")
     assert ctx.ns_id is None and ctx.name == "160" and ctx.status_key is None
 
@@ -240,7 +240,7 @@ def test_illegal_transition_is_a_400_not_a_500(monkeypatch):
     store = _FakeStore()
     _wire_journal(monkeypatch)
 
-    def _refuse(namespace, row_id, patch, *, trace=None,
+    def _refuse(datastore, row_id, patch, *, trace=None,
                 readonly_override=False, origine_override=False,
                    donnees_d_origine=False, **_):
         raise RowValidationError(["statut: transition 'ecarte' → 'enrichi' interdite"])
@@ -249,7 +249,7 @@ def test_illegal_transition_is_a_400_not_a_500(monkeypatch):
     _mount(monkeypatch, store)
 
     status, corps = call("me.datastore.update_row",
-                         path_params={"namespace": "160", "row_id": "row-1"},
+                         path_params={"datastore": "160", "row_id": "row-1"},
                          body={"statut": "enrichi"})
     assert (status, corps["error"]) == (400, "row_invalid")
 
@@ -266,13 +266,13 @@ def test_row_activity_covers_rest_and_mcp(monkeypatch):
     sink: dict = {}
     rows = [
         {"created_at": "2026-07-28 16:05:09", "kind": "rest", "tool": "data_write",
-         "args": {"namespace": "leads-clients", "ns_id": 160, "id": "row-1",
+         "args": {"datastore": "leads-clients", "ns_id": 160, "id": "row-1",
                   "fields": ["statut"], "from_status": "enrichi", "to_status": "ecarte"},
          "ok": True, "error": None, "sub": "u-1", "email": "alexis@otomata.tech",
          "run_id": None, "run_label": None, "doctrine": None, "outcome": None},
         # ligne MCP historique : aucun des champs neufs → null / []
         {"created_at": "2026-07-27 09:00:00", "kind": "mcp", "tool": "data_rows",
-         "args": {"namespace": "160"}, "ok": True, "error": None, "sub": "u-1",
+         "args": {"datastore": "160"}, "ok": True, "error": None, "sub": "u-1",
          "email": None, "run_id": None, "run_label": None, "doctrine": None,
          "outcome": None},
     ]
@@ -292,8 +292,8 @@ def test_row_activity_covers_rest_and_mcp(monkeypatch):
 
 def test_row_activity_surface_labels_entries_with_the_title(monkeypatch):
     store = _FakeStore()
-    monkeypatch.setattr(datastore_journal.db, "get_datastore_namespace_by_id",
-                        lambda ns_id: {"namespace": _FakeStore.NAME, "schema": SCHEMA})
+    monkeypatch.setattr(datastore_journal.db, "get_datastore_by_id",
+                        lambda ns_id: {"datastore": _FakeStore.NAME, "schema": SCHEMA})
     monkeypatch.setattr(dsa, "make_store", lambda sub: store)
     monkeypatch.setattr(dsa.db, "datastore_row_activity",
                         lambda row_id, key_value=None, **kw: [{"row_id": "row-1",
@@ -302,40 +302,45 @@ def test_row_activity_surface_labels_entries_with_the_title(monkeypatch):
 
     from oto_mcp.capabilities._types import ResolvedCtx
     out = dsa._row_activity(ResolvedCtx(sub="u-1"),
-                            dsa.RowActivityInput(namespace="160", row_id="row-1"))
+                            dsa.RowActivityInput(datastore="160", row_id="row-1"))
 
-    assert out["retention_days"] == 30 and out["key"] == "societe"
+    # ⚠️ On vérifie la DÉRIVATION, pas un nombre. Ce banc figeait `30` pendant que la
+    # purge tournait à 90 : il gardait fidèlement une valeur fausse. Un test qui fige un
+    # chiffre recopié ne détecte jamais que la copie a divergé de l'original — il
+    # certifie la divergence.
+    from oto_mcp.maintenance import _JOURNAL_RETENTION_DAYS
+    assert out["retention_days"] == _JOURNAL_RETENTION_DAYS and out["key"] == "societe"
     assert out["activity"][0]["row_title"] == "DEXXON GROUPE"
 
 
 # --- 3. l'activité du tableau matche les deux façons de le nommer -----------
 
-def test_namespace_activity_matches_id_and_name(monkeypatch):
-    """Le piège : MCP journalise le namespace TEL QUE tapé (nom OU id), REST son
+def test_datastore_activity_matches_id_and_name(monkeypatch):
+    """Le piège : MCP journalise le datastore TEL QUE tapé (nom OU id), REST son
     ns_id résolu. Ne matcher qu'une forme trouerait le journal en silence."""
     sink: dict = {}
     rows = [
         {"created_at": "c1", "kind": "rest", "tool": "data_write",
-         "args": {"ns_id": 160, "namespace": "leads-clients", "id": "row-1",
+         "args": {"ns_id": 160, "datastore": "leads-clients", "id": "row-1",
                   "fields": ["statut"], "from_status": "enrichi", "to_status": "ecarte"},
          "ok": True, "error": None, "sub": "u-1", "email": None, "run_id": None,
          "run_label": None, "doctrine": None, "outcome": None},
         {"created_at": "c2", "kind": "mcp", "tool": "data_write",
-         "args": {"namespace": "leads-clients"}, "ok": True, "error": None,
+         "args": {"datastore": "leads-clients"}, "ok": True, "error": None,
          "sub": "u-2", "email": None, "run_id": None, "run_label": None,
          "doctrine": None, "outcome": None},
         {"created_at": "c3", "kind": "mcp", "tool": "data_rows",
-         "args": {"namespace": "160"}, "ok": True, "error": None, "sub": "u-2",
+         "args": {"datastore": "160"}, "ok": True, "error": None, "sub": "u-2",
          "email": None, "run_id": None, "run_label": None, "doctrine": None,
          "outcome": None},
     ]
     monkeypatch.setattr(usage, "_connect", lambda: _FakeConn(sink, rows))
 
-    out = usage.datastore_namespace_activity(160, "leads-clients",
+    out = usage.datastore_activity(160, "leads-clients",
                                              owner_type="org", owner_id="35", limit=50)
 
     assert "l.args->>'ns_id' = %s" in sink["sql"]
-    assert "l.args->>'namespace' = ANY(%s)" in sink["sql"]
+    assert "COALESCE(l.args->>'datastore', l.args->>'namespace') = ANY(%s)" in sink["sql"]
     # ns_id (rest) puis l'axe NOM : les deux formes tapables par l'agent, BORNÉES à l'org
     assert sink["params"][:3] == ("160", ["160", "leads-clients"], 35)
     assert [e["kind"] for e in out] == ["rest", "mcp", "mcp"]
@@ -358,38 +363,38 @@ def test_row_activity_key_axis_is_bounded_to_the_owner(monkeypatch):
     assert "l.args->>'id' = %s" in sink["sql"]
 
 
-def test_namespace_activity_name_axis_is_bounded_to_the_owner(monkeypatch):
+def test_datastore_activity_name_axis_is_bounded_to_the_owner(monkeypatch):
     """Non-régression fuite cross-org : un nom de tableau n'est unique QUE par
     propriétaire (`uq_user_datastores_owner_ns`) — deux orgs peuvent avoir `leads`.
     L'axe nom doit donc toujours porter une borne de tenant, jamais être matché nu."""
     sink: dict = {}
     monkeypatch.setattr(usage, "_connect", lambda: _FakeConn(sink, []))
 
-    usage.datastore_namespace_activity(160, "leads", owner_type="org", owner_id="35")
+    usage.datastore_activity(160, "leads", owner_type="org", owner_id="35")
     assert "l.org_id = %s" in sink["sql"]
     assert 35 in sink["params"]
 
-    usage.datastore_namespace_activity(160, "leads", owner_type="user", owner_id="u-1")
+    usage.datastore_activity(160, "leads", owner_type="user", owner_id="u-1")
     assert "l.sub = %s" in sink["sql"]
     assert "u-1" in sink["params"]
 
     # Propriétaire inconnu / tableau d'équipe : on SOUS-COUVRE (ns_id seul) plutôt que
     # de sur-matcher un homonyme d'un autre tenant.
-    usage.datastore_namespace_activity(160, "leads")
-    assert "l.args->>'namespace'" not in sink["sql"]
+    usage.datastore_activity(160, "leads")
+    assert "l.args->>'datastore'" not in sink["sql"]
     assert sink["params"][:1] == ("160",)
 
 
-def test_namespace_activity_limit_is_server_bounded(monkeypatch):
+def test_datastore_activity_limit_is_server_bounded(monkeypatch):
     sink: dict = {}
     monkeypatch.setattr(usage, "_connect", lambda: _FakeConn(sink, []))
-    usage.datastore_namespace_activity(160, "leads-clients", limit=9999)
+    usage.datastore_activity(160, "leads-clients", limit=9999)
     assert sink["params"][-1] == 200
-    usage.datastore_namespace_activity(160, "leads-clients", limit=0)
+    usage.datastore_activity(160, "leads-clients", limit=0)
     assert sink["params"][-1] == 1
 
 
-def test_namespace_activity_titles_resolved_in_one_batch(monkeypatch):
+def test_datastore_activity_titles_resolved_in_one_batch(monkeypatch):
     """Libellés = UNE requête pour toutes les entrées, ligne supprimée ⇒ None."""
     calls: list = []
 
@@ -440,17 +445,17 @@ def test_semantic_rest_lines_stay_out_of_the_route_lens(monkeypatch):
     assert "position(' /' in tool) > 0" in sink["sql"]
 
 
-def test_namespace_activity_is_a_capability_not_a_handwritten_route():
+def test_datastore_activity_is_a_capability_not_a_handwritten_route():
     """ADR 0042 §Convergence : le verbe naît capacité (une autz, une face dérivée)."""
     from oto_mcp.capabilities import registry
     paths = {b.path for c in registry.CAPABILITIES for b in c.rest_bindings()}
-    assert "/api/datastore/namespaces/{namespace}/activity" in paths
-    assert "/api/datastore/namespaces/{namespace}/rows/{row_id}/activity" in paths
+    assert "/api/datastores/{datastore}/activity" in paths
+    assert "/api/datastores/{datastore}/rows/{row_id}/activity" in paths
 
 
 # --- le journal cite l'ENTITÉ, pas la chaîne tapée --------------------------
 # Corrélation par `ns_id` résolu sur les DEUX surfaces. Sans ça, la face MCP ne
-# laissait que `args.namespace` = ce que l'agent avait tapé, et la lecture devait
+# laissait que `args.datastore` = ce que l'agent avait tapé, et la lecture devait
 # corréler par NOM — un nom n'étant unique que par propriétaire, il fallait le borner
 # au tenant pour ne pas fuiter, il change au renommage, et `slot:<name>` échappait.
 
@@ -462,7 +467,7 @@ def test_resolve_notes_the_entity_whatever_the_agent_typed(monkeypatch):
     from oto_mcp.datastore import core as ds
 
     monkeypatch.setattr(ds.db, "resolve_datastore_ns",
-                        lambda ns, **kw: {"id": 160, "namespace": "leads-clients"})
+                        lambda ns, **kw: {"id": 160, "datastore": "leads-clients"})
     monkeypatch.setattr(ownership, "org_can_access", lambda *a, **kw: True)
     st = DatastorePg("u-1", acting_org=35)
     monkeypatch.setattr(st, "_active_scope", lambda: ([35], []))
@@ -481,7 +486,7 @@ def test_resolve_notes_the_entity_whatever_the_agent_typed(monkeypatch):
 def test_resolve_leaves_no_trace_when_access_is_refused(monkeypatch):
     """Un tableau hors périmètre ne doit pas laisser d'entité dans le relevé."""
     from oto_mcp import session_org
-    from oto_mcp.datastore.core import DatastorePg, NamespaceNotFound
+    from oto_mcp.datastore.core import DatastorePg, DatastoreNotFound
     from oto_mcp.datastore import core as ds
 
     monkeypatch.setattr(ds.db, "resolve_datastore_ns", lambda ns, **kw: None)
@@ -490,7 +495,7 @@ def test_resolve_leaves_no_trace_when_access_is_refused(monkeypatch):
     holder: dict = {}
     tok = session_org.set_call_trace(holder)
     try:
-        with pytest.raises(NamespaceNotFound):
+        with pytest.raises(DatastoreNotFound):
             st._resolve("le-tableau-d-une-autre-org")
     finally:
         session_org.reset_call_trace(tok)
@@ -505,7 +510,7 @@ def test_resolve_is_inert_outside_an_mcp_call(monkeypatch):
     from oto_mcp.datastore import core as ds
 
     monkeypatch.setattr(ds.db, "resolve_datastore_ns",
-                        lambda ns, **kw: {"id": 160, "namespace": "leads-clients"})
+                        lambda ns, **kw: {"id": 160, "datastore": "leads-clients"})
     monkeypatch.setattr(ownership, "org_can_access", lambda *a, **kw: True)
     st = DatastorePg("u-1", acting_org=35)
     monkeypatch.setattr(st, "_active_scope", lambda: ([35], []))
@@ -552,17 +557,18 @@ def test_trace_only_yields_a_closed_set_of_keys():
                                    "readonly_forced")
 
 
-def test_namespace_lens_correlates_on_the_id_without_a_tenant_bound(monkeypatch):
+def test_datastore_lens_correlates_on_the_id_without_a_tenant_bound(monkeypatch):
     """L'axe `ns_id` est de confiance (résolu serveur, l'appelant porte déjà le gate) :
     il se matche NU. Seul le repli par nom — l'historique d'avant — est borné au tenant."""
     sink: dict = {}
     monkeypatch.setattr(usage, "_connect", lambda: _FakeConn(sink, []))
 
-    usage.datastore_namespace_activity(160, "leads-clients",
+    usage.datastore_activity(160, "leads-clients",
                                        owner_type="org", owner_id="2", limit=50)
 
     sql = sink["sql"]
     assert "l.args->>'ns_id' = %s" in sql
     id_axis = [c for c in sql.split(" OR ") if "ns_id" in c][0]
     assert "org_id" not in id_axis                      # l'id ne se borne pas
-    assert "l.args->>'namespace' = ANY(%s) AND l.org_id = %s" in sql   # le nom, si
+    assert ("COALESCE(l.args->>'datastore', l.args->>'namespace') = ANY(%s) "
+            "AND l.org_id = %s") in sql   # le nom, si

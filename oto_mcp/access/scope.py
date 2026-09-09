@@ -310,7 +310,7 @@ def project_pinned_instance(provider: str, project_id: Optional[int] = None):
 SLOT_PREFIX = "slot:"
 
 
-def resolve_namespace_ref(namespace: str) -> str:
+def resolve_datastore_ref(namespace: str) -> str:
     """Résout une référence de tableau : `slot:<name>` → le nom RÉEL du namespace
     bindé par le projet actif ; un nom nu passe inchangé (zéro magie sur les noms
     littéraux).

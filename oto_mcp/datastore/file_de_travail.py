@@ -117,7 +117,7 @@ class FileDeTravailMixin:
 
     # --- file de travail (ADR 0046 D) -----------------------------------------
 
-    def claim_next(self, namespace: str, *, worker: str,
+    def claim_next(self, datastore: str, *, worker: str,
                    filter: Optional[dict] = None, lease_s: int = 900,
                    max_claims: Optional[int] = None,
                    warnings: Optional[list] = None,
@@ -159,7 +159,7 @@ class FileDeTravailMixin:
         worker = (worker or "").strip()
         if not worker:
             raise ValueError("worker requis (libellé stable rejoué sur release)")
-        ns_id = self._resolve(namespace, write=True)
+        ns_id = self._resolve(datastore, write=True)
         ns = self._ns_of(ns_id)
         schema = ns.get("schema")
         declare = dsv2.claimable_of(schema, ns_id)
@@ -178,7 +178,7 @@ class FileDeTravailMixin:
         # qu'un point est adressable.
         return self._row_to_dict(row, schema, layers=layers) if row else None
 
-    def claim_row(self, namespace: str, row_id: str, *, worker: str,
+    def claim_row(self, datastore: str, row_id: str, *, worker: str,
                   lease_s: int = 900, warnings: Optional[list] = None,
                   trace: Optional[dict] = None,
                   layers: str = dsl.DEFAUT) -> dict:
@@ -194,7 +194,7 @@ class FileDeTravailMixin:
         worker = (worker or "").strip()
         if not worker:
             raise ValueError("worker requis (libellé stable rejoué sur release)")
-        ns_id = self._resolve(namespace, write=True)
+        ns_id = self._resolve(datastore, write=True)
         ns = self._ns_of(ns_id)
         schema = ns.get("schema")
         declare = dsv2.claimable_of(schema, ns_id)
@@ -216,7 +216,7 @@ class FileDeTravailMixin:
                      trace: Optional[dict], ns: Optional[dict] = None) -> None:
         """Relevés communs aux deux claims, sur un ns_id DÉJÀ résolu : le défaut de
         configuration qui rend l'auto-release inopérante, et le contexte de journal.
-        Une seule lecture de la ligne namespace pour les deux — et aucune quand
+        Une seule lecture de la ligne datastore pour les deux — et aucune quand
         l'appelant l'a déjà (`ns`), le périmètre l'ayant lue avant le pick."""
         if warnings is None and trace is None:
             return
@@ -228,7 +228,7 @@ class FileDeTravailMixin:
                 warnings.append(w)
         self._trace(trace, ns_id, ns)
 
-    def release_claim(self, namespace: str, row_id: str, *, worker: str,
+    def release_claim(self, datastore: str, row_id: str, *, worker: str,
                       trace: Optional[dict] = None) -> dict:
         """Libère le bail (abandon sans verdict), et NOMME ce qu'elle a constaté.
 
@@ -251,7 +251,7 @@ class FileDeTravailMixin:
         *Le serveur sait lequel des deux c'est : c'est dans la ligne qu'il vient de ne
         pas modifier. Un succès partiel qu'on ne peut pas distinguer d'un échec est
         pire qu'un refus — un refus, au moins, s'instruit.*"""
-        ns_id = self._resolve(namespace, write=True)
+        ns_id = self._resolve(datastore, write=True)
         if trace is not None:
             self._trace(trace, ns_id, self._ns_of(ns_id))
         if db.datastore_release_claim(ns_id, row_id, str(worker)):
@@ -264,7 +264,7 @@ class FileDeTravailMixin:
                 "reason": "held_by_other" if bail else "no_lease",
                 "lease": bail}
 
-    def claimed_hint(self, namespace: str) -> Optional[str]:
+    def claimed_hint(self, datastore: str) -> Optional[str]:
         """Ce que le travail courant tient — dit au moment où une ADRESSE échoue (#517).
 
         Le refus « introuvable » tombe précisément quand l'agent s'est trompé
@@ -281,16 +281,16 @@ class FileDeTravailMixin:
 
         None quand il n'y a rien d'utile à dire — hors run, ou aucune réservation :
         une piste vide vaut mieux qu'une phrase qui meuble."""
-        ici, ailleurs = self._baux_du_run(namespace)
+        ici, ailleurs = self._baux_du_run(datastore)
         if not ici and not ailleurs:
             return None
         if ici:
-            return (f"ton travail tient {_backquote(ici)} dans `{namespace}` — "
+            return (f"ton travail tient {_backquote(ici)} dans `{datastore}` — "
                     "c'est l'identifiant à passer dans `id`, sans le recopier de mémoire")
-        return (f"ton travail ne tient rien dans `{namespace}`, mais tient une ligne "
+        return (f"ton travail ne tient rien dans `{datastore}`, mais tient une ligne "
                 f"dans {_backquote(ailleurs)} — c'est peut-être le tableau que tu visais")
 
-    def _baux_du_run(self, namespace: str):
+    def _baux_du_run(self, datastore: str):
         """Ce que le travail courant tient : ici, et ailleurs — source unique de la piste
         rendue quand une adresse échoue (#517).
 
@@ -310,27 +310,27 @@ class FileDeTravailMixin:
         baux = db.datastore_active_leases_of(run_id=run)
         if not baux:
             return [], []
-        ns_id = self._resolve(namespace)
+        ns_id = self._resolve(datastore)
         ici = [str(b["row_id"]) for b in baux if b["ns_id"] == ns_id]
-        ailleurs = sorted({str(self._ns_of(b["ns_id"]).get("namespace") or b["ns_id"])
+        ailleurs = sorted({str(self._ns_of(b["ns_id"]).get("datastore") or b["ns_id"])
                            for b in baux if b["ns_id"] != ns_id})
         return ici, ailleurs
 
-    def queue(self, namespace: str) -> list[dict]:
+    def queue(self, datastore: str) -> list[dict]:
         """Vue de SUPERVISION de la file (dashboard) : les rows sous bail —
         actif ou expiré, le consommateur tranche sur `_claimed_until`. Lecture
         seule (aucun droit d'écriture requis)."""
-        ns_id = self._resolve(namespace)
+        ns_id = self._resolve(datastore)
         sch = self._schema_of(ns_id)
         return [self._row_to_dict(r, sch, bail_echu="servir")
                 for r in db.datastore_claimed_rows(ns_id)]
 
-    def force_release(self, namespace: str, row_id: str, *,
+    def force_release(self, datastore: str, row_id: str, *,
                       trace: Optional[dict] = None) -> bool:
         """Libère le bail SANS garde de worker — supervision humaine (dashboard),
         ≠ `release_claim` (agent, gardé). Exige le droit d'écriture. False = pas
         de bail à libérer."""
-        ns_id = self._resolve(namespace, write=True)
+        ns_id = self._resolve(datastore, write=True)
         if trace is not None:
             self._trace(trace, ns_id, self._ns_of(ns_id))
         return db.datastore_release_claim(ns_id, row_id, None)

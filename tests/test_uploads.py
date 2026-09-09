@@ -193,7 +193,7 @@ def test_mint_datastore_seals_resolved_ns_id(monkeypatch):
     from oto_mcp.datastore import core as ds
     monkeypatch.setattr(ds, "make_store", lambda sub: FakeStore())
     monkeypatch.setattr(ut, "check_target_access", lambda sub, target: None)
-    out = U._upload_url(CTX, U.UploadUrlInput(target="datastore", namespace="contacts"))
+    out = U._upload_url(CTX, U.UploadUrlInput(target="datastore", datastore="contacts"))
     p = ut.verify(out["url"].rsplit("/", 1)[1])
     # ⚠️ `origine_override` fait partie de ce que le jeton SCELLE (oto#70 lot 2) : la
     # déclaration se prend au mint, par celui qui prépare l'import, et ne peut donc pas

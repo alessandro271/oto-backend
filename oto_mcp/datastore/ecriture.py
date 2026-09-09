@@ -26,7 +26,7 @@ from .columns import (
     refuser_geste_sans_effet,
 )
 from .controles import _relever_origine_module
-from .errors import NamespaceNotFound, RowNotFound, RowValidationError
+from .errors import DatastoreNotFound, RowNotFound, RowValidationError
 from . import fin_du_null as fdn
 from . import reliques as rq
 from .forcage import Forcage
@@ -41,13 +41,13 @@ class EcritureMixin:
 
     # --- row ops -------------------------------------------------------------
 
-    def append_row(self, namespace: str, data: dict, *,
+    def append_row(self, datastore: str, data: dict, *,
                    trace: Optional[dict] = None,
                    readonly_override: bool = False,
                    origine_override: bool = False,
                    donnees_d_origine: bool = False,
                    force: Optional[frozenset] = None) -> dict:
-        """Écrit UNE row. Si le namespace déclare une clé métier (`schema.key`),
+        """Écrit UNE row. Si le datastore déclare une clé métier (`schema.key`),
         applique la MÊME dédup upsert que le batch `write_rows` : une row de même
         valeur de clé est MERGÉE (pas de doublon, l'index `ds_bkey_<ns>` la refuse) ;
         sinon append. Renvoie la row (nouvelle ou mise à jour).
@@ -69,16 +69,16 @@ class EcritureMixin:
             cible = str(data["_id"])
             reste = {k: v for k, v in data.items() if k != "_id"}
             try:
-                return self.update_row(namespace, cible, reste, trace=trace,
+                return self.update_row(datastore, cible, reste, trace=trace,
                                        readonly_override=readonly_override,
                                        donnees_d_origine=donnees_d_origine)
             except RowNotFound:
                 raise ValueError(
                     f"`_id` ({cible!r}) ne correspond à aucune ligne de "
-                    f"`{namespace}` — rien n'est créé. L'identifiant est peut-être "
+                    f"`{datastore}` — rien n'est créé. L'identifiant est peut-être "
                     "tronqué ou la ligne purgée : relis-la (data_rows, "
                     "data_claim_next) et réécris avec son `_id` exact.")
-        ns_id = self._resolve(namespace, write=True)
+        ns_id = self._resolve(datastore, write=True)
         user_data = {k: v for k, v in data.items() if k not in _META_COLS}
         ns = self._ns_of(ns_id)
         schema = ns.get("schema")
@@ -116,7 +116,7 @@ class EcritureMixin:
                                 declare=origine_override)
         self._trace(trace, ns_id, ns)
         # La clé métier sort du MÊME schéma que ci-dessus (`declared_key` re-résolvait
-        # le namespace et relisait la ligne pour le même résultat).
+        # le datastore et relisait la ligne pour le même résultat).
         key = self._declared_key_of(schema)
         # ⚠️ DÉBALLÉ — une clé métier annotée est la MÊME identité qu'une clé nue
         # (cf. `lots.py`). Enrichir la provenance ne change pas ce qu'une donnée est.
@@ -136,7 +136,7 @@ class EcritureMixin:
         # Refuser AVANT `_check_row` : la validation de schéma parlerait des champs
         # d'une ligne qui ne doit pas naître.
         if dsv2.key_required_of(schema):
-            raise _refus_de_creation(ns.get("namespace") or namespace, key, kv)
+            raise _refus_de_creation(ns.get("datastore") or datastore, key, kv)
         # #390 (3ᵉ demande) : une ligne CRÉÉE sans la clé métier déclarée est non
         # rapprochable — aucune écriture ultérieure ne la retrouvera par sa clé, et
         # le batch qui dédouble passera à côté. C'est la forme résiduelle de
@@ -276,20 +276,20 @@ class EcritureMixin:
         self._terminal_write_notice(schema, ns_id, row_id, merged)
         return row
 
-    def upsert_row(self, namespace: str, row_id: str, data: dict, *,
+    def upsert_row(self, datastore: str, row_id: str, data: dict, *,
                    origine_override: bool = False) -> tuple[dict, bool]:
         """Écrit une row à une clé `row_id` EXPLICITE (≠ append_row qui génère un
-        id), en remplaçant si elle existe. Crée le namespace au besoin. Sert le
+        id), en remplaçant si elle existe. Crée le datastore au besoin. Sert le
         stockage dédupliqué par clé stable (ex. urn LinkedIn). Renvoie
         `(row, inserted)` — `inserted` False = la row existait déjà."""
         self._reject_misplaced_id(data, row_id)
         try:
-            ns_id = self._resolve(namespace, write=True)
-        except NamespaceNotFound:
+            ns_id = self._resolve(datastore, write=True)
+        except DatastoreNotFound:
             _ot, _oid = self._default_owner()
-            db.create_datastore_namespace(_ot, _oid, namespace)
+            db.create_datastore(_ot, _oid, datastore)
             self._active_scope_cache = None  # invalide le cache (le ns créé appartient à la PERSONNE (ADR 0068), pas à l'org active)
-            ns_id = self._resolve(namespace, write=True)
+            ns_id = self._resolve(datastore, write=True)
         user_data = {k: v for k, v in data.items() if k not in _META_COLS}
         schema = self._schema_of(ns_id)
         # ⚠️ Pas de `colonnes_en_place` ici, et c'est délibéré : l'upsert REMPLACE la
@@ -323,7 +323,7 @@ class EcritureMixin:
             self._terminal_write_notice(schema, ns_id, row_id, user_data)
         return self._row_to_dict(row, schema), inserted
 
-    def declared_key(self, namespace: str) -> Optional[str]:
+    def declared_key(self, datastore: str) -> Optional[str]:
         """Clé métier déclarée au schéma (`schema.key`) — sert la dédup au batch
         write. None si aucune (table libre / schéma sans clé).
 
@@ -331,9 +331,9 @@ class EcritureMixin:
         jamais la clé métier — `acces_agent._cles_par_acces` l'écarte quoi qu'en dise la
         déclaration, précisément pour qu'aucune décision interne ne dépende du point de
         vue de l'appelant."""
-        return self._declared_key_of(self.get_schema(namespace))
+        return self._declared_key_of(self.get_schema(datastore))
 
-    def write_rows(self, namespace: str, rows: list, *, key: Optional[str] = None,
+    def write_rows(self, datastore: str, rows: list, *, key: Optional[str] = None,
                    readonly_override: bool = False,
                    origine_override: bool = False,
                    donnees_d_origine: bool = False,
@@ -342,15 +342,15 @@ class EcritureMixin:
         `key` explicite, sinon `schema.key` déclarée), chaque row qui la porte fait un
         UPSERT (merge) sur la row existante de même valeur de clé — pas de doublon ;
         sinon append d'une nouvelle row. Renvoie un récap {inserted, updated, count,
-        key, ids}. Résout le namespace UNE fois (write) pour tout le lot."""
-        ns_id = self._resolve(namespace, write=True)
-        return self._write_rows_to_ns(ns_id, rows, key=key or self.declared_key(namespace),
+        key, ids}. Résout le datastore UNE fois (write) pour tout le lot."""
+        ns_id = self._resolve(datastore, write=True)
+        return self._write_rows_to_ns(ns_id, rows, key=key or self.declared_key(datastore),
                                       readonly_override=readonly_override,
                                       origine_override=origine_override,
                                       donnees_d_origine=donnees_d_origine,
                                       force=force)
 
-    def update_row(self, namespace: str, row_id: str, patch: dict, *,
+    def update_row(self, datastore: str, row_id: str, patch: dict, *,
                    trace: Optional[dict] = None,
                    readonly_override: bool = False,
                    origine_override: bool = False,
@@ -363,7 +363,7 @@ class EcritureMixin:
         `readonly_override` (#658) = forcer les colonnes verrouillées de CET appel,
         sous palier — cf. `_forcage_readonly`."""
         self._reject_misplaced_id(patch, row_id)
-        ns_id = self._resolve(namespace, write=True)
+        ns_id = self._resolve(datastore, write=True)
         existing = db.datastore_get_row(ns_id, row_id)
         if not existing:
             raise RowNotFound(row_id)
@@ -469,13 +469,13 @@ class EcritureMixin:
         self._terminal_write_notice(schema, ns_id, row_id, data)
         return self._row_to_dict(row, schema)
 
-    def delete_row(self, namespace: str, row_id: str, *,
+    def delete_row(self, datastore: str, row_id: str, *,
                    trace: Optional[dict] = None) -> None:
-        ns_id = self._resolve(namespace, write=True)
+        ns_id = self._resolve(datastore, write=True)
         if trace is not None:
             # Relevé demandé : on lit l'état de la row DANS le chemin de suppression
             # (au plus près du delete), jamais par un `get_row` séparé côté route —
-            # qui re-résoudrait le namespace et courrait avec un write concurrent.
+            # qui re-résoudrait le datastore et courrait avec un write concurrent.
             ns = self._ns_of(ns_id)
             sk = (dsv2.status_field(ns.get("schema")) or {}).get("key")
             prev = ((db.datastore_get_row(ns_id, row_id) or {}).get("data") or {}) if sk else {}

@@ -97,7 +97,7 @@ def _table(schema=None):
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
     ns = "t-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore_namespace("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, ns)
     if schema is not None:
         make_store(SUB).set_schema(ns, schema)
     return ns, ns_id
@@ -112,7 +112,7 @@ def _base(ns_id: int) -> list[dict]:
 
 
 def _post(ns, corps):
-    return call("me.datastore.append_row", path_params={"namespace": ns},
+    return call("me.datastore.append_row", path_params={"datastore": ns},
                 body=corps, sub=SUB)
 
 
@@ -175,7 +175,7 @@ def test_le_patch_n_est_pas_garde(live):
     ns, ns_id = _table()
     rid = _post(ns, LIGNE)[1]["_id"]
     status, rep = call("me.datastore.update_row",
-                       path_params={"namespace": ns, "row_id": rid},
+                       path_params={"datastore": ns, "row_id": rid},
                        body={"contacts": [{"nom": "A"}]}, sub=SUB)
     assert status == 200 and rep["contacts"] == [{"nom": "A"}]
     assert _base(ns_id) == [{**LIGNE, "contacts": [{"nom": "A"}]}]

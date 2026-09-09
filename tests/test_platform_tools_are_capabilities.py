@@ -21,7 +21,7 @@ import pathlib
 
 TOOLS_DIR = pathlib.Path(__file__).resolve().parent.parent / "oto_mcp" / "tools"
 
-# Préfixes de la surface PLATEFORME (≠ un connecteur, qui a son propre namespace).
+# Préfixes de la surface PLATEFORME (≠ un connecteur, qui a son propre datastore).
 _PLATFORM_PREFIXES = ("oto_", "run_", "data_", "feedback")
 
 # Résidus CONNUS, avec leur raison. `True` = MCP-only par NATURE (aucune face REST
@@ -56,10 +56,10 @@ _KNOWN: dict[str, bool] = {
     "data_rows": False,
     "data_write": False,
     "data_url": False,
-    "data_list_namespaces": False,
-    "data_create_namespace": False,
-    "data_delete_namespace": False,
-    "data_rename_namespace": False,
+    "data_list_datastores": False,
+    "data_create_datastore": False,
+    "data_delete_datastore": False,
+    "data_rename_datastore": False,
     "data_set_schema": False,
     "data_claim_next": False,
     "data_release": False,

@@ -25,17 +25,17 @@ import pytest
 from _datastore_rest import Boom, call, cap, stub_authz
 
 from oto_mcp.capabilities.datastore import rows as dsr
-from oto_mcp.datastore.core import NamespaceNotFound, NamespaceReadOnly, RowNotFound
+from oto_mcp.datastore.core import DatastoreNotFound, DatastoreReadOnly, RowNotFound
 
-NS = {"namespace": "vivier"}
-ROW = {"namespace": "vivier", "row_id": "r1"}
+NS = {"datastore": "vivier"}
+ROW = {"datastore": "vivier", "row_id": "r1"}
 
 
 class _Store:
     """Enregistre l'appel, rend ce que le test a posé."""
     # Relevé de résolution du store (`DatastorePg.dernier_tableau`) : les
     # remises y prennent l'IDENTITÉ du tableau — nom canonique + `ns_id`.
-    dernier_tableau = {"ns_id": 174, "namespace": "vivier"}
+    dernier_tableau = {"ns_id": 174, "datastore": "vivier"}
 
     def __init__(self, **verdicts):
         self.v = verdicts
@@ -257,9 +257,9 @@ _ECRITURES = [c for c in _TOUS
 
 @pytest.mark.parametrize("cle,params,corps", _ECRITURES)
 def test_un_tableau_en_lecture_seule_refuse_lecriture(monkeypatch, cle, params, corps):
-    _boom(monkeypatch, NamespaceReadOnly("vivier"))
+    _boom(monkeypatch, DatastoreReadOnly("vivier"))
     status, out = call(cle, path_params=params, body=corps)
-    assert (status, out["error"]) == (403, "namespace_read_only")
+    assert (status, out["error"]) == (403, "datastore_read_only")
 
 
 @pytest.mark.parametrize("cle,params,corps", _TOUS)
@@ -267,9 +267,9 @@ def test_un_tableau_hors_perimetre_est_un_404_partout(monkeypatch, cle, params, 
     """Le vrai gate n'est pas la garde de capacité (`SUB_ONLY`) mais le store : org
     active + ownership. Un tableau qu'on n'a pas le droit de voir ne se distingue pas
     d'un tableau inexistant — sur les huit chemins, sans exception."""
-    _boom(monkeypatch, NamespaceNotFound("vivier"))
+    _boom(monkeypatch, DatastoreNotFound("vivier"))
     status, out = call(cle, path_params=params, body=corps)
-    assert (status, out["error"]) == (404, "namespace_not_found")
+    assert (status, out["error"]) == (404, "datastore_not_found")
 
 
 # --- le contrat ------------------------------------------------------------------
@@ -281,13 +281,13 @@ def test_les_deux_corps_libres_sont_declares_comme_tels():
 
 
 def test_une_colonne_qui_sappelle_comme_un_champ_dapi_reste_une_donnee(store):
-    """Un tableau peut avoir une colonne « namespace » ou « limit » : elle appartient
+    """Un tableau peut avoir une colonne « datastore » ou « limit » : elle appartient
     à l'utilisateur, elle ne doit jamais être confondue avec un paramètre."""
     call("me.datastore.append_row", path_params=NS,
-         body={"namespace": "pas le tableau", "limit": 3})
+         body={"datastore": "pas le tableau", "limit": 3})
     _, args, _ = store.calls[0]
     assert args[0] == "vivier"                       # le chemin gagne
-    assert args[1] == {"namespace": "pas le tableau", "limit": 3}
+    assert args[1] == {"datastore": "pas le tableau", "limit": 3}
 
 
 def test_les_huit_capacites_declarent_leur_sortie_et_restent_rest_only():

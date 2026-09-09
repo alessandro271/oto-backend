@@ -33,6 +33,7 @@ La liste DEBT doit décroître, jamais s'étendre.
 """
 from __future__ import annotations
 
+from oto_mcp import deprecations
 from oto_mcp.api import routes as api_routes
 
 NATURE, DEBT = "nature", "debt"
@@ -82,7 +83,7 @@ _KNOWN: dict[str, str] = {
     # (`capabilities/connectors/activation.py`), ce qui rendait la dette d'autant plus
     # visible : un même métier décrit de deux façons selon l'étage.
     # ⚠️ Le 2026-08-12 (#302), le datastore a quitté cette liste EN ENTIER — onze
-    # chemins, zéro reste : le tableau (`namespaces`, `namespaces/{ns}`, `…/url`),
+    # chemins, zéro reste : le tableau (`datastores`, `datastores/{ns}`, `…/url`),
     # les lignes (`…/rows`, `…/rows/{row_id}`, `…/rows/{row_id}/release`, `…/queue`,
     # `…/aggregate`), le schéma (`…/schema`) et le partage (`…/share`) sont des
     # capacités (`capabilities/datastore/*.py`). Mêmes chemins, mêmes réponses,
@@ -246,6 +247,13 @@ _KNOWN: dict[str, str] = {
     #  ENCORE exprimer : c'est un travail de migration, pas une nature » — c'est
     #  exactement ce qui a été fait.)
 }
+
+# ⚠️ Les alias du renommage `namespace` → `datastore` (08/09/2026) sont AJOUTÉS ICI PAR
+# DÉRIVATION, pas recopiés. Ils sont eux-mêmes dérivés des routes montées
+# (`deprecations._alias_datastore`) : les lister à la main dans cette garde rétablirait
+# exactement la copie que la dérivation supprime — et une garde qui porte une copie
+# périmée refuse une route légitime ou en laisse passer une qui ne l'est pas.
+_KNOWN.update({a.ancien: NATURE for a in deprecations._alias_datastore()})
 
 
 class _FauxVerifieur:

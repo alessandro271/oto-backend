@@ -46,7 +46,7 @@ def _redirection(alias: deprecations.AliasRest):
             r.headers[k] = v
         # Un intégrateur qui lit ses logs voit la date sans avoir à ouvrir la doc.
         r.headers["Deprecation"] = "true"
-        r.headers["Sunset"] = deprecations.date_de_retrait()
+        r.headers["Sunset"] = deprecations._sunset(alias)
         return r
 
     _handler.__name__ = "alias_deprecie"
@@ -60,7 +60,11 @@ def make_routes(options_handler) -> list:
     précéder un chemin à placeholder qui l'engloberait.
     """
     routes: list = []
-    for alias in deprecations.REST:
+    # ⚠️ Les alias du renommage `namespace` → `datastore` sont DÉRIVÉS des routes
+    # montées, pas listés (`deprecations._alias_datastore`). Ils viennent EN PREMIER
+    # dans cette boucle mais restent, comme tout ce module, montés en dernier par
+    # `routes.make_routes` : un alias ne peut donc éclipser aucune vraie route.
+    for alias in tuple(deprecations._alias_datastore()) + tuple(deprecations.REST):
         routes.append(Route(alias.ancien, _redirection(alias), methods=[alias.verbe]))
         routes.append(Route(alias.ancien, options_handler, methods=["OPTIONS"]))
     return routes

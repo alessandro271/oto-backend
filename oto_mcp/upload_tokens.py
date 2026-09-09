@@ -131,6 +131,11 @@ def target_label(target: dict) -> str:
     if k == "project_file":
         return f"fichier « {target.get('filename')} » (projet #{target.get('project_id')})"
     if k == "datastore":
+        # ⚠️ `namespace` et non `datastore` : cette cible est SCELLÉE dans un jeton
+        # d'upload signé. Les jetons déjà émis portent l'ancienne clé, et un jeton ne se
+        # réécrit pas — le renommage du 08/09/2026 s'arrête donc à cette frontière, comme
+        # il s'arrête au bord du stockage. Lire `datastore` ici rendrait « tableau
+        # « None » » sur tout jeton en circulation, sans lever d'erreur.
         return f"tableau « {target.get('namespace')} » (lot {target.get('format', 'ndjson')})"
     if k == "image":
         return "image publique (png, jpeg, gif ou webp, 2 Mo max)"

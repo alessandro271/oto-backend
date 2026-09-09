@@ -72,7 +72,7 @@ def test_une_table_illisible_n_empeche_PAS_d_armer(monkeypatch):
 
     class _Store:
         def count_rows(self, ns, *, filter=None):
-            raise RuntimeError("namespace inconnu")
+            raise RuntimeError("datastore inconnu")
 
     monkeypatch.setattr("oto_mcp.datastore.core.make_store", lambda sub: _Store())
     recu = {}

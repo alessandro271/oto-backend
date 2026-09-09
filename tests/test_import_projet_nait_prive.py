@@ -50,7 +50,7 @@ def monde(monkeypatch):
                                 "copied_from": copied_from})
         return compteur["pid"]
 
-    def create_datastore_namespace(ot, oid, name):
+    def create_datastore(ot, oid, name):
         compteur["ns"] += 1
         fait["ns"].append({"id": compteur["ns"], "owner": (ot, oid), "nom": name})
         return compteur["ns"]
@@ -75,10 +75,10 @@ def monde(monkeypatch):
     monkeypatch.setattr(PJ, "list_project_links", lambda pid: [
         {"target_type": "tableau", "target_ref": "5", "label": "Vivier",
          "role": "leads", "config": None, "slot": None}])
-    monkeypatch.setattr(PJ, "get_datastore_namespace_by_id", lambda nid: (
-        {"id": 5, "namespace": "vivier", "owner_type": "org", "owner_id": "77",
+    monkeypatch.setattr(PJ, "get_datastore_by_id", lambda nid: (
+        {"id": 5, "datastore": "vivier", "owner_type": "org", "owner_id": "77",
          "schema": None} if nid == 5 else None))
-    monkeypatch.setattr(PJ, "create_datastore_namespace", create_datastore_namespace)
+    monkeypatch.setattr(PJ, "create_datastore", create_datastore)
     monkeypatch.setattr(PJ, "set_datastore_schema", lambda nid, s: None)
     monkeypatch.setattr(PJ, "datastore_list_rows", lambda nid, limit=None: [])
     monkeypatch.setattr(PJ, "datastore_insert_row", lambda nid, rid, d: None)
@@ -159,7 +159,7 @@ def test_la_DESCRIPTION_SERVIE_de_l_import_ne_promet_plus_l_org():
     Cette description-ci annonce « into your ACTIVE org » depuis toujours. Elle part
     dans l'`openapi.json` public et dans le catalogue des capacités : la laisser
     derrière le comportement, c'est refaire à l'identique le défaut qu'on vient de
-    fermer sur `data_create_namespace`, une heure plus tôt, dans le même dépôt."""
+    fermer sur `data_create_datastore`, une heure plus tôt, dans le même dépôt."""
     from oto_mcp.capabilities.registry import CAPABILITIES
 
     cap = next(c for c in CAPABILITIES if c.key == "me.import_project")

@@ -54,6 +54,12 @@ _IMPLIES = {READ: frozenset({READ}), WRITE: frozenset({READ, WRITE})}
 _CURRENT: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
     "oto_token_scope", default=None)
 
+# ⚠️ **Ces deux valeurs sont PERSISTÉES dans les jetons déjà émis.** Ce ne sont pas
+# des mots de vocabulaire : `"namespaces"` a survécu au renommage de `namespace` en
+# `datastore` (08/09/2026) parce qu'un jeton émis hier porte cette chaîne, et qu'un
+# scope qui ne correspond plus ne lève pas d'erreur — il n'autorise simplement plus
+# rien. Le mode d'échec est un ensemble vide, et un ensemble vide ressemble à un
+# succès partout où on le regarde. Les renommer exige de réémettre les jetons.
 NAMESPACES, PROJECTS = "namespaces", "projects"
 
 # La portée du RUNNER — booléenne, et c'est ce qui la distingue des deux autres.
@@ -89,28 +95,28 @@ _ID = r"(?P<res>\d+)"
 
 # (chemin, méthodes, permission requise, famille de portée). Disjointes.
 _ALLOWED: tuple[tuple[re.Pattern, frozenset, str, str], ...] = (
-    (re.compile(rf"^/api/datastore/namespaces/{_RES}/rows$"), frozenset({"GET"}), READ, NAMESPACES),
-    (re.compile(rf"^/api/datastore/namespaces/{_RES}/rows$"), frozenset({"POST"}), WRITE, NAMESPACES),
-    (re.compile(rf"^/api/datastore/namespaces/{_RES}/rows/[^/]+$"),
+    (re.compile(rf"^/api/datastores/{_RES}/rows$"), frozenset({"GET"}), READ, NAMESPACES),
+    (re.compile(rf"^/api/datastores/{_RES}/rows$"), frozenset({"POST"}), WRITE, NAMESPACES),
+    (re.compile(rf"^/api/datastores/{_RES}/rows/[^/]+$"),
      frozenset({"GET"}), READ, NAMESPACES),
-    (re.compile(rf"^/api/datastore/namespaces/{_RES}/rows/[^/]+$"),
+    (re.compile(rf"^/api/datastores/{_RES}/rows/[^/]+$"),
      frozenset({"PATCH", "DELETE"}), WRITE, NAMESPACES),
     # File de travail : réserver EST une écriture (le bail change la ligne), et un
     # jeton en lecture ne doit pas pouvoir retirer une ligne à ses collègues.
-    (re.compile(rf"^/api/datastore/namespaces/{_RES}/claim_next$"),
+    (re.compile(rf"^/api/datastores/{_RES}/claim_next$"),
      frozenset({"POST"}), WRITE, NAMESPACES),
-    (re.compile(rf"^/api/datastore/namespaces/{_RES}/rows/[^/]+/claim$"),
+    (re.compile(rf"^/api/datastores/{_RES}/rows/[^/]+/claim$"),
      frozenset({"POST"}), WRITE, NAMESPACES),
-    (re.compile(rf"^/api/datastore/namespaces/{_RES}/rows/[^/]+/release$"),
+    (re.compile(rf"^/api/datastores/{_RES}/rows/[^/]+/release$"),
      frozenset({"POST"}), WRITE, NAMESPACES),
-    (re.compile(rf"^/api/datastore/namespaces/{_RES}/rows/[^/]+/activity$"),
+    (re.compile(rf"^/api/datastores/{_RES}/rows/[^/]+/activity$"),
      frozenset({"GET"}), READ, NAMESPACES),
-    (re.compile(rf"^/api/datastore/namespaces/{_RES}/activity$"),
+    (re.compile(rf"^/api/datastores/{_RES}/activity$"),
      frozenset({"GET"}), READ, NAMESPACES),
-    (re.compile(rf"^/api/datastore/namespaces/{_RES}/queue$"), frozenset({"GET"}), READ, NAMESPACES),
-    (re.compile(rf"^/api/datastore/namespaces/{_RES}/aggregate$"),
+    (re.compile(rf"^/api/datastores/{_RES}/queue$"), frozenset({"GET"}), READ, NAMESPACES),
+    (re.compile(rf"^/api/datastores/{_RES}/aggregate$"),
      frozenset({"GET"}), READ, NAMESPACES),
-    (re.compile(rf"^/api/datastore/namespaces/{_RES}/url$"), frozenset({"GET"}), READ, NAMESPACES),
+    (re.compile(rf"^/api/datastores/{_RES}/url$"), frozenset({"GET"}), READ, NAMESPACES),
     # ⚠️ Le schéma se LIT avant de s'écrire, et la lecture manquait : `PUT` était
     # ouvert, `GET` non. On pouvait donc poser un schéma sans pouvoir le
     # consulter — personne ne décide ça, c'était un oubli, et l'asymétrie le
@@ -120,9 +126,9 @@ _ALLOWED: tuple[tuple[re.Pattern, frozenset, str, str], ...] = (
     # schéma AVANT d'écrire — c'est ce qui fait qu'une longueur maximale est un
     # contrat et pas une consigne. Un agent porté qui obéissait se prenait un
     # refus sur le geste exact qu'on lui demandait.
-    (re.compile(rf"^/api/datastore/namespaces/{_RES}/schema$"),
+    (re.compile(rf"^/api/datastores/{_RES}/schema$"),
      frozenset({"GET"}), READ, NAMESPACES),
-    (re.compile(rf"^/api/datastore/namespaces/{_RES}/schema$"),
+    (re.compile(rf"^/api/datastores/{_RES}/schema$"),
      frozenset({"PUT", "PATCH"}), WRITE, NAMESPACES),
     # Le projet nommé : son brief et ses liens. Lecture seule, et par id — la
     # capacité `oto_project` (POST /api/me/projects) reste, elle, hors de portée
@@ -133,7 +139,7 @@ _ALLOWED: tuple[tuple[re.Pattern, frozenset, str, str], ...] = (
 # Le catalogue des tableaux est LISIBLE par un jeton porté, mais FILTRÉ à sa portée
 # par le handler (`ds_list_ns`) : sans lui, une intégration ne peut pas découvrir le
 # schéma de son tableau (les colonnes) — `page_rows` ne le rend pas.
-_FILTERED = ("GET", "/api/datastore/namespaces")
+_FILTERED = ("GET", "/api/datastores")
 
 
 class ScopeError(ValueError):
@@ -285,7 +291,7 @@ def current() -> Optional[dict]:
     return _CURRENT.get()
 
 
-def filter_namespaces(rows: list) -> list:
+def filter_datastores(rows: list) -> list:
     """Restreint une liste de tableaux à la portée du jeton courant (no-op hors
     jeton porté). Le catalogue est la seule réponse FILTRÉE plutôt que refusée.
 
@@ -300,7 +306,11 @@ def filter_namespaces(rows: list) -> list:
     grants = (scopes or {}).get(NAMESPACES) or {}
     out = []
     for r in rows:
-        perm = grants.get((r or {}).get("namespace"))
+        # ⚠️ La ligne rend `datastore` depuis le renommage du 08/09/2026 ; la CLÉ DE
+        # SCOPE, elle, reste `namespaces` — elle vit dans les jetons déjà émis. Les
+        # deux mots cohabitent donc ici volontairement, et lire le mauvais rendait un
+        # catalogue VIDE pour tout jeton porté, sans lever la moindre erreur.
+        perm = grants.get((r or {}).get("datastore"))
         if perm is None:
             continue
         e = dict(r)

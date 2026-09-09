@@ -29,7 +29,7 @@ def store(monkeypatch):
     st = DatastorePg("u", acting_org=35)
     monkeypatch.setattr(st, "_resolve", lambda ns, write=False: 7)
     dropped = []
-    monkeypatch.setattr(dsm.db, "get_datastore_namespace_by_id",
+    monkeypatch.setattr(dsm.db, "get_datastore_by_id",
                         lambda ns_id: {"id": ns_id, "schema": STRICT})
     monkeypatch.setattr(dsm.db, "datastore_drop_column",
                         lambda ns_id, key: (dropped.append((ns_id, key)) or 12))
@@ -49,7 +49,7 @@ def test_with_confirm_it_purges_and_counts(store):
     st, dropped = store
     out = st.drop_column("v", "actualite_sociale", confirm=True)
     assert dropped == [(7, "actualite_sociale")]
-    assert out == {"namespace": "v", "key": "actualite_sociale", "rows": 12}
+    assert out == {"datastore": "v", "key": "actualite_sociale", "rows": 12}
 
 
 def test_a_field_still_declared_is_refused(store):
@@ -92,7 +92,7 @@ def store_sans_effet(monkeypatch):
     de couche existe."""
     st = DatastorePg("u", acting_org=35)
     monkeypatch.setattr(st, "_resolve", lambda ns, write=False: 7)
-    monkeypatch.setattr(dsm.db, "get_datastore_namespace_by_id",
+    monkeypatch.setattr(dsm.db, "get_datastore_by_id",
                         lambda ns_id: {"id": ns_id, "schema": STRICT})
     monkeypatch.setattr(dsm.db, "datastore_drop_column", lambda ns_id, key: 0)
     presentes: set = set()
@@ -152,7 +152,7 @@ def test_a_dotted_key_really_STORED_is_purged_not_refused(store):
     st, dropped = store               # la purge SQL rend 12 lignes touchées
     out = st.drop_column("v", "site_web.comment", confirm=True)
     assert dropped == [(7, "site_web.comment")]
-    assert out == {"namespace": "v", "key": "site_web.comment", "rows": 12}
+    assert out == {"datastore": "v", "key": "site_web.comment", "rows": 12}
 
 
 # ── le SQL, contre un vrai PostgreSQL ────────────────────────────────────────
@@ -225,7 +225,7 @@ def test_has_column_is_EXACT_where_row_keys_only_samples(pg_rows):
     assert dbds.datastore_has_column(7, "jamais_ecrite") is False
 
 
-def test_has_column_stays_in_its_namespace(pg_rows):
+def test_has_column_stays_in_its_datastore(pg_rows):
     conn, dbds = pg_rows
     import json
     conn.execute("INSERT INTO datastore_rows (ns_id, row_id, data) "
@@ -233,7 +233,7 @@ def test_has_column_stays_in_its_namespace(pg_rows):
     assert dbds.datastore_has_column(7, "ailleurs") is False
 
 
-def test_drop_column_leaves_other_namespaces_alone(pg_rows):
+def test_drop_column_leaves_other_datastores_alone(pg_rows):
     conn, dbds = pg_rows
     import json
     conn.execute("INSERT INTO datastore_rows (ns_id, row_id, data) "
@@ -282,7 +282,7 @@ def store_mutable(monkeypatch):
     etat = {"schema": dict(STRICT), "purgees": [], "rows_par_colonne": 12}
     st = DatastorePg("u", acting_org=35)
     monkeypatch.setattr(st, "_resolve", lambda ns, write=False: 7)
-    monkeypatch.setattr(dsm.db, "get_datastore_namespace_by_id",
+    monkeypatch.setattr(dsm.db, "get_datastore_by_id",
                         lambda ns_id: {"id": ns_id, "schema": etat["schema"]})
     monkeypatch.setattr(dsm.db, "set_datastore_schema",
                         lambda ns_id, schema: etat.__setitem__("schema", schema))
@@ -311,7 +311,7 @@ def test_retirer_du_schema_puis_purger(store_mutable):
     assert [f["key"] for f in etat["schema"]["fields"]] == ["siren"]
     # 3. la purge passe désormais, et elle a bien touché les données
     out = st.drop_column("v", "analyse1", confirm=True)
-    assert out == {"namespace": "v", "key": "analyse1", "rows": 12}
+    assert out == {"datastore": "v", "key": "analyse1", "rows": 12}
     assert etat["purgees"] == ["analyse1"]
 
 

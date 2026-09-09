@@ -302,16 +302,16 @@ def test_toute_colonne_sub_sous_index_unique_est_pre_traitee():
     allow = {
         # ⚠️ TROU RÉEL, PAS UNE EXCEPTION DE CONFORT — ouvert, daté du 2026-09-02.
         # `uq_user_datastores_owner_ns (owner_type, owner_id, namespace)` n'est PAS
-        # partiel : deux comptes d'une même personne qui ont chacun un namespace du
+        # partiel : deux comptes d'une même personne qui ont chacun un datastore du
         # même nom (« prospects »…) font lever `UniqueViolation` à l'étape 3 et
         # échouer TOUT le merge. Reproduit sur base réelle le 2026-09-02.
         #
         # Il n'est pas corrigé ICI parce que le geste mécanique des autres familles —
         # DELETE de la ligne en trop — serait PIRE que la panne : `datastore_rows` est
         # en `ON DELETE CASCADE` sur `user_datastores(id)`, donc supprimer le
-        # namespace de l'ancien compte détruit ses LIGNES. Un merge qui échoue est
+        # datastore de l'ancien compte détruit ses LIGNES. Un merge qui échoue est
         # bruyant et rejouable ; des lignes effacées en silence ne se rattrapent pas.
-        # La résolution correcte est probablement de RENOMMER le namespace repris,
+        # La résolution correcte est probablement de RENOMMER le datastore repris,
         # ce qui suppose une décision de produit (le nom que verra l'utilisateur),
         # pas un choix de tuyauterie. → à trancher, puis retirer cette entrée.
         ("user_datastores", "owner_id"),

@@ -48,7 +48,7 @@ SCHEMA = {"key": "siren", "fields": [
 def _table(schema=SCHEMA):
     from oto_mcp import db
     ns = "t-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore_namespace("user", "sub-test", ns)
+    ns_id = db.create_datastore("user", "sub-test", ns)
     st = _store()
     st.set_schema(ns, schema)
     return st, ns, ns_id
@@ -222,7 +222,7 @@ def test_le_texte_servi_dit_import_ET_pas_enrichissement():
 def _table_a_cran():
     from oto_mcp import db
     ns = "t-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore_namespace("user", "sub-test", ns)
+    ns_id = db.create_datastore("user", "sub-test", ns)
     st = _store()
     st.set_schema(ns, {"key": "siren", "strict": True, "fields": [
         {"key": "siren", "type": "text", "origine": "system"},

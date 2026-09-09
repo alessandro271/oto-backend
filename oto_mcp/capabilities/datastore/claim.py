@@ -35,8 +35,8 @@ from ...datastore.identite import Adresse
 from ...datastore import claimable, identite
 from ...datastore import journal as datastore_journal
 from ...datastore.core import (
-    NamespaceNotFound,
-    NamespaceReadOnly,
+    DatastoreNotFound,
+    DatastoreReadOnly,
     RowClaimed,
     RowNotFound,
     RowOutsideClaimable,
@@ -49,7 +49,7 @@ from ._forme import _LAYERS, _layers
 
 
 class ClaimNextInput(BaseModel):
-    namespace: Adresse
+    datastore: Adresse
     # oto#63 : la RÉSERVATION est le seul chemin qui alimente une boucle d'écriture,
     # et c'était le seul à ne pas porter la forme. Réutilise le champ des lectures —
     # même nom, même défaut, même refus nommé sur une valeur inconnue.
@@ -68,7 +68,7 @@ class ClaimNextInput(BaseModel):
 
 
 class ClaimRowInput(BaseModel):
-    namespace: Adresse
+    datastore: Adresse
     row_id: str
     layers: str = _LAYERS
     worker: str = ""
@@ -77,9 +77,9 @@ class ClaimRowInput(BaseModel):
 
 class ClaimResult(BaseModel):
     # ⚠️ Le NOM CANONIQUE du tableau, plus l'écho de l'adresse reçue : réserver dans
-    # `600` répondait `namespace: "600"`, donc la clé répétait la question au lieu de
+    # `600` répondait `datastore: "600"`, donc la clé répétait la question au lieu de
     # dire quel tableau avait été touché (cf. `datastore/identite.py`).
-    namespace: Adresse
+    datastore: Adresse
     # Le NUMÉRO du tableau — la forme d'adresse à employer. Il n'était rendu nulle
     # part sur ce chemin, alors que c'est ICI que la boucle d'un agent commence :
     # sans lui, il ne pouvait adresser que par nom. `null` seulement si le tableau
@@ -120,22 +120,22 @@ def _claim_next(ctx: ResolvedCtx, inp: ClaimNextInput) -> dict:
     store = make_store(ctx.sub)
     try:
         row = store.claim_next(
-            inp.namespace, worker=worker, filter=inp.filter,
+            inp.datastore, worker=worker, filter=inp.filter,
             max_claims=inp.max_claims, warnings=warnings, trace=trace,
             perimetre=perimetre, layers=_layers(inp.layers), filters=inp.filters,
             **_lease(inp))
-    except NamespaceNotFound:
-        raise AuthzDenied(404, "namespace_not_found")
-    except NamespaceReadOnly:
-        raise AuthzDenied(403, "namespace_read_only")
+    except DatastoreNotFound:
+        raise AuthzDenied(404, "datastore_not_found")
+    except DatastoreReadOnly:
+        raise AuthzDenied(403, "datastore_read_only")
     except ValueError as e:
         raise AuthzDenied(400, "invalid_claim", str(e))
     if row:
         datastore_journal.record(
             datastore_journal.TOOL_CLAIM_NEXT, sub=ctx.sub,
-            ctx=datastore_journal.from_trace(trace, inp.namespace), row_id=row.get("_id"))
+            ctx=datastore_journal.from_trace(trace, inp.datastore), row_id=row.get("_id"))
     return {
-        **identite.de_releve(store.dernier_tableau, inp.namespace), "row": row,
+        **identite.de_releve(store.dernier_tableau, inp.datastore), "row": row,
         **({"warning": warnings[0]} if warnings else {}),
         # File vide ≠ erreur — mais ça se dit, sinon un `row: null` se lit comme un bug.
         # Et quand le tableau déclare un périmètre, c'est LUI qui se nomme (#517).
@@ -156,13 +156,13 @@ def _claim_row(ctx: ResolvedCtx, inp: ClaimRowInput) -> dict:
     store = make_store(ctx.sub)
     try:
         row = store.claim_row(
-            inp.namespace, inp.row_id, worker=worker,
+            inp.datastore, inp.row_id, worker=worker,
             warnings=warnings, trace=trace, layers=_layers(inp.layers),
             **_lease(inp))
-    except NamespaceNotFound:
-        raise AuthzDenied(404, "namespace_not_found")
-    except NamespaceReadOnly:
-        raise AuthzDenied(403, "namespace_read_only")
+    except DatastoreNotFound:
+        raise AuthzDenied(404, "datastore_not_found")
+    except DatastoreReadOnly:
+        raise AuthzDenied(403, "datastore_read_only")
     except RowNotFound:
         raise AuthzDenied(404, "row_not_found")
     except RowOutsideClaimable as e:
@@ -181,8 +181,8 @@ def _claim_row(ctx: ResolvedCtx, inp: ClaimRowInput) -> dict:
         raise AuthzDenied(400, "invalid_claim", str(e))
     datastore_journal.record(
         datastore_journal.TOOL_CLAIM, sub=ctx.sub,
-        ctx=datastore_journal.from_trace(trace, inp.namespace), row_id=inp.row_id)
-    return {**identite.de_releve(store.dernier_tableau, inp.namespace), "row": row,
+        ctx=datastore_journal.from_trace(trace, inp.datastore), row_id=inp.row_id)
+    return {**identite.de_releve(store.dernier_tableau, inp.datastore), "row": row,
             **({"warning": warnings[0]} if warnings else {})}
 
 
@@ -194,7 +194,7 @@ CAPABILITIES += [
         Output=ClaimResult,
         authz=SUB_ONLY,
         mcp=None,  # `data_claim_next` tient déjà la face agent
-        rest=RestBinding(verb="POST", path="/api/datastore/namespaces/{namespace}/claim_next"),
+        rest=RestBinding(verb="POST", path="/api/datastores/{datastore}/claim_next"),
         description="Réserve atomiquement la prochaine ligne libre d'un tableau (file de travail).",
     ),
     Capability(
@@ -205,7 +205,7 @@ CAPABILITIES += [
         authz=SUB_ONLY,
         mcp=None,  # geste d'un humain qui choisit sa ligne ; l'agent draine
         rest=RestBinding(verb="POST",
-                         path="/api/datastore/namespaces/{namespace}/rows/{row_id}/claim"),
+                         path="/api/datastores/{datastore}/rows/{row_id}/claim"),
         description="Réserve une ligne nommée d'un tableau (409 si déjà sous bail d'un autre).",
     ),
 ]

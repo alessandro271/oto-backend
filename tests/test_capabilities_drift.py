@@ -84,14 +84,14 @@ def test_tools_module_derivation_matches_filesystem():
         "— déclarer le connecteur dans providers/<nom>.py, ou l'ajouter à _EXPLICIT_TOOL_MODULES si c'est un module spine")
 
 
-def test_tools_namespaces_are_matchable():
-    """Un namespace de provider kind="tools" doit pouvoir être produit par
+def test_tools_datastores_are_matchable():
+    """Un datastore de provider kind="tools" doit pouvoir être produit par
     `namespace_of(tool)` (= 1er token avant `_`) — sinon le gate d'activation
-    fail-open en silence. Un namespace multi-mot (`culture_spectacle`) ne matche
+    fail-open en silence. Un datastore multi-mot (`culture_spectacle`) ne matche
     JAMAIS → bug (#24). Pur registre, dep-indépendant.
 
-    (L'ex-namespace `sirene_stock` qui forçait une whitelist a été fusionné dans
-    le connecteur `sirene` sous le namespace `fr` — tools `fr_stock_*`, 2026-06-22.)"""
+    (L'ex-datastore `sirene_stock` qui forçait une whitelist a été fusionné dans
+    le connecteur `sirene` sous le datastore `fr` — tools `fr_stock_*`, 2026-06-22.)"""
     from oto_mcp import providers
     from oto_mcp.tool_visibility import namespace_of
 
@@ -100,7 +100,7 @@ def test_tools_namespaces_are_matchable():
             continue
         for ns in c.namespaces:
             assert namespace_of(f"{ns}_x") == ns, (
-                f"namespace non matchable {c.name}:{ns} (multi-mot → fail-open du gate)")
+                f"datastore non matchable {c.name}:{ns} (multi-mot → fail-open du gate)")
 
 
 def test_rest_caps_are_mounted():

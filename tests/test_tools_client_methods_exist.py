@@ -49,7 +49,7 @@ _NO_CLIENT_EXPECTED = {
     "meta", "whoami", "docs_app", "datastore", "remote", "mount",
 }
 
-# Clients à SOUS-OBJETS (`client.companies.list(…)`) : leurs namespaces sont des
+# Clients à SOUS-OBJETS (`client.companies.list(…)`) : leurs datastores sont des
 # attributs d'instance, invérifiables sur la classe → hors de portée de cette sonde
 # statique. Déclarés ici pour que ça reste un choix visible, pas un oubli.
 _SUBOBJECT_CLIENTS = {"attio"}
@@ -190,7 +190,7 @@ def _methods_called_on_client(tree: ast.Module) -> set[str]:
       connecteur qui factorise perd toute couverture version-skew.
 
     ⚠️ Seuls les attributs **appelés** comptent (`client.m(...)`), pas les accès nus.
-    Un client à sous-objets (`client.companies.list(…)`, Attio) porte ses namespaces
+    Un client à sous-objets (`client.companies.list(…)`, Attio) porte ses datastores
     en attributs d'INSTANCE : `hasattr(AttioClient, "companies")` est False sur la
     classe, donc les compter produirait un faux « méthode absente » — un garde-fou
     qui crie à tort finit ignoré.

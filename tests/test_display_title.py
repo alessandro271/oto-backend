@@ -152,7 +152,7 @@ def test_the_boot_converts_legacy_titles_additively(live):
     from oto_mcp import db
     from oto_mcp.db._conn import _connect
 
-    ns = db.create_datastore_namespace("user", "sub-test", "t-" + uuid.uuid4().hex[:6])
+    ns = db.create_datastore("user", "sub-test", "t-" + uuid.uuid4().hex[:6])
     with _connect() as conn:                  # un schéma d'AVANT la bascule
         conn.execute(
             "UPDATE user_datastores SET schema = %s::jsonb WHERE id = %s",
@@ -178,7 +178,7 @@ def test_the_conversion_is_idempotent(live):
     from oto_mcp import db
     from oto_mcp.db._conn import _connect
 
-    ns = db.create_datastore_namespace("user", "sub-test", "t-" + uuid.uuid4().hex[:6])
+    ns = db.create_datastore("user", "sub-test", "t-" + uuid.uuid4().hex[:6])
     with _connect() as conn:
         conn.execute("UPDATE user_datastores SET schema = %s::jsonb WHERE id = %s",
                      ('{"fields": [{"key": "nom", "type": "url", "role": "title"}]}', ns))
@@ -197,7 +197,7 @@ def test_a_schema_without_any_title_is_left_alone(live):
     from oto_mcp import db
     from oto_mcp.db._conn import _connect
 
-    ns = db.create_datastore_namespace("user", "sub-test", "t-" + uuid.uuid4().hex[:6])
+    ns = db.create_datastore("user", "sub-test", "t-" + uuid.uuid4().hex[:6])
     avant = '{"fields": [{"key": "a", "type": "text"}, {"key": "b", "type": "enum"}]}'
     with _connect() as conn:
         conn.execute("UPDATE user_datastores SET schema = %s::jsonb WHERE id = %s",

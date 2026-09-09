@@ -35,7 +35,7 @@ def store(monkeypatch):
     st = DatastorePg("u", acting_org=35)
     monkeypatch.setattr(st, "_resolve", lambda ns, write=False: 7)
     calls = {"insert": [], "update": []}
-    monkeypatch.setattr(dsm.db, "get_datastore_namespace_by_id",
+    monkeypatch.setattr(dsm.db, "get_datastore_by_id",
                         lambda ns_id: {"id": ns_id, "schema": None})
     monkeypatch.setattr(dsm.db, "datastore_insert_row",
                         lambda ns_id, rid, data, *a, **k: (
@@ -97,7 +97,7 @@ def test_a_declared_id_column_is_plain_data(store, monkeypatch):
     donnée."""
     st, calls = store
     monkeypatch.setattr(
-        dsm.db, "get_datastore_namespace_by_id",
+        dsm.db, "get_datastore_by_id",
         lambda ns_id: {"id": ns_id,
                        "schema": {"fields": [{"key": "id"}, {"key": "siren"}]}})
     st.append_row("v", {"id": "ext-42", "siren": "2"})

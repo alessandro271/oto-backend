@@ -1,7 +1,7 @@
 """La description servie nomme le PROPRIÉTAIRE que le code donne vraiment.
 
 Histoire courte, deux réparations le même jour (04/09/2026).
-`data_create_namespace` annonçait à l'agent, dans le texte relu à chaque appel, un
+`data_create_datastore` annonçait à l'agent, dans le texte relu à chaque appel, un
 identifiant « unique **per user** » — pendant que le code posait le tableau chez l'**org
 active**, lisible de tous ses membres. Le geste le plus banal du produit créait du
 contenu d'org sous une instruction qui promettait un espace à soi.
@@ -54,14 +54,14 @@ def test_le_defaut_de_propriete_du_datastore_est_la_PERSONNE():
     src = inspect.getsource(core.DatastorePg._default_owner)
     assert 'return ("user", self.sub)' in src, (
         "le défaut de propriété d'un tableau n'est plus la personne : mets à jour la "
-        "description servie de `data_create_namespace` AVANT de rendre ce banc vert.")
+        "description servie de `data_create_datastore` AVANT de rendre ce banc vert.")
 
 
-def test_data_create_namespace_DIT_que_le_tableau_est_PRIVE():
+def test_data_create_datastore_DIT_que_le_tableau_est_PRIVE():
     """Ce que l'agent lit doit être ce qui se passe. Et le dire au bon niveau de
     détail : « private » seul laisserait croire qu'un admin d'org y accède quand même
     — c'est précisément la question qu'on se pose devant un contenu sensible."""
-    d = _descriptions_servies()["data_create_namespace"]
+    d = _descriptions_servies()["data_create_datastore"]
     assert "PRIVATE" in d, "le propriétaire réel doit être nommé, en clair"
     assert "not the other members" in d and "not its admins" in d, (
         "« privé » sans dire QUI est exclu se relit comme « privé, sauf les admins »")
@@ -71,14 +71,14 @@ def test_data_create_namespace_DIT_que_le_tableau_est_PRIVE():
 def test_le_texte_dit_aussi_comment_PARTAGER():
     """Un défaut privé sans issue rend le produit inutilisable à deux. La phrase nomme
     le geste inverse — c'est ce qui distingue « privé par défaut » de « fermé »."""
-    d = _descriptions_servies()["data_create_namespace"]
+    d = _descriptions_servies()["data_create_datastore"]
     assert 'owner: {type: "org"|"group", id: N}' in d
 
 
 def test_le_texte_dit_que_l_EXISTANT_ne_bouge_pas():
     """La bascule se voit le jour même. Un agent qui lit « privé » et retrouve un
     tableau d'org conclurait à un bug, ou pire, croirait privé ce qui ne l'est pas."""
-    d = _descriptions_servies()["data_create_namespace"]
+    d = _descriptions_servies()["data_create_datastore"]
     assert "keep the owner they have" in d
 
 

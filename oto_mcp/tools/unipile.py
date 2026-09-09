@@ -652,7 +652,7 @@ def _project_operated_account(anon, provider: str) -> str:
     levait « Unauthenticated ». Résultat, un projet partagé avec un tiers perdait
     LinkedIn — la moitié des contacts d'une mission d'enrichissement — et la seule
     alternative était de confier un jeton `oto_` NOMINAL, qui porte l'organisation
-    entière (356 outils, `email_send`, `data_delete_namespace`) : indéfendable devant la
+    entière (356 outils, `email_send`, `data_delete_datastore`) : indéfendable devant la
     conformité d'un client sous contrat de traitement.
 
     L'information manquante existait déjà : le projet DÉCLARE ses identités de connecteur
@@ -1378,7 +1378,7 @@ def register(mcp: FastMCP) -> None:
                 `None` = texte intégral).
         """
         if op == "feed":
-            from ..datastore.core import make_store, NamespaceNotFound
+            from ..datastore.core import make_store, DatastoreNotFound
 
             sub = access.current_user_sub_or_raise()
             client = unipile_client()
@@ -1391,7 +1391,7 @@ def register(mcp: FastMCP) -> None:
 
             try:
                 rows = store.list_rows(_FEED_NS, limit=10_000)
-            except NamespaceNotFound:
+            except DatastoreNotFound:
                 rows = []
             rows.sort(key=lambda r: r.get("posted_at") or "", reverse=True)
 

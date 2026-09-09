@@ -14,7 +14,7 @@ from typing import Optional
 
 from .. import db, ownership
 from . import acces_agent as aga
-from .errors import NamespaceExists, NamespaceForbidden
+from .errors import DatastoreExists, DatastoreForbidden
 from .outils import _ns_url
 
 
@@ -59,9 +59,9 @@ def _avertissement_de_portee(ns_id: int, owner_type: str, *,
 
 
 class RegistreMixin:
-    """Le cycle de vie d'un namespace. Composé par `DatastorePg`."""
+    """Le cycle de vie d'un datastore. Composé par `DatastorePg`."""
 
-    # --- namespace lifecycle -------------------------------------------------
+    # --- datastore lifecycle -------------------------------------------------
 
     def _entry(self, n: dict, *, shared: bool, permission: Optional[str] = None) -> dict:
         ns_id = int(n["id"])
@@ -70,10 +70,10 @@ class RegistreMixin:
         # Agissant-org (sub-less) : pas de gouvernance via l'endpoint (create/delete/
         # rename/share restent réservés à un user identifié).
         can_govern = (False if self.acting_org is not None
-                      else ownership.can_govern(self.sub, "datastore_namespace", str(ns_id)))
+                      else ownership.can_govern(self.sub, ownership.TYPE_RESSOURCE_DATASTORE, str(ns_id)))
         return {
             "id": ns_id,
-            "namespace": n["namespace"],
+            "datastore": n["datastore"],
             "created_at": n.get("created_at"),
             "url": _ns_url(ns_id, self.sub),
             "shared": shared,
@@ -85,22 +85,22 @@ class RegistreMixin:
             "is_personal": perso,
             # mode typé optionnel (ADR 0032 §6 / 0029, B6) ; None = table libre.
             # oto#83 : c'est le SECOND chemin par lequel un schéma complet est servi
-            # (le premier est `get_schema`) — `data_list_namespaces` et
-            # `GET /api/datastore/namespaces` en dépendent, et un catalogue qui nomme
+            # (le premier est `get_schema`) — `data_list_datastores` et
+            # `GET /api/datastores` en dépendent, et un catalogue qui nomme
             # une colonne masquée l'aurait servie par la porte de derrière.
             "schema": aga.schema_servi(n.get("schema")),
         }
 
-    def list_namespaces(self) -> list[dict]:
-        """Namespaces visibles DANS L'ORG ACTIVE (l'org est le contexte, ADR 0023) :
+    def list_datastores(self) -> list[dict]:
+        """Datastores visibles DANS L'ORG ACTIVE (l'org est le contexte, ADR 0023) :
         possédés par l'org active + accordés à elle ou à MES équipes dans cette org
         (grants d'org/groupe — tous mes groupes de l'org active, pas seulement le
-        groupe actif : un partage d'équipe doit se voir sans basculer). Un namespace
+        groupe actif : un partage d'équipe doit se voir sans basculer). Un datastore
         possédé par une AUTRE org — ou partagé à l'acteur *en propre* (grant user,
         cross-org) — ne fuite PLUS dans la vue d'une org tierce (scope décidé le
         2026-07-01). Dédupliqués par id (priorité possédé). La résolution PAR NOM
         (`_resolve`) scope désormais SUR LE MÊME contexte d'org (2026-07-03) : un
-        namespace d'une autre org ne se résout plus hors de son org non plus."""
+        datastore d'une autre org ne se résout plus hors de son org non plus."""
         from .. import access
         if self.acting_org is not None:
             owner = ("org", str(self.acting_org))
@@ -125,9 +125,9 @@ class RegistreMixin:
         owned = proprios + [("group", str(g)) for g in group_ids
                             if ("group", str(g)) not in proprios]
         out: dict[int, dict] = {}
-        for n in db.list_datastore_namespaces_for_owners(owned):
+        for n in db.list_datastores_for_owners(owned):
             out[int(n["id"])] = self._entry(n, shared=False)
-        for n in db.list_datastore_namespaces_granted_to(self.sub, org_ids, group_ids):
+        for n in db.list_datastores_granted_to(self.sub, org_ids, group_ids):
             if int(n["id"]) in out:
                 continue
             out[int(n["id"])] = self._entry(n, shared=True, permission=n.get("permission"))
@@ -137,7 +137,7 @@ class RegistreMixin:
         return list(out.values())
 
     def _default_owner(self) -> tuple[str, str]:
-        """Owner d'un namespace créé sans précision = **la personne** (ADR 0068).
+        """Owner d'un datastore créé sans précision = **la personne** (ADR 0068).
 
         ⚠️ C'était l'**org active** — « suppression du perso », un choix assumé du temps
         où l'appelant était un humain devant un écran, qui voit ce qu'il crée et où.
@@ -151,10 +151,10 @@ class RegistreMixin:
         NAÎT."""
         return ("user", self.sub)
 
-    def create_namespace(
-        self, namespace: str, *, owner_type: Optional[str] = None, owner_id: Optional[str] = None,
+    def create_datastore(
+        self, datastore: str, *, owner_type: Optional[str] = None, owner_id: Optional[str] = None,
     ) -> dict:
-        """Crée un namespace. Défaut = **la personne** (`_default_owner`, ADR 0068).
+        """Crée un datastore. Défaut = **la personne** (`_default_owner`, ADR 0068).
 
         ⚠️ Cette phrase disait « défaut = org active », quinze lignes sous le code
         qui rend `("user", sub)` : elle datait du régime d'avant et personne ne
@@ -178,10 +178,10 @@ class RegistreMixin:
             owner_type, owner_id = self._default_owner()
         oid = owner_id if owner_id is not None else self.sub
         try:
-            ns_id = db.create_datastore_namespace(owner_type, oid, namespace)
+            ns_id = db.create_datastore(owner_type, oid, datastore)
         except ValueError as e:
-            raise NamespaceExists(str(e))
-        out = {"namespace": namespace, "id": ns_id, "url": _ns_url(ns_id, self.sub),
+            raise DatastoreExists(str(e))
+        out = {"datastore": datastore, "id": ns_id, "url": _ns_url(ns_id, self.sub),
                "owner_type": owner_type, "owner_id": oid,
                "is_personal": owner_type == "user"}
         avertissement = _avertissement_de_portee(ns_id, owner_type,
@@ -190,39 +190,39 @@ class RegistreMixin:
             out["avertissement"] = avertissement
         return out
 
-    def delete_namespace(self, namespace: str) -> None:
-        ns_id = self._resolve(namespace)
-        if not ownership.can_govern(self.sub, "datastore_namespace", str(ns_id)):
-            raise NamespaceForbidden(namespace)
-        db.delete_datastore_namespace_by_id(ns_id)  # rows + grants partent avec
+    def delete_datastore(self, datastore: str) -> None:
+        ns_id = self._resolve(datastore)
+        if not ownership.can_govern(self.sub, ownership.TYPE_RESSOURCE_DATASTORE, str(ns_id)):
+            raise DatastoreForbidden(datastore)
+        db.delete_datastore_by_id(ns_id)  # rows + grants partent avec
 
-    def rename_namespace(self, namespace: str, new_name: str) -> dict:
-        """Renomme un namespace (l'id/URL/grants restent stables, keyés par id — cf.
-        `db.rename_datastore_namespace_by_id`). Exige le droit de GOUVERNANCE, comme la
+    def rename_datastore(self, datastore: str, new_name: str) -> dict:
+        """Renomme un datastore (l'id/URL/grants restent stables, keyés par id — cf.
+        `db.rename_datastore_by_id`). Exige le droit de GOUVERNANCE, comme la
         suppression. Le nouveau nom doit être libre chez le même propriétaire (sinon
-        `NamespaceExists`) — c'est ce qui lève la collision cross-org du gap #71 avant
+        `DatastoreExists`) — c'est ce qui lève la collision cross-org du gap #71 avant
         un transfert/merge."""
-        ns_id = self._resolve(namespace)
-        if not ownership.can_govern(self.sub, "datastore_namespace", str(ns_id)):
-            raise NamespaceForbidden(namespace)
+        ns_id = self._resolve(datastore)
+        if not ownership.can_govern(self.sub, ownership.TYPE_RESSOURCE_DATASTORE, str(ns_id)):
+            raise DatastoreForbidden(datastore)
         new_name = (new_name or "").strip()
         try:
-            db.rename_datastore_namespace_by_id(ns_id, new_name)
+            db.rename_datastore_by_id(ns_id, new_name)
         except ValueError as e:
-            raise NamespaceExists(str(e))
-        return {"id": ns_id, "namespace": new_name, "url": _ns_url(ns_id, self.sub)}
+            raise DatastoreExists(str(e))
+        return {"id": ns_id, "datastore": new_name, "url": _ns_url(ns_id, self.sub)}
 
-    def resolve_ns_id(self, namespace: str) -> int:
-        """ns_id d'un namespace visible par l'acteur (lève `NamespaceNotFound`).
+    def resolve_ns_id(self, datastore: str) -> int:
+        """ns_id d'un datastore visible par l'acteur (lève `DatastoreNotFound`).
         Surface publique pour les chemins de gouvernance (partage/transfert)."""
-        return self._resolve(namespace)
+        return self._resolve(datastore)
 
-    def resolve_ns_id_for_write(self, namespace: str) -> int:
-        """ns_id d'un namespace où l'acteur peut ÉCRIRE (lève `NamespaceNotFound`/
-        `NamespaceReadOnly`). Sert à sceller la cible d'un upload signé au mint (org
+    def resolve_ns_id_for_write(self, datastore: str) -> int:
+        """ns_id d'un datastore où l'acteur peut ÉCRIRE (lève `DatastoreNotFound`/
+        `DatastoreReadOnly`). Sert à sceller la cible d'un upload signé au mint (org
         active présente) ; l'autz est réappliquée au receive via `ownership.can_access`
-        sur `datastore_namespace` (org-agnostique), sans contexte d'org."""
-        return self._resolve(namespace, write=True)
+        sur `datastore` (org-agnostique), sans contexte d'org."""
+        return self._resolve(datastore, write=True)
 
-    def get_url(self, namespace: str) -> str:
-        return _ns_url(self._resolve(namespace), self.sub)  # 404 si inconnu
+    def get_url(self, datastore: str) -> str:
+        return _ns_url(self._resolve(datastore), self.sub)  # 404 si inconnu

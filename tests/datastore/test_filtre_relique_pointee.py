@@ -41,7 +41,7 @@ def _table_avec_relique():
     from oto_mcp.db._conn import _connect
 
     ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore_namespace("user", "sub-test", ns)
+    db.create_datastore("user", "sub-test", ns)
     st = _store()
     st.set_schema(ns, {"key": "siren", "fields": [
         {"key": "siren", "type": "text"},

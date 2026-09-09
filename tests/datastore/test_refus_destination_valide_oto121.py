@@ -72,7 +72,7 @@ def table(live):
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
     ns = "t-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore_namespace("user", "sub-test", ns)
+    ns_id = db.create_datastore("user", "sub-test", ns)
     st = make_store("sub-test")
     st.set_schema(ns, SCHEMA)
     row = st.append_row(ns, {"siren": "377768379", "contacts": [

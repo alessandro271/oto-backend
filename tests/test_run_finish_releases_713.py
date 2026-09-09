@@ -1,7 +1,7 @@
 """#713 — reproduit le scénario EXACT du signal 414 (org 226, 13/08/2026) : `run_start`
 pousse un run dans l'état de session, trois `data_claim_next` SANS `_run_id=` explicite —
 le geste réel de l'agent, confirmé par le calllog du run `a186986859bf4b9c82e69e4e29ceee7e`
-(`oto_admin_monitoring(op="run", ...)`) : les trois appels ne portent que `namespace`,
+(`oto_admin_monitoring(op="run", ...)`) : les trois appels ne portent que `datastore`,
 `worker`, `filter` — puis `run_finish`. Le signal : les 3 lignes restaient réservées
 après la fermeture, mitigé par l'expiration du bail (900s).
 
@@ -98,7 +98,7 @@ def _outil(nom: str):
 def _table(n: int):
     from oto_mcp import db
     ns = "file-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore_namespace("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, ns)
     for i in range(n):
         db.datastore_insert_row(ns_id, f"r{i}", {"siren": f"85045{i:04d}", "statut": "a_faire"})
     return ns, ns_id
@@ -122,7 +122,7 @@ class _SessionStable:
 
 def _claim_sans_run_id(ctx, ns: str, worker: str) -> dict:
     """`data_claim_next(worker=...)` — AUCUN `_run_id=`, exactement l'appel du calllog
-    (`{"ns_id":204,"filter":..., "worker":"test-campagne-3lignes","namespace":"edition-vivier"}`).
+    (`{"ns_id":204,"filter":..., "worker":"test-campagne-3lignes","datastore":"edition-vivier"}`).
     Passe par le VRAI middleware pour que le filet #317 (pile de session) ait sa chance."""
     from oto_mcp.middleware.call_context import CallContextMiddleware
 
@@ -133,7 +133,7 @@ def _claim_sans_run_id(ctx, ns: str, worker: str) -> dict:
 
     msg = _Msg()
     msg.name = "data_claim_next"
-    msg.arguments = {"namespace": ns, "worker": worker}
+    msg.arguments = {"datastore": ns, "worker": worker}
     ctx.message = msg
 
     async def _next(c):

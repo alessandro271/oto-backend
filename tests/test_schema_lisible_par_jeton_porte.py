@@ -19,7 +19,7 @@ import pytest
 
 from oto_mcp.auth import token_scopes as ts
 
-_SCHEMA = "/api/datastore/namespaces/t/schema"
+_SCHEMA = "/api/datastores/t/schema"
 
 
 # ── le schéma, dans les deux sens ────────────────────────────────────────────
@@ -41,17 +41,17 @@ def test_une_portee_en_ECRITURE_fait_les_deux():
 
 def test_le_schema_d_un_AUTRE_tableau_reste_ferme():
     p = ts.parse({"namespaces": {"t": "write"}})
-    assert ts.authorize(p, "GET", "/api/datastore/namespaces/autre/schema") is False
+    assert ts.authorize(p, "GET", "/api/datastores/autre/schema") is False
 
 
 def test_la_gouvernance_reste_hors_de_portee():
     """L'ajout ne devait pas déborder : supprimer, renommer et partager un
     tableau restent fermés à tout jeton porté."""
     p = ts.parse({"namespaces": {"t": "write"}})
-    for m, r in [("DELETE", "/api/datastore/namespaces/t"),
-                 ("PATCH", "/api/datastore/namespaces/t"),
-                 ("POST", "/api/datastore/namespaces/t/share"),
-                 ("DELETE", "/api/datastore/namespaces/t/share")]:
+    for m, r in [("DELETE", "/api/datastores/t"),
+                 ("PATCH", "/api/datastores/t"),
+                 ("POST", "/api/datastores/t/share"),
+                 ("DELETE", "/api/datastores/t/share")]:
         assert ts.authorize(p, m, r) is False, f"{m} {r} s'est ouvert par ricochet"
 
 
@@ -62,7 +62,7 @@ def test_le_refus_distingue_un_GESTE_ferme_d_une_RESSOURCE_hors_portee():
     que son jeton est cassé. C'est le pire des deux états."""
     p = ts.parse({"namespaces": {"t": "read"}})
     assert ts.motif_du_refus(p, "PUT", _SCHEMA) == ("ressource", "t")
-    assert ts.motif_du_refus(p, "DELETE", "/api/datastore/namespaces/t") == ("geste", "")
+    assert ts.motif_du_refus(p, "DELETE", "/api/datastores/t") == ("geste", "")
     assert ts.motif_du_refus(p, "GET", "/api/me") == ("geste", "")
 
 
@@ -70,5 +70,5 @@ def test_le_motif_nomme_la_ressource_telle_qu_ELLE_est_adressee():
     """Le nom vient du CHEMIN, décodé — un tableau à espace ou accent doit se
     retrouver dans le message, pas sa forme encodée."""
     p = ts.parse({"namespaces": {"mon tableau": "read"}})
-    cause, quoi = ts.motif_du_refus(p, "PUT", "/api/datastore/namespaces/mon%20tableau/schema")
+    cause, quoi = ts.motif_du_refus(p, "PUT", "/api/datastores/mon%20tableau/schema")
     assert (cause, quoi) == ("ressource", "mon tableau")

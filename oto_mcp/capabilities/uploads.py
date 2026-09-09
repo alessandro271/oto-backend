@@ -32,7 +32,7 @@ class UploadUrlInput(BaseModel):
     filename: Optional[str] = None                    # project_file (requis)
     description: Optional[str] = None                 # project_file (optionnel)
     content_type: Optional[str] = None                # project_file (sinon déduit à la réception)
-    namespace: Optional[str] = None                   # datastore (requis)
+    datastore: Optional[str] = None                   # le tableau visé (requis)
     format: Optional[Literal["ndjson", "csv"]] = None  # datastore (défaut ndjson)
     key: Optional[str] = None                         # datastore : clé de batch upsert (sinon schema.key)
     #: datastore — l'upload est LA porte de l'import, donc celle où poser la couche
@@ -87,16 +87,16 @@ def _upload_url(ctx: ResolvedCtx, inp: UploadUrlInput) -> dict:
         # des magic bytes. L'URL publique arrive dans l'accusé de réception.
         target = {"kind": "image"}
     else:  # datastore
-        if not (inp.namespace and inp.namespace.strip()):
-            raise AuthzDenied(400, "missing_namespace", "`namespace` requis.")
-        ns = inp.namespace.strip()
+        if not (inp.datastore and inp.datastore.strip()):
+            raise AuthzDenied(400, "missing_datastore", "`datastore` requis.")
+        ns = inp.datastore.strip()
         from ..datastore import core as ds  # lazy : évite tout cycle d'import au boot
         store = ds.make_store(sub)
         try:
             ns_id = store.resolve_ns_id_for_write(ns)  # org active présente au mint
-        except ds.NamespaceNotFound:
+        except ds.DatastoreNotFound:
             raise AuthzDenied(404, "unknown_namespace", f"Tableau `{ns}` inconnu.")
-        except ds.NamespaceReadOnly:
+        except ds.DatastoreReadOnly:
             raise AuthzDenied(403, "read_only", f"Tableau `{ns}` partagé en lecture seule.")
         # Clé effective figée au mint (param explicite, sinon clé déclarée au schéma).
         eff_key = inp.key or store.declared_key(ns)

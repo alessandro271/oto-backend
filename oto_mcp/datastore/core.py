@@ -1,6 +1,6 @@
 """Datastore — substrat natif PostgreSQL (ADR 0016).
 
-Un namespace = une ligne `user_datastores` + ses rows dans `datastore_rows`
+Un datastore = une ligne `user_datastores` + ses rows dans `datastore_rows`
 (une row = un dict JSONB). Schéma libre : aucune colonne à provisionner, les
 champs apparaissent dans `data`. Trois champs auto-managés, exposés à plat dans
 la row renvoyée :
@@ -12,7 +12,7 @@ la row renvoyée :
 
 Plus de dépendance Google : la vérité est en base, types préservés nativement
 par JSONB (fin de la sentinelle `__j:` de l'ère Sheets). La propriété et le partage
-passent par la primitive générique `ownership` (ADR 0030) : un namespace est possédé
+passent par la primitive générique `ownership` (ADR 0030) : un datastore est possédé
 par `(owner_type, owner_id)` (user/org/group) et accessible via owner-match ∪ grants
 (`resource_grants`). L'export vers un provider tiers (Sheets/Notion…) est une
 projection optionnelle, déférée à otomata#29.
@@ -51,10 +51,10 @@ from .reserves import (
 from .errors import (  # noqa: F401
     BusinessKeyRequired,
     InvalidCursor,
-    NamespaceExists,
-    NamespaceForbidden,
-    NamespaceNotFound,
-    NamespaceReadOnly,
+    DatastoreExists,
+    DatastoreForbidden,
+    DatastoreNotFound,
+    DatastoreReadOnly,
     RowClaimed,
     RowLocked,
     RowNotFound,
@@ -122,7 +122,7 @@ class DatastorePg(SchemaOpsMixin, RegistreMixin, LectureMixin, EcritureMixin,
 
     State-less, instancié par requête. Normalement à partir du `sub` (l'acteur user) ;
     ou, pour un endpoint MCP agissant sous une org (`acting_org`, secret opt-in), avec
-    `sub=None` — l'autorité est alors l'org propriétaire. Résout chaque namespace en
+    `sub=None` — l'autorité est alors l'org propriétaire. Résout chaque datastore en
     `ns_id` (possédé OU partagé) et opère sur `datastore_rows`.
     """
 
@@ -139,11 +139,11 @@ class DatastorePg(SchemaOpsMixin, RegistreMixin, LectureMixin, EcritureMixin,
                                               else {int(x) for x in allowed_ns_ids})
         self.read_only = bool(read_only)
         self._active_scope_cache: Optional[tuple[list[int], list[int]]] = None
-        # Le DERNIER tableau résolu par ce store : `{"ns_id", "namespace"}` — le
+        # Le DERNIER tableau résolu par ce store : `{"ns_id", "datastore"}` — le
         # numéro et le nom CANONIQUE, pris dans la ligne `user_datastores` que
         # `_resolve` vient de lire, donc sans une requête de plus. C'est ce qui permet
         # à une remise de porter l'IDENTITÉ du tableau au lieu de l'ÉCHO de l'adresse
-        # reçue (cf. `identite.py`) : `data_rows("600")` répondait `namespace: "600"`.
+        # reçue (cf. `identite.py`) : `data_rows("600")` répondait `datastore: "600"`.
         # Même portée que les relevés ci-dessous — un store par requête — et un geste
         # du datastore résout UN tableau : le « dernier » est donc le sien. À lire
         # juste après l'appel au store, jamais gardé d'un geste à l'autre.
@@ -178,12 +178,12 @@ class DatastorePg(SchemaOpsMixin, RegistreMixin, LectureMixin, EcritureMixin,
         # REST le lit ici pour sa propre ligne (`datastore_journal.record`).
         self.off_forced: list = []
 
-    # --- résolution namespace -> ns_id ---------------------------------------
+    # --- résolution datastore -> ns_id ---------------------------------------
 
     def _active_scope(self) -> tuple[list[int], list[int]]:
         """Contexte de l'ORG ACTIVE (ADR 0023) : `([org active], [mes groupes dans cette
-        org])`. La résolution par NOM scope là-dessus — comme `list_namespaces` — de sorte
-        qu'un namespace d'une AUTRE de mes orgs ne se résout plus hors de son org (fuite
+        org])`. La résolution par NOM scope là-dessus — comme `list_datastores` — de sorte
+        qu'un datastore d'une AUTRE de mes orgs ne se résout plus hors de son org (fuite
         cross-org, symétrique au fix projets). L'ownership PERSO (`owner=user`) et les
         grants perso (`principal user`) suivent l'acteur : ils n'appartiennent à aucune
         org, donc ne sont pas une fuite d'org — `resolve_datastore_ns` les garde via `sub`."""
@@ -211,45 +211,45 @@ class DatastorePg(SchemaOpsMixin, RegistreMixin, LectureMixin, EcritureMixin,
                 self._active_scope_cache = ([org], groups)
         return self._active_scope_cache
 
-    def _resolve(self, namespace: str, *, write: bool = False) -> int:
-        """ns_id d'un namespace VISIBLE DANS L'ORG ACTIVE (possédé par elle, perso, ou
+    def _resolve(self, datastore: str, *, write: bool = False) -> int:
+        """ns_id d'un datastore VISIBLE DANS L'ORG ACTIVE (possédé par elle, perso, ou
         accordé à son contexte). `write=True` exige le droit d'écriture via
         `ownership.can_access`."""
         org_ids, group_ids = self._active_scope()
         ns = db.resolve_datastore_ns(
-            namespace, sub=self.sub, org_ids=org_ids, group_ids=group_ids)
+            datastore, sub=self.sub, org_ids=org_ids, group_ids=group_ids)
         if not ns:
             # #631 : le run sait où il travaille — sa réservation porte le tableau.
-            ns = hors_org.tenu_par_le_run(self.sub, namespace)
+            ns = hors_org.tenu_par_le_run(self.sub, datastore)
         if not ns:
-            raise NamespaceNotFound(namespace, indice=hors_org.indice_autre_org(
-                self.sub, namespace, org_ids[0] if org_ids else None))
+            raise DatastoreNotFound(datastore, indice=hors_org.indice_autre_org(
+                self.sub, datastore, org_ids[0] if org_ids else None))
         ns_id = int(ns["id"])
         # Scope dur d'endpoint partagé : hors des tableaux liés au projet ⇒ invisible
-        # (anti-fuite #193 ; NamespaceNotFound plutôt que Forbidden — on ne divulgue pas
-        # l'existence d'un namespace hors périmètre).
+        # (anti-fuite #193 ; DatastoreNotFound plutôt que Forbidden — on ne divulgue pas
+        # l'existence d'un datastore hors périmètre).
         if self.allowed_ns_ids is not None and ns_id not in self.allowed_ns_ids:
-            raise NamespaceNotFound(namespace)
+            raise DatastoreNotFound(datastore)
         if write and self.read_only:
-            raise NamespaceReadOnly(namespace)
+            raise DatastoreReadOnly(datastore)
         if write:
-            ok = (ownership.org_can_access(self.acting_org, "datastore_namespace",
+            ok = (ownership.org_can_access(self.acting_org, ownership.TYPE_RESSOURCE_DATASTORE,
                                            str(ns_id), "write")
                   if self.acting_org is not None
-                  else ownership.can_access(self.sub, "datastore_namespace",
+                  else ownership.can_access(self.sub, ownership.TYPE_RESSOURCE_DATASTORE,
                                             str(ns_id), "write"))
             if not ok:
-                raise NamespaceReadOnly(namespace)
+                raise DatastoreReadOnly(datastore)
         # Le journal cite l'ENTITÉ, pas la chaîne tapée : `data_write("leads-clients")`,
         # `data_write("160")` et `data_write("slot:vivier")` visent le même tableau.
-        # Consigné APRÈS les gardes (un namespace refusé ne laisse pas de trace) ;
+        # Consigné APRÈS les gardes (un datastore refusé ne laisse pas de trace) ;
         # no-op hors appel MCP — la face REST tient déjà son propre relevé.
-        session_org.note_call_trace(ns_id=ns_id, ns_name=ns.get("namespace"))
+        session_org.note_call_trace(ns_id=ns_id, ns_name=ns.get("datastore"))
         # Le MÊME couple, gardé sur le store, pour les REMISES : le relevé d'appel
         # ci-dessus est muet hors MCP (REST, stdio, tests) et n'alimente que le
         # journal. Les deux valeurs sont dans la ligne déjà lue — l'identité ne coûte
         # donc rien de plus que la résolution elle-même.
-        self.dernier_tableau = {"ns_id": ns_id, "namespace": ns.get("namespace")}
+        self.dernier_tableau = {"ns_id": ns_id, "datastore": ns.get("datastore")}
         return ns_id
 
     @staticmethod
@@ -375,7 +375,7 @@ class DatastorePg(SchemaOpsMixin, RegistreMixin, LectureMixin, EcritureMixin,
 
     def _ns_of(self, ns_id: int) -> dict:
         """La ligne `user_datastores` (nom canonique + schéma + propriétaire)."""
-        return db.get_datastore_namespace_by_id(ns_id) or {}
+        return db.get_datastore_by_id(ns_id) or {}
 
     def _schema_of(self, ns_id: int) -> Optional[dict]:
         return self._ns_of(ns_id).get("schema")
@@ -395,7 +395,7 @@ class DatastorePg(SchemaOpsMixin, RegistreMixin, LectureMixin, EcritureMixin,
         schema = ns.get("schema")
         trace.update({
             "ns_id": int(ns_id),
-            "namespace": ns.get("namespace"),
+            "datastore": ns.get("datastore"),
             "status_key": (dsv2.status_field(schema) or {}).get("key"),
             "title_key": (dsv2.title_field(schema) or {}).get("key"),
             "prev_status": prev_status,
@@ -416,14 +416,14 @@ def make_store(sub: str) -> "DatastorePg":
 def make_org_store(org_id: int, *, allowed_ns_ids: Optional[set] = None,
                    read_only: bool = False) -> "DatastorePg":
     """Store agissant SOUS L'AUTORITÉ d'une ORG, sans user (`sub=None`). Sert un
-    endpoint MCP `secret` opt-in datastore (ADR 0032) : la résolution de namespace et
+    endpoint MCP `secret` opt-in datastore (ADR 0032) : la résolution de datastore et
     le droit d'écriture se décident sur le principal ORG (owner-match / grant d'org),
     jamais sur un membre. N'expose PAS la gouvernance (create/delete/rename/share) —
     ces actes restent réservés à un user identifié (tools sub-only).
 
-    `allowed_ns_ids` (non None) = **scope dur** : seuls ces namespaces sont listables/
+    `allowed_ns_ids` (non None) = **scope dur** : seuls ces datastores sont listables/
     résolvables — les tableaux LIÉS au projet partagé (anti-fuite #193 : sans ce scope
     l'endpoint exposerait TOUT le datastore de l'org). Set vide ⇒ rien d'exposé.
-    `read_only=True` ⇒ l'écriture (`data_write`/`data_set_schema`) lève `NamespaceReadOnly`."""
+    `read_only=True` ⇒ l'écriture (`data_write`/`data_set_schema`) lève `DatastoreReadOnly`."""
     return DatastorePg(None, acting_org=int(org_id),
                        allowed_ns_ids=allowed_ns_ids, read_only=read_only)

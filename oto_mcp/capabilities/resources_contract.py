@@ -75,7 +75,7 @@ class _OwnedResource(BaseModel):
 
 class DatastoreResource(_OwnedResource):
     resource_type: Literal["datastore_namespace"]
-    namespace: str
+    datastore: str
     row_count: int
     created_at: Optional[str] = None
 

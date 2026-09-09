@@ -65,7 +65,7 @@ def tableau(base_jetable):
     """Un tableau avec quelques lignes — l'index doit avoir quelque chose à balayer."""
     from oto_mcp import db
     ns = "t-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore_namespace("user", "sub-borne", ns)
+    ns_id = db.create_datastore("user", "sub-borne", ns)
     for i in range(50):
         db.datastore_insert_row(ns_id, f"r{i}", {"siren": f"{552032534 + i}"})
     return ns, ns_id

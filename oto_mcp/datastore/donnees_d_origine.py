@@ -51,7 +51,7 @@ from . import schema as dsv2
 
 #: Le nom servi. Il dit ce que l'appel APPORTE, jamais quelle case il vise — et il ne
 #: réutilise pas `versions`, qui est le paramètre de LECTURE (« ce que je veux
-#: recevoir »). Un mot, un sens : c'est la leçon du `namespace`, qui désignait deux
+#: recevoir »). Un mot, un sens : c'est la leçon du `datastore`, qui désignait deux
 #: choses dont une seule existait encore.
 PARAMETRE = "donnees_d_origine"
 

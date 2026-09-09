@@ -38,8 +38,8 @@ from ...datastore import layers as dsl
 from ...datastore import schema as dsv2
 from ...datastore.core import (
     BusinessKeyRequired,
-    NamespaceNotFound,
-    NamespaceReadOnly,
+    DatastoreNotFound,
+    DatastoreReadOnly,
     RowLocked,
     RowNotFound,
     RowValidationError,
@@ -69,7 +69,7 @@ def _tolerant_int(v):
 
 
 class ListRowsInput(BaseModel):
-    namespace: Adresse
+    datastore: Adresse
     # `None` = le défaut du serveur (0 / 50) ; borné à [1, 500] pour `limit`.
     offset: Optional[int] = None
     limit: Optional[int] = None
@@ -108,7 +108,7 @@ class ListRowsInput(BaseModel):
 
 
 class AggregateInput(BaseModel):
-    namespace: Adresse
+    datastore: Adresse
     group_by: Optional[str] = None
     # JSON encodé : `[{op: count|sum|avg|min|max, field?}]`.
     metrics: Optional[str] = None
@@ -120,12 +120,12 @@ class AggregateInput(BaseModel):
     filters: Optional[str] = None
 
 
-class NamespaceRefInput(BaseModel):
-    namespace: Adresse
+class DatastoreRefInput(BaseModel):
+    datastore: Adresse
 
 
 class RowRefInput(BaseModel):
-    namespace: Adresse
+    datastore: Adresse
     row_id: str
 
 
@@ -177,7 +177,7 @@ _DONNEES_D_ORIGINE = Field(default=False,
 
 
 class AppendRowInput(BaseModel):
-    namespace: Adresse
+    datastore: Adresse
     # Le corps ENTIER (cf. `RestBinding.body_field`) : les colonnes du tableau.
     row: dict = Field(default_factory=dict)
     readonly_override: bool = _FORCAGE
@@ -204,7 +204,7 @@ class AppendRowInput(BaseModel):
 
 
 class UpdateRowInput(BaseModel):
-    namespace: Adresse
+    datastore: Adresse
     row_id: str
     # Le corps ENTIER : les colonnes à écrire (patch partiel, jamais un remplacement).
     patch: dict = Field(default_factory=dict)
@@ -232,7 +232,7 @@ class UpdateRowInput(BaseModel):
 
 
 class ReleaseInput(BaseModel):
-    namespace: Adresse
+    datastore: Adresse
     row_id: str
     # Vide = libération FORCÉE (supervision humaine) ; renseigné = libération GARDÉE.
     worker: str = ""
@@ -243,7 +243,7 @@ class Row(BaseModel):
 
     `additionalProperties` est VRAI et c'est le fond du modèle — un tableau du
     datastore n'a pas de schéma imposé (le schéma typé d'ADR 0046 est optionnel et se
-    lit sur le namespace, pas ici).
+    lit sur le datastore, pas ici).
     """
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
@@ -314,7 +314,7 @@ class WrittenRow(Row):
     # Le NUMÉRO du tableau écrit — la forme d'adresse à employer (le nom part en
     # retrait). Déclaré et non seulement toléré : une intégration qui lit l'OpenAPI
     # doit le voir. ⚠️ Le NOM, lui, ne s'ajoute pas ici : le corps de cette remise EST
-    # la ligne, et `namespace` y entrerait en collision avec une colonne parfaitement
+    # la ligne, et `datastore` y entrerait en collision avec une colonne parfaitement
     # plausible. Le numéro n'a pas ce défaut. Cf. `datastore/identite.py`.
     ns_id: Optional[int] = Field(default=None, description=identite.DESCRIPTION)
     # #317 : ce qui a CHANGÉ dans le comportement de la plateforme, dit à l'instant
@@ -367,12 +367,12 @@ class ReleasedRow(BaseModel):
     hint: Optional[str] = None
 
 
-def _adresse(namespace: str, row_id=None):
+def _adresse(datastore: str, row_id=None):
     """La MÊME couture que la face agent (`oto_mcp/datastore/jetons.py`).
 
     ⚠️ Elle est ici parce que les deux faces avaient divergé, et en silence : les
     opérations de SCHÉMA de cette couche résolvaient `slot:<nom>` depuis toujours,
-    celles de LIGNES le passaient brut au stockage, qui répondait « namespace inconnu »
+    celles de LIGNES le passaient brut au stockage, qui répondait « datastore inconnu »
     sur un jeton parfaitement valide. *Une divergence qui refuse est visible ; une
     divergence qui répond une cause fausse s'instruit pendant des jours.*
 
@@ -382,8 +382,8 @@ def _adresse(namespace: str, row_id=None):
     qui rend `400 jeton_mal_place` avec la conduite qui aboutit, là où le stockage aurait
     répondu « tableau inconnu » sur une chaîne correctement orthographiée."""
     try:
-        return jetons.resoudre(namespace, row_id,
-                               resoudre_slot=access.resolve_namespace_ref)
+        return jetons.resoudre(datastore, row_id,
+                               resoudre_slot=access.resolve_datastore_ref)
     except jetons.JetonMalPlace as e:
         raise AuthzDenied(400, "jeton_mal_place", str(e))
 
@@ -419,7 +419,7 @@ def _json_param(raw: Optional[str], code: str, *, expect=None):
 
 
 def _list_rows(ctx: ResolvedCtx, inp: ListRowsInput) -> dict:
-    ns, _ = _adresse(inp.namespace)
+    ns, _ = _adresse(inp.datastore)
     offset = max(0, inp.offset if inp.offset is not None else 0)
     limit = min(500, max(1, inp.limit if inp.limit is not None else 50))
     filter_eq = _json_param(inp.filter, "invalid_filter", expect=dict)
@@ -433,7 +433,7 @@ def _list_rows(ctx: ResolvedCtx, inp: ListRowsInput) -> dict:
             q=inp.q or None, filter=filter_eq, filters=filters, layers=layers,
             versions=_versions(inp.versions))
         return {**page, **identite.numero(store.dernier_tableau)}
-    except NamespaceNotFound:
+    except DatastoreNotFound:
         raise ns_not_found(ctx.sub, ns)
     except ValueError as e:
         # Le message du store arrive JUSQU'À l'appelant. Sans lui, un refus
@@ -448,7 +448,7 @@ def _list_rows(ctx: ResolvedCtx, inp: ListRowsInput) -> dict:
 def _aggregate(ctx: ResolvedCtx, inp: AggregateInput) -> dict:
     """Agrégat serveur (ADR 0046 b1 — compteurs du cockpit) : COUNT/SUM/AVG/…
     groupés par un champ JSONB, sans rapatrier les lignes."""
-    ns, _ = _adresse(inp.namespace)
+    ns, _ = _adresse(inp.datastore)
     metrics = _json_param(inp.metrics, "invalid_metrics")
     filter_eq = _json_param(inp.filter, "invalid_filter", expect=dict)
     filters = _json_param(inp.filters, "invalid_filters", expect=list)
@@ -456,32 +456,32 @@ def _aggregate(ctx: ResolvedCtx, inp: AggregateInput) -> dict:
         groups = make_store(ctx.sub).aggregate(
             ns, group_by=inp.group_by or None, metrics=metrics,
             filter=filter_eq, q=inp.q or None, filters=filters)
-    except NamespaceNotFound:
+    except DatastoreNotFound:
         raise ns_not_found(ctx.sub, ns)
     except ValueError as e:
         raise AuthzDenied(400, "invalid_aggregate", str(e))
     return {"groups": groups}
 
 
-def _queue(ctx: ResolvedCtx, inp: NamespaceRefInput) -> dict:
+def _queue(ctx: ResolvedCtx, inp: DatastoreRefInput) -> dict:
     """File de travail (ADR 0046 D) — vue de supervision : les lignes sous bail
     (`_claimed_by`/`_claimed_until`/`_claimed_run`), actif ou expiré. Lecture
     seule. `_claimed_run` est ce qui rend la vue ACTIONNABLE : sans lui elle dit
     qu'un travail tient une ligne, jamais lequel tient laquelle."""
-    ns, _ = _adresse(inp.namespace)
+    ns, _ = _adresse(inp.datastore)
     try:
         return {"rows": make_store(ctx.sub).queue(ns)}
-    except NamespaceNotFound:
+    except DatastoreNotFound:
         raise ns_not_found(ctx.sub, ns)
 
 
 def _get_row(ctx: ResolvedCtx, inp: GetRowInput) -> dict:
-    ns, rid = _adresse(inp.namespace, inp.row_id)
+    ns, rid = _adresse(inp.datastore, inp.row_id)
     layers = _layers(inp.layers)
     try:
         return make_store(ctx.sub).get_row(ns, rid, layers=layers,
                                            versions=_versions(inp.versions))
-    except NamespaceNotFound:
+    except DatastoreNotFound:
         raise ns_not_found(ctx.sub, ns)
     except RowNotFound:
         raise AuthzDenied(404, "row_not_found")
@@ -543,7 +543,7 @@ _ECRITURE_DETRUIT = (
 
 
 def _append_row(ctx: ResolvedCtx, inp: AppendRowInput) -> dict:
-    ns, _ = _adresse(inp.namespace)
+    ns, _ = _adresse(inp.datastore)
     _verifier_contenu(inp.row)
     trace: dict = {}
     store = make_store(ctx.sub)
@@ -554,10 +554,10 @@ def _append_row(ctx: ResolvedCtx, inp: AppendRowInput) -> dict:
                                    origine_override=inp.origine_override,
                                    donnees_d_origine=inp.donnees_d_origine,
                                    force=fcg.chemins_forces(inp.force))
-    except NamespaceNotFound:
+    except DatastoreNotFound:
         raise ns_not_found(ctx.sub, ns)
-    except NamespaceReadOnly:
-        raise AuthzDenied(403, "namespace_read_only")
+    except DatastoreReadOnly:
+        raise AuthzDenied(403, "datastore_read_only")
     except ValueError as e:
         raise _write_refusal(e)
     nsctx = datastore_journal.from_trace(trace, ns)
@@ -576,7 +576,7 @@ def _update_row(ctx: ResolvedCtx, inp: UpdateRowInput) -> dict:
     # L'état AVANT vient du RELEVÉ de la mutation (`trace`) : c'est celui sur lequel la
     # transition a été validée. Le relire ici courrait avec un write concurrent → le
     # cockpit proposerait d'annuler vers un état que la ligne n'a jamais eu.
-    ns, rid = _adresse(inp.namespace, inp.row_id)
+    ns, rid = _adresse(inp.datastore, inp.row_id)
     _verifier_contenu(inp.patch)
     trace: dict = {}
     store = make_store(ctx.sub)
@@ -586,10 +586,10 @@ def _update_row(ctx: ResolvedCtx, inp: UpdateRowInput) -> dict:
                                    origine_override=inp.origine_override,
                                    donnees_d_origine=inp.donnees_d_origine,
                                    force=fcg.chemins_forces(inp.force))
-    except NamespaceNotFound:
+    except DatastoreNotFound:
         raise ns_not_found(ctx.sub, ns)
-    except NamespaceReadOnly:
-        raise AuthzDenied(403, "namespace_read_only")
+    except DatastoreReadOnly:
+        raise AuthzDenied(403, "datastore_read_only")
     except RowNotFound:
         raise AuthzDenied(404, "row_not_found")
     except ValueError as e:
@@ -605,14 +605,14 @@ def _update_row(ctx: ResolvedCtx, inp: UpdateRowInput) -> dict:
 
 
 def _delete_row(ctx: ResolvedCtx, inp: RowRefInput) -> dict:
-    ns, rid = _adresse(inp.namespace, inp.row_id)
+    ns, rid = _adresse(inp.datastore, inp.row_id)
     trace: dict = {}
     try:
         make_store(ctx.sub).delete_row(ns, rid, trace=trace)
-    except NamespaceNotFound:
+    except DatastoreNotFound:
         raise ns_not_found(ctx.sub, ns)
-    except NamespaceReadOnly:
-        raise AuthzDenied(403, "namespace_read_only")
+    except DatastoreReadOnly:
+        raise AuthzDenied(403, "datastore_read_only")
     except RowNotFound:
         raise AuthzDenied(404, "row_not_found")
     nsctx = datastore_journal.from_trace(trace, ns)
@@ -632,7 +632,7 @@ def _release_claim(ctx: ResolvedCtx, inp: ReleaseInput) -> dict:
     de n'importe qui » est le défaut, pas la supervision. Une session interactive
     garde le geste, elle en a la légitimité. Exige l'écriture dans les deux cas.
     """
-    ns, rid = _adresse(inp.namespace, inp.row_id)
+    ns, rid = _adresse(inp.datastore, inp.row_id)
     worker = (inp.worker or "").strip()
     if not worker and token_scopes.current() is not None:
         raise AuthzDenied(400, "worker_required",
@@ -648,10 +648,10 @@ def _release_claim(ctx: ResolvedCtx, inp: ReleaseInput) -> dict:
                  else {"released": store.force_release(ns, rid, trace=trace),
                        "reason": None, "lease": None})
         released = issue["released"]
-    except NamespaceNotFound:
+    except DatastoreNotFound:
         raise ns_not_found(ctx.sub, ns)
-    except NamespaceReadOnly:
-        raise AuthzDenied(403, "namespace_read_only")
+    except DatastoreReadOnly:
+        raise AuthzDenied(403, "datastore_read_only")
     if released:  # rien libéré = rien changé, donc rien à journaliser
         datastore_journal.record(
             datastore_journal.TOOL_RELEASE, sub=ctx.sub,
@@ -663,7 +663,7 @@ def _release_claim(ctx: ResolvedCtx, inp: ReleaseInput) -> dict:
     }
 
 
-_NS = "/api/datastore/namespaces/{namespace}"
+_NS = "/api/datastores/{datastore}"
 
 CAPABILITIES += [
     Capability(
@@ -748,7 +748,7 @@ CAPABILITIES += [
     Capability(
         key="me.datastore.queue",
         handler=_queue,
-        Input=NamespaceRefInput,
+        Input=DatastoreRefInput,
         Output=RowQueue,
         authz=SUB_ONLY,
         mcp=None,

@@ -164,10 +164,16 @@ def _errs(fields):
     return dsv2.validate_schema_def({"fields": fields})
 
 
+# ⚠️ Trois cas RETIRÉS le 08/09/2026, tous sur `origine` : `{"origine": "agent"}`
+# (vocabulaire fermé), et le cran posé sur un `json` ou une `list`. Ils vérifiaient que
+# la POSE refuse une déclaration inapplicable — c'était juste tant que `origine:
+# "system"` armait une capture. Le cran a été supprimé au profit de `donnees_d_origine`
+# déclaré à l'import : ces refus promettaient donc un mécanisme mort, et leur motif
+# décrivait une capture qui n'a plus lieu. La clé n'est pas refusée pour autant (500
+# colonnes de production la portent, un refus gèlerait dix tableaux vivants) : elle est
+# déclarée NON APPLIQUÉE dans `schema_keys`, donc nommée par l'avertissement des clés
+# que la plateforme ne lit pas. `readonly`, lui, s'applique toujours et reste gardé.
 @pytest.mark.parametrize("field, attendu", [
-    ({"key": "x", "origine": "agent"}, "system"),          # vocabulaire fermé
-    ({"key": "x", "type": "json", "origine": "system"}, "json"),
-    ({"key": "x", "type": "list", "of": {"type": "text"}, "origine": "system"}, "list"),
     ({"key": "x", "readonly": "oui"}, "readonly"),
 ])
 def test_une_declaration_qui_ne_peut_pas_s_appliquer_se_refuse_a_la_POSE(field, attendu):

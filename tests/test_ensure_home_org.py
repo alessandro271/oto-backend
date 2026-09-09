@@ -125,8 +125,8 @@ def test_backfill_ne_touche_plus_aux_ressources(monkeypatch):
     monkeypatch.setattr(org_store, "_connect", lambda: _Users([{"sub": "u1", "email": "a@x.co", "name": "A"}]))
     monkeypatch.setattr(org_store, "ensure_personal_org", lambda sub, e, n: 42)
     rep = []
-    monkeypatch.setattr(db, "list_datastore_namespaces_for_owners", lambda owners: [{"id": 1}])
-    monkeypatch.setattr(db, "reparent_datastore_namespace", lambda *a, **k: rep.append(a))
+    monkeypatch.setattr(db, "list_datastores_for_owners", lambda owners: [{"id": 1}])
+    monkeypatch.setattr(db, "reparent_datastore", lambda *a, **k: rep.append(a))
     monkeypatch.setattr(db, "list_projects_for_owners", lambda owners, include_archived=False: [{"id": 5}])
     monkeypatch.setattr(db, "reparent_project", lambda *a, **k: rep.append(a))
     c = org_store.backfill_personal_orgs()

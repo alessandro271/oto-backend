@@ -71,7 +71,13 @@ CLES: tuple[Cle, ...] = (
     Cle("agent_access", ("validateur", "front"),
         "à qui la colonne est servie : \"write\" (défaut), \"read\" (un agent la voit, "
         "n'écrit pas sa valeur), \"none\" (un agent ne la voit pas du tout)", True),
-    Cle("origine", ("validateur",), "la couche d'origine, posée par la plateforme", True),
+    # ⚠️ Lue par PERSONNE depuis le 08/09/2026 — et c'est pour ça qu'elle est déclarée
+    # avec un tuple VIDE plutôt que retirée de la liste. Retirer la ligne la ferait
+    # passer pour une clé inconnue ; la garder sans lecteur la fait nommer pour ce
+    # qu'elle est : un attribut que 500 colonnes portent et que la plateforme n'applique
+    # plus. Le cran est remplacé par `donnees_d_origine`, déclaré à l'import.
+    Cle("origine", (), "SANS EFFET — le cran est remplacé par `donnees_d_origine`, "
+        "déclaré à l'import ; cet attribut n'est plus lu", True),
     Cle("max_length", ("validateur", "front"), "borne de longueur, publiée dans le contrat"),
     Cle("pattern", ("validateur",), "forme exigée de la valeur"),
     Cle("required_when", ("validateur", "front"), "obligatoire sous condition"),

@@ -41,22 +41,22 @@ def forme_de_lot(row) -> Optional[tuple[str, int]]:
     return str(cle), len(valeur)
 
 
-def refuser_un_lot(store, namespace: str, row) -> None:
+def refuser_un_lot(store, datastore: str, row) -> None:
     """Lève `AuthzDenied(400, batch_body)` si `row` est un lot enveloppé dont la clé
     n'est pas une colonne déclarée du tableau. Le schéma n'est lu que lorsque la forme
-    est suspecte : une ligne ordinaire ne paie rien. `NamespaceNotFound` remonte à
+    est suspecte : une ligne ordinaire ne paie rien. `DatastoreNotFound` remonte à
     l'appelant, qui le rend comme pour l'écriture elle-même."""
     lot = forme_de_lot(row)
     if lot is None:
         return
     cle, n = lot
-    if declares_field(store.get_schema(namespace), cle):
+    if declares_field(store.get_schema(datastore), cle):
         return
     raise AuthzDenied(400, CODE, (
         f"`POST …/rows` écrit UNE ligne : le corps est un objet, une clé par colonne. "
         f"Reçu un objet dont l'unique clé `{cle}` porte une liste de {n} objets — la "
         f"forme d'un LOT, qui aurait été écrit tel quel comme une seule ligne à colonne "
-        f"`{cle}`. Rien n'a été écrit. Un lot passe par `data_write(namespace=…, "
+        f"`{cle}`. Rien n'a été écrit. Un lot passe par `data_write(datastore=…, "
         f"rows=[…])` côté agent ; pour un volume, `oto_upload_url` (NDJSON/CSV) puis "
         f"`PUT /api/upload/{{token}}`. Si c'est bien UNE ligne dont la colonne `{cle}` "
         f"porte ces objets, déclare-la dans le schéma (`data_patch_schema`, type "

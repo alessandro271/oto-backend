@@ -2,7 +2,7 @@
 
 **L'incident, daté.** Le 2026-09-01, #756 a rendu `resource_type` OBLIGATOIRE sur
 `oto_resource` / `POST /api/resources`. Le motif était juste — ce champ vaut
-`datastore_namespace` par défaut, donc un appelant qui vise un projet et l'omet
+`datastore` par défaut, donc un appelant qui vise un projet et l'omet
 interroge silencieusement une autre famille, et sur `transfer`/`share` **agit sur une
 autre ressource**. Mais le champ était déclaré sans défaut sur le modèle d'entrée,
 donc obligatoire sur **toutes** les op, pas seulement `op=get` : le journal des appels
@@ -131,7 +131,7 @@ def test_la_stricte_exige_le_discriminant():
         V2.ResourceInputV2(op="list")
 
 
-@pytest.mark.parametrize("famille", ["datastore_namespace", "project", "doctrine"])
+@pytest.mark.parametrize("famille", ["datastore", "project", "doctrine"])
 @pytest.mark.parametrize("valeur", ["abc", "", "7a", "1 OR 1", "../7"])
 def test_la_stricte_refuse_un_identifiant_non_numerique(famille, valeur):
     with pytest.raises(ValidationError):
@@ -200,7 +200,7 @@ def test_l_heritee_annonce_son_defaut_connu_dans_sa_description_servie():
     et qu'on écrit est un contrat. La description servie est le seul texte que le
     modèle relit à chaque appel — un fichier de `docs/` ne l'atteint jamais."""
     d = _cap("resources.govern").description
-    assert "datastore_namespace" in d
+    assert "datastore" in d
     assert "transfer" in d and "share" in d
     assert "oto_resource_v2" in d, "le défaut se documente AVEC sa sortie de secours"
 
@@ -210,7 +210,7 @@ def test_le_defaut_connu_est_publie_dans_le_document_REST():
     l'OpenAPI. Les deux faces servent la même prose (`Capability.description`), et
     c'est ce test qui empêche de documenter le piège d'un seul côté."""
     op = openapi.build()["paths"]["/api/resources"]["post"]
-    assert "datastore_namespace" in op["description"]
+    assert "datastore" in op["description"]
     assert "/api/resources/v2" in op["description"]
 
 

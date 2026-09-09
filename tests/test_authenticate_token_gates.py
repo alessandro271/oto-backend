@@ -89,7 +89,7 @@ def test_scoped_token_reads_its_table(token_row):
 
     async def scenario():
         sub, err = await api_routes._authenticate(
-            _req("GET", "/api/datastore/namespaces/leads/rows"), _FakeVerifier())
+            _req("GET", "/api/datastores/leads/rows"), _FakeVerifier())
         # Le handler qui suit, DANS LA MÊME TÂCHE, doit voir la portée : c'est ce
         # qui permet à `ds_list_ns` de filtrer son catalogue.
         return sub, err, token_scopes.current()
@@ -101,8 +101,8 @@ def test_scoped_token_reads_its_table(token_row):
 
 def test_scoped_token_is_forbidden_elsewhere_in_the_org(token_row):
     token_row["row"] = {"sub": "u-1", "scopes": {"namespaces": {"leads": "read"}}}
-    for method, path in (("GET", "/api/datastore/namespaces/autre/rows"),
-                         ("PATCH", "/api/datastore/namespaces/leads/rows/1"),
+    for method, path in (("GET", "/api/datastores/autre/rows"),
+                         ("PATCH", "/api/datastores/leads/rows/1"),
                          ("GET", "/api/me"),
                          ("GET", "/api/me/tokens"),
                          ("POST", "/api/me/projects")):
@@ -124,7 +124,7 @@ def test_scope_never_survives_the_previous_authentication(token_row):
     async def scenario():
         token_row["row"] = {"sub": "u-1", "scopes": {"namespaces": {"leads": "read"}}}
         await api_routes._authenticate(
-            _req("GET", "/api/datastore/namespaces/leads/rows"), _FakeVerifier())
+            _req("GET", "/api/datastores/leads/rows"), _FakeVerifier())
         first = token_scopes.current()
         token_row["row"] = {"sub": "u-1", "scopes": None}
         await api_routes._authenticate(_req("GET", "/api/me"), _FakeVerifier())
@@ -139,7 +139,7 @@ def test_jwt_never_carries_a_token_scope(token_row):
     async def scenario():
         token_row["row"] = {"sub": "u-1", "scopes": {"namespaces": {"leads": "read"}}}
         await api_routes._authenticate(
-            _req("GET", "/api/datastore/namespaces/leads/rows"), _FakeVerifier())
+            _req("GET", "/api/datastores/leads/rows"), _FakeVerifier())
         await api_routes._authenticate(
             _req("GET", "/api/me", token="eyJ-un-jwt"), _FakeVerifier())
         return token_scopes.current()
@@ -151,10 +151,10 @@ def test_invalid_token_clears_any_scope(token_row):
     async def scenario():
         token_row["row"] = {"sub": "u-1", "scopes": {"namespaces": {"leads": "read"}}}
         await api_routes._authenticate(
-            _req("GET", "/api/datastore/namespaces/leads/rows"), _FakeVerifier())
+            _req("GET", "/api/datastores/leads/rows"), _FakeVerifier())
         token_row["row"] = None
         out = await api_routes._authenticate(
-            _req("GET", "/api/datastore/namespaces/leads/rows"), _FakeVerifier())
+            _req("GET", "/api/datastores/leads/rows"), _FakeVerifier())
         return out, token_scopes.current()
 
     (sub, err), scope = asyncio.run(scenario())

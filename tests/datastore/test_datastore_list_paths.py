@@ -145,7 +145,7 @@ def _store(monkeypatch, schema):
     s = DatastorePg("u-1")
     monkeypatch.setattr(s, "_resolve", lambda ns, write=False: 1)
     monkeypatch.setattr(s, "_schema_of", lambda ns_id: schema)
-    monkeypatch.setattr(s, "_ns_of", lambda ns_id: {"schema": schema, "namespace": "t"})
+    monkeypatch.setattr(s, "_ns_of", lambda ns_id: {"schema": schema, "datastore": "t"})
     return s
 
 

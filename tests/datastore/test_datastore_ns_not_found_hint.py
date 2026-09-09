@@ -2,7 +2,7 @@
 
 L'API REST résout le store sur l'org ACTIVE du porteur du token ; viser le tableau
 d'une autre org demande l'en-tête `X-Oto-Org`, qui n'était nommé nulle part. Un
-namespace bien réel répondait « namespace_not_found » — lu comme « il n'existe pas ».
+datastore bien réel répondait « datastore_not_found » — lu comme « il n'existe pas ».
 
 ⚠️ Le chemin de lecture est passé en CAPACITÉ le 2026-08-12 (#302). L'indice a suivi
 (`capabilities/datastore/common.ns_not_found`) : ces tests le prouvent sur la nouvelle
@@ -15,47 +15,47 @@ from _datastore_rest import Boom, call, stub_authz
 from oto_mcp.capabilities.datastore import common as dc
 from oto_mcp.datastore import hors_org
 from oto_mcp.capabilities.datastore import rows as dsr
-from oto_mcp.datastore.core import NamespaceNotFound
+from oto_mcp.datastore.core import DatastoreNotFound
 
 
 @pytest.fixture(autouse=True)
 def _sans_db(monkeypatch):
     stub_authz(monkeypatch)
-    monkeypatch.setattr(dsr, "make_store", lambda sub: Boom(NamespaceNotFound("nope")))
+    monkeypatch.setattr(dsr, "make_store", lambda sub: Boom(DatastoreNotFound("nope")))
 
 
-def _get_rows(monkeypatch, *, orgs, namespaces, ns="leads-accords-dormants"):
+def _get_rows(monkeypatch, *, orgs, datastores, ns="leads-accords-dormants"):
     monkeypatch.setattr(hors_org.org_store, "list_orgs_for_user", lambda sub: orgs)
-    monkeypatch.setattr(hors_org.db, "list_datastore_namespaces_for_owners",
-                        lambda owners: namespaces)
-    return call("me.datastore.list_rows", path_params={"namespace": ns})
+    monkeypatch.setattr(hors_org.db, "list_datastores_for_owners",
+                        lambda owners: datastores)
+    return call("me.datastore.list_rows", path_params={"datastore": ns})
 
 
 def test_hint_names_the_org_and_the_header(monkeypatch):
     status, corps = _get_rows(
         monkeypatch,
         orgs=[{"org_id": 2, "name": "Otomata Admin"}, {"org_id": 81, "name": "Marché"}],
-        namespaces=[{"namespace": "leads-accords-dormants", "owner_type": "org",
+        datastores=[{"datastore": "leads-accords-dormants", "owner_type": "org",
                      "owner_id": "81"}],
     )
-    assert (status, corps["error"]) == (404, "namespace_not_found")
+    assert (status, corps["error"]) == (404, "datastore_not_found")
     assert "X-Oto-Org: 81" in corps["detail"]
     assert "Marché" in corps["detail"]          # nommer l'org, pas seulement son id
 
 
-def test_no_hint_when_the_namespace_exists_nowhere(monkeypatch):
+def test_no_hint_when_the_datastore_exists_nowhere(monkeypatch):
     assert _get_rows(monkeypatch, orgs=[{"org_id": 2, "name": "Otomata Admin"}],
-                     namespaces=[]) == (404, {"error": "namespace_not_found",
+                     datastores=[]) == (404, {"error": "datastore_not_found",
                                               "detail": None})
 
 
-def test_no_hint_for_a_namespace_of_another_name(monkeypatch):
-    """On ne suggère que le namespace DEMANDÉ — pas un voisin qui traîne."""
+def test_no_hint_for_a_datastore_of_another_name(monkeypatch):
+    """On ne suggère que le datastore DEMANDÉ — pas un voisin qui traîne."""
     out = _get_rows(monkeypatch,
                     orgs=[{"org_id": 2, "name": "Otomata Admin"}],
-                    namespaces=[{"namespace": "autre-chose", "owner_type": "org",
+                    datastores=[{"datastore": "autre-chose", "owner_type": "org",
                                  "owner_id": "2"}])
-    assert out == (404, {"error": "namespace_not_found", "detail": None})
+    assert out == (404, {"error": "datastore_not_found", "detail": None})
 
 
 def test_lookup_failure_degrades_to_the_bare_404(monkeypatch):
@@ -65,8 +65,8 @@ def test_lookup_failure_degrades_to_the_bare_404(monkeypatch):
 
     monkeypatch.setattr(hors_org.org_store, "list_orgs_for_user", boom)
     assert call("me.datastore.list_rows",
-                path_params={"namespace": "peu-importe"}) == (
-                    404, {"error": "namespace_not_found", "detail": None})
+                path_params={"datastore": "peu-importe"}) == (
+                    404, {"error": "datastore_not_found", "detail": None})
 
 
 def test_only_orgs_the_caller_belongs_to_are_probed(monkeypatch):
@@ -81,6 +81,6 @@ def test_only_orgs_the_caller_belongs_to_are_probed(monkeypatch):
     monkeypatch.setattr(hors_org.org_store, "list_orgs_for_user",
                         lambda sub: [{"org_id": 2, "name": "A"},
                                      {"org_id": 81, "name": "B"}])
-    monkeypatch.setattr(hors_org.db, "list_datastore_namespaces_for_owners", capture)
-    call("me.datastore.list_rows", path_params={"namespace": "x"})
+    monkeypatch.setattr(hors_org.db, "list_datastores_for_owners", capture)
+    call("me.datastore.list_rows", path_params={"datastore": "x"})
     assert seen["owners"] == [("org", "2"), ("org", "81")]

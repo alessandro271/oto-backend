@@ -7,7 +7,7 @@ table `tool_calls`). Deux raisons d'exister, toutes deux hors des handlers :
    REST et n'était journalisé qu'au grain route (`PATCH /api/datastore/…`) : on
    voyait qu'une écriture avait eu lieu, jamais LAQUELLE ni depuis quel état. On
    pose donc une ligne `kind='rest'` nommée dans le vocabulaire MCP (`data_write`…)
-   portant `namespace`/`ns_id`/`id`/`fields`/`from_status`/`to_status`.
+   portant `datastore`/`ns_id`/`id`/`fields`/`from_status`/`to_status`.
    ⚠️ **`from_status` vient de la MUTATION elle-même** (relevé `DatastorePg._trace`),
    jamais d'une relecture faite avant l'appel : c'est lui qui rend l'annulation
    possible, il doit donc être l'état sur lequel la transition a été validée.
@@ -56,19 +56,19 @@ class NsContext:
     owner_id: Optional[str] = None
 
 
-def from_trace(trace: dict, namespace: str) -> NsContext:
+def from_trace(trace: dict, datastore: str) -> NsContext:
     """Contexte de journal issu du RELEVÉ rempli par la mutation elle-même
     (`DatastorePg._trace`) — zéro requête ajoutée, zéro course sur l'état d'avant.
     Un relevé vide (mutation qui a échoué avant de le remplir) dégrade proprement."""
     return NsContext(
         ns_id=trace.get("ns_id"),
-        name=trace.get("namespace") or str(namespace),
+        name=trace.get("datastore") or str(datastore),
         status_key=trace.get("status_key"),
         title_key=trace.get("title_key"),
     )
 
 
-def context(store, namespace: str, ns_id: Optional[int] = None) -> NsContext:
+def context(store, datastore: str, ns_id: Optional[int] = None) -> NsContext:
     """Résout le tableau UNE fois pour le journal (id + nom canonique + rôles + owner).
 
     Chemin de LECTURE seulement (surfaces d'activité) : une écriture, elle, passe par
@@ -79,20 +79,20 @@ def context(store, namespace: str, ns_id: Optional[int] = None) -> NsContext:
     `ns_id` évite une seconde résolution quand l'appelant l'a déjà (gate d'accès).
     """
     try:
-        ns_id = int(ns_id if ns_id is not None else store.resolve_ns_id(namespace))
-        ns = db.get_datastore_namespace_by_id(ns_id) or {}
+        ns_id = int(ns_id if ns_id is not None else store.resolve_ns_id(datastore))
+        ns = db.get_datastore_by_id(ns_id) or {}
         schema = ns.get("schema")
         return NsContext(
             ns_id=ns_id,
-            name=ns.get("namespace") or str(namespace),
+            name=ns.get("datastore") or str(datastore),
             status_key=(dsv2.status_field(schema) or {}).get("key"),
             title_key=(dsv2.title_field(schema) or {}).get("key"),
             owner_type=ns.get("owner_type"),
             owner_id=(None if ns.get("owner_id") is None else str(ns.get("owner_id"))),
         )
     except Exception:  # noqa: BLE001 — le journal ne décide pas de l'accès
-        logger.debug("contexte de journal datastore indisponible (%s)", namespace, exc_info=True)
-        return NsContext(ns_id=None, name=str(namespace))
+        logger.debug("contexte de journal datastore indisponible (%s)", datastore, exc_info=True)
+        return NsContext(ns_id=None, name=str(datastore))
 
 
 def status_of(row: Any, ctx: NsContext) -> Optional[Any]:
@@ -119,7 +119,7 @@ def record(tool: str, *, sub: Optional[str], ctx: NsContext, row_id: Optional[st
     calllog.log_rest_call(
         tool,
         sub=sub,
-        args={"namespace": ctx.name, "ns_id": ctx.ns_id, "id": row_id,
+        args={"datastore": ctx.name, "ns_id": ctx.ns_id, "id": row_id,
               "from_status": from_status, "to_status": to_status},
         fields=fields,
         # ⚠️ PAS dans `args` : `truncated_args` y stringifierait la liste et la

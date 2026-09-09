@@ -1,7 +1,7 @@
 """Un nom de tableau qui ne résout pas dans l'org de l'appel (#631).
 
 Vécu en production le 29/08/2026, dans un même travail : `data_claim_next(<nom>)` ok
-à 21:10:05, `data_write(<nom>, id=<ligne>)` refusé « namespace inconnu » à 21:11:23,
+à 21:10:05, `data_write(<nom>, id=<ligne>)` refusé « datastore inconnu » à 21:11:23,
 `data_write("@claimed")` ok à 21:11:35 (ce pronom a été retiré le 07/09/2026, sans
 rien changer au diagnostic ci-dessous) — 103 refus de cette famille sur la soirée,
 82 sur sept jours. Les deux appels ok portaient l'axe `_org=` (journal : `org_id` de
@@ -44,7 +44,7 @@ def run_courant() -> Optional[str]:
         return None
 
 
-def tenu_par_le_run(sub: Optional[str], namespace: str) -> Optional[dict]:
+def tenu_par_le_run(sub: Optional[str], datastore: str) -> Optional[dict]:
     """La ligne `user_datastores` du tableau que la réservation active du run porte
     sous ce nom (ou cet id) — None si le run ne tient rien de tel.
 
@@ -60,30 +60,30 @@ def tenu_par_le_run(sub: Optional[str], namespace: str) -> Optional[dict]:
         if ns_id in vus:
             continue
         vus.add(ns_id)
-        ns = db.get_datastore_namespace_by_id(ns_id) or {}
-        if namespace not in (ns.get("namespace"), str(ns_id)):
+        ns = db.get_datastore_by_id(ns_id) or {}
+        if datastore not in (ns.get("datastore"), str(ns_id)):
             continue
-        if not ownership.can_access(sub, "datastore_namespace", str(ns_id), "read"):
+        if not ownership.can_access(sub, ownership.TYPE_RESSOURCE_DATASTORE, str(ns_id), "read"):
             return None
         return ns
     return None
 
 
-def ou_existe(sub: str, namespace: str) -> list[tuple[int, Optional[str]]]:
+def ou_existe(sub: str, datastore: str) -> list[tuple[int, Optional[str]]]:
     """`(org_id, nom)` des orgs DU sub qui possèdent un tableau de ce nom exact —
     la recherche des deux faces (REST : `X-Oto-Org` ; MCP : `_org=`)."""
     orgs = {int(o["org_id"]): o.get("name") for o in org_store.list_orgs_for_user(sub)}
     owners = [("org", str(i)) for i in orgs]
     return [(int(n["owner_id"]), orgs.get(int(n["owner_id"])))
-            for n in db.list_datastore_namespaces_for_owners(owners)
-            if n["namespace"] == namespace]
+            for n in db.list_datastores_for_owners(owners)
+            if n["datastore"] == datastore]
 
 
 def _nom(org_id: int) -> str:
     return str((org_store.get_org(org_id) or {}).get("name") or "sans nom")
 
 
-def indice_autre_org(sub: Optional[str], namespace: str,
+def indice_autre_org(sub: Optional[str], datastore: str,
                      org_courante: Optional[int]) -> Optional[str]:
     """La phrase de la face MCP : où le tableau existe, où l'appel a été résolu, quoi
     passer. None quand le nom n'existe dans aucune org de l'appelant — on ne suggère que
@@ -91,7 +91,7 @@ def indice_autre_org(sub: Optional[str], namespace: str,
     if not sub:
         return None
     try:
-        ailleurs = [(o, n) for o, n in ou_existe(sub, namespace) if o != org_courante]
+        ailleurs = [(o, n) for o, n in ou_existe(sub, datastore) if o != org_courante]
         if not ailleurs:
             return None
         ou = ", ".join(f"org {o} « {n or 'sans nom'} »" for o, n in ailleurs)

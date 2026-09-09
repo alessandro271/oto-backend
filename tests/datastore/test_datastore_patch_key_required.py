@@ -51,7 +51,7 @@ def _banc(monkeypatch, current: dict):
     st = DatastorePg("u", acting_org=35)
     monkeypatch.setattr(st, "_resolve", lambda ns, write=False: 7)
     posed: dict = {}
-    monkeypatch.setattr(dsm.db, "get_datastore_namespace_by_id",
+    monkeypatch.setattr(dsm.db, "get_datastore_by_id",
                         lambda ns_id: {"id": ns_id, "schema": copy.deepcopy(current)})
     monkeypatch.setattr(dsm.db, "set_datastore_schema",
                         lambda ns_id, schema: posed.update(schema=schema))
@@ -151,21 +151,21 @@ class _Store:
     def __init__(self):
         self.calls: list = []
 
-    def patch_schema(self, namespace, **kw):
-        self.calls.append((namespace, kw))
-        return {"namespace": namespace, "schema": {"key": "siren", "key_required": True,
+    def patch_schema(self, datastore, **kw):
+        self.calls.append((datastore, kw))
+        return {"datastore": datastore, "schema": {"key": "siren", "key_required": True,
                                                    "fields": []},
                 "added": [], "updated": [], "removed": [], "enforced": ["key_required"]}
 
 
 def test_la_face_REST_passe_key_required_au_store(monkeypatch):
-    """`PATCH /api/datastore/namespaces/{ns}/schema` sert le même Input : la clé
+    """`PATCH /api/datastores/{ns}/schema` sert le même Input : la clé
     neuve traverse le corps jusqu'au store (avant ce lot : `400 unknown_fields`)."""
     stub_authz(monkeypatch)
     store = _Store()
     monkeypatch.setattr(dcc, "make_store", lambda sub: store)
     status, corps = call("me.datastore.patch_schema",
-                         path_params={"namespace": "vivier"},
+                         path_params={"datastore": "vivier"},
                          body={"key_required": True})
     assert status == 200, corps
     assert store.calls == [("vivier", {"fields": None, "remove": None, "remove_attrs": None, "strict": None,

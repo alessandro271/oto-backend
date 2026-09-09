@@ -15,8 +15,8 @@ def test_spine_tools_are_protected():
     # Famille projet + docs (le cœur du bug #213)
     for n in ("oto_project", "oto_use_project", "oto_doc", "oto_doc_app"):
         assert is_protected(n), n
-    # Datastore : namespace `data` entier (trop de noms pour lister)
-    for n in ("data_write", "data_rows", "data_create_namespace", "data_claim_next",
+    # Datastore : datastore `data` entier (trop de noms pour lister)
+    for n in ("data_write", "data_rows", "data_create_datastore", "data_claim_next",
               "data_set_schema", "data_delete_row"):
         assert is_protected(n), n
     # Boucle d'usage + identité + échappatoires + dispatch
@@ -26,7 +26,7 @@ def test_spine_tools_are_protected():
 
 
 def test_admin_and_connector_tools_are_NOT_protected():
-    # oto_admin_* reste gaté par rôle (namespace `oto` non protégé en bloc)
+    # oto_admin_* reste gaté par rôle (datastore `oto` non protégé en bloc)
     for n in ("oto_admin_org", "oto_admin_signal", "oto_admin_user"):
         assert not is_protected(n), n
     # outils de connecteur = jamais spine

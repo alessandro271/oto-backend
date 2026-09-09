@@ -68,7 +68,7 @@ def table(live):
     """Un tableau sous les deux crans, et UNE ligne remise par le client."""
     from oto_mcp import db
     ns = "t-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore_namespace("user", "sub-test", ns)
+    ns_id = db.create_datastore("user", "sub-test", ns)
     st = _store()
     pose = st.set_schema(ns, SCHEMA)
     # ⚠️ `origine` a quitté cette liste le 08/09/2026 : `origine: "system"` est
@@ -112,7 +112,7 @@ def terrain(live):
     """Le tableau du terrain : `raison_sociale` verrouillée ET à origine système."""
     from oto_mcp import db
     ns = "t-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore_namespace("user", "sub-test", ns)
+    ns_id = db.create_datastore("user", "sub-test", ns)
     st = _store()
     st.set_schema(ns, {"key": "siren", "fields": [
         {"key": "siren", "type": "text"},

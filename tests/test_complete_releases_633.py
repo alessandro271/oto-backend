@@ -112,7 +112,7 @@ def _run() -> str:
 def _table(n: int):
     from oto_mcp import db
     ns = "file-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore_namespace("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, ns)
     for i in range(n):
         db.datastore_insert_row(ns_id, f"r{i}", {"siren": f"5511100{i}", "statut": "a_enrichir"})
     return ns, ns_id
@@ -133,7 +133,7 @@ def _claim(ns: str, run: str) -> dict:
 
     msg = _Msg()
     msg.name = "data_claim_next"
-    msg.arguments = {"namespace": ns, "worker": run, "filter": {"statut": "a_enrichir"},
+    msg.arguments = {"datastore": ns, "worker": run, "filter": {"statut": "a_enrichir"},
                      "lease_s": 600, "_run_id": run}
     ctx = _Ctx()
     ctx.message = msg

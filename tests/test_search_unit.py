@@ -31,9 +31,9 @@ def _stub_empty(monkeypatch, **over):
             monkeypatch.setattr(S.db, n, lambda q, pids, limit, _r=rows: list(_r))
     monkeypatch.setattr(S.ownership, "accessible_project_ids", lambda *a, **k: [1])
     monkeypatch.setattr(S.ownership, "active_org_principals", lambda *a: [])
-    monkeypatch.setattr(S.db, "list_datastore_namespaces_for_owners",
+    monkeypatch.setattr(S.db, "list_datastores_for_owners",
                         lambda owners: over.get("tableaux", []))
-    monkeypatch.setattr(S.db, "list_datastore_namespaces_granted_to",
+    monkeypatch.setattr(S.db, "list_datastores_granted_to",
                         lambda *a: [])
     monkeypatch.setattr(S.db, "project_names", lambda ids: {1: "Projet X"})
 
@@ -114,15 +114,15 @@ def test_kinds_filters_sources(monkeypatch):
 
 def test_match_tableaux_ranking():
     rows = [
-        {"id": 1, "namespace": "prospects", "schema": {}},
-        {"id": 2, "namespace": "vieux-prospects-2024", "schema": {}},
-        {"id": 3, "namespace": "clients", "schema": {"fields": [{"label": "Prospects chauds"}]}},
-        {"id": 4, "namespace": "autre", "schema": {}},
+        {"id": 1, "datastore": "prospects", "schema": {}},
+        {"id": 2, "datastore": "vieux-prospects-2024", "schema": {}},
+        {"id": 3, "datastore": "clients", "schema": {"fields": [{"label": "Prospects chauds"}]}},
+        {"id": 4, "datastore": "autre", "schema": {}},
     ]
     import unittest.mock as m
     with m.patch.object(S.ownership, "active_org_principals", return_value=[]), \
-         m.patch.object(S.db, "list_datastore_namespaces_for_owners", return_value=rows), \
-         m.patch.object(S.db, "list_datastore_namespaces_granted_to", return_value=[]):
+         m.patch.object(S.db, "list_datastores_for_owners", return_value=rows), \
+         m.patch.object(S.db, "list_datastores_granted_to", return_value=[]):
         out = S._match_tableaux("Prospects", "u1", 7)
     assert [h["ref"] for h in out] == [1, 2, 3]   # exact > partiel > label ; 4 exclu
 

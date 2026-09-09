@@ -43,7 +43,7 @@ LIGNE_SQL = {
     "created_at": "2026-09-01 10:00:00",
     "kind": "rest",
     "tool": "data_write",
-    "args": {"namespace": "leads-clients", "ns_id": 160, "id": "row-1",
+    "args": {"datastore": "leads-clients", "ns_id": 160, "id": "row-1",
              "fields": ["statut"], "from_status": "enrichi", "to_status": "ecarte"},
     "ok": True,
     "error": None,
@@ -98,10 +98,10 @@ def test_la_surface_n_ajoute_aucune_cle(monkeypatch):
     la surface enrichit chaque entrée (`row_title`, `email` résolu à la lecture). Une
     clé posée là échapperait aux deux tests ci-dessus."""
     class _Store:
-        def get_row(self, namespace, row_id, **_):
+        def get_row(self, datastore, row_id, **_):
             return {"societe": "DEXXON GROUPE"}
 
-        def declared_key(self, namespace):
+        def declared_key(self, datastore):
             return "societe"
 
     monkeypatch.setattr(dsa, "make_store", lambda sub: _Store())
@@ -114,7 +114,7 @@ def test_la_surface_n_ajoute_aucune_cle(monkeypatch):
     monkeypatch.setattr(dsa.db, "emails_by_subs", lambda subs: {})
 
     out = dsa._row_activity(ResolvedCtx(sub="u-1"),
-                            dsa.RowActivityInput(namespace="160", row_id="row-1"))
+                            dsa.RowActivityInput(datastore="160", row_id="row-1"))
 
     servies = set(out["activity"][0])
     assert servies == _declarees(), {

@@ -98,7 +98,7 @@ def table(live):
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
     ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore_namespace("user", SUB, ns)
+    db.create_datastore("user", SUB, ns)
     # `LIGNE` porte une couche `origine` (import de socle) : depuis oto#70 lot 2, la
     # poser se déclare — c'est le geste exact qu'un import fera en production.
     row = make_store(SUB).append_row(ns, dict(LIGNE), origine_override=True)
@@ -144,7 +144,7 @@ def _meme_contenu(flat: dict, nested: dict) -> None:
 
 def test_REST_meme_ligne_en_flat_et_en_nested_meme_contenu(client, table):
     ns, rid = table
-    url = f"/api/datastore/namespaces/{ns}/rows/{rid}"
+    url = f"/api/datastores/{ns}/rows/{rid}"
     flat = client.get(url, headers=_h(), params={"layers": "flat"}).json()
     nested = client.get(url, headers=_h(), params={"layers": "nested"}).json()
     # La forme imbriquée est la forme ÉCRITE : ce qu'on a posé revient tel quel.
@@ -159,7 +159,7 @@ def test_REST_meme_ligne_en_flat_et_en_nested_meme_contenu(client, table):
 
 def test_REST_cellule_sans_couche_identique_dans_les_deux_formes(client, table):
     ns, rid = table
-    url = f"/api/datastore/namespaces/{ns}/rows/{rid}"
+    url = f"/api/datastores/{ns}/rows/{rid}"
     flat = client.get(url, headers=_h(), params={"layers": "flat"}).json()
     nested = client.get(url, headers=_h(), params={"layers": "nested"}).json()
     for k in ("siren", "ville", "tags", "_id", "_created_at", "_updated_at"):
@@ -170,7 +170,7 @@ def test_REST_cellule_sans_couche_identique_dans_les_deux_formes(client, table):
 
 def test_REST_la_liste_sert_la_meme_forme_que_la_fiche(client, table):
     ns, rid = table
-    url = f"/api/datastore/namespaces/{ns}/rows"
+    url = f"/api/datastores/{ns}/rows"
     flat = client.get(url, headers=_h(), params={"layers": "flat"}).json()["rows"]
     nested = client.get(url, headers=_h(), params={"layers": "nested"}).json()["rows"]
     assert [r["_id"] for r in flat] == [r["_id"] for r in nested] == [rid]
@@ -181,7 +181,7 @@ def test_REST_la_liste_sert_la_meme_forme_que_la_fiche(client, table):
 @pytest.mark.parametrize("route", ["rows", "rows/{rid}"])
 def test_REST_valeur_inconnue_refusee_en_nommant_le_parametre(client, table, route):
     ns, rid = table
-    r = client.get(f"/api/datastore/namespaces/{ns}/" + route.format(rid=rid),
+    r = client.get(f"/api/datastores/{ns}/" + route.format(rid=rid),
                    headers=_h(), params={"layers": "plat"})
     assert r.status_code == 400, r.text
     corps = r.json()
@@ -195,20 +195,20 @@ def test_REST_la_suppression_ne_prend_pas_layers(client, table):
     """`layers` ne vit que sur les lectures : l'`Input` partagé de la suppression ne
     l'a pas reçu, donc la garde de champ inconnu le refuse là."""
     ns, rid = table
-    r = client.delete(f"/api/datastore/namespaces/{ns}/rows/{rid}", headers=_h(),
+    r = client.delete(f"/api/datastores/{ns}/rows/{rid}", headers=_h(),
                       params={"layers": "nested"})
     assert r.status_code == 400 and r.json().get("error") == "unknown_fields", r.text
     # Et la ligne est toujours là (le refus a précédé toute écriture).
-    assert client.get(f"/api/datastore/namespaces/{ns}/rows/{rid}",
+    assert client.get(f"/api/datastores/{ns}/rows/{rid}",
                       headers=_h()).status_code == 200
 
 
 def test_REST_le_defaut_reste_flat(client, table):
     """SÉLECTIF : c'est CE test qui tombe si quelqu'un bascule le défaut (palier 3)."""
     ns, rid = table
-    sans = client.get(f"/api/datastore/namespaces/{ns}/rows/{rid}", headers=_h()).json()
+    sans = client.get(f"/api/datastores/{ns}/rows/{rid}", headers=_h()).json()
     assert isinstance(sans["suivi"], str) and sans["suivi.comment"] == "à rappeler", sans
-    page = client.get(f"/api/datastore/namespaces/{ns}/rows", headers=_h()).json()["rows"]
+    page = client.get(f"/api/datastores/{ns}/rows", headers=_h()).json()["rows"]
     assert isinstance(page[0]["suivi"], str) and "suivi.comment" in page[0]
 
 
@@ -234,15 +234,15 @@ def acteur(monkeypatch):
 
 def test_MCP_meme_ligne_en_flat_et_en_nested_meme_contenu(data_rows, table, acteur):
     ns, rid = table
-    flat = data_rows(namespace=ns, id=rid, layers="flat")
-    nested = data_rows(namespace=ns, id=rid, layers="nested")
+    flat = data_rows(datastore=ns, id=rid, layers="flat")
+    nested = data_rows(datastore=ns, id=rid, layers="nested")
     assert nested["suivi"] == {"valeur": "a_traiter", "comment": "à rappeler"}
     assert nested["ville"] == "Lyon"
     _meme_contenu(flat, nested)
     # En liste aussi, et une projection garde la cellule imbriquée ENTIÈRE.
-    page = data_rows(namespace=ns, layers="nested")
-    _meme_contenu(data_rows(namespace=ns)["rows"][0], page["rows"][0])
-    projete = data_rows(namespace=ns, layers="nested", fields=["suivi"])["rows"][0]
+    page = data_rows(datastore=ns, layers="nested")
+    _meme_contenu(data_rows(datastore=ns)["rows"][0], page["rows"][0])
+    projete = data_rows(datastore=ns, layers="nested", fields=["suivi"])["rows"][0]
     assert projete == {"_id": rid, "suivi": {"valeur": "a_traiter", "comment": "à rappeler"}}
 
 
@@ -250,7 +250,7 @@ def test_MCP_valeur_inconnue_refusee_en_nommant_le_parametre(data_rows, table, a
     from oto_mcp.mcp_errors import McpError
     ns, rid = table
     with pytest.raises(McpError) as exc:
-        data_rows(namespace=ns, id=rid, layers="plat")
+        data_rows(datastore=ns, id=rid, layers="plat")
     for mot in ("layers", "plat", "flat", "nested"):
         assert mot in str(exc.value), (mot, str(exc.value))
 
@@ -261,7 +261,7 @@ def test_MCP_le_defaut_reste_flat(data_rows, table, acteur):
     from oto_mcp.capabilities.datastore.rows import GetRowInput, ListRowsInput
     from oto_mcp.datastore import layers as dsl
     ns, rid = table
-    sans = data_rows(namespace=ns, id=rid)
+    sans = data_rows(datastore=ns, id=rid)
     assert isinstance(sans["suivi"], str) and sans["suivi.comment"] == "à rappeler", sans
     assert dsl.DEFAUT == "flat"
     assert inspect.signature(data_rows).parameters["layers"].default == "flat"

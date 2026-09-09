@@ -207,6 +207,71 @@ class AliasRest(NamedTuple):
     # `org.guide.get`), l'id historique n'est plus réclamé par personne, et le garder
     # sur l'ancien chemin laisse un client déjà généré retrouver sa méthode.
     operation_id: str = ""
+    # ⚠️ La date de retrait PROPRE à cet alias, quand elle diffère de `RETRAIT`.
+    #
+    # Ce champ naît d'un défaut mesuré le 08/09/2026 : les alias du renommage
+    # `namespace` → `datastore` servaient l'en-tête `Sunset` du renommage #519, annoncé
+    # dix jours plus tôt. Un intégrateur qui lit ses en-têtes aurait daté son travail
+    # sur une échéance qui n'était pas la sienne. **Une seule date pour plusieurs
+    # renommages est une copie qui ne peut que devenir fausse dès le deuxième.**
+    retrait: object = None
+
+
+def _sunset(alias: "AliasRest") -> str:
+    """La date de retrait SERVIE pour cet alias — la sienne, ou celle du lot #519."""
+    d = getattr(alias, "retrait", None)
+    return (d or RETRAIT).strftime("%d/%m/%Y")
+
+
+# ── Renommage `namespace` → `datastore` (08/09/2026) ────────────────────────
+#
+# ⚠️ **Ces alias sont DÉRIVÉS des routes réellement montées, pas recopiés.** Le
+# renommage touche une vingtaine de couples (verbe, chemin) — les lister à la main,
+# c'est en oublier un, et un chemin oublié ne lève rien : il rend 404 chez un
+# consommateur qui croyait la redirection posée. La dérivation ne peut pas oublier.
+#
+# ⚠️ Et le vrai motif de leur existence n'est pas la douceur : **le front de la refonte
+# ne PEUT PAS porter les deux noms.** Une garde de son dépôt exige que tout chemin
+# appelé existe verbatim dans le contrat servi — déclarer un chemin que le back ne sert
+# pas échoue, dans les deux sens. Sans ces alias, sa bascule et celle du back devraient
+# coïncider à la seconde ; avec eux, chacune devient indépendante, et elles survivent à
+# un retour arrière du back.
+#
+# Comme tout ce module : ils portent une DATE. `ANNONCE_DATASTORE` ci-dessous.
+ANNONCE_DATASTORE = datetime.date(2026, 9, 8)
+RETRAIT_DATASTORE = _plus_de_mois(ANNONCE_DATASTORE, PREAVIS_MOIS)
+
+#: L'ancien préfixe et le nouveau. Le placeholder change aussi de nom : seule la
+#: VALEUR capturée voyage (cf. `cible`).
+_DS_ANCIEN = "/api/datastore/namespaces"
+_DS_NOUVEAU = "/api/datastores"
+_DS_PARAMS = {"namespace": "datastore"}
+
+
+def _alias_datastore() -> tuple:
+    """Un alias par route datastore réellement montée — jamais une liste à la main.
+
+    Lit les `RestBinding` des capacités du datastore et rend, pour chacune, l'ancien
+    chemin équivalent. Un chemin ajouté demain hérite de son alias sans que personne
+    n'y pense ; un chemin retiré perd le sien, au lieu de laisser une redirection qui
+    mène nulle part.
+    """
+    from .capabilities.registry import CAPABILITIES  # tardif : évite un cycle
+
+    out = []
+    for cap in CAPABILITIES:
+        rest = getattr(cap, "rest", None)
+        chemin = getattr(rest, "path", None) if rest else None
+        if not chemin or not chemin.startswith(_DS_NOUVEAU):
+            continue
+        ancien = _DS_ANCIEN + chemin[len(_DS_NOUVEAU):]
+        ancien = ancien.replace("{datastore}", "{namespace}")
+        out.append(AliasRest(getattr(rest, "verb", "GET"), ancien, chemin,
+                             _DS_PARAMS, "", RETRAIT_DATASTORE))
+    # Un chemin LITTÉRAL doit précéder un chemin à placeholder qui l'engloberait :
+    # `…/namespaces` avant `…/namespaces/{namespace}`. Le tri par longueur puis par
+    # nombre de placeholders donne cet ordre sans qu'on ait à le tenir à jour.
+    return tuple(sorted(out, key=lambda a: (a.ancien.count("{"), len(a.ancien))))
 
 
 REST: tuple = (

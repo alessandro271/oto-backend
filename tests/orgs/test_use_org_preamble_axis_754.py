@@ -37,8 +37,8 @@ from oto_mcp.capabilities.orgs.core import UseOrgInput, _use_org
 # hors les 3 siblings `data_get_schema`/`data_patch_schema`/`data_drop_column`, qui
 # sont des CAPACITÉS et reçoivent `_org` par l'autre mécanisme).
 DATA_TOOLS_HANDWRITTEN = [
-    "data_list_namespaces", "data_create_namespace", "data_delete_namespace",
-    "data_rename_namespace", "data_set_schema", "data_write", "data_claim_next",
+    "data_list_datastores", "data_create_datastore", "data_delete_datastore",
+    "data_rename_datastore", "data_set_schema", "data_write", "data_claim_next",
     "data_release", "data_rows", "data_aggregate", "data_delete_row", "data_url",
     "data_share", "data_app",
 ]
@@ -73,7 +73,7 @@ def test_data_tools_really_accept_the_org_axis():
 
 def test_a_connector_tool_accepts_the_org_axis():
     """Idem côté connecteurs — un représentant suffit, le mécanisme est générique
-    (`_is_org_scopable_tool` couvre tout tool dont le namespace résout un
+    (`_is_org_scopable_tool` couvre tout tool dont le datastore résout un
     connecteur du registre)."""
     axes = {a.param for a in call_axes.axes_for_call("folk_record")}
     assert "_org" in axes

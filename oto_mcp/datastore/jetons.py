@@ -6,7 +6,7 @@ jusqu'ici chaque outil décidait dans son coin, ce qui a produit exactement deux
 de défauts, toutes deux vécues sur une campagne réelle :
 
 1. **Le jeton reconnu, refusé sur le champ voisin.** `slot:` était résolu par les
-   opérations de schéma et passé brut par celles de lignes, qui répondaient « namespace
+   opérations de schéma et passé brut par celles de lignes, qui répondaient « datastore
    inconnu ». *Un refus qui dit « inconnu » sur un jeton que la plateforme reconnaît
    envoie chercher une faute de frappe là où il n'y en a pas.*
 2. **Le jeton mal placé, accepté en silence** — le cas le plus coûteux, parce qu'il ne
@@ -28,7 +28,7 @@ comme donnée sont refusés dans le contenu.
 
 ## Un jeton RETIRÉ, et pourquoi il reste écrit ici (07/09/2026)
 
-`@claimed` — « la ligne que je tiens », posé dans `namespace` et dans `id` — a vécu du
+`@claimed` — « la ligne que je tiens », posé dans `datastore` et dans `id` — a vécu du
 29/08 au 07/09/2026. Il se résolvait par le RUN courant, et c'est ce qui l'a tué : **un
 agent est sans état**. Il n'y a pas de « moi » stable auquel accrocher un pronom, et
 plusieurs runs d'un même compte coexistent — « la ligne que je tiens » était donc ambigu
@@ -51,11 +51,11 @@ SLOT = "slot:"
 TOUT = "*"
 
 # Les champs d'ADRESSE — ceux qui désignent où l'on écrit ou ce qu'on lit.
-ADRESSE = ("namespace", "id", "fields", "filter", "filters", "group_by", "order_by")
+ADRESSE = ("datastore", "id", "fields", "filter", "filters", "group_by", "order_by")
 
 # jeton → (champs qui l'acceptent, ce qu'il désigne)
 JETONS: dict[str, tuple[tuple[str, ...], str]] = {
-    SLOT: (("namespace",), "le tableau bindé sous ce nom par le projet actif"),
+    SLOT: (("datastore",), "le tableau bindé sous ce nom par le projet actif"),
     TOUT: (("fields",), "toutes les colonnes"),
 }
 
@@ -68,7 +68,7 @@ JETONS_RETIRES: dict[str, tuple[str, str]] = {
         "auquel accrocher un pronom — plusieurs runs coexistent, « la ligne que je "
         "tiens » était ambigu par construction",
         "adresse la ligne explicitement, avec ce que `data_claim_next` t'a rendu au "
-        "moment de la réservation : le nom du tableau dans `namespace`, et la ligne par "
+        "moment de la réservation : le nom du tableau dans `datastore`, et la ligne par "
         "son `_id` dans `id` (ou par sa clé métier dans `filter`). L'un et l'autre sont "
         "dans la réponse qui t'a réservé la ligne — il n'y a rien à inventer, ni de "
         "faute de frappe à chercher"),
@@ -182,14 +182,14 @@ def verifier_contenu(contenu: object) -> None:
             verifier_contenu(v)
 
 
-def verifier_champs(*, namespace=None, id=None, fields=None,
+def verifier_champs(*, datastore=None, id=None, fields=None,
                     filter=None, filters=None) -> None:
     """Le point d'entrée des deux faces : tous les champs d'adresse d'un appel.
 
     Les clés d'un filtre sont des NOMS DE COLONNE — un jeton y est aussi mal placé que
     dans `id`, et le refus par défaut y dirait « colonne inconnue »."""
-    if namespace is not None:
-        verifier_adresse("namespace", namespace)
+    if datastore is not None:
+        verifier_adresse("datastore", datastore)
     if id is not None:
         verifier_adresse("id", id)
     for f in fields or ():
@@ -202,13 +202,13 @@ def verifier_champs(*, namespace=None, id=None, fields=None,
                 verifier_adresse("filter", cle)
 
 
-def resoudre(namespace, id=None, *, resoudre_slot):
+def resoudre(datastore, id=None, *, resoudre_slot):
     """Vérifie PUIS résout les champs d'adresse — **le geste des deux faces**.
 
     C'est ici que la couture cesse d'être une garde et devient un seam : la face MCP et
     la face REST n'ont plus chacune leur idée de ce qu'un jeton signifie. Elles ont
     divergé exactement une fois, et en silence — `slot:` était résolu par les opérations
-    de schéma et passé brut par celles de lignes, qui répondaient « namespace inconnu ».
+    de schéma et passé brut par celles de lignes, qui répondaient « datastore inconnu ».
 
     `resoudre_slot` est injecté (la résolution d'un slot lit le projet actif, qui vit
     dans la couche d'accès) : cette couche-ci ne connaît que les jetons.
@@ -218,5 +218,5 @@ def resoudre(namespace, id=None, *, resoudre_slot):
     donc un `store` et un `worker` ; le pronom retiré (07/09/2026), il ne reste aucun
     jeton qui s'écrive dans `id` — la vérification suffit, et le seul travail restant est
     la résolution du tableau."""
-    verifier_champs(namespace=namespace, id=id)
-    return resoudre_slot(namespace), id
+    verifier_champs(datastore=datastore, id=id)
+    return resoudre_slot(datastore), id

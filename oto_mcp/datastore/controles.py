@@ -91,13 +91,13 @@ class ControlesMixin:
         Endpoint agissant-org (sub-less) : pas de gouvernance par cette porte —
         `_entry` pose déjà la même règle — reste l'owner-match de l'org elle-même."""
         if self.acting_org is not None:
-            owner = ownership.owner_of("datastore_namespace", str(ns_id))
+            owner = ownership.owner_of(ownership.TYPE_RESSOURCE_DATASTORE, str(ns_id))
             return (owner is not None
                     and (str(owner[0]), str(owner[1])) == ("org", str(self.acting_org)))
         if not self.sub:
             return False
-        return (ownership.owns(self.sub, "datastore_namespace", str(ns_id))
-                or ownership.can_govern(self.sub, "datastore_namespace", str(ns_id)))
+        return (ownership.owns(self.sub, ownership.TYPE_RESSOURCE_DATASTORE, str(ns_id))
+                or ownership.can_govern(self.sub, ownership.TYPE_RESSOURCE_DATASTORE, str(ns_id)))
 
     def _relever_forcage(self, forcage: Optional[Forcage],
                          row_id: Optional[str]) -> None:

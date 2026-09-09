@@ -1,7 +1,7 @@
 """Les capacités du datastore résolvent `slot:<nom>` comme les tools `data_*`.
 
 Vécu : `data_drop_column` (capacité) a refusé seize purges d'affilée avec
-`namespace_not_found` parce qu'il recevait `slot:vivier` comme un nom littéral. Le
+`datastore_not_found` parce qu'il recevait `slot:vivier` comme un nom littéral. Le
 tool `@mcp.tool()` qu'il remplace résolvait la référence ; la conversion en capacité
 l'a perdue, le helper vivant dans `tools/datastore.py`. `data_get_schema`, converti
 plus tôt, portait le même trou.
@@ -9,8 +9,8 @@ plus tôt, portait le même trou.
 Sur un verbe destructif l'échec est heureux — mais la même lacune sur une LECTURE
 répond « tableau inconnu » à un tableau qui existe, et sur un verbe qui écrirait,
 elle viserait le mauvais tableau. D'où la source unique
-`access.resolve_namespace_ref` et ce test : toute capacité datastore qui prend un
-`namespace` doit passer par elle.
+`access.resolve_datastore_ref` et ce test : toute capacité datastore qui prend un
+`datastore` doit passer par elle.
 """
 from __future__ import annotations
 
@@ -35,11 +35,11 @@ def resolved(monkeypatch):
 
 
 def test_bare_name_passes_through_untouched():
-    assert access.resolve_namespace_ref("mon-tableau") == "mon-tableau"
+    assert access.resolve_datastore_ref("mon-tableau") == "mon-tableau"
 
 
-def test_slot_is_resolved_to_the_real_namespace(resolved):
-    assert access.resolve_namespace_ref("slot:vivier") == "edition-echantillon-500"
+def test_slot_is_resolved_to_the_real_datastore(resolved):
+    assert access.resolve_datastore_ref("slot:vivier") == "edition-echantillon-500"
     assert resolved == ["vivier"]
 
 
@@ -48,14 +48,14 @@ def test_drop_column_resolves_the_slot(monkeypatch, resolved):
     called = {}
 
     class _Store:
-        def drop_column(self, namespace, key, *, confirm):
-            called.update(namespace=namespace, key=key, confirm=confirm)
-            return {"namespace": namespace, "key": key, "rows": 3}
+        def drop_column(self, datastore, key, *, confirm):
+            called.update(datastore=datastore, key=key, confirm=confirm)
+            return {"datastore": datastore, "key": key, "rows": 3}
 
     monkeypatch.setattr(cols, "make_store", lambda sub: _Store())
     out = cols._drop_column(_Ctx(), cols.DropColumnInput(
-        namespace="slot:vivier", key="actualite_sociale", confirm=True))
-    assert called["namespace"] == "edition-echantillon-500"
+        datastore="slot:vivier", key="actualite_sociale", confirm=True))
+    assert called["datastore"] == "edition-echantillon-500"
     assert out["rows"] == 3
 
 
@@ -63,16 +63,16 @@ def test_get_schema_resolves_the_slot_and_answers_with_the_real_name(monkeypatch
     class _Store:
         # Ce que `_resolve` a relevé sur le vrai store : le nom CANONIQUE et le
         # numéro du tableau atteint — l'identité, pas l'adresse reçue.
-        dernier_tableau = {"ns_id": 500, "namespace": "edition-echantillon-500"}
+        dernier_tableau = {"ns_id": 500, "datastore": "edition-echantillon-500"}
 
-        def get_schema(self, namespace):
-            assert namespace == "edition-echantillon-500"
+        def get_schema(self, datastore):
+            assert datastore == "edition-echantillon-500"
             return {"strict": True, "fields": []}
 
     monkeypatch.setattr(sch, "make_store", lambda sub: _Store())
-    out = sch._get_schema(_Ctx(), sch.GetSchemaInput(namespace="slot:vivier"))
+    out = sch._get_schema(_Ctx(), sch.GetSchemaInput(datastore="slot:vivier"))
     # le nom RÉSOLU revient : l'appelant doit voir sur quel tableau il a lu
-    assert out["namespace"] == "edition-echantillon-500"
+    assert out["datastore"] == "edition-echantillon-500"
     # et son NUMÉRO avec — la forme d'adresse qui remplace le nom
     assert out["ns_id"] == 500
     assert out["schema"]["strict"] is True

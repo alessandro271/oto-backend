@@ -43,7 +43,7 @@ _SURFACE = """
     connector_failure_stats connector_grants consume_upload_token
     contextmanager count_datastore_rows_for_ns count_renewal_attempts
     count_unipile_accounts_for_org counter_sum_today create_api_token
-    create_datastore_namespace create_doc create_project
+    create_datastore create_doc create_project
     create_unipile_pending datastore datastore_active_lease
     datastore_aggregate datastore_claim_next datastore_claim_row
     datastore_claimed_rows datastore_count_rows datastore_delete_row
@@ -53,20 +53,20 @@ _SURFACE = """
     datastore_has_key_index datastore_insert_row datastore_key_dup_groups
     datastore_list_rows datastore_list_rows_after
     datastore_merge_key_duplicates datastore_merge_row_locked
-    datastore_namespace_activity datastore_namespaces_with_key
+    datastore_activity datastores_with_key
     datastore_offending_enum_values datastore_overlong_fields
     datastore_release_by_run datastore_release_claim datastore_row_activity
     datastore_row_keys datastore_rows_by_ids datastore_update_row
     datastore_upsert_row date datetime dead_unipile_account_ids_for
-    delete_api_token delete_datastore_namespace_by_id delete_doc
+    delete_api_token delete_datastore_by_id delete_doc
     delete_google_oauth delete_guide_db delete_project_file
     delete_subscription derive_description dict_row doc_backlinks doc_rev
     due_subscriptions duplicate_project edge_exists edges_for emails
     emails_by_subs enqueue_scheduled_email field_read_sql field_value_sql
     files_pending_extraction find_copied_project finish_run
     get_account_profile get_all_connector_schemas get_aux_embedding_sha
-    get_billing_payment_by_ref get_connector_schema get_datastore_namespace
-    get_datastore_namespace_by_id get_doc_by_id get_doc_by_public_token
+    get_billing_payment_by_ref get_connector_schema get_datastore
+    get_datastore_by_id get_doc_by_id get_doc_by_public_token
     get_doc_change_request get_doc_embedding_sha get_extracted_text
     get_google_oauth get_guide_db get_init_guide_db get_legal_acceptances
     get_member_api_key get_operated_account get_org_subscription
@@ -81,10 +81,10 @@ _SURFACE = """
     insert_tool_call insert_usage_signal instruction_usage
     is_comp_subscription is_tool_disabled_for json keys leaf_read_sql legal
     list_account_grants_by_owner list_account_grants_to
-    list_all_datastore_namespaces list_all_projects list_api_tokens
+    list_all_datastores list_all_projects list_api_tokens
     list_billing_payments list_change_requests_by_project
     list_change_requests_by_requester list_connector_access
-    list_datastore_namespaces_for_owners list_datastore_namespaces_granted_to
+    list_datastores_for_owners list_datastores_granted_to
     list_dirty_aux list_dirty_docs list_dirty_rows list_doc_change_requests
     list_doc_revisions list_docs_for_project list_google_accounts
     list_grants_for_user list_group_connector_access list_group_disabled_tools
@@ -110,7 +110,7 @@ _SURFACE = """
     recent_runs reconcile_tenant_migration record_legal_acceptances
     remove_group_disabled_tool remove_org_disabled_tool remove_project_link
     remove_user_disabled_tool remove_user_enabled_tool
-    rename_datastore_namespace_by_id reparent_datastore_namespace
+    rename_datastore_by_id reparent_datastore
     reparent_project replace_doc_chunk_embeddings resolve_datastore_ns
     resolve_doc_change_request resolve_sub resolve_unipile_pending
     resource_ids_with_edges rest_call_stats

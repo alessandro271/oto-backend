@@ -132,7 +132,7 @@ def _current_run() -> Optional[str]:
         return None
 
 
-def _refus_de_creation(namespace: str, key: str,
+def _refus_de_creation(datastore: str, key: str,
                        value: Any = None) -> BusinessKeyRequired:
     """Le refus d'une CRÉATION sur un tableau fermé (`key_required`, #516).
 
@@ -171,17 +171,17 @@ def _refus_de_creation(namespace: str, key: str,
     naissance = (
         f"Si cette ligne doit VRAIMENT naître, c'est une décision de SCHÉMA et pas "
         f"d'écriture — le cran a été posé sur ce tableau : "
-        f"data_patch_schema(namespace='{namespace}', key_required=false), ton "
-        f"écriture, puis data_patch_schema(namespace='{namespace}', "
+        f"data_patch_schema(datastore='{datastore}', key_required=false), ton "
+        f"écriture, puis data_patch_schema(datastore='{datastore}', "
         f"key_required=true) pour refermer.")
     if value is None or str(value) == "":
         return BusinessKeyRequired(
-            f"`{key}`, la clé métier de `{namespace}`, n'est pas renseigné : {ferme} "
+            f"`{key}`, la clé métier de `{datastore}`, n'est pas renseigné : {ferme} "
             f"{sortie} Sinon renseigne `{key}` avec la valeur que porte la ligne "
             f"visée. {naissance}",
-            key=key, namespace=namespace)
+            key=key, datastore=datastore)
     return BusinessKeyRequired(
-        f"aucune ligne de `{namespace}` ne porte `{key}` = {str(value)!r} : {ferme} "
+        f"aucune ligne de `{datastore}` ne porte `{key}` = {str(value)!r} : {ferme} "
         f"Vérifie la valeur (une clé inventée créerait une ligne que rien ne "
         f"rapproche). {sortie} {naissance}",
-        key=key, namespace=namespace, value=value)
+        key=key, datastore=datastore, value=value)

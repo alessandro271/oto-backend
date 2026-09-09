@@ -20,10 +20,10 @@ logger = logging.getLogger(__name__)
 from ._conn import _connect
 from . import backlinks as _backlinks
 from .datastore import (
-    create_datastore_namespace,
+    create_datastore,
     datastore_insert_row,
     datastore_list_rows,
-    get_datastore_namespace_by_id,
+    get_datastore_by_id,
     set_datastore_schema,
 )
 from .users import upsert_user
@@ -1350,15 +1350,15 @@ def _provision_tableau(owner_type: str, owner_id: str, src_ref: str, *,
         src_ns_id = int(src_ref)
     except (TypeError, ValueError):
         return None
-    src_ns = get_datastore_namespace_by_id(src_ns_id)
+    src_ns = get_datastore_by_id(src_ns_id)
     if src_ns is None:
         return None
-    base = src_ns["namespace"]
+    base = src_ns["datastore"]
     new_id: Optional[int] = None
     candidate = base
     for i in range(1, 100):   # dérive un nom unique chez le nouveau propriétaire
         try:
-            new_id = create_datastore_namespace(owner_type, owner_id, candidate)
+            new_id = create_datastore(owner_type, owner_id, candidate)
             break
         except ValueError:
             candidate = f"{base}-{i}"
@@ -1444,9 +1444,9 @@ def duplicate_project(src_id: int, new_name: str, owner_type: str, owner_id: str
         target_ref = link["target_ref"]
         if link["target_type"] == "tableau":
             mode = (link.get("config") or {}).get("provision")
-            src_ns = (get_datastore_namespace_by_id(int(target_ref))
+            src_ns = (get_datastore_by_id(int(target_ref))
                       if str(target_ref).isdigit() else None)
-            label = link.get("label") or (src_ns or {}).get("namespace") or f"#{target_ref}"
+            label = link.get("label") or (src_ns or {}).get("datastore") or f"#{target_ref}"
             if src_ns is None:
                 # Lien mort dans la source (namespace supprimé/introuvable) : on NE le
                 # réplique PAS, sinon la copie hérite d'un dead_link (oto-backend#112).

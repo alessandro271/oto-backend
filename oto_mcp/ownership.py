@@ -191,6 +191,15 @@ class ResourceKind:
     reparent: Callable[[str, str, str], None]
 
 
+#: Le type de ressource d'un tableau du datastore, **tel qu'il est ÉCRIT EN BASE**
+#: (`resource_grants.resource_type`). ⚠️ Ce n'est pas un mot de vocabulaire : c'est
+#: une valeur persistée, que 15 partages de production portent aujourd'hui. La
+#: renommer sans migrer les lignes ferait disparaître ces partages EN SILENCE —
+#: aucune erreur, juste des droits qui s'évaporent. Elle a survécu au renommage de
+#: `namespace` en `datastore` pour cette raison, et elle est nommée ici pour que le
+#: prochain renommage la trouve au lieu de la traverser.
+TYPE_RESSOURCE_DATASTORE = "datastore_namespace"
+
 RESOURCE_KINDS: dict[str, ResourceKind] = {}
 
 
@@ -394,18 +403,18 @@ def transfer(
 # --- Enregistrement du kind `datastore_namespace` (pilote ADR 0030) ----------
 
 def _datastore_owner(rid: str) -> Optional[tuple[str, str]]:
-    row = db.get_datastore_namespace_by_id(int(rid))
+    row = db.get_datastore_by_id(int(rid))
     if row is None or row.get("owner_id") is None:
         return None
     return (row["owner_type"], row["owner_id"])
 
 
 def _datastore_reparent(rid: str, new_owner_type: str, new_owner_id: str) -> None:
-    db.reparent_datastore_namespace(int(rid), new_owner_type, new_owner_id)
+    db.reparent_datastore(int(rid), new_owner_type, new_owner_id)
 
 
 register_kind(
-    "datastore_namespace",
+    TYPE_RESSOURCE_DATASTORE,
     ResourceKind(owner_getter=_datastore_owner, reparent=_datastore_reparent),
 )
 

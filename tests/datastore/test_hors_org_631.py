@@ -1,4 +1,4 @@
-"""#631 — le nom d'un tableau, résolu par `data_claim_next`, refusé « namespace inconnu »
+"""#631 — le nom d'un tableau, résolu par `data_claim_next`, refusé « datastore inconnu »
 par `data_write` dans le MÊME travail, 78 secondes plus tard.
 
 Mesuré en production le 29/08/2026 (un run de l'org 226) : réservation ok à 21:10:05,
@@ -108,7 +108,7 @@ def _outil(nom: str):
 def _table(org_id: int) -> tuple[str, int]:
     from oto_mcp import db
     ns = "copie-eval-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore_namespace("org", str(org_id), ns)
+    ns_id = db.create_datastore("org", str(org_id), ns)
     for i in range(2):
         db.datastore_insert_row(ns_id, f"r{i}", {"siren": f"5511100{i}", "statut": "a_faire"})
     return ns, ns_id
@@ -176,13 +176,13 @@ def _valeur(ns_id: int, row_id: str, champ: str):
 # ── ① le run sait où il travaille ─────────────────────────────────────────────
 
 def test_le_nom_reserve_par_le_run_s_ecrit_sans_axe_org(surface):
-    """Le geste exact du 29/08 21:11:23 : `data_write(namespace=<nom>, id=<ligne>)`
+    """Le geste exact du 29/08 21:11:23 : `data_write(datastore=<nom>, id=<ligne>)`
     avec `_run_id` et sans `_org`, l'org maison n'étant pas celle du tableau."""
     ns, ns_id = _table(surface["travail"])
     run = uuid.uuid4().hex
     ligne = _reserver(ns, run, surface["travail"])
 
-    out = _ecrire({"namespace": ns, "id": ligne["_id"],
+    out = _ecrire({"datastore": ns, "id": ligne["_id"],
                    "row": {"statut": "fait"}, "_run_id": run})
     assert out["_id"] == ligne["_id"], out
     assert _valeur(ns_id, ligne["_id"], "statut") == "fait"
@@ -200,9 +200,9 @@ def test_le_bail_localise_mais_ne_donne_aucun_droit(orgs, monkeypatch):
     monkeypatch.setattr(T, "_acting_store", lambda: make_store(AUTRE))
     monkeypatch.setattr(T, "_ns", lambda n: n)
     monkeypatch.setattr(T, "_project_hint", lambda n: None)
-    msg = _refus({"namespace": ns, "id": ligne["_id"],
+    msg = _refus({"datastore": ns, "id": ligne["_id"],
                   "row": {"statut": "vole"}, "_run_id": run})
-    assert f"namespace `{ns}` inconnu" in msg, msg
+    assert f"datastore `{ns}` inconnu" in msg, msg
     assert _valeur(ns_id, ligne["_id"], "statut") == "a_faire"
 
 
@@ -216,8 +216,8 @@ def test_sans_reservation_le_refus_nomme_les_deux_orgs_et_l_axe(surface):
     ns, _ = _table(surface["travail"])
     run = uuid.uuid4().hex
 
-    msg = _refus({"namespace": ns, "row": {"siren": "999"}, "_run_id": run})
-    assert f"namespace `{ns}` inconnu" in msg, msg
+    msg = _refus({"datastore": ns, "row": {"siren": "999"}, "_run_id": run})
+    assert f"datastore `{ns}` inconnu" in msg, msg
     assert f"org {surface['travail']}" in msg and "Travail 631" in msg, msg
     assert f"org {surface['maison']}" in msg and "Maison 631" in msg, msg
     assert f"`_org={surface['travail']}`" in msg, msg
@@ -225,7 +225,7 @@ def test_sans_reservation_le_refus_nomme_les_deux_orgs_et_l_axe(surface):
 
 def test_un_nom_qui_n_existe_nulle_part_reste_un_refus_nu(surface):
     """On ne suggère que le tableau DEMANDÉ — pas une org au hasard."""
-    msg = _refus({"namespace": "n-existe-pas-" + uuid.uuid4().hex[:6],
+    msg = _refus({"datastore": "n-existe-pas-" + uuid.uuid4().hex[:6],
                   "row": {"siren": "999"}})
     assert "inconnu" in msg and "_org=" not in msg, msg
 
@@ -234,6 +234,6 @@ def test_avec_l_axe_org_rien_ne_change(surface):
     """L'appel bien formé (`_org=` posé) écrit comme avant — la résolution par bail et
     l'indice ne s'ajoutent qu'au chemin qui échouait."""
     ns, ns_id = _table(surface["travail"])
-    out = _ecrire({"namespace": ns, "row": {"siren": "5511100X", "statut": "neuf"},
+    out = _ecrire({"datastore": ns, "row": {"siren": "5511100X", "statut": "neuf"},
                    "_org": surface["travail"]})
     assert out.get("_id") and _valeur(ns_id, out["_id"], "statut") == "neuf"

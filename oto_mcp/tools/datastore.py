@@ -1,13 +1,13 @@
 """Datastore — stockage de données structurées légères par user (PG natif, ADR 0016).
 
-Chaque user a son propre set de "namespaces". Schéma libre : chaque row = un
+Chaque user a son propre set de "datastores". Schéma libre : chaque row = un
 dict JSON (stocké en JSONB, types préservés), les champs apparaissent au fur et
 à mesure. Trois champs auto-managés exposés à plat : `_id`, `_created_at`,
 `_updated_at`. Aucune dépendance externe — surface plateforme self-contained.
 
 Surface (« moins d'outils, plus d'args ») : `data_write`/`data_rows`/`data_share`
 fondent append↔update / get↔list / share↔unshare via un arg de mode. Les
-destructifs (delete_namespace, delete_row) et la création restent séparés.
+destructifs (delete_datastore, delete_row) et la création restent séparés.
 """
 from __future__ import annotations
 
@@ -29,10 +29,10 @@ from ..datastore import schema as dsv2
 from ..datastore.core import (
     indice_de_liberation,
     InvalidCursor,
-    NamespaceExists,
-    NamespaceForbidden,
-    NamespaceNotFound,
-    NamespaceReadOnly,
+    DatastoreExists,
+    DatastoreForbidden,
+    DatastoreNotFound,
+    DatastoreReadOnly,
     RowLocked,
     RowNotFound,
     make_org_store,
@@ -71,9 +71,9 @@ def _acting_store():
 
 
 def _anon_project_tableau_ns_ids(project_id: Optional[int]) -> frozenset:
-    """Ids des namespaces LIÉS au projet (`project_links` type tableau) — le datastore
+    """Ids des datastores LIÉS au projet (`project_links` type tableau) — le datastore
     exposé sur un endpoint partagé est scopé à CES tableaux, jamais tout le datastore de
-    l'org (anti-fuite #193). Un lien tableau porte soit l'id numérique du namespace, soit
+    l'org (anti-fuite #193). Un lien tableau porte soit l'id numérique du datastore, soit
     son NOM (liens legacy d'avant la normalisation nom→id) → on résout LES DEUX formes
     contre le datastore de l'org propriétaire (`current_anon_org`). project_id None /
     erreur / aucun lien ⇒ frozenset() (rien d'exposé, jamais de fallback ouvert)."""
@@ -92,7 +92,7 @@ def _anon_project_tableau_ns_ids(project_id: Optional[int]) -> frozenset:
             if ref.isdigit():
                 ids.add(int(ref))
             elif org is not None:
-                ns = db.get_datastore_namespace("org", str(org), ref)
+                ns = db.get_datastore("org", str(org), ref)
                 if ns:
                     ids.add(int(ns["id"]))
         return frozenset(ids)
@@ -101,9 +101,9 @@ def _anon_project_tableau_ns_ids(project_id: Optional[int]) -> frozenset:
         return frozenset()
 
 
-def _project_hint(namespace: str) -> Optional[str]:
+def _project_hint(datastore: str) -> Optional[str]:
     """Suggestion inverse run→lien (ADR 0035 B5) : écrire sous PROJET ACTIF dans un
-    namespace NON lié au projet ⇒ suggérer le lien — aujourd'hui c'est de la
+    datastore NON lié au projet ⇒ suggérer le lien — aujourd'hui c'est de la
     discipline LLM (« pense à linker »), ici le substrat le rappelle au moment de
     l'acte. Jamais bloquant, jamais d'auto-link (le lien est une décision).
     Best-effort : toute erreur ⇒ None."""
@@ -112,12 +112,26 @@ def _project_hint(namespace: str) -> Optional[str]:
         if pid is None:
             return None
         links = db.list_project_links(int(pid))
+        # ⚠️ `namespace` et non `datastore` : ce sont des LIENS DE PROJET, pas des
+        # lignes du datastore. Leur clé est posée par `db.list_project_links`, et
+        # `/api/me/projects` la sert sous ce nom aux trois fronts.
+        #
+        # Lire l'autre rendait un ensemble vide : le hint aurait suggéré de lier un
+        # tableau DÉJÀ lié, à chaque appel et pour tout le monde, sans qu'aucune erreur
+        # ne le signale.
+        #
+        # ⚠️ **DETTE ASSUMÉE, pas un état stable** (08/09/2026). Un lien qui pointe un
+        # TABLEAU porte une clé qui nomme l'ancien concept : l'incohérence est réelle et
+        # elle a été laissée hors du lot parce que la corriger ajoutait une surface de
+        # rupture aux trois fronts, le jour où on en migrait déjà quatre. Elle se reprend
+        # avec son propre alias et sa propre date, comme les 24 chemins REST — pas par un
+        # remplacement de texte, qui casserait exactement ce que cette ligne répare.
         linked = {l.get("namespace") for l in links if l.get("target_type") == "tableau"}
-        if namespace in linked:
+        if datastore in linked:
             return None
-        return (f"ce tableau `{namespace}` n'est pas lié au projet actif (#{pid}) — "
+        return (f"ce tableau `{datastore}` n'est pas lié au projet actif (#{pid}) — "
                 f"si c'est une sortie du projet, lie-le : `oto_project op=link "
-                f"project_id={pid} target_type=tableau target_ref=<id du namespace> "
+                f"project_id={pid} target_type=tableau target_ref=<id du datastore> "
                 "(+ slot='<name>' s'il réalise un slot de procédure)`.")
     # noqa: SILENT — dette déclarée : le hint de projet disparaît en silence (#424, verdict C)
     except Exception:  # noqa: BLE001
@@ -188,8 +202,8 @@ def _adresse_de_couche_valide(champ: str, present: set, declared: set) -> bool:
     return base in present or base in declared
 
 
-def _namespace_keys(store, namespace: str) -> set[str]:
-    """Clés réellement présentes dans les DONNÉES du namespace (relevé borné).
+def _datastore_keys(store, datastore: str) -> set[str]:
+    """Clés réellement présentes dans les DONNÉES du datastore (relevé borné).
 
     Troisième juge, après le schéma et la page : une colonne ORPHELINE — présente
     en base, sortie du schéma par un renommage — n'est ni déclarée ni forcément sur
@@ -198,9 +212,9 @@ def _namespace_keys(store, namespace: str) -> set[str]:
     Indisponible ⇒ set() (on ne se tait pas sur un doute, on garde l'accusation la
     moins coûteuse : signaler)."""
     try:
-        ns_id = store._resolve(namespace)
+        ns_id = store._resolve(datastore)
         return set(db.datastore_row_keys(ns_id))
-    # noqa: SILENT — clés de namespace illisibles ⇒ pas d'avertissement de frappe
+    # noqa: SILENT — clés de datastore illisibles ⇒ pas d'avertissement de frappe
     except Exception:  # noqa: BLE001
         return set()
 
@@ -227,11 +241,11 @@ def _targeted_columns(filter: Optional[dict], filters: Optional[list]) -> set[st
     return {c for c in vise if not c.startswith("_")}
 
 
-def _unknown_filter_keys(store, namespace: str, filter, filters=None) -> set[str]:
-    """Clés de `filter`/`filters` absentes de TOUTES les lignes d'un échantillon du namespace
+def _unknown_filter_keys(store, datastore: str, filter, filters=None) -> set[str]:
+    """Clés de `filter`/`filters` absentes de TOUTES les lignes d'un échantillon du datastore
     (feedback #163 : filtre sur colonne inexistante = 0 résultat silencieux,
     indiscernable d'un « aucune ligne ne matche »). Chemin résultat-vide seulement.
-    Namespace vide ou erreur ⇒ set() (rien d'affirmable, pas de faux warning).
+    Datastore vide ou erreur ⇒ set() (rien d'affirmable, pas de faux warning).
 
     ⚠️ Le schéma prime sur l'échantillon, pour la même raison que la projection :
     une colonne déclarée mais peu renseignée peut manquer aux 50 lignes tirées, et
@@ -243,12 +257,12 @@ def _unknown_filter_keys(store, namespace: str, filter, filters=None) -> set[str
     # disparaître un signal utile à la première anicroche de lecture de schéma —
     # exactement le genre de silence que ce warning existe pour combattre.
     try:
-        known = set(dsv2.top_level_keys(store.get_schema(namespace)))
+        known = set(dsv2.top_level_keys(store.get_schema(datastore)))
     # noqa: SILENT — schéma illisible ⇒ repli sur l'échantillon, l'avertissement survit
     except Exception:  # noqa: BLE001
         known = set()
     try:
-        sample = store.cursor_rows(namespace, limit=50)["rows"]
+        sample = store.cursor_rows(datastore, limit=50)["rows"]
         if not sample and not known:
             return set()
         for r in sample:
@@ -257,18 +271,18 @@ def _unknown_filter_keys(store, namespace: str, filter, filters=None) -> set[str
         # Même dernier recours que la projection : une orpheline existe en base
         # sans être ni déclarée ni forcément dans l'échantillon.
         return {k for k in unknown
-                if k not in _namespace_keys(store, namespace)} if unknown else set()
+                if k not in _datastore_keys(store, datastore)} if unknown else set()
     # noqa: SILENT — dernier recours : colonne orpheline non déclarée, pas d'avertissement
     except Exception:  # noqa: BLE001
         return set()
 
 
-def _inconnu(namespace: str, e: NamespaceNotFound) -> str:
+def _inconnu(datastore: str, e: DatastoreNotFound) -> str:
     """« inconnu » — et, quand le tableau existe dans une autre org de l'appelant, OÙ et
     QUOI passer (#631). L'indice vient du store (`datastore/hors_org`), la même recherche
     que la face REST ; sans indice, le refus nu d'avant."""
     indice = getattr(e, "indice", None)
-    return f"namespace `{namespace}` inconnu" + (f" — {indice}" if indice else "")
+    return f"datastore `{datastore}` inconnu" + (f" — {indice}" if indice else "")
 
 
 def _introuvable(row_id: object, piste: Optional[str]) -> str:
@@ -311,16 +325,16 @@ def _hint_file_vide(perimetre: dict, filter: Optional[dict]) -> str:
     return claimable.phrase_vide(perimetre, filter) + _HINT_RIEN_TENU
 
 
-def _row_not_found_hint(store, namespace: str, row_id: object) -> str:
+def _row_not_found_hint(store, datastore: str, row_id: object) -> str:
     """Message actionnable d'un lookup `id` raté (feedback #161 : le param `id`
     cherche par `_id` UUID technique ; quand le schéma déclare une clé métier —
     souvent nommée `id` — l'agent passe naturellement SA valeur et tombe sur
     « introuvable » sans piste). Si une ligne matche la clé métier, on le dit."""
     msg = f"row `{row_id}` introuvable (le param `id` cherche par `_id` technique)"
     try:
-        key = store.declared_key(namespace)
+        key = store.declared_key(datastore)
         if key:
-            hit = store.cursor_rows(namespace, filter={key: row_id}, limit=1)["rows"]
+            hit = store.cursor_rows(datastore, filter={key: row_id}, limit=1)["rows"]
             if hit:
                 return (f"{msg} ; une ligne a bien `{key}={row_id}` (clé métier) — "
                         f"utilise `filter={{\"{key}\": \"{row_id}\"}}`, son `_id` est "
@@ -349,13 +363,13 @@ def _project_row(row: dict, fields: list[str]) -> dict:
 TOUT = "*"  # `fields=["*"]` — « toutes les colonnes », le même jeton que sur oto_doc
 
 
-def _adresse(namespace: str, id=None):
+def _adresse(datastore: str, id=None):
     """Les champs d'ADRESSE d'un appel : vérifiés, puis le tableau résolu — le MÊME
     geste sur tous les verbes (#517).
 
     Écrit une fois plutôt que six : les deux faces ont divergé exactement une fois, et
     en silence — `slot:` était résolu par les opérations de schéma et passé brut par
-    celles de lignes, qui répondaient « namespace inconnu » sur un jeton parfaitement
+    celles de lignes, qui répondaient « datastore inconnu » sur un jeton parfaitement
     valide.
 
     ⚠️ **Ne prend plus ni `store`, ni `worker`, ni `ligne`** (07/09/2026) : ces trois
@@ -367,21 +381,21 @@ def _adresse(namespace: str, id=None):
     Le refus traverse la surface en `INVALID_PARAMS` — il PORTE la conduite à tenir, et
     une erreur interne l'effacerait au moment précis où elle sert."""
     try:
-        return jetons.resoudre(namespace, id, resoudre_slot=_ns)
+        return jetons.resoudre(datastore, id, resoudre_slot=_ns)
     except jetons.JetonMalPlace as e:
         raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
 
 
-def _ns(namespace: str) -> str:
+def _ns(datastore: str) -> str:
     """Adressage par SLOT (ADR 0035 B3) : `slot:<name>` = le tableau bindé sous ce
     nom par le PROJET ACTIF (`access.resolve_slot_tableau` — erreur actionnable si
     pas de projet actif / slot non bindé / binding pendouillant, JAMAIS de fallback).
     Un nom nu passe inchangé (zéro magie sur les noms littéraux).
 
-    Corps déplacé dans `access.resolve_namespace_ref` (source unique) : les capacités
+    Corps déplacé dans `access.resolve_datastore_ref` (source unique) : les capacités
     du datastore en ont besoin aussi, et l'avoir gardé ici a laissé `slot:` non résolu
     sur leur face MCP."""
-    return access.resolve_namespace_ref(namespace)
+    return access.resolve_datastore_ref(datastore)
 
 
 def _destinataire(email: str, recipient_sub: str) -> dict:
@@ -429,10 +443,10 @@ def _destinataire(email: str, recipient_sub: str) -> dict:
 def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
-    def data_list_namespaces() -> dict:
-        """List the user's datastore namespaces (owned + shared)."""
+    def data_list_datastores() -> dict:
+        """List the user's datastores (owned + shared)."""
         store = _acting_store()
-        return {"namespaces": store.list_namespaces()}
+        return {"datastores": store.list_datastores()}
 
     # ⚠️ Cette description a dit « unique per user » jusqu'au 04/09/2026, quand le code
     # créait des tableaux d'ORG depuis toujours. Le mensonge est réparé DEUX FOIS ce
@@ -445,8 +459,8 @@ def register(mcp: FastMCP) -> None:
     # puis exige que le texte servi nomme ce défaut-là — jamais l'inverse. C'est lui qui
     # a refusé de virer au vert quand le défaut a changé, avant que ce texte ne bouge.
     @mcp.tool()
-    def data_create_namespace(namespace: Adresse) -> dict:
-        """Create a new datastore namespace (PG-backed, schema-free).
+    def data_create_datastore(datastore: Adresse) -> dict:
+        """Create a new datastore (PG-backed, schema-free).
 
         The table is PRIVATE: it belongs to you, and no one else can read it — not
         the other members of your org, not its admins. That is the default and it is
@@ -465,47 +479,47 @@ def register(mcp: FastMCP) -> None:
         reply tells you the owner, and warns you in exactly that case.
 
         Args:
-            namespace: kebab-case identifier, unique per owner (e.g. `timetrack`).
+            datastore: kebab-case identifier, unique per owner (e.g. `timetrack`).
         """
         sub = access.current_user_sub_or_raise()
-        if not namespace or not namespace.strip():
-            raise McpError(ErrorData(code=INVALID_PARAMS, message="namespace requis"))
-        if namespace.strip().lower().startswith(access.SLOT_PREFIX):
+        if not datastore or not datastore.strip():
+            raise McpError(ErrorData(code=INVALID_PARAMS, message="datastore requis"))
+        if datastore.strip().lower().startswith(access.SLOT_PREFIX):
             raise McpError(ErrorData(
                 code=INVALID_PARAMS,
-                message=("un slot binde un tableau EXISTANT — crée le namespace avec son "
+                message=("un slot binde un tableau EXISTANT — crée le datastore avec son "
                          "nom réel, puis binde-le au projet "
                          "(`oto_project op=link target_type=tableau … slot='<name>'`).")))
         store = _store_for(sub)
         try:
-            return store.create_namespace(namespace.strip())
-        except NamespaceExists:
+            return store.create_datastore(datastore.strip())
+        except DatastoreExists:
             raise McpError(ErrorData(
                 code=INVALID_PARAMS,
-                message=f"namespace `{namespace}` existe déjà",
+                message=f"datastore `{datastore}` existe déjà",
             ))
 
     @mcp.tool()
-    def data_delete_namespace(namespace: Adresse) -> dict:
-        """Delete a namespace and all its rows (irreversible). Owner (or org/platform
+    def data_delete_datastore(datastore: Adresse) -> dict:
+        """Delete a datastore and all its rows (irreversible). Owner (or org/platform
         admin governing it) only."""
         sub = access.current_user_sub_or_raise()
-        namespace = _ns(namespace)
+        datastore = _ns(datastore)
         store = _store_for(sub)
         try:
-            store.delete_namespace(namespace)
-        except NamespaceNotFound as e:
-            raise McpError(ErrorData(code=INVALID_PARAMS, message=_inconnu(namespace, e)))
-        except NamespaceForbidden:
+            store.delete_datastore(datastore)
+        except DatastoreNotFound as e:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=_inconnu(datastore, e)))
+        except DatastoreForbidden:
             raise McpError(ErrorData(code=INVALID_PARAMS,
-                                     message=f"tu n'as pas le droit de supprimer `{namespace}`"))
+                                     message=f"tu n'as pas le droit de supprimer `{datastore}`"))
         # L'identité de ce qui vient d'être supprimé, pas l'écho de l'adresse : le
         # tableau n'existe plus, donc c'est la SEULE trace que l'appelant en garde.
-        return {"ok": True, **identite.de_releve(store.dernier_tableau, namespace)}
+        return {"ok": True, **identite.de_releve(store.dernier_tableau, datastore)}
 
     @mcp.tool()
-    def data_rename_namespace(namespace: Adresse, new_name: str) -> dict:
-        """Rename a namespace. Only the name changes — the id, URL/deeplink and shares
+    def data_rename_datastore(datastore: Adresse, new_name: str) -> dict:
+        """Rename a datastore. Only the name changes — the id, URL/deeplink and shares
         stay stable (grants are keyed by id). Governance right required (owner, or the
         org/platform admin governing it). The new name must be free for the same owner.
 
@@ -513,11 +527,11 @@ def register(mcp: FastMCP) -> None:
         transferring/consolidating: rename one side, then transfer with `oto_resource`.
 
         Args:
-            namespace: current namespace (or `slot:<name>` under the active project).
+            datastore: current datastore (or `slot:<name>` under the active project).
             new_name: the new kebab-case name (must be unique for the owner).
         """
         sub = access.current_user_sub_or_raise()
-        namespace = _ns(namespace)
+        datastore = _ns(datastore)
         if not new_name or not new_name.strip():
             raise McpError(ErrorData(code=INVALID_PARAMS, message="new_name requis"))
         if new_name.strip().lower().startswith(access.SLOT_PREFIX):
@@ -526,21 +540,21 @@ def register(mcp: FastMCP) -> None:
                 message="`slot:` est réservé à l'adressage — choisis un nom réel."))
         store = _store_for(sub)
         try:
-            return store.rename_namespace(namespace, new_name)
-        except NamespaceNotFound as e:
-            raise McpError(ErrorData(code=INVALID_PARAMS, message=_inconnu(namespace, e)))
-        except NamespaceForbidden:
+            return store.rename_datastore(datastore, new_name)
+        except DatastoreNotFound as e:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=_inconnu(datastore, e)))
+        except DatastoreForbidden:
             raise McpError(ErrorData(code=INVALID_PARAMS,
-                                     message=f"tu n'as pas le droit de renommer `{namespace}`"))
-        except NamespaceExists as e:
+                                     message=f"tu n'as pas le droit de renommer `{datastore}`"))
+        except DatastoreExists as e:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
 
     @mcp.tool()
-    def data_set_schema(namespace: Adresse, schema: Optional[dict] = None,
+    def data_set_schema(datastore: Adresse, schema: Optional[dict] = None,
                         semantic_search: Optional[bool] = None) -> dict:
-        """Declare (or clear with schema=null) a namespace's TYPED schema (ADR 0032 §6).
+        """Declare (or clear with schema=null) a datastore's TYPED schema (ADR 0032 §6).
 
-        A typed namespace renders as readable cards/records instead of a flat table.
+        A typed datastore renders as readable cards/records instead of a flat table.
         `schema` = {"fields": [{"key": str, "label"?: str, "type"?: "text|number|date|
         datetime|bool|json|object|list|url|email|enum",
         "display"?: "title", "role"?: "status|metric|note|qualif"}],
@@ -656,14 +670,14 @@ def register(mcp: FastMCP) -> None:
           rows the queue SERVES: no claim hands out a row outside it, whatever
           `filter` says.
 
-        SEMANTIC SEARCH (#67 V2.2 — opt-in per namespace): pass `semantic_search=true`
-        to make this namespace's ROWS findable by MEANING via oto_search (not just exact
+        SEMANTIC SEARCH (#67 V2.2 — opt-in per datastore): pass `semantic_search=true`
+        to make this datastore's ROWS findable by MEANING via oto_search (not just exact
         words), embedding each row (has a per-row cost → off by default; enable it on the
         tables you actually search by concept). `false` turns it off and purges the
         embeddings. Passing ONLY `semantic_search` leaves the schema untouched.
 
         Args:
-            namespace: target namespace (must exist; you must have write access).
+            datastore: target datastore (must exist; you must have write access).
             schema: the schema object, or null to clear it. Head key
                 `unknown_fields: "report"|"reject"` decides an undeclared column's
                 fate; a field may carry `readonly: true` (value locked, layers
@@ -673,21 +687,21 @@ def register(mcp: FastMCP) -> None:
             semantic_search: true/false to toggle semantic row search; null = leave as is.
         """
         store = _acting_store()
-        namespace = _ns(namespace)
+        datastore = _ns(datastore)
         try:
             out: dict = {}
             # Schéma posé/effacé — sauf si l'appel ne vise QUE le toggle sémantique
             # (schema omis + semantic fourni) : on ne veut pas effacer le schéma alors.
             if schema is not None or semantic_search is None:
-                out = store.set_schema(namespace, schema)
+                out = store.set_schema(datastore, schema)
             if semantic_search is not None:
-                out.update(store.set_semantic(namespace, semantic_search))
-            return out or identite.de_releve(store.dernier_tableau, namespace)
-        except NamespaceNotFound as e:
-            raise McpError(ErrorData(code=INVALID_PARAMS, message=_inconnu(namespace, e)))
-        except NamespaceReadOnly:
+                out.update(store.set_semantic(datastore, semantic_search))
+            return out or identite.de_releve(store.dernier_tableau, datastore)
+        except DatastoreNotFound as e:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=_inconnu(datastore, e)))
+        except DatastoreReadOnly:
             raise McpError(ErrorData(code=INVALID_PARAMS,
-                                     message=f"namespace `{namespace}` partagé en lecture seule"))
+                                     message=f"datastore `{datastore}` partagé en lecture seule"))
         except ValueError as e:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
 
@@ -696,7 +710,7 @@ def register(mcp: FastMCP) -> None:
     # capacité, ADR 0042 §Convergence des surfaces.
 
     @mcp.tool()
-    def data_write(namespace: Adresse, row: dict | None = None, id: str | None = None,
+    def data_write(datastore: Adresse, row: dict | None = None, id: str | None = None,
                    rows: list | None = None, key: str | None = None,
                    readonly_override: bool = False,
                    origine_override: bool = False,
@@ -779,7 +793,7 @@ def register(mcp: FastMCP) -> None:
 
         BATCH (`rows` = list of dicts): write them all at once — for importing a
         dataset without round-tripping each row through your context. If a business
-        KEY is in effect (the `key` arg, else the namespace's declared `schema.key`),
+        KEY is in effect (the `key` arg, else the datastore's declared `schema.key`),
         every row carrying that key value UPSERTS (merges) onto the existing row of
         the same key instead of duplicating; rows without a key are appended. Returns
         a summary {inserted, updated, count, key, ids}. Use `data_set_schema` to
@@ -793,8 +807,8 @@ def register(mcp: FastMCP) -> None:
         nothing is created — including a key value that is simply NEW. That is a
         deliberate setting of that table, not a platform rule. To make a row EXIST
         there, it is a schema move and not a write:
-        `data_patch_schema(namespace=…, key_required=false)`, your write, then
-        `data_patch_schema(namespace=…, key_required=true)` to close it back.
+        `data_patch_schema(datastore=…, key_required=false)`, your write, then
+        `data_patch_schema(datastore=…, key_required=true)` to close it back.
 
         `origine_override=true` belongs to an IMPORT, not to a write of your own:
         it declares that this call sets `origine` on a column that has NO
@@ -812,30 +826,30 @@ def register(mcp: FastMCP) -> None:
         close back. Every forced replacement is written to the call journal (row,
         column, replaced value) next to who called.
 
-        On a namespace with a STRICT schema, any key you write that the schema does
+        On a datastore with a STRICT schema, any key you write that the schema does
         NOT declare comes back in `hors_schema` (with `hors_schema_hint`): the write
         IS accepted and the value persists, but it lands in a free column that the
         interface and everything schema-driven ignore. CHECK that field after a
         write — it is how you catch a renamed field you kept writing under its old
         name. Absent = everything you wrote is in the declared format.
 
-        ⚠️ The namespace must EXIST first (create it with `data_create_namespace`);
-        writing to an unknown namespace raises "namespace inconnu" — it is NOT
-        auto-created. New JSON KEYS within an existing namespace, however, do
+        ⚠️ The datastore must EXIST first (create it with `data_create_datastore`);
+        writing to an unknown datastore raises "datastore inconnu" — it is NOT
+        auto-created. New JSON KEYS within an existing datastore, however, do
         auto-create their columns.
 
         ⚠️ **Address the table by its NUMBER.** The reply carries `ns_id` — the
-        table's number — and that is the form to pass as `namespace`:
-        `data_write(namespace=174, id=…)`. A name still resolves; it is being
+        table's number — and that is the form to pass as `datastore`:
+        `data_write(datastore=174, id=…)`. A name still resolves; it is being
         retired, not broken.
 
-        `namespace` also accepts `slot:<name>` = the table BOUND under that slot
+        `datastore` also accepts `slot:<name>` = the table BOUND under that slot
         name by the ACTIVE project (procedures reference tables as <slot:name>;
         the project maps the name via its links). Requires an active project +
         the binding — otherwise an actionable error, never a fallback.
 
         Args:
-            namespace: the table's NUMBER (`ns_id`, e.g. 174) — the form to use.
+            datastore: the table's NUMBER (`ns_id`, e.g. 174) — the form to use.
                 Its name still resolves and is being retired, not broken.
                 `slot:<name>` also works. It must already exist.
             row: single-row content as a dict (JSON-encoded automatically).
@@ -872,8 +886,8 @@ def register(mcp: FastMCP) -> None:
             # sorte par le même chemin actionnable que les autres (ValueError →
             # INVALID_PARAMS). C'est aussi ce qui rend à l'agent qui écrit encore
             # `@claimed` — retiré le 07/09/2026 — un refus qui NOMME le geste qui
-            # aboutit, plutôt que le « namespace inconnu » du stockage.
-            namespace, id = _adresse(namespace, id)
+            # aboutit, plutôt que le « datastore inconnu » du stockage.
+            datastore, id = _adresse(datastore, id)
             # Refus qui NOMME le paramètre et sa forme, au moment où l'appelant peut
             # encore corriger — jamais un `invalid_input` nu.
             cibles = fcg.chemins_forces(force)
@@ -885,7 +899,7 @@ def register(mcp: FastMCP) -> None:
                                              message="passer `rows` (batch) OU `row`/`id`, pas les deux"))
                 if not isinstance(rows, list):
                     raise McpError(ErrorData(code=INVALID_PARAMS, message="rows doit être une liste de dicts"))
-                recap = store.write_rows(namespace, rows, key=key,
+                recap = store.write_rows(datastore, rows, key=key,
                                          readonly_override=readonly_override,
                                          origine_override=origine_override,
                                          donnees_d_origine=donnees_d_origine,
@@ -893,7 +907,7 @@ def register(mcp: FastMCP) -> None:
                 # Le lot a une ENVELOPPE (son corps n'est pas une ligne) : elle porte
                 # l'identité entière — le nom CANONIQUE, plus l'écho de la chaîne
                 # reçue, et le numéro à employer ensuite.
-                out = {**identite.de_releve(store.dernier_tableau, namespace),
+                out = {**identite.de_releve(store.dernier_tableau, datastore),
                        **recap}
             else:
                 if row is None:
@@ -901,13 +915,13 @@ def register(mcp: FastMCP) -> None:
                                              message="fournir `row` (objet) ou `rows` (liste d'objets, mode batch)"))
                 if not isinstance(row, dict):
                     raise McpError(ErrorData(code=INVALID_PARAMS, message="row doit être un dict"))
-                out = store.append_row(namespace, row,
+                out = store.append_row(datastore, row,
                                        readonly_override=readonly_override,
                                        origine_override=origine_override,
                                        donnees_d_origine=donnees_d_origine,
                                        force=cibles) \
                     if id is None \
-                    else store.update_row(namespace, id, row,
+                    else store.update_row(datastore, id, row,
                                           readonly_override=readonly_override,
                                           origine_override=origine_override,
                                           donnees_d_origine=donnees_d_origine,
@@ -917,17 +931,17 @@ def register(mcp: FastMCP) -> None:
             # Le NUMÉRO du tableau part avec (`ns_id`) : l'écriture est le geste que
             # l'agent répète, et il doit pouvoir en relire l'adresse à employer. Le
             # nom, lui, ne s'ajoute PAS ici — le corps d'une écriture de ligne seule
-            # EST la ligne, et `namespace` y serait en collision avec une colonne.
+            # EST la ligne, et `datastore` y serait en collision avec une colonne.
             out = {**out, **store.off_schema_report(),
                    **identite.numero(store.dernier_tableau)}
-            hint = _project_hint(namespace)
+            hint = _project_hint(datastore)
             return {**out, "project_hint": hint} if hint else out
         except ValueError as e:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
-        except NamespaceNotFound as e:
-            raise McpError(ErrorData(code=INVALID_PARAMS, message=_inconnu(namespace, e)))
-        except NamespaceReadOnly:
-            raise McpError(ErrorData(code=INVALID_PARAMS, message=f"namespace `{namespace}` partagé en lecture seule"))
+        except DatastoreNotFound as e:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=_inconnu(datastore, e)))
+        except DatastoreReadOnly:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=f"datastore `{datastore}` partagé en lecture seule"))
         except RowNotFound:
             # #517 : ce refus arrive au SEUL moment où l'agent peut encore corriger.
             # « Introuvable » tout court le laisse réessayer SANS identifiant — et une
@@ -935,7 +949,7 @@ def register(mcp: FastMCP) -> None:
             # rend donc les deux choses qui manquent : à quoi ressemble un identifiant,
             # et ce que son propre travail tient déjà.
             try:
-                piste = store.claimed_hint(namespace)
+                piste = store.claimed_hint(datastore)
             # noqa: SILENT — une piste est un bonus : échouer à la calculer ne doit jamais remplacer un refus actionnable par une erreur interne
             except Exception:  # noqa: BLE001
                 piste = None
@@ -949,7 +963,7 @@ def register(mcp: FastMCP) -> None:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=_row_locked_message(e)))
 
     @mcp.tool()
-    def data_claim_next(namespace: Adresse, worker: str, filter: Optional[dict] = None,
+    def data_claim_next(datastore: Adresse, worker: str, filter: Optional[dict] = None,
                         lease_s: int = 900, max_claims: Optional[int] = None,
                         # ⚠️ `dsl.DEFAUT`, jamais un littéral. `layers.py` promet que
                         # « le défaut se lit ici et nulle part ailleurs, pour qu'une
@@ -959,7 +973,7 @@ def register(mcp: FastMCP) -> None:
                         # et le défaut aurait divergé là où ça se voit le moins.
                         layers: str = dsl.DEFAUT,
                         filters: Optional[list] = None) -> dict:
-        """Atomically claim the NEXT unprocessed row of a namespace (work queue).
+        """Atomically claim the NEXT unprocessed row of a datastore (work queue).
 
         The primitive for draining a table with N parallel (sub-)agents without
         collisions: picks the oldest row whose claim lease is free or expired,
@@ -970,13 +984,13 @@ def register(mcp: FastMCP) -> None:
         Write your result and release it by the `_id` of the returned row.
 
         ⚠️ **Address the table by its NUMBER, not its name.** The reply carries
-        `ns_id` — the table's number (e.g. `174`) — beside `namespace`, its
-        canonical name. `ns_id` is the form to pass as `namespace` in every
-        following call: `data_write(namespace=174, id=…)`, `data_release
-        (namespace=174, …)`. A name still resolves — it is being retired, not
+        `ns_id` — the table's number (e.g. `174`) — beside `datastore`, its
+        canonical name. `ns_id` is the form to pass as `datastore` in every
+        following call: `data_write(datastore=174, id=…)`, `data_release
+        (datastore=174, …)`. A name still resolves — it is being retired, not
         broken — but the number is what to carry: it survives a rename, it is
         unique where a name is only unique per owner, and it is what the platform
-        records. `namespace` in the reply is the table's REAL name whatever form
+        records. `datastore` in the reply is the table's REAL name whatever form
         you passed in, so reading `"600"` back from a claim on `600` no longer
         happens.
 
@@ -1017,39 +1031,39 @@ def register(mcp: FastMCP) -> None:
         operator per column, so a range (`score >= 10 AND score <= 20`) can only
         be expressed here. Same grammar as `data_rows`.
 
-        `namespace` also accepts `slot:<name>` (table bound by the active project).
+        `datastore` also accepts `slot:<name>` (table bound by the active project).
 
         Args:
-            namespace: the table's NUMBER (`ns_id`, e.g. 174) — the form to use.
+            datastore: the table's NUMBER (`ns_id`, e.g. 174) — the form to use.
                 Its name still resolves and is being retired, not broken.
                 `slot:<name>` also works. It must already exist.
         """
         store = _acting_store()
-        namespace = _ns(namespace)
+        datastore = _ns(datastore)
         warnings: list = []
         perimetre: dict = {}
         try:
-            row = store.claim_next(namespace, worker=worker, filter=filter,
+            row = store.claim_next(datastore, worker=worker, filter=filter,
                                    lease_s=lease_s, max_claims=max_claims,
                                    warnings=warnings, perimetre=perimetre,
                                    layers=dsl.check(layers), filters=filters)
         except ValueError as e:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
-        except NamespaceNotFound as e:
-            raise McpError(ErrorData(code=INVALID_PARAMS, message=_inconnu(namespace, e)))
-        except NamespaceReadOnly:
+        except DatastoreNotFound as e:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=_inconnu(datastore, e)))
+        except DatastoreReadOnly:
             raise McpError(ErrorData(code=INVALID_PARAMS,
-                                     message=f"namespace `{namespace}` partagé en lecture seule"))
+                                     message=f"datastore `{datastore}` partagé en lecture seule"))
         # L'IDENTITÉ du tableau, pas l'écho de l'adresse reçue (cf. `datastore/
-        # identite.py`) : `namespace` est son nom canonique et `ns_id` son NUMÉRO.
+        # identite.py`) : `datastore` est son nom canonique et `ns_id` son NUMÉRO.
         # C'est LA remise où le numéro compte — la boucle des agents part d'ici, et
         # ce qu'ils relisent dans une réponse est ce qu'ils réemploient ensuite.
-        return {**identite.de_releve(store.dernier_tableau, namespace), "row": row,
+        return {**identite.de_releve(store.dernier_tableau, datastore), "row": row,
                 **({"warning": warnings[0]} if warnings else {}),
                 **({} if row else {"hint": _hint_file_vide(perimetre, filter)})}
 
     @mcp.tool()
-    def data_release(namespace: Adresse, id: str, worker: str) -> dict:
+    def data_release(datastore: Adresse, id: str, worker: str) -> dict:
         """Release a claimed row — the NORMAL end of processing one row, and the
         counterpart of data_claim_next. Guarded by `worker` (same label as at claim
         time), and addressed by the `_id` that data_claim_next returned.
@@ -1059,33 +1073,33 @@ def register(mcp: FastMCP) -> None:
         run_start / run_finish, closing the run frees everything it held — that is
         the safety net when you forget.
 
-        `namespace` = the table's NUMBER (`ns_id`, the one data_claim_next handed
+        `datastore` = the table's NUMBER (`ns_id`, the one data_claim_next handed
         you) — the form to use. Its name still resolves and is being retired, not
         broken. `slot:<name>` also works."""
         store = _acting_store()
         try:
-            namespace, id = _adresse(namespace, id)
-            issue = store.release_claim(namespace, id, worker=worker)
+            datastore, id = _adresse(datastore, id)
+            issue = store.release_claim(datastore, id, worker=worker)
         except ValueError as e:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
-        except NamespaceNotFound as e:
-            raise McpError(ErrorData(code=INVALID_PARAMS, message=_inconnu(namespace, e)))
-        except NamespaceReadOnly:
+        except DatastoreNotFound as e:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=_inconnu(datastore, e)))
+        except DatastoreReadOnly:
             raise McpError(ErrorData(code=INVALID_PARAMS,
-                                     message=f"namespace `{namespace}` partagé en lecture seule"))
+                                     message=f"datastore `{datastore}` partagé en lecture seule"))
         # ⚠️ DEUX situations opposées partageaient ce `false` et cet indice (#517) :
         # « il n'y avait rien à rendre » (bénin) et « la ligne est à un autre travail »
         # (échec). Une flotte a branché sa borne d'arrêt dessus et s'est coupée à cinq
         # fiches sur cent, le 29/08. La réponse porte donc la RAISON — vocabulaire
         # fermé, lisible par une machine — et l'indice dit LAQUELLE des deux.
-        return {**identite.de_releve(store.dernier_tableau, namespace),
+        return {**identite.de_releve(store.dernier_tableau, datastore),
                 "id": id, "released": issue["released"],
                 "reason": issue["reason"],
                 **({} if issue["released"] else {"hint": indice_de_liberation(issue)})}
 
     @mcp.tool()
     def data_rows(
-        namespace: Adresse, id: str | None = None,
+        datastore: Adresse, id: str | None = None,
         filter: Optional[dict] = None, limit: int = 100,
         cursor: str | None = None, fields: Optional[list[str]] = None,
         count_only: bool = False, q: str | None = None,
@@ -1111,12 +1125,12 @@ def register(mcp: FastMCP) -> None:
         "this cell has none".
         The REST face `GET …/rows` pages by `offset` with a `total`, no cursor.
 
-        `namespace` = the table's NUMBER (`ns_id`, e.g. 174) — the form to use;
+        `datastore` = the table's NUMBER (`ns_id`, e.g. 174) — the form to use;
         the reply carries it back. A name still resolves and is being retired,
         not broken. `slot:<name>` also works.
 
         List mode returns `{rows, count, next_cursor, ns_id}`. When `next_cursor` is not null
-        there are MORE rows: call again with `cursor=<next_cursor>` (same namespace/
+        there are MORE rows: call again with `cursor=<next_cursor>` (same datastore/
         filter/order) to get the next page — repeat until `next_cursor` is null.
 
         Without `order_by` the cursor is keyset-stable (rows created meanwhile don't
@@ -1136,7 +1150,7 @@ def register(mcp: FastMCP) -> None:
         rows let you pull far more per page.
 
         Args:
-            namespace: target namespace, or `slot:<name>` = the table bound under
+            datastore: target datastore, or `slot:<name>` = the table bound under
                 that slot name by the ACTIVE project (actionable error if unbound).
             id: `_id` of one row ; omit = list rows.
             filter: dict `{column: value}` — exact match. A column may instead take
@@ -1201,7 +1215,7 @@ def register(mcp: FastMCP) -> None:
                 on one shape.
         """
         store = _acting_store()
-        namespace, id = _adresse(namespace, id)
+        datastore, id = _adresse(datastore, id)
         try:
             jetons.verifier_champs(fields=fields, filter=filter, filters=filters)
             layers = dsl.check(layers)
@@ -1210,11 +1224,11 @@ def register(mcp: FastMCP) -> None:
             # moment où l'appelant peut encore corriger.
             vers = dsver.check(versions)
             if count_only:
-                total = store.count_rows(namespace, filter=filter, q=q,
+                total = store.count_rows(datastore, filter=filter, q=q,
                                          filters=filters)
                 return {"total": total, **identite.numero(store.dernier_tableau)}
             if id is not None:
-                row = store.get_row(namespace, id, layers=layers,
+                row = store.get_row(datastore, id, layers=layers,
                                     versions=vers)
                 # ⚠️ Le NUMÉRO ne s'ajoute PAS ici, et c'est délibéré : cette remise
                 # n'a pas d'enveloppe, son corps EST la ligne — et c'est exactement
@@ -1224,7 +1238,7 @@ def register(mcp: FastMCP) -> None:
                 # ferait perdre la ligne sur un tableau qui refuse l'inconnu. La page
                 # ci-dessous, elle, a une enveloppe : le numéro y tient sans risque.
                 return _project_row(row, fields) if fields else row
-            page = store.cursor_rows(namespace, filter=filter, limit=limit,
+            page = store.cursor_rows(datastore, filter=filter, limit=limit,
                                      cursor=cursor, q=q, filters=filters,
                                      order_by=order_by, order_dir=order_dir,
                                      layers=layers, versions=vers)
@@ -1253,18 +1267,18 @@ def register(mcp: FastMCP) -> None:
             # relit son appel, qui est juste, et conclut que le champ n'existe pas.
             if fields and page["rows"]:
                 present = {k for r in page["rows"] for k in r}
-                declared = dsv2.top_level_keys(store.get_schema(namespace))
+                declared = dsv2.top_level_keys(store.get_schema(datastore))
                 unknown = [f for f in fields
                            if f != TOUT and f not in present and f not in declared]
                 # Dernier recours AVANT d'accuser : une colonne peut n'être ni
                 # déclarée ni sur cette page, et exister quand même ailleurs dans le
                 # tableau (colonne orpheline d'un renommage). L'appeler « faute
                 # d'orthographe » serait encore désigner une cause fausse. Le relevé
-                # des clés du namespace tranche — et il ne coûte que sur ce chemin-là,
+                # des clés du datastore tranche — et il ne coûte que sur ce chemin-là,
                 # celui où on s'apprête à écrire un avertissement.
                 if unknown:
                     unknown = [f for f in unknown
-                               if f not in _namespace_keys(store, namespace)]
+                               if f not in _datastore_keys(store, datastore)]
                 # QUATRIÈME juge (#350) : une ADRESSE DE COUCHE — `effectif.origine`,
                 # `contact.comment` — est une projection parfaitement valide. Elle
                 # n'apparaît dans `present` que si la couche est renseignée sur AU
@@ -1280,32 +1294,32 @@ def register(mcp: FastMCP) -> None:
                                if not _adresse_de_couche_valide(f, present, declared)]
                 if unknown:
                     out["warning"] = (
-                        f"colonne(s) de `fields` inconnue(s) dans ce namespace : "
+                        f"colonne(s) de `fields` inconnue(s) dans ce datastore : "
                         f"{', '.join(unknown)} — vérifie l'orthographe (absentes du résultat)")
             # 0 résultat filtré ≠ « la donnée n'existe pas » : si une clé du filter
             # n'apparaît dans AUCUNE ligne échantillonnée, c'est probablement une
             # colonne mal orthographiée — on le SIGNALE (non bloquant, feedback #163).
             if (filter or filters) and not out["rows"]:
-                unknown = _unknown_filter_keys(store, namespace, filter, filters)
+                unknown = _unknown_filter_keys(store, datastore, filter, filters)
                 if unknown:
                     out["warning"] = (
-                        f"colonne(s) de filter inconnue(s) dans ce namespace : "
+                        f"colonne(s) de filter inconnue(s) dans ce datastore : "
                         f"{', '.join(sorted(unknown))} — vérifie l'orthographe "
                         "(0 résultat peut venir de là)")
             return out
         except InvalidCursor:
             raise McpError(ErrorData(code=INVALID_PARAMS, message="`cursor` invalide (repartir sans cursor)"))
-        except NamespaceNotFound as e:
-            raise McpError(ErrorData(code=INVALID_PARAMS, message=_inconnu(namespace, e)))
+        except DatastoreNotFound as e:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=_inconnu(datastore, e)))
         except RowNotFound:
             raise McpError(ErrorData(code=INVALID_PARAMS,
-                                     message=_row_not_found_hint(store, namespace, id)))
+                                     message=_row_not_found_hint(store, datastore, id)))
         except ValueError as e:  # filtre malformé / opérateur inconnu → actionnable
             raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
 
     @mcp.tool()
     def data_aggregate(
-        namespace: Adresse,
+        datastore: Adresse,
         metrics: Optional[list[dict]] = None,
         group_by: str | list[str] | None = None,
         filter: Optional[dict] = None,
@@ -1360,7 +1374,7 @@ def register(mcp: FastMCP) -> None:
               group_by=["contact1_fonction","contact2_fonction","contact3_fonction"]
 
         Args:
-            namespace: target namespace, or `slot:<name>` (active project).
+            datastore: target datastore, or `slot:<name>` (active project).
             metrics: list of `{op, field?, where?, label?}` aggregations
                 (default = count of rows).
             group_by: column to group by, or a LIST of columns whose values are
@@ -1372,31 +1386,31 @@ def register(mcp: FastMCP) -> None:
                 search shows.
         """
         store = _acting_store()
-        namespace, _ = _adresse(namespace)
+        datastore, _ = _adresse(datastore)
         try:
             jetons.verifier_champs(filter=filter, filters=filters)
             results = store.aggregate(
-                namespace, group_by=group_by, metrics=metrics, filter=filter,
+                datastore, group_by=group_by, metrics=metrics, filter=filter,
                 filters=filters, q=q)
             return {"results": results}
         except ValueError as e:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
-        except NamespaceNotFound as e:
-            raise McpError(ErrorData(code=INVALID_PARAMS, message=_inconnu(namespace, e)))
+        except DatastoreNotFound as e:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=_inconnu(datastore, e)))
 
     @mcp.tool()
-    def data_delete_row(namespace: Adresse, id: str) -> dict:
-        """Delete a row by `_id`. `namespace` accepts `slot:<name>` (active
+    def data_delete_row(datastore: Adresse, id: str) -> dict:
+        """Delete a row by `_id`. `datastore` accepts `slot:<name>` (active
         project)."""
         sub = access.current_user_sub_or_raise()
         store = _store_for(sub)
-        namespace, id = _adresse(namespace, id)
+        datastore, id = _adresse(datastore, id)
         try:
-            store.delete_row(namespace, id)
-        except NamespaceNotFound as e:
-            raise McpError(ErrorData(code=INVALID_PARAMS, message=_inconnu(namespace, e)))
-        except NamespaceReadOnly:
-            raise McpError(ErrorData(code=INVALID_PARAMS, message=f"namespace `{namespace}` partagé en lecture seule"))
+            store.delete_row(datastore, id)
+        except DatastoreNotFound as e:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=_inconnu(datastore, e)))
+        except DatastoreReadOnly:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=f"datastore `{datastore}` partagé en lecture seule"))
         except RowNotFound:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=f"row `{id}` introuvable"))
         except RowLocked as e:
@@ -1409,37 +1423,37 @@ def register(mcp: FastMCP) -> None:
         return {"ok": True, "id": id}
 
     @mcp.tool()
-    def data_url(namespace: Adresse) -> dict:
-        """Return the dashboard URL of a namespace (for the user to open/edit in
-        browser). `namespace` accepts `slot:<name>` (active project)."""
+    def data_url(datastore: Adresse) -> dict:
+        """Return the dashboard URL of a datastore (for the user to open/edit in
+        browser). `datastore` accepts `slot:<name>` (active project)."""
         sub = access.current_user_sub_or_raise()
         store = _store_for(sub)
-        namespace, _ = _adresse(namespace)
+        datastore, _ = _adresse(datastore)
         try:
-            return {"url": store.get_url(namespace)}
-        except NamespaceNotFound as e:
-            raise McpError(ErrorData(code=INVALID_PARAMS, message=_inconnu(namespace, e)))
+            return {"url": store.get_url(datastore)}
+        except DatastoreNotFound as e:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=_inconnu(datastore, e)))
 
     @mcp.tool()
     def data_share(
-        namespace: Adresse, email: str = "", permission: str = "read", remove: bool = False,
+        datastore: Adresse, email: str = "", permission: str = "read", remove: bool = False,
         recipient_sub: str = "",
     ) -> dict:
-        """Share (or with `remove=True`, unshare) a namespace with another oto user.
+        """Share (or with `remove=True`, unshare) a datastore with another oto user.
         The recipient accesses it with their own oto account.
 
         Identify the recipient by `email`, or by `recipient_sub` when one address
         carries several accounts — an ambiguous address is REFUSED, never guessed.
 
         Args:
-            namespace: namespace to (un)share (must be owned by you).
+            datastore: datastore to (un)share (must be owned by you).
             email: email of the recipient oto user.
             permission: 'read' or 'write' (default write) — when sharing.
             remove: True = revoke access instead of granting it.
             recipient_sub: the recipient's `sub`, when `email` is ambiguous.
         """
         sub = access.current_user_sub_or_raise()
-        namespace = _ns(namespace)
+        datastore = _ns(datastore)
         recipient = _destinataire(email, recipient_sub)
 
         # Le partage est une action de GOUVERNANCE (owner ∪ escalade roles.py).
@@ -1448,12 +1462,12 @@ def register(mcp: FastMCP) -> None:
             # canonique), et c'est ce que la réponse doit porter — pas l'écho de
             # l'adresse reçue.
             store_partage = _store_for(sub)
-            ns_id = store_partage.resolve_ns_id(namespace)
-        except NamespaceNotFound as e:
-            raise McpError(ErrorData(code=INVALID_PARAMS, message=_inconnu(namespace, e)))
-        if not ownership.can_govern(sub, "datastore_namespace", str(ns_id)):
+            ns_id = store_partage.resolve_ns_id(datastore)
+        except DatastoreNotFound as e:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=_inconnu(datastore, e)))
+        if not ownership.can_govern(sub, ownership.TYPE_RESSOURCE_DATASTORE, str(ns_id)):
             raise McpError(ErrorData(code=INVALID_PARAMS,
-                                     message=f"tu n'as pas le droit de gérer le partage de `{namespace}`"))
+                                     message=f"tu n'as pas le droit de gérer le partage de `{datastore}`"))
 
         # Ce qu'on rend nomme le compte SERVI, pas l'argument reçu : appelé par
         # `recipient_sub`, `email` est vide, et « partagé avec ␣ » serait faux.
@@ -1461,26 +1475,26 @@ def register(mcp: FastMCP) -> None:
         cible = recipient.get("email") or recipient["sub"]
 
         if remove:
-            removed = ownership.revoke("datastore_namespace", str(ns_id), "user", recipient["sub"])
+            removed = ownership.revoke(ownership.TYPE_RESSOURCE_DATASTORE, str(ns_id), "user", recipient["sub"])
             if not removed:
                 raise McpError(ErrorData(code=INVALID_PARAMS,
-                                         message=f"pas de partage actif pour {cible} sur {namespace}"))
+                                         message=f"pas de partage actif pour {cible} sur {datastore}"))
             return {"ok": True,
-                    **identite.de_releve(store_partage.dernier_tableau, namespace),
+                    **identite.de_releve(store_partage.dernier_tableau, datastore),
                     "unshared_with": cible,
                     "unshared_with_sub": recipient["sub"]}
 
         if permission not in ("read", "write"):
             raise McpError(ErrorData(code=INVALID_PARAMS, message="permission must be 'read' or 'write'"))
-        ownership.grant("datastore_namespace", str(ns_id), "user", recipient["sub"],
+        ownership.grant(ownership.TYPE_RESSOURCE_DATASTORE, str(ns_id), "user", recipient["sub"],
                         permission, granted_by=sub)
         return {"ok": True,
-                **identite.de_releve(store_partage.dernier_tableau, namespace),
+                **identite.de_releve(store_partage.dernier_tableau, datastore),
                 "shared_with": cible,
                 "shared_with_sub": recipient["sub"], "permission": permission}
 
     # --- MCP App : variante à interface rendue du datastore (SEP-1865) --------
-    # `data_app` rend le contenu d'un namespace INLINE (carte + table triable /
+    # `data_app` rend le contenu d'un datastore INLINE (carte + table triable /
     # cherchable) au lieu de seulement renvoyer un lien dashboard (`data_url`).
     # Import OPTIONNEL de prefab_ui (extra `fastmcp[apps]`) : absent → on
     # n'enregistre pas l'app, les tools JSON ci-dessus suffisent (dégradation
@@ -1522,7 +1536,7 @@ def register(mcp: FastMCP) -> None:
         return card
 
     # ── conscience du schéma v2 (ADR 0046) ───────────────────────────────────
-    # Un namespace typé porte des fields imbriqués (`object`/`list` → occupant{},
+    # Un datastore typé porte des fields imbriqués (`object`/`list` → occupant{},
     # contacts[], signaux[]) + des rôles `title`/`status` (+ lifecycle). La table
     # plate collapsait tout ça en `n × {...}` : une fiche perdait sa structure. On
     # rend donc (1) la liste avec les colonnes DANS L'ORDRE du schéma, (2) une
@@ -1674,7 +1688,7 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool(app=True)
     def data_app(
-        namespace: Optional[Adresse] = None,
+        datastore: Optional[Adresse] = None,
         filter: Optional[dict] = None,
         row: str | None = None,
         limit: int = 100,
@@ -1687,11 +1701,11 @@ def register(mcp: FastMCP) -> None:
         """Rendered datastore browser (MCP App / interactive card).
 
         Visual variant of `data_url` that renders the data INLINE instead of just
-        returning a dashboard link. WITHOUT `namespace` = a table of your
-        namespaces. WITH `namespace` = a sortable/searchable table of its rows,
+        returning a dashboard link. WITHOUT `datastore` = a table of your
+        datastores. WITH `datastore` = a sortable/searchable table of its rows,
         with an optional exact-match `filter` (same shape as `data_rows`).
 
-        Schema-aware (datastore v2, ADR 0046): a typed namespace renders its
+        Schema-aware (datastore v2, ADR 0046): a typed datastore renders its
         columns in the declared field order, and a SINGLE fiche is shown in a
         detail view — nested `object`/`list` fields (e.g. `contacts[]`, `signaux[]`)
         are expanded as sub-tables instead of a `"3 × {...}"` blob, and the
@@ -1704,7 +1718,7 @@ def register(mcp: FastMCP) -> None:
         `data_rows`; to edit a row, follow the dashboard link shown on the card.
 
         Args:
-            namespace: target namespace ; omit = list all your namespaces.
+            datastore: target datastore ; omit = list all your datastores.
             filter: dict `{column: value}` exact match to pre-filter rows,
                 e.g. `{"priorite": "P1"}`.
             row: open ONE fiche in detail view — matched against `_id`, the
@@ -1714,19 +1728,19 @@ def register(mcp: FastMCP) -> None:
                 (hidden by default).
         """
         sub = access.current_user_sub_or_raise()
-        if namespace:
-            namespace = _ns(namespace)
+        if datastore:
+            datastore = _ns(datastore)
         store = _store_for(sub)
 
-        if not namespace:
-            spaces = store.list_namespaces()
+        if not datastore:
+            spaces = store.list_datastores()
             if not spaces:
                 return _message_card(
-                    "Aucun namespace",
-                    "Crée-en un avec data_create_namespace, puis écris avec data_write.",
+                    "Aucun datastore",
+                    "Crée-en un avec data_create_datastore, puis écris avec data_write.",
                 )
             index = [
-                {"namespace": s["namespace"],
+                {"datastore": s["datastore"],
                  "structure": "typée" if _fdefs(s.get("schema")) else "libre",
                  "partage": "oui" if s.get("shared") else "non",
                  "lien": s.get("url", "")}
@@ -1735,18 +1749,18 @@ def register(mcp: FastMCP) -> None:
             with Card() as card:
                 with Column(gap=4):
                     Heading("Datastore")
-                    Text(f"{len(spaces)} namespace(s)")
+                    Text(f"{len(spaces)} datastore(s)")
                     _rows_table(index, show_meta=True)
             return card
 
         try:
-            rows = store.list_rows(namespace, filter=filter, limit=limit)
-            url = store.get_url(namespace)
-            schema = store.get_schema(namespace)
-        except NamespaceNotFound:
+            rows = store.list_rows(datastore, filter=filter, limit=limit)
+            url = store.get_url(datastore)
+            schema = store.get_schema(datastore)
+        except DatastoreNotFound:
             return _message_card(
-                "Namespace introuvable",
-                f"Aucun namespace « {namespace} » sur ton compte.",
+                "Datastore introuvable",
+                f"Aucun datastore « {datastore} » sur ton compte.",
             )
 
         # Vue DÉTAIL d'une fiche : `row` explicite, ou `filter` qui isole 1 ligne.
@@ -1756,7 +1770,7 @@ def register(mcp: FastMCP) -> None:
             if fiche is None:
                 return _message_card(
                     "Fiche introuvable",
-                    f"Aucune fiche « {row} » dans « {namespace} ».",
+                    f"Aucune fiche « {row} » dans « {datastore} ».",
                 )
         elif filter and len(rows) == 1:
             fiche = rows[0]
@@ -1766,7 +1780,7 @@ def register(mcp: FastMCP) -> None:
         suffix = f" (filtre {filter})" if filter else ""
         with Card() as card:
             with Column(gap=4):
-                Heading(namespace)
+                Heading(datastore)
                 Text(f"{len(rows)} ligne(s){suffix} · éditer : {url}")
                 if rows:
                     _rows_table(rows, show_meta=show_meta, schema=schema)

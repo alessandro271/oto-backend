@@ -36,7 +36,7 @@ def _store(monkeypatch, *, libere: bool, bail=None):
     # `_trace` lit le RECORD du tableau, pas son nom : la face REST passe
     # un relevé, la face agent non — le stub doit servir les deux.
     monkeypatch.setattr(s, "_ns_of",
-                        lambda ns_id: {"namespace": "vivier", "schema": None})
+                        lambda ns_id: {"datastore": "vivier", "schema": None})
     monkeypatch.setattr(D.db, "datastore_release_claim",
                         lambda ns_id, row_id, worker: libere)
     monkeypatch.setattr(D.db, "datastore_active_lease",
@@ -94,7 +94,7 @@ def _appel(monkeypatch, *, libere, bail):
     s = _store(monkeypatch, libere=libere, bail=bail)
     monkeypatch.setattr(T, "_acting_store", lambda: s)
     monkeypatch.setattr(T, "_ns", lambda ns: ns)
-    return asyncio.run(outil.run({"namespace": "vivier", "id": "r1",
+    return asyncio.run(outil.run({"datastore": "vivier", "id": "r1",
                                   "worker": WORKER})).structured_content
 
 
@@ -128,9 +128,9 @@ def test_REST_porte_la_meme_raison(monkeypatch):
     H.stub_authz(monkeypatch)
     monkeypatch.setattr(dsr, "make_store", lambda sub: s)
     monkeypatch.setattr(dsr.datastore_journal, "record", lambda *a, **k: None)
-    monkeypatch.setattr(dsr.access, "resolve_namespace_ref", lambda ns: ns)
+    monkeypatch.setattr(dsr.access, "resolve_datastore_ref", lambda ns: ns)
     _, corps = H.call("me.datastore.release_claim",
-                      path_params={"namespace": "vivier", "row_id": "r1"},
+                      path_params={"datastore": "vivier", "row_id": "r1"},
                       body={"worker": WORKER})
     assert corps["released"] is False
     assert corps["reason"] == "held_by_other"

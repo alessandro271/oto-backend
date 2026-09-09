@@ -36,7 +36,7 @@ _SCHEMA = {"key": "siren",
 def store(monkeypatch):
     st = dsm.DatastorePg("u", acting_org=35)
     monkeypatch.setattr(st, "_resolve", lambda ns, write=False: 7)
-    monkeypatch.setattr(dsm.db, "get_datastore_namespace_by_id",
+    monkeypatch.setattr(dsm.db, "get_datastore_by_id",
                         lambda ns_id: {"id": ns_id, "schema": _SCHEMA})
     monkeypatch.setattr(dsm.db, "datastore_find_row_id_by_key",
                         lambda *a, **k: None)
@@ -80,7 +80,7 @@ def test_une_cle_VIDE_compte_comme_absente(store):
 def test_un_tableau_SANS_cle_declaree_ne_dit_rien(store, monkeypatch):
     """Pas de clé métier = pas de rapprochement promis : avertir y serait du bruit
     sur le régime normal d'un tableau libre."""
-    monkeypatch.setattr(dsm.db, "get_datastore_namespace_by_id",
+    monkeypatch.setattr(dsm.db, "get_datastore_by_id",
                         lambda ns_id: {"id": ns_id,
                                        "schema": {"fields": [{"key": "x"}]}})
     store.append_row("viviers", {"x": "1"})

@@ -72,7 +72,7 @@ def table(live):
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
     ns = "t-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore_namespace("user", "sub-points", ns)
+    ns_id = db.create_datastore("user", "sub-points", ns)
     st = make_store("sub-points")
     st.set_schema(ns, SCHEMA)
     return st, ns, ns_id
@@ -322,7 +322,7 @@ def test_un_CSV_d_export_se_reimporte_et_referme_l_aller_retour(table):
     assert b"site_web.comment" in csv, "l'export porte bien la colonne pointée"
 
     res = ut.materialize("sub-points",
-                         {"kind": "datastore", "ns_id": ns_id, "namespace": ns,
+                         {"kind": "datastore", "ns_id": ns_id, "datastore": ns,
                           "format": "csv", "key": "siren"}, csv, None)
 
     assert "entetes_traduits" not in res, "rien à traduire : c'était une annotation"
@@ -338,7 +338,7 @@ def test_un_CSV_a_en_tetes_ordinaires_est_traduit_ET_ANNONCE(table):
     from oto_mcp import upload_tokens as ut
     st, ns, ns_id = table
     res = ut.materialize("sub-points",
-                         {"kind": "datastore", "ns_id": ns_id, "namespace": ns,
+                         {"kind": "datastore", "ns_id": ns_id, "datastore": ns,
                           "format": "csv", "key": "siren"},
                          b"siren,N.SIREN\n1,552032534\n", None)
     assert res["entetes_traduits"] == {"N.SIREN": "N_SIREN"}

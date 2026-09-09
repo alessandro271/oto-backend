@@ -1,6 +1,6 @@
 """Créer un tableau en DOUBLON refuse, et le refus dit pourquoi.
 
-Bug servi en production par le découpage (#325) : `create_datastore_namespace` a été
+Bug servi en production par le découpage (#325) : `create_datastore` a été
 déplacée dans son module, mais le nom `psycopg` — qu'elle n'employait que dans sa
 clause `except` — vivait dans les globals du monolithe. Une clause `except` ne
 s'évalue qu'au moment de l'exception : le boot restait vert, la suite complète aussi,
@@ -43,7 +43,7 @@ def test_a_duplicate_is_refused_with_its_reason(monkeypatch):
     monkeypatch.setattr(ns, "upsert_user", lambda *a, **k: None)
 
     with pytest.raises(ValueError) as e:
-        ns.create_datastore_namespace("user", "u1", "vivier")
+        ns.create_datastore("user", "u1", "vivier")
     assert "vivier" in str(e.value) and "existe déjà" in str(e.value)
 
 
@@ -51,14 +51,14 @@ def test_the_store_turns_it_into_its_own_refusal(monkeypatch):
     """L'appelant compte dessus pour dériver un nom libre : c'est ce contrat-là qui
     cassait, pas seulement le libellé de l'erreur."""
     from oto_mcp.db import datastore_ns as ns
-    from oto_mcp.datastore.core import DatastorePg, NamespaceExists
+    from oto_mcp.datastore.core import DatastorePg, DatastoreExists
     monkeypatch.setattr(ns, "_connect", _fake_connect)
     monkeypatch.setattr(ns, "upsert_user", lambda *a, **k: None)
 
     s = DatastorePg("u-1")
     monkeypatch.setattr(s, "_default_owner", lambda: ("user", "u-1"))
-    with pytest.raises(NamespaceExists):
-        s.create_namespace("vivier")
+    with pytest.raises(DatastoreExists):
+        s.create_datastore("vivier")
 
 
 # --- le garde-fou qui ferme la classe ----------------------------------------------

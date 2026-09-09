@@ -72,7 +72,7 @@ def test_check_unresolved_and_unreferenced():
 
 
 def test_check_connector_coherence(monkeypatch):
-    # Registre minimal : `folk` existe et porte le namespace `folk` ; identités OK.
+    # Registre minimal : `folk` existe et porte le datastore `folk` ; identités OK.
     class _Con:
         name = "folk"
     monkeypatch.setattr(slots_mod.providers, "REGISTRY", {"folk": _Con()})
@@ -280,7 +280,7 @@ def test_resolve_slot_unbound_lists_bound(monkeypatch):
 
 def test_resolve_slot_dangling(monkeypatch):
     _wire_resolve(monkeypatch, links=[{"target_type": "tableau", "target_ref": "99",
-                                       "slot": "sortie"}])   # pas de namespace résolu
+                                       "slot": "sortie"}])   # pas de datastore résolu
     with pytest.raises(McpError) as e:
         access.resolve_slot_tableau("sortie")
     assert "ne résout plus" in str(e.value)
@@ -450,11 +450,11 @@ def test_target_schema_for_resolves_from_linked_procedures(monkeypatch):
                                               "target_ref": "125"}]) is None
 
 
-def test_provision_on_virgin_namespace(monkeypatch):
+def test_provision_on_virgin_datastore(monkeypatch):
     import oto_mcp.slots as S
     calls = {"set": [], "index": []}
-    monkeypatch.setattr("oto_mcp.db.get_datastore_namespace_by_id",
-                        lambda i: {"id": i, "namespace": "leads-pv", "schema": None})
+    monkeypatch.setattr("oto_mcp.db.get_datastore_by_id",
+                        lambda i: {"id": i, "datastore": "leads-pv", "schema": None})
     monkeypatch.setattr("oto_mcp.db.datastore_key_dup_groups", lambda i, k: [])
     monkeypatch.setattr("oto_mcp.db.set_datastore_schema",
                         lambda i, sc: calls["set"].append((i, sc)))
@@ -467,8 +467,8 @@ def test_provision_on_virgin_namespace(monkeypatch):
 
 def test_provision_conform_and_mismatch(monkeypatch):
     import oto_mcp.slots as S
-    monkeypatch.setattr("oto_mcp.db.get_datastore_namespace_by_id",
-                        lambda i: {"id": i, "namespace": "leads-pv", "schema": _TARGET})
+    monkeypatch.setattr("oto_mcp.db.get_datastore_by_id",
+                        lambda i: {"id": i, "datastore": "leads-pv", "schema": _TARGET})
     assert S.provision_tableau_schema(125, _TARGET)["status"] == "conform"
     other = {"fields": [{"key": "autre"}]}
     res = S.provision_tableau_schema(125, other)
@@ -478,8 +478,8 @@ def test_provision_conform_and_mismatch(monkeypatch):
 def test_provision_refuses_key_on_dirty_data(monkeypatch):
     import oto_mcp.slots as S
     wrote = []
-    monkeypatch.setattr("oto_mcp.db.get_datastore_namespace_by_id",
-                        lambda i: {"id": i, "namespace": "leads-pv", "schema": None})
+    monkeypatch.setattr("oto_mcp.db.get_datastore_by_id",
+                        lambda i: {"id": i, "datastore": "leads-pv", "schema": None})
     monkeypatch.setattr("oto_mcp.db.datastore_key_dup_groups",
                         lambda i, k: [{"value": "f1", "n": 2}])
     monkeypatch.setattr("oto_mcp.db.set_datastore_schema",

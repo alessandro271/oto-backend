@@ -245,9 +245,9 @@ def _accessible_namespaces(sub: str, org_id: int) -> list[dict]:
     → l'invariant « cherchable ⇔ lisible » tient au grain ligne par héritage du ns."""
     principals = ownership.active_org_principals(sub, org_id)
     gids = [int(p[1]) for p in principals if p[0] == "group"]
-    rows = db.list_datastore_namespaces_for_owners(principals)
+    rows = db.list_datastores_for_owners(principals)
     seen = {r["id"] for r in rows}
-    rows += [r for r in db.list_datastore_namespaces_granted_to(sub, [org_id], gids)
+    rows += [r for r in db.list_datastores_granted_to(sub, [org_id], gids)
              if r["id"] not in seen]
     return rows
 
@@ -259,7 +259,7 @@ def _match_tableaux(q: str, sub: str, org_id: int) -> list[dict]:
     fq = fold(q)
     scored: list[tuple[int, dict]] = []
     for r in rows:
-        name = fold(r["namespace"])
+        name = fold(r["datastore"])
         labels = " ".join(
             fold(str(f.get("label") or f.get("key") or ""))
             for f in ((r.get("schema") or {}).get("fields") or []))
@@ -272,7 +272,7 @@ def _match_tableaux(q: str, sub: str, org_id: int) -> list[dict]:
         else:
             continue
         scored.append((rank, {
-            "kind": "tableau", "ref": r["id"], "title": r["namespace"],
+            "kind": "tableau", "ref": r["id"], "title": r["datastore"],
             "matched_by": "lexical"}))
     scored.sort(key=lambda t: t[0])
     return [h for _, h in scored]
@@ -300,7 +300,7 @@ def _match_rows(q: str, sub: str, org_id: int) -> list[dict]:
     ns = _accessible_namespaces(sub, org_id)
     if not ns:
         return []
-    names = {r["id"]: r["namespace"] for r in ns}
+    names = {r["id"]: r["datastore"] for r in ns}
     return _row_hits(db.search_datastore_rows_fts(q, list(names.keys())), names, "lexical")
 
 
@@ -312,7 +312,7 @@ def _match_rows_semantic(q: str, sub: str, org_id: int,
     ns = _accessible_namespaces(sub, org_id)
     if not ns:
         return []
-    names = {r["id"]: r["namespace"] for r in ns}
+    names = {r["id"]: r["datastore"] for r in ns}
     from .embeddings import to_pg
     rows = db.search_datastore_rows_semantic(to_pg(query_embedding), list(names.keys()))
     return _row_hits(rows, names, "semantic")

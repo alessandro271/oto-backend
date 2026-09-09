@@ -1,7 +1,7 @@
 """Un schéma déclaré doit pouvoir se relire — et par les DEUX faces.
 
 `data_set_schema` posait un schéma sans qu'aucun verbe ne le rende. Pour connaître
-l'existant il fallait lister TOUS les namespaces accessibles et filtrer soi-même :
+l'existant il fallait lister TOUS les datastores accessibles et filtrer soi-même :
 une jointure imposée à l'appelant, et de la donnée inutile ramenée en contexte.
 
 L'enjeu n'est pas le confort. `set_schema` pose le schéma ENTIER, il ne fusionne pas :
@@ -25,9 +25,9 @@ _SCHEMA = {"fields": [{"key": "email", "type": "email", "role": "title"},
 
 @pytest.fixture
 def store(monkeypatch):
-    """Store dont la lecture de namespace est stubbée — logique pure, sans PG."""
-    ns = {"id": 1, "namespace": "leads", "schema": _SCHEMA}
-    monkeypatch.setattr(D.db, "get_datastore_namespace_by_id",
+    """Store dont la lecture de datastore est stubbée — logique pure, sans PG."""
+    ns = {"id": 1, "datastore": "leads", "schema": _SCHEMA}
+    monkeypatch.setattr(D.db, "get_datastore_by_id",
                         lambda ns_id: ns if ns_id == 1 else None)
     s = D.DatastorePg("u1")
     monkeypatch.setattr(s, "_resolve", lambda n, write=False: 1 if n == "leads" else 2)
@@ -44,7 +44,7 @@ def test_the_business_key_survives_the_roundtrip(store):
     assert store.get_schema("leads")["key"] == "email"
 
 
-def test_a_namespace_without_schema_is_not_an_error(store):
+def test_a_datastore_without_schema_is_not_an_error(store):
     """État normal — le datastore est schema-free par défaut. Rendre None, pas lever :
     l'appelant doit distinguer « pas de schéma » de « tableau inconnu »."""
     assert store.get_schema("libre") is None
@@ -64,20 +64,20 @@ def test_the_capability_exposes_both_faces():
     assert cap.mcp == "data_get_schema"
     assert cap.rest is not None
     assert cap.rest.verb == "GET"
-    assert "{namespace}" in cap.rest.path
+    assert "{datastore}" in cap.rest.path
 
 
-def test_an_unknown_namespace_is_a_404_not_a_crash(monkeypatch):
+def test_an_unknown_datastore_is_a_404_not_a_crash(monkeypatch):
     def _boom(sub):
         class _S:
             dernier_tableau = None  # rien n'a été résolu : le refus tombe avant
 
             def get_schema(self, ns):
-                raise D.NamespaceNotFound(ns)
+                raise D.DatastoreNotFound(ns)
         return _S()
     monkeypatch.setattr(CAP, "make_store", _boom)
     with pytest.raises(AuthzDenied) as e:
-        CAP._get_schema(_Ctx(), CAP.GetSchemaInput(namespace="fantome"))
+        CAP._get_schema(_Ctx(), CAP.GetSchemaInput(datastore="fantome"))
     assert e.value.status == 404
 
 
@@ -95,12 +95,12 @@ def _lire(monkeypatch, schema):
     schéma contradictoire, et c'est donc lui qui doit porter l'avertissement — le
     vérifier sur le formateur seul laisserait le câblage non couvert."""
     class _S:
-        dernier_tableau = {"ns_id": 174, "namespace": "vivier"}
+        dernier_tableau = {"ns_id": 174, "datastore": "vivier"}
 
         def get_schema(self, ns):
             return schema
     monkeypatch.setattr(CAP, "make_store", lambda sub: _S())
-    return CAP._get_schema(_Ctx(), CAP.GetSchemaInput(namespace="vivier"))
+    return CAP._get_schema(_Ctx(), CAP.GetSchemaInput(datastore="vivier"))
 
 
 def test_le_schema_servi_avec_une_cle_morte_porte_son_avertissement(monkeypatch):

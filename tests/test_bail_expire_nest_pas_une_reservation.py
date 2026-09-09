@@ -58,7 +58,7 @@ def table(live):
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
     ns = "t-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore_namespace("user", "sub-test", ns)
+    ns_id = db.create_datastore("user", "sub-test", ns)
     st = make_store("sub-test")
     st.set_schema(ns, {"key": "siren", "fields": [{"key": "siren", "type": "text"}]})
     row = st.append_row(ns, {"siren": "552032534"})
@@ -142,7 +142,7 @@ def test_la_SUPERVISION_voit_le_bail_echu_que_la_LECTURE_tait(table):
 
     - **la lecture ordinaire** (`get_row`, `list_rows`, l'export client) doit la
       TAIRE : servir le nom d'un travailleur mort est le défaut qu'on ferme ;
-    - **la file de supervision** (`queue`, `GET /api/datastore/namespaces/…/queue`)
+    - **la file de supervision** (`queue`, `GET /api/datastores/…/queue`)
       doit la MONTRER telle quelle. Son contrat — « bail actif OU expiré, le
       consommateur tranche sur `_claimed_until` » — est écrit à trois endroits
       (`db.rowlock.datastore_claimed_rows`, `DatastorePg.queue`, la capacité

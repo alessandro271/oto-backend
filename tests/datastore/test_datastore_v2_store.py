@@ -28,7 +28,7 @@ def store(monkeypatch):
     st = DatastorePg("u", acting_org=35)
     monkeypatch.setattr(st, "_resolve", lambda ns, write=False: 7)
     calls = {"insert": [], "update": [], "release": [], "claim": []}
-    monkeypatch.setattr(dsm.db, "get_datastore_namespace_by_id",
+    monkeypatch.setattr(dsm.db, "get_datastore_by_id",
                         lambda ns_id: {"id": ns_id, "schema": SCHEMA})
     monkeypatch.setattr(dsm.db, "datastore_insert_row",
                         lambda ns_id, rid, data, *a, **k: (
@@ -201,7 +201,7 @@ BOUNDED = {"fields": [{"key": "fonction", "type": "text", "max_length": 60},
 @pytest.fixture()
 def bounded(store, monkeypatch):
     st, calls = store
-    monkeypatch.setattr(dsm.db, "get_datastore_namespace_by_id",
+    monkeypatch.setattr(dsm.db, "get_datastore_by_id",
                         lambda ns_id: {"id": ns_id, "schema": BOUNDED})
     monkeypatch.setattr(dsm.db, "datastore_get_row",
                         lambda ns_id, rid: {

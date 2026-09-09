@@ -65,7 +65,7 @@ def live(pg_dsn):
 def table(live):
     from oto_mcp import db
     ns = "camp-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore_namespace("user", "sub-agent", ns)
+    ns_id = db.create_datastore("user", "sub-agent", ns)
     for i in range(3):
         db.datastore_insert_row(ns_id, f"r{i}", {"siren": f"5511100{i}", "statut": "a_faire"})
     return ns, ns_id
@@ -257,7 +257,7 @@ async def test_the_middleware_pins_the_active_run_from_the_stack():
     await guide_run.push_run(ctx, "run-empile", "campagne")
 
     class _Msg:
-        name, arguments = "data_claim_next", {"namespace": "t", "worker": "w"}
+        name, arguments = "data_claim_next", {"datastore": "t", "worker": "w"}
 
     ctx.message = _Msg()
 

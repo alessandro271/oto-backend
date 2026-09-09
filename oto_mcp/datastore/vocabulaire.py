@@ -91,9 +91,17 @@ _ENFORCEMENT_PROBES = (
     ("type",
      {"strict": True, "fields": [{"key": "x", "type": "number"}]},
      {"x": "abc"}, None),
+    # ⚠️ Sonde CHANGÉE le 08/09/2026, et le motif importe. Elle opposait un schéma
+    # strict à un schéma libre sur une valeur de mauvais TYPE — ce qui supposait que le
+    # type ne soit pas vérifié sans `strict`. Depuis que le type déclaré s'arme
+    # lui-même, les deux refusent, et la sonde concluait que `strict` n'était pas
+    # appliqué. Elle mesurait une différence qui n'existe plus.
+    # Le témoin repose désormais sur les `options`, qui restent inertes sans `strict`
+    # (mesuré le 08/09 : 181 tableaux du parc en portent sans les faire respecter).
     ("strict",
-     {"strict": True, "fields": [{"key": "x", "type": "number"}]}, {"x": "abc"},
-     ({"fields": [{"key": "x", "type": "number"}]}, {"x": "abc"})),
+     {"strict": True, "fields": [{"key": "x", "type": "enum", "options": ["a"]}]},
+     {"x": "b"},
+     ({"fields": [{"key": "x", "type": "enum", "options": ["a"]}]}, {"x": "b"})),
     ("lifecycle",
      {"fields": [{"key": "s", "role": "status",
                   "lifecycle": {"states": ["a", "b"]}}]},
@@ -195,7 +203,7 @@ def _read_keys() -> frozenset:
     (#315/#317), et les figer ici en dur les laisserait dans le vocabulaire après
     que le code aura cessé de les lire.
 
-    La dérivation surestime (elle ramasse aussi des clés de ligne ou de namespace,
+    La dérivation surestime (elle ramasse aussi des clés de ligne ou de datastore,
     `data`, `owner_id`…) et c'est le BON côté de l'erreur : on signale moins, jamais
     à tort. Un faux positif — accuser une clé qui marche — est ce qui ferait ignorer
     l'avertissement, donc le rendrait inutile.

@@ -78,11 +78,11 @@ def test_allowlist_couples_datastore_when_exposed():
         assert sp.current_allowlist() == {"fr_search"}
     finally:
         sp._CTX.reset(tok)
-    # exposé LECTURE → data_list_namespaces + data_rows ajoutés, PAS l'écriture.
+    # exposé LECTURE → data_list_datastores + data_rows ajoutés, PAS l'écriture.
     tok = sp._CTX.set(sp.AnonContext(1, 99, frozenset({"fr_search"}), datastore_exposed=True))
     try:
         allow = sp.current_allowlist()
-        assert {"fr_search", "data_list_namespaces", "data_rows"} <= allow
+        assert {"fr_search", "data_list_datastores", "data_rows"} <= allow
         assert "data_write" not in allow and "data_set_schema" not in allow
         assert sp.current_anon_datastore_exposed() is True
         assert sp.current_anon_datastore_writable() is False
@@ -205,7 +205,7 @@ async def test_anon_visibility_allowlist(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_anon_visibility_exposes_datastore_read(monkeypatch):
-    # datastore exposé (lecture) → data_list_namespaces/data_rows VISIBLES au handshake
+    # datastore exposé (lecture) → data_list_datastores/data_rows VISIBLES au handshake
     # (le bug #193 : le flag rendait résolvable mais laissait masqué). data_write reste
     # masqué sans opt-in write.
     hidden = {}
@@ -217,7 +217,7 @@ async def test_anon_visibility_exposes_datastore_read(monkeypatch):
     tok = sp._CTX.set(sp.AnonContext(1, 99, frozenset({"fr_search"}), datastore_exposed=True))
     try:
         mw = av.AnonymousVisibilityMiddleware()
-        all_names = ["fr_search", "data_list_namespaces", "data_rows",
+        all_names = ["fr_search", "data_list_datastores", "data_rows",
                      "data_write", "serper_search"]
         await mw.on_initialize(_FakeMwCtx(all_names), lambda c: _async_none())
     finally:

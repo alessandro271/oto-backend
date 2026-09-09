@@ -104,7 +104,7 @@ def _table(schema) -> tuple:
     """Un tableau neuf portant UNE ligne à traiter."""
     from oto_mcp import db
     ns = "file-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore_namespace("user", "sub-agent", ns)
+    ns_id = db.create_datastore("user", "sub-agent", ns)
     st = _store()
     st.set_schema(ns, schema)
     st.append_row(ns, {"societe": "ENTREPRISE TEMOIN", "statut": "a_faire"})

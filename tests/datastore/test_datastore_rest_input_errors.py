@@ -42,11 +42,11 @@ class _Store:
     def __init__(self, exc=None):
         self.exc = exc or ValueError(self.MSG)
 
-    def append_row(self, namespace, data, *, trace=None, readonly_override=False, origine_override=False,
+    def append_row(self, datastore, data, *, trace=None, readonly_override=False, origine_override=False,
                    donnees_d_origine=False, **_):
         raise self.exc
 
-    def update_row(self, namespace, row_id, patch, *, trace=None, readonly_override=False, origine_override=False,
+    def update_row(self, datastore, row_id, patch, *, trace=None, readonly_override=False, origine_override=False,
                    donnees_d_origine=False, **_):
         raise self.exc
 
@@ -60,7 +60,7 @@ def _store(monkeypatch, exc=None):
 
 def test_append_refusal_is_an_actionable_400(monkeypatch):
     _store(monkeypatch)
-    status, corps = call("me.datastore.append_row", path_params={"namespace": "160"},
+    status, corps = call("me.datastore.append_row", path_params={"datastore": "160"},
                          body={"_id": "019f-x", "statut": "e"})
     assert (status, corps["error"]) == (400, "invalid_row_input")
     # le message du store arrive JUSQU'À l'appelant : c'est ce qui rend la reprise
@@ -71,7 +71,7 @@ def test_append_refusal_is_an_actionable_400(monkeypatch):
 def test_patch_refusal_is_an_actionable_400(monkeypatch):
     _store(monkeypatch)
     status, corps = call("me.datastore.update_row",
-                         path_params={"namespace": "160", "row_id": "row-1"},
+                         path_params={"datastore": "160", "row_id": "row-1"},
                          body={"_id": "019f-autre"})
     assert (status, corps["error"]) == (400, "invalid_row_input")
     assert corps["detail"]
@@ -83,7 +83,7 @@ def test_business_key_collision_on_patch_is_also_a_400(monkeypatch):
     _store(monkeypatch, ValueError("un autre enregistrement porte déjà siren=111 "
                                    "(clé métier unique) — impossible de dupliquer"))
     status, corps = call("me.datastore.update_row",
-                         path_params={"namespace": "160", "row_id": "row-1"},
+                         path_params={"datastore": "160", "row_id": "row-1"},
                          body={"siren": "111"})
     assert (status, corps["error"]) == (400, "invalid_row_input")
     assert "clé métier unique" in corps["detail"]
@@ -96,7 +96,7 @@ def test_a_schema_refusal_keeps_its_own_code(monkeypatch):
     _store(monkeypatch, RowValidationError(["statut : transition 'clos' → 'neuf' "
                                             "non déclarée"]))
     status, corps = call("me.datastore.update_row",
-                         path_params={"namespace": "160", "row_id": "row-1"},
+                         path_params={"datastore": "160", "row_id": "row-1"},
                          body={"statut": "neuf"})
     assert (status, corps["error"]) == (400, "row_invalid")
     assert "transition" in corps["detail"]

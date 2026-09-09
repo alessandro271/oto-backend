@@ -67,13 +67,13 @@ class _Store:
     l'avertissement se déclenchait à tort."""
     # Relevé de résolution du store (`DatastorePg.dernier_tableau`) : les
     # remises y prennent l'IDENTITÉ du tableau — nom canonique + `ns_id`.
-    dernier_tableau = {"ns_id": 174, "namespace": "vivier"}
+    dernier_tableau = {"ns_id": 174, "datastore": "vivier"}
 
-    def get_schema(self, namespace):
+    def get_schema(self, datastore):
         return {"fields": [{"key": "ref", "type": "text"},
                            {"key": "effectif", "type": "text"}]}
 
-    def cursor_rows(self, namespace, **kw):
+    def cursor_rows(self, datastore, **kw):
         return {"rows": [{"_id": "1", "ref": "r1", "effectif": "12"},
                          {"_id": "2", "ref": "r2", "effectif": "8"}],
                 "next_cursor": None}
@@ -81,7 +81,7 @@ class _Store:
     def count_rows(self, *a, **k):
         return 2
 
-    def _resolve(self, namespace):
+    def _resolve(self, datastore):
         raise RuntimeError("le relevé des clés ne doit pas être atteint ici")
 
 
@@ -93,7 +93,7 @@ def _rows(monkeypatch, **kw):
     monkeypatch.setattr(D, "make_store", lambda sub: _Store())
     reg = _Reg()
     D.register(reg)
-    return reg.tools["data_rows"](namespace="t", **kw)
+    return reg.tools["data_rows"](datastore="t", **kw)
 
 
 def test_le_CHEMIN_ne_signale_plus_une_adresse_de_couche_valide(monkeypatch):

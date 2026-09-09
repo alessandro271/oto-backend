@@ -33,7 +33,7 @@ from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
 
 CTX = ResolvedCtx(sub="u1", org_id=None)
 
-_NS_ROW = {"id": 3, "namespace": "clients", "owner_type": "user", "owner_id": "u1",
+_NS_ROW = {"id": 3, "datastore": "clients", "owner_type": "user", "owner_id": "u1",
            "created_at": "2026-06-01 10:00:00"}
 _PROJ_ROW = {"id": 7, "name": "Proj", "owner_type": "user", "owner_id": "u1",
              "archived_at": None, "created_at": "2026-06-30 09:00:00"}

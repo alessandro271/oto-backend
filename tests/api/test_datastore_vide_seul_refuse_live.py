@@ -99,7 +99,7 @@ def fiche(live):
     from oto_mcp.datastore.core import make_store
 
     ns = "vivier-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore_namespace("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, ns)
     row = make_store(SUB).append_row(
         ns, {"siren": "552032534", "contacts": ["a@exemple.invalid"], "statut": "nouveau"})
     return ns, ns_id, row["_id"]
@@ -142,7 +142,7 @@ async def test_face_MCP_une_liste_vide_SEULE_est_refusee_en_nommant_la_porte(
     ns, ns_id, rid = fiche
 
     with pytest.raises(McpError) as e:
-        data_write(namespace=ns, id=rid, row={"contacts": []})
+        data_write(datastore=ns, id=rid, row={"contacts": []})
 
     message = str(e.value)
     assert "contacts" in message, message
@@ -155,7 +155,7 @@ async def test_face_MCP_une_liste_vide_SEULE_est_refusee_en_nommant_la_porte(
 
 def test_face_REST_une_liste_vide_SEULE_rend_400_et_pas_200(client, fiche):
     ns, ns_id, rid = fiche
-    r = client.patch(f"/api/datastore/namespaces/{ns}/rows/{rid}", headers=_h(),
+    r = client.patch(f"/api/datastores/{ns}/rows/{rid}", headers=_h(),
                      json={"contacts": []})
     assert r.status_code == 400, r.text
     detail = r.json().get("detail", "")
@@ -167,7 +167,7 @@ def test_la_chaine_vide_et_lobjet_vide_SEULS_sont_refuses_pareil(client, fiche):
     """La règle porte sur la FORME du geste, pas sur le type de la valeur."""
     ns, _ns_id, rid = fiche
     for valeur in ("", {}):
-        r = client.patch(f"/api/datastore/namespaces/{ns}/rows/{rid}", headers=_h(),
+        r = client.patch(f"/api/datastores/{ns}/rows/{rid}", headers=_h(),
                          json={"statut": valeur})
         assert r.status_code == 400, (valeur, r.text)
 
@@ -176,7 +176,7 @@ def test_le_null_nomme_EST_la_porte_et_elle_est_ouverte(client, fiche):
     """Le refus ne vaut que si ce qu'il désigne fonctionne. C'est le besoin
     d'origine de l'issue : retirer le dernier contact d'une fiche."""
     ns, ns_id, rid = fiche
-    r = client.patch(f"/api/datastore/namespaces/{ns}/rows/{rid}", headers=_h(),
+    r = client.patch(f"/api/datastores/{ns}/rows/{rid}", headers=_h(),
                      json={"contacts": None})
     assert r.status_code == 200, r.text
     assert _blob(ns_id, rid)["contacts"] is None
@@ -187,7 +187,7 @@ def test_le_null_nomme_EST_la_porte_et_elle_est_ouverte(client, fiche):
 def test_deux_vides_ensemble_et_rien_dautre_sont_refuses_ensemble(client, fiche):
     """« Rien d'autre posé » se juge sur le GESTE entier, pas colonne par colonne."""
     ns, ns_id, rid = fiche
-    r = client.patch(f"/api/datastore/namespaces/{ns}/rows/{rid}", headers=_h(),
+    r = client.patch(f"/api/datastores/{ns}/rows/{rid}", headers=_h(),
                      json={"contacts": [], "statut": ""})
     assert r.status_code == 400, r.text
     blob = _blob(ns_id, rid)
@@ -208,7 +208,7 @@ async def test_la_fiche_ENTIERE_reemise_avec_un_vide_NE_LEFFACE_PAS(
     data_write = await _data_write(monkeypatch)
     ns, ns_id, rid = fiche
 
-    out = data_write(namespace=ns, id=rid, row={
+    out = data_write(datastore=ns, id=rid, row={
         "qualification": {"valeur": "indetermine", "comment": "registre — rien trouvé"},
         "contacts": [],
         "notes_verification": "registre consulté ; aucune page au nom de la structure",
@@ -227,7 +227,7 @@ async def test_la_fiche_ENTIERE_reemise_avec_un_vide_NE_LEFFACE_PAS(
 
 def test_face_REST_la_fiche_reemise_NE_LEFFACE_PAS_non_plus(client, fiche):
     ns, ns_id, rid = fiche
-    r = client.patch(f"/api/datastore/namespaces/{ns}/rows/{rid}", headers=_h(),
+    r = client.patch(f"/api/datastores/{ns}/rows/{rid}", headers=_h(),
                      json={"contacts": [], "statut": "traite"})
     assert r.status_code == 200, r.text
     assert _blob(ns_id, rid)["contacts"] == ["a@exemple.invalid"], r.text
@@ -239,7 +239,7 @@ def test_reecrire_la_valeur_IDENTIQUE_reste_un_no_op_accepte(client, fiche):
     """Le round-trip qui réémet une valeur inchangée POSE une valeur : ce n'est pas
     un vide, et le refuser arrêterait la flotte (#623 → #625)."""
     ns, _ns_id, rid = fiche
-    r = client.patch(f"/api/datastore/namespaces/{ns}/rows/{rid}", headers=_h(),
+    r = client.patch(f"/api/datastores/{ns}/rows/{rid}", headers=_h(),
                      json={"statut": "nouveau"})
     assert r.status_code == 200, r.text
 
@@ -251,9 +251,9 @@ def test_un_vide_sur_une_colonne_DEJA_vide_passe_et_ne_dit_rien(client, live):
     from oto_mcp.datastore.core import make_store
 
     ns = "neuve-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore_namespace("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, ns)
     rid = make_store(SUB).append_row(ns, {"siren": "552032534"})["_id"]
-    r = client.patch(f"/api/datastore/namespaces/{ns}/rows/{rid}", headers=_h(),
+    r = client.patch(f"/api/datastores/{ns}/rows/{rid}", headers=_h(),
                      json={"contacts": []})
     assert r.status_code == 200, r.text
     assert _blob(ns_id, rid)["contacts"] == []
@@ -269,7 +269,7 @@ def test_un_LOT_qui_porte_la_cle_metier_est_une_REEMISSION_donc_preserve(live):
     from oto_mcp.datastore.core import make_store
 
     ns = "lot-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore_namespace("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, ns)
     store = make_store(SUB)
     store.set_schema(ns, {"key": "siren", "fields": [{"key": "siren", "type": "text"}]})
     store.write_rows(ns, [{"siren": "552032534", "contacts": ["a@exemple.invalid"]}])

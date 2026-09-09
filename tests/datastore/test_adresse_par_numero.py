@@ -8,7 +8,7 @@ L'aller-retour que ce banc ferme, et il était rompu en production :
 3. le modèle repasse `609` tel quel à `data_write`… qui le REFUSE :
    `Input should be a valid string [type=string_type, input_value=609, input_type=int]`.
 
-⚠️ **Ce n'était pas une régression de code.** L'annotation `namespace: str` de
+⚠️ **Ce n'était pas une régression de code.** L'annotation `datastore: str` de
 `data_write` datait du 18/06/2026 et n'avait jamais gêné personne : rien ne disait à
 l'agent de passer un nombre. C'est la moitié SERVIE de l'aller-retour, posée le
 07/09/2026, qui a rendu l'autre moitié fausse. **Un contrat se casse en devenant vrai
@@ -44,7 +44,7 @@ _TOOLS = pathlib.Path(inspect.getfile(__import__("oto_mcp.tools.datastore",
 
 
 def _outils_et_leur_adresse() -> dict:
-    """`{nom d'outil: l'annotation de son paramètre `namespace`}`, lue au SOURCE.
+    """`{nom d'outil: l'annotation de son paramètre `datastore`}`, lue au SOURCE.
 
     Par AST plutôt que par introspection : les outils sont enregistrés à l'intérieur
     d'une fonction d'installation, et rien ne les expose une fois le serveur monté."""
@@ -54,7 +54,7 @@ def _outils_et_leur_adresse() -> dict:
         if not isinstance(n, ast.FunctionDef) or not n.name.startswith("data_"):
             continue
         for arg in list(n.args.args) + list(n.args.kwonlyargs):
-            if arg.arg == "namespace" and arg.annotation is not None:
+            if arg.arg == "datastore" and arg.annotation is not None:
                 out[n.name] = ast.unparse(arg.annotation)
     return out
 
@@ -85,21 +85,21 @@ def test_chaque_outil_accepte_le_NUMERO_comme_adresse():
 def test_la_coercition_normalise_vers_le_texte(recu, attendu):
     """Un seul chemin de résolution en aval : on normalise à l'entrée plutôt que
     d'apprendre à chaque appelant à gérer deux formes."""
-    M = create_model("call", namespace=(Adresse, ...))
+    M = create_model("call", datastore=(Adresse, ...))
 
-    obtenu = M(namespace=recu).namespace
+    obtenu = M(datastore=recu).datastore
 
     assert obtenu == attendu
     assert isinstance(obtenu, str), "l'aval manipule du texte, et lui seul"
 
 
 def test_un_BOOLEEN_ne_devient_pas_un_tableau():
-    """`bool` est un `int` en Python. Sans cette borne, `namespace=True` deviendrait
+    """`bool` est un `int` en Python. Sans cette borne, `datastore=True` deviendrait
     le tableau « True » — une coercition silencieuse vers une adresse inventée."""
-    M = create_model("call", namespace=(Adresse, ...))
+    M = create_model("call", datastore=(Adresse, ...))
 
     with pytest.raises(Exception):
-        M(namespace=True)
+        M(datastore=True)
 
 
 def test_les_ENTREES_REST_acceptent_le_numero_aussi():
@@ -109,12 +109,12 @@ def test_les_ENTREES_REST_acceptent_le_numero_aussi():
 
     modeles = [getattr(R, n) for n in dir(R) if n.endswith("Input")]
     portants = [M for M in modeles
-                if getattr(M, "model_fields", {}).get("namespace") is not None]
+                if getattr(M, "model_fields", {}).get("datastore") is not None]
     assert portants, "aucun modèle d'entrée à éprouver : la sonde est aveugle"
 
     for M in portants:
-        kw = {"namespace": 609}
+        kw = {"datastore": 609}
         for cle, champ in M.model_fields.items():
-            if cle != "namespace" and champ.is_required():
+            if cle != "datastore" and champ.is_required():
                 kw[cle] = {} if "dict" in str(champ.annotation) else "x"
-        assert M(**kw).namespace == "609", f"{M.__name__} refuse le numéro"
+        assert M(**kw).datastore == "609", f"{M.__name__} refuse le numéro"

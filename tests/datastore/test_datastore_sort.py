@@ -3,7 +3,7 @@
 La couche SQL portait déjà le tri (`db.datastore_list_rows(order_by=…)`, chemin
 dashboard) ; ce qui manquait, c'est sa traduction depuis la face MCP. Sans elle,
 répondre à « les 10 posts les plus récents » sur un gros vivier obligeait à
-dumper le namespace puis à retrier en local.
+dumper le datastore puis à retrier en local.
 
 Le point délicat n'est pas le tri, c'est la PAGINATION : le curseur keyset
 (`row_id`) n'a de sens que dans l'ordre de création, donc un appel trié pagine

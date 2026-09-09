@@ -42,7 +42,7 @@ def test_declared_keys_are_the_top_level_ones():
         "libre", "contacts"}
 
 
-def test_declared_keys_on_a_schemaless_namespace():
+def test_declared_keys_on_a_schemaless_datastore():
     """Tableau libre : aucune colonne déclarée, donc l'échantillon reste le seul
     juge — le contrôle doit continuer de fonctionner, pas disparaître."""
     assert dsv2.top_level_keys(None) == set()
@@ -62,15 +62,15 @@ class _Store:
     """Store minimal : une page où AUCUNE ligne ne porte `notes_verification`."""
     # Relevé de résolution du store (`DatastorePg.dernier_tableau`) : les
     # remises y prennent l'IDENTITÉ du tableau — nom canonique + `ns_id`.
-    dernier_tableau = {"ns_id": 174, "namespace": "vivier"}
+    dernier_tableau = {"ns_id": 174, "datastore": "vivier"}
 
     def __init__(self, schema=_SCHEMA):
         self._schema = schema
 
-    def get_schema(self, namespace):
+    def get_schema(self, datastore):
         return self._schema
 
-    def cursor_rows(self, namespace, **kw):
+    def cursor_rows(self, datastore, **kw):
         return {"rows": [{"_id": "1", "raison_sociale": "ACME"},
                          {"_id": "2", "raison_sociale": "BETA"}],
                 "next_cursor": None}
@@ -87,7 +87,7 @@ def _rows(monkeypatch, store, **kw):
     monkeypatch.setattr(D, "make_store", lambda sub: store)
     reg = _Reg()
     D.register(reg)
-    return reg.tools["data_rows"](namespace="t", **kw)
+    return reg.tools["data_rows"](datastore="t", **kw)
 
 
 class _Reg:
@@ -122,13 +122,13 @@ def test_an_orphan_column_is_not_a_typo(monkeypatch):
     fausse. Vécu à la vérification en préprod : `note`, écrite sur 1 ligne de 7,
     accusée sur la page qui ne la portait pas."""
     from oto_mcp.tools import datastore as D
-    monkeypatch.setattr(D, "_namespace_keys", lambda store, ns: {"note"})
+    monkeypatch.setattr(D, "_datastore_keys", lambda store, ns: {"note"})
     out = _rows(monkeypatch, _Store(), fields=["nom", "note", "raison_social"])
     assert "note" not in out.get("warning", ""), "orpheline ≠ faute de frappe"
     assert "raison_social" in out["warning"], "la vraie faute reste signalée"
 
 
-def test_the_namespace_scan_only_runs_when_about_to_accuse(monkeypatch):
+def test_the_datastore_scan_only_runs_when_about_to_accuse(monkeypatch):
     """Le relevé des clés coûte une requête : il ne doit se déclencher que sur le
     chemin où l'on s'apprête à écrire un avertissement, pas à chaque lecture."""
     from oto_mcp.tools import datastore as D
@@ -136,7 +136,7 @@ def test_the_namespace_scan_only_runs_when_about_to_accuse(monkeypatch):
     def _boom(store, ns):
         raise AssertionError("relevé inutile : rien n'était douteux")
 
-    monkeypatch.setattr(D, "_namespace_keys", _boom)
+    monkeypatch.setattr(D, "_datastore_keys", _boom)
     out = _rows(monkeypatch, _Store(), fields=["raison_sociale"])
     assert "warning" not in out
 

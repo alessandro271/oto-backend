@@ -11,7 +11,7 @@ _PROJECT = {"id": 5, "name": "Projet démo", "brief_md": "Un projet de démonstr
 
 _LINKS = [
     {"target_type": "procedure", "target_ref": "11", "label": "Enrichir", "title": "Enrichissement"},
-    {"target_type": "tableau", "target_ref": "22", "label": "Prospects", "namespace": "prospects"},
+    {"target_type": "tableau", "target_ref": "22", "label": "Prospects", "datastore": "prospects"},
     {"target_type": "connecteur", "target_ref": "serper"},  # ignoré (pas navigable)
 ]
 
@@ -157,8 +157,8 @@ def test_procedure_not_linked_is_404(monkeypatch):
 # ── Datastore ────────────────────────────────────────────────────────────────
 def test_data_allowed_on_secret(monkeypatch):
     _wire(monkeypatch)
-    monkeypatch.setattr(db, "get_datastore_namespace_by_id",
-                        lambda rid: {"namespace": "prospects", "schema": None})
+    monkeypatch.setattr(db, "get_datastore_by_id",
+                        lambda rid: {"datastore": "prospects", "schema": None})
     monkeypatch.setattr(db, "datastore_count_rows", lambda rid: 2)
     monkeypatch.setattr(db, "datastore_list_rows",
                         lambda rid, **kw: [{"data": {"nom": "Alice", "email": "a@x.fr"}},
@@ -172,7 +172,7 @@ def test_data_allowed_on_secret(monkeypatch):
 def test_data_denied_when_anonymous(monkeypatch):
     # `anonymous` ne sert pas les lignes du datastore (même si le tableau est lié).
     _wire(monkeypatch)
-    monkeypatch.setattr(db, "get_datastore_namespace_by_id",
+    monkeypatch.setattr(db, "get_datastore_by_id",
                         lambda rid: (_ for _ in ()).throw(AssertionError("ne doit pas lire")))
     proj = {**_PROJECT, "mcp_access": "anonymous"}
     html, status = share_ui.build_page(proj, "/data/22", connect_url="u")
@@ -182,7 +182,7 @@ def test_data_denied_when_anonymous(monkeypatch):
 def test_data_denied_without_the_datastore_optin(monkeypatch):
     """Même refus quand l'opt-in `mcp_expose_datastore` n'est pas posé : 404, sans lecture."""
     _wire(monkeypatch)
-    monkeypatch.setattr(db, "get_datastore_namespace_by_id",
+    monkeypatch.setattr(db, "get_datastore_by_id",
                         lambda rid: (_ for _ in ()).throw(AssertionError("ne doit pas lire")))
     proj = {**_PROJECT, "mcp_expose_datastore": False}
     _, status = share_ui.build_page(proj, "/data/22", connect_url="u")
@@ -191,7 +191,7 @@ def test_data_denied_without_the_datastore_optin(monkeypatch):
 
 def test_data_not_linked_is_404(monkeypatch):
     _wire(monkeypatch)
-    monkeypatch.setattr(db, "get_datastore_namespace_by_id",
+    monkeypatch.setattr(db, "get_datastore_by_id",
                         lambda rid: (_ for _ in ()).throw(AssertionError("hors allowlist")))
     html, status = share_ui.build_page(_PROJECT, "/data/99", connect_url="u")
     assert status == 404
@@ -208,7 +208,7 @@ _LINKS_BY_NAME = [
 
 def test_index_lists_tableau_linked_by_name(monkeypatch):
     _wire(monkeypatch, links=_LINKS_BY_NAME)
-    monkeypatch.setattr(db, "get_datastore_namespace",
+    monkeypatch.setattr(db, "get_datastore",
                         lambda ot, oid, name: {"id": 65} if name == "accords_dormants" else None)
     html, _ = share_ui.build_page(_PROJECT_OWNED, "/", connect_url="u")
     assert "Vivier national" in html and "/data/65" in html
@@ -216,10 +216,10 @@ def test_index_lists_tableau_linked_by_name(monkeypatch):
 
 def test_data_allowed_via_name_link(monkeypatch):
     _wire(monkeypatch, links=_LINKS_BY_NAME)
-    monkeypatch.setattr(db, "get_datastore_namespace",
+    monkeypatch.setattr(db, "get_datastore",
                         lambda ot, oid, name: {"id": 65} if name == "accords_dormants" else None)
-    monkeypatch.setattr(db, "get_datastore_namespace_by_id",
-                        lambda rid: {"namespace": "accords_dormants", "schema": None})
+    monkeypatch.setattr(db, "get_datastore_by_id",
+                        lambda rid: {"datastore": "accords_dormants", "schema": None})
     monkeypatch.setattr(db, "datastore_count_rows", lambda rid: 1)
     monkeypatch.setattr(db, "datastore_list_rows", lambda rid, **kw: [{"data": {"siren": "123"}}])
     html, status = share_ui.build_page(_PROJECT_OWNED, "/data/65", connect_url="u")
@@ -340,7 +340,7 @@ _LINKS_WITH_ROLE = [
     {"target_type": "procedure", "target_ref": "11", "label": "Enrichir",
      "title": "Enrichissement", "role": "Ce que chaque agent worker exécute, une ligne à la fois."},
     {"target_type": "tableau", "target_ref": "22", "label": "Prospects",
-     "namespace": "prospects", "role": "Périmètre sourcé par convention collective."},
+     "datastore": "prospects", "role": "Périmètre sourcé par convention collective."},
 ]
 
 

@@ -75,7 +75,7 @@ async def test_ce_que_le_filtre_a_ecarte_est_DIT(compte):
 @pytest.mark.asyncio
 async def test_une_reponse_TRONQUEE_le_dit(compte):
     """La branche « trop de résultats » était la seule non traitée : la branche zéro
-    rendait la carte des namespaces, celle-ci ne disait rien. Un agent qui reçoit 2
+    rendait la carte des datastores, celle-ci ne disait rien. Un agent qui reçoit 2
     entrées sur 40 correspondances doit l'apprendre de la réponse."""
     out = await _appelle({"query": "a", "limit": 2})
     assert out["shown"] == 2

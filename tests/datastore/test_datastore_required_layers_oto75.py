@@ -146,14 +146,33 @@ def test_les_colonnes_que_l_appelant_n_ECRIT_pas_sont_hors_de_portee(cran):
     assert dsv2.validate_row(schema, {"q": valeur}, written={"q"}) == []
 
 
-def test_la_couche_posee_par_la_PLATEFORME_ne_se_reclame_pas():
-    """Sur une colonne `origine: "system"`, la plateforme pose la couche et REFUSE que
-    l'appelant la nomme. L'exiger serait un requis impossible à satisfaire."""
+def test_la_couche_dorigine_se_reclame_comme_les_autres():
+    """⚠️ Ce banc disait L'INVERSE jusqu'au 08/09/2026, et il avait raison à l'époque.
+
+    Tant que `origine: "system"` armait une capture, exiger la couche `origine` sur une
+    colonne qui la portait était un requis impossible : la plateforme la posait
+    elle-même et refusait que l'appelant la nomme. L'exemption était juste.
+
+    Le cran a été supprimé au profit de `donnees_d_origine`, déclaré à l'import. Plus
+    rien ne pose cette couche — l'exemption désarmait donc une exigence que rien ne
+    satisfaisait, en silence. Une colonne pouvait déclarer `required_layers:
+    ["origine"]` et n'exiger RIEN. Mesuré avant de la retirer : zéro colonne du parc
+    combinait les deux, le piège vivait dans le code et pas dans les données.
+
+    *Un banc qui fige un comportement doit tomber quand ce comportement change ; c'est
+    à ça qu'il sert.*"""
     schema = {"fields": [{"key": "q", "type": "text", "origine": "system",
                           "required_layers": ["origine", "comment"]}]}
-    assert dsv2.required_layers_of(schema["fields"][0]) == ("comment",)
+    assert dsv2.required_layers_of(schema["fields"][0]) == ("origine", "comment")
+    # `comment` seul ne suffit plus : la colonne exige les DEUX couches, et c'est le
+    # sens du correctif — l'exemption laissait passer ce cas en faisant croire que
+    # l'exigence était satisfaite.
     assert dsv2.validate_row(schema, {"q": {"valeur": "x", "comment": "src"}},
-                             written={"q"}) == []
+                             written={"q"}) != []
+    # avec les deux, la valeur entre.
+    assert dsv2.validate_row(
+        schema, {"q": {"valeur": "x", "comment": "src", "origine": "x"}},
+        written={"q"}) == []
 
 
 # ── le refus DIT OÙ écrire ──────────────────────────────────────────────────
@@ -269,7 +288,7 @@ def _store():
 def _table():
     from oto_mcp import db
     ns = "rl75-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore_namespace("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, ns)
     _store().set_schema(ns, _SCHEMA)
     return ns, ns_id
 
@@ -320,7 +339,7 @@ def test_face_OUTIL_le_refus_tombe_a_l_ecriture(live, face_outil):
 
     ns, ns_id = _table()
     with pytest.raises(McpError) as capture:
-        _appeler(face_outil, namespace=ns, rows=[{"ref": "r1", "qualif": "PME"}])
+        _appeler(face_outil, datastore=ns, rows=[{"ref": "r1", "qualif": "PME"}])
     assert "qualif" in capture.value.error.message
     assert '"comment": "…"' in capture.value.error.message
     assert _lignes(ns_id) == []
@@ -328,7 +347,7 @@ def test_face_OUTIL_le_refus_tombe_a_l_ecriture(live, face_outil):
 
 def test_face_OUTIL_la_valeur_avec_sa_provenance_passe(live, face_outil):
     ns, ns_id = _table()
-    _appeler(face_outil, namespace=ns,
+    _appeler(face_outil, datastore=ns,
              rows=[{"ref": "r1", "qualif": {"valeur": "PME", "comment": "INSEE"}}])
     (ligne,) = _lignes(ns_id)
     assert ligne["qualif"] == {"valeur": "PME", "comment": "INSEE"}
@@ -342,7 +361,7 @@ def test_face_REST_le_refus_tombe_a_l_ecriture(live, monkeypatch):
 
     stub_authz(monkeypatch, org_id=None)
     ns, ns_id = _table()
-    code, corps = call("me.datastore.append_row", path_params={"namespace": ns},
+    code, corps = call("me.datastore.append_row", path_params={"datastore": ns},
                        body={"ref": "r1", "qualif": "PME"}, sub=SUB)
     assert code == 400 and corps["error"] == "row_invalid"
     assert "qualif" in corps["detail"] and '"comment": "…"' in corps["detail"]
@@ -362,14 +381,14 @@ def test_face_REST_le_PATCH_partiel_reste_ecrivable(live, monkeypatch):
     db.datastore_insert_row(ns_id, "r-vieille", {"ref": "r1", "qualif": "PME"})
 
     code, corps = call("me.datastore.update_row",
-                       path_params={"namespace": ns, "row_id": "r-vieille"},
+                       path_params={"datastore": ns, "row_id": "r-vieille"},
                        body={"libre": "note"}, sub=SUB)
     assert code == 200, corps
     assert _lignes(ns_id)[0]["libre"] == "note"
 
     # …et la MÊME ligne refuse dès que le geste réécrit la colonne gardée
     code, corps = call("me.datastore.update_row",
-                       path_params={"namespace": ns, "row_id": "r-vieille"},
+                       path_params={"datastore": ns, "row_id": "r-vieille"},
                        body={"qualif": "ETI"}, sub=SUB)
     assert code == 400 and corps["error"] == "row_invalid"
     assert "qualif" in corps["detail"]
@@ -390,7 +409,7 @@ def test_store_une_pose_portant_la_liste_VIDE_passe(live):
     from oto_mcp import db
 
     ns = "rl75v-" + uuid.uuid4().hex[:6]
-    db.create_datastore_namespace("user", SUB, ns)
+    db.create_datastore("user", SUB, ns)
     out = _store().set_schema(ns, _VIDE)
     assert out["schema"]["fields"][1]["required_layers"] == []
 
@@ -403,7 +422,7 @@ def test_store_un_patch_sur_une_AUTRE_colonne_d_un_schema_qui_porte_la_liste_vid
     from oto_mcp import db
 
     ns = "rl75p-" + uuid.uuid4().hex[:6]
-    db.create_datastore_namespace("user", SUB, ns)
+    db.create_datastore("user", SUB, ns)
     _store().set_schema(ns, _VIDE)
 
     out = _store().patch_schema(ns, fields=[{"key": "libre", "type": "text",
@@ -420,9 +439,9 @@ def test_store_une_ecriture_sur_la_colonne_a_liste_vide_n_exige_RIEN(live, face_
     from oto_mcp import db
 
     ns = "rl75w-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore_namespace("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, ns)
     _store().set_schema(ns, _VIDE)
-    _appeler(face_outil, namespace=ns, rows=[{"ref": "r1", "qualif": "PME"}])
+    _appeler(face_outil, datastore=ns, rows=[{"ref": "r1", "qualif": "PME"}])
     (ligne,) = _lignes(ns_id)
     assert ligne["qualif"] == "PME"
 
@@ -436,7 +455,7 @@ def test_store_une_pose_illisible_reste_REFUSEE_en_nommant_la_colonne(live, mauv
     from oto_mcp import db
 
     ns = "rl75r-" + uuid.uuid4().hex[:6]
-    db.create_datastore_namespace("user", SUB, ns)
+    db.create_datastore("user", SUB, ns)
     with pytest.raises(ValueError) as capture:
         _store().set_schema(ns, {"fields": [
             {"key": "ref", "type": "text"},

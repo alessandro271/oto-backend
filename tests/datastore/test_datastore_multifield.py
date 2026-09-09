@@ -35,7 +35,7 @@ def _ddl() -> str:
 
     Un banc qui RECONSTITUE le schéma mesure la représentation qu'on s'en fait, pas le
     système — et toujours dans le sens rassurant. Seule la FK vers `user_datastores`
-    saute (le barreau ne parle pas de propriété de namespace, et la porter obligerait
+    saute (le barreau ne parle pas de propriété de datastore, et la porter obligerait
     à monter la moitié du modèle pour tester une clause WHERE)."""
     from oto_mcp.db import _schema
     src = _schema._SCHEMA

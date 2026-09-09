@@ -110,21 +110,21 @@ class _FakeStore:
     def __init__(self, rows, schema):
         self._rows, self._schema = rows, schema
 
-    def list_namespaces(self):
-        return [{"namespace": "leads", "schema": self._schema, "shared": False,
+    def list_datastores(self):
+        return [{"datastore": "leads", "schema": self._schema, "shared": False,
                  "url": "https://dash/leads"}]
 
-    def list_rows(self, namespace, filter=None, limit=100, **_):
+    def list_rows(self, datastore, filter=None, limit=100, **_):
         rows = self._rows
         if filter:
             rows = [r for r in rows
                     if all(str(r.get(k)) == str(v) for k, v in filter.items())]
         return rows[:limit]
 
-    def get_url(self, namespace):
+    def get_url(self, datastore):
         return "https://dash/leads"
 
-    def get_schema(self, namespace):
+    def get_schema(self, datastore):
         return self._schema
 
 
@@ -154,7 +154,7 @@ def data_app(monkeypatch):
 
 
 def test_single_fiche_expands_nested_records(data_app):
-    card = data_app(namespace="leads", row="F-42")
+    card = data_app(datastore="leads", row="F-42")
     texts = " | ".join(card.texts())
     # titre = field role=title ; jamais le blob compact
     assert "F-42" in texts
@@ -172,7 +172,7 @@ def test_single_fiche_expands_nested_records(data_app):
 
 
 def test_filter_narrowing_to_one_row_auto_opens_detail(data_app):
-    card = data_app(namespace="leads", filter={"fact_id": "F-42"})
+    card = data_app(datastore="leads", filter={"fact_id": "F-42"})
     # vue détail auto ⇒ la sous-table contacts est présente
     assert any({c.key for c in t.attrs["columns"]} >= {"nom", "email"}
                for t in card.tables())
@@ -183,7 +183,7 @@ def test_list_view_columns_follow_schema_order(data_app):
     two = _FakeStore([FICHE, {**FICHE, "_id": "r2", "fact_id": "F-43"}], LEAD_SCHEMA)
     import oto_mcp.tools.datastore as ds
     ds.make_store = lambda sub: two  # store à 2 lignes
-    card = data_app(namespace="leads")
+    card = data_app(datastore="leads")
     tables = card.tables()
     assert tables, "vue liste attendue"
     keys = [c.key for c in tables[0].attrs["columns"]]
@@ -192,5 +192,5 @@ def test_list_view_columns_follow_schema_order(data_app):
 
 
 def test_unknown_row_returns_message(data_app):
-    card = data_app(namespace="leads", row="does-not-exist")
+    card = data_app(datastore="leads", row="does-not-exist")
     assert any("introuvable" in t.lower() for t in card.texts())

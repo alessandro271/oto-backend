@@ -35,24 +35,24 @@ class _Store:
     """Capture ce que la surface transmet, et rend de quoi finir l'appel."""
     # Relevé de résolution du store (`DatastorePg.dernier_tableau`) : les
     # remises y prennent l'IDENTITÉ du tableau — nom canonique + `ns_id`.
-    dernier_tableau = {"ns_id": 174, "namespace": "vivier"}
+    dernier_tableau = {"ns_id": 174, "datastore": "vivier"}
 
     def __init__(self):
         self.vu: dict = {}
 
-    def cursor_rows(self, namespace, **kw):
+    def cursor_rows(self, datastore, **kw):
         self.vu = dict(kw, _verbe="cursor_rows")
         return {"rows": [{"_id": "r1"}], "next_cursor": None}
 
-    def count_rows(self, namespace, **kw):
+    def count_rows(self, datastore, **kw):
         self.vu = dict(kw, _verbe="count_rows")
         return 7
 
-    def aggregate(self, namespace, **kw):
+    def aggregate(self, datastore, **kw):
         self.vu = dict(kw, _verbe="aggregate")
         return [{"count": 3}]
 
-    def get_schema(self, namespace):
+    def get_schema(self, datastore):
         return None
 
 
@@ -107,7 +107,7 @@ def test_the_schema_contract_says_how_to_name_a_row():
 
 def test_row_filters_reach_the_store(store):
     spec = [{"fields": _MULTI, "op": "in", "value": ["DRH"]}]
-    _tool("data_rows").fn(namespace="t", filters=spec)
+    _tool("data_rows").fn(datastore="t", filters=spec)
     assert store.vu.get("filters") == spec, (
         f"`filters` n'est pas parvenu au store : {store.vu}")
 
@@ -116,7 +116,7 @@ def test_the_count_path_carries_them_too(store):
     """`count_only` est un AUTRE chemin dans le même outil : c'est celui qu'on prend
     pour « combien de fiches… », donc exactement la question du barreau."""
     spec = [{"fields": _MULTI, "op": "not_empty"}]
-    out = _tool("data_rows").fn(namespace="t", filters=spec, count_only=True)
+    out = _tool("data_rows").fn(datastore="t", filters=spec, count_only=True)
     assert store.vu.get("_verbe") == "count_rows"
     assert store.vu.get("filters") == spec
     assert out == {"total": 7, "ns_id": 174}
@@ -128,20 +128,20 @@ def test_the_aggregate_carries_metrics_filters_and_pooled_grouping(store):
     metrics = [{"op": "count", "label": "fiches"},
                {"op": "count", "label": "avec_rh",
                 "where": [{"fields": _MULTI, "op": "in", "value": ["DRH", "DAF"]}]}]
-    _tool("data_aggregate").fn(namespace="t", group_by="tranche", metrics=metrics)
+    _tool("data_aggregate").fn(datastore="t", group_by="tranche", metrics=metrics)
     assert store.vu.get("metrics") == metrics, (
         "la condition portée par une métrique doit traverser INTACTE — c'est elle "
         f"qui fait le taux : {store.vu}")
 
 
 def test_a_pooled_grouping_reaches_the_store_as_a_list(store):
-    _tool("data_aggregate").fn(namespace="t", group_by=_MULTI)
+    _tool("data_aggregate").fn(datastore="t", group_by=_MULTI)
     assert store.vu.get("group_by") == _MULTI
 
 
 def test_the_existing_forms_are_untouched(store):
     """Le dictionnaire colonne→valeur porte tout l'usage d'aujourd'hui."""
-    _tool("data_rows").fn(namespace="t", filter={"statut": "ouvert"})
+    _tool("data_rows").fn(datastore="t", filter={"statut": "ouvert"})
     assert store.vu.get("filter") == {"statut": "ouvert"}
     assert store.vu.get("filters") is None
 
@@ -156,11 +156,11 @@ def test_a_misspelled_column_is_flagged_in_the_new_form_too(monkeypatch, store):
     ⚠️ Le suffixe de couche ne compte pas comme une faute : `contact1_email.origine`
     vise la colonne `contact1_email`, qui existe."""
     from oto_mcp.tools import datastore as D
-    store.cursor_rows = lambda namespace, **kw: {"rows": [], "next_cursor": None}
-    monkeypatch.setattr(D, "_namespace_keys", lambda s, ns: {"contact1_email"})
+    store.cursor_rows = lambda datastore, **kw: {"rows": [], "next_cursor": None}
+    monkeypatch.setattr(D, "_datastore_keys", lambda s, ns: {"contact1_email"})
     monkeypatch.setattr(D.dsv2, "top_level_keys", lambda schema: {"contact1_email"})
 
-    out = _tool("data_rows").fn(namespace="t", filters=[
+    out = _tool("data_rows").fn(datastore="t", filters=[
         {"fields": ["contact1_email", "contact1_emial.origine"], "op": "not_empty"}])
     assert "contact1_emial" in out.get("warning", ""), (
         f"la faute de frappe doit être signalée : {out}")

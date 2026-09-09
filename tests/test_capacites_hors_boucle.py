@@ -270,7 +270,7 @@ _PATCH_A_CLE = {"key": "siren",
 def tableau(base_jetable):
     from oto_mcp import db
     ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore_namespace("user", "sub-loop", ns)
+    db.create_datastore("user", "sub-loop", ns)
     return ns
 
 
@@ -283,7 +283,7 @@ def test_la_pose_dindex_de_lincident_ne_part_pas_de_la_boucle(tableau, monkeypat
     mouchards = _Mouchards(monkeypatch)
     tool = _mcp_adapter._make_tool(_cap_du_registre("me.datastore.patch_schema"))
 
-    boucle = _joue(lambda: tool(namespace=tableau, **_PATCH_A_CLE))
+    boucle = _joue(lambda: tool(datastore=tableau, **_PATCH_A_CLE))
 
     assert mouchards.ddl, (
         "garde INERTE : le chemin n'a jamais atteint le DDL, donc son vert ne prouve "
@@ -321,7 +321,7 @@ def test_le_meme_chemin_par_la_face_REST_ne_part_pas_non_plus_de_la_boucle(
                        "path": binding.path, "headers": [
                            (b"content-type", b"application/json")],
                        "query_string": b"",
-                       "path_params": {"namespace": tableau}},
+                       "path_params": {"datastore": tableau}},
                       receive=_receive)
         return await handler(req)
 
@@ -354,7 +354,7 @@ def test_le_mouchard_mord(tableau, monkeypatch):
 
     async def naif():
         ctx = ResolvedCtx(sub="sub-loop", org_id=None)
-        inp = cap.Input(namespace=tableau, **_PATCH_A_CLE)
+        inp = cap.Input(datastore=tableau, **_PATCH_A_CLE)
         cap.handler(ctx, inp)          # nûment, dans la boucle — la maladie
 
     boucle = _joue(naif)

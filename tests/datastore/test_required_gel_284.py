@@ -54,7 +54,7 @@ def _table(lignes=3):
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
     ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore_namespace("user", "sub-req", ns)
+    db.create_datastore("user", "sub-req", ns)
     st = make_store("sub-req")
     st.set_schema(ns, {"key": "ref", "fields": [{"key": "ref", "type": "text"},
                                                 {"key": "email", "type": "text"}]})
@@ -101,7 +101,7 @@ def test_pas_d_avertissement_quand_les_lignes_portent_deja_le_champ(live):
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
     ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore_namespace("user", "sub-req", ns)
+    db.create_datastore("user", "sub-req", ns)
     st = make_store("sub-req")
     st.set_schema(ns, {"key": "ref", "fields": [{"key": "ref", "type": "text"},
                                                 {"key": "secteur", "type": "text"}]})
@@ -116,7 +116,7 @@ def test_une_valeur_VIDE_compte_comme_absente(live):
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
     ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore_namespace("user", "sub-req", ns)
+    db.create_datastore("user", "sub-req", ns)
     st = make_store("sub-req")
     st.set_schema(ns, {"key": "ref", "fields": [{"key": "ref", "type": "text"},
                                                 {"key": "secteur", "type": "text"}]})

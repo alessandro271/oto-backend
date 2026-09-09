@@ -31,13 +31,13 @@ class _Store:
     """Capture ce que le handler transmet — c'est tout l'objet du test."""
     # Relevé de résolution du store (`DatastorePg.dernier_tableau`) : les
     # remises y prennent l'IDENTITÉ du tableau — nom canonique + `ns_id`.
-    dernier_tableau = {"ns_id": 174, "namespace": "vivier"}
+    dernier_tableau = {"ns_id": 174, "datastore": "vivier"}
 
     def __init__(self):
         self.seen = {}
 
-    def page_rows(self, namespace, **kw):
-        self.seen = {"namespace": namespace, **kw}
+    def page_rows(self, datastore, **kw):
+        self.seen = {"datastore": datastore, **kw}
         return {"rows": [], "total": 0, "offset": 0, "limit": 50}
 
 
@@ -52,7 +52,7 @@ def test_le_filtre_atteint_le_store(store):
     """Le cœur de #303 : déclaré ET transmis. Un test qui vérifierait seulement
     l'absence de 400 laisserait passer exactement le bug d'origine."""
     dr._list_rows(_Ctx(), dr.ListRowsInput(
-        namespace="leads", filter=json.dumps({"status": "pending"})))
+        datastore="leads", filter=json.dumps({"status": "pending"})))
     assert store.seen["filter"] == {"status": "pending"}
 
 
@@ -60,7 +60,7 @@ def test_les_deux_formes_de_filtre_cohabitent(store):
     """`filter` (égalité, chemin MCP et CLI) et `filters` (clauses riches, dashboard)
     doivent se cumuler : elles viennent de deux surfaces qui peuvent se croiser."""
     dr._list_rows(_Ctx(), dr.ListRowsInput(
-        namespace="leads",
+        datastore="leads",
         filter=json.dumps({"status": "pending"}),
         filters=json.dumps([{"field": "score", "op": "gte", "value": 10}])))
     assert store.seen["filter"] == {"status": "pending"}
@@ -69,7 +69,7 @@ def test_les_deux_formes_de_filtre_cohabitent(store):
 
 def test_sans_filtre_rien_n_est_invente(store):
     """Le cas nominal ne doit pas fabriquer de clause vide qui filtrerait tout."""
-    dr._list_rows(_Ctx(), dr.ListRowsInput(namespace="leads"))
+    dr._list_rows(_Ctx(), dr.ListRowsInput(datastore="leads"))
     assert store.seen["filter"] is None
     assert store.seen["filters"] is None
 
@@ -78,7 +78,7 @@ def test_un_filtre_illisible_est_refuse_et_nomme(store):
     """Refus distinct de `invalid_filters` : deux paramètres, deux diagnostics —
     sinon l'utilisateur corrige le mauvais."""
     with pytest.raises(AuthzDenied) as e:
-        dr._list_rows(_Ctx(), dr.ListRowsInput(namespace="leads", filter="{pas du json"))
+        dr._list_rows(_Ctx(), dr.ListRowsInput(datastore="leads", filter="{pas du json"))
     assert e.value.code == "invalid_filter"
 
 
@@ -87,7 +87,7 @@ def test_un_filtre_de_la_mauvaise_forme_est_refuse(store):
     ignorée — c'est la classe de bug qu'on est en train de fermer."""
     with pytest.raises(AuthzDenied) as e:
         dr._list_rows(_Ctx(), dr.ListRowsInput(
-            namespace="leads", filter=json.dumps([{"field": "status"}])))
+            datastore="leads", filter=json.dumps([{"field": "status"}])))
     assert e.value.code == "invalid_filter"
 
 

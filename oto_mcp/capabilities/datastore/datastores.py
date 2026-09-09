@@ -15,7 +15,7 @@ Autz `SUB_ONLY` au seuil ; le vrai gate reste **dans le handler**, où il était
   tableau hors périmètre répond 404 sans divulguer son existence ;
 - renommer → `govern_ns`, c'est-à-dire `ownership.can_govern` (owner ∪ escalade
   `roles.py`, ADR 0030) — jamais un simple rôle d'org ;
-- supprimer → la garde vit dans `store.delete_namespace` (`NamespaceForbidden`).
+- supprimer → la garde vit dans `store.delete_datastore` (`DatastoreForbidden`).
 
 ⚠️ **Le seul changement de comportement est voulu** : la validation de la couche
 capacité REFUSE un champ inconnu (400 `unknown_fields`) là où ces routes l'ignoraient.
@@ -33,25 +33,25 @@ from ...datastore.identite import Adresse
 
 from ... import db, roles
 from ...auth import token_scopes
-from ...datastore.core import NamespaceExists, NamespaceForbidden, NamespaceNotFound, make_store
+from ...datastore.core import DatastoreExists, DatastoreForbidden, DatastoreNotFound, make_store
 from .._authz import SUB_ONLY
 from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .common import HORODATAGE, govern_ns, ns_not_found
 from ..registry import CAPABILITIES
 
 
-class ListNamespacesInput(BaseModel):
+class ListDatastoresInput(BaseModel):
     """Aucun paramètre : le périmètre est l'org active, jamais un argument."""
 
 
-class CreateNamespaceInput(BaseModel):
+class CreateDatastoreInput(BaseModel):
     # Défaut vide plutôt que champ requis : un nom manquant mérite le refus NOMMÉ
-    # (`missing_namespace`) que cette route rend depuis toujours, pas l'`invalid_input`
+    # (`missing_datastore`) que cette route rend depuis toujours, pas l'`invalid_input`
     # générique de pydantic — le dashboard l'affiche tel quel.
-    namespace: Adresse = ""
+    datastore: Adresse = ""
     # Classeur (ADR 0030) : `{type: 'org'|'group'|'user', id}`. Absent = PERSONNEL
-    # (`type='user'`, l'appelant) — c'est ce que `_create_namespace` fait et ce que
-    # `tests/datastore/test_datastore_namespaces_capability.py` fige (`("create_namespace",
+    # (`type='user'`, l'appelant) — c'est ce que `_create_datastore` fait et ce que
+    # `tests/datastore/test_datastore_datastores_capability.py` fige (`("create_datastore",
     # "vivier", "user", "u-1")`). Corrigé le 01/09/2026 (oto-backend#662) :
     # cette ligne annonçait « org active » depuis toujours, l'inverse du code servi,
     # et un tiers qui dérive son intégration du contrat crée alors chez lui un
@@ -60,16 +60,16 @@ class CreateNamespaceInput(BaseModel):
     owner: Optional[dict] = None
 
 
-class NamespaceRefInput(BaseModel):
-    namespace: Adresse
+class DatastoreRefInput(BaseModel):
+    datastore: Adresse
 
 
-class RenameNamespaceInput(BaseModel):
-    namespace: Adresse
+class RenameDatastoreInput(BaseModel):
+    datastore: Adresse
     name: str = ""
 
 
-class NamespaceEntry(BaseModel):
+class DatastoreEntry(BaseModel):
     """Une entrée du catalogue de tableaux, telle que la peint le cockpit."""
     model_config = ConfigDict(populate_by_name=True)
 
@@ -92,7 +92,7 @@ class NamespaceEntry(BaseModel):
     # DÉRIVÉ de `id` juste en dessous, jamais fourni par l'appelant : deux clés
     # stockées côte à côte finissent par diverger, une clé calculée ne le peut pas.
     ns_id: int = 0
-    namespace: Adresse
+    datastore: Adresse
     created_at: Optional[str] = Field(default=None, description=HORODATAGE)
     # Deep-link dashboard du tableau (`/data/<id>`) — dérivé de l'id, jamais stocké.
     url: str
@@ -125,12 +125,12 @@ class NamespaceEntry(BaseModel):
         return self
 
 
-class NamespaceList(BaseModel):
-    namespaces: list[NamespaceEntry]
+class DatastoreList(BaseModel):
+    datastores: list[DatastoreEntry]
 
 
-class CreatedNamespace(BaseModel):
-    namespace: Adresse
+class CreatedDatastore(BaseModel):
+    datastore: Adresse
     id: int
     url: str
     # QUI possède le tableau — donc qui le verra. La création rendait moins que la
@@ -145,34 +145,34 @@ class CreatedNamespace(BaseModel):
     avertissement: Optional[str] = None
 
 
-class DeletedNamespace(BaseModel):
+class DeletedDatastore(BaseModel):
     ok: bool
-    namespace: Adresse
+    datastore: Adresse
 
 
-class RenamedNamespace(BaseModel):
+class RenamedDatastore(BaseModel):
     ok: bool
     # Le NOUVEAU nom (l'id, l'URL et les partages, eux, ne bougent pas — ils sont
     # keyés par id).
-    namespace: Adresse
+    datastore: Adresse
 
 
-class NamespaceUrl(BaseModel):
+class DatastoreUrl(BaseModel):
     url: str
 
 
-def _list_namespaces(ctx: ResolvedCtx, inp: ListNamespacesInput) -> dict:
+def _list_datastores(ctx: ResolvedCtx, inp: ListDatastoresInput) -> dict:
     # Seule réponse FILTRÉE plutôt que refusée pour un jeton porté : sans le catalogue,
     # une intégration n'a pas le schéma de son tableau (`page_rows` ne le rend pas) —
     # elle ne pourrait pas peindre ses colonnes. No-op pour un JWT ou un jeton non porté.
-    rows = token_scopes.filter_namespaces(make_store(ctx.sub).list_namespaces())
-    return {"namespaces": rows}
+    rows = token_scopes.filter_datastores(make_store(ctx.sub).list_datastores())
+    return {"datastores": rows}
 
 
-def _create_namespace(ctx: ResolvedCtx, inp: CreateNamespaceInput) -> dict:
-    namespace = inp.namespace.strip()
-    if not namespace:
-        raise AuthzDenied(400, "missing_namespace")
+def _create_datastore(ctx: ResolvedCtx, inp: CreateDatastoreInput) -> dict:
+    datastore = inp.datastore.strip()
+    if not datastore:
+        raise AuthzDenied(400, "missing_datastore")
     # ⚠️ Le défaut n'est PAS restitué ici, et c'est le point du lot du 08/09/2026 :
     # `owner_type=None` laisse le store appliquer `_default_owner` (ADR 0068). Le
     # restater ici (`or "user"`) faisait vivre le même défaut à deux endroits — et
@@ -205,62 +205,62 @@ def _create_namespace(ctx: ResolvedCtx, inp: CreateNamespaceInput) -> dict:
         # posés par le STORE et relayés tels quels — c'est ce qui interdit aux deux
         # faces de diverger (elles l'ont fait du 05 au 08/09 : cette réponse-ci les
         # portait, celle du tool MCP non, et sa description promettait le contraire).
-        return make_store(ctx.sub).create_namespace(
-            namespace, owner_type=owner_type, owner_id=owner_id)
-    except NamespaceExists:
-        raise AuthzDenied(409, "namespace_exists")
+        return make_store(ctx.sub).create_datastore(
+            datastore, owner_type=owner_type, owner_id=owner_id)
+    except DatastoreExists:
+        raise AuthzDenied(409, "datastore_exists")
 
 
-def _delete_namespace(ctx: ResolvedCtx, inp: NamespaceRefInput) -> dict:
+def _delete_datastore(ctx: ResolvedCtx, inp: DatastoreRefInput) -> dict:
     try:
-        make_store(ctx.sub).delete_namespace(inp.namespace)
-    except NamespaceNotFound:
-        raise ns_not_found(ctx.sub, inp.namespace)
-    except NamespaceForbidden:
+        make_store(ctx.sub).delete_datastore(inp.datastore)
+    except DatastoreNotFound:
+        raise ns_not_found(ctx.sub, inp.datastore)
+    except DatastoreForbidden:
         raise AuthzDenied(403, "forbidden")
-    return {"ok": True, "namespace": inp.namespace}
+    return {"ok": True, "datastore": inp.datastore}
 
 
-def _rename_namespace(ctx: ResolvedCtx, inp: RenameNamespaceInput) -> dict:
+def _rename_datastore(ctx: ResolvedCtx, inp: RenameDatastoreInput) -> dict:
     new = inp.name.strip()
     if not new:
         raise AuthzDenied(400, "name_required")
-    ns_id = govern_ns(ctx.sub, inp.namespace)
+    ns_id = govern_ns(ctx.sub, inp.datastore)
     try:
-        db.rename_datastore_namespace_by_id(ns_id, new)
+        db.rename_datastore_by_id(ns_id, new)
     except ValueError as e:
-        # Le message du store EST le code de refus ici (« namespace already exists »
+        # Le message du store EST le code de refus ici (« datastore already exists »
         # côté db) : forme héritée de la route, conservée telle quelle — la changer
         # ferait mentir un front qui l'affiche.
         raise AuthzDenied(409, str(e))
-    return {"ok": True, "namespace": new}
+    return {"ok": True, "datastore": new}
 
 
-def _namespace_url(ctx: ResolvedCtx, inp: NamespaceRefInput) -> dict:
+def _datastore_url(ctx: ResolvedCtx, inp: DatastoreRefInput) -> dict:
     try:
-        return {"url": make_store(ctx.sub).get_url(inp.namespace)}
-    except NamespaceNotFound:
-        raise ns_not_found(ctx.sub, inp.namespace)
+        return {"url": make_store(ctx.sub).get_url(inp.datastore)}
+    except DatastoreNotFound:
+        raise ns_not_found(ctx.sub, inp.datastore)
 
 
-_BASE = "/api/datastore/namespaces"
+_BASE = "/api/datastores"
 
 CAPABILITIES += [
     Capability(
-        key="me.datastore.list_namespaces",
-        handler=_list_namespaces,
-        Input=ListNamespacesInput,
-        Output=NamespaceList,
+        key="me.datastore.list_datastores",
+        handler=_list_datastores,
+        Input=ListDatastoresInput,
+        Output=DatastoreList,
         authz=SUB_ONLY,
-        mcp=None,  # `data_list_namespaces` tient déjà la face agent
+        mcp=None,  # `data_list_datastores` tient déjà la face agent
         rest=RestBinding(verb="GET", path=_BASE),
         description="Liste les tableaux visibles dans l'org active (possédés et partagés).",
     ),
     Capability(
-        key="me.datastore.create_namespace",
-        handler=_create_namespace,
-        Input=CreateNamespaceInput,
-        Output=CreatedNamespace,
+        key="me.datastore.create_datastore",
+        handler=_create_datastore,
+        Input=CreateDatastoreInput,
+        Output=CreatedDatastore,
         authz=SUB_ONLY,
         mcp=None,
         # 201 : le code que cette route rend depuis toujours au dashboard et à oto-core.
@@ -285,33 +285,33 @@ CAPABILITIES += [
                      "rend le propriétaire et vous avertit dans ce cas précis."),
     ),
     Capability(
-        key="me.datastore.delete_namespace",
-        handler=_delete_namespace,
-        Input=NamespaceRefInput,
-        Output=DeletedNamespace,
+        key="me.datastore.delete_datastore",
+        handler=_delete_datastore,
+        Input=DatastoreRefInput,
+        Output=DeletedDatastore,
         authz=SUB_ONLY,
         mcp=None,
-        rest=RestBinding(verb="DELETE", path=_BASE + "/{namespace}"),
+        rest=RestBinding(verb="DELETE", path=_BASE + "/{datastore}"),
         description="Supprime un tableau, ses lignes et ses partages (droit de gouvernance).",
     ),
     Capability(
-        key="me.datastore.rename_namespace",
-        handler=_rename_namespace,
-        Input=RenameNamespaceInput,
-        Output=RenamedNamespace,
+        key="me.datastore.rename_datastore",
+        handler=_rename_datastore,
+        Input=RenameDatastoreInput,
+        Output=RenamedDatastore,
         authz=SUB_ONLY,
         mcp=None,
-        rest=RestBinding(verb="PATCH", path=_BASE + "/{namespace}"),
+        rest=RestBinding(verb="PATCH", path=_BASE + "/{datastore}"),
         description="Renomme un tableau (id, URL et partages restent stables).",
     ),
     Capability(
         key="me.datastore.url",
-        handler=_namespace_url,
-        Input=NamespaceRefInput,
-        Output=NamespaceUrl,
+        handler=_datastore_url,
+        Input=DatastoreRefInput,
+        Output=DatastoreUrl,
         authz=SUB_ONLY,
         mcp=None,
-        rest=RestBinding(verb="GET", path=_BASE + "/{namespace}/url"),
+        rest=RestBinding(verb="GET", path=_BASE + "/{datastore}/url"),
         description="Deep-link dashboard d'un tableau.",
     ),
 ]

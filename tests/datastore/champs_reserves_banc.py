@@ -42,8 +42,8 @@ def banc(monkeypatch):
     st = dsm.DatastorePg("u", acting_org=35)
     etat = {"schema": SCHEMA, "lignes": {"r1": dict(LIGNE)}, "creees": [], "maj": []}
     monkeypatch.setattr(st, "_resolve", lambda ns, write=False: 7)
-    monkeypatch.setattr(dsm.db, "get_datastore_namespace_by_id",
-                        lambda ns_id: {"id": ns_id, "namespace": "viviers",
+    monkeypatch.setattr(dsm.db, "get_datastore_by_id",
+                        lambda ns_id: {"id": ns_id, "datastore": "viviers",
                                        "schema": etat["schema"]})
 
     def find(ns_id, key, kv):

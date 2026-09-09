@@ -187,7 +187,7 @@ def test_the_real_write_path_carries_the_warning(live):
     from oto_mcp import db
     st = _store()
     ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore_namespace("user", "sub-test", ns)
+    db.create_datastore("user", "sub-test", ns)
     st.set_schema(ns, {"fields": [ENUM]})           # options, PAS de strict
 
     st.append_row(ns, {"priorite": "Moyenne"})
@@ -210,7 +210,7 @@ def test_the_strict_table_still_refuses(live):
     from oto_mcp.datastore.core import RowValidationError
     st = _store()
     ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore_namespace("user", "sub-test", ns)
+    db.create_datastore("user", "sub-test", ns)
     st.set_schema(ns, {"fields": [ENUM], "strict": True})
 
     with pytest.raises(RowValidationError):
@@ -224,7 +224,7 @@ def test_posing_the_schema_warns_at_the_right_moment(live):
     from oto_mcp import db
     st = _store()
     ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore_namespace("user", "sub-test", ns)
+    db.create_datastore("user", "sub-test", ns)
 
     out = st.set_schema(ns, {"fields": [ENUM, {"key": "prov", "type": "json"}]})
 
@@ -241,7 +241,7 @@ def test_a_clean_schema_says_nothing(live):
     from oto_mcp import db
     st = _store()
     ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore_namespace("user", "sub-test", ns)
+    db.create_datastore("user", "sub-test", ns)
 
     out = st.set_schema(ns, {"fields": [ENUM], "strict": True})
 

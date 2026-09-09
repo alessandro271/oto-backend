@@ -11,8 +11,8 @@ Le journal montre les **deux surfaces** : `kind='mcp'` = appel d'agent, `kind='r
 Avant, seul le MCP était visible — un clic de transition dans le dashboard ne laissait
 aucune trace exploitable, d'où l'angle mort « quelle ligne vient de changer d'état ? ».
 
-Autz : `SUB_ONLY` au seuil, le vrai gate est la LECTURE du namespace — résolu par le
-store (scopé org active + ownership), jamais par l'id nu passé en path. Un namespace
+Autz : `SUB_ONLY` au seuil, le vrai gate est la LECTURE du datastore — résolu par le
+store (scopé org active + ownership), jamais par l'id nu passé en path. Un datastore
 hors périmètre est un 404 (on ne divulgue pas son existence), comme partout ailleurs
 dans le datastore.
 """
@@ -25,24 +25,34 @@ from pydantic import BaseModel, Field
 from ... import db
 from ...datastore.identite import Adresse
 from ...datastore import journal as datastore_journal
-from ...datastore.core import NamespaceNotFound, RowNotFound, make_store
+from ...datastore.core import DatastoreNotFound, RowNotFound, make_store
 from .._authz import SUB_ONLY
 from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from ..registry import CAPABILITIES
 from .common import HORODATAGE
 
-# Rétention du calllog (prune 30 j) : un journal de TRAVAIL, pas un audit permanent.
-# La surface l'annonce pour que l'UI puisse le dire à l'utilisateur.
-RETENTION_DAYS = 30
+# La fenêtre annoncée est **DÉRIVÉE de la purge**, jamais recopiée à côté d'elle.
+#
+# ⚠️ Incident du 08/09/2026, et il a failli coûter une livraison en urgence. Cette
+# constante valait `30` en dur, écrite ici pendant que la purge, elle, tournait à 90
+# jours dans `maintenance`. Les deux ont divergé sans que rien ne le signale — et la
+# requête ci-dessous ne filtre sur AUCUNE date : elle rendait donc des entrées de 41
+# jours tout en annonçant une fenêtre de 30. Un consommateur en a conclu que la preuve
+# de ce que ses agents avaient fait sur les fiches d'une cliente disparaissait dans
+# trois jours, et s'apprêtait à livrer un écran de repli pour une échéance imaginaire.
+#
+# **Un chiffre qui décrit une purge dont il ne dépend pas finit toujours par mentir.**
+# D'où l'import : si la rétention change, cette annonce change avec elle.
+from ...maintenance import _JOURNAL_RETENTION_DAYS as RETENTION_DAYS
 
 
 class RowActivityInput(BaseModel):
-    namespace: Adresse
+    datastore: Adresse
     row_id: str
 
 
-class NamespaceActivityInput(BaseModel):
-    namespace: Adresse
+class DatastoreActivityInput(BaseModel):
+    datastore: Adresse
     limit: int = 50
 
 
@@ -72,14 +82,14 @@ def _attach_emails(entries: list[dict]) -> list[dict]:
 def _row_activity(ctx: ResolvedCtx, inp: RowActivityInput) -> dict:
     store = _store(ctx.sub)
     try:
-        row = store.get_row(inp.namespace, inp.row_id)
-    except NamespaceNotFound:
-        raise AuthzDenied(404, "namespace_not_found")
+        row = store.get_row(inp.datastore, inp.row_id)
+    except DatastoreNotFound:
+        raise AuthzDenied(404, "datastore_not_found")
     except RowNotFound:
         raise AuthzDenied(404, "row_not_found")
-    key = store.declared_key(inp.namespace)
+    key = store.declared_key(inp.datastore)
     key_value = row.get(key) if key else None
-    nsctx = datastore_journal.context(store, inp.namespace)
+    nsctx = datastore_journal.context(store, inp.datastore)
     # Le PROPRIÉTAIRE part avec la requête : l'axe « clé métier » est une recherche de
     # sous-chaîne dans les args, il doit être borné au tenant (sinon une clé banale
     # remonterait les gestes d'une autre org).
@@ -96,19 +106,19 @@ def _row_activity(ctx: ResolvedCtx, inp: RowActivityInput) -> dict:
     return {"activity": activity, "key": key, "retention_days": RETENTION_DAYS}
 
 
-def _activity(ctx: ResolvedCtx, inp: NamespaceActivityInput) -> dict:
+def _activity(ctx: ResolvedCtx, inp: DatastoreActivityInput) -> dict:
     store = _store(ctx.sub)
     try:
-        ns_id = store.resolve_ns_id(inp.namespace)
-    except NamespaceNotFound:
-        raise AuthzDenied(404, "namespace_not_found")
-    nsctx = datastore_journal.context(store, inp.namespace, ns_id=ns_id)
-    # Le namespace est résolu ICI (une fois) et passé sous ses DEUX formes au journal :
+        ns_id = store.resolve_ns_id(inp.datastore)
+    except DatastoreNotFound:
+        raise AuthzDenied(404, "datastore_not_found")
+    nsctx = datastore_journal.context(store, inp.datastore, ns_id=ns_id)
+    # Le datastore est résolu ICI (une fois) et passé sous ses DEUX formes au journal :
     # les gestes REST y sont enregistrés par `ns_id`, les appels MCP par le nom OU l'id
     # tels que l'agent les a tapés. Le PROPRIÉTAIRE part avec — un nom de tableau n'est
     # unique que par propriétaire, l'axe nom doit être borné au tenant (fuite cross-org
-    # sinon, cf. `db.datastore_namespace_activity`).
-    activity = db.datastore_namespace_activity(
+    # sinon, cf. `db.datastore_activity`).
+    activity = db.datastore_activity(
         ns_id, nsctx.name, owner_type=nsctx.owner_type, owner_id=nsctx.owner_id,
         limit=inp.limit)
     datastore_journal.attach_titles(ns_id, nsctx.title_key, activity)
@@ -182,7 +192,7 @@ class ActivityEntry(BaseModel):
     to_status: Optional[str] = None
 
 
-class NamespaceActivity(BaseModel):
+class DatastoreActivity(BaseModel):
     activity: list[ActivityEntry]
     retention_days: int
 
@@ -205,20 +215,20 @@ CAPABILITIES += [
         mcp=None,  # opt-out explicite : lecture de cockpit, l'agent a son propre fil
         rest=RestBinding(
             verb="GET",
-            path="/api/datastore/namespaces/{namespace}/rows/{row_id}/activity",
+            path="/api/datastores/{datastore}/rows/{row_id}/activity",
         ),
         description="Parcours d'une ligne du datastore (gestes d'agent et de dashboard).",
     ),
     Capability(
         key="me.datastore.activity",
         handler=_activity,
-        Input=NamespaceActivityInput,
-        Output=NamespaceActivity,
+        Input=DatastoreActivityInput,
+        Output=DatastoreActivity,
         authz=SUB_ONLY,
         mcp=None,
         rest=RestBinding(
             verb="GET",
-            path="/api/datastore/namespaces/{namespace}/activity",
+            path="/api/datastores/{datastore}/activity",
         ),
         description="Activité d'un tableau du datastore (qui a touché quoi, depuis quel état).",
     ),

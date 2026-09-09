@@ -86,7 +86,7 @@ def ferme(live):
     """Un tableau fermé et VIDE — l'état d'un tableau de journalisation qui débute."""
     from oto_mcp import db
     ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore_namespace("user", "sub-test", ns)
+    db.create_datastore("user", "sub-test", ns)
     st = _store()
     pose = st.set_schema(ns, FERME)
     assert "key_required" in pose["enforced"]      # le cran est bien appliqué ICI

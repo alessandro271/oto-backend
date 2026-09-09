@@ -428,7 +428,7 @@ def _table(sub="sub-a83"):
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
     ns = "t-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore_namespace("user", sub, ns)
+    ns_id = db.create_datastore("user", sub, ns)
     st = make_store(sub)
     st.set_schema(ns, SCHEMA)
     return st, ns, ns_id
@@ -452,7 +452,7 @@ def test_bout_en_bout_l_agent_ne_voit_ni_n_ecrit_la_colonne(live):
         # (b) le schéma servi non plus…
         assert "suivi_commercial" not in {f["key"] for f in st.get_schema(ns)["fields"]}
         # …ni le catalogue, second chemin par lequel un schéma complet sort.
-        entree = next(e for e in st.list_namespaces() if e["namespace"] == ns)
+        entree = next(e for e in st.list_datastores() if e["datastore"] == ns)
         assert "suivi_commercial" not in {f["key"] for f in entree["schema"]["fields"]}
         # (c) l'écriture est refusée — sur les DEUX gestes qu'un agent enchaîne : le
         # patch par identifiant et le lot par clé métier.
@@ -483,17 +483,17 @@ def test_bout_en_bout_l_ecran_du_proprietaire_ne_perd_RIEN(live, monkeypatch):
     ligne = st.append_row(ns, {"ref": "ACME", "suivi_commercial": "à contacter"})
     R.stub_authz(monkeypatch, org_id=None)
 
-    code, corps = R.call("me.datastore.get_schema", path_params={"namespace": ns})
+    code, corps = R.call("me.datastore.get_schema", path_params={"datastore": ns})
     assert code == 200, corps
     assert "suivi_commercial" in {f["key"] for f in corps["schema"]["fields"]}
 
     code, corps = R.call("me.datastore.get_row",
-                         path_params={"namespace": ns, "row_id": ligne["_id"]})
+                         path_params={"datastore": ns, "row_id": ligne["_id"]})
     assert code == 200, corps
     assert corps["suivi_commercial"] == "à contacter"
 
     code, corps = R.call("me.datastore.update_row",
-                         path_params={"namespace": ns, "row_id": ligne["_id"]},
+                         path_params={"datastore": ns, "row_id": ligne["_id"]},
                          body={"suivi_commercial": "gagné"})
     assert code == 200, corps
     assert _blob(ns_id, ligne["_id"])["suivi_commercial"] == "gagné"
@@ -533,4 +533,4 @@ def test_bout_en_bout_un_agent_ne_rouvre_pas_le_reglage(live):
     # Le réglage est INTACT, et le propriétaire, lui, repose ce qu'il veut.
     stocke = st.get_schema(ns)
     assert aga.acces_declare(stocke, "suivi_commercial") == "none"
-    assert st.set_schema(ns, SCHEMA)["namespace"] == ns
+    assert st.set_schema(ns, SCHEMA)["datastore"] == ns

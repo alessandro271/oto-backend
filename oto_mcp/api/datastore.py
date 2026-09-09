@@ -155,7 +155,7 @@ def make_routes(
     # --- Datastore (PG natif, ADR 0016) ----------------------------------
 
     # Lister / créer / supprimer / renommer un tableau, et son deep-link, sont des
-    # CAPACITÉS (`capabilities/datastore/namespaces.py`, #302) : mêmes chemins, mêmes
+    # CAPACITÉS (`capabilities/datastore/datastores.py`, #302) : mêmes chemins, mêmes
     # réponses, mais entrée ET sortie déclarées — donc décrites dans
     # `/api/openapi.json`, donc générables chez un intégrateur.
 

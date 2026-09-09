@@ -94,7 +94,7 @@ def table(live, request):
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
     ns = "t-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore_namespace("user", SUB, ns)
+    ns_id = db.create_datastore("user", SUB, ns)
     st = make_store(SUB)
     if request.param == "schema_flotte":
         st.set_schema(ns, SCHEMA_FLOTTE)
@@ -112,15 +112,15 @@ def _blob(ns_id: int, row_id: str) -> dict:
 
 def test_face_REST_une_valeur_nue_identique_garde_le_comment(client, table):
     ns, ns_id, rid = table
-    r1 = client.patch(f"/api/datastore/namespaces/{ns}/rows/{rid}", headers=_h(),
+    r1 = client.patch(f"/api/datastores/{ns}/rows/{rid}", headers=_h(),
                       json={"suivi": {"valeur": "a_traiter", "comment": "à rappeler"}})
     assert r1.status_code == 200, r1.text
-    lu = client.get(f"/api/datastore/namespaces/{ns}/rows/{rid}", headers=_h()).json()
+    lu = client.get(f"/api/datastores/{ns}/rows/{rid}", headers=_h()).json()
     assert lu["suivi"] == "a_traiter" and lu["suivi.comment"] == "à rappeler"
-    r2 = client.patch(f"/api/datastore/namespaces/{ns}/rows/{rid}", headers=_h(),
+    r2 = client.patch(f"/api/datastores/{ns}/rows/{rid}", headers=_h(),
                       json={"suivi": "a_traiter"})
     assert r2.status_code == 200, r2.text
-    relu = client.get(f"/api/datastore/namespaces/{ns}/rows/{rid}", headers=_h()).json()
+    relu = client.get(f"/api/datastores/{ns}/rows/{rid}", headers=_h()).json()
     assert relu["suivi"] == "a_traiter"
     assert relu.get("suivi.comment") == "à rappeler", relu
     assert _blob(ns_id, rid)["suivi"] == {"valeur": "a_traiter", "comment": "à rappeler"}
@@ -138,11 +138,11 @@ async def test_face_MCP_data_write_id_une_valeur_nue_identique_garde_le_comment(
     mcp = FastMCP("test")
     tools_ds.register(mcp)
     fn = (await mcp.get_tool("data_write")).fn
-    out1 = fn(namespace=ns, id=rid, row={"suivi": {"valeur": "a_traiter", "comment": "à rappeler"}})
+    out1 = fn(datastore=ns, id=rid, row={"suivi": {"valeur": "a_traiter", "comment": "à rappeler"}})
     assert out1["suivi.comment"] == "à rappeler"
-    out2 = fn(namespace=ns, id=rid, row={"suivi": "a_traiter"})
+    out2 = fn(datastore=ns, id=rid, row={"suivi": "a_traiter"})
     assert out2["suivi"] == "a_traiter"
     assert out2.get("suivi.comment") == "à rappeler", out2
-    relu = client.get(f"/api/datastore/namespaces/{ns}/rows/{rid}", headers=_h()).json()
+    relu = client.get(f"/api/datastores/{ns}/rows/{rid}", headers=_h()).json()
     assert relu.get("suivi.comment") == "à rappeler", relu
     assert _blob(ns_id, rid)["suivi"] == {"valeur": "a_traiter", "comment": "à rappeler"}

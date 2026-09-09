@@ -161,14 +161,14 @@ class _Store:
     def __init__(self):
         self.vu: dict = {}
 
-    def _resolve(self, namespace):
+    def _resolve(self, datastore):
         return 12
 
-    def cursor_rows(self, namespace, **kw):
-        self.vu = dict(kw, namespace=namespace)
+    def cursor_rows(self, datastore, **kw):
+        self.vu = dict(kw, datastore=datastore)
         return {"rows": [{"_id": "r1", "nom": "x"}], "next_cursor": None}
 
-    def count_rows(self, namespace, *, filter=None, q=None, filters=None):
+    def count_rows(self, datastore, *, filter=None, q=None, filters=None):
         # Le compte passe par le STORE depuis #621 (il y résout les noms plats comme
         # la page, ce que `db.datastore_count_rows` ne fait pas).
         return len(filters or [])
@@ -213,7 +213,7 @@ async def test_node_rows_MEME_resultat_sur_les_deux_faces(monkeypatch, autz_sans
 
 @pytest.mark.asyncio
 async def test_data_rows_un_filters_repete_est_refuse_pas_tronque(autz_sans_base):
-    """`filters` de `GET …/data/{namespace}/rows` est un JSON dans UNE chaîne : le
+    """`filters` de `GET …/data/{datastore}/rows` est un JSON dans UNE chaîne : le
     répéter est une erreur de forme, et la réponse le dit au lieu de garder le
     dernier et de présenter une page comme filtrée par les deux."""
     cap = next(c for c in CAPABILITIES if c.key == "me.datastore.list_rows")
@@ -221,6 +221,6 @@ async def test_data_rows_un_filters_repete_est_refuse_pas_tronque(autz_sans_base
     code, corps = await _get(
         _handler_de(cap, binding), "/api/me/data/vivier/rows",
         'filters=[{"field":"a","op":"eq","value":1}]&filters=[{"field":"b","op":"eq","value":2}]',
-        {"namespace": "vivier"})
+        {"datastore": "vivier"})
     assert code == 400 and corps["error"] == "repeated_scalar", corps
     assert "filters" in corps["detail"]

@@ -17,8 +17,8 @@ def _stub_sources(monkeypatch, *, lexical=(), semantic=()):
               "search_briefs_semantic", "search_guides_semantic"):
         monkeypatch.setattr(S.db, n, lambda *a, **k: [])
     monkeypatch.setattr(S.ownership, "active_org_principals", lambda *a: [])
-    monkeypatch.setattr(S.db, "list_datastore_namespaces_for_owners", lambda o: [])
-    monkeypatch.setattr(S.db, "list_datastore_namespaces_granted_to", lambda *a: [])
+    monkeypatch.setattr(S.db, "list_datastores_for_owners", lambda o: [])
+    monkeypatch.setattr(S.db, "list_datastores_granted_to", lambda *a: [])
     monkeypatch.setattr(S.db, "project_names", lambda ids: {})
 
 

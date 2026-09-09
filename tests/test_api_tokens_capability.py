@@ -109,8 +109,8 @@ def socle(monkeypatch):
                         lambda et, eid, conn, **kw: vus.append(("clear", et, eid, conn)) or True)
 
     class _Store:
-        def list_namespaces(self):
-            return [{"namespace": "clients"}]
+        def list_datastores(self):
+            return [{"datastore": "clients"}]
 
     monkeypatch.setattr(datastore, "make_store", lambda sub: _Store())
     return vus
@@ -156,7 +156,7 @@ def test_seul_le_palier_membre_refuse_un_tableau_invisible(monkeypatch, socle,
 def test_une_portee_SANS_tableau_s_emet_quand_meme(monkeypatch, socle, portee):
     """`parse` rend légitimement une portée qui ne nomme AUCUN tableau — `projects` ou
     `runner` seuls. Or le contrôle de visibilité ne concerne QUE les tableaux : indexer
-    `namespaces` sans garde faisait un 500 d'une émission parfaitement valide.
+    `datastores` sans garde faisait un 500 d'une émission parfaitement valide.
 
     Pourquoi ce test vit ici et pas dans le banc des portées : `test_portee_runner.py`
     n'exerce que `parse` et `authorize` — la DÉCISION, jamais l'ÉMISSION. C'est ce trou

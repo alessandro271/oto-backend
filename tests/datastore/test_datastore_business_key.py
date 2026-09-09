@@ -93,7 +93,7 @@ def race(monkeypatch):
                             UniqueViolation("duplicate key ds_bkey_7")))
     monkeypatch.setattr(dsm.db, "datastore_merge_row_locked",
                         _fake_merge_locked(state["rows"]))
-    monkeypatch.setattr(dsm.db, "get_datastore_namespace_by_id",
+    monkeypatch.setattr(dsm.db, "get_datastore_by_id",
                         lambda ns_id: {"id": ns_id, "schema": {"key": "member_id"}})
     return st, state
 
@@ -122,7 +122,7 @@ def test_append_row_existing_key_merges_not_500(monkeypatch):
     st = DatastorePg("u", acting_org=35)
     monkeypatch.setattr(st, "_resolve", lambda ns, write=False: 7)
     monkeypatch.setattr(st, "declared_key", lambda ns: "member_id")
-    monkeypatch.setattr(dsm.db, "get_datastore_namespace_by_id",
+    monkeypatch.setattr(dsm.db, "get_datastore_by_id",
                         lambda ns_id: {"id": ns_id, "schema": {"key": "member_id"}})
     rows = {"r1": {"member_id": "A", "x": 1}}
     monkeypatch.setattr(dsm.db, "datastore_find_row_id_by_key",
@@ -143,7 +143,7 @@ def test_append_row_lost_race_converges(monkeypatch):
     st = DatastorePg("u", acting_org=35)
     monkeypatch.setattr(st, "_resolve", lambda ns, write=False: 7)
     monkeypatch.setattr(st, "declared_key", lambda ns: "member_id")
-    monkeypatch.setattr(dsm.db, "get_datastore_namespace_by_id",
+    monkeypatch.setattr(dsm.db, "get_datastore_by_id",
                         lambda ns_id: {"id": ns_id, "schema": {"key": "member_id"}})
     rows = {"winner": {"member_id": "A", "x": 1}}
     state = {"lookups": 0}
@@ -173,7 +173,7 @@ def test_update_row_key_collision_raises_valueerror_not_500(monkeypatch):
     monkeypatch.setattr(dsm.db, "datastore_get_row",
                         lambda ns_id, rid: {"data": {"siren": "111", "x": 1}})
     monkeypatch.setattr(st, "_ns_of",
-                        lambda ns_id: {"namespace": "t",
+                        lambda ns_id: {"datastore": "t",
                                        "schema": {"key": "siren", "fields": []}})
     monkeypatch.setattr(st, "_check_row", lambda *a, **k: None)
     monkeypatch.setattr(dsm.db, "datastore_active_lease", lambda ns_id, rid: None)
@@ -192,7 +192,7 @@ def test_update_row_unexplained_violation_reraises(monkeypatch):
     monkeypatch.setattr(dsm.db, "datastore_get_row",
                         lambda ns_id, rid: {"data": {"x": 1}})
     monkeypatch.setattr(st, "_ns_of",  # pas de key
-                        lambda ns_id: {"namespace": "t", "schema": {"fields": []}})
+                        lambda ns_id: {"datastore": "t", "schema": {"fields": []}})
     monkeypatch.setattr(st, "_check_row", lambda *a, **k: None)
     monkeypatch.setattr(dsm.db, "datastore_active_lease", lambda ns_id, rid: None)
     monkeypatch.setattr(dsm.db, "datastore_update_row",

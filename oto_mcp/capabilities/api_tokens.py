@@ -287,7 +287,7 @@ def _my_create(ctx: ResolvedCtx, inp: TokenCreateInput) -> dict:
         # muet qu'on croirait branché. Ce garde-fou n'existe qu'ici — au palier admin, le
         # catalogue visé n'est pas celui de l'émetteur.
         from ..datastore.core import make_store
-        visible = {n["namespace"] for n in make_store(ctx.sub).list_namespaces()}
+        visible = {n["datastore"] for n in make_store(ctx.sub).list_datastores()}
         missing = sorted(vises.keys() - visible)
         if missing:
             raise AuthzDenied(400, "unknown_namespace",

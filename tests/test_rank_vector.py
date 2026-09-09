@@ -267,7 +267,7 @@ def test_writing_a_row_stamps_its_vector_without_the_backfill(live):
     """Le volume est ici — c'est la source où un vecteur daté se verrait le plus."""
     from oto_mcp import db
 
-    ns = db.create_datastore_namespace("org", "1", "t-" + uuid.uuid4().hex[:6])
+    ns = db.create_datastore("org", "1", "t-" + uuid.uuid4().hex[:6])
     db.datastore_insert_row(ns, "r1", {"societe": "Boulangerie Sylvestre"})
     assert _vecteur("datastore_rows", "ns_id = %s AND row_id = %s", (ns, "r1")) is not None
 

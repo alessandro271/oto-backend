@@ -63,17 +63,24 @@ def live(pg_dsn):
 
 
 def _monte(schema_fields, rows):
-    """Un namespace neuf, son schéma, ses lignes — rend (store, namespace)."""
+    """Un datastore neuf, son schéma, ses lignes — rend (store, datastore)."""
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
 
     st = make_store("sub-test")
     ns = "t-" + uuid.uuid4().hex[:6]
-    db.create_datastore_namespace("user", "sub-test", ns)
-    if schema_fields:
-        st.set_schema(ns, {"fields": schema_fields})
+    db.create_datastore("user", "sub-test", ns)
+    # ⚠️ Les lignes AVANT le schéma, et l'ordre est le sujet même de ce banc.
+    # Depuis le 08/09/2026, un `type` déclaré s'arme lui-même : `{"ca": "abc"}` sur une
+    # colonne `number` est REFUSÉ à l'écriture. Or ce banc éprouve le TRI de valeurs non
+    # conformes — un cas qui existe pour de bon (118 valeurs mesurées dans le parc). Il
+    # ne peut donc plus les poser par la porte d'écriture, et c'est cohérent : ces
+    # valeurs-là sont entrées quand le type n'était pas encore armé. Poser les lignes
+    # d'abord reproduit exactement cette histoire, au lieu de désarmer le contrôle.
     for r in rows:
         st.append_row(ns, r)
+    if schema_fields:
+        st.set_schema(ns, {"fields": schema_fields})
     return st, ns
 
 

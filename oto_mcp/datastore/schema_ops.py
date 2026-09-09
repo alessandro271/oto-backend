@@ -34,7 +34,7 @@ class SchemaOpsMixin:
     """Les opérations de FORMAT du store. Composé par `DatastorePg`, qui fournit
     `_resolve`, `_schema_of` et `_ns_of` — le mixin ne les redéfinit pas."""
 
-    def get_schema(self, namespace: str) -> Optional[dict]:
+    def get_schema(self, datastore: str) -> Optional[dict]:
         """Le schéma SERVI. oto#83 : amputé des colonnes `agent_access: "none"` quand
         l'appel vient de la face agent — c'est le goulot de lecture du format
         (`data_get_schema`, l'index de `data_app`, l'avertissement de colonnes de
@@ -43,8 +43,8 @@ class SchemaOpsMixin:
         ⚠️ Le store, lui, continue de lire le schéma ENTIER par `_schema_of` : la
         validation et les refus ont besoin de la colonne masquée, sans quoi une
         écriture d'agent y passerait comme un champ hors schéma — l'inverse du but."""
-        ns_id = self._resolve(namespace)
-        ns = db.get_datastore_namespace_by_id(ns_id)
+        ns_id = self._resolve(datastore)
+        ns = db.get_datastore_by_id(ns_id)
         return aga.schema_servi((ns or {}).get("schema"))
 
     def _capturer_origine_des_colonnes_neuves(self, ns_id: int,
@@ -67,10 +67,10 @@ class SchemaOpsMixin:
             return 0
         return 0        # `origine: "system"` supprimé — plus rien à baliser
 
-    def set_schema(self, namespace: str, schema: Optional[dict], *,
+    def set_schema(self, datastore: str, schema: Optional[dict], *,
                    retraits_annonces: Optional[list] = None,
                    geste: str = "schema") -> dict:
-        """Pose (ou retire si None) le schéma typé d'un namespace. Exige le droit
+        """Pose (ou retire si None) le schéma typé d'un datastore. Exige le droit
         d'écriture. SOFT pour les champs (schéma de rendu, pas de validation des
         rows) — SAUF `schema.key` (#109 ch.3) : la clé métier déclarée devient une
         CONTRAINTE (index UNIQUE partiel `data->>key`) → dédup concurrent-safe et
@@ -81,7 +81,7 @@ class SchemaOpsMixin:
         (le `remove` d'un patch) : ils sortent du relevé d'effacement, sans quoi le
         geste explicite crierait sur lui-même — et un avertissement qui crie à tort
         est celui qu'on apprend à ignorer."""
-        ns_id = self._resolve(namespace, write=True)
+        ns_id = self._resolve(datastore, write=True)
         if schema is not None and not isinstance(schema, dict):
             raise SchemaDefinitionError("schema doit être un objet {fields:[...]} ou null")
         def_errors = dsv2.validate_schema_def(schema)
@@ -137,7 +137,7 @@ class SchemaOpsMixin:
         # quand le schéma ne déclare rien : c'est une propriété du SERVEUR, pas du
         # schéma, et c'est justement quand on s'apprête à déclarer qu'on veut la
         # connaître.
-        out = {"namespace": namespace, "schema": aga.schema_servi(schema),
+        out = {"datastore": datastore, "schema": aga.schema_servi(schema),
                "enforced": dsv2.enforced_keys()}
         # Une écriture sur des lignes existantes ne se fait pas en silence : celui
         # qui déclare doit savoir que sa pose a TOUCHÉ des données, et combien.
@@ -202,7 +202,7 @@ class SchemaOpsMixin:
         out.update(dsv2.declarations_effacees_report(efface))
         return out
 
-    def patch_schema(self, namespace: str, *, fields: Optional[list] = None,
+    def patch_schema(self, datastore: str, *, fields: Optional[list] = None,
                      remove: Optional[list] = None,
                      remove_attrs: Optional[dict] = None,
                      strict: Optional[bool] = None,
@@ -238,7 +238,7 @@ class SchemaOpsMixin:
         et le relevé d'effacement compte les DISPARITIONS de tête sans exception :
         retirer la clé ferait crier un geste explicite sur lui-même, l'avertissement
         qu'on apprend à ignorer. Même parti que `strict`."""
-        ns_id = self._resolve(namespace, write=True)
+        ns_id = self._resolve(datastore, write=True)
         current = self._schema_of(ns_id) or {}
         if not isinstance(current, dict):
             raise SchemaDefinitionError("le schéma courant n'est pas un objet — repose-le avec "
@@ -284,7 +284,7 @@ class SchemaOpsMixin:
         # Le patch NOMME ce qu'il retire (`removed`) : le relevé d'effacement n'a
         # donc rien à en redire. Il reste tendu pour tout le reste — c'est le seul
         # moyen de voir une fusion qui laisserait échapper quelque chose.
-        result = self.set_schema(namespace, out_schema, geste="patch",
+        result = self.set_schema(datastore, out_schema, geste="patch",
                                  retraits_annonces=(
                                      [str(k) for k in (remove or [])]
                                      + [f"{c}.{a}"
@@ -318,7 +318,7 @@ class SchemaOpsMixin:
                 "Elles se rendent encore à la lecture — après un renommage, leur nom "
                 "décrit souvent le contenu mieux que le nouveau, et un agent qui relit "
                 "une ligne écrit dedans en croyant viser juste. Purge-les "
-                "(`data_drop_column(namespace, key, confirm=True)`) ou déclare-les.")
+                "(`data_drop_column(datastore, key, confirm=True)`) ou déclare-les.")
 
     @staticmethod
     def _overlong_warning(ns_id: int, schema: Optional[dict]) -> Optional[str]:
@@ -469,7 +469,7 @@ class SchemaOpsMixin:
                 "et aux facettes. Corrige-les (réécris le champ) ou élargis les "
                 "options ; les écritures futures, elles, sont refusées.")
 
-    def drop_column(self, namespace: str, key: str, *, confirm: bool) -> dict:
+    def drop_column(self, datastore: str, key: str, *, confirm: bool) -> dict:
         """Retire une colonne des DONNÉES de toutes les rows (#296). Destructif et
         irréversible : `confirm=True` exigé — la garde vit ICI, pas dans la surface,
         pour qu'aucune face ne puisse l'oublier. Exige le droit d'écriture (même
@@ -501,11 +501,11 @@ class SchemaOpsMixin:
             raise ValueError(
                 f"purge de la colonne `{key}` non confirmée — c'est irréversible sur "
                 "toutes les lignes : rappelle l'appel avec confirm=True")
-        ns_id = self._resolve(namespace, write=True)
+        ns_id = self._resolve(datastore, write=True)
         schema = self._schema_of(ns_id)
         if key in {f.get("key") for f in dsv2._fields(schema)}:
             raise ValueError(
-                f"`{key}` est encore DÉCLARÉE au schéma de `{namespace}` : purger une "
+                f"`{key}` est encore DÉCLARÉE au schéma de `{datastore}` : purger une "
                 "colonne vivante est presque toujours une faute de nom. Si la sortie "
                 "est voulue, retire d'abord le champ du schéma (data_set_schema), puis "
                 "purge.")
@@ -517,10 +517,10 @@ class SchemaOpsMixin:
         # que la purge a touché.
         rows = db.datastore_drop_column(ns_id, key)
         if not rows:
-            raise ColumnAbsent(self._rien_purge(ns_id, schema, namespace, key))
-        return {"namespace": namespace, "key": key, "rows": rows}
+            raise ColumnAbsent(self._rien_purge(ns_id, schema, datastore, key))
+        return {"datastore": datastore, "key": key, "rows": rows}
 
-    def _rien_purge(self, ns_id: int, schema, namespace: str, key: str) -> str:
+    def _rien_purge(self, ns_id: int, schema, datastore: str, key: str) -> str:
         """POURQUOI la purge n'a touché aucune ligne — la phrase qui remplace le zéro.
 
         Deux branches, et la seconde est le garde-fou de la première : un nom qui a
@@ -543,16 +543,16 @@ class SchemaOpsMixin:
                     f'`{{"{base}": {{"{couche}": null}}}}`) ; pour purger la colonne '
                     f"entière et ses annotations avec elle, vise `{base}`.")
         return (
-            f"aucune colonne `{key}` dans les données de `{namespace}` : aucune ligne "
+            f"aucune colonne `{key}` dans les données de `{datastore}` : aucune ligne "
             f"ne la portait, rien n'a été touché — ce n'est donc pas un retrait, et "
             f"ça ne se compte pas comme tel. Vérifie le nom avant de le rayer de ta "
             f"liste.")
 
-    def set_semantic(self, namespace: str, enabled: bool) -> dict:
-        """Active/désactive la recherche SÉMANTIQUE des lignes du namespace (#67 V2.2,
+    def set_semantic(self, datastore: str, enabled: bool) -> dict:
+        """Active/désactive la recherche SÉMANTIQUE des lignes du datastore (#67 V2.2,
         opt-in — coût d'embedding). Exige le droit d'écriture. À l'activation, les rows
         sont mises en file d'indexation (worker) ; à la désactivation, leurs embeddings
         sont purgés."""
-        ns_id = self._resolve(namespace, write=True)
+        ns_id = self._resolve(datastore, write=True)
         queued = db.set_datastore_semantic(ns_id, bool(enabled))
-        return {"namespace": namespace, "semantic_search": bool(enabled), "rows_queued": queued}
+        return {"datastore": datastore, "semantic_search": bool(enabled), "rows_queued": queued}

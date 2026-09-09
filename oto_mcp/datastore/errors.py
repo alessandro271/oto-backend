@@ -91,13 +91,13 @@ class BusinessKeyRequired(ValueError):
     le geste (viser la ligne par son identifiant). `row` = la désignation de la ligne
     fautive quand le geste en visait plusieurs, comme `RowValidationError` (#412)."""
 
-    def __init__(self, message: str, *, key: str, namespace: Optional[str] = None,
+    def __init__(self, message: str, *, key: str, datastore: Optional[str] = None,
                  value: Any = None, row: Optional[str] = None):
         # Le motif NU est conservé : le batch reconstruit le même refus en lui
         # ajoutant sa désignation de ligne, sans reformuler le message.
         self.motif = message
         self.key = key
-        self.namespace = namespace
+        self.datastore = datastore
         self.value = value
         self.row = row
         super().__init__(f"{row} : {message}" if row else message)
@@ -126,7 +126,7 @@ class InvalidCursor(ValueError):
     """Curseur de pagination illisible (mal formé / tronqué)."""
 
 
-class NamespaceNotFound(Exception):
+class DatastoreNotFound(Exception):
     """Le nom ne désigne aucun tableau VISIBLE dans l'org de l'appel.
 
     `indice` (#631) : ce que le refus a de plus à dire quand le tableau existe bel et
@@ -135,26 +135,26 @@ class NamespaceNotFound(Exception):
     quel par la face MCP ; None quand il n'y a rien d'utile (le nom n'existe nulle
     part) — une piste vide vaut mieux qu'une phrase qui meuble."""
 
-    def __init__(self, namespace: Optional[str] = None, *, indice: Optional[str] = None):
-        self.namespace = namespace
+    def __init__(self, datastore: Optional[str] = None, *, indice: Optional[str] = None):
+        self.datastore = datastore
         self.indice = indice
-        super().__init__(*([namespace] if namespace is not None else []))
+        super().__init__(*([datastore] if datastore is not None else []))
 
 
 class RowNotFound(Exception):
     pass
 
 
-class NamespaceExists(Exception):
+class DatastoreExists(Exception):
     pass
 
 
-class NamespaceReadOnly(Exception):
-    """Écriture tentée sur un namespace partagé en lecture seule."""
+class DatastoreReadOnly(Exception):
+    """Écriture tentée sur un datastore partagé en lecture seule."""
     pass
 
 
-class NamespaceForbidden(Exception):
+class DatastoreForbidden(Exception):
     """Action de gouvernance (supprimer/transférer) tentée sans droit de gouvernance."""
     pass
 

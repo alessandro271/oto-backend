@@ -5,7 +5,7 @@ Deux défauts d'un même geste, tels que vécus sur le projet 59 :
 1. le SILENCE — la suppression touchait zéro ligne, et la réponse ne portait aucune
    trace de ce non-événement (le lien visé figurait encore dans les `links` rendus par
    ce même appel) ;
-2. la ref INDÉLOGEABLE — un lien `tableau` stocké sous le NOM de son namespace (ligne
+2. la ref INDÉLOGEABLE — un lien `tableau` stocké sous le NOM de son datastore (ligne
    d'avant la normalisation nom→id de `op=link`) alors que l'unlink canonisait la ref
    demandée en id AVANT de supprimer : on effaçait « 108 », la ligne s'appelle
    « suivi-commercial-index ». Même classe côté `procedure` (slug stocké vs id demandé).
@@ -75,8 +75,8 @@ def surface(monkeypatch):
                         lambda *a, **k: {"status": "created", "changed": []})
     monkeypatch.setattr(P.db, "log_project_activity",
                         lambda pid, sub, action, detail=None: etat["activite"].append(action))
-    monkeypatch.setattr(P.db, "get_datastore_namespace",
-                        lambda ot, oid, name: ({"id": NAMESPACES[name], "namespace": name}
+    monkeypatch.setattr(P.db, "get_datastore",
+                        lambda ot, oid, name: ({"id": NAMESPACES[name], "datastore": name}
                                                if (ot, oid) == ("org", "2")
                                                and name in NAMESPACES else None))
     monkeypatch.setattr(P.org_store, "get_instruction",

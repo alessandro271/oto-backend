@@ -280,13 +280,13 @@ def provision_tableau_schema(ns_id: int, target: dict) -> dict:
       écraser un schéma posé serait une perte silencieuse.
     Renvoie {status: provisioned|conform|mismatch|dirty_key, warning?}."""
     from . import db
-    ns = db.get_datastore_namespace_by_id(int(ns_id)) or {}
+    ns = db.get_datastore_by_id(int(ns_id)) or {}
     current = ns.get("schema")
     if current:
         if current == target:
             return {"status": "conform"}
         return {"status": "mismatch",
-                "warning": (f"le tableau `{ns.get('namespace')}` a déjà un schéma "
+                "warning": (f"le tableau `{ns.get('datastore')}` a déjà un schéma "
                             "DIFFÉRENT du schéma cible déclaré par la procédure — "
                             "binding posé tel quel ; aligne-le via data_set_schema "
                             "si c'est voulu.")}

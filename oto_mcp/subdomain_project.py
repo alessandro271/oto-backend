@@ -80,7 +80,7 @@ def valid_org_audience(aud: object) -> bool:
 # Tools datastore exposables sur un endpoint `secret` opt-in — visibilité COUPLÉE au
 # flag `mcp_expose_datastore` (#193 : le flag rendait le datastore résolvable au CALL
 # mais jamais visible au `tools/list`). Lecture par défaut, écriture en opt-in séparé.
-DATASTORE_READ_TOOLS = frozenset({"data_list_namespaces", "data_rows"})
+DATASTORE_READ_TOOLS = frozenset({"data_list_datastores", "data_rows"})
 DATASTORE_WRITE_TOOLS = frozenset({"data_write", "data_set_schema"})
 
 # Pages du projet (`oto_doc` en LECTURE), même couplage flag↔visibilité que le

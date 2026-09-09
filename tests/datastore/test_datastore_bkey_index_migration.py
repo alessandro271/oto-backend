@@ -68,7 +68,7 @@ def test_distinct_values_still_coexist(pg):
     assert n == 2
 
 
-def test_the_index_is_partial_to_its_namespace(pg):
+def test_the_index_is_partial_to_its_datastore(pg):
     """Un même SIREN dans DEUX tableaux n'est pas un doublon."""
     from oto_mcp.db.datastore import datastore_ensure_key_index
     _ins(pg, 1, "a", '{"siren": "552081317"}')

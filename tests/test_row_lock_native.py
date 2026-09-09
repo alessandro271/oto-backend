@@ -58,7 +58,7 @@ def live(pg_dsn):
 def table(live):
     from oto_mcp import db
     ns = "q-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore_namespace("user", "sub-test", ns)
+    ns_id = db.create_datastore("user", "sub-test", ns)
     for i in range(3):
         db.datastore_insert_row(ns_id, f"r{i}", {"societe": f"Boîte {i}"})
     return ns, ns_id
@@ -410,9 +410,9 @@ def _table_a_cle(ns_id: int) -> None:
 def _ns_of(ns_id: int) -> str:
     from oto_mcp.db._conn import _connect
     with _connect() as conn:
-        r = conn.execute("SELECT namespace FROM user_datastores WHERE id = %s",
+        r = conn.execute("SELECT namespace AS datastore FROM user_datastores WHERE id = %s",
                          (ns_id,)).fetchone()
-    return dict(r)["namespace"]
+    return dict(r)["datastore"]
 
 
 def test_the_holder_MERGES_freely_through_its_run(table):

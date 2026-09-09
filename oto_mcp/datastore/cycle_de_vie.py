@@ -131,7 +131,7 @@ def refus_de_transition(colonne: str, depuis: str, vers: str,
     return (
         f"{colonne}: transition {depuis!r} → {vers!r} interdite{quoi}. Si cette "
         f"transition est légitime, elle se DÉCLARE : "
-        f"`data_patch_schema(namespace=…, fields=[{patch}])` — la fusion ne touche que "
+        f"`data_patch_schema(datastore=…, fields=[{patch}])` — la fusion ne touche que "
         f"l'état nommé, le reste du cycle de vie ne bouge pas.")
 
 
@@ -190,7 +190,7 @@ def merge_lifecycle(current: dict, patch: dict) -> dict:
 
 
 def queue_release_warning(schema: Optional[dict]) -> Optional[str]:
-    """Le namespace se donne un STATUT mais aucun état TERMINAL : dit-le, sinon le
+    """Le datastore se donne un STATUT mais aucun état TERMINAL : dit-le, sinon le
     silence se paie en file de travail (signal #360).
 
     L'auto-release du bail (`_release_if_terminal`) ne se déclenche que sur un état

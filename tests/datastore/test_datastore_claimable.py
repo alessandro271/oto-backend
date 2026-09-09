@@ -89,10 +89,10 @@ def _store(sub="sub-agent"):
 
 
 def _table(schema, lignes=LIGNES) -> tuple:
-    """Un tableau neuf → `(store, namespace, ns_id, {societe: _id})`."""
+    """Un tableau neuf → `(store, datastore, ns_id, {societe: _id})`."""
     from oto_mcp import db
     ns = "file-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore_namespace("user", "sub-agent", ns)
+    ns_id = db.create_datastore("user", "sub-agent", ns)
     st = _store()
     st.set_schema(ns, schema)
     ids = {}
@@ -220,13 +220,13 @@ def test_la_face_REST_rend_409_row_outside_claimable(monkeypatch):
     from oto_mcp.datastore.core import RowOutsideClaimable
 
     class _Store:
-        def claim_row(self, namespace, row_id, **k):
+        def claim_row(self, datastore, row_id, **k):
             raise RowOutsideClaimable(row_id, PERIMETRE)
 
     monkeypatch.setattr(dsc, "make_store", lambda sub: _Store())
     with pytest.raises(AuthzDenied) as e:
         dsc._claim_row(ResolvedCtx(sub="u-1"),
-                       dsc.ClaimRowInput(namespace="vivier", row_id="r1", worker="sarah"))
+                       dsc.ClaimRowInput(datastore="vivier", row_id="r1", worker="sarah"))
     assert (e.value.status, e.value.code) == (409, "row_outside_claimable")
     assert "jalon-100" in e.value.message
     assert e.value.details == {"claimable": PERIMETRE}

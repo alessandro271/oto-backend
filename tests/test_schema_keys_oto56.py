@@ -135,11 +135,29 @@ def test_les_attributs_du_FRONT_ne_sont_jamais_denonces():
     assert C.check({"fields": champs})["unknown_keys_warning"] is None
 
 
-def test_chaque_cle_declaree_nomme_au_moins_un_lecteur():
-    """Une clé sans lecteur n'aurait aucune raison d'être reconnue — et c'est
-    précisément ce que le lot cherche à rendre impossible."""
+def test_une_cle_sans_lecteur_DOIT_dire_qu_elle_est_sans_effet():
+    """⚠️ Règle ASSOUPLIE le 08/09/2026, et l'assouplissement est le sujet.
+
+    La règle disait : toute clé déclarée nomme au moins un lecteur, sans quoi elle
+    n'aurait aucune raison d'être reconnue. Elle était juste tant qu'une clé n'avait que
+    deux états — appliquée, ou inconnue.
+
+    `origine` a inauguré le troisième : **500 colonnes de production la portent, et plus
+    personne ne la lit.** La retirer de la liste la ferait passer pour une faute de
+    frappe sur dix tableaux vivants ; lui inventer un lecteur serait un mensonge. Le seul
+    geste honnête est de la déclarer SANS lecteur — et de l'écrire dans sa description,
+    puisque c'est cette description qui est servie à qui pose un schéma.
+
+    Un lecteur vide est donc permis, à une condition : que la clé DISE qu'elle est sans
+    effet. Une clé muette sans lecteur serait le retour du problème d'origine — un mot
+    reconnu dont personne ne sait s'il fait quelque chose."""
     for c in K.CLES:
-        assert c.lecteurs, c.nom
+        if c.lecteurs:
+            continue
+        assert "SANS EFFET" in c.quoi.upper(), (
+            f"`{c.nom}` n'a aucun lecteur : sa description doit dire qu'elle est sans "
+            f"effet, sinon rien ne distingue « plus appliquée » de « oubliée ». "
+            f"Reçu : {c.quoi!r}")
         assert set(c.lecteurs) <= {"validateur", "front"}, c.nom
         assert c.quoi.strip(), c.nom
 
@@ -149,7 +167,11 @@ def test_la_declaration_est_SERVIE():
     cette moitié sûre est un contrôle côté dashboard, et il lui faut cette route."""
     servie = K.servie()
     assert {e["key"] for e in servie} == K.RECONNUES
-    assert all(e["readers"] and "what" in e for e in servie)
+    # ⚠️ `readers` peut être VIDE depuis le 08/09/2026 — une clé encore reconnue que
+    # plus personne n'applique (cf. le banc ci-dessus). Ce qui reste exigé de TOUTE
+    # entrée servie, c'est de dire ce qu'elle fait : c'est là-dessus qu'un client
+    # décide s'il peut compter sur elle.
+    assert all("what" in e and e["what"] for e in servie)
 
 
 # ── le second sens : ce qu'on DÉCLARE appliqué doit l'être ───────────────────

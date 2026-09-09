@@ -9,6 +9,24 @@ même question que le namespace : à qui cette ressource appartient-elle, et qui
 y accède. Le rôle porté par un grant est la source, la permission lecture/écriture en
 est la PROJECTION — jamais l'inverse.
 """
+
+# ── LA FRONTIÈRE DE TRADUCTION ──────────────────────────────────────────────────
+#
+# ⚠️ **La colonne s'appelle `namespace` en base et se SERT sous le nom `datastore`.**
+# C'est délibéré, et c'est ici — dans les projections SQL — que les deux mondes se
+# rejoignent.
+#
+# Le renommage du 08/09/2026 s'arrête au bord du stockage : renommer la colonne
+# imposerait une migration, et surtout prod et préproduction partagent la même base
+# tandis que le déploiement bleu/vert fait tourner les DEUX couleurs ensemble —
+# l'ancienne lirait une colonne disparue, et le retour arrière deviendrait impossible.
+#
+# La conséquence, si on l'oublie : les WHERE et les INSERT ci-dessous nomment la
+# COLONNE (`namespace`), les résultats portent la CLÉ (`datastore`). Confondre les deux
+# ne lève aucune erreur — ça rend une ligne dont la clé attendue est absente, donc
+# `None`, donc un filtre qui ne matche rien. Le mode d'échec est un ensemble vide, et
+# il s'est produit trois fois dans la journée avant d'être compris.
+
 from __future__ import annotations
 
 import json
@@ -21,7 +39,7 @@ from ._conn import _connect
 from .users import upsert_user
 
 
-def create_datastore_namespace(owner_type: str, owner_id: str, namespace: str) -> int:
+def create_datastore(owner_type: str, owner_id: str, namespace: str) -> int:
     """Crée un namespace possédé par `(owner_type, owner_id)` (ADR 0030). `owner_type`
     ∈ {user, org, group} ; `owner_id` = sub | org.id::text | group.id::text. Lève si
     le même propriétaire a déjà ce nom."""
@@ -39,20 +57,20 @@ def create_datastore_namespace(owner_type: str, owner_id: str, namespace: str) -
         return int(row["id"])
 
 
-def get_datastore_namespace(owner_type: str, owner_id: str, namespace: str) -> Optional[dict]:
+def get_datastore(owner_type: str, owner_id: str, namespace: str) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
-            "SELECT id, owner_type, owner_id, namespace, created_at FROM user_datastores "
+            "SELECT id, owner_type, owner_id, namespace AS datastore, created_at FROM user_datastores "
             "WHERE owner_type = %s AND owner_id = %s AND namespace = %s",
             (owner_type, owner_id, namespace),
         ).fetchone()
         return dict(row) if row else None
 
 
-def get_datastore_namespace_by_id(ns_id: int) -> Optional[dict]:
+def get_datastore_by_id(ns_id: int) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
-            "SELECT id, owner_type, owner_id, namespace, schema, created_at "
+            "SELECT id, owner_type, owner_id, namespace AS datastore, schema, created_at "
             "FROM user_datastores WHERE id = %s",
             (ns_id,),
         ).fetchone()
@@ -86,7 +104,7 @@ def set_datastore_semantic(ns_id: int, enabled: bool) -> int:
         return 0
 
 
-def list_datastore_namespaces_for_owners(owners: list[tuple[str, str]]) -> list[dict]:
+def list_datastores_for_owners(owners: list[tuple[str, str]]) -> list[dict]:
     """Namespaces possédés par l'un des `(owner_type, owner_id)` fournis."""
     if not owners:
         return []
@@ -94,7 +112,7 @@ def list_datastore_namespaces_for_owners(owners: list[tuple[str, str]]) -> list[
     oids = [o[1] for o in owners]
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT d.id, d.owner_type, d.owner_id, d.namespace, d.schema, d.created_at "
+            "SELECT d.id, d.owner_type, d.owner_id, d.namespace AS datastore, d.schema, d.created_at "
             "FROM user_datastores d "
             "JOIN unnest(%s::text[], %s::text[]) AS o(t, i) "
             "  ON d.owner_type = o.t AND d.owner_id = o.i "
@@ -123,7 +141,7 @@ def resolve_datastore_ns(
     ns_id = int(namespace) if str(namespace).isdigit() else None
     with _connect() as conn:
         row = conn.execute(
-            "SELECT d.id, d.owner_type, d.owner_id, d.namespace, d.schema, d.created_at "
+            "SELECT d.id, d.owner_type, d.owner_id, d.namespace AS datastore, d.schema, d.created_at "
             "FROM user_datastores d "
             "WHERE (d.namespace = %(ns)s OR d.id = %(nsid)s) AND ("
             "     (d.owner_type = 'user' AND d.owner_id = %(sub)s)"
@@ -147,7 +165,7 @@ def resolve_datastore_ns(
         return dict(row) if row else None
 
 
-def list_datastore_namespaces_granted_to(
+def list_datastores_granted_to(
     sub: str, org_ids: list[int], group_ids: list[int],
 ) -> list[dict]:
     """Namespaces accordés à l'**org active / groupe actif** via `resource_grants`
@@ -163,7 +181,7 @@ def list_datastore_namespaces_granted_to(
     grp_txt = [str(g) for g in group_ids]
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT d.id, d.owner_type, d.owner_id, d.namespace, d.created_at, "
+            "SELECT d.id, d.owner_type, d.owner_id, d.namespace AS datastore, d.created_at, "
             "       max(g.permission) AS permission "
             "FROM resource_grants g "
             "JOIN user_datastores d ON d.id::text = g.resource_id "
@@ -173,7 +191,7 @@ def list_datastore_namespaces_granted_to(
             # ⚠️ L'exclusion « AND NOT (owner_type='user' AND owner_id=sub) » est
             # RETIRÉE (oto-backend#870). Son commentaire disait « reliques perso
             # possédées (gérées à part) » — et ce « à part » ne pointait vers rien :
-            # `list_namespaces` ne listait que l'org, donc un tableau personnel
+            # `list_datastores` ne listait que l'org, donc un tableau personnel
             # n'était rendu par AUCUN des deux chemins. La déduplication par id, en
             # amont, suffit à ne pas le compter deux fois.
 
@@ -184,7 +202,7 @@ def list_datastore_namespaces_granted_to(
         return [dict(r) for r in rows]
 
 
-def rename_datastore_namespace_by_id(ns_id: int, new: str) -> bool:
+def rename_datastore_by_id(ns_id: int, new: str) -> bool:
     """Renomme un namespace par id (l'id BIGSERIAL est conservé → URL/deeplink/grants
     stables ; les grants sont keyés par id, donc rien à propager). Lève si le même
     propriétaire a déjà ce nom, ou si l'id est introuvable."""
@@ -194,7 +212,7 @@ def rename_datastore_namespace_by_id(ns_id: int, new: str) -> bool:
     with _connect() as conn:
         with conn.transaction():
             cur = conn.execute(
-                "SELECT owner_type, owner_id, namespace FROM user_datastores WHERE id = %s FOR UPDATE",
+                "SELECT owner_type, owner_id, namespace AS datastore FROM user_datastores WHERE id = %s FOR UPDATE",
                 (ns_id,),
             ).fetchone()
             if not cur:
@@ -212,7 +230,7 @@ def rename_datastore_namespace_by_id(ns_id: int, new: str) -> bool:
     return True
 
 
-def delete_datastore_namespace_by_id(ns_id: int) -> bool:
+def delete_datastore_by_id(ns_id: int) -> bool:
     """Supprime un namespace par id (CASCADE sur `datastore_rows`) + ses grants
     (`resource_grants` n'a pas de FK car `resource_id` est générique) + son
     éventuel index de clé métier (#109 ch.3 — orphelin inoffensif sinon, mais
@@ -231,7 +249,7 @@ def delete_datastore_namespace_by_id(ns_id: int) -> bool:
     return cur.rowcount > 0
 
 
-def reparent_datastore_namespace(ns_id: int, new_owner_type: str, new_owner_id: str) -> None:
+def reparent_datastore(ns_id: int, new_owner_type: str, new_owner_id: str) -> None:
     """Re-parente un namespace vers un nouveau propriétaire (cœur du transfert).
     Lève si le destinataire possède déjà un namespace de ce nom."""
     with _connect() as conn:
@@ -252,12 +270,12 @@ def reparent_datastore_namespace(ns_id: int, new_owner_type: str, new_owner_id: 
             )
 
 
-def list_all_datastore_namespaces() -> list[dict]:
+def list_all_datastores() -> list[dict]:
     """Tous les namespaces, toutes propriétés confondues — pour l'object-browser
     PLATEFORME (gate super_admin/platform_admin côté capacité)."""
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT id, owner_type, owner_id, namespace, created_at "
+            "SELECT id, owner_type, owner_id, namespace AS datastore, created_at "
             "FROM user_datastores ORDER BY owner_type, owner_id, namespace",
         ).fetchall()
         return [dict(r) for r in rows]

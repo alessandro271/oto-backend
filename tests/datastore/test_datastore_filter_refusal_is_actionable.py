@@ -42,7 +42,7 @@ def store(monkeypatch):
 
 
 def test_list_rows_passes_the_reason_through(store):
-    inp = dr.ListRowsInput(namespace="160",
+    inp = dr.ListRowsInput(datastore="160",
                            filters='[{"field":"x","op":"eq","value":null}]')
     with pytest.raises(AuthzDenied) as e:
         dr._list_rows(_Ctx(), inp)
@@ -53,7 +53,7 @@ def test_list_rows_passes_the_reason_through(store):
 
 
 def test_aggregate_passes_the_reason_through(store):
-    inp = dr.AggregateInput(namespace="160", metrics='["median:ca"]')
+    inp = dr.AggregateInput(datastore="160", metrics='["median:ca"]')
     with pytest.raises(AuthzDenied) as e:
         dr._aggregate(_Ctx(), inp)
     assert e.value.status == 400
@@ -63,7 +63,7 @@ def test_aggregate_passes_the_reason_through(store):
 def test_malformed_json_stays_distinguishable(store):
     """Le refus de PARSING garde son code nu — c'est voulu : il n'a pas de remède
     métier à donner, et le distinguer du refus sémantique est tout l'intérêt."""
-    inp = dr.ListRowsInput(namespace="160", filters="pas du json")
+    inp = dr.ListRowsInput(datastore="160", filters="pas du json")
     with pytest.raises(AuthzDenied) as e:
         dr._list_rows(_Ctx(), inp)
     assert e.value.code == "invalid_filters"

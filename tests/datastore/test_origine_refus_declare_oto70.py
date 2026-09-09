@@ -181,7 +181,7 @@ def test_l_upload_signe_declare_au_MINT_et_le_PUT_ne_peut_pas_se_le_donner(monke
     corps = b'{"ref": "a", "prio": {"valeur": "B", "origine": "A"}}\n'
     for declare in (False, True):
         upload_tokens.materialize(
-            "u1", {"kind": "datastore", "ns_id": 1, "namespace": "t",
+            "u1", {"kind": "datastore", "ns_id": 1, "datastore": "t",
                    "format": "ndjson", "key": None, "origine_override": declare},
             corps, "application/x-ndjson")
         assert vus["origine_override"] is declare
@@ -192,7 +192,7 @@ def test_un_jeton_d_AVANT_ce_lot_ne_declare_rien():
     déclaré », jamais « déclaré ». Le défaut penche du côté qui refuse."""
     from oto_mcp.capabilities.uploads import UploadUrlInput
 
-    assert UploadUrlInput(target="datastore", namespace="t").origine_override is False
+    assert UploadUrlInput(target="datastore", datastore="t").origine_override is False
 
 
 def test_un_jeton_emis_SANS_declaration_ne_se_rejoue_pas_AVEC(monkeypatch):
@@ -209,7 +209,7 @@ def test_un_jeton_emis_SANS_declaration_ne_se_rejoue_pas_AVEC(monkeypatch):
     from oto_mcp import upload_tokens
 
     monkeypatch.setenv("OTO_MCP_OAUTH_STATE_SECRET", "s3cr3t-de-banc")
-    cible = {"kind": "datastore", "ns_id": 1, "namespace": "t",
+    cible = {"kind": "datastore", "ns_id": 1, "datastore": "t",
              "format": "ndjson", "key": None, "origine_override": False}
     token, _exp = upload_tokens.sign("u1", None, cible)
     assert upload_tokens.verify(token)["target"]["origine_override"] is False
@@ -287,7 +287,7 @@ def _table(schema=SCHEMA):
     from oto_mcp import db
     from oto_mcp.datastore.core import make_store
     ns = "t-" + uuid.uuid4().hex[:6]
-    ns_id = db.create_datastore_namespace("user", "sub-origine", ns)
+    ns_id = db.create_datastore("user", "sub-origine", ns)
     st = make_store("sub-origine")
     st.set_schema(ns, schema)
     return st, ns, ns_id

@@ -22,14 +22,14 @@ from oto_mcp.auth import token_scopes
 from oto_mcp.capabilities.datastore import claim as dsc
 from oto_mcp.capabilities.datastore import rows as dsr
 from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
-from oto_mcp.datastore.core import NamespaceNotFound, RowClaimed, RowNotFound
+from oto_mcp.datastore.core import DatastoreNotFound, RowClaimed, RowNotFound
 
 # ── Le store : réserver une ligne NOMMÉE ─────────────────────────────────────
 
 def _store(monkeypatch, ns_id=7):
     s = D.DatastorePg("u1")
     monkeypatch.setattr(s, "_resolve", lambda ns, write=False: ns_id)
-    monkeypatch.setattr(s, "_ns_of", lambda _id: {"namespace": "vivier", "schema": None})
+    monkeypatch.setattr(s, "_ns_of", lambda _id: {"datastore": "vivier", "schema": None})
     return s
 
 
@@ -93,7 +93,7 @@ def test_claim_row_needs_write_access(monkeypatch):
         "claim_active": True})
     s = D.DatastorePg("u1")
     monkeypatch.setattr(s, "_resolve", _resolve)
-    monkeypatch.setattr(s, "_ns_of", lambda _id: {"namespace": "vivier", "schema": None})
+    monkeypatch.setattr(s, "_ns_of", lambda _id: {"datastore": "vivier", "schema": None})
     s.claim_row("vivier", "r1", worker="sarah")
     assert seen["write"] is True    # poser un bail = écrire, un partage en lecture ne réserve pas
 
@@ -117,7 +117,7 @@ class _Store:
     """Store de test : enregistre les appels, rejoue les réponses programmées."""
     # Relevé de résolution du store (`DatastorePg.dernier_tableau`) : les
     # remises y prennent l'IDENTITÉ du tableau — nom canonique + `ns_id`.
-    dernier_tableau = {"ns_id": 174, "namespace": "vivier"}
+    dernier_tableau = {"ns_id": 174, "datastore": "vivier"}
 
     def __init__(self, **outcomes):
         self.outcomes = outcomes
@@ -130,17 +130,17 @@ class _Store:
             raise out
         return out
 
-    def claim_next(self, namespace, **k):
-        return self._play("claim_next", {"namespace": namespace, **k})
+    def claim_next(self, datastore, **k):
+        return self._play("claim_next", {"datastore": datastore, **k})
 
-    def claim_row(self, namespace, row_id, **k):
-        return self._play("claim_row", {"namespace": namespace, "row_id": row_id, **k})
+    def claim_row(self, datastore, row_id, **k):
+        return self._play("claim_row", {"datastore": datastore, "row_id": row_id, **k})
 
-    def release_claim(self, namespace, row_id, **k):
-        return self._play("release_claim", {"namespace": namespace, "row_id": row_id, **k})
+    def release_claim(self, datastore, row_id, **k):
+        return self._play("release_claim", {"datastore": datastore, "row_id": row_id, **k})
 
-    def force_release(self, namespace, row_id, **k):
-        return self._play("force_release", {"namespace": namespace, "row_id": row_id, **k})
+    def force_release(self, datastore, row_id, **k):
+        return self._play("force_release", {"datastore": datastore, "row_id": row_id, **k})
 
 
 def _cap(monkeypatch, store, handler, Input, **fields):
@@ -162,17 +162,17 @@ ROW = {"_id": "r1", "nom": "ACME", "_claimed_by": "sarah", "_claimed_until": "t+
 
 def test_claim_next_reserves_and_returns_the_row(monkeypatch):
     store = _Store(claim_next=ROW)
-    out = _claim_next(monkeypatch, store, namespace="vivier", worker="sarah",
+    out = _claim_next(monkeypatch, store, datastore="vivier", worker="sarah",
                       filter={"statut": "a-appeler"}, lease_s=300)
     # La remise porte l'IDENTITÉ du tableau : son nom canonique ET son numéro —
     # c'est ici que l'agent apprend la forme d'adresse qui remplace le nom.
-    assert out == {"namespace": "vivier", "ns_id": 174, "row": ROW}
+    assert out == {"datastore": "vivier", "ns_id": 174, "row": ROW}
     _, kw = store.calls[0]
     assert (kw["worker"], kw["filter"], kw["lease_s"]) == ("sarah", {"statut": "a-appeler"}, 300)
 
 
 def test_claim_next_on_an_empty_queue_says_so(monkeypatch):
-    out = _claim_next(monkeypatch, _Store(claim_next=None), namespace="vivier", worker="sarah")
+    out = _claim_next(monkeypatch, _Store(claim_next=None), datastore="vivier", worker="sarah")
     assert out["row"] is None
     assert "hint" in out           # file vide ≠ erreur, mais ça se dit
 
@@ -180,19 +180,19 @@ def test_claim_next_on_an_empty_queue_says_so(monkeypatch):
 def test_claim_lease_is_optional_and_defaults_server_side(monkeypatch):
     """Ne pas relayer un `lease_s` absent : le défaut appartient au store, pas au front."""
     store = _Store(claim_next=ROW)
-    _claim_next(monkeypatch, store, namespace="vivier", worker="sarah")
+    _claim_next(monkeypatch, store, datastore="vivier", worker="sarah")
     assert "lease_s" not in store.calls[0][1]
 
 
 def test_claim_next_reports_the_configuration_warning(monkeypatch):
     store = _Store(claim_next=ROW)
 
-    def _claim(namespace, **k):
+    def _claim(datastore, **k):
         k["warnings"].append("statut sans état terminal")
         return ROW
 
     monkeypatch.setattr(store, "claim_next", _claim)
-    assert _claim_next(monkeypatch, store, namespace="vivier",
+    assert _claim_next(monkeypatch, store, datastore="vivier",
                        worker="sarah")["warning"] == "statut sans état terminal"
 
 
@@ -201,8 +201,8 @@ def test_claim_without_worker_is_refused(monkeypatch, worker):
     """`worker` EST la garde du bail — sans lui, la file redevient coopérative."""
     store = _Store()
     for handler in (
-        lambda: _claim_next(monkeypatch, store, namespace="vivier", worker=worker),
-        lambda: _claim_row(monkeypatch, store, namespace="vivier", row_id="r1", worker=worker),
+        lambda: _claim_next(monkeypatch, store, datastore="vivier", worker=worker),
+        lambda: _claim_row(monkeypatch, store, datastore="vivier", row_id="r1", worker=worker),
     ):
         with pytest.raises(AuthzDenied) as e:
             handler()
@@ -214,7 +214,7 @@ def test_claim_without_worker_is_refused(monkeypatch, worker):
 def test_claim_row_conflict_names_who_holds_the_lease(monkeypatch):
     store = _Store(claim_row=RowClaimed("r1", "jules", "t+9"))
     with pytest.raises(AuthzDenied) as e:
-        _claim_row(monkeypatch, store, namespace="vivier", row_id="r1", worker="sarah")
+        _claim_row(monkeypatch, store, datastore="vivier", row_id="r1", worker="sarah")
     assert (e.value.status, e.value.code) == (409, "row_claimed")
     assert "jules" in e.value.message
 
@@ -222,24 +222,24 @@ def test_claim_row_conflict_names_who_holds_the_lease(monkeypatch):
 def test_claim_row_404_when_the_row_is_gone(monkeypatch):
     with pytest.raises(AuthzDenied) as e:
         _claim_row(monkeypatch, _Store(claim_row=RowNotFound("r1")),
-                   namespace="vivier", row_id="r1", worker="sarah")
+                   datastore="vivier", row_id="r1", worker="sarah")
     assert (e.value.status, e.value.code) == (404, "row_not_found")
 
 
-def test_claim_on_an_unknown_namespace_is_a_404(monkeypatch):
+def test_claim_on_an_unknown_datastore_is_a_404(monkeypatch):
     """Un tableau hors périmètre ne se distingue pas d'un tableau inexistant."""
     with pytest.raises(AuthzDenied) as e:
-        _claim_next(monkeypatch, _Store(claim_next=NamespaceNotFound("nope")),
-                    namespace="inconnu", worker="sarah")
-    assert (e.value.status, e.value.code) == (404, "namespace_not_found")
+        _claim_next(monkeypatch, _Store(claim_next=DatastoreNotFound("nope")),
+                    datastore="inconnu", worker="sarah")
+    assert (e.value.status, e.value.code) == (404, "datastore_not_found")
 
 
 def test_claim_on_a_read_only_share_is_refused(monkeypatch):
     """Poser un bail est une écriture : un tableau partagé en lecture ne se réserve pas."""
     with pytest.raises(AuthzDenied) as e:
-        _claim_next(monkeypatch, _Store(claim_next=D.NamespaceReadOnly("vivier")),
-                    namespace="vivier", worker="sarah")
-    assert (e.value.status, e.value.code) == (403, "namespace_read_only")
+        _claim_next(monkeypatch, _Store(claim_next=D.DatastoreReadOnly("vivier")),
+                    datastore="vivier", worker="sarah")
+    assert (e.value.status, e.value.code) == (403, "datastore_read_only")
 
 
 def test_the_claims_are_rest_only_capabilities():
@@ -260,7 +260,7 @@ def _call(monkeypatch, store, body, *, no_body=False):
     monkeypatch.setattr(dsr, "make_store", lambda sub: store)
     monkeypatch.setattr(dsr.datastore_journal, "record", lambda *a, **k: None)
     return call("me.datastore.release_claim",
-                path_params={"namespace": "vivier", "row_id": "r1"},
+                path_params={"datastore": "vivier", "row_id": "r1"},
                 body=body, no_body=no_body)
 
 
@@ -304,7 +304,7 @@ def test_a_scoped_token_cannot_force_release(monkeypatch):
     """Un jeton porté = une intégration multi-utilisateurs : y laisser la
     libération forcée, c'est laisser chacun retirer la ligne de son collègue."""
     store = _Store(force_release=True)
-    token_scopes.set_current({"namespaces": {"vivier": "write"}})
+    token_scopes.set_current({"datastores": {"vivier": "write"}})
     try:
         status, corps = _call(monkeypatch, store, {})
     finally:
@@ -315,7 +315,7 @@ def test_a_scoped_token_cannot_force_release(monkeypatch):
 
 def test_a_scoped_token_releases_its_own_lease(monkeypatch):
     store = _Store(release_claim=_LIBERE)
-    token_scopes.set_current({"namespaces": {"vivier": "write"}})
+    token_scopes.set_current({"datastores": {"vivier": "write"}})
     try:
         status, _ = _call(monkeypatch, store, {"worker": "sarah"})
     finally:

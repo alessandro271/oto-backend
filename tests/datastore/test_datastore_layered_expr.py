@@ -82,7 +82,7 @@ def test_the_index_and_the_lookup_share_one_expression():
 
     Le mode d'échec d'un écart ne casse rien de visible — la déduplication
     continuerait de marcher, chaque lookup passerait simplement en seq scan. C'est
-    la panne silencieuse type : on ne la voit qu'au moment où le namespace est assez
+    la panne silencieuse type : on ne la voit qu'au moment où le datastore est assez
     gros pour que ça coûte. D'où ce test, qui compare les deux chaînes plutôt que
     leurs effets."""
     assert (dsdb.field_value_sql("siren").as_string(None)
