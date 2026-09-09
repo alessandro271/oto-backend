@@ -379,3 +379,57 @@ def test_les_campagnes_epuisees_sont_arretees_AVANT_d_en_servir_une(monkeypatch,
     assert any("campagne 77 arrêtée" in r.message for r in caplog.records), \
         "un arrêt automatique qui ne se dit pas est un silence de plus"
 
+
+
+# ── La consigne servie DANS le cadre, pas chargée par l'agent ────────────────
+# Mesuré le 08/09/2026 sur une passe réelle : la consigne que l'agent charge au
+# premier tour est FACTURÉE plein tarif au deuxième — 20 603 jetons sur 41 204,
+# la moitié du déroulé, avec un cache à zéro sur ce tour-là. Jointe au travail à
+# la réservation, elle entre dans le préfixe stable : lue en cache dès le
+# premier tour, et le tour de chargement disparaît.
+#
+# ⚠️ Jointe, JAMAIS stockée : une consigne pèse ~20 000 caractères, et cent
+# travaux la porteraient cent fois en base. Même raison que la clé de modèle.
+
+def test_le_travail_reserve_porte_le_TEXTE_de_sa_procedure(monkeypatch, espion):
+    monkeypatch.setattr(RJ.db, "get_guide_db",
+                        lambda scope, owner, slug: {"body_md": "LA CONSIGNE"})
+    monkeypatch.setattr(RJ.db, "claim_next_job", lambda *a, **k: {
+        "id": 7, "org_id": 226, "sub": "demandeur",
+        "payload": {"procedure": "passe-registre"}})
+
+    job = _appel(_ctx(), op="claim")["job"]
+
+    assert job["system"] == "LA CONSIGNE", (
+        "le worker reçoit du TEXTE à poser en cadre — il ne va rien chercher, "
+        "et il ignore ce qu'est une procédure")
+
+
+def test_une_procedure_ABSENTE_ne_fait_pas_echouer_la_reservation(monkeypatch, espion):
+    """L'agent la chargera lui-même, comme avant. C'est une accélération,
+    jamais une condition — un travail ne se perd pas parce qu'un texte manque."""
+    monkeypatch.setattr(RJ.db, "get_guide_db", lambda scope, owner, slug: None)
+    monkeypatch.setattr(RJ.db, "claim_next_job", lambda *a, **k: {
+        "id": 7, "org_id": 226, "sub": "demandeur",
+        "payload": {"procedure": "jamais-posee"}})
+
+    job = _appel(_ctx(), op="claim")["job"]
+
+    assert "system" not in job
+    assert job["id"] == 7, "le travail est servi quand même"
+
+
+def test_une_lecture_de_procedure_qui_LEVE_ne_perd_pas_le_travail(monkeypatch, espion):
+    """Le pendant du précédent, et le plus important des trois : la base peut
+    tousser. Un travail réservé qui se perdrait ici laisserait sa ligne sous
+    bail jusqu'à expiration."""
+    def _explose(scope, owner, slug):
+        raise RuntimeError("base indisponible")
+    monkeypatch.setattr(RJ.db, "get_guide_db", _explose)
+    monkeypatch.setattr(RJ.db, "claim_next_job", lambda *a, **k: {
+        "id": 7, "org_id": 226, "sub": "demandeur",
+        "payload": {"procedure": "passe-registre"}})
+
+    job = _appel(_ctx(), op="claim")["job"]
+
+    assert "system" not in job and job["id"] == 7

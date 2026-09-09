@@ -382,6 +382,45 @@ def _depot_pose(org_id: int, depot: str) -> bool:
         return False
 
 
+def _avec_procedure(job: dict) -> dict:
+    """Le travail, augmenté du TEXTE de sa procédure — à la RÉSERVATION.
+
+    ⚠️ Pourquoi ici et pas dans le worker. Le prompt système du runner a déjà
+    porté une section « Procédure » qu'il remplissait lui-même ; on l'a retirée
+    parce qu'un worker qui va CHERCHER un objet d'Oto cesse d'être un client
+    pur — c'est un concept du backend dans le transport (ADR 0064). Rien n'a
+    changé à cela : le worker ne cherche toujours rien. Il reçoit du texte à
+    poser en cadre, exactement comme il reçoit déjà une clé de modèle et un
+    jeton délégué, et il ignore ce qu'est une procédure.
+
+    ⚠️ Joint à la réservation, JAMAIS stocké dans le travail : une consigne
+    métier pèse une vingtaine de milliers de caractères, et cent travaux la
+    porteraient cent fois en base pour rien. Même raison que la clé et le jeton.
+
+    Ce que ça achète, mesuré le 08/09/2026 sur une passe réelle : la consigne
+    chargée par l'agent au premier tour est FACTURÉE plein tarif au deuxième —
+    20 603 jetons sur les 41 204 d'un déroulé, la moitié, avec un cache à zéro
+    sur ce tour-là. Servie dans le cadre, elle entre dans le préfixe stable :
+    lue en cache dès le premier tour, et le tour de chargement disparaît.
+
+    Absente ou illisible, on ne joint rien : l'agent la chargera lui-même comme
+    avant. C'est une accélération, jamais une condition."""
+    p = job.get("payload") or {}
+    slug, org = p.get("procedure"), job.get("org_id")
+    if not slug or not org:
+        return job
+    try:
+        guide = db.get_guide_db("org", str(org), slug)
+    except Exception:  # noqa: BLE001
+        logger.warning("procédure `%s` illisible pour l'org %s — le travail part "
+                       "sans, l'agent la chargera", slug, org, exc_info=True)
+        return job
+    corps = (guide or {}).get("body_md") or ""
+    if not corps:
+        return job
+    return {**job, "system": corps}
+
+
 def _avec_cle(job: dict, depot: Optional[str], appelant: str) -> dict:
     """Le travail, augmenté de la clé de modèle de son org — à la RÉSERVATION.
 
@@ -673,7 +712,8 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
                 return {"job": None, "campaign_error": panne}
         if job is None:
             return {"job": None}
-        return {"job": _avec_cle(_delegue(job, bail, ctx.sub), inp.provider, ctx.sub)}
+        return {"job": _avec_procedure(
+            _avec_cle(_delegue(job, bail, ctx.sub), inp.provider, ctx.sub))}
 
     if inp.op == "list":
         # Surveillance (page Automatisations) : lecture org-scopée, jamais un
