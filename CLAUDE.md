@@ -198,7 +198,7 @@ avatars/logos · ⚠️ **PROD et PREPROD partagent la MÊME base** : ce qu'on �
 - `runner-et-automatisations.md` — l'état ici, la boucle ailleurs
 - `usage-loop.md` — calllog, feedback, déroulés
 - `monitoring.md` — enquête, rétention, Sentry
-- `event-loop-perf.md` — les 4 gels mono-loop
+- `event-loop-perf.md` — les 5 gels mono-loop
 - `silences-2026-08-27.md` — `except` muets, `# noqa: SILENT`
 - `redaction.md` — rédaction de champs, résultat servi
 - `live-migrations.md` — migrations vivantes, base partagée

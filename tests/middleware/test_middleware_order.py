@@ -4,7 +4,14 @@ fastmcp exécute `instance.middleware` dans l'ordre de la liste : premier ajout�
 plus EXTERNE (`_run_middleware` wrap en reversed(), vérifié empiriquement). Les
 invariants gardés ici :
 
-- `ToolAliasMiddleware` OUTERMOST absolu — il rétablit le nom CANONIQUE d'un outil
+- `IdentityScopeMiddleware` LE PLUS EXTERNE DES NÔTRES (fastmcp préfixe le sien, posé
+  dans son constructeur — il ne demande aucune identité) — il ouvre la mémoire d'identité du message
+  et la garnit hors boucle. Il doit être au-dessus d'`alias`, qui est le premier à
+  demander l'identité : plus interne, la portée manquerait celui qui paie en premier.
+  Il ne dispute rien à `ToolAlias` — il ne lit ni ne réécrit aucun nom, aucun argument,
+  aucun résultat. Et il reste SOUS `ErrorEnvelope` pour l'exception : il n'en lève
+  aucune (cf. son docstring), sans quoi un refus partirait sans l'enveloppe.
+- `ToolAliasMiddleware` OUTERMOST de tout ce qui touche au NOM — il rétablit le nom CANONIQUE d'un outil
   avant que quoi que ce soit d'autre ne le lise (gates `_org=`, rédaction par
   namespace, visibilité, journal `tool_calls`), et renomme la liste servie en dernier
   (au RETOUR), donc après le filtrage de visibilité. Plus interne, une partie de la
@@ -32,6 +39,7 @@ from _mcp_app import static_mcp as _test_mcp
 
 
 OURS = [
+    "IdentityScopeMiddleware",
     "ToolAliasMiddleware",
     "EmptyResultMiddleware",
     "CallContextMiddleware",

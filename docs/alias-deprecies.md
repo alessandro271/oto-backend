@@ -233,7 +233,8 @@ L'ancien chemin porte aussi `Deprecation: true` et `Sunset: <date>` — un inté
 qui lit ses logs voit la date sans ouvrir cette page.
 
 **Les outils MCP** : le doublage se fait au **bord du protocole**, dans
-`ToolAliasMiddleware` (`oto_mcp/middleware/alias.py`), le middleware le plus externe.
+`ToolAliasMiddleware` (`oto_mcp/middleware/alias.py`), le middleware le plus externe
+de tout ce qui touche au NOM.
 `tools/list` sert les deux entrées ; `tools/call` rétablit le nom canonique **avant**
 que quoi que ce soit d'autre ne le lise. C'est ce qui garantit que rien en aval —
 gates de contexte d'appel, denylist de visibilité, journal `tool_calls`, refs

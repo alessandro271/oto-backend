@@ -606,7 +606,20 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None, *,
     # relisent `current_org` → un appel épinglé `_org=` était rédigé/audité sous l'org
     # MAISON. Corrigé 2026-08-02 : l'ordre d'ajout ci-dessous EST l'ordre extern→interne.
 
-    # 0. Nom des outils au nom du PRODUIT du tenant (ADR 0052) — OUTERMOST absolu :
+    # -1. Mémoire d'identité du message — LE PLUS EXTERNE DES NÔTRES (fastmcp pose le
+    # sien dans son constructeur, avant tout enregistrement ; il ne lit aucune identité),
+    # y compris au-dessus de `ToolAlias`. Il ne lit ni ne réécrit aucun nom, aucun argument, aucun résultat :
+    # il ouvre une portée où la canonicalisation du `sub` (un SELECT + un INSERT … ON
+    # CONFLICT, donc un COMMIT) se résout UNE fois, hors boucle, au lieu d'être
+    # repayée par chacun des sept intermédiaires qui redemandent la même identité dans
+    # le même appel. Il est au-dessus d'`alias` parce qu'`alias` est le premier à la
+    # demander. Mesuré sur cette chaîne : 10 allers-retours PG par `tools/call` avant,
+    # 0 dans la boucle après.
+    from .middleware.identity_scope import IdentityScopeMiddleware
+    instance.add_middleware(IdentityScopeMiddleware())
+
+    # 0. Nom des outils au nom du PRODUIT du tenant (ADR 0052) — OUTERMOST de tout ce
+    # qui touche au NOM (la portée d'identité au-dessus n'en lit aucun) :
     # il rétablit le nom CANONIQUE avant que le reste de la chaîne ne le lise (gates
     # `_org=`, rédaction par namespace, visibilité, journal), et renomme la liste
     # servie en dernier, après le filtrage de visibilité. Inerte pour le tenant `oto`

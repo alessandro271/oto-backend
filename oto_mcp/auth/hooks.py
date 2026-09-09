@@ -39,6 +39,64 @@ def sub_override(sub: Optional[str]) -> Iterator[None]:
         _sub_override.reset(token)
 
 
+# Mémoire d'identité PAR MESSAGE MCP — la canonicalisation résolue une fois, relue
+# par tous ceux qui la redemandent dans le MÊME appel.
+#
+# ⚠️ **Pourquoi ce cache ne peut pas servir une identité à la place d'une autre**,
+# ce qui serait infiniment pire que le gel qu'il corrige. Trois barrières,
+# indépendantes :
+#
+# 1. **la clé EST l'identité.** L'entrée est indexée par le `sub` BRUT lu du jeton,
+#    et la valeur est sa forme canonique. Demander l'identité de A ne peut donc pas
+#    rendre celle de B : ce serait chercher `A` et trouver ce qui a été rangé sous
+#    `B`. Une portée trop large ne produirait pas une confusion d'identité, mais une
+#    péremption (un alias posé pendant la requête, non vu) — un défaut d'une autre
+#    nature, et sans conséquence de sécurité ;
+# 2. **la portée est ouverte par le message, pas par le processus.** `identity_scope`
+#    pose un dictionnaire NEUF ; le défaut de la ContextVar est `None`, jamais un
+#    dictionnaire partagé au niveau module. Deux requêtes concurrentes ne peuvent pas
+#    tomber sur le même objet : chacune fait son `set` dans le contexte de SA tâche,
+#    et un `set` n'est jamais vu par une tâche sœur ;
+# 3. **hors portée, il n'existe pas.** `None` ⟹ le chemin d'avant, à l'octet près.
+#    Un script, un timer, un test qui n'ouvre pas de portée ne mémorise rien.
+#
+# L'override REST (`_sub_override`) court-circuite tout ceci en amont : il rend son
+# sub avant même qu'on regarde le cache, donc « tester un outil sous l'identité de
+# l'appelant » ne peut ni lire ni garnir la mémoire d'un autre.
+_identity_cache: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
+    "oto_identity_cache", default=None)
+
+
+@contextlib.contextmanager
+def identity_scope() -> Iterator[None]:
+    """Ouvre une mémoire d'identité pour la durée d'UN message servi.
+
+    Réentrant : une portée imbriquée pose son propre dictionnaire et le rend à la
+    sortie. Hors de ce bloc, `current_user_sub_from_token` retrouve exactement le
+    comportement qu'il avait avant l'existence de ce cache."""
+    token = _identity_cache.set({})
+    try:
+        yield
+    finally:
+        _identity_cache.reset(token)
+
+
+def prime_identity() -> None:
+    """Résout l'identité UNE fois et garnit la portée courante — appelée HORS boucle.
+
+    C'est le geste que `_calllog_sink` fait déjà pour son insertion (`asyncio.to_thread`,
+    « ne pas geler l'event loop sur le chemin chaud de chaque tool call ») : le même
+    remède, appliqué à l'identité juste au-dessus, qu'il avait manquée.
+
+    Sans portée ouverte, sans commande de drain, ou sous override REST : ne fait rien —
+    il n'y a alors rien à résoudre, et rien à mémoriser. Ne rattrape aucune erreur :
+    l'appelant (la portée) décide quoi faire d'un échec, et sa décision est de laisser
+    le chemin d'avant se rejouer là où il se rejouait."""
+    if _identity_cache.get() is None or _sub_override.get() or not alias_drain_armed():
+        return
+    current_user_sub_from_token()
+
+
 def current_client_id_from_token() -> Optional[str]:
     """`azp`/`client_id` du bearer JWT — l'application OAuth CLIENTE qui porte le
     grant (claude.ai, Claude Code, ChatGPT…), PAS l'utilisateur (`sub`). Axe de
@@ -81,9 +139,26 @@ def current_user_sub_from_token() -> Optional[str]:
             # commande posée. Ce passager est relevé par le test du même nom ; le
             # sortir de là est un changement de comportement, pas un nettoyage.
             if alias_drain_armed():
+                # Une portée ouverte ⟹ la canonicalisation (un SELECT) et le
+                # rafraîchissement (un INSERT … ON CONFLICT, donc un COMMIT) ne se
+                # paient qu'UNE fois par message, quel que soit le nombre
+                # d'intermédiaires qui redemandent la même identité dans le même
+                # appel. Mesuré le 09/09/2026 sur la chaîne servie : 10 allers-retours
+                # PG par `tools/call`, tous dans la boucle, pour UNE valeur.
+                # ⚠️ La clé est le sub BRUT du jeton : c'est ce qui rend impossible
+                # de servir l'identité d'un autre (cf. `_identity_cache`).
+                cache = _identity_cache.get()
+                if cache is not None and sub in cache:
+                    return cache[sub]
                 from .. import db
-                sub = db.resolve_sub(sub)
-                db.upsert_user(sub, email=token.claims.get("email"),
+                canonique = db.resolve_sub(sub)
+                db.upsert_user(canonique, email=token.claims.get("email"),
                                name=token.claims.get("name"))
+                # Après les deux appels, jamais avant : un refus (`AliasNonResolvable`,
+                # `CompteEnPause`) ne se mémorise pas — il doit se lever pour CHAQUE
+                # demandeur, comme avant, plutôt que d'être rendu en valeur.
+                if cache is not None:
+                    cache[sub] = canonique
+                return canonique
             return sub
     return os.environ.get("OTO_MCP_DEV_SUB")

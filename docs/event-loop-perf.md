@@ -1,11 +1,13 @@
-# Perf event-loop — le serveur est MONO-LOOP (les 4 modes de gel)
+# Perf event-loop — le serveur est MONO-LOOP (les 5 modes de gel)
 
-> ⚠️ Ce titre a dit « les 2 modes » jusqu'au 2026-08-27 puis « les 3 » jusqu'au
-> 2026-09-01, et c'était vrai à chaque écriture. Les deux premiers modes sont des
-> **placements** d'I/O (un handler async sans await, puis un middleware) ; le n°3 est
-> d'une autre nature (le placement est correct, la requête est lente) ; le n°4 est un
-> placement de nouveau, mais à un endroit qu'aucun des trois garde-fous ne regardait —
-> **le seam qui monte les capacités**, donc 285 handlers d'un coup.
+> ⚠️ Ce titre a dit « les 2 modes » jusqu'au 2026-08-27, « les 3 » jusqu'au
+> 2026-09-01 et « les 4 » jusqu'au 2026-09-09, et c'était vrai à chaque écriture. Les
+> deux premiers modes sont des **placements** d'I/O (un handler async sans await, puis
+> un middleware) ; le n°3 est d'une autre nature (le placement est correct, la requête
+> est lente) ; le n°4 est un placement de nouveau, mais à un endroit qu'aucun des trois
+> garde-fous ne regardait — **le seam qui monte les capacités**, donc 285 handlers d'un
+> coup ; le n°5 n'est pas un placement mais une **répétition** : une valeur juste, lue
+> au bon endroit, redemandée dix fois par appel parce que personne ne la retient.
 
 > Extrait du CLAUDE.md (refactor 2026-07-02) — domicile du détail ; le CLAUDE.md garde le résumé + pointeur.
 
@@ -206,10 +208,14 @@ nuit d'incident) : `DynamicInstructionsMiddleware.on_list_tools` (org + index gu
 index guides, sync), `UserDisabledToolsMiddleware.on_initialize` →
 `session_visibility.compute_hidden_tools` (`async def` qui fait 3 requêtes sync avant son
 premier await), le combinateur d'autz `ORG_MEMBER` de `capabilities/_authz.py` appelé
-depuis `_rest_adapter._handler` (`current_org` sync, relevé py-spy), et le sink du
-calllog `server._calllog_sink` → `auth.hooks.current_user_sub_from_token` →
-`db.upsert_user` (écriture + commit dans la boucle). Chacun est UNE requête ou trois,
-là où la composition en faisait des dizaines — d'où l'ordre de traitement.
+depuis `_rest_adapter._handler` (`current_org` sync, relevé py-spy). Chacun est UNE
+requête ou trois, là où la composition en faisait des dizaines — d'où l'ordre de
+traitement.
+
+✅ **Traité le 2026-09-09** : le sink du calllog `server._calllog_sink` →
+`auth.hooks.current_user_sub_from_token` → `db.upsert_user` (écriture + commit dans la
+boucle). ⚠️ Ce reste-à-traiter était **sous-estimé d'un facteur cinq** : le sink n'était
+qu'UN des sept demandeurs de la même identité dans le même appel. Cf. le mode n°5.
 
 ## Mode n°3 — la requête est au BON endroit, mais elle est lente (incident du 27/08)
 
@@ -358,6 +364,71 @@ d'avant le correctif : **5 rouges sur 8**, dont le DDL montré sur `MainThread`.
 ⚠️ **Ce que ce lot ne couvre pas** : un handler `async def` qui ferait de l'I/O sync
 avant son premier `await` (la porte dérobée du mode n°1) reste possible sur les 34
 capacités asynchrones — le seam les laisse dans la boucle, à dessein.
+
+## Mode n°5 — la même valeur redemandée dix fois par appel (mesuré le 2026-09-09)
+
+Les quatre premiers modes disent **où** l'I/O est posée. Celui-ci ne conteste le
+placement de personne : il compte **combien de fois** la même valeur est reconstruite
+dans un seul appel. Une requête au bon endroit qui part dix fois pour un résultat
+identique coûte autant que dix mauvais placements.
+
+`auth.hooks.current_user_sub_from_token()` canonicalise le `sub` du jeton dès que le
+drain d'alias est armé (il l'est, et il le reste — `tenant_migration.py`) : un `SELECT`
+sur `sub_aliases`, puis un `INSERT … ON CONFLICT` sur `users`, donc un **COMMIT**. Deux
+requêtes synchrones, dans la boucle, **sans aucune mémoire** : chaque appelant les
+repaie. Or sept intermédiaires redemandent la MÊME identité dans le MÊME appel — le nom
+d'outil du tenant (`middleware/alias`), le refus de compte en pause
+(`middleware/account_suspended`), le contexte d'appel (`middleware/call_context`), le
+filtrage per-user (`middleware/disabled_tools`), les instructions d'org
+(`middleware/dynamic_instructions`), et deux fois le journal (`server._calllog_identity`
+et `_calllog_sink`).
+
+**Mesuré sur la chaîne réellement servie**, faux pool comptant chaque requête et le
+thread qui la lance, un `tools/call` en régime permanent : **10 allers-retours PG
+d'identité, dont 5 COMMIT, tous depuis le thread de la boucle** — sur 14 allers-retours
+au total pour l'appel. Soit **71 % du SQL d'un appel d'outil pour une seule valeur**.
+`py-spy` sur la production le même jour : 38 % du temps de boucle occupé, dont les deux
+tiers en SQL synchrone. ⚠️ Le journal, lui, n'en déclarait que 4 à 7 % — son témoin ne
+compte rien sous une seconde (`loop_watch`, seuil 1 s) : **ne jamais conclure sur
+l'ampleur d'un gel à partir des warnings**.
+
+### Le remède, et sa borne
+
+`middleware/identity_scope.py`, enregistré **le plus externe des nôtres** (au-dessus même
+de `ToolAlias`, qui est le premier à demander l'identité ; `fastmcp` pose le sien avant
+tout enregistrement, et il ne lit aucune identité) : il ouvre une portée par
+message et la garnit **hors boucle** (`asyncio.to_thread`) — exactement le geste que
+`_calllog_sink` faisait déjà pour son insertion, deux lignes plus bas, et qui avait
+manqué l'identité juste au-dessus. **Après : 2 allers-retours par `tools/call`, 0 dans
+la boucle.**
+
+⚠️ **La borne est une frontière d'identité, et c'est elle qui compte.** Un cache
+d'identité mal borné servirait le compte d'un utilisateur à un autre — infiniment pire
+que le gel qu'on corrige. Trois barrières indépendantes : la **clé EST l'identité** (le
+`sub` brut du jeton ; demander A ne peut pas rendre B), la portée pose un dictionnaire
+**neuf** par message (jamais un défaut de module, et un `set` de ContextVar n'est pas vu
+d'une tâche sœur), et **hors portée il n'existe pas** (défaut `None` ⟹ le chemin d'avant
+à l'octet près). Un refus (`AliasNonResolvable`, `CompteEnPause`) n'est jamais mémorisé :
+il se lève pour chaque demandeur, comme avant.
+
+⚠️ **La pré-résolution ne lève rien.** Elle est plus externe qu'`ErrorEnvelopeMiddleware` :
+son exception partirait sans l'enveloppe contractuelle. Un échec la laisse donc passer,
+et le chemin paresseux d'avant se rejoue là où il se rejouait.
+
+### Le garde-fou
+
+`tests/middleware/test_identite_une_fois_par_message.py` — même parti que les deux
+autres : on **observe**, on ne lit pas le source. Deux crans (la chaîne servie, puis la
+MÊME chaîne privée de sa portée, qui doit repayer les dix) et la garde d'identité à
+part. Épreuve de chute jouée le 2026-09-09 : **8 mutations, 8 rouges**, dont la clé de
+cache rendue constante — la forme exacte de la fuite d'identité.
+
+### La face REST n'était pas concernée
+
+`api/base._authenticate` fait déjà les deux mêmes requêtes **par `run_in_threadpool`**,
+et un handler REST qui invoque un tool pose un `sub_override` que
+`current_user_sub_from_token` rend avant de regarder quoi que ce soit. Le défaut était
+MCP-seul ; le correctif aussi.
 
 ## Un 502 en rafale n'est pas forcément un gel — la 2ᵉ cause (#352, nuit du 15-16/08)
 
