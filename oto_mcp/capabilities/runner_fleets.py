@@ -178,6 +178,7 @@ class FleetInput(BaseModel):
     max_steps: Optional[int] = None
     provider: Optional[str] = None
     model: Optional[str] = None
+    temperature: Optional[float] = None
     workers: Optional[int] = None
     max_rows: Optional[int] = None
     max_tokens: Optional[int] = None
@@ -351,7 +352,8 @@ def _fleets(ctx: ResolvedCtx, inp: FleetInput) -> dict:
             project_id=inp.project_id, max_steps=inp.max_steps,
             input=inp.input or _instruction.de_file(
                 inp.procedure, inp.namespace, inp.row_filter),
-            provider=inp.provider, model=inp.model, workers=inp.workers or 1,
+            provider=inp.provider, model=inp.model,
+            temperature=inp.temperature, workers=inp.workers or 1,
             max_rows=inp.max_rows, max_tokens=inp.max_tokens,
             max_consecutive_failures=inp.max_consecutive_failures,
             max_tokens_per_row=inp.max_tokens_per_row)}

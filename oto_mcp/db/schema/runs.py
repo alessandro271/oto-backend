@@ -119,6 +119,17 @@ CREATE TABLE IF NOT EXISTS runner_fleets (
     -- LE CONTEXTE D'EXÉCUTION, uniforme sur le passage — porte l'attribution
     provider TEXT,
     model TEXT,
+    -- La TEMPÉRATURE du passage, du même rang que `provider`/`model` et pour la
+    -- même raison : c'est du contexte d'exécution, uniforme sur tout le passage,
+    -- et il porte l'attribution de ce qui a été écrit. Deux passages du même
+    -- texte à deux températures ne sont pas comparables — mesuré le 06/09/2026,
+    -- le même banc donnait 11 à 18 sur 18 au défaut du fournisseur contre 14 à
+    -- 16 à zéro : une journée d'itérations a comparé des versions dont l'écart
+    -- était entièrement dans ce bruit.
+    -- ⚠️ Déclarée par PASSAGE et non posée dans l'environnement : une variable
+    -- d'env s'applique à tout le monde sans distinction et ne se lit nulle part.
+    -- NULL = on n'envoie rien, le fournisseur applique son défaut.
+    temperature REAL,
     -- LES BORNES : ce qui arrête un passage, et rien d'autre. ⚠️ Le budget se
     -- compte en JETONS, jamais en monnaie — les tarifs changent, diffèrent par
     -- fournisseur, et une valeur monétaire figée en base devient fausse sans que

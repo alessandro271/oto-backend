@@ -271,6 +271,7 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # nouveaux états — un lot « déployé » dont la moitié est rejetée à l'écriture.
     # Le dénominateur de l'avancement d'un passage (cf. le DDL). Sur une base qui
     # existe déjà, le CREATE TABLE est sauté — seule la colonne manque.
+    conn.execute("ALTER TABLE runner_fleets ADD COLUMN IF NOT EXISTS temperature REAL")
     conn.execute("ALTER TABLE runner_fleets ADD COLUMN IF NOT EXISTS rows_at_launch INT")
     conn.execute("ALTER TABLE runner_fleets ADD COLUMN IF NOT EXISTS armed_at TIMESTAMPTZ")
     conn.execute("ALTER TABLE runner_fleets ADD COLUMN IF NOT EXISTS stopping_at TIMESTAMPTZ")

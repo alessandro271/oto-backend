@@ -291,8 +291,8 @@ from oto_mcp.db import _schema, schema
 # ⚠️ Mis à jour SÉPARÉMENT du commit qui a changé le DDL — ce que le docstring
 # ci-dessus interdit, et pour cause : 4b23cb27 n'a pas rejoué cette garde, et le tronc
 # est resté rouge de 08h37 jusqu'ici, bloquant toute mise en production.
-EMPREINTE = "7debb4af87491c774be325a6ce629773451ec71c3f928dbe7667c742e995b0d9"
-LONGUEUR = 148014
+EMPREINTE = "6332cc218edbfbac9dc3db2932a37d405be1d43ef1172f90bd0eee6a2678732e"
+LONGUEUR = 148788
 
 
 _CREATE_TABLE = re.compile(r"^CREATE TABLE IF NOT EXISTS (\w+)", re.M)

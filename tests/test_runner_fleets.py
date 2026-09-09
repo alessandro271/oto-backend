@@ -345,3 +345,43 @@ def test_armer_une_campagne_SANS_borne_est_refuse_et_nomme_la_reparation(monkeyp
         _appel(_ctx(), op="launch", fleet_id=1)
     assert e.value.code == "budget_par_ligne_invalide"
     assert "op=update" in e.value.message
+
+
+# ── La température : déclarée par PASSAGE, jamais posée dans l'environnement ──
+# Mesuré le 06/09/2026 : le même texte sur le même banc donnait 11 à 18 sur 18 au
+# défaut du fournisseur, contre 14 à 16 à zéro. Une journée d'itérations a comparé
+# des versions dont l'écart était entièrement dans ce bruit.
+#
+# ⚠️ La forme compte autant que le réglage. Une variable d'environnement
+# s'appliquerait à TOUS les passages sans distinction et ne se lirait nulle part ;
+# déclarée, elle se choisit passage par passage et se relit dans la campagne.
+
+def test_la_temperature_se_declare_et_atteint_la_base(monkeypatch):
+    from oto_mcp import db
+    vu = {}
+    monkeypatch.setattr(db, "create_fleet",
+                        lambda *a, **k: vu.update(k) or {"id": 1})
+    _appel(_ctx(), **_creation(temperature=0))
+    assert vu["temperature"] == 0, (
+        "zéro est une valeur, pas une absence — la confondre avec `None` rendrait "
+        "le réglage le plus utile impossible à poser")
+
+
+def test_sans_temperature_declaree_rien_nest_pose(monkeypatch):
+    """L'autre bord : le fournisseur applique son défaut, comme avant. Poser une
+    température devinée serait pire que ne rien poser — elle deviendrait un
+    contexte d'exécution que personne n'a choisi."""
+    from oto_mcp import db
+    vu = {}
+    monkeypatch.setattr(db, "create_fleet",
+                        lambda *a, **k: vu.update(k) or {"id": 1})
+    _appel(_ctx(), **_creation())
+    assert vu["temperature"] is None
+
+
+def test_la_temperature_ne_se_change_PAS_en_vol():
+    """Même raison que `provider`/`model` : deux lignes du même passage écrites à
+    deux températures ne sont pas comparables, et rien dans la donnée ne dirait
+    laquelle vient de quel régime."""
+    from oto_mcp.db.runner_fleets import CHAMPS_MODIFIABLES
+    assert "temperature" not in CHAMPS_MODIFIABLES

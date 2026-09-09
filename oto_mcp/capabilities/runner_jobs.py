@@ -569,6 +569,10 @@ def _produire_pour_une_campagne(org_id: Optional[int], bail_s: int) -> Optional[
                      "namespace": f.get("namespace"), "fleet": f.get("label"),
                      "max_steps": f.get("max_steps"),
                      "max_tokens": f.get("max_tokens_per_row"),
+                     # Le contexte d'exécution déclaré par le passage. `None` =
+                     # on n'envoie rien et le fournisseur applique son défaut —
+                     # c'est le comportement d'avant, et il reste possible.
+                     "temperature": f.get("temperature"),
                      "input": message,
                      "label": f"flotte {f.get('namespace')} — {f['procedure']}"},
             fleet_id=f["id"], sub=f["sub"])
