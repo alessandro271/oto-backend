@@ -24,8 +24,11 @@ CATEGORY = "Prospection"
 PUBLISHER = "Folk"
 LOGO_DOMAIN = "folk.app"
 
+# ⚠️ La fiche a annoncé « coexiste avec le connecteur `folkmcp` (MCP officiel par
+# OAuth) » jusqu'au 2026-09-09 : `folkmcp` est parti avec la fédération MCP (ADR
+# 0069), et cette phrase promettait donc à l'utilisateur un connecteur qu'il ne
+# trouverait nulle part. Une fiche est du TEXTE SERVI — elle se corrige avec le code
+# qu'elle décrit, pas au prochain passage.
 DESCRIPTION = (
-    "Le CRM Folk : contacts, entreprises, deals et objets personnalisés. Clé "
-    "API classique — coexiste avec le connecteur `folkmcp` (MCP officiel par "
-    "OAuth), l'un ou l'autre étant visible selon l'utilisateur."
+    "Le CRM Folk : contacts, entreprises, deals et objets personnalisés, par clé API."
 )

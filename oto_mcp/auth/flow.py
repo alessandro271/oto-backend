@@ -201,7 +201,7 @@ def connector_return_suffix(connector: str, etat: str, *,
     connected`) : ajoutée à la suite, dans le MÊME suffixe, tant que
     `deprecations.dans_le_preavis_retour_oauth()` le dit — jamais deux
     redirections, une seule URL qui porte les deux jeux de clés. Ne rien passer
-    pour un connecteur dont l'ancien statut n'a JAMAIS eu de lecteur (atlassian,
+    pour un connecteur dont l'ancien statut n'a JAMAIS eu de lecteur (les ex-fédérés,
     folk, et les branches d'échec de google qui ne redirigeaient pas du tout) :
     doubler une valeur que personne n'a jamais pu lire ne protège personne, et
     grossit l'URL pour rien."""
@@ -218,14 +218,14 @@ def connector_return_url(app: Optional[str], connector: str, etat: str, *,
     """URL de retour complète : base+chemin de `return_url` (app tierce connue,
     sinon défaut oto-dashboard) + `connector_return_suffix`. Le point d'entrée pour
     un connecteur dont le retour suit déjà le gabarit `return_url`/`RETURN_APPS`
-    (salesforce, zoho, google) ; atlassian/folk résolvent leur base autrement
+    (salesforce, zoho, google) ; atlassian/folk résolvaient leur base autrement
     (`links.link_for`, patron par tenant) et utilisent `avec_connect` à la place."""
     return return_url(app, connector_return_suffix(connector, etat, legacy=legacy), org=org)
 
 
 def avec_connect(url: str, etat: str) -> str:
     """Ajoute `connect=<etat>` à une URL de retour qui porte déjà `connector=`
-    (le patron `links.connector_return`, utilisé par atlassian/folk) — jamais une
+    (le patron `links.connector_return`, qu'utilisaient atlassian/folk) — jamais une
     seconde redirection, le même paramètre rejoint la même URL, qu'elle ait ou non
     déjà une query string."""
     sep = "&" if "?" in url else "?"

@@ -5,11 +5,11 @@ the browser's address bar, exchange it by hand) is gone: the registry entry
 (`providers/salesforce.py`) no longer declares a `refresh_token` field at all, only
 `client_id`/`client_secret`/`login_url`.
 
-Unlike every other live-OAuth flow oto has (google/atlassian/folkmcp),
+Unlike oto's other live-OAuth flow (google),
 Salesforce's OAuth client — a "Connected App" — is **per-customer**: each
 customer creates their own inside their own org, with their own
 `client_id`/`client_secret`/`login_url`. There is no platform-wide Salesforce
-client oto could register once (Google/Atlassian/Folk all share ONE
+client oto could register once (Google shares ONE
 Otomata-owned client). So this flow is a hybrid: the customer still saves
 `client_id`/`client_secret`/`login_url` through the existing generic
 `/api/settings/api-keys/salesforce` form (unchanged — those 3 fields are now

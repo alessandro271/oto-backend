@@ -458,7 +458,7 @@ class Connector:
         """Schéma de saisie du credential — SOURCE UNIQUE pour l'UI, l'endpoint REST,
         `status_for` et le packing. Déclaré explicitement (`credential_fields`),
         sinon dérivé des formes simples. Vide = pas de saisie générique : `cookie`
-        (linkedin/crunchbase), `oauth` (google/atlassian) et `none` (open-data) ont
+        (linkedin/crunchbase), `oauth` (google) et `none` (open-data) ont
         des flux dédiés, pas un formulaire de champs.
 
         Vide aussi pour un connecteur qui DÉLÈGUE son credential (`credential_of`) :

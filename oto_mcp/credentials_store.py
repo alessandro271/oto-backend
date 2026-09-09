@@ -55,7 +55,7 @@ USER = "user"
 ORG = "org"
 # Scope MEMBRE (ADR 0033) : le credential per-user est scopé (sub, org) — « ma clé
 # dans CETTE org », plus de BYO org-agnostique. `entity_type='user'` ne survit que
-# pour la famille oauth (google + mounts atlassian/folkmcp, flux dédiés) en
+# pour la famille oauth (google, flux dédié ; atlassian/folkmcp jusqu'au 09/09/2026) en
 # attendant leurs barreaux (B3/B4).
 MEMBER = "member"
 # Scope PLATEFORME (ADR 0044 §F) : la clé plateforme partagée EST une instance du coffre
@@ -369,7 +369,7 @@ def clear_editor_app(connector: str, data_center: str) -> bool:
 
 
 # `meta` JSONB porte aussi des satellites SECRETS (audit 2026-06-13, otomata#29) :
-# l'`access_token` bearer dérivé d'OAuth (google/atlassian) y vit en clair (le
+# l'`access_token` bearer dérivé d'OAuth (google) y vit en clair (le
 # refresh_token, lui, est chiffré dans `secret_enc`). Les surfaces « statut /
 # listing » (credential_status, list_accounts, list_credentials) sont consommées
 # par /api/me, le listing d'org/groupe, etc. → elles ne doivent JAMAIS sérialiser
@@ -1202,7 +1202,7 @@ def backfill_member_scope() -> dict:
     for r in rows:
         sub, connector, account = r["entity_id"], r["connector"], r["account"]
         con = providers.REGISTRY.get(connector)
-        # Mounts oauth (atlassian/folkmcp) : flux fédérés encore scope 'user'
+        # Ex-mounts oauth (atlassian/folkmcp, retirés le 09/09/2026) : scope 'user'
         # (barreau ultérieur).
         # Google, lui, migre depuis B3 (db/google.py au scope membre). Connecteur
         # hors registre (legacy) : on ne migre pas ce qu'on ne connaît pas.

@@ -20,7 +20,7 @@ from ._model import CredentialField, _c
 # à part : le jeu de `auth_method` est fermé et lu par un switch du dashboard. Le
 # `client_id`/`client_secret` restent PER-CUSTOMER (chaque org crée sa
 # propre Connected App) — pas de client Otomata partagé possible ici,
-# contrairement à google/atlassian/folkmcp (cf. salesforce_oauth.py).
+# contrairement à google (cf. salesforce_oauth.py).
 CONNECTOR = _c(
     "salesforce", ["salesforce"], auth_modes={"byo_user", "byo_org"},
     secret_kind="fields", label="Salesforce",
