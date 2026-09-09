@@ -166,7 +166,11 @@ def test_claim_next_reserves_and_returns_the_row(monkeypatch):
                       filter={"statut": "a-appeler"}, lease_s=300)
     # La remise porte l'IDENTITÉ du tableau : son nom canonique ET son numéro —
     # c'est ici que l'agent apprend la forme d'adresse qui remplace le nom.
-    assert out == {"datastore": "vivier", "ns_id": 174, "row": ROW}
+    # `namespace` est doublée le temps du préavis (08/11/2026) : c'est la seule
+    # clé que le renommage RETIRAIT, donc la seule panne muette de la bascule —
+    # un consommateur qui la lit recevrait `undefined`, sans erreur ni journal.
+    assert out == {"datastore": "vivier", "namespace": "vivier",
+                   "ns_id": 174, "row": ROW}
     _, kw = store.calls[0]
     assert (kw["worker"], kw["filter"], kw["lease_s"]) == ("sarah", {"statut": "a-appeler"}, 300)
 

@@ -246,8 +246,13 @@ def test_sans_resolution_la_remise_rend_ce_qu_elle_rendait(store):
     """Dégradation NOMMÉE : un chemin qui n'a rien résolu rend l'adresse reçue et
     `ns_id: None`. La présence du numéro est donc la preuve que le tableau a été
     atteint — jamais un `0` ni un nom inventé."""
+    # ⚠️ Les DEUX noms, y compris ici. Le repli sert quand rien n'a été relevé —
+    # c'est-à-dire exactement le moment où l'appelant cherche à comprendre ce qui a
+    # échoué. Lui rendre `undefined` sous l'ancien nom dans ce cas-là serait doubler
+    # l'obscurité. La clé s'en va avec les alias de chemin, au 08/11/2026.
     assert identite.de_releve(None, "quoi-que-ce-soit") == {
-        "datastore": "quoi-que-ce-soit", identite.CLE: None}
+        "datastore": "quoi-que-ce-soit", "namespace": "quoi-que-ce-soit",
+        identite.CLE: None}
 
 
 # ── Ce qui ne bouge pas ──────────────────────────────────────────────────────

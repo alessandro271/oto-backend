@@ -54,7 +54,21 @@ def identite(ns_id: Any = None, nom: Optional[str] = None, *,
     avant, plutôt qu'un `null` à la place d'un nom. `ns_id` vaut `None` dans ce seul
     cas — sa présence est donc la preuve que le tableau a bien été résolu.
     """
-    return {"datastore": nom or adresse,
+    valeur = nom or adresse
+    return {"datastore": valeur,
+            # ⚠️ **`namespace` est DOUBLÉE le temps du préavis, et c'est la seule panne
+            # MUETTE de toute la bascule.** Les chemins qui changent rendent un 404 ou
+            # un 308 : on le voit. Une clé de réponse qui disparaît ne rend rien —
+            # `r.namespace` vaut `undefined`, sans erreur, sans journal, chez un
+            # consommateur qu'on ne connaît peut-être pas. Nos propres fronts lisent
+            # désormais les deux noms ; ils ne sont pas les seuls appelants de cette API.
+            #
+            # Les trois autres réponses touchées par le renommage n'AJOUTENT que des
+            # clés — celle-ci est la seule à en retirer une, donc la seule à doubler.
+            # Elle s'en va avec les alias de chemin, à la même date
+            # (`deprecations.RETRAIT_DATASTORE`, 08/11/2026) : un doublage sans date est
+            # un second nom permanent, et ça se décide, ça ne s'ajoute pas.
+            "namespace": valeur,
             CLE: int(ns_id) if ns_id is not None else None}
 
 
