@@ -1362,10 +1362,16 @@ CAPABILITIES += [
     Capability(
         key="me.project", handler=_project, Input=ProjectInput, authz=SUB_ONLY,
         description=(
-            "Projects (organization layer, ADR 0030 owned resource). EVERY project carries "
-            "`url` — the web address to OPEN it, in the reader's own product; hand it over "
-            "as-is when asked \"where is it?\", never rebuild one from a pattern (`null` = "
-            "that reader's product has no such view). op=create (name, "
+            # ⚠️ ORDRE FONCTIONNEL, pas rédactionnel. `tool_registry.blurb()` sert le
+            # 1er PARAGRAPHE borné (100 c. pour le catalogue `oto_list_my_tools`, 140
+            # pour le registre), coupé à la dernière phrase complète : ouvrir sur le
+            # champ `url` (~275 c.) poussait `op=create` HORS du résumé SERVI.
+            # oto_project était alors le seul conteneur de la plateforme dont le
+            # résumé cachait sa création — une recherche `create` ne le rendait pas, et
+            # une utilisatrice s'est vu proposer un tableau plutôt qu'un projet
+            # (09/09/2026). Les ops passent donc en tête ; banc :
+            # tests/test_resume_nomme_ses_ops.py.
+            "Projects (organization layer). op=create (name, "
             "optional brief_md; owner_type user|org + owner_id for a team project) / list "
             "(ORG-SCOPED: the ACTIVE org's projects + projects shared with it or with you — "
             "pass `org=<id>` to see another org's; every response echoes the "
@@ -1419,7 +1425,11 @@ CAPABILITIES += [
             "`cross_project` flag (the same entity is linked by another project → avoid brutal "
             "edits / ask); a tableau link also returns its resolved `namespace` — address THIS "
             "project's table by that name with the data_* tools (never hardcode a namespace). "
-            "Share & transfer go through oto_resource (resource_type='project') — this "
+            "EVERY project carries `url` — the web address to OPEN it, in the reader's "
+            "own product; hand it over as-is when asked \"where is it?\", never rebuild "
+            "one from a pattern (`null` = that reader's product has no such view). "
+            "Share & transfer go through oto_resource (resource_type='project', ADR 0030 "
+            "owned resource) — this "
             "includes RE-PARENTING a project in place (same id, links, runs preserved): "
             "op=transfer new_owner_group=<id> hands it to a TEAM so the project and its "
             "connector credentials sit at the SAME level (the team's secrets then resolve "
