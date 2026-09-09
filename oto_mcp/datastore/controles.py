@@ -186,8 +186,7 @@ class ControlesMixin:
         return releve
 
     def _check_row(self, schema: Optional[dict], merged: dict, *,
-                   prev_status=None, written: Optional[set] = None,
-                   avant: Optional[dict] = None) -> None:
+                   prev_status=None, written: Optional[set] = None) -> None:
         """Valide la row TELLE QU'ÉCRITE (résultat mergé). No-op si le schéma ne
         déclare ni strict/required/max_length ni lifecycle (défaut 0016 soft).
 
@@ -206,7 +205,7 @@ class ControlesMixin:
         details: dict = {}
         hors: list = []
         gelees: list = []
-        errors = dsv2.validate_row(schema, merged, avant=avant, prev_status=prev_status,
+        errors = dsv2.validate_row(schema, merged, prev_status=prev_status,
                                    written=written, details=details, hors=hors,
                                    gelees=gelees)
         # Ce que ce geste n'écrit pas et qui ne passe plus le format déclaré. Relevé

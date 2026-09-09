@@ -107,18 +107,28 @@ def test_revenir_d_un_etat_TERMINAL_reste_permis():
     `transitions` déclare le parcours NORMAL, pas la liste des gestes permis. Lire
     « absent de `transitions` » comme « interdit » est une sur-interprétation — et sur
     un état terminal, dont la définition est de n'avoir aucune sortie, elle rend le
-    retour arrière impossible par construction."""
-    assert dsv2.validate_row(TRANS, {"suivi": "nouveau"},
-                             avant={"suivi": "signe"}) == []
+    retour arrière impossible par construction.
+
+    ⚠️ **Ce banc ne passe plus d'état d'avant, et c'est le second temps du retrait** :
+    le paramètre `avant` traversait quatre niveaux et n'était plus lu par personne.
+    Un paramètre qui promet un jugement qu'il ne rend pas est de la même famille que
+    l'import mort et le docstring périmé — du texte qui parle d'un mécanisme retiré.
+    *Quand on retire une garde, ce qui reste doit être vérifié.*"""
+    assert dsv2.validate_row(TRANS, {"suivi": "nouveau"}) == []
+    assert dsv2.validate_row(TRANS, {"suivi": "signe"}) == []
 
 
-def test_un_saut_non_declare_reste_permis_lui_aussi():
-    assert dsv2.validate_row(TRANS, {"suivi": "signe"},
-                             avant={"suivi": "nouveau"}) == []
+def test_le_module_n_accepte_plus_d_etat_d_avant():
+    """La signature dit ce que la fonction fait. Garder `avant` « au cas où » ferait
+    croire à un jugement de transition qui n'existe plus."""
+    import inspect
+    from oto_mcp.datastore.etats_declares import etats_trahis
+    assert "avant" not in inspect.signature(etats_trahis).parameters
+    assert "avant" not in inspect.signature(dsv2.validate_row).parameters
 
 
 def test_mais_l_APPARTENANCE_reste_verifiee_dans_tous_les_cas():
     """Ce qui a été retiré est le jugement du CHEMIN, pas celui de la valeur. Un état
     hors de la liste déclarée reste refusé — c'est la garde gratuite, mesurée à zéro
     violation sur 8 646 cellules."""
-    assert dsv2.validate_row(TRANS, {"suivi": "inconnu"}, avant={"suivi": "signe"}) != []
+    assert dsv2.validate_row(TRANS, {"suivi": "inconnu"}) != []

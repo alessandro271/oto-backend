@@ -80,8 +80,7 @@ def colonnes_a_etats(schema: Optional[dict], *, sauf: Optional[str] = None) -> l
 
 def etats_trahis(schema: Optional[dict], merged: dict, *,
                  written: Optional[set] = None,
-                 gelees: Optional[list] = None,
-                 avant: Optional[dict] = None) -> list[str]:
+                 gelees: Optional[list] = None) -> list[str]:
     """Les colonnes SECONDAIRES dont la valeur n'est pas dans leur propre liste.
 
     Le partage `posé / gelé` est celui de la colonne de file, et pour la même raison
