@@ -642,11 +642,13 @@ def register(mcp: FastMCP) -> None:
           and each refusal names the field, the reason and where the thing goes:
           `field.readonly: true` refuses a write that CHANGES the value in place
           (layers stay open — what another source says goes in `<field>.comment`);
-          `field.origine: "system"` has the platform keep the previous value in
-          `<field>.origine` — the value AS IT STOOD when the format was declared
-          (`data_write` says what that does and does not mean). Re-sending the SAME
-          value is never a write, so re-emitting a record you just read always
-          passes.
+          ⚠️ `field.origine: "system"` was REMOVED on 2026-09-08 — a schema that
+          still carries it declares a key oto does not interpret, and the
+          unknown-key warning says so. Nothing captures a previous value
+          automatically any more: the origin is set by the call that BRINGS the
+          data, with `donnees_d_origine=true` (`data_write` says how). Re-sending
+          the SAME value is never a write, so re-emitting a record you just read
+          always passes.
           Bound the fields meant to hold ONE short value (a job title, a city): a
           column that collects reasoning stops being groupable/filterable. The
           bound applies to the keys a write actually SETS, so rows already over it
@@ -679,9 +681,9 @@ def register(mcp: FastMCP) -> None:
             schema: the schema object, or null to clear it. Head key
                 `unknown_fields: "report"|"reject"` decides an undeclared column's
                 fate; a field may carry `readonly: true` (value locked, layers
-                open) or `origine: "system"` (platform-kept `<field>.origine` — the
-                value as it stood WHEN THIS FORMAT WAS DECLARED, written onto every
-                existing row at that moment; the name says when, not who).
+                open). ⚠️ `origine: "system"` was REMOVED on 2026-09-08 and is no
+                longer interpreted — the origin is now set by the call that brings
+                the data (`donnees_d_origine=true`), not by a schema format.
             semantic_search: true/false to toggle semantic row search; null = leave as is.
         """
         store = _acting_store()
@@ -719,8 +721,9 @@ def register(mcp: FastMCP) -> None:
         ⚠️ **Provenance goes in `comment`, never in `origine`.** Put WHAT you
         established and WHERE it came from in `<field>.comment`, and the page in
         `<field>.link`. `origine` is the platform's layer — an agent never writes
-        it. On a column whose schema declares `origine: "system"`, writing
-        `<field>.origine` is REFUSED, today, and no parameter lifts that.
+        it. Writing `<field>.origine` still PASSES today, but it is refused from
+        2026-10-01 on unless the call declares `origine_override=true` — which
+        belongs to an import, not to a write of your own.
 
         Layers: `valeur`/`comment`/`link` are yours to write, `origine` is read
         only. What a write destroys, what `readonly` and the business key protect,
@@ -760,19 +763,24 @@ def register(mcp: FastMCP) -> None:
         nothing back — announce what you are about to change on a column you did not
         fill yourself.
 
-        The safety net is `origine: "system"`, and what it keeps is precise: **the
-        value as it stood when the format was declared**. Declaring the format
-        writes that value into `<field>.origine` on every existing row, once, in one
-        transaction — the reply says how many rows it touched. From then on, the
-        layer never moves again: later writes overwrite the value, never the origin.
+        ⚠️ **There is NO automatic safety net.** `origine: "system"` was REMOVED on
+        2026-09-08. It captured the previous value lazily, on the first write that
+        changed it — which required having been declared BEFORE the row existed.
+        Declared after the fact it caught nothing: 837 cells out of 846 lost on one
+        campaign table, the owner's values already overwritten by agents.
 
-        Two things it does NOT mean:
+        What replaces it is a DECLARED gesture, carried by the call that brings the
+        data in: `donnees_d_origine=true`. It writes BOTH versions at once — the
+        current value and the origin — at the moment the value enters, so there is
+        no "before" and no "after" to get wrong. Three rules: an origin ALREADY set
+        is never touched (a re-import updates the current value, never the origin) ;
+        an EMPTY column receives nothing (supplying nothing is not supplying blank) ;
+        the call's layers go into BOTH versions.
 
-        - it is not "the value the data owner supplied". If agents had already
-          written before the format was declared, what is kept is what stood at
-          declaration time. The name says when, not who ;
-        - a column WITHOUT that format keeps nothing at all — overwriting is final,
-          and nothing will tell you afterwards.
+        So on a column whose origin was never captured, overwriting is FINAL and
+        nothing will tell you afterwards. The 28 799 `origine` layers already in the
+        base are untouched — they are still read, served and protected; it is the
+        mechanism that went, not the data.
 
         Re-writing the SAME value changes nothing and captures nothing, by design.
         And it does not depend on how the row was created: a row appended through
@@ -809,9 +817,10 @@ def register(mcp: FastMCP) -> None:
         `data_patch_schema(datastore=…, key_required=true)` to close it back.
 
         `origine_override=true` belongs to an IMPORT, not to a write of your own:
-        it declares that this call sets `origine` on a column that has NO
-        `origine: "system"` format — refused without it from 2026-10-01 on. It
-        never lifts the refusal above.
+        it declares that this call knowingly sets the `origine` layer — refused
+        without it from 2026-10-01 on. ⚠️ For a real import, prefer
+        `donnees_d_origine=true`, which sets both versions in one gesture; the
+        override only says "I know what I am doing on this layer".
 
         ⚠️ A COLUMN can be LOCKED by the schema (`readonly: true`) — it holds a
         value someone put there, and an ordinary write that CHANGES it is refused by
@@ -874,9 +883,10 @@ def register(mcp: FastMCP) -> None:
                 writes, instead of being refused. Owner or governor of the table
                 only ; valid for this call alone ; journaled.
             origine_override: IMPORT path only — declares that this call sets the
-                `origine` layer knowingly, on a column with NO `origine: "system"`
-                format (without it, such a write is refused from 2026-10-01 on).
-                It never lifts the refusal on a formatted column. This call only.
+                `origine` layer knowingly (without it, such a write is refused from
+                2026-10-01 on). ⚠️ `origine: "system"` was removed on 2026-09-08:
+                there is no longer a "formatted column". For a real import, prefer
+                `donnees_d_origine`. This call only.
         """
         store = _acting_store()
         try:
