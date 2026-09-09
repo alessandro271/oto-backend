@@ -36,7 +36,7 @@ adr:
 > périmerait en restant vert.
 
 Stockage structuré léger par user, **substrat PostgreSQL natif** (plus Google
-Sheets — ADR 0016). Un namespace = une ligne `user_datastores` ; les rows vivent
+Sheets — ADR 0016). Un datastore = une ligne `user_datastores` ; les rows vivent
 dans `datastore_rows` (un dict **JSONB** par row, types préservés nativement,
 fin de la sentinelle `__j:`). Schéma libre. Trois champs auto-managés exposés à
 plat : `_id` (uuid7-like), `_created_at`, `_updated_at`.
@@ -60,10 +60,10 @@ pas une URL de Sheet. Code : `datastore/core.py` (`DatastorePg`) + `tools/datast
 > du code PG (brève fenêtre datastore-vide).
 
 Surfaces :
-- MCP tools `data_*` (`data_create_namespace`, `data_write`, `data_rows`,
+- MCP tools `data_*` (`data_create_datastore`, `data_write`, `data_rows`,
   `data_delete_row`, `data_url`, `data_share`, etc.) — pour Claude.ai / Claude Code.
 - MCP **App** `data_app` (`@mcp.tool(app=True)`, SEP-1865, prefab_ui) — variante à
-  interface rendue : sans `namespace` = table des namespaces ; avec `namespace` =
+  interface rendue : sans `datastore` = table des datastores ; avec `datastore` =
   table triable/cherchable/paginée des rows, avec `filter` exact-match optionnel
   (même forme que `data_rows`) et `show_meta` pour les colonnes `_id/_created/_updated`.
   Rend le contenu INLINE dans le chat au lieu du seul deep-link `data_url`. Dégradation
@@ -71,7 +71,7 @@ Surfaces :
   `tools/foncier.py` (`foncier_*_app`).
 - REST `/api/datastore/*` — pour le CLI `oto data` + UI dashboard. **Face DÉRIVÉE
   depuis le 2026-08-12** (#302) : plus une seule route écrite à la main, tout vient
-  des capacités `capabilities/datastore/{namespaces,rows,schema,sharing,claim,
+  des capacités `capabilities/datastore/{datastores,rows,schema,sharing,claim,
   activity,columns}.py`. Conséquences pratiques : les 24 opérations (au 2026-09-04) portent
   leur schéma d'entrée ET de réponse dans `/api/openapi.json` (un intégrateur les génère),
   et un **champ inconnu est refusé** (400 `unknown_fields`) au lieu d'être ignoré —
@@ -110,7 +110,7 @@ LAQUELLE ni depuis quel état — cliquer une transition de cycle de vie ne lais
 rien d'exploitable (ni retrouver la ligne, ni annuler). Les mutations REST posent
 désormais AUSSI une ligne **sémantique** dans la même table `tool_calls`
 (`kind='rest'`), nommée dans le **vocabulaire des tools MCP** (`data_write`,
-`data_delete_row`, `data_release`) et portant `namespace`/`ns_id`/`id`/`fields`/
+`data_delete_row`, `data_release`) et portant `datastore`/`ns_id`/`id`/`fields`/
 `from_status`/`to_status`. Helper unique `calllog.log_rest_call` (best-effort, hors
 chemin chaud) ; colle datastore dans `datastore/journal.py`. Lectures : capacités
 `me.datastore.row_activity` (`GET …/rows/{row_id}/activity`) et `me.datastore.activity`
@@ -120,14 +120,14 @@ peuplé par aucun sink).
 
 ⚠️ **`from_status` vient de la MUTATION, pas d'une relecture.** Les mutations du store
 (`update_row`/`delete_row`/`append_row`/`force_release`) acceptent un **relevé** `trace`
-(dict mutable) qu'elles remplissent avec `ns_id`/`namespace`/`status_key`/`title_key`/
+(dict mutable) qu'elles remplissent avec `ns_id`/`datastore`/`status_key`/`title_key`/
 `prev_status` — pris là où ils sont déjà calculés. Le relire avant l'appel courrait avec
 un write concurrent (un agent qui bouge la ligne entre les deux) et ferait proposer au
 cockpit une annulation vers un état que la ligne n'a jamais eu ; ça ajoutait en prime
 4 requêtes PG synchrones par mutation, sur un serveur mono-loop.
 
 ⚠️ **Le journal cite l'ENTITÉ, pas la chaîne tapée.** Le calllog journalise les args
-BRUTS de l'appel — or `data_write` prend `namespace: str`, que l'agent remplit tantôt du
+BRUTS de l'appel — or `data_write` prend `datastore: str`, que l'agent remplit tantôt du
 nom, tantôt de l'id, tantôt d'un `slot:<name>`. Corréler là-dessus obligeait à matcher
 par NOM, avec trois dettes : un nom n'est unique que **par propriétaire**
 (`uq_user_datastores_owner_ns`) donc il fallait le borner au tenant sous peine de fuite
@@ -168,7 +168,7 @@ au même endroit :
 Le couple vient de `DatastorePg.dernier_tableau` — un relevé posé par `_resolve` dans la
 ligne `user_datastores` qu'il vient de lire, donc **sans une requête de plus** — et se met
 en forme par `datastore/identite.py` (source unique des deux clés, des deux faces). Sans
-résolution, `ns_id` vaut `null` et `namespace` retombe sur l'adresse reçue : **la présence
+résolution, `ns_id` vaut `null` et `datastore` retombe sur l'adresse reçue : **la présence
 du numéro est la preuve que le tableau a été atteint**.
 
 ⚠️ **`data_rows(id=…)` et `GET …/rows/{row_id}` n'en portent RIEN, exprès.** Leur corps
@@ -493,7 +493,7 @@ un read-merge-write du blob ENTIER (`_merge_into_row`, `SELECT FOR UPDATE` + UPD
 son SELECT précède la purge et son UPDATE la suit, la clé purgée **revient** sur cette
 ligne. Fenêtre étroite et effet bénin (re-purgeable), mais réel : purger quand rien ne
 draine le tableau, ou repasser après. Prendre le verrou de ligne dans la purge serait la
-vraie réponse, et coûterait un parcours verrouillé de tout le namespace. ⚠️ **La 3ᵉ option du signal
+vraie réponse, et coûterait un parcours verrouillé de tout le datastore. ⚠️ **La 3ᵉ option du signal
 — que `data_rows` cesse d'exposer les clés non déclarées en strict — est écartée** : elle
 cacherait des données réelles, alors que le contrat 0016 promet qu'un champ libre
 *s'affiche* et que #294 vient de trancher « signaler, jamais refuser ni masquer ». On
@@ -1159,7 +1159,7 @@ ouvert est donc reconnu, et c'est justement le cas dangereux.
 `core._row_to_dict` (toute ligne servie : `data_rows`, `data_claim_next`, l'écho de
 `data_write`, la file, `data_app`, `oto_node_rows`), `schema_ops.get_schema` +
 la sortie de `set_schema` (`data_get_schema`, `data_patch_schema`, l'index de
-`data_app`), et `core._entry` (le catalogue de `data_list_namespaces`). Le store, lui,
+`data_app`), et `core._entry` (le catalogue de `data_list_datastores`). Le store, lui,
 continue de lire le schéma ENTIER par `_schema_of` : masquer à la validation ferait
 passer l'écriture de l'agent comme un champ hors schéma.
 
@@ -1271,7 +1271,7 @@ de voir une fusion qui laisserait échapper quelque chose. ⚠️ Conséquence :
 RELIT le schéma en place avant de le remplacer (un `SELECT` de plus sur un geste rare) —
 un banc qui stubbe l'écriture doit désormais stubber aussi `_ns_of`.
 
-**Écrire hors du format se DIT, sans être refusé (#294).** Sur un namespace `strict`,
+**Écrire hors du format se DIT, sans être refusé (#294).** Sur un datastore `strict`,
 un nom de champ que le schéma ne déclare pas est accepté (contrat 0016 : un champ libre
 s'affiche, il ne débloque rien) et la valeur persiste — mais dans une colonne hors
 format, que l'interface et tout ce qui s'appuie sur le schéma ignorent. Un humain relit
@@ -1503,7 +1503,7 @@ avait fait écarter un refus dur en #608 ; elle ne s'applique pas ici.
 
 **Batch write + clé métier (2026-07-03).** `data_write` accepte un LOT `rows` (list[dict])
 écrit en un appel — importer un dataset sans faire transiter chaque ligne par le contexte
-du LLM. Un namespace peut déclarer une **clé métier** au schéma (`schema.key`, ex.
+du LLM. Un datastore peut déclarer une **clé métier** au schéma (`schema.key`, ex.
 `"email"`/`"siren"` ; cf. `data_set_schema`) : toute écriture qui porte cette clé fait alors
 un **UPSERT (merge)** sur elle au lieu de dupliquer (param `key` explicite prioritaire) — les
 rows sans clé sont appendées. Renvoie `{inserted, updated, count, key, ids}`.
@@ -1816,7 +1816,7 @@ oto, pas une compréhension qu'il aurait du métier. La frontière tient dans un
 
 > **La face REST est 100 % DÉRIVÉE depuis le 2026-08-12 (#302)** : les 17 routes
 > écrites à la main d'`api/datastore.py` (10 chemins) sont des capacités
-> (`capabilities/datastore/{namespaces,rows,schema,sharing}.py`, aux côtés de
+> (`capabilities/datastore/{datastores,rows,schema,sharing}.py`, aux côtés de
 > `claim`/`activity`/`columns` déjà migrés) — mêmes chemins, mêmes réponses, **mêmes
 > codes** (201 sur les créations), mais entrée et sortie déclarées : les 22 opérations
 > datastore de `/api/openapi.json` portent désormais un schéma de réponse, contre 5
@@ -1859,7 +1859,7 @@ personne le voie.
    métier, écrites par la consigne en cours) — illustration du jour, pas définition. ⚠️ **« Purger là où l'origine
    égale la valeur » détruit donc exactement la mesure attendue** sur ces champs : une
    purge NOMME les champs où l'origine doit être une source, ne touche jamais ceux où elle
-   conserve l'entrée, **commence par un EXTRAIT des valeurs supprimées** (namespace,
+   conserve l'entrée, **commence par un EXTRAIT des valeurs supprimées** (datastore,
    row_id, chemin, valeur) déposé hors du tableau, et passe par l'outil (`data_write`,
    journalisé) — jamais par un SQL direct que le journal des appels ne voit pas. Le cas
    « retrouvée identique » se restitue aussi par comparaison avec la colonne `initial_of`
@@ -1882,10 +1882,10 @@ comme une perte de provenance.
 
 ## `@claimed` — le pronom de la réservation, RETIRÉ le 07/09/2026 (#517, #599, #645)
 
-**Ce qu'il faisait**, du 29/08 au 07/09/2026 : `data_write(namespace=…, id="@claimed",
+**Ce qu'il faisait**, du 29/08 au 07/09/2026 : `data_write(datastore=…, id="@claimed",
 row={…})`, et le même geste sur `data_release`, `data_rows`, `data_delete_row`,
 `data_url`, `data_aggregate`. Le serveur relisait le bail du run courant et écrivait sur
-la ligne qu'il tenait. `namespace="@claimed"` marchait aussi — la réservation porte le
+la ligne qu'il tenait. `datastore="@claimed"` marchait aussi — la réservation porte le
 tableau autant que la ligne.
 
 **Pourquoi il est né.** Pour écrire sa fiche, un agent devait repasser les trente-deux
@@ -2021,7 +2021,7 @@ un sens** — `oto_mcp/datastore/jetons.py` —, et les deux faces s'en servent.
 
 | jeton | ce qu'il désigne | champs qui l'acceptent |
 |---|---|---|
-| `slot:<nom>` | le tableau bindé sous ce nom par le projet actif | `namespace` |
+| `slot:<nom>` | le tableau bindé sous ce nom par le projet actif | `datastore` |
 | `*` | toutes les colonnes | `fields` |
 
 Le même module tient une **seconde** liste, `JETONS_RETIRES`, et il n'y en a qu'une

@@ -15,15 +15,15 @@ révoquer/supprimer/publier **sans lire**). La lecture opérateur du contenu
 perso reste le **view-as audité** (ADR 0023). `DatastorePg._resolve` passe par
 `can_access` ; le share/transfert/delete par `can_govern` (un super_admin/org_admin
 gouverne donc un datastore tiers). ⚠️ **Scoping des LISTES de contenu** : une liste de
-ressources possédées (datastore `list_namespaces`, projets `op=list`) scope sur
+ressources possédées (datastore `list_datastores`, projets `op=list`) scope sur
 **`ownership.active_owner(current_org)`** (= l'org active, le pendant `ownership` de
 `current_org`/ADR 0023), **JAMAIS** sur `accessor_scope().owner_pairs()` (= union de
 TOUTES les orgs de l'acteur, réservé au plan **gouvernance** `oto_resource list` +
 découverte/modèles). Les confondre = fuite cross-org *fail-open* (le superset montre
 plus que le contexte chargé) — vécu 2026-06-30 (projets/datastore d'une autre org
 visibles dans le dashboard). Garde-fou : `tests/test_owner_scope_tripwire.py` fige les
-call-sites `owner_pairs()`. **org-owned activé** : `data_create_namespace` /
-`POST /api/datastore/namespaces` acceptent un `owner` (classeur d'équipe). Capacité
+call-sites `owner_pairs()`. **org-owned activé** : `data_create_datastore` /
+`POST /api/datastore/datastores` acceptent un `owner` (classeur d'équipe). Capacité
 générique **`oto_resource`** (`capabilities/resources.py`, op `list/get/transfer/share/
 unshare`, autz combinateur `RESOURCE_GOVERN`) = chemin de gouvernance MCP+REST + alimente
 l'object-browser admin.

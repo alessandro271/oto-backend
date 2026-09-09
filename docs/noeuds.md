@@ -316,7 +316,7 @@ Trois surfaces lisent aujourd'hui le résidu et deviendront vides sans lui :
 1. **le contrat du dashboard** — ouvrir par la surface nœud un contenu créé dans
    l'ancienne. Trois tests sont marqués en échec **attendu strict** : s'ils repassent
    au vert, c'est qu'une recopie est revenue ;
-2. **`oto_node_rows` sur un tableau recopié** — il résout son namespace par
+2. **`oto_node_rows` sur un tableau recopié** — il résout son datastore par
    `props.legacy_id` ;
 3. **la référence de procédure** (`node_procedure_ref`), qui vise la famille produite
    par la conversion.

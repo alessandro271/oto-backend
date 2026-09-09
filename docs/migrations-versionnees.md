@@ -109,7 +109,7 @@ croissant avec la base :
 | `backfill_node_blocks()` | parse le corps markdown des nœuds en blocs, en Python | nombre de nœuds modifiés | 130 ms en régime stable — **mais ~19 s à chaque rotation de marqueur** (1 526 nœuds × 4 allers-retours) |
 | `prune_tool_calls(30 j)` | purge du journal **et** des runs orphelins — deux `DELETE` non bornés | volume du journal | < 10 ms — parce qu'il n'y avait plus rien à purger, et c'est le problème (§1.4) |
 | `prune_run_messages(30 j)` | purge du fil des runs hébergés | volume du fil | 20 ms |
-| `_ensure_datastore_key_indexes()` | par namespace : résorption des doublons puis `CREATE UNIQUE INDEX` | nombre de namespaces × leurs lignes | **644 ms** pour 204 namespaces, zéro index manquant |
+| `_ensure_datastore_key_indexes()` | par datastore : résorption des doublons puis `CREATE UNIQUE INDEX` | nombre de datastores × leurs lignes | **644 ms** pour 204 datastores, zéro index manquant |
 
 Et à l'intérieur de la transaction, cinq conversions de contenu appelées depuis
 `db/nodes.py` (`convert_projects`, `convert_docs`, `convert_guides`,
@@ -137,7 +137,7 @@ ordre** — c'est lui qui convertit un nombre d'allers-retours en secondes) :
 | poste | coût unitaire | fois par boot | total |
 | --- | ---: | ---: | ---: |
 | `init_db` (297 ordres en régime stable) | 0,93 s | **3** | 2,8 s |
-| `_ensure_datastore_key_indexes` (204 namespaces, 1 aller-retour chacun) | 0,64 s | **3** | 1,9 s |
+| `_ensure_datastore_key_indexes` (204 datastores, 1 aller-retour chacun) | 0,64 s | **3** | 1,9 s |
 | `backfill_personal_orgs` (82 users × 2 allers-retours) | 0,58 s | **2** | 1,2 s |
 | `backfill_node_blocks` (la sonde, no-op) | 0,13 s | **3** | 0,4 s |
 | les quatre autres backfills + les deux purges | < 30 ms | 2-3 | ~0,1 s |

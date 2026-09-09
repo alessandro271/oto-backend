@@ -31,7 +31,7 @@ Le pointeur unique « org active » est scindé en **3 notions**, résolues par 
 **Sans axe `_org=`, un appel fait DANS un run se résout dans l'org du run
 (`runs.org_id`), pas dans l'org maison du sub.** Mesuré en prod le 29/08 (#631/#638) :
 un `data_write` sans `_org`, dans un run ouvert sur une org, résolu dans l'org maison
-du sub et refusé « namespace inconnu » sur un tableau que la réservation du même
+du sub et refusé « datastore inconnu » sur un tableau que la réservation du même
 run venait de résoudre — 82 refus sur sept jours, 109 sur les sept suivants, tous des
 `data_write` du runner ; et le journal stampait la maison, donc la vue filtrée par org ne
 montrait pas l'appel (#630). Le contournement de #638 (résolution par la réservation)
