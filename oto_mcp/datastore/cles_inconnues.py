@@ -80,6 +80,56 @@ def inconnues(fields: Iterable) -> dict[str, list[str]]:
     return out
 
 
+def inconnues_de_tete(schema: Any) -> dict[str, str]:
+    """`{clé de tête non interprétée: la conduite}` — vide quand la tête est propre.
+
+    ⚠️ **Le contrôle ne parcourait que les colonnes** (#97), et c'est le trou le plus
+    large du datastore : un `stricte` pour `strict` en tête est accepté en silence, et
+    `validation_active` rend alors `False`. Ce n'est pas un cran qui tombe, **ce sont
+    tous** — options, types, bornes, refus des colonnes inconnues. Le propriétaire, lui,
+    lit son schéma et voit `stricte: true`.
+
+    Trois causes, trois conduites, parce qu'elles ne se corrigent pas pareil :
+
+    - un **paramètre d'appel** rangé dans le schéma (`semantic_search`) — il est stocké,
+      servi, et sans effet ; il se passe à l'appel ;
+    - une clé qui existe **sur une COLONNE** posée à la tête (`readonly`, `options`) —
+      elle a un domicile, ce n'est pas le bon ;
+    - une **faute de frappe** sur un réglage de tête — la plus coûteuse, et la seule que
+      le nom proche permet de nommer.
+    """
+    if not isinstance(schema, dict):
+        return {}
+    from difflib import get_close_matches
+    from . import schema_keys as sk
+
+    out: dict[str, str] = {}
+    for cle in schema:
+        if not isinstance(cle, str) or cle in sk.TETE_RECONNUES:
+            continue
+        if cle in sk.PARAMETRES_HORS_SCHEMA:
+            out[cle] = (f"`{cle}` est un PARAMÈTRE de `data_set_schema`, pas une clé de "
+                        f"schéma : posé ici il est stocké et servi, mais sans aucun "
+                        f"effet. Passe-le à l'appel, à côté de `schema`.")
+            continue
+        proche = get_close_matches(cle, sorted(sk.TETE_RECONNUES), n=1, cutoff=0.75)
+        if proche:
+            quoi = next((c.quoi for c in sk.CLES_DE_TETE if c.nom == proche[0]), "")
+            out[cle] = (f"`{cle}` n'est lue par rien — voulais-tu `{proche[0]}` ? "
+                        f"({quoi}). ⚠️ Tant que le nom est faux, ce réglage n'existe "
+                        f"pas : le tableau se comporte comme s'il n'avait jamais été "
+                        f"posé.")
+        elif cle in sk.RECONNUES:
+            out[cle] = (f"`{cle}` existe, mais sur une COLONNE — pas en tête de schéma. "
+                        f"Ici elle ne garde rien. Déplace-la dans le `fields` de la "
+                        f"colonne qu'elle vise.")
+        else:
+            out[cle] = (f"`{cle}` n'est interprétée par aucun contrôle de la "
+                        f"plateforme. Les réglages de tête sont "
+                        f"{', '.join('`' + n + '`' for n in sorted(sk.TETE_RECONNUES))}.")
+    return out
+
+
 def check(schema: Any) -> dict:
     """Check croisé à la pose, dans la forme des autres (`digest_check`,
     `retrait_check`) : la clé est TOUJOURS présente, `None` = rien à signaler.
@@ -87,9 +137,20 @@ def check(schema: Any) -> dict:
     try:
         if not isinstance(schema, dict):
             return {"unknown_keys_warning": None}
+        tete = inconnues_de_tete(schema)
         trouvees = inconnues(schema.get("fields") or [])
-        if not trouvees:
+        if not trouvees and not tete:
             return {"unknown_keys_warning": None}
+        # ⚠️ La TÊTE d'abord, et seule si elle parle : sa conséquence est d'un autre
+        # ordre — un réglage de tête manqué désarme le tableau ENTIER, là où un
+        # attribut de colonne manqué ne désarme que sa colonne. Les noyer dans la
+        # même phrase ferait lire le plus grave comme un détail de plus.
+        if tete:
+            return {"unknown_keys_warning": (
+                "réglage(s) de TÊTE non interprété(s) — " + " ; ".join(
+                    v for _, v in sorted(tete.items()))
+                + (f" (par ailleurs, des attributs de colonne ne sont pas lus non "
+                   f"plus : {', '.join(sorted(trouvees))})" if trouvees else ""))}
         detail = " ; ".join(
             f"`{col}` : {', '.join('`' + k + '`' for k in cles)}"
             for col, cles in sorted(trouvees.items()))

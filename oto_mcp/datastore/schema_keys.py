@@ -150,3 +150,47 @@ def servie() -> list[dict]:
     `front` aussi sûre que la moitié `validateur`."""
     return [{"key": c.nom, "readers": list(c.lecteurs), "what": c.quoi,
              "column_only": c.colonne_seulement} for c in CLES]
+
+
+# ── La TÊTE du schéma (#97) ──────────────────────────────────────────────────
+#
+# ⚠️ **Le contrôle des clés inconnues ne parcourait que les COLONNES.** Un réglage de
+# tête mal orthographié — `stricte` pour `strict` — passait donc en silence complet, et
+# la conséquence est la plus large du datastore : `validation_active` rend `False`, donc
+# **toutes les gardes du tableau tombent d'un coup** pendant que son propriétaire les
+# croit armées. Ce n'est pas une protection qui s'affaiblit, ce sont toutes.
+#
+# Mesuré sur le parc avant d'écrire cette liste — c'est ce qui la rend sûre plutôt que
+# devinée : sur 362 tableaux à schéma, **deux clés de tête seulement** sortent de ce que
+# le code lit, `description` (15 tableaux) et `semantic_search` (1). La déclaration
+# ci-dessous couvre donc l'existant légitime, et l'avertissement ne criera pas sur le
+# régime normal — celui qu'on apprend à ignorer.
+
+CLES_DE_TETE: tuple[Cle, ...] = (
+    Cle("fields", ("validateur", "front"), "les colonnes du tableau"),
+    Cle("key", ("validateur", "front"), "la colonne qui sert de clé métier"),
+    Cle("strict", ("validateur",),
+        "arme la validation : sans lui, `options`, `type` et les bornes ne "
+        "contraignent rien"),
+    Cle("key_required", ("validateur",),
+        "une écriture qui ne désigne aucune ligne existante est refusée"),
+    Cle("unknown_fields", ("validateur",),
+        "le sort d'une colonne non déclarée — `\"report\"` (défaut) ou `\"reject\"`"),
+    # ⚠️ Lue par personne CÔTÉ SERVEUR, et gardée quand même : 15 tableaux la portent,
+    # le schéma est servi tel quel, donc un écran peut l'afficher. « oto ne l'interprète
+    # pas » n'est pas « personne ne la lit » — la leçon des six attributs portés comme
+    # morts dont un seul l'était.
+    Cle("description", ("front",), "la description du tableau, servie telle quelle"),
+)
+
+#: Ce qu'une tête de schéma a le droit de porter.
+TETE_RECONNUES: frozenset[str] = frozenset(c.nom for c in CLES_DE_TETE)
+
+#: ⚠️ Des PARAMÈTRES de `data_set_schema`, jamais des clés de schéma. Posés dans le
+#: schéma ils sont stockés, servis, et **sans effet** — l'auteur croit avoir réglé
+#: quelque chose. Mesuré : un tableau du parc porte `semantic_search` dans son schéma et
+#: n'a donc pas la recherche sémantique qu'il croit avoir activée. Ils méritent leur
+#: propre phrase : « ce n'est pas une clé de schéma, c'est un paramètre de l'appel » se
+#: corrige en un geste, « clé inconnue » fait chercher une faute de frappe.
+PARAMETRES_HORS_SCHEMA: frozenset[str] = frozenset({"semantic_search", "datastore",
+                                                    "namespace", "owner"})
