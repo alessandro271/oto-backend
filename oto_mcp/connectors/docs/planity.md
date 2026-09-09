@@ -51,6 +51,7 @@ il n'y a **pas d'outil de prévision** : la règle (couverture visée, délai fo
 1. `planity_get_revenue_breakdown` sur 90 jours → les quantités vendues par produit, en un appel (`by_product`, `bucket_id` = l'id du produit au catalogue)
 2. `planity_list_products` → le stock de chaque produit et ses **lots d'achat** (avec leur prix d'achat, donc la marge)
 3. le calcul est à toi : `couverture = stock / (ventes ÷ 90)`, à comparer à ton délai de réassort. `planity_list_stock_movements(product_ids=[…])` donne le détail des mouvements sur les produits qui sortent du lot
+- ⚠️ `planity_list_stock_movements` **exige `product_ids`** : les mouvements se lisent un produit à la fois, et il ne balaie pas un catalogue entier tout seul. sans les ids, il refuse tout de suite, sans rien lire
 - ⚠️ `stock_threshold` et `stock_ceiling` valent `null` quand le salon ne s'en sert pas — **`null` n'est pas `0`** : une règle qui lirait zéro commanderait tout, tout le temps
 - ⚠️ une baisse de stock sans vente n'est pas une anomalie : regarde `planity_list_mass_stock_removals` (inventaire, casse, péremption)
 

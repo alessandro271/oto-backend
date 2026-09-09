@@ -389,33 +389,31 @@ def test_les_mouvements_passent_les_produits_demandes_tels_quels(coeur):
     coeur.client.list_products.assert_not_awaited()
 
 
-@exige_les_sous_modules
-def test_un_balayage_de_tout_le_catalogue_est_refuse_en_nommant_le_chemin_court(coeur):
-    """Les mouvements se lisent UN PRODUIT À LA FOIS. Balayer neuf cents références
-    tiendrait la conversation une demi-minute : on refuse en disant quoi faire à la
-    place, plutôt que de tronquer — une liste de ventes tronquée se lit comme un
-    produit qui ne se vend plus."""
-    coeur.client.list_products.return_value = {"cat-1": {"children": {
-        f"prd-{i}": {"name": f"P{i}"} for i in range(5)}}}
+def test_un_balayage_implicite_est_refuse_AVANT_toute_lecture(coeur):
+    """Le refus doit tomber sans rien lire, et sans même ouvrir de session.
+
+    Il a d'abord été écrit APRÈS un `list_products` qui servait à compter : un appel
+    condamné payait quand même une lecture — sur une session partagée, et donc sur
+    une connexion qu'il pouvait trouver morte. Compter pour refuser, c'est déjà
+    avoir fait ce qu'on refuse."""
     with pytest.raises(McpError) as e:
-        asyncio.run(_outil(coeur, "planity_list_stock_movements")(
-            salon_id="biz-un", max_products=3))
+        asyncio.run(_outil(coeur, "planity_list_stock_movements")(salon_id="biz-un"))
     message = str(e.value)
-    assert "product_ids" in message and "max_products=5" in message
+    assert "product_ids" in message
+    assert "planity_list_products" in message
     assert "planity_get_revenue_breakdown" in message
+    coeur.client.list_products.assert_not_awaited()
+    coeur.client.list_stock_movements.assert_not_awaited()
 
 
-@exige_les_sous_modules
-def test_sous_la_borne_le_catalogue_vivant_est_balaye(coeur):
-    """Et les produits SUPPRIMÉS n'en sont pas : ils ne se réassortissent pas."""
-    coeur.client.list_products.return_value = {"cat-1": {"children": {
-        "prd-1": {"name": "Vivant"}, "prd-2": {"name": "Retiré", "deletedAt": 7}}}}
-    coeur.client.list_stock_movements.return_value = []
-    out = asyncio.run(_outil(coeur, "planity_list_stock_movements")(
-        salon_id="biz-un"))
-    coeur.client.list_stock_movements.assert_awaited_once_with(
-        "biz-un", ["prd-1"], 1_000, 2_000)
-    assert out["products_scanned"] == 1
+def test_une_liste_de_produits_vide_est_refusee_comme_une_absence(coeur):
+    """`product_ids=[]` demande la même chose qu'aucun argument : ne pas le traiter
+    ferait rendre « zéro mouvement », qui se lit comme un stock qui ne bouge pas."""
+    for vide in ([], [""], None):
+        with pytest.raises(McpError):
+            asyncio.run(_outil(coeur, "planity_list_stock_movements")(
+                salon_id="biz-un", product_ids=vide))
+    coeur.client.list_products.assert_not_awaited()
 
 
 def test_un_fournisseur_absent_est_une_reponse_pas_une_panne(coeur):

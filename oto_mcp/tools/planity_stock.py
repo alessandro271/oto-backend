@@ -17,15 +17,24 @@ from typing import Optional
 
 from fastmcp import FastMCP
 
-from . import planity_session
 from .planity_session import _bad, _client, _eur_ou_rien, fenetre, iso, periode
 
-#: Au-delà, un balayage du catalogue entier n'est plus une lecture, c'est une
-#: attente : les mouvements se lisent PAR PRODUIT (une lecture bornée chacun), et
-#: un salon à neuf cents références y passerait une demi-minute. On refuse en
-#: nommant les deux chemins moins chers, plutôt que de tronquer en silence — une
-#: liste tronquée de ventes se lit comme un produit qui ne se vend plus.
-_PRODUITS_MAX = 150
+#: Le refus qu'on oppose à un balayage implicite du catalogue, et les deux chemins
+#: qui coûtent un appel au lieu de six cents.
+#:
+#: ⚠️ **Il tombe AVANT toute lecture, et c'est le point.** Il a d'abord été écrit
+#: après un `list_products` qui servait à compter les produits — donc un appel
+#: condamné payait quand même une lecture, sur une session que l'appelant croyait
+#: intacte. Compter pour refuser, c'est déjà avoir fait ce qu'on refuse.
+_REFUS_BALAYAGE = (
+    "Les mouvements de stock se lisent UN PRODUIT À LA FOIS — il n'existe pas "
+    "d'index de temps au niveau du salon. Balayer un catalogue entier tiendrait la "
+    "conversation des dizaines de secondes, donc cet outil ne le fait pas tout "
+    "seul : passe `product_ids`. Les identifiants viennent de "
+    "`planity_list_products` (un appel). Et pour une vue salon, "
+    "`planity_get_revenue_breakdown` donne les quantités vendues par produit en UN "
+    "appel — c'est de là qu'on part, puis on vient ici pour le détail des quelques "
+    "produits qui sortent du lot.")
 
 
 def register(mcp: FastMCP) -> None:
@@ -37,7 +46,6 @@ def register(mcp: FastMCP) -> None:
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
         preset: Optional[str] = None,
-        max_products: int = _PRODUITS_MAX,
     ) -> dict:
         """Raw stock movements in a date range: every in and out, per product.
 
@@ -53,31 +61,18 @@ def register(mcp: FastMCP) -> None:
         particular purchase lot. `purchase_price_raw` keeps what was actually
         written. Null means "not an amount", never "free".
 
-        Movements are read ONE PRODUCT AT A TIME — there is no whole-catalogue
-        index. Pass `product_ids` whenever you know which products you care about.
-        Without it the whole live catalogue is swept, which is refused above
-        `max_products` rather than made to crawl: for a salon-wide view, the cheap
-        path is `planity_get_revenue_breakdown` (quantities sold per product, one
-        call) and `planity_list_products` (stock and lots, one call) — this tool is
-        for the detail on the handful of products that then look interesting.
+        `product_ids` is REQUIRED in practice: movements are read one product at a
+        time, so a whole-catalogue sweep is dozens of seconds and this tool will not
+        do one implicitly. Without it, the call is refused immediately — **before
+        any read** — naming the two cheaper paths: `planity_list_products` for the
+        ids, and `planity_get_revenue_breakdown` for a salon-wide view in one call.
         """
+        ids = [i for i in (product_ids or []) if i]
+        if not ids:
+            # AVANT `_client()` : un appel condamné n'ouvre même pas de session.
+            raise _bad(_REFUS_BALAYAGE)
         c = await _client()
         gte, lte = fenetre(date_from, date_to, preset)
-        ids = list(product_ids or [])
-        if not ids:
-            coeur = planity_session._coeur()
-            vivants = [p for p in coeur.stock.aplatir_produits(
-                await c.list_products(salon_id)) if not p["deleted"]]
-            if len(vivants) > max_products:
-                raise _bad(
-                    f"Ce salon a {len(vivants)} produits actifs et les mouvements se "
-                    f"lisent un produit à la fois : balayer tout le catalogue tiendrait "
-                    f"la conversation des dizaines de secondes. Passe `product_ids` "
-                    f"(les ids viennent de `planity_list_products`), ou "
-                    f"`max_products={len(vivants)}` si tu veux vraiment tout — et pour "
-                    f"une vue salon, `planity_get_revenue_breakdown` donne les "
-                    f"quantités vendues par produit en UN appel.")
-            ids = [p["id"] for p in vivants]
         mouvements = await c.list_stock_movements(salon_id, ids, gte, lte)
         return {
             "period": periode(gte, lte),
