@@ -1012,6 +1012,16 @@ def register(mcp: FastMCP) -> None:
         LinkedIn n'est PAS un id de facette employeur valide pour la recherche
         people — passer le nom et laisser le client résoudre.
 
+        ⚠️ **Champs d'ENTREPRISE absents du résultat** (taille, description, secteur) :
+        enrichis-les par entreprise DISTINCTE, jamais par profil. Déduplique les
+        employeurs de tes résultats (bien moins nombreux que les personnes), puis
+        `linkedin_unipile_profile(op="company", identifier=<nom ou slug>)` pour chacun —
+        la fiche est CACHÉE 6h, une boîte relookée ne reconsomme pas le quota. Pour des
+        entreprises françaises, `fr_search` donne l'effectif (= la taille) GRATUITEMENT,
+        sans quota LinkedIn. N'interroge PAS chaque personne une par une pour ces champs
+        d'entreprise (c'est le piège du « 844 appels » : compter par profil ce qui se
+        fait par employeur).
+
         Args:
             keywords: Mots-clés (nom, intitulé de poste…).
             category: "people" ou "companies".
