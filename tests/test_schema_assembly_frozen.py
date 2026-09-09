@@ -305,22 +305,29 @@ from oto_mcp.db import _schema, schema
 # ⚠️ Valeurs RECALCULÉES sur le tronc du jour, jamais recopiées d'une version
 # antérieure de cette branche : elle a été rebasée deux fois, et chaque rebase
 # gèle un DDL différent. Recopier l'ancienne empreinte gèlerait un schéma mort.
-# ⚠️ Arithmétique vérifiée APRÈS REBASE sur le tronc du 09/09 (3ᵉ rebase de cette
-# branche, conflit avec planity #913 sur CES deux lignes) : le fragment `USAGE`
+# ⚠️ Arithmétique vérifiée APRÈS REBASE sur le tronc du 09/09 : le fragment `USAGE`
 # grandit de 843 caractères (11 292 → 12 135 — le commentaire de `quantity`, la
-# colonne, et la virgule ajoutée après `token_kind`) et l'assemblé part de 149 422
-# (le tronc, planity inclus) pour arriver à 150 265. Le delta tombe juste des deux
-# côtés : rien d'autre n'a bougé dans le DDL. Les deux empreintes du conflit —
-# dc84b4e2 (tronc seul) et 36834a62 (branche seule) — sont mortes : aucune ne décrit
-# le DDL fusionné, et c'est exactement le cas que l'avertissement ci-dessus vise.
+# colonne, et la virgule ajoutée après `token_kind`), et l'assemblé d'exactement 843
+# aussi. Le delta tombe juste des deux côtés : rien d'autre n'a bougé dans le DDL.
+# Les empreintes rencontrées en conflit pendant ce rebase — dc84b4e2 (planity seul),
+# 36834a62 puis ca2f4729 (branche seule) — sont MORTES : aucune ne décrit le DDL
+# fusionné. C'est exactement le cas que l'avertissement ci-dessus vise.
 # 2026-09-09 (facturation par clé) : `tool_calls.key_mode` — sous quelle clé
 # l'appel est passé (`user|group|org|tenant|platform`), pour que le consommateur
 # de facturation ne compte QUE ce qui passe par une clé Tulina : un client sur sa
 # propre clé paie déjà le fournisseur. ADDITIVE et NULLABLE, posée par l'ALTER
 # d'`init_db` sur la base PARTAGÉE sans réécrire une ligne. Pas d'index.
-# ⚠️ Arithmétique vérifiée à nouveau, sur le tronc REBASÉ : le fragment `USAGE`
-# grandit de 838 caractères (12 135 → 12 973) et l'assemblé d'exactement 838 aussi
-# (150 265 → 151 103). Rien d'autre n'a bougé.
+# ⚠️ Arithmétique vérifiée à nouveau : le fragment `USAGE` grandit de 838 caractères
+# (12 135 → 12 973) et l'assemblé d'exactement 838 aussi. Rien d'autre n'a bougé.
+# ⚠️ Le TOTAL, mesuré sur l'arbre fusionné et non déduit : le tronc c1b1714c assemble
+# 150 323 caractères, cette branche y ajoute 843 (`quantity`) + 838 (`key_mode`) =
+# 152 004. Les deux seuls fragments qui diffèrent du tronc sont `usage.USAGE`
+# (11 292 → 12 973) et l'assemblé, du même delta : contrôle fait fragment par
+# fragment, pas sur le seul total.
+# ⚠️ c1b1714c (runner/worker) a gelé 150 306 alors que son propre DDL en assemblait
+# 150 323 : 17 caractères d'écart, et le tronc était ROUGE en arrivant ici — la garde
+# a fait exactement son travail. Le nombre ci-dessous est recalculé sur l'arbre
+# fusionné, il ne reconduit donc pas cet écart.
 EMPREINTE = "f2961d71beba070b27bfdfb2aa10df3ebd8b7025e87ecbcf07b3d9ce44dee276"
 LONGUEUR = 152004
 
