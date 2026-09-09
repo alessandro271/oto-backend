@@ -47,7 +47,7 @@ from ...datastore.core import (
 )
 from .._authz import SUB_ONLY
 from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
-from .common import HORODATAGE, ns_not_found
+from .common import EntreeDatastore, HORODATAGE, ns_not_found
 from .lot import refuser_un_lot
 from ..registry import CAPABILITIES
 from ._forme import _LAYERS, _VERSIONS, _layers, _versions
@@ -68,7 +68,7 @@ def _tolerant_int(v):
         return None
 
 
-class ListRowsInput(BaseModel):
+class ListRowsInput(EntreeDatastore):
     datastore: Adresse
     # `None` = le défaut du serveur (0 / 50) ; borné à [1, 500] pour `limit`.
     offset: Optional[int] = None
@@ -107,7 +107,7 @@ class ListRowsInput(BaseModel):
 
 
 
-class AggregateInput(BaseModel):
+class AggregateInput(EntreeDatastore):
     datastore: Adresse
     group_by: Optional[str] = None
     # JSON encodé : `[{op: count|sum|avg|min|max, field?}]`.
@@ -120,11 +120,11 @@ class AggregateInput(BaseModel):
     filters: Optional[str] = None
 
 
-class DatastoreRefInput(BaseModel):
+class DatastoreRefInput(EntreeDatastore):
     datastore: Adresse
 
 
-class RowRefInput(BaseModel):
+class RowRefInput(EntreeDatastore):
     datastore: Adresse
     row_id: str
 
@@ -176,7 +176,7 @@ _DONNEES_D_ORIGINE = Field(default=False,
                            description=dsv2.description_donnees_d_origine())
 
 
-class AppendRowInput(BaseModel):
+class AppendRowInput(EntreeDatastore):
     datastore: Adresse
     # Le corps ENTIER (cf. `RestBinding.body_field`) : les colonnes du tableau.
     row: dict = Field(default_factory=dict)
@@ -203,7 +203,7 @@ class AppendRowInput(BaseModel):
 
 
 
-class UpdateRowInput(BaseModel):
+class UpdateRowInput(EntreeDatastore):
     datastore: Adresse
     row_id: str
     # Le corps ENTIER : les colonnes à écrire (patch partiel, jamais un remplacement).
@@ -231,7 +231,7 @@ class UpdateRowInput(BaseModel):
 
 
 
-class ReleaseInput(BaseModel):
+class ReleaseInput(EntreeDatastore):
     datastore: Adresse
     row_id: str
     # Vide = libération FORCÉE (supervision humaine) ; renseigné = libération GARDÉE.

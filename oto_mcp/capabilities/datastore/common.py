@@ -16,7 +16,9 @@ doit pas promettre un instant absolu là où le serveur rend une heure murale.
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
+
+from pydantic import BaseModel, model_validator
 
 from ... import ownership
 from ...datastore import hors_org
@@ -75,3 +77,57 @@ def govern_ns(sub: Optional[str], datastore: str) -> int:
     if not ownership.can_govern(sub, ownership.TYPE_RESSOURCE_DATASTORE, str(ns_id)):
         raise AuthzDenied(403, "forbidden")
     return ns_id
+
+
+# ── `namespace` a été renommé `datastore` (09/09/2026) ───────────────────────
+#
+# Le paramètre n'existe plus sous son ancien nom. Sans la garde ci-dessous, pydantic
+# **ignore silencieusement** la clé inconnue (`extra="ignore"`, le défaut) et l'appel
+# échoue un cran plus loin sur :
+#
+#     datastore: Field required
+#
+# ⚠️ **Le verdict est juste et le message envoie chercher au mauvais endroit.** Un
+# agent qui lit « champ requis manquant » cherche ce qu'il a OUBLIÉ ; il ne peut pas
+# deviner qu'il a fourni la bonne valeur sous un nom qui n'existe plus. C'est
+# exactement le défaut qui, sur un autre refus, a fait brûler 60 appels à dix agents
+# persuadés que leur APPEL était fautif.
+#
+# On ne change pas le verdict — l'appel échouait, il échoue toujours. On change ce
+# qu'il DIT, et c'est tout l'objet : un refus doit nommer sa cause et le geste qui
+# aboutit.
+#
+# ⚠️ **Et on n'accepte pas `namespace` comme alias.** Les alias de ce renommage sont
+# des redirections ANNONCÉES (308 + en-tête `Sunset` au 08/11/2026), jamais des
+# acceptations muettes : un paramètre repris en silence laisserait les textes non
+# migrés le rester, sans que personne l'apprenne — et masquer un problème au lieu de
+# lever est précisément ce qu'on ne fait pas ici.
+
+RENOMME_LE = "09/09/2026"
+
+
+class EntreeDatastore(BaseModel):
+    """Base des entrées datastore : elle ne fait qu'une chose, nommer un renommage.
+
+    Aucun champ ajouté — la signature MCP est dérivée de `model_fields`, et un champ
+    de plus deviendrait un paramètre offert. Un validateur, lui, est invisible au
+    schéma servi.
+    """
+
+    @model_validator(mode="before")
+    @classmethod
+    def _namespace_a_ete_renomme(cls, data: Any) -> Any:
+        if not isinstance(data, dict) or "namespace" not in data:
+            return data
+        # Ne parle que là où le renommage a EU LIEU : une entrée sans champ
+        # `datastore` (s'il en existe une) n'a rien à dire sur ce mot.
+        if "datastore" not in cls.model_fields:
+            return data
+        valeur = data.get("namespace")
+        raise ValueError(
+            f"`namespace` a été renommé `datastore` le {RENOMME_LE} — le paramètre "
+            f"n'existe plus sous ce nom, et rien n'a été écrit. Rejoue le même appel "
+            f"avec `datastore={valeur!r}` : **l'adresse ne change pas** (nom du "
+            f"tableau, numéro, forme `slot:<nom>`), c'est la clé qui bascule. "
+            f"⚠️ Ne cherche pas un paramètre manquant : tu as fourni la bonne valeur "
+            f"sous un nom retiré.")

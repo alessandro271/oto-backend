@@ -44,11 +44,12 @@ from ...datastore.core import (
 )
 from .._authz import SUB_ONLY
 from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
+from .common import EntreeDatastore
 from ..registry import CAPABILITIES
 from ._forme import _LAYERS, _layers
 
 
-class ClaimNextInput(BaseModel):
+class ClaimNextInput(EntreeDatastore):
     datastore: Adresse
     # oto#63 : la RÉSERVATION est le seul chemin qui alimente une boucle d'écriture,
     # et c'était le seul à ne pas porter la forme. Réutilise le champ des lectures —
@@ -67,7 +68,7 @@ class ClaimNextInput(BaseModel):
     max_claims: Optional[int] = None
 
 
-class ClaimRowInput(BaseModel):
+class ClaimRowInput(EntreeDatastore):
     datastore: Adresse
     row_id: str
     layers: str = _LAYERS

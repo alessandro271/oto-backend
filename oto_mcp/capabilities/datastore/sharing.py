@@ -26,7 +26,7 @@ from ...datastore.identite import Adresse
 from ... import db, ownership
 from .._authz import SUB_ONLY
 from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
-from .common import HORODATAGE, govern_ns
+from .common import EntreeDatastore, HORODATAGE, govern_ns
 from ..registry import CAPABILITIES
 
 
@@ -40,7 +40,7 @@ _SUB = ("Identifiant du compte destinataire, quand une adresse en désigne "
         "la même chose, dont une pourrait mentir sur l'autre).")
 
 
-class ShareInput(BaseModel):
+class ShareInput(EntreeDatastore):
     datastore: Adresse
     email: str = ""
     sub: str = Field(default="", description=_SUB)
@@ -49,13 +49,13 @@ class ShareInput(BaseModel):
     permission: str = "read"
 
 
-class UnshareInput(BaseModel):
+class UnshareInput(EntreeDatastore):
     datastore: Adresse
     email: str = ""
     sub: str = Field(default="", description=_SUB)
 
 
-class DatastoreRefInput(BaseModel):
+class DatastoreRefInput(EntreeDatastore):
     datastore: Adresse
 
 

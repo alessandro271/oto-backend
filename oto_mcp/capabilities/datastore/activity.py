@@ -29,7 +29,7 @@ from ...datastore.core import DatastoreNotFound, RowNotFound, make_store
 from .._authz import SUB_ONLY
 from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from ..registry import CAPABILITIES
-from .common import HORODATAGE
+from .common import EntreeDatastore, HORODATAGE
 
 # La fenêtre annoncée est **DÉRIVÉE de la purge**, jamais recopiée à côté d'elle.
 #
@@ -46,12 +46,12 @@ from .common import HORODATAGE
 from ...maintenance import _JOURNAL_RETENTION_DAYS as RETENTION_DAYS
 
 
-class RowActivityInput(BaseModel):
+class RowActivityInput(EntreeDatastore):
     datastore: Adresse
     row_id: str
 
 
-class DatastoreActivityInput(BaseModel):
+class DatastoreActivityInput(EntreeDatastore):
     datastore: Adresse
     limit: int = 50
 

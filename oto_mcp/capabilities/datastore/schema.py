@@ -43,11 +43,11 @@ from ...datastore.core import DatastoreNotFound, DatastoreReadOnly, make_store
 from ...datastore.errors import SchemaDefinitionError
 from .._authz import SUB_ONLY
 from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
-from .common import ns_not_found
+from .common import EntreeDatastore, ns_not_found
 from ..registry import CAPABILITIES
 
 
-class GetSchemaInput(BaseModel):
+class GetSchemaInput(EntreeDatastore):
     datastore: Adresse
 
 
@@ -152,7 +152,7 @@ def _get_schema(ctx: ResolvedCtx, inp: GetSchemaInput) -> dict:
 with warnings.catch_warnings():
     warnings.simplefilter("ignore", UserWarning)
 
-    class SetSchemaInput(BaseModel):
+    class SetSchemaInput(EntreeDatastore):
         datastore: Adresse
         # `null` (ou absent) = RETIRER le schéma, retour en table libre. Les deux se
         # confondent, et c'est le comportement de la route d'avant : `body.get("schema")`.

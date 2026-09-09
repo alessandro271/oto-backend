@@ -36,7 +36,7 @@ from ...auth import token_scopes
 from ...datastore.core import DatastoreExists, DatastoreForbidden, DatastoreNotFound, make_store
 from .._authz import SUB_ONLY
 from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
-from .common import HORODATAGE, govern_ns, ns_not_found
+from .common import EntreeDatastore, HORODATAGE, govern_ns, ns_not_found
 from ..registry import CAPABILITIES
 
 
@@ -44,7 +44,7 @@ class ListDatastoresInput(BaseModel):
     """Aucun paramètre : le périmètre est l'org active, jamais un argument."""
 
 
-class CreateDatastoreInput(BaseModel):
+class CreateDatastoreInput(EntreeDatastore):
     # Défaut vide plutôt que champ requis : un nom manquant mérite le refus NOMMÉ
     # (`missing_datastore`) que cette route rend depuis toujours, pas l'`invalid_input`
     # générique de pydantic — le dashboard l'affiche tel quel.
@@ -60,11 +60,11 @@ class CreateDatastoreInput(BaseModel):
     owner: Optional[dict] = None
 
 
-class DatastoreRefInput(BaseModel):
+class DatastoreRefInput(EntreeDatastore):
     datastore: Adresse
 
 
-class RenameDatastoreInput(BaseModel):
+class RenameDatastoreInput(EntreeDatastore):
     datastore: Adresse
     name: str = ""
 

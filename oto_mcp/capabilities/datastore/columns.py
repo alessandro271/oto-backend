@@ -49,10 +49,11 @@ from ...datastore.core import DatastoreNotFound, DatastoreReadOnly, make_store
 from ...datastore.errors import ColumnAbsent
 from .._authz import SUB_ONLY
 from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
+from .common import EntreeDatastore
 from ..registry import CAPABILITIES
 
 
-class DropColumnInput(BaseModel):
+class DropColumnInput(EntreeDatastore):
     datastore: Adresse
     key: str = Field(description=(
         "The column to erase. A key still DECLARED in the schema is refused — take it "
@@ -97,7 +98,7 @@ def _drop_column(ctx: ResolvedCtx, inp: DropColumnInput) -> dict:
         raise AuthzDenied(400, "invalid_drop_column", str(e))
 
 
-class PatchSchemaInput(BaseModel):
+class PatchSchemaInput(EntreeDatastore):
     datastore: Adresse
     # Fusion PAR CLÉ : chaque entrée complète le field de même `key` (les propriétés
     # fournies écrasent, les autres sont préservées) ou l'ajoute s'il est inconnu.
