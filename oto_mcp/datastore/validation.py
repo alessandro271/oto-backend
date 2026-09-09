@@ -25,6 +25,7 @@ from typing import Any, Optional
 from .couches import _is_empty, LAYER_KEYS, layer_value, split_layer, unknown_layers, unwrap
 from .motifs import _pattern_re
 from .declaration import _fields, max_length_of, pattern_of, status_field, validation_active
+from .etats_declares import etats_trahis
 from .types_declares import types_trahis
 from .cycle_de_vie import lifecycle_of, refus_de_transition
 from .hors_schema import _unknown_subkey_refusal, _unknown_subkeys
@@ -378,6 +379,12 @@ def validate_row(schema: Optional[dict], merged: dict, *,
     # contrôle existait sous `validation_active` et n'y voyait rien passer (0 violation
     # sur 88 tableaux) pendant que 248 tableaux sans validation en portaient 118.
     errors.extend(types_trahis(schema, merged))
+    # 09/09/2026 — le cran suivant de la même famille : une colonne SECONDAIRE qui
+    # déclare ses états les fait respecter, elle aussi. Seule la file était vérifiée ;
+    # 131 colonnes du parc déclaraient une liste que personne n'appliquait. Mesuré
+    # avant de brancher : zéro valeur hors liste sur 8 646 cellules — la garde ne
+    # refuse rien d'existant, elle ferme la porte avant qu'on la pousse.
+    errors.extend(etats_trahis(schema, merged, written=written, gelees=gelees))
     lc = lifecycle_of(schema)
     if lc:
         sf = status_field(schema)
