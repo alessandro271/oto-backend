@@ -265,7 +265,15 @@ def _handwritten(routes: Iterable) -> dict:
     des migrations en capacités (`test_rest_modules_are_capabilities.py`).
     """
     out: dict = {}
-    alias = {a.ancien for a in deprecations.REST}
+    # ⚠️ Les alias DÉRIVÉS comptent autant que les déclarés. Oubliés ici le
+    # 09/09/2026, les 24 chemins du renommage `namespace` → `datastore`
+    # tombaient dans le chemin « route écrite à la main » et étaient décrits en
+    # SOUCHES — sans paramètres, sans corps. Le contrôle de contrat des fronts,
+    # qui apparie par chemin, lisait alors la souche à la place de l'opération et
+    # concluait que six opérations avaient perdu leurs paramètres. Elles ne les
+    # avaient pas perdus : c'est le document qui décrivait mal la redirection.
+    alias = ({a.ancien for a in deprecations.REST}
+             | {a.ancien for a in deprecations._alias_datastore()})
     for route in routes or ():
         path = getattr(route, "path", None)
         methods = getattr(route, "methods", None)
@@ -308,18 +316,18 @@ def _alias_deprecies() -> dict:
     qu'un client généré s'est donné, qu'on ne fait pas changer pour rien.
     """
     out: dict = {}
-    for alias in deprecations.REST:
+    for alias in tuple(deprecations.REST) + tuple(deprecations._alias_datastore()):
         item = out.setdefault(_openapi_path(alias.ancien), {})
         item[alias.verbe.lower()] = {
             "operationId": alias.operation_id or _handwritten_operation_id(
                 alias.verbe, alias.ancien),
             "summary": f"Déprécié : utilisez {alias.nouveau} "
-                       f"(retrait le {deprecations.date_de_retrait()})",
+                       f"(retrait le {deprecations._sunset(alias)})",
             "description": (
                 f"Ancien chemin, conservé le temps du préavis. Il répond **308** vers "
                 f"`{alias.nouveau}` — même méthode, même corps, query string reportée "
                 f"— et **cesse de répondre au premier tag posé à partir du "
-                f"{deprecations.date_de_retrait()}**. Bascule sur le nouveau chemin : "
+                f"{deprecations._sunset(alias)}**. Bascule sur le nouveau chemin : "
                 f"il sert déjà, à l'identique."),
             "deprecated": True,
             "tags": ["_deprecated"],
