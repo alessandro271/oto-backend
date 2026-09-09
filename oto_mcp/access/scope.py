@@ -361,11 +361,18 @@ def resolve_slot_tableau(name: str) -> str:
                         "Aucun slot tableau bindé dans ce projet. ")
                      + f"Binde-le : `oto_project op=link project_id={pid} "
                        f"target_type=tableau target_ref=<id> slot='{name}'`.")))
-    ns = match[0].get("namespace")
+    # ⚠️ **La clé NEUVE, et c'est un chemin critique.** `slot:` est la façon dont les
+    # procédures adressent « le tableau de ce projet » sans nom en dur : tout passe par
+    # ici. `namespace` est doublée jusqu'à `RETRAIT_DATASTORE` (08/11/2026) puis
+    # disparaît — un lecteur resté dessus aurait alors rendu `None` sur des slots
+    # parfaitement valides, et le refus ci-dessous aurait accusé le BINDING au lieu de
+    # la lecture. Toutes les procédures à slot seraient tombées le même jour, en
+    # accusant l'utilisateur.
+    ns = match[0].get("datastore")
     if not ns:
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
             message=(f"le slot `{name}` du projet #{pid} pointe un tableau qui ne résout "
                      f"plus (ref `{match[0].get('target_ref')}`) — re-binde-le sur un "
-                     "namespace existant (`oto_project op=link`).")))
+                     "tableau existant (`oto_project op=link`).")))
     return ns

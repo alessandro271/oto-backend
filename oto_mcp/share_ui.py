@@ -599,12 +599,12 @@ def _tableau_entries(project: dict, links: list) -> list[dict]:
             continue
         if ref.isdigit():
             out.append({"id": int(ref), "role": l.get("role"),
-                        "label": l.get("label") or l.get("namespace") or f"#{ref}"})
+                        "label": l.get("label") or l.get("datastore") or f"#{ref}"})
         elif owner_id:
             ns = db.get_datastore(owner_type, owner_id, ref)
             if ns:
                 out.append({"id": int(ns["id"]), "role": l.get("role"),
-                            "label": l.get("label") or l.get("namespace") or ref})
+                            "label": l.get("label") or l.get("datastore") or ref})
     return out
 
 

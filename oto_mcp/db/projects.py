@@ -444,14 +444,26 @@ def remove_project_link(project_id: int, target_type: str, target_ref: str,
 
 
 def _apply_tableau_names(links: list[dict], name_by_id: dict[int, str]) -> None:
-    """Attache le NOM du namespace à chaque lien `tableau` (résolu depuis l'id porté par
+    """Attache le NOM du tableau à chaque lien `tableau` (résolu depuis l'id porté par
     `target_ref`). Pur (mutation en place), testable sans DB. Un ref non numérique / un
-    namespace disparu → pas de clé `namespace` (le lien reste, best-effort)."""
+    tableau disparu → aucune des deux clés (le lien reste, best-effort).
+
+    ⚠️ **Les DEUX clés, et c'est le sujet.** Jusqu'au 09/09/2026 ce lien servait
+    `namespace` **seul** — le dernier endroit du produit où l'ancien nom était servi sans
+    son remplaçant à côté. Partout ailleurs la bascule sert les deux et le 08/11/2026
+    retirera simplement le doublon ; ici il n'y avait pas de doublon à retirer, donc ce
+    lieu serait devenu soit le dernier `namespace` servi, soit une rupture sèche pour ses
+    lecteurs. Mesuré au moment du correctif : 322 liens dans 112 projets.
+
+    `datastore` est la clé neuve, `namespace` reste jusqu'à la date de retrait commune
+    (`deprecations.RETRAIT_DATASTORE`) — même échéance que les alias REST et que la clé
+    doublée des réponses du datastore, pour qu'un seul geste les retire tous."""
     for l in links:
         if l.get("target_type") == "tableau" and str(l.get("target_ref", "")).isdigit():
             nm = name_by_id.get(int(l["target_ref"]))
             if nm is not None:
-                l["namespace"] = nm
+                l["datastore"] = nm
+                l["namespace"] = nm     # RETRAIT_DATASTORE
 
 
 def _apply_tableau_name_refs(links: list[dict], existing: set) -> None:
@@ -461,9 +473,10 @@ def _apply_tableau_name_refs(links: list[dict], existing: set) -> None:
     plus »). Pur (mutation en place). Ref-nom inexistant → pas de clé `namespace` (le lien
     reste, dead-link signalé à l'usage). Symétrique de `_apply_tableau_names` (chemin id)."""
     for l in links:
-        if (l.get("target_type") == "tableau" and not l.get("namespace")
+        if (l.get("target_type") == "tableau" and not l.get("datastore")
                 and l.get("target_ref") in existing):
-            l["namespace"] = l["target_ref"]
+            l["datastore"] = l["target_ref"]
+            l["namespace"] = l["target_ref"]    # RETRAIT_DATASTORE
 
 
 def _apply_procedure_titles(links: list[dict], title_by_id: dict[int, str]) -> None:
@@ -482,7 +495,8 @@ def list_project_links(project_id: int) -> list[dict]:
     """Liens du projet, avec `role` et `cross_project` DÉRIVÉ (ADR 0032 §2) : True si
     le même (target_type, target_ref) est lié par un AUTRE projet → l'agent sait qu'une
     modif de l'entité retombe ailleurs (s'abstenir d'un changement brutal / demander).
-    Les liens `tableau` sont enrichis du **nom** de leur namespace (`namespace`) : l'agent
+    Les liens `tableau` sont enrichis du **nom** de leur tableau — sous `datastore`, et
+    sous `namespace` jusqu'au retrait commun (`RETRAIT_DATASTORE`) : l'agent
     adresse « le tableau de ce projet » (par rôle/label) → nom réel pour `data_*`, sans
     nom en dur (ADR 0032 §6, adressage par rôle après provisioning template→instance).
     Les liens `procedure` sont enrichis du **titre** de leur guide (`title`), même
@@ -519,7 +533,7 @@ def list_project_links(project_id: int) -> list[dict]:
         # et non un id (dashboard) — résoudre AUSSI ces refs-nom existants, sinon le slot
         # tombait en « ne résout plus » alors que le namespace existe bel et bien.
         name_refs = [l["target_ref"] for l in out
-                     if l.get("target_type") == "tableau" and not l.get("namespace")
+                     if l.get("target_type") == "tableau" and not l.get("datastore")
                      and l.get("target_ref") and not str(l["target_ref"]).isdigit()]
         if name_refs:
             erows = conn.execute(

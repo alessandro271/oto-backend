@@ -21,8 +21,13 @@ def test_name_ref_missing_stays_unresolved():
 
 def test_id_resolved_link_untouched():
     # déjà résolu par le chemin id → ne pas écraser
-    links = [{"target_type": "tableau", "target_ref": "109", "namespace": "vivier-pmi"}]
+    # ⚠️ La forme RÉELLE d'un lien résolu depuis le 09/09/2026 : les deux clés, posées
+    # ensemble par `_apply_tableau_names`. `namespace` seul n'est plus produit — et le
+    # second chemin se déclenche sur `datastore`, celle qui survivra au 08/11.
+    links = [{"target_type": "tableau", "target_ref": "109",
+              "datastore": "vivier-pmi", "namespace": "vivier-pmi"}]
     P._apply_tableau_name_refs(links, {"109"})   # même si "109" existait comme nom
+    assert links[0]["datastore"] == "vivier-pmi"
     assert links[0]["namespace"] == "vivier-pmi"
 
 

@@ -3,7 +3,7 @@
 Pendant projet des « refs mortes » de guide (0014) : un pointeur déclaré qui ne
 correspond plus au réel devient une **alarme**, pas un silence. Quatre signaux,
 tous NON bloquants (dérivation pure, best-effort) :
-- **dead_links** : la cible ne résout plus (tableau sans namespace, procédure
+- **dead_links** : la cible ne résout plus (tableau sans nom résolu, procédure
   disparue, connecteur inconnu du registre) ;
 - **unbound_slots** : une procédure liée déclare des slots que le projet ne binde
   pas (complétude, le pendant des refs mortes à l'écriture) ;
@@ -101,10 +101,12 @@ def audit_project(project_id: int, links: Optional[list[dict]] = None, *,
         t = l.get("target_type")
         try:
             if t == "tableau":
-                if not l.get("namespace"):
+                # Lit la clé NEUVE : `namespace` est doublée jusqu'au 08/11/2026 et
+                # disparaîtra — un lecteur interne qui s'y accroche casserait ce jour-là.
+                if not l.get("datastore"):
                     dead.append({"target_type": t, "target_ref": l.get("target_ref"),
                                  "slot": l.get("slot"),
-                                 "why": "le namespace pointé n'existe plus"})
+                                 "why": "le tableau pointé n'existe plus"})
             elif t == "procedure":
                 if light:
                     continue   # la résolution de procédure est une requête → COMPLET seul

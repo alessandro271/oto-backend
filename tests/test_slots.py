@@ -246,7 +246,7 @@ from oto_mcp import access  # noqa: E402
 from oto_mcp.tools import datastore as ds  # noqa: E402
 
 _LINKS = [
-    {"target_type": "tableau", "target_ref": "9", "slot": "sortie", "namespace": "leads_q3"},
+    {"target_type": "tableau", "target_ref": "9", "slot": "sortie", "datastore": "leads_q3", "namespace": "leads_q3"},
     {"target_type": "tableau", "target_ref": "12", "slot": "source", "namespace": "pool_pme"},
     {"target_type": "connecteur", "target_ref": "folk", "slot": None},
 ]
@@ -318,7 +318,7 @@ def test_audit_project(monkeypatch):
     import oto_mcp.db as db_mod
 
     links = [
-        {"target_type": "tableau", "target_ref": "9", "slot": "sortie", "namespace": "leads"},
+        {"target_type": "tableau", "target_ref": "9", "slot": "sortie", "datastore": "leads", "namespace": "leads"},
         {"target_type": "tableau", "target_ref": "99", "slot": None},              # mort
         {"target_type": "procedure", "target_ref": "42"},                          # ok, slots bindés sauf crm
         {"target_type": "procedure", "target_ref": "43"},                          # morte
@@ -361,7 +361,7 @@ def test_link_procedure_unbound_warning(monkeypatch):
 def test_project_hint_suggests_link(monkeypatch):
     monkeypatch.setattr(ds.access, "current_project", lambda: 7)
     monkeypatch.setattr(ds.db, "list_project_links",
-                        lambda pid: [{"target_type": "tableau", "namespace": "leads"}])
+                        lambda pid: [{"target_type": "tableau", "datastore": "leads", "namespace": "leads"}])
     assert ds._project_hint("leads") is None                    # lié → pas de bruit
     hint = ds._project_hint("orphelin")
     assert hint and "op=link" in hint and "#7" in hint
@@ -381,7 +381,7 @@ def test_inventory_derives_union(monkeypatch):
         {"target_type": "procedure", "target_ref": "42"},
         {"target_type": "procedure", "target_ref": "morte"},        # slug legacy → non résolue
         {"target_type": "connecteur", "target_ref": "unipile"},
-        {"target_type": "tableau", "target_ref": "9", "slot": "sortie", "namespace": "leads_q3"},
+        {"target_type": "tableau", "target_ref": "9", "slot": "sortie", "datastore": "leads_q3", "namespace": "leads_q3"},
     ])
     monkeypatch.setattr(P.db, "project_run_tools",
                         lambda pid: ["fr_search", "oto_use_project", "folk_record"])
@@ -409,7 +409,11 @@ def test_inventory_derives_union(monkeypatch):
     assert out["connectors"] == ["folk", "sirene", "unipile"]
     procs = out["sources"]["procedures"]
     assert {p["ref"]: p["resolved"] for p in procs} == {"42": True, "morte": False}
-    assert out["sources"]["tableaux"] == [{"slot": "sortie", "namespace": "leads_q3", "ref": "9"}]
+    # ⚠️ Les DEUX clés depuis le 09/09/2026 : `datastore` est la neuve, `namespace` est
+    # servie en doublon jusqu'à `RETRAIT_DATASTORE` (08/11/2026) pour ne casser aucun des
+    # trois fronts qui la lisent. Le retrait enlèvera la seconde, ici comme partout.
+    assert out["sources"]["tableaux"] == [
+        {"slot": "sortie", "datastore": "leads_q3", "namespace": "leads_q3", "ref": "9"}]
 
 
 # ── schéma CIBLE d'un slot tableau (ADR 0035 × 0046) ─────────────────────────

@@ -112,21 +112,19 @@ def _project_hint(datastore: str) -> Optional[str]:
         if pid is None:
             return None
         links = db.list_project_links(int(pid))
-        # ⚠️ `namespace` et non `datastore` : ce sont des LIENS DE PROJET, pas des
-        # lignes du datastore. Leur clé est posée par `db.list_project_links`, et
-        # `/api/me/projects` la sert sous ce nom aux trois fronts.
+        # ⚠️ **La dette notée ici le 08/09 est REPRISE (09/09/2026)**, et exactement
+        # comme elle le prescrivait : par un alias et une date, pas par un remplacement
+        # de texte. `db.list_project_links` pose désormais `datastore` ET `namespace`
+        # sur chaque lien `tableau` ; `/api/me/projects` sert donc les deux aux trois
+        # fronts, et le doublon tombe à `RETRAIT_DATASTORE` (08/11/2026) avec les 24
+        # chemins REST et la clé doublée des réponses du datastore.
         #
-        # Lire l'autre rendait un ensemble vide : le hint aurait suggéré de lier un
-        # tableau DÉJÀ lié, à chaque appel et pour tout le monde, sans qu'aucune erreur
-        # ne le signale.
-        #
-        # ⚠️ **DETTE ASSUMÉE, pas un état stable** (08/09/2026). Un lien qui pointe un
-        # TABLEAU porte une clé qui nomme l'ancien concept : l'incohérence est réelle et
-        # elle a été laissée hors du lot parce que la corriger ajoutait une surface de
-        # rupture aux trois fronts, le jour où on en migrait déjà quatre. Elle se reprend
-        # avec son propre alias et sa propre date, comme les 24 chemins REST — pas par un
-        # remplacement de texte, qui casserait exactement ce que cette ligne répare.
-        linked = {l.get("namespace") for l in links if l.get("target_type") == "tableau"}
+        # On lit la clé NEUVE. ⚠️ Lire celle qui va disparaître était le vrai piège :
+        # le jour du retrait, l'ensemble serait redevenu vide et le hint aurait suggéré
+        # de lier un tableau DÉJÀ lié, à chaque appel et pour tout le monde, sans
+        # qu'aucune erreur ne le signale — c'est le défaut qu'on avait déjà payé en
+        # lisant la mauvaise des deux, dans l'autre sens.
+        linked = {l.get("datastore") for l in links if l.get("target_type") == "tableau"}
         if datastore in linked:
             return None
         return (f"ce tableau `{datastore}` n'est pas lié au projet actif (#{pid}) — "
