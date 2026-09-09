@@ -286,3 +286,62 @@ def test_l_org_manquante_prime_sur_la_beta(monkeypatch):
     with pytest.raises(AuthzDenied) as e:
         _appel(ResolvedCtx(sub="alexis", org_id=None), op="list")
     assert e.value.code == "org_required"
+
+
+# ── La borne par ligne : obligatoire, plafonnée, et son produit dit ──────────
+# Décision d'Alexis du 09/09/2026, après un incident : 52 campagnes déclaraient
+# 1 500 000 jetons par ligne. La somme cumulée n'étant pas appliquée, la seule
+# borne réelle d'un passage était `max_rows × max_tokens_per_row` — 150 millions.
+#
+# ⚠️ Le plafond vient d'une DISTRIBUTION, pas d'un ordre de grandeur plausible :
+# 4 520 travaux réels, médiane 786, p95 32 914, p99 60 004, MAXIMUM 128 902.
+# 200 000 = 1,55 × ce maximum, et zéro travail historique refusé.
+
+def _creation(**kw):
+    base = dict(op="create", label="passage", procedure="p", tools=["data_rows"],
+                max_tokens_per_row=120_000)
+    base.update(kw)
+    return base
+
+
+def test_creer_sans_borne_par_ligne_est_REFUSE_et_le_refus_dit_quoi_poser():
+    with pytest.raises(AuthzDenied) as e:
+        _appel(_ctx(), **_creation(max_tokens_per_row=None))
+    assert e.value.code == "budget_par_ligne_requis"
+    assert "max_tokens_per_row" in e.value.message
+    assert "3 000" in e.value.message or "45 000" in e.value.message, (
+        "le refus donne l'ordre de grandeur mesuré — sinon il fait deviner")
+
+
+def test_une_borne_AU_DELA_du_plafond_est_refusee():
+    """C'est la valeur de l'incident : 1 500 000 par ligne, soit douze fois le
+    travail le plus cher jamais mesuré. Au-delà du plafond, ce n'est plus une
+    borne, c'est son absence déclarée en chiffres."""
+    with pytest.raises(AuthzDenied) as e:
+        _appel(_ctx(), **_creation(max_tokens_per_row=1_500_000))
+    assert e.value.code == "budget_par_ligne_trop_haut"
+    assert str(RF.MAX_TOKENS_PAR_LIGNE) in e.value.message
+
+
+def test_le_plafond_ne_refuse_AUCUN_travail_historique():
+    """L'autre bord, et c'est lui qui dit si la garde est posée au bon endroit :
+    une borne qui refuserait du travail qui marchait serait un dégât, pas une
+    protection. Le maximum observé sur 4 520 travaux est 128 902."""
+    assert RF.MAX_TOKENS_PAR_LIGNE > 128_902, (
+        "le plafond doit laisser passer le travail le plus cher jamais mesuré")
+
+
+def test_armer_une_campagne_SANS_borne_est_refuse_et_nomme_la_reparation(monkeypatch):
+    """Les campagnes déclarées avant cette garde n'ont rien qui les arrête, et
+    c'est l'armement qui engage la dépense — pas la déclaration. Le refus nomme
+    sa destination : sans elle, on relit le même appel."""
+    from oto_mcp import db, roles
+    monkeypatch.setattr(roles, "is_org_admin", lambda *a, **k: True)
+    monkeypatch.setattr(RF, "_run_courant", lambda: None)
+    monkeypatch.setattr(db, "get_fleet", lambda *a, **k: {
+        "id": 1, "status": "draft", "procedure": "p", "input": "x",
+        "max_tokens_per_row": None})
+    with pytest.raises(AuthzDenied) as e:
+        _appel(_ctx(), op="launch", fleet_id=1)
+    assert e.value.code == "budget_par_ligne_invalide"
+    assert "op=update" in e.value.message
