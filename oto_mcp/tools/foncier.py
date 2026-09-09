@@ -109,6 +109,173 @@ _DPE_OPS = ("adresse", "stats", "tertiaire")
 # comportement d'AUCUNE des trois lectures.
 _DVF_YEARS_DEFAULT = {"prix_m2": 3, "comparables": 2, "comparables_adresse": 3}
 
+# Fichiers Sit@del servis par DiDo. SOURCE UNIQUE : le refus d'un `kind` inconnu en
+# dérive. Sans ce contrôle, la valeur partait telle quelle jusqu'à la lib, dont le
+# `ValueError` remontait en 500 opaque — indiscernable d'une vraie panne.
+_PERMIS_KINDS = ("logements", "locaux", "amenager")
+
+# Plafond DUR des sources ADEME DataFair (BEGES, DPE tertiaire) : `size` y est borné
+# à 10 000 côté serveur, sans le dire. On l'annonce plutôt que de le laisser découvrir.
+_SOURCE_SIZE_CAP = 10_000
+
+# Libellés EXACTS du secteur d'activité ERP du DPE tertiaire (ADEME). La source
+# filtre en phrase exacte (`secteur_activite:"…"`), pas en texte libre : une valeur
+# approchante rend 0, indiscernable d'un vrai vide. Relevé le 2026-09-09 sur
+# `values_agg` du dataset j9ol0fwjqckyf49vr29nknbu (32 valeurs, ~560 k diagnostics) ;
+# se rafraîchit par ce même appel si l'ADEME en ajoute.
+_DPE_TERTIAIRE_SECTEURS = (
+    "M : Magasins de vente, centres commerciaux",
+    "autres tertiaires non ERP",
+    "W : Administrations, banques, bureaux",
+    "locaux d'entreprise (bureaux)",
+    "N : Restaurants et débits de boisson",
+    "J : Structures d\u2019accueil pour personnes \u00e2g\u00e9es ou personnes handicap\u00e9es",
+    "U : \u00c9tablissements de soins",
+    "R : \u00c9tablissements d\u2019\u00e9veil, d\u2019enseignement, de formation, centres de vacances, "
+    "centres de loisirs sans h\u00e9bergement",
+    "O : H\u00f4tels et pensions de famille",
+    "L : Salles d'auditions, de conf\u00e9rences, de r\u00e9unions, de spectacles ou \u00e0 usage multiple",
+    "GHW : Bureaux",
+    "X : \u00c9tablissements sportifs couverts",
+    "T : Salles d'exposition \u00e0 vocation commerciale",
+    "GHZ : Usage mixte",
+    "P : Salles de danse et salles de jeux",
+    "V : \u00c9tablissements de divers cultes",
+    "S : Biblioth\u00e8ques, centres de documentation",
+    "PA : \u00c9tablissements de Plein Air",
+    "OA : H\u00f4tels-restaurants d'Altitude",
+    "GA : Gares Accessibles au public (chemins de fer, t\u00e9l\u00e9ph\u00e9riques, remonte-pentes...)",
+    "Y : Mus\u00e9es",
+    "PS : Parcs de Stationnement couverts",
+    "GHR : Enseignement",
+    "GHU : Usage sanitaire",
+    "GHO : H\u00f4tel",
+    "GHA : Habitation",
+    "REF : REFuges de montagne",
+    "CTS : Chapiteaux, Tentes et Structures toile",
+    "EF : \u00c9tablissements flottants (eaux int\u00e9rieures)",
+    "GHS : D\u00e9p\u00f4t d'archives",
+    "GHTC : tour de contr\u00f4le",
+    "SG : Structures Gonflables",
+)
+
+
+def _secteur_tertiaire(valeur: str) -> str:
+    """Résout `secteur` vers un libellé ERP EXACT, ou refuse en les nommant.
+
+    La source ne fait PAS de recherche libre : elle compare la phrase entière. Les
+    trois exemples que cette doc servait ("hospital", "enseignement", "bureaux")
+    rendaient donc 0, et ce zéro était indiscernable d'un secteur sans diagnostic.
+    Un filtre qui ne mord pas doit le dire — il ne peut pas rendre un vide crédible.
+
+    Un mot ambigu n'est pas tranché à notre place : "bureaux" désigne trois libellés
+    (159 000 lignes réparties), on les nomme et l'appelant choisit.
+    """
+    v = (valeur or "").strip()
+    exact = {s.casefold(): s for s in _DPE_TERTIAIRE_SECTEURS}
+    if v.casefold() in exact:
+        return exact[v.casefold()]
+    proches = [s for s in _DPE_TERTIAIRE_SECTEURS if v.casefold() in s.casefold()]
+    if len(proches) == 1:
+        return proches[0]
+    liste = proches or list(_DPE_TERTIAIRE_SECTEURS)
+    tete = ("several ERP sector labels contain it" if proches
+            else "no ERP sector label matches it")
+    raise _bad(
+        f'secteur={v!r} is not an ERP sector label of the ADEME tertiary DPE, and '
+        f"{tete}. This filter is an EXACT match on the whole label, not free text: an "
+        "unknown value would return zero rows, which is indistinguishable from a sector "
+        "with no diagnostic. Admitted values"
+        + (" containing it" if proches else "")
+        + ": " + " | ".join(liste)
+    )
+
+
+def _borne(limit: Optional[int]) -> int:
+    """`limit` effectivement demandé à la source.
+
+    `limit <= 0` veut dire « sans plafond » partout dans ce namespace — c'était vrai
+    de `foncier_conso_elec` mais pas de `foncier_dpe(op="tertiaire")`, où `-1` partait
+    tel quel en taille de page et rendait UNE ligne (donc `total: 1`, qui se lisait
+    comme « ce département n'a qu'un diagnostic »). Le même paramètre ne peut pas
+    vouloir dire deux choses.
+    """
+    if limit is None or limit <= 0:
+        return _SOURCE_SIZE_CAP
+    return min(limit, _SOURCE_SIZE_CAP)
+
+
+def _marquer_troncature(res: dict, borne: int, compte: Optional[int] = None) -> dict:
+    """Nomme la coupe quand `total` a saturé sur la borne.
+
+    `total` de ces lectures est le nombre de lignes RENDUES, jamais la population :
+    il sature sur `limit` sans qu'aucun champ ne le dise, et un appelant qui garde le
+    défaut lit une troncature comme un compte. Une coupe qui ne se nomme pas est un
+    faux chiffre, pas une réponse partielle.
+    """
+    if not isinstance(res, dict):
+        return res
+    n = compte if compte is not None else res.get("total")
+    tronque = isinstance(n, int) and n >= borne
+    res["tronque"] = tronque
+    if tronque:
+        res["avertissement_troncature"] = (
+            f"`total` = {n} est le nombre de lignes RENDUES, pas la population : la "
+            f"coupe est tombée sur la borne ({borne}"
+            + (f", plafond dur de la source" if borne >= _SOURCE_SIZE_CAP else "")
+            + "). Resserrer les filtres ou monter `limit` — ne pas lire ce chiffre "
+            "comme un compte."
+        )
+    return res
+
+
+def _annee_servie(transport: dict) -> Optional[str]:
+    """Le millésime RÉELLEMENT rendu, lu sur les lignes — pas celui qu'on a demandé.
+
+    `/api/foncier/odre/conso` ré-écho l'année demandée dans `annee`, même quand elle
+    n'existe pas dans la source : comparer ce champ à la demande, c'est comparer une
+    valeur à elle-même. La seule attestation d'un millésime est portée par les lignes.
+    """
+    for sig in (transport.get("signals") or []):
+        an = sig.get("annee")
+        if an:
+            return str(an)[:4]
+    return None
+
+
+def _millesime(transport: Optional[dict], annee: str, reseau: str) -> Optional[str]:
+    """Nomme ce que l'étage transport n'a pas rendu, et pourquoi il a pu ne rien rendre.
+
+    Un zéro d'étage se lit « aucun site raccordé au transport » alors qu'il veut dire
+    aussi souvent « ce millésime n'existe pas encore ». ODRÉ retarde sur Enedis, et
+    l'année courante est justement celle qu'un appelant choisit naturellement côté
+    distribution : croiser les deux efface tout l'étage transport sans un mot.
+    """
+    if reseau not in ("transport", "les_deux") or not isinstance(transport, dict):
+        return None
+    demandee = str(annee)[:4]
+    if not transport.get("total"):
+        # Le service peut rendre les millésimes qu'il a (champ additif) : s'il le fait,
+        # on NOMME l'année à rejouer au lieu de la faire deviner. S'il ne le fait pas,
+        # on dit quand même que le zéro est ambigu — on n'invente aucune année.
+        dispo = transport.get("annees_disponibles") or []
+        connu = (" Millésimes réellement servis par ODRÉ : "
+                 + ", ".join(str(a) for a in dispo) + ".") if dispo else ""
+        return (
+            f"étage transport (ODRÉ/RTE) : 0 ligne pour {demandee}. Ce jeu retarde sur "
+            "Enedis — un zéro ici veut dire « millésime absent de la source » aussi "
+            "souvent que « aucun site raccordé au réseau de transport ». Ne pas lire ce "
+            "résultat comme un périmètre complet ; rejouer sur un millésime que la "
+            f"source porte avant de conclure.{connu}"
+        )
+    servie = _annee_servie(transport)
+    if servie and servie != demandee:
+        return (
+            f"distribution {demandee} vs transport {servie} — les deux étages ne sont "
+            "pas alignés, ne pas sommer sans le dire"
+        )
+    return None
+
 
 def _ops_error(ops: tuple[str, ...]) -> str:
     quoted = [f"'{o}'" for o in ops]
@@ -337,7 +504,9 @@ def register(mcp: FastMCP) -> None:
         Args:
             code_commune: INSEE commune code (e.g. "75056"). Exact match.
             dept: INSEE department code (e.g. "59", "2A"). Use for a whole department.
-            kind: "logements" (default) | "locaux" | "amenager".
+            kind: "logements" (default) | "locaux" | "amenager". Any other value is
+                REFUSED here, naming the three: it used to travel down to the source
+                and come back as an opaque 500, which looks exactly like a real outage.
             annee_min / annee_max: deposit-year bounds (inclusive).
             siren: applicant's SIREN — server-side filter, combinable with the geography
                 but sufficient on its own. Note ~35 % of permits carry no applicant
@@ -348,6 +517,13 @@ def register(mcp: FastMCP) -> None:
             limit: max permits per page (snapped to 10/20/50/100, cap 100). `total` in
                 the result is the full server-side count — page through for more.
         """
+        if kind not in _PERMIS_KINDS:
+            raise _bad(
+                f"kind={kind!r} n'est pas un fichier Sit@del. Valeurs admises : "
+                + ", ".join(f"'{k}'" for k in _PERMIS_KINDS)
+                + ". (Une valeur hors énumération partait jusqu'à la source et "
+                "revenait en 500 opaque, impossible à distinguer d'une panne.)"
+            )
         if not code_commune and not dept and not siren and not siret:
             raise ValueError(
                 "Renseigner `code_commune`, `dept`, `siren` ou `siret` "
@@ -391,9 +567,19 @@ def register(mcp: FastMCP) -> None:
         (default) reads Enedis: consumption per ADDRESS, with the NAF division.
         `reseau="transport"` reads ODRE (RTE): the sites connected to the transmission
         grid, which are ABSENT from Enedis entirely — and they are the largest consumers
-        in the country. Saint-Jean-de-Maurienne returns zero NAF-24 address on Enedis and
-        1,702,616 MWh on ODRE. A "heavy electricity user" list built on distribution
-        alone is a list without the heavy users: use `reseau="les_deux"` for a real one.
+        in the country. Saint-Jean-de-Maurienne (73248) returns zero NAF-24 address on
+        Enedis and 1,702,616 MWh on ODRE for 2023 — one IRIS (732480104) holding 3
+        delivery points, so that row comes back marked `maille="iris_agrege"`, not as a
+        single site. A "heavy electricity user" list built on distribution alone is a
+        list without the heavy users: use `reseau="les_deux"` for a real one.
+
+        ⚠️ THE TRANSPORT TIER IS A YEAR BEHIND. ODRE's newest millésime is older than
+        Enedis's (2023 against 2024, measured 2026-09-09). Asking ODRE for a year it does
+        not carry returns ZERO rows for the whole tier — which reads exactly like "no
+        transmission-connected site here" while it means "that year does not exist yet".
+        That zero is now NAMED in `avertissement_millesime`: read it before concluding.
+        Nothing is invented to fill the hole — an absent year stays absent, it is only
+        said out loud.
 
         TWO GRAINS on the distribution tier. Enedis publishes ONE ROW PER ADDRESS AND PER
         NAF DIVISION, so `maille="ligne"` (default, unchanged behaviour) returns rows, and
@@ -417,8 +603,18 @@ def register(mcp: FastMCP) -> None:
             min_mwh / max_mwh: consumption band (MWh/year), never GW — no French open
                 data publishes subscribed POWER.
             reseau: which grid tier(s) to read.
-            maille: "ligne" (as published) or "site" (divisions summed).
-            limit: max rows on the distribution tier (default 200).
+            maille: "ligne" (as published, default) or "site" (one row = one site).
+                On DISTRIBUTION, "site" sums an address's NAF divisions. On TRANSPORT,
+                "site" keeps only the IRIS holding a SINGLE delivery point; "ligne"
+                also returns the aggregated IRIS, each marked `maille="iris_agrege"`.
+                Those aggregates carry 59 % of the transmission tier (2023 national:
+                55.3 TWh over 931 rows, of which 22.9 TWh over the 729 single-site
+                ones), and the biggest consumer in France is one of them — filtering
+                them out is how a "largest consumers" query returns the small ones.
+            limit: max rows per tier (default 200); `limit=-1` means NO ceiling, and
+                `total` is the number of rows RETURNED, not the population — it
+                saturates on `limit`, and says so in `tronque` /
+                `avertissement_troncature` when it does.
         """
         if reseau not in ("distribution", "transport", "les_deux"):
             raise _bad('reseau must be "distribution", "transport" or "les_deux"')
@@ -436,6 +632,10 @@ def register(mcp: FastMCP) -> None:
                     annee, dept=dept, code_commune=code_commune, code_epci=code_epci,
                     naf2=naf2, secteur=secteur, min_mwh=min_mwh, limit=limit,
                 )
+                # Ici la coupe porte sur les LIGNES lues, avant l'agrégation en sites
+                # et avant `min_mwh` : `total` (des sites) ne peut pas la révéler.
+                _marquer_troncature(out["distribution"], _borne(limit),
+                                    compte=out["distribution"].get("lignes_lues"))
             else:
                 out["distribution"] = enedis.consommation_par_adresse(
                     annee, dept=dept, secteur=secteur, naf2=naf2,
@@ -443,17 +643,17 @@ def register(mcp: FastMCP) -> None:
                     min_mwh=min_mwh, max_mwh=max_mwh, limit=limit,
                 )
         if reseau in ("transport", "les_deux"):
-            # Le millésime retarde d'un an : on demande l'année voulue, le service rend
-            # ce qu'il a et l'annonce dans `annee` — jamais une année silencieusement autre.
+            # `site_unique=True` (défaut de la lib) ne garde que les IRIS à UN point de
+            # livraison. Le tool le forçait sans l'exposer : les IRIS agrégés — 59 % des
+            # MWh du transport, dont le premier consommateur de France — étaient donc
+            # invisibles, et Saint-Jean-de-Maurienne rendait 0 alors que la donnée existe.
+            # La maille de l'appelant gouverne les deux étages, avec le même sens.
             out["transport"] = odre.consommation_transport(
-                annee, dept=dept, code_commune=code_commune, min_mwh=min_mwh, limit=limit,
+                annee, dept=dept, code_commune=code_commune, min_mwh=min_mwh,
+                site_unique=(maille == "site"), limit=limit,
             )
-        if reseau == "les_deux":
-            d, t = out["distribution"], out["transport"]
-            out["avertissement_millesime"] = (
-                f"distribution {d.get('annee') or annee} vs transport {t.get('annee')} — "
-                "les deux étages ne sont pas alignés, ne pas sommer sans le dire"
-            ) if t.get("annee") and str(t.get("annee")) != str(annee) else None
+            _marquer_troncature(out["transport"], _borne(limit))
+        out["avertissement_millesime"] = _millesime(out.get("transport"), annee, reseau)
         return out
 
     # --- risques industriels / ICPE (Géorisques) — repris de `fr` ------------
@@ -643,10 +843,21 @@ def register(mcp: FastMCP) -> None:
             etiquette: op="adresse" — OPTIONAL DPE label filter (A..G).
             surface_min / surface_max: op="adresse" — OPTIONAL surface habitable band m².
                 op="tertiaire" — `surface_min` applies to SHON instead.
-            secteur: op="tertiaire" — free text on the ERP sector label
-                ("hospital", "enseignement", "bureaux").
+            secteur: op="tertiaire" — the ERP sector label, matched EXACTLY (the
+                source compares the whole label, it is not a free-text search).
+                Examples that really match: "GHW : Bureaux",
+                "W : Administrations, banques, bureaux", "M : Magasins de vente,
+                centres commerciaux", "U : Établissements de soins". Any other value
+                is refused with the list of the 32 admitted labels — it would
+                otherwise return zero rows, indistinguishable from a sector with no
+                diagnostic. Careful: "bureaux" alone names THREE labels, so it is
+                refused with those three rather than one of them picked for you.
             departement: op="tertiaire" — INSEE department code.
-            limit: op="adresse" — max records, nearest first (default 50).
+            limit: max records (default 50; nearest first on op="adresse"). On
+                op="tertiaire", `limit=-1` means NO ceiling and lands on the source's
+                hard cap of 10,000 — and `total` there is the number of rows RETURNED,
+                not the population: it saturates on `limit` and says so in `tronque` /
+                `avertissement_troncature`.
         """
         if op not in _DPE_OPS:
             raise _bad(_ops_error(_DPE_OPS))
@@ -666,9 +877,12 @@ def register(mcp: FastMCP) -> None:
             if not (code_commune or departement):
                 raise _bad('op="tertiaire" needs code_commune or departement — the '
                            "national stock is ~560k diagnostics.")
-            return dpe_tertiaire.diagnostics(
-                code_commune=code_commune, departement=departement, secteur=secteur,
-                etiquette=etiquette, surface_min=surface_min, size=limit)
+            borne = _borne(limit)
+            res = dpe_tertiaire.diagnostics(
+                code_commune=code_commune, departement=departement,
+                secteur=_secteur_tertiaire(secteur) if secteur else None,
+                etiquette=etiquette, surface_min=surface_min, size=borne)
+            return _marquer_troncature(res, borne)
 
         raise _bad(_ops_error(_DPE_OPS))
 
@@ -713,10 +927,18 @@ def register(mcp: FastMCP) -> None:
             annee: reporting year.
             departement: INSEE department code.
             obligee: True keeps only organisations under the legal obligation.
-            limit: max inventories returned (default 100).
+            limit: max inventories RETURNED (default 100); `limit=-1` means no ceiling
+                and lands on the source's hard cap of 10,000.
+
+        ⚠️ `total` is the number of inventories RETURNED, not how many exist: it
+        saturates on `limit` (department 59 at limit=5 reports total 5, at limit=1000
+        reports 504). When it does, `tronque` is true and `avertissement_troncature`
+        says so — never read a saturated `total` as a count.
         """
-        return beges.bilans(siren=siren, naf=naf, annee=annee,
-                            departement=departement, obligee=obligee, size=limit)
+        borne = _borne(limit)
+        res = beges.bilans(siren=siren, naf=naf, annee=annee,
+                           departement=departement, obligee=obligee, size=borne)
+        return _marquer_troncature(res, borne)
 
     # --- MCP Apps : variantes à interface rendue (SEP-1865) ------------------
     # Quelques tools "flagship" *_app qui renvoient une UI (carte + table) rendue

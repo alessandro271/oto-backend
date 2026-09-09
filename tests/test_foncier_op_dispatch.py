@@ -68,8 +68,20 @@ def clients(monkeypatch):
     mocks["georisques"].installations_classees.return_value = {
         "results": 1, "page": 1, "total_pages": 1, "data": []}
     mocks["sitadel"].search.return_value = {"total": 3, "permis": []}
-    # Le tool RELIT l'année du transport pour avertir du décalage de millésime.
-    mocks["odre"].consommation_transport.return_value = {"total": 2, "annee": "2023", "signals": []}
+    # Doublure FIDÈLE du service : `/api/foncier/odre/conso` RÉ-ÉCHO l'année demandée
+    # dans `annee`, même quand la source ne la porte pas — et ODRÉ s'arrête à 2023.
+    # L'ancienne doublure rendait `annee: "2023"` quoi qu'on demande : elle fabriquait
+    # le décalage que le test prétendait détecter, et gardait vert un avertissement
+    # structurellement mort. Une doublure doit rendre ce que rend le vrai.
+    def _odre_echo(annee, **kw):
+        an = str(annee)[:4]
+        if an > "2023":
+            return {"total": 0, "annee": an, "signals": []}
+        return {"total": 2, "annee": an, "signals": [
+            {"annee": an, "mwh": 1702616.348, "maille": "iris_agrege"},
+            {"annee": an, "mwh": 12.0, "maille": "site"},
+        ]}
+    mocks["odre"].consommation_transport.side_effect = _odre_echo
     mocks["beges"].bilans.return_value = {"total": 1, "bilans": []}
     mocks["dpe_tertiaire"].diagnostics.return_value = {"total": 1, "sans_position": 0, "diagnostics": []}
     mocks["enedis"].sites_par_adresse.return_value = {"total": 1, "lignes_lues": 3, "signals": []}
@@ -398,10 +410,129 @@ def test_transport_tier_is_exempt_from_the_perimeter_guard(clients):
     clients["enedis"].consommation_par_adresse.assert_not_called()
 
 
-def test_les_deux_avertit_du_decalage_de_millesime(clients):
-    """Sommer 2024 de distribution avec 2023 de transport est faux sans le dire."""
+def test_un_zero_de_l_etage_transport_se_nomme(clients):
+    """ODRÉ s'arrête à 2023 : demander 2024 efface TOUT l'étage transport.
+
+    Le zéro se lisait « aucun site raccordé au transport » alors qu'il veut dire
+    « ce millésime n'existe pas encore ». C'est le défaut central : un vide servi
+    pour une absence.
+    """
     out = _tool("foncier_conso_elec")(annee="2024", dept="33", reseau="les_deux")
-    assert out["avertissement_millesime"] and "2023" in out["avertissement_millesime"]
+    avert = out["avertissement_millesime"]
+    assert avert and "0 ligne" in avert and "2024" in avert
+    assert out["transport"]["total"] == 0
+
+
+def test_le_zero_du_transport_se_nomme_aussi_quand_il_est_seul(clients):
+    """`reseau="transport"` seul ne rendait AUCUN avertissement : l'ancien n'existait
+    que pour `les_deux`, et un appel mono-étage sortait un `total: 0` nu."""
+    out = _tool("foncier_conso_elec")(annee="2025", reseau="transport")
+    assert out["avertissement_millesime"] and "0 ligne" in out["avertissement_millesime"]
+
+
+def test_l_avertissement_ne_compare_plus_l_annee_a_elle_meme(clients):
+    """L'ancien avertissement testait `transport.annee != annee` — or le service
+    RÉ-ÉCHO l'année demandée : la condition était toujours fausse, la garde morte.
+
+    Ici le millésime servi se lit sur les LIGNES, seule attestation de ce que la
+    source a réellement rendu. Le champ `annee` est délibérément faux dans ce test :
+    s'il pilotait encore la décision, l'avertissement se déclencherait à tort.
+    """
+    clients["odre"].consommation_transport.side_effect = None
+    clients["odre"].consommation_transport.return_value = {
+        "total": 1, "annee": "1999", "signals": [{"annee": "2023", "mwh": 3.0}]}
+    out = _tool("foncier_conso_elec")(annee="2023", dept="33", reseau="les_deux")
+    assert out["avertissement_millesime"] is None
+
+
+def test_un_millesime_servi_different_du_demande_est_annonce(clients):
+    """L'intention d'origine, sur le seul signal qui l'atteste : les lignes."""
+    clients["odre"].consommation_transport.side_effect = None
+    clients["odre"].consommation_transport.return_value = {
+        "total": 1, "annee": "2024", "signals": [{"annee": "2023", "mwh": 3.0}]}
+    out = _tool("foncier_conso_elec")(annee="2024", dept="33", reseau="les_deux")
+    assert "2023" in out["avertissement_millesime"]
+
+
+def test_les_millesimes_rendus_par_le_service_sont_nommes(clients):
+    """Additif : si le service dit quels millésimes il porte, on NOMME celui à
+    rejouer au lieu de le faire deviner. Rien n'est inventé quand il se tait —
+    l'avertissement reste, sans année."""
+    clients["odre"].consommation_transport.side_effect = None
+    clients["odre"].consommation_transport.return_value = {
+        "total": 0, "annee": "2024", "signals": [],
+        "annees_disponibles": ["2023", "2022"]}
+    out = _tool("foncier_conso_elec")(annee="2024", dept="33", reseau="transport")
+    assert "2023" in out["avertissement_millesime"]
+
+
+def test_la_maille_gouverne_aussi_l_etage_transport(clients):
+    """Le tool forçait `site_unique=True` sans l'exposer : les IRIS agrégés — 59 %
+    des MWh du transport, dont le premier consommateur de France — étaient
+    invisibles, et Saint-Jean-de-Maurienne rendait 0 alors que la donnée existe."""
+    _tool("foncier_conso_elec")(annee="2023", reseau="transport")
+    assert clients["odre"].consommation_transport.call_args.kwargs["site_unique"] is False
+
+    clients["odre"].consommation_transport.reset_mock()
+    _tool("foncier_conso_elec")(annee="2023", reseau="transport", maille="site")
+    assert clients["odre"].consommation_transport.call_args.kwargs["site_unique"] is True
+
+
+# --- les bords qui rendaient un zéro muet ------------------------------------
+
+def test_un_kind_hors_enumeration_est_refuse_en_nommant_les_valeurs(clients):
+    """`kind="logement"` (au lieu de `logements`) traversait jusqu'à la source et
+    revenait en 500 opaque, indiscernable d'une vraie panne."""
+    with pytest.raises(McpError) as e:
+        _tool("foncier_permis_search")(code_commune="13201", kind="logement")
+    for admis in ("logements", "locaux", "amenager"):
+        assert admis in str(e.value)
+    clients["sitadel"].search.assert_not_called()
+
+
+def test_le_secteur_tertiaire_exact_passe_tel_quel(clients):
+    _tool("foncier_dpe")(op="tertiaire", departement="59", secteur="GHW : Bureaux")
+    assert clients["dpe_tertiaire"].diagnostics.call_args.kwargs["secteur"] == "GHW : Bureaux"
+
+
+def test_un_secteur_ambigu_est_refuse_en_nommant_ses_candidats(clients):
+    """« bureaux » — un des trois exemples que la doc servait — désigne TROIS
+    libellés : on ne tranche pas à la place de l'appelant, on les nomme."""
+    with pytest.raises(McpError) as e:
+        _tool("foncier_dpe")(op="tertiaire", departement="59", secteur="bureaux")
+    msg = str(e.value)
+    assert "GHW : Bureaux" in msg and "locaux d'entreprise (bureaux)" in msg
+    assert "W : Administrations, banques, bureaux" in msg
+    clients["dpe_tertiaire"].diagnostics.assert_not_called()
+
+
+def test_un_secteur_inconnu_est_refuse_et_non_servi_en_zero(clients):
+    """« hospital » et « enseignement », les deux autres exemples de la doc, ne
+    correspondent à aucun libellé ERP : ils rendaient 0, indiscernable d'un secteur
+    sans diagnostic."""
+    for valeur in ("hospital", "enseignement"):
+        with pytest.raises(McpError, match="ERP sector label"):
+            _tool("foncier_dpe")(op="tertiaire", departement="59", secteur=valeur)
+    clients["dpe_tertiaire"].diagnostics.assert_not_called()
+
+
+def test_limit_moins_un_veut_dire_sans_plafond_partout(clients):
+    """Même paramètre, deux sens : `-1` = sans plafond sur `conso_elec`, mais UNE
+    ligne sur le DPE tertiaire (il partait tel quel en taille de page)."""
+    _tool("foncier_dpe")(op="tertiaire", departement="59", limit=-1)
+    assert clients["dpe_tertiaire"].diagnostics.call_args.kwargs["size"] == 10_000
+
+
+def test_un_total_qui_sature_sur_la_borne_est_nomme(clients):
+    """`total` est le nombre de lignes RENDUES, jamais la population : il sature sur
+    `limit` sans qu'aucun champ ne le dise."""
+    clients["beges"].bilans.return_value = {"total": 5, "bilans": []}
+    out = _tool("foncier_beges")(departement="59", limit=5)
+    assert out["tronque"] is True
+    assert "pas la population" in out["avertissement_troncature"]
+
+    clients["beges"].bilans.return_value = {"total": 504, "bilans": []}
+    assert _tool("foncier_beges")(departement="59", limit=1000)["tronque"] is False
 
 
 # --- les MCP Apps restent hors périmètre --------------------------------------
