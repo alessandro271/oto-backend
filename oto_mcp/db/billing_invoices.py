@@ -2,13 +2,21 @@
 
 Le document vit chez **Pennylane** : c'est lui qui porte la numérotation continue,
 le PDF et la valeur probante. Cette table dit, pour chaque paiement encaissé, ce
-qui a été émis en face — ou ce qui n'a PAS pu l'être, et pourquoi.
+qui a été émis en face — ou ce qui ne l'est pas, et pourquoi.
+
+⚠️ **Depuis le 2026-09-09, plus rien n'émet automatiquement** : une ligne neuve
+naît puis passe en `held` (`billing_invoices/emission.py` dit la décision et ce
+qu'elle attend). Les trois statuts sont donc `pending` (une tentative a échoué —
+lignes d'AVANT la coupure), `issued` (document réel, d'avant la coupure ou posé à
+la main), `held` (tracé, à poser). Le store, lui, garde son vocabulaire ENTIER —
+`mark_billing_invoice_issued`, le PDF — parce que la reprise en main en aura
+besoin, quelle que soit la forme retenue.
 
 Trois propriétés portent tout le reste :
 
-1. **La ligne naît AVANT l'appel au fournisseur**, en `pending`. Un encaissement
-   sans facture reste alors visible et reprenable ; sans elle, une clé plateforme
-   absente ou un Pennylane en panne ne laisserait aucune trace — un paiement muet.
+1. **La ligne naît AVANT toute autre chose**, à l'encaissement. Un paiement sans
+   facture reste alors visible et reprenable ; sans elle, rien ne distinguerait un
+   encaissement non facturé d'un encaissement oublié — un paiement muet.
 2. **L'idempotence est en base** : `UNIQUE (payment_row_id, kind)`. Un webhook
    rejoué retombe sur la ligne existante et ne crée ni seconde facture ni second
    avoir. La garde est la contrainte, pas une lecture préalable (deux webhooks
@@ -42,17 +50,17 @@ INVOICE_KINDS = ("invoice", "credit_note")
 def ensure_billing_invoice(org_id: int, payment_row_id: int, *, kind: str = "invoice",
                            payment_ref: Optional[str] = None,
                            amount_ttc: Optional[int] = None) -> dict:
-    """La ligne de trace d'une émission — créée si elle n'existe pas, rendue sinon.
+    """La ligne de trace d'un encaissement — créée si elle n'existe pas, rendue sinon.
 
-    C'est le PREMIER geste d'une émission, avant tout appel réseau : ce qui suit
-    peut échouer, la trace, elle, est déjà écrite. `ON CONFLICT DO NOTHING` plutôt
+    C'est le PREMIER geste, avant tout le reste : ce qui suit peut échouer ou
+    attendre une main, la trace, elle, est déjà écrite. `ON CONFLICT DO NOTHING` plutôt
     qu'un `SELECT` préalable — deux webhooks concurrents sur le même paiement
     passeraient toute lecture, seule la contrainte les départage.
 
     `amount_ttc` sert l'AVOIR : le montant remboursé n'est connu que du webhook qui
     l'a vu passer, et une reprise horaire n'a plus aucun moyen de le retrouver (le
     webhook Mollie ne porte que l'id du paiement). Écrit à la CRÉATION, il est
-    l'intention ; la finalisation le réécrira avec ce que le fournisseur a émis.
+    l'intention ; une émission le réécrira avec ce que le fournisseur a émis.
     """
     if kind not in INVOICE_KINDS:
         raise ValueError(f"kind de facture inconnu : {kind!r} "
@@ -130,17 +138,33 @@ def mark_billing_invoice_issued(
              amount_ttc, vat_scheme, period_start, period_end, issued_at, invoice_id))
 
 
-def mark_billing_invoice_failed(invoice_id: int, code: str, detail: str = "") -> None:
-    """L'émission n'a pas abouti : la ligne RESTE `pending` et dit pourquoi.
+def hold_billing_invoice(invoice_id: int, code: str, detail: str = "") -> None:
+    """Met la ligne EN ATTENTE D'UNE MAIN (`status='held'`) et dit pourquoi.
 
-    Pas d'état terminal d'échec — un encaissement doit finir facturé. Le compteur
-    de tentatives sert au diagnostic, jamais à abandonner : une reprise qui
-    renoncerait laisserait un paiement sans document, et c'est précisément ce
-    qu'on interdit."""
+    `held` est le troisième et dernier statut, ajouté le 2026-09-09 avec l'arrêt de
+    l'émission automatique (`billing_invoices/emission.py` dit pourquoi). Il se lit
+    « l'encaissement est tracé, aucun document n'est dû tout seul, quelqu'un doit
+    le poser ». Ce n'est ni un échec ni une file d'attente :
+
+    - **le balayage l'ignore SANS le savoir** : `pending_billing_invoices` filtre
+      `status = 'pending'`, une ligne tenue en sort d'elle-même. Rien à ajouter
+      côté reprise, donc rien à retirer le jour où l'émission reviendra ;
+    - **`attempts` n'est PAS incrémenté**, et c'est le point : il compte les appels
+      réellement passés au fournisseur. L'incrémenter ferait lire un fournisseur en
+      panne là où il y a une décision. La fonction qui le faisait
+      (`mark_billing_invoice_failed`) est partie avec les appels qu'elle comptait.
+
+    ⚠️ Aucun DDL : `status` est un TEXT libre, et prod/preprod partagent la même
+    base. La contrainte est dans la tête des lecteurs, pas dans le schéma.
+
+    Deux gardes dans le `WHERE` : **jamais un document déjà émis** (`pending` seul
+    est retenu — un `issued` d'avant la coupure ne se dé-facture pas), et une
+    ligne déjà tenue n'est pas retouchée à chaque tick, sinon `updated_at`
+    avancerait d'une heure en une heure sans qu'il se soit rien passé."""
     with _connect() as conn:
         conn.execute(
-            "UPDATE billing_invoices SET attempts = attempts + 1, error_code=%s, "
-            "error_detail=%s, last_attempt_at=NOW(), updated_at=NOW() WHERE id=%s",
+            "UPDATE billing_invoices SET status='held', error_code=%s, "
+            "error_detail=%s, updated_at=NOW() WHERE id=%s AND status='pending'",
             (code, (detail or "")[:500], invoice_id))
 
 
@@ -176,7 +200,12 @@ def get_billing_invoice_pdf(invoice_id: int) -> Optional[dict]:
 
 
 def pending_billing_invoices(limit: int = 50) -> list[dict]:
-    """Les émissions à reprendre — la file du `billing_runner`.
+    """La file du `billing_runner` — les lignes qu'un tick doit revisiter.
+
+    ⚠️ **`held` en est exclu par le filtre `status = 'pending'`**, et c'est ce qui
+    rend l'arrêt de l'émission (2026-09-09) silencieux : une ligne tenue n'est pas
+    en attente d'une reprise, elle attend une main. Rien n'a été ajouté ici pour
+    l'écarter — donc rien ne sera à retirer le jour où l'émission reviendra.
 
     Plus ANCIENNES d'abord : une facture qui n'est pas partie depuis trois jours
     passe avant celle d'il y a une heure, dont l'échec est peut-être transitoire."""

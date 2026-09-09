@@ -7,9 +7,14 @@ Trois choses s'y vérifient, et aucune n'est du ressort du module d'émission :
    sur le chemin le moins emprunté de la surface ;
 2. **le PDF se sert par une route écrite à la main**, parce qu'un handler de capacité
    rend un `dict` — et son autorisation porte sur l'org QUI PORTE la facture, pas
-   sur l'org active : ce lien s'ouvre depuis un e-mail ;
+   sur l'org active ;
 3. **la reprise est la garantie** — c'est le balayage du runner, pas les appels en
    ligne, qui rend vraie la phrase « jamais un paiement sans trace de facture ».
+
+⚠️ Les documents ÉMIS de ce fichier sont écrits directement par le store
+(`_document_emis`) : depuis le 2026-09-09 aucun chemin de code n'en produit plus
+(`billing_invoices/emission.py`). La surface, elle, doit continuer de les servir —
+ceux d'avant la coupure, et ceux qu'une main posera.
 """
 from __future__ import annotations
 
@@ -22,20 +27,17 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from _datastore_rest import call, stub_authz
-from _faux_pennylane import (_abonnement, _identite, _org,  # noqa: F401
-                            _paiement, brancher, live)
+from _facturation import (_abonnement, _document_emis, _identite,  # noqa: F401
+                          _org, _paiement, espionner_le_reseau, live)
 
 
 # ── la liste ─────────────────────────────────────────────────────────────────
 
 def test_la_liste_rend_le_chemin_du_pdf_et_aucun_octet(live, monkeypatch):
-    from oto_mcp import billing_invoices
-
-    brancher(monkeypatch)
     org = _org()
     _identite(org)
     _abonnement(org)
-    inv = billing_invoices.ensure_invoice_for_payment(_paiement(org), plan="standard")
+    inv = _document_emis(org)
 
     stub_authz(monkeypatch, org_id=org)
     code, corps = call("me.billing.invoices.list")
@@ -50,23 +52,23 @@ def test_la_liste_rend_le_chemin_du_pdf_et_aucun_octet(live, monkeypatch):
     json.dumps(corps)
 
 
-def test_une_facture_en_attente_na_pas_de_chemin_de_pdf(live, monkeypatch):
+def test_une_facture_tenue_na_pas_de_chemin_de_pdf(live, monkeypatch):
     """Un lien vers une 404 se subit au clic, il ne se diagnostique pas."""
     from oto_mcp import billing_invoices
 
-    monkeypatch.delenv(billing_invoices.PLATFORM_KEY_ENV, raising=False)
+    espionner_le_reseau(monkeypatch)
     org = _org()
     _identite(org)
     _abonnement(org)
-    billing_invoices.ensure_invoice_for_payment(_paiement(org), plan="standard")
+    billing_invoices.ensure_invoice_for_payment(_paiement(org))
 
     stub_authz(monkeypatch, org_id=org)
     _, corps = call("me.billing.invoices.list")
 
     vue = corps["invoices"][0]
-    assert vue["status"] == "pending" and vue["number"] is None
+    assert vue["status"] == "held" and vue["number"] is None
     assert vue["has_pdf"] is False and vue["pdf_path"] is None
-    assert "error_code" not in vue, "la cause d'un échec est interne, pas cliente"
+    assert "error_code" not in vue, "la cause est interne, pas cliente"
 
 
 # ── la route de téléchargement ───────────────────────────────────────────────
@@ -104,14 +106,12 @@ def _route_pdf(monkeypatch, sub: str = "u-1"):
 
 
 def test_le_pdf_se_telecharge_pour_un_membre_de_lorg_facturee(live, monkeypatch):
-    from oto_mcp import billing_invoices
     from oto_mcp.db._conn import _connect
 
-    brancher(monkeypatch)
     org = _org()
     _identite(org)
     _abonnement(org)
-    inv = billing_invoices.ensure_invoice_for_payment(_paiement(org), plan="standard")
+    inv = _document_emis(org)
     with _connect() as conn:
         conn.execute("INSERT INTO org_members (org_id, sub, org_role) "
                      "VALUES (%s, 'u-membre', 'org_member')", (org,))
@@ -127,13 +127,10 @@ def test_le_pdf_se_telecharge_pour_un_membre_de_lorg_facturee(live, monkeypatch)
 def test_un_etranger_ne_distingue_pas_une_facture_absente_dune_interdite(live, monkeypatch):
     """404 et non 403 : un « interdit » confirmerait l'existence du document, donc
     la facturation d'une autre org."""
-    from oto_mcp import billing_invoices
-
-    brancher(monkeypatch)
     org = _org()
     _identite(org)
     _abonnement(org)
-    inv = billing_invoices.ensure_invoice_for_payment(_paiement(org), plan="standard")
+    inv = _document_emis(org)
 
     appeler = _route_pdf(monkeypatch, sub="u-etranger")
     assert appeler(inv["id"]).status_code == 404
@@ -141,17 +138,13 @@ def test_un_etranger_ne_distingue_pas_une_facture_absente_dune_interdite(live, m
 
 
 def test_un_document_sans_fichier_le_dit(live, monkeypatch):
-    """Émis mais PDF pas encore récupéré : un 409 nommé, jamais un corps vide."""
-    from oto_mcp import billing_invoices
-    from oto_mcp.db import billing_invoices as db_invoices
+    """Émis mais PDF pas récupéré : un 409 nommé, jamais un corps vide."""
     from oto_mcp.db._conn import _connect
 
-    brancher(monkeypatch)
     org = _org()
     _identite(org)
     _abonnement(org)
-    inv = billing_invoices.ensure_invoice_for_payment(_paiement(org), plan="standard")
-    db_invoices.set_billing_invoice_pdf(inv["id"], None)
+    inv = _document_emis(org, pdf=None)
     with _connect() as conn:
         conn.execute("INSERT INTO org_members (org_id, sub, org_role) "
                      "VALUES (%s, 'u-admin2', 'org_admin')", (org,))
@@ -165,13 +158,10 @@ def test_billing_dormant_la_route_repond_404(live, monkeypatch):
     """La route est montée en toutes circonstances (les cliquets de surface
     l'exigent) : c'est le HANDLER qui porte le dark launch. Un client d'un
     déploiement sans billing voit exactement ce qu'il verrait d'une route absente."""
-    from oto_mcp import billing_invoices
-
-    brancher(monkeypatch)
     org = _org()
     _identite(org)
     _abonnement(org)
-    inv = billing_invoices.ensure_invoice_for_payment(_paiement(org), plan="standard")
+    inv = _document_emis(org)
 
     appeler = _route_pdf(monkeypatch, sub="u-1")
     monkeypatch.delenv("OTO_BILLING_ENABLED", raising=False)
@@ -183,54 +173,33 @@ def test_billing_dormant_la_route_repond_404(live, monkeypatch):
 
 # ── la reprise ───────────────────────────────────────────────────────────────
 
-def test_le_balayage_facture_ce_qui_ne_lavait_pas_ete(live, monkeypatch):
-    """Le filet : un encaissement que personne n'a facturé en ligne."""
+def test_le_balayage_trace_ce_qui_ne_lavait_pas_ete(live, monkeypatch):
+    """Le filet : un encaissement que personne n'a tracé en ligne. C'est lui qui
+    rend vraie la phrase « jamais un paiement sans trace de facture » — et il la
+    rend vraie sans rien émettre."""
     from oto_mcp import billing_invoices
     from oto_mcp.db import billing_invoices as db_invoices
 
-    brancher(monkeypatch)
+    espionner_le_reseau(monkeypatch)
     org = _org()
     _identite(org)
     _abonnement(org)
-    paiement = _paiement(org)              # aucun appel d'émission
+    paiement = _paiement(org)              # aucun appel en ligne
 
     counts = billing_invoices.sweep()
 
     assert counts.get("invoice_new", 0) >= 1
     inv = db_invoices.get_billing_invoice_for_payment(paiement["id"])
-    assert inv and inv["status"] == "issued"
-
-
-def test_le_balayage_rejoue_une_emission_restee_en_attente(live, monkeypatch):
-    """Une clé absente puis posée : la facture part au tick suivant, sans doublon."""
-    from oto_mcp import billing_invoices
-    from oto_mcp.db import billing_invoices as db_invoices
-
-    monkeypatch.delenv(billing_invoices.PLATFORM_KEY_ENV, raising=False)
-    org = _org()
-    _identite(org)
-    _abonnement(org)
-    paiement = _paiement(org)
-    attente = billing_invoices.ensure_invoice_for_payment(paiement, plan="standard")
-    assert attente["status"] == "pending"
-
-    faux = brancher(monkeypatch)           # le fournisseur redevient joignable
-    billing_invoices.sweep()
-
-    inv = db_invoices.get_billing_invoice_for_payment(paiement["id"])
-    assert inv["id"] == attente["id"], "la MÊME ligne aboutit, il n'en naît pas une seconde"
-    assert inv["status"] == "issued" and inv["error_code"] is None
-    assert len(db_invoices.list_billing_invoices(org)) == 1
-    assert len([c for c in faux.calls if c[0] == "create_invoice"]) == 1
+    assert inv and inv["status"] == "held"
 
 
 # ── le webhook ───────────────────────────────────────────────────────────────
 
-def test_le_webhook_dune_echeance_encaissee_facture(live, monkeypatch):
-    from oto_mcp import billing, billing_invoices, mollie_client
+def test_le_webhook_dune_echeance_encaissee_trace(live, monkeypatch):
+    from oto_mcp import billing, mollie_client
     from oto_mcp.db import billing_invoices as db_invoices
 
-    brancher(monkeypatch)
+    espionner_le_reseau(monkeypatch)
     org = _org()
     _identite(org)
     _abonnement(org)
@@ -242,21 +211,21 @@ def test_le_webhook_dune_echeance_encaissee_facture(live, monkeypatch):
     assert billing.process_webhook(ref) == "updated"
 
     inv = db_invoices.get_billing_invoice_for_payment(paiement["id"])
-    assert inv and inv["status"] == "issued"
+    assert inv and inv["status"] == "held"
 
 
-def test_le_webhook_dun_remboursement_produit_lavoir(live, monkeypatch):
+def test_le_webhook_dun_remboursement_trace_lavoir(live, monkeypatch):
     """Mollie n'a pas d'URL propre aux remboursements : c'est le webhook du PAIEMENT
     qui rappelle, et `amountRefunded` qui porte l'information."""
     from oto_mcp import billing, billing_invoices, mollie_client
     from oto_mcp.db import billing_invoices as db_invoices
 
-    brancher(monkeypatch)
+    espionner_le_reseau(monkeypatch)
     org = _org()
     _identite(org)
     _abonnement(org)
     paiement = _paiement(org)
-    billing_invoices.ensure_invoice_for_payment(paiement, plan="standard")
+    billing_invoices.ensure_invoice_for_payment(paiement)
     ref = paiement["payment_intent_id"]
     monkeypatch.setattr(mollie_client, "get_payment", lambda pid: {
         "id": ref, "status": "paid",
@@ -265,7 +234,8 @@ def test_le_webhook_dun_remboursement_produit_lavoir(live, monkeypatch):
     assert billing.process_webhook(ref) == "refunded"
 
     avoir = db_invoices.get_billing_invoice_for_payment(paiement["id"], "credit_note")
-    assert avoir and avoir["status"] == "issued" and avoir["amount_ttc"] == -2280
+    assert avoir and avoir["status"] == "held" and avoir["amount_ttc"] == -2280, (
+        "le montant remboursé est gardé : le webhook qui l'a vu ne repassera pas")
 
 
 def test_un_paiement_sans_remboursement_ne_declenche_pas_davoir(live, monkeypatch):

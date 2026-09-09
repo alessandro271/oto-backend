@@ -129,7 +129,9 @@ plateforme) ; exceptions vers **Sentry** · ⚠️ ne trace ni la connexion d'un
   tiers** · ⚠️ le discriminant est `db.org_tenant_slug`, **union de trois axes** — `orgs.tenant_id` porte désormais,
   mais il est ÉCRIT par quelqu'un quand les deux autres se DÉRIVENT du jeton, donc jamais seul · ⚠️ l'usage inclus **ne refuse
   rien** et ne sert aucun ratio · ⚠️ **aucun e-mail de facture depuis le 09/09** — la facture se met à disposition
-  (PDF téléchargeable), elle ne s'envoie pas ; `emailed_at` est une archive sans écrivain (`docs/billing.md`).
+  (PDF téléchargeable), elle ne s'envoie pas ; `emailed_at` est une archive sans écrivain · ⚠️⚠️ **plus rien n'est
+  créé chez Pennylane depuis le 09/09** — le seam fournisseur est RETIRÉ, un encaissement est tracé `held` et le
+  document se pose à la main ; `OTO_PENNYLANE_API_KEY` n'a plus de lecteur (`docs/billing.md`).
 - **Recherche & KB** : `oto_search` = LE verbe « retrouver », fusion RRF lexicale + sémantique · ⚠️ invariant
   **« cherchable ⇔ lisible »**, tripwire par source = critère de merge (`docs/search-and-kb.md`).
 - **Onboarding & profil** (ADR 0032 §7) : pas de mode d'accueil, un projet « Découverte » semé à la création de l'org

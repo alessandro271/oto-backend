@@ -51,15 +51,18 @@ class Invoice(BaseModel):
     kind: str = Field(description="'invoice' (facture) | 'credit_note' (AVOIR, émis "
                                   "sur remboursement — ses montants sont NÉGATIFS).")
     status: str = Field(
-        description="'issued' = document émis, numéroté, définitif. 'pending' = "
-                    "l'émission n'a pas encore abouti — l'encaissement, lui, a bien "
-                    "eu lieu et la facture est due ; elle est rejouée "
-                    "automatiquement. Un `pending` n'est jamais un paiement perdu.")
+        description="'issued' = document émis, numéroté, définitif. 'held' = "
+                    "l'encaissement est tracé et la facture est due, mais la "
+                    "plateforme n'émet plus aucun document automatiquement depuis "
+                    "le 2026-09-09 : elle est posée à la main. 'pending' = une "
+                    "tentative d'émission d'AVANT cette date n'avait pas abouti. "
+                    "Aucun des trois n'est un paiement perdu, et aucun n'appelle "
+                    "d'action du client.")
     number: Optional[str] = Field(
         default=None,
         description="Numéro de facture, attribué par Pennylane à la finalisation. "
-                    "`null` tant que `status='pending'` : un numéro n'existe pas "
-                    "avant le document.")
+                    "`null` tant que le document n'est pas émis (`held`, "
+                    "`pending`) : un numéro n'existe pas avant le document.")
     currency: str = Field(description="Code devise ISO en minuscules ('eur').")
     amount_ht: Optional[int] = Field(default=None,
                                      description="Total hors taxes, en CENTIMES.")
@@ -84,7 +87,9 @@ class Invoice(BaseModel):
     has_pdf: bool = Field(
         description="Le PDF est-il disponible au téléchargement ? `false` avec "
                     "`status='issued'` signale un document bien émis dont le "
-                    "fichier n'a pas encore été récupéré : la reprise le fera.")
+                    "fichier n'a pas été récupéré ; il ne l'est plus "
+                    "automatiquement depuis le 2026-09-09. Toujours `false` sur "
+                    "un document non émis.")
     pdf_path: Optional[str] = Field(
         default=None,
         description="Chemin REST du PDF, à préfixer de la base d'API (ce n'est pas "
@@ -135,7 +140,10 @@ CAPABILITIES += [replace(_cap, gate=billing.is_enabled) for _cap in [
         authz=ORG_MEMBER, Output=InvoicesView,
         description="List the org's invoices and credit notes (most recent first). "
                     "Numbers come from Pennylane, which holds Otomata's continuous "
-                    "numbering. The PDF itself is downloaded from `pdf_path`, a "
+                    "numbering. Since 2026-09-09 documents are NOT issued "
+                    "automatically: a paid period is traced as `held` until a human "
+                    "issues the document, so a missing number is expected, not an "
+                    "incident. The PDF itself is downloaded from `pdf_path`, a "
                     "separate authenticated route that returns application/pdf.",
         rest=RestBinding("GET", "/api/me/billing/invoices"),
     ),
