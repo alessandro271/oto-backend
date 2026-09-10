@@ -120,7 +120,57 @@ jobs:
       - name: Install (deps + dev)
         run: pip install -e ".[dev]"
       - name: Tests
-        run: pytest -q
+        # `--durations=25` n'ajoute qu'un tableau en fin de sortie : aucune sélection,
+        # aucun comportement changé, aucune seconde de plus. Il est là parce que
+        # personne ne sait OÙ passent les ~9 min de cette étape. On a discuté de la
+        # paralléliser sans jamais regarder si elle est lente partout ou lente à
+        # quelques endroits — et la seule tentative, calibrée sur un chiffre deviné, a
+        # gelé le tronc six heures. Ce tableau est le préalable gratuit à cette
+        # décision. (Les attentes fixes de la suite ne pèsent que quelques secondes :
+        # ce qu'on cherche ici, ce sont les fixtures et les sous-processus.)
+        run: pytest -q --durations=25
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # CE QUE PÈSE UNE COLLECTE, SUR LA MACHINE QUI L'EXÉCUTE.
+  #
+  # Le 07/09, quatre workers figés — calibrés sur un poste à 28 cœurs — ont fait tuer
+  # `pytest` par l'OOM killer sept fois de suite sur un runner 4 vCPU / 16 Go, tronc
+  # rouge six heures. La leçon inscrite dans le revert est qu'un nombre de workers se
+  # dérive de la MÉMOIRE de la machine qui exécute. Sauf que cette règle était
+  # inapplicable : personne n'avait jamais mesuré ce que pèse une collecte, et le
+  # cadre de l'OOM lui-même est une déduction depuis la mort, pas une mesure.
+  #
+  # Ce job produit ce chiffre. Il ne règle rien et ne décide rien.
+  #
+  # ⚠️ `continue-on-error` N'EST PAS UNE PRÉCAUTION DE STYLE. Depuis le 08/09, la garde
+  # de mise en production exige que le run de préproduction de ce sha conclue
+  # `success` : un job qui échoue ici bloquerait une release. Un instrument ne doit
+  # jamais pouvoir faire ça. D'où la double ceinture — ce drapeau, ET un script qui ne
+  # sort jamais en échec. Il ne gate rien non plus : `deploy-preprod` ne l'attend pas,
+  # il tourne en parallèle de `test` (~9 min) et ne coûte donc aucune seconde de mur.
+  empreinte-collecte:
+    name: Ce que pèse une collecte
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          # Le même que `test` : on mesure ce que `test` paie, pas autre chose.
+          python-version: "3.12"
+          cache: pip
+      - name: Install (deps + dev)
+        run: pip install -e ".[dev]"
+      - name: Mesurer
+        # Le relevé va AUSSI dans le résumé du run : un chiffre qu'il faut déplier un
+        # journal pour lire n'est pas lu.
+        run: |
+          {
+            echo '```'
+            python scripts/empreinte_collecte.py
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
   deploy-preprod:
     needs: [test, syntaxe-plancher, arbre-importable]
