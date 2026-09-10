@@ -125,6 +125,24 @@ Aucun secret n'avait fuité en pratique (0 appel aux deux outils qui en déclare
 passent désormais par `truncated_args`, dont le masquage traverse les sous-dictionnaires
 et les listes jusqu'à `MAX_MASK_DEPTH`.
 
+**Et la facturation (corrigé le 2026-09-10).** La ligne du nom cible n'avait ni
+`key_mode` ni `quantity` ni `instance`, et son `org_id` était relu **après** le reset des
+axes — l'org maison de l'appelant, pas celle où la cible avait résolu ses credentials. Ce
+que la cible consigne (`session_org.note_call_trace`) tombait dans le relevé de la
+requête **enveloppe**, donc sur la ligne `tool='oto_call'`, que la lentille
+`org.usage.calls` (filtrée par nom d'outil) ne lit jamais : une consommation passée par
+le dispatch n'était facturée sous aucune org. Désormais :
+
+- `oto_call` pose un relevé **propre à la cible** autour de `tool.run`, et lit l'org et le
+  run de la cible **avant** de défaire ses axes ;
+- **une seule ligne facture — celle de la cible** : `quantity` et `key_mode` y restent ;
+  le reste du relevé (`resolved_account`, `resolved_connector`) est recopié dans le
+  relevé enveloppe, pour que l'écho du compte rendu à l'agent survive au dispatch ;
+- les deux écrivains appliquent **la même règle** (`calllog.apply_call_trace`, avec la
+  liste fermée `server._TRACED_ARGS`).
+
+Cliquet : `tests/test_oto_call_trace_facturation.py`.
+
 **Ce que le banc n'avait pas vu, et pourquoi.** Le cliquet de chaînage posé le matin même
 scannait `calllog` — le module qui se déclare « domicile unique du journal ». Il y avait
 raison, et c'est tout le problème : un garde-fou qui part du module DÉCLARÉ ne peut pas

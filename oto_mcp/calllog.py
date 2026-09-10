@@ -28,6 +28,39 @@ from fastmcp.server.middleware import Middleware
 
 from . import journal_secrets
 
+
+
+def apply_call_trace(row: dict, trace: Optional[dict], traced_args: tuple) -> dict:
+    """Verse le relevé d'un appel dans sa ligne de journal — UNE seule copie de la
+    règle, pour les deux écrivains d'une ligne `tool_calls` : le sink du middleware
+    (`server._calllog_sink`) et le traçage de la cible d'`oto_call`
+    (`tools/meta._trace_target_call`). `traced_args` est la liste fermée
+    `server._TRACED_ARGS`, passée par l'appelant plutôt que recopiée ici.
+
+    - les clés de `traced_args` rejoignent `args` (entités résolues : l'intention de
+      l'agent reste à côté, l'id devient la clé de corrélation) ;
+    - `quantity` (items TRAITÉS — métrage/facturation) : sa propre colonne, posée si
+      c'est un entier `>= 0`. ⚠️ `>= 0`, pas `> 0` : un zéro TRACÉ (recherche vide)
+      n'est pas un appel non tracé, que le consommateur lit comme 1 ;
+    - `key_mode` (SOUS QUELLE clé : `user|group|org|tenant|platform`, posé au seul
+      résolveur) : sa propre colonne si c'est une chaîne non vide. NULL = aucune clé
+      résolue → rien à facturer.
+
+    Le reste du relevé (`resolved_connector`, `resolved_account`…) sert l'ÉCHO rendu à
+    l'agent, pas le journal : il n'est pas écrit."""
+    if not trace:
+        return row
+    traced = {k: v for k, v in trace.items() if k in traced_args}
+    if traced:
+        row["args"] = {**(row.get("args") or {}), **traced}
+    quantity = trace.get("quantity")
+    if isinstance(quantity, int) and quantity >= 0:
+        row["quantity"] = quantity
+    key_mode = trace.get("key_mode")
+    if isinstance(key_mode, str) and key_mode:
+        row["key_mode"] = key_mode
+    return row
+
 logger = logging.getLogger("oto_mcp.calllog")
 
 MAX_ARG_CHARS = 300
