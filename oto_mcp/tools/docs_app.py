@@ -38,7 +38,8 @@ def register(mcp: FastMCP) -> None:
 
     def _kb_project_id(sub: str) -> Optional[int]:
         """KB de l'org active — résolution LECTURE seule (pas de création paresseuse
-        ici : c'est `oto_kb` qui crée ; une app de lecture ne mute rien).
+        ici : la création passe par la route REST du tableau de bord, le verbe MCP
+        étant retiré ; une app de lecture ne mute rien).
 
         Par l'ANCRE `orgs.kb_project_id`, comme `capabilities/kb.py`. Cette fonction
         cherchait le projet dont le NOM vaut `KB_NAME`, alors que l'identification par
@@ -92,7 +93,7 @@ def register(mcp: FastMCP) -> None:
 
         Visual variant of `oto_doc` that renders pages INLINE instead of returning
         JSON. WITHOUT arguments = the tree of the active org's HISTORICAL docs
-        project (whatever it is named — resolved by its anchor, see `oto_kb`);
+        project (whatever it is named — resolved by its anchor);
         pass `project_id` to browse the docs of the project you actually mean.
         With `project_id` = that project's pages tree
         (children indented under parents). With `doc_id` = ONE page, markdown
@@ -105,7 +106,7 @@ def register(mcp: FastMCP) -> None:
 
         Args:
             project_id: project whose pages to browse ; omit = the active org's
-                historical docs project (see `oto_kb`).
+                historical docs project (resolved by its anchor).
             doc_id: render ONE page (title + markdown body). Takes precedence.
             query: full-text search in the project's pages (title + body).
         """

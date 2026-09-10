@@ -89,11 +89,11 @@ SPINE_FAMILIES: tuple[SpineFamily, ...] = (
         "bruts (PDF, HTML…)",
     ),
     SpineFamily(
-        "oto_doc* / oto_kb / oto_search",
-        ("oto_doc", "oto_kb", "oto_search"),
+        "oto_doc* / oto_search",
+        ("oto_doc", "oto_search"),
         "documents : les pages markdown d'un projet — le savoir durable se capture "
         "LÀ, en doc dans son projet — et la recherche transverse sur tout ce qui est "
-        "lisible (`oto_kb` ne fait que résoudre un projet historique, n'y écris pas)",
+        "lisible",
     ),
     SpineFamily(
         "oto_resource* / oto_account_access",

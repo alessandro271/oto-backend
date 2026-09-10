@@ -133,9 +133,12 @@ def test_no_active_org(seams):
 
 
 def test_capability_registered():
+    """REST seule depuis le 10/09/2026 : le verbe MCP `oto_kb` est retiré (son refus est
+    éprouvé par `tests/test_kb_verbe_mcp_retire.py`), la route du tableau de bord reste."""
     from oto_mcp.capabilities.registry import CAPABILITIES
     cap = next((c for c in CAPABILITIES if c.key == "me.kb"), None)
-    assert cap is not None and cap.mcp == "oto_kb"
+    assert cap is not None and cap.mcp is None
+    assert [(b.verb, b.path) for b in cap.rest_bindings()] == [("POST", "/api/me/kb")]
 
 
 def test_kb_output_holds_for_every_op(seams):

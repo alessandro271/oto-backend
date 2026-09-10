@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Iterator, Optional
 
 from fastmcp.exceptions import NotFoundError
+from . import outils_retires
 from .mcp_errors import McpError
 from mcp.types import INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST
 from pydantic import ValidationError
@@ -371,6 +372,13 @@ def classify(exc) -> ErrorInfo:
     # l'installation du connecteur. Sans ça : « Erreur interne du serveur ».
     name = _unknown_tool_name(exc)
     if name:
+        # Un nom RETIRÉ DÉLIBÉRÉMENT (`outils_retires`) : son refus est ÉCRIT et nomme le
+        # geste qui aboutit — ce que ni la fratrie dérivée ci-dessous (~60 `oto_*` pour
+        # `oto_kb`) ni « inconnu » ne savent dire. Consulté AVANT elle : un retrait n'est
+        # pas une consolidation, il n'y a pas de voisin qui porte les verbes.
+        retire = outils_retires.retrait(name)
+        if retire is not None:
+            return ErrorInfo("unknown_tool", False, retire.message, retire.hint)
         # Un nom RETIRÉ n'est pas un connecteur absent — et le confondre envoie chercher
         # un problème de montage qui n'existe pas. Vécu le 14/08 : `gmail_search`,
         # supprimé par la consolidation google (33→13 tools), répondait « le connecteur

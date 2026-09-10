@@ -60,6 +60,6 @@ def test_la_notice_porte_la_forme_longue():
             f"`{axis.param}` absent de la notice : réduit à une ligne au socle et aux "
             f"schémas, il n'est plus décrit nulle part.")
     for token in ("oto_procedure", "run_start", "run_finish", "feedback",
-                  "oto_call", "oto_kb", "oto_doc", "data_claim_next",
+                  "oto_call", "oto_doc", "data_claim_next",
                   "<slot:name>", "oto_connector"):
         assert token in body, f"« {token} » a disparu de la notice"

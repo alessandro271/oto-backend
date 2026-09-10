@@ -69,6 +69,9 @@ def test_l_ecriture_NOMME_les_citations_qui_ne_prennent_pas():
     hint = trace["citations_sans_cible_hint"].casefold()
     assert "aucun lien entrant" in hint, "il faut dire la CONSÉQUENCE, pas le fait"
     assert "hors de portée" in hint, "et la cause, sinon on cherche le mauvais défaut"
+    assert "base de connaissance" not in hint, (
+        "la « base de connaissance » n'existe plus (10/09/2026) : la portée se dit en "
+        "projets — celui de la page, puis le projet de documents historique de l'org")
 
 
 def test_le_releve_reste_VIDE_quand_tout_resout():

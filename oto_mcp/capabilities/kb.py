@@ -17,7 +17,11 @@ verrou = claim optimiste (`claim_kb_project`), le perdant archive son doublon.
 
 **Semée en ANGLAIS depuis le 2026-09-03 (#527)** : le nom et le résumé étaient des
 littéraux français, servis tels quels à des orgs entièrement anglophones. Rien ici ne
-devine une langue — voir le commentaire de `KB_NAME`."""
+devine une langue — voir le commentaire de `KB_NAME`.
+
+**Plus de face MCP depuis le 10/09/2026** : le verbe `oto_kb` est retiré et refuse en
+nommant le geste qui aboutit (`outils_retires`). La route REST reste, pour le tableau
+de bord — voir le commentaire sur `mcp=None`, en bas."""
 from __future__ import annotations
 
 from typing import Literal, Optional
@@ -196,26 +200,31 @@ def _kb(ctx: ResolvedCtx, inp: KbInput) -> dict:
 CAPABILITIES += [
     Capability(
         key="me.kb", handler=_kb, Input=KbInput, authz=SUB_ONLY, Output=KbView,
+        # Servie au TABLEAU DE BORD seul (étape d'accueil, écran Documents, sélecteur de
+        # documents) : publiée dans `/openapi.json`, dans aucun catalogue d'outils.
         description=(
-            "⚠️ LEGACY — do NOT send new writing here. The org « knowledge base » is "
-            "being retired as a concept: it never was anything but ONE ORDINARY "
-            "PROJECT, so nothing has to move and nothing is lost. To capture something "
-            "durable, write a DOC in the PROJECT it belongs to — `oto_doc "
-            "op=create` with that project's id (`oto_project op=list` to pick it, "
-            "`op=create` to open one). That is where org knowledge lives now. "
-            "What this tool still does, and only that: it resolves the id of that one "
-            f"historical project, seeded as \"{KB_NAME}\" and freely renamable — it is "
-            "anchored by project id, so never look it up by name. Its pages are read "
-            "and written with oto_doc exactly like any other project's. It belongs to "
-            "the ORG and is visible to EVERY member, never a personal space whatever "
-            "the request sounded like; the answer says so in `visible_to`. "
-            "op=\"get\" (default) READS the anchor and returns project_id=null when the "
-            "org has none — it never creates one, so opening a Documents view costs the "
-            "org nothing. op=\"create\" is kept for the callers that still depend on it "
-            "and is idempotent (created: false when one already exists, never a "
-            "duplicate), but prefer an ordinary project: `oto_project op=create`."
+            "Resolves the org's historical documents project — what used to be called "
+            "its knowledge base, an ordinary PROJECT of the org — for the dashboard's "
+            "Documents zone. REST only: the MCP verb `oto_kb` is retired, agents reach "
+            "these pages like any project's (`oto_project`, then `oto_doc`). Anchored by "
+            f"project id (seeded as \"{KB_NAME}\", freely renamable — never look it up "
+            "by name). It belongs to the ORG and is visible to EVERY member; the answer "
+            "says so in `visible_to`. op=\"get\" (default) READS the anchor and returns "
+            "project_id=null when the org has none — it never creates one, so opening "
+            "the Documents zone costs the org nothing. op=\"create\" creates it and is "
+            "idempotent (created: false when one already exists, never a duplicate)."
         ),
-        mcp="oto_kb",
+        # ⚠️ **Plus de face MCP depuis le 10/09/2026** (décision d'Alexis) : le verbe
+        # `oto_kb` est RETIRÉ et REFUSE en nommant le geste qui aboutit — le texte vit
+        # dans `outils_retires`, lu par l'appel direct, `oto_call` et `oto_tool_schema`.
+        # Retiré plutôt que laissé dormir parce qu'il RECRUTAIT PAR SA RÉPONSE : sa
+        # description disait « LEGACY, n'écris pas ici », mais `op=get` rendait le numéro
+        # du projet et le résumé « The org-wide knowledge base » — dans 4 des 6 orgs où
+        # des agents ont écrit dans une KB après la coupure du recrutement (08/09),
+        # l'agent venait de l'appeler. `mcp=None` est l'opt-out explicite du registre
+        # (`Capability.__post_init__`) : l'adaptateur MCP saute la capacité, la route
+        # REST reste montée — le tableau de bord la consomme.
+        mcp=None,
         rest=RestBinding("POST", "/api/me/kb"),
     ),
 ]

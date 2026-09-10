@@ -58,9 +58,16 @@ depth?)` bornée (N+2, plafond 200, compteurs `more`) — la carte que l'agent l
 claim optimiste anti-doublon, auto-réparation transfert/archive — le nom n'est plus un marqueur).
 ⚠️ **Le concept se retire (09/09/2026) : le RECRUTEMENT est coupé.** Plus aucun texte
 servi n'envoie un agent écrire dans une « base de connaissance » — le savoir durable se
-capture en **doc, dans son projet** (`oto_doc op=create` + `project_id`). L'outil `oto_kb`
-et sa route RESTENT, le temps que l'existant se tasse : une KB est déjà un projet
-ordinaire (465 pages, 31 orgs), il n'y a rien à migrer ni à supprimer. Ne réintroduis pas
+capture en **doc, dans son projet** (`oto_doc op=create` + `project_id`). **Le verbe MCP
+`oto_kb` est RETIRÉ depuis le 10/09/2026** : il refuse — appel direct, `oto_call`,
+`oto_tool_schema` — en nommant le chemin qui aboutit (`oto_project op=list`, puis `oto_doc`
+avec le `project_id`) ; le texte vit dans `oto_mcp/outils_retires.py`. Retiré plutôt que
+laissé dormir parce qu'il recrutait par sa RÉPONSE : `op=get` rendait le numéro du projet et
+le résumé « The org-wide knowledge base » — dans 4 des 6 orgs où des agents ont écrit dans
+une KB après la coupure, l'agent venait de l'appeler. **La route REST `POST /api/me/kb`
+reste** (capacité `me.kb`, `mcp=None`) : le tableau de bord la consomme (étape d'accueil,
+écran Documents, sélecteur de documents). Une KB est déjà un projet ordinaire (465 pages,
+31 orgs), il n'y a rien à migrer ni à supprimer. Ne réintroduis pas
 la recommandation — ni dans une description d'outil, ni dans le socle, ni dans un guide,
 et sur AUCUN des deux canaux (le code, et la base qui l'écrase).
 

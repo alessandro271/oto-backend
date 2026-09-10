@@ -96,7 +96,7 @@ def test_chaque_famille_affiche_ce_qu_elle_revendique():
 
 def test_le_socle_est_dans_la_carte():
     cat = providers.render_namespace_catalog()
-    for token in ("data_*", "oto_resource*", "oto_doc*", "oto_kb", "run_*"):
+    for token in ("data_*", "oto_resource*", "oto_doc*", "run_*"):
         assert token in cat, f"{token} absent du socle de la carte"
 
 

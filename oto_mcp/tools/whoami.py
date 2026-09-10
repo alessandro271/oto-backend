@@ -56,8 +56,7 @@ def register(mcp: FastMCP) -> None:
 
         Renvoie : `account` (sub, email, name, rôle plateforme), `org` (org active —
         id, name, rôle ; tu es TOUJOURS dans une org), `group` (groupe actif éventuel),
-        `knowledge` (l'ancre `kb_project_id` : l'id du projet de documents historique
-        de l'org, cf. `oto_kb`), `connectors` (résumé des connecteurs
+        `connectors` (résumé des connecteurs
         configurés — dont `platform_quotas`, le quota du jour `{used, limit,
         remaining}` des connecteurs plateforme au quota plafonné : regarde-le avant
         un lot d'appels qui dépensent, pour arbitrer sans découvrir la limite au
@@ -158,14 +157,10 @@ def register(mcp: FastMCP) -> None:
         except Exception as e:
             logger.warning("whoami: status_for failed: %s", e)
 
-        # KB NATIVE (oto_kb) : la base de connaissance vit dans le projet ancré de
-        # l'org (orgs.kb_project_id). On expose cette ancre native.
-        kb_project_id = None
-        try:
-            if active_org is not None:
-                kb_project_id = org_store.get_kb_project_id(active_org)
-        except Exception as e:
-            logger.warning("whoami: kb lookup failed: %s", e)
+        # ⚠️ Plus de champ `knowledge` (retiré le 10/09/2026 avec le verbe `oto_kb`) : il
+        # rendait l'id du projet de l'ex-« base de connaissance », et un agent qui lit
+        # « ta KB est le projet N » y écrit — un recrutement par la RÉPONSE, le défaut
+        # même qui a fait retirer le verbe. Ce projet reste un projet ordinaire.
 
         who = user.get("name") or user.get("email") or sub
         if org_block:
@@ -190,7 +185,6 @@ def register(mcp: FastMCP) -> None:
             "org": org_block,
             "group": group_block,
             "project": project_block,
-            "knowledge": {"native_kb": True, "kb_project_id": kb_project_id},
             "connectors": {
                 "configured": configured,
                 "platform_available": platform_ready,

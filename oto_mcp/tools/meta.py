@@ -23,8 +23,8 @@ from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 from pydantic import ValidationError
 
-from .. import (access, call_axes, calllog, db, deprecations, guide_run, providers,
-                redaction, run_org, tool_alias, tool_registry)
+from .. import (access, call_axes, calllog, db, deprecations, guide_run, outils_retires,
+                providers, redaction, run_org, tool_alias, tool_registry)
 from ..auth.hooks import current_user_sub_from_token
 from ..tool_visibility import (
     PROTECTED_TOOLS,
@@ -37,6 +37,14 @@ from ..tool_visibility import (
 # aucun intérêt à passer par le dispatch, et anti-boucle (`oto_call` sur lui-même).
 # Miroir de `middleware.field_redaction._SPINE_SERVICES`.
 _NON_DISPATCHABLE: frozenset[str] = frozenset({"oto", "run", "feedback", "data"})
+
+
+def _refuser_si_retire(name: str) -> None:
+    """Un nom RETIRÉ (`outils_retires`) refuse ici avec le MÊME texte que l'appel direct :
+    il nomme le geste qui aboutit. `name` est déjà canonique (préfixe de tenant levé)."""
+    retire = outils_retires.retrait(name)
+    if retire is not None:
+        raise McpError(ErrorData(code=INVALID_PARAMS, message=retire.message))
 
 # Budget d'une ligne de catalogue. ~350 entrées rendues d'un coup : chaque caractère
 # est multiplié par le nombre d'outils. 100 c. suffisent à dire ce que fait un outil ;
@@ -378,6 +386,7 @@ def register(mcp: FastMCP) -> None:
         prefix = _tool_prefix()
         demande, name = name, deprecations.tool_canonique(
             tool_alias.canonical(name, prefix))
+        _refuser_si_retire(name)
         tool = await _resolve_tool(ctx, name)
         if tool is None:
             raise McpError(ErrorData(
@@ -450,6 +459,11 @@ def register(mcp: FastMCP) -> None:
         # redevient canonique AVANT le gate méta/spine : sans ça `acme_doc` résout un
         # namespace inconnu, échappe à `_NON_DISPATCHABLE`, et l'anti-boucle saute.
         demande, name = name, tool_alias.canonical(name, _tool_prefix())
+        # Un nom RETIRÉ refuse AVANT le gate méta/spine : `oto_kb` est un nom `oto_*`, et
+        # « appelle-le directement » renverrait l'agent vers un nom qui n'existe plus.
+        # C'est CE chemin qu'un agent prend quand une procédure nomme un outil absent de
+        # sa liste — la notice le lui prescrit.
+        _refuser_si_retire(name)
         if namespace_of(name) in _NON_DISPATCHABLE:
             raise McpError(ErrorData(
                 code=INVALID_PARAMS,
