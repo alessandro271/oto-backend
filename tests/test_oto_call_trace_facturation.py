@@ -162,3 +162,102 @@ def test_un_zero_trace_reste_zero_sur_la_cible(monkeypatch, banc):
 
     (ligne,) = banc
     assert ligne["quantity"] == 0
+
+
+def test_apres_le_dispatch_le_releve_courant_est_de_nouveau_celui_de_l_enveloppe(
+        monkeypatch, banc):
+    """Ce que le sink du middleware relira APRÈS `oto_call` — donc ce qui atterrit sur
+    la ligne `tool='oto_call'`.
+
+    Le banc précédent vérifie le CONTENU du holder d'enveloppe. Celui-ci vérifie que
+    c'est encore LUI que le contexte désigne. Sans le `reset_call_trace` posé en fin de
+    dispatch, le relevé de la CIBLE reste installé : `current_call_trace()` le rend, le
+    sink le verse, et la même consommation est facturée une SECONDE fois — sur la ligne
+    d'enveloppe, celle-là même que cette PR vient de vider. Un banc qui n'inspecte que
+    `outer` ne peut pas le voir : `outer` n'a pas bougé, c'est la ContextVar qui pointe
+    ailleurs.
+
+    Tout tient dans UN SEUL contexte (un seul `asyncio.run`) : c'est la condition pour
+    que la fuite soit observable ici comme en production, où le handler async d'`oto_call`
+    tourne dans le contexte du middleware (`await call_next`). Sous `asyncio.run` par
+    appel — comme `_appeler` —, chaque `.set()` meurt avec la tâche et la garde ne peut
+    pas être éprouvée."""
+    async def run(args):
+        session_org.note_call_trace(key_mode="platform", quantity=47,
+                                    resolved_account="acme")
+        return {"content": []}
+
+    _cible(monkeypatch, run)
+    outil = _oto_call()
+    outer: dict = {}
+
+    async def scenario():
+        tok = session_org.set_call_trace(outer)
+        try:
+            await outil.fn(ctx=SimpleNamespace(), name="linkedin_aiark_search",
+                           arguments={}, _org=178)
+            return session_org.current_call_trace()
+        finally:
+            session_org.reset_call_trace(tok)
+
+    courant = asyncio.run(scenario())
+
+    assert courant is outer, ("le relevé de la CIBLE est resté installé après le "
+                              "dispatch : le sink de l'enveloppe va le relire")
+    from oto_mcp import server
+    enveloppe = calllog.apply_call_trace({"tool": "oto_call"}, courant,
+                                         server._TRACED_ARGS)
+    assert "quantity" not in enveloppe and "key_mode" not in enveloppe, \
+        "la consommation de la cible serait facturée une seconde fois sous `oto_call`"
+    # et elle l'est bien UNE fois, sur la cible
+    (ligne,) = banc
+    assert (ligne["key_mode"], ligne["quantity"]) == ("platform", 47)
+
+
+def _pile_de_session_qui_repond(monkeypatch):
+    """Rend `get_context()` disponible ET la pile session bavarde. Sans contexte fastmcp
+    — le cas de tous les autres bancs de ce fichier — `get_context()` lève, la pile
+    n'est JAMAIS interrogée, et la précédence entre le jeton d'appel et la pile n'est
+    pas exercée du tout."""
+    async def _pile(c):
+        return "run-de-la-pile"
+
+    monkeypatch.setattr("fastmcp.server.dependencies.get_context",
+                        lambda: SimpleNamespace(session_id="s-1"))
+    monkeypatch.setattr(meta.guide_run, "active_run_id", _pile)
+
+
+def test_le_jeton_de_run_de_l_appel_gagne_sur_la_pile_de_session(monkeypatch, banc):
+    """`_run_id=` passé à `oto_call` PRIME la pile session de `guide_run` — c'est l'ordre
+    qu'applique le sink du middleware (#108 : la pile session-scopée ne survit pas au
+    renouvellement du Mcp-Session-Id), et la ligne de la cible doit suivre le même.
+
+    Ici la pile RÉPOND, et elle répond autre chose : c'est ce qui distingue ce banc de
+    `test_le_run_de_la_cible_est_conserve`, où un `run_id = await active_run_id(c)` sans
+    le `run_id or` rendrait exactement le même résultat."""
+    _pile_de_session_qui_repond(monkeypatch)
+
+    async def run(args):
+        return {"content": []}
+
+    _cible(monkeypatch, run)
+    _appeler({}, name="linkedin_aiark_search", arguments={}, _org=178, _run_id="run-9")
+
+    (ligne,) = banc
+    assert ligne["session_id"] == "s-1", "la pile n'était même pas atteignable"
+    assert ligne["run_id"] == "run-9"
+
+
+def test_sans_jeton_la_ligne_retombe_sur_la_pile_de_session(monkeypatch, banc):
+    """La contre-épreuve du banc ci-dessus : le repli n'est pas mort. Sans lui, une ligne
+    dispatchée dans un run ouvert sans `_run_id=` explicite perdrait son rattachement."""
+    _pile_de_session_qui_repond(monkeypatch)
+
+    async def run(args):
+        return {"content": []}
+
+    _cible(monkeypatch, run)
+    _appeler({}, name="linkedin_aiark_search", arguments={}, _org=178)
+
+    (ligne,) = banc
+    assert ligne["run_id"] == "run-de-la-pile"
