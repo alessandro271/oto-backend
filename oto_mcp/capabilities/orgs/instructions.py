@@ -245,6 +245,32 @@ class InstructionView(BaseModel):
     set_by: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+    archived_at: Optional[str] = Field(default=None, description=(
+        "Date de RETRAIT du service, ou null si la procédure est en service. "
+        "⚠️ Renseignée = cette procédure a été RETIRÉE : elle n'apparaît dans "
+        "aucune liste ni aucune recherche, et elle n'est plus censée être suivie. "
+        "Ne la déroule pas — signale-la à qui te l'a demandée. Elle reste lisible "
+        "ici exprès, pour qu'on puisse la relire et décider, pas pour l'exécuter. "
+        "La remettre en service est un geste explicite, depuis l'écran qui l'a "
+        "retirée."))
+
+
+class InstructionUnarchived(BaseModel):
+    """Remise EN SERVICE d'une procédure retirée — l'inverse de l'archivage.
+
+    `was_archived_at` dit ce que le geste a ANNULÉ : un retour en service qui ne
+    rendrait qu'un `ok` laisserait le journal dire qu'on a agi sans dire sur quoi.
+    `null` signifie que la procédure était déjà en service — un non-geste, pas une
+    faute, et surtout pas un 404 : elle existe bien."""
+    ok: bool
+    org_id: Optional[int] = None
+    group_id: Optional[int] = None
+    scope: Optional[str] = None
+    slug: str
+    unarchived: bool
+    was_archived_at: Optional[str] = Field(default=None, description=(
+        "Date de retrait que ce geste vient d'annuler, ou null si la procédure "
+        "était déjà en service."))
 
 
 class InstructionVersion(BaseModel):
@@ -401,8 +427,13 @@ class InstructionArchived(BaseModel):
     donc l'agent cesse de la proposer et de la suivre. `archived` ne vaut jamais
     `false` (un slug absent lève un 404) : c'est une constante d'écho.
 
-    Pas de désarchivage sur cette surface, même choix que pour les projets : la
-    procédure est récupérable en base, pas d'un clic dans l'app.
+    ⚠️ **Le désarchivage existe depuis le 10/09/2026** (`…/unarchive`), sur CETTE
+    face : celui qui retire depuis l'écran doit pouvoir remettre depuis l'écran.
+    C'est une rupture de parité avec les projets, dont l'archivage n'a toujours pas
+    d'inverse — assumée, et instruite à part (#929). Elle était nécessaire : refuser
+    d'écrire sur une procédure retirée sans offrir de la remettre en service
+    laisserait la suppression pour seule sortie, donc la destruction de l'historique
+    que l'archivage existe pour préserver.
 
     ⚠️ Comme à l'écriture, la clé de scope change de nom (#681) — ici toujours
     `org_id` : l'archivage n'est pas servi au palier équipe."""
@@ -1096,6 +1127,16 @@ def _write_instruction(ctx: ResolvedCtx, inp, must_create: bool = False) -> tupl
             "un autre slug, ou édite l'existante (`PUT /api/me/instructions/"
             f"{norm}`) — la création, elle, n'écrase pas.",
             {"slug": norm, "version": e.version, "archived": e.archived})
+    except org_store.InstructionArchived as e:
+        # ⚠️ Le refus RELAIE le message du store tel quel : c'est lui qui nomme la
+        # sortie (la route de remise en service), et deux surfaces qui reformulent le
+        # même geste racontent deux histoires. Le code est distinct de `slug_taken`
+        # parce que l'action à prendre n'est pas la même — là choisir un autre slug,
+        # ici remettre en service ou assumer un slug neuf.
+        raise AuthzDenied(
+            409, "instruction_archived", str(e),
+            {"slug": norm, "archived_at": str(e.archived_at) if e.archived_at else None,
+             "unarchive": f"/api/me/instructions/{norm}/unarchive"})
     except org_store.InstructionVersionConflict as e:
         raise AuthzDenied(
             409, "version_conflict",
@@ -1251,7 +1292,32 @@ def _instruction_get(ctx: ResolvedCtx, inp: InstrGetInput) -> dict:
         "version": instr["version"], "body_md": instr["body_md"],
         "slots": instr.get("slots") or [], "set_by": instr.get("set_by"),
         "created_at": instr.get("created_at"), "updated_at": instr.get("updated_at"),
+        # ⚠️ **L'état de retrait voyage jusqu'à l'appelant** (#857). Cette lecture
+        # n'a AUCUN filtre sur l'archivage — elle sert une procédure retirée comme
+        # une procédure en service — pendant que les listes et la recherche
+        # l'excluent. Sans ce champ, un agent chargeait une procédure retirée et la
+        # déroulait sans rien pouvoir savoir : 3 archivées sur 238 en production,
+        # dont deux réécrites après coup par des clients qui les croyaient vivantes.
+        # Absent de la forme d'une VERSION précise, et c'est juste : une version
+        # n'est pas archivée, la procédure l'est.
+        "archived_at": instr.get("archived_at"),
     }
+
+
+def _unarchive_instruction(ctx: ResolvedCtx, inp) -> dict:
+    """Remet une procédure en service. 404 si le slug n'existe pas ; `unarchived:
+    false` si elle était déjà en service — distinction qui compte, parce que les
+    deux situations appellent des gestes opposés chez l'appelant."""
+    owner = _owner_of(ctx, inp)
+    norm = org_store.normalize_slug(inp.slug)
+    if not norm:
+        raise AuthzDenied(400, "invalid_slug", "slug requis.")
+    avant = org_store.unarchive_instruction(*owner, norm)
+    if avant is None and org_store.get_instruction(owner[0], owner[1], norm) is None:
+        raise AuthzDenied(404, "not_found", f"Instruction `{norm}` absente.")
+    return {"ok": True, **_scope_ref(owner), "slug": norm,
+            "unarchived": avant is not None,
+            "was_archived_at": str(avant) if avant is not None else None}
 
 
 def _instruction_versions(ctx: ResolvedCtx, inp: SlugInput) -> dict:
@@ -1434,6 +1500,23 @@ CAPABILITIES += [
                      "stops being offered and followed. Pass the EXACT slug. `org` pins to "
                      "an explicit org id (default = active org; must be org_admin of it)."),
         rest=RestBinding("POST", "/api/me/instructions/{slug}/archive"),
+    ),
+    Capability(
+        key="org.instruction.unarchive", handler=_unarchive_instruction,
+        Input=GuideDeleteInput, authz=ORG_ADMIN_OPT("org"),
+        Output=InstructionUnarchived,
+        description=("Put an archived guide BACK IN SERVICE (org_admin) — the exact "
+                     "inverse of `archive`, on the same face, because whoever "
+                     "retires one from the screen must be able to restore it from "
+                     "the screen. It reappears in every listing and is offered "
+                     "again. `was_archived_at` echoes the retirement date this call "
+                     "just cancelled, so the journal records what was undone and not "
+                     "merely that something was. A guide that was already in service "
+                     "answers `unarchived: false` and is NOT an error — an unknown "
+                     "slug is the 404. Pass the EXACT slug. `org` pins to an "
+                     "explicit org id (default = active org; must be org_admin of "
+                     "it)."),
+        rest=RestBinding("POST", "/api/me/instructions/{slug}/unarchive"),
     ),
     Capability(
         key="org.instruction.revert", handler=_instruction_revert, Input=RevertInput,

@@ -27,6 +27,8 @@ quelque chose, et le deuxième test le nomme.
 """
 from __future__ import annotations
 
+import inspect
+
 import psycopg
 import pytest
 
@@ -34,37 +36,51 @@ from oto_mcp import org_store
 
 
 def _ddl() -> str:
-    """Le `CREATE TABLE` de la table, plus la colonne que seul un `ALTER` pose.
+    """Le `CREATE TABLE` de la table, plus TOUTES ses migrations, relevées sur le
+    code qui les exécute.
 
-    ⚠️ **`archived_at` n'est PAS dans le `CREATE TABLE`** : c'est une colonne de
-    migration vivante, ajoutée par un `ALTER` au démarrage. Un banc qui rejoue le
-    seul `CREATE` obtient donc une table où la colonne n'existe pas — le piège que
-    la carte du dépôt documente, et celui sur lequel ce fichier a rougi d'abord.
-    On la repose ici explicitement plutôt que de rejouer toute la séquence de
-    migration, dont ce banc n'a pas besoin."""
-    from oto_mcp.db import _schema
+    ⚠️ **Énumérer les colonnes à la main ne tient pas** : `id`, `archived_at` puis
+    `search_vec` ont manqué l'une après l'autre, chacune découverte par un rouge. Ce
+    montage lit donc les `ALTER TABLE` de `db/_init.py` au lieu de les recopier —
+    une colonne ajoutée demain suivra sans que ce banc ait à être retouché. Même
+    parti que le banc d'ordre de démarrage : relever sur le SQL exécuté, pas sur une
+    liste tenue à côté.
+
+    ⚠️ La référence croisée est retirée du `CREATE` : le montage exigerait sinon la
+    table `orgs`, dont ce banc n'a aucun besoin. C'est ce manque qui a rendu le tronc
+    rouge — la base de ce poste le masquait, le PostgreSQL de la CI part nu.
+    """
+    import re
+    from oto_mcp.db import _schema, _init
     s = _schema._SCHEMA
-    i = s.index("CREATE TABLE IF NOT EXISTS org_instructions")
-    creation = s[i:s.index("\n);", i) + 3]
-    # ⚠️ **La référence croisée est RETIRÉE, sinon le montage exige `orgs`.** Ce
-    # banc n'a besoin que de cette table ; la base de ce poste porte tout le schéma
-    # et masquait donc le manque, alors que le PostgreSQL de la CI part NU — huit
-    # erreurs au montage, tronc rouge, et un verdict local vert qui ne pouvait pas
-    # le voir. Même geste que le banc de tri du datastore, pour la même raison.
-    creation = creation.replace(" REFERENCES orgs(id) ON DELETE CASCADE", "")
-    # Les colonnes posées par une migration, reprises de `db/_init.py` et non
-    # devinées : `id` et `archived_at` y sont ajoutées par `ALTER`, donc un banc qui
-    # rejoue le seul `CREATE` obtient une table où elles n'existent pas. C'est le
-    # piège que la carte du dépôt documente, et ce fichier a rougi dessus deux fois.
-    return creation + (
-        "\nALTER TABLE org_instructions ADD COLUMN IF NOT EXISTS id BIGSERIAL;"
-        "\nALTER TABLE org_instructions "
-        "ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;"
-        "\nALTER TABLE org_instructions "
-        "ADD COLUMN IF NOT EXISTS slots JSONB NOT NULL DEFAULT '[]'::jsonb;"
-        "\nALTER TABLE org_instructions "
-        "ADD COLUMN IF NOT EXISTS owner_type TEXT NOT NULL DEFAULT 'org';"
-        "\nALTER TABLE org_instructions ADD COLUMN IF NOT EXISTS owner_id TEXT;")
+    def _table(nom: str) -> str:
+        j = s.index(f"CREATE TABLE IF NOT EXISTS {nom}")
+        brut = s[j:s.index("\n);", j) + 3]
+        # Toute référence croisée est retirée : ce banc ne monte que ce qu'il exerce,
+        # et exiger `orgs` est précisément ce qui a rendu le tronc rouge.
+        return re.sub(r" REFERENCES \w+\([^)]*\)(?: ON DELETE CASCADE)?", "", brut)
+
+    # L'écriture d'une procédure pousse l'état antérieur en RÉVISION : la table des
+    # révisions fait donc partie du montage, sinon le banc du refus n'atteint jamais
+    # son refus — il échoue sur une table absente, et accuse la mauvaise pièce.
+    creation = _table("org_instructions") + "\n" + _table("org_instruction_revisions")
+    src = inspect.getsource(_init)
+    # ⚠️ **Dans l'ORDRE DU SOURCE, et c'est tout le sujet.** Regrouper les séquences
+    # avant les colonnes casse : `CREATE SEQUENCE … OWNED BY org_instructions.id`
+    # exige que `id` existe, et `ALTER COLUMN id SET DEFAULT nextval(…)` exige la
+    # séquence. Ces deux instructions se tiennent l'une l'autre, et seule leur
+    # séquence d'origine les satisfait — j'ai réordonné et je l'ai payé d'un rouge.
+    # C'est le piège du démarrage que la carte du dépôt documente, en plus petit.
+    pas = re.findall(
+        r'"((?:ALTER TABLE org_instructions |CREATE SEQUENCE[^"]*org_instructions)'
+        r'[^"]+)"', src)
+    # La colonne de rang de recherche vient d'un AUTRE module (`db/search.py`), qui
+    # la pose sur toutes les tables indexées : on la prend à sa source aussi, par sa
+    # constante, plutôt que d'écrire son nom ici.
+    from oto_mcp.db.search import RANK_VECTOR_COLUMN
+    pas.append("ALTER TABLE org_instructions ADD COLUMN IF NOT EXISTS "
+               f"{RANK_VECTOR_COLUMN} tsvector")
+    return creation + "".join(f"\n{q};" for q in pas)
 
 
 @pytest.fixture()
@@ -83,9 +99,14 @@ def pg(pg_module_dsn, monkeypatch):
     from oto_mcp.db import _conn
     monkeypatch.setattr(_conn, "_database_url", lambda: pg_dsn)
     with psycopg.connect(pg_dsn, autocommit=True) as c:
+        # Les DEUX tables : ne nettoyer que la première laissait les révisions
+        # s'accumuler d'un test à l'autre, et la collision d'unicité qui en
+        # sort accuse l'écriture testée au lieu du montage.
+        c.execute("DROP TABLE IF EXISTS org_instruction_revisions")
         c.execute("DROP TABLE IF EXISTS org_instructions")
         c.execute(_ddl())
         yield c
+        c.execute("DROP TABLE IF EXISTS org_instruction_revisions")
         c.execute("DROP TABLE IF EXISTS org_instructions")
 
 
@@ -172,3 +193,59 @@ def test_une_procedure_EN_SERVICE_rend_un_etat_vide(pg):
     _pose(pg, archivee=False)
     lu = org_store.get_instruction("org", 231, "target-ownership-register")
     assert lu["archived_at"] is None
+
+
+# ── le refus d'écrire, et sa sortie ──────────────────────────────────────────
+
+def test_ecrire_sur_une_RETIREE_est_refuse(pg):
+    """Le cas mesuré, dans l'autre sens : deux clients ont réécrit une procédure
+    retirée en la croyant en service. L'écriture est désormais refusée."""
+    from oto_mcp.org_store.instructions import InstructionArchived
+    _pose(pg, archivee=True)
+    with pytest.raises(InstructionArchived) as exc:
+        org_store.set_instruction("org", 231, "target-ownership-register",
+                                  "corps neuf", set_by="u1")
+    assert "RETIRÉE" in str(exc.value)
+
+
+def test_le_refus_NOMME_la_sortie(pg):
+    """Le garde-fou qui empêche l'enfermement. Un refus sans issue laisserait la
+    suppression pour seule sortie — donc la destruction de l'historique que
+    l'archivage existe pour préserver."""
+    from oto_mcp.org_store.instructions import InstructionArchived
+    _pose(pg, archivee=True)
+    with pytest.raises(InstructionArchived) as exc:
+        org_store.set_instruction("org", 231, "target-ownership-register",
+                                  "corps neuf", set_by="u1")
+    msg = str(exc.value)
+    assert "/unarchive" in msg, "le refus doit dire COMMENT remettre en service"
+    assert "nouveau slug" in msg, "et l'autre voie, si elle doit rester retirée"
+
+
+def test_le_refus_dit_la_CONSEQUENCE_pas_seulement_l_interdit(pg):
+    """« Écrire dessus produirait une consigne que personne ne suit » : c'est ce qui
+    fait comprendre pourquoi on refuse, au lieu de donner envie de contourner."""
+    from oto_mcp.org_store.instructions import InstructionArchived
+    _pose(pg, archivee=True)
+    with pytest.raises(InstructionArchived) as exc:
+        org_store.set_instruction("org", 231, "target-ownership-register", "x",
+                                  set_by="u1")
+    assert "personne ne suit" in str(exc.value)
+
+
+def test_ecrire_sur_une_procedure_EN_SERVICE_passe_toujours(pg):
+    """La contre-épreuve : le refus ne doit mordre que sur les retirées."""
+    _pose(pg, archivee=False)
+    v = org_store.set_instruction("org", 231, "target-ownership-register",
+                                  "corps neuf", set_by="u1")
+    assert v == 5, "la version monte normalement sur une procédure en service"
+
+
+def test_remise_en_service_puis_ECRITURE_passe(pg):
+    """Le parcours complet de sortie : on débloque, puis on écrit. C'est lui qui
+    prouve que le refus n'enferme pas."""
+    _pose(pg, archivee=True)
+    assert org_store.unarchive_instruction("org", 231, "target-ownership-register")
+    v = org_store.set_instruction("org", 231, "target-ownership-register",
+                                  "corps neuf", set_by="u1")
+    assert v == 5

@@ -60,6 +60,36 @@ OWNER_TYPES: tuple[str, ...] = ("org", "group", "user")
 _OWNER_WHERE = "owner_type = %s AND owner_id = %s"
 
 
+class InstructionArchived(Exception):
+    """Écrire sur une procédure RETIRÉE du service est refusé (#857).
+
+    Le cas mesuré : 3 procédures archivées sur 238 en production, dont **deux
+    réécrites après coup** par des clients qui les croyaient en service — elles se
+    chargeaient par leur slug sans rien dire de leur état. Accepter ces écritures
+    en silence, c'est laisser quelqu'un travailler sur une consigne que plus aucune
+    session ne lira.
+
+    ⚠️ **Ce refus ne part JAMAIS sans son inverse.** Il n'existait pas avant le
+    10/09/2026 parce que le désarchivage n'existait pas non plus : refuser sans
+    offrir la remise en service aurait laissé la suppression pour seule sortie —
+    c'est-à-dire la destruction de l'historique que l'archivage existe pour
+    préserver. Le refus NOMME donc la sortie, ce qui est sa raison d'être autant que
+    l'interdiction."""
+
+    def __init__(self, slug: str, archived_at):
+        self.slug = slug
+        self.archived_at = archived_at
+        super().__init__(
+            f"la procédure `{slug}` a été RETIRÉE du service"
+            + (f" le {archived_at}" if archived_at else "")
+            + " : elle n'apparaît dans aucune liste ni aucune recherche, et plus "
+            "aucune session ne la lira. Écrire dessus produirait une consigne que "
+            "personne ne suit. Pour la remettre en service d'abord : "
+            "POST /api/me/instructions/" + slug + "/unarchive — puis réécris. "
+            "Si elle doit rester retirée, écris plutôt une procédure sous un "
+            "nouveau slug.")
+
+
 class InstructionExists(Exception):
     """Le slug visé porte DÉJÀ une procédure : une CRÉATION ne l'écrase pas (#662).
     L'écriture est un upsert depuis toujours (la version monte, l'état antérieur part
@@ -297,6 +327,12 @@ def set_instruction(owner_type: str, owner_id: int | str, slug: str, body_md: st
             if must_create and cur is not None:
                 raise InstructionExists(slug, cur["version"],
                                         cur["archived_at"] is not None)
+            # ⚠️ **Refus d'écrire sur une RETIRÉE, sous le verrou** (#857). Placé
+            # après le refus de création (plus spécifique : il dit « ce slug est
+            # pris », y compris par une archivée) et avant le conflit de version,
+            # qui parlerait d'un numéro alors que le problème est l'état.
+            if cur is not None and cur["archived_at"] is not None:
+                raise InstructionArchived(slug, cur["archived_at"])
             if expected_version is not None and (
                     cur is None or cur["version"] != expected_version):
                 raise InstructionVersionConflict(cur["version"] if cur else None)
