@@ -59,6 +59,21 @@ ALLOWED = {
                                 "current(ctx.org_id) vs maison pour dé-dupliquer "
                                 "l'affichage, JAMAIS une résolution d'accès (l'accès "
                                 "reste cross-org via can_access/recherche).",
+    # oto#161 (10/09/2026) — les deux entrées suivantes ÉCRIVENT la maison ou la
+    # RENDENT ; aucune ne résout un accès. `current_org` y serait un contresens : il
+    # rend le contexte de l'appel (jeton `_org=`, `X-Oto-Org`), or ce qui se décide et
+    # ce qui s'annonce ici est le DÉFAUT PERSISTANT, pas le contexte du moment.
+    "org_store/invitations.py": "accepter une invitation d'ÉQUIPE ne pose le groupe "
+                                "actif que si la maison est déjà l'org du groupe — "
+                                "`set_active_group` écrit lui aussi `is_active` "
+                                "(invariant ADR 0012) et déplacerait la maison par la "
+                                "bande. Lecture du défaut persistant pour décider d'une "
+                                "ÉCRITURE sur ce même défaut, jamais une résolution.",
+    "capabilities/orgs/invites.py": "l'écho de `org.invite.accept` rend `active_org` "
+                                    "LU après l'écriture : depuis oto#161 accepter ne "
+                                    "déplace plus une maison établie, et recopier "
+                                    "`org_id` serait un accusé de réception faux. "
+                                    "Affichage de « ton défaut », comme `me_account`.",
 }
 
 
