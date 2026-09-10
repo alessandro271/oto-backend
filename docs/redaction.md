@@ -33,7 +33,8 @@ sans code par-connecteur (≠ l'ancien filtrage client-level de folk/silae/penny
 retiré).
 
 - **Deux canaux réémis** depuis la version redactée : `structured_content` **ET**
-  `content` (TextContent JSON) — sinon le canal brut fuit (l'agent lit surtout `content`).
+  `content` (TextContent JSON) — sinon le canal brut fuit. Le canal structuré est ensuite
+  retiré, plus haut dans la chaîne, des outils sans schéma de sortie (§ « Un seul canal »).
 - **Fail-closed** : si une policy existe et que `apply` lève (ex. Faker absent) → on
   **retient** la sortie (`_withheld`), jamais le brut. `is_empty` (pas de policy) =
   passe-through. Échec de *résolution* (aléa DB) → passe-through, sauf service à défaut
@@ -181,6 +182,55 @@ avoir été retirée. Contrat figé par `tests/middleware/test_middleware_order.
 ⚠️ **La face REST ne change pas d'un octet** : elle ne partage aucun code de rendu
 avec la chaîne MCP (`_rest_adapter` → `_json`), et continue de servir la structure
 vide aux clients qui parsent.
+
+## Un seul canal porte la donnée — le canal structuré se mérite, il ne se déduit pas
+
+Un résultat d'outil MCP a deux canaux : `content` (du texte, ce qu'un modèle lit) et
+`structuredContent` (un JSON validable contre l'`outputSchema` de l'outil, ce qu'un
+client qui **parse** consomme ; la spec l'exige dès qu'un schéma est déclaré). FastMCP
+déclare ce schéma **par inférence** : toute fonction `-> dict` reçoit « un objet, tout
+est permis », donc un canal structuré. Mesuré sur le montage réel : 573 outils, 451 avec
+ce schéma vide, 36 enveloppes `x-fastmcp-wrap-result`, **zéro dont le schéma décrive un
+champ**. Le contrat typé n'existe pas ; la copie, elle, part à chaque appel.
+
+Et cette copie est LUE : **Claude Code et `oto-runner` donnent au modèle le canal
+structuré à la place du texte** (marqueurs distincts sur les deux canaux, trois runs sur
+trois, avec ou sans schéma). Tout ce que cette chaîne fait au texte — le rendu du vide,
+la rédaction, le TOON — partait donc à un canal que ces clients ne lisent pas.
+
+La règle, `middleware/un_seul_canal.py`, en deux gestes **indissociables et dans cet
+ordre** :
+
+1. **au montage** (`server._build_mcp`, après le dernier `register`), le schéma DÉDUIT
+   est effacé de chaque outil — un outil neuf naît sans contrat de sortie, sauf s'il en
+   déclare un vrai (un modèle pydantic rendu) ;
+2. **à l'appel**, `UnSeulCanalMiddleware` retire `structuredContent` des outils dont le
+   schéma est **absent**. Juste sous `ToolAlias`, donc plus externe que tout ce qui
+   réémet les deux canaux : plus interne, le rendu du vide ou la rédaction rétablirait
+   le canal qu'il vient de retirer.
+
+⚠️ **Pourquoi « absent » et jamais « vide »** : un client conforme valide, et le client
+FastMCP refuse un résultat sans canal structuré dès qu'un schéma est encore annoncé
+(« outputSchema defined but no structured output returned »). Le middleware seul, sans
+le geste de montage, casserait ces clients. Il ne juge donc que l'absence ; c'est le
+montage qui la crée.
+
+Les 36 enveloppes `x-fastmcp-wrap-result` (une liste nue emballée en `{"result": …}`)
+sont **gardées** et nommées dans `tests/structured_output_debt.txt`, liste qui ne peut
+que décroître : là, les deux canaux n'ont pas la même forme, et un client qui parse
+`.result` ne retrouverait pas la donnée dans le texte sans la désemballer. Payer une
+ligne = rendre un dict aux clés nommées, ou déclarer un vrai `Output`.
+
+**Ce qui change de contrat** : `/openapi.json`, `oto_tool_schema` et `/api/tools`
+servent `output_schema: null` pour 451 outils (`scripts/empreinte_servie.py` le
+mesure désormais — il ne voyait pas le schéma de sortie, et lisait « aucun outil servi
+n'a changé » sur ce lot). `me.tools` le disait déjà : « souvent `null`, un outil n'est
+pas tenu d'en déclarer un ».
+
+**Ce qui est vérifié chez le client** : une fois le canal retiré, Claude Code recopie le
+marqueur du **texte** (deux runs sur deux, 10/09/2026). C'est ce qui rend durable tout
+le reste de cette page : quand un seul canal porte la donnée, le comportement du client
+cesse de compter.
 
 ## Surfaces & fichiers
 - backend : `redaction.py` (logique partagée : extraction, rédaction, réémission,

@@ -17,6 +17,11 @@ invariants gardés ici :
   (au RETOUR), donc après le filtrage de visibilité. Plus interne, une partie de la
   chaîne verrait le nom du tenant : le journal se scinderait en deux noms pour un
   seul outil, et un gate par namespace tomberait fail-open sur un namespace inconnu.
+- `UnSeulCanalMiddleware` juste sous `ToolAlias` — il retire `structuredContent` des
+  outils sans schéma de sortie, et doit donc tourner APRÈS tout ce qui réémet le
+  résultat sur les deux canaux (le rendu du vide, la rédaction, l'écho de compte) :
+  plus interne, l'un d'eux rétablirait le canal qu'il vient de retirer. Sous `ToolAlias`
+  parce que l'ensemble des outils qui gardent leur schéma est nommé au nom CANONIQUE.
 - `EmptyResultMiddleware` juste dessous — il sert un résultat VIDE en PHRASE, et doit
   donc tourner APRÈS tout ce qui réémet le payload en JSON dans le canal texte (la
   rédaction, l'écho de compte). Plus interne, la structure qu'il vient de retirer du
@@ -41,6 +46,7 @@ from _mcp_app import static_mcp as _test_mcp
 OURS = [
     "IdentityScopeMiddleware",
     "ToolAliasMiddleware",
+    "UnSeulCanalMiddleware",
     "EmptyResultMiddleware",
     "CallContextMiddleware",
     "FieldRedactionMiddleware",

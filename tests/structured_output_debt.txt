@@ -1,0 +1,58 @@
+# Outils qui GARDENT un schéma de sortie, donc un canal `structuredContent`.
+# Cette liste ne peut que DÉCROÎTRE — cf. tests/middleware/test_un_seul_canal.py.
+#
+# La règle (`oto_mcp/middleware/un_seul_canal.py`) : le schéma de sortie que FastMCP
+# DÉDUIT d'un `-> dict` — « un objet, tout est permis » — est effacé au montage, et le
+# canal structuré part avec. Un canal structuré se mérite par un VRAI schéma ; il ne
+# se déduit pas.
+#
+# Ce qui reste ici, mesuré le 2026-09-10 sur le montage réel (573 outils, 451 schémas
+# vides effacés, 86 sans schéma) : 36 enveloppes `x-fastmcp-wrap-result`, c'est-à-dire
+# des outils qui rendent une LISTE NUE que FastMCP emballe en `{"result": [...]}` sur le
+# canal structuré. Là, les deux canaux n'ont pas la même forme : un client qui parse
+# `.result` ne retrouverait pas la donnée dans le texte sans la désemballer. On ne
+# retire pas un contrat qu'un client a pu apprendre sans l'avoir mesuré.
+#
+# Payer une ligne = faire rendre à l'outil un dict aux clés nommées (leçon
+# `pennylaneged` : `structured_content` doit être un objet, jamais une liste), ou lui
+# déclarer un vrai `Output`. Un outil NEUF qui rend une liste nue ne s'ajoute pas ici.
+#
+# ⚠️ Zéro outil ne porte aujourd'hui un schéma qui décrive un champ. Le jour où l'un en
+# déclare un (un modèle pydantic rendu), il apparaîtra dans le premier test comme
+# « hors dette » : ce n'est PAS une dette, c'est le but — le nommer ici avec sa raison.
+foncier_geocode
+foncier_site
+fr_accords_themes
+fr_headquarters
+fr_stock_etablissements
+fr_stock_siege
+fr_stock_siret
+frenchtech_get_annuaire
+gocardless_creditors
+gocardless_events
+gocardless_failed
+gocardless_payments
+greenhouse_users
+instagram_meta_get_recent_media
+pennylane_customer
+pennylane_invoice
+pennylane_ledger_entry
+pennylane_ref
+pennylane_supplier
+pennylane_supplier_invoice
+pennylane_transactions
+pennylane_trial_balance
+planity_get_customer_receipts
+planity_get_seller_stats
+planity_list_employees
+planity_list_payment_methods
+planity_list_products
+planity_list_recurring_appointments
+planity_list_salons
+planity_list_services
+planity_search_customers
+sante_finess
+silae_dossier
+silae_employee
+silae_payslip
+silae_variables_to_enter
