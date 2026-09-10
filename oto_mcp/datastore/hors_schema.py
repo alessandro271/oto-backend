@@ -261,6 +261,38 @@ def couche_mal_ecrite(cle: str, declarees) -> Optional[tuple]:
     return None
 
 
+def enveloppe_probable(schema: Optional[dict], data: dict) -> bool:
+    """La ligne est-elle ENVELOPPÉE plutôt qu'écrite ? — aucune clé ne correspond.
+
+    Sur les routes d'écriture, **le corps EST la ligne**. Qui suit la convention
+    habituelle l'enveloppe dans un objet qui la nomme (`{"row": {…}}`) et fabrique une
+    colonne réellement appelée `row`, contenant toute la ligne. La réponse est alors
+    indiscernable d'une écriture réussie.
+
+    ⚠️ **Le critère est l'ABSENCE TOTALE de correspondance**, pas la présence d'une
+    clé inconnue : ajouter une colonne libre à un tableau schématisé reste un droit du
+    contrat (0016), et le refuser durcirait un contrat servi. Ce qui n'a aucun sens,
+    c'est une ligne qui ne touche **pas une seule** des colonnes déclarées.
+
+    ⚠️ **Mesuré avant d'être posé, sur la base servie** : 67 980 lignes de tableaux à
+    colonnes déclarées, **une seule** ne correspondait à rien — sur un tableau qui en
+    compte 1 986 et déclare huit colonnes. Le critère ne décrit donc aucun régime
+    normal : il ne nomme que l'accident.
+
+    Rend `False` dès qu'il manque de quoi juger — schéma sans colonnes déclarées
+    (tableau libre), ligne vide, données non exploitables : on n'invente pas un refus
+    sur une absence d'information.
+    """
+    if not isinstance(data, dict) or not data:
+        return False
+    declarees = {f["key"] for f in _fields(schema)
+                 if isinstance(f.get("key"), str) and f["key"]}
+    if not declarees:
+        return False                      # tableau libre : rien à quoi comparer
+    posees = {k for k in data if isinstance(k, str) and not k.startswith("_")}
+    return bool(posees) and not (posees & declarees)
+
+
 def off_schema_refusal(schema: Optional[dict],
                        data: dict) -> tuple[list[str], dict]:
     """Le refus des colonnes non déclarées au PREMIER niveau → `(messages, details)`.

@@ -187,7 +187,7 @@ class ControlesMixin:
 
     def _check_row(self, schema: Optional[dict], merged: dict, *,
                    prev_status=None, written: Optional[set] = None,
-                   lot: bool = False) -> None:
+                   lot: bool = False, creation: bool = False) -> None:
         """Valide la row TELLE QU'ÉCRITE (résultat mergé). No-op si le schéma ne
         déclare ni strict/required/max_length ni lifecycle (défaut 0016 soft).
 
@@ -282,6 +282,35 @@ class ControlesMixin:
         #
         # Après le refus de l'`id` nu, qui est plus spécifique et plus utile : sur un
         # tableau fermé, `id` serait sinon rendu comme une colonne inventée de plus.
+        # ⚠️ **L'ENVELOPPE (#117)** — le corps EST la ligne. Qui suit la convention
+        # habituelle envoie `{"row": {…}}` et fabrique une colonne réellement appelée
+        # `row`, contenant toute la ligne. Aucune garde ne mordait : sur un tableau
+        # souple — le régime par DÉFAUT — le relevé hors-schéma lui-même reste muet,
+        # et la réponse est indiscernable d'une écriture réussie. Le piège a produit
+        # deux verdicts faux au cours d'une seule mesure.
+        #
+        # ⚠️ Refusé à la CRÉATION seulement, et le critère est l'ABSENCE TOTALE de
+        # correspondance : ajouter une colonne libre à un tableau schématisé reste un
+        # droit du contrat 0016. Ce qui n'a aucun sens, c'est une ligne qui ne touche
+        # pas une SEULE des colonnes déclarées.
+        #
+        # Mesuré avant de poser : 67 980 lignes de tableaux à colonnes déclarées, UNE
+        # seule ne correspondait à rien. La garde ne décrit aucun régime normal.
+        if creation and dsv2.enveloppe_probable(schema, posed):
+            dispo = [f["key"] for f in dsv2._fields(schema)
+                     if isinstance(f.get("key"), str) and f["key"]]
+            cite = ", ".join(f"`{k}`" for k in dispo[:6])
+            if len(dispo) > 6:
+                cite += f" (+{len(dispo) - 6} autres, `data_get_schema`)"
+            raise ValueError(
+                f"aucune des clés posées ({', '.join(repr(k) for k in sorted(posed))}) "
+                f"n'est une colonne de ce tableau — rien n'a été écrit. ⚠️ Le corps EST "
+                f"la ligne : ne l'enveloppe pas dans un objet qui la nomme. Écris "
+                f"`{{\"{dispo[0]}\": …}}` directement, pas "
+                f"`{{\"row\": {{\"{dispo[0]}\": …}}}}`. Les colonnes déclarées sont "
+                f"{cite}. Si ces clés sont VRAIMENT tes données, déclare-les au schéma "
+                f"(`data_set_schema`) — sinon elles naîtraient en colonnes que "
+                f"personne n'a voulues.")
         hs_errors, hs_details = dsv2.off_schema_refusal(schema, posed)
         if hs_errors:
             raise RowValidationError(hs_errors, details=hs_details)

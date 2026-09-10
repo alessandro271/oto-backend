@@ -164,7 +164,10 @@ class EcritureMixin:
         # qu'il ressemble aux autres.
         if donnees_d_origine:
             poser_les_deux_versions(user_data, schema=schema)
-        self._check_row(schema, user_data)
+        # `creation=True` : c'est ici qu'une colonne parasite NAÎT (#117). Un patch par
+        # `id` vise une ligne existante et peut légitimement ne toucher qu'une colonne
+        # libre — la garde n'y a rien à faire.
+        self._check_row(schema, user_data, creation=True)
         try:
             row = db.datastore_insert_row(ns_id, _new_id(), user_data)
         except UniqueViolation:

@@ -102,7 +102,7 @@ from .cycle_de_vie import (
 from .hors_schema import (
     off_schema_keys, _unknown_subkeys, _unknown_subkey_refusal, _off_schema,
     off_schema_warning, types_geles_warning, UNKNOWN_FIELDS_MODES, _REFERENTIEL_CITE,
-    unknown_fields_mode, couche_mal_ecrite, off_schema_refusal,
+    unknown_fields_mode, couche_mal_ecrite, enveloppe_probable, off_schema_refusal,
 )
 from .champs_reserves import (
     PARAMETRE_ORIGINE, ORIGINE_REFUS_LE, ENV_ORIGINE_REFUS_LE, _MOIS_FR, date_refus,
