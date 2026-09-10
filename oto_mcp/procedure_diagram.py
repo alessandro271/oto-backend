@@ -71,6 +71,63 @@ def has_diagram(body_md: str) -> bool:
     return False
 
 
+def trouver_le_dessin(body_md: str) -> tuple[int, int] | None:
+    """L'étendue `(début, fin)` du PREMIER bloc fencé non tagué qui dessine — fences
+    comprises — ou `None`. Le même bloc que `has_diagram` compte, au même critère."""
+    for m in _FENCE.finditer(body_md or ""):
+        if not m.group(1) and is_drawing(m.group(2)):
+            return m.span()
+    return None
+
+
+# ── Le dessin servi à l'agent : un marqueur, pas le tracé ─────────────────────
+#
+# Le dessin est la vue par défaut de la PAGE — un humain le regarde. L'agent qui
+# déroule la procédure lit les étapes, qui disent le même flux en prose ; le tracé lui
+# coûte ~1 000 jetons par lecture (mesuré le 10/09/2026 : 3 304 caractères = 983 jetons
+# Haiku, et une procédure est lue à chaque run) et ne lui apprend rien qu'il n'ait
+# déjà. Sur la face MCP, `op=get` remplace donc le bloc par UNE ligne.
+#
+# ⚠️ Cette ligne est un MARQUEUR, pas un commentaire : l'agent qui édite relit puis
+# réécrit (`op=get` → `op=set`), et sans elle chaque édition d'agent ferait DISPARAÎTRE
+# le dessin — la page se rendrait vide. À l'écriture, `avec_le_dessin` remet à sa place
+# le tracé de la version courante. Un corps qui arrive avec un VRAI dessin le garde ;
+# un corps sans marqueur ni dessin est ce qu'il a toujours été : `diagram_warning`.
+# Les corps STOCKÉS ne portent jamais le marqueur — il ne vit qu'entre les deux appels.
+_MARQUEUR = re.compile(r"^[ \t]*<!--[ \t]*flowchart:[^\n]*?-->[ \t]*$", re.M)
+
+
+def marqueur(version, lignes: int) -> str:
+    return (f"<!-- flowchart: v{version}, {lignes} lines, omitted here — keep this line "
+            "and op=set keeps the drawing; op=get full=true reads it -->")
+
+
+def sans_le_dessin(body_md: str, version) -> str:
+    """Le corps avec son dessin remplacé par le marqueur ; intact s'il n'en a pas."""
+    etendue = trouver_le_dessin(body_md)
+    if etendue is None:
+        return body_md
+    debut, fin = etendue
+    lignes = body_md[debut:fin].count("\n") + 1
+    return body_md[:debut] + marqueur(version, lignes) + body_md[fin:]
+
+
+def porte_le_marqueur(body_md: str) -> bool:
+    return bool(_MARQUEUR.search(body_md or ""))
+
+
+def avec_le_dessin(body_md: str, courant_md: str) -> str:
+    """Le corps à ÉCRIRE : chaque marqueur remplacé par le dessin du corps courant.
+    Sans dessin courant (création, ou une procédure qui n'en a jamais eu), le marqueur
+    s'efface — et le corps tombe sous `diagram_warning`, comme tout corps sans dessin."""
+    if not porte_le_marqueur(body_md):
+        return body_md
+    etendue = trouver_le_dessin(courant_md)
+    dessin = courant_md[etendue[0]:etendue[1]] if etendue else ""
+    # `\g<0>`-style replacement is not needed: the marker line is replaced whole.
+    return _MARQUEUR.sub(lambda _m: dessin, body_md)
+
+
 def diagram_check(body_md: str) -> dict:
     """Check croisé à l'écriture, dans la forme des autres (`slots_check`,
     `write_check`) : la clé est TOUJOURS présente, `None` = le check a tourné et

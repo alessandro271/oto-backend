@@ -147,7 +147,9 @@ class GuideAdminInput(BaseModel):
     scope: Optional[str] = None       # get/list : org (défaut) | group
     version: Optional[int] = None     # get
     with_history: bool = False        # get
+    full: bool = False                # get : dessin + description avec le corps (face MCP)
     query: Optional[str] = None       # list
+    verbose: bool = False             # list : description entière (face MCP)
     body_md: Optional[str] = None     # set
     title: Optional[str] = None       # set
     description: Optional[str] = None  # set

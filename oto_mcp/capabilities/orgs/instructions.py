@@ -454,11 +454,16 @@ class GuideGetInput(BaseModel):
     scope: Optional[str] = None
     version: Optional[int] = None
     with_history: bool = False
+    # Face MCP : le corps servi remplace le dessin par un marqueur et ne répète pas
+    # la description du catalogue (cf. `_servir_a_l_agent`). `full=true` rend tout.
+    full: bool = False
 
 
 class GuideListInput(BaseModel):
     query: Optional[str] = None
     scope: Optional[str] = None
+    # Face MCP : la description est résumée (cf. `_resume`). `verbose=true` la rend entière.
+    verbose: bool = False
 
 
 class InstrGetInput(BaseModel):
@@ -629,12 +634,14 @@ class AdminGuideGetInput(BaseModel):
     scope: str = "org"
     version: Optional[int] = None
     with_history: bool = False
+    full: bool = False                 # même rendu que `GuideGetInput.full`
 
 
 class AdminGuideListInput(BaseModel):
     org_id: int
     query: Optional[str] = None
     scope: Optional[str] = None
+    verbose: bool = False              # même rendu que `GuideListInput.verbose`
 
 
 class AdminInstrSetInput(BaseModel):
@@ -882,11 +889,61 @@ def _read_guide(ctx: ResolvedCtx, inp) -> tuple[dict, tuple[str, ...] | None]:
     return out, (instr["body_md"],)
 
 
+# ── Ce que l'AGENT lit : la consigne, pas la vitrine ────────────────────────────
+#
+# Une procédure est relue à chaque run, et chaque jeton lu est payé à chaque tour du
+# run tant que la procédure reste dans le contexte. Mesuré le 10/09/2026 sur trois
+# procédures d'une org cliente (≈100 000 caractères servis par run) : le dessin pèse
+# ~10 % de la lecture (3 304 caractères = 983 jetons Haiku), la description recopiée
+# ~5 %. Ni l'un ni l'autre n'apprend rien à l'agent qui EXÉCUTE : le dessin est la vue
+# de la page (un humain le regarde), la description est la ligne du catalogue (il l'a
+# déjà lue pour choisir). Sur la face MCP, `op=get` sert donc le corps sans les deux —
+# par DÉFAUT, parce qu'une économie qu'il faut demander ne bénéficie à personne.
+#
+# ⚠️ Face MCP SEULEMENT (`ctx.channel == "mcp"`) : la face REST nourrit la page du
+# process, qui a besoin du dessin ; un appel interne (`None`) sert tout. `full=true`
+# rend tout à l'agent aussi — pour relire le dessin avant de le redessiner.
+# ⚠️ Le dessin n'est pas RETIRÉ, il est remplacé par un marqueur que `op=set` sait
+# rendre : sans ça, chaque édition d'agent (relire, réécrire) perdrait le dessin. Cf.
+# `procedure_diagram.avec_le_dessin`.
+def _servir_a_l_agent(out: dict, ctx: ResolvedCtx, inp) -> dict:
+    if ctx.channel != "mcp" or getattr(inp, "full", False) or "body_md" not in out:
+        return out
+    out = dict(out)
+    out["body_md"] = procedure_diagram.sans_le_dessin(out["body_md"], out.get("version"))
+    out.pop("description", None)
+    return out
+
+
 async def _get_guide(ctx: ResolvedCtx, inp) -> dict:
     out, bodies = await run_in_threadpool(_read_guide, ctx, inp)
     if bodies is not None:
         out["referenced_tools"] = await tool_registry.manifest_for(*bodies)
-    return out
+    return _servir_a_l_agent(out, ctx, inp)
+
+
+# La description d'une procédure est une VITRINE, et certaines font un paragraphe
+# entier (près de 2 000 caractères sur les procédures les plus travaillées) : un
+# catalogue de trente entrées pèse alors autant que deux procédures. Pour CHOISIR,
+# l'agent lit le début — le résumé s'arrête au dernier espace avant la borne.
+_RESUME_MAX = 200
+
+
+def _resume(description, borne: int = _RESUME_MAX) -> str:
+    texte = " ".join((description or "").split())
+    if len(texte) <= borne:
+        return texte
+    coupe = texte.rfind(" ", 0, borne)
+    return texte[:coupe if coupe > borne // 2 else borne].rstrip() + "…"
+
+
+def _catalogue_pour_l_agent(guides: list, ctx: ResolvedCtx, inp) -> list:
+    """Face MCP, sans `verbose` : `description` devient `summary`, `updated_at`
+    part (la fiche complète est à `verbose=true`, le corps à `op=get`)."""
+    if ctx.channel != "mcp" or getattr(inp, "verbose", False):
+        return guides
+    return [{**{k: v for k, v in g.items() if k not in ("description", "updated_at")},
+             "summary": _resume(g.get("description"))} for g in guides]
 
 
 def _list_guides(ctx: ResolvedCtx, inp) -> dict:
@@ -918,7 +975,8 @@ def _list_guides(ctx: ResolvedCtx, inp) -> dict:
                 else org_store.list_instructions("group", group_id))
         out += [{**r, "scope": "group"} for r in rows]
     return deprecations.avec_les_deux_noms(
-        {"org_id": org_id, "group_id": group_id, "guides": out})
+        {"org_id": org_id, "group_id": group_id,
+         "guides": _catalogue_pour_l_agent(out, ctx, inp)})
 
 
 def _write_instruction(ctx: ResolvedCtx, inp, must_create: bool = False) -> tuple[dict, str]:
@@ -954,6 +1012,22 @@ def _write_instruction(ctx: ResolvedCtx, inp, must_create: bool = False) -> tupl
     body_md = (body_md or "").strip()
     if not body_md:
         raise AuthzDenied(400, "body_md_required", "body_md vide (ou fournis `from_version`).")
+    # Le corps AVANT écriture — pour dire ce que cette version RETIRE (oto#61), et pour
+    # rendre au corps le dessin que `op=get` lui a remplacé par un marqueur (face MCP).
+    # ⚠️ Best-effort : un corps précédent illisible ne refuse rien. Lu AVANT la borne de
+    # taille parce que le marqueur se remplace avant de peser — le corps qu'on pèse
+    # est celui qu'on écrit. Une création n'a rien à comparer ni à rendre.
+    ancien_md = ""
+    if not must_create:
+        try:
+            precedent = org_store.get_instruction(*owner, norm)
+            ancien_md = (precedent or {}).get("body_md") or ""
+        except Exception as e:  # noqa: BLE001 — cf. les autres checks de forme
+            # noqa: SILENT — l'avertissement de retrait est optionnel et ne doit jamais
+            # empêcher une écriture légitime ; journalisé pour qu'un silence durable se
+            # voie.
+            logger.warning("retrait: corps précédent illisible pour %s : %s", norm, e)
+    body_md = procedure_diagram.avec_le_dessin(body_md, ancien_md)
     # Injecté dans le guide de base servi à chaque session → caper la taille.
     # ⚠️ La borne n'est PAS publiée dans le schéma servi de `InstrSetInput` /
     # `AdminInstrSetInput` / la création — contrairement au `body_md` des guides, qui
@@ -971,20 +1045,7 @@ def _write_instruction(ctx: ResolvedCtx, inp, must_create: bool = False) -> tupl
                           f"`{_BASE}` est le readme (prose injectée), pas une "
                           "procédure — édite-le sur la surface guide "
                           f"(scope='{owner[0]}', delivery='init').")
-    # Le corps AVANT écriture, pour dire ce que cette version RETIRE (oto#61).
-    # ⚠️ Best-effort, et lu APRÈS toutes les validations : un contrôle de forme ne
-    # change ni l'ordre des refus ni leur nature. Une création n'a rien à comparer.
-    ancien_md = ""
-    if not must_create:
-        try:
-            precedent = org_store.get_instruction(*owner, norm)
-            ancien_md = (precedent or {}).get("body_md") or ""
-        except Exception as e:  # noqa: BLE001 — cf. les autres checks de forme
-            # noqa: SILENT — l'avertissement de retrait est optionnel et ne doit jamais
-            # empêcher une écriture légitime ; journalisé pour qu'un silence durable se
-            # voie.
-            logger.warning("retrait: corps précédent illisible pour %s : %s", norm, e)
-    # Idem : l'entrée de CRÉATION n'a pas de verrou optimiste (rien à verrouiller).
+    # L'entrée de CRÉATION n'a pas de verrou optimiste (rien à verrouiller).
     expected_version = getattr(inp, "expected_version", None)
     try:
         version = org_store.set_instruction(

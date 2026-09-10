@@ -38,10 +38,12 @@ identifiées par `slug`, chacune versionnée :
 optionnel **fond membre↔platform-admin** : absent = ton **org active** ; présent = une **autre org**
 par id (réservé platform_admin). Autz conditionnelle dans `tools/orgs.py`
 (`_resolve_org_read`/`_resolve_org_write`).
-- **Lecture** : `oto_procedure(op='get'[, slug, scope, version, with_history])` — sans `slug` =
+- **Lecture** : `oto_procedure(op='get'[, slug, scope, version, with_history, full])` — sans `slug` =
   `{doctrine, group_doctrine, doctrines[]}` (base org + base groupe + index), le call de **DÉBUT DE
-  SESSION** ; avec `slug` = le markdown d'un guide nommé. `oto_procedure(op='list'[, query,
-  scope])` = catalogue/recherche. Scopés à l'**org active** (+ groupe actif) — servis aux seuls
+  SESSION** ; avec `slug` = le markdown d'un guide nommé — **sur la face MCP, sans son dessin ni
+  sa description** (§ « Ce que l'agent lit »), `full=true` rend tout. `oto_procedure(op='list'[,
+  query, scope, verbose])` = catalogue/recherche — face MCP, la description est un `summary` de
+  200 caractères, `verbose=true` la rend entière. Scopés à l'**org active** (+ groupe actif) — servis aux seuls
   membres. **Vide sans erreur** si pas d'org active (`_SERVER_INSTRUCTIONS` invite à `oto_procedure(op='get')`).
 - **Écriture** : `oto_procedure(op='set'[, body_md, slug, scope, org, group, title, desc,
   from_version])` (base = slug omis ; nommée sinon ; `from_version` = revert) +
@@ -174,6 +176,43 @@ dessin est-il valide ? ». Seul le rendu de la page tranche.
 ⚠️ Un **refus** aurait cassé toute réécriture des ~14 procédures vivantes qui n'avaient
 pas de dessin — et le premier effet d'une garde bloquante aurait été qu'on cesse
 d'écrire des procédures.
+
+## Ce que l'agent lit : la consigne, pas la vitrine
+
+Une procédure est relue à chaque run, et tant qu'elle reste dans le contexte, chaque
+jeton lu est repayé à chaque tour. Mesuré le 10/09/2026 sur trois procédures d'une org
+cliente (≈100 000 caractères servis par run, ≈27 000 jetons) : le **dessin** pèse ~10 %
+de la lecture (3 304 caractères = 983 jetons Haiku — la prose fait 3,6 caractères par
+jeton, le tracé 3,4, donc c'est sa taille qui coûte, pas ses caractères), la
+**description** recopiée à côté du corps ~5 %. Ni l'un ni l'autre n'apprend rien à
+l'agent qui EXÉCUTE : le dessin est la vue de la page (un humain le regarde, les
+étapes disent le même flux en prose), la description est la ligne du catalogue (il l'a
+lue pour choisir).
+
+Sur la **face MCP seulement** (`ctx.channel == "mcp"` — la face REST nourrit la page,
+qui a besoin du dessin ; un appel interne sert tout), et **par défaut** (une économie
+qu'il faut demander ne bénéficie à personne) :
+
+- `op=get` sert le corps avec le dessin remplacé par **une ligne**, un marqueur
+  `<!-- flowchart: v<n>, <k> lines, … -->`, et sans `description`. `full=true` rend tout.
+- `op=list` sert un `summary` de 200 caractères (coupé au dernier espace) à la place de
+  `description`, sans `updated_at`. `verbose=true` rend la fiche entière.
+
+⚠️ **Le marqueur n'est pas un commentaire, c'est ce qui garde le dessin.** L'agent qui
+édite RELIT puis RÉÉCRIT (`op=get` → `op=set`) ; servi sans dessin et sans marqueur,
+chaque édition d'agent viderait la page du process — et personne ne le verrait avant
+de l'ouvrir. À l'écriture, `procedure_diagram.avec_le_dessin` remplace le marqueur par
+le dessin de la **version courante** ; un corps qui arrive avec un vrai dessin le garde ;
+un corps sans marqueur ni dessin est ce qu'il a toujours été (`diagram_warning`). Les
+corps **stockés** ne portent jamais le marqueur — il ne vit qu'entre les deux appels.
+Banc : `tests/test_procedure_servie_lean.py`, dont l'aller-retour à l'identique.
+
+Ce que ça ne fait **pas** : servir la procédure « par étape ». Découper la lecture en
+une lecture par étape échange la résidence (payée au tarif du cache) contre des tours
+supplémentaires (chacun relit tout le contexte) — mesuré sur ces trois procédures, le
+run y perd 10 à 20 %, et les règles transversales (le filtre sur la société, la liste
+blanche des champs, la borne de 255 caractères) vivent hors des étapes. La seule
+économie qui tienne est de servir MOINS, sur les blocs que la forme délimite.
 
 ## Renommer un outil = migrer les procédures
 
