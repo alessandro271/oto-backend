@@ -162,13 +162,24 @@ def get_guide_db(scope: str, owner_id: str, slug: str) -> Optional[dict]:
 
 
 def set_guide_db(scope: str, owner_id: str, slug: str, body_md: str,
-                 title: str = "", description: str = "") -> dict:
+                 title: str = "", description: str = "") -> Optional[dict]:
     """Crée ou met à jour (upsert par `(scope, owner_id, slug)`) un guide ON-DEMAND.
 
     La mise à jour ne touche QUE la prose — `delivery` n'est posé qu'à l'insertion,
     exactement comme la table `guides` ne le mettait pas à jour. `embed_dirty` suit
     la prose (#282) : écrire une couche la remet dans l'outbox sémantique, comme
-    `guides` le faisait par sa colonne."""
+    `guides` le faisait par sa colonne.
+
+    **Renvoie `None` quand la clé est déjà occupée par une couche `init`** — et rien
+    n'a alors été écrit. C'est le trou du 09/09/2026 : `public_id` dérive de
+    `(scope, owner, slug)` et IGNORE `delivery`, alors que toutes les lectures
+    filtrent dessus. Un `PUT …/guides/org/readme` on-demand tombait donc sur la MÊME
+    ligne que le readme injecté de l'org, en remplaçait le corps sans changer son
+    `delivery`, et rendait 200 : la prose reçue par toutes les sessions de l'org était
+    détruite, et le guide écrit restait introuvable à la lecture (qui, elle, exige
+    `delivery='on-demand'`). Le refus est porté par le `WHERE` de l'`ON CONFLICT` —
+    donc par l'instruction elle-même, pas par un pré-contrôle qu'une écriture
+    concurrente traverserait."""
     with _connect() as conn:
         previous_body = _body_before_write(conn, scope, owner_id, slug)
         row = conn.execute(
@@ -182,12 +193,15 @@ def set_guide_db(scope: str, owner_id: str, slug: str, body_md: str,
             "      'title', %s::text, 'description', %s::text, 'body_md', %s::text, "
             "      'embed_dirty', TRUE), "
             "  updated_at = NOW() "
+            "  WHERE nodes.props->>'delivery' = 'on-demand' "
             f"RETURNING {_COLS}",
             (scope, str(owner_id), slug,                       # public_id dérivé
              scope, str(owner_id),                             # owner_type, owner_id
              slug, title, description, body_md,                # props à l'insertion
              title, description, body_md),                     # prose à la mise à jour
         ).fetchone()
+        if row is None:                       # une couche `init` occupe la clé
+            return None
         _maintain_projections(conn, row, body_md if body_md != previous_body else None)
         return dict(row)
 
@@ -229,9 +243,18 @@ def get_init_guide_db(scope: str, owner_id: str, slug: str) -> Optional[dict]:
     return _get_one(scope, owner_id, slug, "init")
 
 
-def set_init_guide_db(scope: str, owner_id: str, slug: str, body_md: str) -> dict:
+def set_init_guide_db(scope: str, owner_id: str, slug: str,
+                      body_md: str) -> Optional[dict]:
     """Upsert d'un readme INIT (édition admin/org/user). Corps vide = readme effacé,
-    la ligne reste (comme les ex-tables)."""
+    la ligne reste (comme les ex-tables).
+
+    **Renvoie `None` quand la clé est déjà occupée par une couche `on-demand`** — rien
+    n'a alors été écrit. Symétrique de `set_guide_db` : la même clé dérivée sert les
+    deux livraisons, donc le sens qui n'a pas été signalé le 09/09 est tout aussi
+    ouvert. Il est plus étroit (les slugs d'init sont canoniques : `readme` pour
+    org/group/user, la clé du bloc pour la plateforme), mais un guide on-demand nommé
+    `readme` rendrait sinon le readme injecté de ce périmètre silencieusement
+    remplaçable par son écriture — et réciproquement."""
     with _connect() as conn:
         previous_body = _body_before_write(conn, scope, owner_id, slug)
         row = conn.execute(
@@ -242,10 +265,13 @@ def set_init_guide_db(scope: str, owner_id: str, slug: str, body_md: str) -> dic
             "ON CONFLICT ON CONSTRAINT nodes_public_id_key DO UPDATE SET "
             "  props = nodes.props || jsonb_build_object('body_md', %s::text), "
             "  updated_at = NOW() "
+            "  WHERE nodes.props->>'delivery' = 'init' "
             f"RETURNING {_COLS}",
             (scope, str(owner_id), slug, scope, str(owner_id),
              slug, body_md or "", body_md or ""),
         ).fetchone()
+        if row is None:                       # une couche `on-demand` occupe la clé
+            return None
         _maintain_projections(conn, row, (body_md or "") if body_md != previous_body else None)
         return dict(row)
 

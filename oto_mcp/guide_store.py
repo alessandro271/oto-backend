@@ -148,6 +148,13 @@ def set_init_guide(scope: str, owner_id: Optional[str], body_md: str) -> dict:
     from . import db
     owner, slug = _init_ref(scope, owner_id)
     row = db.set_init_guide_db(scope, owner, slug, body_md)
+    if row is None:
+        raise GuideDeliveryConflict(
+            f"`{slug}` (scope {scope}) porte déjà un guide À CHARGER (`delivery="
+            f"'on-demand'`), pas le readme injecté : écrire ici en remplacerait le "
+            f"corps — refusé, rien n'a été écrit. Lis-le avec "
+            f"`oto_guide(op='read', scope='{scope}', slug='{slug}')` ; s'il n'a plus "
+            f"lieu d'être, retire-le (`op='delete'`) avant d'écrire le readme.")
     return {"body_md": row.get("body_md") or "", "updated_at": row.get("updated_at")}
 
 
@@ -162,6 +169,14 @@ def seed_init_guide(scope: str, ident: Optional[str], body_md: str) -> None:
 
 class GuideError(ValueError):
     """Écriture de guide invalide (slug mal formé, scope non éditable…)."""
+
+
+class GuideDeliveryConflict(GuideError):
+    """La clé `(scope, owner, slug)` porte déjà une couche de l'AUTRE livraison.
+
+    Sous-classe de `GuideError` pour que les appelants qui rattrapaient déjà la
+    famille continuent de le faire ; les surfaces qui veulent lever le refus à part
+    (409 plutôt que 400) l'attrapent AVANT."""
 
 
 def _slug_ok(slug: str) -> bool:
@@ -233,6 +248,14 @@ def set_guide(scope: str, owner_id: str, slug: str, body_md: str,
     from . import db
     row = db.set_guide_db(scope, str(owner_id), slug, body_md.strip(),
                           (title or "").strip(), (description or "").strip())
+    if row is None:
+        raise GuideDeliveryConflict(
+            f"`{slug}` (scope {scope}) n'est pas un guide à charger : c'est le readme "
+            f"INJECTÉ de ce périmètre, concaténé au début de chaque session. Écrire "
+            f"ici en REMPLACERAIT le corps pour tout le monde, et le guide resterait "
+            f"introuvable à la lecture — refusé, rien n'a été écrit. Pour éditer ce "
+            f"readme : `oto_guide(op='write', scope='{scope}', delivery='init')`. "
+            f"Pour un guide à charger : choisis un autre slug que `{slug}`.")
     return {"slug": slug, "scope": scope, "title": row["title"],
             "description": row["description"]}
 

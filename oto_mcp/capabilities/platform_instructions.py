@@ -157,7 +157,14 @@ def _drift(ctx: ResolvedCtx, inp: _NoInput) -> dict:
 
 def _set(ctx: ResolvedCtx, inp: SetInput) -> dict:
     key = _require_key(inp.key)
-    guide_store.set_init_guide("platform", key, inp.body_md or "")
+    # ⚠️ Un bloc plateforme est un readme `delivery='init'` de scope `platform` : il
+    # partage sa clé dérivée avec une couche À CHARGER du même slug (09/09/2026).
+    # Aucune ne porte `secret_sauce` aujourd'hui, mais un refus prévu qui sort en
+    # 500 n'apprend rien à qui le rencontre — et c'est un platform_admin.
+    try:
+        guide_store.set_init_guide("platform", key, inp.body_md or "")
+    except guide_store.GuideDeliveryConflict as e:
+        raise AuthzDenied(409, "delivery_conflict", str(e))
     return _view(key)
 
 

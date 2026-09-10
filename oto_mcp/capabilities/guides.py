@@ -287,7 +287,11 @@ def _set(ctx: ResolvedCtx, inp: GuideSetInput) -> dict:
         # un guide on-demand vide n'aurait aucun sens (rien à charger).
         ident, slug = _init_ref(ctx, inp.scope, inp.slug, write=True,
                                 owner_id=inp.owner_id)
-        return _init_view(inp.scope, slug, guide_store.set_init_guide(inp.scope, ident, body))
+        try:
+            state = guide_store.set_init_guide(inp.scope, ident, body)
+        except guide_store.GuideDeliveryConflict as e:
+            raise AuthzDenied(409, "delivery_conflict", str(e))
+        return _init_view(inp.scope, slug, state)
     owner_id = _owner_for_write(ctx, inp.scope, inp.owner_id)
     if not inp.slug:
         raise AuthzDenied(400, "missing_slug", "`slug` requis pour un guide on-demand.")
@@ -296,6 +300,11 @@ def _set(ctx: ResolvedCtx, inp: GuideSetInput) -> dict:
     try:
         return guide_store.set_guide(inp.scope, owner_id, inp.slug, body,
                                      inp.title or "", inp.description or "")
+    # ⚠️ AVANT `GuideError`, dont c'est une sous-classe : sans cet ordre le conflit de
+    # livraison sortirait en 400 `invalid_guide` — « ta saisie est mal formée » — alors
+    # que la saisie est valide et que c'est l'ÉTAT en place qui refuse.
+    except guide_store.GuideDeliveryConflict as e:
+        raise AuthzDenied(409, "delivery_conflict", str(e))
     except guide_store.GuideError as e:
         raise AuthzDenied(400, "invalid_guide", str(e))
 
@@ -306,7 +315,14 @@ def _delete(ctx: ResolvedCtx, inp: GuideRefInput) -> dict:
         # omet déjà les couches vides).
         ident, slug = _init_ref(ctx, inp.scope, inp.slug, write=True,
                                 owner_id=inp.owner_id)
-        guide_store.set_init_guide(inp.scope, ident, "")
+        # ⚠️ Vider un readme, c'est l'ÉCRIRE vide : ce chemin passe par le même
+        # upsert que `_set`, donc il rencontre le même conflit de livraison. Sans
+        # cette branche il sortirait en 500 « erreur interne » — un refus prévu
+        # rendu comme une panne, et l'appelant n'a alors rien à faire de la réponse.
+        try:
+            guide_store.set_init_guide(inp.scope, ident, "")
+        except guide_store.GuideDeliveryConflict as e:
+            raise AuthzDenied(409, "delivery_conflict", str(e))
         return {"scope": inp.scope, "slug": slug, "delivery": "init", "deleted": True}
     owner_id = _owner_for_write(ctx, inp.scope, inp.owner_id)
     if not inp.slug:
@@ -386,7 +402,11 @@ CAPABILITIES += [
         key="me.guides.set", handler=_set, Input=GuideSetInput, authz=SUB_ONLY, mcp=None,
         Output=GuideView,
         errors=(DeclaredError(400, "body_too_large",
-                              "`body_md` dépasse 65 536 octets UTF-8"),),
+                              "`body_md` dépasse 65 536 octets UTF-8"),
+                DeclaredError(409, "delivery_conflict",
+                              "ce `(scope, slug)` porte déjà une couche de l'AUTRE "
+                              "livraison — un guide à charger ne remplace pas un "
+                              "readme injecté, ni l'inverse ; rien n'est écrit"),),
         description=(
             "Create/update a guide (scope=platform|org|group|user|tenant). "
             "`delivery='init'` writes that scope's injected readme (empty body clears it). "
@@ -404,6 +424,10 @@ CAPABILITIES += [
     Capability(
         key="me.guides.delete", handler=_delete, Input=GuideRefInput, authz=SUB_ONLY, mcp=None,
         Output=GuideDeleted,
+        errors=(DeclaredError(409, "delivery_conflict",
+                              "ce `(scope, slug)` porte une couche de l'AUTRE "
+                              "livraison — vider un readme injecté ne retire pas un "
+                              "guide à charger ; rien n'est écrit"),),
         description="Delete a guide (scope=platform|org|group|user).",
         rest=RestBinding("DELETE", "/api/me/guides/{scope}/{slug}"),
     ),
