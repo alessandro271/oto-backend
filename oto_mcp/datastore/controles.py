@@ -186,7 +186,8 @@ class ControlesMixin:
         return releve
 
     def _check_row(self, schema: Optional[dict], merged: dict, *,
-                   prev_status=None, written: Optional[set] = None) -> None:
+                   prev_status=None, written: Optional[set] = None,
+                   lot: bool = False) -> None:
         """Valide la row TELLE QU'ÉCRITE (résultat mergé). No-op si le schéma ne
         déclare ni strict/required/max_length ni lifecycle (défaut 0016 soft).
 
@@ -232,14 +233,39 @@ class ControlesMixin:
         # et passe ; sans déclaration, refus nommé — jamais une devinette, jamais
         # un silence. Posé ICI parce que ce seam voit TOUS les chemins d'écriture.
         if "id" in posed and not dsv2.declares_field(schema, "id"):
+            # ⚠️ **La conduite DÉPEND du mode, et c'est tout l'objet de #72.** Les deux
+            # gestes conseillés ci-dessous — reposer l'`_id` dans la ligne, ou passer
+            # `id=` — aboutissent sur une écriture UNITAIRE et échouent tous les deux
+            # sur un LOT : le premier tombe sur `_reject_misplaced_id(batch=True)`, le
+            # second sur le refus de dispatch « `rows` OU `row`/`id`, pas les deux ».
+            #
+            # Mesuré sur les comptes clients : 87 erreurs sur 132 (65,9 %) viennent de
+            # cette famille, dont 29 « `_id` dans une row du LOT » — et **22 d'entre
+            # elles (76 %) suivent IMMÉDIATEMENT le conseil du refus précédent**. Le
+            # défaut est donc auto-entretenu : notre propre texte produit le refus
+            # suivant, et l'agent paie deux allers-retours pour une seule ligne.
+            #
+            # Un refus qui nomme un geste qui échoue est pire qu'un refus muet : il
+            # est CRU, et il fait dépenser.
+            if lot:
+                conduite = (
+                    "Un LOT ne cible aucune ligne par son identifiant, sous aucune "
+                    "forme : sa seule cible est la clé métier (`key`). Ne repose donc "
+                    "PAS l'`_id` dans la ligne — il serait refusé lui aussi — et ne "
+                    "passe pas `id=`, qui est incompatible avec `rows`. Deux voies "
+                    "aboutissent : laisser la clé métier dédoublonner "
+                    "(`data_write(datastore=…, rows=[…], key=\"<colonne>\")`), ou "
+                    "sortir du lot pour cette ligne "
+                    "(`data_write(datastore=…, id=\"<_id>\", row={…})`).")
+            else:
+                conduite = ("Pour cibler une ligne : garde son `_id` tel que servi "
+                            "dans la ligne, ou passe le paramètre id=.")
             raise ValueError(
                 f"`id` ({posed['id']!r}) posé dans `row` sans être une colonne "
                 "déclarée du tableau : un identifiant de ligne ne s'écrit pas "
                 "comme une donnée — l'écriture viserait à côté (ligne fantôme). "
-                "Pour cibler une ligne : garde son `_id` tel que servi dans la "
-                "ligne, ou passe le paramètre id=. Si `id` est une vraie colonne "
-                "de TES données, déclare-la au schéma (data_set_schema) puis "
-                "réécris.")
+                f"{conduite} Si `id` est une vraie colonne de TES données, "
+                "déclare-la au schéma (data_set_schema) puis réécris.")
         # #614/#678 : le TROISIÈME état de `strict` au premier niveau — refuser la
         # colonne non déclarée, opt-in table par table (`unknown_fields: "reject"`).
         #

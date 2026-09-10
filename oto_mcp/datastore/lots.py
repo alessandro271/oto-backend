@@ -150,7 +150,10 @@ class LotsMixin:
                 # car l'appelant peut avoir écrit `origine` lui-même (chemin déclaré).
                 if donnees_d_origine:
                     poser_les_deux_versions(user_data, schema=schema)
-                self._check_row(schema, user_data)
+                # `lot=True` : le refus de l'`id` nu doit nommer un geste qui
+                # ABOUTIT en mode lot — cf. #72, 22 cas sur 29 suivaient le conseil
+                # du refus précédent, lequel échouait ici.
+                self._check_row(schema, user_data, lot=True)
                 try:
                     row = db.datastore_insert_row(ns_id, _new_id(), user_data)
                 except UniqueViolation:
