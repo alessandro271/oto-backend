@@ -151,18 +151,16 @@ def get_instruction(owner_type: str, owner_id: int | str, slug: str,
     ⚠️ Une version archivée vient de la table des RÉVISIONS, qui ne porte ni `id` ni
     `updated_at` : la forme rendue est plus petite.
 
-    ⚠️ **`archived_at` est rendu sur la version COURANTE** (#857, 10/09/2026). Il ne
-    l'était pas, et c'est ce qui a fabriqué le cas : cette lecture n'a aucun filtre
-    sur l'archivage — elle sert donc une procédure retirée exactement comme une
-    procédure en service — pendant que les trois lectures de liste l'excluent. Une
-    procédure pouvait ainsi se charger par son slug tout en étant absente de toutes
-    les listes, et rien dans la réponse ne disait pourquoi.
-    Mesuré en production : 3 archivées sur 238, dont **deux réécrites après coup**
-    par des clients qui les croyaient en service.
-    La table des révisions, elle, ne porte pas la colonne : une VERSION n'est pas
-    archivée, c'est la procédure qui l'est. Lire `archived_at` sur une version
-    précise rendrait donc `None` et ferait croire « en service » — la clé est
-    simplement absente de cette forme, ce que la phrase ci-dessus annonce déjà."""
+    ⚠️ **`archived_at` est rendu sur la version COURANTE** (#857). Il ne l'était pas,
+    et c'est ce qui a fabriqué le cas : cette lecture n'a AUCUN filtre sur
+    l'archivage — elle sert une procédure retirée comme une procédure en service —
+    pendant que les trois lectures de liste l'excluent. Une procédure pouvait donc
+    se charger par son slug en étant absente de toutes les listes, sans que rien ne
+    dise pourquoi. Mesuré : 3 archivées sur 238, dont deux réécrites après coup par
+    des clients qui les croyaient en service. La table des révisions ne porte pas la
+    colonne — une VERSION n'est pas archivée, la procédure l'est — donc la clé est
+    absente de cette forme plutôt que rendue `None`, qui ferait croire « en
+    service »."""
     otype, oid = _owner(owner_type, owner_id)
     slug = normalize_slug(slug)
     with _connect() as conn:
@@ -443,94 +441,3 @@ def list_instruction_versions(owner_type: str, owner_id: int | str, slug: str) -
             (otype, oid, slug),
         ).fetchall()
         return [dict(r) for r in rows]
-
-
-def archive_instruction(owner_type: str, owner_id: int | str, slug: str) -> bool:
-    """Archive une procédure (soft-delete) : elle sort de tous les listings, la
-    ligne et ses révisions restent. False si elle n'existait pas.
-
-    Idempotent en pratique — ré-archiver rafraîchit l'horodatage plutôt que
-    d'échouer, le résultat visé (« elle n'est plus en service ») étant déjà
-    atteint. Pas de désarchivage sur cette surface : même choix que
-    `db/projects.archive_project`, dont l'inverse n'existe pas non plus côté
-    app. Ce qu'archiver garantit ici, c'est que RIEN n'est détruit — contrairement
-    à `delete_instruction` juste en dessous, qui emporte l'historique."""
-    otype, oid = _owner(owner_type, owner_id)
-    slug = normalize_slug(slug)
-    with _connect() as conn:
-        cur = conn.execute(
-            "UPDATE org_instructions SET archived_at = NOW(), updated_at = NOW() "
-            f"WHERE {_OWNER_WHERE} AND slug = %s", (otype, oid, slug)
-        )
-        return (cur.rowcount or 0) > 0
-
-
-def unarchive_instruction(owner_type: str, owner_id: int | str,
-                          slug: str) -> Optional[str]:
-    """Remet une instruction EN SERVICE. Rend la date d'archivage qu'elle portait,
-    ou `None` si elle n'était pas archivée (ou n'existe pas).
-
-    ⚠️ **L'inverse de `archive_instruction` n'existait pas, et c'était un choix
-    ASSUMÉ** — par parité avec les projets, dont l'archivage n'a pas d'inverse non
-    plus. La parité se rompt ici, pour les procédures seules, sur décision d'Alexis
-    du 10/09/2026 et en connaissance de cause. Les projets gardent le même trou et
-    sont instruits à part : lire cette fonction comme une incohérence serait
-    ignorer qu'elle en est une, voulue.
-
-    **Ce que la mesure a montré et qui a emporté la décision** : 3 procédures
-    archivées sur 238 en production, dont **deux réécrites après coup** par des
-    clients qui les croyaient en service. Sans désarchivage, refuser ces écritures
-    aurait enfermé ces clients — plus d'édition, pas de remise en service, et la
-    suppression pour seule sortie, c'est-à-dire la destruction de l'historique que
-    l'archivage existe justement pour préserver.
-
-    ⚠️ **Rend la date d'AVANT, pas un booléen** : l'appelant doit pouvoir tracer ce
-    qu'il vient de défaire. Un geste qui ressuscite une ligne que quelqu'un a
-    retirée exprès doit laisser savoir QUAND elle avait été retirée — sinon le
-    journal dit qu'on a agi, pas ce qu'on a annulé. `None` distingue « rien à
-    défaire » de « défait » sans lever : remettre en service une procédure déjà en
-    service est un non-geste, pas une faute.
-    """
-    otype, oid = _owner(owner_type, owner_id)
-    slug = normalize_slug(slug)
-    with _connect() as conn:
-        # ⚠️ **`RETURNING archived_at` rendrait la valeur NEUVE, donc NULL** — on
-        # effacerait précisément ce qu'on veut tracer, et la fonction annoncerait
-        # « rien à défaire » chaque fois qu'elle vient de défaire quelque chose.
-        # La date d'avant est donc lue par une CTE, dans la MÊME instruction : ni
-        # relecture préalable (une autre session l'aurait changée entre-temps), ni
-        # relecture après coup (elle n'existe plus).
-        # La jointure se fait sur la clé NATURELLE `(owner_type, owner_id, slug)`,
-        # pas sur un identifiant de ligne : c'est elle qui désigne une instruction
-        # partout ailleurs dans ce module, et une CTE adossée à une colonne
-        # technique dépendrait d'un détail de schéma que rien d'autre ici n'utilise.
-        row = conn.execute(
-            "WITH avant AS ("
-            "  SELECT owner_type, owner_id, slug, archived_at FROM org_instructions "
-            f"  WHERE {_OWNER_WHERE} AND slug = %s AND archived_at IS NOT NULL"
-            ") "
-            "UPDATE org_instructions o SET archived_at = NULL, updated_at = NOW() "
-            "FROM avant a WHERE o.owner_type = a.owner_type "
-            "  AND o.owner_id = a.owner_id AND o.slug = a.slug "
-            "RETURNING a.archived_at AS avant",
-            (otype, oid, slug),
-        ).fetchone()
-        return None if row is None else row["avant"]
-
-
-def delete_instruction(owner_type: str, owner_id: int | str, slug: str) -> bool:
-    """Supprime une instruction ET son historique. False si elle n'existait pas."""
-    otype, oid = _owner(owner_type, owner_id)
-    slug = normalize_slug(slug)
-    with _connect() as conn:
-        with conn.transaction():
-            cur = conn.execute(
-                f"DELETE FROM org_instructions WHERE {_OWNER_WHERE} AND slug = %s",
-                (otype, oid, slug),
-            )
-            removed = (cur.rowcount or 0) > 0
-            conn.execute(
-                f"DELETE FROM org_instruction_revisions WHERE {_OWNER_WHERE} AND slug = %s",
-                (otype, oid, slug),
-            )
-    return removed

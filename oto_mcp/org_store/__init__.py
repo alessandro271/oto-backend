@@ -61,6 +61,7 @@ from types import ModuleType as _ModuleType
 from . import (  # noqa: F401  (ré-exportés en masse ci-dessous)
     instruction_ownership,
     instructions,
+    instructions_cycle,
     invitations,
     library,
     members,
@@ -75,7 +76,7 @@ from . import (  # noqa: F401  (ré-exportés en masse ci-dessous)
 _OWNERS: dict = {}
 _g = globals()
 for _mod in (orgs, members, vault, settings, personal, invitations, instructions,
-             instruction_ownership, library):
+             instructions_cycle, instruction_ownership, library):
     for _name in dir(_mod):
         if not _name.startswith("__"):
             _g[_name] = getattr(_mod, _name)
