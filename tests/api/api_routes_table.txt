@@ -311,6 +311,8 @@ DELETE /api/me/instructions/{slug} -> _handler
 OPTIONS /api/me/instructions/{slug} -> options_handler
 POST /api/me/instructions/{slug}/archive -> _handler
 OPTIONS /api/me/instructions/{slug}/archive -> options_handler
+POST /api/me/instructions/{slug}/unarchive -> _handler
+OPTIONS /api/me/instructions/{slug}/unarchive -> options_handler
 POST /api/me/instructions/{slug}/revert -> _handler
 OPTIONS /api/me/instructions/{slug}/revert -> options_handler
 GET,HEAD /api/admin/orgs/{id}/instructions/{slug} -> _handler
