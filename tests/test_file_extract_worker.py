@@ -137,22 +137,31 @@ def test_an_empty_queue_is_a_cheap_no_op(monkeypatch):
 
 # ── la boucle est bien séparée de l'indexation sémantique ────────────────────
 
-def test_the_loop_is_registered_independently_of_the_embed_worker():
+def test_the_loop_is_registered_independently_of_the_embed_worker(monkeypatch):
     """⚠️ L'invariant qui motive tout ce module. `embed_worker.run_embed_loop` sort
     d'emblée sans `MISTRAL_API_KEY` ; l'extraction, elle, ne dépend d'aucun service
     tiers. Les deux boucles doivent donc être montées séparément — sinon un
     déploiement sans clé perd la recherche de fichiers en silence.
 
-    On le vérifie sur le SOURCE du montage plutôt que sur un booléen : c'est là que
-    le couplage se réintroduirait, et un futur « factorisons les deux boucles » doit
-    faire rougir quelque chose."""
-    from pathlib import Path
-    src = Path(w.__file__).with_name("server.py").read_text()
+    On le vérifie sur la COMPOSITION (`boucles_de_fond`, où le montage vit depuis le
+    10/09/2026) plutôt que sur un texte : chaque boucle y a son entrée et son
+    interrupteur, et éteindre l'une ne doit pas éteindre l'autre. Un futur
+    « factorisons les deux boucles » doit faire rougir quelque chose."""
+    from oto_mcp import boucles_de_fond, embed_worker
 
-    assert "file_extract_worker.run_extract_loop" in src
-    # Les deux appends existent et sont distincts.
-    assert "embed_worker.run_embed_loop" in src
-    assert "OTO_FILE_EXTRACT_WORKER_ENABLED" in src, (
+    monkeypatch.setenv("OTO_MCP_PUBLIC_URL", "https://mcp.oto.cx")
+    monkeypatch.delenv("OTO_SENTRY_ENV", raising=False)
+    monkeypatch.delenv("OTO_FILE_EXTRACT_WORKER_ENABLED", raising=False)
+    monkeypatch.setenv("OTO_EMBED_WORKER_ENABLED", "0")
+    composees = boucles_de_fond.composer()
+    assert w.run_extract_loop in composees
+    assert embed_worker.run_embed_loop not in composees
+
+    monkeypatch.setenv("OTO_EMBED_WORKER_ENABLED", "1")
+    monkeypatch.setenv("OTO_FILE_EXTRACT_WORKER_ENABLED", "0")
+    composees = boucles_de_fond.composer()
+    assert embed_worker.run_embed_loop in composees
+    assert w.run_extract_loop not in composees, (
         "la boucle doit avoir SON opt-out, pas partager celui de l'embedding")
 
 

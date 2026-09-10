@@ -67,6 +67,49 @@ def origine_du_process() -> Optional[str]:
     return PROD if host == f"mcp.{_PROD_PROJECT_DOMAIN}" else PREPROD
 
 
+class EnvironnementAmbigu(RuntimeError):
+    """Ce process ne sait pas s'il est la production, alors qu'il doit le savoir."""
+
+
+def est_la_production() -> bool:
+    """**Ce process est-il LA production ?** Oui ou non, jamais « probablement » : lève
+    `EnvironnementAmbigu` plutôt que de deviner.
+
+    Une question en dépend, et elle engage de l'argent : qui draine vers un TIERS
+    (prélèvement, email) le travail en attente dans la base PARTAGÉE
+    (`boucles_de_fond`). Deux erreurs possibles, deux coûts. Une préprod prise pour la
+    prod prélève et écrit à des clients avec son code et ses clés. Une prod prise pour
+    la préprod cesse de prélever sans que rien n'échoue. Aucune des deux ne se rattrape
+    par une valeur par défaut.
+
+    Deux déclarations déjà posées, qui doivent CONCORDER :
+    - `origine_du_process()`, dérivée de `OTO_MCP_PUBLIC_URL` : prod SEULEMENT si l'hôte
+      est exactement `mcp.oto.cx` ;
+    - `OTO_SENTRY_ENV` quand il est posé (`production` en prod, `canari` en préprod,
+      relevés le 10/09/2026). Absent, il ne vote pas : son défaut côté Sentry
+      (`production`) n'est pas une déclaration.
+
+    Une URL sans hôte, ou deux déclarations qui se contredisent, lèvent. Le cas visé :
+    un renommage de domaine qui changerait l'une sans l'autre. La prod refuse alors de
+    démarrer (le bleu/vert garde l'ancienne couleur) au lieu de cesser de prélever en
+    silence.
+    """
+    origine = origine_du_process()
+    if origine is None:
+        raise EnvironnementAmbigu(
+            "impossible de dire si ce process est la production : OTO_MCP_PUBLIC_URL "
+            f"est absente ou sans hôte ({os.environ.get('OTO_MCP_PUBLIC_URL')!r}). "
+            "Pose-la (https://mcp.oto.cx en production), ou éteins les boucles qui "
+            "agissent sur un tiers (OTO_SCHEDULER_ENABLED=0, OTO_BILLING_RUNNER_ENABLED=0).")
+    sentry = os.environ.get("OTO_SENTRY_ENV", "").strip().lower()
+    if sentry and (sentry == "production") != (origine == PROD):
+        raise EnvironnementAmbigu(
+            f"OTO_MCP_PUBLIC_URL désigne {origine!r} mais OTO_SENTRY_ENV vaut {sentry!r} : "
+            "les deux déclarations de l'environnement se contredisent. Corrige celle qui "
+            "ment, ce process ne choisit pas entre elles.")
+    return origine == PROD
+
+
 def mcp_audience_alts() -> frozenset[str]:
     """Audiences MCP canoniques SECONDAIRES (coexistence multi-domaine, ex.
     `https://mcp.oto.cx/mcp` en plus de `MCP_AUDIENCE`=`https://mcp.oto.ninja/mcp`).

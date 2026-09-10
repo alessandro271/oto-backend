@@ -168,7 +168,7 @@ propre niveau** — une borne posée au plus profond ne borne rien si les envelo
 **Box Scaleway dédiée** (ADR 0002) : oto-backend isolé + Caddy ; DB = PG managé partagé (`otomata-main`, DB `oto_mcp`) ;
 coffre `connector_credentials` chiffré au repos (AES-256-GCM, master key en Secret Manager au boot) ; S3 pour
 avatars/logos · ⚠️ **PROD et PREPROD partagent la MÊME base** : ce qu'on écrit depuis la preprod est la donnée de prod
-(`docs/live-migrations.md`) · **détails machine et procédure de déploiement = repo privé `otomata-tech/infra`**, pas ici
+(`docs/live-migrations.md`), et seule la prod fait tourner les boucles de fond qui agissent sur un tiers (`boucles_de_fond.py`) · **détails machine et procédure de déploiement = repo privé `otomata-tech/infra`**, pas ici
 (ce repo est public) ; intervention prod = skill `prod-init`.
 
 ## Docs

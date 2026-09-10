@@ -9,6 +9,11 @@ au boot canari s'applique instantanément à la prod — qui tourne encore l'ANC
 Toute migration destructive se découpe donc en **lots promus séparément**, chaque lot ne
 détruisant que ce que le code prod COURANT ne référence plus.
 
+**Le même fait vaut pour les boucles de fond** : une boucle qui tourne en préprod draine
+le travail de la prod. Celles qui agissent sur un tiers (prélèvement, email) ne sont
+composées qu'en production (`boucles_de_fond.py`), et un process qui ne sait pas s'il est
+la production refuse de démarrer (`config.est_la_production`).
+
 ## La danse en N lots
 
 1. **Lot A (additif)** — nouvelles colonnes/tables + backfill + le code bascule dessus.

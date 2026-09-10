@@ -71,9 +71,12 @@ champ transport sur l'expéditeur).
   `orgs_email_settings` : GET bundle + `PUT /api/orgs/{id}/email-settings/{connector}`.
 - **Envoi différé** : params `send_at`/`force_now` + garde-fou **quiet hours par
   connecteur** (défaut Europe/Paris 20h–8h). `scheduler.py` : `compute_scheduled_at`
-  (pure, testée) + boucle asyncio démarrée via le lifespan (`server.py`), batch isolé
+  (pure, testée) + boucle asyncio démarrée via le lifespan, **en production seulement**
+  (`boucles_de_fond.py` : la préprod partage la file et n'y touche pas), batch isolé
   en `asyncio.to_thread` (ne bloque pas l'event loop) ; table `scheduled_emails`
-  (claim `FOR UPDATE SKIP LOCKED`, retry ×3). Gestion : `oto_list/cancel_scheduled_emails`.
+  (claim `FOR UPDATE SKIP LOCKED`, retry ×3 — ⚠️ le claim incrémente `attempts` sans changer
+  le statut : deux schedulers concurrents peuvent envoyer deux fois le même message, d'où un
+  seul environnement sur la file). Gestion : `oto_list/cancel_scheduled_emails`.
 - **Vérif de domaine d'envoi = déléguée au provider** (les deux connecteurs sont
   BYO) : Scaleway TEM comme Resend refusent un `from` hors domaine vérifié dans le
   compte de l'org → pas de vérif côté oto (#64 sans objet depuis le passage BYO).

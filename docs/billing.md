@@ -842,7 +842,12 @@ pont), `capabilities/me_legal.py` (l'acceptation, REST-only),
 `billing_runner.py` (échéances, dunning, sweeps, reprises — **le balayage des
 factures y est le dernier geste du tick**). La surface entière est gatée par
 `OTO_BILLING_ENABLED=1` (dark launch ADR 0043) et la boucle de fond par
-`OTO_BILLING_RUNNER_ENABLED` (défaut : allumée dès que le billing l'est). Les deux
+`OTO_BILLING_RUNNER_ENABLED` (défaut : allumée dès que le billing l'est) — **et en
+production seulement** : la préprod partage la base et porte la clé Mollie de TEST, elle
+ne compose pas la boucle quel que soit l'interrupteur (`boucles_de_fond.py`, 10/09/2026 :
+tirée par la préprod, une échéance live échouait et la relance repoussait le vrai
+prélèvement de trois jours). ⚠️ Reste ouvert : deux processus de PRODUCTION à la fois
+(recouvrement bleu/vert) — `due_subscriptions` n'a pas de claim. Les deux
 clés fournisseur — `MOLLIE_API_KEY` (le PSP) et `OTO_PENNYLANE_API_KEY` (la compta
 d'Otomata) — viennent de l'**env du process** (Scaleway Secret Manager au boot),
 jamais de SOPS ni du coffre.

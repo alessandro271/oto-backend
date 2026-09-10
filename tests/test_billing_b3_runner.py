@@ -248,11 +248,16 @@ def test_tick_sweeps_and_counts(monkeypatch):
     assert billing_runner.tick() == {"closed": 3}
 
 
-def test_runner_loop_registered_at_boot():
-    # le lifespan du serveur embarque la boucle (gatée OTO_BILLING_RUNNER_ENABLED)
-    import inspect
-    from oto_mcp import server
+def test_runner_loop_registered_at_boot(monkeypatch):
+    # La boucle est composée au boot (`boucles_de_fond`), gatée par
+    # OTO_BILLING_RUNNER_ENABLED, et EN PRODUCTION SEULEMENT : la préprod partage la
+    # base et porte la clé Mollie de test (cf. tests/test_boucles_de_fond.py).
+    from oto_mcp import boucles_de_fond
 
-    src = inspect.getsource(server.main)
-    assert "billing_runner.run_billing_loop" in src
-    assert "OTO_BILLING_RUNNER_ENABLED" in src
+    monkeypatch.setenv("OTO_MCP_PUBLIC_URL", "https://mcp.oto.cx")
+    monkeypatch.delenv("OTO_SENTRY_ENV", raising=False)
+    monkeypatch.setenv("OTO_BILLING_ENABLED", "1")
+    monkeypatch.delenv("OTO_BILLING_RUNNER_ENABLED", raising=False)
+    assert billing_runner.run_billing_loop in boucles_de_fond.composer()
+    monkeypatch.setenv("OTO_BILLING_RUNNER_ENABLED", "0")
+    assert billing_runner.run_billing_loop not in boucles_de_fond.composer()

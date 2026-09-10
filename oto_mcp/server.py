@@ -885,6 +885,15 @@ def main():
     # le cas-limite sub=None disparaît. L'usage local passe par la CLI `oto`.
     transport = os.environ.get("MCP_TRANSPORT", "streamable_http")
 
+    # Les boucles de fond, composées AVANT de préparer la base : un process qui ne sait
+    # pas s'il est la production refuse de démarrer ICI, sans avoir rien écrit (plus
+    # loin, un démarrage avorté a déjà joué init_db et les backfills). Hors production,
+    # les boucles qui agissent sur un tiers (prélèvement, email) ne sont pas composées :
+    # la base est partagée. Cf. `boucles_de_fond`.
+    from . import boucles_de_fond
+    _bg_loops = (boucles_de_fond.composer()
+                 if transport in ("http", "streamable_http") else [])
+
     # Le schéma et les backfills, UNE fois par process. Cet appel vivait dans
     # `_build_mcp`, donc à l'import du module ; il est ici parce que préparer une
     # base est un geste de DÉMARRAGE, et que `main` est le seul endroit qui
@@ -969,49 +978,9 @@ def main():
         # (y compris ViewAs/Subdomain). Pass-through total hors /api/* (n'altère pas /mcp).
         app.add_middleware(api_routes.RestCallLogger)
 
-        # Boucles de fond démarrées au boot en composant le lifespan FastMCP existant
-        # (mono-process → une boucle par tâche). Chacune isolée en thread (ne bloque
-        # pas l'event loop). Opt-out par env : OTO_SCHEDULER_ENABLED (email différé).
-        # (L'index BOAMP/ACCO est passé au service FOD — ADR 0028 B2b — qui porte
-        # désormais l'ingest ; plus de refresh in-process backend.)
-        _bg_loops = []
-        if os.environ.get("OTO_SCHEDULER_ENABLED", "1") != "0":
-            from . import scheduler
-            _bg_loops.append(scheduler.run_scheduler_loop)
-        # Indexation sémantique (lot 3) : draine l'outbox embed_dirty hors event loop.
-        # No-op sans MISTRAL_API_KEY (la recherche reste lexicale).
-        if os.environ.get("OTO_EMBED_WORKER_ENABLED", "1") != "0":
-            from . import embed_worker
-            _bg_loops.append(embed_worker.run_embed_loop)
-        # Extraction du texte des fichiers déposés (#298) : les rend cherchables par
-        # ce qu'ils CONTIENNENT. Boucle SÉPARÉE de l'indexation sémantique, et pas par
-        # goût du découpage — `run_embed_loop` sort d'emblée sans MISTRAL_API_KEY, or
-        # l'extraction ne dépend d'aucun service tiers. L'y greffer la rendrait muette
-        # sur un déploiement sans clé, sous le symptôme « la recherche de fichiers ne
-        # trouve rien », sans erreur nulle part. Les domaines de panne restent donc
-        # disjoints : un échec Mistral n'arrête pas l'extraction, ni l'inverse.
-        if os.environ.get("OTO_FILE_EXTRACT_WORKER_ENABLED", "1") != "0":
-            from . import file_extract_worker
-            _bg_loops.append(file_extract_worker.run_extract_loop)
-        # Vecteurs de classement (#318) : remplit par tranches, puis RÉCONCILIE (elle
-        # ne s'arrête pas). Hors du boot par nécessité — la variante auto-remplissante
-        # tenait `datastore_rows` 7,55 s sous verrou exclusif, en pleine production.
-        if os.environ.get("OTO_RANK_BACKFILL_ENABLED", "1") != "0":
-            from . import rank_backfill_worker
-            _bg_loops.append(rank_backfill_worker.run_rank_backfill_loop)
-        # Le tick des déclencheurs du runner (chantier R3) : une horloge qui ENFILE
-        # des jobs à l'échéance — jamais d'exécution (le worker externe claime).
-        # Concurrent-sûr par CAS sur next_due : prod et preprod partagent la base,
-        # deux ticks tournent, un seul gagne chaque échéance.
-        from . import runner_tick
-        if runner_tick.enabled():
-            _bg_loops.append(runner_tick.run_runner_tick_loop)
-        from . import billing as _billing
-        if _billing.is_enabled() and os.environ.get("OTO_BILLING_RUNNER_ENABLED", "1") != "0":
-            # échéances d'abonnement + réconciliation (ADR 0043) — gaté sur le
-            # feature flag billing (dormant en prod) + no-op sans MOLLIE_API_KEY.
-            from . import billing_runner
-            _bg_loops.append(billing_runner.run_billing_loop)
+        # Boucles de fond (composées en tête de `main`, cf. `boucles_de_fond`) :
+        # démarrées au boot en composant le lifespan FastMCP existant (mono-process →
+        # une tâche par boucle, chacune isolée en thread).
         import contextlib
         _prev_lifespan = app.router.lifespan_context
 
