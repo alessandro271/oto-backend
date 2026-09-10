@@ -147,7 +147,8 @@ def _connect() -> Iterator[psycopg.Connection]:
 
 @contextmanager
 def _connect_autocommit(*, bornee: bool = True) -> Iterator[psycopg.Connection]:
-    """Connexion HORS pool, en autocommit — pour le seul DDL qui l'exige.
+    """Connexion HORS pool, en autocommit — pour le DDL qui l'exige, et pour tenir un
+    verrou de session.
 
     `CREATE INDEX CONCURRENTLY` est REFUSÉ dans un bloc transactionnel (« cannot run
     inside a transaction block », vérifié), et le pool en ouvre un. Or c'est
@@ -165,7 +166,13 @@ def _connect_autocommit(*, bornee: bool = True) -> Iterator[psycopg.Connection]:
 
     `bornee=False` pour un travail de FOND (timer de maintenance, migration de boot) :
     là, attendre ne dessert personne, et une borne ne ferait que garantir qu'un index
-    sur une table très occupée ne se pose jamais."""
+    sur une table très occupée ne se pose jamais.
+
+    Second usage, lui aussi strictement local : TENIR un verrou consultatif de session
+    le temps d'un appel réseau (`billing_reservation`, 10/09/2026). Sur une connexion du
+    pool, la transaction ouverte serait coupée par `idle_in_transaction_session_timeout`
+    en plein appel, et un verrou de session oublié survivrait au retour de la connexion
+    dans le pool ; ici, la fermeture de la connexion le rend."""
     options = _ddl_options() if bornee else _connect_options()
     with psycopg.connect(_database_url(), options=options,
                          row_factory=_str_dict_row, autocommit=True) as conn:

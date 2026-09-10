@@ -4,9 +4,13 @@ Le miroir local fait foi : cette boucle de fond (lifespan, même famille que
 scheduler.py) fait tout le cycle à intervalle horaire :
 
 1. **Échéances dues** (`due_subscriptions`) : rejoue un paiement MIT
-   (`sequenceType=recurring`) sur `customerId`+`mandateId`. `Idempotency-Key`
-   DÉTERMINISTE `org<id>-<période>-a<tentative>` → un tick concurrent/rejoué
-   renvoie le MÊME paiement Mollie (HTTP 200), jamais un double débit.
+   (`sequenceType=recurring`) sur `customerId`+`mandateId`. Chaque échéance est
+   d'abord RÉSERVÉE en base puis relue (`db/billing_reservation.py`) : deux processus
+   de production à la fois — bascule bleu/vert, ancienne unité relancée — n'en tirent
+   qu'un. `Idempotency-Key` DÉRIVÉE DE LA LIGNE, `org<id>-<période>-d<instant dû>`
+   (`_cle_echeance`) : c'est le filet si la réservation manque, tout processus qui tire
+   la même tentative envoie la même clé et Mollie rend le MÊME paiement pendant une
+   heure.
    Le montant prélevé est le **TTC** (#486), calculé par le MÊME seam que la
    souscription (`billing.tax_for_org`) sur l'identité de facturation de l'org à
    l'instant du prélèvement. Une identité qui ne permet plus de calculer la TVA
@@ -60,10 +64,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 
 from . import billing, mollie_client
 from .db import billing as db_billing
+from .db import billing_reservation
 
 log = logging.getLogger("oto_mcp.billing_runner")
 
@@ -124,14 +130,80 @@ def _block(org_id: int, code: str, detail: str, now: datetime) -> str:
     return f"blocked:{code}"
 
 
+def _cle_echeance(sub_row: dict, period_ref: str) -> str:
+    """La clé d'idempotence d'UNE tentative d'échéance : `org<id>-<période>-d<instant dû>`.
+
+    Dérivée de la LIGNE, donc la même pour tout processus qui tire la même tentative ;
+    et neuve à chaque décision du runner, puisque chacune déplace `next_billing_at`
+    (encaissée : période suivante ; refusée : relance à J+3).
+
+    ⚠️ Jusqu'au 10/09/2026 elle portait le numéro de tentative, compté sur le journal
+    (`a<n>`). Ce compte voyait la ligne `processing` d'un processus concurrent : le
+    second prenait `a2`, une autre clé, et Mollie acceptait un second débit. Elle est le
+    filet si la réservation manque, et ce filet a une maille : Mollie oublie une clé au
+    bout d'une heure (docs.mollie.com, « Idempotency »).
+
+    L'instant se lit tel que la ligne le porte : chaîne normalisée par le row factory
+    (`YYYY-MM-DD HH:MM:SS`) en production, `datetime` dans un test — mêmes chiffres."""
+    du = sub_row.get("next_billing_at")
+    if du is None:
+        raise RuntimeError(f"échéance de l'org {sub_row['org_id']} sans instant dû "
+                           "(`next_billing_at` vide) : pas de clé stable, rien n'est tiré")
+    if isinstance(du, datetime):
+        du = (du.astimezone(timezone.utc) if du.tzinfo else du).strftime(
+            "%Y-%m-%d %H:%M:%S")
+    return f"org{sub_row['org_id']}-{period_ref}-d{re.sub(r'[^0-9]', '', str(du))[:14]}"
+
+
+def _doublon(org_id: int, row_id: int, pourquoi: str) -> str:
+    """Le filet a joué : un AUTRE processus tire cette échéance, avec la même clé.
+
+    Ça n'arrive que si la réservation a manqué (connexion du verrou perdue en plein
+    appel, ou un code sans réservation qui tourne encore pendant une bascule). Mollie
+    n'a rien débité de plus : soit la requête jumelle est en cours (409), soit il a
+    rendu le paiement qu'elle a créé. On ne touche donc NI au cycle NI à l'impayé, c'est
+    l'autre tentative qui en décide — surtout pas `failed` + relance à J+3 : écrite
+    après l'encaissement de l'autre, cette relance ramènerait l'échéance SUIVANTE trois
+    jours plus tard, un mois prélevé d'avance. La ligne de cette tentative-ci se ferme
+    `canceled`, puisqu'aucun paiement ne lui correspond ; ERROR, parce qu'une
+    réservation a manqué et que ça doit se voir."""
+    db_billing.update_billing_payment(row_id, status="canceled")
+    log.error("billing_runner: org %s — échéance tirée en double (%s) : aucun débit de "
+              "plus, cycle laissé à l'autre tentative. La réservation a manqué.",
+              org_id, pourquoi)
+    return "busy"
+
+
 def _charge_one(sub_row: dict, now: datetime) -> str:
     """Tire l'échéance d'UN abonnement. Retourne l'issue (log/test) :
-    'renewed' | 'retry' | 'past_due' | 'skipped' | 'blocked:<code>'."""
-    org_id = sub_row["org_id"]
+    'renewed' | 'retry' | 'past_due' | 'skipped' | 'blocked:<code>' | 'busy'.
+
+    ⚠️ **Rien ne part vers le prestataire sans RÉSERVATION** (10/09/2026). `sub_row`
+    vient de `due_subscriptions`, un SELECT sans verrou : pendant une bascule bleu/vert,
+    ou si l'ancienne unité simple revient, deux processus de production lisaient la même
+    échéance. Le second comptait déjà la ligne `processing` du premier, prenait la
+    tentative `a2`, donc une autre clé d'idempotence — et Mollie acceptait un second
+    débit réel. `billing_reservation` relit l'échéance sous verrou, et c'est la ligne
+    RELUE qui est tirée. `busy` = un autre processus la tient, ou elle n'est plus due une
+    fois réservée.
+    """
     if sub_row.get("provider") == "comp":
         # abonnement FORCÉ par un admin (non payé) — jamais de débit. Ceinture
         # + bretelles : due_subscriptions l'exclut déjà (next_billing_at NULL).
         return "skipped"
+    with billing_reservation.reserver_echeance(sub_row) as relue:
+        if relue is None:
+            log.info("billing_runner: org %s — échéance tenue par un autre processus, "
+                     "ou plus due une fois réservée : rien n'est tiré", sub_row["org_id"])
+            return "busy"
+        return _tirer(relue, now)
+
+
+def _tirer(sub_row: dict, now: datetime) -> str:
+    """Le prélèvement d'une échéance RÉSERVÉE — appelé par `_charge_one` seul, qui tient
+    la réservation pendant tout l'appel au prestataire. (Un abonnement offert n'arrive
+    pas jusqu'ici : la relecture exige `next_billing_at`, qu'un comp n'a pas.)"""
+    org_id = sub_row["org_id"]
     plan = billing.PLANS.get(sub_row["plan"])
     if plan is None:
         return _block(org_id, "plan_unknown",
@@ -158,7 +230,8 @@ def _charge_one(sub_row: dict, now: datetime) -> str:
     period_ref = str(sub_row.get("current_period_end") or "epoch")[:10]
     attempt = db_billing.count_renewal_attempts(
         org_id, sub_row.get("current_period_end") or now) + 1
-    idempotency_key = f"org{org_id}-{period_ref}-a{attempt}"
+    # La clé se dérive de la LIGNE, jamais du compte des tentatives (`_cle_echeance`).
+    idempotency_key = _cle_echeance(sub_row, period_ref)
 
     row_id = db_billing.insert_billing_payment(
         org_id, "renewal", tax["amount_ttc"], currency=plan["currency"],
@@ -169,14 +242,24 @@ def _charge_one(sub_row: dict, now: datetime) -> str:
             mandate_id=sub_row["mandate_id"], currency=plan["currency"],
             idempotency_key=idempotency_key, webhook_url=billing.webhook_url(),
             description=f"Abonnement {plan['label']} — échéance {period_ref}")
-        pstatus = str(payment.get("status") or "")
-        db_billing.update_billing_payment(row_id, status=pstatus or "processing",
-                                          payment_id=payment.get("id"))
     except mollie_client.MollieError as e:
+        if e.status_code == 409:
+            # Mollie : « la requête de cette clé est encore en cours de traitement ».
+            return _doublon(org_id, row_id, "la même clé est en cours chez Mollie")
         db_billing.update_billing_payment(row_id, status="failed")
         log.warning("billing_runner: org %s échéance refusée (Mollie %s)",
                     org_id, e.status_code)
         pstatus = "failed"
+    else:
+        deja = (db_billing.get_billing_payment_by_ref(payment["id"])
+                if payment.get("id") else None)
+        if deja and deja.get("id") != row_id:
+            # Réponse REJOUÉE : ce paiement appartient à la tentative qui l'a créé.
+            return _doublon(org_id, row_id, f"le paiement {payment['id']} est déjà "
+                                            f"journalisé (ligne {deja.get('id')})")
+        pstatus = str(payment.get("status") or "")
+        db_billing.update_billing_payment(row_id, status=pstatus or "processing",
+                                          payment_id=payment.get("id"))
 
     if pstatus in _PAYMENT_OK:
         # ancrage CALENDAIRE sur la fin de période payée (pas sur la date du

@@ -2,10 +2,12 @@
 borné, sweeps, réconciliation. Mollie + store monkeypatchés, logique pure testée."""
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 
 from oto_mcp import billing, billing_runner
 from oto_mcp.db import billing as db_billing
+from oto_mcp.db import billing_reservation
 from oto_mcp.mollie_client import MollieError
 
 NOW = datetime(2026, 7, 6, 12, 0, tzinfo=timezone.utc)
@@ -14,7 +16,8 @@ NOW = datetime(2026, 7, 6, 12, 0, tzinfo=timezone.utc)
 def _sub(**over) -> dict:
     base = {"org_id": 42, "plan": "premium", "method": "card",
             "mandate_id": "mdt_1", "customer_id": "cst_1",
-            "current_period_end": NOW - timedelta(hours=2), "status": "active"}
+            "current_period_end": NOW - timedelta(hours=2), "status": "active",
+            "next_billing_at": NOW - timedelta(hours=2)}
     base.update(over)
     return base
 
@@ -33,6 +36,12 @@ def _wire(monkeypatch, *, attempts_before=0, payment=None, payment_exc=None,
     state = {"journal": [], "updates": [], "schedule": None, "retry": None,
              "status": None, "blocked": []}
     monkeypatch.setattr(db_billing, "get_billing_identity", lambda org: identity)
+    # La réservation obtenue, rien n'a bougé entre la sélection et le verrou : la ligne
+    # relue est celle qu'on passe. Le vrai verrou est éprouvé par le banc à deux
+    # processus (`test_billing_echeance_deux_processus.py`).
+    monkeypatch.setattr(billing_reservation, "reserver_echeance",
+                        lambda row: nullcontext(row))
+    monkeypatch.setattr(db_billing, "get_billing_payment_by_ref", lambda ref: None)
     monkeypatch.setattr(db_billing, "count_renewal_attempts",
                         lambda org, since: attempts_before)
     monkeypatch.setattr(db_billing, "insert_billing_payment",
@@ -74,8 +83,9 @@ def test_renewal_success_anchors_on_period_end(monkeypatch):
     assert state["journal"][-1][1]["tax"]["vat_scheme"] == "fr_ttc"
     assert state["journal"][-1][0][2] == 11880
     assert kw["customer_id"] == "cst_1" and kw["mandate_id"] == "mdt_1"
-    # idempotency_key déterministe période+tentative (anti double-débit)
-    assert kw["idempotency_key"] == "org42-2026-07-06-a1"
+    # clé dérivée de la LIGNE — période + instant dû —, la même pour tout processus
+    # qui tire cette tentative (anti double-débit, cf. le banc à deux processus)
+    assert kw["idempotency_key"] == "org42-2026-07-06-d20260706100000"
     org, period_end, next_at = state["schedule"]
     # ancré sur current_period_end (+1 mois calendaire), PAS sur l'heure du tick
     assert (period_end.year, period_end.month, period_end.day) == (2026, 8, 6)

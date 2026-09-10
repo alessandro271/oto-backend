@@ -846,8 +846,18 @@ factures y est le dernier geste du tick**). La surface entière est gatée par
 production seulement** : la préprod partage la base et porte la clé Mollie de TEST, elle
 ne compose pas la boucle quel que soit l'interrupteur (`boucles_de_fond.py`, 10/09/2026 :
 tirée par la préprod, une échéance live échouait et la relance repoussait le vrai
-prélèvement de trois jours). ⚠️ Reste ouvert : deux processus de PRODUCTION à la fois
-(recouvrement bleu/vert) — `due_subscriptions` n'a pas de claim. Les deux
+prélèvement de trois jours). Deux processus de PRODUCTION à la fois (bascule bleu/vert,
+ancienne unité simple relancée) ne tirent qu'une fois la même échéance : elle est
+**réservée** avant tout appel au prestataire (`db/billing_reservation.py` — verrou
+consultatif de session sur une connexion hors pool, puis relecture de l'échéance sous
+verrou), et c'est la ligne relue qui est tirée. La clé d'idempotence se **dérive de la
+ligne**, `org<id>-<période>-d<instant dû>` (`billing_runner._cle_echeance`) — elle
+portait le numéro de tentative compté sur le journal, qui voyait la tentative en vol de
+l'autre processus et lui donnait une autre clé, donc un second débit réel. C'est le filet
+si la réservation manque, dans l'heure où Mollie garde une clé ; une réponse jumelle (409
+ou paiement déjà journalisé) ne touche ni au cycle ni à l'impayé. Banc :
+`tests/test_billing_echeance_deux_processus.py`, deux vrais processus sur une vraie base
+(10/09/2026). Les deux
 clés fournisseur — `MOLLIE_API_KEY` (le PSP) et `OTO_PENNYLANE_API_KEY` (la compta
 d'Otomata) — viennent de l'**env du process** (Scaleway Secret Manager au boot),
 jamais de SOPS ni du coffre.

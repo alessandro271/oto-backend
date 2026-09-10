@@ -28,7 +28,8 @@ Les interrupteurs par boucle (`OTO_*_ENABLED=0`) restent ce qu'ils étaient : il
 ÉTEIGNENT une boucle partout, ils n'en allument jamais une hors production.
 
 Ce que cette garde ne ferme pas : DEUX processus de production à la fois (recouvrement
-bleu/vert pendant la vidange). Là, c'est au claim en base de tenir, pas à la composition.
+bleu/vert pendant la vidange). Là, c'est la réservation en base qui tient
+(`db/billing_reservation.py`), pas la composition.
 """
 from __future__ import annotations
 

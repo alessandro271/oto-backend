@@ -20,12 +20,14 @@ Mollie et le store sont simulés, comme dans toute la famille `test_billing_*`.
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from oto_mcp import billing, billing_runner, billing_vat
 from oto_mcp.db import billing as db_billing
+from oto_mcp.db import billing_reservation
 
 ORG = 4242
 RETURN_URL = "https://dashboard.oto.cx/org/billing"
@@ -336,6 +338,10 @@ def test_le_renouvellement_prend_exactement_le_meme_montant(monkeypatch):
         echeance["psp"] = amount
         return {"id": "tr_r1", "status": "paid"}
 
+    # La réservation obtenue, rien n'a bougé : la ligne relue est celle qu'on passe.
+    monkeypatch.setattr(billing_reservation, "reserver_echeance",
+                        lambda row: nullcontext(row))
+    monkeypatch.setattr(db_billing, "get_billing_payment_by_ref", lambda ref: None)
     monkeypatch.setattr(db_billing, "count_renewal_attempts", lambda org, since: 0)
     monkeypatch.setattr(db_billing, "update_billing_payment", lambda r, **k: True)
     monkeypatch.setattr(db_billing, "schedule_next_billing", lambda *a: True)
@@ -346,7 +352,8 @@ def test_le_renouvellement_prend_exactement_le_meme_montant(monkeypatch):
     issue = billing_runner._charge_one(
         {"org_id": ORG, "plan": "standard", "method": "card", "status": "active",
          "customer_id": "cst_1", "mandate_id": "mdt_1",
-         "current_period_end": now - timedelta(hours=1)}, now)
+         "current_period_end": now - timedelta(hours=1),
+         "next_billing_at": now - timedelta(hours=1)}, now)
 
     assert issue == "renewed"
     assert echeance["psp"] == premier == 2280
@@ -359,6 +366,8 @@ def test_un_renouvellement_sans_identite_ne_prend_RIEN(monkeypatch):
     l'identité sera réparée."""
     etat: dict = {}
     trace: list = []
+    monkeypatch.setattr(billing_reservation, "reserver_echeance",
+                        lambda row: nullcontext(row))
     monkeypatch.setattr(db_billing, "get_billing_identity", lambda org: None)
     for nom in ("insert_billing_payment", "schedule_next_billing", "retry_billing_at",
                 "set_subscription_status"):
@@ -372,7 +381,8 @@ def test_un_renouvellement_sans_identite_ne_prend_RIEN(monkeypatch):
     issue = billing_runner._charge_one(
         {"org_id": ORG, "plan": "standard", "method": "card", "status": "active",
          "customer_id": "cst_1", "mandate_id": "mdt_1",
-         "current_period_end": now - timedelta(hours=1)}, now)
+         "current_period_end": now - timedelta(hours=1),
+         "next_billing_at": now - timedelta(hours=1)}, now)
 
     assert issue == "blocked:billing_identity_required"
     assert etat == {}, "ni débit, ni ligne de journal, ni décalage du cycle"
