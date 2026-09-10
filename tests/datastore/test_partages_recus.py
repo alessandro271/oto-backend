@@ -56,13 +56,17 @@ def monde(live):
 
 
 def _recus(monkeypatch, sub, org) -> dict:
-    """La réponse de la capacité, pour `sub` naviguant dans `org` (None = aucune org)."""
+    """La réponse de la capacité, pour `sub` naviguant dans `org` (None = aucune org).
+
+    ⚠️ La face REST sert le dict du handler TEL QUEL : `Output` décrit, il ne valide pas
+    (`_types.Capability`). Mesuré sur la préproduction le 10/09/2026 : aucune clé `ns_id`
+    sur le fil, alors que le modèle la dérive. On lit donc `out`, jamais un `model_dump` —
+    ce serait asserter la DÉCLARATION, pas ce qui est servi. La déclaration, elle, doit au
+    moins accepter ce qui est servi."""
     monkeypatch.setattr(access, "current_org", lambda s: org)
     out = P._shared_with_me(ResolvedCtx(sub=sub, org_id=org), P.SharedWithMeInput())
-    # Ce que la face REST SERT : la forme déclarée (`Output`) appliquée à la réponse —
-    # c'est elle qui pose `ns_id` et renomme `schema`, pas le handler.
-    servi = P.SharedWithMe(**out).model_dump(by_alias=True)
-    return {int(e["id"]): e for e in servi["datastores"]}
+    P.SharedWithMe(**out)
+    return {int(e["id"]): e for e in out["datastores"]}
 
 
 def _liste_de_l_org(monkeypatch, sub, org) -> set:
@@ -85,7 +89,7 @@ def test_le_destinataire_voit_le_partage_personnel_depuis_n_importe_quelle_org(
     assert e["shared_by"] == "Alice Proprio", "qui a partagé — un nom, pas un identifiant"
     assert (e["permission"], e["can_write"], e["shared"]) == ("read", False, True)
     assert (e["owner_type"], e["is_personal"]) == ("user", False)
-    assert e["ns_id"] == e["id"] == monde["t-perso"]
+    assert e["id"] == monde["t-perso"]
 
 
 def test_sans_doublon_avec_la_liste_de_l_org(monde, monkeypatch):
