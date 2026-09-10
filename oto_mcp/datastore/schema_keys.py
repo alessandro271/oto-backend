@@ -107,6 +107,31 @@ CLES: tuple[Cle, ...] = (
     Cle("help", ("front",), "l'aide affichée à la saisie"),
     Cle("hint", ("front",), "l'indice court à côté du champ"),
     Cle("placeholder", ("front",), "le texte fantôme d'un champ vide"),
+    # ⚠️ **`hidden` et `width` manquaient, et leur absence coûtait 87 % du bruit du
+    # canal d'avertissement.** Mesuré le 10/09/2026 : sur 363 tableaux à schéma,
+    # **224 (61 %) portaient un avertissement à la lecture** — et `hidden` (186) plus
+    # `width` (141) en expliquaient presque tout. Sans elles : **30 tableaux, 8 %**.
+    #
+    # Or la description de `data_set_schema` les PRESCRIT, mot pour mot : « `width`…
+    # **declare it** to keep a stable layout », « `hidden: true`… **Use it** for opaque
+    # ids and technical fields ». Le produit disait donc « déclare-la », puis dénonçait
+    # la déclaration à chaque lecture, sur 194 tableaux. La plateforme criait sur sa
+    # propre consigne.
+    #
+    # ⚠️ Et le coût n'est pas le bruit : c'est le SIGNAL qu'il couvrait. Les 26
+    # tableaux portant `enum` là où `options` fait foi — la clé même qui a laissé
+    # passer 504 valeurs libres — étaient noyés dans 194 faux positifs.
+    #
+    # Vérifié dans `oto-dashboard` avant de les déclarer, parce qu'une clé « front »
+    # qui ne serait lue par personne serait la même faute dans l'autre sens :
+    # `hidden` filtre les cartes (`DatastoreCards.vue`) et pilote la sauvegarde de vue
+    # (`DatastoreTable.vue`) ; `width` est lu par `RowDrawer.vue` — « déclarée au
+    # schéma (`width`) sinon dérivée du widget » — et porté par `datastoreForm.ts`.
+    # Elles sont donc exactement dans le cas de `label` : interprétées par le
+    # consommateur auquel elles s'adressent, jamais par le validateur.
+    Cle("hidden", ("front",),
+        "garde la colonne hors des colonnes du tableau, par défaut"),
+    Cle("width", ("front",), "la largeur du champ dans la fiche — `half` ou `full`"),
     Cle("display", ("validateur", "front"), "comment la colonne se rend", True),
     # ⚠️ `role` n'est plus lu par le validateur depuis le 08/09/2026 : `status` est
     # désigné par le bloc `lifecycle`, `title` par `display: "title"`. Il reste servi
