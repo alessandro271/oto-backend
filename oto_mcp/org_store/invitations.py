@@ -379,9 +379,11 @@ def accept_invitation_by_code(code: str, sub: str) -> Optional[dict]:
 def _accept_invitation_row(inv: dict, sub: str) -> dict:
     """Cœur de l'acceptation d'une invitation à partir d'une ligne déjà résolue (par
     token, code OU email lors d'une réconciliation de signup). Selon le scope :
-    - **org** (org_id présent) → ajoute le membre d'org + bascule l'org active ;
+    - **org** (org_id présent) → ajoute le membre d'org ; la MAISON n'est posée que
+      par `add_org_member`, sous SA condition (voir plus bas) ;
     - **équipe** (group_id présent) → ajoute AUSSI l'équipe (avec `group_role`) et la
-      rend active (l'org parente est jointe d'abord — invariant équipe ⊂ org) ;
+      rend active SI la maison est bien l'org du groupe (l'org parente est jointe
+      d'abord — invariant équipe ⊂ org) ;
     - **plateforme** (ni l'un ni l'autre) → l'invité a déjà son compte + org perso au
       signup ; l'acceptation ne fait que marquer l'invitation consommée (attribution).
 
@@ -393,6 +395,21 @@ def _accept_invitation_row(inv: dict, sub: str) -> dict:
     d'équipe. On garde donc le **maximum des deux rôles** ; l'administrateur qui veut
     rétrograder a la route dédiée (`org.member.set_role`, gardée #273/#280). Les rangs
     viennent de `roles` (source unique de la hiérarchie), jamais recopiés ici.
+
+    **Accepter ne déplace pas la MAISON (oto#161).** Ce corps appelait
+    `members.set_active_org(sub, org_id)` juste après l'ajout — un `is_active` posé
+    SANS condition, qui débarquait l'invité de son org par défaut, y compris sans
+    aucun clic par `reconcile_signup_with_invitation`. Mesuré en production le
+    10/09/2026 : 7 personnes déplacées d'une org réelle vers une autre, et 8 dont les
+    clés membre (rangées sous `{maison}:{sub}`, jamais migrées quand la maison change)
+    sont devenues injoignables par défaut — leurs appels tombent en « non configuré ».
+    La règle de la maison est écrite UNE fois, dans `add_org_member` (ADR 0030/0033 :
+    aucune maison → la nouvelle ; maison = l'espace perso silencieux → promotion ;
+    maison réelle établie → on n'y touche pas). On la laisse décider ici aussi plutôt
+    que de la recopier : deux formulations divergeraient au premier changement.
+    Corollaire au palier équipe — `set_active_group` écrit lui AUSSI
+    `org_members.is_active` (invariant ADR 0012, groupe actif ⊂ org active) : l'appeler
+    nu ré-ouvrait le même trou par la bande, d'où la condition sur la maison.
     """
     # Import paresseux : `roles` importe org_store (et group_store) au niveau module
     # → cycle si on l'importait en tête. À l'appel, tout est chargé.
@@ -402,7 +419,6 @@ def _accept_invitation_row(inv: dict, sub: str) -> dict:
     if org_id is not None:
         org_role = roles.max_org_role(members.get_org_role(org_id, sub), org_role)
         members.add_org_member(org_id, sub, org_role)
-        members.set_active_org(sub, org_id)
     group_id = inv.get("group_id")
     group_role = inv.get("group_role")
     if group_id is not None:
@@ -412,7 +428,8 @@ def _accept_invitation_row(inv: dict, sub: str) -> dict:
         group_role = roles.max_group_role(group_store.get_group_role(group_id, sub),
                                           group_role or "group_member")
         group_store.add_group_member(group_id, sub, group_role)
-        group_store.set_active_group(sub, group_id)
+        if org_id is not None and members.get_active_org(sub) == org_id:
+            group_store.set_active_group(sub, group_id)
     _mark_invitation_accepted(inv["id"], sub)
     # Les rôles rendus sont ceux ÉCRITS, pas ceux de l'invitation : sinon l'écho
     # annonce « tu es org_member » à quelqu'un qui vient de rester org_admin.

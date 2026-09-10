@@ -58,6 +58,10 @@ def _patch(monkeypatch, *, org_role=None, group_role=None):
     monkeypatch.setattr(org_store, "add_org_member",
                         lambda oid, sub, role: written["org"].append((oid, sub, role)))
     monkeypatch.setattr(org_store, "set_active_org", lambda sub, oid: None)
+    # La maison est LUE depuis oto#161 (le palier équipe ne pose le groupe actif que
+    # si la maison est bien l'org du groupe) : sans ce stub, ce banc sans PG tomberait
+    # sur `DATABASE_URL not set` au lieu de mesurer les rôles.
+    monkeypatch.setattr(org_store, "get_active_org", lambda sub: ORG_ID)
     monkeypatch.setattr(org_store, "_mark_invitation_accepted", lambda i, sub: None)
     monkeypatch.setattr(group_store, "get_group_role", lambda gid, sub: group_role)
     monkeypatch.setattr(group_store, "add_group_member",

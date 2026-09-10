@@ -323,7 +323,12 @@ def _invite_revoke(ctx: ResolvedCtx, inp: InviteRevokeInput) -> dict:
 
 def _invite_accept(ctx: ResolvedCtx, inp: InviteAcceptInput) -> dict:
     """Accepte une invitation d'org par token mail (legacy) ou code court nominatif.
-    Modèle bearer : le secret suffit."""
+    Modèle bearer : le secret suffit.
+
+    `active_org` est **lu après l'écriture**, jamais recopié de l'invitation : depuis
+    oto#161 accepter ne déplace plus une maison réelle établie, et annoncer l'org
+    rejointe comme maison serait un accusé de réception faux — le front s'y fierait
+    pour router, l'agent pour supposer où tombent ses appels sans axe."""
     if inp.token:
         res = org_store.accept_invitation(inp.token, ctx.sub)
     elif inp.code:
@@ -335,7 +340,8 @@ def _invite_accept(ctx: ResolvedCtx, inp: InviteAcceptInput) -> dict:
     org = org_store.get_org(res["org_id"]) if res.get("org_id") else None
     return {"ok": True, "org_id": res.get("org_id"), "org_role": res.get("org_role"),
             "group_id": res.get("group_id"), "group_role": res.get("group_role"),
-            "active_org": res.get("org_id"), "name": org["name"] if org else None}
+            "active_org": org_store.get_active_org(ctx.sub),
+            "name": org["name"] if org else None}
 
 
 def _invite_reject(ctx: ResolvedCtx, inp: InviteRejectInput) -> dict:
