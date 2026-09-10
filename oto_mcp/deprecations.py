@@ -45,7 +45,7 @@ from __future__ import annotations
 
 import calendar
 import datetime
-from typing import NamedTuple
+from typing import Any, NamedTuple, Optional
 from urllib.parse import quote
 
 # ── Le préavis : sa durée, et d'où elle vient ───────────────────────────────
@@ -245,7 +245,37 @@ RETRAIT_DATASTORE = _plus_de_mois(ANNONCE_DATASTORE, PREAVIS_MOIS)
 #: VALEUR capturée voyage (cf. `cible`).
 _DS_ANCIEN = "/api/datastore/namespaces"
 _DS_NOUVEAU = "/api/datastores"
-_DS_PARAMS = {"namespace": "datastore"}
+#: Les PARAMÈTRES renommés : ancien nom → (nouveau nom, date servie, ce qui ne change
+#: pas). Une seule table pour les deux refus qui les nomment — la base des entrées de
+#: capacité (`EntreeDatastore`) et l'enveloppe d'erreur des outils écrits à la main
+#: (`error_taxonomy`, oto#135) — et pour le placeholder des alias de chemin.
+#: ⚠️ La date est celle du REFUS servi (09/09), pas celle de l'annonce des chemins
+#: (`ANNONCE_DATASTORE`, 08/09) : c'est la première que les agents lisent déjà.
+PARAMETRES_RENOMMES = {
+    "namespace": ("datastore", "09/09/2026",
+                  "**l'adresse ne change pas** (nom du tableau, numéro, forme "
+                  "`slot:<nom>`), c'est la clé qui bascule"),
+}
+_DS_PARAMS = {ancien: v[0] for ancien, v in PARAMETRES_RENOMMES.items()}
+
+
+def refus_parametre_renomme(ancien: str, valeur: Any = None,
+                            outil: Optional[str] = None) -> Optional[str]:
+    """Le refus d'un paramètre passé sous un nom RETIRÉ — `None` s'il n'a pas été renommé.
+
+    Un seul texte, servi tel quel par la face capacité et par la face des outils écrits
+    à la main. Jusqu'au 10/09/2026 la seconde disait « valeur(s) refusée(s) : namespace
+    (Unexpected keyword argument) » — en anglais, sans le nom neuf : un agent y lisait
+    un paramètre manquant et recomposait son appel à neuf (oto#135)."""
+    if ancien not in PARAMETRES_RENOMMES:
+        return None
+    nouveau, date, inchange = PARAMETRES_RENOMMES[ancien]
+    rejeu = (f"`{outil}` avec `{nouveau}={valeur!r}`" if outil
+             else f"le même appel avec `{nouveau}={valeur!r}`")
+    return (f"`{ancien}` a été renommé `{nouveau}` le {date} — le paramètre n'existe "
+            f"plus sous ce nom, et rien n'a été écrit. Rejoue {rejeu} : {inchange}. "
+            f"⚠️ Ne cherche pas un paramètre manquant : tu as fourni la bonne valeur "
+            f"sous un nom retiré.")
 
 
 def _alias_datastore() -> tuple:

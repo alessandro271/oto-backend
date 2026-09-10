@@ -20,7 +20,7 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, model_validator
 
-from ... import ownership
+from ... import deprecations, ownership
 from ...datastore import hors_org
 from ...datastore.core import DatastoreNotFound, make_store
 from .._types import AuthzDenied
@@ -103,7 +103,8 @@ def govern_ns(sub: Optional[str], datastore: str) -> int:
 # migrés le rester, sans que personne l'apprenne — et masquer un problème au lieu de
 # lever est précisément ce qu'on ne fait pas ici.
 
-RENOMME_LE = "09/09/2026"
+# La date et le texte du refus vivent dans `deprecations.PARAMETRES_RENOMMES` : une
+# source unique, que l'enveloppe d'erreur des outils écrits à la main sert aussi (oto#135).
 
 
 class EntreeDatastore(BaseModel):
@@ -123,11 +124,5 @@ class EntreeDatastore(BaseModel):
         # `datastore` (s'il en existe une) n'a rien à dire sur ce mot.
         if "datastore" not in cls.model_fields:
             return data
-        valeur = data.get("namespace")
-        raise ValueError(
-            f"`namespace` a été renommé `datastore` le {RENOMME_LE} — le paramètre "
-            f"n'existe plus sous ce nom, et rien n'a été écrit. Rejoue le même appel "
-            f"avec `datastore={valeur!r}` : **l'adresse ne change pas** (nom du "
-            f"tableau, numéro, forme `slot:<nom>`), c'est la clé qui bascule. "
-            f"⚠️ Ne cherche pas un paramètre manquant : tu as fourni la bonne valeur "
-            f"sous un nom retiré.")
+        raise ValueError(deprecations.refus_parametre_renomme(
+            "namespace", data.get("namespace")))

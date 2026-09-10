@@ -107,6 +107,13 @@ def _is_arg_validation_error(exc) -> bool:
     return False
 
 
+# Types pydantic d'une erreur de SIGNATURE (outil écrit à la main, validé par FastMCP 3),
+# et son titre : `call[data_write]` — dont on ne sert que le nom de l'outil (oto#135).
+_TYPES_DE_SIGNATURE = frozenset({"unexpected_keyword_argument", "missing_argument",
+                                 "unexpected_positional_argument", "multiple_argument_values"})
+_TITRE_D_OUTIL = re.compile(r"^(?:call\[)?([A-Za-z_]\w*)\]?$")
+
+
 def _arg_error_message(exc) -> str:
     """« Arguments invalides » qui NOMME la clé fautive — parité avec la face REST.
 
@@ -122,12 +129,17 @@ def _arg_error_message(exc) -> str:
     if err is None:
         return "Arguments invalides — vérifie les paramètres de l'outil."
     inconnus, manquants, autres = [], [], []
+    valeurs: dict = {}
+    signature = False
     try:
         for d in err.errors():
             cle = ".".join(str(p) for p in (d.get("loc") or ())) or "?"
             kind = d.get("type") or ""
-            if kind == "extra_forbidden":
+            signature = signature or kind in _TYPES_DE_SIGNATURE
+            # FastMCP 3 type une clé inconnue `unexpected_keyword_argument` (oto#135).
+            if kind in ("extra_forbidden", "unexpected_keyword_argument"):
                 inconnus.append(cle)
+                valeurs[cle] = d.get("input")
             elif kind.startswith("missing"):
                 manquants.append(cle)
             else:
@@ -135,6 +147,14 @@ def _arg_error_message(exc) -> str:
     # noqa: SILENT — message d'aide dégradé, la taxonomie rend son défaut
     except Exception:      # forme pydantic inattendue : on ne casse pas le message
         return "Arguments invalides — vérifie les paramètres de l'outil."
+    # Le titre d'un MODÈLE nomme une classe : jamais servi comme nom d'outil.
+    m = _TITRE_D_OUTIL.match(err.title or "") if signature else None
+    outil = m.group(1) if m else None
+    from . import deprecations  # tardif : la taxonomie est importée partout
+    for cle in inconnus:
+        refus = deprecations.refus_parametre_renomme(cle, valeurs.get(cle), outil)
+        if refus:  # le nom neuf n'est alors pas « requis absent » : il est mal nommé
+            return "Arguments invalides — " + refus
     bouts = []
     if inconnus:
         bouts.append(f"champ(s) non reconnu(s) : {', '.join(inconnus)}")
@@ -144,8 +164,8 @@ def _arg_error_message(exc) -> str:
         bouts.append(f"valeur(s) refusée(s) : {'; '.join(autres)}")
     if not bouts:
         return "Arguments invalides — vérifie les paramètres de l'outil."
-    return ("Arguments invalides — " + " · ".join(bouts)
-            + ". Le schéma exact : oto_tool_schema(name=…).")
+    schema = f'oto_tool_schema(name="{outil}")' if outil else "oto_tool_schema(name=…)"
+    return "Arguments invalides — " + " · ".join(bouts) + f". Le schéma exact : {schema}."
 
 
 def _is_oauth_exchange_refused(exc) -> bool:
