@@ -451,6 +451,59 @@ def archive_instruction(owner_type: str, owner_id: int | str, slug: str) -> bool
         return (cur.rowcount or 0) > 0
 
 
+def unarchive_instruction(owner_type: str, owner_id: int | str,
+                          slug: str) -> Optional[str]:
+    """Remet une instruction EN SERVICE. Rend la date d'archivage qu'elle portait,
+    ou `None` si elle n'était pas archivée (ou n'existe pas).
+
+    ⚠️ **L'inverse de `archive_instruction` n'existait pas, et c'était un choix
+    ASSUMÉ** — par parité avec les projets, dont l'archivage n'a pas d'inverse non
+    plus. La parité se rompt ici, pour les procédures seules, sur décision d'Alexis
+    du 10/09/2026 et en connaissance de cause. Les projets gardent le même trou et
+    sont instruits à part : lire cette fonction comme une incohérence serait
+    ignorer qu'elle en est une, voulue.
+
+    **Ce que la mesure a montré et qui a emporté la décision** : 3 procédures
+    archivées sur 238 en production, dont **deux réécrites après coup** par des
+    clients qui les croyaient en service. Sans désarchivage, refuser ces écritures
+    aurait enfermé ces clients — plus d'édition, pas de remise en service, et la
+    suppression pour seule sortie, c'est-à-dire la destruction de l'historique que
+    l'archivage existe justement pour préserver.
+
+    ⚠️ **Rend la date d'AVANT, pas un booléen** : l'appelant doit pouvoir tracer ce
+    qu'il vient de défaire. Un geste qui ressuscite une ligne que quelqu'un a
+    retirée exprès doit laisser savoir QUAND elle avait été retirée — sinon le
+    journal dit qu'on a agi, pas ce qu'on a annulé. `None` distingue « rien à
+    défaire » de « défait » sans lever : remettre en service une procédure déjà en
+    service est un non-geste, pas une faute.
+    """
+    otype, oid = _owner(owner_type, owner_id)
+    slug = normalize_slug(slug)
+    with _connect() as conn:
+        # ⚠️ **`RETURNING archived_at` rendrait la valeur NEUVE, donc NULL** — on
+        # effacerait précisément ce qu'on veut tracer, et la fonction annoncerait
+        # « rien à défaire » chaque fois qu'elle vient de défaire quelque chose.
+        # La date d'avant est donc lue par une CTE, dans la MÊME instruction : ni
+        # relecture préalable (une autre session l'aurait changée entre-temps), ni
+        # relecture après coup (elle n'existe plus).
+        # La jointure se fait sur la clé NATURELLE `(owner_type, owner_id, slug)`,
+        # pas sur un identifiant de ligne : c'est elle qui désigne une instruction
+        # partout ailleurs dans ce module, et une CTE adossée à une colonne
+        # technique dépendrait d'un détail de schéma que rien d'autre ici n'utilise.
+        row = conn.execute(
+            "WITH avant AS ("
+            "  SELECT owner_type, owner_id, slug, archived_at FROM org_instructions "
+            f"  WHERE {_OWNER_WHERE} AND slug = %s AND archived_at IS NOT NULL"
+            ") "
+            "UPDATE org_instructions o SET archived_at = NULL, updated_at = NOW() "
+            "FROM avant a WHERE o.owner_type = a.owner_type "
+            "  AND o.owner_id = a.owner_id AND o.slug = a.slug "
+            "RETURNING a.archived_at AS avant",
+            (otype, oid, slug),
+        ).fetchone()
+        return None if row is None else row["avant"]
+
+
 def delete_instruction(owner_type: str, owner_id: int | str, slug: str) -> bool:
     """Supprime une instruction ET son historique. False si elle n'existait pas."""
     otype, oid = _owner(owner_type, owner_id)
