@@ -48,6 +48,14 @@ _FENCE = re.compile(r"^[ \t]*```[ \t]*([\w-]*)[^\n]*\n(.*?)^[ \t]*```[ \t]*$", r
 WARNING = ("no flowchart found — add the drawing described in the procedure guide "
            "(procedure-flowchart)")
 
+# Deux blocs qui dessinent : la page n'en rend qu'UN, le premier. Le cas se fabrique
+# quand un corps arrive avec le marqueur ET un vrai dessin — `avec_le_dessin` remet
+# alors le tracé stocké à côté du neuf, et `has_diagram` seul répondait « oui, il y a
+# un dessin », donc rien n'était dit.
+DOUBLE = ("two drawings in this body — the process page renders the FIRST one only. "
+          "If you drew a new flowchart, DROP the `<!-- flowchart: … -->` marker line: "
+          "kept, it put the stored drawing back next to yours")
+
 
 def is_drawing(block: str) -> bool:
     """Ce bloc est-il un dessin plutôt qu'un échantillon de code ? Port du `isDrawing`
@@ -63,12 +71,16 @@ def is_drawing(block: str) -> bool:
     return lines_with >= MIN_GLYPH_LINES and total >= MIN_GLYPHS
 
 
+def compter_les_dessins(body_md: str) -> int:
+    """Combien de blocs NON TAGUÉS dessinent dans ce corps. La page n'en rend qu'un —
+    le premier — donc au-delà de 1, un tracé est écrit et jamais montré."""
+    return sum(1 for lang, block in _FENCE.findall(body_md or "")
+               if not lang and is_drawing(block))
+
+
 def has_diagram(body_md: str) -> bool:
     """Le corps porte-t-il un dessin que la page du process saura rendre ?"""
-    for lang, block in _FENCE.findall(body_md or ""):
-        if not lang and is_drawing(block):
-            return True
-    return False
+    return compter_les_dessins(body_md) > 0
 
 
 def trouver_le_dessin(body_md: str) -> tuple[int, int] | None:
@@ -94,12 +106,33 @@ def trouver_le_dessin(body_md: str) -> tuple[int, int] | None:
 # le tracé de la version courante. Un corps qui arrive avec un VRAI dessin le garde ;
 # un corps sans marqueur ni dessin est ce qu'il a toujours été : `diagram_warning`.
 # Les corps STOCKÉS ne portent jamais le marqueur — il ne vit qu'entre les deux appels.
+#
+# ⚠️ Ce que le marqueur NE promet pas : `avec_le_dessin` relit le corps COURANT de la
+# ligne visée par l'écriture. Une écriture qui vise ailleurs n'a rien à relire, et le
+# marqueur s'efface : `op=create`, un slug neuf, ou un `scope` omis après avoir lu
+# l'org (le défaut d'écriture est `user`, ADR 0068). C'est pour ça que la ligne dit
+# désormais « same slug and scope » plutôt que « op=set keeps the drawing ».
+# ⚠️ Et marqueur + VRAI dessin dans le même corps donne DEUX blocs dessinants : la
+# page n'en rend qu'un, le premier. `has_diagram` répondait « oui » et se taisait ;
+# `compter_les_dessins` le compte, et `diagram_check` le DIT (`DOUBLE`).
 _MARQUEUR = re.compile(r"^[ \t]*<!--[ \t]*flowchart:[^\n]*?-->[ \t]*$", re.M)
 
 
 def marqueur(version, lignes: int) -> str:
+    """La ligne qui remplace le tracé — et qui dit à QUELLES conditions il revient.
+
+    ⚠️ Elle a d'abord promis « keep this line and op=set keeps the drawing », sans
+    condition. C'était faux dans quatre cas mesurés le 10/09/2026, tous des écritures
+    qui ne visent pas la ligne d'où le marqueur vient : `op=create` (rien à relire),
+    un slug neuf, un `scope` omis (le défaut d'écriture est `user` — on relit l'org et
+    on écrit chez soi, ADR 0068), et le marqueur simplement non recopié. Le dessin est
+    alors perdu — pas en silence (`diagram_warning` le dit), mais après coup.
+
+    Un texte servi est du code de prod : une promesse sans condition sera crue."""
     return (f"<!-- flowchart: v{version}, {lignes} lines, omitted here — keep this line "
-            "and op=set keeps the drawing; op=get full=true reads it -->")
+            "VERBATIM; op=set puts the drawing back only on the SAME slug and scope you "
+            "read (no scope = user, not org). op=create never does. "
+            "op=get full=true reads it -->")
 
 
 def sans_le_dessin(body_md: str, version) -> str:
@@ -133,7 +166,9 @@ def diagram_check(body_md: str) -> dict:
     `write_check`) : la clé est TOUJOURS présente, `None` = le check a tourné et
     n'a rien trouvé à dire. Best-effort — un check ne casse jamais une écriture."""
     try:
-        return {"diagram_warning": None if has_diagram(body_md) else WARNING}
+        combien = compter_les_dessins(body_md)
+        return {"diagram_warning": WARNING if combien == 0
+                else DOUBLE if combien > 1 else None}
     # noqa: SILENT — contrôle de forme optionnel : pas d'avertissement plutôt qu'un faux
     except Exception:  # noqa: BLE001 — cf. `slots_check`
         return {"diagram_warning": None}

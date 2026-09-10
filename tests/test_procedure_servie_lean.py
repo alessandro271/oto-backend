@@ -206,3 +206,97 @@ def test_op_set_avec_un_vrai_dessin_l_ecrit_tel_quel(monkeypatch):
     oi._write_instruction(ResolvedCtx(sub="u1", org_id=3),
                           oi.ConsoleInstrSetInput(slug="p", body_md=nouveau, scope="org"))
     assert ecrit["body_md"] == nouveau.strip()
+
+
+# ── Ce que le marqueur PROMET, et ce que la promesse vaut ──────────────────────
+
+def test_le_marqueur_ne_promet_rien_sans_condition():
+    """La ligne a d'abord dit « keep this line and op=set keeps the drawing ». Sans
+    condition, et faux dans quatre cas : `op=create`, un slug neuf, un `scope` omis
+    (le défaut d'écriture est `user`), et la ligne non recopiée. Un texte servi est du
+    code de prod — une promesse sans condition sera crue."""
+    ligne = procedure_diagram.marqueur(7, 9)
+    assert "op=set keeps the drawing" not in ligne, (
+        "promesse inconditionnelle revenue dans le marqueur")
+    assert "SAME slug and scope" in ligne, "la condition doit être DANS la ligne servie"
+    assert "op=create never does" in ligne
+
+
+def test_un_scope_omis_ecrit_ailleurs_et_perd_le_dessin(monkeypatch):
+    """Le cas que la promesse d'origine niait : on relit une procédure d'ORG, on
+    réécrit sans `scope`, l'écriture part au palier `user` (ADR 0068) — il n'y a rien
+    à relire là-bas, le marqueur s'efface, le dessin est perdu. Non silencieux
+    (`diagram_warning`), mais après coup."""
+    from oto_mcp.capabilities import procedure_console as pc
+    # 1. Sur la face AGENT, une écriture sans `scope` vise le palier PERSONNEL.
+    assert pc._ECRIT_SCOPE(pc.ProcedureInput(op="set", slug="p")) == "user", (
+        "le défaut d'écriture de `oto_procedure` n'est plus `user` : le marqueur peut "
+        "reformuler sa condition, ce banc dit pourquoi elle existe")
+    # 2. Le dessin, lui, est resté chez l'org : il n'y a rien à relire chez soi.
+    vus = []
+
+    def _get_instruction(otype, oid, slug):
+        vus.append(otype)
+        return None                       # rien de stocké au palier personnel
+    monkeypatch.setattr(oi.org_store, "get_instruction", _get_instruction)
+    monkeypatch.setattr(oi.org_store, "set_instruction", lambda *a, **k: 1)
+    relu = procedure_diagram.sans_le_dessin(_CORPS, 7)          # lu chez l'org
+    out = oi._write_instruction(ResolvedCtx(sub="u1", org_id=3),
+                                oi.ConsoleInstrSetInput(slug="p", body_md=relu,
+                                                        scope="user"))[0]
+    assert vus and vus[0] == "user", "l'écriture doit relire le palier qu'elle VISE"
+    assert out["diagram_warning"] == procedure_diagram.WARNING
+
+
+def test_marqueur_plus_vrai_dessin_annonce_les_deux_blocs(monkeypatch):
+    """Le seul cas où la perte était MUETTE : le corps porte le marqueur ET un dessin
+    neuf. `avec_le_dessin` remet le tracé stocké à côté du neuf, `has_diagram` disait
+    « oui, il y a un dessin » — et la page n'en rend qu'un, le premier."""
+    ecrit = _ecriture(monkeypatch, _CORPS)
+    autre = _DESSIN.replace("1 · Lire", "1 · Relire")
+    corps = procedure_diagram.sans_le_dessin(_CORPS, 7) + "\n\n" + autre + "\n"
+    out = oi._write_instruction(ResolvedCtx(sub="u1", org_id=3),
+                                oi.ConsoleInstrSetInput(slug="p", body_md=corps,
+                                                        scope="org"))[0]
+    assert procedure_diagram.compter_les_dessins(ecrit["body_md"]) == 2
+    assert out["diagram_warning"] == procedure_diagram.DOUBLE
+
+
+# ── Le texte servi tient dans ce que le client en lit ──────────────────────────
+#
+# Claude Code coupe la description d'un outil MCP à 2048 caractères (mesuré le
+# 10/09/2026). Ce qui est écrit au-delà n'atteint pas le modèle : ajouter en TÊTE
+# pousse dehors ce qui était vu. La règle n'est donc pas « écris court », c'est
+# « ce qui coûte du travail à qui l'ignore passe devant ».
+_COUPE_CLIENT = 2048
+
+# Chacune de ces phrases a un coût mesuré si elle manque : perdre le dessin d'une
+# procédure, publier chez soi ce qu'on croyait publier pour l'org, ou découvrir la
+# forme de `slots` par essais (une procédure a atteint la v3 comme ça).
+_A_SAUVER = (
+    "`diagram_warning`",
+    "same slug and scope you read from",
+    "Omitting `scope` writes YOUR OWN procedure",
+    "`[{name, type}]`",
+)
+
+
+def _description_servie(nom: str) -> str:
+    from _mcp_app import static_mcp
+    outils = {t.name: t for t in asyncio.run(static_mcp().list_tools(run_middleware=False))}
+    return outils[nom].description or ""
+
+
+def test_l_essentiel_d_oto_procedure_survit_a_la_coupe_du_client():
+    d = _description_servie("oto_procedure")
+    dehors = []
+    for phrase in _A_SAUVER:
+        i = d.find(phrase)
+        if i < 0 or i + len(phrase) > _COUPE_CLIENT:
+            dehors.append((phrase, i))
+    assert not dehors, (
+        f"Hors des {_COUPE_CLIENT} premiers caractères servis (longueur totale "
+        f"{len(d)}) : {dehors}. Claude Code ne lira pas ces phrases. N'allonge pas la "
+        "tête de la description : déplace vers la fin ce qui se rattrape autrement "
+        "(la grammaire du dessin est dans le guide `procedure-flowchart`, et "
+        "`diagram_warning` nomme ce guide quand il se déclenche).")

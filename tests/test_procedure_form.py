@@ -76,9 +76,25 @@ def test_a_shell_sample_with_a_stray_arrow_is_not_a_drawing():
 
 
 def test_the_check_never_raises(monkeypatch):
-    monkeypatch.setattr(pd, "has_diagram",
+    """⚠️ La mutation doit viser ce que `diagram_check` APPELLE vraiment — depuis qu'il
+    compte les dessins au lieu d'en tester la présence, c'est `compter_les_dessins`.
+    Posée sur `has_diagram`, elle ne mordait plus : le test aurait viré au vert creux
+    (il a viré au rouge, ce qui l'a signalé — mais le vert était le mode d'échec
+    possible)."""
+    monkeypatch.setattr(pd, "compter_les_dessins",
                         lambda body: (_ for _ in ()).throw(RuntimeError("boom")))
     assert pd.diagram_check("peu importe") == {"diagram_warning": None}
+
+
+def test_deux_dessins_sont_annonces():
+    """La page n'en rend qu'un — le premier. Le cas se fabrique quand un corps garde le
+    marqueur ET porte un dessin neuf : `avec_le_dessin` remet le tracé stocké à côté."""
+    deux = _fenced(_DRAWING) + "\n```\n" + _DRAWING + "\n```\n"
+    assert pd.compter_les_dessins(deux) == 2
+    assert pd.has_diagram(deux), "deux dessins, c'est toujours « il y a un dessin »"
+    assert pd.diagram_check(deux) == {"diagram_warning": pd.DOUBLE}
+    # Un seul reste muet : la garde vise le SECOND bloc, pas la présence.
+    assert pd.diagram_check(_fenced(_DRAWING)) == {"diagram_warning": None}
 
 
 # ── Remontée dans les faces d'écriture ──────────────────────────────────────

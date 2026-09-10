@@ -207,6 +207,20 @@ un corps sans marqueur ni dessin est ce qu'il a toujours été (`diagram_warning
 corps **stockés** ne portent jamais le marqueur — il ne vit qu'entre les deux appels.
 Banc : `tests/test_procedure_servie_lean.py`, dont l'aller-retour à l'identique.
 
+⚠️ **Ce que le marqueur ne promet pas.** Il a d'abord dit « keep this line and op=set
+keeps the drawing », sans condition — et `avec_le_dessin` relit le corps courant de la
+**ligne visée par l'écriture**. Une écriture qui vise ailleurs n'a rien à relire, et le
+marqueur s'efface : `op=create`, un slug neuf, et surtout un **`scope` omis** — le
+défaut d'écriture de `oto_procedure` est `user` (`_ECRIT_SCOPE`), donc relire l'org et
+réécrire sans `scope` publie chez soi une procédure sans son dessin. La ligne servie dit
+désormais « same slug and scope you read ». La perte n'est pas silencieuse
+(`diagram_warning`), mais elle est constatée APRÈS.
+
+⚠️ **Marqueur + vrai dessin dans le même corps = DEUX blocs dessinants.** La page n'en
+rend qu'un, le premier ; `has_diagram` répondait « oui, il y a un dessin » et se taisait.
+`procedure_diagram.compter_les_dessins` les compte, et `diagram_check` le dit
+(`DOUBLE`) : c'est le seul cas où la perte était muette.
+
 Ce que ça ne fait **pas** : servir la procédure « par étape ». Découper la lecture en
 une lecture par étape échange la résidence (payée au tarif du cache) contre des tours
 supplémentaires (chacun relit tout le contexte) — mesuré sur ces trois procédures, le
