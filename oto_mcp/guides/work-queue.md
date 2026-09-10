@@ -94,7 +94,25 @@ sous-agent : c'est ce qui permet de voir lequel est mort.
 **`filter`** — égalité exacte `{colonne: valeur}`, ce qui définit ce qui **compte comme
 claimable**. Typiquement `{"status": "nouveau"}`. Sans filtre, toute ligne dont le bail
 est libre est candidate — y compris celles déjà traitées. **Mets toujours un filtre**
-dès que la table porte un statut. Si le tableau déclare un périmètre de réservation
+dès que la table porte un statut.
+
+⚠️ **Et ce filtre doit porter sur une colonne que ton traitement ÉCRIT.** C'est la
+condition qui fait AVANCER la file, et rien ne la fait respecter. L'ordre est figé — la
+plus ancienne d'abord — donc relâcher une ligne la remet en tête si elle correspond
+toujours à ton filtre. Filtre sur la colonne A, écris dans la colonne B, et tu seras
+servi les deux ou trois mêmes lignes indéfiniment.
+
+Mesuré le 07/09/2026 sur un tableau de 3 766 lignes : trois workers filtraient sur une
+colonne que le traitement ne touchait pas. **834 lignes fraîches n'ont jamais été
+atteintes**, et un worker a réservé SEPT fois la même. Chaque appel réussissait, aucune
+erreur n'était levée — c'est un livelock, pas une panne, et on ne le voit pas de
+l'intérieur.
+
+⚠️ **Comment le voir quand même** : la ligne porte `_claims`. Au-dessus de 1, elle dit
+« je t'ai déjà été servie et je n'ai pas été écrite » — c'est la signature. Arrête-toi et
+relis ton filtre : réserver encore n'y changera rien. Sur un tableau qui déclare
+`lifecycle.max_claims`, ces lignes finissent par sortir de la file dans l'état d'abandon
+— **perdues pour la passe, sans avoir rien de fautif**. Si le tableau déclare un périmètre de réservation
 (`lifecycle.claimable` dans son schéma), ton `filter` s'y ajoute en ET : il le resserre,
 il ne l'élargit jamais — et une réponse `row: null` te nomme ce périmètre.
 

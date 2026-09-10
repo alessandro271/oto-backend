@@ -1008,6 +1008,23 @@ def register(mcp: FastMCP) -> None:
         workers never get the same row. Returns `{row: null}` when nothing is
         left to claim.
 
+        ⚠️ **Your `filter` MUST name a column your processing WRITES.** That is the
+        one condition which makes the queue ADVANCE, and nothing enforces it. The
+        order is fixed — oldest first — so releasing a row puts it back at the head
+        if it still matches your filter. Filter on column A, write into column B,
+        and you will be served the same two or three rows for ever.
+
+        Measured on a 3 766-row table: three workers filtered on a column the
+        processing never touched. **834 fresh rows were never reached**, and one
+        worker claimed the SAME row seven times. Every call succeeded and no error
+        was raised — a livelock, not a failure, and you cannot see it from inside.
+
+        ⚠️ **How to see it anyway**: the row carries `_claims`. Above 1 it means
+        « you have already been served this row and it was not written » — that is
+        the signature. Stop and re-read your filter; claiming again will not help.
+        On a table declaring `lifecycle.max_claims`, such rows eventually leave the
+        queue in the abandon state — LOST to the pass, without being at fault.
+
         Write your result and release it by the `_id` of the returned row.
 
         ⚠️ **Address the table by its NUMBER, not its name.** The reply carries
