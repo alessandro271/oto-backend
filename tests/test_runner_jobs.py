@@ -55,6 +55,16 @@ def espion(monkeypatch):
     # bancs de campagne passeraient alors sans rien exercer. Vérifié le
     # 07/09/2026 : lancés seuls ils tombaient, en groupe ils passaient.
     monkeypatch.setattr(RJ.db, "arreter_campagnes_epuisees", lambda org_id: [])
+    # ⚠️ MÊME raison, MÊME piège, repayé le 10/09/2026 : `accuser_arrets_effectifs`
+    # est entré dans le même chemin (#« un arrêt demandé redevient un arrêt
+    # constaté ») sans doublure ici. Joués seuls, les sept bancs de campagne
+    # tombaient en `KeyError: 'sub'` — un message qui accuse l'espion ; joués avec
+    # leur fichier ils passaient, parce que la fixture `live` d'un test VOISIN
+    # laisse `DATABASE_URL` posée pour tout le module. Un banc vert par voisinage
+    # ne garde rien : ici il garde SOUS QUELLE IDENTITÉ une campagne agit.
+    # Toute lecture de base ajoutée à `_produire_pour_une_campagne` doit être
+    # doublée ici — sinon le fail-open de la production avale l'échec.
+    monkeypatch.setattr(RJ.db, "accuser_arrets_effectifs", lambda org_id: [])
     return vu
 
 
@@ -276,8 +286,16 @@ def test_une_file_vide_fait_produire_le_travail_de_la_campagne(campagne):
 def test_le_travail_porte_l_identite_du_DECLARANT_pas_du_worker(campagne):
     """C'est la garde qui compte. Le worker n'est pas un pouvoir : il portera un
     jeton émis au nom de quelqu'un d'autre. Prendre son propre `sub` ici ferait
-    agir la campagne sous l'identité de l'infrastructure."""
-    _appel(_ctx(sub="worker-campagne"), op="claim")
+    agir la campagne sous l'identité de l'infrastructure.
+
+    ⚠️ Ce banc pose LUI-MÊME tout ce qu'il vérifie (cf. la doublure
+    `accuser_arrets_effectifs` de l'espion) et regarde `campaign_error` : la
+    production de travail est fail-open, elle avale toute exception et la rend
+    dans ce champ. Sans ce regard, une lecture de base non doublée fait échouer
+    la production en silence, et le banc tombe sur un `KeyError` qui accuse
+    l'espion au lieu de nommer la cause — ou pire, passe par voisinage."""
+    rendu = _appel(_ctx(sub="worker-campagne"), op="claim")
+    assert "campaign_error" not in rendu, rendu.get("campaign_error")
     assert campagne["sub"] == "celui-qui-a-declare"
     assert campagne["sub"] != "worker-campagne"
 
