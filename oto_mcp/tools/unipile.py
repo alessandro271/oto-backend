@@ -1471,6 +1471,11 @@ def register(mcp: FastMCP) -> None:
         - **"invitations"** : les invitations de connexion. `direction`='received'
           (reçues, à accepter) ou 'sent' (envoyées, en attente). Paginé — `limit`
           (défaut 50 : sans borne le backlog entier dépasse la limite de tokens).
+          ⚠️ **Une page rend 100 items au maximum**, quel que soit le `limit`
+          demandé : c'est un plafond du service amont, pas une troncature de notre
+          fait. Au-delà, repasse le `cursor` rendu — et ne repasse PAS `direction`
+          avec lui, il est déjà porté par le curseur. Un backlog de plusieurs
+          centaines d'invitations se parcourt donc page par page, pas d'un coup.
         - **"invite"** : envoie une demande de connexion (outreach 2e/3e degré).
           `provider_id` = champ `provider_id` d'un résultat `linkedin_unipile_search`
           / `linkedin_unipile_profile` ; `message` = note ≤300 caractères.
