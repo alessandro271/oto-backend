@@ -135,7 +135,8 @@ class LotsMixin:
                     self._merge_into_row(ns_id, existing_id, user_data, schema=schema,
                                          forcage=forcage,
                                          origine_override=origine_override,
-                                         donnees_d_origine=donnees_d_origine)
+                                         donnees_d_origine=donnees_d_origine,
+                                         lot=True)
                     updated += 1
                     ids.append(existing_id)
                     continue
@@ -170,9 +171,16 @@ class LotsMixin:
                                    if dk and dkv is not None else None)
                     if existing_id is None:
                         raise  # violation inexpliquée → erreur franche, pas de repli muet
+                    # ⚠️ `donnees_d_origine` voyage ICI aussi (oto#72) : ce chemin est
+                    # la COURSE PERDUE sous l'index de clé métier, qui converge en
+                    # update — « même merge que le chemin nominal », disait le
+                    # commentaire, mais il laissait tomber ce paramètre. Une ligne
+                    # d'import qui perdait sa course perdait sa version d'origine.
                     self._merge_into_row(ns_id, existing_id, user_data, schema=schema,
                                          forcage=forcage,
-                                     origine_override=origine_override)
+                                         origine_override=origine_override,
+                                         donnees_d_origine=donnees_d_origine,
+                                         lot=True)
                     updated += 1
                     ids.append(existing_id)
                     continue

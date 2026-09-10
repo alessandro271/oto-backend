@@ -189,7 +189,8 @@ class EcritureMixin:
                         *, schema: Optional[dict] = None,
                         forcage: Optional[Forcage] = None,
                         origine_override: bool = False,
-                        donnees_d_origine: bool = False) -> dict:
+                        donnees_d_origine: bool = False,
+                        lot: bool = False) -> dict:
         """MERGE `user_data` dans la row existante (dernier écrit gagne par champ),
         en appliquant le schéma v2 (ADR 0046) au résultat mergé : validation avec
         `prev_status` (transition de lifecycle) puis release du claim si l'état
@@ -199,7 +200,12 @@ class EcritureMixin:
         Le read-merge-write est ATOMIQUE (verrou de ligne, #197) : le get + le
         merge + l'update tournent dans une seule transaction `FOR UPDATE`, sinon
         deux writes concurrents de la même clé (même row_id) s'écrasaient
-        mutuellement (last-writer-wins) et perdaient des champs silencieusement."""
+        mutuellement (last-writer-wins) et perdaient des champs silencieusement.
+
+        `lot` = ce geste vient d'un LOT (oto#72). Il ne change rien à la fusion, il
+        change le REFUS : hors lot, celui d'un `id` nu conseille deux gestes que le mode
+        lot refuse ailleurs. La ligne de lot qui retrouve une ligne EXISTANTE passe ici,
+        et recevait donc le conseil qui échoue au tour suivant."""
         if schema is None:
             schema = self._schema_of(ns_id)
         # La ligne visée est connue ICI : ses colonnes comptent pour « colonne réelle »,
@@ -268,7 +274,7 @@ class EcritureMixin:
             # celles qu'on a retenues : une borne de longueur ou un motif ne doit pas
             # se réarmer sur une colonne préservée, dont la valeur n'a pas bougé.
             self._check_row(schema, merged, prev_status=prev_status,
-                            written=set(pose))
+                            written=set(pose), lot=lot)
             self.off_erased.extend(vidages)
             self.off_ignored.extend(ecartes)
             return merged

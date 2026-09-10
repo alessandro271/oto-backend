@@ -109,3 +109,62 @@ def test_le_chemin_de_LOT_passe_bien_le_mode():
         assert isinstance(val, ast.Constant) and val.value is True, (
             "le chemin de lot ne déclare plus son mode : le refus y redeviendrait "
             "celui qui conseille deux gestes refusés, en silence")
+
+
+def test_le_chemin_de_FUSION_recoit_et_transmet_le_mode():
+    """⚠️ Le trou que le premier lot a laissé (oto#72). Le mode était transmis sur la
+    branche de CRÉATION du lot — et le banc ci-dessus ne regardait que `lots.py`, donc
+    il ne pouvait pas le voir. Une ligne de lot qui retrouve une ligne EXISTANTE par sa
+    clé métier passe par `_merge_into_row`, dont l'appel au contrôle ne déclarait aucun
+    mode : elle recevait encore le conseil qui échoue au tour suivant.
+
+    Par l'AST, et sur le paramètre PROPAGÉ (`lot=lot`), pas sur une constante : un
+    `lot=True` gravé dans la fusion mentirait sur le chemin unitaire, qui passe par la
+    même fonction."""
+    import ast
+    import inspect
+
+    from oto_mcp.datastore import ecriture
+
+    arbre = ast.parse(inspect.getsource(ecriture))
+    fusion = next((n for n in ast.walk(arbre)
+                   if isinstance(n, ast.FunctionDef) and n.name == "_merge_into_row"), None)
+    assert fusion is not None, "`_merge_into_row` a disparu d'`ecriture.py`"
+    assert "lot" in [a.arg for a in fusion.args.kwonlyargs], (
+        "la fusion ne reçoit plus le mode : le refus y redevient celui qui conseille "
+        "deux gestes refusés, en silence")
+    appels = [n for n in ast.walk(fusion)
+              if isinstance(n, ast.Call)
+              and isinstance(n.func, ast.Attribute) and n.func.attr == "_check_row"]
+    assert appels, "la fusion n'appelle plus le contrôle"
+    for appel in appels:
+        val = {k.arg: k.value for k in appel.keywords}.get("lot")
+        assert isinstance(val, ast.Name) and val.id == "lot", (
+            "la fusion ne PROPAGE pas le mode reçu (attendu `lot=lot`)")
+
+
+def test_le_chemin_de_LOT_declare_son_mode_a_la_FUSION_aussi():
+    """Le pendant du précédent : recevoir le mode ne sert à rien si le lot ne le passe
+    pas. Les deux appels de `lots.py` comptent — celui du chemin nominal et celui de la
+    course perdue sous l'index de clé métier, qui converge en update."""
+    import ast
+    import inspect
+
+    from oto_mcp.datastore import lots
+
+    arbre = ast.parse(inspect.getsource(lots))
+    appels = [n for n in ast.walk(arbre)
+              if isinstance(n, ast.Call)
+              and isinstance(n.func, ast.Attribute) and n.func.attr == "_merge_into_row"]
+    assert len(appels) >= 2, f"attendu les deux chemins de fusion du lot, vu {len(appels)}"
+    for appel in appels:
+        kwargs = {k.arg: k.value for k in appel.keywords}
+        val = kwargs.get("lot")
+        assert isinstance(val, ast.Constant) and val.value is True, (
+            "un chemin de lot fusionne sans déclarer son mode")
+        # Même famille, trouvée en corrigeant : la course perdue laissait tomber le
+        # paramètre d'import, que le chemin nominal transmet.
+        assert "donnees_d_origine" in kwargs, (
+            "un chemin de lot fusionne sans transmettre `donnees_d_origine` : une ligne "
+            "d'import y perdrait sa version d'origine")
+
