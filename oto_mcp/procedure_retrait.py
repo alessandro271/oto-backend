@@ -1,14 +1,16 @@
 """Ce qu'une nouvelle version d'une procédure RETIRE — l'avertissement qui manquait.
 
-Le digest d'auto-amélioration raconte ce qu'on **ajoute**. Rien n'oblige à dire ce qu'on
-**retire**, et une réécriture « resserrée » retire par construction.
+Rien n'oblige à dire ce qu'une nouvelle version **retire**, et une réécriture
+« resserrée » retire par construction.
 
 Mesuré le 01/09/2026 sur une procédure réelle de 132 versions (oto#61, signal 644) :
 **22 colonnes du tableau de travail ne sont nommées nulle part dans la version servie**,
 alors que plusieurs sont massivement remplies — 471 fiches sur 504 en portent une. Des
 agents ne remplissent pas 300 fiches sans qu'une consigne le leur dise : la consigne le
 disait, et ne le dit plus. Trois coupes datées, dont une de trois sections **sans un
-mot** dans un digest par ailleurs méticuleux, qui justifiait chaque autre changement.
+mot** dans le bloc d'ouverture — par ailleurs méticuleux — qui justifiait chaque autre
+changement. (Ce bloc, le « Self-improvement digest », a lui-même été retiré le
+10/09/2026, oto#159 : la mesure ci-dessus le précède et reste ce qu'elle était.)
 
 ⚠️ **Le contenu perdu ne manque à personne sur le moment.** Il ne manque qu'aux agents
 des mois suivants, qui ne peuvent pas regretter ce qu'ils n'ont jamais lu. C'est ce qui

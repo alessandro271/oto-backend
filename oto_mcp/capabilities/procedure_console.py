@@ -59,8 +59,8 @@ _LIRE = BY_OP({None: ORG_MEMBER_OPT("org"), "user": SUB_ONLY, "org": ORG_MEMBER_
 #
 # Ce qui rend l'ouverture tenable, c'est que le geste est RÉVERSIBLE : chaque écriture
 # ajoute une version et `from_version` restaure la précédente. Le risque d'une procédure
-# qui pilote un agent se traite là — par les versions et par le digest qui dit ce qui a
-# changé — et non en fermant la porte à ceux qui s'en servent.
+# qui pilote un agent se traite là — par les versions, qui disent ce qui a changé et le
+# défont — et non en fermant la porte à ceux qui s'en servent.
 # ⚠️ Le refus d'écriture NOMME les autres chemins (04/09/2026). Mesuré sur un cas
 # réel, au journal des appels : une membre d'org tente d'écrire une procédure le
 # 31/08, réessaie le 02/09, et ne trouve le palier ÉQUIPE que le 04/09 — quatre jours,
