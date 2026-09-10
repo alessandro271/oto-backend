@@ -89,6 +89,16 @@ rien ne rendait navigable et que rien ne tenait.
 
 ## Les règles, chacune née d'un incident daté
 
+- **Un outil de LISTE naît avec un défaut resserré, et un cliquet le garde**
+  (2026-09-10, #910). Ce qu'un outil rend est le poste dominant d'un workflow : sur
+  trois jours d'une org en production, un seul outil de liste pesait 68 % des caractères
+  servis, et il a fallu corriger son défaut après coup (#918, −46 % par enregistrement).
+  Une économie qu'il faut connaître ne bénéficie à personne, donc elle vit dans le
+  DÉFAUT — et le seul moment où ça ne coûte rien, c'est l'écriture de l'outil.
+  `tests/test_sorties_listes_projetees.py` : un outil qui pagine expose `fields`/`full`
+  ou appelle une projection dans son corps ; les 198 qui ne le font pas sont nommés dans
+  `tests/tool_output_debt.txt`, liste qui ne peut que décroître. Payer une ligne = une PR
+  avec sa mesure avant/après.
 - **Le vocabulaire du produit se garde par un CLIQUET, pas par une règle de revue**
   (2026-08-28, #519). « Doctrine » a été remplacé par **guide** (ADR 0042) et
   **procédure** (ce qui s'exécute) dans tout l'interne. Une règle de vocabulaire ne

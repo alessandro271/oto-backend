@@ -1,0 +1,228 @@
+# Outils qui rendent une LISTE sans rien retirer de chaque enregistrement.
+# Un outil NEUF ne doit jamais s'ajouter ici : déclare ce que ton défaut retire.
+# Cette liste ne peut que DÉCROÎTRE — cf. tests/test_sorties_listes_projetees.py.
+#
+# La règle, par OUTIL : un outil servi qui expose un paramètre de pagination (`page`,
+# `size`, `limit`, `cursor`, `page_size`, `per_page`, `offset`) rend une liste par
+# construction. Il doit alors, soit exposer `fields` ou `full` (l'appelant peut
+# projeter, et le défaut est la vue resserrée — ADR 0047), soit appeler une projection
+# dans son propre corps (`output_projection`, `_shape(`, `summarize(`, `_project(`,
+# `_slim…`). Sinon il est ici.
+#
+# Mesuré le 2026-09-10 sur le montage réel (`register_all`) : 198 outils en dette.
+# ⚠️ Le premier relevé, fait sur un venv en retard sur le pin oto-core, n'en voyait que
+# 136 — une vingtaine de connecteurs récents n'y étaient pas montés (stripe, posthog,
+# promptwatch, ahrefs, tally, webflow…). La CI, qui les monte, a nommé les 62 autres.
+# Ce fichier se régénère donc sur le catalogue de la CI, jamais sur un poste de dev. Sur trois jours d'une org cliente en production, UN seul outil de
+# liste pesait 68 % de tous les caractères servis : c'est ce qu'un défaut non
+# resserré coûte à l'échelle, et c'est ce que #918 a dû corriger après coup.
+#
+# ⚠️ Ce que la règle NE mesure PAS, pour que personne ne lui fasse dire plus :
+# - elle détecte une DÉCLARATION, pas un effet. Un `fields` qui ne retire rien passe.
+#   Le poids réel se lit dans le journal (`tool_calls.result_size`,
+#   `oto_org_monitoring op=summary`), pas ici ;
+# - une projection faite dans un helper APPELÉ par l'outil, hors de son corps, se lit
+#   comme de la dette. Le remède est d'appeler la projection depuis l'outil, ou
+#   d'exposer `full` — pas d'ajouter un nom de marqueur à la liste du test ;
+# - un outil qui rend une liste SANS paramètre de pagination (liste courte bornée par
+#   l'amont) n'est pas vu.
+#
+# Payer une ligne = une PR à part, avec sa mesure avant/après (#918 est le modèle).
+ahrefs_gsc
+ahrefs_keywords_explorer
+ahrefs_site_audit
+ahrefs_site_explorer
+ahrefs_web_analytics
+apify_actors
+apify_store_search
+apollo_conversation
+apollo_email
+apollo_search_people
+apollo_sequence
+apollo_sequence_contacts
+ashby_applications
+ashby_candidates
+ashby_jobs
+attio_comment
+attio_entry
+attio_meeting
+attio_note
+attio_record
+attio_task
+brevo_contact
+brevo_crm_list
+brevo_list
+brevo_template
+brevo_transactional
+ccn_article
+ccn_conventions
+crunchbase_search_companies
+crunchbase_search_people
+culture_spectacle_search
+culture_spectacle_stats
+data_app
+drive_file
+finkare_debtor
+finkare_invoice
+finkare_payment
+firecrawl_crawl
+firecrawl_map
+firecrawl_search
+fireflies_bite
+fireflies_org
+fireflies_transcript
+foncier_beges
+foncier_comparables_app
+foncier_conso_elec
+foncier_dpe
+foncier_dvf
+foncier_geocode
+foncier_icpe
+foncier_permis_search
+forager_account
+forager_autocomplete
+fr_accords_search
+fr_accords_text
+fr_aides_search
+fr_events
+fr_search
+fr_stock_search
+fr_tenders_search
+frenchtech_search_annuaire
+github_actions
+github_orgs
+github_search
+gocardless_events
+gocardless_failed
+gocardless_payments
+grain_recording
+granola_content
+greenhouse_application
+greenhouse_candidate
+greenhouse_job
+greenhouse_users
+hubspot_list
+hubspot_object
+infosec_domain
+instagram_chat
+instagram_meta_get_recent_media
+juris_decision
+leexi_notes
+lemlist_contact
+lemlist_database
+lemlist_get_activities
+lemlist_inbox
+lemlist_schedule
+lemlist_task
+lemlist_unsubscribe
+lemlist_watchlist
+lever_opportunities
+lever_postings
+lever_users
+lighton_files
+linkedin_unipile_chat
+linkedin_unipile_facets
+linkedin_unipile_job
+loi_article
+make_list_scenario_logs
+make_list_scenarios
+messenger_chat
+minari_analytics
+minari_call
+minari_list
+n8n_list_executions
+n8n_list_tags
+n8n_list_workflows
+notion_query_database
+origami_campaigns
+origami_rows
+origami_sequences
+origami_tables
+origami_workspaces
+osm_pois
+oto_list_my_tools
+pennylane_transactions
+pennylaneged_companies
+phantombuster_list_containers
+pipedrive_lead
+pipedrive_note
+pipedrive_record
+planity_get_customer_receipts
+planity_list_appointments
+planity_list_mass_stock_removals
+planity_list_pos_periods
+planity_list_product_orders
+planity_list_recurring_appointments
+planity_search_customers
+posthog_flag
+posthog_insight
+posthog_person
+posthog_recording
+promptwatch_actions
+promptwatch_ads
+promptwatch_citation
+promptwatch_content
+promptwatch_content_agent
+promptwatch_monitor
+promptwatch_page_tracker
+promptwatch_prompt
+promptwatch_response
+promptwatch_shopping
+promptwatch_sitemap
+promptwatch_social
+promptwatch_visibility
+recruitee_candidates
+reddit_search
+reddit_search_subreddits
+reddit_subreddit
+sante_essms_search
+sante_finess_search
+searchapi_search
+sellsy_ref
+sellsy_search
+serpapi_search
+serper_maps_sample
+slack_read_history
+slack_read_thread
+snitcher_contact
+snitcher_organisation
+snitcher_session
+snitcher_workspace
+spott_application
+spott_candidate
+spott_client
+spott_job
+spott_note
+spott_people
+spott_placements
+stripe_balance
+stripe_catalog
+stripe_checkout
+stripe_customer
+stripe_event
+stripe_invoice
+stripe_payment
+stripe_search
+stripe_subscription
+supabase_query_logs
+tally_form
+tally_submission
+tally_webhook
+tally_workspace
+tavily_crawl
+tavily_map
+teamtailor_candidates
+teamtailor_job_applications
+teamtailor_jobs
+telegram_chat
+topograph_search
+twitter_chat
+webflow_cms
+webflow_forms
+webflow_pages
+webflow_submissions
+whatsapp_chat
+zohodesk_articles
+zohodesk_contacts
+zohodesk_search_tickets
+zohodesk_tickets
