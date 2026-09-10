@@ -57,3 +57,71 @@ capacité `me.guide`** (`capabilities/guides.py`, ADR 0042 §Convergence des sur
 handlers, une seule autz de scope** (`_owner_for_write`) — l'ex-`tools/guide.py`
 (qui redéclarait la sienne) est supprimé. `scope` omis à l'écriture = `user`. Le cap
 64 KB et le refus d'un corps vide s'appliquent désormais **aux deux faces**.
+
+## La seule app qui écrit — `data_review_app` (`FastMCPApp`)
+
+Une procédure s'arrête souvent sur une étape HUMAINE (« une personne relit les lignes
+en attente et les lance »). `data_review_app` (`tools/datastore_review_app.py`) la ramène
+dans la conversation : la prochaine ligne au statut `pending`, deux boutons, puis la
+suivante. C'est l'**utilisateur** qui tranche en cliquant ; les autres apps restent en
+lecture seule.
+
+**Les bornes, revérifiées au clic côté serveur** : une colonne (le statut) ; deux
+valeurs fixées par l'appel du modèle, figées dans la carte, et refusées hors des
+`options` déclarées ; une ligne par `_id`, écrite seulement si elle est TOUJOURS à
+`pending` (sinon sautée, jamais écrasée) ; le droit d'écrire est celui du store. Le
+`lifecycle` n'est pas lu pour choisir les boutons — son interprétation est en retrait
+(#317). La carte n'envoie ni ne lance rien dans un autre outil. En fin de file seulement,
+un bouton « Continue in chat » poste — au clic de l'utilisateur — un message factuel
+(« Done reviewing: 2 launched, 1 skipped. ») pour que l'agent reprenne la procédure. Le
+bilan voyage dans les arguments du bouton : fourni par le client, il est borné, affiché,
+incrémenté sur une écriture réelle seulement — jamais une garde. ⚠️ Le support de
+`ui/message` par claude.ai n'est pas vérifié : à éprouver en preprod.
+
+**Mécanique** : `FastMCPApp` plutôt que `@mcp.tool(app=True)`, parce que les boutons
+appellent un outil. `@app.ui()` = le point d'entrée servi au modèle ; `@app.tool()` =
+le gestionnaire des boutons, **app-only** — absent de `tools/list` (zéro coût de
+contexte), appelé sous un nom haché `<hash>_data_review_decide`, introuvable sous son
+nom nu. Trois conséquences à connaître :
+- ⚠️ **ce chemin contourne la visibilité de session** : fastmcp retrouve un outil d'app
+  même masqué par un transform. Le gestionnaire ne peut compter que sur ses propres
+  gardes (ici, celles du store).
+- ⚠️ **et il contourne les axes d'appel** : `namespace_of` d'un nom haché n'est pas
+  `data`, donc `CallContextMiddleware` n'y lit ni `_project` ni `_org`. Le contexte de
+  l'appel d'entrée est donc FIGÉ dans les arguments du bouton au rendu, et reposé dans
+  le gestionnaire par les gardes des axes eux-mêmes (`call_axes.PROJECT` / `ORG`). Les
+  middlewares tournent bien (journal, rédaction), sous le nom haché.
+- ⚠️ **l'absence de `tools/list` est marquée FIXME côté fastmcp** (le spec veut l'outil
+  listé, filtré par le host) : un bump au-delà du pin `<3.5` peut le faire réapparaître
+  dans le contexte du modèle.
+
+`test_platform_tools_are_capabilities.py` compte désormais les `@app.ui()` comme des
+tools écrits à la main : un point d'entrée `FastMCPApp` y passait sans être vu.
+
+## Construire une app qui agit — ce que la première a appris
+
+- **Le JSON servi ne prouve pas l'écran.** Les tests lisent `structuredContent` : ils
+  n'ont vu ni la carte qui ne passait jamais à la suivante, ni le double cadre, ni la
+  pastille illisible en sombre. Avant la PR, cliquer dans un vrai host : un serveur
+  FastMCP nu qui monte le module sur un store en mémoire (ni Logto ni base), puis
+  l'inspecteur MCPJam, onglet **Chat** — l'onglet Tools ne peint pas les apps.
+- **`$result` reçoit TOUT le `structuredContent`**, et un `Slot` ne peint qu'un composant
+  (clé `type` au premier niveau) : quand le gestionnaire rend un `PrefabApp`, échanger
+  par `SetState(clé, RESULT.view)`, jamais `RESULT`.
+- **Toute couleur passe par une variable du host** (`--color-background-primary`,
+  `--color-text-warning`…), accent compris : un host peut servir des fonds sombres sans
+  poser `.dark`, et une couleur réglée par `.dark` seule reste claire sur fond sombre.
+- **Le cadre est au host** : page transparente et sans marge, la carte ne redessine ni
+  bordure ni arrondi — sinon un second fond apparaît derrière ses coins. `@app.ui()` ne
+  transmet pas `prefersBorder` (fastmcp 3.4.x) : le rendu sans cadre de claude.ai web se
+  vérifie en préprod.
+- **L'iframe ne rétrécit pas** quand une carte plus courte remplace la précédente.
+- **Bruit à ignorer** : les rapports CSP `eval` du panneau Sandbox de MCPJam viennent des
+  sondes `new Function("")` du validateur embarqué dans le renderer — attrapées, sans effet.
+- **Un serveur local redémarré** laisse MCPJam sur l'ancien `Mcp-Session-Id` : 404, « No
+  tools found », erreur de chat. Couper puis rallumer le serveur dans Connect.
+- **Un bilan porté par les arguments d'un bouton est une donnée du client** : borné,
+  affiché, incrémenté sur une écriture réelle seulement — jamais une garde.
+- **La PR annonce** l'empreinte (`scripts/empreinte_servie.py`) et ce qui reste à éprouver
+  sur claude.ai (appel d'un outil absent de `tools/list`, `ui/message`, thème clair,
+  cadre) — en préprod, sur une COPIE de tableau : préprod et prod partagent la base.

@@ -46,7 +46,7 @@ class _Node:
         return [n for n in self.walk() if n.kind == "DataTable"]
 
 
-def _install_prefab_stub():
+def _install_prefab_stub(monkeypatch):
     mod = types.ModuleType("prefab_ui")
     comp = types.ModuleType("prefab_ui.components")
 
@@ -73,8 +73,11 @@ def _install_prefab_stub():
     comp.Card, comp.Column, comp.Heading = Card, Column, Heading
     comp.Text, comp.DataTable, comp.DataTableColumn = Text, DataTable, DataTableColumn
     mod.components = comp
-    sys.modules["prefab_ui"] = mod
-    sys.modules["prefab_ui.components"] = comp
+    # Posé par monkeypatch, donc RETIRÉ après chaque test : un stub laissé dans
+    # sys.modules faisait échouer en silence l'import gardé de toute app testée
+    # plus loin dans la session (sa `register()` sortait sans rien enregistrer).
+    monkeypatch.setitem(sys.modules, "prefab_ui", mod)
+    monkeypatch.setitem(sys.modules, "prefab_ui.components", comp)
 
 
 LEAD_SCHEMA = {
@@ -130,10 +133,11 @@ class _FakeStore:
 
 @pytest.fixture
 def data_app(monkeypatch):
-    _install_prefab_stub()
+    _install_prefab_stub(monkeypatch)
     _STACK.clear()
-    # (ré)importe le module APRÈS le stub pour que l'import gardé réussisse
-    sys.modules.pop("oto_mcp.tools.datastore", None)
+    # (ré)importe le module APRÈS le stub pour que l'import gardé réussisse — et
+    # rend le module d'origine après le test
+    monkeypatch.delitem(sys.modules, "oto_mcp.tools.datastore", raising=False)
     import oto_mcp.tools.datastore as ds
 
     captured = {}

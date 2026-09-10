@@ -17,6 +17,7 @@ données structurées, que tu peux lire normalement.
 | --- | --- | --- |
 | `data_app` | le datastore : sans `datastore` = table de tes tableaux ; avec = table triable des lignes (`filter` exact-match, `show_meta`) ; `row=<id\|clé\|titre>` ou un filtre qui isole 1 ligne = **fiche détail** (sous-records dépliés, statut + cycle de vie) | `data_rows`, `data_list_datastores` |
 | `oto_doc_app` | les pages/docs, **lecture seule** : sans argument = arbre du projet de documents HISTORIQUE de l'org active, quel que soit son nom (résolu par son ancre) — passe `project_id` pour le projet que tu vises vraiment ; `project_id` = arbre des pages d'un projet (enfants indentés) ; `doc_id` = une page en Markdown rendu ; `query` = recherche plein-texte avec extraits | `oto_doc` |
+| `data_review_app` | la **file de revue** d'un tableau : UNE ligne à la fois au statut `pending` (titre, 4 champs, la note), deux boutons — l'utilisateur clique `approve` ou `reject`, le statut s'écrit, la carte passe à la suivante. Pour l'étape HUMAINE d'une procédure (« une personne relit et lance ») | `data_rows` + `data_write` |
 | `foncier_site_app` | fiche d'un site (géocodage + parcelle + bâti) | `foncier_geocode`, `foncier_site(op="parcelle")`, `foncier_site(op="bati")` |
 | `foncier_comparables_app` | ventes DVF comparables autour d'une adresse | `foncier_dvf(op="comparables_adresse")` |
 | `foncier_prix_m2_app` | stats €/m² d'une commune | `foncier_dvf(op="prix_m2")` |
@@ -29,8 +30,14 @@ données structurées, que tu peux lire normalement.
 - **Toi tu veux TRAITER les données** (boucler, filtrer, croiser, compter) →
   l'équivalent JSON. L'app est faite pour les yeux de l'utilisateur, pas pour
   l'itération programmatique (pagination limitée, cellules résumées).
-- **Écrire** (créer, modifier, supprimer, partager) → jamais par une app : elles
-  sont en lecture seule. Utilise l'outil d'écriture (`data_write`, `oto_doc`…).
+- **Écrire** (créer, modifier, supprimer, partager) → jamais par une app, à UNE
+  exception : `data_review_app`, où c'est **l'utilisateur** qui tranche en cliquant
+  (un statut, sur une ligne encore en attente — une ligne changée entre-temps est
+  sautée). Ne l'ouvre pas pour décider à sa place : si c'est à toi de trancher,
+  `data_write`. La carte écrit un statut, elle n'envoie ni ne lance rien dans un autre
+  outil — dis-le si l'étape suivante (un envoi, un lancement) reste à faire. En fin de
+  file, l'utilisateur peut cliquer « Continue in chat » : son message « Done reviewing:
+  2 launched, 1 skipped. » est le signal de reprendre la procédure.
 - Les deux se combinent bien : traite en JSON, puis termine par un appel d'app
   pour donner à l'utilisateur une vue propre du résultat.
 

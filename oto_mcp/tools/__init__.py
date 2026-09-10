@@ -55,6 +55,11 @@ def register_all(mcp: FastMCP) -> None:
     from . import docs_app
     docs_app.register(mcp)
 
+    # File de revue — la seule MCP App qui écrit (un statut, sur une ligne encore en
+    # attente). Spine `data_*`, import prefab_ui gardé comme ci-dessus.
+    from . import datastore_review_app
+    datastore_review_app.register(mcp)
+
     # Runs / déroulés (ADR 0017) — verbes run_start/finish (spine). Le run_id posé
     # en état de session est stampé sur chaque tool_call par le sink calllog. Pas
     # de dépendance externe.

@@ -37,6 +37,10 @@ _KNOWN: dict[str, bool] = {
     # MCP App (SEP-1865) : renvoie une UI `prefab_ui` peinte par le host.
     "oto_doc_app": True,
     "data_app": True,
+    # …et la file de revue : son point d'entrée (`@app.ui()`) et le gestionnaire de
+    # ses boutons (`@app.tool()`, app-only, jamais listé au modèle).
+    "data_review_app": True,
+    "data_review_decide": True,
     # Boucle d'usage (ADR 0017) : la pile de run est session-scopée côté MCP.
     # (`feedback`, lui, est DÉJÀ une capacité — `capabilities/usage.py`.)
     "run_start": True,
@@ -70,7 +74,10 @@ _KNOWN: dict[str, bool] = {
 
 
 def _handwritten_tools() -> dict[str, str]:
-    """`{nom de tool: module}` pour tout `@mcp.tool()` déclaré dans `tools/`."""
+    """`{nom de tool: module}` pour tout `@mcp.tool()` déclaré dans `tools/`.
+
+    `@app.ui()` compte aussi : un point d'entrée `FastMCPApp` est un tool servi au
+    modèle, et ne pas le voir ici le ferait passer sous la garde sans un mot."""
     found: dict[str, str] = {}
     for path in sorted(TOOLS_DIR.glob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -79,7 +86,7 @@ def _handwritten_tools() -> dict[str, str]:
                 continue
             for deco in node.decorator_list:
                 target = deco.func if isinstance(deco, ast.Call) else deco
-                if isinstance(target, ast.Attribute) and target.attr == "tool":
+                if isinstance(target, ast.Attribute) and target.attr in ("tool", "ui"):
                     found[node.name] = path.name
     return found
 
