@@ -27,6 +27,26 @@ dependencies = [
     # branche : on n'écrit pas dans le dépôt d'autrui (l'API Contents rend 404 dessus).
     # Le mainteneur bump ici, puis `update-branch` la PR. L'atomicité du revert cède
     # devant ça. Cf. docs/contributions-forks.md (amendement du 2026-09-01).
+    # v1.123.0 = unipile : les invitations se paginent enfin, par DÉCALAGE — l'amont
+    # ne rend ni curseur ni total_count, seulement `data`, et le curseur qu'on lui
+    # renvoyait était refusé (« only limit and meta_only are allowed alongside it »)
+    # alors que `type` est requis : toute page après la première tombait en 400.
+    # L'arrêt est MÉCANIQUE, et c'est le point : le curseur fabriqué porte l'empreinte
+    # des ids de la page qui l'a produit ; page identique à l'empreinte portée ⇒ aucun
+    # curseur rendu. Sans cet arrêt, un amont qui ignorerait `offset` resservirait la
+    # même page indéfiniment (simulé : 8 pages, 400 lignes rendues pour 50 distinctes,
+    # jamais de fin) — la page VIDE, seul critère naïf, n'arrive jamais dans ce cas.
+    # v1.122.0 = apollo : le téléphone direct (`reveal_phone_number`) cessait d'être
+    # atteignable depuis la plateforme. Emporte aussi le nettoyage du paquet PUBLIC
+    # (archive source bornée, noms de tiers sortis du code) — hygiène de dépôt, sans
+    # effet sur ce qui s'exécute.
+    # v1.121.0 = serper : `census_maps` et `reviews_all` rendent `credits_used`, les
+    # crédits que Serper a RÉELLEMENT déduits. « Une page = un crédit » est faux pour
+    # Maps : une page en coûte 3, donc un recensement par défaut coûte ~81 crédits et
+    # non 27. C'est la donnée que consomme le métrage côté backend.
+    # Aucun de ces trois tags ne bouge la liste d'extras : ce pin garde `anonymize`
+    # (drive/gmail, dont la perte crashe en production) ET `planity` (httpx +
+    # websockets, sortis du socle en v1.118.0).
     # v1.120.0 = planity : l'amont coupe toute connexion WebSocket restée INACTIVE
     # au bout de 45 s, sans trame de fermeture, et le transport la resservait sans
     # la vérifier — vécu en production : tout ce qui passe par ce shard échouait
@@ -219,7 +239,7 @@ dependencies = [
     # antérieur, pip ignore un extra inconnu (avec un avertissement) — le
     # connecteur marcherait par accident, en tirant les deux libs du socle. Cette
     # ligne et ce tag se déplacent donc ENSEMBLE.
-    "oto-core[anonymize,planity] @ git+https://github.com/otomata-tech/oto-core.git@v1.120.0",
+    "oto-core[anonymize,planity] @ git+https://github.com/otomata-tech/oto-core.git@v1.123.0",
     # Patchright = client CDP qui pilote le Chrome HÉBERGÉ Browserbase (connect_over_cdp)
     # pour les connecteurs d'API privée cookie-bound (tools/brevo.py, tools/crunchbase.py).
     # AUCUN browser local sur la box (connect_over_cdp ne lance rien → pas de binaire Chrome
