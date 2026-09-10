@@ -172,6 +172,28 @@ dual-sub gmail), `OTO_MCP_CLAUDE_APP_ID` (client partagé) + `OTO_MCP_LOGTO_M2M_
 (M2M dédié pour la façade DCR). S3 Scaleway (`OTO_MCP_S3_*`, bucket `oto-media`)
 pour les avatars/logos. Tous ces secrets sont dans SOPS `projects/oto-mcp.yaml`.
 
+## Ce qui signe n'est pas ce qu'on annonce (`LOGTO_PUBLIC_ENDPOINT`, 10/09/2026)
+
+`LOGTO_ENDPOINT` porte **deux rôles** longtemps confondus : l'`issuer` des jetons (donc
+ce que le verifier attend, et l'adresse de la Management API) **et** l'adresse de Logto
+que la façade RFC 8414 **publie aux clients** (`authorization_endpoint`, `token_endpoint`,
+`jwks_uri`). Or l'`issuer` est gravé dans l'instance Logto — il vient de son `ENDPOINT`, le
+changer invalide toute session vivante — et vaut `https://auth.oto.ninja/oidc`. Conséquence
+vécue le 10/09 : un utilisateur qui autorise Claude sur `mcp.oto.cx` lisait `auth.oto.ninja`
+dans la métadonnée et se connectait donc là, seul écran du produit hors du domaine canonique.
+
+**`LOGTO_PUBLIC_ENDPOINT` sépare les deux** (`auth.facade._logto_public_oidc`) : posée, elle
+ne change QUE les endpoints annoncés ; l'`issuer` de la métadonnée reste **nous**
+(`OTO_MCP_PUBLIC_URL`, exigence RFC 8414 §3.3) et la vérification continue de lire
+`LOGTO_ENDPOINT`. C'est licite parce que **dans Logto tout suit l'en-tête `Host` sauf
+l'`issuer`** : les deux domaines servent les mêmes endpoints et les mêmes clés, un jeton
+obtenu par l'un est identique à un jeton obtenu par l'autre. Absente = pas de domaine public
+distinct, on annonce celui qui signe (preprod, on-premise). Un host réclamé par un **tenant
+tiers** garde son propre annuaire : la variable ne le touche pas.
+
+⚠️ Le cookie de session Logto est **par domaine** : à la bascule, une session ouverte sur
+`auth.oto.ninja` ne vaut pas sur `auth.oto.cx` — une reconnexion, une fois.
+
 ## MFA par org (« une org impose le 2ᵉ facteur à ses membres »)
 
 But : un `org_admin` peut rendre le MFA **obligatoire** pour tous les membres de

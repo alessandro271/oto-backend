@@ -44,6 +44,25 @@ def _logto_issuer() -> str:
     return os.environ["LOGTO_ENDPOINT"].rstrip("/") + "/oidc"
 
 
+def _logto_public_oidc() -> str:
+    """L'adresse de Logto **annoncée au client**, qui n'est pas celle qui signe.
+
+    `LOGTO_ENDPOINT` est l'`issuer` des jetons et l'adresse de la Management API : il
+    est gravé dans l'instance — le changer invalide toute session vivante — et reste
+    donc `auth.oto.ninja`. Mais ce que le client LIT le conduit à une page de
+    connexion : y annoncer l'adresse interne fait qu'un utilisateur qui autorise son
+    client sur `mcp.oto.cx` se connecte sur `auth.oto.ninja`, alors que tout le reste
+    du produit est en `.cx` (vécu le 10/09/2026). Dans Logto, tout suit l'en-tête
+    `Host` SAUF l'`issuer` : les deux domaines servent les mêmes endpoints et les
+    mêmes clés, un jeton obtenu par l'un est identique à un jeton obtenu par l'autre.
+
+    `LOGTO_PUBLIC_ENDPOINT` absent = pas de domaine public distinct de celui qui
+    signe ; on annonce alors le même, ce qu'attendent la preprod et l'on-premise.
+    """
+    public = os.environ.get("LOGTO_PUBLIC_ENDPOINT", "").strip().rstrip("/")
+    return f"{public}/oidc" if public else _logto_issuer()
+
+
 def as_metadata(public_url: str, logto: str = "") -> dict:
     """Métadonnée RFC 8414 servie sur NOTRE domaine : issuer = nous, le
     `registration_endpoint` est à nous, tous les endpoints OAuth sont ceux de Logto.
@@ -55,7 +74,7 @@ def as_metadata(public_url: str, logto: str = "") -> dict:
     (`https://x` → `https://x/`). On normalise l'issuer par le MÊME `AnyHttpUrl` →
     égalité byte-à-byte garantie. Sans ça, un client strict (Mistral) rejette le
     discovery pour issuer mismatch (claude.ai, lui, tolère le slash). Vécu 2026-06-25."""
-    logto = logto or _logto_issuer()
+    logto = logto or _logto_public_oidc()
     return {
         "issuer": str(AnyHttpUrl(public_url)),
         "authorization_endpoint": f"{logto}/auth",
@@ -79,7 +98,7 @@ def as_oidc_metadata(public_url: str, logto: str = "") -> dict:
     (`subject_types_supported`, `id_token_signing_alg_values_supported` = ES384, ce
     que Logto self-hosted signe) + `userinfo_endpoint`. Même issuer (normalisé) →
     pas de mismatch."""
-    logto = logto or _logto_issuer()
+    logto = logto or _logto_public_oidc()
     return {
         **as_metadata(public_url, logto),
         "userinfo_endpoint": f"{logto}/me",

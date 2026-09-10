@@ -45,7 +45,10 @@ argument MCP** ; la table de routes est **figée** (`docs/architecture.md`, `doc
 ## Auth, rôles, coffre, REST & version servie
 
 JWT Logto **ES384**, discovery RFC 9728, façade DCR ; au-dessus des orgs, l'étage **tenant** (ADR 0052 : un partenaire
-sert oto sous sa marque). ⚠️ Logto prod/preprod = **`auth.oto.ninja`**, pas `.zone` · ⚠️ **un env-liste s'ÉTEND, ne se
+sert oto sous sa marque). ⚠️ Logto prod/preprod = **`auth.oto.ninja`**, pas `.zone` · ⚠️ **ce qui SIGNE n'est pas ce qu'on
+ANNONCE** : l'`issuer` (donc `LOGTO_ENDPOINT`, donc la vérification) est gravé sur `.ninja`, mais les endpoints
+publiés aux clients suivent `LOGTO_PUBLIC_ENDPOINT` — `auth.oto.cx` en prod, sinon un utilisateur autorisé sur
+`mcp.oto.cx` se connecte sur `.ninja` (`docs/auth-logto.md`) · ⚠️ **un env-liste s'ÉTEND, ne se
 remplace jamais** (`MCP_AUDIENCE_ALT`, `OTO_MCP_CORS_ORIGINS`, `MAILER_FROM_DOMAINS`, SPF, redirect URIs), chaque env
 ayant la sienne (`docs/auth-logto.md`, `docs/tenants.md`).
 Paliers `member < admin < super_admin` ; clé résolue à chaque appel par le **walker unique** `access.walk_cascade`

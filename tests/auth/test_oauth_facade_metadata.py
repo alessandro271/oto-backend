@@ -46,3 +46,26 @@ def test_oauth_endpoints_point_to_logto():
     assert meta["token_endpoint"] == "https://auth.oto.ninja/oidc/token"
     # le registration_endpoint reste sur NOTRE domaine (façade DCR)
     assert meta["registration_endpoint"] == "https://mcp.oto.ninja/oauth/register"
+
+
+def test_endpoints_annonces_suivent_le_domaine_public(monkeypatch):
+    """`LOGTO_PUBLIC_ENDPOINT` déplace ce que le CLIENT lit — pas l'issuer.
+
+    Ce que la métadonnée annonce conduit l'utilisateur à une page de connexion : y
+    laisser l'adresse interne fait qu'une autorisation demandée sur `mcp.oto.cx` se
+    termine sur `auth.oto.ninja`, seul écran du produit hors du domaine canonique
+    (vécu le 10/09/2026). L'`issuer`, lui, reste NOUS — le PRM en dépend."""
+    monkeypatch.setenv("LOGTO_PUBLIC_ENDPOINT", "https://auth.oto.cx")
+    meta = as_metadata("https://mcp.oto.cx")
+    assert meta["authorization_endpoint"] == "https://auth.oto.cx/oidc/auth"
+    assert meta["token_endpoint"] == "https://auth.oto.cx/oidc/token"
+    assert meta["jwks_uri"] == "https://auth.oto.cx/oidc/jwks"
+    assert meta["issuer"] == str(AnyHttpUrl("https://mcp.oto.cx"))
+
+
+def test_domaine_public_ne_contamine_pas_un_tenant_tiers(monkeypatch):
+    """Un host réclamé par un tenant est servi par son annuaire, pas par le nôtre :
+    le domaine public du tenant primaire n'a rien à y faire."""
+    monkeypatch.setenv("LOGTO_PUBLIC_ENDPOINT", "https://auth.oto.cx")
+    meta = as_metadata("https://mcp.acme.test", "https://auth.acme.test/oidc")
+    assert meta["authorization_endpoint"] == "https://auth.acme.test/oidc/auth"
