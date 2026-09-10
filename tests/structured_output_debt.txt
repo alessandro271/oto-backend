@@ -6,15 +6,27 @@
 # canal structuré part avec. Un canal structuré se mérite par un VRAI schéma ; il ne
 # se déduit pas.
 #
-# Ce qui reste ici, mesuré le 2026-09-10 sur le catalogue COMPLET de la CI : 120
-# enveloppes `x-fastmcp-wrap-result` — 36 outils annotés `-> list` (une liste nue
-# emballée en `{"result": [...]}`) et 84 annotés `-> object` (un dict emballé en
-# `{"result": {...}}`, connecteurs récents : ahrefs, stripe, posthog, linear…). Dans les
-# deux cas les canaux n'ont pas la même forme : un client qui parse `.result` ne
-# retrouverait pas la donnée dans le texte sans la désemballer. On ne retire pas un
+# Ce qui reste ici, RECOMPTÉ le 2026-09-10 sur le montage complet (`_build_mcp`, 717
+# outils servis, dont 473 dont le schéma déduit vide est effacé et 124 qui n'en avaient
+# aucun) : 120 enveloppes `x-fastmcp-wrap-result`, dont
+#   -  20 dont le `result` est une `array` — annotés `list` (7) ou `list[dict]` (13),
+#      une liste nue emballée en `{"result": [...]}` ;
+#   - 100 dont le `result` n'a AUCUN type — annotés `object` (88), `Optional[dict]` (6)
+#      ou `dict | list` (6), emballés en `{"result": {...}}` (connecteurs récents :
+#      ahrefs, stripe, posthog, linear…).
+# Dans les deux cas les canaux n'ont pas la même forme : un client qui parse `.result`
+# ne retrouverait pas la donnée dans le texte sans la désemballer. On ne retire pas un
 # contrat qu'un client a pu apprendre sans l'avoir mesuré.
-# ⚠️ Un poste de dev en retard sur le pin oto-core n'en voit que 36 : la liste se
-# régénère sur le catalogue de la CI, jamais sur un poste.
+#
+# ⚠️ Cette composition a d'abord été écrite « 36 annotés `-> list` / 84 annotés
+# `-> object` » : ni les comptes ni la cause. Ce qui fabrique l'enveloppe, ce n'est pas
+# `-> object` en particulier — c'est TOUTE annotation de retour qui n'est pas un `dict`
+# NU, `Optional[dict]` et `dict | list` comprises.
+# ⚠️ Et un poste en retard sur le pin oto-core en voit AUTANT, contrairement à ce qui
+# était écrit ici : mesuré à oto-core 1.116.0 contre un pin v1.120.0, les mêmes 717
+# outils et les mêmes 120 enveloppes — un connecteur dont le cœur manque est monté en
+# REFUS, il ne disparaît pas du catalogue. C'est le PIN qui doit être bon, pas la
+# machine ; régénérer ce fichier sur un poste au pin est légitime.
 #
 # Payer une ligne = annoter l'outil `-> dict` et lui faire rendre un dict aux clés
 # nommées (leçon `pennylaneged` : `structured_content` doit être un objet, jamais une

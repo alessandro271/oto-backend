@@ -137,7 +137,7 @@ def relever(noms: list[str] | None = None) -> dict:
     paramètre ajouté ou une énumération élargie changent ce que le modèle lit, au même
     titre qu'une phrase — et un `outputSchema` qui apparaît ou disparaît change ce qu'un
     client PARSE (et, mesuré le 10/09/2026, ce que Claude Code donne au modèle). Il
-    manquait à l'empreinte : une PR qui retirait 451 schémas de sortie y lisait « aucun
+    manquait à l'empreinte : une PR qui retirait 473 schémas de sortie y lisait « aucun
     outil servi n'a changé »."""
     out: dict[str, dict] = {}
     for t in _monter():

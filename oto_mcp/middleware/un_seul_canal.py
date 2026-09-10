@@ -6,11 +6,11 @@ client qui PARSE consomme). La spec exige le second dès qu'un schéma est décl
 
 FastMCP déclare ce schéma **par inférence** : toute fonction annotée `-> dict` reçoit
 `{"type": "object", "additionalProperties": true}` — « un objet, tout est permis » — et
-donc un canal structuré. Mesuré le 10/09/2026 sur le catalogue de la CI : 451 outils
-avec ce schéma vide, 120 avec l'enveloppe `x-fastmcp-wrap-result` (un retour annoté
-`-> list` ou `-> object`, emballé en `{"result": …}`), **zéro dont le schéma décrive un
-seul champ**. Le contrat typé, seule
-raison d'être du canal, n'existe pas ; la copie, elle, part à chaque appel.
+donc un canal structuré. Recompté le 10/09/2026 sur le montage COMPLET (`_build_mcp`,
+717 outils) : **473** portaient ce schéma déduit vide, 124 n'en avaient aucun, et 120
+gardent l'enveloppe `x-fastmcp-wrap-result` (un retour annoté `-> list` ou `-> object`,
+emballé en `{"result": …}`) — **zéro dont le schéma décrive un seul champ**. Le contrat
+typé, seule raison d'être du canal, n'existe pas ; la copie, elle, part à chaque appel.
 
 Et cette copie n'est pas inerte : **Claude Code et oto-runner donnent au modèle le canal
 structuré À LA PLACE du texte** (marqueurs distincts sur les deux canaux, trois runs sur

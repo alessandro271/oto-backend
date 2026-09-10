@@ -189,9 +189,10 @@ Un résultat d'outil MCP a deux canaux : `content` (du texte, ce qu'un modèle l
 `structuredContent` (un JSON validable contre l'`outputSchema` de l'outil, ce qu'un
 client qui **parse** consomme ; la spec l'exige dès qu'un schéma est déclaré). FastMCP
 déclare ce schéma **par inférence** : toute fonction `-> dict` reçoit « un objet, tout
-est permis », donc un canal structuré. Mesuré sur le catalogue de la CI : 451 outils
-avec ce schéma vide, 120 enveloppes `x-fastmcp-wrap-result` (annotés `-> list` ou
-`-> object`), **zéro dont le schéma décrive un champ**. Le contrat typé n'existe pas ; la copie, elle, part à chaque appel.
+est permis », donc un canal structuré. Recompté sur le montage complet (717 outils
+servis) : **473** avec ce schéma vide, 124 sans aucun schéma, 120 enveloppes
+`x-fastmcp-wrap-result` (annotés `-> list` ou `-> object`), **zéro dont le schéma
+décrive un champ**. Le contrat typé n'existe pas ; la copie, elle, part à chaque appel.
 
 Et cette copie est LUE : **Claude Code et `oto-runner` donnent au modèle le canal
 structuré à la place du texte** (marqueurs distincts sur les deux canaux, trois runs sur
@@ -219,12 +220,18 @@ Les 120 enveloppes `x-fastmcp-wrap-result` (une valeur annotée `-> list` ou `->
 emballée en `{"result": …}`) sont **gardées** et nommées dans
 `tests/structured_output_debt.txt`, liste qui ne peut que décroître : là, les deux canaux
 n'ont pas la même forme, et un client qui parse `.result` ne retrouverait pas la donnée
-dans le texte sans la désemballer. Payer une ligne = annoter `-> dict` et rendre un dict
-aux clés nommées, ou déclarer un vrai `Output`. ⚠️ Un poste en retard sur le pin
-oto-core n'en voit que 36 ; le chiffre qui compte est celui de la CI.
+dans le texte sans la désemballer. Payer une ligne = annoter `-> dict` **nu** et rendre
+un dict aux clés nommées, ou déclarer un vrai `Output`. Composition recomptée : **20**
+dont le `result` est une `array` (annotés `list` / `list[dict]`) et **100** dont le
+`result` n'a pas de type (88 `object`, 6 `Optional[dict]`, 6 `dict | list`) — ce n'est
+donc pas `-> object` qui fabrique l'enveloppe, c'est **toute annotation qui n'est pas un
+`dict` nu**. ⚠️ Un poste en retard sur le pin oto-core en voit AUTANT : mesuré à
+oto-core 1.116.0 contre un pin v1.120.0, mêmes 717 outils et mêmes 120 enveloppes — un
+connecteur dont le cœur manque est monté en REFUS, pas absent du catalogue.
 
 **Ce qui change de contrat** : `/openapi.json`, `oto_tool_schema` et `/api/tools`
-servent `output_schema: null` pour 451 outils (`scripts/empreinte_servie.py` le
+servent `output_schema: null` pour 597 outils — les 473 dont le schéma déduit est
+effacé, plus les 124 qui n'en avaient aucun (`scripts/empreinte_servie.py` le
 mesure désormais — il ne voyait pas le schéma de sortie, et lisait « aucun outil servi
 n'a changé » sur ce lot). `me.tools` le disait déjà : « souvent `null`, un outil n'est
 pas tenu d'en déclarer un ».
