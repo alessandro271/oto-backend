@@ -398,3 +398,36 @@ def test_un_appel_REFUSÉ_ne_gonfle_pas_la_population(live, monkeypatch):
     with pytest.raises(ValueError):
         st.append_row(ns, {"ref": "i", "prio": {"valeur": "B", "origine": "A"}})
     assert _trace(ns_id) == []
+
+
+# --- oto#79 : le texte nomme la couche qui accueille l'intention -----------------
+
+def test_le_texte_nomme_la_couche_qui_accueille_l_intention_oto79(monkeypatch):
+    """Huit refus sur dix-huit rejouaient le geste refusé, la reprise la plus rapide à
+    neuf secondes. L'agent ne cherchait pas à écrire une valeur : il cherchait à dire
+    d'où elle venait, et le texte ne nommait jamais la couche qui accueille ça. Le refus
+    voisin — celui d'une colonne servie en lecture — le fait depuis toujours.
+
+    ⚠️ La forme d'écriture est exigée avec le nom : nommer `comment` sans montrer où il
+    se met laisse l'agent deviner, et c'est ce qu'on cherche à supprimer."""
+    monkeypatch.delenv(dsv2.ENV_ORIGINE_REFUS_LE, raising=False)
+    for texte in (dsv2.avertissement_origine(["charge_affaires"]),
+                  dsv2.refus_origine(["charge_affaires"])):
+        assert "`charge_affaires.comment`" in texte, texte
+        assert '{"charge_affaires": {"comment": …}}' in texte, texte
+        # Le registre ne change pas : ces textes VOUVOIENT (une personne décidera).
+        assert not re.search(r"\b(ton|ta|tes|tu|écris)\b", texte, re.I), texte
+
+
+def test_le_refus_qui_promettait_un_mecanisme_MORT_a_disparu():
+    """La branche qui servait « l'origine est conservée, et posée si elle manque » était
+    gardée par un cran SUPPRIMÉ le 08/09/2026 : elle ne pouvait plus jamais servir, et
+    elle promettait un filet qui n'existe plus. Le banc garde les deux faits — le texte
+    parti, et la raison pour laquelle il ne reviendra pas."""
+    import inspect
+
+    from oto_mcp.datastore import champs_reserves
+    src = inspect.getsource(champs_reserves)
+    assert "est posée par le système à partir de la valeur" not in src
+    assert dsv2.system_origin_fields({"fields": [{"key": "x", "origine": "system"}]}) == set()
+

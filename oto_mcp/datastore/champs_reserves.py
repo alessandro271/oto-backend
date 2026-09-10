@@ -45,7 +45,7 @@ from .couches import (
     unwrap,
     VALUE_LAYER,
 )
-from .declaration import readonly_fields, system_origin_fields
+from .declaration import readonly_fields
 
 #: Le paramètre par lequel un appelant DÉCLARE qu'il pose l'origine en connaissance de
 #: cause. Nommé par cohérence stricte avec `readonly_override` (#658) : même famille de
@@ -192,7 +192,7 @@ def refus_arme(aujourdhui: Optional["_date"] = None) -> bool:
     return jour >= date_refus()
 
 
-def _les_deux_gestes(maintenant: bool = False) -> str:
+def _les_deux_gestes(colonnes: list, maintenant: bool = False) -> str:
     """Les deux issues, côte à côte — le CORPS que l'avertissement et le refus
     partagent.
 
@@ -209,8 +209,20 @@ def _les_deux_gestes(maintenant: bool = False) -> str:
     le paramètre à cet appel » est impossible à suivre : un import par URL signée pousse
     des octets, il ne passe aucun paramètre. Lui dire seulement où le paramètre va sur un
     appel MCP, c'est l'envoyer chercher une manœuvre — il faut qu'il lise, là où il est,
-    que sa déclaration se fait au moment où l'URL est créée."""
+    que sa déclaration se fait au moment où l'URL est créée.
+
+    ⚠️ **Et la DESTINATION de l'intention est nommée (oto#79).** Sur dix-huit écritures
+    refusées, huit rejouaient le geste refusé — la reprise la plus rapide à neuf
+    secondes. L'agent ne cherchait pas à écrire une valeur : il cherchait à dire D'OÙ
+    elle venait, et aucun de ces textes ne nommait la couche qui accueille précisément
+    ça. Le refus voisin, celui d'une colonne servie en lecture, le fait depuis toujours
+    — le bon texte existait déjà à côté, il manquait là où il comptait le plus. Une
+    garde neuve qui ferme un geste répandu doit dire par quoi le remplacer.
+
+    ⚠️ Les deux gestes restent DEUX : la phrase ajoutée ne décrit pas un troisième geste
+    sur l'origine, elle renvoie une AUTRE intention vers une autre couche."""
     quand = ", dès maintenant" if maintenant else ""
+    col = str(colonnes[0]) if colonnes else "<colonne>"
     return (
         f"Deux gestes, l'un ou l'autre{quand} : si vous n'avez pas besoin d'écrire "
         "l'origine, écrivez la valeur seule (l'origine est conservée, et posée par la "
@@ -218,7 +230,12 @@ def _les_deux_gestes(maintenant: bool = False) -> str:
         f"ajoutez `{PARAMETRE_ORIGINE}: true` à cet appel — ou, si vous chargez un "
         f"fichier par URL signée, à l'appel qui a CRÉÉ l'URL (`oto_upload_url`), le PUT "
         "ne portant aucun paramètre. Rien à demander à personne : ce paramètre déclare "
-        "que vous savez ce que vous écrivez, et il suffit.")
+        "que vous savez ce que vous écrivez, et il suffit. "
+        f"⚠️ Et si votre intention était de dire D'OÙ VIENT cette valeur — sa source, "
+        f"qui vous l'a remise —, ce n'est pas `origine` : cela se pose en commentaire de "
+        f"la colonne (`{col}.comment`, soit `{{\"{col}\": {{\"comment\": …}}}}`), qui "
+        f"reste ouverte à l'écriture. `origine` ne dit qu'une chose : quelle était la "
+        f"valeur du DÉPART, à l'import.")
 
 
 def avertissement_origine(colonnes: list) -> str:
@@ -241,7 +258,7 @@ def avertissement_origine(colonnes: list) -> str:
         f"Cette écriture pose la couche `origine` de {quoi}. L'origine est la valeur du "
         f"départ, à l'import : la poser SANS LE DIRE sera refusé à partir du "
         f"{_en_francais(date_refus())}. Écrire l'origine reste possible — ce qui change, "
-        f"c'est qu'il faudra le déclarer. {_les_deux_gestes(maintenant=True)}")
+        f"c'est qu'il faudra le déclarer. {_les_deux_gestes(colonnes, maintenant=True)}")
 
 
 def refus_origine(colonnes: list) -> str:
@@ -256,7 +273,7 @@ def refus_origine(colonnes: list) -> str:
         f"Cette écriture pose la couche `origine` de {quoi} sans la déclarer — rien n'a "
         f"été écrit. L'origine est la valeur du départ, à l'import : depuis le "
         f"{_en_francais(date_refus())}, la poser exige de le dire. Écrire l'origine "
-        f"reste possible. {_les_deux_gestes()}")
+        f"reste possible. {_les_deux_gestes(colonnes)}")
 
 
 def origine_posee(payload: Optional[dict], avant: Optional[dict] = None) -> list[str]:
@@ -381,7 +398,7 @@ def reserved_refusals(schema: Optional[dict], payload: Optional[dict],
 
     ⚠️ Ici et pas dans le registre des jetons (#602) : celui-ci juge AVANT la
     résolution, sans schéma ; un champ réservé est une propriété du TABLEAU."""
-    ro, so = readonly_fields(schema), system_origin_fields(schema)
+    ro = readonly_fields(schema)
     # oto#83 : vides hors face agent — le cran ne borne que ce que la face a déclaré
     # être un appel de modèle. Deux ensembles disjoints : ce qui n'est pas servi du
     # tout, et ce qui est servi en lecture seule.
@@ -389,7 +406,7 @@ def reserved_refusals(schema: Optional[dict], payload: Optional[dict],
     lecture = (aga.fermees(schema) - masques) if agent else set()
     errors: list[str] = []
     details: dict = {}
-    if not ro and not so and not masques and not lecture:
+    if not ro and not masques and not lecture:
         return errors, details
     for cle, neuf in (payload or {}).items():
         if cle in masques:
@@ -400,14 +417,12 @@ def reserved_refusals(schema: Optional[dict], payload: Optional[dict],
                 and not same_value(unwrap(neuf), unwrap((avant or {}).get(cle))):
             errors.append(aga.refus(schema, cle, aga.LECTURE))
             continue
-        if cle in so and names_layers(neuf) and ORIGIN_LAYER in neuf \
-                and not same_value(neuf[ORIGIN_LAYER],
-                                   _origine_attendue(avant, cle, neuf)):
-            errors.append(
-                f"`{cle}.origine` est posée par le système à partir de la valeur "
-                f"remise ; elle ne s'écrit pas — rien n'a été écrit. Écris la valeur "
-                f"seule ({{\"{cle}\": …}}) : l'origine est conservée, et posée si "
-                f"elle manque.")
+        # ⚠️ La branche qui refusait ici l'écriture d'une origine RÉSERVÉE est retirée
+        # (oto#79). Son cran a été supprimé le 08/09/2026 : `system_origin_fields` rend
+        # `set()` même sur une colonne qui le déclare, donc elle ne pouvait plus jamais
+        # servir — et son texte promettait un filet qui n'existe plus (« l'origine est
+        # conservée, et posée si elle manque »). L'écriture d'une origine se juge
+        # désormais ailleurs, par la déclaration (`origine_override`).
         if cle in ro and avant is not None \
                 and (not names_layers(neuf) or VALUE_LAYER in neuf) \
                 and not same_value(unwrap(neuf), unwrap(avant.get(cle))):
