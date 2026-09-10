@@ -19,13 +19,21 @@ _LONG = "Description de la société, son marché, ses offres. " * 40
 # Forme réelle d'un `content[]` de `op=people` (clés de premier niveau exhaustives).
 PERSON = {
     "id": "03a4cc1e", "identifier": "laportealexis",
-    "profile": {"first_name": "Alexis", "last_name": "Laporte", "full_name": "Alexis Laporte",
+    "profile": {"first_name": "Alexis", "middle_name": None, "last_name": "Laporte",
+                "full_name": "Alexis Laporte",
                 "headline": "AI Engineer & Entrepreneur", "title": "AI Founding Engineer",
+                "birth_date": None,
                 "picture": {"source": "https://images.ai-ark.com/" + "x" * 120},
                 "background": {"source": "https://media.licdn.com/" + "y" * 160},
-                "summary": "Tech entrepreneur since 2010."},
-    "link": {"linkedin": "https://www.linkedin.com/in/laportealexis"},
-    "location": {"default": "Greater Marseille Metropolitan Area, France", "country": "France"},
+                "summary": "Tech entrepreneur since 2010. " * 20},
+    # Les clés à `None` et les sous-blocs sont ceux d'une capture du 10/09/2026 : la
+    # capture du 14/08 avait été élaguée à ce que le sourcing lit, et un banc qui ne
+    # porte pas une clé ne peut pas mesurer ce qu'elle coûte.
+    "link": {"linkedin": "https://www.linkedin.com/in/laportealexis",
+             "twitter": None, "github": None, "facebook": None},
+    "location": {"default": "Greater Marseille Metropolitan Area, France",
+                 "short": "Greater Marseille Metropolitan Area", "country": "France",
+                 "state": "Provence-Alpes-Côte d'Azur", "city": "Marseille", "position": None},
     "languages": {"profile_languages": [{"name": "English"}, {"name": "French"}]},
     "industry": "Computer Software",
     "educations": [{"school": {"name": "ENSEEIHT"}, "degree_name": "Master"}] * 3,
@@ -45,7 +53,8 @@ PERSON = {
                 "industries": ["software development"], "languages": ["english", "french"],
                 "technologies": ["hubspot", "aws"] * 30, "keywords": ["ai"] * 40,
                 "naics": ["541511"], "last_updated": "2026-07-20"},
-    "department": {"departments": ["engineering"], "seniority": "senior"},
+    "department": {"departments": ["engineering"], "sub_departments": ["software"],
+                   "functions": ["engineering"], "seniority": "senior"},
     "last_updated": "2026-07-20",
 }
 
@@ -86,6 +95,19 @@ def test_ce_qui_est_ecarte_est_ce_que_le_sourcing_ne_lit_jamais():
               "position_groups", "volunteer_experiences", "awards"):
         assert k not in p, k
     assert "picture" not in p["profile"] and "background" not in p["profile"]
+    # Élargi le 10/09 : le « À propos », les clés toujours nulles, les sous-blocs.
+    for k in ("summary", "middle_name", "birth_date"):
+        assert k not in p["profile"], k
+    for k in ("twitter", "github", "facebook"):
+        assert k not in p["link"], k
+    for k in ("short", "state", "position"):
+        assert k not in p["location"], k
+    for k in ("sub_departments", "functions"):
+        assert k not in p["department"], k
+    # …et ce que le tri côté client LIT reste : `departments` est le remède documenté
+    # au filtre mort `contact.department`, `city` et `country` situent le profil.
+    assert p["department"]["departments"] == ["engineering"]
+    assert p["location"]["city"] == "Marseille" and p["location"]["country"] == "France"
     # Les blocs répétés à l'identique sur les 100 personnes d'une même société.
     for k in ("technologies", "keywords", "naics"):
         assert k not in p["company"], k
