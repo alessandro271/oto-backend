@@ -46,6 +46,12 @@ def _ddl() -> str:
     s = _schema._SCHEMA
     i = s.index("CREATE TABLE IF NOT EXISTS org_instructions")
     creation = s[i:s.index("\n);", i) + 3]
+    # ⚠️ **La référence croisée est RETIRÉE, sinon le montage exige `orgs`.** Ce
+    # banc n'a besoin que de cette table ; la base de ce poste porte tout le schéma
+    # et masquait donc le manque, alors que le PostgreSQL de la CI part NU — huit
+    # erreurs au montage, tronc rouge, et un verdict local vert qui ne pouvait pas
+    # le voir. Même geste que le banc de tri du datastore, pour la même raison.
+    creation = creation.replace(" REFERENCES orgs(id) ON DELETE CASCADE", "")
     # Les colonnes posées par une migration, reprises de `db/_init.py` et non
     # devinées : `id` et `archived_at` y sont ajoutées par `ALTER`, donc un banc qui
     # rejoue le seul `CREATE` obtient une table où elles n'existent pas. C'est le
@@ -62,7 +68,17 @@ def _ddl() -> str:
 
 
 @pytest.fixture()
-def pg(pg_dsn, monkeypatch):
+def pg(pg_module_dsn, monkeypatch):
+    """Une base NEUVE pour ce module — donc NUE, comme celle de la CI.
+
+    ⚠️ **`pg_dsn` désigne une base partagée qui porte déjà tout le schéma**, et
+    c'est elle qui a masqué le défaut : ce banc passait ici et posait huit erreurs
+    au montage en CI (`relation "orgs" does not exist`), tronc rouge. Monter sur une
+    base neuve reproduit le manque localement au lieu de le découvrir en
+    intégration — un vert obtenu sur une base déjà meublée ne dit rien du montage.
+    Et ça évite au passage d'écrire dans la base des autres sessions.
+    """
+    pg_dsn = pg_module_dsn
     monkeypatch.setenv("DATABASE_URL", pg_dsn)
     from oto_mcp.db import _conn
     monkeypatch.setattr(_conn, "_database_url", lambda: pg_dsn)
