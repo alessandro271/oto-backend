@@ -34,7 +34,7 @@ def store(monkeypatch):
     """Un store réel, sans base : seule la FORME de la réponse est en jeu ici."""
     monkeypatch.setattr(registre.db, "create_datastore",
                         lambda ot, oid, ns: 42)
-    monkeypatch.setattr(registre, "_ns_url", lambda ns_id, sub: f"https://d/data/{ns_id}")
+    monkeypatch.setattr(registre, "_ns_url", lambda ns_id, sub, org=None: f"https://d/data/{ns_id}")
     return DatastorePg("u-1")
 
 
@@ -131,7 +131,7 @@ def test_le_TOOL_SERVI_tient_la_promesse_de_sa_propre_description(monkeypatch):
 
     monkeypatch.setattr(registre.db, "create_datastore",
                         lambda ot, oid, ns: 42)
-    monkeypatch.setattr(registre, "_ns_url", lambda ns_id, sub: f"https://d/data/{ns_id}")
+    monkeypatch.setattr(registre, "_ns_url", lambda ns_id, sub, org=None: f"https://d/data/{ns_id}")
     monkeypatch.setattr(access, "current_user_sub_or_raise", lambda: "u-1")
     monkeypatch.setattr(surface, "_store_for", lambda sub: DatastorePg("u-1"))
 
@@ -156,7 +156,7 @@ def test_le_TOOL_SERVI_avertit_quand_une_org_etait_demandee(monkeypatch, org_dem
 
     monkeypatch.setattr(registre.db, "create_datastore",
                         lambda ot, oid, ns: 42)
-    monkeypatch.setattr(registre, "_ns_url", lambda ns_id, sub: f"https://d/data/{ns_id}")
+    monkeypatch.setattr(registre, "_ns_url", lambda ns_id, sub, org=None: f"https://d/data/{ns_id}")
     monkeypatch.setattr(access, "current_user_sub_or_raise", lambda: "u-1")
     monkeypatch.setattr(surface, "_store_for", lambda sub: DatastorePg("u-1"))
 

@@ -21,10 +21,17 @@ D'où un patron par TYPE de lien, déclaré par le tenant, et une règle simple 
   peut pas « ne pas rediriger ». Sans patron, elle retombe sur la nôtre — l'utilisateur
   voit notre marque une fois, ce qui vaut mieux qu'une page blanche au milieu d'une
   connexion. C'est `redirect_for`, et c'est le seul chemin qui replie ainsi.
+
+⚠️ **Mis à jour le 10/09/2026 (oto#63).** Le partenaire décrit plus haut a désormais
+une page de tableau ; tant que sa ligne de tenant ne la déclare pas, ses comptes
+reçoivent `null`. Un `null` NU disait « introuvable » à qui le lisait — d'où
+`raison_sans_lien`, qui dit pourquoi l'adresse manque, et `patron_reclame`, qui ne fait
+payer un paramètre coûteux (l'org de l'appelant) qu'au produit qui le réclame.
 """
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Optional
 
 from . import config
@@ -112,6 +119,62 @@ def link_for(kind: str, *, sub: Optional[str] = None, **params: Any) -> Optional
     if not base:
         return None                       # un patron sans adresse ne mène nulle part
     return _render(base, str(patrons[kind]), params)
+
+
+# Le NOM de l'objet, pour dire à un humain ce qui n'a pas d'adresse.
+_NOMS = {"table": "tableau", "doc": "page", "project": "projet",
+         "public_doc": "page publique", "connectors": "connecteurs"}
+
+
+def _chemin_pour(kind: str, sub: Optional[str]) -> Optional[str]:
+    entry = _tenant_of(sub)
+    if entry is None:
+        return DEFAULT_PATHS.get(kind)
+    return (getattr(entry, "link_paths", None) or {}).get(kind)
+
+
+def patron_reclame(kind: str, param: str, *, sub: Optional[str] = None) -> bool:
+    """Le patron de lien de ce compte pour `kind` porte-t-il `{param}` ?
+
+    Sert à ne payer un paramètre coûteux QUE lorsque le produit qui recevra le lien le
+    réclame : chez nous un tableau s'ouvre par son seul id, et résoudre l'org de
+    l'appelant pour rien sur chaque ligne d'une liste serait une requête par ligne."""
+    chemin = _chemin_pour(kind, sub)
+    return bool(chemin) and "{" + param + "}" in str(chemin)
+
+
+def raison_sans_lien(kind: str, *, sub: Optional[str] = None, **params: Any) -> Optional[str]:
+    """POURQUOI `link_for` ne rend rien — `None` s'il rend bien un lien.
+
+    `None` n'est pas une erreur (cf. la tête de ce module), mais un `null` NU était
+    indiscernable d'un objet introuvable (oto#63) : l'appelant cherchait une panne qui
+    n'existe pas, ou concluait que l'objet n'existe pas. Mêmes branches que
+    `link_for`, dans le même ordre — une lecture du registre, deux formulations."""
+    if link_for(kind, sub=sub, **params) is not None:
+        return None
+    nom = _NOMS.get(kind, kind)
+    entry = _tenant_of(sub)
+    if entry is None:
+        chemin = DEFAULT_PATHS.get(kind)
+        if chemin is None:
+            return f"aucune page de {nom} n'existe dans ce produit"
+    else:
+        patrons = getattr(entry, "link_paths", None) or {}
+        if kind not in patrons:
+            return (f"le produit de ce compte ne déclare aucune page de {nom} : il n'y a "
+                    f"pas d'adresse à donner. Le {nom} existe bel et bien — c'est "
+                    "l'adresse qui manque, pas lui")
+        if not (entry.dashboard_url or "").strip():
+            return (f"le produit de ce compte déclare une page de {nom}, mais aucune "
+                    "adresse de base : aucun lien ne peut être construit")
+        chemin = str(patrons[kind])
+    poses = {k for k, v in params.items() if v is not None}
+    manquants = sorted(set(re.findall(r"\{(\w+)\}", str(chemin))) - poses)
+    if manquants:
+        return ("l'adresse de ce produit réclame "
+                + ", ".join(f"`{m}`" for m in manquants) + ", que ce contexte ne porte pas"
+                + (" — passe `_org=` pour la fixer" if "org" in manquants else ""))
+    return "aucune adresse n'a pu être construite : le patron déclaré est illisible"
 
 
 def redirect_for(kind: str, *, sub: Optional[str] = None, **params: Any) -> str:

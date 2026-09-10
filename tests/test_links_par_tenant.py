@@ -28,6 +28,10 @@ def registre():
                             "project": "/network/{org}/projects/{id}"}},
             # Déclaré mais sans rien : ne doit produire aucun lien, jamais les nôtres.
             {"slug": "beta", "issuer": "https://auth.beta.test/oidc"},
+            # oto#63 : un partenaire qui A une page de tableau, et l'ouvre DANS une org.
+            {"slug": "gamma", "issuer": "https://auth.gamma.test/oidc",
+             "dashboard_url": "https://app.gamma.test",
+             "link_paths": {"table": "/org/{org}/tables/{id}"}},
         ])))
     yield
     tenancy.install(avant)
@@ -175,3 +179,60 @@ def test_chez_nous_le_retour_federe_reste_le_notre(registre):
     # que de la figer, sinon le test suit le domaine du jour et pas la règle.
     assert links.link_for("connector_return", connector="folk") == \
         f"{config.dashboard_url()}/connectors?connector=folk"
+
+
+# --- oto#63 : l'org que le patron réclame, et la raison d'un lien absent ----------
+
+def test_un_tableau_s_ouvre_dans_l_org_que_le_patron_reclame(registre):
+    from oto_mcp.datastore.core import _ns_url
+    assert _ns_url(203, "gamma:u", org=58) == "https://app.gamma.test/org/58/tables/203"
+    assert _ns_url(203, "gamma:u") is None, "sans org, le patron ne se remplit pas : aucun lien"
+
+
+def test_le_patron_dit_ce_qu_il_reclame(registre):
+    assert links.patron_reclame("table", "org", sub="gamma:u") is True
+    assert links.patron_reclame("table", "org", sub="acme:u") is False    # pas de page
+    assert links.patron_reclame("table", "org", sub="bn01jfy76a5n") is False  # `/data/{id}`
+
+
+@pytest.mark.parametrize("sub, params, attendu", [
+    ("acme:u", {"id": 203}, "ne déclare aucune page de tableau"),
+    ("beta:u", {"id": 203}, "ne déclare aucune page de tableau"),
+    ("gamma:u", {"id": 203}, "réclame `org`"),
+])
+def test_un_lien_absent_dit_pourquoi(registre, sub, params, attendu):
+    assert links.link_for("table", sub=sub, **params) is None
+    raison = links.raison_sans_lien("table", sub=sub, **params)
+    assert raison and attendu in raison, raison
+
+
+def test_un_lien_present_n_a_pas_de_raison(registre):
+    assert links.raison_sans_lien("table", sub="gamma:u", id=203, org=58) is None
+    assert links.raison_sans_lien("table", sub="bn01jfy76a5n", id=203) is None
+
+
+def test_la_raison_nomme_le_remede_quand_c_est_l_org_qui_manque(registre):
+    assert "`_org=`" in links.raison_sans_lien("table", sub="gamma:u", id=203)
+
+
+def test_l_org_des_liens_se_resout_UNE_fois_et_seulement_si_le_patron_la_reclame(
+        registre, monkeypatch):
+    """Une liste de cent tableaux ne doit pas payer cent résolutions d'org — et chez
+    nous, qui ouvrons un tableau par son seul id, elle n'en paie aucune."""
+    from oto_mcp import access
+    from oto_mcp.datastore.registre import RegistreMixin
+    appels: list = []
+    monkeypatch.setattr(access, "current_org", lambda sub: appels.append(sub) or 58)
+
+    class _Store(RegistreMixin):
+        def __init__(self, sub):
+            self.sub = sub
+
+    partenaire = _Store("gamma:u")
+    assert [partenaire._org_des_liens() for _ in range(3)] == [58, 58, 58]
+    assert appels == ["gamma:u"], "résolue une seule fois par geste"
+    appels.clear()
+    assert _Store("bn01jfy76a5n")._org_des_liens() is None
+    assert _Store("acme:u")._org_des_liens() is None
+    assert appels == [], "aucune résolution quand le patron ne la réclame pas"
+

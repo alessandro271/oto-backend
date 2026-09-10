@@ -17,6 +17,10 @@ from . import acces_agent as aga
 from .errors import DatastoreExists, DatastoreForbidden
 from .outils import _ns_url
 
+# Sentinelle du mémo d'org des liens : `None` est une réponse légitime (aucune org
+# à porter), il ne peut donc pas signifier « pas encore calculée ».
+_PAS_CALCULE = object()
+
 
 def _avertissement_de_portee(ns_id: int, owner_type: str, *,
                              explicite: bool) -> Optional[str]:
@@ -63,6 +67,19 @@ class RegistreMixin:
 
     # --- datastore lifecycle -------------------------------------------------
 
+    def _org_des_liens(self) -> Optional[int]:
+        """L'org à porter dans le lien d'un tableau — calculée UNE fois par geste, et
+        seulement si le produit du compte la réclame (oto#63). Une liste de cent
+        tableaux ne paie donc jamais cent résolutions d'org, et chez nous
+        (`/data/{id}`) elle n'en paie aucune."""
+        memo = getattr(self, "_org_liens_memo", _PAS_CALCULE)
+        if memo is _PAS_CALCULE:
+            from .. import access, links
+            memo = (access.current_org(self.sub)
+                    if links.patron_reclame("table", "org", sub=self.sub) else None)
+            self._org_liens_memo = memo
+        return memo
+
     def _entry(self, n: dict, *, shared: bool, permission: Optional[str] = None) -> dict:
         ns_id = int(n["id"])
         perso = (self.sub is not None
@@ -75,7 +92,7 @@ class RegistreMixin:
             "id": ns_id,
             "datastore": n["datastore"],
             "created_at": n.get("created_at"),
-            "url": _ns_url(ns_id, self.sub),
+            "url": _ns_url(ns_id, self.sub, org=self._org_des_liens()),
             "shared": shared,
             "owner_type": n.get("owner_type"),
             "owner_id": n.get("owner_id"),
@@ -181,7 +198,7 @@ class RegistreMixin:
             ns_id = db.create_datastore(owner_type, oid, datastore)
         except ValueError as e:
             raise DatastoreExists(str(e))
-        out = {"datastore": datastore, "id": ns_id, "url": _ns_url(ns_id, self.sub),
+        out = {"datastore": datastore, "id": ns_id, "url": _ns_url(ns_id, self.sub, org=self._org_des_liens()),
                "owner_type": owner_type, "owner_id": oid,
                "is_personal": owner_type == "user"}
         avertissement = _avertissement_de_portee(ns_id, owner_type,
@@ -210,7 +227,7 @@ class RegistreMixin:
             db.rename_datastore_by_id(ns_id, new_name)
         except ValueError as e:
             raise DatastoreExists(str(e))
-        return {"id": ns_id, "datastore": new_name, "url": _ns_url(ns_id, self.sub)}
+        return {"id": ns_id, "datastore": new_name, "url": _ns_url(ns_id, self.sub, org=self._org_des_liens())}
 
     def resolve_ns_id(self, datastore: str) -> int:
         """ns_id d'un datastore visible par l'acteur (lève `DatastoreNotFound`).
@@ -225,4 +242,4 @@ class RegistreMixin:
         return self._resolve(datastore, write=True)
 
     def get_url(self, datastore: str) -> str:
-        return _ns_url(self._resolve(datastore), self.sub)  # 404 si inconnu
+        return _ns_url(self._resolve(datastore), self.sub, org=self._org_des_liens())  # 404 si inconnu

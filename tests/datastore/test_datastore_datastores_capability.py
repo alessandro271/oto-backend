@@ -73,7 +73,7 @@ def store(monkeypatch):
     monkeypatch.setattr(registre.db, "create_datastore",
                         lambda ot, oid, ns: 42)
     monkeypatch.setattr(registre, "_ns_url",
-                        lambda ns_id, sub: f"https://dashboard.oto.ninja/data/{ns_id}")
+                        lambda ns_id, sub, org=None: f"https://dashboard.oto.ninja/data/{ns_id}")
     s = _Store()
     monkeypatch.setattr(dsn, "make_store", lambda sub: s)
     return s
@@ -292,6 +292,19 @@ def test_lurl_rend_le_deep_link(store):
     store.v["get_url"] = "https://dashboard.oto.ninja/data/42"
     assert _call("me.datastore.url", path_params={"datastore": "v"}) == (
         200, {"url": "https://dashboard.oto.ninja/data/42"})
+
+
+def test_une_url_absente_dit_pourquoi_et_n_est_pas_un_404(store, monkeypatch):
+    """oto#63 : un compte dont le produit n'a pas de page de tableau recevait un
+    `url: null` NU — lu « introuvable », alors que le tableau existe. La réponse dit
+    maintenant pourquoi, et SEULEMENT dans ce cas (le cas ordinaire, au-dessus, ne
+    porte aucune clé de plus)."""
+    from oto_mcp import access, links
+    store.v["get_url"] = None
+    monkeypatch.setattr(access, "current_org", lambda sub: 58)
+    monkeypatch.setattr(links, "raison_sans_lien", lambda kind, **k: f"pas de page de {kind}")
+    assert _call("me.datastore.url", path_params={"datastore": "v"}) == (
+        200, {"url": None, "url_absente": "pas de page de table"})
 
 
 # --- le seul écart, et il est voulu ---------------------------------------------

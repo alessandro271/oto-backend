@@ -30,6 +30,7 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ...datastore.identite import Adresse
+from ...datastore.outils import adresse_servie
 
 from ... import db, roles
 from ...auth import token_scopes
@@ -38,6 +39,15 @@ from .._authz import SUB_ONLY
 from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .common import EntreeDatastore, HORODATAGE, govern_ns, ns_not_found
 from ..registry import CAPABILITIES
+
+
+# ⚠️ `url` était déclarée `str` — obligatoire et non nulle — alors que le store rend
+# `None` pour tout compte dont le produit n'a pas de page de tableau (oto#63). Les
+# sorties ne sont pas validées : le serveur servait donc `null` sous un contrat qui
+# promettait une chaîne, et un client généré depuis ce contrat ne pouvait pas le prévoir.
+URL_TABLEAU = ("Adresse de la page du tableau dans le produit de ce compte. `null` quand ce "
+               "produit n'a pas de page de tableau — le tableau existe quand même ; "
+               "`GET …/url` dit alors pourquoi (`url_absente`).")
 
 
 class ListDatastoresInput(BaseModel):
@@ -95,7 +105,7 @@ class DatastoreEntry(BaseModel):
     datastore: Adresse
     created_at: Optional[str] = Field(default=None, description=HORODATAGE)
     # Deep-link dashboard du tableau (`/data/<id>`) — dérivé de l'id, jamais stocké.
-    url: str
+    url: Optional[str] = Field(default=None, description=URL_TABLEAU)
     # `True` = reçu par partage, `False` = possédé par l'org/l'équipe active.
     shared: bool
     owner_type: Optional[str] = None
@@ -132,7 +142,7 @@ class DatastoreList(BaseModel):
 class CreatedDatastore(BaseModel):
     datastore: Adresse
     id: int
-    url: str
+    url: Optional[str] = Field(default=None, description=URL_TABLEAU)
     # QUI possède le tableau — donc qui le verra. La création rendait moins que la
     # liste sur la seule information qui décide de ça (otomata-tech/oto#45) : le
     # serveur le savait, la réponse ne le disait pas.
@@ -158,7 +168,11 @@ class RenamedDatastore(BaseModel):
 
 
 class DatastoreUrl(BaseModel):
-    url: str
+    url: Optional[str] = Field(default=None, description=URL_TABLEAU)
+    url_absente: Optional[str] = Field(default=None, description=(
+        "Présent SEULEMENT quand `url` est null : pourquoi ce tableau n'a pas d'adresse "
+        "dans le produit de ce compte. Ce n'est jamais un tableau introuvable — celui-ci "
+        "répond 404."))
 
 
 def _list_datastores(ctx: ResolvedCtx, inp: ListDatastoresInput) -> dict:
@@ -238,7 +252,7 @@ def _rename_datastore(ctx: ResolvedCtx, inp: RenameDatastoreInput) -> dict:
 
 def _datastore_url(ctx: ResolvedCtx, inp: DatastoreRefInput) -> dict:
     try:
-        return {"url": make_store(ctx.sub).get_url(inp.datastore)}
+        return adresse_servie(make_store(ctx.sub).get_url(inp.datastore), ctx.sub)
     except DatastoreNotFound:
         raise ns_not_found(ctx.sub, inp.datastore)
 

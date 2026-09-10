@@ -84,16 +84,37 @@ def _new_id() -> str:
     return str(uuid.UUID(int=raw))
 
 
-def _ns_url(ns_id: int, sub: Optional[str] = None) -> Optional[str]:
+def _ns_url(ns_id: int, sub: Optional[str] = None,
+            org: Optional[int] = None) -> Optional[str]:
     """Deep-link vers la vue datastore du dashboard (surface d'édition canonique
     tant que l'export tiers — otomata#29 — n'existe pas). Par ID (`/data/<id>`,
     BIGSERIAL stable au renommage) — l'adressage `?ns=<nom>` est déprécié.
 
     ⚠️ **Peut valoir `None`** : le produit d'un partenaire n'a pas forcément de vue
-    tableau (celui du 13/08 n'en a aucune). On ne rend alors AUCUN lien — un lien mort
-    ne se diagnostique pas, il se subit."""
+    tableau. Celui du 13/08 n'en avait aucune ; il en a une depuis, que sa ligne de
+    tenant doit encore déclarer (oto#63). On ne rend alors AUCUN lien — un lien mort ne
+    se diagnostique pas, il se subit — et `adresse_servie` dit pourquoi.
+
+    `org` = l'org dans laquelle le lien ouvre le tableau, pour un produit dont le
+    patron la réclame (`/org/{org}/tables/{id}`). Transmise telle quelle ; `None`
+    l'omet, et un patron qui la réclame ne rend alors aucun lien. Le registre ne la
+    calcule qu'une fois par geste, et seulement si le patron la réclame."""
     from .. import links
-    return links.link_for("table", sub=sub, id=int(ns_id))
+    return links.link_for("table", sub=sub, id=int(ns_id), org=org)
+
+
+def adresse_servie(url: Optional[str], sub: Optional[str]) -> dict:
+    """La réponse d'adresse d'un tableau, identique sur les deux faces (oto#63).
+
+    Un `url: null` NU se lisait « tableau introuvable » : il dit maintenant POURQUOI
+    l'adresse manque (`url_absente`), et seulement quand elle manque — la réponse
+    ordinaire ne porte pas de clé de plus."""
+    if url is not None:
+        return {"url": url}
+    from .. import access, links
+    raison = links.raison_sans_lien("table", sub=sub, id=0, org=access.current_org(sub))
+    return {"url": None,
+            "url_absente": raison or "aucune adresse n'a pu être construite pour ce tableau"}
 
 
 
