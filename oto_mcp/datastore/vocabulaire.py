@@ -84,9 +84,14 @@ _ENFORCEMENT_PROBES = (
       "fields": [{"key": "x", "type": "list", "of": {"type": "text"},
                   "max_items": 1}]},
      {"x": ["a", "b"]}, None),
+    # ⚠️ Sonde passée d'`enum` à `text` le 10/09/2026 (#98). Sur un enum, elle
+    # annonçait `options` appliquée pendant qu'une liste posée sur un texte, un json ou
+    # une colonne sans type ne refusait RIEN, tableau strict compris : le client qui
+    # lisait `enforced` se croyait protégé. Elle éprouve désormais le cas général —
+    # celui qui était cassé —, et l'annonce retombera si le trou se rouvre.
     ("options",
      {"strict": True,
-      "fields": [{"key": "x", "type": "enum", "options": ["a"]}]},
+      "fields": [{"key": "x", "type": "text", "options": ["a"]}]},
      {"x": "b"}, None),
     ("type",
      {"strict": True, "fields": [{"key": "x", "type": "number"}]},

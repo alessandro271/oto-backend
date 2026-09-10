@@ -49,10 +49,10 @@ def test_declared_keys_on_a_schemaless_datastore():
     assert dsv2.top_level_keys({}) == set()
 
 
-def test_enum_options_ignore_the_free_ones():
+def test_options_ignore_the_free_enums():
     """Un enum SANS `options` est libre (le client rend un select vide) : il ne
     condamne aucune valeur, donc il n'a rien à vérifier sur l'existant."""
-    assert dsv2.top_level_enum_options(_SCHEMA) == {
+    assert dsv2.top_level_options(_SCHEMA) == {
         "unite_employeuse": ["oui", "non", "inconnu"]}
 
 

@@ -23,6 +23,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from .couches import _is_empty, LAYER_KEYS, layer_value, split_layer, unknown_layers, unwrap
+from .options_declarees import hors_des_options, montrable
 from .motifs import _pattern_re
 from .declaration import _fields, max_length_of, pattern_of, status_field, validation_active
 from .etats_declares import etats_trahis
@@ -37,22 +38,10 @@ from .phrases_de_refus import (
 _NUM_RE = re.compile(r"^-?\d+(\.\d+)?$")
 
 
-def _type_error(value: Any, ftype: str, path: str,
-                fields: Optional[list] = None, of: Optional[dict] = None,
-                options: Optional[list] = None, *,
-                closed: bool = False,
-                hors: Optional[list] = None) -> list[str]:
-    """Erreurs de conformité d'UNE valeur à un type déclaré (récursif).
-
-    `closed` = le référentiel de CE composite est fermé (#544) : un attribut que sa
-    déclaration ne nomme pas est refusé, au lieu d'être traversé en silence. Il se
-    propage vers le bas — une liste d'objets dans un objet reste fermée.
-
-    `hors` (liste mutable, optionnelle) = le relevé STRUCTURÉ des valeurs hors
-    options (#667), rempli en chemin : `{champ, valeur, options}`. Il existe pour
-    que l'appelant puisse ÉCARTER la valeur sans reparser le message — un refus
-    français relu comme un contrat est un contrat déguisé. Optionnel par
-    construction : ce validateur reste pur si personne ne le lui passe."""
+def _conformite_scalaire(value: Any, ftype: Optional[str], path: str) -> list[str]:
+    """La FORME d'une valeur scalaire, sans son appartenance à une liste — que
+    `_hors_options` juge ensuite. `json` et l'absence de type n'ont pas de forme à
+    tenir : ils rendent `[]`."""
     if ftype == "text":
         return [] if isinstance(value, str) else [f"{path}: attendu text, reçu {type(value).__name__}"]
     if ftype == "number":
@@ -81,16 +70,51 @@ def _type_error(value: Any, ftype: str, path: str,
         if isinstance(value, str) and "@" in value and " " not in value.strip():
             return []
         return [f"{path}: attendu un e-mail, reçu {value!r}"]
+    return []
+
+
+def _hors_options(value: Any, options: Optional[list], path: str,
+                  hors: Optional[list]) -> list[str]:
+    """L'appartenance à la liste DÉCLARÉE, pour tout type scalaire (#98).
+
+    Jusqu'au 10/09/2026, seule la branche `enum` lisait `options` : sur un tableau
+    strict, une liste posée sur un texte, un json ou une colonne sans type ne refusait
+    rien, et le signalement du régime souple se taisait aussi dès que la validation
+    était armée — personne ne voyait passer la valeur. La règle vient de
+    `options_declarees`, la même que le signalement souple et que le relevé de
+    l'existant à la pose.
+
+    Le relevé structuré (`hors`) est rempli comme il l'était pour les enums : c'est lui
+    qui permet à l'écriture d'ÉCARTER la valeur et d'écrire le reste (#667)."""
+    if not hors_des_options(value, options):
+        return []
+    allowed = [str(o) for o in options]
+    if hors is not None:
+        hors.append({"champ": path, "valeur": value, "options": allowed})
+    return [f"{path}: valeur {montrable(value)!r} hors options ({', '.join(allowed)})"]
+
+
+def _type_error(value: Any, ftype: Optional[str], path: str,
+                fields: Optional[list] = None, of: Optional[dict] = None,
+                options: Optional[list] = None, *,
+                closed: bool = False,
+                hors: Optional[list] = None) -> list[str]:
+    """Erreurs de conformité d'UNE valeur à un type déclaré (récursif).
+
+    `closed` = le référentiel de CE composite est fermé (#544) : un attribut que sa
+    déclaration ne nomme pas est refusé, au lieu d'être traversé en silence. Il se
+    propage vers le bas — une liste d'objets dans un objet reste fermée.
+
+    `hors` (liste mutable, optionnelle) = le relevé STRUCTURÉ des valeurs hors
+    options (#667), rempli en chemin : `{champ, valeur, options}`. Il existe pour
+    que l'appelant puisse ÉCARTER la valeur sans reparser le message — un refus
+    français relu comme un contrat est un contrat déguisé. Optionnel par
+    construction : ce validateur reste pur si personne ne le lui passe."""
     if ftype == "enum":
         # `options` absentes ⇒ enum libre (le client rend un select vide, pas d'erreur).
         if not isinstance(value, str):
             return [f"{path}: attendu une valeur d'énumération, reçu {value!r}"]
-        allowed = [str(o) for o in (options or [])]
-        if allowed and value not in allowed:
-            if hors is not None:
-                hors.append({"champ": path, "valeur": value, "options": allowed})
-            return [f"{path}: valeur {value!r} hors options ({', '.join(allowed)})"]
-        return []
+        return _hors_options(value, options, path, hors)
     if ftype == "object":
         if not isinstance(value, dict):
             return [f"{path}: attendu object, reçu {type(value).__name__}"]
@@ -116,13 +140,17 @@ def _type_error(value: Any, ftype: str, path: str,
                     errors.extend(_row_errors(
                         [x for x in sub_fields if isinstance(x, dict)], item, ipath,
                         closed=closed, vus=vus, hors=hors))
-            elif of.get("type"):
-                errors.extend(_type_error(item, of["type"], ipath,
+            elif of.get("type") or of.get("options"):
+                errors.extend(_type_error(item, of.get("type"), ipath,
                                           of.get("fields"), of.get("of"),
                                           of.get("options"), closed=closed,
                                           hors=hors))
         return errors
-    return []  # json / type absent : tout passe
+    # Tout autre type scalaire — et l'absence de type — passe par la MÊME liste (#98) :
+    # d'abord la forme, puis l'appartenance, jamais les deux sur une même valeur. Deux
+    # refus pour un seul relevé `hors` feraient refuser la fiche entière, là où
+    # l'écriture sait écarter la valeur et écrire le reste (#667).
+    return _conformite_scalaire(value, ftype, path) or _hors_options(value, options, path, hors)
 
 
 def _row_errors(fields: list, data: dict, path: str,
@@ -238,8 +266,10 @@ def _row_errors(fields: list, data: dict, path: str,
                 if details is not None:
                     details.setdefault("expected_column", str(key))
             continue
-        if f.get("type"):
-            errs_type = _type_error(value, f["type"], fpath,
+        # `options` sans type compte aussi (#98) : la liste est déclarée, la valeur doit
+        # y être — le type absent dit seulement qu'il n'y a pas de FORME à tenir.
+        if f.get("type") or f.get("options"):
+            errs_type = _type_error(value, f.get("type"), fpath,
                                     f.get("fields"), f.get("of"), f.get("options"),
                                     closed=closed or (strict and pose),
                                     hors=hors)

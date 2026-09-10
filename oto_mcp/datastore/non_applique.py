@@ -7,6 +7,12 @@ où ils comptent, à la pose comme à l'écriture, jamais six semaines plus tard
   que sur `strict`/`required`/`required_when`/`max_length` : un tableau qui déclare
   une liste de choix et rien d'autre accepte tout. `options_not_enforced` le dit à la
   pose, `unenforced_options` nomme la valeur hors liste à l'écriture ;
+
+  ⚠️ **Et en régime STRICT, jusqu'au 10/09/2026, `options` ne contraignait que les
+  `enum`** (#98) : sur un texte, un json ou une colonne sans type, une valeur hors
+  liste s'écrivait sans refus NI signalement — ce module ne la voyait pas non plus,
+  puisqu'il se tait dès que la validation est armée. Les deux régimes jugent désormais
+  tout type scalaire, avec la même règle (`options_declarees`) ;
 - **un champ `type: json` n'est pas interrogeable en profondeur** — stocké et rendu
   tel quel, ni filtrable ni agrégeable au-delà du premier niveau (`json_fields_depth`).
 
@@ -16,7 +22,7 @@ jour au lendemain des écritures qui passaient en erreurs, sans que personne l'a
 demandé.
 
 ⚠️ **Tout est DÉRIVÉ des fonctions qui décident** (`validation_active`,
-`top_level_enum_options`, `lifecycle_of`), jamais d'une copie de leur logique : le jour
+`top_level_options`, `lifecycle_of`), jamais d'une copie de leur logique : le jour
 où `options` entrera dans `validation_active`, ces avertissements s'éteindront d'
 eux-mêmes. Ce module existe précisément parce qu'une liste avait divergé du code.
 
@@ -33,11 +39,12 @@ from typing import Optional
 from .declaration import (
     _fields,
     status_field,
-    top_level_enum_options,
+    top_level_options,
     validation_active,
     _walk_fields,
 )
 from .couches import unwrap
+from .options_declarees import hors_des_options, montrable
 from .cycle_de_vie import (abandon_state_of, claimable_of, lifecycle_of,
                            max_claims_of, terminal_states)
 
@@ -59,7 +66,7 @@ from .cycle_de_vie import (abandon_state_of, claimable_of, lifecycle_of,
 # au lendemain sans qu'il ait rien demandé. Le régime strict, lui, refuse déjà.
 #
 # ⚠️ **Tout est DÉRIVÉ des fonctions qui décident** (`validation_active`,
-# `top_level_enum_options`), jamais d'une copie de leur logique : le jour où `options`
+# `top_level_options`), jamais d'une copie de leur logique : le jour où `options`
 # entrera dans `validation_active`, ces avertissements s'éteindront d'eux-mêmes. Ce
 # lot existe précisément parce qu'une liste avait divergé de ce que le code lit.
 
@@ -93,7 +100,7 @@ def unenforced_options(schema: Optional[dict], data: dict) -> dict:
         return {}
     deja = _options_already_enforced(schema)
     out: dict = {}
-    for champ, opts in top_level_enum_options(schema).items():
+    for champ, opts in top_level_options(schema).items():
         if champ in deja:
             continue
         # ⚠️ **Déballer avant de comparer**, comme partout ailleurs où une valeur est
@@ -120,8 +127,8 @@ def unenforced_options(schema: Optional[dict], data: dict) -> dict:
         # `etats_trahis`, qui ignore `None` et `""` depuis sa première ligne.
         if v is None or (isinstance(v, str) and not v.strip()):
             continue
-        if str(v) not in opts:
-            out[champ] = str(v)
+        if hors_des_options(v, opts):
+            out[champ] = montrable(v)
     return out
 
 
@@ -148,7 +155,7 @@ def options_not_enforced(schema: Optional[dict]) -> list[str]:
     if validation_active(schema):
         return []
     deja = _options_already_enforced(schema)
-    return sorted(c for c in top_level_enum_options(schema) if c not in deja)
+    return sorted(c for c in top_level_options(schema) if c not in deja)
 
 
 def options_not_enforced_warning(champs: list[str]) -> Optional[str]:

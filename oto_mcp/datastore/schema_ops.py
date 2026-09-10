@@ -430,8 +430,8 @@ class SchemaOpsMixin:
 
     @staticmethod
     def _offending_enum_warning(ns_id: int, schema: Optional[dict]) -> Optional[str]:
-        """Des rows existantes portent une valeur qu'un enum fraîchement déclaré
-        condamne : le dire à celui qui le déclare.
+        """Des rows existantes portent une valeur qu'une liste d'options fraîchement
+        déclarée condamne (tout type scalaire, #98) : le dire à celui qui la déclare.
 
         Un schéma ne vaut que pour l'AVENIR — le poser ne revalide pas l'existant.
         Or l'ordre normal des choses est d'écrire d'abord et de formaliser ensuite :
@@ -445,13 +445,13 @@ class SchemaOpsMixin:
         fautives avec leur compte — c'est ce qui permet de choisir entre corriger la
         donnée et élargir les options, là où un total nu laisse chercher."""
         # Gate = la validation sera-t-elle ACTIVE ? On avertit exactement quand les
-        # écritures futures seront refusées. Sur un schéma souple, l'enum ne
+        # écritures futures seront refusées. Sur un schéma souple, la liste ne
         # condamne rien (validation opt-in, 0016) : signaler l'existant y annoncerait
         # un refus qui n'aura pas lieu — un faux avertissement coûte la confiance
         # qu'on met dans les vrais.
         if not dsv2.validation_active(schema):
             return None
-        options = dsv2.top_level_enum_options(schema)
+        options = dsv2.top_level_options(schema)
         if not options:
             return None
         bad = db.datastore_offending_enum_values(ns_id, options)
@@ -464,7 +464,7 @@ class SchemaOpsMixin:
                if b["distinct"] > len(b["values"]) else "")
             + f"  [options : {', '.join(options[b['field']])}]"
             for b in bad)
-        return ("enum déclaré sur des données qui en sortent déjà :\n" + detail +
+        return ("liste de valeurs déclarée sur des données qui en sortent déjà :\n" + detail +
                 "\nCes lignes restent en place et resteront INVISIBLES au filtrage "
                 "et aux facettes. Corrige-les (réécris le champ) ou élargis les "
                 "options ; les écritures futures, elles, sont refusées.")

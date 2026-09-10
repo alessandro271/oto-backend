@@ -8,7 +8,7 @@ couche que tout le reste interroge pour savoir de quoi il parle :
   `declares_field`) ;
 - les contraintes portées par un champ (`max_length_of`, `pattern_of`) ;
 - ce que le premier niveau expose en bloc (`top_level_bounds`, `top_level_keys`,
-  `top_level_enum_options`, `top_level_patterns`, `order_spec`) ;
+  `top_level_options`, `top_level_patterns`, `order_spec`) ;
 - les champs désignés par leur STRUCTURE (`status_field` = qui porte le `lifecycle`,
   `title_field` = qui porte `display: "title"`) ;
 - les crans qui décident d'un régime (`validation_active`, `key_required_of`,
@@ -152,19 +152,29 @@ def top_level_keys(schema: Optional[dict]) -> set:
     return {str(f["key"]) for f in _fields(schema) if f.get("key")}
 
 
-def top_level_enum_options(schema: Optional[dict]) -> dict:
-    """`{champ: [options]}` des enums DÉCLARÉS au premier niveau, options non vides.
+def top_level_options(schema: Optional[dict]) -> dict:
+    """`{champ: [options]}` des champs de premier niveau porteurs d'une liste de
+    valeurs non vide — **quel que soit leur type scalaire** (#98), plus seulement
+    `enum`.
 
-    Restreint au premier niveau comme `top_level_bounds` : c'est ce qu'une requête
-    `data->>champ` sait interroger sur l'existant. Un enum sans `options` est un
-    enum LIBRE (le client rend un select vide) — il ne condamne rien."""
+    Jusqu'au 10/09/2026 elle s'appelait `top_level_enum_options` et ne rendait que les
+    enums. Or `options` est l'attribut canonique de la liste fermée, et il était
+    ACCEPTÉ sans un mot sur les dix autres types : un propriétaire qui restreignait une
+    colonne texte à quatre valeurs, sur un tableau strict, obtenait une déclaration
+    acceptée et aucune restriction — ni refus, ni signalement.
+
+    Exclus : les composites (`object`/`list` — leurs éléments se jugent par la récursion
+    de la validation) et les cibles de couche. Restreint au premier niveau comme
+    `top_level_bounds` : c'est ce qu'une requête `data->>champ` sait interroger sur
+    l'existant. Un enum sans `options` est un enum LIBRE (le client rend un select
+    vide) — il ne condamne rien."""
     out: dict = {}
     for f in _fields(schema):
         key = f.get("key")
         # Même raison que `top_level_bounds` : une cible de couche n'est pas
         # interrogeable par `data->>champ`, l'annoncer ferait porter le réglage
         # d'un écran sur une colonne qui n'existe pas.
-        if not key or f.get("type") != "enum" or split_layer(key)[1]:
+        if not key or f.get("type") in COMPOSITE_TYPES or split_layer(key)[1]:
             continue
         opts = [str(o) for o in (f.get("options") or [])]
         if opts:
@@ -180,7 +190,7 @@ def order_spec(schema: Optional[dict], key) -> tuple:
     vides-en-queue. Tout le reste — text, non déclaré, composite, chemin
     `col[0].attr`, couche `champ.source` — garde le tri textuel historique : ce
     helper ne matche que la CLÉ EXACTE d'un champ de premier niveau, comme
-    `top_level_enum_options`, parce que c'est ce que `data->>champ` sait trier.
+    `top_level_options`, parce que c'est ce que `data->>champ` sait trier.
     Un enum sans `options` est un enum LIBRE : rien à ranger, tri textuel."""
     if not isinstance(key, str):
         return (None, None)
@@ -384,7 +394,7 @@ def system_origin_fields(schema: Optional[dict]) -> set:
 def top_level_patterns(schema: Optional[dict]) -> dict:
     """`{clé: motif}` des champs de premier niveau porteurs d'un motif EXPLOITABLE.
 
-    Même restriction que `top_level_bounds` et `top_level_enum_options` : ce que
+    Même restriction que `top_level_bounds` et `top_level_options` : ce que
     `data->>clé` sait relire sur l'existant. Sert l'avertissement « des lignes
     existantes ne suivent déjà pas ce motif » à la pose du schéma."""
     out: dict = {}
