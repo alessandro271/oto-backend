@@ -231,6 +231,8 @@ def test_set_schema_warns_about_rows_already_over_the_bound(store, monkeypatch):
     st, _ = store
     monkeypatch.setattr(dsm.db, "set_datastore_schema", lambda *a: None)
     monkeypatch.setattr(dsm.db, "datastore_key_dup_groups", lambda *a: [])
+    # oto#82 : ce db stubbé ne porte aucun index — la pose reste donc faite.
+    monkeypatch.setattr(dsm.db, "datastore_has_key_index", lambda ns_id: False)
     monkeypatch.setattr(dsm.db, "datastore_drop_key_index", lambda *a: None)
     seen = {}
     monkeypatch.setattr(dsm.db, "datastore_overlong_fields",
@@ -247,6 +249,8 @@ def test_set_schema_silent_without_bounds(store, monkeypatch):
     st, _ = store
     monkeypatch.setattr(dsm.db, "set_datastore_schema", lambda *a: None)
     monkeypatch.setattr(dsm.db, "datastore_key_dup_groups", lambda *a: [])
+    # oto#82 : ce db stubbé ne porte aucun index — la pose reste donc faite.
+    monkeypatch.setattr(dsm.db, "datastore_has_key_index", lambda ns_id: False)
     monkeypatch.setattr(dsm.db, "datastore_drop_key_index", lambda *a: None)
     monkeypatch.setattr(dsm.db, "datastore_overlong_fields",
                         lambda *a, **k: pytest.fail("aucune borne : pas de scan"))

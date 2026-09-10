@@ -513,6 +513,19 @@ class KeyIndexUnavailable(RuntimeError):
     sur un schéma pourtant posé (incident du 2026-09-01)."""
 
 
+class KeyIndexStillEnforced(RuntimeError):
+    """Le RETRAIT de l'index d'unicité n'a pas abouti dans sa borne — il est encore là.
+
+    Sœur exacte de `KeyIndexUnavailable`, et son contraire : là, une contrainte
+    manquait ; ici une contrainte SURVIT à la clé qui la déclarait. La conséquence
+    n'est pas symétrique — un index qu'aucun schéma ne déclare refuse des écritures
+    au nom d'une clé que `data_get_schema` ne montre plus. Personne ne peut relier
+    le refus à sa cause.
+
+    Elle existe pour la même raison que sa sœur : le schéma est déjà écrit quand le
+    retrait coupe, donc l'appelant doit pouvoir le DIRE."""
+
+
 def datastore_ensure_key_index(ns_id: int, key: str, *, bornee: bool = True) -> None:
     """Pose l'index UNIQUE partiel de clé métier du namespace (dépose l'ancien —
     la clé a pu changer). Nom déterministe `ds_bkey_<ns_id>` (int → sûr) ; la clé
@@ -614,17 +627,43 @@ _POSE_INTERROMPUE = (
 )
 
 
-def datastore_drop_key_index(ns_id: int) -> None:
+def datastore_drop_key_index(ns_id: int, *, bornee: bool = True) -> None:
     """Dépose l'index d'unicité — ET le temporaire `_v2` qu'une pose coupée aurait
     pu laisser (sinon un unique orphelin continue de refuser des écritures pour une
-    clé qui n'est plus déclarée)."""
+    clé qui n'est plus déclarée).
+
+    ⚠️ **Borné comme la pose, et pour la même raison** (oto#82). Ce geste tournait sur
+    le pool de requête, où `lock_timeout` n'existe pas et `statement_timeout` vaut 0 :
+    mesuré **5,72 s d'attente derrière une simple lecture de 6 s**, borne réglée à
+    300 ms et ignorée. Et l'attente ne retient pas que l'appelant — `DROP INDEX`
+    réclame un `AccessExclusiveLock` sur `datastore_rows`, table COMMUNE à tous les
+    tableaux, et une demande de verrou exclusif se met en file DEVANT les lecteurs et
+    écrivains suivants. Un tableau qui perd sa clé arrêtait donc le voisinage.
+
+    Lève `KeyIndexStillEnforced` quand la borne coupe : l'index est encore là, et le
+    schéma qui ne le déclare plus est déjà écrit. `bornee=False` pour le travail de
+    FOND, qui a le droit d'attendre son tour."""
     from psycopg import sql as _sql
     name = _bkey_index_name(ns_id)
-    with _connect() as conn:
-        conn.execute(_sql.SQL("DROP INDEX IF EXISTS {n}").format(
-            n=_sql.Identifier(name)))
-        conn.execute(_sql.SQL("DROP INDEX IF EXISTS {t}").format(
-            t=_sql.Identifier(name + "_v2")))
+    with _connect_autocommit(bornee=bornee) as conn:
+        try:
+            conn.execute(_sql.SQL("DROP INDEX IF EXISTS {n}").format(
+                n=_sql.Identifier(name)))
+            conn.execute(_sql.SQL("DROP INDEX IF EXISTS {t}").format(
+                t=_sql.Identifier(name + "_v2")))
+        except _POSE_INTERROMPUE as e:
+            # Même forme que la pose : on ne traduit QUE la contention. Une vraie panne
+            # remonte telle quelle — annoncer « réessaie » ferait attendre un tir
+            # suivant qui échouera pareil.
+            pourquoi = ("pris dans un interblocage"
+                        if isinstance(e, psycopg.errors.DeadlockDetected)
+                        else "retenu par une transaction ouverte")
+            raise KeyIndexStillEnforced(
+                f"l'ancienne contrainte d'unicité du tableau est TOUJOURS en place "
+                f"(son retrait a été {pourquoi}) : une écriture que le nouveau schéma "
+                f"autorise peut encore être refusée au nom de la clé retirée. Repose "
+                f"le même schéma pour réessayer le retrait — la maintenance, elle, ne "
+                f"balaie que les index MANQUANTS.") from e
 
 
 def datastore_has_key_index(ns_id: int) -> bool:

@@ -432,6 +432,75 @@ et un handler REST qui invoque un tool pose un `sub_override` que
 `current_user_sub_from_token` rend avant de regarder quoi que ce soit. Le défaut était
 MCP-seul ; le correctif aussi.
 
+## Mode n°6 — le travail est bien placé, bien borné… et refait pour rien (oto#82, 11/09)
+
+Les modes précédents disent **où** l'I/O est posée et **combien de fois**. Celui-ci ne
+conteste ni l'un ni l'autre : le geste est au bon endroit, dans sa borne, et il ne
+devrait **pas avoir lieu du tout**. Le coût n'est pas sa durée, c'est le **verrou qu'il
+demande sur une table partagée**.
+
+`set_schema` décidait de reposer l'index d'unicité de clé métier sur `if new_key:` — donc
+sur **ce qui existe**, jamais sur **ce qui a changé**. L'ancien schéma était bien relu
+juste au-dessus, mais il ne servait qu'au relevé d'effacement : **jamais comparé à la
+clé**. Conséquence, mesurée en comparant l'identifiant de relation de `ds_bkey_<ns>`
+avant et après : changer un **libellé** reconstruisait l'index (DROP + CREATE
+CONCURRENTLY + RENAME), précédé d'un `GROUP BY … HAVING COUNT(*) > 1` sur **toutes** les
+lignes du tableau. Coût de la seule pose relevé dans l'issue : ≈ 0,55 s pour 400 000
+lignes. Et `patch_schema` recopie la clé telle quelle dans le schéma résultant : **tout**
+patch passait par là.
+
+**Ce qui rend ce gaspillage dangereux, et pas seulement cher :** les index de clé sont
+partiels par `ns_id`, mais la **table ne l'est pas** — tous les tableaux vivent dans
+`datastore_rows`. Un `DROP INDEX` y prend un `AccessExclusiveLock`, et une demande de
+verrou exclusif **se met en file DEVANT** les lecteurs et écrivains suivants. Modifier un
+libellé sur un tableau arrêtait donc le voisinage, qui n'a aucun rapport avec le geste.
+Un interblocage réel en est sorti le 2026-09-05 à 23:46 UTC, sur un appel qui ne portait
+qu'un booléen de tête.
+
+**Le remède tient en une comparaison** — la clé d'hier contre celle d'aujourd'hui — avec
+deux moitiés qui ne se déduisent pas l'une de l'autre :
+
+- « inchangée » ne veut pas dire « présente » : si l'index **manque** (borne coupée au
+  tir précédent), il se repose quand même ;
+- le **retrait** se décide sur l'**existant**, pas sur la déclaration d'hier : un index
+  qu'aucun schéma ne déclare plus imposerait son unicité à une colonne que
+  `data_get_schema` ne montre pas — un refus d'écriture que personne ne peut relier à sa
+  cause.
+
+**Et le retrait n'était pas borné.** La pose l'a été après l'incident du 2026-09-01 ; le
+retrait est resté sur le pool de requête, où `lock_timeout` n'existe pas et
+`statement_timeout` vaut 0. Mesuré : **5,72 s d'attente derrière une simple lecture de
+6 s**, borne réglée à 300 ms et ignorée. Il passe donc sur la connexion bornée, comme la
+pose, et lève `KeyIndexStillEnforced` quand il renonce — sœur de `KeyIndexUnavailable` et
+son contraire : là une contrainte manquait, ici une contrainte **survit** à la clé qui la
+déclarait. Le schéma est déjà écrit dans les deux cas, donc les deux se **disent** en
+avertissement plutôt qu'en 500, et celui du retrait **nomme la clé** qui reste imposée.
+
+### Le garde-fou
+
+`tests/test_pose_index_bornee.py` — bancs à vraie base qui mesurent l'**identifiant de
+relation** de l'index avant et après, seule mesure qui distingue « reposé » de « laissé
+en place ». Rejoué contre le corps d'avant : **un rouge**, l'index reconstruit sur une
+pose de libellé. Et chaque moitié de la condition a sa propre chute, simulée en mémoire :
+neutraliser « et si l'index manque » rougit le banc de l'index absent, réduire le retrait
+au souvenir de la déclaration rougit celui de l'index orphelin.
+
+### Ce que ce lot ne couvre pas
+
+- `oto-mcp maintenance key-indexes` ne balaie que les index **MANQUANTS** des tableaux à
+  clé déclarée. Un index **orphelin** — clé retirée, retrait coupé par sa borne — n'est
+  repris par personne ; seule une nouvelle pose du même schéma le retire. C'est pourquoi
+  l'avertissement servi dit « repose le même schéma », et ne promet pas la maintenance ;
+- le nom de l'index temporaire reste **déterministe et partagé par tableau**
+  (`ds_bkey_<ns>_v2`) : deux poses concurrentes qui changent **toutes les deux** la clé
+  visent encore le même objet. La fenêtre est désormais étroite (il faut deux
+  changements de clé simultanés sur le même tableau) mais elle existe, et rien ne
+  sérialise ce chemin ;
+- `DROP INDEX CONCURRENTLY` (`ShareUpdateExclusiveLock` au lieu d'`AccessExclusiveLock`)
+  retirerait la cause du verrou exclusif plutôt que sa fréquence. Non pris dans ce lot :
+  il laisse un index INVALIDE quand il est interrompu, donc il demande son propre
+  nettoyage et sa propre preuve.
+
 ## Un 502 en rafale n'est pas forcément un gel — la 2ᵉ cause (#352, nuit du 15-16/08)
 
 ⚠️ **À lire avant de conclure « c'est encore le gel ».** Ce document a servi, du 15/08 au

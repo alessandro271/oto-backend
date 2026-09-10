@@ -57,6 +57,8 @@ def _banc(monkeypatch, current: dict):
                         lambda ns_id, schema: posed.update(schema=schema))
     monkeypatch.setattr(dsm.db, "datastore_key_dup_groups", lambda ns_id, key: [])
     monkeypatch.setattr(dsm.db, "datastore_ensure_key_index", lambda ns_id, key: None)
+    # oto#82 : ce db stubbé ne porte aucun index — la pose reste donc faite.
+    monkeypatch.setattr(dsm.db, "datastore_has_key_index", lambda ns_id: False)
     monkeypatch.setattr(dsm.db, "datastore_drop_key_index", lambda ns_id: None)
     monkeypatch.setattr(dsm.db, "datastore_overlong_fields", lambda ns_id, bounds: [])
     monkeypatch.setattr(dsm.db, "datastore_field_values", lambda *a, **k: {})

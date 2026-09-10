@@ -88,6 +88,8 @@ def test_la_pose_annonce_ce_qu_elle_fera_respecter(monkeypatch):
     monkeypatch.setattr(st, "_ns_of", lambda ns_id: {})
     monkeypatch.setattr(ops.db, "set_datastore_schema", lambda *a: None)
     monkeypatch.setattr(ops.db, "datastore_key_dup_groups", lambda *a: [])
+    # oto#82 : ce db stubbé ne porte aucun index — la pose reste donc faite.
+    monkeypatch.setattr(ops.db, "datastore_has_key_index", lambda ns_id: False)
     monkeypatch.setattr(ops.db, "datastore_drop_key_index", lambda *a: None)
     monkeypatch.setattr(ops.db, "datastore_row_keys", lambda ns_id: [])
     monkeypatch.setattr(ops.db, "datastore_overlong_fields", lambda *a, **k: [])

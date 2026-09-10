@@ -30,6 +30,7 @@ est la PROJECTION — jamais l'inverse.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Optional
 
@@ -37,6 +38,8 @@ import psycopg
 
 from ._conn import _connect
 from .users import upsert_user
+
+logger = logging.getLogger(__name__)
 
 
 def create_datastore(owner_type: str, owner_id: str, namespace: str) -> int:
@@ -273,8 +276,16 @@ def delete_datastore_by_id(ns_id: int) -> bool:
             cur = conn.execute("DELETE FROM user_datastores WHERE id = %s", (ns_id,))
     # Import LOCAL : l'index de clé métier vit avec les lignes, pas avec le tableau.
     # Le faire en tête créerait un cycle (les lignes connaissent déjà le tableau).
-    from .datastore import datastore_drop_key_index
-    datastore_drop_key_index(ns_id)
+    from .datastore import KeyIndexStillEnforced, datastore_drop_key_index
+    try:
+        datastore_drop_key_index(ns_id)
+    except KeyIndexStillEnforced as e:
+        # oto#82 : le retrait est borné. Ici la suppression a DÉJÀ abouti, et l'index
+        # qui survit ne garde plus rien (le tableau n'existe plus, les ids ne se
+        # réutilisent pas) — c'est le cas « orphelin inoffensif » que dit le docstring
+        # ci-dessus. On le journalise au lieu de faire échouer une suppression faite,
+        # et l'attente exclusive sur la table commune ne retient plus personne.
+        logger.warning("ds_bkey ns=%s : index non retiré à la suppression — %s", ns_id, e)
     return cur.rowcount > 0
 
 

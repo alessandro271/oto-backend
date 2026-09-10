@@ -167,6 +167,8 @@ def store(monkeypatch):
     monkeypatch.setattr(st, "_schema_of", lambda ns_id: _AVANT)
     monkeypatch.setattr(ops.db, "set_datastore_schema", lambda *a: None)
     monkeypatch.setattr(ops.db, "datastore_key_dup_groups", lambda *a: [])
+    # oto#82 : ce db stubbé ne porte aucun index — la pose reste donc faite.
+    monkeypatch.setattr(ops.db, "datastore_has_key_index", lambda ns_id: False)
     monkeypatch.setattr(ops.db, "datastore_drop_key_index", lambda *a: None)
     monkeypatch.setattr(ops.db, "datastore_ensure_key_index", lambda *a: None)
     monkeypatch.setattr(ops.db, "datastore_row_keys", lambda ns_id: [])

@@ -196,3 +196,157 @@ def test_le_travail_de_fond_nest_PAS_borne(tableau, base_jetable, monkeypatch):
         db.datastore_ensure_key_index(ns_id, "siren", bornee=False)   # attend, et pose
 
     assert db.datastore_has_key_index(ns_id)
+
+
+# --- oto#82 : l'index ne se repose que s'il y a lieu ------------------------------
+
+def _oid_index(dsn: str, ns_id: int):
+    """L'identifiant de relation de l'index de clé — `None` s'il n'existe pas.
+
+    C'est la seule mesure qui distingue « reposé » de « laissé en place » : un index
+    reconstruit change d'oid, un index intact le garde. La même mesure que l'issue."""
+    import psycopg
+    with psycopg.connect(dsn) as c:
+        r = c.execute("SELECT oid FROM pg_class WHERE relname = %s AND relkind = 'i'",
+                      (f"ds_bkey_{int(ns_id)}",)).fetchone()
+    return r[0] if r else None
+
+
+def test_une_pose_qui_ne_touche_pas_la_cle_ne_repose_PAS_l_index(tableau, base_jetable):
+    """oto#82 : le calcul regardait ce qui EXISTE, pas ce qui a CHANGÉ. Toute pose —
+    un simple libellé — rescannait toutes les lignes puis reconstruisait l'index. Or un
+    `DROP INDEX` prend un verrou exclusif sur `datastore_rows`, commune à TOUS les
+    tableaux : le voisinage était verrouillé pour un geste qui ne le concerne pas."""
+    from oto_mcp.datastore.core import make_store
+    ns, ns_id = tableau
+    store = make_store("sub-borne")
+    store.set_schema(ns, _SCHEMA)
+    avant = _oid_index(base_jetable, ns_id)
+    assert avant is not None, "l'index de clé n'a pas été posé du tout"
+
+    store.set_schema(ns, {"key": "siren",
+                          "fields": [{"key": "siren", "type": "text", "label": "SIREN"}]})
+    assert _oid_index(base_jetable, ns_id) == avant, (
+        "l'index a été reconstruit alors que la clé n'a pas changé")
+
+
+def test_changer_la_cle_repose_l_index(tableau, base_jetable):
+    """Le contrepoids : conditionner ne doit pas rendre la pose paresseuse là où elle
+    est nécessaire — sinon la contrainte d'unicité porterait sur l'ancienne colonne."""
+    from oto_mcp.datastore.core import make_store
+    ns, ns_id = tableau
+    store = make_store("sub-borne")
+    store.set_schema(ns, _SCHEMA)
+    avant = _oid_index(base_jetable, ns_id)
+
+    store.set_schema(ns, {"key": "autre",
+                          "fields": [{"key": "siren", "type": "text"},
+                                     {"key": "autre", "type": "text"}]})
+    apres = _oid_index(base_jetable, ns_id)
+    assert apres is not None and apres != avant, "la clé a changé, l'index devait suivre"
+
+
+def test_retirer_la_cle_depose_l_index(tableau, base_jetable):
+    """Et un schéma sans clé ne laisse pas derrière lui une unicité que plus rien ne
+    déclare — c'est ce que le dépôt conditionné à l'EXISTANT garantit."""
+    from oto_mcp.datastore.core import make_store
+    ns, ns_id = tableau
+    store = make_store("sub-borne")
+    store.set_schema(ns, _SCHEMA)
+    assert _oid_index(base_jetable, ns_id) is not None
+
+    store.set_schema(ns, {"fields": [{"key": "siren", "type": "text"}]})
+    assert _oid_index(base_jetable, ns_id) is None, (
+        "l'index survit à la clé qui le déclarait : il imposerait son unicité à une "
+        "colonne que le schéma ne déclare plus")
+
+
+def test_un_index_MANQUANT_se_repose_meme_a_cle_INCHANGEE(tableau, base_jetable):
+    """⚠️ La moitié qui empêche le correctif de devenir un trou : « la clé n'a pas
+    changé » ne dit rien de la présence de l'index. Il peut manquer — la borne a coupé
+    au tir précédent, la maintenance n'est pas passée. Le conditionner à la seule
+    comparaison des clés laisserait le tableau SANS garantie anti-course, sans un mot."""
+    import psycopg
+
+    from oto_mcp.datastore.core import make_store
+    ns, ns_id = tableau
+    store = make_store("sub-borne")
+    store.set_schema(ns, _SCHEMA)
+    with psycopg.connect(base_jetable, autocommit=True) as c:
+        c.execute(f'DROP INDEX "ds_bkey_{int(ns_id)}"')
+    assert _oid_index(base_jetable, ns_id) is None
+
+    store.set_schema(ns, _SCHEMA)
+    assert _oid_index(base_jetable, ns_id) is not None, (
+        "l'index manquant n'a pas été reposé : la clé inchangée a suffi à sauter la pose")
+
+
+def test_un_index_ORPHELIN_est_depose_meme_sans_cle_declaree(tableau, base_jetable):
+    """L'autre moitié : le dépôt se décide sur ce qui EXISTE en base, pas sur la seule
+    déclaration d'hier. Un index resté là — reposé par la maintenance après un retrait,
+    une reprise à moitié faite — imposerait silencieusement son unicité à une colonne
+    que le schéma ne déclare plus : une écriture légitime se verrait refusée au nom
+    d'une contrainte que `data_get_schema` ne montre nulle part."""
+    from oto_mcp import db
+    from oto_mcp.datastore.core import make_store
+    ns, ns_id = tableau
+    sans_cle = {"fields": [{"key": "siren", "type": "text"}]}
+    store = make_store("sub-borne")
+    store.set_schema(ns, sans_cle)
+    assert _oid_index(base_jetable, ns_id) is None
+    db.datastore_ensure_key_index(ns_id, "siren")          # l'index orphelin
+    assert _oid_index(base_jetable, ns_id) is not None
+
+    store.set_schema(ns, sans_cle)
+    assert _oid_index(base_jetable, ns_id) is None, (
+        "un index qu'aucune clé ne déclare a survécu à une pose de schéma sans clé")
+
+
+# --- oto#82 : le RETRAIT aussi tient la table commune ----------------------------
+
+def test_le_RETRAIT_d_index_est_borne_LUI_AUSSI(tableau, base_jetable, monkeypatch):
+    """La pose a été bornée après l'incident du 2026-09-01 ; le retrait est resté sur la
+    connexion de requête ORDINAIRE — sans `lock_timeout`, et `statement_timeout` y est
+    désarmé par défaut. Or `DROP INDEX` réclame un `AccessExclusiveLock` sur
+    `datastore_rows`, table COMMUNE à tous les tableaux, et une demande de verrou
+    exclusif se met en file DEVANT les lecteurs et écrivains suivants : l'attente ne
+    retient pas seulement l'appelant, elle arrête le voisinage.
+
+    Ce que ce banc mesure est donc une DURÉE : le retrait doit renoncer dans sa borne,
+    pas attendre la fin de la lecture qui le précède."""
+    from oto_mcp import db
+    ns, ns_id = tableau
+    db.datastore_ensure_key_index(ns_id, "siren")
+    monkeypatch.setenv("OTO_MCP_DDL_LOCK_TIMEOUT_MS", "300")
+
+    with _LectureQuiTourne(base_jetable, 4.0):
+        t0 = time.monotonic()
+        with pytest.raises(db.KeyIndexStillEnforced):
+            db.datastore_drop_key_index(ns_id)
+        mis = time.monotonic() - t0
+    assert mis < 2.0, f"le retrait a attendu la lecture ({mis:.1f} s) au lieu de renoncer"
+    assert db.datastore_has_key_index(ns_id), "il a renoncé, l'index est donc encore là"
+
+
+def test_un_retrait_qui_RENONCE_laisse_le_schema_pose_et_le_DIT(tableau, base_jetable,
+                                                                monkeypatch):
+    """Et ce qui suit la borne : le schéma EST écrit avant le retrait. Rendre une erreur
+    interne ferait chercher un dégât inexistant ; se taire ferait croire la contrainte
+    partie alors qu'elle refuse encore des écritures que le nouveau schéma autorise.
+
+    Le seul comportement juste est de servir le schéma ET de nommer ce qui reste."""
+    from oto_mcp import db
+    from oto_mcp.datastore.core import make_store
+    ns, ns_id = tableau
+    store = make_store("sub-borne")
+    store.set_schema(ns, _SCHEMA)
+    monkeypatch.setenv("OTO_MCP_DDL_LOCK_TIMEOUT_MS", "300")
+
+    with _LectureQuiTourne(base_jetable, 4.0):
+        out = store.set_schema(ns, {"fields": [{"key": "siren", "type": "text"}]})
+    assert "key" not in (db.get_datastore_by_id(ns_id)["schema"] or {}), (
+        "le schéma sans clé n'a pas été écrit")
+    dit = out.get("warning") or ""
+    assert "unicité" in dit and "siren" in dit, (
+        f"le retrait a renoncé sans nommer ce qui survit — servi : {dit!r}")
+

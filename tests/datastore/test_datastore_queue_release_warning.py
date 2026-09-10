@@ -65,6 +65,8 @@ def test_set_schema_returns_the_warning(monkeypatch):
     """L'auteur du schéma l'apprend au moment où il le pose — les DEUX faces, le
     retour de `set_schema` étant servi tel quel par le tool MCP et la route REST."""
     monkeypatch.setattr(D.db, "set_datastore_schema", lambda ns_id, schema: None)
+    # oto#82 : ce db stubbé ne porte aucun index — la pose reste donc faite.
+    monkeypatch.setattr(D.db, "datastore_has_key_index", lambda ns_id: False)
     monkeypatch.setattr(D.db, "datastore_drop_key_index", lambda ns_id: None)
     s = D.DatastorePg("u1")
     monkeypatch.setattr(s, "_resolve", lambda ns, write=False: 7)

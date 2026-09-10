@@ -89,7 +89,18 @@ class SchemaOpsMixin:
             raise SchemaDefinitionError("schéma invalide : " + " ; ".join(def_errors))
         new_key = (schema or {}).get("key")
         new_key = new_key if isinstance(new_key, str) and new_key else None
-        if new_key:
+        # oto#82 : l'ancien schéma se lit ICI, avant le scan, parce que c'est la
+        # COMPARAISON des clés qui décide du travail — le calcul regardait ce qui EXISTE,
+        # pas ce qui a CHANGÉ, donc toute pose (un libellé) rescannait les lignes puis
+        # reposait l'index, et son `DROP` prend un verrou exclusif sur `datastore_rows`,
+        # commune à TOUS les tableaux. « Inchangée » ne suffit pas : si l'index MANQUE
+        # (borne coupée au tir précédent), il se repose.
+        ancien = self._schema_of(ns_id)
+        ancienne_cle = (ancien or {}).get("key")
+        ancienne_cle = ancienne_cle if isinstance(ancienne_cle, str) and ancienne_cle else None
+        poser_index = bool(new_key) and (new_key != ancienne_cle
+                                         or not db.datastore_has_key_index(ns_id))
+        if poser_index:
             dups = db.datastore_key_dup_groups(ns_id, new_key)
             if dups:
                 sample = ", ".join(f"{d['value']!r}×{d['n']}" for d in dups[:5])
@@ -98,11 +109,9 @@ class SchemaOpsMixin:
                     f"dans les rows existantes (ex. {sample}). Résorbe-les d'abord "
                     f"(data_write avec key='{new_key}' merge les doublons, ou supprime "
                     "les rows en trop), puis re-déclare la clé.")
-        # Relevé AVANT l'écriture : après, l'ancien schéma n'existe plus nulle part
-        # — c'est exactement pour ça que la réponse doit le porter. Lu une fois la
-        # validation passée : un refus n'a rien effacé, l'annoncer ferait chercher
-        # un dégât imaginaire (même patron qu'`effacements` sur une ligne).
-        ancien = self._schema_of(ns_id)
+        # L'ancien schéma est lu plus haut (oto#82). Ce qui compte ici reste vrai : le
+        # RELEVÉ d'effacement ne se calcule qu'après les refus — un refus n'a rien
+        # effacé, et l'annoncer ferait chercher un dégât imaginaire.
         # oto#83 : un agent ne décide pas de ce qui lui est servi, et il ne repose pas
         # un format dont il ne voit qu'une partie. Ici plutôt que dans les surfaces :
         # `patch_schema` repasse par cette méthode, donc les deux gestes sont couverts
@@ -122,14 +131,27 @@ class SchemaOpsMixin:
         # déjà écrit : rendre un 500 ferait chercher un dégât qui n'existe pas, et
         # taire l'échec ferait croire à une contrainte qui n'est pas là. On le DIT, et
         # `oto-mcp maintenance key-indexes` repose l'index au tir suivant.
-        index_differe = None
-        if new_key:
+        index_differe = index_non_retire = None
+        if poser_index:
             try:
                 db.datastore_ensure_key_index(ns_id, new_key)
             except db.KeyIndexUnavailable as e:
                 index_differe = str(e)
-        else:
-            db.datastore_drop_key_index(ns_id)
+        elif not new_key and (ancienne_cle or db.datastore_has_key_index(ns_id)):
+            # Le dépôt reste conditionné à l'EXISTANT, pas à l'ancienne déclaration
+            # seule : un index laissé par une clé retirée imposerait son unicité à une
+            # colonne que le schéma ne déclare plus. Borné lui aussi (oto#82) — et quand
+            # sa borne coupe, le schéma est déjà écrit : même arbitrage que la pose, on
+            # sert le schéma et on NOMME la contrainte qui survit.
+            try:
+                db.datastore_drop_key_index(ns_id)
+            except db.KeyIndexStillEnforced as e:
+                # La clé survivante se NOMME : c'est elle que la contrainte fait encore
+                # respecter, et sans son nom l'appelant ne peut pas relier un refus
+                # d'écriture à la colonne qui le produit. `_schema_of` la connaît, le
+                # retrait en base ne la connaît pas — le nom se pose donc ici.
+                index_non_retire = (f"index d'unicité de `{ancienne_cle}` : {e}"
+                                    if ancienne_cle else str(e))
         # #389 : ce que CETTE version fait respecter, dit à celui qui pose. Le
         # défaut n'était pas le vocabulaire mais le DÉCALAGE de déploiement — une
         # borne écrite un jour et servie trois semaines plus tard gèle 75 lignes
@@ -145,7 +167,7 @@ class SchemaOpsMixin:
             out["origines_capturees"] = origines_posees
         # Un statut sans état terminal = file de travail qui ne libère rien : le dire
         # ICI, à l'auteur du schéma, au moment où il le pose (les deux faces l'ont).
-        warnings = [w for w in (index_differe,
+        warnings = [w for w in (index_differe, index_non_retire,
                                 # ⚠️ Le nombre rendu sous `origines_capturees`
                                 # se lit comme un succès alors qu'il compte
                                 # des pertes. La phrase dit ce qui s'est

@@ -288,6 +288,8 @@ def store_mutable(monkeypatch):
                         lambda ns_id, schema: etat.__setitem__("schema", schema))
     monkeypatch.setattr(dsm.db, "datastore_key_dup_groups", lambda ns_id, key: [])
     monkeypatch.setattr(dsm.db, "datastore_ensure_key_index", lambda ns_id, key: None)
+    # oto#82 : ce db stubbé ne porte aucun index — la pose reste donc faite.
+    monkeypatch.setattr(dsm.db, "datastore_has_key_index", lambda ns_id: False)
     monkeypatch.setattr(dsm.db, "datastore_drop_key_index", lambda ns_id: None)
     monkeypatch.setattr(dsm.db, "datastore_row_keys", lambda ns_id: [])
     monkeypatch.setattr(dsm.db, "datastore_overlong_fields", lambda ns_id, bounds: [])

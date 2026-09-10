@@ -36,6 +36,10 @@ def store(monkeypatch):
                         lambda ns_id, schema: calls["set"].append((ns_id, schema)))
     monkeypatch.setattr(dsm.db, "datastore_ensure_key_index",
                         lambda ns_id, key: calls["ensure"].append((ns_id, key)))
+    # oto#82 : le dépôt d'index se décide désormais sur l'EXISTANT, pas sur la seule
+    # déclaration. Ce tableau-ci PORTE l'index — c'est l'état que décrivent les deux
+    # bancs « sans clé ⇒ l'index tombe » : sans lui, il n'y aurait rien à déposer.
+    monkeypatch.setattr(dsm.db, "datastore_has_key_index", lambda ns_id: True)
     monkeypatch.setattr(dsm.db, "datastore_drop_key_index",
                         lambda ns_id: calls["drop"].append(ns_id))
     monkeypatch.setattr(dsm.db, "datastore_key_dup_groups", lambda ns_id, key: [])
