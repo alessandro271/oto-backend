@@ -149,14 +149,28 @@ def get_instruction(owner_type: str, owner_id: int | str, slug: str,
     capacité `me.guides.*`). Un appel avec ce slug renvoie donc None.
 
     ⚠️ Une version archivée vient de la table des RÉVISIONS, qui ne porte ni `id` ni
-    `updated_at` : la forme rendue est plus petite."""
+    `updated_at` : la forme rendue est plus petite.
+
+    ⚠️ **`archived_at` est rendu sur la version COURANTE** (#857, 10/09/2026). Il ne
+    l'était pas, et c'est ce qui a fabriqué le cas : cette lecture n'a aucun filtre
+    sur l'archivage — elle sert donc une procédure retirée exactement comme une
+    procédure en service — pendant que les trois lectures de liste l'excluent. Une
+    procédure pouvait ainsi se charger par son slug tout en étant absente de toutes
+    les listes, et rien dans la réponse ne disait pourquoi.
+    Mesuré en production : 3 archivées sur 238, dont **deux réécrites après coup**
+    par des clients qui les croyaient en service.
+    La table des révisions, elle, ne porte pas la colonne : une VERSION n'est pas
+    archivée, c'est la procédure qui l'est. Lire `archived_at` sur une version
+    précise rendrait donc `None` et ferait croire « en service » — la clé est
+    simplement absente de cette forme, ce que la phrase ci-dessus annonce déjà."""
     otype, oid = _owner(owner_type, owner_id)
     slug = normalize_slug(slug)
     with _connect() as conn:
         if version is None:
             row = conn.execute(
                 "SELECT id, org_id, owner_type, owner_id, slug, title, description, "
-                "body_md, slots, version, set_by, created_at, updated_at "
+                "body_md, slots, version, set_by, created_at, updated_at, "
+                "archived_at "
                 f"FROM org_instructions WHERE {_OWNER_WHERE} AND slug = %s",
                 (otype, oid, slug),
             ).fetchone()

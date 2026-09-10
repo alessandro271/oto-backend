@@ -46,9 +46,19 @@ def _ddl() -> str:
     s = _schema._SCHEMA
     i = s.index("CREATE TABLE IF NOT EXISTS org_instructions")
     creation = s[i:s.index("\n);", i) + 3]
+    # Les colonnes posées par une migration, reprises de `db/_init.py` et non
+    # devinées : `id` et `archived_at` y sont ajoutées par `ALTER`, donc un banc qui
+    # rejoue le seul `CREATE` obtient une table où elles n'existent pas. C'est le
+    # piège que la carte du dépôt documente, et ce fichier a rougi dessus deux fois.
     return creation + (
+        "\nALTER TABLE org_instructions ADD COLUMN IF NOT EXISTS id BIGSERIAL;"
         "\nALTER TABLE org_instructions "
-        "ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;")
+        "ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;"
+        "\nALTER TABLE org_instructions "
+        "ADD COLUMN IF NOT EXISTS slots JSONB NOT NULL DEFAULT '[]'::jsonb;"
+        "\nALTER TABLE org_instructions "
+        "ADD COLUMN IF NOT EXISTS owner_type TEXT NOT NULL DEFAULT 'org';"
+        "\nALTER TABLE org_instructions ADD COLUMN IF NOT EXISTS owner_id TEXT;")
 
 
 @pytest.fixture()
@@ -128,3 +138,21 @@ def test_il_ne_traverse_PAS_les_organisations(pg):
         "SELECT archived_at FROM org_instructions WHERE owner_id = '999'").fetchone()
     assert autre[0] is not None, "l'org voisine a été touchée"
 
+
+
+def test_la_lecture_par_slug_REMONTE_l_etat_d_archivage(pg):
+    """La moitié du défaut que personne n'avait vue : la lecture par slug n'a AUCUN
+    filtre sur l'archivage — elle sert une procédure retirée comme une procédure en
+    service — et elle ne remontait même pas la colonne. Elle ne pouvait donc pas
+    dire l'état, quelle que soit la surface au-dessus."""
+    _pose(pg, archivee=True)
+    lu = org_store.get_instruction("org", 231, "target-ownership-register")
+    assert lu is not None, "la lecture par slug sert l'archivée : c'est le cas mesuré"
+    assert lu.get("archived_at") is not None, (
+        "sans cette colonne, aucune surface ne peut annoncer l'état")
+
+
+def test_une_procedure_EN_SERVICE_rend_un_etat_vide(pg):
+    _pose(pg, archivee=False)
+    lu = org_store.get_instruction("org", 231, "target-ownership-register")
+    assert lu["archived_at"] is None
