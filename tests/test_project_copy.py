@@ -227,7 +227,7 @@ def test_apply_tableau_names_resolves_by_id():
         {"target_type": "connecteur", "target_ref": "6"},     # pas un tableau → ignoré
     ]
     PJ._apply_tableau_names(links, {6: "vivier-6"})
-    assert links[0]["namespace"] == "vivier-6"
+    assert links[0]["datastore"] == "vivier-6"
     assert "datastore" not in links[1]
     assert "datastore" not in links[2]
     assert "datastore" not in links[3]

@@ -251,7 +251,7 @@ def test_sans_resolution_la_remise_rend_ce_qu_elle_rendait(store):
     # échoué. Lui rendre `undefined` sous l'ancien nom dans ce cas-là serait doubler
     # l'obscurité. La clé s'en va avec les alias de chemin, au 08/11/2026.
     assert identite.de_releve(None, "quoi-que-ce-soit") == {
-        "datastore": "quoi-que-ce-soit", "namespace": "quoi-que-ce-soit",
+        "datastore": "quoi-que-ce-soit",
         identite.CLE: None}
 
 

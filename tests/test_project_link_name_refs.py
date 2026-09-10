@@ -10,13 +10,13 @@ from oto_mcp.db import projects as P
 def test_name_ref_existing_gets_namespace():
     links = [{"target_type": "tableau", "target_ref": "vivier-pmi"}]
     P._apply_tableau_name_refs(links, {"vivier-pmi", "autre"})
-    assert links[0]["namespace"] == "vivier-pmi"
+    assert links[0]["datastore"] == "vivier-pmi"
 
 
 def test_name_ref_missing_stays_unresolved():
     links = [{"target_type": "tableau", "target_ref": "disparu"}]
     P._apply_tableau_name_refs(links, {"vivier-pmi"})
-    assert "namespace" not in links[0]          # dead-link préservé (signalé à l'usage)
+    assert "datastore" not in links[0]          # dead-link préservé (signalé à l'usage)
 
 
 def test_id_resolved_link_untouched():
@@ -25,10 +25,10 @@ def test_id_resolved_link_untouched():
     # ensemble par `_apply_tableau_names`. `namespace` seul n'est plus produit — et le
     # second chemin se déclenche sur `datastore`, celle qui survivra au 08/11.
     links = [{"target_type": "tableau", "target_ref": "109",
-              "datastore": "vivier-pmi", "namespace": "vivier-pmi"}]
+              "datastore": "vivier-pmi"}]
     P._apply_tableau_name_refs(links, {"109"})   # même si "109" existait comme nom
     assert links[0]["datastore"] == "vivier-pmi"
-    assert links[0]["namespace"] == "vivier-pmi"
+    assert links[0]["datastore"] == "vivier-pmi"
 
 
 def test_non_tableau_untouched():

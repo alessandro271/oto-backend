@@ -145,7 +145,7 @@ class NodeOut(BaseModel):
 
     `rev` est l'empreinte du corps servi : elle a changé une fois pour tous les nœuds
     à l'ajout de ces champs (un cache client se rafraîchit, puis retrouve ses 304).
-    **Même effet à l'ajout de `pinned` et `namespace` (01/09/2026)** — une seule vague
+    **Même effet à l'ajout de `pinned` et `datastore` (01/09/2026, alors `namespace`)** — une seule vague
     d'invalidation, connue et bornée. C'est le prix d'une empreinte calculée sur le
     contenu servi, et c'est le bon prix : une empreinte qui ignorerait les champs neufs
     laisserait un client sur une version qu'il croit à jour."""
@@ -164,16 +164,22 @@ class NodeOut(BaseModel):
     # seule chose qui distingue les deux, et parce que le modèle a retiré le GENRE
     # `project` exprès : l'épingle est ce qui reste pour le dire.
     pinned: bool = False
-    # Tableau : le NOM DE NAMESPACE à repasser aux surfaces `data_*`.
+    # Tableau : le NOM DU TABLEAU à repasser aux surfaces `data_*`.
     #
     # ⚠️ Il vaut aujourd'hui la même chose que `name`, et c'est une COÏNCIDENCE qu'on
-    # dissout exprès : la projection pose `title = namespace`, mais le modèle veut que
-    # le namespace devienne une position dans l'arbre, pas un nom. Le jour où c'est
+    # dissout exprès : la projection pose `title = datastore`, mais le modèle veut que
+    # l'adresse devienne une position dans l'arbre, pas un nom. Le jour où c'est
     # fait, un client qui lisait `name` comme une adresse casserait **sans que rien ne
     # le prévienne**. La poignée est donc déclarée maintenant, tant qu'elle est facile
     # à tenir — même geste que `doc_id`/`project_id`. Absent sur une page.
-    namespace: Optional[str] = Field(default=None, description=(
-        "Tableau : le nom de namespace à repasser aux surfaces `data_*`. `null` sur "
+    #
+    # Nom de la clé : `datastore` depuis le 10/09/2026 (ex-`namespace`, bascule sèche,
+    # sans doublon). Cette poignée-ci était la DERNIÈRE du sens « tableau » à porter
+    # l'ancien nom : elle avait échappé à la bascule parce que son module s'appelle
+    # `node_view` et que le filtre triait sur le nom du module, pas sur ce que la clé
+    # désigne.
+    datastore: Optional[str] = Field(default=None, description=(
+        "Tableau : le nom du tableau à repasser aux surfaces `data_*`. `null` sur "
         "une page. ⚠️ **C'est un NOM, et un nom peut désigner deux tableaux.** Les "
         "écritures de lignes le résolvent dans le scope de l'appelant, où « vivier », "
         "« leads » ou « contacts » existent souvent en plusieurs exemplaires (perso, "
@@ -329,9 +335,9 @@ def _compose(ctx: ResolvedCtx, node_id: str) -> dict:
         "doc_id": doc_id,
         "project_id": project_id,
         "pinned": bool(props.get("pinned")),
-        # Le point UNIQUE où le namespace se résout : le jour où `title` cesse d'être
-        # le namespace, c'est cette ligne qui change, et les clients ne bougent pas.
-        "namespace": (props.get("title") or None) if nature == "table" else None,
+        # Le point UNIQUE où l'adresse du tableau se résout : le jour où `title` cesse
+        # d'être cette adresse, c'est cette ligne qui change, et les clients ne bougent pas.
+        "datastore": (props.get("title") or None) if nature == "table" else None,
         "trail": [c.model_dump() for c in _fil(fiche, chaine)],
         "modified": NodeModified(
             at=str(fiche["updated_at"]) if fiche.get("updated_at") else None,

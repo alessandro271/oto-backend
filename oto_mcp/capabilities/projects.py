@@ -837,11 +837,8 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         return {"id": inp.project_id, "tools": tools, "connectors": sorted(connectors),
                 "connector_sources": {k: sorted(v) for k, v in csources.items()},
                 "sources": {"procedures": procedures, "runs": run_tools,
-                            # `namespace` doublé jusqu'à RETRAIT_DATASTORE (08/11/2026),
-                            # comme partout ailleurs dans la bascule.
                             "tableaux": [{"slot": l.get("slot"),
                                           "datastore": l.get("datastore"),
-                                          "namespace": l.get("datastore"),
                                           "ref": l["target_ref"]}
                                          for l in links if l["target_type"] == "tableau"]},
                 # B5 : liens vérifiés comme des refs — morts / slots non bindés / inertes.

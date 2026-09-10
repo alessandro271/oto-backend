@@ -175,6 +175,35 @@ qu'il lit, et échoue.
 ⚠️ **Un code d'erreur, lui, ne se double pas** — il n'y a qu'un champ `error`. Le
 nouveau prend la place, l'ancien est conservé dans `details.legacy_code`.
 
+⚠️ **L'exception mesurée du 10/09/2026 — le doublage a une CONDITION.** Le renommage
+`namespace` → `datastore` a doublé ses clés, puis a retiré le doublon deux jours plus
+tard, à sec. La règle ci-dessus n'est pas fausse ; elle est incomplète. Ce qui manquait :
+
+> Un doublage ne vaut que s'il est POSÉ PARTOUT. Doublé sur certaines surfaces
+> seulement, il ne protège plus personne — il fabrique une troisième chose à connaître.
+
+Ce renommage-là avait trois politiques dans le même produit : la liste basculée à sec,
+les réponses unitaires doublées, l'upload de lignes jamais basculé. Un consommateur ne
+pouvait pas écrire une règle simple ; nos deux fronts portaient chacun un pont, et un
+pont qu'on ne retire pas masque le renommage suivant. **La rupture annoncée a été jugée
+moins chère que la dette permanente répartie sur trois dépôts.**
+
+Ce que ça donne comme test avant de doubler, plutôt qu'une préférence :
+
+1. **Le doublage est-il posé sur TOUTES les surfaces qui servent la clé ?** Si une seule
+   reste à l'ancien nom, ou bascule à sec, le doublage ne tient pas sa promesse.
+   `tests/datastore/test_cle_namespace_doublee.py` est l'instrument qui répond à cette
+   question par un balayage AST — c'est faisable, ce n'est pas une affaire de vigilance.
+2. **La date de retrait est-elle celle des chemins ?** Elles avaient été liées ici par
+   commodité et découplées le 10/09 : un chemin qui change rend un 308 (ça se voit), une
+   clé qui disparaît ne rend rien. Deux modes d'échec, deux calendriers.
+3. **Qui porte le pont chez le consommateur, et qui le retirera ?** Un pont sans porteur
+   nommé est permanent.
+
+Le doublage reste le défaut pour `doctrine` → `guide` : ses surfaces sont doublées
+uniformément, et la table ci-dessus le prouve ligne à ligne. C'est exactement ce que
+l'autre renommage n'avait pas.
+
 ### La prose, elle, n'a pas d'alias
 
 Un texte se réécrit — il n'a pas deux noms. Le lot B5 est donc **le seul endroit du

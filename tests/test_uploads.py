@@ -181,7 +181,7 @@ def test_materialize_datastore_batch(monkeypatch):
     assert seen["donnees_d_origine"] is True, "scellé au mint ⟹ transmis au store"
     # Le récap remonte AUSSI le relevé « hors schéma » (#294) : le bulk load est le
     # geste où un format renommé passe le plus facilement inaperçu.
-    assert res == {"ok": True, "kind": "datastore", "namespace": "boites",
+    assert res == {"ok": True, "kind": "datastore", "datastore": "boites",
                    "inserted": 2, "updated": 0, "count": 2, "bytes": 27,
                    "hors_schema": ["actualite_sociale"], "hors_schema_hint": "…"}
 

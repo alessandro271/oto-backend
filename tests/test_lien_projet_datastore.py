@@ -16,23 +16,25 @@ from __future__ import annotations
 from oto_mcp.db.projects import _apply_tableau_names, _apply_tableau_name_refs
 
 
-def test_le_chemin_par_ID_sert_les_deux_cles():
-    """Le chemin du dashboard : `target_ref` est l'id numérique du tableau."""
+def test_le_chemin_par_ID_sert_le_nom_du_tableau():
+    """Le chemin du dashboard : `target_ref` est l'id numérique du tableau.
+
+    ⚠️ Le doublon `namespace` posé le 09/09 a été RETIRÉ le 10/09 : le renommage était
+    incohérent — liste basculée à sec, réponses unitaires doublées, upload jamais
+    basculé — et l'incohérence coûtait plus que la rupture."""
     liens = [{"target_type": "tableau", "target_ref": "174"}]
-    _apply_tableau_names(liens, {174: "edition-echantillon-500"})
-    assert liens[0]["datastore"] == "edition-echantillon-500"
-    assert liens[0]["namespace"] == "edition-echantillon-500", (
-        "le doublon reste servi jusqu'à RETRAIT_DATASTORE — le retirer avant la date "
-        "casserait les lecteurs sans préavis")
+    _apply_tableau_names(liens, {174: "un-tableau"})
+    assert liens[0]["datastore"] == "un-tableau"
+    assert "namespace" not in liens[0], "un seul nom, partout"
 
 
-def test_le_chemin_par_NOM_sert_les_deux_cles():
+def test_le_chemin_par_NOM_sert_le_nom_du_tableau():
     """Le chemin de l'agent (#117) : `target_ref` EST déjà le nom du tableau."""
-    liens = [{"target_type": "tableau", "target_ref": "edition-vivier"}]
+    liens = [{"target_type": "tableau", "target_ref": "un-vivier"}]
     _apply_tableau_names(liens, {})                      # rien à résoudre par id
-    _apply_tableau_name_refs(liens, {"edition-vivier"})
-    assert liens[0]["datastore"] == "edition-vivier"
-    assert liens[0]["namespace"] == "edition-vivier"
+    _apply_tableau_name_refs(liens, {"un-vivier"})
+    assert liens[0]["datastore"] == "un-vivier"
+    assert "namespace" not in liens[0]
 
 
 def test_un_tableau_DISPARU_ne_pose_aucune_des_deux():
@@ -48,7 +50,7 @@ def test_le_second_chemin_se_declenche_sur_la_cle_NEUVE():
     testait `namespace` alors que le premier chemin pose `datastore`, il repasserait sur
     un lien déjà résolu — ou l'inverse le jour où le doublon partira."""
     deja = [{"target_type": "tableau", "target_ref": "174",
-             "datastore": "resolu-par-id", "namespace": "resolu-par-id"}]
+             "datastore": "resolu-par-id"}]
     _apply_tableau_name_refs(deja, {"174"})
     assert deja[0]["datastore"] == "resolu-par-id", "un lien déjà résolu n'est pas réécrit"
 

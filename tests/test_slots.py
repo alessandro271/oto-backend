@@ -409,11 +409,12 @@ def test_inventory_derives_union(monkeypatch):
     assert out["connectors"] == ["folk", "sirene", "unipile"]
     procs = out["sources"]["procedures"]
     assert {p["ref"]: p["resolved"] for p in procs} == {"42": True, "morte": False}
-    # ⚠️ Les DEUX clés depuis le 09/09/2026 : `datastore` est la neuve, `namespace` est
-    # servie en doublon jusqu'à `RETRAIT_DATASTORE` (08/11/2026) pour ne casser aucun des
-    # trois fronts qui la lisent. Le retrait enlèvera la seconde, ici comme partout.
+    # `datastore` SEUL depuis le 10/09/2026. Le doublon `namespace` a vécu un jour :
+    # servir deux noms pour la même chose, c'est promettre que les deux durent. On a
+    # préféré une panne datée à une seconde API. L'égalité stricte est le banc : elle
+    # rougit si quelqu'un remet la clé morte autant que si la neuve disparaît.
     assert out["sources"]["tableaux"] == [
-        {"slot": "sortie", "datastore": "leads_q3", "namespace": "leads_q3", "ref": "9"}]
+        {"slot": "sortie", "datastore": "leads_q3", "ref": "9"}]
 
 
 # ── schéma CIBLE d'un slot tableau (ADR 0035 × 0046) ─────────────────────────

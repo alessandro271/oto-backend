@@ -463,7 +463,6 @@ def _apply_tableau_names(links: list[dict], name_by_id: dict[int, str]) -> None:
             nm = name_by_id.get(int(l["target_ref"]))
             if nm is not None:
                 l["datastore"] = nm
-                l["namespace"] = nm     # RETRAIT_DATASTORE
 
 
 def _apply_tableau_name_refs(links: list[dict], existing: set) -> None:
@@ -476,7 +475,6 @@ def _apply_tableau_name_refs(links: list[dict], existing: set) -> None:
         if (l.get("target_type") == "tableau" and not l.get("datastore")
                 and l.get("target_ref") in existing):
             l["datastore"] = l["target_ref"]
-            l["namespace"] = l["target_ref"]    # RETRAIT_DATASTORE
 
 
 def _apply_procedure_titles(links: list[dict], title_by_id: dict[int, str]) -> None:
@@ -495,8 +493,8 @@ def list_project_links(project_id: int) -> list[dict]:
     """Liens du projet, avec `role` et `cross_project` DÉRIVÉ (ADR 0032 §2) : True si
     le même (target_type, target_ref) est lié par un AUTRE projet → l'agent sait qu'une
     modif de l'entité retombe ailleurs (s'abstenir d'un changement brutal / demander).
-    Les liens `tableau` sont enrichis du **nom** de leur tableau — sous `datastore`, et
-    sous `namespace` jusqu'au retrait commun (`RETRAIT_DATASTORE`) : l'agent
+    Les liens `tableau` sont enrichis du **nom** de leur tableau, sous `datastore`
+    (le doublon `namespace` est retiré depuis le 10/09/2026) : l'agent
     adresse « le tableau de ce projet » (par rôle/label) → nom réel pour `data_*`, sans
     nom en dur (ADR 0032 §6, adressage par rôle après provisioning template→instance).
     Les liens `procedure` sont enrichis du **titre** de leur guide (`title`), même

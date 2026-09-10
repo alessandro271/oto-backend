@@ -301,7 +301,11 @@ def materialize(sub: str, target: dict, data: bytes, request_ct: Optional[str]) 
             raise UploadError(400, "bad_row", str(e))
         # Le chemin de bulk load est celui où le silence coûte le plus cher (#294) :
         # un format renommé + un lot de 500 lignes, et tout atterrit hors schéma.
-        rendu = {"ok": True, "kind": "datastore", "namespace": target.get("namespace"),
+        # ⚠️ Cette réponse servait encore `namespace` SEUL : elle n'avait jamais
+        # basculé, alors que la liste l'avait fait à sec et les réponses unitaires en
+        # doublon. Trois politiques dans un même produit — c'est l'incohérence qui a
+        # décidé la bascule sèche du 10/09/2026, pas la rupture elle-même.
+        rendu = {"ok": True, "kind": "datastore", "datastore": target.get("namespace"),
                  "inserted": out["inserted"], "updated": out["updated"],
                  "count": out["count"], "bytes": len(data),
                  **store.off_schema_report()}

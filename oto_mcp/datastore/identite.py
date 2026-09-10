@@ -55,20 +55,24 @@ def identite(ns_id: Any = None, nom: Optional[str] = None, *,
     cas — sa présence est donc la preuve que le tableau a bien été résolu.
     """
     valeur = nom or adresse
+    # ⚠️ **Le doublon `namespace` est RETIRÉ (10/09/2026, décision d'Alexis).** Il avait
+    # été posé pour le préavis, avec une raison qui reste vraie et qu'il faut connaître :
+    # c'était la seule panne MUETTE de la bascule. Un chemin qui change rend un 404 ou un
+    # 308 — on le voit. Une clé de réponse qui disparaît ne rend rien : `r.namespace`
+    # vaut `undefined`, sans erreur et sans journal, chez un consommateur qu'on ne
+    # connaît pas forcément.
+    #
+    # Ce qui a fait pencher : le renommage était INCOHÉRENT, et l'incohérence coûtait
+    # plus que la rupture. Trois politiques coexistaient — la liste `/api/datastores`
+    # basculée à sec, les réponses unitaires doublées, l'upload de lignes jamais
+    # basculé. Nos deux fronts (le nôtre et celui du partenaire) portaient chacun un
+    # pont pour absorber ça, et *un pont qu'on ne retire pas masque le renommage
+    # suivant*. Un seul nom, partout, coûte une rupture annoncée plutôt qu'une dette
+    # permanente répartie sur trois dépôts.
+    #
+    # Les consommateurs connus sont prévenus ; les ponts des fronts lisent `datastore`
+    # en premier, donc ils ne cassent pas — ils deviennent inutiles et tombent.
     return {"datastore": valeur,
-            # ⚠️ **`namespace` est DOUBLÉE le temps du préavis, et c'est la seule panne
-            # MUETTE de toute la bascule.** Les chemins qui changent rendent un 404 ou
-            # un 308 : on le voit. Une clé de réponse qui disparaît ne rend rien —
-            # `r.namespace` vaut `undefined`, sans erreur, sans journal, chez un
-            # consommateur qu'on ne connaît peut-être pas. Nos propres fronts lisent
-            # désormais les deux noms ; ils ne sont pas les seuls appelants de cette API.
-            #
-            # Les trois autres réponses touchées par le renommage n'AJOUTENT que des
-            # clés — celle-ci est la seule à en retirer une, donc la seule à doubler.
-            # Elle s'en va avec les alias de chemin, à la même date
-            # (`deprecations.RETRAIT_DATASTORE`, 08/11/2026) : un doublage sans date est
-            # un second nom permanent, et ça se décide, ça ne s'ajoute pas.
-            "namespace": valeur,
             CLE: int(ns_id) if ns_id is not None else None}
 
 

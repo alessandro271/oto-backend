@@ -169,7 +169,7 @@ def test_claim_next_reserves_and_returns_the_row(monkeypatch):
     # `namespace` est doublée le temps du préavis (08/11/2026) : c'est la seule
     # clé que le renommage RETIRAIT, donc la seule panne muette de la bascule —
     # un consommateur qui la lit recevrait `undefined`, sans erreur ni journal.
-    assert out == {"datastore": "vivier", "namespace": "vivier",
+    assert out == {"datastore": "vivier",
                    "ns_id": 174, "row": ROW}
     _, kw = store.calls[0]
     assert (kw["worker"], kw["filter"], kw["lease_s"]) == ("sarah", {"statut": "a-appeler"}, 300)
