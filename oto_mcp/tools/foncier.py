@@ -219,13 +219,29 @@ def _marquer_troncature(res: dict, borne: int, compte: Optional[int] = None) -> 
     tronque = isinstance(n, int) and n >= borne
     res["tronque"] = tronque
     if tronque:
-        res["avertissement_troncature"] = (
-            f"`total` = {n} est le nombre de lignes RENDUES, pas la population : la "
-            f"coupe est tombée sur la borne ({borne}"
-            + (f", plafond dur de la source" if borne >= _SOURCE_SIZE_CAP else "")
-            + "). Resserrer les filtres ou monter `limit` — ne pas lire ce chiffre "
-            "comme un compte."
-        )
+        plafond = ", plafond dur de la source" if borne >= _SOURCE_SIZE_CAP else ""
+        # ⚠️ **Quand la coupe porte sur un AUTRE compte que `total`, le dire — sinon
+        # l'avertissement ment lui aussi** (#859, 10/09/2026). Sur une lecture avec
+        # seuillage, la borne tombe sur les lignes LUES et `total` ne compte que les
+        # retenues : un `total: 2` avec `lignes_lues: 60` annonçait « total = 60 est
+        # le nombre de lignes RENDUES », deux fois faux. Mesuré sur un département
+        # entier : 2 annoncés, 61 réels — un gisement faux à 97 %, sous un
+        # avertissement censé sauver la mise.
+        retenus = res.get("total")
+        if compte is not None and isinstance(retenus, int) and retenus != n:
+            res["avertissement_troncature"] = (
+                f"{n} lignes ont été LUES et la coupe est tombée là ({borne}"
+                f"{plafond}) — en AMONT du seuillage. `total` = {retenus} ne compte "
+                f"que les lignes retenues PARMI ces {n} : ce n'est ni la population "
+                f"ni un compte de ce qui existe. Relancer avec `limit=-1` pour "
+                f"connaître le gisement réel."
+            )
+        else:
+            res["avertissement_troncature"] = (
+                f"`total` = {n} est le nombre de lignes RENDUES, pas la population : "
+                f"la coupe est tombée sur la borne ({borne}{plafond}). Resserrer les "
+                "filtres ou monter `limit` — ne pas lire ce chiffre comme un compte."
+            )
     return res
 
 
@@ -621,6 +637,12 @@ def register(mcp: FastMCP) -> None:
                 `total` is the number of rows RETURNED, not the population — it
                 saturates on `limit`, and says so in `tronque` /
                 `avertissement_troncature` when it does.
+                ⚠️ **`limit` caps the rows READ, upstream of `min_mwh`** — the
+                threshold is applied AFTER reading, so a capped read thresholds only
+                what it happened to read. With `min_mwh` set, `total` is therefore a
+                FLOOR, never a count: measured on one department, `limit=60` answered
+                `total: 2` where `limit=-1` answers 61. **Pass `limit=-1` whenever you
+                pass `min_mwh`**, or read `total` as "at least".
         """
         if reseau not in ("distribution", "transport", "les_deux"):
             raise _bad('reseau must be "distribution", "transport" or "les_deux"')
