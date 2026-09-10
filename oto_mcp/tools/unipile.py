@@ -1474,7 +1474,9 @@ def register(mcp: FastMCP) -> None:
           et sans borne le backlog entier dépasse la limite de tokens).
           Pour la page suivante, repasse le `cursor` RENDU par l'appel précédent
           — et lui seul : un curseur bricolé est refusé. Plus de `cursor` rendu
-          = fin du backlog (une page COURTE n'est pas la fin). `direction` est
+          = fin du backlog (une page COURTE n'est pas la fin), sauf si
+          `pagination_note` est présent : elle dit alors pourquoi la pagination
+          s'est arrêtée là, et il n'y a rien de plus à demander. `direction` est
           rappelée à chaque page, elle ne se déduit pas du curseur.
         - **"invite"** : envoie une demande de connexion (outreach 2e/3e degré).
           `provider_id` = champ `provider_id` d'un résultat `linkedin_unipile_search`
