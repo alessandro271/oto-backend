@@ -14,7 +14,7 @@ from fastmcp import FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS, INVALID_REQUEST
 
-from .. import access, output_projection, url_perimeter
+from .. import access, output_projection, session_org, url_perimeter
 from ..connectors import verify as connector_verify
 from . import mail_obfuscation
 
@@ -37,6 +37,35 @@ from . import mail_obfuscation
 # La prudence de #37 ne s'applique pas ici — ces listes sont une DENYLIST de clés nommées,
 # pas une allowlist : elles ne peuvent pas faire disparaître un champ imprévu.
 _SEARCH_DROP = ("knowledgeGraph", "peopleAlsoAsk", "relatedSearches", "searchParameters")
+
+# Les méthodes du client qui PAGINENT côté serveur : plusieurs requêtes Serper derrière
+# un seul appel d'outil. Elles rendent la somme dans `credits_used` (oto-core) ; un
+# oto-core antérieur ne rend que `pages_fetched`, repli honnête à 1 crédit la page.
+_MULTI_REQUEST = ("census_maps", "reviews_all")
+
+
+def _as_count(value, default: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        return default
+    return int(value)
+
+
+def _credits_consumed(method: str, result) -> int:
+    """Les crédits que Serper a DÉDUITS pour cet appel d'outil — l'unité que Tulina
+    facture (0,1 crédit Tulina par crédit Serper, 10/09/2026).
+
+    Lu dans la RÉPONSE, jamais déduit d'une règle codée ici : Serper facture une page
+    Maps à 100 résultats ou un scrape difficile plus d'un crédit, et le dit dans son
+    champ `credits`. Repli sur 1 quand l'amont ne le dit pas : une réponse réussie
+    coûte au moins un crédit."""
+    if not isinstance(result, dict):
+        return 1
+    if method in _MULTI_REQUEST:
+        raw = result.get("credits_used")
+        if raw is None:
+            raw = result.get("pages_fetched")
+        return _as_count(raw, default=1)
+    return _as_count(result.get("credits"), default=1)
 _RESULT_DROP = ("sitelinks", "attributes", "imageUrl", "thumbnailUrl")
 
 # Serper renvoie `Serper <method> <status>: <msg>` (RuntimeError nu). Deux classes
@@ -125,8 +154,15 @@ def register(mcp: FastMCP) -> None:
             if m and int(m.group(1)) == 400:
                 raise McpError(ErrorData(code=INVALID_REQUEST, message=str(e))) from None
             raise
+        # Même séparation que theirstack/aiark : le MÉTRAGE est inconditionnel
+        # (`tool_calls.key_mode` dit à part sous quelle clé l'appel est passé, et la
+        # facturation ne lit que la clé Tulina) ; le QUOTA interne d'oto ne compte que
+        # notre clé. Les deux au nombre de crédits Serper déduits, pas à 1 par appel :
+        # un recensement Maps coûtait jusqu'à 54 crédits pour un seul « appel ».
+        credits = _credits_consumed(method, result)
+        session_org.note_call_trace(quantity=credits)
         if is_platform:
-            access.record_platform_usage("serper")
+            access.record_platform_usage("serper", credits)
         return result
 
     def _project(result: dict, items: str, full: bool, fields) -> dict:
