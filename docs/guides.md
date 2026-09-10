@@ -123,23 +123,18 @@ par id (réservé platform_admin). Autz conditionnelle dans `tools/orgs.py`
   évolue avec le code du connecteur → sa place reste le repo (docstring, `_SERVER_INSTRUCTIONS`),
   versionné avec l'outil.
 
-## La forme d'une procédure : digest d'ouverture + schéma
-
-**Toute procédure s'ouvre sur son digest d'auto-amélioration** — `> **Self-improvement
-digest** — …` en premier bloc : ce que le dernier déroulé a appris et ce qui a été
-corrigé, DATÉ ; une procédure qui n'a jamais tourné le dit en une phrase. C'est le seul
-bloc d'une procédure où un fait daté est à sa place. ⚠️ **Jamais fabriqué** : sourcé sur
-le journal des runs, sur le relevé daté que le corps porte déjà, ou rien — un digest
-décoratif est pire que pas de digest, il se lit comme une preuve. `procedure_digest`
-garde la seule chose qu'un serveur peut voir (le bloc est-il là, ET en tête) et rend
-`digest_warning`, même régime non bloquant que le reste.
-
-⚠️ **La PLACE du digest vient du rendu** : la page d'un process retire un H1 de tête qui
-répète le nom de la procédure (`stripLeadingTitleHeading`) et affiche le sien. Le digest
-se pose donc SOUS ce H1 quand il existe (au-dessus, le titre resterait orphelin en
-milieu de page), et en tout premier quand le corps n'en a pas (`## Goal`…).
-
 ## Le schéma est une section requise (front tiers, issue #108)
+
+⚠️ **Le « Self-improvement digest » a été RETIRÉ le 10/09/2026 (oto#159).** La
+plateforme réclamait un bloc de citation en tête de chaque corps ; elle ne le réclame
+plus, et `procedure_digest` n'existe plus. Ce que ce bloc racontait, la plateforme le
+porte déjà : la version par le champ `version`, ce qui a changé par l'historique des
+versions (`with_history`, réversible par `from_version`), ce qu'un passage a appris par
+un document de projet. Le bloc était né d'une contrainte de RENDU (il fallait quelque
+chose en tête de la page d'un process) et 24 procédures sur 57 recevaient
+l'avertissement à chaque écriture depuis des mois sans que rien ne change. Les corps
+existants gardent leur bloc : c'est du texte ordinaire, retiré par son auteur quand il
+touche au texte, jamais par une migration.
 
 Une procédure embarque un **dessin** de son process, et ce n'est pas une illustration :
 le front en fait la **vue par défaut** de la page de la procédure — une procédure sans

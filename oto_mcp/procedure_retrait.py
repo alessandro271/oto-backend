@@ -15,10 +15,10 @@ des mois suivants, qui ne peuvent pas regretter ce qu'ils n'ont jamais lu. C'est
 rend ce défaut invisible sans instrument : il n'a pas de victime au moment où il se
 produit.
 
-⚠️ **Warning, jamais un refus** — même régime que `procedure_digest`, `procedure_diagram`
-et `slots` (ADR 0014/0035). Retirer une section est parfaitement légitime : ce qui ne
-l'est pas, c'est de le faire sans le savoir. La procédure s'enregistre, l'auteur reçoit
-le signal, et il peut le porter dans son digest à la version suivante.
+⚠️ **Warning, jamais un refus** — même régime que `procedure_diagram` et `slots`
+(ADR 0014/0035). Retirer une section est parfaitement légitime : ce qui ne l'est pas,
+c'est de le faire sans le savoir. La procédure s'enregistre, l'auteur reçoit le signal,
+et c'est lui qui décide s'il rejoue son édition sur la version à jour.
 
 ## Pourquoi les TITRES, et rien d'autre
 
@@ -92,8 +92,8 @@ def sections_retirees(ancien_md: str, nouveau_md: str) -> list[str]:
 
 
 def retrait_check(ancien_md: str, nouveau_md: str) -> dict:
-    """Check croisé à l'écriture, dans la forme des autres (`digest_check`,
-    `diagram_check`, `slots_check`) : la clé est TOUJOURS présente, `None` = rien à
+    """Check croisé à l'écriture, dans la forme des autres (`diagram_check`,
+    `slots_check`) : la clé est TOUJOURS présente, `None` = rien à
     signaler. Best-effort — un check ne casse jamais une écriture.
 
     `ancien_md` vide (création, ou ancien corps illisible) ⟹ `None` : il n'y a rien
@@ -110,9 +110,8 @@ def retrait_check(ancien_md: str, nouveau_md: str) -> dict:
             nommes += f", et {reste} de plus"
         return {"retrait_warning": (
             f"cette version RETIRE {len(partis)} section(s) : {nommes}. "
-            "Si c'est voulu, dis-le dans le digest — le prochain agent ne peut pas "
-            "regretter une consigne qu'il n'a jamais lue. Si ça ne l'est pas, relis "
-            "`op=get with_history=true` et rejoue ton édition sur la version à jour.")}
+            "Si ça n'est pas voulu, relis `op=get with_history=true` et rejoue ton "
+            "édition sur la version à jour.")}
     # noqa: SILENT — contrôle de forme optionnel : pas d'avertissement plutôt qu'un faux
-    except Exception:  # noqa: BLE001 — cf. `digest_check`
+    except Exception:  # noqa: BLE001 — cf. `diagram_check`
         return {"retrait_warning": None}

@@ -26,7 +26,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
 
-from .. import access, deprecations, org_store, procedure_diagram, procedure_digest, roles
+from .. import access, deprecations, org_store, procedure_diagram, roles
 from ._authz import ORG_MEMBER, SUB_ONLY
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
@@ -196,9 +196,6 @@ class PublishResult(BaseModel):
         default=None,
         description="Le SCHÉMA manquant du corps publié (cf. `procedure_diagram`). "
                     "`null` = rien à signaler. Non bloquant : la publication a eu lieu.")
-    digest_warning: Optional[str] = Field(
-        default=None,
-        description="Le DIGEST d'ouverture manquant (cf. `procedure_digest`).")
 
 
 class ForkResult(BaseModel):
@@ -224,9 +221,6 @@ class ForkResult(BaseModel):
         default=None,
         description="Le SCHÉMA manquant du corps forké (cf. `procedure_diagram`). "
                     "`null` = rien à signaler. Non bloquant : le fork a eu lieu.")
-    digest_warning: Optional[str] = Field(
-        default=None,
-        description="Le DIGEST d'ouverture manquant (cf. `procedure_digest`).")
 
 
 class UnpublishResult(BaseModel):
@@ -328,8 +322,7 @@ def _publish(ctx: ResolvedCtx, inp: PublishInput) -> dict:
     # signal part ici aussi, au même régime non bloquant (front tiers, issue #108).
     return {"published": True, "id": row["id"], "slug": row["slug"],
             "version": row["version"], "visibility": row["visibility"],
-            **procedure_diagram.diagram_check(src.get("body_md") or ""),
-            **procedure_digest.digest_check(src.get("body_md") or "")}
+            **procedure_diagram.diagram_check(src.get("body_md") or "")}
 
 
 def _fork(ctx: ResolvedCtx, inp: ForkInput) -> dict:
@@ -342,8 +335,7 @@ def _fork(ctx: ResolvedCtx, inp: ForkInput) -> dict:
     # Le fork est une écriture de procédure comme une autre : l'org repart avec un
     # corps qu'elle n'a pas écrit, et c'est elle qui devra lui dessiner son schéma.
     return {"forked": True, **res,
-            **procedure_diagram.diagram_check(entry.get("body_md") or ""),
-            **procedure_digest.digest_check(entry.get("body_md") or "")}
+            **procedure_diagram.diagram_check(entry.get("body_md") or "")}
 
 
 def _unpublish(ctx: ResolvedCtx, inp: UnpublishInput) -> dict:

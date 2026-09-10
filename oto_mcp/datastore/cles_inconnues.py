@@ -22,8 +22,8 @@ verrouillé — la faute de frappe est silencieuse **et** elle désarme le cran.
 
 Refuser durcirait un contrat déjà servi (ADR 0019/0050 : *un contrat servi ne se durcit
 pas en place, il se double*) et casserait à la première écriture tous les schémas
-existants qui portent déjà des clés mortes. Même régime que `digest_warning`,
-`diagram_warning` et `retrait_warning` : la pose réussit, l'auteur reçoit le signal.
+existants qui portent déjà des clés mortes. Même régime que `diagram_warning`
+et `retrait_warning` : la pose réussit, l'auteur reçoit le signal.
 
 ## La référence est la DÉCLARATION, pas ce que le validateur lit
 
@@ -131,7 +131,7 @@ def inconnues_de_tete(schema: Any) -> dict[str, str]:
 
 
 def check(schema: Any) -> dict:
-    """Check croisé à la pose, dans la forme des autres (`digest_check`,
+    """Check croisé à la pose, dans la forme des autres (`diagram_check`,
     `retrait_check`) : la clé est TOUJOURS présente, `None` = rien à signaler.
     Best-effort — un check ne casse jamais une écriture."""
     try:
@@ -165,5 +165,5 @@ def check(schema: Any) -> dict:
             "attributs qu'oto interprète, avec le lecteur de chacun, est servie sur "
             "`GET /api/datastore/schema/keys`.")}
     # noqa: SILENT — contrôle de forme optionnel : pas d'avertissement plutôt qu'un faux
-    except Exception:  # noqa: BLE001 — cf. `digest_check`
+    except Exception:  # noqa: BLE001 — cf. `diagram_check`
         return {"unknown_keys_warning": None}

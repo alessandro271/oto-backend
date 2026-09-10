@@ -255,7 +255,6 @@ CAPABILITIES += [
             "`scope='org'` (needs org_admin) for the org's. ⚠️ The "
             "org README (the prose injected into every session, « socle de l'org ») is NOT a "
             "procedure: write it with `oto_guide(op='write', scope='org', delivery='init')`. "
-            "⚠️ EVERY procedure OPENS with `> **Self-improvement digest** — …` as its first block (what the last run taught and what was fixed, dated; one sentence if it has never been run — never invent a run). "
             "⚠️ EVERY procedure must carry a FLOWCHART — one untagged fenced block drawn in "
             "box characters, placed right after the « At a glance » table (or the intro) and "
             "before the first phase heading. It is the DEFAULT view of the process page, and "

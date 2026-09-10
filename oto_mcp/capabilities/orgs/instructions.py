@@ -32,7 +32,7 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from ... import (access, db, deprecations, group_store, guide_store, org_store,
-                procedure_diagram, procedure_digest, procedure_retrait, roles,
+                procedure_diagram, procedure_retrait, roles,
                 slots as slots_mod, tool_registry)
 from .._authz import (ORG_ADMIN, ORG_ADMIN_OF, ORG_ADMIN_OPT, ORG_MEMBER,
                       ORG_MEMBER_OF, SUB_ONLY, capacite_autorise)
@@ -345,13 +345,9 @@ class InstructionWritten(BaseModel):
     # `None` = le check a tourné et n'a rien à dire ; la clé est toujours présente,
     # pour qu'un client sache distinguer « rien à signaler » d'un serveur trop vieux.
     diagram_warning: Optional[str] = None
-    # Le DIGEST d'ouverture (`procedure_digest`) : ce que le dernier déroulé a appris.
-    # Même régime — la procédure est enregistrée, il lui manque son bloc d'ouverture.
-    digest_warning: Optional[str] = None
-    # Ce que cette version RETIRE (`procedure_retrait`, oto#61). Le digest raconte ce
-    # qu'on ajoute ; rien ne disait ce qu'on enlève, et une réécriture « resserrée »
-    # enlève par construction. `None` = aucune SECTION entière n'a disparu — ce qui ne
-    # veut pas dire que rien n'a été retiré.
+    # Ce que cette version RETIRE (`procedure_retrait`, oto#61) : une réécriture
+    # « resserrée » enlève par construction, et rien d'autre ne le dit. `None` = aucune
+    # SECTION entière n'a disparu — ce qui ne veut pas dire que rien n'a été retiré.
     retrait_warning: Optional[str] = None
 
 
@@ -363,8 +359,8 @@ class InstructionDescribed(BaseModel):
     réversible par `from_version` — et ce qui fait que la version lue avant la
     correction ne vaut plus pour un `expected_version` ultérieur.
 
-    Pas de check croisé dans la réponse (`unresolved_slots`, `diagram_warning`,
-    `digest_warning`) : ils portent tous sur le CORPS, que ce geste ne touche pas.
+    Pas de check croisé dans la réponse (`unresolved_slots`, `diagram_warning`) :
+    ils portent tous sur le CORPS, que ce geste ne touche pas.
     Les rendre ici les ferait passer pour un verdict sur ce qui vient d'être écrit.
 
     `title`/`description` sont l'état APRÈS correction — celui qui n'était pas fourni
@@ -427,9 +423,8 @@ class InstructionReverted(BaseModel):
     slug: str
     version: int
     reverted_from: int
-    # Un retour en arrière peut ramener un corps d'avant le schéma OU le digest requis.
+    # Un retour en arrière peut ramener un corps d'avant le schéma requis.
     diagram_warning: Optional[str] = None
-    digest_warning: Optional[str] = None
 
 
 def _inconnu(message: str) -> AuthzDenied:
@@ -1025,7 +1020,6 @@ def _write_instruction(ctx: ResolvedCtx, inp, must_create: bool = False) -> tupl
             **({"reverted_from": from_version} if from_version is not None else {}),
             **slots_mod.slots_check(body_md, effective_slots),
             **procedure_diagram.diagram_check(body_md),
-            **procedure_digest.digest_check(body_md),
             **procedure_retrait.retrait_check(ancien_md, body_md)}, body_md
 
 
@@ -1179,8 +1173,7 @@ def _instruction_revert(ctx: ResolvedCtx, inp: RevertInput) -> dict:
     # Revenir en arrière peut RAMENER une procédure d'avant le schéma requis : le signal
     # part ici aussi (la face MCP passe par `_set_instruction`, qui l'a déjà).
     return {"ok": True, "slug": slug, "version": version, "reverted_from": inp.version,
-            **procedure_diagram.diagram_check(old["body_md"]),
-            **procedure_digest.digest_check(old["body_md"])}
+            **procedure_diagram.diagram_check(old["body_md"])}
 
 
 def _instruction_usage(ctx: ResolvedCtx, inp: SlugInput) -> dict:
@@ -1259,15 +1252,12 @@ CAPABILITIES += [
                      "`slots` = the procedure's REQUIRED ENTITIES [{name, type: tableau|"
                      "connecteur|base, description?, connector?}] — reference them BY NAME "
                      "in the prose as <slot:name> (never a hardcoded instance: the project "
-                     "binds name→instance). EVERY procedure OPENS with "
-                     "`> **Self-improvement digest** — …` (what the last run taught and "
-                     "what was fixed, dated) and must carry a FLOWCHART (one "
+                     "binds name→instance). EVERY procedure must carry a FLOWCHART (one "
                      "untagged fenced block drawn in box characters, right after the « At a "
                      "glance » table and before the first phase heading) — it is the DEFAULT "
                      "view of the process page; read the `procedure-flowchart` guide first. "
                      "Response returns cross-check warnings "
-                     "(unresolved/unreferenced slots, suggestions, `digest_warning`, "
-                     "`diagram_warning`). "
+                     "(unresolved/unreferenced slots, suggestions, `diagram_warning`). "
                      "`org` pins the write to "
                      "an EXPLICIT org id (default = your active org) — pass it to stay robust "
                      "if a reconnect dropped your session org; you must be org_admin of it. "

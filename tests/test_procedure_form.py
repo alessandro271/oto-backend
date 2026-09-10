@@ -1,16 +1,18 @@
-"""La FORME d'une procédure : son digest d'ouverture et son schéma, tous deux requis.
+"""La FORME d'une procédure : son schéma, requis.
 
 Couvre : le test de présence (mêmes seuils que le `isDrawing` du front), le fait que
 seuls les blocs NON TAGUÉS comptent (c'est le routeur du front qui en décide), le
 régime non bloquant du check, sa remontée dans les deux faces d'écriture (org + équipe),
 et les deux tripwires qui font que la CONSIGNE ne peut pas disparaître en silence :
 le guide qui porte la grammaire, et la mention dans le socle injecté à chaque session.
+
+⚠️ Le DIGEST d'ouverture, longtemps l'autre moitié de cette « forme », a été retiré le
+10/09/2026 (oto#159) — son retrait est gardé par `test_digest_retire_159.py`.
 """
 import asyncio
 import pathlib
 
-from oto_mcp import (guide_store, instructions, procedure_diagram as pd,
-                     procedure_digest as pdg)
+from oto_mcp import guide_store, instructions, procedure_diagram as pd
 from oto_mcp.capabilities.groups import guide as gd
 from oto_mcp.capabilities.orgs import instructions as oi
 
@@ -205,64 +207,3 @@ def test_publish_and_fork_carry_the_warning(monkeypatch):
         slug = "s"; new_slug = None
 
     assert dl._fork(_Ctx(), _F())["diagram_warning"] is None
-
-
-# ── Le digest d'ouverture ───────────────────────────────────────────────────
-_DIGEST = "> **Self-improvement digest** — Never run end to end; nothing to report yet."
-
-
-def test_the_digest_may_follow_a_leading_title_heading():
-    """La page du process RETIRE un H1 qui répète le titre et affiche le sien : le
-    digest posé dessous est donc bien la première chose que le lecteur voit."""
-    assert pdg.has_digest(f"# Ma procédure\n\n{_DIGEST}\n\nDe la prose.\n")
-
-
-def test_the_digest_may_be_the_very_first_block():
-    assert pdg.has_digest(f"{_DIGEST}\n\n## Goal\n\nDe la prose.\n")
-
-
-def test_a_digest_that_is_not_the_opening_block_does_not_count():
-    """« Quelque part dans le corps » n'est pas la consigne — c'est l'OUVERTURE."""
-    assert not pdg.has_digest(f"# T\n\nDe la prose.\n\n{_DIGEST}\n")
-    assert not pdg.has_digest(f"## Goal\n\n{_DIGEST}\n")
-    # Un seul H1 est sauté : deux titres, ou un titre collé à de la prose, ne le sont pas.
-    assert not pdg.has_digest(f"# T\n\n## Goal\n\n{_DIGEST}\n")
-    assert not pdg.has_digest(f"# T\nDe la prose.\n\n{_DIGEST}\n")
-
-
-def test_an_ordinary_blockquote_is_not_a_digest():
-    assert not pdg.has_digest("# T\n\n> Une citation quelconque.\n")
-
-
-def test_the_digest_check_never_raises(monkeypatch):
-    monkeypatch.setattr(pdg, "has_digest",
-                        lambda body: (_ for _ in ()).throw(RuntimeError("boom")))
-    assert pdg.digest_check("peu importe") == {"digest_warning": None}
-
-
-def test_every_write_face_surfaces_the_digest_warning(monkeypatch):
-    """Les quatre faces qui écrivent ou font circuler une procédure le signalent."""
-    out = _set_org(monkeypatch, _fenced(_DRAWING))          # dessin OK, digest absent
-    assert out["digest_warning"] == pdg.WARNING and out["diagram_warning"] is None
-    out = _set_org(monkeypatch, f"# T\n\n{_DIGEST}\n\n{_fenced(_DRAWING)}")
-    assert out["digest_warning"] is None and out["diagram_warning"] is None
-
-    monkeypatch.setattr(gd.org_store, "set_instruction", lambda *a, **k: 2)
-
-    class _GInp(_Inp):
-        group_id = 4
-
-    assert gd._set(_Ctx(), _GInp("Sans digest."))["digest_warning"] == pdg.WARNING
-    for model in (oi.InstructionWritten, oi.InstructionReverted, gd.GroupInstructionWritten):
-        assert "digest_warning" in model.model_fields, model
-
-
-def test_the_guide_and_the_socle_carry_the_opening_rule():
-    body = _GUIDE.read_text(encoding="utf-8")
-    assert "Self-improvement digest" in body
-    # La règle de placement vient du rendu : si la raison tombe, la consigne devient
-    # arbitraire et le premier relecteur la « simplifiera ».
-    assert "retire" in body and "At a glance" in body
-    socle = instructions._SECRET_SAUCE
-    assert "Self-improvement digest" in socle and "digest_warning" in socle
-

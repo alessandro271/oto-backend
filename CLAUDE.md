@@ -90,8 +90,8 @@ masqué »** ; `PROTECTED_TOOLS` (`tool_visibility.py`) = jamais masquables ; st
 admin), **fail-closed**, **noms neufs seulement** · ⚠️ **un contrat servi ne se durcit pas en place, il se double** :
 l'héritée garde son défaut écrit dans sa description, la stricte l'exige (ADR 0019/0050, `docs/tool-visibility.md`).
 **Agent readme** = prose injectée à chaque session, cumulée plateforme → org → équipe → user, éditée par la seule
-surface `me.guide{,s}` (ADR 0042) ; **procédure** = guide nommé chargé à la demande, qui s'ouvre sur son digest et
-embarque son schéma · ⚠️ l'injection au handshake **n'est pas garantie** : le bloc A est un socle ≤ 2 000 c. (budget CI
+surface `me.guide{,s}` (ADR 0042) ; **procédure** = guide nommé chargé à la demande, qui embarque son schéma
+(le « digest d'ouverture » a été retiré le 10/09/2026, oto#159) · ⚠️ l'injection au handshake **n'est pas garantie** : le bloc A est un socle ≤ 2 000 c. (budget CI
 `tests/test_instructions_budget.py`) qui pointe le guide `notice` et `oto_context` · ⚠️ guides = **tout-DB**,
 `oto_mcp/guides/*.md` sont des seeds (`docs/guides.md`, `docs/alias-deprecies.md`).
 `ToolCallLogger` journalise chaque appel dans `tool_calls` (identité = `sub`), lu par trois lentilles (membre / org /

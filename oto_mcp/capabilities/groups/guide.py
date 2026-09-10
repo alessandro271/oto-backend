@@ -26,8 +26,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from ... import (deprecations, guide_store, org_store, procedure_diagram,
-                procedure_digest, roles)
+from ... import (deprecations, guide_store, org_store, procedure_diagram, roles)
 from .._authz import GROUP_ADMIN_OF, GROUP_MEMBER_OF, capacite_autorise
 from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from ..registry import CAPABILITIES
@@ -218,9 +217,8 @@ class GroupInstructionWritten(BaseModel):
     version: int
     # Constante d'écho : vaut toujours `true`.
     set: bool
-    # Le SCHÉMA et le DIGEST manquants. `None` = rien à signaler.
+    # Le SCHÉMA manquant. `None` = rien à signaler.
     diagram_warning: Optional[str] = None
-    digest_warning: Optional[str] = None
 
 
 class GroupInstructionDeleted(BaseModel):
@@ -333,8 +331,7 @@ def _set(ctx: ResolvedCtx, inp: InstrSetInput) -> dict:
     # Une procédure d'équipe est une procédure : même exigence de schéma qu'au grain org
     # (front tiers, issue #108), même régime — un warning, jamais un refus.
     return {"group_id": inp.group_id, "slug": slug, "version": version, "set": True,
-            **procedure_diagram.diagram_check(inp.body_md),
-            **procedure_digest.digest_check(inp.body_md)}
+            **procedure_diagram.diagram_check(inp.body_md)}
 
 
 def _delete(ctx: ResolvedCtx, inp: InstrSlugInput) -> dict:

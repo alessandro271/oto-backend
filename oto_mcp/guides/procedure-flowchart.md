@@ -1,6 +1,6 @@
 ---
-title: "La forme d'une procédure — digest d'ouverture, tableau, schéma"
-description: toute procédure s'ouvre sur son digest d'auto-amélioration et embarque un schéma, qui est la vue par défaut de sa page ; le dessin est parsé, donc sa grammaire est un contrat — à lire AVANT d'écrire ou de réécrire une procédure
+title: La forme d'une procédure — le tableau et le schéma
+description: toute procédure embarque un schéma, qui est la vue par défaut de sa page ; le dessin est parsé, donc sa grammaire est un contrat — à lire AVANT d'écrire ou de réécrire une procédure
 ---
 
 # Le schéma d'une procédure
@@ -18,47 +18,6 @@ retenir avant de dessiner :
 > tout ce qu'elle ne couvre pas — et il *préfère* refuser : un schéma faussement
 > confiant est pire qu'un dessin fidèle. Un dessin refusé retombe sur ses caractères
 > bruts. Il n'y a pas de demi-rendu.
-
-## L'ouverture : le digest d'auto-amélioration
-
-**Toute procédure s'ouvre sur son digest.** C'est le premier bloc, avant la prose, avant
-les sections, avant tout :
-
-```
-> **Self-improvement digest** — <ce que le dernier déroulé a appris et ce qui a été
-> corrigé, daté>.
-```
-
-Ce qu'il dit : **ce que le DERNIER RUN a appris, et ce qui a été corrigé en conséquence,
-daté**. C'est un relevé, donc la date est obligatoire — c'est le seul bloc d'une
-procédure où un fait daté est à sa place (partout ailleurs, cf. §Deux règles, un fait
-daté dérive).
-
-Une procédure qui n'a jamais tourné **le dit, en une phrase** :
-
-```
-> **Self-improvement digest** — Never run end to end; nothing to report until it is.
-```
-
-⚠️ **Ne fabrique jamais un déroulé.** Ce bloc ne vaut que tant qu'il est vrai : un
-digest décoratif est pire que pas de digest, parce qu'il se lit comme une preuve. Les
-sources admissibles, dans cet ordre : le journal des runs
-(`oto_org_monitoring(op="runs", org_id=…)`), le relevé daté que le corps porte déjà
-(un « Corrected on <date> by a rehearsal run that found thirteen defects », un exemple
-travaillé avec de vraies valeurs — c'est une preuve qu'un run a eu lieu), puis
-l'historique des versions (`oto_procedure(op="get", …, with_history=true)`), qui dit
-QUAND ça a été corrigé pendant que le corps dit POURQUOI. Une retouche de la page n'est
-pas un déroulé du process.
-
-⚠️ **Où exactement**, et ça vient du RENDU, pas du goût : la page d'un process **retire
-un titre de tête qui répète le nom de la procédure** et affiche le sien à la place. Donc
-si le corps ouvre sur `# <le titre>`, le digest se pose **juste en dessous** (au-dessus,
-il laisserait ce titre orphelin au milieu de la page) ; si le corps n'a pas ce H1 — il
-ouvre sur `## Goal` ou sur un paragraphe — le digest est **littéralement le premier
-bloc**. Dans les deux cas, c'est la première chose que le lecteur voit.
-
-À l'écriture, la réponse porte `digest_warning` quand le bloc manque ou n'est pas en
-tête. Warning, pas refus.
 
 ## Où il va
 
