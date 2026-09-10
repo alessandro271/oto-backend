@@ -757,6 +757,31 @@ def _scope_ref(owner: tuple[str, str]) -> dict:
     return {f"{otype}_id": (oid if otype == "user" else int(oid)), "scope": otype}
 
 
+def _note_de_portee(owner: tuple[str, str]) -> dict:
+    """Ce qu'une portée PERSONNELLE implique, dit DANS l'accusé d'écriture.
+
+    Le 08/09/2026, un agent a écrit deux procédures sans `scope` : elles sont parties
+    au palier personnel (ADR 0068) et son accusé disait bien `scope: "user"` — mais
+    discrètement, à côté d'un `_org: {id, name}` bien visible ajouté par l'adaptateur
+    MCP. Il a conclu qu'il avait écrit pour son org. Le `scope` nommait le fait ; il
+    ne disait pas ce qu'il IMPLIQUE, et c'est l'implication qui décide de la suite.
+
+    ⚠️ **Phrase écrite pour l'état d'APRÈS le cumul des paliers** dans l'index poussé
+    au `tools/list` (`instructions.skills_index_md`) et dans le bundle de session
+    (`_read_guide`, slug omis) — les deux vivent dans le MÊME lot que cette phrase.
+    Avant ce cumul, la vérité était plus dure : une procédure perso n'apparaissait
+    dans AUCUN des deux. Retirer le cumul sans réécrire cette phrase servirait un
+    texte faux ; les trois se tiennent."""
+    if owner[0] != "user":
+        return {}
+    return {"scope_note": (
+        "Procédure PRIVÉE — palier `user`, celui où l'on écrit quand on ne passe pas "
+        "`scope`. Elle n'apparaît que dans TON index de connexion et TON bundle de "
+        "session : aucun autre compte de ton org ne la verra, ni un agent de la flotte "
+        "qui tourne sous un autre compte. Pour une procédure que toute l'org reçoit, "
+        "repasse-la avec `scope='org'` (réservé aux admins de l'org).")}
+
+
 # ── Handlers (core ; owner depuis ctx → partagés membre/admin) ──────────────
 def _read_guide(ctx: ResolvedCtx, inp) -> tuple[dict, tuple[str, ...] | None]:
     """Bundle session-start (slug omis) OU un guide nommé. En mode membre
@@ -812,9 +837,17 @@ def _read_guide(ctx: ResolvedCtx, inp) -> tuple[dict, tuple[str, ...] | None]:
         # Le readme d'org/équipe est un GUIDE `delivery='init'` (ADR 0042), plus une
         # instruction déguisée : on le lit sur sa surface, pas via le store de procédures.
         base_body = guide_store.init_guide_body("org", org_id) or ""
+        # ⚠️ Le palier PERSONNEL vient EN TÊTE, comme dans `op=list` (04/09/2026) et
+        # dans l'index poussé au `tools/list` (`instructions.skills_index_md`). Sans
+        # lui, ce bundle — l'autre texte que l'agent reçoit sans le demander — ne
+        # montrait pas ce que l'écriture sans `scope` avait pourtant écrit chez lui.
         index = [{"slug": i["slug"], "title": i["title"],
-                  "description": i["description"], "scope": "org"}
-                 for i in org_store.list_instructions("org", org_id)]
+                  "description": i["description"], "scope": "user"}
+                 for i in (org_store.list_instructions("user", str(ctx.sub))
+                           if (member_mode and ctx.sub is not None) else [])]
+        index += [{"slug": i["slug"], "title": i["title"],
+                   "description": i["description"], "scope": "org"}
+                  for i in org_store.list_instructions("org", org_id)]
         group_id = _active_group(ctx) if member_mode else None
         group_name, group_guide = None, ""
         if group_id is not None:
@@ -1071,13 +1104,18 @@ def _write_instruction(ctx: ResolvedCtx, inp, must_create: bool = False) -> tupl
              else f"`{norm}` n'existe pas (ou plus) dans ce scope")
             + " : relis-la (`op=get`) et rejoue ton édition sur la version à jour.",
             {"slug": norm, "current_version": e.current_version})
-    # Slots EFFECTIFS après écriture (None = conservés → relire la row) pour le
-    # check croisé <slot:name> ↔ déclaration (ADR 0035, non bloquant comme 0014).
-    effective_slots = slots_in
-    if effective_slots is None:
-        cur = org_store.get_instruction(*owner, norm)
-        effective_slots = (cur or {}).get("slots") or []
-    return {"ok": True, **_scope_ref(owner), "slug": norm, "version": version, "set": True,
+    # La row ÉCRITE, relue une fois. Elle porte les slots effectifs (None = conservés
+    # → il faut les relire, pour le check croisé <slot:name> ↔ déclaration, ADR 0035,
+    # non bloquant comme 0014) ET l'identifiant STABLE. La relecture était déjà là,
+    # conditionnée aux slots ; elle devient inconditionnelle parce que `guide_id` est
+    # la seule poignée qui désigne la procédure sans ambiguïté de palier — deux
+    # paliers portent le même slug en production (mesuré le 09/09/2026 : sur deux
+    # orgs, un même slug de campagne existe en `user` ET en `org`).
+    ecrite = org_store.get_instruction(*owner, norm) or {}
+    effective_slots = slots_in if slots_in is not None else (ecrite.get("slots") or [])
+    return {"ok": True, **_scope_ref(owner), "slug": norm,
+            **({"guide_id": ecrite["id"]} if ecrite.get("id") is not None else {}),
+            **_note_de_portee(owner), "version": version, "set": True,
             **({"reverted_from": from_version} if from_version is not None else {}),
             **slots_mod.slots_check(body_md, effective_slots),
             **procedure_diagram.diagram_check(body_md),

@@ -197,21 +197,10 @@ def test_middleware_fail_open(monkeypatch):
 
 
 # ── index des skills (description dynamique de oto_get_doctrine) ──────────────
-def test_skills_index_md(monkeypatch):
-    monkeypatch.setattr(org_store, "list_instructions", lambda otype, oid: [
-        {"slug": "a", "title": "Skill A", "description": "fait A"},
-        {"slug": "b", "title": "Skill B", "description": ""},
-    ])
-    out = instr.skills_index_md(7)
-    assert out.startswith("Guides nommés")
-    assert "- a — Skill A : fait A" in out
-    assert "- b — Skill B" in out and "Skill B :" not in out
-
-
-def test_skills_index_md_empty(monkeypatch):
-    monkeypatch.setattr(org_store, "list_instructions", lambda otype, oid: [])
-    assert instr.skills_index_md(7) == ""
-    assert instr.skills_index_md(None) == ""
+# ⚠️ Le RENDU de `skills_index_md` (cumul des trois paliers, marques, ordre, fail-open)
+# vit dans `tests/test_index_paliers_perso.py` depuis le 09/09/2026 : la fonction a pris
+# un paramètre `sub` et le palier personnel, et deux fichiers qui figent le même texte
+# divergent au premier changement. Ce qui reste ici est le CÂBLAGE du middleware.
 
 
 class _FakeTool:
@@ -232,7 +221,7 @@ def _run_list(tools, sub, monkeypatch):
 
 def test_on_list_tools_enriches_get_guide(monkeypatch):
     monkeypatch.setattr(access, "current_org", lambda sub: 7)
-    monkeypatch.setattr(instr, "skills_index_md", lambda org: "INDEX-BLOCK")
+    monkeypatch.setattr(instr, "skills_index_md", lambda sub, org: "INDEX-BLOCK")
     monkeypatch.setattr(guide_store, "guides_index_md", lambda sub, org: "")
     tools = [_FakeTool("fr_get", "search"), _FakeTool("oto_procedure", "load guide")]
     out = {t.name: t for t in _run_list(tools, "u1", monkeypatch)}
@@ -244,7 +233,7 @@ def test_on_list_tools_enriches_get_guide(monkeypatch):
 def test_on_list_tools_enriches_guide_per_caller(monkeypatch):
     # oto_guide reçoit l'index per-(sub, org) — plateforme ∪ org ∪ user — pas le guide.
     monkeypatch.setattr(access, "current_org", lambda sub: 7)
-    monkeypatch.setattr(instr, "skills_index_md", lambda org: "")
+    monkeypatch.setattr(instr, "skills_index_md", lambda sub, org: "")
     monkeypatch.setattr(guide_store, "guides_index_md", lambda sub, org: "GUIDES-BLOCK")
     tools = [_FakeTool("fr_get", "search"), _FakeTool("oto_guide", "load guide")]
     out = {t.name: t for t in _run_list(tools, "u1", monkeypatch)}
@@ -255,7 +244,7 @@ def test_on_list_tools_enriches_guide_per_caller(monkeypatch):
 
 def test_on_list_tools_noop_without_index(monkeypatch):
     monkeypatch.setattr(access, "current_org", lambda sub: 7)
-    monkeypatch.setattr(instr, "skills_index_md", lambda org: "")
+    monkeypatch.setattr(instr, "skills_index_md", lambda sub, org: "")
     monkeypatch.setattr(guide_store, "guides_index_md", lambda sub, org: "")
     tools = [_FakeTool("oto_get_doctrine", "load")]
     assert _run_list(tools, "u1", monkeypatch) is tools

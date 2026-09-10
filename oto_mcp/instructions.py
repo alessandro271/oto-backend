@@ -469,25 +469,51 @@ def seed_platform_blocks() -> None:
     par `server._build_mcp`) pour ne pas toucher le chemin de démarrage."""
 
 
-def skills_index_md(org_id: int | None) -> str:
-    """Index markdown des guides NOMMÉS (skills) d'une org — `slug — titre :
-    description`, SANS les corps. Sert à enrichir DYNAMIQUEMENT la description de
-    l'outil `oto_procedure` au `tools/list` (les skills ne sont PAS des outils →
-    absents de `tools/list`, donc invisibles sans ça). Fail-open : '' si pas d'org /
-    aucun guide / erreur."""
-    if org_id is None:
-        return ""
+# Marque de palier dans l'index — le tag DIT ce que la portée implique. Sans lui,
+# une procédure perso et une procédure d'org se ressemblent, et l'agent croit avoir
+# publié pour son org ce qu'il a écrit pour lui seul.
+_TAG_PALIER = {"user": " [perso]", "org": "", "group": " [équipe]"}
+
+
+def skills_index_md(sub: str | None = None, org_id: int | None = None) -> str:
+    """Index markdown des procédures VISIBLES par le caller — les siennes (`user`),
+    celles de son org, celles de son équipe active — `slug — titre : description`,
+    SANS les corps. Sert à enrichir DYNAMIQUEMENT la description de l'outil
+    `oto_procedure` au `tools/list` (les procédures ne sont PAS des outils → absentes
+    de `tools/list`, donc invisibles sans ça). Fail-open : '' si rien / erreur.
+
+    ⚠️ **Les trois paliers, pas seulement l'org (09/09/2026).** L'ADR 0068 a fait
+    qu'une écriture sans `scope` va au palier PERSONNEL depuis le 04/09 ; `op=list`
+    cumule bien les trois paliers depuis le même jour, mais cet index-ci — le seul
+    texte poussé à CHAQUE agent à CHAQUE connexion — ne lisait que l'org. Une
+    procédure écrite à soi n'apparaissait donc dans rien de ce que l'agent reçoit :
+    elle existait, et personne ne pouvait la trouver sans la nommer.
+
+    Même cumul, même ORDRE et mêmes seams que `capabilities.orgs.instructions._list_guides`
+    (la sienne d'abord — c'est le premier endroit où l'on cherche ce qu'on a écrit).
+    Les deux doivent bouger ensemble : un palier ajouté ici sans y être, ou l'inverse,
+    et l'agent lit un index qui ne dit pas ce que `op=list` lui rendra."""
+    entrees: list[tuple[str, dict]] = []
     try:
-        from . import org_store
-        rows = org_store.list_instructions("org", org_id)  # exclut la base (claude_md)
+        from . import access, org_store
+        if sub:
+            entrees += [("user", r) for r in org_store.list_instructions("user", sub)]
+        if org_id is not None:
+            # exclut la base (claude_md)
+            entrees += [("org", r) for r in org_store.list_instructions("org", org_id)]
+        group_id = access.current_group(sub) if sub else None
+        if group_id is not None:
+            entrees += [("group", r) for r in org_store.list_instructions("group", group_id)]
     except Exception:
-        logger.warning("skills_index_md: lecture org=%s échouée (fail-open)",
-                       org_id, exc_info=True)
+        logger.warning("skills_index_md: lecture sub=%s org=%s échouée (fail-open)",
+                       sub, org_id, exc_info=True)
         return ""
-    if not rows:
+    if not entrees:
         return ""
-    lines = ["Guides nommés de ton org (passe le `slug` pour charger le corps) :"]
-    for r in rows:
+    lines = ["Procédures que tu peux charger (passe le `slug` pour charger le corps) — "
+             "`[perso]` = à toi seul, `[équipe]` = à ton équipe, sans marque = à ton org :"]
+    for palier, r in entrees:
         desc = (r.get("description") or "").strip()
-        lines.append(f"- {r['slug']} — {r['title']}" + (f" : {desc}" if desc else ""))
+        lines.append(f"- {r['slug']} — {r['title']}"
+                     + (f" : {desc}" if desc else "") + _TAG_PALIER.get(palier, ""))
     return "\n".join(lines)

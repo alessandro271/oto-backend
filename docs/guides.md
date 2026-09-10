@@ -116,8 +116,11 @@ par id (réservé platform_admin). Autz conditionnelle dans `tools/orgs.py`
   en dur, `group_store` filtrait `owner_type='group'` en dur, sur la MÊME table — et ils avaient
   déjà divergé (le palier équipe écrivait `slots='[]'` en dur, ne relisait pas les slots,
   ignorait l'archivage). Ajouter un palier par la même méthode en aurait fait un troisième :
-  **le propriétaire est une DIMENSION, pas trois cas particuliers.** Le palier `user` reste
-  fermé (`OWNER_TYPES`) tant que `org_id` est NOT NULL — phase 2 du même lot.
+  **le propriétaire est une DIMENSION, pas trois cas particuliers.** Le palier `user` est
+  OUVERT depuis l'ADR 0068 (04/09/2026) — `OWNER_TYPES = ("org","group","user")`, `org_id`
+  rendu nullable. ⚠️ Cette ligne a annoncé le contraire jusqu'au 09/09/2026, alors que la
+  ligne 50 de cette même page disait déjà l'inverse : une page qui se contredit ne se lit
+  pas, elle se cite au hasard.
 
   **En clair** (prose, pas un credential → hors coffre chiffré). **Pas de cache** : lecture DB
   à l'appel. Écriture sérialisée par `(owner_type, owner_id, slug)` via verrou advisory.
@@ -286,8 +289,17 @@ autres (Claude Code, claude.ai — #478), la lecture au démarrage EST le canal 
 prescrit `oto_guide op=read slug=notice` puis `oto_context`, et la description
 d'`oto_context` (toujours livrée, elle) porte la même consigne.
 Les **guides nommés (skills)** ne sont pas des outils → absents de `tools/list` → `on_list_tools`
-**enrichit la description de `oto_procedure`** avec leur index per-org (`instructions.skills_index_md`,
-Tool non-frozen → `model_copy`). `render()` reste la surface STATIQUE (boot / fallback, sans DB).
+**enrichit la description de `oto_procedure`** avec leur index per-**(compte, org, équipe
+active)** (`instructions.skills_index_md`, Tool non-frozen → `model_copy`). ⚠️ Les TROIS
+paliers depuis le 09/09/2026, marqués `[perso]` / `[équipe]` / sans marque pour l'org — cet
+index ne lisait que l'org, alors que l'écriture sans `scope` va au palier personnel depuis
+l'ADR 0068 : une procédure écrite à soi n'apparaissait ni ici ni dans le bundle de session
+(`op=get` sans slug), donc dans RIEN de ce que l'agent reçoit sans le demander. Les deux
+index et `op=list` doivent cumuler les mêmes paliers — garde
+`tests/test_index_paliers_perso.py::test_les_deux_index_lisent_les_memes_paliers`. Coût
+mesuré du cumul en production le 09/09 : +2 lignes / +154 caractères (+1 % sur l'index le
+plus gros, +5 % sur un petit). Composé **hors boucle** (`run_in_threadpool`) : ces lectures
+tournaient dans l'event loop. `render()` reste la surface STATIQUE (boot / fallback, sans DB).
 Tout **fail-open** (pas de sub/org/guide/DB → surface statique). Édition des blocs A/B : capacité
 `oto_admin_platform_instructions` (+ REST `/api/admin/platform-instructions`, `PLATFORM_ADMIN`) →
 éditeur dashboard `/platform/instructions`. Transparence : `/api/me/agent-context` rend le même

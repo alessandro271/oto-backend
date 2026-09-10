@@ -102,6 +102,32 @@ def test_on_initialize_ne_touche_pas_la_base_dans_la_boucle(mouchard, monkeypatc
                         "DynamicInstructionsMiddleware.on_initialize")
 
 
+def test_on_list_tools_ne_touche_pas_la_base_dans_la_boucle(mouchard, monkeypatch):
+    """`tools/list` appende à deux descriptions d'outils l'index de prose chargeable —
+    résolution d'org, puis un index par outil, chacun cumulant plusieurs paliers
+    (perso, org, équipe depuis le 09/09/2026). Autant de lectures SYNC, sur un hook
+    joué à chaque connexion et à chaque `tools/list_changed`.
+
+    Ce hook a échappé à la garde jusqu'ici : `on_initialize` était le seul couvert,
+    et l'asymétrie ne se voyait nulle part."""
+    monkeypatch.setattr(mw, "current_user_sub_from_token", lambda: "u-perf")
+
+    class _Tool:
+        def __init__(self, name):
+            self.name, self.description = name, "desc"
+
+        def model_copy(self, update):
+            return self
+
+    async def call_next(ctx):
+        return [_Tool("oto_procedure"), _Tool("oto_guide")]
+
+    boucle = _joue(
+        lambda: mw.DynamicInstructionsMiddleware().on_list_tools(object(), call_next))
+    _assert_hors_boucle(mouchard, boucle,
+                        "DynamicInstructionsMiddleware.on_list_tools")
+
+
 def test_le_mouchard_mord(mouchard):
     """Contrôle : le MÊME travail appelé nûment dans la boucle EST attrapé.
 

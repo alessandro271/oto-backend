@@ -131,7 +131,14 @@ def _make_tool(cap: Capability):
             # sinon une réponse vide se lit comme un résultat vide. On rend le `rev`
             # avec, pour que l'appelant sache sur quelle version il est resté.
             result = {"not_modified": True, "rev": result.rev}
-        if isinstance(result, dict) and ctx.org_id is not None:
+        # ⚠️ Une réponse qui DÉCLARE une portée personnelle ne reçoit pas l'écho d'org.
+        # `_org: {id, name}` est visible et affirmatif ; posé à côté d'un `scope:
+        # "user"` discret, il se lit « écrit pour cette org » — c'est la lecture qu'un
+        # agent a faite le 08/09/2026 après avoir écrit deux procédures que personne
+        # d'autre ne verrait jamais. L'org du contexte n'apprend rien sur un geste
+        # qui, par construction, ne la concerne pas ; elle ne fait que le brouiller.
+        if isinstance(result, dict) and ctx.org_id is not None \
+                and result.get("scope") != "user":
             # Org à ÉCHOER dans `_org` : par défaut `ctx.org_id`, résolu à l'autz — il
             # porte déjà tout PIN MÉTIER explicite qu'accepte l'`Input` d'une capacité
             # (ex. `oto_procedure(org=<id>)`, lecture cross-org d'une procédure par un

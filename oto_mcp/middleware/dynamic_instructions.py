@@ -32,6 +32,19 @@ def _published_project_instructions():
     return instructions.compose_published_project(pid)
 
 
+def _index_par_outil(sub: str) -> dict:
+    """Les index de prose on-demand à appender aux descriptions d'outils, par outil.
+
+    **Sync (DB) — à appeler via `run_in_threadpool`** : résolution d'org, puis un index
+    par outil, chacun cumulant plusieurs paliers (perso, org, équipe). Deux loaders,
+    même canal de découverte : l'index per-(sub, org) enrichit la description de
+    l'outil qui les charge."""
+    from .. import access, guide_store, instructions
+    org_id = access.current_org(sub)
+    return {_GUIDE_GET_TOOL: instructions.skills_index_md(sub, org_id),
+            _GUIDE_TOOL: guide_store.guides_index_md(sub, org_id)}
+
+
 def _session_instructions(sub: str) -> str:
     """L'artefact A/C composé pour `sub` (org active incluse).
 
@@ -109,14 +122,13 @@ class DynamicInstructionsMiddleware(Middleware):
         if not sub:
             return tools
         try:
-            from .. import access, instructions, guide_store
-            org_id = access.current_org(sub)
-            # Deux loaders de prose on-demand, même canal de découverte : l'index
-            # per-(sub, org) enrichit la description de l'outil qui les charge.
-            extra = {
-                _GUIDE_GET_TOOL: instructions.skills_index_md(org_id),
-                _GUIDE_TOOL: guide_store.guides_index_md(sub, org_id),
-            }
+            # ⚠️ HORS BOUCLE (09/09/2026). Ces trois seams sont SYNC et lisent la base :
+            # résolution d'org, puis les deux index (qui interrogent chacun plusieurs
+            # paliers). Ils tournaient dans le thread de l'event loop — le mode de panne
+            # exact de `docs/event-loop-perf.md`, resté ici parce que ce hook n'était pas
+            # couvert par la garde. Le cumul des paliers personnel et équipe y ajoute des
+            # requêtes : le déplacer AVANT d'en ajouter, pas après.
+            extra = await run_in_threadpool(_index_par_outil, sub)
             if not any(extra.values()):
                 return tools
             return [
