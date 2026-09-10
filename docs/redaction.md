@@ -189,9 +189,9 @@ Un résultat d'outil MCP a deux canaux : `content` (du texte, ce qu'un modèle l
 `structuredContent` (un JSON validable contre l'`outputSchema` de l'outil, ce qu'un
 client qui **parse** consomme ; la spec l'exige dès qu'un schéma est déclaré). FastMCP
 déclare ce schéma **par inférence** : toute fonction `-> dict` reçoit « un objet, tout
-est permis », donc un canal structuré. Mesuré sur le montage réel : 573 outils, 451 avec
-ce schéma vide, 36 enveloppes `x-fastmcp-wrap-result`, **zéro dont le schéma décrive un
-champ**. Le contrat typé n'existe pas ; la copie, elle, part à chaque appel.
+est permis », donc un canal structuré. Mesuré sur le catalogue de la CI : 451 outils
+avec ce schéma vide, 120 enveloppes `x-fastmcp-wrap-result` (annotés `-> list` ou
+`-> object`), **zéro dont le schéma décrive un champ**. Le contrat typé n'existe pas ; la copie, elle, part à chaque appel.
 
 Et cette copie est LUE : **Claude Code et `oto-runner` donnent au modèle le canal
 structuré à la place du texte** (marqueurs distincts sur les deux canaux, trois runs sur
@@ -215,11 +215,13 @@ FastMCP refuse un résultat sans canal structuré dès qu'un schéma est encore 
 le geste de montage, casserait ces clients. Il ne juge donc que l'absence ; c'est le
 montage qui la crée.
 
-Les 36 enveloppes `x-fastmcp-wrap-result` (une liste nue emballée en `{"result": …}`)
-sont **gardées** et nommées dans `tests/structured_output_debt.txt`, liste qui ne peut
-que décroître : là, les deux canaux n'ont pas la même forme, et un client qui parse
-`.result` ne retrouverait pas la donnée dans le texte sans la désemballer. Payer une
-ligne = rendre un dict aux clés nommées, ou déclarer un vrai `Output`.
+Les 120 enveloppes `x-fastmcp-wrap-result` (une valeur annotée `-> list` ou `-> object`,
+emballée en `{"result": …}`) sont **gardées** et nommées dans
+`tests/structured_output_debt.txt`, liste qui ne peut que décroître : là, les deux canaux
+n'ont pas la même forme, et un client qui parse `.result` ne retrouverait pas la donnée
+dans le texte sans la désemballer. Payer une ligne = annoter `-> dict` et rendre un dict
+aux clés nommées, ou déclarer un vrai `Output`. ⚠️ Un poste en retard sur le pin
+oto-core n'en voit que 36 ; le chiffre qui compte est celui de la CI.
 
 **Ce qui change de contrat** : `/openapi.json`, `oto_tool_schema` et `/api/tools`
 servent `output_schema: null` pour 451 outils (`scripts/empreinte_servie.py` le

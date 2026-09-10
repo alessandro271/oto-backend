@@ -32,7 +32,7 @@ from oto_mcp.middleware import un_seul_canal
 _DEBT_FILE = pathlib.Path(__file__).resolve().parent.parent / "structured_output_debt.txt"
 
 # Plafond de la dette : il ne peut que BAISSER. Mesuré le 2026-09-10 sur le montage réel.
-_PLAFOND = 36
+_PLAFOND = 120
 
 
 def _banc(fn, *, nom: str = "recherche", montage: bool = True):

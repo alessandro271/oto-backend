@@ -6,9 +6,10 @@ client qui PARSE consomme). La spec exige le second dès qu'un schéma est décl
 
 FastMCP déclare ce schéma **par inférence** : toute fonction annotée `-> dict` reçoit
 `{"type": "object", "additionalProperties": true}` — « un objet, tout est permis » — et
-donc un canal structuré. Mesuré le 10/09/2026 sur le montage réel : 573 outils, 451 avec
-ce schéma vide, 36 avec l'enveloppe `x-fastmcp-wrap-result` (un retour non-dict emballé
-en `{"result": …}`), **zéro dont le schéma décrive un seul champ**. Le contrat typé, seule
+donc un canal structuré. Mesuré le 10/09/2026 sur le catalogue de la CI : 451 outils
+avec ce schéma vide, 120 avec l'enveloppe `x-fastmcp-wrap-result` (un retour annoté
+`-> list` ou `-> object`, emballé en `{"result": …}`), **zéro dont le schéma décrive un
+seul champ**. Le contrat typé, seule
 raison d'être du canal, n'existe pas ; la copie, elle, part à chaque appel.
 
 Et cette copie n'est pas inerte : **Claude Code et oto-runner donnent au modèle le canal
@@ -33,12 +34,13 @@ le 10/09/2026). Le middleware ne juge donc que l'ABSENCE de schéma — un outil
 schéma vide est encore déclaré garde son canal, quoi qu'il vaille. C'est le montage qui
 retire le schéma, et le middleware qui suit ; jamais l'inverse.
 
-Les 36 enveloppes `x-fastmcp-wrap-result` sont **gardées** : là, les deux canaux n'ont pas
-la même forme (le texte porte la liste nue, le structuré `{"result": [...]}`), et un
+Les 120 enveloppes `x-fastmcp-wrap-result` sont **gardées** : là, les deux canaux n'ont
+pas la même forme (le texte porte la valeur nue, le structuré `{"result": …}`), et un
 client qui parse `.result` ne retrouverait pas la donnée dans le texte sans la
 désemballer. Elles sont nommées dans `tests/structured_output_debt.txt`, liste qui ne
-peut que décroître ; un outil neuf qui rend une liste nue déclare un vrai `Output` ou
-rend un dict aux clés nommées (leçon `pennylaneged`).
+peut que décroître ; un outil neuf s'annote `-> dict` et rend un dict aux clés nommées
+(leçon `pennylaneged`), ou déclare un vrai `Output` — c'est l'annotation `-> list` ou
+`-> object` qui fabrique l'enveloppe.
 
 **Place dans la chaîne** : juste sous `ToolAlias` (il lui faut le nom CANONIQUE), donc
 plus EXTERNE que tout ce qui réémet le résultat sur les deux canaux — le rendu du vide,
