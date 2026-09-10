@@ -25,6 +25,7 @@ from ..datastore import forcage as fcg
 from ..datastore import layers as dsl
 from ..datastore import versions as dsver
 from ..datastore.identite import AdresseJson as Adresse
+from ..datastore.outils import adresse_servie
 from ..datastore import schema as dsv2
 from ..datastore.core import (
     indice_de_liberation,
@@ -124,8 +125,28 @@ def _project_hint(datastore: str) -> Optional[str]:
         # de lier un tableau DÉJÀ lié, à chaque appel et pour tout le monde, sans
         # qu'aucune erreur ne le signale — c'est le défaut qu'on avait déjà payé en
         # lisant la mauvaise des deux, dans l'autre sens.
-        linked = {l.get("datastore") for l in links if l.get("target_type") == "tableau"}
-        if datastore in linked:
+        # ⚠️ **Un lien se désigne sous DEUX formes, et ce hint n'en comparait qu'une**
+        # (#858, 10/09/2026). `list_project_links` enrichit chaque lien `tableau` du
+        # NOM de son tableau sous `datastore` ; mais une écriture vise couramment son
+        # ID. Un tableau lié par id, écrit par id, tombait donc à côté : le hint
+        # affirmait « pas lié » sur un lien posé sept minutes plus tôt. Quatre
+        # sous-agents successifs l'ont cru, deux l'ont remonté comme une action à
+        # faire, un a proposé de créer le lien — un doublon évité de justesse.
+        # Le voisin immédiat (`_anon_project_tableau_ns_ids`) résolvait DÉJÀ les deux
+        # formes, trente lignes plus haut, en le disant dans sa docstring.
+        cible = str(datastore).strip()
+        tableaux = [l for l in links if l.get("target_type") == "tableau"]
+        formes = {str(l.get("datastore") or "").strip() for l in tableaux}
+        formes |= {str(l.get("target_ref") or "").strip() for l in tableaux}
+        if cible in formes:
+            return None
+        # ⚠️ **Et dans le doute, ce hint se TAIT.** Il reste un cas qu'on ne peut pas
+        # trancher sans une requête de plus : la cible est un id, un lien porte un
+        # nom, et rien ici ne dit si ce nom EST ce tableau. Affirmer « pas lié » y
+        # rejouerait exactement le défaut qu'on corrige, alors que se taire ne coûte
+        # qu'un rappel. Le hint n'a jamais été bloquant : son silence est gratuit,
+        # son erreur ne l'est pas.
+        if cible.isdigit() and any(not f.isdigit() for f in formes if f):
             return None
         return (f"ce tableau `{datastore}` n'est pas lié au projet actif (#{pid}) — "
                 f"si c'est une sortie du projet, lie-le : `oto_project op=link "
@@ -1468,13 +1489,14 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def data_url(datastore: Adresse) -> dict:
-        """Return the dashboard URL of a datastore (for the user to open/edit in
-        browser). `datastore` accepts `slot:<name>` (active project)."""
+        """Return the web URL of a datastore, for the user to open it. `url` is null
+        when this account's product has no table page — `url_absente` then says why;
+        the table still exists. `datastore` accepts `slot:<name>` (active project)."""
         sub = access.current_user_sub_or_raise()
         store = _store_for(sub)
         datastore, _ = _adresse(datastore)
         try:
-            return {"url": store.get_url(datastore)}
+            return adresse_servie(store.get_url(datastore), sub)
         except DatastoreNotFound as e:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=_inconnu(datastore, e)))
 
