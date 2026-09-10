@@ -103,7 +103,7 @@ def _reject_dead_filters(**blocks) -> None:
 # « À propos » LinkedIn) en pesait 23 % à lui seul — absent sur la plupart des profils,
 # ~700 c. quand il est là ; les clés TOUJOURS nulles sur l'échantillon (`middle_name`,
 # `birth_date`, les trois réseaux hors LinkedIn, `location.position`) 11 % ; les
-# sous-blocs de `department` 12 % ; `location.short/state` 7 %. Même doctrine que le
+# sous-blocs de `department` 12 % ; `location.short/state` 7 %. Même règle que le
 # reste du module : le détail non lu part du DÉFAUT et revient sur `full=True`.
 #
 # ⚠️ `department.departments` est GARDÉ : c'est le tri côté client que recommande le
