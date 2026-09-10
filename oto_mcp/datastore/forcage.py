@@ -27,9 +27,13 @@ Trois choses le tiennent, et il en faut trois :
 - **la trace** — chaque substitution est relevée (ligne, colonne, valeur remplacée) et
   versée aux arguments du journal des appels (`server._TRACED_ARGS`), à côté du `sub`
   que le journal stampe déjà. ⚠️ Tranché le 02/09/2026 **en connaissance de cause** :
-  le journal ne remonte qu'à ~35 jours, donc la trace disparaîtra alors que la valeur
-  forcée restera. Pas de colonne de plus sur la ligne — la question a été posée et
-  fermée.
+  le journal garde **90 jours** en ligne — une seule politique (#426) — puis ARCHIVE en
+  froid sur l'Object Storage avant d'effacer. La trace quitte donc la table que le
+  produit sait interroger, alors que la valeur forcée reste. Pas de colonne de plus sur
+  la ligne — la question a été posée et fermée.
+  ⚠️ Ce passage annonçait « ~35 jours » jusqu'au 10/09/2026, et oto#138 a calculé sur lui
+  une échéance fausse (« les traces expirent entre le 12 et le 15 octobre » au lieu de
+  début décembre). La décision, elle, ne bouge pas : c'est son urgence qui était fausse.
 
 Module PUR (aucun I/O, aucun import du paquet) : `schema.py` l'importe en tête, le
 store lui remet un `Forcage` déjà tranché.
