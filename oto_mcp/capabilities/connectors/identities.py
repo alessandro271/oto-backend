@@ -225,10 +225,40 @@ def _why_empty(ctx: ResolvedCtx, connector: str, noun: str) -> dict:
     # `pending_step` ⟹ c'est bien « aucun compte lié » : on le nomme dans le
     # vocabulaire de CETTE surface, en relayant le geste du connecteur tel quel.
     if diag is None or diag.reason == connector_readiness.PENDING_STEP:
-        return {"reason": "no_identity_connected",
-                "next_step": (diag.next_step if diag is not None
-                              else connector_readiness.no_identity_step(
-                                  ctx.sub, connector, noun))}
+        # ⚠️ **`pending_step` veut dire « les COUCHES sont bonnes »** — la clé
+        # résout, le connecteur peut parfaitement travailler. Cette liste vide ne
+        # décrit donc que le registre d'identités, jamais la santé du connecteur,
+        # et rendre « rien n'est connecté » tout court la faisait lire comme un
+        # diagnostic de panne (#850, 10/09/2026).
+        #
+        # Le cas mesuré : dans la MÊME minute où cette liste rendait `[]`, le même
+        # appelant rejoignait un canal et lisait 37 messages sur l'espace de travail
+        # visé. La veille, tous les appels échouaient vraiment et cette liste
+        # répondait `[]` **aussi** — si bien qu'elle a servi de corroboration à une
+        # conclusion fausse. *Une lecture qui rend la même réponse quand tout va
+        # bien et quand tout est cassé ne corrobore rien : elle confirme ce que son
+        # lecteur croit déjà.* C'est pire qu'une absence de lecture.
+        couches_ok = (diag is not None
+                      and diag.reason == connector_readiness.PENDING_STEP)
+        out = {"reason": "no_identity_connected",
+               "next_step": (diag.next_step if diag is not None
+                             else connector_readiness.no_identity_step(
+                                 ctx.sub, connector, noun))}
+        if couches_ok:
+            # ⚠️ **Dans un champ SÉPARÉ, pas dans `next_step`.** Ce dernier est le
+            # geste déclaré par le connecteur, relayé tel quel : deux surfaces qui
+            # le reformulent racontent deux histoires, et son banc garde cette
+            # égalité exacte. La mise en garde porte sur la PORTÉE de la lecture,
+            # ce qui est un autre fait — elle a donc sa propre clé.
+            out["layers_ok"] = True
+            out["scope_note"] = (
+                f"Ceci ne dit RIEN sur la santé de `{connector}` : ses couches "
+                "résolvent (clé, option), donc ses appels peuvent réussir dès "
+                "maintenant. Cette liste ne décrit que le registre d'identités — "
+                "n'en conclus pas qu'un appel qui échoue échoue pour cette raison, "
+                f"vérifie-le avec oto_instance(op='verify', connector='{connector}')."
+            )
+        return out
     return {"reason": diag.reason, "next_step": diag.next_step}
 
 
