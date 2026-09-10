@@ -303,9 +303,16 @@ def test_le_portefeuille_tape_la_route_deplacee(substrat):
     assert vu["path"] == "/portfolio/crm/flow_companies?page=2"
 
 
-def test_un_404_metier_se_dit_comme_un_demenagement_de_route(substrat):
+def test_un_404_metier_ne_se_dit_pas_comme_une_session_expiree(substrat):
     """Le message qui aurait épargné la matinée du 2026-09-03 : sur cette API interne
-    un 404 est un endpoint disparu, pas une session expirée (ça, c'est 401/403)."""
+    un 404 n'est pas une session expirée (ça, c'est 401/403).
+
+    ⚠️ Ce test EXIGEAIT « ENDPOINT … n'existe plus » jusqu'au 2026-09-10. Il ne
+    protégeait donc pas une garantie : il protégeait une affirmation devenue fausse,
+    et il aurait défendu l'erreur contre sa correction. La mesure du 10/09 — même
+    route, 200 pour un compte de cabinet et 404 pour un compte d'entreprise, à la
+    même heure — a montré que le 404 a DEUX causes. Ce qu'il garde de vrai est ici ;
+    ce qui manquait est dans `test_un_404_nomme_les_DEUX_causes_et_le_test_qui_tranche`."""
     async def _eval(ctx, app, js, arg):
         return {"status": 404, "data": {"status": 404, "error": "Not Found"}}
 
@@ -314,12 +321,11 @@ def test_un_404_metier_se_dit_comme_un_demenagement_de_route(substrat):
         asyncio.run(_tool("pennylaneged_companies")())
     msg = str(e.value)
     assert "404" in msg and "/portfolio/crm/flow_companies" in msg
-    assert "ENDPOINT" in msg or "n'existe plus" in msg
     assert "401" in msg, "et il rappelle à quoi ressemble une VRAIE session expirée"
     assert "NE RELANCE PAS" in msg, \
         "il coupe la boucle de reconnexion : six essais chez la cliente le 2026-09-03"
-    assert "AUTRES outils" in msg and "company_id" in msg, \
-        "et il dit que le connecteur n'est pas mort pour autant"
+    assert "minimal=true" in msg, \
+        "et il donne la voie qui reste ouverte — sans promettre que le connecteur est mort"
 
 
 def test_la_liste_des_societes_a_une_voie_de_secours_independante(substrat):
@@ -403,3 +409,62 @@ def test_un_refus_hors_societe_accuse_bien_la_session(substrat):
     with pytest.raises(McpError) as e:
         asyncio.run(_tool("pennylaneged_companies")(page=1))
     assert "connect_start" in str(e.value)
+
+
+# --- le 404 a DEUX causes, pas une (mesuré le 2026-09-10) --------------------
+#
+# Le message d'erreur affirmait une cause unique — « l'ENDPOINT N'EXISTE PLUS » —
+# et concluait « le correctif est chez nous ». Mesuré ce jour-là sur la production :
+# `/portfolio/crm/flow_companies` répondait 200 pour un compte de cabinet et 404
+# pour un compte d'entreprise, à la même heure, la même route. La route n'avait pas
+# bougé : elle n'existe pas pour un compte qui n'est rattaché à aucun cabinet.
+#
+# Le défaut n'est pas d'avoir corrigé le cas du 03/09, il est de l'avoir gravé comme
+# LA cause. Un message qui n'admet qu'une explication envoie chercher le correctif
+# là où il n'y a rien à corriger — ici, dans le bundle d'un fournisseur.
+
+def test_un_404_nomme_les_DEUX_causes_et_le_test_qui_tranche(substrat):
+    """Le refus doit laisser à l'appelant de quoi décider lui-même, sans nous."""
+    async def _eval(ctx, app, js, arg):
+        return {"status": 404, "data": {"error": "Not Found"}}
+
+    substrat.setattr(P.browserbase, "run_page_eval", _eval)
+    with pytest.raises(McpError) as e:
+        asyncio.run(_tool("pennylaneged_companies")(page=1))
+    msg = str(e.value)
+
+    # La cause qui manquait, et qui est la plus fréquente sur une route de cabinet.
+    assert "PÉRIMÈTRE" in msg, (
+        "le refus doit nommer le cas « ton compte n'a pas ce périmètre » : sans lui, "
+        "un compte d'entreprise ordinaire est renvoyé chercher un bug chez nous")
+    # Celle d'origine, conservée : elle reste vraie, elle n'était pas seule.
+    assert "BOUGÉ" in msg or "bougé" in msg
+    # Et de quoi trancher, sans reconnecter ni attendre notre diagnostic.
+    assert "minimal=true" in msg, (
+        "le refus doit donner le test discriminant — une autre route, même session")
+
+
+def test_un_404_ne_dit_jamais_de_se_reconnecter(substrat):
+    """Non-régression du 03/09 : c'est cette confusion-là qui avait coûté une
+    matinée. Un 404 n'est pas une session morte, et le dire reste juste."""
+    async def _eval(ctx, app, js, arg):
+        return {"status": 404, "data": {}}
+
+    substrat.setattr(P.browserbase, "run_page_eval", _eval)
+    with pytest.raises(McpError) as e:
+        asyncio.run(_tool("pennylaneged_companies")(page=1))
+    msg = str(e.value)
+    assert "NE RELANCE PAS" in msg and "session est bonne" in msg
+
+
+def test_le_texte_servi_ne_promet_plus_une_cause_unique():
+    """Le module l'affirmait à trois endroits — en-tête, message, docstring de
+    l'outil. Les trois se lisent, et les trois envoyaient au même endroit."""
+    import inspect
+
+    entete = P.__doc__ or ""
+    assert "deux causes" in entete.lower(), entete[:300]
+    doc = inspect.getdoc(_tool("pennylaneged_companies")) or ""
+    assert "cabinet" in doc and "minimal=true" in doc, (
+        "la docstring de l'outil doit porter la même nuance que le refus : c'est "
+        "elle que l'agent lit AVANT d'appeler")

@@ -49,12 +49,17 @@ route indépendante. Quand la liste tombe, les trois autres outils (arborescence
 dépôt) marchent toujours — le 2026-09-03, une cliente a passé sa matinée à croire le
 connecteur mort parce que SEULE cette liste l'était.
 
-⚠️ **Une API interne BOUGE, et son 404 le dit.** Vérifié le 2026-09-03 : une route
-VIVANTE répond **401** à une session anonyme, une route DISPARUE répond **404**. Ici un
-404 = « endpoint déplacé/renommé », jamais « session expirée » ; la
-nouvelle route se relève dans le bundle de la SPA (`assets.pennylane.com/assets/
-application-*.js` + ses chunks). Le portefeuille a ainsi migré de `/crm/flow_companies`
-vers `/portfolio/crm/flow_companies`.
+⚠️ **Un 404 ici dit « pas d'endpoint pour CET appel »**, jamais « session expirée »
+(ça, c'est 401/403 — vérifié le 03/09 : une route vivante répond 401 à une session
+anonyme). Deux causes le donnent : le COMPTE n'a pas ce périmètre (les routes de
+cabinet n'existent que pour un compte rattaché à un cabinet — mesuré le 10/09 : 200
+pour l'un, 404 pour l'autre, à la même heure), ou la ROUTE a bougé (Pennylane renomme
+sans préavis ; la nouvelle se relève dans le bundle de la SPA — le portefeuille a
+migré de `/crm/flow_companies` vers `/portfolio/crm/flow_companies` le 03/09).
+Trancher sans rien reconnecter : rappeler avec `minimal=true`, qui emprunte une autre
+route — si elle répond, c'est le périmètre. ⚠️ Ce texte a affirmé la seconde cause
+SEULE jusqu'au 10/09 : fermer un cas en gravant SA cause fait accuser la mauvaise
+pièce dès que l'autre se présente.
 
 Le LOGIN (Live View, sonde de vérification, persistance de la session au coffre) vit
 dans le module frère `pennylaneged_session.py` — ici, on suppose la session acquise.
@@ -199,18 +204,31 @@ async def _call_raw(app: str, path: str, method: str = "GET",
             "société en particulier, la session est donc bien en cause : relance "
             "`pennylaneged_connect_start`.")
     if st == 404:
-        # Le 404 de cette API n'est PAS ambigu (cf. en-tête) : la route n'existe plus.
-        # Le taire a coûté une matinée de chasse à l'authentification le 2026-09-03.
-        raise _err(f"Pennylane a répondu 404 sur {method.upper()} {path} — sur cette API "
-                   "interne un 404 dit que l'ENDPOINT N'EXISTE PLUS (route déplacée ou "
-                   "renommée par Pennylane), PAS que la session est expirée (ça, c'est "
-                   "401/403). Conduite à tenir : NE RELANCE PAS `pennylaneged_connect_"
-                   "start` — ta session est bonne, se reconnecter ne changera rien. Le "
-                   "correctif est chez nous (relever la nouvelle route dans le bundle de "
-                   "la SPA). En attendant, les AUTRES outils du connecteur fonctionnent "
-                   "sans doute très bien : essaies-en un avant de conclure que la GED "
-                   "est en panne, et lis le `company_id` dans l'URL de la SPA si c'est "
-                   "la liste des sociétés qui manque.", code=INTERNAL_ERROR)
+        # ⚠️ Ce bloc a affirmé une cause UNIQUE — « la route n'existe plus » — jusqu'au
+        # 2026-09-10, où un 404 sur `/portfolio/crm/flow_companies` a été mesuré alors
+        # que la MÊME route répondait 200 pour un autre compte, à la même heure. Le 404
+        # ne dit pas « l'endpoint a disparu », il dit « pas d'endpoint POUR CET APPEL » :
+        # une route de cabinet n'existe pas pour un compte qui n'est rattaché à aucun
+        # cabinet. Fermer le cas du 03/09 en gravant sa cause a fait accuser la mauvaise
+        # pièce, et envoyé chercher un correctif chez nous là où il n'y avait rien à
+        # corriger. Le message discrimine donc, et donne de quoi trancher.
+        raise _err(
+            f"Pennylane a répondu 404 sur {method.upper()} {path}. Ce n'est PAS une "
+            "session expirée (ça, c'est 401/403) : NE RELANCE PAS "
+            "`pennylaneged_connect_start`, ta session est bonne. Sur cette API interne, "
+            "un 404 dit « pas d'endpoint pour CET appel », et deux causes le donnent. "
+            "(1) TON COMPTE N'A PAS CE PÉRIMÈTRE — le plus fréquent sur les routes de "
+            "cabinet (le portefeuille) : elles n'existent que pour un compte rattaché à "
+            "un cabinet. Un compte d'entreprise ordinaire reçoit 404, et c'est normal : "
+            "rien à corriger, ni chez toi ni chez nous. (2) LA ROUTE A BOUGÉ — Pennylane "
+            "renomme ses routes internes sans préavis (vécu le 03/09) ; là, le correctif "
+            "est chez nous, relever la nouvelle route dans le bundle de la SPA. "
+            "POUR TRANCHER, sans rien reconnecter : rappelle `pennylaneged_companies` "
+            "avec `minimal=true` — c'est une AUTRE route (le sélecteur de société), qui "
+            "ne partage rien avec le portefeuille. Si elle répond, ta session ET la SPA "
+            "vont bien : tu es dans le cas (1), et `minimal` est justement la voie qui "
+            "te convient. Si elle rend 404 elle aussi, c'est le cas (2) : signale-le.",
+            code=INTERNAL_ERROR)
     if not (200 <= (st or 0) < 300):
         raise _err(f"Pennylane GED a renvoyé {st} : {str(res.get('data'))[:200]}",
                    code=INTERNAL_ERROR)
@@ -251,8 +269,13 @@ def register(mcp: FastMCP) -> None:
 
         ⚠️ **La route a déménagé** (bundle de la SPA, chunk `list-*.js`,
         `getCRMFlowCompanies`, relevé le 2026-09-03) : `/crm/flow_companies` →
-        `/portfolio/crm/flow_companies`. Un 404 ici = « elle a encore bougé », pas
-        « déloguée ». Renvoie la réponse BRUTE :
+        `/portfolio/crm/flow_companies`. Un 404 ici n'est PAS « déloguée » — mais pas
+        non plus « elle a encore bougé » à coup sûr : sur une route de CABINET, la
+        cause la plus fréquente est que **ton compte n'est rattaché à aucun cabinet**
+        (mesuré le 10/09 : 200 pour un compte de cabinet, 404 pour un compte
+        d'entreprise, à la même heure). Pour trancher : rappelle avec `minimal=true`,
+        qui emprunte une autre route — si elle répond, c'est ton périmètre, pas la
+        route, et `minimal` est la voie qui te convient. Renvoie la réponse BRUTE :
         `{companies: [...], pagination: {page, pageSize, pages, totalEntries,
         hasNextPage}}`. **20 sociétés par page** — un portefeuille de cabinet se
         parcourt donc en plusieurs appels, pilotés par `hasNextPage`/`pages`.
