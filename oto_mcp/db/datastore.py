@@ -48,6 +48,7 @@ from .datastore_ns import (  # noqa: F401
     list_all_datastores,
     list_datastores_for_owners,
     list_datastores_granted_to,
+    list_datastores_shared_to_user,
     list_resource_grants,
     rename_datastore_by_id,
     reparent_datastore,

@@ -202,6 +202,35 @@ def list_datastores_granted_to(
         return [dict(r) for r in rows]
 
 
+def list_datastores_shared_to_user(sub: str) -> list[dict]:
+    """Les tableaux partagés NOMINATIVEMENT à `sub` — `principal_type='user'` ET
+    `principal_id = sub`, rien d'autre.
+
+    ⚠️ **C'est tout le périmètre, et il est étroit à dessein.** Ni les droits d'org ni
+    ceux d'équipe (ils se rangent dans la liste de l'org, `list_datastores_granted_to`),
+    ni le contexte d'org de l'appel : un partage à une personne n'appartient à aucune
+    org (arbitrage d'Alexis, otomata-tech/oto#160, 10/09/2026). La seule clé qui ouvre
+    une ligne ici est le `sub` de l'appelant — c'est ce qui interdit de rejouer
+    l'incident du 30/06 (des ressources d'une autre org visibles dans une vue d'org) :
+    rien n'entre qui n'ait été donné À CETTE PERSONNE.
+
+    Un tableau que `sub` possède lui-même n'est pas « partagé avec lui » : exclu, même
+    s'il s'est posé un droit sur son propre tableau."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT d.id, d.owner_type, d.owner_id, d.namespace AS datastore, d.schema, "
+            "       d.created_at, g.permission, g.granted_by "
+            "FROM resource_grants g "
+            "JOIN user_datastores d ON d.id::text = g.resource_id "
+            "WHERE g.resource_type = 'datastore_namespace' "
+            "  AND g.principal_type = 'user' AND g.principal_id = %(sub)s "
+            "  AND NOT (d.owner_type = 'user' AND d.owner_id = %(sub)s) "
+            "ORDER BY d.namespace",
+            {"sub": sub},
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def rename_datastore_by_id(ns_id: int, new: str) -> bool:
     """Renomme un namespace par id (l'id BIGSERIAL est conservé → URL/deeplink/grants
     stables ; les grants sont keyés par id, donc rien à propager). Lève si le même

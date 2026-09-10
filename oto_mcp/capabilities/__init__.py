@@ -164,6 +164,7 @@ import oto_mcp.capabilities.datastore.claim  # noqa: F401 — me.datastore.{clai
 import oto_mcp.capabilities.datastore.schema  # noqa: F401 — me.datastore.{get,set}_schema (MCP data_get_schema + REST)
 # Partage nominatif d'un tableau (#302) — contrat du client HTTP d'oto-core.
 import oto_mcp.capabilities.datastore.sharing  # noqa: F401 — me.datastore.{list_shares,share,unshare}
+import oto_mcp.capabilities.datastore.partages_recus  # noqa: F401 — me.datastore.shared_with_me (REST-only, oto#160)
 # Le tableau lui-même (#302) — lister/créer/renommer/supprimer/ouvrir, ex-routes écrites
 # à la main : mêmes chemins, entrée ET sortie déclarées.
 import oto_mcp.capabilities.datastore.datastores  # noqa: F401 — me.datastore.{list,create,delete,rename}_namespace + url
