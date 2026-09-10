@@ -857,7 +857,12 @@ l'autre processus et lui donnait une autre clé, donc un second débit réel. C'
 si la réservation manque, dans l'heure où Mollie garde une clé ; une réponse jumelle (409
 ou paiement déjà journalisé) ne touche ni au cycle ni à l'impayé. Banc :
 `tests/test_billing_echeance_deux_processus.py`, deux vrais processus sur une vraie base
-(10/09/2026). Les deux
+(10/09/2026). **Un paiement n'ouvre de droit que s'il est réel et constaté par la
+production** (`billing_mode.py`, même jour) : `confirm` et le changement de moyen lisent le
+`mode` rendu par Mollie, avant toute écriture ; en production un paiement `test` est refusé
+(`payment_mode_mismatch`), et hors production aucun paiement n'ouvre de droit
+(`billing_not_production`) — la préprod partage la base, un droit qu'elle ouvrirait serait
+réel. Les deux
 clés fournisseur — `MOLLIE_API_KEY` (le PSP) et `OTO_PENNYLANE_API_KEY` (la compta
 d'Otomata) — viennent de l'**env du process** (Scaleway Secret Manager au boot),
 jamais de SOPS ni du coffre.

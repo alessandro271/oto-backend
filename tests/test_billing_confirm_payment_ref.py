@@ -49,6 +49,14 @@ class _Db:
     TERMINAL_PAYMENT_STATUSES = TERMINAL
 
 
+@pytest.fixture(autouse=True)
+def _production(monkeypatch):
+    """Ces épreuves jouent la PRODUCTION, où un paiement `live` ouvre un droit ; hors
+    d'elle aucun n'en ouvre (`billing_mode`, 10/09/2026)."""
+    monkeypatch.setenv("OTO_MCP_PUBLIC_URL", "https://mcp.oto.cx")
+    monkeypatch.delenv("OTO_SENTRY_ENV", raising=False)
+
+
 def _payment(pid, ref, status="open", age=timedelta(seconds=2)):
     return {"id": pid, "payment_intent_id": ref, "kind": "initial",
             "status": status, "org_id": 7,
@@ -63,9 +71,9 @@ def deux_checkouts(monkeypatch):
 
     def get_payment(ref):
         if ref == "tr_ANCIEN":
-            return {"id": ref, "status": "paid", "customerId": "cst_1",
+            return {"id": ref, "mode": "live", "status": "paid", "customerId": "cst_1",
                     "metadata": {"plan": "standard"}}
-        return {"id": ref, "status": "open"}
+        return {"id": ref, "mode": "live", "status": "open"}
 
     monkeypatch.setattr(billing.mollie_client, "get_payment", get_payment)
     monkeypatch.setattr(billing.mollie_client, "valid_mandate",
@@ -120,7 +128,7 @@ def test_le_webhook_n_annonce_pas_un_succes_qu_il_n_a_pas_constate(monkeypatch):
     db = _Db([vieux])
     monkeypatch.setattr(billing, "db_billing", db)
     monkeypatch.setattr(billing.mollie_client, "get_payment",
-                        lambda ref: {"id": ref, "status": "paid", "customerId": "cst_1",
+                        lambda ref: {"id": ref, "mode": "live", "status": "paid", "customerId": "cst_1",
                                      "metadata": {"plan": "standard"}})
     # Encaissé mais AUCUN mandat réutilisable → refus définitif, pas d'abonnement.
     monkeypatch.setattr(billing.mollie_client, "valid_mandate", lambda cid: None)
@@ -136,7 +144,7 @@ def test_le_webhook_ne_crie_pas_sur_une_course_de_mandat(monkeypatch):
     db = _Db([_payment(1, "tr_X")])
     monkeypatch.setattr(billing, "db_billing", db)
     monkeypatch.setattr(billing.mollie_client, "get_payment",
-                        lambda ref: {"id": ref, "status": "paid", "customerId": "cst_1",
+                        lambda ref: {"id": ref, "mode": "live", "status": "paid", "customerId": "cst_1",
                                      "metadata": {"plan": "standard"}})
     monkeypatch.setattr(billing.mollie_client, "valid_mandate", lambda cid: None)
 
@@ -152,7 +160,7 @@ def test_un_initial_ouvert_ancien_reste_visible(monkeypatch):
     db = _Db([_payment(i, f"tr_{i}", status="expired") for i in range(50, 1, -1)] + [vieux])
     monkeypatch.setattr(billing, "db_billing", db)
     monkeypatch.setattr(billing.mollie_client, "get_payment",
-                        lambda ref: {"id": ref, "status": "paid", "customerId": "c",
+                        lambda ref: {"id": ref, "mode": "live", "status": "paid", "customerId": "c",
                                      "metadata": {"plan": "standard"}})
     monkeypatch.setattr(billing.mollie_client, "valid_mandate",
                         lambda cid: {"id": "m", "mandateReference": "R"})

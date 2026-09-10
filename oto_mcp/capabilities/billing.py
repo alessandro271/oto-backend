@@ -511,7 +511,11 @@ def _domain(fn, *args):
         # invite à retenter — sur un état où le client a DÉJÀ été débité et où il faut
         # une investigation manuelle. Un 409 dit la vérité : l'état empêche d'aboutir,
         # réessayer n'y changera rien.
-        if code in ("no_mandate", "bad_metadata"):
+        # `billing_not_production` et `payment_mode_mismatch` (10/09/2026, `billing_mode`)
+        # sont définitifs eux aussi : ni cette instance ni ce paiement n'ouvriront de
+        # droit en réessayant.
+        if code in ("no_mandate", "bad_metadata", "billing_not_production",
+                    "payment_mode_mismatch"):
             raise AuthzDenied(409, code, msg)
         raise AuthzDenied(503, "billing_unavailable", msg)
 

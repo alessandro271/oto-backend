@@ -47,6 +47,7 @@ from typing import Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from . import billing_consent, billing_grants, billing_vat, mollie_client
+from . import billing_mode
 from . import db
 from .db import billing as db_billing
 # Le format de date servi par l'API est défini UNE fois, dans la couche DB (le row
@@ -450,6 +451,9 @@ def confirm(org_id: int, payment_ref: Optional[str] = None) -> dict:
     else:
         row = candidates[0]  # le plus récent (list_billing_payments trie DESC)
     payment = mollie_client.get_payment(row["payment_intent_id"])
+    # Le MODE d'abord, avant toute écriture : un paiement de test, ou tout paiement
+    # constaté hors production, n'ouvre aucun droit sur la base partagée (`billing_mode`).
+    billing_mode.exiger_paiement_reel(payment)
     pstatus = str(payment.get("status") or "")
 
     if pstatus in ("failed", "canceled", "expired"):

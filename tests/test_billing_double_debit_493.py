@@ -48,6 +48,14 @@ PRIX_HT = billing.PLANS["standard"]["amount"]
 PRIX = PRIX_HT + PRIX_HT // 5
 
 
+@pytest.fixture(autouse=True)
+def _production(monkeypatch):
+    """Ces épreuves jouent la PRODUCTION, où un paiement `live` ouvre un droit ; hors
+    d'elle aucun n'en ouvre (`billing_mode`, 10/09/2026)."""
+    monkeypatch.setenv("OTO_MCP_PUBLIC_URL", "https://mcp.oto.cx")
+    monkeypatch.delenv("OTO_SENTRY_ENV", raising=False)
+
+
 # ── l'horloge du scénario ────────────────────────────────────────────────────
 
 class _Timeline:
@@ -93,7 +101,7 @@ class _Mollie:
                              metadata=None, webhook_url=None) -> dict:
         pid = f"tr_{len(self.payments) + 1}"
         self.payments[pid] = {
-            "id": pid, "status": "open", "customerId": customer_id,
+            "id": pid, "mode": "live", "status": "open", "customerId": customer_id,
             "amount": amount, "metadata": metadata or {}, "method": method,
             "redirectUrl": redirect_url,
             "_links": {"checkout": {"href": f"https://www.mollie.com/checkout/{pid}"}},

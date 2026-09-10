@@ -27,6 +27,14 @@ SUB = {"status": "active", "customer_id": "cst_1", "mandate_id": "mdt_ancien",
        "currency": "eur", "plan": "pro"}
 
 
+@pytest.fixture(autouse=True)
+def _production(monkeypatch):
+    """Ces épreuves jouent la PRODUCTION, où un paiement `live` ouvre un droit ; hors
+    d'elle aucun n'en ouvre (`billing_mode`, 10/09/2026)."""
+    monkeypatch.setenv("OTO_MCP_PUBLIC_URL", "https://mcp.oto.cx")
+    monkeypatch.delenv("OTO_SENTRY_ENV", raising=False)
+
+
 class _Mollie:
     """Le prestataire, tel que sa doc le décrit — et tel qu'il déraille."""
 
@@ -41,7 +49,7 @@ class _Mollie:
                 "_links": {"checkout": {"href": "https://pay.invalid/x"}}}
 
     def get_payment(self, pid):
-        return {"id": pid, "status": self.statut}
+        return {"id": pid, "mode": "live", "status": self.statut}
 
     def valid_mandate(self, customer_id):
         if not self.mandat:

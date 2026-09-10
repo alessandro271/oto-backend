@@ -52,6 +52,7 @@ import logging
 from typing import Optional
 
 from . import billing, mollie_client
+from . import billing_mode
 from .db import billing as db_billing
 
 logger = logging.getLogger(__name__)
@@ -161,6 +162,9 @@ def confirm(org_id: int, payment_ref: Optional[str] = None) -> dict:
         raise ValueError("no_pending_change: aucun changement de moyen en cours")
 
     payment = mollie_client.get_payment(ligne["payment_intent_id"])
+    # Le MODE d'abord (`billing_mode`) : un mandat né d'un paiement de test, posé sur un
+    # abonnement réel de la base partagée, ferait échouer le prélèvement suivant.
+    billing_mode.exiger_paiement_reel(payment)
     pstatus = str(payment.get("status") or "")
     if pstatus in ("failed", "canceled", "expired"):
         db_billing.update_billing_payment(ligne["id"], status=pstatus)
