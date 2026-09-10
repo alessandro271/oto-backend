@@ -154,9 +154,12 @@ def record_platform_usage(provider: str, calls: int = 1) -> None:
     requête) hors connecteurs basculés.
 
     `calls` = consommation d'UN appel qui compte pour plusieurs (un bulk facturé au
-    contact). L'historique reste incrémenté un par un — sa signature n'accepte pas de
-    pas —, mais la chaîne débite en UNE fois : sur un bulk de 100, c'est la différence
-    entre 5 requêtes et 500 sur le chemin chaud."""
+    contact, un appel Serper facturé au crédit déduit). Les DEUX compteurs débitent en
+    UNE fois. L'historique bouclait, faute d'un pas dans sa signature ; il en a un
+    depuis que le métrage se compte en crédits et plus en appels — un recensement Maps
+    par défaut aurait sinon pris 81 connexions du pool et 81 transactions pour un seul
+    appel d'outil, jusqu'à 2 000 sur une grille dense, sur le chemin chaud d'un serveur
+    mono-loop. Le compteur vaut la même chose qu'après N incréments."""
     sub = current_user_sub_from_token()
     if not sub:
         return
@@ -164,7 +167,7 @@ def record_platform_usage(provider: str, calls: int = 1) -> None:
     # le quota du compte unipile, pas celui d'un compteur « whatsapp » que personne
     # ne lit. Écriture et lecture (`usage_today`) normalisent pareil.
     provider = providers.credential_provider(provider)
-    for _ in range(max(1, calls)):
-        db.increment_usage(sub, provider)
+    unites = max(1, calls)
+    db.increment_usage(sub, provider, unites)
     if grants_chain.is_chained(provider):
-        grants_chain.record_usage(sub, provider, scope.current_org(sub), max(1, calls))
+        grants_chain.record_usage(sub, provider, scope.current_org(sub), unites)

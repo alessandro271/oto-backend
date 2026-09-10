@@ -258,7 +258,13 @@ def register(mcp: FastMCP) -> None:
             return None
         res = SerperClient(api_key=key).scrape_page(url, include_markdown=True)
         if is_platform:
-            access.record_platform_usage("serper")
+            # `web_read` est la SECONDE bouche serper du backend, et elle débitait 1 là
+            # où un scrape en coûte 2 (la description ci-dessous l'annonce depuis
+            # toujours) : le quota interne sous-comptait donc de moitié tout ce qui
+            # passait par le cran ②. Même règle que les tools `serper_*`, importée et
+            # non recopiée — une règle de coût dupliquée est une règle qui diverge.
+            from .serper import credits_consumed
+            access.record_platform_usage("serper", credits_consumed("scrape_page", res))
         return res
 
     @mcp.tool()
@@ -382,8 +388,12 @@ def register(mcp: FastMCP) -> None:
             # Le compte vient de la RÉPONSE : Serper facture 2 crédits sur une
             # page ordinaire et jusqu'à 10 sur une page difficile. Le 1 en dur
             # sous-déclarait la dépense à l'appelant qui lit `cout` pour décider
-            # s'il escalade. Repli sur 1 si l'amont ne le dit pas.
-            cout["serper_credits"] = scrape.get("credits") or 1
+            # s'il escalade. Repli sur 1 si l'amont ne le dit pas. MÊME règle que
+            # celle qui débite le quota juste au-dessus (`_serper_scrape`) et que
+            # celle des tools `serper_*` : ce qu'on annonce et ce qu'on débite ne
+            # peuvent pas être deux lectures différentes de la même réponse.
+            from .serper import credits_consumed
+            cout["serper_credits"] = credits_consumed("scrape_page", scrape)
             md = scrape.get("markdown") or scrape.get("text") or ""
             meta = scrape.get("metadata") or {}
             if len(md.strip()) >= _EMPTY_TEXT_CHARS:

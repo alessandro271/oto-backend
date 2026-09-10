@@ -23,17 +23,29 @@ from . import journal_calls
 from ._conn import _connect
 
 
-def increment_usage(sub: str, tool: str) -> int:
-    """Incrémente le compteur (sub, tool, today). Retourne la nouvelle valeur."""
+def increment_usage(sub: str, tool: str, amount: int = 1) -> int:
+    """Incrémente le compteur (sub, tool, today) de `amount`. Retourne la nouvelle valeur.
+
+    `amount` existe pour qu'un appel qui consomme N unités coûte UNE requête et non N.
+    Sans lui, l'appelant n'avait d'autre choix que de boucler : un bulk de 100 contacts
+    prenait 100 connexions du pool et 100 transactions, sur le chemin chaud d'un serveur
+    mono-loop — et un recensement Maps métré en crédits Serper en aurait pris 81, jusqu'à
+    2 000 sur une grille dense. Le compteur écrit vaut exactement la même chose qu'après
+    N incréments : c'est la même somme, en une écriture.
+
+    `EXCLUDED.count` reprend le pas de l'INSERT tenté, ce qui évite de passer `amount`
+    deux fois. Borné à 1 au minimum : un pas nul ou négatif n'a pas de sens ici, et
+    laisserait un appel réussi ne rien débiter."""
+    amount = max(1, int(amount))
     with _connect() as conn:
         row = conn.execute(
             """
             INSERT INTO usage (sub, tool, day, count)
-            VALUES (%s, %s, CURRENT_DATE, 1)
-            ON CONFLICT(sub, tool, day) DO UPDATE SET count = usage.count + 1
+            VALUES (%s, %s, CURRENT_DATE, %s)
+            ON CONFLICT(sub, tool, day) DO UPDATE SET count = usage.count + EXCLUDED.count
             RETURNING count
             """,
-            (sub, tool),
+            (sub, tool, amount),
         ).fetchone()
         return int(row["count"]) if row else 0
 

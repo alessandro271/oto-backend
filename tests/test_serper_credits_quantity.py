@@ -1,6 +1,8 @@
 """Chaque appel serper trace, comme `quantity`, les crédits que Serper a DÉDUITS.
 
-Tulina facture 0,1 crédit par crédit Serper (10/09/2026) et lit `tool_calls.quantity`.
+Le consommateur du métrage lit `tool_calls.quantity` ; l'unité écrite ici est le crédit
+SERPER, tel que l'amont le déclare — aucun taux de conversion n'est codé dans le
+backend, un taux est une décision commerciale.
 Avant ce lot, `_run` comptait UN usage plateforme par appel d'outil et ne traçait
 aucune quantité : un recensement Maps (jusqu'à grid² × max_pages pages à 100 résultats)
 coûtait autant qu'une recherche. Ce fichier fige :
@@ -142,6 +144,26 @@ def test_a_rejected_input_is_neither_metered_nor_counted(serper):
     ({"credits": -3}, 1), ("pas un dict", 1),
 ])
 def test_credits_consumed_reads_only_a_sane_count(raw, expected):
-    from oto_mcp.tools.serper import _credits_consumed
+    from oto_mcp.tools.serper import credits_consumed
 
-    assert _credits_consumed("search", raw) == expected
+    assert credits_consumed("search", raw) == expected
+
+
+@pytest.mark.parametrize("tool", ["serper_maps_census", "serper_reviews"])
+def test_la_description_servie_annonce_le_champ_qui_dit_le_cout(tool):
+    """Les deux tools qui PAGINENT rendent `credits_used` (oto-core ≥ 1.121.0, le pin),
+    et leurs descriptions listaient une forme de sortie qui ne l'avait plus.
+
+    Un agent ne connaît d'un outil que ce que sa description lui dit : un champ omis
+    n'existe pas pour lui — et c'est précisément le champ qui dit ce que l'appel a
+    coûté, sur les deux seuls tools serper capables de coûter cher."""
+    import asyncio as _asyncio
+
+    from fastmcp import FastMCP
+    from oto_mcp.tools import serper as S
+
+    m = FastMCP("t")
+    S.register(m)
+    doc = _asyncio.run(m.get_tool(tool)).description or ""
+    assert "credits_used" in doc, (
+        f"{tool} annonce une forme de sortie sans le champ de coût qu'il rend")

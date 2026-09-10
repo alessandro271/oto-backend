@@ -38,9 +38,13 @@ from . import mail_obfuscation
 # pas une allowlist : elles ne peuvent pas faire disparaître un champ imprévu.
 _SEARCH_DROP = ("knowledgeGraph", "peopleAlsoAsk", "relatedSearches", "searchParameters")
 
+_RESULT_DROP = ("sitelinks", "attributes", "imageUrl", "thumbnailUrl")
+
 # Les méthodes du client qui PAGINENT côté serveur : plusieurs requêtes Serper derrière
-# un seul appel d'outil. Elles rendent la somme dans `credits_used` (oto-core) ; un
-# oto-core antérieur ne rend que `pages_fetched`, repli honnête à 1 crédit la page.
+# un seul appel d'outil. Elles rendent la somme dans `credits_used` (oto-core ≥ 1.121.0,
+# = le pin) ; un oto-core antérieur ne rend que `pages_fetched`, repli honnête à 1 crédit
+# la page — qui sous-compte un recensement Maps d'environ deux tiers, une page Maps étant
+# facturée 3.
 _MULTI_REQUEST = ("census_maps", "reviews_all")
 
 
@@ -50,9 +54,14 @@ def _as_count(value, default: int) -> int:
     return int(value)
 
 
-def _credits_consumed(method: str, result) -> int:
-    """Les crédits que Serper a DÉDUITS pour cet appel d'outil — l'unité que Tulina
-    facture (0,1 crédit Tulina par crédit Serper, 10/09/2026).
+def credits_consumed(method: str, result) -> int:
+    """Les crédits que SERPER a déduits pour cet appel d'outil. PUBLIQUE parce que
+    `web_read` est la seconde bouche serper du backend (cran ② de son escalade) et doit
+    débiter la même chose : une règle de coût recopiée est une règle qui diverge.
+
+    L'unité est le crédit SERPER, tel que l'amont le déclare — aucune conversion vers
+    une unité de facturation n'est faite ici, et aucune ne doit l'être : un taux est une
+    décision commerciale, il ne s'écrit pas dans un connecteur.
 
     Lu dans la RÉPONSE, jamais déduit d'une règle codée ici : Serper facture une page
     Maps à 100 résultats ou un scrape difficile plus d'un crédit, et le dit dans son
@@ -66,7 +75,6 @@ def _credits_consumed(method: str, result) -> int:
             raw = result.get("pages_fetched")
         return _as_count(raw, default=1)
     return _as_count(result.get("credits"), default=1)
-_RESULT_DROP = ("sitelinks", "attributes", "imageUrl", "thumbnailUrl")
 
 # Serper renvoie `Serper <method> <status>: <msg>` (RuntimeError nu). Deux classes
 # d'échec sont des ENTRÉES invalides, pas des bugs backend — on les convertit en
@@ -159,7 +167,7 @@ def register(mcp: FastMCP) -> None:
         # facturation ne lit que la clé Tulina) ; le QUOTA interne d'oto ne compte que
         # notre clé. Les deux au nombre de crédits Serper déduits, pas à 1 par appel :
         # un recensement Maps coûtait jusqu'à 54 crédits pour un seul « appel ».
-        credits = _credits_consumed(method, result)
+        credits = credits_consumed(method, result)
         session_org.note_call_trace(quantity=credits)
         if is_platform:
             access.record_platform_usage("serper", credits)
@@ -349,11 +357,16 @@ def register(mcp: FastMCP) -> None:
         → résultat complet.
 
         Fournir soit `center` "lat,lng" (+ radius_km, grid), soit `ll_anchors`.
-        Coût : ~grid² × max_pages appels Serper (throttlés) — c'est le prix de
-        l'exhaustivité ; commencer modeste et resserrer la grille si besoin.
+        Coût : ~grid² × max_pages requêtes Serper (throttlées), et une page Maps est
+        facturée **3 crédits**, pas 1 — un recensement par défaut (grid=3, max_pages=3)
+        coûte donc environ 81 crédits. C'est le prix de l'exhaustivité ; commencer
+        modeste et resserrer la grille si besoin.
 
-        Returns {query, count, places[], anchors_used, pages_fetched}. `count` =
-        total dédupliqué — à préférer à tout comptage d'un échantillon seul.
+        Returns {query, count, places[], anchors_used, pages_fetched, credits_used}.
+        `count` = total dédupliqué — à préférer à tout comptage d'un échantillon seul.
+        `credits_used` = ce que Serper a RÉELLEMENT déduit sur l'ensemble des pages,
+        le chiffre exact du coût de cet appel (`pages_fetched` compte les requêtes,
+        pas la dépense).
 
         Args:
             query: Ce qu'on énumère (e.g. "laverie automatique").
@@ -398,8 +411,10 @@ def register(mcp: FastMCP) -> None:
         - **"all"** (défaut) : suit le curseur `nextPageToken` côté serveur jusqu'à
           épuisement, ou jusqu'au plafond `max_reviews` (borne le coût ;
           `truncated=True` signale la coupe). Renvoie {count, reviews[],
-          pages_fetched, truncated}. C'est ce qu'il faut pour un sentiment global,
-          des thèmes récurrents, une réputation.
+          pages_fetched, credits_used, truncated} — `credits_used` = ce que Serper a
+          réellement déduit sur l'ensemble des pages, le coût exact de l'appel.
+          C'est ce qu'il faut pour un sentiment global, des thèmes récurrents, une
+          réputation.
         - **"page"** : UNE page (~10 avis) — échantillon rapide, ou pagination à la
           main via `next_page_token`. Ne conclus rien de global dessus.
 

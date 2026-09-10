@@ -372,26 +372,33 @@ def test_instance_is_in_the_journal_allowlist():
 
 # ── 7. Le chemin chaud : un bulk ne se compte pas en N requêtes ────────────────
 
-def test_a_bulk_debits_the_edge_once(monkeypatch):
-    """`fullenrich` facture au contact et métrait donc en boucle : jusqu'à 100
-    incréments par job. L'historique garde sa cadence (sa signature n'accepte pas de
-    pas), mais la chaîne débite en UNE fois — sinon la fenêtre multiplierait par cinq
-    le trafic DB d'un bulk, sur le chemin chaud d'un serveur mono-loop."""
+def test_a_bulk_debits_both_counters_once(monkeypatch):
+    """`fullenrich` facture au contact et métrait donc en boucle : jusqu'à 100 incréments
+    par job. Les DEUX compteurs débitent maintenant en une seule écriture, du montant
+    exact — sinon métrer un recensement Maps en crédits Serper (81 par défaut, 2 000 sur
+    une grille dense) prendrait autant de connexions du pool et de transactions, pour un
+    seul appel d'outil, sur le chemin chaud d'un serveur mono-loop.
+
+    Ce banc gardait auparavant la cadence inverse (`len(legacy) == 100`), au motif que la
+    signature de l'historique « n'accepte pas de pas ». Elle en accepte un depuis que le
+    métrage se compte en unités consommées : ce n'était pas une propriété à tenir, c'était
+    un manque figé."""
     legacy, edge = [], []
     monkeypatch.setattr(access, "current_user_sub_from_token", lambda: "s")
     monkeypatch.setattr(access, "current_org", lambda sub: None)
     monkeypatch.setattr(access.db, "increment_usage",
-                        lambda sub, p: legacy.append(p))
+                        lambda sub, p, amount=1: legacy.append((p, amount)))
     monkeypatch.setattr(grants_chain, "record_usage",
                         lambda sub, p, org, calls: edge.append(calls))
     access.record_platform_usage("fullenrich", 100)
-    assert len(legacy) == 100, "le compteur historique garde EXACTEMENT sa cadence"
+    assert legacy == [("fullenrich", 100)], (
+        "l'historique est débité UNE fois, du montant exact — pas 100 fois de 1")
     assert edge == [100], "l'arête est débitée une fois, du bon montant"
 
 
 def test_a_non_migrated_connector_never_reaches_the_chain_counter(monkeypatch):
     monkeypatch.setattr(access, "current_user_sub_from_token", lambda: "s")
-    monkeypatch.setattr(access.db, "increment_usage", lambda sub, p: None)
+    monkeypatch.setattr(access.db, "increment_usage", lambda sub, p, amount=1: None)
     monkeypatch.setattr(grants_chain, "record_usage",
                         lambda *a, **k: pytest.fail("connecteur non basculé compté"))
     access.record_platform_usage("unipile", 3)

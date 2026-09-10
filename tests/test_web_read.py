@@ -396,3 +396,65 @@ def test_la_lecture_a_un_budget_et_dit_ce_qu_elle_a_tente(monkeypatch):
         "le verdict doit dire ce qu'il a tenté, pas seulement qu'il a renoncé"
     assert horloge["t"] <= W._DEADLINE_S + 20.0, \
         "le budget doit couper AVANT d'épuiser les 5 redirections"
+
+
+# ── ② : ce qu'on annonce et ce qu'on débite, même lecture ────────────────────
+
+def _cran_deux(monkeypatch, reponse, *, platform=True):
+    """Le cran ② atteint, avec la clé PLATEFORME et un espion sur le débit de quota."""
+    debits = []
+    lire = _web_read(monkeypatch,
+                     fetch={"ok": False, "verdict": "HTTP 403", "status": 403},
+                     serper=reponse)
+    monkeypatch.setattr(W.access, "resolve_api_key", lambda p: ("k", platform))
+    monkeypatch.setattr(W.access, "record_platform_usage",
+                        lambda provider, calls=1: debits.append((provider, calls)))
+    return lire, debits
+
+
+def test_le_cran_serper_debite_ce_qu_il_a_reellement_coute(monkeypatch):
+    """`web_read` est la SECONDE bouche serper du backend, et elle débitait UNE unité de
+    quota là où un scrape en coûte deux — la description du tool annonce « ~2 credits »
+    depuis toujours, et `cout.serper_credits` les rendait déjà à l'appelant. La moitié de
+    la dépense de ce chemin n'était comptée nulle part.
+
+    Ce que le tool ANNONCE et ce qu'il DÉBITE sont désormais la même lecture de la même
+    réponse (`serper.credits_consumed`), pas deux règles qui dérivent."""
+    lire, debits = _cran_deux(monkeypatch,
+                              {"markdown": "# ACME\ndu contenu\n" * 40, "credits": 2})
+    out = lire(url="https://acme.fr")
+
+    assert out["chemin"] == "serper"
+    assert debits == [("serper", 2)], "le quota interne sous-comptait le cran ② de moitié"
+    assert out["cout"]["serper_credits"] == 2
+
+
+def test_un_scrape_difficile_coute_ce_que_serper_dit(monkeypatch):
+    """La contre-épreuve du 2 en dur : le montant vient de la RÉPONSE. Une page difficile
+    est facturée davantage, et le quota doit le voir."""
+    lire, debits = _cran_deux(monkeypatch,
+                              {"markdown": "# ACME\ndu contenu\n" * 40, "credits": 10})
+    out = lire(url="https://acme.fr")
+
+    assert debits == [("serper", 10)]
+    assert out["cout"]["serper_credits"] == 10
+
+
+def test_un_amont_muet_debite_au_moins_un(monkeypatch):
+    """Repli honnête : une réponse réussie coûte au moins un crédit, jamais zéro."""
+    lire, debits = _cran_deux(monkeypatch, {"markdown": "# ACME\ndu contenu\n" * 40})
+    out = lire(url="https://acme.fr")
+
+    assert debits == [("serper", 1)]
+    assert out["cout"]["serper_credits"] == 1
+
+
+def test_sur_une_cle_du_client_le_quota_de_la_plateforme_ne_bouge_pas(monkeypatch):
+    """Le QUOTA interne d'oto ne compte que NOTRE clé — inchangé par ce lot."""
+    lire, debits = _cran_deux(monkeypatch,
+                              {"markdown": "# ACME\ndu contenu\n" * 40, "credits": 2},
+                              platform=False)
+    out = lire(url="https://acme.fr")
+
+    assert debits == []
+    assert out["cout"]["serper_credits"] == 2, "le coût reste ANNONCÉ, clé du client ou pas"
