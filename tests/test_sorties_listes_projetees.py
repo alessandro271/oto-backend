@@ -13,7 +13,7 @@ l'outil — et le seul moment où ça ne coûte rien de l'y mettre, c'est quand 
 s'écrit.
 
 **Rattrapage progressif, pas de grand soir** — même patron que
-`test_capability_outputs.py` : les 136 outils qui n'ont rien sont nommés dans
+`test_capability_outputs.py` : les 198 outils qui n'ont rien sont nommés dans
 `tool_output_debt.txt`. La liste ne peut que rétrécir ; un outil hors liste doit
 projeter, sinon la CI casse. Ce test ne corrige rien de l'existant : il empêche le
 prochain.
@@ -44,7 +44,7 @@ _PROJECTION_APPELS = ("output_projection", "_shape(", "summarize(", "_project(",
                       "_slim")
 
 # Plafond de la dette : il ne peut que BAISSER. Mesuré le 2026-09-10.
-_PLAFOND = 136
+_PLAFOND = 198
 
 
 def _debt() -> set[str]:

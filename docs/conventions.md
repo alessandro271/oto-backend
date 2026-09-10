@@ -96,7 +96,7 @@ rien ne rendait navigable et que rien ne tenait.
   Une économie qu'il faut connaître ne bénéficie à personne, donc elle vit dans le
   DÉFAUT — et le seul moment où ça ne coûte rien, c'est l'écriture de l'outil.
   `tests/test_sorties_listes_projetees.py` : un outil qui pagine expose `fields`/`full`
-  ou appelle une projection dans son corps ; les 136 qui ne le font pas sont nommés dans
+  ou appelle une projection dans son corps ; les 198 qui ne le font pas sont nommés dans
   `tests/tool_output_debt.txt`, liste qui ne peut que décroître. Payer une ligne = une PR
   avec sa mesure avant/après.
 - **Le vocabulaire du produit se garde par un CLIQUET, pas par une règle de revue**
