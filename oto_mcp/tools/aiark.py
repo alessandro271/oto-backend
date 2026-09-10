@@ -97,7 +97,23 @@ def _reject_dead_filters(**blocks) -> None:
                     f"pour un résultat filtré (vérifié par différentiel). "
                     f"À la place : {remedy}.")))
 # URLs d'images : un agent ne les regarde pas.
-_PROFILE_DROP = ("picture", "background")
+#
+# Élargi le 10/09/2026 après mesure sur 11 enregistrements réels de `op=people` rendus
+# par la vue de tri : **53 % du poids restant n'était lu par personne**. `summary` (le
+# « À propos » LinkedIn) en pesait 23 % à lui seul — absent sur la plupart des profils,
+# ~700 c. quand il est là ; les clés TOUJOURS nulles sur l'échantillon (`middle_name`,
+# `birth_date`, les trois réseaux hors LinkedIn, `location.position`) 11 % ; les
+# sous-blocs de `department` 12 % ; `location.short/state` 7 %. Même doctrine que le
+# reste du module : le détail non lu part du DÉFAUT et revient sur `full=True`.
+#
+# ⚠️ `department.departments` est GARDÉ : c'est le tri côté client que recommande le
+# refus du filtre mort `contact.department` (`_DEAD_FILTERS`) — le retirer rendrait ce
+# remède impossible à suivre. `location.country` aussi : c'est le seul champ qui dise
+# le pays quand `city` est vide (vécu : « China, Asia », sans ville).
+_PROFILE_DROP = ("picture", "background", "summary", "middle_name", "birth_date")
+_LINK_DROP = ("twitter", "github", "facebook")
+_LOCATION_DROP = ("short", "state", "position")
+_DEPARTMENT_DROP = ("sub_departments", "functions")
 
 
 def _slim_company(company: object) -> object:
@@ -115,8 +131,10 @@ def _slim_person(row: object) -> object:
     if not isinstance(row, dict):
         return row
     out = {k: v for k, v in row.items() if k not in _PERSON_DROP}
-    if isinstance(prof := out.get("profile"), dict):
-        out["profile"] = {k: v for k, v in prof.items() if k not in _PROFILE_DROP}
+    for bloc, drop in (("profile", _PROFILE_DROP), ("link", _LINK_DROP),
+                       ("location", _LOCATION_DROP), ("department", _DEPARTMENT_DROP)):
+        if isinstance(sous := out.get(bloc), dict):
+            out[bloc] = {k: v for k, v in sous.items() if k not in drop}
     if "company" in out:
         out["company"] = _slim_company(out["company"])
     return out
@@ -344,9 +362,13 @@ def register(mcp: FastMCP) -> None:
             full: True = the RAW AI Ark record, every block. The DEFAULT is a sourcing
                 view that drops what sourcing never reads — past positions with the
                 full write-up of every company worked at, education, volunteering,
-                awards, skills, badges, statistics, languages, image URLs — plus the
-                company blocks repeated identically on all 100 people of one firm.
-                A `size=100` page returned ~3 M characters, past any tool-result cap.
+                awards, skills, badges, statistics, languages, image URLs, the
+                profile `summary`, birth date, non-LinkedIn social links and the
+                `department` sub-blocks — plus the company blocks repeated
+                identically on all 100 people of one firm. A `size=100` page
+                returned ~3 M characters, past any tool-result cap; measured
+                10/09/2026, 53 % of what the sourcing view still carried was read
+                by nobody.
             fields: keep ONLY these keys on each record; the envelope (totals,
                 pagination, trackId) always stays — without it you would think you
                 saw everything. Combine with `full=True` to project the raw record.
