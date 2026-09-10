@@ -96,9 +96,12 @@ rien ne rendait navigable et que rien ne tenait.
   Une économie qu'il faut connaître ne bénéficie à personne, donc elle vit dans le
   DÉFAUT — et le seul moment où ça ne coûte rien, c'est l'écriture de l'outil.
   `tests/test_sorties_listes_projetees.py` : un outil qui pagine expose `fields`/`full`
-  ou appelle une projection dans son corps ; les 198 qui ne le font pas sont nommés dans
+  ou appelle une projection dans son corps ; les 200 qui ne le font pas sont nommés dans
   `tests/tool_output_debt.txt`, liste qui ne peut que décroître. Payer une ligne = une PR
-  avec sa mesure avant/après.
+  avec sa mesure avant/après. ⚠️ « Appelle » se lit sur les APPELÉS de son AST, pas dans
+  le texte de sa source : le premier critère lisait aussi les docstrings et la ligne
+  `def`, et blanchissait deux outils qui ne projettent rien — d'où 198 annoncés au lieu
+  de 200.
 - **Le vocabulaire du produit se garde par un CLIQUET, pas par une règle de revue**
   (2026-08-28, #519). « Doctrine » a été remplacé par **guide** (ADR 0042) et
   **procédure** (ce qui s'exécute) dans tout l'interne. Une règle de vocabulaire ne

@@ -9,7 +9,16 @@
 # dans son propre corps (`output_projection`, `_shape(`, `summarize(`, `_project(`,
 # `_slim…`). Sinon il est ici.
 #
-# Mesuré le 2026-09-10 sur le montage réel (`register_all`) : 198 outils en dette.
+# ⚠️ Le marqueur se confronte à ce que l'outil APPELLE (les `ast.Call` de son corps),
+# jamais au texte de sa source : une docstring qui cite `ahrefs_project(op="list")` et
+# une ligne `def posthog_project(` ne projettent rien.
+#
+# Mesuré le 2026-09-10 sur le montage réel (`register_all` : 653 outils servis, 248 qui
+# paginent, 47 qui projettent par `fields`/`full`) : 200 outils en dette.
+# ⚠️ Ce fichier a d'abord annoncé 198, et les deux manquants n'étaient pas un oubli de
+# recensement : le critère les blanchissait — `ahrefs_rank_tracker` par sa docstring,
+# `posthog_project` par son propre nom. Corrigé le 2026-09-10 ; la liste ne « grossit »
+# donc pas, elle cesse de sous-compter.
 # ⚠️ Le premier relevé, fait sur un venv en retard sur le pin oto-core, n'en voyait que
 # 136 — une vingtaine de connecteurs récents n'y étaient pas montés (stripe, posthog,
 # promptwatch, ahrefs, tally, webflow…). La CI, qui les monte, a nommé les 62 autres.
@@ -30,6 +39,7 @@
 # Payer une ligne = une PR à part, avec sa mesure avant/après (#918 est le modèle).
 ahrefs_gsc
 ahrefs_keywords_explorer
+ahrefs_rank_tracker
 ahrefs_site_audit
 ahrefs_site_explorer
 ahrefs_web_analytics
@@ -157,6 +167,7 @@ planity_search_customers
 posthog_flag
 posthog_insight
 posthog_person
+posthog_project
 posthog_recording
 promptwatch_actions
 promptwatch_ads

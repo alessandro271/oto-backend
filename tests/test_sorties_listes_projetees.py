@@ -13,7 +13,7 @@ l'outil — et le seul moment où ça ne coûte rien de l'y mettre, c'est quand 
 s'écrit.
 
 **Rattrapage progressif, pas de grand soir** — même patron que
-`test_capability_outputs.py` : les 198 outils qui n'ont rien sont nommés dans
+`test_capability_outputs.py` : les 200 outils qui n'ont rien sont nommés dans
 `tool_output_debt.txt`. La liste ne peut que rétrécir ; un outil hors liste doit
 projeter, sinon la CI casse. Ce test ne corrige rien de l'existant : il empêche le
 prochain.
@@ -23,9 +23,11 @@ que personne ne lui fasse dire plus qu'elle ne dit.
 """
 from __future__ import annotations
 
+import ast
 import asyncio
 import inspect
 import pathlib
+import textwrap
 
 import pytest
 
@@ -40,11 +42,17 @@ _PAGINATION = frozenset({"page", "size", "limit", "cursor", "page_size", "per_pa
 _PROJECTION_PARAMS = frozenset({"fields", "full"})
 
 # Un de ces appels dans le CORPS de l'outil ⟹ il retire quelque chose avant de rendre.
+# ⚠️ Confrontés à l'APPELÉ (`_appeles`), jamais au texte de la source : cf. `_projette`.
 _PROJECTION_APPELS = ("output_projection", "_shape(", "summarize(", "_project(",
                       "_slim")
 
-# Plafond de la dette : il ne peut que BAISSER. Mesuré le 2026-09-10.
-_PLAFOND = 198
+# Plafond de la dette : il ne peut que BAISSER. Mesuré le 2026-09-10 sur le montage
+# réel — 653 outils servis, 248 qui paginent, 47 qui projettent par `fields`/`full`.
+# ⚠️ Il est passé de 198 à 200 le 2026-09-10, et ce n'est PAS la dette qui a grossi :
+# le critère d'origine lisait la source en entier, prose comprise, et blanchissait
+# deux outils qui ne projettent rien (cf. `_appeles`). Un plafond posé sur un critère
+# faux garantit la décroissance d'un chiffre qui ne décrit personne.
+_PLAFOND = 200
 
 
 def _debt() -> set[str]:
@@ -71,15 +79,48 @@ def _pagine(tool) -> bool:
     return bool(_PAGINATION & set((tool.parameters or {}).get("properties", {})))
 
 
+def _nom_pointe(noeud) -> str:
+    """`output_projection.project` pour `output_projection.project(...)`, `""` sinon."""
+    if isinstance(noeud, ast.Name):
+        return noeud.id
+    if isinstance(noeud, ast.Attribute):
+        gauche = _nom_pointe(noeud.value)
+        return f"{gauche}.{noeud.attr}" if gauche else noeud.attr
+    return ""
+
+
+def _appeles(fn) -> set[str] | None:
+    """Ce que le corps de l'outil APPELLE, sous la forme `nom.pointé(` — ou `None` si
+    la source n'est pas lisible.
+
+    ⚠️ Le critère d'origine cherchait les marqueurs dans `inspect.getsource` **en
+    entier** : il jugeait donc aussi la prose et la signature. Deux outils étaient
+    blanchis à tort le 2026-09-10 — `ahrefs_rank_tracker`, dont une docstring cite
+    `ahrefs_project(op="list")` pour dire d'où vient un identifiant, et
+    `posthog_project`, que sa propre ligne `def posthog_project(` faisait matcher.
+    Ni l'un ni l'autre ne retire quoi que ce soit. **Un marqueur cité, ou porté par le
+    nom de l'outil, n'est pas un marqueur appelé** : seul l'appelé est du code qui agit.
+
+    Passer par l'AST plutôt que par un `str.replace` des docstrings règle les deux d'un
+    coup, et referme au passage les commentaires — un marqueur en commentaire ne
+    projette pas davantage."""
+    try:
+        arbre = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+    except (OSError, TypeError, SyntaxError, IndentationError):
+        # Source illisible ou non ré-analysable (outil généré, lambda) : on ne peut pas
+        # prouver qu'il projette.
+        return None
+    return {_nom_pointe(n.func) + "(" for n in ast.walk(arbre)
+            if isinstance(n, ast.Call)}
+
+
 def _projette(tool) -> bool:
     if _PROJECTION_PARAMS & set((tool.parameters or {}).get("properties", {})):
         return True
-    try:
-        corps = inspect.getsource(tool.fn)
-    except (OSError, TypeError):
-        # Source illisible (outil généré) : on ne peut pas prouver qu'il projette.
+    appeles = _appeles(tool.fn)
+    if appeles is None:
         return False
-    return any(appel in corps for appel in _PROJECTION_APPELS)
+    return any(marqueur in cible for cible in appeles for marqueur in _PROJECTION_APPELS)
 
 
 def _sans_projection(tools) -> set[str]:
@@ -121,3 +162,62 @@ def test_la_dette_ne_fait_que_baisser():
     assert len(_debt()) <= _PLAFOND, (
         f"la dette de sortie a grossi ({len(_debt())} outils pour un plafond de "
         f"{_PLAFOND}). Elle doit DÉCROÎTRE : projette plutôt que d'élargir la liste.")
+
+
+# ── Le critère lui-même : ce qu'il doit refuser de lire ────────────────────────
+class _Outil:
+    """Un outil minimal : `_projette` ne lit que `parameters` et `fn`."""
+
+    def __init__(self, fn):
+        self.parameters = {"properties": {"limit": {}}}
+        self.fn = fn
+
+
+def _shape(ligne):
+    """Cible d'appel des faux outils ci-dessous — jamais exécutée en vrai."""
+    return ligne
+
+
+def test_le_critere_ne_lit_ni_la_prose_ni_le_nom_de_l_outil():
+    """Deux outils servis étaient blanchis par leur seule prose ou leur seul nom.
+
+    `ahrefs_rank_tracker` citait `ahrefs_project(op="list")` dans sa docstring pour
+    dire d'où vient un identifiant ; `posthog_project` portait `_project(` dans sa
+    propre ligne `def`. Aucun des deux ne retire quoi que ce soit du résultat, et le
+    critère textuel les comptait comme payés — c'est ce qui faisait lire 198 là où la
+    dette réelle est 200."""
+    def _liste_project(limit: int = 10):
+        """Le `project_id` vient de `ahrefs_project(op="list")`."""
+        # summarize( en commentaire ne retire rien non plus
+        return {"rows": []}
+
+    def _liste_projetee(limit: int = 10):
+        return {"rows": [_shape(l) for l in []]}
+
+    assert not _projette(_Outil(_liste_project)), (
+        "un marqueur cité en docstring ou en commentaire, ou porté par le NOM de "
+        "l'outil, n'est pas une projection : seul l'appelé est du code qui agit")
+    assert _projette(_Outil(_liste_projetee)), (
+        "un appel réel à une projection doit rester reconnu")
+
+
+def test_un_nom_qui_contient_un_marqueur_ne_suffit_pas():
+    """Le symétrique : juger l'AST sans borner à l'appelé rouvrirait le même trou.
+
+    `resolve_project_id(`, `list_hiring_projects(` et `_shape_submissions_page(` sont
+    des appels RÉELS de trois outils servis — aucun n'est une projection. Le marqueur
+    se confronte à l'appelé entier, parenthèse comprise (`_shape(`), pas au nom nu."""
+    def _liste_voisine(limit: int = 10):
+        return {"rows": resolve_project_id(_shape_submissions_page(limit))}
+
+    assert not _projette(_Outil(_liste_voisine))
+
+
+def resolve_project_id(x):
+    """Cible d'appel du banc ci-dessus — un voisin lexical, pas une projection."""
+    return x
+
+
+def _shape_submissions_page(x):
+    """Idem : `_shape_submissions_page(` ne contient pas `_shape(`."""
+    return x
