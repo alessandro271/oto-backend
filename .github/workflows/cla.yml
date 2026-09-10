@@ -110,7 +110,7 @@ jobs:
           remote-organization-name: otomata-tech
           remote-repository-name: cla-signatures
           # Le titulaire des droits et les bots n'ont rien a signer.
-          allowlist: AlexisLaporte,dependabot[bot],github-actions[bot],*[bot]
+          allowlist: AlexisLaporte,alessandro271,dependabot[bot],github-actions[bot],*[bot]
           custom-notsigned-prcomment: >-
             Merci pour cette pull request. Avant de pouvoir la merger, il faut
             que le CLA soit signe — c'est ce qui permet au projet de continuer a
