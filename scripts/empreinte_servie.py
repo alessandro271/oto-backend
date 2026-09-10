@@ -73,6 +73,15 @@ def _monter() -> list:
     mcp = FastMCP("empreinte-servie")
     register_all(mcp)
     _mcp_adapter.register(mcp, cap_registry.CAPABILITIES)
+    # Le geste de montage qui suit dans `server._build_mcp` : le schéma de sortie
+    # DÉDUIT est effacé. Absent sur un état du tronc antérieur au module — là, ce qui
+    # est servi EST le schéma déduit, et c'est ce que le relevé doit mesurer.
+    try:
+        from oto_mcp.middleware.un_seul_canal import retirer_les_schemas_vides
+    except ImportError:
+        pass
+    else:
+        retirer_les_schemas_vides(mcp)
     return asyncio.run(mcp.list_tools())
 
 
@@ -124,8 +133,12 @@ def _phrase_portee(p: dict) -> str:
 def relever(noms: list[str] | None = None) -> dict:
     """`{outil: {description, schema, sha256}}` — les longueurs de ce qui est servi.
 
-    L'empreinte porte sur description **et** schéma d'entrée : un paramètre ajouté ou
-    une énumération élargie changent ce que le modèle lit, au même titre qu'une phrase."""
+    L'empreinte porte sur description, schéma d'entrée **et schéma de sortie** : un
+    paramètre ajouté ou une énumération élargie changent ce que le modèle lit, au même
+    titre qu'une phrase — et un `outputSchema` qui apparaît ou disparaît change ce qu'un
+    client PARSE (et, mesuré le 10/09/2026, ce que Claude Code donne au modèle). Il
+    manquait à l'empreinte : une PR qui retirait 451 schémas de sortie y lisait « aucun
+    outil servi n'a changé »."""
     out: dict[str, dict] = {}
     for t in _monter():
         if noms and t.name not in noms:
@@ -133,10 +146,12 @@ def relever(noms: list[str] | None = None) -> dict:
         desc = t.description or ""
         schema = getattr(t, "parameters", None) or {}
         brut = json.dumps(schema, sort_keys=True, ensure_ascii=False)
+        sortie = json.dumps(getattr(t, "output_schema", None), sort_keys=True, ensure_ascii=False)
         out[t.name] = {
             "description": len(desc),
             "schema": len(brut),
-            "sha256": hashlib.sha256((desc + "\n" + brut).encode()).hexdigest()[:12],
+            "sortie": len(sortie),
+            "sha256": hashlib.sha256((desc + "\n" + brut + "\n" + sortie).encode()).hexdigest()[:12],
         }
     return dict(sorted(out.items()))
 
@@ -178,9 +193,10 @@ def _relever_ailleurs(ref: str, noms: list[str] | None) -> dict:
 def _tableau(rel: dict, p: dict) -> None:
     print(_phrase_portee(p) + "\n")
     largeur = max((len(n) for n in rel), default=10)
-    print(f"{'outil':{largeur}}  {'description':>11}  {'schéma':>7}  empreinte")
+    print(f"{'outil':{largeur}}  {'description':>11}  {'schéma':>7}  {'sortie':>6}  empreinte")
     for nom, v in rel.items():
-        print(f"{nom:{largeur}}  {v['description']:>11}  {v['schema']:>7}  {v['sha256']}")
+        print(f"{nom:{largeur}}  {v['description']:>11}  {v['schema']:>7}  "
+              f"{v.get('sortie', 0):>6}  {v['sha256']}")
     print(f"\n{len(rel)} outils · {sum(v['description'] for v in rel.values())} caractères "
           f"de description servis au total")
 
@@ -210,11 +226,12 @@ def _diff(avant: dict, apres: dict) -> int:
     noms = sorted(set(avant) | set(apres))
     bouges = [n for n in noms if avant.get(n, {}).get("sha256") != apres.get(n, {}).get("sha256")]
     if not bouges:
-        print("aucun outil servi n'a changé — ni description, ni schéma")
+        print("aucun outil servi n'a changé — ni description, ni schéma d'entrée, ni schéma de sortie")
         return 0
     largeur = max(len(n) for n in bouges)
-    print(f"{'outil':{largeur}}  {'description':>22}  {'schéma':>16}")
+    print(f"{'outil':{largeur}}  {'description':>22}  {'schéma':>16}  {'sortie':>14}")
     total = 0
+    sorties = 0
     for n in bouges:
         a, b = avant.get(n), apres.get(n)
         if a is None:
@@ -226,11 +243,15 @@ def _diff(avant: dict, apres: dict) -> int:
             total -= a["description"]
             continue
         dd, ds = b["description"] - a["description"], b["schema"] - a["schema"]
+        so_a, so_b = a.get("sortie", 0), b.get("sortie", 0)
         total += dd
+        sorties += (so_a != so_b)
         print(f"{n:{largeur}}  {a['description']:>7} → {b['description']:<5} "
-              f"{dd:+5d}  {a['schema']:>5} → {b['schema']:<5} {ds:+4d}")
+              f"{dd:+5d}  {a['schema']:>5} → {b['schema']:<5} {ds:+4d}  "
+              f"{so_a:>5} → {so_b:<5}")
     print(f"\n{len(bouges)} outil(s) servi(s) modifié(s) · "
-          f"delta de description : {total:+d} caractères")
+          f"delta de description : {total:+d} caractères · "
+          f"schéma de sortie changé sur {sorties} outil(s)")
     print("→ c'est CE chiffre qui s'annonce dans la PR (docs/conventions.md).")
     return len(bouges)
 

@@ -1,0 +1,146 @@
+# Outils qui GARDENT un schéma de sortie, donc un canal `structuredContent`.
+# Cette liste ne peut que DÉCROÎTRE — cf. tests/middleware/test_un_seul_canal.py.
+#
+# La règle (`oto_mcp/middleware/un_seul_canal.py`) : le schéma de sortie que FastMCP
+# DÉDUIT d'un `-> dict` — « un objet, tout est permis » — est effacé au montage, et le
+# canal structuré part avec. Un canal structuré se mérite par un VRAI schéma ; il ne
+# se déduit pas.
+#
+# Ce qui reste ici, mesuré le 2026-09-10 sur le catalogue COMPLET de la CI : 120
+# enveloppes `x-fastmcp-wrap-result` — 36 outils annotés `-> list` (une liste nue
+# emballée en `{"result": [...]}`) et 84 annotés `-> object` (un dict emballé en
+# `{"result": {...}}`, connecteurs récents : ahrefs, stripe, posthog, linear…). Dans les
+# deux cas les canaux n'ont pas la même forme : un client qui parse `.result` ne
+# retrouverait pas la donnée dans le texte sans la désemballer. On ne retire pas un
+# contrat qu'un client a pu apprendre sans l'avoir mesuré.
+# ⚠️ Un poste de dev en retard sur le pin oto-core n'en voit que 36 : la liste se
+# régénère sur le catalogue de la CI, jamais sur un poste.
+#
+# Payer une ligne = annoter l'outil `-> dict` et lui faire rendre un dict aux clés
+# nommées (leçon `pennylaneged` : `structured_content` doit être un objet, jamais une
+# liste), ou lui déclarer un vrai `Output`. Un outil NEUF annoté `-> list` ou
+# `-> object` ne s'ajoute pas ici : c'est l'annotation qui fabrique l'enveloppe.
+#
+# ⚠️ Zéro outil ne porte aujourd'hui un schéma qui décrive un champ. Le jour où l'un en
+# déclare un (un modèle pydantic rendu), il apparaîtra dans le premier test comme
+# « hors dette » : ce n'est PAS une dette, c'est le but — le nommer ici avec sa raison.
+ahrefs_account
+ahrefs_batch_analysis
+ahrefs_brand_radar
+ahrefs_brand_radar_prompt
+ahrefs_brand_radar_report
+ahrefs_gsc
+ahrefs_keyword_list
+ahrefs_keywords_explorer
+ahrefs_locations
+ahrefs_project
+ahrefs_project_competitors
+ahrefs_project_keywords
+ahrefs_public
+ahrefs_rank_tracker
+ahrefs_serp_overview
+ahrefs_site_audit
+ahrefs_site_explorer
+ahrefs_social
+ahrefs_web_analytics
+fireflies_askfred
+fireflies_bite
+fireflies_channel
+fireflies_live_meeting
+fireflies_org
+fireflies_transcript
+fireflies_user
+foncier_geocode
+foncier_site
+forager_account
+forager_autocomplete
+forager_feedback
+forager_job_post
+forager_organization
+forager_person
+fr_accords_themes
+fr_headquarters
+fr_stock_etablissements
+fr_stock_siege
+fr_stock_siret
+frenchtech_get_annuaire
+gocardless_creditors
+gocardless_events
+gocardless_failed
+gocardless_payments
+grain_hook
+grain_org
+grain_recording
+grain_recording_file
+grain_transcript
+granola_content
+granola_webhook_endpoint
+greenhouse_users
+instagram_meta_get_recent_media
+linear_comment
+linear_cycle
+linear_issue
+linear_label
+linear_project
+linear_team
+linear_user
+linear_webhook
+minari_analytics
+minari_call
+minari_contact
+minari_custom_field
+minari_list
+minari_user
+pennylane_customer
+pennylane_invoice
+pennylane_ledger_entry
+pennylane_ref
+pennylane_supplier
+pennylane_supplier_invoice
+pennylane_transactions
+pennylane_trial_balance
+planity_get_customer_receipts
+planity_get_seller_stats
+planity_list_employees
+planity_list_payment_methods
+planity_list_products
+planity_list_recurring_appointments
+planity_list_salons
+planity_list_services
+planity_search_customers
+posthog_flag
+posthog_group
+posthog_insight
+posthog_person
+posthog_project
+posthog_query
+posthog_recording
+posthog_schema
+sante_finess
+silae_dossier
+silae_employee
+silae_payslip
+silae_variables_to_enter
+snitcher_contact
+snitcher_custom_field
+snitcher_organisation
+snitcher_session
+snitcher_workspace
+stripe_balance
+stripe_catalog
+stripe_checkout
+stripe_customer
+stripe_event
+stripe_invoice
+stripe_payment
+stripe_search
+stripe_subscription
+tally_account
+tally_analytics
+tally_form
+tally_submission
+tally_webhook
+tally_workspace
+waalaxy_campaign
+waalaxy_prospect
+waalaxy_prospect_list

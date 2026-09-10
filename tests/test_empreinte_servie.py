@@ -54,14 +54,19 @@ def test_le_releve_mesure_le_texte_SERVI_et_pas_la_docstring():
         f"n'est pas servi) — servie {servie}, docstring {len(docstring)}")
 
 
-def test_le_releve_porte_la_description_ET_le_schema():
-    """Un paramètre ajouté change ce que le modèle lit autant qu'une phrase."""
+def test_le_releve_porte_la_description_le_schema_ET_la_sortie():
+    """Un paramètre ajouté change ce que le modèle lit autant qu'une phrase — et un
+    schéma de SORTIE qui apparaît ou disparaît change ce qu'un client parse, et ce
+    que Claude Code donne au modèle (10/09/2026). Le relevé ne le voyait pas : une
+    PR qui retirait 451 schémas de sortie y lisait « aucun outil servi n'a changé »."""
     sys.path.insert(0, str(RACINE))
     from scripts.empreinte_servie import relever
     rel = relever(["data_write", "data_claim_next"])
     for nom, v in rel.items():
-        assert set(v) == {"description", "schema", "sha256"}, nom
+        assert set(v) == {"description", "schema", "sortie", "sha256"}, nom
         assert v["schema"] > 0, f"{nom} : le schéma d'entrée doit être mesuré"
+        # `null` fait 4 caractères : un schéma absent se mesure aussi, il ne se tait pas.
+        assert isinstance(v["sortie"], int) and v["sortie"] >= 4, nom
         assert len(v["sha256"]) == 12
 
 

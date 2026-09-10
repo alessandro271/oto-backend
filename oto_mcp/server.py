@@ -600,6 +600,14 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     from .capabilities import registry as _cap_registry
     _mcp_adapter.register(instance, _cap_registry.CAPABILITIES)
 
+    # Après le DERNIER montage : le schéma de sortie que FastMCP DÉDUIT d'un `-> dict`
+    # (« un objet, tout est permis ») est effacé de chaque outil — un canal structuré
+    # se mérite par un vrai `Output`, il ne se déduit pas. Ce qui garde un schéma
+    # (les enveloppes `x-fastmcp-wrap-result`) est nommé dans une dette qui ne peut
+    # que décroître. Cf. `middleware/un_seul_canal.py`.
+    from .middleware.un_seul_canal import UnSeulCanalMiddleware, retirer_les_schemas_vides
+    retirer_les_schemas_vides(instance)
+
     # ⚠️ ORDRE : fastmcp exécute les middlewares dans l'ordre d'ajout — le PREMIER
     # ajouté est le plus EXTERNE (vérifié empiriquement, `_run_middleware` wrap en
     # reversed()). Les commentaires historiques « ajouté en dernier = outermost »
@@ -628,6 +636,15 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     # et pour tout tenant qui ne déclare pas de préfixe (cf. `tool_alias`).
     from .middleware.alias import ToolAliasMiddleware
     instance.add_middleware(ToolAliasMiddleware())
+
+    # 0 ter. UN SEUL CANAL porte la donnée : `structuredContent` est retiré des outils
+    # sans schéma de sortie. Mesuré le 10/09/2026 : Claude Code et oto-runner donnent
+    # au modèle le canal structuré À LA PLACE du texte — tout ce que la chaîne fait au
+    # texte (vide en phrase, rédaction, TOON) partait à un canal que ces clients ne
+    # lisent pas. Juste sous `ToolAlias` (nom canonique), donc plus EXTERNE que tout ce
+    # qui réémet le résultat sur les deux canaux : plus interne, l'un d'eux rétablirait
+    # le canal qu'on vient de retirer.
+    instance.add_middleware(UnSeulCanalMiddleware())
 
     # 0 bis. Compte en PAUSE : refus de TOUTE requête, avant tout le reste. Sous
     # `ToolAlias` seulement parce que celui-ci se déclare outermost absolu et
