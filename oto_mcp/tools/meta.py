@@ -24,7 +24,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 from pydantic import ValidationError
 
 from .. import (access, call_axes, calllog, db, deprecations, guide_run, outils_retires,
-                providers, redaction, run_org, tool_alias, tool_registry)
+                providers, redaction, run_org, session_org, tool_alias, tool_registry)
 from ..auth.hooks import current_user_sub_from_token
 from ..tool_visibility import (
     PROTECTED_TOOLS,
@@ -149,8 +149,19 @@ async def _resolve_tool(ctx: Context, name: str):
     return None
 
 
+# Les clés du relevé qui FACTURENT : elles vont sur la ligne de la cible, et sur elle
+# seule. La ligne d'enveloppe (`tool='oto_call'`) ne doit pas les porter — une même
+# consommation écrite deux fois serait facturée deux fois le jour où un consommateur
+# ne filtrerait plus par nom d'outil.
+_BILLING_TRACE_KEYS = ("quantity", "key_mode")
+_UNSET = object()
+
+
 async def _trace_target_call(sub: Optional[str], name: str, args: dict, ok: bool,
-                             error: Optional[str], duration_ms: int) -> None:
+                             error: Optional[str], duration_ms: int, *,
+                             trace: Optional[dict] = None,
+                             org_id: object = _UNSET,
+                             run_id: Optional[str] = None) -> None:
     """Journalise l'appel dispatché SOUS LE NOM CIBLE (ADR 0036 §5 / 0017) : sans ça
     seul `oto_call` apparaît dans `tool_calls` et l'inventaire d'usage devient aveugle
     au catalogue latent. Best-effort — jamais bloquant.
@@ -162,12 +173,14 @@ async def _trace_target_call(sub: Optional[str], name: str, args: dict, ok: bool
     dont une valeur dépassait la borne annoncée. Le nom CIBLE est celui qui déclare ses
     secrets : c'est lui qu'on passe, jamais `oto_call`."""
     try:
-        session_id, run_id = None, None
+        session_id = None
         try:
             from fastmcp.server.dependencies import get_context
             c = get_context()
             session_id = c.session_id
-            run_id = await guide_run.active_run_id(c)
+            # Même source que le sink du middleware : le jeton `_run_id=` d'abord (lu
+            # par l'appelant AVANT le reset des axes), la pile de session ensuite.
+            run_id = run_id or await guide_run.active_run_id(c)
         # noqa: SILENT — dette déclarée : la trace d'appel indirect disparaît (#424, verdict C)
         except Exception:
             pass
@@ -176,8 +189,17 @@ async def _trace_target_call(sub: Optional[str], name: str, args: dict, ok: bool
             "args": calllog.truncated_args(args, tool=name),
             "ok": ok, "error": error, "duration_ms": duration_ms,
             "session_id": session_id, "run_id": run_id,
-            "org_id": access.current_org(sub),
+            # L'org SOUS LAQUELLE LA CIBLE A RÉSOLU, lue par `oto_call` avant de défaire
+            # ses axes — pas l'org maison qu'on relirait après coup.
+            "org_id": access.current_org(sub) if org_id is _UNSET else org_id,
         }
+        # La même règle que le sink du middleware : sans elle, la cible d'un dispatch
+        # n'avait ni `key_mode` ni `quantity`, donc n'était jamais facturée.
+        # La liste fermée des clés versées dans `args` vit dans `server` (import au
+        # moment de l'appel : le module est déjà chargé en production, et l'outil ne
+        # doit pas en recopier une seconde version).
+        from .. import server as _server
+        calllog.apply_call_trace(row, trace, _server._TRACED_ARGS)
         await asyncio.to_thread(db.insert_tool_call, row)
     except Exception:
         logger.warning("traçage oto_call → %s échoué (non bloquant)", name, exc_info=True)
@@ -519,6 +541,15 @@ def register(mcp: FastMCP) -> None:
         # un argument MÉTIER homonyme (aiark `account` = le filtre société) ne porte pas
         # le préfixe et n'est donc jamais touché (issue #250).
         call_axes.strip_unconsumed_axes(args)
+        # Relevé PROPRE à la cible. Sans lui, ce que la cible consigne (`key_mode` au
+        # résolveur, `quantity` au point où N est connu) tombait dans le relevé de la
+        # requête ENVELOPPE, donc sur la ligne `tool='oto_call'` — que la lentille de
+        # facturation, qui filtre par nom d'outil, ne lit jamais. Holder MUTABLE posé
+        # avant `tool.run` : un handler sync tourne en threadpool sur une copie du
+        # contexte, et c'est la mutation de CE dict qui remonte.
+        outer_trace = session_org.current_call_trace()
+        target_trace: dict = {}
+        trace_tok = session_org.set_call_trace(target_trace)
         started = time.monotonic()
         ok, err = True, None
         try:
@@ -542,10 +573,29 @@ def register(mcp: FastMCP) -> None:
             # journal, lui, écrit le canonique (`_trace_target_call` juste dessous).
             return {"tool": demande, "ok": False, "error": str(e)}
         finally:
+            # Org et run de la CIBLE, lus AVANT de défaire les axes : après le reset,
+            # `current_org` rend l'org maison de l'appelant, pas celle où la cible a
+            # résolu ses credentials — la ligne partait sous la mauvaise org.
+            target_org: object = _UNSET
+            try:
+                target_org = access.current_org(sub)
+            # noqa: SILENT — best-effort : `_trace_target_call` retombe sur sa propre lecture
+            except Exception:
+                pass
+            target_run = session_org.current_call_run()
+            session_org.reset_call_trace(trace_tok)
+            # L'écho rendu à l'agent (`resolved_account`/`resolved_connector`, lus par
+            # `CallContextMiddleware` dans le relevé ENVELOPPE) doit survivre ; seules
+            # les clés qui facturent restent sur la ligne de la cible.
+            if outer_trace is not None:
+                outer_trace.update({k: v for k, v in target_trace.items()
+                                    if k not in _BILLING_TRACE_KEYS})
             for _reset, _tok in reversed(undo):
                 _reset(_tok)
             await _trace_target_call(sub, name, args, ok, err,
-                                     int((time.monotonic() - started) * 1000))
+                                     int((time.monotonic() - started) * 1000),
+                                     trace=target_trace, org_id=target_org,
+                                     run_id=target_run)
 
         # Rédaction ré-appliquée (ADR 0036 §2) via la logique PARTAGÉE fail-closed —
         # sinon un connecteur à PII surfacé par oto_call fuiterait (le middleware a vu

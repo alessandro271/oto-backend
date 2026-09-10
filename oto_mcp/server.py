@@ -781,40 +781,13 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
             # corrélation exacte des lectures du journal. Le contexte est copié par
             # create_task → le holder est le même objet que celui muté par le handler.
             trace = session_org.current_call_trace()
-            if trace:
-                row["args"] = {**(row.get("args") or {}),
-                               **{k: v for k, v in trace.items() if k in _TRACED_ARGS}}
-                # Quantité d'items TRAITÉS par cet appel (métrage/facturation, pas
-                # de debug) — SA PROPRE colonne, délibérément PAS fondue dans `args`
-                # via `_TRACED_ARGS`, qui reste la liste fermée déclarée plus haut.
-                # `note_call_trace(quantity=N)` est le seam ; un tool bulk
-                # (linkedin_aiark_search, fullenrich_enrich_linkedin,
-                # theirstack_*_search) l'appelle au point où N est connu.
-                # ⚠️ `>= 0`, PAS `> 0` : un zéro TRACÉ n'est pas un appel non tracé.
-                # Une recherche qui ne rend rien a bien traité zéro item, et la
-                # colonne doit le dire — NULL veut dire « ce tool ne trace pas »,
-                # que le consommateur lit comme 1. Confondre les deux fait facturer
-                # un item à une recherche vide (3 crédits pour zéro entreprise sur
-                # `theirstack_companies_search`).
-                quantity = trace.get("quantity")
-                if isinstance(quantity, int) and quantity >= 0:
-                    row["quantity"] = quantity
-                # SOUS QUELLE CLÉ l'appel est passé — `user|group|org|tenant|
-                # platform`, le `mode` du credential gagnant de la cascade. Posé
-                # au SEUL résolveur (`access.resolve._note_resolved_instance`,
-                # ADR 0024), donc tout tool keyed le porte sans travail par tool.
-                # ⚠️ Le `mode`, PAS le booléen `is_platform` : celui-ci écrase
-                # quatre origines distinctes en « pas plateforme », alors qu'un
-                # consommateur de facturation doit pouvoir les distinguer (une
-                # clé d'org n'est pas une clé de membre). Sa propre colonne pour
-                # la même raison que `quantity` : donnée de premier ordre qu'on
-                # filtre, pas trace de debug fondue dans `args`.
-                # NULL = appel sans credential résolu (outil méta, open data) ou
-                # antérieur à cette colonne — un consommateur ne doit RIEN en
-                # facturer, faute de pouvoir l'attribuer.
-                key_mode = trace.get("key_mode")
-                if isinstance(key_mode, str) and key_mode:
-                    row["key_mode"] = key_mode
+            # Règle UNIQUE partagée avec le traçage de la cible d'`oto_call`
+            # (`calllog.apply_call_trace`) : entités résolues dans `args`, `quantity`
+            # (entier >= 0, un zéro tracé n'est pas un appel non tracé) et `key_mode`
+            # dans leurs propres colonnes. Le contexte est copié par create_task → le
+            # holder est le même objet que celui muté par le handler.
+            from .calllog import apply_call_trace
+            apply_call_trace(row, trace, _TRACED_ARGS)
         # noqa: SILENT — dette déclarée : tout l'enrichissement du journal tombe d'un bloc (#424, verdict C)
         except Exception:
             pass
