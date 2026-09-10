@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 
 import fastmcp.server.context as _fc
 import pytest
@@ -137,6 +138,84 @@ def test_oto_doc_dit_la_portee_des_liens_en_projets():
     desc = next(t for t in _catalogue_monte() if t.name == "oto_doc").description or ""
     assert "historical documents project" in desc
     assert "org KB" not in desc and "the KB" not in desc
+
+
+#: Ce qui PORTE le concept — et ce qui ne le porte pas. Mesuré le 10/09/2026 sur le
+#: corpus réellement servi : le jeton `KB` SEUL y apparaît 8 fois et pas une pour notre
+#: concept — c'est une taille (« ≤256 KB », « ~160 KB », « ~220 KB ») ou le vocabulaire
+#: d'un tiers (Zoho Desk : « Help Center (KB) articles »). Le bannir viserait le mot et
+#: raterait le sens. Le concept, lui, se dit en DEUX mots, ou se nomme par un
+#: identifiant à nous — ce sont ces quatre-là qu'on refuse.
+CONCEPT = ("knowledge base", "base de connaissance", "oto_kb", "kb_project_id")
+
+#: La seule surface qui a le DROIT de nommer l'ancien concept : la route qui en porte
+#: encore le nom dans son chemin. Un lecteur de `/api/openapi.json` qui cherche « la KB »
+#: doit pouvoir la retrouver — mais au PASSÉ, jamais comme une chose qui existe.
+CHEMIN_LEGACY = "/api/me/kb"
+_AU_PASSE = re.compile(r"used to be called|is retired|historical|seeded as", re.I)
+
+
+def test_la_face_REST_ne_parle_du_concept_QUE_sur_la_route_qui_en_porte_le_nom():
+    """Le catalogue MCP n'est qu'un tiers du texte servi : 222 capacités sur 327 sont
+    REST-only et ne se lisent QUE dans `/api/openapi.json` — servi sans authentification.
+    Balayer le document ENTIER attrape en prime les docstrings des modèles de sortie,
+    qui y partent en descriptions de schéma (c'est par là que `KbView` affirmait encore
+    « Ancre de la base de connaissance de l'org active »)."""
+    doc = openapi.build()
+    doc["paths"].pop(CHEMIN_LEGACY)                   # jugée à part, juste en dessous
+    reste = json.dumps(doc, ensure_ascii=False).lower()
+    assert "/api/me/docs" in json.dumps(doc), "contrôle positif : c'est bien le document"
+    fautifs = [m for m in CONCEPT if m in reste]
+    assert not fautifs, f"le concept revient hors de {CHEMIN_LEGACY} : {fautifs}"
+
+
+def test_la_route_legacy_ne_nomme_l_ancien_concept_qu_au_passe():
+    """Elle garde le nom (son chemin le porte), donc elle doit l'EXPLIQUER — pas le
+    poser au présent. Chaque occurrence doit voisiner un marqueur de passé."""
+    legacy = json.dumps(openapi.build()["paths"][CHEMIN_LEGACY], ensure_ascii=False)
+    trouve = 0
+    for motif in CONCEPT:
+        for m in re.finditer(re.escape(motif), legacy, re.I):
+            trouve += 1
+            fenetre = legacy[max(0, m.start() - 150):m.end() + 150]
+            assert _AU_PASSE.search(fenetre), (
+                f"« {motif} » posé sans marqueur de passé : …{fenetre}…")
+    assert trouve, "contrôle positif : cette route DOIT encore nommer l'ancien concept"
+
+
+def test_le_brief_seme_dans_le_projet_ne_pose_plus_la_base_comme_un_lieu():
+    """`KB_BRIEF` n'est pas un commentaire : `op=create` l'écrit dans `brief_md`, et
+    `oto_project` le SERT ensuite à tout agent qui liste les projets de l'org. Le
+    10/09/2026, 41 briefs vivants disaient encore « The org-wide knowledge base:
+    shared reference pages… », et c'est un des chemins par lesquels des agents ont
+    continué d'écrire « dans la KB » après le retrait du recrutement.
+    ⚠️ `KB_NAME` reste « Knowledge base » : c'est le NOM d'une donnée déjà posée dans
+    43 orgs, et le motif du rapport `scripts/archive_empty_kb_projects.py`. Il ne
+    produit plus rien — mesuré le 10/09/2026, AUCUN client de la flotte n'appelle
+    `op=create` (le seul appelant de la route est le tableau de bord, en `op=get`, et
+    il n'y lit que `project_id`) ; le verbe MCP qui créait est retiré."""
+    from oto_mcp.capabilities import kb as kb_cap
+    fautifs = [m for m in CONCEPT if m in kb_cap.KB_BRIEF.lower()]
+    assert not fautifs, f"le brief semé pose encore le concept : {fautifs}"
+    assert "`oto_doc`" in kb_cap.KB_BRIEF, "il doit nommer le geste qui aboutit"
+
+
+def test_aucun_guide_seme_ne_pose_le_concept():
+    """Les 11 guides plateforme sont la consigne la plus lue (la notice dit « lis-moi
+    d'abord »). ⚠️ Ce banc ne voit que les SEEDS du dépôt : ce qui est réellement servi
+    vient de la table — un fichier corrigé n'atteint personne tant que la ligne en base
+    n'est pas réécrite. Cf. le compte rendu du 10/09."""
+    corpus = {g["slug"]: (str(g.get("title", "")) + str(g.get("description", ""))
+                          + str(g.get("body_md", ""))).lower()
+              for g in guide_store.list_file_guides()}
+    assert "notice" in corpus and "oto_doc" in corpus["notice"], "contrôle positif"
+    fautifs = {s: [m for m in CONCEPT if m in c] for s, c in corpus.items()
+               if any(m in c for m in CONCEPT)}
+    # La notice a le droit de DIRE que la base n'existe pas — mais pas de nommer le
+    # verbe retiré, ni de la présenter comme un lieu où aller.
+    for slug, motifs in fautifs.items():
+        assert motifs == ["base de connaissance"], f"{slug} : {motifs}"
+        assert "il n'y a pas de « base de connaissance »" in corpus[slug], slug
 
 
 def test_aucun_texte_servi_ne_nomme_plus_le_verbe_retire():

@@ -45,8 +45,11 @@ _VISIBLE_TO = ("TOUS les membres de l'org — cette base est partagée, elle n'e
                "(`oto_project op=create`, owner_type='user').")
 
 KB_NAME = "Knowledge base"
-KB_BRIEF = ("The org-wide knowledge base: shared reference pages "
-            "(processes, context, conventions). One per org.")
+# ⚠️ ASCII pur, sans tiret cadratin : le cliquet `test_la_kb_semee_ne_parle_pas_francais`
+# (#527) refuse TOUT caractère non-ASCII dans le libellé semé — accents, « » et — compris.
+KB_BRIEF = ("The org's shared reference pages (processes, context, conventions). "
+            "An ordinary project: its pages are docs, read and written with "
+            "`oto_doc`. Capture a new fact in the project it belongs to.")
 
 # Le libellé semé JUSQU'AU 2026-09-03. Aucune base neuve ne le porte plus, mais toutes
 # celles posées avant, oui — le backfill d'ancre de `db/_init.py` et le rapport de
@@ -90,7 +93,9 @@ OPS_RETIREES = ("ensure",)
 
 
 class KbView(BaseModel):
-    """Ancre de la base de connaissance de l'org active.
+    """Ancre du projet de documents HISTORIQUE de l'org active — un projet
+    ordinaire, pas une zone à part (le concept d'une « base » distincte est
+    retiré depuis le 10/09/2026 ; seule cette route en garde le nom, `me.kb`).
 
     Cette surface est consolidée comme ses voisines (le verbe vit dans le corps,
     `op=`), mais ses `op` rendent toutes la même forme — donc l'intersection des
