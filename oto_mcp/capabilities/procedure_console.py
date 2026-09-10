@@ -114,7 +114,9 @@ class ProcedureInput(BaseModel):
     scope: Optional[str] = None            # org (défaut) | group — LECTURE ET ÉCRITURE
     version: Optional[int] = None          # get
     with_history: bool = False             # get
+    full: bool = False                     # get : le dessin et la description avec le corps
     query: Optional[str] = None            # list / library_list
+    verbose: bool = False                  # list : la description entière, pas le résumé
     body_md: Optional[str] = None          # set
     title: Optional[str] = None            # set / describe / publish
     description: Optional[str] = None      # set / describe / publish
@@ -154,9 +156,10 @@ def _dispatch_procedure(ctx: ResolvedCtx, inp: ProcedureInput):
             # (chez soi d'abord, puis l'org). Écrire à soi par défaut et relire
             # ailleurs par défaut ferait « perdre » la procédure qu'on vient d'écrire.
             scope=inp.scope,
-            version=inp.version, with_history=inp.with_history))
+            version=inp.version, with_history=inp.with_history, full=inp.full))
     if inp.op == "list":
-        return oi._list_guides(ctx, oi.GuideListInput(query=inp.query, scope=inp.scope))
+        return oi._list_guides(ctx, oi.GuideListInput(query=inp.query, scope=inp.scope,
+                                                      verbose=inp.verbose))
     if inp.op == "create":
         return oi._create_instruction(ctx, oi.ConsoleInstrCreateInput(
             slug=_need(inp.slug, "missing_slug", "`slug` requis pour create."),
@@ -238,9 +241,12 @@ CAPABILITIES += [
             "guide is INJECTED at connect — op=get with `slug` loads ONE skill's full "
             "markdown (`scope=group` targets your active department; `guide_id` loads by "
             "STABLE id, incl. one SHARED to your org; `org` pins the read to an EXPLICIT org "
-            "id you are a member of — cross-org load of a named skill by slug) / list (catalog: "
-            "slug/title/description, "
-            "no body) / create (NEW procedure: `slug` REQUIRED and free — a slug already "
+            "id you are a member of — cross-org load of a named skill by slug). The body "
+            "comes WITHOUT its flowchart: one `<!-- flowchart: … -->` line stands in for "
+            "it — keep that line when you op=set and the drawing is kept; `full=true` "
+            "reads the drawing and the catalog description too) / list (catalog: "
+            "slug/title/summary/version, no body; `verbose=true` for the full "
+            "description) / create (NEW procedure: `slug` REQUIRED and free — a slug already "
             "taken is REFUSED, `slug_taken`, nothing overwritten. Use this whenever you mean "
             "to add a procedure; `set` on a taken slug silently replaces it) "
             "/ set (write: `slug` is REQUIRED — one named skill. It is an UPSERT: an "
