@@ -1470,7 +1470,12 @@ def register(mcp: FastMCP) -> None:
           relation » agira ensuite sur une réponse fausse.
         - **"invitations"** : les invitations de connexion. `direction`='received'
           (reçues, à accepter) ou 'sent' (envoyées, en attente). Paginé — `limit`
-          (défaut 50 : sans borne le backlog entier dépasse la limite de tokens).
+          (défaut 50, MAX 100 : au-delà l'amont rend « Invalid querystring » ;
+          et sans borne le backlog entier dépasse la limite de tokens).
+          Pour la page suivante, repasse le `cursor` RENDU par l'appel précédent
+          — et lui seul : un curseur bricolé est refusé. Plus de `cursor` rendu
+          = fin du backlog (une page COURTE n'est pas la fin). `direction` est
+          rappelée à chaque page, elle ne se déduit pas du curseur.
         - **"invite"** : envoie une demande de connexion (outreach 2e/3e degré).
           `provider_id` = champ `provider_id` d'un résultat `linkedin_unipile_search`
           / `linkedin_unipile_profile` ; `message` = note ≤300 caractères.
@@ -1488,7 +1493,8 @@ def register(mcp: FastMCP) -> None:
             shared_secret: op="handle" — token LinkedIn du même item (obligatoire).
             message: op="invite" — note d'accompagnement (≤300 caractères).
             action: op="handle" — 'accept' (défaut) ou 'decline'.
-            cursor: pagination (relations, invitations).
+            cursor: pagination (relations, invitations) — toujours celui
+                rendu par l'appel précédent, jamais construit à la main.
             limit: taille de page.
             fields: op="relations" — projection de champs.
         """
