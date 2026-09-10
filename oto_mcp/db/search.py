@@ -363,12 +363,22 @@ def search_procedures_fts(q: str, org_id: int, *, limit: int = 20) -> list[dict]
     """Procédures ORG-owned de l'org active — kind=procedure. Les procédures d'ÉQUIPE
     sont exclues V1 (écart nommé au plan : `can_read_group` par ligne, plus tard).
     `slug <> 'claude_md'` : reliques du readme pré-convergence 0042 (le readme vit
-    dans `guides` — 3 lignes mortes constatées en prod le 17/07, purge à part)."""
+    dans `guides` — 3 lignes mortes constatées en prod le 17/07, purge à part).
+
+    ⚠️ **Les ARCHIVÉES sont exclues** (#857, 10/09/2026). Elles ne l'étaient pas ici,
+    alors que la voisine des projets porte la même clause quatre lignes plus haut et
+    que les deux lectures du store (`list_instructions`, `search_instructions`) la
+    posent aussi. L'archivage promet que la procédure « cesse d'être proposée » :
+    cette recherche la proposait quand même, donc la promesse était fausse sur une
+    surface et vraie sur trois — l'état le plus coûteux, parce qu'on le découvre par
+    hasard. 3 lignes archivées sur 238 en production, dont deux réécrites ensuite par
+    quelqu'un qui les croyait en service."""
     return _prose_query(
         "org_instructions", INSTR_TEXT,
         "slug, title, description, updated_at",
         "coalesce(body_md,'')",
-        "owner_type = 'org' AND owner_id = %s AND slug <> 'claude_md'",
+        "owner_type = 'org' AND owner_id = %s AND slug <> 'claude_md' "
+        "AND archived_at IS NULL",
         (str(org_id),), q, limit, rank_vec=rank_expr("org_instructions"))
 
 
