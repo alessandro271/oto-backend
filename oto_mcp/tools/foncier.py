@@ -293,6 +293,55 @@ def _millesime(transport: Optional[dict], annee: str, reseau: str) -> Optional[s
     return None
 
 
+# Rubriques de la nomenclature ICPE dont l'activité EST une consommation d'énergie.
+# Sert à LIRE une fiche, pas à mesurer : la quantité déclarée porte sur l'activité
+# classée (m³ stockés, MW installés…), jamais sur des kWh. C'est ce que l'API donne
+# de plus proche d'un « gros consommateur » quand la conso réseau manque — une
+# présomption sourcée par son codeAIOT, au même titre que le régime ou le statut IED.
+_RUBRIQUES_ENERGIE = {
+    "2910": "combustion (chaudières, moteurs)",
+    "3110": "combustion ≥ 50 MW (IED)",
+    "2915": "chauffage par fluides caloporteurs",
+    "2920": "compression et réfrigération",
+    "2921": "refroidissement évaporatif (tours aéroréfrigérantes)",
+    "4735": "ammoniac — froid industriel",
+    "1185": "fluides frigorigènes fluorés — froid",
+}
+
+_ICPE_MAX_RUBRIQUES = 10
+
+
+def _compact_rubriques(brutes: list) -> tuple[list, list, bool]:
+    """Rubriques déclarées d'une fiche ICPE, les « énergie » d'abord.
+
+    Rend `(rubriques, rubriques_energie, tronquees)`. Une fiche de gros site en
+    porte parfois trente : on plafonne, mais en faisant PASSER DEVANT celles qui
+    portent le signal — sinon la troncature mange précisément ce qu'on cherche.
+    """
+    rubriques = [
+        {
+            "numero": r.get("numeroRubrique"),
+            "nature": r.get("nature"),
+            "regime": r.get("regimeAutoriseAlinea"),
+            "quantite": r.get("quantiteTotale"),
+            "unite": r.get("unite"),
+        }
+        for r in brutes
+    ]
+    energie = [
+        {**r, "lecture": _RUBRIQUES_ENERGIE[str(r["numero"])]}
+        for r in rubriques
+        if str(r.get("numero")) in _RUBRIQUES_ENERGIE
+    ]
+    numeros_energie = {r["numero"] for r in energie}
+    ordonnees = energie + [r for r in rubriques if r["numero"] not in numeros_energie]
+    return (
+        [{k: v for k, v in r.items() if k != "lecture"} for r in ordonnees[:_ICPE_MAX_RUBRIQUES]],
+        energie,
+        len(ordonnees) > _ICPE_MAX_RUBRIQUES,
+    )
+
+
 def _ops_error(ops: tuple[str, ...]) -> str:
     quoted = [f"'{o}'" for o in ops]
     return "op doit être " + ", ".join(quoted[:-1]) + f" ou {quoted[-1]}"
@@ -701,6 +750,11 @@ def register(mcp: FastMCP) -> None:
              "url": (i.get("fichierInspection") or {}).get("urlFichier")}
             for i in inspections[-3:]
         ]
+        rubriques, energie, tronquees = _compact_rubriques(d.get("rubriques") or [])
+        out["rubriques"] = rubriques
+        out["rubriques_energie"] = energie
+        if tronquees:
+            out["rubriques_tronquees"] = True
         return out
 
     @mcp.tool()
@@ -715,8 +769,16 @@ def register(mcp: FastMCP) -> None:
         open data (statistical secrecy): returns ICPE regime (Déclaration /
         Enregistrement / Autorisation), IED status, Seveso, activity state,
         geolocation, DREAL inspection service and latest inspection reports.
+
+        Also returns `rubriques` (nomenclature number, nature, authorised
+        quantity) and `rubriques_energie` — those whose very activity IS energy
+        use, each with a plain reading: 2910/3110 combustion, 2920/2921 cooling,
+        4735/1185 industrial refrigeration. Long sheets are capped at 10, energy
+        ones FIRST, and `rubriques_tronquees` says so.
+
         Grounds a SOURCED "big consumer" presumption (cite the codeAIOT) — it does
-        NOT return energy consumption.
+        NOT return energy consumption: an authorised quantity is m³ or MW of
+        installed plant, never kWh.
 
         Args:
             siret: establishment SIRET (14 digits) — exact match.
@@ -946,6 +1008,15 @@ def register(mcp: FastMCP) -> None:
         ⚠️ A missing emission post is not a zero. Totals sum only what was declared, and
         each category carries `postes_declares` / `postes_absents` so a low total can be
         told apart from a partial declaration.
+
+        Beyond emissions, each inventory carries `contact` (the declared energy
+        officer — name, role, phone, e-mail; absent means MASKED at source, not
+        unlisted), `entites_consolidees` (the SIREN of the declared consolidation
+        perimeter — neither ownership nor directorships) and `electricite`, a MWh
+        figure DERIVED from post 2.1 with the French average factor, marked
+        `certitude: "infere"` and returned with that factor. It is the only public
+        route to a consumption tied to a NAMED legal entity — grid data (Enedis by
+        address, RTE by IRIS) is anonymous on both tiers.
 
         ⚠️ `total` is the number of inventories RETURNED, not how many exist: it
         saturates on `limit` (department 59 at limit=5 reports total 5, at limit=1000
