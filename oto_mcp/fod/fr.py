@@ -93,6 +93,15 @@ def get_boamp(idweb: str) -> Optional[dict[str, Any]]:
     return _get(f"/api/fr/tenders/{idweb}")
 
 
+def search_decp(mot_cle=None, titulaire_siret=None, acheteur_siret=None, lieu=None,
+                depuis=None, limit=50) -> dict[str, Any]:
+    """Marchés ATTRIBUÉS (DECP) — l'issue, là où BOAMP ne donne que l'avis."""
+    return _get("/api/fr/tenders/awarded", {
+        "mot_cle": mot_cle, "titulaire_siret": titulaire_siret,
+        "acheteur_siret": acheteur_siret, "lieu": lieu, "depuis": depuis, "limit": limit,
+    })
+
+
 def search_aides(insee=None, code_postal=None, effectif=None, nature=None,
                  echeance_avant=None, q=None, limit=50, offset=0) -> dict[str, Any]:
     import httpx

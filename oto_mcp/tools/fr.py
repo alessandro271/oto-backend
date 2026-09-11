@@ -705,6 +705,40 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
+    def fr_tenders_awarded(
+        mot_cle: Optional[str] = None,
+        titulaire_siret: Optional[str] = None,
+        acheteur_siret: Optional[str] = None,
+        lieu: Optional[str] = None,
+        depuis: Optional[str] = None,
+        limit: int = 50,
+    ) -> dict:
+        """AWARDED public contracts (DECP) — who won, for how much, notified when.
+
+        `fr_tenders_search` returns the NOTICE (a need, a deadline); this returns the
+        OUTCOME: winner SIRET, amount, notification date, duration, procedure. It is
+        the only source that says who actually wins the contracts of a territory —
+        the real competition, not the assumed one.
+
+        ⚠️ The main winner has NO name column in the source (only co-winners 2 and 3
+        do): resolve it from its SIRET with `fr_siret`. `denomination: null` on rank 1
+        is the source's shape, not a gap.
+
+        Args:
+            mot_cle: search in the contract subject ("photovoltaïque"…).
+            titulaire_siret: every contract won by this establishment.
+            acheteur_siret: every contract passed by this buyer.
+            lieu: prefix of the place-of-performance code — a department ("59") or a
+                postcode; the code type varies between contracts.
+            depuis: minimum notification date, YYYY-MM-DD.
+            limit: contracts returned, 1-100.
+        """
+        return fod_fr.search_decp(
+            mot_cle=mot_cle, titulaire_siret=titulaire_siret, acheteur_siret=acheteur_siret,
+            lieu=lieu, depuis=depuis, limit=limit,
+        )
+
+    @mcp.tool()
     def fr_tenders_get(idweb: str) -> dict:
         """Fetch a single BOAMP tender by its ID.
 

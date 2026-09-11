@@ -17,7 +17,7 @@ Connecteur open-data : pas de credential. Exposé seulement si activé en DB
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from fastmcp import FastMCP
 
@@ -33,6 +33,8 @@ def register(mcp: FastMCP) -> None:
     qpv = fod_urba.qpv
     insee = fod_urba.insee
     iris = fod_urba.iris
+    elus = fod_urba.elus
+    annuaire = fod_urba.annuaire
     epfif = fod_urba.epfif
 
     # --- zonage PLU/PLUi (Géoportail de l'Urbanisme) -------------------------
@@ -96,6 +98,57 @@ def register(mcp: FastMCP) -> None:
         return georisques.alea_argiles(lon, lat)
 
     # --- Quartiers Prioritaires de la Ville (QPV) ----------------------------
+
+    @mcp.tool()
+    def urba_elus(
+        fonction: Literal["maire", "president_epci"] = "maire",
+        code_commune: Optional[str] = None,
+        siren_epci: Optional[str] = None,
+        departement: Optional[str] = None,
+        limit: int = 100,
+    ) -> dict:
+        """Elected decision-makers of a public target: mayors, or EPCI presidents.
+
+        On a public-sector prospect the decision-maker is an elected official, not a
+        company director — paid enrichment looks for the latter and finds nothing.
+        `fonction="maire"` takes `code_commune` or `departement`;
+        `fonction="president_epci"` takes `siren_epci` or `departement` (only the
+        PRESIDENT is kept, not the thousands of community councillors).
+
+        Returns name, first name, commune, and the start date of the office — useful
+        to tell whether the contact changed since the last campaign. Birth date and
+        sex are in the source file and deliberately NOT returned.
+
+        Match on the INSEE code, never on the commune NAME: "Sainte-Marie" exists
+        dozens of times.
+        """
+        if fonction == "president_epci":
+            return elus.presidents_epci(siren=siren_epci, departement=departement, limit=limit)
+        return elus.maires(code_commune=code_commune, departement=departement, limit=limit)
+
+    @mcp.tool()
+    def urba_annuaire(
+        siren: Optional[str] = None,
+        code_commune: Optional[str] = None,
+        type_service: Optional[str] = None,
+        limit: int = 20,
+    ) -> dict:
+        """Public services and their NAMED head (DILA administration directory).
+
+        ~36,000 town halls plus prefectures, tax offices, departmental directorates.
+        Returns switchboard, generic e-mail, website and `responsables` — the named
+        head of the service with their role and often a direct e-mail. On a public
+        target it replaces paid enrichment.
+
+        `type_service` is the directory's « pivot » type (`mairie`, `prefecture`,
+        `dd_fip`…). A value the source serialised badly comes back listed in
+        `champs_illisibles` rather than silently empty.
+
+        ⚠️ Served by OpenDataSoft on its own domain: egress from the production box is
+        not yet verified.
+        """
+        return annuaire.services(siren=siren, code_commune=code_commune,
+                                 type_service=type_service, limit=limit)
 
     @mcp.tool()
     def urba_qpv(code_insee: str) -> dict:

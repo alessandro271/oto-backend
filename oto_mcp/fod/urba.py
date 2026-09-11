@@ -73,9 +73,31 @@ class _Iris:
         return _get(f"/api/urba/iris/by_commune/{code}")
 
 
+class _Elus:
+    def maires(self, code_commune: Optional[str] = None, departement: Optional[str] = None,
+               limit: int = 100) -> dict[str, Any]:
+        return _get("/api/urba/elus/maires",
+                    {"code_commune": code_commune, "departement": departement, "limit": limit})
+
+    def presidents_epci(self, siren: Optional[str] = None, departement: Optional[str] = None,
+                        limit: int = 100) -> dict[str, Any]:
+        return _get("/api/urba/elus/presidents-epci",
+                    {"siren": siren, "departement": departement, "limit": limit})
+
+
+class _Annuaire:
+    def services(self, siren: Optional[str] = None, code_commune: Optional[str] = None,
+                 type_service: Optional[str] = None, limit: int = 20) -> dict[str, Any]:
+        return _get("/api/urba/annuaire",
+                    {"siren": siren, "code_commune": code_commune,
+                     "type_service": type_service, "limit": limit})
+
+
 gpu = _Gpu()
 georisques = _Georisques()
 qpv = _Qpv()
 epfif = _Epfif()
 insee = _InseeMelodi()
 iris = _Iris()
+elus = _Elus()
+annuaire = _Annuaire()
