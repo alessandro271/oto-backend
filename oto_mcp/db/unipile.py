@@ -192,8 +192,8 @@ def count_unipile_accounts_for_org(org_id: int) -> int:
 
 
 def unipile_connection_key(org_id: int, sub: str, provider: str) -> str:
-    """Clé OPAQUE d'une connexion (un canal d'un membre dans une org) — ce que le
-    relevé de facturation de Tulina déduplique : un débit par connexion et par mois.
+    """Clé OPAQUE d'une connexion (un canal d'un membre dans une org) — ce qu'un
+    relevé déduplique pour compter une connexion une fois par période.
 
     Tirée de la clé primaire `(sub, org_id, provider)` et non d'`account_id` : une
     reconnexion peut changer de compte Unipile, elle reste la même connexion. Et elle
@@ -202,18 +202,20 @@ def unipile_connection_key(org_id: int, sub: str, provider: str) -> str:
     return hashlib.sha256(f"{int(org_id)}:{sub}:{provider}".encode()).hexdigest()[:24]
 
 
-def list_billable_unipile_connections(org_id: int, since: Optional[str] = None) -> list[dict]:
-    """Les connexions de CETTE org sur la clé PLATEFORME, pour la facturation au mois
-    (lentille `org.usage.connections`) : `[{connection_key, provider, connected_at,
-    disconnected_at}]`, dates ISO UTC.
+def list_org_unipile_connections(org_id: int, since: Optional[str] = None) -> list[dict]:
+    """Les connexions de messagerie hébergées de CETTE org (lentille
+    `org.usage.connections`) : `[{connection_key, provider, platform_seat,
+    connected_at, disconnected_at}]`, dates ISO UTC.
 
     Vivantes, plus les soft-déconnectées APRÈS `since` : coupée le 12, une connexion a
-    servi ce mois-là. BYO exclus (`platform_seat`), comme `count_unipile_accounts_for_org`.
+    existé ce mois-là. TOUTES les clés : `platform_seat` dit si la connexion occupe un
+    siège de la clé plateforme ou vit sur une clé propre (BYO). Ce qu'on en compte est
+    l'affaire du consommateur, pas de cette lecture.
 
     ⚠️ `connected_at` repart à NOW() à chaque reconnexion (`set_unipile_account`) et la
     table ne garde aucun historique : ce qui a déjà été compté, c'est au consommateur
     de le retenir."""
-    clauses, params = ["org_id = %s", "platform_seat"], [int(org_id)]
+    clauses, params = ["org_id = %s"], [int(org_id)]
     if since:
         clauses.append("(disconnected_at IS NULL OR disconnected_at >= %s::timestamptz)")
         params.append(since)
@@ -221,15 +223,16 @@ def list_billable_unipile_connections(org_id: int, since: Optional[str] = None) 
         clauses.append("disconnected_at IS NULL")
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT sub, provider, "
+            "SELECT sub, provider, platform_seat, "
             "to_char(connected_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS connected_at, "
             "to_char(disconnected_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS disconnected_at "
             f"FROM unipile_accounts WHERE {' AND '.join(clauses)} ORDER BY connected_at, provider",
             tuple(params),
         ).fetchall()
     return [{"connection_key": unipile_connection_key(org_id, r["sub"], r["provider"]),
-             "provider": r["provider"], "connected_at": r["connected_at"],
-             "disconnected_at": r["disconnected_at"]} for r in rows]
+             "provider": r["provider"], "platform_seat": bool(r["platform_seat"]),
+             "connected_at": r["connected_at"], "disconnected_at": r["disconnected_at"]}
+            for r in rows]
 
 
 def list_unipile_accounts_by_org() -> list[dict]:
