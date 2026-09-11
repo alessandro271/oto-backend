@@ -66,7 +66,7 @@ from fastmcp import FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access, output_projection
+from .. import access, output_projection, session_org
 
 
 def _bad(msg: str) -> McpError:
@@ -278,6 +278,96 @@ def register(mcp: FastMCP) -> None:
             organization_locations=organization_locations,
             per_page=per_page, page=page)
 
+    # Le poids d'un match tient dans la fiche ORGANISATION imbriquée, et dans
+    # CINQ de ses clés : mesuré sur un match réel le 2026-09-11, `organization`
+    # pèse 55 404 caractères sur 60 701, dont `current_technologies` 32 321 à lui
+    # seul. L'appel DÉPASSAIT la limite de sortie d'un client MCP pour UNE seule
+    # personne — même mode de panne que le signal #645 sur
+    # `apollo_search_organizations`, et sur l'outil que toute construction de
+    # liste appelle en boucle. Sans ça, sourcer 50 contacts = 3 M de caractères.
+    #
+    # DENYLIST nommée, jamais une allowlist : `name`, `primary_domain`, `phone`,
+    # `industry`, `estimated_num_employees`, `short_description` restent, et une
+    # clé qu'Apollo ajouterait demain reste visible (leçon `fr_get`/`liste_idcc`).
+    # ⚠️ Et `organization` ne se retire PAS en bloc, contrairement à
+    # `_CONTACT_NOISE` : `people/match` ne rend aucun `organization_name` au
+    # premier niveau (vérifié le 2026-09-11), donc la retirer entière perdrait le
+    # nom de la boîte — ce que la fiche contact, elle, garde.
+    _MATCH_ORG_NOISE = ("current_technologies", "technology_names",
+                        "funding_events", "suborganizations", "keywords")
+
+    def _light_org(person):
+        """Une fiche personne dont l'organisation a perdu ses blocs de masse.
+
+        Rend `(fiche, allégée?)` — le booléen dit s'il y avait quelque chose à
+        retirer, pour ne pas annoncer une projection qui n'a rien fait."""
+        if not isinstance(person, dict):
+            return person, False
+        org = person.get("organization")
+        if not isinstance(org, dict):
+            return person, False
+        allege = {k: v for k, v in org.items() if k not in _MATCH_ORG_NOISE}
+        if len(allege) == len(org):
+            return person, False
+        return {**person, "organization": allege}, True
+
+    # Le LOT a sa propre mesure, et ce n'est pas celle de l'unitaire. Mesuré le
+    # 2026-09-11 sur l'exemple de réponse que documente Apollo pour
+    # `people/bulk_match` (forme réelle, fiches répétées jusqu'à 10) : 88 740 c.
+    # servis bruts, 85 941 après la seule coupe de l'organisation — au-dessus des
+    # 60 693 c. qui débordaient déjà un client MCP pour UNE personne. Une fiche de lot
+    # pèse ~6 300 c., dont `employment_history` 2 525 et `account` 1 756 (la fiche
+    # SOCIÉTÉ du CRM Apollo de l'appelant, qui double `organization`). Ce qu'une
+    # construction de liste vient chercher — le nom révélé, l'intitulé, l'email, le
+    # LinkedIn, l'employeur — n'est dans aucun des deux. Un lot tronqué par le client
+    # est un lot perdu, et payé. DENYLIST nommée, comme au-dessus ; `full=True` rend tout.
+    _LOT_PERSON_NOISE = ("employment_history", "account")
+
+    def _light_match(person):
+        """Une fiche de LOT : l'organisation allégée (`_light_org`), puis les deux blocs
+        qui font le poids d'un lot. Rend `(fiche, allégée?)`, comme `_light_org`."""
+        person, allegee = _light_org(person)
+        if not isinstance(person, dict):
+            return person, allegee
+        reste = {k: v for k, v in person.items() if k not in _LOT_PERSON_NOISE}
+        return (reste, True) if len(reste) < len(person) else (person, allegee)
+
+    def _projection_bloc(lot: bool = False) -> dict:
+        dropped = [f"organization.{k}" for k in _MATCH_ORG_NOISE]
+        why = ("blocs de masse de la fiche entreprise — 91 % du payload, et "
+               "l'appel dépassait la limite de sortie pour UNE personne")
+        if lot:
+            dropped = list(_LOT_PERSON_NOISE) + dropped
+            why = ("historique d'emploi, fiche société du CRM Apollo et blocs de masse "
+                   "de l'employeur — un lot de 10 dépassait la limite de sortie d'un "
+                   "client MCP")
+        return {"dropped": dropped, "why": why, "how_to_get_everything": "full=True"}
+
+    def _light_person(payload: dict) -> dict:
+        """Allège `person.organization` des cinq blocs de masse, et le DIT."""
+        person, allegee = _light_org(payload.get("person"))
+        if not allegee:
+            return payload
+        out = {**payload, "person": person}
+        out["projection"] = _projection_bloc()
+        return out
+
+    def _stringify_request_id(payload: dict) -> dict:
+        """`request_id` en CHAÎNE — Apollo en rend un à CHAQUE match, reveal ou pas.
+
+        ⚠️ C'est un entier SIGNÉ 64 bits (~7,2e17, souvent négatif) : il dépasse
+        la précision d'un nombre JavaScript, et la réponse d'un outil traverse du
+        JSON jusqu'à des clients qui en sont faits. Mesuré en prod le 2026-09-11,
+        un match nu rendait `-4604290848231370000` — quatre zéros de queue, une
+        valeur que le float64 a déjà réécrite. Un agent qui repasse cet id à
+        `apollo_reveal_phone_result` sonde un identifiant qui n'existe pas.
+        `apollo_reveal_phone` le sérialisait déjà ; le match, non.
+        """
+        rid = payload.get("request_id")
+        if rid is None or isinstance(rid, str):
+            return payload
+        return {**payload, "request_id": str(rid)}
+
     @mcp.tool()
     def apollo_match_person(
         person_id: Optional[str] = None,
@@ -289,6 +379,7 @@ def register(mcp: FastMCP) -> None:
         domain: Optional[str] = None,
         org_name: Optional[str] = None,
         reveal_personal_emails: Optional[bool] = None,
+        full: bool = False,
     ) -> dict:
         """Match a single person (enrichment). Returns {} if no match.
 
@@ -320,9 +411,15 @@ def register(mcp: FastMCP) -> None:
         that reveal ON TOP of the match, and the shared key's meter can only charge a
         plain match. Same rule as apollo_reveal_phone.
 
+        The employer's heaviest blocks (tech stack, funding, sub-orgs, keywords) are
+        dropped by default — they were 91% of the payload and overflowed MCP output
+        limits on ONE person. `projection` names them; `full=True` returns them.
+
         Args:
             reveal_personal_emails: also return PERSONAL emails (your own Apollo key;
                 withheld in GDPR regions, so empty is an answer, not a failure).
+            full: return Apollo's payload untouched, tech stack and all. Costs the
+                same — this is about size, not data you are missing.
         """
         # Un reveal ne part jamais sur la clé commune — cf. `_BYO_REVEAL_*`
         # ci-dessus. C'est le GESTE qui bascule, pas l'outil : `apollo_match_person`
@@ -344,7 +441,8 @@ def register(mcp: FastMCP) -> None:
             quota = access.platform_quota_hint("apollo")
             if quota is not None:
                 result = {**result, "platform_quota": quota}
-        return result
+        result = _stringify_request_id(result)
+        return result if full else _light_person(result)
 
     # ------------------------------------------------------------------
     # Téléphone direct — le seul geste de ce module qui ne rend PAS son
@@ -533,6 +631,108 @@ def register(mcp: FastMCP) -> None:
                               f"again in ~{wait or 10}s."),
             }
         return {"done": True, "result": out.get("result") or {}}
+
+    _BYO_REVEAL_LOT = (
+        "un lot qui RÉVÈLE (emails personnels ou téléphones) ne passe jamais par "
+        "la clé plateforme : Apollo facture ces reveals en plus du match, et par "
+        "PERSONNE — pose ta propre clé Apollo. Sans elle, le lot marche toujours, "
+        "il rend simplement les fiches sans ces reveals.")
+
+    @mcp.tool()
+    def apollo_bulk_match(
+        people: list[dict],
+        reveal_personal_emails: bool = False,
+        reveal_phone_number: bool = False,
+        webhook_url: Optional[str] = None,
+        full: bool = False,
+    ) -> dict:
+        """Match UP TO 10 people in one call — the way a list actually gets built.
+
+        apollo_search_people returns hundreds of people with obfuscated last names
+        and no email. This is how you resolve them: 10 per call instead of one, so
+        300 people cost 30 calls, not 300.
+
+        ⚠️ A LOT DOES NOT SAVE CREDITS — Apollo bills PER PERSON, exactly as if you
+        had called apollo_match_person ten times. What it saves is calls, and the
+        rate limit that comes with them. Ask only for the reveals you need.
+
+        `matches` comes back one entry PER PERSON, in the order you sent them, with
+        `null` where nothing matched. An entry carrying `_stub: true` is an empty
+        record Apollo minted and CHARGED for — count it as a failure, not as data.
+
+        Each match drops `employment_history`, the Apollo CRM `account` record and
+        the employer's heaviest blocks by default — a lot of 10 overflowed MCP output
+        limits. `projection` names them; `full=True` returns everything.
+
+        ⚠️ Phone numbers are not in this response: with `reveal_phone_number` Apollo
+        POSTs them to `webhook_url` minutes later and hands back a `request_id` —
+        pass it to apollo_reveal_phone_result. Either reveal needs your own Apollo
+        key; a plain match works on the shared one.
+
+        Args:
+            people: 1-10 entries. Each takes the same identifiers as
+                apollo_match_person — `id` (surest, from apollo_search_people),
+                `email`, `linkedin_url`, or a FULL name (`first_name` +
+                `last_name`) with `domain`/`organization_name`. A weak entry is
+                refused by INDEX before the whole lot is billed.
+            reveal_personal_emails: also return PERSONAL emails (your own key).
+            reveal_phone_number: order phone numbers (your own key). Needs
+                `webhook_url`; the numbers arrive there, not here.
+            webhook_url: HTTPS endpoint Apollo POSTs the numbers to. oto is not a
+                webhook receiver — a URL YOU control. You need not read it,
+                apollo_reveal_phone_result returns the same payload.
+            full: return every match untouched (employment history, CRM account,
+                employer tech stack). Same price — this is about size.
+        """
+        revele = bool(reveal_personal_emails) or bool(reveal_phone_number)
+        if revele:
+            client = _client_byo(_BYO_REVEAL_LOT)
+            is_platform = False
+        else:
+            client, is_platform = _client()
+        destination = _webhook_destination(webhook_url) if webhook_url else None
+        try:
+            out = client.bulk_match_people(
+                people,
+                reveal_personal_emails=reveal_personal_emails or None,
+                reveal_phone_number=reveal_phone_number or None,
+                webhook_url=destination) or {}
+        except ValueError as e:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
+
+        # Le crédit se paie à la PERSONNE : le compteur plateforme doit débiter
+        # autant d'unités qu'il y a d'entrées, jamais 1 pour l'appel — même règle
+        # que `fullenrich` et `lemlist_enrich_bulk`, et sans elle un lot de 10
+        # coûterait au pot commun le dixième de ce qu'il consomme vraiment.
+        if is_platform:
+            access.record_platform_usage("apollo", len(people))
+            quota = access.platform_quota_hint("apollo")
+            if quota is not None:
+                out = {**out, "platform_quota": quota}
+        # La ligne FACTURÉE (`tool_calls.quantity`, lue par la lentille d'usage et par
+        # le facturier d'un partenaire) est un AUTRE compteur que le quota ci-dessus.
+        # Inconditionnelle, clé commune OU propre, comme `fullenrich` : c'est
+        # `key_mode`, posé par le résolveur, qui dit s'il y a quelque chose à facturer.
+        # Sans elle `quantity` reste NULL, que le consommateur lit 1 : un lot de 10 se
+        # facturait 1. Compte les personnes SOUMISES, comme le débit de quota.
+        session_org.note_call_trace(quantity=len(people))
+
+        out = _stringify_request_id(out)
+        matches = out.get("matches")
+        if not full and isinstance(matches, list):
+            allegees = [_light_match(m) for m in matches]
+            if any(flag for _, flag in allegees):
+                out = {**out, "matches": [m for m, _ in allegees],
+                       "projection": _projection_bloc(lot=True)}
+        if reveal_phone_number:
+            rid = out.get("request_id")
+            out["next_step"] = (
+                f"Phone reveal ordered for {len(people)} people. Call "
+                f"apollo_reveal_phone_result('{rid}') in ~1-2min."
+                if rid else
+                "Apollo accepted the reveal but returned no request_id: the numbers "
+                "will only reach your webhook_url. Nothing to poll.")
+        return out
 
     @mcp.tool()
     def apollo_job_postings(org_id: str) -> dict:

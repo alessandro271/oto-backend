@@ -87,6 +87,14 @@ dependencies = [
     # d'oto-core demande (« un client est SYNCHRONE sauf quand l'amont ne le permet
     # pas ») et pourquoi `planity`, seul client async, n'y est pas un précédent. La
     # liste d'extras du pin ne bouge donc pas.
+    # v1.125.0 = apollo : `bulk_match_people` (people/bulk_match, ≤10 par appel) — la
+    # forme qu'une construction de liste emploie réellement, un search rendant des
+    # centaines de noms obfusqués à révéler ; la garde d'identifiant faible s'y
+    # applique PAR ENTRÉE et nomme l'index, parce qu'en lot une entrée faible passe
+    # inaperçue et qu'Apollo facture la coquille vide qu'il fabrique. Plus une reprise
+    # BORNÉE du 429 (≤2 fois, et seulement si l'amont demande une attente courte : un
+    # `Retry-After` long est REMONTÉ, jamais dormi — un outil MCP qui dort deux minutes
+    # rend un timeout muet). Sert oto-backend : `apollo_bulk_match` ;
     # v1.118.0 = planity : `httpx` et `websockets` passent du socle d'oto-core à
     # l'extra `planity` — deux libs pour un seul connecteur n'ont rien à faire au
     # socle. Ce qui rendait l'extra tentant à éviter (un extra manquant ferait
@@ -265,7 +273,7 @@ dependencies = [
     # antérieur, pip ignore un extra inconnu (avec un avertissement) — le
     # connecteur marcherait par accident, en tirant les deux libs du socle. Cette
     # ligne et ce tag se déplacent donc ENSEMBLE.
-    "oto-core[anonymize,planity] @ git+https://github.com/otomata-tech/oto-core.git@v1.124.0",
+    "oto-core[anonymize,planity] @ git+https://github.com/otomata-tech/oto-core.git@v1.125.0",
     # Patchright = client CDP qui pilote le Chrome HÉBERGÉ Browserbase (connect_over_cdp)
     # pour les connecteurs d'API privée cookie-bound (tools/brevo.py, tools/crunchbase.py).
     # AUCUN browser local sur la box (connect_over_cdp ne lance rien → pas de binaire Chrome

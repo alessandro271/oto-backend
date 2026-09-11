@@ -33,7 +33,21 @@ recherche et enrichis entreprises et personnes, et repère les signaux de recrut
 - `apollo_search_organizations` — entreprises par nom, domaine, pays
 - `apollo_search_people` — personnes par domaines, départements, intitulés, séniorités
 - `apollo_match_person` — enrichit une personne (url linkedin ou email = meilleurs identifiants)
+- `apollo_bulk_match` — **jusqu'à 10 personnes en UN appel**, la forme qu'emploie une
+  construction de liste : un search rend des centaines de noms obfusqués, et c'est par
+  là qu'on les révèle (300 personnes = 30 appels, pas 300). ⚠️ **le lot n'économise
+  aucun crédit** — apollo facture à la PERSONNE, exactement comme 10 appels unitaires ;
+  ce qu'il économise, ce sont les appels et le rate limit. les reveals (emails
+  personnels, téléphones) y demandent ta propre clé, comme en unitaire.
 - `apollo_job_postings` — offres d'emploi actives d'une entreprise (signal d'embauche)
+
+⚠️ **la fiche entreprise imbriquée est allégée par défaut** sur `apollo_match_person` et
+`apollo_bulk_match` : stack technique, levées de fonds, filiales et mots-clés pesaient
+91 % du payload — un seul match sortait à 60 000 caractères et dépassait la limite de
+sortie des clients MCP. le nom, le domaine, le téléphone, l'effectif et le secteur
+restent ; `full=True` rend le brut, au même prix. **en lot**, chaque fiche perd aussi
+`employment_history` et `account` (la fiche société de ton CRM apollo) : sans ça, un
+lot de 10 sortait à ~86 000 caractères.
 
 ## usage — les reveals (téléphone direct, emails personnels)
 
