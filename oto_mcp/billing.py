@@ -128,12 +128,40 @@ def plan_is_unmetered(plan: str) -> bool:
     return bool(meta and meta.get("unmetered"))
 
 
+def _hosted_by_partner(org_id: int) -> bool:
+    """L'org est-elle hébergée par un tenant TIERS, sur réponse franche ?
+
+    Son plafond de comptes de messagerie appartient alors à la facturation du
+    partenaire, qui le pose lui-même (`platform.org.unipile_limit_set`) : un plan
+    d'oto — forcé par un admin, ou retiré — ne l'écrase pas. Sans ce garde, un
+    `oto_admin_set_plan` sur l'org d'un partenaire remettait son plafond au défaut de
+    la plateforme, dans le dos de la facturation qui l'avait posé.
+
+    Une lecture de tenant qui échoue rend `False` : le plan écrit, comme avant. C'est
+    le sens inverse de `billing_grants.org_is_ours` (fermé par défaut), et c'est
+    voulu : ce garde ne doit jamais priver une cliente directe du plafond de son plan."""
+    from . import tenancy
+    try:
+        slug = db.org_tenant_slug(int(org_id))
+    # noqa: SILENT — ouvert par défaut : sans réponse franche sur le tenant, le plan
+    # fait ce qu'il a toujours fait.
+    except Exception:  # noqa: BLE001
+        logger.warning("billing: tenant de l'org %s illisible — plafond du plan appliqué",
+                       org_id, exc_info=True)
+        return False
+    return bool(slug) and slug != tenancy.PRIMARY_SLUG
+
+
 def apply_plan_entitlements(org_id: int, plan: str) -> None:
     """Configure l'org d'après son plan à l'ACTIVATION — le geste qui remplace
     le micro-management admin (options + plafond messagerie posés d'un coup).
     Idempotent. `unipile_accounts=None` (devis) = plafond levé."""
     meta = PLANS.get(plan)
     if meta is None:
+        return
+    if _hosted_by_partner(org_id):
+        logger.info("billing: org %s hébergée par un tenant tiers — son plafond de "
+                    "messagerie reste celui que sa facturation a posé", org_id)
         return
     db.set_org_unipile_limit(org_id, meta.get("unipile_accounts"))
 
@@ -669,7 +697,8 @@ def admin_clear_plan(org_id: int) -> dict:
         raise ValueError("paid_subscription: abonnement payant — résilier via "
                          "cancel, pas admin_clear_plan")
     db_billing.delete_subscription(org_id)
-    db.set_org_unipile_limit(org_id, None)   # retire le plafond posé par le plan
+    if not _hosted_by_partner(org_id):     # le plafond d'un partenaire est à lui
+        db.set_org_unipile_limit(org_id, None)   # retire le plafond posé par le plan
     logger.info("billing: plan comp retiré de l'org %s", org_id)
     return {"subscribed": False, "org_id": org_id}
 

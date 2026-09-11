@@ -510,3 +510,7 @@ comptabilité de miroir. Le défaut coupe donc le texte à **600 caractères** (
 > ⚠️ **Reste à faire au tag prod** : migrer `user_selected_connectors` (119 lignes `linkedin`
 > → `aiark`, dédoublonnées) — la DB est partagée preprod/prod, la migrer avant le tag
 > retirerait le connecteur de 119 toolbox encore servies par l'ancien code.
+
+### Org hébergée par un tenant tiers
+
+Un plan d'oto — forcé (`oto_admin_set_plan`) ou retiré — **n'écrit pas** le plafond de comptes d'une org hébergée par un tenant tiers : ce plafond appartient à la facturation du partenaire, qui le pose via `PUT /api/admin/orgs/{id}/unipile-limit` (`billing._hosted_by_partner`). Une lecture de tenant qui échoue retombe sur le comportement d'avant : le plan écrit.

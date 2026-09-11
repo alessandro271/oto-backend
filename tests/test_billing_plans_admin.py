@@ -48,6 +48,7 @@ def _wire_admin(monkeypatch):
                         lambda org, plan, granted_by=None: state.update(comp=(org, plan, granted_by)))
     monkeypatch.setattr(billing.db, "set_org_unipile_limit",
                         lambda org, lim: state.update(limit=(org, lim)))
+    monkeypatch.setattr(billing.db, "org_tenant_slug", lambda org: "oto")
     monkeypatch.setattr(billing, "status", lambda org: {"subscribed": True, "org_id": org})
     return state
 
