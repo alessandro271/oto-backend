@@ -157,6 +157,10 @@ POST /api/admin/orgs/{id}/grants/{provider} -> _handler
 OPTIONS /api/admin/orgs/{id}/grants/{provider} -> options_handler
 DELETE /api/admin/orgs/{id}/grants/{provider} -> _handler
 OPTIONS /api/admin/orgs/{id}/grants/{provider} -> options_handler
+GET,HEAD /api/admin/orgs/{id}/unipile-limit -> _handler
+OPTIONS /api/admin/orgs/{id}/unipile-limit -> options_handler
+PUT /api/admin/orgs/{id}/unipile-limit -> _handler
+OPTIONS /api/admin/orgs/{id}/unipile-limit -> options_handler
 POST /api/admin/option-comps -> _handler
 OPTIONS /api/admin/option-comps -> options_handler
 POST /api/admin/users/{sub}/suspension -> _handler

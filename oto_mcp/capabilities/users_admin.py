@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, StrictInt
 
 from .. import (access, billing_grants, providers, credentials_store, db,
                 group_store, org_store)
@@ -90,6 +90,33 @@ class OrgGrantKeyInput(BaseModel):
 class OrgRevokeKeyInput(BaseModel):
     org_id: int
     provider: str
+
+
+class OrgUnipileLimitInput(BaseModel):
+    org_id: int
+
+
+class OrgUnipileLimitSetInput(BaseModel):
+    org_id: int
+    # REQUIS, mais peut valoir `null` : `null` = l'org n'a plus de plafond propre et
+    # retombe sur le défaut plateforme. Un corps sans `limit` est refusé plutôt que lu
+    # comme `null` — un PUT vide ne doit pas lever un plafond en silence.
+    # `StrictInt` : `true` ou `"1"` ne deviennent pas un plafond de 1.
+    limit: Optional[StrictInt] = Field(...)
+
+
+class OrgUnipileLimitView(BaseModel):
+    """Plafond de comptes de messagerie hébergés (sièges de la clé plateforme Unipile)
+    d'une org. `limit` = la valeur PROPRE de l'org (`null` = aucune, l'org suit
+    `default_limit`, le défaut plateforme posé par l'environnement). `effective_limit`
+    = ce que la connexion applique. ⚠️ **`0` veut dire « sans plafond »**, pas « aucun
+    compte » — sur `limit` comme sur `default_limit` et `effective_limit`. `accounts` =
+    sièges consommés aujourd'hui (comptes BYO et comptes déconnectés exclus)."""
+    org_id: int
+    limit: Optional[int] = None
+    default_limit: int
+    effective_limit: int
+    accounts: int
 
 
 class OptionInput(BaseModel):
@@ -206,6 +233,48 @@ def _grant_org_key(ctx: ResolvedCtx, inp: OrgGrantKeyInput) -> dict:
 def _revoke_org_key(ctx: ResolvedCtx, inp: OrgRevokeKeyInput) -> dict:
     credentials_store.platform_revoke(inp.provider, f"org:{inp.org_id}")
     return {"ok": True, "org_id": inp.org_id, "provider": inp.provider}
+
+
+def _unipile_limit_view(org_id: int) -> dict:
+    """La vue du plafond, calculée comme la connexion le calcule
+    (`unipile_connect.hosted_auth_url`) : plafond propre, sinon défaut plateforme.
+
+    Le défaut est LU chez `unipile_connect`, pas recopié : une seconde lecture de
+    l'environnement pourrait diverger de celle qui refuse réellement la connexion.
+    Import tardif, comme `_user_detail` pour `tools.unipile`."""
+    from .. import unipile_connect
+    limit = db.get_org_unipile_limit(org_id)
+    default = unipile_connect._default_limit()
+    return {
+        "org_id": org_id,
+        "limit": limit,
+        "default_limit": default,
+        "effective_limit": limit if limit is not None else default,
+        "accounts": db.count_unipile_accounts_for_org(org_id),
+    }
+
+
+def _get_unipile_limit(ctx: ResolvedCtx, inp: OrgUnipileLimitInput) -> dict:
+    if not org_store.get_org(inp.org_id):
+        raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
+    return _unipile_limit_view(inp.org_id)
+
+
+def _set_unipile_limit(ctx: ResolvedCtx, inp: OrgUnipileLimitSetInput) -> dict:
+    """Pose (ou efface, `limit=null`) le plafond propre de l'org.
+
+    ⚠️ Ne gouverne que les connexions NEUVES : les comptes déjà connectés au-delà du
+    nouveau plafond restent en place, rien n'est déconnecté. ⚠️ Pour une org sur un
+    plan oto, la synchronisation du plan (`billing.apply_plan_entitlements`, et le
+    retrait d'un plan offert) RÉÉCRIT cette colonne : une valeur posée ici ne survit
+    pas à la prochaine activation de plan."""
+    if inp.limit is not None and inp.limit < 0:
+        raise AuthzDenied(400, "invalid_body",
+                          f"limit doit être un entier ≥ 0 ou null (reçu {inp.limit}).")
+    if not org_store.get_org(inp.org_id):
+        raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
+    db.set_org_unipile_limit(inp.org_id, inp.limit)
+    return _unipile_limit_view(inp.org_id)
 
 
 def _parse_expiry(inp: "OptionInput", eid: str) -> object:
@@ -402,6 +471,31 @@ CAPABILITIES += [
         authz=SUPER_ADMIN,
         description="[super admin] Revoke an org's share of a connector's platform key.",
         rest=RestBinding("DELETE", "/api/admin/orgs/{id}/grants/{provider}", _ID),
+    ),
+    Capability(
+        key="platform.org.unipile_limit_get", handler=_get_unipile_limit,
+        Input=OrgUnipileLimitInput, Output=OrgUnipileLimitView, authz=PLATFORM_ADMIN,
+        description="[platform admin] An org's cap on hosted messaging accounts (Unipile "
+                    "platform-key seats): `limit` = the org's own cap (null = none, the org "
+                    "follows `default_limit`, the platform default from the environment), "
+                    "`effective_limit` = what connecting enforces, `accounts` = seats in use "
+                    "(BYO and disconnected accounts excluded). ⚠️ 0 means NO cap, not zero "
+                    "accounts.",
+        mcp=None,
+        rest=RestBinding("GET", "/api/admin/orgs/{id}/unipile-limit", _ID),
+    ),
+    Capability(
+        key="platform.org.unipile_limit_set", handler=_set_unipile_limit,
+        Input=OrgUnipileLimitSetInput, Output=OrgUnipileLimitView, authz=SUPER_ADMIN,
+        description="[super admin] Set an org's cap on hosted messaging accounts. Body "
+                    "`{\"limit\": int | null}` (required): an integer >= 0 (0 = no cap), or "
+                    "null to drop the org's own cap and fall back to the platform default. "
+                    "Returns the same view as the read. ⚠️ Only gates NEW connections: "
+                    "accounts already connected beyond the new cap stay connected. ⚠️ For an "
+                    "org on an oto plan, the plan sync overwrites this value on the next plan "
+                    "activation.",
+        mcp=None,
+        rest=RestBinding("PUT", "/api/admin/orgs/{id}/unipile-limit", _ID),
     ),
     Capability(
         key="platform.option.set", handler=_set_option, Input=OptionInput,

@@ -322,7 +322,11 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   unique** — il pose ENSEMBLE l'option offerte (couche 3) et le grant de clé plateforme
   (couche 2), ce que le backend couplait déjà. Aucun secret n'en sort. ⚠️ Si
   `open_tier` est vrai, une instance en partage `open` sert le connecteur à **tous sans
-  grant** : `beneficiaries` ne dit alors plus la population servie. Lecture =
+  grant** : `beneficiaries` ne dit alors plus la population servie. Chaque bénéficiaire
+  porte `daily_quota`, le quota du grant de clé lu dans `meta.rate_limit_by` de
+  l'instance (`null` = aucun quota, ou pas de clé) ; ⚠️ `platform_revoke` l'efface, donc
+  le relever AVANT de révoquer pour ré-accorder à l'identique, et un connecteur par
+  chaîne (`grants_chain`) garde le sien sur l'arête, non rapporté ici. Lecture =
   `PLATFORM_ADMIN`, écriture = `SUPER_ADMIN`. Refus : `404 unknown_connector`,
   `400 invalid_body`, `404 unknown_org`/`unknown_user`, `400 no_platform_access`.
   **Pas de face MCP** : basculer le master global est un acte de déploiement, ouvrir un
