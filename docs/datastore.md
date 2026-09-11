@@ -179,6 +179,31 @@ refuse l'inconnu. Pour la même raison, l'écriture d'une ligne seule gagne `ns_
 **pas** `namespace` : « namespace » est un nom de colonne trop plausible. Garde-fou :
 `tests/datastore/test_datastore_numero_de_tableau.py`.
 
+⚠️ **Là où une réponse VOYAGE, le nom ne suffit pas : elle porte l'identifiant
+(11/09/2026, oto#160).** Les deux règles ci-dessus valent pour ce qu'on rend à qui vient
+d'appeler. Deux réponses, elles, sont lues **plus tard et par quelqu'un d'autre** — et
+sur celles-là un nom seul est un piège, parce que le lecteur le résoudra avec SON propre
+demandeur, donc vers son homonyme personnel :
+
+- la **charge utile d'un travail de runner** (`runner_jobs.payload`) ne portait que
+  `namespace`. Elle porte `datastore_id`, résolu à l'enfilage au nom de qui a déclaré la
+  campagne (`capabilities/runner_jobs.py::_id_du_tableau_vise`). ⚠️ Elle est PERSISTÉE :
+  les travaux enfilés avant ce jour n'en auront jamais, et l'écran doit vivre sans ;
+- un **lien de projet vers un tableau** (`db.list_project_links`) ne portait que
+  `datastore` (le nom) — or son `target_ref` est tantôt un id (posé par le dashboard),
+  tantôt un nom (posé par un agent, #117). Il porte `datastore_id`, résolu dans la portée
+  du **propriétaire du projet** (`_portee_du_projet` + `db.resolve_datastore_ids_by_name`,
+  même prédicat de visibilité que `resolve_datastore_ns`) : un lien appartient au projet,
+  pas à qui l'ouvre, donc il doit désigner le même tableau pour tous. Hors de cette
+  portée ⇒ **pas de clé**, et l'écran ne devine pas à sa place.
+
+Les deux additions sont purement additives (le nom reste servi, c'est le libellé) et le
+`datastore_id` d'un lien est **mangé** par les six projections explicites qui recopient
+un sous-ensemble de clés (`op=inventory`, `oto_use_project`, `share_ui`, cascade
+`resources`, `orgs/instructions`, `project_audit`) — aucune n'en a besoin aujourd'hui.
+Banc : `tests/test_designation_par_identifiant.py` (la reproduction y est le faux
+résolveur qui rejoue l'`ORDER BY` : le même nom, deux demandeurs, deux tableaux).
+
 ⚠️ **Aucune date de retrait du nom n'est arrêtée**, et les textes servis le disent : le
 nom résout encore, partout, avec le même contrôle de visibilité (`db.resolve_datastore_ns`
 matche `d.namespace = %(ns)s OR d.id = %(nsid)s`, le NOM gagnant en cas de collision).

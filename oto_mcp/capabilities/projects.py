@@ -1281,8 +1281,11 @@ class ProjectRead(BaseModel):
     # Droit d'écriture de l'APPELANT sur ce projet (cf. docstring).
     can_write: bool
     # Liens typés (tableau | procedure | connecteur) enrichis à la lecture :
-    # `namespace` (tableau) / `title` (procédure) résolus, et `cross_project: true`
-    # quand la même cible est liée par un AUTRE projet — la toucher retombe ailleurs.
+    # `datastore` + `datastore_id` (tableau) / `title` (procédure) résolus, et
+    # `cross_project: true` quand la même cible est liée par un AUTRE projet — la
+    # toucher retombe ailleurs. ⚠️ `datastore` est un LIBELLÉ, `datastore_id` l'ADRESSE :
+    # `target_ref` est tantôt l'un tantôt l'autre (#117), `datastore_id` porte toujours
+    # le même sens ou n'est pas là (oto#160).
     links: list[dict]
     audit: ProjectAudit
     # Présent SEULEMENT si `include=['spine']` a été demandé — l'arbre des pages dans
@@ -1424,8 +1427,12 @@ CAPABILITIES += [
             "instead of the id, and unlink takes back either spelling. "
             "get/link return each link's role + slot + config + a derived "
             "`cross_project` flag (the same entity is linked by another project → avoid brutal "
-            "edits / ask); a tableau link also returns its resolved `namespace` — address THIS "
-            "project's table by that name with the data_* tools (never hardcode a namespace). "
+            "edits / ask); a tableau link also returns its resolved `datastore` (the NAME, a "
+            "label) and `datastore_id` (the IDENTIFIER, resolved server-side in the PROJECT "
+            "OWNER's scope) — address THIS project's table with `datastore_id` in the data_* "
+            "tools, never by hardcoding a name: several tables can carry one name, and at equal "
+            "name resolution prefers the CALLER's own personal table. No `datastore_id` = this "
+            "link does not resolve to a single table here — say so instead of guessing. "
             "EVERY project carries `url` — the web address to OPEN it, in the reader's "
             "own product; hand it over as-is when asked \"where is it?\", never rebuild "
             "one from a pattern (`null` = that reader's product has no such view). "

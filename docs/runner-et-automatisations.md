@@ -117,6 +117,18 @@ jusqu'au 01/09/2026 : c'est faux et constaté sur la machine), gaté par le cran
   cible ni une borne. ⚠️ `heartbeat_at` distingue le VIVANT du RÉSIDU (une flotte
   `running` qui ne bat plus n'est pas une concurrence à attendre), et la table est
   créée AVANT `runner_jobs`, qui la référence.
+  ⚠️ **La cible n'est stockée que par son NOM, et un nom ne désigne rien de sûr**
+  (11/09/2026, oto#160). À nom égal, `resolve_datastore_ns` préfère le tableau
+  PERSONNEL du demandeur — et le demandeur est celui qui APPELLE. Un écran qui
+  résolvait `payload["namespace"]` le résolvait donc avec SON lecteur : ouvrir le
+  travail d'un collègue, ou détenir un homonyme de ce que la campagne vise, peignait
+  les lignes du sien sous le bon libellé, sans un mot. La charge utile d'un travail
+  emporte désormais `datastore_id`, résolu à l'enfilage **au nom de `fleet["sub"]`**
+  — le sub sous lequel l'agent travaillera, donc la même priorité que le store qu'il
+  utilisera. Fail-open : un nom qui ne résout plus rend `None` et le travail part
+  quand même. ⚠️ **Un travail est PERSISTÉ** : ceux enfilés avant ce jour n'auront
+  jamais cet identifiant — le dashboard montre alors le nom sans prétendre l'ouvrir.
+  Banc : `tests/test_designation_par_identifiant.py`.
   ⚠️ **SEPT états, parce que deux d'entre eux séparent une INTENTION d'un FAIT**
   (R4b, 01/09/2026) : `armed` (on a DEMANDÉ que ça tourne, `op=launch`) ≠
   `running` (un ordonnanceur l'a PRISE et donne signe) ; `stopping` (arrêt

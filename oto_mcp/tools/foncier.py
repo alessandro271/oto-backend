@@ -385,6 +385,7 @@ def register(mcp: FastMCP) -> None:
     odre = fod_foncier.odre
     beges = fod_foncier.beges
     bdnb = fod_foncier.bdnb
+    irep = fod_foncier.irep
     dpe_tertiaire = fod_foncier.dpe_tertiaire
     dvf = fod_foncier.dvf
     dpe = fod_foncier.dpe
@@ -793,6 +794,49 @@ def register(mcp: FastMCP) -> None:
             "total_pages": res.get("total_pages", 1),
             "data": [_compact_icpe(d) for d in res.get("data", [])],
         }
+
+    # --- émissions déclarées par établissement (IREP, Géorisques) -----------
+
+    @mcp.tool()
+    def foncier_emissions(
+        annee: int = 2024,
+        departement: Optional[str] = None,
+        code_commune: Optional[str] = None,
+        siret: Optional[str] = None,
+        polluant: Optional[str] = None,
+        milieu: Optional[str] = "Air",
+        limit: int = 50,
+    ) -> dict:
+        """Declared pollutant emissions, per ESTABLISHMENT with its SIRET (IREP).
+
+        The complement to `foncier_beges`: a GHG inventory covers a whole
+        ORGANISATION and never says where, while IREP declares site by site, with
+        SIRET and coordinates. That is what lets you name WHICH site of a large
+        account weighs — and therefore which address to call on. Measured on
+        department 59: ArcelorMittal France at 5.995 Mt of fossil CO2, SIRET included.
+
+        ⚠️ 89% of the registry's quantities are the string "< seuil" (56,848 rows out
+        of 64,045 in 2024): the operator declared BELOW the reporting threshold. They
+        come back as `quantite: null` with `sous_seuil: true`, never as zero, and are
+        sorted after the known quantities — they inform, they do not rank.
+
+        ⚠️ CO2 comes in three flavours — fossil (the default), biomass, and the total
+        that sums both. Reading the total as fossil inflates a site that burns wood.
+
+        Args:
+            annee: registry vintage (2024 by default).
+            departement: INSEE department code.
+            code_commune: INSEE commune code.
+            siret: one establishment.
+            polluant: EXACT label from the dataset; omitted means fossil CO2, "" (empty
+                string) means every pollutant.
+            milieu: "Air" by default; empty means water and soil too.
+            limit: establishments returned.
+        """
+        return irep.emetteurs(
+            annee=annee, departement=departement, code_commune=code_commune,
+            siret=siret, polluant=polluant, milieu=milieu, limit=limit,
+        )
 
     # --- propriétaire d'un bâtiment (BDNB, CSTB) ----------------------------
 

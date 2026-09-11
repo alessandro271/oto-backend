@@ -168,6 +168,49 @@ def resolve_datastore_ns(
         return dict(row) if row else None
 
 
+def resolve_datastore_ids_by_name(
+    names: list[str], *, sub: str, org_ids: list[int], group_ids: list[int],
+) -> dict[str, int]:
+    """Les identifiants des tableaux NOMMÉS `names`, vus par un principal donné — même
+    prédicat de visibilité et même priorité que `resolve_datastore_ns`, en UNE requête
+    pour toute la liste. Un nom qui ne résout pas dans cette portée est simplement
+    absent du résultat : l'appelant garde le nom et n'invente pas d'identifiant.
+
+    ⚠️ **Le principal n'est pas forcément celui qui LIT, et c'est tout l'objet.** Un
+    lien de projet qui désigne son tableau par un NOM doit désigner le MÊME tableau
+    pour quiconque ouvre le projet. Résolu une fois ici, au nom du PROPRIÉTAIRE du
+    projet, l'identifiant est stable et se sert tel quel ; refait chez chaque lecteur,
+    il dérive vers l'homonyme personnel de chacun — la priorité `owner_type='user' AND
+    owner_id=sub` est faite pour ça et n'a pas de sens hors de son propriétaire. C'est
+    exactement le défaut d'oto#160, et c'est pourquoi cette résolution appartient au
+    serveur : un écran qui la referait la referait faux."""
+    if not names:
+        return {}
+    org_txt = [str(o) for o in org_ids]
+    grp_txt = [str(g) for g in group_ids]
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT ON (d.namespace) d.namespace, d.id "
+            "FROM user_datastores d "
+            "WHERE d.namespace = ANY(%(names)s) AND ("
+            "     (d.owner_type = 'user' AND d.owner_id = %(sub)s)"
+            "  OR (d.owner_type = 'org'  AND d.owner_id = ANY(%(org)s))"
+            "  OR (d.owner_type = 'group' AND d.owner_id = ANY(%(grp)s))"
+            "  OR EXISTS ("
+            "       SELECT 1 FROM resource_grants g"
+            "        WHERE g.resource_type = 'datastore_namespace' AND g.resource_id = d.id::text"
+            "          AND ( (g.principal_type = 'user'  AND g.principal_id = %(sub)s)"
+            "             OR (g.principal_type = 'org'   AND g.principal_id = ANY(%(org)s))"
+            "             OR (g.principal_type = 'group' AND g.principal_id = ANY(%(grp)s)) ))"
+            ") "
+            "ORDER BY d.namespace, "
+            "         CASE WHEN d.owner_type='user' AND d.owner_id=%(sub)s THEN 0 "
+            "              WHEN d.owner_type='org' THEN 1 ELSE 2 END, d.id",
+            {"names": list(names), "sub": sub, "org": org_txt, "grp": grp_txt},
+        ).fetchall()
+        return {r["namespace"]: int(r["id"]) for r in rows}
+
+
 def list_datastores_granted_to(
     sub: str, org_ids: list[int], group_ids: list[int],
 ) -> list[dict]:

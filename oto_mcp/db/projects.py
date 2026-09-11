@@ -26,6 +26,7 @@ from .datastore import (
     get_datastore_by_id,
     set_datastore_schema,
 )
+from .datastore_ns import resolve_datastore_ids_by_name
 from .users import upsert_user
 
 
@@ -463,6 +464,11 @@ def _apply_tableau_names(links: list[dict], name_by_id: dict[int, str]) -> None:
             nm = name_by_id.get(int(l["target_ref"]))
             if nm is not None:
                 l["datastore"] = nm
+                # L'identifiant SERVI, même quand il est déjà dans `target_ref` : le
+                # lecteur n'a pas à savoir qu'un `target_ref` est tantôt un id, tantôt
+                # un nom (oto#160). Une clé qui porte toujours le même sens, ou pas de
+                # clé du tout — jamais « à toi de deviner ».
+                l["datastore_id"] = int(l["target_ref"])
 
 
 def _apply_tableau_name_refs(links: list[dict], existing: set) -> None:
@@ -475,6 +481,43 @@ def _apply_tableau_name_refs(links: list[dict], existing: set) -> None:
         if (l.get("target_type") == "tableau" and not l.get("datastore")
                 and l.get("target_ref") in existing):
             l["datastore"] = l["target_ref"]
+
+
+def _portee_du_projet(proprio: dict) -> dict:
+    """Le principal dans la portée duquel se résout un lien posé par NOM : le
+    PROPRIÉTAIRE du projet (ADR 0030), jamais celui qui lit.
+
+    Un projet perso résout comme son porteur — plus, s'il en a un, son org de contexte,
+    parce qu'un projet perso ouvert dans une org y lie couramment un tableau d'org. Un
+    projet d'org ou d'équipe résout comme cette org / cette équipe, et pas comme un
+    membre : le lien appartient au projet, pas à qui l'ouvre."""
+    t, oid = proprio["owner_type"], str(proprio["owner_id"])
+    ctx = proprio.get("context_org_id")
+    if t == "org":
+        return {"sub": "", "org_ids": [int(oid)], "group_ids": []}
+    if t == "group":
+        return {"sub": "", "org_ids": [], "group_ids": [int(oid)]}
+    return {"sub": oid, "org_ids": [int(ctx)] if ctx else [], "group_ids": []}
+
+
+def _apply_tableau_name_ids(links: list[dict], id_by_name: dict[str, int]) -> None:
+    """Attache l'IDENTIFIANT à un lien `tableau` dont le `target_ref` est un NOM, quand
+    ce nom résout dans la portée du PROPRIÉTAIRE du projet. Pur (mutation en place).
+
+    ⚠️ **Pourquoi le serveur le résout, et pourquoi dans cette portée-là.** À nom égal,
+    la résolution préfère le tableau personnel du demandeur : un écran qui résoudrait
+    lui-même le nom du lien le résoudrait chez CHAQUE lecteur, donc vers l'homonyme
+    personnel de chacun — un tableau reçu en partage s'affichait sous le bon libellé
+    avec les lignes d'un autre (oto#160). Résolu une fois, au nom du propriétaire du
+    projet, l'identifiant désigne le même tableau pour tout le monde ; celui qui n'y a
+    pas droit reçoit un refus franc, pas une réponse plausible et fausse.
+
+    Nom non résolu dans cette portée → pas de clé (le lien garde son nom, et l'écran
+    n'a alors pas le droit de prétendre l'ouvrir)."""
+    for l in links:
+        if (l.get("target_type") == "tableau" and l.get("datastore_id") is None
+                and l.get("target_ref") in id_by_name):
+            l["datastore_id"] = id_by_name[l["target_ref"]]
 
 
 def _apply_procedure_titles(links: list[dict], title_by_id: dict[int, str]) -> None:
@@ -539,6 +582,14 @@ def list_project_links(project_id: int) -> list[dict]:
                 (name_refs,),
             ).fetchall()
             _apply_tableau_name_refs(out, {r["namespace"] for r in erows})
+        # ⚠️ Et l'IDENTIFIANT de ces refs-nom, résolu dans la portée du PROPRIÉTAIRE du
+        # projet (oto#160) : le nom seul est ambigu, la résolution est faite ici pour
+        # qu'elle soit la MÊME chez tous les lecteurs. Requête à part de celle du
+        # dessus, à dessein — elle ne juge pas l'existence (portée mondiale, clé
+        # `datastore`, comportement inchangé) mais la VISIBILITÉ pour un principal.
+        proprio = conn.execute(
+            "SELECT owner_type, owner_id, context_org_id FROM projects WHERE id = %s",
+            (project_id,)).fetchone() if name_refs else None
         # Idem pour les titres de guide des procédures (id stable, ADR 0032).
         doc_ids = [int(l["target_ref"]) for l in out
                    if l.get("target_type") == "procedure" and str(l.get("target_ref", "")).isdigit()]
@@ -550,7 +601,12 @@ def list_project_links(project_id: int) -> list[dict]:
         # (Le type de lien `doc` — pointeur manuel vers une page — a été RETIRÉ, lot 3
         # chantier 0.4 : relier des pages = les backlinks `[[…]]` de Ship 4, pas un
         # pointeur de rail. Les liens existants ont été purgés en migration.)
-        return out
+    # Hors de la connexion ci-dessus : le résolveur ouvre la sienne, et deux
+    # acquisitions imbriquées sur le pool s'interbloquent quand il est étroit.
+    if name_refs and proprio is not None:
+        _apply_tableau_name_ids(out, resolve_datastore_ids_by_name(
+            name_refs, **_portee_du_projet(proprio)))
+    return out
 
 
 # --- Docs (pages markdown arborescentes d'un projet, incrément 3) -------------

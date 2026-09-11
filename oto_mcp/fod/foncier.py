@@ -119,6 +119,17 @@ class _Bdnb:
                       "emprise_min": emprise_min, "limit": limit})
 
 
+class _Irep:
+    def emetteurs(self, annee: int = 2024, departement: Optional[str] = None,
+                  code_commune: Optional[str] = None, siret: Optional[str] = None,
+                  polluant: Optional[str] = None, milieu: Optional[str] = "Air",
+                  limit: int = 50) -> dict[str, Any]:
+        return _post("/api/foncier/irep",
+                     {"annee": annee, "departement": departement,
+                      "code_commune": code_commune, "siret": siret,
+                      "polluant": polluant, "milieu": milieu, "limit": limit})
+
+
 class _DpeTertiaire:
     def diagnostics(self, code_commune: Optional[Any] = None, departement: Optional[str] = None,
                     secteur: Optional[str] = None, etiquette: Optional[Any] = None,
@@ -191,6 +202,7 @@ enedis = _Enedis()
 odre = _Odre()
 beges = _Beges()
 bdnb = _Bdnb()
+irep = _Irep()
 dpe_tertiaire = _DpeTertiaire()
 dvf = _Dvf()
 dpe = _Dpe()

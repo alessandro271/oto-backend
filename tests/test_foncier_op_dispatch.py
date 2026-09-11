@@ -112,12 +112,14 @@ def test_the_consolidated_surface_is_exactly_these_tools(clients):
     """Le comptage n'est pas le critère, mais un tool qui APPARAÎT ou DISPARAÎT sans
     qu'on le veuille (renommage manqué, corps oublié) doit casser ici."""
     assert _tool_names() == {
-        # 10 tools JSON
+        # 11 tools JSON
         "foncier_geocode", "foncier_site", "foncier_isochrone",
         "foncier_permis_search", "foncier_conso_elec", "foncier_icpe",
         "foncier_dvf", "foncier_dpe", "foncier_beges",
         # le seul qui rende un PROPRIÉTAIRE : la bdnb relie un bâtiment à un SIREN
         "foncier_proprietaire",
+        # l'IREP désigne un ÉTABLISSEMENT, là où beges couvre l'organisation
+        "foncier_emissions",
         # 3 MCP Apps, HORS consolidation (elles rendent un composant d'UI)
         "foncier_site_app", "foncier_comparables_app", "foncier_prix_m2_app",
     }
