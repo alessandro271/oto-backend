@@ -679,6 +679,60 @@ def _billable_calls(ctx: ResolvedCtx, inp: OrgBillableCallsInput) -> dict:
     }
 
 
+# ── connexions de messagerie facturables, lentille MEMBRE ───────────────────
+#
+# Julien, 2026-09-11 : chaque connexion Unipile sur la clé Tulina se facture au mois
+# (100 crédits par mois d'abonnement où elle a été connectée). Le relevé de Tulina
+# lit donc, pour UNE org, ses connexions sur la clé plateforme et leurs dates. Même
+# règle d'étroitesse que `org.usage.calls` : ni `sub`, ni email, ni `account_id`
+# Unipile — une clé opaque suffit à dédupliquer, et un membre voit ce que SON ORG
+# consomme, pas qui a connecté quoi.
+
+class BillableConnectionRow(BaseModel):
+    """Une connexion (un canal d'un membre dans cette org) sur la clé plateforme."""
+    # Stable d'une reconnexion à l'autre, ne nomme personne (`db.unipile_connection_key`).
+    connection_key: str
+    provider: str
+    connected_at: str
+    # Posée = soft-déconnectée. Rendue seulement si elle est postérieure à `since`.
+    disconnected_at: Optional[str] = None
+
+
+class OrgBillableConnections(BaseModel):
+    """⚠️ `connected_at` repart à zéro à chaque reconnexion et aucun historique n'est
+    gardé : un mois se facture tant qu'il est lisible, le consommateur retient ce qu'il
+    a déjà compté."""
+    connections: list[BillableConnectionRow]
+
+
+class OrgBillableConnectionsInput(BaseModel):
+    org_id: int
+    # Borne basse ISO 8601 : rend aussi les connexions déconnectées depuis. Absente =
+    # les vivantes seules.
+    since: Optional[str] = None
+
+    @field_validator("since")
+    @classmethod
+    def _since_iso(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        from datetime import datetime
+        try:
+            datetime.fromisoformat(v.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError("`since` doit être une date ISO 8601") from None
+        return v
+
+
+def _billable_connections(ctx: ResolvedCtx, inp: OrgBillableConnectionsInput) -> dict:
+    rows = db.list_billable_unipile_connections(inp.org_id, since=inp.since)
+    return {"connections": [
+        # Projection EXPLICITE : la lentille reste étroite même si la requête s'élargit.
+        {"connection_key": r["connection_key"], "provider": r["provider"],
+         "connected_at": r["connected_at"], "disconnected_at": r.get("disconnected_at")}
+        for r in rows]}
+
+
 _MEMBER_OF = ORG_MEMBER_OF("org_id")
 
 _ADMIN_OF = ORG_ADMIN_OF("org_id")
@@ -699,6 +753,13 @@ CAPABILITIES += [
                Input=OrgBillableCallsInput, authz=_MEMBER_OF, mcp=None,
                Output=OrgBillableCalls,
                rest=RestBinding("GET", "/api/orgs/{id}/usage/calls", _ID)),
+    # Même lentille membre, pour les connexions de messagerie facturées au mois
+    # (voir le bloc au-dessus de `BillableConnectionRow`). `mcp=None` : un tuyau de
+    # facturation, pas un outil d'agent.
+    Capability(key="org.usage.connections", handler=_billable_connections,
+               Input=OrgBillableConnectionsInput, authz=_MEMBER_OF, mcp=None,
+               Output=OrgBillableConnections,
+               rest=RestBinding("GET", "/api/orgs/{id}/usage/connections", _ID)),
     Capability(key="org.monitoring.call", handler=_call, Input=OrgCallInput,
                authz=_ADMIN_OF, mcp=None, Output=OrgCall,
                rest=RestBinding("GET", "/api/orgs/{id}/monitoring/calls/{call_id}", _ID)),
