@@ -10,6 +10,8 @@ geste d'org sur ces boîtes passe par `appliquer` :
 | poser le kit en entier (`connectors.recommend`)    | `appliquer(org, kit=[…])`          |
 | ajouter au kit (`connectors.bulk_select`)          | `appliquer(org, ajouter=[nom])`    |
 | retirer du kit (`connectors.unset_default`)        | `appliquer(org, retirer=[nom])`    |
+| pousser à UN membre (`connectors.force.member`)    | `appliquer(org, ajouter=[nom],`    |
+|                                                    | `          pousser_a=sub)`         |
 
 **Garde d'écriture (§E2)** : un AJOUT au kit nomme un connecteur connu du registre et
 exposé pour l'org, sinon tout le geste est refusé, raison nommée, rien n'est écrit
@@ -28,6 +30,14 @@ Un ajout installe chez chaque membre de l'org, provenance `kit` (§E4), par
 boîtes s'écrivent dans UNE transaction, la ligne de l'org verrouillée (`FOR
 UPDATE`) : deux admins qui modifient le kit en même temps ne calculent pas leur
 différence sur le même « avant ».
+
+Un RETRAIT du kit (décision Q1 du 11/09) désinstalle le connecteur chez chaque membre
+dont la ligne porte la provenance `kit`, active ou en pause — et nulle part ailleurs :
+installé ou repris par le membre (`membre`), poussé par un admin (`admin`), venu du
+socle (`socle`) ou antérieur à la trace (`inconnue`), il reste.
+
+La POUSSÉE à un membre (décision Q2) installe chez lui seul, provenance `admin`, avec
+les mêmes exceptions — elle ne touche pas au kit, et ne défait jamais son retrait.
 
 La réponse est chiffrée par connecteur : installé chez N, déjà actif chez M, laissé
 chez P qui l'ont en pause, laissé chez R qui l'ont retiré eux-mêmes, dont K qu'une
@@ -153,59 +163,79 @@ def _masques(org_id: int, connecteur: str, subs: list[str]) -> Optional[int]:
 
 
 def appliquer(org_id: int, *, kit: Optional[Iterable[str]] = None,
-              ajouter: Iterable[str] = (), retirer: Iterable[str] = ()) -> dict:
-    """Applique un geste d'org sur le kit et les boîtes de ses membres. Voir le module."""
+              ajouter: Iterable[str] = (), retirer: Iterable[str] = (),
+              pousser_a: Optional[str] = None) -> dict:
+    """Applique un geste d'org sur le kit et les boîtes de ses membres. Voir le module.
+    `pousser_a=sub` = la poussée nominative : UN connecteur (`ajouter`), UN membre,
+    provenance `admin`, kit intact."""
     from .. import db
 
     ajouter, retirer = _dedupe(ajouter), _dedupe(retirer)
     if kit is not None and (ajouter or retirer):
         raise ValueError("appliquer : `kit` (le kit entier) OU `ajouter`/`retirer`, pas les deux")
+    if pousser_a is not None and (kit is not None or retirer or len(ajouter) != 1):
+        raise ValueError("appliquer : une poussée ajoute UN connecteur à UN membre, sans toucher au kit")
     with db._connect() as conn:
         row = conn.execute("SELECT default_connectors FROM orgs WHERE id = %s FOR UPDATE",
                            (org_id,)).fetchone()
         if row is None:
             raise OrgInconnue(org_id)
         avant = list(row["default_connectors"] or [])
-        if kit is not None:
+        if pousser_a is not None:
+            nommes, apres = [], avant
+        elif kit is not None:
             nommes = _dedupe(kit)
             apres = nommes
         else:
             nommes = ajouter + retirer
             apres = [n for n in avant if n not in set(retirer)] + [
                 n for n in ajouter if n not in avant]
-        ajouts = [n for n in apres if n not in avant]
+        ajouts = list(ajouter) if pousser_a is not None else [n for n in apres if n not in avant]
         retraits = [n for n in avant if n not in apres]
         refus = refus_d_ajout(org_id, ajouts)
         if refus:
             raise AjoutRefuse(refus)       # avant toute écriture : la transaction s'annule
-        if ajouts or retraits or (kit is not None and row["default_connectors"] is None):
+        if pousser_a is None and (ajouts or retraits
+                                  or (kit is not None and row["default_connectors"] is None)):
             conn.execute("UPDATE orgs SET default_connectors = %s WHERE id = %s",
                          (apres, org_id))
-        membres = [r["sub"] for r in conn.execute(
+        membres = [pousser_a] if pousser_a is not None else [r["sub"] for r in conn.execute(
             "SELECT sub FROM org_members WHERE org_id = %s ORDER BY joined_at, sub",
             (org_id,)).fetchall()]
+        origine = sel.ADMIN if pousser_a is not None else sel.KIT
         effets: list[dict] = []
         poses: dict[str, list[str]] = {}
         for c in ajouts:
             comptes = {"installed": 0, "already_active": 0, "paused": 0,
                        "removed_by_member": 0}
             poses[c] = []
+            retire_le = None
             for m in membres:
-                issue = sel.install_for_member(conn, m, c, org_id, sel.KIT)
+                issue = sel.install_for_member(conn, m, c, org_id, origine)
                 comptes[issue] += 1
                 if issue == "installed":
                     poses[c].append(m)
-            effets.append({"connector": c, "change": ADDED, **comptes})
+                elif issue == "removed_by_member" and pousser_a is not None:
+                    retire_le = conn.execute(
+                        "SELECT removed_at FROM connector_selection_removed "
+                        "WHERE sub = %s AND org_id = %s AND connector = %s",
+                        (m, org_id, c)).fetchone()["removed_at"]
+            effet = {"connector": c, "change": ADDED, **comptes}
+            if retire_le is not None:
+                effet["removed_at"] = str(retire_le)
+            effets.append(effet)
         for c in retraits:
-            # E5 d'avant la décision Q1 : un retrait du kit ne désinstalle chez
-            # personne. On COMPTE ce qui reste, par provenance, pour que la réponse le
-            # dise au lieu de le taire (le barreau 4 applique Q1).
+            # E5, décision Q1 : désinstallé là où le KIT l'a posé (actif ou en pause),
+            # et nulle part ailleurs. On compte ce qui reste, par provenance.
+            cur = conn.execute(
+                "DELETE FROM user_selected_connectors WHERE org_id = %s AND connector = %s "
+                "AND origin = %s AND sub = ANY(%s)", (org_id, c, sel.KIT, membres))
             reste = {r["origin"]: int(r["n"]) for r in conn.execute(
                 "SELECT origin, count(*) AS n FROM user_selected_connectors "
                 "WHERE org_id = %s AND connector = %s AND sub = ANY(%s) GROUP BY origin",
                 (org_id, c, membres)).fetchall()}
-            effets.append({"connector": c, "change": REMOVED, "uninstalled": 0,
-                           "kept": reste})
+            effets.append({"connector": c, "change": REMOVED,
+                           "uninstalled": cur.rowcount or 0, "kept": reste})
     for e in effets:
         if e["change"] == ADDED:
             e["masked_by_access"] = _masques(org_id, e["connector"], poses[e["connector"]])

@@ -175,9 +175,9 @@ def test_ajouter_ce_qui_est_deja_au_kit_dit_pourquoi_et_comment(live, monkeypatc
     assert _ligne(m, org, "folk") == {"state": "active", "origin": "kit"}
 
 
-# ── E5 avant l'application de Q1 : un retrait du kit ne désinstalle personne ──────
+# ── E5, décision Q1 : un retrait désinstalle là où le kit a posé, et le compte ──────
 
-def test_retirer_du_kit_ne_desinstalle_personne_et_le_compte(live, monkeypatch):
+def test_retirer_du_kit_desinstalle_ce_que_le_kit_a_pose_et_le_compte(live, monkeypatch):
     admin, m1, m2 = "k2-ret-admin", "k2-ret-m1", "k2-ret-m2"
     org = _org("Kit2 retrait", admin, m1, m2)
     _membre(monkeypatch, "connectors.select", m2, org, "osm")          # m2 : le sien
@@ -185,9 +185,10 @@ def test_retirer_du_kit_ne_desinstalle_personne_et_le_compte(live, monkeypatch):
     corps = _geste(monkeypatch, "connectors.unset_default", admin, org, name="osm")
     ch = _ch(corps, "osm")
     assert corps["removed"] is True and corps["kit"] == []
-    assert ch["change"] == "removed" and ch["uninstalled"] == 0
-    assert ch["kept"] == {"kit": 2, "membre": 1}
-    assert _ligne(m1, org, "osm") == {"state": "active", "origin": "kit"}
+    assert ch["change"] == "removed" and ch["uninstalled"] == 2     # admin + m1 : le kit
+    assert ch["kept"] == {"membre": 1}                                # m2 : le sien
+    assert _ligne(m1, org, "osm") is None
+    assert _ligne(m2, org, "osm") == {"state": "active", "origin": "membre"}
     # Retirer ce qui n'est pas au kit : rien ne change, et c'est dit.
     corps = _geste(monkeypatch, "connectors.unset_default", admin, org, name="osm")
     assert corps["removed"] is False and corps["unchanged"] == ["osm"]

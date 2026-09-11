@@ -1,25 +1,32 @@
-"""Forcer un connecteur dans la toolbox d'un membre (ADR 0031) — surface org_admin.
+"""« Pousser à un membre » : installer un connecteur dans la boîte à outils d'UN membre.
 
-L'org_admin POUSSE un connecteur à un membre nommé de son org : pose un override
-positif de visibilité (`user_enabled_tools`) sur tous les tools du connecteur, scopé
-sur cette org. Le membre le voit sans rien activer, et reste libre de le re-masquer
-(`oto_disable_tool` lève l'override). C'est de la **VISIBILITÉ** (préférence imposée),
-PAS un grant d'accès — l'accès réel reste gardé au call-time (credential + ADR 0025).
+ADR 0050 §E, décision Q2 du 11/09/2026 (amende l'ADR 0031, force-connecteur-par-user).
 
-Pendant de `connectors_acl` (ADR 0025) : l'ACL *restreint* un connecteur à un
-sous-ensemble de l'org (deny) ; ici on *pousse* un connecteur à un membre (allow).
+Le geste posait une préférence de visibilité par outil (`user_enabled_tools`), que le
+régime de sélection ignore sur un connecteur non installé : en production, 18 poussées
+du 11/08 au 11/09, dont 11 visaient un membre qui n'avait pas le connecteur — rien n'est
+jamais apparu chez lui, et la réponse disait `ok`. Désormais le geste INSTALLE,
+provenance `admin`, par la fonction unique du kit (`connectors.kit.appliquer(…,
+pousser_a=sub)`) — sans toucher au kit, et avec les exceptions du membre (§E6) : une
+ligne active n'est pas réécrite ; une PAUSE ou un RETRAIT de sa part n'est jamais
+défait, et le geste est alors REFUSÉ (avec la date du retrait) plutôt que de répondre
+`ok` sur un geste qui n'a rien fait. Plus aucune préférence par outil n'est écrite.
 
-autz `ORG_ADMIN_OF` : l'org_admin gouverne SON org (super_admin escalade via roles).
+Installer n'est pas autoriser (§E1) : l'accès réel reste gardé à l'appel (credential,
+restrictions ADR 0025). autz `ORG_ADMIN_OF` : l'org_admin gouverne SON org.
 """
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel
 
-from ... import db, org_store, providers, tool_registry
-from ...tool_visibility import namespace_of
+from ... import db, org_store
 from .._authz import ORG_ADMIN_OF
-from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
+from .._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
 from ..registry import CAPABILITIES
+from .kit import appliquer_servi
+from .selection import _connector_tools
 
 _ID_CONN = {"id": "org_id", "connector": "connector"}
 
@@ -31,21 +38,23 @@ class ForceConnectorInput(BaseModel):
 
 
 class ForceConnectorResult(BaseModel):
-    """Écho du push d'un connecteur dans la toolbox d'un membre. C'est de la
-    VISIBILITÉ (préférence imposée), pas un grant : le membre voit le connecteur
-    sans l'activer, peut toujours le re-masquer, et l'accès réel reste gardé au
-    call-time (credential + ADR 0025)."""
-    ok: bool
+    """Le connecteur est installé et actif dans la boîte à outils du membre, pour cette
+    org — visible pour son agent à sa PROCHAINE conversation. Un geste sans effet
+    (pause ou retrait du membre) n'arrive jamais ici : il est refusé."""
+    ok: bool                                  # toujours vrai sur un 200
     org_id: int
     connector: str
-    # Le sub RÉSOLU du membre — l'entrée acceptait un email, la réponse ne le
-    # renvoie jamais.
+    # Le sub RÉSOLU du membre — l'entrée acceptait un email, la réponse ne le renvoie jamais.
     member: str
-    # Nombre de tools sur lesquels l'override positif a été posé. ⚠️ `0` renvoie
-    # `ok:true` : le connecteur est déclaré au registre mais aucun de ses tools
-    # n'est monté (module non chargé, registre non réchauffé). Rien n'a été poussé
-    # — c'est ici, et nulle part ailleurs, que ça se voit.
+    # `installed` = posé par ce geste (provenance `admin`) ; `already_active` = il l'avait
+    # déjà, actif (sa ligne n'est pas réécrite).
+    result: Literal["installed", "already_active"]
+    # ALIAS déprécié (champ d'avant la décision Q2, qui comptait des préférences par
+    # outil) : le nombre d'outils du connecteur, lus du registre BOOT, que sa boîte porte
+    # désormais. `0` = registre non réchauffé (script hors serveur), pas un connecteur
+    # sans outils.
     tools_forced: int
+    note: str
 
 
 def _resolve_member(org_id: int, target: str) -> str:
@@ -63,26 +72,48 @@ def _resolve_member(org_id: int, target: str) -> str:
 
 
 async def _force_connector(ctx: ResolvedCtx, inp: ForceConnectorInput) -> dict:
-    con = providers.connector_for_provider(inp.connector)
-    if con is None:
-        raise AuthzDenied(400, "unknown_connector", f"Connecteur `{inp.connector}` inconnu.")
     sub = _resolve_member(inp.org_id, inp.member)
-    reg = await tool_registry.build_registry()  # {tool_name: entry}, instance bindée au boot
-    names = [n for n in reg if namespace_of(n) in con.namespaces]
-    for n in names:
-        db.add_user_enabled_tool(sub, n, inp.org_id)
-    return {"ok": True, "org_id": inp.org_id, "connector": inp.connector,
-            "member": sub, "tools_forced": len(names)}
+    out = appliquer_servi(inp.org_id, ajouter=[inp.connector], pousser_a=sub)
+    (ch,) = out["changes"]
+    if ch["removed_by_member"]:
+        raise AuthzDenied(
+            409, "removed_by_member",
+            f"Refusé, rien n'a été écrit : ce membre a retiré `{inp.connector}` lui-même le "
+            f"{ch.get('removed_at')} (UTC). La plateforme ne défait pas son geste ; s'il en "
+            f"a besoin, c'est à lui de le réinstaller.",
+            details={"removed_at": ch.get("removed_at")})
+    if ch["paused"]:
+        raise AuthzDenied(
+            409, "paused_by_member",
+            f"Refusé, rien n'a été écrit : ce membre a `{inp.connector}` installé et l'a mis "
+            f"en pause lui-même. La plateforme ne le reprend pas à sa place ; il le reprend "
+            f"quand il veut.")
+    return {"ok": True, "org_id": inp.org_id, "connector": inp.connector, "member": sub,
+            "result": "installed" if ch["installed"] else "already_active",
+            "tools_forced": len(_connector_tools(inp.connector)), "note": out["note"]}
 
 
 CAPABILITIES += [
     Capability(
         key="connectors.force.member", handler=_force_connector, Input=ForceConnectorInput,
         authz=ORG_ADMIN_OF("org_id"), Output=ForceConnectorResult,
-        description="[org admin] Force a connector into a member's toolbox IN THIS ORG: sets a "
-                    "positive visibility override on all the connector's tools for the target member "
-                    "(`member` = sub or email). They see it without enabling it, and can still hide it "
-                    "(oto_disable_tool lifts the override). Visibility only — NOT an access grant.",
+        description="[org admin] Install a connector in ONE member's toolbox in this org "
+                    "(provenance `admin`) — it is NOT added to your org's kit. Never over "
+                    "their own choice: if they paused it or removed it themselves, the push "
+                    "is REFUSED and says so, with the date. Refused too if the connector is "
+                    "unknown or not available for your org. Not an access grant: keys and "
+                    "access rules still apply at call time. Their agent sees it at their "
+                    "NEXT conversation. `member` = sub or email.",
+        errors=(DeclaredError(404, "unknown_user", "aucun compte ne porte cet email"),
+                DeclaredError(400, "user_not_in_org", "la cible n'est pas membre de l'org"),
+                DeclaredError(404, "unknown_connector", "nom inconnu du registre"),
+                DeclaredError(409, "org_disabled",
+                              "connecteur non disponible pour les membres de l'org"),
+                DeclaredError(409, "platform_disabled", "connecteur coupé par la plateforme"),
+                DeclaredError(409, "removed_by_member",
+                              "le membre l'a retiré lui-même — jamais défait, rien n'est écrit"),
+                DeclaredError(409, "paused_by_member",
+                              "le membre l'a mis en pause lui-même — rien n'est écrit"),),
         rest=RestBinding("POST", "/api/orgs/{id}/connectors/{connector}/force", _ID_CONN),
     ),
 ]

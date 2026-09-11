@@ -51,12 +51,14 @@ class KitChange(BaseModel):
     already_active: Optional[int] = None     # déjà installé et actif : intact
     paused: Optional[int] = None             # en pause chez le membre : intact
     removed_by_member: Optional[int] = None  # retiré par le membre lui-même : laissé retiré
+    # Poussée seulement : la date à laquelle le membre l'a retiré lui-même.
+    removed_at: Optional[str] = None
     # Parmi les `installed`, combien une restriction d'accès (org ou équipe active)
     # masque. `null` = non calculé (une lecture a échoué) — jamais un zéro supposé.
     masked_by_access: Optional[int] = None
     uninstalled: Optional[int] = None        # retrait : désinstallé chez D membres
-    # Retrait : membres qui le GARDENT, par provenance de leur installation
-    # (`membre`, `admin`, `socle`, `inconnue`, et `kit` tant que Q1 n'est pas appliquée).
+    # Retrait : membres qui le GARDENT, par provenance de leur installation — `membre`,
+    # `admin`, `socle`, `inconnue` (décision Q1 : seul ce que le kit a posé part).
     kept: Optional[dict[str, int]] = None
 
 
@@ -102,7 +104,9 @@ class UnsetDefaultResult(_KitApplied):
     removed: bool
 
 
-def _appliquer(org_id: int, **geste) -> dict:
+def appliquer_servi(org_id: int, **geste) -> dict:
+    """`connectors.kit.appliquer`, ses refus traduits pour les deux faces. Partagé par
+    les gestes du kit et par la poussée (`force.py`)."""
     try:
         return connector_kit.appliquer(org_id, **geste)
     except connector_kit.OrgInconnue:
@@ -136,7 +140,7 @@ def _change(out: dict, name: str) -> Optional[dict]:
 def _recommend(ctx: ResolvedCtx, inp: RecommendInput) -> dict:
     """[org admin] Pose le kit ENTIER ; seule sa différence avec le kit actuel
     s'applique aux membres (cf. `connectors.kit`)."""
-    out = _appliquer(inp.org_id, kit=inp.connectors)
+    out = appliquer_servi(inp.org_id, kit=inp.connectors)
     return {"org_id": inp.org_id, "recommended": out["kit"], **out}
 
 
@@ -146,7 +150,7 @@ def _bulk_select(ctx: ResolvedCtx, inp: BulkSelectInput) -> dict:
     # La garde d'écriture (§E2) est DANS la fonction d'application : même refus,
     # mêmes jetons (`unknown_connector`, `org_disabled`, `platform_disabled`) pour les
     # trois gestes. Un connecteur déjà au kit n'est pas un ajout : il n'est pas jugé.
-    out = _appliquer(inp.org_id, ajouter=[inp.name])
+    out = appliquer_servi(inp.org_id, ajouter=[inp.name])
     ch = _change(out, inp.name)
     laisses = (ch["already_active"] + ch["paused"] + ch["removed_by_member"]) if ch else 0
     return {"org_id": inp.org_id, "connector": inp.name,
@@ -157,6 +161,6 @@ def _bulk_select(ctx: ResolvedCtx, inp: BulkSelectInput) -> dict:
 def _unset_default(ctx: ResolvedCtx, inp: UnsetDefaultInput) -> dict:
     """[org admin] Retire `name` du kit. Ne masque jamais le connecteur de la library
     (ce n'est pas le levier d'exposition)."""
-    out = _appliquer(inp.org_id, retirer=[inp.name])
+    out = appliquer_servi(inp.org_id, retirer=[inp.name])
     return {"org_id": inp.org_id, "connector": inp.name,
             "removed": _change(out, inp.name) is not None, **out}

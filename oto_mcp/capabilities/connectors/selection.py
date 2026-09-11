@@ -612,8 +612,9 @@ CAPABILITIES += [
                     "kit is applied, to current members AND to members who join later: each "
                     "added connector is installed for every member who doesn't have it (never "
                     "over a member's own choice — a connector they paused or removed themselves "
-                    "stays that way); a connector taken out of the kit is uninstalled from no "
-                    "one. Connectors already in the kit are not replayed. Returns, per changed "
+                    "stays that way); a connector taken out of the kit is uninstalled where the "
+                    "kit installed it, and nowhere else. Connectors already in the kit are not "
+                    "replayed. Returns, per changed "
                     "connector, installed / already_active / paused / removed_by_member / "
                     "masked_by_access. Members' agents see it at their NEXT conversation. "
                     "ADDING a connector unknown to the catalog or not available for your org "
@@ -659,11 +660,13 @@ CAPABILITIES += [
         key="connectors.unset_default", handler=_unset_default, Input=UnsetDefaultInput,
         Output=UnsetDefaultResult,
         authz=ORG_ADMIN_OF("org_id"),
-        description="[org admin] Take a connector out of your org's KIT: members who join "
-                    "later no longer get it. It is uninstalled from NO current member — the "
-                    "response counts who keeps it, by who installed it (`kept`). It never hides "
-                    "the connector from search/the library: that is the availability switch, "
-                    "a different lever.",
+        description="[org admin] Take a connector out of your org's KIT: it is uninstalled "
+                    "from every member the KIT installed it for (active or paused), and kept "
+                    "where the member installed or resumed it themselves, where an admin pushed "
+                    "it to them, or where it predates tracking — `uninstalled` and `kept` (by "
+                    "provenance) say so. Members who join later no longer get it. It never "
+                    "hides the connector from search/the library: that is the availability "
+                    "switch, a different lever.",
         rest=RestBinding("DELETE", "/api/orgs/{id}/connectors/{name}/bulk-select", _ID),
     ),
 ]
