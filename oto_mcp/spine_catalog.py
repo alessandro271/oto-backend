@@ -72,8 +72,9 @@ SPINE_FAMILIES: tuple[SpineFamily, ...] = (
     SpineFamily(
         "oto_context / oto_whoami / oto_profile / oto_use_* / oto_clear_*",
         ("oto_context", "oto_whoami", "oto_profile", "oto_use_", "oto_clear_"),
-        "contexte d'appel : les règles de travail de ton org (à lire en premier), sous "
-        "quel compte tu agis, et comment agir sous une autre org, équipe ou projet",
+        "contexte d'appel : les règles de travail de ton org et ce qu'oto sait de toi "
+        "(à lire en premier), sous quel compte tu agis, et comment agir sous une autre "
+        "org, équipe ou projet",
     ),
     SpineFamily(
         "oto_list_my_tools / oto_tool_schema / oto_call / oto_enable_tool / oto_disable_tool",
@@ -91,9 +92,9 @@ SPINE_FAMILIES: tuple[SpineFamily, ...] = (
     SpineFamily(
         "oto_doc* / oto_search",
         ("oto_doc", "oto_search"),
-        "documents : les pages markdown d'un projet — le savoir durable se capture "
-        "LÀ, en doc dans son projet — et la recherche transverse sur tout ce qui est "
-        "lisible",
+        "documents : les pages markdown d'un projet — les faits et sources d'un "
+        "travail s'y capturent, dans son projet — et la recherche transverse sur tout "
+        "ce qui est lisible",
     ),
     SpineFamily(
         "oto_resource* / oto_account_access",
@@ -110,8 +111,9 @@ SPINE_FAMILIES: tuple[SpineFamily, ...] = (
     SpineFamily(
         "oto_guide / oto_procedure",
         ("oto_guide", "oto_procedure"),
-        "guides & procédures : la prose d'instruction de ton org et la bibliothèque "
-        "publique de procédures",
+        "guides & procédures : les règles et le mode de travail de ton org (écrits par "
+        "ses admins), ta propre note (`scope=user`) et la bibliothèque publique de "
+        "procédures",
     ),
     SpineFamily(
         "oto_org* / oto_group / oto_list_orgs",

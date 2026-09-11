@@ -35,8 +35,10 @@ Pour bien l'accueillir :
 
 Quand il a pris ses marques, crée des projets pour ses vrais cas d'usage (prospection,
 veille, suivi client…) — chaque projet regroupe son but, ses tableaux, ses connecteurs
-préconfigurés, ses procédures et ses documents. Ce que tu apprends de durable se
-capture en **doc, dans le projet concerné** (`oto_doc op=create`), jamais ailleurs.
+préconfigurés, ses procédures et ses documents. Ce que tu apprends de lui va dans sa
+fiche (`oto_profile op=update`) ; les règles de son organisation, dans le guide de
+l'org (`oto_guide`, par un admin) ; les faits d'un travail, en **doc dans le projet
+concerné** (`oto_doc op=create`).
 """
 
 
