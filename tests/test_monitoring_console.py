@@ -64,6 +64,10 @@ def test_rest_paths_are_unchanged_for_the_dashboard():
     paths = {b.path for c in CAPABILITIES if c.key.startswith("monitoring.")
              for b in c.rest_bindings()}
     assert paths == {
+        # Un chemin qui s'AJOUTE ne casse rien ; l'égalité stricte est là pour qu'il
+        # apparaisse dans le diff, donc qu'il soit ajouté délibérément. Un chemin qui
+        # DISPARAÎT de cette liste est, lui, une surface consommée qu'on retire.
+        "/api/admin/monitoring/transport",
         "/api/admin/monitoring/summary",
         "/api/admin/monitoring/rest",
         "/api/admin/monitoring/connectors",

@@ -57,6 +57,37 @@ class ConnectorsInput(BaseModel):
     org_id: Optional[int] = None   # les échecs subis SOUS cette org
 
 
+class TransportInput(BaseModel):
+    days: int = 7
+    # Pas de filtre d'environnement : la réponse VENTILE par environnement, elle ne
+    # le choisit pas. Préproduction et production écrivent dans la même base ; un
+    # filtre par défaut y cacherait la moitié du trafic sans le dire.
+
+
+class TransportRefusalRow(BaseModel):
+    env: str                      # `production` | `canari` | `inconnu`
+    cause: str                    # vocabulaire FERMÉ, cf. `transport_refusals._MARQUEURS`
+    statut: Optional[int] = None  # le code HTTP servi — plusieurs causes le partagent
+    n: int
+    last_at: Optional[datetime] = None
+
+
+class TransportVersionRow(BaseModel):
+    env: str
+    version_demandee: str
+    n: int
+
+
+class TransportRefusals(BaseModel):
+    """Ce que le transport refuse avant tout dispatch, ventilé par cause."""
+    since_days: int
+    total: int
+    by_cause: list[TransportRefusalRow]
+    # Les versions de protocole réclamées puis refusées : le signal qui dira, le jour
+    # venu, qu'un logiciel client est écarté par notre plancher de protocole.
+    protocol_versions_refused: list[TransportVersionRow]
+
+
 class FunnelInput(BaseModel):
     days: int = 30
 
@@ -91,6 +122,20 @@ def _summary(ctx: ResolvedCtx, inp: SummaryInput) -> dict:
 def _rest_stats(ctx: ResolvedCtx, inp: RestInput) -> dict:
     return db.rest_call_stats(since_days=inp.days, org_id=inp.org_id,
                               sub=_resolve_sub(inp.sub), route=inp.route)
+
+
+def _transport_stats(ctx: ResolvedCtx, inp: TransportInput) -> dict:
+    """Ce que le transport MCP refuse AVANT tout dispatch, ventilé par cause.
+
+    Ces refus ne traversent aucun middleware : ils sont absents du journal d'appels
+    d'outils, de Sentry et de toute télémétrie bâtie sur les hooks. Ce compteur est
+    leur seule source (cf. `oto_mcp/transport_refusals.py`).
+
+    ⚠️ Un volume non nul est le RÉGIME NORMAL, pas une panne : ~2,2 % des `POST /mcp`
+    de production sont refusés en permanence, et toutes les adresses sources mesurées
+    le 11/09/2026 appartenaient à la plage de sortie de claude.ai — aucune à nos
+    propres machines. Lire une hausse comme un incident interne serait une erreur."""
+    return db.transport_refusal_stats(since_days=inp.days)
 
 
 def _connector_stats(ctx: ResolvedCtx, inp: ConnectorsInput) -> dict:
@@ -175,8 +220,8 @@ def _call(ctx: ResolvedCtx, inp: CallInput) -> dict:
 # ── console MCP consolidée `oto_admin_monitoring(op=…)` (pattern ADR 0047) ───
 
 class MonitoringInput(BaseModel):
-    op: Literal["summary", "rest", "connectors", "funnel", "calls", "call",
-                "runs", "run", "gaps", "tool_quality"]
+    op: Literal["summary", "rest", "connectors", "transport", "funnel", "calls",
+                "call", "runs", "run", "gaps", "tool_quality"]
     days: Optional[int] = None            # fenêtre (défaut : 7 ; funnel/gaps/tool_quality : 30)
     limit: Optional[int] = None           # calls (défaut 200) / runs (défaut 100)
     sub: Optional[str] = None             # summary/rest/calls : appelant (email ou sub)
@@ -215,6 +260,7 @@ _CHAMPS_LUS: dict[str, set[str]] = {
     "summary": {"days", "org_id", "sub"},
     "rest": {"days", "org_id", "sub", "route"},
     "connectors": {"days", "org_id"},
+    "transport": {"days"},
     "funnel": {"days"},
     "calls": {"days", "limit", "sub", "tool", "errors", "org_id", "run_id",
               "session_id", "min_duration_ms", "error_contains"},
@@ -260,6 +306,8 @@ def _monitoring(ctx: ResolvedCtx, inp: MonitoringInput) -> dict:
     if inp.op == "connectors":
         return _connector_stats(ctx, ConnectorsInput(days=inp.days or 7,
                                                      org_id=inp.org_id))
+    if inp.op == "transport":
+        return _transport_stats(ctx, TransportInput(days=inp.days or 7))
     if inp.op == "funnel":
         return _funnel(ctx, FunnelInput(days=inp.days or 30))
     if inp.op == "calls":
@@ -292,6 +340,10 @@ CAPABILITIES += [
                Input=ConnectorsInput,
                authz=PLATFORM_ADMIN,
                rest=RestBinding("GET", "/api/admin/monitoring/connectors")),
+    Capability(key="monitoring.transport", handler=_transport_stats,
+               Input=TransportInput, Output=TransportRefusals,
+               authz=PLATFORM_ADMIN,
+               rest=RestBinding("GET", "/api/admin/monitoring/transport")),
     Capability(key="monitoring.funnel", handler=_funnel, Input=FunnelInput,
                authz=PLATFORM_ADMIN,
                rest=RestBinding("GET", "/api/admin/monitoring/funnel")),

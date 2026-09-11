@@ -836,7 +836,15 @@ def build_root_app(app, anon_app):
        un changement de comportement. Posée au-dessus du charset et du dispatch pour
        la même raison que lui — elle couvre les deux instances FastMCP et toute la
        face REST d'un seul geste. Cf. `version_header`.
-    4. **garde de déconnexion client** (#352), la couche la plus EXTERNE — entre uvicorn
+    4. **compteur des refus du transport** : une requête refusée par le transport du
+       SDK `mcp` l'est AVANT tout dispatch de session — elle ne traverse aucun
+       middleware FastMCP, donc ni `tool_calls`, ni Sentry, ni rien. ~2,2 % des
+       `POST /mcp` de production, en régime permanent, sans qu'on sache ce qu'on
+       refuse. Posé au-dessus du dispatch pour couvrir les deux instances FastMCP
+       d'un seul geste, et SOUS la garde de déconnexion pour ne pas compter la
+       réponse que celle-ci synthétise. Cf. `transport_refusals` pour les trois
+       garanties qui le rendent acceptable sur le chemin du transport.
+    5. **garde de déconnexion client** (#352), la couche la plus EXTERNE — entre uvicorn
        et tout le reste. Un POST `/mcp` dont le client est parti en cours de route
        laissait une réponse ASGI incomplète ; uvicorn fermait alors le transport, et
        Caddy rendait des 502 sur cette connexion **et sur les requêtes voisines** qui
@@ -853,10 +861,12 @@ def build_root_app(app, anon_app):
     from . import subdomain_project
     from .client_disconnect_guard import ClientDisconnectGuard
     from .response_charset import ResponseCharset
+    from .transport_refusals import TransportRefusalCounter
     from .version_header import VersionHeader
     return ClientDisconnectGuard(
-        VersionHeader(
-            ResponseCharset(subdomain_project.HostDispatch(app, anon_app))))
+        TransportRefusalCounter(
+            VersionHeader(
+                ResponseCharset(subdomain_project.HostDispatch(app, anon_app)))))
 
 
 def main():

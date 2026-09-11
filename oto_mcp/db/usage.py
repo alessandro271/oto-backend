@@ -1368,6 +1368,60 @@ def connector_failure_stats(since_days: int = 7, *, org_id: Optional[int] = None
     }
 
 
+def transport_refusal_stats(since_days: int = 7) -> dict:
+    """Lentille des refus du TRANSPORT MCP (`kind='transport'`, cf.
+    `oto_mcp/transport_refusals.py`) : ce qu'on refuse AVANT tout dispatch de session,
+    ventilé par cause, par code HTTP et par environnement.
+
+    ⚠️ **Ventilé par environnement, et ce n'est pas un luxe** : préproduction et
+    production écrivent dans la MÊME base et `tool_calls.server` est un littéral
+    constant, donc sans cet axe les deux trafics s'additionneraient en silence. La
+    ligne le porte dans `args->>'env'` (posé à l'écriture depuis `OTO_SENTRY_ENV`).
+
+    La cause vit dans `tool`, préfixée `refus:` — un `GROUP BY` la rend directement,
+    sans toucher au JSON. Aucune ligne ne porte de `sub` : à cette couche il n'y a pas
+    encore d'identité."""
+    since_days = max(1, min(int(since_days), 365))
+    with _connect() as conn:
+        par_cause = conn.execute(
+            """
+            SELECT COALESCE(l.args->>'env', 'inconnu') AS env,
+                   substring(l.tool from 7)            AS cause,
+                   (l.args->>'statut')::int            AS statut,
+                   COUNT(*)                            AS n,
+                   MAX(l.created_at)                   AS last_at
+            FROM tool_calls l
+            WHERE l.kind = 'transport'
+              AND l.created_at >= NOW() - make_interval(days => %s)
+            GROUP BY 1, 2, 3
+            ORDER BY n DESC
+            LIMIT 100
+            """,
+            (since_days,),
+        ).fetchall()
+        versions = conn.execute(
+            """
+            SELECT COALESCE(l.args->>'env', 'inconnu') AS env,
+                   l.args->>'version_demandee'         AS version_demandee,
+                   COUNT(*)                            AS n
+            FROM tool_calls l
+            WHERE l.kind = 'transport'
+              AND l.args->>'version_demandee' IS NOT NULL
+              AND l.created_at >= NOW() - make_interval(days => %s)
+            GROUP BY 1, 2
+            ORDER BY n DESC
+            LIMIT 50
+            """,
+            (since_days,),
+        ).fetchall()
+    return {
+        "since_days": since_days,
+        "total": sum(int(r["n"]) for r in par_cause),
+        "by_cause": list(par_cause),
+        "protocol_versions_refused": list(versions),
+    }
+
+
 def activation_funnel(active_window_days: int = 30) -> dict:
     """Funnel d'activation (ADR 0017) : distingue COMPTE de USAGE. Un compte avec 0
     appel d'outil n'a jamais rien déclenché (idle, ou handshake OAuth jamais réussi) —

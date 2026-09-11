@@ -204,6 +204,29 @@ refusée) — lot à part, même issue.
 
 ## Ce qui n'est PAS tracé
 
+⚠️ **Les refus du TRANSPORT l'étaient — ils ne le sont plus (11/09/2026).** Une requête
+refusée par le transport du SDK `mcp` l'est **avant tout dispatch de session** : elle ne
+traverse aucun middleware FastMCP, donc ni `tool_calls`, ni Sentry, ni aucune télémétrie
+bâtie sur les hooks. Mesuré : **~2,2 % des `POST /mcp` de production**, en régime
+permanent, dont on ne savait rien — la seule trace était la ligne de statut du journal
+d'accès uvicorn, qui ne porte que le code HTTP et vit **deux jours**. Et il faut la
+chercher sous les unités **colorées** (`journalctl -u oto-mcp@blue`), pas sous
+`oto-mcp`, sinon on conclut « aucun journal », ce qui est un zéro crédible et faux.
+
+`oto_mcp/transport_refusals.py` les compte désormais **avec leur cause**, depuis un
+middleware ASGI posé dans `build_root_app`. La cause ne se lit que dans le corps de la
+réponse : **cinq** refus différents rendent 400 (analyse, validation, `Mcp-Session-Id`
+manquant, version de protocole, `Content-Type`) et le code JSON-RPC ne les sépare pas
+non plus (`-32600` en couvre deux). Ces lignes portent `kind='transport'`, leur cause
+dans `tool` (`refus:<cause>`), et l'environnement dans `args` — indispensable, puisque
+préproduction et production écrivent dans la MÊME base et que `tool_calls.server` est un
+littéral constant. Aucun `sub` : à cette couche il n'y a pas encore d'identité.
+
+Lecture : `oto_admin_monitoring op=transport` / `GET /api/admin/monitoring/transport`.
+⚠️ **Un volume non nul est le régime NORMAL, pas une panne.** Toutes les adresses
+sources mesurées le 11/09/2026 étaient dans `160.79.106.0/24`, la plage de sortie de
+claude.ai — aucune de nos machines. Ce sont des clients tiers qui parlent mal.
+
 Pas la connexion d'un connecteur, pas le `tools/list`. (Ce paragraphe disait « uniquement
 les invocations d'outils » jusqu'au 2026-08-29 : les appels `/api/*` y sont écrits depuis
 `RestCallLogger`, et le handshake depuis `on_initialize` — c'est cet angle mort de lecture

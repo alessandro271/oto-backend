@@ -271,6 +271,8 @@ GET,HEAD /api/admin/monitoring/rest -> _handler
 OPTIONS /api/admin/monitoring/rest -> options_handler
 GET,HEAD /api/admin/monitoring/connectors -> _handler
 OPTIONS /api/admin/monitoring/connectors -> options_handler
+GET,HEAD /api/admin/monitoring/transport -> _handler
+OPTIONS /api/admin/monitoring/transport -> options_handler
 GET,HEAD /api/admin/monitoring/funnel -> _handler
 OPTIONS /api/admin/monitoring/funnel -> options_handler
 GET,HEAD /api/admin/monitoring/calls -> _handler
