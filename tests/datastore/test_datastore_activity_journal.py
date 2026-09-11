@@ -547,14 +547,18 @@ def test_trace_only_yields_a_closed_set_of_keys():
     """Le relevé est un seam de service : il ne doit pas devenir une porte par
     laquelle n'importe quel état de résolution finit journalisé.
 
-    QUATRE clés, quatre raisons nommées : l'entité datastore résolue (`ns_id`) ;
+    SEPT clés, cinq raisons nommées : l'entité datastore résolue (`ns_id`) ;
     l'EMPREINTE d'un run — la version de procédure exécutée + l'instance de connecteur
-    résolue (chantier du run, lot J2) ; et le FORÇAGE d'une colonne verrouillée (#658,
+    résolue (chantier du run, lot J2) ; le FORÇAGE d'une colonne verrouillée (#658,
     02/09/2026), dont c'est la seule trace — décidé comme telle, sans colonne de plus
-    sur la ligne. Une clé s'ajoute ICI, à la main, dans le commit qui la provoque."""
+    sur la ligne ; et ce qu'un job FullEnrich terminé a TROUVÉ, en contacts par sorte
+    (`found_*`, 11/09/2026, métrage par résultat — trois entiers, lus par la lentille
+    `org.usage.calls`). Une clé s'ajoute ICI, à la main, dans le commit qui la provoque."""
     from oto_mcp import server
     assert server._TRACED_ARGS == ("ns_id", "doctrine_version", "instance",
-                                   "readonly_forced")
+                                   "readonly_forced",
+                                   "found_work_emails", "found_personal_emails",
+                                   "found_phones")
 
 
 def test_datastore_lens_correlates_on_the_id_without_a_tenant_bound(monkeypatch):

@@ -3,8 +3,13 @@ must trace the number of contacts SUBMITTED (not enriched/found — that count o
 exists later, inside `fullenrich_result`, a separate call/journal row) via
 `session_org.note_call_trace(quantity=…)`, regardless of platform vs BYO key —
 unlike `access.record_platform_usage`, which only fires on the platform key and
-serves a different purpose (oto's own internal quota, not org billing)."""
+serves a different purpose (oto's own internal quota, not org billing).
+
+`fullenrich_result` traces what FullEnrich DEDUCTED for the job (`cost_credits`,
+its `cost.credits`) once FINISHED, 0 while not finished, and nothing when no cost
+is declared — no price table, no dedupe in the backend (2026-09-11)."""
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -61,3 +66,102 @@ def test_enrich_linkedin_does_not_trace_on_a_rejected_submission():
             _tool("fullenrich_enrich_linkedin").fn(contacts=_contacts(1))
 
     trace.assert_not_called()
+
+
+# ── `fullenrich_result` : le coût DÉCLARÉ par FullEnrich, relevé tel quel ─────
+#
+# Le client oto-core rend `cost_credits` (le `cost.credits` du job). Les tests
+# passent par `res.get(...)` sur un client simulé : ils tiennent sur le pin actuel,
+# que le champ y soit déjà ou non.
+
+def _result(fetched: dict, *, is_platform: bool = True):
+    with patch("oto_mcp.access.resolve_api_key", return_value=("fake-key", is_platform)), \
+         patch("oto_mcp.tools.fullenrich.session_org.note_call_trace") as trace, \
+         patch("oto.tools.fullenrich.client.FullenrichClient") as client_cls:
+        client_cls.return_value.fetch.return_value = fetched
+        out = _tool("fullenrich_result").fn(enrichment_id="enr_789")
+    return out, trace
+
+
+def _profile(*, work_emails=(), personal_emails=(), phones=()):
+    """Un profil tel que le client le rend (attributs + `to_dict`), sans dépendre du pin."""
+    p = SimpleNamespace(work_emails=list(work_emails), personal_emails=list(personal_emails),
+                        phones=list(phones))
+    p.to_dict = lambda: {"work_emails": p.work_emails, "personal_emails": p.personal_emails,
+                         "phones": p.phones}
+    return p
+
+
+_RIEN = {"found_work_emails": 0, "found_personal_emails": 0, "found_phones": 0}
+
+
+@pytest.mark.parametrize("is_platform", [True, False])
+def test_result_finished_traces_the_credits_fullenrich_deducted(is_platform):
+    out, trace = _result({"status": "FINISHED", "profiles": [], "cost_credits": 14},
+                         is_platform=is_platform)
+    assert out["done"] is True
+    # INCONDITIONNEL : même trace sur la clé plateforme et sur une clé BYO — le
+    # consommateur filtre sur `key_mode`, pas le backend.
+    trace.assert_called_once_with(quantity=14, **_RIEN)
+
+
+def test_result_finished_with_zero_credits_traces_a_zero():
+    """Rien trouvé = rien déduit chez FullEnrich : un zéro mesuré, pas une absence."""
+    _, trace = _result({"status": "FINISHED", "profiles": [], "cost_credits": 0})
+    trace.assert_called_once_with(quantity=0, **_RIEN)
+
+
+def test_result_finished_counts_CONTACTS_per_kind_not_values():
+    """Deux e-mails pro sur un contact comptent UNE fois ; un contact sans rien ne
+    compte nulle part ; chaque sorte se compte à part."""
+    profiles = [
+        _profile(work_emails=["a@x.fr", "a.b@x.fr"], phones=["+33600000001"]),
+        _profile(work_emails=["c@y.fr"], personal_emails=["c@gmail.com", "c2@gmail.com"]),
+        _profile(),
+        _profile(phones=["+33600000002", "+33600000003"]),
+    ]
+    _, trace = _result({"status": "FINISHED", "profiles": profiles, "cost_credits": 25})
+    trace.assert_called_once_with(quantity=25, found_work_emails=2,
+                                  found_personal_emails=1, found_phones=2)
+
+
+@pytest.mark.parametrize("status", ["CREATED", "IN_PROGRESS"])
+def test_result_not_finished_traces_zero_and_no_counts(status):
+    out, trace = _result({"status": status, "profiles": None, "cost_credits": None})
+    assert out["done"] is False
+    trace.assert_called_once_with(quantity=0)
+
+
+@pytest.mark.parametrize("fetched", [
+    {"status": "FINISHED", "profiles": [_profile(work_emails=["a@x.fr"])]},     # oto-core antérieur au champ
+    {"status": "FINISHED", "profiles": [_profile(work_emails=["a@x.fr"])],
+     "cost_credits": None},                                                       # amont muet
+])
+def test_result_finished_without_a_declared_cost_traces_counts_but_no_quantity(fetched):
+    """Pas de repli calculé depuis les profils : un barème (1/3/10) n'a pas sa place
+    dans le backend. Sans coût déclaré, aucune quantité — jamais une valeur devinée.
+    Les comptes, eux, sont des faits lus dans les profils : ils partent quand même."""
+    out, trace = _result(fetched)
+    assert out["done"] is True
+    trace.assert_called_once_with(found_work_emails=1, found_personal_emails=0, found_phones=0)
+
+
+def test_the_found_counts_reach_the_journal_and_bill_only_on_the_target_row():
+    """Les trois noms sont dans la liste fermée des args journalisés, et parmi les clés
+    qui facturent (gardées sur la ligne cible d'un `oto_call`, jamais sur l'enveloppe) ;
+    la lentille de facturation les lit sous ces mêmes noms."""
+    from oto_mcp import server
+    from oto_mcp.calllog import apply_call_trace
+    from oto_mcp.db import usage as dbu
+    from oto_mcp.tools import meta
+
+    noms = set(dbu.BILLABLE_FOUND_ARGS.values())
+    assert noms <= set(server._TRACED_ARGS)
+    assert noms <= set(meta._BILLING_TRACE_KEYS)
+    row = apply_call_trace({"args": {"enrichment_id": "enr_789"}},
+                           {"quantity": 25, "found_work_emails": 2,
+                            "found_personal_emails": 1, "found_phones": 2},
+                           server._TRACED_ARGS)
+    assert row["args"] == {"enrichment_id": "enr_789", "found_work_emails": 2,
+                           "found_personal_emails": 1, "found_phones": 2}
+    assert row["quantity"] == 25

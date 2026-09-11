@@ -7,6 +7,18 @@ in-process 131-147s → tout client MCP raccroche (~60s), résultat perdu ET cr�
 consommés. Désormais : `fullenrich_enrich_linkedin` SOUMET le job (~1s, bulk
 jusqu'à 100 contacts) et `fullenrich_result` relève le statut/le résultat —
 le polling appartient à l'agent.
+
+Métrage (billing Tulina) : des faits distincts, aucun prix. La soumission trace les
+contacts SOUMIS. Le relevé d'un job terminé trace :
+- en `quantity`, les crédits que FullEnrich a DÉDUITS (`cost.credits`, rendu par
+  oto-core en `cost_credits`) — le chiffre de rapprochement avec l'amont ;
+- `found_work_emails` / `found_personal_emails` / `found_phones`, le nombre de
+  CONTACTS du job où au moins une valeur de chaque sorte a été trouvée — ce que lit un
+  prix par résultat qui n'est pas un multiple du barème de l'amont.
+Un relevé non terminé trace 0 et aucun compte. Le backend ne porte aucun barème et ne
+déduplique rien : un job relevé deux fois trace deux fois ses chiffres, et le
+consommateur le compte une fois par son `enrichment_id` (le `job_id` de la lentille
+`org.usage.calls`, qui rend aussi les comptes en `found`).
 """
 from __future__ import annotations
 
@@ -124,11 +136,40 @@ def register(mcp: FastMCP) -> None:
         client, _ = _client()
         res = client.fetch(enrichment_id)
         if res["status"] != "FINISHED":
+            # Un relevé de statut n'a rien consommé chez FullEnrich : un zéro TRACÉ,
+            # pas une absence — un consommateur du métrage lit l'absence comme 1.
+            session_org.note_call_trace(quantity=0)
             return {
                 "done": False,
                 "status": res["status"],
                 "next_step": "Still running — call fullenrich_result again in ~20-30s.",
             }
+        # Métrage (billing Tulina), INCONDITIONNEL (clé plateforme OU BYO), comme
+        # `fullenrich_enrich_linkedin` : le consommateur filtre sur `key_mode`.
+        #   • `quantity` = les crédits que FULLENRICH a déduits pour ce job —
+        #     `cost_credits`, son `cost.credits` relu par oto-core : le chiffre de
+        #     RAPPROCHEMENT. Coût absent (oto-core antérieur au champ, amont muet) →
+        #     AUCUNE quantité, jamais une valeur devinée depuis les profils.
+        #   • `found_*` = combien de CONTACTS du job ont au moins une valeur de chaque
+        #     sorte (un contact à deux e-mails compte UNE fois, un contact vide nulle
+        #     part). Des faits lus dans les profils — donc tracés même sans coût
+        #     déclaré. C'est ce que lit un prix par résultat qui n'est pas un multiple
+        #     du barème de l'amont.
+        # Aucun barème ici, ni 1/3/10 ni conversion : un taux est une décision
+        # commerciale. ⚠️ Chaque relevé FINISHED d'un même job trace les mêmes
+        # chiffres : compter un job une fois (par son `enrichment_id`, que la lentille
+        # de facturation rend en `job_id`) appartient au consommateur, pas au backend.
+        profiles = res.get("profiles") or []
+        trace = {
+            "found_work_emails": sum(1 for p in profiles if getattr(p, "work_emails", None)),
+            "found_personal_emails": sum(1 for p in profiles
+                                         if getattr(p, "personal_emails", None)),
+            "found_phones": sum(1 for p in profiles if getattr(p, "phones", None)),
+        }
+        cost = res.get("cost_credits")
+        if isinstance(cost, int) and not isinstance(cost, bool) and cost >= 0:
+            trace["quantity"] = cost
+        session_org.note_call_trace(**trace)
         return {
             "done": True,
             "status": "FINISHED",

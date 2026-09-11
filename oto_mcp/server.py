@@ -456,7 +456,17 @@ _SERVER_INSTRUCTIONS = instructions.render()
 # `quantity` (21/08, billing Tulina) utilise le MÊME seam (`note_call_trace`) mais
 # N'EST PAS dans cette liste : elle a SA PROPRE colonne (`tool_calls.quantity`),
 # posée directement par `_calllog_sink` ci-dessous — voir ce bloc, pas ici.
-_TRACED_ARGS = ("ns_id", "doctrine_version", "instance", "readonly_forced")
+#
+# `found_work_emails` / `found_personal_emails` / `found_phones` (11/09/2026, billing
+# Tulina) — sur un relevé FullEnrich TERMINÉ, le nombre de CONTACTS du job où au moins
+# une valeur de chaque sorte a été trouvée. Trois entiers, pas une colonne chacun : le
+# métrage les lit par `org.usage.calls` (`found`, liste fermée
+# `db.usage.BILLABLE_FOUND_ARGS`), aucune requête chaude ne les somme. Versés ici, ils
+# rejoignent `args` APRÈS `truncated_args` — un entier n'y est de toute façon ni
+# stringifié ni coupé. Ils facturent : `tools/meta._BILLING_TRACE_KEYS` les garde sur
+# la ligne CIBLE d'un `oto_call`, jamais sur l'enveloppe.
+_TRACED_ARGS = ("ns_id", "doctrine_version", "instance", "readonly_forced",
+                "found_work_emails", "found_personal_emails", "found_phones")
 
 
 _PREPARED = False
