@@ -153,7 +153,10 @@ async def _resolve_tool(ctx: Context, name: str):
 # seule. La ligne d'enveloppe (`tool='oto_call'`) ne doit pas les porter — une même
 # consommation écrite deux fois serait facturée deux fois le jour où un consommateur
 # ne filtrerait plus par nom d'outil.
-_BILLING_TRACE_KEYS = ("quantity", "key_mode")
+# Les compteurs `found_*` (contacts d'un job FullEnrich où une valeur de chaque sorte
+# a été trouvée) FACTURENT aussi : ce sont eux qui portent le prix par résultat.
+_BILLING_TRACE_KEYS = ("quantity", "key_mode",
+                       "found_work_emails", "found_personal_emails", "found_phones")
 _UNSET = object()
 
 

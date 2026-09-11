@@ -52,22 +52,43 @@ def test_la_lentille_ne_rend_QUE_ce_qu_un_metrage_somme(monkeypatch):
     out = om._billable_calls(CTX, om.OrgBillableCallsInput(org_id=7, tool="linkedin_aiark_search"))
     assert out["calls"] == [{"call_id": 9, "tool": "linkedin_aiark_search",
                              "created_at": "2026-09-01T09:00:00.000000Z",
-                             "quantity": 47, "key_mode": "platform", "job_id": None}]
+                             "quantity": 47, "key_mode": "platform", "job_id": None,
+                             "found": None}]
     assert not {"sub", "email", "error"} & set(out["calls"][0])
 
 
 def test_la_lentille_rend_le_job_d_un_releve_et_rien_d_autre_des_args(monkeypatch):
-    """`job_id` sert au consommateur à compter UNE fois un job relevé plusieurs fois.
-    Aucun autre argument ne passe, même si le store en laissait remonter."""
+    """`job_id` sert au consommateur à compter UNE fois un job relevé plusieurs fois ;
+    `found` porte ce que le job a trouvé, en contacts par sorte. Aucun autre argument
+    ne passe, même si le store en laissait remonter."""
+    trouve = {"work_emails": 2, "personal_emails": 1, "phones": 2}
     _fake(monkeypatch, total=1, calls=[{
         "id": 11, "tool": "fullenrich_result", "created_at": "2026-09-01T09:05:00.000000Z",
-        "quantity": 14, "key_mode": "platform", "job_id": "enr-0001",
-        "args": {"enrichment_id": "enr-0001"}, "contacts": [{"first_name": "A"}]}])
+        "quantity": 14, "key_mode": "platform", "job_id": "enr-0001", "found": trouve,
+        "args": {"enrichment_id": "enr-0001"}, "contacts": [{"first_name": "A"}],
+        "found_phones": "2"}])
     out = om._billable_calls(CTX, om.OrgBillableCallsInput(org_id=7, tool="fullenrich_result"))
     assert out["calls"] == [{"call_id": 11, "tool": "fullenrich_result",
                              "created_at": "2026-09-01T09:05:00.000000Z",
-                             "quantity": 14, "key_mode": "platform", "job_id": "enr-0001"}]
-    assert not {"args", "contacts"} & set(out["calls"][0])
+                             "quantity": 14, "key_mode": "platform", "job_id": "enr-0001",
+                             "found": trouve}]
+    assert not {"args", "contacts", "found_phones"} & set(out["calls"][0])
+
+
+@pytest.mark.parametrize("colonnes, attendu", [
+    ({"found_work_emails": "2", "found_personal_emails": "0", "found_phones": "1"},
+     {"work_emails": 2, "personal_emails": 0, "phones": 1}),
+    ({}, None),                                                        # autre outil / non terminé
+    ({"found_work_emails": "2", "found_personal_emails": None, "found_phones": "1"}, None),
+    ({"found_work_emails": "2", "found_personal_emails": "-1", "found_phones": "1"}, None),
+    ({"found_work_emails": "x", "found_personal_emails": "0", "found_phones": "1"}, None),
+])
+def test_found_est_tout_ou_rien_et_retire_ses_colonnes_de_la_ligne(colonnes, attendu):
+    from oto_mcp.db import usage as dbu
+
+    ligne = {"id": 1, "tool": "fullenrich_result", **colonnes}
+    assert dbu._found_from_row(ligne) == attendu
+    assert not set(dbu.BILLABLE_FOUND_ARGS.values()) & set(ligne)
 
 
 def test_la_reponse_porte_le_total_et_la_position_suivante(monkeypatch):
@@ -145,13 +166,19 @@ def test_le_store_rend_le_job_d_un_releve_sans_aucun_autre_argument(live):
     `calllog.truncated_args` les écrit), pour la seule liste fermée
     `BILLABLE_JOB_ARGS` — le reste des args ne sort pas, et un outil sans job
     rend `None`."""
-    from oto_mcp import db, org_store
-    from oto_mcp.calllog import truncated_args
+    from oto_mcp import db, org_store, server
+    from oto_mcp.calllog import apply_call_trace, truncated_args
 
     sub = "sub-job-" + uuid.uuid4().hex[:6]
     org = org_store.create_org("Jobs relevés", created_by=sub)
-    args = truncated_args({"enrichment_id": "8f14e45f-ceea-467e-a9b4-2f0e0f8b1c7d"},
-                          tool="fullenrich_result")
+    # La ligne telle que le sink l'écrit : args tronqués, puis le relevé versé par la
+    # liste fermée `server._TRACED_ARGS`.
+    args = apply_call_trace(
+        {"args": truncated_args({"enrichment_id": "8f14e45f-ceea-467e-a9b4-2f0e0f8b1c7d"},
+                                tool="fullenrich_result")},
+        {"quantity": 14, "found_work_emails": 2, "found_personal_emails": 0,
+         "found_phones": 1},
+        server._TRACED_ARGS)["args"]
     for minute in (1, 2):                          # le MÊME job relevé deux fois
         _poser(sub, org, quand=f"2026-08-20T10:0{minute}:00+00:00",
                tool="fullenrich_result", quantity=14, key_mode="platform", args=args)
@@ -164,10 +191,13 @@ def test_le_store_rend_le_job_d_un_releve_sans_aucun_autre_argument(live):
     releves = db.list_billable_calls_for_org(org, "fullenrich_result", **fenetre)
     assert releves["total"] == 2
     assert {c["job_id"] for c in releves["calls"]} == {"8f14e45f-ceea-467e-a9b4-2f0e0f8b1c7d"}
-    assert not {"args", "contacts"} & set(releves["calls"][0])
+    assert [c["found"] for c in releves["calls"]] == [
+        {"work_emails": 2, "personal_emails": 0, "phones": 1}] * 2
+    assert not {"args", "contacts", "found_work_emails", "found_phones"} & set(releves["calls"][0])
 
     soumis = db.list_billable_calls_for_org(org, "fullenrich_enrich_linkedin", **fenetre)
     assert [c["job_id"] for c in soumis["calls"]] == [None]
+    assert [c["found"] for c in soumis["calls"]] == [None]
     assert "contacts" not in soumis["calls"][0] and "args" not in soumis["calls"][0]
 
 

@@ -634,6 +634,12 @@ class BillableCallRow(BaseModel):
     # une liste FERMÉE de noms (`db.BILLABLE_JOB_ARGS`) — jamais un autre argument :
     # ceux d'un enrichissement portent des personnes. `None` = l'outil n'en a pas.
     job_id: Optional[str] = None
+    # Ce qu'un relevé de job terminé a TROUVÉ, en CONTACTS par sorte :
+    # `{"work_emails": n, "personal_emails": n, "phones": n}` (un contact à deux
+    # valeurs d'une sorte compte une fois). Lu dans les args journalisés pour la
+    # liste fermée `db.usage.BILLABLE_FOUND_ARGS`. `None` = rien de tel n'a été tracé
+    # (autre outil, job non terminé, ligne antérieure).
+    found: Optional[dict[str, int]] = None
 
 
 class OrgBillableCalls(BaseModel):
@@ -678,7 +684,7 @@ def _billable_calls(ctx: ResolvedCtx, inp: OrgBillableCallsInput) -> dict:
         # si la requête gagne des colonnes demain.
         "calls": [{"call_id": r["id"], "tool": r["tool"], "created_at": r["created_at"],
                    "quantity": r.get("quantity"), "key_mode": r.get("key_mode"),
-                   "job_id": r.get("job_id")}
+                   "job_id": r.get("job_id"), "found": r.get("found")}
                   for r in page["calls"]],
         "total": page["total"],
         "until_effectif": page["until_effectif"],

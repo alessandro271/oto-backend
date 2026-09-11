@@ -1011,6 +1011,32 @@ BILLABLE_JOB_ARGS: tuple[str, ...] = ("enrichment_id",)
 _BILLABLE_JOB_ID_SQL = "COALESCE(" + ", ".join(
     f"l.args->>'{nom}'" for nom in BILLABLE_JOB_ARGS) + ")"
 
+# Ce qu'un relevé de job a TROUVÉ, par sorte : clé servie par la lentille (`found`)
+# → nom d'argument journalisé (posé par l'outil via `note_call_trace`, versé dans
+# `args` par `server._TRACED_ARGS`). Liste FERMÉE de littéraux, comme ci-dessus.
+BILLABLE_FOUND_ARGS: dict[str, str] = {
+    "work_emails": "found_work_emails",
+    "personal_emails": "found_personal_emails",
+    "phones": "found_phones",
+}
+_BILLABLE_FOUND_SQL = ", ".join(
+    f"l.args->>'{arg}' AS {arg}" for arg in BILLABLE_FOUND_ARGS.values())
+
+
+def _found_from_row(row: dict) -> Optional[dict]:
+    """Retire de la ligne les trois colonnes `found_*` et rend `found` : un dict des
+    trois comptes, ou `None` si l'un manque ou n'est pas un entier `>= 0`. Tout ou
+    rien — un compte partiel ferait lire « 0 trouvé » là où rien n'a été mesuré."""
+    found: dict[str, int] = {}
+    for cle, arg in BILLABLE_FOUND_ARGS.items():
+        brut = row.pop(arg, None)
+        if not isinstance(brut, str) or not brut.isdigit():
+            found = None  # type: ignore[assignment]
+            continue
+        if found is not None:
+            found[cle] = int(brut)
+    return found
+
 
 def list_billable_calls_for_org(
     org_id: int, tool: str, *, since: Optional[str] = None,
@@ -1034,8 +1060,10 @@ def list_billable_calls_for_org(
     sous-facture sans lever d'erreur. Le relevé ne doit JAMAIS repasser par là.
 
     Projection ÉTROITE par construction : id, outil, date, quantité, mode de
-    clé, et l'identité du job relevé (`job_id`, lue pour la seule liste fermée
-    `BILLABLE_JOB_ARGS` — `None` pour tout autre outil). Ni `sub`, ni `email`,
+    clé, l'identité du job relevé (`job_id`, lue pour la seule liste fermée
+    `BILLABLE_JOB_ARGS` — `None` pour tout autre outil) et ce qu'il a trouvé
+    (`found`, contacts par sorte, lu pour `BILLABLE_FOUND_ARGS` — `None` quand
+    rien n'a été tracé). Ni `sub`, ni `email`,
     ni `error`, ni aucun autre argument — la lentille est lisible par tout
     membre, et ce qu'il lit est ce que son org consomme, pas qui a fait quoi.
     Seuls les appels `ok` : un échec n'a rien consommé chez le fournisseur."""
@@ -1062,6 +1090,7 @@ def list_billable_calls_for_org(
             f"""
             SELECT l.id, l.tool, l.quantity, l.key_mode,
                    {_BILLABLE_JOB_ID_SQL} AS job_id,
+                   {_BILLABLE_FOUND_SQL},
                    {_AUDIT_KEYSET_AT} AS created_at
             FROM tool_calls l
             WHERE {' AND '.join(page_clauses)}
@@ -1073,6 +1102,8 @@ def list_billable_calls_for_org(
 
     encore = len(rows) > limit
     rows = [dict(r) for r in rows[:limit]]
+    for r in rows:
+        r["found"] = _found_from_row(r)
     return {"until_effectif": until, "total": total, "calls": rows,
             "next": (rows[-1]["created_at"], rows[-1]["id"]) if encore and rows else None}
 
