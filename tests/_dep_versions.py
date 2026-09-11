@@ -6,11 +6,14 @@ Découvert le 05/09/2026 en creusant un « socle connu » de 9 tests rouges/erre
 qu'on croyait propres à ce dépôt : dans un venv JETÉ avec des dépendances
 fraîchement résolues, les 9 passent. Dans le venv partagé :
 
-- **`fastmcp`** (plancher+plafond `>=3.4.2,<3.5`) : à 3.4.2 (le PLANCHER, installé
-  ici depuis longtemps), `pydantic_core.ValidationError` n'est pas encore
+- **`fastmcp`** : à 3.4.2, `pydantic_core.ValidationError` n'est pas encore
   enveloppée en `fastmcp.exceptions.ValidationError` — 3 tests de
   `test_github_leexi_productlane.py` qui l'attendent lèvent le type brut.
   Confirmé absent en 3.4.2, présent en 3.4.7.
+  ⚠️ Depuis le 11/09/2026 le manifeste déclare `>=3.4.7,<3.5` (pour un tout autre
+  motif : le correctif JWKS de 3.4.5). Ce seuil-ci et le plancher du manifeste
+  disent donc la même chose, et ce détecteur ne parle plus que d'un venv EN
+  DESSOUS de ce qui est déclaré — c'est-à-dire d'un venv non réinstallé.
 - **`france_opendata`** (tiré transitivement par oto-core, `>=0.7.0`, sans
   plafond) : à 0.11.0 (installé ici), des classes/modules entiers ont disparu
   du paquet (`EgaproClient`, et 13 modules data listés par

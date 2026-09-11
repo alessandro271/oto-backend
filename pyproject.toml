@@ -17,7 +17,29 @@ dependencies = [
     # on lance la suite, on borne plus haut. Extra `apps` = prefab_ui (MCP Apps
     # SEP-1865) consommé par les tools *_app. Schéma plat des tools validé sur 3.4
     # (ADR 0009).
-    "fastmcp[apps]>=3.4.2,<3.5",
+    #
+    # ⚠️ **Le PLANCHER est le seul levier qui atteigne la production** (mesuré le
+    # 11/09/2026). `deploy/oto-mcp-bluegreen.sh` installe par `pip install -e .` dans
+    # un venv qui existe déjà, et pip ne met JAMAIS à jour une dépendance déjà
+    # satisfaite : chaque couleur garde ce qu'elle a résolu le jour de sa création.
+    # Il n'y a rien d'autre — `uv.lock` est gitignoré et personne ne le lit, et la CI
+    # résout à neuf à chaque run, donc elle teste déjà plus récent que ce qui sert.
+    # Relevé ce jour-là : bleu (production) en 3.4.2, vert (attente) et préproduction
+    # en 3.4.7. Le plancher est donc aussi la seule façon d'ÉCRIRE une version servie.
+    #
+    # 3.4.7 — plancher monté le 11/09/2026 pour un seul correctif, celui de 3.4.5
+    # (`providers/jwt.py`, amont #4515) : **une seule clé de type non supporté dans le
+    # trousseau JWKS faisait rejeter TOUS les jetons** par `JWTVerifier`, y compris
+    # ceux signés par une clé supportée du même trousseau — `_jwk_to_pem` levait dans
+    # la boucle de remplissage du cache et perdait le trousseau entier. Éprouvé sur
+    # les deux versions : trousseau à une clé EC → accepté des deux côtés ; le même
+    # plus une clé Ed25519 → REFUSÉ en 3.4.2, accepté en 3.4.7 ; jeton d'une clé
+    # étrangère → refusé des deux côtés. `auth.oto.cx/oidc/jwks` ne sert aujourd'hui
+    # qu'une clé (EC/ES384) : la panne d'authentification est LATENTE, elle part le
+    # jour où le fournisseur d'identité publie une clé EdDSA. Ce plancher ne touche
+    # PAS `mcp` (non déclarée, tirée par fastmcp en `>=1.24,<2.0`) : aucun des
+    # comportements de transport de mcp 1.30.0 n'arrive avec lui.
+    "fastmcp[apps]>=3.4.7,<3.5",
     # lib connecteurs (oto.tools) — PLUS de dép à la CLI (otomata#13). PINNÉ sur un
     # tag git (≠ @main flottant) : une version déployée = une coordonnée reproductible
     # (SHA backend + ce pin). PyPI ne reçoit pas chaque merge (publish manuel, lag) →
