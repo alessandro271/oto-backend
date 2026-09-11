@@ -207,6 +207,10 @@ _DECLARATIONS: tuple[str, ...] = (
     # (projets et issues y naissent, puis sont reflétés). Les deux cartes se
     # lisent ensemble.
     "productlane",
+    # --- administration d'une marketplace métier — câblé 2026-09-11 ----------
+    # Jeton PERSONNEL d'un administrateur de la marketplace (byo_user seul) ; le
+    # seul connecteur du catalogue qui écrit dans un produit que nous opérons.
+    "hellostock",
     # --- porteurs de CLÉ, aucun outil (kind="credential") --------------------
     # La clé de modèle qu'une org dépose pour ses agents programmés. Ils ne
     # servent aucun tool : le worker la consomme pour le compte de l'org.
