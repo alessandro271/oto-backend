@@ -702,13 +702,16 @@ def register(mcp: FastMCP) -> None:
         `awarded`, `departement` is matched as the PREFIX of the place-of-performance
         code (a department "59" or a postcode — the code type varies per contract).
         Notices only: `descripteur`, `date_to`, `type_marche`. Awarded only:
-        `titulaire_siret` (every contract won by that establishment),
-        `acheteur_siret` (every contract passed by that buyer). A parameter the
-        chosen op cannot honour is REFUSED, never silently dropped.
+        `titulaire_siret` (every contract won by that establishment, alone or in
+        a consortium), `acheteur_siret` (every contract passed by that buyer). A
+        parameter the chosen op cannot honour is REFUSED, never silently dropped.
 
-        ⚠️ awarded: the main winner has NO name column in the source (only
-        co-winners 2 and 3 do) — resolve it from its SIRET with `fr_siret`.
-        `denomination: null` on rank 1 is the source's shape, not a gap.
+        awarded reads two regimes split at the notification date — the 2022
+        decree from 2024 on, the 2019 decree before — and each record carries its
+        `arrete`. ⚠️ Since 2024 the source publishes NO names at all (buyer, place,
+        winners); before 2024, never the main winner's. Resolve them from their
+        SIRET with `fr_siret`: `nom`/`denomination: null` is the source's shape,
+        not a gap.
 
         `fields` keeps only these keys in each record; the envelope (counts,
         pagination) always stays.

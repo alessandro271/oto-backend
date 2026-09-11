@@ -13,7 +13,7 @@ interroge identité, finances, dirigeants, événements légaux et appels d'offr
 - `fr_get(siren)` — fiche complète agrégée : identité + 7 ratios du dernier bilan inpi + événements bodacc
 - `fr_bilans(siren)` puis `fr_bilan(siren, date_cloture)` — historique des dépôts et bilan détaillé (CA, EBE, endettement…)
 - `fr_directors(siren)`, `fr_events(siren)`, `fr_tenders_search(query=…)` — dirigeants, événements bodacc, appels d'offres boamp
-- `fr_tenders_search(op="awarded", query= | titulaire_siret= | departement=)` — les marchés **attribués** (decp) : qui a gagné, pour combien, notifié quand. l'issue, là où `op="notices"` (le défaut, boamp) ne donne que l'avis — donc la concurrence réelle d'un territoire. un paramètre propre à l'autre op est refusé, pas ignoré. ⚠️ le titulaire principal n'a pas de colonne de nom dans la source : le résoudre par son siret avec `fr_siret`.
+- `fr_tenders_search(op="awarded", query= | titulaire_siret= | departement=)` — les marchés **attribués** (decp) : qui a gagné, pour combien, notifié quand. l'issue, là où `op="notices"` (le défaut, boamp) ne donne que l'avis — donc la concurrence réelle d'un territoire. un paramètre propre à l'autre op est refusé, pas ignoré. deux régimes lus, découpés à la notification : l'arrêté 2022 depuis 2024, l'arrêté 2019 avant — chaque marché porte son `arrete`. ⚠️ depuis 2024 la source ne publie aucun nom (acheteur, lieu, titulaire), et avant 2024 jamais celui du titulaire principal : les résoudre par leur siret avec `fr_siret`.
 - `fr_accords_search(siren=…)`, `fr_egapro_declaration(siren)`, `fr_avis_sirene(siret)` — accords d'entreprise, index égalité f-h, avis de situation insee (pdf)
 
 ## usage — aides publiques (subventions, prêts, aap)
