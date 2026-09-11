@@ -292,7 +292,7 @@ def rename_datastore_by_id(ns_id: int, new: str) -> bool:
             ).fetchone()
             if not cur:
                 raise ValueError("namespace introuvable")
-            if cur["namespace"] == new:
+            if cur["datastore"] == new:
                 return True
             if conn.execute(
                 "SELECT 1 FROM user_datastores WHERE owner_type = %s AND owner_id = %s AND namespace = %s",
