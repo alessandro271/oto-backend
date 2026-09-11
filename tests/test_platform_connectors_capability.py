@@ -186,6 +186,29 @@ def test_les_deux_couches_sont_independantes(socle, admin, monkeypatch):
     assert by[("user", "u2")]["label"] == "u2@x.io" == by[("user", "u2")]["email"]
 
 
+def test_le_quota_journalier_du_grant_est_rapporte(socle, admin, monkeypatch):
+    """Le quota d'un grant vit dans `meta.rate_limit_by` de l'instance qui l'accorde,
+    et `platform_revoke` l'EFFACE : qui veut ré-accorder à l'identique doit pouvoir le
+    relever ici avant de révoquer. Un grant sans quota et un bénéficiaire sans clé (option
+    seule) rendent `null` — ni l'un ni l'autre n'a de quota à conserver."""
+    from oto_mcp import credentials_store
+    monkeypatch.setattr(credentials_store, "list_platform_instances",
+                        lambda p: [{"share_mode": "closed",
+                                    "share_down": ["org:35", "user:u-9"],
+                                    "meta": {"rate_limit_by": {"org:35": 40,
+                                                               "user:u-orphelin": 9}}}])
+    monkeypatch.setattr(pc.db, "list_option_comps_for_option", lambda o: [
+        {"entity_type": "user", "entity_id": "u-2"}])
+    code, out = call("platform.connector.access_list", path_params={"provider": "unipile"})
+    assert code == 200, out
+    by = {(b["scope"], b["id"]): b for b in out["beneficiaries"]}
+    assert by[("org", "35")]["daily_quota"] == 40
+    assert by[("user", "u-9")]["has_key"] and by[("user", "u-9")]["daily_quota"] is None
+    assert not by[("user", "u-2")]["has_key"] and by[("user", "u-2")]["daily_quota"] is None
+    # Un quota sans grant dans `share_down` ne fabrique pas de bénéficiaire.
+    assert ("user", "u-orphelin") not in by
+
+
 def test_une_org_fantome_garde_un_libelle_lisible(socle, admin, monkeypatch):
     """Un grant vers une org supprimée depuis : la ligne reste, avec `org #<id>` — la
     faire disparaître cacherait le grant à nettoyer."""

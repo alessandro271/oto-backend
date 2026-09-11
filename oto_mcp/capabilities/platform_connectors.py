@@ -131,11 +131,19 @@ class ActivationClearView(BaseModel):
 class Beneficiary(BaseModel):
     """Une org ou un membre à qui la plateforme ouvre ce connecteur. `has_key` = grant
     sur la clé plateforme (couche 2) ; `has_option` = option offerte (couche 3). Les
-    deux sont indépendants : l'un sans l'autre est un état normal, pas une incohérence."""
+    deux sont indépendants : l'un sans l'autre est un état normal, pas une incohérence.
+
+    `daily_quota` = le quota journalier du grant de clé, lu dans `meta.rate_limit_by`
+    de l'instance plateforme dont le `share_down` nomme ce bénéficiaire ; `null` = pas
+    de quota posé, ou pas de grant de clé. ⚠️ `platform_revoke` EFFACE ce quota : qui
+    veut ré-accorder à l'identique doit le relever AVANT de révoquer. ⚠️ Pour un
+    connecteur passé au modèle par chaîne (`grants_chain.CHAIN_CONNECTORS`), le quota
+    vit sur l'arête du grant et n'est PAS rapporté ici."""
     scope: str                         # 'org' | 'user'
     id: str
     has_key: bool
     has_option: bool
+    daily_quota: Optional[int] = None  # quota du grant de clé (meta.rate_limit_by)
     label: Optional[str] = None
     logo_url: Optional[str] = None     # orgs
     email: Optional[str] = None        # membres
@@ -246,16 +254,24 @@ def _platform_access(ctx: ResolvedCtx, inp: PlatformAccessInput) -> dict:
     def touch(scope: str, sid: str) -> dict:
         k = f"{scope}:{sid}"
         if k not in acc:
-            acc[k] = {"scope": scope, "id": sid, "has_key": False, "has_option": False}
+            acc[k] = {"scope": scope, "id": sid, "has_key": False, "has_option": False,
+                      "daily_quota": None}
         return acc[k]
 
     insts = credentials_store.list_platform_instances(inp.provider)
     open_tier = any(i["share_mode"] == "open" for i in insts)
     for inst in insts:
+        # Le quota d'un grant vit à côté du grant, sur la MÊME instance
+        # (`credentials_store.platform_grant`). Lecture seule : rien de la résolution
+        # ne change, et un connecteur par chaîne garde le quota sur son arête.
+        quotas = (inst.get("meta") or {}).get("rate_limit_by") or {}
         for g in inst["share_down"]:
             scope, _, sid = str(g).partition(":")
             if scope in ("user", "org") and sid:
-                touch(scope, sid)["has_key"] = True
+                rec = touch(scope, sid)
+                rec["has_key"] = True
+                if rec["daily_quota"] is None:
+                    rec["daily_quota"] = quotas.get(str(g))
     if option:
         for c in db.list_option_comps_for_option(option):
             if c["entity_type"] in ("user", "org"):

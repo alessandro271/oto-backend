@@ -192,6 +192,16 @@ de paiement).
 > anti-binding, **BYO-only** — en revente la liste est vide, hosted-auth conservé). Vue admin
 > **sièges clé plateforme** `GET /api/admin/unipile/seats` (super_admin, `db.unipile_account_owners`) :
 > réconcilie les comptes de l'instance partagée ↔ leur owner oto (flag **orphelin**).
+>
+> **Plafond de sièges hébergés par org.** `orgs.unipile_account_limit`, lu à la connexion
+> (`hosted_auth_url`) : `NULL` = pas de plafond propre → défaut plateforme
+> `OTO_MCP_UNIPILE_DEFAULT_LIMIT` (5 si absent) ; ⚠️ **`0` = sans plafond** (le test est
+> `if limit and count >= limit`). Surface admin : `GET /api/admin/orgs/{id}/unipile-limit`
+> (admin plateforme, vue `{org_id, limit, default_limit, effective_limit, accounts}`) et
+> `PUT` même chemin, corps `{"limit": int | null}` (super admin ; `null` = retour au
+> défaut, négatif = `400 invalid_body`). ⚠️ Le plafond ne gouverne que les connexions
+> **neuves** — rien n'est déconnecté au-dessus — et la synchronisation d'un plan
+> (`billing.apply_plan_entitlements`, retrait d'un plan offert) **réécrit** la colonne.
 
 > **Compte partagé autorisé (otomata-private#55).** Le **propriétaire** d'un compte
 > Unipile accorde à un **user nommé, cross-org** (⚠️ corrigé le 2026-09-02 : ce
@@ -500,3 +510,7 @@ comptabilité de miroir. Le défaut coupe donc le texte à **600 caractères** (
 > ⚠️ **Reste à faire au tag prod** : migrer `user_selected_connectors` (119 lignes `linkedin`
 > → `aiark`, dédoublonnées) — la DB est partagée preprod/prod, la migrer avant le tag
 > retirerait le connecteur de 119 toolbox encore servies par l'ancien code.
+
+### Org hébergée par un tenant tiers
+
+Un plan d'oto — forcé (`oto_admin_set_plan`) ou retiré — **n'écrit pas** le plafond de comptes d'une org hébergée par un tenant tiers : ce plafond appartient à la facturation du partenaire, qui le pose via `PUT /api/admin/orgs/{id}/unipile-limit` (`billing._hosted_by_partner`). Une lecture de tenant qui échoue retombe sur le comportement d'avant : le plan écrit.
