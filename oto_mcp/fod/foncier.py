@@ -109,6 +109,16 @@ class _Beges:
                       "departement": departement, "obligee": obligee, "size": size})
 
 
+class _Bdnb:
+    def batiments(self, code_commune: Optional[str] = None, siren: Optional[str] = None,
+                  batiment_groupe_id: Optional[str] = None, departement: Optional[str] = None,
+                  emprise_min: Optional[float] = None, limit: int = 50) -> dict[str, Any]:
+        return _post("/api/foncier/bdnb",
+                     {"code_commune": code_commune, "siren": siren,
+                      "batiment_groupe_id": batiment_groupe_id, "departement": departement,
+                      "emprise_min": emprise_min, "limit": limit})
+
+
 class _DpeTertiaire:
     def diagnostics(self, code_commune: Optional[Any] = None, departement: Optional[str] = None,
                     secteur: Optional[str] = None, etiquette: Optional[Any] = None,
@@ -180,6 +190,7 @@ sitadel = _Sitadel()
 enedis = _Enedis()
 odre = _Odre()
 beges = _Beges()
+bdnb = _Bdnb()
 dpe_tertiaire = _DpeTertiaire()
 dvf = _Dvf()
 dpe = _Dpe()

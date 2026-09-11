@@ -384,6 +384,7 @@ def register(mcp: FastMCP) -> None:
     enedis = fod_foncier.enedis
     odre = fod_foncier.odre
     beges = fod_foncier.beges
+    bdnb = fod_foncier.bdnb
     dpe_tertiaire = fod_foncier.dpe_tertiaire
     dvf = fod_foncier.dvf
     dpe = fod_foncier.dpe
@@ -792,6 +793,51 @@ def register(mcp: FastMCP) -> None:
             "total_pages": res.get("total_pages", 1),
             "data": [_compact_icpe(d) for d in res.get("data", [])],
         }
+
+    # --- propriétaire d'un bâtiment (BDNB, CSTB) ----------------------------
+
+    @mcp.tool()
+    def foncier_proprietaire(
+        code_commune: Optional[str] = None,
+        siren: Optional[str] = None,
+        batiment_groupe_id: Optional[str] = None,
+        departement: Optional[str] = None,
+        emprise_min: Optional[float] = None,
+        limit: int = 50,
+    ) -> dict:
+        """Buildings and the SIREN of their legal-entity owner (BDNB, CSTB).
+
+        The only public source that ties a PLACE to a LEGAL ENTITY without address
+        matching: the link comes from the land registry, so it is exact. Works both
+        ways — `code_commune` (+ `emprise_min`) lists a town's large buildings with
+        their owner, `siren` lists every building a company owns.
+
+        Each record also carries floor footprint, use, construction year, DPE class
+        and the building's professional electricity and gas consumption (kWh/year,
+        2020 vintage), so a site is qualified without a second call.
+
+        ⚠️ ONLY legal entities published in MAJIC are here. Natural persons — family
+        SCIs, farmers, craftsmen — are anonymised at source by the tax administration
+        and absent entirely: a missing building is NOT a building without an owner.
+        Every response repeats this in `couverture_partielle`.
+
+        ⚠️ The upstream API serves 10 rows per call, so `limit` above 10 costs one
+        round-trip per additional 10 — `requetes` says how many were made. `total` is
+        what was RETURNED, never what exists: the source publishes no count.
+
+        Args:
+            code_commune: INSEE commune code.
+            siren: every building owned by this company (indexed, fast).
+            batiment_groupe_id: one building group (`bdnb-bg-…`).
+            departement: INSEE department code.
+            emprise_min: minimum ground footprint in m² — the prospecting filter.
+            limit: buildings returned, 1 to 500 (default 50).
+        """
+        return bdnb.batiments(
+            code_commune=code_commune, siren=siren,
+            batiment_groupe_id=batiment_groupe_id, departement=departement,
+            emprise_min=emprise_min, limit=limit,
+        )
 
     # --- valorisation immobilière (DVF+ Cerema, depuis 2014) — repris de `dvf` -
 
