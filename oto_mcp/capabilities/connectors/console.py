@@ -275,7 +275,9 @@ CAPABILITIES += [
             "`name` — its tools do NOT mount in the current conversation: reach them right "
             "away via oto_call, or open a new one) / pause / unselect. Org admin, on "
             "`org_id`: op=force (push `name` into a `member`'s toolbox — visibility only, "
-            "not an access grant) / recommend (set the org baseline `connectors`, [] clears)."),
+            "not an access grant) / recommend (set the org's KIT `connectors` as a whole list: the "
+            "DIFFERENCE is installed for current members too, never over their own choice; [] "
+            "empties it)."),
         mcp="oto_connector",
     ),
     Capability(

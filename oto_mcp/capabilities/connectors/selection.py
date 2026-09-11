@@ -31,6 +31,9 @@ from ...connectors import selection as connector_selection
 from .._authz import ORG_ADMIN_OF, SUB_ONLY
 from .._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding)
 from ..registry import CAPABILITIES
+from .kit import (BulkSelectInput, BulkSelectResult,  # noqa: F401 — ré-exportés
+                  OrgRecommendedConnectors, RecommendInput, UnsetDefaultInput,
+                  UnsetDefaultResult, _bulk_select, _recommend, _unset_default)
 from .catalog_card import (AuthDescriptor, ConnectFlow, CredentialField,
                            DocSection, FreeTier)
 
@@ -57,21 +60,6 @@ class MyConnectorsInput(BaseModel):
 
 class ConnectorActionInput(BaseModel):
     name: str                            # nom de connecteur (registre providers/)
-
-
-class RecommendInput(BaseModel):
-    org_id: int                          # injecté du placeholder {id} (ORG_ADMIN_OF)
-    connectors: list[str] = []           # baseline proposée ; [] = aucune recommandation
-
-
-class BulkSelectInput(BaseModel):
-    org_id: int
-    name: str                            # connecteur (placeholder {name}, auto-mappé)
-
-
-class UnsetDefaultInput(BaseModel):
-    org_id: int
-    name: str                            # connecteur (placeholder {name}, auto-mappé)
 
 
 class ReachableInstance(BaseModel):
@@ -241,37 +229,6 @@ class ConnectorSelectionState(BaseModel):
     # au lieu de rendre `removed: false` sur un 200 — un succès qui n'a rien fait est
     # pire qu'un refus, même pattern que l'unlink de projet (`d3c5de40`).
     removed: Optional[bool] = None
-
-
-class OrgRecommendedConnectors(BaseModel):
-    """Écho de la baseline d'org posée. C'est le socle de départ réel de tout
-    NOUVEAU membre (ADR 0050), jamais une rétroaction sur les membres existants."""
-    org_id: int
-    recommended: list[str]                  # [] = retour au seul socle plateforme
-
-
-class BulkSelectResult(BaseModel):
-    """Résultat du geste « rendre ce connecteur actif pour toute l'org » — deux
-    effets comptés séparément parce qu'ils portent sur deux populations."""
-    org_id: int
-    connector: str
-    # Membres ACTUELS sans choix posé, à qui le connecteur vient d'être activé.
-    activated: int
-    # Membres SAUTÉS parce qu'ils avaient déjà un choix (actif OU pause) : leur
-    # décision n'est jamais réécrite. `skipped>0` n'est donc pas une anomalie.
-    skipped: int
-    # `false` = le connecteur était DÉJÀ dans la baseline d'org (rien à ajouter),
-    # pas un refus.
-    added_to_org_defaults: bool
-
-
-class UnsetDefaultResult(BaseModel):
-    """Écho du retrait de la baseline d'org. `removed=false` = il n'y était pas.
-    Dans les DEUX cas aucun membre existant n'est touché, et le connecteur reste
-    visible dans la library (ce n'est pas un levier d'exposition)."""
-    org_id: int
-    connector: str
-    removed: bool
 
 
 def _visible_catalog(ctx: ResolvedCtx) -> list[dict]:
@@ -583,73 +540,6 @@ def _unselect(ctx: ResolvedCtx, inp: ConnectorActionInput) -> dict:
     return {"connector": inp.name, "state": "not_selected", "removed": True}
 
 
-def _recommend(ctx: ResolvedCtx, inp: RecommendInput) -> dict:
-    """« Org propose » : l'org_admin pose la baseline de connecteurs par défaut de
-    l'org. Depuis peu ce N'EST PLUS un simple badge consultatif : c'est la source
-    RÉELLE du socle de départ de tout NOUVEAU membre (union avec le socle plateforme
-    au premier seed, `session_visibility.compute_hidden_tools`). N'affecte JAMAIS un
-    membre déjà seedé (existant) — ceux-là restent sur leurs propres choix, sauf
-    poussée explicite via `connectors.bulk_select`. [] efface la baseline (retour au
-    seul socle plateforme, vide par défaut)."""
-    ok = org_store.set_org_default_connectors(inp.org_id, inp.connectors)
-    if not ok:
-        raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
-    return {"org_id": inp.org_id, "recommended": inp.connectors}
-
-
-def _bulk_select(ctx: ResolvedCtx, inp: BulkSelectInput) -> dict:
-    """[org admin] Un seul geste, deux effets — le moins de friction possible pour
-    « rendre ce connecteur actif pour toute l'org, maintenant ET pour la suite » :
-    (1) push explicite immédiat : active `name` pour tout membre ACTUEL de l'org
-    qui n'a encore fait AUCUN choix pour ce connecteur (ni actif ni pause) — ne
-    réécrit jamais un choix déjà posé, un membre qui a pause/désinstallé reste sur
-    sa décision ; (2) persiste `name` dans la baseline par défaut de l'org
-    (`org_store.default_connectors`, fusion additive — n'écrase pas les autres
-    entrées déjà présentes) pour que tout NOUVEAU membre le reçoive pré-activé à
-    son premier seed, sans repasser par ici."""
-    if inp.name not in providers.REGISTRY:
-        raise AuthzDenied(404, "unknown_connector", f"Connecteur `{inp.name}` inconnu.")
-    if inp.name not in connector_activation.exposed_connectors(inp.org_id):
-        raise AuthzDenied(409, "org_disabled",
-                          f"Connecteur `{inp.name}` non disponible pour cette org — rien à "
-                          f"activer en masse (le plafond d'exposition n'est jamais relâché).")
-    activated = 0
-    skipped = 0
-    # Geste d'ORG : provenance `kit` (ADR 0050 §E7), jamais `set_state` — qui est le
-    # geste du membre et poserait `membre`. Un retrait du membre est désormais RETENU,
-    # et `install_for_member` le respecte : la promesse « never overrides a member's
-    # own pause/uninstall » de la description devient vraie pour le retrait aussi.
-    from ... import db
-    members = org_store.list_org_members(inp.org_id)
-    with db._connect() as conn:
-        for m in members:
-            if connector_selection.install_for_member(
-                    conn, m["sub"], inp.name, inp.org_id, connector_selection.KIT) == "installed":
-                activated += 1
-            else:
-                skipped += 1
-    current_defaults = set(org_store.get_org_default_connectors(inp.org_id) or [])
-    already_default = inp.name in current_defaults
-    if not already_default:
-        org_store.set_org_default_connectors(inp.org_id, sorted(current_defaults | {inp.name}))
-    return {"org_id": inp.org_id, "connector": inp.name, "activated": activated, "skipped": skipped,
-            "added_to_org_defaults": not already_default}
-
-
-def _unset_default(ctx: ResolvedCtx, inp: UnsetDefaultInput) -> dict:
-    """[org admin] Symétrique SOUSTRACTIF de `bulk_select` : retire `name` de la
-    baseline par défaut de l'org — plus aucun FUTUR membre ne le recevra
-    pré-activé. Ne touche AUCUN membre existant (n'active ni ne désactive
-    personne, et surtout ne masque JAMAIS le connecteur du catalogue/recherche —
-    contrairement à l'ancien levier d'exposition, un membre reste toujours libre
-    de le trouver et de le sélectionner lui-même)."""
-    current = set(org_store.get_org_default_connectors(inp.org_id) or [])
-    removed = inp.name in current
-    if removed:
-        org_store.set_org_default_connectors(inp.org_id, sorted(current - {inp.name}))
-    return {"org_id": inp.org_id, "connector": inp.name, "removed": removed}
-
-
 CAPABILITIES += [
     Capability(
         key="connectors.me", handler=_me, Input=MyConnectorsInput, authz=SUB_ONLY,
@@ -717,11 +607,16 @@ CAPABILITIES += [
         key="connectors.recommend", handler=_recommend, Input=RecommendInput,
         Output=OrgRecommendedConnectors,
         authz=ORG_ADMIN_OF("org_id"),
-        description="[org admin] Set your org's default connector set. This is the REAL starting "
-                    "toolbox for every NEW member (merged with the platform baseline at their "
-                    "first session) — not just a library badge. Never retroactively touches an "
-                    "existing member; they keep whatever they've already chosen. connectors = "
-                    "list of connector names ([] clears back to the platform-only baseline).",
+        description="[org admin] Set your org's KIT as a whole list — the connectors your org "
+                    "installs into its members' toolboxes. Only the DIFFERENCE with the current "
+                    "kit is applied, to current members AND to members who join later: each "
+                    "added connector is installed for every member who doesn't have it (never "
+                    "over a member's own choice — a connector they paused or removed themselves "
+                    "stays that way); a connector taken out of the kit is uninstalled from no "
+                    "one. Connectors already in the kit are not replayed. Returns, per changed "
+                    "connector, installed / already_active / paused / removed_by_member / "
+                    "masked_by_access. Members' agents see it at their NEXT conversation. "
+                    "connectors = connector names ([] empties the kit).",
         errors=(DeclaredError(404, "unknown_org", "org inconnue"),),
         rest=RestBinding("PUT", "/api/orgs/{id}/default-connectors", _ID),
     ),
@@ -729,11 +624,14 @@ CAPABILITIES += [
         key="connectors.bulk_select", handler=_bulk_select, Input=BulkSelectInput,
         Output=BulkSelectResult,
         authz=ORG_ADMIN_OF("org_id"),
-        description="[org admin] Make a connector active for the whole org, now and going "
-                    "forward, in one call: activates it for every CURRENT member who hasn't made "
-                    "an explicit choice yet (never overrides a member's own pause/uninstall), AND "
-                    "adds it to the org's default set so every member who joins LATER starts with "
-                    "it pre-activated too. Requires the org to already expose the connector.",
+        description="[org admin] Add a connector to your org's KIT: it is installed right away "
+                    "for every current member who doesn't have it, and for every member who "
+                    "joins later. Never over a member's own choice — a member who paused it or "
+                    "removed it themselves keeps it that way. If it is ALREADY in the kit, "
+                    "nothing is replayed: the response says why and how to apply it anyway. "
+                    "Requires the org to expose the connector. Returns activated (installed "
+                    "now), skipped, and the per-population detail in `changes`. Members' "
+                    "agents see it at their NEXT conversation.",
         errors=(DeclaredError(404, "unknown_connector",
                               "nom inconnu du registre"),
                 DeclaredError(409, "org_disabled",
@@ -745,10 +643,11 @@ CAPABILITIES += [
         key="connectors.unset_default", handler=_unset_default, Input=UnsetDefaultInput,
         Output=UnsetDefaultResult,
         authz=ORG_ADMIN_OF("org_id"),
-        description="[org admin] Remove a connector from the org's default set — members who "
-                    "join later stop getting it pre-activated. Never touches an existing "
-                    "member's own active/paused choice, and never hides the connector from "
-                    "search/the library (unlike the platform/org exposure ceiling).",
+        description="[org admin] Take a connector out of your org's KIT: members who join "
+                    "later no longer get it. It is uninstalled from NO current member — the "
+                    "response counts who keeps it, by who installed it (`kept`). It never hides "
+                    "the connector from search/the library: that is the availability switch, "
+                    "a different lever.",
         rest=RestBinding("DELETE", "/api/orgs/{id}/connectors/{name}/bulk-select", _ID),
     ),
 ]
