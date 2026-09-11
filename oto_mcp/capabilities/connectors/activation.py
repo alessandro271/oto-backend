@@ -79,6 +79,11 @@ class ActivationOverrideSet(BaseModel):
     group_id: Optional[int] = None          # présent au grain ÉQUIPE
     connector: str
     enabled: bool
+    # Grain ORG seulement, et présent seulement si le connecteur est dans le KIT de
+    # l'org (ADR 0050 §E2) : couper ne le retire pas du kit — il y reste, installé
+    # et masqué chez tous, et revient seul à la réouverture. `kit_note` le dit.
+    in_kit: Optional[bool] = None
+    kit_note: Optional[str] = None
 
 
 class ActivationOverrideCleared(BaseModel):
@@ -91,6 +96,8 @@ class ActivationOverrideCleared(BaseModel):
     group_id: Optional[int] = None          # présent au grain ÉQUIPE
     connector: str
     cleared: bool
+    in_kit: Optional[bool] = None           # cf. `ActivationOverrideSet`
+    kit_note: Optional[str] = None
 
 
 class OrgActivationRow(BaseModel):
@@ -188,13 +195,37 @@ def _require_master_exposed(name: str) -> None:
                           f"peut pas l'activer (le plafond plateforme n'est jamais relâché).")
 
 
+_KIT_COUPE = ("Il est dans le kit de ton organisation : couper ne l'en retire pas. Il reste "
+              "installé chez tes membres, masqué chez tous tant qu'il est coupé, et revient "
+              "seul à la réouverture. Pour qu'il ne s'installe plus, retire-le du kit.")
+_KIT_OUVERT = ("Il est dans le kit de ton organisation : ses outils reviennent chez les "
+               "membres qui l'ont installé, à leur prochaine conversation.")
+
+
+def _signal_kit(org_id: int, name: str) -> dict:
+    """ADR 0050 §E2 — la réponse de la coupure (ou de la réouverture) dit que le
+    connecteur est au kit. Lu APRÈS le geste : c'est l'état résultant qu'on décrit.
+    Le geste a déjà réussi quand on lit : un échec de lecture le DIT au lieu de
+    changer un succès en erreur."""
+    try:
+        if name not in (org_store.get_org_default_connectors(org_id) or []):
+            return {}
+        ouvert = name in connector_activation.exposed_connectors(org_id)
+    # noqa: SILENT — l'état du kit non lu se DIT dans la réponse, jamais un 500 sur un succès
+    except Exception:
+        return {"kit_note": "L'appartenance au kit n'a pas pu être lue : rien n'est dit ici "
+                            "du kit, dans un sens ni dans l'autre."}
+    return {"in_kit": True, "kit_note": _KIT_OUVERT if ouvert else _KIT_COUPE}
+
+
 def _org_set(ctx: ResolvedCtx, inp: OrgActivationSetInput) -> dict:
     if inp.name not in providers.REGISTRY:
         raise AuthzDenied(404, "unknown_connector", f"Connecteur `{inp.name}` inconnu.")
     if inp.enabled:
         _require_master_exposed(inp.name)
     connector_activation.set_activation(inp.name, inp.enabled, org_id=inp.org_id, set_by=ctx.sub)
-    return {"org_id": inp.org_id, "connector": inp.name, "enabled": inp.enabled}
+    return {"org_id": inp.org_id, "connector": inp.name, "enabled": inp.enabled,
+            **_signal_kit(inp.org_id, inp.name)}
 
 
 def _org_clear(ctx: ResolvedCtx, inp: OrgActivationClearInput) -> dict:
@@ -202,7 +233,8 @@ def _org_clear(ctx: ResolvedCtx, inp: OrgActivationClearInput) -> dict:
     if inp.name not in providers.REGISTRY:
         raise AuthzDenied(404, "unknown_connector", f"Connecteur `{inp.name}` inconnu.")
     connector_activation.clear_activation(inp.name, inp.org_id)
-    return {"org_id": inp.org_id, "connector": inp.name, "cleared": True}
+    return {"org_id": inp.org_id, "connector": inp.name, "cleared": True,
+            **_signal_kit(inp.org_id, inp.name)}
 
 
 # ── tier ÉQUIPE (ADR 0012, restrict-only) ────────────────────────────────────
@@ -329,7 +361,10 @@ CAPABILITIES += [
         authz=ORG_ADMIN_OF("org_id"), refresh_visibility=True,
         description="[org admin] Force a connector ON or OFF for your whole org (hard ceiling). "
                     "Enabling requires the platform to expose it (the platform ceiling is never "
-                    "lifted); disabling always works. Takes effect for members on their next session.",
+                    "lifted); disabling always works. Takes effect for members on their next session. "
+                    "If the connector is in your org's kit, the response says so (`in_kit`, "
+                    "`kit_note`): cutting it keeps it in the kit and installed, hidden for "
+                    "everyone, and it comes back on its own when reopened.",
         rest=RestBinding("PUT", "/api/orgs/{id}/connectors/{name}/activation", _ID),
     ),
     Capability(

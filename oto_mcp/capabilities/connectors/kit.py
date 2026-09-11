@@ -68,8 +68,12 @@ class _KitApplied(BaseModel):
     # Connecteurs nommés par le geste qui n'ont PAS changé le kit (déjà dedans pour
     # un ajout, absents pour un retrait) : rien n'est rejoué chez les membres.
     unchanged: list[str]
+    # Connecteurs du kit que l'org a coupés APRÈS les y avoir mis : ils y restent,
+    # installés et masqués chez tous, et reviennent seuls à la réouverture (§E2).
+    cut: list[str] = []
     note: str                                # quand l'agent d'un membre le verra
     unchanged_note: Optional[str] = None     # pourquoi rien n'a été rejoué, et comment faire
+    cut_note: Optional[str] = None           # présent quand `cut` n'est pas vide
 
 
 class OrgRecommendedConnectors(_KitApplied):
@@ -103,6 +107,26 @@ def _appliquer(org_id: int, **geste) -> dict:
         return connector_kit.appliquer(org_id, **geste)
     except connector_kit.OrgInconnue:
         raise AuthzDenied(404, "unknown_org", f"Org #{org_id} inconnue.")
+    except connector_kit.AjoutRefuse as e:
+        _refus_d_ajout(e)
+
+
+def _refus_d_ajout(e) -> None:
+    """§E2 — le refus dit POURQUOI, au geste : l'admin l'apprend ici, pas des semaines
+    plus tard chez un membre. Mêmes jetons que ceux déjà servis par la gouvernance
+    d'activation. Trois `raise` LITTÉRAUX et non un couple calculé : le cliquet des refus
+    déclarés (`tests/_refus_atteignables.py`) ne lit que les littéraux — un code calculé
+    rend la déclaration « décorative » à ses yeux, alors qu'elle est servie."""
+    raisons = {r["reason"] for r in e.refus}
+    detail = " ; ".join(f"`{r['connector']}` {connector_kit.RAISONS[r['reason']]}"
+                        for r in e.refus)
+    message = f"Refusé, rien n'a été écrit (ni au kit, ni chez tes membres) : {detail}."
+    details = {"refused": e.refus}
+    if "unknown" in raisons:
+        raise AuthzDenied(404, "unknown_connector", message, details=details)
+    if "platform_disabled" in raisons:
+        raise AuthzDenied(409, "platform_disabled", message, details=details)
+    raise AuthzDenied(409, "org_disabled", message, details=details)
 
 
 def _change(out: dict, name: str) -> Optional[dict]:
@@ -119,14 +143,9 @@ def _recommend(ctx: ResolvedCtx, inp: RecommendInput) -> dict:
 def _bulk_select(ctx: ResolvedCtx, inp: BulkSelectInput) -> dict:
     """[org admin] Ajoute `name` au kit : installé chez chaque membre actuel qui ne
     l'a pas (jamais par-dessus son choix), et chez tout futur membre au semis."""
-    from ... import providers
-    from ...connectors import activation as connector_activation
-    if inp.name not in providers.REGISTRY:
-        raise AuthzDenied(404, "unknown_connector", f"Connecteur `{inp.name}` inconnu.")
-    if inp.name not in connector_activation.exposed_connectors(inp.org_id):
-        raise AuthzDenied(409, "org_disabled",
-                          f"Connecteur `{inp.name}` non disponible pour cette org — rien à "
-                          f"activer en masse (le plafond d'exposition n'est jamais relâché).")
+    # La garde d'écriture (§E2) est DANS la fonction d'application : même refus,
+    # mêmes jetons (`unknown_connector`, `org_disabled`, `platform_disabled`) pour les
+    # trois gestes. Un connecteur déjà au kit n'est pas un ajout : il n'est pas jugé.
     out = _appliquer(inp.org_id, ajouter=[inp.name])
     ch = _change(out, inp.name)
     laisses = (ch["already_active"] + ch["paused"] + ch["removed_by_member"]) if ch else 0

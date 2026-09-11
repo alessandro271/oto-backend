@@ -616,8 +616,21 @@ CAPABILITIES += [
                     "one. Connectors already in the kit are not replayed. Returns, per changed "
                     "connector, installed / already_active / paused / removed_by_member / "
                     "masked_by_access. Members' agents see it at their NEXT conversation. "
+                    "ADDING a connector unknown to the catalog or not available for your org "
+                    "is REFUSED, naming why — nothing is written. A connector already in the "
+                    "kit that your org has since cut stays in it: installed, hidden for "
+                    "everyone, back on its own when reopened (listed in `cut`). "
                     "connectors = connector names ([] empties the kit).",
-        errors=(DeclaredError(404, "unknown_org", "org inconnue"),),
+        errors=(DeclaredError(404, "unknown_org", "org inconnue"),
+                DeclaredError(404, "unknown_connector",
+                              "un connecteur AJOUTÉ au kit est inconnu du registre — rien "
+                              "n'est écrit"),
+                DeclaredError(409, "org_disabled",
+                              "un connecteur AJOUTÉ au kit n'est pas disponible pour les "
+                              "membres de l'org (l'org l'a coupé) — rien n'est écrit"),
+                DeclaredError(409, "platform_disabled",
+                              "un connecteur AJOUTÉ au kit est coupé par la plateforme — "
+                              "rien n'est écrit"),),
         rest=RestBinding("PUT", "/api/orgs/{id}/default-connectors", _ID),
     ),
     Capability(
@@ -636,7 +649,10 @@ CAPABILITIES += [
                               "nom inconnu du registre"),
                 DeclaredError(409, "org_disabled",
                               "l'org a désactivé ce connecteur : l'activer pour "
-                              "tous contredirait sa propre gouvernance"),),
+                              "tous contredirait sa propre gouvernance"),
+                DeclaredError(409, "platform_disabled",
+                              "la plateforme a coupé ce connecteur : l'org ne peut pas "
+                              "l'installer"),),
         rest=RestBinding("POST", "/api/orgs/{id}/connectors/{name}/bulk-select", _ID),
     ),
     Capability(

@@ -161,9 +161,15 @@ async def compute_hidden_tools(ctx, sub: str, *, org=_DERIVE_ORG) -> set[str]:
             org_defaults = set(org_store.get_org_default_connectors(active_org) or []) if active_org else set()
             exposed_now = connector_activation.exposed_connectors(active_org)
             socle = providers.DEFAULT_ACTIVE_CONNECTORS & exposed_now
-            # Provenance (ADR 0050 §E7) : le socle prime sur le kit — un connecteur
-            # que la plateforme installe d'office ne sort pas avec un retrait du kit.
-            origins = {n: connector_selection.KIT for n in org_defaults & exposed_now}
+            # Le KIT n'est plus filtré par l'exposition (ADR 0050 §E2, oto#166) : un
+            # connecteur que l'org a coupé APRÈS l'avoir mis au kit s'installe comme
+            # les autres — masqué plus bas par le bloc d'activation tant que la coupure
+            # dure, et visible seul à la réouverture. Il était ÉCARTÉ EN SILENCE (une
+            # entrée sur 182 en production le 11/09). La garde d'exposition vaut pour
+            # le geste qui AJOUTE au kit (`connectors.kit`), pas pour ce semis.
+            # Provenance (§E7) : le socle prime sur le kit — un connecteur que la
+            # plateforme installe d'office ne sort pas avec un retrait du kit.
+            origins = {n: connector_selection.KIT for n in org_defaults}
             origins.update({n: connector_selection.SOCLE for n in socle})
             connector_selection.seed_active(sub, origins, prof_org)
         _sel = connector_selection.list_selection(sub, prof_org)

@@ -11,6 +11,11 @@ geste d'org sur ces boîtes passe par `appliquer` :
 | ajouter au kit (`connectors.bulk_select`)          | `appliquer(org, ajouter=[nom])`    |
 | retirer du kit (`connectors.unset_default`)        | `appliquer(org, retirer=[nom])`    |
 
+**Garde d'écriture (§E2)** : un AJOUT au kit nomme un connecteur connu du registre et
+exposé pour l'org, sinon tout le geste est refusé, raison nommée, rien n'est écrit
+(`AjoutRefuse`). Un connecteur coupé APRÈS sa mise au kit y reste : installé, masqué
+chez tous, il revient seul à la réouverture — la réponse le liste (`cut`).
+
 Seule la DIFFÉRENCE entre l'ancien et le nouveau kit s'applique aux membres
 (décision Q4 du 11/09 : « une modification future s'applique à tous les membres,
 anciens compris ; ce qui a été posé avant n'est pas rejoué »). Un connecteur nommé
@@ -57,8 +62,65 @@ UNCHANGED_NOTE = (
     "l'a retiré lui-même depuis le 11/09/2026, qui le garde retiré.")
 
 
+CUT_NOTE = ("Coupé pour ton organisation : il reste dans le kit et installé chez tes "
+            "membres, mais masqué chez tous tant qu'il est coupé ; il revient seul quand tu "
+            "le rends de nouveau disponible.")
+
+# Raison d'un refus d'ajout, telle que servie (E2 : « le refus dit pourquoi »).
+RAISONS = {
+    "unknown": "est inconnu du registre des connecteurs",
+    "platform_disabled": "est coupé par la plateforme : ton organisation ne peut pas l'installer",
+    "org_disabled": ("n'est pas disponible pour tes membres (ton organisation l'a coupé) : "
+                     "rends-le disponible d'abord"),
+}
+
+
 class OrgInconnue(LookupError):
     """L'org visée n'existe pas."""
+
+
+class AjoutRefuse(ValueError):
+    """Un ajout nomme un connecteur que l'org ne peut pas installer (ADR 0050 §E2).
+    `refus` = `[{"connector", "reason"}]`, raison ∈ `RAISONS`. Levé AVANT toute
+    écriture, dans la transaction : rien n'est écrit, ni au kit ni chez les membres."""
+
+    def __init__(self, refus: list[dict]):
+        self.refus = refus
+        super().__init__("; ".join(f"{r['connector']}: {r['reason']}" for r in refus))
+
+
+def refus_d_ajout(org_id: int, noms: Iterable[str]) -> list[dict]:
+    """E2 — on n'AJOUTE au kit qu'un connecteur connu du registre et exposé pour
+    l'org. La garde vaut pour le geste qui ajoute ; un connecteur coupé APRÈS sa mise
+    au kit y reste (cf. `coupes`). Rend les refus, raison nommée ; vide = tout passe.
+    Coupé par l'org (le master l'expose, l'override d'org le retire) se distingue de
+    coupé par la plateforme : ce ne sont pas les mêmes gestes pour le rouvrir."""
+    from .. import providers
+    from . import activation
+    noms = list(noms)
+    if not noms:
+        return []
+    expo = activation.exposed_connectors(org_id)
+    refus = []
+    for n in noms:
+        if n not in providers.REGISTRY:
+            refus.append({"connector": n, "reason": "unknown"})
+        elif n not in expo:
+            refus.append({"connector": n, "reason": "org_disabled"
+                          if activation.is_exposed(n, None) else "platform_disabled"})
+    return refus
+
+
+def coupes(org_id: int, kit: Iterable[str]) -> list[str]:
+    """Les connecteurs du kit que l'org n'expose plus : ils y restent (l'intention de
+    l'admin), installés et masqués chez tous, et reviennent seuls à la réouverture."""
+    from .. import providers
+    from . import activation
+    kit = list(kit)
+    if not kit:
+        return []
+    expo = activation.exposed_connectors(org_id)
+    return [n for n in kit if n in providers.REGISTRY and n not in expo]
 
 
 def _dedupe(noms: Iterable[str]) -> list[str]:
@@ -113,6 +175,9 @@ def appliquer(org_id: int, *, kit: Optional[Iterable[str]] = None,
                 n for n in ajouter if n not in avant]
         ajouts = [n for n in apres if n not in avant]
         retraits = [n for n in avant if n not in apres]
+        refus = refus_d_ajout(org_id, ajouts)
+        if refus:
+            raise AjoutRefuse(refus)       # avant toute écriture : la transaction s'annule
         if ajouts or retraits or (kit is not None and row["default_connectors"] is None):
             conn.execute("UPDATE orgs SET default_connectors = %s WHERE id = %s",
                          (apres, org_id))
@@ -145,8 +210,11 @@ def appliquer(org_id: int, *, kit: Optional[Iterable[str]] = None,
         if e["change"] == ADDED:
             e["masked_by_access"] = _masques(org_id, e["connector"], poses[e["connector"]])
     unchanged = [n for n in nommes if n not in ajouts and n not in retraits]
+    cut = coupes(org_id, apres)
     out = {"org_id": org_id, "kit": apres, "members": len(membres),
-           "changes": effets, "unchanged": unchanged, "note": AGENT_NOTE}
+           "changes": effets, "unchanged": unchanged, "cut": cut, "note": AGENT_NOTE}
     if unchanged:
         out["unchanged_note"] = UNCHANGED_NOTE
+    if cut:
+        out["cut_note"] = CUT_NOTE
     return out
