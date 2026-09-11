@@ -21,6 +21,8 @@ from typing import Literal, Optional
 
 from fastmcp import FastMCP
 
+from .. import output_projection
+
 
 def register(mcp: FastMCP) -> None:
     from ..fod import urba as fod_urba
@@ -106,6 +108,7 @@ def register(mcp: FastMCP) -> None:
         siren_epci: Optional[str] = None,
         departement: Optional[str] = None,
         limit: int = 100,
+        fields: Optional[list[str]] = None,
     ) -> dict:
         """Elected decision-makers of a public target: mayors, or EPCI presidents.
 
@@ -121,10 +124,18 @@ def register(mcp: FastMCP) -> None:
 
         Match on the INSEE code, never on the commune NAME: "Sainte-Marie" exists
         dozens of times.
+
+        `fields` keeps only these keys in each record (the envelope always stays);
+        omitted = the whole record, already shaped by the source client.
         """
         if fonction == "president_epci":
-            return elus.presidents_epci(siren=siren_epci, departement=departement, limit=limit)
-        return elus.maires(code_commune=code_commune, departement=departement, limit=limit)
+            res = elus.presidents_epci(siren=siren_epci, departement=departement, limit=limit)
+        else:
+            res = elus.maires(code_commune=code_commune, departement=departement, limit=limit)
+        # Le défaut ne retire rien ICI : l'enregistrement est déjà une vue choisie par
+        # le client de la source. `fields` est la projection offerte à l'appelant
+        # (ADR 0047), cf. `tests/test_sorties_listes_projetees.py`.
+        return output_projection.project(res, items_path="signaux", fields=fields)
 
     @mcp.tool()
     def urba_annuaire(
@@ -132,6 +143,7 @@ def register(mcp: FastMCP) -> None:
         code_commune: Optional[str] = None,
         type_service: Optional[str] = None,
         limit: int = 20,
+        fields: Optional[list[str]] = None,
     ) -> dict:
         """Public services and their NAMED head (DILA administration directory).
 
@@ -146,9 +158,16 @@ def register(mcp: FastMCP) -> None:
 
         ⚠️ Served by OpenDataSoft on its own domain: egress from the production box is
         not yet verified.
+
+        `fields` keeps only these keys in each record (the envelope always stays);
+        omitted = the whole record, already shaped by the source client.
         """
-        return annuaire.services(siren=siren, code_commune=code_commune,
-                                 type_service=type_service, limit=limit)
+        # Même règle que `urba_elus` : rien de dupliqué à retirer ici, `fields` est la
+        # projection offerte à l'appelant (ADR 0047).
+        return output_projection.project(
+            annuaire.services(siren=siren, code_commune=code_commune,
+                              type_service=type_service, limit=limit),
+            items_path="signaux", fields=fields)
 
     @mcp.tool()
     def urba_qpv(code_insee: str) -> dict:

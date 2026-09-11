@@ -14,7 +14,7 @@ from fastmcp import FastMCP
 from ..mcp_errors import McpError
 from mcp.types import INVALID_PARAMS, ErrorData
 
-from .. import access
+from .. import access, output_projection
 # Hors de `tools/` : ce module ne sert AUCUN outil, il porte la lecture du
 # registre des personnes. `tools/<m>.py` est réservé aux modules montés depuis
 # le registre de connecteurs (garde-fou `test_capabilities_drift`).
@@ -712,6 +712,7 @@ def register(mcp: FastMCP) -> None:
         lieu: Optional[str] = None,
         depuis: Optional[str] = None,
         limit: int = 50,
+        fields: Optional[list[str]] = None,
     ) -> dict:
         """AWARDED public contracts (DECP) — who won, for how much, notified when.
 
@@ -732,11 +733,19 @@ def register(mcp: FastMCP) -> None:
                 postcode; the code type varies between contracts.
             depuis: minimum notification date, YYYY-MM-DD.
             limit: contracts returned, 1-100.
+            fields: keep only these keys in each contract — the envelope (`total`,
+                `rendus`, `tronque`) always stays. Omitted = the whole record,
+                already shaped by the source client.
         """
-        return fod_fr.search_decp(
-            mot_cle=mot_cle, titulaire_siret=titulaire_siret, acheteur_siret=acheteur_siret,
-            lieu=lieu, depuis=depuis, limit=limit,
-        )
+        # Le défaut ne retire rien ICI : l'enregistrement est déjà une vue choisie par
+        # le client de la source. `fields` est la projection offerte à l'appelant
+        # (ADR 0047), cf. `tests/test_sorties_listes_projetees.py`.
+        return output_projection.project(
+            fod_fr.search_decp(
+                mot_cle=mot_cle, titulaire_siret=titulaire_siret,
+                acheteur_siret=acheteur_siret, lieu=lieu, depuis=depuis, limit=limit,
+            ),
+            items_path="signaux", fields=fields)
 
     @mcp.tool()
     def fr_tenders_get(idweb: str) -> dict:

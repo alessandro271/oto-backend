@@ -64,6 +64,7 @@ import re
 from typing import Literal, Optional
 
 from fastmcp import FastMCP
+from .. import output_projection
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
@@ -806,6 +807,7 @@ def register(mcp: FastMCP) -> None:
         polluant: Optional[str] = None,
         milieu: Optional[str] = "Air",
         limit: int = 50,
+        fields: Optional[list[str]] = None,
     ) -> dict:
         """Declared pollutant emissions, per ESTABLISHMENT with its SIRET (IREP).
 
@@ -832,11 +834,19 @@ def register(mcp: FastMCP) -> None:
                 string) means every pollutant.
             milieu: "Air" by default; empty means water and soil too.
             limit: establishments returned.
+            fields: keep only these keys in each record — the envelope (`total`,
+                `tronque`, `sous_seuil`) always stays. Omitted = the whole record,
+                already shaped by the source client.
         """
-        return irep.emetteurs(
-            annee=annee, departement=departement, code_commune=code_commune,
-            siret=siret, polluant=polluant, milieu=milieu, limit=limit,
-        )
+        # Le défaut ne retire rien ICI : l'enregistrement est déjà une vue choisie par
+        # le client de la source, sans rien de dupliqué. `fields` est la projection
+        # offerte à l'appelant (ADR 0047), cf. `tests/test_sorties_listes_projetees.py`.
+        return output_projection.project(
+            irep.emetteurs(
+                annee=annee, departement=departement, code_commune=code_commune,
+                siret=siret, polluant=polluant, milieu=milieu, limit=limit,
+            ),
+            items_path="signaux", fields=fields)
 
     # --- propriétaire d'un bâtiment (BDNB, CSTB) ----------------------------
 
@@ -848,6 +858,7 @@ def register(mcp: FastMCP) -> None:
         departement: Optional[str] = None,
         emprise_min: Optional[float] = None,
         limit: int = 50,
+        full: bool = False,
     ) -> dict:
         """Buildings and the SIREN of their legal-entity owner (BDNB, CSTB).
 
@@ -876,12 +887,20 @@ def register(mcp: FastMCP) -> None:
             departement: INSEE department code.
             emprise_min: minimum ground footprint in m² — the prospecting filter.
             limit: buildings returned, 1 to 500 (default 50).
+            full: also return `raw`, the BDNB row each record was built from. Every
+                column it holds is already in the record, reshaped.
         """
-        return bdnb.batiments(
+        res = bdnb.batiments(
             code_commune=code_commune, siren=siren,
             batiment_groupe_id=batiment_groupe_id, departement=departement,
             emprise_min=emprise_min, limit=limit,
         )
+        if full:
+            return res
+        # `raw` recopie la ligne BDNB dont chaque colonne est déjà rendue, remise en
+        # forme, dans le même enregistrement : de la duplication pure, que le défaut
+        # retire (ADR 0047).
+        return output_projection.project(res, items_path="signaux", item_drop=("raw",))
 
     # --- valorisation immobilière (DVF+ Cerema, depuis 2014) — repris de `dvf` -
 
