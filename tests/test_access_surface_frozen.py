@@ -37,7 +37,7 @@ _SURFACE = """
     ADMIN BYO_MODES Callable CascadeProbe CascadeRung ErrorData FETCH_PROBE
     INVALID_PARAMS MEMBER McpError ORG_SHAREABLE_PROVIDERS Optional
     PRESENCE_PROBE ROLES ResolvedCredential SLOT_PREFIX SUPER_ADMIN
-    _ACCOUNT_URL _PAID_OPTION_BY_CONNECTOR _QUOTA_DEFAULTS _UNSET
+    _account_url _PAID_OPTION_BY_CONNECTOR _QUOTA_DEFAULTS _UNSET
     _emit_connector_failure _instance_side_shares_safe _is_multi_account
     _legacy_platform_grant_meta _note_resolved_instance _org_unmetered
     _platform_grant_meta _platform_grantee_scope _platform_instance_usable

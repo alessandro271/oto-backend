@@ -23,6 +23,7 @@ from typing import Optional
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
+from .. import config
 from .. import (providers, credentials_store, db, group_store, instance_refs, org_store,
                 session_org, tenant_vault)
 from . import cascade, chain_shadow, quotas, rbac, resolve_anon, scope, tenant_budget
@@ -31,7 +32,26 @@ from .resolved_credential import ResolvedCredential
 logger = logging.getLogger(__name__)
 
 
-_ACCOUNT_URL = "https://manage.oto.cx/account"
+def _account_url(sub: Optional[str]) -> str:
+    """L'adresse où CE compte pose ses clés.
+
+    ⚠️ Écrite en dur jusqu'au 2026-09-11, et c'est la faute que
+    `config.dashboard_url_for` existe pour empêcher : un compte de tenant tiers
+    se voyait répondre « pose ta clé sur NOTRE tableau de bord » — le produit de
+    QUELQU'UN D'AUTRE. Le message qui dit comment se débloquer envoyait donc sur
+    une adresse où ce compte n'existe pas : le refus n'était pas actionnable, et
+    il montrait notre marque à l'utilisateur d'un partenaire, ce qu'ADR 0052
+    exclut. Vécu sur le chemin Apollo le 2026-09-11, dans une org de tenant dont
+    le `dashboard_url` déclaré est son propre domaine.
+
+    Le littéral est banni de ce module par un cliquet
+    (`tests/test_dashboard_url_par_tenant.py`) : c'est un copier-coller depuis un
+    module voisin qui l'avait introduit, et une relecture ne l'attrape pas.
+
+    Ces quatre refus sont les plus lus de la plateforme — ils tombent sur TOUT
+    connecteur sans credential — donc la faute s'y payait à chaque fois.
+    """
+    return f"{config.dashboard_url_for(sub).rstrip('/')}/account"
 
 
 class CredentialUnavailable(McpError):
@@ -210,7 +230,7 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
             code=INVALID_PARAMS,
             message=(
                 f"{noun} `{eff}` introuvable pour `{mprov}` — vérifie avec "
-                f"oto_identity(op='list'), ou pose-le sur {_ACCOUNT_URL}."
+                f"oto_identity(op='list'), ou pose-le sur {_account_url(sub)}."
             )))
 
     def _member_fetch(msub: str, morg: int, mprov: str) -> Optional[tuple]:
@@ -318,7 +338,7 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
                 code=INVALID_PARAMS,
                 message=(
                     f"Aucun credential `{provider}` configuré pour toi. Renseigne-le "
-                    f"sur {_ACCOUNT_URL} (section {provider.capitalize()})."
+                    f"sur {_account_url(sub)} (section {provider.capitalize()})."
                     + rbac._revoked_hint(sub, active_org, provider)
                     + rbac._reachable_hint(sub, active_org, provider)
                 ),
@@ -334,7 +354,7 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
             # sous le porteur — c'est là que les secrets partagés existent.
             message=(
                 f"Aucune clé `{porteur}` configurée pour toi. Soit pose "
-                f"ta propre clé sur {_ACCOUNT_URL} (section {porteur.capitalize()}), "
+                f"ta propre clé sur {_account_url(sub)} (section {porteur.capitalize()}), "
                 f"soit demande à un admin de te grant un accès à une clé plateforme."
                 + rbac._revoked_hint(sub, active_org, porteur)
                 + rbac._reachable_hint(sub, active_org, porteur)
@@ -364,7 +384,7 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
             message=(
                 f"Quota plateforme {provider} dépassé aujourd'hui ({used}/{limit}) "
                 f"pour la clé `{win.payload['label']}` — 0 restant, le compteur "
-                f"repart à minuit. Pose ta propre clé sur {_ACCOUNT_URL} pour "
+                f"repart à minuit. Pose ta propre clé sur {_account_url(sub)} pour "
                 "lever la limite immédiatement."
             ),
         ))

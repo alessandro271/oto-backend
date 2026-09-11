@@ -138,3 +138,44 @@ def test_aucune_adresse_de_tableau_de_bord_nest_ecrite_en_dur():
     assert not fautifs, (
         "adresse de tableau de bord écrite en dur :\n  " + "\n  ".join(fautifs)
         + "\n→ passer par `config.dashboard_url_for(sub)`.")
+
+
+# --- le REFUS de credential, le lien le plus lu de la plateforme ---------------
+#
+# Vécu le 2026-09-11, même faute que le 13/08 mais sur une autre surface : les
+# quatre refus de `access/resolve.py` écrivaient l'adresse EN DUR
+# (`_ACCOUNT_URL = "https://manage.oto.cx/account"`). Un compte de tenant à qui
+# l'on répondait « pose ta clé » était envoyé sur NOTRE tableau de bord — où son
+# compte n'existe pas. Le refus n'était donc pas actionnable, et il montrait notre
+# marque à l'utilisateur d'un partenaire.
+#
+# Ces refus tombent sur TOUT connecteur sans credential : c'est le chemin d'erreur
+# le plus fréquenté du produit, et la faute s'y payait à chaque fois.
+
+def test_le_refus_de_credential_envoie_sur_le_tableau_de_bord_DU_COMPTE(
+        registre, env_propre):
+    from oto_mcp.access import resolve
+
+    assert resolve._account_url("acme:u-1") == "https://app.acme.test/account"
+
+
+def test_le_refus_dun_compte_plateforme_garde_la_notre(registre, env_propre):
+    from oto_mcp.access import resolve
+
+    assert resolve._account_url("bn01jfy76a5n") == "https://manage.oto.cx/account"
+    assert resolve._account_url(None) == "https://manage.oto.cx/account"
+
+
+def test_aucune_adresse_de_tableau_de_bord_nest_ecrite_en_dur_dans_la_resolution():
+    """Le cliquet : c'est un LITTÉRAL qui a produit la faute, pas un raisonnement.
+    Une relecture ne l'attrape pas — le prochain copier-coller depuis un module
+    voisin le réintroduirait sans bruit."""
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parent.parent
+              / "oto_mcp" / "access" / "resolve.py").read_text(encoding="utf-8")
+    for littéral in ("manage.oto.cx", "app.oto.cx", "dashboard.oto"):
+        assert littéral not in source, (
+            f"`{littéral}` écrit en dur dans access/resolve.py — passe par "
+            "`config.dashboard_url_for(sub)`, sinon un compte de tenant est "
+            "renvoyé vers le produit de quelqu'un d'autre.")
