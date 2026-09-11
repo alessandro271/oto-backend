@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import ast
 import importlib
+import inspect
 from pathlib import Path
 
 import pytest
@@ -271,6 +272,37 @@ def _methods_called_on_client(tree: ast.Module) -> set[str]:
     return methods
 
 
+def _kwargs_called_on_client(tree: ast.Module) -> dict[str, set[str]]:
+    """`{méthode: {kwarg, …}}` pour les appels sur le client — même reconnaissance
+    du receveur que `_methods_called_on_client`, un cran plus bas.
+
+    Deux formes échappent, et c'est dit plutôt qu'implicite : un appel qui déballe
+    (`m(**opts)`) ne porte rien de lisible statiquement, et une méthode **confiée**
+    (`appeler(geste, ig.get_profile)`) n'a pas de site d'appel ici — c'est
+    l'exécuteur qui choisit ses arguments. Prétendre les vérifier vaudrait moins
+    que dire qu'on ne les vérifie pas.
+    """
+    bound = _names_bound_to_client(tree) | {"c"}
+
+    def _est_le_client(node: ast.expr) -> bool:
+        if isinstance(node, ast.Await):
+            node = node.value
+        if isinstance(node, ast.Name):
+            return node.id in bound
+        return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id in _CLIENT_FACTORIES)
+
+    out: dict[str, set[str]] = {}
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+            continue
+        if not _est_le_client(node.func.value):
+            continue
+        out.setdefault(node.func.attr, set()).update(
+            kw.arg for kw in node.keywords if kw.arg)
+    return out
+
+
 def _covered_modules() -> list[tuple[str, str, str, set[str]]]:
     """(module_tool, clsname, import_module, méthodes) pour chaque tool suivant la
     convention `_client() -> ClasseConcrète` avec ≥1 appel `_client().m()`."""
@@ -358,3 +390,72 @@ def test_client_methods_exist_on_pinned_core(tool_mod, clsname, import_mod, meth
         f"{tool_mod}.py appelle des méthodes absentes de {clsname} "
         f"(oto-core épinglé) : {missing} — bump le pin oto-core dans CETTE PR "
         f"(version-skew, cf. leçon folk_user).")
+
+
+@pytest.mark.parametrize("tool_mod, clsname, import_mod, methods",
+                         _CASES, ids=[c[0] for c in _CASES])
+def test_client_kwargs_exist_on_pinned_core(tool_mod, clsname, import_mod, methods):
+    """Chaque MOT-CLÉ passé au client existe sur la signature oto-core épinglée.
+
+    Le voisin du dessus vérifie le NOM de la méthode ; ce trou-ci est le même
+    défaut d'un cran plus bas et il ne coûte pas moins cher. Un tool mergé en
+    avance de phase qui appelle `client.match_person(reveal_phone_number=True)`
+    sur un oto-core qui ne connaît pas encore ce paramètre passe la CI (la
+    méthode EXISTE) et lève `TypeError: unexpected keyword argument` à la
+    première invocation en prod — exactement le scénario `folk_user`, à ceci
+    près que la sonde d'à côté le laissait passer.
+
+    Trouvé en ajoutant le reveal de téléphone Apollo, qui est précisément un lot
+    « trois paramètres neufs chez oto-core, puis le backend les passe » : la
+    seule chose qui protégeait cet ordre était la mémoire de celui qui l'écrit.
+
+    Deux formes échappent, et c'est assumé plutôt qu'implicite : une méthode qui
+    déclare `**kwargs` (elle accepte tout — `update_contact(**fields)`), et un
+    appel qui déballe un dict. Les deux sont statiquement invérifiables.
+    """
+    try:
+        cls = getattr(importlib.import_module(import_mod), clsname)
+    except Exception as e:  # noqa: BLE001 — extra non installé, etc.
+        pytest.skip(f"{clsname} non importable ({import_mod}) : {e}")
+
+    tree = ast.parse((_TOOLS_DIR / f"{tool_mod}.py").read_text())
+    inconnus = []
+    for methode, kwargs in sorted(_kwargs_called_on_client(tree).items()):
+        fn = getattr(cls, methode, None)
+        if fn is None or not callable(fn):
+            continue          # absence de méthode : c'est l'autre test qui parle
+        try:
+            params = inspect.signature(fn).parameters
+        except (TypeError, ValueError):
+            continue
+        if any(p.kind is p.VAR_KEYWORD for p in params.values()):
+            continue          # `**fields` accepte tout
+        inconnus += [f"{methode}({kw}=…)" for kw in sorted(kwargs)
+                     if kw not in params]
+    assert not inconnus, (
+        f"{tool_mod}.py passe des paramètres absents de {clsname} "
+        f"(oto-core épinglé) : {inconnus} — bump le pin oto-core dans CETTE PR "
+        f"(version-skew de SIGNATURE, pas de nom).")
+
+
+def test_the_kwarg_probe_bites_and_knows_what_it_cannot_see():
+    """La sonde ci-dessus se PROUVE sur l'anomalie qu'elle prétend attraper —
+    sinon on ne mesure que sa présence (`docs/conventions.md` : « à sa création,
+    prouver qu'il mord »). Vérifié à l'écriture contre le vrai couple : les
+    trois kwargs neufs d'`apollo_match_person` remontent face à un oto-core qui
+    ne les connaît pas encore, et disparaissent face à celui qui les porte.
+
+    Ici on éprouve l'EXTRACTION, qui ne dépend d'aucun pin : ce qu'elle voit, et
+    ce qu'elle admet ne pas voir."""
+    tree = ast.parse(
+        "def _client() -> ApolloClient:\n"
+        "    return ApolloClient()\n"
+        "def t():\n"
+        "    client, _ = _client()\n"
+        "    client.match_person(person_id=p, reveal_phone_number=True)\n"
+        "    client.update_contact(cid, **fields)\n")
+    vus = _kwargs_called_on_client(tree)
+    assert vus["match_person"] == {"person_id", "reveal_phone_number"}
+    # Le déballage ne fabrique pas de faux nom : la méthode est vue, ses kwargs
+    # non — mieux vaut un trou nommé qu'une vérification qui invente.
+    assert vus["update_contact"] == set()
