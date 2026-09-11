@@ -291,12 +291,12 @@ def test_get_cross_org_member_blocked_with_switch_hint(seams, monkeypatch):
     monkeypatch.setattr(P.db, "get_project_by_id",
                         lambda pid: dict(ROW, id=pid, owner_id="83") if pid in (7, 8) else None)
     monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": True)
-    monkeypatch.setattr(P.org_store, "get_org", lambda oid: {"id": oid, "name": "Ferme Solaire"})
+    monkeypatch.setattr(P.org_store, "get_org", lambda oid: {"id": oid, "name": "Org Exemple"})
     ctx = ResolvedCtx(sub="u1", org_id=44)   # org active ≠ 83 (propriétaire)
     with pytest.raises(AuthzDenied) as e:
         P._project(ctx, P.ProjectInput(op="get", project_id=7))
     assert e.value.code == "wrong_org_context" and e.value.status == 403
-    assert "Ferme Solaire" in e.value.message and "org=<id>" in e.value.message
+    assert "Org Exemple" in e.value.message and "org=<id>" in e.value.message
 
 
 def test_get_unknown(seams):

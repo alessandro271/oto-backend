@@ -64,14 +64,14 @@ def test_apply_vars_empty_dashes():
 
 def test_format_context_optional_lines():
     ctx = {"org_name": "Acme", "role": "org_admin", "group_name": "",
-           "connectors": [], "projects": ["Ferme solaire"],
+           "connectors": [], "projects": ["Projet exemple"],
            "runs": [{"label": "prospection", "doctrine": "scout", "outcome": "done"}]}
     out = instr._format_context(ctx)
     assert "## Ton contexte oto" in out
     assert "Organisation : Acme (ton rôle : org_admin)" in out
     assert "Équipe active" not in out          # vide → ligne omise
     assert "Connecteurs actifs" not in out
-    assert "Projets récents : Ferme solaire" in out
+    assert "Projets récents : Projet exemple" in out
     assert "Derniers déroulés : prospection [scout] → done" in out
 
 

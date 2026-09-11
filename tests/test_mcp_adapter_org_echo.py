@@ -44,7 +44,7 @@ def test_org_echo_reflects_post_handler_org(monkeypatch):
 
     def _handler(ctx, inp):
         state["org"] = 83   # bascule DANS le handler, comme `oto_use_org`
-        return {"active_org": 83, "name": "Ferme Solaire"}
+        return {"active_org": 83, "name": "Org Exemple"}
 
     tool = _mcp_adapter._make_tool(_make_switch_cap(_handler))
     result = asyncio.run(tool())

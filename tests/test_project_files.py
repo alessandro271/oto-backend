@@ -59,7 +59,7 @@ def test_cross_org_member_blocked(seams, monkeypatch):
     monkeypatch.setattr(P.db, "get_project_by_id",
                         lambda pid: dict(ROW, id=pid, owner_id="83") if pid == 7 else None)
     monkeypatch.setattr(PJ.ownership, "can_access", lambda sub, t, rid, want="read": True)
-    monkeypatch.setattr(PJ.org_store, "get_org", lambda oid: {"id": oid, "name": "Ferme Solaire"})
+    monkeypatch.setattr(PJ.org_store, "get_org", lambda oid: {"id": oid, "name": "Org Exemple"})
     ctx = ResolvedCtx(sub="u1", org_id=44)
     with pytest.raises(AuthzDenied) as e:
         P._project_files(ctx, P.ProjectFilesInput(op="list", project_id=7))
