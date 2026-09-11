@@ -19,15 +19,17 @@ def test_default_active_socle_is_the_curated_set():
     assert set(providers.DEFAULT_ACTIVE_CONNECTORS) == _SOCLE
 
 
-def test_naked_account_guidance_is_injected():
-    """Le compte nu n'est viable que si l'agent est GUIDÉ : le bloc A statique doit
-    porter le mode d'emploi (installer via oto_connector op=select, pont oto_call)
-    et l'en-tête du catalogue doit dire que rien n'est installé d'office."""
+def test_toolbox_guidance_is_injected_and_true():
+    """ADR 0050 §E9 (oto#166) : le texte servi dit VRAI pour tout couple compte-org —
+    la boîte contient l'installé (par le membre, ou par le kit de son org), le reste
+    s'installe. « Le compte démarre nu » était faux pour qui rejoint une org à kit ;
+    ce test gravait la promesse fausse."""
     from oto_mcp import instructions
     surface = instructions.render()
-    assert "Le compte démarre nu" in surface
+    assert "kit de ton org" in surface
     assert "oto_connector(op='select'" in surface
-    assert "Aucune n'est installée d'office" in surface
+    for faux in ("Le compte démarre nu", "Aucune n'est installée d'office"):
+        assert faux not in surface
 
 
 # ── backfill one-shot (faux conn : rejoue le contrat SQL sans PG) ──────────────

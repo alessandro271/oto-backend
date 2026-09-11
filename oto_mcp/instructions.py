@@ -52,14 +52,14 @@ Oto — TA boîte à outils d'automatisation (prospection B2B, données entrepri
 - **Aucun état de session** : tout contexte se passe DANS l'appel : `_project`/`_org`/`_group`/`_account`/`_instance` (optionnels — omis = défaut) et `_run_id`, OBLIGATOIRE dès qu'un run est ouvert ou une ligne réservée (sinon écriture REFUSÉE).
 - **Ce qui dure** : règles de l'org → son guide (`oto_guide`, rendu par `oto_context`) ; la personne → sa fiche (`oto_profile`) et sa note (`oto_guide scope=user`) ; faits d'un travail → un doc de son projet (`oto_doc`). Cherche là avant le web.
 - **Registre FIGÉ** : un outil non listé s'appelle via `oto_call(name, arguments)` — n'en déduis jamais qu'une capacité n'existe pas.
-- **Le compte démarre nu** : les connecteurs s'INSTALLENT (`oto_connector op=list/select`, catalogue ci-dessous) ; open data/free tier = zéro config ; ne simule jamais un résultat.
+- **Toolbox = l'installé** (par toi ou le kit de ton org) ; le reste s'INSTALLE (`oto_connector op=list/select`, catalogue) ; open data/free tier = zéro config ; ne simule jamais.
 - **Slots** : la procédure référence `<slot:nom>`, le projet binde ; non résolu = matérialise le contexte, jamais une table « probable ».
 """
 
 # En-tête du catalogue de namespaces (dérivé du registre), appendé au bloc A.
 _CATALOG_HEADER = (
-    "Namespaces — le catalogue COMPLET des capacités de la plateforme. Aucune n'est "
-    "installée d'office : celles absentes de ta toolbox s'installent via "
+    "Namespaces — le catalogue COMPLET des capacités de la plateforme. Ta toolbox n'en "
+    "porte que l'installé (par toi, ou par le kit de ton org) : les autres s'installent via "
     "`oto_connector(op='select', name=…)` (durable) ou s'appellent ponctuellement via "
     "`oto_call` :"
 )
