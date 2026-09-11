@@ -325,7 +325,7 @@ d'URL. Le cliquet `test_every_covered_module_calls_the_seam` fige la liste des c
 | `apify_run*` | — | non couvert : `run_input` opaque d'un acteur tiers ; cran = activation |
 | `http_get/post` | — | non couvert : chemin relatif à une `base_url` configurée par l'org (client d'API) |
 | `browser_connect_start` | — | non couvert : page de login ouverte à l'humain, pas une lecture |
-| `email_send(cta_url, image_url)`, `brevo_import_contacts(file_url)`, `fireflies_transcript(url)`, webhooks (`folk`/`linear`/`grain`/`granola`/`webflow`), `ahrefs_*`, `promptwatch_*`, `snitcher_*` | — | non couvert : URL écrite, importée par le fournisseur, ou de configuration — rien n'est lu par nous |
+| `email_send(cta_url, image_url)`, `brevo_import_contacts(file_url)`, `fireflies_transcript(url)`, `apollo_reveal_phone(webhook_url)`, webhooks (`folk`/`linear`/`grain`/`granola`/`webflow`), `ahrefs_*`, `promptwatch_*`, `snitcher_*` | — | non couvert : URL écrite, importée par le fournisseur, ou de configuration — rien n'est lu par nous |
 
 **`serper_scrape` a DEUX amonts depuis le 2026-09-03 (#681).** Le scraper hébergé ne
 rend aucun champ HTML, et les adresses obfusquées (base64 d'un `joomla-hidden-mail`,

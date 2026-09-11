@@ -13,6 +13,12 @@ crée une clé api dans les réglages développeur/api de ton compte [apollo](ht
   (email) et `kaspr_enrich_linkedin` / `fullenrich_enrich_linkedin` (téléphone,
   historique LinkedIn) — source différente, pas de crédit brûlé sur un appel qui
   échouerait de toute façon.
+- **les REVEALS sont BYO-only, et pour une autre raison que le reste : le COÛT.**
+  Apollo facture un reveal EN PLUS du match, alors que notre compteur plateforme ne sait
+  débiter qu'un match nu. C'est vrai du téléphone (~9 crédits là où un match nu en coûte
+  1) comme des emails personnels (pot distinct, barème selon le plan — écart non mesuré,
+  donc pas débitable non plus). `apollo_match_person` continue de marcher sans ta clé, il
+  ne rend simplement ni mobile, ni direct dial, ni email personnel.
 - **contacts, séquences, emails et conversations sont BYO-only** — pas de repli plateforme
   sur ces outils-là, il te faut ta propre clé. Pas seulement pour écrire : même les lister
   ou les lire rend TES données (ton carnet de contacts, tes boîtes connectées, le contenu
@@ -28,6 +34,33 @@ recherche et enrichis entreprises et personnes, et repère les signaux de recrut
 - `apollo_search_people` — personnes par domaines, départements, intitulés, séniorités
 - `apollo_match_person` — enrichit une personne (url linkedin ou email = meilleurs identifiants)
 - `apollo_job_postings` — offres d'emploi actives d'une entreprise (signal d'embauche)
+
+## usage — les reveals (téléphone direct, emails personnels)
+
+⚠️ **le seul geste d'apollo qui ne rend pas son résultat.** apollo ne renvoie jamais un
+mobile dans la réponse : il le vérifie de son côté et le POSTe à une url, quelques
+minutes plus tard. la réponse immédiate ne porte qu'un `request_id`.
+
+- `apollo_reveal_phone(webhook_url=…, person_id=…)` — commande le reveal. ta propre clé
+  apollo, ~9 crédits. `webhook_url` est **obligatoire côté apollo** : c'est une url
+  HTTPS que TU contrôles (un endpoint n8n ou make, ton service) — **oto n'est pas un
+  receveur de webhook**, et ne voit pas ce qui y atterrit.
+- `apollo_reveal_phone_result(request_id)` — relit le MÊME contenu, **sans webhook, 0
+  crédit, pendant 30 jours**. c'est par là que le numéro revient à l'agent : tu n'as pas
+  à lire toi-même ce qu'apollo a posté.
+- ⚠️ **le sondage demande la permission `webhook_result` sur ta clé** (ou une clé
+  « Master »), d'après la doc apollo — même famille de prérequis que les outils de
+  contact. à vérifier sur une vraie clé : si elle ne l'a pas, le reveal part quand même
+  et les numéros arrivent sur ton webhook, mais `apollo_reveal_phone_result` refusera.
+- ⚠️ **garde le `request_id`** (une ligne de tableau, le journal du run) : perdu, les
+  crédits sont dépensés et il ne reste rien à relever. passé 30 jours, le résultat
+  disparaît pour de bon.
+- apollo ne signe pas ses callbacks et peut rejouer un envoi : ton endpoint est à
+  traiter comme non authentifié, et à rendre idempotent.
+- `apollo_match_person(reveal_personal_emails=True)` — les emails PERSONNELS, eux,
+  reviennent bien dans la réponse (synchrone), **sur ta propre clé apollo** (même règle
+  de coût que le téléphone). apollo les retient pour les personnes en zone RGPD : un
+  résultat vide est une réponse, pas une panne.
 
 ## usage — contacts (les personnes DANS ton espace de travail)
 
