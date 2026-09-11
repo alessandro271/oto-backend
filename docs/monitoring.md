@@ -222,6 +222,12 @@ dans `tool` (`refus:<cause>`), et l'environnement dans `args` — indispensable,
 préproduction et production écrivent dans la MÊME base et que `tool_calls.server` est un
 littéral constant. Aucun `sub` : à cette couche il n'y a pas encore d'identité.
 
+**Les 401/403 en sont exclus, délibérément** : ils viennent de la couche d'auth, que le
+transport ne voit jamais, et sur `/mcp` un 401 est l'étape NORMALE de la découverte
+OAuth — les compter noierait le signal sous le fonctionnement nominal. Constaté en
+déploiement, pas en banc : la première version en a compté six en cinq minutes sur la
+préproduction, tous étiquetés `autre`.
+
 Lecture : `oto_admin_monitoring op=transport` / `GET /api/admin/monitoring/transport`.
 ⚠️ **Un volume non nul est le régime NORMAL, pas une panne.** Toutes les adresses
 sources mesurées le 11/09/2026 étaient dans `160.79.106.0/24`, la plage de sortie de

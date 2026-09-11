@@ -269,6 +269,46 @@ def test_un_echec_d_ecriture_ne_casse_jamais_la_reponse(monkeypatch):
     assert reponses[0].status_code == 400
 
 
+def test_un_refus_d_authentification_n_est_pas_compte(lignes):
+    """401 et 403 viennent de `RequireAuthMiddleware`, qui vit SOUS ce compteur mais
+    AU-DESSUS du transport : le transport ne les voit jamais. Et sur `/mcp`, un 401 est
+    l'étape NORMALE de la découverte OAuth — c'est ainsi qu'un client apprend où
+    trouver notre PRM.
+
+    ⚠️ Ce banc existe parce que la première version DÉPLOYÉE les comptait : six 401 en
+    cinq minutes sur la préproduction, tous étiquetés `autre`. Aucun banc ne pouvait le
+    montrer — ils montent une app FastMCP nue, sans couche d'authentification. D'où
+    celui-ci, qui simule la couche manquante."""
+    async def app_qui_refuse(scope, receive, send):
+        # Le statut vient d'un EN-TÊTE, pas du chemin : les deux requêtes doivent
+        # viser `/mcp` exactement, sinon c'est le filtre de chemin qui les écarte et
+        # le banc passerait sans rien prouver de l'exclusion qu'il prétend tenir.
+        entetes = dict(scope["headers"])
+        statut = int(entetes.get(b"x-banc-statut", b"401"))
+        corps = b'{"error":{"message":"Not authenticated"}}'
+        await send({"type": "http.response.start", "status": statut,
+                    "headers": [(b"content-length", str(len(corps)).encode())]})
+        await send({"type": "http.response.body", "body": corps})
+
+    async def scenario():
+        async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=TransportRefusalCounter(app_qui_refuse)),
+                base_url="http://banc.test") as client:
+            r1 = await client.post("/mcp", content=b"{}")
+            r2 = await client.post("/mcp", content=b"{}", headers={"X-Banc-Statut": "403"})
+            # Contrôle de l'instrument : la MÊME app, au même chemin, rendant un 400,
+            # DOIT être comptée — sinon ce banc prouverait seulement que rien ne compte.
+            r3 = await client.post("/mcp", content=b"{}", headers={"X-Banc-Statut": "400"})
+            await _drainer()
+            return r1.status_code, r2.status_code, r3.status_code
+
+    assert anyio.run(scenario) == (401, 403, 400)
+    # Le 400 de la MÊME app, au MÊME chemin, est bien compté : l'exclusion vise les
+    # deux statuts d'authentification, pas le chemin ni le banc.
+    assert _causes(lignes) == ["refus:autre"]
+    assert lignes[0]["args"]["statut"] == 400
+
+
 # --- l'assemblage : le compteur est bien POSÉ, et à la bonne place -----------
 
 def test_le_compteur_est_pose_dans_lapp_racine_servie_par_uvicorn():

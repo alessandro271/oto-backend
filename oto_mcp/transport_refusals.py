@@ -35,7 +35,7 @@ journal d'accès dit déjà : rien.
 - un middleware FastMCP est précisément la couche que ces refus court-circuitent ;
 - la lib `mcp` n'est pas touchée, et ce fichier se retire d'une ligne.
 
-**Trois garanties, qui sont la condition pour qu'un instrument vive sur le chemin du
+**Quatre garanties, qui sont la condition pour qu'un instrument vive sur le chemin du
 transport — il voit TOUT le trafic :**
 
 1. **rien n'est bufferisé sur le chemin nominal.** Tant que le statut est < 400, le
@@ -44,7 +44,10 @@ transport — il voit TOUT le trafic :**
 2. **vocabulaire d'étiquettes FERMÉ.** Une cause inconnue devient `autre` ; on
    n'invente jamais une étiquette à partir du texte du SDK, sinon le cardinal du
    compteur suivrait les formulations de l'amont ;
-3. **on n'enregistre jamais le corps.** Celui d'une erreur de validation porte le
+3. **les refus d'authentification sont hors sujet.** Un 401/403 vient de la couche
+   d'auth, jamais du transport, et sur `/mcp` c'est l'étape normale de la découverte
+   OAuth : le compter noierait le signal sous le fonctionnement nominal ;
+4. **on n'enregistre jamais le corps.** Celui d'une erreur de validation porte le
    détail pydantic, donc des DONNÉES DU CLIENT. On en extrait une étiquette et, pour
    le seul cas « version refusée », la version demandée — et seulement si elle a la
    forme stricte d'une date. Aucun en-tête, aucun jeton, aucun identifiant de session
@@ -102,6 +105,19 @@ _MARQUEURS: tuple[tuple[str, str], ...] = (
 #: La SEULE donnée variable qu'on accepte d'écrire, et seulement pour
 #: `version_refusee` : une date au format du protocole. Tout le reste est jeté.
 _VERSION = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
+
+#: **Les refus d'AUTHENTIFICATION ne sont pas des refus de transport.** Ils naissent
+#: dans `RequireAuthMiddleware`, qui vit SOUS ce compteur mais AU-DESSUS du transport :
+#: le transport ne les voit jamais, et nous, on les voit déjà partout ailleurs.
+#: Surtout, un 401 sur `/mcp` est l'étape NORMALE de la découverte OAuth — c'est ainsi
+#: qu'un client apprend où trouver notre PRM. Les compter noierait le signal qu'on
+#: cherche sous le bruit du fonctionnement nominal.
+#:
+#: ⚠️ Constaté en déploiement, pas en banc : la première version comptait **6 × 401 en
+#: cinq minutes** sur la préproduction, tous étiquetés `autre`. Aucun banc ne pouvait
+#: le montrer — ils construisent une app FastMCP nue, sans la couche d'authentification.
+#: C'est en allant lire ce que le code DÉPLOYÉ écrivait vraiment que ça s'est vu.
+_HORS_SUJET = frozenset({401, 403})
 
 _EN_VOL: set = set()
 
@@ -229,7 +245,8 @@ class TransportRefusalCounter:
             genre = message.get("type")
             if genre == "http.response.start":
                 etat["statut"] = int(message.get("status") or 0)
-            elif genre == "http.response.body" and etat["statut"] >= 400:
+            elif (genre == "http.response.body" and etat["statut"] >= 400
+                  and etat["statut"] not in _HORS_SUJET):
                 # Accumulation BORNÉE, et seulement sur un refus : le chemin nominal
                 # ne passe jamais ici.
                 if len(etat["corps"]) < _FENETRE_CORPS:
