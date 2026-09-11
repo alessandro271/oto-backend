@@ -8,7 +8,8 @@ from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
 
 def _catalog(monkeypatch, entries):
     monkeypatch.setattr(CS, "_visible_catalog", lambda ctx: list(entries))
-    monkeypatch.setattr(CS.connector_selection, "list_selection", lambda sub, org: {})
+    monkeypatch.setattr(CS.connector_selection, "list_selection_detail", lambda sub, org: {})
+    monkeypatch.setattr(CS.connector_selection, "list_removed", lambda sub, org: {})
     monkeypatch.setattr(CS.org_store, "get_org_default_connectors", lambda org: [])
     monkeypatch.setattr(CS, "_guide_refs_by_ns", lambda org: {})
 
@@ -59,8 +60,8 @@ def test_me_verbose_keeps_full_card(monkeypatch):
 
 def test_me_state_filter(monkeypatch):
     _catalog(monkeypatch, [_FAT, {**_FAT, "name": "hunter"}])
-    monkeypatch.setattr(CS.connector_selection, "list_selection",
-                        lambda sub, org: {"hunter": "active"})
+    monkeypatch.setattr(CS.connector_selection, "list_selection_detail",
+                        lambda sub, org: {"hunter": {"state": "active", "origin": "membre"}})
     out = CS._me(ResolvedCtx(sub="u1", org_id=42), CS.MyConnectorsInput(state="active"))
     assert [c["name"] for c in out["connectors"]] == ["hunter"]
 
@@ -134,24 +135,29 @@ def test_select_returns_activation_hint(monkeypatch):
 # ── bulk_select : activer un connecteur pour toute l'org, présent + futurs ──
 
 def test_bulk_select_activates_unselected_members_and_persists_default(monkeypatch):
+    import contextlib
+    import oto_mcp.db as DB
     monkeypatch.setattr(CS.connector_activation, "exposed_connectors", lambda org: {"unipile"})
     monkeypatch.setattr(CS.org_store, "list_org_members",
-                        lambda org: [{"sub": "a"}, {"sub": "b"}, {"sub": "c"}])
-    states = {"a": None, "b": "active", "c": "paused"}
-    monkeypatch.setattr(CS.connector_selection, "state_of",
-                        lambda sub, name, org: states[sub])
+                        lambda org: [{"sub": "a"}, {"sub": "b"}, {"sub": "c"}, {"sub": "d"}])
+    monkeypatch.setattr(DB, "_connect", lambda: contextlib.nullcontext("conn"))
+    # Ce que rend l'écrivain d'org pour chaque membre : seul « a » n'a rien.
+    issue = {"a": "installed", "b": "already_active", "c": "paused", "d": "removed_by_member"}
     calls = []
-    monkeypatch.setattr(CS.connector_selection, "set_state",
-                        lambda sub, name, state, org: calls.append((sub, name, state, org)))
+    monkeypatch.setattr(CS.connector_selection, "install_for_member",
+                        lambda conn, sub, name, org, origin:
+                        calls.append((sub, name, org, origin)) or issue[sub])
     monkeypatch.setattr(CS.org_store, "get_org_default_connectors", lambda org: ["hunter"])
     set_defaults_calls = []
     monkeypatch.setattr(CS.org_store, "set_org_default_connectors",
                         lambda org, connectors: set_defaults_calls.append((org, connectors)))
     out = CS._bulk_select(ResolvedCtx(sub="admin", org_id=42), CS.BulkSelectInput(org_id=42, name="unipile"))
     # Seul "a" (jamais choisi) est activé — "b"/"c" ont déjà un choix explicite,
-    # jamais réécrit (le paused de "c" en particulier doit survivre).
-    assert out["activated"] == 1 and out["skipped"] == 2
-    assert calls == [("a", "unipile", "active", 42)]
+    # jamais réécrit (le paused de "c" en particulier doit survivre), et "d" l'a
+    # retiré lui-même (ADR 0050 §E6 : retenu depuis la trace, jamais défait).
+    assert out["activated"] == 1 and out["skipped"] == 3
+    # Geste d'ORG : provenance `kit`, jamais `membre` (ADR 0050 §E7).
+    assert {c[3] for c in calls} == {"kit"} and [c[0] for c in calls] == ["a", "b", "c", "d"]
     # Persisté en défaut d'org (fusion additive, "hunter" préservé) pour que les
     # FUTURS membres le reçoivent pré-activé à leur premier seed.
     assert out["added_to_org_defaults"] is True
@@ -159,6 +165,9 @@ def test_bulk_select_activates_unselected_members_and_persists_default(monkeypat
 
 
 def test_bulk_select_does_not_rewrite_org_defaults_if_already_present(monkeypatch):
+    import contextlib
+    import oto_mcp.db as DB
+    monkeypatch.setattr(DB, "_connect", lambda: contextlib.nullcontext("conn"))
     monkeypatch.setattr(CS.connector_activation, "exposed_connectors", lambda org: {"unipile"})
     monkeypatch.setattr(CS.org_store, "list_org_members", lambda org: [])
     monkeypatch.setattr(CS.org_store, "get_org_default_connectors", lambda org: ["unipile"])

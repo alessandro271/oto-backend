@@ -129,6 +129,16 @@ class MyConnectorRow(BaseModel):
     # de `/api/me`). Le seul champ d'auth du mode compact ; cf. `_COMPACT_KEYS`.
     secret_kind: Optional[str] = None
     state: Literal["not_selected", "active", "paused"]
+    # QUI a posé l'installation (ADR 0050 §E7) — présent seulement quand `state` ≠
+    # `not_selected`. `kit` = installé par ton organisation (un retrait du kit le
+    # retire) ; `membre` = par toi ; `admin` = poussé à toi par un admin ; `socle` =
+    # d'office par la plateforme ; `inconnue` = posé avant que la plateforme ne le
+    # trace — ce dernier n'est jamais retiré par un geste d'org.
+    origin: Optional[Literal["socle", "kit", "admin", "membre", "inconnue"]] = None
+    # Date (« AAAA-MM-JJ HH:MM:SS », UTC) à laquelle TU as retiré ce connecteur — présent seulement quand
+    # `state` = `not_selected` et que le retrait vient de toi. Aucun geste d'org (kit,
+    # poussée) ne le réinstalle tant qu'il est posé ; le réinstaller toi-même l'efface.
+    removed_at: Optional[str] = None
     # Baseline proposée par l'ORG (ADR 0019), jamais l'état du membre : un
     # connecteur `recommended` peut très bien être `not_selected`.
     recommended: bool
@@ -406,7 +416,9 @@ def _with_readiness(ctx: ResolvedCtx, row: dict) -> dict:
 
 def _me(ctx: ResolvedCtx, inp: MyConnectorsInput) -> dict:
     org_id = ctx.org_id or 0
-    selection = connector_selection.list_selection(ctx.sub, org_id)
+    detail = connector_selection.list_selection_detail(ctx.sub, org_id)
+    selection = {name: d["state"] for name, d in detail.items()}
+    removed = connector_selection.list_removed(ctx.sub, org_id)
     recommended = set(org_store.get_org_default_connectors(ctx.org_id) or []) if ctx.org_id else set()
     doc_refs = _guide_refs_by_ns(ctx.org_id)
     # Découvrabilité : une clé peut exister à portée (équipe dont je suis membre,
@@ -476,6 +488,14 @@ def _me(ctx: ResolvedCtx, inp: MyConnectorsInput) -> dict:
         # `require_connector_access` à l'appel.
         if reach.get(c["name"]):
             row["reachable_instances"] = reach[c["name"]]
+        # Provenance et retrait (ADR 0050 §E7) : posés seulement quand ils disent
+        # quelque chose, pour la même raison que `reachable_instances`.
+        if c["name"] in detail:
+            row["origin"] = detail[c["name"]]["origin"]
+        elif c["name"] in removed:
+            # Déjà une chaîne : la fabrique de lignes de `db` rend les horodatages en
+            # « AAAA-MM-JJ HH:MM:SS » (UTC, sans fuseau) — servie telle quelle.
+            row["removed_at"] = str(removed[c["name"]])
         connectors.append(row)
     out: dict = {"connectors": connectors, "verbose": inp.verbose}
     # Verdict d'aptitude (#476) — sur une lecture CIBLÉE seulement. Mesuré sur la prod
@@ -595,12 +615,19 @@ def _bulk_select(ctx: ResolvedCtx, inp: BulkSelectInput) -> dict:
                           f"activer en masse (le plafond d'exposition n'est jamais relâché).")
     activated = 0
     skipped = 0
-    for m in org_store.list_org_members(inp.org_id):
-        if connector_selection.state_of(m["sub"], inp.name, inp.org_id) is None:
-            connector_selection.set_state(m["sub"], inp.name, connector_selection.ACTIVE, inp.org_id)
-            activated += 1
-        else:
-            skipped += 1
+    # Geste d'ORG : provenance `kit` (ADR 0050 §E7), jamais `set_state` — qui est le
+    # geste du membre et poserait `membre`. Un retrait du membre est désormais RETENU,
+    # et `install_for_member` le respecte : la promesse « never overrides a member's
+    # own pause/uninstall » de la description devient vraie pour le retrait aussi.
+    from ... import db
+    members = org_store.list_org_members(inp.org_id)
+    with db._connect() as conn:
+        for m in members:
+            if connector_selection.install_for_member(
+                    conn, m["sub"], inp.name, inp.org_id, connector_selection.KIT) == "installed":
+                activated += 1
+            else:
+                skipped += 1
     current_defaults = set(org_store.get_org_default_connectors(inp.org_id) or [])
     already_default = inp.name in current_defaults
     if not already_default:

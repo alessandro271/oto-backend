@@ -32,6 +32,19 @@ ACTIVE = "active"
 PAUSED = "paused"
 STATES = (ACTIVE, PAUSED)
 
+# PROVENANCE d'une installation (ADR 0050 §E7, oto#166) — qui a posé la ligne.
+# Sans elle, une ligne semée, posée par le kit ou choisie par le membre étaient
+# indiscernables, et aucune règle de retrait n'était tenable : retirer du kit ce
+# que le kit a posé exige de savoir QUI l'a posé. `inconnue` = toute ligne écrite
+# avant la trace, ou par un code qui ne la connaît pas (la production pendant la
+# fenêtre préprod→tag : base partagée) — aucun geste d'org ne la retire jamais.
+SOCLE = "socle"        # le socle plateforme `default_active`, au semis
+KIT = "kit"            # le kit de l'org, au semis ou au geste de l'admin
+ADMIN = "admin"        # poussée nominative d'un admin à UN membre
+MEMBRE = "membre"      # le membre lui-même (installation, ou reprise après une pause)
+INCONNUE = "inconnue"  # antérieure à la trace — jamais retirée par un geste d'org
+ORIGINS = (SOCLE, KIT, ADMIN, MEMBRE, INCONNUE)
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS user_selected_connectors (
     sub         TEXT   NOT NULL,
@@ -39,6 +52,24 @@ CREATE TABLE IF NOT EXISTS user_selected_connectors (
     connector   TEXT   NOT NULL,             -- nom de connecteur (registre providers/)
     state       TEXT   NOT NULL DEFAULT 'active',  -- 'active' | 'paused'
     selected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- Provenance (ADR 0050 §E7) : socle | kit | admin | membre | inconnue. Posée
+    -- aussi par `ALTER … ADD COLUMN` dans `db/_init.py` pour la base PARTAGÉE
+    -- prod/préprod, où ce `CREATE TABLE` est sauté — les deux définitions sont
+    -- identiques (le cliquet `test_boot_order_replay` compare défaut et nullabilité).
+    origin      TEXT   NOT NULL DEFAULT 'inconnue',
+    PRIMARY KEY (sub, org_id, connector)
+);
+-- Le RETRAIT par le membre, retenu avec sa date (ADR 0050 §E6/§E7). Une table à part
+-- et non un état de plus dans `user_selected_connectors` : le code servi AVANT ce lot
+-- (base partagée) lit chaque ligne de cette table-là comme « installé ou en pause »,
+-- et servirait un état qu'il ne connaît pas. Ici, il ne voit rien. Un retrait reste
+-- un DELETE de la sélection, doublé de cette trace ; un `select`/`pause` du membre
+-- l'efface (son dernier geste n'est plus un retrait).
+CREATE TABLE IF NOT EXISTS connector_selection_removed (
+    sub        TEXT   NOT NULL,
+    org_id     BIGINT NOT NULL DEFAULT 0,
+    connector  TEXT   NOT NULL,
+    removed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (sub, org_id, connector)
 );
 -- Marque de transition (B6) : un (sub, org) « seedé » a reçu sa sélection initiale
@@ -75,6 +106,35 @@ def list_selection(sub: str, org_id: int = 0) -> dict[str, str]:
     return {r["connector"]: r["state"] for r in rows}
 
 
+def list_selection_detail(sub: str, org_id: int = 0) -> dict[str, dict]:
+    """Même lecture que `list_selection`, avec la PROVENANCE de chaque ligne :
+    `{connector: {"state": …, "origin": …}}` (ADR 0050 §E7)."""
+    from .. import db
+
+    with db._connect() as conn:
+        rows = conn.execute(
+            "SELECT connector, state, origin FROM user_selected_connectors "
+            "WHERE sub = %s AND org_id = %s",
+            (sub, org_id),
+        ).fetchall()
+    return {r["connector"]: {"state": r["state"], "origin": r["origin"]} for r in rows}
+
+
+def list_removed(sub: str, org_id: int = 0) -> dict:
+    """Retraits du membre dans une org : `{connector: removed_at}` (ADR 0050 §E6).
+    Un connecteur de cette map n'est plus installé ET le membre l'a retiré lui-même :
+    aucun geste d'org ne le lui remet."""
+    from .. import db
+
+    with db._connect() as conn:
+        rows = conn.execute(
+            "SELECT connector, removed_at FROM connector_selection_removed "
+            "WHERE sub = %s AND org_id = %s",
+            (sub, org_id),
+        ).fetchall()
+    return {r["connector"]: r["removed_at"] for r in rows}
+
+
 def state_of(sub: str, connector: str, org_id: int = 0) -> str | None:
     """État d'un connecteur pour le membre : 'active' | 'paused' | None (non-sélectionné)."""
     from .. import db
@@ -88,27 +148,47 @@ def state_of(sub: str, connector: str, org_id: int = 0) -> str | None:
     return row["state"] if row is not None else None
 
 
-# --- écritures (self-managing) ----------------------------------------------
+# --- écritures du MEMBRE (self-managing) --------------------------------------
 
 def set_state(sub: str, connector: str, state: str, org_id: int = 0) -> None:
-    """Sélectionne (ou bascule actif↔pause) un connecteur pour le membre. Upsert."""
+    """Geste du MEMBRE : installe (ou bascule actif↔pause) un connecteur. Upsert.
+
+    Provenance (ADR 0050 §E7) : une installation par le membre, ou sa reprise après
+    une pause, passe la ligne à `membre` — c'est ce qui la soustrait à un retrait du
+    kit (décision Q1 : « un membre qui l'avait installé lui-même le garde »). Une
+    PAUSE ne change pas la provenance d'une ligne existante : mettre en pause ce que
+    le kit a posé ne l'approprie pas. Le geste efface un retrait antérieur du membre
+    — son dernier geste n'est plus un retrait. ⚠️ Réservé aux gestes du membre : un
+    geste d'org écrit par `install_for_member`, jamais par ici (la provenance mentirait)."""
     if state not in STATES:
         raise ValueError(f"état de sélection invalide: {state!r} (∈ {STATES})")
     from .. import db
 
+    on_conflict = ("DO UPDATE SET state = EXCLUDED.state, selected_at = NOW(), "
+                   "origin = EXCLUDED.origin" if state == ACTIVE
+                   else "DO UPDATE SET state = EXCLUDED.state, selected_at = NOW()")
     with db._connect() as conn:
         conn.execute(
-            "INSERT INTO user_selected_connectors (sub, org_id, connector, state) "
-            "VALUES (%s, %s, %s, %s) "
-            "ON CONFLICT (sub, org_id, connector) "
-            "DO UPDATE SET state = EXCLUDED.state, selected_at = NOW()",
-            (sub, org_id, connector, state),
+            "INSERT INTO user_selected_connectors (sub, org_id, connector, state, origin) "
+            "VALUES (%s, %s, %s, %s, %s) "
+            f"ON CONFLICT (sub, org_id, connector) {on_conflict}",
+            (sub, org_id, connector, state, MEMBRE),
+        )
+        conn.execute(
+            "DELETE FROM connector_selection_removed "
+            "WHERE sub = %s AND org_id = %s AND connector = %s",
+            (sub, org_id, connector),
         )
 
 
 def unselect(sub: str, connector: str, org_id: int = 0) -> bool:
-    """Retire un connecteur de la sélection du membre (→ retour library).
-    Renvoie True si une ligne existait."""
+    """Geste du MEMBRE : retire un connecteur de sa sélection (→ retour library).
+    Renvoie True si une ligne existait.
+
+    Le retrait est RETENU avec sa date (ADR 0050 §E6) : sans lui, un ajout au kit
+    réinstallait ce que le membre venait de retirer — la ligne effacée ne laissait
+    aucune trace de son « non ». Un retrait qui ne trouve rien n'écrit rien : il n'y
+    avait rien à retirer, et l'appelant le refuse."""
     from .. import db
 
     with db._connect() as conn:
@@ -116,7 +196,53 @@ def unselect(sub: str, connector: str, org_id: int = 0) -> bool:
             "DELETE FROM user_selected_connectors WHERE sub = %s AND org_id = %s AND connector = %s",
             (sub, org_id, connector),
         )
-        return (cur.rowcount or 0) > 0
+        if not (cur.rowcount or 0):
+            return False
+        conn.execute(
+            "INSERT INTO connector_selection_removed (sub, org_id, connector) "
+            "VALUES (%s, %s, %s) ON CONFLICT (sub, org_id, connector) "
+            "DO UPDATE SET removed_at = NOW()",
+            (sub, org_id, connector),
+        )
+        return True
+
+
+# --- écriture d'un geste d'ORG (reçoit le conn de l'appelant) --------------------
+
+def install_for_member(conn, sub: str, connector: str, org_id: int, origin: str) -> str:
+    """Installe `connector` chez UN membre pour le compte d'un geste d'org (kit,
+    poussée) — jamais par-dessus le membre (ADR 0050 §E4/§E6). Reçoit le `conn` de
+    l'appelant : un geste d'org est UNE transaction. Rend ce qui s'est passé :
+
+    - `installed`       — aucune ligne, aucun retrait : ligne posée, `active`, `origin` ;
+    - `already_active`  — une ligne active existe (quelle qu'en soit la provenance) :
+                          intacte ;
+    - `paused`          — le membre l'a en pause : intacte (une pause tient) ;
+    - `removed_by_member` — le membre l'a retiré lui-même : rien n'est posé.
+
+    La lecture et l'écriture sont une seule instruction gardée par la PK et par le
+    retrait, pas un `SELECT` puis un `INSERT` : un membre qui retire le connecteur
+    pendant le geste ne le voit pas revenir."""
+    if origin not in (SOCLE, KIT, ADMIN):
+        raise ValueError(f"provenance d'un geste d'org invalide: {origin!r}")
+    cur = conn.execute(
+        "INSERT INTO user_selected_connectors (sub, org_id, connector, state, origin) "
+        "SELECT %s, %s, %s, 'active', %s "
+        " WHERE NOT EXISTS (SELECT 1 FROM connector_selection_removed "
+        "                    WHERE sub = %s AND org_id = %s AND connector = %s) "
+        "ON CONFLICT (sub, org_id, connector) DO NOTHING",
+        (sub, org_id, connector, origin, sub, org_id, connector),
+    )
+    if cur.rowcount:
+        return "installed"
+    row = conn.execute(
+        "SELECT state FROM user_selected_connectors "
+        "WHERE sub = %s AND org_id = %s AND connector = %s",
+        (sub, org_id, connector),
+    ).fetchone()
+    if row is None:
+        return "removed_by_member"
+    return "already_active" if row["state"] == ACTIVE else "paused"
 
 
 # --- seed initial d'un (sub, org) — socle curé (ADR 0050) ---------------------
@@ -133,21 +259,21 @@ def is_seeded(sub: str, org_id: int = 0) -> bool:
     return row is not None
 
 
-def seed_active(sub: str, connectors: set[str], org_id: int = 0) -> None:
+def seed_active(sub: str, origins: dict[str, str], org_id: int = 0) -> None:
     """Sélection initiale d'un (sub, org) (one-shot, marque `seeded`) : installe
-    `connectors` en `active`. L'appelant décide le contenu — régime nominal =
-    le SOCLE curé `default_active ∩ exposé` (ADR 0050, `session_visibility`).
+    chaque connecteur de `origins` en `active`, sous sa provenance (`socle` ou
+    `kit`, ADR 0050 §E7). L'appelant décide le contenu (`session_visibility`).
     Le reste de l'exposé démarre non-sélectionné (→ library). Idempotent, ne
-    réécrit jamais une sélection existante."""
+    réécrit jamais une sélection existante — et ne remet jamais ce que le membre a
+    retiré (un geste du kit a pu poser la ligne AVANT son premier passage, et il a
+    pu la retirer depuis l'écran, qui ne sème pas)."""
+    if not isinstance(origins, dict):
+        raise TypeError("seed_active: `origins` = {connecteur: provenance}")
     from .. import db
 
     with db._connect() as conn:
-        for name in connectors:
-            conn.execute(
-                "INSERT INTO user_selected_connectors (sub, org_id, connector, state) "
-                "VALUES (%s, %s, %s, 'active') ON CONFLICT (sub, org_id, connector) DO NOTHING",
-                (sub, org_id, name),
-            )
+        for name, origin in origins.items():
+            install_for_member(conn, sub, name, org_id, origin)
         conn.execute(
             "INSERT INTO connector_selection_seeded (sub, org_id) VALUES (%s, %s) "
             "ON CONFLICT (sub, org_id) DO NOTHING",
@@ -201,6 +327,20 @@ def rename_selection(conn, old: str, new: str) -> int:
     #    pause reste en pause : le renommage n'est pas une occasion d'installer).
     cur = conn.execute(
         "UPDATE user_selected_connectors SET connector = %s WHERE connector = %s",
+        (new, old),
+    )
+    # 4. Les RETRAITS du membre suivent aussi (ADR 0050 §E6) : un retrait resté sur
+    #    l'ancien nom ne protégerait plus rien, et le kit réinstallerait sous le
+    #    nouveau ce que le membre avait retiré. Même ordre : un retrait déjà posé
+    #    sous `new` gagne (c'est le plus récent des deux faits), l'ancien part.
+    conn.execute(
+        "DELETE FROM connector_selection_removed a WHERE a.connector = %s "
+        "   AND EXISTS (SELECT 1 FROM connector_selection_removed b "
+        "                WHERE b.sub = a.sub AND b.org_id = a.org_id AND b.connector = %s)",
+        (old, new),
+    )
+    conn.execute(
+        "UPDATE connector_selection_removed SET connector = %s WHERE connector = %s",
         (new, old),
     )
     return cur.rowcount or 0

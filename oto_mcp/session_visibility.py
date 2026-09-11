@@ -159,11 +159,13 @@ async def compute_hidden_tools(ctx, sub: str, *, org=_DERIVE_ORG) -> set[str]:
     try:
         if not connector_selection.is_seeded(sub, prof_org):
             org_defaults = set(org_store.get_org_default_connectors(active_org) or []) if active_org else set()
-            connector_selection.seed_active(
-                sub,
-                (providers.DEFAULT_ACTIVE_CONNECTORS | org_defaults)
-                & connector_activation.exposed_connectors(active_org),
-                prof_org)
+            exposed_now = connector_activation.exposed_connectors(active_org)
+            socle = providers.DEFAULT_ACTIVE_CONNECTORS & exposed_now
+            # Provenance (ADR 0050 §E7) : le socle prime sur le kit — un connecteur
+            # que la plateforme installe d'office ne sort pas avec un retrait du kit.
+            origins = {n: connector_selection.KIT for n in org_defaults & exposed_now}
+            origins.update({n: connector_selection.SOCLE for n in socle})
+            connector_selection.seed_active(sub, origins, prof_org)
         _sel = connector_selection.list_selection(sub, prof_org)
         to_hide |= {
             n for n in all_names

@@ -1242,6 +1242,18 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # suivent en B3/B4/B5.
     from ..connectors import selection as _conn_sel
     _conn_sel.init_schema(conn)
+    # ADR 0050 §E7 (oto#166) : la PROVENANCE d'une installation — socle, kit, admin,
+    # membre, inconnue. La base est PARTAGÉE prod/préprod : cet ALTER s'applique à la
+    # production dès le boot préprod, pendant qu'elle sert encore l'ancien code. Il
+    # est donc strictement ADDITIF : défaut constant (instantané, PG ≥ 11, aucune
+    # réécriture), et l'ancien code — qui n'écrit pas la colonne — pose `inconnue`,
+    # la seule valeur qu'aucun geste d'org ne retire. Même définition que le
+    # `CREATE TABLE` de `connectors/selection.py` (bases vierges). La table des
+    # RETRAITS du membre (`connector_selection_removed`) naît par ce même
+    # `init_schema`, en `CREATE TABLE IF NOT EXISTS` : additive, invisible à
+    # l'ancien code.
+    conn.execute("ALTER TABLE user_selected_connectors "
+                 "ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'inconnue'")
     # ADR 0050 : passage au régime nominal « non-sélectionné = masqué ».
     # Backfill ONE-SHOT (sentinelle) des (sub, org) pré-existants avec ce
     # qu'ils VOYAIENT (exposé − ex-default_hidden) — zéro changement de

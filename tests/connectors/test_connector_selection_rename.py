@@ -31,6 +31,7 @@ def conn(pg_module_dsn):
     with psycopg.connect(pg_module_dsn, row_factory=dict_row, autocommit=True) as c:
         c.execute("DROP TABLE IF EXISTS user_selected_connectors")
         c.execute("DROP TABLE IF EXISTS connector_selection_seeded")
+        c.execute("DROP TABLE IF EXISTS connector_selection_removed")
         sel.init_schema(c)          # le VRAI schéma, PK comprise
         yield c
 
@@ -116,6 +117,20 @@ def test_other_connectors_are_never_touched(conn):
 
 _SRC = (pathlib.Path(__file__).resolve().parents[2]
         / "oto_mcp" / "connectors" / "selection.py").read_text(encoding="utf-8")
+
+
+def test_les_retraits_du_membre_suivent_le_renommage(conn):
+    """oto#166 (ADR 0050 §E6) : un retrait resté sur l'ancien nom ne protège plus rien —
+    le kit réinstallerait sous le nouveau ce que le membre avait retiré. Un retrait
+    déjà posé sous le nouveau nom gagne (la PK interdit les deux)."""
+    for sub, org_id, connector in (("u1", 1, "linkedin"), ("u2", 1, "linkedin"),
+                                   ("u2", 1, "aiark"), ("u3", 1, "folk")):
+        conn.execute("INSERT INTO connector_selection_removed (sub, org_id, connector) "
+                     "VALUES (%s, %s, %s)", (sub, org_id, connector))
+    sel.rename_selection(conn, "linkedin", "aiark")
+    assert {(r["sub"], r["connector"]) for r in conn.execute(
+        "SELECT sub, connector FROM connector_selection_removed").fetchall()} == {
+        ("u1", "aiark"), ("u2", "aiark"), ("u3", "folk")}
 
 
 def test_the_three_statements_stay_in_this_order():

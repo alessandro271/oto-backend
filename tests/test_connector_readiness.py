@@ -38,8 +38,10 @@ def _wire(monkeypatch, *, catalog=(_ROW,), selection=None, option_ok=True,
           mode="platform", pending=None, home_org=42):
     """Seams de domaine stubés — aucun accès DB (convention du repo)."""
     monkeypatch.setattr(CS, "_visible_catalog", lambda ctx: [dict(c) for c in catalog])
-    monkeypatch.setattr(CS.connector_selection, "list_selection",
-                        lambda sub, org: dict(selection or {}))
+    monkeypatch.setattr(CS.connector_selection, "list_selection_detail",
+                        lambda sub, org: {n: {"state": st, "origin": "inconnue"}
+                                          for n, st in (selection or {}).items()})
+    monkeypatch.setattr(CS.connector_selection, "list_removed", lambda sub, org: {})
     monkeypatch.setattr(CS.org_store, "get_org_default_connectors", lambda org: [])
     monkeypatch.setattr(CS, "_guide_refs_by_ns", lambda org: {})
     monkeypatch.setattr(CS.access, "reachable_instances_map", lambda sub, org: {})
