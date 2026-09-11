@@ -170,3 +170,38 @@ def test_unlink_dun_binding_precis_ne_prend_que_le_sien(surface):
     assert out["removed"] == 1
     assert [l.get("identity_ref") for l in surface["links"]
             if l["target_type"] == "connecteur"] == [None]
+
+
+# --- signal #883 : le link reconnaît, lui aussi, les deux écritures ---------------
+
+def _link_capture(monkeypatch):
+    vu: dict = {}
+
+    def _add(*a, **k):
+        vu.update(k)
+        return {"status": "updated", "changed": ["target_ref"],
+                "rewritten_from": k.get("rewrite_from")}
+    monkeypatch.setattr(P.db, "add_project_link", _add)
+    return vu
+
+
+def test_link_par_id_reconnait_le_tableau_stocke_sous_son_nom(surface, monkeypatch):
+    """Le cas vécu : la ligne porte « suivi-commercial-index », l'agent relie par l'id
+    108 pour changer le rôle. Le link doit désigner la ligne STOCKÉE à réécrire — sans
+    quoi l'upsert crée un second lien et l'unlink, qui reconnaît les deux, les retire."""
+    vu = _link_capture(monkeypatch)
+    out = P._project(CTX, P.ProjectInput(op="link", project_id=59, target_type="tableau",
+                                         target_ref="108", role="index"))
+    assert vu["rewrite_from"] == "suivi-commercial-index"
+    assert out["rewritten_from"] == "suivi-commercial-index"
+    assert "duplicate_refs" not in out
+
+
+def test_link_dun_tableau_deja_stocke_par_id_ne_reecrit_rien(surface, monkeypatch):
+    """Contrôle négatif : « 12 » est stocké sous son id, aucune autre écriture ne le
+    désigne — rien à réécrire, rien à signaler."""
+    vu = _link_capture(monkeypatch)
+    out = P._project(CTX, P.ProjectInput(op="link", project_id=59, target_type="tableau",
+                                         target_ref="linkedin-feed", role="flux"))
+    assert vu["rewrite_from"] is None
+    assert "duplicate_refs" not in out

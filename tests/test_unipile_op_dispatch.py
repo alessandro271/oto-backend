@@ -96,6 +96,22 @@ def test_chat_send_refuses_without_a_destination(client):
     client.send_message.assert_not_called()
 
 
+@pytest.mark.parametrize("limit", [0, 26, 50])
+def test_chat_list_refuses_a_page_linkedin_refuses_naming_the_bound(client, limit):
+    """#873 — au-delà de 25, Unipile répond « 400 Invalid querystring » sans nommer la
+    borne : le refus la nomme, et renvoie à `cursor`, avant tout appel amont."""
+    with pytest.raises(McpError, match="1 à 25") as e:
+        _tool("linkedin_unipile_chat")(op="list", limit=limit)
+    assert "cursor" in str(e.value.error.message)
+    client.list_chats.assert_not_called()
+
+
+def test_chat_list_accepts_the_bound_itself(client):
+    """Contrôle positif : 25 passe (mesuré le 11/09/2026 sur un compte réel)."""
+    _tool("linkedin_unipile_chat")(op="list", limit=25)
+    assert client.list_chats.call_args.kwargs["limit"] == 25
+
+
 def test_chat_react_omits_chat_id_when_absent(client):
     """`chat_id` est requis par l'API v2 mais absent de la v1 : on ne passe le kwarg
     que s'il est fourni, pour rester compatible d'un oto-core plus ancien."""

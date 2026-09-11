@@ -372,6 +372,7 @@ def register(mcp: FastMCP) -> None:
         record_id: Optional[str] = None,
         attributes: Optional[dict] = None,
         query: Optional[str] = None,
+        filter: Optional[dict] = None,
         limit: int = 50,
         offset: int = 0,
     ) -> dict:
@@ -385,11 +386,15 @@ def register(mcp: FastMCP) -> None:
         - **"list"** (default): list records of that object in the Attio CRM
           workspace. Paginated (`limit` / `offset`).
         - **"get"**: fetch a record by its Attio record ID.
-        - **"search"**: search by free-text `query` — matches name/domain/etc.
-          for companies, name/email/etc. for people.
+        - **"search"**: records whose NAME contains `query` (case-insensitive
+          substring — an email address or a domain does NOT match), or records
+          matching `filter`, an Attio filter object: `{"email_addresses":
+          "ada@acme.com"}` finds the person carrying that address — the check to
+          run before creating a person. One of the two, never both.
         - **"create"** — ⚠️ WRITES: create a record from `attributes`.
-        - **"update"** — ⚠️ WRITES: update a record (PATCH — multiselect values
-          are appended).
+        - **"update"** — ⚠️ WRITES: update a record (PATCH: a multiselect value
+          you pass is ADDED to the existing ones, and an empty list changes
+          nothing — this tool cannot clear or replace a multiselect).
         - **"delete"** — ⚠️ WRITES: delete a record by ID. Irreversible.
 
         Args:
@@ -404,15 +409,20 @@ def register(mcp: FastMCP) -> None:
                 - companies: `name`, `domains`, `description`, `categories`, etc.
                 - people: `name`, `email_addresses`, `phone_numbers`, `company`,
                   `job_title`, etc.
-                - deals — champs clés : `name` (str ou [{"value": ...}]), `stage`
-                  (titre du status, ex "Lead" | "In Discussion" | "Proposal" |
-                  "Active"), `owner` (actor-reference — auto-rempli avec le 1er
-                  workspace member si omis), `associated_company` /
+                - deals: `name` (str or [{"value": ...}]), `stage` (the TITLE of
+                  one of the workspace's deal statuses), `owner`
+                  (actor-reference — auto-filled with the first workspace member
+                  when omitted), `value`, `associated_company` /
                   `associated_people` ([{"target_object": "companies",
-                  "target_record_id": ...}]), et les customs workspace : `slug`
-                  (unique, kebab-case), `tjm` ({"currency_value": N} — type
-                  currency), `via`, `debut`/`fin` (date).
-            query: op="search" — free-text query.
+                  "target_record_id": ...}]).
+                Every other slug, and the deal stages, belong to the workspace:
+                read them with `attio_attribute(target="objects",
+                identifier="<object>", op="list")` and `op="statuses",
+                attribute="stage"` — never assume one.
+            query: op="search" — substring of the record NAME.
+            filter: op="search" — Attio filter object, `{"<attribute slug>":
+                <value>}` or with an operator (`{"$contains": ...}`); instead of
+                `query`.
             limit: op="list"/"search" — max records (default 50).
             offset: op="list" — pagination offset.
         """
@@ -423,6 +433,11 @@ def register(mcp: FastMCP) -> None:
             raise _bad(_one_of("op", _RECORD_OPS))
         if object not in _RECORD_OBJECTS:
             raise _bad(_one_of("object", _RECORD_OBJECTS))
+        # #880 — le client laisse `filters` écraser `query` sans rien dire : les deux
+        # ensemble ne feraient qu'une des deux recherches.
+        if op == "search" and query and filter:
+            raise _bad("op='search' : query OU filter, pas les deux — le filtre "
+                       "remplacerait la recherche par nom sans le dire")
         client, is_platform = _client()
         resource = getattr(client, object)
 
@@ -431,7 +446,13 @@ def register(mcp: FastMCP) -> None:
         elif op == "get":
             result = resource.get(_need(record_id, "record_id", op))
         elif op == "search":
-            result = resource.search(query=_need(query, "query", op), limit=limit)
+            # `query` n'est comparé qu'au NOM (oto-core : `name $contains`) — une
+            # adresse ou un domaine ne s'y trouvent pas (#880) ; le filtre Attio, lui,
+            # atteint n'importe quel attribut.
+            if not query and not filter:
+                raise _bad("op='search' requiert query (sous-chaîne du nom) ou filter "
+                           "(objet filtre Attio, ex. {\"email_addresses\": \"…\"})")
+            result = resource.search(query=query, filters=filter, limit=limit)
         elif op == "create":
             values = dict(_need(attributes, "attributes", op))
             # `owner` est obligatoire côté workspace pour un deal : sans lui la

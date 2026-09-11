@@ -196,6 +196,21 @@ def _merge_group_ids(current_groups, add, remove) -> list[dict]:
     return [{"id": gid} for gid in result]
 
 
+def _forme_ecriture(valeur):
+    """Une valeur RELUE ramenée à la forme que Folk accepte en écriture (#866, #834).
+
+    Folk rend un champ utilisateur sous la forme `{id, fullName, email}`, un champ de
+    contact ou d'objet sous `{id, fullName, entityType}`, mais n'accepte en écriture
+    que `{id}` (ou `{email}` pour un utilisateur) : renvoyer la forme lue telle quelle
+    fait refuser TOUT l'appel en 422 (« either an id or an email, not both »), y
+    compris pour un champ d'un groupe que l'appel ne visait pas. Seules les listes de
+    dicts qui portent un `id` sont touchées ; tout le reste passe tel quel."""
+    if isinstance(valeur, list) and valeur and all(
+            isinstance(d, dict) and d.get("id") for d in valeur):
+        return [{"id": d["id"]} for d in valeur]
+    return valeur
+
+
 def _merge_custom_fields(current_cfv, patch: dict) -> dict:
     """Fusionne `customFieldValues` et renvoie l'objet COMPLET attendu par l'API.
 
@@ -222,7 +237,8 @@ def _merge_custom_fields(current_cfv, patch: dict) -> dict:
     """
     out: dict = {}
     for gid, champs in (current_cfv or {}).items():
-        out[str(gid)] = dict(champs) if isinstance(champs, dict) else champs
+        out[str(gid)] = ({k: _forme_ecriture(v) for k, v in champs.items()}
+                         if isinstance(champs, dict) else champs)
     for gid, champs in (patch or {}).items():
         gid = str(gid)
         ancien = out.get(gid)
@@ -807,6 +823,11 @@ def register(mcp: FastMCP) -> None:
         of `items`, `*` = required, snake_case — see the warning above):
             person: {first_name*, last_name, emails, phones, job_title,
                 company_name, company_id, group_ids, urls, description}
+                — ⚠️ Folk ALSO links, on its own, a company matched on the
+                person's primary email domain, even when `company_id` is
+                passed, and may create one for it — a duplicate of the company
+                you named. Read back the person's `companies` after the create
+                to see what Folk added.
             company: {name*, emails, industry}
             deal: {name*, people_ids, company_ids, custom_fields}
             note: {entity_id*, content*, visibility}

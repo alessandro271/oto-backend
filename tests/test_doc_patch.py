@@ -276,3 +276,50 @@ def test_un_corps_passe_avec_delete_est_refuse_par_le_moteur():
     défauts que ce dépôt refuse (leçon #461)."""
     with pytest.raises(ValueError):
         P.patch_section(BODY, "Contacts", "du contenu", mode="delete")
+
+
+# ── #828 / #869 : deux titres qui se normalisent pareil ─────────────────────────
+#
+# La comparaison ignore le niveau et la casse. Le premier titre venu était pris en
+# silence : un replace visant le second écrasait le premier, et l'accusé disait « ok ».
+
+JOURNAL = ("# Signal Log\n\n### 26 August 2026\n\npremier bloc\n\n"
+           "### 26 August 2026\n\nsecond bloc\n\n### 25 August 2026\n\nplus ancien\n")
+
+
+def test_deux_titres_identiques_sont_refuses_pas_le_premier_pris():
+    with pytest.raises(P.AmbiguousSection) as ei:
+        P.patch_section(JOURNAL, "26 August 2026", "réécrit", mode="replace")
+    assert [(n, texte) for n, _niveau, texte in ei.value.matches] == [
+        (3, "26 August 2026"), (7, "26 August 2026")]
+
+
+def test_un_niveau_different_ne_desambiguise_pas():
+    """`## Contacts` et `### contacts` : même clé normalisée, donc même refus —
+    le niveau n'entre pas dans la comparaison, il ne peut pas trancher en douce."""
+    corps = "## Contacts\n\n- ada\n\n## Suite\n\n### contacts\n\n- bob\n"
+    with pytest.raises(P.AmbiguousSection) as ei:
+        P.patch_section(corps, "Contacts", "x", mode="append")
+    assert [niveau for _n, niveau, _t in ei.value.matches] == [2, 3]
+
+
+@pytest.mark.parametrize("mode", ["replace", "append", "prepend"])
+def test_tous_les_modes_refusent_l_ambiguite(mode):
+    with pytest.raises(P.AmbiguousSection):
+        P.patch_section(JOURNAL, "26 august 2026", "x", mode=mode)
+
+
+def test_delete_refuse_l_ambiguite_aussi():
+    with pytest.raises(P.AmbiguousSection):
+        P.patch_section(JOURNAL, "26 August 2026", mode="delete")
+
+
+def test_subsections_refuse_de_deviner_quels_enfants_partiraient():
+    with pytest.raises(P.AmbiguousSection):
+        P.subsections(JOURNAL, "26 August 2026")
+
+
+def test_un_titre_unique_voisin_reste_patchable():
+    """La contre-épreuve : le refus ne mord que sur le titre ambigu."""
+    out = P.patch_section(JOURNAL, "25 August 2026", "réécrit", mode="replace")
+    assert "réécrit" in out and out.count("### 26 August 2026") == 2

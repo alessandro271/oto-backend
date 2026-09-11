@@ -1,27 +1,21 @@
-"""Une citation qui ne trouve rien se DIT, et l'asymétrie du graphe aussi (#611).
+"""Une citation qui ne trouve rien se DIT (#611) — et l'asymétrie d'avant est fermée (#888).
 
 Signalé le 28/08 : une page citait six autres pages, en tableau ET en ligne de
 liens ; aucune des six ne la voyait dans ses liens entrants, alors que le sens
-inverse s'indexait correctement. Quatre hypothèses avaient été éprouvées et
-écartées par l'auteur du signal (liens en cellule, réindexation partielle,
-cohérence différée, cibles du même jour).
+inverse s'indexait correctement. La cause, reproduite le 03/09 sur ce banc factice,
+était une ASYMÉTRIE de portée : une page du projet ANCRÉ de l'org (l'ancienne « base
+de connaissance ») résolvait ses `[[…]]` contre ce seul projet, tandis qu'une page de
+projet résolvait contre `[projet, ancre]`.
 
-**La cause, reproduite ici le 03/09 sur le banc factice, est une ASYMÉTRIE de
-portée** : une page de la **base de connaissance** résout ses `[[…]]` contre la
-base SEULE, tandis qu'une page de **projet** résout contre `[projet, base]`. Une
-page de la base ne peut donc jamais citer une page de projet ; l'inverse marche.
-Le lien est à sens unique dans l'index et à double sens dans la prose — et aucune
-réécriture ne le répare, ce qui explique qu'un `op=update` complet n'ait rien
-changé.
+Le 03/09, le banc choisissait de RENDRE VISIBLE l'asymétrie plutôt que de la corriger,
+de peur qu'une portée « toute l'org » fasse résoudre « Start Here » n'importe où. Le
+11/09/2026 (signaux #888, #890), la décision est prise : la résolution se fait parmi
+les projets que possède l'org, et un titre porté par plusieurs d'entre eux est AMBIGU
+— dit, jamais deviné. La crainte du 03/09 est tenue par l'ambiguïté : « Start Here »
+présent dans deux projets ne résout nulle part, et l'écriture le dit.
 
-⚠️ **Ce banc ne corrige PAS l'asymétrie, il la rend visible** — et c'est
-délibéré : élargir la résolution à tous les projets d'une org ferait résoudre
-« Start Here » n'importe où, et transformerait chaque écriture en scan de toute
-l'org. Ce qui manquait n'était pas la portée, c'était de SAVOIR : le lien-souche
-n'est stocké nulle part et n'était dit nulle part, donc la page se croyait citée.
-
-Éprouvé rouge le 2026-09-03 : le relevé retiré ⟹ le deuxième test constate qu'une
-écriture peut laisser six citations mortes sans un mot.
+Reste vrai, et ce banc le garde : un lien-souche n'est stocké nulle part, donc il doit
+être DIT au moment de son écriture.
 """
 from __future__ import annotations
 
@@ -34,7 +28,8 @@ from oto_mcp.db import backlinks as B          # noqa: E402
 from test_backlinks import _Conn               # noqa: E402
 
 _ORG = {"owner_type": "org", "owner_id": "196", "context_org_id": None}
-# La carte de tête vit dans la BASE (projet 900) ; ses six cibles dans un PROJET.
+# La carte de tête vit dans un projet d'org (900) ; ses cibles dans un autre (100).
+_PROJETS_ORG = [900, 100]
 _DOCS = [
     {"id": 627, "project_id": 900, "title": "Company OS: Start Here"},
     {"id": 1191, "project_id": 100, "title": "Process Intelligence: Start Here"},
@@ -43,40 +38,41 @@ _DOCS = [
 _CORPS = "voir [[Product: Start Here]] et [[Process Intelligence: Start Here]]"
 
 
-def test_l_asymetrie_est_REELLE_et_reproductible():
-    """Le fait qui manquait au signal : ce n'est ni l'extraction ni l'indexation
-    qui échoue, c'est la PORTÉE, et elle dépend d'où vit la page qui cite."""
-    depuis_la_base = _Conn(project=_ORG, kb=900, docs=_DOCS)
-    B.refresh_links(depuis_la_base, 627, 900, _CORPS)
-    assert depuis_la_base.inserted == [], (
-        "une page de la base ne voit pas les pages de projet — si ce jour arrive, "
-        "c'est ce banc qu'il faut relire, pas le signal")
+def test_l_asymetrie_entre_projets_d_org_est_FERMEE():
+    """Le cas du signal : la carte de tête cite les pages d'un autre projet de l'org.
+    Elles se lient maintenant, dans les deux sens."""
+    depuis_la_carte = _Conn(project=_ORG, org_projects=_PROJETS_ORG, docs=_DOCS)
+    B.refresh_links(depuis_la_carte, 627, 900, _CORPS)
+    assert sorted(depuis_la_carte.inserted) == [(627, 1191), (627, 1196)]
 
-    depuis_le_projet = _Conn(project=_ORG, kb=900, docs=_DOCS)
+    depuis_le_projet = _Conn(project=_ORG, org_projects=_PROJETS_ORG, docs=_DOCS)
     B.refresh_links(depuis_le_projet, 1196, 100, "voir [[Company OS: Start Here]]")
-    assert depuis_le_projet.inserted == [(1196, 627)], (
-        "le sens inverse, lui, s'indexe : c'est bien une asymétrie")
+    assert depuis_le_projet.inserted == [(1196, 627)]
 
 
 def test_l_ecriture_NOMME_les_citations_qui_ne_prennent_pas():
-    """Le remède : un lien-souche n'est stocké nulle part, donc il doit être DIT
-    au moment où il est écrit — le seul moment où son auteur peut agir."""
+    """Le remède de #611 tient : une cible hors de portée — ici dans un projet qui
+    n'est pas un projet de l'org (une équipe, un projet personnel, une autre org) —
+    est DITE au moment de l'écriture, le seul où son auteur peut agir."""
+    hors_org = [d if d["id"] == 627 else dict(d, project_id=555) for d in _DOCS]
     trace: dict = {}
-    conn = _Conn(project=_ORG, kb=900, docs=_DOCS)
+    conn = _Conn(project=_ORG, org_projects=_PROJETS_ORG, docs=hors_org)
     B.refresh_links(conn, 627, 900, _CORPS, trace)
     assert trace["citations_sans_cible"] == ["Product: Start Here",
                                              "Process Intelligence: Start Here"]
     hint = trace["citations_sans_cible_hint"].casefold()
     assert "aucun lien entrant" in hint, "il faut dire la CONSÉQUENCE, pas le fait"
-    assert "hors de portée" in hint, "et la cause, sinon on cherche le mauvais défaut"
+    assert "hors de" in hint and "portée" in hint, (
+        "et la cause, sinon on cherche le mauvais défaut")
+    assert "projets que possède l'organisation" in hint, "la portée se dit en projets"
     assert "base de connaissance" not in hint, (
-        "la « base de connaissance » n'existe plus (10/09/2026) : la portée se dit en "
-        "projets — celui de la page, puis le projet de documents historique de l'org")
+        "la « base de connaissance » n'existe plus (10/09/2026)")
+    assert "historique" not in hint, "l'ancre n'est plus une marche (11/09/2026)"
 
 
 def test_le_releve_reste_VIDE_quand_tout_resout():
     trace: dict = {}
-    conn = _Conn(project=_ORG, kb=900, docs=_DOCS)
+    conn = _Conn(project=_ORG, org_projects=_PROJETS_ORG, docs=_DOCS)
     B.refresh_links(conn, 1196, 100, "voir [[Company OS: Start Here]]", trace)
     assert trace == {}, "pas de clé parasite dans une écriture normale"
 
@@ -90,6 +86,7 @@ def test_la_LIMITE_est_dite_dans_la_description_servie():
     assert "not symmetric" in prose
     assert "orphan check" in prose
     assert "citations_sans_cible" in prose
+    assert "citations_ambigues" in prose
 
 
 def test_la_description_servie_ne_promet_plus_une_portee_UNIQUE():

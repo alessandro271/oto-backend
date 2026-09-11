@@ -96,6 +96,7 @@ _TEXTUAL_FIELDS = ("text", "original_text")
 # — micro-backoff qui auto-pace la rafale sans marteler (le martèlement dégrade en timeouts
 # puis fait checkpoint/déconnecte le compte). + cache fiches société (route la plus
 # contrainte, ~100/fenêtre) = 0 appel amont, 0 quota. Garde-fous PROCESS-LOCAL (mono-loop).
+_CHAT_LIST_MAX = 25      # page max de `linkedin_unipile_chat op=list` (#873, LinkedIn)
 _RATE_LIMIT_UNTIL: dict[str, float] = {}   # sub -> epoch de fin de cooldown
 _COMPANY_CACHE: dict[tuple, tuple] = {}     # (sub, ident_lower) -> (epoch, résultat)
 _COMPANY_TTL = 6 * 3600                      # fiches société ~statiques → 6h
@@ -1242,7 +1243,8 @@ def register(mcp: FastMCP) -> None:
         """Messagerie LinkedIn (DM) via Unipile.
 
         `op` :
-        - **"list"** (défaut) : les conversations, paginé (`limit` + `cursor`).
+        - **"list"** (défaut) : les conversations, paginé (`limit` + `cursor`) —
+          25 au plus par page (borne de LinkedIn) : au-delà, pagine par `cursor`.
           Chaque fil 1-à-1 est enrichi de `attendee_name`/`attendee_headline`/
           `attendee_profile_url` (résolus en batch — le `name` brut des fils 1-à-1
           est null et `attendee_provider_id` est opaque). `with_names=False` coupe
@@ -1287,6 +1289,12 @@ def register(mcp: FastMCP) -> None:
         client = unipile_client()
 
         if op == "list":
+            # #873 — au-delà de 25, LinkedIn fait répondre à Unipile « 400 Invalid
+            # querystring », sans nommer la borne (mesuré le 11/09/2026 : 25 passe,
+            # 26 refuse). Refusé ici en la nommant, avant tout appel.
+            if limit is not None and not 1 <= limit <= _CHAT_LIST_MAX:
+                raise _bad(f"op='list' : `limit` va de 1 à {_CHAT_LIST_MAX} "
+                           "(borne de LinkedIn) — pagine avec `cursor`.")
             return client.list_chats(limit=limit if limit is not None else 20,
                                      cursor=cursor, with_attendee_names=with_names)
 

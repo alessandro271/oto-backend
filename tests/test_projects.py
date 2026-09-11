@@ -47,7 +47,7 @@ def seams(monkeypatch):
     rec["link"] = []
     rec["unlink"] = []
     def _add_link(pid, tt, tr, label=None, role=None, config=None, identity_ref=None,
-                  slot=None):
+                  slot=None, rewrite_from=None):
         rec["link"].append((pid, tt, tr, label, role, config, identity_ref))
         # oto#119 — la vraie fonction rend l'effet du geste ; la doublure aussi.
         return {"status": "created", "changed": []}

@@ -39,6 +39,21 @@ def refus_section_introuvable(heading: str, disponibles: list, corps: str) -> st
     return msg
 
 
+def refus_section_ambigue(heading: str, candidats: list) -> str:
+    """Le message d'un `section=` qui désigne PLUSIEURS titres (#828, #869) : lesquels,
+    avec leur niveau et leur ligne, et la seule sortie qui existe aujourd'hui. Sans la
+    liste, l'agent ne peut que réessayer à l'identique ; sans la sortie, il réécrit la
+    page entière — ce que le patch existe pour éviter."""
+    liste = " ; ".join(f"n°{k} `{'#' * niveau} {texte}` (ligne {ligne})"
+                       for k, (ligne, niveau, texte) in enumerate(candidats, 1))
+    return (f"Section « {heading} » ambiguë : {len(candidats)} titres y correspondent — "
+            f"{liste}. `section` compare le TEXTE du titre, sans son niveau ni sa casse : "
+            "aucun ne peut être visé seul, et RIEN n'a été modifié. Pour en viser un, "
+            "rends d'abord les titres uniques — `mode=replace` sur une section PARENTE au "
+            "titre unique qui les contient, en renommant l'un d'eux dans son `body_md`, "
+            "ou `op=update` avec le corps complet.")
+
+
 def patch(sub: Optional[str], inp, row: dict, pid: int) -> dict:
     # Édition PARTIELLE (top5 #3) : ne touche QUE la région visée → deux auteurs sur
     # des régions différentes ne s'écrasent plus. On applique le patch puis on réécrit
@@ -87,9 +102,11 @@ def patch(sub: Optional[str], inp, row: dict, pid: int) -> dict:
     # patch — vendu comme le mode sûr — en écrasement du travail d'un autre auteur
     # (signal #334). On ne refuse pas : on ANNONCE ce qui part, la révision précédente
     # permettant de revenir en arrière (op=revisions).
-    removed = (doc_patch.subsections(corps, inp.section)
-               if vise_section and mode in ("replace", "delete") else [])
+    # Dans le `try` : sur un titre AMBIGU, dire quels enfants partiraient est impossible,
+    # donc le refus doit sortir par le même chemin que celui du patch (#869).
     try:
+        removed = (doc_patch.subsections(corps, inp.section)
+                   if vise_section and mode in ("replace", "delete") else [])
         if vise_section:
             new_body = doc_patch.patch_section(corps, inp.section, inp.body_md,
                                                mode=mode)
@@ -101,6 +118,11 @@ def patch(sub: Optional[str], inp, row: dict, pid: int) -> dict:
         # à un mur qui apprend, plutôt qu'à un synonyme deviné.
         require(False, "unknown_section",
                 refus_section_introuvable(inp.section, e.available, corps), 404)
+    except doc_patch.AmbiguousSection as e:
+        # Le premier titre venu était pris en silence : un replace visant le second
+        # écrasait le premier, et l'accusé disait « ok » (#828, #869).
+        require(False, "ambiguous_section",
+                refus_section_ambigue(inp.section, e.matches), 409)
     except doc_patch.HeadingInPreamble as e:
         require(False, "heading_in_preamble",
                 f"Le préambule est ce qui PRÉCÈDE le premier titre : y écrire un "

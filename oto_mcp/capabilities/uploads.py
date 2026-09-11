@@ -137,7 +137,10 @@ def _upload_url(ctx: ResolvedCtx, inp: UploadUrlInput) -> dict:
         # (claude.ai), transmettre l'URL à l'humain qui l'ouvre → page d'upload.
         "hint": (f"If you have a shell: `curl -X PUT -H 'Content-Type: {ct}' "
                  f"--data-binary @FILE '{url}'`. If you DON'T (no shell), hand this URL to "
-                 "the user — opening it in a browser shows an upload form. Single-use, "
+                 "the user — opening it in a browser shows an upload form. With neither "
+                 "(unattended scheduled run, or the PUT blocked by your sandbox's egress "
+                 "policy), send the content INLINE instead: `data_write(rows=[…], key=…)` in "
+                 "slices for a table, `oto_doc op=create|update|patch` for a page. Single-use, "
                  "expires soon; the body never returns through you (only a light receipt)."),
         "target": target,
     }
@@ -154,7 +157,10 @@ CAPABILITIES += [
             "Returns {url, method:PUT, expires_at, max_bytes, headers}. TWO ways to use the "
             "SAME url: if you have a shell, `curl -X PUT --data-binary @FILE '<url>'`; if you "
             "don't (e.g. claude.ai), HAND THE URL to the user — opening it shows an upload "
-            "form. The backend materializes it and returns a light receipt (id + length), "
+            "form. With neither (unattended scheduled run, or the PUT blocked by your "
+            "sandbox's egress policy), send it INLINE: `data_write(rows=[…], key=…)` in "
+            "slices, `oto_doc op=create|update|patch`. "
+            "The backend materializes it and returns a light receipt (id + length), "
             "never the body. target='doc' writes a Documents page (op=create: project_id + "
             "title [+ parent_id, kind]; op=update: doc_id) ; target='project_file' attaches a "
             "raw file (project_id + filename [+ title, description, content_type]) — fills the "

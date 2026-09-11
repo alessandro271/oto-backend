@@ -273,8 +273,17 @@ def persist_token(sub: str, org_id: int, token_response: dict) -> str:
     return email
 
 
-class GoogleReauthRequired(Exception):
-    """Refresh token Google mort (invalid_grant) → l'user doit reconnecter."""
+class GoogleReauthRequired(RuntimeError):
+    """Refresh token Google mort (invalid_grant) → l'user doit reconnecter.
+
+    `RuntimeError` et non `Exception` (#875/#876) : les six outils Google traduisent
+    les `RuntimeError` de `credentials_for` en refus lisible, et seulement elles. Un
+    grant mort finissait donc en « Erreur interne du serveur » — le seul cas où
+    l'appelant a un geste précis à faire (reconnecter CE compte) était celui où on
+    ne lui disait rien."""
+
+
+_RECONNECTER = "https://manage.oto.cx/ (section Google)"
 
 
 def _refresh_access_token(refresh_token: str) -> dict:
@@ -316,7 +325,7 @@ def _no_account_message(sub: str, org_id: Optional[int], account: Optional[str])
     # noqa: SILENT — message d'aide : liste de comptes connectés absente plutôt que fausse
     except Exception:      # jamais transformer une erreur d'entrée en panne
         connectes = []
-    dash = "https://manage.oto.cx/ (section Google)"
+    dash = _RECONNECTER
     if not account:
         return (f"Aucun compte Google connecté. Connecte-en un sur {dash}."
                 if not connectes else
@@ -376,7 +385,10 @@ def credentials_for(sub: str, account: Optional[str] = None):
             # `Credentials` valides ou une exception, jamais un `None` muet).
             connector_health.mark_rejected(
                 credentials_store.MEMBER, member_id, "google", account, str(e) or None)
-            raise
+            raise GoogleReauthRequired(
+                f"Le jeton du compte Google {account or '(sans email)'} est expiré ou "
+                "révoqué (Google répond invalid_grant) : reconnecte ce compte sur "
+                f"{_RECONNECTER}. Rien n'a été fait.") from e
         access_token = resp["access_token"]
         expires_in = int(resp.get("expires_in", 0) or 0)
         new_exp = datetime.fromtimestamp(time.time() + expires_in, tz=timezone.utc).isoformat()

@@ -123,7 +123,8 @@ def register(mcp: FastMCP) -> None:
         - **"get"**: get a single calendar event by id (`event_id`, detailed —
           adds description, attendees, recurrence, reminders).
         - **"create"**: create a calendar event (`summary` + `start`).
-          ⚠️ **Writes into a real calendar** — attendees may be notified.
+          ⚠️ **Writes into a real calendar.** This tool cannot invite anyone: it
+          has no attendees parameter, so the event is created without guests.
         - **"update"**: fix an existing event (`event_id` + what changes). PATCHES —
           only the fields you pass are touched, everything else (attendees,
           recurrence, reminders, meeting link) is left alone. Use this instead of

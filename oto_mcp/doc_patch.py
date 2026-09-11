@@ -56,6 +56,22 @@ class SectionNotFound(Exception):
         super().__init__(f"section introuvable: {heading!r}")
 
 
+class AmbiguousSection(Exception):
+    """PLUSIEURS titres correspondent au `section` demandé (signaux #828, #869).
+
+    La comparaison porte sur le TEXTE du titre, sans son niveau ni sa casse : un
+    journal qui porte deux `### 26 August 2026`, ou une page qui a `## Contacts` et
+    `### contacts`, donne la même clé à deux sections. `_locate` prenait la PREMIÈRE
+    en silence — un `replace` qui visait la seconde écrasait la première, et l'accusé
+    disait « ok ». Aucun candidat ne peut être deviné, et une écriture sur la mauvaise
+    section se lit comme un succès : on refuse en les nommant.
+    `matches` = `(n° de ligne 1-based, niveau, texte du titre)`, dans l'ordre du corps."""
+    def __init__(self, heading: str, matches: list[tuple[int, int, str]]):
+        self.heading = heading
+        self.matches = matches
+        super().__init__(f"section ambiguë: {heading!r} ({len(matches)} titres)")
+
+
 class HeadingInPreamble(Exception):
     """Le corps proposé pour le préambule contient un titre markdown.
 
@@ -136,24 +152,30 @@ def _strip_own_heading(new_body: str, target: str) -> str:
     return "\n".join(rest)
 
 
-def _locate(lines: list[str], target: str) -> tuple[int, int, int] | None:
+def _locate(lines: list[str], target: str,
+            heading: str | None = None) -> tuple[int, int, int] | None:
     """`(index du titre, niveau, fin exclusive)` de la section `target` (déjà normalisé).
 
     Fin de section = prochain titre de niveau ≤ (une sous-section reste DEDANS).
-    `None` si le titre n'existe pas."""
-    for i, line in enumerate(lines):
-        m = _HEADING.match(line)
-        if not m or _norm(m.group(2)) != target:
-            continue
-        level = len(m.group(1))
-        j = i + 1
-        while j < len(lines):
-            m2 = _HEADING.match(lines[j])
-            if m2 and len(m2.group(1)) <= level:
-                break
-            j += 1
-        return i, level, j
-    return None
+    `None` si le titre n'existe pas ; `AmbiguousSection` si PLUSIEURS titres
+    correspondent — on les compte TOUS avant de choisir, jamais le premier venu.
+    `heading` = la chaîne demandée, pour que le refus la cite telle quelle."""
+    hits = [(i, len(m.group(1)), m.group(2).strip())
+            for i, m in enumerate(_HEADING.match(ln) for ln in lines)
+            if m and _norm(m.group(2)) == target]
+    if not hits:
+        return None
+    if len(hits) > 1:
+        raise AmbiguousSection(heading if heading is not None else target,
+                               [(i + 1, niveau, texte) for i, niveau, texte in hits])
+    i, level, _texte = hits[0]
+    j = i + 1
+    while j < len(lines):
+        m2 = _HEADING.match(lines[j])
+        if m2 and len(m2.group(1)) <= level:
+            break
+        j += 1
+    return i, level, j
 
 
 def subsections(body: str, heading: str) -> list[str]:
@@ -163,9 +185,11 @@ def subsections(body: str, heading: str) -> list[str]:
     partie, donc `mode='replace'` — et `mode='delete'` — les emportent AVEC le reste.
     Tant que c'était silencieux, patcher un parent écrasait le travail d'un autre auteur
     sur l'enfant — le contraire de ce que le patch promet (signal #334). Le caller
-    annonce ce qu'il retire. Liste vide si la section est introuvable ou sans enfant."""
+    annonce ce qu'il retire. Liste vide si la section est introuvable ou sans enfant.
+    Lève `AmbiguousSection` comme `patch_section` : on ne peut pas dire QUELS enfants
+    partiraient sans savoir quelle section est visée — le caller refuse avant d'écrire."""
     lines = (body or "").split("\n")
-    found = _locate(lines, _norm(heading))
+    found = _locate(lines, _norm(heading), heading)
     if not found:
         return []
     i, _level, j = found
@@ -215,11 +239,12 @@ def patch_section(body: str, heading: str, new_body: str | None = None,
     `subsections()` dit lesquelles, pour que le caller l'annonce.
     `new_body` = le CORPS de la section : s'il rouvre lui-même le titre visé, ce titre
     de tête est absorbé (jamais dupliqué).
-    Lève `SectionNotFound` si le titre n'existe pas."""
+    Lève `SectionNotFound` si le titre n'existe pas, `AmbiguousSection` si plusieurs
+    titres lui correspondent (le corps n'est alors pas touché)."""
     _check_mode(mode, new_body)
     lines = (body or "").split("\n")
     target = _norm(heading)
-    found = _locate(lines, target)
+    found = _locate(lines, target, heading)
     if found is None:
         raise SectionNotFound(heading, headings(body))
     i, _level, j = found

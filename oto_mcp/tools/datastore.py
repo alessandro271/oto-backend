@@ -899,7 +899,8 @@ def register(mcp: FastMCP) -> None:
                 empty cell gets nothing — the client handed over nothing there,
                 which is not the same as handing over an empty value.
             rows: BATCH mode — a list of row dicts written in one call.
-            key: business key field for batch upsert/dedup (else `schema.key`).
+            key: BATCH only (with `rows=[…]`) — business key field for upsert/dedup
+                (else `schema.key`). Refused alongside `row`.
             readonly_override: `true` = overwrite the `readonly` columns THIS CALL
                 writes, instead of being refused. Owner or governor of the table
                 only ; valid for this call alone ; journaled.

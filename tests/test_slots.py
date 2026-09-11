@@ -200,7 +200,8 @@ def _wire_link(monkeypatch, add=None):
     monkeypatch.setattr(P.db, "list_project_links", lambda pid: [])
     rec = {}
 
-    def _add(pid, tt, tr, label=None, role=None, config=None, identity_ref=None, slot=None):
+    def _add(pid, tt, tr, label=None, role=None, config=None, identity_ref=None, slot=None,
+             rewrite_from=None):
         if add:
             add(slot)
         rec["slot"] = slot

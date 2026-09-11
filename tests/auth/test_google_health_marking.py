@@ -93,6 +93,43 @@ def test_un_grant_mort_marque_puis_releve(monkeypatch, wiring):
     assert calls["update"] == [], "un grant mort ne doit jamais persister de nouveau token"
 
 
+def test_le_grant_mort_rend_un_refus_qui_nomme_le_compte(monkeypatch, wiring):
+    """#875/#876 — la relève est une `RuntimeError` (la seule famille que les outils
+    Google traduisent en refus lisible) et son message dit QUEL compte reconnecter, et
+    où. Avant : `Exception` nue, donc « Erreur interne du serveur » côté agent."""
+    import requests
+    monkeypatch.setattr(requests, "post", lambda *a, **k: _Resp(
+        400, '{"error":"invalid_grant"}'))
+
+    with pytest.raises(RuntimeError) as e:
+        google_oauth.credentials_for("sub-1", account="a@b.com")
+
+    assert isinstance(e.value, google_oauth.GoogleReauthRequired)
+    assert "a@b.com" in str(e.value) and "reconnecte" in str(e.value)
+    assert "manage.oto.cx" in str(e.value)
+
+
+@pytest.mark.parametrize("module", ["calendar", "chat", "drive", "gmail", "sheets",
+                                    "tasks"])
+def test_les_six_outils_google_rendent_le_refus_pas_une_erreur_interne(
+        monkeypatch, module):
+    """Le chemin servi : chaque `_client_for_user` doit rendre le message de réauth
+    en refus d'appel, jamais laisser filer l'exception jusqu'au filet générique."""
+    import importlib
+
+    from oto_mcp.mcp_errors import McpError
+    mod = importlib.import_module(f"oto_mcp.tools.{module}")
+    monkeypatch.setattr(mod.access, "current_user_sub_or_raise", lambda: "sub-1")
+
+    def _mort(sub, account=None):
+        raise google_oauth.GoogleReauthRequired("jeton de a@b.com mort — reconnecte-le")
+    monkeypatch.setattr(mod.google_oauth, "credentials_for", _mort)
+
+    with pytest.raises(McpError) as e:
+        mod._client_for_user("a@b.com")
+    assert "reconnecte" in str(e.value.error.message)
+
+
 def test_un_refresh_reussi_demarque(monkeypatch, wiring):
     """`update_google_access_token` MERGE le meta (contrairement à atlassian/folk
     qui le REMPLACENT) : sans cet appel explicite, un `health_ko` posé plus tôt

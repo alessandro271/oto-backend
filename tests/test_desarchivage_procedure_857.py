@@ -249,3 +249,56 @@ def test_remise_en_service_puis_ECRITURE_passe(pg):
     v = org_store.set_instruction("org", 231, "target-ownership-register",
                                   "corps neuf", set_by="u1")
     assert v == 5
+
+
+# ── ce que l'AGENT lit : `op=get` dit l'état que `op=list` tait ──────────────────
+
+def test_la_lecture_par_ID_REMONTE_l_etat_d_archivage(pg):
+    """La lecture par id stable (liens de projet, face REST) ne filtre pas
+    l'archivage non plus : elle doit pouvoir dire l'état, comme celle par slug."""
+    from oto_mcp.org_store.instruction_ownership import get_instruction_by_id
+    _pose(pg, archivee=True)
+    ident = pg.execute("SELECT id FROM org_instructions WHERE slug = %s",
+                       ("target-ownership-register",)).fetchone()[0]
+    assert get_instruction_by_id(ident)["archived_at"] is not None
+
+
+def _get_agent(monkeypatch, lu: dict):
+    import asyncio
+    from oto_mcp.capabilities.orgs import instructions as oi
+    from oto_mcp.capabilities._types import ResolvedCtx
+    monkeypatch.setattr(oi, "_project_instance", lambda member_mode: None)
+    monkeypatch.setattr(oi.org_store, "get_instruction",
+                        lambda otype, oid, slug, version=None: dict(lu, slug=slug))
+
+    async def _manifest(*a, **k):
+        return []
+    monkeypatch.setattr(oi.tool_registry, "manifest_for", _manifest)
+    out = asyncio.run(oi._get_guide(ResolvedCtx(sub="u1", org_id=231, channel="mcp"),
+                                    oi.GuideGetInput(slug="target-ownership-register",
+                                                     scope="org")))
+    return out, oi.GuideView.model_validate(out)
+
+
+_LU = {"title": "T", "description": "d", "version": 4, "body_md": "corps", "slots": []}
+
+
+def test_op_get_DIT_a_l_agent_que_la_procedure_est_retiree(monkeypatch):
+    """Le cas du signal : la procédure se charge par son slug et manque à `op=list`.
+    La réponse de `get` doit porter la raison — et la sortie DÉCLARÉE aussi, sans
+    quoi la face qui projette sur le modèle la perdrait."""
+    out, vue = _get_agent(monkeypatch, {**_LU, "archived_at": "2026-09-10 12:00:00+00"})
+    assert out["archived_at"] == "2026-09-10 12:00:00+00"
+    assert vue.archived_at == "2026-09-10 12:00:00+00"
+
+
+def test_op_get_d_une_procedure_EN_SERVICE_rend_un_etat_vide(monkeypatch):
+    out, _ = _get_agent(monkeypatch, {**_LU, "archived_at": None})
+    assert "archived_at" in out and out["archived_at"] is None
+
+
+def test_une_VERSION_lue_ne_pretend_pas_etre_en_service(monkeypatch):
+    """Une version vient de la table des révisions, qui ne porte pas l'état : la clé
+    est ABSENTE, jamais `null` — qui se lirait « en service »."""
+    out, _ = _get_agent(monkeypatch, dict(_LU))
+    assert "archived_at" not in out

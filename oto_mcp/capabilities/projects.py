@@ -981,12 +981,31 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
                 slot = slots_mod.normalize_name(inp.slot)
             except ValueError as e:
                 _require(False, "invalid_slot", str(e), 400)
+        # Signal #883 — un lien d'avant la normalisation porte encore le NOM du tableau (le
+        # SLUG de la procédure) : l'upsert, qui cherche l'id, ne le voyait pas et en créait
+        # un second, sans slot, que l'unlink retirait ensuite avec le premier. Les écritures
+        # stockées de la même entité se reconnaissent par la règle de l'unlink ; l'ancienne
+        # est RÉÉCRITE en id si l'id n'est pas encore lié. S'il l'est déjà, deux liens
+        # coexistent (créés avant ce correctif) : les fondre perdrait le slot de l'un, on
+        # le DIT au lieu de choisir.
+        rewrite_from, doublons = None, []
+        if inp.op == "link" and inp.target_type in ("tableau", "procedure"):
+            meme_binding = [l for l in db.list_project_links(int(inp.project_id))
+                            if l.get("identity_ref") == identity_ref]
+            ecritures = _unlink_refs(meme_binding, inp.target_type, target_ref,
+                                     _ref_canonizer(row, proj_org, inp.target_type))
+            autres = [r for r in ecritures if r != target_ref]
+            if autres and target_ref not in ecritures:
+                rewrite_from, doublons = autres[0], autres[1:]
+            else:
+                doublons = autres
         effet = None
         if inp.op == "link":
             try:
                 effet = db.add_project_link(int(inp.project_id), inp.target_type, target_ref,
                                             inp.label, role=inp.role, config=config,
-                                            identity_ref=identity_ref, slot=slot)
+                                            identity_ref=identity_ref, slot=slot,
+                                            rewrite_from=rewrite_from)
             except ValueError as e:
                 code = "slot_taken" if str(e).startswith("slot_taken") else "bad_link"
                 _require(False, code, str(e), 409 if code == "slot_taken" else 400)
@@ -1021,6 +1040,17 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
             out["link_status"] = effet["status"]
             if effet["changed"]:
                 out["changed_fields"] = effet["changed"]
+            if effet.get("rewritten_from"):
+                out["rewritten_from"] = effet["rewritten_from"]
+            if doublons:
+                out["duplicate_refs"] = doublons
+                out["warning"] = (
+                    "ce projet porte AUSSI cette entité sous une autre écriture ("
+                    + ", ".join(f"« {r} »" for r in doublons)
+                    + ") — un lien d'avant la normalisation en id, avec ses propres slot, "
+                    "rôle et libellé : deux liens pour une même entité, et `unlink` les "
+                    "retire TOUS. Pour n'en garder qu'un : `unlink`, puis `link` par l'id "
+                    "en repassant `slot`, `role` et `label`.")
         # 0035 × 0046 — schéma CIBLE au binding d'un slot tableau : si une procédure
         # liée déclare ce slot avec un `schema`, un namespace vierge est PROVISIONNÉ
         # (le tableau naît avec son contrat — validation/lifecycle/clé) ; un schéma
@@ -1413,18 +1443,21 @@ CAPABILITIES += [
             "in their prose — the project maps each name to a concrete entity via its links. "
             "Slot names are a PROJECT-wide vocabulary (unique per project → 409 slot_taken; "
             "two linked procedures sharing `sortie` share the binding). "
-            "Re-linking without role/config/slot preserves the "
-            "existing ones. link says WHAT IT DID in `link_status`: `created` (the binding "
-            "did not exist), `unchanged` (it was already there and this call rewrote "
-            "nothing) or `updated` (it existed and this call changed it — `changed_fields` "
-            "then lists which of label/role/slot/config moved). Re-running a link is safe "
+            "Re-linking preserves every field you omit — label, role, config and slot; "
+            "pass a value to change one. link says WHAT IT DID in `link_status`: `created` "
+            "(the binding did not exist), `unchanged` (it was already there and this call "
+            "rewrote nothing) or `updated` (it existed and this call changed it — "
+            "`changed_fields` then lists which of label/role/slot/config/target_ref "
+            "moved). Re-running a link is safe "
             "and idempotent, so a caller told to ENSURE a resource is attached must read "
             "`link_status` — not `ok` — to know whether it actually acted. "
             "unlink returns `removed` = how many bindings it actually took "
             "out, and REFUSES (`link_not_found`) when it matched none — it never answers ok "
             "on a link it did not find. Give the `target_ref` as op=get renders it: an older "
             "link may still carry the NAME of its tableau (or the SLUG of its procedure) "
-            "instead of the id, and unlink takes back either spelling. "
+            "instead of the id. link and unlink both recognize either spelling: link "
+            "rewrites that older link to the id (`rewritten_from` = the old spelling) "
+            "instead of adding a second one, unlink takes back every spelling. "
             "get/link return each link's role + slot + config + a derived "
             "`cross_project` flag (the same entity is linked by another project → avoid brutal "
             "edits / ask); a tableau link also returns its resolved `datastore` (the NAME, a "

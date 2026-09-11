@@ -32,11 +32,13 @@ from ..db import _connect
 
 
 def get_instruction_by_id(instruction_id: int) -> Optional[dict]:
-    """Une instruction par son id surrogate (identité publique). None si absente."""
+    """Une instruction par son id surrogate (identité publique). None si absente.
+    Porte `archived_at` comme la lecture par slug (#857) : cette lecture ne filtre pas
+    l'archivage non plus, donc elle doit pouvoir dire l'état."""
     with _connect() as conn:
         row = conn.execute(
             "SELECT id, org_id, owner_type, owner_id, slug, title, description, body_md, "
-            "slots, version, set_by, created_at, updated_at "
+            "slots, version, set_by, created_at, updated_at, archived_at "
             "FROM org_instructions WHERE id = %s",
             (instruction_id,),
         ).fetchone()

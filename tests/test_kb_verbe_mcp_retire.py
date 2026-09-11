@@ -133,10 +133,12 @@ def test_oto_whoami_ne_rend_plus_le_projet_de_l_ex_base(monkeypatch):
 
 
 def test_oto_doc_dit_la_portee_des_liens_en_projets():
-    """La résolution des `[[…]]` retombe bien sur le projet ancré de l'org
-    (`db/backlinks._kb_project_of`) : le texte dit ce mécanisme, en projets."""
+    """La résolution des `[[…]]` se fait parmi les projets que possède l'org
+    (`db/backlinks.resolution_scope`, #888/#890) — plus d'ancre, donc plus de « projet
+    historique » : le texte dit ce mécanisme, en projets."""
     desc = next(t for t in _catalogue_monte() if t.name == "oto_doc").description or ""
-    assert "historical documents project" in desc
+    assert "every project the ORGANIZATION owns" in desc
+    assert "historical documents project" not in desc
     assert "org KB" not in desc and "the KB" not in desc
 
 

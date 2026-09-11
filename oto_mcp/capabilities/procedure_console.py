@@ -291,7 +291,8 @@ CAPABILITIES += [
             "op=library_list (browse/search, filter category/author_kind) / library_get (full "
             "body by public slug) / publish (share one of your org's skills; visibility="
             "public|unlisted) / fork (copy a public entry into your org, optional `new_slug`) "
-            "/ unpublish (`id`)."),
+            "/ unpublish (`id`). An ARCHIVED procedure is left out of op=list; op=get "
+            "still reads it by slug, with `archived_at` set."),
         mcp=orgs_instructions._GUIDE_GET_TOOL,
     ),
 ]

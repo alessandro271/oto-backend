@@ -199,3 +199,74 @@ def test_un_autre_binding_de_la_meme_entite_est_une_creation(monde):
                                  identity_ref="acc-2")
 
     assert premier["status"] == "created" and second["status"] == "created"
+
+
+# ── Signal #883 : un champ tu, et un lien écrit sous l'ancienne graphie ──────
+
+def _procedure(monde) -> tuple[str, str]:
+    """Une procédure à moi seul, rendue en `(slug, id)` : les deux écritures qu'un lien
+    a pu stocker selon qu'il est né avant ou après la normalisation en id."""
+    from oto_mcp import org_store
+    slug = "p-" + uuid.uuid4().hex[:8]
+    org_store.set_instruction("org", monde["org"], slug, "1. Faire", title=slug,
+                              set_by="u-admin")
+    return slug, str(org_store.get_instruction("org", monde["org"], slug)["id"])
+
+
+def _lies(out, *refs) -> list[dict]:
+    return [l for l in out["links"] if l["target_ref"] in refs]
+
+
+def test_relier_avec_le_seul_role_garde_le_libelle(monde):
+    """Piège 1, vécu le 11/09/2026 : re-lier en ne passant que `role` rendait
+    `changed_fields=[label, role]` et le libellé repartait à NULL — alors que le texte
+    servi promet de préserver ce qu'on tait. Un champ omis n'est plus jamais écrasé."""
+    ref = _ref()
+    _link(monde, ref, label="Vivier", role="le pourquoi")
+    out = _link(monde, ref, role="un autre pourquoi")
+
+    assert out["link_status"] == "updated"
+    assert out["changed_fields"] == ["role"]
+    lien = _lies(out, ref)[0]
+    assert lien["label"] == "Vivier" and lien["role"] == "un autre pourquoi"
+
+
+@pytest.mark.parametrize("donnee", ["slug", "id"])
+def test_un_lien_stocke_sous_son_slug_est_reecrit_pas_double(monde, donnee):
+    """Piège 2 : le lien existant porte le SLUG (né avant la normalisation), `link`
+    canonise la réf demandée en id et l'upsert, qui cherchait l'id, CRÉAIT un second
+    lien, sans slot — que l'unlink retirait ensuite avec le premier. Les deux sens : la
+    réf donnée par slug, et par id (le seul qui exerce la canonisation du STOCKÉ)."""
+    from oto_mcp import db
+    slug, pid = _procedure(monde)
+    slot = "s_" + uuid.uuid4().hex[:8]
+    db.add_project_link(monde["projet"], "procedure", slug, "Porte", slot=slot)
+
+    out = _link(monde, slug if donnee == "slug" else pid, role="la garde d'achat")
+
+    liens = _lies(out, slug, pid)
+    assert [l["target_ref"] for l in liens] == [pid], "un second lien est né"
+    assert liens[0]["slot"] == slot and liens[0]["label"] == "Porte"
+    assert liens[0]["role"] == "la garde d'achat"
+    assert out["link_status"] == "updated"
+    assert out["changed_fields"] == ["target_ref", "role"]
+    assert out["rewritten_from"] == slug
+
+
+def test_deux_graphies_deja_liees_sont_dites_jamais_fondues(monde):
+    """Le reliquat du défaut : un projet qui porte DÉJÀ les deux liens (le second créé
+    avant ce correctif). Les fondre perdrait le slot de l'un en silence ; le lien met à
+    jour celui par id, garde l'autre, et le DIT — l'appelant sait que `unlink` les
+    retirera tous deux."""
+    from oto_mcp import db
+    slug, pid = _procedure(monde)
+    db.add_project_link(monde["projet"], "procedure", slug, "Ancien",
+                        slot="s_" + uuid.uuid4().hex[:8])
+    db.add_project_link(monde["projet"], "procedure", pid, "Nouveau")
+
+    out = _link(monde, pid, role="r")
+
+    assert sorted(l["target_ref"] for l in _lies(out, slug, pid)) == sorted([slug, pid])
+    assert out["duplicate_refs"] == [slug]
+    assert f"« {slug} »" in out["warning"] and "unlink" in out["warning"]
+    assert "rewritten_from" not in out

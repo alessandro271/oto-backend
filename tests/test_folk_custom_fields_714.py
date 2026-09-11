@@ -150,3 +150,55 @@ def test_le_dry_run_montre_l_etat_FUSIONNE(client_cls):
     assert apres["grp_a"]["Statut"] == "en cours"
     assert apres["grp_a"]["Cercle"] == ["x"]
     inst.update_person.assert_not_called()
+
+
+# --- #866 / #834 : ce qui est RELU repart sous la forme que Folk accepte ---------
+
+FICHE_RELUE = {
+    "id": "com_1",
+    "customFieldValues": {
+        # Le groupe que l'appel ne vise PAS : un champ utilisateur rendu par Folk sous
+        # sa forme de LECTURE. Renvoyé tel quel, il faisait refuser tout l'appel en 422
+        # (« either an id or an email, not both ») — mesuré deux fois le 10/09/2026.
+        "grp_clients": {"Owner": [{"id": "usr_1", "fullName": "A B",
+                                   "email": "a@exemple.test"}],
+                        "Contrat": [{"id": "per_9", "fullName": "C D",
+                                     "entityType": "person"}],
+                        "Etape": "signé", "Tags": ["x", "y"]},
+        "grp_warm": {"Next steps": "rappeler"},
+    },
+}
+
+
+def test_un_champ_utilisateur_relu_repart_sous_son_seul_id(client_cls):
+    """Le 422 d'avant, joué où il naissait : on écrit `Next steps` dans un groupe, et
+    le champ utilisateur d'un AUTRE groupe repartait avec `fullName` + `email`."""
+    inst = client_cls.return_value
+    inst.get_company.return_value = dict(FICHE_RELUE)
+    inst.update_company.return_value = {"id": "com_1"}
+
+    _appel(op="update", entity="company", id="com_1",
+           fields={"customFieldValues": {"grp_warm": {"Next steps": "relancer"}}})
+
+    envoye = inst.update_company.call_args.kwargs["customFieldValues"]
+    assert envoye["grp_clients"]["Owner"] == [{"id": "usr_1"}]
+    assert envoye["grp_clients"]["Contrat"] == [{"id": "per_9"}]
+    # Ce qui n'est pas une liste d'objets à `id` ne bouge pas.
+    assert envoye["grp_clients"]["Etape"] == "signé"
+    assert envoye["grp_clients"]["Tags"] == ["x", "y"]
+    assert envoye["grp_warm"] == {"Next steps": "relancer"}
+
+
+def test_la_valeur_fournie_par_l_appelant_n_est_jamais_reecrite(client_cls):
+    """La normalisation ne vise que le RELU : un `{email}` que l'appelant pose (forme
+    admise par Folk pour un utilisateur) doit partir tel qu'il l'a écrit."""
+    inst = client_cls.return_value
+    inst.get_company.return_value = dict(FICHE_RELUE)
+    inst.update_company.return_value = {"id": "com_1"}
+
+    _appel(op="update", entity="company", id="com_1",
+           fields={"customFieldValues": {"grp_clients": {
+               "Owner": [{"email": "b@exemple.test"}]}}})
+
+    envoye = inst.update_company.call_args.kwargs["customFieldValues"]
+    assert envoye["grp_clients"]["Owner"] == [{"email": "b@exemple.test"}]

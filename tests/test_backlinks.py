@@ -32,11 +32,16 @@ class _Cur:
 
 
 class _Conn:
-    """Renvoie des rows scénarisés par motif SQL ; enregistre les INSERT doc_links."""
-    def __init__(self, *, project=None, kb=None, docs=None):
+    """Renvoie des rows scénarisés par motif SQL ; enregistre les INSERT doc_links.
+
+    `org_projects` = les projets vivants que possède l'org du projet — la seconde
+    marche de la résolution depuis #888/#890 (il n'y a plus d'ancre) ; `referrers` =
+    ce que rend la requête des projets citants (`_referrer_projects`)."""
+    def __init__(self, *, project=None, org_projects=None, docs=None, referrers=None):
         self.project = project        # row projects (owner_type/owner_id/context_org_id)
-        self.kb = kb                  # kb_project_id de l'org
-        self.docs = docs or []        # docs candidats (id/project_id/title)
+        self.org_projects = org_projects or []
+        self.docs = docs or []        # docs candidats (id/project_id/title[/body_md])
+        self.referrers = referrers or []
         self.inserted: list[tuple] = []
         self.deleted = False
 
@@ -47,8 +52,10 @@ class _Conn:
             return _Cur([])
         if "FROM projects WHERE id" in s:
             return _Cur([self.project] if self.project else [])
-        if "kb_project_id FROM orgs" in s:
-            return _Cur([{"kb_project_id": self.kb}] if self.kb is not None else [{"kb_project_id": None}])
+        if "FROM projects WHERE owner_type = 'org' AND owner_id" in s:
+            return _Cur([{"id": p} for p in self.org_projects])
+        if "FROM projects WHERE (owner_type = 'org'" in s:
+            return _Cur([{"id": p} for p in self.referrers])
         if "FROM docs WHERE project_id = ANY" in s:
             scope = params[0]
             return _Cur([d for d in self.docs if d["project_id"] in scope])
@@ -64,9 +71,10 @@ def _proj(owner_type="org", owner_id="7", ctx=None):
     return {"owner_type": owner_type, "owner_id": owner_id, "context_org_id": ctx}
 
 
-def test_resolve_precedence_project_over_kb():
-    # « Marché » existe dans le projet courant (1) ET la KB (9) → le projet gagne.
-    c = _Conn(project=_proj(), kb=9, docs=[
+def test_resolve_precedence_project_over_org_projects():
+    # « Marché » existe dans le projet courant (1) ET un autre projet de l'org (9) →
+    # le projet de la page l'emporte, et ce n'est PAS une ambiguïté.
+    c = _Conn(project=_proj(), org_projects=[1, 9], docs=[
         {"id": 100, "project_id": 1, "title": "Marché"},
         {"id": 200, "project_id": 9, "title": "Marché"},
     ])
@@ -74,45 +82,100 @@ def test_resolve_precedence_project_over_kb():
     assert c.deleted and c.inserted == [(5, 100)]
 
 
-def test_resolve_falls_back_to_kb():
-    c = _Conn(project=_proj(), kb=9, docs=[
+def test_resolve_reaches_another_org_project():
+    c = _Conn(project=_proj(), org_projects=[1, 9], docs=[
         {"id": 200, "project_id": 9, "title": "Marché"},
     ])
     B.refresh_links(c, from_doc=5, project_id=1, body_md="[[marche]]" )  # casse/accent ? -> non
     # 'marche' (sans accent) ne matche pas 'Marché' → lien-souche, rien
     assert c.inserted == []
-    c2 = _Conn(project=_proj(), kb=9, docs=[{"id": 200, "project_id": 9, "title": "Marché"}])
+    c2 = _Conn(project=_proj(), org_projects=[1, 9],
+               docs=[{"id": 200, "project_id": 9, "title": "Marché"}])
     B.refresh_links(c2, from_doc=5, project_id=1, body_md="[[Marché]]")
     assert c2.inserted == [(5, 200)]
 
 
 def test_ambiguity_picks_lowest_id_same_tier():
-    c = _Conn(project=_proj(), kb=None, docs=[
+    c = _Conn(project=_proj(), docs=[
         {"id": 30, "project_id": 1, "title": "Note"},
         {"id": 12, "project_id": 1, "title": "Note"},
     ])
     B.refresh_links(c, from_doc=5, project_id=1, body_md="[[Note]]")
-    assert c.inserted == [(5, 12)]           # N>1 même tier → plus petit id, JAMAIS création
+    assert c.inserted == [(5, 12)]           # N>1 même projet → plus petit id, JAMAIS création
 
 
 def test_no_self_citation():
-    c = _Conn(project=_proj(), kb=None, docs=[{"id": 5, "project_id": 1, "title": "Moi"}])
+    c = _Conn(project=_proj(), docs=[{"id": 5, "project_id": 1, "title": "Moi"}])
     B.refresh_links(c, from_doc=5, project_id=1, body_md="[[Moi]]")
     assert c.inserted == []
 
 
 def test_stub_when_absent_still_clears_old():
-    c = _Conn(project=_proj(), kb=None, docs=[])
+    c = _Conn(project=_proj(), docs=[])
     B.refresh_links(c, from_doc=5, project_id=1, body_md="[[Inconnu]]")
     assert c.deleted and c.inserted == []    # N=0 = souche (UI), rien stocké
 
 
-def test_member_project_uses_context_org_kb():
-    # projet perso (user) avec context_org_id → KB de cette org.
-    c = _Conn(project=_proj(owner_type="user", owner_id="sub1", ctx=7), kb=9, docs=[
+def test_member_project_resolves_into_its_context_org_projects():
+    # projet perso (user) avec context_org_id → les projets de cette org.
+    c = _Conn(project=_proj(owner_type="user", owner_id="sub1", ctx=7), org_projects=[9],
+              docs=[{"id": 200, "project_id": 9, "title": "Charte"}])
+    B.refresh_links(c, from_doc=5, project_id=1, body_md="[[Charte]]")
+    assert c.inserted == [(5, 200)]
+
+
+# ── #888/#890 : la portée est l'org, sans ancre — ambiguïté dite, frontière tenue ──
+
+def test_un_titre_porte_par_DEUX_projets_de_l_org_est_ambigu_et_dit():
+    """Décision du 11/09/2026 : un titre présent dans plusieurs projets de l'org ne
+    se résout pas au hasard — ni plus petit id, ni plus ancien. Rien n'est lié, et
+    l'écriture nomme les candidats pour que l'auteur rende le titre unique."""
+    trace: dict = {}
+    c = _Conn(project=_proj(), org_projects=[1, 9, 10], docs=[
+        {"id": 300, "project_id": 10, "title": "Charte"},
         {"id": 200, "project_id": 9, "title": "Charte"},
     ])
+    B.refresh_links(c, from_doc=5, project_id=1, body_md="voir [[Charte]]", trace=trace)
+    assert c.inserted == []
+    assert trace["citations_ambigues"] == [{"titre": "Charte", "candidats": [
+        {"doc_id": 200, "project_id": 9}, {"doc_id": 300, "project_id": 10}]}]
+    assert "citations_sans_cible" not in trace, "ambigu n'est pas absent"
+    assert "PLUSIEURS projets" in trace["citations_ambigues_hint"]
+    assert "AUCUN lien" in trace["citations_ambigues_hint"]
+
+
+def test_deux_pages_d_UN_autre_projet_ne_font_pas_une_ambiguite_entre_projets():
+    """L'ambiguïté est entre PROJETS ; dans un seul projet, la règle d'avant tient."""
+    c = _Conn(project=_proj(), org_projects=[1, 9], docs=[
+        {"id": 210, "project_id": 9, "title": "Charte"},
+        {"id": 150, "project_id": 9, "title": "Charte"},
+    ])
     B.refresh_links(c, from_doc=5, project_id=1, body_md="[[Charte]]")
+    assert c.inserted == [(5, 150)]
+
+
+def test_la_resolution_ne_franchit_jamais_la_frontiere_de_l_org():
+    """Un projet hors de la liste des projets de l'org — une autre org, une équipe,
+    un projet personnel — n'est jamais cherché : sa page reste hors de portée."""
+    trace: dict = {}
+    c = _Conn(project=_proj(), org_projects=[1, 9], docs=[
+        {"id": 900, "project_id": 77, "title": "Charte"},
+    ])
+    B.refresh_links(c, from_doc=5, project_id=1, body_md="[[Charte]]", trace=trace)
+    assert c.inserted == []
+    assert trace["citations_sans_cible"] == ["Charte"]
+
+
+def test_une_cible_nee_dans_un_projet_d_org_relie_les_citants_des_AUTRES_projets():
+    """Du temps de l'ancre, la re-résolution ne regardait que le projet de la cible +
+    l'ancre : une cible née dans l'ancre laissait souches les pages des autres projets
+    qui la citaient. Elle regarde maintenant tous les projets depuis lesquels la page
+    est citable."""
+    c = _Conn(project=_proj(), org_projects=[1, 9], referrers=[1, 9], docs=[
+        {"id": 5, "project_id": 1, "title": "Page", "body_md": "voir [[Charte]]"},
+        {"id": 200, "project_id": 9, "title": "Charte", "body_md": ""},
+    ])
+    B.reresolve_referrers(c, 9, "Charte")
     assert c.inserted == [(5, 200)]
 
 
@@ -239,7 +302,7 @@ def monde(pg_dsn):
     """Base JETABLE bootée par le vrai `init_db` (recette #662 : la base du
     conteneur est PARTAGÉE, y monter le schéma entier casse d'autres fichiers).
 
-    Deux projets PERSO, sans org : `_kb_project_of` rend None, donc la portée de
+    Deux projets PERSO, sans org : `_org_of_project` rend None, donc la portée de
     résolution est le seul projet courant — le cas le plus étroit possible."""
     psycopg = pytest.importorskip("psycopg")
     from oto_mcp.db import _conn as dbconn

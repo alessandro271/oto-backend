@@ -344,22 +344,36 @@ def set_project_mcp_publication(project_id: int, *, slug: Optional[str],
 
 
 # Les champs qu'un re-lien peut RÉÉCRIRE — donc les seuls dont la mise à jour est
-# observable, et le vocabulaire exact de `changed` (oto#119).
+# observable, et le vocabulaire exact de `changed` (oto#119), plus `target_ref` quand
+# une ancienne écriture de la réf est ramenée à l'id (`rewrite_from`, signal #883).
 _LINK_MUTABLES = ("label", "role", "slot", "config")
 
 
 def add_project_link(project_id: int, target_type: str, target_ref: str,
                      label: Optional[str] = None, role: Optional[str] = None,
                      config: Optional[dict] = None, identity_ref: Optional[str] = None,
-                     slot: Optional[str] = None) -> dict:
+                     slot: Optional[str] = None,
+                     rewrite_from: Optional[str] = None) -> dict:
     """Lie une entité (tableau/procédure/connecteur/base) au projet. `identity_ref`
     (ADR 0032 §4 amendé, #57) = un BINDING distinct par identité — NULL = binding par
     défaut (un connecteur peut être lié N fois, une identité par binding). `slot`
     (ADR 0035 B2) = nom de slot bindé par ce lien, vocabulaire DU PROJET — unicité
     (project_id, slot) ; un nom déjà bindé par un AUTRE lien lève
     `ValueError('slot_taken: …')` (traduite en 409 actionnable par la capacité).
-    Idempotent par binding : re-lier met à jour le label ; `role`/`config`/`slot`
-    (surcharge préfaite) ne sont écrasés que s'ils sont fournis.
+    Idempotent par binding : un champ OMIS — `label`, `role`, `config`, `slot` — n'est
+    jamais écrasé ; il faut en passer une valeur pour le changer. `label` faisait
+    exception jusqu'au 11/09/2026 : re-lier en ne passant que `role` le remettait à NULL,
+    alors que le texte servi promettait de préserver ce qu'on tait (signal #883).
+
+    `rewrite_from` (signal #883) = une AUTRE écriture stockée de la même entité — le NOM
+    d'un tableau, le SLUG d'une procédure, d'avant la normalisation en id — que
+    l'appelant a reconnue. Sans elle l'`ON CONFLICT` ne voyait pas le lien existant (sa
+    clé porte l'autre écriture) : il en CRÉAIT un second, sans slot, que l'unlink — qui,
+    lui, reconnaît les deux écritures — retirait ensuite avec le premier. Le lien est
+    RÉÉCRIT en id dans la même transaction que l'upsert, qui le trouve alors et le met à
+    jour ; seulement si l'id n'est pas déjà lié (sinon ce serait fondre deux liens, et
+    perdre en silence le slot de l'un : c'est à l'appelant d'en décider). Le compte
+    rendu le dit : `target_ref` dans `changed`, et `rewritten_from`.
 
     **Renvoie CE QUI A EU LIEU** (oto#119) : `{"status": "created" | "updated" |
     "unchanged", "changed": [champs]}`. L'idempotence du geste n'était pas en cause,
@@ -378,7 +392,21 @@ def add_project_link(project_id: int, target_type: str, target_ref: str,
     le déclare pas changé). `status` décrit l'effet de CET appel — d'où « unchanged »
     et non « exists » : deux appels identiques rendent `created` puis `unchanged`."""
     cfg = json.dumps(config) if config is not None else None
+    cle = (project_id, target_type, target_ref, identity_ref)
     with _connect() as conn:
+        reecrit = False
+        if rewrite_from and rewrite_from != target_ref:
+            # Même transaction que l'upsert ci-dessous : l'ordre suivant voit la ligne
+            # réécrite. Le NOT EXISTS garde la clé unique si l'id est lié entre-temps.
+            reecrit = conn.execute(
+                "UPDATE project_links SET target_ref = %s "
+                " WHERE project_id = %s AND target_type = %s AND target_ref = %s "
+                "   AND identity_ref IS NOT DISTINCT FROM %s "
+                "   AND NOT EXISTS (SELECT 1 FROM project_links "
+                "        WHERE project_id = %s AND target_type = %s AND target_ref = %s "
+                "          AND identity_ref IS NOT DISTINCT FROM %s)",
+                (target_ref, project_id, target_type, rewrite_from, identity_ref, *cle),
+            ).rowcount == 1
         try:
             row = conn.execute(
                 "WITH avant AS ("
@@ -389,7 +417,8 @@ def add_project_link(project_id: int, target_type: str, target_ref: str,
                 "  INSERT INTO project_links (project_id, target_type, target_ref, identity_ref, label, role, slot, config) "
                 "  VALUES (%s, %s, %s, %s, %s, %s, %s, COALESCE(%s::jsonb, '{}'::jsonb)) "
                 "  ON CONFLICT (project_id, target_type, target_ref, identity_ref) DO UPDATE SET "
-                "  label = EXCLUDED.label, role = COALESCE(EXCLUDED.role, project_links.role), "
+                "  label = COALESCE(EXCLUDED.label, project_links.label), "
+                "  role = COALESCE(EXCLUDED.role, project_links.role), "
                 "  slot = COALESCE(EXCLUDED.slot, project_links.slot), "
                 "  config = COALESCE(%s::jsonb, project_links.config) "
                 "  RETURNING label, role, slot, config"
@@ -412,6 +441,9 @@ def add_project_link(project_id: int, target_type: str, target_ref: str,
     if not row["existait"]:
         return {"status": "created", "changed": []}
     changed = [c for c in _LINK_MUTABLES if row[c] != row[f"avant_{c}"]]
+    if reecrit:
+        return {"status": "updated", "changed": ["target_ref", *changed],
+                "rewritten_from": rewrite_from}
     return {"status": "updated" if changed else "unchanged", "changed": changed}
 
 

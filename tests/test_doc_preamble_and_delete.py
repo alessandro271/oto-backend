@@ -320,3 +320,28 @@ def test_supprimer_le_preambule_d_une_page_sans_aucun_titre_est_REFUSE(seams, mo
         D._doc(CTX, D.DocInput(op="patch", doc_id=662, region="preamble", mode="delete"))
     assert e.value.code == "preamble_is_whole_page"
     assert seams["appels"] == []
+
+
+# ── #828 / #869 : un `section` ambigu est refusé, la page n'est pas touchée ────────
+
+def test_un_section_ambigu_refuse_en_nommant_les_candidats(seams):
+    seams["body"] = ("# Fiche\n\n### 26 August 2026\n\nun\n\n"
+                     "### 26 August 2026\n\ndeux\n")
+    with pytest.raises(AuthzDenied) as ei:
+        D._doc(CTX, D.DocInput(op="patch", doc_id=662, section="26 August 2026",
+                               body_md="réécrit"))
+    assert ei.value.code == "ambiguous_section" and ei.value.status == 409
+    msg = ei.value.message
+    assert "2 titres" in msg and "(ligne 3)" in msg and "(ligne 7)" in msg
+    assert "RIEN n'a été modifié" in msg and "op=update" in msg
+    assert seams["appels"] == [], "aucune écriture ne doit partir"
+
+
+def test_un_delete_ambigu_refuse_avant_d_annoncer_des_sous_sections(seams):
+    """`subsections` est appelé AVANT le patch pour annoncer ce qui part : sur un
+    titre ambigu il ne peut rien annoncer, et le refus sort par le même chemin."""
+    seams["body"] = "## A\n\n### x\n\n## a\n\ntexte\n"
+    with pytest.raises(AuthzDenied) as ei:
+        D._doc(CTX, D.DocInput(op="patch", doc_id=662, section="A", mode="delete"))
+    assert ei.value.code == "ambiguous_section"
+    assert seams["appels"] == []

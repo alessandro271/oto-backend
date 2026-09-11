@@ -153,6 +153,13 @@ class GuideView(BaseModel):
     # et cette fiche-ci n'en connaît aucune.
     slots: Optional[list[slots_mod.SlotDecl]] = None
     referenced_tools: Optional[list[ReferencedTool]] = None
+    # Formes 1 et 3 (#857) : la procédure lue est-elle RETIRÉE du service ? La lecture
+    # ne filtre pas l'archivage, les listes si : sans ce champ, une procédure se charge
+    # par son slug et manque à `op=list` sans que rien ne dise pourquoi. Absent (et non
+    # `null`) sur une VERSION archivée lue par slug : la révision ne porte pas l'état.
+    archived_at: Optional[str] = Field(default=None, description=(
+        "When set, this procedure is ARCHIVED — withdrawn from service, absent from "
+        "op=list, and refused on write until an org admin puts it back in service."))
     # Forme 2 seulement : le readme d'org (prose plate), son org, son équipe active.
     org: Optional[str] = None
     guide: Optional[str] = None
@@ -846,6 +853,9 @@ def _read_guide(ctx: ResolvedCtx, inp) -> tuple[dict, tuple[str, ...] | None]:
         # n'existait, faux le jour où l'une est partagée par id (#681).
         owner_type, owner_id = str(instr["owner_type"]), str(instr["owner_id"])
         parent_org = instr["org_id"]
+        # L'état d'archivage est celui de la PROCÉDURE, lu sur la ligne courante avant
+        # qu'une version demandée ne la remplace (la révision ne le porte pas) — #857.
+        archivee = instr.get("archived_at")
         if version is not None:
             versioned = org_store.get_instruction(owner_type, owner_id, instr["slug"],
                                                   version)
@@ -856,7 +866,8 @@ def _read_guide(ctx: ResolvedCtx, inp) -> tuple[dict, tuple[str, ...] | None]:
             "org_id": parent_org, "guide_id": int(guide_id),
             "scope": owner_type, "slug": instr["slug"], "title": instr["title"],
             "description": instr["description"], "version": instr["version"],
-            "body_md": instr["body_md"], "slots": instr.get("slots") or []}), (instr["body_md"],)
+            "body_md": instr["body_md"], "slots": instr.get("slots") or [],
+            "archived_at": str(archivee) if archivee is not None else None}), (instr["body_md"],)
 
     if slug is None:
         # Début de session : guide de base + index (vide gracieux si pas d'org).
@@ -942,6 +953,12 @@ def _read_guide(ctx: ResolvedCtx, inp) -> tuple[dict, tuple[str, ...] | None]:
     out = {**scope_ref, "scope": scope, "slug": instr["slug"], "title": instr["title"],
            "description": instr["description"], "version": instr["version"],
            "body_md": instr["body_md"], "slots": instr.get("slots") or []}
+    # #857 — la ligne COURANTE porte l'état ; une version archivée lue par slug vient
+    # de la table des révisions, qui ne le porte pas : clé absente plutôt que `null`,
+    # qui se lirait « en service ».
+    if "archived_at" in instr:
+        v = instr["archived_at"]
+        out["archived_at"] = str(v) if v is not None else None
     pi = _project_instance(member_mode)
     if pi:
         out["project_instance"] = pi

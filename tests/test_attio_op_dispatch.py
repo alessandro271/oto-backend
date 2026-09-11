@@ -99,6 +99,24 @@ def test_record_ops_route_to_the_right_object_and_method(
     _attr(client, f"{object}.{method}").assert_called_once()
 
 
+def test_record_search_by_filter_hands_the_attio_filter_to_the_client(client):
+    """#880 — `query` n'est comparé qu'au NOM : une adresse n'y est jamais trouvée, et
+    c'est pourtant LE dédoublonnage avant de créer une personne. Le filtre Attio, lui,
+    passe tel quel au client, sans `query` qui l'écraserait."""
+    f = {"email_addresses": "ada@acme.com"}
+    _tool("attio_record")(object="people", op="search", filter=f)
+    client.people.search.assert_called_once_with(query=None, filters=f, limit=50)
+
+
+def test_record_search_refuses_query_and_filter_together(client):
+    """Le client laisse `filters` écraser `query` en silence : les deux ensemble ne
+    feraient qu'une des deux recherches. Refusé avant toute résolution de clé."""
+    with pytest.raises(McpError, match="pas les deux"):
+        _tool("attio_record")(object="people", op="search", query="Ada",
+                              filter={"email_addresses": "ada@acme.com"})
+    assert not client.mock_calls
+
+
 def test_record_refuses_an_unknown_object(client):
     """Attio a des objets CUSTOM, mais le client n'expose que les trois standard :
     un objet inconnu doit être nommé, pas silencieusement traité."""
