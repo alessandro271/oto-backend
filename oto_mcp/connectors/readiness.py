@@ -39,7 +39,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from .. import status_hints
+from .. import links, status_hints
 
 # Jetons machine stables (l'ordre est celui de l'évaluation, cf. `diagnose`).
 PAID_OPTION_OFF = "paid_option_off"      # couche 3 — l'option n'est pas levée
@@ -58,15 +58,6 @@ class Diagnosis:
     en aval, sinon deux surfaces racontent deux versions du même fait."""
     reason: str
     next_step: str
-
-
-def _account_url(sub: Optional[str]) -> str:
-    """Où l'on POSE une clé, pour CE compte. `dashboard_url_for` et pas une adresse
-    en dur : org 196 (celle de #476) est un tenant tiers, et lui servir notre marque
-    est précisément l'incident du 13/08/2026 — un client d'un partenaire renvoyé vers
-    un produit qui n'est pas le sien."""
-    from .. import config
-    return f"{config.dashboard_url_for(sub)}/account"
 
 
 def _connections_url(sub: Optional[str]) -> str:
@@ -98,7 +89,8 @@ def diagnose(sub: str, connector: str, *, org, group) -> Optional[Diagnosis]:
             f"L'option `{opt}` n'est pas ouverte pour toi ici : il faut l'abonnement "
             f"d'org qui l'inclut, un accès accordé par un admin, ou ta PROPRE clé "
             f"`{connector}` — une clé à toi lève l'option par construction (il n'y a "
-            f"plus de siège plateforme à protéger). Pose-la sur {_account_url(sub)}."))
+            f"plus de siège plateforme à protéger). Pose-la"
+            f"{links.ou_poser_la_cle(sub, org=org)}."))
 
     # Couche 2 — la clé. `credential_mode_for` est le MIROIR de la cascade réelle
     # (`resolve_credential`) : le verdict de la carte ne peut donc pas diverger de ce
@@ -115,15 +107,16 @@ def diagnose(sub: str, connector: str, *, org, group) -> Optional[Diagnosis]:
     if mode == "forbidden":
         return Diagnosis(NO_CREDENTIAL, (
             f"Aucune clé `{porteur}` ne résout pour toi dans cette org : pose la "
-            f"tienne sur {_account_url(sub)} (section {porteur.capitalize()}), ou "
+            f"tienne{links.ou_poser_la_cle(sub, org=org, connecteur=porteur)}, ou "
             f"demande à un admin de te prêter la clé plateforme."))
     if mode == OVER_QUOTA:
         # Distinct de `no_credential` À DESSEIN : la clé va très bien, c'est la
         # journée qui est finie. Les confondre envoie reconfigurer un credential sain.
         return Diagnosis(OVER_QUOTA, (
             f"Quota de la clé plateforme `{porteur}` épuisé pour aujourd'hui — la "
-            f"clé résout, elle est à bout de course. Pose ta propre clé sur "
-            f"{_account_url(sub)} pour continuer sans limite, ou reprends demain."))
+            f"clé résout, elle est à bout de course. Pose ta propre "
+            f"clé{links.ou_poser_la_cle(sub, org=org)} pour continuer sans limite, "
+            f"ou reprends demain."))
 
     # Couche 2 (suite) — la clé résout, mais le FOURNISSEUR l'a refusée. Le verdict
     # existait déjà en base (`meta.health_ko`) et n'avait aucun lecteur ici : une clé
@@ -146,7 +139,7 @@ def diagnose(sub: str, connector: str, *, org, group) -> Optional[Diagnosis]:
     # c'est le point.
     rejet = access.credential_rejection_for(sub, connector, org=org, group=group)
     if rejet:
-        ou = (f"Repose-la sur {_account_url(sub)} (section {porteur.capitalize()})."
+        ou = (f"Repose-la{links.ou_poser_la_cle(sub, org=org, connecteur=porteur)}."
               if mode == "user" else
               f"C'est une clé de palier `{mode}` : demande à un admin de la reposer.")
         return Diagnosis(CREDENTIAL_REJECTED, (

@@ -37,7 +37,7 @@ _SURFACE = """
     ADMIN BYO_MODES Callable CascadeProbe CascadeRung ErrorData FETCH_PROBE
     INVALID_PARAMS MEMBER McpError ORG_SHAREABLE_PROVIDERS Optional
     PRESENCE_PROBE ROLES ResolvedCredential SLOT_PREFIX SUPER_ADMIN
-    _ACCOUNT_URL _PAID_OPTION_BY_CONNECTOR _QUOTA_DEFAULTS _UNSET
+    _PAID_OPTION_BY_CONNECTOR _QUOTA_DEFAULTS _UNSET
     _emit_connector_failure _instance_side_shares_safe _is_multi_account
     _legacy_platform_grant_meta _note_resolved_instance _org_unmetered
     _platform_grant_meta _platform_grantee_scope _platform_instance_usable
@@ -86,11 +86,15 @@ def test_l_inventaire_n_est_pas_vide():
     qu'il n'a plus d'appelant (cf. l'entête). 91 → 90 le 09/09/2026 :
     `resolve_mount_token` retiré avec la fédération MCP (ADR 0069) — il résolvait
     le token OAuth per-user d'un `kind="mount"`, et son seul appelant
-    (`tools/mount.py`) n'existe plus. Ce compte n'est pas décoratif — c'est lui
+    (`tools/mount.py`) n'existe plus. 90 → 89 le 11/09/2026 : `_ACCOUNT_URL`
+    retiré — l'adresse EN DUR des refus de credential envoyait un compte de
+    tenant sur notre tableau de bord ; ils passent par `links.ou_poser_la_cle`
+    (oto-backend#935), et le nom n'avait aucun lecteur hors d'`access/resolve.py`.
+    Ce compte n'est pas décoratif — c'est lui
     qui oblige à écrire POURQUOI la surface bouge. Une baisse qu'on ne peut pas
     justifier nom par nom est un rabotage, pas un nettoyage.
     """
-    assert len(_SURFACE) == 90
+    assert len(_SURFACE) == 89
 
 
 def test_une_ecriture_sur_la_facade_traverse_les_sous_modules(monkeypatch):

@@ -121,6 +121,28 @@ def link_for(kind: str, *, sub: Optional[str] = None, **params: Any) -> Optional
     return _render(base, str(patrons[kind]), params)
 
 
+def ou_poser_la_cle(sub: Optional[str], *, org: Any = None,
+                    connecteur: Optional[str] = None) -> str:
+    """Le complément « sur <page connecteurs> (connecteur X) » d'une phrase qui dit OÙ
+    poser une clé — ou une chaîne VIDE quand le produit du compte ne déclare pas de page
+    connecteurs. La phrase reste vraie sans lui : « pose ta propre clé » plutôt que
+    « pose ta propre clé sur <une page qui n'existe pas> ».
+
+    ⚠️ Vécu le 2026-09-11 (oto-backend#935) : les refus de credential
+    (`access/resolve.py`) et la carte connecteur (`connectors/readiness.py`) collaient
+    `/account` — NOTRE chemin — sous l'adresse du tenant du compte. Chez le seul tenant
+    tiers déclaré, cette page répond 404 : c'est exactement le lien mort que ce module
+    interdit. Le chemin vient désormais du patron `connectors` du tenant ; un tenant qui
+    ne le déclare pas ne reçoit AUCUNE adresse, jamais la nôtre.
+
+    `org` n'est lu que par un patron qui le réclame (`/org/{org}/connectors`) ; absent,
+    le lien est annulé plutôt que rendu à trous (cf. `_render`)."""
+    url = link_for("connectors", sub=sub, org=org)
+    if not url:
+        return ""
+    return f" sur {url}" + (f" (connecteur {connecteur.capitalize()})" if connecteur else "")
+
+
 # Le NOM de l'objet, pour dire à un humain ce qui n'a pas d'adresse.
 _NOMS = {"table": "tableau", "doc": "page", "project": "projet",
          "public_doc": "page publique", "connectors": "connecteurs"}

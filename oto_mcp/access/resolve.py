@@ -23,15 +23,15 @@ from typing import Optional
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
+# `links` : où poser une clé SELON LE PRODUIT du compte — pas de patron, pas de lien
+# (oto-backend#935, cf. `links.ou_poser_la_cle`).
+from .. import links
 from .. import (providers, credentials_store, db, group_store, instance_refs, org_store,
                 session_org, tenant_vault)
 from . import cascade, chain_shadow, quotas, rbac, resolve_anon, scope, tenant_budget
 from .resolved_credential import ResolvedCredential
 
 logger = logging.getLogger(__name__)
-
-
-_ACCOUNT_URL = "https://manage.oto.cx/account"
 
 
 class CredentialUnavailable(McpError):
@@ -210,7 +210,8 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
             code=INVALID_PARAMS,
             message=(
                 f"{noun} `{eff}` introuvable pour `{mprov}` — vérifie avec "
-                f"oto_identity(op='list'), ou pose-le sur {_ACCOUNT_URL}."
+                f"oto_identity(op='list'), ou pose-le"
+                f"{links.ou_poser_la_cle(sub, org=active_org)}."
             )))
 
     def _member_fetch(msub: str, morg: int, mprov: str) -> Optional[tuple]:
@@ -317,8 +318,8 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
             raise CredentialUnavailable(ErrorData(
                 code=INVALID_PARAMS,
                 message=(
-                    f"Aucun credential `{provider}` configuré pour toi. Renseigne-le "
-                    f"sur {_ACCOUNT_URL} (section {provider.capitalize()})."
+                    f"Aucun credential `{provider}` configuré pour toi. Renseigne-le"
+                    f"{links.ou_poser_la_cle(sub, org=active_org, connecteur=provider)}."
                     + rbac._revoked_hint(sub, active_org, provider)
                     + rbac._reachable_hint(sub, active_org, provider)
                 ),
@@ -333,8 +334,8 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
             # est un cul-de-sac. Le hint « une équipe a la clé » se cherche lui aussi
             # sous le porteur — c'est là que les secrets partagés existent.
             message=(
-                f"Aucune clé `{porteur}` configurée pour toi. Soit pose "
-                f"ta propre clé sur {_ACCOUNT_URL} (section {porteur.capitalize()}), "
+                f"Aucune clé `{porteur}` configurée pour toi. Soit pose ta propre "
+                f"clé{links.ou_poser_la_cle(sub, org=active_org, connecteur=porteur)}, "
                 f"soit demande à un admin de te grant un accès à une clé plateforme."
                 + rbac._revoked_hint(sub, active_org, porteur)
                 + rbac._reachable_hint(sub, active_org, porteur)
@@ -364,7 +365,8 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
             message=(
                 f"Quota plateforme {provider} dépassé aujourd'hui ({used}/{limit}) "
                 f"pour la clé `{win.payload['label']}` — 0 restant, le compteur "
-                f"repart à minuit. Pose ta propre clé sur {_ACCOUNT_URL} pour "
+                f"repart à minuit. Pose ta propre "
+                f"clé{links.ou_poser_la_cle(sub, org=active_org)} pour "
                 "lever la limite immédiatement."
             ),
         ))
