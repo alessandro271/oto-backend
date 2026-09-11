@@ -87,7 +87,6 @@ foncier_conso_elec
 foncier_dpe
 foncier_dvf
 foncier_geocode
-foncier_icpe
 foncier_permis_search
 forager_account
 forager_autocomplete
@@ -97,7 +96,6 @@ fr_aides_search
 fr_events
 fr_search
 fr_stock_search
-fr_tenders_search
 frenchtech_search_annuaire
 github_actions
 github_orgs

@@ -20,8 +20,10 @@ from __future__ import annotations
 from typing import Literal, Optional
 
 from fastmcp import FastMCP
+from mcp.types import INVALID_PARAMS, ErrorData
 
 from .. import output_projection
+from ..mcp_errors import McpError
 
 
 def register(mcp: FastMCP) -> None:
@@ -102,72 +104,71 @@ def register(mcp: FastMCP) -> None:
     # --- Quartiers Prioritaires de la Ville (QPV) ----------------------------
 
     @mcp.tool()
-    def urba_elus(
-        fonction: Literal["maire", "president_epci"] = "maire",
-        code_commune: Optional[str] = None,
-        siren_epci: Optional[str] = None,
-        departement: Optional[str] = None,
-        limit: int = 100,
-        fields: Optional[list[str]] = None,
-    ) -> dict:
-        """Elected decision-makers of a public target: mayors, or EPCI presidents.
-
-        On a public-sector prospect the decision-maker is an elected official, not a
-        company director — paid enrichment looks for the latter and finds nothing.
-        `fonction="maire"` takes `code_commune` or `departement`;
-        `fonction="president_epci"` takes `siren_epci` or `departement` (only the
-        PRESIDENT is kept, not the thousands of community councillors).
-
-        Returns name, first name, commune, and the start date of the office — useful
-        to tell whether the contact changed since the last campaign. Birth date and
-        sex are in the source file and deliberately NOT returned.
-
-        Match on the INSEE code, never on the commune NAME: "Sainte-Marie" exists
-        dozens of times.
-
-        `fields` keeps only these keys in each record (the envelope always stays);
-        omitted = the whole record, already shaped by the source client.
-        """
-        if fonction == "president_epci":
-            res = elus.presidents_epci(siren=siren_epci, departement=departement, limit=limit)
-        else:
-            res = elus.maires(code_commune=code_commune, departement=departement, limit=limit)
-        # Le défaut ne retire rien ICI : l'enregistrement est déjà une vue choisie par
-        # le client de la source. `fields` est la projection offerte à l'appelant
-        # (ADR 0047), cf. `tests/test_sorties_listes_projetees.py`.
-        return output_projection.project(res, items_path="signaux", fields=fields)
-
-    @mcp.tool()
     def urba_annuaire(
-        siren: Optional[str] = None,
+        op: Literal["services", "maires", "presidents_epci"] = "services",
         code_commune: Optional[str] = None,
+        siren: Optional[str] = None,
+        departement: Optional[str] = None,
         type_service: Optional[str] = None,
         limit: int = 20,
         fields: Optional[list[str]] = None,
     ) -> dict:
-        """Public services and their NAMED head (DILA administration directory).
+        """Who decides and who answers on a PUBLIC target: services, mayors, EPCI presidents.
 
-        ~36,000 town halls plus prefectures, tax offices, departmental directorates.
-        Returns switchboard, generic e-mail, website and `responsables` — the named
-        head of the service with their role and often a direct e-mail. On a public
-        target it replaces paid enrichment.
+        On a public-sector prospect the decision-maker is an elected official and the
+        contact a public service — neither is a company director, and paid enrichment
+        finds nothing.
 
-        `type_service` is the directory's « pivot » type (`mairie`, `prefecture`,
-        `dd_fip`…). A value the source serialised badly comes back listed in
-        `champs_illisibles` rather than silently empty.
+        `op="services"` (default) — the DILA administration directory (~36,000 town
+        halls plus prefectures, tax offices, departmental directorates) by
+        `code_commune` or `siren`, optionally narrowed by `type_service` (the
+        directory's « pivot »: `mairie`, `prefecture`, `dd_fip`…). Returns switchboard,
+        generic e-mail, website and `responsables` — the NAMED head of the service with
+        their role. A value the source serialised badly is listed in
+        `champs_illisibles`, never silently emptied.
 
-        ⚠️ Served by OpenDataSoft on its own domain: egress from the production box is
-        not yet verified.
+        `op="maires"` — the mayor, by `code_commune` or `departement`.
+        `op="presidents_epci"` — the intercommunality president, by `siren` (the EPCI's)
+        or `departement`; only the PRESIDENT is kept, not the thousands of community
+        councillors. Both return the start date of the office — useful to tell whether
+        the contact changed since the last campaign. Birth date and sex are in the
+        source file and deliberately NOT returned.
 
-        `fields` keeps only these keys in each record (the envelope always stays);
-        omitted = the whole record, already shaped by the source client.
+        Match on the INSEE code, never on the commune NAME: "Sainte-Marie" exists
+        dozens of times. A parameter the chosen op cannot honour is REFUSED.
+        `fields` keeps only these keys in each record; the envelope always stays.
+
+        Args:
+            op: "services" (default), "maires" or "presidents_epci".
+            code_commune: INSEE commune code (services, maires).
+            siren: organisation SIREN (services) or EPCI SIREN (presidents_epci).
+            departement: department code (maires, presidents_epci).
+            type_service: directory « pivot » type (services only).
+            limit: records returned.
+            fields: keys kept in each record.
         """
-        # Même règle que `urba_elus` : rien de dupliqué à retirer ici, `fields` est la
-        # projection offerte à l'appelant (ADR 0047).
-        return output_projection.project(
-            annuaire.services(siren=siren, code_commune=code_commune,
-                              type_service=type_service, limit=limit),
-            items_path="signaux", fields=fields)
+        acceptes = {
+            "services": {"code_commune", "siren", "type_service"},
+            "maires": {"code_commune", "departement"},
+            "presidents_epci": {"siren", "departement"},
+        }[op]
+        poses = {n for n, v in (("code_commune", code_commune), ("siren", siren),
+                                ("departement", departement), ("type_service", type_service)) if v}
+        if poses - acceptes:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+                f"op='{op}' n'accepte pas {', '.join(sorted(poses - acceptes))} "
+                f"(accepte : {', '.join(sorted(acceptes))})")))
+        if not poses & (acceptes - {"type_service"}):
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+                f"op='{op}' requiert au moins : {', '.join(sorted(acceptes - {'type_service'}))}")))
+        if op == "maires":
+            res = elus.maires(code_commune=code_commune, departement=departement, limit=limit)
+        elif op == "presidents_epci":
+            res = elus.presidents_epci(siren=siren, departement=departement, limit=limit)
+        else:
+            res = annuaire.services(siren=siren, code_commune=code_commune,
+                                    type_service=type_service, limit=limit)
+        return output_projection.project(res, items_path="signaux", fields=fields)
 
     @mcp.tool()
     def urba_qpv(code_insee: str) -> dict:

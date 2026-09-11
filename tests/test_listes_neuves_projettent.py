@@ -5,6 +5,12 @@ projeter : `foncier_proprietaire`, `foncier_emissions`, `urba_elus`, `urba_annua
 et `fr_tenders_awarded` y tombaient tous les cinq. Le cliquet ne juge que la FORME
 (un paramètre, un appel) ; ce banc juge ce que l'outil REND.
 
+Le même jour, trois d'entre eux sont devenus des `op` d'outils existants, pour ne pas
+multiplier les verbes MCP : les émissions IREP sont `foncier_icpe(op="emissions")`, les
+marchés attribués `fr_tenders_search(op="awarded")`, les élus
+`urba_annuaire(op="maires"|"presidents_epci")`. Le banc suit : chaque cas porte les
+arguments de son `op`.
+
 - `foncier_proprietaire` : chaque enregistrement portait `raw`, la ligne BDNB dont
   toutes les colonnes sont déjà rendues, remises en forme, à côté. Duplication pure :
   le défaut la retire, `full=True` la rend ;
@@ -92,30 +98,62 @@ def _cas():
     annuaire = {"total": 1, "signaux": [{"nom": "Mairie", "courriel": "m@x.fr",
                                          "responsables": []}]}
     return [
-        (F, "foncier_emissions",
-         lambda mp, p: mp.setattr(fod_foncier, "irep", _Proxy(p)), irep, "siret"),
-        (FR, "fr_tenders_awarded",
+        (F, "foncier_icpe",
+         lambda mp, p: mp.setattr(fod_foncier, "irep", _Proxy(p)), irep, "siret",
+         {"op": "emissions", "departement": "59"}),
+        (FR, "fr_tenders_search",
          lambda mp, p: mp.setattr(fod_fr, "search_decp",
-                                  lambda **k: copy.deepcopy(p)), decp, "objet"),
-        (U, "urba_elus",
-         lambda mp, p: mp.setattr(fod_urba, "elus", _Proxy(p)), elus, "nom"),
+                                  lambda **k: copy.deepcopy(p)), decp, "objet",
+         {"op": "awarded", "query": "toiture"}),
         (U, "urba_annuaire",
-         lambda mp, p: mp.setattr(fod_urba, "annuaire", _Proxy(p)), annuaire, "nom"),
+         lambda mp, p: mp.setattr(fod_urba, "elus", _Proxy(p)), elus, "nom",
+         {"op": "maires", "code_commune": "59350"}),
+        (U, "urba_annuaire",
+         lambda mp, p: mp.setattr(fod_urba, "annuaire", _Proxy(p)), annuaire, "nom",
+         {"code_commune": "59350"}),
     ]
 
 
 @pytest.mark.parametrize("i", range(4))
 def test_sans_fields_rien_ne_bouge(monkeypatch, i):
-    module, nom, poser, payload, _ = _cas()[i]
+    module, nom, poser, payload, _, kw = _cas()[i]
     poser(monkeypatch, payload)
-    assert _outil(module, nom)() == payload
+    assert _outil(module, nom)(**kw) == payload
 
 
 @pytest.mark.parametrize("i", range(4))
 def test_fields_resserre_les_enregistrements_et_garde_l_enveloppe(monkeypatch, i):
-    module, nom, poser, payload, cle = _cas()[i]
+    module, nom, poser, payload, cle, kw = _cas()[i]
     poser(monkeypatch, payload)
-    out = _outil(module, nom)(fields=[cle])
+    out = _outil(module, nom)(**kw, fields=[cle])
     assert out["signaux"] == [{cle: payload["signaux"][0][cle]}]
     assert {k: v for k, v in out.items() if k != "signaux"} == \
         {k: v for k, v in payload.items() if k != "signaux"}
+
+
+# --- une op n'avale pas en silence un paramètre qu'elle ne sait pas honorer ----------
+# Trois outils ont gagné une `op` qui change ce que chaque paramètre veut dire. Le
+# risque de la fusion : `fr_tenders_search(op="awarded", type_marche="TRAVAUX")` qui
+# ignorerait le filtre et rendrait tous les marchés — une réponse fausse qui a l'air
+# juste. Chaque paramètre hors de son op est donc refusé en le nommant.
+
+@pytest.mark.parametrize("module_nom,kw,mot", [
+    ("fr", {"op": "awarded", "query": "x", "type_marche": "TRAVAUX"}, "type_marche"),
+    ("fr", {"op": "notices", "titulaire_siret": "12345678901234"}, "titulaire_siret"),
+    ("fr", {"op": "awarded"}, "au moins un critère"),
+    ("foncier", {"op": "emissions", "departement": "59", "page": 2}, "page"),
+    ("foncier", {"op": "installations", "departement": "59"}, "departement"),
+    ("foncier", {"op": "emissions"}, "requiert"),
+    ("urba", {"op": "maires", "type_service": "mairie", "code_commune": "59350"}, "type_service"),
+    ("urba", {"op": "presidents_epci", "code_commune": "59350"}, "code_commune"),
+    ("urba", {"op": "services"}, "requiert"),
+])
+def test_un_parametre_hors_de_son_op_est_refuse_en_le_nommant(module_nom, kw, mot):
+    from oto_mcp.mcp_errors import McpError
+    from oto_mcp.tools import foncier as F, fr as FR, urba as U
+
+    module, nom = {"fr": (FR, "fr_tenders_search"), "foncier": (F, "foncier_icpe"),
+                   "urba": (U, "urba_annuaire")}[module_nom]
+    with pytest.raises(McpError) as exc:
+        _outil(module, nom)(**kw)
+    assert mot in str(exc.value)

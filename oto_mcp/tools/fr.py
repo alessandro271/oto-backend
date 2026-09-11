@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 import threading
 import time
-from typing import Optional
+from typing import Literal, Optional
 
 from fastmcp import FastMCP
 from ..mcp_errors import McpError
@@ -679,73 +679,78 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def fr_tenders_search(
+        op: Literal["notices", "awarded"] = "notices",
         query: Optional[str] = None,
-        descripteur: Optional[str] = None,
         departement: Optional[str] = None,
         date_from: Optional[str] = None,
+        descripteur: Optional[str] = None,
         date_to: Optional[str] = None,
         type_marche: Optional[str] = None,
-        limit: int = 20,
-    ) -> dict:
-        """Search French public procurement tenders (BOAMP).
-
-        Args:
-            query: Full-text search in the notice subject.
-            descripteur: BOAMP descriptor (e.g. "Photovoltaïque", "Informatique").
-            departement: Department code (e.g. "75").
-            date_from: Publication date start (YYYY-MM-DD).
-            date_to: Publication date end (YYYY-MM-DD).
-            type_marche: Market type (TRAVAUX, FOURNITURES, SERVICES).
-            limit: Max results (default 20, max 100).
-        """
-        return fod_fr.search_boamp(
-            query=query, descripteur=descripteur, departement=departement,
-            date_from=date_from, date_to=date_to, type_marche=type_marche,
-            limit=limit,
-        )
-
-    @mcp.tool()
-    def fr_tenders_awarded(
-        mot_cle: Optional[str] = None,
         titulaire_siret: Optional[str] = None,
         acheteur_siret: Optional[str] = None,
-        lieu: Optional[str] = None,
-        depuis: Optional[str] = None,
-        limit: int = 50,
+        limit: int = 20,
         fields: Optional[list[str]] = None,
     ) -> dict:
-        """AWARDED public contracts (DECP) — who won, for how much, notified when.
+        """French public procurement — tender NOTICES (BOAMP) or AWARDED contracts (DECP).
 
-        `fr_tenders_search` returns the NOTICE (a need, a deadline); this returns the
-        OUTCOME: winner SIRET, amount, notification date, duration, procedure. It is
-        the only source that says who actually wins the contracts of a territory —
-        the real competition, not the assumed one.
+        `op="notices"` (default): the notice — a need, a deadline.
+        `op="awarded"`: the OUTCOME — winner SIRET, amount, notification date,
+        duration, procedure. The only source that says who actually wins the
+        contracts of a territory: the real competition, not the assumed one.
 
-        ⚠️ The main winner has NO name column in the source (only co-winners 2 and 3
-        do): resolve it from its SIRET with `fr_siret`. `denomination: null` on rank 1
-        is the source's shape, not a gap.
+        Shared: `query` (text in the subject), `departement`, `date_from`. For
+        `awarded`, `departement` is matched as the PREFIX of the place-of-performance
+        code (a department "59" or a postcode — the code type varies per contract).
+        Notices only: `descripteur`, `date_to`, `type_marche`. Awarded only:
+        `titulaire_siret` (every contract won by that establishment),
+        `acheteur_siret` (every contract passed by that buyer). A parameter the
+        chosen op cannot honour is REFUSED, never silently dropped.
+
+        ⚠️ awarded: the main winner has NO name column in the source (only
+        co-winners 2 and 3 do) — resolve it from its SIRET with `fr_siret`.
+        `denomination: null` on rank 1 is the source's shape, not a gap.
+
+        `fields` keeps only these keys in each record; the envelope (counts,
+        pagination) always stays.
 
         Args:
-            mot_cle: search in the contract subject ("photovoltaïque"…).
-            titulaire_siret: every contract won by this establishment.
-            acheteur_siret: every contract passed by this buyer.
-            lieu: prefix of the place-of-performance code — a department ("59") or a
-                postcode; the code type varies between contracts.
-            depuis: minimum notification date, YYYY-MM-DD.
-            limit: contracts returned, 1-100.
-            fields: keep only these keys in each contract — the envelope (`total`,
-                `rendus`, `tronque`) always stays. Omitted = the whole record,
-                already shaped by the source client.
+            op: "notices" (BOAMP, default) or "awarded" (DECP).
+            query: text searched in the subject.
+            departement: department code; for awarded, a place-code prefix.
+            date_from: start date (YYYY-MM-DD) — publication, or notification.
+            descripteur: BOAMP descriptor (notices only).
+            date_to: publication end date (notices only).
+            type_marche: TRAVAUX, FOURNITURES, SERVICES (notices only).
+            titulaire_siret: winner establishment (awarded only).
+            acheteur_siret: buyer establishment (awarded only).
+            limit: max results (1-100).
+            fields: keys kept in each record.
         """
-        # Le défaut ne retire rien ICI : l'enregistrement est déjà une vue choisie par
-        # le client de la source. `fields` est la projection offerte à l'appelant
-        # (ADR 0047), cf. `tests/test_sorties_listes_projetees.py`.
-        return output_projection.project(
-            fod_fr.search_decp(
-                mot_cle=mot_cle, titulaire_siret=titulaire_siret,
-                acheteur_siret=acheteur_siret, lieu=lieu, depuis=depuis, limit=limit,
-            ),
-            items_path="signaux", fields=fields)
+        propres = {
+            "notices": {"descripteur": descripteur, "date_to": date_to, "type_marche": type_marche},
+            "awarded": {"titulaire_siret": titulaire_siret, "acheteur_siret": acheteur_siret},
+        }
+        autre = "awarded" if op == "notices" else "notices"
+        refuses = [nom for nom, v in propres[autre].items() if v]
+        if refuses:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+                f"op='{op}' n'accepte pas {', '.join(refuses)} (réservé à op='{autre}')")))
+        if op == "awarded":
+            if not any([query, departement, titulaire_siret, acheteur_siret]):
+                raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+                    "op='awarded' requiert au moins un critère : query, departement, "
+                    "titulaire_siret ou acheteur_siret — 700 000 marchés sans filtre "
+                    "ne sont pas une réponse")))
+            res = fod_fr.search_decp(
+                mot_cle=query, titulaire_siret=titulaire_siret, acheteur_siret=acheteur_siret,
+                lieu=departement, depuis=date_from, limit=limit,
+            )
+            return output_projection.project(res, items_path="signaux", fields=fields)
+        res = fod_fr.search_boamp(
+            query=query, descripteur=descripteur, departement=departement,
+            date_from=date_from, date_to=date_to, type_marche=type_marche, limit=limit,
+        )
+        return output_projection.project(res, items_path="results", fields=fields)
 
     @mcp.tool()
     def fr_tenders_get(idweb: str) -> dict:

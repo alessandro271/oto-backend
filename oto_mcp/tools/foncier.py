@@ -762,93 +762,79 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def foncier_icpe(
+        op: Literal["installations", "emissions"] = "installations",
         siret: Optional[str] = None,
         code_insee: Optional[str] = None,
-        page: int = 1,
-    ) -> dict:
-        """ICPE registry (classified installations, Géorisques) by SIRET or commune.
-
-        Detects HEAVY INDUSTRIAL SITES when power consumption is masked in Enedis
-        open data (statistical secrecy): returns ICPE regime (Déclaration /
-        Enregistrement / Autorisation), IED status, Seveso, activity state,
-        geolocation, DREAL inspection service and latest inspection reports.
-
-        Also returns `rubriques` (nomenclature number, nature, authorised
-        quantity) and `rubriques_energie` — those whose very activity IS energy
-        use, each with a plain reading: 2910/3110 combustion, 2920/2921 cooling,
-        4735/1185 industrial refrigeration. Long sheets are capped at 10, energy
-        ones FIRST, and `rubriques_tronquees` says so.
-
-        Grounds a SOURCED "big consumer" presumption (cite the codeAIOT) — it does
-        NOT return energy consumption: an authorised quantity is m³ or MW of
-        installed plant, never kWh.
-
-        Args:
-            siret: establishment SIRET (14 digits) — exact match.
-            code_insee: INSEE commune code — all ICPE of the commune.
-            page: 1-based page (20 per page).
-        """
-        res = georisques.installations_classees(siret=siret, code_insee=code_insee, page=page)
-        return {
-            "results": res.get("results", 0),
-            "page": res.get("page", page),
-            "total_pages": res.get("total_pages", 1),
-            "data": [_compact_icpe(d) for d in res.get("data", [])],
-        }
-
-    # --- émissions déclarées par établissement (IREP, Géorisques) -----------
-
-    @mcp.tool()
-    def foncier_emissions(
-        annee: int = 2024,
         departement: Optional[str] = None,
-        code_commune: Optional[str] = None,
-        siret: Optional[str] = None,
+        page: int = 1,
+        annee: int = 2024,
         polluant: Optional[str] = None,
         milieu: Optional[str] = "Air",
         limit: int = 50,
         fields: Optional[list[str]] = None,
     ) -> dict:
-        """Declared pollutant emissions, per ESTABLISHMENT with its SIRET (IREP).
+        """Declared industrial installations (Géorisques): ICPE registry, or IREP emissions.
 
+        `op="installations"` (default) — the ICPE registry by `siret` or `code_insee`:
+        regime (Déclaration / Enregistrement / Autorisation), IED, Seveso, activity
+        state, geolocation, DREAL service, latest inspection reports, and `rubriques`
+        (nomenclature number, nature, authorised quantity) with `rubriques_energie` —
+        those whose very activity IS energy use, each with a plain reading: 2910/3110
+        combustion, 2920/2921 cooling, 4735/1185 industrial refrigeration. Long sheets
+        are capped at 10, energy ones FIRST, and `rubriques_tronquees` says so.
+        Detects HEAVY INDUSTRIAL SITES when power consumption is masked in Enedis
+        open data — a SOURCED "big consumer" presumption (cite the codeAIOT), NOT a
+        consumption: an authorised quantity is m³ or MW of plant, never kWh.
+
+        `op="emissions"` — the IREP registry: declared emissions per ESTABLISHMENT,
+        with its SIRET and coordinates, by `departement`, `code_insee` or `siret`.
         The complement to `foncier_beges`: a GHG inventory covers a whole
-        ORGANISATION and never says where, while IREP declares site by site, with
-        SIRET and coordinates. That is what lets you name WHICH site of a large
-        account weighs — and therefore which address to call on. Measured on
-        department 59: ArcelorMittal France at 5.995 Mt of fossil CO2, SIRET included.
+        ORGANISATION and never says where, IREP names WHICH site weighs — and
+        therefore which address to call on.
+        ⚠️ 89% of the registry's quantities are the string "< seuil" (declared BELOW
+        the reporting threshold): they come back as `quantite: null` with
+        `sous_seuil: true`, never as zero, sorted after the known quantities.
+        ⚠️ CO2 comes in three labels — fossil (the default), biomass, and the total
+        that sums both; reading the total as fossil inflates a site that burns wood.
 
-        ⚠️ 89% of the registry's quantities are the string "< seuil" (56,848 rows out
-        of 64,045 in 2024): the operator declared BELOW the reporting threshold. They
-        come back as `quantite: null` with `sous_seuil: true`, never as zero, and are
-        sorted after the known quantities — they inform, they do not rank.
-
-        ⚠️ CO2 comes in three flavours — fossil (the default), biomass, and the total
-        that sums both. Reading the total as fossil inflates a site that burns wood.
+        A parameter the chosen op cannot honour is REFUSED, never silently dropped.
+        `fields` keeps only these keys in each record; the envelope always stays.
 
         Args:
-            annee: registry vintage (2024 by default).
-            departement: INSEE department code.
-            code_commune: INSEE commune code.
-            siret: one establishment.
-            polluant: EXACT label from the dataset; omitted means fossil CO2, "" (empty
-                string) means every pollutant.
-            milieu: "Air" by default; empty means water and soil too.
-            limit: establishments returned.
-            fields: keep only these keys in each record — the envelope (`total`,
-                `tronque`, `sous_seuil`) always stays. Omitted = the whole record,
-                already shaped by the source client.
+            op: "installations" (ICPE, default) or "emissions" (IREP).
+            siret: establishment SIRET (14 digits).
+            code_insee: INSEE commune code.
+            departement: INSEE department code (emissions only).
+            page: 1-based page of 20 (installations only).
+            annee: registry vintage (emissions only).
+            polluant: EXACT dataset label (emissions only); omitted = fossil CO2,
+                "" = every pollutant.
+            milieu: "Air" by default; empty = water and soil too (emissions only).
+            limit: establishments returned (emissions only).
+            fields: keys kept in each record.
         """
-        # Le défaut ne retire rien ICI : l'enregistrement est déjà une vue choisie par
-        # le client de la source, sans rien de dupliqué. `fields` est la projection
-        # offerte à l'appelant (ADR 0047), cf. `tests/test_sorties_listes_projetees.py`.
-        return output_projection.project(
-            irep.emetteurs(
-                annee=annee, departement=departement, code_commune=code_commune,
+        if op == "emissions":
+            if page != 1:
+                raise _bad("op='emissions' ne pagine pas par `page` : utiliser `limit`")
+            if not any([siret, code_insee, departement]):
+                raise _bad("op='emissions' requiert siret, code_insee ou departement")
+            res = irep.emetteurs(
+                annee=annee, departement=departement, code_commune=code_insee,
                 siret=siret, polluant=polluant, milieu=milieu, limit=limit,
-            ),
-            items_path="signaux", fields=fields)
-
-    # --- propriétaire d'un bâtiment (BDNB, CSTB) ----------------------------
+            )
+            return output_projection.project(res, items_path="signaux", fields=fields)
+        refuses = [n for n, v in (("departement", departement), ("polluant", polluant)) if v]
+        if refuses:
+            raise _bad(f"op='installations' n'accepte pas {', '.join(refuses)} (réservé à op='emissions')")
+        if not siret and not code_insee:
+            raise _bad("op='installations' requiert siret ou code_insee")
+        res = georisques.installations_classees(siret=siret, code_insee=code_insee, page=page)
+        return output_projection.project({
+            "results": res.get("results", 0),
+            "page": res.get("page", page),
+            "total_pages": res.get("total_pages", 1),
+            "data": [_compact_icpe(d) for d in res.get("data", [])],
+        }, items_path="data", fields=fields)
 
     @mcp.tool()
     def foncier_proprietaire(

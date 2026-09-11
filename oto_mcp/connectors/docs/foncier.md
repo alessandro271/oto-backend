@@ -36,7 +36,7 @@ la consommation décrit un site sans le qualifier, et ne localise pas tout. deux
 
 ## usage — quel SITE d'un grand compte pèse
 
-`foncier_emissions(departement= | code_commune= | siret= | annee=)` — le registre irep : les émissions déclarées **par établissement**, avec siret et coordonnées. c'est le complément de `foncier_beges`, qui porte sur l'organisation entière et ne dit jamais où : ici on nomme le site, donc l'adresse. mesuré sur le 59 — arcelormittal france à 5,995 mt de co2 fossile.
+`foncier_icpe(op="emissions", departement= | code_insee= | siret= | annee=)` — le registre irep : les émissions déclarées **par établissement**, avec siret et coordonnées. c'est le complément de `foncier_beges`, qui porte sur l'organisation entière et ne dit jamais où : ici on nomme le site, donc l'adresse. mesuré sur le 59 — arcelormittal france à 5,995 mt de co2 fossile.
 
 ⚠️ **89 % des quantités du registre valent « < seuil »** (56 848 lignes sur 64 045 en 2024) : l'exploitant déclare SOUS le seuil de déclaration. elles sortent en `quantite: null` + `sous_seuil: true`, jamais en zéro, et se rangent APRÈS les quantités connues — elles informent, elles ne classent pas.
 

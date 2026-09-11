@@ -100,10 +100,10 @@ FOD_NOT_EXPOSED = {
     "dpe_tertiaire": _FONCIER_JAMAIS_PAR_LA_LIB,  # volet tertiaire de foncier_dpe → /api/foncier/dpe/tertiaire
     "odre": _FONCIER_JAMAIS_PAR_LA_LIB,  # conso transport de foncier_conso_elec → /api/foncier/odre/conso
     "bdnb": _FONCIER_JAMAIS_PAR_LA_LIB,  # bâtiment → SIREN du propriétaire — foncier_proprietaire → /api/foncier/bdnb
-    "irep": _FONCIER_JAMAIS_PAR_LA_LIB,  # émissions par établissement — foncier_emissions → /api/foncier/irep
-    "elus": _URBA_FR_JAMAIS_PAR_LA_LIB,  # maires / présidents d'EPCI — urba_elus → /api/urba/elus/*
-    "lannuaire": _URBA_FR_JAMAIS_PAR_LA_LIB,  # annuaire DILA — urba_annuaire → /api/urba/annuaire
-    "decp": _URBA_FR_JAMAIS_PAR_LA_LIB,  # marchés attribués — fr_tenders_awarded → /api/fr/tenders/awarded
+    "irep": _FONCIER_JAMAIS_PAR_LA_LIB,  # émissions par établissement — foncier_icpe(op="emissions") → /api/foncier/irep
+    "elus": _URBA_FR_JAMAIS_PAR_LA_LIB,  # maires / présidents d'EPCI — urba_annuaire(op="maires"|"presidents_epci") → /api/urba/elus/*
+    "lannuaire": _URBA_FR_JAMAIS_PAR_LA_LIB,  # annuaire DILA — urba_annuaire(op="services") → /api/urba/annuaire
+    "decp": _URBA_FR_JAMAIS_PAR_LA_LIB,  # marchés attribués — fr_tenders_search(op="awarded") → /api/fr/tenders/awarded
     # Clients « fr » (données entreprise) consommés via le service FOD (B2a) :
     # entreprises/BODACC/Egapro = proxy HTTP live, INPI = DuckDB parquet isolé.
     # oto_mcp/fod_fr.py → /api/fr/*. INSEE SIRENE (keyé) reste, lui, au backend.
