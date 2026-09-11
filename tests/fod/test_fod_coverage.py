@@ -65,6 +65,15 @@ _FONCIER_JAMAIS_PAR_LA_LIB = (
     "l'extraction : il n'a jamais tourné in-process côté backend"
 )
 
+# Même situation hors foncier : clients urba / fr arrivés dans la lib APRÈS l'extraction
+# (0.46.x, 2026-09-11). Le service FOD les sert, le backend ne les a jamais importés.
+_URBA_FR_JAMAIS_PAR_LA_LIB = (
+    "client urba/fr consommé via le service FOD dédié en proxy HTTP live "
+    "(oto_mcp/fod/{urba,fr}.py → /api/{urba,fr}/*, ADR 0028 extraction totale) — "
+    "le tool est exposé, mais le client lib est arrivé APRÈS l'extraction : "
+    "il n'a jamais tourné in-process côté backend"
+)
+
 FOD_NOT_EXPOSED = {
     "judilibre": "client Judilibre (jurisprudence) = source d'INGESTION du service "
                  "FOD (fod-0, épopée DILA) ; le backend consomme la jurisprudence "
@@ -90,6 +99,11 @@ FOD_NOT_EXPOSED = {
     "beges": _FONCIER_JAMAIS_PAR_LA_LIB,  # bilans GES — tool foncier_beges → /api/foncier/beges
     "dpe_tertiaire": _FONCIER_JAMAIS_PAR_LA_LIB,  # volet tertiaire de foncier_dpe → /api/foncier/dpe/tertiaire
     "odre": _FONCIER_JAMAIS_PAR_LA_LIB,  # conso transport de foncier_conso_elec → /api/foncier/odre/conso
+    "bdnb": _FONCIER_JAMAIS_PAR_LA_LIB,  # bâtiment → SIREN du propriétaire — foncier_proprietaire → /api/foncier/bdnb
+    "irep": _FONCIER_JAMAIS_PAR_LA_LIB,  # émissions par établissement — foncier_emissions → /api/foncier/irep
+    "elus": _URBA_FR_JAMAIS_PAR_LA_LIB,  # maires / présidents d'EPCI — urba_elus → /api/urba/elus/*
+    "lannuaire": _URBA_FR_JAMAIS_PAR_LA_LIB,  # annuaire DILA — urba_annuaire → /api/urba/annuaire
+    "decp": _URBA_FR_JAMAIS_PAR_LA_LIB,  # marchés attribués — fr_tenders_awarded → /api/fr/tenders/awarded
     # Clients « fr » (données entreprise) consommés via le service FOD (B2a) :
     # entreprises/BODACC/Egapro = proxy HTTP live, INPI = DuckDB parquet isolé.
     # oto_mcp/fod_fr.py → /api/fr/*. INSEE SIRENE (keyé) reste, lui, au backend.
