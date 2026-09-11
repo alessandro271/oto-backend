@@ -352,6 +352,45 @@ def register(mcp: FastMCP) -> None:
         out["projection"] = _projection_bloc()
         return out
 
+    # ⚠️ Le reveal servait sa fiche ENTIÈRE — il était le seul des trois à ne pas
+    # être allégé, et c'est l'outil du signalement client. Mesuré sur un appel RÉEL
+    # en production le 2026-09-11 (org sur clé payante, une personne) : **65 374
+    # caractères**, dont `person.organization` 59 244 et `employment_history` 4 396.
+    # Le client MCP a REFUSÉ la réponse (`exceeds maximum allowed tokens`) : l'appel
+    # a coûté ses crédits, les numéros étaient commandés, et l'agent n'a rien pu
+    # lire — exactement la panne que la projection existe pour empêcher, sur le seul
+    # outil qui l'avait manquée. Allégé : 5 457 c., soit 92 % de moins.
+    #
+    # ⚠️ Et `phone_enrichment.request_id` N'EST PAS l'identifiant de sondage : Apollo
+    # en rend DEUX (`6aa46cf…` interne, et le `request_id` signé 64 bits au premier
+    # niveau) et son propre message dit d'employer « the top-level `request_id` ».
+    # Deux identifiants dont un seul marche, dans la même réponse, c'est un piège —
+    # on retire celui qui ne sonde rien et on le NOMME, le message d'Apollo restant
+    # là pour expliquer lequel vaut.
+    _REVEAL_TRAP = ("phone_enrichment.request_id",)
+
+    def _light_reveal(payload: dict) -> dict:
+        person, allegee = _light_match(payload.get("person"))
+        out = {**payload, "person": person} if allegee else dict(payload)
+
+        piege = False
+        pe = out.get("phone_enrichment")
+        if isinstance(pe, dict) and "request_id" in pe:
+            out["phone_enrichment"] = {k: v for k, v in pe.items() if k != "request_id"}
+            piege = True
+
+        if not (allegee or piege):
+            return payload
+        bloc = _projection_bloc(lot=True)
+        bloc["dropped"] = ([*_REVEAL_TRAP] if piege else []) + (
+            bloc["dropped"] if allegee else [])
+        bloc["why"] = ("fiche entreprise, historique d'emploi et fiche société du CRM "
+                       "Apollo — 65 374 c. mesurés sur un reveal réel, refusés par le "
+                       "client ; plus l'identifiant de `phone_enrichment`, qui ne "
+                       "sonde RIEN (c'est `request_id` au premier niveau qui sonde)")
+        out["projection"] = bloc
+        return out
+
     def _stringify_request_id(payload: dict) -> dict:
         """`request_id` en CHAÎNE — Apollo en rend un à CHAQUE match, reveal ou pas.
 
@@ -520,6 +559,7 @@ def register(mcp: FastMCP) -> None:
         name: Optional[str] = None,
         domain: Optional[str] = None,
         org_name: Optional[str] = None,
+        full: bool = False,
     ) -> dict:
         """Order someone's phone numbers, mobile and direct dial included (ASYNC).
 
@@ -539,6 +579,9 @@ def register(mcp: FastMCP) -> None:
             webhook_url: HTTPS endpoint Apollo POSTs to — mandatory on its side.
                 oto is not a webhook receiver: give a URL YOU control. You need not
                 read it, apollo_reveal_phone_result returns the same payload.
+            full: keep the employer's tech stack, the employment history and the
+                Apollo CRM account record. Off by default: a real reveal came back
+                at 65 374 characters and the client refused it outright. Same price.
         """
         client = _client_byo(_BYO_REVEAL_TELEPHONE)
         destination = _webhook_destination(webhook_url)
@@ -594,12 +637,12 @@ def register(mcp: FastMCP) -> None:
                 "Apollo matched this person and accepted the reveal, but returned "
                 "no request_id: the numbers will only reach your webhook_url. "
                 "Nothing to poll.")
-            return result
+            return result if full else _light_reveal(result)
         result["request_id"] = str(rid)
         result["next_step"] = (
             f"Reveal ordered. Call apollo_reveal_phone_result('{rid}') in ~1-2min "
             "(0 Apollo credits per check, result kept 30 days).")
-        return result
+        return result if full else _light_reveal(result)
 
     @mcp.tool()
     def apollo_reveal_phone_result(request_id: str) -> dict:
