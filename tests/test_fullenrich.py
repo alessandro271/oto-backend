@@ -3,7 +3,11 @@ must trace the number of contacts SUBMITTED (not enriched/found — that count o
 exists later, inside `fullenrich_result`, a separate call/journal row) via
 `session_org.note_call_trace(quantity=…)`, regardless of platform vs BYO key —
 unlike `access.record_platform_usage`, which only fires on the platform key and
-serves a different purpose (oto's own internal quota, not org billing)."""
+serves a different purpose (oto's own internal quota, not org billing).
+
+`fullenrich_result` traces what FullEnrich DEDUCTED for the job (`cost_credits`,
+its `cost.credits`) once FINISHED, 0 while not finished, and nothing when no cost
+is declared — no price table, no dedupe in the backend (2026-09-11)."""
 import asyncio
 from unittest.mock import patch
 
@@ -60,4 +64,54 @@ def test_enrich_linkedin_does_not_trace_on_a_rejected_submission():
         with pytest.raises(McpError):
             _tool("fullenrich_enrich_linkedin").fn(contacts=_contacts(1))
 
+    trace.assert_not_called()
+
+
+# ── `fullenrich_result` : le coût DÉCLARÉ par FullEnrich, relevé tel quel ─────
+#
+# Le client oto-core rend `cost_credits` (le `cost.credits` du job). Les tests
+# passent par `res.get(...)` sur un client simulé : ils tiennent sur le pin actuel,
+# que le champ y soit déjà ou non.
+
+def _result(fetched: dict, *, is_platform: bool = True):
+    with patch("oto_mcp.access.resolve_api_key", return_value=("fake-key", is_platform)), \
+         patch("oto_mcp.tools.fullenrich.session_org.note_call_trace") as trace, \
+         patch("oto.tools.fullenrich.client.FullenrichClient") as client_cls:
+        client_cls.return_value.fetch.return_value = fetched
+        out = _tool("fullenrich_result").fn(enrichment_id="enr_789")
+    return out, trace
+
+
+@pytest.mark.parametrize("is_platform", [True, False])
+def test_result_finished_traces_the_credits_fullenrich_deducted(is_platform):
+    out, trace = _result({"status": "FINISHED", "profiles": [], "cost_credits": 14},
+                         is_platform=is_platform)
+    assert out["done"] is True
+    # INCONDITIONNEL : même trace sur la clé plateforme et sur une clé BYO — le
+    # consommateur filtre sur `key_mode`, pas le backend.
+    trace.assert_called_once_with(quantity=14)
+
+
+def test_result_finished_with_zero_credits_traces_a_zero():
+    """Rien trouvé = rien déduit chez FullEnrich : un zéro mesuré, pas une absence."""
+    _, trace = _result({"status": "FINISHED", "profiles": [], "cost_credits": 0})
+    trace.assert_called_once_with(quantity=0)
+
+
+@pytest.mark.parametrize("status", ["CREATED", "IN_PROGRESS"])
+def test_result_not_finished_traces_zero(status):
+    out, trace = _result({"status": status, "profiles": None, "cost_credits": None})
+    assert out["done"] is False
+    trace.assert_called_once_with(quantity=0)
+
+
+@pytest.mark.parametrize("fetched", [
+    {"status": "FINISHED", "profiles": []},                         # oto-core antérieur au champ
+    {"status": "FINISHED", "profiles": [], "cost_credits": None},   # amont muet
+])
+def test_result_finished_without_a_declared_cost_traces_no_quantity(fetched):
+    """Pas de repli calculé depuis les profils : un barème (1/3/10) n'a pas sa place
+    dans le backend. Sans coût déclaré, aucune quantité — jamais une valeur devinée."""
+    out, trace = _result(fetched)
+    assert out["done"] is True
     trace.assert_not_called()

@@ -1000,6 +1000,18 @@ def export_tool_calls_for_org(
             "next": (cles[-1], rows[-1]["id"]) if encore and rows else None}
 
 
+# Les noms d'argument qui DÉSIGNENT un job fournisseur relevé par un appel — liste
+# FERMÉE de littéraux de ce module, interpolée dans le SQL, jamais fournie par un
+# appelant. `job_id` de la lentille de facturation en est la seule sortie : aucun
+# autre argument ne quitte le journal par elle (ceux d'un enrichissement portent des
+# personnes). Un identifiant de job court passe `calllog.truncated_args` intact
+# (scalaire sous la borne, nom non déclaré secret), sur l'appel direct comme sur la
+# ligne CIBLE d'un `oto_call` (même fabrique d'arguments).
+BILLABLE_JOB_ARGS: tuple[str, ...] = ("enrichment_id",)
+_BILLABLE_JOB_ID_SQL = "COALESCE(" + ", ".join(
+    f"l.args->>'{nom}'" for nom in BILLABLE_JOB_ARGS) + ")"
+
+
 def list_billable_calls_for_org(
     org_id: int, tool: str, *, since: Optional[str] = None,
     until: Optional[str] = None, limit: int = 1000,
@@ -1022,7 +1034,9 @@ def list_billable_calls_for_org(
     sous-facture sans lever d'erreur. Le relevé ne doit JAMAIS repasser par là.
 
     Projection ÉTROITE par construction : id, outil, date, quantité, mode de
-    clé. Ni `sub`, ni `email`, ni `error` — la lentille est lisible par tout
+    clé, et l'identité du job relevé (`job_id`, lue pour la seule liste fermée
+    `BILLABLE_JOB_ARGS` — `None` pour tout autre outil). Ni `sub`, ni `email`,
+    ni `error`, ni aucun autre argument — la lentille est lisible par tout
     membre, et ce qu'il lit est ce que son org consomme, pas qui a fait quoi.
     Seuls les appels `ok` : un échec n'a rien consommé chez le fournisseur."""
     limit = max(1, min(int(limit), 5000))
@@ -1047,6 +1061,7 @@ def list_billable_calls_for_org(
         rows = conn.execute(
             f"""
             SELECT l.id, l.tool, l.quantity, l.key_mode,
+                   {_BILLABLE_JOB_ID_SQL} AS job_id,
                    {_AUDIT_KEYSET_AT} AS created_at
             FROM tool_calls l
             WHERE {' AND '.join(page_clauses)}

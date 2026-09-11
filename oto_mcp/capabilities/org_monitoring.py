@@ -627,6 +627,13 @@ class BillableCallRow(BaseModel):
     # `user|group|org|tenant|platform`. `None` = aucun credential résolu ou ligne
     # antérieure à la colonne : non attribuable, donc à NE PAS facturer.
     key_mode: Optional[str] = None
+    # L'identité du JOB fournisseur que l'appel relève, quand l'outil en porte un
+    # (`fullenrich_result` → son `enrichment_id`). Elle ne sert qu'à une chose : un
+    # job relevé plusieurs fois trace plusieurs fois le même coût, et c'est au
+    # consommateur de ne le compter qu'une fois. Lue dans les args journalisés pour
+    # une liste FERMÉE de noms (`db.BILLABLE_JOB_ARGS`) — jamais un autre argument :
+    # ceux d'un enrichissement portent des personnes. `None` = l'outil n'en a pas.
+    job_id: Optional[str] = None
 
 
 class OrgBillableCalls(BaseModel):
@@ -670,7 +677,8 @@ def _billable_calls(ctx: ResolvedCtx, inp: OrgBillableCallsInput) -> dict:
         # Projection EXPLICITE, pas un `**row` : la lentille reste étroite même
         # si la requête gagne des colonnes demain.
         "calls": [{"call_id": r["id"], "tool": r["tool"], "created_at": r["created_at"],
-                   "quantity": r.get("quantity"), "key_mode": r.get("key_mode")}
+                   "quantity": r.get("quantity"), "key_mode": r.get("key_mode"),
+                   "job_id": r.get("job_id")}
                   for r in page["calls"]],
         "total": page["total"],
         "until_effectif": page["until_effectif"],

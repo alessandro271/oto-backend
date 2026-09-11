@@ -52,8 +52,22 @@ def test_la_lentille_ne_rend_QUE_ce_qu_un_metrage_somme(monkeypatch):
     out = om._billable_calls(CTX, om.OrgBillableCallsInput(org_id=7, tool="linkedin_aiark_search"))
     assert out["calls"] == [{"call_id": 9, "tool": "linkedin_aiark_search",
                              "created_at": "2026-09-01T09:00:00.000000Z",
-                             "quantity": 47, "key_mode": "platform"}]
+                             "quantity": 47, "key_mode": "platform", "job_id": None}]
     assert not {"sub", "email", "error"} & set(out["calls"][0])
+
+
+def test_la_lentille_rend_le_job_d_un_releve_et_rien_d_autre_des_args(monkeypatch):
+    """`job_id` sert au consommateur à compter UNE fois un job relevé plusieurs fois.
+    Aucun autre argument ne passe, même si le store en laissait remonter."""
+    _fake(monkeypatch, total=1, calls=[{
+        "id": 11, "tool": "fullenrich_result", "created_at": "2026-09-01T09:05:00.000000Z",
+        "quantity": 14, "key_mode": "platform", "job_id": "enr-0001",
+        "args": {"enrichment_id": "enr-0001"}, "contacts": [{"first_name": "A"}]}])
+    out = om._billable_calls(CTX, om.OrgBillableCallsInput(org_id=7, tool="fullenrich_result"))
+    assert out["calls"] == [{"call_id": 11, "tool": "fullenrich_result",
+                             "created_at": "2026-09-01T09:05:00.000000Z",
+                             "quantity": 14, "key_mode": "platform", "job_id": "enr-0001"}]
+    assert not {"args", "contacts"} & set(out["calls"][0])
 
 
 def test_la_reponse_porte_le_total_et_la_position_suivante(monkeypatch):
@@ -113,17 +127,48 @@ def live(pg_dsn):
 
 
 def _poser(sub, org_id, *, quand, tool="linkedin_aiark_search", ok=True,
-           quantity=None, key_mode=None, kind="mcp"):
+           quantity=None, key_mode=None, kind="mcp", args=None):
     from oto_mcp import db
     from oto_mcp.db._conn import _connect
 
     db.insert_tool_call({"sub": sub, "kind": kind, "tool": tool, "ok": ok,
-                         "org_id": org_id, "duration_ms": 3,
+                         "org_id": org_id, "duration_ms": 3, "args": args,
                          "quantity": quantity, "key_mode": key_mode})
     with _connect() as conn:
         conn.execute(
             "UPDATE tool_calls SET created_at = %s::timestamptz WHERE id = ("
             "SELECT max(id) FROM tool_calls)", (quand,))
+
+
+def test_le_store_rend_le_job_d_un_releve_sans_aucun_autre_argument(live):
+    """Contre la base : `job_id` vient des args JOURNALISÉS (tels que
+    `calllog.truncated_args` les écrit), pour la seule liste fermée
+    `BILLABLE_JOB_ARGS` — le reste des args ne sort pas, et un outil sans job
+    rend `None`."""
+    from oto_mcp import db, org_store
+    from oto_mcp.calllog import truncated_args
+
+    sub = "sub-job-" + uuid.uuid4().hex[:6]
+    org = org_store.create_org("Jobs relevés", created_by=sub)
+    args = truncated_args({"enrichment_id": "8f14e45f-ceea-467e-a9b4-2f0e0f8b1c7d"},
+                          tool="fullenrich_result")
+    for minute in (1, 2):                          # le MÊME job relevé deux fois
+        _poser(sub, org, quand=f"2026-08-20T10:0{minute}:00+00:00",
+               tool="fullenrich_result", quantity=14, key_mode="platform", args=args)
+    _poser(sub, org, quand="2026-08-20T10:03:00+00:00", tool="fullenrich_enrich_linkedin",
+           quantity=3, key_mode="platform",
+           args=truncated_args({"contacts": [{"first_name": "Ada", "last_name": "L"}]},
+                               tool="fullenrich_enrich_linkedin"))
+
+    fenetre = {"since": "2026-08-10T00:00:00+00:00", "until": "2026-08-21T00:00:00+00:00"}
+    releves = db.list_billable_calls_for_org(org, "fullenrich_result", **fenetre)
+    assert releves["total"] == 2
+    assert {c["job_id"] for c in releves["calls"]} == {"8f14e45f-ceea-467e-a9b4-2f0e0f8b1c7d"}
+    assert not {"args", "contacts"} & set(releves["calls"][0])
+
+    soumis = db.list_billable_calls_for_org(org, "fullenrich_enrich_linkedin", **fenetre)
+    assert [c["job_id"] for c in soumis["calls"]] == [None]
+    assert "contacts" not in soumis["calls"][0] and "args" not in soumis["calls"][0]
 
 
 @pytest.fixture

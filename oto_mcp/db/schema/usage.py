@@ -111,7 +111,9 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     -- Nombre d'items TRAITÉS par cet appel (extension OTO-LOCALE, 2026-08-21) —
     -- un appel bulk (ex. linkedin_aiark_search jusqu'à 100 résultats,
     -- fullenrich_enrich_linkedin jusqu'à 100 contacts SOUMIS) compte pour PLUS
-    -- qu'UN appel côté métrage/facturation. NULL = non tracé pour ce tool
+    -- qu'UN appel côté métrage/facturation. L'unité est celle que l'OUTIL déclare :
+    -- items, ou crédits déduits par l'amont (serper_*, fullenrich_result —
+    -- `cost.credits` d'un job terminé, 0 tant qu'il ne l'est pas). NULL = non tracé pour ce tool
     -- (l'écrasante majorité — un consommateur doit traiter NULL comme 1, PAS
     -- comme 0). Posé via le même seam que `_TRACED_ARGS`
     -- (`session_org.note_call_trace(quantity=N)`), mais dans SA PROPRE colonne

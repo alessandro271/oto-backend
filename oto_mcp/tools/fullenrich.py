@@ -7,6 +7,14 @@ in-process 131-147s → tout client MCP raccroche (~60s), résultat perdu ET cr�
 consommés. Désormais : `fullenrich_enrich_linkedin` SOUMET le job (~1s, bulk
 jusqu'à 100 contacts) et `fullenrich_result` relève le statut/le résultat —
 le polling appartient à l'agent.
+
+Métrage (billing Tulina) : deux quantités, deux faits distincts. La soumission trace
+les contacts SOUMIS ; le relevé d'un job terminé trace les crédits que FullEnrich a
+DÉDUITS (`cost.credits`, rendu par oto-core en `cost_credits`) — seul chiffre qui dit
+ce que le job a coûté, puisque l'amont ne facture que ce qu'il trouve. Un relevé non
+terminé trace 0. Le backend ne porte aucun barème et ne déduplique rien : un job
+relevé deux fois trace deux fois son coût, et le consommateur le compte une fois par
+son `enrichment_id` (le `job_id` de la lentille `org.usage.calls`).
 """
 from __future__ import annotations
 
@@ -124,11 +132,26 @@ def register(mcp: FastMCP) -> None:
         client, _ = _client()
         res = client.fetch(enrichment_id)
         if res["status"] != "FINISHED":
+            # Un relevé de statut n'a rien consommé chez FullEnrich : un zéro TRACÉ,
+            # pas une absence — un consommateur du métrage lit l'absence comme 1.
+            session_org.note_call_trace(quantity=0)
             return {
                 "done": False,
                 "status": res["status"],
                 "next_step": "Still running — call fullenrich_result again in ~20-30s.",
             }
+        # Métrage (billing Tulina) : les crédits que FULLENRICH a déduits pour ce job —
+        # `cost_credits`, son `cost.credits` relu par oto-core. INCONDITIONNEL (clé
+        # plateforme OU BYO), comme `fullenrich_enrich_linkedin` : le consommateur
+        # filtre sur `key_mode`. Aucun barème ici, ni 1/3/10 ni conversion : un taux
+        # est une décision commerciale. Coût absent (oto-core antérieur au champ, amont
+        # muet) → AUCUNE quantité, jamais une valeur devinée depuis les profils.
+        # ⚠️ Chaque relevé FINISHED d'un même job trace le même coût : compter un job
+        # une fois (par son `enrichment_id`, que la lentille de facturation rend en
+        # `job_id`) appartient au consommateur, pas au backend.
+        cost = res.get("cost_credits")
+        if isinstance(cost, int) and not isinstance(cost, bool) and cost >= 0:
+            session_org.note_call_trace(quantity=cost)
         return {
             "done": True,
             "status": "FINISHED",
