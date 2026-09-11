@@ -679,6 +679,62 @@ def _billable_calls(ctx: ResolvedCtx, inp: OrgBillableCallsInput) -> dict:
     }
 
 
+# ── connexions de messagerie d'une org, lentille MEMBRE ─────────────────────
+#
+# Les comptes de messagerie hébergés (Unipile) d'UNE org et leurs dates. Aucune règle
+# de facturation ici — ni prix, ni tri « facturable » : `platform_seat` dit sur quelle
+# clé vit chaque connexion, et le relevé qui la lit (celui d'un tenant) décide de ce
+# qu'il compte. Même règle d'étroitesse que `org.usage.calls` : ni `sub`, ni email, ni
+# `account_id` Unipile — une clé opaque suffit à dédupliquer, et un membre voit ce que
+# SON ORG a connecté, pas qui a connecté quoi.
+
+class OrgConnectionRow(BaseModel):
+    """Une connexion (un canal d'un membre dans cette org)."""
+    # Stable d'une reconnexion à l'autre, ne nomme personne (`db.unipile_connection_key`).
+    connection_key: str
+    provider: str
+    # True = un siège de la clé PLATEFORME ; False = une clé propre (BYO).
+    platform_seat: bool
+    connected_at: str
+    # Posée = soft-déconnectée. Rendue seulement si elle est postérieure à `since`.
+    disconnected_at: Optional[str] = None
+
+
+class OrgConnections(BaseModel):
+    """⚠️ `connected_at` repart à zéro à chaque reconnexion et aucun historique n'est
+    gardé : le consommateur retient ce qu'il a déjà compté."""
+    connections: list[OrgConnectionRow]
+
+
+class OrgConnectionsInput(BaseModel):
+    org_id: int
+    # Borne basse ISO 8601 : rend aussi les connexions déconnectées depuis. Absente =
+    # les vivantes seules.
+    since: Optional[str] = None
+
+    @field_validator("since")
+    @classmethod
+    def _since_iso(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        from datetime import datetime
+        try:
+            datetime.fromisoformat(v.replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError("`since` doit être une date ISO 8601") from None
+        return v
+
+
+def _connections(ctx: ResolvedCtx, inp: OrgConnectionsInput) -> dict:
+    rows = db.list_org_unipile_connections(inp.org_id, since=inp.since)
+    return {"connections": [
+        # Projection EXPLICITE : la lentille reste étroite même si la requête s'élargit.
+        {"connection_key": r["connection_key"], "provider": r["provider"],
+         "platform_seat": bool(r["platform_seat"]),
+         "connected_at": r["connected_at"], "disconnected_at": r.get("disconnected_at")}
+        for r in rows]}
+
+
 _MEMBER_OF = ORG_MEMBER_OF("org_id")
 
 _ADMIN_OF = ORG_ADMIN_OF("org_id")
@@ -699,6 +755,13 @@ CAPABILITIES += [
                Input=OrgBillableCallsInput, authz=_MEMBER_OF, mcp=None,
                Output=OrgBillableCalls,
                rest=RestBinding("GET", "/api/orgs/{id}/usage/calls", _ID)),
+    # Même lentille membre, pour les connexions de messagerie d'une org (voir le bloc
+    # au-dessus de `OrgConnectionRow`). `mcp=None` : un tuyau de relevé, pas un outil
+    # d'agent.
+    Capability(key="org.usage.connections", handler=_connections,
+               Input=OrgConnectionsInput, authz=_MEMBER_OF, mcp=None,
+               Output=OrgConnections,
+               rest=RestBinding("GET", "/api/orgs/{id}/usage/connections", _ID)),
     Capability(key="org.monitoring.call", handler=_call, Input=OrgCallInput,
                authz=_ADMIN_OF, mcp=None, Output=OrgCall,
                rest=RestBinding("GET", "/api/orgs/{id}/monitoring/calls/{call_id}", _ID)),
