@@ -110,6 +110,7 @@ def register(mcp: FastMCP) -> None:
         end: Optional[str] = None,
         description: Optional[str] = None,
         location: Optional[str] = None,
+        attendees: Optional[list[str]] = None,
         all_day: bool = False,
         send_updates: Literal["none", "all", "externalOnly"] = "none",
         account: Optional[str] = None,
@@ -122,19 +123,22 @@ def register(mcp: FastMCP) -> None:
           count}.
         - **"get"**: get a single calendar event by id (`event_id`, detailed —
           adds description, attendees, recurrence, reminders).
-        - **"create"**: create a calendar event (`summary` + `start`).
-          ⚠️ **Writes into a real calendar.** This tool cannot invite anyone: it
-          has no attendees parameter, so the event is created without guests.
+        - **"create"**: create a calendar event (`summary` + `start`, optional
+          `attendees` = guest emails). ⚠️ **Writes into a real calendar.** With
+          `send_updates="none"` (default) the guests are added but nobody is
+          emailed — pass "all" to send the invitations.
         - **"update"**: fix an existing event (`event_id` + what changes). PATCHES —
           only the fields you pass are touched, everything else (attendees,
           recurrence, reminders, meeting link) is left alone. Use this instead of
-          creating a second event.
+          creating a second event. `attendees`, when passed, REPLACES the whole
+          guest list (Google's rule for lists): pass everyone — read the current
+          guests with op="get" — and `[]` removes them all.
         - **"rm"**: delete an event (`event_id`). Irreversible. Returns what was
           deleted (summary + start), read before the deletion — so that deleting the
           wrong id does not look exactly like deleting the right one.
 
         Args:
-            op: list (default) | get | create.
+            op: list (default) | get | create | update | rm.
             calendar_id: calendar id (default 'primary'). Ids come from
                 calendar_calendars.
             event_id: op="get" — the event id (from op="list").
@@ -154,10 +158,12 @@ def register(mcp: FastMCP) -> None:
                 full day.
             description: op="create" — event description.
             location: op="create" — event location.
+            attendees: op="create"/"update" — guest email addresses. On update
+                it REPLACES the guest list (`[]` removes every guest).
             all_day: op="create" — treat start/end as dates (YYYY-MM-DD).
                 ⚠️ A 10-character `start` ('YYYY-MM-DD') is treated as all-day
                 even when all_day is False (CalendarClient.create_event).
-            send_updates: op="update"/"rm" — whether attendees get an email.
+            send_updates: op="create"/"update"/"rm" — whether attendees get an email.
                 Default **"none"**: fixing a typo must not mail twelve people, and
                 cancelling silently is the lesser surprise. Pass "all" deliberately.
             account: email of the Google account to use (default if omitted).
@@ -180,7 +186,7 @@ def register(mcp: FastMCP) -> None:
             return await asyncio.to_thread(
                 client.create_event, _need(summary, "summary", op),
                 _need(start, "start", op), end, description, location, all_day,
-                calendar_id,
+                calendar_id, attendees=attendees, send_updates=send_updates,
             )
         if op == "update":
             # Le client REFUSE un patch vide : sans champ, l'appel dépenserait une
@@ -188,7 +194,7 @@ def register(mcp: FastMCP) -> None:
             return await asyncio.to_thread(
                 client.update_event, _need(event_id, "event_id", op), summary,
                 start, end, description, location, all_day, calendar_id,
-                send_updates,
+                send_updates, attendees=attendees,
             )
         if op == "rm":
             return await asyncio.to_thread(

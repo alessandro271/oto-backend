@@ -97,7 +97,7 @@ from ..connectors import verify as connector_verify
 # validation d'entrée ET le message de refus en dérivent — une op ajoutée ne peut
 # pas être acceptée sans être annoncée (ni l'inverse).
 _RecordObject = Literal["companies", "people", "deals"]
-_RecordOp = Literal["list", "get", "search", "create", "update", "delete"]
+_RecordOp = Literal["list", "get", "search", "create", "update", "merge", "delete"]
 _NoteOp = Literal["list", "get", "create", "delete"]
 _TaskOp = Literal["list", "get", "create", "update", "delete"]
 _ListOp = Literal["list", "get", "views", "create", "update"]
@@ -370,14 +370,16 @@ def register(mcp: FastMCP) -> None:
         object: _RecordObject,
         op: _RecordOp = "list",
         record_id: Optional[str] = None,
+        secondary_record_id: Optional[str] = None,
         attributes: Optional[dict] = None,
+        overwrite_multiselect: bool = False,
         query: Optional[str] = None,
         filter: Optional[dict] = None,
         limit: int = 50,
         offset: int = 0,
     ) -> dict:
         """A CRM record — company, person or deal: list, read, search, create,
-        update, delete.
+        update, merge, delete.
 
         `object` picks the Attio object the record lives in: "companies",
         "people" or "deals".
@@ -392,15 +394,24 @@ def register(mcp: FastMCP) -> None:
           "ada@acme.com"}` finds the person carrying that address — the check to
           run before creating a person. One of the two, never both.
         - **"create"** — ⚠️ WRITES: create a record from `attributes`.
-        - **"update"** — ⚠️ WRITES: update a record (PATCH: a multiselect value
-          you pass is ADDED to the existing ones, and an empty list changes
-          nothing — this tool cannot clear or replace a multiselect).
+        - **"update"** — ⚠️ WRITES: update a record. PATCH by default: a
+          multiselect value you pass is ADDED to the existing ones, and an empty
+          list changes nothing. `overwrite_multiselect=true` REPLACES them
+          instead (`[]` empties the field) — the way to free a unique value, a
+          domain or an address, before putting it on another record.
+        - **"merge"** — ⚠️ WRITES, IRREVERSIBLE: merge `secondary_record_id`
+          into `record_id` (same object). Attio marks BOTH as merged — neither
+          can be read afterwards — and creates a THIRD record, returned as
+          `new_record_id`; where both hold a value, the primary's wins. Not
+          idempotent (a replay answers 404). Beta at Attio.
         - **"delete"** — ⚠️ WRITES: delete a record by ID. Irreversible.
 
         Args:
             object: companies | people | deals.
-            op: list (default) | get | search | create | update | delete.
-            record_id: op="get"/"update"/"delete" — Attio record ID.
+            op: list (default) | get | search | create | update | merge | delete.
+            record_id: op="get"/"update"/"delete"/"merge" — Attio record ID (for
+                merge, the PRIMARY record — the one whose values win).
+            secondary_record_id: op="merge" — the record merged into `record_id`.
             attributes: op="create"/"update" — Attio attribute dict. Keys are the
                 slugs of that object in the workspace; each value follows Attio's
                 value format (typically a list, e.g.
@@ -419,6 +430,9 @@ def register(mcp: FastMCP) -> None:
                 read them with `attio_attribute(target="objects",
                 identifier="<object>", op="list")` and `op="statuses",
                 attribute="stage"` — never assume one.
+            overwrite_multiselect: op="update" — true = PUT: the multiselect
+                values you pass REPLACE the existing ones (`[]` empties them)
+                instead of being added.
             query: op="search" — substring of the record NAME.
             filter: op="search" — Attio filter object, `{"<attribute slug>":
                 <value>}` or with an operator (`{"$contains": ...}`); instead of
@@ -467,8 +481,15 @@ def register(mcp: FastMCP) -> None:
                     }]
             result = resource.create(**values)
         elif op == "update":
+            # #887 — PATCH ajoute aux multisélections ; PUT (overwrite) les remplace.
             result = resource.update(_need(record_id, "record_id", op),
+                                     overwrite_multiselect=overwrite_multiselect,
                                      **_need(attributes, "attributes", op))
+        elif op == "merge":
+            # #886 — irréversible : les deux fiches d'origine ne se lisent plus, Attio
+            # en crée une troisième. Les deux ids sont exigés, jamais devinés.
+            result = resource.merge(_need(record_id, "record_id", op),
+                                    _need(secondary_record_id, "secondary_record_id", op))
         elif op == "delete":
             result = resource.delete(_need(record_id, "record_id", op))
         else:

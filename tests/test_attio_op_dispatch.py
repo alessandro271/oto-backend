@@ -35,7 +35,7 @@ _TOOLS = {
     "attio_attribute": {"target": "objects", "identifier": "companies"},
 }
 
-_WRITE_VERBS = ("create", "update", "delete")
+_WRITE_VERBS = ("create", "update", "merge", "delete")
 
 
 def _tool(name: str):
@@ -89,6 +89,7 @@ def client(monkeypatch):
     ("search", {"query": "acme"}, "search"),
     ("create", {"attributes": {"name": "Acme"}}, "create"),
     ("update", {"record_id": "r1", "attributes": {"name": "Acme"}}, "update"),
+    ("merge", {"record_id": "r1", "secondary_record_id": "r2"}, "merge"),
     ("delete", {"record_id": "r1"}, "delete"),
 ])
 def test_record_ops_route_to_the_right_object_and_method(
@@ -115,6 +116,29 @@ def test_record_search_refuses_query_and_filter_together(client):
         _tool("attio_record")(object="people", op="search", query="Ada",
                               filter={"email_addresses": "ada@acme.com"})
     assert not client.mock_calls
+
+
+def test_record_update_patches_by_default_and_overwrites_on_request(client):
+    """#887 — PATCH ajoute aux multisélections, et une liste vide n'y change rien :
+    une valeur unique coincée sur une fiche ne se libérait par aucun appel. Le
+    drapeau part au client, jamais dans les valeurs de la fiche."""
+    _tool("attio_record")(object="companies", op="update", record_id="r1",
+                          attributes={"domains": []})
+    client.companies.update.assert_called_once_with(
+        "r1", overwrite_multiselect=False, domains=[])
+    client.companies.update.reset_mock()
+    _tool("attio_record")(object="companies", op="update", record_id="r1",
+                          attributes={"domains": []}, overwrite_multiselect=True)
+    client.companies.update.assert_called_once_with(
+        "r1", overwrite_multiselect=True, domains=[])
+
+
+def test_record_merge_names_the_primary_then_the_secondary(client):
+    """#886 — l'ordre porte le sens : le primaire garde ses valeurs."""
+    _tool("attio_record")(object="people", op="merge", record_id="prim",
+                          secondary_record_id="sec")
+    client.people.merge.assert_called_once_with("prim", "sec")
+    _assert_no_stray_write(client, expected="people.merge")
 
 
 def test_record_refuses_an_unknown_object(client):
@@ -332,6 +356,8 @@ def test_attribute_target_can_be_lists(client):
                       "attributes": {"name": "Acme"}}, "companies.update"),
     ("attio_record", {"object": "companies", "op": "delete",
                       "record_id": "r1"}, "companies.delete"),
+    ("attio_record", {"object": "people", "op": "merge", "record_id": "r1",
+                      "secondary_record_id": "r2"}, "people.merge"),
     ("attio_record", {"object": "people", "op": "delete",
                       "record_id": "r1"}, "people.delete"),
     ("attio_record", {"object": "deals", "op": "delete",
@@ -394,6 +420,9 @@ def test_unknown_op_is_refused_with_the_allowed_list(client, tool, minimal):
     ("attio_record", "update", {"object": "companies", "record_id": "r1"},
      "attributes"),
     ("attio_record", "delete", {"object": "companies"}, "record_id"),
+    ("attio_record", "merge", {"object": "companies"}, "record_id"),
+    ("attio_record", "merge", {"object": "companies", "record_id": "r1"},
+     "secondary_record_id"),
     ("attio_note", "get", {}, "note_id"),
     ("attio_note", "create", {}, "parent_object"),
     ("attio_note", "create", {"parent_object": "companies",

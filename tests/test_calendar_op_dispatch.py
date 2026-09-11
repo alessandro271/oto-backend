@@ -310,3 +310,26 @@ def test_supprimer_ne_touche_que_la_suppression(client):
     client.create_event.assert_not_called()
     client.update_event.assert_not_called()
     client.list_events.assert_not_called()
+
+
+# --- #862 : inviter à un événement ----------------------------------------------
+
+def test_create_invites_the_attendees_and_mails_nobody_by_default(client):
+    """L'événement se créait, personne ne pouvait y être invité, et la description
+    promettait pourtant que « attendees may be notified ». Les invités partent au
+    client ; `send_updates` aussi, « none » par défaut : inviter n'écrit à personne
+    sans qu'on le demande."""
+    _call("calendar_event", op="create", summary="Point",
+          start="2026-09-12T10:00:00Z", attendees=["a@x.fr"])
+    assert client.create_event.call_args.kwargs == {
+        "attendees": ["a@x.fr"], "send_updates": "none"}
+
+
+def test_update_replaces_the_guests_only_when_attendees_is_given(client):
+    """Google REMPLACE une liste passée à `patch` : `[]` retire tout le monde ;
+    omis, la liste part à None et le client n'y touche pas."""
+    _call("calendar_event", op="update", event_id="e1", attendees=[])
+    assert client.update_event.call_args.kwargs == {"attendees": []}
+    client.update_event.reset_mock()
+    _call("calendar_event", op="update", event_id="e1", summary="Point corrigé")
+    assert client.update_event.call_args.kwargs == {"attendees": None}
