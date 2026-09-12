@@ -211,7 +211,8 @@ def test_une_org_jamais_sondee_rend_last_seen_None(base_bootee):
     from oto_mcp import db
 
     etat = db.runner_arme(4343)
-    assert etat == {"armed": False, "workers": 0, "last_seen": None}
+    # `families` (12/09/2026) : les familles de modèles servies — aucune ici.
+    assert etat == {"armed": False, "workers": 0, "last_seen": None, "families": []}
 
 
 def test_un_worker_tu_depuis_trop_longtemps_ne_compte_plus(base_bootee):

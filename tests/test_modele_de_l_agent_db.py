@@ -145,6 +145,13 @@ def test_un_declencheur_garde_son_modele_et_le_rend(live):
 
 def test_un_continue_relit_le_modele_du_START_de_son_run(live):
     from oto_mcp import db
+    from oto_mcp.db._conn import _connect
+    # `runner_jobs.run_id` référence `runs` : un travail ne se lie qu'à un run qui existe.
+    with _connect() as c:
+        for run_id in ("run-banc", "run-sans-modele"):
+            c.execute("INSERT INTO runs (run_id, sub, org_id, label) VALUES (%s, %s, %s, %s)",
+                      (run_id, "alexis", 9104, "banc du modèle"))
+        c.commit()
     db.enqueue_job(9104, "start", run_id="run-banc",
                    payload={"procedure": "p", "model": "claude-opus-5",
                             "model_family": "anthropic"})
