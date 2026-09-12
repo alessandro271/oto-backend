@@ -134,6 +134,8 @@ from . import resources_v2  # noqa: F401 — resources.govern.v2 (oto_resource_v
 from . import capabilities_catalog  # noqa: F401 — admin.capabilities (GET /api/admin/capabilities)
 # Vue de transparence « contexte agent » (otomata-private#49) — ce que Claude reçoit.
 from . import agent_context  # noqa: F401 — me.agent_context (GET /api/me/agent-context)
+# La boîte à outils de l'agent, calculée par la fonction du handshake (ADR 0050 §E10, oto#166).
+from . import agent_toolbox  # noqa: F401 — me.agent_toolbox (GET /api/me/agent-toolbox)
 # Guides ON-DEMAND (ADR 0042) — surface REST des how-to (miroir de l'outil MCP oto_guide).
 from . import guides  # noqa: F401 — me.guide (MCP oto_guide) + me.guides.{list,get,set,delete} (REST)
 # Le COMPTE (#121) — ex-routes écrites à la main d'`api/routes.py` : `GET /api/me`
