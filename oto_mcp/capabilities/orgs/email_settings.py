@@ -42,7 +42,12 @@ class EmailSettingsView(BaseModel):
     `connectors` et `transports` portent la même information (les clés de l'un sont
     la liste de l'autre) — redondance de compat front, pas deux catalogues.
     `resend_key_set` dit qu'une clé Resend est POSÉE au coffre, jamais qu'elle est
-    valide (aucun appel n'est fait ici)."""
+    valide (aucun appel n'est fait ici).
+
+    `settings.<connector>.footer` = le désabonnement PROPRE de l'org sur ce connecteur
+    (`{unsubscribe_url?, unsubscribe_email?}`). Présent, les envois de ce connecteur
+    portent le pied de l'org à la place de celui de la plateforme ; absent, le nôtre
+    reste. Il ne vaut que pour CE connecteur."""
     org_id: int
     # {"<connector>": {"senders": [{email, name?, reply_to?}], "quiet_hours"?: {...}}}
     settings: dict
@@ -72,6 +77,9 @@ class EmailSettingsSet(BaseModel):
     senders: Optional[list[dict]] = None
     count: Optional[int] = None
     quiet_hours: Optional[dict] = None
+    # Le pied de l'org tel que STOCKÉ (nettoyé) ; `null` via `clear_footer=true` = le
+    # pied de la plateforme revient sur ce connecteur. Absent = non touché.
+    footer: Optional[dict] = None
 
 
 class GetEmailSettingsInput(BaseModel):
@@ -84,6 +92,17 @@ class SetEmailSettingsInput(BaseModel):
     senders: Optional[list[dict]] = None     # [{email, name?, reply_to?}] — SANS transport
     quiet_hours: Optional[dict] = None       # {tz, start, end} — fenêtre d'envoi interdite
     clear_quiet_hours: bool = False          # True = efface la fenêtre du connecteur
+    footer: Optional[dict] = None            # {unsubscribe_url?, unsubscribe_email?} — remplace NOTRE pied
+    clear_footer: bool = False               # True = retire le pied de l'org, le nôtre revient
+
+
+# Le geste à nommer quand on demande le retrait sans fournir le moyen : pas un
+# « interdit », mais ce qu'il faut déclarer pour l'obtenir.
+_PIED_SANS_DESABONNEMENT = (
+    "Retirer le pied de page de la plateforme exige de déclarer TON propre désabonnement "
+    "sur ce connecteur : passe `footer` avec `unsubscribe_url` (un lien https://) et/ou "
+    "`unsubscribe_email` (l'adresse qui reçoit les demandes de désinscription). Tant "
+    "qu'il n'est pas déclaré, le pied de page de la plateforme reste sur tes envois.")
 
 
 def _validate_senders(senders: list[dict]) -> list[dict]:
@@ -124,6 +143,37 @@ def _validate_quiet_hours(qh: dict) -> dict:
     return {"tz": tz, "start": start, "end": end}
 
 
+def _validate_footer(footer: dict) -> dict:
+    """Le pied de l'org remplace le nôtre SI ET SEULEMENT SI il porte un moyen de se
+    désabonner — décision d'Alexis du 12/09/2026, pour une raison de conformité : un
+    prospect à qui une org écrit avec SA clé doit pouvoir refuser auprès d'elle, pas
+    auprès de nous qu'il ne connaît pas. C'est le contrat de la fonction d'envoi, pas
+    une garde devant un outil : aucun autre refus ici que ce que ce contrat exige.
+
+    - ni lien ni adresse → refus qui NOMME le geste (`_PIED_SANS_DESABONNEMENT`) ;
+    - un lien non `https://` → refus : le gabarit le refuserait à l'envoi
+      (`email_brand._lien_desinscription`), mieux vaut le dire à la déclaration ;
+    - une adresse sans `@` ou avec un blanc → refus, même règle que les expéditeurs."""
+    url = str(footer.get("unsubscribe_url") or "").strip()
+    adresse = str(footer.get("unsubscribe_email") or "").strip()
+    if not url and not adresse:
+        raise AuthzDenied(400, "unsubscribe_required", _PIED_SANS_DESABONNEMENT)
+    if url and not url.startswith("https://"):
+        raise AuthzDenied(400, "bad_unsubscribe_url",
+                          f"`footer.unsubscribe_url` doit commencer par https:// (reçu "
+                          f"{url[:24]!r}) : un lien de désabonnement en clair est bloqué "
+                          "ou marqué non sûr par les clients mail.")
+    if adresse and ("@" not in adresse or any(c.isspace() for c in adresse)):
+        raise AuthzDenied(400, "bad_unsubscribe_email",
+                          f"`footer.unsubscribe_email` invalide : {adresse!r}.")
+    clean: dict = {}
+    if url:
+        clean["unsubscribe_url"] = url
+    if adresse:
+        clean["unsubscribe_email"] = adresse
+    return clean
+
+
 def _get_email_settings(ctx: ResolvedCtx, inp: GetEmailSettingsInput) -> dict:
     if not org_store.get_org(inp.org_id):
         raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
@@ -148,13 +198,24 @@ def _set_email_settings(ctx: ResolvedCtx, inp: SetEmailSettingsInput) -> dict:
     if inp.clear_quiet_hours and inp.quiet_hours is not None:
         raise AuthzDenied(400, "bad_quiet_hours",
                           "`quiet_hours` et `clear_quiet_hours` sont exclusifs.")
-    if inp.senders is None and inp.quiet_hours is None and not inp.clear_quiet_hours:
+    if inp.clear_footer and inp.footer is not None:
+        raise AuthzDenied(400, "bad_footer", "`footer` et `clear_footer` sont exclusifs.")
+    if (inp.senders is None and inp.quiet_hours is None and not inp.clear_quiet_hours
+            and inp.footer is None and not inp.clear_footer):
         raise AuthzDenied(400, "nothing_to_set",
-                          "Fournis `senders`, `quiet_hours` ou `clear_quiet_hours`.")
+                          "Fournis `senders`, `quiet_hours`, `clear_quiet_hours`, `footer` "
+                          "ou `clear_footer`.")
+    # Tout se valide AVANT la première écriture : un pied refusé n'écrit pas non plus
+    # les expéditeurs passés dans le même appel.
     senders = _validate_senders(inp.senders) if inp.senders is not None else None
     quiet = _validate_quiet_hours(inp.quiet_hours) if inp.quiet_hours is not None else None
-    org_store.set_org_email_settings(inp.org_id, connector, senders=senders,
-                                     quiet_hours=quiet, clear_quiet_hours=inp.clear_quiet_hours)
+    pied = _validate_footer(inp.footer) if inp.footer is not None else None
+    if senders is not None or quiet is not None or inp.clear_quiet_hours:
+        org_store.set_org_email_settings(inp.org_id, connector, senders=senders,
+                                         quiet_hours=quiet,
+                                         clear_quiet_hours=inp.clear_quiet_hours)
+    if pied is not None or inp.clear_footer:
+        org_store.set_org_email_footer(inp.org_id, connector, pied)
     out: dict = {"ok": True, "org_id": inp.org_id, "connector": connector}
     if senders is not None:
         out["senders"] = senders
@@ -163,6 +224,10 @@ def _set_email_settings(ctx: ResolvedCtx, inp: SetEmailSettingsInput) -> dict:
         out["quiet_hours"] = quiet
     if inp.clear_quiet_hours:
         out["quiet_hours"] = None
+    if pied is not None:
+        out["footer"] = pied
+    if inp.clear_footer:
+        out["footer"] = None
     return out
 
 
@@ -173,7 +238,9 @@ CAPABILITIES += [
         description=("Read the org's email config keyed by connector (scaleway = Otomata-"
                      "hosted, resend = BYOK): per-connector senders + quiet hours, the known "
                      "email connectors, connector→transport map, and whether the org's Resend "
-                     "key is set."),
+                     "key is set. `settings.<connector>.footer` = the org's own unsubscribe "
+                     "on that connector (present = its sends carry the org's footer instead "
+                     "of the platform's)."),
         rest=RestBinding("GET", "/api/orgs/{id}/email-settings", _ID),
     ),
     Capability(
@@ -189,7 +256,12 @@ CAPABILITIES += [
                      "`from_email`. `quiet_hours` = {tz, start, end} (hours 0..23, wrap-around "
                      "midnight ok): emails composed inside the window are auto-deferred to the "
                      "next `end`. `clear_quiet_hours=true` removes this connector's window. "
-                     "Pass any field (merge)."),
+                     "`footer` = {unsubscribe_url? (https), unsubscribe_email?} — the org's OWN "
+                     "unsubscribe: once declared, sends through this connector (the org's own "
+                     "key) carry the org's footer INSTEAD of the platform's; asking for it "
+                     "without either field is refused, and the platform footer stays. "
+                     "`clear_footer=true` brings the platform footer back. Sends under the "
+                     "platform brand always keep the platform footer. Pass any field (merge)."),
         rest=RestBinding("PUT", "/api/orgs/{id}/email-settings/{connector}", _ID_CONNECTOR),
     ),
 ]

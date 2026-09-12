@@ -228,3 +228,45 @@ en partie non francophones).
 - **Ce qui n'est PAS traduit** : le contenu écrit par un humain ou un agent (noms de
   projet, titres de doc, corps libre d'un signal `usage_signals.body`) — ce ne sont
   pas des mots du gabarit, les traduire changerait ce que quelqu'un a écrit.
+
+## Le pied de page d'un envoi avec la clé de l'org (décision du 12/09/2026)
+
+**Le constat.** Apporter sa clé (Resend, Scaleway TEM) changeait le TRANSPORT, pas le
+GABARIT : un `email_send` de prospection à froid partait avec notre pied — « vous
+recevez ce message car vous avez un compte oto », signature `oto · oto.cx` — et
+l'invitation à se désabonner renvoyait vers nous, sur des prospects qui ne nous
+connaissent pas. Rapporté par deux retours d'un même espace le 27/08, arbitré le
+12/09 comme le seul point de conformité de la pile (oto-backend#443).
+
+**La décision d'Alexis, verbatim** : « Autoriser, désabonnement exigé — l'org peut
+retirer notre pied de page à condition de fournir le sien ; sinon le nôtre reste. »
+
+**Le contrat livré :**
+- l'org déclare, **par connecteur**, `footer: {unsubscribe_url?, unsubscribe_email?}`
+  (`oto_org_settings domain=email op=set` / `PUT /api/orgs/{id}/email-settings/{connector}`,
+  org_admin). Stocké dans `orgs.email_settings.<connector>.footer` — JSONB existant,
+  **aucun changement de schéma** ; `org_store.set_org_email_footer` / `org_email_footer`
+  (fonctions à part : la signature de `set_org_email_settings` est figée) ;
+- **déclaré ⟹ son pied remplace le nôtre** sur les envois de ce connecteur : ni
+  signature de marque ni mention de compte, seulement le moyen de se désabonner
+  (`email._pied_de_l_org`, `email_brand.page(signature=False)`) ;
+- **non déclaré ⟹ rien ne change** ; un `footer` sans lien ni adresse est refusé
+  (`unsubscribe_required`) par un message qui nomme le geste ; un lien non `https://`
+  ou une adresse sans `@` sont refusés à la déclaration (le gabarit les refuserait à
+  l'envoi). `clear_footer=true` rend notre pied ;
+- **clé commune ⟹ notre pied, toujours** : la condition vit dans `email_send`
+  (`_cle_de_l_org`, dérivée du registre : connecteur sans palier `platform`), et
+  `send_composed_email` (mailer, clé commune) n'accepte pas de pied d'org ;
+- la réponse d'`email_send` dit lequel part : `footer: org | platform`.
+
+⚠️ **Le pied est figé au rendu, pas à l'envoi** : un mail programmé garde le pied en
+vigueur quand il a été composé, même si l'org retire son désabonnement entre-temps
+(même régime que l'image de tête : la file porte le HTML).
+
+⚠️ **Ce que la décision ne couvre pas, et qui reste à notre marque** : l'en-tête de la
+carte (`m.nom`, le nom du produit de l'expéditeur) ; la langue du gabarit (FR par
+défaut, `email_send` ne passe aucune locale) ; et aucune liste de suppression n'est
+tenue côté org — le désabonnement déclaré est honoré par l'org, pas par nous.
+
+Bancs : `tests/test_email_pied_org.py` (les trois cas, sur PostgreSQL réel pour la
+déclaration et la route, éprouvés en chute).

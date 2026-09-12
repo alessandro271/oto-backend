@@ -89,6 +89,8 @@ class OrgSettingsInput(BaseModel):
     senders: Optional[list[dict]] = None     # [{email, name?, reply_to?}]
     quiet_hours: Optional[dict] = None       # {tz, start, end}
     clear_quiet_hours: bool = False
+    footer: Optional[dict] = None            # {unsubscribe_url?, unsubscribe_email?}
+    clear_footer: bool = False
     # mfa (set) :
     require: Optional[bool] = None
     # field_filters :
@@ -110,7 +112,8 @@ def _org_settings(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
                 connector=_need(inp.connector, "missing_connector",
                                 "`connector` (scaleway|resend) requis pour set."),
                 senders=inp.senders, quiet_hours=inp.quiet_hours,
-                clear_quiet_hours=inp.clear_quiet_hours))
+                clear_quiet_hours=inp.clear_quiet_hours,
+                footer=inp.footer, clear_footer=inp.clear_footer))
         raise AuthzDenied(400, "unsupported_op", "preview n'existe que pour field_filters.")
     if inp.domain == "mfa":
         if inp.op == "get":
@@ -229,7 +232,10 @@ CAPABILITIES += [
         description=(
             "Org settings, by domain. domain=email (per-connector senders + quiet hours: "
             "set takes `connector` scaleway|resend, `senders` [{email,name?,reply_to?}], "
-            "`quiet_hours` {tz,start,end} or clear_quiet_hours=true) | mfa (set `require` "
+            "`quiet_hours` {tz,start,end} or clear_quiet_hours=true, `footer` "
+            "{unsubscribe_url?,unsubscribe_email?} = the org's own unsubscribe — once "
+            "declared it REPLACES the platform footer on that connector's sends, refused "
+            "without either field; clear_footer=true restores ours) | mfa (set `require` "
             "true|false — org-wide mandatory MFA) | field_filters (redaction policy ADR "
             "0015: get returns policies, include_schemas=true adds the observed field "
             "catalog; set takes `service` + `rules` (None clears) + optional `salt`; "

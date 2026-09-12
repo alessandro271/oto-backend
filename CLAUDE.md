@@ -122,7 +122,8 @@ plateforme) ; exceptions vers **Sentry** · ⚠️ ne trace ni la connexion d'un
 - **Messagerie** : `unipile` = le **compte**, plus six **connexions** au nom du réseau, noms de tools inchangés ·
   ⚠️ `namespace_of` résout au **plus long préfixe déclaré**, pas au 1er token (`docs/unipile.md`).
 - **Email per-org** : `scaleway` (TEM) et `resend` en BYO-org, `email_send` route `sender → connecteur → transport` ·
-  ⚠️ le front qui héberge une org est **dérivé de l'org cible** (`docs/email.md`).
+  ⚠️ le front qui héberge une org est **dérivé de l'org cible** (`docs/email.md`) ·
+  ⚠️ avec la clé de l'org, notre pied de page reste **tant que l'org n'a pas déclaré son désabonnement** sur le connecteur ; sur la clé commune, toujours (`docs/email.md`, 12/09).
 - **Relance des comptes jamais actifs** : **REST seule** (`oto_admin_outreach`) · ⚠️ comptée par **boîte mail**, jamais
   par compte ni par org — un humain s'inscrit deux fois, et l'index unique `(campagne, sub)` ne voit pas ce doublon-là ;
   tenant partenaire écarté **par la requête** ; la langue se choisit, ne se devine pas (`docs/relance-comptes.md`).

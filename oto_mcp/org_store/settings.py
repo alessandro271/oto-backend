@@ -195,3 +195,43 @@ def resolve_sender(org_id: int, from_email: Optional[str] = None
 def org_email_quiet_hours(org_id: int, connector: str) -> Optional[dict]:
     """Fenêtre calme d'un connecteur email de l'org (None = pas posée)."""
     return (get_org_email_settings(org_id).get(connector) or {}).get("quiet_hours")
+
+
+# --- pied de page PROPRE à l'org, par connecteur (décision du 12/09/2026) -----
+# Un envoi fait avec la clé de l'org (resend, scaleway TEM) porte le pied de page de
+# la plateforme — « vous avez un compte oto », signature oto · oto.cx — tant que
+# l'org n'a pas déclaré SON désabonnement sur ce connecteur. Déclaré, il remplace le
+# nôtre ; retiré, le nôtre revient. Forme, dans le bloc du connecteur :
+#   "footer": {"unsubscribe_url"?: "https://…", "unsubscribe_email"?: "…"}
+# La validation (au moins l'un des deux, https, adresse) vit dans la capacité
+# `org.email_settings.set` : le store transporte ce qui a été validé. Fonction À PART
+# de `set_org_email_settings`, dont la signature est figée par
+# `test_org_store_surface_frozen` : la surface s'élargit, rien ne se déforme.
+
+def set_org_email_footer(org_id: int, connector: str, footer: Optional[dict]) -> bool:
+    """Pose (`dict`) ou retire (`None`) le pied de page de l'org sur UN connecteur,
+    sans toucher ses expéditeurs ni sa fenêtre calme. False si org absente."""
+    with _connect() as conn:
+        with conn.transaction():
+            row = conn.execute(
+                "SELECT email_settings FROM orgs WHERE id = %s FOR UPDATE", (org_id,)
+            ).fetchone()
+            if not row:
+                return False
+            current = dict(row["email_settings"] or {})
+            block = dict(current.get(connector) or {})
+            if footer is None:
+                block.pop("footer", None)
+            else:
+                block["footer"] = footer
+            current[connector] = block
+            conn.execute(
+                "UPDATE orgs SET email_settings = %s::jsonb WHERE id = %s",
+                (json.dumps(current), org_id),
+            )
+            return True
+
+
+def org_email_footer(org_id: int, connector: str) -> Optional[dict]:
+    """Le pied de page déclaré par l'org sur un connecteur email (None = le nôtre)."""
+    return (get_org_email_settings(org_id).get(connector) or {}).get("footer")

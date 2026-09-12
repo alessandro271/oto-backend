@@ -255,7 +255,7 @@ def _lien_desinscription(m: Marque, desinscription: Optional[tuple]) -> str:
 
 
 def _pied(m: Marque, mention: Optional[str],
-          desinscription: Optional[tuple] = None) -> str:
+          desinscription: Optional[tuple] = None, signature: bool = True) -> str:
     """Le pied : la signature de marque, puis la raison de l'envoi.
 
     Trois régimes, et la distinction porte du sens :
@@ -267,17 +267,22 @@ def _pied(m: Marque, mention: Optional[str],
     pied qui n'aurait alors NI signature NI mention ne se rend pas du tout.
 
     `desinscription` = `(url, libellé)` d'un lien de désabonnement, réservé au pied
-    MARKETING (cf. `mention_transactionnelle`, qui n'en propose délibérément pas)."""
+    MARKETING (cf. `mention_transactionnelle`, qui n'en propose délibérément pas).
+
+    `signature=False` = le pied n'est pas le NÔTRE : c'est celui qu'une org déclare
+    pour ses envois avec sa propre clé (décision du 12/09/2026). La ligne « marque ·
+    site » disparaît — la garder signerait de notre nom un message qui ne vient pas
+    de nous, adressé à quelqu'un qui ne nous connaît pas."""
     if mention is None:
         return ""
-    signature = f"{_email._esc(m.nom)} · {_email._esc(m.site)}<br>" if m.site else ""
-    if not signature and not mention:
+    ligne = f"{_email._esc(m.nom)} · {_email._esc(m.site)}<br>" if (m.site and signature) else ""
+    if not ligne and not mention:
         return ""
     return (
         f'<tr><td style="padding:0 32px"><div style="border-top:1px solid {m.filet}">'
         f'</div></td></tr>'
         f'<tr><td style="padding:16px 32px 28px 32px;font-family:{POLICE};'
-        f'{discret(m)}">{signature}{_email._esc(mention)}'
+        f'{discret(m)}">{ligne}{_email._esc(mention)}'
         f'{_lien_desinscription(m, desinscription)}</td></tr>'
     )
 
@@ -298,7 +303,8 @@ def mention_transactionnelle(m: Marque, locale: Optional[str]) -> str:
 
 
 def page(m: Marque, contenu: str, *, preheader: str, mention: Optional[str],
-         locale: Optional[str] = None, desinscription: Optional[tuple] = None) -> str:
+         locale: Optional[str] = None, desinscription: Optional[tuple] = None,
+         signature: bool = True) -> str:
     """Le document complet : `<head>`, fond, carte, en-tête de marque, pied.
 
     `contenu` = les `<p>` déjà rendus par le gabarit (la cellule porte la typo, donc
@@ -339,6 +345,6 @@ def page(m: Marque, contenu: str, *, preheader: str, mention: Optional[str],
         f'font-weight:600;letter-spacing:-0.01em;color:{m.encre}">{_email._esc(m.nom)}</td></tr>'
         f'<tr><td style="padding:20px 32px 4px 32px;font-family:{POLICE};'
         f'font-size:16px;line-height:1.6;color:{m.encre}">{contenu}</td></tr>'
-        + _pied(m, mention, desinscription) +
+        + _pied(m, mention, desinscription, signature) +
         '</table></td></tr></table></body></html>'
     )

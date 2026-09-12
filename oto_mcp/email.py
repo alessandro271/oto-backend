@@ -209,6 +209,32 @@ def _image_html(image_url: str | None, image_alt: str | None) -> str:
             f'width="{_charte.LARGEUR_UTILE}" style="{_IMG_STYLE}"></p>')
 
 
+def _pied_de_l_org(org_footer: dict, en: bool) -> tuple[str, tuple | None]:
+    """La phrase et le lien du pied qu'une org DÉCLARE pour ses envois avec sa propre
+    clé — à la place du nôtre, jamais à côté (décision d'Alexis du 12/09/2026).
+
+    Ni signature de marque ni « vous avez un compte » : le destinataire est un
+    prospect de l'org, il n'a pas de compte chez nous et ne nous connaît pas. Le pied
+    dit le moyen de ne plus rien recevoir que l'org a déclaré — une adresse, un lien,
+    ou les deux. Sans aucun des deux, il n'y a pas de pied de l'org : on lève, on ne
+    rend jamais un pied privé de désabonnement (la capacité de réglage refuse déjà ce
+    cas en amont ; ceci est la garantie du gabarit, pas le message servi)."""
+    url = str(org_footer.get("unsubscribe_url") or "").strip()
+    adresse = str(org_footer.get("unsubscribe_email") or "").strip()
+    if not url and not adresse:
+        raise ValueError("pied de l'org sans désabonnement : `unsubscribe_url` ou "
+                         "`unsubscribe_email` requis.")
+    if en:
+        tete, libelle = "to stop receiving our messages", "unsubscribe"
+        ecrire = f", write to {adresse}" if adresse else ""
+        lien = (" or use this link:" if adresse else ", use this link:") if url else "."
+    else:
+        tete, libelle = "pour ne plus recevoir nos messages", "se désabonner"
+        ecrire = f", écrivez à {adresse}" if adresse else ""
+        lien = (" ou utilisez ce lien :" if adresse else ", utilisez ce lien :") if url else "."
+    return tete + ecrire + lien, ((url, libelle) if url else None)
+
+
 def render_composed_email(
     body: str,
     *,
@@ -220,6 +246,7 @@ def render_composed_email(
     brand: str = "oto",
     locale: str | None = None,
     unsubscribe_url: str | None = None,
+    org_footer: dict | None = None,
 ) -> str:
     """Rend le HTML, à la charte de `brand`, d'un email dont le **contenu est fourni
     par l'agent** (prose brute + CTA optionnel + UNE image de tête).
@@ -233,7 +260,12 @@ def render_composed_email(
     La ligne d'aperçu de la boîte de réception est le PREMIER PARAGRAPHE, pas le
     sujet : Gmail affiche « sujet — aperçu » côte à côte, et y répéter le sujet ne
     dit rien de plus. C'est aussi ce qui évite l'aperçu d'avant, où la boîte allait
-    chercher le premier texte venu (« ou collez ce lien »)."""
+    chercher le premier texte venu (« ou collez ce lien »).
+
+    `org_footer` = le pied que l'org a déclaré (`{unsubscribe_url?, unsubscribe_email?}`)
+    pour un envoi fait avec SA clé : il REMPLACE le nôtre (cf. `_pied_de_l_org`). C'est à
+    l'appelant de ne le passer que sur ce chemin-là — `send_composed_email`, qui part
+    avec la clé commune du mailer, ne l'accepte pas, et c'est délibéré."""
     m = _charte.marque(brand)
     image_html = _image_html(image_url, image_alt)
     paras = [p.strip() for p in (body or "").split("\n\n") if p.strip()]
@@ -250,6 +282,15 @@ def render_composed_email(
     # faut le dire ; avec lien, le laisser proposerait deux chemins dont un seul est
     # enregistré quelque part (une réponse humaine ne persiste aucun refus).
     en = locale == "en"
+    apercu = paras[0] if paras else m.nom
+    if footer and org_footer:
+        if unsubscribe_url:
+            raise ValueError("`org_footer` et `unsubscribe_url` s'excluent : le pied de "
+                             "l'org porte SON désabonnement, pas le nôtre.")
+        mention_org, lien_org = _pied_de_l_org(org_footer, en)
+        return _charte.page(m, image_html + body_html + cta_html,
+                            preheader=apercu, mention=mention_org, locale=locale,
+                            desinscription=lien_org, signature=False)
     if not footer:
         mention = None
     elif unsubscribe_url:
@@ -267,7 +308,6 @@ def render_composed_email(
     desinscription = ((unsubscribe_url, "unsubscribe" if en else
                        "ne plus recevoir ces messages")
                       if (footer and unsubscribe_url) else None)
-    apercu = paras[0] if paras else m.nom
     return _charte.page(m, image_html + body_html + cta_html,
                         preheader=apercu, mention=mention, locale=locale,
                         desinscription=desinscription)

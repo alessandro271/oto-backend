@@ -80,6 +80,7 @@ def _resolve_route(from_email: Optional[str]) -> tuple[str, dict]:
                 "transport": transport,
                 "reply_to": sender.get("reply_to"),
                 "quiet_hours": org_store.org_email_quiet_hours(org, connector),
+                "footer": org_store.org_email_footer(org, connector),
             }
         if from_email is not None:
             raise _err(f"« {from_email} » n'est pas une adresse déclarée d'un connecteur email de "
@@ -94,7 +95,21 @@ def _resolve_route(from_email: Optional[str]) -> tuple[str, dict]:
                    "de l'ajouter via `oto_org_settings(domain='email', op='set')`. L'envoi sous la marque "
                    "oto@otomata.tech est réservé au super_admin de la plateforme.")
     return sub, {"org_id": None, "connector": None, "from_email": None, "from_name": None,
-                 "transport": "mailer", "reply_to": None, "quiet_hours": None}
+                 "transport": "mailer", "reply_to": None, "quiet_hours": None, "footer": None}
+
+
+def _cle_de_l_org(connector: Optional[str]) -> bool:
+    """L'envoi part-il avec la clé de l'ORG ? Dérivé du registre, jamais d'une liste
+    recopiée : un connecteur email sans palier `platform` ne peut envoyer qu'avec une
+    clé apportée (cascade byo). Le repli marque (`connector=None`, clé commune du
+    mailer) rend False — notre pied y reste toujours.
+
+    Si un connecteur email gagnait un jour un palier plateforme, ceci rendrait False
+    pour TOUS ses envois : notre pied reviendrait, faute de savoir au rendu (avant la
+    mise en file) quelle clé partira. C'est le côté sûr ; le séparer demanderait de
+    rendre le pied APRÈS la résolution de la clé."""
+    c = providers.connector_for_provider(connector) if connector else None
+    return c is not None and bool(c.auth_modes) and "platform" not in c.auth_modes
 
 
 def register(mcp: FastMCP) -> None:
@@ -132,10 +147,18 @@ def register(mcp: FastMCP) -> None:
         précise, passe `send_at`. Pour forcer un envoi immédiat malgré les quiet
         hours, `force_now=True`. Gère/annule la file : `oto_scheduled_emails(op='list'|'cancel')`.
 
+        Pied de page : un envoi avec la clé de ton org (Resend, Scaleway TEM) porte le
+        pied de la PLATEFORME, sauf si l'org a déclaré SON désabonnement sur ce
+        connecteur — `oto_org_settings(domain='email', op='set', connector=…,
+        footer={"unsubscribe_url": "https://…"} ou {"unsubscribe_email": "…"})`,
+        org_admin : son pied remplace alors le nôtre. Rien ne le retire depuis cet
+        outil. L'envoi sous la marque oto@otomata.tech garde toujours le nôtre. Le champ
+        `footer` de la réponse dit lequel part (`org` | `platform`).
+
         Image de tête : `image_url` (https) + `image_alt` REQUIS ; l'URL publique
         vient de `oto_upload_url(target="image")` (un upload, réutilisable).
 
-        Renvoie {sent, to, subject, from, transport} en envoi immédiat ;
+        Renvoie {sent, to, subject, from, transport, footer} en envoi immédiat ;
         {scheduled, id, scheduled_at, ...} si différé ; +`html` si dry_run.
 
         Args:
@@ -191,9 +214,16 @@ def register(mcp: FastMCP) -> None:
         # d'auth de plus : celui-ci lèverait avant les refus de paramètre ci-dessus et
         # inverserait l'ordre des erreurs de cet outil.
         marque_expediteur = config.front_for(sub)[1] or "oto"
+        # Le pied de l'ORG remplace le nôtre sur un envoi fait avec SA clé, et là
+        # seulement (décision d'Alexis du 12/09/2026, conformité) : apporter sa clé
+        # changeait le transport et pas le gabarit, si bien qu'un prospect froid lisait
+        # « vous avez un compte oto » et se voyait proposer de se désabonner auprès de
+        # nous. Sur la clé commune, jamais — la condition est ici, pas dans la route.
+        pied_org = route.get("footer") if _cle_de_l_org(route["connector"]) else None
+        pied = "org" if pied_org else "platform"
         html = mailer.render_composed_email(body, cta_text=cta_text, cta_url=cta_url,
                                             image_url=image_url, image_alt=image_alt,
-                                            brand=marque_expediteur)
+                                            brand=marque_expediteur, org_footer=pied_org)
         org_id = route["org_id"]
         from_hdr = mailer.format_from(route["from_email"], route["from_name"]) or mailer._MAIL_FROM
         transport = route["transport"]
@@ -201,7 +231,7 @@ def register(mcp: FastMCP) -> None:
 
         if dry_run:
             return {"sent": False, "dry_run": True, "to": to, "subject": subject,
-                    "from": from_hdr, "transport": transport, "html": html}
+                    "from": from_hdr, "transport": transport, "footer": pied, "html": html}
 
         # Quiet hours du CONNECTEUR de l'expéditeur (résolues dans la route). Repli
         # marque (org=None / pas de connecteur) → désactivé (seul send_at diffère).
@@ -229,7 +259,7 @@ def register(mcp: FastMCP) -> None:
                         sched_id, to, when.isoformat(), transport)
             return {"sent": False, "scheduled": True, "id": sched_id,
                     "scheduled_at": when.isoformat(), "to": to, "subject": subject,
-                    "from": from_hdr, "transport": transport}
+                    "from": from_hdr, "transport": transport, "footer": pied}
 
         # Envoi immédiat.
         if transport == "resend":
@@ -260,4 +290,4 @@ def register(mcp: FastMCP) -> None:
             raise _err(f"Envoi échoué ({hint}). Rien n'a été envoyé.", code=INTERNAL_ERROR)
         logger.info("email_send → %s (from=%r, transport=%s)", to, from_hdr, transport)
         return {"sent": True, "dry_run": False, "to": to, "subject": subject,
-                "from": from_hdr, "transport": transport}
+                "from": from_hdr, "transport": transport, "footer": pied}
