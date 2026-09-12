@@ -129,7 +129,12 @@ def test_list_porte_letat_du_runner(monkeypatch):
     # et sa lecture en base n'a pas sa place ici.
     monkeypatch.setattr(RT.db, "comptage_perime", lambda org, tid: {})
     out = _appel(_ctx(), op="list")
-    assert out["runner"] == {"armed": False, "workers": 0, "last_seen": None}
+    runner = out["runner"]
+    assert {k: runner[k] for k in ("armed", "workers", "last_seen")} == {
+        "armed": False, "workers": 0, "last_seen": None}
+    # Et le catalogue servi avec : sans worker, aucun modèle ne l'est.
+    assert runner["families"] == []
+    assert runner["models"] and not any(m["served"] for m in runner["models"])
 
 
 def test_get_porte_letat_du_runner(monkeypatch):

@@ -281,6 +281,9 @@ CREATE TABLE IF NOT EXISTS runner_triggers (
     tools JSONB NOT NULL,
     input TEXT,
     max_steps INT,
+    -- 12/09/2026 : le modèle que l'agent DÉCLARE (catalogue `runner_models`).
+    -- NULL = aucun : n'importe quel worker le sert, sur son propre modèle.
+    model TEXT,
     cron TEXT NOT NULL,
     tz TEXT NOT NULL DEFAULT 'Europe/Paris',
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
@@ -340,4 +343,18 @@ ALTER TABLE runner_platform_workers ADD COLUMN IF NOT EXISTS label TEXT;
 ALTER TABLE runner_platform_workers ADD COLUMN IF NOT EXISTS secret_hash TEXT UNIQUE;
 ALTER TABLE runner_platform_workers ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 ALTER TABLE runner_platform_workers ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ;
+
+-- 12/09/2026 : la présence d'un worker de plateforme PAR FAMILLE de modèle — le
+-- dépôt qu'il nomme au claim (`anthropic`, `mistral`). Une table à part, et non
+-- une colonne de la déclaration : plusieurs processus partagent UN secret, donc
+-- une ligne, et ne servent pas forcément la même famille. Une colonne garderait
+-- la dernière famille vue et effacerait l'autre à chaque sondage.
+-- Lue par `runner_arme` (`families`) : un agent qui déclare un modèle ne se pose
+-- que si une famille vivante le sert.
+CREATE TABLE IF NOT EXISTS runner_platform_depots (
+    worker_sub TEXT NOT NULL,
+    depot TEXT NOT NULL,
+    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (worker_sub, depot)
+);
 """

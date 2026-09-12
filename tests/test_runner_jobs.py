@@ -41,13 +41,16 @@ def espion(monkeypatch):
                         {"id": 7, "status": "pending", "due_at": "2026-08-13",
                          "fleet_id": fleet_id})
     monkeypatch.setattr(RJ.db, "claim_next_job",
-                        lambda org_id, sub, lease_seconds=600:
-                        vu.update(claim=(org_id, sub, lease_seconds)) or None)
+                        lambda org_id, sub, lease_seconds=600, depot=None, **_:
+                        vu.update(claim=(org_id, sub, lease_seconds)) or
+                        vu.setdefault("depots", []).append(depot))
     monkeypatch.setattr(RJ.db, "complete_job",
                         lambda job_id, sub, ok, error=None, run_id=None, result=None:
                         vu.update(result=result) or
                         ({"status": "done"} if sub == "worker-campagne" else None))
     monkeypatch.setattr(RJ.db, "bind_job_run", lambda j, s, r: s == "worker-campagne")
+    # Un `continue` relit le modèle de son run : par défaut, un run démarré sans.
+    monkeypatch.setattr(RJ.db, "modele_du_run", lambda run_id, org_id: {})
     monkeypatch.setattr(RJ.db, "extend_job_lease", lambda j, s, lease_seconds=600: False)
     monkeypatch.setattr(RJ.db, "get_job", lambda j, org: None)
     # ⚠️ Doublure OBLIGATOIRE : sans elle, l'arrêt des campagnes épuisées tape la
@@ -298,6 +301,34 @@ def test_le_travail_porte_l_identite_du_DECLARANT_pas_du_worker(campagne):
     assert "campaign_error" not in rendu, rendu.get("campaign_error")
     assert campagne["sub"] == "celui-qui-a-declare"
     assert campagne["sub"] != "worker-campagne"
+
+
+def test_le_claim_passe_au_filtre_le_depot_que_nomme_le_worker(espion):
+    """Le dépôt est aussi la FAMILLE que le worker sert : c'est lui qui filtre la
+    file (`claim_next_job`). Oublié ici, un worker Anthropic recevrait un travail
+    Mistral comme une commande valide.
+
+    ⚠️ CHAQUE sondage de l'appel : sur file vide, le claim est rejoué après la
+    production d'une campagne. N'en regarder qu'un laisserait l'autre partir sans
+    filtre — c'est la mutation que ce banc laissait passer."""
+    _appel(_ctx(), op="claim", provider="mistral")
+    assert len(espion["depots"]) == 2, "file vide : sondage, production, re-sondage"
+    assert set(espion["depots"]) == {"mistral"}
+
+
+def test_le_travail_d_une_campagne_emporte_son_modele_et_sa_famille(monkeypatch, campagne):
+    monkeypatch.setattr(RJ.db, "campagne_a_servir",
+                        lambda org_id: {**CAMPAGNE, "model": "mistral-large-2512"})
+    rendu = _appel(_ctx(), op="claim")
+    assert "campaign_error" not in rendu, rendu.get("campaign_error")
+    assert campagne["payload"]["model"] == "mistral-large-2512"
+    assert campagne["payload"]["model_family"] == "mistral"
+
+
+def test_une_campagne_SANS_modele_produit_le_travail_d_avant(campagne):
+    _appel(_ctx(), op="claim")
+    assert "model" not in campagne["payload"]
+    assert "model_family" not in campagne["payload"]
 
 
 def test_la_borne_PAR_LIGNE_part_avec_le_travail(campagne):

@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 
 from croniter import croniter
 
-from . import db
+from . import db, runner_models
 
 log = logging.getLogger(__name__)
 
@@ -83,6 +83,10 @@ def _tick() -> int:
             "label": t.get("label") or f"planifié — {t['procedure']}",
             "max_steps": t.get("max_steps"),
             "trigger_id": t["id"],
+            # Le modèle DÉCLARÉ et sa famille — la famille route le travail vers un
+            # worker qui la sert (`claim_next_job`). Sans modèle : rien ne part, et
+            # n'importe quel worker le prend sur le sien, comme avant.
+            **runner_models.charge(t.get("model")),
         }
         # ⚠️ PÉRIMER AVANT D'ENFILER. Ce qui restait en attente pour ce
         # déclencheur n'a pas été pris dans son cycle : une veille quotidienne

@@ -271,6 +271,10 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # nouveaux états — un lot « déployé » dont la moitié est rejetée à l'écriture.
     # Le dénominateur de l'avancement d'un passage (cf. le DDL). Sur une base qui
     # existe déjà, le CREATE TABLE est sauté — seule la colonne manque.
+    # Le modèle qu'un agent programmé déclare (12/09/2026). Sur une base qui existe
+    # déjà, le CREATE TABLE est sauté — seule la colonne manque. NULL = le worker
+    # tourne sur le sien, comme avant.
+    conn.execute("ALTER TABLE runner_triggers ADD COLUMN IF NOT EXISTS model TEXT")
     conn.execute("ALTER TABLE runner_fleets ADD COLUMN IF NOT EXISTS temperature REAL")
     conn.execute("ALTER TABLE runner_fleets ADD COLUMN IF NOT EXISTS rows_at_launch INT")
     conn.execute("ALTER TABLE runner_fleets ADD COLUMN IF NOT EXISTS armed_at TIMESTAMPTZ")

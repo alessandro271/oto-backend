@@ -14,25 +14,26 @@ from typing import Any, Optional
 from ._conn import _connect
 
 _COLS = ("id, org_id, sub, label, procedure, project_id, tools, input, max_steps, "
-         "cron, tz, enabled, next_due, last_enqueued_at, created_at")
+         "model, cron, tz, enabled, next_due, last_enqueued_at, created_at")
 
 
 def create_trigger(org_id: int, sub: str, *, procedure: str, cron: str, tz: str,
                    next_due, tools: list, project_id: Optional[int] = None,
                    input: Optional[str] = None, label: Optional[str] = None,
-                   max_steps: Optional[int] = None) -> dict:
+                   max_steps: Optional[int] = None,
+                   model: Optional[str] = None) -> dict:
     with _connect() as conn:
         row = conn.execute(
             f"""
             INSERT INTO runner_triggers
                    (org_id, sub, label, procedure, project_id, tools, input,
-                    max_steps, cron, tz, next_due)
-            VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s)
+                    max_steps, model, cron, tz, next_due)
+            VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s)
             RETURNING {_COLS}
             """,
             (org_id, sub, label, procedure, project_id,
              json.dumps(list(tools), ensure_ascii=False), input, max_steps,
-             cron, tz, next_due),
+             model, cron, tz, next_due),
         ).fetchone()
     return dict(row)
 
@@ -59,7 +60,7 @@ def update_trigger(trigger_id: int, org_id: int, champs: dict[str, Any]) -> Opti
     """Mise à jour partielle, org-scopée. `champs` ne contient QUE des colonnes
     déjà validées par la capacité (jamais de SQL construit sur l'entrée brute)."""
     autorises = {"label", "procedure", "project_id", "tools", "input", "max_steps",
-                 "cron", "tz", "enabled", "next_due"}
+                 "model", "cron", "tz", "enabled", "next_due"}
     inconnu = set(champs) - autorises
     if inconnu:
         raise ValueError(f"colonnes hors contrat : {sorted(inconnu)}")

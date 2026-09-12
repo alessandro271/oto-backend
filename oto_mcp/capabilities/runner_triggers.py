@@ -19,8 +19,8 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel
 
-from . import _instruction
-from .. import db, runner_tick, tool_registry
+from . import _instruction, _modele
+from .. import db, runner_models, runner_tick, tool_registry
 from ._authz import ORG_MEMBER
 from ._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx,
                      RestBinding)
@@ -41,6 +41,9 @@ class TriggerInput(BaseModel):
     input: Optional[str] = None
     label: Optional[str] = None
     max_steps: Optional[int] = None
+    # Le modèle de l'agent, pris dans le catalogue (`runner.models`). Absent = on
+    # ne touche à rien ; `""` sur `update` = revenir au modèle du worker.
+    model: Optional[str] = None
     enabled: Optional[bool] = None
 
 
@@ -57,6 +60,9 @@ class Trigger(BaseModel):
     tools: Optional[list[str]] = None
     input: Optional[str] = None
     max_steps: Optional[int] = None
+    #: Le modèle DÉCLARÉ. `null` = aucun : le worker qui prend le travail tourne
+    #: sur le sien — c'est l'état de tout déclencheur posé avant le 12/09/2026.
+    model: Optional[str] = None
     cron: Optional[str] = None
     tz: Optional[str] = None
     enabled: Optional[bool] = None
@@ -92,6 +98,24 @@ class RunnerArme(BaseModel):
     #: `None` = aucun worker n'est JAMAIS venu ; une date = il s'est tu depuis.
     #: Les deux n'appellent pas le même geste, et un seul booléen les confondrait.
     last_seen: Optional[str] = None
+    #: Les familles de modèles qu'un worker vivant sert (`anthropic`, `mistral`).
+    #: Vide ne veut pas dire « aucun runner » — `armed` le dit : un worker qui ne
+    #: déclare pas de famille sert quand même les agents sans modèle.
+    families: list[str] = []
+    #: Le catalogue, chaque modèle marqué `served` — ce qu'un écran propose.
+    models: list["RunnerModel"] = []
+
+
+class RunnerModel(BaseModel):
+    """Un modèle du catalogue (`runner_models`), et s'il est servi en ce moment."""
+    id: str
+    label: str
+    family: str
+    default: bool = False
+    served: bool = False
+
+
+RunnerArme.model_rebuild()
 
 
 class TriggerOut(BaseModel):
@@ -113,8 +137,9 @@ def _avec_pertes(org_id: int, t: dict) -> dict:
     return {**t, **db.comptage_perime(org_id, t["id"])}
 
 
-def _exige_un_runner(org_id: int) -> None:
-    """Refuse de PROMETTRE une exécution que personne n'assure.
+def _exige_un_runner(org_id: int) -> dict:
+    """Refuse de PROMETTRE une exécution que personne n'assure — et rend l'état lu,
+    pour que la garde du modèle (`_modele.exige_servi`) juge sur la même lecture.
 
     ⚠️ La garde suit le VERBE, pas l'objet — le motif que `runner_fleets` a
     établi pour `launch`/`stop`. Poser un déclencheur (ou en rallumer un) est le
@@ -127,7 +152,7 @@ def _exige_un_runner(org_id: int) -> None:
     plus en silence."""
     etat = db.runner_arme(org_id)
     if etat["armed"]:
-        return
+        return etat
     if etat["last_seen"] is None:
         detail = ("aucun worker n'a jamais sondé la file de cette org : rien "
                   "n'exécuterait ce déclencheur")
@@ -194,11 +219,17 @@ def _triggers(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
             runner_tick.validate_cron(inp.cron, tz)
         except ValueError as e:
             raise AuthzDenied(400, "invalid_schedule", str(e))
+        # Un modèle inconnu se corrige dans l'appel, comme un cron : il se juge
+        # avec lui, avant la présence du runner.
+        famille = _modele.famille_declaree(inp.model)
         # Après la validation du cadencement, avant l'écriture : un cron fautif
         # se corrige, une org sans runner appelle un autre geste — les deux
         # refus ne se remplacent pas, et celui qu'on lit d'abord est celui qu'on
         # peut réparer sans quitter l'appel.
-        _exige_un_runner(ctx.org_id)
+        etat = _exige_un_runner(ctx.org_id)
+        # Un runner armé ne sert pas forcément CE modèle : son travail attendrait
+        # un worker de la bonne famille, puis périmerait.
+        _modele.exige_servi(etat, famille)
         # ⚠️ UN SEUL agent programmé par objet (tranché le 03/09). L'agent est une
         # PROPRIÉTÉ de la procédure, pas une collection : deux agents sur le même
         # objet, c'est deux réponses à « est-ce que ça tourne ? », et l'écran
@@ -216,7 +247,11 @@ def _triggers(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
             next_due=runner_tick.next_due(inp.cron, tz), tools=outils,
             project_id=inp.project_id,
             input=inp.input or _instruction.derivee(inp.procedure),
-            label=inp.label, max_steps=inp.max_steps)
+            label=inp.label, max_steps=inp.max_steps,
+            # ⚠️ Sans modèle, on n'écrit PAS le défaut du catalogue : NULL veut
+            # dire « n'importe quel worker, sur le sien ». Écrire le défaut
+            # refuserait la création dans une org servie par une autre famille.
+            model=inp.model or None)
         return {"trigger": t}
 
     if inp.op == "list":
@@ -226,7 +261,7 @@ def _triggers(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         lus = (db.triggers_for_procedure(ctx.org_id, inp.procedure) if inp.procedure
                else db.list_triggers(ctx.org_id))
         return {"triggers": [_avec_pertes(ctx.org_id, t) for t in lus],
-                "runner": db.runner_arme(ctx.org_id)}
+                "runner": _modele.etat_servi(db.runner_arme(ctx.org_id))}
 
     if inp.trigger_id is None:
         raise AuthzDenied(400, "missing_fields", f"{inp.op} exige `trigger_id`")
@@ -236,7 +271,7 @@ def _triggers(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         if not t:
             raise AuthzDenied(404, "trigger_not_found", "déclencheur inconnu")
         return {"trigger": _avec_pertes(ctx.org_id, t),
-                "runner": db.runner_arme(ctx.org_id)}
+                "runner": _modele.etat_servi(db.runner_arme(ctx.org_id))}
 
     if inp.op == "delete":
         if not db.delete_trigger(inp.trigger_id, ctx.org_id):
@@ -251,6 +286,10 @@ def _triggers(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         v = getattr(inp, c)
         if v is not None:
             champs[c] = v
+    famille = None
+    if inp.model is not None:
+        famille = _modele.famille_declaree(inp.model)
+        champs["model"] = inp.model or None
     actuel = None
     if inp.cron is not None or inp.tz is not None:
         actuel = db.get_trigger(inp.trigger_id, ctx.org_id)
@@ -267,7 +306,7 @@ def _triggers(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
     # renommer ou corriger un cron ne promet rien et passe toujours — sinon un
     # déclencheur mort deviendrait impossible à ranger.
     if champs.get("enabled") is True:
-        _exige_un_runner(ctx.org_id)
+        etat = _exige_un_runner(ctx.org_id)
         # ⚠️ **RALLUMER REPREND LE RYTHME, ça ne rembobine pas** (arbitré le
         # 02/09, #826). Une échéance figée pendant l'extinction est restée dans
         # le PASSÉ : sans ce recalcul, le tick voyait le déclencheur dû à la
@@ -293,6 +332,20 @@ def _triggers(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
             actuel = db.get_trigger(inp.trigger_id, ctx.org_id)
         if actuel and not actuel["enabled"] and "next_due" not in champs:
             champs["next_due"] = runner_tick.next_due(actuel["cron"], actuel["tz"])
+        # Rallumer promet aussi un MODÈLE : celui qu'on pose dans cet appel, sinon
+        # celui qui est stocké. Un déclencheur éteint pendant qu'une famille
+        # disparaissait ne doit pas se rallumer sur une promesse morte.
+        _modele.exige_servi(etat, famille if inp.model is not None
+                            else runner_models.famille((actuel or {}).get("model")))
+    elif famille and inp.enabled is None:
+        # Changer le modèle d'un déclencheur ALLUMÉ, c'est promettre ce modèle dès
+        # l'occurrence suivante. Éteint, rien n'est promis : la retouche passe.
+        if actuel is None:
+            actuel = db.get_trigger(inp.trigger_id, ctx.org_id)
+        if not actuel:
+            raise AuthzDenied(404, "trigger_not_found", "déclencheur inconnu")
+        if actuel["enabled"]:
+            _modele.exige_servi(db.runner_arme(ctx.org_id), famille)
     t = db.update_trigger(inp.trigger_id, ctx.org_id, champs)
     if not t:
         raise AuthzDenied(404, "trigger_not_found", "déclencheur inconnu")
@@ -322,6 +375,13 @@ CAPABILITIES += [
                           "`create`, et `update enabled=true`, sont refusés "
                           "plutôt que de promettre une exécution qui n'aurait "
                           "pas lieu"),
+            DeclaredError(400, "invalid_model",
+                          "`model` hors du catalogue servi (`runner.models` sur "
+                          "`list`/`get`)"),
+            DeclaredError(400, "model_not_served",
+                          "`model` d'une famille qu'aucun worker vivant ne sert : "
+                          "`create`, `update enabled=true` et le changement de "
+                          "modèle d'un déclencheur allumé sont refusés"),
             DeclaredError(404, "trigger_not_found",
                           "déclencheur inconnu dans l'org du porteur"),
         ),
@@ -337,7 +397,12 @@ CAPABILITIES += [
             "`update enabled=true`) is REFUSED when no worker polls this org's "
             "queue — a trigger nothing executes would enqueue forever without an "
             "error; `list`/`get` carry `runner` (armed, workers, last_seen) so an "
-            "existing trigger can be told apart from a live one. ⚠️ An occurrence "
+            "existing trigger can be told apart from a live one. `model` "
+            "(optional) is the model the agent runs on, one of `runner.models` — "
+            "each flagged `served`; omitted, the worker that takes the job runs its "
+            "own. A model no live worker serves is REFUSED (`model_not_served`) on "
+            "create, on enable, and when changed on an enabled trigger: its job "
+            "would wait for a worker of that family and expire. ⚠️ An occurrence "
             "nobody claimed BEFORE the next one is due is EXPIRED, not silently "
             "kept: a daily watch run thirteen days late does not return a late "
             "result, it returns a WRONG one — and a backlog released all at once "

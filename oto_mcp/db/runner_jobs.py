@@ -141,8 +141,16 @@ def comptage_perime(org_id: int, trigger_id: int) -> dict:
 
 
 def claim_next_job(org_id: Optional[int], worker_sub: str,
-                   lease_seconds: int = _LEASE_DEFAULT_S) -> Optional[dict]:
+                   lease_seconds: int = _LEASE_DEFAULT_S,
+                   depot: Optional[str] = None) -> Optional[dict]:
     """Le prochain job, bail posé — ou None (file vide).
+
+    ⚠️ `depot` = le dépôt de clé que le worker nomme, c'est-à-dire la FAMILLE de
+    modèles qu'il sait servir (`runner_models`). Il ne réserve que les travaux de
+    cette famille ET ceux qui n'en portent aucune — un travail sans famille est
+    servi par n'importe qui, sur son propre modèle, comme avant le 12/09/2026.
+    Sans dépôt, il ne prend QUE les travaux sans famille : un worker qui ne dit
+    pas ce qu'il sert ne reçoit jamais un modèle qu'il ne saurait pas appeler.
 
     Marque d'abord `failed` les épaves (bail mort + tentatives épuisées) : elles
     deviennent VISIBLES au lieu d'être re-servies pour rien.
@@ -173,6 +181,19 @@ def claim_next_job(org_id: Optional[int], worker_sub: str,
                 """,
                 (worker_sub,),
             )
+            # La présence PAR FAMILLE — ce que `runner_arme` rend en `families`.
+            # Seules les familles du catalogue se notent : `provider` est une
+            # chaîne libre, et un dépôt que rien ne route n'a rien à promettre.
+            from ..runner_models import FAMILLES
+            if depot in FAMILLES:
+                conn.execute(
+                    """
+                    INSERT INTO runner_platform_depots (worker_sub, depot, last_seen_at)
+                         VALUES (%s, %s, NOW())
+                    ON CONFLICT (worker_sub, depot) DO UPDATE SET last_seen_at = NOW()
+                    """,
+                    (worker_sub, depot),
+                )
         else:
             conn.execute(
                 """
@@ -205,13 +226,19 @@ def claim_next_job(org_id: Optional[int], worker_sub: str,
                       AND (status = 'pending'
                            OR (status = 'claimed' AND lease_until < NOW()))
                       AND attempts < max_attempts
+                      -- ⚠️ `''` et jamais NULL pour « aucun dépôt » : `= ''` rend
+                      -- FAUX, `= NULL` rend INCONNU. Même tri dans cette forme,
+                      -- mais la première réécriture qui NIE la clause (`NOT …`)
+                      -- ferait de l'inconnu une exclusion muette.
+                      AND (payload->>'model_family' IS NULL
+                           OR payload->>'model_family' = %s)
                     ORDER BY due_at
                       FOR UPDATE SKIP LOCKED
                     LIMIT 1)
             RETURNING id, kind, run_id, payload, attempts, max_attempts,
                       lease_until, sub, org_id
             """,
-            (worker_sub, int(lease_seconds), org_id, org_id),
+            (worker_sub, int(lease_seconds), org_id, org_id, depot or ""),
         ).fetchone()
     return dict(row) if row else None
 
@@ -243,6 +270,29 @@ def refuser_pour_identite(job_id: int, worker_sub: str, raison: str) -> bool:
             (raison, job_id, worker_sub),
         )
         return bool(cur.rowcount)
+
+
+def modele_du_run(run_id: str, org_id: int) -> dict:
+    """Le modèle sous lequel un run a DÉMARRÉ — `{model, model_family}`, ou `{}`.
+
+    Lu sur le travail `start` du run (lié par `bind_run`). Un `continue` le reprend :
+    un fil ouvert sur une voie ne se poursuit pas sur une autre — la voie
+    Conversations et la boucle Messages n'ont pas le même fil."""
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT payload->>'model' AS model,
+                   payload->>'model_family' AS model_family
+              FROM runner_jobs
+             WHERE run_id = %s AND org_id = %s AND kind = 'start'
+             ORDER BY id
+             LIMIT 1
+            """,
+            (run_id, org_id),
+        ).fetchone()
+    if not row or not row["model_family"]:
+        return {}
+    return {"model": row["model"], "model_family": row["model_family"]}
 
 
 def bind_job_run(job_id: int, worker_sub: str, run_id: str) -> bool:
@@ -476,8 +526,21 @@ def runner_arme(org_id: int) -> dict:
     est un booléen que le serveur pose, et `last_seen` distingue « aucun worker
     n'est jamais venu » (None) de « il en est venu un, il y a trop longtemps ».
     Les deux appellent des gestes différents — monter un runner, ou aller voir
-    pourquoi celui qui existe s'est tu."""
+    pourquoi celui qui existe s'est tu.
+
+    `families` (12/09/2026) = les familles de modèles qu'un worker de PLATEFORME
+    vivant a déclarées au claim, dans la même fenêtre. ⚠️ Un worker au jeton
+    d'org compte dans `workers` mais ne déclare aucune famille : il ne sert que
+    les agents sans modèle (cf. `capabilities/_modele.exige_servi`)."""
     with _connect() as conn:
+        familles = conn.execute(
+            """
+            SELECT COALESCE(array_agg(DISTINCT depot ORDER BY depot), '{}') AS f
+              FROM runner_platform_depots
+             WHERE last_seen_at > NOW() - make_interval(secs => %s)
+            """,
+            (ARME_FENETRE_S,),
+        ).fetchone()
         row = conn.execute(
             """
             SELECT COUNT(*) FILTER (
@@ -500,4 +563,5 @@ def runner_arme(org_id: int) -> dict:
     dernier = row["dernier"] if row else None
     return {"armed": vivants > 0,
             "workers": vivants,
-            "last_seen": str(dernier) if dernier else None}
+            "last_seen": str(dernier) if dernier else None,
+            "families": list(familles["f"] or []) if familles else []}

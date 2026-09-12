@@ -25,7 +25,8 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .. import db
+from . import _modele
+from .. import db, runner_models
 from ._authz import WORKER_OR_ORG_MEMBER
 from ._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx,
                      RestBinding, cap_limit)
@@ -50,6 +51,8 @@ class JobsInput(BaseModel):
     trigger_id: Optional[int] = None
     # claim — le worker nomme le dépôt de clé qu'il sait consommer (voir
     # `_cle_de_modele`). Absent : il tourne sur la clé de la plateforme.
+    # ⚠️ C'est aussi la FAMILLE de modèles qu'il sert : il ne réserve que les
+    # travaux de cette famille, et ceux qui n'en portent aucune.
     provider: Optional[str] = None
     # claim / extend —
     lease_seconds: int = 600
@@ -613,6 +616,10 @@ def _produire_pour_une_campagne(org_id: Optional[int], bail_s: int) -> Optional[
                      # on n'envoie rien et le fournisseur applique son défaut —
                      # c'est le comportement d'avant, et il reste possible.
                      "temperature": f.get("temperature"),
+                     # Le modèle déclaré par le passage, et la famille qui route le
+                     # travail. Une flotte sans modèle — ou d'un modèle hors
+                     # catalogue — n'envoie rien : n'importe quel worker la sert.
+                     **runner_models.charge(f.get("model")),
                      "input": message,
                      "label": f"flotte {f.get('namespace')} — {f['procedure']}"},
             fleet_id=f["id"], sub=f["sub"])
@@ -686,6 +693,33 @@ def _delegue(job: dict, bail_s: int, claimant: str) -> dict:
     return job
 
 
+def _charge_et_modele(ctx: ResolvedCtx, inp: JobsInput) -> Optional[dict]:
+    """La charge d'un travail enfilé à la main, son modèle mis en règle.
+
+    ⚠️ **La famille se DÉDUIT, elle ne se déclare pas.** C'est elle qui route le
+    travail (`claim_next_job`) : une famille posée par l'appelant enverrait un
+    modèle Mistral à un worker Anthropic, qui le recevrait comme une commande
+    valide. Celle qui arrive dans la charge est donc retirée, et recalculée depuis
+    `model` — refusé s'il est hors catalogue.
+
+    ⚠️ **Un `continue` reprend le modèle de son run**, quel que soit celui qu'on lui
+    passe : un fil ouvert sur une voie ne se poursuit pas sur une autre. Un run
+    démarré sans modèle se poursuit sans modèle — la charge d'avant, à l'octet."""
+    if inp.payload is None and inp.kind != "continue":
+        return None
+    charge = {k: v for k, v in (inp.payload or {}).items()
+              if k not in ("model", "model_family")}
+    if inp.kind == "continue":
+        charge.update(db.modele_du_run(inp.run_id, ctx.org_id))
+    else:
+        model = (inp.payload or {}).get("model")
+        if model is not None and not isinstance(model, str):
+            raise AuthzDenied(400, "invalid_model", "`payload.model` est un nom de modèle")
+        _modele.famille_declaree(model)
+        charge.update(runner_models.charge(model))
+    return charge if (charge or inp.payload is not None) else None
+
+
 #: Ce qu'un worker sait faire — et rien d'autre. Enfiler, lister, lire un
 #: travail sont des gestes d'organisation : ils exigent une org, et un worker
 #: n'en a pas.
@@ -741,7 +775,7 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
         # usurpation en une ligne de JSON. Le paramétrage vers un autre membre —
         # prévu par la direction du 02/09 — passera par une garde
         # d'appartenance, pas par la confiance faite au corps de la requête.
-        res = db.enqueue_job(ctx.org_id, inp.kind, payload=inp.payload,
+        res = db.enqueue_job(ctx.org_id, inp.kind, payload=_charge_et_modele(ctx, inp),
                              run_id=inp.run_id, max_attempts=inp.max_attempts,
                              fleet_id=inp.fleet_id, sub=ctx.sub)
         return {"id": res["id"], "status": res["status"], "due_at": str(res["due_at"]),
@@ -749,7 +783,8 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
 
     if inp.op == "claim":
         bail = max(30, min(inp.lease_seconds, 3600))
-        job = db.claim_next_job(ctx.org_id, ctx.sub, lease_seconds=bail)
+        job = db.claim_next_job(ctx.org_id, ctx.sub, lease_seconds=bail,
+                                depot=inp.provider)
         if job is None:
             # ⚠️ La file vide n'est pas la fin de l'histoire : une CAMPAGNE en
             # cours est une règle qui produit des travaux, et c'est ici qu'on
@@ -763,7 +798,8 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
             # suffit à faire avancer le passage — et il suffit, puisqu'il a
             # déjà lieu en boucle.
             panne = _produire_pour_une_campagne(ctx.org_id, bail)
-            job = db.claim_next_job(ctx.org_id, ctx.sub, lease_seconds=bail)
+            job = db.claim_next_job(ctx.org_id, ctx.sub, lease_seconds=bail,
+                                    depot=inp.provider)
             if job is None and panne:
                 # « Rien à faire » et « je n'ai pas pu regarder » ne se disent
                 # pas de la même façon. Les confondre a coûté des jours de
