@@ -525,6 +525,16 @@ une ligne de déclaration, sans servir forcément la même famille. `runner_arme
 workers de PLATEFORME déclarent leur famille : une org servie par un worker au
 jeton d'org se verra refuser tout modèle explicite (aucune en production aujourd'hui).
 
+⚠️ **Le modèle proposé par défaut se DÉRIVE de ce qui est servi** (12/09/2026) :
+`default` marque le premier modèle servi dans l'ordre du catalogue — l'ordre de
+`MODELES` est la préférence. **Aucun** modèle n'est marqué quand aucune famille
+n'est servie : `families: []` rend l'absence visible, et le geste est alors
+d'omettre `model`. Pas de repli sur le premier du catalogue : la marque posée en dur
+sur `claude-sonnet-5` proposait un modèle que les workers de production (famille
+`mistral`) ne servent pas, et un agent qui la suivait prenait `model_not_served`.
+Le défaut ne s'écrit nulle part : un modèle choisi n'est jamais changé, et aucun
+agent existant n'est réécrit.
+
 ⚠️ **La famille se déduit, elle ne se déclare pas** : un `enqueue` manuel qui en
 porte une se la voit retirer et recalculer depuis `model`. Et **un `continue` garde
 le modèle du `start` de son run** — un fil ouvert sur la voie Conversations ne se

@@ -28,11 +28,12 @@ class Modele(NamedTuple):
     id: str
     label: str
     family: str
-    default: bool = False
 
 
+#: ⚠️ L'ORDRE est la préférence : le modèle proposé par défaut est le premier
+#: modèle SERVI de cette liste (cf. `catalogue`). Aucun n'est marqué en dur.
 MODELES: tuple[Modele, ...] = (
-    Modele("claude-sonnet-5", "Claude Sonnet 5", "anthropic", default=True),
+    Modele("claude-sonnet-5", "Claude Sonnet 5", "anthropic"),
     Modele("claude-opus-5", "Claude Opus 5", "anthropic"),
     Modele("claude-haiku-4-5", "Claude Haiku 4.5", "anthropic"),
     # La voie Conversations des workers de production (cf. oto-runner).
@@ -63,9 +64,23 @@ def charge(model: Optional[str]) -> dict:
 
 
 def catalogue(familles_servies) -> list[dict]:
-    """Le catalogue tel qu'un écran le propose : chaque modèle, et s'il est SERVI
-    — une famille dont un worker a sondé la file dans la fenêtre de présence."""
+    """Le catalogue tel qu'un écran le propose : chaque modèle, s'il est SERVI —
+    une famille dont un worker a sondé la file dans la fenêtre de présence — et
+    celui à proposer par DÉFAUT.
+
+    ⚠️ **Le défaut se DÉRIVE de ce qui est servi, il ne se déclare pas** : c'est le
+    premier modèle servi dans l'ordre de `MODELES`. Une marque posée en dur
+    (`claude-sonnet-5` jusqu'au 12/09/2026) proposait un modèle que les workers de
+    production, qui ne servent que `mistral`, ne servaient pas : un agent qui la
+    suivait se faisait refuser `model_not_served`.
+
+    ⚠️ **Aucun défaut quand aucune famille n'est servie** — jamais de repli sur le
+    premier du catalogue, qui proposerait un modèle refusé. L'absence se lit avec
+    `families: []`, et le geste est alors de ne nommer aucun modèle : le worker
+    tourne sur le sien. Le défaut ne s'écrit nulle part : un agent posé sans modèle
+    reste NULL, et un modèle choisi n'est jamais changé."""
     servies = set(familles_servies or ())
+    defaut = next((m.id for m in MODELES if m.family in servies), None)
     return [{"id": m.id, "label": m.label, "family": m.family,
-             "default": m.default, "served": m.family in servies}
+             "default": m.id == defaut, "served": m.family in servies}
             for m in MODELES]

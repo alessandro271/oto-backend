@@ -111,6 +111,9 @@ class RunnerModel(BaseModel):
     id: str
     label: str
     family: str
+    #: Le modèle à PROPOSER : le premier servi dans l'ordre du catalogue. Au plus un
+    #: modèle le porte, jamais un modèle non servi — et aucun quand aucun worker ne
+    #: déclare de famille (`families: []`) : il faut alors omettre `model`.
     default: bool = False
     served: bool = False
 
@@ -400,7 +403,10 @@ CAPABILITIES += [
             "existing trigger can be told apart from a live one. `model` "
             "(optional) is the model the agent runs on, one of `runner.models` — "
             "each flagged `served`; omitted, the worker that takes the job runs its "
-            "own. A model no live worker serves is REFUSED (`model_not_served`) on "
+            "own. The model flagged `default` is the one to propose: the first "
+            "served model in catalogue order. No model is flagged when no live "
+            "worker declares a family (`runner.families` is `[]`) — then omit "
+            "`model`. A model no live worker serves is REFUSED (`model_not_served`) on "
             "create, on enable, and when changed on an enabled trigger: its job "
             "would wait for a worker of that family and expire. ⚠️ An occurrence "
             "nobody claimed BEFORE the next one is due is EXPIRED, not silently "

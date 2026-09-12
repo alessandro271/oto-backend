@@ -61,10 +61,26 @@ def test_un_modele_inconnu_ne_part_PAS_avec_le_travail():
     assert runner_models.charge(None) == {}
 
 
-def test_le_catalogue_a_UN_defaut_et_il_est_servi_par_une_famille_connue():
-    defauts = [m for m in runner_models.MODELES if m.default]
-    assert len(defauts) == 1
-    assert defauts[0].family in runner_models.FAMILLES
+@pytest.mark.parametrize("familles, attendu", [
+    ((), None),
+    (("mistral",), "mistral-large-2512"),
+    (("anthropic",), "claude-sonnet-5"),
+    (("anthropic", "mistral"), "claude-sonnet-5"),
+])
+def test_le_defaut_propose_est_le_premier_modele_SERVI_et_aucun_sans_famille(
+        familles, attendu):
+    """Le défaut se DÉRIVE de ce qui est servi. Une marque en dur proposait
+    `claude-sonnet-5` alors que les workers de production ne servent que `mistral` :
+    un agent qui la suivait se faisait refuser `model_not_served`."""
+    modeles = runner_models.catalogue(familles)
+    defauts = [m for m in modeles if m["default"]]
+    assert len(defauts) <= 1, "au plus un défaut"
+    assert all(m["served"] for m in defauts), "un défaut non servi serait refusé"
+    if not familles:
+        assert defauts == [], "rien de servi, rien à proposer — pas de repli"
+    # L'ordre du catalogue est la préférence : le défaut est le PREMIER servi.
+    premier_servi = next((m["id"] for m in modeles if m["served"]), None)
+    assert (defauts[0]["id"] if defauts else None) == premier_servi == attendu
 
 
 def test_le_catalogue_servi_marque_ce_qu_un_worker_vivant_sert():
@@ -222,6 +238,16 @@ def test_list_sert_le_catalogue_marque(monkeypatch):
     servis = {m["id"]: m["served"] for m in runner["models"]}
     assert servis == {"claude-sonnet-5": True, "claude-opus-5": True,
                       "claude-haiku-4-5": True, "mistral-large-2512": False}
+    assert [m["id"] for m in runner["models"] if m["default"]] == ["claude-sonnet-5"]
+    # Servi par la seule famille des workers de production : le défaut la suit.
+    _runner(monkeypatch, familles=("mistral",))
+    runner = _declencher(op="list")["runner"]
+    assert [m["id"] for m in runner["models"] if m["default"]] == ["mistral-large-2512"]
+    # Aucune famille : aucun défaut, et `families: []` le dit.
+    _runner(monkeypatch, familles=())
+    runner = _declencher(op="list")["runner"]
+    assert runner["families"] == []
+    assert not any(m["default"] for m in runner["models"])
     # Et la sortie typée l'accepte : un champ servi hors modèle n'est dans aucun
     # schéma, donc aucun front ne sait qu'il peut le lire.
     RT.TriggerOut(**{"triggers": [], "runner": runner})
