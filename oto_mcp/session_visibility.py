@@ -38,8 +38,34 @@ logger = logging.getLogger(__name__)
 _DERIVE_ORG = object()
 
 
+# Les COUCHES du masquage, nommées. Deux familles : celles qui ne touchent qu'à
+# l'AFFICHAGE (l'outil reste appelable par `oto_call`, ADR 0036) et celles derrière
+# lesquelles une garde d'appel existe aussi (activation, RBAC, bêta, plancher de
+# rôle) — un outil masqué par l'une d'elles n'est pas appelable. Le catalogue
+# (`oto_list_my_tools`) en dérive l'état de chaque outil : « installé »,
+# « installable » ou « non exposé » — sans recopier une seule des règles ci-dessous.
+COUCHE_TOGGLE = "toggle"              # désactivé par la personne, par un admin, ou masqué par défaut
+COUCHE_ACTIVATION = "activation"      # connecteur non exposé à l'org (ou coupé par l'équipe)
+COUCHE_RBAC = "rbac"                  # connecteur réservé dans l'org (ADR 0025)
+COUCHE_RBAC_EQUIPE = "rbac_group"     # connecteur réservé dans l'équipe (ADR 0012 B2)
+COUCHE_SELECTION = "selection"        # connecteur non installé / en pause dans la boîte
+COUCHE_BETA = "beta"                  # surface bêta sans l'option
+COUCHE_HORS_DE_PORTEE = "hors_de_portee"   # plancher de rôle plateforme non atteint
+#: Les couches qui ne masquent que l'AFFICHAGE : l'outil y reste appelable.
+COUCHES_INSTALLABLES = frozenset({COUCHE_TOGGLE, COUCHE_SELECTION})
+
+
 async def compute_hidden_tools(ctx, sub: str, *, org=_DERIVE_ORG) -> set[str]:
-    """Ensemble effectif des tools à masquer pour `(sub, org active)`.
+    """Ensemble effectif des tools à masquer pour `(sub, org active)` — l'union des
+    couches de `compute_hidden_layers`, qui porte la documentation."""
+    couches = await compute_hidden_layers(ctx, sub, org=org)
+    return set().union(*couches.values())
+
+
+async def compute_hidden_layers(ctx, sub: str, *, org=_DERIVE_ORG) -> dict[str, set[str]]:
+    """Les tools à masquer pour `(sub, org active)`, PAR COUCHE (`COUCHE_*` → noms).
+    Chaque couche est déjà amputée des outils protégés (anti-lockout) ; leur union
+    est exactement ce que `compute_hidden_tools` masque.
 
     Profil de visibilité = (sub, org active) ; 0 = perso/global (ADR 0015). Lit
     l'org active à CHAQUE appel → après `set_active_org`, recalcule pour la
@@ -89,7 +115,9 @@ async def compute_hidden_tools(ctx, sub: str, *, org=_DERIVE_ORG) -> set[str]:
         admin_hidden |= access.group_admin_hidden_tools(access.current_group(sub))
     except Exception as e:
         logger.warning("group tool denylist skipped for %s (fail-open): %s", sub, e)
-    to_hide = effective_disabled(all_names, disabled, enabled_override, frozenset(admin_hidden))
+    couches: dict[str, set[str]] = {
+        COUCHE_TOGGLE: effective_disabled(all_names, disabled, enabled_override,
+                                          frozenset(admin_hidden))}
     # Activation (ADR 0011) : masque les tools d'un connecteur non activé pour
     # l'org de la session — à chaud, per-org. Fail-OPEN (gouvernance d'exposition,
     # pas une barrière de sécurité ; le grant-only reste fail-closed ci-dessus).
@@ -104,7 +132,7 @@ async def compute_hidden_tools(ctx, sub: str, *, org=_DERIVE_ORG) -> set[str]:
         if active_group is not None:
             exposed = connector_activation.effective_for_group(
                 exposed, connector_activation.group_cut_connectors(active_group))
-        to_hide |= {
+        couches[COUCHE_ACTIVATION] = {
             n for n in all_names
             if (c := providers.connector_for_namespace(namespace_of(n))) is not None
             and c.name not in exposed
@@ -122,7 +150,7 @@ async def compute_hidden_tools(ctx, sub: str, *, org=_DERIVE_ORG) -> set[str]:
     try:
         deny = access.rbac_denied_connectors(sub, active_org)
         if deny:
-            to_hide |= {
+            couches[COUCHE_RBAC] = {
                 n for n in all_names
                 if (c := providers.connector_for_namespace(namespace_of(n))) is not None
                 and c.name in deny
@@ -136,7 +164,7 @@ async def compute_hidden_tools(ctx, sub: str, *, org=_DERIVE_ORG) -> set[str]:
     try:
         g_deny = access.group_rbac_denied_connectors(sub, access.current_group(sub))
         if g_deny:
-            to_hide |= {
+            couches[COUCHE_RBAC_EQUIPE] = {
                 n for n in all_names
                 if (c := providers.connector_for_namespace(namespace_of(n))) is not None
                 and c.name in g_deny
@@ -173,7 +201,7 @@ async def compute_hidden_tools(ctx, sub: str, *, org=_DERIVE_ORG) -> set[str]:
             origins.update({n: connector_selection.SOCLE for n in socle})
             connector_selection.seed_active(sub, origins, prof_org)
         _sel = connector_selection.list_selection(sub, prof_org)
-        to_hide |= {
+        couches[COUCHE_SELECTION] = {
             n for n in all_names
             if (c := providers.connector_for_namespace(namespace_of(n))) is not None
             and _sel.get(c.name) != connector_selection.ACTIVE
@@ -194,20 +222,22 @@ async def compute_hidden_tools(ctx, sub: str, *, org=_DERIVE_ORG) -> set[str]:
     # doute : ne pas proposer une bêta n'a jamais bloqué personne.
     try:
         if not access.has_option(sub, BETA_OPTION, org=active_org):
-            to_hide |= (all_names & BETA_TOOLS)
+            couches[COUCHE_BETA] = all_names & BETA_TOOLS
     except Exception as e:
         logger.warning("beta visibility fail-CLOSED for %s: %s", sub, e)
-        to_hide |= (all_names & BETA_TOOLS)
+        couches[COUCHE_BETA] = all_names & BETA_TOOLS
     # Outils hors de portée : masqués d'après l'AUTORISATION DÉCLARÉE, pas d'après
     # le nom. Visibilité seulement — l'autz reste appliquée à l'appel, ici comme avant.
-    to_hide |= _hors_de_portee_plateforme(all_names, role_plateforme)
+    couches[COUCHE_HORS_DE_PORTEE] = _hors_de_portee_plateforme(all_names, role_plateforme)
     # Garde anti-lockout STRUCTUREL (signal d’usage #213) : AUCUN bloc de gating ci-dessus
     # (connecteur/RBAC/sélection/admin) ne peut masquer un tool SPINE/protégé. Jusqu'ici
     # le spine n'était sauvé que parce que son namespace ne résolvait aucun connecteur
     # (effet de bord fragile : un connecteur déclarant `oto`/`data` aurait tout évincé).
-    # Ici c'est explicite et robuste — source unique `is_protected`.
-    to_hide -= {n for n in all_names if is_protected(n)}
-    return to_hide
+    # Ici c'est explicite et robuste — source unique `is_protected`, appliquée à
+    # CHAQUE couche : l'union reste ce qu'elle était, et aucun lecteur par couche ne
+    # peut croire un outil protégé masqué.
+    proteges = {n for n in all_names if is_protected(n)}
+    return {nom: noms - proteges for nom, noms in couches.items()}
 
 
 def _hors_de_portee_plateforme(all_names: set[str], role_plateforme: str) -> set[str]:

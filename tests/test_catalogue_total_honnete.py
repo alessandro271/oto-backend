@@ -48,8 +48,8 @@ async def _appelle(args: dict) -> dict:
 async def test_sans_recherche_le_total_est_le_catalogue(compte):
     """Le cas nominal ne change pas : sans filtre, `total` EST le catalogue."""
     out = await _appelle({})
-    assert out["total"] == len(out["tools"]) or out["total"] >= out["shown"]
-    assert "catalog_total" not in out, "rien n'a été écarté : pas de champ parasite"
+    assert out["total"] == out["catalog_total"] == out["shown"]
+    assert out["total"] == sum(len(g["tools"]) for g in out["connectors"])
 
 
 @pytest.mark.asyncio
@@ -69,7 +69,9 @@ async def test_ce_que_le_filtre_a_ecarte_est_DIT(compte):
     chiffre écarté ne disparaît pas, il change de nom."""
     out = await _appelle({"query": "datastore"})
     assert out["catalog_total"] > out["total"]
-    assert "catalog_disabled_count" in out
+    # …et le catalogue entier est rendu PAR ÉTAT : « combien sont désactivés » était
+    # 0 par construction (oto#170), il ne se recalcule plus sur un jeu filtré.
+    assert sum(out["catalog_by_state"].values()) == out["catalog_total"]
 
 
 @pytest.mark.asyncio

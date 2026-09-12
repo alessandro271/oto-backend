@@ -148,7 +148,6 @@ origami_sequences
 origami_tables
 origami_workspaces
 osm_pois
-oto_list_my_tools
 pennylane_transactions
 pennylaneged_companies
 phantombuster_list_containers

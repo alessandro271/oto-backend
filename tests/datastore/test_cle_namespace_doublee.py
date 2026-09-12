@@ -91,6 +91,7 @@ def test_AUCUNE_reponse_du_datastore_ne_sert_encore_l_ancien_nom():
         "capabilities/tools_me.py": "famille d'outils MCP (`namespace_of(inp.name)`)",
         "capabilities/audit_log.py": "famille de l'outil appelé (`fr_`, `apollo_`…)",
         "tools/meta.py": "famille d'outils MCP",
+        "tools/catalogue.py": "famille d'outils MCP (`namespace_of(t.name)`, oto#170)",
     }
     # (b) VALEUR PERSISTÉE — la clé relit un champ écrit avant la bascule. La renommer
     #     ne renommerait pas la donnée : elle détruirait la correspondance.

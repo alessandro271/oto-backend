@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Optional
+from typing import Literal, Optional
 
 from fastmcp import Context, FastMCP
 from fastmcp.server.transforms.visibility import (
@@ -29,9 +29,9 @@ from ..auth.hooks import current_user_sub_from_token
 from ..tool_visibility import (
     PROTECTED_TOOLS,
     is_default_hidden,
-    is_tool_visible,
     namespace_of,
 )
+from . import catalogue
 
 # Méta/spine non dispatchables via `oto_call` (ADR 0036 §4) : déjà toujours visibles,
 # aucun intérêt à passer par le dispatch, et anti-boucle (`oto_call` sur lui-même).
@@ -46,10 +46,8 @@ def _refuser_si_retire(name: str) -> None:
     if retire is not None:
         raise McpError(ErrorData(code=INVALID_PARAMS, message=retire.message))
 
-# Budget d'une ligne de catalogue. ~350 entrées rendues d'un coup : chaque caractère
-# est multiplié par le nombre d'outils. 100 c. suffisent à dire ce que fait un outil ;
-# le détail est dans `oto_tool_schema`, qu'on lit AVANT d'appeler de toute façon.
-_CATALOG_BLURB = 100
+# Le budget d'une ligne de catalogue vit avec le catalogue (`tools/catalogue.py`).
+_CATALOG_BLURB = catalogue.CATALOG_BLURB
 # Recherche : borne par défaut. Au-delà, l'agent relit le catalogue entier — c'est le
 # signe que la requête était trop large, pas qu'il manque des résultats.
 _SEARCH_LIMIT = 40
@@ -80,17 +78,6 @@ def hint_zero_resultat(tb: Optional[dict]) -> str:
             "ressource » rend 0 outil et « transfer ownership resource team » rend "
             "`oto_resource` en tête. Sinon, repère le domaine dans `namespaces`, ou "
             "relance sans `query` pour le catalogue complet.")
-
-
-def _namespace_help(ns: str) -> str:
-    """Ligne de catalogue du connecteur d'un namespace (curée, en français) — le pont
-    entre une requête en langue naturelle et des docstrings anglaises. Fail-soft."""
-    try:
-        con = providers.connector_for_namespace(ns)
-        return f"{con.label} {con.help}" if con else ""
-    # noqa: SILENT — aide de namespace absente plutôt que fausse
-    except Exception:
-        return ""
 
 
 def _tool_prefix() -> str:
@@ -210,78 +197,56 @@ async def _trace_target_call(sub: Optional[str], name: str, args: dict, ok: bool
 
 def register(mcp: FastMCP) -> None:
     @mcp.tool()
-    async def oto_list_my_tools(ctx: Context, query: Optional[str] = None,
-                                limit: Optional[int] = None) -> dict:
-        """The oto tool CATALOG — every tool, what it does in one line, and whether it is
-        currently visible to you.
+    async def oto_list_my_tools(ctx: Context, op: Optional[Literal["list", "search"]] = None,
+                                query: Optional[str] = None, state: Optional[str] = None,
+                                limit: Optional[int] = None, full: bool = False) -> dict:
+        """The oto tool CATALOG — EVERY tool of the platform (~725), each with its STATE
+        for you: `installed` (in your toolbox: call it directly), `installable`
+        (callable right now with `oto_call`, installed durably with
+        `oto_connector(op='select', name=<connector>)`) or `not_exposed` (NOT
+        callable: the connector is not opened to your organization, or the tool is
+        beyond your role — an org admin opens it). A tool absent from your toolbox is
+        never a missing capability: it is here, with the state that says what to do.
 
-        This is the entry point of the deferred mode (`oto_list_my_tools` →
-        `oto_tool_schema` → `oto_call`): the way an agent reaches oto without loading
-        ~350 full schemas. Each entry carries a one-line `description` — pick from it
-        rather than guessing from the name, then read the exact arguments with
-        `oto_tool_schema(name)` before calling.
+        op=list (default without `query`) → the whole catalog GROUPED by connector:
+        `{namespace, connector, label, state, tools: [names]}` (~25k chars in all).
+        `full=True` flattens it, one entry per tool with a one-line description
+        (~115k chars: prefer `state=` or a search). `state=installed|installable|
+        not_exposed` keeps one state.
+        op=search (default with `query`) → tools RANKED by how many words of `query`
+        match their name, their connector's catalog line and their description.
+        LEXICAL, docstrings in ENGLISH: zero result means « rephrase, try English, or
+        op=list » — never « oto cannot do this ». 40 entries by default (`limit`),
+        one-line descriptions; `full=True` = whole descriptions.
 
-        Returns `{tools: [{name, description, enabled}], total, shown, disabled_count}`.
-        `total` = how many tools MATCH (the whole catalogue when there is no `query`),
-        `shown` = how many are in this response. When a `query` filtered the catalogue,
-        `catalog_total` says how many exist in all — so « 3 tools » never reads « oto
-        only has 3 ». A truncated response says so (`truncated`, `hint_truncated`).
-        `enabled: false` = not mounted in your session — call it anyway with `oto_call`,
-        or install its connector durably with `oto_connector(op='select')`.
+        Entry point of the deferred mode — `oto_list_my_tools` → `oto_tool_schema(name)`
+        (the exact arguments, read BEFORE calling) → `oto_call` — the way an agent
+        reaches oto without loading ~725 schemas.
 
         Args:
-            query: keywords to search the catalog (name + description + the connector's
-                catalog line), e.g. "entreprises françaises", "linkedin message",
-                "invoice". Ranked by how many words match, name before description.
-                LEXICAL, not semantic — zero results means "rephrase, or drop the query
-                and read the whole catalog", never "oto cannot do this": the response
-                then carries `namespaces`, the map of every capability of the platform.
-            limit: cap the number of entries returned (default: all; 40 when searching).
+            op: `list` | `search`; derived from `query` when omitted.
+            query: words to search (op=search), e.g. "linkedin message", "invoice".
+            state: keep only the tools in this state.
+            limit: cap the entries (search: 40 by default; list: none).
+            full: more description — list: one line per tool; search: whole docstrings.
         """
         sub = _require_sub()
-        org = _active_org(sub)
-        disabled = set(db.list_user_disabled_tools(sub, org))
-        enabled_override = set(db.list_user_enabled_tools(sub, org))
-        # Denylist admin (org + équipe active) — même fail-open indépendant par
-        # palier que session_visibility.compute_hidden_tools, pour que ce que
-        # l'user VOIT ici matche ce qui est réellement monté à la session.
-        admin_hidden: set[str] = set()
-        try:
-            admin_hidden |= access.org_admin_hidden_tools(access.current_org(sub))
-        # noqa: SILENT — fail-open par palier, calqué sur compute_hidden_tools
-        except Exception:
-            pass
-        try:
-            admin_hidden |= access.group_admin_hidden_tools(access.current_group(sub))
-        # noqa: SILENT — fail-open par palier, calqué sur compute_hidden_tools
-        except Exception:
-            pass
-        # run_middleware=False : on veut la liste complète (y compris les
-        # tools masqués pour ce user), sinon on n'affiche pas leur état.
-        all_tools = await ctx.fastmcp.list_tools(run_middleware=False)
-        # Le catalogue annonce les noms tels que l'utilisateur les VOIT (cf.
-        # `tool_alias`) ; tout ce qui se calcule — namespace, visibilité — repart du
-        # nom canonique. Le retour `canonical(public(x)) == x` est total, donc aucun
-        # nom ne se perd en route.
-        prefix = _tool_prefix()
-        entries = sorted(
-            ({"name": tool_alias.public(t.name, prefix),
-              "description": tool_registry.blurb(t.description, _CATALOG_BLURB),
-              # Ligne de catalogue du connecteur : le seul texte FRANÇAIS de l'entrée
-              # (les docstrings sont en anglais). Sert la recherche, pas la sortie.
-              "namespace_help": _namespace_help(namespace_of(t.name))}
-             for t in all_tools),
-            key=lambda e: e["name"])
-        for e in entries:
-            e["enabled"] = is_tool_visible(tool_alias.canonical(e["name"], prefix),
-                                           disabled, enabled_override,
-                                           frozenset(admin_hidden))
-        # ⚠️ `total` et `disabled_count` sont posés APRÈS le filtrage (voir plus bas) :
-        # un champ nommé `total` décrit le jeu qu'il accompagne, sinon il ment mieux
-        # que le silence. Le catalogue entier reste rendu, sous son propre nom.
+        if op is None:
+            op = "search" if query else "list"
+        if op == "search" and not (query or "").strip():
+            raise McpError(ErrorData(code=INVALID_PARAMS,
+                                     message="op=search : `query` requis (les mots à chercher)."))
+        if op == "list" and query:
+            raise McpError(ErrorData(code=INVALID_PARAMS,
+                                     message="op=list ne filtre pas par `query` — pour chercher, op=search."))
+        if state is not None and state not in catalogue.ETATS:
+            raise McpError(ErrorData(code=INVALID_PARAMS,
+                                     message=f"`state` ∈ {' | '.join(catalogue.ETATS)}."))
+        entries = await catalogue.catalogue_avec_etat(ctx, sub, _tool_prefix())
         catalogue_entier = len(entries)
-        catalogue_desactives = sum(1 for e in entries if not e["enabled"])
-        out: dict = {}
+        par_etat = {e: sum(1 for x in entries if x["state"] == e) for e in catalogue.ETATS}
+        out: dict = {"op": op, "catalog_total": catalogue_entier,
+                     "catalog_by_state": par_etat}
         # L'aveu du décalage de boîte (#577, signaux #616/#639) : la session a été
         # montée pour l'org MAISON au handshake, l'appel épingle peut-être une autre
         # org — les outils de ses connecteurs ne sont alors PAS listés, tout en restant
@@ -292,7 +257,10 @@ def register(mcp: FastMCP) -> None:
         tb = _toolbox_scope(sub)
         if tb:
             out["toolbox_scope"] = tb
-        if query:
+        if state:
+            entries = [e for e in entries if e["state"] == state]
+            out["state"] = state
+        if op == "search":
             entries = tool_registry.match(query, entries)
             out["query"] = query
             if not entries:
@@ -301,20 +269,12 @@ def register(mcp: FastMCP) -> None:
                 # repart du domaine au lieu de conclure à une lacune.
                 out["namespaces"] = providers.render_namespace_catalog()
                 out["hint"] = hint_zero_resultat(tb)
-        # oto#42, entrée 1 : `total` valait le CATALOGUE ENTIER, calculé avant le
-        # filtrage — donc sur une recherche, la réponse portait un champ littéralement
-        # nommé `total` qui ne décrivait pas ce qu'elle rendait, un `shown` plafonné,
-        # et JAMAIS le nombre de correspondances, pourtant disponible ici. C'est la
-        # forme exacte du « 92 résultats, 10 rendus » corrigé ailleurs, en pire : là
-        # le total manquait, ici il était présent et faux.
+        # oto#42, entrée 1 : `total` décrit le jeu qu'il accompagne — sur une recherche,
+        # le nombre de CORRESPONDANCES, jamais le catalogue entier (rendu à côté sous
+        # son propre nom, `catalog_total`, pour que « 3 outils » ne se lise pas « oto
+        # n'en a que 3 »).
         out["total"] = len(entries)
-        out["disabled_count"] = sum(1 for e in entries if not e["enabled"])
-        if query and len(entries) != catalogue_entier:
-            # Ce que le filtre a écarté ne disparaît pas en silence : sans ce chiffre,
-            # « 3 outils » se lit « oto n'en a que 3 ».
-            out["catalog_total"] = catalogue_entier
-            out["catalog_disabled_count"] = catalogue_desactives
-        cap = limit if limit is not None else (_SEARCH_LIMIT if query else None)
+        cap = limit if limit is not None else (_SEARCH_LIMIT if op == "search" else None)
         shown = entries[:cap] if cap else entries
         out["shown"] = len(shown)
         if len(shown) < len(entries):
@@ -324,8 +284,19 @@ def register(mcp: FastMCP) -> None:
             out["hint_truncated"] = (
                 f"{len(entries)} outils correspondent, {len(shown)} rendus. Affine la "
                 "recherche, ou relance avec `limit` plus haut pour les voir tous.")
-        out["tools"] = [{k: e[k] for k in ("name", "description", "enabled")}
-                        for e in shown]
+        out["legend"] = catalogue.LEGENDE
+        if op == "search":
+            cle = "description_full" if full else "description"
+            out["tools"] = [{"name": e["name"], "namespace": e["namespace"],
+                             "state": e["state"], "description": e[cle]} for e in shown]
+        elif full:
+            out["tools"] = [{k: e[k] for k in ("name", "namespace", "state", "description")}
+                            for e in shown]
+        else:
+            out["connectors"] = catalogue.grouper_par_connecteur(shown)
+            out["projection"] = ("un groupe par connecteur, avec ses outils par nom ; "
+                                 "`full=True` rend une ligne de description par outil, "
+                                 "`oto_tool_schema(name)` le détail d'un outil.")
         return out
 
     @mcp.tool()

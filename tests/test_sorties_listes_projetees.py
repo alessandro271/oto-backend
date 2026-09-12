@@ -52,7 +52,7 @@ _PROJECTION_APPELS = ("output_projection", "_shape(", "summarize(", "_project(",
 # le critère d'origine lisait la source en entier, prose comprise, et blanchissait
 # deux outils qui ne projettent rien (cf. `_appeles`). Un plafond posé sur un critère
 # faux garantit la décroissance d'un chiffre qui ne décrit personne.
-_PLAFOND = 198
+_PLAFOND = 197
 
 
 def _debt() -> set[str]:

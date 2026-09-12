@@ -335,16 +335,18 @@ async def test_le_catalogue_annonce_les_noms_du_produit(compte_acme, monkeypatch
     monkeypatch.setattr(access, "group_admin_hidden_tools", lambda g: frozenset())
     monkeypatch.setattr(db, "list_user_disabled_tools", lambda sub, org: [])
     monkeypatch.setattr(db, "list_user_enabled_tools", lambda sub, org: [])
-    out = await _appelle("oto_list_my_tools", {})
+    # `full=True` : une entrée par outil (le défaut groupe par connecteur, oto#170).
+    out = await _appelle("oto_list_my_tools", {"full": True})
     noms = {e["name"] for e in out["tools"]}
     assert "acme_doc" in noms and "acme_whoami" in noms
     assert not any(n.startswith("oto_") for n in noms)
     # Le reste du catalogue est intact — seul le namespace de la plateforme bouge.
     assert "data_write" in noms and "feedback" in noms
     # …et l'état de visibilité reste calculé sur le nom canonique : un outil
-    # masqué-par-défaut doit toujours ressortir masqué sous son nom de produit.
+    # masqué-par-défaut doit toujours ressortir « installable » (masqué par la
+    # personne, appelable) sous son nom de produit.
     par_nom = {e["name"]: e for e in out["tools"]}
-    assert par_nom["email_send"]["enabled"] is False
+    assert par_nom["email_send"]["state"] == "installable"
 
 
 # ── 6. Tout ce que l'agent LIT, pas seulement ce qu'il appelle ───────────────
