@@ -57,8 +57,8 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from . import _instruction
-from .. import access, db
+from . import _instruction, _modele
+from .. import access, db, runner_models
 from ..tool_visibility import BETA_OPTION
 
 logger = logging.getLogger(__name__)
@@ -289,13 +289,18 @@ def _fleets(ctx: ResolvedCtx, inp: FleetInput) -> dict:
                 400, "target_incomplete",
                 "`row_filter` sans `namespace` : un périmètre suppose un tableau. "
                 "Nomme la cible, ou n'en déclare aucune.")
+        # ⚠️ Le modèle d'un passage PART désormais avec ses travaux (12/09/2026) —
+        # il ne peut donc plus être une chaîne libre : un nom que rien ne route
+        # promettrait une attribution fausse. `provider` ne choisit plus rien, il
+        # se déduit du modèle ; fourni, il doit le confirmer.
+        famille = _modele.famille_declaree(inp.model, inp.provider)
         return {"fleet": db.create_fleet(
             ctx.org_id, ctx.sub, label=inp.label, procedure=inp.procedure,
             tools=inp.tools, namespace=inp.namespace, row_filter=inp.row_filter,
             project_id=inp.project_id, max_steps=inp.max_steps,
             input=inp.input or _instruction.de_file(
                 inp.procedure, inp.namespace, inp.row_filter),
-            provider=inp.provider, model=inp.model,
+            provider=famille, model=inp.model or None,
             temperature=inp.temperature, workers=inp.workers or 1,
             max_rows=inp.max_rows, max_tokens=inp.max_tokens,
             max_consecutive_failures=inp.max_consecutive_failures,
@@ -340,6 +345,15 @@ def _fleets(ctx: ResolvedCtx, inp: FleetInput) -> dict:
         # depuis le produit est « l'ordonnanceur est mort » — un diagnostic faux
         # posé sur une cause invisible. On répare AVANT d'armer, jamais après.
         avant = db.get_fleet(inp.fleet_id, ctx.org_id)
+        # ⚠️ Armer un passage dont AUCUN worker vivant ne sert le modèle le laisse
+        # `running` pour toujours : `campagne_a_servir` produit un travail, le
+        # claim le filtre, et plus rien n'est produit tant qu'il attend. Refusé
+        # AVANT la réparation de l'instruction — un refus n'écrit rien.
+        # Un passage sans modèle (ou d'un modèle hors catalogue) n'est pas jugé :
+        # n'importe quel worker le sert.
+        famille = runner_models.famille((avant or {}).get("model"))
+        if famille:
+            _modele.exige_servi(db.runner_arme(ctx.org_id), famille)
         if avant and avant.get("procedure") and not (avant.get("input") or "").strip():
             db.update_fleet(inp.fleet_id, ctx.org_id, {"input": _instruction.de_file(
                 avant["procedure"], avant.get("namespace"), avant.get("row_filter"))})
@@ -539,6 +553,12 @@ CAPABILITIES += [
             DeclaredError(400, "invalid_bound",
                           "une borne (`workers`, `max_rows`, `max_tokens`…) "
                           "inférieure à 1"),
+            DeclaredError(400, "invalid_model",
+                          "`create` avec un `model` hors catalogue, un `provider` "
+                          "qui le contredit, ou un `provider` sans `model`"),
+            DeclaredError(400, "model_not_served",
+                          "`launch` d'un passage dont aucun worker vivant ne sert "
+                          "la famille du modèle"),
             DeclaredError(404, "fleet_not_found",
                           "flotte inconnue dans l'org du porteur"),
         ),
@@ -547,7 +567,9 @@ CAPABILITIES += [
             "Declared configuration of an agent PASS — what a fleet runs, on which "
             "table, within which perimeter, and up to which limit. op=create "
             "(`label` + procedure slug + `tools` allowlist ; optional target "
-            "`namespace` + `row_filter`, execution context `provider`/`model`, and "
+            "`namespace` + `row_filter`, execution context `model` — one of the "
+            "catalogue served as `runner.models` by oto_trigger; `provider` is "
+            "deduced from it; omitted, the worker runs its own —, and "
             "limits `max_rows` / `max_tokens` / `max_consecutive_failures` / "
             "`max_tokens_per_row` — budgets are counted in TOKENS, never money) / "
             "list (optionally filtered by `status`) / get / "
@@ -571,7 +593,9 @@ CAPABILITIES += [
             "none of its jobs is left in flight, at which point Oto states the "
             "fact (`stopped`) at the next poll. "
             "Never report a launch on `armed`, nor a stop on `stopping` — the gap "
-            "between the two is also the diagnosis. "
+            "between the two is also the diagnosis. op=launch is REFUSED "
+            "(`model_not_served`) when the fleet declares a model no live worker "
+            "serves: its jobs would wait forever. "
             "op=state returns the pass PROGRESS aggregated "
             "over its jobs — pending, claimed, done, failed, abandoned, tokens "
             "consumed, heaviest single row — and says `no_jobs_attached` "

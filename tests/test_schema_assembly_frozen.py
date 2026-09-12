@@ -342,8 +342,13 @@ from oto_mcp.db import _schema, schema
 # IDENTITIES grandit de 287 caractères (1 314 → 1 601 — le commentaire SQL et la
 # colonne), l'assemblé d'exactement 287 aussi (152 004 → 152 291). Rien d'autre n'a
 # bougé dans le DDL.
-EMPREINTE = "2d22d7ff9dbfdada7c00dbae9372083dc2134021262d5ad39c024d512da38ea7"
-LONGUEUR = 152291
+# 12/09/2026 — le modèle déclaré par l'agent (fragment RUNS) : la colonne
+# `runner_triggers.model` et son commentaire dans le CREATE TABLE (la base partagée
+# la reçoit par l'ALTER de `_init.py`), et la table `runner_platform_depots` — la
+# présence d'un worker de plateforme par famille de modèles. Additif : le code du
+# tag précédent ne lit ni n'écrit l'une ou l'autre. 152 291 → 153 174.
+EMPREINTE = "19c8ec744c7fe811f93fe113ba0fb9785128a1c57dc9577cf3e1420dc52d4545"
+LONGUEUR = 153174
 
 
 _CREATE_TABLE = re.compile(r"^CREATE TABLE IF NOT EXISTS (\w+)", re.M)

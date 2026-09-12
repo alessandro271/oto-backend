@@ -106,7 +106,9 @@ def flotte(client, org):
     r = client.post(ROUTE, headers=_h(org["membre"]), json={
         "op": "create", "label": "passage d'essai", "procedure": "enrichissement",
         "tools": ["oto_kb"], "namespace": "un-tableau", "row_filter": {"lot": "a"},
-        "provider": "openai", "model": "un-modele",
+        # Un modèle du CATALOGUE : depuis le 12/09/2026 il part avec les travaux,
+        # donc une chaîne libre est refusée à la déclaration.
+        "model": "claude-sonnet-5",
         "max_rows": 10, "max_tokens": 1_000_000, "max_tokens_per_row": 50_000})
     assert r.status_code == 200, r.text
     return r.json()["fleet"]
@@ -626,3 +628,38 @@ def test_api_me_orgs_dit_par_org_si_le_compte_est_beta(client, org, org_sans_bet
     r = client.get("/api/me/orgs", headers=_h(org_sans_beta["membre"]))
     assert r.status_code == 200, r.text
     assert {o["id"]: o["beta"] for o in r.json()["orgs"]}[org_sans_beta["id"]] is False
+
+
+# ── LE MODÈLE d'un passage : il part avec ses travaux (12/09/2026) ────────────
+#
+# Rejoués sur la route parce qu'ils sont DÉCLARÉS. En fin de fichier à dessein :
+# le dernier banc pose une présence Anthropic dans la base du module, et aucun
+# banc au-dessus ne doit en dépendre.
+
+def test_un_modele_hors_catalogue_est_refuse_a_la_declaration(client, org):
+    base = {"op": "create", "label": "x", "procedure": "p", "tools": ["oto_kb"]}
+    assert _refus(client, org, {**base, "model": "un-modele-libre"}
+                  ) == (400, "invalid_model")
+    assert _refus(client, org, {**base, "provider": "openai"}
+                  ) == (400, "invalid_model")
+
+
+def test_armer_un_passage_dont_personne_ne_sert_le_modele_est_refuse(client, org):
+    """Sans ce refus, le passage passerait `running` au premier travail produit —
+    que le claim filtre — et n'avancerait plus jamais, sans une erreur."""
+    from oto_mcp.db._conn import _connect
+    fid = client.post(ROUTE, headers=_h(org["membre"]), json={
+        "op": "create", "label": "opus", "procedure": "p", "tools": ["oto_kb"],
+        "model": "claude-opus-5"}).json()["fleet"]["id"]
+    assert _refus(client, org, {"op": "launch", "fleet_id": fid}
+                  ) == (400, "model_not_served")
+
+    # Un worker de plateforme sert désormais la famille : l'armement passe.
+    with _connect() as c:
+        c.execute("INSERT INTO runner_platform_depots (worker_sub, depot) "
+                  "VALUES ('worker:banc-flottes', 'anthropic')")
+        c.commit()
+    r = client.post(ROUTE, headers=_h(org["membre"]),
+                    json={"op": "launch", "fleet_id": fid})
+    assert r.status_code == 200, r.text
+    assert r.json()["fleet"]["status"] == "armed"

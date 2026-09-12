@@ -73,7 +73,9 @@ Conversations coûte ~26 k jetons par fiche, plate au rang ; en boucle locale la
 aujourd'hui** : `fleet.py` lit `OTO_RUNNER_MODEL` et ignore la déclaration. Le
 schéma affirme pourtant que ces champs portent l'attribution d'une ligne. Un
 champ inerte est un défaut ; un champ qui PROMET ce qui n'arrive pas en est un
-autre, plus coûteux.
+autre, plus coûteux. *(12/09/2026 : côté backend, le modèle part désormais avec
+le travail — « Le modèle se déclare sur l'AGENT » ci-dessous ; reste au runner à
+le lire.)*
 
 ## Runner hébergé — l'état ici, la boucle dehors (chantier R1-R5, ADR 0064 au blueprint)
 
@@ -479,6 +481,60 @@ l'acteur et sur lui seul.
 plateforme, qui doit déposer la sienne. Elle appartient au chantier « qui a le
 droit de quoi et pourquoi », au blueprint. Aujourd'hui, une org sans dépôt
 continue sur la clé de la plateforme.
+
+### Le modèle se déclare sur l'AGENT et part avec le travail (oto#81, 12/09/2026)
+
+Le modèle d'un agent hébergé était une variable d'environnement du worker
+(`OTO_RUNNER_MODEL`) : un déclencheur ne pouvait pas en nommer un, et une flotte en
+stockait un que rien ne lisait. Il se déclare maintenant sur l'agent, dans un
+catalogue (`oto_mcp/runner_models.py`), et voyage comme la température :
+
+```
+agent            model ∈ catalogue            NULL = aucun (le worker tourne sur le sien)
+  → travail      payload.model + payload.model_family      (tick, campagne, enqueue)
+  → claim        provider=<dépôt>  ne réserve que SA famille + les travaux SANS famille
+```
+
+⚠️ **La famille EST le nom du dépôt** (`anthropic`, `mistral`) que le worker nomme
+déjà au claim pour recevoir la clé de l'org (#874). Un seul mot, deux usages : ce
+qu'il sait consommer, c'est ce qu'il sait servir.
+
+⚠️ **Un travail sans famille est servi par N'IMPORTE QUEL worker.** C'est l'état de
+tout agent déclaré avant ce lot, et le comportement d'avant à l'octet. Une règle
+stricte aurait orphelin chaque déclencheur existant le jour du déploiement, sans
+une erreur. Pour la même raison, un agent posé sans modèle écrit NULL, jamais le
+défaut du catalogue — l'écrire ferait refuser la création dans une org servie par
+une autre famille. Un worker qui ne nomme aucun dépôt ne prend, lui, que les
+travaux sans famille.
+
+⚠️ **On ne PROMET pas un modèle que personne ne sert** — même asymétrie que
+`no_runner_armed` : le claim filtre le travail, il attend, puis périme.
+`model_not_served` refuse donc `create`, `update enabled=true` (sur le modèle
+posé, sinon le modèle stocké) et le changement de modèle d'un déclencheur ALLUMÉ ;
+et côté flottes `launch` — un passage armé sur une famille absente passerait
+`running` au premier travail et n'avancerait plus jamais. Éteint, un agent se
+corrige librement. Un modèle hors catalogue est refusé à l'écriture
+(`invalid_model`), jamais à la lecture : ce qui est déjà en base se lit, et ne
+voyage simplement pas.
+
+⚠️ **La présence se lit PAR FAMILLE, dans une table à part**
+(`runner_platform_depots`) : plusieurs processus partagent un secret de worker, donc
+une ligne de déclaration, sans servir forcément la même famille. `runner_arme` rend
+`families` ; `oto_trigger op=list/get` sert `runner.models`, le catalogue marqué
+`served`, pour qu'un écran ne propose pas un modèle qui serait refusé. Seuls les
+workers de PLATEFORME déclarent leur famille : une org servie par un worker au
+jeton d'org se verra refuser tout modèle explicite (aucune en production aujourd'hui).
+
+⚠️ **La famille se déduit, elle ne se déclare pas** : un `enqueue` manuel qui en
+porte une se la voit retirer et recalculer depuis `model`. Et **un `continue` garde
+le modèle du `start` de son run** — un fil ouvert sur la voie Conversations ne se
+poursuit pas dans une boucle Messages.
+
+**Ce qui n'est pas ici** : le runner qui LIT `payload.model` (otomata-tech/oto-runner).
+Tant qu'il ne le lit pas, le travail part bien vers un worker de la bonne famille,
+mais tourne sur le modèle de son environnement. Et la SOURCE de la clé (l'org ou la
+plateforme), qui conditionne toute refacturation des jetons, n'est toujours tracée
+nulle part — un lot à part.
 
 ### Une occurrence que personne ne prend PÉRIME, et ça se dit (#814, 02/09/2026)
 

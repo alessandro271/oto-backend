@@ -129,7 +129,12 @@ def test_list_porte_letat_du_runner(monkeypatch):
     # et sa lecture en base n'a pas sa place ici.
     monkeypatch.setattr(RT.db, "comptage_perime", lambda org, tid: {})
     out = _appel(_ctx(), op="list")
-    assert out["runner"] == {"armed": False, "workers": 0, "last_seen": None}
+    runner = out["runner"]
+    assert {k: runner[k] for k in ("armed", "workers", "last_seen")} == {
+        "armed": False, "workers": 0, "last_seen": None}
+    # Et le catalogue servi avec : sans worker, aucun modèle ne l'est.
+    assert runner["families"] == []
+    assert runner["models"] and not any(m["served"] for m in runner["models"])
 
 
 def test_get_porte_letat_du_runner(monkeypatch):
@@ -206,7 +211,8 @@ def test_une_org_jamais_sondee_rend_last_seen_None(base_bootee):
     from oto_mcp import db
 
     etat = db.runner_arme(4343)
-    assert etat == {"armed": False, "workers": 0, "last_seen": None}
+    # `families` (12/09/2026) : les familles de modèles servies — aucune ici.
+    assert etat == {"armed": False, "workers": 0, "last_seen": None, "families": []}
 
 
 def test_un_worker_tu_depuis_trop_longtemps_ne_compte_plus(base_bootee):
