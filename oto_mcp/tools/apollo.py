@@ -673,7 +673,17 @@ def register(mcp: FastMCP) -> None:
                 "next_step": ("Still verifying — call apollo_reveal_phone_result "
                               f"again in ~{wait or 10}s."),
             }
-        return {"done": True, "result": out.get("result") or {}}
+        # ⚠️ Apollo RÉ-ÉCHOTE l'identifiant dans son enveloppe, en NOMBRE — et il
+        # arrive donc abîmé, comme partout ailleurs. Mesuré sur un sondage réel en
+        # production le 2026-09-12 : sondé avec `-8351464734221602674`, l'enveloppe
+        # rendait `-8351464734221603000` — 326 d'écart, la signature du float64.
+        # `_stringify_request_id` ne couvrait que le PREMIER niveau des réponses de
+        # `match`/`reveal` ; l'écho niché du sondage lui échappait. Un agent qui
+        # relit `result.request_id` (pour re-sonder plus tard, ou pour le ranger
+        # dans une ligne de tableau) range un identifiant qui ne sonde rien.
+        # Troisième fois que le même piège se présente à un niveau différent : il
+        # se ferme là où la valeur SORT, pas là où on l'a vue la dernière fois.
+        return {"done": True, "result": _stringify_request_id(out.get("result") or {})}
 
     _BYO_REVEAL_LOT = (
         "un lot qui RÉVÈLE (emails personnels ou téléphones) ne passe jamais par "
