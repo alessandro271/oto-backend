@@ -1,86 +1,107 @@
-"""Un déroulé terminé sans action le DIT, et les réglages n'ont pas l'air acquis (#627).
+"""Un déroulé terminé sans action est REFUSÉ, et les réglages n'ont pas l'air acquis
+(#627, oto#175).
 
 Mesuré le 31/08/2026 sur un enrôlement incrémental : la réponse du déroulé
 affirmait « 19/19 personnes ajoutées, ouverture conservée mot pour mot » avec une
-liste d'actions VIDE. La campagne racontait l'inverse — personnes trouvées 52 →
-71, contactées restées à 52, et 19 séquences neuves sans aucun destinataire.
+liste d'actions VIDE. Puis le 09/09/2026 (signal 830) : trois créations de campagne
+de suite sur la même table, chacune « completed » en ~90 s avec `actions: []` et
+une prose confiante nommant une campagne et un slug inexistants —
+`origami_campaigns(op='list_for_table')` rendait VIDE après les trois. Le drapeau
+`aucune_action` posé le 03/09 a été le seul discriminateur sur sept appels ; mais un
+drapeau se lit ou ne se lit pas, et la prose voyageait quand même comme un succès.
 
-⚠️ **Le pire assemblage possible pour un agent sans surveillance** : une prose de
-succès et une trace vide. La prose vient du modèle d'en face et ne se contrôle
-pas ; ce qui se contrôle, c'est qu'elle ne voyage pas seule — le fait mesurable
-la contredit dans la même réponse.
+Décision d'Alexis (12/09/2026) : refuser. Le déroulé est rendu en ERREUR qui nomme
+la cause (aucune action : rien n'a été créé, la campagne annoncée n'existe pas) et
+le geste (vérifier la table, relancer la création).
 
 ⚠️ **La garde se TAIT sur ce qu'elle ne voit pas**, et c'est la moitié du lot. La
 liste d'actions n'est pas dans le contrat documenté du fournisseur : on la cherche
-à deux emplacements plausibles et on n'avertit que si on l'a trouvée vide. Une
-garde qui devine une forme fabrique des fausses alertes, ce qui coûte exactement
-la confiance qu'elle est censée servir.
+à deux emplacements plausibles et on ne refuse que si on l'a trouvée vide. Une
+garde qui devine une forme fabrique des refus sur des déroulés normaux.
 
 ⚠️ **Second défaut du même signal, plus discret** : les deux réglages passés à la
 création étaient renvoyés en écho alors qu'ils ne s'appliquaient pas — l'agent
 avait enrôlé dans une campagne EXISTANTE, dont les réglages propres gouvernent.
 Un écho qui ne dit pas ce qu'il vaut se lit comme un acquis.
-
-Éprouvé rouge le 2026-09-03 : la condition sur le statut retirée ⟹ le troisième
-test constate qu'un déroulé encore EN COURS est accusé de n'avoir rien fait.
 """
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import patch
 
 import pytest
 from fastmcp import FastMCP
 
+from oto_mcp.mcp_errors import McpError
 from oto_mcp.tools import origami
-from oto_mcp.tools.origami import _dit_si_rien_n_a_ete_fait as garde
+from oto_mcp.tools.origami import _refuse_si_rien_n_a_ete_fait as garde
 
-# Le déroulé du 31/08, réduit à ce qui produit le défaut.
-_TERMINE_VIDE = {"status": "completed", "actions": [],
-                 "response": {"text": "19/19 personnes ajoutées, opener conservé"}}
-
-
-def test_un_deroule_TERMINE_sans_action_est_signale():
-    out = garde(_TERMINE_VIDE)
-    assert out["aucune_action"] is True
-    assert "origami_campaigns" in out["aucune_action_hint"], (
-        "il faut dire OÙ aller lire l'état réel, pas seulement qu'il y a doute")
+# Le déroulé du 09/09, réduit à ce qui produit le défaut.
+_TERMINE_VIDE = {"id": "v2_run-x", "status": "completed", "actions": [],
+                 "steps": {"completed": 6, "total": 30},
+                 "response": {"text": "Created the draft campaign wave3-ceo — "
+                                      "People enrolled: 15, all successfully added"}}
 
 
-def test_le_signalement_dit_le_SYMPTOME_a_chercher():
-    """« Trouvées qui monte, contactées qui ne suit pas » est ce qui permet de
-    reconnaître le cas sans connaître ce lot."""
-    hint = garde(_TERMINE_VIDE)["aucune_action_hint"]
-    assert "trouvées" in hint and "contactées" in hint
+def test_un_deroule_TERMINE_sans_action_est_REFUSE():
+    with pytest.raises(McpError) as e:
+        garde(_TERMINE_VIDE)
+    msg = e.value.error.message
+    assert "SANS AUCUNE ACTION" in msg and "v2_run-x" in msg
+    assert "n'existent pas" in msg, "la cause : la campagne annoncée n'existe pas"
+    assert e.value.error.data["aucune_action"] is True
+    assert e.value.error.data["steps_completed"] == 6
 
 
-def test_un_deroule_EN_COURS_n_est_pas_accuse():
-    """Une liste vide pendant l'exécution est normale — l'accuser ferait crier au
-    loup à chaque sondage, et un avertissement permanent ne se lit plus."""
-    assert "aucune_action" not in garde({"status": "running", "actions": []})
+def test_le_refus_dit_le_GESTE_verifier_puis_relancer():
+    with pytest.raises(McpError) as e:
+        garde(_TERMINE_VIDE)
+    msg = e.value.error.message
+    assert "origami_campaigns(op='list_for_table'" in msg
+    assert "relance origami_campaign_create" in msg
+    # …et le symptôme de l'autre cas (enrôlement dans une campagne existante).
+    assert "trouvées" in msg and "contactées" in msg
+
+
+def test_le_refus_traverse_le_tool_MONTE(monkeypatch):
+    """Ce n'est pas la fonction qui compte, c'est ce que rend `origami_run_get`."""
+    monkeypatch.setattr("oto_mcp.access.resolve_api_key",
+                        lambda provider, account=None: ("og_live_k", False))
+    with patch("oto.tools.origami.client.OrigamiClient") as cls:
+        m = FastMCP("t")
+        origami.register(m)          # le client se lie au register : patcher AVANT
+        tool = asyncio.run(m.get_tool("origami_run_get"))
+        cls.return_value.get_run.return_value = dict(_TERMINE_VIDE)
+        with pytest.raises(McpError) as e:
+            tool.fn(agent_id="ag-1", run_id="v2_run-x")
+    assert "SANS AUCUNE ACTION" in e.value.error.message
+
+
+def test_un_deroule_EN_COURS_n_est_pas_refuse():
+    """Une liste vide pendant l'exécution est normale — la refuser ferait échouer
+    chaque sondage avant la fin."""
+    out = garde({"status": "running", "actions": []})
+    assert out["status"] == "running" and "aucune_action" not in out
 
 
 def test_la_garde_SE_TAIT_quand_la_forme_est_absente():
     """Le fournisseur ne documente pas cette liste. Deviner sa présence
-    fabriquerait des alertes sur des déroulés parfaitement normaux."""
-    assert "aucune_action" not in garde({"status": "completed"})
-    assert "aucune_action" not in garde({"status": "completed", "steps": []})
+    fabriquerait des refus sur des déroulés parfaitement normaux."""
+    assert garde({"status": "completed"}) == {"status": "completed"}
+    assert garde({"status": "completed", "steps": []})["status"] == "completed"
 
 
 def test_la_liste_est_cherchee_AUSSI_sous_la_reponse():
-    """Le fournisseur la loge à l'un ou l'autre endroit selon le déroulé ; ne
-    regarder qu'à la racine raterait la moitié des cas."""
-    assert garde({"status": "completed",
-                  "response": {"actions": []}})["aucune_action"] is True
+    with pytest.raises(McpError):
+        garde({"status": "completed", "response": {"actions": []}})
 
 
 def test_un_deroule_QUI_A_AGI_passe_sans_bruit():
-    assert "aucune_action" not in garde(
-        {"status": "completed", "actions": [{"type": "enrol"}]})
+    res = {"status": "completed", "actions": [{"type": "enrol"}]}
+    assert garde(res) == res
 
 
 def test_l_entree_non_dict_traverse_intacte():
-    """Le fournisseur peut rendre autre chose ; la garde ne doit jamais casser un
-    appel qui marchait."""
     assert garde("texte") == "texte"
     assert garde(None) is None
 
@@ -93,23 +114,27 @@ def prose() -> str:
 
 
 def test_la_description_dit_que_les_REGLAGES_peuvent_ne_pas_s_appliquer(prose):
-    """Le second défaut du signal : les réglages sont renvoyés en écho même quand
-    la campagne visée est une autre, dont les réglages gouvernent."""
     plat = " ".join(prose.split())
     assert "CREATES" in plat and "NO effect" in plat
 
 
 def test_la_description_dit_qu_AUCUN_verbe_ne_corrige_une_campagne_existante(prose):
-    """Sans ça, l'agent cherche longtemps le verbe qui n'existe pas — c'est la
-    seconde demande du signal, et la réponse est « c'est un geste humain »."""
-    # La prose est repliée sur plusieurs lignes : on compare sur le texte aplati,
-    # pas sur la mise en forme — sinon le banc rougit au prochain reformatage,
-    # qui ne change rien à ce qu'il garde.
     plat = " ".join(prose.split())
     assert "Nothing in this connector updates an existing campaign's settings" in plat
 
 
-def test_la_description_dit_de_NE_PAS_croire_la_prose_du_deroule(prose):
+def test_la_description_dit_que_la_prose_peut_nommer_une_campagne_INEXISTANTE(prose):
+    """La troisième demande du signal 830 : dire PLAINEMENT que la prose peut nommer
+    une campagne et un slug jamais créés, et que le poll REFUSE ce déroulé."""
     plat = " ".join(prose.split())
     assert "not a measurement" in plat
-    assert "aucune_action" in plat, "le nom du témoin doit être donné"
+    assert "never created" in plat
+    assert "REFUSES such a run" in plat
+    assert "flags that as" not in plat, "l'ancien contrat (un drapeau) n'est plus promis"
+
+
+def test_run_get_dit_lui_aussi_le_refus():
+    m = FastMCP("t")
+    origami.register(m)
+    prose = " ".join((asyncio.run(m.get_tool("origami_run_get")).description or "").split())
+    assert "REFUSED" in prose and "list_for_table" in prose

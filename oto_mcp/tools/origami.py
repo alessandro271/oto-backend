@@ -48,7 +48,7 @@ from typing import Any, Literal, Optional
 
 from fastmcp import FastMCP
 from ..mcp_errors import McpError
-from mcp.types import ErrorData, INVALID_PARAMS
+from mcp.types import ErrorData, INVALID_PARAMS, INVALID_REQUEST
 
 from .. import access
 from ..connectors import verify as connector_verify
@@ -138,23 +138,30 @@ def _parse_csv_preview(csv_text: str) -> dict:
     return {"columns": header, "rows": count, "preview": preview}
 
 
-def _dit_si_rien_n_a_ete_fait(res: dict) -> dict:
-    """Un déroulé TERMINÉ qui n'a produit AUCUNE action le dit (#627).
+def _refuse_si_rien_n_a_ete_fait(res: dict) -> dict:
+    """Un déroulé TERMINÉ qui n'a produit AUCUNE action est REFUSÉ (#627, oto#175).
 
     Mesuré le 31/08 : un enrôlement incrémental a rendu un texte affirmant
     « 19/19 personnes ajoutées, ouverture conservée mot pour mot », avec une
-    liste d'actions VIDE. La campagne, elle, racontait l'inverse — le nombre de
-    personnes trouvées montait de 52 à 71 pendant que les contactées restaient
-    à 52, et les 19 séquences neuves n'avaient aucun destinataire.
+    liste d'actions VIDE. Puis le 09/09/2026 (signal 830) : trois créations de
+    campagne de suite sur la même table, chacune « completed » en ~90 s avec
+    `actions: []`, chacune répondant en prose confiante « Created the draft
+    campaign … People enrolled: 15 » en nommant une campagne et un slug qui
+    n'existent pas — `origami_campaigns(op='list_for_table')` rendait VIDE après
+    les trois. Le drapeau `aucune_action` posé le 03/09 a été le seul
+    discriminateur sur sept appels ; mais un drapeau se lit ou ne se lit pas, et
+    la prose voyageait quand même.
 
     ⚠️ **Le pire assemblage possible pour un agent sans surveillance** : une
     prose de succès et une trace vide. La prose vient du modèle d'en face, on
-    ne la contrôle pas ; ce qu'on peut faire, c'est refuser qu'elle voyage
-    seule. Le fait mesurable la contredit dans la même réponse.
+    ne la contrôle pas ; ce qu'on contrôle, c'est qu'elle ne soit PAS servie
+    comme un succès : le déroulé est rendu en ERREUR, qui nomme la cause (aucune
+    action, la campagne annoncée n'existe pas) et le geste (vérifier la table,
+    relancer la création). Décision d'Alexis du 12/09/2026.
 
     ⚠️ **La garde se tait sur ce qu'elle ne voit pas.** La liste d'actions n'est
     pas dans le contrat documenté du fournisseur : on la cherche à la racine
-    puis sous `response`, et on n'avertit QUE si on l'a trouvée et qu'elle est
+    puis sous `response`, et on ne refuse QUE si on l'a trouvée et qu'elle est
     vide. Absente, on ne dit rien — une garde qui devine une forme fabrique des
     fausses alertes, ce qui coûte la confiance qu'elle est censée servir.
     """
@@ -168,14 +175,25 @@ def _dit_si_rien_n_a_ete_fait(res: dict) -> dict:
             continue
         actions = source.get("actions")
         if isinstance(actions, list) and not actions:
-            res = {**res, "aucune_action": True, "aucune_action_hint": (
-                "ce déroulé s'est terminé sans produire UNE SEULE action. Si sa "
-                "réponse en prose annonce un résultat (des personnes ajoutées, "
-                "une campagne modifiée), elle n'est corroborée par rien : va "
-                "lire l'état réel avec origami_campaigns(op='get') et "
-                "op='people' avant de rapporter quoi que ce soit. Un compte de "
-                "personnes trouvées qui monte sans que les contactées suivent "
-                "signale des séquences sans destinataire.")}
+            etapes = res.get("steps")
+            faites = (etapes.get("completed") if isinstance(etapes, dict) else None)
+            raise McpError(ErrorData(
+                code=INVALID_REQUEST,
+                message=(
+                    f"Déroulé Origami `{res.get('id') or '?'}` terminé (`{statut}`) SANS "
+                    "AUCUNE ACTION : il n'a rien créé ni modifié, quoi qu'en dise sa "
+                    "prose — la campagne et le slug qu'elle nomme n'existent pas, et "
+                    "aucune personne n'a été enrôlée. Ne rapporte rien de ce déroulé "
+                    "comme fait. Geste : vérifie l'état réel avec "
+                    "origami_campaigns(op='list_for_table', table_id=…) — s'il n'y a "
+                    "pas de campagne, relance origami_campaign_create (même table, même "
+                    "brief) ; si le brief visait une campagne existante, lis-la avec "
+                    "op='get' et op='people' (un nombre de personnes trouvées qui monte "
+                    "sans que les contactées suivent signale des séquences sans "
+                    "destinataire). Le défaut est chez le fournisseur : son déroulé se "
+                    "termine « terminé » au lieu de « en erreur »."),
+                data={"aucune_action": True, "run_id": res.get("id"), "status": statut,
+                      "steps_completed": faites}))
         break
     return res
 
@@ -558,11 +576,15 @@ def register(mcp: FastMCP) -> None:
         the change is a human action in Origami.
 
         ⚠️ **Check the result, do not trust the run's prose.** The agent answers in
-        words; those words are not a measurement. A run that reports people added
-        while its action list is empty has added nobody — `origami_run_get` now
-        flags that as `aucune_action`. The state that settles it is the campaign
-        itself: if found rises while contacted does not, the new sequences have no
-        recipient and nothing will ever send to them.
+        words; those words are not a measurement. A run can end `completed` having
+        done NOTHING, with prose that names a campaign and a slug that were never
+        created (measured 2026-09-09: three times in a row on one table) — or
+        report people added while its action list is empty. `origami_run_get`
+        REFUSES such a run (error `aucune_action`, nothing was created: verify the
+        table with `origami_campaigns(op="list_for_table")`, then relaunch). The
+        state that settles it is the campaign itself: if found rises while
+        contacted does not, the new sequences have no recipient and nothing will
+        ever send to them.
 
         Settings (persisted on the campaign, read back in `settings`):
         - `block_prior_contacts=True` (default): auto-cancels every person who was
@@ -632,7 +654,10 @@ def register(mcp: FastMCP) -> None:
         terminal), `steps`, `response` (tables touched, transcript with
         `include="transcript"`, economics with `include="stats"`). Poll until
         `status != "running"`, then read the drafted campaign with
-        `origami_campaigns`.
+        `origami_campaigns`. A terminal run whose action list is EMPTY is
+        REFUSED (error `aucune_action`): it created nothing, whatever its prose
+        says — verify with `origami_campaigns(op="list_for_table")`, then relaunch
+        `origami_campaign_create`.
 
         Args:
             agent_id: from `origami_campaign_create` → `agent_id`.
@@ -642,7 +667,7 @@ def register(mcp: FastMCP) -> None:
         if not agent_id or not run_id:
             raise _bad("`agent_id` et `run_id` requis (rendus par origami_campaign_create).")
         res = _run(lambda: _client().get_run(agent_id, run_id, include=include))
-        return _dit_si_rien_n_a_ete_fait(res)
+        return _refuse_si_rien_n_a_ete_fait(res)
 
     def _launch(c: OrigamiClient, campaign_id: str, dry_run: bool) -> dict:
         campaign = c.get_campaign(campaign_id)
