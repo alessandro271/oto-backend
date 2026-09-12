@@ -130,3 +130,43 @@ def test_a_no_match_is_untouched_by_the_projection(monkeypatch):
     out = fn(webhook_url=_WEBHOOK, person_id="p1")
     assert out["matched"] is False
     assert "projection" not in out
+
+
+# --------------------------------------------------------------------------- #
+# Le sondage ré-échote l'identifiant — en nombre, donc abîmé
+# --------------------------------------------------------------------------- #
+
+def test_the_poll_does_not_echo_a_damaged_id(monkeypatch):
+    """Mesuré en production le 2026-09-12 : sondé avec `-8351464734221602674`,
+    l'enveloppe d'Apollo rendait `-8351464734221603000` — 326 d'écart, signature
+    du float64. Un agent qui relit `result.request_id` pour re-sonder plus tard
+    range un identifiant qui ne sonde rien."""
+    import asyncio
+    from unittest.mock import MagicMock
+    import oto.tools.apollo.client as apollo_client
+    from fastmcp import FastMCP
+    from oto_mcp import access
+    from oto_mcp.tools import apollo as apollo_tool
+
+    client = MagicMock()
+    client.poll_webhook_result.return_value = {
+        "done": True,
+        "result": {"request_id": -8351464734221602674,
+                   "webhook_status": "success",
+                   "webhook_result": {"people": [{"phone_numbers": [{}]}]}},
+    }
+    monkeypatch.setattr(access, "resolve_credential",
+                        lambda *a, **k: MagicMock(key="k"))
+    monkeypatch.setattr(apollo_client, "ApolloClient", lambda **kw: client)
+
+    m = FastMCP("t")
+    apollo_tool.register(m)
+    fn = asyncio.run(m.get_tool("apollo_reveal_phone_result")).fn
+    out = fn(request_id="-8351464734221602674")
+
+    rid = out["result"]["request_id"]
+    assert isinstance(rid, str), "l'écho doit sortir en CHAÎNE"
+    assert rid == "-8351464734221602674", "et identique à ce qu'on a sondé"
+    # le reste de l'enveloppe est intact
+    assert out["result"]["webhook_status"] == "success"
+    assert out["result"]["webhook_result"]["people"]
