@@ -252,7 +252,14 @@ def test_a_finished_poll_hands_back_the_numbers(monkeypatch):
     }
     m, _, usage = _mount(monkeypatch, poll_return={"done": True, "result": payload})
     out = _tool(m, "apollo_reveal_phone_result")(request_id="718432950164203900")
-    assert out == {"done": True, "result": payload}
+    # ⚠️ L'enveloppe ressort TELLE QUELLE à une exception près, et c'en est une
+    # volontaire : l'identifiant ré-échoté par Apollo sort en CHAÎNE (cf.
+    # `test_the_poll_does_not_echo_a_damaged_id`). Ce test figeait l'égalité
+    # stricte avec le payload d'Apollo et a donc rougi quand la sérialisation est
+    # descendue d'un niveau — c'est ce qu'on lui demande : dire qu'un contrat
+    # servi a changé, plutôt que de suivre en silence.
+    assert out == {"done": True,
+                   "result": {**payload, "request_id": "718432950164203900"}}
     assert usage == [], "un sondage coûte 0 crédit — rien à débiter"
 
 
