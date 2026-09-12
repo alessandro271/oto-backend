@@ -174,12 +174,25 @@ def resolved_addresses(hote: str, port: int) -> set[str]:
     return {info[4][0].split("%", 1)[0] for info in infos}
 
 
-def check_url(url: str, *, connector: str, field: str = "base_url") -> None:
+def check_url(url: str, *, connector: str, field: str = "base_url",
+              exceptions_declarees: bool = True) -> None:
     """Refuse `url` si son hôte résout vers une adresse interne non déclarée.
 
     Ne rend rien quand la destination est publique ou déclarée. `connector` et
     `field` ne servent qu'au message : un opérateur doit savoir QUELLE carte
-    corriger, pas seulement que « quelque chose » a été refusé."""
+    corriger, pas seulement que « quelque chose » a été refusé.
+
+    `exceptions_declarees=False` = la politique de l'URL CHOISIE PAR L'AGENT
+    (`web_read`, une source `url` de fichier — oto#180) : la même décision sur ce
+    qui est interne, mais AUCUNE exception ne s'applique. Les exceptions nommées
+    de `OTO_EGRESS_ALLOW` couvrent la destination d'un credential posé par un
+    administrateur (un pont hébergé en boucle locale) ; une URL tapée par un agent
+    n'a pas à les hériter — sinon déclarer un pont pour une organisation
+    l'ouvrirait à toute lecture de page de n'importe quelle autre. Le refus dit
+    alors le geste de CE lecteur-là, pas celui d'un opérateur. Jusqu'au
+    12/09/2026, ces deux lecteurs portaient chacun leur propre garde, écrite
+    avant celle-ci : même intention, trois textes, et une plage refusée ici
+    pouvait passer là."""
     morceaux = urlsplit((url or "").strip())
     if morceaux.scheme not in ("http", "https"):
         raise EgressRefused(
@@ -203,13 +216,24 @@ def check_url(url: str, *, connector: str, field: str = "base_url") -> None:
         raison = internal_reason(adresse)
         if raison is None:
             continue
-        if declared_exceptions().get((adresse, port)) is not None:
+        if exceptions_declarees and declared_exceptions().get((adresse, port)) is not None:
             continue
         # Le déguisement : dire les DEUX. Un refus qui ne montre que l'adresse
         # résolue paraît absurde à qui a saisi un nom de domaine public, et un
         # refus qui ne montre que le nom saisi ne dit pas ce qui cloche.
         vu = (f"`{hote}`" if hote == adresse
               else f"`{hote}`, qui résout vers {adresse},")
+        if not exceptions_declarees:
+            raise EgressRefused(
+                f"`{connector}` : destination refusée. {vu} est une adresse interne — "
+                f"{raison}. Depuis oto on ne lit que l'internet public : le service "
+                "tourne sur une machine dont le réseau interne porte des services "
+                "d'administration, et une URL choisie dans une conversation ne "
+                "l'atteint pas, sans exception. Si cette adresse est un service de "
+                "ton organisation, il se déclare comme connecteur `http` par un "
+                "administrateur (carte HTTP du tableau de bord) — et une adresse "
+                "interne y est refusée aussi, sauf exception nommée par l'opérateur "
+                f"de la plateforme. (Champ `{field}`.)")
         raise EgressRefused(
             f"connecteur `{connector}` : destination refusée. {vu} est une "
             f"adresse interne — {raison}. Un connecteur ne sort pas vers le "

@@ -62,24 +62,24 @@ def _from_gmail(src: dict) -> ResolvedFile:
 
 
 def _assert_public_host(host: str) -> None:
-    """Anti-SSRF : refuse une cible qui résout vers une IP non-publique (loopback,
-    privée, link-local — dont les métadonnées cloud 169.254.169.254 —, reserved,
-    multicast). Sans ce garde-fou, un agent pourrait faire lire au serveur ses
-    services internes (`localhost:9103`) ou l'IMDS. Toutes les IP résolues du host
-    doivent être globales."""
-    import ipaddress
-    import socket
+    """Anti-SSRF : refuse une cible qui résout vers une adresse non publique
+    (boucle locale, privée, lien-local — dont les métadonnées cloud
+    169.254.169.254 —, réservée, multicast). Sans ce garde-fou, un agent pourrait
+    faire lire au serveur ses services internes ou l'IMDS.
+
+    C'est la garde d'egress de la plateforme (`oto_mcp/egress.py`) sous la
+    politique « URL choisie par l'agent » (aucune exception déclarée) — la même
+    couture que `web_read` et que les connecteurs à hôte libre (oto#180). Elle
+    portait sa propre règle jusqu'au 12/09/2026."""
+    from . import egress
     if not host:
         raise FileSourceError("source url : hôte manquant.")
+    hote = f"[{host}]" if ":" in host else host
     try:
-        infos = socket.getaddrinfo(host, None)
-    except OSError as e:
-        raise FileSourceError(f"source url : hôte non résolu ({e}).")
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if not ip.is_global or ip.is_multicast:
-            raise FileSourceError(
-                f"source url : cible non autorisée ({ip}) — adresse interne/réservée.")
+        egress.check_url(f"http://{hote}/", connector="source url", field="url",
+                         exceptions_declarees=False)
+    except egress.EgressRefused as e:
+        raise FileSourceError(str(e)) from None
 
 
 def _from_url(src: dict, max_bytes: int) -> ResolvedFile:

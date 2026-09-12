@@ -34,8 +34,6 @@ décompression).
 from __future__ import annotations
 
 import asyncio
-import ipaddress
-import socket
 import time
 from html.parser import HTMLParser
 from typing import Optional
@@ -46,7 +44,7 @@ from fastmcp import FastMCP
 from ..mcp_errors import McpError
 from mcp.types import INVALID_REQUEST, ErrorData
 
-from .. import access, browserbase, url_perimeter
+from .. import access, browserbase, egress, url_perimeter
 
 _TIMEOUT = (10, 30)              # borne CHAQUE socket — pas la lecture entière
 _DEADLINE_S = 45                 # budget GLOBAL du cran ① (cf. `_fetch_http`)
@@ -90,33 +88,23 @@ def _meme_site(demande: str, servi: str) -> bool:
 
 
 # ── garde SSRF (cran ① seulement) ────────────────────────────────────────────
-def _resolved_ips(host: str) -> list:
-    infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
-    return [ipaddress.ip_address(i[4][0]) for i in infos]
-
-
 def check_url_public(url: str) -> None:
     """Lève (en nommant la raison) si `url` ne désigne pas une cible PUBLIQUE.
 
-    Fail-closed sur l'ENSEMBLE des IPs résolues : un host qui résout à la fois
-    public et privé est refusé — c'est le montage type du contournement."""
-    parts = urlsplit(url)
-    if parts.scheme not in ("http", "https"):
-        raise _bad(f"schéma `{parts.scheme or '∅'}` refusé — web_read lit du "
-                   "http(s), rien d'autre")
-    host = parts.hostname
-    if not host:
-        raise _bad("URL sans hôte")
+    C'est la garde d'egress de la plateforme (`oto_mcp/egress.py`), sous la
+    politique « URL choisie par l'agent » : même décision sur ce qui est interne
+    (fail-closed sur l'ENSEMBLE des adresses résolues — un hôte qui résout public
+    ET privé est refusé, c'est le montage type du contournement), et AUCUNE
+    exception déclarée ne s'applique. Jusqu'au 12/09/2026 (oto#180) ce lecteur
+    portait sa propre garde, écrite avant celle des connecteurs : une API ouverte
+    atteinte depuis un run (`web_read` est le seul chemin sans instance) sortait
+    par une règle à part — `not is_global` seul, sans le mot de la plage refusée,
+    et qui laissait passer une plage que l'autre refuse. Une seule couture."""
     try:
-        ips = _resolved_ips(host)
-    except OSError as e:
-        raise _bad(f"`{host}` ne résout pas ({e})") from None
-    for ip in ips:
-        if not ip.is_global:
-            raise _bad(
-                f"`{host}` résout vers {ip}, une adresse non publique "
-                "(réseau interne, loopback ou lien-local) — web_read ne lit "
-                "que l'internet public")
+        egress.check_url(url, connector="web_read", field="url",
+                         exceptions_declarees=False)
+    except egress.EgressRefused as e:
+        raise _bad(str(e)) from None
 
 
 # ── extraction texte (stdlib — pas de dépendance pour retirer des balises) ───

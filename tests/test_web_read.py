@@ -9,7 +9,6 @@ publique→privée : les trois voies du SSRF, chacune son test).
 from __future__ import annotations
 
 import asyncio
-import ipaddress
 
 import pytest
 from oto_mcp.mcp_errors import McpError
@@ -141,18 +140,29 @@ def test_avec_opt_in_le_navigateur_lit_et_le_cout_est_dit(monkeypatch):
 
 # ── la garde SSRF : les trois voies, chacune son test ────────────────────────
 
+# Depuis le 12/09/2026 (oto#180) la garde de `web_read` EST celle d'egress
+# (`oto_mcp/egress.py`) : la résolution DNS se remplace là, et le refus nomme la
+# plage (« réseau privé », « boucle locale »…), plus seulement « non publique ».
+def _resolution(**table):
+    def faux(hote, port):  # noqa: ARG001
+        return set(table[hote])
+    return faux
+
+
 def test_une_ip_privee_directe_est_refusee():
     with pytest.raises(McpError) as e:
         W.check_url_public("http://172.16.16.4:8000/api/sirene/info")
-    assert "non publique" in str(e.value)
+    assert "adresse interne" in str(e.value) and "réseau privé" in str(e.value)
 
 
 def test_un_domaine_qui_resout_prive_est_refuse(monkeypatch):
-    monkeypatch.setattr(W, "_resolved_ips",
-                        lambda h: [ipaddress.ip_address("10.0.0.7")])
+    from oto_mcp import egress
+    monkeypatch.setattr(egress, "resolved_addresses",
+                        _resolution(**{"piege.example.com": ["10.0.0.7"]}))
     with pytest.raises(McpError) as e:
         W.check_url_public("https://piege.example.com/")
-    assert "non publique" in str(e.value)
+    assert "adresse interne" in str(e.value)
+    assert "piege.example.com" in str(e.value) and "10.0.0.7" in str(e.value)
 
 
 def test_une_redirection_vers_le_prive_est_refusee(monkeypatch):
@@ -173,14 +183,14 @@ def test_une_redirection_vers_le_prive_est_refusee(monkeypatch):
         sauts["n"] += 1
         return _Resp(redirect=True)
 
-    monkeypatch.setattr(W, "_resolved_ips",
-                        lambda h: [ipaddress.ip_address("93.184.216.34")]
-                        if "example.com" in h else
-                        [ipaddress.ip_address("169.254.169.254")])
+    from oto_mcp import egress
+    monkeypatch.setattr(egress, "resolved_addresses",
+                        lambda h, p: {"93.184.216.34"} if "example.com" in h
+                        else {"169.254.169.254"})
     monkeypatch.setattr(W.requests, "get", _faux_get)
     with pytest.raises(McpError) as e:
         W._fetch_http("https://example.com/page")
-    assert "non publique" in str(e.value)
+    assert "adresse interne" in str(e.value) and "lien-local" in str(e.value)
     assert sauts["n"] == 1, "le saut privé est refusé AVANT toute connexion"
 
 
@@ -192,9 +202,10 @@ def test_un_schema_non_http_est_refuse():
 def test_un_host_mixte_public_prive_est_refuse(monkeypatch):
     """Fail-closed sur l'ENSEMBLE : public + privé dans la même résolution =
     le montage type du contournement."""
-    monkeypatch.setattr(W, "_resolved_ips",
-                        lambda h: [ipaddress.ip_address("93.184.216.34"),
-                                   ipaddress.ip_address("192.168.1.10")])
+    from oto_mcp import egress
+    monkeypatch.setattr(egress, "resolved_addresses",
+                        _resolution(**{"mixte.example.com": ["93.184.216.34",
+                                                             "192.168.1.10"]}))
     with pytest.raises(McpError):
         W.check_url_public("https://mixte.example.com/")
 
