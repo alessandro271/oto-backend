@@ -141,6 +141,7 @@ from . import guides  # noqa: F401 — me.guide (MCP oto_guide) + me.guides.{lis
 # Le COMPTE (#121) — ex-routes écrites à la main d'`api/routes.py` : `GET /api/me`
 # est la première requête de tout front qui se branche, et l'OpenAPI n'en décrivait rien.
 from . import me_account  # noqa: F401 — me.{get,calls,activity_summary}
+from . import recent_changes  # noqa: F401 — me.recent_changes (dernières pages/procédures modifiées, oto#191)
 # Préférence de langue de l'UI dashboard (niveau USER, REST-only).
 from . import user_locale  # noqa: F401 — me.locale.set (PUT /api/me/locale)
 # Fiche profil « situation avec oto » (surface REST de oto_profile, édition dashboard).

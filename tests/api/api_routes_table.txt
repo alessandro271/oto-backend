@@ -555,6 +555,8 @@ GET,HEAD /api/me/calls -> _handler
 OPTIONS /api/me/calls -> options_handler
 GET,HEAD /api/me/activity-summary -> _handler
 OPTIONS /api/me/activity-summary -> options_handler
+GET,HEAD /api/me/recent-changes -> _handler
+OPTIONS /api/me/recent-changes -> options_handler
 PUT /api/me/locale -> _handler
 OPTIONS /api/me/locale -> options_handler
 GET,HEAD /api/me/profile -> _handler

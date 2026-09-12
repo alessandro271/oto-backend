@@ -66,6 +66,30 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   jamais un 400 — c'est le comportement servi depuis toujours. En revanche un **paramètre
   inconnu** est désormais refusé (400 `unknown_fields`, champ nommé) là où il était ignoré
   en silence : c'est la garde de l'adaptateur, et c'est le seul écart visible de la migration.
+- `GET /api/me/recent-changes` — **les dernières modifications** (oto#191), capacité
+  `me.recent_changes` depuis le 2026-09-12 (`capabilities/recent_changes.py`, requête
+  `db/recent_changes.py`) : la source de l'îlot « Dernières modifications » de l'accueil de
+  dashboard.oto.cx. **Pas de face MCP.** Rend `{items, limit}` : pages et procédures
+  **fusionnées**, triées par `updated_at` décroissant (départage `type`, puis `id`
+  décroissant), coupées **en base après le tri**. `?limit=` : défaut 20, borné 1…50 — hors
+  bornes (ou non entier) = **400 `invalid_input`**, jamais un plafond appliqué en silence ;
+  un paramètre inconnu = 400 `unknown_fields`. Un élément : `type` (`doc` | `procedure`),
+  `id` (page : la poignée `doc_id` de `POST /api/me/docs` ; procédure : l'id stable de
+  `GET /api/me/guides/{guide_id}`), `title`, `project` `{id, name}` pour une page et `null`
+  pour une procédure (elle appartient à un palier, pas à un projet), `slug` et `scope`
+  (`user` | `org` | `group`, procédure seulement, `null` sinon), `author` `{sub, name}` ou
+  `null`, `updated_at`. **Périmètre = la lecture, jamais plus large** : les pages des projets
+  lisibles **dans l'org active** (`ownership.accessible_project_ids`, l'ensemble
+  d'`oto_project op=list` et de la recherche — plus étroit que l'ouverture par id, qui
+  traverse toutes mes orgs) ; les procédures de mes paliers (moi, l'org active, mes équipes
+  — toutes pour un admin d'org, la règle de `roles.can_read_group`). Une procédure qu'on
+  m'a seulement **partagée** n'y figure pas. **Dérivée** : ni table ni journal, les
+  `updated_at` que les deux stores tiennent déjà. ⚠️ **L'auteur n'est jamais déduit** : ni
+  `docs` ni `org_instructions` ne portent « qui a fait la dernière modification » ; il vient
+  de la révision écrite dans la **même transaction** que la modification (égalité exacte
+  des horodatages). Page jamais modifiée = son créateur ; page déplacée, procédure
+  transférée, révision sans auteur = `null`. **Sans org active : 200 et `items: []`**,
+  jamais un 400 — l'accueil charge l'îlot d'office.
 - `POST|DELETE /api/me/avatar` — upload (multipart `file`, png/jpeg/webp ≤ 2 Mo) / efface
   l'avatar user → Scaleway Object Storage, URL publique en DB. ⚠️ **Les deux verbes ne
   vivent plus au même endroit** : le `DELETE` est la capacité `me.avatar.clear` depuis le
