@@ -26,7 +26,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from . import _modele
-from .. import db, runner_models
+from .. import db, org_store, runner_consigne, runner_models
 from ._authz import WORKER_OR_ORG_MEMBER
 from ._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx,
                      RestBinding, cap_limit)
@@ -411,13 +411,28 @@ def _avec_procedure(job: dict) -> dict:
     slug, org = p.get("procedure"), job.get("org_id")
     if not slug or not org:
         return job
+    # ⚠️ La procédure se lit où `oto_procedure` la lit : `org_instructions`. Cette
+    # jonction lisait `get_guide_db`, qui ne sert que les guides À LA DEMANDE — un
+    # autre magasin. Mesuré le 12/09/2026 sur la production : `None` pour les six
+    # procédures d'une chaîne d'enrichissement que `oto_procedure` rendait en
+    # version 10 à 18. La jonction n'avait donc jamais rien joint à ces passes, et
+    # rien ne le disait : l'agent rechargeait la consigne, et payait le tour.
     try:
-        guide = db.get_guide_db("org", str(org), slug)
+        procedure = org_store.get_instruction("org", org, slug)
     except Exception:  # noqa: BLE001
         logger.warning("procédure `%s` illisible pour l'org %s — le travail part "
                        "sans, l'agent la chargera", slug, org, exc_info=True)
         return job
-    corps = (guide or {}).get("body_md") or ""
+    if not procedure:
+        logger.warning("procédure `%s` introuvable dans l'org %s — le travail part "
+                       "sans, l'agent la chargera", slug, org)
+        return job
+    if procedure.get("archived_at"):
+        # Une procédure retirée ne se sert pas en cadre : la lecture par slug ne
+        # filtre pas l'archivage (#857), c'est à l'appelant de ne pas la joindre.
+        logger.warning("procédure `%s` ARCHIVÉE dans l'org %s — non jointe", slug, org)
+        return job
+    corps = procedure.get("body_md") or ""
     if not corps:
         return job
     return {**job, "system": corps}
@@ -594,9 +609,7 @@ def _produire_pour_une_campagne(org_id: Optional[int], bail_s: int) -> Optional[
         f = db.campagne_a_servir(org_id)
         if not f or not f.get("sub"):
             return None
-        message = (f.get("input") or "") \
-            .replace("{namespace}", f.get("namespace") or "") \
-            .replace("{filter}", json.dumps(f.get("row_filter") or {}, ensure_ascii=False))
+        message = runner_consigne.composer(f)
         db.enqueue_job(
             # L'org de la CAMPAGNE, jamais celle de l'appelant : un worker de
             # plateforme n'en a pas, et un travail sans org serait orphelin.

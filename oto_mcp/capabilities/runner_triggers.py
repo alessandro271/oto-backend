@@ -20,7 +20,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel
 
 from . import _instruction, _modele
-from .. import db, runner_models, runner_tick, tool_registry
+from .. import db, org_store, runner_models, runner_tick, tool_registry
 from ._authz import ORG_MEMBER
 from ._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx,
                      RestBinding)
@@ -188,7 +188,11 @@ def _outils_de_la_procedure(ctx: ResolvedCtx, slug: str) -> list[str]:
     déclarée, et une allowlist trop large est exactement ce qu'elle existe pour
     empêcher.
     """
-    g = db.get_guide_db("org", str(ctx.org_id), slug)
+    # La procédure se lit dans `org_instructions`, comme `oto_procedure` : lue dans
+    # les guides à la demande (`get_guide_db`), elle rendait None et la liste
+    # d'outils déduite partait VIDE (même méprise que la jonction de `runner_jobs`,
+    # mesurée le 12/09/2026).
+    g = org_store.get_instruction("org", ctx.org_id, slug)
     if not g:
         return []
     return tool_registry.ref_names(g.get("body_md") or "")

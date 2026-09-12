@@ -286,6 +286,17 @@ def test_une_file_vide_fait_produire_le_travail_de_la_campagne(campagne):
     assert campagne["kind"] == "start"
 
 
+def test_la_consigne_commandee_ne_porte_AUCUN_marqueur_en_litteral(campagne, monkeypatch):
+    """La couture, pas le module : le travail enfilé pour une campagne porte la
+    consigne COMPOSÉE. Le 12/09/2026, `{date_du_jour}` partait tel quel."""
+    monkeypatch.setattr(RJ.db, "campagne_a_servir", lambda org_id: dict(
+        CAMPAGNE, input="file {namespace} filtre {filter} du {date_du_jour}"))
+    _appel(_ctx(), op="claim")
+    servi = campagne["payload"]["input"]
+    assert "{" not in servi.replace('{"statut"', ""), f"marqueur resté en littéral : {servi!r}"
+    assert servi.startswith("file tableau filtre ")
+
+
 def test_le_travail_porte_l_identite_du_DECLARANT_pas_du_worker(campagne):
     """C'est la garde qui compte. Le worker n'est pas un pouvoir : il portera un
     jeton émis au nom de quelqu'un d'autre. Prendre son propre `sub` ici ferait
@@ -462,9 +473,15 @@ def test_les_campagnes_epuisees_sont_arretees_AVANT_d_en_servir_une(monkeypatch,
 # ⚠️ Jointe, JAMAIS stockée : une consigne pèse ~20 000 caractères, et cent
 # travaux la porteraient cent fois en base. Même raison que la clé de modèle.
 
+# ⚠️ Doublée sur `org_store.get_instruction`, la lecture de `oto_procedure`. Ces
+# bancs doublaient `get_guide_db` — la mauvaise table — et restaient verts : ils
+# prouvaient que la jonction pose ce qu'on lui rend, jamais qu'elle lit là où
+# vivent les procédures. Mesuré le 12/09/2026 en production : rien de joint.
+
 def test_le_travail_reserve_porte_le_TEXTE_de_sa_procedure(monkeypatch, espion):
-    monkeypatch.setattr(RJ.db, "get_guide_db",
-                        lambda scope, owner, slug: {"body_md": "LA CONSIGNE"})
+    monkeypatch.setattr(RJ.org_store, "get_instruction",
+                        lambda owner_type, owner_id, slug, version=None:
+                        {"body_md": "LA CONSIGNE", "archived_at": None})
     monkeypatch.setattr(RJ.db, "claim_next_job", lambda *a, **k: {
         "id": 7, "org_id": 226, "sub": "demandeur",
         "payload": {"procedure": "passe-registre"}})
@@ -479,7 +496,8 @@ def test_le_travail_reserve_porte_le_TEXTE_de_sa_procedure(monkeypatch, espion):
 def test_une_procedure_ABSENTE_ne_fait_pas_echouer_la_reservation(monkeypatch, espion):
     """L'agent la chargera lui-même, comme avant. C'est une accélération,
     jamais une condition — un travail ne se perd pas parce qu'un texte manque."""
-    monkeypatch.setattr(RJ.db, "get_guide_db", lambda scope, owner, slug: None)
+    monkeypatch.setattr(RJ.org_store, "get_instruction",
+                        lambda owner_type, owner_id, slug, version=None: None)
     monkeypatch.setattr(RJ.db, "claim_next_job", lambda *a, **k: {
         "id": 7, "org_id": 226, "sub": "demandeur",
         "payload": {"procedure": "jamais-posee"}})
@@ -494,9 +512,9 @@ def test_une_lecture_de_procedure_qui_LEVE_ne_perd_pas_le_travail(monkeypatch, e
     """Le pendant du précédent, et le plus important des trois : la base peut
     tousser. Un travail réservé qui se perdrait ici laisserait sa ligne sous
     bail jusqu'à expiration."""
-    def _explose(scope, owner, slug):
+    def _explose(owner_type, owner_id, slug, version=None):
         raise RuntimeError("base indisponible")
-    monkeypatch.setattr(RJ.db, "get_guide_db", _explose)
+    monkeypatch.setattr(RJ.org_store, "get_instruction", _explose)
     monkeypatch.setattr(RJ.db, "claim_next_job", lambda *a, **k: {
         "id": 7, "org_id": 226, "sub": "demandeur",
         "payload": {"procedure": "passe-registre"}})
@@ -504,6 +522,40 @@ def test_une_lecture_de_procedure_qui_LEVE_ne_perd_pas_le_travail(monkeypatch, e
     job = _appel(_ctx(), op="claim")["job"]
 
     assert "system" not in job and job["id"] == 7
+
+
+def test_une_procedure_ARCHIVEE_n_est_pas_jointe(monkeypatch, espion):
+    """La lecture par slug sert une procédure retirée comme une procédure en
+    service (#857) : la jonction ne la pose pas en cadre."""
+    monkeypatch.setattr(RJ.org_store, "get_instruction",
+                        lambda owner_type, owner_id, slug, version=None:
+                        {"body_md": "RETIRÉE", "archived_at": "2026-09-01"})
+    monkeypatch.setattr(RJ.db, "claim_next_job", lambda *a, **k: {
+        "id": 7, "org_id": 226, "sub": "demandeur",
+        "payload": {"procedure": "passe-retiree"}})
+
+    job = _appel(_ctx(), op="claim")["job"]
+
+    assert "system" not in job and job["id"] == 7
+
+
+def test_la_jonction_lit_la_table_des_PROCEDURES_pas_les_guides(monkeypatch, espion):
+    """La couture elle-même : slug et org du TRAVAIL, portée org, table de
+    `oto_procedure`. Un retour à `get_guide_db` lirait la vraie base depuis ce
+    banc et ne joindrait rien."""
+    vu = {}
+    def _lue(owner_type, owner_id, slug, version=None):
+        vu.update(owner_type=owner_type, owner_id=owner_id, slug=slug)
+        return {"body_md": "CONSIGNE", "archived_at": None}
+    monkeypatch.setattr(RJ.org_store, "get_instruction", _lue)
+    monkeypatch.setattr(RJ.db, "claim_next_job", lambda *a, **k: {
+        "id": 7, "org_id": 226, "sub": "demandeur",
+        "payload": {"procedure": "passe-registre"}})
+
+    job = _appel(_ctx(), op="claim")["job"]
+
+    assert vu == {"owner_type": "org", "owner_id": 226, "slug": "passe-registre"}
+    assert job["system"] == "CONSIGNE"
 
 
 # ── Le worker de PLATEFORME : aucune org, et ce n'est pas un manque ──────────
