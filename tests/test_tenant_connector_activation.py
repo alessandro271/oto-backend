@@ -59,7 +59,8 @@ def base(pg_module_dsn, monkeypatch):
 
 def _org_du_tenant(monkeypatch, par_org: dict):
     from oto_mcp import db
-    monkeypatch.setattr(db, "org_tenant_slug", lambda org_id: par_org.get(int(org_id), "oto"))
+    monkeypatch.setattr(db, "org_tenant_slug",
+                        lambda org_id, conn=None: par_org.get(int(org_id), "oto"))
 
 
 def test_le_tenant_coupe_pour_ses_orgs_et_pas_pour_les_autres(base, monkeypatch):
@@ -96,6 +97,29 @@ def test_une_ligne_tenant_a_true_nexpose_pas_au_dela_de_la_plateforme(base, monk
     _org_du_tenant(monkeypatch, {8: TULINA})
     act.set_tenant_activation(TULINA, "hunter", True)     # hunter : aucun master
     assert "hunter" not in act.exposed_connectors(8)
+
+
+def test_le_cran_tenant_se_lit_dans_une_seule_connexion(base, monkeypatch):
+    """`cran_qui_coupe` tourne à CHAQUE appel d'outil de connecteur : le tenant de
+    l'org se lit dans la connexion de la résolution, pas dans une connexion de plus.
+    Vraie lecture du tenant (pas de doublure) : org inconnue → tenant primaire."""
+    from oto_mcp import db
+    from oto_mcp.db import tenants as db_tenants
+    ouvertes = []
+
+    def _compter(original):
+        def _connect(*a, **k):
+            ouvertes.append(1)
+            return original(*a, **k)
+        return _connect
+
+    monkeypatch.setattr(db, "_connect", _compter(db._connect))
+    monkeypatch.setattr(db_tenants, "_connect", _compter(db_tenants._connect))
+    assert act.cran_qui_coupe("gmail", 999999) is None
+    assert len(ouvertes) == 1
+    ouvertes.clear()
+    assert act.exposed_connectors(999999) == {"gmail", "chat", "serper"}
+    assert len(ouvertes) == 1
 
 
 # ─── 2. la face admin, scopée au slug ─────────────────────────────────────────

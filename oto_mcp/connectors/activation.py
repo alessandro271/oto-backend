@@ -167,14 +167,17 @@ def effective_for_group(exposed: set[str], group_cut: set[str]) -> set[str]:
 
 # --- lectures (self-managing) -----------------------------------------------
 
-def tenant_of_org(org_id: Optional[int]) -> Optional[str]:
+def tenant_of_org(org_id: Optional[int], conn=None) -> Optional[str]:
     """Le slug du tenant qui HÉBERGE cette org, ou `None` (tenant primaire, ou pas
     d'org) — le seul cas où le cran tenant n'existe pas. Lu par `db.org_tenant_slug`
-    (l'union des trois axes, `docs/tenants.md`), jamais deviné."""
+    (l'union des trois axes, `docs/tenants.md`), jamais deviné. `conn` : la connexion
+    déjà ouverte par l'appelant — la résolution d'activation lit le tenant dans la
+    SIENNE, pas dans une connexion de plus à chaque appel d'outil."""
     if org_id is None:
         return None
     from .. import db, tenancy
-    slug = db.org_tenant_slug(int(org_id))
+    slug = (db.org_tenant_slug(int(org_id)) if conn is None
+            else db.org_tenant_slug(int(org_id), conn=conn))
     return None if not slug or slug == tenancy.PRIMARY_SLUG else slug
 
 
@@ -194,8 +197,8 @@ def cran_qui_coupe(connector: str, org_id: Optional[int] = None,
     peut rouvrir — ce que le refus d'appel (`activation_gate`) dit à l'agent."""
     from .. import db
 
-    slug = tenant_of_org(org_id)
     with db._connect() as conn:
+        slug = tenant_of_org(org_id, conn=conn)
         # Le plafond du TENANT d'abord : coupé là, personne dans l'org ne rouvre —
         # ni un override d'org ON, ni une équipe. Nommer ce cran, c'est dire que le
         # geste est chez l'hébergeur.
@@ -239,8 +242,8 @@ def exposed_connectors(org_id: Optional[int] = None) -> set[str]:
     scan). Pour filtrer le catalogue / le chargement en une requête."""
     from .. import db
 
-    slug = tenant_of_org(org_id)
     with db._connect() as conn:
+        slug = tenant_of_org(org_id, conn=conn)
         rows = conn.execute(
             "SELECT scope_type, connector, enabled FROM connector_availability "
             "WHERE scope_type = 'platform' OR (scope_type = 'org' AND scope_id = %s)"
