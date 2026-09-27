@@ -62,6 +62,9 @@ def _org_servie(monkeypatch):
                                       "derniere": None})
     monkeypatch.setattr(RT.db, "file_du_declencheur",
                         lambda t, o: {"pending": 0, "held": 0})
+    # Un webhook NAÎT avec une adresse privée (25/09/2026) : son écriture est
+    # doublée ici, `test_webhook_plafond_adresse.py` en tient la règle.
+    monkeypatch.setattr(RT.db, "poser_adresse_de_hook", lambda t, o, slug: True)
 
 
 # ── 1. le SECRET ──────────────────────────────────────────────────────────────
@@ -153,7 +156,8 @@ def test_le_hache_est_COMPARE_dans_le_WHERE_pas_seulement_passe():
 
 def test_renouveler_le_secret_casse_l_ancien(monkeypatch, pose):
     monkeypatch.setattr(RT.db, "get_trigger",
-                        lambda i, o: {"id": i, "kind": "webhook", "org_id": o})
+                        lambda i, o: {"id": i, "kind": "webhook", "org_id": o,
+                                      "sub": "alexis"})   # son propriétaire (#1083)
     out = _appel(op="rotate_secret", trigger_id=5)
     assert out["hook_secret"].startswith(runner_hook.HOOK_SECRET_PREFIX)
     assert pose["hash_pose"] == runner_hook.hacher(out["hook_secret"])
