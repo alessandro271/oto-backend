@@ -554,6 +554,8 @@ PUT /api/service/orgs/{id}/entitlements/{right_key}/{source} -> _handler
 OPTIONS /api/service/orgs/{id}/entitlements/{right_key}/{source} -> options_handler
 DELETE /api/service/orgs/{id}/entitlements/{right_key}/{source} -> _handler
 OPTIONS /api/service/orgs/{id}/entitlements/{right_key}/{source} -> options_handler
+GET,HEAD /api/service/billing/export -> _handler
+OPTIONS /api/service/billing/export -> options_handler
 POST /api/resources -> _handler
 OPTIONS /api/resources -> options_handler
 POST /api/resources/v2 -> _handler

@@ -23,7 +23,7 @@ _SERVICE = {"sub": "service:m2m-commerce", "client_id": "m2m-commerce",
             "roles": frozenset({"commerce"})}
 _CLES = ("service.orgs.list", "service.org.members", "service.org.usage",
          "service.org.entitlements.list", "service.org.entitlement.put",
-         "service.org.entitlement.delete")
+         "service.org.entitlement.delete", "service.billing.export")
 
 
 def _cap(cle):
@@ -204,3 +204,37 @@ def test_une_pose_refusee_dit_pourquoi_et_n_ecrit_rien(live, champs, code):
     org = _org()
     assert _refus("service.org.entitlement.put", org_id=org, **champs).code == code
     assert _appel("service.org.entitlements.list", org_id=org)["entitlements"] == []
+
+
+def test_l_export_rend_l_etat_de_facturation_en_un_instantane_date(live):
+    """#1085 : ce que oto-commerce reprendra, bloc par bloc, dates avec leur fuseau."""
+    org = _org()
+    sub = _membre(org, T0)
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO org_subscriptions (org_id, provider, plan, status, customer_id, "
+            "mandate_id, current_period_end, next_billing_at) VALUES "
+            "(%s, 'mollie', 'standard', 'active', 'cst_x', 'mdt_x', %s, %s)",
+            (org, T0 + timedelta(days=30), T0 + timedelta(days=30)))
+        conn.execute("INSERT INTO option_comps (entity_type, entity_id, option, granted_by) "
+                     "VALUES ('user', %s, 'unipile', 'admin')", (sub,))
+        conn.execute(
+            "INSERT INTO billing_identities (org_id, legal_name, country_code, vat_number, "
+            "address_line, postal_code, city, billing_email) VALUES "
+            "(%s, 'Acme', 'FR', NULL, '1 rue X', '75001', 'Paris', 'c@acme.test')", (org,))
+        conn.execute(
+            "INSERT INTO legal_acceptance_events (sub, org_id, doc_slug, version, context) "
+            "VALUES (%s, %s, 'cgv', 'v1', 'purchase')", (sub, org))
+    out = _appel("service.billing.export")
+    assert out["plans"]["standard"]["amount_ht"] == 1900
+    assert set(out["plans"]["standard"]["rights"]) == {"unipile", "platform_unmetered"}
+    abo = next(s for s in out["subscriptions"] if s["org_id"] == org)
+    assert (abo["customer_id"], abo["mandate_id"], abo["plan"]) == ("cst_x", "mdt_x", "standard")
+    assert abo["current_period_end"] == (T0 + timedelta(days=30)).isoformat().replace(
+        "+00:00", ".000000+00:00")
+    assert datetime.fromisoformat(abo["current_period_end"]).tzinfo is not None
+    assert abo["grace_until"] is None
+    assert any(c["entity_id"] == sub and c["option"] == "unipile" for c in out["option_comps"])
+    assert any(i["org_id"] == org and i["billing_email"] == "c@acme.test"
+               for i in out["identities"])
+    assert any(a["sub"] == sub and a["doc_slug"] == "cgv" for a in out["purchase_acceptances"])

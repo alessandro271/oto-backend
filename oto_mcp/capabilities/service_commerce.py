@@ -254,6 +254,39 @@ class ServiceOk(BaseModel):
     ok: bool
 
 
+# ── l'export pour la reprise (#1085) — TEMPORAIRE ────────────────────────────
+#
+# L'état de facturation que porte encore le cœur, pour que oto-commerce le reprenne
+# par l'API (conception, Q4 : il ne lit pas la base du cœur). Répété d'abord à blanc :
+# le commerce dérive les droits de cet état et les compare à ceux que le cœur porte.
+# ⚠️ Part avec le code de facturation du cœur (retrait, lot 6).
+
+class ServiceBillingExport(BaseModel):
+    """L'état de facturation entier, en un instantané. Dates en ISO 8601 UTC explicite.
+    `plans` : la grille des anciens paliers (prix HT mensuel en centimes, droits qu'il
+    ouvre), pour qu'un abonné gardé à son prix le reste sans recopie de la grille."""
+    plans: dict
+    subscriptions: list[dict]
+    contracts: list[dict]
+    option_comps: list[dict]
+    identities: list[dict]
+    payments: list[dict]
+    purchase_acceptances: list[dict]
+
+
+class ServiceNoInput(BaseModel):
+    pass
+
+
+def _billing_export(ctx: ResolvedCtx, inp: ServiceNoInput) -> dict:
+    from .. import billing
+    from ..db import billing as db_billing
+    return {"plans": {cle: {"amount_ht": p["amount"], "currency": p["currency"],
+                            "interval": p["interval"], "rights": list(billing.plan_rights(cle))}
+                      for cle, p in billing.PLANS.items()},
+            **db_billing.export_commerce()}
+
+
 _CHEMIN_DROIT = "/api/service/orgs/{id}/entitlements/{right_key}/{source}"
 
 CAPABILITIES += [
@@ -305,4 +338,11 @@ CAPABILITIES += [
                description="[service commerce] Remove one entitlement row (org, person, "
                            "right, source); other sources and scopes stay.",
                rest=RestBinding("DELETE", _CHEMIN_DROIT, _ID)),
+    Capability(key="service.billing.export", handler=_billing_export, Input=ServiceNoInput,
+               authz=COMMERCE_SERVICE, mcp=None, Output=ServiceBillingExport,
+               description="[service commerce, temporary] The core's billing state "
+                           "(subscriptions, contracts, option comps, identities, payments, "
+                           "purchase acceptances, legacy plan grid), for the takeover by "
+                           "the commerce service. Removed with the core's billing code.",
+               rest=RestBinding("GET", "/api/service/billing/export")),
 ]

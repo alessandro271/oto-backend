@@ -753,3 +753,47 @@ def open_billing_payments(limit: int = 100) -> list[dict]:
             "ORDER BY created_at ASC LIMIT %s",
             (*TERMINAL_PAYMENT_STATUSES, limit),
         ))
+
+
+# ── l'export pour la reprise par oto-commerce (#1085) ────────────────────────
+#
+# ⚠️ TEMPORAIRE : lu par la seule route `service.billing.export`, et retiré avec le code
+# de facturation du cœur (lot 6). Les dates sortent en ISO 8601 UTC EXPLICITE, formées
+# par PostgreSQL : la fabrique de lignes du store rendrait sinon du texte sans fuseau.
+
+def _utc(col: str) -> str:
+    return (f"to_char({col} AT TIME ZONE 'UTC', "
+            f"'YYYY-MM-DD\"T\"HH24:MI:SS.US\"+00:00\"') AS {col.rsplit('.', 1)[-1]}")
+
+
+def export_commerce() -> dict[str, list[dict]]:
+    """L'état de facturation entier, bloc par bloc, en une transaction (un seul instantané)."""
+    requetes = {
+        "subscriptions": (
+            "SELECT org_id, provider, plan, status, method, customer_id, mandate_id, "
+            f"{_utc('current_period_end')}, {_utc('next_billing_at')}, "
+            f"{_utc('grace_until')}, {_utc('canceled_at')}, block_code "
+            "FROM org_subscriptions ORDER BY org_id"),
+        "contracts": (
+            "SELECT org_id, seats, unit_amount, currency, interval, reference, granted_by, "
+            f"{_utc('starts_at')}, {_utc('ends_at')} FROM billing_contracts ORDER BY org_id"),
+        "option_comps": (
+            "SELECT entity_type, entity_id, option, granted_by, "
+            f"{_utc('granted_at')}, {_utc('expires_at')} "
+            "FROM option_comps ORDER BY entity_type, entity_id, option"),
+        "identities": (
+            "SELECT org_id, legal_name, country_code, vat_number, address_line, postal_code, "
+            "city, billing_email FROM billing_identities ORDER BY org_id"),
+        "payments": (
+            "SELECT id, org_id, kind, amount, amount_ht, vat_rate_bps, vat_amount, "
+            "country_code, vat_scheme, payment_intent_id, payment_id, customer_id, status, "
+            f"attempt, {_utc('created_at')} FROM billing_payments ORDER BY id"),
+        "purchase_acceptances": (
+            "SELECT sub, org_id, doc_slug, version, ip, user_agent, "
+            f"{_utc('accepted_at')} FROM legal_acceptance_events "
+            "WHERE context = 'purchase' ORDER BY id"),
+    }
+    with _connect() as conn:
+        conn.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        return {bloc: [dict(r) for r in conn.execute(sql).fetchall()]
+                for bloc, sql in requetes.items()}
