@@ -36,35 +36,131 @@ _TITLE = "Oto REST API"
 _BODY_VERBS = ("POST", "PUT", "PATCH")
 _ADMIN_PREFIX = "/api/admin/"
 
+# Le MODE D'EMPLOI du document — la seule prose qu'un intégrateur lit avant son premier
+# appel, et elle est ICI, dans ce qu'on sert. Elle a vécu un temps dans le build de
+# docs.oto.cx, collée devant cette description : tout consommateur qui ne passait pas par
+# cette page (un générateur de client, un agent qui lit le contrat, un intégrateur qui
+# reçoit le fichier) ne la voyait jamais (oto-dashboard#155). Ce qui gouverne un appel se
+# DÉCLARE en plus dans le contrat (en-têtes `X-Oto-Org`/`X-Oto-Group`, `_parametres`) :
+# la prose explique, elle ne remplace pas une déclaration.
+#
+# ⚠️ Aucune adresse d'instance en dur : le même document est servi par chaque instance.
+# Les exemples notent `$OTO` l'adresse du serveur, que `servers` porte.
 _DESCRIPTION = """\
 API REST de la plateforme Oto. Deux faces servent le même métier (ADR 0009) : le
 MCP (`/mcp`, JWT Logto) et ce REST. Ce document est **dérivé du serveur** à chaque
 requête — il décrit ce qui tourne, pas une intention.
 
-**Authentification** — `Authorization: Bearer <jeton>`, sous deux formes :
+## Démarrer
 
-- **JWT Logto** (session interactive : dashboard, connecteur MCP) ;
-- **jeton API** `oto_…` (intégration programmatique), émis depuis une session
-  interactive — un jeton ne peut ni lister, ni créer, ni révoquer de jeton.
+Trois choses à savoir avant le premier appel : où obtenir un jeton, ce que ce jeton
+ouvre, et dans quelle organisation il travaille. Les exemples notent `$OTO` l'adresse
+de ce serveur (le champ `servers` de ce document).
 
-**Portée d'un jeton** — un jeton API peut être **porté** à sa création
-(`POST /api/me/tokens` avec `scopes`) : il n'ouvre alors QUE les tableaux nommés,
-en lecture ou écriture, et rien d'autre de l'organisation. C'est la forme à confier
-à une intégration tierce. Hors portée : `403 token_scope_forbidden`.
+### 1. Obtenir un jeton
 
-**Verbe dans le corps** — les surfaces consolidées (projets, pages, procédures,
-ressources…) exposent un seul chemin dont le corps porte le verbe : `{"op": "list"}`.
-Les valeurs possibles sont dans l'énuméré `op` du schéma de la requête.
+Chaque appel porte `Authorization: Bearer <jeton>`, sous deux formes :
 
-**Contexte d'organisation** — en-tête optionnel `X-Oto-Org` (et `X-Oto-Group`) pour
-travailler dans une organisation précise ; par défaut, l'organisation maison.
+- **JWT Logto** — la session interactive (dashboard, connecteur MCP) ;
+- **jeton API** `oto_…` — l'intégration programmatique.
 
-**Erreurs** — une seule enveloppe, le composant `Erreur` : `error` (jeton machine
-stable, la clé sur laquelle un client décide), `detail` (la phrase, actionnable) et
-parfois `details` (forme structurée). Les 4xx listés sur une opération sont ceux
-qu'elle DÉCLARE, chacun rejoué par un test ; la liste n'est pas exhaustive : tout
-appel peut rendre `400 invalid_input` / `unknown_fields` / `invalid_json` /
-`invalid_body` (validation de la requête par l'adaptateur), `401` et `403`.
+Un jeton API se crée depuis une **session interactive** : l'écran **Développeurs** du
+compte, dans la console (`/account/developers`). Un jeton ne peut ni en lister, ni en
+créer, ni en révoquer un autre : c'est volontaire, il ne peut pas se réémettre lui-même
+s'il fuite. Il n'est affiché **qu'une fois**, à sa création.
+
+### 2. Le premier appel
+
+```bash
+curl -s "$OTO/api/me/profile" \\
+  -H "Authorization: Bearer oto_…"
+```
+
+Une réponse `200` prouve que le jeton est valide. Un `401 {"error":"invalid_api_token"}`
+qu'il ne l'est pas ou plus ; un `401 {"error":"missing_bearer"}` que l'en-tête manque.
+
+Si ton jeton est **porté** (section suivante), cet appel répond `403` : `/api/me/profile`
+n'est pas dans sa portée. Vérifie-le alors sur un tableau qu'il nomme, par exemple
+`GET /api/datastores/<ton-tableau>/rows`.
+
+### 3. Ce qu'un jeton ouvre
+
+Par défaut, **un jeton est le compte** : le porteur peut ce que la personne peut. C'est
+la forme à garder pour ses propres scripts, jamais celle à confier à un tiers.
+
+Pour une intégration tierce, crée un jeton **porté** (`POST /api/me/tokens` avec
+`scopes`) — la posture s'inverse, rien n'est permis sauf ce que la portée nomme :
+
+```json
+{
+  "label": "front client",
+  "scopes": {
+    "namespaces": { "leads-dormants": "read", "sorties": "write" },
+    "projects": { "12": "read" }
+  }
+}
+```
+
+`read` lit le tableau, `write` lit **et** écrit ses lignes. Ni l'un ni l'autre n'ouvre la
+gouvernance — créer, renommer, supprimer ou partager un tableau reste hors de portée, comme
+tout le reste de l'organisation. Hors portée, la réponse est `403 token_scope_forbidden`.
+
+Un tableau est nommé par son **nom**, un projet par son **id**. Un renommage déplace donc
+ce que le jeton atteint : ré-émets-le après.
+
+### 4. Choisir l'organisation
+
+Sans rien préciser, un appel travaille dans ton **organisation maison** (`home_org` de
+`GET /api/me`). Pour en viser une autre, ajoute l'en-tête `X-Oto-Org` (et `X-Oto-Group`
+pour une équipe) ; tes organisations se listent avec `GET /api/me/orgs`. Les deux
+en-têtes sont **déclarés sur chaque opération** qui les lit (composants `XOtoOrg` et
+`XOtoGroup`) — un client généré les connaît.
+
+```bash
+curl -s "$OTO/api/me/search?q=facture" \\
+  -H "Authorization: Bearer oto_…" \\
+  -H "X-Oto-Org: 42"
+```
+
+⚠️ Un compte membre de **plusieurs** organisations qui omet l'en-tête ne reçoit aucune
+erreur : ses appels lisent et écrivent dans l'org maison. C'est juste tant qu'il n'en a
+qu'une ; dès la deuxième, ce qu'il cherche est ailleurs. L'en-tête décide aussi sous quelle
+org on lit et écrit, **jamais à qui appartient ce qu'on crée** — seul `owner` le fait.
+
+### 5. Le verbe est parfois dans le corps
+
+Les surfaces consolidées — projets, pages, procédures, ressources — exposent **un seul
+chemin** dont le corps porte l'action :
+
+```bash
+curl -s "$OTO/api/me/projects" \\
+  -H "Authorization: Bearer oto_…" \\
+  -H "Content-Type: application/json" \\
+  -d '{"op": "list"}'
+```
+
+Les valeurs possibles sont dans l'énuméré `op` du schéma de la requête, sur chaque
+opération concernée.
+
+## Erreurs
+
+Une seule enveloppe, le composant `Erreur` : `error` (jeton machine stable, la clé sur
+laquelle un client décide), `detail` (la phrase, actionnable) et parfois `details` (forme
+structurée). Les 4xx listés sur une opération sont ceux qu'elle DÉCLARE, chacun rejoué par
+un test ; la liste n'est pas exhaustive : tout appel peut rendre `400 invalid_input` /
+`unknown_fields` / `invalid_json` / `invalid_body` (validation de la requête par
+l'adaptateur), `401` et `403`.
+
+## Ce que ce document ne dit pas encore
+
+Il est **dérivé du serveur**, pas rédigé : il décrit ce qui tourne. Mais il hérite aussi
+de ses trous, et les montrer vaut mieux que les taire.
+
+Une partie des opérations n'a pas encore de **schéma de réponse** déclaré — leur réponse
+heureuse n'a pas de `content`, la forme du `200` n'est pas décrite. Et les opérations
+taguées `_legacy` sont écrites à la main plutôt que dérivées du registre de capacités :
+ni leur corps ni leur réponse ne peuvent être décrits tant qu'elles restent dehors. Ces
+deux dettes se résorbent côté serveur, et ce document suivra sans intervention.
 """
 
 # L'enveloppe d'erreur REST (`api/base._json_error`), publiée UNE fois en composant :
@@ -91,15 +187,54 @@ _ERREUR_REF = {"$ref": "#/components/schemas/Erreur"}
 # leur déclarer dirait faux (un refus se déclare là où il peut survenir, #217).
 _PARAM_RUN = "XOtoRun"
 _PARAM_RUN_REF = {"$ref": f"#/components/parameters/{_PARAM_RUN}"}
+
+# Les en-têtes de CONTEXTE (oto-dashboard#155) — l'organisation, ou l'équipe, dans
+# laquelle l'appel lit et écrit. Ils décident de la portée d'une écriture : c'est un
+# paramètre, pas une note de prose. Absents du contrat, un client généré n'avait aucun
+# moyen de savoir qu'ils existent, et ses appels atterrissaient dans l'org maison — ce
+# qui MARCHE, jusqu'au jour où le compte en a deux.
+#
+# Qui les lit : `api.routes.ViewAsMiddleware`, sur TOUTE requête `/api/*` authentifiée,
+# avant la route — capacité ou route écrite à la main. D'où leur référence sur ces deux
+# familles, et pas sur un alias 308 (qui ne fait que renvoyer ailleurs : c'est la cible
+# qui les lit). Même source pour les deux faces : l'en-tête pose l'org de consultation
+# que résout le seam `access.current_org`.
+_PARAM_ORG = "XOtoOrg"
+_PARAM_GROUP = "XOtoGroup"
+_PARAMS_CONTEXTE = ({"$ref": f"#/components/parameters/{_PARAM_ORG}"},
+                    {"$ref": f"#/components/parameters/{_PARAM_GROUP}"})
+
+
 def _parametres() -> dict:
-    return {_PARAM_RUN: {
-        "name": "X-Oto-Run", "in": "header", "required": False,
-        "schema": {"type": "string"},
-        "description": (
-            "Le run de la requête (`POST /api/me/runs`) — le seul titulaire qu'un bail "
-            "de ligne reconnaisse. Jugé AVANT l'opération, refus nommés sans rien "
-            "écrire : run inconnu ou d'un autre compte, porteur non membre de l'org du "
-            "run (403 générique), `X-Oto-Org` contradictoire, run clos.")}}
+    return {
+        _PARAM_RUN: {
+            "name": "X-Oto-Run", "in": "header", "required": False,
+            "schema": {"type": "string"},
+            "description": (
+                "Le run de la requête (`POST /api/me/runs`) — le seul titulaire qu'un bail "
+                "de ligne reconnaisse. Jugé AVANT l'opération, refus nommés sans rien "
+                "écrire : run inconnu ou d'un autre compte, porteur non membre de l'org du "
+                "run (403 générique), `X-Oto-Org` contradictoire, run clos.")},
+        _PARAM_ORG: {
+            "name": "X-Oto-Org", "in": "header", "required": False,
+            "schema": {"type": "string", "examples": ["42", "perso"]},
+            "description": (
+                "L'organisation dans laquelle l'appel lit et écrit : son id (`GET "
+                "/api/me/orgs`), ou `0` / `perso` pour l'espace personnel. **Absent : "
+                "l'organisation maison du compte** (`home_org` de `GET /api/me`) — sans "
+                "erreur, donc un compte de plusieurs orgs qui l'oublie écrit dans sa maison. "
+                "Une org dont le porteur n'est pas membre → `403 forbidden`. Il choisit OÙ "
+                "on lit et écrit, jamais à qui appartient ce qu'on crée (`owner`). Une valeur "
+                "illisible est ignorée : l'appel reste dans l'org maison.")},
+        _PARAM_GROUP: {
+            "name": "X-Oto-Group", "in": "header", "required": False,
+            "schema": {"type": "integer", "minimum": 1},
+            "description": (
+                "L'équipe dans laquelle l'appel travaille, par son id ; son organisation "
+                "parente devient celle de l'appel (elle l'emporte sur `X-Oto-Org`). "
+                "Absent : le niveau de l'organisation. Une équipe que le porteur ne peut "
+                "pas lire → `403 forbidden` ; une valeur illisible est ignorée.")},
+    }
 
 
 def _refus_de_l_en_tete() -> tuple:
@@ -332,7 +467,7 @@ def _handwritten(routes: Iterable) -> dict:
                                "(elle n'est pas encore une capacité).",
                 "tags": ["_legacy"],
                 "security": [{"bearerAuth": []}],
-                "parameters": params,
+                "parameters": [*params, *_PARAMS_CONTEXTE],
                 "responses": {"200": {"description": "OK"}},
             }
     return {p: i for p, i in out.items() if i}
@@ -415,8 +550,9 @@ def build(routes: Optional[Iterable] = None, *, server_url: Optional[str] = None
         publies = [b for b in cap.rest_bindings() if not b.path.startswith(_ADMIN_PREFIX)]
         for binding, operation_id in zip(publies, _capability_operation_ids(cap, publies)):
             op, defs = _operation(cap, binding, operation_id)
-            # L'en-tête de run : LA passe qui le référence, sur les capacités et elles seules.
-            op["parameters"] = [*op.get("parameters", []), _PARAM_RUN_REF]
+            # L'en-tête de run : LA passe qui le référence, sur les capacités et elles
+            # seules ; les en-têtes de contexte, lus avant toute route `/api/*`, aussi.
+            op["parameters"] = [*op.get("parameters", []), *_PARAMS_CONTEXTE, _PARAM_RUN_REF]
             schemas.update(defs)
             item = paths.setdefault(_openapi_path(binding.path), {})
             item[binding.verb.lower()] = op          # la capacité prime sur le legacy

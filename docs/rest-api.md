@@ -867,6 +867,18 @@ qui sonde `/api/projects` obtient 404 et conclut « les projets ne sont pas sur 
 arrivé (brief scout, 08/2026). Le descriptif rend l'énuméré `op` lisible, ce que le sondage de
 chemins ne donnera jamais. Même forme pour `/api/me/docs`, `/api/me/kb`, `/api/resources`.
 
+⚠️ **Le mode d'emploi est DANS le document servi, et ce qui gouverne un appel y est
+DÉCLARÉ** (oto-dashboard#155). `info.description` porte la section « Démarrer » (jeton,
+premier appel, jeton porté, choix de l'org, verbe dans le corps) : elle vivait dans le
+build de docs.oto.cx, collée devant la description, donc invisible à un générateur de
+client ou à un agent qui lit le contrat. Les en-têtes de contexte `X-Oto-Org` et
+`X-Oto-Group` sont des composants (`XOtoOrg`, `XOtoGroup`) référencés par chaque
+opération que `ViewAsMiddleware` précède — capacités ET routes écrites à la main, pas
+les alias 308 — avec leur valeur par défaut (l'org maison). La règle : **rien de ce qui
+décide d'un appel n'existe seulement dans une page** ; si un site a besoin d'ajouter au
+document pour être utilisable, c'est le document qui est incomplet. Aucune adresse
+d'instance dans la prose : les exemples notent `$OTO` l'adresse de `servers`.
+
 ## Version servie — `GET /api/version` (+ `X-Oto-Version`)
 
 **Sans auth**, comme le descriptif ci-dessus : un ref git, un SHA, deux horodatages —

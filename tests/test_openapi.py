@@ -228,3 +228,42 @@ def test_une_capacite_a_plusieurs_chemins_garde_son_id_sur_le_premier():
               "put_api_groups_id_guides_scope_slug"))):
         item = doc["paths"][chemin]
         assert (item["get"]["operationId"], item["put"]["operationId"]) == attendu, chemin
+
+
+# ── Le mode d'emploi et le contexte d'org : DANS le contrat servi (oto-dashboard#155) ──
+
+def test_les_en_tetes_de_contexte_sont_declares_sur_chaque_operation_qui_les_lit():
+    """`X-Oto-Org` décide de la portée d'une écriture : un client généré doit le
+    connaître. Le middleware le lit sur toute route `/api/*` — capacité ou route écrite à
+    la main —, donc les deux familles le déclarent ; un alias 308 ne fait que renvoyer."""
+    doc = openapi.build([_FakeRoute("/api/upload/{token}", ["GET"])])
+    params = doc["components"]["parameters"]
+    assert (params["XOtoOrg"]["name"], params["XOtoOrg"]["in"],
+            params["XOtoOrg"]["required"]) == ("X-Oto-Org", "header", False)
+    assert (params["XOtoGroup"]["name"], params["XOtoGroup"]["in"],
+            params["XOtoGroup"]["required"]) == ("X-Oto-Group", "header", False)
+    # Ce qu'il vaut ABSENT est dit dans le contrat, pas seulement dans une page.
+    assert "maison" in params["XOtoOrg"]["description"]
+    refs = [{"$ref": "#/components/parameters/XOtoOrg"},
+            {"$ref": "#/components/parameters/XOtoGroup"}]
+    vues = {"_legacy": 0, "capacite": 0}
+    for chemin, verbe, op in _operations(doc):
+        tag = op["tags"][0]
+        for ref in refs:
+            attendu = 0 if tag == "_deprecated" else 1
+            assert op.get("parameters", []).count(ref) == attendu, (chemin, verbe, ref)
+        if tag != "_deprecated":
+            vues["_legacy" if tag == "_legacy" else "capacite"] += 1
+    assert all(vues.values()), f"une famille n'est plus éprouvée : {vues}"
+
+
+def test_le_mode_d_emploi_est_dans_la_description_servie():
+    """La section « Démarrer » était collée par le build de docs.oto.cx : invisible à
+    qui lit le contrat sans passer par cette page. Elle est servie, et elle nomme les
+    deux en-têtes de contexte et le défaut quand ils manquent."""
+    desc = openapi.build()["info"]["description"]
+    assert "## Démarrer" in desc
+    for mot in ("X-Oto-Org", "X-Oto-Group", "home_org", "token_scope_forbidden", '"op"'):
+        assert mot in desc, mot
+    # Servi par chaque instance : aucune adresse d'instance en dur.
+    assert "oto.cx" not in desc and "oto.ninja" not in desc
