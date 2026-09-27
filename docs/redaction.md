@@ -290,6 +290,29 @@ qui réémettent les deux canaux en JSON (`tests/middleware/test_middleware_orde
 Banc : `tests/middleware/test_markdown_body.py` — dont « la rédaction a tourné avant,
 l'en-tête ne rend pas un champ rédigé ».
 
+## Une grosse liste se sert une fiche par ligne
+
+Claude Code range un gros résultat d'outil dans un fichier et ne le fait relire que par
+morceaux de **lignes** (`Read` avec `offset`/`limit`, 25 000 jetons au plus par
+lecture). Servi sur une seule ligne, un tel résultat y est illisible, en entier comme par
+morceaux — mesuré le 27/09/2026 sur le CLI 2.1.281 : une ligne de 61 350 jetons refusée
+même avec `limit` ; la même page, une fiche par ligne, lue à la ligne 900.
+
+`UneFicheParLigneMiddleware` (`middleware/une_fiche_par_ligne.py`) réémet le canal texte
+d'un résultat d'au moins 20 000 caractères dont une liste de fiches porte l'essentiel
+(une liste servie seule, ou la plus lourde liste d'au moins deux dicts d'une enveloppe)
+avec une fiche par ligne. Le texte reste du **JSON valide, identique une fois parsé** ; le
+canal structuré ne bouge pas. **Fidèle à l'octet** : il n'est réécrit que s'il est
+exactement une sérialisation de la chaîne (compacte, ou `json.dumps` par défaut de la
+rédaction), dans ce même style — seuls les blancs entre fiches changent ; un JSON brut
+rendu tel quel par un outil (`1e5`, clé en double, `\ud800` échappé…) reste intact.
+Au-delà d'1 Mo, le calcul passe dans un thread. Sous le seuil, rien ne change (le résultat reste dans le
+contexte, chaque retour à la ligne y coûterait un jeton). Place : juste sous
+`MarkdownBody`, pour la même raison. Banc : `tests/middleware/test_une_fiche_par_ligne.py`.
+Côté sandboxes (`claude-sandbox-manager`), `MAX_MCP_OUTPUT_TOKENS=10000` fait passer
+ces résultats par ce rangement ligne à ligne plutôt que par un autre, en blocs JSON sur
+une ligne, que `Read` ne sait pas lire.
+
 ## Face REST : allow-list explicite sur une route anonyme (oto#86)
 
 `FieldRedactionMiddleware` et `EmptyResultMiddleware` n'ont qu'un point d'accroche,

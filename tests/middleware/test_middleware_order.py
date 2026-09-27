@@ -34,6 +34,9 @@ invariants gardés ici :
 - `MarkdownBodyMiddleware` sous lui — il réémet le canal texte d'une fiche à corps
   markdown en markdown, et doit donc tourner APRÈS l'écho de compte et la rédaction,
   qui réémettent les deux canaux en JSON. Plus interne, le JSON échappé reviendrait.
+- `UneFicheParLigneMiddleware` sous lui — il réémet le canal texte d'une grosse liste
+  une fiche par ligne (JSON toujours valide), pour la même raison : plus interne,
+  l'écho de compte ou la rédaction rétabliraient la ligne unique.
 - `CallContextMiddleware` sous lui — sa ContextVar `_CALL_ORG` doit rester posée
   pendant que la rédaction ET le calllog (plus internes… donc ajoutés après) relisent
   `current_org`. Ajouté ailleurs, un appel `_org=` est rédigé/audité sous l'org MAISON
@@ -58,6 +61,7 @@ OURS = [
     "RappelContexteMiddleware",
     "EmptyResultMiddleware",
     "MarkdownBodyMiddleware",
+    "UneFicheParLigneMiddleware",
     "CallContextMiddleware",
     "ConstatContexteMiddleware",
     "FieldRedactionMiddleware",

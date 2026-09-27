@@ -760,6 +760,14 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     from .middleware.markdown_body import MarkdownBodyMiddleware
     instance.add_middleware(MarkdownBodyMiddleware())
 
+    # 1c. Une grosse liste se sert UNE FICHE PAR LIGNE (JSON toujours valide) : un
+    # client qui range un gros résultat dans un fichier (Claude Code) ne le relit que
+    # par morceaux de lignes — une ligne unique y est illisible. Sous `MarkdownBody`,
+    # plus externe que l'écho de compte et la rédaction, qui rétabliraient la ligne
+    # unique.
+    from .middleware.une_fiche_par_ligne import UneFicheParLigneMiddleware
+    instance.add_middleware(UneFicheParLigneMiddleware())
+
     # 2. Contexte d'appel (`_org=`, modèle sans état de session, #108/#112) : pose la
     # ContextVar `_CALL_ORG` AVANT le reste de la chaîne et la reset APRÈS, pour que
     # le handler ET les hooks post-tool (rédaction, calllog) lisent la MÊME org que
