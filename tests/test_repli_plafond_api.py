@@ -374,3 +374,53 @@ def test_le_repli_se_rouvre(live):
 
     row = _repli(oid)
     assert row is not None and row["id"] == jid
+
+
+# ── 11. de bout en bout, par le CHEMIN DE RÉSERVATION réel ────────────────
+
+def test_le_travail_replie_est_SERVI_avec_la_cle_de_l_org(live):
+    """La garantie que tout le reste promet, prise par le vrai chemin : un worker de
+    plateforme qui réclame `anthropic` reçoit le travail d'abonnement plafonné,
+    reroute, **avec la clé que l'ORG a déposée**.
+
+    Les autres bancs appellent `db.repli_disponible` en direct : ils prouvent la
+    règle, pas le câblage. Celui-ci passe par `capabilities.runner_jobs._jobs`, donc
+    par la garde `ctx.platform_worker and inp.provider` et par la remise de clé — le
+    seul endroit où « la clé du client » cesse d'être une intention pour devenir ce
+    que le worker tient dans la main."""
+    from oto_mcp.capabilities import runner_jobs as RJ
+    from oto_mcp.capabilities._types import ResolvedCtx
+
+    oid = _org("p14", "p14-dem")
+    _abonne("p14-dem", statut="paused_limit", reset=_futur())
+    jid = _travail(oid, "p14-dem")
+    _cle_org(oid)  # dépôt `anthropic` de CETTE org : "sk-test-secret"
+
+    rendu = RJ._jobs(ResolvedCtx(sub="worker:banc", org_id=None, platform_worker=True),
+                     RJ.JobsInput(op="claim", provider=_API))
+
+    job = rendu["job"]
+    assert job is not None, "le repli doit passer par le chemin de réservation réel"
+    assert job["id"] == jid
+    assert job["payload"]["model_family"] == "anthropic"
+    assert job["model_key"] == "sk-test-secret", (
+        "servi avec la clé DÉPOSÉE PAR L'ORG — c'est toute la promesse du lot")
+
+
+def test_sans_cle_de_l_org_le_chemin_reel_ne_sert_RIEN(live):
+    """Et son négatif, par le même chemin : pas de clé d'org, pas de service. Le
+    travail reste en file, il n'est ni servi sur la clé d'un autre, ni arrêté."""
+    from oto_mcp import db
+    from oto_mcp.capabilities import runner_jobs as RJ
+    from oto_mcp.capabilities._types import ResolvedCtx
+
+    oid = _org("p15", "p15-dem")
+    _abonne("p15-dem", statut="paused_limit", reset=_futur())
+    jid = _travail(oid, "p15-dem")
+    # Aucun dépôt pour cette org.
+
+    rendu = RJ._jobs(ResolvedCtx(sub="worker:banc", org_id=None, platform_worker=True),
+                     RJ.JobsInput(op="claim", provider=_API))
+
+    assert rendu["job"] is None
+    assert db.get_job(jid, oid)["status"] == "pending", "il attend, il n'est pas arrêté"

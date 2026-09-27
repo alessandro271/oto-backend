@@ -118,6 +118,33 @@ def taille_du_pool(org_id: int, famille: str) -> int:
     return int(row["n"]) if row else 0
 
 
+def taille_du_pool_a_la_pose(org_id: int, famille: str) -> int:
+    """Combien de membres prêtent un abonnement qui POURRA servir — connecté, ou au
+    plafond QUEL QUE SOIT son échéance. `PRETEUR_SERVABLE` sans sa clause d'échéance.
+
+    ⚠️ La pose et la RÉSERVATION ne posent pas la même question, et les confondre a
+    bloqué une org réelle (27/09/2026). La réservation demande « qui peut servir CE
+    travail, maintenant ? » — un prêteur au plafond non échu est sauté, le travail
+    attend. La pose demande « cet agent pourra-t-il tourner un jour ? » — et un
+    plafond est TEMPORAIRE : il tombe à son échéance, l'agent partira. Refuser la
+    pose parce que l'unique prêteur est au plafond jusqu'à demain matin, c'est
+    refuser pour une raison qui aura disparu avant la prochaine occurrence.
+
+    C'est déjà la règle en mode PERSONNEL, où `servable()` rend `True` pour un
+    `paused_limit` quelle que soit son échéance, délibérément. Le pool s'aligne :
+    seule l'ABSENCE durable (personne ne prête, ou tous déconnectés / sans sandbox)
+    refuse la pose — `subscription_pool_empty` veut dire « ça ne tournera jamais »,
+    pas « pas tout de suite »."""
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT COUNT(*) AS n FROM user_model_subscription_loans l {PRET_VIVANT} "
+            f"WHERE l.org_id = %s AND l.famille = %s "
+            f"  AND ab.sandbox_id IS NOT NULL "
+            f"  AND ab.statut IN ('connected', 'paused_limit')",
+            (org_id, famille)).fetchone()
+    return int(row["n"]) if row else 0
+
+
 def taille_totale_du_pool(org_id: int, famille: str) -> int:
     """Combien de membres de l'org lui prêtent un abonnement, SERVABLE ou pas —
     à distinguer de `taille_du_pool` (0 est ambigu : personne ne prête, ou tout

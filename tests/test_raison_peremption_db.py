@@ -1,4 +1,4 @@
-"""Le TEXTE d'une péremption de cycle nomme la VRAIE cause (27/09/2026, trigger
+"""Le TEXTE d'une péremption de cycle nomme la VRAIE cause (27/09/2026,
 OTO-130) — pas une garantie de comportement (la RÈGLE d'expiration ne
 bouge pas), un diagnostic. Avant ce lot, `perimer_travaux_du_declencheur`
 disait toujours « aucun agent ne dessert cette organisation », même quand un

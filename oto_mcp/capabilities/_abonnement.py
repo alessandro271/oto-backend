@@ -224,13 +224,20 @@ def exiger_a_la_pose(sub: str, proprietaire: Optional[str], famille: Optional[st
             "tournent sur l'abonnement de leur propriétaire. Seule la personne qui "
             "possède l'agent peut le poser sur le sien.")
     if pool:
-        if not org_subscription_pool.taille_du_pool(org_id, famille):
+        # ⚠️ `taille_du_pool_a_la_pose`, PAS `taille_du_pool` : un prêteur au plafond
+        # pourra servir dès son échéance, et la pose juge « ça tournera un jour ? »,
+        # pas « ça tournerait à la seconde près ? ». Le mode personnel dit déjà oui
+        # dans ce cas (`servable()` rend True sur un `paused_limit`) ; refuser ici
+        # rendait le pool STRICTEMENT pire que le personnel pour la même org.
+        if not org_subscription_pool.taille_du_pool_a_la_pose(org_id, famille):
             raise AuthzDenied(
                 400, "subscription_pool_empty",
                 f"l'organisation fait tourner les modèles `{famille}` sur son pool, et "
-                "aucun membre n'y prête d'abonnement connecté. Un membre doit prêter le "
-                "sien (Réglages › Fournisseurs de modèles), puis pose l'agent : posé sur "
-                "un pool vide, il resterait programmé sans jamais tourner.")
+                "aucun membre n'y prête d'abonnement utilisable. Un membre doit prêter "
+                "le sien, connecté (Réglages › Fournisseurs de modèles), puis pose "
+                "l'agent : posé sur un pool vide, il resterait programmé sans jamais "
+                "tourner. Un prêteur au plafond ne compte PAS comme un pool vide — son "
+                "forfait se réinitialise, et l'agent partira ce jour-là.")
         return
     servable_, statut, _ = servable(sub, famille)
     if not servable_:

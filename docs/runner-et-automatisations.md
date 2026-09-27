@@ -1525,7 +1525,12 @@ l'org tournent sur l'abonnement d'un membre qui l'a **prêté à cette org**.
   plafond de l'org du travail et de son plafond perso. Un prêteur au plafond est sauté par
   la réservation comme une personne au plafond.
 - **Les gardes de pose** : en `pool`, le demandeur porte l'option mais n'a pas besoin
-  d'une connexion à lui ; la pose exige un pool non vide (`subscription_pool_empty` sinon) ;
+  d'une connexion à lui ; la pose exige un pool non vide (`subscription_pool_empty` sinon) — **vide au sens de
+  la POSE** : un prêteur au plafond compte, puisque son forfait se réinitialise et que
+  l'agent partira ce jour-là (`taille_du_pool_a_la_pose`, 27/09/2026) ; seule l'absence
+  durable refuse (personne ne prête, ou tous déconnectés). La RÉSERVATION, elle, garde
+  `taille_du_pool` : elle demande qui peut servir MAINTENANT. Confondre les deux rendait
+  le pool strictement pire que le personnel, où un `paused_limit` pose sans problème ;
   **une flotte y passe**. En `personnel`, les refus d'avant restent. La propriété d'un agent
   se juge dans les deux modes (l'org peut repasser en personnel : l'agent d'un autre
   retouché pendant le pool tournerait alors sur son forfait). Une flotte armée en pool dont
