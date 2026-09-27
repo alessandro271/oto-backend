@@ -14,7 +14,9 @@ Il imite les trois formes réelles du dépôt :
   fabrique(…)` — l'idiome de `ns_not_found` et de `_write_refusal`, que le parcours ne
   savait pas voir (oto#217) ;
 - un refus **voisin**, levé par une fonction que le handler n'appelle pas : c'est le
-  cas qui restait vert quand la question était « existe-t-il dans ce module ? ».
+  cas qui restait vert quand la question était « existe-t-il dans ce module ? » ;
+- un relais **complet** (oto#106) : l'exception métier porte statut ET code
+  (`UploadError(403, "forbidden")`), et ressort par `AuthzDenied(e.status, e.code)`.
 """
 from __future__ import annotations
 
@@ -57,3 +59,24 @@ def handler():
     except ValueError as e:
         # L'idiome du dépôt : la fonction CONSTRUIT le refus, le `raise` reste ici.
         raise fabrique(str(e))
+
+
+class RefusStatue(Exception):
+    """Une exception métier qui porte statut ET code, comme celles de l'upload signé."""
+
+    def __init__(self, status: int, code: str, message: str = ""):
+        super().__init__(code)
+        self.status = status
+        self.code = code
+        self.message = message
+
+
+def cible():
+    raise RefusStatue(403, "cible_interdite", "plus d'écriture sur la cible")
+
+
+def handler_relais_complet():
+    try:
+        cible()
+    except RefusStatue as e:
+        raise AuthzDenied(e.status, e.code, e.message)

@@ -58,7 +58,6 @@ me.guide
 me.project
 me.project_files
 me.salesforce_connect
-me.upload_url
 me.use_project
 me.zoho_connect
 monitoring.call

@@ -156,3 +156,47 @@ def test_le_parcours_accepte_un_refus_RELAYE_depuis_ailleurs():
     assert not vu.accepte(400, "code_qui_nexiste_nulle_part"), (
         "le relais n'ouvre pas la porte à n'importe quel code : seulement à ceux que "
         "les exceptions du chemin savent porter")
+
+
+def test_le_parcours_accepte_la_PAIRE_d_un_relais_complet():
+    """oto#106 : l'exception porte statut ET code, le relais transporte les deux. La
+    paire levée passe ; la même paire sous un autre statut ne passe pas."""
+    import _faux_refus
+
+    vu = atteignables(_faux_refus.handler_relais_complet)
+    assert vu.accepte(403, "cible_interdite")
+    assert not vu.accepte(404, "cible_interdite"), (
+        "un relais complet transporte le statut levé, il n'en invente pas un autre")
+    assert not vu.accepte(400, "valeur_refusee"), "…ni le code d'un autre chemin"
+
+
+# ── Les routes de NATURE qui déclarent leur contrat (oto#106) ──────────────────
+
+def _contrats() -> list[tuple]:
+    from oto_mcp.api import routes as api_routes
+    from oto_mcp.capabilities._types import ContratDeRoute
+    vus, out = set(), []
+    for r in api_routes.make_routes(object()):
+        contrat = getattr(getattr(r, "endpoint", None), "contrat", None)
+        if isinstance(contrat, ContratDeRoute) and id(r.endpoint) not in vus:
+            vus.add(id(r.endpoint))
+            out += [(r, e) for e in contrat.errors]
+    return out
+
+
+def test_il_y_a_des_contrats_de_route():
+    """Le garde-fou ne vaut que s'il garde quelque chose : la réception d'un upload."""
+    assert {("/api/upload/{token}", 401, "invalid_or_expired_token")} <= {
+        (r.path, e.status, e.code) for r, e in _contrats()}
+
+
+@pytest.mark.parametrize("paire", _contrats(),
+                         ids=lambda p: f"{p[0].path}:{p[1].status}:{p[1].code}")
+def test_un_refus_de_route_declare_est_ATTEIGNABLE_et_publie(paire):
+    route, e = paire
+    assert atteignables(route.endpoint).accepte(e.status, e.code), (
+        f"{route.path} déclare {e.status} `{e.code}` que son handler ne rend pas")
+    doc = openapi.build([route])
+    for verbe in route.methods - {"HEAD", "OPTIONS"}:
+        rep = doc["paths"][openapi._openapi_path(route.path)][verbe.lower()]["responses"]
+        assert f"`{e.code}`" in rep[str(e.status)]["description"]

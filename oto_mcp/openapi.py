@@ -30,11 +30,14 @@ from typing import Iterable, Optional
 
 from . import deprecations, version
 from .capabilities import registry
-from .capabilities._types import Capability, RestBinding
+from .capabilities._types import Capability, ContratDeRoute, RestBinding
 
 _TITLE = "Oto REST API"
 _BODY_VERBS = ("POST", "PUT", "PATCH")
 _ADMIN_PREFIX = "/api/admin/"
+# Les routes de NATURE qui déclarent leur contrat : ni capacités (aucun en-tête de run,
+# aucun refus de l'adaptateur), ni souches « legacy ».
+_TAG_NATURE = "_nature"
 
 # Le MODE D'EMPLOI du document — la seule prose qu'un intégrateur lit avant son premier
 # appel, et elle est ICI, dans ce qu'on sert. Elle a vécu un temps dans le build de
@@ -142,6 +145,14 @@ curl -s "$OTO/api/me/projects" \\
 Les valeurs possibles sont dans l'énuméré `op` du schéma de la requête, sur chaque
 opération concernée.
 
+### 6. Déposer en volume
+
+Pour charger des milliers de lignes d'un coup, pas ligne à ligne : `POST
+/api/me/upload-url` frappe un lien signé à usage unique (mêmes paramètres que l'outil
+agent `oto_upload_url`), puis le contenu part en `PUT` brut sur ce lien, **sans**
+`Authorization` — NDJSON ou CSV, upserté en lot sur la clé du tableau. Corps, accusé et
+refus : `PUT /api/upload/{token}`. Un jeton porté ne frappe pas de lien.
+
 ## Erreurs
 
 Une seule enveloppe, le composant `Erreur` : `error` (jeton machine stable, la clé sur
@@ -160,7 +171,9 @@ Une partie des opérations n'a pas encore de **schéma de réponse** déclaré �
 heureuse n'a pas de `content`, la forme du `200` n'est pas décrite. Et les opérations
 taguées `_legacy` sont écrites à la main plutôt que dérivées du registre de capacités :
 ni leur corps ni leur réponse ne peuvent être décrits tant qu'elles restent dehors. Ces
-deux dettes se résorbent côté serveur, et ce document suivra sans intervention.
+deux dettes se résorbent côté serveur, et ce document suivra sans intervention. Les
+opérations taguées `_nature` sont hors du moule par construction (corps brut, jeton dans
+l'adresse) mais DÉCLARENT leur contrat : corps, réponse et refus y sont décrits.
 """
 
 # L'enveloppe d'erreur REST (`api/base._json_error`), publiée UNE fois en composant :
@@ -267,9 +280,15 @@ def _reponses(cap: Capability, heureuse: tuple[str, dict]) -> dict:
     out = {heureuse[0]: heureuse[1],
            "401": _reponse_erreur("jeton absent ou invalide"),
            "403": _reponse_erreur("refus d'autorisation (ou hors portée du jeton)")}
+    return _fusionne_refus(out, (*cap.errors, *_refus_de_l_en_tete()))
+
+
+def _fusionne_refus(out: dict, errors: Iterable) -> dict:
+    """Range des refus déclarés dans les réponses `out`, par statut (cf. `_reponses`).
+    Partagé par les capacités et les routes de nature qui déclarent leur contrat."""
     par_statut: dict[int, list] = {}
     vus: set = set()
-    for e in (*cap.errors, *_refus_de_l_en_tete()):
+    for e in errors:
         if (e.status, e.code) in vus:
             continue
         vus.add((e.status, e.code))
@@ -334,6 +353,25 @@ def _section(key: str) -> str:
     return parts[1] if len(parts) >= 3 else parts[0]
 
 
+def _reponse_heureuse(Output, defs: dict, media: str = "application/json") -> dict:
+    """La réponse heureuse : son schéma dès que la sortie est DÉCLARÉE (`Output`), ses
+    sous-modèles hissés dans `defs`. Sans elle, on ne peut qu'annoncer « OK »."""
+    ok: dict = {"description": "OK"}
+    if Output is not None:
+        try:
+            out = Output.model_json_schema(ref_template="#/components/schemas/{model}")
+        # noqa: SILENT — schéma de sortie illisible ⇒ document amputé, jamais absent
+        except Exception:                              # modèle exotique → sans schéma
+            out = {}
+        if isinstance(out, dict):
+            defs.update(out.pop("$defs", {}) or {})
+        if out:
+            ok = {"description": "OK", "content": {media: {"schema": out}}}
+    elif media != "application/json":
+        ok = {"description": "OK", "content": {media: {"schema": {"type": "string"}}}}
+    return ok
+
+
 def _operation(cap: Capability, binding: RestBinding,
                operation_id: str) -> tuple[dict, dict]:
     """Opération OpenAPI d'un binding + les définitions `$defs` à hisser.
@@ -360,19 +398,7 @@ def _operation(cap: Capability, binding: RestBinding,
     # La 200 porte un schéma dès que la capacité DÉCLARE sa sortie (`Output`). Sans
     # lui, on ne peut qu'annoncer « OK » — ce qui suffit à appeler, jamais à écrire
     # le client qui consomme. Cf. `Capability.Output` et le garde-fou de dette.
-    ok: dict = {"description": "OK"}
-    if cap.Output is not None:
-        try:
-            out = cap.Output.model_json_schema(
-                ref_template="#/components/schemas/{model}")
-        # noqa: SILENT — schéma de sortie illisible ⇒ document amputé, jamais absent
-        except Exception:                              # modèle exotique → sans schéma
-            out = {}
-        if isinstance(out, dict):
-            defs.update(out.pop("$defs", {}) or {})
-        if out:
-            ok = {"description": "OK",
-                  "content": {"application/json": {"schema": out}}}
+    ok = _reponse_heureuse(cap.Output, defs)
 
     op: dict = {
         "operationId": operation_id,
@@ -427,14 +453,44 @@ def _handwritten_operation_id(verb: str, path: str) -> str:
     return f"{verb.lower()}_{corps}"
 
 
-def _handwritten(routes: Iterable) -> dict:
+def _operation_de_nature(contrat: ContratDeRoute, verb: str, path: str,
+                         params: list, defs: dict) -> dict:
+    """L'opération d'une route de NATURE qui DÉCLARE son contrat (oto#106) : la même
+    matière qu'une capacité — description, réponse heureuse, refus déclarés — plus son
+    corps par verbe, et `security: []` quand le jeton de l'URL fait foi."""
+    reponses = _fusionne_refus(
+        {"200": _reponse_heureuse(contrat.Output, defs, contrat.media)}, contrat.errors)
+    op = {
+        "operationId": _handwritten_operation_id(verb, path),
+        "summary": contrat.description.strip().split(". ")[0][:180],
+        "description": contrat.description,
+        "tags": [_TAG_NATURE],
+        "security": [{"bearerAuth": []}] if contrat.authentifiee else [],
+        # Les en-têtes de contexte ne sont lus que sur une requête AUTHENTIFIÉE : une
+        # route dont le jeton est dans l'adresse n'a pas d'org de consultation.
+        "parameters": [*params, *(_PARAMS_CONTEXTE if contrat.authentifiee else ())],
+        "responses": reponses,
+    }
+    corps = (contrat.corps or {}).get(verb.upper())
+    if corps:
+        op["requestBody"] = {"required": True, "content": {
+            media: {"schema": schema} for media, schema in corps.items()}}
+    return op
+
+
+def _handwritten(routes: Iterable, defs: Optional[dict] = None) -> dict:
     """Routes Starlette écrites à la main : chemin + méthodes, sans schéma.
 
     Les documenter sans corps vaut mieux que les taire — l'intégrateur sait au moins
     qu'elles existent, et qu'il faut demander leur forme. Elles décroissent au fil
     des migrations en capacités (`test_rest_modules_are_capabilities.py`).
+
+    ⚠️ Une route de NATURE (qui ne deviendra jamais capacité) peut porter son contrat
+    (`ContratDeRoute`, posé sur son handler) : elle est alors décrite pour de bon —
+    sinon un client voit la porte sans pouvoir l'ouvrir (oto#106).
     """
     out: dict = {}
+    defs = {} if defs is None else defs
     # ⚠️ Les alias DÉRIVÉS comptent autant que les déclarés. Oubliés ici le
     # 09/09/2026, les 24 chemins du renommage `namespace` → `datastore`
     # tombaient dans le chemin « route écrite à la main » et étaient décrits en
@@ -456,9 +512,13 @@ def _handwritten(routes: Iterable) -> dict:
         item = out.setdefault(_openapi_path(path), {})
         params = [_param(ph, "path", {"type": "string"}, True)
                   for ph in _placeholders(path)]
+        contrat = getattr(getattr(route, "endpoint", None), "contrat", None)
         for verb in methods:
             v = verb.lower()
             if v in ("options", "head") or v in item:
+                continue
+            if isinstance(contrat, ContratDeRoute):
+                item[v] = _operation_de_nature(contrat, verb, path, params, defs)
                 continue
             item[v] = {
                 "operationId": _handwritten_operation_id(v, path),
@@ -540,10 +600,10 @@ def _capability_operation_ids(cap: Capability, bindings: list) -> list[str]:
 def build(routes: Optional[Iterable] = None, *, server_url: Optional[str] = None) -> dict:
     """Document OpenAPI 3.1 complet. `routes` = table de routes vivante (facultative :
     sans elle, seules les capacités sont décrites)."""
-    paths = _handwritten(routes)
+    schemas: dict = {"Erreur": _ERREUR}
+    paths = _handwritten(routes, schemas)
     for chemin, item in _alias_deprecies().items():
         paths.setdefault(chemin, {}).update(item)
-    schemas: dict = {"Erreur": _ERREUR}
     for cap in registry.CAPABILITIES:
         if not cap.is_exposed():
             continue

@@ -142,6 +142,30 @@ class DeclaredError:
 
 
 @dataclass(frozen=True)
+class ContratDeRoute:
+    """Le contrat d'une route de NATURE — hors du moule capacité par construction (corps
+    binaire, pas de JWT) — que `/openapi.json` publie au lieu de la souche « écrite à la
+    main » (oto#106).
+
+    Même matière que la capacité, et rien d'autre : une description, la forme de la
+    réponse heureuse (`Output`), les refus DÉCLARÉS (`DeclaredError`, chacun ATTEIGNABLE
+    depuis le handler — `tests/test_capability_declared_errors.py`), plus ce que seule
+    une telle route a : le corps par verbe (type de média → schéma) et l'absence
+    d'`Authorization`. Posé sur le handler (`handler.contrat = …`) : le document le lit
+    sur la table de routes vivante, là où il trouve déjà le chemin et les méthodes.
+    """
+    description: str
+    Output: Optional[type[BaseModel]] = None
+    errors: tuple = ()
+    # verbe → {type de média: schéma} ; un verbe absent n'a pas de corps.
+    corps: dict = field(default_factory=dict)
+    # Type de média de la réponse heureuse (une page d'upload rend du HTML).
+    media: str = "application/json"
+    # False = aucun en-tête d'auth : le jeton de l'URL fait foi.
+    authentifiee: bool = True
+
+
+@dataclass(frozen=True)
 class RestBinding:
     verb: str                                   # GET | POST | PUT | PATCH | DELETE
     path: str                                   # ex "/api/me/active-org"

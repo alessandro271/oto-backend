@@ -50,6 +50,10 @@ import secrets
 import time
 from typing import Optional
 
+# Module-level : `media_store` n'importe que la stdlib (boto3 y est chargé à l'upload),
+# et le parcours des refus déclarés (oto#106) ne suit que ce que le module VOIT.
+from . import media_store
+
 _TTL = 900  # 15 min — assez pour un curl, assez court pour borner la fenêtre.
 _DEFAULT_MAX_BYTES = 25 * 1024 * 1024  # 25 Mo — plafond dur du contenu poussé.
 
@@ -245,7 +249,7 @@ def _resolve_content_type(target: dict, request_ct: Optional[str]) -> str:
 def materialize(sub: str, target: dict, data: bytes, request_ct: Optional[str]) -> dict:
     """Écrit le contenu poussé dans la ressource cible. Renvoie un accusé léger
     (jamais le body). Suppose l'autz déjà vérifiée (`check_target_access`)."""
-    from . import db, media_store  # lazy : évite tout cycle d'import au boot
+    from . import db  # lazy : évite tout cycle d'import au boot
     kind = target.get("kind")
 
     if kind == "doc":

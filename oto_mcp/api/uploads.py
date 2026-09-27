@@ -22,17 +22,23 @@ lecture s'arrête au premier octet au-delà du plafond ; un `Content-Length` dé
 au-delà est refusé sans rien lire.
 
 La table de routes (chemins, méthodes, ORDRE) reste assemblée dans
-`api.routes.make_routes` ; ce module ne porte que les handlers.
+`api.routes.make_routes` ; ce module ne porte que les handlers — et leur CONTRAT
+(`ContratDeRoute`, oto#106) : la route ne sera jamais une capacité (corps brut, pas de
+JWT), mais un client REST doit pouvoir l'ouvrir en ne lisant que `/openapi.json`. Il y
+voyait une souche « écrite à la main », sans corps ni accusé ni refus.
 """
 from __future__ import annotations
 
 import html as _html
+from typing import Literal, Optional
 
+from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
 
-from .. import db, geste
+from .. import db, geste, upload_tokens
+from ..capabilities._types import ContratDeRoute, DeclaredError
 from .base import _json, _json_error
 
 
@@ -127,7 +133,7 @@ async def _do_signed_upload(request: Request, payload: dict, data: bytes,
     try:
         await run_in_threadpool(upload_tokens.check_target_access, sub, target)
     except upload_tokens.UploadError as e:
-        return _json_error(request, e.status, e.code)
+        return _json_error(request, e.status, e.code, e.message or None)
     if not data:
         return _json_error(request, 400, "empty_body")
     if len(data) > upload_tokens.max_bytes():
@@ -145,7 +151,9 @@ async def _do_signed_upload(request: Request, payload: dict, data: bytes,
             result = await run_in_threadpool(upload_tokens.materialize, sub, target,
                                              data, ct)
     except upload_tokens.UploadError as e:
-        return _json_error(request, e.status, e.code)
+        # La phrase part avec le code : « ligne NDJSON 4 312 invalide » dit où reprendre,
+        # `bad_ndjson` seul ne le dit pas (oto#106).
+        return _json_error(request, e.status, e.code, e.message or None)
     return _json(request, result)
 
 
@@ -155,7 +163,6 @@ async def upload_receive(request: Request) -> JSONResponse:
     **PUT** = un agent avec shell y pousse le corps brut (`curl --data-binary`) ;
     **POST** multipart `file` = le formulaire humain (fallback claude.ai). On
     matérialise en RÉAPPLIQUANT l'autz de la cible. Accusé léger, jamais le body."""
-    from .. import upload_tokens
     payload = upload_tokens.verify(request.path_params.get("token", ""))
     if payload is None:
         return _json_error(request, 401, "invalid_or_expired_token")
@@ -193,7 +200,6 @@ async def upload_form(request: Request) -> Response:
     """Page HTML d'upload d'un lien signé (GET) — **fallback humain** quand l'agent
     n'a pas de shell (claude.ai lui transmet ce lien). Le jeton n'est PAS consommé
     au GET (seulement au POST du fichier). Autoportée (aucun asset externe)."""
-    from .. import upload_tokens
     payload = upload_tokens.verify(request.path_params.get("token", ""))
     from ..entetes_securite import csp_upload
     headers = {"Cache-Control": "private", "Referrer-Policy": "no-referrer",
@@ -204,3 +210,104 @@ async def upload_form(request: Request) -> Response:
         _upload_page_html(upload_tokens.target_label(payload["target"])),
         headers=headers
     )
+
+
+# ── Le contrat publié (oto#106) ───────────────────────────────────────────────────
+
+class AccuseDeDepot(BaseModel):
+    """L'accusé LÉGER d'un dépôt : jamais le corps reçu, jamais un identifiant interne
+    (oto#86). Les champs présents dépendent de la cible scellée au jeton (`kind`)."""
+    ok: bool
+    kind: Literal["doc", "project_file", "datastore", "image"]
+    bytes: int = Field(description="taille reçue, en octets")
+    op: Optional[Literal["create", "update"]] = Field(None, description="`doc`")
+    chars: Optional[int] = Field(None, description="`doc` : caractères de la page")
+    filename: Optional[str] = Field(None, description="`project_file`")
+    url: Optional[str] = Field(None, description="`image` : l'adresse publique, permanente")
+    datastore: Optional[str] = Field(None, description="`datastore` : le tableau chargé")
+    inserted: Optional[int] = Field(None, description="`datastore` : lignes créées")
+    updated: Optional[int] = Field(None, description="`datastore` : lignes mises à jour "
+                                                     "(même clé d'upsert)")
+    count: Optional[int] = Field(None, description="`datastore` : lignes du fichier")
+    entetes_traduits: Optional[dict[str, str]] = Field(None, description=(
+        "`datastore` CSV : en-têtes renommés (un point ne peut pas figurer dans un nom "
+        "de colonne) — ancien → nouveau"))
+    # Les relevés d'écriture (`hors_schema`, `hors_options`, `origine_warning`…) du
+    # datastore s'ajoutent tels quels : ce sont ceux de toute écriture de lignes.
+    model_config = {"extra": "allow"}
+
+
+_REFUS_DE_LA_RECEPTION = (
+    DeclaredError(401, "invalid_or_expired_token",
+                  "le jeton de l'adresse est illisible, falsifié ou expiré (TTL court) : "
+                  "en frapper un autre (`POST /api/me/upload-url`)"),
+    DeclaredError(409, "token_already_used",
+                  "le jeton est à usage unique et a déjà servi : en frapper un autre"),
+    DeclaredError(413, "content_too_large",
+                  "le corps dépasse `max_bytes` (rendu à la frappe) — un `Content-Length` "
+                  "annoncé au-delà est refusé sans rien lire"),
+    DeclaredError(400, "empty_body", "le corps est vide"),
+    DeclaredError(400, "invalid_multipart", "`POST` : le corps n'est pas un multipart lisible"),
+    DeclaredError(400, "missing_file",
+                  "`POST` : pas de partie `file` ; ou un fichier vide (image, fichier "
+                  "de projet)"),
+    DeclaredError(403, "forbidden",
+                  "la cible est RE-jugée à la réception : le compte qui a frappé le jeton "
+                  "n'y a plus l'écriture"),
+    DeclaredError(404, "unknown_doc", "`doc` : la page visée n'existe plus"),
+    DeclaredError(404, "unknown_project", "le projet visé n'existe plus"),
+    DeclaredError(400, "not_utf8", "`doc` ou `datastore` : le corps n'est pas de l'UTF-8"),
+    DeclaredError(400, "bad_ndjson",
+                  "`datastore` NDJSON : une ligne n'est pas un objet JSON — `detail` "
+                  "dit laquelle"),
+    DeclaredError(400, "empty_dataset",
+                  "`datastore` : aucune ligne (un CSV exige son en-tête)"),
+    DeclaredError(400, "entete_en_collision",
+                  "`datastore` CSV : un en-tête traduit tombe sur une colonne déjà "
+                  "déclarée"),
+    DeclaredError(400, "bad_row",
+                  "`datastore` : une ligne est refusée par le stockage — `detail` dit "
+                  "laquelle et pourquoi"),
+    DeclaredError(413, "image_too_large", "`image` : au-delà de 2 Mo"),
+    DeclaredError(400, "unsupported_type",
+                  "`image` : ni png, ni jpeg, ni gif, ni webp (jugé sur les octets)"),
+)
+
+_FICHIER_BRUT = {"type": "string", "format": "binary"}
+
+upload_receive.contrat = ContratDeRoute(
+    description=(
+        "Dépose le contenu d'un lien signé frappé par `POST /api/me/upload-url` (ou "
+        "l'outil agent `oto_upload_url`). Aucun en-tête `Authorization` : le jeton de "
+        "l'adresse fait foi — il scelle le compte, l'org et la cible, vit 15 minutes et "
+        "ne sert qu'une fois. `PUT` : le corps BRUT, sous le `Content-Type` rendu à la "
+        "frappe — pour un tableau, NDJSON (`application/x-ndjson`, un objet JSON par "
+        "ligne) ou CSV (`text/csv`, en-tête requis), upserté en lot sur la clé choisie à "
+        "la frappe (sinon la clé métier du tableau) ; pour une page, du Markdown ; pour "
+        "un fichier de projet ou une image, les octets. `POST` : le même dépôt en "
+        "multipart, une seule partie `file` (le formulaire de la page `GET`). La cible "
+        "est RE-jugée à la réception, et la réponse est un accusé léger, jamais le "
+        "corps."),
+    Output=AccuseDeDepot,
+    errors=_REFUS_DE_LA_RECEPTION,
+    corps={
+        "PUT": {"application/x-ndjson": {"type": "string"},
+                "text/csv": {"type": "string"},
+                "text/markdown": {"type": "string"},
+                "application/octet-stream": _FICHIER_BRUT},
+        "POST": {"multipart/form-data": {
+            "type": "object", "required": ["file"],
+            "properties": {"file": _FICHIER_BRUT}}},
+    },
+    authentifiee=False,
+)
+
+upload_form.contrat = ContratDeRoute(
+    description=(
+        "La page HTML de dépôt d'un lien signé — la voie d'un humain, quand l'agent n'a "
+        "pas de shell. Aucun en-tête `Authorization`, et le jeton n'est PAS consommé : "
+        "il ne l'est qu'au dépôt (`POST` du formulaire). Lien invalide ou expiré : la "
+        "même page, en 401, sans formulaire."),
+    media="text/html",
+    authentifiee=False,
+)

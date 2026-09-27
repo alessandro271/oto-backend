@@ -86,6 +86,8 @@ ECRITURES = {
     "me.function": {"create", "propose", "run", "test", "publish", "refuse"},
     "me.kb": {"create", "ensure"},
     "me.node.edit": {"create", "update", "move", "delete"},
+    # oto#106 : frapper un lien de dépôt prépare une ÉCRITURE (la cible est scellée).
+    "me.upload_url": {"create", "update"},
     "me.project": {"create", "update", "archive", "unarchive", "copy", "link", "unlink",
                    "publish_mcp", "unpublish_mcp"},
     "platform.connector.setting": {"reload", "clear", "set"},

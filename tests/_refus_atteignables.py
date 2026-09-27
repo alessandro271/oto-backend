@@ -44,6 +44,9 @@ PROFONDEUR_MAX = 4
 PAQUET = "oto_mcp"
 
 REFUS = "AuthzDenied"
+# Le refus d'une route écrite à la main (`api.base._json_error`) — les routes de NATURE
+# qui déclarent leur contrat (`ContratDeRoute`) sont jugées sur le même parcours.
+REFUS_REST = "_json_error"
 
 # Un code d'erreur est un IDENTIFIANT, pas une phrase. Sans ce filtre, le premier
 # argument de n'importe quelle exception (« secret requis », « DATABASE_URL not
@@ -67,9 +70,19 @@ class Atteignables:
         self.codes: set[tuple[int, str]] = set()
         self.statuts_relayes: set[int] = set()
         self.codes_exceptions: set[str] = set()
+        # oto#106 — la paire (statut, code) d'une exception métier qui porte les DEUX
+        # (`UploadError(403, "forbidden")`), et le relais qui transporte les deux sans
+        # rien fixer (`AuthzDenied(e.status, e.code)`). Sans ces deux relevés, les refus
+        # que l'upload signé rend depuis toujours restaient indéclarables.
+        self.paires_exceptions: set[tuple[int, str]] = set()
+        self.relais_complet = False
 
     def accepte(self, status: int, code: str) -> bool:
         if (status, code) in self.codes:
+            return True
+        # Un relais complet transporte statut ET code : on n'accepte que les PAIRES
+        # levées sur le chemin — un 404 ne devient pas un 403 parce qu'il est relayé.
+        if self.relais_complet and (status, code) in self.paires_exceptions:
             return True
         # Un relais ne dit pas QUEL code il transporte : on accepte alors ceux que les
         # exceptions du chemin savent porter. Sans cette règle, un refus réellement
@@ -142,6 +155,12 @@ def _releve(noeud: ast.AST, acc: Atteignables) -> None:
     refus, et le premier argument d'un objet quelconque ne doit pas devenir un code.
     """
     for n in ast.walk(noeud):
+        if isinstance(n, ast.Call) and (getattr(n.func, "id", None)
+                                        or getattr(n.func, "attr", None)) == REFUS_REST:
+            # La réponse d'erreur d'une route écrite à la main (`_json_error(request,
+            # statut, code)`) : même lecture qu'un `AuthzDenied`, décalée d'un argument.
+            _code_du_refus(n.args[1:], acc)
+            continue
         if isinstance(n, ast.Return) and isinstance(n.value, ast.Call) \
                 and (getattr(n.value.func, "id", None)
                      or getattr(n.value.func, "attr", None)) == REFUS:
@@ -158,11 +177,24 @@ def _releve(noeud: ast.AST, acc: Atteignables) -> None:
             # matière qu'un relais transporte jusqu'au refus servi.
             if isinstance(args[0].value, str) and _FORME_DE_CODE.match(args[0].value):
                 acc.codes_exceptions.add(args[0].value)
+            # …ou un STATUT suivi d'un code (`UploadError(403, "forbidden")`) : la
+            # paire entière, que seul un relais complet peut transporter.
+            elif (isinstance(args[0].value, int) and len(args) > 1
+                  and isinstance(args[1], ast.Constant)
+                  and isinstance(args[1].value, str)
+                  and _FORME_DE_CODE.match(args[1].value)):
+                acc.paires_exceptions.add((args[0].value, args[1].value))
 
 
 def _code_du_refus(args: list, acc: Atteignables) -> None:
     """`AuthzDenied(<statut>, <code>)` → ce que ce refus apporte au relevé."""
-    if len(args) < 2 or not isinstance(args[0], ast.Constant):
+    if len(args) < 2:
+        return
+    if not isinstance(args[0], ast.Constant):
+        # `AuthzDenied(e.status, e.code, …)` : le relais COMPLET d'une exception métier.
+        if (isinstance(args[0], ast.Attribute) and args[0].attr == "status"
+                and isinstance(args[1], ast.Attribute) and args[1].attr == "code"):
+            acc.relais_complet = True
         return
     statut = args[0].value
     if isinstance(args[1], ast.Constant) and isinstance(args[1].value, str):

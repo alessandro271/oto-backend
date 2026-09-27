@@ -87,6 +87,33 @@ def test_handwritten_routes_are_listed_without_schema():
     assert item["get"]["tags"] == ["_legacy"]
 
 
+def test_le_depot_en_volume_s_ouvre_en_ne_lisant_que_le_contrat():
+    """oto#106 : un client REST pur voyait `/api/upload/{token}` sans pouvoir l'ouvrir —
+    ni frapper le jeton, ni savoir quel corps envoyer, ni ce que l'accusé contient."""
+    from oto_mcp.api import routes as api_routes
+    doc = openapi.build(api_routes.make_routes(object()))
+    # 1. Frapper le jeton : une opération REST, mêmes paramètres que l'outil agent.
+    mint = doc["paths"]["/api/me/upload-url"]["post"]
+    props = mint["requestBody"]["content"]["application/json"]["schema"]["properties"]
+    assert {"target", "datastore", "format", "key", "donnees_d_origine"} <= set(props)
+    sortie = mint["responses"]["200"]["content"]["application/json"]["schema"]
+    assert {"url", "method", "headers", "max_bytes", "expires_at"} <= set(sortie["properties"])
+    assert "unknown_namespace" in mint["responses"]["404"]["description"]
+    # 2. Déposer : sans `Authorization`, le corps décrit, l'accusé et les refus déclarés.
+    depot = doc["paths"]["/api/upload/{token}"]
+    put = depot["put"]
+    assert put["security"] == [] and put["tags"] == ["_nature"]
+    assert {"application/x-ndjson", "text/csv"} <= set(put["requestBody"]["content"])
+    assert "file" in depot["post"]["requestBody"]["content"]["multipart/form-data"][
+        "schema"]["properties"]
+    accuse = put["responses"]["200"]["content"]["application/json"]["schema"]
+    assert {"kind", "inserted", "updated", "count"} <= set(accuse["properties"])
+    assert "token_already_used" in put["responses"]["409"]["description"]
+    assert "bad_ndjson" in put["responses"]["400"]["description"]
+    assert "Route écrite à la main" not in depot["get"]["description"]
+    assert "text/html" in depot["get"]["responses"]["200"]["content"]
+
+
 def test_capability_wins_over_handwritten_on_the_same_path():
     """Une route encore montée à la main ET déclarée en capacité : c'est la capacité
     (avec son schéma) qui doit décrire le chemin, pas la coquille vide."""
@@ -150,7 +177,7 @@ def test_l_en_tete_de_run_est_UN_composant_reference_par_chaque_operation_de_cap
     ref = {"$ref": "#/components/parameters/XOtoRun"}
     capacites = 0
     for chemin, verbe, op in _operations(doc):
-        if op["tags"][0] in ("_legacy", "_deprecated"):
+        if op["tags"][0] in ("_legacy", "_deprecated", "_nature"):
             assert ref not in op.get("parameters", []), (chemin, verbe)
         else:
             capacites += 1
@@ -165,7 +192,7 @@ def test_les_refus_de_l_en_tete_sont_FUSIONNES_jamais_substitues():
     from oto_mcp.capabilities.run_thread import REFUS_DECLARES_DE_L_EN_TETE as REFUS
     doc = openapi.build()
     for chemin, verbe, op in _operations(doc):
-        if op["tags"][0] in ("_legacy", "_deprecated"):
+        if op["tags"][0] in ("_legacy", "_deprecated", "_nature"):
             continue
         for e in REFUS:
             assert f"`{e.code}`" in op["responses"][str(e.status)]["description"], (

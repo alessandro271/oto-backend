@@ -4,8 +4,15 @@
 l'agent PUT le contenu depuis le disque (`curl --data-binary @fichier`), au lieu de le
 faire transiter INLINE par le contexte du LLM (coût tokens + troncature sur du verbatim).
 Le backend matérialise dans la cible (`PUT /api/upload/<token>`, `api.routes`) en
-réappliquant l'autz. MCP-only : c'est une amorce d'action agent, pas une surface
-dashboard (le dashboard a déjà l'upload multipart humain).
+réappliquant l'autz.
+
+⚠️ **Deux faces, pas une** (oto#106). La frappe du jeton a longtemps été MCP-only (« une
+amorce d'action agent ») : un client REST pur voyait `/api/upload/{token}` publié au
+contrat sans pouvoir obtenir le jeton, ni savoir quel corps envoyer, ni ce que l'accusé
+contient — et chargeait 8 910 lignes une à une. `POST /api/me/upload-url` frappe le même
+jeton, avec les mêmes paramètres ; la réception déclare son propre contrat
+(`api.uploads.CONTRAT_RECEPTION`). Hors portée d'un jeton PORTÉ (`token_scopes`) : la
+cible vit dans le corps, et ce qu'un jeton porté atteint se lit dans le chemin.
 """
 from __future__ import annotations
 
@@ -16,7 +23,7 @@ from pydantic import BaseModel, Field
 from .. import config, upload_tokens
 from ..datastore import schema as dsv2
 from ._authz import SUB_ONLY
-from ._types import AuthzDenied, Capability, ResolvedCtx
+from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
 
@@ -52,6 +59,45 @@ class UploadUrlInput(BaseModel):
     #: PRÉPARE l'import qui le déclare, et c'est scellé dans le jeton.
     donnees_d_origine: bool = Field(
         default=False, description=dsv2.description_donnees_d_origine(en=True))
+
+
+class UploadUrlOutput(BaseModel):
+    """Le lien frappé — et le mode d'emploi du PUT qu'il ouvre."""
+    url: str = Field(description=(
+        "l'adresse signée, à usage unique : y envoyer le corps (`PUT`, octets bruts), "
+        "ou l'ouvrir dans un navigateur (formulaire de dépôt). Sans `Authorization` : "
+        "le jeton de l'adresse fait foi. L'accusé et les refus de la réception sont "
+        "ceux de `PUT /api/upload/{token}`. Un jeton API PORTÉ ne frappe pas de lien "
+        "(la cible vit dans le corps) : `403 token_scope_forbidden`."))
+    method: Literal["PUT"]
+    expires_at: int = Field(description="expiration du lien, en secondes epoch (TTL court)")
+    max_bytes: int = Field(description="plafond du corps, en octets : au-delà, `413`")
+    headers: dict[str, str] = Field(description=(
+        "en-têtes à poser sur le PUT — le `Content-Type` attendu : NDJSON "
+        "(`application/x-ndjson`, un objet JSON par ligne) ou CSV (`text/csv`, "
+        "en-tête requis) pour un tableau, Markdown pour une page"))
+    hint: str = Field(description="la conduite, en une phrase (shell, navigateur, ou inline)")
+    target: dict = Field(description=(
+        "la cible SCELLÉE dans le jeton (lisible, signée, non chiffrée) — le PUT ne "
+        "porte aucun paramètre"))
+
+
+# Les refus de la frappe. La cible est RE-jugée à la réception (`check_target_access`) :
+# les mêmes 403/404 peuvent donc aussi sortir du PUT, cf. `api.uploads.CONTRAT_RECEPTION`.
+_REFUS_DU_MINT = (
+    DeclaredError(400, "missing_doc", "`target=doc`, `op=update` sans `doc_id`"),
+    DeclaredError(400, "missing_project",
+                  "`target=doc` (`op=create`) ou `project_file` sans `project_id`"),
+    DeclaredError(400, "missing_title", "`target=doc`, `op=create` sans `title`"),
+    DeclaredError(400, "missing_filename", "`target=project_file` sans `filename`"),
+    DeclaredError(400, "missing_datastore", "`target=datastore` sans `datastore`"),
+    DeclaredError(404, "unknown_namespace",
+                  "le tableau nommé ne se voit pas depuis l'org de l'appel"),
+    DeclaredError(403, "read_only", "le tableau est partagé en LECTURE seule"),
+    DeclaredError(404, "unknown_doc", "la page visée (`doc_id`) n'existe pas"),
+    DeclaredError(404, "unknown_project", "le projet visé (`project_id`) n'existe pas"),
+    DeclaredError(403, "forbidden", "l'appelant n'a pas l'écriture sur la cible"),
+)
 
 
 def _upload_url(ctx: ResolvedCtx, inp: UploadUrlInput) -> dict:
@@ -147,6 +193,7 @@ def _upload_url(ctx: ResolvedCtx, inp: UploadUrlInput) -> dict:
 CAPABILITIES += [
     Capability(
         key="me.upload_url", handler=_upload_url, Input=UploadUrlInput, authz=SUB_ONLY,
+        Output=UploadUrlOutput, errors=_REFUS_DU_MINT,
         description=(
             "Get a SIGNED, single-use, short-TTL URL to PUSH large content OUT-OF-BAND "
             "into oto, instead of passing the body INLINE through your context. Use this "
@@ -180,5 +227,6 @@ CAPABILITIES += [
             "target) — don't put a confidential title or filename in it."
         ),
         mcp="oto_upload_url",
+        rest=RestBinding("POST", "/api/me/upload-url"),
     ),
 ]
