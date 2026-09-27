@@ -103,6 +103,7 @@ class OrgSettingsInput(BaseModel):
     family: Optional[str] = None             # get/set : claude_subscription
     limit_pct: Optional[int] = None          # set : 1..100, null (EXPLICITE) = défaut
     mode: Optional[str] = None               # set : personnel | pool (seul, sans limit_pct)
+    api_fallback: Optional[bool] = None      # set : repli clé de l'org (seul), défaut true
 
 
 def _org_settings(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
@@ -150,6 +151,15 @@ def _plafond_abonnements(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
                    f"`family` (ex. claude_subscription) requis pour {inp.op}.")
     if inp.op == "get":
         return ms._get_plafond(ctx, ms.GetOrgPlafondInput(org_id=inp.org_id, family=family))
+    if inp.op == "set" and inp.api_fallback is not None:
+        # Même discipline que `mode` : un réglage par appel. Trois interrupteurs sur
+        # la même ressource, et un `set` qui en porterait deux ne dirait pas lequel
+        # on voulait laisser tel quel.
+        if inp.mode is not None or inp.limit_pct is not None:
+            raise AuthzDenied(400, "one_setting_per_call",
+                              "`api_fallback` se règle seul : un appel par réglage.")
+        return ms._set_repli(ctx, ms.SetOrgRepliInput(
+            org_id=inp.org_id, family=family, api_fallback=inp.api_fallback))
     if inp.op == "set" and inp.mode is not None:
         # Le MODE se règle SEUL. Sur cette face, un `limit_pct` omis et un `null`
         # arrivent identiques (fastmcp remplit les défauts) : un `set` qui porterait
