@@ -684,6 +684,8 @@ def register(mcp: FastMCP) -> None:
     def fr_events_batch(
         sirens: list[str],
         famille: Optional[FamilleBodacc] = "collective",
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
     ) -> dict:
         """Check BODACC legal events for MANY companies at once (e.g. screen 700
         SIRENs for collective proceedings) — batched into a few upstream requests.
@@ -710,8 +712,15 @@ def register(mcp: FastMCP) -> None:
                 "collective" (procédures collectives); None = all families. The
                 output `famille` is a LABEL ("Modifications diverses"), not an
                 input: pass the code ("modification"). Unknown values are refused.
+            date_from: earliest PUBLICATION date, inclusive (YYYY-MM-DD). None =
+                no lower bound (the whole history comes back).
+            date_to: latest publication date, inclusive (YYYY-MM-DD). A malformed
+                date or date_from > date_to is refused; `synthese.periode` echoes
+                the window the counts apply to. It filters on publication, not
+                on the jugement date (`date_jugement`).
         """
-        return bodacc.search_batch(sirens, famille=_famille_bodacc(famille))
+        return bodacc.search_batch(sirens, famille=_famille_bodacc(famille),
+                                   date_from=date_from, date_to=date_to)
 
     # --- Appels d'offres (BOAMP, open data) ---
 

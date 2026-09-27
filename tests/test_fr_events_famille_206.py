@@ -35,8 +35,9 @@ class _Bodacc:
         self.appels.append(("unitaire", famille))
         return {"results": [], "total_count": 0}
 
-    def search_batch(self, sirens, famille=None):
+    def search_batch(self, sirens, famille=None, date_from=None, date_to=None):
         self.appels.append(("lot", famille))
+        self.fenetre = (date_from, date_to)
         return {"annonces": [], "synthese": {"annonces_total": 0}}
 
 
@@ -109,3 +110,31 @@ def test_la_description_du_lot_dit_le_rattachement_et_le_texte(outils):
     for mot in ("partie", "indeterminee", "texte_source", "annonces_sans_texte",
                 "lignes_total", "EVERY family"):
         assert mot in doc, mot
+
+
+def test_la_fenetre_de_parution_part_jusqu_au_service(outils, monkeypatch):
+    """Point 4 : `date_from`/`date_to` bornent le lot en amont (la lib les valide et
+    les traduit), au lieu de rendre tout l'historique de chaque SIREN."""
+    outils.tools["fr_events_batch"](sirens=["552032534"], famille="modification",
+                                    date_from="2026-01-01", date_to="2026-06-30")
+    assert outils.bodacc.fenetre == ("2026-01-01", "2026-06-30")
+    envoye = {}
+    monkeypatch.setattr("oto_mcp.fod.fr._post",
+                        lambda chemin, corps: envoye.update(chemin=chemin, **corps) or {})
+    from oto_mcp.fod.fr import _Bodacc
+    _Bodacc().search_batch(["552032534"], famille="vente", date_from="2026-01-01",
+                           date_to="2026-06-30")
+    assert envoye["chemin"] == "/api/fr/bodacc/batch"
+    assert (envoye["date_from"], envoye["date_to"]) == ("2026-01-01", "2026-06-30")
+
+
+def test_la_fenetre_est_declaree_au_schema(outils):
+    import asyncio
+    from fastmcp import FastMCP
+    from oto_mcp.tools import fr
+    mcp = FastMCP("banc-206-dates")
+    fr.register(mcp)
+    tool = asyncio.run(mcp.get_tool("fr_events_batch"))
+    props = tool.parameters["properties"]
+    assert {"date_from", "date_to"} <= set(props)
+    assert "YYYY-MM-DD" in props["date_from"].get("description", "") + tool.description
