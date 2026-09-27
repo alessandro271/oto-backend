@@ -48,7 +48,7 @@ def get_mode(org_id: Optional[int], famille: str) -> Optional[dict]:
         return None
     with _connect() as conn:
         row = conn.execute(
-            "SELECT org_id, famille, mode, updated_at, updated_by "
+            "SELECT org_id, famille, mode, repli_api, updated_at, updated_by "
             "FROM org_model_subscription_modes WHERE org_id = %s AND famille = %s",
             (org_id, famille)).fetchone()
     return dict(row) if row else None
@@ -56,6 +56,40 @@ def get_mode(org_id: Optional[int], famille: str) -> Optional[dict]:
 
 def en_pool(org_id: Optional[int], famille: str) -> bool:
     return ((get_mode(org_id, famille) or {}).get("mode")) == POOL
+
+
+def repli_api_actif(org_id: Optional[int], famille: str) -> bool:
+    """Cette org accepte-t-elle qu'un travail d'abonnement PLAFONNÉ rejoue sur SA
+    clé API plutôt que d'attendre la réinitialisation (OTO-130) ? OUVERT par
+    défaut — sans ligne, et sans colonne réglée.
+
+    ⚠️ Ouvert par défaut ne veut pas dire « dépense par défaut » : le repli exige
+    en plus que l'org ait DÉPOSÉ sa propre clé (`runner_jobs._cle_ok_pour_repli`),
+    ce que personne ne fait sans le vouloir. Cet interrupteur sert l'org qui a une
+    clé et préfère quand même attendre son forfait — la décision « je ne veux pas
+    que ces agents-là me coûtent des jetons », qu'aucune autre surface ne porte."""
+    row = get_mode(org_id, famille)
+    if not row:
+        return True
+    valeur = row.get("repli_api")
+    return True if valeur is None else bool(valeur)
+
+
+def set_repli_api(org_id: int, famille: str, actif: bool, par: Optional[str]) -> dict:
+    """Ouvre ou ferme le repli API de cette org. Fait NAÎTRE la ligne à
+    `personnel` si l'org n'a jamais réglé de mode — son mode effectif d'avant, donc
+    rien ne change d'autre que l'interrupteur."""
+    with _connect() as conn:
+        row = conn.execute(
+            "INSERT INTO org_model_subscription_modes "
+            "  (org_id, famille, mode, repli_api, updated_by) "
+            "VALUES (%s, %s, %s, %s, %s) "
+            "ON CONFLICT (org_id, famille) DO UPDATE "
+            "   SET repli_api = EXCLUDED.repli_api, updated_at = NOW(), "
+            "       updated_by = EXCLUDED.updated_by "
+            "RETURNING org_id, famille, mode, repli_api, updated_at, updated_by",
+            (org_id, famille, PERSONNEL, bool(actif), par)).fetchone()
+    return dict(row)
 
 
 def poser_mode(org_id: int, famille: str, mode: str, par: str) -> dict:

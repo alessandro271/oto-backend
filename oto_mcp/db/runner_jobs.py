@@ -19,10 +19,13 @@ Quatre invariants, gravés ici parce qu'une réécriture distraite les casserait
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Optional
 
 from .. import runner_models
 from ._conn import _connect
+
+logger = logging.getLogger(__name__)
 
 # Backoff linéaire simple : un échec renvoie le job dans la file à +30 s × tentatives.
 # Pas d'exponentiel en V1 — les échecs attendus (amont LLM en vrac) se lissent, et un
@@ -690,6 +693,234 @@ def claim_next_job(org_id: Optional[int], worker_sub: str,
                     (preteur, (row.get("payload") or {}).get("model_family")))
             conn.execute("RELEASE SAVEPOINT prise_abonnement")
     return row
+
+
+#: ────────────────────────────────────────────────────────────────────────────
+#: REPLI PLAFOND → clé API (OTO-130, 27/09/2026)
+#:
+#: Un travail d'ABONNEMENT dont le SEUL obstacle est un PLAFOND de consommation
+#: (`paused_limit`, échéance FUTURE) — jamais `needs_login`/`disconnected` (la
+#: personne doit se reconnecter, ce repli ne répare rien de ça), jamais un pool
+#: VIDE (personne ne prête, ce n'est pas une pause, c'est une absence) — peut
+#: REJOUER sur la clé de modèle API de son org, au même tier, plutôt qu'attendre
+#: la réinitialisation du forfait. Ça déplace une dépense réelle d'un abonnement
+#: personnel gratuit vers des jetons facturés à l'org : **décision produit,
+#: assumée, jamais silencieuse** — chaque repli s'écrit dans la charge du
+#: travail (`_plateforme.repli`), au même endroit que le rapport de forfait.
+#:
+#: ⚠️ **Narrowly ciblé sur CE cas** : un travail qui attend parce que personne ne
+#: dessert la famille, ou parce que le propriétaire doit se reconnecter,
+#: continue d'ATTENDRE — ce module ne touche à rien d'autre.
+#: ────────────────────────────────────────────────────────────────────────────
+
+def _cle_ok_pour_repli(org_id: int, famille: str) -> bool:
+    """Le repli est-il payable **par l'ORG elle-même** ? Sa propre clé déposée,
+    et RIEN d'autre : pas le barreau tenant, pas la clé de plateforme, pas la clé
+    d'environnement du worker.
+
+    ⚠️ C'est la règle la plus STRICTE du dépôt, et c'est délibéré. La cascade
+    ordinaire (`access.walk_cascade`) sert un travail que l'org a demandé sur un
+    modèle qu'elle a choisi ; ici le travail avait choisi un ABONNEMENT — gratuit
+    pour l'org — et c'est NOUS qui le déplaçons vers des jetons facturés. Déplacer
+    une dépense vers quelqu'un qui ne l'a pas demandée, ce serait le faire payer
+    sans qu'il ait rien signé : seule une org qui a posé SA clé a dit « je paie
+    mes jetons ». Sans clé d'org, le travail continue d'ATTENDRE la
+    réinitialisation du forfait — le comportement d'avant, jamais un échec dur.
+
+    ⚠️ Ne PAS lire `runner.org_key_required` ici (ce qu'une première version
+    faisait) : ce réglage est à `false` par défaut, et « non exigée » y veut dire
+    « la clé d'env du worker fera l'affaire » — c'est-à-dire, sur ce chemin, que
+    la plateforme paierait le repli de toutes les orgs sans clé. Le réglage
+    répond à « qui peut tourner ? », cette fonction à « qui PAIE ? ».
+
+    Miroir exact de `capabilities.runner_jobs._depot_pose`, recopié plutôt
+    qu'importé : le sens unique des 4 couches (ADR 0004) interdit à `db` de
+    remonter vers `capabilities`. Vérifié AVANT la prise, jamais après : rerouter
+    vers un dépôt qui arrêterait ensuite le travail (`_avec_cle`,
+    `model_key_required`) romprait la promesse « jamais un échec dur »."""
+    from .. import credentials_store, providers
+    c = providers.connector_for_provider(famille)
+    if not c or c.kind != "credential":
+        return False
+    try:
+        return credentials_store.has_credential("org", str(org_id), famille, account="")
+    except Exception:
+        logger.warning("présence du dépôt `%s` illisible pour l'org %s — repli refusé",
+                       famille, org_id, exc_info=True)
+        return False
+
+
+def candidats_repli_abonnement(org_id: Optional[int], org_ids: Optional[list],
+                               familles: frozenset, limit: int = 25) -> list[dict]:
+    """Travaux `pending` d'une famille d'ABONNEMENT dont le SEUL obstacle est un
+    plafond à échéance future — lecture SEULE, hors verrou, pour que l'appelant
+    choisisse une cible avant le claim atomique (`claim_fallback_job`, qui
+    revérifie la MÊME condition : entre les deux, une reconnexion a pu gagner).
+
+    Mode personnel : le DEMANDEUR est `paused_limit`, échéance future. Mode pool
+    (réglé par l'org) : au moins un prêt VIVANT, et TOUS ses prêteurs sont
+    `paused_limit` à échéance future — un mélange avec un prêteur simplement
+    déconnecté n'est PAS un pool « en pause », c'est un pool cassé, et ça
+    n'ouvre aucun repli (l'état du demandeur ne compte jamais en pool : il ne
+    paie pas)."""
+    if not familles:
+        return []
+    from .org_subscription_pool import PRET_VIVANT
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT rj.id, rj.org_id, rj.sub,
+                   rj.payload->>'model' AS model,
+                   rj.payload->>'model_family' AS model_family
+              FROM runner_jobs rj
+              LEFT JOIN LATERAL (SELECT EXISTS (
+                       SELECT 1 FROM org_model_subscription_modes m
+                        WHERE m.org_id = rj.org_id
+                          AND m.famille = rj.payload->>'model_family'
+                          AND m.mode = 'pool') AS actif) modep ON TRUE
+              LEFT JOIN LATERAL (
+                     SELECT ab.limit_reset_at
+                       FROM user_model_subscriptions ab
+                      WHERE NOT modep.actif AND ab.sub = rj.sub
+                        AND ab.famille = rj.payload->>'model_family'
+                        AND ab.statut = 'paused_limit' AND ab.limit_reset_at > NOW()
+                    ) perso ON TRUE
+              LEFT JOIN LATERAL (
+                     SELECT bool_and(ab.statut = 'paused_limit'
+                                      AND ab.limit_reset_at > NOW()) AS tout_plafonne,
+                            COUNT(*) AS n
+                       FROM user_model_subscription_loans l
+                       {PRET_VIVANT}
+                      WHERE modep.actif AND l.org_id = rj.org_id
+                        AND l.famille = rj.payload->>'model_family'
+                    ) pool ON TRUE
+             WHERE (%s::bigint IS NULL OR rj.org_id = %s)
+               AND (%s::bigint[] IS NULL OR rj.org_id = ANY(%s::bigint[]))
+               AND rj.status = 'pending' AND rj.due_at <= NOW()
+               AND rj.attempts < rj.max_attempts
+               AND rj.payload->>'model_family' = ANY(%s)
+               AND (perso.limit_reset_at IS NOT NULL
+                    OR (modep.actif AND COALESCE(pool.n, 0) > 0
+                        AND COALESCE(pool.tout_plafonne, false)))
+             ORDER BY rj.due_at
+             LIMIT %s
+            """,
+            (org_id, org_id, org_ids, org_ids, list(familles), limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def claim_fallback_job(job_id: int, worker_sub: str, to_model: str, to_family: str,
+                       lease_seconds: int = _LEASE_DEFAULT_S) -> Optional[dict]:
+    """Réclame UN travail d'abonnement plafonné pour le REJOUER sur `to_model`
+    (famille `to_family`, une clé API) — revérifie l'éligibilité dans le WHERE
+    de l'UPDATE, jamais celle lue par `candidats_repli_abonnement` : entre les
+    deux, le porteur (ou le pool) a pu redevenir servable, et une reconnexion
+    gagne toujours contre un repli en cours de décision.
+
+    Réécrit `model`/`model_family` dans la MÊME écriture que la prise : tout ce
+    qui lit le travail ensuite (la clé exigée, l'usage compté à la conclusion,
+    le rapport de forfait) doit voir un travail `to_family` ORDINAIRE, jamais un
+    abonnement déguisé — sans ça, `noter_rapport` lèverait la pause d'un
+    abonnement qui n'a pourtant pas tourné, et l'usage compterait zéro jeton
+    pour une exécution qui en a réellement consommé (payée par l'org).
+
+    Le repli se STAMPE, jamais silencieusement : `_plateforme.repli` porte
+    l'AVANT, l'APRÈS, le mode et l'échéance qui a déclenché le repli — visible
+    partout où `payload` l'est déjà (`runner.jobs get/list`, `op=deliveries`)."""
+    from .org_subscription_pool import PRET_VIVANT
+    with _connect() as conn:
+        row = conn.execute(
+            f"""
+            WITH cible AS (
+                SELECT rj.id, rj.payload,
+                       COALESCE(perso.limit_reset_at, pool.reset_at) AS reset_at,
+                       CASE WHEN modep.actif THEN 'pool' ELSE 'personnel' END AS mode
+                  FROM runner_jobs rj
+                  LEFT JOIN LATERAL (SELECT EXISTS (
+                           SELECT 1 FROM org_model_subscription_modes m
+                            WHERE m.org_id = rj.org_id
+                              AND m.famille = rj.payload->>'model_family'
+                              AND m.mode = 'pool') AS actif) modep ON TRUE
+                  LEFT JOIN LATERAL (
+                         SELECT ab.limit_reset_at
+                           FROM user_model_subscriptions ab
+                          WHERE NOT modep.actif AND ab.sub = rj.sub
+                            AND ab.famille = rj.payload->>'model_family'
+                            AND ab.statut = 'paused_limit' AND ab.limit_reset_at > NOW()
+                        ) perso ON TRUE
+                  LEFT JOIN LATERAL (
+                         SELECT MAX(ab.limit_reset_at) AS reset_at
+                           FROM user_model_subscription_loans l
+                           {PRET_VIVANT}
+                          WHERE modep.actif AND l.org_id = rj.org_id
+                            AND l.famille = rj.payload->>'model_family'
+                         HAVING COUNT(*) > 0
+                            AND bool_and(ab.statut = 'paused_limit'
+                                         AND ab.limit_reset_at > NOW())
+                        ) pool ON TRUE
+                 WHERE rj.id = %s AND rj.status = 'pending' AND rj.due_at <= NOW()
+                   AND rj.attempts < rj.max_attempts
+                   AND (perso.limit_reset_at IS NOT NULL OR pool.reset_at IS NOT NULL)
+                 FOR UPDATE OF rj
+            )
+            UPDATE runner_jobs j
+               SET status = 'claimed', claimed_by = %s, attempts = j.attempts + 1,
+                   lease_until = NOW() + make_interval(secs => %s),
+                   payload = jsonb_set(
+                       jsonb_set(jsonb_set(cible.payload, '{{model}}', to_jsonb(%s::text)),
+                                 '{{model_family}}', to_jsonb(%s::text)),
+                       '{{_plateforme}}',
+                       COALESCE(cible.payload->'_plateforme', '{{}}'::jsonb)
+                       || jsonb_build_object('repli', jsonb_build_object(
+                              'from_model', cible.payload->>'model',
+                              'from_family', cible.payload->>'model_family',
+                              'to_model', %s::text, 'to_family', %s::text,
+                              'mode', cible.mode, 'reason', 'paused_limit',
+                              'reset_at', to_jsonb(cible.reset_at),
+                              'at', to_jsonb(NOW())))
+                   )
+              FROM cible
+             WHERE j.id = cible.id
+            RETURNING j.id, j.kind, j.run_id, j.payload, j.attempts, j.max_attempts,
+                      j.lease_until, j.sub, j.org_id
+            """,
+            (job_id, worker_sub, int(lease_seconds), to_model, to_family,
+             to_model, to_family),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def repli_disponible(org_id: Optional[int], org_ids: Optional[list], worker_sub: str,
+                     depot: Optional[str],
+                     lease_seconds: int = _LEASE_DEFAULT_S) -> Optional[dict]:
+    """Tente un repli plafond → clé API pour le dépôt `depot` d'un worker de
+    PLATEFORME (`claim_next_job` a déjà rendu `None` pour lui) : parcourt les
+    candidats du PLUS ANCIEN au plus récent, s'arrête au premier repli qui
+    PAIE (clé org/plateforme disponible) et qui gagne la course du claim.
+    `None` si rien n'est repliable — l'appelant continue d'ATTENDRE, jamais un
+    échec : un candidat sans clé payable, ou perdu à la course, est SAUTÉ, pas
+    arrêté."""
+    familles = runner_models.familles_de_repli(depot)
+    if not familles:
+        return None
+    from .org_subscription_pool import repli_api_actif
+    for cand in candidats_repli_abonnement(org_id, org_ids, familles):
+        to_model = runner_models.repli_api(cand["model"])
+        if not to_model or runner_models.famille(to_model) != depot:
+            continue
+        # L'org a-t-elle laissé le repli ouvert, et peut-elle le PAYER elle-même ?
+        # Les deux, dans cet ordre : l'interrupteur se lit sur la famille
+        # d'ABONNEMENT du travail (c'est elle qu'on quitte), la clé sur le dépôt
+        # d'ARRIVÉE (c'est lui qui facture).
+        if not repli_api_actif(cand["org_id"], cand["model_family"]):
+            continue
+        if not _cle_ok_pour_repli(cand["org_id"], depot):
+            continue
+        row = claim_fallback_job(cand["id"], worker_sub, to_model, depot, lease_seconds)
+        if row:
+            return row
+    return None
 
 
 def porteur_et_famille(job_id: int) -> Optional[dict]:

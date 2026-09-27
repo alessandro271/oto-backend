@@ -1534,6 +1534,43 @@ l'org tournent sur l'abonnement d'un membre qui l'a **prêté à cette org**.
 - **Le run en cours n'est jamais coupé** : changer de mode, retirer un prêt ou franchir un
   plafond vaut pour les travaux suivants.
 
+**Le REPLI vers la clé de l'org, quand le forfait est épuisé (27/09/2026).** Un forfait
+au plafond arrête tout jusqu'à sa réinitialisation — jusqu'à trente-six heures pour la
+fenêtre sept jours. Le travail qui attend a pourtant un autre moyen de tourner : le même
+modèle, au même palier, payé aux jetons sur la clé API de l'org. Le repli le prend.
+
+- **Le déclencheur, et lui seul** : `paused_limit` à échéance **future**, en personnel
+  (le demandeur) comme en pool (TOUS les prêteurs, et il en faut au moins un). **Jamais**
+  `needs_login`/`disconnected` — se reconnecter est un geste que le repli ne remplace
+  pas —, **jamais** un pool vide : personne ne prête n'est pas une pause, c'est une
+  absence, et l'org doit la voir.
+- **Qui paie : l'org, sur SA clé déposée, ou personne.** `_cle_ok_pour_repli` exige la
+  clé de l'org au coffre — pas le barreau tenant, pas la clé de plateforme, pas la clé
+  d'environnement du worker. ⚠️ **Ne pas lire `runner.org_key_required` ici** : ce réglage
+  est à `false` par défaut et « non exigée » y veut dire « la clé d'env fera l'affaire »,
+  ce qui aurait fait payer la PLATEFORME le repli de toutes les orgs sans clé (défaut de
+  la première version, corrigé avant mise en service). Le réglage répond à « qui peut
+  tourner ? », cette fonction à « qui PAIE ? ». Sans clé d'org : le travail **attend**,
+  comme avant — jamais un échec dur.
+- **L'org peut le couper** : colonne `org_model_subscription_modes.repli_api`, **ouverte
+  par défaut** (`org_subscription_pool.repli_api_actif`). Ouvert par défaut n'est pas
+  « dépense par défaut » : sans clé déposée, rien ne se déclenche. L'interrupteur sert
+  l'org qui A une clé et préfère quand même attendre son forfait. Le couper sur une org
+  sans ligne la fait naître à `personnel` — son mode effectif d'avant, rien d'autre ne
+  bouge.
+- **Le repli se STAMPE, jamais silencieusement** : `payload._plateforme.repli` porte
+  l'avant, l'après, le mode et l'échéance qui l'a déclenché, visible partout où la charge
+  l'est déjà. Déplacer une dépense sans le dire serait la faire découvrir au relevé.
+- **Le travail rerouté est un travail `anthropic` ORDINAIRE** : `model` et `model_family`
+  sont réécrits DANS l'écriture de la prise. Sans ça, `noter_rapport` lèverait la pause
+  d'un abonnement qui n'a pas tourné, et l'usage compterait zéro jeton pour une exécution
+  réellement facturée.
+- **Réservé au worker de plateforme**, et tenté seulement quand la réservation ordinaire
+  n'a rien rendu : le repli traverse une famille que le dépôt du worker ne nomme pas. Un
+  candidat sans clé, repli coupé, ou perdu à la course du claim est **sauté**, pas arrêté
+  — et la revérification se fait dans le `WHERE` de l'`UPDATE`, jamais sur la lecture :
+  entre les deux, une reconnexion peut avoir gagné, et elle gagne toujours.
+
 **Ouvert à des personnes NOMMÉES (24/09/2026).** L'option `claude_subscription`
 (`oto_admin_set_option`, entité `user`) ouvre le chemin ; sans elle, `subscription_not_
 enabled` avant tout autre refus. La garde vit dans `_abonnement.exiger_ouvert`, relue par

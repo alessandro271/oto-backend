@@ -623,4 +623,19 @@ CREATE TABLE IF NOT EXISTS user_model_subscription_loans (
 );
 CREATE INDEX IF NOT EXISTS idx_user_model_subscription_loans_org
     ON user_model_subscription_loans(org_id, famille);
+
+-- Le REPLI d'un travail d'abonnement PLAFONNÉ vers la clé API de l'org, au même
+-- tier (OTO-130). `TRUE` par défaut, y compris pour les orgs qui ont déjà une
+-- ligne : sans clé déposée par l'org, le repli ne se déclenche de toute façon
+-- jamais (`db.runner_jobs._cle_ok_pour_repli`), donc l'ouvrir par défaut ne
+-- fait dépenser personne sans qu'il ait posé sa propre clé. L'interrupteur
+-- existe pour l'org qui a une clé et veut quand même qu'on ATTENDE la
+-- réinitialisation du forfait plutôt que de consommer ses jetons.
+--
+-- ⚠️ Sur la table des MODES, pas une table à part : absence de ligne = mode
+-- `personnel` ET repli ouvert, les deux défauts d'un coup. Une org qui coupe le
+-- repli sans avoir réglé de mode fait naître la ligne à `personnel`, ce qui est
+-- exactement ce qu'elle vivait déjà.
+ALTER TABLE org_model_subscription_modes
+    ADD COLUMN IF NOT EXISTS repli_api BOOLEAN NOT NULL DEFAULT TRUE;
 """

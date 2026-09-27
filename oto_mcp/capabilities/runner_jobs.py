@@ -1036,6 +1036,16 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
                 # pas de la même façon. Les confondre a coûté des jours de
                 # sondage à vide sans que personne ne le voie (07/09/2026).
                 return {"job": None, "campaign_error": panne}
+        if job is None and ctx.platform_worker and inp.provider:
+            # ⚠️ REPLI PLAFOND → clé API (OTO-130, 27/09/2026) : un travail
+            # d'abonnement `paused_limit` (jamais needs_login/disconnected,
+            # jamais un pool vide) rejoue sur la clé API de son org plutôt que
+            # d'attendre — seulement si CETTE clé paie (`repli_disponible`
+            # revérifie avant de prendre). Réservé au worker de PLATEFORME,
+            # même garde que le sandbox d'abonnement lui-même : ce chemin
+            # traverse une famille que le dépôt de ce worker ne nomme pas.
+            job = db.repli_disponible(ctx.org_id, inp.org_ids, ctx.sub,
+                                      inp.provider, lease_seconds=bail)
         if job is None:
             return {"job": None}
         # La charge servie est composée AVANT la délégation : tout ce qui se décide
