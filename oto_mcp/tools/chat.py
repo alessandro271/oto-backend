@@ -43,8 +43,14 @@ def _need(value, name: str, op: str):
 def _http_error(e) -> McpError:
     """Normalise un `googleapiclient.errors.HttpError` (stacktrace brut illisible)
     en message actionnable, aligné sur la famille messagerie (oto-backend#110).
-    Le cas courant = l'API Google Chat non activée / le compte sans accès Chat →
-    l'ancien retour était un `<HttpError 404 …>` opaque."""
+
+    Le 404 « Google Chat app not found » ne dit rien du COMPTE : Google exige, pour
+    toute écriture sous l'identité de l'utilisateur, qu'une application Chat soit
+    configurée dans le projet Google Cloud du client OAuth qui a émis le jeton (les
+    lectures s'en passent). C'est la configuration de ce client — le nôtre, ou celui
+    d'un tenant qui a posé sa propre app Google —, pas un geste de l'utilisateur :
+    le dire autrement l'envoie reconnecter un compte qui n'y est pour rien
+    (otomata-tech/oto#190)."""
     status = getattr(getattr(e, "resp", None), "status", None) or getattr(e, "status_code", None)
     detail = ""
     try:
@@ -57,9 +63,12 @@ def _http_error(e) -> McpError:
     detail = detail or (getattr(e, "reason", None) or "").strip() or "erreur inconnue"
     low = detail.lower()
     if status == 404 and ("app not found" in low or "chat api" in low or "turn on" in low):
-        msg = ("Google Chat n'est pas disponible pour ce compte : l'API Google Chat doit "
-               "être activée côté Google (ou le compte n'a pas accès à Chat). "
-               f"Détail : {detail}")
+        msg = ("Google Chat refuse d'écrire : aucune application Chat n'est configurée "
+               "dans le projet Google Cloud du client OAuth qui a émis la connexion de "
+               "ce compte (Google l'exige pour écrire, pas pour lire). C'est une "
+               "configuration de ce client OAuth, à faire par son administrateur dans "
+               "la console Google Cloud (API Google Chat → Configuration) : reconnecter "
+               f"le compte ou réessayer n'y change rien. Détail Google : {detail}")
     else:
         msg = f"Google Chat a refusé la requête (HTTP {status}) : {detail}"
     return McpError(ErrorData(code=INVALID_PARAMS, message=msg))

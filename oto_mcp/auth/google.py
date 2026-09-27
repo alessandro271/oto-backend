@@ -21,6 +21,12 @@ Setup ops :
   ADR 0040 (2026-07-06) le client est partagé prod + preprod → déclarer les deux :
     - `https://mcp.oto.cx/api/google/oauth/callback`    (PROD)
     - `https://mcp.oto.ninja/api/google/oauth/callback` (PREPROD)
+- Google Chat (scopes `chat.*` ci-dessous) : dans le projet Google Cloud qui porte
+  le client, activer l'API Google Chat ET la configurer (API Google Chat →
+  Configuration : nom, avatar, description, fonctionnalités interactives
+  désactivées). Sans cette app Chat, toute écriture sous l'identité de
+  l'utilisateur rend 404 « Google Chat app not found » ; les lectures s'en passent
+  (otomata-tech/oto#190). Vaut aussi pour le projet d'un tenant qui pose son app.
 - Env `OTO_MCP_PUBLIC_URL` (déjà utilisée pour Logto) — base pour le
   redirect URI ; en local on peut override pour pointer sur localhost.
 - Env `OTO_MCP_OAUTH_STATE_SECRET` — secret HMAC pour signer le state

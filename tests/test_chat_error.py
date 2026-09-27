@@ -19,10 +19,17 @@ def _msg(err):
     return _err.error.message if (_err := C._http_error(err)) else ""
 
 
-def test_chat_api_not_enabled_404_is_actionable():
-    e = _FakeHttpError(404, "Google Chat app not found. To create a Chat app, you must turn on the Chat API.")
+def test_chat_app_not_found_404_names_the_oauth_client_project():
+    """oto#190 : le 404 vient du projet Google Cloud du client OAuth (aucune app
+    Chat configurée), pas du compte — le message ne doit pas envoyer l'utilisateur
+    reconnecter un compte qui n'y est pour rien."""
+    e = _FakeHttpError(404, "Google Chat app not found. To create a Chat app, you must "
+                            "turn on the Chat API and configure the app in the Google "
+                            "Cloud console.")
     m = _msg(e)
-    assert "API Google Chat doit être" in m and "404" not in m  # message métier, pas le code brut
+    assert "projet Google Cloud du client OAuth" in m and "Configuration" in m
+    assert "reconnecter le compte ou réessayer n'y change rien" in m
+    assert "404" not in m                                       # message métier, pas le code brut
     assert "HttpError" not in m and "<" not in m                # pas de repr d'exception
 
 
