@@ -127,7 +127,8 @@ def make_routes(
             if scope == "member":
                 google_oauth.persist_token(sub, org_id, tokens)
             else:
-                google_oauth.persist_token(sub, org_id, tokens, scope=scope, group_id=group_id)
+                google_oauth.persist_token(sub, org_id, tokens, scope=scope, group_id=group_id,
+                                           connector=connector)
 
         try:
             # DB + HTTP sync → hors event loop (#867), même patron qu'api/zoho.py.

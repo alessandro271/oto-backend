@@ -55,6 +55,7 @@ import hmac
 import hashlib
 import base64
 import json
+import logging
 import os
 import time
 from dataclasses import dataclass, field
@@ -66,6 +67,8 @@ from . import flow as oauth_flow
 from ..connectors import flow as connector_flow
 from ..connectors import health as connector_health
 from ..connectors import link as connector_link
+
+logger = logging.getLogger(__name__)
 
 
 # Scopes d'IDENTITÉ — demandés à CHAQUE consentement, quel que soit le service : c'est
@@ -367,7 +370,9 @@ def build_auth_url(sub: str, return_app: str = "", connector: str = "google",
         # client. C'est ce qui fait tenir le split — autoriser Drive après Gmail rend UN
         # jeton qui sait les deux, sur la même ligne du coffre. Sous le client d'un
         # partenaire aussi : son client est dédié à ce produit, et ce qui entre au coffre
-        # est de toute façon filtré sur `KNOWN_SCOPES` (`persist_token`).
+        # est de toute façon filtré sur `KNOWN_SCOPES` (`persist_token`) — et, pour un
+        # compte PARTAGÉ, sur ce que CE consentement demande : l'union porte aussi les
+        # droits personnels du titulaire.
         "include_granted_scopes": "true",
     }
     return f"{_AUTH_URL}?{urlencode(params)}"
@@ -438,13 +443,19 @@ class GoogleScopeRejected(RuntimeError):
 
 def persist_token(sub: str, org_id: int, token_response: dict,
                   client_id: Optional[str] = None, scope: str = "member",
-                  group_id: Optional[int] = None) -> str:
+                  group_id: Optional[int] = None,
+                  connector: Optional[str] = None) -> str:
     """Persiste les tokens (scope membre : l'org vient du state, capturée au
     démarrage du flow) et renvoie l'email du compte Google connecté.
 
     `client_id` : le client qui a ÉMIS ce jeton, noté sur lui — un jeton ne se
     rafraîchit qu'avec son émetteur (cf. `credentials_for`). Absent, c'est l'app que
-    `app_for(sub)` sert à cet instant, celle qui vient d'échanger le code."""
+    `app_for(sub)` sert à cet instant, celle qui vient d'échanger le code.
+
+    `connector` : la carte qui a demandé le consentement (portée par le state).
+    Requise pour un compte PARTAGÉ : elle borne ce que le partage enregistre."""
+    if scope != "member" and connector is None:
+        raise ValueError("persist_token : `connector` requis pour un compte partagé.")
     refresh_token = token_response.get("refresh_token")
     if not refresh_token:
         # `build_auth_url` impose `prompt=consent` + `access_type=offline`,
@@ -470,15 +481,29 @@ def persist_token(sub: str, org_id: int, token_response: dict,
     granted = [sc for sc in brut.split() if sc in KNOWN_SCOPES]
     scopes = " ".join(granted)
     email = _fetch_email(access_token, granted)
-    emetteur = client_id or app_for(sub).client_id
     if scope != "member":
         # Compte PARTAGÉ : rangé sous l'org ou l'équipe du state (vérifié signé), avec
         # qui l'a connecté — jamais sous le membre qui a cliqué.
+        target = group_id if scope == "group" else org_id
+        # Le jeton porte l'UNION des droits du titulaire (`include_granted_scopes`),
+        # ses droits PERSONNELS compris : partager Drive ne doit pas livrer à toute
+        # l'org la boîte Gmail qu'il n'a autorisée que pour lui (revue de #1081). La
+        # ligne partagée ne garde que ce que CE consentement demande, plus ce qu'elle
+        # partageait déjà ; et pas l'access token d'échange, qui porte l'union : le
+        # premier usage en tire un par refresh, borné aux scopes de la ligne.
+        deja = next((a.get("scopes") or "" for a in db.list_shared_google_accounts(scope, target)
+                     if a.get("google_email") == email), "")
+        app = app_for(sub)
+        permis = set(scopes_for(connector, app)) | set(deja.split())
+        scopes = " ".join(sc for sc in granted if sc in permis)
         db.set_shared_google_oauth(
-            scope, group_id if scope == "group" else org_id, set_by=sub,
+            scope, target, set_by=sub,
             google_email=email, refresh_token=refresh_token, scopes=scopes,
-            access_token=access_token, expires_at=expires_at, client_id=emetteur)
+            access_token=None, expires_at=None, client_id=client_id or app.client_id)
+        logger.info("compte Google partagé connecté : %s=%s compte=%s par=%s scopes=%s",
+                    scope, target, email, sub, scopes)
         return email
+    emetteur = client_id or app_for(sub).client_id
     db.set_google_oauth(
         sub,
         org_id,
@@ -622,13 +647,26 @@ def _no_account_message(sub: str, org_id: Optional[int], account: Optional[str])
 
 def _shared_targets(sub: str, org_id: int) -> list:
     """Les porteurs de comptes partagés joignables par ce membre, du plus proche au
-    plus large : son équipe active, puis son org."""
+    plus large : son équipe active, l'équipe propriétaire que lui prête un partage,
+    puis son org.
+
+    Mêmes barreaux que la cascade des clés (`access.cascade`, #480) : sous `_project=`
+    d'une org dont l'appelant n'est pas membre, le compte de l'org ne lui est prêté
+    que si le partage l'a accordé (`credentials="inherit"`) — sinon un simple
+    bénéficiaire lisait et envoyait depuis la boîte partagée de l'org."""
     from .. import access
+    from ..access import heritage
     out = []
     group = access.current_group(sub)
     if group is not None:
         out.append(("group", int(group)))
-    out.append(("org", int(org_id)))
+    cles = heritage.du_contexte(sub, org_id)
+    herite = cles.groupe_herite if cles is not None else None
+    if herite is not None and herite != group:
+        out.append(("group", int(herite)))
+    org_cles = heritage.org_partagee(org_id, cles)
+    if org_cles is not None:
+        out.append(("org", int(org_cles)))
     return out
 
 
@@ -923,6 +961,9 @@ def _revoke_shared(sub: str, account: Optional[str], scope: str) -> None:
     for r in db.list_shared_google_accounts(scope, target):
         if account is not None and r.get("google_email") != account:
             continue
+        # Qui retire, et qui l'avait connecté : la ligne disparaît avec son meta.
+        logger.info("compte Google partagé retiré : %s=%s compte=%s par=%s connecté_par=%s",
+                    scope, target, r.get("google_email"), sub, r.get("connected_by"))
         try:
             row = db.get_shared_google_oauth(scope, target, account=r.get("google_email"))
         # noqa: SILENT — dette déclarée : credential indéchiffrable ⇒ on supprime quand même (#424)

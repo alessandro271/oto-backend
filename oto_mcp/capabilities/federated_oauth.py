@@ -86,6 +86,8 @@ class GoogleAccount(BaseModel):
     services: list[str] = []
     # À qui le compte est confié : `member` (le sien), `group` ou `org` (partagé).
     scope: str = "member"
+    # Compte partagé : le `sub` de l'admin qui l'a connecté (vide pour le sien).
+    connected_by: Optional[str] = None
 
 
 class GoogleStatus(BaseModel):
@@ -152,6 +154,7 @@ def _google_status(ctx: ResolvedCtx, inp: OAuthStatusInput) -> dict:
                 "granted_at": a.get("granted_at"),
                 "services": google_oauth.services_granted(a.get("scopes")),
                 "scope": a.get("scope") or "org",
+                "connected_by": a.get("connected_by"),
             }
             for a in google_oauth.list_shared_accounts(ctx.sub)
         ],
