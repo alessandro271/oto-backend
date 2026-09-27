@@ -41,6 +41,14 @@ _COMPTES = [
 ]
 
 
+@pytest.fixture(autouse=True)
+def _sans_comptes_partages(monkeypatch):
+    """Aucun compte PARTAGÉ (org/équipe, 2026-09-27) dans ce banc : le statut rend
+    `shared: []`, et les champs racine restent ceux du membre."""
+    from oto_mcp.auth import google as _g
+    monkeypatch.setattr(_g, "list_shared_accounts", lambda sub: [])
+
+
 @pytest.fixture()
 def socle(monkeypatch):
     vus: list = []
@@ -111,7 +119,8 @@ def test_aucun_compte(monkeypatch, socle):
     stub_authz(monkeypatch)
     monkeypatch.setattr(google_oauth, "list_accounts", lambda sub: [])
     _, out = call("me.federation.google.status")
-    assert out == {"connected": False, "granted_at": None, "scopes": [], "accounts": []}
+    assert out == {"connected": False, "granted_at": None, "scopes": [], "accounts": [],
+                   "shared": []}
 
 
 def test_une_app_oauth_mal_configuree_est_un_500_qui_NOMME_la_cause(monkeypatch, socle):

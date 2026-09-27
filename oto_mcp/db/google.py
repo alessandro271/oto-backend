@@ -193,3 +193,124 @@ def delete_google_oauth(sub: str, org_id: int, account: Optional[str] = None) ->
                     "UPDATE connector_credentials SET meta = jsonb_set(meta, '{is_default}', 'true') "
                     "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=%s",
                     (et, eid, GOOGLE, oldest))
+
+
+# --- comptes PARTAGÉS : l'org ou l'équipe détient le compte (2026-09-27) --------
+#
+# Un admin d'org (ou un chef d'équipe) connecte UN compte Google au nom de tous —
+# une boîte partagée `hello@…`, un agenda d'équipe. Même ligne de coffre qu'un compte
+# membre (connector='google', account=email, satellites dans meta), sous l'entité de
+# l'org (`("org", org_id)`) ou de l'équipe (`("group", group_id)`) — le rangement que
+# Salesforce emploie déjà pour ses connexions d'org et d'équipe. Les fonctions MEMBRE
+# ci-dessus ne bougent pas : ce sont deux chemins, pas un chemin qui devine.
+
+SHARED_SCOPES = ("org", "group")
+
+
+def _shared_ent(scope: str, target_id: int) -> tuple[str, str]:
+    if scope not in SHARED_SCOPES:
+        raise ValueError(f"scope partagé invalide : {scope!r} (attendu 'org' ou 'group')")
+    return scope, str(int(target_id))
+
+
+def set_shared_google_oauth(scope: str, target_id: int, *, set_by: str, google_email: str,
+                            refresh_token: str, scopes: str,
+                            access_token: Optional[str] = None,
+                            expires_at: Optional[str] = None,
+                            client_id: Optional[str] = None) -> None:
+    """Upsert d'un compte Google PARTAGÉ (org ou équipe). Premier compte ⟹ défaut."""
+    from .. import credentials_store
+    et, eid = _shared_ent(scope, target_id)
+    account = google_email or ""
+    accts = credentials_store.list_accounts(et, eid, GOOGLE)
+    prior = next((a for a in accts if a["account"] == account), None)
+    make_default = not any(a["account"] for a in accts)
+    is_default = bool(prior and prior["meta"].get("is_default")) or make_default
+    granted_at = (prior["meta"].get("granted_at") if prior else None) \
+        or datetime.now(timezone.utc).isoformat()
+    meta = {"access_token": access_token, "expires_at": expires_at, "scopes": scopes,
+            "is_default": is_default, "granted_at": granted_at, "client_id": client_id,
+            "connected_by": set_by}
+    with _connect() as conn:
+        with conn.transaction():
+            credentials_store.set_credential(
+                et, eid, GOOGLE, refresh_token, set_by=set_by,
+                meta=meta, account=account, conn=conn)
+
+
+def get_shared_google_oauth(scope: str, target_id: int,
+                            account: Optional[str] = None) -> Optional[dict]:
+    """Un compte partagé (déchiffré) : `account` ciblé, sinon le défaut, sinon le plus ancien."""
+    from .. import credentials_store
+    et, eid = _shared_ent(scope, target_id)
+    if account:
+        cur = credentials_store.get_credential_with_meta(et, eid, GOOGLE, account=account)
+        return _google_row(account, cur) if cur else None
+    accts = credentials_store.list_accounts(et, eid, GOOGLE)
+    if not accts:
+        return None
+    chosen = next((a for a in accts if a["meta"].get("is_default")), None) \
+        or min(accts, key=lambda a: a["meta"].get("granted_at") or "")
+    cur = credentials_store.get_credential_with_meta(et, eid, GOOGLE, account=chosen["account"])
+    return _google_row(chosen["account"], cur) if cur else None
+
+
+def list_shared_google_accounts(scope: str, target_id: int) -> list[dict]:
+    """Les comptes partagés de cette org/équipe (sans les tokens), défaut d'abord."""
+    from .. import credentials_store
+    et, eid = _shared_ent(scope, target_id)
+    out = [{
+        "google_email": a["account"] or None,
+        "is_default": bool(a["meta"].get("is_default")),
+        "scopes": a["meta"].get("scopes"),
+        "granted_at": a["meta"].get("granted_at"),
+        "updated_at": a["set_at"],
+        "connected_by": a["meta"].get("connected_by"),
+        "scope": scope, "target_id": int(target_id),
+    } for a in credentials_store.list_accounts(et, eid, GOOGLE)]
+    out.sort(key=lambda r: (not r["is_default"], r["granted_at"] or ""))
+    return out
+
+
+def update_shared_google_access_token(scope: str, target_id: int, google_email: Optional[str],
+                                      access_token: str, expires_at: str) -> None:
+    from .. import credentials_store
+    et, eid = _shared_ent(scope, target_id)
+    credentials_store.update_meta(et, eid, GOOGLE, google_email or "",
+                                  {"access_token": access_token, "expires_at": expires_at})
+
+
+def set_default_shared_google_account(scope: str, target_id: int, account: str) -> bool:
+    from .. import credentials_store
+    et, eid = _shared_ent(scope, target_id)
+    if not any(a["account"] == account for a in credentials_store.list_accounts(et, eid, GOOGLE)):
+        return False
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE connector_credentials "
+            "SET meta = jsonb_set(meta, '{is_default}', to_jsonb(account = %s)) "
+            "WHERE entity_type=%s AND entity_id=%s AND connector=%s",
+            (account, et, eid, GOOGLE),
+        )
+    return True
+
+
+def delete_shared_google_oauth(scope: str, target_id: int, account: Optional[str] = None) -> None:
+    """Retire un compte partagé (ou tous) ; promeut le plus ancien restant en défaut."""
+    from .. import credentials_store
+    et, eid = _shared_ent(scope, target_id)
+    with _connect() as conn:
+        with conn.transaction():
+            if account is None:
+                credentials_store.clear_connector_credentials(et, eid, GOOGLE, conn=conn)
+                return
+            credentials_store.clear_credential(et, eid, GOOGLE, account=account, conn=conn)
+            rem = conn.execute(
+                "SELECT account, meta FROM connector_credentials "
+                "WHERE entity_type=%s AND entity_id=%s AND connector=%s", (et, eid, GOOGLE)).fetchall()
+            if rem and not any((r["meta"] or {}).get("is_default") for r in rem):
+                oldest = min(rem, key=lambda r: (r["meta"] or {}).get("granted_at") or "")["account"]
+                conn.execute(
+                    "UPDATE connector_credentials SET meta = jsonb_set(meta, '{is_default}', 'true') "
+                    "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=%s",
+                    (et, eid, GOOGLE, oldest))

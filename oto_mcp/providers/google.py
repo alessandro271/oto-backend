@@ -30,7 +30,10 @@ from ._model import _c
 # devenus des connecteurs — un namespace n'appartient qu'à UN connecteur.
 CONNECTOR = _c(
     "google", ["google"],
-    auth_modes={"byo_user"},
+    # `byo_org` (2026-09-27) : un admin d'org ou un chef d'équipe peut confier UN compte
+    # à tous (boîte partagée, agenda d'équipe) — rangé sous l'org ou l'équipe, résolu
+    # après le compte du membre (`auth/google._resolve_row`).
+    auth_modes={"byo_user", "byo_org"},
     personal_session=True, secret_kind="oauth",
     # OAuth ⟹ la dérivation dirait mono ; or N consentements = N comptes, et le
     # coffre porte une ligne par adresse. Déclaré ici, pas dans une liste transverse.
@@ -72,7 +75,7 @@ def service(name: str, *, label: str, help: str, href: str,
     Drive. `publisher` reste Google — l'éditeur nomme qui reçoit l'appel."""
     return _c(
         name, [name],
-        auth_modes={"byo_user"},
+        auth_modes={"byo_user", "byo_org"},
         personal_session=True, secret_kind="oauth",
         credential_of="google",
         cardinality="multi", account_axis_static=True,

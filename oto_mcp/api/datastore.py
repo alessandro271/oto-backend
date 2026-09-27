@@ -114,13 +114,20 @@ def make_routes(
         if not parsed:
             logger.warning("google oauth callback: state illisible/expiré")
             return RedirectResponse(url=_retour("error"), status_code=302)
-        sub, org_id, return_app, connector = parsed
+        # `scope`/`group_id` (2026-09-27) : à qui le compte est confié — le membre, ou
+        # son org / son équipe (compte partagé posé par un admin). Un state d'avant ne
+        # les porte pas : le membre, comme alors.
+        sub, org_id, return_app, connector, *reste = parsed
+        scope, group_id = (list(reste) + ["member", None])[:2]
 
         def _finish() -> None:
             # `sub` (qualifié, porté par le state) choisit l'app qui a demandé le
             # consentement — celle du tenant ou la nôtre — et son rappel exact.
             tokens = google_oauth.exchange_code(code, sub)
-            google_oauth.persist_token(sub, org_id, tokens)
+            if scope == "member":
+                google_oauth.persist_token(sub, org_id, tokens)
+            else:
+                google_oauth.persist_token(sub, org_id, tokens, scope=scope, group_id=group_id)
 
         try:
             # DB + HTTP sync → hors event loop (#867), même patron qu'api/zoho.py.

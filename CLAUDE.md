@@ -129,6 +129,7 @@ base n'a pas bougé, CONSERVE et signale une base éditée — défauts servis p
   `sheets`, `calendar`, `tasks`, `chat`) qui l'empruntent (`credential_of`) et demandent chacun **ses seuls scopes**
   en autorisation incrémentale (`auth/google.SERVICE_SCOPES`) · ⚠️ un outil de service refuse un compte qui n'a pas
   autorisé CE service en nommant sa carte, jamais un 403 Google muet (`connectors/docs/google.md`, `docs/connector-model.md`).
+  · ⚠️ un compte peut être **partagé** par l'org ou l'équipe (consentement d'admin, `scope=org|group`) : résolution membre → équipe active → org, jamais le compte personnel d'un autre.
 - **Email per-org** : `scaleway` (TEM) et `resend` en BYO-org, `email_send` route `sender → connecteur → transport` ·
   ⚠️ le front qui héberge une org est **dérivé de l'org cible** (`docs/email.md`) ·
   ⚠️ avec la clé de l'org, notre pied de page reste **tant que l'org n'a pas déclaré son désabonnement** sur le connecteur ; sur la clé commune, toujours (`docs/email.md`, 12/09).

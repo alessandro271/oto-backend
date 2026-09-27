@@ -542,6 +542,12 @@ def org_secret_meta(provider: str, base_url: str | None) -> tuple[dict | None, s
     # (`Connector.org_shareable`) — sa clé se pose sur le porteur, pas sur lui.
     if provider not in ORG_SHAREABLE_PROVIDERS:
         return None, "provider_not_shareable"
+    # Un connecteur OAuth se partage par CONSENTEMENT, jamais par un secret collé :
+    # `google` accepte le palier org (compte partagé posé par un admin, 2026-09-27),
+    # mais seulement par son flux (`auth/google.build_auth_url(scope='org')`). Une
+    # pose générique écrirait une ligne sans refresh token qu'aucun outil ne lirait.
+    if c is not None and c.secret_kind == "oauth":
+        return None, "provider_not_shareable"
     if base_url:
         return None, "base_url_not_allowed"
     return None, None

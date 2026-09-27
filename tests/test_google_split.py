@@ -130,7 +130,7 @@ def test_lurl_de_consentement_dun_service_porte_ses_scopes_et_sa_carte(monkeypat
 
 def test_le_state_porte_la_carte_et_un_state_davant_revient_au_compte():
     etat = G.make_state("sub-1", 42, "tulina", "sheets")
-    assert G.verify_state(etat) == ("sub-1", 42, "tulina", "sheets")
+    assert G.verify_state(etat)[:4] == ("sub-1", 42, "tulina", "sheets")
     assert G.verify_state(G.make_state("sub-1", 42))[3] == "google"
     # Un state forgé sur un connecteur inconnu ne passe pas, même bien signé.
     import base64, hashlib, hmac, json, time
@@ -184,6 +184,7 @@ def test_un_compte_qui_a_le_scope_passe_sans_rafraichir(monkeypatch):
 
 
 def test_letat_de_lien_dune_carte_ne_compte_que_les_comptes_qui_lont_autorisee(monkeypatch):
+    monkeypatch.setattr(G, "list_shared_accounts", lambda sub: [])
     monkeypatch.setattr(G, "list_accounts", lambda sub: [
         {"google_email": "a@b.com", "scopes": "https://www.googleapis.com/auth/gmail.modify",
          "set_at": "2026-09-26T10:00:00+00:00"},
@@ -196,6 +197,7 @@ def test_letat_de_lien_dune_carte_ne_compte_que_les_comptes_qui_lont_autorisee(m
 
 
 def test_les_identites_dune_carte_sont_les_comptes_qui_lont_autorisee(monkeypatch):
+    monkeypatch.setattr(G, "list_shared_accounts", lambda sub: [])
     monkeypatch.setattr(G, "list_accounts", lambda sub: [
         {"google_email": "a@b.com", "is_default": True,
          "scopes": "https://www.googleapis.com/auth/gmail.modify"},

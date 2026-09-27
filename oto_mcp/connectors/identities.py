@@ -118,11 +118,20 @@ def _google_list(sub: str, service: "str | None" = None) -> list[dict]:
     `service` pour la carte d'un service (split du 2026-09-26) : `oto_identity(
     connector='drive')` ne doit pas proposer un compte que `drive_file` refusera."""
     from ..auth import google as google_oauth
-    return [{"id": a["google_email"], "label": a["google_email"], "status": "ok",
+    ok = (lambda a: a.get("google_email") and (
+        service is None or service in google_oauth.services_granted(a.get("scopes"))))
+    mine = [{"id": a["google_email"], "label": a["google_email"], "status": "ok",
              "is_default": a["is_default"], "channel": None}
-            for a in google_oauth.list_accounts(sub)
-            if a.get("google_email")
-            and (service is None or service in google_oauth.services_granted(a.get("scopes")))]
+            for a in google_oauth.list_accounts(sub) if ok(a)]
+    # Les comptes PARTAGÉS par l'équipe ou l'org (2026-09-27) : joignables par
+    # `_account=`, étiquetés comme tels — jamais le défaut du membre (il reste le sien).
+    vus = {i["id"] for i in mine}
+    partages = [{"id": a["google_email"],
+                 "label": f"{a['google_email']} (partagé : {'équipe' if a.get('scope') == 'group' else 'org'})",
+                 "status": "ok", "is_default": False, "channel": None, "shared": a.get("scope")}
+                for a in google_oauth.list_shared_accounts(sub)
+                if ok(a) and a["google_email"] not in vus]
+    return mine + partages
 
 
 def _google_select(sub: str, identity_id: str) -> dict:
