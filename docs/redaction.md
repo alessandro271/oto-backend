@@ -305,7 +305,7 @@ avec une fiche par ligne. Le texte reste du **JSON valide, identique une fois pa
 canal structuré ne bouge pas. Sous le seuil, rien ne change (le résultat reste dans le
 contexte, chaque retour à la ligne y coûterait un jeton). Place : juste sous
 `MarkdownBody`, pour la même raison. Banc : `tests/middleware/test_une_fiche_par_ligne.py`.
-Côté sandboxes (`claude-sandbox-manager`), `MAX_MCP_OUTPUT_TOKENS=12000` fait passer
+Côté sandboxes (`claude-sandbox-manager`), `MAX_MCP_OUTPUT_TOKENS=10000` fait passer
 ces résultats par ce rangement ligne à ligne plutôt que par un autre, en blocs JSON sur
 une ligne, que `Read` ne sait pas lire.
 
