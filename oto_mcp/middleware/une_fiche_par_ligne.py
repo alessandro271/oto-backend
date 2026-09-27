@@ -9,10 +9,17 @@ y est alors illisible, en entier comme par morceaux. Mesuré le 27/09/2026 sur l
 même page, une fiche par ligne, lue à la ligne 900 sans difficulté.
 
 Ce middleware réémet le canal texte d'un GROS résultat (≥ `SEUIL` caractères) dont une
-liste de fiches porte l'essentiel : chaque fiche sur sa ligne. Le texte reste du JSON
-VALIDE et identique une fois parsé — seuls des retours à la ligne s'ajoutent entre les
-fiches — donc un client qui parse le texte ne voit aucune différence. Le canal
-STRUCTURÉ ne bouge pas.
+liste de fiches porte l'essentiel : chaque fiche sur sa ligne. Seuls des retours à la
+ligne s'ajoutent entre les fiches : le texte reste du JSON VALIDE, et un client qui le
+parse ne voit aucune différence. Le canal STRUCTURÉ ne bouge pas.
+
+**Fidèle à l'octet** : le texte n'est réécrit que s'il est EXACTEMENT la sérialisation,
+par l'un des `_STYLES`, de ce qu'il porte — la forme compacte que sert un outil qui rend un
+dict, ou `json.dumps` par défaut, celle que réémet la rédaction. La réécriture reprend ce
+style : seuls les blancs entre les fiches changent. Un JSON brut rendu tel quel par un
+outil (`str` : un fichier, un corps amont) n'est pas forcément l'un d'eux, et parsé puis
+réécrit il s'altérerait : `1e5` → `100000.0`, clé en double perdue, et un `\ud800`
+échappé devenu surrogate seul, que la sérialisation MCP refuse. Il reste intact.
 
 Ne s'applique qu'à :
 - une liste de fiches (dicts) servie seule, ou
@@ -28,6 +35,7 @@ rédigé ne revient pas.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 
 from fastmcp.server.middleware import Middleware
@@ -36,18 +44,20 @@ from mcp.types import TextContent
 
 # Sous ce seuil, le résultat reste dans le contexte du modèle : rien à relire.
 SEUIL = 20_000
+# Au-delà, le calcul (parse, contrôle, réécriture : ~40 ms par Mo) quitte la boucle.
+SEUIL_THREAD = 1_000_000
 
 
-def _compact(valeur) -> str:
-    return json.dumps(valeur, ensure_ascii=False, separators=(",", ":"))
+# Les sérialisations que la chaîne sert : compacte (fastmcp, `MarkdownBody`) et
+# `json.dumps` par défaut (`redaction.rebuild_result`).
+_STYLES = (
+    {"ensure_ascii": False, "separators": (",", ":")},
+    {"ensure_ascii": True, "separators": (", ", ": ")},
+)
 
 
 def _fiches(valeur) -> bool:
     return isinstance(valeur, list) and len(valeur) >= 2 and all(isinstance(x, dict) for x in valeur)
-
-
-def _lignes(fiches: list) -> str:
-    return "[\n" + ",\n".join(_compact(f) for f in fiches) + "\n]"
 
 
 def rendu(texte: str) -> str | None:
@@ -58,16 +68,27 @@ def rendu(texte: str) -> str | None:
         charge = json.loads(texte)
     except ValueError:
         return None
-    if _fiches(charge):
-        return _lignes(charge)
-    if not isinstance(charge, dict):
+    if not (_fiches(charge) or isinstance(charge, dict)):
         return None
+    style = next((st for st in _STYLES if json.dumps(charge, **st) == texte), None)
+    if style is None:
+        return None  # pas une sérialisation de la chaîne : réécrire l'altérerait
+    virgule, deux_points = style["separators"]
+
+    def ser(valeur) -> str:
+        return json.dumps(valeur, **style)
+
+    def lignes(fiches: list) -> str:
+        return "[\n" + ",\n".join(ser(f) for f in fiches) + "\n]"
+
+    if _fiches(charge):
+        return lignes(charge)
     candidates = [c for c, v in charge.items() if _fiches(v)]
     if not candidates:
         return None
-    cle = max(candidates, key=lambda c: len(_compact(charge[c])))
-    parties = [f"{_compact(c)}:{_lignes(v) if c == cle else _compact(v)}" for c, v in charge.items()]
-    return "{" + ",".join(parties) + "}"
+    cle = max(candidates, key=lambda c: len(ser(charge[c])))
+    parties = [f"{ser(c)}{deux_points}{lignes(v) if c == cle else ser(v)}" for c, v in charge.items()]
+    return "{" + virgule.join(parties) + "}"
 
 
 class UneFicheParLigneMiddleware(Middleware):
@@ -80,7 +101,8 @@ class UneFicheParLigneMiddleware(Middleware):
         contenu = getattr(result, "content", None) or []
         if len(contenu) != 1 or not isinstance(contenu[0], TextContent):
             return result
-        texte = rendu(contenu[0].text)
+        brut = contenu[0].text
+        texte = await asyncio.to_thread(rendu, brut) if len(brut) >= SEUIL_THREAD else rendu(brut)
         if texte is None:
             return result
         return ToolResult(

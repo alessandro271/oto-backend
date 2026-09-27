@@ -52,8 +52,12 @@ def test_une_grosse_page_est_servie_une_fiche_par_ligne_et_reste_le_meme_json():
     assert lignes[-1] == '],"next":null}'
 
 
+def _compact(valeur) -> str:
+    return json.dumps(valeur, ensure_ascii=False, separators=(",", ":"))
+
+
 def test_une_liste_servie_seule():
-    texte = une_fiche_par_ligne.rendu(json.dumps(_FICHES))
+    texte = une_fiche_par_ligne.rendu(_compact(_FICHES))
     assert texte is not None and json.loads(texte) == _FICHES
     assert len(texte.splitlines()) == len(_FICHES) + 2
 
@@ -73,9 +77,70 @@ def test_sans_liste_de_fiches_rien_ne_change():
 
 def test_la_plus_lourde_des_listes_est_celle_qui_se_deplie():
     charge = {"facettes": [{"k": "a"}, {"k": "b"}], "rows": _FICHES}
-    texte = une_fiche_par_ligne.rendu(json.dumps(charge))
+    texte = une_fiche_par_ligne.rendu(_compact(charge))
     assert json.loads(texte) == charge
     assert '"facettes":[{"k":"a"},{"k":"b"}]' in texte, "la petite liste reste sur sa ligne"
+
+
+def _brut(fiche: str) -> str:
+    """Un document JSON brut, tel qu'un outil qui rend une `str` le sert."""
+    return "[" + ",".join(fiche % i for i in range(300)) + "]"
+
+
+def test_un_json_brut_qui_n_est_pas_une_forme_servie_reste_intact():
+    """Parser puis réécrire n'est pas fidèle à l'octet : on ne réécrit qu'une
+    sérialisation exacte de la chaîne, un autre texte reste tel quel."""
+    note = "x" * 80
+    for brut in (
+        _brut('{"id":%d,"v":1e5,"note":"' + note + '"}'),        # 1e5 → 100000.0
+        _brut('{"id":%d,"v":1.10,"note":"' + note + '"}'),       # 1.10 → 1.1
+        _brut('{"id":%d,"id":0,"note":"' + note + '"}'),         # clé en double perdue
+        _brut('{"id":%d,"ville":"\\u00e9","note":"' + note + '"}'),  # é échappé, compact
+        json.dumps(_FICHES, indent=1),                            # indenté
+    ):
+        assert len(brut) >= une_fiche_par_ligne.SEUIL
+        assert une_fiche_par_ligne.rendu(brut) is None
+
+
+def test_la_forme_de_la_redaction_est_reprise_a_l_identique():
+    """`json.dumps` par défaut (ce que réémet la rédaction) : seuls les blancs entre les
+    fiches changent, les échappements restent."""
+    fiches = [{**f, "ville": "Orléans"} for f in _FICHES]
+    brut = json.dumps({"rows": fiches, "total": 200})
+    texte = une_fiche_par_ligne.rendu(brut)
+    assert texte is not None and json.loads(texte) == {"rows": fiches, "total": 200}
+    assert "Orl\\u00e9ans" in texte and "é" not in texte
+    assert texte.splitlines()[-1] == '], "total": 200}'
+    assert texte.replace("[\n", "[").replace(",\n", ", ").replace("\n]", "]") == brut
+
+
+def test_un_surrogate_echappe_traverse_la_chaine_intact():
+    """`\\ud800` échappé est du JSON valide ; parsé puis réécrit, il devenait un
+    surrogate seul, que la sérialisation MCP refuse (`PydanticSerializationError`)."""
+    brut = _brut('{"id":%d,"s":"\\ud800","note":"' + "x" * 80 + '"}')
+
+    def page() -> str:
+        return brut
+
+    texte, err = _servir(_banc(page))
+    assert not err
+    assert texte == brut
+
+
+def test_une_tres_grosse_page_se_calcule_hors_de_la_boucle(monkeypatch):
+    monkeypatch.setattr(une_fiche_par_ligne, "SEUIL_THREAD", 0)
+    appels = []
+    vrai = une_fiche_par_ligne.asyncio.to_thread
+
+    async def espion(fn, *a):
+        appels.append(fn)
+        return await vrai(fn, *a)
+
+    monkeypatch.setattr(une_fiche_par_ligne.asyncio, "to_thread", espion)
+    charge = {"rows": _FICHES}
+    texte, _ = _servir(_banc(lambda: charge))
+    assert appels.count(une_fiche_par_ligne.rendu) == 1
+    assert len(texte.splitlines()) == len(_FICHES) + 2 and json.loads(texte) == charge
 
 
 def test_une_erreur_n_est_pas_touchee():
