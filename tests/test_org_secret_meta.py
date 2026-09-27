@@ -64,5 +64,9 @@ def test_all_org_shareable_providers_accepted_without_base_url_unless_remote():
         meta, code = providers.org_secret_meta(provider, None)
         if provider in remote:
             assert code == "base_url_required", provider
+        elif providers.REGISTRY[provider].secret_kind == "oauth":
+            # Partageable par CONSENTEMENT seulement (google, 2026-09-27) : la pose
+            # générique d'un secret collé reste refusée.
+            assert code == "provider_not_shareable", provider
         else:
             assert code is None, provider

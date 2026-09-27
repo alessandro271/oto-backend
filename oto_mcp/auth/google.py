@@ -68,25 +68,71 @@ from ..connectors import health as connector_health
 from ..connectors import link as connector_link
 
 
-SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    # Drive COMPLET (restricted) — gérer TOUS les fichiers du user (pas seulement
+# Scopes d'IDENTITÉ — demandés à CHAQUE consentement, quel que soit le service : c'est
+# par eux que le compte se NOMME (`userinfo` → email), sans dépendre du scope Gmail
+# comme avant le split (un consentement Drive seul n'a pas de profil Gmail à lire).
+# Non sensibles chez Google.
+IDENTITY_SCOPES = ("openid", "https://www.googleapis.com/auth/userinfo.email")
+
+# Les scopes de CHAQUE service — un connecteur par service depuis le split du
+# 2026-09-26 (`providers/google.service`) : connecter Drive ne demande que Drive, en
+# autorisation incrémentale sur le même compte (`include_granted_scopes`). Un tenant
+# n'a plus à faire vérifier chez Google un service qu'il n'offre pas, et une personne
+# qui ne veut que son agenda ne livre pas sa boîte mail.
+SERVICE_SCOPES: dict[str, tuple[str, ...]] = {
+    # Scope SENSIBLE → vérification Google à la publication, pas d'audit CASA.
+    "sheets": ("https://www.googleapis.com/auth/spreadsheets",),
+    # Drive COMPLET (RESTRICTED) — gérer TOUS les fichiers du user (pas seulement
     # ceux créés par oto). Couvre aussi l'export datastore (#29). Supersede drive.file.
-    "https://www.googleapis.com/auth/drive",
-    # Gmail surface complète (read/send/reply/draft/archive/trash). Scope
-    # RESTRICTED chez Google → audit CASA requis si l'écran de consentement
-    # passe en published/external (OK en mode testing).
-    "https://www.googleapis.com/auth/gmail.modify",
-    # Google Tasks (read/write). Scope SENSIBLE (pas restricted comme Gmail) →
-    # vérification Google requise si l'app passe en published, pas d'audit CASA.
-    "https://www.googleapis.com/auth/tasks",
-    # Google Calendar (read/write events). Scope SENSIBLE (pas restricted) →
-    # vérification de marque à la publication, pas d'audit CASA.
-    "https://www.googleapis.com/auth/calendar",
+    "drive": ("https://www.googleapis.com/auth/drive",),
+    # Gmail surface complète (read/send/reply/draft/archive/trash). RESTRICTED →
+    # audit CASA requis si l'écran de consentement passe en published.
+    "gmail": ("https://www.googleapis.com/auth/gmail.modify",),
+    # Google Tasks (read/write). SENSIBLE, pas restricted.
+    "tasks": ("https://www.googleapis.com/auth/tasks",),
+    # Google Calendar (read/write events). SENSIBLE, pas restricted.
+    "calendar": ("https://www.googleapis.com/auth/calendar",),
     # Google Chat (RESTRICTED) — lire les espaces + lire/poster des messages.
-    "https://www.googleapis.com/auth/chat.spaces.readonly",
-    "https://www.googleapis.com/auth/chat.messages",
-]
+    "chat": ("https://www.googleapis.com/auth/chat.spaces.readonly",
+             "https://www.googleapis.com/auth/chat.messages"),
+}
+SERVICES: tuple[str, ...] = tuple(SERVICE_SCOPES)
+SERVICE_LABELS = {"gmail": "Gmail", "drive": "Google Drive", "sheets": "Google Sheets",
+                  "calendar": "Google Calendar", "tasks": "Google Tasks",
+                  "chat": "Google Chat"}
+
+# TOUS les scopes de service — ce que le COMPTE (`google`) demande sous notre app :
+# l'état d'avant le split, pour un tableau de bord à carte Google unique.
+SCOPES = [scope for svc in SERVICES for scope in SERVICE_SCOPES[svc]]
+# Ce qu'une ligne du coffre peut porter : rien d'autre n'y entre (`persist_token`),
+# même si le client d'un partenaire a d'autres scopes accordés ailleurs.
+KNOWN_SCOPES = frozenset(IDENTITY_SCOPES) | frozenset(SCOPES)
+
+
+def services_granted(scopes) -> list[str]:
+    """Les services dont TOUS les scopes figurent dans `scopes` (chaîne ou liste) —
+    ce qu'un compte a réellement autorisé, dans l'ordre des services."""
+    have = set(scopes.split() if isinstance(scopes, str) else (scopes or ()))
+    return [svc for svc in SERVICES if set(SERVICE_SCOPES[svc]) <= have]
+
+
+def scopes_for(connector: str, app: "OAuthApp") -> list[str]:
+    """Les scopes que CE consentement demande — l'identité, puis :
+
+    - un service : les siens, et rien d'autre ;
+    - le compte (`google`) : sous NOTRE app, les six services (l'état d'avant le
+      split, pour un tableau de bord à carte unique) ; sous l'app d'un TENANT,
+      rien de plus que l'identité — un partenaire ne demande jamais un scope que
+      son projet Google ne déclare pas, ses services les ajoutent un à un.
+
+    Un connecteur inconnu est refusé : rien ici ne devine un scope."""
+    if connector == "google":
+        base = list(SCOPES) if app.origin == "env" else []
+    elif connector in SERVICE_SCOPES:
+        base = list(SERVICE_SCOPES[connector])
+    else:
+        raise RuntimeError(f"« {connector} » n'est pas un service Google connu.")
+    return list(IDENTITY_SCOPES) + base
 
 _AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 _TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -202,8 +248,14 @@ def _ctx_org(sub: str) -> int:
     return org
 
 
-def make_state(sub: str, org_id: int, return_app: str = "") -> str:
-    """HMAC-signed state : `<b64(payload)>.<b64(sig)>` — payload = {sub, org, ts, app}.
+def make_state(sub: str, org_id: int, return_app: str = "",
+               connector: str = "google", scope: str = "member",
+               group_id: Optional[int] = None) -> str:
+    """HMAC-signed state : `<b64(payload)>.<b64(sig)>` — payload = {sub, org, ts, app, c}.
+
+    `connector` (`c`) : QUELLE carte a demandé le consentement — le compte, ou l'un de
+    ses six services (split du 2026-09-26). Le callback y renvoie ; sans lui, une
+    personne qui autorisait Drive atterrissait sur la carte du compte.
 
     L'org du DÉMARRAGE voyage jusqu'au callback (qui vient de Google, sans les
     headers de consultation) : le compte est scopé à l'org où l'user a cliqué
@@ -218,14 +270,22 @@ def make_state(sub: str, org_id: int, return_app: str = "") -> str:
     ici : le state ne doit jamais porter une clé de front non vérifiée, sinon il
     signe une redirection ouverte."""
     payload = json.dumps({"sub": sub, "org": org_id, "ts": int(time.time()),
-                          "app": return_app},
+                          "app": return_app, "c": connector,
+                          # À QUI le compte est confié (2026-09-27) : le membre, ou son
+                          # org / son équipe (compte PARTAGÉ, posé par un admin).
+                          "s": scope, "g": group_id},
                          separators=(",", ":")).encode()
     sig = hmac.new(_state_secret(), payload, hashlib.sha256).digest()
     return f"{_b64url(payload)}.{_b64url(sig)}"
 
 
-def verify_state(state: str) -> Optional[tuple[str, int, str]]:
-    """Renvoie (sub, org_id, return_app) si state valide et non expiré, sinon None.
+def verify_state(state: str) -> Optional[tuple]:
+    """Renvoie (sub, org_id, return_app, connector, scope, group_id) si state valide et
+    non expiré, sinon None. `scope` retombe sur `"member"` pour un state d'avant les
+    comptes partagés ; un `scope="group"` sans équipe est refusé.
+
+    `connector` retombe sur `"google"` pour un state émis AVANT le split : le compte,
+    exactement la carte qui existait alors.
 
     `return_app` retombe sur `""` pour un state émis AVANT ce lot : ils vivent
     quelques minutes, il y en a en vol au déploiement, et les casser renverrait
@@ -258,11 +318,21 @@ def verify_state(state: str) -> Optional[tuple[str, int, str]]:
     # retour ne doit pas ressusciter par sa signature.
     from . import flow as oauth_flow
 
-    return sub, org, oauth_flow.resolve_return_app(data.get("app") or "")
+    connector = data.get("c") or "google"
+    if connector != "google" and connector not in SERVICE_SCOPES:
+        return None
+    scope, group = data.get("s") or "member", data.get("g")
+    if scope not in ("member", "org", "group") or (
+            scope == "group" and not isinstance(group, int)):
+        return None
+    return (sub, org, oauth_flow.resolve_return_app(data.get("app") or ""), connector,
+            scope, group if scope == "group" else None)
 
 
-def build_auth_url(sub: str, return_app: str = "") -> str:
-    """L'URL de consentement Google.
+def build_auth_url(sub: str, return_app: str = "", connector: str = "google",
+                   scope: str = "member") -> str:
+    """L'URL de consentement Google — pour le compte, ou pour UN service (ses scopes
+    seulement, cf. `scopes_for`).
 
     `return_app` : clé de front déclarée par l'APPELANT (ex. un front tiers), jamais
     un Origin sniffé — les capacités sont transport-agnostiques (ADR 0009). Validée
@@ -274,24 +344,32 @@ def build_auth_url(sub: str, return_app: str = "") -> str:
     from . import flow as oauth_flow
 
     org_id = _ctx_org(sub)
+    group_id: Optional[int] = None
+    if scope != "member":
+        # Un compte PARTAGÉ ne se connecte qu'au nom de ceux qu'on administre :
+        # admin d'org pour l'org, chef d'équipe pour l'équipe (même règle que
+        # Salesforce). Lève PermissionError / ValueError — le flux les nomme.
+        _, target = scope_target(sub, scope)
+        group_id = target if scope == "group" else None
     resolved_app = oauth_flow.resolve_return_app(return_app)
     app = app_for(sub)
     params = {
         "client_id": app.client_id,
         "redirect_uri": app.redirect_uri,
         "response_type": "code",
-        "scope": " ".join(SCOPES),
+        "scope": " ".join(scopes_for(connector, app)),
         "access_type": "offline",
         # consent → force refresh_token ; select_account → laisse l'user choisir
         # quel compte Google connecter (clé du multi-compte).
         "prompt": "consent select_account",
-        "state": make_state(sub, org_id, resolved_app),
+        "state": make_state(sub, org_id, resolved_app, connector, scope, group_id),
+        # Consentement INCRÉMENTAL : le jeton porte aussi les scopes déjà accordés à ce
+        # client. C'est ce qui fait tenir le split — autoriser Drive après Gmail rend UN
+        # jeton qui sait les deux, sur la même ligne du coffre. Sous le client d'un
+        # partenaire aussi : son client est dédié à ce produit, et ce qui entre au coffre
+        # est de toute façon filtré sur `KNOWN_SCOPES` (`persist_token`).
+        "include_granted_scopes": "true",
     }
-    if app.origin == "env":
-        # Consentement incrémental : le jeton porte aussi les scopes déjà accordés à CE
-        # client. Sous notre client, ce sont les nôtres. Sous celui d'un partenaire, ce
-        # seraient ceux de ses AUTRES produits — hors de `SCOPES`, jamais demandés ici.
-        params["include_granted_scopes"] = "true"
     return f"{_AUTH_URL}?{urlencode(params)}"
 
 
@@ -319,13 +397,25 @@ def exchange_code(code: str, sub: str) -> dict:
     return r.json()
 
 
-def _fetch_email(access_token: str) -> str:
+def _fetch_email(access_token: str, scopes=()) -> str:
     """Récupère l'adresse du compte Google qui vient de consentir.
 
-    Via le profil Gmail (scope gmail.modify déjà accordé) — évite d'ajouter
-    un scope identité juste pour connaître l'email.
+    Par `userinfo` dès que le scope d'identité est là (tout consentement depuis le
+    split le demande) — un consentement Drive seul n'a pas de profil Gmail à lire.
+    Repli sur le profil Gmail pour un jeton d'avant, qui n'a que `gmail.modify`.
     """
     import requests
+    if IDENTITY_SCOPES[1] in set(scopes or ()):
+        r = requests.get(
+            "https://openidconnect.googleapis.com/v1/userinfo",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=15,
+        )
+        r.raise_for_status()
+        email = r.json().get("email")
+        if not email:
+            raise RuntimeError("userinfo sans email — impossible d'identifier le compte.")
+        return email
     r = requests.get(
         "https://gmail.googleapis.com/gmail/v1/users/me/profile",
         headers={"Authorization": f"Bearer {access_token}"},
@@ -338,8 +428,17 @@ def _fetch_email(access_token: str) -> str:
     return email
 
 
+class GoogleScopeMissing(RuntimeError):
+    """Réponse de jeton Google sans champ `scope` : droits accordés inconnus."""
+
+
+class GoogleScopeRejected(RuntimeError):
+    """Google refuse de borner l'access token aux scopes enregistrés (`invalid_scope`)."""
+
+
 def persist_token(sub: str, org_id: int, token_response: dict,
-                  client_id: Optional[str] = None) -> str:
+                  client_id: Optional[str] = None, scope: str = "member",
+                  group_id: Optional[int] = None) -> str:
     """Persiste les tokens (scope membre : l'org vient du state, capturée au
     démarrage du flow) et renvoie l'email du compte Google connecté.
 
@@ -358,8 +457,28 @@ def persist_token(sub: str, org_id: int, token_response: dict,
     access_token = token_response.get("access_token")
     expires_in = int(token_response.get("expires_in", 0) or 0)
     expires_at = datetime.fromtimestamp(time.time() + expires_in, tz=timezone.utc).isoformat() if expires_in else None
-    scopes = token_response.get("scope") or " ".join(SCOPES)
-    email = _fetch_email(access_token)
+    # Ce qui entre au coffre : les scopes que le jeton PORTE (l'union, par
+    # `include_granted_scopes`), bornés à ceux qu'on connaît — jamais ceux d'un autre
+    # produit du même client. Une réponse d'échange SANS `scope` n'est pas « tout » :
+    # on ne sait pas ce qui a été accordé, donc on refuse plutôt que d'ouvrir les six
+    # services en silence (revue de #1081).
+    brut = token_response.get("scope")
+    if not brut:
+        raise GoogleScopeMissing(
+            "Google n'a pas dit quels droits il accorde (réponse sans champ `scope`) : "
+            "rien n'a été enregistré. Relance la connexion du compte Google.")
+    granted = [sc for sc in brut.split() if sc in KNOWN_SCOPES]
+    scopes = " ".join(granted)
+    email = _fetch_email(access_token, granted)
+    emetteur = client_id or app_for(sub).client_id
+    if scope != "member":
+        # Compte PARTAGÉ : rangé sous l'org ou l'équipe du state (vérifié signé), avec
+        # qui l'a connecté — jamais sous le membre qui a cliqué.
+        db.set_shared_google_oauth(
+            scope, group_id if scope == "group" else org_id, set_by=sub,
+            google_email=email, refresh_token=refresh_token, scopes=scopes,
+            access_token=access_token, expires_at=expires_at, client_id=emetteur)
+        return email
     db.set_google_oauth(
         sub,
         org_id,
@@ -368,7 +487,7 @@ def persist_token(sub: str, org_id: int, token_response: dict,
         scopes=scopes,
         access_token=access_token,
         expires_at=expires_at,
-        client_id=client_id or app_for(sub).client_id,
+        client_id=emetteur,
     )
     return email
 
@@ -406,6 +525,12 @@ def _emis_par_un_autre_client(row: dict, app: "OAuthApp") -> bool:
     return emetteur != app.client_id
 
 
+def config_dashboard(sub) -> str:
+    """Le tableau de bord de SON produit — où une carte de service se connecte."""
+    from .. import config
+    return config.dashboard_url_for(sub)
+
+
 def _reconnecter(sub) -> str:
     """Où CE compte va reconnecter son Google — le tableau de bord de SON produit.
 
@@ -419,21 +544,27 @@ def _reconnecter(sub) -> str:
 
 
 def _refresh_access_token(refresh_token: str, sub: str,
-                          app: Optional[OAuthApp] = None) -> dict:
+                          app: Optional[OAuthApp] = None,
+                          scopes: Optional[str] = None) -> dict:
     """`app` : l'app déjà résolue par l'appelant (une lecture de coffre de moins) ;
-    absente, celle que `app_for(sub)` sert."""
+    absente, celle que `app_for(sub)` sert.
+
+    `scopes` : les scopes ENREGISTRÉS pour cette ligne. Passés à Google, ils BORNENT
+    l'access token rendu : avec `include_granted_scopes` (le découpage par service en
+    a besoin), le refresh token d'un client de tenant porte aussi les droits que ce
+    client a obtenus ailleurs — l'access token, lui, ne porte que les nôtres (revue de
+    #1081). Le refresh token reste large : c'est structurel."""
     import requests
     app = app or app_for(sub)
-    r = requests.post(
-        _TOKEN_URL,
-        data={
-            "client_id": app.client_id,
-            "client_secret": app.client_secret,
-            "refresh_token": refresh_token,
-            "grant_type": "refresh_token",
-        },
-        timeout=15,
-    )
+    data = {
+        "client_id": app.client_id,
+        "client_secret": app.client_secret,
+        "refresh_token": refresh_token,
+        "grant_type": "refresh_token",
+    }
+    if scopes:
+        data["scope"] = scopes
+    r = requests.post(_TOKEN_URL, data=data, timeout=15)
     # `invalid_grant` SEUL vaut « réauth » (même règle que atlassian/folk/zoho,
     # `oauth_flow.grant_is_dead`) — un autre 4xx (client mal configuré) doit
     # remonter, pas se confondre avec un grant mort.
@@ -443,6 +574,9 @@ def _refresh_access_token(refresh_token: str, sub: str,
     if r.status_code in (400, 401) and any(
             code in body.lower() for code in ("unauthorized_client", "invalid_client")):
         raise GoogleClientRejected(body)
+    if r.status_code == 400 and "invalid_scope" in body.lower():
+        # Le bornage est refusé : on ne retombe PAS sur un jeton non borné.
+        raise GoogleScopeRejected(body)
     r.raise_for_status()
     return r.json()
 
@@ -478,7 +612,90 @@ def _no_account_message(sub: str, org_id: Optional[int], account: Optional[str])
             "ni un nom d'organisation. La liste complète : gmail_list_accounts().")
 
 
-def credentials_for(sub: str, account: Optional[str] = None):
+# --- comptes PARTAGÉS (org / équipe, 2026-09-27) ------------------------------
+#
+# Un admin d'org ou un chef d'équipe connecte UN compte Google au nom de tous — une
+# boîte partagée, un agenda d'équipe. Ordre de résolution à l'appel : le compte du
+# MEMBRE d'abord (le sien, ou celui qu'il nomme), puis celui de son ÉQUIPE active,
+# puis celui de son ORG. Personne n'atteint le compte PERSONNEL d'un autre : ne sont
+# partagés que les comptes qu'un admin a posés comme tels.
+
+def _shared_targets(sub: str, org_id: int) -> list:
+    """Les porteurs de comptes partagés joignables par ce membre, du plus proche au
+    plus large : son équipe active, puis son org."""
+    from .. import access
+    out = []
+    group = access.current_group(sub)
+    if group is not None:
+        out.append(("group", int(group)))
+    out.append(("org", int(org_id)))
+    return out
+
+
+def scope_target(sub: str, scope: str) -> tuple:
+    """`(org_id, target_id)` pour un geste d'ADMIN sur les comptes partagés d'un
+    scope — lève `PermissionError` si l'appelant n'administre pas ce scope."""
+    from .. import access, roles
+    org_id = _ctx_org(sub)
+    if scope == "org":
+        if not roles.is_org_admin(sub, org_id):
+            raise PermissionError(
+                "Seul un admin de l'organisation connecte ou gère un compte Google "
+                "partagé par toute l'organisation.")
+        return org_id, org_id
+    if scope == "group":
+        group = access.current_group(sub)
+        if group is None:
+            raise PermissionError(
+                "Aucune équipe active : choisis l'équipe avant de lui partager un compte Google.")
+        if not roles.can_admin_group(sub, int(group)):
+            raise PermissionError(
+                "Seul un chef d'équipe connecte ou gère un compte Google partagé par l'équipe.")
+        return org_id, int(group)
+    raise ValueError(f"scope invalide : {scope!r} (attendu 'member', 'org' ou 'group')")
+
+
+def _resolve_row(sub: str, org_id: int, account: Optional[str]):
+    """`(row, where)` — `where` = `("member", None)`, `("group", id)` ou `("org", id)`.
+    Le membre d'abord, puis les comptes partagés du plus proche au plus large."""
+    row = db.get_google_oauth(sub, org_id, account=account)
+    if row:
+        return row, ("member", None)
+    for scope, target in _shared_targets(sub, org_id):
+        shared = db.get_shared_google_oauth(scope, target, account=account)
+        if shared:
+            return shared, (scope, target)
+    return None, None
+
+
+def _health_entity(sub: str, org_id: int, where) -> tuple:
+    """L'entité du coffre qui porte la ligne résolue — la santé s'y écrit."""
+    scope, target = where
+    if scope == "member":
+        return credentials_store.MEMBER, credentials_store.member_id(org_id, sub)
+    return scope, str(target)
+
+
+def list_shared_accounts(sub: str) -> list[dict]:
+    """Les comptes Google partagés joignables par ce membre (équipe active, org)."""
+    from .. import access
+    org_id = access.current_org(sub)
+    if org_id is None:
+        return []
+    out: list[dict] = []
+    for scope, target in _shared_targets(sub, org_id):
+        out.extend(db.list_shared_google_accounts(scope, target))
+    return out
+
+
+def set_default_shared(sub: str, account: str, scope: str) -> bool:
+    """Le compte partagé par défaut d'un scope — geste d'admin (`scope_target`)."""
+    _, target = scope_target(sub, scope)
+    return db.set_default_shared_google_account(scope, target, account)
+
+
+def credentials_for(sub: str, account: Optional[str] = None,
+                    service: Optional[str] = None):
     """Renvoie un `google.oauth2.credentials.Credentials` valide pour ce sub.
 
     `account` (email) cible un compte précis ; None = compte par défaut. Si aucun
@@ -492,9 +709,18 @@ def credentials_for(sub: str, account: Optional[str] = None):
         from .. import access  # lazy : évite tout cycle d'import au boot
         account = access.project_pinned_identity("google")
     org_id = _ctx_org(sub)
-    row = db.get_google_oauth(sub, org_id, account=account)
+    row, where = _resolve_row(sub, org_id, account)
     if not row:
         raise RuntimeError(_no_account_message(sub, org_id, account))
+    if service and service not in services_granted(row.get("scopes")):
+        # Le compte existe mais n'a pas autorisé CE service (split du 2026-09-26) :
+        # nommer la carte à ouvrir, pas « reconnecte-toi » — l'API Google, elle,
+        # répondrait un 403 `insufficientPermissions` sans dire lequel.
+        label = SERVICE_LABELS.get(service, service)
+        raise RuntimeError(
+            f"Le compte Google {row.get('google_email') or account or ''} n'a pas "
+            f"encore autorisé {label} : connecte {label} depuis sa carte sur "
+            f"{config_dashboard(sub)}. Rien n'a été fait.")
 
     from google.oauth2.credentials import Credentials
 
@@ -514,14 +740,14 @@ def credentials_for(sub: str, account: Optional[str] = None):
     # UNE lecture de l'app par appel (coffre + déchiffrement pour un compte tenant) :
     # elle sert au contrôle d'émetteur, au refresh et à l'objet rendu.
     app = app_for(sub)
-    member_id = credentials_store.member_id(org_id, sub)
+    et, eid = _health_entity(sub, org_id, where)
     email = row.get("google_email") or ""
     if _emis_par_un_autre_client(row, app):
         # L'app servie a changé depuis la connexion (posée, changée ou retirée) : ce
         # jeton ne se rafraîchira plus. On le dit avant tout appel réseau — et avant
         # qu'un access_token encore valide ne masque la panne pour une heure.
         connector_health.mark_rejected(
-            credentials_store.MEMBER, member_id, "google", email,
+            et, eid, "google", email,
             "jeton émis par un autre client OAuth que l'app servie")
         raise GoogleReauthRequired(
             f"Le compte Google {email or '(sans email)'} a été connecté sous une autre app "
@@ -530,9 +756,15 @@ def credentials_for(sub: str, account: Optional[str] = None):
 
     if needs_refresh:
         account = email
-        scope = (credentials_store.MEMBER, member_id, account)
+        scope = (et, eid, account)
         try:
-            resp = _refresh_access_token(row["refresh_token"], sub, app)
+            resp = _refresh_access_token(row["refresh_token"], sub, app,
+                                         scopes=row.get("scopes"))
+        except GoogleScopeRejected as e:
+            raise GoogleScopeRejected(
+                f"Google refuse de borner le jeton du compte {account or '(sans email)'} "
+                f"aux droits enregistrés ({str(e)[:120]}) : reconnecte ce compte sur "
+                f"{_reconnecter(sub)}. Rien n'a été fait.") from e
         except GoogleClientRejected as e:
             raise GoogleClientRejected(
                 f"Google refuse le client OAuth au rafraîchissement du compte "
@@ -545,7 +777,7 @@ def credentials_for(sub: str, account: Optional[str] = None):
             # ENSUITE, sans changer le contrat de `credentials_for` (toujours des
             # `Credentials` valides ou une exception, jamais un `None` muet).
             connector_health.mark_rejected(
-                credentials_store.MEMBER, member_id, "google", account, str(e) or None)
+                et, eid, "google", account, str(e) or None)
             raise GoogleReauthRequired(
                 f"Le jeton du compte Google {account or '(sans email)'} est expiré ou "
                 "révoqué (Google répond invalid_grant) : reconnecte ce compte sur "
@@ -553,7 +785,11 @@ def credentials_for(sub: str, account: Optional[str] = None):
         access_token = resp["access_token"]
         expires_in = int(resp.get("expires_in", 0) or 0)
         new_exp = datetime.fromtimestamp(time.time() + expires_in, tz=timezone.utc).isoformat()
-        db.update_google_access_token(sub, org_id, row.get("google_email"), access_token, new_exp)
+        if where[0] == "member":
+            db.update_google_access_token(sub, org_id, row.get("google_email"), access_token, new_exp)
+        else:
+            db.update_shared_google_access_token(where[0], where[1], row.get("google_email"),
+                                                 access_token, new_exp)
         # `update_google_access_token` MERGE le meta (`update_meta`, JSONB ||) :
         # un `health_ko` posé par un refresh mort précédent ne serait jamais
         # effacé par ce chemin sans cet appel explicite (oto#25 lot b3, même
@@ -583,13 +819,32 @@ def _link_state(sub: str) -> connector_link.LinkState:
     """État de lien pour `/api/me`. Google est MULTI-COMPTE : une ligne de coffre par
     adresse (`account = email`), avec ses satellites dans `meta`. Une boucle générique
     qui chercherait « la » ligne du membre n'en trouverait aucune."""
-    accounts = list_accounts(sub)
+    # Un compte PARTAGÉ par l'org ou l'équipe relie aussi la carte : les outils le
+    # résolvent (`_resolve_row`), la carte ne doit pas dire « à connecter ».
+    accounts = list_accounts(sub) + list_shared_accounts(sub)
     return connector_link.LinkState(
         linked=bool(accounts), accounts=len(accounts),
         set_at=max((a.get("set_at") or "" for a in accounts), default="") or None)
 
 
 connector_link.register("google", _link_state)
+
+
+def _link_state_for(service: str):
+    """L'état de lien d'UN service : les comptes qui l'ont AUTORISÉ, pas tous les
+    comptes du porteur — sinon la carte Drive dirait « connecté » à qui n'a
+    consenti que Gmail, et le premier `drive_file` échouerait."""
+    def read(sub: str) -> connector_link.LinkState:
+        accounts = [a for a in list_accounts(sub) + list_shared_accounts(sub)
+                    if service in services_granted(a.get("scopes"))]
+        return connector_link.LinkState(
+            linked=bool(accounts), accounts=len(accounts),
+            set_at=max((a.get("set_at") or "" for a in accounts), default="") or None)
+    return read
+
+
+for _svc in SERVICES:
+    connector_link.register(_svc, _link_state_for(_svc))
 
 
 def _start_flow(ctx, values: dict) -> "connector_flow.FlowStart":
@@ -610,8 +865,14 @@ def _start_flow(ctx, values: dict) -> "connector_flow.FlowStart":
         # hors formulaire (le client sait qui il est), elle ne doit jamais devenir
         # un champ visible à l'utilisateur. Même convention que les quatre autres
         # connecteurs OAuth — Google était le seul à l'ignorer (oto-backend#877).
-        return connector_flow.FlowStart(
-            auth_url=build_auth_url(ctx.sub, (values or {}).get("app") or ""))
+        app_key, scope = (values or {}).get("app") or "", (values or {}).get("scope") or "member"
+        url = (build_auth_url(ctx.sub, app_key) if scope == "member"
+               else build_auth_url(ctx.sub, app_key, scope=scope))
+        return connector_flow.FlowStart(auth_url=url)
+    except PermissionError as e:
+        raise AuthzDenied(403, "scope_forbidden", str(e))
+    except ValueError as e:
+        raise AuthzDenied(400, "invalid_scope", str(e))
     except RuntimeError as e:
         raise AuthzDenied(503, "oauth_misconfigured", str(e))
 
@@ -619,18 +880,75 @@ def _start_flow(ctx, values: dict) -> "connector_flow.FlowStart":
 connector_flow.declare(
     "google",
     start=_start_flow,
-    label="Autoriser oto chez Google",
+    label="Lier un compte Google",
     callback_path="/api/google/oauth/callback",
 )
 
 
-def revoke(sub: str, account: Optional[str] = None) -> None:
+def _start_flow_for(service: str):
+    """Le geste « connecter » d'UN service (split du 2026-09-26) : le même flux que
+    le compte, borné à ses scopes (`scopes_for`), et un state qui nomme la carte —
+    le callback y ramène."""
+    def start(ctx, values: dict) -> "connector_flow.FlowStart":
+        from ..capabilities._types import AuthzDenied
+        try:
+            app_key = (values or {}).get("app") or ""
+            scope = (values or {}).get("scope") or "member"
+            url = (build_auth_url(ctx.sub, app_key, connector=service) if scope == "member"
+                   else build_auth_url(ctx.sub, app_key, connector=service, scope=scope))
+            return connector_flow.FlowStart(auth_url=url)
+        except PermissionError as e:
+            raise AuthzDenied(403, "scope_forbidden", str(e))
+        except ValueError as e:
+            raise AuthzDenied(400, "invalid_scope", str(e))
+        except RuntimeError as e:
+            raise AuthzDenied(503, "oauth_misconfigured", str(e))
+    return start
+
+
+for _svc in SERVICES:
+    connector_flow.declare(
+        _svc,
+        start=_start_flow_for(_svc),
+        label=f"Autoriser {SERVICE_LABELS[_svc]}",
+        callback_path="/api/google/oauth/callback",
+    )
+
+
+def _revoke_shared(sub: str, account: Optional[str], scope: str) -> None:
+    """Retire un compte PARTAGÉ (ou tous ceux du scope) — geste d'admin."""
+    import requests
+
+    _, target = scope_target(sub, scope)
+    for r in db.list_shared_google_accounts(scope, target):
+        if account is not None and r.get("google_email") != account:
+            continue
+        try:
+            row = db.get_shared_google_oauth(scope, target, account=r.get("google_email"))
+        # noqa: SILENT — dette déclarée : credential indéchiffrable ⇒ on supprime quand même (#424)
+        except Exception:
+            row = None
+        if row and row.get("refresh_token"):
+            try:
+                requests.post("https://oauth2.googleapis.com/revoke",
+                              data={"token": row["refresh_token"]}, timeout=10)
+            # noqa: SILENT — dette déclarée : le refresh_token reste vivant chez Google (#424, verdict C)
+            except Exception:
+                pass
+    db.delete_shared_google_oauth(scope, target, account=account)
+
+
+def revoke(sub: str, account: Optional[str] = None, scope: str = "member") -> None:
     """Révoque côté Google + supprime de la DB.
 
     `account` (email) cible un compte ; None révoque tous les comptes du user.
+    `scope` `org`/`group` : les comptes PARTAGÉS de ce scope (admin seulement).
     """
     import requests
 
+    if scope != "member":
+        _revoke_shared(sub, account, scope)
+        return
     org_id = _ctx_org(sub)
     if account is None:
         rows = db.list_google_accounts(sub, org_id)

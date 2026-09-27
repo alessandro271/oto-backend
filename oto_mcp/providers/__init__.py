@@ -133,6 +133,15 @@ _DECLARATIONS: tuple[str, ...] = (
     "pennylaneged",
     "browser",
     "google",
+    # --- les six SERVICES Google, sur le compte `google` (split 2026-09-26) ------
+    # Chacun sa carte, son activation, sa sélection, SON consentement (ses scopes
+    # seulement) ; le compte, lui, porte le coffre — `providers/google.service`.
+    "gmail",
+    "drive",
+    "sheets",
+    "calendar",
+    "tasks",
+    "chat",
     # --- open-data / sans credential ----------------------------------------
     # Sources publiques sans rapport → connecteurs distincts (ex-`fr_open` qui les
     # fusionnait : un sac « open data » incohérent, activer l'un activait l'autre).
@@ -532,6 +541,12 @@ def org_secret_meta(provider: str, base_url: str | None) -> tuple[dict | None, s
     # NB : un connecteur qui DÉLÈGUE son credential en est exclu par construction
     # (`Connector.org_shareable`) — sa clé se pose sur le porteur, pas sur lui.
     if provider not in ORG_SHAREABLE_PROVIDERS:
+        return None, "provider_not_shareable"
+    # Un connecteur OAuth se partage par CONSENTEMENT, jamais par un secret collé :
+    # `google` accepte le palier org (compte partagé posé par un admin, 2026-09-27),
+    # mais seulement par son flux (`auth/google.build_auth_url(scope='org')`). Une
+    # pose générique écrirait une ligne sans refresh token qu'aucun outil ne lirait.
+    if c is not None and c.secret_kind == "oauth":
         return None, "provider_not_shareable"
     if base_url:
         return None, "base_url_not_allowed"
