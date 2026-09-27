@@ -98,3 +98,14 @@ def test_les_familles_admises_sont_DECLAREES_au_schema(outils, monkeypatch, outi
                    "immatriculation", "modification", "radiation",
                    "retablissement_professionnel", "vente"):
         assert f'"{admise}"' in schema
+
+
+def test_la_description_du_lot_dit_le_rattachement_et_le_texte(outils):
+    """Le lot rattache une annonce aux SEULS SIREN demandés, avec leur `partie`, et
+    sert `texte` pour toutes les familles (lib france-opendata >= 0.47.0) : la
+    description SERVIE le dit, sinon l'agent compte des avis sans lire leur texte ou
+    impute une vente à la mauvaise partie."""
+    doc = outils.tools["fr_events_batch"].__doc__
+    for mot in ("partie", "indeterminee", "texte_source", "annonces_sans_texte",
+                "lignes_total", "EVERY family"):
+        assert mot in doc, mot

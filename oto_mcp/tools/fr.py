@@ -76,11 +76,11 @@ def _split_legal_form(query: Optional[str]) -> Optional[tuple[str, str]]:
 
 
 # Les valeurs RÉELLES du champ BODACC `familleavis` (relevé de la lib france-opendata,
-# `bodacc.py`). Aucun étage en aval ne valide la valeur : elle part telle quelle dans la
-# requête, et une famille inconnue y rend ZÉRO annonce — lu par l'agent comme « aucune de
-# ces sociétés n'a eu de modification » (oto#206, mesuré sur « Modifications diverses »,
-# le LIBELLÉ que la sortie sert dans `famille`, recopié en entrée). Déclarées au schéma
-# ET revérifiées au corps : un appel interne ne passe pas par la validation du schéma.
+# `bodacc.py`). Une famille inconnue y rendait ZÉRO annonce — lu par l'agent comme
+# « aucune de ces sociétés n'a eu de modification » (oto#206, mesuré sur « Modifications
+# diverses », le LIBELLÉ que la sortie sert dans `famille`, recopié en entrée). La lib la
+# refuse depuis 0.47.0 ; ici, déclarées au schéma pour que l'agent les lise AVANT
+# d'appeler, et revérifiées au corps : un appel interne ne passe pas par le schéma.
 FamilleBodacc = Literal["collective", "conciliation", "creation", "divers", "dpc",
                         "immatriculation", "modification", "radiation",
                         "retablissement_professionnel", "vente"]
@@ -688,12 +688,21 @@ def register(mcp: FastMCP) -> None:
         """Check BODACC legal events for MANY companies at once (e.g. screen 700
         SIRENs for collective proceedings) — batched into a few upstream requests.
 
-        Deterministic: returns a flat `annonces` list (one row per announcement,
-        table-friendly) plus a `synthese` block of aggregate counts
-        (sirens_avec_annonce, par_jugement_nature, …). It does NOT decide whether
-        a company is currently *in* proceedings — that requires reading each
-        annonce's `texte` (the jugement wording: "Ouvre la procédure…" vs
-        "Clôture pour…"). Read `texte` and judge per SIREN.
+        Deterministic: returns a flat `annonces` list — one row per announcement
+        AND per requested SIREN it names (a sale names both parties: requesting
+        both gives two rows, same `bodacc_id`; a non-requested party never shows
+        up). Each row's `partie` is that SIREN's role: sujet, ancien_proprietaire,
+        ancien_exploitant, nouveau_titulaire, or indeterminee (the announcement
+        does not say — do not guess). `synthese` counts on the requested SIRENs
+        (sirens_avec_annonce, sirens_sans_annonce, par_partie, …; annonces_total =
+        distinct announcements, lignes_total = rows).
+
+        `texte` is the announcement's wording for EVERY family (jugement,
+        modification or sale descriptif… — `texte_source` names the field);
+        rows the source serves without it are counted in `annonces_sans_texte`.
+        It does NOT decide whether a company is *in* proceedings, nor what a
+        modification changed (a director or just the auditor): read `texte` and
+        judge per SIREN — counting announcements is not a signal.
 
         Args:
             sirens: list of SIRENs (9 digits).
