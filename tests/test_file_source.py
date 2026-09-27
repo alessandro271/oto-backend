@@ -27,7 +27,7 @@ def _inject(monkeypatch, module_path: str, attr: str, value):
 def _no_google(monkeypatch):
     # Pas de credentials réels : les résolveurs drive/gmail instancient un client
     # stub, on n'atteint jamais Google.
-    monkeypatch.setattr(fs, "_google_creds", lambda account: object())
+    monkeypatch.setattr(fs, "_google_creds", lambda account, service: object())
 
 
 def test_unknown_kind_raises():

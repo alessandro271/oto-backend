@@ -115,7 +115,7 @@ GOOGLE_CALLBACK = "/api/google/oauth/callback"
 
 
 def test_google_succes_ne_sert_que_la_forme_neuve(monkeypatch):
-    monkeypatch.setattr(datastore_routes.google_oauth, "verify_state", lambda s: ("sub-1", 7, ""))
+    monkeypatch.setattr(datastore_routes.google_oauth, "verify_state", lambda s: ("sub-1", 7, "", "google"))
     monkeypatch.setattr(datastore_routes.google_oauth, "exchange_code",
                         lambda code, sub: {"access_token": "a", "refresh_token": "r"})
     monkeypatch.setattr(datastore_routes.google_oauth, "persist_token",
@@ -125,6 +125,22 @@ def test_google_succes_ne_sert_que_la_forme_neuve(monkeypatch):
     q = _qs(_location(resp))
     assert q.get("google") is None, "ancienne forme réapparue — elle est retirée depuis le 17/09"
     assert q["connector"] == ["google"] and q["connect"] == ["connected"]
+
+
+def test_google_partage_recoit_la_carte_du_state(monkeypatch):
+    """Un compte PARTAGÉ est borné par la carte qui a demandé le consentement (revue
+    de #1081) : le callback la lui passe, telle que le state signé la porte."""
+    recus = []
+    monkeypatch.setattr(datastore_routes.google_oauth, "verify_state",
+                        lambda s: ("sub-1", 7, "", "drive", "org", None))
+    monkeypatch.setattr(datastore_routes.google_oauth, "exchange_code",
+                        lambda code, sub: {"access_token": "a", "refresh_token": "r"})
+    monkeypatch.setattr(datastore_routes.google_oauth, "persist_token",
+                        lambda sub, org, tok, **k: recus.append(k) or "e@x.io")
+    handler = _endpoint(datastore_routes, GOOGLE_CALLBACK, with_cors=True)
+    resp = asyncio.run(handler(_get(GOOGLE_CALLBACK, "code=c&state=s")))
+    assert _qs(_location(resp))["connect"] == ["connected"]
+    assert recus == [{"scope": "org", "group_id": None, "connector": "drive"}]
 
 
 @pytest.mark.parametrize("brise", ["absent", "illisible", "echange"])
@@ -138,7 +154,7 @@ def test_google_echec_redirige_desormais_au_lieu_dun_json_brut(monkeypatch, bris
         monkeypatch.setattr(datastore_routes.google_oauth, "verify_state", lambda s: None)
         req = _get(GOOGLE_CALLBACK, "code=c&state=bad")
     else:
-        monkeypatch.setattr(datastore_routes.google_oauth, "verify_state", lambda s: ("sub-1", 7, ""))
+        monkeypatch.setattr(datastore_routes.google_oauth, "verify_state", lambda s: ("sub-1", 7, "", "google"))
 
         def _boom(code, sub):
             raise RuntimeError("refus du fournisseur")

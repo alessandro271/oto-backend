@@ -29,6 +29,8 @@ class _FakeUnipile:
 
 def test_google_list_and_select(monkeypatch):
     monkeypatch.setattr(access, "current_org", lambda sub: 39)
+    # Aucun compte PARTAGÉ ici (org/équipe, 2026-09-27) : la liste est celle du membre.
+    monkeypatch.setattr("oto_mcp.auth.google.list_shared_accounts", lambda sub: [])
     monkeypatch.setattr("oto_mcp.auth.google.list_accounts",
                         lambda sub: [{"google_email": "a@x.io", "is_default": True},
                                      {"google_email": "b@x.io", "is_default": False}])

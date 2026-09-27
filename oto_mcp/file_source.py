@@ -34,9 +34,11 @@ class ResolvedFile:
     mime: str
 
 
-def _google_creds(account: Optional[str]):
+def _google_creds(account: Optional[str], service: str):
+    """`service` : le service Google que la source lit — vérifié comme un appel
+    d'outil (un compte qui ne l'a pas autorisé reçoit le refus nommé, pas un 403 muet)."""
     sub = access.current_user_sub_or_raise()
-    return google_oauth.credentials_for(sub, account=account)
+    return google_oauth.credentials_for(sub, account=account, service=service)
 
 
 def _from_drive(src: dict) -> ResolvedFile:
@@ -44,7 +46,7 @@ def _from_drive(src: dict) -> ResolvedFile:
     if not file_id:
         raise FileSourceError("source drive : `file_id` requis.")
     from oto.tools.google.drive.lib.drive_client import DriveClient
-    client = DriveClient(credentials=_google_creds(src.get("account")))
+    client = DriveClient(credentials=_google_creds(src.get("account"), "drive"))
     att = client.get_file_bytes(str(file_id))
     return ResolvedFile(att["data"], att.get("filename") or str(file_id),
                         att.get("mimeType") or "application/octet-stream")
@@ -55,7 +57,7 @@ def _from_gmail(src: dict) -> ResolvedFile:
     if not message_id or not filename:
         raise FileSourceError("source gmail : `message_id` et `filename` requis.")
     from oto.tools.google.gmail.lib.gmail_client import GmailClient
-    client = GmailClient(credentials=_google_creds(src.get("account")))
+    client = GmailClient(credentials=_google_creds(src.get("account"), "gmail"))
     att = client.get_attachment(message_id, filename, int(src.get("index", 0)))
     return ResolvedFile(att["data"], att.get("filename") or filename,
                         att.get("mimeType") or "application/octet-stream")

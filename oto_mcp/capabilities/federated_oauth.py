@@ -47,10 +47,13 @@ class OAuthStatusInput(BaseModel):
 class GoogleRevokeInput(BaseModel):
     # Compte précis à révoquer ; ABSENT = TOUS les comptes Google du sub.
     account: Optional[str] = None
+    # `org` / `group` : les comptes PARTAGÉS de ce scope (admin d'org / chef d'équipe).
+    scope: Optional[str] = None
 
 
 class GoogleDefaultInput(BaseModel):
     account: str = ""
+    scope: Optional[str] = None             # `org` / `group` : le défaut PARTAGÉ
 
 
 # --- Sorties ----------------------------------------------------------------
@@ -78,6 +81,13 @@ class GoogleAccount(BaseModel):
     is_default: bool = False
     scopes: list[str] = []
     granted_at: Optional[str] = None
+    # Les services que CE compte a autorisés (split du 2026-09-26) — dérivés des
+    # scopes, pour qu'un front n'ait pas à connaître les URLs de scope de Google.
+    services: list[str] = []
+    # À qui le compte est confié : `member` (le sien), `group` ou `org` (partagé).
+    scope: str = "member"
+    # Compte partagé : le `sub` de l'admin qui l'a connecté (vide pour le sien).
+    connected_by: Optional[str] = None
 
 
 class GoogleStatus(BaseModel):
@@ -89,6 +99,9 @@ class GoogleStatus(BaseModel):
     granted_at: Optional[str] = None
     scopes: list[str] = []
     accounts: list[GoogleAccount]
+    # Les comptes PARTAGÉS joignables par l'appelant (son équipe active, son org) —
+    # ses outils les résolvent après les siens (2026-09-27).
+    shared: list[GoogleAccount] = []
 
 
 class GoogleRevoked(BaseModel):
@@ -129,8 +142,21 @@ def _google_status(ctx: ResolvedCtx, inp: OAuthStatusInput) -> dict:
                 "is_default": a.get("is_default", False),
                 "scopes": a["scopes"].split() if a.get("scopes") else [],
                 "granted_at": a.get("granted_at"),
+                "services": google_oauth.services_granted(a.get("scopes")),
             }
             for a in accounts
+        ],
+        "shared": [
+            {
+                "email": a.get("google_email"),
+                "is_default": a.get("is_default", False),
+                "scopes": a["scopes"].split() if a.get("scopes") else [],
+                "granted_at": a.get("granted_at"),
+                "services": google_oauth.services_granted(a.get("scopes")),
+                "scope": a.get("scope") or "org",
+                "connected_by": a.get("connected_by"),
+            }
+            for a in google_oauth.list_shared_accounts(ctx.sub)
         ],
     }
 
@@ -139,7 +165,16 @@ def _google_revoke(ctx: ResolvedCtx, inp: GoogleRevokeInput) -> dict:
     from ..auth import google as google_oauth
     # ?account=<email> révoque un compte précis ; absent = tous.
     account = inp.account or None
-    google_oauth.revoke(ctx.sub, account=account)
+    scope = inp.scope or "member"
+    try:
+        if scope == "member":
+            google_oauth.revoke(ctx.sub, account=account)
+        else:
+            google_oauth.revoke(ctx.sub, account=account, scope=scope)
+    except PermissionError as e:
+        raise AuthzDenied(403, "scope_forbidden", str(e))
+    except ValueError as e:
+        raise AuthzDenied(400, "invalid_scope", str(e))
     return {"ok": True, "account": account}
 
 
@@ -147,6 +182,16 @@ def _google_set_default(ctx: ResolvedCtx, inp: GoogleDefaultInput) -> dict:
     account = (inp.account or "").strip()
     if not account:
         raise AuthzDenied(400, "missing_account")
+    if inp.scope and inp.scope != "member":
+        from ..auth import google as google_oauth
+        try:
+            if not google_oauth.set_default_shared(ctx.sub, account, inp.scope):
+                raise AuthzDenied(404, "unknown_account")
+        except PermissionError as e:
+            raise AuthzDenied(403, "scope_forbidden", str(e))
+        except ValueError as e:
+            raise AuthzDenied(400, "invalid_scope", str(e))
+        return {"ok": True, "default": account}
     org_id = access.current_org(ctx.sub)
     if org_id is None or not db.set_default_google_account(ctx.sub, org_id, account):
         raise AuthzDenied(404, "unknown_account")
