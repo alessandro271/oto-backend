@@ -235,7 +235,7 @@ _ORG_TENANT_SQL = f"""
 """
 
 
-def org_tenant_slug(org_id: int) -> str:
+def org_tenant_slug(org_id: int, conn=None) -> str:
     """Le tenant EFFECTIF d'une organisation : `'oto'` (la nôtre) ou le slug du
     tenant tiers qui l'héberge. Union des trois axes ci-dessus, sans arbitrage.
 
@@ -251,10 +251,20 @@ def org_tenant_slug(org_id: int) -> str:
 
     ⚠️ Ce n'est PAS `front_brand` : la marque n'est qu'un des trois axes, et l'axe
     qui a un trou historique. Lire la colonne en direct rouvrirait ce trou.
+
+    `conn` : une connexion DÉJÀ ouverte par l'appelant, pour lire le tenant dans la
+    même que ses propres lectures (le cran tenant de l'activation, lu à chaque appel
+    d'outil de connecteur) ; sans elle, la lecture ouvre la sienne.
     """
-    with _connect() as conn:
-        row = conn.execute(_ORG_TENANT_SQL,
-                           {"primary": tenancy.PRIMARY_SLUG, "oid": int(org_id)}).fetchone()
+    if conn is not None:
+        return _lire_org_tenant(conn, org_id)
+    with _connect() as c:
+        return _lire_org_tenant(c, org_id)
+
+
+def _lire_org_tenant(conn, org_id: int) -> str:
+    row = conn.execute(_ORG_TENANT_SQL,
+                       {"primary": tenancy.PRIMARY_SLUG, "oid": int(org_id)}).fetchone()
     return (row and row["slug"]) or tenancy.PRIMARY_SLUG
 
 
