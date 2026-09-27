@@ -47,6 +47,16 @@ def _verify(fields: dict, config: dict | None = None) -> None:
     raise RuntimeError(f"GoCardless: {detail}")
 
 
+# Vue par défaut d'un versement : de quoi le reconnaître sur le relevé et le
+# rapprocher. `fx`, `tax_currency`, `metadata` et `links` reviennent sur `full=True`.
+_PAYOUT_KEYS = ("id", "amount", "deducted_fees", "currency", "status",
+                "arrival_date", "created_at", "reference")
+
+
+def _slim_payout(payout: dict) -> dict:
+    return {k: payout.get(k) for k in _PAYOUT_KEYS}
+
+
 def register(mcp: FastMCP) -> None:
     from oto.tools.gocardless import GoCardlessClient
 
@@ -91,6 +101,51 @@ def register(mcp: FastMCP) -> None:
     def gocardless_payment(payment_id: str) -> dict:
         """Détail brut d'un prélèvement (PM…)."""
         return _client().get_payment(payment_id)
+
+    @mcp.tool()
+    def gocardless_payouts(
+        status: Optional[str] = None,
+        limit: int = 50,
+        currency: Optional[str] = None,
+        reference: Optional[str] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        full: bool = False,
+    ) -> dict:
+        """Versements groupés reçus en banque (payouts, PO…), 1 page.
+
+        Montants en CENTIMES : `amount` = net versé, `deducted_fees` = frais
+        déjà retenus. Le détail paiement par paiement : `gocardless_payout`.
+
+        Args:
+            status: pending, paid, bounced.
+            limit: taille de page (max 500).
+            currency: EUR, GBP…
+            reference: libellé exact du virement sur le relevé bancaire.
+            since / until: ISO8601, bornes (exclues) sur la création du
+                versement — une date nue vaut minuit UTC. Pour remonter plus
+                loin qu'une page, rapprocher `until` du plus ancien rendu.
+            full: True = l'objet brut (fx, taxes, metadata, links).
+        """
+        rows = _client().list_payouts(
+            status=status, limit=limit, currency=currency, reference=reference,
+            created_gt=since, created_lt=until,
+        )
+        return {"payouts": rows if full else [_slim_payout(r) for r in rows]}
+
+    @mcp.tool()
+    def gocardless_payout(payout_id: str) -> dict:
+        """Un versement (PO…) et TOUTES ses lignes, pour le lettrer.
+
+        `items` : une ligne par mouvement — `type` (payment_paid_out,
+        payment_failed, payment_charged_back, payment_refunded, refund,
+        refund_funds_returned, gocardless_fee, app_fee, revenue_share,
+        surcharge_fee), `amount` signé en CENTIMES, `links.payment` (PM…) à
+        passer à `gocardless_payment_party` pour le client. GoCardless ne sert
+        les lignes que des versements créés il y a moins de 6 mois (HTTP 410
+        au-delà).
+        """
+        return _client().payout_detail(payout_id)
 
     @mcp.tool()
     def gocardless_events(

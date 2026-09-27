@@ -5,10 +5,12 @@ lecture seule — chaque utilisateur pose sa propre clé, tes prélèvements ne 
 - choisis un token en **lecture** (read-only) — oto n'annule ni ne crée de prélèvement
 - colle-le dans tes clés de connecteur oto sous `gocardless`
 
-## usage — suivre prélèvements et échecs sepa
+## usage — suivre prélèvements, échecs et versements sepa
 
-consulte tes prélèvements, leur timeline et les motifs d'échec pour la réconciliation.
+consulte tes prélèvements, leur timeline, les motifs d'échec et les versements groupés pour la réconciliation.
 - `gocardless_payments` liste les prélèvements (filtre par `status`, mandat, customer, date)
 - `gocardless_failed` te sort en un appel les prélèvements refusés enrichis (client, montant, cause, `will_attempt_retry`)
 - `gocardless_failure_reason` donne le motif du dernier échec d'un paiement précis (`PM…`)
 - `gocardless_payment_party` résout paiement → mandat → client (email, société)
+- `gocardless_payouts` liste les versements reçus en banque (statut, devise, référence, dates), montants en centimes
+- `gocardless_payout` détaille un versement (`PO…`) ligne par ligne — paiement reversé, échec, frais — pour le lettrer contre tes factures
