@@ -269,6 +269,79 @@ def seuil(sub: str, org_id: Optional[int], famille: str) -> float:
     return pct / 100
 
 
+def raison_de_peremption(sub: Optional[str], org_id: Optional[int],
+                         famille: Optional[str], etat_runner: dict) -> str:
+    """La raison SERVIE quand le tick périme une occurrence non prise DANS SON
+    CYCLE (27/09/2026) — nommant la VRAIE cause plutôt que le texte générique
+    d'avant, qui disait toujours « aucun agent ne dessert cette organisation »
+    même quand un worker de la famille existait et que la seule chose qui
+    manquait était la connexion PERSONNELLE du propriétaire, ou un pool momentanément
+    en pause. Les deux diagnostics n'envoient pas au même geste : le premier dit
+    « préviens l'exploitant », le second dit « reconnecte-toi, ça repartira tout
+    seul ». Confondre les deux a fait tourner en rond un propriétaire qui n'avait
+    qu'à se reconnecter (mesuré sur un déclencheur réel, le 25/09/2026).
+
+    ⚠️ **Best-effort, jamais une garantie** : lu au moment de la péremption, cet
+    état a pu changer une seconde avant ou après (une reconnexion qui gagne de
+    justesse contre le tick, par exemple) — la RÈGLE d'expiration (occurrence
+    superседée) ne change pas d'un mot, seul le TEXTE qui l'accompagne s'affine.
+    """
+    base = "occurrence non prise dans son cycle : le déclencheur a enfilé la suivante."
+    aucun_agent = f"{base} Aucun agent ne dessert cette organisation."
+    servies = etat_runner.get("families") or []
+    if not est_abonnement(famille):
+        if famille:
+            # Famille API déclarée : la seule distinction qu'on sait faire ici
+            # est « un worker de cette famille existe-t-il ? » — le détail
+            # d'une clé manquante appartient à `_cle_exigee`, pas à ce module.
+            return aucun_agent if famille not in servies else base
+        # Aucun modèle déclaré (agents d'avant le catalogue, ou posés sans
+        # modèle) : n'importe quel worker sert ce travail, donc la seule
+        # question qui vaille est « un runner existe-t-il pour cette org, tout
+        # court ? » — la même lecture que `_modele.exige_un_runner`.
+        return aucun_agent if not etat_runner.get("armed") else base
+    if famille not in servies or not sub:
+        return aucun_agent
+    if en_pool(org_id, famille):
+        # ⚠️ `taille_du_pool` compte les prêteurs SERVABLES MAINTENANT — 0 y est
+        # ambigu (personne ne prête ? ou tout le monde est au plafond ?) pour un
+        # diagnostic. `taille_totale_du_pool` compte les prêts VIVANTS sans
+        # regarder l'état : lui seul distingue les deux.
+        if not org_subscription_pool.taille_totale_du_pool(org_id, famille):
+            return (f"{base} Le pool `{famille}` de l'organisation est vide : "
+                    "personne n'y prête d'abonnement connecté.")
+        if not org_subscription_pool.taille_du_pool(org_id, famille):
+            return (f"{base} Le pool `{famille}` de l'organisation était en pause "
+                    "(plafond de consommation atteint) au moment où la suivante est "
+                    "arrivée.")
+        # Un prêteur EST servable maintenant : la vraie cause a déjà cédé.
+        return aucun_agent
+    # ⚠️ `servable()` répond FAIT EXPRÈS `True` pour un `paused_limit`, quelle que
+    # soit son échéance (l'attente vit dans la réservation, pas dans cette
+    # garde) : la réutiliser ici confondrait TOUT plafond avec une cause déjà
+    # résolue. Le diagnostic lit donc la ligne lui-même.
+    ligne = user_subscriptions.get_subscription(sub, famille) or {}
+    statut = ligne.get("statut")
+    if statut in (user_subscriptions.A_RECONNECTER, user_subscriptions.DECONNECTE):
+        return (f"{base} L'abonnement `{famille}` de son propriétaire doit se "
+                "reconnecter (Réglages › Fournisseurs de modèles) — il repartira "
+                "tout seul.")
+    if statut == user_subscriptions.PLAFOND:
+        reset = ligne.get("limit_reset_at")
+        if isinstance(reset, str):
+            reset = datetime.fromisoformat(reset)
+        if reset and reset.tzinfo is None:
+            reset = reset.replace(tzinfo=timezone.utc)
+        if reset and reset > datetime.now(timezone.utc):
+            return (f"{base} L'abonnement `{famille}` de son propriétaire avait "
+                    "atteint son plafond de consommation.")
+        # Échéance passée (ou inconnue) : la réservation aurait déjà servi ce
+        # travail — la vraie cause a cédé, le texte générique reste le plus
+        # honnête qu'on puisse écrire.
+        return aucun_agent
+    return aucun_agent
+
+
 def noter_rapport(conclu: dict, ok: bool, resultat: Optional[dict]) -> None:
     """Ce que le worker a VU du forfait en exécutant ce travail, porté sur la
     connexion qui l'a SERVI (`conclu["abonnement"]` : le demandeur en mode personnel,

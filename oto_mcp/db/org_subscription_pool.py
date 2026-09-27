@@ -84,6 +84,20 @@ def taille_du_pool(org_id: int, famille: str) -> int:
     return int(row["n"]) if row else 0
 
 
+def taille_totale_du_pool(org_id: int, famille: str) -> int:
+    """Combien de membres de l'org lui prêtent un abonnement, SERVABLE ou pas —
+    à distinguer de `taille_du_pool` (0 est ambigu : personne ne prête, ou tout
+    le monde est momentanément au plafond ?). Sert au DIAGNOSTIC d'une
+    péremption (`capabilities._abonnement.raison_de_peremption`, 27/09/2026),
+    jamais à une garde de pose — la pose reste jugée sur `taille_du_pool`."""
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT COUNT(*) AS n FROM user_model_subscription_loans l {PRET_VIVANT} "
+            f"WHERE l.org_id = %s AND l.famille = %s",
+            (org_id, famille)).fetchone()
+    return int(row["n"]) if row else 0
+
+
 def orgs_pretees(sub: str, famille: str) -> list[int]:
     """Les orgs au pool desquelles cette personne prête cet abonnement."""
     with _connect() as conn:

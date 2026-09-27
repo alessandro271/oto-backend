@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 from croniter import croniter
 
 from . import db, runner_models
-from .capabilities import _instruction, _limites_du_run
+from .capabilities import _abonnement, _instruction, _limites_du_run
 
 log = logging.getLogger(__name__)
 
@@ -120,8 +120,29 @@ def _tick() -> int:
         # son travail ; c'est leur COMPOSITION qui fabriquait le trou, et rien ne
         # le disait — un travail « en attente » ressemble à un travail qui va
         # partir.
+        # ⚠️ La raison nomme la VRAIE cause (27/09/2026) : le texte
+        # générique d'avant disait « aucun agent ne dessert cette organisation »
+        # même quand un worker de la famille existait et que seule la connexion
+        # PERSONNELLE du propriétaire (ou un pool en pause) manquait — deux
+        # diagnostics qui n'envoient pas au même geste
+        # (`_abonnement.raison_de_peremption`). La RÈGLE d'expiration ne bouge
+        # pas d'un mot : seul le texte s'affine.
+        #
+        # ⚠️ Calculée à PART de l'appel qui périme, et jamais laissée l'empêcher :
+        # un diagnostic qui casse (une lecture `runner_arme` en délicatesse) ne
+        # doit pas faire manquer la péremption elle-même — ce serait le défaut
+        # d'hygiène ci-dessous, pour un simple texte. `raison_kw` vide fait
+        # retomber sur le texte générique de `perimer_travaux_du_declencheur`.
+        raison_kw: dict = {}
         try:
-            perimes = db.perimer_travaux_du_declencheur(t["id"], t["org_id"])
+            raison_kw["raison"] = _abonnement.raison_de_peremption(
+                t.get("sub"), t["org_id"], runner_models.famille(t.get("model")),
+                db.runner_arme(t["org_id"]))
+        except Exception as e:  # noqa: BLE001 — un diagnostic manqué garde le texte générique
+            log.warning("déclencheur %s : diagnostic de péremption illisible (%s) — "
+                        "texte générique conservé", t["id"], e)
+        try:
+            perimes = db.perimer_travaux_du_declencheur(t["id"], t["org_id"], **raison_kw)
         except Exception as e:  # noqa: BLE001 — voir ci-dessous
             # ⚠️ La péremption est un geste d'HYGIÈNE, l'enfilage est le SERVICE.
             # Si elle casse, le service continue : l'inverse ferait qu'un défaut
