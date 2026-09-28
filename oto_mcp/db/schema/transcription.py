@@ -36,6 +36,10 @@ CREATE TABLE IF NOT EXISTS transcription_jobs (
     api_key_enc TEXT NOT NULL,
     page_id BIGINT,
     result JSONB,
+    -- Les tours verbatim `[{speaker, start, end, text}]`, rendus par la face REST
+    -- seule. Hors de `result`, que l'ancienne face MCP recopie tel quel dans sa
+    -- réponse : l'y mettre ferait entrer le texte dans le contexte de l'agent.
+    transcript JSONB,
     error TEXT,
     attempts INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

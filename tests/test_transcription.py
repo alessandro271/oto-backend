@@ -213,7 +213,8 @@ def monde(monkeypatch):
                              "status": "pending", "audio_key": audio_key,
                              "filename": filename, "mime": mime, "language": language,
                              "vocabulary": vocabulary, "api_key_enc": api_key_enc,
-                             "page_id": None, "result": None, "error": None}
+                             "page_id": None, "result": None, "transcript": None,
+                             "error": None}
         return jid
 
     def _claim_next_job():
@@ -227,8 +228,9 @@ def monde(monkeypatch):
         j = etat["jobs"].get(jid)
         return dict(j) if j else None
 
-    def _mark_done(jid, *, page_id, result):
-        etat["jobs"][jid].update(status="done", page_id=page_id, result=result)
+    def _mark_done(jid, *, page_id, result, transcript):
+        etat["jobs"][jid].update(status="done", page_id=page_id, result=result,
+                                 transcript=transcript)
 
     def _mark_failed(jid, *, error):
         etat["jobs"][jid].update(status="failed", error=error)
@@ -461,3 +463,108 @@ def test_un_audio_plus_gros_qu_une_image_est_relu_et_un_echec_de_lecture_purge(
     out = _statut(all_tools, ref2["job_id"])
     assert out["status"] == "failed" and "file_too_large" in out["error"]
     assert monde["jobs"][ref2["job_id"]]["audio_key"] in monde["s3"].supprimes
+
+
+# --- la face REST : la même file, et les tours en JSON ----------------------------------
+
+def _ctx():
+    from oto_mcp.capabilities._types import ResolvedCtx
+    return ResolvedCtx(sub="u1", org_id=3)
+
+
+@pytest.fixture
+def rest(monde, monkeypatch):
+    """Le monde, plus la ligne du projet que la ressource REST relit (existence et
+    contexte d'org, comme toute route projet par id)."""
+    from oto_mcp import db
+    from oto_mcp.capabilities import transcription
+    monkeypatch.setattr(db, "get_project_by_id", lambda pid: {"id": pid, "name": "Visite"})
+    return transcription
+
+
+def test_rest_deux_routes_une_ressource_sans_doublon_mcp():
+    from oto_mcp.capabilities.registry import CAPABILITIES
+    caps = {c.key: c for c in CAPABILITIES if c.key.startswith("me.transcription.")}
+    [create] = caps["me.transcription.create"].rest_bindings()
+    [read] = caps["me.transcription.read"].rest_bindings()
+    assert (create.verb, create.path, create.status) == (
+        "POST", "/api/me/projects/{project_id:int}/transcriptions", 202)
+    assert (read.verb, read.path) == ("GET", "/api/me/transcriptions/{job_id:int}")
+    # Les agents ont déjà transcription_create/status (projet ambiant `_project`).
+    assert all(c.mcp is None for c in caps.values())
+
+
+def test_rest_une_reference_project_file_prend_le_projet_de_l_url(rest, monde):
+    out = rest._create(_ctx(), rest.TranscriptionCreateInput(
+        project_id=42, source={"kind": "project_file", "file_id": 7}))
+    assert out == {"job_id": 1, "status": "pending"}
+    assert monde["jobs"][1]["project_id"] == 42
+    assert monde["s3"].lus == [FICHIER["s3_key"]] and monde["envois"] == []
+
+
+def test_rest_sans_droit_d_ecriture_rien_n_est_lu(rest, monde, monkeypatch):
+    from oto_mcp import ownership
+    from oto_mcp.capabilities._types import AuthzDenied
+    monkeypatch.setattr(ownership, "can_access",
+                        lambda sub, rtype, rid, want="read": want != "write")
+    with pytest.raises(AuthzDenied) as refus:
+        rest._create(_ctx(), rest.TranscriptionCreateInput(
+            project_id=42, source={"kind": "project_file", "file_id": 7}))
+    assert (refus.value.status, refus.value.code) == (403, "forbidden")
+    assert monde["jobs"] == {} and monde["s3"].lus == []
+
+
+def test_rest_rend_les_tours_en_json_le_mcp_rend_la_page(all_tools, rest, monde):
+    """Les tours verbatim, horodatés : ce que la page met en paragraphes, la face REST
+    le rend en données. La face MCP, elle, ne met jamais le texte dans le contexte de
+    l'agent."""
+    ref = rest._create(_ctx(), rest.TranscriptionCreateInput(
+        project_id=42, source={"kind": "project_file", "file_id": 7}))
+    _tourner(monde)
+    out = rest._read(_ctx(), rest.TranscriptionReadInput(job_id=ref["job_id"]))
+    assert out["status"] == "done" and out["project_id"] == 42
+    assert out["filename"] == "visite.m4a" and out["page"]["id"] == monde["pages"][0]["id"]
+    assert out["turns"] == 2
+    assert out["transcript"] == [
+        {"speaker": "Locuteur 1", "start": 0.0, "end": 9.6,
+         "text": "Bonjour. On regarde la toiture et la charpente du garage. Hum."},
+        {"speaker": "Locuteur 2", "start": 10.0, "end": 14.0,
+         "text": "D'accord, et les combles sont isolés depuis quand ?"},
+    ]
+    mcp = _statut(all_tools, ref["job_id"])
+    assert "transcript" not in mcp and "D'accord" not in json.dumps(mcp)
+
+
+def test_rest_un_travail_d_un_projet_illisible_est_introuvable(rest, monde, monkeypatch):
+    from oto_mcp import ownership
+    from oto_mcp.capabilities._types import AuthzDenied
+    ref = rest._create(_ctx(), rest.TranscriptionCreateInput(
+        project_id=42, source={"kind": "project_file", "file_id": 7}))
+    monkeypatch.setattr(ownership, "can_access", lambda *a, **k: False)
+    for jid in (ref["job_id"], 999):
+        with pytest.raises(AuthzDenied) as refus:
+            rest._read(_ctx(), rest.TranscriptionReadInput(job_id=jid))
+        assert (refus.value.status, refus.value.code) == (404, "unknown_transcription")
+
+
+def test_un_credential_qui_ne_resout_pas(all_tools, rest, monde, monkeypatch):
+    """REST : un refus nommé. MCP : l'erreur du résolveur telle quelle, déjà actionnable
+    (connecteur à activer, quota) — pas une traduction qui en perdrait le sens."""
+    from mcp.types import INVALID_PARAMS, ErrorData
+
+    from oto_mcp import access
+    from oto_mcp.capabilities._types import AuthzDenied
+
+    def _absent(provider, want="auto", **kw):
+        raise McpError(ErrorData(code=INVALID_PARAMS,
+                                 message="Connecteur transcription non activé."))
+
+    monkeypatch.setattr(access, "resolve_credential", _absent)
+    with pytest.raises(AuthzDenied) as refus:
+        rest._create(_ctx(), rest.TranscriptionCreateInput(
+            project_id=42, source={"kind": "project_file", "file_id": 7}))
+    assert (refus.value.status, refus.value.code) == (400, "credential_unavailable")
+    assert "non activé" in refus.value.message
+    with pytest.raises(McpError, match="non activé"):
+        _appeler(all_tools, source=_pf())
+    assert monde["jobs"] == {}

@@ -32,7 +32,7 @@ from datetime import datetime, timezone
 
 from starlette.concurrency import run_in_threadpool
 
-from . import db, media_store, transcript, upload_tokens
+from . import db, media_store, transcript
 from .crypto import decrypt as _decrypt
 
 logger = logging.getLogger(__name__)
@@ -89,11 +89,11 @@ def _transcribe_one(job: dict) -> str:
     échec, est PERSISTÉ sur le travail (sinon l'agent qui poll ne saurait
     jamais qu'il est allé au bout)."""
     jid = int(job["id"])
+    from .capabilities.transcription import MAX_AUDIO_BYTES
     try:
-        # Le plafond d'un FICHIER DE PROJET : sans lui la lecture retombe sur celui
+        # Le plafond d'un AUDIO, celui du dépôt : sans lui la lecture retombe sur celui
         # d'une image (2 Mo) et tout enregistrement plus gros échoue ici.
-        data = media_store.fetch_object(job["audio_key"],
-                                        max_bytes=upload_tokens.max_bytes())
+        data = media_store.fetch_object(job["audio_key"], max_bytes=MAX_AUDIO_BYTES)
     except Exception as e:  # noqa: SILENT — stockage : l'échec est PERSISTÉ sur le travail
         code = getattr(e, "code", None) or type(e).__name__
         db.mark_transcription_job_failed(jid, error=f"lecture de l'audio impossible ({code}).")
@@ -125,7 +125,7 @@ def _transcribe_one(job: dict) -> str:
 
     tours = transcript.process(brut["segments"])
     if not tours and brut["text"].strip():
-        tours = [{"speaker": None, "start": None, "text": brut["text"].strip()}]
+        tours = [{"speaker": None, "start": None, "end": None, "text": brut["text"].strip()}]
     if not tours:
         db.mark_transcription_job_failed(jid, error=f"Aucune parole reconnue dans « {job['filename']} ».")
         return "failed"
@@ -151,7 +151,10 @@ def _transcribe_one(job: dict) -> str:
     }
     if brut.get("context_bias_dropped"):
         result["vocabulary_dropped"] = brut["context_bias_dropped"]
-    db.mark_transcription_job_done(jid, page_id=int(page["id"]), result=result)
+    # Les tours verbatim, à part du résumé : la face REST les rend en JSON (`GET
+    # /api/me/transcriptions/{id}`), la face MCP jamais (l'agent lit la page).
+    db.mark_transcription_job_done(jid, page_id=int(page["id"]), result=result,
+                                   transcript=tours)
     return "done"
 
 

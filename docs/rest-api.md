@@ -46,6 +46,7 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
 | favicon, `/api/version`, `/api/mcp/catalog`, `openapi.json`, `/api/connectors`, bibliothèques de procédures & de guides, aperçu d'invitation, docs partagés (`/api/public/docs/{token}`, `/p/d/{token}`) | `api/public.py` | **sans auth** — l'adaptateur capacité authentifie toujours. ⚠️ `/api/connectors` est la seule **MIXTE** : anonyme pour la vitrine, authentifiée pour le dashboard, et depuis le 2026-09-01 (#732) l'en-tête **change ce qu'elle rend** — org de contexte ⟹ `auth.cardinality` effective |
 | `POST /api/me/avatar`, `POST /api/orgs/{id}/logo` | `api/media.py` | **multipart** → hors du moule par CONSTRUCTION (classé `NATURE`) |
 | `POST` d'un fichier de projet, `/api/me/projects/{id}/export` | `api/projects.py` | **multipart / ZIP** → hors du moule (classé `NATURE`) |
+| `POST /api/me/projects/{id}/transcriptions/upload` (audio à transcrire) | `api/transcription.py` | **multipart** → hors du moule (classé `NATURE`) ; la forme par référence est une capacité |
 | `/api/upload/{token}` (PUT/POST/GET) | `api/uploads.py` | **pas de JWT** : le jeton de l'URL fait foi |
 | SIRENE (`api/sirene.py`), accords (`api/accords.py`), webhook Mollie (`api/billing.py`), **callbacks OAuth** zoho/google/salesforce (`api/{zoho,datastore,salesforce}.py`) | `api/<nom>.py` (antérieurs à la découpe) | gardent leur patron : `make_routes(...)` reçoit les primitives en paramètres. ⚠️ `api/atlassian.py` et `api/folk.py` ont porté les deux callbacks fédérés jusqu'au **2026-09-09** : partis avec la fédération MCP (**ADR 0069**). ⚠️ **Le datastore n'y est plus** depuis le 2026-08-12 (#302) : ses 24 chemins sont des capacités (bloc ci-dessous) ; `api/datastore.py` est un nom vestige qui ne porte QUE le callback Google |
 
@@ -120,6 +121,24 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   qui diffère est la forme des REFUS (la face MCP joint un message à ses 404) et l'entrée
   (`op` + `project_id` contre des paramètres de chemin). Les fusionner changerait les
   corps servis au dashboard — même famille de décision que la toolbox (oto-backend#429).
+- `POST /api/me/projects/{project_id}/transcriptions` + `GET /api/me/transcriptions/{job_id}` —
+  **la transcription d'un audio** (ADR 0074), capacités `me.transcription.{create,read}`
+  (`capabilities/transcription.py`) ; le dépôt DIRECT de l'audio, `POST
+  …/transcriptions/upload` (multipart `file` + `vocabulary`, `vocabulary_replace`
+  `true|false` facultatifs), est écrit à la main (`api/transcription.py`, `NATURE`). Les
+  deux dépôts rendent **`202 {job_id, status:"pending"}`** sans appeler Mistral : le
+  worker s'en charge. `create` prend une RÉFÉRENCE `source` (`file_source` :
+  `{"kind":"project_file","file_id":N}`, le projet de l'URL par défaut ; `url`, `drive`,
+  `gmail`). La relecture rend `status` (`pending|running|done|failed`), `project_id`,
+  `filename`, et sur `done` la page (`page{id,project_id,title,url}`), `words`,
+  `duration_s`, `speakers`, `turns` (le nombre) et **`transcript`**, les tours
+  `[{speaker, start, end, text}]` en secondes — que la face MCP (`transcription_status`)
+  ne rend jamais : un agent lit la page. Ordre des gardes : projet visible dans l'org de
+  consultation (404) → écriture (403) → lecture de l'audio → credential (`400
+  credential_unavailable`). Plafond d'un audio : **100 Mo** (`MAX_AUDIO_BYTES`, tenu
+  pendant la lecture du multipart, `413 content_too_large`) ; Mistral en accepte 500 et
+  3 h. Un travail dont le projet est illisible répond `404 unknown_transcription`, comme
+  un inconnu.
 - `POST|DELETE /api/orgs/{id}/logo` — upload / efface le logo **uploadé** d'org (org_admin, multipart `file`). Le logo AFFICHÉ (`logo_url` des lectures + `active_org_logo_url` de `/api/me`) est l'**effectif** : upload sinon dérivé du CDN logo.dev via le `domain` déclaré (`org_store.effective_logo_url`, token `LOGODEV_TOKEN`) ; `logo_custom` (fiche org) dit si un upload existe.
 - `PATCH /api/orgs/{id}` (+ miroir `/api/admin/orgs/{id}`) — profil d'org (org_admin) : `name`, `description`, **`domain`** (domaine de marque, normalisé `org_store.normalize_domain` — `""` efface, saisie URL tolérée, invalide → 400 `invalid_domain`), `industry`, `location`. Capacité `org.update` (MCP `oto_org(op='update')`, console ADR 0047).
 > ⚠️ **`POST|DELETE /api/settings/linkedin` n'existe plus** — ce doc l'a annoncée comme

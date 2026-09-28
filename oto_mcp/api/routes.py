@@ -79,6 +79,7 @@ from . import alias_routes, public
 from . import datastore_export
 from . import media
 from . import projects
+from . import transcription as api_transcription
 from . import uploads
 
 logger = logging.getLogger(__name__)
@@ -797,6 +798,10 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         Route("/api/me/avatar", options_handler, methods=["OPTIONS"]),
         Route("/api/me/projects/{project_id:int}/files", bind(projects.project_files_upload, verifier=verifier), methods=["POST"]),
         Route("/api/me/projects/{project_id:int}/files", options_handler, methods=["OPTIONS"]),
+        # Dépôt DIRECT d'un audio à transcrire (multipart) — la forme par référence,
+        # `POST …/transcriptions`, est une capacité (`capabilities/transcription.py`).
+        Route("/api/me/projects/{project_id:int}/transcriptions/upload", bind(api_transcription.transcription_upload, verifier=verifier), methods=["POST"]),
+        Route("/api/me/projects/{project_id:int}/transcriptions/upload", options_handler, methods=["OPTIONS"]),
         Route("/api/public/docs/{token}", public.public_doc, methods=["GET"]),
         Route("/api/public/docs/{token}", options_handler, methods=["OPTIONS"]),
         # Réception d'un upload signé out-of-bande (#105) — jeton dans l'URL, pas de JWT.

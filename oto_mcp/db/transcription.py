@@ -15,6 +15,11 @@ from typing import Optional
 
 from ._conn import _connect
 
+# Posée par la révision `0026_transcription_tours` et par le démarrage (même DDL).
+COLONNE_TRANSCRIPT = "transcript"
+DDL_COLONNE_TRANSCRIPT = (f"ALTER TABLE transcription_jobs ADD COLUMN IF NOT EXISTS "
+                          f"{COLONNE_TRANSCRIPT} JSONB")
+
 
 def create_transcription_job(*, project_id: int, sub: str, audio_key: str,
                              filename: str, mime: Optional[str], language: Optional[str],
@@ -35,7 +40,7 @@ def create_transcription_job(*, project_id: int, sub: str, audio_key: str,
 def get_transcription_job(job_id: int) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
-            "SELECT id, project_id, sub, status, filename, page_id, result, error, "
+            "SELECT id, project_id, sub, status, filename, page_id, result, transcript, error, "
             "       created_at, updated_at "
             "FROM transcription_jobs WHERE id = %s", (job_id,),
         ).fetchone()
@@ -66,12 +71,14 @@ def claim_next_transcription_job() -> Optional[dict]:
         return dict(row) if row else None
 
 
-def mark_transcription_job_done(job_id: int, *, page_id: int, result: dict) -> None:
+def mark_transcription_job_done(job_id: int, *, page_id: int, result: dict,
+                                transcript: list[dict]) -> None:
     with _connect() as conn:
         conn.execute(
             "UPDATE transcription_jobs SET status = 'done', page_id = %s, "
-            "  result = %s::jsonb, updated_at = NOW() WHERE id = %s",
-            (page_id, json.dumps(result), job_id),
+            "  result = %s::jsonb, transcript = %s::jsonb, updated_at = NOW() "
+            "WHERE id = %s",
+            (page_id, json.dumps(result), json.dumps(transcript), job_id),
         )
 
 

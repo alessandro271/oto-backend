@@ -158,6 +158,7 @@ from . import platform_instructions  # noqa: F401 — platform.instructions (oto
 # Projet — couche d'organisation (modèle produit 2026-06-27, owned resource ADR 0030).
 from . import projects  # noqa: F401 — me.project (oto_project, POST /api/me/projects)
 from . import project_files  # noqa: F401 — me.project_files (oto_project_files, MCP-only, ADR 0032 §3)
+from . import transcription  # noqa: F401 — me.transcription.{create,read} (POST /api/me/projects/{id}/transcriptions, GET /api/me/transcriptions/{id}, ADR 0074)
 from . import kb  # noqa: F401 — me.kb (REST seule : projet de documents historique = zone Documents)
 from . import search  # noqa: F401 — me.search (oto_search, lot 3 Ship 1)
 from . import shell  # noqa: F401 — me.shell (/shell v0, surface nœuds précoce)

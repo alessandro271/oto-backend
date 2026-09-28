@@ -97,7 +97,7 @@ def merge_speakers(segments: list[dict]) -> list[dict]:
 
 
 def turns(segments: list[dict]) -> list[dict]:
-    """Segments consécutifs d'un même locuteur → un tour `{speaker, start, text}`,
+    """Segments consécutifs d'un même locuteur → un tour `{speaker, start, end, text}`,
     le locuteur renommé « Locuteur N » dans l'ordre d'apparition. Sans locuteur (pas
     de diarisation), chaque segment reste son propre paragraphe : tout fondre en un
     bloc rendrait la page illisible."""
@@ -110,8 +110,10 @@ def turns(segments: list[dict]) -> list[dict]:
         nom = noms.get(brut) if brut is not None else None
         if nom is not None and out and out[-1]["speaker"] == nom:
             out[-1]["text"] += " " + s["text"]
+            out[-1]["end"] = s.get("end")
             continue
-        out.append({"speaker": nom, "start": s.get("start"), "text": s["text"]})
+        out.append({"speaker": nom, "start": s.get("start"), "end": s.get("end"),
+                    "text": s["text"]})
     return out
 
 

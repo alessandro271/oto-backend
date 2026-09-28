@@ -157,6 +157,46 @@ async def _do_signed_upload(request: Request, payload: dict, data: bytes,
     return _json(request, result)
 
 
+class CorpsRefuse(Exception):
+    """Un corps refusé à la lecture : `status` et `code` de la réponse d'erreur."""
+
+    def __init__(self, status: int, code: str):
+        super().__init__(code)
+        self.status, self.code = status, code
+
+
+async def lire_corps_borne(request: Request, plafond: int) -> bytes:
+    """Le corps brut, refusé au-delà de `plafond` : sur l'annonce, sinon en cours de
+    lecture (#562)."""
+    if _annonce_trop_gros(request, plafond):
+        raise CorpsRefuse(413, "content_too_large")
+    try:
+        return await _lire_borne(request, plafond)
+    except _CorpsTropGros:
+        raise CorpsRefuse(413, "content_too_large") from None
+
+
+async def lire_multipart_borne(request: Request, plafond: int):
+    """Un formulaire multipart dont la partie `file` pèse au plus `plafond` : rend
+    `(form, upload, octets)`. Le parseur lit le corps DÉJÀ BORNÉ (plafond + l'enveloppe)
+    et n'accepte qu'une partie fichier. Quelques champs texte restent tolérés
+    (`max_fields`) : un formulaire sans fichier, ou un `file` envoyé en texte, doit
+    rendre `missing_file`, pas `invalid_multipart` — le corps borné rend leur coût
+    négligeable. Lève `CorpsRefuse`."""
+    corps = await lire_corps_borne(request, plafond + _MARGE_MULTIPART)
+    try:
+        form = await Request(request.scope, _rejouer(corps)).form(max_files=1, max_fields=16)
+    except Exception:  # noqa: SILENT — tout échec du parseur EST le refus rendu
+        raise CorpsRefuse(400, "invalid_multipart") from None
+    upload = form.get("file")
+    if upload is None or not hasattr(upload, "read"):
+        raise CorpsRefuse(400, "missing_file")
+    data = await upload.read()
+    if len(data) > plafond:
+        raise CorpsRefuse(413, "content_too_large")
+    return form, upload, data
+
+
 async def upload_receive(request: Request) -> JSONResponse:
     """Réception d'un upload signé (issue #105) : PAS de JWT — le jeton signé DANS
     l'URL fait foi (scellé sub/org/cible, TTL, usage unique). Deux voies :
@@ -167,32 +207,15 @@ async def upload_receive(request: Request) -> JSONResponse:
     if payload is None:
         return _json_error(request, 401, "invalid_or_expired_token")
     plafond = upload_tokens.max_bytes()
-    if request.method == "POST":
-        plafond += _MARGE_MULTIPART
-    if _annonce_trop_gros(request, plafond):
-        return _json_error(request, 413, "content_too_large")
     try:
-        corps = await _lire_borne(request, plafond)
-    except _CorpsTropGros:
-        return _json_error(request, 413, "content_too_large")
-    if request.method == "POST":
-        # Le parseur lit le corps DÉJÀ BORNÉ et n'accepte qu'une partie fichier.
-        # Quelques champs texte restent tolérés (`max_fields`) : un formulaire sans
-        # fichier, ou un `file` envoyé en texte, doit rendre `missing_file`, pas
-        # `invalid_multipart` — le corps borné rend leur coût négligeable.
-        try:
-            form = await Request(request.scope, _rejouer(corps)).form(
-                max_files=1, max_fields=16)
-        except Exception:
-            return _json_error(request, 400, "invalid_multipart")
-        upload = form.get("file")
-        if upload is None or not hasattr(upload, "read"):
-            return _json_error(request, 400, "missing_file")
-        data = await upload.read()
-        ct = getattr(upload, "content_type", None)
-    else:  # PUT — corps brut
-        data = corps
-        ct = request.headers.get("content-type")
+        if request.method == "POST":
+            _form, upload, data = await lire_multipart_borne(request, plafond)
+            ct = getattr(upload, "content_type", None)
+        else:  # PUT — corps brut
+            data = await lire_corps_borne(request, plafond)
+            ct = request.headers.get("content-type")
+    except CorpsRefuse as e:
+        return _json_error(request, e.status, e.code)
     return await _do_signed_upload(request, payload, data, ct)
 
 

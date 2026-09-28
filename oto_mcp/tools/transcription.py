@@ -1,46 +1,29 @@
 """Transcription — un audio du projet devient une page du projet (ADR 0074).
 
-Deux outils. `transcription_create` : l'agent désigne un fichier par sa
+Face MCP. Deux outils. `transcription_create` : l'agent désigne un fichier par sa
 RÉFÉRENCE (`file_source`, typiquement `project_file`), le serveur lit les octets
 et dépose un TRAVAIL — il ne bloque PAS l'agent (#674, arbitrage du 22/09/2026:
 un connecteur long ne doit jamais l'attendre en ligne). `transcription_status`
 relit ce travail : en cours, terminé (avec la page), ou en échec (avec le refus).
 
-**Ce qui se fait encore ICI, dans le contexte de l'appel** (avant de rendre) :
-lire l'audio par le seam d'accès (`file_source.resolve`, garde de visibilité du
-projet), résoudre le credential de l'instance (byo_org, ou plateforme accordée à l'org)
-et vérifier le droit d'ÉCRIRE dans le projet — dans cet ordre, le droit d'écrire
-AVANT l'appel payant reste vrai même déplacé : ici, c'est avant même de CRÉER le
-travail, pour ne jamais facturer un texte qui n'aura nulle part où se ranger.
-Ces deux résolutions dépendent du `sub`/de l'org ACTIFS de l'appel MCP — elles
-n'existent plus une fois le travail rendu, d'où leur place ici et pas dans le
-worker (`oto_mcp/transcription_worker.py`, qui exécute hors de ce contexte).
+Le dépôt et la relecture sont ceux de la ressource REST (`capabilities/transcription.py`,
+gardes et ordre documentés là) ; ce module ne porte que le projet ambiant (`_project`),
+la traduction des refus en erreur MCP, et la sonde du connecteur. Le travail de fond
+(appel Mistral, page) vit dans `oto_mcp/transcription_worker.py`.
 
-**Ce qui se fait en tâche de fond** : l'appel à Mistral (post-traitement inclus,
-`oto_mcp/transcript.py`) et l'écriture de la page — celle-ci ne dépend QUE d'un
-`sub` et d'un `project_id` explicites (ownership réelle, pas un contexte ambiant),
-portés par le travail.
-
-Credential à 3 champs (ADR 0011), résolu par appel via
-`access.resolve_credential("transcription", want="auto")` (cascade, palier plateforme compris) : la clé (secret), la langue et le
-vocabulaire (non secrets) — une instance = une clé × un vocabulaire, rattachable à un
-projet par slot. La clé est CHIFFRÉE (même enveloppe que le coffre, `oto_mcp/crypto.py`)
-avant d'être portée sur le travail — aucune colonne plaintext.
+Credential à 3 champs (ADR 0011) : la clé (secret), la langue et le vocabulaire (non
+secrets) — une instance = une clé × un vocabulaire, rattachable à un projet par slot.
 """
 from __future__ import annotations
 
 from fastmcp import FastMCP
 from mcp.types import INVALID_PARAMS, ErrorData
 
-from .. import access, db, file_source, media_store, upload_tokens
+from .. import access, file_source
+from ..capabilities import transcription as _transcription
+from ..capabilities._types import AuthzDenied
 from ..connectors import verify as connector_verify
-from ..crypto import encrypt as _encrypt
 from ..mcp_errors import McpError
-
-# `language` vide = cette langue ; `auto` = détection par le fournisseur (aucune langue
-# envoyée). Mesuré au banc : aucun écart entre `fr` forcé et `auto` sur du français.
-_LANGUE_PAR_DEFAUT = "fr"
-_AUTO = "auto"
 
 
 def _refus(message: str) -> McpError:
@@ -53,20 +36,6 @@ def _verify(fields: dict, config: dict | None = None) -> None:
     from oto.tools.mistral import MistralClient
 
     MistralClient(api_key=fields["api_key"]).list_models()
-
-
-def _langue(creds: dict) -> str | None:
-    """Langue envoyée d'après le champ `language` de l'instance (None = détection)."""
-    valeur = (creds.get("language") or "").strip() or _LANGUE_PAR_DEFAUT
-    return None if valeur.lower() == _AUTO else valeur
-
-
-def _vocabulaire(instance: str | None, appel: str | None, remplace: bool) -> str | None:
-    """Vocabulaire du travail : celui de l'instance complété par celui de l'appel
-    (l'instance d'abord : au-delà de 100 mots c'est l'appel qui est rogné), ou
-    l'appel seul s'il remplace."""
-    parts = [appel] if remplace else [instance, appel]
-    return "\n".join(p.strip() for p in parts if p and p.strip()) or None
 
 
 def register(mcp: FastMCP) -> None:
@@ -96,56 +65,26 @@ def register(mcp: FastMCP) -> None:
             raise _refus("transcription_create écrit une page de projet : passe "
                          "`_project=<id>` (le projet qui recevra la page).")
         sub = access.current_user_sub_or_raise()
-        from ..capabilities.docs import common as docs_common
-        if not docs_common.can(sub, pid, "write"):
-            raise _refus(f"Écriture refusée sur le projet #{pid} : rien n'a été "
-                         "transcrit.")
         try:
-            fichier = file_source.resolve(source, max_bytes=upload_tokens.max_bytes())
-        except file_source.FileSourceError as e:
+            ref = _transcription.deposer(
+                sub, pid,
+                lambda: file_source.resolve(source, max_bytes=_transcription.MAX_AUDIO_BYTES),
+                vocabulary=vocabulary, vocabulary_replace=vocabulary_replace)
+        except AuthzDenied as e:
+            # Le refus du résolveur de credential est déjà une erreur MCP actionnable
+            # (connecteur à activer, quota) : la rendre telle quelle, pas sa traduction.
+            if isinstance(e.__cause__, McpError):
+                raise e.__cause__ from None
             raise _refus(str(e)) from None
-
-        rc = access.resolve_credential("transcription", want="auto")
-        # Un secret plateforme est la clé SEULE (la langue et le vocabulaire sont ceux de
-        # l'appel) ; celui d'une instance d'org est le pack JSON des trois champs.
-        creds = {"api_key": rc.secret} if rc.is_platform else rc.fields
-        langue = _langue(creds)
-        api_key = creds.get("api_key")
-        if not api_key:
-            raise _refus("Aucune clé Mistral posée sur cette instance : rien n'a "
-                         "été transcrit.")
-
-        audio_key = media_store.upload_object(
-            "transcription-jobs", str(pid), fichier.data, fichier.mime,
-            filename=fichier.filename, max_bytes=upload_tokens.max_bytes())
-        # AAD = `audio_key` (déjà unique, déjà colonne de LA ligne créée juste en
-        # dessous) : lie le chiffré à sa ligne sans un aller-retour pour connaître
-        # l'id serial d'abord (même intention que le coffre, forme plus simple).
-        job_id = db.create_transcription_job(
-            project_id=pid, sub=sub, audio_key=audio_key, filename=fichier.filename,
-            mime=fichier.mime, language=langue,
-            vocabulary=_vocabulaire(creds.get("vocabulary"), vocabulary,
-                                    vocabulary_replace),
-            api_key_enc=_encrypt(api_key, f"transcription_jobs:{audio_key}"))
-
-        return {"job_id": job_id, "status": "pending",
-                "note": "Relire avec transcription_status(job_id)."}
+        return {**ref, "note": "Relire avec transcription_status(job_id)."}
 
     @mcp.tool()
     def transcription_status(job_id: int) -> dict:
         """Read a transcription job started by `transcription_create`. Returns
         `{status: pending|running|done|failed, ...}` — on `done`, the page
         `{id, title, url}` plus words/duration/speakers; on `failed`, `error`."""
-        job = db.get_transcription_job(int(job_id))
-        if job is None:
-            raise _refus(f"Travail de transcription #{job_id} introuvable.")
         sub = access.current_user_sub_or_raise()
-        from ..capabilities.docs import common as docs_common
-        if not docs_common.can(sub, int(job["project_id"]), "read"):
-            raise _refus(f"Travail de transcription #{job_id} introuvable.")
-        out = {"job_id": job["id"], "status": job["status"]}
-        if job["status"] == "done":
-            out.update(job["result"] or {})
-        elif job["status"] == "failed":
-            out["error"] = job["error"]
-        return out
+        try:
+            return _transcription.relire(sub, int(job_id), transcript=False)
+        except AuthzDenied as e:
+            raise _refus(str(e)) from None

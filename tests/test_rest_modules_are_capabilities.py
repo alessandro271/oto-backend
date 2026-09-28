@@ -200,6 +200,7 @@ _KNOWN: dict[str, str] = {
     # la main, leur autre verbe est généré. C'est sans effet sur le routage — Starlette
     # rend un `Match.PARTIAL` sur méthode non trouvée et poursuit son balayage.
     "/api/me/projects/{project_id:int}/files": NATURE,   # POST multipart
+    "/api/me/projects/{project_id:int}/transcriptions/upload": NATURE,   # POST multipart (audio à transcrire)
     "/api/me/projects/{id}/export": NATURE,              # réponse application/zip
     # Le PDF d'une facture (#488). Même raison que l'export ci-dessus, et elle est
     # STRUCTURELLE, pas de la dette : un handler de capacité rend un `dict` que

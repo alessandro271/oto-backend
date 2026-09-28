@@ -574,8 +574,14 @@ from oto_mcp.db import _schema, schema
 # réécrit (PG ≥ 11), l'ancien code les ignore. Base existante par la révision Alembic
 # `0025_repli_api`, à jouer avant la fusion. 182 362 → 184 032 (+1 670, commentaires
 # compris).
-EMPREINTE = "e903983e7acaf674f107648d73fe9b9df25dbaff18efacc0ed495f1aebadb0a2"
-LONGUEUR = 184032
+# 28/09/2026 (ADR 0074) — `transcription_jobs` prend `transcript JSONB` : les tours
+# verbatim que rend la face REST, à part de `result` que l'ancienne face MCP recopie.
+# Base neuve par le fragment `schema/transcription::TRANSCRIPTION_JOBS` ; base existante
+# par la révision Alembic `0026_transcription_tours` ou le démarrage
+# (`transcription.DDL_COLONNE_TRANSCRIPT`, même forme). 184 032 → 184 298 (+266,
+# commentaire compris).
+EMPREINTE = "8853836ad805218056c2346f2dd10f0daa23988d28a9b2ef78c88ebb5b43d50c"
+LONGUEUR = 184298
 
 
 _CREATE_TABLE = re.compile(r"^CREATE TABLE IF NOT EXISTS (\w+)", re.M)

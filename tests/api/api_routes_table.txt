@@ -16,6 +16,8 @@ POST /api/me/avatar -> avatar_save
 OPTIONS /api/me/avatar -> options_handler
 POST /api/me/projects/{project_id:int}/files -> project_files_upload
 OPTIONS /api/me/projects/{project_id:int}/files -> options_handler
+POST /api/me/projects/{project_id:int}/transcriptions/upload -> transcription_upload
+OPTIONS /api/me/projects/{project_id:int}/transcriptions/upload -> options_handler
 GET,HEAD /api/public/docs/{token} -> public_doc
 OPTIONS /api/public/docs/{token} -> options_handler
 POST,PUT /api/upload/{token} -> upload_receive
@@ -618,6 +620,10 @@ GET,HEAD /api/me/projects/{project_id:int} -> _handler
 OPTIONS /api/me/projects/{project_id:int} -> options_handler
 POST /api/me/projects -> _handler
 OPTIONS /api/me/projects -> options_handler
+POST /api/me/projects/{project_id:int}/transcriptions -> _handler
+OPTIONS /api/me/projects/{project_id:int}/transcriptions -> options_handler
+GET,HEAD /api/me/transcriptions/{job_id:int} -> _handler
+OPTIONS /api/me/transcriptions/{job_id:int} -> options_handler
 POST /api/me/kb -> _handler
 OPTIONS /api/me/kb -> options_handler
 GET,HEAD /api/me/search -> _handler

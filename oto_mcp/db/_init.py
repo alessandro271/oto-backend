@@ -14,7 +14,7 @@ import time
 import psycopg
 
 from . import (_prerequis, _tenant_primaire, _version_alembic, connector_instances, datastore_ns, journal_revisions,
-               revision, user_subscriptions)
+               revision, transcription, user_subscriptions)
 from ._conn import _connect
 from ._ddl_garde import GardeDdl, ddl_a_faire
 from ._schema import _SCHEMA
@@ -626,6 +626,10 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     if _index_absent(conn, "idx_datastore_rows_formula_dirty"):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_datastore_rows_formula_dirty "
                      "ON datastore_rows(ns_id, row_id) WHERE formula_dirty")
+    # Les tours verbatim d'une transcription (ADR 0074) — la même que pose la révision
+    # `0026` : ordre indifférent entre elles.
+    if _colonne_absente(conn, "transcription_jobs", transcription.COLONNE_TRANSCRIPT):
+        conn.execute(transcription.DDL_COLONNE_TRANSCRIPT)
     # Lot 3 Ship 3 : propositions de CRÉATION (doc_id nullable + project_id +
     # emplacement proposé + CHECK). Le CHECK valide sur l'existant (toutes les
     # lignes ont doc_id). Idempotent.

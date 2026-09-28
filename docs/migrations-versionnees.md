@@ -705,6 +705,16 @@ chaque lecture du mode (`get_mode`, donc à chaque remise d'un travail d'abonnem
 écrit la cause à chaque rapport de forfait. Le fragment de `0020` n'a pas bougé. Le
 retour arrière retire les trois colonnes.
 
+`0026_transcription_tours` (28/09/2026, ADR 0074, après `0025_repli_api`)
+ajoute `transcription_jobs.transcript JSONB` : les tours verbatim d'une transcription,
+que la face REST rend et la face MCP jamais. À part de `result` exprès — l'ancienne face
+MCP recopie `result` dans sa réponse, et le worker draine la même file en préprod et en
+prod. Sans défaut, écriture de catalogue seule, `AccessExclusiveLock` borné par
+`lock_timeout`. **Ordre indifférent** : le démarrage pose la même colonne s'il ne la
+trouve pas (`transcription.DDL_COLONNE_TRANSCRIPT`, sous garde de catalogue). L'ancien
+code ne la lit ni ne l'écrit. Le retour arrière retire la colonne ; le code qui l'écrit
+doit être retiré avant lui.
+
 ### 5.2 Une base neuve naît à la tête du registre (24/09/2026, oto-backend#969)
 
 Une base neuve reçoit tout son schéma du démarrage : chaque colonne qu'une révision pose

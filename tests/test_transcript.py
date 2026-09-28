@@ -88,9 +88,9 @@ def test_tours_regroupes_et_locuteurs_renommes_dans_l_ordre_d_apparition():
         _s("Oui.", "speaker_0", 10, 15), _s("Bonjour.", "speaker_3", 15, 20),
     ])
     assert tours == [
-        {"speaker": "Locuteur 1", "start": 0, "text": "Bonjour. On y va."},
-        {"speaker": "Locuteur 2", "start": 10, "text": "Oui."},
-        {"speaker": "Locuteur 1", "start": 15, "text": "Bonjour."},
+        {"speaker": "Locuteur 1", "start": 0, "end": 10, "text": "Bonjour. On y va."},
+        {"speaker": "Locuteur 2", "start": 10, "end": 15, "text": "Oui."},
+        {"speaker": "Locuteur 1", "start": 15, "end": 20, "text": "Bonjour."},
     ]
 
 
