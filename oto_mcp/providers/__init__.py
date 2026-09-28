@@ -248,6 +248,11 @@ _DECLARATIONS: tuple[str, ...] = (
     # --- référentiel des métiers US — câblé 2026-09-22 ------------------------
     # Le pendant keyé de `bls` : O*NET nomme le métier, BLS en donne les salaires.
     "onet",
+    # --- décision typée (System One) — câblé 2026-09-28 ----------------------
+    # Le modèle qui tranche une question fermée au lieu d'un tour de modèle. Voisin
+    # de `transcription` par la SITUATION : un service d'inférence porté par la
+    # plateforme, dont la clé n'est jamais celle d'une org.
+    "jev",
     # --- porteurs de CLÉ, aucun outil (kind="credential") --------------------
     # La clé de modèle qu'une org dépose pour ses agents programmés. Ils ne
     # servent aucun tool : le worker la consomme pour le compte de l'org.
