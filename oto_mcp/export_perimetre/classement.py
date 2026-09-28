@@ -28,7 +28,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..ownership import TYPE_RESSOURCE_DATASTORE, TYPE_RESSOURCE_PROCEDURE
-from .regles import Ou, ParEntite, ParGroupe, ParOrg, ParSub, ParSubSansOrg, Regle, Via
+from .regles import (Ou, ParEntite, ParGroupe, ParOrg, ParSub, ParSubSansOrg, ParTenant,
+                     Regle, Via)
 
 POSSEDEE = "possedee"
 INDIRECTE = "indirecte"
@@ -67,8 +68,6 @@ def exclue(regle: Regle, raison: str) -> Table:
 # `org_id` NULLABLE : la ligne sans org est celle de son compte.
 _ORG_OU_COMPTE = Ou((ParOrg(), ParSubSansOrg()))
 _COMMERCE = "notre commerce (ADR 0070 §3.1) : repris par oto-commerce, jamais embarqué"
-_TENANT = ("étage tenant : un module que l'instance déclare (ADR 0070 §7.2) — "
-           "sa reprise est à trancher, rien ne part d'ici")
 _DOCS = Via("docs", ("doc_id",))
 _PROJETS = Via("projects", ("project_id",))
 _TABLEAUX = Via("user_datastores", ("ns_id",))
@@ -90,9 +89,12 @@ CLASSEMENT: dict[str, Table] = {
     "group_disabled_tools": possedee(ParGroupe()),
     "user_disabled_tools": possedee(ParOrg()),
     "user_enabled_tools": possedee(ParOrg()),
-    "tenants": instance(_TENANT),
-    "tenant_admins": instance(_TENANT),
-    "tenant_legal_docs": instance(_TENANT),
+    # Le tenant du périmètre PART (décision du 28/09/2026) : il devient la ligne 1 de
+    # la cible, les clés qui le désignent y sont remappées (`importation`). Ses admins
+    # partent s'ils sont des comptes du périmètre ; les nôtres restent.
+    "tenants": possedee(ParTenant()),
+    "tenant_admins": possedee(ParSub()),
+    "tenant_legal_docs": indirecte(Via("tenants", ("tenant_slug",), ("slug",), fk=False)),
     # ── contenu : projets, pages, tableaux, nœuds, procédures, fonctions ───────
     "projects": possedee(ParEntite()),
     "project_activity": indirecte(_PROJETS),
@@ -182,7 +184,7 @@ CLASSEMENT: dict[str, Table] = {
     "transcription_jobs": indirecte(_PROJETS, secrets=("api_key_enc",),
                                     hors_base=("audio_key",)),
     # ── journal, usage, signaux ────────────────────────────────────────────────
-    "tool_calls": possedee(_ORG_OU_COMPTE, "le journal d'appels : fenêtre et volume à trancher ; "
+    "tool_calls": possedee(_ORG_OU_COMPTE, "tout l'historique (décision du 28/09/2026) ; "
                            "ses mois archivés au froid ne partent pas"),
     "journal_archives": instance("registre des mois archivés au froid : les archives "
                                  "mêlent tous les propriétaires, hors base"),
@@ -204,8 +206,9 @@ CLASSEMENT: dict[str, Table] = {
     # (`org_id` NULL) — la dernière ne se lit que par le compte.
     "org_entitlements": exclue(_ORG_OU_COMPTE,
                                "droits déclarés posés par notre commerce ; "
-                               "l'instance cible déclare les siens (à trancher)"),
-    "legal_acceptances": exclue(ParSub(), "preuve d'acceptation de NOS documents légaux"),
+                               "l'instance cible déclare les siens (décision du 28/09/2026)"),
+    "legal_acceptances": exclue(ParSub(), "preuve d'acceptation de NOS documents légaux "
+                                "(décision du 28/09/2026)"),
     "legal_acceptance_events": exclue(ParSub(), "preuve d'acceptation de NOS documents "
                                       "légaux"),
     "outreach_sends": exclue(ParSub(), "nos relances de plateforme"),

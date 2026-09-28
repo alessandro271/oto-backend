@@ -95,8 +95,9 @@ def test_un_lien_declare_fk_sans_cle_etrangere_est_refuse(schema):
 
 def test_un_heritage_d_une_table_qui_ne_part_pas_est_refuse(schema):
     classement = {**cl.CLASSEMENT,
-                  "tenant_admins": cl.indirecte(Via("tenants", ("slug",), ("slug",)))}
-    assert "`tenant_admins` hérite de `tenants`" in _refus(schema, classement)
+                  "tenant_admins": cl.indirecte(Via("alembic_version", ("slug",),
+                                                    ("version_num",), fk=False))}
+    assert "`tenant_admins` hérite de `alembic_version`" in _refus(schema, classement)
 
 
 def test_une_table_indirecte_ne_porte_pas_de_regle_directe(schema):

@@ -6,14 +6,21 @@ partagent la même), et aucune écriture possible — la base le refuserait.
 
 Avant d'écrire la première ligne, trois refus possibles, chacun nommé :
 - le classement ne couvre pas exactement le schéma (`ClassementIncomplet`) ;
-- le périmètre est ambigu (`ComptesPartages`) ;
-- une ligne exportée porte une valeur chiffrée avec NOTRE clé (`SecretsChiffres`), ou
-  une clé étrangère qui pointe hors de l'export (`ReferencesHorsPerimetre`).
+- le périmètre est ambigu (`perimetre.PerimetreRefuse` et ses cas) ;
+- une ligne exportée porte une valeur chiffrée avec NOTRE clé sans que l'appelant ait
+  demandé à la transporter (`SecretsChiffres`), ou une clé étrangère pointe hors de
+  l'export (`ReferencesHorsPerimetre`).
 
 Les identifiants sont PRÉSERVÉS : une base née par le démarrage n'en a aucun qui
-entre en collision (hors les semences que #969 retire), et l'AAD des secrets contient
-l'identité du propriétaire — remapper casserait le déchiffrement. Le manifeste relève
-le maximum de chaque séquence pour que l'import la recale.
+entre en collision, et l'AAD des secrets contient l'identité du propriétaire. Deux
+remappages seulement, faits à l'IMPORT et déclarés ici dans le manifeste : le tenant
+devient la ligne 1 de la cible (`tenant`), ses subs y perdent leur préfixe (`comptes`).
+Transportés, les secrets restent chiffrés sous NOTRE clé dans le fichier : le clair
+n'existe qu'en mémoire, au rechiffrement de l'import (`rechiffrement`).
+
+Les horodatages s'écrivent en UTC (`TimeZone` posé dans la transaction) : la même
+ligne relue sur la cible se sérialise à l'identique, ce qui rend l'empreinte
+comparable (`importation`).
 
 Format (`FORMAT`) : une ligne JSON par ligne de table, `{"t": <table>, "l": <ligne>}`,
 dans un ordre où chaque parent précède ses enfants ; puis une dernière ligne
@@ -25,6 +32,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Callable
@@ -47,8 +55,8 @@ class SecretsChiffres(RuntimeError):
         self.comptes = comptes
         detail = ", ".join(f"{t} : {n}" for t, n in sorted(comptes.items()))
         super().__init__("valeurs chiffrées avec la clé maîtresse de CETTE instance — la "
-                         "cible ne peut pas les lire, et le rechiffrement n'est pas écrit "
-                         f"(#1088) : {detail}")
+                         "cible ne peut les lire qu'après rechiffrement à l'import : "
+                         f"exporter avec `transporter_secrets=True` pour les emporter : {detail}")
 
 
 class ReferencesHorsPerimetre(RuntimeError):
@@ -90,7 +98,7 @@ def _compter(conn, sql: str, params: dict) -> int:
     return conn.execute(sql, params).fetchone()["n"]
 
 
-def controler_secrets(conn, classement, pred, params) -> None:
+def compter_secrets(conn, classement, pred, params) -> dict[str, int]:
     comptes = {}
     for t, e in sorted(classement.items()):
         if e.classe in EXPORTEES and e.secrets:
@@ -99,8 +107,7 @@ def controler_secrets(conn, classement, pred, params) -> None:
                          params)
             if n:
                 comptes[t] = n
-    if comptes:
-        raise SecretsChiffres(comptes)
+    return comptes
 
 
 def _jointure(k: Cle) -> str:
@@ -116,6 +123,8 @@ def controler_fermeture(conn, schema: Schema, classement, pred, params) -> dict[
     vers_instance: dict[str, list] = {}
     for t in sorted(t for t, e in classement.items() if e.classe in EXPORTEES):
         for k in schema.cles_de(t):
+            if k.cible == "tenants" and k.colonnes_cible == ("id",):
+                continue  # remappée EN BLOC vers la ligne 1 de la cible (`importation`)
             nom = f"{t}({', '.join(k.colonnes)}) → {k.cible}"
             non_nul = " AND ".join(f"c.{c} IS NOT NULL" for c in k.colonnes)
             cible = classement[k.cible]
@@ -141,8 +150,7 @@ def controler_fermeture(conn, schema: Schema, classement, pred, params) -> dict[
 
 
 def _lignes(conn, schema: Schema, t: str, pred, params):
-    generees = schema.generees.get(t, frozenset())
-    cols = ", ".join(c for c in schema.colonnes[t] if c not in generees)
+    cols = ", ".join(_colonnes(schema, t))
     tri = ", ".join(schema.primaires.get(t, ())) or "row_to_json(x)::text"
     sql = (f"SELECT row_to_json(x)::text FROM (SELECT {cols} FROM {t} "
            f"WHERE {pred(t)}) x ORDER BY {tri}")
@@ -152,44 +160,85 @@ def _lignes(conn, schema: Schema, t: str, pred, params):
             yield ligne
 
 
+@dataclass(frozen=True)
+class Lecture:
+    """Tout ce qu'il faut pour lire un périmètre dans l'instantané ouvert."""
+    schema: Schema
+    classement: dict[str, Table]
+    perimetre: Perimetre
+    pred: Callable[[str], str]
+    params: dict
+    ordre: list[str]
+
+    def lignes(self, conn, t: str):
+        return _lignes(conn, self.schema, t, self.pred, self.params)
+
+
+def ouvrir(conn: psycopg.Connection, orgs: list[int],
+           classement: dict[str, Table] = CLASSEMENT) -> Lecture:
+    """Pose l'instantané en lecture seule (UTC) et résout le périmètre — à appeler DANS
+    `conn.transaction()`, sur une connexion passée en lecture seule avant."""
+    conn.execute("SET LOCAL TimeZone = 'UTC'")
+    schema = lire_schema(conn)
+    classement = verifier_classement(schema, classement)
+    perimetre = resoudre(conn, orgs)
+    params = perimetre.parametres()
+    pred = compilateur(classement)
+    return Lecture(schema, classement, perimetre, pred, params,
+                   ordre_d_export(schema, classement))
+
+
+def lecture_seule(conn: psycopg.Connection) -> None:
+    """Une connexion confiée à une lecture de périmètre n'écrit plus, et lit un seul
+    instantané. Elle le reste après l'appel."""
+    conn.read_only = True
+    conn.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
+
+
 def exporter(conn: psycopg.Connection, orgs: list[int], sortie: Path | str, *,
+             transporter_secrets: bool = False,
              classement: dict[str, Table] = CLASSEMENT) -> dict:
     """Exporte le périmètre des `orgs` vers `sortie` et rend le manifeste.
 
-    `conn` : une connexion psycopg à `dict_row`, HORS transaction — l'export pose
-    lui-même son instantané en lecture seule, et la laisse en lecture seule — une
-    connexion confiée à un export n'a plus à écrire. `sortie` ne doit pas exister : on
-    n'écrase jamais un export (il s'écrit à côté puis se renomme)."""
+    `conn` : une connexion psycopg à `dict_row`, HORS transaction (`lecture_seule`).
+    `sortie` ne doit pas exister : on n'écrase jamais un export (il s'écrit à côté
+    puis se renomme). `transporter_secrets` : emporter les valeurs chiffrées TELLES
+    QUELLES (sous notre clé), pour que l'import les rechiffre ; sans lui, leur
+    présence refuse."""
     sortie = Path(sortie)
     if sortie.exists():
         raise FileExistsError(f"{sortie} existe déjà : un export ne s'écrase pas")
-    conn.read_only = True
-    conn.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
+    lecture_seule(conn)
     with conn.transaction():
-        schema = lire_schema(conn)
-        classement = verifier_classement(schema, classement)
-        perimetre = resoudre(conn, orgs)
-        params = perimetre.parametres()
-        pred = compilateur(classement)
-        controler_secrets(conn, classement, pred, params)
-        vers_instance = controler_fermeture(conn, schema, classement, pred, params)
-        ordre = ordre_d_export(schema, classement)
+        lu = ouvrir(conn, orgs, classement)
+        secrets = compter_secrets(conn, lu.classement, lu.pred, lu.params)
+        if secrets and not transporter_secrets:
+            raise SecretsChiffres(secrets)
+        vers_instance = controler_fermeture(conn, lu.schema, lu.classement, lu.pred, lu.params)
         provisoire = sortie.with_name(sortie.name + ".partiel")
         with provisoire.open("x", encoding="utf-8") as f:
-            manifeste = _ecrire(conn, f, schema, classement, pred, params, ordre)
-            manifeste.update(_entete(conn, perimetre), ordre=ordre,
-                             references_instance=vers_instance)
+            manifeste = _ecrire(conn, f, lu)
+            manifeste.update(_entete(conn, lu.perimetre), ordre=lu.ordre,
+                             references_instance=vers_instance, secrets=secrets,
+                             colonnes={t: _colonnes(lu.schema, t) for t in lu.ordre})
             f.write(json.dumps({"manifeste": manifeste}, ensure_ascii=False) + "\n")
         os.replace(provisoire, sortie)
     return manifeste
 
 
-def _ecrire(conn, f, schema, classement, pred, params, ordre) -> dict:
+def _colonnes(schema: Schema, t: str) -> list[str]:
+    generees = schema.generees.get(t, frozenset())
+    return [c for c in schema.colonnes[t] if c not in generees]
+
+
+def _ecrire(conn, f, lu: Lecture) -> dict:
+    schema, classement, pred, params, ordre = (lu.schema, lu.classement, lu.pred,
+                                               lu.params, lu.ordre)
     empreinte = hashlib.sha256()
     tables: dict[str, dict] = {}
     for t in ordre:
         n = 0
-        for ligne in _lignes(conn, schema, t, pred, params):
+        for ligne in lu.lignes(conn, t):
             texte = f'{{"t": {json.dumps(t)}, "l": {ligne}}}\n'
             empreinte.update(texte.encode())
             f.write(texte)
@@ -235,4 +284,7 @@ def _entete(conn, p: Perimetre) -> dict:
             "perimetre": {"orgs_declarees": list(p.orgs_declarees),
                           "orgs_personnelles": [o for o in p.orgs
                                                 if o not in p.orgs_declarees],
-                          "groupes": len(p.groupes), "comptes": len(p.subs)}}
+                          "groupes": len(p.groupes), "comptes": len(p.subs)},
+            "tenant": {"id": p.id_tenant, "slug": p.tenant_slug,
+                       "primaire_source": p.tenant_primaire_source},
+            "comptes": p.comptes_cible()}

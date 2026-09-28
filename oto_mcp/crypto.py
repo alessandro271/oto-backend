@@ -63,15 +63,26 @@ def encrypt(plaintext: str, aad: str) -> str:
     key = _load_master_key()
     if key is None:
         raise RuntimeError("OTO_MCP_MASTER_KEY absente — chiffrement indisponible")
-    nonce = os.urandom(12)
-    ct = AESGCM(key).encrypt(nonce, plaintext.encode(), aad.encode())
-    return base64.b64encode(_KEY_REF + nonce + ct).decode()
+    return encrypt_with_key(key, plaintext, aad)
 
 
 def decrypt(envelope: str, aad: str) -> str:
     key = _load_master_key()
     if key is None:
         raise RuntimeError("OTO_MCP_MASTER_KEY absente — déchiffrement impossible")
+    return decrypt_with_key(key, envelope, aad)
+
+
+def encrypt_with_key(key: bytes, plaintext: str, aad: str) -> str:
+    """L'enveloppe, sous une clé DONNÉE plutôt que celle de l'instance : le
+    rechiffrement d'un export vers une autre instance (#1088) tient deux clés à la
+    fois, en mémoire. Même format que `encrypt`, qui s'y ramène."""
+    nonce = os.urandom(12)
+    ct = AESGCM(key).encrypt(nonce, plaintext.encode(), aad.encode())
+    return base64.b64encode(_KEY_REF + nonce + ct).decode()
+
+
+def decrypt_with_key(key: bytes, envelope: str, aad: str) -> str:
     blob = base64.b64decode(envelope)
     # blob[:1] = key_ref (réservé au versioning/rotation) ; [1:13] = nonce.
     nonce, ct = blob[1:13], blob[13:]

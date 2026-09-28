@@ -1,15 +1,15 @@
-"""L'export d'un périmètre, sur une vraie base à plusieurs orgs (oto-backend#1088).
+"""L'export d'un périmètre, sur une vraie base à plusieurs tenants et orgs (oto-backend#1088).
 
 Chaque ligne semée porte le MARQUEUR de son propriétaire dans une valeur texte
-(`A7d1e` pour le périmètre exporté, `B9f3c` pour l'org voisine). Deux propriétés se
-vérifient alors sans passer par les règles du classement — un second chemin, pas la
-relecture de ce qu'on a écrit :
-- **rien d'autrui** : aucune ligne du fichier ne contient le marqueur de la voisine ;
+(`A7d1e` pour le périmètre exporté, `B9f3c` pour le voisin ; `perimetre_banc`). Deux
+propriétés se vérifient alors sans passer par les règles du classement — un second
+chemin, pas la relecture de ce qu'on a écrit :
+- **rien d'autrui** : aucune ligne du fichier ne contient le marqueur du voisin ;
 - **rien d'oublié** : pour chaque table, les lignes de la base qui portent le marqueur
   du périmètre sont exactement celles du fichier qui le portent.
 
-Les refus (compte partagé, secret chiffré, référence hors périmètre) se prouvent chacun
-sur une org à part, pour ne pas contaminer le périmètre principal.
+Les refus se prouvent chacun sur un tenant à part, pour ne pas contaminer le
+périmètre principal.
 """
 from __future__ import annotations
 
@@ -23,91 +23,28 @@ from psycopg.rows import dict_row  # noqa: E402
 from oto_mcp.export_perimetre.classement import CLASSEMENT, EXPORTEES  # noqa: E402
 from oto_mcp.export_perimetre.extraction import (  # noqa: E402
     ReferencesHorsPerimetre, SecretsChiffres, exporter)
-from oto_mcp.export_perimetre.perimetre import ComptesPartages, PerimetreRefuse  # noqa: E402
-
-A, B = "A7d1e", "B9f3c"
-
-
-def _org(c, nom: str, personal_of: str | None = None) -> int:
-    return c.execute("INSERT INTO orgs (name, personal_of) VALUES (%s, %s) RETURNING id",
-                     (nom, personal_of)).fetchone()["id"]
-
-
-def _membre(c, org: int, sub: str) -> None:
-    c.execute("INSERT INTO users (sub, email) VALUES (%s, %s) ON CONFLICT DO NOTHING",
-              (sub, f"{sub}@exemple.test"))
-    c.execute("INSERT INTO org_members (org_id, sub, org_role) VALUES (%s, %s, 'admin')",
-              (org, sub))
-
-
-def _semer(c, m: str) -> dict:
-    """Une org, deux comptes, un espace perso, une équipe et un contenu de chaque famille."""
-    org = _org(c, f"org {m}")
-    alice, bob = f"{m}-alice", f"{m}-bob"
-    _membre(c, org, alice)
-    _membre(c, org, bob)
-    _membre(c, _org(c, f"perso {m}", personal_of=alice), alice)
-    groupe = c.execute("INSERT INTO org_groups (org_id, name) VALUES (%s, %s) RETURNING id",
-                       (org, f"équipe {m}")).fetchone()["id"]
-    c.execute("INSERT INTO org_group_members (group_id, sub, group_role) "
-              "VALUES (%s, %s, 'member')", (groupe, bob))
-    projet = c.execute("INSERT INTO projects (owner_type, owner_id, name) "
-                       "VALUES ('org', %s, %s) RETURNING id", (str(org), f"projet {m}")
-                       ).fetchone()["id"]
-    c.execute("INSERT INTO projects (owner_type, owner_id, name) VALUES ('user', %s, %s)",
-              (alice, f"projet perso {m}"))
-    page = c.execute("INSERT INTO docs (project_id, title, body_md) VALUES (%s, %s, %s) "
-                     "RETURNING id", (projet, f"page {m}", f"corps {m}")).fetchone()["id"]
-    c.execute("INSERT INTO doc_revisions (doc_id, title, body_md) VALUES (%s, %s, %s)",
-              (page, f"page {m}", f"v1 {m}"))
-    c.execute("INSERT INTO project_files (project_id, s3_key, filename, mime, size_bytes) "
-              "VALUES (%s, %s, %s, 'text/plain', 3)", (projet, f"projets/{m}/f.txt", f"f {m}"))
-    c.execute("INSERT INTO resource_grants (resource_type, resource_id, principal_type, "
-              "principal_id, granted_by) VALUES ('project', %s, 'group', %s, %s)",
-              (str(projet), str(groupe), alice))
-    tableau = c.execute("INSERT INTO user_datastores (owner_type, owner_id, namespace) "
-                        "VALUES ('org', %s, %s) RETURNING id", (str(org), f"tableau_{m}")
-                        ).fetchone()["id"]
-    for i in (1, 2):
-        c.execute("INSERT INTO datastore_rows (ns_id, row_id, data) VALUES (%s, %s, %s)",
-                  (tableau, f"{m}-{i}", json.dumps({"nom": f"ligne {m}"})))
-    noeud = c.execute("INSERT INTO nodes (public_id, kind, owner_type, owner_id, props) "
-                      "VALUES (%s, 'page', 'org', %s, %s) RETURNING id",
-                      (f"n-{m}", str(org), json.dumps({"titre": m}))).fetchone()["id"]
-    c.execute("INSERT INTO blocks (public_id, node_id, position, type, props) "
-              "VALUES (%s, %s, 1, 'paragraph', %s)", (f"b-{m}", noeud, json.dumps({"t": m})))
-    c.execute("INSERT INTO org_instructions (org_id, owner_type, owner_id, slug, body_md) "
-              "VALUES (%s, 'org', %s, %s, %s)", (org, str(org), f"proc-{m}", f"fais {m}"))
-    c.execute("INSERT INTO runs (run_id, sub, org_id, label) VALUES (%s, %s, %s, %s)",
-              (f"run-{m}", alice, org, f"run {m}"))
-    c.execute("INSERT INTO run_messages (run_id, seq, role, content) "
-              "VALUES (%s, 1, 'user', %s)", (f"run-{m}", json.dumps({"texte": m})))
-    c.execute("INSERT INTO tool_calls (server, kind, sub, tool, org_id) "
-              "VALUES ('oto', 'tool', %s, 'oto_doc', %s)", (alice, org))
-    c.execute("INSERT INTO usage (sub, tool, day, count) VALUES (%s, 'oto_doc', "
-              "CURRENT_DATE, 3)", (bob,))
-    c.execute("INSERT INTO billing_contracts (org_id, seats, unit_amount, reference, "
-              "starts_at) VALUES (%s, 1, 100, %s, NOW())", (org, f"contrat {m}"))
-    c.execute("INSERT INTO tool_calls (server, kind, sub, tool) "
-              "VALUES ('oto', 'tool', %s, 'oto_whoami')", (bob,))
-    c.execute("INSERT INTO org_entitlements (sub, right_key, value, source) "
-              "VALUES (%s, 'essai', 1, %s)", (alice, f"commerce {m}"))
-    return {"org": org, "projet": projet, "page": page}
+from oto_mcp.export_perimetre.perimetre import (  # noqa: E402
+    ComptesHorsTenant, ComptesPartages, PerimetreRefuse, TenantPartage, TenantsMultiples)
+from perimetre_banc import A, B, membre, org, semer, tenant  # noqa: E402
 
 
 @pytest.fixture(scope="module")
 def base(live, pg_module_dsn):
     with psycopg.connect(pg_module_dsn, autocommit=True, row_factory=dict_row) as c:
-        yield {"dsn": pg_module_dsn, A: _semer(c, A), B: _semer(c, B)}
+        yield {"dsn": pg_module_dsn, A: semer(c, A), B: semer(c, B)}
 
 
-def _exporter(base, orgs, chemin):
+def _exporter(base, orgs, chemin, **kw):
     with psycopg.connect(base["dsn"], row_factory=dict_row) as c:
-        return exporter(c, orgs, chemin)
+        return exporter(c, orgs, chemin, **kw)
 
 
 def _lignes(chemin) -> list[dict]:
     return [json.loads(x) for x in chemin.read_text(encoding="utf-8").splitlines()]
+
+
+def _tenant_a_part(c, slug: str) -> int:
+    return tenant(c, slug, slug)
 
 
 @pytest.fixture(scope="module")
@@ -126,9 +63,8 @@ def test_aucune_ligne_d_un_autre_proprietaire(export_a):
 
 def test_toutes_les_lignes_marquees_du_perimetre_sont_parties(base, export_a):
     chemin, _ = export_a
-    lignes = _lignes(chemin)[:-1]
     parties: dict[str, int] = {}
-    for x in lignes:
+    for x in _lignes(chemin)[:-1]:
         if A in json.dumps(x["l"], ensure_ascii=False):
             parties[x["t"]] = parties.get(x["t"], 0) + 1
     with psycopg.connect(base["dsn"], row_factory=dict_row) as c:
@@ -140,12 +76,13 @@ def test_toutes_les_lignes_marquees_du_perimetre_sont_parties(base, export_a):
                           "WHERE row_to_json(x)::text LIKE %s", (f"%{A}%",)).fetchone()["n"]
             if n:
                 attendues[t] = n
-    assert len(attendues) >= 15, attendues   # le banc exerce vraiment les familles
+    assert len(attendues) >= 20, attendues   # le banc exerce vraiment les familles
     assert parties == attendues
 
 
 def test_le_manifeste_dit_ce_qui_ne_part_pas_et_ce_qui_vit_hors_base(base, export_a):
     chemin, manifeste = export_a
+    a = base[A]
     assert _lignes(chemin)[-1] == {"manifeste": manifeste}
     assert manifeste["tables"]["billing_contracts"] == {
         "classe": "exclue", "raison": CLASSEMENT["billing_contracts"].raison, "omises": 1}
@@ -154,11 +91,17 @@ def test_le_manifeste_dit_ce_qui_ne_part_pas_et_ce_qui_vit_hors_base(base, expor
     assert manifeste["tables"]["org_entitlements"]["omises"] == 1
     assert manifeste["tables"]["tool_calls"]["lignes"] == 2
     assert manifeste["hors_base"] == {"project_files.s3_key": [f"projets/{A}/f.txt"]}
-    assert manifeste["references_instance"] == {"orgs(tenant_id) → tenants": ["1"]}
-    assert manifeste["perimetre"]["orgs_declarees"] == [base[A]["org"]]
+    # Le tenant PART : plus aucune référence vers l'instance, et l'import sait quoi remapper.
+    assert manifeste["references_instance"] == {}
+    assert manifeste["tables"]["tenants"]["lignes"] == 1
+    assert manifeste["tenant"] == {"id": a["tenant"], "slug": a["slug"],
+                                   "primaire_source": False}
+    assert manifeste["comptes"] == {a["alice"]: f"{A}-alice", a["bob"]: f"{A}-bob"}
+    assert manifeste["secrets"] == {}
+    assert manifeste["perimetre"]["orgs_declarees"] == [a["org"]]
     assert len(manifeste["perimetre"]["orgs_personnelles"]) == 1
     assert manifeste["perimetre"]["comptes"] == 2
-    assert manifeste["sequences"]["orgs.id"] >= base[A]["org"]
+    assert manifeste["sequences"]["orgs.id"] >= a["org"]
     compte = {t: v["lignes"] for t, v in manifeste["tables"].items() if "lignes" in v}
     assert sum(compte.values()) == len(_lignes(chemin)) - 1
 
@@ -170,6 +113,7 @@ def test_les_parents_precedent_leurs_enfants_dans_le_fichier(export_a):
     assert premiers["projects"] < premiers["docs"] < premiers["doc_revisions"]
     assert premiers["user_datastores"] < premiers["datastore_rows"]
     assert premiers["runs"] < premiers["run_messages"]
+    assert premiers["tenants"] < premiers["tenant_admins"]
 
 
 def test_un_export_ne_s_ecrase_pas(base, export_a):
@@ -184,41 +128,67 @@ def test_une_org_inconnue_est_refusee(base, tmp_path):
     assert not (tmp_path / "x.jsonl").exists()
 
 
+def test_deux_tenants_dans_un_perimetre_refusent(base, tmp_path):
+    # Avant le test du compte partagé : celui-ci rattache un compte tiers à B.
+    with pytest.raises(TenantsMultiples):
+        _exporter(base, [base[A]["org"], base[B]["org"]], tmp_path / "x.jsonl")
+
+
 def test_un_compte_partage_avec_une_org_hors_perimetre_refuse(base, tmp_path):
     with psycopg.connect(base["dsn"], autocommit=True, row_factory=dict_row) as c:
-        org = _org(c, "org partagée")
-        _membre(c, org, "partage-dave")
+        o = org(c, "org partagée", _tenant_a_part(c, "tpartage"))
+        membre(c, o, "tpartage:dave")
         c.execute("INSERT INTO org_members (org_id, sub, org_role) VALUES (%s, %s, 'member')",
-                  (base[B]["org"], "partage-dave"))
-    with pytest.raises(ComptesPartages, match="partage-dave") as e:
-        _exporter(base, [org], tmp_path / "x.jsonl")
-    assert e.value.partages == {"partage-dave": [base[B]["org"]]}
+                  (base[B]["org"], "tpartage:dave"))
+    with pytest.raises(ComptesPartages, match="dave") as e:
+        _exporter(base, [o], tmp_path / "x.jsonl")
+    assert e.value.partages == {"tpartage:dave": [base[B]["org"]]}
 
 
-def test_un_secret_chiffre_du_perimetre_refuse(base, tmp_path):
+def test_un_tenant_qui_heberge_une_org_hors_perimetre_refuse(base, tmp_path):
     with psycopg.connect(base["dsn"], autocommit=True, row_factory=dict_row) as c:
-        org = _org(c, "org à secret")
+        tid = _tenant_a_part(c, "tdeux")
+        seule, autre = org(c, "déclarée", tid), org(c, "oubliée", tid)
+    with pytest.raises(TenantPartage, match=str(autre)):
+        _exporter(base, [seule], tmp_path / "x.jsonl")
+
+
+def test_un_compte_que_le_tenant_ne_qualifie_pas_refuse(base, tmp_path):
+    """Sur la cible le tenant est primaire, ses subs y sont nus : un sub sans son
+    préfixe est celui d'un autre annuaire."""
+    with psycopg.connect(base["dsn"], autocommit=True, row_factory=dict_row) as c:
+        o = org(c, "org hors annuaire", _tenant_a_part(c, "thors"))
+        membre(c, o, "compte-nu")
+    with pytest.raises(ComptesHorsTenant, match="compte-nu"):
+        _exporter(base, [o], tmp_path / "x.jsonl")
+
+
+def test_un_secret_chiffre_refuse_sauf_a_le_transporter(base, tmp_path):
+    with psycopg.connect(base["dsn"], autocommit=True, row_factory=dict_row) as c:
+        o = org(c, "org à secret", _tenant_a_part(c, "tsecret"))
         c.execute("INSERT INTO connector_credentials (entity_type, entity_id, connector, "
                   "account, secret_enc) VALUES ('org', %s, 'serper', '', 'chiffre')",
-                  (str(org),))
+                  (str(o),))
     with pytest.raises(SecretsChiffres) as e:
-        _exporter(base, [org], tmp_path / "x.jsonl")
+        _exporter(base, [o], tmp_path / "x.jsonl")
     assert e.value.comptes == {"connector_credentials": 1}
     assert not (tmp_path / "x.jsonl").exists()
+    manifeste = _exporter(base, [o], tmp_path / "x.jsonl", transporter_secrets=True)
+    assert manifeste["secrets"] == {"connector_credentials": 1}
 
 
 def test_une_reference_vers_une_ligne_d_autrui_refuse(base, tmp_path):
     with psycopg.connect(base["dsn"], autocommit=True, row_factory=dict_row) as c:
-        org = _org(c, "org qui pointe ailleurs")
+        o = org(c, "org qui pointe ailleurs", _tenant_a_part(c, "tpointe"))
         projet = c.execute("INSERT INTO projects (owner_type, owner_id, name) "
-                           "VALUES ('org', %s, 'p') RETURNING id", (str(org),)
+                           "VALUES ('org', %s, 'p') RETURNING id", (str(o),)
                            ).fetchone()["id"]
         page = c.execute("INSERT INTO docs (project_id, title, body_md) "
                          "VALUES (%s, 't', '') RETURNING id", (projet,)).fetchone()["id"]
         c.execute("INSERT INTO doc_links (from_doc, to_doc) VALUES (%s, %s)",
                   (page, base[B]["page"]))
     with pytest.raises(ReferencesHorsPerimetre) as e:
-        _exporter(base, [org], tmp_path / "x.jsonl")
+        _exporter(base, [o], tmp_path / "x.jsonl")
     assert e.value.comptes == {"doc_links(to_doc) → docs": 1}
 
 

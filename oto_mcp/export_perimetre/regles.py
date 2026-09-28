@@ -12,8 +12,8 @@ Quatre formes de propriété coexistent dans le schéma, et chacune a sa règle 
   ligne dont l'org est NULLE appartient à son compte (`ParSubSansOrg`) ;
 - le couple POLYMORPHE (`ParEntite`) : `owner_type`/`owner_id` en texte, au
   vocabulaire du coffre — `org` et `group` par id, `user` par sub, `member` en
-  `'<org_id>:<sub>'` (`credentials_store.member_id`). `platform` et `tenant` ne
-  relèvent JAMAIS d'un périmètre d'orgs : ce sont des lignes de l'instance ;
+  `'<org_id>:<sub>'` (`credentials_store.member_id`), `tenant` par son slug.
+  `platform` ne relève JAMAIS d'un périmètre : ce sont les lignes de l'instance ;
 - l'héritage d'un parent (`Via`), par une clé étrangère déclarée ou LOGIQUE
   (polymorphe, sans FK possible) — la seconde se déclare avec `fk=False` ;
 - l'union (`Ou`), quand une table porte deux chemins (procédure d'org ou perso).
@@ -73,8 +73,22 @@ class ParGroupe:
 
 
 @dataclass(frozen=True)
+class ParTenant:
+    """Le tenant du périmètre, par son id (`colonne="id"` sur `tenants`) ou son slug."""
+    colonne: str = "id"
+    par_slug: bool = False
+
+    def predicat(self, _parent: Callable[[str], str]) -> str:
+        return f"{self.colonne} = ANY(%({'tenants_slug' if self.par_slug else 'tenants'})s)"
+
+    def colonnes(self) -> tuple[str, ...]:
+        return (self.colonne,)
+
+
+@dataclass(frozen=True)
 class ParEntite:
-    """Le couple polymorphe (type, id) — `platform`/`tenant` n'y entrent jamais."""
+    """Le couple polymorphe (type, id). `tenant` s'y lit par son SLUG ; `platform`
+    n'y entre jamais."""
     colonne_type: str = "owner_type"
     colonne_id: str = "owner_id"
 
@@ -83,7 +97,8 @@ class ParEntite:
         return (f"(({t} = 'org' AND {i} = ANY(%(orgs_txt)s))"
                 f" OR ({t} = 'group' AND {i} = ANY(%(groupes_txt)s))"
                 f" OR ({t} = 'user' AND {i} = ANY(%(subs)s))"
-                f" OR ({t} = 'member' AND split_part({i}, ':', 1) = ANY(%(orgs_txt)s)))")
+                f" OR ({t} = 'member' AND split_part({i}, ':', 1) = ANY(%(orgs_txt)s))"
+                f" OR ({t} = 'tenant' AND {i} = ANY(%(tenants_slug)s)))")
 
     def colonnes(self) -> tuple[str, ...]:
         return (self.colonne_type, self.colonne_id)
@@ -129,7 +144,7 @@ class Ou:
         return tuple(c for r in self.regles for c in r.colonnes())
 
 
-Regle = Union[ParOrg, ParSub, ParSubSansOrg, ParGroupe, ParEntite, Via, Ou]
+Regle = Union[ParOrg, ParSub, ParSubSansOrg, ParGroupe, ParTenant, ParEntite, Via, Ou]
 
 
 def vias(regle: Regle) -> tuple[Via, ...]:
