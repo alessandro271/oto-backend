@@ -19,11 +19,12 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict
 
-from .. import access, db, group_store, roles, tenancy
+from .. import access, db, detenteurs, group_store, roles, tenancy
 from ._types import AuthzDenied, RawCtx, ResolvedCtx
 
 
-def _refus_org_admin(org_id, autres: Optional[str] = None) -> AuthzDenied:
+def _refus_org_admin(org_id, autres: Optional[str] = None, *,
+                     sub: Optional[str] = None) -> AuthzDenied:
     """LE refus « il faut être administrateur de cette org » — une seule phrase.
 
     Il s'écrivait à quatre endroits sous **deux** formulations : « de ton org active »
@@ -44,9 +45,44 @@ def _refus_org_admin(org_id, autres: Optional[str] = None) -> AuthzDenied:
     lors du lot qui l'a relevé : on avait unifié la phrase sans lui donner d'issue.
 
     Un refus qui ne porte pas le geste n'arrête pas la demande, il la déplace.
+
+    ⚠️ **`sub` y ajoute QUI** (oto#108) : le rôle et le niveau ne suffisent pas à qui doit
+    faire poser une clé — il lui faut une personne. Les administrateurs sont NOMMÉS (le
+    nom seul, jamais l'adresse) à un membre de cette org, et à lui seul (`detenteurs`) ; `details` porte la même chose en
+    forme structurée (`required_role`, `scope`, `org_id`, `holders`).
     """
     phrase = f"Réservé à un administrateur de l'org #{org_id}."
-    return AuthzDenied(403, "forbidden", phrase + (f" {autres}" if autres else ""))
+    details: dict = {"required_role": detenteurs.ORG_ADMIN, "scope": "org",
+                     "org_id": org_id}
+    admins = detenteurs.admins_de_l_org(sub, org_id)
+    if admins is not None:
+        phrase += detenteurs.phrase("Ses administrateurs, à qui le demander", admins)
+        details["holders"] = admins
+    return AuthzDenied(403, "forbidden", phrase + (f" {autres}" if autres else ""),
+                       details=details)
+
+
+def _refus_chef_d_equipe(group_id: int, *, sub: Optional[str] = None) -> AuthzDenied:
+    """LE refus « il faut être chef de cette équipe » — une seule phrase (oto#108).
+
+    Il s'écrivait sous deux formes (« du groupe #N », « de l'équipe #N ») pour un même
+    mur. Il dit le rôle, le niveau (l'équipe, ou l'org qui la contient) et, à un membre
+    de cette org, QUI : les chefs de l'équipe puis les administrateurs de l'org — la
+    gestionnaire d'une clé d'équipe sait alors à qui en demander la pose, au lieu de
+    faire circuler le secret par un canal externe."""
+    g = group_store.get_group(group_id) if sub else None
+    org_id = g["org_id"] if g else None
+    phrase = (f"Réservé au chef de l'équipe #{group_id} (ou à un administrateur de "
+              "son org).")
+    details: dict = {"required_role": detenteurs.GROUP_ADMIN, "scope": "group",
+                     "group_id": group_id, "org_id": org_id}
+    chefs = detenteurs.chefs_de_l_equipe(sub, group_id, org_id)
+    if chefs is not None:
+        admins = detenteurs.admins_de_l_org(sub, org_id)
+        phrase += (detenteurs.phrase("Chefs de cette équipe", chefs)
+                   + detenteurs.phrase("Administrateurs de son org", admins))
+        details["holders"] = {"group_admins": chefs, "org_admins": admins}
+    return AuthzDenied(403, "forbidden", phrase, details=details)
 
 
 #: Le refus d'une vue « en tant que » BORNÉE à une org (oto#270) : un org_admin qui
@@ -235,7 +271,7 @@ def ORG_ADMIN(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
         raise AuthzDenied(400, "no_active_org",
                           "Aucune org active — choisis-en une avec oto_use_org.")
     if not roles.is_org_admin(sub, org_id):
-        raise _refus_org_admin(org_id)
+        raise _refus_org_admin(org_id, sub=sub)
     return ResolvedCtx(sub=sub, org_id=org_id, role=access.get_user_role(sub))
 
 
@@ -432,7 +468,7 @@ def ORG_ADMIN_OF(field: str):
         sub = _require_sub(raw)
         org_id = _field_int(inp, field, "missing_org", field)
         if not roles.is_org_admin(sub, org_id):
-            raise _refus_org_admin(org_id)
+            raise _refus_org_admin(org_id, sub=sub)
         return ResolvedCtx(sub=sub, org_id=org_id, role=access.get_user_role(sub))
     return rule
 
@@ -519,7 +555,7 @@ def ORG_ADMIN_OPT(field: str, autres: Optional[str] = None):
         if explicit is not None:
             org_id = int(explicit)
             if not roles.is_org_admin(sub, org_id):
-                raise _refus_org_admin(org_id, autres)
+                raise _refus_org_admin(org_id, autres, sub=sub)
             return ResolvedCtx(sub=sub, org_id=org_id, role=access.get_user_role(sub))
         org_id = access.current_org(sub)
         if org_id is None:
@@ -527,7 +563,7 @@ def ORG_ADMIN_OPT(field: str, autres: Optional[str] = None):
                               "Aucune org active — choisis-en une avec oto_use_org, "
                               "ou passe `org` explicitement.")
         if not roles.is_org_admin(sub, org_id):
-            raise _refus_org_admin(org_id, autres)
+            raise _refus_org_admin(org_id, autres, sub=sub)
         return ResolvedCtx(sub=sub, org_id=org_id, role=access.get_user_role(sub))
     return rule
 
@@ -556,9 +592,10 @@ def ORG_MEMBER_OPT(field: str):
     return rule
 
 
-def _group_opt(field: str, allowed, refus: str):
+def _group_opt(field: str, allowed, refus):
     """Fabrique commune de `GROUP_MEMBER_OPT` / `GROUP_ADMIN_OPT` : équipe explicite
-    `input.<field>`, sinon l'équipe ACTIVE de la session, puis la garde `allowed`."""
+    `input.<field>`, sinon l'équipe ACTIVE de la session, puis la garde `allowed`.
+    `refus` : la phrase (formatée sur `{id}`), ou la fabrique `(group_id, sub)` du refus."""
     def rule(raw: RawCtx, inp: Optional[BaseModel] = None) -> ResolvedCtx:
         sub = _require_sub(raw)
         explicit = getattr(inp, field, None) if inp is not None else None
@@ -568,6 +605,8 @@ def _group_opt(field: str, allowed, refus: str):
                               "Aucune équipe active — choisis-en une avec oto_use_group, "
                               f"ou passe `{field}` explicitement.")
         if not allowed(sub, group_id):
+            if callable(refus):
+                raise refus(group_id, sub=sub)
             raise AuthzDenied(403, "forbidden", refus.format(id=group_id))
         # `org_id` reste l'org ACTIVE (ce que servait la règle d'org sur cette même
         # surface) : l'équipe visée est portée par `group_id`, et c'est elle que le
@@ -609,8 +648,7 @@ def GROUP_ADMIN_OPT(field: str):
 
     Le palier existait déjà sous `guides._owner_for_write` ; il est ici pour se DÉCLARER
     au niveau de la capacité (ADR 0009 §7) plutôt que de redescendre dans un handler."""
-    return _group_opt(field, roles.can_admin_group,
-                      "Réservé au chef de l'équipe #{id} (ou à un org_admin du parent).")
+    return _group_opt(field, roles.can_admin_group, _refus_chef_d_equipe)
 
 
 def TENANT_ADMIN_OF(field: str, *, platform):
@@ -731,8 +769,7 @@ def GROUP_ADMIN_OF(field: str):
         group_id = _field_int(inp, field, "missing_group", field)
         # Même ordre que `GROUP_MEMBER_OF` ci-dessus : autorisation d'abord (#300).
         if not roles.can_admin_group(sub, group_id):
-            raise AuthzDenied(403, "forbidden",
-                              f"Réservé au chef d'équipe (ou org_admin) du groupe #{group_id}.")
+            raise _refus_chef_d_equipe(group_id, sub=sub)
         g = group_store.get_group(group_id)
         if g is None:
             raise AuthzDenied(404, "unknown_group", f"Groupe #{group_id} inconnu.")

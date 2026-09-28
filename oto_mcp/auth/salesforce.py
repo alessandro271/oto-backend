@@ -230,15 +230,21 @@ def build_auth_url(sub: str, scope: str = "member", return_app: Optional[str] = 
     if scope == "org":
         from .. import roles
         if not roles.is_org_admin(sub, org_id):
+            from .. import detenteurs  # QUI le peut, nommé à un membre (oto#108)
             raise PermissionError(
                 "Seul un org_admin peut connecter Salesforce au nom de toute l'org."
+                + detenteurs.phrase("Ses administrateurs, à qui le demander",
+                                    detenteurs.admins_de_l_org(sub, org_id))
             )
     elif scope == "group":
         from .. import roles
         group_id = _ctx_group(sub)
         if not roles.can_admin_group(sub, group_id):
+            from .. import detenteurs  # QUI le peut, nommé à un membre (oto#108)
             raise PermissionError(
                 "Seul un chef d'équipe peut connecter Salesforce au nom de toute l'équipe."
+                + detenteurs.phrase("Chefs de cette équipe",
+                                    detenteurs.chefs_de_l_equipe(sub, group_id, org_id))
             )
     # L'application se cherche EN CASCADE (voir `_entites_montantes`) : un membre
     # consent avec l'application de son org sans jamais en connaître les identifiants.

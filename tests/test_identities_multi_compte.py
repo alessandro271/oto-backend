@@ -79,6 +79,7 @@ async def test_rename_capability_requires_org_admin_for_org_scope(monkeypatch):
     _coffre(monkeypatch, [{"account": "a", "meta": {}}])
     monkeypatch.setattr(roles, "is_org_admin", lambda sub, org: False)
     ctx = type("Ctx", (), {"sub": "u", "org_id": 1})()
+    monkeypatch.setattr("oto_mcp.detenteurs.est_membre", lambda *a: False)  # oto#108 : sans annuaire
     with pytest.raises(AuthzDenied) as e:
         await cap._rename(ctx, cap.RenameIdentityInput(
             connector="zoho", identity_id="a", name="c", scope="org"))

@@ -50,6 +50,13 @@ def _wire(monkeypatch, *, byo=False, option=True, org=39, existing=None, count=0
                         pending.update(nonce=nonce, sub=sub, org_id=org_id,
                                        provider=prov, platform_seat=platform_seat))
     monkeypatch.setattr("oto.tools.unipile.UnipileClient", _FakeClient)
+    # Le refus d'option nomme les administrateurs de l'org à un membre (oto#108) : ici
+    # un membre, dont l'org a une administratrice.
+    monkeypatch.setattr("oto_mcp.detenteurs.est_membre", lambda sub, org_id: True)
+    monkeypatch.setattr("oto_mcp.org_store.list_org_members", lambda org_id: [
+        {"sub": "adm", "org_role": "org_admin"}, {"sub": "u1", "org_role": "org_member"}])
+    monkeypatch.setattr("oto_mcp.db.get_user", lambda sub: {
+        "adm": {"name": "Admin Exemple", "email": "admin@example.test"}}.get(sub))
     return pending
 
 
@@ -94,6 +101,11 @@ def test_option_gate_on_platform_key(monkeypatch):
     with pytest.raises(ConnectRefused) as e:
         _run(hosted_auth_url("u1"))
     assert e.value.code == "unipile_option_required" and e.value.status == 402
+    # QUI lève l'option, et OÙ — pas « un admin » sans autre précision (oto#108).
+    assert "administrateur de cette org" in e.value.message
+    assert "équipe de la plateforme" in e.value.message
+    assert "Admin Exemple" in e.value.message
+    assert "admin@example.test" not in e.value.message      # le nom seul, jamais l'adresse
 
 
 def test_seat_cap_blocks_new_hosted_account(monkeypatch):

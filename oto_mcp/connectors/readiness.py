@@ -86,8 +86,11 @@ def diagnose(sub: str, connector: str, *, org, group) -> Optional[Diagnosis]:
     opt = access.paid_option_for(connector)
     if opt is not None and not access.option_open(sub, connector, org=org):
         return Diagnosis(PAID_OPTION_OFF, (
-            f"L'option `{opt}` n'est pas ouverte pour toi ici : il faut l'abonnement "
-            f"d'org qui l'inclut, un accès accordé par un admin, ou ta PROPRE clé "
+            # QUEL admin (oto#108) : « accordé par un admin » laissait l'administrateur
+            # de l'org se croire visé et chercher un geste qu'il n'a pas.
+            f"L'option `{opt}` n'est pas ouverte pour toi ici : il faut qu'un "
+            f"administrateur de l'org souscrive la formule qui l'inclut (page de "
+            f"facturation), que l'équipe de la plateforme l'offre à l'org, ou ta PROPRE clé "
             f"`{connector}` — une clé à toi lève l'option par construction (il n'y a "
             f"plus de siège plateforme à protéger). Pose-la"
             f"{links.ou_poser_la_cle(sub, org=org)}."))

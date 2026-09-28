@@ -3,7 +3,8 @@
 L'org_admin déclare, **par connecteur email** (`scaleway` = hébergé Otomata ; `resend`
 = BYOK), les adresses expéditrices que `email_send` peut utiliser + une fenêtre calme.
 Le **transport dérive du connecteur** (plus de champ transport sur l'expéditeur). La
-clé Resend, elle, se pose dans le coffre (`oto_set_org_secret(provider="resend")`).
+clé Resend, elle, se pose dans le coffre de l'org (`PUT /api/orgs/{id}/secrets/resend`,
+org_admin — la page connecteurs du tableau de bord).
 Lecture = membre ; écriture = org_admin.
 
 Modèle calqué sur `orgs/field_filters.py` : get global (toutes les configs keyées par
@@ -248,8 +249,8 @@ CAPABILITIES += [
         authz=ORG_ADMIN_OF("org_id"), Output=EmailSettingsSet,
         description=("Set ONE email connector's config for `email_send`. `connector` ∈ "
                      "{scaleway (Otomata-hosted via Scaleway TEM — domain verified + in the "
-                     "service allowlist), resend (BYOK — set the org's Resend key via "
-                     "oto_set_org_secret provider=resend; domain verified on Resend)}; the "
+                     "service allowlist), resend (BYOK — an org admin sets the org's Resend "
+                     "key on the dashboard's connectors page; domain verified on Resend)}; the "
                      "transport is DERIVED from the connector. `senders` = [{email, name?, "
                      "reply_to?}] (no transport) — replaces this connector's list; the first "
                      "sender across connectors is the default when `email_send` omits "

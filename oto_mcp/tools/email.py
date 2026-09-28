@@ -37,6 +37,18 @@ from ..auth.hooks import current_user_sub_from_token
 logger = logging.getLogger(__name__)
 
 
+def _cle_d_org_absente(sub: str, org_id, connecteur: str, libelle: str) -> str:
+    """Le refus d'un envoi différé sans la clé d'org de son transport — il dit QUI la pose
+    et OÙ (oto#108). Il renvoyait vers `oto_set_org_secret`, un outil retiré le
+    25/06/2026 : la destination nommée n'existait plus."""
+    from .. import detenteurs, links
+    return (f"Transport {libelle} sans clé d'org : un administrateur de l'org la pose"
+            f"{links.ou_poser_la_cle(sub, org=org_id, connecteur=connecteur)} avant de "
+            "programmer."
+            + detenteurs.phrase("Administrateurs de cette org",
+                                detenteurs.admins_de_l_org(sub, org_id)))
+
+
 def _err(msg: str, code: int = INVALID_PARAMS) -> McpError:
     return McpError(ErrorData(code=code, message=msg))
 
@@ -245,12 +257,9 @@ def register(mcp: FastMCP) -> None:
 
         if when is not None:
             # Envoi différé → mise en file (HTML rendu + autz déjà figés).
-            if transport == "resend" and not (org_id and org_store.has_org_secret(org_id, "resend")):
-                raise _err("Transport Resend sans clé d'org : pose-la via "
-                           "`oto_set_org_secret(provider=\"resend\")` avant de programmer.")
-            if transport == "scaleway" and not (org_id and org_store.has_org_secret(org_id, "scaleway")):
-                raise _err("Transport Scaleway TEM sans clé d'org : pose-la via "
-                           "`oto_set_org_secret(provider=\"scaleway\")` avant de programmer.")
+            for nom, libelle in (("resend", "Resend"), ("scaleway", "Scaleway TEM")):
+                if transport == nom and not (org_id and org_store.has_org_secret(org_id, nom)):
+                    raise _err(_cle_d_org_absente(sub, org_id, nom, libelle))
             sched_id = db.enqueue_scheduled_email(
                 org_id=org_id, created_by=sub, to_email=to, subject=subject, body_html=html,
                 from_email=route["from_email"], from_name=route["from_name"],

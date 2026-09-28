@@ -163,7 +163,11 @@ async def _connect(ctx: ResolvedCtx, inp: UnipileConnectInput) -> dict:
         # #172) portent un message actionnable, servi À LA PLACE du code machine dans
         # `error` ; les autres exposent leur code. Le champ `error` est donc de la PROSE
         # pour ces deux-là — c'est ce qui est servi depuis toujours.
-        raise AuthzDenied(e.status, e.message if e.status in (409, 502) else e.code)
+        if e.status in (409, 502):
+            raise AuthzDenied(e.status, e.message)
+        # La phrase part avec le code (oto#108) : `unipile_option_required` seul ne dit
+        # ni qui lève l'option ni où — le message, lui, le dit.
+        raise AuthzDenied(e.status, e.code, e.message)
     # Adoption (binding-par-org) : le compte connecté ailleurs a été lié ICI sans
     # wizard → pas d'URL, le front rafraîchit ({adopted, account_name, channel}).
     if out.get("adopted"):

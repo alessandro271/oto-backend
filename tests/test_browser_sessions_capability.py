@@ -167,6 +167,8 @@ def test_l_ordre_des_refus_du_scope_partage(monkeypatch, socle, scope, patch,
     partageabilité (400) AVANT droit d'admin (403). C'est pourquoi l'escalade vit dans
     le handler et non dans une règle d'autz déclarée, qui trancherait trop tôt."""
     stub_authz(monkeypatch)
+    monkeypatch.setattr("oto_mcp.detenteurs.est_membre", lambda *a: False)  # oto#108 : sans annuaire
+    monkeypatch.setattr("oto_mcp.group_store.get_group", lambda gid: None)  # oto#108 : sans annuaire
     champ, valeur = patch
     cible = bs.access if champ.startswith("current") else (
         bs.providers if champ == "is_org_shareable" else bs.roles)

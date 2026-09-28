@@ -91,7 +91,9 @@ def test_un_connecteur_byo_org_nest_plus_inconnu(monkeypatch, coffre):
 def test_sans_le_droit_dadmin_dequipe_cest_refuse(monkeypatch, coffre):
     stub_authz(monkeypatch)
     monkeypatch.setattr(mc.roles, "can_admin_group", lambda sub, gid: False)
+    monkeypatch.setattr("oto_mcp.group_store.get_group", lambda gid: None)  # oto#108 : sans annuaire
     code, out = _get(query=b"scope=group")
+    monkeypatch.setattr("oto_mcp.detenteurs.est_membre", lambda *a: False)  # oto#108 : sans annuaire
     assert code == 403, out
 
 

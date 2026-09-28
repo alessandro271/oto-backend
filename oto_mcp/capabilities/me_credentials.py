@@ -33,7 +33,7 @@ from pydantic import BaseModel, ConfigDict
 from starlette.concurrency import run_in_threadpool
 
 from .. import access, providers, credentials_store, db, journal_secrets, roles
-from ._authz import SUB_ONLY
+from ._authz import SUB_ONLY, _refus_chef_d_equipe, _refus_org_admin
 from ._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx,
                      RestBinding)
 from .registry import CAPABILITIES
@@ -270,14 +270,14 @@ def _scoped_entity(ctx: ResolvedCtx, scope: str, org_id) -> tuple[str, str]:
         if org_id is None:
             raise AuthzDenied(400, "no_org_context", "Aucune org de contexte.")
         if not roles.is_org_admin(ctx.sub, org_id):
-            raise AuthzDenied(403, "forbidden", "Admin d'org requis.")
+            raise _refus_org_admin(org_id, sub=ctx.sub)
         return credentials_store.ORG, str(org_id)
     if scope == "group":
         group_id = access.current_group(ctx.sub)
         if group_id is None:
             raise AuthzDenied(400, "no_group_context", "Aucune équipe de contexte.")
         if not roles.can_admin_group(ctx.sub, group_id):
-            raise AuthzDenied(403, "forbidden", "Admin d'équipe requis.")
+            raise _refus_chef_d_equipe(group_id, sub=ctx.sub)
         return "group", str(group_id)
     if org_id is None:
         raise AuthzDenied(400, "no_org_context", "Aucune org de contexte.")
@@ -595,7 +595,9 @@ _REFUS_DE_PALIER = (
                   "`scope=group` alors qu'aucune équipe n'est active"),
     DeclaredError(403, "forbidden",
                   "`scope=org` ou `group` sans être admin de ce palier — un membre "
-                  "ne lit ni ne retire la clé partagée d'un autre"),
+                  "ne lit ni ne retire la clé partagée d'un autre. Le refus dit le rôle "
+                  "et le niveau requis et, à un membre de l'org, QUI les détient "
+                  "(`details.holders`)"),
 )
 # Les quatre refus de CONNECTEUR, un par cause. Ils n'en faisaient qu'un jusqu'au
 # 2026-09-08 — `unknown_provider` pour les quatre — et le document promettait donc

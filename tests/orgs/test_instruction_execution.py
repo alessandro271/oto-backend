@@ -161,6 +161,7 @@ def test_real_operation_authorizes_once_and_keeps_io_outside_loop(monkeypatch, s
 @pytest.mark.parametrize("op", ["get", "list", "set", "delete"])
 def test_denied_operation_never_reaches_store(monkeypatch, surface, op):
     events = _wire(monkeypatch, allowed=False)
+    monkeypatch.setattr("oto_mcp.detenteurs.est_membre", lambda *a: False)  # oto#108 : sans annuaire
     args = {"op": op, "org_id": ORG, "slug": "sample", "body_md": "Body"}
 
     async def call():

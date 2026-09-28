@@ -55,6 +55,28 @@ Les combinateurs de la couche capacité (`capabilities/_authz.py`) délèguent �
 `roles` : `ORG_ADMIN_OF`, `ORG_MEMBER_OF`, `GROUP_ADMIN_OF`, `GROUP_MEMBER_OF`.
 Ajouter un palier plus tard = un seul endroit à toucher.
 
+### Un refus d'administration dit QUI le lève (oto#108)
+
+Deux fabriques, une par palier, et toute garde d'administration passe par elles :
+`_authz._refus_org_admin(org_id, sub=…)` et `_authz._refus_chef_d_equipe(group_id,
+sub=…)` (règles `ORG_ADMIN*`, `GROUP_ADMIN_OF`, `GROUP_ADMIN_OPT`, et les paliers
+`org`/`group` de la clé : `me.credential.get|clear`, `oto_identity`, sessions de
+navigateur ; Salesforce et l'envoi différé disent la même chose par leur propre texte).
+Le refus nomme le **rôle** et le **niveau** (l'org #N, ou l'équipe #N et son org) ; à un
+**membre de cette org**, et à lui seul (`detenteurs.est_membre` = `roles.is_org_member`,
+qui y range aussi l'admin plateforme), il nomme aussi **les personnes** :
+administrateurs de l'org, chefs de l'équipe — **par leur nom seul, jamais leur adresse**
+(décision produit), sans les comptes en pause, cinq au plus ; un détenteur sans nom est
+compté, pas tu.
+REST : `details = {required_role, scope, org_id[, group_id], holders}`, chaque
+détenteur réduit à `{name}`. Un palier sans
+personne joignable le dit. Une **option payante** refusée (`unipile_option_required`,
+`paid_option_refusal`) dit ses deux portes : un administrateur de l'org souscrit (page de
+facturation), ou l'équipe de la plateforme l'offre — `detenteurs.qui_leve_une_option`.
+Le cas qui l'a fait naître : une simple membre, gestionnaire du compte d'un fournisseur,
+refusée sur la clé d'équipe sans savoir à qui s'adresser — et un secret envoyé par un
+lien externe pour qu'un administrateur le recolle.
+
 ## Ce qu'un groupe gouverne
 
 Un groupe ≠ juste un label : il **gouverne deux ressources** par **délégation de

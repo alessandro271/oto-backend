@@ -73,7 +73,7 @@ def paid_option_refusal(connector: str, org: "int | None") -> Optional[str]:
         return (f"L'option « {nom} » est un droit d'organisation, et aucune org qui "
                 "la porte ne couvre cet appel : travaille dans une org abonnée.")
     return (f"L'option « {nom} » n'est pas active pour cette org : essai terminé "
-            "ou abonnement requis. Un admin de l'org peut s'abonner ; une clé "
+            "ou abonnement requis ; une clé "
             f"`{providers.credential_provider(connector)}` propre reste servie.")
 
 
@@ -81,9 +81,13 @@ def exiger_option_payante(connector: str, sub: "str | None", org: "int | None") 
     """Lève le refus de `paid_option_refusal` au palier PLATEFORME d'une résolution. Les
     droits lus sont ceux de l'org que l'appelant peut consommer : pour le bénéficiaire
     d'un projet partagé à qui rien n'est prêté, aucune (#480, `heritage.org_partagee`)."""
-    refus = paid_option_refusal(
-        connector, heritage.org_partagee(org, heritage.du_contexte(sub, org)))
+    org_servie = heritage.org_partagee(org, heritage.du_contexte(sub, org))
+    refus = paid_option_refusal(connector, org_servie)
     if refus:
+        if org_servie is not None:
+            # QUI lève l'obstacle et OÙ (oto#108) — nommé à un membre de l'org seul.
+            from .. import detenteurs
+            refus += detenteurs.qui_leve_une_option(sub, org_servie)
         raise McpError(ErrorData(code=INVALID_PARAMS, message=refus))
 
 

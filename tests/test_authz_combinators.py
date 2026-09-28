@@ -187,7 +187,11 @@ def test_org_admin_of_allows_admin(monkeypatch):
 def test_org_admin_of_denies_member_of_target(monkeypatch):
     """Membre de l'org cible mais pas admin → refusé (frontière lecture/écriture)."""
     monkeypatch.setattr(roles, "is_org_member", lambda sub, org: True)
-    assert _denied(_authz.ORG_ADMIN_OF("org_id"), RAW, SimpleNamespace(org_id=99)).status == 403
+    # Un membre apprend qui administre son org (oto#108) : ici, personne.
+    monkeypatch.setattr("oto_mcp.org_store.list_org_members", lambda org_id: [])
+    refus = _denied(_authz.ORG_ADMIN_OF("org_id"), RAW, SimpleNamespace(org_id=99))
+    assert refus.status == 403
+    assert "Ses administrateurs, à qui le demander : personne de joignable." in refus.message
 
 
 # --- ORG_ADMIN_OPT (self-service par défaut, épinglable par `org`) ----------

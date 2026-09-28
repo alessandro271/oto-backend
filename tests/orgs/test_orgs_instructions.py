@@ -59,6 +59,7 @@ def test_usage_tool_name_is_a_mounted_tool():
 # ── Combinateur d'autz ORG_ADMIN (org active) ───────────────────────────────
 def test_org_admin_active_combinator(monkeypatch):
     monkeypatch.setattr(_authz.access, "get_user_role", lambda sub: "member")
+    monkeypatch.setattr("oto_mcp.detenteurs.est_membre", lambda *a: False)  # oto#108 : sans annuaire
 
     # L'org active est résolue via le seam access.current_org (ADR 0023 : org de
     # session ?? maison) — c'est lui qu'on simule, plus org_store directement.

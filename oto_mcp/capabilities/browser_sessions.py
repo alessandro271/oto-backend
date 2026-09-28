@@ -33,7 +33,7 @@ from typing import Optional
 from pydantic import BaseModel
 
 from .. import access, providers, roles
-from ._authz import SUB_ONLY
+from ._authz import SUB_ONLY, _refus_chef_d_equipe, _refus_org_admin
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
@@ -138,13 +138,13 @@ async def _finalize(ctx: ResolvedCtx, inp: SessionFinalizeInput) -> dict:
             raise AuthzDenied(400, "not_org_shareable")
         if scope == "org":
             if not roles.is_org_admin(ctx.sub, org_id):
-                raise AuthzDenied(403, "forbidden")
+                raise _refus_org_admin(org_id, sub=ctx.sub)
         else:
             group_id = access.current_group(ctx.sub)
             if group_id is None:
                 raise AuthzDenied(400, "no_group_context")
             if not roles.can_admin_group(ctx.sub, group_id):
-                raise AuthzDenied(403, "forbidden")
+                raise _refus_chef_d_equipe(group_id, sub=ctx.sub)
     account = (inp.account or "").strip()
     try:
         res = await browser_session.finalize(

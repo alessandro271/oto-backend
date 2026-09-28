@@ -190,9 +190,18 @@ def test_l_operateur_plateforme_lit_le_journal(client, monde):
 def test_refuse_a_qui_n_administre_pas_l_org(client, monde, qui):
     r = client.get(f"/api/orgs/{monde['o']}/members/events", headers=_h(qui))
     assert r.status_code == 403, r.text
-    # Rien sur l'org quittée : ni son nom, ni un membre, ni un geste.
-    for trace in (NOM_ORG, ADMIN, "removed", "added"):
+    # Rien sur l'org quittée : ni son nom, ni un membre, ni un geste — et jamais une
+    # adresse, à personne.
+    for trace in (NOM_ORG, "removed", "added", "@journal.invalid"):
         assert trace not in r.text
+    # ⚠️ Le SIMPLE membre apprend, lui, qui administre SON org, par son NOM seul — c'est à
+    # qui demander (oto#108) ; ni le tiers ni l'ex-membre ne l'apprennent. (Ici le nom
+    # vaut le sub : l'authentification du banc le réécrit depuis ses claims.)
+    details = r.json().get("details") or {}
+    if qui == MEMBRE:
+        assert details["holders"] and all(set(h) == {"name"} for h in details["holders"])
+    else:
+        assert ADMIN not in r.text and "holders" not in details
 
 
 def test_un_ex_membre_n_apprend_rien_de_l_org_quittee(client, monde):

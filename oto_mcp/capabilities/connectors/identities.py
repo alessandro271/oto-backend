@@ -13,7 +13,7 @@ from starlette.concurrency import run_in_threadpool
 
 from ... import account_suspension
 from ...connectors import identities as connector_identities
-from .._authz import SUB_ONLY
+from .._authz import SUB_ONLY, _refus_chef_d_equipe, _refus_org_admin
 from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 
 logger = logging.getLogger(__name__)
@@ -170,13 +170,13 @@ def _require_scope(ctx: ResolvedCtx, scope: str, *, write: bool) -> None:
     if org is None:
         raise AuthzDenied(400, "no_org_context", "Aucune org de contexte.")
     if scope == "org" and not roles.is_org_admin(ctx.sub, org):
-        raise AuthzDenied(403, "forbidden", "Admin d'org requis pour choisir le compte d'org.")
+        raise _refus_org_admin(org, sub=ctx.sub)
     if scope == "group":
         gid = access.current_group(ctx.sub)
         if gid is None:
             raise AuthzDenied(400, "no_group_context", "Aucune équipe de contexte.")
         if not roles.can_admin_group(ctx.sub, gid):
-            raise AuthzDenied(403, "forbidden", "Admin d'équipe requis pour choisir le compte d'équipe.")
+            raise _refus_chef_d_equipe(gid, sub=ctx.sub)
 
 
 async def _list(ctx: ResolvedCtx, inp: IdentitiesInput) -> dict:

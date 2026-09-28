@@ -227,6 +227,7 @@ def test_build_auth_url_raises_when_fields_not_saved_yet(monkeypatch):
 
 def test_org_scope_requires_org_admin(monkeypatch):
     from oto_mcp import access, roles
+    monkeypatch.setattr("oto_mcp.detenteurs.est_membre", lambda *a: False)  # oto#108 : sans annuaire
     monkeypatch.setattr(access, "current_org", lambda sub: 5)
     monkeypatch.setattr(roles, "is_org_admin", lambda sub, org_id: False)
     with pytest.raises(PermissionError):
@@ -254,6 +255,7 @@ def test_invalid_scope_value_rejected():
 
 def test_group_scope_requires_group_admin(monkeypatch):
     from oto_mcp import access, roles
+    monkeypatch.setattr("oto_mcp.detenteurs.est_membre", lambda *a: False)  # oto#108 : sans annuaire
     monkeypatch.setattr(access, "current_org", lambda sub: 5)
     monkeypatch.setattr(access, "current_group", lambda sub: 77)
     monkeypatch.setattr(roles, "can_admin_group", lambda sub, group_id: False)

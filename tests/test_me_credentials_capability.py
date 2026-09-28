@@ -156,6 +156,7 @@ def test_retrait_d_un_compte_nomme(monkeypatch, vault):
 
 def test_retrait_au_palier_org_exige_l_admin(monkeypatch, vault):
     stub_authz(monkeypatch)
+    monkeypatch.setattr("oto_mcp.detenteurs.est_membre", lambda *a: False)  # oto#108 : sans annuaire
     monkeypatch.setattr(mc.roles, "is_org_admin", lambda sub, org: False)
     code, out = call("me.credential.clear", path_params={"provider": "serper"},
                      query=b"scope=org")

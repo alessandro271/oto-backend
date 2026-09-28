@@ -238,6 +238,7 @@ def test_montrer_l_outil_ne_donne_aucun_droit(monkeypatch):
 
     capa = next(c for c in CAPABILITIES if c.mcp == "oto_admin_org_member")
     monkeypatch.setattr(_authz.roles, "is_org_admin", lambda sub, org: False)
+    monkeypatch.setattr("oto_mcp.detenteurs.est_membre", lambda *a: False)  # oto#108 : sans annuaire
 
     with pytest.raises(AuthzDenied) as refus:
         capa.authz(RawCtx(sub="sub-membre"),

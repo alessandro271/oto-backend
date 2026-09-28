@@ -124,7 +124,10 @@ def test_les_autres_refus_servent_leur_CODE(monkeypatch, socle, status):
     _refus(monkeypatch, status, "option_required", "Souscris l'option messagerie.")
     code, out = call("me.unipile.connect")
     assert code == status
-    assert out["error"] == "option_required" and out["detail"] is None
+    # Le code dans `error`, et la phrase dans `detail` (oto#108) : elle dit qui lève
+    # l'obstacle et où — `option_required` seul ne le disait pas.
+    assert out["error"] == "option_required"
+    assert out["detail"] == "Souscris l'option messagerie."
 
 
 # --- Réconcilier ------------------------------------------------------------
