@@ -1,14 +1,14 @@
 ---
-title: Droits déclarés — ce qu'une personne dans une org a le droit de faire, et à quelle valeur
+title: Droits déclarés — ce qu'une personne a le droit de faire, dans une org ou partout, et à quelle valeur
 type: reference
 description: >-
   Le modèle des droits déclarés (ADR 0070 §7, oto-backend#1066) : le cœur applique des
-  limites DÉCLARÉES sans savoir qui paie. Une ligne = une portée (org ou personne dans
-  l'org), une clé du catalogue, une valeur entière jamais vide, une fenêtre de dates, une
+  limites DÉCLARÉES sans savoir qui paie. Une ligne = une portée (l'org, une personne
+  dans l'org, ou une personne dans toutes ses orgs), une clé du catalogue, une valeur entière jamais vide, une fenêtre de dates, une
   source opaque. Un seul point de lecture (`access.entitlements.value_for`), le plus
   généreux gagne, et sans ligne c'est le défaut DÉCLARÉ par l'instance
   (`OTO_ENTITLEMENT_DEFAULTS`) — jamais un défaut du code. Ce qui est branché, ce qui ne
-  l'est pas encore, et la migration en deux révisions.
+  l'est pas encore, et les révisions de la base servie.
 ---
 
 # Droits déclarés
@@ -22,17 +22,33 @@ relit à chaque usage, jamais mis en cache comme acquis.
 
 | champ | ce qu'il dit |
 |---|---|
-| `org_id` | l'org où le droit s'applique |
-| `sub` | **la portée** : NULL = la ligne vaut pour l'org (tous ses membres) ; posé = pour cette personne dans cette org |
+| `org_id` | l'org où le droit s'applique ; NULL = la personne `sub` dans **toutes** ses orgs |
+| `sub` | la personne : NULL = la ligne vaut pour l'org (tous ses membres) ; posé = pour cette personne, dans l'org `org_id` ou partout |
 | `right_key` | une clé du **catalogue** (ci-dessous) — toute autre est refusée à la pose |
 | `value` | un **entier, jamais vide** : oui/non = `1`/`0` ; sinon le nombre (plafond, quota par jour). « Sans plafond » = `SANS_PLAFOND` (2 147 483 647), une valeur explicite |
 | `starts_at`, `expires_at` | la fenêtre : **début inclus, fin exclue**, fin nulle = sans échéance |
 | `source` | qui l'a posé, au sens du producteur. **Informative** (affichage, reprise) : la règle d'application ne dépend jamais d'elle |
 
+**Trois portées** (#1089), et jamais aucune :
+
+| portée | `org_id` | `sub` | vaut pour |
+|---|---|---|---|
+| org | posé | NULL | chaque membre de l'org, dans cette org |
+| personne dans l'org | posé | posé | cette personne, dans cette org |
+| personne partout | NULL | posé | cette personne, quelle que soit l'org où elle agit — et hors de toute org |
+
+Une ligne sans org ni personne est refusée par la base (contrainte
+`org_entitlements_une_portee`, `CHECK (org_id IS NOT NULL OR sub IS NOT NULL)`) et, avant
+elle, par le code (`entitlement_scope_required`). La personne partout n'a pas à être
+membre d'une org : le droit lui appartient, pas à une appartenance. Supprimer une org
+emporte ses lignes d'org et de personnes dans l'org (`ON DELETE CASCADE`), jamais une
+ligne de personne partout.
+
 **Une ligne par (org, personne, droit, source)** : la contrainte
-`org_entitlements_une_ligne` (`UNIQUE NULLS NOT DISTINCT`) le tient, `sub` nul compris.
-Reposer la même quadruple remplace la ligne, bornes et valeur comprises : le producteur
-dit l'état entier de son droit à chaque pose.
+`org_entitlements_une_ligne` (`UNIQUE NULLS NOT DISTINCT`) le tient, `sub` nul comme
+`org_id` nul — deux lignes `(NULL, sub, droit, source)` sont égales pour elle. Reposer la
+même quadruple remplace la ligne, bornes et valeur comprises : le producteur dit l'état
+entier de son droit à chaque pose.
 
 **Pourquoi une valeur jamais vide.** Une valeur nulle voulait dire « pas d'avis », et un
 plan « sans avis » sur les sièges n'écrivait rien (#805) — l'absence se lisait comme un
@@ -63,11 +79,15 @@ value_for(sub, org_id, key, now=None) -> int
 
 1. les lignes **valides** à `now` (défaut : l'horloge de la BASE, la même pour tous les
    processus) ;
-2. de l'**org** (`sub` NULL) **et** de la **personne** `sub` dans l'org, toutes sources ;
+2. des **trois portées** : l'**org** (`sub` NULL), la **personne** `sub` dans l'org, et la
+   **personne** `sub` partout (`org_id` NULL) — toutes sources ;
 3. **le plus généreux gagne** : le maximum. Un don ne retire jamais ce qu'un abonnement
    donne, ni l'inverse ; une ligne à `0` dit « non » mais ne retire pas un « oui » posé
    ailleurs ;
 4. **aucune ligne valide → le défaut déclaré par l'instance**.
+
+`sub` None : l'org seule (la personne partout ne s'applique pas à une org). `org_id` None :
+la personne partout seule. Les deux None : le défaut.
 
 ⚠️ Une ligne vaut même si elle est MOINS généreuse que le défaut : le défaut ne répond
 qu'en l'absence de toute ligne valide.
@@ -75,18 +95,26 @@ qu'en l'absence de toute ligne valide.
 `org_has(org_id, key)` en dérive (`value_for(None, org_id, key) >= 1`). **Personne d'autre
 ne lit la table pour appliquer un droit.** Deux lectures directes subsistent, qui
 n'appliquent rien : le témoin « la table est-elle remplie ? » de la fin de droit de la
-messagerie (`db/unipile_fin_de_droit.py`) et la liste des orgs à réconcilier du commerce
-(`db/billing.orgs_with_commercial_rights`).
+messagerie (`db/unipile_fin_de_droit.py`, toutes portées) et la liste des orgs à
+réconcilier du commerce (`db/billing.orgs_with_commercial_rights`, jointe sur `org_id` :
+une ligne de personne partout n'y fait entrer aucune org).
+
+⚠️ Aujourd'hui, seul `org_has` est appelé : aucun lecteur ne passe encore de `sub`. Une
+ligne de personne (dans l'org ou partout) est donc posée, relue par l'API, mais **n'ouvre
+rien** tant qu'un point d'usage ne demande pas `value_for(sub, …)`.
 
 ## L'écriture — `db/entitlements.py`
 
 `grant(org_id, key, source, *, value, sub=None, starts_at=None, expires_at=None,
-granted_by=None)` : pose idempotente ; clé hors catalogue, valeur vide ou hors genre →
-`ValueError` nommée (`entitlement_unknown_key`, `entitlement_value_required`,
-`entitlement_value_invalid`), rien n'est écrit. `revoke(org_id, key, source, *, sub=None)`
-retire une ligne. Listes : `list_for_org` (org et personnes, échues comprises — une
-console doit voir un droit échu), `list_for_person`, `list_for_right` (« quelles orgs ou
-personnes ont X », vivantes par défaut).
+granted_by=None)` : pose idempotente, `org_id` None = la personne partout ; clé hors
+catalogue, valeur vide ou hors genre, ni org ni personne → `ValueError` nommée
+(`entitlement_unknown_key`, `entitlement_value_required`, `entitlement_value_invalid`,
+`entitlement_scope_required`), rien n'est écrit. `revoke(org_id, key, source, *,
+sub=None)` retire UNE ligne, de la portée exacte que disent `org_id` et `sub` — jamais
+une autre. Listes : `list_for_org` (org et personnes dans l'org, échues comprises — une
+console doit voir un droit échu), `list_for_person_everywhere` (la personne partout),
+`list_for_person` (toutes les lignes de la personne, partout en dernier),
+`list_for_right` (« quelles orgs ou personnes ont X », vivantes par défaut).
 
 ## L'API du commerce — `capabilities/service_commerce.py` (#1069)
 
@@ -103,13 +131,21 @@ identité de service (`docs/auth-logto.md` §Identité de service). REST seule, 
 | `PUT /api/service/orgs/{id}/entitlements/{right_key}/{source}` | `grant`, `granted_by = service:<client_id>` ; rend la ligne |
 | `DELETE /api/service/orgs/{id}/entitlements/{right_key}/{source}` | `revoke` |
 | `GET /api/service/users/{sub}` | le rôle **plateforme** d'un compte (#1087), relu par l'API d'administration du commerce |
+| `GET /api/service/users/{sub}/entitlements` | `list_for_person_everywhere` |
+| `PUT /api/service/users/{sub}/entitlements/{right_key}/{source}` | `grant` sur la personne partout, `granted_by = service:<client_id>` ; rend la ligne |
+| `DELETE /api/service/users/{sub}/entitlements/{right_key}/{source}` | `revoke` de la personne partout seule |
 | `GET /api/service/billing/export` | **temporaire** (#1085) : l'état de facturation du cœur (factures et PDF compris), pour sa reprise par le commerce ; part avec le retrait |
 
-`sub` (corps ou requête) vise une personne, qui doit être membre ; omis, le droit vaut
-pour l'org. `source` est prise dans la liste fermée `entitlements_catalogue.SOURCES`.
+Sous `/orgs/{id}/`, `sub` (corps ou requête) vise une personne, qui doit être membre ;
+omis, le droit vaut pour l'org. Sous `/users/{sub}/`, le droit vaut pour la personne
+dans toutes ses orgs : elle doit avoir un compte (`404 unknown_user`), pas une
+appartenance. **Chaque ligne se lit par une seule route** : une ligne d'org ou de
+personne dans l'org par l'org, une ligne de personne partout par la personne. `source`
+est prise dans la liste fermée `entitlements_catalogue.SOURCES`.
 ⚠️ Tant que la réconciliation interne tourne (ci-dessous), elle retire les lignes de SES
-sources qu'elle n'a pas posées : le service ne doit écrire que sous une source qu'elle ne
-réconcilie pas (`trial`) jusqu'à la bascule.
+sources qu'elle n'a pas posées — à la portée org seulement : une ligne de personne, dans
+l'org ou partout, n'est jamais à elle (#1080). Le service ne doit donc écrire de ligne
+D'ORG que sous une source qu'elle ne réconcilie pas (`trial`) jusqu'à la bascule.
 
 ## Les défauts de l'instance — `OTO_ENTITLEMENT_DEFAULTS`
 
@@ -145,7 +181,7 @@ s'étiquettera `trial`).
 renommées — la source étant opaque pour le cœur, le renommage est l'affaire du
 producteur, et il réécrirait des lignes servies.
 
-## La migration de la base servie — deux révisions
+## La migration de la base servie — les révisions
 
 La base neuve reçoit la forme cible du fragment `db/schema/entitlements.py`. La base
 PARTAGÉE (préproduction et production) la reçoit en deux temps, parce que le code d'avant
@@ -158,8 +194,15 @@ dans son `ON CONFLICT` :
 | `0015_droits_valeur_obligatoire` | `value` NULL → 1, `SET NOT NULL`, retrait de la PK | **après le tag de production** : plus aucun processus ne sert l'ancien code |
 
 Entre les deux, une ligne de personne du même (org, droit, source) qu'une ligne d'org
-serait refusée par la PK encore en place — aucun producteur n'en pose encore. Détail et
-ordre : `docs/migrations-versionnees.md` §5.1, et l'en-tête de chaque révision.
+serait refusée par la PK encore en place — aucun producteur n'en pose encore.
+
+La portée personne partout vient ensuite, en une révision additive :
+
+| révision | contenu | quand |
+|---|---|---|
+| `0024_droits_personne_partout` | `CHECK org_entitlements_une_portee`, puis `org_id` DROP NOT NULL | avant la fusion de préférence : sans elle, seule la POSE d'une ligne de personne partout échoue (500 `NotNullViolation`) ; la lecture et l'ancien code passent |
+
+Détail et ordre : `docs/migrations-versionnees.md` §5.1, et l'en-tête de chaque révision.
 
 ## Ce qui n'est pas encore fait
 

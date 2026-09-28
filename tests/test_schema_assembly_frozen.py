@@ -557,8 +557,16 @@ from oto_mcp.db import _schema, schema
 # d'adresse ne sont PAS dans ce DDL (leurs colonnes naissent d'un ALTER que le DDL
 # précède, #450) : un commentaire le dit à leur place.
 # 180 592 → 182 207 (+1 615, commentaires compris).
-EMPREINTE = "d652a0cc92c649039d2b911c9b6297de49f0b62222e74f23ffb58d78c97d11f5"
-LONGUEUR = 182207
+# 28/09/2026 (oto-backend#1089) — `org_entitlements` reçoit la portée « personne, toutes orgs » :
+# `org_id` devient NULLABLE (NULL = la personne `sub` dans toutes ses orgs) et la
+# contrainte `org_entitlements_une_portee` CHECK (org_id IS NOT NULL OR sub IS NOT
+# NULL) refuse une ligne sans org ni personne. L'unicité `org_entitlements_une_ligne`
+# (NULLS NOT DISTINCT) couvre déjà la nouvelle portée. Ne sert qu'à une base NEUVE ;
+# la base PARTAGÉE reçoit la forme par la révision Alembic
+# `0024_droits_personne_partout`, pas par le démarrage.
+# 182 207 → 182 362 (+155, commentaires compris).
+EMPREINTE = "e8f94cdd02c1a79b760cb0871353f02fed3fe870ef0cb4190b49d727abbb813e"
+LONGUEUR = 182362
 
 
 _CREATE_TABLE = re.compile(r"^CREATE TABLE IF NOT EXISTS (\w+)", re.M)

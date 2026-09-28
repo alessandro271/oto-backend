@@ -556,6 +556,12 @@ DELETE /api/service/orgs/{id}/entitlements/{right_key}/{source} -> _handler
 OPTIONS /api/service/orgs/{id}/entitlements/{right_key}/{source} -> options_handler
 GET,HEAD /api/service/users/{sub} -> _handler
 OPTIONS /api/service/users/{sub} -> options_handler
+GET,HEAD /api/service/users/{sub}/entitlements -> _handler
+OPTIONS /api/service/users/{sub}/entitlements -> options_handler
+PUT /api/service/users/{sub}/entitlements/{right_key}/{source} -> _handler
+OPTIONS /api/service/users/{sub}/entitlements/{right_key}/{source} -> options_handler
+DELETE /api/service/users/{sub}/entitlements/{right_key}/{source} -> _handler
+OPTIONS /api/service/users/{sub}/entitlements/{right_key}/{source} -> options_handler
 GET,HEAD /api/service/billing/export -> _handler
 OPTIONS /api/service/billing/export -> options_handler
 POST /api/resources -> _handler

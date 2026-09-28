@@ -266,3 +266,60 @@ def test_revoke_sans_sub_ne_retire_que_la_ligne_d_org(live):
     assert not E.revoke(org, "unipile", billing_droits.SOURCE_SUBSCRIPTION), (
         "sans ligne d'org, rien à retirer : la ligne par personne n'est pas prise")
     assert _ligne_personne(org, sub) == avant
+
+
+# --- … ni une ligne de la personne PARTOUT (`org_id` NULL, sub posé) ------------------
+# La troisième portée : un droit de la personne quelle que soit l'org. La réconciliation
+# ne la voit pas (`list_for_org` ne la rend pas), et la reprise ne la compte pas
+# (`orgs_with_commercial_rights` joint sur `org_id`).
+
+def _ligne_partout(sub: str) -> dict:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT right_key, source, value, starts_at, expires_at, granted_by, granted_at "
+            "FROM org_entitlements WHERE org_id IS NULL AND sub = %s", (sub,)).fetchall()
+    return {(r["right_key"], r["source"]): dict(r) for r in rows}
+
+
+def _poser_partout() -> tuple[str, dict]:
+    sub = f"u-{uuid.uuid4().hex[:8]}"
+    E.grant(None, "unipile", billing_droits.SOURCE_SUBSCRIPTION, value=1, sub=sub,
+            expires_at=DANS_UN_MOIS + timedelta(days=7), granted_by="service-externe")
+    return sub, _ligne_partout(sub)
+
+
+def test_la_fermeture_laisse_la_ligne_de_la_personne_partout(live):
+    org = _org()
+    _abonner(org)
+    billing_droits.reconcilier(org)
+    sub, avant = _poser_partout()
+    db_billing.set_subscription_status(org, "canceled")
+    assert billing_droits.reconcilier(org) == {"poses": 0, "retires": 2}
+    assert _ligne_partout(sub) == avant, "la ligne de la personne partout n'a pas bougé"
+
+
+def test_la_pose_d_org_ne_reecrit_pas_la_ligne_de_la_personne_partout(live):
+    org = _org()
+    sub, avant = _poser_partout()
+    _abonner(org)
+    billing_droits.reconcilier(org)
+    billing_droits.reconcilier(org)
+    assert _ligne_partout(sub) == avant
+
+
+def test_la_reprise_n_invente_aucune_org_pour_la_personne_partout(live):
+    """La liste des orgs que `reconcilier_tout` parcourt ne rend jamais d'org nulle pour
+    une ligne sans org. (Pas de passage entier ici : sur la base partagée des bancs, il
+    réconcilierait les orgs des autres tests pendant qu'ils tournent.)"""
+    _poser_partout()
+    assert None not in db_billing.orgs_with_commercial_rights(billing_droits.SOURCES)
+
+
+def test_revoke_d_org_ne_retire_pas_la_ligne_de_la_personne_partout(live):
+    org = _org()
+    E.grant(org, "unipile", billing_droits.SOURCE_SUBSCRIPTION, value=1)
+    sub, avant = _poser_partout()
+    assert E.revoke(org, "unipile", billing_droits.SOURCE_SUBSCRIPTION)
+    assert not E.revoke(org, "unipile", billing_droits.SOURCE_SUBSCRIPTION, sub=sub), (
+        "la ligne de la personne DANS l'org n'existe pas ; celle de partout n'est pas prise")
+    assert _ligne_partout(sub) == avant

@@ -7,11 +7,13 @@ tuyau de service, pas un outil d'agent), sous `/api/service/`, gardées par
 
 Ce qu'il y trouve (conception `oto-commerce`, question 4) : les orgs, leurs membres
 PAR ANCIENNETÉ avec leur dernière activité (il désigne les membres payants et écrit ses
-relances), l'usage par personne sur une fenêtre, et les droits déclarés de l'org, qu'il
-pose et retire. Il ne pose jamais de plan ni de prix : le cœur ne sait pas qui paie.
+relances), l'usage par personne sur une fenêtre, et les droits déclarés — de l'org, d'une
+personne dans l'org, ou d'une personne dans toutes ses orgs —, qu'il pose, relit et
+retire. Il ne pose jamais de plan ni de prix : le cœur ne sait pas qui paie.
 
-Le service n'a pas d'org (`ResolvedCtx.org_id` est None) : l'org visée vient TOUJOURS
-du chemin, et son existence est vérifiée ici — jamais déduite d'un état de session.
+Le service n'a pas d'org (`ResolvedCtx.org_id` est None) : l'org ou la personne visée
+vient TOUJOURS du chemin, et son existence est vérifiée ici — jamais déduite d'un état
+de session.
 """
 from __future__ import annotations
 
@@ -29,11 +31,17 @@ from .registry import CAPABILITIES
 _ID = {"id": "org_id"}
 
 _ORG_INCONNUE = DeclaredError(404, "unknown_org", "l'org n'existe pas ou est archivée")
+_COMPTE_INCONNU = DeclaredError(404, "unknown_user", "aucun compte ne porte ce sub")
 
 
 def _org_ou_404(org_id: int) -> None:
     if not org_store.get_org(org_id) or org_store.is_archived_org(org_id):
         raise AuthzDenied(404, "unknown_org", f"Org #{org_id} inconnue ou archivée.")
+
+
+def _compte_ou_404(sub: str) -> None:
+    if db.get_user(sub) is None:
+        raise AuthzDenied(404, "unknown_user", f"Compte {sub!r} inconnu.")
 
 
 def _iso(v) -> Optional[str]:
@@ -201,27 +209,39 @@ class ServiceEntitlementPutInput(ServiceEntitlementKey):
     expires_at: Optional[datetime] = None
 
 
+_SOURCE_INCONNUE = DeclaredError(
+    400, "unknown_source", f"`source` hors de la liste fermée ({', '.join(catalogue.SOURCES)})")
 _ERREURS_CLE = (
     _ORG_INCONNUE,
-    DeclaredError(400, "unknown_source",
-                  f"`source` hors de la liste fermée ({', '.join(catalogue.SOURCES)})"),
+    _SOURCE_INCONNUE,
     DeclaredError(404, "not_a_member", "la personne `sub` n'est pas membre de l'org"),
 )
+_ERREURS_POSE = (
+    DeclaredError(400, "entitlement_unknown_key", "clé hors catalogue"),
+    DeclaredError(400, "entitlement_value_invalid", "valeur hors du genre de la clé"),
+    DeclaredError(400, "invalid_window", "`expires_at` ne suit pas `starts_at`"),
+)
+_AUCUNE_LIGNE = DeclaredError(404, "unknown_entitlement", "aucune ligne à retirer")
+
+
+def _source_valide(source: str) -> None:
+    if source not in catalogue.SOURCES:
+        raise AuthzDenied(400, "unknown_source",
+                          f"Source {source!r} inconnue (attendu l'une de "
+                          f"{', '.join(catalogue.SOURCES)}).")
 
 
 def _cle_valide(inp: ServiceEntitlementKey) -> None:
     _org_ou_404(inp.org_id)
-    if inp.source not in catalogue.SOURCES:
-        raise AuthzDenied(400, "unknown_source",
-                          f"Source {inp.source!r} inconnue (attendu l'une de "
-                          f"{', '.join(catalogue.SOURCES)}).")
+    _source_valide(inp.source)
     if inp.sub is not None and org_store.get_org_role(inp.org_id, inp.sub) is None:
         raise AuthzDenied(404, "not_a_member",
                           f"{inp.sub!r} n'est pas membre de l'org #{inp.org_id}.")
 
 
-def _put(ctx: ResolvedCtx, inp: ServiceEntitlementPutInput) -> dict:
-    _cle_valide(inp)
+def _poser(ctx: ResolvedCtx, org_id: Optional[int], inp) -> dict:
+    """La pose commune aux portées (`org_id` None = la personne partout), la clé déjà
+    jugée : fenêtre, catalogue, puis `grant`. Rend la ligne telle que stockée."""
     if inp.expires_at and inp.starts_at and inp.expires_at <= inp.starts_at:
         raise AuthzDenied(400, "invalid_window", "`expires_at` doit suivre `starts_at`.")
     # Le catalogue juge AVANT la pose (qui le rejugerait) : chaque refus a son code ici.
@@ -233,12 +253,19 @@ def _put(ctx: ResolvedCtx, inp: ServiceEntitlementPutInput) -> dict:
         catalogue.valeur_valide(inp.right_key, inp.value)
     except ValueError as e:
         raise AuthzDenied(400, "entitlement_value_invalid", str(e))
-    db_entitlements.grant(inp.org_id, inp.right_key, inp.source, value=inp.value,
+    db_entitlements.grant(org_id, inp.right_key, inp.source, value=inp.value,
                           sub=inp.sub, starts_at=inp.starts_at, expires_at=inp.expires_at,
                           granted_by=ctx.sub)
-    ligne = next(r for r in db_entitlements.list_for_org(inp.org_id)
+    lignes = (db_entitlements.list_for_person_everywhere(inp.sub) if org_id is None
+              else db_entitlements.list_for_org(org_id))
+    ligne = next(r for r in lignes
                  if (r["right_key"], r["source"], r["sub"]) == (inp.right_key, inp.source, inp.sub))
     return _ligne(ligne)
+
+
+def _put(ctx: ResolvedCtx, inp: ServiceEntitlementPutInput) -> dict:
+    _cle_valide(inp)
+    return _poser(ctx, inp.org_id, inp)
 
 
 def _delete(ctx: ResolvedCtx, inp: ServiceEntitlementKey) -> dict:
@@ -247,6 +274,59 @@ def _delete(ctx: ResolvedCtx, inp: ServiceEntitlementKey) -> dict:
         raise AuthzDenied(404, "unknown_entitlement",
                           f"Aucun droit {inp.right_key!r} de source {inp.source!r} "
                           f"posé sur {'cette personne' if inp.sub else 'cette org'}.")
+    return {"ok": True}
+
+
+# ── Les droits d'une personne dans toutes ses orgs ───────────────────────────
+#
+# La troisième portée (`org_id` NULL) : un droit qui appartient à la personne quelle
+# que soit l'org où elle agit. Chaque ligne se lit par UNE seule route : une ligne
+# d'org ou de personne dans l'org par `/orgs/{id}/entitlements`, une ligne de personne
+# partout par `/users/{sub}/entitlements`.
+
+class ServiceUserEntitlements(BaseModel):
+    """Les lignes de la personne PARTOUT (`org_id` nul), échues et à venir comprises —
+    ni ses lignes dans une org, ni les lignes d'org (celles de
+    `/api/service/orgs/{id}/entitlements`)."""
+    sub: str
+    entitlements: list[ServiceEntitlementRow]
+
+
+class ServiceUserEntitlementKey(BaseModel):
+    sub: str
+    right_key: str
+    source: str
+
+
+class ServiceUserEntitlementPutInput(ServiceUserEntitlementKey):
+    value: int
+    starts_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+
+
+def _cle_personne_valide(inp: ServiceUserEntitlementKey) -> None:
+    _compte_ou_404(inp.sub)
+    _source_valide(inp.source)
+
+
+def _user_entitlements(ctx: ResolvedCtx, inp: ServiceUserInput) -> dict:
+    _compte_ou_404(inp.sub)
+    return {"sub": inp.sub,
+            "entitlements": [_ligne(r) for r in
+                             db_entitlements.list_for_person_everywhere(inp.sub)]}
+
+
+def _user_put(ctx: ResolvedCtx, inp: ServiceUserEntitlementPutInput) -> dict:
+    _cle_personne_valide(inp)
+    return _poser(ctx, None, inp)
+
+
+def _user_delete(ctx: ResolvedCtx, inp: ServiceUserEntitlementKey) -> dict:
+    _cle_personne_valide(inp)
+    if not db_entitlements.revoke(None, inp.right_key, inp.source, sub=inp.sub):
+        raise AuthzDenied(404, "unknown_entitlement",
+                          f"Aucun droit {inp.right_key!r} de source {inp.source!r} "
+                          "posé sur cette personne dans toutes ses orgs.")
     return {"ok": True}
 
 
@@ -304,13 +384,13 @@ class ServiceUser(BaseModel):
 
 
 def _user(ctx: ResolvedCtx, inp: ServiceUserInput) -> dict:
-    if db.get_user(inp.sub) is None:
-        raise AuthzDenied(404, "unknown_user", f"Compte {inp.sub!r} inconnu.")
+    _compte_ou_404(inp.sub)
     from .. import access
     return {"sub": inp.sub, "role": access.get_user_role(inp.sub)}
 
 
 _CHEMIN_DROIT = "/api/service/orgs/{id}/entitlements/{right_key}/{source}"
+_CHEMIN_DROIT_PERSONNE = "/api/service/users/{sub}/entitlements/{right_key}/{source}"
 
 CAPABILITIES += [
     Capability(key="service.orgs.list", handler=_orgs, Input=ServiceOrgsInput,
@@ -342,12 +422,7 @@ CAPABILITIES += [
     Capability(key="service.org.entitlement.put", handler=_put,
                Input=ServiceEntitlementPutInput, authz=COMMERCE_SERVICE, mcp=None,
                Output=ServiceEntitlementRow,
-               errors=_ERREURS_CLE + (
-                   DeclaredError(400, "entitlement_unknown_key", "clé hors catalogue"),
-                   DeclaredError(400, "entitlement_value_invalid",
-                                 "valeur hors du genre de la clé"),
-                   DeclaredError(400, "invalid_window", "`expires_at` ne suit pas `starts_at`"),
-               ),
+               errors=_ERREURS_CLE + _ERREURS_POSE,
                description="[service commerce] Set (idempotent upsert) one entitlement: "
                            "one row per (org, person, right, source). `sub` omitted = the "
                            "whole org. Returns the stored row.",
@@ -355,18 +430,39 @@ CAPABILITIES += [
     Capability(key="service.org.entitlement.delete", handler=_delete,
                Input=ServiceEntitlementKey, authz=COMMERCE_SERVICE, mcp=None,
                Output=ServiceOk,
-               errors=_ERREURS_CLE + (
-                   DeclaredError(404, "unknown_entitlement", "aucune ligne à retirer"),
-               ),
+               errors=_ERREURS_CLE + (_AUCUNE_LIGNE,),
                description="[service commerce] Remove one entitlement row (org, person, "
                            "right, source); other sources and scopes stay.",
                rest=RestBinding("DELETE", _CHEMIN_DROIT, _ID)),
     Capability(key="service.users.get", handler=_user, Input=ServiceUserInput,
                authz=COMMERCE_SERVICE, mcp=None, Output=ServiceUser,
-               errors=(DeclaredError(404, "unknown_user", "aucun compte ne porte ce sub"),),
+               errors=(_COMPTE_INCONNU,),
                description="[service commerce] The PLATFORM role of an account (member, "
                            "admin, super_admin), re-read on each request.",
                rest=RestBinding("GET", "/api/service/users/{sub}")),
+    Capability(key="service.user.entitlements.list", handler=_user_entitlements,
+               Input=ServiceUserInput, authz=COMMERCE_SERVICE, mcp=None,
+               Output=ServiceUserEntitlements, errors=(_COMPTE_INCONNU,),
+               description="[service commerce] Declared entitlements of a person across "
+                           "all their orgs (org-independent rows only), expired and "
+                           "future included.",
+               rest=RestBinding("GET", "/api/service/users/{sub}/entitlements")),
+    Capability(key="service.user.entitlement.put", handler=_user_put,
+               Input=ServiceUserEntitlementPutInput, authz=COMMERCE_SERVICE, mcp=None,
+               Output=ServiceEntitlementRow,
+               errors=(_COMPTE_INCONNU, _SOURCE_INCONNUE) + _ERREURS_POSE,
+               description="[service commerce] Set (idempotent upsert) one entitlement "
+                           "that belongs to a person whatever the org: one row per "
+                           "(person, right, source). Returns the stored row.",
+               rest=RestBinding("PUT", _CHEMIN_DROIT_PERSONNE)),
+    Capability(key="service.user.entitlement.delete", handler=_user_delete,
+               Input=ServiceUserEntitlementKey, authz=COMMERCE_SERVICE, mcp=None,
+               Output=ServiceOk,
+               errors=(_COMPTE_INCONNU, _SOURCE_INCONNUE, _AUCUNE_LIGNE),
+               description="[service commerce] Remove one person-wide entitlement row "
+                           "(person, right, source); org rows and the person's rows "
+                           "within an org stay.",
+               rest=RestBinding("DELETE", _CHEMIN_DROIT_PERSONNE)),
     Capability(key="service.billing.export", handler=_billing_export, Input=ServiceNoInput,
                authz=COMMERCE_SERVICE, mcp=None, Output=ServiceBillingExport,
                description="[service commerce, temporary] The core's billing state "

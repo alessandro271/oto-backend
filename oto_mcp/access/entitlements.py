@@ -7,7 +7,8 @@ et ne sait rien de plus : ni qui l'a posé, ni s'il est payé. Il n'importe pas
 `value_for` applique la règle entière, relue à chaque usage (jamais mise en cache) :
 
 1. les lignes VALIDES à l'instant (début inclus, fin exclue, borne nulle = non bornée) ;
-2. de l'org ET de la personne dans l'org, toutes sources confondues ;
+2. des trois portées — l'org, la personne dans l'org, la personne partout (quelle que
+   soit l'org) —, toutes sources confondues ;
 3. **le plus généreux gagne** : le maximum ;
 4. aucune ligne → **le défaut déclaré par l'instance** (`OTO_ENTITLEMENT_DEFAULTS`),
    jamais un défaut du code. Une clé du catalogue sans défaut déclaré fait échouer le
@@ -108,12 +109,14 @@ def defaut_du_droit(key: str) -> int:
 def value_for(sub: Optional[str], org_id: Optional[int], key: str,
               now: Optional[datetime] = None) -> int:
     """La valeur du droit `key` pour la personne `sub` dans l'org `org_id` : le maximum
-    des lignes valides à `now` (défaut : maintenant, horloge de la base) de l'org et de
-    la personne, sinon le défaut déclaré par l'instance. `sub` None = l'org seule ;
-    `org_id` None = aucune ligne ne peut s'appliquer, le défaut répond."""
+    des lignes valides à `now` (défaut : maintenant, horloge de la base) de l'org, de la
+    personne dans l'org et de la personne partout, sinon le défaut déclaré par
+    l'instance. `sub` None = l'org seule ; `org_id` None = la personne partout seule ;
+    les deux None = aucune ligne ne peut s'appliquer, le défaut répond."""
     catalogue.droit(key)
-    posee = (None if org_id is None
-             else db_entitlements.max_value(int(org_id), sub, key, now))
+    posee = (None if org_id is None and sub is None
+             else db_entitlements.max_value(None if org_id is None else int(org_id),
+                                            sub, key, now))
     return defaut_du_droit(key) if posee is None else posee
 
 

@@ -12,7 +12,8 @@ la commande `oto-mcp maintenance droits` (timer quotidien), au tick du runner
 d'échéances. Même parade que le runner sur ses échéances.
 
 **Elle ne retire que ce que ses propres sources ont posé** (`SOURCES`), et **jamais une
-ligne de portée personne** (`sub` posé), même sous l'une de ces sources. Une ligne
+ligne de portée personne** (`sub` posé, dans l'org ou partout), même sous l'une de ces
+sources. Une ligne
 posée sous une autre étiquette (un essai, un droit qu'un partenaire écrirait lui-même
 sous la sienne…) ne lui appartient pas : elle ne la réécrit pas et ne l'efface pas.
 
@@ -169,6 +170,7 @@ def reconcilier(org_id: int, *, dry_run: bool = False) -> dict:
     voulus = droits_voulus(org_id)
     # Portée org seulement (`sub` nul) : une ligne par personne, même sous l'une de nos
     # sources, n'est jamais à nous (un service externe en pose sous `subscription`).
+    # Celle d'une personne partout (`org_id` nul) n'est même pas dans `list_for_org`.
     en_place = {(r["right_key"], r["source"])
                 for r in db_entitlements.list_for_org(org_id)
                 if r["sub"] is None and r["source"] in SOURCES}

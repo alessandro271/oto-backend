@@ -230,5 +230,6 @@ avatars/logos · ⚠️ **PROD et PREPROD partagent la MÊME base** : ce qu'on �
 - `sirene-stock.md` — DuckDB sur parquet INSEE
 - `connector-test-gate-theirstack-origami.md` — porte de test locale
 - `billing.md` — abonnement par org, Mollie, TVA, **avantage offert / échéance / usage inclus**
-- `droits-declares.md` — ce que le cœur applique sans savoir qui paie : catalogue, portée org/personne,
+- `droits-declares.md` — ce que le cœur applique sans savoir qui paie : catalogue, trois portées (org,
+  personne dans l'org, personne partout),
   `value_for` (le plus généreux gagne), défauts déclarés par l'instance (`OTO_ENTITLEMENT_DEFAULTS`)

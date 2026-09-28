@@ -344,6 +344,8 @@ _UNIQUE_INDEX_SUB_TABLES = (
     # `org_entitlements_une_ligne` = `(org_id, sub, right_key, source)`. Un droit suit la
     # personne ; si les deux comptes portent la même ligne, celle du compte survivant
     # reste (le producteur la repose de toute façon à sa prochaine réconciliation).
+    # `org_id` est NULL pour une ligne de la personne partout : l'unicité étant NULLS NOT
+    # DISTINCT, la comparaison du dédoublonnage l'est aussi (`IS NOT DISTINCT FROM`).
     ("org_entitlements", "sub", ("org_id", "right_key", "source"), None),
 )
 
@@ -644,7 +646,8 @@ def migrate_sub(old_sub: str, new_sub: str, *, operator_source: str = "") -> boo
         #    que l'index ne regarde même pas.
         #    Le repointage lui-même reste l'UPDATE nu de l'étape 3.
         for table, col, autres, predicat in _UNIQUE_INDEX_SUB_TABLES:
-            meme_ligne = " AND ".join(f"a.{c} = b.{c}" for c in autres) or "TRUE"
+            meme_ligne = " AND ".join(f"a.{c} IS NOT DISTINCT FROM b.{c}"
+                                      for c in autres) or "TRUE"
             filtre_a = f" AND {predicat.format(a='a')}" if predicat else ""
             filtre_b = f" AND {predicat.format(a='b')}" if predicat else ""
             conn.execute(

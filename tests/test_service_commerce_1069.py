@@ -23,7 +23,9 @@ _SERVICE = {"sub": "service:m2m-commerce", "client_id": "m2m-commerce",
             "roles": frozenset({"commerce"})}
 _CLES = ("service.orgs.list", "service.org.members", "service.org.usage",
          "service.org.entitlements.list", "service.org.entitlement.put",
-         "service.org.entitlement.delete", "service.billing.export", "service.users.get")
+         "service.org.entitlement.delete", "service.billing.export", "service.users.get",
+         "service.user.entitlements.list", "service.user.entitlement.put",
+         "service.user.entitlement.delete")
 
 
 def _cap(cle):
@@ -204,6 +206,73 @@ def test_une_pose_refusee_dit_pourquoi_et_n_ecrit_rien(live, champs, code):
     org = _org()
     assert _refus("service.org.entitlement.put", org_id=org, **champs).code == code
     assert _appel("service.org.entitlements.list", org_id=org)["entitlements"] == []
+
+
+# ── la portée « personne, toutes orgs » ──────────────────────────────────────
+
+def _personne() -> str:
+    sub = f"u-{uuid.uuid4().hex[:8]}"
+    db.upsert_user(sub, email=f"{sub}@exemple.test")
+    return sub
+
+
+def test_la_personne_partout_se_pose_se_relit_et_se_retire_seule(live):
+    """Pose idempotente sous le service, relue par sa route, retirée sans toucher la
+    ligne d'org ni la ligne de la personne dans l'org."""
+    org = _org()
+    sub = _membre(org, T0)
+    _appel("service.org.entitlement.put", org_id=org, right_key="unipile_seats",
+           source="subscription", value=2)
+    _appel("service.org.entitlement.put", org_id=org, right_key="unipile_seats",
+           source="subscription", value=3, sub=sub)
+    for valeur in (4, 4, 6):
+        ligne = _appel("service.user.entitlement.put", sub=sub, right_key="unipile_seats",
+                       source="subscription", value=valeur, expires_at=T0 + timedelta(days=30))
+    assert (ligne["sub"], ligne["value"], ligne["granted_by"]) == (sub, 6, _SERVICE["sub"])
+    assert ligne["expires_at"] == (T0 + timedelta(days=30)).isoformat()
+    lues = _appel("service.user.entitlements.list", sub=sub)
+    assert lues["sub"] == sub and lues["entitlements"] == [ligne], "relue telle que posée"
+    assert [r["sub"] for r in _appel("service.org.entitlements.list", org_id=org)
+            ["entitlements"]] == [None, sub], "la route de l'org ne la rend pas"
+
+    assert _appel("service.user.entitlement.delete", sub=sub, right_key="unipile_seats",
+                  source="subscription") == {"ok": True}
+    assert _appel("service.user.entitlements.list", sub=sub)["entitlements"] == []
+    assert [(r["sub"], r["value"]) for r in _appel(
+        "service.org.entitlements.list", org_id=org)["entitlements"]] == [(None, 2), (sub, 3)]
+    assert _refus("service.user.entitlement.delete", sub=sub, right_key="unipile_seats",
+                  source="subscription").code == "unknown_entitlement"
+
+
+def test_la_personne_partout_n_a_pas_besoin_d_etre_membre(live):
+    sub = _personne()
+    ligne = _appel("service.user.entitlement.put", sub=sub, right_key="unipile",
+                   source="trial", value=1)
+    assert ligne["sub"] == sub
+    assert access.value_for(sub, _org(), "unipile") == 1
+
+
+@pytest.mark.parametrize("champs, code", [
+    (dict(right_key="unipile", source="gratuit", value=1), "unknown_source"),
+    (dict(right_key="inconnu", source="trial", value=1), "entitlement_unknown_key"),
+    (dict(right_key="unipile", source="trial", value=7), "entitlement_value_invalid"),
+    (dict(right_key="unipile", source="trial", value=1,
+          starts_at=T0, expires_at=T0), "invalid_window"),
+])
+def test_une_pose_de_personne_refusee_dit_pourquoi_et_n_ecrit_rien(live, champs, code):
+    sub = _personne()
+    assert _refus("service.user.entitlement.put", sub=sub, **champs).code == code
+    assert _appel("service.user.entitlements.list", sub=sub)["entitlements"] == []
+
+
+@pytest.mark.parametrize("cle, champs", [
+    ("service.user.entitlements.list", {}),
+    ("service.user.entitlement.put", dict(right_key="unipile", source="trial", value=1)),
+    ("service.user.entitlement.delete", dict(right_key="unipile", source="trial")),
+])
+def test_une_personne_inconnue_est_un_404_nomme(live, cle, champs):
+    assert _refus(cle, sub=f"u-inconnu-{uuid.uuid4().hex[:8]}", **champs).code == \
+        "unknown_user"
 
 
 def test_l_export_rend_l_etat_de_facturation_en_un_instantane_date(live):

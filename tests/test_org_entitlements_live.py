@@ -10,7 +10,9 @@ Ce que ces bancs tiennent :
   moins généreuse que lui l'emporte quand même ;
 - **le catalogue** : clé hors catalogue, valeur vide, valeur hors genre refusées à la
   pose, rien n'est écrit ;
-- les listes (org, personne, droit), et la suppression de l'org qui emporte ses droits.
+- les listes (org, personne, droit), et la suppression de l'org qui emporte ses droits ;
+- **la portée « personne, toutes orgs »** (`org_id` NULL) : lue dans toute org, tenue
+  par l'unicité, refusée sans personne, retirée sans toucher les autres portées.
 """
 from __future__ import annotations
 
@@ -252,3 +254,116 @@ def test_la_fusion_de_comptes_emmene_les_droits_de_la_personne(live):
     assert sorted((r["right_key"], r["sub"]) for r in E.list_for_org(org)) == [
         (C.UNIPILE, neuf), (SIEGES, neuf)]
     assert value_for(neuf, org, SIEGES) == 8
+
+
+# ── la portée « personne, toutes orgs » (`org_id` NULL) ─────────────────────────
+
+def test_trois_portees_le_plus_genereux_gagne(live):
+    """`value_for(sub, org, clé)` : le maximum des lignes valides de l'org, de la
+    personne dans l'org et de la personne partout, sinon le défaut d'instance."""
+    org, ailleurs, sub, autre = _org(), _org(), _sub(), _sub()
+    E.grant(None, SIEGES, "subscription", value=12, sub=sub)
+    assert value_for(sub, org, SIEGES) == 12, "la personne partout vaut dans cette org"
+    assert value_for(sub, ailleurs, SIEGES) == 12, "et dans toute autre"
+    assert value_for(sub, None, SIEGES) == 12, "et hors de toute org"
+    assert value_for(None, org, SIEGES) == DEFAUT_SIEGES, "l'org seule ne la voit pas"
+    assert value_for(autre, org, SIEGES) == DEFAUT_SIEGES, "une autre personne non plus"
+    E.grant(org, SIEGES, "offered", value=20)
+    assert value_for(sub, org, SIEGES) == 20, "l'org plus généreuse gagne"
+    assert value_for(sub, ailleurs, SIEGES) == 12
+    E.grant(ailleurs, SIEGES, "trial", value=30, sub=sub)
+    assert value_for(sub, ailleurs, SIEGES) == 30, "la personne dans l'org plus généreuse"
+    E.grant(None, SIEGES, "partner", value=40, sub=sub)
+    assert (value_for(sub, org, SIEGES), value_for(sub, ailleurs, SIEGES)) == (40, 40)
+
+
+def test_la_personne_partout_suit_les_dates(live):
+    sub = _sub()
+    E.grant(None, SIEGES, "trial", value=9, sub=sub,
+            starts_at=HIER - timedelta(days=1), expires_at=HIER)
+    assert value_for(sub, _org(), SIEGES) == DEFAUT_SIEGES, "échue : le défaut"
+    assert value_for(sub, _org(), SIEGES, now=HIER - timedelta(hours=1)) == 9
+
+
+def test_une_ligne_sans_org_ni_personne_est_refusee(live):
+    """Par le code (erreur nommée, rien d'écrit), et par la base elle-même."""
+    import psycopg
+    with pytest.raises(ValueError, match="^entitlement_scope_required:"):
+        E.grant(None, SIEGES, "offered", value=1)
+    with pytest.raises(ValueError, match="^entitlement_scope_required:"):
+        E.revoke(None, SIEGES, "offered")
+    with pytest.raises(psycopg.errors.CheckViolation):
+        with _connect() as conn:
+            conn.execute("INSERT INTO org_entitlements (org_id, sub, right_key, source, "
+                         "value) VALUES (NULL, NULL, %s, 'offered', 1)", (SIEGES,))
+
+
+def test_la_base_tient_l_unicite_de_la_personne_partout(live):
+    """`org_entitlements_une_ligne` (NULLS NOT DISTINCT) couvre `org_id` NULL : une
+    ligne par (personne, droit, source), et reposer la remplace."""
+    import psycopg
+    sub = _sub()
+    E.grant(None, SIEGES, "offered", value=1, sub=sub)
+    E.grant(None, SIEGES, "offered", value=6, sub=sub, granted_by="b")
+    (ligne,) = E.list_for_person_everywhere(sub)
+    assert (ligne["org_id"], ligne["value"], ligne["granted_by"]) == (None, 6, "b")
+    with pytest.raises(psycopg.errors.UniqueViolation):
+        with _connect() as conn:
+            conn.execute("INSERT INTO org_entitlements (org_id, sub, right_key, source, "
+                         "value) VALUES (NULL, %s, %s, 'offered', 2)", (sub, SIEGES))
+
+
+def test_retirer_la_personne_partout_ne_touche_aucune_autre_portee(live):
+    org, sub = _org(), _sub()
+    E.grant(org, C.UNIPILE, "subscription", value=1)
+    E.grant(org, C.UNIPILE, "subscription", value=1, sub=sub)
+    E.grant(None, C.UNIPILE, "subscription", value=1, sub=sub)
+    E.grant(None, C.UNIPILE, "trial", value=1, sub=sub)
+    assert E.revoke(None, C.UNIPILE, "subscription", sub=sub)
+    assert [(r["sub"], r["source"]) for r in E.list_for_org(org)] == [
+        (None, "subscription"), (sub, "subscription")], "org et personne dans l'org restent"
+    assert [r["source"] for r in E.list_for_person_everywhere(sub)] == ["trial"], \
+        "l'autre source reste"
+    assert not E.revoke(None, C.UNIPILE, "subscription", sub=sub), "rien deux fois"
+    # Et dans l'autre sens : retirer la ligne de la personne DANS l'org, puis celle de
+    # l'org, laisse la personne partout.
+    assert E.revoke(org, C.UNIPILE, "subscription", sub=sub)
+    assert E.revoke(org, C.UNIPILE, "subscription")
+    assert [r["source"] for r in E.list_for_person_everywhere(sub)] == ["trial"]
+
+
+def test_les_listes_rangent_la_personne_partout_a_part(live):
+    org, sub = _org(), _sub()
+    E.grant(org, C.UNIPILE, "trial", value=1, sub=sub)
+    E.grant(None, C.UNIPILE, "offered", value=1, sub=sub)
+    assert [r["sub"] for r in E.list_for_org(org)] == [sub], "pas la ligne sans org"
+    assert [r["org_id"] for r in E.list_for_person_everywhere(sub)] == [None]
+    assert [r["org_id"] for r in E.list_for_person(sub)] == [org, None], \
+        "toutes les lignes de la personne, celle de partout en dernier"
+    assert (None, sub) in {(r["org_id"], r["sub"]) for r in E.list_for_right(C.UNIPILE)}
+
+
+def test_supprimer_une_org_laisse_la_personne_partout(live):
+    org, sub = _org(), _sub()
+    E.grant(None, SIEGES, "offered", value=7, sub=sub)
+    with _connect() as conn:
+        conn.execute("DELETE FROM orgs WHERE id = %s", (org,))
+    assert value_for(sub, None, SIEGES) == 7
+
+
+def test_la_fusion_de_comptes_emmene_la_personne_partout(live):
+    """`migrate_sub` sur la portée sans org : le dédoublonnage compare `org_id` NULL
+    comme l'unicité (NULLS NOT DISTINCT) — sinon l'UPDATE lèverait et la fusion
+    entière échouerait."""
+    from oto_mcp import db
+    vieux, neuf = _sub(), _sub()
+    for s in (vieux, neuf):
+        db.upsert_user(s, email=f"{s}@exemple.invalid")
+    E.grant(None, SIEGES, "offered", value=8, sub=vieux)
+    E.grant(None, C.UNIPILE, "trial", value=1, sub=vieux)
+    E.grant(None, C.UNIPILE, "trial", value=1, sub=neuf)
+    assert db.migrate_sub(vieux, neuf, operator_source="test") is True
+    assert E.list_for_person_everywhere(vieux) == []
+    assert sorted(r["right_key"] for r in E.list_for_person_everywhere(neuf)) == [
+        C.UNIPILE, SIEGES]
+    assert value_for(neuf, None, SIEGES) == 8

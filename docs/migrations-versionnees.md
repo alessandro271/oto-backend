@@ -676,6 +676,23 @@ même table s'il ne la trouve pas ; l'ancien code ne la lit ni ne l'écrit. Le c
 l'ÉCRIT dans la transaction de chaque ajout, retrait ou changement de rôle : la jouer
 **avant la fusion**, comme 0020. Le retour arrière retire la table et son historique.
 
+`0024_droits_personne_partout` (28/09/2026, oto-backend#1089, après `0023_signature_webhook`) ouvre la
+portée « personne, toutes orgs » des droits déclarés (`docs/droits-declares.md`) : la
+contrainte `org_entitlements_une_portee` `CHECK (org_id IS NOT NULL OR sub IS NOT NULL)`,
+posée d'abord (chaque ligne la satisfait, `org_id` étant encore NOT NULL), puis
+`ALTER COLUMN org_id DROP NOT NULL`. L'unicité `org_entitlements_une_ligne` (NULLS NOT
+DISTINCT) couvre déjà la nouvelle portée et ne bouge pas. **Verrous** : les deux ordres
+prennent `AccessExclusiveLock` sur `org_entitlements` seule, jusqu'à la fin de la
+transaction ; `DROP NOT NULL` est une écriture de catalogue, le `CHECK` parcourt la table
+une fois (une poignée de lignes) ; l'attente est bornée par `lock_timeout` 5 s. Suppose la
+0015 jouée (sans quoi `DROP NOT NULL` échoue sur la clé primaire). **Pas au démarrage** :
+une base neuve a la forme par le fragment, une base servie par cette révision seule.
+**Avant la fusion de préférence** : l'ancien code n'écrit que des lignes à `org_id` posé
+et ne lit que par `org_id = …` ; le code du lot lit la portée sans elle, et seule la pose
+d'une ligne de personne partout échoue sans elle (500 `NotNullViolation`, jamais en
+silence). Le retour arrière repose `NOT NULL` et **échoue de lui-même** tant qu'une ligne
+à `org_id` NULL existe — rien n'est supprimé en douce.
+
 ### 5.2 Une base neuve naît à la tête du registre (24/09/2026, oto-backend#969)
 
 Une base neuve reçoit tout son schéma du démarrage : chaque colonne qu'une révision pose
