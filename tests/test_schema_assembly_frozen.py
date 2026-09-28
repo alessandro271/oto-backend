@@ -580,8 +580,14 @@ from oto_mcp.db import _schema, schema
 # par la révision Alembic `0026_transcription_tours` ou le démarrage
 # (`transcription.DDL_COLONNE_TRANSCRIPT`, même forme). 184 032 → 184 298 (+266,
 # commentaire compris).
-EMPREINTE = "8853836ad805218056c2346f2dd10f0daa23988d28a9b2ef78c88ebb5b43d50c"
-LONGUEUR = 184298
+# 28/09/2026 — table NEUVE `apollo_phone_reveals` et ses deux index (fragment
+# `schema/connectors::APOLLO_PHONE_REVEALS`, en fin d'assemblage) : les reveals de
+# téléphone Apollo reçus par oto (`docs/donnees-par-reference.md`). Aucune clé
+# étrangère, index `(org_id, request_id)` délibérément non unique. Base existante par la
+# révision Alembic `0027_apollo_phone_reveals` ou le démarrage (`CREATE TABLE IF NOT
+# EXISTS`). 184 298 → 186 075 (+1 777, commentaires compris).
+EMPREINTE = "d15f88e6f32a894aefea95d3e3bfc1f9c5c0b7ffb7a00dd7e621b30138074b8f"
+LONGUEUR = 186075
 
 
 _CREATE_TABLE = re.compile(r"^CREATE TABLE IF NOT EXISTS (\w+)", re.M)

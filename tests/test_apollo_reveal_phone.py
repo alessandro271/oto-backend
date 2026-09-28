@@ -15,8 +15,9 @@ Ce que ces tests figent :
    au-delà de la précision d'un nombre JavaScript : rendu en nombre il revient
    faux d'une unité ou deux, sans que rien ne le dise, et un id faux ne sonde
    rien.
-3. **Une `webhook_url` à laquelle Apollo ne livrera jamais se refuse AVANT les
-   crédits** — le reveal est facturé même quand le POST n'arrive nulle part.
+3. **L'URL de livraison est la NÔTRE** — générée par `apollo_receiver`, jamais
+   fournie par l'appelant ; une `webhook_url` héritée est ignorée
+   (`tests/test_apollo_receveur.py` éprouve le receveur lui-même).
 4. **Pas de `next_step` qui promette un outil inutilisable** : si Apollo accepte
    sans rendre d'id, la réponse le DIT au lieu d'annoncer un sondage impossible.
 
@@ -32,6 +33,9 @@ import pytest
 
 
 _WEBHOOK = "https://hooks.acme.test/apollo"
+#: L'URL que `apollo_receiver.commander` rend dans ce montage — la seule qu'Apollo
+#: doit jamais recevoir.
+_RECEVEUR = "https://mcp.acme.test/api/receivers/apollo/phones/jeton"
 
 # `None` est une VALEUR DE RETOUR à part entière ici (le client oto-core traduit
 # le 404 d'Apollo en None) : le défaut du montage ne peut donc pas s'écrire
@@ -40,7 +44,7 @@ _DEFAUT = object()
 
 
 def _mount(monkeypatch, *, byo: bool = True, is_platform=None, quota=None,
-           match_return=_DEFAUT, poll_return=_DEFAUT):
+           match_return=_DEFAUT, poll_return=_DEFAUT, recu=None):
     """Monte apollo.py sur un FastMCP nu. `byo=False` simule l'absence de
     credential propre (donc le palier plateforme) en faisant lever
     `resolve_credential` comme le fait la vraie résolution.
@@ -82,11 +86,19 @@ def _mount(monkeypatch, *, byo: bool = True, is_platform=None, quota=None,
     monkeypatch.setattr(access, "platform_quota_hint", lambda p: quota)
     monkeypatch.setattr(apollo_client, "ApolloClient", lambda **kw: client)
 
-    # `_webhook_destination` résout l'hôte : on rend le DNS déterministe plutôt
-    # que de dépendre du réseau du poste (`.test` ne résout nulle part).
-    import socket
-    monkeypatch.setattr(socket, "getaddrinfo",
-                        lambda host, *a, **k: [(2, 1, 6, "", ("93.184.216.34", 0))])
+    # Le receveur : sa base est éprouvée ailleurs (`test_apollo_receveur.py`) ; ici
+    # on relève ce que l'outil lui DEMANDE. `recu` = ce qu'Apollo nous aurait livré
+    # (None : rien d'arrivé, le sondage d'Apollo prend le relais).
+    from oto_mcp import apollo_receiver
+    client.receveur = []
+    monkeypatch.setattr(apollo_receiver, "commander",
+                        lambda: (client.receveur.append(("commande",)) or
+                                 ("jeton", _RECEVEUR)))
+    monkeypatch.setattr(apollo_receiver, "lier",
+                        lambda j, rid: client.receveur.append(("lier", j, str(rid))))
+    monkeypatch.setattr(apollo_receiver, "abandonner",
+                        lambda j: client.receveur.append(("abandon", j)))
+    monkeypatch.setattr(apollo_receiver, "resultat_recu", lambda rid: recu)
 
     m = FastMCP("t")
     apollo_tool.register(m)
@@ -141,12 +153,14 @@ def test_the_refusal_names_the_cost_not_the_data_boundary(monkeypatch):
 # 2. Le geste nominal
 # --------------------------------------------------------------------------- #
 
-def test_reveal_forwards_the_flag_and_the_webhook(monkeypatch):
+def test_reveal_forwards_the_flag_and_OUR_receiver(monkeypatch):
+    """Apollo reçoit l'URL générée par oto — même quand un appelant d'avant ce lot
+    passe encore la sienne."""
     m, client, usage = _mount(monkeypatch)
     _tool(m, "apollo_reveal_phone")(webhook_url=_WEBHOOK, person_id="p1")
     kw = client.match_person.call_args.kwargs
     assert kw["reveal_phone_number"] is True
-    assert kw["webhook_url"] == _WEBHOOK
+    assert kw["webhook_url"] == _RECEVEUR
     assert kw["person_id"] == "p1"
     assert usage == [], "clé BYO : rien à débiter du pot plateforme"
 
@@ -186,42 +200,6 @@ def test_apollo_finding_nobody_is_not_an_accepted_reveal(monkeypatch, reponse, c
     assert "No Apollo match" in out["next_step"]
     assert "accepted" not in out["next_step"], (
         "rien n'a été accepté : ni commande, ni crédit, ni webhook")
-
-
-# --------------------------------------------------------------------------- #
-# 3. La destination : refusée AVANT les crédits
-# --------------------------------------------------------------------------- #
-
-@pytest.mark.parametrize("url, pourquoi", [
-    ("http://hooks.acme.test/apollo", "Apollo ne livre qu'en HTTPS"),
-    ("https://mcp.oto.cx/hook", "oto n'est pas un receveur de webhook"),
-    ("https://acme.mcp.oto.cx/hook", "un SOUS-domaine d'oto est oto : il "
-     "atterrit sur la même box, qui ne reçoit rien"),
-    ("ftp://hooks.acme.test/apollo", "ni http ni https"),
-    ("https://", "pas d'hôte"),
-])
-def test_an_undeliverable_webhook_is_refused_before_the_credits(
-        monkeypatch, url, pourquoi):
-    from oto_mcp.mcp_errors import McpError
-
-    m, client, _ = _mount(monkeypatch)
-    with pytest.raises(McpError):
-        _tool(m, "apollo_reveal_phone")(webhook_url=url, person_id="p1")
-    assert not client.match_person.called, f"aucun crédit ne doit partir ({pourquoi})"
-
-
-def test_a_private_webhook_host_is_refused(monkeypatch):
-    """Un hôte d'apparence publique qui résout en interne : Apollo livre depuis
-    l'internet et n'y arrivera jamais — le reveal serait facturé pour rien."""
-    import socket
-    from oto_mcp.mcp_errors import McpError
-
-    m, client, _ = _mount(monkeypatch)
-    monkeypatch.setattr(socket, "getaddrinfo",
-                        lambda host, *a, **k: [(2, 1, 6, "", ("10.0.0.5", 0))])
-    with pytest.raises(McpError):
-        _tool(m, "apollo_reveal_phone")(webhook_url=_WEBHOOK, person_id="p1")
-    assert not client.match_person.called
 
 
 # --------------------------------------------------------------------------- #

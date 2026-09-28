@@ -715,6 +715,17 @@ trouve pas (`transcription.DDL_COLONNE_TRANSCRIPT`, sous garde de catalogue). L'
 code ne la lit ni ne l'écrit. Le retour arrière retire la colonne ; le code qui l'écrit
 doit être retiré avant lui.
 
+`0027_apollo_phone_reveals` (28/09/2026, après `0026_transcription_tours`) crée la table
+NEUVE `apollo_phone_reveals` et ses deux index (fragment
+`db/schema/connectors.py::APOLLO_PHONE_REVEALS`, exécuté tel quel) : les reveals de
+téléphone Apollo reçus par oto (`docs/donnees-par-reference.md`). **Aucune clé
+étrangère** — ni verrou sur `orgs` ni sur `users` — et l'index `(org_id, request_id)` est
+délibérément NON unique. Le démarrage crée la même table s'il ne la trouve pas ;
+l'ancien code ne la lit ni ne l'écrit. Le code du lot l'ÉCRIT à chaque reveal de
+téléphone (la commande naît avant l'appel à Apollo) : la jouer **avant la fusion**,
+comme 0020. Le retour arrière retire la table et les numéros qu'elle garde ; le sondage
+d'Apollo reste alors le seul chemin de lecture.
+
 ### 5.2 Une base neuve naît à la tête du registre (24/09/2026, oto-backend#969)
 
 Une base neuve reçoit tout son schéma du démarrage : chaque colonne qu'une révision pose

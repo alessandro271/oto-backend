@@ -410,6 +410,10 @@ _SUB_COLUMNS = [
     # droit d'écriture pour un compte qui n'a jamais cessé d'exister, seulement
     # changé de nom.
     ("transcription_jobs", "sub"),
+    # Qui a commandé un reveal de téléphone Apollo (`apollo_receiver.py`). Hors PK
+    # (`token_hash`), sans FK ni unicité sur `sub` : UPDATE nu. Non repointée, une
+    # commande en attente appartiendrait à un compte disparu pendant ses trente jours.
+    ("apollo_phone_reveals", "sub"),
     # l'HISTORIQUE de la personne (dossier du 23/08 — ces lignes survivaient au merge
     # rattachées à un identifiant mort, donc invisibles au compte fusionné : déroulés
     # et activité perdus de vue, déclencheurs orphelins) :

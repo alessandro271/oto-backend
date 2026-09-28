@@ -255,3 +255,38 @@ CREATE INDEX IF NOT EXISTS idx_connector_instances_vault_all
 CREATE INDEX IF NOT EXISTS idx_connector_instances_parent
     ON connector_instances(parent_id);
 """
+
+# Réception des téléphones révélés par Apollo — `apollo_receiver.py`
+APOLLO_PHONE_REVEALS = """
+-- Un reveal de téléphone Apollo commandé par oto, et ce qu'Apollo a POSTé en retour.
+-- La ligne naît AVANT l'appel à Apollo (le POST peut arriver avant que l'appel ne
+-- rende la main) ; `request_id` la rejoint dès qu'Apollo l'a rendu, `payload` quand
+-- Apollo livre. Le jeton de l'URL de réception n'est JAMAIS stocké en clair : seule
+-- son empreinte SHA-256 l'est, comme un secret.
+-- Aucune clé étrangère vers `orgs` : une FK y prendrait un verrou à la création, pour
+-- des lignes qui vivent trente jours (la rétention d'Apollo) et que la maintenance
+-- purge (`oto-mcp maintenance apollo-phones`).
+CREATE TABLE IF NOT EXISTS apollo_phone_reveals (
+    token_hash TEXT PRIMARY KEY,
+    org_id BIGINT,
+    sub TEXT NOT NULL,
+    -- L'entier signé 64 bits d'Apollo, en CHAÎNE (au-delà de la précision JSON).
+    request_id TEXT,
+    payload JSONB,
+    -- Combien de POST sont arrivés : Apollo réessaie, seul le premier est gardé.
+    deliveries INTEGER NOT NULL DEFAULT 0,
+    received_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '30 days'
+);
+-- (org, request_id) : la clé de lecture de `apollo_reveal_phone_result`.
+-- ⚠️ Délibérément NON unique. L'unicité d'une livraison est tenue par le JETON (une
+-- commande = une ligne) ; un index unique ici ferait échouer le POST d'Apollo en 500
+-- le jour où un `request_id` reviendrait — et Apollo réessaie un 500 sans fin. Sur
+-- une collision, la lecture prend la commande livrée la plus récente.
+CREATE INDEX IF NOT EXISTS idx_apollo_phone_reveals_request
+    ON apollo_phone_reveals(org_id, request_id)
+    WHERE request_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_apollo_phone_reveals_expires
+    ON apollo_phone_reveals(expires_at);
+"""

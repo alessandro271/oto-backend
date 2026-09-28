@@ -29,6 +29,8 @@ Ils sont ici, chacun nommé, chacun jouable seul :
                                           avant de redémarrer le service
     oto-mcp maintenance droits        réaligne les droits déclarés des orgs sur
                                           l'état du commerce (ADR 0070 §7)
+    oto-mcp maintenance apollo-phones retire les reveals de téléphone Apollo reçus
+                                          au-delà de trente jours
     oto-mcp maintenance all           ceux du timer quotidien, dans l'ordre
 
     oto-mcp maintenance key-index-rebuild   (#421 — voir plus bas, PAS dans `all`)
@@ -507,6 +509,19 @@ def droits(*, dry_run: bool = False) -> dict:
     return billing_droits.reconcilier_tout(dry_run=dry_run)
 
 
+def apollo_phones(*, dry_run: bool = False) -> dict:
+    """Retire les reveals de téléphone Apollo reçus au-delà de trente jours.
+
+    La rétention d'Apollo lui-même : passé ce délai, son sondage ne rend plus rien, et
+    une commande gardée ici ne servirait qu'à garder des numéros. La lecture filtre
+    déjà l'échéance (`db/apollo_reveals.lire`) : ce travail retire ce qu'on ne sert
+    plus, il ne décide pas de ce qu'on sert."""
+    from .db import apollo_reveals
+    if dry_run:
+        return {"purgeables": apollo_reveals.compter_purgeables()}
+    return {"purged": apollo_reveals.purger()}
+
+
 _TRAVAUX: dict[str, Callable[..., dict]] = {
     "retention": retention,
     "revisions": revisions,
@@ -522,6 +537,7 @@ _TRAVAUX: dict[str, Callable[..., dict]] = {
     "unipile-fin-de-droit": unipile_fin_de_droit,
     "oauth-relay-callbacks": oauth_relay_callbacks,
     "droits": droits,
+    "apollo-phones": apollo_phones,
 }
 # Travaux dont l'écriture est un ACTE, pas une routine : à blanc par défaut, et
 # c'est `--apply` qui écrit. Ils ne sont dans aucun timer et jamais dans `all`.
@@ -539,7 +555,7 @@ _ACTES = ("journal-tokens", "residu-projete", "oauth-relay-callbacks")
 # ⚠️ `droits` AVANT `unipile-fin-de-droit` : la fin de droit lit `org_entitlements`, que
 # `droits` vient de réaligner sur l'état du commerce.
 _ALL = ("retention", "revisions", "blocks", "key-indexes", "alertes-credential",
-        "instagram-tokens", "droits", "unipile-fin-de-droit")
+        "instagram-tokens", "droits", "unipile-fin-de-droit", "apollo-phones")
 
 
 def run(noms: list[str], *, dry_run: bool = False, strict: bool = False) -> int:

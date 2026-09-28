@@ -160,6 +160,11 @@ CLASSEMENT: dict[str, Table] = {
     "connector_acl": exclue(ParEntite("scope_type", "scope_id"),
                             "plus lue depuis le 24/09/2026 (ADR 0053 D1)"),
     "connector_schemas": instance("cache des schémas d'outils, reconstruit par l'instance"),
+    "apollo_phone_reveals": exclue(_ORG_OU_COMPTE,
+                                   "commandes de reveal Apollo de trente jours, adressées "
+                                   "à l'URL de réception de CETTE instance : la cible ne "
+                                   "recevrait jamais leurs livraisons, et le sondage "
+                                   "d'Apollo les relit pendant la même fenêtre"),
     # ── messagerie hébergée ────────────────────────────────────────────────────
     "unipile_accounts": possedee(ParOrg()),
     "unipile_operated_accounts": possedee(ParSub()),

@@ -67,6 +67,7 @@ ASSEMBLAGE: tuple[str, ...] = (
     schema.runs.MODEL_SUBSCRIPTION_POOL,  # pool d'org des abonnements : mode et prêts
     schema.runs.MODEL_SUBSCRIPTION_REPLI,  # repli d'un abonnement épuisé sur la clé de l'org
     schema.orgs.MEMBER_EVENTS,       # journal des entrées et sorties de membres (oto#145)
+    schema.connectors.APOLLO_PHONE_REVEALS,  # téléphones révélés par Apollo, reçus par oto
 )
 
 _SCHEMA = "".join(ASSEMBLAGE)

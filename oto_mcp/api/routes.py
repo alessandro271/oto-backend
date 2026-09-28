@@ -59,6 +59,7 @@ from . import (accords as api_routes_accords,
                datastore as api_routes_datastore,
                hooks as api_routes_hooks,
                instagram_meta as api_routes_instagram_meta,
+               receveurs as api_routes_receveurs,
                salesforce as api_routes_salesforce,
                sirene as api_routes_sirene,
                zoho as api_routes_zoho)
@@ -774,6 +775,11 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
     # — et ne passe donc pas par `_authenticate`.
     hook_routes = api_routes_hooks.make_routes(options_handler)
 
+    # Les RECEVEURS (28/09/2026) : un fournisseur y livre ce qu'oto a commandé — les
+    # téléphones d'un reveal Apollo. À la main pour la même raison : corps libre, et
+    # l'autorisation est le jeton du chemin, propre à une commande.
+    receveur_routes = api_routes_receveurs.make_routes(options_handler)
+
     table = [
         Route("/favicon.svg", public.favicon, methods=["GET"]),
         Route("/favicon.ico", public.favicon, methods=["GET"]),
@@ -842,6 +848,7 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         *capability_routes,
         *billing_webhook_routes,
         *hook_routes,
+        *receveur_routes,
         # EN DERNIER, et c'est la garde : un alias déprécié ne peut capturer que ce
         # que rien d'autre ne sert. Monté plus haut, un de ses placeholders pourrait
         # éclipser une vraie route sans que rien ne le dise (#519, retrait #526).

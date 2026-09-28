@@ -74,6 +74,9 @@ from . import (
     alertes_credential,
     origine_ecritures,
     transcription,
+    # NON aplati : `ouvrir`/`lire`/`purger` sont trop communs pour la surface plate.
+    # Les appelants écrivent `from ..db import apollo_reveals as db_apollo`.
+    apollo_reveals,
 )
 
 # Ré-export plat (publics + privés à un underscore). Les noms dunder restent au
