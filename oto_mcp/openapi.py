@@ -466,14 +466,19 @@ def _operation_de_nature(contrat: ContratDeRoute, verb: str, path: str,
         "description": contrat.description,
         "tags": [_TAG_NATURE],
         "security": [{"bearerAuth": []}] if contrat.authentifiee else [],
-        # Les en-têtes de contexte ne sont lus que sur une requête AUTHENTIFIÉE : une
-        # route dont le jeton est dans l'adresse n'a pas d'org de consultation.
-        "parameters": [*params, *(_PARAMS_CONTEXTE if contrat.authentifiee else ())],
+        # ⚠️ Les en-têtes de contexte RESTENT déclarés, jeton dans l'adresse ou non :
+        # `ViewAsMiddleware` précède toute route `/api/*`, et le front les épingle sur
+        # ces opérations depuis qu'elles étaient des souches — les retirer cassait son
+        # contrat (préprod rouge, contrôle « Contrat avant déploiement »).
+        "parameters": [*params, *_PARAMS_CONTEXTE],
         "responses": reponses,
     }
     corps = (contrat.corps or {}).get(verb.upper())
     if corps:
-        op["requestBody"] = {"required": True, "content": {
+        # `required: False` : un corps devenu OBLIGATOIRE au contrat est une casse pour
+        # un client généré sur la souche d'avant. Le serveur, lui, refuse toujours un
+        # corps vide (`400 empty_body`, déclaré).
+        op["requestBody"] = {"required": False, "content": {
             media: {"schema": schema} for media, schema in corps.items()}}
     return op
 

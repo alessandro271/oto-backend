@@ -112,6 +112,14 @@ def test_le_depot_en_volume_s_ouvre_en_ne_lisant_que_le_contrat():
     assert "bad_ndjson" in put["responses"]["400"]["description"]
     assert "Route écrite à la main" not in depot["get"]["description"]
     assert "text/html" in depot["get"]["responses"]["200"]["content"]
+    # Compatibilité avec les contrats épinglés d'avant (souches) : en-têtes de contexte
+    # toujours déclarés, corps décrit mais pas obligatoire.
+    ctx = [{"$ref": "#/components/parameters/XOtoOrg"},
+           {"$ref": "#/components/parameters/XOtoGroup"}]
+    for verbe in ("get", "put", "post"):
+        assert all(r in depot[verbe]["parameters"] for r in ctx), verbe
+    assert put["requestBody"]["required"] is False
+    assert depot["post"]["requestBody"]["required"] is False
 
 
 def test_capability_wins_over_handwritten_on_the_same_path():
