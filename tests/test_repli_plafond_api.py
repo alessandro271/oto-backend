@@ -424,3 +424,67 @@ def test_sans_cle_de_l_org_le_chemin_reel_ne_sert_RIEN(live):
 
     assert rendu["job"] is None
     assert db.get_job(jid, oid)["status"] == "pending", "il attend, il n'est pas arrêté"
+
+
+# ── 12. la clé qui disparaît ENTRE la décision et la remise ───────────────
+
+def test_une_cle_illisible_a_la_remise_DEFAIT_le_repli(live, monkeypatch):
+    """Le trou que la revue de déploiement a trouvé, et qui n'était PAS une course :
+    le repli se décidait sur `has_credential` (présence de la ligne, sans déchiffrer)
+    alors que la remise lit le coffre pour de vrai. Un coffre qui ne rend pas la clé
+    laisse la ligne en place — donc « l'org paie » était décidé, puis la remise
+    retombait sur la clé de la PLATEFORME. Nous, silencieusement.
+
+    Ici on force ce désaccord (la remise ne trouve rien) et on exige la troisième
+    issue : ni servi sur notre clé, ni arrêté — le repli est DÉFAIT et le travail
+    rendu à la file, sur son abonnement, tel qu'il était."""
+    from oto_mcp import db
+    from oto_mcp.capabilities import runner_jobs as RJ
+    from oto_mcp.capabilities._types import ResolvedCtx
+
+    oid = _org("p16", "p16-dem")
+    _abonne("p16-dem", statut="paused_limit", reset=_futur())
+    jid = _travail(oid, "p16-dem")
+    _cle_org(oid)  # la LIGNE existe : le repli sera décidé
+
+    # ... mais le coffre ne rend rien à la REMISE (master key indisponible, ligne
+    # illisible) — sans toucher à la décision, qui lit le coffre de son côté.
+    vraie_lecture = RJ._cle_de_modele
+    monkeypatch.setattr(RJ, "_cle_de_modele", lambda org, depot: (None, None))
+
+    rendu = RJ._jobs(ResolvedCtx(sub="worker:banc", org_id=None, platform_worker=True),
+                     RJ.JobsInput(op="claim", provider=_API))
+
+    assert rendu["job"] is None, "rien n'est servi — surtout pas sur notre clé"
+
+    remis = db.get_job(jid, oid)
+    assert remis["status"] == "pending", "rendu à la file, pas arrêté"
+    assert remis["payload"]["model"] == "sub:sonnet", "son abonnement lui est rendu"
+    assert remis["payload"]["model_family"] == "claude_subscription"
+    assert "repli" not in remis["payload"]["_plateforme"], "le repli est défait"
+    defait = remis["payload"]["_plateforme"]["repli_defait"]
+    assert defait["to_model"] == "claude-sonnet-5", "mais il reste TRAÇABLE"
+    assert "illisible" in defait["raison"]
+    assert vraie_lecture is not None
+
+
+def test_un_coffre_illisible_ne_DECIDE_plus_le_repli(live, monkeypatch):
+    """Et la cause racine, fermée en amont : si le coffre ne rend pas la clé, le
+    repli n'est même plus décidé. Le travail attend son forfait, sans être touché."""
+    from oto_mcp import credentials_store
+
+    oid = _org("p17", "p17-dem")
+    _abonne("p17-dem", statut="paused_limit", reset=_futur())
+    jid = _travail(oid, "p17-dem")
+    _cle_org(oid)
+
+    def _coffre_muet(entity_type, entity_id, connector, *a, **k):
+        raise RuntimeError("master key indisponible")
+    monkeypatch.setattr(credentials_store, "get_credential_with_meta", _coffre_muet)
+
+    assert _repli(oid) is None, "un coffre muet ne fait pas rerouter"
+
+    from oto_mcp import db
+    reste = db.get_job(jid, oid)
+    assert reste["status"] == "pending"
+    assert reste["payload"]["model"] == "sub:sonnet", "jamais touché"

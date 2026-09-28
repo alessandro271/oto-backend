@@ -1570,6 +1570,20 @@ modèle, au même palier, payé aux jetons sur la clé API de l'org. Le repli le
   sont réécrits DANS l'écriture de la prise. Sans ça, `noter_rapport` lèverait la pause
   d'un abonnement qui n'a pas tourné, et l'usage compterait zéro jeton pour une exécution
   réellement facturée.
+- **Ce qui DÉCIDE est ce qui SERT.** La payabilité se juge sur la lecture qui
+  DÉCHIFFRE (`credentials_store.get_credential_with_meta`), jamais sur la présence de
+  la ligne (`has_credential`) : les deux divergent sans aucune course, un coffre qui
+  ne rend pas la clé laissant la ligne en place. Décider sur la présence aurait
+  rerouté en jurant que l'org paie, pour que la PLATEFORME paie — le défaut du lot,
+  rentré par l'autre porte.
+- **Et si la clé cesse d'être lisible entre la décision et la remise** : le repli est
+  **DÉFAIT** (`db.defaire_le_repli`) — le travail retrouve son `sub:*` et retourne en
+  file, tentative rendue. Ni servi sans clé (la plateforme paierait), ni arrêté (il
+  avait de quoi attendre). Défaire et rendre se font dans la MÊME écriture : rendu
+  sans être défait, il resterait estampillé `anthropic` et un worker ordinaire le
+  reprendrait plus tard sur la clé de son environnement. Le repli annulé reste
+  lisible dans la charge (`_plateforme.repli_defait`) — un chemin qui se met à mordre
+  en boucle doit se voir.
 - **Réservé au worker de plateforme**, et tenté seulement quand la réservation ordinaire
   n'a rien rendu : le repli traverse une famille que le dépôt du worker ne nomme pas. Un
   candidat sans clé, repli coupé, ou perdu à la course du claim est **sauté**, pas arrêté

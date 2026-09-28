@@ -733,21 +733,73 @@ def _cle_ok_pour_repli(org_id: int, famille: str) -> bool:
     la plateforme paierait le repli de toutes les orgs sans clé. Le réglage
     répond à « qui peut tourner ? », cette fonction à « qui PAIE ? ».
 
-    Miroir exact de `capabilities.runner_jobs._depot_pose`, recopié plutôt
-    qu'importé : le sens unique des 4 couches (ADR 0004) interdit à `db` de
-    remonter vers `capabilities`. Vérifié AVANT la prise, jamais après : rerouter
-    vers un dépôt qui arrêterait ensuite le travail (`_avec_cle`,
-    `model_key_required`) romprait la promesse « jamais un échec dur »."""
+    ⚠️ **La MÊME lecture que la REMISE** (`capabilities._cle_de_modele`), et non la
+    simple présence de la ligne (`has_credential`, qui ne DÉCHIFFRE pas). Les deux
+    divergent sans qu'aucune course ne soit en jeu : un coffre qui ne rend pas la
+    clé — master key indisponible au boot, ligne illisible — laisse la LIGNE en
+    place et fait pourtant rendre `None` à la remise. Or la remise, dans ce cas,
+    **retombe sur la clé de la plateforme** (son propre commentaire le dit). On
+    aurait donc rerouté un travail en jurant que l'org paie, pour nous le faire
+    payer, silencieusement : le défaut même que ce lot ferme, rentré par l'autre
+    porte. Ce qui DÉCIDE doit être ce qui SERT.
+
+    Recopié plutôt qu'importé : le sens unique des 4 couches (ADR 0004) interdit à
+    `db` de remonter vers `capabilities`. Vérifié AVANT la prise : rerouter vers un
+    dépôt qui arrêterait ensuite le travail romprait la promesse « jamais un échec
+    dur »."""
     from .. import credentials_store, providers
     c = providers.connector_for_provider(famille)
     if not c or c.kind != "credential":
         return False
     try:
-        return credentials_store.has_credential("org", str(org_id), famille, account="")
+        ligne = credentials_store.get_credential_with_meta("org", str(org_id), famille)
     except Exception:
-        logger.warning("présence du dépôt `%s` illisible pour l'org %s — repli refusé",
-                       famille, org_id, exc_info=True)
+        logger.warning("clé `%s` illisible pour l'org %s — repli refusé, le travail "
+                       "attend son forfait", famille, org_id, exc_info=True)
         return False
+    return bool(ligne and ligne.get("secret"))
+
+
+def defaire_le_repli(job_id: int, worker_sub: str, raison: str,
+                     delai_s: int = 60) -> bool:
+    """Un travail REPLIÉ que la remise n'a finalement pas pu payer sur la clé de son
+    org : on le remet EXACTEMENT comme avant le repli — son modèle d'abonnement
+    retrouvé — et on le rend à la file, sans compter la tentative.
+
+    ⚠️ Défaire le repli ET rendre à la file dans la MÊME écriture. Rendre sans
+    défaire laisserait en file un travail estampillé `anthropic` : n'importe quel
+    worker de cette famille le reprendrait plus tard, et si la clé de l'org n'est
+    toujours pas lisible, il tournerait sur la clé d'ENVIRONNEMENT du worker — la
+    nôtre. Le travail retrouve donc son `sub:*`, et redevient ce qu'il était : un
+    travail qui attend la réinitialisation d'un forfait.
+
+    Le `repli` de la charge n'est pas effacé mais DÉCLASSÉ en `repli_defait` (avec
+    sa raison) : un repli tenté puis annulé est un fait d'exploitation, et l'effacer
+    rendrait ce chemin invisible le jour où il se met à mordre en boucle."""
+    with _connect() as conn:
+        cur = conn.execute(
+            """
+            UPDATE runner_jobs j
+               SET status = 'pending', claimed_by = NULL, lease_until = NULL,
+                   attempts = GREATEST(j.attempts - 1, 0),
+                   due_at = NOW() + make_interval(secs => %s),
+                   payload = jsonb_set(
+                       jsonb_set(
+                           jsonb_set(j.payload, '{model}',
+                                     j.payload->'_plateforme'->'repli'->'from_model'),
+                           '{model_family}',
+                           j.payload->'_plateforme'->'repli'->'from_family'),
+                       '{_plateforme}',
+                       (j.payload->'_plateforme') - 'repli'
+                       || jsonb_build_object('repli_defait',
+                              (j.payload->'_plateforme'->'repli')
+                              || jsonb_build_object('raison', %s::text,
+                                                    'defait_at', to_jsonb(NOW()))))
+             WHERE j.id = %s AND j.claimed_by = %s AND j.status = 'claimed'
+               AND j.payload->'_plateforme'->'repli' IS NOT NULL
+            """,
+            (int(delai_s), raison, job_id, worker_sub))
+        return bool(cur.rowcount)
 
 
 def candidats_repli_abonnement(org_id: Optional[int], org_ids: Optional[list],

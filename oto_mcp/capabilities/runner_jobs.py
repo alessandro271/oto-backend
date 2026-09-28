@@ -480,7 +480,7 @@ def _charge_servie(job: dict) -> dict:
 
 
 def _avec_cle(job: dict, depot: Optional[str], appelant: str, *,
-              worker: bool, org_key_only: bool = False) -> dict:
+              worker: bool, org_key_only: bool = False) -> Optional[dict]:
     """Le travail, augmenté de la clé de modèle de son org — à la RÉSERVATION.
 
     Le worker fait partie du backend et a le droit de lire les clés que les orgs
@@ -551,6 +551,29 @@ def _avec_cle(job: dict, depot: Optional[str], appelant: str, *,
             return _refuser_sans_cle(job, appelant, _SANS_DEPOT)
         return job
     cle, workspace = _cle_de_modele(job["org_id"], depot)
+    if not cle and (job.get("payload") or {}).get("_plateforme", {}).get("repli"):
+        # ⚠️ UN TRAVAIL REPLIÉ NE SE SERT JAMAIS SUR NOTRE CLÉ (OTO-130). Il a été
+        # déplacé d'un abonnement gratuit vers une clé d'org PRÉCISÉMENT parce que
+        # cette clé était lisible ; si elle ne l'est plus à la remise, les deux
+        # issues d'en dessous sont fausses pour lui : le servir sans clé le ferait
+        # payer par la PLATEFORME (le cas `return job`), et l'arrêter
+        # définitivement le tuerait alors qu'il avait de quoi attendre.
+        #
+        # La troisième issue est la bonne, et elle n'existait pas : défaire le
+        # repli et le rendre à la file, tel qu'il était. Il redevient un travail
+        # d'abonnement qui attend sa réinitialisation — ce qu'il aurait fait si on
+        # ne l'avait jamais touché.
+        if db.defaire_le_repli(job["id"], appelant,
+                               f"clé `{depot}` de l'org illisible à la remise"):
+            logger.warning("repli DÉFAIT pour le travail %s (org %s) : la clé `%s` "
+                           "n'était plus lisible à la remise — rendu à la file sur "
+                           "son abonnement", job.get("id"), job.get("org_id"), depot)
+            return None
+        # Le défaire a échoué (course sur la prise) : on ne sert RIEN plutôt que de
+        # servir sur notre clé. Le bail expirera et le travail repartira.
+        logger.warning("repli du travail %s NON défait (course) — rien n'est servi",
+                       job.get("id"))
+        return None
     if not cle and org_key_only:
         # ⚠️ Un worker SANS clé de plateforme : le remettre sans clé, c'est un
         # travail qui échouera chez le fournisseur — ou, pire, qui trouvera une
