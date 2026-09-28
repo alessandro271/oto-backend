@@ -590,6 +590,10 @@ opération servie le fait rougir, qu'il l'appelle ou non, jusqu'à ce qu'il ait 
 instantané). Déclarer un consommateur = ajouter une entrée, plus sa clé de déploiement en
 lecture seule s'il est privé.
 
+Déclaré au 28/09/2026 : **oto-commerce**, le service de facturation (dépôt privé), qui épingle
+les routes `/api/service/*` qu'il appelle (`api/openapi-service.json`, secret
+`OTO_COMMERCE_CONTRACT_KEY`).
+
 ## Le contrat dit ce que le serveur rend — retours d'un front tiers (29/08/2026)
 
 Un front tiers, consommateur pur de cette API, a dérivé son comportement du contrat

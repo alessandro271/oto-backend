@@ -10,5 +10,11 @@
     "depot": "otomata-tech/oto-dashboard",
     "chemin": "frontend/openapi/oto-openapi.json",
     "secret": null
+  },
+  {
+    "nom": "oto-commerce",
+    "depot": "otomata-tech/oto-commerce",
+    "chemin": "api/openapi-service.json",
+    "secret": "OTO_COMMERCE_CONTRACT_KEY"
   }
 ]
