@@ -16,7 +16,7 @@ Une ligne qui porte déjà son id HubSpot est mise à jour par cet id, sans rech
 """
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Literal, Optional, Union
 
 from fastmcp import FastMCP
 
@@ -27,7 +27,7 @@ from .hubspot import _scope_refusal
 
 #: La propriété qui dit « c'est le même enregistrement », par type d'objet.
 CLE_PAR_DEFAUT = {"contacts": "email", "companies": "domain"}
-CREE, MAJ, ECHEC = "created", "updated", "failed"
+CREE, MAJ, EXISTE, ECHEC = "created", "updated", "exists", "failed"
 #: HubSpot plafonne une page de recherche, et une liste de valeurs `IN`, à 100.
 _PAGE = 100
 
@@ -39,6 +39,31 @@ def _cle(v) -> Optional[str]:
         return None
     s = str(v).strip().lower()
     return s or None
+
+
+def _constantes(constants, mapping: dict[str, str]) -> dict:
+    """Les propriétés FIXES d'un lot (`lifecyclestage`, un lot d'import…), écrites
+    sur chaque enregistrement. Pas une colonne : une valeur connue de l'appelant, qui
+    ne dit rien d'une personne. Une propriété à la fois fixe et lue d'une colonne est
+    refusée plutôt que tranchée en silence."""
+    if constants is None:
+        return {}
+    if not isinstance(constants, dict):
+        raise pr.refus("hubspot_constants_shape",
+                       "`constants` est un objet {propriété: valeur}. Rien n'a été envoyé.")
+    doublons = sorted(k for k in constants if k in mapping)
+    if doublons:
+        raise pr.refus("hubspot_constant_mapped",
+                       f"propriété(s) à la fois fixe(s) et lue(s) d'une colonne : "
+                       f"{', '.join(doublons)}. Rien n'a été envoyé.")
+    out: dict = {}
+    for k, v in constants.items():
+        if not (isinstance(k, str) and k) or not isinstance(v, (str, int, float, bool)):
+            raise pr.refus("hubspot_constants_shape",
+                           "`constants` : noms non vides, valeurs scalaires. "
+                           "Rien n'a été envoyé.")
+        out[k] = ("true" if v else "false") if isinstance(v, bool) else v
+    return out
 
 
 def _proprietes(ligne: dict, mapping: dict[str, str]) -> tuple[dict, Optional[str]]:
@@ -106,6 +131,8 @@ def register(mcp: FastMCP) -> None:
         associate_with: Optional[Literal["contacts", "companies", "deals"]] = None,
         associate_id_column: Optional[str] = None,
         list_id: Optional[str] = None,
+        constants: Optional[dict[str, Union[str, int, float, bool]]] = None,
+        on_existing: Literal["update", "skip", "list_only"] = "update",
         id_column: str = "hubspot_id",
         status_column: str = "hubspot_status",
         batch_size: int = 25,
@@ -140,13 +167,20 @@ def register(mcp: FastMCP) -> None:
             associate_id_column: column holding the HubSpot id to associate with
                 (with `associate_with`).
             list_id: a MANUAL or SNAPSHOT list to add every pushed record to.
+            constants: {property: value} written on every record created or
+                updated (e.g. `lifecyclestage`, a batch tag) — a fixed value, not a
+                column.
+            on_existing: what a record that ALREADY exists gets — update (default),
+                skip (left untouched, not listed) or list_only (left untouched, but
+                added to `list_id`). Its row gets status `exists`.
             id_column: where the HubSpot id is written back.
-            status_column: where created | updated | failed is written back; the
-                code of a failure goes in its `comment` layer.
+            status_column: where created | updated | exists | failed is written
+                back; the code of a failure goes in its `comment` layer.
             batch_size: rows per call with `filter` (1-50).
             dry_run: read and check only — no HubSpot write, nothing written back.
         """
         mapping = pr.valider_correspondance(field_mapping)
+        fixes = _constantes(constants, mapping)
         prop_cle = match_property or CLE_PAR_DEFAUT[object_type]
         if prop_cle not in mapping:
             raise pr.refus("hubspot_match_unmapped",
@@ -197,7 +231,11 @@ def register(mcp: FastMCP) -> None:
                                              "status_column": status_column})
 
         c = _client() if a_pousser else None
+        # `pousses` = ce qui rejoint la liste ; `ecrits` = ce qui a été créé ou modifié
+        # chez HubSpot (la quantité facturée). Un existant laissé intact (`list_only`)
+        # est dans le premier, jamais dans le second.
         pousses: list[str] = []
+        ecrits = 0
         try:
             if c is not None and list_id:
                 fiche = c.get_list(list_id) or {}
@@ -230,9 +268,21 @@ def register(mcp: FastMCP) -> None:
                                          f"{status_column}.comment": "hubspot_ambiguous_match"})
                     continue
                 cible = ids[0] if ids else None
+            if cible is not None and on_existing != "update":
+                # Un existant qu'on ne TOUCHE pas : ni propriété, ni association. Il
+                # rejoint la liste seulement si on l'a demandé (`list_only`).
+                recu.compter(EXISTE)
+                if on_existing == "list_only":
+                    pousses.append(cible)
+                ecrit = pr.ecrire(lot, rid, {
+                    id_column: cible, f"{id_column}.comment": f"hubspot {object_type}",
+                    status_column: EXISTE})
+                if ecrit:
+                    recu.echec(rid, f"writeback_{ecrit}")
+                continue
             try:
                 if cible is None:
-                    rec = c.create_object(object_type, props) or {}
+                    rec = c.create_object(object_type, {**fixes, **props}) or {}
                     cible, etat = str(rec.get("id") or ""), CREE
                     if not cible:
                         recu.echec(rid, "hubspot_not_created")
@@ -240,8 +290,9 @@ def register(mcp: FastMCP) -> None:
                                              f"{status_column}.comment": "hubspot_not_created"})
                         continue
                 else:
-                    c.update_object(object_type, cible, props)
+                    c.update_object(object_type, cible, {**fixes, **props})
                     etat = MAJ
+                ecrits += 1
                 if associate_with and vers_id:
                     _associer(c, object_type, cible, associate_with, vers_id)
                     recu.compter("associated")
@@ -280,7 +331,7 @@ def register(mcp: FastMCP) -> None:
 
         # La ligne FACTURÉE compte les enregistrements écrits, comme N appels à
         # hubspot_object l'auraient fait (`tool_calls.quantity`).
-        session_org.note_call_trace(quantity=len(pousses))
+        session_org.note_call_trace(quantity=ecrits)
         return recu.rendre(lot, selectionnees=len(lot.lignes), dry_run=False,
                            traitees=traitees, object_type=object_type,
                            match_property=prop_cle,

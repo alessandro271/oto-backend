@@ -180,3 +180,56 @@ def test_dry_run_ne_touche_pas_a_hubspot(banc):
     assert out["would_push"] == 3
     assert not (client.search_objects.called or client.create_object.called)
     _sans_donnee_personnelle(out)
+
+
+# ── les propriétés fixes, et les existants qu'on ne touche pas ───────────────
+
+def test_les_proprietes_fixes_vont_sur_chaque_enregistrement_ecrit(banc):
+    """`lifecyclestage`, un tag de lot : ce ne sont pas des colonnes, et une
+    procédure qui crée des contacts en a besoin sur chacun."""
+    fn, client = banc
+    ns, ids = _table()
+    fn(datastore=ns, object_type="contacts", field_mapping=_MAPPING, row_ids=ids,
+       constants={"lifecyclestage": "lead", "oqy_batch": "be-02"})
+    cree = client.create_object.call_args_list[0].args[1]
+    assert cree["lifecyclestage"] == "lead" and cree["oqy_batch"] == "be-02"
+    assert client.update_object.call_args.args[2]["lifecyclestage"] == "lead"
+
+
+def test_une_propriete_a_la_fois_fixe_et_mappee_est_refusee(banc):
+    from oto_mcp.mcp_errors import McpError
+    fn, client = banc
+    ns, ids = _table()
+    with pytest.raises(McpError) as e:
+        fn(datastore=ns, object_type="contacts", field_mapping=_MAPPING, row_ids=ids,
+           constants={"firstname": "X"})
+    assert e.value.error.data["code"] == "hubspot_constant_mapped"
+    assert not client.search_objects.called
+
+
+def test_on_existing_skip_ne_touche_pas_l_existant(banc):
+    """La règle d'une procédure réelle : un contact qui existe déjà n'est pas
+    modifié. Il n'est ni mis à jour, ni associé, ni rangé dans la liste — mais sa
+    ligne apprend son id, pour ne pas le rechercher au tour suivant."""
+    fn, client = banc
+    ns, ids = _table()
+    out = fn(datastore=ns, object_type="contacts", field_mapping=_MAPPING, row_ids=ids,
+             list_id="L9", on_existing="skip",
+             associate_with="companies", associate_id_column="societe_id")
+    assert not client.update_object.called
+    assert out["exists"] == 1 and out["created"] == 2
+    assert out["added_to_list"] == 2, "seuls les créés rejoignent la liste"
+    assert not any(c.args[1].startswith("/crm/v4/objects/contacts/501/")
+                   for c in client._request.call_args_list), "pas d'association"
+    assert _ligne(ns, ids[1])["hubspot_status"] == "exists"
+    assert _ligne(ns, ids[1])["hubspot_id"] == "501"
+
+
+def test_on_existing_list_only_range_l_existant_sans_le_modifier(banc):
+    fn, client = banc
+    ns, ids = _table()
+    out = fn(datastore=ns, object_type="contacts", field_mapping=_MAPPING, row_ids=ids,
+             list_id="L9", on_existing="list_only")
+    assert not client.update_object.called
+    assert out["exists"] == 1 and out["added_to_list"] == 3
+    assert "501" in client.add_list_memberships.call_args.args[1]
