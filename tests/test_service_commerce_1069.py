@@ -23,7 +23,7 @@ _SERVICE = {"sub": "service:m2m-commerce", "client_id": "m2m-commerce",
             "roles": frozenset({"commerce"})}
 _CLES = ("service.orgs.list", "service.org.members", "service.org.usage",
          "service.org.entitlements.list", "service.org.entitlement.put",
-         "service.org.entitlement.delete", "service.billing.export")
+         "service.org.entitlement.delete", "service.billing.export", "service.users.get")
 
 
 def _cap(cle):
@@ -225,6 +225,13 @@ def test_l_export_rend_l_etat_de_facturation_en_un_instantane_date(live):
         conn.execute(
             "INSERT INTO legal_acceptance_events (sub, org_id, doc_slug, version, context) "
             "VALUES (%s, %s, 'cgv', 'v1', 'purchase')", (sub, org))
+        pid = conn.execute(
+            "INSERT INTO billing_payments (org_id, kind, amount, status) "
+            "VALUES (%s, 'initial', 2280, 'paid') RETURNING id", (org,)).fetchone()["id"]
+        conn.execute(
+            "INSERT INTO billing_invoices (org_id, payment_row_id, kind, status, number, "
+            "amount_ttc, pdf, pdf_filename) VALUES (%s, %s, 'invoice', 'issued', 'F-1', 2280, "
+            "%s, 'F-1.pdf')", (org, pid, b"%PDF-1.4 x"))
     out = _appel("service.billing.export")
     assert out["plans"]["standard"]["amount_ht"] == 1900
     assert set(out["plans"]["standard"]["rights"]) == {"unipile", "platform_unmetered"}
@@ -238,3 +245,17 @@ def test_l_export_rend_l_etat_de_facturation_en_un_instantane_date(live):
     assert any(i["org_id"] == org and i["billing_email"] == "c@acme.test"
                for i in out["identities"])
     assert any(a["sub"] == sub and a["doc_slug"] == "cgv" for a in out["purchase_acceptances"])
+    import base64
+    facture = next(f for f in out["invoices"] if f["org_id"] == org)
+    assert (facture["number"], facture["pdf_filename"]) == ("F-1", "F-1.pdf")
+    assert base64.b64decode(facture["pdf_base64"]) == b"%PDF-1.4 x"
+
+
+def test_le_role_plateforme_d_un_compte(live):
+    org = _org()
+    membre, admin = _membre(org, T0), _membre(org, T0)
+    with _connect() as conn:
+        conn.execute("UPDATE users SET role = 'admin' WHERE sub = %s", (admin,))
+    assert _appel("service.users.get", sub=membre)["role"] == "member"
+    assert _appel("service.users.get", sub=admin)["role"] == "admin"
+    assert _refus("service.users.get", sub="u-inconnu").code == "unknown_user"

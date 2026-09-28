@@ -102,7 +102,8 @@ identité de service (`docs/auth-logto.md` §Identité de service). REST seule, 
 | `GET /api/service/orgs/{id}/entitlements` | `list_for_org` |
 | `PUT /api/service/orgs/{id}/entitlements/{right_key}/{source}` | `grant`, `granted_by = service:<client_id>` ; rend la ligne |
 | `DELETE /api/service/orgs/{id}/entitlements/{right_key}/{source}` | `revoke` |
-| `GET /api/service/billing/export` | **temporaire** (#1085) : l'état de facturation du cœur, pour sa reprise par le commerce ; part avec le retrait |
+| `GET /api/service/users/{sub}` | le rôle **plateforme** d'un compte (#1087), relu par l'API d'administration du commerce |
+| `GET /api/service/billing/export` | **temporaire** (#1085) : l'état de facturation du cœur (factures et PDF compris), pour sa reprise par le commerce ; part avec le retrait |
 
 `sub` (corps ou requête) vise une personne, qui doit être membre ; omis, le droit vaut
 pour l'org. `source` est prise dans la liste fermée `entitlements_catalogue.SOURCES`.

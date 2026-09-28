@@ -18,7 +18,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from .. import db, entitlements_catalogue as catalogue, org_store
 from ..db import entitlements as db_entitlements
@@ -271,6 +271,7 @@ class ServiceBillingExport(BaseModel):
     option_comps: list[dict]
     identities: list[dict]
     payments: list[dict]
+    invoices: list[dict]
     purchase_acceptances: list[dict]
 
 
@@ -285,6 +286,28 @@ def _billing_export(ctx: ResolvedCtx, inp: ServiceNoInput) -> dict:
                             "interval": p["interval"], "rights": list(billing.plan_rights(cle))}
                       for cle, p in billing.PLANS.items()},
             **db_billing.export_commerce()}
+
+
+# ── le rôle plateforme d'un compte (#1087) ──────────────────────────────────
+#
+# Le commerce sert une API d'administration plateforme (le bloc « commerce » de la fiche
+# d'org, dashboard) ; le rôle plateforme vit ici, dans l'annuaire du cœur. Il le relit à
+# chaque requête, jamais ne le copie.
+
+class ServiceUserInput(BaseModel):
+    sub: str
+
+
+class ServiceUser(BaseModel):
+    sub: str
+    role: str = Field(description="Le rôle PLATEFORME : member | admin | super_admin.")
+
+
+def _user(ctx: ResolvedCtx, inp: ServiceUserInput) -> dict:
+    if db.get_user(inp.sub) is None:
+        raise AuthzDenied(404, "unknown_user", f"Compte {inp.sub!r} inconnu.")
+    from .. import access
+    return {"sub": inp.sub, "role": access.get_user_role(inp.sub)}
 
 
 _CHEMIN_DROIT = "/api/service/orgs/{id}/entitlements/{right_key}/{source}"
@@ -338,6 +361,12 @@ CAPABILITIES += [
                description="[service commerce] Remove one entitlement row (org, person, "
                            "right, source); other sources and scopes stay.",
                rest=RestBinding("DELETE", _CHEMIN_DROIT, _ID)),
+    Capability(key="service.users.get", handler=_user, Input=ServiceUserInput,
+               authz=COMMERCE_SERVICE, mcp=None, Output=ServiceUser,
+               errors=(DeclaredError(404, "unknown_user", "aucun compte ne porte ce sub"),),
+               description="[service commerce] The PLATFORM role of an account (member, "
+                           "admin, super_admin), re-read on each request.",
+               rest=RestBinding("GET", "/api/service/users/{sub}")),
     Capability(key="service.billing.export", handler=_billing_export, Input=ServiceNoInput,
                authz=COMMERCE_SERVICE, mcp=None, Output=ServiceBillingExport,
                description="[service commerce, temporary] The core's billing state "

@@ -788,6 +788,12 @@ def export_commerce() -> dict[str, list[dict]]:
             "SELECT id, org_id, kind, amount, amount_ht, vat_rate_bps, vat_amount, "
             "country_code, vat_scheme, payment_intent_id, payment_id, customer_id, status, "
             f"attempt, {_utc('created_at')} FROM billing_payments ORDER BY id"),
+        "invoices": (
+            "SELECT id, org_id, payment_ref, kind, status, number, currency, amount_ht, "
+            "vat_rate_bps, vat_amount, amount_ttc, vat_scheme, "
+            f"{_utc('period_start')}, {_utc('period_end')}, {_utc('issued_at')}, "
+            "pdf_filename, encode(pdf, 'base64') AS pdf_base64 "
+            "FROM billing_invoices ORDER BY id"),
         "purchase_acceptances": (
             "SELECT sub, org_id, doc_slug, version, ip, user_agent, "
             f"{_utc('accepted_at')} FROM legal_acceptance_events "
