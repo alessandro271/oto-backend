@@ -219,13 +219,14 @@ def list_instructions(owner_type: str, owner_id: int | str,
     guide de base sauf `include_base` (surface admin), et TOUJOURS les
     procédures archivées.
 
-    Toujours, faute d'appelant qui veuille le contraire : le jour où une surface
-    admin voudra les voir, elle ajoutera son paramètre avec son besoin sous les
-    yeux. C'est le point de l'archivage : cette fonction alimente aussi bien
-    l'index que l'IA lit (`instructions.skills_index_md`, qui enrichit la
-    description d'`oto_procedure` au tools/list) que `oto_procedure op=list`.
-    Une procédure retirée du service doit cesser d'être proposée à l'agent — un
-    archivage qui la laisserait dans cet index ne serait qu'un habillage."""
+    Toujours : l'écran qui doit les voir pour les remettre en service lit
+    `list_archived_instructions` (`instructions_cycle`), une fonction À PART — pas
+    un paramètre d'ici, qui les mettrait à un argument de l'index. C'est le point
+    de l'archivage : cette fonction alimente aussi bien l'index que l'IA lit
+    (`instructions.skills_index_md`, qui enrichit la description d'`oto_procedure`
+    au tools/list) que `oto_procedure op=list`. Une procédure retirée du service
+    doit cesser d'être proposée à l'agent — un archivage qui la laisserait dans
+    cet index ne serait qu'un habillage."""
     otype, oid = _owner(owner_type, owner_id)
     where = _OWNER_WHERE if include_base else _OWNER_WHERE + " AND slug <> %s"
     where += " AND archived_at IS NULL"
