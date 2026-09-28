@@ -557,8 +557,8 @@ from oto_mcp.db import _schema, schema
 # d'adresse ne sont PAS dans ce DDL (leurs colonnes naissent d'un ALTER que le DDL
 # précède, #450) : un commentaire le dit à leur place.
 # 180 592 → 182 207 (+1 615, commentaires compris).
-EMPREINTE = "d652a0cc92c649039d2b911c9b6297de49f0b62222e74f23ffb58d78c97d11f5"
-LONGUEUR = 182207
+EMPREINTE = "dc7e2dc029bc2e0bfee26341a39d1d7e6c1ca37fd30067257d813469cae8a042"
+LONGUEUR = 183129
 
 
 _CREATE_TABLE = re.compile(r"^CREATE TABLE IF NOT EXISTS (\w+)", re.M)
