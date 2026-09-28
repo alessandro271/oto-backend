@@ -92,24 +92,11 @@ def _shell(*, title: str, inner: str, home_url: Optional[str] = None,
     from . import email_brand
     m = marque or email_brand.marque(None)
     j = _jetons(m)
-    nous = not m.slug or m.slug == "oto"
     safe_title = html.escape(title or "Projet")
-    nom = html.escape(m.nom or "")
-    # Le pied nomme le produit qui partage. Sans site déclaré, pas de lien : on
-    # n'invente pas l'adresse de quelqu'un (même règle que le pied des emails).
-    if nous:
-        pied = ('Partagé via <a href="https://oto.cx">Oto</a> — la boîte à outils '
-                "d'automatisation pour agents IA.")
-    elif m.site:
-        pied = f'Partagé via <a href="https://{html.escape(m.site)}">{nom}</a>.'
-    else:
-        pied = f"Partagé via {nom}." if nom else "Projet partagé."
-    titre_suffixe = " · Oto" if nous else (f" · {nom}" if nom else "")
-    descr = ("Projet partagé via Oto." if nous
-             else (f"Projet partagé via {nom}." if nom else "Projet partagé."))
+    pied, titre_suffixe, descr = brand.mentions_de_partage(m, "Projet")
     # Le favicon est un dessin de marque : il ne suit pas un partenaire tant qu'il n'en
     # a pas déclaré un. Rien vaut mieux que le nôtre sur sa page.
-    favicon = _FAVICON_LINK if nous else ""
+    favicon = _FAVICON_LINK if brand.est_primaire(m) else ""
     crumb = (f'<a class=back href="{html.escape(home_url)}">← Retour au projet</a>'
              if home_url else "")
     wrap_cls = "wrap wide" if wide else "wrap"
@@ -360,7 +347,7 @@ def render_index(*, name: str, brief_md: str, procedures: list[dict], tables: li
     if loose_tools:
         chips = "".join(f"<span class=toolchip>{html.escape(t)}</span>" for t in loose_tools)
         loose = (f'<div class=card><h2>Autres outils</h2><div class=toolchips>{chips}</div></div>')
-    _nom = (marque.nom if marque and marque.slug and marque.slug != "oto" else "Oto")
+    _nom = brand.nom_de(marque)
     inner = (f'  <div class=eyebrow>Projet partagé · {html.escape(_nom)}</div>\n'
              f'  <h1>{html.escape(name or "Projet")}</h1>\n'
              f'  {brief_html}\n'
@@ -427,7 +414,7 @@ def render_data(*, name: str, namespace: str, columns: list[str], rows: list[dic
 
 
 def render_not_found(*, name: str = "", marque=None) -> str:
-    _nom = (marque.nom if marque and marque.slug and marque.slug != "oto" else "Oto")
+    _nom = brand.nom_de(marque)
     inner = (f'  <div class=eyebrow>{html.escape(_nom)}</div>\n  <h1>Introuvable</h1>\n'
              '  <div class=card><p class="empty">Cette page n\'existe pas ou n\'est plus '
              'partagée dans ce projet.</p></div>')

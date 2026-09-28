@@ -49,6 +49,8 @@ from typing import Optional
 # de la même façon (`from . import email_brand as _charte`) et personne ne dépend,
 # au moment de l'import, d'un attribut de l'autre — seulement à l'appel.
 from . import email as _email
+from .config import require_env
+from .tenancy import PRIMARY_SLUG as _SLUG_PRIMAIRE
 
 logger = logging.getLogger(__name__)
 
@@ -87,22 +89,42 @@ class Marque:
     bouton_encre: str
 
 
-# NOTRE charte, et elle seule. Les palettes de partenaires vivaient ici jusqu'au
-# 03/09/2026 ; elles se DÉCLARENT désormais en base (`tenants.brand`, servi par
-# `_declaree` ci-dessous), pour la même raison que leur adresse de tableau de bord :
-# accueillir le partenaire suivant demandait d'éditer ce fichier et de redéployer
-# pour lui. oto garde sa charte chaude, à l'octet près.
-# ⚠️ **Ce n'est PAS un registre de marques et ça ne doit pas le redevenir.** Une
-# entrée posée ici pour un tiers reprendrait la main sur ce qu'il déclare dès que
-# son slug manque au registre de tenants — le repli du code gagnerait en silence,
-# et on serait revenu au point de départ sans que rien ne rougisse.
-MARQUES: dict[str, Marque] = {
-    "oto": Marque(
-        slug="oto", nom="oto", site="oto.cx",
-        fond="#faf6ec", surface="#fffdf7", encre="#2c2112", discret="#7a6c50",
-        filet="#ece4d0", bouton_fond="#2c2112", bouton_encre="#fefcf5",
-    ),
-}
+# La charte du tenant PRIMAIRE — nos teintes, à l'octet. Les palettes de partenaires
+# vivaient à côté jusqu'au 03/09/2026 ; elles se DÉCLARENT désormais en base
+# (`tenants.brand`, servi par `_declaree` ci-dessous), pour la même raison que leur
+# adresse de tableau de bord : accueillir le partenaire suivant demandait d'éditer ce
+# fichier et de redéployer pour lui.
+# ⚠️ **Ce n'est PAS un registre de marques et ça ne doit pas le redevenir.**
+_TEINTES_PRIMAIRES = dict(
+    fond="#faf6ec", surface="#fffdf7", encre="#2c2112", discret="#7a6c50",
+    filet="#ece4d0", bouton_fond="#2c2112", bouton_encre="#fefcf5",
+)
+
+
+def marque_instance() -> Marque:
+    """La marque du tenant PRIMAIRE de cette instance : son NOM et son SITE sont
+    DÉCLARÉS (`OTO_BRAND_NAME`, `OTO_BRAND_SITE` — décision du 28/09/2026, #968), les
+    teintes sont celles du code. Le site était écrit ici en dur : toute autre instance
+    signait donc ses emails et ses pages publiques de NOTRE adresse. Lève si l'une des
+    deux manque, et `identite_instance.verifier` refuse le démarrage.
+
+    `OTO_BRAND_SITE` est un hôte nu (`exemple.tld`) : il s'affiche en pied d'email et
+    devient `https://<site>` dans le pied des pages publiques."""
+    return Marque(slug=_SLUG_PRIMAIRE, nom=nom_instance(), site=site_instance(),
+                  **_TEINTES_PRIMAIRES)
+
+
+def nom_instance() -> str:
+    return require_env("OTO_BRAND_NAME").strip()
+
+
+def site_instance() -> str:
+    site = require_env("OTO_BRAND_SITE").strip()
+    if "/" in site or ":" in site:
+        raise RuntimeError(
+            f"OTO_BRAND_SITE vaut {site!r} : attendu un hôte nu (exemple.tld), sans "
+            "schéma ni chemin.")
+    return site
 
 # Le gabarit d'un slug qu'on ne connaît pas : les gris neutres du système partagé
 # par les deux fronts, et le NOM qu'on nous a donné. Pas de site (on ne l'invente
@@ -158,29 +180,24 @@ def marque(slug: Optional[str]) -> Marque:
 
     On ne replie PAS sur oto : écrire « oto » en pied de l'email d'un partenaire est
     le faux que 7d10a798 a corrigé côté texte, et il reviendrait ici par la porte du
-    dessin. Sans nom du tout (`None`, `""`), c'est bien oto — le défaut de
-    `front_brand`, dont NULL veut dire « la plateforme ».
+    dessin. Sans nom du tout (`None`, `""`), c'est la marque que l'instance déclare
+    (`marque_instance`) — le défaut de `front_brand`, dont NULL veut dire « la
+    plateforme ».
 
-    **Ordre depuis le 03/09/2026 : ce que le TENANT déclare d'abord**, `MARQUES`
-    ensuite. Une palette de partenaire écrite dans notre code oblige à nous
-    redéployer pour accueillir le suivant — c'est le même défaut que son adresse de
-    tableau de bord, corrigé de la même façon et au même endroit. `MARQUES` ne
-    garde plus que la nôtre : depuis le 03/09/2026, aucune palette de partenaire ne
-    vit dans ce fichier, et un slug tiers sans déclaration prend le gabarit neutre à
-    son nom — jamais nos couleurs.
+    **Ordre depuis le 03/09/2026 : ce que le TENANT déclare d'abord**, jamais une
+    palette de partenaire écrite dans notre code : elle obligerait à nous redéployer
+    pour accueillir le suivant — c'est le même défaut que son adresse de tableau de
+    bord, corrigé de la même façon et au même endroit. Un slug tiers sans déclaration
+    prend le gabarit neutre à son nom — jamais les teintes du tenant primaire.
     """
     s = (slug or "").strip()
-    if not s:
-        return MARQUES["oto"]
-    if s.lower() != "oto":
-        # Le tenant primaire ne se surcharge pas : notre charte n'est pas une
-        # configuration, et une ligne en base ne doit pas pouvoir repeindre oto.
-        declaree = _declaree(s)
-        if declaree is not None:
-            return declaree
-    connue = MARQUES.get(s.lower())
-    if connue is not None:
-        return connue
+    if not s or s.lower() == _SLUG_PRIMAIRE:
+        # Le tenant primaire ne se surcharge pas en base : sa marque est celle que
+        # l'instance déclare, et une ligne de registre ne doit pas pouvoir la repeindre.
+        return marque_instance()
+    declaree = _declaree(s)
+    if declaree is not None:
+        return declaree
     return Marque(**{**_NEUTRE.__dict__, "slug": s, "nom": s})
 
 

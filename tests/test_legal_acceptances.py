@@ -13,6 +13,7 @@ vraie table ne sert plus.
 import pytest
 
 from oto_mcp import db, legal_docs
+from _documents_legaux import bumper
 from oto_mcp.capabilities import me_legal
 from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
 
@@ -57,7 +58,7 @@ def test_accept_access_clears_access_only(store):
     assert st["contexts"]["access"]["outstanding"] == []
     assert st["contexts"]["purchase"]["outstanding"] == ["cgv", "dpa"]
     terms = next(d for d in st["documents"] if d["slug"] == "terms")
-    assert terms["accepted"] and terms["accepted_version"] == legal_docs.CURRENT_DOCS["terms"]["version"]
+    assert terms["accepted"] and terms["accepted_version"] == legal_docs.current_docs()["terms"]["version"]
 
 
 def test_accept_purchase_clears_all(store):
@@ -68,7 +69,7 @@ def test_accept_purchase_clears_all(store):
 
 def test_version_bump_reopens(store, monkeypatch):
     me_legal._accept(_ctx(), me_legal.AcceptInput(context="access"))
-    monkeypatch.setitem(legal_docs.CURRENT_DOCS["terms"], "version", "999.0")
+    bumper(monkeypatch, "terms", "999.0")
     st = me_legal._status("s1")
     assert st["contexts"]["access"]["outstanding"] == ["terms"]
 

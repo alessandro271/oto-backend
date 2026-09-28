@@ -38,7 +38,8 @@ CGV ne les rend opposables à personne — il faut une **acceptation horodatée*
 `subscribe` prend donc l'appelant (`sub`, **obligatoire** : accepter est un acte de
 personne, pas d'organisation) et refuse **409 `legal_required`** tant que les trois
 documents ne sont pas acceptés **à leur version courante**. Un bump de version dans
-`legal_docs.CURRENT_DOCS` rouvre le gate ; une acceptation périmée ne vaut pas.
+`OTO_LEGAL_DOCS` (les documents que l'instance déclare, `legal_docs.current_docs`) rouvre
+le gate ; une acceptation périmée ne vaut pas.
 
 ### Deux préalables, un seul aller-retour
 
@@ -248,7 +249,7 @@ et ne garde qu'une ligne par document, ce qui est l'état, pas la preuve.
 elle ne tient que dans un sens — la recopie de la projection laisse bien ces colonnes
 nulles, et une acceptation ordinaire arrivée hors requête REST aussi (paragraphe
 ci-dessus). L'origine d'une ligne ne se déduit donc pas. Ensuite, `legal_docs.
-CURRENT_DOCS` ne garde que la version **courante** de chaque document : une acceptation
+current_docs()` ne garde que la version **courante** de chaque document : une acceptation
 d'une version passée ne peut pas être reliée au texte qu'elle a accepté, et l'`url` reste
 `null` plutôt que de pointer le texte d'aujourd'hui. Retrouver le texte d'époque se fait
 dans le dépôt du site, pas ici.

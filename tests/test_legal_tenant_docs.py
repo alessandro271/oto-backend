@@ -8,6 +8,7 @@ from __future__ import annotations
 import pytest
 
 from oto_mcp import db, legal_docs, tenancy
+from _documents_legaux import bumper
 from oto_mcp.capabilities import me_legal, tenant_legal_docs_admin as tld
 from oto_mcp.capabilities._authz import PLATFORM_ADMIN
 from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
@@ -23,13 +24,13 @@ def test_primary_tenant_short_circuits_without_a_db_call(monkeypatch):
     def _boom(tenant_slug):
         raise AssertionError("docs_for(oto) hit the DB — it must short-circuit")
     monkeypatch.setattr(db, "get_tenant_legal_docs", _boom)
-    assert legal_docs.docs_for(tenancy.PRIMARY_SLUG) is legal_docs.CURRENT_DOCS
-    assert legal_docs.docs_for("") is legal_docs.CURRENT_DOCS
+    assert legal_docs.docs_for(tenancy.PRIMARY_SLUG) == legal_docs.current_docs()
+    assert legal_docs.docs_for("") == legal_docs.current_docs()
 
 
 def test_tenant_without_override_falls_back_to_platform_default(monkeypatch):
     monkeypatch.setattr(db, "get_tenant_legal_docs", lambda slug: {})
-    assert legal_docs.docs_for("acme") is legal_docs.CURRENT_DOCS
+    assert legal_docs.docs_for("acme") == legal_docs.current_docs()
 
 
 def test_tenant_override_replaces_only_its_own_slug(monkeypatch):
@@ -40,8 +41,8 @@ def test_tenant_override_replaces_only_its_own_slug(monkeypatch):
     docs = legal_docs.docs_for("acme")
     assert docs["terms"] == {"version": "1.0", "label": "Acme Terms", "url": "https://acme.test/terms"}
     # cgv/dpa untouched — Acme hasn't declared its own.
-    assert docs["cgv"] == legal_docs.CURRENT_DOCS["cgv"]
-    assert docs["dpa"] == legal_docs.CURRENT_DOCS["dpa"]
+    assert docs["cgv"] == legal_docs.current_docs()["cgv"]
+    assert docs["dpa"] == legal_docs.current_docs()["dpa"]
 
 
 # ── me_legal is tenant-aware ──────────────────────────────────────────────────
@@ -78,7 +79,7 @@ def test_acme_sub_sees_acme_terms_and_still_owes_them(monkeypatch, acceptances):
     # An oto sub in the SAME process still owes oto's own terms, unaffected.
     oto_st = me_legal._get(ResolvedCtx(sub="u2", org_id=None, role="member"), me_legal._NoInput())
     oto_terms = next(d for d in oto_st["documents"] if d["slug"] == "terms")
-    assert oto_terms["version"] == legal_docs.CURRENT_DOCS["terms"]["version"]
+    assert oto_terms["version"] == legal_docs.current_docs()["terms"]["version"]
 
 
 def test_accept_records_the_tenants_own_version_not_otos(monkeypatch, acceptances):
@@ -96,7 +97,7 @@ def test_accept_records_the_tenants_own_version_not_otos(monkeypatch, acceptance
     assert terms["accepted"] is True and terms["accepted_version"] == "1.0"
 
     # Oto bumping ITS OWN terms afterwards must not reopen Acme's gate.
-    monkeypatch.setitem(legal_docs.CURRENT_DOCS["terms"], "version", "999.0")
+    bumper(monkeypatch, "terms", "999.0")
     st2 = me_legal._get(ctx, me_legal._NoInput())
     assert st2["contexts"]["access"]["outstanding"] == []
 
@@ -139,7 +140,7 @@ def test_set_then_list_reports_the_override_and_the_defaults(tenant_docs):
     assert by_slug["terms"]["overridden"] is True
     assert by_slug["terms"]["version"] == "1.0"
     assert by_slug["cgv"]["overridden"] is False
-    assert by_slug["cgv"]["version"] == legal_docs.CURRENT_DOCS["cgv"]["version"]
+    assert by_slug["cgv"]["version"] == legal_docs.current_docs()["cgv"]["version"]
 
 
 def test_delete_falls_back_to_the_platform_default(tenant_docs):

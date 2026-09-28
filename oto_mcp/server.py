@@ -1019,6 +1019,13 @@ def main():
     from .access import entitlements as droits_declares
     droits_declares.verifier_defauts()
 
+    # Identité de l'instance (#968, décision du 28/09/2026) : adresses, email, marque,
+    # contrats — tout ce qui pointerait chez quelqu'un d'autre sans déclaration. Un
+    # manque refuse le démarrage ICI, en nommant tout ce qui manque, avant d'avoir rien
+    # écrit. Cf. `identite_instance`.
+    from . import identite_instance
+    identite_instance.verifier()
+
     # Les boucles de fond, composées AVANT de préparer la base : un process qui ne sait
     # pas s'il est la production refuse de démarrer ICI, sans avoir rien écrit (plus
     # loin, un démarrage avorté a déjà joué init_db et les backfills). Hors production,

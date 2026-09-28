@@ -27,7 +27,7 @@ from oto_mcp import email_brand as B
 _URL = "https://exemple.test/x"
 
 # La marque d'un partenaire fictif, posée pour ces tests seuls. Elle a remplacé celle
-# d'un client réel (03/09/2026), qui vivait dans `email_brand.MARQUES` : la palette
+# d'un client réel (03/09/2026), qui vivait dans le code d'`email_brand` : la palette
 # d'un partenaire se DÉCLARE désormais en base, elle n'est plus dans notre code — et
 # une propriété générale ne doit de toute façon pas s'éprouver sur un client nommé,
 # dans un dépôt public. ⚠️ Ses sept teintes sont TOUTES distinctes de celles d'oto :
@@ -41,9 +41,11 @@ _PARTENAIRE = B.Marque(
 
 @pytest.fixture(autouse=True)
 def _marque_de_test(monkeypatch):
-    """Enregistre `_PARTENAIRE` le temps du test — `marque()` la sert comme n'importe
-    quelle marque connue, sans toucher au registre de tenants."""
-    monkeypatch.setitem(B.MARQUES, "pilote", _PARTENAIRE)
+    """Déclare `_PARTENAIRE` le temps du test, par le seul chemin qu'a une marque de
+    partenaire : sa déclaration (`_declaree`, lue du registre de tenants)."""
+    declaree = B._declaree
+    monkeypatch.setattr(B, "_declaree",
+                        lambda slug: _PARTENAIRE if slug.lower() == "pilote" else declaree(slug))
 
 
 @pytest.fixture
@@ -85,7 +87,7 @@ def _tous_les_envois(brand: str, locale: str | None = None) -> list:
 def test_un_email_de_partenaire_ne_porte_aucune_couleur_d_oto(envoye):
     """La propriété qui compte : chez le destinataire d'un partenaire, RIEN du dessin d'oto ne
     doit ressortir. Assertion par l'absence, parce que c'est l'absence qui manquait."""
-    oto, partenaire = B.MARQUES["oto"], _PARTENAIRE
+    oto, partenaire = B.marque_instance(), _PARTENAIRE
     couleurs_oto = {oto.fond, oto.surface, oto.encre, oto.discret, oto.filet,
                     oto.bouton_fond, oto.bouton_encre}
     couleurs_part = {partenaire.fond, partenaire.surface, partenaire.encre,
@@ -113,20 +115,20 @@ def test_la_marque_ecrite_est_le_nom_du_produit_pas_le_slug(envoye):
 
 def test_un_slug_inconnu_prend_le_gabarit_neutre_et_SON_nom(envoye):
     """`front_brand` est une colonne, pas une énum : un tenant déclaré demain y écrira
-    son slug avant que `MARQUES` le connaisse. Le repli n'est PAS oto — écrire le nom
+    son slug avant de déclarer sa marque. Le repli n'est PAS oto — écrire le nom
     d'oto chez un partenaire est exactement le faux qu'on répare."""
     for envoi in _tous_les_envois("partenaire"):
         envoi()
         html = envoye["html"]
         assert "partenaire" in html
         assert "oto.cx" not in html
-        assert B.MARQUES["oto"].encre not in html
+        assert B.marque_instance().encre not in html
 
 
 def test_sans_marque_c_est_oto_le_defaut():
     """`orgs.front_brand IS NULL` veut dire « la plateforme », pas « inconnu »."""
-    assert B.marque(None) is B.MARQUES["oto"]
-    assert B.marque("") is B.MARQUES["oto"]
+    assert B.marque(None) == B.marque_instance()
+    assert B.marque("") == B.marque_instance()
     assert B.marque("PILOTE") is _PARTENAIRE
 
 
@@ -207,7 +209,7 @@ def test_le_bouton_n_offre_aucun_guillemet_nu_a_une_url_d_agent():
     """`cta_url` vient d'un agent, et l'adresse est rendue DEUX fois : dans `href` et
     en clair dessous. Les deux sont échappées en attribut — une donnée d'entrée ne
     ressort jamais avec un guillemet nu, où qu'elle atterrisse."""
-    bouton = B.bouton(B.MARQUES["oto"], 'https://e.test/?a="b" onmouseover="y', "ouvrir")
+    bouton = B.bouton(B.marque_instance(), 'https://e.test/?a="b" onmouseover="y', "ouvrir")
     assert 'onmouseover="' not in bouton and bouton.count("<a ") == 1
     assert bouton.count("&quot;") == 6, "3 guillemets de l'URL × 2 rendus"
 
@@ -246,4 +248,4 @@ def test_email_send_signe_la_marque_de_l_expediteur_pas_la_notre(monkeypatch):
                    dry_run=True)
     assert "Pilote · pilote.test" in out["html"]
     assert "oto.cx" not in out["html"]
-    assert B.MARQUES["oto"].encre not in out["html"]
+    assert B.marque_instance().encre not in out["html"]

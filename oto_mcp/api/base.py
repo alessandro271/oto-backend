@@ -23,7 +23,6 @@ ce qui est servi.
 from __future__ import annotations
 
 import functools
-import os
 from typing import Awaitable, Callable
 
 from fastmcp.server.auth.providers.jwt import JWTVerifier
@@ -31,7 +30,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
-from .. import db
+from .. import config, db
 from ..auth import platform_worker, service_identity, token_scopes
 from ..tenant_migration import alias_drain_armed
 from .. import account_suspension
@@ -60,34 +59,10 @@ def en_thread(handler):
 
 
 def _allowed_origins() -> list[str]:
-    raw = os.environ.get("OTO_MCP_CORS_ORIGINS")
-    if raw:
-        return [o.strip() for o in raw.split(",") if o.strip()]
-    return [
-        "https://oto.cx",                   # domaine marketing canonique (cutover ADR 0040)
-        "https://www.oto.cx",
-        "https://manage.oto.cx",            # oto-dashboard PROD (cutover ADR 0040)
-        "https://oto.ninja",                # preprod/canari + redirections
-        "https://www.oto.ninja",
-        "https://app.oto.ninja",
-        # noqa: CLIENT — origines FONCTIONNELLES d'un front tiers (repli seulement :
-        # les deux box posent OTO_MCP_CORS_ORIGINS, cf. CLAUDE.md). Les retirer casse
-        # le CORS d'un dev sans env. Relocalisation = 2e volet de oto-private#85.
-        "https://app.tulina.ai",            # noqa: CLIENT — front tiers PROD
-        "https://tulina.oto.zone",          # noqa: CLIENT — front tiers PREPROD
-        "http://localhost:5173",
-        "http://localhost:4173",
-        "http://localhost:5182",
-        "http://localhost:5184",
-        "http://localhost:5192",            # oto-dashboard dev (ADR 0007)
-        "http://localhost:5193",            # front tiers en dev, ports alternatifs
-        "http://localhost:5194",
-        "http://localhost:5195",
-        "http://localhost:5196",
-        "https://dashboard.otoninja.dev",   # oto-dashboard via Caddy local
-        "https://dashboard.oto.ninja",      # oto-dashboard prod
-    ]
-
+    """Les origines que CETTE instance déclare (`config.cors_origins`, #968) — aucune
+    liste en dur : lue à chaque requête, donc un changement d'environnement prend effet
+    au redémarrage sans redéploiement."""
+    return config.cors_origins()
 
 
 def _cors_headers(origin: str | None) -> dict[str, str]:

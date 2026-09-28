@@ -26,6 +26,11 @@ def _mail_from() -> str:
     return require_env("OTO_MAIL_FROM")
 
 
+def _contact_to() -> str:
+    """La boîte qui reçoit les réponses d'un email composé sans `reply_to` explicite."""
+    return require_env("OTO_CONTACT_TO")
+
+
 def _esc(s: str) -> str:
     return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
@@ -364,5 +369,5 @@ def send_composed_email(
                                  locale=locale, unsubscribe_url=unsubscribe_url)
     # `require_env` seulement si `reply_to` est absent (court-circuit `or`) — sans
     # elle, le repli irait vers NOTRE boîte personnelle (#968).
-    rt = reply_to or require_env("OTO_CONTACT_TO")
+    rt = reply_to or _contact_to()
     return _send(to, subject, html, reply_to=rt, from_email=format_from(from_email, from_name))

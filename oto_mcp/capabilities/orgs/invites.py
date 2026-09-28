@@ -23,7 +23,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from ... import db, org_store
+from ... import config, db, org_store
 from ...auth import facade as oauth_facade
 from ... import email as email_mod  # alias : le param `email` d'emit_invitation masquerait le module
 from .._authz import ORG_ADMIN_OF, SUB_ONLY
@@ -37,8 +37,8 @@ _INVITE_TTL_DAYS = int(os.environ.get("OTO_MCP_INVITE_TTL_DAYS", "7"))
 def _invite_base(front_base: str | None = None) -> str:
     """Base PUBLIQUE des liens d'invitation partagés (court, marketing).
     `front_base` = le front qui héberge l'org (`orgs.front_base_url`, ex. un tenant tiers) ;
-    absent = oto, où `oto.cx/invitation/...` redirige vers le dashboard (règle Caddy)."""
-    return (front_base or os.environ.get("OTO_INVITE_BASE_URL", "https://oto.cx")).rstrip("/")
+    absent = la base que l'instance DÉCLARE (`config.invite_base_url`, sans défaut)."""
+    return front_base.rstrip("/") if front_base else config.invite_base_url()
 
 
 def _nominal_url(token: str, email_addr: str | None = None, *,

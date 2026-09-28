@@ -31,9 +31,8 @@ import uvicorn
 from starlette.applications import Starlette
 from starlette.routing import Route
 
-# Une origine de la liste par défaut (`base._allowed_origins`) : le dashboard de
-# production. Prise dans la vraie liste, jamais fabriquée — c'est elle qui a été
-# refusée le 09/09.
+# Le dashboard de production — c'est lui qui a été refusé le 09/09. L'instance le
+# DÉCLARE (`OTO_MCP_CORS_ORIGINS`, sans liste de repli depuis #968).
 ORIGINE = "https://manage.oto.cx"
 ETRANGERE = "https://exemple.invalid"
 
@@ -57,9 +56,9 @@ def _servi(app):
 
 
 @pytest.fixture
-def sans_liste_env(monkeypatch):
-    """La liste d'origines SERVIE par défaut, sans l'`OTO_MCP_CORS_ORIGINS` du poste."""
-    monkeypatch.delenv("OTO_MCP_CORS_ORIGINS", raising=False)
+def liste_declaree(monkeypatch):
+    """La liste d'origines que l'instance déclare — `ORIGINE` seule, rien du poste."""
+    monkeypatch.setenv("OTO_MCP_CORS_ORIGINS", ORIGINE)
 
 
 # ── le PDF d'une facture ─────────────────────────────────────────────────────
@@ -86,7 +85,7 @@ def _app_pdf(monkeypatch, *, pdf: bytes = b"%PDF-1.4 test", nom: str = "F-2026-0
         json_error=base._json_error))
 
 
-def test_le_pdf_sort_avec_son_cors_sur_un_vrai_socket(monkeypatch, sans_liste_env):
+def test_le_pdf_sort_avec_son_cors_sur_un_vrai_socket(monkeypatch, liste_declaree):
     """LE test du lot : la réponse qui répondait 200 sans que le front la voie."""
     with _servi(_app_pdf(monkeypatch)) as base_url:
         rep = requests.get(f"{base_url}/api/me/billing/invoices/1/pdf",
@@ -102,7 +101,7 @@ def test_le_pdf_sort_avec_son_cors_sur_un_vrai_socket(monkeypatch, sans_liste_en
     assert "Content-Disposition" in rep.headers.get("access-control-expose-headers", "")
 
 
-def test_une_origine_hors_liste_nobtient_toujours_rien(monkeypatch, sans_liste_env):
+def test_une_origine_hors_liste_nobtient_toujours_rien(monkeypatch, liste_declaree):
     """Poser le CORS n'est pas l'ouvrir : l'allowlist décide, comme pour le JSON."""
     with _servi(_app_pdf(monkeypatch)) as base_url:
         rep = requests.get(f"{base_url}/api/me/billing/invoices/1/pdf",
@@ -112,7 +111,7 @@ def test_une_origine_hors_liste_nobtient_toujours_rien(monkeypatch, sans_liste_e
     assert "access-control-allow-origin" not in rep.headers
 
 
-def test_un_nom_de_fichier_ne_compose_pas_un_entete(monkeypatch, sans_liste_env):
+def test_un_nom_de_fichier_ne_compose_pas_un_entete(monkeypatch, liste_declaree):
     """Le numéro vient du FOURNISSEUR : CR/LF et guillemets n'atteignent pas le fil."""
     app = _app_pdf(monkeypatch, nom='F-2026\r\nX-Injecte: 1"')
     with _servi(app) as base_url:
@@ -126,7 +125,7 @@ def test_un_nom_de_fichier_ne_compose_pas_un_entete(monkeypatch, sans_liste_env)
 
 # ── l'export ZIP d'un projet : le même défaut, la même correction ────────────
 
-def test_lexport_zip_dun_projet_porte_le_meme_cors(monkeypatch, sans_liste_env):
+def test_lexport_zip_dun_projet_porte_le_meme_cors(monkeypatch, liste_declaree):
     from oto_mcp import db, doc_export, ownership
     from oto_mcp.api import base
     from oto_mcp.api import projects as api_projects

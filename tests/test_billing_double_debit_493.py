@@ -51,7 +51,7 @@ def _tout_accepte(monkeypatch):
     from oto_mcp import db as oto_db, legal_docs
     monkeypatch.setattr(oto_db, "get_legal_acceptances", lambda sub: {
         slug: {"version": meta["version"], "accepted_at": "2026-08-25 10:00:00"}
-        for slug, meta in legal_docs.CURRENT_DOCS.items()})
+        for slug, meta in legal_docs.current_docs().items()})
 PRIX_HT = billing.PLANS["standard"]["amount"]
 # Ce que le PSP encaisse réellement depuis #486 : 19,00 € HT + 20 % = 22,80 €.
 PRIX = PRIX_HT + PRIX_HT // 5

@@ -25,6 +25,7 @@ survit au filtre parce qu'elle contient déjà « passed ».
 """
 from __future__ import annotations
 
+import json
 import os
 import socket
 import subprocess
@@ -174,6 +175,30 @@ def _email_transactionnel(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OTO_MAILER_URL", "https://mailer.oto.zone/api/send")
     monkeypatch.setenv("OTO_MAIL_FROM", "Oto <oto@otomata.tech>")
     monkeypatch.setenv("OTO_CONTACT_TO", "alexis@otomata.tech")
+
+
+# ── Le reste de l'identité de l'instance (décision du 28/09/2026, #968 : refus partout,
+# `identite_instance.verifier`) — invitations, CORS, contrats, marque. Valeurs gréées =
+# celles de notre production, même raison que le domaine des projets ci-dessus : des
+# bancs affirment sur leur forme littérale (origine `manage.oto.cx`, signature
+# `oto · oto.cx`, pied des pages publiques). Un banc qui bumpe une version de document
+# repose `OTO_LEGAL_DOCS` : `legal_docs.current_docs()` la relit à chaque appel.
+DOCUMENTS_LEGAUX = {
+    "terms": {"version": "3.1", "label": "CGU", "url": "https://oto.cx/terms"},
+    "cgv": {"version": "2.1", "label": "CGV", "url": "https://oto.cx/cgv"},
+    "dpa": {"version": "2.1", "label": "DPA", "url": "https://oto.cx/dpa"},
+}
+ORIGINES_CORS = ("https://oto.cx", "https://manage.oto.cx", "https://app.oto.ninja",
+                 "https://dashboard.oto.ninja", "http://localhost:5192")
+
+
+@pytest.fixture(autouse=True)
+def _identite_de_l_instance(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OTO_INVITE_BASE_URL", "https://oto.cx")
+    monkeypatch.setenv("OTO_MCP_CORS_ORIGINS", ",".join(ORIGINES_CORS))
+    monkeypatch.setenv("OTO_LEGAL_DOCS", json.dumps(DOCUMENTS_LEGAUX))
+    monkeypatch.setenv("OTO_BRAND_NAME", "oto")
+    monkeypatch.setenv("OTO_BRAND_SITE", "oto.cx")
 
 
 # **Comment vérifier que ce gréement ne CACHE rien** — à refaire après tout changement

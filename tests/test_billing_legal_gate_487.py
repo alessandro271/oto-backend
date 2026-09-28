@@ -22,6 +22,7 @@ from __future__ import annotations
 import pytest
 
 from oto_mcp import billing, billing_consent, db, legal_docs
+from _documents_legaux import bumper
 from oto_mcp.capabilities import billing as cap_billing
 from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
 from oto_mcp.db import billing as db_billing
@@ -45,7 +46,7 @@ def _acceptations(**versions) -> dict:
 
 def _tout_a_jour() -> dict:
     return _acceptations(**{slug: meta["version"]
-                            for slug, meta in legal_docs.CURRENT_DOCS.items()})
+                            for slug, meta in legal_docs.current_docs().items()})
 
 
 @pytest.fixture
@@ -89,7 +90,7 @@ def test_sans_acceptation_la_souscription_est_refusee_en_nommant_les_trois_docum
     # Le refus se suffit à lui-même : chaque document, SA version courante, SON
     # adresse. Un tunnel n'a pas à faire un second appel pour peindre l'écran.
     for doc in manque["documents"]:
-        courant = legal_docs.CURRENT_DOCS[doc["slug"]]
+        courant = legal_docs.current_docs()[doc["slug"]]
         assert (doc["version"], doc["url"], doc["label"]) == (
             courant["version"], courant["url"], courant["label"])
         assert doc["accepted_version"] is None, "jamais accepté, pas périmé"
@@ -101,7 +102,7 @@ def test_sans_acceptation_la_souscription_est_refusee_en_nommant_les_trois_docum
 
 
 def test_une_acceptation_partielle_ne_nomme_que_ce_qui_manque(scene):
-    scene(acceptances=_acceptations(terms=legal_docs.CURRENT_DOCS["terms"]["version"]))
+    scene(acceptances=_acceptations(terms=legal_docs.current_docs()["terms"]["version"]))
     with pytest.raises(billing_consent.PurchaseBlocked) as e:
         billing.subscribe(ORG, "standard", RETURN_URL, sub=SUB)
     (manque,) = e.value.blockers
@@ -127,7 +128,7 @@ def test_une_acceptation_a_une_vieille_version_est_refusee_en_nommant_la_courant
 
     (manque,) = e.value.blockers
     for doc in manque["documents"]:
-        assert doc["version"] == legal_docs.CURRENT_DOCS[doc["slug"]]["version"]
+        assert doc["version"] == legal_docs.current_docs()[doc["slug"]]["version"]
         # `accepted_version` distingue « jamais accepté » de « accepté à une version
         # périmée » — sans lui, le payeur est renvoyé chercher une case déjà cochée.
         assert doc["accepted_version"] == "1.0"
@@ -138,7 +139,7 @@ def test_un_bump_de_version_rouvre_un_gate_qui_etait_passe(scene, monkeypatch):
     scene(acceptances=_tout_a_jour())
     billing.subscribe(ORG, "standard", RETURN_URL, sub=SUB)      # passe
 
-    monkeypatch.setitem(legal_docs.CURRENT_DOCS["cgv"], "version", "9.0")
+    bumper(monkeypatch, "cgv", "9.0")
     with pytest.raises(billing_consent.PurchaseBlocked) as e:
         billing.subscribe(ORG, "standard", RETURN_URL, sub=SUB)
     (manque,) = e.value.blockers

@@ -1,52 +1,45 @@
-"""Documents légaux — SOURCE DE VÉRITÉ (version/label/url), miroir de
-`oto-websites/web/src/legal`.
+"""Documents légaux — métadonnées (version/label/url) DÉCLARÉES par l'instance.
 
-Le contenu des docs vit sur oto.cx (routes `/terms`, `/cgv`, `/dpa`) ; ici on ne
-tient que les MÉTADONNÉES (slug → version courante + libellé + URL) et la carte des
-CONTEXTES (quels docs sont requis pour « accéder » vs « acheter »). Le backend
-`me.legal` en dérive le reste-à-accepter ; la table `legal_acceptances` ne trace que
-le consentement.
+Le contenu des docs vit sur le site de l'opérateur de l'instance ; ici on ne tient que
+les MÉTADONNÉES (slug → version courante + libellé + URL) et la carte des CONTEXTES
+(quels docs sont requis pour « accéder » vs « acheter »). Le backend `me.legal` en
+dérive le reste-à-accepter ; la table `legal_acceptances` ne trace que le consentement.
 
-⚠️ Tenir aligné avec `web/src/legal` : à chaque bump de `current` d'un doc côté site,
-bumper `version` ici — sinon un doc modifié ne redemande pas l'acceptation (ou en
-redemande une périmée). Versions au 2026-09-05 : terms 3.1, cgv 2.1, dpa 2.1.
+**Déclarées, jamais écrites ici** (décision du 28/09/2026, oto-backend#968) : les
+métadonnées vivaient en dur dans ce fichier, URL de NOTRE site comprises — toute autre
+instance faisait donc accepter NOS contrats à ses utilisateurs. Elles viennent
+désormais de `OTO_LEGAL_DOCS` (JSON, un objet par slug de `CONTEXTS`), sans défaut :
+absente ou incomplète, `current_docs()` lève en nommant ce qui manque, et
+`identite_instance.verifier` refuse le démarrage.
 
-⚠️ **Cet alignement a dérivé une fois, et il a tenu huit jours** (oto-websites#74) :
-les textes v2.1/v3.1 étaient écrits et servis sur oto.cx depuis le 28/08, ce fichier
-était resté au 09/07. Conséquence pendant cette fenêtre : les clients gardaient
-l'acceptation d'une CGV qui nommait **Stancer** comme prestataire de paiement — alors
-que le service encaisse par Mollie depuis le 24/07 — et affichait des montants qui ne
-sont plus pratiqués. Les textes corrigés existaient, personne n'était invité à les
-accepter.
+⚠️ **Le bump de version est un geste en deux endroits** : le texte publié sur le site
+(`current` côté site) et la `version` déclarée dans l'environnement de l'instance.
+Sans le second, un doc modifié ne redemande pas l'acceptation. Cet alignement a dérivé
+une fois, huit jours durant (oto-websites#74) : les clients gardaient l'acceptation
+d'une CGV périmée alors que le texte corrigé était en ligne. **Aucun banc ne peut
+détecter cette dérive** — les deux vérités vivent hors de ce dépôt ; la garde est
+humaine, et il faut le savoir plutôt que de croire le contraire.
 
-⚠️ **Aucun banc ne peut détecter cette dérive**, et il faut le savoir plutôt que de
-croire le contraire : les deux vérités vivent dans deux dépôts (`current` dans
-`oto-websites/web/src/legal/*/index.ts`, `version` ici), et la CI du backend ne voit
-pas l'autre. La garde est humaine — le bump côté site et le bump ici sont **un seul
-geste en deux endroits**, et celui-ci est le second.
-
-**Un tenant tiers a ses PROPRES documents, pas les nôtres** — même besoin
-que `orgs.front_base_url`/`front_brand` (invitations) ou `guides` scope `tenant`
-(socle d'instructions) : une donnée servie à l'utilisateur qui ne peut pas rester
-celle de la plateforme primaire. `docs_for` en est le seam : un override par
-(tenant, slug) vit dans `tenant_legal_docs` (table, PAS le registre `tenancy.py` —
-lu en LIVE, sans redémarrage) ; absent, le slug garde son défaut `CURRENT_DOCS`
-tel quel. Un tenant sans override — le cas de la plupart d'entre eux aujourd'hui — voit donc
-exactement les documents d'oto, jusqu'à ce qu'une ligne soit posée pour lui.
+**Un tenant tiers a ses PROPRES documents** — même besoin que
+`orgs.front_base_url`/`front_brand` (invitations) ou `guides` scope `tenant` : `docs_for`
+en est le seam. Un override par (tenant, slug) vit dans `tenant_legal_docs` (table, lue
+en LIVE, sans redémarrage) ; absent, le slug garde la déclaration de l'instance.
 """
 from __future__ import annotations
 
+import json
 from typing import Optional
 
 from . import db, tenancy
+from .config import require_env
 
-# slug → métadonnées de la VERSION COURANTE (miroir de web/src/legal `current`).
-# Défaut plateforme — s'applique à tout tenant sans override déclaré.
-CURRENT_DOCS: dict[str, dict[str, str]] = {
-    "terms": {"version": "3.1", "label": "CGU", "url": "https://oto.cx/terms"},
-    "cgv":   {"version": "2.1", "label": "CGV", "url": "https://oto.cx/cgv"},
-    "dpa":   {"version": "2.1", "label": "DPA", "url": "https://oto.cx/dpa"},
-}
+_ENV = "OTO_LEGAL_DOCS"
+_CHAMPS = ("version", "label", "url")
+
+
+class DocumentsLegauxMalDeclares(RuntimeError):
+    """`OTO_LEGAL_DOCS` est posée mais ne décrit pas les documents attendus."""
+
 
 # Contexte → docs requis. `access` = à l'inscription (CGU) ; `purchase` = à l'achat.
 # Un override de tenant ne peut pas AJOUTER de slug à un contexte — seulement
@@ -57,21 +50,60 @@ CONTEXTS: dict[str, list[str]] = {
 }
 
 
+def slugs_attendus() -> tuple[str, ...]:
+    """Chaque document qu'un contexte exige, une fois, dans l'ordre de `CONTEXTS`."""
+    return tuple(dict.fromkeys(slug for slugs in CONTEXTS.values() for slug in slugs))
+
+
+def current_docs() -> dict[str, dict[str, str]]:
+    """Les métadonnées que l'instance DÉCLARE (`OTO_LEGAL_DOCS`), validées : exactement
+    les slugs de `CONTEXTS`, chacun avec `version`, `label` et `url` non vides. Relue et
+    revalidée à chaque appel — une variable d'environnement ne change pas en cours de
+    process, mais un dict partagé muterait sous les pieds de l'appelant suivant.
+
+    Lève `RuntimeError` si la variable manque, `DocumentsLegauxMalDeclares` si elle
+    ne décrit pas les documents attendus — jamais un défaut à la place."""
+    brut = require_env(_ENV)
+    try:
+        declares = json.loads(brut)
+    except ValueError as exc:
+        raise DocumentsLegauxMalDeclares(f"{_ENV} n'est pas du JSON lisible : {exc}") from exc
+    if not isinstance(declares, dict):
+        raise DocumentsLegauxMalDeclares(
+            f"{_ENV} doit être un objet {{slug: {{version, label, url}}}}.")
+    attendus = slugs_attendus()
+    problemes = []
+    if set(declares) != set(attendus):
+        problemes.append(f"slugs déclarés {sorted(declares)}, attendus {sorted(attendus)}")
+    for slug in attendus:
+        meta = declares.get(slug)
+        if not isinstance(meta, dict):
+            continue
+        vides = [c for c in _CHAMPS if not (isinstance(meta.get(c), str) and meta[c].strip())]
+        if vides:
+            problemes.append(f"{slug} : {', '.join(vides)} manquant(s) ou vide(s)")
+    if problemes:
+        raise DocumentsLegauxMalDeclares(
+            f"{_ENV} ne décrit pas les documents légaux de l'instance — "
+            + " ; ".join(problemes) + ".")
+    return {slug: {c: declares[slug][c].strip() for c in _CHAMPS} for slug in attendus}
+
+
 def docs_for(tenant_slug: str) -> dict[str, dict[str, str]]:
-    """`CURRENT_DOCS`, avec les overrides déclarés par `tenant_slug` fusionnés
+    """`current_docs()`, avec les overrides déclarés par `tenant_slug` fusionnés
     par-dessus, slug par slug. Chaque appel relit la table — c'est ce qui rend un
     override effectif sans redéploiement ni redémarrage du process.
 
-    Le tenant PRIMAIRE (oto) court-circuite la lecture : `CURRENT_DOCS` EST son
-    défaut, il n'y a jamais de ligne à chercher pour lui — et ça évite un aller PG
-    par défaut sur le chemin le plus emprunté (le seul aujourd'hui, tant qu'aucun
-    tenant n'a d'override)."""
+    Le tenant PRIMAIRE court-circuite la lecture : la déclaration de l'instance EST
+    la sienne, il n'y a jamais de ligne à chercher pour lui — et ça évite un aller PG
+    sur le chemin le plus emprunté."""
+    docs = current_docs()
     if not tenant_slug or tenant_slug == tenancy.PRIMARY_SLUG:
-        return CURRENT_DOCS
+        return docs
     overrides = db.get_tenant_legal_docs(tenant_slug)
     if not overrides:
-        return CURRENT_DOCS
-    return {slug: {**meta, **overrides.get(slug, {})} for slug, meta in CURRENT_DOCS.items()}
+        return docs
+    return {slug: {**meta, **overrides.get(slug, {})} for slug, meta in docs.items()}
 
 
 # ── ce qui reste à accepter ──────────────────────────────────────────────────

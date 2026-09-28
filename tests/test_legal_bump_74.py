@@ -12,7 +12,8 @@ le MÉCANISME : qu'une acceptation d'une version antérieure redevienne due. C'e
 qui n'avait pas été éprouvé, et ce dont la valeur ne périme pas.
 
 ⚠️ Aucun banc ne peut détecter la dérive elle-même : `current` vit dans oto-websites,
-`version` vit ici, et la CI du backend ne voit pas l'autre dépôt. La garde est
+`version` est déclarée par l'instance (`OTO_LEGAL_DOCS`), et la CI du backend ne voit
+ni l'un ni l'autre. La garde est
 humaine — c'est écrit dans `legal_docs.py`, pas masqué par un test décoratif.
 """
 from __future__ import annotations
@@ -32,7 +33,7 @@ def _precedente(v: str) -> str:
 
 
 def test_une_acceptation_PERIMEE_redevient_due():
-    docs = legal_docs.CURRENT_DOCS
+    docs = legal_docs.current_docs()
     dus = legal_docs.missing_docs(_vieille(docs), docs, legal_docs.CONTEXTS["purchase"])
     assert {d["slug"] for d in dus} == {"terms", "cgv", "dpa"}, dus
 
@@ -40,7 +41,7 @@ def test_une_acceptation_PERIMEE_redevient_due():
 def test_l_acceptation_COURANTE_ne_redemande_rien():
     """L'autre moitié : un bump qui redemanderait tout à tout le monde en permanence
     ne serait pas un bump, ce serait une panne."""
-    docs = legal_docs.CURRENT_DOCS
+    docs = legal_docs.current_docs()
     a_jour = {slug: {"version": meta["version"]} for slug, meta in docs.items()}
     assert legal_docs.missing_docs(a_jour, docs,
                                    legal_docs.CONTEXTS["purchase"]) == []
@@ -56,6 +57,6 @@ def test_les_trois_documents_d_achat_sont_couverts():
 def test_chaque_document_porte_une_URL_et_un_libelle_servis():
     """Ce que l'utilisateur reçoit pour décider : sans URL, on lui demande d'accepter
     un texte qu'il ne peut pas lire."""
-    for slug, meta in legal_docs.CURRENT_DOCS.items():
-        assert meta["url"].startswith("https://oto.cx/"), slug
+    for slug, meta in legal_docs.current_docs().items():
+        assert meta["url"].startswith("https://"), slug
         assert meta["label"] and meta["version"]

@@ -10,10 +10,9 @@ contre le code ; ce script verrouille `.env.example` contre l'inventaire — la 
 complète ne peut donc plus diverger sans qu'un test le dise.
 
 Organisation du fichier produit, dans cet ordre — REQUISE d'abord (rien ne démarre
-sans elles), puis NOTRE_DEFAUT (silencieuses mais pointent chez nous tant qu'on ne les
-déclare pas), puis REGLAGE (tout le reste, à toucher seulement pour dévier du défaut) :
-chaque variable de la classe NOTRE_DEFAUT porte un commentaire qui le dit EXPLICITEMENT
-(demande de l'issue), pour qu'une instance tierce ne le découvre pas en production.
+sans elles), puis IDENTITE (ce que l'instance émet sous son nom : sans défaut, vérifiée
+au démarrage — décision du 28/09/2026), puis REGLAGE (tout le reste, à toucher
+seulement pour dévier du défaut).
 
 Usage : `python -m scripts.generer_env_example` écrit `.env.example` à la racine du
 repo. `--check` n'écrit rien et sort en erreur (1) si le fichier existant diverge de ce
@@ -36,11 +35,11 @@ _TITRES = {
     inv.Classe.REQUISE: (
         "# ── REQUISES — le boot (ou le premier appel qui en dépend) échoue\n"
         "# proprement sans elles. Aucun défaut : à poser explicitement. ──────────"),
-    inv.Classe.NOTRE_DEFAUT: (
-        "# ── DÉFAUT = UNE VALEUR À NOUS — absente, chacune pointe chez NOUS (notre\n"
-        "# domaine, notre adresse). Une instance tierce DOIT les écraser sous peine\n"
-        "# de nous envoyer du trafic qui ne nous appartient pas. Pas de garde de\n"
-        "# boot dessus (décision du 15/09/2026) : elles se documentent, c'est tout. ──"),
+    inv.Classe.IDENTITE: (
+        "# ── IDENTITÉ DE L'INSTANCE — ses adresses, ses emails, sa marque, ses\n"
+        "# contrats. Aucun défaut : toute instance les déclare (prod comprise ; en\n"
+        "# dev, dans ce .env), sinon elle refuse de démarrer (décision du\n"
+        "# 28/09/2026, `identite_instance.verifier`). ─────────────────────────────"),
     inv.Classe.REGLAGE: (
         "# ── RÉGLAGES — défaut neutre légitime en toute instance (timeout, cadence,\n"
         "# taille, rétention, interrupteur, secret optionnel). À toucher seulement\n"
@@ -51,15 +50,12 @@ _TITRES = {
 def _ligne_variable(v: "inv.Variable") -> str:
     corps = "\n".join(f"# {ligne}" for ligne in _enrouler(v.description))
     refs = f"# Réf. : {', '.join(v.refs)}"
-    if v.classe is inv.Classe.REQUISE:
+    if v.classe in (inv.Classe.REQUISE, inv.Classe.IDENTITE):
         exemple = f"{v.nom}=\n"
     elif v.defaut is None:
         exemple = f"# {v.nom}=\n"
     else:
         exemple = f"# {v.nom}={v.defaut}\n"
-    if v.classe is inv.Classe.NOTRE_DEFAUT:
-        corps += (f"\n# ⚠️ Défaut = NOTRE valeur ({v.defaut!r}) — à écraser pour toute "
-                   "instance qui n'est pas nous.")
     return f"{corps}\n{refs}\n{exemple}"
 
 
@@ -97,7 +93,7 @@ def _bloc_familles_dynamiques() -> str:
 
 def generer() -> str:
     blocs = [_ENTETE]
-    for classe in (inv.Classe.REQUISE, inv.Classe.NOTRE_DEFAUT, inv.Classe.REGLAGE):
+    for classe in inv.Classe:
         variables = [v for v in inv.NOMS_FIXES if v.classe is classe]
         if not variables:
             continue

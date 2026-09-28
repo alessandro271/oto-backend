@@ -55,20 +55,6 @@ def test_une_palette_declaree_est_servie(pose):
     assert (m.nom, m.site) == ("Acme", "acme.test")
 
 
-def test_la_palette_declaree_prime_sur_celle_du_code(pose):
-    """Le point de tout le lot : la base gagne, sinon rien n'a changé.
-
-    Sans cette assertion, tous les autres tests passeraient avec un code qui lit
-    encore `MARQUES` en premier et ignore la déclaration."""
-    pose(clonecharte=PALETTE)
-    email_brand.MARQUES["clonecharte"] = email_brand.MARQUES["oto"]
-    try:
-        assert email_brand.marque("clonecharte").fond == "#101014", (
-            "la palette déclarée par le tenant doit passer AVANT celle du code")
-    finally:
-        email_brand.MARQUES.pop("clonecharte", None)
-
-
 # --- ce qui est mal déclaré ne casse rien, et ne se mélange pas --------------
 
 @pytest.mark.parametrize("cassee, pourquoi", [

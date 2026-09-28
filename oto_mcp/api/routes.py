@@ -35,8 +35,8 @@ Le reste du palier ORG (`/api/me/orgs`, `/api/orgs/*`, `/api/admin/orgs/*`) est
 docstring y renvoyait encore le 2026-08-27, vers un fichier qui n'existe plus.
 
 Auth : Bearer JWT Logto **ou** jeton API long-lived (préfixe `oto_`), vérifié par
-`api_routes_base._authenticate` (ré-exporté ici). CORS : origines oto.cx/oto.ninja
-(+ localhosts en dev), `_allowed_origins`.
+`api_routes_base._authenticate` (ré-exporté ici). CORS : les origines
+que l'instance déclare (`OTO_MCP_CORS_ORIGINS`), `_allowed_origins`.
 """
 from __future__ import annotations
 

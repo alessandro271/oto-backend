@@ -58,7 +58,7 @@ def _tout_accepte(monkeypatch):
     from oto_mcp import db as oto_db, legal_docs
     monkeypatch.setattr(oto_db, "get_legal_acceptances", lambda sub: {
         slug: {"version": meta["version"], "accepted_at": "2026-08-28 09:00:00"}
-        for slug, meta in legal_docs.CURRENT_DOCS.items()})
+        for slug, meta in legal_docs.current_docs().items()})
 
 
 

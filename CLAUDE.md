@@ -23,6 +23,9 @@ les sessions parallèles → bumper en **superset**, garder la version haute à 
 venv en retard sur le pin — la suite le dit (bannière `PIN oto-core`, tests `exige_pin_oto_core` non concluants) ; ne
 pas trier au message, ne pas muter le venv : `docs/commands.md` §Pin oto-core → « Faux rouge ».
 ⚠️ Les rows PG sont des **dicts** — `r["col"]`, jamais `r[0]`.
+⚠️ **Toute variable lue est inventoriée** (`oto_mcp/env_inventory.py`, `.env.example` en dérive) ; ce qu'une instance
+émet sous son nom — adresses, email, marque, contrats — n'a **aucun défaut** : non déclaré, refus de démarrer, prod et
+dev compris (`identite_instance.py`, #968).
 
 ## Architecture
 
@@ -67,8 +70,8 @@ charge PAS** (son prédicat de vivacité est l'existence de la ligne, qu'une pau
 bougent pas parce qu'il n'y en a aucun** (forfaits plats par org) · ⚠️ **pas un org_admin** — un compte n'appartient
 pas à une org ; c'est l'admin de **tenant**, sur les comptes du sien (`docs/comptes-en-pause.md`).
 `/api/*` sous le même `JWTVerifier` que `/mcp` ; `GET /openapi.json` **dérivé** du registre de capacités ; un jeton
-`oto_` peut naître **porté** · ⚠️ **CORS : la liste du code est morte**, chaque box pose `OTO_MCP_CORS_ORIGINS` dans son
-`.env` (`docs/rest-api.md`). Une étiquette de version unique sur trois surfaces (`GET /api/version`, `info.version`
+`oto_` peut naître **porté** · ⚠️ **CORS : aucune liste dans le code**, chaque instance déclare `OTO_MCP_CORS_ORIGINS`
+(`docs/rest-api.md`). Une étiquette de version unique sur trois surfaces (`GET /api/version`, `info.version`
 OpenAPI, en-tête **`X-Oto-Version` de chaque réponse**) · ⚠️ elle dit **ce que le processus exécute**, pas ce qu'un run
 vert a déployé (`docs/version-servie.md`).
 

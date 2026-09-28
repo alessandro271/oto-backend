@@ -15,8 +15,9 @@ même commit. Ce qui doit rougir, c'est l'inverse : une lecture neuve, jamais d�
 1. un littéral direct — `os.environ.get("X")`, `os.environ["X"]`, `require_env("X")` ;
 2. une indirection par CONSTANTE MODULE-LEVEL du même fichier — `_VAR = "X"` puis
    `os.environ.get(_VAR)` (`db/_conn.py`, `auth/flow.py`, `egress.py`, `version.py`…) ;
-3. une indirection par BOUCLE `for x in ("A", "B", "C"): os.environ.get(x)` — la
-   cascade `config.dashboard_url()` ;
+3. une indirection par BOUCLE `for x in ("A", "B", "C"): os.environ.get(x)`, le tuple
+   écrit sur place ou en constante module-level — la cascade `config.dashboard_url()`
+   (`for var in DASHBOARD_VARS`) ;
 4. une indirection par PARAMÈTRE d'une fonction-relais appelée avec des littéraux —
    `boucles_de_fond._interrupteur(var)`, appelée `_interrupteur("OTO_...")` à chaque
    site ; c'est aussi, sans cas particulier, comment il retombe sur ses pieds pour la
@@ -65,6 +66,27 @@ def _constantes_module(arbre: ast.Module) -> dict[str, str]:
     return out
 
 
+def _litteraux(node: ast.expr) -> "tuple[str, ...] | None":
+    """Les chaînes d'un tuple/liste/ensemble écrit en littéraux, ou None."""
+    if not isinstance(node, (ast.Tuple, ast.List, ast.Set)) or not node.elts:
+        return None
+    if not all(isinstance(e, ast.Constant) and isinstance(e.value, str) for e in node.elts):
+        return None
+    return tuple(e.value for e in node.elts)
+
+
+def _tuples_module(arbre: ast.Module) -> dict[str, tuple[str, ...]]:
+    """`NOMS = ("A", "B")` au niveau MODULE — l'itérable d'une boucle de lecture."""
+    out: dict[str, tuple[str, ...]] = {}
+    for n in arbre.body:
+        if (isinstance(n, ast.Assign) and len(n.targets) == 1
+                and isinstance(n.targets[0], ast.Name)):
+            valeurs = _litteraux(n.value)
+            if valeurs is not None:
+                out[n.targets[0].id] = valeurs
+    return out
+
+
 def _appels_par_nom(arbre: ast.Module) -> dict[str, list[ast.Call]]:
     """Tous les appels `f(...)` du fichier, groupés par nom de fonction — sert à
     résoudre une indirection par PARAMÈTRE : les sites d'appel de la fonction-relais
@@ -82,14 +104,19 @@ class _Visiteur(ast.NodeVisitor):
     est un tuple de littéraux (pour la résolution par boucle)."""
 
     def __init__(self, fichier: str, constantes: dict[str, str],
-                 appels_par_nom: dict[str, list[ast.Call]]):
+                 appels_par_nom: dict[str, list[ast.Call]],
+                 tuples: "dict[str, tuple[str, ...]] | None" = None):
         self.fichier = fichier
         self.constantes = constantes
+        self.tuples = tuples or {}
         self.appels_par_nom = appels_par_nom
         self._pile_fonctions: list[ast.FunctionDef] = []
         self._pile_boucles: list[tuple[str, tuple[str, ...]]] = []
         self.resolues: list[tuple[str, int]] = []          # (nom_var_env, ligne)
         self.echecs: list[tuple[int, str]] = []             # (ligne, raison)
+        # (nom_var_env, ligne, défaut littéral) — `os.environ.get(X, "d")` et
+        # `os.environ.get(X) or "d"` : ce que le process prend quand X manque.
+        self.defauts: list[tuple[str, int, str]] = []
 
     # -- contexte -----------------------------------------------------------------
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
@@ -107,26 +134,40 @@ class _Visiteur(ast.NodeVisitor):
         if resolu:
             self._pile_boucles.pop()
 
-    @staticmethod
-    def _resoudre_boucle(node: ast.For) -> "tuple[str, tuple[str, ...]] | None":
+    def _resoudre_boucle(self, node: ast.For) -> "tuple[str, tuple[str, ...]] | None":
         if not isinstance(node.target, ast.Name):
             return None
-        if not isinstance(node.iter, (ast.Tuple, ast.List, ast.Set)):
-            return None
-        elts = node.iter.elts
-        if not elts or not all(isinstance(e, ast.Constant) and isinstance(e.value, str)
-                                for e in elts):
-            return None
-        return (node.target.id, tuple(e.value for e in elts))
+        if isinstance(node.iter, ast.Name):
+            valeurs = self.tuples.get(node.iter.id)
+        else:
+            valeurs = _litteraux(node.iter)
+        return (node.target.id, valeurs) if valeurs else None
 
     # -- les lectures ---------------------------------------------------------------
     def visit_Call(self, node: ast.Call) -> None:
         if (isinstance(node.func, ast.Attribute) and node.func.attr in ("get", "setdefault")
                 and _est_os_environ(node.func.value) and node.args):
             self._traiter(node.args[0], node.lineno, f"os.environ.{node.func.attr}")
+            if len(node.args) > 1:
+                self._noter_defaut(node, node.args[1])
         elif isinstance(node.func, ast.Name) and node.func.id == "require_env" and node.args:
             self._traiter(node.args[0], node.lineno, "require_env")
         self.generic_visit(node)
+
+    def visit_BoolOp(self, node: ast.BoolOp) -> None:
+        # `lecture or "défaut"` : le littéral qui suit une lecture est son défaut.
+        if isinstance(node.op, ast.Or):
+            for gauche, droite in zip(node.values, node.values[1:]):
+                if _est_lecture_env(gauche):
+                    self._noter_defaut(gauche, droite)
+        self.generic_visit(node)
+
+    def _noter_defaut(self, lecture: ast.expr, defaut: ast.expr) -> None:
+        if not (isinstance(defaut, ast.Constant) and isinstance(defaut.value, str)):
+            return
+        noms = self._resoudre(_cle_lue(lecture)) or ("<nom non résolu>",)
+        for nom in noms:
+            self.defauts.append((nom, lecture.lineno, defaut.value))
 
     def visit_Subscript(self, node: ast.Subscript) -> None:
         if _est_os_environ(node.value) and isinstance(node.slice, ast.expr):
@@ -189,9 +230,21 @@ class _Visiteur(ast.NodeVisitor):
         return any(f.motif.match(squelette) for f in inv.FAMILLES_DYNAMIQUES)
 
 
+def _est_lecture_env(node: ast.expr) -> bool:
+    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "get" and _est_os_environ(node.func.value)
+            and bool(node.args))
+
+
+def _cle_lue(lecture: ast.expr) -> ast.expr:
+    assert isinstance(lecture, ast.Call)
+    return lecture.args[0]
+
+
 def _analyser(chemin: pathlib.Path) -> _Visiteur:
     arbre = ast.parse(chemin.read_text(encoding="utf-8"), filename=str(chemin))
-    v = _Visiteur(str(chemin), _constantes_module(arbre), _appels_par_nom(arbre))
+    v = _Visiteur(str(chemin), _constantes_module(arbre), _appels_par_nom(arbre),
+                  _tuples_module(arbre))
     v.visit(arbre)
     return v
 
@@ -222,7 +275,7 @@ def test_toute_lecture_d_environnement_est_dans_l_inventaire():
         "le code lit une variable d'environnement que l'inventaire ne connaît pas :\n"
         "    " + "\n    ".join(manquantes) +
         "\n  → ajoute une entrée dans oto_mcp/env_inventory.py (NOMS_FIXES), classée "
-        "REQUISE / NOTRE_DEFAUT / REGLAGE. Ce test ne rougit que dans CE sens : une "
+        "REQUISE / IDENTITE / REGLAGE. Ce test ne rougit que dans CE sens : une "
         "entrée de l'inventaire que le code a cessé de lire ne le fait pas rougir.")
 
 
@@ -239,3 +292,46 @@ def test_familles_dynamiques_ont_un_motif_qui_mord() -> None:
     # `credential_management_annuaire_secret` : il est lu via un littéral direct,
     # résolu et vérifié contre `NOMS_FIXES` avant que le chemin dynamique n'entre en
     # jeu (`_Visiteur._traiter` n'essaie une famille qu'après échec de `_resoudre`).
+
+
+# ── Aucun défaut ne pointe chez nous (décision du 28/09/2026, #968) ─────────────
+#
+# Ce qui distingue « chez nous » d'un défaut neutre : un de nos domaines dans la valeur.
+# Liste de FORMES, pas d'adresses — elle attrape aussi une adresse qu'on n'a pas encore.
+_NOS_DOMAINES = ("oto.cx", "oto.ninja", "oto.zone", "otomata")
+
+
+def test_aucun_defaut_du_code_ne_pointe_chez_nous():
+    """Le code ne prend jamais une de nos adresses quand une variable manque : ni
+    `os.environ.get(X, "<nous>")`, ni `os.environ.get(X) or "<nous>"`. Une valeur
+    émise sous le nom de l'instance se DÉCLARE (classe IDENTITE) — sans elle, refus."""
+    fautes = []
+    for fichier in sorted(RACINE.rglob("*.py")):
+        rel = fichier.relative_to(RACINE.parent)
+        for nom, ligne, defaut in _analyser(fichier).defauts:
+            if any(d in defaut.lower() for d in _NOS_DOMAINES):
+                fautes.append(f"{rel}:{ligne} → {nom} retombe sur {defaut!r}")
+    assert not fautes, (
+        "une lecture d'environnement retombe sur une de NOS adresses :\n    "
+        + "\n    ".join(fautes)
+        + "\n  → retire le défaut (`config.require_env`) et classe la variable IDENTITE.")
+
+
+def test_l_inventaire_ne_documente_aucun_defaut_chez_nous():
+    for v in inv.NOMS_FIXES:
+        assert not any(d in (v.defaut or "").lower() for d in _NOS_DOMAINES), v.nom
+        if v.classe in (inv.Classe.REQUISE, inv.Classe.IDENTITE):
+            assert v.defaut is None, f"{v.nom} est {v.classe.value} : elle n'a pas de défaut"
+
+
+def test_le_detecteur_de_defauts_mord():
+    """Preuve, pas affirmation : les deux formes de repli sont bien relevées."""
+    arbre = ast.parse(
+        'import os\n'
+        'A = os.environ.get("X_A", "https://oto.cx")\n'
+        'B = os.environ.get("X_B") or "https://app.oto.ninja"\n')
+    v = _Visiteur("<banc>", _constantes_module(arbre), _appels_par_nom(arbre),
+                  _tuples_module(arbre))
+    v.visit(arbre)
+    assert {(n, d) for n, _, d in v.defauts} == {
+        ("X_A", "https://oto.cx"), ("X_B", "https://app.oto.ninja")}

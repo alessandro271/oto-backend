@@ -12,7 +12,7 @@ par connecteur dans `orgs.email_settings`) ; le **transport en dérive**
 
 Autorisation **dynamique** selon le `from` résolu :
 - envoi depuis une adresse déclarée de l'org → **membre de l'org** suffit ;
-- repli **marque** `oto@otomata.tech` (org sans adresse configurée, `from` omis) →
+- repli **marque** = l'expéditeur de l'instance (`OTO_MAIL_FROM` ; org sans adresse configurée, `from` omis) →
   réservé **super_admin** (c'est l'identité de marque de la plateforme).
 
 À distinguer de `gmail_compose`, qui écrit depuis la boîte Gmail de l'utilisateur
@@ -98,14 +98,15 @@ def _resolve_route(from_email: Optional[str]) -> tuple[str, dict]:
             raise _err(f"« {from_email} » n'est pas une adresse déclarée d'un connecteur email de "
                        "l'org active. Ajoute-la via `oto_org_settings(domain='email', op='set')`, ou omets `from_email`.")
 
-    # Chemin marque oto@otomata.tech — super_admin uniquement
+    # Chemin marque (l'expéditeur de l'instance, `OTO_MAIL_FROM`) — super_admin uniquement
     if from_email is not None:
         raise _err("Aucune org active avec une adresse d'envoi configurée. Configure-la "
                    "(`oto_org_settings(domain='email', op='set')`) ou passe la bonne org (`org=<id>`).")
     if not access.is_super_admin(sub):
         raise _err("Ton org n'a pas d'adresse d'envoi configurée — demande à un org_admin "
-                   "de l'ajouter via `oto_org_settings(domain='email', op='set')`. L'envoi sous la marque "
-                   "oto@otomata.tech est réservé au super_admin de la plateforme.")
+                   "de l'ajouter via `oto_org_settings(domain='email', op='set')`. L'envoi sous "
+                   f"l'adresse de la plateforme ({mailer._mail_from()}) est réservé au "
+                   "super_admin de la plateforme.")
     return sub, {"org_id": None, "connector": None, "from_email": None, "from_name": None,
                  "transport": "mailer", "reply_to": None, "quiet_hours": None, "footer": None}
 
@@ -164,7 +165,7 @@ def register(mcp: FastMCP) -> None:
         connecteur — `oto_org_settings(domain='email', op='set', connector=…,
         footer={"unsubscribe_url": "https://…"} ou {"unsubscribe_email": "…"})`,
         org_admin : son pied remplace alors le nôtre. Rien ne le retire depuis cet
-        outil. L'envoi sous la marque oto@otomata.tech garde toujours le nôtre. Le champ
+        outil. L'envoi sous l'adresse de la plateforme garde toujours le nôtre. Le champ
         `footer` de la réponse dit lequel part (`org` | `platform`).
 
         Image de tête : `image_url` (https) + `image_alt` REQUIS ; l'URL publique
@@ -181,8 +182,8 @@ def register(mcp: FastMCP) -> None:
                 (n'injecte pas de balises). Écris du contenu réel, personnalisé —
                 jamais d'invention sur le compte du destinataire.
             from_email: adresse expéditrice. DOIT être une adresse déclarée de l'org
-                active. Omise = l'adresse par défaut de l'org (ou la marque
-                oto@otomata.tech si l'org n'en a aucune — super_admin uniquement).
+                active. Omise = l'adresse par défaut de l'org (ou l'adresse de la
+                plateforme si l'org n'en a aucune — super_admin uniquement).
             cta_text: libellé d'un bouton d'action optionnel (ex. « ouvrir oto »).
             cta_url: URL du bouton (requis si `cta_text` est fourni).
             image_url: URL `https://` publique d'UNE image en tête du mail (480 px,

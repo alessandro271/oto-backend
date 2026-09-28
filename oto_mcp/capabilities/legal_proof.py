@@ -27,7 +27,7 @@ surface ne s'y risque pas : `null` s'y lit « aucune trace enregistrée », jama
 trace n'existait ».
 
 **⚠️ Le texte d'une version passée n'est pas récupérable, et c'est dit.** `legal_docs.
-CURRENT_DOCS` ne porte que la version COURANTE de chaque document. Une acceptation des
+current_docs()` ne porte que la version COURANTE de chaque document. Une acceptation des
 CGU 2.0 ne peut donc pas être reliée au texte qu'elle a accepté — `url` reste `null` et
 `version_courante` vaut `false`. C'est une **limite de la preuve**, pas de cette
 lecture : l'opposer suppose de retrouver le texte d'époque ailleurs (le dépôt du site).

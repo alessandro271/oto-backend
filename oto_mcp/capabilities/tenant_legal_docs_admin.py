@@ -12,7 +12,7 @@ capacité normale, pas un écran lecture seule.
 poser AVANT que l'émetteur du tenant ne soit déclaré (même ordre lâche que
 `tenancy.qualify`), et retirer un tenant du registre ne doit pas faire disparaître
 en silence l'override qu'on avait posé pour lui. `doc_slug` en revanche EST validé
-contre `legal_docs.CURRENT_DOCS` — un override ne peut remplacer que les métadonnées
+contre `legal_docs.slugs_attendus()` — un override ne peut remplacer que les métadonnées
 d'un doc qui existe déjà, jamais en introduire un nouveau (ça demanderait de
 retoucher `CONTEXTS`, une décision produit, pas une administration de tenant).
 """
@@ -61,10 +61,11 @@ class TenantLegalDocDeleted(BaseModel):
 
 
 def _known_slug(slug: str) -> str:
-    if slug not in legal_docs.CURRENT_DOCS:
+    attendus = legal_docs.slugs_attendus()
+    if slug not in attendus:
         raise AuthzDenied(400, "unknown_doc_slug",
                           f"`{slug}` n'est pas un doc légal connu — "
-                          f"attendus : {', '.join(sorted(legal_docs.CURRENT_DOCS))}.")
+                          f"attendus : {', '.join(sorted(attendus))}.")
     return slug
 
 
@@ -105,7 +106,7 @@ CAPABILITIES += [
         authz=PLATFORM_ADMIN, Output=TenantLegalDocs,
         description="Set a tenant's override for one legal doc slug (version, "
                     "label, url) — effective immediately, no restart. `slug` must "
-                    "already exist in the platform's CURRENT_DOCS.",
+                    "be one of the instance's declared legal docs.",
         rest=RestBinding("PUT", "/api/admin/tenants/{tenant}/legal-docs/{slug}"),
     ),
     Capability(

@@ -154,10 +154,18 @@ def test_emit_invitation_sends_email(monkeypatch):
 
 # --- Front qui héberge l'org (colonnes `orgs.front_*`) ----------------------
 
-def test_invite_base_defaults_to_oto(monkeypatch):
+def test_invite_base_is_the_declared_one(monkeypatch):
+    monkeypatch.setenv("OTO_INVITE_BASE_URL", "https://invite.exemple.test/")
+    assert oi._invite_base() == "https://invite.exemple.test"
+    assert oi._invite_base(None) == "https://invite.exemple.test"
+
+
+def test_invite_base_undeclared_refuses_instead_of_pointing_at_us(monkeypatch):
+    """#968, décision du 28/09/2026 : plus de défaut vers NOTRE site."""
     monkeypatch.delenv("OTO_INVITE_BASE_URL", raising=False)
-    assert oi._invite_base() == "https://oto.cx"
-    assert oi._invite_base(None) == "https://oto.cx"
+    with pytest.raises(RuntimeError, match="OTO_INVITE_BASE_URL"):
+        oi._invite_base()
+    assert oi._invite_base("https://app.acme.test") == "https://app.acme.test"
 
 
 def test_invite_base_uses_org_front():

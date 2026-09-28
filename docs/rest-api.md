@@ -458,7 +458,7 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   YouTube) — servie par `library.get` (slug exact, tout user authentifié) mais **jamais**
   listée (`list` force `include_unlisted=False`) ni servie en anonyme. Partage par lien, pas
   un secret d'org : un guide sensible ne se publie pas (reste un skill d'org privé).
-- CORS : `oto.ninja`, `app.oto.ninja`, `dashboard.oto.ninja` (+ localhosts dev) — défaut dans `_allowed_origins`, override `OTO_MCP_CORS_ORIGINS`. `account.oto.zone` retiré (surface compte décommissionnée → dashboard.oto.ninja)
+- CORS : les origines que l'instance déclare (`OTO_MCP_CORS_ORIGINS`, sans défaut — cf. § CORS). `account.oto.zone` retiré (surface compte décommissionnée → dashboard.oto.ninja)
 - Même `JWTVerifier` que `/mcp` — partage l'audience `https://mcp.oto.ninja/mcp`
 
 ## Surface nœuds (PROVISOIRE) — `/api/me/shell`, `/api/me/nodes/{id}`, `/api/me/nodes/{id}/rows`
@@ -956,18 +956,19 @@ déploiement : **`docs/version-servie.md`**.
 > portée ne peut la borner : **ce qu'un jeton porté atteint doit se lire dans le chemin.**
 > C'est la règle à garder en tête avant d'ouvrir une nouvelle surface aux intégrations.
 
-## CORS — la liste du code est MORTE en prod comme en preprod
+## CORS — les origines se DÉCLARENT, il n'y a plus de liste dans le code
 
-⚠️ **CORS : la liste du code est MORTE en prod comme en preprod.** `_allowed_origins()`
-(`api/routes.py`) n'est qu'un **fallback** — les DEUX box posent `OTO_MCP_CORS_ORIGINS`
-dans leur `.env`, qui **écrase** la liste. Ajouter une origine au code, la déployer et
-constater que rien ne change est un piège vécu (30/07, front d'un tenant tiers) : le tag prod avait
-été posé pour une raison inexacte. **Ajouter une origine = éditer l'env des deux box +
-restart** (`/opt/oto-mcp/.env`, `/opt/oto-mcp-canari/.env`) ; le code ne sert qu'aux
-environnements neufs. Diagnostic en 1 appel, sans lire le `.env` : `curl -X OPTIONS
+⚠️ **CORS : aucune liste dans le code** (#968, décision du 28/09/2026). `_allowed_origins()`
+(`api/base.py`) lit `config.cors_origins()`, c'est-à-dire `OTO_MCP_CORS_ORIGINS` — sans
+défaut : absente ou vide, l'instance refuse de démarrer (`identite_instance.verifier`).
+La liste en dur qui servait de repli mêlait nos domaines, ceux d'un front tiers et des
+ports de développement ; elle était déjà morte en prod et en preprod (les deux box posent
+la variable), elle n'accueillait plus que les environnements neufs — en pointant chez
+nous. **Ajouter une origine = éditer l'env des box + restart** (`/opt/oto-mcp/.env`,
+`/opt/oto-mcp-canari/.env`) ; en développement, le `.env` du poste porte ses ports
+`localhost`. Diagnostic en 1 appel, sans lire le `.env` : `curl -X OPTIONS
 https://mcp.oto.cx/api/mcp/catalog -H 'Origin: <x>'` → l'en-tête `Access-Control-Allow-Origin`
-revient si l'origine passe. ⚠️ Ne pas déduire « c'est la liste du code » du seul fait qu'une
-origine du défaut est acceptée : l'override en contient une copie.
+revient si l'origine passe.
 
 ⚠️ **Le CORS se pose RÉPONSE PAR RÉPONSE — il n'y a pas de `CORSMiddleware`.** Une
 `Response` construite à la main sort donc sans en-tête, et le navigateur la jette

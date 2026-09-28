@@ -18,7 +18,7 @@ production sert le code qui lit le journal. Un fallback est un chemin de secours
 permanent ; ceci est un pont, et il a une date de démolition.
 
 Trace de consentement UNIQUEMENT ; les métadonnées des docs (version courante,
-libellé, URL) vivent dans `legal_docs.py`.
+libellé, URL) sont déclarées par l'instance (`legal_docs.current_docs`).
 """
 from __future__ import annotations
 
@@ -140,7 +140,7 @@ def list_acceptance_events(sub: str, *, doc_slug: str | None = None,
 
 def get_tenant_legal_docs(tenant_slug: str) -> dict[str, dict]:
     """slug → {version, label, url} déclarés par CE tenant. Vide = aucun override —
-    `legal_docs.docs_for` retombe alors sur `CURRENT_DOCS` tel quel."""
+    `legal_docs.docs_for` retombe alors sur `current_docs()` tel quel."""
     if not tenant_slug:
         return {}
     with _connect() as conn:

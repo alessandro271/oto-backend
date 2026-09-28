@@ -35,7 +35,15 @@ from fastmcp import FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-_UA = "oto-infosec/1.0 (+https://oto.ninja)"
+from .. import config
+
+
+def _ua() -> str:
+    """User-Agent des sondes : l'adresse de contact est celle de CETTE instance, jamais
+    la nôtre écrite en dur (#968) — résolue à l'appel, `public_base_url` lève sans elle."""
+    return f"oto-infosec/1.0 (+{config.public_base_url()})"
+
+
 _DOH = "https://cloudflare-dns.com/dns-query"
 
 # Source unique des facettes — le dispatch ET le message d'erreur en dérivent, pour
@@ -93,7 +101,7 @@ def _vcard_field(vcard: list, field: str) -> Optional[str]:
 async def _whois(d: str) -> dict:
     """op="whois" — immatriculation du domaine via RDAP."""
     async with httpx.AsyncClient(timeout=20, follow_redirects=True,
-                                 headers={"user-agent": _UA}) as c:
+                                 headers={"user-agent": _ua()}) as c:
         r = await c.get(f"https://rdap.org/domain/{d}")
         if r.status_code == 404:
             return {"domain": d, "found": False, "note": "non enregistré ou TLD non couvert par RDAP"}
@@ -188,7 +196,7 @@ async def _subdomains(d: str, limit: int) -> dict:
     """op="subdomains" — noms connus lus dans les logs Certificate Transparency."""
     rows = None
     last_err = "inconnu"
-    async with httpx.AsyncClient(timeout=40, headers={"user-agent": _UA}) as c:
+    async with httpx.AsyncClient(timeout=40, headers={"user-agent": _ua()}) as c:
         for attempt in range(3):  # crt.sh renvoie souvent des 5xx transitoires
             try:
                 r = await c.get("https://crt.sh/", params={"q": f"%.{d}", "output": "json"})
@@ -260,7 +268,7 @@ async def _headers(d: str) -> dict:
     """op="headers" — en-têtes de sécurité HTTP + empreinte serveur (un seul GET)."""
     try:
         async with httpx.AsyncClient(timeout=15, follow_redirects=True,
-                                     headers={"user-agent": _UA}) as c:
+                                     headers={"user-agent": _ua()}) as c:
             r = await c.get(f"https://{d}")
     # noqa: SILENT — l'échec est rendu dans le résultat (error), pas avalé
     except Exception as e:

@@ -23,39 +23,17 @@ from . import brand
 _MD = MarkdownIt("commonmark", {"html": False})
 
 
-def _MARQUE_OTO_():
-    from . import email_brand
-    return email_brand.marque(None)
-
-
-def _nom(marque) -> str:
-    """Le nom à afficher — le nôtre quand la page est à nous."""
-    return "Oto" if _nous(marque) else (marque.nom or "")
-
-
-def _nous(marque) -> bool:
-    return marque is None or not marque.slug or marque.slug == "oto"
-
-
 def _shell(*, title: str, inner: str, marque=None) -> str:
-    """`marque=None` ⟹ la nôtre : le défaut sert les appelants sans contenu sous la
-    main, jamais un partenaire — le handler la résout toujours depuis la donnée."""
-    j = brand.jetons(marque) if marque is not None else brand.jetons(_MARQUE_OTO_())
-    nous = _nous(marque)
-    nom = html.escape(_nom(marque))
-    if nous:
-        pied = ('Partagé via <a href="https://oto.cx">Oto</a> — la boîte à outils '
-                "d'automatisation.")
-    elif marque.site:
-        pied = f'Partagé via <a href="https://{html.escape(marque.site)}">{nom}</a>.'
-    else:
-        pied = f"Partagé via {nom}." if nom else "Document partagé."
-    titre_suffixe = " · Oto" if nous else (f" · {nom}" if nom else "")
-    descr = ("Document partagé via Oto." if nous
-             else (f"Document partagé via {nom}." if nom else "Document partagé."))
+    """`marque=None` ⟹ celle du tenant primaire : le défaut sert les appelants sans
+    contenu sous la main, jamais un partenaire — le handler la résout toujours depuis
+    la donnée."""
+    from . import email_brand
+    m = marque or email_brand.marque(None)
+    j = brand.jetons(m)
+    pied, titre_suffixe, descr = brand.mentions_de_partage(m, "Document")
     # Le favicon est un dessin de marque : il ne suit pas un partenaire tant qu'il n'en
     # a pas déclaré un. Rien vaut mieux que le nôtre sur sa page.
-    favicon = brand.FAVICON_LINK if nous else ""
+    favicon = brand.FAVICON_LINK if brand.est_primaire(m) else ""
     safe_title = html.escape(title or "Document")
     return f"""<!DOCTYPE html>
 <html lang=fr><head>
@@ -108,7 +86,7 @@ def render(*, title: str, body_md: str, updated_at: object = None, marque=None) 
     body_html = _MD.render(body_md or "")
     meta = (f'<div class=meta>Mis à jour le {html.escape(str(updated_at)[:10])}</div>'
             if updated_at else "")
-    inner = (f'  <div class=eyebrow>Document · {html.escape(_nom(marque))}</div>\n'
+    inner = (f'  <div class=eyebrow>Document · {html.escape(brand.nom_de(marque))}</div>\n'
              f'  <h1>{html.escape(title or "Document")}</h1>\n'
              f'  {meta}\n'
              f'  <div class=card><article>{body_html}</article></div>')
@@ -119,7 +97,7 @@ def render_missing(*, marque=None) -> str:
     """⚠️ Elle se rend AVANT toute lecture réussie — c'est la page qu'un jeton périmé
     sert, donc la plus vue depuis l'extérieur. L'oublier laisserait notre marque sur
     l'écran le plus fréquent de cette surface."""
-    inner = (f'  <div class=eyebrow>{html.escape(_nom(marque))}</div>\n'
+    inner = (f'  <div class=eyebrow>{html.escape(brand.nom_de(marque))}</div>\n'
              '  <h1>Document introuvable</h1>\n'
              '  <div class=card><article><p>Ce document n\'existe pas ou n\'est plus '
              'partagé.</p></article></div>')

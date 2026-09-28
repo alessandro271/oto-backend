@@ -206,6 +206,10 @@ def mcp_audience_alt_hosts() -> frozenset[str]:
     return frozenset(h for h in hosts if h)
 
 
+# La cascade de `dashboard_url()`, dans son ordre : une seule des trois suffit.
+DASHBOARD_VARS = ("OTO_APP_URL", "OTO_DASHBOARD_URL", "OTO_DASHBOARD_BASE_URL")
+
+
 def dashboard_url() -> str:
     """L'adresse du tableau de bord servie AUX UTILISATEURS (liens de tableaux, de
     connexion, pages publiques).
@@ -222,7 +226,7 @@ def dashboard_url() -> str:
     dépendent, en le nommant, plutôt que d'offrir silencieusement notre produit à sa
     place.
     """
-    for var in ("OTO_APP_URL", "OTO_DASHBOARD_URL", "OTO_DASHBOARD_BASE_URL"):
+    for var in DASHBOARD_VARS:
         valeur = os.environ.get(var, "").strip().rstrip("/")
         if valeur:
             return valeur
@@ -231,6 +235,30 @@ def dashboard_url() -> str:
         "posée : l'adresse du tableau de bord doit être déclarée (une seule suffit), "
         "ce process ne devine pas la nôtre à sa place."
     )
+
+
+def invite_base_url() -> str:
+    """Base publique des liens d'invitation d'une org SANS front déclaré
+    (`orgs.front_base_url` gagne quand il est posé). Obligatoire (décision du 28/09/2026,
+    #968) : le défaut visait NOTRE site, donc toute invitation émise par une autre
+    instance envoyait l'invité chez nous. Lève à l'appel, et au démarrage via
+    `identite_instance.verifier`."""
+    return require_env("OTO_INVITE_BASE_URL").strip().rstrip("/")
+
+
+def cors_origins() -> list[str]:
+    """Les origines navigateur autorisées à appeler `/api/*` — liste séparée par des
+    virgules. Obligatoire (décision du 28/09/2026, #968) : la liste en dur qui servait de
+    repli mêlait nos domaines, ceux d'un front tiers et des ports de développement ;
+    chaque instance — prod, preprod, poste de dev — déclare désormais la sienne dans son
+    environnement. Une déclaration qui ne contient aucune origine lève aussi."""
+    origines = [o.strip() for o in require_env("OTO_MCP_CORS_ORIGINS").split(",") if o.strip()]
+    if not origines:
+        raise RuntimeError(
+            "OTO_MCP_CORS_ORIGINS est posée mais ne contient aucune origine : déclare "
+            "les origines de tes fronts, séparées par des virgules "
+            "(https://app.exemple.tld,http://localhost:5173).")
+    return origines
 
 
 def dashboard_url_for(sub: Optional[str]) -> str:

@@ -11,6 +11,7 @@ ici, à l'octet près.
 from __future__ import annotations
 
 import base64
+import html
 
 # Identique octet pour octet à `oto-studio/brand/logos/oto/oto-dashboard-mark.svg`.
 FAVICON_SVG = (
@@ -111,8 +112,43 @@ def jetons(marque) -> dict:
     fermante y est inerte, alors qu'ici elle terminerait la règle et ouvrirait un
     sélecteur arbitraire.
     """
-    if not marque.slug or marque.slug == "oto":
+    if est_primaire(marque):
         return {"bg": "#fefcf5", "surface": "#fff", "ink": "#2c2112", "hair": "#dccfa8",
                 "primary": "#f0b41e", **_JETONS_OTO}
     return {"bg": marque.fond, "surface": marque.surface, "ink": marque.encre,
             "hair": marque.filet, "primary": marque.bouton_fond, **_JETONS_NEUTRES}
+
+
+def est_primaire(marque) -> bool:
+    """La page est-elle au tenant PRIMAIRE de l'instance (ses teintes, son favicon) ?"""
+    from . import tenancy
+    return not marque.slug or marque.slug == tenancy.PRIMARY_SLUG
+
+
+def nom_de(marque) -> str:
+    """Le nom affiché d'une page publique : celui de sa marque, ou — sans marque sous la
+    main (page d'erreur hors contexte) — celui que l'instance déclare. Jamais un nom
+    écrit ici."""
+    from . import email_brand
+    return (marque or email_brand.marque(None)).nom or ""
+
+
+def mentions_de_partage(marque, objet: str) -> tuple[str, str, str]:
+    """`(pied HTML, suffixe de <title>, meta description)` d'une page publique où un
+    `objet` (« Projet », « Document ») est partagé sous `marque`.
+
+    Une seule règle pour toutes les marques, primaire comprise : le pied nomme le
+    produit qui partage et pointe vers SON site, celui que la marque déclare
+    (`email_brand.marque_instance` pour le primaire, `tenants.brand` pour un
+    partenaire). Sans site déclaré, pas de lien : on n'invente pas l'adresse de
+    quelqu'un (même règle que le pied des emails). Le primaire avait sa branche, avec
+    notre adresse écrite en dur — toute autre instance signait donc ses pages de notre
+    site (#968)."""
+    nom = html.escape(marque.nom or "")
+    if marque.site:
+        pied = f'Partagé via <a href="https://{html.escape(marque.site)}">{nom}</a>.'
+    else:
+        pied = f"Partagé via {nom}." if nom else f"{objet} partagé."
+    suffixe = f" · {nom}" if nom else ""
+    descr = f"{objet} partagé via {nom}." if nom else f"{objet} partagé."
+    return pied, suffixe, descr
