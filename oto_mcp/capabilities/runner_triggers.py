@@ -3,7 +3,11 @@
 Deux faces, et c'est un choix de principe : un déclencheur est de la CONFIG
 utilisateur, pas de la plomberie worker. « Tous les matins à 8h05, joue la
 veille » doit pouvoir se poser EN CONVERSATION (`oto_trigger`) comme au
-dashboard — c'est le `/schedule` du produit. La file de jobs, elle, reste
+dashboard. Ce n'est PAS pour autant le chemin par défaut du planifié : c'est un
+agent hébergé de l'org (flotte oto, clé de l'org) ; la routine qu'un utilisateur
+demande à son assistant relève de l'ordonnancement du client (routine Claude
+Code, guide `procedure-en-routine`) — la description servie le dit d'entrée
+(28/09/2026, Alexis : l'assistant y allait trop volontiers). La file de jobs, elle, reste
 worker-only (`runner.jobs`, REST seul) : la frontière passe entre configurer
 et exécuter.
 
@@ -1191,7 +1195,14 @@ CAPABILITIES += [
         ),
         rest=RestBinding(verb="POST", path="/api/me/runner/triggers"),
         description=(
-            "Scheduled triggers for hosted runs — the product's /schedule. op=create "
+            "HOSTED AGENTS of the organization: run by oto's worker fleet on the "
+            "org's model key, under their owner's identity, managed in the "
+            "dashboard. NOT the way to schedule a task or a routine for yourself "
+            "or the user (\"every Monday…\", \"remind me\", \"set up a "
+            "routine\") — that is your client's own scheduling (a Claude Code "
+            "routine; method: guide `procedure-en-routine`). Use this only when "
+            "the user explicitly asks for an oto hosted agent or a webhook. "
+            "op=create "
             "(procedure slug + `cron` + `tools` allowlist ; `tz` defaults to "
             "Europe/Paris and the cron evaluates IN that timezone — say WHICH 8am "
             "you mean) / list / get / update (editing cron or tz revalidates and "

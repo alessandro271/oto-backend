@@ -153,3 +153,24 @@ def test_oto_procedure_n_annonce_plus_un_defaut_ORG():
         "la description annonce un défaut `org` que le code ne fait plus (ADR 0068)")
     assert "scope='user'" in d or "default `scope='user'`" in d, (
         "le défaut réel doit être nommé — un agent règle ce qu'on lui offre")
+
+
+# ── `oto_trigger` : un agent de l'ORG, pas la routine de l'assistant (28/09/2026) ──
+#
+# Sa description s'ouvrait sur « the product's /schedule » : tout « tous les lundis »
+# ou « mets en place une routine » y menait, et l'assistant créait un agent hébergé de
+# l'org — flotte oto, clé de modèle de l'org, identité de son propriétaire — là où
+# l'utilisateur voulait une routine de son client. Les clients TRONQUENT : la mise en
+# garde doit tenir dans l'ouverture, pas au milieu du paragraphe.
+
+
+def test_oto_trigger_dit_d_entree_qu_il_n_est_pas_la_routine_de_l_assistant():
+    d = _description_de_capacite("runner.triggers")
+    ouverture = d[:500]
+    assert ouverture.startswith("HOSTED AGENTS of the organization"), ouverture
+    assert "NOT the way to schedule" in ouverture, (
+        "la mise en garde contre l'usage « routine de l'assistant » doit ouvrir la "
+        "description — un client qui tronque ne la verrait plus")
+    assert "procedure-en-routine" in ouverture, "le bon chemin doit être nommé"
+    assert "/schedule" not in d, (
+        "« /schedule » refait d'oto_trigger le chemin par défaut du planifié")

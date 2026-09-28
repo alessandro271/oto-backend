@@ -58,8 +58,9 @@ from __future__ import annotations
 # ⚠️ **`oto_trigger` n'y est PAS, et c'est TRANCHÉ** — Alexis, 2026-09-02, « laisse
 # oto_trigger visible », après relevé de son usage : 112 appels, 10 acteurs, dont le
 # jour même. Le masquage filtre aussi `get_tool`, pas seulement la liste : il aurait
-# rendu le verbe injoignable pour dix personnes en cours de travail. Sa description le
-# dit elle-même — c'est le `/schedule` du produit.
+# rendu le verbe injoignable pour dix personnes en cours de travail. Le tri se fait
+# par sa description (28/09/2026) : elle dit d'entrée qu'il crée un agent hébergé de
+# l'org, pas la routine qu'un assistant se planifie.
 #
 # La première consigne était « resserre » sur les trois ; elle a été donnée sur une
 # question qui ne portait aucun chiffre, et l'usage l'a renversée pour celui-ci.

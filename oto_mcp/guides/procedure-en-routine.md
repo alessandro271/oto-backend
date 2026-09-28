@@ -86,3 +86,7 @@ Le vrai réflexe : **faire écrire à la procédure une trace datée dans un tab
 Le connecteur `routine` porte une routine par instance (`routine_id` + jeton de déclenchement, posés depuis les connecteurs du dashboard). `routine_fire` la déclenche et rend la session à ouvrir ; le résultat se lit dans cette session, pas dans la réponse.
 
 C'est utile quand le déclencheur est un agent en conversation, ou un service qui passe déjà par oto. Un outil tiers qui sait faire un POST HTTP appellera `/fire` directement — inutile de mettre oto sur ce chemin.
+
+## Routine ou agent hébergé
+
+Une routine Claude Code est **le** chemin quand un utilisateur demande à son assistant de planifier une tâche (« tous les lundis », « rappelle-moi »). `oto_trigger` est autre chose : il crée un **agent hébergé de l'org**, exécuté par la flotte de workers d'oto sur la clé de modèle de l'org, sous l'identité de son propriétaire, et géré dans le dashboard. Ne s'y tourner que si l'utilisateur demande explicitement un agent hébergé oto ou un webhook.

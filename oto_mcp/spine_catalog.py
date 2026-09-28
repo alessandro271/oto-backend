@@ -142,8 +142,9 @@ SPINE_FAMILIES: tuple[SpineFamily, ...] = (
     SpineFamily(
         "oto_fleet / oto_trigger",
         ("oto_fleet", "oto_trigger"),
-        "agents hébergés : ce que fait passer une flotte, sur quel tableau, et ses "
-        "déclencheurs programmés",
+        "agents hébergés DE L'ORG (flotte oto, clé de l'org) : ce que fait passer une "
+        "flotte, sur quel tableau, et ses déclencheurs — pas les routines que "
+        "l'assistant planifie pour lui-même (→ guide `procedure-en-routine`)",
     ),
     SpineFamily(
         "oto_function",
