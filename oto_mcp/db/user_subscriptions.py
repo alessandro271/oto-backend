@@ -84,6 +84,8 @@ def upsert_sandbox(sub: str, famille: str, sandbox_id: str) -> dict:
 def marquer_statut(sub: str, famille: str, statut: str, *,
                    plan: Optional[str] = None, method: Optional[str] = None,
                    limit_reset_at: Optional[Any] = None,
+                   epuise: bool = False,
+                   utilisation: Optional[float] = None,
                    ok: bool = False,
                    observe: bool = False) -> Optional[dict]:
     """Écrit l'état observé. Ne crée RIEN : sans sandbox, il n'y a rien à
@@ -105,7 +107,13 @@ def marquer_statut(sub: str, famille: str, statut: str, *,
     ⚠️ `limit_reset_at` s'écrit TOUJOURS avec le statut `paused_limit`, y compris
     à `None` : une échéance dépassée qu'on garderait ferait sauter la personne
     dans la réservation pour toujours (`claim_next_job` lit `limit_reset_at >
-    NOW()`), et une échéance sans statut ne freine rien."""
+    NOW()`), et une échéance sans statut ne freine rien.
+
+    `epuise` / `utilisation` : ce qui a posé la pause (`paused_limit` seulement,
+    remis à FALSE / NULL par tout autre statut) — le fournisseur a refusé, ou la
+    part de la fenêtre la plus chargée. Le repli vers la clé d'une org les relit
+    (`runner_jobs.PAUSE_POUR_L_ORG`) : il n'en part que si le forfait est épuisé, ou
+    si le seuil de l'org du TRAVAIL est lui-même dépassé."""
     with _connect() as conn:
         row = conn.execute(
             f"""UPDATE user_model_subscriptions
@@ -114,13 +122,16 @@ def marquer_statut(sub: str, famille: str, statut: str, *,
                        method = COALESCE(%s, method),
                        limit_reset_at = CASE WHEN %s = '{PLAFOND}' THEN %s::timestamptz
                                              ELSE NULL END,
+                       limit_epuise = %s = '{PLAFOND}' AND %s::boolean,
+                       limit_utilisation = CASE WHEN %s = '{PLAFOND}'
+                                                THEN %s::double precision END,
                        last_ok_at = CASE WHEN %s THEN NOW() ELSE last_ok_at END,
                        updated_at = NOW()
                  WHERE sub = %s AND famille = %s
                    AND (NOT %s::boolean OR statut <> '{DECONNECTE}')
              RETURNING {_CHAMPS}""",
-            (statut, plan, method, statut, limit_reset_at, bool(ok), sub, famille,
-             bool(observe)),
+            (statut, plan, method, statut, limit_reset_at, statut, bool(epuise),
+             statut, utilisation, bool(ok), sub, famille, bool(observe)),
         ).fetchone()
     return dict(row) if row else None
 

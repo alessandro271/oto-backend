@@ -117,6 +117,36 @@ def charge(model: Optional[str]) -> dict:
     return charge
 
 
+def repli_api(model: Optional[str]) -> Optional[str]:
+    """Le modèle `anthropic` de même TIER qu'un modèle d'ABONNEMENT — l'autre
+    façon de payer le même travail (OTO-130, repli plafond, 27/09/2026).
+
+    Dérivé du même préfixe que la famille (`sub:sonnet` -> tier `sonnet` ->
+    `claude-sonnet-5`) — jamais une table à part qui divergerait du catalogue le
+    jour où un tier est ajouté d'un côté et pas de l'autre. `None` si `model`
+    n'est pas un abonnement, ou si aucun modèle `anthropic` ne porte ce tier."""
+    m = _PAR_ID.get(model or "")
+    if not m or m.family not in FAMILLES_PERSONNELLES:
+        return None
+    tier = (model or "").split(":", 1)[-1]
+    if not tier:
+        return None
+    return next((c.id for c in MODELES if c.family == "anthropic" and tier in c.id),
+                None)
+
+
+def familles_de_repli(vers_famille: Optional[str]) -> frozenset[str]:
+    """Les familles d'ABONNEMENT dont au moins un modèle a un équivalent tier
+    dans `vers_famille` (`repli_api`) — dérivée, jamais recopiée : un tier
+    ajouté d'un côté sans l'autre sort de lui-même de cet ensemble."""
+    if not vers_famille:
+        return frozenset()
+    return frozenset(
+        m.family for m in MODELES
+        if m.family in FAMILLES_PERSONNELLES
+        and famille(repli_api(m.id)) == vers_famille)
+
+
 def catalogue(familles_servies, familles_sans_cle=()) -> list[dict]:
     """Le catalogue tel qu'un écran le propose : chaque modèle, s'il est SERVI —
     une famille dont un worker a sondé la file dans la fenêtre de présence — et

@@ -437,3 +437,64 @@ def test_un_preteur_OCCUPE_est_saute_au_profit_d_un_libre(live):
     assert _claim(perso) is not None
     _travail(oid, "occupe-dem")
     assert _forfait(_claim(oid)) == "occupe-p2"
+
+
+# ── La pose juge « ça tournera un jour ? », pas « à la seconde près ? » ───────
+
+def _plus_tard(h=36):
+    import datetime as _dt
+    return _dt.datetime.now(_dt.timezone.utc) + _dt.timedelta(hours=h)
+
+
+@pytest.fixture()
+def _option(monkeypatch):
+    from oto_mcp.capabilities import _abonnement
+    monkeypatch.setattr(_abonnement.access, "has_option", lambda *a, **k: True)
+
+
+def test_un_pool_dont_les_preteurs_sont_au_plafond_laisse_POSER(live, _option):
+    """Le cas vécu le 27/09/2026 : un seul prêteur, au plafond jusqu'au surlendemain.
+    `taille_du_pool` (la réservation) le compte à zéro — c'est juste, il ne peut pas
+    servir MAINTENANT. Mais refuser la POSE pour ça rendait le pool strictement pire
+    que le mode personnel, où `servable()` dit oui à un `paused_limit` quelle que soit
+    son échéance. Un plafond est temporaire : l'agent partira à la réinitialisation."""
+    from oto_mcp.capabilities import _abonnement
+    from oto_mcp.db import org_subscription_pool as P
+
+    oid = _org("pose-plafond", "pp-preteur")
+    _abonne("pp-preteur", statut="paused_limit", reset=_plus_tard(), pret_a=[oid])
+
+    assert P.taille_du_pool(oid, _F) == 0, "il ne peut pas servir maintenant"
+    assert P.taille_du_pool_a_la_pose(oid, _F) == 1, "il pourra servir à l'échéance"
+    _abonnement.exiger_a_la_pose("pp-preteur", None, _F, org_id=oid)  # ne lève pas
+
+
+def test_un_pool_dont_les_preteurs_sont_DECONNECTES_refuse_la_pose(live, _option):
+    """L'autre moitié : déconnecté n'est pas temporaire, rien ne le résout tout seul.
+    Le refus reste — `subscription_pool_empty` veut dire « ça ne tournera jamais »."""
+    from oto_mcp.capabilities import _abonnement
+    from oto_mcp.capabilities._types import AuthzDenied
+    from oto_mcp.db import org_subscription_pool as P
+    import pytest as _pytest
+
+    oid = _org("pose-deco", "pd-preteur")
+    _abonne("pd-preteur", statut="disconnected", pret_a=[oid])
+
+    assert P.taille_du_pool_a_la_pose(oid, _F) == 0
+    with _pytest.raises(AuthzDenied) as e:
+        _abonnement.exiger_a_la_pose("pd-preteur", None, _F, org_id=oid)
+    assert e.value.code == "subscription_pool_empty"
+
+
+def test_un_pool_sans_aucun_pret_refuse_toujours_la_pose(live, _option):
+    """Et le cas d'origine, inchangé : personne ne prête."""
+    from oto_mcp.capabilities import _abonnement
+    from oto_mcp.capabilities._types import AuthzDenied
+    import pytest as _pytest
+
+    oid = _org("pose-vide", "pv-membre")
+    _abonne("pv-membre", statut="connected")  # connecté, mais ne prête à personne
+
+    with _pytest.raises(AuthzDenied) as e:
+        _abonnement.exiger_a_la_pose("pv-membre", None, _F, org_id=oid)
+    assert e.value.code == "subscription_pool_empty"

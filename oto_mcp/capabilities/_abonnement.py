@@ -224,13 +224,20 @@ def exiger_a_la_pose(sub: str, proprietaire: Optional[str], famille: Optional[st
             "tournent sur l'abonnement de leur propriétaire. Seule la personne qui "
             "possède l'agent peut le poser sur le sien.")
     if pool:
-        if not org_subscription_pool.taille_du_pool(org_id, famille):
+        # ⚠️ `taille_du_pool_a_la_pose`, PAS `taille_du_pool` : un prêteur au plafond
+        # pourra servir dès son échéance, et la pose juge « ça tournera un jour ? »,
+        # pas « ça tournerait à la seconde près ? ». Le mode personnel dit déjà oui
+        # dans ce cas (`servable()` rend True sur un `paused_limit`) ; refuser ici
+        # rendait le pool STRICTEMENT pire que le personnel pour la même org.
+        if not org_subscription_pool.taille_du_pool_a_la_pose(org_id, famille):
             raise AuthzDenied(
                 400, "subscription_pool_empty",
                 f"l'organisation fait tourner les modèles `{famille}` sur son pool, et "
-                "aucun membre n'y prête d'abonnement connecté. Un membre doit prêter le "
-                "sien (Réglages › Fournisseurs de modèles), puis pose l'agent : posé sur "
-                "un pool vide, il resterait programmé sans jamais tourner.")
+                "aucun membre n'y prête d'abonnement utilisable. Un membre doit prêter "
+                "le sien, connecté (Réglages › Fournisseurs de modèles), puis pose "
+                "l'agent : posé sur un pool vide, il resterait programmé sans jamais "
+                "tourner. Un prêteur au plafond ne compte PAS comme un pool vide — son "
+                "forfait se réinitialise, et l'agent partira ce jour-là.")
         return
     servable_, statut, _ = servable(sub, famille)
     if not servable_:
@@ -267,6 +274,87 @@ def seuil(sub: str, org_id: Optional[int], famille: str) -> float:
     if perso is not None:
         pct = min(pct, perso)
     return pct / 100
+
+
+def raison_de_peremption(sub: Optional[str], org_id: Optional[int],
+                         famille: Optional[str], etat_runner: dict) -> str:
+    """La raison SERVIE quand le tick périme une occurrence non prise DANS SON
+    CYCLE (27/09/2026) — nommant la VRAIE cause plutôt que le texte générique
+    d'avant, qui disait toujours « aucun agent ne dessert cette organisation »
+    même quand un worker de la famille existait et que la seule chose qui
+    manquait était la connexion PERSONNELLE du propriétaire, ou un pool momentanément
+    en pause. Les deux diagnostics n'envoient pas au même geste : le premier dit
+    « préviens l'exploitant », le second dit « reconnecte-toi, ça repartira tout
+    seul ». Confondre les deux a fait tourner en rond un propriétaire qui n'avait
+    qu'à se reconnecter (mesuré sur un déclencheur réel, le 25/09/2026).
+
+    ⚠️ **Best-effort, jamais une garantie** : lu au moment de la péremption, cet
+    état a pu changer une seconde avant ou après (une reconnexion qui gagne de
+    justesse contre le tick, par exemple) — la RÈGLE d'expiration (occurrence
+    superседée) ne change pas d'un mot, seul le TEXTE qui l'accompagne s'affine.
+    """
+    base = "occurrence non prise dans son cycle : le déclencheur a enfilé la suivante."
+    aucun_agent = f"{base} Aucun agent ne dessert cette organisation."
+    servies = etat_runner.get("families") or []
+    if not est_abonnement(famille):
+        if famille:
+            # Famille API déclarée : la seule distinction qu'on sait faire ici
+            # est « un worker de cette famille existe-t-il ? » — le détail
+            # d'une clé manquante appartient à `_cle_exigee`, pas à ce module.
+            return aucun_agent if famille not in servies else base
+        # Aucun modèle déclaré (agents d'avant le catalogue, ou posés sans
+        # modèle) : n'importe quel worker sert ce travail, donc la seule
+        # question qui vaille est « un runner existe-t-il pour cette org, tout
+        # court ? » — la même lecture que `_modele.exige_un_runner`.
+        return aucun_agent if not etat_runner.get("armed") else base
+    if famille not in servies or not sub:
+        return aucun_agent
+    if en_pool(org_id, famille):
+        # ⚠️ `taille_du_pool` compte les prêteurs SERVABLES MAINTENANT — 0 y est
+        # ambigu (personne ne prête ? ou tout le monde est au plafond ?) pour un
+        # diagnostic. `taille_totale_du_pool` compte les prêts VIVANTS sans
+        # regarder l'état : lui seul distingue les deux.
+        if not org_subscription_pool.taille_totale_du_pool(org_id, famille):
+            return (f"{base} Le pool `{famille}` de l'organisation est vide : "
+                    "personne n'y prête d'abonnement connecté.")
+        if not org_subscription_pool.taille_du_pool(org_id, famille):
+            # ⚠️ Aucun prêteur servable : au plafond, ou à reconnecter ? Seul le
+            # premier est une PAUSE. `taille_du_pool_a_la_pose` compte les prêteurs
+            # connectés ou au plafond : 0, c'est que tous doivent se reconnecter
+            # — l'annoncer « en pause » renverrait attendre qui doit agir.
+            if not org_subscription_pool.taille_du_pool_a_la_pose(org_id, famille):
+                return (f"{base} Les membres qui prêtent leur abonnement `{famille}` "
+                        "au pool de l'organisation doivent le reconnecter (Réglages › "
+                        "Fournisseurs de modèles) — il repartira tout seul.")
+            return (f"{base} Le pool `{famille}` de l'organisation était en pause "
+                    "(plafond de consommation atteint) au moment où la suivante est "
+                    "arrivée.")
+        # Un prêteur EST servable maintenant : la vraie cause a déjà cédé.
+        return aucun_agent
+    # ⚠️ `servable()` répond FAIT EXPRÈS `True` pour un `paused_limit`, quelle que
+    # soit son échéance (l'attente vit dans la réservation, pas dans cette
+    # garde) : la réutiliser ici confondrait TOUT plafond avec une cause déjà
+    # résolue. Le diagnostic lit donc la ligne lui-même.
+    ligne = user_subscriptions.get_subscription(sub, famille) or {}
+    statut = ligne.get("statut")
+    if statut in (user_subscriptions.A_RECONNECTER, user_subscriptions.DECONNECTE):
+        return (f"{base} L'abonnement `{famille}` de son propriétaire doit se "
+                "reconnecter (Réglages › Fournisseurs de modèles) — il repartira "
+                "tout seul.")
+    if statut == user_subscriptions.PLAFOND:
+        reset = ligne.get("limit_reset_at")
+        if isinstance(reset, str):
+            reset = datetime.fromisoformat(reset)
+        if reset and reset.tzinfo is None:
+            reset = reset.replace(tzinfo=timezone.utc)
+        if reset and reset > datetime.now(timezone.utc):
+            return (f"{base} L'abonnement `{famille}` de son propriétaire avait "
+                    "atteint son plafond de consommation.")
+        # Échéance passée (ou inconnue) : la réservation aurait déjà servi ce
+        # travail — la vraie cause a cédé, le texte générique reste le plus
+        # honnête qu'on puisse écrire.
+        return aucun_agent
+    return aucun_agent
 
 
 def noter_rapport(conclu: dict, ok: bool, resultat: Optional[dict]) -> None:
@@ -333,8 +421,16 @@ def noter_rapport(conclu: dict, ok: bool, resultat: Optional[dict]) -> None:
             borne = (datetime.now(timezone.utc) + ECHEANCE_MAX).timestamp()
             quand = (datetime.fromtimestamp(min(max(echeances), borne), tz=timezone.utc)
                      if echeances else None)
+            # La CAUSE part avec la pause (décision du 28/09/2026) : le repli vers la
+            # clé d'une org n'en part que si le forfait est épuisé, ou si le seuil de
+            # l'org du TRAVAIL est dépassé — la pause, elle, est portée par la
+            # personne, et une autre org peut en tolérer davantage.
+            charges = [f["utilization"] for f in fenetres.values()
+                       if isinstance(f, dict)
+                       and isinstance(f.get("utilization"), (int, float))]
             user_subscriptions.marquer_statut(
                 porteur, famille, user_subscriptions.PLAFOND, limit_reset_at=quand,
+                epuise=refuse, utilisation=max(charges) if charges else None,
                 observe=True)
             return
         user_subscriptions.marquer_statut(

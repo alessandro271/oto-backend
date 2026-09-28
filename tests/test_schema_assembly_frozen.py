@@ -565,8 +565,17 @@ from oto_mcp.db import _schema, schema
 # la base PARTAGÉE reçoit la forme par la révision Alembic
 # `0024_droits_personne_partout`, pas par le démarrage.
 # 182 207 → 182 362 (+155, commentaires compris).
-EMPREINTE = "e8f94cdd02c1a79b760cb0871353f02fed3fe870ef0cb4190b49d727abbb813e"
-LONGUEUR = 182362
+# 28/09/2026 — le REPLI d'un abonnement épuisé sur la clé de l'org (#1086). Constante
+# NEUVE `schema/runs.py::MODEL_SUBSCRIPTION_REPLI`, en queue d'`ASSEMBLAGE` après
+# `MODEL_SUBSCRIPTION_POOL` (le fragment de `0020` reste à l'octet) : trois `ALTER TABLE
+# … ADD COLUMN IF NOT EXISTS` à défaut constant ou NULL — `org_model_subscription_modes.
+# repli_api BOOLEAN NOT NULL DEFAULT FALSE`, `user_model_subscriptions.limit_epuise
+# BOOLEAN NOT NULL DEFAULT FALSE` et `limit_utilisation DOUBLE PRECISION` ; rien ne se
+# réécrit (PG ≥ 11), l'ancien code les ignore. Base existante par la révision Alembic
+# `0025_repli_api`, à jouer avant la fusion. 182 362 → 184 032 (+1 670, commentaires
+# compris).
+EMPREINTE = "e903983e7acaf674f107648d73fe9b9df25dbaff18efacc0ed495f1aebadb0a2"
+LONGUEUR = 184032
 
 
 _CREATE_TABLE = re.compile(r"^CREATE TABLE IF NOT EXISTS (\w+)", re.M)

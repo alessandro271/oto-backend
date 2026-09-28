@@ -692,6 +692,18 @@ et ne lit que par `org_id = …` ; le code du lot lit la portée sans elle, et s
 d'une ligne de personne partout échoue sans elle (500 `NotNullViolation`, jamais en
 silence). Le retour arrière repose `NOT NULL` et **échoue de lui-même** tant qu'une ligne
 à `org_id` NULL existe — rien n'est supprimé en douce.
+`0025_repli_api` (28/09/2026, oto-backend#1086, après `0024_droits_personne_partout`)
+pose le repli d'un abonnement épuisé sur la clé API de l'org
+(`docs/runner-et-automatisations.md`) : trois `ADD COLUMN IF NOT EXISTS` du fragment
+`schema/runs.py::MODEL_SUBSCRIPTION_REPLI`, exécuté tel quel —
+`org_model_subscription_modes.repli_api BOOLEAN NOT NULL DEFAULT FALSE` (l'interrupteur,
+fermé), `user_model_subscriptions.limit_epuise BOOLEAN NOT NULL DEFAULT FALSE` et
+`limit_utilisation DOUBLE PRECISION` (la cause d'une pause). Défauts constants : rien ne
+se réécrit (PG ≥ 11), verrous bornés par `lock_timeout` 5 s. Le démarrage joue le même
+fragment, sous le garde des DDL. **Avant la fusion** : le code du lot lit `repli_api` à
+chaque lecture du mode (`get_mode`, donc à chaque remise d'un travail d'abonnement) et
+écrit la cause à chaque rapport de forfait. Le fragment de `0020` n'a pas bougé. Le
+retour arrière retire les trois colonnes.
 
 ### 5.2 Une base neuve naît à la tête du registre (24/09/2026, oto-backend#969)
 

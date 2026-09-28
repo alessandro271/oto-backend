@@ -564,8 +564,9 @@ MODEL_SUBSCRIPTION_LIMITS = """
 --
 -- ⚠️ Constante À PART de `RUNS`, assemblée en queue (après `orgs`, qu'elle
 -- référence) : `RUNS` se joue seul sur une base vierge et ne porte aucune FK vers
--- l'extérieur. La réservation ne lit pas cette table — la conclusion d'un travail
--- (`_abonnement.noter_rapport`) seule la lit.
+-- l'extérieur. La réservation ordinaire ne lit pas cette table — la conclusion d'un
+-- travail (`_abonnement.noter_rapport`) la lit, et le repli vers la clé de l'org
+-- (`runner_jobs._pause_pour_l_org`) aussi.
 CREATE TABLE IF NOT EXISTS org_model_subscription_limits (
     org_id BIGINT NOT NULL REFERENCES orgs(id) ON DELETE CASCADE,
     famille TEXT NOT NULL,
@@ -623,4 +624,32 @@ CREATE TABLE IF NOT EXISTS user_model_subscription_loans (
 );
 CREATE INDEX IF NOT EXISTS idx_user_model_subscription_loans_org
     ON user_model_subscription_loans(org_id, famille);
+"""
+
+# le REPLI d'un abonnement épuisé vers la clé API de l'org (OTO-130, #1086)
+MODEL_SUBSCRIPTION_REPLI = """
+-- Le REPLI d'un travail d'abonnement ÉPUISÉ vers la clé API de l'org, au même tier.
+-- `FALSE` par défaut (décision du 28/09/2026) : la clé qu'une org a déposée l'a été
+-- pour ses agents API, pas pour qu'on y déplace des travaux d'abonnement — le repli se
+-- CHOISIT, org par org (`oto_org_settings`, `PUT …/api-fallback`).
+--
+-- ⚠️ Sur la table des MODES, pas une table à part : absence de ligne = mode
+-- `personnel` ET repli fermé, les deux défauts d'un coup. Une org qui ouvre le repli
+-- sans avoir réglé de mode fait naître la ligne à `personnel`, ce qui est exactement
+-- ce qu'elle vivait déjà.
+ALTER TABLE org_model_subscription_modes
+    ADD COLUMN IF NOT EXISTS repli_api BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- CE QUI a mis un abonnement en pause, écrit avec `paused_limit`
+-- (`_abonnement.noter_rapport`) : le repli n'en part que si le forfait est RÉELLEMENT
+-- épuisé, ou si l'org du travail aurait posé la pause elle-même — jamais parce qu'une
+-- AUTRE org de la même personne a un plafond plus serré (décision du 28/09/2026).
+-- `limit_epuise` : le fournisseur a refusé (`rate_limit_info.status` ≠ `allowed`).
+-- `limit_utilisation` : la part (0..1) de la fenêtre la plus chargée, relue contre le
+-- seuil de l'org du travail. Remis à FALSE / NULL par tout autre statut. Une pause
+-- écrite avant ces colonnes (FALSE / NULL) n'ouvre aucun repli : elle attend.
+ALTER TABLE user_model_subscriptions
+    ADD COLUMN IF NOT EXISTS limit_epuise BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE user_model_subscriptions
+    ADD COLUMN IF NOT EXISTS limit_utilisation DOUBLE PRECISION;
 """

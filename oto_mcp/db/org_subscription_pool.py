@@ -9,7 +9,8 @@ Deux tables (`db/schema/runs.py::MODEL_SUBSCRIPTION_POOL`) :
 
 La réservation (`runner_jobs.claim_next_job`) lit les deux tables en SQL ; ce module
 porte les lectures et écritures des surfaces (réglage d'org, écran de la personne) et
-celle de la pose (`taille_du_pool`).
+celle de la pose (`taille_du_pool_a_la_pose` — PAS `taille_du_pool`, qui juge ce qui
+peut servir à la seconde près ; voir leurs docstrings).
 
 ⚠️ Aucune session, aucun secret ici, comme dans `user_subscriptions` : un prêt dit
 QUEL sandbox peut servir, jamais comment s'y connecter.
@@ -48,7 +49,7 @@ def get_mode(org_id: Optional[int], famille: str) -> Optional[dict]:
         return None
     with _connect() as conn:
         row = conn.execute(
-            "SELECT org_id, famille, mode, updated_at, updated_by "
+            "SELECT org_id, famille, mode, repli_api, updated_at, updated_by "
             "FROM org_model_subscription_modes WHERE org_id = %s AND famille = %s",
             (org_id, famille)).fetchone()
     return dict(row) if row else None
@@ -56,6 +57,36 @@ def get_mode(org_id: Optional[int], famille: str) -> Optional[dict]:
 
 def en_pool(org_id: Optional[int], famille: str) -> bool:
     return ((get_mode(org_id, famille) or {}).get("mode")) == POOL
+
+
+def repli_api_actif(org_id: Optional[int], famille: str) -> bool:
+    """Cette org a-t-elle CHOISI qu'un travail d'abonnement épuisé rejoue sur SA clé
+    API plutôt que d'attendre la réinitialisation (OTO-130) ? FERMÉ par défaut —
+    sans ligne, le repli n'existe pas (décision du 28/09/2026).
+
+    ⚠️ Une clé déposée ne vaut pas ce choix : les orgs qui en ont une l'ont posée pour
+    leurs agents API, et y déplacer des travaux d'abonnement serait les faire payer
+    pour une dépense qu'elles n'ont pas demandée. Ouvert, le repli exige EN PLUS
+    cette clé (`runner_jobs._cle_ok_pour_repli`). La réservation lit la colonne en
+    SQL (`runner_jobs.candidats_repli_abonnement`) ; cette lecture sert l'écran."""
+    return bool((get_mode(org_id, famille) or {}).get("repli_api"))
+
+
+def set_repli_api(org_id: int, famille: str, actif: bool, par: Optional[str]) -> dict:
+    """Ouvre ou referme le repli API de cette org. Fait NAÎTRE la ligne à
+    `personnel` si l'org n'a jamais réglé de mode — son mode effectif d'avant, donc
+    rien ne change d'autre que l'interrupteur."""
+    with _connect() as conn:
+        row = conn.execute(
+            "INSERT INTO org_model_subscription_modes "
+            "  (org_id, famille, mode, repli_api, updated_by) "
+            "VALUES (%s, %s, %s, %s, %s) "
+            "ON CONFLICT (org_id, famille) DO UPDATE "
+            "   SET repli_api = EXCLUDED.repli_api, updated_at = NOW(), "
+            "       updated_by = EXCLUDED.updated_by "
+            "RETURNING org_id, famille, mode, repli_api, updated_at, updated_by",
+            (org_id, famille, PERSONNEL, bool(actif), par)).fetchone()
+    return dict(row)
 
 
 def poser_mode(org_id: int, famille: str, mode: str, par: str) -> dict:
@@ -80,6 +111,47 @@ def taille_du_pool(org_id: int, famille: str) -> int:
         row = conn.execute(
             f"SELECT COUNT(*) AS n FROM user_model_subscription_loans l {PRET_VIVANT} "
             f"WHERE l.org_id = %s AND l.famille = %s AND {PRETEUR_SERVABLE}",
+            (org_id, famille)).fetchone()
+    return int(row["n"]) if row else 0
+
+
+def taille_du_pool_a_la_pose(org_id: int, famille: str) -> int:
+    """Combien de membres prêtent un abonnement qui POURRA servir — connecté, ou au
+    plafond QUEL QUE SOIT son échéance. `PRETEUR_SERVABLE` sans sa clause d'échéance.
+
+    ⚠️ La pose et la RÉSERVATION ne posent pas la même question, et les confondre a
+    bloqué une org réelle (27/09/2026). La réservation demande « qui peut servir CE
+    travail, maintenant ? » — un prêteur au plafond non échu est sauté, le travail
+    attend. La pose demande « cet agent pourra-t-il tourner un jour ? » — et un
+    plafond est TEMPORAIRE : il tombe à son échéance, l'agent partira. Refuser la
+    pose parce que l'unique prêteur est au plafond jusqu'à demain matin, c'est
+    refuser pour une raison qui aura disparu avant la prochaine occurrence.
+
+    C'est déjà la règle en mode PERSONNEL, où `servable()` rend `True` pour un
+    `paused_limit` quelle que soit son échéance, délibérément. Le pool s'aligne :
+    seule l'ABSENCE durable (personne ne prête, ou tous déconnectés / sans sandbox)
+    refuse la pose — `subscription_pool_empty` veut dire « ça ne tournera jamais »,
+    pas « pas tout de suite »."""
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT COUNT(*) AS n FROM user_model_subscription_loans l {PRET_VIVANT} "
+            f"WHERE l.org_id = %s AND l.famille = %s "
+            f"  AND ab.sandbox_id IS NOT NULL "
+            f"  AND ab.statut IN ('connected', 'paused_limit')",
+            (org_id, famille)).fetchone()
+    return int(row["n"]) if row else 0
+
+
+def taille_totale_du_pool(org_id: int, famille: str) -> int:
+    """Combien de membres de l'org lui prêtent un abonnement, SERVABLE ou pas —
+    à distinguer de `taille_du_pool` (0 est ambigu : personne ne prête, ou tout
+    le monde est momentanément au plafond ?). Sert au DIAGNOSTIC d'une
+    péremption (`capabilities._abonnement.raison_de_peremption`, 27/09/2026),
+    jamais à une garde de pose — celle-ci lit `taille_du_pool_a_la_pose`."""
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT COUNT(*) AS n FROM user_model_subscription_loans l {PRET_VIVANT} "
+            f"WHERE l.org_id = %s AND l.famille = %s",
             (org_id, famille)).fetchone()
     return int(row["n"]) if row else 0
 

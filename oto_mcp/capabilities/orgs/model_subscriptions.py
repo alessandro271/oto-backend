@@ -36,6 +36,7 @@ from ..registry import CAPABILITIES
 _ID = {"id": "org_id"}
 _PATH = "/api/orgs/{id}/model-subscriptions/{family}"
 _PATH_MODE = "/api/orgs/{id}/model-subscriptions/{family}/mode"
+_PATH_REPLI = "/api/orgs/{id}/model-subscriptions/{family}/api-fallback"
 
 
 class OrgPlafond(BaseModel):
@@ -59,6 +60,12 @@ class OrgPlafond(BaseModel):
     pool_size: int = Field(
         description=("How many members currently lend this org a usable (connected) "
                      "subscription. In `pool` mode, zero means the org's jobs wait."))
+    api_fallback: bool = Field(
+        default=False,
+        description=("`true`: a job whose subscription (the requester's, or the whole "
+                     "pool) is EXHAUSTED replays on this org's own deposited API key, "
+                     "same tier, instead of waiting for the plan to reset. `false` "
+                     "(default): those jobs wait. It never spends anyone else's key."))
 
 
 class GetOrgPlafondInput(BaseModel):
@@ -81,6 +88,18 @@ class SetOrgModeInput(BaseModel):
         description="`personnel` (each requester's own subscription) or `pool`.")
 
 
+class SetOrgRepliInput(BaseModel):
+    org_id: int
+    family: str
+    api_fallback: bool = Field(
+        description=("`true`: when the subscription is exhausted, the org's jobs replay "
+                     "on the org's OWN deposited API key, same tier, instead of waiting "
+                     "for the plan to reset — at most one such run at a time per "
+                     "subscription, each capped in tokens. Never spends anyone else's "
+                     "key: with no key deposited by this org, the jobs wait either way. "
+                     "`false` (default): those jobs wait for the reset."))
+
+
 def _exiger(org_id: int, famille: str) -> None:
     if not org_store.get_org(org_id):
         raise AuthzDenied(404, "unknown_org", f"Org #{org_id} inconnue.")
@@ -92,6 +111,7 @@ def _exiger(org_id: int, famille: str) -> None:
 
 
 def _servi(org_id: int, famille: str) -> dict:
+    repli = {"api_fallback": org_subscription_pool.repli_api_actif(org_id, famille)}
     pool = {"mode": ((org_subscription_pool.get_mode(org_id, famille) or {}).get("mode")
                      or org_subscription_pool.PERSONNEL),
             "pool_size": org_subscription_pool.taille_du_pool(org_id, famille)}
@@ -99,12 +119,12 @@ def _servi(org_id: int, famille: str) -> dict:
     if not ligne:
         return {"org_id": org_id, "family": famille,
                 "limit_pct": _abonnement.DEFAUT_LIMITE_PCT, "default": True,
-                "updated_at": None, "updated_by": None, **pool}
+                "updated_at": None, "updated_by": None, **pool, **repli}
     quand = ligne.get("updated_at")
     return {"org_id": org_id, "family": famille, "limit_pct": ligne["limite_pct"],
             "default": False,
             "updated_at": quand.isoformat() if hasattr(quand, "isoformat") else quand,
-            "updated_by": ligne.get("updated_by"), **pool}
+            "updated_by": ligne.get("updated_by"), **pool, **repli}
 
 
 # `def`, pas `async def` : I/O bloquante (psycopg), servie en threadpool
@@ -132,6 +152,17 @@ def _set_mode(ctx: ResolvedCtx, inp: SetOrgModeInput) -> dict:
     est nul."""
     _exiger(inp.org_id, inp.family)
     org_subscription_pool.poser_mode(inp.org_id, inp.family, inp.mode, ctx.sub)
+    return _servi(inp.org_id, inp.family)
+
+
+def _set_repli(ctx: ResolvedCtx, inp: SetOrgRepliInput) -> dict:
+    """Le REPLI vers la clé API de l'org quand le forfait est épuisé (OTO-130).
+    FERMÉ par défaut (décision du 28/09/2026) : une clé déposée l'a été pour des
+    agents API, et y déplacer des travaux d'abonnement se CHOISIT. Ouvert, le repli
+    exige en plus que l'org ait déposé sa propre clé. Vaut pour le travail SUIVANT."""
+    _exiger(inp.org_id, inp.family)
+    org_subscription_pool.set_repli_api(inp.org_id, inp.family, inp.api_fallback,
+                                        ctx.sub)
     return _servi(inp.org_id, inp.family)
 
 
@@ -178,5 +209,20 @@ CAPABILITIES += [
                      "account (the lower of the org's cap and theirs). Applies from the "
                      "next job; a running job is never cut. Org admin."),
         rest=RestBinding("PUT", _PATH_MODE, _ID),
+    ),
+    Capability(
+        key="org.model_subscriptions.set_api_fallback", handler=_set_repli,
+        Input=SetOrgRepliInput, authz=ORG_ADMIN_OF("org_id"), Output=OrgPlafond,
+        errors=_ERREURS,
+        description=("Allow or refuse, for this org, that a job whose model subscription "
+                     "is EXHAUSTED — the requester's own, or every lender of the org's "
+                     "pool — replays on the org's OWN deposited API key at the same tier "
+                     "instead of waiting for the plan to reset. Off by default. A pause "
+                     "set by another org's tighter cap never triggers it; one replayed "
+                     "run at a time per subscription, capped in tokens. It never spends "
+                     "another party's key: without a key deposited BY THIS ORG the job "
+                     "waits either way. Applies from the next job; a running job is never "
+                     "cut. Org admin."),
+        rest=RestBinding("PUT", _PATH_REPLI, _ID),
     ),
 ]
