@@ -7,17 +7,20 @@ valide qu'après s'être relu.
 
 Refus, tous AVANT la première écriture et chacun nommé (`ImportRefuse`) : fichier dont
 l'empreinte ou les comptes ne sont pas ceux du manifeste, schéma ou version
-différents de la source, base cible déjà peuplée, tenant primaire de la cible qui
-n'est pas celui de l'export, secrets à rechiffrer sans les deux clés.
+différents de la source, base cible déjà peuplée, tenant primaire de la cible dont
+le slug ou le NOM (semé depuis `OTO_BRAND_NAME`) n'est pas celui du tenant exporté,
+secrets chiffrés sous une autre clé que celle de CETTE instance.
 
-Ce qui change en chemin, et rien d'autre :
-- **le tenant** exporté devient la ligne 1 de la cible (la ligne semée prend ses
-  valeurs, son slug est déjà le même) ; toute clé étrangère vers `tenants(id)` vaut 1 ;
-- **les comptes** perdent le préfixe `<slug>:` que leur donnait un tenant tiers
-  (`manifeste["comptes"]`) : sur la cible, le tenant est primaire et ses subs sont nus.
-  Le remplacement vise les VALEURS exactement égales à un sub du périmètre, ou à sa
-  forme membre `<org>:<sub>`, à toute profondeur d'un JSON ;
-- **les secrets** sont rechiffrés de la clé source vers la clé cible (`rechiffrement`).
+L'import ne connaît que la clé de son instance : les secrets arrivent déjà rechiffrés
+pour elle (`rechiffrement`, fait à l'export). Il vérifie seulement, en mémoire, que
+chacun se déchiffre sous sa clé et l'AAD de la ligne qu'il écrit.
+
+Ce qui change en chemin est `transformation.Transformation`, la fonction même dont
+l'export s'est servi pour les AAD : le tenant devient la ligne 1 (la ligne semée prend
+ses valeurs), toute clé vers `tenants(id)` vaut 1, les comptes perdent leur préfixe.
+
+L'écriture se fait par LOTS (`TAILLE_LOT` lignes par aller-retour) : un journal
+d'appels complet se compte en centaines de milliers de lignes.
 
 La vérification finale relit le périmètre SUR LA CIBLE, par la même lecture que
 l'export (`extraction.ouvrir`), et exige par table le même nombre de lignes que le
@@ -35,10 +38,13 @@ import psycopg
 
 from .classement import CLASSEMENT
 from .decouverte import lire_schema, verifier_classement
+from ..crypto import _load_master_key
 from .extraction import FORMAT, _colonnes, ouvrir
-from .rechiffrement import AAD, Cles, rechiffrer
+from .rechiffrement import AAD, empreinte_cle, lisible
+from .transformation import Transformation
 
 _MODULE = 2 ** 256
+TAILLE_LOT = 500
 
 
 class ImportRefuse(RuntimeError):
@@ -90,31 +96,13 @@ def _canonique(ligne: dict) -> int:
     return int.from_bytes(hashlib.sha256(texte.encode()).digest(), "big")
 
 
-def _denuder(v, comptes: dict[str, str]):
-    """Le sub cible de chaque valeur qui EST un sub du périmètre (ou sa forme membre)."""
-    if isinstance(v, str):
-        if v in comptes:
-            return comptes[v]
-        tete, sep, reste = v.partition(":")
-        if sep and tete.isdigit() and reste in comptes:
-            return f"{tete}:{comptes[reste]}"
-        return v
-    if isinstance(v, list):
-        return [_denuder(x, comptes) for x in v]
-    if isinstance(v, dict):
-        return {k: _denuder(x, comptes) for k, x in v.items()}
-    return v
-
-
-def importer(conn: psycopg.Connection, chemin: Path | str, *, cles: Cles | None = None) -> dict:
+def importer(conn: psycopg.Connection, chemin: Path | str) -> dict:
     """Verse l'export `chemin` dans la base de `conn` (à `dict_row`, hors transaction)
     et rend, par table, le nombre de lignes et l'empreinte relue sur la cible."""
     chemin = Path(chemin)
     manifeste = lire_manifeste(chemin)
     controler_fichier(chemin, manifeste)
-    if manifeste["secrets"] and cles is None:
-        raise ImportRefuse(f"secrets à rechiffrer {manifeste['secrets']} : les deux clés "
-                           "(source et cible) sont requises")
+    cle = _cle_de_l_instance(manifeste)
     with conn.transaction():
         schema = _controler_cible(conn, manifeste)
         # L'import REPRODUIT un état, il ne rejoue pas des gestes : les déclencheurs de
@@ -124,7 +112,7 @@ def importer(conn: psycopg.Connection, chemin: Path | str, *, cles: Cles | None 
         tables = ["tenants", *manifeste["ordre"]]
         for t in tables:
             conn.execute(f"ALTER TABLE {t} DISABLE TRIGGER USER")
-        attendu = _verser(conn, chemin, manifeste, schema, cles)
+        attendu = _verser(conn, chemin, manifeste, schema, cle)
         for t in tables:
             conn.execute(f"ALTER TABLE {t} ENABLE TRIGGER USER")
         _recaler_sequences(conn, manifeste)
@@ -133,6 +121,22 @@ def importer(conn: psycopg.Connection, chemin: Path | str, *, cles: Cles | None 
             ecarts = sorted(t for t in set(attendu) | set(relu) if attendu.get(t) != relu.get(t))
             raise VerificationEchouee(f"la cible relue diffère de ce qui a été écrit : {ecarts}")
     return {t: {"lignes": n, "empreinte": f"{h:064x}"} for t, (n, h) in relu.items()}
+
+
+def _cle_de_l_instance(manifeste: dict) -> bytes | None:
+    """La clé de CETTE instance, si le fichier porte des secrets — et c'est la leur."""
+    if not manifeste["secrets"]:
+        return None
+    cle = _load_master_key()
+    if cle is None:
+        raise ImportRefuse(f"le fichier porte des secrets {manifeste['secrets']} et cette "
+                           "instance n'a pas de clé maîtresse (OTO_MCP_MASTER_KEY)")
+    if empreinte_cle(cle) != manifeste["cle_cible"]:
+        raise ImportRefuse("les secrets du fichier sont chiffrés sous une autre clé que "
+                           "celle de cette instance (empreinte "
+                           f"{manifeste['cle_cible'][:12]}… ≠ {empreinte_cle(cle)[:12]}…) : "
+                           "refaire l'export avec la clé de CETTE instance")
+    return cle
 
 
 def _controler_cible(conn, manifeste: dict):
@@ -151,33 +155,34 @@ def _controler_cible(conn, manifeste: dict):
     if peuplees:
         raise ImportRefuse(f"la base cible n'est pas vierge ({peuplees} portent des lignes) : "
                            "l'import vise une base née par le démarrage, rien d'autre")
-    slug = conn.execute("SELECT slug FROM tenants WHERE id = 1").fetchone()
-    if slug is None or slug["slug"] != manifeste["tenant"]["slug"]:
+    primaire = conn.execute("SELECT slug, name FROM tenants WHERE id = 1").fetchone()
+    exporte = manifeste["tenant"]
+    if primaire is None or primaire["slug"] != exporte["slug"]:
         raise ImportRefuse(f"la cible déclare le tenant primaire "
-                           f"{slug and slug['slug']!r}, l'export est celui de "
-                           f"{manifeste['tenant']['slug']!r} (OTO_TENANT_PRIMAIRE_SLUG)")
+                           f"{primaire and primaire['slug']!r}, l'export est celui de "
+                           f"{exporte['slug']!r} (OTO_TENANT_PRIMAIRE_SLUG)")
+    if primaire["name"] != exporte["nom"]:
+        raise ImportRefuse(f"le tenant primaire de la cible s'appelle {primaire['name']!r} "
+                           f"(OTO_BRAND_NAME), le tenant exporté {exporte['nom']!r} : "
+                           "l'instance déclare son nom, l'import ne l'écrase pas")
     return schema
 
 
-def _verser(conn, chemin: Path, manifeste: dict, schema, cles) -> dict[str, tuple[int, int]]:
-    comptes = {s: c for s, c in manifeste["comptes"].items() if s != c}
-    vers_tenant = {k.table: k.colonnes for k in schema.cles
-                   if k.cible == "tenants" and k.colonnes_cible == ("id",)}
+def _verser(conn, chemin: Path, manifeste: dict, schema, cle) -> dict[str, tuple[int, int]]:
+    transformation = Transformation.depuis(schema, manifeste["comptes"])
     auto = {t: [k.colonnes[0] for k in schema.cles_de(t) if k.cible == t]
             for t in manifeste["ordre"]}
     attendu: dict[str, tuple[int, int]] = {}
     differes: list[tuple[str, dict]] = []
+    lot: list[str] = []
+    table_du_lot = None
     for texte in _lignes_du_fichier(chemin):
         brut = json.loads(texte)
-        t, source = brut["t"], brut["l"]
-        ligne = _denuder(source, comptes) if comptes else dict(source)
-        for c in vers_tenant.get(t, ()):
-            if ligne[c] is not None:
-                ligne[c] = 1
-        if t == "tenants":
-            ligne["id"] = 1
-        if t in AAD and cles is not None:
-            rechiffrer(t, source, ligne, cles)
+        t = brut["t"]
+        ligne = transformation.appliquer(t, brut["l"])
+        if t in AAD and not lisible(t, ligne, cle):
+            raise ImportRefuse(f"{t} : un secret ne se déchiffre pas sous la clé de cette "
+                               "instance et l'AAD de sa ligne")
         n, h = attendu.get(t, (0, 0))
         attendu[t] = (n + 1, (h + _canonique(ligne)) % _MODULE)
         if t == "tenants":
@@ -186,16 +191,27 @@ def _verser(conn, chemin: Path, manifeste: dict, schema, cles) -> dict[str, tupl
         if any(ligne.get(c) is not None for c in auto[t]):
             differes.append((t, {c: ligne[c] for c in auto[t]} | _cle(schema, t, ligne)))
             ligne = {**ligne, **{c: None for c in auto[t]}}
-        conn.execute(f"INSERT INTO {t} SELECT * FROM json_populate_record(NULL::{t}, %s::json)",
-                     (json.dumps(ligne),))
+        if t != table_du_lot or len(lot) >= TAILLE_LOT:
+            _inserer(conn, table_du_lot, lot)
+            lot, table_du_lot = [], t
+        lot.append(json.dumps(ligne))
+    _inserer(conn, table_du_lot, lot)
     # Les auto-références (une page sous une page) se posent quand toutes les lignes
     # de la table sont là : leur ordre d'insertion n'a pas à connaître l'arbre.
     for t, v in differes:
-        cle = _cle(schema, t, v)
-        poses = [c for c in v if c not in cle]
+        cle_ligne = _cle(schema, t, v)
+        poses = [c for c in v if c not in cle_ligne]
         conn.execute(f"UPDATE {t} SET " + ", ".join(f"{c} = %({c})s" for c in poses)
-                     + " WHERE " + " AND ".join(f"{c} = %({c})s" for c in cle), v)
+                     + " WHERE " + " AND ".join(f"{c} = %({c})s" for c in cle_ligne), v)
     return attendu
+
+
+def _inserer(conn, t: str | None, lot: list[str]) -> None:
+    if not lot:
+        return
+    with conn.cursor() as cur:
+        cur.executemany(f"INSERT INTO {t} SELECT * FROM json_populate_record(NULL::{t}, "
+                        "%s::json)", [(x,) for x in lot])
 
 
 def _cle(schema, t: str, ligne: dict) -> dict:
@@ -203,6 +219,7 @@ def _cle(schema, t: str, ligne: dict) -> dict:
 
 
 def _ecrire_tenant_primaire(conn, ligne: dict) -> None:
+    """La ligne 1 semée prend les valeurs du tenant exporté (slug et nom déjà égaux)."""
     cols = [c for c in ligne if c != "id"]
     conn.execute(f"UPDATE tenants SET ({', '.join(cols)}) = (SELECT {', '.join(cols)} "
                  "FROM json_populate_record(NULL::tenants, %s::json)) WHERE id = 1",

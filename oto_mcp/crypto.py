@@ -45,13 +45,19 @@ def _load_master_key() -> Optional[bytes]:
     raw = os.environ.get("OTO_MCP_MASTER_KEY")
     if not raw:
         return None
+    return parse_key(raw, "OTO_MCP_MASTER_KEY")
+
+
+def parse_key(raw: str, nom: str) -> bytes:
+    """Une clé maîtresse écrite en hex (64 chars) ou base64, décodée en 32 octets —
+    `nom` dit d'où elle vient dans le refus."""
     raw = raw.strip()
     if len(raw) == 64 and all(c in string.hexdigits for c in raw):
         key = bytes.fromhex(raw)
     else:
         key = base64.b64decode(raw, validate=True)
     if len(key) != 32:
-        raise ValueError("OTO_MCP_MASTER_KEY doit décoder en 32 octets (AES-256 ; hex 64 chars ou base64)")
+        raise ValueError(f"{nom} doit décoder en 32 octets (AES-256 ; hex 64 chars ou base64)")
     return key
 
 

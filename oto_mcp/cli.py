@@ -45,12 +45,17 @@ def main() -> None:
     if argv and argv[0] == "maintenance":
         from . import maintenance
         raise SystemExit(maintenance.main(argv[1:]))
+    if argv and argv[0] == "perimetre":
+        from .export_perimetre import commande
+        raise SystemExit(commande.main(argv[1:]))
     if argv:
         raise SystemExit(
             f"oto-mcp : argument inconnu {argv[0]!r}.\n"
             "  oto-mcp                        démarre le serveur\n"
             "  oto-mcp maintenance <travail>  joue un travail de maintenance "
-            "(--help pour la liste)")
+            "(--help pour la liste)\n"
+            "  oto-mcp perimetre export|import  export par périmètre de propriétaire "
+            "(docs/export-perimetre.md)")
     # AVANT l'import : cet import EST déjà du démarrage, et il journalise.
     _configurer_le_journal()
     from .server import main as serve

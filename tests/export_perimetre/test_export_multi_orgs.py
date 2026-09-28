@@ -14,17 +14,21 @@ périmètre principal.
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
 psycopg = pytest.importorskip("psycopg")
 from psycopg.rows import dict_row  # noqa: E402
 
+from oto_mcp import credentials_store  # noqa: E402
+from oto_mcp.crypto import decrypt_with_key, encrypt_with_key  # noqa: E402
 from oto_mcp.export_perimetre.classement import CLASSEMENT, EXPORTEES  # noqa: E402
 from oto_mcp.export_perimetre.extraction import (  # noqa: E402
     ReferencesHorsPerimetre, SecretsChiffres, exporter)
 from oto_mcp.export_perimetre.perimetre import (  # noqa: E402
     ComptesHorsTenant, ComptesPartages, PerimetreRefuse, TenantPartage, TenantsMultiples)
+from oto_mcp.export_perimetre.rechiffrement import empreinte_cle  # noqa: E402
 from perimetre_banc import A, B, membre, org, semer, tenant  # noqa: E402
 
 
@@ -95,9 +99,10 @@ def test_le_manifeste_dit_ce_qui_ne_part_pas_et_ce_qui_vit_hors_base(base, expor
     assert manifeste["references_instance"] == {}
     assert manifeste["tables"]["tenants"]["lignes"] == 1
     assert manifeste["tenant"] == {"id": a["tenant"], "slug": a["slug"],
-                                   "primaire_source": False}
+                                   "nom": f"tenant {A}", "primaire_source": False}
     assert manifeste["comptes"] == {a["alice"]: f"{A}-alice", a["bob"]: f"{A}-bob"}
-    assert manifeste["secrets"] == {}
+    assert manifeste["secrets"] == {} and manifeste["cle_cible"] is None
+    assert manifeste["tenant"]["nom"] == f"tenant {A}"
     assert manifeste["perimetre"]["orgs_declarees"] == [a["org"]]
     assert len(manifeste["perimetre"]["orgs_personnelles"]) == 1
     assert manifeste["perimetre"]["comptes"] == 2
@@ -163,18 +168,31 @@ def test_un_compte_que_le_tenant_ne_qualifie_pas_refuse(base, tmp_path):
         _exporter(base, [o], tmp_path / "x.jsonl")
 
 
-def test_un_secret_chiffre_refuse_sauf_a_le_transporter(base, tmp_path):
+def test_un_secret_refuse_sans_la_cle_cible_et_part_rechiffre_avec(base, tmp_path,
+                                                                  monkeypatch):
+    """Le fichier ne porte JAMAIS un secret sous notre clé : sans la clé de la cible,
+    l'export refuse ; avec, il rechiffre, et le manifeste dit sous quelle clé."""
+    cle_source, cle_cible = os.urandom(32), os.urandom(32)
+    monkeypatch.setenv("OTO_MCP_MASTER_KEY", cle_source.hex())
     with psycopg.connect(base["dsn"], autocommit=True, row_factory=dict_row) as c:
         o = org(c, "org à secret", _tenant_a_part(c, "tsecret"))
+        aad = credentials_store._aad("org", str(o), "serper")
+        source = encrypt_with_key(cle_source, "clair", aad)
         c.execute("INSERT INTO connector_credentials (entity_type, entity_id, connector, "
-                  "account, secret_enc) VALUES ('org', %s, 'serper', '', 'chiffre')",
-                  (str(o),))
+                  "account, secret_enc) VALUES ('org', %s, 'serper', '', %s)", (str(o), source))
     with pytest.raises(SecretsChiffres) as e:
         _exporter(base, [o], tmp_path / "x.jsonl")
     assert e.value.comptes == {"connector_credentials": 1}
     assert not (tmp_path / "x.jsonl").exists()
-    manifeste = _exporter(base, [o], tmp_path / "x.jsonl", transporter_secrets=True)
+    manifeste = _exporter(base, [o], tmp_path / "x.jsonl", cle_cible=cle_cible)
     assert manifeste["secrets"] == {"connector_credentials": 1}
+    assert manifeste["cle_cible"] == empreinte_cle(cle_cible)
+    ligne = next(x["l"] for x in _lignes(tmp_path / "x.jsonl")[:-1]
+                 if x["t"] == "connector_credentials")
+    assert ligne["secret_enc"] != source
+    assert decrypt_with_key(cle_cible, ligne["secret_enc"], aad) == "clair"
+    texte = (tmp_path / "x.jsonl").read_text(encoding="utf-8")
+    assert "clair" not in texte and cle_cible.hex() not in texte
 
 
 def test_une_reference_vers_une_ligne_d_autrui_refuse(base, tmp_path):

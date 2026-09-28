@@ -8,15 +8,29 @@ description: >-
   (possédée, indirecte, instance, exclue), le refus d'une table non classée, le
   périmètre dérivé d'orgs déclarées (et de leur tenant), les refus de l'extraction,
   et l'import dans une base née par le démarrage : tenant sur la ligne 1, comptes
-  dénudés, secrets rechiffrés, vérification par relecture.
+  dénudés, secrets rechiffrés à l'export, vérification par relecture, commande
+  `oto-mcp perimetre`.
 ---
 
 # Export par périmètre de propriétaire
 
-`oto_mcp/export_perimetre/`. **État : classement, extraction, import et rechiffrement
-existent, éprouvés de bout en bout sur des bases de test
-(`tests/export_perimetre/test_import_bout_en_bout.py`). L'outil en ligne de commande et
-la répétition à blanc sur une copie restent à faire (#1088).**
+`oto_mcp/export_perimetre/`. **État : classement, extraction avec rechiffrement, import
+par lots et commande `oto-mcp perimetre` existent, éprouvés de bout en bout sur des
+bases de test (`tests/export_perimetre/test_import_bout_en_bout.py`). La répétition à
+blanc sur une copie reste à faire (#1088).**
+
+## La commande
+
+```bash
+# Chez NOUS, sur la base source (DATABASE_URL, OTO_MCP_MASTER_KEY de notre instance) :
+OTO_EXPORT_CLE_CIBLE=<clé de l'instance cible> \
+  oto-mcp perimetre export --org 12 [--org 13 …] --sortie perimetre.jsonl
+# Sur l'instance cible, née par le démarrage (sa DATABASE_URL, SA clé maîtresse) :
+oto-mcp perimetre import perimetre.jsonl
+```
+
+Un refus s'imprime nommé et sort en code 2, sans rien écrire. Le résumé ne cite jamais
+une clé, seulement l'empreinte de la clé cible.
 
 ## Le classement : chaque table, une classe
 
@@ -71,10 +85,9 @@ restent (« exclue ») ; les orgs personnelles suivent leurs comptes.
 toute écriture. La connexion reste en lecture seule après l'appel. Avant la première
 ligne écrite, elle refuse dans trois cas :
 
-- `SecretsChiffres` : une ligne exportée porte une valeur chiffrée avec **notre** clé
-  maîtresse (`secrets` du classement : coffre, secret de signature d'un déclencheur, clé
-  d'une transcription), et l'appelant n'a pas demandé `transporter_secrets=True`.
-  Transportées, ces valeurs restent chiffrées sous notre clé dans le fichier ;
+- `SecretsChiffres` : une ligne exportée porte une valeur chiffrée (`secrets` du
+  classement : coffre, secret de signature d'un déclencheur, clé d'une transcription)
+  et l'appelant n'a pas donné la clé de l'instance cible (`cle_cible`) ;
 - `ReferencesHorsPerimetre` : une clé étrangère d'une ligne exportée pointe vers une
   ligne qui ne part pas (un lien de page vers la page d'autrui, une ligne exclue) ;
 - une clé étrangère vers une table **instance** n'est pas un refus : le manifeste la
@@ -86,32 +99,52 @@ table (`{"t", "l"}`, le `row_to_json` de PostgreSQL), les parents avant leurs en
 puis le manifeste. Celui-ci porte le compte par table, les lignes omises des tables
 exclues, le maximum de chaque séquence, l'inventaire hors base (clés d'Object Storage à
 copier à part), l'instantané, la version de schéma, les colonnes de chaque table, le
-tenant, la correspondance des comptes source → cible, les secrets transportés et
-l'empreinte SHA-256 des lignes. Les horodatages sont écrits en UTC. Un export
-existant ne s'écrase pas.
+tenant (id, slug, nom), la correspondance des comptes source → cible, le compte des
+secrets, l'EMPREINTE de la clé cible (`rechiffrement.empreinte_cle`, jamais la clé) et
+l'empreinte SHA-256 des lignes. Les horodatages sont écrits en UTC. Un export existant
+ne s'écrase pas.
+
+## Les secrets : rechiffrés CHEZ NOUS, À L'EXPORT
+
+Décision d'Alexis du 28/09/2026 : **notre clé maîtresse ne sort jamais de notre
+infrastructure**. L'export tourne chez nous, sous notre clé (`OTO_MCP_MASTER_KEY`), et
+reçoit la clé de l'instance cible pour cette seule exécution. Il déchiffre chaque
+secret sous notre clé et l'AAD de la ligne source, puis le rechiffre sous la clé cible
+et l'AAD de la ligne CIBLE. Le fichier ne porte QUE des secrets chiffrés pour la cible.
+Il n'y a pas d'autre chemin : aucun mode ne transporte un secret sous notre clé.
+
+⚠️ L'AAD d'un credential de compte ou de membre contient le sub, et le sub change à
+l'import. L'export calcule donc la ligne cible par la fonction même de l'import,
+`transformation.Transformation`, et il n'en existe qu'une. Les AAD viennent des
+fonctions qui écrivent ces secrets (`credentials_store._aad`,
+`runner_hook._aad_du_secret`, `transcription_worker._aad`). Le clair ne vit qu'en mémoire.
 
 ## L'import
 
-`importation.importer(conn, fichier, cles=Cles(source, cible))` verse le fichier dans
-une base **née par le démarrage** pour l'instance du propriétaire, en UNE transaction.
-Avant d'écrire, elle refuse (`ImportRefuse`) : un fichier dont l'empreinte ou les
-comptes ne sont pas ceux du manifeste, une version de schéma ou des colonnes
-différentes, une base déjà peuplée (`orgs` ou `users`), un tenant primaire cible dont
-le slug (`OTO_TENANT_PRIMAIRE_SLUG`) n'est pas celui de l'export, ou des secrets sans
-les deux clés.
+`importation.importer(conn, fichier)` verse le fichier dans une base **née par le
+démarrage** pour l'instance du propriétaire, en UNE transaction. L'import ne connaît
+que la clé de SON instance. Avant d'écrire, il refuse (`ImportRefuse`) dans ces cas :
 
-Trois remappages, et rien d'autre :
+- un fichier dont l'empreinte ou les comptes ne sont pas ceux du manifeste ;
+- une version de schéma ou des colonnes différentes ;
+- une base déjà peuplée (`orgs` ou `users`) ;
+- un tenant primaire cible dont le slug (`OTO_TENANT_PRIMAIRE_SLUG`) ou le NOM (semé
+  depuis `OTO_BRAND_NAME`) n'est pas celui du tenant exporté : le refus donne les deux
+  noms, l'import n'écrase pas le nom que l'instance déclare (décision du 28/09/2026) ;
+- des secrets chiffrés sous une autre clé que la sienne (empreinte du manifeste ≠
+  empreinte de `OTO_MCP_MASTER_KEY`), ou dont un ne se déchiffre pas sous l'AAD de sa
+  ligne cible.
+
+Ce qui change en chemin est `transformation.Transformation`, rien d'autre :
 
 - **le tenant** : la ligne 1 semée par le démarrage prend les valeurs du tenant exporté,
   et toute clé vers `tenants(id)` vaut 1 ;
-- **les comptes** perdent le préfixe `<slug>:` : toute VALEUR exactement égale à un sub
-  du périmètre, ou à sa forme membre `<org>:<sub>`, est remplacée, à toute profondeur
-  d'un JSON ;
-- **les secrets** sont rechiffrés (`rechiffrement`) : déchiffrés sous la clé source et
-  l'AAD de la ligne source, rechiffrés sous la clé cible et l'AAD de la ligne cible. Les
-  AAD viennent des fonctions qui écrivent ces secrets. Le clair ne vit qu'en mémoire.
-  ⚠️ L'AAD d'un credential de compte ou de membre contient le sub : c'est pourquoi le
-  dénudage des comptes impose ce rechiffrement.
+- **les comptes** perdent le préfixe `<slug>:` (validé le 28/09/2026) : toute VALEUR
+  exactement égale à un sub du périmètre, ou à sa forme membre `<org>:<sub>`, est
+  remplacée, à toute profondeur d'un JSON.
+
+L'écriture se fait par lots (`TAILLE_LOT` lignes par aller-retour, `executemany`) : un
+journal d'appels complet compte des centaines de milliers de lignes.
 
 Les déclencheurs de la cible (journal des révisions, vecteur de recherche) sont
 suspendus le temps de la transaction : l'import reproduit un état, il ne rejoue pas des

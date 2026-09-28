@@ -504,6 +504,12 @@ _REGLAGES: tuple[Variable, ...] = (
              "Endpoint Logto ANNONCÉ aux clients — distinct de celui qui SIGNE "
              "(`LOGTO_ENDPOINT`). Vide, on annonce celui qui signe.",
              ("oto_mcp/auth/facade.py:68",)),
+    Variable("OTO_EXPORT_CLE_CIBLE", Classe.REGLAGE, None,
+             "Clé maîtresse (hex 64 ou base64) de l'instance CIBLE d'un export par "
+             "périmètre, pour cette seule exécution de `oto-mcp perimetre export` : les "
+             "secrets y sont rechiffrés depuis `OTO_MCP_MASTER_KEY`. Absente, un périmètre "
+             "qui porte des secrets refuse. Jamais dans l'environnement du serveur.",
+             ("oto_mcp/export_perimetre/commande.py:39",)),
     Variable("OTO_DEPLOY_REF", Classe.REGLAGE, None,
              "Réf. git du deploy en cours, affichée par `/api/version`.",
              ("oto_mcp/version.py:61", "oto_mcp/version.py:122")),

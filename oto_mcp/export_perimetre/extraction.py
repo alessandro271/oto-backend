@@ -7,16 +7,17 @@ partagent la même), et aucune écriture possible — la base le refuserait.
 Avant d'écrire la première ligne, trois refus possibles, chacun nommé :
 - le classement ne couvre pas exactement le schéma (`ClassementIncomplet`) ;
 - le périmètre est ambigu (`perimetre.PerimetreRefuse` et ses cas) ;
-- une ligne exportée porte une valeur chiffrée avec NOTRE clé sans que l'appelant ait
-  demandé à la transporter (`SecretsChiffres`), ou une clé étrangère pointe hors de
-  l'export (`ReferencesHorsPerimetre`).
+- une ligne exportée porte une valeur chiffrée et l'appelant n'a pas donné la clé de
+  l'instance cible (`SecretsChiffres`), ou une clé étrangère pointe hors de l'export
+  (`ReferencesHorsPerimetre`).
 
 Les identifiants sont PRÉSERVÉS : une base née par le démarrage n'en a aucun qui
 entre en collision, et l'AAD des secrets contient l'identité du propriétaire. Deux
 remappages seulement, faits à l'IMPORT et déclarés ici dans le manifeste : le tenant
 devient la ligne 1 de la cible (`tenant`), ses subs y perdent leur préfixe (`comptes`).
-Transportés, les secrets restent chiffrés sous NOTRE clé dans le fichier : le clair
-n'existe qu'en mémoire, au rechiffrement de l'import (`rechiffrement`).
+Les secrets sont rechiffrés ICI, sous la clé de la cible et l'AAD de la ligne cible
+(`rechiffrement`, `transformation`) : le fichier ne porte jamais un secret sous notre
+clé, notre clé ne sort pas, et le clair n'existe qu'en mémoire.
 
 Les horodatages s'écrivent en UTC (`TimeZone` posé dans la transaction) : la même
 ligne relue sur la cible se sérialise à l'identique, ce qui rend l'empreinte
@@ -40,10 +41,14 @@ from typing import Callable
 import psycopg
 from psycopg.rows import tuple_row
 
+from ..crypto import _load_master_key
+
 from .classement import CLASSEMENT, EXCLUE, EXPORTEES, INSTANCE, Table
 from .decouverte import Cle, Schema, lire_schema, verifier_classement
 from .perimetre import Perimetre, resoudre
+from .rechiffrement import AAD, empreinte_cle, rechiffrer
 from .regles import vias
+from .transformation import Transformation
 
 FORMAT = "oto-export-perimetre/1"
 
@@ -54,9 +59,9 @@ class SecretsChiffres(RuntimeError):
     def __init__(self, comptes: dict[str, int]):
         self.comptes = comptes
         detail = ", ".join(f"{t} : {n}" for t, n in sorted(comptes.items()))
-        super().__init__("valeurs chiffrées avec la clé maîtresse de CETTE instance — la "
-                         "cible ne peut les lire qu'après rechiffrement à l'import : "
-                         f"exporter avec `transporter_secrets=True` pour les emporter : {detail}")
+        super().__init__("valeurs chiffrées avec la clé maîtresse de CETTE instance — "
+                         "l'export les rechiffre pour la cible : lui donner la clé de "
+                         f"l'instance cible (`cle_cible`) : {detail}")
 
 
 class ReferencesHorsPerimetre(RuntimeError):
@@ -196,15 +201,15 @@ def lecture_seule(conn: psycopg.Connection) -> None:
 
 
 def exporter(conn: psycopg.Connection, orgs: list[int], sortie: Path | str, *,
-             transporter_secrets: bool = False,
+             cle_cible: bytes | None = None,
              classement: dict[str, Table] = CLASSEMENT) -> dict:
     """Exporte le périmètre des `orgs` vers `sortie` et rend le manifeste.
 
     `conn` : une connexion psycopg à `dict_row`, HORS transaction (`lecture_seule`).
     `sortie` ne doit pas exister : on n'écrase jamais un export (il s'écrit à côté
-    puis se renomme). `transporter_secrets` : emporter les valeurs chiffrées TELLES
-    QUELLES (sous notre clé), pour que l'import les rechiffre ; sans lui, leur
-    présence refuse."""
+    puis se renomme). `cle_cible` : la clé maîtresse de l'instance cible, pour cette
+    seule exécution — les secrets du périmètre y sont rechiffrés depuis la clé de
+    CETTE instance (`OTO_MCP_MASTER_KEY`) ; sans elle, leur présence refuse."""
     sortie = Path(sortie)
     if sortie.exists():
         raise FileExistsError(f"{sortie} existe déjà : un export ne s'écrase pas")
@@ -212,14 +217,16 @@ def exporter(conn: psycopg.Connection, orgs: list[int], sortie: Path | str, *,
     with conn.transaction():
         lu = ouvrir(conn, orgs, classement)
         secrets = compter_secrets(conn, lu.classement, lu.pred, lu.params)
-        if secrets and not transporter_secrets:
+        if secrets and cle_cible is None:
             raise SecretsChiffres(secrets)
+        recoder = _recodeur(lu, cle_cible) if secrets else None
         vers_instance = controler_fermeture(conn, lu.schema, lu.classement, lu.pred, lu.params)
         provisoire = sortie.with_name(sortie.name + ".partiel")
         with provisoire.open("x", encoding="utf-8") as f:
-            manifeste = _ecrire(conn, f, lu)
+            manifeste = _ecrire(conn, f, lu, recoder)
             manifeste.update(_entete(conn, lu.perimetre), ordre=lu.ordre,
                              references_instance=vers_instance, secrets=secrets,
+                             cle_cible=empreinte_cle(cle_cible) if secrets else None,
                              colonnes={t: _colonnes(lu.schema, t) for t in lu.ordre})
             f.write(json.dumps({"manifeste": manifeste}, ensure_ascii=False) + "\n")
         os.replace(provisoire, sortie)
@@ -231,7 +238,28 @@ def _colonnes(schema: Schema, t: str) -> list[str]:
     return [c for c in schema.colonnes[t] if c not in generees]
 
 
-def _ecrire(conn, f, lu: Lecture) -> dict:
+def _recodeur(lu: Lecture, cle_cible: bytes) -> Callable[[str, str], str]:
+    """`recoder(table, ligne)` : la ligne JSON, son secret rechiffré pour la cible —
+    sous l'AAD de la ligne que l'import écrira (`Transformation`, la même fonction)."""
+    cle_source = _load_master_key()
+    if cle_source is None:
+        raise RuntimeError("OTO_MCP_MASTER_KEY absente : l'export ne peut pas lire les "
+                           "secrets qu'il doit rechiffrer pour la cible")
+    transformation = Transformation.depuis(lu.schema, lu.perimetre.comptes_cible())
+
+    def recoder(t: str, ligne: str) -> str:
+        if t not in AAD:
+            return ligne
+        source = json.loads(ligne)
+        if source.get(AAD[t][0]) is None:
+            return ligne
+        source[AAD[t][0]] = rechiffrer(t, source, transformation.appliquer(t, source),
+                                       cle_source, cle_cible)
+        return json.dumps(source, ensure_ascii=False)
+    return recoder
+
+
+def _ecrire(conn, f, lu: Lecture, recoder=None) -> dict:
     schema, classement, pred, params, ordre = (lu.schema, lu.classement, lu.pred,
                                                lu.params, lu.ordre)
     empreinte = hashlib.sha256()
@@ -239,6 +267,8 @@ def _ecrire(conn, f, lu: Lecture) -> dict:
     for t in ordre:
         n = 0
         for ligne in lu.lignes(conn, t):
+            if recoder is not None:
+                ligne = recoder(t, ligne)
             texte = f'{{"t": {json.dumps(t)}, "l": {ligne}}}\n'
             empreinte.update(texte.encode())
             f.write(texte)
@@ -286,5 +316,7 @@ def _entete(conn, p: Perimetre) -> dict:
                                                 if o not in p.orgs_declarees],
                           "groupes": len(p.groupes), "comptes": len(p.subs)},
             "tenant": {"id": p.id_tenant, "slug": p.tenant_slug,
+                       "nom": conn.execute("SELECT name FROM tenants WHERE id = %s",
+                                           (p.id_tenant,)).fetchone()["name"],
                        "primaire_source": p.tenant_primaire_source},
             "comptes": p.comptes_cible()}
