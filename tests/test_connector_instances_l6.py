@@ -86,6 +86,10 @@ _LECTEURS_ADMIS = {
     # PUR et dit lui-même que résoudre un `inst:{id}` demande la base. Passer par lui
     # aurait été mieux ; il ne le permet pas.
     "capabilities/instance_health.py",
+    # #1088 — l'export par périmètre classe CHAQUE table du schéma, celle-ci comprise,
+    # et la recopie telle quelle vers une autre base. Il ne résout rien : ni cascade,
+    # ni coffre, ni autorisation ne passent par lui.
+    "export_perimetre/classement.py",
 }
 
 # Dans le coffre, les SEULES fonctions admises à nommer une instance. Ce sont les
