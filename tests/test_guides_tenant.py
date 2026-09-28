@@ -144,3 +144,66 @@ def test_un_compte_de_la_plateforme_lit_la_prose_a_l_octet(magasin):
     g = G._get(ResolvedCtx(sub="bn01jfy76a5n", org_id=None),
                G.GuideRefInput(scope="", slug="notice"))
     assert g["body_md"] == magasin[("platform", guide_store.PLATFORM_OWNER, "notice")]["body_md"]
+
+
+# ── 3. Qui l'écrit ───────────────────────────────────────────────────────────
+# La lecture servait le guide du tenant ; l'écriture le refusait (« scope éditable =
+# platform | org | user ») — un étage qu'on lit sans pouvoir y écrire. Même palier que
+# le socle de tenant : l'admin plateforme, sur un tenant connu du registre.
+
+@pytest.fixture
+def ecrit(registre, monkeypatch):
+    from oto_mcp import db
+    faits = []
+
+    def _set(scope, owner, slug, body, title, description):
+        faits.append((scope, owner, slug, body))
+        return {"title": title, "description": description}
+
+    monkeypatch.setattr(db, "set_guide_db", _set)
+    monkeypatch.setattr(db, "delete_guide_db",
+                        lambda scope, owner, slug: bool(faits.append(("del", scope, owner, slug))) or True)
+    return faits
+
+
+def _admin(monkeypatch, oui: bool):
+    from oto_mcp import roles
+    monkeypatch.setattr(roles, "is_platform_admin", lambda sub: oui)
+
+
+def test_l_admin_plateforme_ecrit_le_guide_d_un_tenant(ecrit, monkeypatch):
+    from oto_mcp.capabilities import guides as G
+    from oto_mcp.capabilities._types import ResolvedCtx
+    _admin(monkeypatch, True)
+    G._set(ResolvedCtx(sub="bn01jfy76a5n", org_id=None),
+           G.GuideSetInput(scope="tenant", owner_id="acme", slug="dessin", body_md="Dessine."))
+    assert ecrit == [("tenant", "acme", "dessin", "Dessine.")]
+
+
+def test_un_admin_d_org_n_ecrit_pas_le_guide_du_tenant(ecrit, monkeypatch):
+    from oto_mcp.capabilities import guides as G
+    from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
+    _admin(monkeypatch, False)
+    with pytest.raises(AuthzDenied) as e:
+        G._set(ResolvedCtx(sub="acme:u-1", org_id=None),
+               G.GuideSetInput(scope="tenant", owner_id="acme", slug="dessin", body_md="x"))
+    assert e.value.status == 403 and ecrit == []
+
+
+def test_un_tenant_inconnu_est_refuse_plutot_qu_ecrit_pour_personne(ecrit, monkeypatch):
+    from oto_mcp.capabilities import guides as G
+    from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
+    _admin(monkeypatch, True)
+    with pytest.raises(AuthzDenied) as e:
+        G._set(ResolvedCtx(sub="bn01jfy76a5n", org_id=None),
+               G.GuideSetInput(scope="tenant", owner_id="acmee", slug="dessin", body_md="x"))
+    assert e.value.status == 404 and ecrit == []
+
+
+def test_le_guide_d_un_tenant_se_retire(ecrit, monkeypatch):
+    from oto_mcp.capabilities import guides as G
+    from oto_mcp.capabilities._types import ResolvedCtx
+    _admin(monkeypatch, True)
+    G._delete(ResolvedCtx(sub="bn01jfy76a5n", org_id=None),
+              G.GuideRefInput(scope="tenant", owner_id="acme", slug="dessin"))
+    assert ecrit == [("del", "tenant", "acme", "dessin")]

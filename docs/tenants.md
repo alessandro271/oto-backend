@@ -120,7 +120,12 @@ naissait avec notre tenant (ADR 0070 §7.2). Elle se **déclare** désormais, sa
 >   feraient choisir l'agent entre deux guides dont un seul lui serait rendu). Le socle
 >   PRESCRIT d'aller les lire : les tenant-iser à moitié laissait le texte le plus lu
 >   après lui au niveau plateforme. ⚠️ **Rien ne change tant que personne n'a rédigé** —
->   un tenant sans guide propre reçoit le nôtre, à l'octet.
+>   un tenant sans guide propre reçoit le nôtre, à l'octet. **L'écriture a suivi la
+>   lecture** : `oto_guide op=write|delete scope=tenant owner_id=<slug>` (on-demand),
+>   au même palier que le socle — admin plateforme, tenant connu du registre. Avant,
+>   `guide_store.set_guide` refusait le scope : l'étage se lisait sans pouvoir s'écrire,
+>   et un besoin propre à un partenaire (un guide que le cœur a retiré, par exemple)
+>   n'avait d'autre place que le socle entier de ce tenant.
 > - ⚠️ **Le socle ne suffisait pas : les OUTILS aussi portaient notre nom.** Dans la
 >   conversation d'un client du partenaire, chaque appel s'affichait `Oto doc`,
 >   `Oto project`… — le nom d'un outil n'est pas de la prose, il est réaffiché à chaque

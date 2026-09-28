@@ -398,13 +398,23 @@ def read_guide_scoped(slug: str, *, scope: Optional[str] = None,
     return None
 
 
+# Scopes où un guide ON-DEMAND s'écrit. `group` n'y est pas : l'étage équipe n'existe
+# qu'en prose init.
+_ONDEMAND_EDITABLE = ("platform", "tenant", "org", "user")
+_ONDEMAND_EDITABLE_MSG = "scope éditable = platform | tenant | org | user."
+
+
 def set_guide(scope: str, owner_id: str, slug: str, body_md: str,
               title: str = "", description: str = "") -> dict:
-    """Crée/met à jour un guide on-demand (scope `platform`|`org`|`user` — l'AUTZ par
-    scope est du ressort de l'appelant : platform_admin / org_admin / self). Slug
-    strict. Renvoie `{slug, scope, title, description}`."""
-    if scope not in ("platform", "org", "user"):
-        raise GuideError("scope éditable = platform | org | user.")
+    """Crée/met à jour un guide on-demand (scope `platform`|`tenant`|`org`|`user` —
+    l'AUTZ par scope est du ressort de l'appelant : platform_admin (platform, tenant) /
+    org_admin / self). Slug strict. Renvoie `{slug, scope, title, description}`.
+
+    `tenant` : la lecture servait déjà le guide d'un tenant avant le nôtre (même slug =
+    le sien) ; il manquait l'écriture, faute de quoi un besoin propre à un partenaire
+    n'avait d'autre place que le cœur. Owner = le slug du tenant, validé par l'appelant."""
+    if scope not in _ONDEMAND_EDITABLE:
+        raise GuideError(_ONDEMAND_EDITABLE_MSG)
     if not _slug_ok(slug):
         raise GuideError("slug invalide (min. `^[a-z0-9][a-z0-9-]*$`).")
     if not (body_md or "").strip():
@@ -425,8 +435,8 @@ def set_guide(scope: str, owner_id: str, slug: str, body_md: str,
 
 
 def delete_guide(scope: str, owner_id: str, slug: str) -> bool:
-    if scope not in ("platform", "org", "user"):
-        raise GuideError("scope éditable = platform | org | user.")
+    if scope not in _ONDEMAND_EDITABLE:
+        raise GuideError(_ONDEMAND_EDITABLE_MSG)
     from . import db
     return db.delete_guide_db(scope, str(owner_id), slug)
 
