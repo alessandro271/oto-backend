@@ -9,7 +9,8 @@ Deux tables (`db/schema/runs.py::MODEL_SUBSCRIPTION_POOL`) :
 
 La réservation (`runner_jobs.claim_next_job`) lit les deux tables en SQL ; ce module
 porte les lectures et écritures des surfaces (réglage d'org, écran de la personne) et
-celle de la pose (`taille_du_pool`).
+celle de la pose (`taille_du_pool_a_la_pose` — PAS `taille_du_pool`, qui juge ce qui
+peut servir à la seconde près ; voir leurs docstrings).
 
 ⚠️ Aucune session, aucun secret ici, comme dans `user_subscriptions` : un prêt dit
 QUEL sandbox peut servir, jamais comment s'y connecter.
@@ -150,7 +151,7 @@ def taille_totale_du_pool(org_id: int, famille: str) -> int:
     à distinguer de `taille_du_pool` (0 est ambigu : personne ne prête, ou tout
     le monde est momentanément au plafond ?). Sert au DIAGNOSTIC d'une
     péremption (`capabilities._abonnement.raison_de_peremption`, 27/09/2026),
-    jamais à une garde de pose — la pose reste jugée sur `taille_du_pool`."""
+    jamais à une garde de pose — celle-ci lit `taille_du_pool_a_la_pose`."""
     with _connect() as conn:
         row = conn.execute(
             f"SELECT COUNT(*) AS n FROM user_model_subscription_loans l {PRET_VIVANT} "
