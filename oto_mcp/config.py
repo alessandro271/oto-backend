@@ -279,7 +279,7 @@ def dashboard_url_for(sub: Optional[str]) -> str:
         from . import tenancy
         registre = tenancy.current()
         slug = registre.tenant_of(sub)
-        if not slug or slug == tenancy.PRIMARY_SLUG:
+        if not slug or slug == tenancy.primary_slug():
             return dashboard_url()
         propre = next((e.dashboard_url for e in registre.entries()
                        if e.slug == slug and e.dashboard_url), "")
@@ -322,7 +322,7 @@ def tenant_slug_for(sub: Optional[str]) -> Optional[str]:
     try:
         from . import tenancy
         slug = tenancy.current().tenant_of(sub)
-        return None if (not slug or slug == tenancy.PRIMARY_SLUG) else slug
+        return None if (not slug or slug == tenancy.primary_slug()) else slug
     # noqa: SILENT — registre illisible : on dégrade vers le tenant primaire au lieu de refuser une création d'org ; l'écart n'est plus rapporté (contrôle retiré le 03/09/2026) et n'a aucune conséquence, les deux dérivations rendent le bon verdict sans lui
     except Exception:  # noqa: BLE001
         return None
@@ -358,7 +358,7 @@ def front_for(sub: Optional[str]) -> tuple[Optional[str], Optional[str]]:
         from . import tenancy
         registre = tenancy.current()
         slug = registre.tenant_of(sub)
-        if not slug or slug == tenancy.PRIMARY_SLUG:
+        if not slug or slug == tenancy.primary_slug():
             return (None, None)
         base = next((e.dashboard_url for e in registre.entries()
                      if e.slug == slug and e.dashboard_url), "")

@@ -226,7 +226,7 @@ def app_for(sub: str) -> OAuthApp:
     registre = tenancy.current()
     slug = registre.tenant_of(sub)
     app = (credentials_store.get_editor_app("google", credentials_store.tenant_app_key(slug))
-           if slug != tenancy.PRIMARY_SLUG else None)
+           if slug != tenancy.primary_slug() else None)
     if app:
         host = registre.callback_host(slug)
         return OAuthApp(client_id=app["client_id"], client_secret=app["client_secret"],

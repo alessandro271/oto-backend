@@ -153,7 +153,7 @@ def test_chaque_org_porte_son_tenant(live):
         conn.execute("UPDATE orgs SET tenant_id = %s WHERE id = %s", (tid, chez_un_tiers))
     page = _appel("service.orgs.list", after_id=a_nous - 1, limit=2)
     assert {o["id"]: o["tenant"] for o in page["orgs"]} == {
-        a_nous: tenancy.PRIMARY_SLUG, chez_un_tiers: slug}
+        a_nous: tenancy.primary_slug(), chez_un_tiers: slug}
 
 
 def test_l_usage_compte_les_reussites_de_la_fenetre_et_les_cles_de_plateforme(live):

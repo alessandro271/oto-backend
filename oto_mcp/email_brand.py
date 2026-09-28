@@ -50,7 +50,7 @@ from typing import Optional
 # au moment de l'import, d'un attribut de l'autre — seulement à l'appel.
 from . import email as _email
 from .config import require_env
-from .tenancy import PRIMARY_SLUG as _SLUG_PRIMAIRE
+from .tenancy import primary_slug
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +110,7 @@ def marque_instance() -> Marque:
 
     `OTO_BRAND_SITE` est un hôte nu (`exemple.tld`) : il s'affiche en pied d'email et
     devient `https://<site>` dans le pied des pages publiques."""
-    return Marque(slug=_SLUG_PRIMAIRE, nom=nom_instance(), site=site_instance(),
+    return Marque(slug=primary_slug(), nom=nom_instance(), site=site_instance(),
                   **_TEINTES_PRIMAIRES)
 
 
@@ -191,7 +191,7 @@ def marque(slug: Optional[str]) -> Marque:
     prend le gabarit neutre à son nom — jamais les teintes du tenant primaire.
     """
     s = (slug or "").strip()
-    if not s or s.lower() == _SLUG_PRIMAIRE:
+    if not s or s.lower() == primary_slug():
         # Le tenant primaire ne se surcharge pas en base : sa marque est celle que
         # l'instance déclare, et une ligne de registre ne doit pas pouvoir la repeindre.
         return marque_instance()

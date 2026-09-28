@@ -124,7 +124,7 @@ def _tenant_entry(sub: Optional[str]):
         from . import tenancy
         registre = tenancy.current()
         slug = registre.tenant_of(sub)
-        if not slug or slug == tenancy.PRIMARY_SLUG:
+        if not slug or slug == tenancy.primary_slug():
             return None
         return next((e for e in registre.entries() if e.slug == slug), None)
     except Exception:  # noqa: BLE001 — un nom d'outil ne casse jamais un appel

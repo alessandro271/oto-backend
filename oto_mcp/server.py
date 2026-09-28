@@ -134,7 +134,7 @@ class _IatGatedVerifier(JWTVerifier):
         sur le primaire — qui le rejettera aussi.
         """
         entry = self._by_issuer.get(tenancy.unverified_issuer(token) or "")
-        return entry if entry is not None else (tenancy.PRIMARY_SLUG, None)
+        return entry if entry is not None else (tenancy.primary_slug(), None)
 
     def _qualified(self, result, slug: str):
         """Le point où un jeton devient un sub — l'UNIQUE endroit de la chaîne de
@@ -144,7 +144,7 @@ class _IatGatedVerifier(JWTVerifier):
         une optimisation — l'AAD du coffre dérive du sub, donc qualifier le sub du
         tenant `oto` rendrait tous les credentials existants indéchiffrables.
         """
-        if slug == tenancy.PRIMARY_SLUG:
+        if slug == tenancy.primary_slug():
             return result
         claims = dict(getattr(result, "claims", None) or {})
         sub = claims.get("sub")

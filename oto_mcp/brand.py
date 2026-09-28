@@ -71,7 +71,7 @@ def nom_affiche(marque):
     clients. Même résolution que le socle d'accueil (`instructions._socle_for`).
     """
     from . import tenancy
-    if not marque.slug or marque.slug == tenancy.PRIMARY_SLUG:
+    if not marque.slug or marque.slug == tenancy.primary_slug():
         return marque
     nom = next((e.name for e in tenancy.current().entries()
                 if e.slug == marque.slug and e.name), marque.nom)
@@ -122,7 +122,7 @@ def jetons(marque) -> dict:
 def est_primaire(marque) -> bool:
     """La page est-elle au tenant PRIMAIRE de l'instance (ses teintes, son favicon) ?"""
     from . import tenancy
-    return not marque.slug or marque.slug == tenancy.PRIMARY_SLUG
+    return not marque.slug or marque.slug == tenancy.primary_slug()
 
 
 def nom_de(marque) -> str:

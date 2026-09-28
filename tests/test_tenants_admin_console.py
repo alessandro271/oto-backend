@@ -35,26 +35,35 @@ CTX = ResolvedCtx(sub="operateur", role="super_admin")
 # Les lignes stubbées passent par `_shape_tenant` — la même dérivation que la vraie
 # lecture (état d'émetteur, compteurs entiers). Stuber la forme SERVIE plutôt que la
 # forme BRUTE ferait tester une réponse que le code ne produit jamais.
-_OTO = tenants_db._shape_tenant(
-    {"id": 1, "slug": "oto", "name": "Oto", "issuer": None, "jwks_uri": None,
-     "hosts": [], "oauth_client_id": None, "dashboard_url": None,
-     "link_paths": {}, "created_at": "2026-01-01 00:00:00", "orgs": 12,
-     "orgs_archivees": 1, "comptes": 40, "comptes_actifs": 9, "appels": 300,
-     "dernier_compte_at": None, "last_seen_at": None, "orgs_desalignees": 0})
-_TIERS = tenants_db._shape_tenant(
-    dict(_OTO, id=2, slug="acme", name="Acme",
-         issuer="https://auth.acme.test/oidc", hosts=["mcp.acme.test"],
-         orgs=3, comptes=10, comptes_actifs=2, appels=44, orgs_desalignees=2))
+# Formées à l'APPEL, pas à la collecte : la forme dit si la ligne est le tenant primaire,
+# que l'instance déclare (`tenancy.primary_slug`, #969) — déclaration posée par une
+# fixture, donc absente pendant la collecte.
+_OTO_BRUT = {"id": 1, "slug": "oto", "name": "Oto", "issuer": None, "jwks_uri": None,
+             "hosts": [], "oauth_client_id": None, "dashboard_url": None,
+             "link_paths": {}, "created_at": "2026-01-01 00:00:00", "orgs": 12,
+             "orgs_archivees": 1, "comptes": 40, "comptes_actifs": 9, "appels": 300,
+             "dernier_compte_at": None, "last_seen_at": None, "orgs_desalignees": 0}
+
+
+def _oto() -> dict:
+    return tenants_db._shape_tenant(dict(_OTO_BRUT))
+
+
+def _tiers() -> dict:
+    return tenants_db._shape_tenant(
+        dict(_OTO_BRUT, id=2, slug="acme", name="Acme",
+             issuer="https://auth.acme.test/oidc", hosts=["mcp.acme.test"],
+             orgs=3, comptes=10, comptes_actifs=2, appels=44, orgs_desalignees=2))
 
 
 def test_the_shape_derives_what_authenticates_from_the_row():
     """Le primaire tient son émetteur de l'ENV (une ligne le redéclarant est ignorée
     par le registre) ; un tenant tiers n'authentifie que s'il en porte un."""
-    assert _OTO["primary"] is True
-    assert _OTO["issuer_source"] == "env" and _OTO["authenticates"] is True
-    assert _TIERS["primary"] is False
-    assert _TIERS["issuer_source"] == "db" and _TIERS["authenticates"] is True
-    muet = tenants_db._shape_tenant(dict(_TIERS, slug="globex", issuer=None))
+    assert _oto()["primary"] is True
+    assert _oto()["issuer_source"] == "env" and _oto()["authenticates"] is True
+    assert _tiers()["primary"] is False
+    assert _tiers()["issuer_source"] == "db" and _tiers()["authenticates"] is True
+    muet = tenants_db._shape_tenant(dict(_tiers(), slug="globex", issuer=None))
     assert muet["issuer_source"] is None and muet["authenticates"] is False
 
 
@@ -159,7 +168,7 @@ def _registry(*entries):
 def test_a_declared_tenant_absent_from_the_registry_is_flagged(monkeypatch):
     """Le cas qui motive l'écran : la ligne existe, le process ne l'a pas chargée
     (déclarée après le dernier boot) — donc ses jetons sont rejetés."""
-    monkeypatch.setattr(ta.db, "list_tenants_overview", lambda **kw: [dict(_OTO), dict(_TIERS)])
+    monkeypatch.setattr(ta.db, "list_tenants_overview", lambda **kw: [dict(_oto()), dict(_tiers())])
     monkeypatch.setattr(tenancy, "_INSTALLED", _registry(), raising=False)
 
     par_slug = {t["slug"]: t for t in ta._tenants(CTX, ta.TenantsInput())["tenants"]}
@@ -171,7 +180,7 @@ def test_a_declared_tenant_absent_from_the_registry_is_flagged(monkeypatch):
 
 
 def test_a_loaded_tenant_reports_the_hosts_the_process_serves(monkeypatch):
-    monkeypatch.setattr(ta.db, "list_tenants_overview", lambda **kw: [dict(_TIERS)])
+    monkeypatch.setattr(ta.db, "list_tenants_overview", lambda **kw: [dict(_tiers())])
     monkeypatch.setattr(tenancy, "_INSTALLED", _registry(
         {"slug": "acme", "issuer": "https://auth.acme.test/oidc",
          "hosts": ["mcp.acme.test"]}), raising=False)
@@ -184,7 +193,7 @@ def test_a_loaded_tenant_reports_the_hosts_the_process_serves(monkeypatch):
 def test_a_tenant_without_an_issuer_does_not_authenticate(monkeypatch):
     """Une ligne sans émetteur n'authentifie personne — et ce n'est PAS un
     « redémarrage en attente » : il n'y a rien à charger."""
-    orphelin = tenants_db._shape_tenant(dict(_TIERS, slug="globex", issuer=None, hosts=[]))
+    orphelin = tenants_db._shape_tenant(dict(_tiers(), slug="globex", issuer=None, hosts=[]))
     monkeypatch.setattr(ta.db, "list_tenants_overview", lambda **kw: [orphelin])
     monkeypatch.setattr(tenancy, "_INSTALLED", _registry(), raising=False)
 
@@ -199,7 +208,7 @@ _MGMT = {"token_endpoint": "https://admin.acme.test",
 
 
 def _avec_mgmt(monkeypatch):
-    ligne = tenants_db._shape_tenant(dict(_TIERS, logto_mgmt=dict(_MGMT)))
+    ligne = tenants_db._shape_tenant(dict(_tiers(), logto_mgmt=dict(_MGMT)))
     monkeypatch.setattr(ta.db, "list_tenants_overview", lambda **kw: [ligne])
     monkeypatch.setattr(tenancy, "_INSTALLED", _registry(
         {"slug": "acme", "issuer": "https://auth.acme.test/oidc",
@@ -244,7 +253,7 @@ def test_la_fiche_rend_l_opt_in_refresh_tokens_EFFECTIF(monkeypatch, declare, ch
     """Relecture de #1030 : la fiche ne montrait que le déclaré — `"true"` en chaîne s'y
     lisait « allumé » alors que seul le booléen `true` allume."""
     mgmt = dict(_MGMT) if declare is None else dict(_MGMT, refresh_tokens=declare)
-    ligne = tenants_db._shape_tenant(dict(_TIERS, logto_mgmt=mgmt))
+    ligne = tenants_db._shape_tenant(dict(_tiers(), logto_mgmt=mgmt))
     monkeypatch.setattr(ta.db, "get_tenant_overview", lambda slug, **kw: dict(ligne))
     entree = {"slug": "acme", "issuer": "https://auth.acme.test/oidc",
               "hosts": ["mcp.acme.test"]}
@@ -262,7 +271,7 @@ def test_la_fiche_rend_l_opt_in_refresh_tokens_EFFECTIF(monkeypatch, declare, ch
 def test_sans_declaration_lannuaire_nest_pas_administrable(monkeypatch):
     """Le défaut, et il le reste : authentifier les comptes d'un tenant ne donne aucun
     droit d'écrire dans son annuaire."""
-    monkeypatch.setattr(ta.db, "list_tenants_overview", lambda **kw: [dict(_TIERS)])
+    monkeypatch.setattr(ta.db, "list_tenants_overview", lambda **kw: [dict(_tiers())])
     monkeypatch.setattr(tenancy, "_INSTALLED", _registry(
         {"slug": "acme", "issuer": "https://auth.acme.test/oidc"}), raising=False)
 
@@ -271,7 +280,7 @@ def test_sans_declaration_lannuaire_nest_pas_administrable(monkeypatch):
 
 
 def test_totals_are_summed_from_the_rows(monkeypatch):
-    monkeypatch.setattr(ta.db, "list_tenants_overview", lambda **kw: [dict(_OTO), dict(_TIERS)])
+    monkeypatch.setattr(ta.db, "list_tenants_overview", lambda **kw: [dict(_oto()), dict(_tiers())])
     out = ta._tenants(CTX, ta.TenantsInput())
     assert out["totals"] == {"tenants": 2, "orgs": 15, "comptes": 50,
                              "comptes_actifs": 11, "appels": 344}
@@ -308,7 +317,7 @@ def test_the_window_is_clamped_never_a_500(monkeypatch):
 def test_get_passes_the_slug_and_window_through(monkeypatch):
     vu = {}
     monkeypatch.setattr(ta.db, "get_tenant_overview",
-                        lambda slug, **kw: vu.update(slug=slug, **kw) or dict(_TIERS))
+                        lambda slug, **kw: vu.update(slug=slug, **kw) or dict(_tiers()))
     monkeypatch.setattr(tenancy, "_INSTALLED", _registry(), raising=False)
     out = ta._console(CTX, ta.TenantConsoleInput(op="get", slug="acme", days=7))
     assert vu == {"slug": "acme", "days": 7}

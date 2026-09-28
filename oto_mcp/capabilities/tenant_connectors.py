@@ -87,7 +87,7 @@ class TenantConnectorCleared(BaseModel):
 
 def _tenant(slug: str) -> str:
     slug = _known(slug)
-    if slug == tenancy.PRIMARY_SLUG:
+    if slug == tenancy.primary_slug():
         raise AuthzDenied(400, "primary_tenant_activation",
                           f"Le tenant `{slug}` n'a pas de plafond de tenant : le sien est "
                           "le master plateforme (/api/admin/connectors/activation).")

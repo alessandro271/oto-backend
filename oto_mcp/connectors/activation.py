@@ -178,7 +178,7 @@ def tenant_of_org(org_id: Optional[int], conn=None) -> Optional[str]:
     from .. import db, tenancy
     slug = (db.org_tenant_slug(int(org_id)) if conn is None
             else db.org_tenant_slug(int(org_id), conn=conn))
-    return None if not slug or slug == tenancy.PRIMARY_SLUG else slug
+    return None if not slug or slug == tenancy.primary_slug() else slug
 
 
 def is_exposed(connector: str, org_id: Optional[int] = None) -> bool:

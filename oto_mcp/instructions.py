@@ -363,7 +363,7 @@ def _socle_for(sub: str | None) -> tuple[str, str]:
         from . import guide_store, tenancy
         registre = tenancy.current()
         slug = registre.tenant_of(sub)
-        if not slug or slug == tenancy.PRIMARY_SLUG:
+        if not slug or slug == tenancy.primary_slug():
             return plateforme
         corps = guide_store.init_guide_body("tenant", slug)
         if not corps:

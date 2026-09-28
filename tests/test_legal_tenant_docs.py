@@ -24,7 +24,7 @@ def test_primary_tenant_short_circuits_without_a_db_call(monkeypatch):
     def _boom(tenant_slug):
         raise AssertionError("docs_for(oto) hit the DB — it must short-circuit")
     monkeypatch.setattr(db, "get_tenant_legal_docs", _boom)
-    assert legal_docs.docs_for(tenancy.PRIMARY_SLUG) == legal_docs.current_docs()
+    assert legal_docs.docs_for(tenancy.primary_slug()) == legal_docs.current_docs()
     assert legal_docs.docs_for("") == legal_docs.current_docs()
 
 

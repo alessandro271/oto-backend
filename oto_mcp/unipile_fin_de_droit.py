@@ -84,7 +84,7 @@ def _org_est_a_nous(org_id: int, cache: dict) -> bool:
     if org_id not in cache:
         from . import db, tenancy
         try:
-            cache[org_id] = db.org_tenant_slug(int(org_id)) == tenancy.PRIMARY_SLUG
+            cache[org_id] = db.org_tenant_slug(int(org_id)) == tenancy.primary_slug()
         # noqa: SILENT — fermé par défaut, et dit : l'org est écartée et comptée.
         except Exception:  # noqa: BLE001
             log.warning("unipile fin de droit : tenant de l'org %s illisible — org "

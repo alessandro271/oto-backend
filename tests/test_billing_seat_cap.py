@@ -65,7 +65,7 @@ def plan_with_seats(monkeypatch):
 def test_souscrire_un_plan_sans_avis_garde_le_plafond_manuel(monkeypatch, plan):
     """Le cliquet de #805 : c'est le chemin de la souscription payée (`confirm`) et du
     plan forcé (`admin_set_plan`)."""
-    s = _wire(monkeypatch, tenancy.PRIMARY_SLUG)
+    s = _wire(monkeypatch, tenancy.primary_slug())
     billing.apply_plan_entitlements(7, plan)
     assert s["limits"][7] == MANUAL_CAP and s["writes"] == []
 
@@ -76,9 +76,9 @@ def test_forcer_un_plan_sur_une_cliente_directe_garde_son_plafond(monkeypatch):
     assert s["limits"][7] == MANUAL_CAP and s["writes"] == []
 
 
-@pytest.mark.parametrize("tenant", [tenancy.PRIMARY_SLUG, "acme"])
+@pytest.mark.parametrize("tenant", [None, "acme"])  # None : le tenant primaire déclaré
 def test_retirer_le_plan_comp_garde_le_plafond(monkeypatch, tenant):
-    s = _wire(monkeypatch, tenant)
+    s = _wire(monkeypatch, tenant or tenancy.primary_slug())
     billing.admin_clear_plan(7)
     assert s["limits"][7] == MANUAL_CAP and s["writes"] == []
 
@@ -92,7 +92,7 @@ def test_aucun_palier_ne_porte_de_sieges_aujourd_hui():
 # ── plan qui porte un nombre de sièges ──────────────────────────────────────
 
 def test_un_plan_avec_sieges_ecrit_le_plafond_d_une_cliente_directe(monkeypatch, plan_with_seats):
-    s = _wire(monkeypatch, tenancy.PRIMARY_SLUG)
+    s = _wire(monkeypatch, tenancy.primary_slug())
     billing.apply_plan_entitlements(7, plan_with_seats)
     assert s["writes"] == [(7, 12)]
 

@@ -324,7 +324,7 @@ def _tenant_de(sub: Optional[str]) -> Optional[str]:
         return None
     from . import tenancy
     slug = tenancy.current().tenant_of(sub)
-    return None if not slug or slug == tenancy.PRIMARY_SLUG else slug
+    return None if not slug or slug == tenancy.primary_slug() else slug
 
 
 def list_guides_for(sub: Optional[str] = None, org_id: Optional[int] = None) -> list[dict]:

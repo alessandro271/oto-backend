@@ -40,6 +40,7 @@ _TIERCE = {
         for slug in ("terms", "cgv", "dpa")}),
     "OTO_BRAND_NAME": "Tiers",
     "OTO_BRAND_SITE": "tiers.test",
+    "OTO_TENANT_PRIMAIRE_SLUG": "tiers",
 }
 _NOS_DOMAINES = ("oto.cx", "oto.ninja", "oto.zone", "otomata")
 _IDENTITE = [v.nom for v in inv.NOMS_FIXES if v.classe is inv.Classe.IDENTITE]
@@ -130,7 +131,7 @@ def _surfaces(monkeypatch) -> dict[str, str]:
     email.send_composed_email("dest@exemple.test", "sujet", "bonjour")
     return {
         "lien d'invitation": invites._nominal_url("jeton"),
-        "contrats": json.dumps(legal_docs.docs_for(tenancy.PRIMARY_SLUG)),
+        "contrats": json.dumps(legal_docs.docs_for(tenancy.primary_slug())),
         "email composé": envoye["html"] + str(envoye.get("reply_to")),
         "page de projet partagé": share_ui.render_not_found(),
         "page de document partagé": public_doc_page.render_missing(),

@@ -264,8 +264,8 @@ def org_tenant_slug(org_id: int, conn=None) -> str:
 
 def _lire_org_tenant(conn, org_id: int) -> str:
     row = conn.execute(_ORG_TENANT_SQL,
-                       {"primary": tenancy.PRIMARY_SLUG, "oid": int(org_id)}).fetchone()
-    return (row and row["slug"]) or tenancy.PRIMARY_SLUG
+                       {"primary": tenancy.primary_slug(), "oid": int(org_id)}).fetchone()
+    return (row and row["slug"]) or tenancy.primary_slug()
 
 
 def _shape_tenant(row: dict) -> dict:
@@ -273,7 +273,7 @@ def _shape_tenant(row: dict) -> dict:
     une seule dérivation, partagée par la liste et la fiche."""
     out = dict(row)
     issuer = (out.get("issuer") or "").strip()
-    primaire = out.get("slug") == tenancy.PRIMARY_SLUG
+    primaire = out.get("slug") == tenancy.primary_slug()
     # Ce que le tenant peut faire, tel que le registre le verra au prochain boot :
     # le primaire tient son émetteur de l'ENV (une ligne le redéclarant est ignorée),
     # les autres n'authentifient que si leur ligne porte un émetteur.
@@ -308,7 +308,7 @@ def list_tenants_overview(*, days: int = 30) -> list[dict]:
     """
     with _connect() as conn:
         rows = conn.execute(_tenant_counts_sql(),
-                            {"primary": tenancy.PRIMARY_SLUG, "days": int(days)}).fetchall()
+                            {"primary": tenancy.primary_slug(), "days": int(days)}).fetchall()
     return [_shape_tenant(r) for r in rows]
 
 
@@ -331,7 +331,7 @@ def get_tenant_overview(slug: str, *, days: int = 30) -> dict | None:
       pour ne garder qu'un tenant à la fin. Les chiffres rendus sont les mêmes :
       `tests/test_tenants_overview_pg.py` compare la fiche à la ligne de la liste.
     """
-    if slug == tenancy.PRIMARY_SLUG:
+    if slug == tenancy.primary_slug():
         return _overview_primaire(slug, days=days)
     return _overview_tiers(slug, days=days)
 
@@ -339,7 +339,7 @@ def get_tenant_overview(slug: str, *, days: int = 30) -> dict | None:
 def _overview_primaire(slug: str, *, days: int = 30) -> dict | None:
     """La passe générique (CTE `sub_tenant` sur toute la plateforme) — le seul chemin
     qui sache compter « les subs nus »."""
-    params = {"primary": tenancy.PRIMARY_SLUG, "days": int(days), "slug": slug}
+    params = {"primary": tenancy.primary_slug(), "days": int(days), "slug": slug}
     with _connect() as conn:
         row = conn.execute(_tenant_counts_sql("WHERE t.slug = %(slug)s"), params).fetchone()
         if row is None:
@@ -423,7 +423,7 @@ def _overview_tiers(slug: str, *, days: int = 30) -> dict | None:
     interdit dans un slug), donc « commence par `<slug>:` » classe sans ambiguïté —
     la règle du plus long préfixe de `_SUB_TENANT_SQL` n'a rien à départager ici.
     """
-    params = {"primary": tenancy.PRIMARY_SLUG, "days": int(days), "slug": slug,
+    params = {"primary": tenancy.primary_slug(), "days": int(days), "slug": slug,
               "pfx": f"{slug}:", "cap": _TENANT_LIST_CAP}
     with _connect() as conn:
         row = conn.execute(_TENANT_ROW_SQL, params).fetchone()

@@ -154,7 +154,7 @@ def _target_tenant(ctx: ResolvedCtx, owner_id: Optional[str]) -> str:
     jusqu'à ce qu'on cherche pourquoi la marque ne change pas."""
     from .. import tenancy
     slug = (owner_id or "").strip() or tenancy.current().tenant_of(ctx.sub)
-    if not slug or slug == tenancy.PRIMARY_SLUG:
+    if not slug or slug == tenancy.primary_slug():
         raise AuthzDenied(400, "bad_owner",
                           "Préciser le tenant visé (son slug) — `platform` a son "
                           "propre scope.")

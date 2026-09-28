@@ -22,7 +22,7 @@ SUB = "sub-test-1"
 class _Registre:
     """Le tenant se lit sur le PRÉFIXE du sub — même contrat que le registre servi."""
     def tenant_of(self, sub: str) -> str:
-        return sub.split(":", 1)[0] if ":" in sub else tenancy.PRIMARY_SLUG
+        return sub.split(":", 1)[0] if ":" in sub else tenancy.primary_slug()
 
 
 @pytest.fixture()

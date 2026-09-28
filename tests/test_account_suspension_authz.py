@@ -102,7 +102,7 @@ def test_le_tenant_primaire_na_pas_dadmin_de_tenant(monde, monkeypatch):
     Un sub sans préfixe relève du tenant primaire. Si une ligne `tenant_admins('oto',
     …)` existait — rien en base ne l'interdit, `tenants` porte bien la ligne `oto` —
     son porteur pourrait neutraliser TOUS les comptes de la plateforme sans être
-    super admin. Le refus sur `slug == PRIMARY_SLUG` est la seule chose qui s'y
+    super admin. Le refus sur `slug == tenancy.primary_slug()` est la seule chose qui s'y
     oppose : ici l'appelant est nu, déclaré admin du tenant `oto`, et il vise un
     compte nu — les deux autres branches du refus sont donc fausses."""
     monkeypatch.setattr(_authz.db, "is_tenant_admin",

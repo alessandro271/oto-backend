@@ -78,7 +78,7 @@ def test_un_emetteur_deja_tenu_alerte_au_boot(env, registre_installe, alertes,
         server._build_verifier()
 
     # Le tenant n'est PAS chargé — c'est ce que l'alerte doit dire.
-    assert tenancy.current().get(_PRIMAIRE).slug == tenancy.PRIMARY_SLUG
+    assert tenancy.current().get(_PRIMAIRE).slug == tenancy.primary_slug()
 
     assert len(alertes) == 1, [e.get("message") for e in alertes]
     event = alertes[0]

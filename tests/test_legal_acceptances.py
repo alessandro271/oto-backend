@@ -12,7 +12,7 @@ vraie table ne sert plus.
 """
 import pytest
 
-from oto_mcp import db, legal_docs
+from oto_mcp import db, legal_docs, tenancy
 from _documents_legaux import bumper
 from oto_mcp.capabilities import me_legal
 from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
@@ -47,7 +47,7 @@ def _ctx():
 
 
 def test_initial_all_outstanding(store):
-    st = me_legal._status("s1")
+    st = me_legal._status("s1", tenancy.primary_slug())
     assert st["contexts"]["access"]["outstanding"] == ["terms"]
     assert st["contexts"]["purchase"]["outstanding"] == ["terms", "cgv", "dpa"]
     assert all(not d["accepted"] for d in st["documents"])
@@ -63,14 +63,14 @@ def test_accept_access_clears_access_only(store):
 
 def test_accept_purchase_clears_all(store):
     me_legal._accept(_ctx(), me_legal.AcceptInput(context="purchase"))
-    st = me_legal._status("s1")
+    st = me_legal._status("s1", tenancy.primary_slug())
     assert st["contexts"]["purchase"]["outstanding"] == []
 
 
 def test_version_bump_reopens(store, monkeypatch):
     me_legal._accept(_ctx(), me_legal.AcceptInput(context="access"))
     bumper(monkeypatch, "terms", "999.0")
-    st = me_legal._status("s1")
+    st = me_legal._status("s1", tenancy.primary_slug())
     assert st["contexts"]["access"]["outstanding"] == ["terms"]
 
 

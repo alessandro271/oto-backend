@@ -188,7 +188,7 @@ _CRITERE = {
 
 
 def _params(campaign: str, silence_days: int, cap: int) -> dict:
-    return {"primary": tenancy.PRIMARY_SLUG, "campaign": campaign,
+    return {"primary": tenancy.primary_slug(), "campaign": campaign,
             "days": int(silence_days), "cap": max(1, min(int(cap), MAX_ENVOI))}
 
 

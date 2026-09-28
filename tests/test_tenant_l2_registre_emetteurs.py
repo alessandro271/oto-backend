@@ -124,8 +124,8 @@ def test_le_drain_est_une_entree_du_registre_sur_le_tenant_oto():
     cas particulier de « un tenant, deux émetteurs » — donc une entrée, pas un
     mécanisme à côté. Et un sub qui arrive par le drain reste NU."""
     registre = _registry(drains=[_DRAIN])
-    assert registre.slug_for(_PRIMARY) == tenancy.PRIMARY_SLUG
-    assert registre.slug_for(_DRAIN) == tenancy.PRIMARY_SLUG
+    assert registre.slug_for(_PRIMARY) == tenancy.primary_slug()
+    assert registre.slug_for(_DRAIN) == tenancy.primary_slug()
     assert registre.qualify_claims({"sub": "abc123", "iss": _DRAIN}) == "abc123"
 
 
@@ -150,13 +150,13 @@ def test_une_ligne_qui_reclame_lemetteur_primaire_est_ignoree():
     """Sinon un `UPDATE tenants` suffirait à re-tenanter tous les comptes existants
     — donc à changer leur sub, donc l'AAD de leurs credentials."""
     registre = _registry({"slug": "pirate", "issuer": _PRIMARY})
-    assert registre.slug_for(_PRIMARY) == tenancy.PRIMARY_SLUG
+    assert registre.slug_for(_PRIMARY) == tenancy.primary_slug()
     assert registre.qualify_claims({"sub": "abc123", "iss": _PRIMARY}) == "abc123"
 
 
 def test_une_ligne_qui_reclame_un_drain_est_ignoree():
     registre = _registry({"slug": "pirate", "issuer": _DRAIN}, drains=[_DRAIN])
-    assert registre.slug_for(_DRAIN) == tenancy.PRIMARY_SLUG
+    assert registre.slug_for(_DRAIN) == tenancy.primary_slug()
 
 
 def test_un_emetteur_deja_tenu_ne_se_reprend_pas():
@@ -171,8 +171,8 @@ def test_un_emetteur_inconnu_retombe_sur_le_primaire():
     """Il sera rejeté par le verifier primaire (`iss` différent du sien) : fermé,
     jamais accepté sous une identité qualifiée par défaut."""
     registre = _registry({"slug": "acme", "issuer": _TIERS})
-    assert registre.slug_for("https://ailleurs.example/oidc") == tenancy.PRIMARY_SLUG
-    assert registre.slug_for(None) == tenancy.PRIMARY_SLUG
+    assert registre.slug_for("https://ailleurs.example/oidc") == tenancy.primary_slug()
+    assert registre.slug_for(None) == tenancy.primary_slug()
 
 
 def test_une_base_indisponible_ne_coupe_pas_lauth_canonique(monkeypatch):
@@ -247,7 +247,7 @@ def test_le_verifier_rend_le_sub_du_tenant_oto_tel_quel(monkeypatch):
         return jeton
 
     monkeypatch.setattr(server.JWTVerifier, "verify_token", _super)
-    v = _Verifier({_PRIMARY: (tenancy.PRIMARY_SLUG, None)})
+    v = _Verifier({_PRIMARY: (tenancy.primary_slug(), None)})
     out = asyncio.run(v.verify_token(_jwt(_PRIMARY)))
     assert out is jeton, "aucune copie, aucune retouche pour le tenant `oto`"
     assert out.claims["sub"] == "abc123"

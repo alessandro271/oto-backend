@@ -93,7 +93,7 @@ def _list(ctx: ResolvedCtx, inp: TenantAdminsInput) -> dict:
 
 def _add(ctx: ResolvedCtx, inp: TenantAdminAddInput) -> dict:
     slug = _known(inp.slug)
-    if slug == tenancy.PRIMARY_SLUG:
+    if slug == tenancy.primary_slug():
         raise AuthzDenied(400, "primary_tenant",
                           f"Le tenant `{slug}` n'a pas d'admin de tenant : ses admins sont "
                           "ceux de la plateforme (oto_admin_user op=set_role).")

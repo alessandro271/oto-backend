@@ -146,6 +146,25 @@ def _defauts_des_droits(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OTO_ENTITLEMENT_DEFAULTS", DEFAUTS_DES_DROITS)
 
 
+# ── Le tenant primaire déclaré (`tenancy.primary_slug`, #969) — identité : sans
+# déclaration, le démarrage et toute classification d'un sub lèvent. La valeur gréée
+# est celle de l'instance historique, comme les droits ci-dessus : des dizaines de bancs
+# affirment sur le slug `oto` d'un sub nu, c'est le comportement de PROD qu'ils
+# vérifient. Un banc qui joue une AUTRE instance pose la sienne par `monkeypatch`
+# (`tests/test_naissance_d_une_base.py`).
+# ⚠️ Portée SESSION, pas fonction : des fixtures de MODULE jouent le démarrage
+# (`init_db`, qui sème le tenant sous ce slug et le nom de la marque) avant toute
+# fixture de fonction — d'où aussi `OTO_BRAND_NAME` ici, à la même valeur que
+# `_identite_de_l_instance` plus bas. Elle se déclare, se voit et s'annule en fin de
+# session ; un `monkeypatch` de banc la surcharge.
+@pytest.fixture(autouse=True, scope="session")
+def _tenant_primaire_declare() -> Iterator[None]:
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("OTO_TENANT_PRIMAIRE_SLUG", "oto")
+        mp.setenv("OTO_BRAND_NAME", "oto")
+        yield
+
+
 # ── Email transactionnel (`oto_mcp/email.py`, devenues REQUISE le 16/09/2026, #968) —
 # aucun banc n'affirme sur leur valeur littérale (les envois réels sont mockés/
 # court-circuités par l'absence d'`OTO_MAILER_SEND_BEARER` en test) : les anciens

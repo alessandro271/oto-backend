@@ -725,7 +725,7 @@ def TENANT_ADMIN_OF_TARGET(field: str, *, platform):
                 raise
         registre = tenancy.current()
         slug = registre.tenant_of(cible)
-        if (slug == tenancy.PRIMARY_SLUG or registre.tenant_of(sub) != slug
+        if (slug == tenancy.primary_slug() or registre.tenant_of(sub) != slug
                 or not db.is_tenant_admin(slug, sub)):
             raise AuthzDenied(403, "forbidden",
                               "Réservé à un admin du tenant dont relève ce compte.")

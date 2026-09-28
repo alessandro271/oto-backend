@@ -13,7 +13,7 @@ import time
 
 import psycopg
 
-from . import (_version_alembic, connector_instances, datastore_ns, journal_revisions,
+from . import (_prerequis, _tenant_primaire, _version_alembic, connector_instances, datastore_ns, journal_revisions,
                revision, user_subscriptions)
 from ._conn import _connect
 from ._ddl_garde import GardeDdl, ddl_a_faire
@@ -258,16 +258,17 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # transaction (#969, `_version_alembic`). Constaté après le premier `CREATE`, il
     # verrait toujours une base existante.
     etat_registre = _version_alembic.constater(conn)
+    # Puis ce que la base EXIGE (schéma où créer, extensions), refusé en le nommant
+    # plutôt que découvert au milieu de la transaction (#969, `_prerequis`). Les
+    # extensions y sont posées si elles manquent : `vector` DOIT précéder `_SCHEMA`
+    # (`doc_embeddings`, halfvec/hnsw), `pg_trgm` les index trigramme.
+    _prerequis.verifier(conn, etat_registre)
     # AVANT _SCHEMA : renomme l'ancienne tool_call_log vers le schéma canonique
     # (sinon CREATE IF NOT EXISTS poserait une tool_calls vide à côté).
     _migrate_tool_call_log(conn)
     # AVANT _SCHEMA : droppe l'org_subscriptions du modèle Stripe retiré
     # (sinon CREATE IF NOT EXISTS saute et l'index 0043 explose au boot).
     _drop_legacy_org_subscriptions(conn)
-    # Recherche sémantique (lot 3) : pgvector requis par la table doc_embeddings
-    # (halfvec/hnsw) créée dans _SCHEMA → l'extension DOIT précéder. Idempotent ;
-    # no-op si déjà installée. pgvector 0.8.2 dispo sur otomata-main (spike 20/07).
-    conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
     conn.execute(_SCHEMA)
     # ADR 0044 §F R5 : clés plateforme + grants migrés en instances du coffre unifié
     # (connector_credentials scope PLATFORM + share_down/meta.rate_limit) → DROP des 3
@@ -283,13 +284,9 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # argument que `embed_dirty` plus bas) ; PG ≥ 11 range le DEFAULT au catalogue,
     # donc pas de réécriture de table. **Rien ne lit encore cette colonne** :
     # l'existant est NOMMÉ, pas déplacé — le lot se défait par un `drop`.
-    conn.execute("INSERT INTO tenants (id, slug, name) VALUES (1, 'oto', 'Oto') "
-                 "ON CONFLICT (id) DO NOTHING")
-    # La séquence ne bouge pas sur un INSERT à id explicite : sans ce recalage, le
-    # prochain tenant naîtrait sur l'id 1 et casserait (cf. « ids fusionnés = la
-    # MÊME séquence », docs/live-migrations.md).
-    conn.execute("SELECT setval(pg_get_serial_sequence('tenants','id'), "
-                 "GREATEST((SELECT MAX(id) FROM tenants), 1))")
+    # Le tenant 1 est celui que l'instance DÉCLARE, jamais le nôtre par constante ;
+    # une base qui en porte un autre refuse le démarrage (#969, `_tenant_primaire`).
+    _tenant_primaire.semer(conn)
     if _colonne_absente(conn, "orgs", "tenant_id"):
         conn.execute("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS tenant_id BIGINT "
                      "NOT NULL DEFAULT 1 REFERENCES tenants(id)")
@@ -662,8 +659,7 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # PAS de colonne STORED, qui réécrirait la table sous ACCESS EXCLUSIVE).
     # Source unique des expressions : db/search.py (index ↔ requête identiques).
     # pg_trgm requis par les index TRIGRAMME (#67 : substring indexé « syl »→« Sylvie »
-    # en plus de la FTS tokenisée) → l'extension DOIT précéder.
-    conn.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+    # en plus de la FTS tokenisée) : posée en tête, avec les prérequis (`_prerequis`).
     from . import search as _search
     # Colonnes de vecteur de CLASSEMENT (#318) — AVANT les index, parce qu'elles
     # doivent exister quand une requête les lit. `ADD COLUMN <tsvector>` nullable

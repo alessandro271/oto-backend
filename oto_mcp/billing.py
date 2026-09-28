@@ -159,7 +159,7 @@ def _hosted_by_partner(org_id: int) -> bool:
         logger.warning("billing: tenant de l'org %s illisible — plafond du plan appliqué",
                        org_id, exc_info=True)
         return False
-    return bool(slug) and slug != tenancy.PRIMARY_SLUG
+    return bool(slug) and slug != tenancy.primary_slug()
 
 
 def apply_plan_entitlements(org_id: int, plan: str) -> None:

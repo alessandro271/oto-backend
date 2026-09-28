@@ -95,7 +95,7 @@ def _list_keys(ctx: ResolvedCtx, inp: TenantKeysInput) -> dict:
 
 def _set_key(ctx: ResolvedCtx, inp: TenantKeySetInput) -> dict:
     slug = _known(inp.slug)
-    if slug == tenancy.PRIMARY_SLUG:
+    if slug == tenancy.primary_slug():
         raise AuthzDenied(400, "primary_tenant_key",
                           f"Le tenant `{slug}` ne porte pas de clé de tenant : ses clés "
                           "partagées sont les instances plateforme (/api/admin/platform-keys).")

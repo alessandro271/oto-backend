@@ -42,6 +42,7 @@ import base64
 import binascii
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass
 from typing import Iterable, Mapping, Optional, Any
@@ -49,14 +50,39 @@ from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
 
-# Le tenant de la plateforme elle-même (id 1, semé par L1). Son sub reste NU :
-# l'existant est NOMMÉ, pas déplacé.
-PRIMARY_SLUG = "oto"
-
 # Un slug entre DANS le sub : il doit être un jeton sans ambiguïté. Pas de `:` (il
 # rendrait la qualification indécidable), rien qu'un agent ou une UI puisse
 # confondre avec autre chose.
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+
+
+# ── Le tenant PRIMAIRE : une déclaration de l'instance (oto-backend#969) ──────────
+# Le tenant de l'instance elle-même, ligne 1 de `tenants`, semée par le premier
+# démarrage (`db/_init.py`). Son sub reste NU. Son slug était la constante « nous » :
+# toute base neuve naissait avec notre tenant, et toute instance se croyait nous. Il se
+# DÉCLARE désormais, sans défaut — un défaut vaudrait « nous » (ADR 0070 §7.2, décision
+# du 28/09/2026 : toute instance déclare ses valeurs, la nôtre comprise). Lu à chaque
+# appel, jamais figé à l'import ; vérifié au démarrage avec le reste de l'identité de
+# l'instance (`identite_instance`). Son NOM est celui de la marque (`OTO_BRAND_NAME`).
+class TenantPrimaireNonDeclare(RuntimeError):
+    """L'instance n'a pas déclaré (ou a mal déclaré) son tenant primaire."""
+
+
+def primary_slug() -> str:
+    """Le slug DÉCLARÉ du tenant primaire (`OTO_TENANT_PRIMAIRE_SLUG`). Lève
+    `TenantPrimaireNonDeclare` s'il manque ou n'est pas un slug."""
+    slug = os.environ.get("OTO_TENANT_PRIMAIRE_SLUG") or ""
+    if not slug:
+        raise TenantPrimaireNonDeclare(
+            "OTO_TENANT_PRIMAIRE_SLUG absente : l'instance doit déclarer le slug de son "
+            "tenant primaire (la ligne 1 de `tenants`, dont les subs restent nus). "
+            "Aucun défaut : il vaudrait le nôtre.")
+    if not _SLUG_RE.match(slug):
+        raise TenantPrimaireNonDeclare(
+            f"OTO_TENANT_PRIMAIRE_SLUG={slug!r} n'est pas un slug "
+            f"({_SLUG_RE.pattern}) : il entre dans les subs des autres tenants.")
+    return slug
+
 
 
 def _refus(message: str, *args) -> None:
@@ -156,7 +182,7 @@ def qualify(slug: Optional[str], sub: Optional[str]) -> Optional[str]:
     Tenant `oto` (ou slug absent) : le sub est rendu **inchangé, byte pour byte**.
     Ce n'est pas une optimisation, c'est l'invariant : l'AAD du coffre en dérive.
     """
-    if not sub or not slug or slug == PRIMARY_SLUG:
+    if not sub or not slug or slug == primary_slug():
         return sub
     return f"{slug}:{sub}"
 
@@ -237,9 +263,10 @@ def build(primary_issuer: str, drain_issuers: Iterable[str] = (),
                                     dcr_redirects=_normalize_redirects(logto_mgmt, slug),
                                     refresh_tokens=_normalize_refresh_tokens(logto_mgmt, slug))
 
-    _put(PRIMARY_SLUG, primary_issuer)
+    primaire = primary_slug()
+    _put(primaire, primary_issuer)
     for drain in drain_issuers or ():
-        _put(PRIMARY_SLUG, drain)
+        _put(primaire, drain)
 
     for row in tenants or ():
         # Pas de `.strip()` : le slug entre dans le sub, donc il vaut EXACTEMENT ce
@@ -249,7 +276,7 @@ def build(primary_issuer: str, drain_issuers: Iterable[str] = (),
         iss = normalize_issuer((row or {}).get("issuer"))
         if not iss:
             continue
-        if not _SLUG_RE.match(slug) or slug == PRIMARY_SLUG:
+        if not _SLUG_RE.match(slug) or slug == primaire:
             _refus(
                 "registre d'émetteurs : slug %r refusé (invalide, ou réservé au "
                 "tenant de la plateforme dont l'émetteur vient de l'env) — %s ignoré",
@@ -451,8 +478,11 @@ class IssuerRegistry:
         self._by_issuer: dict = dict(entries or {})
         # Préfixes des tenants NON primaires — servent à CLASSER un sub sans le
         # découper (cf. `tenant_of`). Triés pour un log/diagnostic stable.
+        # Un registre VIDE (le défaut posé à l'import) ne lit aucune déclaration :
+        # un import définit, il ne travaille pas.
+        primaire = primary_slug() if self._by_issuer else ""
         self._prefixes = tuple(sorted(
-            f"{e.slug}:" for e in self._by_issuer.values() if e.slug != PRIMARY_SLUG))
+            f"{e.slug}:" for e in self._by_issuer.values() if e.slug != primaire))
         # Binding `host → tenant` (lot L3). Un host déclaré par DEUX tenants est
         # refusé comme l'est un émetteur en double : il déciderait vers quel
         # annuaire on envoie l'utilisateur, et se tromper l'envoie chez le mauvais
@@ -479,7 +509,7 @@ class IssuerRegistry:
         """Tenant d'un émetteur. Inconnu ⟹ `oto` : le verifier primaire tranchera,
         et il rejettera (l'`iss` ne correspond pas au sien)."""
         entry = self.get(issuer)
-        return entry.slug if entry else PRIMARY_SLUG
+        return entry.slug if entry else primary_slug()
 
     def entry_for_slug(self, slug: Optional[str]) -> Optional[TenantIssuer]:
         """L'entrée d'un tenant par son SLUG — ce que ce tenant DÉCLARE (son adresse,
@@ -495,7 +525,7 @@ class IssuerRegistry:
         index à tenir se désynchroniserait pour économiser une comparaison.
         """
         s = (slug or "").strip()
-        if not s or s == PRIMARY_SLUG:
+        if not s or s == primary_slug():
             return None
         return next((e for e in self.entries() if e.slug == s), None)
 
@@ -517,11 +547,11 @@ class IssuerRegistry:
         Un sub qui ne porte aucun préfixe connu est du tenant `oto` (sub nu).
         """
         if not sub:
-            return PRIMARY_SLUG
+            return primary_slug()
         for prefix in self._prefixes:
             if sub.startswith(prefix):
                 return prefix[:-1]
-        return PRIMARY_SLUG
+        return primary_slug()
 
     def for_host(self, host) -> Optional[TenantIssuer]:
         """Tenant servi par ce host, ou **None** si le host n'est réclamé par aucun.
@@ -603,11 +633,11 @@ def require_primary_tenant(sub: Optional[str], action: str) -> Optional[str]:
     Management API), pas chez l'appelant : c'est là que l'hypothèse « ce sub désigne
     un utilisateur de notre Logto » est faite.
     """
-    slug = current().tenant_of(sub)
-    if slug != PRIMARY_SLUG:
+    slug, primaire = current().tenant_of(sub), primary_slug()
+    if slug != primaire:
         raise ForeignTenantDirectory(
             f"{action} : le compte {sub!r} relève du tenant {slug!r}, pas de "
-            f"{PRIMARY_SLUG!r}. Il n'existe pas dans notre annuaire Logto, et aucun "
+            f"{primaire!r}. Il n'existe pas dans notre annuaire Logto, et aucun "
             f"acte de management visant un UTILISATEUR n'est routé vers l'émetteur "
             f"de {slug!r} — cet acte doit être porté par le tenant propriétaire du "
             f"compte.")

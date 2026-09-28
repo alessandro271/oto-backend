@@ -17,12 +17,9 @@ from .. import config
 from .. import logodev
 from ..db import _connect
 from ..db.billing import ABONNEMENT_QUI_PRELEVE
+from ..tenancy import primary_slug
 
 _log = logging.getLogger(__name__)
-
-# Le tenant de la plateforme (sub NU) — `tenancy.PRIMARY_SLUG`, sans importer le
-# registre dans le store : seul `backfill_org_front` en a besoin, en SQL.
-_PRIMARY_TENANT = "oto"
 
 
 # --- écritures + lectures de gestion (barreau 3, meta-tools platform_admin) --
@@ -391,7 +388,7 @@ def backfill_org_front() -> dict:
                AND o.created_by LIKE t.slug || ':%%'
             RETURNING o.id, t.slug
             """,
-            {"primary": _PRIMARY_TENANT},
+            {"primary": primary_slug()},
         ).fetchall()
     if rows:
         _log.info("backfill_org_front: %d org(s) rattachée(s) à leur front : %s",

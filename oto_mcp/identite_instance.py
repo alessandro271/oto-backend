@@ -29,7 +29,7 @@ class IdentiteNonDeclaree(RuntimeError):
 def _lectures() -> tuple[tuple[str, Callable[[], object]], ...]:
     # Imports tardifs : `config` ne dépend de rien, mais `legal_docs` tire la base et le
     # registre de tenants — ce module doit rester importable sans eux.
-    from . import config, email, email_brand, legal_docs
+    from . import config, email, email_brand, legal_docs, tenancy
     return (
         ("adresse publique de l'instance", config.public_base_url),
         ("domaine des projets publiés", config.project_domain),
@@ -42,6 +42,7 @@ def _lectures() -> tuple[tuple[str, Callable[[], object]], ...]:
         ("documents légaux", legal_docs.current_docs),
         ("nom de la marque", email_brand.nom_instance),
         ("site de la marque", email_brand.site_instance),
+        ("tenant primaire", tenancy.primary_slug),
     )
 
 

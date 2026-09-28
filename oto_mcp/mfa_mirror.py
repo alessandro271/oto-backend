@@ -114,7 +114,7 @@ def _split_members_by_tenant(org_id: int) -> tuple[set[str], set[str]]:
     foreign: set[str] = set()
     for m in org_store.list_org_members(org_id):
         sub = m["sub"]
-        target = (mirrorable if registry.tenant_of(sub) == tenancy.PRIMARY_SLUG
+        target = (mirrorable if registry.tenant_of(sub) == tenancy.primary_slug()
                   else foreign)
         target.add(sub)
     return mirrorable, foreign
@@ -157,7 +157,7 @@ def sync_members(org_id: int) -> None:
         _log.info("MFA mirror org %s : %d membre(s) hors tenant %s non miroité(s) — "
                   "leur émetteur applique sa propre politique MFA (exposé par "
                   "org.mfa.get : members_other_tenant)",
-                  org_id, len(foreign), tenancy.PRIMARY_SLUG)
+                  org_id, len(foreign), tenancy.primary_slug())
     have = _list_logto_members(logto_org_id)
     _add_logto_members(logto_org_id, sorted(want - have))
     for sub in sorted(have - want):

@@ -147,7 +147,7 @@ EXPECTED_EDGES = {
 FROZEN = (
     'BASE_SLUG', 'LibrarySlugTaken', 'ORG_ROLES', 'Optional',
     '_DOMAIN_RE', '_EMAIL_CONNECTORS_ORDER', '_INV_LIST_SELECT', '_LIBRARY_COLS',
-    '_LIBRARY_META_COLS', '_PREVIEW_SELECT', '_PRIMARY_TENANT', '_SLUG_RE',
+    '_LIBRARY_META_COLS', '_PREVIEW_SELECT', '_SLUG_RE',
     '_accept_invitation_row', '_connect', '_email_connectors_in_order',
     '_free_instruction_slug', '_get_invitation', '_hash_token',
     '_idempotent_accept', '_list_invitations', '_log', '_mark_invitation_accepted',

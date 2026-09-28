@@ -106,7 +106,7 @@ def org_is_ours(org_id: Optional[int]) -> bool:
     if not org_id:
         return False
     try:
-        return db.org_tenant_slug(int(org_id)) == tenancy.PRIMARY_SLUG
+        return db.org_tenant_slug(int(org_id)) == tenancy.primary_slug()
     # noqa: SILENT — fail-closed de périmètre : sans réponse franche sur le tenant,
     # on se tait plutôt que de risquer de s'adresser aux clients d'un partenaire.
     except Exception:  # noqa: BLE001

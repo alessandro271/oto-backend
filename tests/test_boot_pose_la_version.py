@@ -15,43 +15,16 @@ from __future__ import annotations
 
 import logging
 import os
-import uuid
-from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
 psycopg = pytest.importorskip("psycopg")
 
+from _base_jetable import base_jetable as _base_jetable  # noqa: E402
+
 RACINE = Path(__file__).resolve().parent.parent
 DEPART = "0001_point_de_depart"
-
-
-@contextmanager
-def _base_jetable(pg_dsn: str):
-    """Une base vide À NOUS, pointée par `DATABASE_URL`, pool remis à neuf ; rend un
-    ouvreur de connexion. Détruite à la sortie."""
-    from oto_mcp.db import _conn as dbconn
-
-    nom = "oto_version_" + uuid.uuid4().hex[:8]
-    root = psycopg.connect(pg_dsn, autocommit=True)
-    root.execute(f'CREATE DATABASE "{nom}"')
-    dsn = pg_dsn.rsplit("/", 1)[0] + "/" + nom
-    url_avant, pool_avant = os.environ.get("DATABASE_URL"), dbconn._pool
-    os.environ["DATABASE_URL"] = dsn
-    dbconn._pool = None
-    try:
-        yield lambda: psycopg.connect(dsn, autocommit=True)
-    finally:
-        if dbconn._pool is not None:
-            dbconn._pool.close()
-        dbconn._pool = pool_avant
-        if url_avant is None:
-            os.environ.pop("DATABASE_URL", None)
-        else:
-            os.environ["DATABASE_URL"] = url_avant
-        root.execute(f'DROP DATABASE IF EXISTS "{nom}" WITH (FORCE)')
-        root.close()
 
 
 def _version(ouvrir) -> list[str] | None:

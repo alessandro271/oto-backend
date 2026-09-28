@@ -147,7 +147,7 @@ def _list_apps(ctx: ResolvedCtx, inp: TenantAppsInput) -> dict:  # noqa: ARG001
 
 def _set_app(ctx: ResolvedCtx, inp: TenantAppSetInput) -> dict:
     slug = _known(inp.slug)
-    if slug == tenancy.PRIMARY_SLUG:
+    if slug == tenancy.primary_slug():
         raise AuthzDenied(400, "primary_tenant_app",
                           f"Le tenant `{slug}` ne porte pas d'app de tenant : la sienne est "
                           "celle de la plateforme (env), ou /api/admin/editor-apps.")

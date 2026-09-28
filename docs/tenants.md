@@ -13,6 +13,25 @@ description: >-
 > La carte garde le résumé + le pointeur ; le détail (schémas, incidents datés et leurs
 > leçons) vit ici.
 
+## Le tenant primaire est une DÉCLARATION de l'instance (28/09/2026, oto-backend#969)
+
+La ligne 1 de `tenants` est le tenant de l'instance elle-même : ses subs restent nus,
+`orgs.tenant_id DEFAULT 1` y rattache toute org. Son identité était la constante
+`tenancy.PRIMARY_SLUG = "oto"`, semée au démarrage sous notre nom : toute base neuve
+naissait avec notre tenant (ADR 0070 §7.2). Elle se **déclare** désormais, sans défaut :
+
+| variable | rôle |
+|---|---|
+| `OTO_TENANT_PRIMAIRE_SLUG` | le slug, lu par `tenancy.primary_slug()` à chaque appel — tout le code qui disait `PRIMARY_SLUG` |
+| `OTO_BRAND_NAME` | le nom de la marque (#968), qui est aussi celui du tenant, posé **à la naissance** de la base seulement |
+
+- absente ou invalide : le démarrage refuse (`identite_instance.verifier`, dans
+  `server.main`, avant d'avoir rien écrit) ;
+- base neuve : la ligne 1 naît avec le slug et le nom déclarés (`db/_tenant_primaire.py`) ;
+- base existante dont la ligne 1 porte **un autre slug** : refus du démarrage
+  (`TenantPrimaireDiscordant`) — une base ne change pas de tenant primaire par un réglage ;
+- l'instance historique déclare le slug `oto`, ce que porte sa base (qui garde son nom).
+
 ## Un tenant tiers est SERVI depuis le 13/08 (oto-private#83)
 
 > **Un tenant tiers est SERVI, depuis le 13/08 (oto-private#83).** Le premier partenaire a

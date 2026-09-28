@@ -93,10 +93,10 @@ def test_le_classement_dun_sub_ne_le_decoupe_pas(registre_avec_un_tiers):
     interdit par ailleurs."""
     r = registre_avec_un_tiers
     assert r.tenant_of("acme:abc123") == "acme"
-    assert r.tenant_of("abc123") == tenancy.PRIMARY_SLUG
+    assert r.tenant_of("abc123") == tenancy.primary_slug()
     # Ni un sub qui COMMENCE par le slug sans le séparateur…
-    assert r.tenant_of("acmeabc123") == tenancy.PRIMARY_SLUG
+    assert r.tenant_of("acmeabc123") == tenancy.primary_slug()
     # …ni un tenant non déclaré ne prennent le préfixe pour eux.
-    assert r.tenant_of("globex:abc123") == tenancy.PRIMARY_SLUG
+    assert r.tenant_of("globex:abc123") == tenancy.primary_slug()
     assert not r.same_tenant("acme:abc123", "abc123")
     assert r.same_tenant("acme:abc123", "acme:def456")

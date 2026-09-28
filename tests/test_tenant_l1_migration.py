@@ -38,6 +38,8 @@ _DB = pathlib.Path(__file__).resolve().parent.parent / "oto_mcp" / "db"
 # ordres et les formes ci-dessous soient des propriétés.
 _SCHEMA_SRC = _schema._SCHEMA
 _INIT_SRC = (_DB / "_init.py").read_text(encoding="utf-8")
+# Le seed du tenant 1 vit à part depuis qu'il suit la déclaration de l'instance (#969).
+_SEED_SRC = (_DB / "_tenant_primaire.py").read_text(encoding="utf-8")
 
 
 def test_tenants_table_is_created_before_orgs():
@@ -50,14 +52,15 @@ def test_tenants_table_is_created_before_orgs():
 
 
 def test_tenant_one_is_seeded_before_the_column_references_it():
-    seed = _INIT_SRC.index("INSERT INTO tenants")
-    setval = _INIT_SRC.index("pg_get_serial_sequence('tenants','id')")
+    seed = _INIT_SRC.index("_tenant_primaire.semer(conn)")
     alter = _INIT_SRC.index("ALTER TABLE orgs ADD COLUMN IF NOT EXISTS tenant_id")
     assert seed < alter, (
         "le tenant 1 doit être semé AVANT l'ajout de `orgs.tenant_id` : la colonne "
         "naît `NOT NULL DEFAULT 1 REFERENCES tenants(id)`, donc la FK est violée "
         "par la première org existante si le tenant n'est pas là.")
-    assert seed < setval < alter, (
+    insert = _SEED_SRC.index("INSERT INTO tenants")
+    setval = _SEED_SRC.index("pg_get_serial_sequence('tenants','id')")
+    assert insert < setval, (
         "le recalage de séquence doit suivre le seed : un INSERT à id explicite ne "
         "fait pas avancer la BIGSERIAL, et le prochain tenant naîtrait sur l'id 1.")
 

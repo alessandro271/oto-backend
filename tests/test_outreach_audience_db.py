@@ -391,7 +391,7 @@ def _audience_sans(*mutations):
     from oto_mcp import tenancy
     from oto_mcp.db._conn import _connect
     with _connect() as conn:
-        rows = conn.execute(sql, {"primary": tenancy.PRIMARY_SLUG, "campaign": CAMPAGNE,
+        rows = conn.execute(sql, {"primary": tenancy.primary_slug(), "campaign": CAMPAGNE,
                                   "days": 30, "cap": 500}).fetchall()
     return {r["sub"] for r in rows}
 

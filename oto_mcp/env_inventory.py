@@ -219,6 +219,14 @@ _IDENTITE: tuple[Variable, ...] = (
     Variable("OTO_BRAND_SITE", Classe.IDENTITE, None,
              "Site du tenant primaire, hôte nu (`exemple.tld`) : pied des emails, lien "
              "du pied des pages publiques.", ("oto_mcp/email_brand.py:122",)),
+    Variable("OTO_TENANT_PRIMAIRE_SLUG", Classe.IDENTITE, None,
+             "Slug du tenant PRIMAIRE de l'instance (#969, ADR 0070 §7.2) : la ligne 1 "
+             "de `tenants`, semée à la naissance de la base sous ce slug et le nom "
+             "`OTO_BRAND_NAME`, dont les subs restent nus. Plus de constante « nous ». "
+             "Une base existante dont la ligne 1 porte un autre slug refuse le "
+             "démarrage. L'instance historique déclare `oto`.",
+             ("oto_mcp/tenancy.py:74", "oto_mcp/identite_instance.py:45",
+              "oto_mcp/db/_tenant_primaire.py:45")),
 )
 
 

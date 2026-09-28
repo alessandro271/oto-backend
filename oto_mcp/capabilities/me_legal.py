@@ -64,9 +64,9 @@ class LegalStatus(BaseModel):
     contexts: dict[str, LegalContext]            # clé = 'access' | 'purchase'
 
 
-def _status(sub: str, tenant_slug: str = tenancy.PRIMARY_SLUG) -> dict:
+def _status(sub: str, tenant_slug: str) -> dict:
     """Compose le LegalStatus attendu par le front (documents + contexts), contre
-    les docs EFFECTIFS de `tenant_slug` (défaut : la plateforme, `oto`)."""
+    les docs EFFECTIFS de `tenant_slug`."""
     docs = legal_docs.docs_for(tenant_slug)
     acc = db.get_legal_acceptances(sub)
     documents = []

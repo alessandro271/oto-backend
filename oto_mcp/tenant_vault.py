@@ -44,7 +44,7 @@ def rung_tenant(sub: Optional[str]) -> Optional[str]:
     if not sub:
         return None
     slug = tenancy.current().tenant_of(sub)
-    return None if slug == tenancy.PRIMARY_SLUG else slug
+    return None if slug == tenancy.primary_slug() else slug
 
 
 def get_tenant_secret(slug: str, provider: str, account: str = "") -> Optional[str]:
@@ -67,9 +67,9 @@ def set_tenant_secret(slug: str, provider: str, secret: str, set_by: Optional[st
 
     Le tenant primaire est refusé ici, et le walker ne sonde jamais son barreau : les
     deux verdicts sont les mêmes par construction."""
-    if not slug or slug == tenancy.PRIMARY_SLUG:
+    if not slug or slug == tenancy.primary_slug():
         raise PrimaryTenantKeyRefused(
-            f"Le tenant `{tenancy.PRIMARY_SLUG}` ne porte pas de clé de tenant : ses "
+            f"Le tenant `{tenancy.primary_slug()}` ne porte pas de clé de tenant : ses "
             "clés partagées sont les instances plateforme (posées sur "
             "/api/admin/platform-keys, accordées par oto_admin_key_grant).")
     if not (meta and meta.get("base_url")):

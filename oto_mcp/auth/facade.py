@@ -335,9 +335,9 @@ def _logto_base() -> str:
 
 def _primary_directory() -> Directory:
     """NOTRE annuaire — le défaut de tout appel de management non qualifié."""
-    from ..tenancy import PRIMARY_SLUG
+    from ..tenancy import primary_slug
     base = _logto_base()
-    return Directory(PRIMARY_SLUG, base, base, _PRIMARY_CREDENTIAL)
+    return Directory(primary_slug(), base, base, _PRIMARY_CREDENTIAL)
 
 
 def directory_for_tenant(entry) -> "Directory | None":

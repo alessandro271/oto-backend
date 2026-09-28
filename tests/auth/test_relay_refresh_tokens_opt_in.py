@@ -344,5 +344,5 @@ def test_le_tenant_primaire_na_jamais_le_drapeau():
     reg = _registre(_lignes(True))
 
     primaire = reg.get(tenancy.normalize_issuer("https://auth.oto.ninja/oidc"))
-    assert primaire is not None and primaire.slug == tenancy.PRIMARY_SLUG
+    assert primaire is not None and primaire.slug == tenancy.primary_slug()
     assert primaire.refresh_tokens is False

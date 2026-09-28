@@ -139,7 +139,7 @@ def test_le_tenant_primaire_ne_porte_pas_de_cle_tenant(coffre_vide):
     """Les clés partagées de la plateforme SONT ses instances plateforme (avec leurs
     grants) : une clé « tenant oto » serait un second mécanisme pour la même fonction."""
     with pytest.raises(tenant_vault.PrimaryTenantKeyRefused):
-        tenant_vault.set_tenant_secret(tenancy.PRIMARY_SLUG, CONN, "k", set_by="x")
+        tenant_vault.set_tenant_secret(tenancy.primary_slug(), CONN, "k", set_by="x")
     assert _one("SELECT count(*) AS n FROM connector_credentials "
                 "WHERE entity_type = 'tenant'")["n"] == 0
 

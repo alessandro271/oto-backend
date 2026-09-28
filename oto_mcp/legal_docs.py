@@ -98,7 +98,7 @@ def docs_for(tenant_slug: str) -> dict[str, dict[str, str]]:
     la sienne, il n'y a jamais de ligne à chercher pour lui — et ça évite un aller PG
     sur le chemin le plus emprunté."""
     docs = current_docs()
-    if not tenant_slug or tenant_slug == tenancy.PRIMARY_SLUG:
+    if not tenant_slug or tenant_slug == tenancy.primary_slug():
         return docs
     overrides = db.get_tenant_legal_docs(tenant_slug)
     if not overrides:

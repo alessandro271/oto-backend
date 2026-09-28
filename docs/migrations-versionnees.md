@@ -718,6 +718,21 @@ fait échouer le démarrage d'une base neuve plutôt que d'en choisir une.
 schéma porte déjà (lire l'en-tête de chaque révision et le catalogue), puis
 `alembic stamp <révision>` et `alembic upgrade head`.
 
+**Ce que la naissance exige, vérifié avant le premier ordre** (`oto_mcp/db/_prerequis.py`,
+28/09/2026) : refus nommé (`PrerequisBaseManquant`) au lieu d'une erreur PostgreSQL brute
+au milieu de la transaction.
+
+| prérequis | exigé de | ce qu'il faut fournir |
+|---|---|---|
+| un schéma courant où le rôle a `CREATE` | une base **neuve** seulement | `GRANT CREATE ON SCHEMA <s> TO <rôle>` ou un rôle propriétaire |
+| l'extension `vector` (pgvector) | toute base où elle **manque** | un serveur qui la propose ; la créer exige un superutilisateur — sinon `CREATE EXTENSION vector` joué une fois par un administrateur |
+| l'extension `pg_trgm` | toute base où elle **manque** | extension de confiance : le droit `CREATE` sur la base suffit, sinon même geste |
+
+Une base existante où les deux extensions sont déjà posées (la nôtre) n'exige **aucun
+droit de plus** qu'avant. Le tenant primaire, semé dans la même transaction, suit la
+déclaration de l'instance (`docs/tenants.md`, §« Le tenant primaire est une
+déclaration »). Banc : `tests/test_naissance_d_une_base.py`.
+
 ⚠️ **Ce que le stamp suppose** : que le démarrage produise bien l'état de la tête — c'est
 la discipline de chaque révision (poser aussi sa colonne dans le fragment du schéma).
 Rien ne compare encore le schéma d'une base neuve à celui d'une base remise à niveau par

@@ -121,7 +121,7 @@ def _bloquants(conn, params) -> tuple[list[dict], list[dict]]:
 
 
 def main(apply: bool) -> int:
-    params = {"primary": tenancy.PRIMARY_SLUG}
+    params = {"primary": tenancy.primary_slug()}
     with _connect() as conn:
         print("── état AVANT ──")
         for r in _etat(conn):
