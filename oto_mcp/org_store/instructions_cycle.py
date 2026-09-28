@@ -79,6 +79,28 @@ def unarchive_instruction(owner_type: str, owner_id: int | str,
         return None if row is None else row["avant"]
 
 
+def list_archived_instructions(owner_type: str, owner_id: int | str) -> list[dict]:
+    """Les procédures RETIRÉES du service, la plus récemment archivée d'abord — ce que
+    `list_instructions` exclut toujours, et la seule façon de les retrouver par liste.
+
+    ⚠️ **Sans elle, le désarchivage n'avait pas de point d'entrée** : une procédure
+    archivée sort de toutes les listes, donc on ne pouvait la remettre en service
+    qu'en connaissant déjà son slug. Elle sert l'écran qui en offre le retour ; elle
+    ne nourrit JAMAIS l'index que lit l'IA, qui reste `list_instructions`.
+
+    Même forme que `list_instructions`, plus `archived_at`. Le readme est exclu : il
+    n'est pas une procédure."""
+    otype, oid = instructions._owner(owner_type, owner_id)
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT id, slug, title, description, version, updated_at, archived_at "
+            f"FROM org_instructions WHERE {instructions._OWNER_WHERE} AND slug <> %s "
+            "AND archived_at IS NOT NULL ORDER BY archived_at DESC, slug",
+            (otype, oid, instructions.BASE_SLUG),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
 def delete_instruction(owner_type: str, owner_id: int | str, slug: str) -> bool:
     """Supprime une instruction ET son historique. False si elle n'existait pas."""
     otype, oid = instructions._owner(owner_type, owner_id)

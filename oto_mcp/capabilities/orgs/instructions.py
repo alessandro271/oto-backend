@@ -200,11 +200,17 @@ class InstructionIndexEntry(BaseModel):
     updated_at: Optional[str] = None
 
 
+class ArchivedInstructionIndexEntry(InstructionIndexEntry):
+    """Une procédure RETIRÉE du service : la même fiche, plus la date du retrait."""
+    archived_at: str
+
+
 class InstructionsBundle(BaseModel):
     """Readme + index des procédures de l'ORG ACTIVE.
 
     ⚠️ **Sans org active, c'est un 200 avec tout à vide** (`org_id: null`,
-    `can_edit: false`, `guide.exists: false`, `instructions: []`) — pas un 400.
+    `can_edit: false`, `guide.exists: false`, `instructions: []`, `archived: []`) —
+    pas un 400.
     Indiscernable, à la lecture, d'une org réelle qui n'aurait rien écrit.
 
     ⚠️ **`instructions` exclut le readme** (slug réservé `claude_md`), qui n'est décrit
@@ -234,6 +240,13 @@ class InstructionsBundle(BaseModel):
     guide: GuideMeta
     doctrine: GuideMeta   # ALIAS déprécié, retrait le 29/10/2026 (#519)
     instructions: list[InstructionIndexEntry]
+    # Pas un drapeau de plus dans `_DROITS_SERVIS` : la liste EST la réponse à « qui
+    # peut désarchiver », servie pleine ou vide par la règle de la capacité elle-même.
+    archived: list[ArchivedInstructionIndexEntry] = Field(default_factory=list, description=(
+        "Les procédures ARCHIVÉES de l'org, la plus récemment retirée d'abord — de quoi "
+        "offrir leur remise en service (`POST …/{slug}/unarchive`). Servie à qui peut les "
+        "désarchiver (org_admin), VIDE pour les autres. Jamais dans `instructions`, et "
+        "jamais dans l'index que lit l'IA."))
 
 
 class InstructionView(BaseModel):
@@ -1407,7 +1420,7 @@ def _instructions_list(ctx: ResolvedCtx, inp: EmptyInput) -> dict:
             "org_id": None, "org_name": None, "can_edit": False,
             **{nom: False for nom in _DROITS_SERVIS},
             "guide": {"exists": False, "version": 0, "updated_at": None},
-            "instructions": []})
+            "instructions": [], "archived": []})
     o = org_store.get_org(org_id)
     base = guide_store.get_init_guide("org", org_id)      # readme = guide init (ADR 0042)
     has_readme = bool((base["body_md"] or "").strip())
@@ -1427,6 +1440,12 @@ def _instructions_list(ctx: ResolvedCtx, inp: EmptyInput) -> dict:
             "updated_at": base["updated_at"] if has_readme else None,
         },
         "instructions": org_store.list_instructions("org", org_id),
+        # Les retirées, à part — pour qu'on puisse les remettre en service sans connaître
+        # déjà leur slug. Même règle que le geste qu'elles servent : la capacité
+        # `unarchive`, exécutée, pas recopiée.
+        "archived": (org_store.list_archived_instructions("org", org_id)
+                     if capacite_autorise("org.instruction.unarchive", ctx.sub, org=org_id)
+                     else []),
     })
 
 

@@ -251,6 +251,29 @@ def test_remise_en_service_puis_ECRITURE_passe(pg):
     assert v == 5
 
 
+# ── RETROUVER une retirée : la liste qui ouvre le désarchivage ───────────────────
+
+def test_les_retirees_se_listent_la_plus_recente_d_abord(pg):
+    """Sans liste, on ne remettait en service qu'une procédure dont on connaissait
+    déjà le slug. Celle-ci rend les retirées de CE propriétaire, et elles seules :
+    ni celles en service, ni le readme, ni celles d'un autre propriétaire."""
+    for owner, slug, retrait in (("231", "vieille", "NOW() - INTERVAL '3 days'"),
+                                 ("231", "recente", "NOW() - INTERVAL '1 hour'"),
+                                 ("231", "en-service", "NULL"),
+                                 ("231", "claude_md", "NOW()"),
+                                 ("232", "d-une-autre-org", "NOW()")):
+        pg.execute(
+            "INSERT INTO org_instructions (owner_type, owner_id, slug, title, body_md, "
+            f"version, archived_at) VALUES ('org', %s, %s, 'T', 'corps', 1, {retrait})",
+            (owner, slug))
+
+    rendues = org_store.list_archived_instructions("org", 231)
+    assert [r["slug"] for r in rendues] == ["recente", "vieille"]
+    assert all(str(r["archived_at"]).startswith("20") for r in rendues)
+    # L'index que lit l'agent, lui, n'en voit toujours aucune.
+    assert [r["slug"] for r in org_store.list_instructions("org", 231)] == ["en-service"]
+
+
 # ── ce que l'AGENT lit : `op=get` dit l'état que `op=list` tait ──────────────────
 
 def test_la_lecture_par_ID_REMONTE_l_etat_d_archivage(pg):
