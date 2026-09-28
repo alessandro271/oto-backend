@@ -167,7 +167,7 @@ def exporter(conn: psycopg.Connection, orgs: list[int], sortie: Path | str, *,
     conn.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
     with conn.transaction():
         schema = lire_schema(conn)
-        verifier_classement(schema, classement)
+        classement = verifier_classement(schema, classement)
         perimetre = resoudre(conn, orgs)
         params = perimetre.parametres()
         pred = compilateur(classement)

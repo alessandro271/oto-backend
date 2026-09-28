@@ -141,9 +141,6 @@ PLAFONDS: dict[str, int] = {
     #   SQL `AS doctrine`/`AS doctrines` (donc clés de réponse).
     "oto_mcp/db/usage.py": 31,
     "oto_mcp/project_audit.py": 2,
-    # — Le classement de CHAQUE table pour l'export par périmètre (#1088), vérifié
-    #   CONTRE LE DDL : il nomme la table `doctrine_library` telle qu'elle est en base.
-    "oto_mcp/export_perimetre/classement.py": 1,
     # — L'inventaire des colonnes porteuses d'un `sub`, vérifié CONTRE LE DDL : une
     #   vue n'y apparaît pas, donc cette entrée reste sur la TABLE (sinon le
     #   garde-fou devient aveugle à une entrée morte). Elle suit la table au lot D.

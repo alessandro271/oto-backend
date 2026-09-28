@@ -10,6 +10,10 @@ exactement une entrée ici, dans l'une des quatre classes :
   écrite (notre commerce, ADR 0070 §3.1). La règle reste déclarée : le manifeste
   COMPTE ce qui n'est pas parti, il ne le tait pas.
 
+Une entrée peut nommer une VUE SIMPLE (une seule table sous-jacente) plutôt que sa
+table : `decouverte.verifier_classement` la résout en la table physique. C'est le cas
+de la bibliothèque publique, que le code ne désigne que par sa vue.
+
 ⚠️ Une table absente d'ici est un REFUS (`decouverte.verifier_classement`), jamais un
 oubli : c'est ce qui empêche l'export de rater la table ajoutée demain. Ajouter une
 table au schéma, c'est la classer ici dans le même commit — le test
@@ -116,9 +120,9 @@ CLASSEMENT: dict[str, Table] = {
     "blocks": indirecte(Via("nodes", ("node_id",))),
     "org_instructions": possedee(Ou((ParOrg(), ParEntite()))),
     "org_instruction_revisions": possedee(Ou((ParOrg(), ParEntite()))),
-    # La bibliothèque de procédures garde en base le nom d'avant #519 (cliquet
-    # `tests/test_vocabulaire_guide.py`) : ce classement se vérifie contre le DDL.
-    "doctrine_library": possedee(
+    # La bibliothèque publique se nomme par sa VUE, comme partout dans le code (#526 :
+    # son renommage physique ne doit être qu'un DDL) ; la découverte la résout en sa table.
+    "guide_library": possedee(
         Ou((ParOrg("author_org_id"), ParOrg("source_org_id"))),
         "une entrée publiée part avec l'org qui l'a écrite ; celles de la plateforme restent"),
     "functions": possedee(ParEntite()),

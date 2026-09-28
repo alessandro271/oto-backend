@@ -43,7 +43,24 @@ def _refus(schema, classement) -> str:
 
 def test_le_classement_couvre_le_schema_reel(schema):
     assert len(schema.colonnes) > 90, "le schéma lu n'est pas celui du démarrage"
-    verifier_classement(schema, cl.CLASSEMENT)
+    resolu = verifier_classement(schema, cl.CLASSEMENT)
+    assert set(resolu) == set(schema.colonnes)
+
+
+def test_une_entree_qui_nomme_une_vue_classe_sa_table(schema):
+    """La bibliothèque publique se nomme par sa vue (#526) : la découverte la résout."""
+    assert "guide_library" in cl.CLASSEMENT
+    table = schema.vues["guide_library"]
+    assert table in schema.colonnes and table not in cl.CLASSEMENT
+    assert verifier_classement(schema, cl.CLASSEMENT)[table] is cl.CLASSEMENT["guide_library"]
+    classement = {t: e for t, e in cl.CLASSEMENT.items() if t != "guide_library"}
+    assert f"table `{table}` non classée" in _refus(schema, classement)
+
+
+def test_une_table_classee_deux_fois_par_sa_vue_est_refusee(schema):
+    table = schema.vues["guide_library"]
+    classement = {**cl.CLASSEMENT, table: cl.CLASSEMENT["guide_library"]}
+    assert "classée deux fois" in _refus(schema, classement)
 
 
 def test_une_table_ajoutee_au_schema_sans_classement_est_refusee(conn):
@@ -97,15 +114,16 @@ def test_une_exclusion_ou_une_table_d_instance_dit_pourquoi(schema):
 
 
 def test_les_colonnes_secretes_et_hors_base_existent(schema):
-    for t, e in cl.CLASSEMENT.items():
+    for t, e in verifier_classement(schema, cl.CLASSEMENT).items():
         for c in (*e.secrets, *e.hors_base):
             assert c in schema.colonnes[t], f"{t}.{c}"
 
 
 def test_l_ordre_d_export_place_chaque_parent_avant_ses_enfants(schema):
-    ordre = ordre_d_export(schema, cl.CLASSEMENT)
+    classement = verifier_classement(schema, cl.CLASSEMENT)
+    ordre = ordre_d_export(schema, classement)
     rang = {t: i for i, t in enumerate(ordre)}
-    assert set(ordre) == {t for t, e in cl.CLASSEMENT.items() if e.classe in cl.EXPORTEES}
+    assert set(ordre) == {t for t, e in classement.items() if e.classe in cl.EXPORTEES}
     for t in ordre:
         for k in schema.cles_de(t):
             if k.cible in rang and k.cible != t:

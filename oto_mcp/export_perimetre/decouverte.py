@@ -32,6 +32,7 @@ class Schema:
     sequences: dict[str, tuple[str, ...]]     # colonnes dont le défaut tire une séquence
     cles: tuple[Cle, ...]
     primaires: dict[str, tuple[str, ...]]     # clé primaire (absente sur deux tables)
+    vues: dict[str, str]                      # vue SIMPLE → sa seule table sous-jacente
 
     def cles_de(self, table: str) -> tuple[Cle, ...]:
         return tuple(c for c in self.cles if c.table == table)
@@ -82,18 +83,38 @@ def lire_schema(conn, schema: str = "public") -> Schema:
             "        ORDER BY u.i)::text[] AS cols "
             "FROM pg_constraint k JOIN pg_namespace ns ON ns.oid = k.connamespace "
             "WHERE k.contype = 'p' AND ns.nspname = %s", (schema,))}
+    sous_jacentes: dict[str, set[str]] = {}
+    for r in conn.execute(
+            "SELECT DISTINCT v.relname AS vue, t.relname AS tbl "
+            "FROM pg_class v JOIN pg_namespace ns ON ns.oid = v.relnamespace "
+            "JOIN pg_rewrite rw ON rw.ev_class = v.oid "
+            "JOIN pg_depend d ON d.objid = rw.oid AND d.classid = 'pg_rewrite'::regclass "
+            "  AND d.refclassid = 'pg_class'::regclass "
+            "JOIN pg_class t ON t.oid = d.refobjid AND t.relkind = 'r' "
+            "WHERE v.relkind = 'v' AND ns.nspname = %s", (schema,)):
+        sous_jacentes.setdefault(r["vue"], set()).add(r["tbl"])
     return Schema(
         colonnes={t: tuple(c) for t, c in colonnes.items()},
         generees={t: frozenset(c) for t, c in generees.items()},
         sequences={t: tuple(c) for t, c in sequences.items()},
         cles=cles,
         primaires=primaires,
+        vues={v: next(iter(t)) for v, t in sous_jacentes.items() if len(t) == 1},
     )
 
 
-def verifier_classement(schema: Schema, classement: dict[str, Table]) -> None:
-    """Lève `ClassementIncomplet` si le classement et le schéma divergent en quoi que ce soit."""
+def verifier_classement(schema: Schema, classement: dict[str, Table]) -> dict[str, Table]:
+    """Rend le classement indexé par TABLE PHYSIQUE (une entrée qui nomme une vue simple
+    est résolue en sa table), ou lève `ClassementIncomplet` si le classement et le
+    schéma divergent en quoi que ce soit."""
     anomalies: list[str] = []
+    resolu: dict[str, Table] = {}
+    for nom, entree in classement.items():
+        table = schema.vues.get(nom, nom)
+        if table in resolu:
+            anomalies.append(f"`{table}` classée deux fois (dont par la vue `{nom}`)")
+        resolu[table] = entree
+    classement = resolu
     for t in sorted(set(schema.colonnes) - set(classement)):
         anomalies.append(f"table `{t}` non classée : la déclarer dans "
                          "export_perimetre/classement.py (possédée, indirecte, instance "
@@ -104,6 +125,7 @@ def verifier_classement(schema: Schema, classement: dict[str, Table]) -> None:
         anomalies.extend(_anomalies_table(t, classement[t], schema, classement))
     if anomalies:
         raise ClassementIncomplet(anomalies)
+    return classement
 
 
 def _anomalies_table(t: str, entree: Table, schema: Schema,
