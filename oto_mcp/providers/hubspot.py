@@ -15,6 +15,9 @@ CONNECTOR = _c(
     secret_kind="api_key", label="HubSpot",
     help="CRM (contacts, companies, deals, tickets, notes, listes/segments, propriétés)",
     href="https://app.hubspot.com",
+    # `hubspot_lignes` ne porte que `hubspot_push_rows` : les lignes d'un tableau
+    # poussées PAR RÉFÉRENCE. Même namespace, donc même activation.
+    modules=("hubspot", "hubspot_lignes"),
 )
 
 CATEGORY = "Prospection"

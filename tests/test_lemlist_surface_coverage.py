@@ -98,9 +98,9 @@ def _methods_that_reach_the_api() -> set[str]:
 
 
 def _methods_called_by_tools() -> set[str]:
-    from oto_mcp.tools import lemlist, lemlist_crm
+    from oto_mcp.tools import lemlist, lemlist_crm, lemlist_lignes
     called: set[str] = set()
-    for module in (lemlist, lemlist_crm):
+    for module in (lemlist, lemlist_crm, lemlist_lignes):
         src = inspect.getsource(module)
         # Toute MENTION compte, pas seulement un appel direct : les tables de
         # dispatch (`{"add": client.add_unsubscribe, …}[op](email)`) et les
@@ -172,10 +172,10 @@ def _client_calls() -> dict[str, list[tuple[int, set[str], bool]]]:
     présence d'un `**dict`)` pour chaque site d'appel."""
     import ast
 
-    from oto_mcp.tools import lemlist, lemlist_crm
+    from oto_mcp.tools import lemlist, lemlist_crm, lemlist_lignes
 
     calls: dict[str, list] = {}
-    for module in (lemlist, lemlist_crm):
+    for module in (lemlist, lemlist_crm, lemlist_lignes):
         tree = ast.parse(inspect.getsource(module))
         for node in ast.walk(tree):
             if not (isinstance(node, ast.Call)
@@ -259,7 +259,7 @@ def test_aucun_tool_n_ecrase_un_defaut_client_par_None():
     import ast
 
     from oto.tools.lemlist import LemlistClient
-    from oto_mcp.tools import lemlist, lemlist_crm
+    from oto_mcp.tools import lemlist, lemlist_crm, lemlist_lignes
 
     # Paramètres client dont le défaut porte une VALEUR (ni None ni sentinelle).
     porteurs: dict[str, set[str]] = {}
@@ -279,7 +279,7 @@ def test_aucun_tool_n_ecrase_un_defaut_client_par_None():
             porteurs[name] = vals
 
     fautes = []
-    for module in (lemlist, lemlist_crm):
+    for module in (lemlist, lemlist_crm, lemlist_lignes):
         tree = ast.parse(inspect.getsource(module))
         for fn in ast.walk(tree):
             if not isinstance(fn, ast.FunctionDef):
