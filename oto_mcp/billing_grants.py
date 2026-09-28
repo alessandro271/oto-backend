@@ -146,9 +146,9 @@ def _shape(row: dict, scope: str, meta: dict, now: datetime) -> dict:
 def granted_benefits(org_id: Optional[int]) -> list[dict]:
     """Les avantages payants OFFERTS à cette org, prêts à afficher.
 
-    **L'org seulement.** Un don fait à une PERSONNE n'ouvre plus d'option payante
-    (ADR 0070 §7 : seule l'org porte un droit payant) ; l'annoncer comme un avantage
-    serait promettre ce que le seam refuse.
+    **L'org seulement.** Un don fait à une PERSONNE (sa marque de compte) n'ouvre pas
+    d'option payante (ADR 0070 §7 : seule une ligne de droit déclaré en ouvre une) ;
+    l'annoncer comme un avantage serait promettre ce que le seam refuse.
 
     Rend `[]` — jamais un refus, jamais une exception — dès que l'org sort du
     périmètre : un écran qui s'affiche à moitié vaut mieux qu'un écran qui parle à la

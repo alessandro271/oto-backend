@@ -29,6 +29,9 @@ from oto_mcp.access import cascade, chain_resolution, chain_shadow
 from oto_mcp.db import access_shadow as db_shadow
 from oto_mcp.db import grants as db_grants
 
+# Sans base : le palier plateforme lit les droits de la personne (#1090).
+pytestmark = pytest.mark.usefixtures("sans_droit_declare")
+
 # L'instance free-tier serper TELLE QU'ELLE EST EN PROD : ouverte à tous
 # (`share_mode='open'`, aucune allowlist). C'est la forme que 0053 ne sait PAS dire —
 # elle n'a pas de bénéficiaire, et « tout le monde » n'est pas un scope de grant.

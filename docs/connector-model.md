@@ -168,13 +168,15 @@ d'admin**.
 **Deux seams, deux questions distinctes — ne pas les confondre :**
 
 **`access.has_option(sub, option)`** — « l'option est-elle ACCORDÉE ? ». Pour une option
-**payante** (`unipile`), une seule règle (**ADR 0070 §7**) : un droit déclaré **vivant** de
-l'org active, `access.org_has(org, option)`, lu dans `org_entitlements` — quelle que soit sa
-source (abonnement, don d'org, partenaire, essai). Le cœur ne sait pas qui paie : c'est le
+**payante** (`unipile`), une seule règle (**ADR 0070 §7**) : un droit déclaré **vivant**,
+`access.has_right(sub, org, option)`, lu dans `org_entitlements` — celui de l'org active ou
+une ligne posée sur la personne (dans l'org ou partout), quelle que soit sa source
+(abonnement, don, partenaire, essai). Le cœur ne sait pas qui paie : c'est le
 commerce qui écrit ces lignes, avec leur échéance (`billing_droits`, cf. `billing.md`).
-⚠️ **Le don fait à une PERSONNE n'ouvre plus d'option payante** (depuis le lot 2 de #806) :
-seule l'org porte un droit payant. `user_has_option` ne sert plus qu'aux options non
-payantes (`beta`, un drapeau de population), que `has_option` lit sur le compte ou l'org.
+⚠️ **La marque de compte (`option_comps`) n'ouvre pas d'option payante** (depuis le lot 2
+de #806) : seule une ligne de droit déclaré le fait. `user_has_option` ne sert plus
+qu'aux options non payantes (`beta`, un drapeau de population), que `has_option` lit
+sur le compte ou l'org.
 
 **`access.option_open(sub, connector)`** — « l'option est-elle LEVÉE pour cet appel ? », donc
 `has_option` **∪ BYO** (clé propre user/groupe/org). C'est le seam que lisent le statut de la

@@ -24,6 +24,9 @@ from oto_mcp.access import cascade, chain_resolution, chain_shadow
 from oto_mcp.db import access_shadow as db_shadow
 from oto_mcp.db import grants as db_grants
 
+# Sans base : le palier plateforme lit les droits de la personne (#1090).
+pytestmark = pytest.mark.usefixtures("sans_droit_declare")
+
 REF = "platform:serper:env"
 # La clé serper telle qu'elle est en prod : ouverte à tous, quota par défaut 200.
 OUVERTE = [{"label": "env", "share_mode": "open", "share_down": [], "share_side": [],

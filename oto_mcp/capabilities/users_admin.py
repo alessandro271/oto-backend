@@ -335,7 +335,8 @@ def _set_option(ctx: ResolvedCtx, inp: OptionInput) -> dict:
         key = _compose_platform_revoke(inp, eid)
     if inp.entity_type == "org":
         # Le don d'ORG devient un droit déclaré de l'org (source `offered`, même
-        # échéance). Le grain personne n'en écrit aucun : seule l'org porte un droit payant.
+        # échéance). Le grain personne n'en écrit aucun : une marque de compte n'est pas
+        # un droit déclaré.
         billing.reconcilier_droits(int(eid))
     return {"ok": True, "entity_type": inp.entity_type, "entity_id": eid,
             "option": inp.option, "on": inp.on, "platform_key": key,

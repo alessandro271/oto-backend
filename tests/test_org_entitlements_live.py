@@ -12,11 +12,16 @@ Ce que ces bancs tiennent :
   pose, rien n'est écrit ;
 - les listes (org, personne, droit), et la suppression de l'org qui emporte ses droits ;
 - **la portée « personne, toutes orgs »** (`org_id` NULL) : lue dans toute org, tenue
-  par l'unicité, refusée sans personne, retirée sans toucher les autres portées.
+  par l'unicité, refusée sans personne, retirée sans toucher les autres portées ;
+- **une ligne par personne ne fait qu'ajouter** : la valeur de l'org (ses lignes, sinon
+  le défaut) relevée par la personne, jamais abaissée — prouvé par propriété sur une
+  grille exhaustive des trois portées et de défauts d'instance.
 """
 from __future__ import annotations
 
 import uuid
+import itertools
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -367,3 +372,81 @@ def test_la_fusion_de_comptes_emmene_la_personne_partout(live):
     assert sorted(r["right_key"] for r in E.list_for_person_everywhere(neuf)) == [
         C.UNIPILE, SIEGES]
     assert value_for(neuf, None, SIEGES) == 8
+
+
+# ── une ligne par personne ne fait qu'ajouter ───────────────────────────────────
+
+def test_une_ligne_de_personne_plus_basse_que_le_defaut_ne_retire_rien(live):
+    """Une ligne d'ORG plus basse que le défaut le remplace ; une ligne de PERSONNE
+    plus basse ne compte pas : elle ne fait qu'ajouter."""
+    org, sub = _org(), _sub()
+    E.grant(org, SIEGES, "offered", value=2, sub=sub)
+    E.grant(None, SIEGES, "trial", value=1, sub=sub)
+    assert value_for(sub, org, SIEGES) == DEFAUT_SIEGES
+    assert value_for(sub, None, SIEGES) == DEFAUT_SIEGES, "hors org : le défaut aussi"
+    E.grant(org, SIEGES, "contract", value=1)
+    assert value_for(None, org, SIEGES) == 1, "la ligne d'org remplace le défaut"
+    assert value_for(sub, org, SIEGES) == 2, "et la personne la relève"
+
+
+def test_un_non_de_personne_ne_retire_pas_le_oui_de_l_org(live):
+    org, sub = _org(), _sub()
+    E.grant(org, C.UNIPILE, "subscription", value=1)
+    E.grant(org, C.UNIPILE, "offered", value=0, sub=sub)
+    E.grant(None, C.UNIPILE, "offered", value=0, sub=sub)
+    assert value_for(sub, org, C.UNIPILE) == 1
+
+
+# La grille : pour chaque portée, « absente » (None) ou une valeur ; des lignes d'org
+# plus basses ET plus hautes que chaque défaut, le 0 et le sans-plafond compris.
+_DEFAUTS = (0, 1, 5)
+_ORG = (None, 0, 1, 3, 9, C.SANS_PLAFOND)
+_PERSONNE_ORG = (None, 0, 2, 7)
+_PERSONNE_PARTOUT = (None, 0, 4, C.SANS_PLAFOND)
+
+
+def _lecture_d_org(defaut, ligne_org):
+    """La lecture d'org d'avant la règle : sa ligne valide si elle en a une, sinon le
+    défaut. Calculée ici, indépendamment du code servi."""
+    return defaut if ligne_org is None else ligne_org
+
+
+def test_monotonie_par_propriete_sur_les_trois_portees(live, monkeypatch):
+    """Pour tout défaut, toute ligne d'org, toute ligne de personne dans l'org et
+    partout : `value_for(None, org) ==` la lecture d'org, `value_for(sub, org) >=` elle
+    (exactement le plus grand des deux), et hors org la personne relève le défaut.
+    Une org et une personne neuves par cas : aucune ligne d'un cas ne fuit sur un autre."""
+    cas = list(itertools.product(_ORG, _PERSONNE_ORG, _PERSONNE_PARTOUT))
+    poses = []
+    for ligne_org, ligne_perso, ligne_partout in cas:
+        org, sub = _org(), _sub()
+        if ligne_org is not None:
+            E.grant(org, SIEGES, "subscription", value=ligne_org)
+        if ligne_perso is not None:
+            E.grant(org, SIEGES, "offered", value=ligne_perso, sub=sub)
+        if ligne_partout is not None:
+            E.grant(None, SIEGES, "partner", value=ligne_partout, sub=sub)
+        # Une ligne échue ou d'une autre personne ne doit rien changer.
+        E.grant(org, SIEGES, "trial", value=C.SANS_PLAFOND, sub=sub,
+                starts_at=HIER - timedelta(days=1), expires_at=HIER)
+        E.grant(org, SIEGES, "trial", value=C.SANS_PLAFOND, sub=_sub())
+        poses.append((org, sub))
+    verifies = 0
+    for defaut in _DEFAUTS:
+        monkeypatch.setenv("OTO_ENTITLEMENT_DEFAULTS", json.dumps({
+            "unipile": 0, "platform_unmetered": 0, "unipile_seats": defaut,
+            "members_max": "unlimited", "platform_key:*": 0}))
+        for (ligne_org, ligne_perso, ligne_partout), (org, sub) in zip(cas, poses):
+            ref = _lecture_d_org(defaut, ligne_org)
+            personne = [v for v in (ligne_perso, ligne_partout) if v is not None]
+            lu = value_for(sub, org, SIEGES)
+            contexte = (defaut, ligne_org, ligne_perso, ligne_partout)
+            assert value_for(None, org, SIEGES) == ref, contexte
+            assert lu >= ref, contexte
+            assert lu == max([ref] + personne), contexte
+            hors_org = value_for(sub, None, SIEGES)
+            assert hors_org >= defaut, contexte
+            assert hors_org == max([defaut] + ([ligne_partout] if ligne_partout is not None
+                                               else [])), contexte
+            verifies += 1
+    assert verifies == len(_DEFAUTS) * len(cas) == 288

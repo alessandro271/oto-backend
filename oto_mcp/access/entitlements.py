@@ -6,17 +6,21 @@ et ne sait rien de plus : ni qui l'a posé, ni s'il est payé. Il n'importe pas
 
 `value_for` applique la règle entière, relue à chaque usage (jamais mise en cache) :
 
-1. les lignes VALIDES à l'instant (début inclus, fin exclue, borne nulle = non bornée) ;
-2. des trois portées — l'org, la personne dans l'org, la personne partout (quelle que
-   soit l'org) —, toutes sources confondues ;
-3. **le plus généreux gagne** : le maximum ;
-4. aucune ligne → **le défaut déclaré par l'instance** (`OTO_ENTITLEMENT_DEFAULTS`),
-   jamais un défaut du code. Une clé du catalogue sans défaut déclaré fait échouer le
-   démarrage (`verifier_defauts`, appelé par `server.main`).
+1. les lignes VALIDES à l'instant (début inclus, fin exclue, borne nulle = non bornée),
+   toutes sources confondues ;
+2. **la valeur de l'org** : le maximum de ses lignes d'org, et sans aucune ligne d'org
+   valide **le défaut déclaré par l'instance** (`OTO_ENTITLEMENT_DEFAULTS`), jamais un
+   défaut du code. Une clé du catalogue sans défaut déclaré fait échouer le démarrage
+   (`verifier_defauts`, appelé par `server.main`) ;
+3. **une ligne par personne ne fait qu'ajouter** : le plus généreux entre la valeur de
+   l'org et les lignes de la personne (dans l'org et partout). Le plus généreux est le
+   plus GRAND pour toute clé du catalogue : `0` y dit « non » ou « pas d'accès », et
+   « sans plafond » s'écrit `SANS_PLAFOND`, le plus grand entier (`entitlements_catalogue`).
 
-⚠️ Une ligne vaut même quand elle est MOINS généreuse que le défaut : le défaut ne
-s'applique qu'en l'absence de toute ligne valide (un quota de 5 posé l'emporte sur un
-défaut de 10).
+⚠️ Une ligne d'ORG vaut même quand elle est MOINS généreuse que le défaut : elle le
+remplace (un quota de 5 posé sur l'org l'emporte sur un défaut de 10). Une ligne de
+PERSONNE, elle, ne retire jamais rien : plus basse que la valeur de l'org, elle ne
+compte pas. Sans personne (`sub` None), la lecture est exactement celle de l'org.
 """
 from __future__ import annotations
 
@@ -108,19 +112,30 @@ def defaut_du_droit(key: str) -> int:
 
 def value_for(sub: Optional[str], org_id: Optional[int], key: str,
               now: Optional[datetime] = None) -> int:
-    """La valeur du droit `key` pour la personne `sub` dans l'org `org_id` : le maximum
-    des lignes valides à `now` (défaut : maintenant, horloge de la base) de l'org, de la
-    personne dans l'org et de la personne partout, sinon le défaut déclaré par
-    l'instance. `sub` None = l'org seule ; `org_id` None = la personne partout seule ;
-    les deux None = aucune ligne ne peut s'appliquer, le défaut répond."""
+    """La valeur du droit `key` pour la personne `sub` dans l'org `org_id`, à `now`
+    (défaut : maintenant, horloge de la base) : la valeur de l'org (ses lignes, sinon le
+    défaut déclaré par l'instance), relevée par les lignes de la personne dans l'org et
+    partout si elles sont plus généreuses. `sub` None = l'org seule ; `org_id` None =
+    le défaut, relevé par la personne partout ; les deux None = le défaut."""
     catalogue.droit(key)
-    posee = (None if org_id is None and sub is None
-             else db_entitlements.max_value(None if org_id is None else int(org_id),
-                                            sub, key, now))
-    return defaut_du_droit(key) if posee is None else posee
+    defaut = defaut_du_droit(key)
+    if org_id is None and sub is None:
+        return defaut
+    posees = db_entitlements.valeurs_posees(None if org_id is None else int(org_id),
+                                            sub, key, now)
+    de_l_org = defaut if posees.org is None else posees.org
+    return de_l_org if posees.personne is None else max(de_l_org, posees.personne)
+
+
+def has_right(sub: Optional[str], org_id: Optional[int], right_key: str) -> bool:
+    """Vrai si la personne `sub`, agissant dans `org_id`, a ce droit oui/non (ou une
+    valeur non nulle) : `value_for`, lignes de la personne et défaut d'instance
+    compris. C'est la question d'un point d'USAGE, qui connaît la personne."""
+    return value_for(sub, org_id, right_key) >= 1
 
 
 def org_has(org_id: int, right_key: str) -> bool:
-    """Vrai si l'ORG a ce droit oui/non (ou une valeur non nulle) : `value_for` sans
-    personne, défaut d'instance compris."""
-    return value_for(None, org_id, right_key) >= 1
+    """Vrai si l'ORG a ce droit oui/non (ou une valeur non nulle), sans personne :
+    ses lignes d'org, sinon le défaut d'instance. Pour les lectures qui ne portent
+    sur aucune personne (l'org est-elle souscrite ?)."""
+    return has_right(None, org_id, right_key)

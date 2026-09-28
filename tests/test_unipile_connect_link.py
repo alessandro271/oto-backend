@@ -26,7 +26,7 @@ def _wire(monkeypatch, *, byo=False, option=True, org=39, existing=None, count=0
     monkeypatch.setattr(access, "resolve_credential", lambda *a, **k: SimpleNamespace(
         key="KEY", mode="org" if byo else "platform", config={}))
     monkeypatch.setattr(access, "current_org", lambda sub: org)
-    monkeypatch.setattr(access, "org_has", lambda org_id, droit: option)
+    monkeypatch.setattr(access, "has_right", lambda sub, org_id, droit: option)
     # Garde-fou anti-doublon cross-org (#172) : comptes déjà connectés du sub, tous
     # canaux/orgs confondus. [] par défaut ⇒ garde-fou inerte (chemins existants).
     monkeypatch.setattr("oto_mcp.db.list_unipile_accounts", lambda sub: connected or [])
@@ -106,6 +106,17 @@ def test_option_gate_on_platform_key(monkeypatch):
     assert "équipe de la plateforme" in e.value.message
     assert "Admin Exemple" in e.value.message
     assert "admin@example.test" not in e.value.message      # le nom seul, jamais l'adresse
+
+
+def test_le_gate_lit_le_droit_de_la_personne_qui_connecte(monkeypatch):
+    """Le droit est celui de la personne dans son org (org OU ligne posée sur elle,
+    ADR 0070 §7) : le gate demande `has_right(sub, org)`, jamais l'org seule."""
+    _wire(monkeypatch)
+    lus = []
+    monkeypatch.setattr(access, "has_right",
+                        lambda sub, org_id, droit: lus.append((sub, org_id, droit)) or True)
+    assert _run(hosted_auth_url("u1", "linkedin"))["url"]
+    assert lus == [("u1", 39, "unipile")]
 
 
 def test_seat_cap_blocks_new_hosted_account(monkeypatch):

@@ -166,11 +166,13 @@ droit de manquer. Un dépassement s'affiche, il ne coupe pas, et il ne facture p
 Trois fonctions y répondaient avec trois règles. Conséquence mesurée : **une org qui
 PAYAIT s'affichait « non souscrite »** dans son cockpit d'activation, dont la lecture
 ne regardait que le don admin et jamais le plan. **Il n'y a plus qu'une règle** (lot 2
-de #806) : pour une option payante, `access.has_option` = `access.org_has(org courante)`,
-le droit déclaré de l'org (« Les droits déclarés », plus bas), et le cockpit lit `access.org_has`.
+de #806) : pour une option payante, `access.has_option` = `access.has_right(sub, org
+courante)`, le droit déclaré de l'org ou une ligne posée sur la personne (« Les droits
+déclarés », plus bas), et le cockpit, qui parle de l'org, lit `access.org_has`.
 `access.views.option_open` reste au-dessus (il croise avec le BYO). Le cœur n'importe
 plus `billing` (cliquet `tests/test_access_sans_billing.py`). ⚠️ **Le don fait à une
-personne n'ouvre plus d'option payante**, et `status.granted[]` ne l'annonce plus.
+personne (sa marque de compte) n'ouvre pas d'option payante**, et `status.granted[]` ne
+l'annonce plus.
 
 ### Ce qui ne demande PAS de consentement
 
@@ -290,7 +292,7 @@ preuve.
 
 ## Les droits déclarés : le commerce les écrit, le cœur les relit (ADR 0070 §7)
 
-Le cœur relit `org_entitlements` (`access.org_has`) et ne sait pas qui paie. Le
+Le cœur relit `org_entitlements` (`access.has_right`) et ne sait pas qui paie. Le
 commerce y **écrit** ses droits : c'est `billing_droits.reconcilier(org)`, rejouée
 après chaque geste qui change l'état de l'org.
 
@@ -306,7 +308,8 @@ après chaque geste qui change l'état de l'org.
 
 Un plan pose ses `options` et, s'il est `unmetered`, `platform_unmetered`
 (`billing.plan_rights`), valeur `1` (oui). **Le don fait à une PERSONNE n'écrit rien** :
-seule l'org porte un droit payant. Un don d'option d'org **hors catalogue** (`beta`)
+cette réconciliation ne pose que des lignes d'org ; une ligne de personne vient d'un
+autre producteur (l'API du commerce). Un don d'option d'org **hors catalogue** (`beta`)
 n'est pas posé en droit (#1066). Le modèle — catalogue, portée, `value_for`, défauts
 d'instance — est dans `docs/droits-declares.md`.
 

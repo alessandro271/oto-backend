@@ -26,6 +26,9 @@ import pytest
 from oto_mcp import access, credentials_store, grants_chain, providers
 from oto_mcp.db import grants as db_grants
 
+# Sans base : le palier plateforme lit les droits de la personne (#1090).
+pytestmark = pytest.mark.usefixtures("sans_droit_declare")
+
 # L'instance fullenrich TELLE QU'ELLE EST EN PROD (relevé du 12/08/2026) : free-tier
 # ouverte (`share_mode='open'`, `share_down=[]`), quota par défaut 5, deux grants
 # nominatifs dans `rate_limit_by`. Les tests jouent contre CETTE forme, pas contre une

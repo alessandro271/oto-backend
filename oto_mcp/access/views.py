@@ -42,8 +42,9 @@ def option_open(sub: str, connector: str, *, org: "int | None | object" = scope.
     (`status_for.subscribed`) l'appellent → ils ne peuvent plus DIVERGER (le BYO ouvrait
     l'option ici mais pas là → carte « clé d'org » + « Bloqué » incohérente, corrigé
     2026-07-07). Règle : pas d'option requise ⟹ ouvert ; sinon **BYO** (clé propre
-    user/groupe/org — l'user gère sa propre instance) OU **has_option** (comp admin /
-    abonnement). `org`/`group` explicites = calcul pour un tiers (fiche admin)."""
+    user/groupe/org — l'user gère sa propre instance) OU **has_option** (droit déclaré
+    de l'org ou de la personne `sub`). `org`/`group` explicites = calcul pour un tiers
+    (fiche admin)."""
     opt = quotas.paid_option_for(connector)
     if opt is None:
         return True
@@ -109,9 +110,9 @@ def credential_mode_for(sub: str, provider: str, *,
         return "forbidden"
     if win.mode != "platform":
         return win.mode
-    grant = win.payload
-    used = quotas.usage_today(sub, provider)
-    limit = grant.get("daily_quota") or quotas.quota_for(provider)
+    # Le même couple (compteur, plafond) que le refus — levée `platform_unmetered` de
+    # la personne comprise : sinon l'UI annoncerait « quota épuisé » à qui est servi.
+    used, limit = resolve._win_quota(win, sub, provider, o)
     return "over_quota" if (limit and used >= limit) else "platform"
 
 

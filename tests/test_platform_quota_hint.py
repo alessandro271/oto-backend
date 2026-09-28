@@ -48,6 +48,10 @@ def _platform_only(monkeypatch):
     monkeypatch.setattr(credentials_store, "get_credential",
                         lambda et, eid, p, account="": "SECRET")
     monkeypatch.setattr(grants_chain.db_grants, "edges_for", lambda ref, grantees: [])
+    # Sans base : aucun droit déclaré posé, le défaut d'instance (quotas non levés).
+    monkeypatch.setattr(access.db_entitlements, "valeurs_posees",
+                        lambda oid, sub, droit, now=None:
+                        access.db_entitlements.Posees(None, None))
     yield
 
 
@@ -88,8 +92,10 @@ def test_hint_is_none_when_org_is_unmetered(_platform_only, monkeypatch):
     # (walk_cascade) — sondes DB à blanc, pour ne pas taper une base absente ici.
     monkeypatch.setattr(db, "has_member_api_key", lambda s, o, p: False)
     monkeypatch.setattr(org_store, "has_org_secret", lambda o, p: False)
-    monkeypatch.setattr(access, "org_has",
-                        lambda org, droit: droit == access.PLATFORM_UNMETERED)
+    monkeypatch.setattr(access.db_entitlements, "valeurs_posees",
+                        lambda oid, sub, droit, now=None: access.db_entitlements.Posees(
+                            1 if (oid, droit) == (7, access.PLATFORM_UNMETERED) else None,
+                            None))
     monkeypatch.setattr(db, "get_usage_today", lambda sub, p: 4)
     assert access.platform_quota_hint("apollo", sub="u") is None
 

@@ -28,7 +28,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 from .. import links
 from .. import (providers, credentials_store, db, group_store, instance_refs, org_store,
                 session_org, tenant_vault)
-from . import (cascade, chain_shadow, entitlements, heritage, indices, quotas, rbac,
+from . import (cascade, chain_shadow, heritage, indices, quotas, rbac,
                resolve_anon, scope, tenant_budget)
 from .resolved_credential import ResolvedCredential
 
@@ -405,21 +405,19 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
 def _win_quota(win, sub: str, provider: str,
               active_org: Optional[int]) -> tuple[int, int]:
     """(used, limit) du jour pour l'arête PLATEFORME gagnante `win`. `limit=0` =
-    illimité (registre sans plafond par défaut, OU org sur un plan `unmetered`,
-    ADR 0043) — jamais un plafond réel de 0, `quota_for` ne le rend pas.
+    illimité (registre sans plafond par défaut, OU quotas levés par le droit
+    `platform_unmetered` de la personne dans son org, ADR 0070 §7) — jamais un plafond
+    réel de 0, `quota_for` ne le rend pas.
 
-    Fonction UNIQUE : le refus ci-dessus ET la sonde en lecture seule
-    `platform_quota_hint` (plus bas) y passent tous les deux. Un même chiffre
-    calculé à deux endroits finit par diverger — c'est la raison d'être du
-    walker `cascade` pour la cascade elle-même (vécu 2026-07-07, règle d'option
-    recopiée 3×), la même discipline s'applique ici."""
+    Fonction UNIQUE pour le couple : le refus ci-dessus, la sonde en lecture seule
+    `platform_quota_hint` (plus bas) et le mode affiché (`views.credential_mode_for`)
+    y passent. Le plafond lui-même vient de `quotas.plafond_du_jour`, que le snapshot
+    `/api/me` lit aussi. Un même chiffre calculé à deux endroits finit par diverger —
+    c'est la raison d'être du walker `cascade` pour la cascade elle-même (vécu
+    2026-07-07, règle d'option recopiée 3×), la même discipline s'applique ici."""
     used = quotas.usage_today(sub, provider)
-    limit = win.payload.get("daily_quota") or quotas.quota_for(provider)
-    # 0070 §7 : le droit `platform_unmetered` lève le quota ; #480 : pas sans prêt.
-    plan_org = heritage.org_partagee(active_org, heritage.du_contexte(sub, active_org))
-    if limit and plan_org is not None and entitlements.org_has(
-            plan_org, entitlements.PLATFORM_UNMETERED):
-        limit = 0
+    limit = quotas.plafond_du_jour(win.payload, provider,
+                                   lambda: quotas.quotas_leves(sub, active_org))
     return used, limit
 
 
@@ -439,7 +437,7 @@ def platform_quota_hint(provider: str, sub: Optional[str] = None) -> Optional[di
 
     `None` : soit ce provider ne résoudrait pas en mode plateforme pour ce sub
     (une clé BYO gagne avant, ou aucun grant — la question ne se pose pas),
-    soit aucun plafond (illimité, ou org sur un plan `unmetered`, ADR 0043)."""
+    soit aucun plafond (illimité, ou quotas levés par `platform_unmetered`, ADR 0070 §7)."""
     sub = sub or scope.current_user_sub_or_raise()
     active_org = scope.current_org(sub)
     active_group = scope.current_group(sub)

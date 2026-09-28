@@ -3,8 +3,9 @@
 Deux dates par binding (`unipile_accounts`), posées par le travail de maintenance
 `oto-mcp maintenance unipile-fin-de-droit` (`oto_mcp/unipile_fin_de_droit.py`) :
 
-- `entitlement_lost_at` : le premier passage qui a vu l'org de ce binding SANS le droit
-  `unipile`. C'est le point de départ du délai avant suppression chez unipile ;
+- `entitlement_lost_at` : le premier passage qui a vu le titulaire de ce binding SANS
+  le droit `unipile` dans son org. C'est le point de départ du délai avant suppression
+  chez unipile ;
 - `entitlement_notice_at` : le préavis envoyé au propriétaire. Posé APRÈS l'envoi,
   jamais avant : marquer d'abord transformerait un envoi raté en silence définitif.
 
@@ -93,22 +94,26 @@ def marquer_preavis(lignes: Iterable[dict]) -> int:
         ).rowcount
 
 
-def effacer_perte(org_ids: Iterable[int]) -> int:
-    """Le droit est revenu : efface les deux marques de TOUS les bindings de ces orgs."""
-    ids = sorted({int(o) for o in org_ids})
-    if not ids:
+def effacer_perte(lignes: Iterable[dict]) -> int:
+    """Le droit est revenu : efface les deux marques de CES bindings (sub, org, canal).
+
+    Par binding, pas par org : le droit se lit pour le titulaire de chaque ligne, et un
+    voisin de la même org resté sans droit garde sa marque — et son délai."""
+    subs, orgs, canaux = _cles(lignes)
+    if not subs:
         return 0
     with _connect() as conn:
         return conn.execute(
             "UPDATE unipile_accounts SET entitlement_lost_at = NULL, "
-            "entitlement_notice_at = NULL WHERE org_id = ANY(%s) "
+            f"entitlement_notice_at = NULL WHERE {_PAR_CLE} "
             "AND (entitlement_lost_at IS NOT NULL OR entitlement_notice_at IS NOT NULL)",
-            (ids,),
+            (subs, orgs, canaux),
         ).rowcount
 
 
 def droit_unipile_declare_quelque_part() -> bool:
-    """Au moins une org porte-t-elle un droit `unipile` VIVANT dans `org_entitlements` ?
+    """Au moins une ligne (toutes portées) porte-t-elle un droit `unipile` VIVANT dans
+    `org_entitlements` ?
 
     Le témoin de la garde du travail : une table sans aucun droit `unipile` vivant
     alors que des sièges sont en service, c'est la table qui n'est pas remplie — pas

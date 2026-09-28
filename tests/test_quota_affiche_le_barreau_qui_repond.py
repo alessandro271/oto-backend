@@ -40,6 +40,10 @@ def fiche(monkeypatch):
     # restait à toucher la base.
     monkeypatch.setattr(A_status.credentials_store, "credential_status",
                         lambda *a, **k: None)
+    # Sans base : aucun droit déclaré posé, le défaut d'instance (quotas non levés).
+    monkeypatch.setattr(access.db_entitlements, "valeurs_posees",
+                        lambda oid, sub, droit, now=None:
+                        access.db_entitlements.Posees(None, None))
 
     def _fiche(*rungs):
         monkeypatch.setattr(A_status.chain_shadow, "resolution_rungs",
@@ -116,3 +120,52 @@ def test_tous_les_champs_d_effet_sont_servis_sur_le_barreau_plateforme(fiche):
     st = fiche(_PLATEFORME)
     for champ in CHAMPS_D_EFFET_PLATEFORME:
         assert st[champ] is not None, f"`{champ}` tu sur le barreau plateforme"
+
+
+# ── la levée `platform_unmetered` : la même que celle du refus ────────────────
+
+def _droit_personnel(monkeypatch, lectures: list):
+    """`platform_unmetered` posé sur la personne `u1` (partout), rien sur l'org."""
+    def posees(oid, sub, droit, now=None):
+        lectures.append((oid, sub, droit))
+        leve = sub == "u1" and droit == access.PLATFORM_UNMETERED
+        return access.db_entitlements.Posees(None, 1 if leve else None)
+    monkeypatch.setattr(access.db_entitlements, "valeurs_posees", posees)
+
+
+def test_un_quota_leve_par_droit_personnel_n_est_pas_annonce_epuise(fiche, monkeypatch):
+    """`status_for` lisait le plafond du registre sans la levée de `_win_quota` :
+    `over_quota` et « 250/200 » à une personne que le refus, lui, sert."""
+    lectures: list = []
+    _droit_personnel(monkeypatch, lectures)
+    monkeypatch.setattr(A_status.db, "usage_today_map", lambda s: {"serper": 250})
+    st = fiche(_PLATEFORME)
+    assert st["mode"] == "platform"
+    assert st["quota_daily"] is None, "levé = illimité, affiché « ∞ »"
+    assert lectures == [(269, "u1", access.PLATFORM_UNMETERED)]
+
+
+def test_la_levee_est_lue_une_fois_par_snapshot(fiche, monkeypatch):
+    """Le chemin chaud `/api/me` : la levée ne dépend que de (sujet, org), jamais une
+    lecture des droits par connecteur."""
+    from oto_mcp import db
+    lectures: list = []
+    _droit_personnel(monkeypatch, lectures)
+    monkeypatch.setattr(db, "KEY_PROVIDERS", ("serper", "apollo", "hunter"))
+    monkeypatch.setattr(A_status.db, "usage_today_map", lambda s: {})
+    monkeypatch.setattr(A_status.chain_shadow, "resolution_rungs",
+                        lambda sub, provider, **kw: [_PLATEFORME])
+    A_status.status_for("u1", org=269, group=None)
+    assert len(lectures) == 1
+
+
+def test_le_mode_affiche_suit_la_meme_levee_que_le_refus(monkeypatch):
+    """`credential_mode_for` (carte, option) passe par `_win_quota`, comme le refus :
+    la personne dont le quota est levé n'est pas `over_quota`, une autre l'est."""
+    from oto_mcp import db
+    _droit_personnel(monkeypatch, [])
+    monkeypatch.setattr(access.chain_shadow, "resolution_rungs",
+                        lambda sub, provider, **kw: iter([_PLATEFORME]))
+    monkeypatch.setattr(db, "get_usage_today", lambda sub, p: 250)
+    assert access.credential_mode_for("u1", "serper", org=269, group=None) == "platform"
+    assert access.credential_mode_for("u2", "serper", org=269, group=None) == "over_quota"

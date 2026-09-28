@@ -178,13 +178,14 @@ async def hosted_auth_url(sub: str, channel: str = "linkedin",
     # de reconnecter ; `force=True` pour un compte RÉELLEMENT distinct. (Reconnexion
     # dans la MÊME org = remplacement, non concernée : filtrée par `org_id`.)
     platform_seat = not byo
-    # Gate OPTION (couche 3), au grain ORG : hébergé sans le droit déclaré de l'org
-    # = refus. Le don fait à une personne ne l'ouvre plus (ADR 0070 §7).
-    if not byo and not access.org_has(org_id, "unipile"):
+    # Gate OPTION (couche 3) : hébergé sans le droit déclaré = refus. Le droit est
+    # celui de l'org OU une ligne posée sur la personne, dans l'org ou partout
+    # (ADR 0070 §7) ; la marque de compte (`option_comps`) ne l'ouvre pas.
+    if not byo and not await asyncio.to_thread(access.has_right, sub, org_id, "unipile"):
         from . import detenteurs  # paresseux, comme les autres paliers au point d'appel
         raise ConnectRefused(402, "unipile_option_required",
-                             "La messagerie hébergée n'est pas active pour cette org : "
-                             "essai terminé ou abonnement requis."
+                             "La messagerie hébergée n'est active ni pour cette org ni "
+                             "pour toi : essai terminé ou abonnement requis."
                              + await asyncio.to_thread(detenteurs.qui_leve_une_option,
                                                        sub, org_id))
     # Plafond de sièges hébergés (reconnexion d'un compte existant = remplacement, OK ;

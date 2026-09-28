@@ -5,10 +5,11 @@ description: >-
   Le modèle des droits déclarés (ADR 0070 §7, oto-backend#1066) : le cœur applique des
   limites DÉCLARÉES sans savoir qui paie. Une ligne = une portée (l'org, une personne
   dans l'org, ou une personne dans toutes ses orgs), une clé du catalogue, une valeur entière jamais vide, une fenêtre de dates, une
-  source opaque. Un seul point de lecture (`access.entitlements.value_for`), le plus
-  généreux gagne, et sans ligne c'est le défaut DÉCLARÉ par l'instance
-  (`OTO_ENTITLEMENT_DEFAULTS`) — jamais un défaut du code. Ce qui est branché, ce qui ne
-  l'est pas encore, et les révisions de la base servie.
+  source opaque. Un seul point de lecture (`access.entitlements.value_for`) : la valeur
+  de l'org (ses lignes, sinon le défaut DÉCLARÉ par l'instance, `OTO_ENTITLEMENT_DEFAULTS`
+  — jamais un défaut du code), qu'une ligne de personne ne fait que relever. Les points
+  d'usage branchés sur la personne, ceux qui restent sur l'org, les limites connues, et
+  les révisions de la base servie.
 ---
 
 # Droits déclarés
@@ -61,8 +62,8 @@ cœur ne sait pas appliquer.
 
 | clé | genre | aujourd'hui |
 |---|---|---|
-| `unipile` | oui/non | la messagerie hébergée — lue par l'option payante (`access.quotas`) et la fin de droit de la messagerie |
-| `platform_unmetered` | oui/non | quotas levés sur les clés de plateforme — lue par `access.resolve` |
+| `unipile` | oui/non | la messagerie hébergée — lue pour la personne par l'option payante (`access.quotas`), le branchement d'un compte, l'inventaire et la fin de droit de la messagerie |
+| `platform_unmetered` | oui/non | quotas levés sur les clés de plateforme — lue pour la personne par `access.quotas.plafond_du_jour` (refus, sonde, mode affiché, `/api/me`) |
 | `unipile_seats` | nombre | nombre de comptes de messagerie — **pas encore lue** : le plafond vient toujours de `orgs.unipile_account_limit` et `OTO_MCP_UNIPILE_DEFAULT_LIMIT` |
 | `platform_key:<connecteur>` | nombre (quota par jour, `0` = pas d'accès) | l'accès à notre clé de plateforme d'un connecteur du registre `providers` (suffixe vérifié) — **pas encore lue** : le registre (`platform_key_open`, `default_quota`) reste la règle appliquée |
 | `members_max` | nombre | ⚠️ **hérité, sans lecteur** : le nombre de licences d'un abonnement réglé hors plateforme. Le cœur ne connaît aucun plafond de membres ; la clé sort du catalogue quand le commerce posera les droits payants par personne |
@@ -75,33 +76,96 @@ d'option hors catalogue en droit.
 
 ```python
 value_for(sub, org_id, key, now=None) -> int
+has_right(sub, org_id, key) -> bool     # value_for(...) >= 1
+org_has(org_id, key) -> bool            # has_right(None, org_id, key)
 ```
 
-1. les lignes **valides** à `now` (défaut : l'horloge de la BASE, la même pour tous les
-   processus) ;
-2. des **trois portées** : l'**org** (`sub` NULL), la **personne** `sub` dans l'org, et la
-   **personne** `sub` partout (`org_id` NULL) — toutes sources ;
-3. **le plus généreux gagne** : le maximum. Un don ne retire jamais ce qu'un abonnement
-   donne, ni l'inverse ; une ligne à `0` dit « non » mais ne retire pas un « oui » posé
-   ailleurs ;
-4. **aucune ligne valide → le défaut déclaré par l'instance**.
+**Une ligne par personne ne fait qu'ajouter** (règle tranchée le 28/09/2026) :
 
-`sub` None : l'org seule (la personne partout ne s'applique pas à une org). `org_id` None :
-la personne partout seule. Les deux None : le défaut.
+1. seules comptent les lignes **valides** à `now` (défaut : l'horloge de la BASE, la même
+   pour tous les processus), toutes sources ;
+2. **la valeur de l'org** se calcule comme avant : le maximum de ses lignes d'org
+   (`sub` NULL) s'il y en a une valide, **sinon le défaut déclaré par l'instance** ;
+3. **la personne la relève** : le résultat est le plus généreux entre la valeur de
+   l'org et les lignes valides de la personne, dans l'org et partout. Une ligne de
+   personne ne retire jamais rien — ni un « oui » de l'org, ni le défaut.
 
-⚠️ Une ligne vaut même si elle est MOINS généreuse que le défaut : le défaut ne répond
-qu'en l'absence de toute ligne valide.
+Une lecture (`db/entitlements.valeurs_posees`) rend les deux maxima séparés ; la règle
+vit dans `value_for`.
 
-`org_has(org_id, key)` en dérive (`value_for(None, org_id, key) >= 1`). **Personne d'autre
-ne lit la table pour appliquer un droit.** Deux lectures directes subsistent, qui
-n'appliquent rien : le témoin « la table est-elle remplie ? » de la fin de droit de la
-messagerie (`db/unipile_fin_de_droit.py`, toutes portées) et la liste des orgs à
-réconcilier du commerce (`db/billing.orgs_with_commercial_rights`, jointe sur `org_id` :
-une ligne de personne partout n'y fait entrer aucune org).
+**Le plus généreux est le plus GRAND**, pour toute clé du catalogue : un oui/non vaut
+`1`/`0`, un quota `platform_key:<connecteur>` vaut `0` pour « pas d'accès », et « sans
+plafond » s'écrit `SANS_PLAFOND`, le plus grand entier. Aucune clé du catalogue ne donne
+au `0` le sens « illimité » — c'est ce qui rend le maximum juste (voir les limites).
 
-⚠️ Aujourd'hui, seul `org_has` est appelé : aucun lecteur ne passe encore de `sub`. Une
-ligne de personne (dans l'org ou partout) est donc posée, relue par l'API, mais **n'ouvre
-rien** tant qu'un point d'usage ne demande pas `value_for(sub, …)`.
+⚠️ Une ligne d'**org** vaut même quand elle est MOINS généreuse que le défaut : elle le
+remplace. Une ligne de **personne** plus basse que la valeur de l'org ne compte pas.
+
+`sub` None : la lecture d'org, exactement celle d'avant la règle. `org_id` None : le
+défaut, relevé par les lignes de la personne partout. Les deux None : le défaut. La
+propriété est prouvée sur vraie base, sur une grille exhaustive des trois portées et de
+trois défauts (`tests/test_org_entitlements_live.py`,
+`test_monotonie_par_propriete_sur_les_trois_portees`) : `value_for(None, org)` égale la
+lecture d'org, `value_for(sub, org)` lui est toujours supérieure ou égale.
+
+### Les points d'usage branchés sur la personne
+
+Chacun connaît la personne qui agit — ou, pour les sièges, le titulaire du binding — et
+lit `has_right(sub, org, clé)` :
+
+| point d'usage | clé | la personne lue |
+|---|---|---|
+| `access.quotas.exiger_option_payante` → `paid_option_refusal` (palier plateforme de `access.resolve`) | `unipile` | l'appelant, dans l'org qu'il peut consommer (#480 : aucune pour le bénéficiaire d'un projet partagé sans prêt, restent ses lignes partout) |
+| `access.quotas.has_option`, branche **payante** (← `views.option_open` ← carte des connecteurs, diagnostic `connectors/readiness`, statut unipile) | `unipile` | l'appelant (ou le tiers d'une fiche admin) |
+| `access.quotas.plafond_du_jour` (← `resolve._win_quota` : refus et `platform_quota_hint` ; `views.credential_mode_for` ; `status.status_for`) | `platform_unmetered` | l'appelant, dans l'org qu'il peut consommer (#480) ; une seule lecture par snapshot `/api/me` |
+| `unipile_connect.hosted_auth_url` (refus 402 `unipile_option_required`) | `unipile` | la personne qui connecte |
+| `capabilities/unipile_seats._droit_vivant` (inventaire `entitled`, garde de reprise sans `force`) | `unipile` | le **titulaire** `sub` de chaque binding, jamais l'admin qui appelle ; cache par (titulaire, org) |
+| `unipile_fin_de_droit.balayer` (le travail de fin de droit) | `unipile` | le **titulaire** de chaque ligne de `sieges_plateforme`, cache par (titulaire, org) ; le retour du droit efface les marques **par binding** (`effacer_perte`), plus par org |
+
+Ces six points partent ensemble : l'usage sans le travail de fin de droit et la garde
+de reprise servirait une personne tout en lui supprimant son compte.
+
+L'endpoint anonyme (`access.resolve_anon`) passe `sub` None : il lit l'org seule, comme
+avant.
+
+### Ce qui reste sur la lecture d'org, et pourquoi
+
+- `org_has` pour une question **sur l'org**, sans personne : le cockpit d'activation
+  (`capabilities/connectors/activation._org_subscribed`, « l'org est-elle souscrite ? »)
+  et le champ `option_source.org_comp` du statut unipile (`tools/unipile.py`), qui
+  affiche le droit de l'org à côté de la marque de compte ;
+- les options **non payantes** (`beta`) : une marque de compte ou d'org dans
+  `option_comps`, pas un droit déclaré ; la lecture directe (`has_option_comp`,
+  `user_has_option`) reste, et la marque de compte n'ouvre toujours aucune option
+  payante ;
+- `unipile_seats` et `platform_key:<connecteur>` : **pas encore lues** (ci-dessus) ;
+- deux lectures directes de la table, qui n'appliquent rien : le témoin « la table
+  est-elle remplie ? » de la fin de droit (`db/unipile_fin_de_droit.py`, toutes
+  portées) et la liste des orgs à réconcilier du commerce
+  (`db/billing.orgs_with_commercial_rights`, jointe sur `org_id` : une ligne de personne
+  partout n'y fait entrer aucune org).
+
+**Personne d'autre ne lit la table pour appliquer un droit.**
+
+⚠️ Hors org (`org_id` None — bénéficiaire d'un projet partagé sans prêt), le défaut
+d'instance répond désormais, relevé par la personne partout : une instance qui déclare
+`unipile: 1` ou `platform_unmetered: 1` pour tous l'ouvre aussi là, où l'ancienne
+lecture refusait sans lire le défaut.
+
+### Limites connues
+
+- **(b) Des lectures héritées remplacent au lieu de prendre le maximum, et y `0` veut
+  dire « illimité »** : le `daily_quota` de l'arête de grant d'une clé de plateforme
+  (`grant.daily_quota or quota_for(...)`) et le plafond de messagerie
+  `orgs.unipile_account_limit`. Leur `0` (ou NULL) n'a pas le sens du catalogue, où `0`
+  = non / pas d'accès. **Toute reprise d'une valeur héritée en ligne de droit traduit
+  le `0` « illimité » en `SANS_PLAFOND`** — recopié tel quel, il deviendrait « aucun
+  accès » et le maximum le laisserait perdre face au défaut.
+- **(e) La ligne « personne dans l'org » d'un ancien membre reste lue** s'il agit dans
+  cette org par un projet partagé AVEC prêt (`heritage.org_partagee` rend l'org) :
+  `value_for(sub, org)` ne vérifie pas l'appartenance. Sans prêt, l'org n'est pas
+  servie et seule sa ligne partout compte. Retirer la ligne au départ du membre est
+  l'affaire du producteur.
 
 ## L'écriture — `db/entitlements.py`
 
@@ -207,7 +271,8 @@ Détail et ordre : `docs/migrations-versionnees.md` §5.1, et l'en-tête de chaq
 ## Ce qui n'est pas encore fait
 
 - faire lire `unipile_seats` et `platform_key:<connecteur>` par `value_for` (messagerie,
-  quotas et cascade des clés de plateforme) ;
+  quotas et cascade des clés de plateforme) — en traduisant le `0` « illimité » hérité
+  (limite (b)) ;
 - l'essai (source `trial`), les droits payants par personne, le retrait de `members_max`.
 
 ## Ce qu'on ne fait pas

@@ -544,14 +544,19 @@ compte sur la propre clé du client (`platform_seat = false`) n'est jamais regar
   `unipile_accounts.entitlement_lost_at` au premier constat de la perte, envoie **un**
   préavis par (propriétaire, org) et pose `entitlement_notice_at` après l'envoi. Puis il
   supprime, par le geste de `release` (`capabilities/unipile_seats.liberer` : délier,
-  puis supprimer), les comptes que l'instance liste encore, dont aucune org qui les tient
-  en service n'a le droit, préavis fait et délai échu. Chaque suppression est
-  journalisée. Rejouer ne double ni un préavis ni une suppression.
-- **Le droit** est celui de `access.org_has(org, "unipile")`, donc `org_entitlements`.
-  Un compte adopté dans deux orgs reste dû tant qu'une des deux a le droit.
+  puis supprimer), les comptes que l'instance liste encore, dont aucun binding en service
+  n'a le droit, préavis fait et délai échu. Chaque suppression est journalisée. Rejouer
+  ne double ni un préavis ni une suppression.
+- **Le droit** est celui du **titulaire** de chaque binding dans son org,
+  `access.has_right(sub, org, "unipile")`, donc `org_entitlements` : le droit de l'org, ou
+  une ligne posée sur la personne (dans l'org ou partout, `docs/droits-declares.md`).
+  Le retour du droit efface les marques binding par binding. Un compte adopté dans deux
+  orgs reste dû tant qu'un de ses bindings a le droit. L'inventaire (`entitled`) et la
+  garde de reprise sans `force` lisent le même droit du titulaire, jamais celui de
+  l'admin qui appelle.
 - ⚠️ **Fermé par défaut** : sans `OTO_UNIPILE_FIN_DE_DROIT=1` dans le `.env` de prod, le
   passage compte ce qu'il ferait et n'écrit rien. On ne l'ouvre qu'une fois la reprise des
-  abonnements faite dans `org_entitlements` : avant, `org_has` rend faux pour les abonnés.
+  abonnements faite dans `org_entitlements` : avant, `has_right` rend faux pour les abonnés.
   Ouvert, il refuse encore de tourner si aucun droit `unipile` vivant n'existe alors que
   des sièges sont en service.
 - ⚠️ **Préavis obligatoire** : un compte dont le propriétaire n'a pas d'adresse n'est pas

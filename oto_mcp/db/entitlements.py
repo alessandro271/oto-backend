@@ -21,7 +21,7 @@ communs pour elle. Les appelants écrivent `from ..db import entitlements`.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, NamedTuple, Optional
 
 from .. import entitlements_catalogue as catalogue
 from ._conn import _connect
@@ -89,23 +89,35 @@ def revoke(org_id: Optional[int], right_key: str, source: str, *,
     return n > 0
 
 
-def max_value(org_id: Optional[int], sub: Optional[str], right_key: str,
-              now: Optional[datetime] = None) -> Optional[int]:
-    """La plus grande valeur des lignes VALIDES à `now` (défaut : l'instant de la base)
-    des trois portées : l'org, la personne `sub` dans l'org, la personne `sub` partout
-    — toutes sources confondues. `org_id` None : seule la dernière peut s'appliquer ;
-    `sub` None : seule la première. `None` s'il n'y en a aucune. Seul lecteur :
-    `access.entitlements`."""
+class Posees(NamedTuple):
+    """Les lignes VALIDES d'un droit, par portée : `org` = le maximum des lignes d'org
+    (`sub` NULL), `personne` = le maximum des lignes de la personne (dans l'org et
+    partout). `None` = aucune ligne valide de cette portée."""
+    org: Optional[int]
+    personne: Optional[int]
+
+
+def valeurs_posees(org_id: Optional[int], sub: Optional[str], right_key: str,
+                   now: Optional[datetime] = None) -> Posees:
+    """Les lignes VALIDES à `now` (défaut : l'instant de la base) du droit `right_key`,
+    toutes sources confondues, en UNE lecture : le maximum des lignes de l'org, et le
+    maximum des lignes de la personne `sub` dans l'org ET partout. `org_id` None :
+    seule la personne partout peut s'appliquer ; `sub` None : seule l'org. Les deux
+    maxima restent SÉPARÉS : la règle qui les combine (le défaut d'instance ne répond
+    qu'à l'org, la personne ne fait qu'ajouter) vit dans `access.entitlements`, seul
+    lecteur."""
     _portee(org_id, sub)
     with _connect() as conn:
         row = conn.execute(
-            "SELECT MAX(value) AS v FROM org_entitlements WHERE right_key = %(cle)s "
+            "SELECT MAX(value) FILTER (WHERE sub IS NULL) AS org, "
+            "MAX(value) FILTER (WHERE sub IS NOT NULL) AS personne "
+            "FROM org_entitlements WHERE right_key = %(cle)s "
             "AND ((org_id = %(org)s AND (sub IS NULL OR sub = %(sub)s)) "
             "     OR (org_id IS NULL AND sub = %(sub)s)) "
             f"AND {_VIVANT_A}",
             {"org": org_id, "cle": right_key, "sub": sub, "t": now},
         ).fetchone()
-    return None if row is None else row["v"]
+    return Posees(row["org"], row["personne"])
 
 
 def list_for_org(org_id: int) -> list[dict[str, Any]]:

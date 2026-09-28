@@ -48,9 +48,9 @@ def _setup(monkeypatch, *, accounts, rows, has_key=True):
                                                   if r["disconnected_at"] is None]
 
     monkeypatch.setattr(us.db, "unipile_account_owners", owners)
-    # Sans base : l'org a le droit `unipile` (#806). Le cas « droit perdu » se joue sur
-    # vraie base, dans `test_unipile_fin_de_droit.py`.
-    monkeypatch.setattr(us.access, "org_has", lambda org_id, key: True)
+    # Sans base : le titulaire a le droit `unipile` (#806). Le cas « droit perdu » se
+    # joue sur vraie base, dans `test_unipile_fin_de_droit.py`.
+    monkeypatch.setattr(us.access, "has_right", lambda sub, org_id, key: True)
     deleted: list[str] = []
     monkeypatch.setattr(us, "_platform_client",
                         lambda: (FakeClient(accounts, deleted) if has_key else None))

@@ -49,7 +49,7 @@ découpe est un **DÉPLACEMENT PUR** : aucun appelant ne change (cf.
               Verdict posé par `_project=`, lu par le walker ; ne dépend que de
               `session_org` (et, paresseusement, de `roles`/`ownership`).
 - `quotas`  — ce qui est métré (quota jour, usage) et ce qui est payé (option
-              payante = droit déclaré de l'org, via `entitlements`).
+              payante = droit déclaré de l'org ou de la personne, via `entitlements`).
 - `cascade` — le walker UNIQUE `perso > cross-org > équipe > org > plateforme`,
               ses trois sondes, le palier plateforme.
 - `rbac`    — qui a le droit : tools masqués, garde
@@ -66,8 +66,8 @@ découpe est un **DÉPLACEMENT PUR** : aucun appelant ne change (cf.
 - `views`   — les vues minces : clé, champs, mode, option levée,
               résolvabilité d'une org.
 - `status`  — le snapshot par connecteur de `/api/me`.
-- `entitlements` — les droits DÉCLARÉS d'une org (ADR 0070 §7), relus à chaque
-              usage ; ne dépend que de `db`, jamais de `billing`.
+- `entitlements` — les droits DÉCLARÉS d'une org ou d'une personne (ADR 0070 §7),
+              relus à chaque usage ; ne dépend que de `db`, jamais de `billing`.
 
 Le graphe est un DAG strict — aucun cycle, chaque flèche va vers le bas :
 

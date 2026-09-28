@@ -1,20 +1,26 @@
-"""Une seule règle pour une option payante : le droit déclaré de l'org (ADR 0070 §7).
+"""Une seule règle pour une option payante : le droit déclaré (ADR 0070 §7).
 
-`has_option` d'une option PAYANTE (`unipile`) = `org_has(org courante)`, quelle que
-soit la source du droit (abonnement, don d'org, partenaire). **Le don fait à une
-personne n'ouvre plus d'option payante.** Une option non payante (`beta`) reste la
-marque du compte ou de l'org.
+`has_option` d'une option PAYANTE (`unipile`) = `has_right(sub, org courante)` : le
+droit de l'org, quelle que soit sa source (abonnement, don d'org, partenaire), ou une
+ligne de droit posée sur la personne (dans l'org ou partout). **La marque de compte
+(`option_comps`) n'ouvre pas d'option payante.** Une option non payante (`beta`) reste
+la marque du compte ou de l'org.
 """
 from __future__ import annotations
 
 from oto_mcp import access
 
 
-def _wire(monkeypatch, *, droits=(), user_comp=False, org_comp=False, org=7):
-    """`droits` = les (org, droit) vivants dans `org_entitlements`."""
-    monkeypatch.setattr(access.db_entitlements, "max_value",
-                        lambda oid, sub, droit, now=None:
-                        1 if (oid, droit) in set(droits) else None)
+def _wire(monkeypatch, *, droits=(), personne=(), user_comp=False, org_comp=False,
+          org=7):
+    """`droits` = les (org, droit) d'org vivants dans `org_entitlements` ;
+    `personne` = les (org ou None, droit) posés sur la personne `u1`."""
+    monkeypatch.setattr(access.db_entitlements, "valeurs_posees",
+                        lambda oid, sub, droit, now=None: access.db_entitlements.Posees(
+                            1 if (oid, droit) in set(droits) else None,
+                            1 if sub == "u1" and ((oid, droit) in set(personne)
+                                                  or (None, droit) in set(personne))
+                            else None))
     monkeypatch.setattr(access.db, "has_option_comp",
                         lambda et, eid, opt: user_comp if et == "user" else org_comp)
     monkeypatch.setattr(access, "current_org", lambda sub: org)
@@ -25,9 +31,18 @@ def test_le_droit_declare_de_l_org_ouvre_l_option_payante(monkeypatch):
     assert access.has_option("u1", "unipile") is True
 
 
-def test_le_don_personnel_n_ouvre_plus_l_option_payante(monkeypatch):
+def test_la_marque_de_compte_n_ouvre_pas_l_option_payante(monkeypatch):
     _wire(monkeypatch, user_comp=True)
     assert access.has_option("u1", "unipile") is False
+
+
+def test_une_ligne_de_droit_de_la_personne_ouvre_l_option_payante(monkeypatch):
+    """Dans l'org comme partout : la personne a le droit, son org non."""
+    _wire(monkeypatch, personne=[(7, "unipile")])
+    assert access.has_option("u1", "unipile") is True
+    assert access.has_option("u2", "unipile") is False, "une autre personne non"
+    _wire(monkeypatch, personne=[(None, "unipile")], org=None)
+    assert access.has_option("u1", "unipile") is True, "sans org : la personne partout"
 
 
 def test_le_don_d_org_brut_ne_suffit_pas_c_est_le_droit_declare_qui_compte(monkeypatch):
@@ -37,13 +52,14 @@ def test_le_don_d_org_brut_ne_suffit_pas_c_est_le_droit_declare_qui_compte(monke
     assert access.has_option("u1", "unipile") is False
 
 
-def test_sans_org_pas_d_option_payante(monkeypatch):
-    called = {}
+def test_sans_org_seule_la_personne_partout_est_lue(monkeypatch):
+    lus = []
     _wire(monkeypatch, user_comp=True, org=None)
-    monkeypatch.setattr(access.db_entitlements, "max_value",
-                        lambda oid, sub, droit, now=None: called.update(oid=oid) or 1)
-    assert access.has_option("u1", "unipile") is False
-    assert called == {}, "sans org, aucun droit n'est interrogé"
+    monkeypatch.setattr(access.db_entitlements, "valeurs_posees",
+                        lambda oid, sub, droit, now=None: lus.append(oid)
+                        or access.db_entitlements.Posees(None, None))
+    assert access.has_option("u1", "unipile") is False, "le défaut d'instance : non"
+    assert lus == [None], "sans org, seule la personne partout est interrogée"
 
 
 def test_l_org_explicite_est_celle_qu_on_lit(monkeypatch):

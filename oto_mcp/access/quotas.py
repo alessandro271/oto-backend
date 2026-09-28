@@ -3,11 +3,12 @@
 Deux crans distincts, souvent confondus :
 
 - le **quota** journalier d'une clé PLATEFORME (`quota_for`, `usage_today`,
-  `record_platform_usage`) — un garde-fou d'essai, levé pour toute l'org par le droit
-  déclaré `platform_unmetered` (lu par `resolve._win_quota`) ;
+  `record_platform_usage`) — un garde-fou d'essai, levé par le droit déclaré
+  `platform_unmetered` de la personne dans son org (`plafond_du_jour`, `quotas_leves`) ;
 - l'**option payante** d'un connecteur (`paid_option_for`, `has_option`) — un droit
-  déclaré de l'ORG (`entitlements.org_has`), une seule règle. Le don fait à une
-  personne n'ouvre plus d'option payante.
+  déclaré (`entitlements.has_right`), une seule règle : celui de l'org, ou une ligne
+  de droit posée sur la personne (dans l'org ou partout). La marque de compte
+  (`option_comps`) n'ouvre pas d'option payante.
 
 Ne dépend que de `scope` (le contexte de l'acteur) et d'`entitlements` (les droits
 déclarés) — jamais de `billing` : le commerce écrit les droits, le cœur les relit.
@@ -17,7 +18,7 @@ vit dans `views.option_open`, au-dessus de la cascade.
 from __future__ import annotations
 
 import os
-from typing import Optional
+from typing import Callable, Optional
 
 from mcp.types import ErrorData, INVALID_PARAMS
 
@@ -36,8 +37,8 @@ _QUOTA_DEFAULTS = providers.QUOTA_DEFAULTS
 _PAID_OPTION_BY_CONNECTOR = {"unipile": "unipile"}
 
 
-# Les options PAYANTES : un droit déclaré de l'org, jamais d'une personne. Dérivé du
-# mapping ci-dessus.
+# Les options PAYANTES : un droit déclaré (de l'org, ou d'une personne), jamais une
+# marque de compte. Dérivé du mapping ci-dessus.
 _PAID_OPTIONS = frozenset(_PAID_OPTION_BY_CONNECTOR.values())
 
 
@@ -54,35 +55,45 @@ def paid_option_for(connector: str) -> Optional[str]:
         providers.credential_provider(connector))
 
 
-def paid_option_refusal(connector: str, org: "int | None") -> Optional[str]:
+def paid_option_refusal(connector: str, sub: "str | None",
+                        org: "int | None") -> Optional[str]:
     """Le refus à servir quand `connector` s'apprête à consommer la clé PLATEFORME pour
-    une org qui n'a pas (ou plus) le droit de son option payante — `None` si rien ne
-    s'y oppose. **Relu à chaque usage** (ADR 0070 §7) : une org dont l'essai ou
-    l'abonnement a pris fin cesse d'être servie dès l'appel suivant, pas au prochain
-    branchement d'un compte.
+    la personne `sub` agissant dans `org`, qui n'a pas (ou plus) le droit de son option
+    payante — `None` si rien ne s'y oppose. Le droit est celui de l'org OU une ligne
+    posée sur la personne, dans l'org ou partout (`entitlements.has_right`) ; `org`
+    None : les lignes de la personne partout (et le défaut d'instance) seules. **Relu à
+    chaque usage** (ADR 0070 §7) : un droit qui a pris fin cesse de servir dès l'appel
+    suivant, pas au prochain branchement d'un compte.
 
     Le message NOMME la cause et ce qui la lève ; aucun repli silencieux."""
     option = paid_option_for(connector)
     if option is None:
         return None
-    if org is not None and entitlements.org_has(int(org), option):
+    if entitlements.has_right(sub, org, option):
         return None
     porteur = providers.REGISTRY.get(providers.credential_provider(connector))
     nom = (porteur.label if porteur and porteur.label else option)
+    cle_propre = (f"une clé `{providers.credential_provider(connector)}` propre reste "
+                  "servie.")
     if org is None:
-        return (f"L'option « {nom} » est un droit d'organisation, et aucune org qui "
-                "la porte ne couvre cet appel : travaille dans une org abonnée.")
-    return (f"L'option « {nom} » n'est pas active pour cette org : essai terminé "
-            "ou abonnement requis ; une clé "
-            f"`{providers.credential_provider(connector)}` propre reste servie.")
+        return (f"L'option « {nom} » ne t'est pas ouverte à titre personnel, et aucune "
+                "org qui la porte ne couvre cet appel : travaille dans une org qui a "
+                f"l'option, ou obtiens-la pour toi ; {cle_propre}")
+    if sub is None:
+        return (f"L'option « {nom} » n'est pas active pour cette org : essai terminé "
+                f"ou abonnement requis ; {cle_propre}")
+    return (f"L'option « {nom} » n'est active ni pour cette org ni pour toi : essai "
+            f"terminé ou abonnement requis ; {cle_propre}")
 
 
 def exiger_option_payante(connector: str, sub: "str | None", org: "int | None") -> None:
     """Lève le refus de `paid_option_refusal` au palier PLATEFORME d'une résolution. Les
-    droits lus sont ceux de l'org que l'appelant peut consommer : pour le bénéficiaire
-    d'un projet partagé à qui rien n'est prêté, aucune (#480, `heritage.org_partagee`)."""
+    droits lus sont ceux de la personne `sub` et de l'org que l'appelant peut
+    consommer : pour le bénéficiaire d'un projet partagé à qui rien n'est prêté, aucune
+    org (#480, `heritage.org_partagee`) — restent ses lignes de personne partout.
+    `sub` None (endpoint anonyme) : l'org seule."""
     org_servie = heritage.org_partagee(org, heritage.du_contexte(sub, org))
-    refus = paid_option_refusal(connector, org_servie)
+    refus = paid_option_refusal(connector, sub, org_servie)
     if refus:
         if org_servie is not None:
             # QUI lève l'obstacle et OÙ (oto#108) — nommé à un membre de l'org seul.
@@ -95,10 +106,11 @@ def has_option(sub: str, option: str, *, org: "int | None | object" = scope._UNS
     """Couche 3 du modèle de connecteur (cf. docs/connector-model.md) : l'option de
     connecteur `option` est-elle débloquée pour `sub` dans son org ? **Seam unique.**
 
-    - Option PAYANTE (`unipile`) : un droit déclaré VIVANT de l'org
-      (`entitlements.org_has`), quelle que soit sa source — abonnement, don d'org,
-      partenaire, essai. **Le don fait à une personne n'ouvre plus d'option payante**
-      (ADR 0070 §7) : seule l'org porte un droit payant.
+    - Option PAYANTE (`unipile`) : un droit déclaré VIVANT (`entitlements.has_right`),
+      quelle que soit sa source — abonnement, don, partenaire, essai —, posé sur l'org
+      OU sur la personne (dans l'org ou partout, ADR 0070 §7). Sans org, les lignes de
+      la personne partout. La marque de compte (`option_comps`, `user_has_option`)
+      n'ouvre PAS d'option payante : seule une ligne de droit le fait.
     - Option non payante (`beta`, un drapeau de population) : la marque du compte
       (`user_has_option`) ou celle de l'org.
 
@@ -107,7 +119,7 @@ def has_option(sub: str, option: str, *, org: "int | None | object" = scope._UNS
     sans current_org (anti-fuite de contexte)."""
     if option in _PAID_OPTIONS:
         org = scope.current_org(sub) if org is scope._UNSET else org
-        return org is not None and entitlements.org_has(int(org), option)
+        return entitlements.has_right(sub, org, option)
     if user_has_option(sub, option):
         return True
     org = scope.current_org(sub) if org is scope._UNSET else org
@@ -117,8 +129,8 @@ def has_option(sub: str, option: str, *, org: "int | None | object" = scope._UNS
 def user_has_option(sub: str, option: str) -> bool:
     """La moitié COMPTE du seam — « CET ACTEUR porte-t-il la marque », sans espace.
 
-    Pour les options NON payantes seulement : une option payante est un droit de
-    l'org (`entitlements.org_has`), et une marque de compte ne l'ouvre pas. Certaines
+    Pour les options NON payantes seulement : une option payante est un droit déclaré
+    (`entitlements.has_right`), et une marque de compte ne l'ouvre pas. Certaines
     questions portent sur l'identité de l'appelant et sur elle seule. `has_option`
     ne convient pas — il répond vrai dès que l'ORG ACTIVE porte la marque, donc il
     transforme une marque de compte en propriété d'espace, partagée par tous les
@@ -159,6 +171,29 @@ def usage_today(sub: str, provider: str) -> int:
     un canal lirait 0 face au plafond d'une clé déjà épuisée (« quota intact » chez
     quelqu'un qui n'a plus rien). Tout lecteur de quota passe par ici."""
     return db.get_usage_today(sub, providers.credential_provider(provider))
+
+
+def quotas_leves(sub: str, org: Optional[int]) -> bool:
+    """Le droit `platform_unmetered` lève-t-il les quotas de plateforme pour la personne
+    `sub` agissant dans `org` (ADR 0070 §7) ? Le droit de l'org consommable par
+    l'appelant — aucune pour le bénéficiaire d'un projet partagé sans prêt (#480) —,
+    ou une ligne posée sur la personne, dans l'org ou partout."""
+    plan_org = heritage.org_partagee(org, heritage.du_contexte(sub, org))
+    return entitlements.has_right(sub, plan_org, entitlements.PLATFORM_UNMETERED)
+
+
+def plafond_du_jour(grant: dict, provider: str, leves: Callable[[], bool]) -> int:
+    """Le plafond du jour d'une arête PLATEFORME `grant` pour `provider` — `0` =
+    illimité (registre sans plafond par défaut, OU quotas levés par le droit
+    `platform_unmetered`), jamais un plafond réel de 0 (`quota_for` ne le rend pas).
+
+    **Fonction UNIQUE** : le refus et la sonde (`resolve._win_quota`), le mode affiché
+    (`views.credential_mode_for`) et le snapshot de `/api/me` (`status.status_for`) y
+    passent tous. `leves` rend `quotas_leves(sub, org)` ; il n'est appelé que s'il y a
+    un plafond à lever — un appelant qui boucle sur les connecteurs le mémorise, une
+    lecture des droits par snapshot et non par connecteur."""
+    limit = grant.get("daily_quota") or quota_for(provider)
+    return 0 if limit and leves() else limit
 
 
 def record_platform_usage(provider: str, calls: int = 1) -> None:

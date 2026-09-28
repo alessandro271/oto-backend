@@ -16,6 +16,9 @@ import pytest
 
 from oto_mcp import access
 
+# Sans base : le palier plateforme lit les droits de la personne (#1090).
+pytestmark = pytest.mark.usefixtures("sans_droit_declare")
+
 
 @pytest.fixture
 def coffre(monkeypatch):

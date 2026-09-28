@@ -10,7 +10,9 @@ l'endpoint anonyme :
 - droit vivant → servi ;
 - clé propre → servie, sans consulter le droit ;
 - configurer une connexion (`check_usage=False`) → inchangé ;
-- un connecteur sans option payante → inchangé.
+- un connecteur sans option payante → inchangé ;
+- une ligne de droit posée sur la PERSONNE (dans l'org ou partout) → servie, à elle
+  seule ; hors org (projet partagé sans prêt), seule la personne partout compte.
 """
 from __future__ import annotations
 
@@ -62,9 +64,15 @@ def gagnant(monkeypatch):
     return etat
 
 
-def _resoudre(provider="unipile", check_usage=True):
-    return access.resolve._resolve_credential_impl(provider, "auto", "u-test",
+def _resoudre(provider="unipile", check_usage=True, sub="u-test"):
+    return access.resolve._resolve_credential_impl(provider, "auto", sub,
                                                    check_usage=check_usage)
+
+
+def _sub() -> str:
+    """Une personne PROPRE au test : ses lignes de personne partout valent dans toute
+    org de la base du module, donc aucun test ne les partage."""
+    return f"u-{uuid.uuid4().hex[:8]}"
 
 
 def test_droit_echu_refus_qui_nomme_la_cause(live, gagnant):
@@ -73,7 +81,7 @@ def test_droit_echu_refus_qui_nomme_la_cause(live, gagnant):
     with pytest.raises(McpError) as e:
         _resoudre()
     msg = str(e.value)
-    assert "n'est pas active pour cette org" in msg
+    assert "n'est active ni pour cette org ni pour toi" in msg
     assert "essai terminé ou abonnement requis" in msg
 
 
@@ -143,3 +151,42 @@ def test_le_beneficiaire_d_un_projet_partage_sans_pret_n_herite_pas_du_droit(
     monkeypatch.setattr(heritage, "du_contexte", lambda sub, o: SimpleNamespace(
         sub=sub, org=o, membre=False, org_heritee=True))
     assert _resoudre().is_platform is True
+
+
+# ── le droit posé sur la personne (ADR 0070 §7, « ne fait qu'ajouter ») ─────────
+
+@pytest.mark.parametrize("partout", [False, True])
+def test_un_droit_personnel_sert_sa_personne_seule(live, gagnant, partout):
+    gagnant["org"] = org = _org()
+    sub = _sub()
+    E.grant(None if partout else org, "unipile", "offered", value=1, sub=sub)
+    assert _resoudre(sub=sub).is_platform is True
+    with pytest.raises(McpError) as e:
+        _resoudre(sub=_sub())
+    assert "n'est active ni pour cette org ni pour toi" in str(e.value)
+
+
+def test_sans_org_servie_seule_la_personne_partout_ouvre(live, gagnant, monkeypatch):
+    """Bénéficiaire d'un projet partagé sans prêt : l'org ne le couvre pas, sa ligne
+    dans cette org non plus — sa ligne de personne partout, si."""
+    gagnant["org"] = org = _org()
+    sub = _sub()
+    E.grant(org, "unipile", "offered", value=1, sub=sub)
+    monkeypatch.setattr(heritage, "du_contexte", lambda s, o: SimpleNamespace(
+        sub=s, org=o, membre=False, org_heritee=False))
+    with pytest.raises(McpError) as e:
+        _resoudre(sub=sub)
+    assert "ne t'est pas ouverte à titre personnel" in str(e.value)
+    E.grant(None, "unipile", "offered", value=1, sub=sub)
+    assert _resoudre(sub=sub).is_platform is True
+
+
+def test_l_endpoint_anonyme_ne_lit_que_l_org(live, gagnant):
+    """`sub` None : une ligne de personne n'ouvre rien à l'anonyme, et le refus reste
+    celui d'avant, mot pour mot."""
+    org = _org()
+    E.grant(org, "unipile", "offered", value=1, sub=_sub())
+    with pytest.raises(McpError) as e:
+        resolve_anon._resolve_credential_anon("unipile", "auto", org)
+    assert ("n'est pas active pour cette org : essai terminé ou abonnement requis ; "
+            "une clé `unipile` propre reste servie.") in str(e.value)

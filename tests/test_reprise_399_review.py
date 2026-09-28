@@ -34,6 +34,9 @@ import pytest
 from oto_mcp.mcp_errors import McpError
 from oto_mcp import access, call_axes, session_org
 
+# Sans base : le palier plateforme lit les droits de la personne (#1090).
+pytestmark = pytest.mark.usefixtures("sans_droit_declare")
+
 META_PY = pathlib.Path(__file__).resolve().parent.parent / "oto_mcp" / "tools" / "meta.py"
 
 

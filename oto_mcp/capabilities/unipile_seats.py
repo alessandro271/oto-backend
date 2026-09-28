@@ -14,13 +14,15 @@ aucun user oto ».
 `SUPER_ADMIN` : l'inventaire révèle l'ownership cross-user, la libération est
 irréversible. Aucun secret ne sort (la clé sert à appeler unipile, jamais rendue).
 
-**Le droit `unipile` de l'org** (oto-backend#806) : l'inventaire dit, par siège, si une
-org qui le tient en service a encore le droit (`entitled`), depuis quand elle l'a perdu
-(`entitlement_lost_at`) et quand le compte sera supprimé (`deletion_scheduled_at`). La
-libération accepte un siège en service dont AUCUNE org n'a plus le droit : ce n'est plus
-couper la messagerie de quelqu'un qui y a droit, c'est avancer ce que le travail
-`unipile-fin-de-droit` fera de lui-même (`oto_mcp/unipile_fin_de_droit.py`). Les deux
-passent par le même geste, `liberer`.
+**Le droit `unipile` du titulaire** (oto-backend#806) : l'inventaire dit, par siège, si
+un binding qui le tient en service a encore le droit (`entitled`), depuis quand il l'a
+perdu (`entitlement_lost_at`) et quand le compte sera supprimé (`deletion_scheduled_at`).
+Le droit est lu pour le TITULAIRE du binding (`sub` de la ligne) dans l'org du binding :
+celui de l'org, ou une ligne posée sur la personne (dans l'org ou partout) — jamais pour
+l'admin qui consulte. La libération accepte un siège en service dont AUCUN titulaire n'a
+plus le droit : ce n'est plus couper la messagerie de quelqu'un qui y a droit, c'est
+avancer ce que le travail `unipile-fin-de-droit` fera de lui-même
+(`oto_mcp/unipile_fin_de_droit.py`). Les deux passent par le même geste, `liberer`.
 """
 from __future__ import annotations
 
@@ -67,14 +69,14 @@ class Seat(BaseModel):
     disconnected_at: Optional[str] = None
     state: str          # bound | disconnected | orphan
     orphan: bool        # = state == "orphan"
-    # Le droit `unipile` de l'org qui tient le siège (n'importe laquelle, s'il est en
-    # service dans plusieurs) — lu dans les droits déclarés (`access.org_has`).
+    # Le droit `unipile` d'un titulaire du siège dans son org (n'importe lequel, s'il est
+    # en service dans plusieurs) — lu dans les droits déclarés (`access.has_right`).
     entitled: bool = False
     # Premier passage du travail de fin de droit qui l'a vue sans droit ; None tant
     # qu'aucun passage ne l'a marquée (ou que le droit est revenu).
     entitlement_lost_at: Optional[str] = None
     # `entitlement_lost_at` + le délai (`OTO_UNIPILE_FIN_DE_DROIT_DELAI_JOURS`) ;
-    # None si l'org a le droit ou n'est pas marquée.
+    # None si un titulaire a le droit ou que le siège n'est pas marqué.
     deletion_scheduled_at: Optional[str] = None
 
 
@@ -127,19 +129,23 @@ def _rows_for(account_id: str) -> list[dict]:
 
 
 def _droit_vivant(rows: list[dict], droits: Optional[dict] = None) -> bool:
-    """Une org qui tient ce siège EN SERVICE a-t-elle encore le droit `unipile` ?
+    """Un binding qui tient ce siège EN SERVICE a-t-il encore le droit `unipile` ?
 
-    Seuls les bindings vivants comptent : un compte adopté dans deux orgs reste dû
-    tant qu'une seule des deux a le droit. `droits` = cache `org_id → bool` d'un
-    inventaire, pour ne relire chaque org qu'une fois."""
+    Le droit est celui du TITULAIRE de la ligne (`r["sub"]`) dans l'org de la ligne —
+    le droit de l'org, ou une ligne posée sur la personne —, jamais celui de l'appelant
+    (un admin qui fait le ménage n'est pas le titulaire). Seuls les bindings vivants
+    comptent : un compte adopté dans deux orgs reste dû tant qu'un seul des deux a le
+    droit. `droits` = cache `(sub, org_id) → bool` d'un inventaire, pour ne relire
+    chaque titulaire dans chaque org qu'une fois."""
     droits = {} if droits is None else droits
     for r in rows:
         org = r.get("org_id")
         if r.get("disconnected_at") is not None or org is None:
             continue
-        if org not in droits:
-            droits[org] = access.org_has(int(org), "unipile")
-        if droits[org]:
+        cle = (r["sub"], int(org))
+        if cle not in droits:
+            droits[cle] = access.has_right(r["sub"], int(org), "unipile")
+        if droits[cle]:
             return True
     return False
 
@@ -244,8 +250,8 @@ async def _release_seat(ctx: ResolvedCtx, inp: SeatReleaseInput) -> dict:
         # cette face. Sans droit, le siège ne sert plus (lot 3 de #806) : le reprendre
         # n'est qu'avancer la suppression que le travail de fin de droit fera.
         raise AuthzDenied(409, "seat_in_use",
-                          "Ce siège est en service et son organisation a le droit à la "
-                          "messagerie hébergée — son propriétaire doit le déconnecter "
+                          "Ce siège est en service et son titulaire a le droit à la "
+                          "messagerie hébergée — il doit le déconnecter "
                           "d'abord, ou passer force=true pour le reprendre quand même.")
     client = await asyncio.to_thread(_platform_client)
     if client is None:

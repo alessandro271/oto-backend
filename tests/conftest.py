@@ -146,6 +146,18 @@ def _defauts_des_droits(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OTO_ENTITLEMENT_DEFAULTS", DEFAUTS_DES_DROITS)
 
 
+@pytest.fixture
+def sans_droit_declare(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sans base : aucune ligne de droit déclaré posée — `value_for` rend le défaut
+    d'instance. Pour les bancs SANS base qui traversent un point d'usage des droits :
+    depuis #1090, le palier plateforme lit les lignes de la PERSONNE même hors org
+    (levée `platform_unmetered`, option payante). À poser par
+    `pytestmark = pytest.mark.usefixtures("sans_droit_declare")`."""
+    from oto_mcp.db import entitlements as db_entitlements
+    monkeypatch.setattr(db_entitlements, "valeurs_posees",
+                        lambda org_id, sub, cle, now=None: db_entitlements.Posees(None, None))
+
+
 # ── Le tenant primaire déclaré (`tenancy.primary_slug`, #969) — identité : sans
 # déclaration, le démarrage et toute classification d'un sub lèvent. La valeur gréée
 # est celle de l'instance historique, comme les droits ci-dessus : des dizaines de bancs

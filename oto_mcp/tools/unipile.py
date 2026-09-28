@@ -711,8 +711,9 @@ def admin_status_by_org(sub: str, orgs: list) -> list:
             "mode": mode, "byo": byo,
             "channels": _channels_from(by),
             # Par le seam, jamais par les sources. `org_comp` = le droit déclaré de
-            # l'org (toute source) : c'est lui, seul, qui ouvre l'option. `user_comp`
-            # = le don fait à la personne, affiché pour mémoire — il n'ouvre plus rien.
+            # l'org (toute source). `user_comp` = la marque de compte de la personne,
+            # affichée pour mémoire — elle n'ouvre rien. `subscribed` compte aussi une
+            # ligne de droit posée sur la personne (`has_option`, ADR 0070 §7).
             "option_source": {
                 "user_comp": access.user_has_option(sub, "unipile"),
                 "org_comp": access.org_has(oid, "unipile"),

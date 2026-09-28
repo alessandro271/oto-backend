@@ -1,4 +1,4 @@
-"""La fin du droit `unipile` : cesser de payer les comptes d'une org qui ne l'a plus.
+"""La fin du droit `unipile` : cesser de payer les comptes de qui ne l'a plus.
 
 Décision du 23/09/2026 (oto-backend#806) : dès la fin du droit (fin d'essai, résiliation,
 don échu), les canaux cessent de marcher — c'est la relecture du droit à l'usage, pas ce
@@ -14,8 +14,14 @@ chaque passage et ne dépend d'aucun signal de fin de droit : un droit qui s'ét
 son échéance ne prévient personne, et un événement perdu ne se rejoue pas. Chaque étape
 est idempotente — le rejouer ne marque, ne prévient ni ne supprime deux fois :
 
-1. **retour du droit** : les marques des orgs qui ont (de nouveau) le droit s'effacent ;
-2. **perte** : un binding en service dont l'org n'a pas le droit reçoit
+Le droit est lu PAR BINDING, pour son titulaire (`sub` de la ligne) dans l'org du
+binding (`access.has_right`) : celui de l'org, ou une ligne posée sur la personne, dans
+l'org ou partout (ADR 0070 §7). Une personne servie par un droit personnel garde ses
+comptes même si son org n'a pas le droit.
+
+1. **retour du droit** : les marques des bindings dont le titulaire a (de nouveau) le
+   droit s'effacent, binding par binding ;
+2. **perte** : un binding en service dont le titulaire n'a pas le droit reçoit
    `entitlement_lost_at` (jamais repoussée : le délai part du premier constat) ;
 3. **préavis** : un e-mail par (propriétaire, org), `entitlement_notice_at` posé APRÈS
    l'envoi ;
@@ -29,7 +35,7 @@ est idempotente — le rejouer ne marque, ne prévient ni ne supprime deux fois 
 ⚠️ **Fermé par défaut** (`OTO_UNIPILE_FIN_DE_DROIT`, même dispositif que
 `OTO_ALERTE_CREDENTIAL`) : le travail tourne et DIT ce qu'il ferait, sans rien écrire,
 tant que le drapeau n'est pas posé. Raison : le droit est lu dans `org_entitlements`
-(`access.org_has`), que la reprise des abonnements remplit ; avant elle, `org_has` rend
+(`access.has_right`), que la reprise des abonnements remplit ; avant elle, il rend
 faux pour tout abonné, et le travail marquerait, préviendrait puis supprimerait les
 comptes de clients qui paient. Une garde « table vide » ne suffisait pas : la table
 porte déjà des droits posés à la main, donc elle n'est pas vide alors qu'elle est
@@ -124,17 +130,18 @@ def balayer(*, dry_run: bool = False) -> dict:
     ecartes: set = set()
 
     def lire() -> list[dict]:
-        """Les bindings à regarder, org d'un tenant tiers écartée, droit relu une fois
-        par org et par passage."""
+        """Les bindings à regarder, org d'un tenant tiers écartée, droit du TITULAIRE
+        relu une fois par (titulaire, org) et par passage."""
         lignes = []
         for r in db_fdd.sieges_plateforme(delai):
             org = int(r["org_id"])
             if not _org_est_a_nous(org, a_nous):
                 ecartes.add((r["sub"], org, r["provider"]))
                 continue
-            if org not in droits:
-                droits[org] = access.org_has(org, DROIT)
-            r["entitled"] = droits[org]
+            cle = (r["sub"], org)
+            if cle not in droits:
+                droits[cle] = access.has_right(r["sub"], org, DROIT)
+            r["entitled"] = droits[cle]
             lignes.append(r)
         return lignes
 
@@ -147,19 +154,20 @@ def balayer(*, dry_run: bool = False) -> dict:
             f"{len(vivantes)} binding(s) sont en service sur la clé plateforme : la table "
             "n'est pas remplie. Rien n'a été marqué, prévenu ni supprimé.")
 
-    # 1. Le droit est revenu : effacer.
-    orgs_revenues = sorted({r["org_id"] for r in lignes if r["entitled"]
-                            and (r["entitlement_lost_at"] or r["entitlement_notice_at"])})
+    # 1. Le droit est revenu : effacer, binding par binding (le droit est celui de son
+    # titulaire, pas de l'org : un voisin sans droit dans la même org garde sa marque).
+    revenus = [r for r in lignes if r["entitled"]
+               and (r["entitlement_lost_at"] or r["entitlement_notice_at"])]
     # 2. La perte : marquer les bindings en service qui ne le sont pas encore.
     a_marquer = [r for r in vivantes if not r["entitled"] and r["entitlement_lost_at"] is None]
     efface = marque = 0
     if ecrit:
-        efface = db_fdd.effacer_perte(orgs_revenues)
+        efface = db_fdd.effacer_perte(revenus)
         marque = db_fdd.marquer_perte(a_marquer)
         lignes = lire()  # relire la donnée écrite, dates de la base comprises
 
-    # Par compte : un compte adopté dans deux orgs reste dû tant qu'une des deux a le
-    # droit. Seul un compte que PERSONNE ayant droit ne tient en service est concerné.
+    # Par compte : un compte adopté dans deux orgs reste dû tant qu'un de ses bindings a
+    # le droit. Seul un compte que PERSONNE ayant droit ne tient en service est concerné.
     comptes: dict = {}
     for r in lignes:
         comptes.setdefault(r["account_id"], []).append(r)
@@ -230,7 +238,7 @@ def balayer(*, dry_run: bool = False) -> dict:
         "delai_jours": delai,
         "en_service": len(vivantes),
         "tenant_tiers_ecartes": len(ecartes),
-        "droit_revenu": efface if ecrit else len(orgs_revenues),
+        "droit_revenu": efface if ecrit else len(revenus),
         "marques": marque if ecrit else len(a_marquer),
         "a_prevenir": len(a_prevenir),
         "preavis_envoyes": envoyes,

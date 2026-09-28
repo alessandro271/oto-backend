@@ -15,6 +15,7 @@ dépend de lui.
 """
 from __future__ import annotations
 
+import functools
 import logging
 
 from .. import providers, credentials_store, db, group_store, status_hints
@@ -146,6 +147,9 @@ def _status_for_projection(sub: str, *, org: "int | None | object" = scope._UNSE
     # de côté ici et on RECOPIE l'entrée du porteur après la boucle.
     delegants = {p: providers.credential_provider(p) for p in db.KEY_PROVIDERS
                  if providers.credential_provider(p) != p}
+    # La levée `platform_unmetered` ne dépend que de (sujet, org) : lue au plus UNE fois
+    # par snapshot, et seulement si un plafond est à lever (`quotas.plafond_du_jour`).
+    leves = functools.cache(lambda: quotas.quotas_leves(sub, active_org))
     for provider in db.KEY_PROVIDERS:
         if provider in delegants:
             continue
@@ -160,7 +164,9 @@ def _status_for_projection(sub: str, *, org: "int | None | object" = scope._UNSE
         org_has = any(r.mode == "org" for r in hits)
         grant = next((r.payload for r in hits if r.mode == "platform"), None)
         used = _used(provider)
-        limit = (grant.get("daily_quota") if grant else None) or quotas.quota_for(provider)
+        # Le plafond du refus (`quotas.plafond_du_jour`), levée par droit comprise : un
+        # plafond recopié ici annonçait `over_quota` à une personne que rien ne borne.
+        limit = quotas.plafond_du_jour(grant, provider, leves) if grant else 0
 
         winner = hits[0] if hits else None
         # ⚠️ LA distinction de cette projection, et la seule cause du défaut qu'elle

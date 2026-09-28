@@ -9,6 +9,11 @@ droit vivant → rien ; perte → une marque et UN préavis ; retour du droit �
 effacée ; délai échu → suppression ; clé propre → jamais regardée ; rejeu → ni préavis
 ni suppression en double. Et les deux gardes : fermé par défaut, et refus de tourner sur
 une table des droits vide.
+
+Le droit se lit pour le TITULAIRE de chaque binding dans son org (ADR 0070 §7) : une
+personne servie par un droit personnel — dans l'org ou partout — n'est ni marquée, ni
+prévenue, ni supprimée, et la garde de reprise la protège ; le retour du droit efface
+binding par binding, pas org par org.
 """
 from __future__ import annotations
 
@@ -365,3 +370,84 @@ def test_release_refuse_toujours_un_siege_en_service_AVEC_droit(banc):
         asyncio.run(us._release_seat(CTX, us.SeatReleaseInput(account_id="acc_garde")))
     assert (e.value.status, e.value.code) == (409, "seat_in_use")
     assert instance.supprimes == []
+
+
+# ── le droit du TITULAIRE : une ligne posée sur la personne ─────────────────────
+
+def _droit_partout(sub: str) -> None:
+    from oto_mcp.db import entitlements
+    entitlements.grant(None, "unipile", "test", value=1, sub=sub)
+
+
+def _droit_personnel(portee: str, org: int, sub: str) -> None:
+    if portee == "dans l'org":
+        _droit(org, sub=sub)
+    else:
+        _droit_partout(sub)
+
+
+@pytest.mark.parametrize("portee", ["dans l'org", "partout"])
+def test_un_droit_personnel_protege_le_siege_de_son_titulaire(banc, portee):
+    """L'org n'a pas le droit, sa personne si : ni marque, ni préavis, ni suppression,
+    même après des semaines de passages."""
+    instance, lettres = banc
+    org = _org("sans droit d'org")
+    _compte(instance, org, "acc_perso", sub="u-servie")
+    _droit_personnel(portee, org, "u-servie")
+    out = F.balayer()
+    assert out["marques"] == 0 and out["a_prevenir"] == 0
+    _vieillir(30)
+    out = F.balayer()
+    ligne = _ligne("acc_perso", org)
+    assert ligne["entitlement_lost_at"] is None and ligne["entitlement_notice_at"] is None
+    assert out["supprimes"] == [] and lettres == [] and instance.supprimes == []
+
+
+@pytest.mark.parametrize("portee", ["dans l'org", "partout"])
+def test_la_garde_de_reprise_protege_un_droit_personnel(banc, portee):
+    """Sans `force`, l'admin ne reprend pas le siège d'une personne qui y a droit à
+    titre personnel — et l'inventaire le dit `entitled`."""
+    instance, _ = banc
+    org = _org("sans droit d'org")
+    _compte(instance, org, "acc_garde_perso", sub="u-servie")
+    _droit_personnel(portee, org, "u-servie")
+    vue = asyncio.run(us._list_seats(CTX, us.SeatsListInput()))
+    (siege,) = [s for s in vue["seats"] if s["account_id"] == "acc_garde_perso"]
+    assert siege["entitled"] is True and siege["deletion_scheduled_at"] is None
+    with pytest.raises(AuthzDenied) as e:
+        asyncio.run(us._release_seat(CTX, us.SeatReleaseInput(
+            account_id="acc_garde_perso")))
+    assert (e.value.status, e.value.code) == (409, "seat_in_use")
+    assert instance.supprimes == []
+
+
+def test_le_droit_de_l_admin_ne_protege_pas_le_siege_d_un_autre(banc):
+    """La personne lue est le titulaire de la ligne, JAMAIS l'appelant : un admin qui a
+    lui-même le droit n'en couvre pas le siège d'un titulaire qui ne l'a pas."""
+    instance, _ = banc
+    org = _org("sans droit")
+    _compte(instance, org, "acc_d_un_autre", sub="u-sans")
+    _droit_partout(CTX.sub)
+    out = asyncio.run(us._release_seat(CTX, us.SeatReleaseInput(
+        account_id="acc_d_un_autre")))
+    assert out["was"] == "bound" and instance.supprimes == ["acc_d_un_autre"]
+
+
+def test_le_droit_d_une_personne_ne_couvre_pas_son_voisin(banc):
+    """Deux titulaires dans la même org sans droit : le droit revenu de l'un efface SA
+    marque, binding par binding ; le voisin garde la sienne, et son délai."""
+    instance, lettres = banc
+    org = _org("voisins")
+    _compte(instance, org, "acc_a", sub="u-a")
+    _compte(instance, org, "acc_b", sub="u-b")
+    assert F.balayer()["marques"] == 2
+    perte_b = _ligne("acc_b", org)["entitlement_lost_at"]
+    _droit(org, sub="u-a")
+    out = F.balayer()
+    assert out["droit_revenu"] == 1
+    a, b = _ligne("acc_a", org), _ligne("acc_b", org)
+    assert a["entitlement_lost_at"] is None and a["entitlement_notice_at"] is None
+    assert b["entitlement_lost_at"] == perte_b and b["entitlement_notice_at"] is not None
+    _vieillir(30)
+    assert F.balayer()["supprimes"] == ["acc_b"]
+    assert instance.supprimes == ["acc_b"]

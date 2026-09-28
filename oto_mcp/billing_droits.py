@@ -29,8 +29,8 @@ Ce qu'elle dérive, et sous quelle source :
 | les deux derniers, org hébergée par un partenaire | `partner` | aucune |
 | abonnement réglé hors plateforme (`contract`) | `contract` | sa date de fin, ou aucune (reconduction tacite) ; + `members_max` = licences |
 
-Le grain PERSONNE (don d'option à un compte) n'écrit rien ici : seule l'org porte un
-droit payant.
+Le grain PERSONNE (don d'option à un compte) n'écrit rien ici : cette réconciliation ne
+pose que des lignes d'org ; une ligne de personne vient d'un autre producteur.
 """
 from __future__ import annotations
 
