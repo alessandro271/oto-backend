@@ -211,8 +211,9 @@ avatars/logos · ⚠️ **PROD et PREPROD partagent la MÊME base** : ce qu'on �
   résurrection automatique
 - `rest-api.md` — endpoints, OpenAPI, jetons, CORS
 - `version-servie.md` — dater un changement : les 3 surfaces, les 3 coordonnées qui mentent
-- `instance-cible.md` — déployer le tronc sur une autre machine : bibliothèque bleu/vert commune
-  (nos gestes figés par un banc), lanceur qui tire les secrets de la cible par nom (#967)
+- `instance-cible.md` — déployer le tronc sur une autre machine (#967) : bibliothèque bleu/vert commune
+  (nos gestes figés par un banc), lanceur qui tire les secrets de la cible par nom, amorce,
+  workflow à la main par cible, porte en commande forcée, et comment déclarer et monter une cible
 - `noeuds.md` — le NOUVEL univers de contenu : page/tableau/ligne, `props` vs `data`, les deux
   univers côte à côte, l'arrêt de la recopie
 - `fonctions.md` — `oto_function` : code pur versionné, publié sous la garde de ses tests,

@@ -1,0 +1,79 @@
+{
+  "instance": "",
+  "secrets": {
+    "region": "",
+    "projet": ""
+  },
+  "roles": {
+    "preprod": {
+      "ports": {
+        "blue": null,
+        "green": null
+      },
+      "hote_public": "",
+      "ask": null,
+      "drain_max": null,
+      "secrets_optionnels": [],
+      "env": {
+        "FOD_BASE_URL": "",
+        "GOOGLE_WORKSPACE_CLIENT_ID": "",
+        "LOGTO_ENDPOINT": "",
+        "MCP_AUDIENCE": "",
+        "OTO_APP_URL": "",
+        "OTO_BRAND_NAME": "",
+        "OTO_BRAND_SITE": "",
+        "OTO_CONTACT_TO": "",
+        "OTO_DASHBOARD_BASE_URL": "",
+        "OTO_DASHBOARD_URL": "",
+        "OTO_ENTITLEMENT_DEFAULTS": "",
+        "OTO_ENV": "preprod",
+        "OTO_FERME_URL": "",
+        "OTO_INVITE_BASE_URL": "",
+        "OTO_LEGAL_DOCS": "",
+        "OTO_MAILER_URL": "",
+        "OTO_MAIL_FROM": "",
+        "OTO_MCP_CORS_ORIGINS": "",
+        "OTO_MCP_PUBLIC_URL": "",
+        "OTO_MCP_S3_BUCKET": "",
+        "OTO_MCP_S3_ENDPOINT": "",
+        "OTO_PROJECT_DOMAIN": "",
+        "OTO_TENANT_PRIMAIRE_SLUG": ""
+      }
+    },
+    "prod": {
+      "ports": {
+        "blue": null,
+        "green": null
+      },
+      "hote_public": "",
+      "ask": null,
+      "drain_max": null,
+      "secrets_optionnels": [],
+      "env": {
+        "FOD_BASE_URL": "",
+        "GOOGLE_WORKSPACE_CLIENT_ID": "",
+        "LOGTO_ENDPOINT": "",
+        "MCP_AUDIENCE": "",
+        "OTO_APP_URL": "",
+        "OTO_BRAND_NAME": "",
+        "OTO_BRAND_SITE": "",
+        "OTO_CONTACT_TO": "",
+        "OTO_DASHBOARD_BASE_URL": "",
+        "OTO_DASHBOARD_URL": "",
+        "OTO_ENTITLEMENT_DEFAULTS": "",
+        "OTO_ENV": "prod",
+        "OTO_FERME_URL": "",
+        "OTO_INVITE_BASE_URL": "",
+        "OTO_LEGAL_DOCS": "",
+        "OTO_MAILER_URL": "",
+        "OTO_MAIL_FROM": "",
+        "OTO_MCP_CORS_ORIGINS": "",
+        "OTO_MCP_PUBLIC_URL": "",
+        "OTO_MCP_S3_BUCKET": "",
+        "OTO_MCP_S3_ENDPOINT": "",
+        "OTO_PROJECT_DOMAIN": "",
+        "OTO_TENANT_PRIMAIRE_SLUG": ""
+      }
+    }
+  }
+}

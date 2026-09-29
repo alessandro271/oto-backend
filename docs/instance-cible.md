@@ -144,6 +144,98 @@ qu'il est **sur la branche principale du tronc** (miroir local du dépôt, dont 
 la main (`deploy/cible/deployer.sh` : amorce, bleu/vert, maintenance). L'amorce, la
 bibliothèque et le lanceur sont donc toujours ceux de la version qu'on monte.
 
+## Déclarer une cible, pas à pas
+
+Chaque étape est un geste d'opérateur, hors de ce dépôt ; la chaîne refuse en le nommant
+tout ce qui manque. Rien de ce qui suit ne s'écrit dans le dépôt : ni nom, ni hôte, ni
+identifiant.
+
+### 1. La déclaration
+
+Partir du gabarit `deploy/cible/declaration.gabarit.json` : la forme complète, sans
+aucune valeur. Il liste, pour chaque rôle, les variables que l'inventaire exige dans le
+`.env` (identité, requises non secrètes) ; `OTO_ENV` vaut le rôle, et rien d'autre.
+Ajouter les variables non secrètes voulues (inventoriées : `oto_mcp/env_inventory.py`),
+les secrets facultatifs portés (`secrets_optionnels`), puis juger le document avec le
+code du tag qu'on montera :
+
+```
+python3 deploy/cible/declaration.py verifier declaration.json
+```
+
+Un test (`tests/deploy/test_gabarit_cible_967.py`) garde le gabarit en phase avec
+l'inventaire : une variable qui devient exigée y apparaît, ou le test rougit.
+
+### 2. Le Secret Manager du projet de la cible
+
+Un secret par variable, **nommé comme la variable**, sous le chemin du rôle (`/preprod`,
+`/prod`) : les requis
+(`python3 -c "from oto_mcp import env_secrets; print(*env_secrets.secrets_requis())"`),
+dont chaque `DATABASE_URL` vers la base de son rôle, et les facultatifs déclarés. Une
+clé d'API dédiée, limitée à la lecture des secrets de ce projet, lue par la machine.
+La valeur de référence de chaque secret est gardée par l'opérateur dans son
+gestionnaire de mots de passe, jamais dans un dépôt ni dans une page.
+
+### 3. La machine (socle)
+
+Sur une Ubuntu 24.04 du projet de la cible, montée selon le socle d'une box tierce :
+
+- `git`, `caddy`, `python3`, `uv` ;
+- le tunnel Cloudflare Access de la machine, une application SSH, et un **jeton de
+  service dédié à cette cible** dans la politique de l'application ;
+- un utilisateur de déploiement **non root**, avec la clé CI en commande forcée :
+  ```
+  # ~deploy/.ssh/authorized_keys
+  restrict,command="sudo /usr/local/sbin/oto-cible-porte \"$SSH_ORIGINAL_COMMAND\"" ssh-ed25519 AAAA… ci-<cible>
+  # /etc/sudoers.d/oto-cible
+  deploy ALL=(root) NOPASSWD: /usr/local/sbin/oto-cible-porte *
+  ```
+- la porte, depuis un tag : `install -m 0755 deploy/cible/porte.sh /usr/local/sbin/oto-cible-porte` ;
+- la clé d'API du Secret Manager : `install -d -m 0700 /etc/<i>` puis
+  `/etc/<i>/scw.key` (0600, root) ;
+- le Caddyfile qui importe l'amont de chaque rôle (§ L'amorce), et le DNS des hôtes
+  publics.
+
+⚠️ Le `:22` reste ouvert jusqu'à ce qu'**un déploiement réel soit passé par le
+tunnel** ; on ne le ferme qu'après (socle, gestes J+2/J+7).
+
+### 4. L'environnement GitHub de la cible
+
+Un environnement du dépôt, au nom de la cible (le nom ne s'écrit que là, et dans
+l'entrée `cible` du workflow) :
+
+| Nom | Sorte | Contenu |
+|---|---|---|
+| `CIBLE_DECLARATION` | variable | la déclaration (JSON) |
+| `CIBLE_SSH_HOTE` | variable | l'hôte SSH de l'application Access |
+| `CIBLE_SSH_UTILISATEUR` | variable | l'utilisateur de déploiement |
+| `CIBLE_SSH_KNOWN_HOSTS` | variable | la clé d'hôte de la machine, sous le nom de l'hôte SSH (épinglée) |
+| `CIBLE_CONSOMMATEUR` | variable, facultative | `{"nom", "depot": "owner/repo", "chemin", "cle": bool}` — le front qui consomme l'API de la cible |
+| `CIBLE_SSH_CLE` | secret | la clé privée de déploiement |
+| `CIBLE_CF_ACCESS_CLIENT_ID` | secret | le jeton de service Access (identifiant) |
+| `CIBLE_CF_ACCESS_CLIENT_SECRET` | secret | le jeton de service Access (secret) |
+| `CIBLE_CONSOMMATEUR_CLE` | secret, si `cle` | clé de lecture seule du dépôt du consommateur |
+
+**Protection de l'environnement — obligatoire** : dans ses réglages, « Required
+reviewers » avec au moins un relecteur (celui qui décide des montées), et les branches de
+déploiement limitées à `main` (celle d'où l'on lance le workflow). Le workflow le vérifie à chaque montée et
+refuse de partir sans relecteur requis — y compris quand l'environnement n'existe pas
+encore, que GitHub créerait sinon à la volée, sans protection.
+
+### 5. Monter
+
+```
+gh workflow run deploy-cible.yml -f cible=<environnement> -f tag=vX.Y.Z -f etape=preprod
+gh workflow run deploy-cible.yml -f cible=<environnement> -f tag=vX.Y.Z -f etape=prod
+```
+
+La première montée d'un rôle le fait naître (amorce) et installe la couleur verte. Puis,
+sur la machine, les valeurs **effectives** : `systemctl show <i>-<r>@green -p User -p
+NoNewPrivileges -p Restart`, et `curl https://<hôte>/api/version`. Les données arrivent
+à part, par l'export par périmètre (`docs/export-perimetre.md`), dans la base née.
+
+Retour arrière d'un rôle : `-f action=retour -f etape=<rôle>`.
+
 ## Hors de ce dépôt : les workers runner
 
 Les workers `oto-runner` vivent dans leur propre dépôt et y suivent `main`. Pour une

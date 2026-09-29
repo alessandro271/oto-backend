@@ -136,6 +136,11 @@ def _role(ecarts: list[str], nom: str, r) -> None:
     for n in exigees_dans_env():
         if n not in env:
             ecarts.append(f"{ou}.env.{n} : exigée par l'inventaire, manquante")
+    # Ce que le process DÉCLARE être (`config.est_la_production`) est le rôle qu'on
+    # déploie : une préprod qui se dirait prod agirait sur des tiers avec son code.
+    if env.get("OTO_ENV") != nom:
+        ecarts.append(f"{ou}.env.OTO_ENV : doit valoir « {nom} », le rôle déployé "
+                      f"(reçu {env.get('OTO_ENV')!r})")
 
 
 def valider(doc) -> dict:
