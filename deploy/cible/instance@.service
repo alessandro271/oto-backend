@@ -1,0 +1,47 @@
+# Gabarit d'unité d'une instance cible (#967) — RENDU par deploy/cible/amorcer.sh, jamais
+# posé tel quel : chaque @CLÉ@ vient de la déclaration de la cible. Une unité par rôle
+# (@UNITE@@.service), une instance par couleur (%i = blue | green) ; une seule couleur
+# `enabled` à la fois, celle en service (la bibliothèque bleu/vert s'en charge).
+#
+# Confiné dès la pose (socle d'une box tierce) : utilisateur dédié, jamais root ; l'arbre
+# appartient à root, le service ne peut pas réécrire son propre code ; la clé d'API du
+# Secret Manager n'est lisible que par systemd, qui la passe au lanceur (LoadCredential) ;
+# les secrets n'arrivent que par le lanceur, le .env ne porte que le non-secret.
+[Unit]
+Description=Backend oto — @UNITE@, couleur %i
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=@UTILISATEUR@
+Group=@UTILISATEUR@
+WorkingDirectory=@ARBRE@-%i
+EnvironmentFile=@ETC@/app.env
+EnvironmentFile=@ETC@/lanceur.env
+EnvironmentFile=@ETC@/port-%i.env
+Environment=MCP_TRANSPORT=streamable_http
+Environment=HOST=127.0.0.1
+Environment=LOG_LEVEL=INFO
+Environment=HOME=/var/lib/@UNITE@-%i
+StateDirectory=@UNITE@-%i
+LoadCredential=scw:@CLE_SCW@
+ExecStart=@ARBRE@-%i/.venv/bin/python @ARBRE@-%i/deploy/lanceur_secrets.py
+Restart=on-failure
+RestartSec=5
+SyslogIdentifier=@UNITE@-%i
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+CapabilityBoundingSet=
+# Backstop SSRF du connecteur `http` (ADR 0037), comme notre unité : pas d'egress vers
+# le metadata cloud (169.254/16 = identifiants de l'instance).
+IPAddressDeny=169.254.0.0/16
+IPAddressDeny=fe80::/10
+
+[Install]
+WantedBy=multi-user.target

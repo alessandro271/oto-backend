@@ -1,0 +1,83 @@
+{
+  "instance": "exemple",
+  "secrets": {
+    "region": "fr-par",
+    "projet": "00000000-0000-4000-8000-000000000000"
+  },
+  "roles": {
+    "preprod": {
+      "ports": {
+        "blue": 9205,
+        "green": 9206
+      },
+      "hote_public": "mcp-preprod.exemple.test",
+      "ask": false,
+      "drain_max": 120,
+      "secrets_optionnels": [],
+      "env": {
+        "FOD_BASE_URL": "https://fod-base-url.exemple.test",
+        "GOOGLE_WORKSPACE_CLIENT_ID": "https://google-workspace-client-id.exemple.test",
+        "LOGTO_ENDPOINT": "https://logto-endpoint.exemple.test",
+        "MCP_AUDIENCE": "https://mcp-preprod.exemple.test/mcp",
+        "OTO_APP_URL": "https://oto-app-url.exemple.test",
+        "OTO_BRAND_NAME": "Exemple",
+        "OTO_BRAND_SITE": "https://oto-brand-site.exemple.test",
+        "OTO_CONTACT_TO": "contact@exemple.test",
+        "OTO_DASHBOARD_BASE_URL": "https://oto-dashboard-base-url.exemple.test",
+        "OTO_DASHBOARD_URL": "https://oto-dashboard-url.exemple.test",
+        "OTO_ENTITLEMENT_DEFAULTS": "{}",
+        "OTO_ENV": "preprod",
+        "OTO_FERME_URL": "https://oto-ferme-url.exemple.test",
+        "OTO_INVITE_BASE_URL": "https://oto-invite-base-url.exemple.test",
+        "OTO_LEGAL_DOCS": "{\"cgu\": {\"version\": \"1\", \"url\": \"https://exemple.test/cgu\"}}",
+        "OTO_MAILER_URL": "https://oto-mailer-url.exemple.test",
+        "OTO_MAIL_FROM": "Exemple <bonjour@exemple.test>",
+        "OTO_MCP_CORS_ORIGINS": "https://app.exemple.test",
+        "OTO_MCP_PUBLIC_URL": "https://mcp-preprod.exemple.test",
+        "OTO_MCP_S3_BUCKET": "exemple-preprod",
+        "OTO_MCP_S3_ENDPOINT": "https://oto-mcp-s3-endpoint.exemple.test",
+        "OTO_PROJECT_DOMAIN": "exemple.test",
+        "OTO_TENANT_PRIMAIRE_SLUG": "exemple"
+      }
+    },
+    "prod": {
+      "ports": {
+        "blue": 9203,
+        "green": 9207
+      },
+      "hote_public": "mcp.exemple.test",
+      "ask": false,
+      "drain_max": 120,
+      "secrets_optionnels": [
+        "MISTRAL_API_KEY",
+        "OTO_MCP_LOGTO_M2M_SECRET"
+      ],
+      "env": {
+        "FOD_BASE_URL": "https://fod-base-url.exemple.test",
+        "GOOGLE_WORKSPACE_CLIENT_ID": "https://google-workspace-client-id.exemple.test",
+        "LOGTO_ENDPOINT": "https://logto-endpoint.exemple.test",
+        "MCP_AUDIENCE": "https://mcp.exemple.test/mcp",
+        "OTO_APP_URL": "https://oto-app-url.exemple.test",
+        "OTO_BRAND_NAME": "Exemple",
+        "OTO_BRAND_SITE": "https://oto-brand-site.exemple.test",
+        "OTO_CONTACT_TO": "contact@exemple.test",
+        "OTO_DASHBOARD_BASE_URL": "https://oto-dashboard-base-url.exemple.test",
+        "OTO_DASHBOARD_URL": "https://oto-dashboard-url.exemple.test",
+        "OTO_ENTITLEMENT_DEFAULTS": "{}",
+        "OTO_ENV": "prod",
+        "OTO_FERME_URL": "https://oto-ferme-url.exemple.test",
+        "OTO_INVITE_BASE_URL": "https://oto-invite-base-url.exemple.test",
+        "OTO_LEGAL_DOCS": "{\"cgu\": {\"version\": \"1\", \"url\": \"https://exemple.test/cgu\"}}",
+        "OTO_MAILER_URL": "https://oto-mailer-url.exemple.test",
+        "OTO_MAIL_FROM": "Exemple <bonjour@exemple.test>",
+        "OTO_MCP_CORS_ORIGINS": "https://app.exemple.test",
+        "OTO_MCP_PUBLIC_URL": "https://mcp.exemple.test",
+        "OTO_MCP_S3_BUCKET": "exemple-prod",
+        "OTO_MCP_S3_ENDPOINT": "https://oto-mcp-s3-endpoint.exemple.test",
+        "OTO_PROJECT_DOMAIN": "exemple.test",
+        "OTO_TENANT_PRIMAIRE_SLUG": "exemple",
+        "OTO_MCP_LOGTO_M2M_ID": "m2m-exemple"
+      }
+    }
+  }
+}

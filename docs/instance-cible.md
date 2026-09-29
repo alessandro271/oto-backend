@@ -64,3 +64,41 @@ Notre box garde son lanceur (`BG_LANCEUR=propage`) : `deploy/start-encrypted.sh`
 notre projet, Mollie, Pennylane. La passer au lanceur générique est un geste à part
 (créer nos secrets par nom, vider le `.env` de ses secrets, poser l'unité), pas une
 conséquence de ce chantier.
+
+## L'amorce — une instance naît du code
+
+`deploy/cible/amorcer.sh` fait naître un rôle (préprod ou prod) sur une machine nue, et
+le remet à sa forme déclarée à chaque déploiement : c'est le déploiement qui l'appelle,
+depuis l'arbre du tag, avant la bascule. Idempotente — la seconde fois, elle ne recrée
+rien et réécrit seulement ce qui se dérive de la déclaration.
+
+| Ce qu'elle pose | Où (dérivé du nom d'instance `<i>` et du rôle `<r>`) |
+|---|---|
+| Utilisateur de service, système, sans shell — **jamais root** | `oto-<i>` |
+| Python du plancher du `pyproject` (3.10), via uv | `/opt/<i>/python` |
+| Deux arbres (clone du tronc) et leur venv | `/opt/<i>/<r>-blue`, `/opt/<i>/<r>-green` |
+| Environnement du rôle : `app.env` (non-secret), `lanceur.env`, ports | `/etc/<i>/<r>/` (0700, root) |
+| Pointeur de couleur, posé à la naissance seulement (bleu : le 1er déploiement installe la verte) | `/etc/<i>/<r>/active` |
+| Unité par couleur, confinée (`NoNewPrivileges`, `ProtectSystem`, `CapabilityBoundingSet=`, lien-local refusé) | `<i>-<r>@.service` (gabarit `deploy/cible/instance@.service`) |
+| Amont Caddy initial | `/etc/caddy/upstream-<i>-<r>.conf` |
+| Vidange (chemin stable : elle tourne après le déploiement) | `/usr/local/lib/<i>/oto-mcp-drain.sh` |
+| Maintenance quotidienne, après la bascule, sur l'arbre qui sert — chaque rôle a sa base, donc la sienne | `<i>-<r>-maintenance.{service,timer}` |
+
+Ce qu'elle **exige et ne pose jamais** — le socle, geste d'opérateur, chacun refusé en
+le nommant s'il manque : root ; `uv`, `git`, `caddy`, `python3` ; la clé d'API du
+Secret Manager dans `/etc/<i>/scw.key` (0600) ; un Caddyfile qui importe l'amont du rôle
+et l'utilise dans le bloc du site :
+
+```
+import /etc/caddy/upstream-<i>-<r>.conf          # en tête, avant le bloc global
+
+<hôte public du rôle> {
+	handle /p/d/* {
+		import <i>_<r>_upstream_docshare
+	}
+	import <i>_<r>_upstream
+}
+```
+
+Le service ne peut pas réécrire son code (les arbres sont à root), n'a d'état que dans
+son `StateDirectory`, et ne voit sa clé d'API que par `LoadCredential`.

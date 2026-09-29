@@ -1,0 +1,33 @@
+# Gabarit de la maintenance d'un rôle d'instance cible (#967) — RENDU par
+# deploy/cible/amorcer.sh (étape `maintenance`) après chaque bascule, sur l'arbre de la
+# couleur qui sert. Même travail que deploy/oto-mcp-maintenance.service chez nous, même
+# timer (deploy/oto-mcp-maintenance.timer, posé sous le nom du rôle) ; les secrets
+# arrivent par le lanceur, comme pour le service.
+[Unit]
+Description=Maintenance du backend oto — @UNITE@
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=@UTILISATEUR@
+Group=@UTILISATEUR@
+WorkingDirectory=@ARBRE_ACTIF@
+EnvironmentFile=@ETC@/app.env
+EnvironmentFile=@ETC@/lanceur.env
+Environment=HOME=/var/lib/@UNITE@-maintenance
+StateDirectory=@UNITE@-maintenance
+LoadCredential=scw:@CLE_SCW@
+ExecStart=@ARBRE_ACTIF@/.venv/bin/python @ARBRE_ACTIF@/deploy/lanceur_secrets.py maintenance all
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=1h
+SyslogIdentifier=@UNITE@-maintenance
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+CapabilityBoundingSet=
+IPAddressDeny=169.254.0.0/16
+IPAddressDeny=fe80::/10
