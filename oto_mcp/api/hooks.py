@@ -32,7 +32,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from .. import runner_hook
+from .. import journal_secrets, runner_hook
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +60,7 @@ def _refus(statut: int, code: str, message: str, **extra) -> JSONResponse:
                         status_code=statut)
 
 
+@journal_secrets.parametres_secrets("trigger_id")
 async def fire(request: Request) -> JSONResponse:
     """Un tiers POSTe, un agent part.
 
@@ -81,7 +82,7 @@ async def fire(request: Request) -> JSONResponse:
     # Le segment est un id numérique OU une adresse privée (`h_…`, 128 bits).
     # Résolue hors boucle : une adresse privée se lit en base.
     trigger_id, par_adresse_privee = await run_in_threadpool(
-        runner_hook.resoudre_adresse, str(request.path_params.get("address", "")))
+        runner_hook.resoudre_adresse, str(request.path_params.get("trigger_id", "")))
     if trigger_id is None:
         return _refus(404, "hook_not_found", runner_hook.HOOK_INCONNU)
     secret = runner_hook.secret_du_porteur(request.headers.get("authorization"))
@@ -149,6 +150,6 @@ def make_routes(options_handler) -> list[Route]:
     ailleurs — une source appelée depuis un navigateur existe (un formulaire, un
     outil no-code hébergé)."""
     return [
-        Route("/api/hooks/{address}", fire, methods=["POST"]),
-        Route("/api/hooks/{address}", options_handler, methods=["OPTIONS"]),
+        Route("/api/hooks/{trigger_id}", fire, methods=["POST"]),
+        Route("/api/hooks/{trigger_id}", options_handler, methods=["OPTIONS"]),
     ]

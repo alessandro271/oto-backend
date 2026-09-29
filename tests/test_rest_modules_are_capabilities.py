@@ -57,7 +57,7 @@ _KNOWN: dict[str, str] = {
     # LIBRE, que l'adaptateur refuserait champ par champ (`unknown_fields`). Son
     # authentification est un secret par déclencheur (`Authorization: Bearer
     # otoh_…`), pas un jeton Logto.
-    "/api/hooks/{address}": NATURE,
+    "/api/hooks/{trigger_id}": NATURE,
     # Le RECEVEUR des téléphones Apollo (28/09/2026) : Apollo POSTe le résultat d'un
     # reveal qu'oto a commandé. Corps libre (la forme d'Apollo, pas la nôtre) et
     # aucun JWT : l'autorisation est le jeton du chemin, propre à une commande.

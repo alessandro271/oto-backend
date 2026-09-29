@@ -66,13 +66,25 @@ logger = logging.getLogger(__name__)
 # Les NOMS de paramètre qui portent un secret. C'est la seule liste écrite à la
 # main de ce module, et elle est volontairement courte : tout le reste (quelles
 # routes, quels outils) en est dérivé.
-#
-# `address` : l'adresse d'un webhook d'agent (`/api/hooks/{address}`) — l'adresse
-# privée `h_…` (128 bits) est ce qui rend l'agent introuvable à qui ne l'a pas reçue,
-# au même titre qu'un jeton. Le segment porte aussi l'id numérique d'un agent sans
-# adresse privée ; il est masqué pareil, la route ne pouvant savoir lequel elle sert
-# avant de lire la base. Aucune entrée de capacité ne porte ce nom.
-SECRET_PARAM_NAMES = frozenset({"token", "code", "address"})
+SECRET_PARAM_NAMES = frozenset({"token", "code"})
+
+# Un paramètre dont le NOM n'est pas secret partout peut l'être sur UNE route : la
+# route le DÉCLARE alors elle-même, sur son point d'entrée (`parametres_secrets`), et
+# `declare_routes` le lit comme le reste — jamais une liste de chemins tenue ici.
+# Premier cas : `/api/hooks/{trigger_id}`, dont le segment est l'adresse privée `h_…`
+# d'un agent (128 bits, ce qui le rend introuvable à qui ne l'a pas reçue) ou l'id
+# numérique d'un agent sans adresse privée, masqué pareil — la route ne sait lequel
+# elle sert qu'en lisant la base. `trigger_id` n'est pas un secret ailleurs (les
+# capacités de flotte le portent) : d'où la déclaration par route, pas par nom.
+_ATTR_SECRETS = "parametres_secrets_du_chemin"
+
+
+def parametres_secrets(*noms: str):
+    """Décorateur d'un point d'entrée : ces paramètres de SON chemin sont secrets."""
+    def poser(fn):
+        setattr(fn, _ATTR_SECRETS, frozenset(noms))
+        return fn
+    return poser
 
 # Les CONNECTEURS échappent à la dérivation ci-dessus (elle ne lit que le registre
 # de capacités), et masquer leurs arguments par le NOM seul serait faux : un
@@ -171,11 +183,12 @@ def declare_routes(routes: Iterable) -> int:
             continue
         gabarit: list[Optional[str]] = []
         secrets_a: dict[int, str] = {}
+        declares = getattr(getattr(route, "endpoint", None), _ATTR_SECRETS, frozenset())
         for i, seg in enumerate(patron.split("/")):
             if seg.startswith("{") and seg.endswith("}"):
                 nom = seg[1:-1].split(":", 1)[0]
                 gabarit.append(None)
-                if nom in SECRET_PARAM_NAMES:
+                if nom in SECRET_PARAM_NAMES or nom in declares:
                     secrets_a[i] = nom
             else:
                 gabarit.append(seg)
