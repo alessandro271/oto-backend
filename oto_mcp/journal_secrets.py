@@ -238,6 +238,50 @@ def route_and_secrets(path: str) -> tuple[str, Optional[dict[str, str]]]:
 
 
 # --------------------------------------------------------------------------- #
+# Le journal d'ACCÈS d'uvicorn : la même propriété, sur le troisième canal
+# --------------------------------------------------------------------------- #
+
+def chemin_pour_journal_acces(cible: str) -> str:
+    """La cible d'une requête (`chemin?requête`) telle que le journal d'accès l'écrit :
+    chaque segment lié à un paramètre de route secret devient son masque, tout le
+    reste est recopié tel quel.
+
+    Pas la réduction de `route_and_secrets` : le journal d'accès sert à lire UNE
+    requête (quel tableau, quel numéro), pas à agréger — les identifiants y restent
+    lisibles. Seul le secret tombe, et sous le MÊME masque que `tool_calls.args` :
+    une ligne d'accès et une ligne d'appel se recoupent (« ce jeton a été rejoué »)
+    sans que l'une ou l'autre dise lequel."""
+    chemin, sep, requete = cible.partition("?")
+    segments = chemin.split("/")
+    secrets_a = _secret_indices(segments)
+    if not secrets_a:
+        return cible
+    for i in secrets_a:
+        if i < len(segments) and segments[i]:
+            segments[i] = mask(segments[i])
+    return "/".join(segments) + sep + requete
+
+
+class MasqueCheminAcces(logging.Filter):
+    """Filtre de `uvicorn.access` : le chemin de chaque ligne passe par
+    `chemin_pour_journal_acces`. Sans lui, `/api/receivers/apollo/phones/<jeton>`,
+    `/api/upload/<jeton>`, `/api/invitations/<jeton>`… s'écrivaient EN CLAIR dans
+    journald (le journal d'accès d'uvicorn ne connaît pas la table des routes) —
+    la même fuite que #558, sur le canal que #558 n'avait pas vu.
+
+    Une ligne qui n'a pas la forme d'uvicorn (`client, méthode, cible, version,
+    statut`) passe inchangée : un filtre de journal ne lève jamais."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str):
+            masque = chemin_pour_journal_acces(args[2])
+            if masque != args[2]:
+                record.args = args[:2] + (masque,) + args[3:]
+        return True
+
+
+# --------------------------------------------------------------------------- #
 # Les arguments d'outil : la même propriété, sur l'autre face
 # --------------------------------------------------------------------------- #
 

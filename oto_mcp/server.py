@@ -1012,6 +1012,10 @@ def main():
     from .auth import relay as oauth_relay
     oauth_relay.verifier_configuration()
     logging.getLogger("uvicorn.access").addFilter(oauth_relay.FiltreJournalAcces())
+    # Même règle pour les jetons portés DANS le chemin (`{token}`, `{code}` des routes
+    # servies) : leur masque, jamais leur valeur, dans le journal d'accès.
+    from . import journal_secrets
+    logging.getLogger("uvicorn.access").addFilter(journal_secrets.MasqueCheminAcces())
 
     # Droits déclarés (ADR 0070 §7, #1066) : l'instance déclare la valeur de chaque droit
     # du catalogue pour qui n'en a aucun posé. Une clé sans défaut déclaré refuse le
