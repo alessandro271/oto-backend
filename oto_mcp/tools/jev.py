@@ -571,7 +571,7 @@ def register(mcp: FastMCP) -> None:
                             continue
                         n["low_confidence"] += sum(1 for c in conf if c < jr.LOW_CONFIDENCE)
                         if dry_run:
-                            judged.append({"_id": rid, "state": st, "answers": answers})
+                            judged.append({"_id": rid, "state": st, "answers": jr.answers_slim(answers)})
                             fait[rid] = True
                             continue
                         code = _ecrire(rid, rev, patch)

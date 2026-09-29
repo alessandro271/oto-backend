@@ -145,3 +145,9 @@ def patch_of(answers: dict, output: dict, model_column: str, model: str) -> tupl
             conf.append(c)
     patch[model_column] = model
     return patch, conf
+
+
+def answers_slim(answers: dict) -> dict:
+    """Answers as returned to the agent: `legend` dropped (it repeats the criteria)."""
+    return {q: {k: v for k, v in (a or {}).items() if k != "legend"}
+            for q, a in (answers or {}).items()}
