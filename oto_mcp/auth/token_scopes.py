@@ -10,7 +10,7 @@ Un jeton **porté** (`user_api_tokens.scopes` non NULL) inverse la posture :
 **rien n'est permis sauf ce que la portée nomme**. Deux portées sont exprimables,
 ensemble ou séparément — le datastore et le projet :
 
-    {"namespaces": {"leads-accords-dormants": "read", "sorties": "write"},
+    {"namespaces": {"204": "read", "317": "write"},
      "projects": {"12": "read"}}
 
 `read` = lire le tableau ; `write` = lire **et** écrire ses LIGNES. Ni l'un ni
@@ -23,17 +23,20 @@ une denylist à tenir à jour.
 `projects` ouvre **la lecture d'un projet nommé** : son brief et ses liens, de quoi
 qu'une intégration parte du projet plutôt que d'un nom de tableau appris par cœur.
 `write` y est refusé — aucune route de projet en écriture n'est ouverte à un jeton
-porté, et accepter le mot donnerait une permission qui n'existe pas. Un projet se
-nomme par son **id**, lui stable, là où un tableau se nomme par son nom.
+porté, et accepter le mot donnerait une permission qui n'existe pas.
 
 Un jeton **sans** portée (`scopes` NULL) garde le comportement historique (pleins
 pouvoirs du sub) : aucune migration, aucun jeton existant cassé.
 
-⚠️ La portée nomme le tableau par son **nom** — ce que l'URL adresse — pas par son
-id. Renommer un tableau (ou en créer un qui reprend un nom libéré) déplace donc ce
-que le jeton atteint. Les deux actes sont hors de portée d'un jeton porté (ils
-demandent une session interactive du propriétaire), mais après un renommage :
-ré-émettre le jeton.
+**Tableau et projet se nomment par leur IDENTIFIANT** (oto#158, 29/09/2026). La
+portée nommait le tableau par son nom, comparé littéralement au chemin : un
+renommage — ou un tableau qui reprenait un nom libéré — déplaçait ce que le jeton
+atteignait. L'identifiant ne bouge pas. L'émission reçoit encore un nom et le range
+sous son identifiant (`capabilities/api_tokens`) ; une URL qui adresse le tableau par
+son nom se juge sur l'identifiant que ce nom résout (`api.base`), le temps du
+préavis (`deprecations.RETRAIT_NOM_DE_TABLEAU`). ⚠️ Une portée déjà émise qui nomme
+encore un tableau par son NOM n'ouvre rien et le DIT (`noms_de_tableau`) : elle se
+migre (`scripts/tableaux_par_numero.py`), elle ne se devine pas.
 """
 from __future__ import annotations
 
@@ -165,8 +168,11 @@ class ScopeError(ValueError):
 
 
 def _parse_namespaces(ns: object) -> dict[str, str]:
+    """Les clés sont encore des noms OU des identifiants : l'émission range un nom
+    sous son identifiant, et c'est elle qui sait lequel (`api_tokens`)."""
     if not isinstance(ns, dict) or not ns:
-        raise ScopeError("scopes.namespaces doit être un objet non vide {nom: read|write}")
+        raise ScopeError(
+            "scopes.namespaces doit être un objet non vide {identifiant: read|write}")
     out: dict[str, str] = {}
     for name, perm in ns.items():
         if not isinstance(name, str) or not name.strip():
@@ -233,7 +239,7 @@ def parse(raw: object) -> Optional[dict]:
 
 
 def namespaces(scopes: Optional[dict]) -> frozenset:
-    """Noms de tableaux nommés par la portée (vide si le jeton n'est pas porté)."""
+    """Identifiants des tableaux nommés par la portée (vide si le jeton n'est pas porté)."""
     if not scopes:
         return frozenset()
     return frozenset((scopes.get(NAMESPACES) or {}).keys())
@@ -246,11 +252,14 @@ def projects(scopes: Optional[dict]) -> frozenset:
     return frozenset((scopes.get(PROJECTS) or {}).keys())
 
 
-def authorize(scopes: Optional[dict], method: str, path: str) -> bool:
+def authorize(scopes: Optional[dict], method: str, path: str,
+              id_du_tableau: Optional[int] = None) -> bool:
     """La requête `(method, path)` est-elle dans la portée ? Fail-closed.
 
     `scopes` None ⇒ jeton non porté ⇒ True (le gate ne s'applique qu'aux jetons
-    portés ; les droits du sub restent seuls juges en aval).
+    portés ; les droits du sub restent seuls juges en aval). `id_du_tableau` : ce que
+    RÉSOUT le nom de tableau écrit dans le chemin (`tableau_du_chemin`), résolu par
+    l'appelant — un nom qui ne résout rien n'ouvre rien.
     """
     if scopes is None:
         return True
@@ -274,9 +283,31 @@ def authorize(scopes: Optional[dict], method: str, path: str) -> bool:
         m = pattern.match(path)
         if not m:
             continue
-        granted = ((scopes or {}).get(family) or {}).get(unquote(m.group("res")))
+        res = unquote(m.group("res"))
+        if family == NAMESPACES and not res.isdigit():
+            # Un NOM dans le chemin : c'est l'identifiant qu'il résout qui est jugé.
+            res = str(id_du_tableau) if id_du_tableau is not None else ""
+        granted = ((scopes or {}).get(family) or {}).get(res)
         return granted is not None and needed in _IMPLIES[granted]
     return False
+
+
+def tableau_du_chemin(method: str, path: str) -> Optional[str]:
+    """Le tableau qu'adresse une route ouverte aux jetons portés — tel qu'il est écrit
+    dans le chemin (identifiant ou nom), `None` si la route n'en adresse aucun."""
+    method = (method or "").upper()
+    path = (path or "").rstrip("/") or "/"
+    for pattern, methods, _needed, family in _ALLOWED:
+        if family == NAMESPACES and method in methods and (m := pattern.match(path)):
+            return unquote(m.group("res"))
+    return None
+
+
+def noms_de_tableau(scopes: Optional[dict]) -> list:
+    """Les tableaux qu'une portée déjà émise nomme encore par leur NOM — vide si elle
+    n'en nomme que par identifiant. Une telle portée n'ouvre plus ces tableaux."""
+    return sorted(k for k in ((scopes or {}).get(NAMESPACES) or {})
+                  if not str(k).isdigit())
 
 
 def motif_du_refus(scopes: Optional[dict], method: str, path: str) -> tuple[str, str]:
@@ -330,11 +361,9 @@ def filter_datastores(rows: list) -> list:
     grants = (scopes or {}).get(NAMESPACES) or {}
     out = []
     for r in rows:
-        # ⚠️ La ligne rend `datastore` depuis le renommage du 08/09/2026 ; la CLÉ DE
-        # SCOPE, elle, reste `namespaces` — elle vit dans les jetons déjà émis. Les
-        # deux mots cohabitent donc ici volontairement, et lire le mauvais rendait un
-        # catalogue VIDE pour tout jeton porté, sans lever la moindre erreur.
-        perm = grants.get((r or {}).get("datastore"))
+        # ⚠️ La CLÉ DE SCOPE reste `namespaces` — elle vit dans les jetons déjà émis —
+        # et elle porte l'IDENTIFIANT du tableau, pas son nom (oto#158).
+        perm = grants.get(str((r or {}).get("id")))
         if perm is None:
             continue
         e = dict(r)

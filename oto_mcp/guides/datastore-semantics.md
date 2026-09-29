@@ -13,12 +13,13 @@ faces divergent, et ce qu'une réponse ne dit pas.
 ## 0. Adresser un tableau : par son NUMÉRO
 
 Un tableau porte un **numéro** (`ns_id`, ex. `174`) et un **nom** (`edition-vivier`).
-Les deux résolvent, partout, avec le même contrôle de visibilité — `datastore: 174` et
-`datastore: "edition-vivier"` désignent le même tableau, sur les deux faces.
+Jusqu'au 08/11/2026, les deux résolvent, avec le même contrôle de visibilité —
+`datastore: 174` et `datastore: "edition-vivier"` désignent le même tableau.
 
-**Emploie le numéro.** Le nom est en cours de retrait : il marche encore aujourd'hui, et
-rien n'est cassé, mais il n'est unique que par propriétaire, il change au renommage, et
-c'est le numéro que la plateforme enregistre.
+**Emploie le numéro.** Un nom de tableau sera **REFUSÉ à partir du 08/11/2026** : il
+n'est unique que par propriétaire, il change au renommage, et c'est le numéro que la
+plateforme enregistre. D'ici là, chaque réponse obtenue par un nom le dit en tête, avec
+le numéro à passer.
 
 Où le trouver : `data_list_datastores` le donne sous **les deux noms** (`ns_id`, et `id`
 — le même nombre, gardé pour les liens du tableau de bord), la création et le renommage

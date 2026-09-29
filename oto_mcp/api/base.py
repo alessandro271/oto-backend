@@ -152,6 +152,16 @@ def _publier_principal(request: Request, sub: str, *,
     }
 
 
+def _id_du_tableau(sub: str, adresse: str):
+    """L'identifiant du tableau que `adresse` (un nom) désigne pour `sub` — `None` s'il
+    n'en désigne aucun, ou plusieurs : un nom qui ne résout pas n'ouvre rien."""
+    from ..datastore.core import DatastoreAmbigu, DatastoreNotFound, make_store
+    try:
+        return make_store(sub)._resolve(adresse)
+    except (DatastoreNotFound, DatastoreAmbigu):
+        return None
+
+
 async def _authenticate(
     request: Request,
     verifier: JWTVerifier,
@@ -223,7 +233,23 @@ async def _authenticate(
         # puis gate deny-by-default. Un jeton non porté (`scopes` NULL) est inchangé.
         scopes = row.get("scopes")
         token_scopes.set_current(scopes)
-        if not token_scopes.authorize(scopes, request.method, request.url.path):
+        # Une portée émise avant qu'elle ne nomme les tableaux par identifiant n'ouvre
+        # plus rien, et le DIT : la juger sur des noms rouvrirait ce qu'un renommage
+        # déplace (oto#158). Elle se migre, elle ne se devine pas.
+        if (anciens := token_scopes.noms_de_tableau(scopes)):
+            return None, _json_error(
+                request, 403, "token_scope_by_name",
+                f"La portée de ce jeton nomme des tableaux par leur NOM "
+                f"({', '.join(anciens)}) : une portée nomme un tableau par son "
+                "IDENTIFIANT, et celle-ci n'ouvre donc plus ces tableaux. Le jeton doit "
+                "être réémis avec les identifiants (`data_list_datastores`).")
+        # Un NOM de tableau dans le chemin est jugé sur l'identifiant qu'il résout,
+        # pour le porteur — le temps du préavis (`deprecations.RETRAIT_NOM_DE_TABLEAU`).
+        adresse = token_scopes.tableau_du_chemin(request.method, request.url.path)
+        id_du_tableau = (await run_in_threadpool(_id_du_tableau, row["sub"], adresse)
+                         if scopes and adresse and not adresse.isdigit() else None)
+        if not token_scopes.authorize(scopes, request.method, request.url.path,
+                                      id_du_tableau):
             granted = []
             if token_scopes.namespaces(scopes):
                 granted.append(f"les tableaux {sorted(token_scopes.namespaces(scopes))}")

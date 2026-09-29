@@ -98,13 +98,14 @@ Pour une intégration tierce, crée un jeton **porté** (`POST /api/me/tokens` a
 {
   "label": "front client",
   "scopes": {
-    "namespaces": { "leads-dormants": "read", "sorties": "write" },
+    "namespaces": { "204": "read", "317": "write" },
     "projects": { "12": "read" }
   }
 }
 ```
 
-`read` lit le tableau, `write` lit **et** écrit ses lignes. Ni l'un ni l'autre n'ouvre la
+Un tableau se nomme par son **identifiant** (`ns_id`) : un renommage ne déplace pas ce que
+le jeton atteint. `read` lit le tableau, `write` lit **et** écrit ses lignes. Ni l'un ni l'autre n'ouvre la
 gouvernance — créer, renommer, supprimer ou partager un tableau reste hors de portée, comme
 tout le reste de l'organisation. Hors portée, la réponse est `403 token_scope_forbidden`.
 

@@ -26,7 +26,7 @@ from fastmcp.tools.tool import ToolResult
 from mcp.types import TextContent
 from starlette.concurrency import run_in_threadpool
 
-from .. import rappel_contexte
+from .. import rappel_contexte, session_org
 from ..db._hors_boucle import HorsBoucle
 from .call_context import _cible
 
@@ -41,16 +41,23 @@ class RappelContexteMiddleware(Middleware):
 
     async def on_call_tool(self, context, call_next):
         releve: dict = {}
+        avis: list = []
         jeton = _RELEVE.set(releve)
+        jeton_avis = session_org.set_call_avis(avis)
         try:
             result = await call_next(context)
         finally:
+            session_org.reset_call_avis(jeton_avis)
             _RELEVE.reset(jeton)
-        texte = releve.get("ligne")
-        if not texte or getattr(result, "is_error", False):
+        # Les avis de l'appel (`session_org.noter_avis`) prennent la même place que le
+        # rappel, et pour la même raison : rien de ce qui réécrit le canal texte ne
+        # passe au-dessus.
+        lignes = [t for t in (releve.get("ligne"), *avis) if t]
+        if not lignes or getattr(result, "is_error", False):
             return result
         return ToolResult(
-            content=[TextContent(type="text", text=texte), *(result.content or [])],
+            content=[*(TextContent(type="text", text=t) for t in lignes),
+                     *(result.content or [])],
             structured_content=getattr(result, "structured_content", None),
             meta=getattr(result, "meta", None),
         )

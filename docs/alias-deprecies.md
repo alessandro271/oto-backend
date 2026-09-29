@@ -176,6 +176,22 @@ Les vitrines anonymes `/api/guide-library[/{slug}]` (marché) et `/api/guides/li
 qui n'y menaient plus que vers un 404 (otomata-tech/oto#84). La face authentifiée
 `/api/me/guide-library` reste.
 
+### Une adresse : le NOM d'un tableau (lot 0 du retrait, 29/09/2026)
+
+**Sa propre date : un nom de tableau est refusé à partir du 08/11/2026**
+(`deprecations.RETRAIT_NOM_DE_TABLEAU` = `RETRAIT_DATASTORE`, décision d'Alexis : un seul
+geste pour le nom et pour `namespace`). Ce n'est pas un renommage mais une forme
+d'adresse qui s'en va : le numéro (`ns_id`) reste. ⚠️ **L'écart est assumé** : le retrait
+est servi sans date depuis le 07/09/2026 (`ANNONCE_NOM_DE_TABLEAU`), la date ne l'est
+qu'à partir de ce lot — à moins de deux mois. `PREAVIS_MOIS` ne bouge pas.
+
+Forme de la coexistence : **servi, et dit**. Une réponse MCP obtenue par un nom
+(`data_*`, `oto_project op=link`, `oto_fleet op=create`) porte en tête l'avis qui donne le
+numéro et la date ; une route REST adressée par un nom répond `Deprecation: true` et
+`Sunset`. La portée d'un jeton range ses tableaux par numéro (oto#158) : une portée
+émise avant, encore par nom, est refusée en le disant (`token_scope_by_name`). Les
+données qui gardent un nom se migrent par `scripts/tableaux_par_numero.py`.
+
 ### Pourquoi les clés de capacité n'ont pas d'alias
 
 Une clé de capacité ne sort du serveur qu'à deux endroits : `/api/admin/capabilities`

@@ -114,7 +114,8 @@ def socle(monkeypatch):
 
     class _Store:
         def list_datastores(self):
-            return [{"datastore": "clients"}]
+            return [{"id": 12, "datastore": "clients"},
+                    {"id": 13, "datastore": "doublon"}, {"id": 14, "datastore": "doublon"}]
 
     monkeypatch.setattr(datastore, "make_store", lambda sub: _Store())
     return vus
@@ -142,18 +143,40 @@ def test_la_suppression_membre_rend_ok_seul_l_admin_rend_l_id(monkeypatch, socle
                 path_params={"sub": "u-9", "token_id": "7"})[1] == {"ok": True, "id": 7}
 
 
-def test_seul_le_palier_membre_refuse_un_tableau_invisible(monkeypatch, socle,
-                                                           super_admin):
-    """Au palier membre, un tableau que l'ÉMETTEUR ne voit pas est refusé : sinon le
-    jeton serait muet et on le croirait branché. Au palier admin, le catalogue visé
-    n'est pas celui de l'émetteur — la garde n'aurait aucun sens et n'existe pas."""
+@pytest.mark.parametrize("cle,pp", [("me.token.create", {}),
+                                    ("platform.token.create", {"sub": "u-9"})])
+def test_un_tableau_que_le_PORTEUR_ne_voit_pas_est_refuse(monkeypatch, socle,
+                                                          super_admin, cle, pp):
+    """Un tableau que le porteur ne voit pas est refusé : sinon le jeton serait muet
+    et on le croirait branché. Depuis oto#158 le palier admin aussi : la portée se
+    RANGE par identifiant, dans le catalogue du porteur — pas de l'émetteur — et un
+    nom qui n'y désigne rien n'a pas d'identifiant à ranger."""
     portee = {"namespaces": {"inconnu": "read"}}
-    code, out = call("me.token.create", body={"scopes": portee})
+    code, out = call(cle, path_params=pp, body={"scopes": portee})
     assert code == 400 and out["error"] == "unknown_namespace"
     assert "inconnu" in out["detail"]
-    # Le même corps passe au palier admin.
-    assert call("platform.token.create", path_params={"sub": "u-9"},
-                body={"scopes": portee})[0] == 200
+
+
+def test_un_nom_est_RANGE_sous_son_identifiant_et_la_reponse_le_rend(monkeypatch, socle):
+    """oto#158 : la portée nomme un tableau par son identifiant — un renommage ne
+    déplace plus ce que le jeton atteint. L'émission accepte encore un nom le temps du
+    préavis, et rend la portée RANGÉE : c'est ce que l'appelant doit envoyer ensuite."""
+    stub_authz(monkeypatch)
+    code, out = call("me.token.create",
+                     body={"scopes": {"namespaces": {"clients": "read"}}})
+    assert code == 201, out
+    assert out["scopes"] == {"namespaces": {"12": "read"}}
+    assert socle[-1][4] == out["scopes"], "la portée rangée est celle qui est stockée"
+    code, out = call("me.token.create", body={"scopes": {"namespaces": {"12": "read"}}})
+    assert code == 201 and out["scopes"] == {"namespaces": {"12": "read"}}
+
+
+def test_un_nom_que_portent_DEUX_tableaux_est_refuse_jamais_tranche(monkeypatch, socle):
+    stub_authz(monkeypatch)
+    code, out = call("me.token.create",
+                     body={"scopes": {"namespaces": {"doublon": "read"}}})
+    assert code == 400 and out["error"] == "ambiguous_namespace"
+    assert socle == []
 
 
 @pytest.mark.parametrize("portee", [{"projects": {"12": "read"}}, {"runner": True}])

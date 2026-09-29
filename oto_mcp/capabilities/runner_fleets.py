@@ -63,7 +63,8 @@ from pydantic import BaseModel, Field
 from . import (_abonnement, _cle_exigee, _descriptions_outils, _instruction,
                _limites_du_run, _lignes_de_campagne, _lignes_reservables, _modele,
                _ordonnanceur_de_campagne, _outils_manquants)
-from .. import db, output_projection, runner_models, tool_alias
+from .. import (db, deprecations, output_projection, runner_models, session_org,
+               tool_alias)
 
 logger = logging.getLogger(__name__)
 from ._authz import ORG_MEMBER
@@ -395,7 +396,9 @@ def _cible_a_la_declaration(ctx: ResolvedCtx, adresse: Optional[str]) -> Optiona
         raise AuthzDenied(
             404, "datastore_not_found",
             f"aucun tableau « {adresse} » dans ta portée : une automatisation vise un "
-            "tableau qui existe, désigné par son nom ou son identifiant.")
+            "tableau qui existe, désigné par son identifiant.")
+    if deprecations.adresse_par_nom(adresse, cle):
+        session_org.noter_avis(deprecations.avis_nom_de_tableau(adresse, cle))
     return str(cle)
 
 

@@ -19,39 +19,39 @@ import pytest
 
 from oto_mcp.auth import token_scopes as ts
 
-_SCHEMA = "/api/datastores/t/schema"
+_SCHEMA = "/api/datastores/7/schema"
 
 
 # ── le schéma, dans les deux sens ────────────────────────────────────────────
 
 def test_une_portee_en_LECTURE_lit_le_schema():
-    assert ts.authorize(ts.parse({"namespaces": {"t": "read"}}), "GET", _SCHEMA) is True
+    assert ts.authorize(ts.parse({"namespaces": {"7": "read"}}), "GET", _SCHEMA) is True
 
 
 def test_une_portee_en_LECTURE_ne_l_ecrit_pas():
-    p = ts.parse({"namespaces": {"t": "read"}})
+    p = ts.parse({"namespaces": {"7": "read"}})
     assert ts.authorize(p, "PUT", _SCHEMA) is False
     assert ts.authorize(p, "PATCH", _SCHEMA) is False
 
 
 def test_une_portee_en_ECRITURE_fait_les_deux():
-    p = ts.parse({"namespaces": {"t": "write"}})
+    p = ts.parse({"namespaces": {"7": "write"}})
     assert all(ts.authorize(p, m, _SCHEMA) for m in ("GET", "PUT", "PATCH"))
 
 
 def test_le_schema_d_un_AUTRE_tableau_reste_ferme():
-    p = ts.parse({"namespaces": {"t": "write"}})
+    p = ts.parse({"namespaces": {"7": "write"}})
     assert ts.authorize(p, "GET", "/api/datastores/autre/schema") is False
 
 
 def test_la_gouvernance_reste_hors_de_portee():
     """L'ajout ne devait pas déborder : supprimer, renommer et partager un
     tableau restent fermés à tout jeton porté."""
-    p = ts.parse({"namespaces": {"t": "write"}})
-    for m, r in [("DELETE", "/api/datastores/t"),
-                 ("PATCH", "/api/datastores/t"),
-                 ("POST", "/api/datastores/t/share"),
-                 ("DELETE", "/api/datastores/t/share")]:
+    p = ts.parse({"namespaces": {"7": "write"}})
+    for m, r in [("DELETE", "/api/datastores/7"),
+                 ("PATCH", "/api/datastores/7"),
+                 ("POST", "/api/datastores/7/share"),
+                 ("DELETE", "/api/datastores/7/share")]:
         assert ts.authorize(p, m, r) is False, f"{m} {r} s'est ouvert par ricochet"
 
 
@@ -60,9 +60,9 @@ def test_la_gouvernance_reste_hors_de_portee():
 def test_le_refus_distingue_un_GESTE_ferme_d_une_RESSOURCE_hors_portee():
     """Refuser un tableau EN LE NOMMANT comme autorisé fait conclure au lecteur
     que son jeton est cassé. C'est le pire des deux états."""
-    p = ts.parse({"namespaces": {"t": "read"}})
-    assert ts.motif_du_refus(p, "PUT", _SCHEMA) == ("ressource", "t")
-    assert ts.motif_du_refus(p, "DELETE", "/api/datastores/t") == ("geste", "")
+    p = ts.parse({"namespaces": {"7": "read"}})
+    assert ts.motif_du_refus(p, "PUT", _SCHEMA) == ("ressource", "7")
+    assert ts.motif_du_refus(p, "DELETE", "/api/datastores/7") == ("geste", "")
     assert ts.motif_du_refus(p, "GET", "/api/me") == ("geste", "")
 
 

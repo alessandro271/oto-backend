@@ -338,6 +338,48 @@ def valeur_canonique(champ: str, valeur: Any) -> tuple:
         f"comme `{nouvelle}` ; envoie désormais `{nouvelle}`.")
 
 
+# ── Adresser un tableau par son NOM (lot 0 du retrait, 29/09/2026) ──────────
+#
+# Un tableau s'adresse par son IDENTIFIANT. Le nom résout encore — toutes les faces
+# `data_*`, les routes `/api/datastores/{datastore}/…`, `oto_project op=link`,
+# `oto_fleet op=create` — et chaque réponse obtenue par un nom le DIT, avec
+# l'identifiant à passer et le jour où le nom sera refusé. Rien n'est accepté en
+# silence : c'est un préavis servi, pas une tolérance.
+#
+# ⚠️ **L'annonce et la date ne sont pas le même jour, et c'est l'écart assumé.**
+# Le retrait du nom est servi en production depuis le 07/09/2026 (`v1.233.0` : « a
+# name still resolves… it is being retired »), mais SANS date. La date n'est servie
+# qu'à partir de ce lot. Alexis l'a alignée le 29/09/2026 sur le retrait de
+# `namespace` (`RETRAIT_DATASTORE`, un seul geste pour les deux), en sachant qu'elle
+# tombe à moins de deux mois du jour où elle devient lisible — écart à l'Art 8.2
+# décidé par le propriétaire du produit, pas une durée de préavis revue à la baisse :
+# `PREAVIS_MOIS` ne bouge pas, et le plancher compté depuis l'annonce tient
+# (`tests/test_tableau_par_numero.py`).
+ANNONCE_NOM_DE_TABLEAU = datetime.date(2026, 9, 7)
+RETRAIT_NOM_DE_TABLEAU = RETRAIT_DATASTORE
+
+
+def date_retrait_nom_de_tableau() -> str:
+    """Le jour où un nom de tableau sera refusé, tel qu'il est SERVI (JJ/MM/AAAA)."""
+    return RETRAIT_NOM_DE_TABLEAU.strftime("%d/%m/%Y")
+
+
+def adresse_par_nom(adresse: Any, ns_id: Any) -> bool:
+    """L'adresse reçue a-t-elle résolu le tableau `ns_id` PAR SON NOM ?
+
+    Juge le résultat, pas la forme : des chiffres qui NOMMENT un tableau (« 2024 »)
+    sont un nom, et `slot:` n'arrive jamais jusqu'ici — il rend déjà l'identifiant."""
+    return str(adresse or "").strip() != str(ns_id)
+
+
+def avis_nom_de_tableau(nom: str, ns_id: int) -> str:
+    """L'avis servi à chaque réponse obtenue par un nom : l'identifiant et la date."""
+    return (f"⚠️ Le tableau « {nom} » a été adressé par son NOM : passe "
+            f"`datastore={ns_id}`. Un nom de tableau sera REFUSÉ à partir du "
+            f"{date_retrait_nom_de_tableau()} ; l'identifiant, lui, ne change jamais, "
+            f"même si le tableau est renommé.")
+
+
 # ── Clés de capacité (lot B2) ───────────────────────────────────────────────
 # ancienne clé → clé d'aujourd'hui. ⚠️ **Renommées SANS alias**, et c'est un choix :
 # une clé de capacité ne sort du serveur qu'à deux endroits — `/api/admin/capabilities`

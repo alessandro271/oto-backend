@@ -305,24 +305,51 @@ def _my_list(ctx: ResolvedCtx, inp: TokenListInput) -> dict:
     return {"tokens": db.list_api_tokens(ctx.sub, include_revoked=inp.include_revoked)}
 
 
+def _par_identifiant(sub: str, scopes: Optional[dict]) -> Optional[dict]:
+    """La portée telle qu'elle est RANGÉE : chaque tableau sous son IDENTIFIANT
+    (oto#158), résolu dans ce que `sub` — le porteur du jeton — voit dans son org
+    active. Un nom est accepté à l'émission le temps du préavis
+    (`deprecations.RETRAIT_NOM_DE_TABLEAU`) ; la réponse rend la portée rangée, donc
+    l'identifiant, et c'est lui qu'un appelant doit envoyer désormais.
+
+    ⚠️ La portée ne nomme pas forcément un tableau : `parse` rend légitimement
+    `{"projects": …}` ou `{"runner": true}` seuls. Refuser un tableau que le porteur ne
+    voit pas : le jeton ne peut de toute façon pas dépasser ses droits, mais une faute
+    de frappe produirait un jeton muet qu'on croirait branché. Un nom que portent
+    plusieurs tableaux visibles est refusé, jamais tranché."""
+    vises = (scopes or {}).get("namespaces") or {}
+    if not vises:
+        return scopes
+    from ..datastore.core import make_store
+    visibles = make_store(sub).list_datastores()
+    ids = {str(n["id"]) for n in visibles}
+    par_nom: dict = {}
+    for n in visibles:
+        par_nom.setdefault(n["datastore"], set()).add(str(n["id"]))
+    ranges: dict = {}
+    inconnus, ambigus = [], []
+    for cle, droit in vises.items():
+        if cle.isdigit() and cle in ids:
+            ranges[cle] = droit
+        elif len(par_nom.get(cle, ())) == 1:
+            ranges[next(iter(par_nom[cle]))] = droit
+        elif par_nom.get(cle):
+            ambigus.append(cle)
+        else:
+            inconnus.append(cle)
+    if ambigus:
+        raise AuthzDenied(400, "ambiguous_namespace",
+                          f"Plusieurs tableaux visibles portent ces noms : {sorted(ambigus)}"
+                          " — nomme-les par leur identifiant (`data_list_datastores`).")
+    if inconnus:
+        raise AuthzDenied(400, "unknown_namespace",
+                          f"Tableaux inconnus dans l'org active : {sorted(inconnus)}")
+    return {**scopes, "namespaces": ranges}
+
+
 def _my_create(ctx: ResolvedCtx, inp: TokenCreateInput) -> dict:
     label = _libelle(inp.label)
-    scopes = _portee(inp.scopes)
-    # ⚠️ La portée ne nomme pas forcément un tableau : `parse` rend légitimement
-    # `{"projects": …}` ou `{"runner": true}` seuls. L'indexer sans garde faisait un 500
-    # d'une émission valide — le contrôle ci-dessous ne concerne QUE les tableaux.
-    vises = (scopes or {}).get("namespaces") or {}
-    if vises:
-        # Refuser un tableau que l'ÉMETTEUR ne voit pas : le jeton ne peut de toute façon
-        # pas dépasser les droits du sub, mais une faute de frappe produirait un jeton
-        # muet qu'on croirait branché. Ce garde-fou n'existe qu'ici — au palier admin, le
-        # catalogue visé n'est pas celui de l'émetteur.
-        from ..datastore.core import make_store
-        visible = {n["datastore"] for n in make_store(ctx.sub).list_datastores()}
-        missing = sorted(vises.keys() - visible)
-        if missing:
-            raise AuthzDenied(400, "unknown_namespace",
-                              f"Tableaux inconnus dans l'org active : {missing}")
+    scopes = _par_identifiant(ctx.sub, _portee(inp.scopes))
     ttl_days = _jours(inp.ttl_days)
     token = db.create_api_token(ctx.sub, label=label, ttl_days=ttl_days, scopes=scopes)
     return {"token": token, "label": label, "scopes": scopes, "ttl_days": ttl_days}
@@ -346,7 +373,9 @@ def _admin_create(ctx: ResolvedCtx, inp: AdminTokenCreateInput) -> dict:
     cible = _cible_connue(inp.target_sub)
     label = _libelle(inp.label)
     ttl_days = _jours(inp.ttl_days)
-    scopes = _portee(inp.scopes)
+    # Rangée dans ce que voit le PORTEUR du jeton, pas l'émetteur : c'est pour lui
+    # que l'identifiant doit désigner le tableau.
+    scopes = _par_identifiant(cible, _portee(inp.scopes))
     token = db.create_api_token(cible, label=label, ttl_days=ttl_days,
                                 scopes=scopes)
     return {"token": token, "label": label, "ttl_days": ttl_days, "scopes": scopes}
@@ -408,10 +437,11 @@ _D_LIST = ("Mes jetons API, sans leur secret — il n'est rendu qu'à la créati
            "compte). Les jetons révoqués n'y sont qu'avec `include_revoked`. Réservé à "
            "une session interactive : un jeton ne peut pas lister les jetons.")
 _D_CREATE = ("Émet un jeton API. ⚠️ Le secret n'est rendu QU'UNE FOIS. `scopes` le BORNE "
-             "à des tableaux ou projets nommés — la forme à confier à une intégration "
-             "tierce ; absent, le jeton a tous mes droits. Un tableau que je ne vois pas "
-             "est refusé (`unknown_namespace`) : sinon le jeton serait muet et on le "
-             "croirait branché. Réservé à une session interactive.")
+             "à des tableaux (par IDENTIFIANT) ou projets nommés — la forme à confier à "
+             "une intégration tierce ; absent, le jeton a tous mes droits. Un nom de "
+             "tableau est rangé sous son identifiant, que la réponse rend. Un tableau que "
+             "je ne vois pas est refusé (`unknown_namespace`) : sinon le jeton serait "
+             "muet et on le croirait branché. Réservé à une session interactive.")
 _D_DELETE = ("Révoque un de mes jetons : il cesse de fonctionner, et la révocation est "
              "GARDÉE (qui, quand, `reason` facultatif) — la liste la montre avec "
              "`include_revoked`. Un jeton déjà révoqué rend 404 `unknown_token`. Réservé "

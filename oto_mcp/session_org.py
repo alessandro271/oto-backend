@@ -288,6 +288,32 @@ def note_call_trace(**values) -> None:
     holder.update({k: v for k, v in values.items() if v is not None})
 
 
+# ── Avis de l'appel (ce que la RÉPONSE doit dire en tête) ────────────────────
+# Un seam de résolution qui constate un usage à corriger (un tableau adressé par son
+# nom) le dit à l'agent dans la réponse même, quelle que soit sa forme : l'avis est
+# posé en tête du canal texte par `middleware.rappel_contexte`, au-dessus de tout ce
+# qui réécrit ce canal. Même holder MUTABLE que le relevé ci-dessus, pour la même
+# raison (threadpool). No-op hors appel MCP : la face REST dit la même chose par ses
+# en-têtes (`capabilities/_rest_adapter`).
+_CALL_AVIS: contextvars.ContextVar[Optional[list]] = contextvars.ContextVar(
+    "oto_call_avis", default=None)
+
+
+def set_call_avis(holder: list) -> contextvars.Token:
+    return _CALL_AVIS.set(holder)
+
+
+def reset_call_avis(token: contextvars.Token) -> None:
+    _CALL_AVIS.reset(token)
+
+
+def noter_avis(texte: str) -> None:
+    """Ajoute un avis à la réponse de l'appel courant — une fois par texte."""
+    holder = _CALL_AVIS.get()
+    if holder is not None and texte and texte not in holder:
+        holder.append(texte)
+
+
 # ── View-as USER (« voir en tant que », face REST, LECTURE SEULE) ────────────
 # Extension de la consultation à l'axe USER : un opérateur plateforme « voit en
 # tant que » un autre user dans le dashboard. Contextvar per-requête posé par

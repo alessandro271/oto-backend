@@ -376,7 +376,10 @@ def test_l_appartenance_jugee_par_l_en_tete_est_celle_de_roles(client, monde, mo
 def test_un_jeton_porte_qui_ECRIT_un_tableau_suit_tout_le_parcours(client, monde):
     from oto_mcp import db
     ns, ns_id = _table(monde["a"])
-    jeton = db.create_api_token(ALICE, label="scout", scopes={"namespaces": {ns: "write"}})
+    # La portée nomme le tableau par son IDENTIFIANT (oto#158) ; le parcours l'adresse
+    # encore par son nom, jugé sur l'identifiant que ce nom résout.
+    jeton = db.create_api_token(ALICE, label="scout",
+                                scopes={"namespaces": {str(ns_id): "write"}})
 
     run = _ouvrir(client, jeton)
     row = _reserver(client, ns, run, "scout-session-1", bearer=jeton)
@@ -391,8 +394,9 @@ def test_un_jeton_porte_qui_ECRIT_un_tableau_suit_tout_le_parcours(client, monde
 
 def test_un_jeton_porte_en_LECTURE_n_ouvre_pas_de_run(client, monde):
     from oto_mcp import db
-    ns, _ = _table(monde["a"])
-    jeton = db.create_api_token(ALICE, label="lecture", scopes={"namespaces": {ns: "read"}})
+    _, ns_id = _table(monde["a"])
+    jeton = db.create_api_token(ALICE, label="lecture",
+                                scopes={"namespaces": {str(ns_id): "read"}})
 
     r = client.post("/api/me/runs", headers=_h(jeton), json={"label": "appel scout"})
 

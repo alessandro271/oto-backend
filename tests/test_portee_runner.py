@@ -83,9 +83,9 @@ def test_runner_seul_suffit_a_faire_une_portee():
 def test_il_se_combine_avec_des_tableaux(_porte):
     """Un ordonnanceur compte des lignes : il porte `runner` ET ses tableaux.
     L'un n'annule pas l'autre."""
-    p = ts.parse({"runner": True, "namespaces": {"edition-vivier": "read"}})
+    p = ts.parse({"runner": True, "namespaces": {"204": "read"}})
     assert ts.authorize(p, "POST", "/api/me/runner/jobs") is True
-    assert ts.authorize(p, "GET", "/api/datastores/edition-vivier/rows") is True
+    assert ts.authorize(p, "GET", "/api/datastores/204/rows") is True
     assert ts.authorize(p, "GET", "/api/datastores/autre/rows") is False
     assert ts.authorize(p, "GET", "/api/admin/users") is False
 

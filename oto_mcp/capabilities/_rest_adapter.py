@@ -30,7 +30,7 @@ from starlette.routing import Route
 
 logger = logging.getLogger(__name__)
 
-from .. import client_trace, geste
+from .. import client_trace, deprecations, geste
 from ..json_body import InvalidJsonBody, read_json_body
 from ._authz import accepts_service, refus_hors_vue
 from ._types import AuthzDenied, Capability, NotModified, RawCtx
@@ -285,7 +285,14 @@ def _make_handler(cap: Capability, binding, verifier, authenticate, json_respons
             # garde ce qu'il a en cache. Un 200 portant « rien n'a changé » ferait
             # ranger CE message à la place des données.
             return Response(status_code=304, headers=_cors_of(request, json_response))
-        return json_response(request, result, status=binding.status)
+        reponse = json_response(request, result, status=binding.status)
+        # Un tableau adressé par son NOM dans le chemin : servi, et daté. La face MCP
+        # dit la même chose dans la réponse (`session_org.noter_avis`).
+        adresse = str(request.path_params.get("datastore") or "")
+        if adresse and not adresse.isdigit():
+            reponse.headers["Deprecation"] = "true"
+            reponse.headers["Sunset"] = deprecations.date_retrait_nom_de_tableau()
+        return reponse
     return _handler
 
 

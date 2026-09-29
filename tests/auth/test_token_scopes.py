@@ -10,31 +10,31 @@ import pytest
 
 from oto_mcp.auth import token_scopes as ts
 
-READ_ONLY = {"namespaces": {"leads-accords-dormants": "read"}}
-WRITABLE = {"namespaces": {"leads-accords-dormants": "write"}}
+READ_ONLY = {"namespaces": {"204": "read"}}
+WRITABLE = {"namespaces": {"204": "write"}}
 
 
 # ── Critère 1 du brief : un jeton porté lit SON tableau, pas les voisins ──────
 
 def test_scoped_token_reads_its_own_table():
     assert ts.authorize(READ_ONLY, "GET",
-                        "/api/datastores/leads-accords-dormants/rows")
+                        "/api/datastores/204/rows")
     assert ts.authorize(READ_ONLY, "GET",
-                        "/api/datastores/leads-accords-dormants/rows/42")
+                        "/api/datastores/204/rows/42")
 
 
 def test_scoped_token_is_forbidden_on_sibling_table_of_same_org():
     """Le cœur de la demande : quatre tableaux dans l'org, le jeton n'en ouvre qu'un."""
-    for path in ("/api/datastores/autre-tableau/rows",
-                 "/api/datastores/autre-tableau/rows/1",
-                 "/api/datastores/autre-tableau/queue"):
+    for path in ("/api/datastores/317/rows",
+                 "/api/datastores/317/rows/1",
+                 "/api/datastores/317/queue"):
         assert not ts.authorize(READ_ONLY, "GET", path), path
 
 
 # ── Critère 2 : lecture seule ⇒ les écritures sont refusées ───────────────────
 
 def test_read_only_token_cannot_write():
-    ns = "/api/datastores/leads-accords-dormants"
+    ns = "/api/datastores/204"
     assert not ts.authorize(READ_ONLY, "PATCH", f"{ns}/rows/42")
     assert not ts.authorize(READ_ONLY, "POST", f"{ns}/rows")
     assert not ts.authorize(READ_ONLY, "DELETE", f"{ns}/rows/42")
@@ -42,7 +42,7 @@ def test_read_only_token_cannot_write():
 
 
 def test_write_token_writes_and_reads():
-    ns = "/api/datastores/leads-accords-dormants"
+    ns = "/api/datastores/204"
     assert ts.authorize(WRITABLE, "PATCH", f"{ns}/rows/42")
     assert ts.authorize(WRITABLE, "POST", f"{ns}/rows")
     assert ts.authorize(WRITABLE, "GET", f"{ns}/rows")      # write ⊃ read
@@ -58,9 +58,9 @@ def test_write_token_writes_and_reads():
     ("POST", "/api/me/projects"),
     ("GET", "/api/me/instructions"),
     ("POST", "/api/datastores"),                       # créer un tableau
-    ("DELETE", "/api/datastores/leads-accords-dormants"),
-    ("PATCH", "/api/datastores/leads-accords-dormants"),   # renommer
-    ("POST", "/api/datastores/leads-accords-dormants/share"),
+    ("DELETE", "/api/datastores/204"),
+    ("PATCH", "/api/datastores/204"),   # renommer
+    ("POST", "/api/datastores/204/share"),
 ])
 def test_everything_else_is_denied(method, path):
     assert not ts.authorize(WRITABLE, method, path)
@@ -69,7 +69,7 @@ def test_everything_else_is_denied(method, path):
 # ── File de travail : réserver est une écriture (signal #362) ────────────────
 
 def test_write_token_can_claim():
-    ns = "/api/datastores/leads-accords-dormants"
+    ns = "/api/datastores/204"
     assert ts.authorize(WRITABLE, "POST", f"{ns}/claim_next")
     assert ts.authorize(WRITABLE, "POST", f"{ns}/rows/42/claim")
     assert ts.authorize(WRITABLE, "POST", f"{ns}/rows/42/release")
@@ -77,7 +77,7 @@ def test_write_token_can_claim():
 
 def test_read_only_token_cannot_claim():
     """Lire la file ne donne pas le droit d'en retirer une ligne aux autres."""
-    ns = "/api/datastores/leads-accords-dormants"
+    ns = "/api/datastores/204"
     assert ts.authorize(READ_ONLY, "GET", f"{ns}/queue")      # la file se lit…
     assert not ts.authorize(READ_ONLY, "POST", f"{ns}/claim_next")
     assert not ts.authorize(READ_ONLY, "POST", f"{ns}/rows/42/claim")
@@ -85,8 +85,8 @@ def test_read_only_token_cannot_claim():
 
 
 def test_claim_stays_within_the_scoped_table():
-    for path in ("/api/datastores/autre-tableau/claim_next",
-                 "/api/datastores/autre-tableau/rows/42/claim"):
+    for path in ("/api/datastores/317/claim_next",
+                 "/api/datastores/317/rows/42/claim"):
         assert not ts.authorize(WRITABLE, "POST", path), path
 
 
@@ -102,13 +102,32 @@ def test_unscoped_token_is_unchanged():
 
 
 def test_datastore_with_url_encoded_name():
-    scopes = {"namespaces": {"mon tableau": "read"}}
-    assert ts.authorize(scopes, "GET", "/api/datastores/mon%20tableau/rows")
+    """Un NOM dans le chemin est jugé sur l'identifiant qu'il résout (oto#158) — que
+    l'appelant fournit, décodé du chemin (`tableau_du_chemin`)."""
+    scopes = {"namespaces": {"204": "read"}}
+    assert ts.tableau_du_chemin("GET", "/api/datastores/mon%20tableau/rows") == "mon tableau"
+    assert ts.authorize(scopes, "GET", "/api/datastores/mon%20tableau/rows",
+                        id_du_tableau=204)
+
+
+def test_un_nom_qui_ne_resout_rien_n_ouvre_rien():
+    assert not ts.authorize(READ_ONLY, "GET", "/api/datastores/leads-accords-dormants/rows")
+    assert not ts.authorize(READ_ONLY, "GET", "/api/datastores/autre/rows",
+                            id_du_tableau=317)
+
+
+def test_une_portee_par_nom_se_voit():
+    """Une portée émise avant oto#158 nomme encore ses tableaux : elle n'ouvre plus
+    rien, et `noms_de_tableau` les liste pour que le refus les nomme."""
+    ancienne = {"namespaces": {"leads-accords-dormants": "read", "204": "write"}}
+    assert ts.noms_de_tableau(ancienne) == ["leads-accords-dormants"]
+    assert ts.noms_de_tableau(READ_ONLY) == []
+    assert ts.noms_de_tableau(None) == []
 
 
 def test_trailing_slash_does_not_bypass():
     assert ts.authorize(READ_ONLY, "GET",
-                        "/api/datastores/leads-accords-dormants/rows/")
+                        "/api/datastores/204/rows/")
     assert not ts.authorize(READ_ONLY, "POST",
                             "/api/datastores/autre/rows/")
 
@@ -117,7 +136,7 @@ def test_path_traversal_in_datastore_is_not_a_match():
     """Le segment de datastore ne franchit pas le `/` — pas d'évasion par chemin."""
     assert not ts.authorize(
         READ_ONLY, "GET",
-        "/api/datastores/leads-accords-dormants/rows/../../autre/rows")
+        "/api/datastores/204/rows/../../autre/rows")
 
 
 # ── Validation du document de portée (saisie de l'émetteur) ───────────────────
@@ -146,9 +165,9 @@ def test_parse_rejects_malformed(raw):
 
 def test_filter_datastores_keeps_only_scoped_and_downgrades_rights():
     rows = [
-        {"datastore": "leads-accords-dormants", "permission": "write",
+        {"id": 204, "datastore": "leads-accords-dormants", "permission": "write",
          "can_write": True, "can_govern": True, "schema": {"fields": []}},
-        {"datastore": "autre-tableau", "permission": "write", "can_write": True},
+        {"id": 317, "datastore": "autre-tableau", "permission": "write", "can_write": True},
     ]
     ts.set_current(READ_ONLY)
     try:
@@ -171,7 +190,7 @@ def test_filter_datastores_is_noop_without_scope():
 # ── Portée « projet » : brancher une intégration sur un projet, et lui seul ───
 
 PROJECT_ONLY = {"projects": {"12": "read"}}
-BOTH = {"namespaces": {"leads-accords-dormants": "read"}, "projects": {"12": "read"}}
+BOTH = {"namespaces": {"204": "read"}, "projects": {"12": "read"}}
 
 
 def test_project_scoped_token_reads_its_project():
@@ -192,7 +211,7 @@ def test_project_scope_does_not_open_the_post_form():
 
 def test_project_scope_does_not_open_the_datastore():
     assert not ts.authorize(
-        PROJECT_ONLY, "GET", "/api/datastores/leads-accords-dormants/rows")
+        PROJECT_ONLY, "GET", "/api/datastores/204/rows")
 
 
 def test_table_scope_does_not_open_the_project():
@@ -202,7 +221,7 @@ def test_table_scope_does_not_open_the_project():
 def test_both_scopes_coexist():
     assert ts.authorize(BOTH, "GET", "/api/me/projects/12")
     assert ts.authorize(BOTH, "GET",
-                        "/api/datastores/leads-accords-dormants/rows")
+                        "/api/datastores/204/rows")
 
 
 def test_project_scope_leaves_the_rest_of_the_platform_shut():

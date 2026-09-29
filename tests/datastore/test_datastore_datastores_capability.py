@@ -94,9 +94,10 @@ def test_la_liste_rend_lenveloppe_datastores(store, monkeypatch):
 def test_la_liste_reste_filtree_par_la_portee_du_jeton(store, monkeypatch):
     """Seule réponse filtrée plutôt que refusée à un jeton porté : sans catalogue,
     une intégration n'a pas le schéma de son tableau."""
-    store.v["list_datastores"] = [{"datastore": "vivier"}, {"datastore": "prive"}]
+    store.v["list_datastores"] = [{"id": 1, "datastore": "vivier"},
+                                  {"id": 2, "datastore": "prive"}]
     monkeypatch.setattr(dsn.token_scopes, "current",
-                        lambda: {"namespaces": {"vivier": "read"}})
+                        lambda: {"namespaces": {"1": "read"}})
     code, corps = _call("me.datastore.list_datastores")
     assert code == 200
     assert [r["datastore"] for r in corps["datastores"]] == ["vivier"]
