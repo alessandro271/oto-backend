@@ -9,6 +9,10 @@ annonçait `confirmed`.
 
 La facturation est en production : ces tests exercent la logique réelle avec le PSP
 et la base stubbés, jamais le seam qu'ils vérifient.
+
+Depuis la coupure du cœur (#1097), un encaissement constaté est gravé sur le BON
+paiement, puis refusé (`billing_moved`) sans ouvrir d'abonnement : ce que ces bancs
+tiennent encore, c'est que le paiement nommé soit celui qu'on grave et qu'on nomme.
 """
 from __future__ import annotations
 
@@ -17,14 +21,6 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from oto_mcp import billing
-
-
-@pytest.fixture(autouse=True)
-def _droits_declares_hors_banc(monkeypatch):
-    """La réconciliation des droits déclarés lit la base : son banc est
-    `test_billing_droits_live`. Ici, elle est neutralisée."""
-    from oto_mcp import billing as _billing
-    monkeypatch.setattr(_billing, "reconcilier_droits", lambda org_id: None)
 
 
 TERMINAL = ("failed", "canceled", "expired", "paid_confirmed")
@@ -58,6 +54,12 @@ class _Db:
 
 
 @pytest.fixture(autouse=True)
+def _trace_sans_base(monkeypatch):
+    from oto_mcp import billing_invoices
+    monkeypatch.setattr(billing_invoices, "tracer_encaissement", lambda rid: None)
+
+
+@pytest.fixture(autouse=True)
 def _production(monkeypatch):
     """Ces épreuves jouent la PRODUCTION, où un paiement `live` ouvre un droit ; hors
     d'elle aucun n'en ouvre (`billing_mode`, 10/09/2026)."""
@@ -84,9 +86,6 @@ def deux_checkouts(monkeypatch):
         return {"id": ref, "mode": "live", "status": "open"}
 
     monkeypatch.setattr(billing.mollie_client, "get_payment", get_payment)
-    monkeypatch.setattr(billing.mollie_client, "valid_mandate",
-                        lambda cid: {"id": "mdt_1", "mandateReference": "RUM1"})
-    monkeypatch.setattr(billing, "apply_plan_entitlements", lambda *a, **k: None)
     return db
 
 
@@ -99,20 +98,21 @@ def test_sans_reference_on_confirme_le_mauvais(deux_checkouts):
     assert deux_checkouts.upserted == [], "aucun abonnement ne doit être posé"
 
 
-def test_avec_la_reference_du_paiement_encaisse_l_abonnement_s_ouvre(deux_checkouts):
-    """Le cœur du correctif : le webhook sait lequel a été payé, il le dit."""
-    out = billing.confirm(7, payment_ref="tr_ANCIEN")
-    assert out["status"] == "active"
-    assert out["plan"] == "standard"
-    assert len(deux_checkouts.upserted) == 1
-    org_id, kw = deux_checkouts.upserted[0]
-    assert org_id == 7 and kw["status"] == "active" and kw["plan"] == "standard"
+def test_avec_la_reference_le_bon_paiement_est_grave_puis_refuse(deux_checkouts):
+    """Le webhook sait lequel a été payé, il le dit : c'est CELUI-LÀ qui est gravé
+    `paid` et nommé dans le refus — et aucun abonnement ne s'ouvre (#1097)."""
+    with pytest.raises(ValueError, match="billing_moved: paiement tr_ANCIEN"):
+        billing.confirm(7, payment_ref="tr_ANCIEN")
+    assert deux_checkouts.updated == [(1, {"status": "paid", "payment_id": "tr_ANCIEN"})]
+    assert deux_checkouts.upserted == []
 
 
 def test_le_webhook_transmet_la_reference(monkeypatch, deux_checkouts):
-    """Bout en bout : c'est la chaîne complète qui était rompue, pas `confirm` seul."""
-    assert billing.process_webhook("tr_ANCIEN") == "confirmed"
-    assert len(deux_checkouts.upserted) == 1
+    """Bout en bout : le webhook passe la référence, l'encaissement est gravé sur la
+    bonne ligne, et l'issue dit la vérité — rien n'a été confirmé."""
+    assert billing.process_webhook("tr_ANCIEN") == "not_confirmed"
+    assert deux_checkouts.updated == [(1, {"status": "paid", "payment_id": "tr_ANCIEN"})]
+    assert deux_checkouts.upserted == []
 
 
 def test_une_reference_inconnue_ne_se_rabat_sur_personne(deux_checkouts):
@@ -126,10 +126,7 @@ def test_une_reference_inconnue_ne_se_rabat_sur_personne(deux_checkouts):
 
 def test_le_webhook_n_annonce_pas_un_succes_qu_il_n_a_pas_constate(monkeypatch):
     """`confirmed` était rendu quoi qu'il arrive : le journal affirmait le contraire
-    de ce qui s'était passé, ce qui envoie chercher l'incident ailleurs.
-
-    Le paiement est daté HORS de la fenêtre de mandat : dedans, un mandat absent est
-    une course normale (`awaiting_mandate`), pas un incident — cf. le test suivant."""
+    de ce qui s'était passé, ce qui envoie chercher l'incident ailleurs."""
     vieux = _payment(1, "tr_X")
     vieux["created_at"] = (datetime.now(timezone.utc)
                            - billing.PENDING_WINDOW - timedelta(minutes=1))
@@ -138,27 +135,8 @@ def test_le_webhook_n_annonce_pas_un_succes_qu_il_n_a_pas_constate(monkeypatch):
     monkeypatch.setattr(billing.mollie_client, "get_payment",
                         lambda ref: {"id": ref, "mode": "live", "status": "paid", "customerId": "cst_1",
                                      "metadata": {"plan": "standard"}})
-    # Encaissé mais AUCUN mandat réutilisable → refus définitif, pas d'abonnement.
-    monkeypatch.setattr(billing.mollie_client, "valid_mandate", lambda cid: None)
-
     assert billing.process_webhook("tr_X") == "not_confirmed"
     assert db.upserted == []
-
-
-def test_le_webhook_ne_crie_pas_sur_une_course_de_mandat(monkeypatch):
-    """#493 : le webhook arrive une seconde après l'encaissement, le mandat n'existe
-    pas encore. Le compter comme un incident envoie chercher un défaut là où il n'y
-    en a pas — et l'encaissement, lui, doit être journalisé tout de suite."""
-    db = _Db([_payment(1, "tr_X")])
-    monkeypatch.setattr(billing, "db_billing", db)
-    monkeypatch.setattr(billing.mollie_client, "get_payment",
-                        lambda ref: {"id": ref, "mode": "live", "status": "paid", "customerId": "cst_1",
-                                     "metadata": {"plan": "standard"}})
-    monkeypatch.setattr(billing.mollie_client, "valid_mandate", lambda cid: None)
-
-    assert billing.process_webhook("tr_X") == "awaiting_mandate"
-    assert db.upserted == []
-    assert db.updated == [(1, {"status": "paid", "payment_id": "tr_X"})]
 
 
 def test_un_initial_ouvert_ancien_reste_visible(monkeypatch):
@@ -170,19 +148,6 @@ def test_un_initial_ouvert_ancien_reste_visible(monkeypatch):
     monkeypatch.setattr(billing.mollie_client, "get_payment",
                         lambda ref: {"id": ref, "mode": "live", "status": "paid", "customerId": "c",
                                      "metadata": {"plan": "standard"}})
-    monkeypatch.setattr(billing.mollie_client, "valid_mandate",
-                        lambda cid: {"id": "m", "mandateReference": "R"})
-    monkeypatch.setattr(billing, "apply_plan_entitlements", lambda *a, **k: None)
-
-    out = billing.confirm(7, payment_ref="tr_VIEUX")
-    assert out["status"] == "active"
-
-
-def test_la_date_sort_au_meme_format_que_status(deux_checkouts):
-    """Le même champ rendait deux formes selon le verbe : un client qui parse
-    `confirm` cassait sur `status`."""
-    out = billing.confirm(7, payment_ref="tr_ANCIEN")
-    end = out["current_period_end"]
-    assert isinstance(end, str)
-    assert "T" not in end and "+" not in end, f"format ISO à offset revenu : {end!r}"
-    assert len(end) == 19, f"attendu 'YYYY-MM-DD HH:MM:SS', reçu {end!r}"
+    with pytest.raises(ValueError, match="billing_moved: paiement tr_VIEUX"):
+        billing.confirm(7, payment_ref="tr_VIEUX")
+    assert db.updated == [(1, {"status": "paid", "payment_id": "tr_VIEUX"})]

@@ -24,7 +24,7 @@ import pytest
 from oto_mcp import billing, billing_consent, db, legal_docs
 from _documents_legaux import bumper
 from oto_mcp.capabilities import billing as cap_billing
-from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
+from oto_mcp.capabilities._types import AuthzDenied
 from oto_mcp.db import billing as db_billing
 
 ORG = 4242
@@ -185,10 +185,12 @@ def test_un_particulier_de_l_union_et_un_legal_absent_partent_aussi_ensemble(sce
 # ══ 4. la traduction en refus servi ══════════════════════════════════════════
 
 def _refus(scene_armee, **kw):
-    ctx = ResolvedCtx(sub=SUB, org_id=ORG, role="admin")
-    inp = cap_billing.SubscribeInput(plan="standard", return_url=RETURN_URL)
+    """La traduction du domaine en refus servi (`_domain`). Depuis la coupure du cœur
+    (#1097), la capacité `billing.subscribe` refuse AVANT le domaine (`billing_moved`,
+    cf. `test_coupure_du_coeur.py`) : c'est donc la traduction qu'on éprouve ici."""
     with pytest.raises(AuthzDenied) as e:
-        cap_billing._subscribe(ctx, inp)
+        cap_billing._domain(lambda: billing.subscribe(ORG, "standard", RETURN_URL,
+                                                      sub=SUB))
     return e.value
 
 
@@ -235,10 +237,9 @@ def test_le_renouvellement_ne_redemande_pas_de_consentement(monkeypatch):
 
 # ══ 6. ce que le tunnel reçoit VRAIMENT, par la route ════════════════════════
 
-def test_la_route_rend_un_409_dont_le_corps_porte_les_deux_manques(scene, monkeypatch):
-    """Bout en bout, à travers l'adaptateur REST : c'est là que `AuthzDenied.details`
-    devient (ou non) une clé du corps JSON. Un test au niveau du handler ne verrait
-    pas l'enveloppe."""
+def test_la_route_refuse_billing_moved_avant_tout_prealable(scene, monkeypatch):
+    """Coupure du cœur (#1097) : la route ne vend plus. Le refus est nommé, sans
+    `details`, et tombe avant l'identité de facturation et le consentement."""
     from _datastore_rest import call, stub_authz
 
     scene(identity=None)
@@ -247,29 +248,6 @@ def test_la_route_rend_un_409_dont_le_corps_porte_les_deux_manques(scene, monkey
 
     code, corps = call("billing.subscribe",
                        body={"plan": "standard", "return_url": RETURN_URL})
-    assert code == 409
-    assert corps["error"] == "billing_identity_required"
-    blockers = corps["details"]["blockers"]
-    assert [b["code"] for b in blockers] == ["billing_identity_required",
-                                             "legal_required"]
-    documents = blockers[1]["documents"]
-    assert [d["slug"] for d in documents] == PURCHASE
-    assert all(d["url"].startswith("http") and d["version"] for d in documents)
-
-
-def test_un_refus_sans_details_garde_l_enveloppe_d_avant(scene, monkeypatch):
-    """Additif : les refus qui ne posent pas `details` rendent exactement le corps
-    d'avant — la clé n'apparaît pas, elle ne vaut pas `null`."""
-    from _datastore_rest import call, stub_authz
-
-    scene(acceptances=_tout_a_jour())
-    stub_authz(monkeypatch, org_id=ORG, role="admin")
-    monkeypatch.setattr("oto_mcp.roles.is_org_admin", lambda sub, org: True)
-    monkeypatch.setattr(db_billing, "get_org_subscription",
-                        lambda org: {"status": "active", "canceled_at": None,
-                                     "customer_id": "cst_1"})
-
-    code, corps = call("billing.subscribe",
-                       body={"plan": "standard", "return_url": RETURN_URL})
-    assert (code, corps["error"]) == (409, "already_subscribed")
+    assert (code, corps["error"]) == (409, "billing_moved")
+    assert "oto-commerce" in corps["detail"]
     assert "details" not in corps

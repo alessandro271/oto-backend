@@ -20,6 +20,11 @@ toute la plateforme. Ce module rend les dons LISIBLES là où on les cherche.
    qu'il faudrait tenir à jour — l'avantage se NOMME, on ne suppose pas lequel c'est.
 2. **Le périmètre** — à qui ce genre de dispositif s'adresse. Voir `org_is_ours`.
 
+⚠️ **Depuis la coupure du cœur (#1097)**, un avantage qui est un droit du catalogue
+(`unipile`…) n'est plus annoncé d'après `option_comps` : oto-commerce pose ces droits et
+sait ce qu'il offre ; la marque héritée d'un don ne le dit plus. Aujourd'hui tous les
+avantages vendus sont de ce genre — `granted_benefits` rend donc une liste vide.
+
 ## Ce qu'il ne tient pas
 
 L'entitlement. « L'option est-elle ouverte » reste `access.has_option` (le seam, qui
@@ -34,7 +39,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional
 
-from . import db, providers, tenancy
+from . import db, entitlements_catalogue as catalogue, providers, tenancy
 from .access import quotas
 # Le format de date servi par l'API est défini UNE fois, dans la couche DB (même
 # raison qu'en tête de `billing.py`) : une réponse qui construit sa date à côté
@@ -162,6 +167,10 @@ def granted_benefits(org_id: Optional[int]) -> list[dict]:
     for row in db.list_option_comp_rows("org", str(org_id)):
         meta = cat.get(row["option"])
         if meta is None:          # option sans prix (drapeau) : pas un cadeau
+            continue
+        if catalogue.est_du_catalogue(row["option"]):
+            # Un droit du catalogue offert se lit chez oto-commerce, qui le pose (#1097) :
+            # la marque héritée d'`option_comps` ne dit plus ce qui est ouvert.
             continue
         out.append(_shape(row, "org", meta, now))
     return sorted(out, key=lambda b: b["option"])

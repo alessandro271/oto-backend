@@ -91,6 +91,13 @@ def droit(cle: str) -> Droit:
                      f"{', '.join(sorted(FIXES))}, {PLATFORM_KEY_PREFIX}<connecteur>)")
 
 
+def est_du_catalogue(cle: str) -> bool:
+    """`cle` nomme-t-elle un droit du catalogue — une clé FIXE ou la famille
+    `platform_key:` ? Le territoire des droits déclarés, qu'oto-commerce pose seul
+    (#1097) : ni un don d'option (`option_comps`) ni sa lecture n'y touchent."""
+    return cle in FIXES or cle.startswith(PLATFORM_KEY_PREFIX)
+
+
 def valeur_valide(cle: str, valeur: object) -> int:
     """La valeur à POSER pour `cle`, vérifiée contre son genre, ou `ValueError` nommée :
     `entitlement_unknown_key`, `entitlement_value_required` (vide),

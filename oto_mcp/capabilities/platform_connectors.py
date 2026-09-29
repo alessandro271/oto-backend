@@ -35,7 +35,8 @@ from typing import Optional, Union
 
 from pydantic import BaseModel, StrictBool, StrictInt
 
-from .. import access, billing, db, org_store, providers
+from .. import access, db, entitlements_catalogue as catalogue, org_store, providers
+from . import _facturation_externe as facturation_externe
 from ..connectors import activation as connector_activation
 from ._authz import PLATFORM_ADMIN, SUPER_ADMIN
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
@@ -312,6 +313,17 @@ def _set_platform_access(ctx: ResolvedCtx, inp: PlatformAccessSetInput) -> dict:
 
     from .. import credentials_store
     option = access.paid_option_for(inp.provider)
+    if option and catalogue.est_du_catalogue(option):
+        # L'option de ce connecteur est un droit du catalogue, qu'oto-commerce pose seul
+        # (#1097). Le geste composé ne peut plus en poser la moitié : la clé se partage
+        # seule, par le grant de la portée visée — l'org ou le compte.
+        partage = (" Pour partager seulement la clé de plateforme avec ce compte : "
+                   "`platform.key.grant` (POST /api/admin/users/{sub}/grants/{provider})."
+                   if inp.scope == "user" else
+                   " Pour partager seulement la clé de plateforme avec cette org : "
+                   "`platform.org.grant_key` (POST /api/admin/orgs/{id}/grants/{provider}).")
+        raise facturation_externe.refus(
+            f"Ouvrir l'accès plateforme à {inp.provider!r} (l'option {option!r})", partage)
     has_key = bool(credentials_store.list_platform_instances(inp.provider))
     if not option and not has_key:
         # ni option payante ni clé plateforme → rien à ouvrir côté plateforme
@@ -328,9 +340,6 @@ def _set_platform_access(ctx: ResolvedCtx, inp: PlatformAccessSetInput) -> dict:
             db.clear_option_comp(inp.scope, sid, option)
         if has_key:
             credentials_store.platform_revoke(inp.provider, gscope)
-    if option and inp.scope == "org":
-        # Le don d'org devient un droit déclaré de l'org (source `offered`).
-        billing.reconcilier_droits(int(sid))
     return {
         "ok": True, "connector": inp.provider, "scope": inp.scope, "id": sid, "on": on,
         "paid_option": option, "platform_key": has_key,
@@ -353,15 +362,22 @@ _DOC_CLEAR = (
 )
 _DOC_ACCESS = (
     "Les orgs et membres à qui la PLATEFORME ouvre ce connecteur — grants de la clé "
-    "plateforme et bénéficiaires de l'option offerte, réunis en une vue "
-    "connecteur-centrique. Aucun secret. ⚠️ Si `open_tier` est vrai, le connecteur est "
-    "ouvert à tous sans grant : la liste ne dit alors plus la population servie."
+    "plateforme et marques de don d'option (`has_option`), réunis en une vue "
+    "connecteur-centrique. Aucun secret. ⚠️ `has_option` est la marque HÉRITÉE d'un don "
+    "(`option_comps`), pas le droit : le droit d'une option payante est posé par le "
+    "service de facturation (oto-commerce) et se lit dans les droits déclarés. ⚠️ Si "
+    "`open_tier` est vrai, le connecteur est ouvert à tous sans grant : la liste ne dit "
+    "alors plus la population servie."
 )
 _DOC_SET_ACCESS = (
     "Ouvre ou ferme l'accès plateforme d'une org ou d'un membre à un connecteur, en un "
-    "geste : pose ensemble l'option offerte et le grant de clé plateforme, selon ce que "
+    "geste : pose ensemble la marque d'option et le grant de clé plateforme, selon ce que "
     "le connecteur possède. Refuse un grant vers une org ou un compte inexistant, et un "
-    "connecteur qui n'a ni option ni clé plateforme (`no_platform_access`)."
+    "connecteur qui n'a ni option ni clé plateforme (`no_platform_access`). ⚠️ Refuse en "
+    "409 `billing_moved` un connecteur dont l'option est un droit du catalogue "
+    "(`unipile`) : ce droit est posé par le service de facturation (oto-commerce) seul ; "
+    "la clé de plateforme se partage alors par `platform.org.grant_key` (une org) ou "
+    "`platform.key.grant` (un compte)."
 )
 
 CAPABILITIES += [
@@ -397,6 +413,10 @@ CAPABILITIES += [
         key="platform.connector.access_set", handler=_set_platform_access,
         Input=PlatformAccessSetInput, authz=SUPER_ADMIN, Output=PlatformAccessSetView,
         description=_DOC_SET_ACCESS,
+        errors=(facturation_externe.declaration(
+            "L'option du connecteur est une clé du catalogue des droits, que seul le "
+            "service de facturation (oto-commerce) pose ; la clé de plateforme se partage "
+            "par `platform.org.grant_key` (une org) ou `platform.key.grant` (un compte)."),),
         mcp=None,
         rest=RestBinding("POST", _ACCESS),
     ),

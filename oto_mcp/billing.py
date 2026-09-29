@@ -1,18 +1,26 @@
 """Billing par org (ADR 0043) — abonnement unique, PSP Mollie.
 
+⚠️ **Depuis la coupure du cœur (#1097), ce module ne pose plus aucun droit.** La
+facturation est tenue par oto-commerce, qui pose seul les droits déclarés
+(`org_entitlements`) par l'API de service. Les gestes servis qui vendaient ou offraient
+(`subscribe`, `confirm`, changement de moyen de paiement, résiliation et reprise, plan
+offert, contrat) sont refusés en 409 `billing_moved` à la capacité
+(`capabilities/_facturation_externe.py`) ; `confirm` lui-même, encore atteint par le
+webhook et le rattrapage du runner, grave l'encaissement puis refuse (`billing_moved`,
+une erreur au journal) sans ouvrir d'abonnement ; le runner refuse de prélever
+(`billing_runner`). Ce qui suit reste pour les lectures (`status`, factures) et le
+webhook Mollie ; le reste est l'histoire du cycle d'avant.
+
 Le cycle est piloté ICI (miroir local `org_subscriptions` = source de vérité,
 PSP-agnostique par conception ADR 0043) :
 - `subscribe` ouvre le PREMIER paiement sur la page de checkout hébergée Mollie
   (`sequenceType=first` — 3DS carte ou collecte IBAN + mandat SEPA gérés par eux,
   UN seul flux) et journalise le paiement ;
 - `confirm` LIT le paiement au retour du payeur (et en réconciliation) : encaissé
-  (`paid`) → journalise l'encaissement AUSSITÔT, puis récupère le mandat réutilisable
-  né du checkout et pose le miroir `active` — c'est LUI qui ouvre l'entitlement,
-  jamais le redirect brut. Le mandat met quelques minutes à apparaître chez Mollie :
-  tant que la fenêtre court, son absence est une ATTENTE (`pending_mandate`), jamais
-  un refus servi au payeur — voir #493 ;
-- `cancel` marque la résiliation à fin de période (l'entitlement court jusqu'à
-  `current_period_end` ; le billing_runner fera la bascule).
+  (`paid`) → journalise l'encaissement AUSSITÔT (#493), puis, depuis la coupure du
+  cœur, refuse (`billing_moved`) sans poser de miroir ;
+- la résiliation et sa reprise (`cancel`, `resume`) ont été retirées à la coupure du
+  cœur : l'abonnement se gère dans oto-commerce.
 
 Bascule Stancer→Mollie (ADR 0043, amende 2026-07-24) : Mollie **unifie carte et
 SEPA** derrière un customer + un mandat créé au premier paiement → plus de chemin
@@ -64,8 +72,6 @@ logger = logging.getLogger(__name__)
 # non un refus, et pendant laquelle ouvrir un second checkout ne peut que débiter
 # deux fois (#493).
 PENDING_WINDOW = timedelta(minutes=30)
-# Cadence de re-sonde suggérée au client tant que le mandat n'est pas visible.
-MANDATE_RETRY_AFTER_S = 15
 # Nom du paramètre qui porte l'identité du paiement sur l'URL de retour navigateur.
 RETURN_REF_PARAM = "payment_ref"
 
@@ -86,8 +92,8 @@ def is_enabled() -> bool:
 # (`unmetered`). On NE facture PLUS au nombre de comptes messagerie → tous les
 # paliers ont `unipile_accounts=None`, qui veut dire « le plan n'a PAS d'avis sur les
 # sièges » (arbitrage du 23/09, #805) — surtout pas « illimité » : le plafond en place
-# (posé à la main, ou le défaut plateforme de 5) reste ce qu'il est, voir
-# `apply_plan_entitlements`. ⚠️ Les 4 paliers débloquent donc
+# (posé à la main, ou le défaut plateforme de 5) reste ce qu'il est. ⚠️ Les 4 paliers
+# débloquent donc
 # AUJOURD'HUI exactement la même chose et ne diffèrent QUE par le prix — la
 # différenciation (« payant = Unipile, mais pas que ») viendra plus tard (options
 # premium par palier). `unmetered=True` = fin des credits d'appel.
@@ -132,66 +138,12 @@ def plan_is_unmetered(plan: str) -> bool:
 
 
 def plan_rights(plan: str) -> tuple[str, ...]:
-    """Les droits déclarés (`org_entitlements.right_key`) qu'un plan fait poser : ses
-    options, plus la levée du quota plateforme s'il est `unmetered`. Plan inconnu = rien."""
+    """Les droits déclarés (`org_entitlements.right_key`) qu'un plan ouvre : ses options,
+    plus la levée du quota plateforme s'il est `unmetered`. Plan inconnu = rien. Lu par
+    l'export de reprise d'oto-commerce (`service_commerce`) : le cœur ne les pose plus."""
     from .access.entitlements import PLATFORM_UNMETERED
     droits = tuple(sorted(plan_options(plan)))
     return droits + ((PLATFORM_UNMETERED,) if plan_is_unmetered(plan) else ())
-
-
-def _hosted_by_partner(org_id: int) -> bool:
-    """L'org est-elle hébergée par un tenant TIERS, sur réponse franche ?
-
-    Son plafond de comptes de messagerie appartient alors à la facturation du
-    partenaire, qui le pose lui-même (`platform.org.unipile_limit_set`) : un plan
-    d'oto qui porte un nombre de sièges ne l'écrase pas, dans le dos de la
-    facturation qui l'avait posé. (Un plan sans avis n'écrit de toute façon rien.)
-
-    Une lecture de tenant qui échoue rend `False` : le plan écrit, comme avant. C'est
-    le sens inverse de `billing_grants.org_is_ours` (fermé par défaut), et c'est
-    voulu : ce garde ne doit jamais priver une cliente directe du plafond de son plan."""
-    from . import tenancy
-    try:
-        slug = db.org_tenant_slug(int(org_id))
-    # noqa: SILENT — ouvert par défaut : sans réponse franche sur le tenant, le plan
-    # fait ce qu'il a toujours fait.
-    except Exception:  # noqa: BLE001
-        logger.warning("billing: tenant de l'org %s illisible — plafond du plan appliqué",
-                       org_id, exc_info=True)
-        return False
-    return bool(slug) and slug != tenancy.primary_slug()
-
-
-def apply_plan_entitlements(org_id: int, plan: str) -> None:
-    """Configure l'org d'après son plan à l'ACTIVATION — le geste qui remplace
-    le micro-management admin. Idempotent. SEUL chemin par lequel un plan écrit le
-    plafond de comptes de messagerie (`orgs.unipile_account_limit`).
-
-    `unipile_accounts=None` = le plan n'a PAS d'avis sur les sièges : on n'écrit
-    RIEN (arbitrage du 23/09, #805). Écrire `NULL` n'aurait pas « levé » le plafond :
-    la lecture (`unipile_connect.hosted_auth_url`) rend `NULL` comme le défaut
-    plateforme (5) — un plafond posé à la main (20) retombait à 5 au moment où le
-    client payait. Le retrait d'un plan ne touche pas non plus au plafond
-    (`admin_clear_plan`)."""
-    meta = PLANS.get(plan)
-    if meta is None:
-        return
-    seats = meta.get("unipile_accounts")
-    if seats is None:
-        return
-    if _hosted_by_partner(org_id):
-        logger.info("billing: org %s hébergée par un tenant tiers — son plafond de "
-                    "messagerie reste celui que sa facturation a posé", org_id)
-        return
-    db.set_org_unipile_limit(org_id, seats)
-
-
-def reconcilier_droits(org_id: int) -> None:
-    """Réaligne les droits déclarés de l'org (`org_entitlements`) sur son état de
-    commerce — à appeler APRÈS chaque geste qui change cet état. Rejouable : le détail
-    est dans `billing_droits`. Import tardif, `billing_droits` importe ce module."""
-    from . import billing_droits
-    billing_droits.reconcilier(org_id)
 
 
 def _add_period(dt: datetime, interval: str) -> datetime:
@@ -293,21 +245,6 @@ def _elapsed_since(value, now: datetime) -> Optional[timedelta]:
     return None
 
 
-def _since_paid(payment: dict, row: dict, now: datetime) -> Optional[timedelta]:
-    """Depuis combien de temps l'argent est-il PRIS ?
-
-    C'est cette durée-là, pas l'âge du checkout, qui décide si un mandat manquant est
-    une course ou un incident : une page de paiement peut rester ouverte une
-    demi-heure avant d'être payée. `paidAt` du PSP fait donc foi ; à défaut on
-    retombe sur l'ouverture du checkout, qui ne peut que MAJORER le délai réel (le
-    paiement lui est forcément postérieur) — jamais l'inverse, donc jamais une
-    attente écourtée sans le savoir."""
-    since = _elapsed_since(payment.get("paidAt"), now)
-    if since is not None:
-        return since
-    return _elapsed_since(row.get("created_at"), now)
-
-
 def _age_label(age: Optional[timedelta]) -> str:
     if age is None:
         return "à l'instant"
@@ -373,9 +310,7 @@ def subscribe(org_id: int, plan: str, return_url: str, *, sub: Optional[str],
     `sub` = l'appelant, et il est OBLIGATOIRE : c'est une personne qui accepte des
     documents, pas une organisation. Sans lui rien n'est accepté et la souscription
     est refusée — le paramètre n'a pas de défaut pour que l'oubli soit une erreur de
-    programmation, jamais un gate ouvert. (Un abonnement OFFERT par un admin
-    `admin_set_plan` ne passe pas par ici : rien n'y est vendu ni débité, il n'y a
-    donc pas de consentement d'achat à recueillir.)"""
+    programmation, jamais un gate ouvert."""
     meta = PLANS.get(plan)
     if meta is None:
         raise ValueError(f"unknown_plan: {plan!r} (plans : {', '.join(PLANS)})")
@@ -448,20 +383,19 @@ def subscribe(org_id: int, plan: str, return_url: str, *, sub: Optional[str],
 
 
 def confirm(org_id: int, payment_ref: Optional[str] = None) -> dict:
-    """Fait avancer la souscription en cours : lit un premier paiement non conclu ;
-    encaissé (`paid`) → journalise l'encaissement, récupère le mandat réutilisable né
-    du checkout, pose le miroir `active` (carte comme SEPA — même chemin). Idempotent :
-    re-confirmer un abonnement déjà actif est un no-op informatif.
+    """Constate un premier paiement non conclu : échoué → journalisé ; pas encore
+    encaissé → `pending` ; encaissé (`paid`) → l'encaissement est journalisé et tracé,
+    puis **refusé** (`billing_moved`, erreur au journal nommant l'org et le paiement) :
+    depuis la coupure du cœur (#1097), aucun abonnement ne s'ouvre ici, oto-commerce
+    tient la facturation. Re-confirmer un abonnement déjà actif reste un no-op
+    informatif.
 
     `payment_ref` = l'identifiant du paiement à traiter, quand l'appelant le
     connaît. Le **webhook** le connaît (c'est celui qu'il vient de recevoir) et
     DOIT le passer ; le **retour navigateur** le porte désormais aussi (#493, il est
     daté sur l'URL de retour) ; le **polling** ne le connaît pas et prend le plus
     récent, ce qui reste correct pour lui. Sans ce paramètre, l'identité du paiement
-    encaissé se perdait entre le webhook et ce chemin (#291).
-
-    Encaissé sans mandat encore visible = `pending_mandate`, PAS un refus : le mandat
-    réutilisable apparaît quelques minutes après le paiement chez Mollie (#493)."""
+    encaissé se perdait entre le webhook et ce chemin (#291)."""
     sub_row = db_billing.get_org_subscription(org_id)
     # Idempotence D'ABORD. Elle tenait jusqu'ici au fait qu'un paiement confirmé
     # sortait de la file (`paid` = terminal) ; depuis #493 un encaissement RESTE
@@ -470,9 +404,6 @@ def confirm(org_id: int, payment_ref: Optional[str] = None) -> dict:
     # période à chaque appel. Un abonnement résilié (canceled_at) n'est pas concerné :
     # il peut légitimement re-souscrire, exactement comme dans `subscribe`.
     if sub_row and sub_row["status"] == "active" and not sub_row.get("canceled_at"):
-        # Les droits se reposent aussi ici : si la pose a échoué au passage qui a ouvert
-        # l'abonnement, le rejeu du webhook ou la re-sonde du navigateur la rattrapent.
-        reconcilier_droits(org_id)
         return {"status": "active", "plan": sub_row["plan"]}
 
     # Candidats = les premiers paiements qui n'ont pas DÉFINITIVEMENT échoué. `paid`
@@ -540,62 +471,20 @@ def confirm(org_id: int, payment_ref: Optional[str] = None) -> dict:
     from . import billing_invoices as factures     # import tardif
     factures.tracer_encaissement(row["id"])
 
-    # encaissé → le mandat réutilisable naît sur le customer… quelques minutes plus
-    # tard. À 1,4 s il n'existe pas encore.
-    now = datetime.now(timezone.utc)
-    customer_id = payment.get("customerId")
-    mandate = mollie_client.valid_mandate(customer_id) if customer_id else None
-    if not mandate:
-        age = _since_paid(payment, row, now)
-        if age is None or age < PENDING_WINDOW:
-            # COURSE, pas échec : servir un refus au payeur ici, c'est lui annoncer
-            # un échec sur un paiement réussi — et il repaie (incident du 25/08).
-            # L'abonnement s'ouvrira au prochain passage : re-sonde du navigateur,
-            # webhook, ou rattrapage du billing_runner.
-            logger.info("billing: org %s encaissée (paiement %s), mandat pas encore "
-                        "visible (%s) — en attente", org_id, row["payment_intent_id"],
-                        _age_label(age))
-            return {"status": "pending_mandate", "payment_status": "paid",
-                    "retry_after": MANDATE_RETRY_AFTER_S, **billing_vat.tax_view(row)}
-        # Passé la fenêtre, ce n'est plus une course : encaissé sans mandat
-        # réutilisable = récurrence impossible. On ne pose PAS un abonnement qu'on ne
-        # saura pas renouveler (ADR : jamais de fallback silencieux) — c'est le SEUL
-        # cas où le refus `no_mandate` a jamais été vrai, il le reste.
-        logger.error("billing: org %s encaissée (paiement %s) SANS mandat après %s — "
-                     "récurrence impossible, reprise manuelle",
-                     org_id, row["payment_intent_id"], _age_label(age))
-        raise RuntimeError(
-            "no_mandate: premier paiement encaissé sans mandat valide après "
-            f"{int(PENDING_WINDOW.total_seconds() // 60)} min — récurrence "
-            "impossible, vérifier le moyen de paiement de la page de checkout")
-
-    plan = (payment.get("metadata") or {}).get("plan")
-    if plan not in PLANS:
-        raise RuntimeError(f"bad_metadata: plan illisible sur le paiement ({plan!r})")
-    meta = PLANS[plan]
-    method = mollie_client.method_from_mollie(payment.get("method"))
-
-    period_end = _add_period(now, meta["interval"])
-    db_billing.upsert_org_subscription(
-        org_id, plan=plan, method=method, provider="mollie",
-        customer_id=customer_id, mandate_id=mandate["id"],
-        mandate_rum=mandate.get("mandateReference"),
-        status="active", current_period_end=period_end, next_billing_at=period_end)
-    apply_plan_entitlements(org_id, plan)
-    reconcilier_droits(org_id)
-    logger.info("billing: org %s abonnée (plan %s, méthode %s, échéance %s)",
-                org_id, plan, method, period_end.date())
-    return {"status": "active", "plan": plan, "method": method, **billing_vat.tax_view(row),
-            # MÊME format que `status`/`cancel`, qui rendent la valeur relue en base
-            # (normalisée « YYYY-MM-DD HH:MM:SS » par le row factory). Cette réponse
-            # sortait en ISO 8601 avec offset : le même champ, deux formes selon le
-            # verbe, donc un client qui parse `confirm` cassait sur `status` (#291).
-            # On importe le normaliseur plutôt que de recopier son expression — une
-            # seule définition du format, celle de la couche DB.
-            "current_period_end": _normalize_value(period_end)}
+    # Coupure du cœur (#1097) : un checkout ouvert AVANT la bascule et payé APRÈS arrive
+    # ici. L'encaissement est gravé et tracé ci-dessus — le journal dit ce que le PSP a
+    # fait —, mais aucun abonnement n'est ouvert : il n'ouvrirait aucun droit
+    # (oto-commerce les pose seul), et le cœur noterait un abonné actif sans droit. Une
+    # ERREUR, pour que l'encaissement orphelin se voie et soit repris.
+    logger.error("billing: org %s — paiement %s ENCAISSÉ après la coupure du cœur : aucun "
+                 "abonnement ouvert, aucun droit (billing_moved) — encaissement orphelin "
+                 "à reprendre par oto-commerce", org_id, payment["id"])
+    raise ValueError(
+        f"billing_moved: paiement {payment['id']} encaissé, mais la facturation est tenue "
+        "par le service de facturation (oto-commerce) : aucun abonnement n'est ouvert ici")
 
 
-# ── état & résiliation ───────────────────────────────────────────────────────
+# ── état ─────────────────────────────────────────────────────────────────────
 
 def status(org_id: int) -> dict:
     """État d'abonnement de l'org — **et ce qui lui est offert sans abonnement**.
@@ -664,191 +553,22 @@ def status(org_id: int) -> dict:
     }
 
 
-def cancel(org_id: int) -> dict:
-    """Résiliation à fin de période : l'entitlement court jusqu'à
-    `current_period_end`, plus aucune échéance n'est tirée (next_billing_at
-    nettoyé) ; le billing_runner basculera le statut à l'échéance."""
-    row = db_billing.get_org_subscription(org_id)
-    if not row or row["status"] == "canceled":
-        raise ValueError("not_subscribed: aucun abonnement à résilier")
-    if row.get("provider") == "contract":
-        raise ValueError("contract_subscription: cet abonnement est réglé hors "
-                         "plateforme — sa résiliation passe par Otomata")
-    db_billing.mark_cancel_at_period_end(org_id)
-    # La résiliation BORNE les droits à la fin de la période payée.
-    reconcilier_droits(org_id)
-    return status(org_id)
-
-
-def resume(org_id: int) -> dict:
-    """Annule une résiliation : l'abonnement repart sur son cycle, sans rien encaisser.
-
-    Le geste manquait, et son absence coûtait (#845) : l'écran annonçait la date de
-    bascule vers le palier gratuit sans offrir de revenir en arrière — **un clic de trop
-    était définitif jusqu'à la fin de la période**.
-
-    ⚠️ **Aucun appel au prestataire de paiement, aucun mouvement d'argent.** Résilier ne
-    révoque pas le mandat : il est toujours là, et l'abonnement n'a jamais cessé d'être
-    `active`. Reprendre, c'est donc défaire deux écritures locales — rien de plus, et
-    surtout rien qui touche l'encaissement.
-
-    Les refus NOMMENT ce qui bloque, parce que les trois appellent des gestes
-    différents : s'abonner, ne rien faire, ou se réabonner."""
-    row = db_billing.get_org_subscription(org_id)
-    if not row:
-        raise ValueError("not_subscribed: aucun abonnement sur cette org")
-    if row["status"] == "canceled":
-        # ⚠️ La période est ÉCHUE et le runner a basculé : reprendre ici rouvrirait
-        # l'entitlement sans qu'aucune échéance ne soit tirée — un abonnement gratuit
-        # créé par un bouton « annuler la résiliation ». C'est un réabonnement, il
-        # passe par `subscribe`.
-        raise ValueError(
-            "already_ended: la période est terminée et l'abonnement est clos — "
-            "reprends-le par une nouvelle souscription, pas par une reprise")
-    if not row.get("canceled_at"):
-        raise ValueError("not_canceled: cet abonnement n'est pas résilié")
-    if row.get("provider") == "contract":
-        raise ValueError("contract_subscription: cet abonnement est réglé hors "
-                         "plateforme — le re-déclarer passe par Otomata")
-    if not db_billing.resume_canceled(org_id):
-        # Le `WHERE` n'a rien touché alors que la lecture disait le contraire : le
-        # runner est passé entre les deux. On le DIT plutôt que de rendre un succès
-        # qui n'a rien fait.
-        raise ValueError(
-            "already_ended: la résiliation s'est consommée pendant la reprise — "
-            "relis l'état avant de rejouer")
-    reconcilier_droits(org_id)
-    return status(org_id)
-
-
-# ── admin : forcer / retirer un plan (non payé) ──────────────────────────────
-
-def admin_set_plan(org_id: int, plan: str, *, granted_by: str) -> dict:
-    """Force un plan sur une org SANS paiement (abonnement `comp`) — ADR 0043.
-    Ouvre l'entitlement immédiatement (options du plan ; le plafond messagerie
-    seulement si le plan en porte un, cf. `apply_plan_entitlements`),
-    jamais de PSP derrière, jamais d'échéance tirée. Sert les pilotes,
-    partenaires et le palier « sur devis ». Écrase l'abonnement existant."""
-    if plan not in PLANS:
-        raise ValueError(f"unknown_plan: {plan!r} (plans : {', '.join(PLANS)})")
-    db_billing.set_comp_subscription(org_id, plan, granted_by=granted_by)
-    apply_plan_entitlements(org_id, plan)
-    reconcilier_droits(org_id)
-    logger.info("billing: plan %s FORCÉ (comp) sur l'org %s par %s",
-                plan, org_id, granted_by)
-    return status(org_id)
-
-
-# ── admin : abonnement réglé HORS PLATEFORME (contrat, virement) ─────────────
-
-CONTRACT_INTERVALS = ("month", "year")
-
-
-def _contract_period_end(starts_at: datetime, interval: str, now: datetime) -> datetime:
-    """La fin de la période EN COURS d'un contrat reconduit tacitement : la première
-    échéance calendaire, comptée depuis son début, qui tombe après maintenant."""
-    fin = _add_period(starts_at, interval)
-    while fin <= now:
-        fin = _add_period(fin, interval)
-    return fin
-
-
-def admin_set_contract(org_id: int, plan: str, *, seats: int, granted_by: str,
-                       unit_amount: Optional[int] = None,
-                       starts_at: Optional[datetime] = None,
-                       ends_at: Optional[datetime] = None, interval: str = "month",
-                       reference: Optional[str] = None) -> dict:
-    """Déclare (ou re-déclare) un abonnement réglé HORS PLATEFORME — contrat, virement.
-
-    Ce n'est pas un don : c'est un abonnement payé ailleurs. Il ne prélève jamais (le
-    runner l'ignore), ouvre les droits de `plan` sous la source `contract`, et déclare
-    le droit `members_max` = `seats`. `ends_at` omis = reconduction tacite de période en
-    période (`interval`) jusqu'à la résiliation ; le renouveler, c'est le re-déclarer
-    avec une nouvelle date. Refuse de remplacer un abonnement PAYÉ ici et encore
-    actif : on le résilie d'abord, sinon un mandat continuerait de prélever."""
-    if plan not in PLANS:
-        raise ValueError(f"unknown_plan: {plan!r} (plans : {', '.join(PLANS)})")
-    if seats < 1:
-        raise ValueError("invalid_seats: un contrat porte au moins une licence")
-    if interval not in CONTRACT_INTERVALS:
-        raise ValueError(f"invalid_interval: {interval!r} (month | year)")
-    if unit_amount is not None and unit_amount < 0:
-        raise ValueError("invalid_amount: le prix unitaire est un montant positif")
-    debut = starts_at or datetime.now(timezone.utc)
-    if ends_at is not None and ends_at <= debut:
-        raise ValueError("invalid_period: la date de fin doit suivre la date de début")
-    row = db_billing.get_org_subscription(org_id)
-    if (row and row["provider"] not in ("comp", "contract")
-            and row["status"] in ("active", "past_due") and not row.get("canceled_at")):
-        raise ValueError("paid_subscription: l'org a un abonnement payé sur la "
-                         "plateforme — le résilier avant de déclarer un contrat")
-    db_billing.set_contract_subscription(
-        org_id, plan=plan, seats=seats, unit_amount=unit_amount,
-        currency=PLANS[plan]["currency"], interval=interval, starts_at=debut,
-        ends_at=ends_at, reference=reference, granted_by=granted_by)
-    reconcilier_droits(org_id)
-    logger.info("billing: contrat déclaré sur l'org %s (plan %s, %s licence(s), fin %s) "
-                "par %s", org_id, plan, seats, ends_at or "tacite", granted_by)
-    return status(org_id)
-
-
-def admin_cancel_contract(org_id: int, *, ends_at: Optional[datetime] = None) -> dict:
-    """Résilie un abonnement réglé hors plateforme : pose sa date de fin — celle donnée,
-    sinon la fin de la période en cours. Les droits s'arrêtent à cette date."""
-    contrat = db_billing.get_contract(org_id)
-    row = db_billing.get_org_subscription(org_id)
-    if not contrat or not row or row["provider"] != "contract":
-        raise ValueError("not_contract: aucun abonnement réglé hors plateforme sur "
-                         "cette org")
-    if row["status"] == "canceled":
-        raise ValueError("already_ended: ce contrat est déjà clos")
-    if ends_at is None:
-        debut = datetime.fromtimestamp(float(contrat["starts_epoch"]), timezone.utc)
-        ends_at = _contract_period_end(debut, contrat["interval"],
-                                       datetime.now(timezone.utc))
-    db_billing.end_contract(org_id, ends_at)
-    reconcilier_droits(org_id)
-    logger.info("billing: contrat de l'org %s résilié, fin %s", org_id, ends_at)
-    return status(org_id)
-
-
-def admin_clear_plan(org_id: int) -> dict:
-    """Retire un abonnement `comp` (forcé). Refuse de toucher un abonnement PAYÉ
-    (passer par la résiliation) — anti-bévue admin."""
-    row = db_billing.get_org_subscription(org_id)
-    if not row:
-        raise ValueError("not_subscribed: aucun abonnement sur cette org")
-    if row["provider"] == "contract":
-        raise ValueError("contract_subscription: abonnement réglé hors plateforme — "
-                         "le résilier par oto_admin_cancel_contract")
-    if row["provider"] != "comp":
-        raise ValueError("paid_subscription: abonnement payant — résilier via "
-                         "cancel, pas admin_clear_plan")
-    db_billing.delete_subscription(org_id)
-    reconcilier_droits(org_id)
-    # Le plafond de sièges n'est PAS touché (#805) : il n'y a pas de « valeur d'avant »
-    # à restaurer, et écrire `NULL` le ramènerait au défaut plateforme.
-    logger.info("billing: plan comp retiré de l'org %s", org_id)
-    return {"subscribed": False, "org_id": org_id}
-
-
 # ── webhook Mollie (réconciliation événementielle) ───────────────────────────
 
 def process_webhook(payment_id: str) -> str:
     """Traite un rappel webhook Mollie (le corps ne porte QUE l'id du paiement —
     on re-fetch l'objet avec NOTRE clé, jamais de confiance dans le POST). Retourne
-    l'issue (log) : 'ignored' | 'confirmed' | 'awaiting_mandate' | 'not_confirmed'
-    | 'updated' | 'unchanged' | 'refunded'.
+    l'issue (log) : 'ignored' | 'confirmed' | 'not_confirmed' | 'updated' |
+    'unchanged' | 'refunded'.
 
     Sécurité : un id inconnu de notre journal est ignoré (un POST forgé ne
     déclenche rien) ; un premier paiement `paid` rejoue `confirm` (idempotent) ;
     sinon on aligne le statut journalisé. Complément du polling (billing_runner),
     pas un remplacement.
 
-    'awaiting_mandate' = encaissement pris en compte, mandat pas encore né chez
-    Mollie (#493). C'est le cas NOMINAL du webhook, qui arrive une seconde après le
-    paiement : le compter comme un incident enverrait chercher un défaut là où il
-    n'y en a pas."""
+    Depuis la coupure du cœur (#1097), un premier paiement encaissé rend
+    `not_confirmed` : `confirm` grave l'encaissement puis refuse (`billing_moved`),
+    sans ouvrir d'abonnement — l'encaissement orphelin est une erreur au journal."""
     row = db_billing.get_billing_payment_by_ref(payment_id)
     if not row:
         return "ignored"
@@ -883,13 +603,6 @@ def process_webhook(payment_id: str) -> str:
         # Et on rend l'issue RÉELLE : annoncer « confirmed » quoi qu'il arrive faisait
         # affirmer au journal le contraire de ce qui s'était passé, ce qui est pire
         # qu'un silence — on cherche l'incident ailleurs.
-        if out.get("status") == "pending_mandate":
-            # Le mandat naît quelques minutes après l'encaissement : à l'instant du
-            # webhook il n'existe pas encore. Rien à investiguer — la reprise est déjà
-            # câblée (re-sonde du navigateur, rattrapage du billing_runner).
-            logger.info("webhook: paiement %s encaissé (org %s), mandat pas encore "
-                        "visible — abonnement en attente", payment_id, row["org_id"])
-            return "awaiting_mandate"
         if out.get("status") != "active":
             logger.error("webhook: paiement %s encaissé (org %s), abonnement toujours "
                          "%s — investiguer", payment_id, row["org_id"], out.get("status"))

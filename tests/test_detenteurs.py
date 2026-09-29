@@ -112,5 +112,6 @@ def test_une_option_dit_qui_la_leve_et_ou(monkeypatch):
     assert "administrateur de cette org" in texte
     assert "https://dashboard.example.test/org/billing" in texte
     assert "équipe de la plateforme" in texte
+    assert "facturation de l'org" in texte
     assert "Admin Un" in texte and "admin1@example.test" not in texte
     assert "Admin Un" not in detenteurs.qui_leve_une_option("etranger", _ORG)

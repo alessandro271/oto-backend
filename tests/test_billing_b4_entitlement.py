@@ -8,6 +8,8 @@ la marque du compte ou de l'org.
 """
 from __future__ import annotations
 
+import pytest
+
 from oto_mcp import access
 
 
@@ -46,8 +48,8 @@ def test_une_ligne_de_droit_de_la_personne_ouvre_l_option_payante(monkeypatch):
 
 
 def test_le_don_d_org_brut_ne_suffit_pas_c_est_le_droit_declare_qui_compte(monkeypatch):
-    """`option_comps` n'est plus lu pour une option payante : le don d'org y est
-    recopié en droit déclaré (`offered`) par la réconciliation du commerce."""
+    """`option_comps` n'est plus lu pour une option payante : le droit est posé par
+    oto-commerce dans les droits déclarés (#1097)."""
     _wire(monkeypatch, org_comp=True)
     assert access.has_option("u1", "unipile") is False
 
@@ -91,3 +93,18 @@ def test_le_cockpit_d_org_lit_la_meme_regle(monkeypatch):
     _wire(monkeypatch, droits=[(9, "unipile")], user_comp=True)
     assert cap._org_subscribed(9, "unipile") is True
     assert cap._org_subscribed(8, "unipile") is False
+
+
+@pytest.mark.parametrize("cle", ["platform_unmetered", "unipile_seats", "members_max",
+                                 "platform_key:serper"])
+def test_une_cle_du_catalogue_ne_se_lit_jamais_dans_option_comps(monkeypatch, cle):
+    """La garde de la coupure (#1097) : hors de la branche payante, une clé du
+    catalogue des droits LÈVE au lieu d'être cherchée dans `option_comps` — une marque
+    de don héritée, que plus personne ne pose, ne doit rien ouvrir."""
+    lus = []
+    _wire(monkeypatch, user_comp=True, org_comp=True)
+    monkeypatch.setattr(access.db, "has_option_comp",
+                        lambda et, eid, opt: lus.append(opt) or True)
+    with pytest.raises(ValueError, match="catalogue_key_via_option_comps"):
+        access.has_option("u1", cle)
+    assert lus == [], "rien n'est lu dans option_comps"

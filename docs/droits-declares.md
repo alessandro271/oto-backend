@@ -14,10 +14,16 @@ description: >-
 
 # Droits déclarés
 
-**Le cœur ne sait pas qui paie.** Il applique des droits qu'un producteur — aujourd'hui
-la réconciliation du commerce (`billing_droits.py`), demain un service de commerce à part
-par l'API d'administration — a DÉCLARÉS dans la table `org_entitlements`. Le cœur les
-relit à chaque usage, jamais mis en cache comme acquis.
+**Le cœur ne sait pas qui paie.** Il applique des droits qu'un seul producteur, le service
+de facturation **oto-commerce**, a DÉCLARÉS dans la table `org_entitlements`, par l'API de
+service (ci-dessous). Le cœur les relit à chaque usage, jamais mis en cache comme acquis.
+
+⚠️ **Depuis la coupure du cœur (#1097), le cœur ne pose plus AUCUN droit.** La
+réconciliation interne qui dérivait les lignes des abonnements et des dons
+(`billing_droits`) est retirée à tous ses appels — démarrage, `oto-mcp maintenance
+droits` (timer quotidien), gestes de facturation et dons d'option d'org — et le module
+avec elle. Les gestes qui vendaient, offraient ou déclaraient un droit refusent en 409
+`billing_moved` (§ Ce que le cœur refuse).
 
 ## Un droit
 
@@ -68,9 +74,13 @@ cœur ne sait pas appliquer.
 | `platform_key:<connecteur>` | nombre (quota par jour, `0` = pas d'accès) | l'accès à notre clé de plateforme d'un connecteur du registre `providers` (suffixe vérifié) — **pas encore lue** : le registre (`platform_key_open`, `default_quota`) reste la règle appliquée |
 | `members_max` | nombre | ⚠️ **hérité, sans lecteur** : le nombre de licences d'un abonnement réglé hors plateforme. Le cœur ne connaît aucun plafond de membres ; la clé sort du catalogue quand le commerce posera les droits payants par personne |
 
-Hors catalogue, délibérément : `beta` (un drapeau de population du cœur, lu dans
-`option_comps`, pas un droit vendu). La réconciliation du commerce ne pose plus un don
-d'option hors catalogue en droit.
+Hors catalogue, délibérément : `beta`, `claude_subscription` (des drapeaux de population
+du cœur, lus dans `option_comps`, pas des droits vendus). **Une clé du catalogue ne se lit
+jamais dans `option_comps` pour appliquer un droit** : `access.has_option` lève
+`catalogue_key_via_option_comps` si on le lui demande hors de la branche payante, et les
+gestes qui posaient un don d'une telle clé la refusent (`billing_moved`).
+`entitlements_catalogue.est_du_catalogue(clé)` dit le territoire : une clé fixe ou la
+famille `platform_key:`.
 
 ## Le point de lecture unique — `access.entitlements`
 
@@ -147,11 +157,9 @@ avant.
   `user_has_option`) reste, et la marque de compte n'ouvre toujours aucune option
   payante ;
 - `unipile_seats` et `platform_key:<connecteur>` : **pas encore lues** (ci-dessus) ;
-- deux lectures directes de la table, qui n'appliquent rien : le témoin « la table
+- une lecture directe de la table, qui n'applique rien : le témoin « la table
   est-elle remplie ? » de la fin de droit (`db/unipile_fin_de_droit.py`, toutes
-  portées) et la liste des orgs à réconcilier du commerce
-  (`db/billing.orgs_with_commercial_rights`, jointe sur `org_id` : une ligne de personne
-  partout n'y fait entrer aucune org).
+  portées).
 
 **Personne d'autre ne lit la table pour appliquer un droit.**
 
@@ -216,10 +224,9 @@ appartenance. **Chaque ligne se liste par une seule route** : une ligne d'org ou
 personne dans l'org par l'org, une ligne de personne partout par la personne (la valeur
 effective ne liste pas : elle nomme les lignes valides qui entrent dans UNE lecture). `source`
 est prise dans la liste fermée `entitlements_catalogue.SOURCES`.
-⚠️ Tant que la réconciliation interne tourne (ci-dessous), elle retire les lignes de SES
-sources qu'elle n'a pas posées — à la portée org seulement : une ligne de personne, dans
-l'org ou partout, n'est jamais à elle (#1080). Le service ne doit donc écrire de ligne
-D'ORG que sous une source qu'elle ne réconcilie pas (`trial`) jusqu'à la bascule.
+Depuis la coupure du cœur (#1097), plus rien dans le cœur ne retire une ligne que le
+service a posée : il écrit sous n'importe quelle source de la liste fermée, à toutes les
+portées.
 
 ### La valeur effective d'un droit (#1096)
 
@@ -242,7 +249,7 @@ appartenance n'est exigée (comme `value_for`, limite (e)). Rend :
 
 | clé | champ | lu par |
 |---|---|---|
-| `unipile`, `platform_unmetered` | `option_comps: {personne, org}` | `db.has_option_comp` sur le compte et sur l'org (`org` null hors org) — les dons que la réconciliation traduit (org) ou qui n'ouvrent plus rien (compte) |
+| `unipile`, `platform_unmetered` | `option_comps: {personne, org}` | `db.has_option_comp` sur le compte et sur l'org (`org` null hors org) — des dons qui n'ouvrent plus rien : la réconciliation qui traduisait ceux de l'org est retirée (#1097) |
 | `unipile_seats` | `plafond_messagerie: {plafond}` | `unipile_connect.plafond_de_comptes`, le plafond que le branchement applique (`0` = sans plafond) ; `lecture_directe` null hors org |
 | `platform_key:<connecteur>` | `registre: {cle_ouverte, quota_du_jour}` | `platform_key_open` du registre et `quotas.quota_for` (`0` = illimité) — sans l'arête de grant |
 | `members_max` | — | aucune lecture héritée : `null` |
@@ -280,17 +287,48 @@ aujourd'hui, dérivés du registre (`platform_key_open`, `default_quota` et sa s
 d'une instance qui veut notre comportement. Une instance tierce naît avec les siens —
 typiquement sans aucune de nos clés de plateforme.
 
-## Le producteur d'aujourd'hui, et son vocabulaire
+## Le producteur : oto-commerce, et ce que la coupure a laissé en base
 
-La réconciliation du commerce (`billing_droits.py`) dérive les lignes de l'état des
-abonnements et des dons, et les aligne ; elle pose `1` pour un droit oui/non. Ses
-étiquettes de source sont `subscription`, `offered`, `partner`, `contract` (et un essai
-s'étiquettera `trial`).
+oto-commerce pose et retire les droits par l'API de service, sous les étiquettes de la
+liste fermée `subscription`, `trial`, `offered`, `partner`, `contract`.
+
+⚠️ **Les lignes posées AVANT la coupure restent** : la réconciliation interne en avait
+posé sous `subscription`, `offered`, `partner` et `contract`, à la portée org, et plus
+personne dans le cœur ne les réaligne ni ne les retire. Elles valent jusqu'à leur
+échéance — une ligne sans échéance (plan offert, contrat reconduit, don perpétuel) vaut
+donc jusqu'à ce qu'oto-commerce la repose ou la retire. Reposer la même quadruple
+(org, personne, droit, source) la remplace : c'est ainsi qu'oto-commerce les reprend.
 
 ⚠️ **Écart de vocabulaire avec la conception**, qui nomme les sources
 `abonnement | essai | don | instance` : les étiquettes en place sont conservées, pas
 renommées — la source étant opaque pour le cœur, le renommage est l'affaire du
 producteur, et il réécrirait des lignes servies.
+
+## Ce que le cœur refuse — 409 `billing_moved`
+
+Un geste qui vendait, offrait ou déclarait un droit n'aurait plus d'effet : il refuse,
+nommément, avant d'écrire quoi que ce soit (`capabilities/_facturation_externe.py`, une
+seule fabrique, déclarée sur chaque capacité) :
+
+| capacité | refusé |
+|---|---|
+| `billing.subscribe`, `billing.confirm`, `billing.method_change{,_confirm}` | toujours |
+| `billing.cancel`, `billing.resume` | toujours |
+| `billing.admin_set_plan` (`oto_admin_set_plan`, plan offert ou retiré) | toujours |
+| `billing.admin_set_contract`, `billing.admin_cancel_contract` | toujours |
+| `platform.option.set` (`oto_admin_set_option`) | pour une clé du catalogue ; `beta`, `claude_subscription`… restent posables, org et personne |
+| `platform.connector.access_set` | pour un connecteur dont l'option est une clé du catalogue (`unipile`) ; la clé de plateforme se partage alors par `platform.org.grant_key` (une org) ou `platform.key.grant` (un compte) |
+
+Le runner de facturation est gelé (`OTO_BILLING_RUNNER_ENABLED=0`) ; s'il tourne quand
+même, il refuse chaque échéance due et le journalise en erreur, jamais un débit
+(`billing_runner._refuser_l_echeance`). `confirm` lui-même, encore atteint par le webhook
+et le rattrapage du runner, grave un encaissement puis refuse, sans ouvrir d'abonnement
+(une erreur au journal nomme l'org et le paiement). Restent servis : `billing.status`, le
+catalogue, les paiements, les factures, le webhook Mollie.
+
+**Un seul écrivain** : seule l'API de service (`capabilities/service_commerce.py`)
+appelle `db/entitlements.grant` et `revoke` — un banc AST le tient, quel que soit l'alias
+d'import (`tests/test_coupure_du_coeur.py`).
 
 ## La migration de la base servie — les révisions
 

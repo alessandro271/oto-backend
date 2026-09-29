@@ -15,14 +15,6 @@ from oto_mcp.db import billing as db_billing
 from oto_mcp.mollie_client import MollieError
 
 
-@pytest.fixture(autouse=True)
-def _droits_declares_hors_banc(monkeypatch):
-    """La réconciliation des droits déclarés lit la base : son banc est
-    `test_billing_droits_live`. Ici, elle est neutralisée."""
-    from oto_mcp import billing as _billing
-    monkeypatch.setattr(_billing, "reconcilier_droits", lambda org_id: None)
-
-
 # ── période calendaire ───────────────────────────────────────────────────────
 
 def test_add_period_month_end_clamps():
@@ -226,7 +218,9 @@ def _wire_confirm(monkeypatch, *, payment, mandate=None, sub=None, age=None):
     monkeypatch.setattr(billing.mollie_client, "get_payment",
                         lambda i: {"mode": "live", **payment})
     monkeypatch.setattr(billing.mollie_client, "valid_mandate", lambda cid: mandate)
-    monkeypatch.setattr(billing, "apply_plan_entitlements", lambda org, plan: None)
+    from oto_mcp import billing_invoices
+    monkeypatch.setattr(billing_invoices, "tracer_encaissement",
+                        lambda rid: state.setdefault("trace", rid))
     return state
 
 
@@ -242,47 +236,23 @@ def test_confirm_failure_closes_payment(monkeypatch):
     assert "upsert" not in state                         # jamais de miroir sur échec
 
 
-def test_confirm_success_opens_subscription(monkeypatch):
+def test_un_encaissement_apres_la_coupure_est_grave_puis_refuse(monkeypatch, caplog):
+    """Coupure du cœur (#1097) : un checkout ouvert avant la bascule et payé après.
+    L'encaissement est gravé et tracé — le journal dit ce que le PSP a fait —, puis
+    `confirm` REFUSE (`billing_moved`) : aucun abonnement ouvert, et une ERREUR au
+    journal nomme l'org et le paiement, pour que l'encaissement orphelin se voie."""
     state = _wire_confirm(
         monkeypatch,
         payment={"status": "paid", "customerId": "cst_1", "method": "creditcard",
                  "id": "tr_1", "metadata": {"org_id": "42", "plan": "premium"}},
         mandate={"id": "mdt_1", "mandateReference": "RUM123"})
-    out = billing.confirm(42)
-    assert out["status"] == "active" and out["plan"] == "premium" and out["method"] == "card"
-    org, kw = state["upsert"]
-    assert (org, kw["plan"], kw["mandate_id"], kw["status"]) == (42, "premium", "mdt_1", "active")
-    assert kw["provider"] == "mollie"
-    assert kw["next_billing_at"] == kw["current_period_end"]
-
-
-def test_confirm_paid_without_mandate_yet_waits(monkeypatch):
-    # #493 : le mandat naît quelques MINUTES après l'encaissement. Tant que la
-    # fenêtre court, c'est une attente — pas un refus servi au payeur, qui repaierait.
-    state = _wire_confirm(monkeypatch,
-                          payment={"status": "paid", "customerId": "cst_1", "id": "tr_1",
-                                   "metadata": {"org_id": "42", "plan": "premium"}},
-                          mandate=None)
-    out = billing.confirm(42)
-    assert out["status"] == "pending_mandate" and out["payment_status"] == "paid"
-    assert out["retry_after"] > 0
-    assert "upsert" not in state          # jamais d'abonnement irrenouvelable posé
-    # l'encaissement est gravé AVANT le contrôle de mandat : le journal dit ce que
-    # le PSP a fait, pas ce qu'on a su en faire.
-    assert state["update"][1]["status"] == "paid"
-
-
-def test_confirm_paid_without_mandate_refuses_past_the_window(monkeypatch):
-    # Passé la fenêtre ce n'est plus une course : récurrence impossible, reprise
-    # manuelle — le refus historique `no_mandate` garde exactement ce sens-là.
-    state = _wire_confirm(monkeypatch,
-                          payment={"status": "paid", "customerId": "cst_1", "id": "tr_1",
-                                   "metadata": {"org_id": "42", "plan": "premium"}},
-                          mandate=None, age=billing.PENDING_WINDOW + timedelta(minutes=1))
-    with pytest.raises(RuntimeError, match="no_mandate"):
-        billing.confirm(42)
-    assert "upsert" not in state
-    assert state["update"][1]["status"] == "paid"   # l'encaissement reste gravé
+    with caplog.at_level("ERROR", logger="oto_mcp.billing"):
+        with pytest.raises(ValueError, match="^billing_moved:"):
+            billing.confirm(42)
+    assert "upsert" not in state, "aucune écriture d'abonnement"
+    assert state["update"][1]["status"] == "paid" and state["trace"] == 7
+    erreurs = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
+    assert any("org 42" in m and "tr_1" in m and "billing_moved" in m for m in erreurs)
 
 
 def test_confirm_idempotent_when_active(monkeypatch):
@@ -293,12 +263,6 @@ def test_confirm_idempotent_when_active(monkeypatch):
 
 
 # ── cancel & entitlement helper ──────────────────────────────────────────────
-
-def test_cancel_requires_subscription(monkeypatch):
-    monkeypatch.setattr(db_billing, "get_org_subscription", lambda org: None)
-    with pytest.raises(ValueError, match="not_subscribed"):
-        billing.cancel(42)
-
 
 def test_plan_options_mapping():
     assert "unipile" in billing.plan_options("premium")

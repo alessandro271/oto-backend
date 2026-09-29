@@ -142,8 +142,11 @@ base n'a pas bougé, CONSERVE et signale une base éditée — défauts servis p
 - **Relance des comptes jamais actifs** : **REST seule** (`oto_admin_outreach`) · ⚠️ comptée par **boîte mail**, jamais
   par compte ni par org — un humain s'inscrit deux fois, et l'index unique `(campagne, sub)` ne voit pas ce doublon-là ;
   tenant partenaire écarté **par la requête** ; la langue se choisit, ne se devine pas (`docs/relance-comptes.md`).
-- **Facturation & avantages offerts** : `billing.status` porte `granted[]` pour les deux façons d'offrir (abonnement
-  `comp`, don d'option) · ⚠️ l'avantage **se nomme** et **est un avantage ce qui est vendu** — un drapeau de population
+- **Facturation & avantages offerts** : ⚠️⚠️ **la facturation est tenue par oto-commerce depuis la coupure du cœur
+  (#1097)** — le cœur ne pose AUCUN droit (`org_entitlements` : oto-commerce seul, par l'API de service), les gestes
+  de vente et d'offre (souscrire, confirmer, moyen de paiement, résilier/reprendre, plan offert, contrat, option du catalogue) refusent en
+  409 `billing_moved`, le runner refuse toute échéance ; lectures, factures et webhook restent servis
+  (`docs/droits-declares.md`) · `billing.status` porte `granted[]`, qui n'annonce plus un droit du catalogue · ⚠️ l'avantage **se nomme** et **est un avantage ce qui est vendu** — un drapeau de population
   comme `beta` n'est pas un cadeau · ⚠️⚠️ rien qui s'adresse au titulaire d'une org ne touche une org d'un **tenant
   tiers** · ⚠️ le discriminant est `db.org_tenant_slug`, **union de trois axes** — `orgs.tenant_id` porte désormais,
   mais il est ÉCRIT par quelqu'un quand les deux autres se DÉRIVENT du jeton, donc jamais seul · ⚠️ l'usage inclus **ne refuse

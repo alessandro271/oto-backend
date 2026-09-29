@@ -1,19 +1,11 @@
-"""Billing — 4 plans (Alexis 06/07) + abonnement forcé par un admin (comp,
-non payé) + levée de quota (fin des credits d'appel). ADR 0043."""
+"""Billing — 4 plans (Alexis 06/07) + abonnement offert (comp, non payé, jamais tiré)
++ levée de quota (fin des credits d'appel). ADR 0043."""
 from __future__ import annotations
 
 import pytest
 
 from oto_mcp import access, billing, billing_runner
 from oto_mcp.db import billing as db_billing
-
-
-@pytest.fixture(autouse=True)
-def _droits_declares_hors_banc(monkeypatch):
-    """La réconciliation des droits déclarés lit la base : son banc est
-    `test_billing_droits_live`. Ici, elle est neutralisée."""
-    from oto_mcp import billing as _billing
-    monkeypatch.setattr(_billing, "reconcilier_droits", lambda org_id: None)
 
 
 # ── catalogue des 4 plans ────────────────────────────────────────────────────
@@ -49,53 +41,9 @@ def test_plan_carries_no_cap_and_unmetered():
     assert billing.PLANS["enterprise"]["unipile_accounts"] is None
 
 
-# ── admin force plan (comp) ──────────────────────────────────────────────────
-
-def _wire_admin(monkeypatch):
-    state = {}
-    monkeypatch.setattr(db_billing, "set_comp_subscription",
-                        lambda org, plan, granted_by=None: state.update(comp=(org, plan, granted_by)))
-    monkeypatch.setattr(billing.db, "set_org_unipile_limit",
-                        lambda org, lim: state.update(limit=(org, lim)))
-    monkeypatch.setattr(billing.db, "org_tenant_slug", lambda org: "oto")
-    monkeypatch.setattr(billing, "status", lambda org: {"subscribed": True, "org_id": org})
-    return state
-
-
-def test_admin_set_plan_forces_comp_and_configures_org(monkeypatch):
-    state = _wire_admin(monkeypatch)
-    billing.admin_set_plan(7, "business", granted_by="admin-sub")
-    assert state["comp"] == (7, "business", "admin-sub")
-    # un palier sans nombre de sièges n'a pas d'avis : le plafond de l'org n'est pas
-    # touché (#805, cf. test_billing_seat_cap.py)
-    assert "limit" not in state
-
-
-def test_admin_set_plan_rejects_unknown(monkeypatch):
-    _wire_admin(monkeypatch)
-    with pytest.raises(ValueError, match="unknown_plan"):
-        billing.admin_set_plan(7, "platinum", granted_by="admin-sub")
-
-
-def test_admin_clear_refuses_paid(monkeypatch):
-    monkeypatch.setattr(db_billing, "get_org_subscription",
-                        lambda org: {"provider": "mollie", "status": "active"})
-    with pytest.raises(ValueError, match="paid_subscription"):
-        billing.admin_clear_plan(7)
-
-
-def test_admin_clear_removes_comp(monkeypatch):
-    state = {}
-    monkeypatch.setattr(db_billing, "get_org_subscription",
-                        lambda org: {"provider": "comp", "status": "active"})
-    monkeypatch.setattr(db_billing, "delete_subscription",
-                        lambda org: state.update(deleted=org) or True)
-    monkeypatch.setattr(billing.db, "set_org_unipile_limit",
-                        lambda org, lim: state.update(limit=(org, lim)))
-    out = billing.admin_clear_plan(7)
-    assert out["subscribed"] is False
-    assert state["deleted"] == 7 and "limit" not in state   # plafond non touché (#805)
-
+# ── abonnement offert (comp) : le runner ne le tire jamais ─────────────────
+# (Offrir un plan est refusé depuis la coupure du cœur, #1097 — `billing_moved`,
+# cf. `test_coupure_du_coeur.py` ; un comp déjà en base reste lu.)
 
 def test_runner_never_charges_comp(monkeypatch):
     charged = {}

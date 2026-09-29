@@ -97,16 +97,17 @@ def phrase(libelle: str, personnes: Optional[list[dict]]) -> str:
 def qui_leve_une_option(sub: Optional[str], org_id: Optional[int]) -> str:
     """Qui lève le refus d'une option payante de l'org, et où (oto#108).
 
-    Deux portes, et le refus doit dire les deux : un administrateur de l'ORG souscrit
-    une formule qui l'inclut (sa page de facturation — `billing.subscribe`), ou
-    l'équipe de la plateforme l'offre (`platform.option.set`). La marque n'est pas
+    Une seule porte depuis la coupure du cœur (#1097) : la FACTURATION de l'org, tenue
+    par le service de facturation, qui pose le droit — qu'un administrateur de l'org y
+    prenne une formule, ou que l'équipe de la plateforme l'y offre. Le cœur ne vend ni
+    n'offre plus rien (`billing_moved`). La marque n'est pas
     nommée : sous un tenant, la plateforme que voit l'utilisateur n'est pas la nôtre. « À accorder par un
     admin » seul laissait l'administrateur de l'org se croire visé, chercher un geste
     qu'il n'a pas, et conclure que le connecteur n'était pas supporté."""
     from . import links  # paresseux : `links` lit la config des tenants à l'appel
     facturation = links.link_for("billing", sub=sub)
     ou = f" ({facturation})" if facturation else ""
-    return (" Qui la lève : un administrateur de cette org, en souscrivant une "
-            f"formule qui l'inclut depuis sa page de facturation{ou} — ou l'équipe "
-            "de la plateforme, qui peut l'offrir à l'org."
+    return (" Qui la lève : la facturation de l'org, qui pose ce droit — un "
+            f"administrateur de cette org y prend une formule qui l'inclut{ou}, ou "
+            "l'équipe de la plateforme l'y offre."
             + phrase("Administrateurs de cette org", admins_de_l_org(sub, org_id)))

@@ -20,14 +20,6 @@ from oto_mcp.capabilities._types import AuthzDenied
 from oto_mcp.db import billing as db_billing
 
 
-@pytest.fixture(autouse=True)
-def _droits_declares_hors_banc(monkeypatch):
-    """La réconciliation des droits déclarés lit la base : son banc est
-    `test_billing_droits_live`. Ici, elle est neutralisée."""
-    from oto_mcp import billing as _billing
-    monkeypatch.setattr(_billing, "reconcilier_droits", lambda org_id: None)
-
-
 # Les déclarations relevées sur les processus servis le 10/09/2026 — chaque
 # environnement se nommait alors par son URL publique ; c'est `OTO_ENV` qui le porte
 # depuis le 15/09, et Sentry reste le second témoin qu'on recoupe.
@@ -61,8 +53,6 @@ def souscription(monkeypatch):
                         lambda rid, **k: ecrit.append(("journal", rid, k)) or True)
     monkeypatch.setattr(db_billing, "upsert_org_subscription",
                         lambda org, **k: ecrit.append(("abonnement", org, k["plan"])))
-    monkeypatch.setattr(billing, "apply_plan_entitlements",
-                        lambda org, plan: ecrit.append(("droit", org, plan)))
     from oto_mcp import billing_invoices
     monkeypatch.setattr(billing_invoices, "tracer_encaissement",
                         lambda rid: ecrit.append(("facture", rid)))
@@ -81,12 +71,17 @@ def souscription(monkeypatch):
     return poser, ecrit
 
 
-def test_en_production_un_paiement_reel_ouvre_le_droit(souscription, monkeypatch):
+def test_en_production_un_paiement_reel_est_grave_mais_n_ouvre_rien(souscription,
+                                                                  monkeypatch):
+    """Coupure du cœur (#1097) : même réel et en production, l'encaissement est gravé
+    et tracé, puis refusé (`billing_moved`) — aucun abonnement."""
     poser, ecrit = souscription
     _env(monkeypatch, *PROD)
     poser("live")
-    assert billing.confirm(42)["status"] == "active"
-    assert ("abonnement", 42, "standard") in ecrit and ("droit", 42, "standard") in ecrit
+    with pytest.raises(ValueError, match="billing_moved"):
+        billing.confirm(42)
+    assert ecrit == [("journal", 7, {"status": "paid", "payment_id": "tr_1"}),
+                     ("facture", 7)]
 
 
 @pytest.mark.parametrize("mode", ["test", None], ids=["test", "absent"])

@@ -15,16 +15,22 @@ Le **consentement** est le second préalable (#487, `billing_consent`) : 409
 courante, via `me.legal.accept {context: "purchase"}`. Les deux préalables sont
 rendus ENSEMBLE dans `details.blockers` — le tunnel les affiche d'un coup au lieu
 de les découvrir un par un.
+
+⚠️ **Depuis la coupure du cœur (#1097), rien ne se vend ni ne s'offre ici.** oto-commerce
+tient la facturation et pose seul les droits. Souscrire, confirmer, changer de moyen de
+paiement, offrir un plan, poser ou clore un contrat REFUSENT en 409 `billing_moved`
+(`_facturation_externe`), avant tout appel au domaine — résiliation et reprise
+comprises. Restent servis : l'état (`billing.status`), le catalogue, les paiements.
 """
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime, timezone
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
 from .. import billing, billing_consent
+from . import _facturation_externe as facturation_externe
 from ..mollie_client import MollieError
 from ._authz import ORG_ADMIN, ORG_MEMBER, SUB_ONLY, SUPER_ADMIN
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
@@ -227,7 +233,7 @@ class GrantedBenefit(BaseModel):
 
 class BillingStatus(BaseModel):
     """État d'abonnement de l'org active — servi aussi bien par billing.status que
-    par billing.cancel (qui rend l'état APRÈS la demande de résiliation).
+    par billing.cancel (sa forme de réponse ; refusé depuis la coupure du cœur, #1097).
 
     ⚠️ DEUX formes selon qu'une ligne d'abonnement existe : sans abonnement, la
     réponse se réduit à `{subscribed: false, plans: […]}` et TOUS les autres champs
@@ -352,13 +358,13 @@ class BillingStatus(BaseModel):
                     "c'est la date du PREMIER constat, pas du dernier.")
     granted: list["GrantedBenefit"] = Field(
         default_factory=list,
-        description="Avantages payants OFFERTS à l'org (jamais à une personne : un "
-                    "don personnel n'ouvre plus d'option payante) — servis dans les "
-                    "DEUX branches, y compris "
-                    "`subscribed:false`. Liste vide = rien d'offert **ou** org hors "
-                    "du périmètre du dispositif (une org hébergée par un tenant "
-                    "tiers n'en reçoit jamais : ses clients ne sont pas les nôtres). "
-                    "L'absence ne prouve donc pas l'absence de don.")
+        description="Avantages payants OFFERTS à l'org, d'après une marque de don. "
+                    "⚠️ Depuis que la facturation est tenue par le service de "
+                    "facturation (oto-commerce), un avantage qui est un droit du "
+                    "catalogue (la messagerie hébergée…) n'est plus annoncé ici : ce "
+                    "qui est offert se lit dans le service de facturation, qui le pose. "
+                    "Liste vide = rien à annoncer d'ici — elle ne prouve donc pas "
+                    "l'absence de don.")
     usage: Optional[MonthlyUsage] = Field(
         default=None,
         description="Consommation du mois en cours face à ce qui est inclus, servie "
@@ -590,21 +596,15 @@ def _status(ctx: ResolvedCtx, inp: NoInput) -> dict:
 
 
 def _subscribe(ctx: ResolvedCtx, inp: SubscribeInput) -> dict:
-    def call():
-        # `sub` = l'appelant : accepter des documents est un acte de PERSONNE, pas
-        # d'organisation (ADR 0043 fait payer l'org ; c'est un humain qui signe).
-        return billing.subscribe(ctx.org_id, inp.plan, inp.return_url,
-                                 sub=ctx.sub, method=inp.method)
-
-    return _domain(call)
+    raise facturation_externe.refus("Souscrire un abonnement")
 
 
 def _confirm(ctx: ResolvedCtx, inp: ConfirmInput) -> dict:
-    return _domain(billing.confirm, ctx.org_id, inp.payment_ref)
+    raise facturation_externe.refus("Confirmer une souscription")
 
 
 def _cancel(ctx: ResolvedCtx, inp: NoInput) -> dict:
-    return _domain(billing.cancel, ctx.org_id)
+    raise facturation_externe.refus("Résilier un abonnement")
 
 
 class MethodChangeInput(BaseModel):
@@ -635,56 +635,27 @@ class MethodChangeResult(BaseModel):
 
 
 def _method_change_start(ctx: ResolvedCtx, inp: MethodChangeInput) -> dict:
-    from .. import billing_method
-    return _domain(lambda: billing_method.start(ctx.org_id, inp.return_url))
+    raise facturation_externe.refus("Changer de moyen de paiement")
 
 
 def _method_change_confirm(ctx: ResolvedCtx, inp: ConfirmInput) -> dict:
-    from .. import billing_method
-    return _domain(lambda: billing_method.confirm(ctx.org_id, inp.payment_ref))
+    raise facturation_externe.refus("Confirmer un changement de moyen de paiement")
 
 
 def _resume(ctx: ResolvedCtx, inp: NoInput) -> dict:
-    return _domain(billing.resume, ctx.org_id)
+    raise facturation_externe.refus("Reprendre un abonnement résilié")
 
 
 def _admin_set_plan(ctx: ResolvedCtx, inp: AdminPlanInput) -> dict:
-    if inp.plan:
-        return _domain(lambda: billing.admin_set_plan(
-            inp.org_id, inp.plan, granted_by=ctx.sub))
-    return _domain(lambda: billing.admin_clear_plan(inp.org_id))
-
-
-def _date(brut: Optional[str], champ: str, *, fin_de_journee: bool) -> Optional[datetime]:
-    """'YYYY-MM-DD' (début ou fin de journée, UTC) ou ISO 8601 → datetime ; `None`/vide
-    = non fourni."""
-    if brut is None or not brut.strip():
-        return None
-    brut = brut.strip()
-    try:
-        if len(brut) == 10:
-            jour = datetime.strptime(brut, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-            return jour.replace(hour=23, minute=59, second=59) if fin_de_journee else jour
-        d = datetime.fromisoformat(brut.replace("Z", "+00:00"))
-        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
-    except ValueError:
-        raise AuthzDenied(400, "invalid_body",
-                          f"{champ} invalide : {brut!r}. Attendu 'YYYY-MM-DD' ou un "
-                          "horodatage ISO 8601.")
+    raise facturation_externe.refus("Offrir un plan" if inp.plan else "Retirer un plan offert")
 
 
 def _admin_set_contract(ctx: ResolvedCtx, inp: AdminContractInput) -> dict:
-    debut = _date(inp.starts_at, "starts_at", fin_de_journee=False)
-    fin = _date(inp.ends_at, "ends_at", fin_de_journee=True)
-    return _domain(lambda: billing.admin_set_contract(
-        inp.org_id, inp.plan, seats=inp.seats, granted_by=ctx.sub,
-        unit_amount=inp.unit_amount, starts_at=debut, ends_at=fin,
-        interval=inp.interval, reference=inp.reference))
+    raise facturation_externe.refus("Déclarer un contrat")
 
 
 def _admin_cancel_contract(ctx: ResolvedCtx, inp: AdminContractCancelInput) -> dict:
-    fin = _date(inp.ends_at, "ends_at", fin_de_journee=True)
-    return _domain(lambda: billing.admin_cancel_contract(inp.org_id, ends_at=fin))
+    raise facturation_externe.refus("Résilier un contrat")
 
 
 def _payments(ctx: ResolvedCtx, inp: PaymentsInput) -> dict:
@@ -713,34 +684,36 @@ _BILLING_CAPS = [
     Capability(
         key="billing.subscribe", handler=_subscribe, Input=SubscribeInput,
         authz=ORG_ADMIN, Output=SubscribeStarted,
-        description="Open a subscription: returns a hosted Mollie checkout URL. "
-                    "Refuses with 409 while a precondition is unmet — "
-                    "`billing_identity_required` (no billing identity on the org), "
-                    "`vat_consumer_unsupported` (EU consumer outside France), "
-                    "`legal_required` (caller has not accepted CGU/CGV/DPA at their "
-                    "current version), `already_subscribed`, `payment_pending`. ALL "
-                    "unmet preconditions are listed in `details.blockers`; the "
-                    "top-level code names only the first.",
+        description="Open a subscription. ⚠️ Always refused with 409 `billing_moved`: "
+                    "billing is run by the billing service (oto-commerce), which sets "
+                    "the org's rights — subscribing happens there.",
+        errors=(facturation_externe.declaration(),),
         rest=RestBinding("POST", "/api/me/billing/subscribe"),
     ),
     Capability(
         key="billing.confirm", handler=_confirm, Input=ConfirmInput,
         authz=ORG_ADMIN, Output=ConfirmResult,
+        description="Confirm a subscription's first payment. ⚠️ Always refused with 409 "
+                    "`billing_moved`: billing is run by the billing service (oto-commerce).",
+        errors=(facturation_externe.declaration(),),
         rest=RestBinding("POST", "/api/me/billing/confirm"),
     ),
-    # Résiliation à fin de période : rend le MÊME état que billing.status (avec
-    # canceled_at posé, statut encore 'active') — d'où l'Output partagé.
+    # Résiliation et reprise : refusées depuis la coupure du cœur (#1097), comme les
+    # autres gestes du cycle — l'abonnement se gère dans oto-commerce.
     Capability(
         key="billing.cancel", handler=_cancel, Input=NoInput,
         authz=ORG_ADMIN, Output=BillingStatus,
+        description="Cancel the org's subscription. ⚠️ Always refused with 409 "
+                    "`billing_moved`: billing is run by the billing service (oto-commerce).",
+        errors=(facturation_externe.declaration(),),
         rest=RestBinding("POST", "/api/me/billing/cancel"),
     ),
-    # L'inverse de la résiliation, qui n'existait pas : l'écran annonçait la date de
-    # bascule sans offrir de revenir en arrière (#845). Purement local — résilier ne
-    # révoque pas le mandat, donc reprendre n'encaisse rien et n'appelle personne.
     Capability(
         key="billing.resume", handler=_resume, Input=NoInput,
         authz=ORG_ADMIN, Output=BillingStatus,
+        description="Undo a subscription cancellation. ⚠️ Always refused with 409 "
+                    "`billing_moved`: billing is run by the billing service (oto-commerce).",
+        errors=(facturation_externe.declaration(),),
         rest=RestBinding("POST", "/api/me/billing/resume"),
     ),
     # Changer de moyen de paiement (#845 ①) — on perdait un abonné payant en silence :
@@ -750,11 +723,17 @@ _BILLING_CAPS = [
     Capability(
         key="billing.method_change", handler=_method_change_start,
         Input=MethodChangeInput, authz=ORG_ADMIN, Output=MethodChangeStarted,
+        description="Change the payment method. ⚠️ Always refused with 409 "
+                    "`billing_moved`: billing is run by the billing service (oto-commerce).",
+        errors=(facturation_externe.declaration(),),
         rest=RestBinding("POST", "/api/me/billing/method"),
     ),
     Capability(
         key="billing.method_change_confirm", handler=_method_change_confirm,
         Input=ConfirmInput, authz=ORG_ADMIN, Output=MethodChangeResult,
+        description="Confirm a payment-method change. ⚠️ Always refused with 409 "
+                    "`billing_moved`: billing is run by the billing service (oto-commerce).",
+        errors=(facturation_externe.declaration(),),
         rest=RestBinding("POST", "/api/me/billing/method/confirm"),
     ),
     Capability(
@@ -762,37 +741,28 @@ _BILLING_CAPS = [
         authz=ORG_MEMBER, Output=PaymentsView,
         rest=RestBinding("GET", "/api/me/billing/payments"),
     ),
-    # Admin : forcer un plan sur une org SANS paiement (abonnement comp) ou le
-    # retirer (plan=null). Ouvre l'entitlement (options du plan) immédiatement ; le
-    # plafond messagerie de l'org n'est pas touché tant que le plan n'en porte pas
-    # (#805). Sert pilotes/partenaires + palier « sur devis ».
+    # Admin : offrir un plan, déclarer ou résilier un contrat. Refusés depuis la coupure
+    # du cœur (#1097) : oto-commerce pose seul les droits ; ces routes restent montées
+    # pour dire OÙ le geste se fait, plutôt que de répondre 404.
     Capability(
         key="billing.admin_set_plan", handler=_admin_set_plan, Input=AdminPlanInput,
         authz=SUPER_ADMIN,
-        description="[super admin] Force a plan on an org WITHOUT payment (comp "
-                    "subscription): unlocks the plan's options immediately, no PSP, "
-                    "never charged. Does NOT change the org's messaging seat cap "
-                    "(no plan sets one today): a cap set by an admin stays, otherwise "
-                    "the platform default applies. Pass plan=null to remove a comp "
-                    "plan (refuses to touch a PAID subscription; the seat cap stays "
-                    "as is). For pilots, partners and the custom 'enterprise' tier.",
+        description="[super admin] Offer (or, with plan=null, remove) a plan on an org "
+                    "without payment. ⚠️ Always refused with 409 `billing_moved`: rights "
+                    "are set by the billing service (oto-commerce) only — offering a plan "
+                    "happens there.",
+        errors=(facturation_externe.declaration(),),
         mcp="oto_admin_set_plan",
         rest=RestBinding("POST", "/api/admin/orgs/{org_id}/plan", {"org_id": "org_id"}),
     ),
-    # Admin : un abonnement réglé HORS PLATEFORME (contrat, virement). Ce n'est pas un
-    # don : un abonnement payé ailleurs, qui ne prélève jamais. Déclarer et
-    # re-déclarer (renouveler, changer les licences) = PUT ; résilier = son acte à lui.
     Capability(
         key="billing.admin_set_contract", handler=_admin_set_contract,
         Input=AdminContractInput, authz=SUPER_ADMIN, Output=BillingStatus,
-        description="[super admin] Declare (or re-declare) a subscription PAID OFF "
-                    "PLATFORM (contract, bank transfer) on an org: `plan`, `seats` "
-                    "(licences), `unit_amount` (HT cents, for the record), `starts_at`, "
-                    "optional `ends_at` (omitted = tacitly renewed each `interval` until "
-                    "cancelled), `reference`. Never charged. Opens the plan's rights until "
-                    "`ends_at`; renewing = declaring again with a new date. Refuses to "
-                    "replace an active subscription paid on the platform "
-                    "(`paid_subscription`).",
+        description="[super admin] Declare a subscription paid off platform (contract, "
+                    "bank transfer). ⚠️ Always refused with 409 `billing_moved`: "
+                    "contracts and their rights are held by the billing service "
+                    "(oto-commerce) — declaring one happens there.",
+        errors=(facturation_externe.declaration(),),
         mcp="oto_admin_set_contract",
         rest=RestBinding("PUT", "/api/admin/orgs/{org_id}/contract",
                          {"org_id": "org_id"}),
@@ -800,9 +770,10 @@ _BILLING_CAPS = [
     Capability(
         key="billing.admin_cancel_contract", handler=_admin_cancel_contract,
         Input=AdminContractCancelInput, authz=SUPER_ADMIN, Output=BillingStatus,
-        description="[super admin] Cancel a subscription paid off platform: sets its end "
-                    "date — `ends_at` if given, otherwise the end of the current period. "
-                    "Its rights stop at that date.",
+        description="[super admin] Cancel a subscription paid off platform. ⚠️ Always "
+                    "refused with 409 `billing_moved`: contracts are held by the billing "
+                    "service (oto-commerce) — closing one happens there.",
+        errors=(facturation_externe.declaration(),),
         mcp="oto_admin_cancel_contract",
         rest=RestBinding("POST", "/api/admin/orgs/{org_id}/contract/cancel",
                          {"org_id": "org_id"}),

@@ -32,14 +32,6 @@ from oto_mcp import billing, billing_runner
 from oto_mcp.db import billing as db_billing
 
 
-@pytest.fixture(autouse=True)
-def _droits_declares_hors_banc(monkeypatch):
-    """La réconciliation des droits déclarés lit la base : son banc est
-    `test_billing_droits_live`. Ici, elle est neutralisée."""
-    from oto_mcp import billing as _billing
-    monkeypatch.setattr(_billing, "reconcilier_droits", lambda org_id: None)
-
-
 ORG = 219
 RETURN_URL = "https://dashboard.oto.cx/org/billing?billing=return"
 SUB = "u-219"
@@ -264,51 +256,47 @@ def scene(monkeypatch):
     for nom in ("create_customer", "create_first_payment", "update_payment",
                 "get_payment", "valid_mandate"):
         monkeypatch.setattr(billing.mollie_client, nom, getattr(mollie, nom))
-    monkeypatch.setattr(billing, "apply_plan_entitlements", lambda *a, **k: None)
+    from oto_mcp import billing_invoices
+    monkeypatch.setattr(billing_invoices, "tracer_encaissement", lambda rid: None)
     return clock, store, mollie
 
 
 # ── le rejeu ─────────────────────────────────────────────────────────────────
 
 def test_la_chronologie_du_25_aout_ne_debite_plus_qu_une_fois(scene):
+    """Le rejeu du 25/08, sous la coupure du cœur (#1097) : le checkout ouvert avant la
+    bascule est payé après. L'encaissement est gravé, le second clic reste bloqué, et
+    `confirm` refuse (`billing_moved`) sans ouvrir d'abonnement : un seul débit, aucun
+    abonné sans droit."""
     clock, store, mollie = scene
 
     # 10:29:44 — l'org ouvre un checkout.
     depart = billing.subscribe(ORG, "standard", RETURN_URL, sub=SUB)
     tr1 = depart["payment_intent_id"]
 
-    # 10:31:0x — elle paie. Le mandat, lui, mettra cinq minutes à naître.
+    # 10:31:0x — elle paie.
     clock.advance(minutes=1, seconds=20)
     mollie.pay(tr1)
     mollie.mandate_in(minutes=5)
 
-    # 10:31:05 — retour navigateur, 1,4 s après l'encaissement.
+    # 10:31:05 — retour navigateur : l'encaissement est gravé, puis refusé.
     clock.advance(milliseconds=1400)
-    retour = billing.confirm(ORG, payment_ref=tr1)
-    assert retour["status"] == "pending_mandate", "un paiement réussi ne se refuse pas"
-    assert retour["payment_status"] == "paid" and retour["retry_after"] > 0
-    # …et l'encaissement est DÉJÀ au journal : c'est ce qui manquait pour que la
-    # souscription suivante puisse s'en garder.
+    with pytest.raises(ValueError, match="billing_moved"):
+        billing.confirm(ORG, payment_ref=tr1)
     assert store.list_billing_payments(ORG)[0]["status"] == "paid"
 
-    # 10:31:44 — le payeur reclique (il a vu « en attente », pas « payé »).
+    # 10:31:44 — le payeur reclique : l'encaissement gravé ferme la porte.
     clock.advance(seconds=39)
     with pytest.raises(ValueError) as refus:
         billing.subscribe(ORG, "standard", RETURN_URL, sub=SUB)
     assert "payment_pending" in str(refus.value)
     assert tr1 in str(refus.value), "le refus doit nommer le paiement qui occupe la place"
 
-    # 10:36 — le mandat apparaît ; la re-sonde du navigateur ouvre l'abonnement.
-    clock.advance(minutes=5)
-    fin = billing.confirm(ORG, payment_ref=tr1)
-    assert fin["status"] == "active" and fin["plan"] == "standard"
-
     # Le verdict de l'incident.
     assert mollie.encaisses == [tr1], "un seul paiement encaissé"
     assert mollie.total_debite == PRIX, f"{PRIX} c débités, pas {2 * PRIX}"
     assert mollie.customers == ["cst_1"], "un seul customer Mollie pour l'org"
-    assert store.sub["status"] == "active" and store.sub["customer_id"] == "cst_1"
-    assert store.sub["mandate_id"] == "mdt_cst_1"
+    assert store.sub is None, "aucun abonnement ouvert après la coupure"
 
 
 def test_le_second_clic_ne_cree_pas_un_second_customer(scene):
@@ -349,43 +337,21 @@ def test_le_retour_navigateur_porte_l_identite_du_paiement(scene):
 
 # ── les rejeux : webhook doublé, confirm relancé ─────────────────────────────
 
-def test_deux_webhooks_pour_le_meme_paiement_n_ouvrent_qu_un_abonnement(scene):
-    """Mollie rappelle plusieurs fois. Le second passage ne doit ni re-poser le
-    miroir, ni repousser la fin de période d'un mois de plus."""
-    clock, store, mollie = scene
-    tr1 = billing.subscribe(ORG, "standard", RETURN_URL, sub=SUB)["payment_intent_id"]
-    clock.advance(minutes=1)
-    mollie.pay(tr1)
-    mollie.mandate_in(seconds=0)          # mandat immédiat : cas nominal
-
-    assert billing.process_webhook(tr1) == "confirmed"
-    fin_de_periode = store.sub["current_period_end"]
-
-    clock.advance(seconds=30)
-    assert billing.process_webhook(tr1) == "confirmed"
-    assert store.upserts == 1, "le miroir n'est posé qu'une fois"
-    assert store.sub["current_period_end"] == fin_de_periode
-
-
-def test_confirm_rejoue_ne_prolonge_pas_la_periode(scene):
-    """Le navigateur re-sonde tant qu'il est ouvert. Chaque appel doit être un
-    no-op informatif une fois l'abonnement posé — pas un mois offert."""
+def test_ni_le_webhook_ni_confirm_rejoues_n_ouvrent_d_abonnement(scene):
+    """Mollie rappelle plusieurs fois, le navigateur re-sonde : chaque passage grave
+    le même encaissement et refuse, jamais un abonnement (#1097)."""
     clock, store, mollie = scene
     tr1 = billing.subscribe(ORG, "standard", RETURN_URL, sub=SUB)["payment_intent_id"]
     clock.advance(minutes=1)
     mollie.pay(tr1)
     mollie.mandate_in(seconds=0)
 
-    premier = billing.confirm(ORG, payment_ref=tr1)
-    assert premier["status"] == "active"
-    fin_de_periode = store.sub["current_period_end"]
-
-    for _ in range(3):
+    for _ in range(2):
+        assert billing.process_webhook(tr1) == "not_confirmed"
         clock.advance(seconds=15)
-        rejeu = billing.confirm(ORG)
-        assert rejeu == {"status": "active", "plan": "standard"}
-    assert store.upserts == 1
-    assert store.sub["current_period_end"] == fin_de_periode
+        with pytest.raises(ValueError, match="billing_moved"):
+            billing.confirm(ORG, payment_ref=tr1)
+    assert store.upserts == 0 and store.sub is None
 
 
 def test_le_webhook_du_premier_paiement_bloque_le_second_clic(scene):
@@ -398,50 +364,31 @@ def test_le_webhook_du_premier_paiement_bloque_le_second_clic(scene):
     mollie.pay(tr1)
     mollie.mandate_in(minutes=5)
 
-    assert billing.process_webhook(tr1) == "awaiting_mandate"
+    assert billing.process_webhook(tr1) == "not_confirmed"
     clock.advance(seconds=40)
     with pytest.raises(ValueError, match="payment_pending"):
         billing.subscribe(ORG, "standard", RETURN_URL, sub=SUB)
 
 
-# ── le mandat qui n'arrive jamais ────────────────────────────────────────────
+# ── l'onglet fermé ───────────────────────────────────────────────────────────
 
-def test_un_mandat_qui_n_arrive_jamais_finit_par_etre_dit(scene):
-    """Passé la fenêtre, l'attente devient un mensonge : plus rien ne viendra. On
-    tranche pour le refus `no_mandate` (409), le code historique, dont c'est le seul
-    sens vrai — encaissé, récurrence impossible, reprise manuelle. L'encaissement,
-    lui, reste gravé au journal : c'est ce qui rend l'incident lisible."""
-    clock, store, mollie = scene
-    tr1 = billing.subscribe(ORG, "standard", RETURN_URL, sub=SUB)["payment_intent_id"]
-    clock.advance(minutes=1)
-    mollie.pay(tr1)                                    # aucun mandat, jamais
-
-    clock.advance(minutes=10)
-    assert billing.confirm(ORG, payment_ref=tr1)["status"] == "pending_mandate"
-
-    clock.advance(minutes=25)                          # au-delà de la fenêtre
-    with pytest.raises(RuntimeError, match="no_mandate"):
-        billing.confirm(ORG, payment_ref=tr1)
-    assert store.sub is None, "aucun abonnement qu'on ne saurait pas renouveler"
-    assert store.list_billing_payments(ORG)[0]["status"] == "paid"
-
-
-def test_l_onglet_ferme_est_rattrape_par_le_runner(scene):
-    """L'encaissement quitte la file de réconciliation dès qu'il est journalisé
-    `paid`. Sans une seconde file, un payeur qui ferme son onglet pendant la course
-    au mandat resterait débité et sans droits (#493)."""
+def test_l_onglet_ferme_est_rattrape_par_le_runner_qui_le_DIT(scene, caplog):
+    """L'encaissement sans abonnement reste repérable, et le rattrapage du runner le
+    DIT en erreur à chaque passage, sans jamais ouvrir d'abonnement (#1097) : c'est
+    ainsi qu'un encaissement orphelin se voit."""
     clock, store, mollie = scene
     tr1 = billing.subscribe(ORG, "standard", RETURN_URL, sub=SUB)["payment_intent_id"]
     clock.advance(minutes=1)
     mollie.pay(tr1)
-    mollie.mandate_in(minutes=5)
-    assert billing.confirm(ORG, payment_ref=tr1)["status"] == "pending_mandate"
-    # …puis l'onglet se ferme. Plus personne ne re-sonde côté navigateur.
+    mollie.mandate_in(seconds=0)
+    with caplog.at_level("ERROR"):
+        billing_runner._catch_up(ORG, tr1)
+    assert store.sub is None
     assert store.paid_initials_awaiting_subscription(
         since=datetime.now(timezone.utc) - timedelta(hours=48)), \
-        "l'encaissement sans abonnement doit rester repérable"
-
-    clock.advance(minutes=6)
-    billing_runner._catch_up(ORG, tr1)
-    assert store.sub["status"] == "active"
+        "l'encaissement sans abonnement reste repérable"
+    assert store.list_billing_payments(ORG)[0]["status"] == "paid"
+    assert any(str(ORG) in r.getMessage() and tr1 in r.getMessage()
+               and "billing_moved" in r.getMessage()
+               for r in caplog.records if r.levelname == "ERROR")
     assert mollie.total_debite == PRIX

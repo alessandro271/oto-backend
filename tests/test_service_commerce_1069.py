@@ -355,17 +355,21 @@ def test_la_valeur_effective_refuse_nommement(live):
 
 
 def test_la_lecture_directe_des_dons_d_option_part_a_cote_de_la_valeur(live):
-    """Un don d'option posé sur le compte n'ouvre pas l'option payante (la valeur reste
-    le défaut) : la lecture héritée le montre, la valeur non. Celui de l'org est
-    réconcilié en ligne `offered`."""
+    """Un don d'option n'ouvre pas l'option payante (la valeur reste le défaut), ni sur
+    le compte ni, depuis la coupure du cœur (#1097), sur l'org : plus rien ne le traduit
+    en droit. La lecture héritée le montre, la valeur non ; seule la ligne posée par le
+    service l'ouvre."""
     org, sub = _org(), _personne()
     db.set_option_comp("user", sub, "unipile", granted_by="admin-test")
     out = _effectif(sub, "unipile", org)
     assert (out["valeur"], out["defaut"], out["par"]) == (0, True, [])
     assert out["lecture_directe"] == {"option_comps": {"personne": True, "org": False}}
     db.set_option_comp("org", str(org), "unipile", granted_by="admin-test")
-    from oto_mcp import billing_droits
-    billing_droits.reconcilier(org)
+    out = _effectif(sub, "unipile", org)
+    assert (out["valeur"], out["defaut"], out["par"]) == (0, True, []), \
+        "le don d'org n'ouvre plus rien"
+    _appel("service.org.entitlement.put", org_id=org, right_key="unipile",
+           source="offered", value=1)
     out = _effectif(sub, "unipile", org)
     assert (out["valeur"], out["defaut"]) == (1, False)
     assert out["par"] == [{"portee": "org", "source": "offered", "valeur": 1}]

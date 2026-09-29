@@ -1,5 +1,12 @@
 """Runner d'échéances d'abonnement (ADR 0043) — la « récurrence » maison.
 
+⚠️ **Depuis la coupure du cœur (#1097), aucune échéance n'est tirée.** oto-commerce
+tient la facturation et pose seul les droits : le runner est gelé par
+`OTO_BILLING_RUNNER_ENABLED=0`, et s'il tourne quand même, `tick` refuse chaque
+échéance due (`_refuser_l_echeance`, une erreur au journal, jamais un débit). Le
+prélèvement décrit en (1) et (2) (`_charge_one`) n'a plus d'appelant servi ; il part
+avec le retrait du code de facturation du cœur.
+
 Le miroir local fait foi : cette boucle de fond (lifespan, même famille que
 scheduler.py) fait tout le cycle à intervalle horaire :
 
@@ -323,7 +330,9 @@ def _reconcile_one(row: dict, now: datetime) -> None:
 
 
 def _catch_up(org_id: int, payment_ref: str) -> None:
-    """Termine la pose du miroir pour un encaissement constaté hors `confirm`."""
+    """Rejoue `confirm` pour un encaissement constaté hors de lui. Depuis la coupure du
+    cœur (#1097), `confirm` grave l'encaissement puis refuse (`billing_moved`) : ce
+    rattrapage le redit alors en ERREUR à chaque passage, jamais un abonnement."""
     try:
         billing.confirm(org_id, payment_ref=payment_ref)
     except Exception as e:
@@ -335,16 +344,16 @@ def _catch_up(org_id: int, payment_ref: str) -> None:
                   org_id, payment_ref, e, exc_info=True)
 
 
-def _reposer_droits(org_id: int) -> None:
-    """Réaligne les droits déclarés de l'org après que ce tick a changé son état
-    (échéance encaissée, impayé, fermeture). Un échec est une ERREUR journalisée, pas un
-    arrêt du cycle de paiement : la réconciliation est rejouable, et la maintenance
-    quotidienne (`oto-mcp maintenance droits`) la repasse sur toutes les orgs."""
-    try:
-        billing.reconcilier_droits(org_id)
-    except Exception:  # noqa: BLE001 — journalisé ; les droits se rattrapent au passage suivant
-        log.error("billing_runner: droits de l'org %s non réalignés — l'échéance de "
-                  "ses droits déclarés reste celle d'avant ce tick", org_id, exc_info=True)
+def _refuser_l_echeance(sub_row: dict) -> str:
+    """La garde de la coupure du cœur (#1097) : une échéance due n'est NI prélevée NI
+    renouvelée. Depuis la bascule, les droits sont posés par oto-commerce seul ; un
+    renouvellement tiré ici prendrait l'argent sans qu'aucun droit ne suive. Le runner
+    doit être gelé (`OTO_BILLING_RUNNER_ENABLED=0`) : s'il tourne quand même, chaque
+    échéance due est une ERREUR journalisée, jamais un débit."""
+    log.error("billing_runner: org %s — échéance due NON prélevée : la facturation est "
+              "tenue par oto-commerce (billing_moved). Le runner devrait être gelé "
+              "(OTO_BILLING_RUNNER_ENABLED=0).", sub_row["org_id"])
+    return "refused"
 
 
 def tick() -> dict:
@@ -357,17 +366,13 @@ def tick() -> dict:
     for org_id in db_billing.sweep_period_end_cancellations():
         log.info("billing_runner: org %s résiliée (période échue)", org_id)
         counts["closed"] = counts.get("closed", 0) + 1
-        _reposer_droits(org_id)
     for org_id in db_billing.sweep_grace_expired():
         log.warning("billing_runner: org %s fermée (grace consommée)", org_id)
         counts["closed"] = counts.get("closed", 0) + 1
-        _reposer_droits(org_id)
 
     for sub_row in db_billing.due_subscriptions():
-        outcome = _charge_one(sub_row, now)
+        outcome = _refuser_l_echeance(sub_row)
         counts[outcome] = counts.get(outcome, 0) + 1
-        if outcome in ("renewed", "past_due"):
-            _reposer_droits(sub_row["org_id"])
 
     for row in db_billing.open_billing_payments():
         try:

@@ -5,6 +5,12 @@ type: reference
 
 # Facturation par org (ADR 0043) — le modèle, la TVA, le consentement, les factures, et le double débit du 25/08
 
+> ⚠️ **Depuis la coupure du cœur (#1097), la facturation est tenue par oto-commerce.** Le
+> cœur ne vend, n'offre ni ne prélève plus rien, et ne pose aucun droit : les gestes de
+> vente et d'offre refusent en 409 `billing_moved`, le runner est gelé et refuse toute
+> échéance (§ Les droits déclarés). Ce document décrit le code resté en place — les
+> lectures, les factures, le webhook — et l'histoire de ce qui s'y faisait.
+
 ## Ce que Mollie voit, et ce qu'il ne voit pas
 
 **Il n'y a pas d'abonnement Mollie.** Chercher `/v2/customers/<id>/subscriptions`
@@ -77,6 +83,12 @@ Le tunnel répare avec `POST /api/me/billing/identity` puis
 
 ## Deux façons d'offrir, et une seule était visible (2026-09-02)
 
+⚠️ **Depuis la coupure du cœur (#1097), aucune des deux ne s'offre plus ici** : plan
+offert et don d'une option du catalogue refusent en 409 `billing_moved`, et
+`granted[]` n'annonce plus un avantage qui est un droit du catalogue (aujourd'hui, tous) :
+ce qui est offert se lit dans le service de facturation, oto-commerce, qui le pose.
+Ce qui suit est l'histoire du dispositif, et reste vrai de sa mise en forme.
+
 Un droit payant peut s'ouvrir **sans** abonnement, et c'est là que le produit mentait.
 
 | chemin | ce qu'il écrit | ce que `billing.status` en disait |
@@ -110,10 +122,10 @@ est additive au sens du droit, elle ne retire rien. Une date se pose **ligne par
 ligne**, par un acte admin explicite (`oto_admin_set_option expires_at=…`), et
 s'efface en repassant une chaîne vide.
 
-- **Elle mord dans le seam** : le don d'org est recopié en droit déclaré (`offered`)
-  avec son échéance, et `access.org_has` ignore une ligne échue — les surfaces
-  d'entitlement tombent d'accord sans qu'aucune connaisse la règle. Une échéance
-  qu'aucun chemin n'applique serait pire que pas d'échéance.
+- **Elle mord dans le seam** : `has_option_comp` ignore une ligne échue, pour les
+  drapeaux hors catalogue (`beta`…) qui se posent encore ici. (Le don d'une option du
+  catalogue était recopié en droit déclaré `offered` avec son échéance par la
+  réconciliation, retirée à la coupure du cœur, #1097.)
 - **`list_option_comps` ne filtre PAS** : une console admin doit voir le don échu,
   sinon il devient invisible donc irrécupérable.
 - **Omettre `expires_at` ne l'efface pas** (sentinelle `db.KEEP_EXPIRY`) : deux
@@ -176,7 +188,6 @@ l'annonce plus.
 
 ### Ce qui ne demande PAS de consentement
 
-Un **abonnement offert** (`admin_set_plan`, `comp`) : rien n'y est vendu ni débité.
 Une **échéance** : le consentement a été donné à la souscription, `billing_runner`
 ne le rejoue pas — `_charge_one` ne prend d'ailleurs pas de `sub`, et un test le
 fige.
@@ -290,52 +301,64 @@ Les lignes recopiées de la projection ont leurs quatre satellites à `NULL` :
 « access ». Leur inventer un contexte ferait mentir la trace là où elle sert de
 preuve.
 
-## Les droits déclarés : le commerce les écrit, le cœur les relit (ADR 0070 §7)
+## Les droits déclarés : oto-commerce les écrit, le cœur les relit (ADR 0070 §7)
 
-Le cœur relit `org_entitlements` (`access.has_right`) et ne sait pas qui paie. Le
-commerce y **écrit** ses droits : c'est `billing_droits.reconcilier(org)`, rejouée
-après chaque geste qui change l'état de l'org.
+Le cœur relit `org_entitlements` (`access.has_right`) et ne sait pas qui paie.
+**Depuis la coupure du cœur (#1097), il n'y écrit plus rien** : le service de
+facturation, oto-commerce, pose et retire seul les droits, par l'API de service
+(`docs/droits-declares.md` §L'API du commerce).
 
-| état du commerce | source | échéance (`expires_at`) |
-| --- | --- | --- |
-| abonnement payé `active` | `subscription` | fin de période + 21 j (relances J+3, J+6, puis 15 j de grâce) |
-| abonnement payé résilié | `subscription` | fin de période |
-| abonnement payé `past_due` | `subscription` | `grace_until` |
-| abonnement offert (`comp`) | `offered` | sa fin de période, ou aucune |
-| don d'option posé sur l'ORG | `offered` | l'échéance du don |
-| les deux derniers, org hébergée par un partenaire | `partner` | aucune |
-| abonnement réglé hors plateforme (`contract`) | `contract` | sa date de fin, ou aucune ; + `members_max` = licences |
+Ce qui a été retiré avec la coupure :
 
-Un plan pose ses `options` et, s'il est `unmetered`, `platform_unmetered`
-(`billing.plan_rights`), valeur `1` (oui). **Le don fait à une PERSONNE n'écrit rien** :
-cette réconciliation ne pose que des lignes d'org ; une ligne de personne vient d'un
-autre producteur (l'API du commerce). Un don d'option d'org **hors catalogue** (`beta`)
-n'est pas posé en droit (#1066). Le modèle — catalogue, portée, `value_for`, défauts
-d'instance — est dans `docs/droits-declares.md`.
+- la réconciliation interne `billing_droits` (qui dérivait des abonnements, plans
+  offerts, contrats et dons d'org des lignes `subscription`, `offered`, `partner`,
+  `contract`), à ses trois appels : le démarrage (`reprise_droits`), le travail
+  `oto-mcp maintenance droits` du timer quotidien, et les gestes (`confirm`,
+  `cancel`, `resume`, le runner, les gestes d'admin, les dons d'org) ;
+- ses lectures (`db/billing.subscription_rights_state`, `org_option_comp_bounds`,
+  `orgs_with_commercial_rights`).
 
-- **Rejouable, pas événementielle.** Qui l'appelle : `confirm` (les deux branches,
-  pour que le rejeu du webhook rattrape une pose ratée), `cancel`, `resume`,
-  `admin_set_plan`, `admin_clear_plan`, le runner après une échéance encaissée, un
-  impayé ou une fermeture, et le don d'org (`admin.option.set`,
-  `platform.connector.access_set`). Un appel manqué se rattrape au boot, par
-  `oto-mcp maintenance droits` (timer quotidien) ou au geste suivant.
-- **Elle ne retire que ce que ses sources ont posé** (`subscription`, `offered`,
-  `partner`). Une autre étiquette ne lui appartient pas.
-- **La date ferme le droit toute seule** : aucune boucle n'a besoin de passer le jour
-  venu. `access.entitlements.value_for` filtre en SQL sur l'horloge de la base, et le droit est **relu à chaque usage** de la
-  clé plateforme (`quotas.exiger_option_payante`, au palier plateforme de la
-  résolution) : un canal branché sur la clé plateforme cesse de marcher à l'appel qui
-  suit l'échéance, avec un refus qui nomme la cause.
-- **La reprise** est la même fonction sur toutes les orgs (`reconcilier_tout`) : au
-  démarrage (`reprise_droits` au journal, avec ses comptes) ou par la commande. Se
-  vérifie par une lecture : `SELECT source, right_key, count(*) FROM
-  org_entitlements GROUP BY 1, 2`.
+⚠️ **Les lignes posées avant la coupure restent en base** et ne sont plus réalignées :
+une ligne `subscription` expire à la date qu'elle portait (fin de période + 21 j), une
+ligne sans échéance (plan offert, contrat reconduit, don perpétuel) vaut jusqu'à ce
+qu'oto-commerce la repose ou la retire. Se relit par
+`SELECT source, right_key, count(*) FROM org_entitlements GROUP BY 1, 2`.
+
+**La date ferme le droit toute seule** : aucune boucle n'a besoin de passer le jour
+venu. `access.entitlements.value_for` filtre en SQL sur l'horloge de la base, et le
+droit est **relu à chaque usage** de la clé plateforme (`quotas.exiger_option_payante`,
+au palier plateforme de la résolution).
+
+### Ce qui refuse désormais — 409 `billing_moved`
+
+Souscrire, confirmer, changer de moyen de paiement, résilier et reprendre
+(`/api/me/billing/{subscribe,confirm,method,method/confirm,cancel,resume}`), offrir ou
+retirer un plan (`oto_admin_set_plan`),
+déclarer ou résilier un contrat (`oto_admin_set_contract`, `oto_admin_cancel_contract`),
+offrir une option qui est une clé du catalogue (`oto_admin_set_option`,
+`platform.connector.access_set`). Le refus tombe à la capacité, avant le domaine, et
+dit que la facturation est tenue par oto-commerce. Le runner, gelé par
+`OTO_BILLING_RUNNER_ENABLED=0`, refuse de toute façon chaque échéance due
+(`_refuser_l_echeance`, une erreur au journal). Restent servis : `billing.status`, le
+catalogue, les paiements, les factures (PDF), et le webhook Mollie (monté).
+
+⚠️ **Un checkout ouvert avant la coupure et payé après** arrive encore à `confirm`, par
+le webhook ou le rattrapage du runner. L'encaissement est gravé (`paid`) et tracé,
+puis `confirm` refuse (`billing_moved`) : aucun abonnement, et une ERREUR au journal
+nomme l'org et le paiement — l'encaissement orphelin se voit, et se reprend dans
+oto-commerce. Le rattrapage du runner le redit à chaque passage pendant sa fenêtre
+(48 h). Les fonctions de domaine `cancel`, `resume` et la pose du plafond de sièges
+par un plan (`apply_plan_entitlements`) sont retirées.
 
 ## L'abonnement réglé hors plateforme (`provider='contract'`)
 
-Un achat réglé AILLEURS (contrat, virement) se déclare par un admin plateforme :
-`oto_admin_set_contract` / `PUT /api/admin/orgs/{id}/contract`. **Ce n'est pas un
-don** : c'est un abonnement payé ailleurs, et la réconciliation le traite comme tel.
+⚠️ **Depuis la coupure du cœur (#1097), un contrat ne se déclare ni ne se résilie plus
+ici** : `oto_admin_set_contract` et `oto_admin_cancel_contract` refusent en 409
+`billing_moved`, oto-commerce tient les contrats et leurs droits. Ce qui suit décrit un
+contrat DÉJÀ en base, qui reste lu (`billing.status`, fiche admin) sans rien ouvrir.
+
+Un achat réglé AILLEURS (contrat, virement) se déclarait par un admin plateforme.
+**Ce n'est pas un don** : c'est un abonnement payé ailleurs.
 
 - **Paramètres** : `plan` (ce qu'il ouvre), `seats` (licences), `unit_amount` (HT, en
   centimes, pour mémoire), `starts_at`, `ends_at` **facultative**, `interval`
@@ -343,16 +366,10 @@ don** : c'est un abonnement payé ailleurs, et la réconciliation le traite comm
   ligne `org_subscriptions` porte `provider='contract'`, `next_billing_at` NULL.
 - **Il ne prélève jamais** : le runner le saute (`_charge_one` → `skipped`), il n'est
   jamais dû, et il n'empêche pas d'archiver l'org (`ABONNEMENT_QUI_PRELEVE`).
-- **Droits** : ceux du plan, source `contract`, de `starts_at` à `ends_at` ; et
-  `members_max` = licences (une déclaration, que rien ne lit encore).
-- **Sans date de fin** = reconduction tacite, droits sans échéance. **La résiliation**
-  (`oto_admin_cancel_contract` / `POST …/contract/cancel`) pose la fin : la date donnée,
-  sinon la fin de la période en cours, comptée depuis `starts_at`. **Renouveler** =
-  re-déclarer avec une nouvelle date.
-- Refus : remplacer un abonnement payé sur la plateforme et actif
-  (`paid_subscription`) ; l'org ne résilie pas elle-même un contrat
-  (`contract_subscription`, aussi pour `admin_clear_plan`). Un contrat échu ne bloque
-  pas une souscription.
+- **Droits** : le cœur n'en pose aucun (oto-commerce les tient). Les lignes `contract`
+  posées avant la coupure restent jusqu'à leur échéance — aucune pour un contrat
+  reconduit tacitement.
+- L'org ne résilie pas elle-même un contrat (`contract_subscription`).
 - `billing.status` et la fiche admin d'org l'affichent : `provider`, `contract`
   (licences, prix, période, fin, référence), TVA `null` (rien n'est prélevé ici).
 - Table neuve : née au démarrage (`CREATE TABLE IF NOT EXISTS`) comme par la révision
@@ -820,6 +837,9 @@ aucune ligne `pending` n'est créée pour eux — elle sonnerait pour toujours.
    Y poser une ligne à la main ferait croire à une émission automatique.
 
 ## Le mandat est une COURSE, pas un état
+
+> ⚠️ Histoire : depuis la coupure du cœur (#1097), `confirm` n'attend plus de mandat —
+> un encaissement est gravé puis refusé (`billing_moved`). Ce qui suit décrit #493.
 
 Le mandat réutilisable ne naît pas avec l'encaissement : chez Mollie il apparaît
 une à cinq minutes plus tard. `confirm` le constatait absent 1,4 s après le paiement

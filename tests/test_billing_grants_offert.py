@@ -13,6 +13,11 @@ Trois gardes, chacune posée sur une bévue réelle mesurée le 2026-09-02 :
 3. **L'échéance.** Une date posée sur un don doit FERMER le droit le jour venu ; une
    échéance sans effet serait pire que pas d'échéance.
 
+⚠️ **Depuis la coupure du cœur (#1097)**, un avantage qui est un droit du catalogue
+(`unipile`) n'est plus annoncé d'après `option_comps` : oto-commerce le pose et sait ce
+qu'il offre. La mise en forme d'un avantage se prouve donc sur un avantage VENDU hors
+catalogue (`addon_test`, ajouté à un palier le temps du test).
+
 ⚠️ Le dépôt est public : aucun nom de partenaire ici. Le tenant tiers de test
 s'appelle `acme`.
 """
@@ -38,7 +43,19 @@ def _wire(monkeypatch, *, tenant="oto", org_rows=(), user_rows=()):
         lambda et, eid: list(org_rows if et == "org" else user_rows))
 
 
-def _don(option="unipile", expires_at=None):
+ADDON = "addon_test"
+
+
+@pytest.fixture(autouse=True)
+def _avantage_hors_catalogue(monkeypatch):
+    """Un avantage vendu qui n'est PAS un droit du catalogue : le seul genre que
+    `granted_benefits` annonce encore."""
+    standard = dict(billing.PLANS["standard"])
+    standard["options"] = tuple(standard["options"]) + (ADDON,)
+    monkeypatch.setitem(billing.PLANS, "standard", standard)
+
+
+def _don(option=ADDON, expires_at=None):
     return {"option": option, "granted_by": "admin",
             "granted_at": datetime(2026, 7, 16, tzinfo=UTC), "expires_at": expires_at}
 
@@ -48,12 +65,18 @@ def _don(option="unipile", expires_at=None):
 def test_un_don_dorg_est_rendu_avec_son_nom_et_sa_valeur(monkeypatch):
     _wire(monkeypatch, org_rows=[_don()])
     (b,) = billing_grants.granted_benefits(7)
-    assert b["option"] == "unipile"
+    assert b["option"] == ADDON
     assert b["scope"] == "org"
-    # NOMMÉ, pas supposé : « il n'y a pas que l'option de messagerie qui coûte ».
-    assert b["label"] == "Messagerie hébergée (Unipile)"
     # Ce que ça vaut = le palier le MOINS cher qui l'inclut, en centimes HT.
     assert b["value_amount"] == 1900 and b["currency"] == "eur"
+
+
+@pytest.mark.parametrize("option", ["unipile", "platform_unmetered"])
+def test_un_droit_du_catalogue_offert_n_est_plus_annonce_d_ici(monkeypatch, option):
+    """Coupure du cœur (#1097) : oto-commerce pose ces droits et sait ce qu'il offre ;
+    la marque héritée d'un don ne dit plus ce qui est ouvert."""
+    _wire(monkeypatch, org_rows=[_don(option="unipile"), _don(option=option)])
+    assert billing_grants.granted_benefits(7) == []
 
 
 def test_un_don_fait_a_une_personne_n_est_pas_annonce(monkeypatch):
@@ -79,7 +102,7 @@ def test_status_sans_abonnement_porte_le_don_ET_garde_le_catalogue(monkeypatch):
     monkeypatch.setattr(billing.db_billing, "get_org_subscription", lambda oid: None)
     st = billing.status(7)
     assert st["subscribed"] is False
-    assert [b["option"] for b in st["granted"]] == ["unipile"]
+    assert [b["option"] for b in st["granted"]] == [ADDON]
     assert st["plans"], "le catalogue doit rester joint — c'est la voie de conversion"
 
 
@@ -177,7 +200,7 @@ def test_poser_une_echeance_sur_une_org_de_partenaire_est_refuse(monkeypatch):
     from oto_mcp.capabilities._types import AuthzDenied
 
     ua = _admin(monkeypatch, tenant="acme")
-    inp = ua.OptionInput(entity_type="org", entity_id="200", option="unipile",
+    inp = ua.OptionInput(entity_type="org", entity_id="200", option="beta",
                          on=True, expires_at="2026-10-31")
     with pytest.raises(AuthzDenied) as e:
         ua._parse_expiry(inp, "200")
@@ -187,7 +210,7 @@ def test_poser_une_echeance_sur_une_org_de_partenaire_est_refuse(monkeypatch):
 def test_une_echeance_au_jour_couvre_la_JOURNEE(monkeypatch):
     # « offert jusqu'au 31 octobre » doit couvrir le 31 : minuit couperait un jour trop tôt.
     ua = _admin(monkeypatch)
-    inp = ua.OptionInput(entity_type="org", entity_id="7", option="unipile",
+    inp = ua.OptionInput(entity_type="org", entity_id="7", option="beta",
                          on=True, expires_at="2026-10-31")
     d = ua._parse_expiry(inp, "7")
     assert (d.year, d.month, d.day, d.hour) == (2026, 10, 31, 23)
@@ -199,13 +222,13 @@ def test_omettre_lecheance_ne_leffacce_pas(monkeypatch):
     from oto_mcp import db
 
     ua = _admin(monkeypatch)
-    inp = ua.OptionInput(entity_type="org", entity_id="7", option="unipile", on=True)
+    inp = ua.OptionInput(entity_type="org", entity_id="7", option="beta", on=True)
     assert ua._parse_expiry(inp, "7") is db.KEEP_EXPIRY
 
 
 def test_une_chaine_vide_rouvre_le_don(monkeypatch):
     ua = _admin(monkeypatch)
-    inp = ua.OptionInput(entity_type="org", entity_id="7", option="unipile",
+    inp = ua.OptionInput(entity_type="org", entity_id="7", option="beta",
                          on=True, expires_at="")
     assert ua._parse_expiry(inp, "7") is None
 
@@ -216,7 +239,7 @@ def test_le_don_lui_meme_reste_posable_sur_une_org_de_partenaire(monkeypatch):
     from oto_mcp import db
 
     ua = _admin(monkeypatch, tenant="acme")
-    inp = ua.OptionInput(entity_type="org", entity_id="200", option="unipile", on=True)
+    inp = ua.OptionInput(entity_type="org", entity_id="200", option="beta", on=True)
     assert ua._parse_expiry(inp, "200") is db.KEEP_EXPIRY
 
 

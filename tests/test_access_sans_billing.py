@@ -1,7 +1,7 @@
 """Cliquet : le paquet `access/` ne connaît pas le commerce (ADR 0070 §7).
 
-Le cœur relit les droits déclarés d'une org (`org_entitlements`) ; le commerce les
-écrit (`billing_droits`). Jusqu'au lot 2 de #806, `access.quotas` importait `billing`
+Le cœur relit les droits déclarés d'une org (`org_entitlements`) ; le service de
+facturation, oto-commerce, les écrit par l'API de service (#1097). Jusqu'au lot 2 de #806, `access.quotas` importait `billing`
 pour demander « quel est ton forfait, quelles options donne-t-il ? » — donc le cœur
 savait qu'un forfait existe, et une instance sans notre commerce livrait du code
 jamais emprunté.

@@ -178,8 +178,12 @@ de paiement).
 > Unipile se partage en **clé plateforme + grant** (pas de copie par org) ;
 > `access.resolve_credential` porte aussi ce palier au connect. Le gate d'option reste
 > par org (un grant donne la clé, ne débloque pas l'option). **Débloquer l'option
-> = comp** : `db.set_option_comp("org", id, "unipile")` (débloque `access.has_option`).
-> ⚠️ Les deux couches (clé=2, option=3) sont **orthogonales en base** mais l'**action
+> = un droit déclaré `unipile`**, posé par le service de facturation (oto-commerce) seul
+> (`docs/droits-declares.md`) : depuis la coupure du cœur (#1097), `oto_admin_set_option`
+> et `platform.connector.access_set` refusent `unipile` en 409 `billing_moved`, et la clé
+> de plateforme se partage seule par `platform.org.grant_key`.
+> ⚠️ Pour une option HORS catalogue d'un connecteur en mode plateforme, les deux couches
+> (clé=2, option=3) sont **orthogonales en base** mais l'**action
 > admin les compose** (`capabilities/users_admin._set_option`) : `oto_admin_set_option`
 > `on=true` sur un connecteur en mode plateforme **grant aussi la clé plateforme** (sinon
 > `has_option`=true mais aucune clé → 404 au `/connect`, bouton « Connecter » inerte = état

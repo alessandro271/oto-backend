@@ -26,14 +26,6 @@ from _datastore_rest import call, stub_authz
 from oto_mcp.capabilities import platform_connectors as pc
 
 
-@pytest.fixture(autouse=True)
-def _droits_declares_hors_banc(monkeypatch):
-    """La réconciliation des droits déclarés lit la base : son banc est
-    `test_billing_droits_live`. Ici, elle est neutralisée."""
-    from oto_mcp import billing as _billing
-    monkeypatch.setattr(_billing, "reconcilier_droits", lambda org_id: None)
-
-
 class _Conn:
     def __init__(self, label, help_, ns):
         self.label, self.help, self.namespaces = label, help_, ns
@@ -285,15 +277,28 @@ def test_ouvrir_l_acces_pose_les_DEUX_leviers_ensemble(socle, admin):
     assert socle == [("comp+", "org", "35", "messagerie"), ("grant", "unipile", "org:35")]
 
 
-def test_le_geste_sur_une_org_realigne_ses_droits_declares(socle, admin, monkeypatch):
-    """Le don d'org devient un droit déclaré de l'org ; celui d'une personne, aucun."""
-    vus: list = []
-    monkeypatch.setattr(pc.billing, "reconcilier_droits", vus.append)
-    call("platform.connector.access_set", path_params={"provider": "unipile"},
-         body={"scope": "org", "id": 35, "on": True})
-    call("platform.connector.access_set", path_params={"provider": "unipile"},
-         body={"scope": "user", "id": "u-9", "on": True})
-    assert vus == [35]
+@pytest.mark.parametrize("scope,ident", [("org", 35), ("user", "u-9")])
+@pytest.mark.parametrize("on", [True, False])
+def test_une_option_du_catalogue_est_refusee_billing_moved(socle, admin, monkeypatch,
+                                                           scope, ident, on):
+    """Coupure du cœur (#1097) : l'option `unipile` est un droit du catalogue, qu'oto-
+    commerce pose seul. Le geste refuse, nommément, et n'écrit NI la marque NI le grant
+    de clé — il renvoie vers le partage de clé seul."""
+    monkeypatch.setattr(pc.access, "paid_option_for", lambda n: "unipile")
+    code, out = call("platform.connector.access_set", path_params={"provider": "unipile"},
+                     body={"scope": scope, "id": ident, "on": on})
+    assert code == 409 and out["error"] == "billing_moved", out
+    assert "oto-commerce" in out["detail"]
+    # Le renvoi vise le grant de la PORTÉE demandée : un compte ne se partage pas une
+    # clé par le geste d'une org.
+    if scope == "user":
+        assert "platform.key.grant" in out["detail"]
+        assert "/api/admin/users/{sub}/grants/{provider}" in out["detail"]
+        assert "platform.org.grant_key" not in out["detail"]
+    else:
+        assert "platform.org.grant_key" in out["detail"]
+        assert "platform.key.grant" not in out["detail"]
+    assert socle == []
 
 
 def test_fermer_retire_les_deux(socle, admin):

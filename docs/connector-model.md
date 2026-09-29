@@ -172,7 +172,10 @@ d'admin**.
 `access.has_right(sub, org, option)`, lu dans `org_entitlements` — celui de l'org active ou
 une ligne posée sur la personne (dans l'org ou partout), quelle que soit sa source
 (abonnement, don, partenaire, essai). Le cœur ne sait pas qui paie : c'est le
-commerce qui écrit ces lignes, avec leur échéance (`billing_droits`, cf. `billing.md`).
+service de facturation, oto-commerce, qui écrit ces lignes, avec leur échéance, par l'API de
+service — le cœur n'en pose aucune depuis la coupure (#1097, cf. `droits-declares.md`). Une
+clé du catalogue ne se lit jamais dans `option_comps` : `has_option` lève si on le lui
+demande hors de la branche payante.
 ⚠️ **La marque de compte (`option_comps`) n'ouvre pas d'option payante** (depuis le lot 2
 de #806) : seule une ligne de droit déclaré le fait. `user_has_option` ne sert plus
 qu'aux options non payantes (`beta`, un drapeau de population), que `has_option` lit

@@ -77,8 +77,14 @@ def test_un_refus_declare_est_ATTEIGNABLE_par_cette_capacite(paire):
 
 
 @pytest.mark.parametrize("paire", _declarations(), ids=_ids)
-def test_un_refus_declare_atteint_le_document(paire):
+def test_un_refus_declare_atteint_le_document(paire, monkeypatch):
     cap, e = paire
+    if cap.gate is not None:
+        # Le seul drapeau du registre est le lancement à blanc de la facturation
+        # (`billing.is_enabled`) : une capacité non montée n'est pas au document. Son
+        # refus déclaré doit l'atteindre sur l'instance qui la monte.
+        monkeypatch.setenv("OTO_BILLING_ENABLED", "1")
+        assert cap.is_exposed(), f"{cap.key} : un drapeau autre que la facturation"
     doc = openapi.build()
     for b in cap.rest_bindings():
         if b.path.startswith(_ADMIN):

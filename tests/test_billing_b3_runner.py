@@ -259,42 +259,35 @@ def test_tick_sweeps_and_counts(monkeypatch):
     monkeypatch.setattr(db_billing, "open_billing_payments", lambda: [])
     monkeypatch.setattr(db_billing, "paid_initials_awaiting_subscription",
                         lambda **k: [])
-    realignees: list = []
-    monkeypatch.setattr(billing, "reconcilier_droits", realignees.append)
     assert billing_runner.tick() == {"closed": 3}
-    assert realignees == [1, 2, 3], "une fermeture réaligne les droits déclarés de l'org"
 
 
-def test_tick_realigne_les_droits_apres_une_echeance_encaissee(monkeypatch):
-    _wire(monkeypatch)
+def test_le_runner_ne_preleve_ni_ne_renouvelle_une_echeance_due(monkeypatch, caplog):
+    """La garde de la coupure du cœur (#1097) : oto-commerce pose seul les droits, donc
+    une échéance tirée ici prendrait l'argent sans droit. Le runner est gelé par
+    `OTO_BILLING_RUNNER_ENABLED=0` ; s'il tourne quand même (variable oubliée), chaque
+    échéance due est REFUSÉE et journalisée en erreur — jamais un débit."""
+    state = _wire(monkeypatch)
     monkeypatch.setattr(billing_runner.mollie_client, "is_configured", lambda: True)
     monkeypatch.setattr(db_billing, "sweep_period_end_cancellations", lambda: [])
     monkeypatch.setattr(db_billing, "sweep_grace_expired", lambda: [])
-    monkeypatch.setattr(db_billing, "due_subscriptions", lambda: [_sub()])
-    monkeypatch.setattr(db_billing, "open_billing_payments", lambda: [])
-    monkeypatch.setattr(db_billing, "paid_initials_awaiting_subscription",
-                        lambda **k: [])
-    realignees: list = []
-    monkeypatch.setattr(billing, "reconcilier_droits", realignees.append)
-    assert billing_runner.tick().get("renewed") == 1
-    assert realignees == [42]
-
-
-def test_un_realignement_qui_casse_n_arrete_pas_le_tick(monkeypatch, caplog):
-    monkeypatch.setattr(billing_runner.mollie_client, "is_configured", lambda: True)
-    monkeypatch.setattr(db_billing, "sweep_period_end_cancellations", lambda: [1])
-    monkeypatch.setattr(db_billing, "sweep_grace_expired", lambda: [])
-    monkeypatch.setattr(db_billing, "due_subscriptions", lambda: [])
+    monkeypatch.setattr(db_billing, "due_subscriptions",
+                        lambda: [_sub(), _sub(org_id=43)])
     monkeypatch.setattr(db_billing, "open_billing_payments", lambda: [])
     monkeypatch.setattr(db_billing, "paid_initials_awaiting_subscription",
                         lambda **k: [])
 
-    def _casse(org_id):
-        raise RuntimeError("base indisponible")
+    def _jamais(*a, **k):
+        raise AssertionError("aucune réservation d'échéance ne doit être prise")
 
-    monkeypatch.setattr(billing, "reconcilier_droits", _casse)
-    assert billing_runner.tick() == {"closed": 1}
-    assert any("non réalignés" in r.getMessage() for r in caplog.records)
+    monkeypatch.setattr(billing_reservation, "reserver_echeance", _jamais)
+    with caplog.at_level("ERROR", logger="oto_mcp.billing_runner"):
+        assert billing_runner.tick() == {"refused": 2}
+    assert "charge" not in state, "aucun paiement récurrent créé"
+    assert state["journal"] == [] and state["schedule"] is None
+    erreurs = [r for r in caplog.records if r.levelname == "ERROR"
+               and "billing_moved" in r.getMessage()]
+    assert len(erreurs) == 2
 
 
 def test_runner_loop_registered_at_boot(monkeypatch):

@@ -22,7 +22,7 @@ from typing import Callable, Optional
 
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import providers, db, grants_chain
+from .. import entitlements_catalogue as catalogue, providers, db, grants_chain
 from ..auth.hooks import current_user_sub_from_token
 from ..mcp_errors import McpError
 from . import entitlements, heritage, scope
@@ -113,6 +113,10 @@ def has_option(sub: str, option: str, *, org: "int | None | object" = scope._UNS
       n'ouvre PAS d'option payante : seule une ligne de droit le fait.
     - Option non payante (`beta`, un drapeau de population) : la marque du compte
       (`user_has_option`) ou celle de l'org.
+    - Toute AUTRE clé du catalogue des droits (`platform_unmetered`, `unipile_seats`…)
+      **lève** `catalogue_key_via_option_comps` : c'est un droit déclaré, qu'oto-commerce
+      pose seul et que `entitlements.value_for` lit (#1097) — la lire dans
+      `option_comps` rouvrirait un don hérité que plus personne ne pose.
 
     Ne JAMAIS lire les sources en direct ailleurs (un nouveau chemin passe par ici).
     `org` explicite (≠ _UNSET) = calcul pour un tiers contre une org donnée (fiche admin),
@@ -120,6 +124,10 @@ def has_option(sub: str, option: str, *, org: "int | None | object" = scope._UNS
     if option in _PAID_OPTIONS:
         org = scope.current_org(sub) if org is scope._UNSET else org
         return entitlements.has_right(sub, org, option)
+    if catalogue.est_du_catalogue(option):
+        raise ValueError(
+            f"catalogue_key_via_option_comps: {option!r} est un droit du catalogue — il se "
+            "lit par `entitlements.value_for`/`has_right`, jamais dans `option_comps`")
     if user_has_option(sub, option):
         return True
     org = scope.current_org(sub) if org is scope._UNSET else org

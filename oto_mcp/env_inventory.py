@@ -455,8 +455,10 @@ _REGLAGES: tuple[Variable, ...] = (
              "Ouvre le travail `unipile-fin-de-droit` (#806) : préavis puis suppression "
              "chez unipile des comptes sur la clé plateforme d'une org sans droit "
              "`unipile`. Absente : le travail compte ce qu'il ferait, n'écrit rien. "
-             "À poser seulement une fois `org_entitlements` rempli par la reprise des "
-             "abonnements.", ("oto_mcp/unipile_fin_de_droit.py:64",)),
+             "À poser seulement une fois `org_entitlements` rempli par oto-commerce, "
+             "qui pose seul les droits depuis la coupure du cœur (#1097) : une "
+             "ligne qu'il n'a pas posée ferait supprimer le compte d'un client qui "
+             "paie.", ("oto_mcp/unipile_fin_de_droit.py:64",)),
     Variable("OTO_UNIPILE_FIN_DE_DROIT_DELAI_JOURS", Classe.REGLAGE, "7",
              "Jours entre le premier constat de la perte du droit `unipile` et la "
              "suppression du compte chez unipile. Entier ≥ 1, sinon le travail lève.",

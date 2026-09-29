@@ -17,8 +17,9 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, StrictInt
 
-from .. import (access, billing, billing_grants, providers, credentials_store, db,
-                group_store, org_store)
+from .. import (access, billing_grants, providers, credentials_store, db,
+                entitlements_catalogue as catalogue, group_store, org_store)
+from . import _facturation_externe as facturation_externe
 from . import _identite
 from ._authz import PLATFORM_ADMIN, SUPER_ADMIN
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
@@ -264,11 +265,8 @@ def _set_unipile_limit(ctx: ResolvedCtx, inp: OrgUnipileLimitSetInput) -> dict:
     """Pose (ou efface, `limit=null`) le plafond propre de l'org.
 
     ⚠️ Ne gouverne que les connexions NEUVES : les comptes déjà connectés au-delà du
-    nouveau plafond restent en place, rien n'est déconnecté. Une valeur posée ici
-    SURVIT à la souscription et au retrait d'un plan oto : un plan sans nombre de
-    sièges (tous aujourd'hui) n'écrit rien (`billing.apply_plan_entitlements`, #805),
-    et un plan qui en porterait un n'écraserait pas l'org d'un tenant tiers
-    (`billing._hosted_by_partner`)."""
+    nouveau plafond restent en place, rien n'est déconnecté. Aucun plan n'écrit plus
+    cette colonne (#805, puis la coupure du cœur, #1097)."""
     if inp.limit is not None and inp.limit < 0:
         raise AuthzDenied(400, "invalid_body",
                           f"limit doit être un entier ≥ 0 ou null (reçu {inp.limit}).")
@@ -317,6 +315,10 @@ def _parse_expiry(inp: "OptionInput", eid: str) -> object:
 
 
 def _set_option(ctx: ResolvedCtx, inp: OptionInput) -> dict:
+    if catalogue.est_du_catalogue(inp.option):
+        # Un droit du catalogue (`unipile`, `platform_unmetered`…) est un droit déclaré,
+        # qu'oto-commerce pose seul (#1097) : un don d'option ne l'ouvrirait plus.
+        raise facturation_externe.refus(f"Offrir l'option {inp.option!r}")
     eid = str(inp.entity_id)
     if inp.entity_type == "user" and not db.get_user(eid):
         raise AuthzDenied(404, "unknown_user", f"Compte {eid!r} inconnu.")
@@ -333,11 +335,6 @@ def _set_option(ctx: ResolvedCtx, inp: OptionInput) -> dict:
     else:
         db.clear_option_comp(inp.entity_type, eid, inp.option)
         key = _compose_platform_revoke(inp, eid)
-    if inp.entity_type == "org":
-        # Le don d'ORG devient un droit déclaré de l'org (source `offered`, même
-        # échéance). Le grain personne n'en écrit aucun : une marque de compte n'est pas
-        # un droit déclaré.
-        billing.reconcilier_droits(int(eid))
     return {"ok": True, "entity_type": inp.entity_type, "entity_id": eid,
             "option": inp.option, "on": inp.on, "platform_key": key,
             "visible_next_session": _visible_next_session(ctx, inp, eid)}
@@ -506,9 +503,13 @@ CAPABILITIES += [
     Capability(
         key="platform.option.set", handler=_set_option, Input=OptionInput,
         authz=SUPER_ADMIN, refresh_visibility=True,
-        description="[super admin] Grant (on=true) or remove (on=false) a connector option as a FREE "
-                    "comp for a user or org (e.g. option='unipile'). Read by access.has_option "
-                    "(no billing — option governance is admin-only). entity_type='user'|'org', entity_id=sub|org_id. "
+        description="[super admin] Set (on=true) or remove (on=false) a NON-billed option flag "
+                    "on a user or org (e.g. option='beta', 'claude_subscription'). Read by "
+                    "access.has_option. entity_type='user'|'org', entity_id=sub|org_id. "
+                    "A key of the entitlements catalogue ('unipile', 'platform_unmetered', "
+                    "'unipile_seats', 'members_max', 'platform_key:<connector>') is REFUSED with "
+                    "409 `billing_moved`: those are declared rights, set by the billing service "
+                    "(oto-commerce) only — offering one happens there, not here. "
                     "For a platform-mode connector this ALSO grants/revokes its platform key (so "
                     "the option is actually usable, not a dead has_option without a key); the "
                     "`platform_key` field reports what happened (granted / no_platform_key / "
@@ -523,6 +524,9 @@ CAPABILITIES += [
                     "being granted, the row stays, and clearing the date reopens it. Refused "
                     "with 409 `partner_org_out_of_scope` on an org hosted by a third-party "
                     "tenant: its owners are that partner's customers, not ours.",
+        errors=(facturation_externe.declaration(
+            "L'option est une clé du catalogue des droits : c'est un droit déclaré, que "
+            "seul le service de facturation (oto-commerce) pose."),),
         mcp="oto_admin_set_option",
         rest=RestBinding("POST", "/api/admin/option-comps", {}),
     ),
