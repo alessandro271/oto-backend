@@ -1,0 +1,52 @@
+### scénario prod-lanceur-fige : oto-backend.sh v1.2.3
+### code de sortie : 1
+### commandes
+flock -w 900 9
+date +%H:%M:%S
+date +%H:%M:%S
+systemctl stop oto-mcp-drain-prod.service
+systemctl stop oto-mcp@green
+date +%H:%M:%S
+date +%H:%M:%S
+date +%H:%M:%S
+journalctl -u oto-mcp@green -n 50 --no-pager
+systemctl stop oto-mcp@green
+date +%H:%M:%S
+### sortie
+[12:00:00] verrou pris (/var/lock/oto-mcp-bluegreen-prod.lock)
+[12:00:00] prod: couleur en service = blue, cible = green (:9107)
+[12:00:00] le start-encrypted.sh de blue n'est PAS indépendant du chemin — il exécuterait le venv de l'autre couleur
+[12:00:00] ÉCHEC: propagation du lanceur en échec
+[12:00:00] --- journal de la couleur green ---
+[12:00:00] couleur green arrêtée — prod reste servie par blue, rien n'a basculé
+### erreurs
+### état final
+--- /etc/caddy/Caddyfile
+# Caddyfile du banc
+--- /etc/caddy/upstream-oto-prod.conf
+# amont d'avant la bascule
+--- /etc/oto-mcp/active-prod
+blue
+--- /opt/oto-mcp-blue/deploy/oto-mcp-maintenance.service
+# oto-mcp-maintenance.service de la couleur blue
+--- /opt/oto-mcp-blue/deploy/oto-mcp-maintenance.timer
+# oto-mcp-maintenance.timer de la couleur blue
+--- /opt/oto-mcp-blue/pyproject.toml
+dependencies = [
+    "oto-core[anonymize] @ git+https://github.com/otomata-tech/oto-core.git@v9.9.9",
+]
+--- /opt/oto-mcp-blue/start-encrypted.sh
+#!/bin/bash
+exec /opt/oto-mcp-blue/.venv/bin/oto-mcp
+--- /opt/oto-mcp-green/deploy/oto-mcp-maintenance.service
+# oto-mcp-maintenance.service de la couleur green
+--- /opt/oto-mcp-green/deploy/oto-mcp-maintenance.timer
+# oto-mcp-maintenance.timer de la couleur green
+--- /opt/oto-mcp-green/pyproject.toml
+dependencies = [
+    "oto-core[anonymize] @ git+https://github.com/otomata-tech/oto-core.git@v9.9.9",
+]
+--- /opt/oto-mcp-green/start-encrypted.sh
+#!/bin/bash
+exec /opt/oto-mcp-blue/.venv/bin/oto-mcp
+--- /var/lock/oto-mcp-bluegreen-prod.lock

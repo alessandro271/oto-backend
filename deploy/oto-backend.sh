@@ -42,6 +42,15 @@ BG_PUBLIC="https://mcp.oto.cx/.well-known/oauth-authorization-server"
 # requêtes déjà en cours. Donc pas de raison de faire vivre deux versions longtemps —
 # et une bonne raison de ne pas le faire : deux versions écrivent dans la MÊME base.
 BG_DRAIN_MAX=120
+# Ce qui était codé en dur dans la bibliothèque avant qu'elle ne serve aussi une
+# instance tierce (#967) — mêmes valeurs, désormais DÉCLARÉES ici.
+BG_LOCK=/var/lock/oto-mcp-bluegreen-prod.lock
+BG_CADDYFILE=/etc/caddy/Caddyfile
+BG_DRAIN=/opt/deploy/oto-mcp-drain.sh
+BG_DRAIN_UNIT=oto-mcp-drain-prod
+# Notre lanceur vit hors git dans chaque arbre et s'y édite à la main : il est PROPAGÉ
+# de la couleur en service à la nouvelle (cf. deploy/start-encrypted.sh).
+BG_LANCEUR=propage
 
 . /opt/deploy/oto-mcp-bluegreen.sh
 

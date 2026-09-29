@@ -1,11 +1,13 @@
 #!/bin/bash
 # ============================================================================
-# Bibliothèque bleu/vert du backend oto — SOURCÉE par les deux déploiements :
-#   /opt/deploy/oto-backend.sh         (PROD,     oto-mcp@blue|green)
-#   /opt/deploy/oto-backend-canari.sh  (PRÉPROD,  oto-mcp-canari@blue|green)
+# Bibliothèque bleu/vert du backend oto — SOURCÉE par chaque déploiement :
+#   /opt/deploy/oto-backend.sh         (notre PROD,     oto-mcp@blue|green)
+#   /opt/deploy/oto-backend-canari.sh  (notre PRÉPROD,  oto-mcp-canari@blue|green)
+#   deploy/cible/deployer.sh           (une instance tierce, chargée depuis l'arbre
+#                                       du tag qu'elle déploie — docs/instance-cible.md)
 #
 # Source versionnée : otomata-tech/oto-backend, deploy/oto-mcp-bluegreen.sh
-#   — modifier là, puis recopier ici (/opt/deploy/ sur oto-platform).
+#   — pour notre box : modifier là, puis recopier ici (/opt/deploy/ sur oto-platform).
 #   Copie de référence des unités/amonts : otomata-tech/infra,
 #   scripts/oto-backend-bluegreen/ (+ README).
 #
@@ -27,46 +29,88 @@
 #   5. seulement alors on l'arrête. Échec à n'importe quelle étape : on ne bascule
 #      pas (ou on rebascule), l'ancienne couleur n'a jamais cessé de servir.
 #
-# Variables attendues AVANT le `source` (cf. les deux wrappers) :
-#   BG_ENV            prod | canari                (libellé)
-#   BG_UNIT           oto-mcp | oto-mcp-canari     (gabarit systemd, sans @)
-#   BG_TREE           /opt/oto-mcp | /opt/oto-mcp-canari   (arbre = <BG_TREE>-<couleur>)
+# Variables attendues AVANT le `source` — TOUTES déclarées par le wrapper, aucune n'a
+# de défaut ici (#967) : une cible qui en oublie une est refusée au chargement, en
+# nommant ce qui manque, plutôt que de déployer avec une valeur qui serait la nôtre.
+#   BG_ENV            libellé de l'environnement (prod | canari | <rôle d'une cible>)
+#   BG_UNIT           gabarit systemd, sans @ (oto-mcp | oto-mcp-canari | …)
+#   BG_TREE           préfixe des arbres : l'arbre d'une couleur est <BG_TREE>-<couleur>
 #   BG_PORT_blue      port de la couleur bleue
 #   BG_PORT_green     port de la couleur verte
-#   BG_UPSTREAM       /etc/caddy/upstream-oto-<env>.conf   (fichier GÉNÉRÉ)
-#   BG_SNIPPET        oto_prod | oto_canari        (préfixe des snippets Caddy)
+#   BG_UPSTREAM       fichier d'amont Caddy GÉNÉRÉ (ex. /etc/caddy/upstream-oto-prod.conf)
+#   BG_SNIPPET        préfixe des snippets Caddy (oto_prod | oto_canari | …)
 #   BG_DOCSHARE_HOST  Host forcé pour le snippet doc-share (/p/d/*)
-#   BG_ASK            1 si l'env porte le `ask` de l'on-demand TLS (prod), sinon vide
-#   BG_ACTIVE         /etc/oto-mcp/active-<env>    (fichier pointeur de couleur)
+#   BG_ASK            1 si l'env porte le `ask` de l'on-demand TLS, sinon VIDE (déclaré)
+#   BG_ACTIVE         fichier pointeur de couleur (blue | green)
 #   BG_PUBLIC         URL publique de vérification post-bascule
 #   BG_DRAIN_MAX      plafond du drain, en secondes
+#   BG_LOCK           verrou du déploiement (un par environnement)
+#   BG_CADDYFILE      Caddyfile que `caddy validate` juge avant chaque reload
+#   BG_DRAIN          script de vidange différée (chemin STABLE : il tourne après nous)
+#   BG_DRAIN_UNIT     nom de l'unité transitoire de vidange (une par environnement)
+#   BG_LANCEUR        propage  — le lanceur `start-encrypted.sh` vit hors git dans
+#                                l'arbre et passe de la couleur en service à la
+#                                nouvelle (notre box : il s'y édite à la main) ;
+#                     versionne — le lanceur est celui DU TAG (deploy/lanceur_secrets.py),
+#                                rien n'est propagé d'une couleur à l'autre.
 # ============================================================================
 set -uo pipefail
 
 HEALTH_PATH="/.well-known/oauth-authorization-server"
-LOCK="/var/lock/oto-mcp-bluegreen-${BG_ENV}.lock"
+# Qui réécrit l'amont — nommé dans l'en-tête du fichier généré.
+BG_LIB="${BASH_SOURCE[0]}"
+
+# --- chaque variable est DÉCLARÉE par le wrapper ; `BG_ASK` seule peut être vide.
+bg_exiger() {
+  local v manque=""
+  for v in BG_ENV BG_UNIT BG_TREE BG_PORT_blue BG_PORT_green BG_UPSTREAM BG_SNIPPET \
+           BG_DOCSHARE_HOST BG_ACTIVE BG_PUBLIC BG_DRAIN_MAX BG_LOCK BG_CADDYFILE \
+           BG_DRAIN BG_DRAIN_UNIT BG_LANCEUR; do
+    [ -n "${!v:-}" ] || manque="$manque $v"
+  done
+  [ -n "${BG_ASK+declaree}" ] || manque="$manque BG_ASK"
+  if [ -n "$manque" ]; then
+    echo "bibliothèque bleu/vert : variable(s) non déclarée(s) par le wrapper :$manque" >&2
+    return 1
+  fi
+  case "$BG_LANCEUR" in
+    propage|versionne) ;;
+    *) echo "bibliothèque bleu/vert : BG_LANCEUR='$BG_LANCEUR' (attendu propage | versionne)" >&2; return 1 ;;
+  esac
+}
+bg_exiger || exit 2
 
 bg_log() { echo "[$(date +%H:%M:%S)] $*"; }
 
 # --- verrou : deux déploiements simultanés (push auto + main) ne doivent JAMAIS
 # --- s'entrelacer, sinon la préprod reste à moitié basculée.
 bg_lock() {
-  exec 9>"$LOCK"
-  flock -w 900 9 || { echo "verrou $LOCK non obtenu après 900 s — un déploiement tourne déjà" >&2; exit 1; }
-  bg_log "verrou pris ($LOCK)"
+  exec 9>"$BG_LOCK"
+  flock -w 900 9 || { echo "verrou $BG_LOCK non obtenu après 900 s — un déploiement tourne déjà" >&2; exit 1; }
+  bg_log "verrou pris ($BG_LOCK)"
 }
 
 bg_port() { local v="BG_PORT_$1"; echo "${!v}"; }
 bg_tree() { echo "${BG_TREE}-$1"; }
-bg_active() { cat "$BG_ACTIVE" 2>/dev/null || echo blue; }
-bg_other()  { [ "$(bg_active)" = blue ] && echo green || echo blue; }
+# --- la couleur en service est ce que dit le pointeur, et rien d'autre : un pointeur
+# --- absent ou illisible est une panne à nommer, pas une invitation à supposer bleu
+# --- (#967 — l'amorce d'une cible le pose à sa naissance).
+bg_active() {
+  local c
+  c=$(cat "$BG_ACTIVE" 2>/dev/null)
+  case "$c" in
+    blue|green) echo "$c" ;;
+    *) echo "pointeur de couleur $BG_ACTIVE absent ou illisible (« $c ») — rien n'est joué" >&2; return 1 ;;
+  esac
+}
+bg_other()  { local c; c=$(bg_active) || return 1; [ "$c" = blue ] && echo green || echo blue; }
 
 # --- fichier d'amont Caddy : la SEULE chose qui décide où va le trafic.
 bg_write_upstream() {
   local color=$1 port; port=$(bg_port "$color")
   {
     echo "# Amont du backend oto ${BG_ENV} — FICHIER GÉNÉRÉ, ne pas éditer à la main."
-    echo "# Réécrit par /opt/deploy/oto-mcp-bluegreen.sh à chaque bascule bleu/vert."
+    echo "# Réécrit par ${BG_LIB} à chaque bascule bleu/vert."
     echo "# Couleur active : ${color} (port ${port}) — bascule du $(date -Is)."
     echo "(${BG_SNIPPET}_upstream) {"
     echo "	reverse_proxy 127.0.0.1:${port} {"
@@ -205,7 +249,7 @@ bg_switch() {
   local color=$1
   cp -a "$BG_UPSTREAM" "${BG_UPSTREAM}.prev" 2>/dev/null
   bg_write_upstream "$color"
-  if ! caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1; then
+  if ! caddy validate --config "$BG_CADDYFILE" --adapter caddyfile >/dev/null 2>&1; then
     bg_log "caddy validate REFUSE la config — amont restauré, pas de bascule"
     [ -f "${BG_UPSTREAM}.prev" ] && cp -a "${BG_UPSTREAM}.prev" "$BG_UPSTREAM"
     return 1
@@ -233,10 +277,10 @@ bg_public_ok() {
 bg_schedule_drain() {
   local color=$1 port; port=$(bg_port "$color")
   local n; n=$(ss -Htn state established "( sport = :$port )" 2>/dev/null | wc -l)
-  systemd-run --collect --quiet --unit="oto-mcp-drain-${BG_ENV}" \
+  systemd-run --collect --quiet --unit="$BG_DRAIN_UNIT" \
     --description="Vidange de la couleur ${color} du backend oto ${BG_ENV}" \
-    /opt/deploy/oto-mcp-drain.sh "$BG_UNIT" "$color" "$port" "$BG_DRAIN_MAX" \
-    && bg_log "vidange de ${color} (:${port}) confiée à oto-mcp-drain-${BG_ENV} — ${n} connexion(s) au moment de la bascule, plafond ${BG_DRAIN_MAX}s (journalctl -u oto-mcp-drain-${BG_ENV})" \
+    "$BG_DRAIN" "$BG_UNIT" "$color" "$port" "$BG_DRAIN_MAX" \
+    && bg_log "vidange de ${color} (:${port}) confiée à ${BG_DRAIN_UNIT} — ${n} connexion(s) au moment de la bascule, plafond ${BG_DRAIN_MAX}s (journalctl -u ${BG_DRAIN_UNIT})" \
     || { bg_log "systemd-run indisponible — arrêt immédiat de ${color} (dégradé)"; systemctl stop "${BG_UNIT}@${color}"; systemctl stop "${BG_UNIT}" 2>/dev/null; }
 }
 
@@ -265,7 +309,7 @@ bg_abort() {
 bg_run() {
   local ref=$1 t_start=$SECONDS
   bg_lock
-  local old new; old=$(bg_active); new=$(bg_other)
+  local old new; old=$(bg_active) && new=$(bg_other) || exit 1
   local newport; newport=$(bg_port "$new")
   bg_log "${BG_ENV}: couleur en service = ${old}, cible = ${new} (:${newport})"
 
@@ -273,14 +317,19 @@ bg_run() {
   # une vidange tourne encore, sa couleur a eu son sursis — on l'arrête maintenant,
   # c'est précisément l'arbre qu'on s'apprête à réécrire. Borne à deux instances
   # vivantes en régime normal, trois pendant une seconde.
-  systemctl stop "oto-mcp-drain-${BG_ENV}.service" 2>/dev/null
+  systemctl stop "${BG_DRAIN_UNIT}.service" 2>/dev/null
   systemctl stop "${BG_UNIT}@${new}" 2>/dev/null
 
   if [ "$ref" = "--rollback" ]; then
     bg_log "ROLLBACK : on rebascule sur ${new}, qui porte la version précédente ($(git -C "$(bg_tree "$new")" rev-parse --short HEAD 2>/dev/null))"
   else
-    bg_propagate_start "$old" "$new" || bg_abort "$new" "propagation du lanceur en échec"
+    if [ "$BG_LANCEUR" = propage ]; then
+      bg_propagate_start "$old" "$new" || bg_abort "$new" "propagation du lanceur en échec"
+    fi
     bg_install "$new" "$ref" || bg_abort "$new" "installation de ${ref} en échec"
+    if [ "$BG_LANCEUR" = versionne ] && [ ! -f "$(bg_tree "$new")/deploy/lanceur_secrets.py" ]; then
+      bg_abort "$new" "${ref} ne porte pas le lanceur versionné (deploy/lanceur_secrets.py) — tag antérieur à #967"
+    fi
   fi
 
   bg_start_and_wait "$new" || bg_abort "$new" "la couleur ${new} n'est pas devenue saine"

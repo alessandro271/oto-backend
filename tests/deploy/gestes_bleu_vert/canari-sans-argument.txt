@@ -1,0 +1,35 @@
+### scénario canari-sans-argument : oto-backend-canari.sh 
+### code de sortie : 2
+### commandes
+### sortie
+### erreurs
+usage: oto-backend-canari.sh <sha>  (celui du run CI) | --rollback
+### état final
+--- /etc/caddy/Caddyfile
+# Caddyfile du banc
+--- /etc/caddy/upstream-oto-canari.conf
+# amont d'avant la bascule
+--- /etc/oto-mcp/active-canari
+blue
+--- /opt/oto-mcp-canari-blue/deploy/oto-mcp-maintenance.service
+# oto-mcp-maintenance.service de la couleur blue
+--- /opt/oto-mcp-canari-blue/deploy/oto-mcp-maintenance.timer
+# oto-mcp-maintenance.timer de la couleur blue
+--- /opt/oto-mcp-canari-blue/pyproject.toml
+dependencies = [
+    "oto-core[anonymize] @ git+https://github.com/otomata-tech/oto-core.git@v9.9.9",
+]
+--- /opt/oto-mcp-canari-blue/start-encrypted.sh
+#!/bin/bash
+exec "$(cd "$(dirname "$0")" && pwd)/.venv/bin/oto-mcp"
+--- /opt/oto-mcp-canari-green/deploy/oto-mcp-maintenance.service
+# oto-mcp-maintenance.service de la couleur green
+--- /opt/oto-mcp-canari-green/deploy/oto-mcp-maintenance.timer
+# oto-mcp-maintenance.timer de la couleur green
+--- /opt/oto-mcp-canari-green/pyproject.toml
+dependencies = [
+    "oto-core[anonymize] @ git+https://github.com/otomata-tech/oto-core.git@v9.9.9",
+]
+--- /opt/oto-mcp-canari-green/start-encrypted.sh
+#!/bin/bash
+exec "$(cd "$(dirname "$0")" && pwd)/.venv/bin/oto-mcp"

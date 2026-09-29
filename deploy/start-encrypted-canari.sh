@@ -9,6 +9,13 @@
 # Diffère de la prod sur deux points, volontairement : PAS de clé Pennylane (le canari
 # partage la base de la prod — une facture émise depuis la préprod serait une VRAIE
 # facture) et le secret Mollie est celui de TEST.
+#
+# #967 — CE FICHIER EST LA DÉCLARATION DE SECRETS PROPRE À NOTRE PRÉPRODUCTION : les
+# identifiants de secrets de NOTRE projet Scaleway, Mollie. Il n'est pas le
+# lanceur générique. Une autre instance démarre par `deploy/lanceur_secrets.py`, versionné
+# avec le tag, qui dérive ce qu'il tire de l'inventaire (`oto_mcp/env_secrets.py`) et le
+# tire du projet de CETTE instance, par nom (`BG_LANCEUR=versionne`). Notre box reste en
+# `BG_LANCEUR=propage` tant que le passage n'est pas décidé (docs/instance-cible.md).
 set -e
 set -a; . /etc/oto-mcp/scw.env; set +a
 

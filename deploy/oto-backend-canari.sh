@@ -44,6 +44,15 @@ BG_PUBLIC="https://mcp-canari.oto.ninja/.well-known/oauth-authorization-server"
 # Même plafond qu'en prod (cf. oto-backend.sh) : la vidange couvre les requêtes en
 # cours, pas les sessions — inutile de laisser deux versions coexister plus longtemps.
 BG_DRAIN_MAX=120
+# Ce qui était codé en dur dans la bibliothèque avant qu'elle ne serve aussi une
+# instance tierce (#967) — mêmes valeurs, désormais DÉCLARÉES ici.
+BG_LOCK=/var/lock/oto-mcp-bluegreen-canari.lock
+BG_CADDYFILE=/etc/caddy/Caddyfile
+BG_DRAIN=/opt/deploy/oto-mcp-drain.sh
+BG_DRAIN_UNIT=oto-mcp-drain-canari
+# Notre lanceur vit hors git dans chaque arbre et s'y édite à la main : il est PROPAGÉ
+# de la couleur en service à la nouvelle (cf. deploy/start-encrypted-canari.sh).
+BG_LANCEUR=propage
 
 . /opt/deploy/oto-mcp-bluegreen.sh
 
