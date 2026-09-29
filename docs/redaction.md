@@ -74,6 +74,13 @@ documents sur la politique : ils ne sortent que si la politique EFFECTIVE de l'a
 (`access.resolve_field_filter`, même cascade que la sortie) est vide — sinon refus nommé,
 et fail-closed si elle est illisible (`tools/payfit_garde.serve_document`, décision du
 2026-09-18). Masquer les champs et laisser passer le fichier serait une passoire.
+Un document lu CÔTÉ SERVEUR dont on ne rend qu'un extrait nommé n'est pas un document
+qui sort : `payfit_payslip(op="overtime")` ne rend que les lignes heures sup du bulletin
+(`tools/payfit_bulletin.py`) et échappe donc au verrou — décision du 2026-09-29. Tout
+nouvel extrait de ce genre doit dire exactement ce qu'il garde, et rien de plus.
+⚠️ Depuis le même jour, un PDF servi par `file_content.render_for_agent` sort en TEXTE
+(plus l'original en URL) : c'est toujours le document entier, donc toujours derrière
+le verrou.
 
 ## Schéma OBSERVÉ = source de vérité (pas déclaré)
 

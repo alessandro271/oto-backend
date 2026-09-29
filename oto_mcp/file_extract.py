@@ -558,6 +558,11 @@ def is_spreadsheet(filename: str, mime: str = "") -> bool:
     return _extension_of(filename, mime) == "xlsx"
 
 
+def is_pdf(filename: str, mime: str = "") -> bool:
+    """Ce fichier se lit-il comme un PDF ? Même routage : l'extension fait autorité."""
+    return _extension_of(filename, mime) == "pdf"
+
+
 def extract(data: bytes, filename: str, mime: str = "") -> Extraction:
     """Le texte d'un fichier, ou la raison nommée de son absence.
 

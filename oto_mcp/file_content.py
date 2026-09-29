@@ -7,11 +7,17 @@ inline évite d'injecter trop de tokens dans le contexte de l'agent.
 
 Un TABLEUR `.xlsx` est un binaire qu'on sait lire : il est rendu INLINE en CSV par
 feuille (`file_extract.render_xlsx_csv`, oto#181), borné au même seuil inline.
+
+Un PDF aussi : son TEXTE est rendu INLINE (`file_extract.extract`), le PDF original
+joint en URL signée. Servi seulement en URL, il n'était lisible par aucun agent dont
+le bac à sable ne joint pas notre stockage — or c'est le cas par défaut d'un client
+qui filtre sa sortie réseau.
 """
 from __future__ import annotations
 
 from typing import Optional, Union
 
+from . import file_extract
 from .file_extract import (DEFAULT_SHEET_ROWS, NOT_A_SPREADSHEET, SpreadsheetError,
                            is_spreadsheet, render_xlsx_csv)
 
@@ -69,7 +75,12 @@ def render_for_agent(data: bytes, filename: str, mime: str, *, sub: str, prefix:
       à 200 n'avait aucun chemin vers ses données — or on le veut entier pour le
       charger dans un tableau ou le ranger). Le CSV inline reste : c'est lui que
       l'agent lit. Stockage indisponible → `raw_unavailable` le DIT, le rendu inline
-      n'échoue pas pour autant.
+      n'échoue pas pour autant ;
+    - PDF → INLINE son texte extrait : `{encoding: "text", format: "pdf-text",
+      content, pages, truncated}` + TOUJOURS `raw_url` vers l'original (la mise en
+      page et les images ne passent pas dans le texte). Sans texte extractible
+      (scanné, protégé, illisible) → URL signée comme un binaire, et
+      `text_unavailable` dit pourquoi.
 
     `prefix` = préfixe de clé S3 (`gmail-attachments`, `drive-files`,
     `slack-files`…) ; `sub` = propriétaire du dépôt. **Appel BLOQUANT** (I/O S3) :
@@ -95,7 +106,19 @@ def render_for_agent(data: bytes, filename: str, mime: str, *, sub: str, prefix:
             NOT_A_SPREADSHEET,
             f"`sheet`/`max_rows` ne valent que pour un tableur .xlsx — « {filename} » "
             f"({mime or 'type inconnu'}) n'en est pas un : relance sans ces paramètres.")
-    text = as_text(data, mime)
+    pdf = file_extract.is_pdf(filename, mime)
+    if pdf:
+        ex = file_extract.extract(data, filename, mime)
+        if ex.ok:
+            out.update(encoding="text", format="pdf-text",
+                       content=ex.text[:INLINE_TEXT_CAP], pages=ex.pages,
+                       truncated=len(ex.text) > INLINE_TEXT_CAP)
+            _joindre_le_brut(out, data, filename, mime, sub=sub, prefix=prefix)
+            return out
+        out["text_unavailable"] = f"{ex.status} : {ex.detail}"
+    # Un PDF sans texte extractible part en URL : ses octets, même décodables, ne
+    # sont pas un texte à lire.
+    text = None if pdf else as_text(data, mime)
     if text is not None and len(data) <= INLINE_TEXT_CAP:
         out.update(encoding="text", content=text)
         return out
@@ -113,18 +136,20 @@ def render_for_agent(data: bytes, filename: str, mime: str, *, sub: str, prefix:
 
 def _joindre_le_brut(out: dict, data: bytes, filename: str, mime: str, *, sub: str,
                      prefix: str) -> None:
-    """Dépose le fichier ORIGINAL (tableur tronqué) et en rend l'URL signée.
+    """Dépose le fichier ORIGINAL (tableur tronqué, PDF rendu en texte) et en rend
+    l'URL signée.
 
-    Un stockage absent ne fait pas échouer le rendu : le CSV inline est juste et
+    Un stockage absent ne fait pas échouer le rendu : le texte inline est juste et
     utile. Mais l'absence se DIT (`raw_unavailable`) — jamais un `raw_url` manquant
     en silence, qu'un agent lirait « pas de fichier complet »."""
     from . import media_store
     try:
         out["raw_url"] = media_store.upload_private(prefix, sub, data, mime, filename)
     except media_store.MediaError as e:
+        suite = ("relance avec `sheet` et un `max_rows` plus haut pour lire plus de "
+                 "lignes." if out.get("format") == "csv" else
+                 "le texte ci-dessus est celui du document.")
         out["raw_unavailable"] = (
-            f"fichier brut non déposé : stockage temporaire indisponible ({e}). Le "
-            "rendu CSV ci-dessus est tronqué ; relance avec `sheet` et un `max_rows` "
-            "plus haut pour lire plus de lignes.")
+            f"fichier brut non déposé : stockage temporaire indisponible ({e}) ; {suite}")
         return
     out["raw_expires_in"] = media_store.presign_expiry()

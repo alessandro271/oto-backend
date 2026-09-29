@@ -130,7 +130,12 @@ def register(mcp: FastMCP) -> None:
           the file:
           - **small text** (txt/csv/json/markdown, ≤256 KB) → returned INLINE:
             `{encoding: "text", content}` — read it directly.
-          - **binary or large** (PDF, image, big file) → uploaded to temporary
+          - **PDF** → its extracted TEXT returned INLINE: `{encoding: "text",
+            format: "pdf-text", content, pages, truncated}` plus `raw_url` (+
+            `raw_expires_in`), a short-lived signed URL to the original PDF
+            (layout, images). A scanned or protected PDF has no text: it comes
+            back as a URL, with `text_unavailable` saying why.
+          - **binary or large** (image, archive, big file) → uploaded to temporary
             storage and returned as a short-lived signed URL: `{encoding: "url",
             url, expires_in}` (seconds). Fetch the URL to get the bytes.
           - **spreadsheet (.xlsx)** → returned INLINE as CSV, one section per
@@ -155,7 +160,7 @@ def register(mcp: FastMCP) -> None:
           op="list". `format` = markdown | text | html | pdf | csv ; omit it for a
           sensible default per type (Doc→markdown, Sheet→csv (first sheet),
           Slides→text). Returns {filename, mimeType, encoding, content|url, …}:
-          text formats come back INLINE, `pdf` as a short-lived signed URL.
+          text formats come back INLINE, `pdf` as its extracted text + `raw_url`.
         - **"create_folder"**: Create a folder (`name`), optionally inside a parent
           folder (`parent_folder_id`). Returns the folder metadata. Folders only —
           uploading a local FILE to Drive stays on the CLI side (no server FS).

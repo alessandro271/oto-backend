@@ -197,7 +197,12 @@ def register(mcp: FastMCP) -> None:
           `op="get"`). The response depends on the file:
           - **small text** (JSON/CSV/Markdown/plain, ≤256 KB) → returned INLINE:
             `{encoding: "text", content: "<decoded text>"}` — read it directly.
-          - **binary or large** (PDF, image, big file) → uploaded to temporary
+          - **PDF** → its extracted TEXT returned INLINE: `{encoding: "text",
+            format: "pdf-text", content, pages, truncated}` plus `raw_url` (+
+            `raw_expires_in`), a short-lived signed URL to the original PDF
+            (layout, images). A scanned or protected PDF has no text: it comes
+            back as a URL, with `text_unavailable` saying why.
+          - **binary or large** (image, archive, big file) → uploaded to temporary
             storage and returned as a short-lived signed URL: `{encoding: "url",
             url, expires_in}` (seconds). Fetch the URL to get the bytes.
           - **spreadsheet (.xlsx)** → returned INLINE as CSV, one section per
