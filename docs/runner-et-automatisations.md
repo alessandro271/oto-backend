@@ -998,7 +998,7 @@ faux dès que la source est silencieuse.
 Un déclencheur porte désormais un **genre** (`runner_triggers.kind`) :
 
 - `schedule` — l'existant, à l'octet. `cron` + `next_due`, pris par le tick.
-- `webhook` — un tiers POSTe `/api/hooks/{trigger_id}`, et le travail part.
+- `webhook` — un tiers POSTe `/api/hooks/{address}` (l'id ou l'adresse privée `h_…`), et le travail part.
 
 **Le genre se pose à la CRÉATION et ne se change jamais** (`kind` est hors de
 l'allowlist d'`update_trigger`). Basculer un agent d'un coup d'envoi à l'autre

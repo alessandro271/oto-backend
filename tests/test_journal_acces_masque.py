@@ -61,6 +61,37 @@ def test_un_jeton_du_chemin_ne_part_pas_en_clair(acces, gabarit):
     assert js.mask(JETON) in ligne, "le masque corrélable remplace le jeton"
 
 
+ADRESSE_PRIVEE = "h_Zq3xV9mK2pL7wR4tY8uN1bC6"   # la forme `h_…` servie en `hook_url`
+
+
+@pytest.mark.parametrize("adresse", [ADRESSE_PRIVEE, "4242"])
+def test_l_adresse_d_un_webhook_d_agent_ne_part_pas_en_clair(acces, adresse):
+    """`/api/hooks/{address}` : l'adresse privée est ce qui rend l'agent introuvable ;
+    l'id numérique d'un agent sans adresse privée passe par le même segment, que la
+    route ne distingue qu'en lisant la base — masqué pareil."""
+    ligne = acces("POST", f"/api/hooks/{adresse}", 202)
+    assert f"/api/hooks/{adresse}" not in ligne
+    assert js.mask(adresse) in ligne
+
+
+def test_l_adresse_d_un_webhook_ne_part_pas_en_clair_dans_tool_calls():
+    """L'autre canal : la ligne `tool_calls` d'un POST de webhook (`route_and_secrets`,
+    lu par le journal REST) ne porte l'adresse ni dans `tool` ni en clair dans `args`."""
+    route, masques = js.route_and_secrets(f"/api/hooks/{ADRESSE_PRIVEE}")
+    assert route == "/api/hooks/:address"
+    assert masques == {"address": js.mask(ADRESSE_PRIVEE)}
+
+
+def test_aucune_capacite_ne_porte_un_argument_nomme_comme_un_secret_de_route():
+    """Un nom de `SECRET_PARAM_NAMES` masque aussi l'argument de CAPACITÉ qui le porte :
+    `address` n'en touche aucun aujourd'hui — un ajout futur doit être voulu."""
+    import oto_mcp.capabilities  # noqa: F401 — peuple le registre
+    from oto_mcp.capabilities.registry import caps_with_mcp
+    porteurs = sorted(c.mcp for c in caps_with_mcp()
+                      if "address" in (getattr(c.Input, "model_fields", {}) or {}))
+    assert porteurs == []
+
+
 def test_la_requete_et_la_queue_restent_lisibles(acces):
     ligne = acces("GET", f"/api/upload/{JETON}/x?format=csv", 404)
     assert JETON not in ligne and "/x?format=csv" in ligne

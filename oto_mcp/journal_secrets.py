@@ -66,7 +66,13 @@ logger = logging.getLogger(__name__)
 # Les NOMS de paramètre qui portent un secret. C'est la seule liste écrite à la
 # main de ce module, et elle est volontairement courte : tout le reste (quelles
 # routes, quels outils) en est dérivé.
-SECRET_PARAM_NAMES = frozenset({"token", "code"})
+#
+# `address` : l'adresse d'un webhook d'agent (`/api/hooks/{address}`) — l'adresse
+# privée `h_…` (128 bits) est ce qui rend l'agent introuvable à qui ne l'a pas reçue,
+# au même titre qu'un jeton. Le segment porte aussi l'id numérique d'un agent sans
+# adresse privée ; il est masqué pareil, la route ne pouvant savoir lequel elle sert
+# avant de lire la base. Aucune entrée de capacité ne porte ce nom.
+SECRET_PARAM_NAMES = frozenset({"token", "code", "address"})
 
 # Les CONNECTEURS échappent à la dérivation ci-dessus (elle ne lit que le registre
 # de capacités), et masquer leurs arguments par le NOM seul serait faux : un
