@@ -15,7 +15,10 @@ projet ou un tableau personnel listé dans l'org où il a été créé (`context
 - les lentilles « moi » (`scope=me`, `GET /api/me/datastores/shared`, `shared_with_me`
   sans `scope` ou `me`) ne sont servies que dans l'org perso : ailleurs, 409
   `personal_view_outside_personal_org` (29/09/2026) ;
-- l'accès par identifiant ne change pas.
+- l'accès par identifiant ne change pas ;
+- amendement du 29/09/2026 (Alexis) : un projet PERSONNEL se liste aussi, pour son
+  seul propriétaire, dans l'org où il l'a créé (`context_org_id`) — jamais pour un
+  autre membre sans partage.
 
 Base réelle, sur les faces servies : `POST /api/me/projects` (op=list, op=create),
 `GET /api/datastores` et `POST /api/datastores` sous `X-Oto-Org`, l'outil
@@ -142,11 +145,15 @@ def _tableaux_listes(client, org: int) -> list[dict]:
 
 # --- projets -------------------------------------------------------------------
 
-def test_projets_dans_une_org_de_travail_rien_que_l_org(monde, client):
+def test_projets_dans_une_org_de_travail_l_org_et_mes_projets_crees_ici(monde, client):
+    # Décision du 29/09/2026 : mon projet perso créé dans A (`perso_a`) se liste pour
+    # MOI dans A ; celui d'un autre créé dans A (`tiers_perso`), jamais — il n'est à
+    # personne d'autre que lui tant qu'il ne le partage pas.
     vus = _projets_listes(client, monde["a"])
-    assert _connus(monde, "p", [x["id"] for x in vus]) == {"org_a", "equipe", "recu_a"}
-    assert not [x for x in vus if x["owner_type"] == "user"], (
-        "un projet personnel — le mien ou celui d'un autre — est listé dans une org")
+    assert _connus(monde, "p", [x["id"] for x in vus]) == {
+        "org_a", "equipe", "recu_a", "perso_a"}
+    assert {x["owner_id"] for x in vus if x["owner_type"] == "user"} == {MOI}, (
+        "le projet personnel d'un autre est listé dans une org")
 
 
 def test_projets_dans_l_org_perso_tout_mon_personnel_et_ce_qui_m_est_partage(monde, client):
@@ -217,14 +224,15 @@ def test_une_page_partagee_a_moi_se_liste_dans_l_org_perso(monde):
 
 # --- création : à la personne, listée dans l'org perso (29/09/2026) ---------------
 
-def test_un_projet_sans_proprietaire_cree_dans_a_est_perso_et_se_liste_dans_l_org_perso(
+def test_un_projet_sans_proprietaire_cree_dans_a_est_perso_et_se_liste_ici_et_en_perso(
         monde, client):
     nom = _nom()
     r = client.post("/api/me/projects", json={"op": "create", "name": nom},
                     headers=_entetes(monde["a"]))
     assert r.status_code == 200, r.text
     assert (r.json()["owner_type"], r.json()["context_org_id"]) == ("user", str(monde["a"]))
-    assert nom not in {x["name"] for x in _projets_listes(client, monde["a"])}
+    # 29/09/2026 : il se liste pour moi dans A, où je l'ai créé, et dans mon org perso.
+    assert nom in {x["name"] for x in _projets_listes(client, monde["a"])}
     assert nom in {x["name"] for x in _projets_listes(client, monde["perso"])}
     # `owner_type=user` explicite depuis A : permis, même effet.
     r = client.post("/api/me/projects",

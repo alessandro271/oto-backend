@@ -684,17 +684,17 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
                 raise AuthzDenied(409, "personal_view_outside_personal_org", message, details)
             return _projected(_received([("user", sub)], set()), inp.fields)
 
-        # La LISTE de l'org consultée (décision du 28/09/2026, amende l'ADR 0030 §8) :
-        # dans une org, on ne voit QUE l'org — ses projets, ceux de ses pôles (ADR 0049 :
-        # mes équipes, ou toutes si j'en suis admin), et ce qui est partagé à elle ou à
-        # mes équipes en elle, marqué `shared`. Aucun projet perso, aucun partage fait à
-        # MOI : ils se listent dans mon org PERSO, où s'ajoutent TOUS mes projets perso
-        # (quel que soit leur `context_org_id`) et ce qui est partagé à moi en personne.
-        # Deux seams, les mêmes que la recherche (`accessible_project_ids`) : « cherchable
-        # ⇔ lisible » (tripwire `test_search_scope_tripwire`).
-        owners = ownership.project_list_owners(sub, ctx.org_id)
-        _require(bool(owners), "no_active_org", "Aucune org active.", 400)
-        own_rows = db.list_projects_for_owners(owners)
+        # La LISTE de l'org consultée (décisions des 28 et 29/09/2026, amendent l'ADR
+        # 0030 §8) : ses projets, ceux de ses pôles (ADR 0049 : mes équipes, ou toutes si
+        # j'en suis admin), ce qui est partagé à elle ou à mes équipes en elle, marqué
+        # `shared` — et MES projets personnels créés dans cette org (`mes_projets_ici`),
+        # invisibles des autres membres sauf partage. Aucun partage fait à MOI : il se
+        # liste dans mon org PERSO. Deux seams, les mêmes que la recherche
+        # (`accessible_project_ids`) : « cherchable ⇔ lisible »
+        # (tripwire `test_search_scope_tripwire`).
+        _require(bool(ownership.project_list_owners(sub, ctx.org_id)), "no_active_org",
+                 "Aucune org active.", 400)
+        own_rows = ownership.projets_possedes_ici(sub, ctx.org_id)
         grant_counts.update(db.project_grant_counts([r["id"] for r in own_rows]))
 
         own = [_enrich(r, False) for r in own_rows]
@@ -708,9 +708,8 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         # pôles, et mes modèles perso dans mon org perso seulement) et (ADR 0049) les
         # modèles PLATFORM-owned, pour tous. Jamais l'union de toutes mes orgs : un
         # modèle d'une autre org se voit depuis cette org-là.
-        rows = db.list_projects_for_owners(
-            ownership.project_list_owners(sub, ctx.org_id) + [("platform", "platform")],
-            templates_only=True)
+        rows = ownership.projets_possedes_ici(
+            sub, ctx.org_id, extra=[("platform", "platform")], templates_only=True)
         return _projected([_view(r, sub) for r in rows], inp.fields)
 
     if inp.op == "runs" and inp.project_id is None:
@@ -1269,9 +1268,9 @@ def _archived_in_org(ctx: ResolvedCtx) -> list[dict]:
     (`ownership.project_list_owners`), sans les partages reçus (celui qui reçoit ne
     gouverne pas, il ne désarchiverait rien)."""
     sub = ctx.sub
-    owners = ownership.project_list_owners(sub, ctx.org_id)
-    _require(bool(owners), "no_active_org", "Aucune org active.", 400)
-    rows = db.list_projects_for_owners(owners, include_archived=True)
+    _require(bool(ownership.project_list_owners(sub, ctx.org_id)), "no_active_org",
+             "Aucune org active.", 400)
+    rows = ownership.projets_possedes_ici(sub, ctx.org_id, include_archived=True)
     return [_view(r, sub) for r in rows if r.get("archived_at") is not None]
 
 

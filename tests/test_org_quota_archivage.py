@@ -326,17 +326,15 @@ def test_l_espace_personnel_d_autrui_reste_refuse(store, monkeypatch):
     assert store.get_personal_org(AUTRE) == autrui   # intact
 
 
-def test_un_espace_perso_qui_gagne_un_membre_n_est_plus_perso(store, monkeypatch):
-    """Pourquoi la capacité ne porte PAS de garde « et seulement s'il est seul » :
-    elle serait morte. Le store tient déjà l'invariant — `add_org_member` efface
-    `personal_of` au 2ᵉ membre (correctif 2026-08-04) — donc « perso » implique
-    « solo », et l'espace qui a gagné un coéquipier s'archive par la voie ordinaire."""
+def test_un_espace_perso_qui_gagne_un_membre_reste_perso(store, monkeypatch):
+    """Décision d'Alexis du 29/09/2026 : `personal_of` est une étiquette, pas un état —
+    un 2ᵉ membre ne la retire plus. Son propriétaire l'archive comme sa propre org."""
     monkeypatch.setattr(session_org, "current_session_id", lambda: None)
     perso = _perso(store, SUB)
     store.add_org_member(perso, AUTRE, "org_member")
 
-    assert store.is_personal_org(perso) is False
-    assert store.get_personal_org(SUB) is None
+    assert store.is_personal_org(perso) is True
+    assert store.get_personal_org(SUB) == perso
     assert _archiver(SUB, perso)["archived"] is True
 
 

@@ -17,15 +17,17 @@ CTX = ResolvedCtx(sub="u1", org_id=7)
 
 @pytest.fixture
 def calls(monkeypatch):
-    rec = {"owners": [], "principals": [], "granted_want": []}
+    rec = {"owners": [], "principals": [], "granted_want": [], "createurs": []}
 
     monkeypatch.setattr(ownership.roles, "is_org_admin", lambda sub, org: False)
     monkeypatch.setattr(ownership.group_store, "list_groups_for_user",
                         lambda sub, org: [{"group_id": 3}])
     monkeypatch.setattr(ownership.group_store, "list_groups", lambda org: [])
     monkeypatch.setattr(ownership.db, "list_projects_for_owners",
-                        lambda owners, **k: rec["owners"].append(list(owners)) or
-                        [{"id": 11}, {"id": 12}])
+                        lambda owners, createur=None, **k: (
+                            rec["owners"].append(list(owners)),
+                            rec["createurs"].append(createur))
+                        and [{"id": 11}, {"id": 12}])
     # Org 7 = une org de TRAVAIL (l'org perso de u1 est la 5) : décision du 28/09/2026,
     # aucun objet personnel ni partage nominatif n'y entre. Les tests d'org perso
     # passent `org=5`.
@@ -56,18 +58,22 @@ def test_scope_parity_with_op_list(calls):
     # côté op=list : mêmes seams (project_list_owners + principaux_de_liste)
     assert search_owners == ownership.project_list_owners("u1", 7)
     assert search_principals == ownership.principaux_de_liste("u1", 7)
+    assert calls["createurs"][-1] == ownership.mes_projets_ici("u1", 7)
     # org de travail : owners = org active + mes groupes ; principals = org + mes
-    # groupes — JAMAIS moi (28/09/2026)
+    # groupes — JAMAIS moi (28/09/2026). Mes projets perso créés ICI passent par
+    # `createur` (29/09/2026), qui ne porte que sur moi.
     assert search_owners == [("org", "7"), ("group", "3")]
     assert search_principals == [("org", "7"), ("group", "3")]
+    assert calls["createurs"][-1] == ("u1", 7, False)
 
 
 def test_org_perso_ajoute_moi_comme_proprietaire_et_destinataire(calls):
     """Décision du 28/09/2026 : dans MON org perso, la liste (et donc la recherche)
-    rend tous mes projets perso — `("user", sub)` propriétaire, quel que soit leur
+    rend tous mes projets perso — `createur` à `tout`, quel que soit leur
     `context_org_id` — et ce qui m'est partagé en personne."""
     ownership.accessible_project_ids("u1", 5)
-    assert calls["owners"][-1] == [("org", "5"), ("group", "3"), ("user", "u1")]
+    assert calls["owners"][-1] == [("org", "5"), ("group", "3")]
+    assert calls["createurs"][-1] == ("u1", 5, True)
     assert calls["principals"][-1] == [("org", "5"), ("user", "u1"), ("group", "3")]
 
 

@@ -18,7 +18,9 @@ def _ctx(sub="u1"):
 def _patch(monkeypatch, *, org=True, personal=False, role="org_member",
            admins=2, removed=True):
     monkeypatch.setattr(om.org_store, "get_org", lambda oid: {"id": oid} if org else None)
-    monkeypatch.setattr(om.org_store, "is_personal_org", lambda oid: personal)
+    # `personal` : l'org 7 est l'org perso de l'appelant. Celle d'un AUTRE (où il a été
+    # invité) se quitte (29/09/2026) : la garde lit l'org perso DE l'appelant.
+    monkeypatch.setattr(om.org_store, "get_personal_org", lambda sub: 7 if personal else 99)
     monkeypatch.setattr(om.org_store, "get_org_role", lambda oid, sub: role)
     monkeypatch.setattr(
         om.org_store, "list_org_members",
@@ -61,6 +63,12 @@ def test_leave_personal_refused(monkeypatch):
     with pytest.raises(AuthzDenied) as e:
         om._leave_org(_ctx(), om.LeaveOrgInput(org_id=7))
     assert e.value.code == "personal_org"
+
+
+def test_leave_someone_elses_personal_org_ok(monkeypatch):
+    # L'org perso d'un autre, où l'on a été invité : elle se quitte comme toute org.
+    _patch(monkeypatch, personal=False)
+    assert om._leave_org(_ctx(), om.LeaveOrgInput(org_id=7))["left"] is True
 
 
 def test_leave_not_member(monkeypatch):

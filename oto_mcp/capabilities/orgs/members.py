@@ -186,8 +186,10 @@ def _leave_org(ctx: ResolvedCtx, inp: LeaveOrgInput) -> dict:
     de `org.member.remove` (org_admin retire un TIERS). L'org active bascule côté store
     (`remove_org_member` promeut la plus ancienne restante ; l'org perso est le repli)."""
     _require_org_exists(inp.org_id)
-    # On ne quitte pas son espace perso (c'est le repli d'identité, jamais supprimable).
-    if org_store.is_personal_org(inp.org_id):
+    # On ne quitte pas SON espace perso (c'est le repli d'identité, jamais supprimable).
+    # Celui d'un autre, où l'on a été invité, se quitte comme toute org (29/09/2026 :
+    # une org perso garde son étiquette quand d'autres membres la rejoignent).
+    if org_store.get_personal_org(ctx.sub) == inp.org_id:
         raise AuthzDenied(409, "personal_org", "On ne peut pas quitter son espace personnel.")
     role = org_store.get_org_role(inp.org_id, ctx.sub)
     if role is None:

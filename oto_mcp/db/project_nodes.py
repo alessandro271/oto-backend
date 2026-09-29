@@ -87,27 +87,31 @@ def _ligne(famille: str, ident, parent: Optional[str], owner_type: str, owner_id
             "role": None, "legacy": famille, "legacy_id": str(ident), "slug": None}
 
 
-def lignes_pour_proprietaires(owners: Iterable[tuple[str, str]]) -> list[dict]:
+def lignes_pour_proprietaires(owners: Iterable[tuple[str, str]],
+                              createur: Optional[tuple[str, int, bool]] = None) -> list[dict]:
     """Les projets non archivés de ces propriétaires, suivis de leurs pages.
 
-    Le filtre d'org est dans le jeu de propriétaires, pas ici : l'appelant n'y met
-    `("user", sub)` que dans l'org perso de la personne (`ownership.perso_de_la_liste`,
-    décision du 28/09/2026), et TOUS ses projets perso y sortent alors, quel que soit
-    leur `context_org_id`. Avant, un projet personnel sortait dans son org de contexte.
+    `owners` = les propriétaires collectifs (l'org, ses équipes). Mes projets
+    PERSONNELS passent par `createur` (`ownership.mes_projets_ici`, décision du
+    29/09/2026) : ceux que j'ai créés dans cette org et, dans mon org perso, tous —
+    la même règle que `oto_project op=list`.
 
     Deux requêtes, jamais une par projet. L'ordre est celui des surfaces d'origine :
     projets par nom, pages par position puis titre.
     """
     owners = list(owners)
-    if not owners:
+    if not owners and createur is None:
         return []
+    csub, corg, ctout = createur if createur is not None else (None, None, False)
     with _connect() as conn:
         projets = conn.execute(
             "SELECT p.id, p.owner_type, p.owner_id, p.name FROM projects p "
-            "WHERE p.archived_at IS NULL AND (p.owner_type, p.owner_id) IN "
-            f"({','.join(['(%s, %s)'] * len(owners))}) "
+            "WHERE p.archived_at IS NULL AND ((p.owner_type, p.owner_id) IN "
+            "        (SELECT o.t, o.i FROM unnest(%s::text[], %s::text[]) AS o(t, i)) "
+            "   OR (p.owner_type = 'user' AND p.owner_id = %s "
+            "       AND (p.context_org_id = %s OR %s))) "
             "ORDER BY p.name, p.id",
-            [v for pair in owners for v in pair]).fetchall()
+            ([o[0] for o in owners], [o[1] for o in owners], csub, corg, ctout)).fetchall()
         ids = [p["id"] for p in projets]
         pages = conn.execute(
             "SELECT d.id, d.project_id, d.parent_id, d.title, d.position FROM docs d "

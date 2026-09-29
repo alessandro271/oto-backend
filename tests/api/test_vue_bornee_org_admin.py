@@ -132,11 +132,11 @@ def test_la_vue_montre_ce_que_le_membre_voit_dans_o(client, monde):
     orgs = client.get("/api/me/orgs", headers=h).json()["orgs"]
     assert [x["id"] for x in orgs] == [monde["o"]]
 
-    # O n'est pas l'org perso du membre : la liste ne rend QUE O (28/09/2026) — son
-    # projet perso rangé dans O s'ouvre par son id (ci-dessous), il ne s'y liste pas.
+    # O n'est pas l'org perso du membre : la liste rend O (28/09/2026) et son projet
+    # perso CRÉÉ dans O (29/09/2026), qui descend dans O — vu en vue comme par lui.
     r = client.post("/api/me/projects", json={"op": "list"}, headers=h)
     assert r.status_code == 200, r.text
-    assert _noms(r) == {"Projet de O", "Projet d'équipe O"}
+    assert _noms(r) == {"Projet de O", "Projet d'équipe O", "Perso rangé dans O"}
     # Lentille « moi » : servie dans l'org perso seulement (29/09/2026) — O n'en est
     # pas une, refus nommé ; il ne nomme QUE l'org perso de la cible, jamais P.
     r = client.post("/api/me/projects", json={"op": "list", "scope": "me"}, headers=h)
@@ -263,9 +263,9 @@ def test_hors_vue_le_membre_lit_comme_avant(client, monde):
     # O, P et son espace personnel : toutes ses orgs.
     assert {monde["o"], monde["p"]} < {
         x["id"] for x in client.get("/api/me/orgs", headers=h).json()["orgs"]}
-    # 28/09/2026 : O n'est pas son org perso — la liste ne rend QUE O.
+    # O n'est pas son org perso : O (28/09/2026) et son perso créé dans O (29/09/2026).
     r = client.post("/api/me/projects", json={"op": "list"}, headers=h)
-    assert _noms(r) == {"Projet de O", "Projet d'équipe O"}
+    assert _noms(r) == {"Projet de O", "Projet d'équipe O", "Perso rangé dans O"}
     # La lentille « moi » : refusée dans O, servie dans son org perso (29/09/2026).
     r = client.post("/api/me/projects", json={"op": "list", "scope": "me"}, headers=h)
     assert r.status_code == 409, r.text
@@ -330,12 +330,12 @@ def test_le_seam_est_identique_hors_vue_et_borne_en_vue(monde):
         "équipes de l'acteur": (
             lambda: sorted(ow.accessor_scope(MEMBRE).group_ids),
             sorted([monde["g"], monde["h"]]), [monde["g"]]),
-        # 28/09/2026 : dans O (pas son org perso), on ne cherche QUE O — en vue comme
-        # hors vue, en parité avec la liste.
+        # Dans O (pas son org perso) : O, et son perso créé dans O (29/09/2026) — en
+        # vue comme hors vue, en parité avec la liste.
         "projets cherchables dans O": (
             lambda: sorted(ow.accessible_project_ids(MEMBRE, o)),
-            sorted([pr["org_o"], pr["equipe_o"]]),
-            sorted([pr["org_o"], pr["equipe_o"]])),
+            sorted([pr["org_o"], pr["equipe_o"], pr["perso_o"]]),
+            sorted([pr["org_o"], pr["equipe_o"], pr["perso_o"]])),
     }
     for nom, (appel, hors_vue, en_vue) in cas.items():
         assert appel() == hors_vue, f"hors vue — {nom}"

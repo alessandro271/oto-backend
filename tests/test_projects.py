@@ -27,10 +27,11 @@ def seams(monkeypatch):
     # L'org PERSO de l'appelant (décision du 28/09/2026) : la 5. Les orgs 99 et 42 des
     # bancs sont des orgs de TRAVAIL — aucun objet perso ne s'y liste ni ne s'y crée.
     monkeypatch.setattr(P.ownership.org_store, "get_personal_org", lambda sub: 5)
-    rec["list_owners"] = []
+    rec["list_owners"], rec["createurs"] = [], []
     monkeypatch.setattr(P.db, "list_projects_for_owners",
-                        lambda owners, templates_only=False: rec["list_owners"].append(owners) or (
-                            [dict(ROW, is_template=True)] if templates_only else [ROW]))
+                        lambda owners, templates_only=False, createur=None, **k: (
+                            rec["list_owners"].append(owners), rec["createurs"].append(createur))
+                        and ([dict(ROW, is_template=True)] if templates_only else [ROW]))
     monkeypatch.setattr(P.db, "update_project",
                         lambda pid, name=None, brief_md=None, is_template=None, icon=None: rec["update"].append((pid, name, brief_md, is_template)))
     rec["copy"] = []
@@ -201,23 +202,31 @@ def test_list_without_active_org_rejected(seams):
     assert e.value.code == "no_active_org"
 
 
-def test_list_includes_my_personal_projects_only_in_personal_org(seams, monkeypatch):
-    # Décision du 28/09/2026 : TOUS mes projets PERSO (quel que soit leur
-    # `context_org_id`) se listent dans mon org perso, possédés (jamais `shared`) — et
-    # dans aucune autre org, même celle où ils ont été créés.
+def test_list_includes_my_personal_projects_where_created_and_in_personal_org(
+        seams, monkeypatch):
+    # Décision du 29/09/2026 : mon projet PERSO se liste pour MOI dans l'org où je l'ai
+    # créé (`context_org_id`) — et, comme le 28/09, dans mon org perso avec tous les
+    # autres. Possédé (jamais `shared`). La clause ne porte que sur moi (`createur`).
     mine = dict(ROW, id=71, name="Perso", owner_type="user", owner_id="u1",
                 context_org_id=99)
-    monkeypatch.setattr(P.db, "list_projects_for_owners",
-                        lambda owners, **k: seams["list_owners"].append(owners) or (
-                            [ROW] + ([mine] if ("user", "u1") in owners else [])))
-    out = P._project(ResolvedCtx(sub="u1", org_id=5), P.ProjectInput(op="list"))
-    assert [p["id"] for p in out["projects"]] == [7, 71]
-    perso = next(p for p in out["projects"] if p["id"] == 71)
-    assert perso["shared"] is False and perso["owner_type"] == "user"
-    assert perso["context_org_id"] == "99"          # l'org où il travaille, exposée
-    out = P._project(ResolvedCtx(sub="u1", org_id=99), P.ProjectInput(op="list"))
-    assert [p["id"] for p in out["projects"]] == [7]
-    assert seams["list_owners"] == [[("org", "5"), ("user", "u1")], [("org", "99")]]
+
+    def lister(owners, createur=None, **k):
+        seams["list_owners"].append(owners)
+        seams["createurs"].append(createur)
+        ok = createur is not None and createur[0] == "u1" and (
+            createur[2] or createur[1] == mine["context_org_id"])
+        return [ROW] + ([mine] if ok else [])
+    monkeypatch.setattr(P.db, "list_projects_for_owners", lister)
+    for org in (5, 99):
+        out = P._project(ResolvedCtx(sub="u1", org_id=org), P.ProjectInput(op="list"))
+        assert [p["id"] for p in out["projects"]] == [7, 71], org
+        perso = next(p for p in out["projects"] if p["id"] == 71)
+        assert perso["shared"] is False and perso["owner_type"] == "user"
+        assert perso["context_org_id"] == "99"
+    out = P._project(ResolvedCtx(sub="u1", org_id=42), P.ProjectInput(op="list"))
+    assert [p["id"] for p in out["projects"]] == [7]    # ni créé ici, ni org perso
+    assert seams["list_owners"] == [[("org", "5")], [("org", "99")], [("org", "42")]]
+    assert seams["createurs"] == [("u1", 5, True), ("u1", 99, False), ("u1", 42, False)]
 
 
 def test_list_includes_projects_delivered_to_org(seams, monkeypatch):
@@ -326,15 +335,16 @@ def test_scope_hors_op_list_refuse(seams):
 
 def test_list_templates_scoped_to_consulted_org(seams, monkeypatch):
     # Les modèles se lisent DANS l'org consultée (mêmes owners qu'op=list : org + ses
-    # pôles, et moi dans mon org perso seulement) + la plateforme — plus l'union de
-    # toutes les orgs de l'acteur.
+    # pôles, et mes projets perso par `createur` — créés ici, ou tous dans mon org
+    # perso) + la plateforme — plus l'union de toutes les orgs de l'acteur.
     monkeypatch.setattr(P.ownership.group_store, "list_groups_for_user",
                         lambda sub, org_id=None: [{"group_id": 6}])
     P._project(CTX, P.ProjectInput(op="list_templates"))
     P._project(ResolvedCtx(sub="u1", org_id=5), P.ProjectInput(op="list_templates"))
     assert seams["list_owners"] == [
         [("org", "99"), ("group", "6"), ("platform", "platform")],
-        [("org", "5"), ("group", "6"), ("user", "u1"), ("platform", "platform")]]
+        [("org", "5"), ("group", "6"), ("platform", "platform")]]
+    assert seams["createurs"] == [("u1", 99, False), ("u1", 5, True)]
 
 
 def test_get_other_org_hidden_returns_404(seams, monkeypatch):

@@ -84,24 +84,30 @@ def get_project_by_id(project_id: int) -> Optional[dict]:
 
 def list_projects_for_owners(owners: list[tuple[str, str]], *,
                              include_archived: bool = False,
-                             templates_only: bool = False) -> list[dict]:
+                             templates_only: bool = False,
+                             createur: Optional[tuple[str, int, bool]] = None) -> list[dict]:
     """Projets possédés par l'un des `(owner_type, owner_id)` (perso + orgs/groupes).
-    `templates_only` = ne garder que les modèles publiés (`is_template`, ADR 0032 §7 B5a)."""
-    if not owners:
+    `templates_only` = ne garder que les modèles publiés (`is_template`, ADR 0032 §7 B5a).
+    `createur` = `(sub, org, tout)` (`ownership.mes_projets_ici`) : s'y ajoutent les
+    projets PERSONNELS de `sub` rangés dans l'org `org` (`context_org_id`) et, si
+    `tout` (son org perso), tous ses projets personnels."""
+    if not owners and createur is None:
         return []
     otypes = [o[0] for o in owners]
     oids = [o[1] for o in owners]
+    csub, corg, ctout = createur if createur is not None else (None, None, False)
     sql = (f"SELECT {_PROJECT_COLS} FROM projects p "
-           "JOIN unnest(%s::text[], %s::text[]) AS o(t, i) "
-           "  ON p.owner_type = o.t AND p.owner_id = o.i "
-           "WHERE TRUE ")
+           "WHERE ((p.owner_type, p.owner_id) IN "
+           "        (SELECT o.t, o.i FROM unnest(%s::text[], %s::text[]) AS o(t, i)) "
+           "   OR (p.owner_type = 'user' AND p.owner_id = %s "
+           "       AND (p.context_org_id = %s OR %s))) ")
     if not include_archived:
         sql += "AND p.archived_at IS NULL "
     if templates_only:
         sql += "AND p.is_template "
     sql += "ORDER BY p.updated_at DESC"
     with _connect() as conn:
-        rows = conn.execute(sql, (otypes, oids)).fetchall()
+        rows = conn.execute(sql, (otypes, oids, csub, corg, ctout)).fetchall()
         return [dict(r) for r in rows]
 
 

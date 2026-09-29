@@ -167,13 +167,44 @@ def project_scope_owners(sub: str, org_id: Optional[int]) -> list[tuple[str, str
 
 
 def project_list_owners(sub: str, org_id: Optional[int]) -> list[tuple[str, str]]:
-    """Propriétaires des projets qu'une LISTE rend dans l'org `org_id` : ceux du
-    contexte (`project_scope_owners` — l'org et ses pôles) et, dans mon org perso
-    seulement, moi (`perso_de_la_liste`) — TOUS mes projets perso, quel que soit
-    leur `context_org_id` (décision du 28/09/2026). Source unique d'`op=list`,
-    `op=list_templates`, `archived=true`, du rail et de la recherche."""
-    owners = project_scope_owners(sub, org_id)
-    return owners + perso_de_la_liste(sub, org_id) if owners else []
+    """Propriétaires COLLECTIFS des projets qu'une LISTE rend dans l'org `org_id` : ceux
+    du contexte (`project_scope_owners` — l'org et ses pôles). Mes projets PERSONNELS
+    n'y sont pas : ils passent par `mes_projets_ici`, qui les range dans l'org où je
+    les ai créés. Source unique d'`op=list`, `op=list_templates`, `archived=true`, du
+    rail et de la recherche (`projets_possedes_ici`)."""
+    return project_scope_owners(sub, org_id)
+
+
+def mes_projets_ici(sub: Optional[str], org_id: Optional[int]
+                    ) -> Optional[tuple[str, int, bool]]:
+    """`(sub, org, tout)` : les projets PERSONNELS (`owner_type='user'`) que `sub` voit
+    dans la liste de l'org `org_id` — ceux qu'il y a CRÉÉS (`context_org_id = org`)
+    et, dans son org perso (`tout`), tous ses projets personnels (28/09/2026). `None` :
+    aucun.
+
+    Décision d'Alexis du 29/09/2026 : un projet appartient à qui le crée et vit dans
+    l'org où il l'a créé ; son propriétaire l'y voit TOUJOURS, que l'org soit perso ou
+    partagée, et même quand elle cesse d'être perso (un 2ᵉ membre y entre et
+    `personal_of` retombe). Les autres membres ne le voient que s'il le leur partage :
+    la clause ne porte que sur `sub`. En vue bornée (oto#270), seul le contexte O
+    compte."""
+    if not sub or org_id is None:
+        return None
+    tout = vue_bornee() is None and org_perso_de(sub, org_id)
+    return (sub, int(org_id), tout)
+
+
+def projets_possedes_ici(sub: str, org_id: Optional[int], *,
+                         extra: Optional[list] = None, **kw) -> list[dict]:
+    """Les projets POSSÉDÉS que la liste de l'org `org_id` rend : ceux de l'org et de
+    ses pôles (`project_list_owners`), plus mes projets personnels créés ici
+    (`mes_projets_ici`). `extra` ajoute des propriétaires (la plateforme, pour les
+    modèles) ; `kw` passe à `db.list_projects_for_owners`. `[]` sans org active."""
+    owners = project_list_owners(sub, org_id)
+    if not owners:
+        return []
+    return db.list_projects_for_owners(owners + list(extra or []),
+                                       createur=mes_projets_ici(sub, org_id), **kw)
 
 
 def accessible_project_ids(sub: str, org_id: Optional[int],
@@ -186,10 +217,9 @@ def accessible_project_ids(sub: str, org_id: Optional[int],
     invariants du plan lot 3. PARITÉ STRICTE avec `oto_project op=list` (mêmes deux
     seams) — sinon « cherchable ⇔ lisible » ment (tripwire
     `test_search_scope_tripwire`)."""
-    owners = project_list_owners(sub, org_id)
-    if not owners:
+    ids = [int(r["id"]) for r in projets_possedes_ici(sub, org_id)]
+    if not ids and not project_list_owners(sub, org_id):
         return []
-    ids = [int(r["id"]) for r in db.list_projects_for_owners(owners)]
     seen = set(ids)
     for r in db.list_projects_granted_to(principaux_de_liste(sub, org_id)):
         rid = int(r["id"])

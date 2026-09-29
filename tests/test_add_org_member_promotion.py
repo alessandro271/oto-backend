@@ -128,15 +128,15 @@ def test_personal_does_not_steal_real_home(monkeypatch):
     assert _inserted_active(calls) is False
 
 
-def test_second_member_joining_a_personal_org_clears_personal_of(monkeypatch):
-    # Une org perso est mono-membre par définition (slot unique `personal_of`) :
-    # dès qu'un 2e membre distinct la rejoint, ce n'en est plus une (deux tenants tiers,
-    # 2026-08-04 — une org réelle multi-membre restait "personal" à vie faute de ce clear).
+def test_second_member_joining_a_personal_org_keeps_personal_of(monkeypatch):
+    # Décision d'Alexis du 29/09/2026 : `personal_of` est une ÉTIQUETTE (l'org créée à
+    # l'inscription), pas un état. Un 2ᵉ membre qui la rejoint ne la retire plus — le
+    # retrait laissait le propriétaire sans org perso, et ses projets hors des listes.
     calls = _run_add(
         monkeypatch, existing=None,
         active=None, joining_personal=True,
     )
-    assert _personal_of_cleared(calls)
+    assert not _personal_of_cleared(calls)
 
 
 def test_first_member_bootstrap_does_not_clear_personal_of(monkeypatch):

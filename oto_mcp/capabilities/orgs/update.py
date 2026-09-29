@@ -139,10 +139,9 @@ def _archive_org(ctx: ResolvedCtx, inp: OrgIdInput) -> dict:
     par escalade platform_admin, et ce chemin self-service ne doit pas effacer l'espace
     privé d'un tiers (la console admin a le sien).
 
-    Pas de garde « et seulement s'il est seul » en plus : elle serait morte. Un espace
-    perso EST mono-membre par construction — `add_org_member` efface `personal_of` dès
-    qu'un 2ᵉ membre distinct arrive (org_store.py, correctif 2026-08-04), l'org tombant
-    alors dans le cas ordinaire ci-dessous.
+    Depuis le 29/09/2026, un espace perso peut avoir d'autres membres : `add_org_member`
+    ne retire plus `personal_of` (une étiquette, plus un état). Son propriétaire le
+    supprime comme n'importe quel admin supprime son org.
 
     ⚠️ Ce n'est pas une suppression de compte. Si ce geste laisse l'appelant SANS
     aucune org, on lui repose immédiatement un espace perso VIDE et neuf — son contenu
