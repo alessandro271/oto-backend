@@ -17,7 +17,7 @@ from oto_mcp.mcp_errors import McpError
 from oto_mcp.tool_visibility import namespace_of
 from oto_mcp.tools import jev
 
-EXPECTED_TOOLS = {"jev_ask", "jev_items"}
+EXPECTED_TOOLS = {"jev_ask", "jev_items", "jev_rows"}
 
 NOUL = {"type": "noul", "instructions": "Does the condition hold?",
         "criteria": {"true": "yes", "false": "no"}}
@@ -315,3 +315,276 @@ def test_rubric_checked_once_per_batch(monte):
     with pytest.raises(McpError, match="criteria"):
         _fn(m, "jev_items")([{"n": 1}, {"n": 2}], {"q": {"type": "noul"}})
     assert client.decide.call_count == 0
+
+
+# --- jev_rows (fake store; the real write path is in tests/datastore/test_jev_rows_db.py) ---
+
+from oto_mcp.datastore.errors import RevisionConflict, RowLocked  # noqa: E402
+from oto_mcp.datastore.outils import _decode_cursor, _encode_cursor  # noqa: E402
+
+SCHEMA = {"fields": [
+    {"key": "company", "type": "text"}, {"key": "description", "type": "text"},
+    {"key": "q_fit", "type": "number"}, {"key": "q_fit_p", "type": "number"},
+    {"key": "q_seg", "type": "enum", "options": ["A", "B"]},
+    {"key": "q_seg_p", "type": "number"}, {"key": "q_ok", "type": "number"},
+    {"key": "q_model", "type": "text"}]}
+QS = {"fit": {"type": "score", "instructions": "fit?", "criteria": ["no", "yes"]},
+      "seg": {"type": "choice", "instructions": "seg?", "criteria": {"A": "a", "B": "b"}}}
+OUT = {"fit": "q_fit", "seg": "q_seg"}
+
+
+def _rows_answer(cost=4.8e-05, conf=0.8):
+    return {"model": "typesafe/jev-1.13-20260917",
+            "answers": {"fit": {"type": "score", "score": 3.34, "confidence": conf},
+                        "seg": {"type": "choice", "choice": "A", "confidence": conf,
+                                "probabilities": {"A": 0.9, "B": 0.1}}},
+            "usage": {"input_tokens": 1100, "cost": cost}}
+
+
+class FakeStore:
+    """Keyset pages over rows sorted by `_id`; the empty-marker clause is honoured."""
+
+    def __init__(self, n=5, schema=SCHEMA):
+        self.schema = schema
+        self.rows = {f"r{i:03d}": {"_id": f"r{i:03d}", "company": f"Co {i}",
+                                   "description": "d" * 300, "_revision": "1"}
+                     for i in range(n)}
+        self.writes: list = []
+        self.locked: set = set()
+        self.changed: set = set()
+
+    def _resolve(self, adresse, write=False):
+        return 1
+
+    def get_schema(self, adresse):
+        return self.schema
+
+    def _match(self, r, filters):
+        for c in filters or []:
+            if c["op"] == "empty" and r.get(c["field"]) not in (None, ""):
+                return False
+        return True
+
+    def cursor_rows(self, adresse, *, filter=None, filters=None, limit=100,
+                    cursor=None, fields=None):
+        after = _decode_cursor(cursor) if cursor else ""
+        ids = [i for i in sorted(self.rows) if i > after
+               and self._match(self.rows[i], filters)]
+        page = [dict(self.rows[i]) for i in ids[:limit]]
+        nxt = _encode_cursor(page[-1]["_id"]) if len(page) == limit else None
+        return {"rows": page, "next_cursor": nxt}
+
+    def count_rows(self, adresse, *, filter=None, filters=None):
+        return sum(1 for r in self.rows.values() if self._match(r, filters))
+
+    def update_row(self, adresse, rid, patch, expected_revision=None):
+        if rid in self.locked:
+            raise RowLocked(rid, claimed_by="w", claimed_until="later")
+        if rid in self.changed:
+            raise RevisionConflict(rid, expected_revision, "2")
+        self.writes.append((rid, dict(patch)))
+        self.rows[rid].update(patch)
+        return self.rows[rid]
+
+
+@pytest.fixture()
+def rows_env(monte, monkeypatch):
+    m, client, tools, releve = monte
+    store = FakeStore()
+    monkeypatch.setattr("oto_mcp.datastore.core.make_store", lambda sub: store)
+    monkeypatch.setattr("oto_mcp.access.current_user_sub_or_raise", lambda: "sub-t")
+    client.decide.return_value = _rows_answer()
+    client.decide.side_effect = None
+    return _fn(m, "jev_rows"), client, store, releve
+
+
+def _call(fn, **kw):
+    args = dict(datastore="42", questions=QS, state_fields=["company", {"description": 50}],
+                output=OUT, model_column="q_model")
+    args.update(kw)
+    return fn(**args)
+
+
+def test_rows_writes_answer_confidence_and_model(rows_env):
+    fn, client, store, releve = rows_env
+    r = _call(fn)
+    assert r["decided"] == 5 and r["done"] is True and r["next_cursor"] is None
+    rid, patch = store.writes[0]
+    assert patch == {"q_fit": 3.34, "q_fit_p": 0.8, "q_seg": "A", "q_seg_p": 0.8,
+                     "q_model": "typesafe/jev-1.13-20260917"}
+    sent = client.decide.call_args_list[0].args[0]
+    assert sent == {"company": "Co 0", "description": "d" * 50}, "projection + max_chars"
+    assert releve["quantity"] == 240, "5 × 48 µ$, one billing line per call"
+
+
+def test_rows_rerun_is_idempotent_and_free(rows_env):
+    fn, client, store, releve = rows_env
+    _call(fn)
+    calls = client.decide.call_count
+    releve.clear()
+    r = _call(fn)
+    assert r["decided"] == 0 and client.decide.call_count == calls
+    assert "quantity" not in releve
+
+
+def test_rows_limit_pages_with_a_watermark_cursor(rows_env):
+    fn, _, store, _ = rows_env
+    r = _call(fn, limit=2)
+    assert r["decided"] == 2 and r["remaining"] == 3 and r["done"] is False
+    assert _decode_cursor(r["next_cursor"]) == "r001"
+    r = _call(fn, limit=2, cursor=r["next_cursor"])
+    assert [w[0] for w in store.writes] == ["r000", "r001", "r002", "r003"]
+
+
+def test_rows_transient_error_holds_the_watermark_and_stays_undecided(rows_env):
+    from oto.tools.common.errors import UpstreamHTTPError
+    fn, client, store, _ = rows_env
+    err = UpstreamHTTPError(503, "down") if _takes_two() else UpstreamHTTPError("down")
+    err.status_code = 503
+
+    def decide(state, questions, **kw):
+        if state["company"] == "Co 1":
+            raise err
+        return _rows_answer()
+    client.decide.side_effect = decide
+    r = _call(fn)
+    assert r["decided"] == 4 and r["error_count"] == 1 and r["jev_errors"] == 0
+    assert _decode_cursor(r["next_cursor"]) == "r000", "never past an unhandled row"
+    assert store.rows["r001"].get("q_model") is None, "retried next call"
+    assert r["remaining"] == 1
+
+
+def _takes_two() -> bool:
+    import inspect
+    from oto.tools.common.errors import UpstreamHTTPError
+    return len(inspect.signature(UpstreamHTTPError.__init__).parameters) > 2
+
+
+def test_rows_upstream_400_and_oversized_state_are_marked_not_replayed(rows_env):
+    from oto.tools.common.errors import UpstreamHTTPError
+    fn, client, store, _ = rows_env
+    store.rows["r002"]["description"] = "x" * 20_000
+    err = UpstreamHTTPError(400, "max_tokens_exceeded") if _takes_two() \
+        else UpstreamHTTPError("max_tokens_exceeded")
+    err.status_code, err.body = 400, "max_tokens_exceeded"
+
+    def decide(state, questions, **kw):
+        if state["company"] == "Co 1":
+            raise err
+        return _rows_answer()
+    client.decide.side_effect = decide
+    r = _call(fn, state_fields=["company", "description"])
+    assert r["jev_errors"] == 2 and r["decided"] == 3 and r["done"] is True
+    assert store.rows["r001"]["q_model"].startswith("jev_error: ")
+    assert "bytes" in store.rows["r002"]["q_model"]
+    n = client.decide.call_count
+    _call(fn, state_fields=["company", "description"])
+    assert client.decide.call_count == n, "marked rows are not replayed"
+
+
+def test_rows_leased_and_changed_rows_are_never_overwritten(rows_env, monkeypatch):
+    fn, client, store, _ = rows_env
+    store.rows["r000"].update({"_claimed_by": "w9", "_claimed_until": "x",
+                               "_claimed_run": "other"})
+    store.locked.add("r001")          # lease taken after the read
+    store.changed.add("r002")
+    r = _call(fn)
+    assert r["skipped_leased"] == 2 and r["skipped_changed"] == 1 and r["decided"] == 2
+    assert {w[0] for w in store.writes} == {"r003", "r004"}
+    sent = [c.args[0]["company"] for c in client.decide.call_args_list]
+    assert "Co 0" not in sent, "a leased row is not paid for"
+
+
+def test_rows_dry_run_writes_nothing_and_is_billed(rows_env):
+    fn, client, store, releve = rows_env
+    r = _call(fn, dry_run=True, limit=100)
+    assert store.writes == [] and r["dry_run"] is True
+    assert len(r["rows"]) == 5 and r["rows"][0]["answers"]["seg"]["choice"] == "A"
+    assert releve["quantity"] == 240
+
+
+def test_rows_overwrite_rejudges_decided_rows(rows_env):
+    fn, client, store, _ = rows_env
+    _call(fn)
+    n = len(store.writes)
+    r = _call(fn, overwrite=True)
+    assert r["decided"] == 5 and len(store.writes) == n + 5 and r["remaining"] is None
+
+
+@pytest.mark.parametrize("kw, needle", [
+    (dict(questions={"fit": {"type": "score", "instructions": "x"}}, output={"fit": "q_fit"}),
+     "`criteria` is required"),
+    (dict(output={"fit": "q_nope", "seg": "q_seg"}), "q_nope"),
+    (dict(output={"fit": "q_fit"}), "missing ['seg']"),
+    (dict(output={"fit": "q_seg", "seg": "q_fit"}), "needs"),
+    (dict(model_column="q_fit"), "model_column"),
+    (dict(state_fields=["company", "ghost"]), "ghost"),
+])
+def test_rows_bad_calls_are_refused_before_any_upstream_call(rows_env, kw, needle):
+    fn, client, store, releve = rows_env
+    with pytest.raises(McpError) as e:
+        _call(fn, **kw)
+    assert needle in str(e.value)
+    assert client.decide.call_count == 0 and "quantity" not in releve
+
+
+def test_rows_enum_missing_an_option_and_missing_p_column_are_refused(rows_env):
+    fn, _, store, _ = rows_env
+    store.schema = {"fields": [f for f in SCHEMA["fields"] if f["key"] != "q_fit_p"]}
+    store.schema["fields"] = [dict(f, options=["A"]) if f["key"] == "q_seg" else f
+                              for f in store.schema["fields"]]
+    with pytest.raises(McpError) as e:
+        _call(fn)
+    assert "q_fit_p" in str(e.value) and "lacks option(s) B" in str(e.value)
+
+
+def test_rows_noul_writes_p_and_needs_no_p_column(rows_env):
+    fn, client, store, _ = rows_env
+    client.decide.return_value = {"model": "m", "answers": {"ok": {"type": "noul", "noul": 0.7}},
+                                  "usage": {"cost": 1e-05}}
+    r = _call(fn, questions={"ok": NOUL}, output={"ok": "q_ok"})
+    assert r["decided"] == 5 and store.writes[0][1] == {"q_ok": 0.7, "q_model": "m"}
+
+
+def test_rows_quota_checked_per_page(rows_env, monkeypatch):
+    fn, _, store, releve = rows_env
+    from oto_mcp.tools import jev_rows as jr
+    monkeypatch.setattr(jr, "PAGE", 2)
+    units = []
+
+    def resoudre(provider, want="auto", **kw):
+        units.append(kw.get("units"))
+        return _Rung()
+    monkeypatch.setattr("oto_mcp.access.resolve_credential", resoudre)
+    _call(fn)
+    assert units == [2, 2, 1]
+
+
+def test_rows_counts_low_confidence_and_thin_states(rows_env):
+    fn, client, store, _ = rows_env
+    client.decide.return_value = _rows_answer(conf=0.4)
+    for r in store.rows.values():
+        r["description"] = ""
+    r = _call(fn)
+    assert r["low_confidence"] == 10, "two answers per row"
+    assert r["thin_state"] == 5
+    assert all(w[1]["q_fit"] == 3.34 for w in store.writes), "counts never change a verdict"
+
+
+def test_rows_key_failure_stops_and_bills_what_was_given(rows_env):
+    from oto.tools.common.errors import UpstreamHTTPError
+    fn, client, store, releve = rows_env
+    err = UpstreamHTTPError(402, "no credits") if _takes_two() else UpstreamHTTPError("x")
+    err.status_code, err.body = 402, "no credits"
+    seen = []
+
+    def decide(state, questions, **kw):
+        seen.append(1)
+        if len(seen) > 2:
+            raise err
+        return _rows_answer()
+    client.decide.side_effect = decide
+    with pytest.raises(McpError) as e:
+        _call(fn, parallel=1)
+    assert "402" in str(e.value) and "2 row(s) already written" in str(e.value)
+    assert releve["quantity"] == 96 and len(store.writes) == 2
