@@ -261,7 +261,7 @@ def test_un_402_au_milieu_du_lot_releve_ce_qui_est_deja_paye(monte):
     with pytest.raises(McpError) as e:
         _fn(m, "jev_items")([{"n": i} for i in range(6)], {"q": NOUL}, parallel=1)
     assert releve["quantity"] == 30  # 3 décisions payées, relevées
-    assert "3 décision(s) déjà prise(s) et relevée(s)" in str(e.value)
+    assert "3 réponse(s) déjà rendue(s) et relevée(s)" in str(e.value)
     assert "rien n'est facturé" not in str(e.value)
 
 

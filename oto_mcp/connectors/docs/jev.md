@@ -1,6 +1,6 @@
 ## prerequisite — une clé API OpenRouter, posée par le tenant
 
-jev est un modèle de **TypeSafe**, servi par **OpenRouter** : la clé attendue est donc une [clé API OpenRouter](https://openrouter.ai/settings/keys) (elle commence par `sk-or-`), pas une clé TypeSafe — il n'y en a pas. c'est **le tenant** qui la dépose pour ses organisations : un de ses administrateurs la pose une fois, et toutes ses orgs décident dessus. oto ne fournit pas de clé plateforme jev.
+jev est un modèle de **TypeSafe**, servi par **OpenRouter** : la clé attendue est donc une [clé API OpenRouter](https://openrouter.ai/settings/keys) (elle commence par `sk-or-`), pas une clé TypeSafe — il n'y en a pas. c'est **le tenant** qui la dépose pour ses organisations : un de ses administrateurs la pose une fois, et toutes ses orgs s'en servent. oto ne fournit pas de clé plateforme jev.
 - réserve-lui une clé dédiée, avec son propre plafond de dépense : la même clé, ailleurs, ouvrirait tout le catalogue de modèles d'openrouter
 - une clé posée au niveau d'une organisation, d'une équipe ou d'une personne n'est **pas** servie, et elle masque celle du tenant : l'outil la refuse en le disant et en nommant qui doit la retirer
 - sans clé déposée, aucun appel ne part — il n'y a pas de palier gratuit sur ce connecteur
@@ -21,7 +21,7 @@ une probabilité proche de 0,5 veut dire « aussi probable que l'inverse », jam
 - garde **deux** seuils et laisse la bande du milieu à une relecture humaine ou à un modèle de texte : c'est moins cher que de forcer une étiquette
 - `confidence` décrit la concentration de la distribution, pas la sûreté du geste qui suit
 - un `choice` répond TOUJOURS, même quand la question ne se pose pas : sur un contact hors cible, la persona rendue ne veut rien dire. lis d'abord le `noul` qui filtre, et le `choice` seulement s'il passe — ou prévois une option « aucune » et regarde sa probabilité
-- la réponse nomme le `model` exact qui a servi : garde-le à côté de la décision, c'est ce qui rend un seuil reproductible
+- la réponse nomme le `model` exact qui a servi : garde-le à côté de la réponse, c'est ce qui rend un seuil reproductible
 
 ## note — coût
 

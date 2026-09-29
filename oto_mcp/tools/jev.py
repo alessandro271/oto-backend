@@ -228,7 +228,7 @@ def register(mcp: FastMCP) -> None:
     def jev_ask(state: dict, questions: dict, model: Optional[str] = None) -> dict:
         """Ask Jev typed questions about one state and get answers with probabilities.
 
-        Jev is a decision model, not a chat model: it returns a typed answer per
+        Jev is not a chat model: it returns a typed answer per
         question and nothing else — no prose, no justification, no tool calls. It pays
         off on BATCHES — many rows or profiles to triage with the same rubric (see
         `jev_items`). A single case you can judge yourself does not need Jev.
@@ -297,7 +297,7 @@ def register(mcp: FastMCP) -> None:
             (about 40 s): send exactly those again. `[]` when everything was sent.
 
         A key problem (invalid key, no credits left) aborts the whole call rather than
-        turning into N identical item errors; the decisions already made are still
+        turning into N identical item errors; the answers already given are still
         billed, and the error says how many.
 
         Args:
@@ -306,7 +306,7 @@ def register(mcp: FastMCP) -> None:
                 your own id back beside each answer (`key` is echoed, never sent).
             questions: the rubric, same shape and same rules as `jev_ask`.
             model: another model id (default: the pinned dated snapshot).
-            parallel: how many decisions in flight (default 10, max 50). Raise it for
+            parallel: how many items in flight (default 10, max 50). Raise it for
                 a big batch that must finish inside one call.
         """
         if not isinstance(items, list) or not items:
@@ -386,8 +386,8 @@ def register(mcp: FastMCP) -> None:
 
         decides = sum(1 for r in res if "answers" in r)
         if panne is not None:
-            deja = (f" {decides} décision(s) déjà prise(s) et relevée(s) avant l'arrêt."
-                    if decides else " Aucune décision n'avait encore été prise.")
+            deja = (f" {decides} réponse(s) déjà rendue(s) et relevée(s) avant l'arrêt."
+                    if decides else " Aucune réponse n'avait encore été rendue.")
             if isinstance(panne, UpstreamHTTPError):
                 raise _bad(_upstream_message(panne) + deja) from panne
             raise panne

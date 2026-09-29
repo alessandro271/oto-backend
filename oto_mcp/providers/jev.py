@@ -41,8 +41,8 @@ CONNECTOR = _c(
     # même palier n'auraient aucun critère pour se départager.
     cardinality="mono",
     platform_key_open=False,
-    label="Jev (décisions)",
-    help="décisions typées avec leur probabilité (oui/non, choix, échelle) — clé API "
+    label="Jev",
+    help="réponses typées avec leur probabilité (oui/non, choix, échelle) — clé API "
          "OpenRouter, déposée par un administrateur du tenant, jamais par une org",
     href="https://openrouter.ai/settings/keys",
     # Le champ est NOMMÉ, alors que `secret_kind="api_key"` en dériverait un
@@ -55,7 +55,7 @@ CONNECTOR = _c(
         CredentialField("key", "Clé API OpenRouter", secret=True,
                         help="commence par `sk-or-` — créée sur "
                              "openrouter.ai/settings/keys ; c'est elle qui paie les "
-                             "décisions, réserve-lui une clé dédiée avec son plafond"),
+                             "appels Jev, réserve-lui une clé dédiée avec son plafond"),
     ),
 )
 
