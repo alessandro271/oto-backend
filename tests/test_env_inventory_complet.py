@@ -39,6 +39,7 @@ test). Si un futur site ne s'y range pas, le message d'échec le dit expliciteme
 from __future__ import annotations
 
 import ast
+import importlib.util
 import pathlib
 
 from oto_mcp import env_inventory as inv
@@ -150,6 +151,12 @@ class _Visiteur(ast.NodeVisitor):
             self._traiter(node.args[0], node.lineno, f"os.environ.{node.func.attr}")
             if len(node.args) > 1:
                 self._noter_defaut(node, node.args[1])
+        elif (isinstance(node.func, ast.Attribute) and node.func.attr == "getenv"
+                and isinstance(node.func.value, ast.Name) and node.func.value.id == "os"
+                and node.args):
+            self._traiter(node.args[0], node.lineno, "os.getenv")
+            if len(node.args) > 1:
+                self._noter_defaut(node, node.args[1])
         elif isinstance(node.func, ast.Name) and node.func.id == "require_env" and node.args:
             self._traiter(node.args[0], node.lineno, "require_env")
         self.generic_visit(node)
@@ -231,9 +238,13 @@ class _Visiteur(ast.NodeVisitor):
 
 
 def _est_lecture_env(node: ast.expr) -> bool:
-    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "get" and _est_os_environ(node.func.value)
-            and bool(node.args))
+    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.args):
+        return False
+    if node.func.attr == "get" and _est_os_environ(node.func.value):
+        return True
+    return (node.func.attr == "getenv" and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "os")
 
 
 def _cle_lue(lecture: ast.expr) -> ast.expr:
@@ -277,6 +288,56 @@ def test_toute_lecture_d_environnement_est_dans_l_inventaire():
         "\n  → ajoute une entrée dans oto_mcp/env_inventory.py (NOMS_FIXES), classée "
         "REQUISE / IDENTITE / REGLAGE. Ce test ne rougit que dans CE sens : une "
         "entrée de l'inventaire que le code a cessé de lire ne le fait pas rougir.")
+
+
+# ── Ce que la DÉPENDANCE lit au nom du serveur (relevé du 29/09/2026) ─────────
+#
+# `OTO_CONFIG_DISABLE_SOPS`, posée dans l'environnement de prod, n'était vue par aucune
+# garde : c'est oto-core (`oto.config`) qui la lit, et le walker ne parcourait que
+# `oto_mcp/`. Même axe pour toute lecture d'une dépendance : on parcourt oto-core AU
+# PIN (le paquet installé), et chaque lecture LITTÉRALE qu'on y trouve est rangée —
+# lue au nom du serveur (`NOMS_FIXES`) ou hors serveur, avec sa raison
+# (`LUES_PAR_OTO_CORE_HORS_SERVEUR`). Les lectures non littérales d'oto-core sont les
+# accesseurs génériques (`get_secret(name)`) : leurs noms sont des clés de connecteur,
+# qui vivent au coffre, pas des réglages du serveur.
+
+
+def _racines_oto_core() -> list[pathlib.Path]:
+    spec = importlib.util.find_spec("oto")
+    assert spec is not None and spec.submodule_search_locations, \
+        "oto-core n'est pas installé : la garde ne peut pas le parcourir"
+    return [pathlib.Path(p) for p in spec.submodule_search_locations]
+
+
+def _lectures_oto_core() -> dict[str, list[str]]:
+    lues: dict[str, list[str]] = {}
+    for racine in _racines_oto_core():
+        for fichier in sorted(racine.rglob("*.py")):
+            for nom, ligne in _analyser(fichier).resolues:
+                lues.setdefault(nom, []).append(
+                    f"oto-core:oto/{fichier.relative_to(racine)}:{ligne}")
+    return lues
+
+
+def test_toute_lecture_d_oto_core_est_rangee():
+    connues = set(inv.par_nom()) | set(inv.LUES_PAR_OTO_CORE_HORS_SERVEUR)
+    orphelines = [f"{sites[0]} → {nom!r}" for nom, sites in sorted(_lectures_oto_core().items())
+                  if nom not in connues]
+    assert not orphelines, (
+        "oto-core lit une variable d'environnement que l'inventaire ne range pas :\n"
+        "    " + "\n    ".join(orphelines) +
+        "\n  → lue au nom du serveur : une entrée dans NOMS_FIXES ; sinon une entrée "
+        "dans env_inventory.LUES_PAR_OTO_CORE_HORS_SERVEUR, avec la raison pour "
+        "laquelle le serveur n'en dépend pas.")
+
+
+def test_le_parcours_d_oto_core_mord():
+    """Preuve, pas affirmation : le parcours voit bien la lecture qui a motivé la garde."""
+    assert "OTO_CONFIG_DISABLE_SOPS" in _lectures_oto_core()
+    arbre = ast.parse('import os\nA = os.getenv("X_G")\n')
+    v = _Visiteur("<banc>", {}, {}, {})
+    v.visit(arbre)
+    assert [n for n, _ in v.resolues] == ["X_G"]
 
 
 def test_familles_dynamiques_ont_un_motif_qui_mord() -> None:
