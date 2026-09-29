@@ -148,11 +148,11 @@ def _resolve_context(sub: str | None, org_id: int) -> dict:
     projects: list[str] = []
     try:
         # L'org et mes projets PERSONNELS créés dans cette org (décision du 29/09/2026,
-        # `ownership.mes_projets_ici`) ; ce qui m'est partagé en personne, seulement dans
+        # `ownership.mes_objets_ici`) ; ce qui m'est partagé en personne, seulement dans
         # mon org perso (28/09/2026).
         moi = ownership.perso_de_la_liste(sub, org_id) if sub else []
         rows = db.list_projects_for_owners([("org", str(org_id))],
-                                           createur=ownership.mes_projets_ici(sub, org_id))
+                                           createur=ownership.mes_objets_ici(sub, org_id))
         # + les projets LIVRÉS à cette org (partagés via resource_grants, #52) — c'est
         # l'exposition au handshake : le client ouvre le projet livré en un message.
         seen = {r.get("id") for r in rows}

@@ -117,7 +117,33 @@ JAMAIS `owner_pairs()`** (union de toutes les orgs = fuite fail-open ; tripwire
 (`orgs.personal_of`), défauts de création = org active.
 **Détail (datastore pilote, oto_resource, migration, abolition du perso) : `docs/ownership.md`**.
 
+## Une org perso est une org comme une autre (décision d'Alexis du 29/09/2026)
+
+« Perso » n'est qu'une **étiquette** (`orgs.personal_of`), du même genre que la maison.
+Fonctionnellement, une org perso est une org : on y invite, on y crée des équipes, on
+l'archive par la même règle (`ORG_ADMIN_OF`). **Deux exceptions seulement** : elle est
+**créée à l'inscription** (`ensure_personal_org`), et **son propriétaire ne peut pas la
+quitter** (`me.leave_org`). L'étiquette reste posée quand d'autres y entrent
+(`add_org_member`, ffbe1c64) ; sans étiquette, le boot réclame la plus ancienne org que le
+compte a créée et dont il est membre, quel que soit son nombre de membres.
+
+**Un objet appartient à qui le crée et vit dans l'org où il l'a créé** : son
+propriétaire l'y voit TOUJOURS (projets et tableaux, `ownership.mes_objets_ici` /
+`mes_tableaux_ici`, qui lisent `context_org_id`) ; les autres membres ne le voient que
+s'il le leur partage. L'org perso reste la **maison** de ce qui n'a pas d'org de
+création (procédures, guides, nœuds perso, objets legacy sans `context_org_id`) et de ce
+qui est partagé à la personne (`perso_de_la_liste`). **Les lentilles « moi »** —
+`oto_project op=list scope="me"`, `GET /api/me/datastores/shared`, `oto_doc
+op=shared_with_me` sans `scope` ou `scope="me"` — sont **servies dans toute org**, avec le
+même contenu : un partage à une personne n'appartient à aucune org. Le 409
+`personal_view_outside_personal_org` est retiré. La cascade des clés ne préfère plus l'org
+perso (`personal_instance_org` : la clé la plus récente). Bancs :
+`tests/test_org_perso_est_une_org.py`, `tests/test_projets_perso_visibles_ou_crees.py`.
+
 ## Dans une org, on ne voit QUE l'org (décision du 28/09/2026, ADR 0030 §9)
+
+> ⚠️ Amendé le 29/09/2026 (section précédente) : mes objets perso se listent aussi dans
+> l'org où je les ai créés, et les lentilles « moi » sont servies dans toute org.
 
 La règle des LISTES — l'accès par identifiant ne change pas (`visible_in_org`,
 `can_access`, `resolve_datastore_ns` gardent le principal personnel) :
@@ -138,13 +164,10 @@ Une seule source : `ownership.perso_de_la_liste(sub, org)` (`[("user", sub)]` da
 perso, `[]` ailleurs), que composent `principaux_de_liste` (principals des listes) et
 `project_list_owners` (propriétaires des projets listés).
 
-**Les lentilles « moi »** (29/09/2026) — `oto_project op=list scope="me"`,
+**Les lentilles « moi »** — `oto_project op=list scope="me"`,
 `GET /api/me/datastores/shared`, `oto_doc op=shared_with_me` sans `scope` ou `scope="me"`
-— ne sont servies que dans l'org perso. Ailleurs : **409
-`personal_view_outside_personal_org`**, dont le message
-(`ownership.refus_vue_perso_hors_org_perso`) nomme l'org perso où basculer, et dont
-`details` porte `{"personal_org_id": N}` (vide en vue bornée) — jamais une liste vide, qui
-se lirait « personne ne t'a rien partagé ». Un tableau absent des listes s'ouvre par
+— étaient servies dans l'org perso seulement (409 ailleurs) ; depuis le 29/09/2026 elles
+le sont dans toute org (section précédente). Un tableau absent des listes s'ouvre par
 `GET /api/datastores/{datastore}`, qui n'en dépend pas. `GET /api/me/datastores/shared`
 ne dédoublonne plus avec la liste de l'org perso, qui rend aussi ces tableaux.
 
@@ -287,8 +310,7 @@ résolution des `[[…]]` (`db/backlinks`). Pour un tableau, il est écrit et pl
 > `group_id` ; `op=unshare` retire ; `op=get` rend la fiche et ses bénéficiaires ;
 > `op=list` rend les pages partagées une à une. Le destinataire lit par `oto_doc op=get`
 > et retrouve par `oto_doc op=shared_with_me` (toutes orgs confondues : vue « moi », servie
-> dans l'org perso seulement depuis le 29/09/2026 — ailleurs 409
-> `personal_view_outside_personal_org`).
+> dans toute org).
 > **Sa portée se choisit (21/09/2026)** : `scope="me"` = les pages partagées à la PERSONNE
 > seule, quelle que soit l'org ; `scope="org"` = celles partagées à l'org CONSULTÉE
 > (`X-Oto-Org` en REST, l'org de session en MCP) et aux équipes de l'appelant dans cette

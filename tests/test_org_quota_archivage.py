@@ -222,8 +222,8 @@ def _archiver(sub: str, org_id: int) -> dict:
 
 
 def test_la_sequence_du_cul_de_sac(store, plafond, monkeypatch):
-    """La reproduction, de bout en bout : plafond atteint → refus ; archiver l'espace
-    personnel → refusé ; archiver un autre espace → la création repasse."""
+    """La reproduction, de bout en bout : plafond atteint → refus ; archiver un espace
+    → la création repasse."""
     monkeypatch.setattr(session_org, "current_session_id", lambda: None)
 
     _perso(store, SUB)
@@ -232,13 +232,6 @@ def test_la_sequence_du_cul_de_sac(store, plafond, monkeypatch):
     with pytest.raises(AuthzDenied) as refus:
         _creer(SUB, "Un de trop")
     assert refus.value.status == 429 and refus.value.code == "org_quota"
-
-    # L'espace personnel d'AUTRUI ne peut pas être rendu : il n'est de toute façon
-    # pas une de nos places (depuis 2026-08-25 le sien, lui, est supprimable — voir
-    # `test_le_solo_supprime_son_espace_personnel`).
-    with pytest.raises(AuthzDenied) as perso:
-        _archiver(SUB, _perso(store, AUTRE, "L'espace d'autrui"))
-    assert perso.value.code == "personal_org"
 
     assert _archiver(SUB, ids[0])["archived"] is True
 
@@ -314,16 +307,19 @@ def test_l_espace_repose_ne_l_est_que_si_le_compte_est_VIDE(store, monkeypatch):
     assert len(store.list_orgs_for_user(SUB)) == 1
 
 
-def test_l_espace_personnel_d_autrui_reste_refuse(store, monkeypatch):
-    """`ORG_ADMIN_OF` s'obtient aussi par escalade platform_admin : sans cette garde,
-    ce chemin self-service effacerait l'espace PRIVÉ d'un tiers."""
+def test_l_espace_personnel_d_autrui_suit_la_regle_commune(store, monkeypatch):
+    """29/09/2026 : une org perso est une org comme une autre — elle s'archive par la
+    même règle (`ORG_ADMIN_OF`, posée au niveau capacité), plus par un refus
+    `personal_org` propre à l'étiquette. Son propriétaire, laissé sans aucune org,
+    retrouve un espace TOUT DE SUITE (l'invariant ne dépend pas de qui archive)."""
     monkeypatch.setattr(session_org, "current_session_id", lambda: None)
     autrui = _perso(store, AUTRE)
+    store.add_org_member(autrui, SUB, "org_admin")      # un co-admin de cet espace
 
-    with pytest.raises(AuthzDenied) as refus:
-        _archiver(SUB, autrui)
-    assert refus.value.status == 400 and refus.value.code == "personal_org"
-    assert store.get_personal_org(AUTRE) == autrui   # intact
+    assert _archiver(SUB, autrui)["archived"] is True
+    neuf = store.get_personal_org(AUTRE)
+    assert neuf is not None and neuf != autrui
+    assert store.list_orgs_for_user(AUTRE), "jamais sans org"
 
 
 def test_un_espace_perso_qui_gagne_un_membre_reste_perso(store, monkeypatch):
