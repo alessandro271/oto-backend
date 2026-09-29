@@ -66,9 +66,14 @@ def _mount(monkeypatch, *, byo: bool = True, match_return=_DEFAUT, bulk_return=_
     monkeypatch.setattr(access, "platform_quota_hint", lambda p: None)
     monkeypatch.setattr(apollo_client, "ApolloClient", lambda **kw: client)
 
-    import socket
-    monkeypatch.setattr(socket, "getaddrinfo",
-                        lambda host, *a, **k: [(2, 1, 6, "", ("93.184.216.34", 0))])
+    # Le receveur d'oto (éprouvé dans `test_apollo_receveur.py`) : rien de livré,
+    # donc le sondage d'Apollo répond — le chemin que ce banc décrit.
+    from oto_mcp import apollo_receiver
+    monkeypatch.setattr(apollo_receiver, "commander",
+                        lambda cle: ("jeton", "https://mcp.acme.test/api/receivers/apollo/phones/jeton"))
+    monkeypatch.setattr(apollo_receiver, "lier", lambda j, rid: None)
+    monkeypatch.setattr(apollo_receiver, "abandonner", lambda j: None)
+    monkeypatch.setattr(apollo_receiver, "resultat_recu", lambda rid, cle: None)
 
     m = FastMCP("t")
     apollo_tool.register(m)

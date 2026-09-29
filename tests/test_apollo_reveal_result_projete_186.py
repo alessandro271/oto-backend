@@ -50,6 +50,14 @@ def _sonder(monkeypatch, **kw):
     }
     monkeypatch.setattr(access, "resolve_credential", lambda *a, **k: MagicMock(key="k"))
     monkeypatch.setattr(apollo_client, "ApolloClient", lambda **k: client)
+    # Le receveur d'oto (éprouvé dans `test_apollo_receveur.py`) : rien de livré,
+    # donc le sondage d'Apollo répond — le chemin que ce banc décrit.
+    from oto_mcp import apollo_receiver
+    monkeypatch.setattr(apollo_receiver, "commander",
+                        lambda cle: ("jeton", "https://mcp.acme.test/api/receivers/apollo/phones/jeton"))
+    monkeypatch.setattr(apollo_receiver, "lier", lambda j, rid: None)
+    monkeypatch.setattr(apollo_receiver, "abandonner", lambda j: None)
+    monkeypatch.setattr(apollo_receiver, "resultat_recu", lambda rid, cle: None)
     m = FastMCP("t")
     apollo_tool.register(m)
     fn = asyncio.run(m.get_tool("apollo_reveal_phone_result")).fn

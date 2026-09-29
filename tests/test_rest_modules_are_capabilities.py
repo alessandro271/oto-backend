@@ -58,6 +58,10 @@ _KNOWN: dict[str, str] = {
     # authentification est un secret par déclencheur (`Authorization: Bearer
     # otoh_…`), pas un jeton Logto.
     "/api/hooks/{trigger_id}": NATURE,
+    # Le RECEVEUR des téléphones Apollo (28/09/2026) : Apollo POSTe le résultat d'un
+    # reveal qu'oto a commandé. Corps libre (la forme d'Apollo, pas la nôtre) et
+    # aucun JWT : l'autorisation est le jeton du chemin, propre à une commande.
+    "/api/receivers/apollo/phones/{token}": NATURE,
     # --- Lien de DÉSINSCRIPTION d'une relance : un NAVIGATEUR suit un lien depuis un
     # webmail, sans en-tête d'auth, et reçoit une page HTML. Même nature qu'un
     # callback — et exiger une session la demanderait à celui-là même qui ne veut plus
