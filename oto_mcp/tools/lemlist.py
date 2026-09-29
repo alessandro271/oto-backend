@@ -487,6 +487,8 @@ def register(mcp: FastMCP) -> None:
     ) -> dict:
         """Create a lead in a campaign.
 
+        Several leads: lemlist_push_rows reads them from a datastore table instead.
+
         All lead fields are optional (lemlist accepts phone/LinkedIn-only
         leads), but you'll usually pass at least `email` or `linkedin_url`.
         `custom_variables` merges extra key-value pairs into the lead, used for

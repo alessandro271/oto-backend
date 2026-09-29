@@ -214,7 +214,7 @@ avatars/logos · ⚠️ **PROD et PREPROD partagent la MÊME base** : ce qu'on �
   exécuté dans un bac à sable Pyodide/Deno sans réseau (ADR 0073)
 - `datastore.md` — spine PG `data_*`, OAuth Google
 - `donnees-par-reference.md` — rien de personnel ni d'URL extérieure en argument :
-  le receveur Apollo
+  le receveur Apollo, les `*_push_rows`
 - `datastore-colonne-tableau.md` — sa spec
 - `projects.md` — liens, partage, périmètre d'URL
 - `search-and-kb.md` — `oto_search`, RRF, grains

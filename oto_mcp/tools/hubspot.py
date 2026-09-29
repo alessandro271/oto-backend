@@ -374,6 +374,8 @@ def register(mcp: FastMCP) -> None:
         on `op` (read = list of names, write = dict / association objects) — see the
         Args below. A wrong shape is refused with an explicit error, never coerced.
 
+        Many contacts/companies: hubspot_push_rows reads them from a datastore table.
+
         Args:
             op: search | list | get | create | update | delete | associations |
                 add_note.

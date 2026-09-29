@@ -1,0 +1,221 @@
+"""Lemlist — pousser les lignes d'un tableau en leads, PAR RÉFÉRENCE.
+
+Troisième module du connecteur (`lemlist` tient la campagne, `lemlist_crm` le reste) :
+celui-ci ne porte qu'un geste, `lemlist_push_rows`. `lemlist_create_lead` prenait la
+personne en ARGUMENTS — nom, email, téléphone traversaient l'appel d'outil, une fois
+par lead. Ici l'agent désigne des lignes ; le serveur les lit, crée les leads, écrit en
+retour l'id lemlist et l'état sur chaque ligne, et ne rend que des comptes. La mécanique
+commune (lot, bail, écriture en retour, reçu) vit dans `datastore/par_reference.py`.
+
+⚠️ Comme `lemlist_create_lead`, ce geste n'ENVOIE rien : un lead créé attend la revue
+de la campagne. Ce qui met un message sur le fil reste `lemlist_launch_lead` et
+`lemlist_campaign_start`, masqués par défaut (cf. `tools/lemlist.py`).
+"""
+from __future__ import annotations
+
+from typing import Optional
+
+from fastmcp import FastMCP
+
+from .. import access, session_org
+from ..datastore import par_reference as pr
+from ..datastore.identite import AdresseJson as Adresse
+from .lemlist import _campagne_introuvable, _lead_deja_pris
+
+#: Les noms de `lemlist_create_lead` → le champ de lemlist. Une clé de
+#: `field_mapping` hors de cette table part telle quelle : lemlist range toute clé
+#: inconnue en variable personnalisée (`{{nom}}` dans un modèle).
+CHAMPS = {
+    "email": "email",
+    "first_name": "firstName",
+    "last_name": "lastName",
+    "company_name": "companyName",
+    "job_title": "jobTitle",
+    "linkedin_url": "linkedinUrl",
+    "phone": "phone",
+    "company_domain": "companyDomain",
+    "icebreaker": "icebreaker",
+    "timezone": "timezone",
+    "contact_owner": "contactOwner",
+}
+#: Un lead sans aucun de ces champs n'est joignable par aucune étape d'une campagne.
+IDENTITE = ("email", "linkedinUrl", "phone")
+
+POUSSE, DOUBLON, ECHEC = "pushed", "duplicate", "failed"
+
+
+def _texte(v) -> Optional[str]:
+    """La valeur d'une case telle que lemlist l'accepte : une chaîne. Une liste de
+    scalaires se joint ; un objet ne se devine pas (None)."""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (str, int, float)):
+        return str(v)
+    if isinstance(v, list) and all(isinstance(x, (str, int, float)) for x in v):
+        return ", ".join(str(x) for x in v)
+    return None
+
+
+def construire_lead(ligne: dict, mapping: dict[str, str]) -> tuple[dict, Optional[str]]:
+    """`(lead, code)` — le lead à envoyer, ou le code qui l'écarte."""
+    lead: dict = {}
+    for champ, colonne in mapping.items():
+        v = pr.valeur(ligne, colonne)
+        if v is None:
+            continue
+        texte = _texte(v)
+        if texte is None:
+            return {}, "unsupported_value"
+        lead[CHAMPS.get(champ, champ)] = texte
+    if not any(lead.get(c) for c in IDENTITE):
+        return {}, "missing_identity"
+    return lead, None
+
+
+def register(mcp: FastMCP) -> None:
+    from oto.tools.common.errors import UpstreamHTTPError
+    from oto.tools.lemlist import LemlistClient
+
+    def _client(units: int = 1) -> tuple[LemlistClient, bool]:
+        key, is_platform = access.resolve_api_key("lemlist", units=units)
+        return LemlistClient(api_key=key), is_platform
+
+    @mcp.tool()
+    def lemlist_push_rows(
+        datastore: Adresse,
+        campaign_id: str,
+        field_mapping: dict[str, str],
+        row_ids: Optional[list[str]] = None,
+        filter: Optional[dict] = None,
+        deduplicate: bool = False,
+        id_column: str = "lemlist_lead_id",
+        status_column: str = "lemlist_status",
+        batch_size: int = 25,
+        dry_run: bool = False,
+    ) -> dict:
+        """Create lemlist leads FROM DATASTORE ROWS — the bulk way; nothing personal
+        goes through this call.
+
+        Name the rows (`row_ids`, or a `filter`); oto reads them, creates one lead per
+        row in the campaign, and writes back `id_column` (the lead id) and
+        `status_column` (pushed | duplicate | failed) on each row. The answer is
+        counts plus `errors: [{row_id, code}]` — never a value read from a row.
+
+        By `filter`, only rows whose `status_column` is empty are taken: call again
+        with the same filter until `remaining` is 0. A row already treated is not
+        picked again — name it in `row_ids` to retry it. A row with `id_column`
+        already set is skipped (`already_pushed`); one reserved by another run is
+        skipped (`row_locked`) before anything is sent. `dry_run` reads and checks
+        the mapping, sends nothing. Like lemlist_create_lead, this sends no email: a
+        lead waits for review until lemlist_launch_lead.
+
+        Args:
+            datastore: the table, by name or number.
+            campaign_id: lemlist campaign id WITH its `cam_` prefix.
+            field_mapping: {lead field: column}. Lead fields are those of
+                lemlist_create_lead (email, first_name, last_name, company_name,
+                job_title, linkedin_url, phone, company_domain, icebreaker, timezone,
+                contact_owner); any other key becomes a custom variable. A row needs
+                an email, a linkedin_url or a phone.
+            row_ids: the rows to push (at most 50). Exclusive with `filter`.
+            filter: data_rows filter grammar; `{}` = every row not yet treated.
+            deduplicate: skip a lead whose email is already in another campaign.
+            id_column: where the lemlist lead id is written back.
+            status_column: where pushed | duplicate | failed is written back; the
+                code of a duplicate or a failure goes in its `comment` layer.
+            batch_size: rows per call with `filter` (1-50).
+            dry_run: read and check only — no lemlist call, nothing written.
+        """
+        if not campaign_id.startswith("cam_"):
+            raise pr.refus("lemlist_campaign_id_format",
+                           "`campaign_id` doit porter son préfixe `cam_`, tel que "
+                           "lemlist_campaign le rend. Rien n'a été envoyé.")
+        mapping = pr.valider_correspondance(field_mapping)
+        lot = pr.ouvrir(datastore, row_ids=row_ids, filter=filter,
+                        colonne_etat=status_column, limite=batch_size)
+        inconnues = pr.colonnes_inconnues(lot, mapping.values())
+        if inconnues:
+            raise pr.refus("push_rows_unknown_columns",
+                           f"colonnes absentes du tableau : {', '.join(inconnues)}. "
+                           "Rien n'a été envoyé.", columns=inconnues)
+
+        recu = pr.Recu()
+        client = is_platform = None
+        if not dry_run and lot.lignes:
+            client, is_platform = _client(units=len(lot.lignes))
+        traitees = 0
+        for ligne in lot.lignes:
+            if recu.budget_epuise():
+                recu.arret = "time_budget"
+                break
+            traitees += 1
+            rid = str(ligne.get("_id"))
+            if pr.tenue_ailleurs(ligne):
+                recu.ecarter(rid, "row_locked")
+                continue
+            if pr.valeur(ligne, id_column) is not None:
+                recu.ecarter(rid, "already_pushed")
+                continue
+            lead, code = construire_lead(ligne, mapping)
+            if code:
+                recu.ecarter(rid, code)
+                continue
+            if dry_run:
+                recu.compter("would_push")
+                continue
+            try:
+                cree = client.create_lead(campaign_id, lead, deduplicate=deduplicate)
+            except UpstreamHTTPError as e:
+                if _campagne_introuvable(e):
+                    traitees -= 1
+                    recu.arret = "lemlist_campaign_not_found"
+                    break
+                raison = _lead_deja_pris(e)
+                statut = getattr(e, "status_code", None)
+                if raison is None and statut in (401, 403, 429):
+                    # La clé, le plan ou le débit : la ligne suivante tomberait pareil.
+                    traitees -= 1
+                    recu.arret = "rate_limited" if statut == 429 else f"lemlist_http_{statut}"
+                    break
+                if raison is not None:
+                    recu.compter("duplicates")
+                    ecrit = pr.ecrire(lot, rid, {status_column: DOUBLON,
+                                                 f"{status_column}.comment": raison})
+                else:
+                    recu.echec(rid, f"lemlist_http_{statut}")
+                    ecrit = pr.ecrire(lot, rid, {status_column: ECHEC,
+                                                 f"{status_column}.comment":
+                                                     f"lemlist_http_{statut}"})
+                if ecrit:
+                    recu.echec(rid, f"writeback_{ecrit}")
+                continue
+            lead_id = cree.get("_id") if isinstance(cree, dict) else None
+            if not lead_id:
+                recu.echec(rid, "lemlist_lead_not_created")
+                pr.ecrire(lot, rid, {status_column: ECHEC,
+                                     f"{status_column}.comment": "lemlist_lead_not_created"})
+                continue
+            recu.compter("pushed")
+            ecrit = pr.ecrire(lot, rid, {
+                id_column: lead_id, f"{id_column}.comment": f"lemlist {campaign_id}",
+                status_column: POUSSE})
+            if ecrit:
+                # Le lead EXISTE chez lemlist : ce code dit que la ligne ne le sait pas.
+                recu.echec(rid, f"writeback_{ecrit}")
+
+        poussees = recu.comptes.get("pushed", 0)
+        if is_platform and poussees:
+            access.record_platform_usage("lemlist", poussees)
+        if not dry_run:
+            # La ligne FACTURÉE compte les leads créés, comme N appels à
+            # lemlist_create_lead l'auraient fait (`tool_calls.quantity`).
+            session_org.note_call_trace(quantity=poussees)
+        doublons = recu.comptes.get("duplicates", 0)
+        avis = {"existing_left_untouched": (
+            f"{doublons} lead(s) already taken were left untouched: lemlist refuses a "
+            "lead already in this campaign (or, with `deduplicate`, in another one). "
+            "Their rows got status `duplicate`, the reason in its comment.")} if doublons else {}
+        return recu.rendre(lot, selectionnees=len(lot.lignes), dry_run=dry_run,
+                           traitees=traitees, campaign_id=campaign_id,
+                           written_back={"id_column": id_column,
+                                         "status_column": status_column}, **avis)
