@@ -363,6 +363,8 @@ def register(mcp: FastMCP) -> None:
         questions: put client context (ICP, offer) in the criteria or the state. Rows with a
         thin state score low for lack of evidence (`thin_state` counts them). No bucketing
         here: thresholds belong to you.
+        Validate fit against known outcomes before trusting it; combine Jev's answers with
+        structured fields in plain code.
 
         ⚠️ Each state goes to a third party (OpenRouter, then TypeSafe). Billed on real cost,
         about 50 µ$ per row for 3 questions and a 500-character description.

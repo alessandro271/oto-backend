@@ -19,6 +19,7 @@ jev returns a **typed answer with its probability**, never text: yes/no (`noul`)
 ## note — reading a probability, and where to set the threshold
 
 A probability near 0.5 means "as likely as not", never "medium".
+- validate fit against known outcomes before trusting it; combine Jev's answers with structured fields in plain code
 - keep **two** thresholds and send the middle band to a human or a text model: cheaper than forcing a label
 - `confidence` describes how concentrated the distribution is, not how safe the next step is
 - a `choice` ALWAYS answers, even when the question does not apply: read the filtering `noul` first, or add a "none" option and check its probability
