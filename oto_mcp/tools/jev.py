@@ -1,35 +1,10 @@
-"""Jev — une décision TYPÉE au lieu d'un tour de modèle (TypeSafe, via OpenRouter).
+"""Jev tools: typed answers instead of a model turn (TypeSafe, via OpenRouter).
 
-Wrappe `oto.tools.jev.client.JevClient`. On donne un **état** et des **questions** ;
-Jev rend une réponse typée par question, avec sa probabilité :
-- `noul` → la probabilité que la condition tienne ;
-- `choice` → l'option retenue, la probabilité de chacune, la confiance ;
-- `score` → la position sur une échelle ordonnée, et sa légende.
+Wraps `oto.tools.jev.client.JevClient`. `jev_ask` = one state, whole rubric in one call;
+`jev_items` = many states, same rubric, nothing written.
 
-Aucun texte, aucune justification, aucun appel d'outil : Jev ne remplace pas l'agent
-qui mène le travail, il remplace le geste « je demande au modèle et je parse sa
-réponse » — qualifier une ligne, trier un message, juger si une donnée tient.
-
-Deux gestes :
-- `jev_ask` : UN état, la grille entière en un appel (les questions d'un même appel
-  sont répondues en parallèle et ne se voient pas l'une l'autre) ;
-- `jev_items` : N états, la MÊME grille, en un appel — la forme utile quand on vient
-  de lire une page de lignes ou une liste de profils, et qu'on veut trancher avant
-  d'écrire ou de payer l'étape suivante.
-
-⚠️ **La clé est celle du TENANT, jamais celle d'une org ni de la plateforme** (cf.
-`providers/jev.py`) : un administrateur du tenant la dépose pour toutes ses orgs, et
-une clé posée plus près de l'appelant (org, équipe, personne) est refusée à l'usage
-en le disant — elle masque celle du tenant dans la cascade.
-
-⚠️ L'état part chez un TIERS (OpenRouter, qui le passe à TypeSafe) : le texte servi
-le dit, pour que l'agent n'y mette que les champs utiles au jugement.
-
-Facturation : l'amont facture l'ENTRÉE seule (sortie gratuite), et chaque réponse
-porte `usage.cost`, le coût réel en dollars. C'est ce coût — en micro-dollars — qui
-part au relevé (`note_call_trace(quantity=…)`), pas un nombre d'appels : le prix
-suit alors la dépense réelle au lieu d'un forfait qui vieillit. Même usage de
-`quantity` que `serper` (les crédits déduits par le fournisseur).
+⚠️ TENANT key only (see `providers/jev.py`); a closer key is refused, naming who removes it.
+Billing: `quantity` = the real upstream cost in micro-dollars (like `serper`), not a call count.
 """
 from __future__ import annotations
 
@@ -50,44 +25,28 @@ from ..access.resolve import CredentialUnavailable
 from ..connectors import verify as connector_verify
 from ..mcp_errors import McpError
 
-#: Le seul barreau de la cascade que cet outil accepte : la clé du TENANT (décision du
-#: 28/09/2026 — aucune clé plateforme, le tenant qui apporte sa clé répond de la
-#: dépense et de la sous-traitance). Un dépôt plus proche de l'appelant (org, équipe,
-#: personne) gagne la cascade AVANT le tenant : il est refusé en disant qu'il masque la
-#: clé du tenant et qui peut le retirer (cf. `_client`).
+#: The only cascade rung this tool serves. A closer rung wins the cascade first and is refused.
 RANGS_SERVIS = ("tenant",)
 
-#: Qui peut retirer une clé qui masque celle du tenant, par barreau.
-QUI_RETIRE = {"org": "un administrateur de l'org",
-              "group": "un administrateur de l'équipe",
-              "user": "son titulaire, sur sa page compte"}
+#: Who can remove a key that shadows the tenant's, per rung.
+QUI_RETIRE = {"org": "an org admin",
+              "group": "a team admin",
+              "user": "its owner, on their account page"}
 
-#: Combien d'états au plus dans un `jev_items`. Mesuré le 28/09/2026 : 50 appels en
-#: vol rendent 50/50 en une seconde, sans un seul 429 ; 200 états à 10 en vol tiennent
-#: dans la fenêtre de départ ci-dessous.
+#: Max states per `jev_items` (measured 28/09/2026: 50 in flight, no 429).
 MAX_ITEMS = 200
-#: Appels en vol par défaut — volontairement en dessous du débit mesuré : ce sont des
-#: threads du pool du serveur, et un outil ne se sert pas tout seul.
+#: Default in-flight calls, below the measured rate: these are server pool threads.
 PARALLELE_DEFAUT = 10
 PARALLELE_MAX = 50
 
-#: Taille maximale d'UN état, en octets de son JSON (UTF-8). 16 Ko, c'est ~4 000
-#: jetons : très au-dessus d'une ligne de table ou d'un profil (ce que jev juge),
-#: très en dessous du contexte de 32 000 jetons — et c'est la borne qui plafonne la
-#: dépense d'un appel (200 états × 16 Ko au pire), l'entrée seule étant facturée.
-#: Un état plus gros est un document entier : c'est le signal d'un usage à tort.
+#: Max size of ONE state (UTF-8 JSON bytes), ~4k tokens; caps a call's spend (input is billed).
 MAX_ETAT_OCTETS = 16_000
 
-#: Délai de LECTURE d'une décision (la connexion garde les 10 s du client). Une
-#: décision répond en ~0,5 s : 15 s, c'est un amont en difficulté, pas une décision lente.
+#: Read timeout per answer (connect keeps the client's 10 s); answers take ~0.5 s.
 LECTURE_S = 15
-#: Plafond dur d'un appel sur le chemin REST (`capabilities/tools_me.py`,
-#: `asyncio.wait_for(..., timeout=45)`), même borne que `clay`.
+#: Hard cap on the REST path (`capabilities/tools_me.py`), same as `clay`.
 REST_CALL_LIMIT_S = 45.0
-#: Fenêtre de DÉPART d'un lot : aucune décision ne part après elle, et une décision
-#: partie juste avant peut encore durer connexion + lecture (10 + 15 s). D'où : plafond
-#: REST − la pire décision − une marge, soit un lot qui rend TOUJOURS sous ~40 s, avec
-#: les états non partis à rejouer, au lieu d'un appel coupé sans reçu.
+#: Batch send window: REST cap − worst in-flight call (10 + 15 s) − margin. Unsent states go to `retry`.
 LOT_FENETRE_S = REST_CALL_LIMIT_S - (10 + LECTURE_S) - 5.0
 
 
@@ -98,59 +57,44 @@ def _bad(msg: str) -> McpError:
 def _upstream_message(e) -> str:
     status = e.status_code
     if status in (401, 403):
-        return (f"OpenRouter a rejeté la clé (HTTP {status}) — la clé Jev du tenant "
-                "est invalide ou révoquée ; c'est un administrateur du tenant qui la "
-                "repose.")
+        return (f"OpenRouter rejected the key (HTTP {status}): the tenant's Jev key is "
+                "invalid or revoked. A tenant admin must set it again.")
     if status == 402:
-        return ("Crédits OpenRouter épuisés (402) — la clé du tenant n'a plus de "
-                "solde ; c'est un administrateur du tenant qui la recharge.")
+        return ("OpenRouter credits exhausted (402): a tenant admin must top up the "
+                "tenant's key.")
     if status == 429:
-        return "Jev : trop de requêtes (429) — réessaie dans un instant."
+        return "Jev: too many requests (429). Retry shortly."
     if status == 400:
-        # Le DIRE de l'amont, entier : il nomme la question fautive ou l'état trop
-        # long (`max_tokens_exceeded`, au-delà de 32 000 jetons), et le reformuler
-        # ferait perdre exactement ce qui permet de corriger.
-        return f"Jev a refusé la requête (400) — {e.body}"
+        # Upstream body verbatim: it names the faulty question or `max_tokens_exceeded`.
+        return f"Jev rejected the request (400): {e.body}"
     if status in (500, 502, 503, 504):
-        return f"Jev est momentanément indisponible (HTTP {status}) — réessaie plus tard."
-    return f"Jev a refusé la requête (HTTP {status}): {e.body}"
+        return f"Jev is temporarily unavailable (HTTP {status}). Retry later."
+    return f"Jev rejected the request (HTTP {status}): {e.body}"
 
 
 def _microdollars(cout: Optional[float]) -> int:
-    """Le coût d'un appel en micro-dollars, ARRONDI AU SUPÉRIEUR.
+    """Call cost in micro-dollars, rounded UP; no declared cost bills 0.
 
-    C'est l'unité du relevé (`quantity`) : un appel qui a coûté quelque chose ne doit
-    jamais se relever à zéro. Un coût absent (l'amont ne l'a pas déclaré) rend 0 — on
-    ne facture pas ce qu'on n'a pas mesuré.
-
-    ⚠️ **Le `round` avant le plafond n'est pas cosmétique** : la somme des coûts d'un
-    lot est une addition de flottants, et `3 × 1,0e-05` vaut `3,0000000000000004e-05`
-    en binaire — soit 30,000000000000004 µ$, que `ceil` seul relèverait à **31**. Un
-    micro-dollar inventé à chaque lot, toujours dans le même sens, sur une marge qui
-    se compte en multiples du coût réel : la décimale est ici une question de
-    facture, pas de présentation."""
+    ⚠️ The `round` before `ceil` matters: a batch cost is a float sum, and
+    `3 × 1e-05` = 3.0000000000000004e-05, which bare `ceil` would bill as 31 µ$."""
     return math.ceil(round(float(cout) * 1e6, 6)) if cout else 0
 
 
 def _verify(fields: dict, config: dict | None = None,  # noqa: ARG001
             instance: tuple | None = None) -> None:
-    """Sonde « tester la connexion » : la plus petite décision possible — un état d'un
-    mot, une question oui/non. Une décision coûte quelques micro-dollars ; c'est
-    l'appel authentifié le moins cher que cette API propose.
+    """"Test connection" probe: the smallest possible call (one word, one yes/no).
 
-    ⚠️ Une clé posée ailleurs que sur le TENANT échoue ici SANS appel : elle est
-    refusée à l'usage (`RANGS_SERVIS`), une carte verte mentirait. `instance` est la
-    ligne réellement sondée ; absente (vérification avant dépôt, grant sans ligne),
-    la sonde ne peut pas juger du barreau et teste la clé seule."""
+    ⚠️ A key on any rung but TENANT fails here without a call: it would be refused at use.
+    Without `instance` (check before saving), only the key is tested."""
     if instance is not None and instance[0] != credentials_store.TENANT:
         raise ValueError(
-            f"une clé `jev` posée au niveau « {instance[0]} » n'est pas servie : jev "
-            "ne tourne que sur la clé du TENANT, et celle-ci la masquerait.")
+            f"a `jev` key set at the '{instance[0]}' level is not used: Jev only runs "
+            "on the TENANT key, which this one would shadow.")
     from oto.tools.jev.client import JevClient
     JevClient(api_key=fields["key"]).decide(
-        {"mot": "test"},
-        {"ok": {"type": "noul", "instructions": "Ce mot est-il « test » ?",
-                "criteria": {"true": "c'est le mot test", "false": "c'est un autre mot"}}},
+        {"word": "test"},
+        {"ok": {"type": "noul", "instructions": "Is this word 'test'?",
+                "criteria": {"true": "the word is test", "false": "another word"}}},
         timeout=20)
 
 
@@ -161,65 +105,51 @@ def register(mcp: FastMCP) -> None:
     connector_verify.register("jev", _verify)
 
     def _client(units: int = 1) -> JevClient:
-        """Le client sur la clé du tenant. `units` = le nombre de décisions de l'appel,
-        vérifié d'avance contre le quota de la clé (`resolve_credential`).
+        """Client on the tenant key; `units` = answers in this call (quota pre-check).
 
-        ⚠️ **Le barreau gagnant est VÉRIFIÉ, pas seulement lu.** La cascade rendrait
-        volontiers une clé posée par une org ou une personne ; cet outil ne tourne que
-        sur la clé du tenant (`providers/jev.py`), et une clé d'org servie en silence
-        ferait deux choses fausses à la fois — un travail payé par quelqu'un qui ne
-        l'a pas voulu, et un usage que le tenant ne verrait pas.
-
-        ⚠️ Sans aucune clé, le refus générique de la cascade propose de « poser ta
-        propre clé » — exactement le geste refusé ici. Il est remplacé par la seule
-        voie qui existe."""
+        ⚠️ The winning rung is CHECKED: an org/user key would bill someone who didn't
+        opt in, invisibly to the tenant. The generic "set your own key" refusal is
+        replaced by the only valid path."""
         try:
             rc = access.resolve_credential("jev", want="auto", units=units)
         except CredentialUnavailable as e:
             raise CredentialUnavailable(ErrorData(
                 code=INVALID_PARAMS,
-                message=("Aucune clé `jev` servie pour ton org : jev tourne sur la clé "
-                         "que ton TENANT dépose (un de ses administrateurs la pose une "
-                         "fois pour toutes ses orgs). oto ne fournit pas de clé "
-                         "plateforme `jev`, et une clé posée par une org, une équipe "
-                         "ou une personne n'est pas servie."))) from e
+                message=("No `jev` key for your org: Jev runs on the key your TENANT "
+                         "sets (a tenant admin sets it once for all its orgs). There is "
+                         "no platform key, and org, team or personal keys are not "
+                         "used."))) from e
         if rc.mode not in RANGS_SERVIS:
-            qui = QUI_RETIRE.get(rc.mode, "celui qui l'a posée")
+            qui = QUI_RETIRE.get(rc.mode, "whoever set it")
             raise _bad(
-                f"Une clé `jev` posée au niveau « {rc.mode} » masque celle du TENANT : "
-                "jev ne tourne que sur la clé du tenant, et cette clé-là n'est pas "
-                f"servie. Pour décider sur la clé du tenant, {qui} doit la retirer "
-                "(carte du connecteur jev).")
+                f"A `jev` key set at the '{rc.mode}' level shadows the TENANT key: "
+                "Jev only runs on the tenant key, so this one is not used. "
+                f"To use the tenant key, {qui} must remove it (Jev connector card).")
         return JevClient(api_key=rc.key)
 
     def _etat_borne(state, ou: str) -> None:
-        """Refuse un état au-delà de `MAX_ETAT_OCTETS` AVANT tout appel."""
+        """Refuse a state over `MAX_ETAT_OCTETS` before any call."""
         taille = len(json.dumps(state, ensure_ascii=False, default=str).encode("utf-8"))
         if taille > MAX_ETAT_OCTETS:
             raise _bad(
-                f"{ou} : l'état fait {taille} octets, le maximum est "
-                f"{MAX_ETAT_OCTETS} — n'envoie que les champs qui servent au "
-                "jugement, pas la fiche ou le document entier.")
+                f"{ou}: state is {taille} bytes, max is {MAX_ETAT_OCTETS}. Send only "
+                "the fields the judgement needs, not the whole record.")
 
     @contextmanager
     def _upstream():
-        """Traduit un refus de l'amont en erreur d'outil actionnable."""
+        """Turn an upstream refusal into an actionable tool error."""
         try:
             yield
         except ValueError as e:
-            # La garde de grille du client (type inconnu, `criteria` absent) : elle
-            # nomme la question fautive, c'est déjà le bon message.
+            # Client rubric guard (unknown type, missing `criteria`); names the question.
             raise _bad(str(e))
         except UpstreamHTTPError as e:
             raise _bad(_upstream_message(e))
         except (requests.ConnectionError, requests.Timeout) as e:
-            raise _bad(f"Jev injoignable (réseau/timeout) — réessaie plus tard. {e}")
+            raise _bad(f"Jev unreachable (network/timeout). Retry later. {e}")
 
     def _releve(cout_total: float) -> None:
-        """Le relevé d'un appel : sa dépense RÉELLE, en micro-dollars.
-
-        ⚠️ Sans `quantity`, un `jev_items` de deux cents décisions se relèverait comme
-        un appel unique — et le prix ne suivrait plus rien."""
+        """Record the call's REAL spend in micro-dollars (else a 200-item batch bills as one call)."""
         u = _microdollars(cout_total)
         if u:
             session_org.note_call_trace(quantity=u)
@@ -310,15 +240,15 @@ def register(mcp: FastMCP) -> None:
                 a big batch that must finish inside one call.
         """
         if not isinstance(items, list) or not items:
-            raise _bad("`items` : au moins un état à juger est attendu.")
+            raise _bad("`items`: at least one state is required.")
         if len(items) > MAX_ITEMS:
-            raise _bad(f"`items` : {len(items)} états, le maximum est {MAX_ITEMS} par "
-                       "appel — découpe en pages et rappelle.")
+            raise _bad(f"`items`: {len(items)} states, max is {MAX_ITEMS} per call. "
+                       "Split into pages.")
         try:
             fil = max(1, min(int(parallel or PARALLELE_DEFAUT), PARALLELE_MAX))
         except (TypeError, ValueError):
-            raise _bad(f"`parallel` : un entier entre 1 et {PARALLELE_MAX} est attendu, "
-                       f"pas {parallel!r}.")
+            raise _bad(f"`parallel`: expected an integer from 1 to {PARALLELE_MAX}, "
+                       f"got {parallel!r}.")
 
         def _etat(i, x) -> tuple[Optional[str], dict]:
             if isinstance(x, dict) and "state" in x and isinstance(x["state"], dict):
@@ -327,21 +257,18 @@ def register(mcp: FastMCP) -> None:
             elif isinstance(x, dict):
                 cle, state = None, x
             else:
-                raise _bad("chaque élément de `items` est un objet (l'état), "
-                           "ou `{key, state}`.")
+                raise _bad("each `items` entry must be an object (the state) "
+                           "or `{key, state}`.")
             _etat_borne(state, f"`items[{i}]`")
             return cle, state
 
         paires = [_etat(i, x) for i, x in enumerate(items)]
         client = _client(units=len(paires))
-        # La grille est jugée UNE fois, pas une fois par état : une grille fautive
-        # n'a pas à coûter deux cents refus identiques.
+        # Check the rubric ONCE, not once per state.
         with _upstream():
             client.check_questions(questions)
 
-        # Aucune décision ne PART après la fenêtre, ni après un arrêt du lot : une
-        # décision déjà partie finit (un appel HTTP synchrone ne s'annule pas), et
-        # son coût est relevé.
+        # Nothing starts after the window or a stop; in-flight calls finish and are billed.
         fin_depart = time.monotonic() + LOT_FENETRE_S
         arret = threading.Event()
 
@@ -354,13 +281,12 @@ def register(mcp: FastMCP) -> None:
                 return {"index": i, "key": cle, "answers": r.get("answers") or {},
                         "_usage": r.get("usage") or {}, "_model": r.get("model")}
             except UpstreamHTTPError as e:
-                # ⚠️ Un problème de CLÉ ou de SOLDE n'est pas l'affaire d'un état : il
-                # remonte et arrête le lot, au lieu de se répéter deux cents fois.
+                # ⚠️ Key or balance problems stop the whole batch (not N identical errors).
                 if e.status_code in (401, 402, 403):
                     raise
                 return {"index": i, "key": cle, "error": _upstream_message(e)}
             except (requests.ConnectionError, requests.Timeout) as e:
-                return {"index": i, "key": cle, "error": f"Jev injoignable — {e}"}
+                return {"index": i, "key": cle, "error": f"Jev unreachable: {e}"}
 
         res: list[dict] = []
         panne: Optional[Exception] = None
@@ -371,23 +297,22 @@ def register(mcp: FastMCP) -> None:
                 for f in as_completed(futurs):
                     try:
                         res.append(f.result())
-                    except Exception as e:  # noqa: SILENT — retenue, relevée plus bas après le relevé
-                        # Clé, solde, ou exception inattendue sortie d'un fil : le
-                        # lot s'arrête, mais ce qui est déjà décidé reste PAYÉ.
+                    except Exception as e:  # noqa: SILENT — kept, re-raised below after billing
+                        # Stop the batch; answers already given stay billed.
                         if panne is None:
                             panne = e
                             arret.set()
                             for autre in futurs:
                                 autre.cancel()
         finally:
-            # Ce qui est parti chez l'amont compte, même si le lot s'arrête en route.
+            # Whatever reached upstream is billed, even if the batch stops.
             cout = sum((r.get("_usage") or {}).get("cost") or 0 for r in res)
             _releve(cout)
 
         decides = sum(1 for r in res if "answers" in r)
         if panne is not None:
-            deja = (f" {decides} réponse(s) déjà rendue(s) et relevée(s) avant l'arrêt."
-                    if decides else " Aucune réponse n'avait encore été rendue.")
+            deja = (f" {decides} answer(s) already given and billed before the stop."
+                    if decides else " No answer had been given yet.")
             if isinstance(panne, UpstreamHTTPError):
                 raise _bad(_upstream_message(panne) + deja) from panne
             raise panne

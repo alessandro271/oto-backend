@@ -49,8 +49,8 @@ dependencies = [
     # branche : on n'écrit pas dans le dépôt d'autrui (l'API Contents rend 404 dessus).
     # Le mainteneur bump ici, puis `update-branch` la PR. L'atomicité du revert cède
     # devant ça. Cf. docs/contributions-forks.md (amendement du 2026-09-01).
-    # v1.147.0 = jev : client du modèle de décision TypeSafe, via OpenRouter
-    # (connectors#91, sert oto-backend#1092).
+    # v1.147.0 = jev: TypeSafe typed-answer model client, via OpenRouter
+    # (connectors#91, for oto-backend#1092).
     # v1.145.0 = clay : client Public API (tables, routines, recherche) et webhooks de
     # table entrants (connectors#90, sert oto-backend#1075).
     # v1.144.0 = google_analytics : client GA4 en lecture par compte de service (#1070).
