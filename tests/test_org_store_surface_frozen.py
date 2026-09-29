@@ -139,7 +139,7 @@ EXPECTED_EDGES = {
     "instructions_cycle": {"instructions"},
     "instruction_ownership": {"instructions"},
     "personal": {"orgs", "members"},
-    "invitations": {"members"},
+    "invitations": {"members", "personal"},
     "library": {"instructions"},
 }
 

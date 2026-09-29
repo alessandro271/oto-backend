@@ -24,6 +24,7 @@ import secrets
 from typing import Optional
 
 from . import members
+from . import personal
 from ..db import _connect, _hash_token
 
 
@@ -372,6 +373,9 @@ def _accept_invitation_row(inv: dict, sub: str, *, actor: Optional[str]) -> dict
     if org_id is not None:
         org_role = roles.max_org_role(members.get_org_role(org_id, sub), org_role)
         members.add_org_member(org_id, sub, org_role, actor=actor)
+        # Rejoindre une org perso la fait cesser de l'être : son ex-propriétaire
+        # retrouve une org perso tout de suite, pas au prochain boot.
+        personal.ensure_members_personal_orgs(org_id)
     group_id = inv.get("group_id")
     group_role = inv.get("group_role")
     if group_id is not None:

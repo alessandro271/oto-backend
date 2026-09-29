@@ -98,6 +98,38 @@ def ensure_personal_org(sub: str, email: Optional[str] = None, name: Optional[st
     return pid
 
 
+def ensure_members_personal_orgs(org_id: int) -> list[str]:
+    """Garantit l'org perso de chaque membre de `org_id` qui n'en a plus ; rend leurs subs.
+
+    À appeler APRÈS toute adhésion (`members.add_org_member`). Rejoindre l'org perso de
+    quelqu'un lui retire son statut (`personal_of` remis à NULL : une org perso est
+    mono-membre), et son ex-propriétaire se retrouvait SANS org perso jusqu'au prochain
+    boot (`backfill_personal_orgs`). Or les projets privés (`owner_type='user'`) ne se
+    listent que dans l'org perso (`ownership.perso_de_la_liste`) : « tous mes projets
+    ont disparu » dès qu'un coéquipier acceptait son invitation (vécu 29/09/2026).
+
+    Hors de la transaction de l'adhésion, et pour cause : tant qu'elle n'est pas
+    validée, `personal_of` se lit encore sur l'org rejointe et `get_personal_org`
+    croirait l'ex-propriétaire servi. Idempotent : un membre qui a son org perso n'est
+    pas touché."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT m.sub, u.email, u.name FROM org_members m
+              LEFT JOIN users u ON u.sub = m.sub
+             WHERE m.org_id = %s
+               AND NOT EXISTS (SELECT 1 FROM orgs o
+                                WHERE o.personal_of = m.sub AND o.archived_at IS NULL)
+            """,
+            (org_id,),
+        ).fetchall()
+    for r in rows:
+        ensure_personal_org(r["sub"], r.get("email"), r.get("name"))
+        _log.info("org #%s : org perso rendue à %s (la sienne a été rejointe)",
+                  org_id, r["sub"])
+    return [r["sub"] for r in rows]
+
+
 def backfill_personal_orgs() -> dict:
     """Idempotent (boot) : chaque user a une **org perso** marquée, et une org active
     (la perso si aucune autre).

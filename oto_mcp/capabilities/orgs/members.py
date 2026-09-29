@@ -153,6 +153,9 @@ def _write_member_role(org_id: int, sub: str, role: str, *, require_member: bool
     if current == "org_admin" and role != "org_admin" and _count_org_admins(org_id) <= 1:
         raise AuthzDenied(409, "last_org_admin", "Impossible de rétrograder le dernier org_admin.")
     org_store.add_org_member(org_id, sub, role, actor=actor)
+    # Un 2e membre dans une org perso la fait cesser de l'être : son ex-propriétaire
+    # retrouve une org perso tout de suite (ses projets privés s'y listent).
+    org_store.ensure_members_personal_orgs(org_id)
     return {"ok": True, "org_id": org_id, "sub": sub, "role": role}
 
 

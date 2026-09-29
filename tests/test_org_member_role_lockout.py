@@ -34,6 +34,7 @@ def _patch(monkeypatch, *, role="org_admin", admins=1, org=True):
     written = []
     monkeypatch.setattr(om.org_store, "add_org_member",
                         lambda oid, sub, r, *, actor: written.append((oid, sub, r)))
+    monkeypatch.setattr(om.org_store, "ensure_members_personal_orgs", lambda oid: [])
     return written
 
 
