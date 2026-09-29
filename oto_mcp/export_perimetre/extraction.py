@@ -47,6 +47,7 @@ from .classement import CLASSEMENT, EXCLUE, EXPORTEES, INSTANCE, Table
 from .decouverte import Cle, Schema, lire_schema, verifier_classement
 from .perimetre import Perimetre, resoudre
 from .rechiffrement import AAD, empreinte_cle, rechiffrer
+from .objets import COLONNES_DE_CLES, ObjetsRefuses, Stockage, archiver, cles_dans
 from .regles import vias
 from .transformation import Transformation
 
@@ -78,7 +79,12 @@ def compilateur(classement: dict[str, Table]) -> Callable[[str], str]:
     """`pred(table)` : le prédicat SQL « cette ligne est du périmètre », parents composés."""
     @lru_cache(maxsize=None)
     def pred(table: str) -> str:
-        return classement[table].regle.predicat(pred)
+        entree = classement[table]
+        appartient = entree.regle.predicat(pred)
+        if entree.destinataire is None:
+            return appartient
+        # Un partage ne part que si son destinataire est AUSSI du périmètre.
+        return f"({appartient}) AND ({entree.destinataire.predicat(pred)})"
     return pred
 
 
@@ -110,6 +116,21 @@ def compter_secrets(conn, classement, pred, params) -> dict[str, int]:
             cond = " OR ".join(f"{c} IS NOT NULL" for c in e.secrets)
             n = _compter(conn, f"SELECT count(*) AS n FROM {t} WHERE ({pred(t)}) AND ({cond})",
                          params)
+            if n:
+                comptes[t] = n
+    return comptes
+
+
+def compter_partages_omis(conn, classement, pred, params) -> dict[str, int]:
+    """Les partages du périmètre dont le destinataire n'en est pas : omis (décision du
+    28/09/2026 — sur la cible ce destinataire n'existe pas, et la ligne y emporterait
+    l'identité d'un tiers), et comptés au manifeste."""
+    comptes = {}
+    for t, e in sorted(classement.items()):
+        if e.classe in EXPORTEES and e.destinataire is not None:
+            n = _compter(conn, f"SELECT count(*) AS n FROM {t} WHERE "
+                               f"({e.regle.predicat(pred)}) "
+                               f"AND NOT ({e.destinataire.predicat(pred)})", params)
             if n:
                 comptes[t] = n
     return comptes
@@ -201,18 +222,24 @@ def lecture_seule(conn: psycopg.Connection) -> None:
 
 
 def exporter(conn: psycopg.Connection, orgs: list[int], sortie: Path | str, *,
-             cle_cible: bytes | None = None,
+             base_publique: str, cle_cible: bytes | None = None,
+             stockage: Stockage | None = None,
              classement: dict[str, Table] = CLASSEMENT) -> dict:
     """Exporte le périmètre des `orgs` vers `sortie` et rend le manifeste.
 
     `conn` : une connexion psycopg à `dict_row`, HORS transaction (`lecture_seule`).
     `sortie` ne doit pas exister : on n'écrase jamais un export (il s'écrit à côté
-    puis se renomme). `cle_cible` : la clé maîtresse de l'instance cible, pour cette
-    seule exécution — les secrets du périmètre y sont rechiffrés depuis la clé de
-    CETTE instance (`OTO_MCP_MASTER_KEY`) ; sans elle, leur présence refuse."""
+    puis se renomme). `base_publique` : celle de NOTRE stockage public
+    (`media_store.public_base`), qui désigne les objets cités par URL.
+    `cle_cible` : la clé maîtresse de l'instance cible, pour cette seule exécution —
+    les secrets y sont rechiffrés depuis la clé de CETTE instance, et l'archive des
+    objets y est scellée. `stockage` : NOTRE stockage objet, où l'export lit les objets
+    du périmètre. Sans eux, un périmètre qui porte des secrets ou des objets refuse."""
     sortie = Path(sortie)
-    if sortie.exists():
-        raise FileExistsError(f"{sortie} existe déjà : un export ne s'écrase pas")
+    archive = sortie.with_name(sortie.name + ".objets.tar")
+    for chemin in (sortie, archive):
+        if chemin.exists():
+            raise FileExistsError(f"{chemin} existe déjà : un export ne s'écrase pas")
     lecture_seule(conn)
     with conn.transaction():
         lu = ouvrir(conn, orgs, classement)
@@ -222,15 +249,40 @@ def exporter(conn: psycopg.Connection, orgs: list[int], sortie: Path | str, *,
         recoder = _recodeur(lu, cle_cible) if secrets else None
         vers_instance = controler_fermeture(conn, lu.schema, lu.classement, lu.pred, lu.params)
         provisoire = sortie.with_name(sortie.name + ".partiel")
-        with provisoire.open("x", encoding="utf-8") as f:
-            manifeste = _ecrire(conn, f, lu, recoder)
-            manifeste.update(_entete(conn, lu.perimetre), ordre=lu.ordre,
-                             references_instance=vers_instance, secrets=secrets,
-                             cle_cible=empreinte_cle(cle_cible) if secrets else None,
-                             colonnes={t: _colonnes(lu.schema, t) for t in lu.ordre})
-            f.write(json.dumps({"manifeste": manifeste}, ensure_ascii=False) + "\n")
+        try:
+            with provisoire.open("x", encoding="utf-8") as f:
+                manifeste, cles = _ecrire(conn, f, lu, recoder, base_publique)
+                objets = _archiver(cles, stockage, archive, cle_cible, base_publique)
+                manifeste.update(
+                    _entete(conn, lu.perimetre), ordre=lu.ordre,
+                    references_instance=vers_instance, secrets=secrets, objets=objets,
+                    partages_omis=compter_partages_omis(conn, lu.classement, lu.pred,
+                                                        lu.params),
+                    cle_cible=(empreinte_cle(cle_cible) if secrets or objets["liste"]
+                               else None),
+                    colonnes={t: _colonnes(lu.schema, t) for t in lu.ordre})
+                f.write(json.dumps({"manifeste": manifeste}, ensure_ascii=False) + "\n")
+        except BaseException:
+            # Un export refusé en chemin ne laisse rien derrière lui, ni lignes ni archive.
+            provisoire.unlink(missing_ok=True)
+            archive.unlink(missing_ok=True)
+            raise
         os.replace(provisoire, sortie)
     return manifeste
+
+
+def _archiver(cles: set[str], stockage, archive: Path, cle_cible, base_publique) -> dict:
+    """L'archive des objets du périmètre, scellée pour la cible, inscrite au manifeste."""
+    if not cles:
+        return {"archive": None, "empreinte": None, "base_publique": base_publique,
+                "liste": {}}
+    if stockage is None or cle_cible is None:
+        raise ObjetsRefuses(f"le périmètre désigne {len(cles)} objet(s) : l'export les lit "
+                            "dans le stockage source (`stockage`) et les scelle sous la clé "
+                            "de l'instance cible (`cle_cible`)")
+    liste, empreinte = archiver(cles, stockage, archive, cle_cible)
+    return {"archive": archive.name, "empreinte": empreinte, "base_publique": base_publique,
+            "liste": liste}
 
 
 def _colonnes(schema: Schema, t: str) -> list[str]:
@@ -259,16 +311,20 @@ def _recodeur(lu: Lecture, cle_cible: bytes) -> Callable[[str, str], str]:
     return recoder
 
 
-def _ecrire(conn, f, lu: Lecture, recoder=None) -> dict:
+def _ecrire(conn, f, lu: Lecture, recoder, base_publique: str) -> tuple[dict, set[str]]:
+    """Écrit les lignes ; rend le début du manifeste et les clés des objets désignés,
+    par une colonne de clé ou par une URL de notre stockage, où qu'elle soit."""
     schema, classement, pred, params, ordre = (lu.schema, lu.classement, lu.pred,
                                                lu.params, lu.ordre)
     empreinte = hashlib.sha256()
     tables: dict[str, dict] = {}
+    cles = _cles_d_objet(conn, classement, ordre, pred, params)
     for t in ordre:
         n = 0
         for ligne in lu.lignes(conn, t):
             if recoder is not None:
                 ligne = recoder(t, ligne)
+            cles |= cles_dans(ligne, base_publique)
             texte = f'{{"t": {json.dumps(t)}, "l": {ligne}}}\n'
             empreinte.update(texte.encode())
             f.write(texte)
@@ -281,8 +337,7 @@ def _ecrire(conn, f, lu: Lecture, recoder=None) -> dict:
         elif e.classe == INSTANCE:
             tables[t] = {"classe": INSTANCE, "raison": e.raison}
     return {"format": FORMAT, "tables": tables, "empreinte": empreinte.hexdigest(),
-            "sequences": _sequences(conn, schema, ordre, pred, params),
-            "hors_base": _hors_base(conn, classement, ordre, pred, params)}
+            "sequences": _sequences(conn, schema, ordre, pred, params)}, cles
 
 
 def _sequences(conn, schema, ordre, pred, params) -> dict[str, int]:
@@ -295,16 +350,17 @@ def _sequences(conn, schema, ordre, pred, params) -> dict[str, int]:
     return out
 
 
-def _hors_base(conn, classement, ordre, pred, params) -> dict[str, list[str]]:
-    out = {}
+def _cles_d_objet(conn, classement, ordre, pred, params) -> set[str]:
+    """Les valeurs des colonnes de CLÉ d'objet ; les colonnes d'URL, elles, sont lues
+    avec tout le reste par `cles_dans`."""
+    cles: set[str] = set()
     for t in ordre:
         for c in classement[t].hors_base:
-            vals = [r["v"] for r in conn.execute(
-                f"SELECT DISTINCT {c} AS v FROM {t} WHERE ({pred(t)}) AND {c} IS NOT NULL "
-                "ORDER BY 1", params)]
-            if vals:
-                out[f"{t}.{c}"] = vals
-    return out
+            if f"{t}.{c}" in COLONNES_DE_CLES:
+                cles |= {r["v"] for r in conn.execute(
+                    f"SELECT DISTINCT {c} AS v FROM {t} WHERE ({pred(t)}) "
+                    f"AND {c} IS NOT NULL", params)}
+    return cles
 
 
 def _entete(conn, p: Perimetre) -> dict:

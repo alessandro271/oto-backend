@@ -5,16 +5,64 @@ Un propriétaire = un TENANT tiers, une org, deux comptes qualifiés par le tena
 contenu. Chaque ligne porte le MARQUEUR `m` du propriétaire dans une valeur texte :
 c'est ce qui permet de vérifier « rien d'autrui, rien d'oublié » par un second chemin,
 sans passer par les règles du classement.
+
+Ses objets de stockage (avatar, logo, fichier de projet, images citées par URL dans une
+page et dans une ligne de tableau, audio) sont rendus par `semer` pour qu'un `FauxS3`
+les porte : aucun vrai seau.
 """
 from __future__ import annotations
 
+import io
 import json
+from urllib.parse import quote
 
 from oto_mcp import credentials_store, runner_hook, transcription_worker
 from oto_mcp.crypto import encrypt_with_key
 
 A, B = "A7d1e", "B9f3c"
 SECRET = "clair-{}-{}"
+BASE_SOURCE = "https://stockage-source.exemple.test"
+BASE_CIBLE = "https://stockage-cible.exemple.test"
+
+
+class _ClientError(Exception):
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.response = {"Error": {"Code": code}}
+
+
+class _NoSuchKey(_ClientError):
+    def __init__(self):
+        super().__init__("NoSuchKey")
+
+
+class FauxS3:
+    """Un seau en mémoire, à l'API de boto3 (`get_object`, `put_object`, `head_object`,
+    `exceptions`) — `alterer` simule une cible qui abîme ce qu'on lui écrit."""
+
+    class exceptions:  # noqa: N801 — la forme de `client.exceptions` chez boto3
+        ClientError = _ClientError
+        NoSuchKey = _NoSuchKey
+
+    def __init__(self, objets: dict[str, bytes] | None = None, alterer: bool = False):
+        self.objets = {k: (v, {}) for k, v in (objets or {}).items()}
+        self.alterer = alterer
+        self.ecritures = 0
+
+    def get_object(self, Bucket, Key):  # noqa: N803
+        if Key not in self.objets:
+            raise _NoSuchKey()
+        return {"Body": io.BytesIO(self.objets[Key][0])}
+
+    def put_object(self, Bucket, Key, Body, Metadata=None):  # noqa: N803
+        self.ecritures += 1
+        self.objets[Key] = (Body[:-1] if self.alterer else Body, dict(Metadata or {}))
+
+    def head_object(self, Bucket, Key):  # noqa: N803
+        if Key not in self.objets:
+            raise _ClientError("404")
+        donnees, meta = self.objets[Key]
+        return {"ContentLength": len(donnees), "Metadata": meta}
 
 
 def slug_de(m: str) -> str:
@@ -55,6 +103,15 @@ def semer(c, m: str, *, cle: bytes | None = None) -> dict:
     alice, bob = f"{slug}:{m}-alice", f"{slug}:{m}-bob"
     membre(c, o, alice)
     membre(c, o, bob)
+    objets = {f"avatars/{quote(alice, safe='')}/{m}.png": f"avatar {m}".encode(),
+              f"org-logos/{o}/{m}.png": f"logo {m}".encode(),
+              f"projets/{m}/f.txt": f"fichier {m}".encode(),
+              f"images/{quote(alice, safe='')}/{m}-page.png": f"image page {m}".encode(),
+              f"images/{quote(alice, safe='')}/{m}-ligne.png": f"image ligne {m}".encode()}
+    url = {cle: f"{BASE_SOURCE}/{cle}" for cle in objets}
+    cles = list(objets)
+    c.execute("UPDATE users SET avatar_url = %s WHERE sub = %s", (url[cles[0]], alice))
+    c.execute("UPDATE orgs SET logo_url = %s WHERE id = %s", (url[cles[1]], o))
     membre(c, org(c, f"perso {m}", tid, personal_of=alice), alice)
     c.execute("INSERT INTO tenant_admins (slug, sub, granted_by) VALUES (%s, %s, %s)",
               (slug, alice, f"admin {m}"))
@@ -72,13 +129,16 @@ def semer(c, m: str, *, cle: bytes | None = None) -> dict:
     c.execute("INSERT INTO projects (owner_type, owner_id, name) VALUES ('user', %s, %s)",
               (alice, f"projet perso {m}"))
     page = c.execute("INSERT INTO docs (project_id, title, body_md) VALUES (%s, %s, %s) "
-                     "RETURNING id", (projet, f"page {m}", f"corps {m}")).fetchone()["id"]
+                     "RETURNING id",
+                     (projet, f"page {m}", f"corps {m}\n\n![schéma]({url[cles[3]]})")
+                     ).fetchone()["id"]
     c.execute("INSERT INTO docs (project_id, parent_id, title, body_md) "
               "VALUES (%s, %s, %s, '')", (projet, page, f"sous-page {m}"))
     c.execute("INSERT INTO doc_revisions (doc_id, title, body_md) VALUES (%s, %s, %s)",
               (page, f"page {m}", f"v1 {m}"))
-    c.execute("INSERT INTO project_files (project_id, s3_key, filename, mime, size_bytes) "
-              "VALUES (%s, %s, %s, 'text/plain', 3)", (projet, f"projets/{m}/f.txt", f"f {m}"))
+    c.execute("INSERT INTO project_files (project_id, s3_key, filename, mime, size_bytes, "
+              "public, public_url) VALUES (%s, %s, %s, 'text/plain', 3, true, %s)",
+              (projet, cles[2], f"f {m}", url[cles[2]]))
     c.execute("INSERT INTO resource_grants (resource_type, resource_id, principal_type, "
               "principal_id, granted_by) VALUES ('project', %s, 'group', %s, %s)",
               (str(projet), str(groupe), alice))
@@ -87,7 +147,8 @@ def semer(c, m: str, *, cle: bytes | None = None) -> dict:
                         ).fetchone()["id"]
     for i in (1, 2):
         c.execute("INSERT INTO datastore_rows (ns_id, row_id, data) VALUES (%s, %s, %s)",
-                  (tableau, f"{m}-{i}", json.dumps({"nom": f"ligne {m}", "par": bob})))
+                  (tableau, f"{m}-{i}", json.dumps({"nom": f"ligne {m}", "par": bob,
+                                                     "image": url[cles[4]]})))
     noeud = c.execute("INSERT INTO nodes (public_id, kind, owner_type, owner_id, props) "
                       "VALUES (%s, 'page', 'org', %s, %s) RETURNING id",
                       (f"n-{m}", str(o), json.dumps({"titre": m}))).fetchone()["id"]
@@ -123,6 +184,7 @@ def semer(c, m: str, *, cle: bytes | None = None) -> dict:
                   (encrypt_with_key(cle, SECRET.format(m, "hook"),
                                     runner_hook._aad_du_secret(declencheur)), declencheur))
         audio = f"audio/{m}/a.mp3"
+        objets[audio] = f"audio {m}".encode()
         c.execute("INSERT INTO transcription_jobs (project_id, sub, status, audio_key, "
                   "filename, mime, api_key_enc) VALUES (%s, %s, 'queued', %s, %s, "
                   "'audio/mpeg', %s)",
@@ -130,4 +192,4 @@ def semer(c, m: str, *, cle: bytes | None = None) -> dict:
                    encrypt_with_key(cle, SECRET.format(m, "transcription"),
                                     transcription_worker._aad(audio))))
     return {"org": o, "tenant": tid, "slug": slug, "projet": projet, "page": page,
-            "alice": alice, "bob": bob}
+            "alice": alice, "bob": bob, "objets": objets}

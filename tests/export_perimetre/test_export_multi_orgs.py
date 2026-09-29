@@ -29,16 +29,26 @@ from oto_mcp.export_perimetre.extraction import (  # noqa: E402
 from oto_mcp.export_perimetre.perimetre import (  # noqa: E402
     ComptesHorsTenant, ComptesPartages, PerimetreRefuse, TenantPartage, TenantsMultiples)
 from oto_mcp.export_perimetre.rechiffrement import empreinte_cle  # noqa: E402
-from perimetre_banc import A, B, membre, org, semer, tenant  # noqa: E402
+from oto_mcp.export_perimetre.objets import StockageS3  # noqa: E402
+from perimetre_banc import A, B, BASE_SOURCE, FauxS3, membre, org, semer, tenant  # noqa: E402
+
+CLE_CIBLE = os.urandom(32)
 
 
 @pytest.fixture(scope="module")
 def base(live, pg_module_dsn):
     with psycopg.connect(pg_module_dsn, autocommit=True, row_factory=dict_row) as c:
-        yield {"dsn": pg_module_dsn, A: semer(c, A), B: semer(c, B)}
+        a, b = semer(c, A), semer(c, B)
+        yield {"dsn": pg_module_dsn, A: a, B: b,
+               "stockage": StockageS3(FauxS3({**a["objets"], **b["objets"]}), "source")}
 
 
 def _exporter(base, orgs, chemin, **kw):
+    """Comme la commande : notre stockage (faux), notre base publique, et la clé de la
+    cible — l'archive des objets se scelle sous elle."""
+    kw.setdefault("base_publique", BASE_SOURCE)
+    kw.setdefault("stockage", base["stockage"])
+    kw.setdefault("cle_cible", CLE_CIBLE)
     with psycopg.connect(base["dsn"], row_factory=dict_row) as c:
         return exporter(c, orgs, chemin, **kw)
 
@@ -94,14 +104,20 @@ def test_le_manifeste_dit_ce_qui_ne_part_pas_et_ce_qui_vit_hors_base(base, expor
     # compte : elle se compte, ou elle part — elle ne tombe pas hors périmètre.
     assert manifeste["tables"]["org_entitlements"]["omises"] == 1
     assert manifeste["tables"]["tool_calls"]["lignes"] == 2
-    assert manifeste["hors_base"] == {"project_files.s3_key": [f"projets/{A}/f.txt"]}
+    # Les objets du périmètre, par leur clé ou par leur URL, où qu'elle soit (avatar,
+    # logo, fichier public, image collée dans une page ou une ligne de tableau).
+    objets = manifeste["objets"]
+    assert set(objets["liste"]) == set(a["objets"])
+    assert objets["base_publique"] == BASE_SOURCE
+    assert (chemin.parent / objets["archive"]).is_file()
     # Le tenant PART : plus aucune référence vers l'instance, et l'import sait quoi remapper.
     assert manifeste["references_instance"] == {}
     assert manifeste["tables"]["tenants"]["lignes"] == 1
     assert manifeste["tenant"] == {"id": a["tenant"], "slug": a["slug"],
                                    "nom": f"tenant {A}", "primaire_source": False}
     assert manifeste["comptes"] == {a["alice"]: f"{A}-alice", a["bob"]: f"{A}-bob"}
-    assert manifeste["secrets"] == {} and manifeste["cle_cible"] is None
+    assert manifeste["secrets"] == {} and manifeste["cle_cible"] == empreinte_cle(CLE_CIBLE)
+    assert manifeste["partages_omis"] == {}
     assert manifeste["tenant"]["nom"] == f"tenant {A}"
     assert manifeste["perimetre"]["orgs_declarees"] == [a["org"]]
     assert len(manifeste["perimetre"]["orgs_personnelles"]) == 1
@@ -181,7 +197,7 @@ def test_un_secret_refuse_sans_la_cle_cible_et_part_rechiffre_avec(base, tmp_pat
         c.execute("INSERT INTO connector_credentials (entity_type, entity_id, connector, "
                   "account, secret_enc) VALUES ('org', %s, 'serper', '', %s)", (str(o), source))
     with pytest.raises(SecretsChiffres) as e:
-        _exporter(base, [o], tmp_path / "x.jsonl")
+        _exporter(base, [o], tmp_path / "x.jsonl", cle_cible=None)
     assert e.value.comptes == {"connector_credentials": 1}
     assert not (tmp_path / "x.jsonl").exists()
     manifeste = _exporter(base, [o], tmp_path / "x.jsonl", cle_cible=cle_cible)
@@ -210,10 +226,31 @@ def test_une_reference_vers_une_ligne_d_autrui_refuse(base, tmp_path):
     assert e.value.comptes == {"doc_links(to_doc) → docs": 1}
 
 
+def test_un_partage_vers_un_destinataire_hors_perimetre_est_omis_et_compte(base, tmp_path):
+    """Décision du 28/09/2026 : il ne part pas — sur la cible ce destinataire n'existe
+    pas — et le manifeste le compte."""
+    with psycopg.connect(base["dsn"], autocommit=True, row_factory=dict_row) as c:
+        o = org(c, "org qui partage dehors", _tenant_a_part(c, "tdehors"))
+        projet = c.execute("INSERT INTO projects (owner_type, owner_id, name) "
+                           "VALUES ('org', %s, 'p') RETURNING id", (str(o),)
+                           ).fetchone()["id"]
+        c.execute("INSERT INTO resource_grants (resource_type, resource_id, principal_type, "
+                  "principal_id) VALUES ('project', %s, 'org', %s)",
+                  (str(projet), str(base[B]["org"])))
+        c.execute("INSERT INTO grants (resource_id, grantor_kind, grantor_id, grantee_kind, "
+                  "grantee_id) VALUES ('inst:1', 'org', %s, 'user', %s)",
+                  (str(o), base[B]["alice"]))
+    manifeste = _exporter(base, [o], tmp_path / "x.jsonl")
+    assert manifeste["partages_omis"] == {"resource_grants": 1, "grants": 1}
+    parties = {x["t"] for x in _lignes(tmp_path / "x.jsonl")[:-1]}
+    assert not parties & {"resource_grants", "grants"}
+
+
 def test_l_export_se_fait_en_lecture_seule(base, tmp_path):
     """La transaction d'export refuse toute écriture : c'est la BASE qui le garantit."""
     with psycopg.connect(base["dsn"], row_factory=dict_row) as c:
-        exporter(c, [base[A]["org"]], tmp_path / "a.jsonl")
+        exporter(c, [base[A]["org"]], tmp_path / "a.jsonl", base_publique=BASE_SOURCE,
+                 stockage=base["stockage"], cle_cible=CLE_CIBLE)
         assert c.read_only is True
         with pytest.raises(psycopg.errors.ReadOnlySqlTransaction):
             c.execute("INSERT INTO usage (sub, tool, day, count) "

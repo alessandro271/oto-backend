@@ -83,17 +83,25 @@ def encrypt_with_key(key: bytes, plaintext: str, aad: str) -> str:
     """L'enveloppe, sous une clé DONNÉE plutôt que celle de l'instance : le
     rechiffrement d'un export vers une autre instance (#1088) tient deux clés à la
     fois, en mémoire. Même format que `encrypt`, qui s'y ramène."""
-    nonce = os.urandom(12)
-    ct = AESGCM(key).encrypt(nonce, plaintext.encode(), aad.encode())
-    return base64.b64encode(_KEY_REF + nonce + ct).decode()
+    return base64.b64encode(seal(key, plaintext.encode(), aad)).decode()
 
 
 def decrypt_with_key(key: bytes, envelope: str, aad: str) -> str:
-    blob = base64.b64decode(envelope)
+    return unseal(key, base64.b64decode(envelope), aad).decode()
+
+
+def seal(key: bytes, data: bytes, aad: str) -> bytes:
+    """L'enveloppe BRUTE (key_ref ‖ nonce ‖ ciphertext+tag), pour des octets : un objet
+    d'archive (#1088) n'a pas à passer par du texte base64 pour être chiffré."""
+    nonce = os.urandom(12)
+    return _KEY_REF + nonce + AESGCM(key).encrypt(nonce, data, aad.encode())
+
+
+def unseal(key: bytes, blob: bytes, aad: str) -> bytes:
     # blob[:1] = key_ref (réservé au versioning/rotation) ; [1:13] = nonce.
     nonce, ct = blob[1:13], blob[13:]
     try:
-        return AESGCM(key).decrypt(nonce, ct, aad.encode()).decode()
+        return AESGCM(key).decrypt(nonce, ct, aad.encode())
     except InvalidTag as e:
         # InvalidTag a un str() VIDE : sans cette traduction, l'erreur remonte
         # illisible jusqu'à l'agent (« Error calling tool X: » sans message) et

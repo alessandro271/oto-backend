@@ -22,10 +22,12 @@ blanc sur une copie reste à faire (#1088).**
 ## La commande
 
 ```bash
-# Chez NOUS, sur la base source (DATABASE_URL, OTO_MCP_MASTER_KEY de notre instance) :
+# Chez NOUS, sur la base source (DATABASE_URL, OTO_MCP_MASTER_KEY, OTO_MCP_S3_* de notre
+# instance) — écrit perimetre.jsonl et perimetre.jsonl.objets.tar :
 OTO_EXPORT_CLE_CIBLE=<clé de l'instance cible> \
   oto-mcp perimetre export --org 12 [--org 13 …] --sortie perimetre.jsonl
-# Sur l'instance cible, née par le démarrage (sa DATABASE_URL, SA clé maîtresse) :
+# Sur l'instance cible, née par le démarrage (sa DATABASE_URL, SA clé maîtresse, SON
+# stockage OTO_MCP_S3_*) — les deux fichiers côte à côte :
 oto-mcp perimetre import perimetre.jsonl
 ```
 
@@ -118,6 +120,47 @@ l'import. L'export calcule donc la ligne cible par la fonction même de l'import
 `transformation.Transformation`, et il n'en existe qu'une. Les AAD viennent des
 fonctions qui écrivent ces secrets (`credentials_store._aad`,
 `runner_hook._aad_du_secret`, `transcription_worker._aad`). Le clair ne vit qu'en mémoire.
+
+## Les objets du stockage objet : une archive scellée pour la cible
+
+Décision d'Alexis du 28/09/2026 : les objets voyagent par une **archive**, et par elle
+seule. Il n'y a ni copie directe d'un seau à l'autre, ni URL signée.
+
+- **Quels objets** (`objets`) : ceux qu'une ligne du périmètre désigne, par une CLÉ
+  (`project_files.s3_key`, `transcription_jobs.audio_key`) ou par une URL de notre
+  stockage public, où qu'elle soit. Cela couvre les colonnes (`users.avatar_url`,
+  `orgs.logo_url`, `project_files.public_url`) comme les contenus : une image déposée
+  par un agent (`images/<sub>/…`) n'a d'autre trace que son URL collée dans une page,
+  un tableau ou un JSON. L'export cherche `<base publique>/<clé>` dans chaque ligne
+  écrite (`cles_dans`). Un banc rougit si une colonne `hors_base` n'est classée ni clé
+  ni URL.
+- **L'archive** (`<sortie>.objets.tar`) : un membre par objet, nommé par sa clé et
+  scellé (`crypto.seal`, AES-256-GCM) sous la clé de l'instance CIBLE, avec une AAD
+  qui le lie à sa clé d'objet. Elle est écrite chez nous, depuis notre stockage
+  (`stockage`, `media_store`). Le manifeste l'inscrit (`objets` : nom, empreinte
+  SHA-256, notre base publique, et par objet la taille et l'empreinte du clair). Un
+  objet absent de notre stockage refuse, tous nommés, et un export refusé ne laisse
+  derrière lui ni lignes ni archive.
+- **À l'import**, l'archive est vérifiée avant toute écriture. Elle se verse dans le
+  stockage de la cible, avec ses propres identifiants, après la relecture et avant la
+  validation. Chaque objet est déchiffré sous la clé de l'instance, comparé au
+  manifeste, écrit sous la MÊME clé, puis relu. Un objet déjà là avec la même
+  empreinte est sauté : un import interrompu se reprend.
+- **Les URL** sont réécrites par la `Transformation` : `<notre base>/` devient `<base
+  cible>/` dans toute valeur texte, colonne ou contenu. La base cible est celle que la
+  cible déclare (`media_store.public_base`), sans défaut de notre côté. La relecture
+  refuse s'il subsiste une URL de notre stockage dans le périmètre.
+
+Les archives froides du journal mêlent tous les propriétaires : elles restent hors
+périmètre.
+
+## Les partages hors périmètre : omis, comptés
+
+`resource_grants` et `grants` désignent leur destinataire par un couple polymorphe,
+sans clé étrangère (`classement` : `destinataire`). Décision du 28/09/2026 : une ligne
+dont le destinataire n'est pas du périmètre **ne part pas**. Sur la cible, ce
+destinataire n'existe pas, et la ligne y emporterait l'identité d'un tiers. Le
+manifeste compte ces lignes (`partages_omis`).
 
 ## L'import
 

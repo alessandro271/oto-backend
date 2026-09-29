@@ -200,14 +200,21 @@ def type_servi(data: bytes, declare: str | None) -> TypeServi:
     return TypeServi(_NEUTRE, attachment=True)
 
 
-def public_url(key: str) -> str:
+def public_base() -> str:
+    """La base publique de CETTE instance, sans `/` final : celle sous laquelle
+    `public_url` sert chaque clé. L'export par périmètre la relit pour réécrire, à
+    l'import, les URL d'une instance vers celles d'une autre (#1088)."""
     base = os.environ.get("OTO_MCP_S3_PUBLIC_BASE_URL")
     if base:
-        return f"{base.rstrip('/')}/{key}"
+        return base.rstrip("/")
     # Style virtual-hosted Scaleway : https://<bucket>.s3.fr-par.scw.cloud/<key>
     from .config import require_env
     parts = urlsplit(require_env("OTO_MCP_S3_ENDPOINT"))
-    return f"{parts.scheme}://{_bucket()}.{parts.netloc}/{key}"
+    return f"{parts.scheme}://{_bucket()}.{parts.netloc}"
+
+
+def public_url(key: str) -> str:
+    return f"{public_base()}/{key}"
 
 
 # NB : les logos de connecteurs ne transitent plus par S3 — ils sont servis par

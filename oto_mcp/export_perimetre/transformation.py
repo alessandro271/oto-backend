@@ -10,7 +10,12 @@ Ce qu'elle change, et rien d'autre :
   (`Perimetre.comptes_cible`) : toute VALEUR exactement égale à un sub du périmètre,
   ou à sa forme membre `<org>:<sub>`, à toute profondeur d'un JSON ;
 - **le tenant** devient la ligne 1 de la cible : sa ligne prend l'id 1, et toute clé
-  étrangère vers `tenants(id)` vaut 1.
+  étrangère vers `tenants(id)` vaut 1 ;
+- **les URL de notre stockage public** (décision du 28/09/2026) : dans toute valeur
+  texte, colonne ou contenu (page, JSON), `<base source>/` devient `<base cible>/` ; les
+  objets, eux, gardent leur clé (`objets`). Seul l'import connaît la base cible, que la
+  cible déclare. L'export s'en passe sans rien changer à ce qu'il calcule, puisqu'aucun
+  champ d'AAD (`rechiffrement.AAD`) n'est une URL.
 """
 from __future__ import annotations
 
@@ -19,34 +24,38 @@ from dataclasses import dataclass
 from .decouverte import Schema
 
 
-def _denuder(v, comptes: dict[str, str]):
-    if isinstance(v, str):
-        if v in comptes:
-            return comptes[v]
-        tete, sep, reste = v.partition(":")
-        if sep and tete.isdigit() and reste in comptes:
-            return f"{tete}:{comptes[reste]}"
-        return v
-    if isinstance(v, list):
-        return [_denuder(x, comptes) for x in v]
-    if isinstance(v, dict):
-        return {k: _denuder(x, comptes) for k, x in v.items()}
-    return v
-
-
 @dataclass(frozen=True)
 class Transformation:
     comptes: dict[str, str]                    # sub source → sub cible, identités retirées
     vers_tenant: dict[str, tuple[str, ...]]    # table → colonnes de clé vers `tenants(id)`
+    bases: tuple[str, str] | None = None       # (base publique source, base cible)
 
     @classmethod
-    def depuis(cls, schema: Schema, comptes: dict[str, str]) -> "Transformation":
+    def depuis(cls, schema: Schema, comptes: dict[str, str],
+               bases: tuple[str, str] | None = None) -> "Transformation":
         return cls({s: c for s, c in comptes.items() if s != c},
                    {k.table: k.colonnes for k in schema.cles
-                    if k.cible == "tenants" and k.colonnes_cible == ("id",)})
+                    if k.cible == "tenants" and k.colonnes_cible == ("id",)},
+                   None if bases is None or bases[0] == bases[1] else bases)
+
+    def _valeur(self, v):
+        if isinstance(v, str):
+            if v in self.comptes:
+                return self.comptes[v]
+            tete, sep, reste = v.partition(":")
+            if sep and tete.isdigit() and reste in self.comptes:
+                return f"{tete}:{self.comptes[reste]}"
+            if self.bases and f"{self.bases[0]}/" in v:
+                return v.replace(f"{self.bases[0]}/", f"{self.bases[1]}/")
+            return v
+        if isinstance(v, list):
+            return [self._valeur(x) for x in v]
+        if isinstance(v, dict):
+            return {k: self._valeur(x) for k, x in v.items()}
+        return v
 
     def appliquer(self, table: str, ligne: dict) -> dict:
-        cible = _denuder(ligne, self.comptes) if self.comptes else dict(ligne)
+        cible = self._valeur(ligne) if (self.comptes or self.bases) else dict(ligne)
         for c in self.vers_tenant.get(table, ()):
             if cible[c] is not None:
                 cible[c] = 1

@@ -38,7 +38,9 @@ from oto_mcp.export_perimetre.importation import (  # noqa: E402
     TAILLE_LOT, ImportRefuse, importer)
 from oto_mcp.export_perimetre.rechiffrement import AAD, empreinte_cle  # noqa: E402
 from oto_mcp.export_perimetre.transformation import Transformation  # noqa: E402
-from perimetre_banc import A, B, SECRET, semer, slug_de  # noqa: E402
+from oto_mcp.export_perimetre.objets import StockageS3  # noqa: E402
+from perimetre_banc import (  # noqa: E402
+    A, B, BASE_CIBLE, BASE_SOURCE, SECRET, FauxS3, semer, slug_de)
 
 CLE_SOURCE, CLE_CIBLE = os.urandom(32), os.urandom(32)
 NOM_A = f"tenant {A}"
@@ -71,15 +73,18 @@ def _detruire(pg_dsn: str, dsn: str) -> None:
         root.execute(f'DROP DATABASE IF EXISTS "{dsn.rsplit("/", 1)[1]}" WITH (FORCE)')
 
 
-def _importer(dsn: str, chemin, cle: bytes | None = CLE_CIBLE) -> dict:
-    """L'import, tel que l'instance CIBLE le joue : sous SA clé, et seulement la sienne."""
+def _importer(dsn: str, chemin, cle: bytes | None = CLE_CIBLE,
+              seau: FauxS3 | None = None) -> dict:
+    """L'import, tel que l'instance CIBLE le joue : sous SA clé, et seulement la sienne,
+    dans SON stockage, vers SA base publique."""
     with pytest.MonkeyPatch.context() as mp:
         if cle is None:
             mp.delenv("OTO_MCP_MASTER_KEY", raising=False)
         else:
             mp.setenv("OTO_MCP_MASTER_KEY", cle.hex())
         with psycopg.connect(dsn, row_factory=dict_row) as c:
-            return importer(c, chemin)
+            return importer(c, chemin, stockage=StockageS3(seau or FauxS3(), "cible"),
+                            base_publique=BASE_CIBLE)
 
 
 def _marquees(dsn: str, marqueur: str) -> dict[str, int]:
@@ -104,7 +109,8 @@ def source(live, pg_module_dsn):
                   "SELECT 'oto', 'tool', %s, 'oto_doc', %s, "
                   "jsonb_build_object('_m', %s::text, 'n', g) FROM generate_series(1, 1234) g",
                   (a["alice"], a["org"], A))
-        yield {"dsn": pg_module_dsn, A: a, B: b}
+        yield {"dsn": pg_module_dsn, A: a, B: b,
+               "seau": FauxS3({**a["objets"], **b["objets"]})}
 
 
 @pytest.fixture(scope="module")
@@ -113,15 +119,18 @@ def export_a(source, tmp_path_factory):
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("OTO_MCP_MASTER_KEY", CLE_SOURCE.hex())
         with psycopg.connect(source["dsn"], row_factory=dict_row) as c:
-            manifeste = exporter(c, [source[A]["org"]], chemin, cle_cible=CLE_CIBLE)
+            manifeste = exporter(c, [source[A]["org"]], chemin, cle_cible=CLE_CIBLE,
+                                 stockage=StockageS3(source["seau"], "source"),
+                                 base_publique=BASE_SOURCE)
     return chemin, manifeste
 
 
 @pytest.fixture(scope="module")
 def cible(source, export_a, pg_dsn):
     dsn = _naitre(pg_dsn, slug_de(A))
+    seau = FauxS3()
     try:
-        yield {"dsn": dsn, "rapport": _importer(dsn, export_a[0])}
+        yield {"dsn": dsn, "rapport": _importer(dsn, export_a[0], seau=seau), "seau": seau}
     finally:
         _detruire(pg_dsn, dsn)
 
@@ -146,6 +155,81 @@ def test_le_fichier_ne_porte_que_des_secrets_pour_la_cible(export_a):
 
 def _schema_vide_de_tenant() -> Schema:
     return Schema({}, {}, {}, (), {}, {})
+
+
+def test_le_manifeste_inscrit_l_archive_des_objets_du_perimetre(source, export_a):
+    chemin, manifeste = export_a
+    objets = manifeste["objets"]
+    assert set(objets["liste"]) == set(source[A]["objets"])
+    assert (chemin.parent / objets["archive"]).is_file()
+    assert objets["base_publique"] == BASE_SOURCE
+
+
+def test_les_objets_du_perimetre_sont_dans_le_stockage_cible_et_eux_seuls(source, cible):
+    attendus = source[A]["objets"]
+    assert {c: v[0] for c, v in cible["seau"].objets.items()} == attendus
+    assert not set(cible["seau"].objets) & set(source[B]["objets"])
+
+
+def test_aucune_url_de_notre_stockage_ne_subsiste_sur_la_cible(source, cible):
+    """Décision du 28/09/2026 : tout est réécrit, colonnes comme contenus."""
+    with psycopg.connect(cible["dsn"], row_factory=dict_row) as c:
+        for t in CLASSEMENT:
+            n = c.execute(f"SELECT count(*) AS n FROM {t} x WHERE row_to_json(x)::text "
+                          "LIKE %s", (f"%{BASE_SOURCE}%",)).fetchone()["n"]
+            assert n == 0, f"{t} porte encore une URL de notre stockage"
+        avatar = c.execute("SELECT avatar_url FROM users WHERE avatar_url IS NOT NULL"
+                           ).fetchone()["avatar_url"]
+        corps = c.execute("SELECT body_md FROM docs WHERE body_md LIKE '%%![%%'"
+                          ).fetchone()["body_md"]
+        ligne = c.execute("SELECT data FROM datastore_rows LIMIT 1").fetchone()["data"]
+    cles = list(source[A]["objets"])      # avatar, logo, fichier, image de page, de ligne
+    assert avatar == f"{BASE_CIBLE}/{cles[0]}"
+    assert f"{BASE_CIBLE}/{cles[3]}" in corps
+    assert ligne["image"] == f"{BASE_CIBLE}/{cles[4]}"
+
+
+def test_un_import_interrompu_reprend_ses_objets_sans_les_recopier(source, export_a, pg_dsn):
+    seau = FauxS3()
+    dsn = _naitre(pg_dsn, slug_de(A))
+    try:
+        from oto_mcp.export_perimetre import importation
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(importation, "_recaler_sequences",
+                       lambda conn, m: (_ for _ in ()).throw(RuntimeError("coupure")))
+            with pytest.raises(RuntimeError, match="coupure"):
+                _importer(dsn, export_a[0], seau=seau)
+        assert seau.objets == {}          # rien n'est versé avant la relecture
+        # Un objet déjà là (versé par un essai précédent) : il est sauté, pas recopié.
+        liste = export_a[1]["objets"]["liste"]
+        deja = sorted(liste)[0]
+        StockageS3(seau, "cible").ecrire(deja, source[A]["objets"][deja], liste[deja]["sha256"])
+        _importer(dsn, export_a[0], seau=seau)
+        assert seau.ecritures == len(liste)          # 1 (déjà là) + les autres, une fois
+        assert {c: v[0] for c, v in seau.objets.items()} == source[A]["objets"]
+    finally:
+        _detruire(pg_dsn, dsn)
+
+
+def test_une_archive_modifiee_ou_un_import_sans_stockage_refuse(export_a, tmp_path, pg_dsn):
+    chemin, manifeste = export_a
+    dsn = _naitre(pg_dsn, slug_de(A))
+    try:
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setenv("OTO_MCP_MASTER_KEY", CLE_CIBLE.hex())
+            with psycopg.connect(dsn, row_factory=dict_row) as c:
+                with pytest.raises(ImportRefuse, match="stockage objet"):
+                    importer(c, chemin)
+        archive = chemin.parent / manifeste["objets"]["archive"]
+        copie = tmp_path / chemin.name
+        copie.write_bytes(chemin.read_bytes())
+        brut = bytearray(archive.read_bytes())
+        brut[-600] ^= 1
+        (tmp_path / archive.name).write_bytes(bytes(brut))
+        with pytest.raises(ImportRefuse, match="tronquée ou modifiée"):
+            _importer(dsn, copie)
+    finally:
+        _detruire(pg_dsn, dsn)
 
 
 def test_rien_d_autrui_et_rien_d_oublie_sur_la_cible(source, cible):
@@ -297,8 +381,11 @@ def test_la_commande_exporte_puis_importe(source, pg_dsn, tmp_path, monkeypatch,
     """`oto-mcp perimetre export|import` : la clé cible par l'environnement, pour cette
     seule exécution ; un refus sort en code 2, nommé, sans rien écrire."""
     chemin = tmp_path / "cli.jsonl"
+    seau_cible = FauxS3()
     monkeypatch.setenv("DATABASE_URL", source["dsn"])
     monkeypatch.setenv("OTO_MCP_MASTER_KEY", CLE_SOURCE.hex())
+    monkeypatch.setenv("OTO_MCP_S3_PUBLIC_BASE_URL", BASE_SOURCE)
+    monkeypatch.setattr(commande, "_stockage", lambda: StockageS3(source["seau"], "source"))
     assert commande.main(["export", "--org", str(source[A]["org"]),
                           "--sortie", str(chemin)]) == 2
     assert "SecretsChiffres" in capsys.readouterr().err and not chemin.exists()
@@ -313,8 +400,13 @@ def test_la_commande_exporte_puis_importe(source, pg_dsn, tmp_path, monkeypatch,
         monkeypatch.delenv("OTO_EXPORT_CLE_CIBLE")
         monkeypatch.setenv("DATABASE_URL", dsn)
         monkeypatch.setenv("OTO_MCP_MASTER_KEY", CLE_CIBLE.hex())
+        monkeypatch.setenv("OTO_MCP_S3_PUBLIC_BASE_URL", BASE_CIBLE)
+        monkeypatch.setattr(commande, "_stockage", lambda: StockageS3(seau_cible, "cible"))
         assert commande.main(["import", str(chemin)]) == 0
         assert json.loads(capsys.readouterr().out) == resume["lignes"]
+        assert {c: v[0] for c, v in seau_cible.objets.items()} == \
+            {c: source["seau"].objets[c][0] for c in seau_cible.objets}
+        assert len(seau_cible.objets) == resume["objets"]["nombre"]
     finally:
         _detruire(pg_dsn, dsn)
 
@@ -327,9 +419,10 @@ def test_l_import_n_a_aucun_chemin_de_rechiffrement():
     gardé en variante : l'import ne prend aucune clé, n'en chiffre aucune, et l'export
     n'a plus de mode qui transporterait un secret sous notre clé."""
     from oto_mcp.export_perimetre import importation
-    assert list(inspect.signature(importer).parameters) == ["conn", "chemin"]
-    assert set(inspect.signature(exporter).parameters) == {"conn", "orgs", "sortie",
-                                                            "cle_cible", "classement"}
+    assert list(inspect.signature(importer).parameters) == ["conn", "chemin", "stockage",
+                                                            "base_publique"]
+    assert set(inspect.signature(exporter).parameters) == {
+        "conn", "orgs", "sortie", "base_publique", "cle_cible", "stockage", "classement"}
     source = inspect.getsource(importation)
     assert "encrypt_with_key" not in source and "rechiffrer" not in source
 
@@ -357,6 +450,8 @@ def test_un_secret_chiffre_sous_une_autre_cle_que_la_cible_refuse(export_a, tmp_
                                        aad(transformation.appliquer(x["t"], x["l"])))
     textes = [json.dumps(y, ensure_ascii=False) + "\n" for y in lignes]
     empreinte = hashlib.sha256("".join(textes).encode()).hexdigest()
+    archive = manifeste["objets"]["archive"]
+    (tmp_path / archive).write_bytes((chemin.parent / archive).read_bytes())
     forge = tmp_path / "forge.jsonl"
     forge.write_text("".join(textes) + json.dumps(
         {"manifeste": {**manifeste, "empreinte": empreinte}}, ensure_ascii=False) + "\n",

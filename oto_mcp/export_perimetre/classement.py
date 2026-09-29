@@ -45,16 +45,19 @@ class Table:
     raison: str = ""
     secrets: tuple[str, ...] = ()
     hors_base: tuple[str, ...] = ()
+    # Un PARTAGE : la ligne ne part que si son destinataire est aussi du périmètre ;
+    # sinon elle est omise, et comptée au manifeste (décision du 28/09/2026).
+    destinataire: Regle | None = None
 
 
 def possedee(regle: Regle, raison: str = "", *, secrets: tuple[str, ...] = (),
-             hors_base: tuple[str, ...] = ()) -> Table:
-    return Table(POSSEDEE, regle, raison, secrets, hors_base)
+             hors_base: tuple[str, ...] = (), destinataire: Regle | None = None) -> Table:
+    return Table(POSSEDEE, regle, raison, secrets, hors_base, destinataire)
 
 
 def indirecte(regle: Regle, raison: str = "", *, secrets: tuple[str, ...] = (),
-              hors_base: tuple[str, ...] = ()) -> Table:
-    return Table(INDIRECTE, regle, raison, secrets, hors_base)
+              hors_base: tuple[str, ...] = (), destinataire: Regle | None = None) -> Table:
+    return Table(INDIRECTE, regle, raison, secrets, hors_base, destinataire)
 
 
 def instance(raison: str) -> Table:
@@ -99,7 +102,7 @@ CLASSEMENT: dict[str, Table] = {
     "projects": possedee(ParEntite()),
     "project_activity": indirecte(_PROJETS),
     "project_links": indirecte(_PROJETS),
-    "project_files": indirecte(_PROJETS, hors_base=("s3_key",)),
+    "project_files": indirecte(_PROJETS, hors_base=("s3_key", "public_url")),
     "project_file_texts": indirecte(Via("project_files", ("file_id",))),
     "docs": indirecte(_PROJETS),
     "doc_revisions": indirecte(_DOCS),
@@ -138,7 +141,8 @@ CLASSEMENT: dict[str, Table] = {
                 quand=("resource_type", TYPE_RESSOURCE_PROCEDURE)),
             Via("docs", ("resource_id",), fk=False, texte=True,
                 quand=("resource_type", "doc")))),
-        "un partage part avec sa RESSOURCE — son principal peut être hors périmètre"),
+        "un partage part avec sa RESSOURCE, si son principal est du périmètre",
+        destinataire=ParEntite("principal_type", "principal_id")),
     # ── connecteurs et coffre ──────────────────────────────────────────────────
     "connector_credentials": possedee(ParEntite("entity_type", "entity_id"),
                                       secrets=("secret_enc",)),
@@ -154,8 +158,10 @@ CLASSEMENT: dict[str, Table] = {
     "connector_account_group_grants": possedee(ParSub("owner_sub")),
     "credential_disparitions": possedee(ParOrg()),
     "grants": possedee(ParEntite("grantor_kind", "grantor_id"),
-                       "une arête part avec qui l'accorde ; celles que la plateforme "
-                       "accorde sont notre offre (ADR 0070 §6)"),
+                       "une arête part avec qui l'accorde, si son bénéficiaire est du "
+                       "périmètre ; celles que la plateforme accorde sont notre offre "
+                       "(ADR 0070 §6)",
+                       destinataire=ParEntite("grantee_kind", "grantee_id")),
     "grant_counters": indirecte(Via("grants", ("grant_id",))),
     "connector_acl": exclue(ParEntite("scope_type", "scope_id"),
                             "plus lue depuis le 24/09/2026 (ADR 0053 D1)"),

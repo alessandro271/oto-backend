@@ -523,7 +523,7 @@ _REGLAGES: tuple[Variable, ...] = (
              "périmètre, pour cette seule exécution de `oto-mcp perimetre export` : les "
              "secrets y sont rechiffrés depuis `OTO_MCP_MASTER_KEY`. Absente, un périmètre "
              "qui porte des secrets refuse. Jamais dans l'environnement du serveur.",
-             ("oto_mcp/export_perimetre/commande.py:39",)),
+             ("oto_mcp/export_perimetre/commande.py:49",)),
     Variable("OTO_DEPLOY_REF", Classe.REGLAGE, None,
              "Réf. git du deploy en cours, affichée par `/api/version`.",
              ("oto_mcp/version.py:61", "oto_mcp/version.py:122")),
