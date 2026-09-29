@@ -47,6 +47,13 @@ def _from_drive(src: dict) -> ResolvedFile:
         raise FileSourceError("source drive : `file_id` requis.")
     from oto.tools.google.drive.lib.drive_client import DriveClient
     client = DriveClient(credentials=_google_creds(src.get("account"), "drive"))
+    if src.get("export_sheets"):
+        meta = client.get_file_metadata(str(file_id))
+        if meta.get("mimeType") == "application/vnd.google-apps.spreadsheet":
+            # A native Sheet has no bytes to download: export its first sheet as CSV.
+            att = client.export_file_bytes(str(file_id), "text/csv")
+            return ResolvedFile(att["data"], (att.get("filename") or str(file_id)) + ".csv",
+                                "text/csv")
     att = client.get_file_bytes(str(file_id))
     return ResolvedFile(att["data"], att.get("filename") or str(file_id),
                         att.get("mimeType") or "application/octet-stream")
@@ -84,41 +91,66 @@ def _assert_public_host(host: str) -> None:
         raise FileSourceError(str(e)) from None
 
 
-def _from_url(src: dict, max_bytes: int) -> ResolvedFile:
+#: Hops allowed when a caller opts into redirects (`oto_import`); each is re-checked.
+MAX_REDIRECTS = 5
+
+
+def _check_url(url: str) -> None:
+    """Perimeter, scheme and anti-SSRF — run on the first URL and on every hop."""
+    url_perimeter.refuse_if_excluded(url, url_perimeter.perimeter_of_call())
+    if not url or not str(url).lower().startswith(("http://", "https://")):
+        raise FileSourceError("source url : `url` http(s) requise.")
+    from urllib.parse import urlsplit
+    _assert_public_host(urlsplit(str(url)).hostname or "")
+
+
+def _from_url(src: dict, max_bytes: int, follow_redirects: bool = False) -> ResolvedFile:
     # Périmètre du projet (#605) : un fichier lu à une URL est une page lue. Et le
     # refus du périmètre parle en PREMIER (#632) — avant la forme http(s), avant
     # l'anti-SSRF (qui résout l'hôte : sans réseau, il parlait à sa place).
     url_perimeter.refuse_if_excluded(src.get("url"), url_perimeter.perimeter_of_call())
     url = src.get("url")
-    if not url or not str(url).lower().startswith(("http://", "https://")):
-        raise FileSourceError("source url : `url` http(s) requise.")
+    _check_url(url)
     import os
-    from urllib.parse import unquote, urlsplit
+    from urllib.parse import unquote, urljoin, urlsplit
 
     import httpx
-    host = urlsplit(str(url)).hostname
-    _assert_public_host(host or "")
-    # Redirections DÉSACTIVÉES : un 3xx pourrait pointer une IP interne (le garde-fou
-    # ci-dessus ne valide que l'hôte initial). Nos sources légitimes (URLs signées S3,
-    # gmail_message(op="attachment")) sont directes → pas de redirect attendu.
+    # Redirections DÉSACTIVÉES par défaut : un 3xx pourrait pointer une IP interne.
+    # Opt-in (`follow_redirects`) : suivies à la main, chaque saut re-vérifié, jamais
+    # de https vers http.
     with httpx.Client(follow_redirects=False, timeout=60.0) as c:
-        with c.stream("GET", url) as r:
-            if 300 <= r.status_code < 400:
-                raise FileSourceError(
-                    "source url : redirection non suivie (anti-SSRF) — fournir l'URL finale directe.")
-            r.raise_for_status()
-            declared = r.headers.get("content-length")
-            if declared and int(declared) > max_bytes:
-                raise FileSourceError(
-                    f"fichier distant trop volumineux ({declared} > {max_bytes} octets).")
-            chunks, total = [], 0
-            for chunk in r.iter_bytes():
-                total += len(chunk)
-                if total > max_bytes:
-                    raise FileSourceError(f"fichier distant > {max_bytes} octets.")
-                chunks.append(chunk)
-            data = b"".join(chunks)
-            mime = (r.headers.get("content-type") or "application/octet-stream").split(";")[0].strip()
+        for _ in range(MAX_REDIRECTS + 1):
+            with c.stream("GET", url) as r:
+                if 300 <= r.status_code < 400:
+                    if not follow_redirects:
+                        raise FileSourceError(
+                            "source url : redirection non suivie (anti-SSRF) — fournir "
+                            "l'URL finale directe.")
+                    nxt = urljoin(str(url), r.headers.get("location") or "")
+                    if (str(url).lower().startswith("https://")
+                            and not nxt.lower().startswith("https://")):
+                        raise FileSourceError(
+                            "source url: redirect from https to http refused.")
+                    _check_url(nxt)
+                    url = nxt
+                    continue
+                r.raise_for_status()
+                declared = r.headers.get("content-length")
+                if declared and int(declared) > max_bytes:
+                    raise FileSourceError(
+                        f"fichier distant trop volumineux ({declared} > {max_bytes} octets).")
+                chunks, total = [], 0
+                for chunk in r.iter_bytes():
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise FileSourceError(f"fichier distant > {max_bytes} octets.")
+                    chunks.append(chunk)
+                data = b"".join(chunks)
+                mime = (r.headers.get("content-type")
+                        or "application/octet-stream").split(";")[0].strip()
+                break
+        else:
+            raise FileSourceError(f"source url: more than {MAX_REDIRECTS} redirects.")
     name = os.path.basename(unquote(urlsplit(str(url)).path)) or "file"
     return ResolvedFile(data, name, mime)
 
@@ -162,7 +194,8 @@ _RESOLVERS = {"drive": _from_drive, "gmail": _from_gmail}
 _RESOLVERS_BORNES = {"url": _from_url, "project_file": _from_project_file}
 
 
-def resolve(source: Any, *, max_bytes: int = DEFAULT_MAX_BYTES) -> ResolvedFile:
+def resolve(source: Any, *, max_bytes: int = DEFAULT_MAX_BYTES,
+            follow_redirects: bool = False) -> ResolvedFile:
     """Résout une référence de fichier côté oto vers ses octets + métadonnées.
 
     `source` = dict `{"kind": "drive"|"gmail"|"url"|"project_file", …}` :
@@ -175,7 +208,9 @@ def resolve(source: Any, *, max_bytes: int = DEFAULT_MAX_BYTES) -> ResolvedFile:
     if not isinstance(source, dict):
         raise FileSourceError("source : objet attendu `{kind, …}`.")
     kind = source.get("kind")
-    if kind in _RESOLVERS_BORNES:
+    if kind == "url":
+        rf = _from_url(source, max_bytes, follow_redirects)
+    elif kind in _RESOLVERS_BORNES:
         rf = _RESOLVERS_BORNES[kind](source, max_bytes)
     else:
         fn = _RESOLVERS.get(kind)

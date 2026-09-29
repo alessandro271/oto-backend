@@ -16,11 +16,14 @@ cible vit dans le corps, et ce qu'un jeton porté atteint se lit dans le chemin.
 """
 from __future__ import annotations
 
+import hashlib
+import re
+import time
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from .. import config, upload_tokens
+from .. import config, file_source, upload_tokens
 from ..datastore import schema as dsv2
 from ._authz import SUB_ONLY
 from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
@@ -100,6 +103,36 @@ _REFUS_DU_MINT = (
 )
 
 
+def _project_file_target(inp, filename: str) -> dict:
+    if inp.project_id is None:
+        raise AuthzDenied(400, "missing_project", "`project_id` requis.")
+    return {"kind": "project_file", "project_id": int(inp.project_id),
+            "filename": filename.strip(),
+            "title": (inp.title.strip() if inp.title else None),
+            "description": (inp.description.strip() if inp.description else None),
+            "content_type": getattr(inp, "content_type", None)}
+
+
+def _datastore_target(sub: str, inp, fmt: str) -> dict:
+    if not (inp.datastore and inp.datastore.strip()):
+        raise AuthzDenied(400, "missing_datastore", "`datastore` requis.")
+    ns = inp.datastore.strip()
+    from ..datastore import core as ds  # lazy : évite tout cycle d'import au boot
+    store = ds.make_store(sub)
+    try:
+        ns_id = store.resolve_ns_id_for_write(ns)  # org active présente au mint
+    except ds.DatastoreNotFound:
+        raise AuthzDenied(404, "unknown_namespace", f"Tableau `{ns}` inconnu.")
+    except ds.DatastoreReadOnly:
+        raise AuthzDenied(403, "read_only", f"Tableau `{ns}` partagé en lecture seule.")
+    # Clé effective figée au mint (param explicite, sinon clé déclarée au schéma).
+    eff_key = inp.key or store.declared_key(ns)
+    return {"kind": "datastore", "ns_id": ns_id, "namespace": ns,
+            "format": fmt, "key": eff_key,
+            "origine_override": bool(inp.origine_override),
+            "donnees_d_origine": bool(inp.donnees_d_origine)}
+
+
 def _upload_url(ctx: ResolvedCtx, inp: UploadUrlInput) -> dict:
     sub = ctx.sub
     # Descripteur de cible SCELLÉ dans le jeton — jamais accepté d'un param client à la
@@ -118,37 +151,17 @@ def _upload_url(ctx: ResolvedCtx, inp: UploadUrlInput) -> dict:
                       "parent_id": int(inp.parent_id) if inp.parent_id is not None else None,
                       "title": inp.title.strip(), "doc_kind": inp.kind or "source"}
     elif inp.target == "project_file":
-        if inp.project_id is None:
-            raise AuthzDenied(400, "missing_project", "`project_id` requis.")
         if not (inp.filename and inp.filename.strip()):
+            if inp.project_id is None:
+                raise AuthzDenied(400, "missing_project", "`project_id` requis.")
             raise AuthzDenied(400, "missing_filename", "`filename` requis.")
-        target = {"kind": "project_file", "project_id": int(inp.project_id),
-                  "filename": inp.filename.strip(),
-                  "title": (inp.title.strip() if inp.title else None),
-                  "description": (inp.description.strip() if inp.description else None),
-                  "content_type": inp.content_type}
+        target = _project_file_target(inp, inp.filename)
     elif inp.target == "image":
         # Aucun paramètre : ni projet ni nom — la clé dérive du contenu (hash), le type
         # des magic bytes. L'URL publique arrive dans l'accusé de réception.
         target = {"kind": "image"}
     else:  # datastore
-        if not (inp.datastore and inp.datastore.strip()):
-            raise AuthzDenied(400, "missing_datastore", "`datastore` requis.")
-        ns = inp.datastore.strip()
-        from ..datastore import core as ds  # lazy : évite tout cycle d'import au boot
-        store = ds.make_store(sub)
-        try:
-            ns_id = store.resolve_ns_id_for_write(ns)  # org active présente au mint
-        except ds.DatastoreNotFound:
-            raise AuthzDenied(404, "unknown_namespace", f"Tableau `{ns}` inconnu.")
-        except ds.DatastoreReadOnly:
-            raise AuthzDenied(403, "read_only", f"Tableau `{ns}` partagé en lecture seule.")
-        # Clé effective figée au mint (param explicite, sinon clé déclarée au schéma).
-        eff_key = inp.key or store.declared_key(ns)
-        target = {"kind": "datastore", "ns_id": ns_id, "namespace": ns,
-                  "format": inp.format or "ndjson", "key": eff_key,
-                  "origine_override": bool(inp.origine_override),
-                  "donnees_d_origine": bool(inp.donnees_d_origine)}
+        target = _datastore_target(sub, inp, inp.format or "ndjson")
 
     # Fail-fast : refuse tout de suite sans l'écriture sur la cible (l'autz est
     # RÉAPPLIQUÉE à la réception — le jeton ne fait pas foi seul). Pour datastore
@@ -195,38 +208,249 @@ CAPABILITIES += [
         key="me.upload_url", handler=_upload_url, Input=UploadUrlInput, authz=SUB_ONLY,
         Output=UploadUrlOutput, errors=_REFUS_DU_MINT,
         description=(
-            "Get a SIGNED, single-use, short-TTL URL to PUSH large content OUT-OF-BAND "
-            "into oto, instead of passing the body INLINE through your context. Use this "
-            "whenever the content is big (meeting transcript, dataset, long doc, PDF/CSV) "
-            "so it never round-trips through you (token cost + verbatim truncation). "
-            "Returns {url, method:PUT, expires_at, max_bytes, headers}. TWO ways to use the "
-            "SAME url: if you have a shell, `curl -X PUT --data-binary @FILE '<url>'`; if you "
-            "don't (e.g. claude.ai), HAND THE URL to the user — opening it shows an upload "
-            "form. With neither (unattended scheduled run, or the PUT blocked by your "
-            "sandbox's egress policy), send it INLINE: `data_write(rows=[…], key=…)` in "
-            "slices, `oto_doc op=create|update|patch`. "
-            "The backend materializes it and returns a light receipt (id + length), "
-            "never the body. target='doc' writes a Documents page (op=create: project_id + "
-            "title [+ parent_id, kind]; op=update: doc_id) ; target='project_file' attaches a "
-            "raw file (project_id + filename [+ title, description, content_type]) — fills the "
-            "agent gap of depositing a PDF/CSV ; target='datastore' bulk-loads rows into a "
-            "table (namespace + format ndjson|csv [+ key]) — NDJSON/CSV body is batch-upserted "
-            "(dedup on `key`, else the namespace's schema.key ; pass "
-            "`origine_override=true` HERE, at mint time, if the rows carry an `origine` "
-            "layer — from 2026-10-01 on, setting it without saying so is refused, and "
-            "the signed PUT itself carries no parameter ; pass `donnees_d_origine=true` "
-            "HERE too when the file IS the client's own data, so each cell freezes its "
-            "`origine` version as it lands) ; target='image' publishes ONE "
-            "image (png/jpeg/gif/webp by magic bytes, 2 MB max) at a PUBLIC, permanent, "
-            "content-addressed URL — the receipt carries `url`; upload once, reuse it in "
-            "every `email_send(image_url=…)`. Requires write access to the target. "
-            "For 'project_file', `content_type` is only a hint: the file is served under "
-            "the type its bytes prove, and active or unrecognized content (HTML, SVG, "
-            "script…) is stored as a download, never refused. The URL is readable by "
-            "whoever holds it (signed, NOT encrypted: your account id, the org, the "
-            "target) — don't put a confidential title or filename in it."
+            "Get a signed, single-use URL to push a big file into oto without passing it "
+            "through the conversation. With a shell: `curl -X PUT --data-binary @FILE "
+            "'<url>'`. Without one, give the URL to the user: it opens an upload form. If "
+            "the file is already reachable (a link, a Drive file, a project file, a Gmail "
+            "attachment), use `oto_import` instead: the server fetches it. Targets: "
+            "`datastore` (CSV or NDJSON rows, upsert on `key`), `doc`, `project_file`, "
+            "`image` (public permanent URL, 2 MB). With neither a shell nor a user, send "
+            "rows inline with `data_write`. The URL is signed, not encrypted: keep "
+            "confidential names out of it."
         ),
         mcp="oto_upload_url",
         rest=RestBinding("POST", "/api/me/upload-url"),
+    ),
+]
+
+
+# ── oto_import: the server fetches the file (no content through the conversation) ──
+
+#: Whole-call budget, fetch included; the write stops between 500-row slices.
+IMPORT_BUDGET_S = 40.0
+
+_GSHEET = re.compile(r"^https://docs\.google\.com/spreadsheets/d/([A-Za-z0-9_-]+)")
+_GID = re.compile(r"[#&?]gid=(\d+)")
+_EXT_FORMAT = {".csv": "csv", ".tsv": "csv", ".txt": "csv",
+               ".ndjson": "ndjson", ".jsonl": "ndjson"}
+_MIME_FORMAT = {"text/csv": "csv", "text/tab-separated-values": "csv",
+                "application/vnd.ms-excel": "csv", "text/plain": "csv",
+                "application/x-ndjson": "ndjson", "application/jsonl": "ndjson",
+                "application/x-jsonlines": "ndjson"}
+_SEPARATOR = {",": ",", ";": ";", "tab": "\t", "|": "|"}
+
+
+class ImportInput(BaseModel):
+    source: dict = Field(description=(
+        "Where the file is: `{kind:\"url\", url}` (public link; a Google Sheets share "
+        "link works if the sheet is public, `gid` picks the tab), `{kind:\"drive\", "
+        "file_id}` (your Google account; a native Sheet exports its first tab as CSV), "
+        "`{kind:\"project_file\", project_id, file_id}`, or `{kind:\"gmail\", "
+        "message_id, filename}`."))
+    target: Literal["datastore", "project_file"] = "datastore"
+    datastore: Optional[str] = None
+    format: Optional[Literal["csv", "ndjson"]] = Field(
+        default=None, description="Default: from the file name or type.")
+    separator: Optional[Literal[",", ";", "tab", "|"]] = Field(
+        default=None, description="CSV only. Default: detected.")
+    key: Optional[str] = Field(default=None, description=(
+        "Column that identifies a row: a re-run then updates instead of appending. "
+        "Default: the table's declared key."))
+    declare_columns: bool = Field(default=True, description=(
+        "Declare headers that match no column as text columns (label = header). "
+        "Existing columns are never changed."))
+    resume_from: Optional[int] = Field(default=None, description=(
+        "From a previous receipt, when the file did not fit one call. Needs "
+        "`source_sha256`."))
+    source_sha256: Optional[str] = Field(default=None, description=(
+        "From the previous receipt: the resume is refused if the file changed."))
+    project_id: Optional[int] = None
+    filename: Optional[str] = Field(default=None, description=(
+        "project_file only. Default: the source's file name."))
+    title: Optional[str] = None
+    description: Optional[str] = None
+    origine_override: bool = Field(
+        default=False, description=dsv2.description_parametre_origine(en=True))
+    donnees_d_origine: bool = Field(
+        default=False, description=dsv2.description_donnees_d_origine(en=True))
+
+
+class ImportOutput(BaseModel):
+    """The receipt — never the content."""
+    model_config = ConfigDict(extra="allow")
+    ok: bool
+    kind: Literal["datastore", "project_file"]
+    source: dict = Field(description=(
+        "`{kind, name, mime, bytes, sha256, url?}` — `url` without its query string"))
+    datastore: Optional[str] = None
+    inserted: Optional[int] = None
+    updated: Optional[int] = None
+    count: Optional[int] = Field(default=None, description="rows written by this call")
+    total_rows: Optional[int] = None
+    done: Optional[bool] = None
+    resume_from: Optional[int] = Field(default=None, description=(
+        "set when the file did not fit the call: call again with it and "
+        "`source.sha256` as `source_sha256`"))
+    format: Optional[str] = None
+    encoding: Optional[str] = None
+    separator: Optional[str] = None
+    matched_by_label: Optional[dict] = Field(default=None, description="header → column")
+    unmatched_headers: Optional[list] = None
+    created_columns: Optional[list] = None
+    hint: Optional[str] = None
+
+
+def _source_for_fetch(source: dict) -> dict:
+    """A public Google Sheets link becomes its CSV export; a Drive Sheet exports."""
+    src = dict(source or {})
+    if src.get("kind") == "drive":
+        src["export_sheets"] = True
+    url = str(src.get("url") or "")
+    m = _GSHEET.match(url)
+    if src.get("kind") == "url" and m and "/export" not in url:
+        gid = _GID.search(url)
+        src["url"] = (f"https://docs.google.com/spreadsheets/d/{m.group(1)}/export"
+                      f"?format=csv" + (f"&gid={gid.group(1)}" if gid else ""))
+    return src
+
+
+def _public_url(url: str) -> str:
+    """Scheme, host and path only: a signed link's query string is a credential."""
+    from urllib.parse import urlsplit
+    p = urlsplit(url)
+    return f"{p.scheme}://{p.hostname or ''}{p.path}"
+
+
+def _format_of(rf, explicit: Optional[str]) -> str:
+    if explicit:
+        return explicit
+    import os
+    ext = os.path.splitext(rf.filename or "")[1].lower()
+    fmt = _EXT_FORMAT.get(ext) or _MIME_FORMAT.get((rf.mime or "").lower())
+    if fmt is None:
+        raise AuthzDenied(400, "unknown_format",
+                          f"Can't tell the format of `{rf.filename}` ({rf.mime}): pass "
+                          f"`format` (csv or ndjson).")
+    return fmt
+
+
+def _refuse_html(rf, source: dict) -> None:
+    head = rf.data[:512].lstrip().lower()
+    if rf.mime == "text/html" or head.startswith((b"<!doctype html", b"<html")):
+        hint = ("The Google Sheet is not public: share it with \"anyone with the link\", "
+                "or use `{kind: \"drive\", file_id}`." if _GSHEET.match(
+                    str((source or {}).get("url") or "")) else
+                "The link returned a web page, not a file: use a direct download link.")
+        raise AuthzDenied(400, "not_a_data_file", hint)
+
+
+def _import(ctx: ResolvedCtx, inp: ImportInput) -> dict:
+    sub = ctx.sub
+    deadline = time.monotonic() + IMPORT_BUDGET_S
+    if inp.resume_from and not inp.source_sha256:
+        raise AuthzDenied(400, "missing_source_sha256",
+                          "`resume_from` needs the `source_sha256` of the first receipt.")
+    # Authz before the fetch: nothing is downloaded for a target the caller can't write.
+    if inp.target == "project_file":
+        target = _project_file_target(inp, inp.filename or "file")
+    else:
+        target = _datastore_target(sub, inp, inp.format or "csv")
+    try:
+        upload_tokens.check_target_access(sub, target)
+    except upload_tokens.UploadError as e:
+        raise AuthzDenied(e.status, e.code, e.message)
+
+    source = _source_for_fetch(inp.source)
+    try:
+        rf = file_source.resolve(source, max_bytes=upload_tokens.max_bytes(),
+                                 follow_redirects=True)
+    except file_source.FileSourceError as e:
+        raise AuthzDenied(400, "source_unreadable", str(e))
+    sha = hashlib.sha256(rf.data).hexdigest()
+    if inp.source_sha256 and inp.source_sha256 != sha:
+        raise AuthzDenied(409, "source_changed",
+                          "The file changed since the first call: start again without "
+                          "`resume_from`.")
+    src_info = {"kind": source.get("kind"), "name": rf.filename, "mime": rf.mime,
+                "bytes": len(rf.data), "sha256": sha}
+    if source.get("kind") == "url":
+        src_info["url"] = _public_url(str(source.get("url")))
+
+    try:
+        if inp.target == "project_file":
+            if not inp.filename:
+                target["filename"] = rf.filename
+            return {**upload_tokens.materialize(sub, target, rf.data, rf.mime),
+                    "source": src_info}
+        fmt = _format_of(rf, inp.format)
+        _refuse_html(rf, inp.source)
+        sep = _SEPARATOR.get(inp.separator or "") or (
+            "\t" if (rf.filename or "").lower().endswith(".tsv")
+            or rf.mime == "text/tab-separated-values" else None)
+        from ..datastore import core as ds  # lazy : évite tout cycle d'import au boot
+        store = ds.make_store(sub)
+        ns_id = int(target["ns_id"])
+        parsed = upload_tokens.parse_import(
+            rf.data, fmt, store._schema_of(ns_id) if fmt == "csv" else None,
+            separator=sep, declare_columns=inp.declare_columns and fmt == "csv")
+        created = parsed["new_columns"]
+        if created:
+            store.patch_schema(target["namespace"], fields=created)
+        if target.get("key"):
+            target["key"] = parsed["header_map"].get(target["key"], target["key"])
+        out = upload_tokens.import_rows(sub, target, parsed["rows"], deadline=deadline,
+                                        resume_from=inp.resume_from or 0)
+    except upload_tokens.UploadError as e:
+        raise AuthzDenied(e.status, e.code, e.message, details=e.details)
+    receipt = {"ok": True, "kind": "datastore", "datastore": target["namespace"], **out,
+               **parsed["info"], "source": src_info}
+    if created:
+        receipt["created_columns"] = [c["key"] for c in created]
+    if parsed["traduits"]:
+        receipt["entetes_traduits"] = parsed["traduits"]
+    if not out["done"]:
+        receipt["hint"] = (f"Not finished: call again with resume_from={out['resume_from']} "
+                           f"and source_sha256 (same source).")
+    if not target.get("key"):
+        receipt["no_key"] = "Rows were appended: pass `key` so a re-run updates instead."
+    return receipt
+
+
+CAPABILITIES += [
+    Capability(
+        key="me.import", handler=_import, Input=ImportInput, Output=ImportOutput,
+        authz=SUB_ONLY,
+        errors=(
+            DeclaredError(400, "missing_datastore", "`target=datastore` without `datastore`"),
+            DeclaredError(400, "missing_project", "`target=project_file` without `project_id`"),
+            DeclaredError(404, "unknown_namespace", "the table is not visible from this org"),
+            DeclaredError(403, "read_only", "the table is shared read-only"),
+            DeclaredError(404, "unknown_project", "the project does not exist"),
+            DeclaredError(403, "forbidden", "no write access on the target"),
+            DeclaredError(400, "missing_source_sha256", "`resume_from` without `source_sha256`"),
+            DeclaredError(400, "source_unreadable",
+                          "the source can't be read (link, redirect, size, private host)"),
+            DeclaredError(409, "source_changed", "the file changed between two calls"),
+            DeclaredError(400, "unknown_format", "the format can't be told: pass `format`"),
+            DeclaredError(400, "not_a_data_file",
+                          "the link returned a web page (a private Google Sheet, a login)"),
+            DeclaredError(400, "not_utf8", "not UTF-8, UTF-16 or cp1252"),
+            DeclaredError(400, "binary_content", "binary file (an .xlsx?)"),
+            DeclaredError(400, "entete_en_collision", "two headers map to one column"),
+            DeclaredError(400, "empty_dataset", "no rows"),
+            DeclaredError(400, "bad_ndjson", "an NDJSON line is not an object"),
+            DeclaredError(400, "bad_row",
+                          "a row was refused: `details` gives the row and `resume_from`"),
+        ),
+        description=(
+            "Load a file the server can reach into a table or a project — the content "
+            "never goes through the conversation. Use it instead of `data_write` rows for "
+            "any file (CSV export, Google Sheet, Clay export, attachment). CSV: `,` `;` or "
+            "tab, UTF-8 / UTF-16 / cp1252, headers matched to column keys or labels; new "
+            "headers become text columns. Pass `key` so a re-run updates instead of "
+            "appending. A big file stops after ~40 s with `resume_from`: call again with "
+            "it and `source_sha256`."),
+        mcp="oto_import",
+        rest=RestBinding("POST", "/api/me/import"),
     ),
 ]

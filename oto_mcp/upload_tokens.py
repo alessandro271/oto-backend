@@ -65,11 +65,13 @@ _CURL_DEFAULT_CT = "application/x-www-form-urlencoded"
 class UploadError(Exception):
     """Échec de validation/autz/matérialisation, traduit en réponse par l'appelant."""
 
-    def __init__(self, status: int, code: str, message: str = ""):
+    def __init__(self, status: int, code: str, message: str = "",
+                 details: Optional[dict] = None):
         super().__init__(message or code)
         self.status = status
         self.code = code
         self.message = message
+        self.details = details
 
 
 def max_bytes() -> int:
@@ -168,27 +170,74 @@ def _parse_rows(data: bytes, fmt: str,
     c'est un choix : le NDJSON porte des CLÉS, pas des étiquettes. Une clé pointée y
     est une adresse — le store la range si elle en désigne une, la refuse sinon.
     Traduire ici masquerait un bug d'appelant au lieu de le lui dire."""
-    try:
-        text = data.decode("utf-8")
-    except UnicodeDecodeError:
-        raise UploadError(400, "not_utf8", "Le contenu doit être de l'UTF-8.")
-    if fmt == "csv":
-        import csv
-        import io
+    parsed = parse_import(data, fmt, schema)
+    return parsed["rows"], parsed["traduits"]
 
-        from .datastore.errors import RowValidationError
-        from .datastore.points import traduire_les_entetes
-        lecteur = csv.DictReader(io.StringIO(text))
+
+def parse_import(data: bytes, fmt: str, schema: Optional[dict] = None, *,
+                 separator: Optional[str] = None,
+                 declare_columns: bool = False) -> dict:
+    """Rows of an import body, plus how the file was read.
+
+    CSV is read tolerantly (`csv_tolerant`): separator, encoding and headers matched to
+    column keys or labels. With `declare_columns`, headers matching no column get a slug
+    key and are listed in `new_columns` for the caller to declare."""
+    from . import csv_tolerant as ct
+    if fmt != "csv":
         try:
-            traduits = traduire_les_entetes(schema, list(lecteur.fieldnames or []))
-        except RowValidationError as e:
-            # Une collision d'en-têtes est un refus d'INGESTION, pas de schéma : elle
-            # sort en 400 nommé, au même titre que « pas de l'UTF-8 ».
-            raise UploadError(400, "entete_en_collision", str(e))
-        rows = [{traduits.get(k, k): v for k, v in r.items()} for r in lecteur]
-        if not rows:
-            raise UploadError(400, "empty_dataset", "Aucune ligne CSV (en-tête requis).")
-        return rows, traduits
+            text = data.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            raise UploadError(400, "not_utf8", "Le contenu doit être de l'UTF-8.")
+        return {"rows": _ndjson_rows(text), "traduits": {}, "info": {}, "new_columns": [],
+                "header_map": {}}
+    try:
+        decoded = ct.decode(data)
+    except ct.CsvError as e:
+        if e.code == "binary_content":
+            raise UploadError(400, "binary_content", str(e))
+        raise UploadError(400, "not_utf8", str(e))
+    sep = separator or ct.detect_separator(decoded.text)
+    headers, raw = ct.read_rows(decoded.text, sep)
+
+    from .datastore.errors import RowValidationError
+    from .datastore.points import traduire_les_entetes
+    try:
+        mapped = ct.map_headers(schema, headers)
+        traduits = traduire_les_entetes(schema, headers)
+    except ct.CsvError as e:
+        raise UploadError(400, "entete_en_collision", str(e))
+    except RowValidationError as e:
+        # Une collision d'en-têtes est un refus d'INGESTION, pas de schéma : elle
+        # sort en 400 nommé, au même titre que « pas de l'UTF-8 ».
+        raise UploadError(400, "entete_en_collision", str(e))
+    target = {h: traduits.get(h, mapped.target.get(h, h)) for h in headers if h}
+    new_columns = []
+    unmatched = [h for h in mapped.unmatched if h not in traduits]
+    if declare_columns:
+        used = set(target.values()) - set(unmatched)
+        for i, h in enumerate(unmatched, 1):
+            k = ct.key_for(h) or f"column_{i}"
+            if k in used:
+                raise UploadError(400, "entete_en_collision",
+                                  f"Header `{h}` would become column `{k}`, already taken "
+                                  f"by another header. Nothing was imported: rename one.")
+            used.add(k)
+            target[h] = k
+            new_columns.append({"key": k, "label": h, "type": "text"})
+    rows = [{target.get(k, k): v for k, v in r.items() if k} for r in raw]
+    if not rows:
+        raise UploadError(400, "empty_dataset", "Aucune ligne CSV (en-tête requis).")
+    info = {"format": "csv", "encoding": decoded.encoding,
+            "separator": {"\t": "tab"}.get(sep, sep)}
+    if mapped.by_label:
+        info["matched_by_label"] = mapped.by_label
+    if unmatched and not declare_columns:
+        info["unmatched_headers"] = unmatched
+    return {"rows": rows, "traduits": traduits, "info": info, "new_columns": new_columns,
+            "header_map": target}
+
+
+def _ndjson_rows(text: str) -> list:
     rows = []
     for i, line in enumerate(text.splitlines(), 1):
         line = line.strip()
@@ -203,7 +252,50 @@ def _parse_rows(data: bytes, fmt: str,
         rows.append(obj)
     if not rows:
         raise UploadError(400, "empty_dataset", "Aucune ligne NDJSON.")
-    return rows, {}
+    return rows
+
+
+#: One `_write_rows_to_ns` call per slice: a budget stops between slices, never inside.
+IMPORT_SLICE = 500
+
+
+def import_rows(sub: str, target: dict, rows: list, *, deadline: float,
+                resume_from: int = 0) -> dict:
+    """Write `rows[resume_from:]` into a table in slices, until done or `deadline`
+    (`time.monotonic()`). A refusal names the absolute row and what is already written.
+    Assumes authz checked (`check_target_access`) and columns already declared."""
+    from .datastore import core as ds  # lazy : évite tout cycle d'import au boot
+    from .datastore import mots_deprecies as mdp
+    store = ds.make_store(sub)
+    ns_id = int(target["ns_id"])
+    # Deprecated-word refusals are judged on the whole file before the first slice.
+    mdp.controler(set(), *(r for r in rows[resume_from:] if isinstance(r, dict)))
+    inserted = updated = 0
+    i, last = resume_from, 0.0
+    while i < len(rows):
+        if i > resume_from and time.monotonic() + last > deadline:
+            break
+        start = time.monotonic()
+        store._lot_rang = 0
+        try:
+            out = store._write_rows_to_ns(
+                ns_id, rows[i:i + IMPORT_SLICE], key=target.get("key"),
+                origine_override=bool(target.get("origine_override")),
+                donnees_d_origine=bool(target.get("donnees_d_origine")))
+        except ValueError as e:
+            rang = getattr(store, "_lot_rang", 0) or 1
+            done = i + rang - 1
+            raise UploadError(400, "bad_row", str(e), details={
+                "row": done + 1, "written": inserted + updated + rang - 1,
+                "resume_from": done + 1})
+        inserted, updated = inserted + out["inserted"], updated + out["updated"]
+        i += IMPORT_SLICE
+        last = time.monotonic() - start
+    done = min(i, len(rows))
+    return {"inserted": inserted, "updated": updated, "count": inserted + updated,
+            "total_rows": len(rows), "done": done >= len(rows),
+            **({} if done >= len(rows) else {"resume_from": done}),
+            **store.off_schema_report()}
 
 
 def check_target_access(sub: str, target: dict) -> None:
@@ -310,9 +402,10 @@ def materialize(sub: str, target: dict, data: bytes, request_ct: Optional[str]) 
         # annotation (le store la rangera), et une cible de traduction déjà déclarée
         # est une collision. Le NDJSON porte des clés — il n'a rien à traduire.
         fmt = target.get("format") or "ndjson"
-        rows, entetes_traduits = _parse_rows(
+        parsed = parse_import(
             data, fmt,
             store._schema_of(int(target["ns_id"])) if fmt == "csv" else None)
+        rows, entetes_traduits = parsed["rows"], parsed["traduits"]
         try:
             out = store._write_rows_to_ns(
                 int(target["ns_id"]), rows, key=target.get("key"),
@@ -339,7 +432,7 @@ def materialize(sub: str, target: dict, data: bytes, request_ct: Optional[str]) 
         rendu = {"ok": True, "kind": "datastore", "datastore": target.get("namespace"),
                  "inserted": out["inserted"], "updated": out["updated"],
                  "count": out["count"], "bytes": len(data),
-                 **store.off_schema_report()}
+                 **parsed["info"], **store.off_schema_report()}
         if entetes_traduits:
             # DITE, jamais silencieuse : sans cette ligne, le client reçoit une colonne
             # qu'il ne peut plus retrouver par le nom qu'il lui a donné — exactement le

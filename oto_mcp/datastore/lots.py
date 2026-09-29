@@ -87,6 +87,7 @@ class LotsMixin:
         inserted, updated, ids = 0, 0, []
         total = len(rows)
         for rang, data in enumerate(rows, 1):
+            self._lot_rang = rang  # read by a sliced import to name the absolute row
             try:
                 if not isinstance(data, dict):
                     raise ValueError("chaque row doit être un objet")

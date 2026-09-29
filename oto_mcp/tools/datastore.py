@@ -916,8 +916,9 @@ def register(mcp: FastMCP) -> None:
         every row carrying that key value UPSERTS (merges) onto the existing row of
         the same key instead of duplicating; rows without a key are appended. Returns
         a summary {inserted, updated, count, key, ids}. Use `data_set_schema` to
-        declare a persistent `key`. For LARGE batches, prefer `oto_upload_url` to push
-        the data out-of-band (never through your context).
+        declare a persistent `key`. For a FILE, never retype its rows here: `oto_import`
+        loads it from where it is (link, Drive, project file), `oto_upload_url` takes
+        it from your disk.
 
         ⚠️ A table can be CLOSED by its schema (`key_required: true`, next to its
         business `key`) — `data_get_schema` says whether it is. On such a table there
