@@ -150,3 +150,67 @@ def test_main_rend_1_et_nomme_le_refus(tmp_path, monkeypatch, capsys):
     monkeypatch.delenv("OTO_SECRETS_OPTIONNELS", raising=False)
     assert lanceur.main(["lanceur_secrets.py"]) == 1
     assert "lanceur : REFUS" in capsys.readouterr().err
+
+
+# --- ce que le lanceur démarre : le serveur, un script de l'arbre, ou rien (--noms) ---
+ARBRE = _CHEMIN.parents[1]
+
+
+def _script_de_l_arbre(nom="deploy/archive_tool_calls.py"):
+    return [str(ARBRE / ".venv" / "bin" / "python"), str(ARBRE / nom)]
+
+
+def test_script_execute_un_script_de_l_arbre_sous_son_python_avec_les_secrets(
+        tmp_path, monkeypatch, capsys):
+    for n, v in _env(tmp_path).items():
+        monkeypatch.setenv(n, v)
+    monkeypatch.setattr(lanceur, "preparer",
+                        lambda env: ({**env, "DATABASE_URL": "postgres://secret"}, ["DATABASE_URL"]))
+    execute = {}
+    monkeypatch.setattr(lanceur.os, "execve",
+                        lambda chemin, args, env: execute.update(chemin=chemin, args=args, env=env))
+    lanceur.main(["lanceur_secrets.py", "--script", "deploy/archive_tool_calls.py",
+                  "--dry-run", "--retention-days", "30"])
+    python, script = _script_de_l_arbre()
+    assert execute["chemin"] == python
+    assert execute["args"] == [python, script, "--dry-run", "--retention-days", "30"]
+    assert execute["env"]["DATABASE_URL"] == "postgres://secret"
+    assert "postgres://secret" not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("arguments, motif", [
+    (["--script"], "attend le chemin"),
+    (["--script", "/etc/passwd"], "n'est pas un fichier .py de l'arbre"),
+    (["--script", "../hors_arbre.py"], "n'est pas un fichier .py de l'arbre"),
+    (["--script", "deploy/oto-mcp.service"], "n'est pas un fichier .py de l'arbre"),
+    (["--script", "deploy/absent.py"], "n'existe pas dans l'arbre"),
+    (["--noms", "maintenance"], "ne prend aucun autre argument"),
+])
+def test_une_forme_invalide_refuse_avant_de_tirer_un_secret(arguments, motif, monkeypatch, capsys):
+    monkeypatch.setattr(lanceur, "preparer", lambda env: pytest.fail("aucun secret ne se tire"))
+    assert lanceur.main(["lanceur_secrets.py", *arguments]) == 1
+    assert motif in capsys.readouterr().err
+
+
+def test_noms_imprime_les_noms_de_l_environnement_final_sans_une_valeur(
+        tmp_path, monkeypatch, capsys):
+    for n, v in _env(tmp_path).items():
+        monkeypatch.setenv(n, v)
+    monkeypatch.setattr(lanceur, "preparer",
+                        lambda env: ({**env, "DATABASE_URL": "postgres://secret"}, ["DATABASE_URL"]))
+    monkeypatch.setattr(lanceur.os, "execve", lambda *a: pytest.fail("--noms ne démarre rien"))
+    assert lanceur.main(["lanceur_secrets.py", "--noms"]) == 0
+    sortie = capsys.readouterr()
+    noms = sortie.out.splitlines()
+    assert noms == sorted(noms) and "DATABASE_URL" in noms and "CREDENTIALS_DIRECTORY" in noms
+    assert "postgres://secret" not in sortie.out + sortie.err
+    assert str(tmp_path) not in sortie.out and "cle-api" not in sortie.out + sortie.err
+
+
+def test_noms_refuse_comme_un_demarrage_quand_un_secret_manque(tmp_path, monkeypatch, capsys):
+    for n, v in _env(tmp_path).items():
+        monkeypatch.setenv(n, v)
+    monkeypatch.setattr(lanceur, "preparer",
+                        lambda env: (_ for _ in ()).throw(lanceur.Refus("X introuvable")))
+    assert lanceur.main(["lanceur_secrets.py", "--noms"]) == 1
+    assert capsys.readouterr().out == ""

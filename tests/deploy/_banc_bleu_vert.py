@@ -60,6 +60,11 @@ SCENARIOS: dict[str, tuple[str, list[str], str, str, dict[str, str]]] = {
                           {"BANC_LANCEUR_FIGE": "1"}),
     "prod-tag-sans-maintenance": ("oto-backend.sh", [TAG], "prod", "blue",
                                   {"BANC_SANS_MAINTENANCE": "1"}),
+    # Notre box en `BG_LANCEUR=versionne` (lot 5, #967) : rien n'est propagé d'une couleur
+    # à l'autre, le lanceur est celui de l'arbre du tag. Pas de référence « d'avant » —
+    # celle-ci prouve ce que fera la bascule, elle se relit dans son fichier.
+    "prod-lanceur-versionne": ("oto-backend.sh", [TAG], "prod", "blue",
+                               {"BANC_LANCEUR_VERSIONNE": "1"}),
     "canari-bleu-vers-vert": ("oto-backend-canari.sh", [SHA], "canari", "blue", {}),
     "canari-vert-vers-bleu": ("oto-backend-canari.sh", [SHA], "canari", "green", {}),
     "canari-retour-arriere": ("oto-backend-canari.sh", ["--rollback"], "canari", "blue", {}),
@@ -126,9 +131,11 @@ PYPROJECT = ('dependencies = [\n'
              ']\n')
 
 
-def _reecrire(texte: str, racine: str) -> str:
+def _reecrire(texte: str, racine: str, variantes: dict[str, str] | None = None) -> str:
     for prefixe in ("/opt/", "/etc/", "/var/lock/"):
         texte = texte.replace(prefixe, racine + prefixe)
+    if (variantes or {}).get("BANC_LANCEUR_VERSIONNE"):
+        texte = texte.replace("BG_LANCEUR=propage", "BG_LANCEUR=versionne")
     return texte
 
 
@@ -138,7 +145,7 @@ def _preparer(racine: pathlib.Path, deploy: pathlib.Path, env: str, active: str,
     (racine / "opt/deploy").mkdir(parents=True)
     for nom in SCRIPTS:
         cible = racine / "opt/deploy" / nom
-        cible.write_text(_reecrire((deploy / nom).read_text(encoding="utf-8"), r),
+        cible.write_text(_reecrire((deploy / nom).read_text(encoding="utf-8"), r, variantes),
                          encoding="utf-8")
         cible.chmod(0o755)
     for d in ("etc/oto-mcp", "etc/caddy", "etc/systemd/system", "var/lock"):
@@ -154,11 +161,15 @@ def _preparer(racine: pathlib.Path, deploy: pathlib.Path, env: str, active: str,
         pip.write_text(PIP)
         pip.chmod(0o755)
         (arbre / "pyproject.toml").write_text(PYPROJECT)
-        lanceur = arbre / "start-encrypted.sh"
-        lanceur.write_text(LANCEUR_FIGE if variantes.get("BANC_LANCEUR_FIGE") else LANCEUR)
-        lanceur.chmod(0o755)
+        (arbre / "deploy").mkdir()
+        if variantes.get("BANC_LANCEUR_VERSIONNE"):
+            # Le lanceur est DANS le tag ; aucun start-encrypted.sh n'existe plus.
+            (arbre / "deploy" / "lanceur_secrets.py").write_text("# lanceur du tag\n")
+        else:
+            lanceur = arbre / "start-encrypted.sh"
+            lanceur.write_text(LANCEUR_FIGE if variantes.get("BANC_LANCEUR_FIGE") else LANCEUR)
+            lanceur.chmod(0o755)
         if not variantes.get("BANC_SANS_MAINTENANCE"):
-            (arbre / "deploy").mkdir()
             for u in ("oto-mcp-maintenance.service", "oto-mcp-maintenance.timer"):
                 (arbre / "deploy" / u).write_text(f"# {u} de la couleur {couleur}\n")
     doublures = racine / "banc-bin"

@@ -34,9 +34,23 @@ CE QU'IL REFUSE
 
 Il n'écrit jamais une valeur : le journal nomme les secrets tirés, pas leur contenu.
 
+CE QU'IL DÉMARRE — une seule chose par appel, choisie par son PREMIER argument :
+  (rien d'autre)       le serveur, `<arbre>/.venv/bin/oto-mcp [args…]` (`maintenance all`…) ;
+  --script CHEMIN [args…]  un script de l'arbre, sous son Python : `<arbre>/.venv/bin/python
+                       <arbre>/CHEMIN [args…]` (ex. `deploy/archive_tool_calls.py`, l'archive
+                       du journal). Il reçoit le MÊME environnement, secrets compris : une
+                       seule source de secrets, pas un `.env` de plus. Le chemin est relatif à
+                       l'arbre, un fichier .py qui s'y trouve — rien n'en sort ;
+  --noms               ne démarre rien : lit les secrets comme pour un démarrage puis
+                       imprime, un par ligne et triés, les NOMS de l'environnement final —
+                       jamais une valeur. C'est le contrôle d'un passage au lanceur : à
+                       comparer, par noms, aux `/proc/<pid>/environ` du service qu'il remplace.
+Ces trois formes ne se combinent pas : `--script` et `--noms` doivent venir en premier.
+
 Notre production n'utilise PAS encore ce lanceur : son `start-encrypted.sh` vit hors git
 et se propage d'une couleur à l'autre (`BG_LANCEUR=propage`, cf.
-`deploy/start-encrypted.sh`). La passer ici est un geste à part (docs/instance-cible.md).
+`deploy/start-encrypted.sh`). La passer ici est un geste à part, décrit pas à pas dans
+docs/instance-cible.md (§Passer notre box au lanceur).
 """
 from __future__ import annotations
 
@@ -147,16 +161,41 @@ def preparer(env: dict, ouvrir=urllib.request.urlopen) -> tuple[dict, list[str]]
     return complet, noms
 
 
+def cible(arguments: list[str]) -> list[str] | None:
+    """La commande que le lanceur exécute : le serveur, ou un script de l'arbre.
+
+    Rend None pour `--noms` (rien à exécuter). Lève `Refus` sur une forme invalide.
+    """
+    if arguments[:1] == ["--noms"]:
+        if arguments[1:]:
+            raise Refus("--noms ne prend aucun autre argument")
+        return None
+    if arguments[:1] == ["--script"]:
+        if len(arguments) < 2:
+            raise Refus("--script attend le chemin du script, relatif à l'arbre")
+        relatif = Path(arguments[1])
+        chemin = (ARBRE / relatif).resolve()
+        if relatif.is_absolute() or ARBRE not in chemin.parents or chemin.suffix != ".py":
+            raise Refus(f"--script : {arguments[1]!r} n'est pas un fichier .py de l'arbre")
+        if not chemin.is_file():
+            raise Refus(f"--script : {arguments[1]} n'existe pas dans l'arbre")
+        return [str(ARBRE / ".venv" / "bin" / "python"), str(chemin), *arguments[2:]]
+    return [str(ARBRE / ".venv" / "bin" / "oto-mcp"), *arguments]
+
+
 def main(argv: list[str]) -> int:
     try:
+        commande = cible(argv[1:])
         env, noms = preparer(dict(os.environ))
     except Refus as refus:
         print(f"lanceur : REFUS — {refus}", file=sys.stderr)
         return 1
+    if commande is None:
+        print("\n".join(sorted(env)))
+        return 0
     print(f"lanceur : {len(noms)} secret(s) tiré(s) de {env['OTO_SECRETS_CHEMIN']} : "
           + " ".join(noms), file=sys.stderr)
-    serveur = ARBRE / ".venv" / "bin" / "oto-mcp"
-    os.execve(str(serveur), [str(serveur), *argv[1:]], env)
+    os.execve(commande[0], commande, env)
     return 1  # execve ne rend pas la main
 
 

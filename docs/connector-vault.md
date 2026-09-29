@@ -795,7 +795,11 @@ Pas de framework de tests dans le repo → validation manuelle sur **PG16 jetabl
 # `OTO_MCP_MASTER_KEY` n'est PAS dans .env — start-encrypted.sh la fetch au boot
 # depuis Scaleway Secret Manager. Un script qui ne source que .env voit
 # `encryption_enabled()=False` → tous les déchiffrements lèvent RuntimeError (FAUX
-# négatif, ≠ InvalidTag). Pour reproduire le runtime, répliquer le fetch :
+# négatif, ≠ InvalidTag). Dès que la box est passée au lanceur générique (#967 lot 5),
+# `OTO_MCP_MASTER_KEY` est tirée par NOM par `deploy/lanceur_secrets.py` : passer par lui
+# (`lanceur --script scripts/X.py`, docs/commands.md §Un script d'entretien par le lanceur)
+# et non par le fetch ci-dessous, qui est celui de `start-encrypted.sh`. Avant ce passage,
+# répliquer le fetch :
 #   set -a; . .env; . /etc/oto-mcp/scw.env; set +a
 #   RESP=$(curl -s -H "X-Auth-Token: $SCW_SECRET_KEY" \
 #     ".../secret-manager/v1beta1/regions/fr-par/secrets/<id>/versions/latest_enabled/access")

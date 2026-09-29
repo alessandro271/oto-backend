@@ -14,6 +14,9 @@ Cron léger conseillé (quotidien, fenêtre courte) sur la box :
     30 5 * * * cd /opt/oto-mcp && set -a; . .env; set +a; \
         .venv/bin/python deploy/ingest_boamp.py --since "$(date -d '10 days ago' +\%F)" \
         >> /var/log/oto-mcp/boamp-ingest.log 2>&1
+Dès que la box est passée au lanceur générique (#967 lot 5), `. .env` ne suffit plus
+(`DATABASE_URL` n'y est plus) : même commande par `deploy/lanceur_secrets.py --script
+deploy/ingest_boamp.py …` (docs/commands.md §Un script d'entretien par le lanceur).
 """
 from __future__ import annotations
 

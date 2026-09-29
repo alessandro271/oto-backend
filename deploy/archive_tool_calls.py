@@ -38,7 +38,10 @@ Usage :
     archive_tool_calls.py [--dry-run] [--retention-days N]
 
 L'environnement est celui du backend (`/opt/oto-mcp/.env`) : `DATABASE_URL` et
-`OTO_MCP_S3_{ENDPOINT,REGION,BUCKET,ACCESS_KEY,SECRET_KEY}`.
+`OTO_MCP_S3_{ENDPOINT,REGION,BUCKET,ACCESS_KEY,SECRET_KEY}`. Dès que la box est passée au
+lanceur générique (#967 lot 5), les secrets n'y sont plus : le script se lance par
+`deploy/lanceur_secrets.py --script deploy/archive_tool_calls.py [options]`
+(`deploy/oto-journal-archive.service`).
 """
 from __future__ import annotations
 

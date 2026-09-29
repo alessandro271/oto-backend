@@ -17,6 +17,9 @@ Cron léger conseillé (hebdo) sur la box :
     40 5 * * 1 cd /opt/oto-mcp && set -a; . .env; set +a; \
         .venv/bin/python deploy/ingest_acco.py --since "$(date -d '14 days ago' +\%F)" \
         >> /var/log/oto-mcp/acco-ingest.log 2>&1
+Dès que la box est passée au lanceur générique (#967 lot 5), `. .env` ne suffit plus
+(`DATABASE_URL` n'y est plus) : même commande par `deploy/lanceur_secrets.py --script
+deploy/ingest_acco.py …` (docs/commands.md §Un script d'entretien par le lanceur).
 
 Nécessite `france-opendata[stock]` (defusedxml) dans le venv.
 """

@@ -62,9 +62,15 @@ est **dans le tag** : ni propagé, ni édité sur la machine.
 
 Notre box garde son lanceur (`BG_LANCEUR=propage`) : `deploy/start-encrypted.sh` et
 `-canari.sh` sont la déclaration de secrets **propre à notre cible** — identifiants de
-notre projet, Mollie, Pennylane. La passer au lanceur générique est un geste à part
-(créer nos secrets par nom, vider le `.env` de ses secrets, poser l'unité), pas une
+notre projet, Mollie, Pennylane. La passer au lanceur générique est un geste à part,
+décidé (lot 5) et décrit pas à pas plus bas (§Passer notre box au lanceur), pas une
 conséquence de ce chantier.
+
+Le lanceur démarre le serveur, ou — `--script CHEMIN` — un script de l'arbre sous son
+Python (l'archive du journal, un script d'entretien), avec les mêmes secrets ; `--noms`
+ne démarre rien et imprime les **noms** de l'environnement final, jamais une valeur. Un
+seul mécanisme de secrets pour tout ce qui tourne sur la box (`docs/commands.md` §Un
+script d'entretien par le lanceur).
 
 ## L'amorce — une instance naît du code
 
@@ -242,3 +248,151 @@ Les workers `oto-runner` vivent dans leur propre dépôt et y suivent `main`. Po
 cible, ils doivent tourner **au même tag** que son back-end : il faudra, dans ce dépôt-là,
 une montée pilotée par tag (même déclenchement manuel, même approbation), et une
 déclaration de l'URL du back-end de la cible. Rien de ce chantier ne le fait.
+
+## Passer notre box au lanceur (#967, lot 5)
+
+Notre production (`oto-mcp`) et notre préproduction (canari) quittent `start-encrypted.sh` et
+`start-encrypted-canari.sh` pour `deploy/lanceur_secrets.py` : les secrets se lisent **par
+nom** dans notre Secret Manager, sous `/prod` et `/preprod`, et plus aucun identifiant de
+secret n'est écrit dans ce dépôt. Décisions : **Mollie strict** (un facultatif déclaré mais
+introuvable bloque le démarrage : le bleu/vert garde l'ancienne couleur) ; `OTO_PENNYLANE_API_KEY`
+disparaît (plus de lecteur) ; `STRIPE_SECRET_KEY` ne passe pas (retirée du `.env`).
+
+**Découpage.** Lot 5a (code, sans effet sur la box) : `--script`, `--noms`, le scénario
+`BG_LANCEUR=versionne` du banc, les docs. Lot 5c (à déployer AVEC la bascule prod, jamais
+avant : `install_timers` de `deploy/oto-backend.sh` pose la maintenance à chaque déploiement
+prod) : `oto-mcp-maintenance.service` et `oto-journal-archive.service` par le lanceur. Lot 5b
+(après) : retrait de `start-encrypted*.sh`, suppression des anciens secrets par identifiant.
+
+**Règle** : canari d'abord, prod ensuite, chaque rôle en une seule séance (les étapes B se
+suivent sans pause). **Aucune valeur de secret ne s'affiche, ni ne passe en argument** : les
+contrôles se font par noms ou par code retour. Sur la box, en root. `<r>` = `prod` ou
+`canari` ; `<c>` = `/prod` ou `/preprod` ; `<env>` = `/opt/oto-mcp/.env` (prod) ou
+`/opt/oto-mcp-canari/.env` (canari) ; `<u>` = `oto-mcp` ou `oto-mcp-canari`.
+
+### A. Préparer — aucun effet sur ce qui sert
+
+1. **Recenser les lecteurs du `.env`** (noms de fichiers seulement) :
+   `grep -rlE '/opt/oto-mcp(-canari)?/\.env' /etc/systemd/system /etc/cron* /var/spool/cron /usr/local/sbin /opt/deploy 2>/dev/null`.
+   Chacun doit passer par le lanceur ou renoncer au secret (unités de maintenance et d'archive :
+   lot 5c ; crontabs d'ingestion : `--script`).
+2. **Poser la clé d'API** : `( umask 077; . /etc/oto-mcp/scw.env; printf '%s' "$SCW_SECRET_KEY" > /etc/oto-mcp/scw.key )`
+   puis `stat -c '%a %U' /etc/oto-mcp/scw.key` → `600 root`. Une seule clé pour les deux rôles
+   (lecture des secrets du projet).
+3. **Poser `/etc/oto-mcp/lanceur-<r>.env`** (0644, aucun secret) :
+   ```
+   OTO_SECRETS_REGION=fr-par
+   OTO_SECRETS_PROJET=<identifiant du projet Scaleway de la box>
+   OTO_SECRETS_CHEMIN=<c>
+   OTO_SECRETS_OPTIONNELS=<facultatifs portés par CE .env, séparés par des espaces>
+   ```
+4. **Lister ce que le `.env` porte de secret** (noms seulement, avec le code du tag à monter —
+   extraire `oto_mcp/` et `deploy/` du tag : `git -C <arbre inactif> fetch --tags -q &&
+   rm -rf /root/lanceur-essai && mkdir /root/lanceur-essai &&
+   git -C <arbre inactif> archive <tag> oto_mcp deploy | tar -x -C /root/lanceur-essai`) :
+   ```
+   cd /root/lanceur-essai && python3 - <<'PY'
+   import re, sys
+   sys.path.insert(0, '.')
+   from oto_mcp import env_secrets as e
+   requis = set(e.secrets_requis()); vus = []; gardees = []
+   for ligne in open('<env>', encoding='utf-8'):
+       m = re.match(r'\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=', ligne)
+       if m and (e.est_secret(m.group(1)) or m.group(1) == 'STRIPE_SECRET_KEY'):
+           vus.append(m.group(1))
+       else:
+           gardees.append(ligne)
+   open('<env>.purge', 'w', encoding='utf-8').writelines(gardees)   # le .env sans ses secrets
+   print('requis dans le .env    :', *sorted(set(vus) & requis))
+   print('OTO_SECRETS_OPTIONNELS :', *sorted(set(vus) - requis - {'STRIPE_SECRET_KEY'}))
+   PY
+   ```
+   Reporter la seconde ligne dans `OTO_SECRETS_OPTIONNELS` (étape 3), **plus** le secret de
+   Mollie (prod : clé live ; canari : clé de test) s'il n'était pas dans le `.env` — il vient
+   aujourd'hui de `start-encrypted*.sh`. Il n'y a pas de Pennylane.
+5. **Créer les secrets, un par variable, nommé comme elle**, sous `<c>` — depuis un poste qui
+   peut ÉCRIRE dans le Secret Manager (la clé de la box est en lecture) : `scw secret secret
+   create name=<NOM> path=<c> project-id=<projet> region=fr-par`, puis `scw secret version create`
+   avec la valeur lue d'un fichier 0600 supprimé aussitôt (`scw secret version create --help`
+   pour la syntaxe ; jamais la valeur en argument visible). Requis (les huit de
+   `env_secrets.secrets_requis()`, à vérifier contre le tag) : `DATABASE_URL`,
+   `OTO_MCP_S3_ACCESS_KEY`, `OTO_MCP_S3_SECRET_KEY`, `OTO_MCP_MASTER_KEY`,
+   `OTO_MCP_OAUTH_STATE_SECRET`, `GOOGLE_WORKSPACE_CLIENT_SECRET`, `FOD_API_TOKEN`,
+   `OTO_FERME_TOKEN`, puis les facultatifs de l'étape 4. Origine des valeurs : le `.env` du rôle,
+   sauf `OTO_MCP_MASTER_KEY` et le secret Mollie, lus une dernière fois dans leurs anciens
+   secrets. ⚠️ **La base est partagée** : `DATABASE_URL` et `OTO_MCP_MASTER_KEY` ont la
+   MÊME valeur sous `/prod` et `/preprod` — les autres peuvent différer (Mollie : live/test).
+6. **Vérifier l'égalité par code retour** (rien ne s'affiche) :
+   ```
+   lire() { curl -fsS -G -H "X-Auth-Token: $(cat /etc/oto-mcp/scw.key)" \
+     "https://api.scaleway.com/secret-manager/v1beta1/regions/fr-par/secrets-by-path/versions/latest_enabled/access" \
+     --data-urlencode "project_id=<projet>" --data-urlencode "secret_name=$1" --data-urlencode "secret_path=$2" |
+     python3 -c 'import sys,json,base64; sys.stdout.buffer.write(base64.b64decode(json.load(sys.stdin)["data"]))' | tr -d '\r\n'; }
+   for n in DATABASE_URL OTO_MCP_MASTER_KEY; do
+     cmp -s <(lire $n /prod) <(lire $n /preprod) && echo "$n : identique" || echo "$n : DIFFÉRENT"; done
+   ```
+7. **Noms d'avant** (le service qui sert, avant tout changement) :
+   ```
+   PID=$(systemctl show -p MainPID --value <u>@$(cat /etc/oto-mcp/active-<r>))
+   tr '\0' '\n' < /proc/$PID/environ | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' | sort > /root/noms-<r>.avant
+   ```
+8. **Essai à blanc du lanceur** sur la copie purgée du `.env` (`<env>.purge`, écrite par l'étape 4) :
+   ```
+   systemd-run --pipe --wait --quiet --collect -p EnvironmentFile=<env>.purge \
+     -p EnvironmentFile=/etc/oto-mcp/lanceur-<r>.env -p EnvironmentFile=/etc/oto-mcp/port-<r>-blue.env \
+     -p LoadCredential=scw:/etc/oto-mcp/scw.key \
+     python3 /root/lanceur-essai/deploy/lanceur_secrets.py --noms | sort > /root/noms-<r>.essai
+   comm -3 /root/noms-<r>.avant /root/noms-<r>.essai
+   ```
+   Un refus nomme ce qui manque (secret introuvable, `.env` encore secret, clé illisible).
+   **Écart attendu** — colonne de gauche (avant seul) : `SCW_*`, `OTO_PENNYLANE_API_KEY` (prod),
+   `STRIPE_SECRET_KEY` si le service la portait, et les variables de session de systemd
+   (`INVOCATION_ID`, `JOURNAL_STREAM`, `SYSTEMD_EXEC_PID`…) ; colonne de droite (essai seul) :
+   `CREDENTIALS_DIRECTORY`, `OTO_SECRETS_REGION`, `OTO_SECRETS_PROJET`, `OTO_SECRETS_CHEMIN`,
+   `OTO_SECRETS_OPTIONNELS`. Tout autre écart est un secret oublié : le déclarer, ne pas continuer.
+
+### B. Basculer — d'une traite, un rôle à la fois
+
+9. **Sauvegardes** (suffixe `.avant-lot5`, hors git) : `<env>`, l'unité
+   `/etc/systemd/system/<u>@.service`, et `/opt/deploy/{oto-mcp-bluegreen.sh,oto-backend.sh,oto-backend-canari.sh,oto-mcp-drain.sh}`.
+10. **Purger le `.env`** : `chmod --reference=<env> <env>.purge && chown --reference=<env> <env>.purge
+    && mv <env>.purge <env>` (le lien de la couleur verte reste valide).
+11. **Unité** `/etc/systemd/system/<u>@.service` : ajouter `EnvironmentFile=/etc/oto-mcp/lanceur-<r>.env`
+    (entre `<env>` et le fichier de port) et `LoadCredential=scw:/etc/oto-mcp/scw.key`, puis remplacer
+    l'`ExecStart` par
+    `ExecStart=/opt/<arbre>-%i/.venv/bin/python /opt/<arbre>-%i/deploy/lanceur_secrets.py`
+    (`<arbre>` = `oto-mcp` ou `oto-mcp-canari`). Reporter le même changement dans le miroir de
+    `/data/infra/scripts/oto-backend-bluegreen/`.
+12. **Copies de `/opt/deploy/`** depuis le tag (`/root/lanceur-essai/deploy/`) : la bibliothèque
+    `oto-mcp-bluegreen.sh`, le wrapper du rôle, `oto-mcp-drain.sh`. Le wrapper du dépôt déclare
+    encore `BG_LANCEUR=propage` : sur la box, `sed -i 's/^BG_LANCEUR=propage$/BG_LANCEUR=versionne/'
+    /opt/deploy/oto-backend{,-canari}.sh`. Contrôle : `grep -v '^#'` du fichier posé et du dépôt,
+    à la seule ligne `BG_LANCEUR` près. Puis `systemctl daemon-reload`.
+13. **Déployer par le pipeline habituel** (canari : push sur main ; prod : tag) : la nouvelle couleur
+    démarre par le lanceur, le bleu/vert garde l'ancienne si elle ne devient pas saine. Le tag doit
+    porter `deploy/lanceur_secrets.py` (la bibliothèque refuse sinon). ⚠️ Entre les étapes 10 et 13,
+    l'ancienne couleur sert encore mais ne saurait plus redémarrer seule : ne pas s'attarder.
+14. **Contrôles après**, par noms : refaire le relevé de l'étape 7 sur la couleur qui sert →
+    `/root/noms-<r>.apres` ; `comm -3 /root/noms-<r>.avant /root/noms-<r>.apres` ne montre que l'écart
+    attendu de l'étape 8 ; `journalctl -u <u>@<couleur> -n 5 --no-pager` contient « secret(s) tiré(s) de
+    <c> » (les noms, pas les valeurs) ; `GET /api/version` sert le tag. Refaire l'étape 6.
+15. **Prod seulement — les travaux planifiés (lot 5c)**, livrés par le même tag : le déploiement pose
+    `oto-mcp-maintenance.service` (arbre de la couleur qui sert écrit à la pose) ; contrôler
+    `systemctl cat oto-mcp-maintenance.service | grep ExecStart`, puis l'essai sans effet :
+    `systemd-run --pipe --wait --quiet --collect -p WorkingDirectory=/opt/oto-mcp-<couleur> -p
+    EnvironmentFile=/opt/oto-mcp/.env -p EnvironmentFile=/etc/oto-mcp/lanceur-prod.env -p
+    LoadCredential=scw:/etc/oto-mcp/scw.key /opt/oto-mcp-<couleur>/.venv/bin/python
+    /opt/oto-mcp-<couleur>/deploy/lanceur_secrets.py maintenance check-boot`. L'archive du journal se
+    pose à la main (le déploiement ne la pose pas) : `test -f /opt/oto-mcp/deploy/lanceur_secrets.py`
+    (l'arbre bleu doit porter le lanceur), `install -m 0644 <arbre>/deploy/oto-journal-archive.service
+    /etc/systemd/system/`, `systemctl daemon-reload`, essai `… lanceur_secrets.py --script
+    deploy/archive_tool_calls.py --dry-run` avec les mêmes `-p` que ci-dessus.
+
+### Retour arrière, par rôle
+
+Remettre dans l'ordre : `<env>.avant-lot5` → `<env>`, l'unité et les copies de `/opt/deploy/`
+(sauvegardes de l'étape 9), `systemctl daemon-reload`, puis `/opt/deploy/oto-backend{,-canari}.sh
+--rollback` : l'ancienne couleur porte encore son `start-encrypted.sh`. Ne pas rebasculer avant
+d'avoir remis le `.env` : l'ancien lanceur (`start-encrypted.sh`) attend les secrets dans le `.env`.
+Les secrets créés par nom restent : ils ne gênent personne. Les sauvegardes `.env.avant-lot5`
+portent des secrets en clair : les détruire à la fin du lot 5b, pas avant.

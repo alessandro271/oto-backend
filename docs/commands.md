@@ -192,12 +192,17 @@ import os, psycopg
 with psycopg.connect(os.environ[\"DATABASE_URL\"]) as c:
     for r in c.execute(\"SELECT sub, email, role FROM users\"): print(r)
 "'
+# ⚠️ Dès que la box est passée au lanceur (#967 lot 5), le `.env` ne porte plus AUCUN secret
+# et `. .env` ne donne plus `DATABASE_URL` : passer par le lanceur (§Un script d'entretien
+# par le lanceur, plus bas) — son `--script` prend un fichier, ici `python -c` n'en est pas un.
 
 # ⚠️ Même besoin pour tout script d'ENTRETIEN lancé à la main (`python -m scripts.X`) :
 # il n'hérite pas de l'environnement du service systemd, donc il sort en
 # « RuntimeError: DATABASE_URL not set » avant d'avoir rien fait. Sourcer d'abord :
 #   cd /opt/oto-mcp && set -a && . ./.env && set +a && ./.venv/bin/python -m scripts.X
 # Vécu 19/08 sur scripts.archive_empty_kb_projects (dry-run par défaut, --apply pour agir).
+# ⚠️ Cela ne vaut que tant que le `.env` porte les secrets : après le passage au lanceur
+# (#967 lot 5), `. ./.env` ne suffit plus → `lanceur --script scripts/X.py` (§suivant).
 
 # ⚠️ Un script HORS SERVEUR ne voit AUCUN outil : `tool_registry.boot_tool_names()`
 # rend [] tant que le registre n'est pas réchauffé (le serveur le fait au lifespan).
@@ -212,6 +217,39 @@ with psycopg.connect(os.environ[\"DATABASE_URL\"]) as c:
 # docs/connector-vault.md §Déchiffrer un credential ad-hoc.
 ```
 
+## Un script d'entretien par le lanceur (#967 lot 5)
+
+Une fois notre box passée au lanceur générique, le `.env` ne porte plus que le non-secret :
+`DATABASE_URL`, `OTO_MCP_MASTER_KEY`, les clés S3… n'existent que dans l'environnement que
+`deploy/lanceur_secrets.py` construit à chaque démarrage. Un script lancé à la main les
+reçoit de lui, comme le service, et non d'un `.env` qu'on sourcerait. Le lanceur lit la clé
+d'API du Secret Manager dans `$CREDENTIALS_DIRECTORY/scw` : hors d'une unité, c'est
+`systemd-run` qui la présente (`LoadCredential`), à la façon des unités de maintenance.
+
+```bash
+# Sur la box (prod ; pour la préprod : /opt/oto-mcp-canari et lanceur-canari.env).
+lanceur() {
+  sudo systemd-run --pipe --wait --quiet --collect \
+    -p WorkingDirectory=/opt/oto-mcp \
+    -p EnvironmentFile=/opt/oto-mcp/.env -p EnvironmentFile=/etc/oto-mcp/lanceur-prod.env \
+    -p LoadCredential=scw:/etc/oto-mcp/scw.key \
+    /opt/oto-mcp/.venv/bin/python /opt/oto-mcp/deploy/lanceur_secrets.py "$@"
+}
+lanceur maintenance retention --dry-run                    # le serveur (`oto-mcp …`)
+lanceur --script scripts/archive_empty_kb_projects.py      # un script de l'arbre, sous son Python
+lanceur --script deploy/archive_tool_calls.py --dry-run    # l'archive du journal
+lanceur --noms                                             # les NOMS de l'environnement, jamais une valeur
+```
+
+- `--script CHEMIN [args]` : un fichier `.py` **de l'arbre** (chemin relatif), exécuté par le
+  Python du venv de l'arbre — pas `python -m scripts.X`, qui n'est pas un fichier. Ce qui
+  n'est pas un fichier (`python -c "…"`) se joue en le posant dans un script de l'arbre, ou
+  se lit par `oto-mcp` lui-même.
+- `--noms` ne démarre rien : il lit les secrets comme un démarrage, refuse comme lui s'il en
+  manque un, et imprime les noms, triés. **Ne jamais** afficher les valeurs d'un secret.
+- Le lanceur **refuse** un secret déjà présent dans l'environnement : ne pas sourcer un
+  ancien `.env` (`.env.avant-lot5`) devant lui.
+
 ## Maintenance — les travaux qui ont quitté le boot (ADR 0065 lot 0)
 
 ```bash
@@ -222,6 +260,8 @@ systemctl list-timers oto-mcp-maintenance.timer           # le prochain tir
 
 # Un travail seul, et d'abord À BLANC — sur une base PARTAGÉE prod/preprod, la
 # première question devant une purge est « combien de lignes ? ».
+# ⚠️ Ces `sudo -E env $(cat .env)` valent tant que le `.env` porte `DATABASE_URL` ; après le
+# passage au lanceur (#967 lot 5), même geste par `lanceur maintenance …` (§précédent).
 sudo -E env $(cat /opt/oto-mcp/.env | xargs) \
   /opt/oto-mcp/.venv/bin/oto-mcp maintenance retention --dry-run
 #   retention | blocks | key-indexes            les travaux du timer
