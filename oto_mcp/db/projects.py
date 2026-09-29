@@ -59,7 +59,8 @@ def create_project(owner_type: str, owner_id: str, name: str,
     """Crée un projet possédé par `(owner_type, owner_id)` (ADR 0030). owner_id = sub
     (perso) | org.id::text | group.id::text. `context_org_id` (ADR 0030 amendé) = l'org de CONTEXTE d'un projet perso (owner='user') — sépare la
     propriété (la personne) du contexte de travail (l'org, pour la résolution des
-    credentials et le scope de liste) ; NULL pour un projet non-perso (contexte = owner)."""
+    credentials et l'org d'origine affichée — plus le scope de liste depuis le 28/09/2026 :
+    un perso se liste dans l'org perso) ; NULL pour un projet non-perso (contexte = owner)."""
     if owner_type == "user":
         upsert_user(owner_id)
     with _connect() as conn:
@@ -71,23 +72,6 @@ def create_project(owner_type: str, owner_id: str, name: str,
         from .search import stamp_rank_vector
         stamp_rank_vector(conn, "projects", "id = %s", (int(row["id"]),))
         return int(row["id"])
-
-
-def list_member_projects(sub: str, org_id: int, *,
-                         include_archived: bool = False) -> list[dict]:
-    """Projets PERSO de l'acteur (owner=('user', sub)) DANS le contexte de l'org `org_id`
-    (scope membre `(sub, org)`, ADR 0030 amendé). Privés à leur propriétaire, listés dans
-    LEUR org de contexte (pas un fourre-tout cross-org). Le contexte `(moi, org)` est la
-    demi-identité qui manquait : un projet perso créé « chez un client » remonte chez
-    ce client, pas chez otomata. Filtre `context_org_id = org_id` (les perso legacy à
-    contexte NULL n'y apparaissent pas — ils vivent dans l'org perso)."""
-    sql = (f"SELECT {_PROJECT_COLS} FROM projects "
-           "WHERE owner_type = 'user' AND owner_id = %s AND context_org_id = %s ")
-    if not include_archived:
-        sql += "AND archived_at IS NULL "
-    sql += "ORDER BY updated_at DESC"
-    with _connect() as conn:
-        return [dict(r) for r in conn.execute(sql, (sub, org_id)).fetchall()]
 
 
 def get_project_by_id(project_id: int) -> Optional[dict]:
@@ -231,10 +215,10 @@ def reparent_project(project_id: int, new_owner_type: str, new_owner_id: str,
                      context_org_id: Optional[int] = None) -> None:
     """Change le DÉTENTEUR d'un projet, et repose son « rangé chez » (`context_org_id`).
 
-    Les deux vont ensemble : un projet perso (`owner_type='user'`) n'est listé que dans
-    SON org de contexte (`list_member_projects`), donc un transfert vers une personne qui
-    laisserait le contexte à NULL rendrait le projet invisible PARTOUT, y compris à son
-    nouveau propriétaire. `context_org_id` est NULL pour un projet non-perso (org/group/
+    Les deux vont ensemble : un projet perso (`owner_type='user'`) TRAVAILLE sous son
+    org de contexte (clés résolues par l'axe `project=`, org d'origine affichée) ; il se
+    LISTE dans l'org perso de son propriétaire (décision du 28/09/2026), quel que soit
+    ce contexte. `context_org_id` est NULL pour un projet non-perso (org/group/
     platform), dont le contexte se dérive de l'owner. L'appelant (`ownership`) calcule
     l'org de contexte ; ici on l'écrit."""
     if new_owner_type == "user":

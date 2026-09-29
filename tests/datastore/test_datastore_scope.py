@@ -27,8 +27,14 @@ GRANTED = {"id": 2, "datastore": "accords", "owner_type": "org", "owner_id": "42
            "created_at": "2026-07-02", "schema": None, "permission": "read"}
 
 
-def _wire(monkeypatch, rec, *, org=99, groups=({"group_id": 5, "org_id": 99, "name": "sales"},)):
+def _wire(monkeypatch, rec, *, org=99, groups=({"group_id": 5, "org_id": 99, "name": "sales"},),
+          perso=99):
     monkeypatch.setattr(access, "current_org", lambda sub: org)
+    # L'org PERSO de l'appelant (décision du 28/09/2026) : par défaut l'org active —
+    # les bancs d'org de TRAVAIL passent une autre valeur.
+    monkeypatch.setattr(D.ownership.org_store, "get_personal_org", lambda sub: perso)
+    monkeypatch.setattr(D.db, "list_datastores_shared_to_user",
+                        lambda sub: rec.setdefault("to_me", []).append(sub) or [])
 
     def fake_groups(sub, org_id):  # positionnel strict : droppe l'arg org = TypeError
         rec["groups_for"] = (sub, org_id)
@@ -59,11 +65,10 @@ def test_list_datastores_scopes_groups_on_active_org(monkeypatch):
     assert rec["groups_for"] == ("u1", 99)          # le filtre org est bien passé
     # ADR 0049 (cadrage 10/07) : le contenu possédé = org active + MES équipes de cette
     # org (un tableau team-owned se liste sans grant, comme un projet de pôle).
-    # ⚠️ Et MOI (oto-backend#870, 04/09) : ce banc figeait `[("org","99"),("group","5")]`
-    # et CERTIFIAIT donc l'absence du demandeur. Depuis l'ADR 0068 un tableau créé par
-    # un agent naît personnel — sans cette entrée, son créateur ne le voyait pas et
-    # concluait qu'il n'existait pas. Le jeu reste borné à l'org active.
+    # ⚠️ Et MOI (oto-backend#870, 04/09) — dans mon org PERSO seulement depuis le
+    # 28/09/2026 (99 est ici l'org perso ; le banc d'org de travail est plus bas).
     assert rec["owners"] == [("org", "99"), ("user", "u1"), ("group", "5")]
+    assert rec["to_me"] == ["u1"]           # org perso : les partages faits à moi
     assert rec["granted_to"] == ("u1", [99], [5])   # grants org active + mes groupes de cette org
 
     by_id = {e["id"]: e for e in out}
@@ -220,7 +225,7 @@ def test_org_store_read_only_blocks_write(monkeypatch):
     assert store._resolve("leads") == 1        # lecture OK en read_only
 
 
-def test_un_tableau_qu_on_vient_de_CREER_apparait_dans_sa_propre_liste(monkeypatch):
+def test_un_tableau_qu_on_vient_de_CREER_se_liste_dans_l_org_perso(monkeypatch):
     """oto-backend#870 — le banc qui manquait, et son absence explique tout.
 
     Mesuré en PRODUCTION le 04/09 : `data_create_datastore` rend un id, la liste
@@ -234,16 +239,29 @@ def test_un_tableau_qu_on_vient_de_CREER_apparait_dans_sa_propre_liste(monkeypat
     aucun ne joignait les deux — le défaut vivait exactement dans l'espace entre eux.
     Un test qui crée puis lit est le seul qui pouvait le voir.
     """
+    # Décision du 29/09/2026 : un tableau créé sans précision est À LA PERSONNE, dans
+    # toute org — et il se liste dans son org PERSO (99 ici), pas dans une org de
+    # travail (5 = l'org perso, 99 devient une org de travail).
+    for perso, liste in ((99, True), (5, False)):
+        rec = {}
+        _wire(monkeypatch, rec, perso=perso)
+        store = D.make_store("u1")
+        assert store._default_owner() == ("user", "u1")
+        store.list_datastores()
+        assert (("user", "u1") in rec["owners"]) is liste, (
+            "un tableau personnel doit se lister dans l'org perso, et seulement là")
+
+
+def test_dans_une_org_de_TRAVAIL_la_liste_ne_rend_ni_personnel_ni_partage_a_moi(monkeypatch):
+    """Décision du 28/09/2026 : hors de l'org perso, la liste ne demande ni mes
+    tableaux perso ni ceux partagés à moi en personne — le jeu possédé est l'org et
+    mes équipes, et les partages sont ceux faits à l'org ou à mes équipes."""
     rec = {}
-    _wire(monkeypatch, rec)
-    store = D.make_store("u1")
-    # Ce que `_default_owner` donne à une création sans précision (ADR 0068).
-    assert store._default_owner() == ("user", "u1")
-    # …et ce jeu-là doit être celui que la liste interroge.
-    store.list_datastores()
-    assert ("user", "u1") in rec["owners"], (
-        "le propriétaire d'un tableau créé par défaut n'est pas dans le jeu que la "
-        "liste interroge : il naîtrait invisible à celui qui vient de l'écrire")
+    _wire(monkeypatch, rec, perso=5)
+    D.make_store("u1").list_datastores()
+    assert rec["owners"] == [("org", "99"), ("group", "5")]
+    assert rec["granted_to"] == ("u1", [99], [5])
+    assert "to_me" not in rec
 
 
 def test_parite_recherche_liste(monkeypatch):
@@ -264,18 +282,20 @@ def test_parite_recherche_liste(monkeypatch):
     src_liste = inspect.getsource(D.DatastorePg.list_datastores)
     src_reche = inspect.getsource(search._accessible_namespaces)
     for nom, src in (("liste", src_liste), ("recherche", src_reche)):
-        assert "active_org_principals" in src, (
+        assert "principaux_de_liste" in src, (
             f"la {nom} n'interroge plus le même jeu de propriétaires que l'autre : "
             "l'invariant « cherchable ⇔ lisible » se rompt en silence, et c'est le "
             "sens de l'écart qui décide s'il cache ou s'il fuit")
-        # oto#160 : et elles le réduisent de la même façon — un personnel créé dans
-        # une autre org n'est ni listé ni cherchable ici. Jeux comparés sur base
-        # réelle : `test_liste_par_org_160.py::test_la_recherche_reste_en_parite…`.
-        assert "tableaux_du_contexte" in src, (
-            f"la {nom} ne réduit plus les personnels à l'org de leur création : "
+        # 28/09/2026 : et elles ajoutent de la même façon, dans l'org perso, ce qui
+        # est partagé à moi en personne. Jeux comparés sur base réelle :
+        # `tests/test_listes_seule_l_org.py::test_la_recherche_reste_en_parite…`.
+        assert "list_datastores_shared_to_user" in src, (
+            f"la {nom} ne rend plus les partages faits à moi dans l'org perso : "
             "l'autre face, si")
-    # Et le jeu lui-même porte bien les trois paliers, dans l'org active seulement.
+    # Et le jeu lui-même : trois paliers dans l'org perso, deux ailleurs.
     monkeypatch.setattr(ownership.group_store, "list_groups_for_user",
                         lambda sub, org: [{"group_id": 5}])
-    jeu = ownership.active_org_principals("u1", 99)
-    assert jeu == [("org", "99"), ("user", "u1"), ("group", "5")]
+    monkeypatch.setattr(ownership.org_store, "get_personal_org", lambda sub: 99)
+    assert ownership.principaux_de_liste("u1", 99) == [
+        ("org", "99"), ("user", "u1"), ("group", "5")]
+    assert ownership.principaux_de_liste("u1", 42) == [("org", "42"), ("group", "5")]

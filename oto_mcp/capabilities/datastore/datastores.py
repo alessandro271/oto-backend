@@ -37,7 +37,7 @@ from ... import db, roles
 from ...auth import token_scopes
 from ...datastore.core import DatastoreExists, DatastoreForbidden, DatastoreNotFound, make_store
 from .._authz import SUB_ONLY
-from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
+from .._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
 from .common import EntreeDatastore, HORODATAGE, govern_ns, ns_not_found
 from ..registry import CAPABILITIES
 
@@ -199,6 +199,17 @@ def _list_datastores(ctx: ResolvedCtx, inp: ListDatastoresInput) -> dict:
     return {"datastores": rows}
 
 
+def _get_datastore(ctx: ResolvedCtx, inp: DatastoreRefInput) -> dict:
+    # La lecture par identifiant (oto#160, 29/09/2026) : une liste d'org ne rend plus ni
+    # le personnel ni les partages faits à moi, et un tableau partagé à moi et lié à un
+    # projet de l'org doit rester ouvrable depuis cette org. Accès = `_resolve`, comme
+    # toutes les routes `…/{datastore}/…` ; 404 non-disclosant sinon (`ns_not_found`).
+    try:
+        return make_store(ctx.sub).lire_tableau(inp.datastore)
+    except DatastoreNotFound:
+        raise ns_not_found(ctx.sub, inp.datastore)
+
+
 def _create_datastore(ctx: ResolvedCtx, inp: CreateDatastoreInput) -> dict:
     datastore = inp.datastore.strip()
     if not datastore:
@@ -287,11 +298,35 @@ CAPABILITIES += [
         authz=SUB_ONLY,
         mcp=None,  # `data_list_datastores` tient déjà la face agent
         rest=RestBinding(verb="GET", path=_BASE),
-        description=("Liste les tableaux visibles dans l'org active : ceux de l'org et "
-                     "de tes équipes, ceux partagés à l'org ou à tes équipes, et TES "
-                     "tableaux personnels créés dans cette org (plus ceux d'avant dont "
-                     "l'org de création est inconnue). Un personnel créé dans une autre "
-                     "org est listé là-bas, pas ici ; il s'ouvre toujours par son numéro."),
+        description=("Liste les tableaux de l'org active : ceux de l'org et de tes "
+                     "équipes, et ceux partagés à l'org ou à tes équipes — jamais un "
+                     "tableau personnel ni un partage fait à toi. Dans ton org PERSO "
+                     "seulement, s'y ajoutent TOUS tes tableaux personnels (quelle que "
+                     "soit l'org où ils ont été créés) et ceux partagés à toi en "
+                     "personne (`shared: true`). Un tableau s'ouvre toujours par son "
+                     "numéro, depuis n'importe quelle org."),
+    ),
+    Capability(
+        key="me.datastore.get_datastore",
+        handler=_get_datastore,
+        Input=DatastoreRefInput,
+        Output=DatastoreEntry,
+        authz=SUB_ONLY,
+        mcp=None,  # la face agent lit un tableau par son numéro via `data_get_schema`
+        rest=RestBinding(verb="GET", path=_BASE + "/{datastore}"),
+        errors=(DeclaredError(404, "datastore_not_found",
+                              "tableau inconnu, ou inaccessible à l'appelant — la même "
+                              "réponse dans les deux cas : elle ne révèle pas son "
+                              "existence"),),
+        description=("Lit UN tableau par son numéro (ou son nom), à la forme d'une entrée "
+                     "de `GET /api/datastores`. L'accès ne dépend ni des listes ni de "
+                     "l'org consultée : possession, org, équipe, partage à l'org, à "
+                     "l'équipe ou à toi — le même que les autres routes "
+                     "`/api/datastores/{datastore}/…`. C'est la façon d'ouvrir, depuis "
+                     "une org, un tableau personnel ou partagé à toi, que la liste de "
+                     "l'org ne rend pas. `shared: true` quand il n'appartient pas au "
+                     "contexte de l'appel (`permission` = le droit effectif). 404 "
+                     "`datastore_not_found` s'il est inconnu ou inaccessible."),
     ),
     Capability(
         key="me.datastore.create_datastore",
@@ -326,8 +361,8 @@ CAPABILITIES += [
                      "et tout continue de fonctionner pour TOI : c'est au second agent, "
                      "ou au collègue qui ne le trouve pas, que ça se voit. La réponse "
                      "rend le propriétaire et vous avertit dans ce cas précis. Un "
-                     "tableau personnel n'est LISTÉ que dans l'org où il a été créé "
-                     "(`X-Oto-Org`, ou l'org active) ; son numéro l'ouvre partout."),
+                     "tableau personnel est LISTÉ dans ton org perso, quelle que soit "
+                     "l'org où il a été créé ; son numéro l'ouvre partout."),
     ),
     Capability(
         key="me.datastore.delete_datastore",

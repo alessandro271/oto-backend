@@ -662,6 +662,8 @@ DELETE /api/datastores/{datastore}/share -> _handler
 OPTIONS /api/datastores/{datastore}/share -> options_handler
 GET,HEAD /api/datastores -> _handler
 OPTIONS /api/datastores -> options_handler
+GET,HEAD /api/datastores/{datastore} -> _handler
+OPTIONS /api/datastores/{datastore} -> options_handler
 POST /api/datastores -> _handler
 OPTIONS /api/datastores -> options_handler
 DELETE /api/datastores/{datastore} -> _handler
@@ -726,6 +728,8 @@ GET,HEAD /api/datastore/namespaces -> alias_deprecie
 OPTIONS /api/datastore/namespaces -> options_handler
 POST /api/datastore/namespaces -> alias_deprecie
 OPTIONS /api/datastore/namespaces -> options_handler
+GET,HEAD /api/datastore/namespaces/{namespace} -> alias_deprecie
+OPTIONS /api/datastore/namespaces/{namespace} -> options_handler
 DELETE /api/datastore/namespaces/{namespace} -> alias_deprecie
 OPTIONS /api/datastore/namespaces/{namespace} -> options_handler
 PATCH /api/datastore/namespaces/{namespace} -> alias_deprecie

@@ -92,7 +92,7 @@ _SURFACE = """
     list_dirty_aux list_dirty_docs list_dirty_rows
     list_doc_revisions list_docs_for_project list_google_accounts
     list_grants_for_user list_group_disabled_tools
-    list_guides_db list_member_projects list_option_comps
+    list_guides_db list_option_comps
     list_option_comps_for_option list_org_disabled_tools list_org_grants
     list_platform_instructions list_project_activity list_project_files
     list_project_links list_projects_for_owners list_projects_granted_to

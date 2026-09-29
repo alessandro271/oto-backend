@@ -256,6 +256,7 @@ _LECTURES_VUE_BORNEE: dict[tuple[str, str], frozenset | None] = {
     ("POST", "/api/me/runs/thread"): frozenset({"read"}),
     # Tableaux.
     ("GET", "/api/datastores"): None,
+    ("GET", "/api/datastores/{datastore}"): None,
     ("GET", "/api/datastores/{datastore}/rows"): None,
     ("GET", "/api/datastores/{datastore}/rows/export.csv"): None,
     ("GET", "/api/datastores/{datastore}/rows/{row_id}"): None,

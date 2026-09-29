@@ -58,7 +58,8 @@ def create_datastore(owner_type: str, owner_id: str, namespace: str, *,
     le même propriétaire a déjà ce nom.
 
     `context_org_id` = l'org active de l'appel qui crée (oto#160), retenue pour un
-    tableau PERSONNEL seulement : un tableau d'org ou d'équipe tient son contexte de
+    tableau PERSONNEL seulement — écrite, plus lue par aucune liste depuis la décision
+    du 28/09/2026 (colonne gardée, sa suppression est un autre lot) : un tableau d'org ou d'équipe tient son contexte de
     son propriétaire, et une seconde source dirait un jour autre chose que lui. Toute
     voie de création du code la passe — `tests/datastore/test_contexte_org_160.py`
     le vérifie sur le source ; le défaut `None` ne sert qu'aux bancs."""
@@ -126,7 +127,8 @@ def set_datastore_semantic(ns_id: int, enabled: bool) -> int:
 
 def list_datastores_for_owners(owners: list[tuple[str, str]]) -> list[dict]:
     """Namespaces possédés par l'un des `(owner_type, owner_id)` fournis. Rend
-    `context_org_id`, que les listes par org lisent (`ownership.tableaux_du_contexte`)."""
+    `context_org_id` — que plus aucune liste ne lit depuis le 28/09/2026 (un tableau
+    perso se liste dans l'org perso, quelle que soit son org de création)."""
     if not owners:
         return []
     otypes = [o[0] for o in owners]

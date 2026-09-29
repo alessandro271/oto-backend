@@ -15,6 +15,10 @@ contenu d'une autre org comme appartenant à A, il ment au client. La première 
 - `scope=project` sur un projet reçu d'une autre org rendait toujours « d'ici ».
 
 Base réelle, chemin servi (`me.search`, la capacité derrière `oto_search`).
+
+Depuis la décision du 28/09/2026 (ADR 0030 §9), ce qui est à MOI ou partagé à MOI en
+personne ne se cherche plus que depuis mon org PERSO (`perso`) : les cas qui en
+dépendent y sont rejoués, et l'org d'origine y reste celle de l'objet.
 """
 from __future__ import annotations
 
@@ -80,7 +84,8 @@ def monde(live):
     ownership.grant(ownership.TYPE_RESSOURCE_DATASTORE, str(t["org_b"]), "org", str(a),
                     "read", granted_by=TIERS)
     db.datastore_insert_row(t["perso"], "r1", {"nom": f"ligne {MOT}"})
-    return {"a": a, "b": b, "p": p, "t": t, "page_seule": page_seule}
+    return {"a": a, "b": b, "p": p, "t": t, "page_seule": page_seule,
+            "perso": org_store.ensure_personal_org(MOI)}
 
 
 def _cherche(sub, org, **k) -> dict:
@@ -98,37 +103,47 @@ def _origines(out, kind) -> dict:
 
 
 def test_tableau_personnel_ne_d_ici_mais_inconnu(monde):
-    """Mon tableau personnel sort dans l'org A (il est à moi) ; son org de naissance
-    n'est pas enregistrée : `other_org` est `None`, pas `False`."""
-    out = _cherche(MOI, monde["a"], kinds=["tableau", "ligne"])
+    """Mon tableau personnel sort dans mon org perso (il est à moi, 28/09/2026) ; son
+    org de naissance n'est pas enregistrée : `other_org` est `None`, pas `False`. Dans
+    l'org A, il ne sort pas — seuls les tableaux de A et ceux partagés à A."""
     t = monde["t"]
-    assert _origines(out, "tableau") == {
-        t["perso"]: (None, None),
+    dans_a = _cherche(MOI, monde["a"], kinds=["tableau", "ligne"])
+    assert _origines(dans_a, "tableau") == {
         t["org_a"]: (monde["a"], False),
         t["org_b"]: (monde["b"], True),
     }
-    assert _origines(out, "ligne") == {t["perso"]: (None, None)}
+    assert _origines(dans_a, "ligne") == {}
+    dans_perso = _cherche(MOI, monde["perso"], kinds=["tableau", "ligne"])
+    assert _origines(dans_perso, "tableau") == {t["perso"]: (None, None)}
+    assert _origines(dans_perso, "ligne") == {t["perso"]: (None, None)}
 
 
 def test_projet_personnel_d_une_autre_org_par_son_context_org(monde):
-    out = _cherche(MOI, monde["a"], kinds=["page", "brief"])
+    out = _cherche(MOI, monde["perso"], kinds=["page", "brief"])
     assert _origines(out, "page")[monde["p"]["perso_b"]] == (monde["b"], True)
     assert _origines(out, "brief")[monde["p"]["perso_b"]] == (monde["b"], True)
+    # Partagé à MOI en personne : il ne se cherche pas depuis l'org A.
+    dans_a = _cherche(MOI, monde["a"], kinds=["page", "brief"])
+    assert monde["p"]["perso_b"] not in _origines(dans_a, "page")
 
 
 def test_projet_d_un_collegue_de_la_meme_org_partage_reste_d_ici(monde):
-    out = _cherche(MOI, monde["a"], kinds=["page"])
-    pages = _origines(out, "page")
-    assert pages[monde["p"]["collegue_a"]] == (monde["a"], False)
+    pages = _origines(_cherche(MOI, monde["a"], kinds=["page"]), "page")
     assert pages[monde["p"]["org_a"]] == (monde["a"], False)
+    # Partagé à MOI en personne : trouvé depuis mon org perso (28/09/2026), et il y
+    # dit toujours l'org où il vit — A, pas l'org d'où on cherche.
+    assert monde["p"]["collegue_a"] not in pages
+    pages = _origines(_cherche(MOI, monde["perso"], kinds=["page"]), "page")
+    assert pages[monde["p"]["collegue_a"]] == (monde["a"], True)
 
 
 def test_admin_et_membre_lisent_la_meme_org(monde):
-    """Le projet du pôle : partage pour MOI, propriété pour l'admin — même réponse."""
+    """Le projet du pôle : partage pour MOI (trouvé depuis mon org perso, 28/09/2026),
+    propriété pour l'admin (depuis A) — la même org d'origine."""
     pid = monde["p"]["pole_a"]
-    moi = _origines(_cherche(MOI, monde["a"], kinds=["page"]), "page")
+    moi = _origines(_cherche(MOI, monde["perso"], kinds=["page"]), "page")
     admin = _origines(_cherche(ADMIN, monde["a"], kinds=["page"]), "page")
-    assert moi[pid] == admin[pid] == (monde["a"], False)
+    assert moi[pid][0] == admin[pid][0] == monde["a"]
 
 
 def test_scope_projet_sur_un_projet_recu_d_ailleurs(monde):

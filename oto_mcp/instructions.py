@@ -147,11 +147,15 @@ def _resolve_context(sub: str | None, org_id: int) -> dict:
 
     projects: list[str] = []
     try:
-        rows = db.list_projects_for_owners([("org", str(org_id))])
+        # L'org, et moi SEULEMENT dans mon org perso (décision du 28/09/2026 : dans une
+        # org on ne voit que l'org — mes projets perso et ce qui m'est partagé en
+        # personne se listent dans mon org perso).
+        moi = ownership.perso_de_la_liste(sub, org_id) if sub else []
+        rows = db.list_projects_for_owners([("org", str(org_id))] + moi)
         # + les projets LIVRÉS à cette org (partagés via resource_grants, #52) — c'est
         # l'exposition au handshake : le client ouvre le projet livré en un message.
         seen = {r.get("id") for r in rows}
-        principals = [("org", str(org_id))] + ([("user", sub)] if sub else [])
+        principals = [("org", str(org_id))] + moi
         # Vue bornée (oto#270) : un partage personnel reçu n'est pas de l'org consultée.
         rows += [r for r in ownership.borner_a_la_vue(
                      sub, "project", db.list_projects_granted_to(principals),

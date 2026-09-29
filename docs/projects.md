@@ -192,6 +192,18 @@ Partage/transfert via **`oto_resource`** (resource_type=`project` ajouté au dis
 `/projects` + page dédiée `/projects/:id` (`ProjectDetailView`, ADR 0030). Reliquats du modèle
 (MCP-App rendu, édition temps réel/lock, pré-set vendable=copie) **non faits**.
 
+> **Dans une org, on ne voit QUE l'org (28/09/2026, ADR 0030 §9 — remplace le paragraphe
+> suivant pour les projets perso et les partages faits à moi).** `op=list` (portée `org`)
+> rend les projets de l'org consultée, de ses pôles, et ce qui est partagé à elle ou à mes
+> équipes en elle — **aucun projet perso**, quel que soit son `context_org_id`, et aucun
+> partage fait à moi. Dans mon **org perso**, s'y ajoutent **tous** mes projets perso et ce
+> qui m'est partagé en personne (`shared: true`). `list_templates`, `archived=true`, la
+> recherche et le rail suivent (`ownership.project_list_owners` / `principaux_de_liste`).
+> `op=create`/`op=copy` sans `owner_type` : le projet reste « moi, org » (§8) depuis
+> n'importe quelle org, et se LISTE dans l'org perso. `scope="me"` n'est servi que dans
+> l'org perso (29/09/2026) : ailleurs, 409 `personal_view_outside_personal_org`. Détail :
+> `docs/ownership.md`.
+
 > **Ce qu'une liste d'org montre des partages (21/09/2026).** `oto_project op=list` (portée
 > `org`, le défaut) rend les projets de l'org consultée, ceux de ses pôles, mes projets
 > perso qui y sont rangés (ADR 0030 amendé) et ce qui est partagé **à l'org ou à mes

@@ -72,9 +72,12 @@ que le dashboard et le MCP continuent d'écrire dans `projects` et `docs`.
   là où le résidu reste, il afficherait un contenu figé à côté de la vraie page. La fiche
   ouvre encore une copie par son identifiant (contrat R5 ci-dessus) ; le résidu se retire
   par `oto-mcp maintenance residu-projete`.
-- ⚠️ **Un projet personnel ne sort que dans son org de contexte** (`context_org_id`,
-  ADR 0030 amendé, la règle de `oto_project op=list`). Corrigé le 2026-09-22 : la section
-  « Privé » d'une org cliente listait les projets personnels créés dans une autre org.
+- ⚠️ **Le personnel ne sort que dans l'org PERSO** (décision du 28/09/2026, ADR 0030 §9,
+  la règle de `oto_project op=list`) : le rail n'y met `("user", sub)` que là
+  (`ownership.perso_de_la_liste`), et y sort alors TOUS les projets perso, quel que soit
+  leur `context_org_id` ; la section « Partagé » (partages faits à moi) aussi. Ailleurs,
+  « Privé » ne porte que mes exécutions dans l'org. Avant (22/09), un projet personnel
+  sortait dans son org de contexte.
 - ⚠️ **Les identifiants de blocs d'une page lue ainsi sont dérivés** du rang et de la
   source : clés de rendu, pas ancres. Ils changent quand le texte au-dessus change.
 - Pas encore couverts : un projet partagé EN DIRECT n'entre pas dans la section

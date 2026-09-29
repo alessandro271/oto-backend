@@ -132,11 +132,17 @@ def test_la_vue_montre_ce_que_le_membre_voit_dans_o(client, monde):
     orgs = client.get("/api/me/orgs", headers=h).json()["orgs"]
     assert [x["id"] for x in orgs] == [monde["o"]]
 
+    # O n'est pas l'org perso du membre : la liste ne rend QUE O (28/09/2026) — son
+    # projet perso rangé dans O s'ouvre par son id (ci-dessous), il ne s'y liste pas.
     r = client.post("/api/me/projects", json={"op": "list"}, headers=h)
     assert r.status_code == 200, r.text
-    assert _noms(r) == {"Projet de O", "Projet d'équipe O", "Perso rangé dans O"}
+    assert _noms(r) == {"Projet de O", "Projet d'équipe O"}
+    # Lentille « moi » : servie dans l'org perso seulement (29/09/2026) — O n'en est
+    # pas une, refus nommé ; il ne nomme QUE l'org perso de la cible, jamais P.
     r = client.post("/api/me/projects", json={"op": "list", "scope": "me"}, headers=h)
-    assert r.status_code == 200 and _noms(r) == set(), r.text
+    assert (r.status_code, r.json()["error"]) == (
+        409, "personal_view_outside_personal_org"), r.text
+    assert MARQUE_P not in r.text
 
     r = client.post("/api/me/projects",
                     json={"op": "get", "project_id": monde["pr"]["perso_o"]}, headers=h)
@@ -144,7 +150,7 @@ def test_la_vue_montre_ce_que_le_membre_voit_dans_o(client, monde):
 
     tableaux = client.get("/api/datastores", headers=h)
     assert tableaux.status_code == 200, tableaux.text
-    assert {t["datastore"] for t in tableaux.json()["datastores"]} == {"tab_o", "tab_perso"}
+    assert {t["datastore"] for t in tableaux.json()["datastores"]} == {"tab_o"}
 
     cle = client.get("/api/settings/api-keys/hunter", headers=h)
     assert cle.status_code == 200, cle.text
@@ -180,8 +186,12 @@ def test_rien_de_p_ni_aucun_secret_dans_les_lectures_ouvertes(client, monde):
         r = client.post("/api/me/projects", json=op, headers=h)
         assert r.status_code == 200, r.text
         corps.append(r.text)
-    r = client.post("/api/me/docs", json={"op": "shared_with_me"}, headers=h)
+    r = client.post("/api/me/docs", json={"op": "shared_with_me", "scope": "org"}, headers=h)
     assert r.status_code == 200, r.text
+    corps.append(r.text)
+    # La lentille « moi » des pages : refusée dans O (29/09/2026), sans rien de P.
+    r = client.post("/api/me/docs", json={"op": "shared_with_me"}, headers=h)
+    assert r.status_code == 409, r.text
     corps.append(r.text)
     tout = "\n".join(corps)
     assert MARQUE_P not in tout
@@ -253,9 +263,15 @@ def test_hors_vue_le_membre_lit_comme_avant(client, monde):
     # O, P et son espace personnel : toutes ses orgs.
     assert {monde["o"], monde["p"]} < {
         x["id"] for x in client.get("/api/me/orgs", headers=h).json()["orgs"]}
+    # 28/09/2026 : O n'est pas son org perso — la liste ne rend QUE O.
     r = client.post("/api/me/projects", json={"op": "list"}, headers=h)
-    assert _noms(r) == {"Projet de O", "Projet d'équipe O", "Perso rangé dans O"}
+    assert _noms(r) == {"Projet de O", "Projet d'équipe O"}
+    # La lentille « moi » : refusée dans O, servie dans son org perso (29/09/2026).
     r = client.post("/api/me/projects", json={"op": "list", "scope": "me"}, headers=h)
+    assert r.status_code == 409, r.text
+    from oto_mcp import org_store
+    r = client.post("/api/me/projects", json={"op": "list", "scope": "me"},
+                    headers=_soi(MEMBRE, org_store.ensure_personal_org(MEMBRE)))
     assert _noms(r) == {f"{MARQUE_P} partagé en propre"}
     # Règle d'avant : ma ressource perso et mon partage personnel me suivent partout.
     for cle in ("perso_p", "partage_p"):
@@ -267,8 +283,8 @@ def test_hors_vue_le_membre_lit_comme_avant(client, monde):
     assert (r.status_code, r.json()["error"]) == (403, "wrong_org_context")
     tableaux = {t["datastore"] for t in
                 client.get("/api/datastores", headers=h).json()["datastores"]}
-    # Règle d'avant (2026-07-01) : le partage reçu en propre ne se liste dans aucune org.
-    assert tableaux == {"tab_o", "tab_perso"}
+    # Le partage reçu en propre et le tableau perso ne se listent que dans l'org perso.
+    assert tableaux == {"tab_o"}
     assert client.get("/api/me/tokens", headers=h).status_code == 200
 
 
@@ -314,11 +330,12 @@ def test_le_seam_est_identique_hors_vue_et_borne_en_vue(monde):
         "équipes de l'acteur": (
             lambda: sorted(ow.accessor_scope(MEMBRE).group_ids),
             sorted([monde["g"], monde["h"]]), [monde["g"]]),
-        # Hors vue, la recherche garde le partage personnel (cherchable ⇔ lisible).
+        # 28/09/2026 : dans O (pas son org perso), on ne cherche QUE O — en vue comme
+        # hors vue, en parité avec la liste.
         "projets cherchables dans O": (
             lambda: sorted(ow.accessible_project_ids(MEMBRE, o)),
-            sorted([pr["org_o"], pr["equipe_o"], pr["perso_o"], pr["partage_p"]]),
-            sorted([pr["org_o"], pr["equipe_o"], pr["perso_o"]])),
+            sorted([pr["org_o"], pr["equipe_o"]]),
+            sorted([pr["org_o"], pr["equipe_o"]])),
     }
     for nom, (appel, hors_vue, en_vue) in cas.items():
         assert appel() == hors_vue, f"hors vue — {nom}"

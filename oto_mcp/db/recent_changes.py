@@ -7,7 +7,8 @@ après avoir rapatrié deux listes entières.
 
 Le PÉRIMÈTRE n'est pas calculé ici : l'appelant passe les projets lisibles
 (`ownership.accessible_project_ids`) et les propriétaires de procédures à portée
-(`ownership.project_scope_owners` + la personne). Même règle que la recherche
+(`ownership.project_list_owners` : la personne dans son org perso seulement). Même
+règle que la recherche
 (`db/search.py`) — « cherchable ⇔ lisible » devient « listé ⇔ lisible ».
 
 ⚠️ **L'auteur n'est jamais déduit.** Une PAGE porte le sien depuis oto#274 :

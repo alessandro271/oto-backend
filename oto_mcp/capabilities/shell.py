@@ -15,7 +15,9 @@ le patron de l'épine), jamais la liste.
 **Les sections sont CALCULÉES à l'appel, jamais stockées** — elles sont la projection
 de l'ownership (ADR 0049) sur une personne : `everyone` = l'org, `team` = une par équipe
 dont elle est membre, `private` = ce qu'elle possède, `shared` = ce qu'on lui a partagé
-en direct et qu'aucune équipe ne couvre déjà.
+en direct et qu'aucune équipe ne couvre déjà. ⚠️ Depuis le 28/09/2026, `private` (hors
+ses exécutions dans l'org) et `shared` ne se remplissent que dans son org PERSO — dans
+une autre org, on ne voit que l'org (`ownership.perso_de_la_liste`).
 
 Trois garanties du contrat, tenues ici :
 
@@ -377,12 +379,16 @@ def _compose(ctx: ResolvedCtx) -> dict:
 
     proprios = ([("org", str(org_id))] if org_id is not None else [])
     proprios += [("group", str(g["group_id"])) for g in equipes]
-    proprios += [("user", sub)]
+    # Le personnel — mes nœuds et TOUS mes projets perso — et les partages faits à moi
+    # ne se rangent que dans mon org PERSO (décision du 28/09/2026) : dans une autre
+    # org, on ne voit que l'org. La section « Privé » y garde mes exécutions dans l'org.
+    moi = ownership.perso_de_la_liste(sub, org_id)
+    proprios += moi
     # Les projets et leurs pages sont LUS dans leurs tables (`db/project_nodes`), pas dans
     # leurs anciennes copies : une copie restée en base porterait un contenu figé.
     lignes = [l for l in db_shell.nodes_for_owners(proprios)
               if not project_nodes.est_une_copie(l)]
-    lignes += project_nodes.lignes_pour_proprietaires(proprios, org_id)
+    lignes += project_nodes.lignes_pour_proprietaires(proprios)
 
     par_proprio: dict = {}
     for l in lignes:
@@ -410,7 +416,8 @@ def _compose(ctx: ResolvedCtx) -> dict:
 
     # ── `shared` : les partages DIRECTS, moins ce qu'une autre section range déjà ──
     # Vue bornée (oto#270) : seuls les partages dont la ressource est visible dans O.
-    grants = ownership.partages_dans_la_vue(sub, db_shell.direct_grants(sub))
+    grants = (ownership.partages_dans_la_vue(sub, db_shell.direct_grants(sub))
+              if moi else [])
     par_id, sans_noeud = db_shell.resolve_grant_nodes(grants)
     deja_rangés = {l["public_id"] for l in lignes}
     candidats = [pid for pid in par_id if pid not in deja_rangés]
@@ -477,7 +484,10 @@ CAPABILITIES += [
         authz=ORG_MEMBER,
         description=(
             "The application CHROME in one call: company, user, the rail in ordered "
-            "SECTIONS (everyone / one per team / private / shared-when-not-empty), "
+            "SECTIONS (everyone / one per team / private / shared-when-not-empty — "
+            "your personal nodes and projects, and what is shared with you as a "
+            "person, only in your PERSONAL org; elsewhere `private` holds only your "
+            "runs in that org), "
             "`counters` of things AWAITING you (nothing is counted today, so it is `{}` — a "
             "missing key means « not counted », never zero), and a short connector index for the "
             "command palette. Read-only, never paginated — depth is capped instead "

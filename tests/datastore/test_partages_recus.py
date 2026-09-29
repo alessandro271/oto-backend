@@ -16,7 +16,9 @@ La distribution :
 - Y est une autre org de B, qui ne possède rien.
 
 L'org active est posée par appel (`access.current_org`, le seam unique) ; les
-appartenances, elles, sont de vraies lignes.
+appartenances, elles, sont de vraies lignes. Depuis le 29/09/2026 la route n'est servie
+que dans l'org PERSO de l'appelant (409 `personal_view_outside_personal_org` ailleurs),
+et ne dédoublonne plus avec la liste de l'org, qui y rend aussi ces tableaux.
 """
 from __future__ import annotations
 
@@ -25,7 +27,7 @@ import pytest
 from oto_mcp import access, db, group_store, org_store, ownership
 from oto_mcp.capabilities import registry
 from oto_mcp.capabilities._authz import SUB_ONLY
-from oto_mcp.capabilities._types import ResolvedCtx
+from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
 from oto_mcp.capabilities.datastore import partages_recus as P
 from oto_mcp.datastore.core import make_store
 
@@ -56,7 +58,8 @@ def monde(live):
 
 
 def _recus(monkeypatch, sub, org) -> dict:
-    """La réponse de la capacité, pour `sub` naviguant dans `org` (None = aucune org).
+    """La réponse de la capacité, pour `sub` naviguant dans `org` — son org PERSO, seule
+    où la lentille est servie depuis le 29/09/2026 (ADR 0030 §9).
 
     ⚠️ La face REST sert le dict du handler TEL QUEL : `Output` décrit, il ne valide pas
     (`_types.Capability`). Mesuré sur la préproduction le 10/09/2026 : aucune clé `ns_id`
@@ -69,51 +72,66 @@ def _recus(monkeypatch, sub, org) -> dict:
     return {int(e["id"]): e for e in out["datastores"]}
 
 
+def _perso(sub) -> int:
+    return org_store.ensure_personal_org(sub)
+
+
 def _liste_de_l_org(monkeypatch, sub, org) -> set:
     monkeypatch.setattr(access, "current_org", lambda s: org)
     return {int(e["id"]) for e in make_store(sub).list_datastores()}
 
 
-def test_la_route_est_independante_de_l_org_et_reste_hors_MCP():
+def test_la_route_reste_hors_MCP_et_declare_son_refus():
     cap = registry.by_key("me.datastore.shared_with_me")
-    assert cap.authz is SUB_ONLY, "aucune org requise : un partage à une personne n'en a pas"
+    assert cap.authz is SUB_ONLY
     assert cap.mcp is None
     assert [(b.verb, b.path) for b in cap.rest_bindings()] == [("GET", "/api/me/datastores/shared")]
+    assert [(e.status, e.code) for e in cap.errors] == [
+        (409, "personal_view_outside_personal_org")]
 
 
 @pytest.mark.parametrize("org", ["x", "y", None])
-def test_le_destinataire_voit_le_partage_personnel_depuis_n_importe_quelle_org(
+def test_hors_de_l_org_perso_la_lentille_est_REFUSEE_en_nommant_l_org_perso(
         monde, monkeypatch, org):
-    recus = _recus(monkeypatch, B, monde[org] if org else None)
-    e = recus[monde["t-perso"]]
+    """Décision du 29/09/2026 : une lentille « moi » ne se sert que dans l'org perso —
+    ailleurs un refus nommé, jamais une liste vide (« personne ne t'a rien partagé »)."""
+    with pytest.raises(AuthzDenied) as refus:
+        _recus(monkeypatch, B, monde[org] if org else None)
+    assert (refus.value.status, refus.value.code) == (409, "personal_view_outside_personal_org")
+    assert f"#{_perso(B)}" in refus.value.message
+
+
+def test_le_destinataire_voit_le_partage_personnel_dans_son_org_perso(monde, monkeypatch):
+    e = _recus(monkeypatch, B, _perso(B))[monde["t-perso"]]
     assert e["shared_by"] == "Alice Proprio", "qui a partagé — un nom, pas un identifiant"
     assert (e["permission"], e["can_write"], e["shared"]) == ("read", False, True)
     assert (e["owner_type"], e["is_personal"]) == ("user", False)
     assert e["id"] == monde["t-perso"]
 
 
-def test_sans_doublon_avec_la_liste_de_l_org(monde, monkeypatch):
-    # Contrôle positif : dans X, la liste de l'org rend DÉJÀ `t-org` (X le possède).
-    assert monde["t-org"] in _liste_de_l_org(monkeypatch, B, monde["x"])
-    assert monde["t-org"] not in _recus(monkeypatch, B, monde["x"]), "répété ici = doublon"
-    # Hors de X, rien ne le rend ailleurs : il revient ici, avec son droit.
-    e = _recus(monkeypatch, B, monde["y"])[monde["t-org"]]
-    assert (e["permission"], e["can_write"]) == ("write", True)
+def test_la_lentille_est_le_sous_ensemble_partage_a_moi_de_la_liste_de_l_org_perso(
+        monde, monkeypatch):
+    """Plus de dédoublonnage (29/09/2026) : dans l'org perso, la liste rend aussi ces
+    tableaux ; la lentille en est le sous-ensemble, droit compris — `t-org`, possédé par
+    X et partagé à B en personne, y est avec son droit d'écriture."""
+    perso = _perso(B)
+    recus = _recus(monkeypatch, B, perso)
+    assert set(recus) == {monde["t-perso"], monde["t-org"]}
+    assert set(recus) <= _liste_de_l_org(monkeypatch, B, perso)
+    assert (recus[monde["t-org"]]["permission"], recus[monde["t-org"]]["can_write"]) == (
+        "write", True)
 
 
-@pytest.mark.parametrize("org", ["x", None])
-def test_un_tiers_de_la_meme_org_ne_voit_rien(monde, monkeypatch, org):
+def test_un_tiers_de_la_meme_org_ne_voit_rien(monde, monkeypatch):
     """C est dans X ET dans l'équipe : il voit les droits d'audience LÀ OÙ ILS VIVENT
     (la liste de l'org), jamais ici — ni les partages faits à B."""
-    if org:
-        liste = _liste_de_l_org(monkeypatch, C, monde["x"])
-        assert {monde["t-a-l-org"], monde["t-a-l-equipe"]} <= liste, "contrôle positif"
-    assert _recus(monkeypatch, C, monde[org] if org else None) == {}
+    liste = _liste_de_l_org(monkeypatch, C, monde["x"])
+    assert {monde["t-a-l-org"], monde["t-a-l-equipe"]} <= liste, "contrôle positif"
+    assert _recus(monkeypatch, C, _perso(C)) == {}
 
 
-@pytest.mark.parametrize("org", ["x", None])
-def test_le_proprietaire_ne_se_voit_rien_partager(monde, monkeypatch, org):
-    assert _recus(monkeypatch, A, monde[org] if org else None) == {}
+def test_le_proprietaire_ne_se_voit_rien_partager(monde, monkeypatch):
+    assert _recus(monkeypatch, A, _perso(A)) == {}
 
 
 def test_la_requete_ne_connait_que_le_destinataire(monde):

@@ -496,12 +496,14 @@ def register(mcp: FastMCP) -> None:
     # quoi la clé existe pour qui la connaît déjà, c'est-à-dire pour personne.
     @mcp.tool()
     def data_list_datastores() -> dict:
-        """List the datastores visible in the active org: the org's and your teams'
-        tables, those shared with the org or your teams, and YOUR personal tables
-        created in this org (plus older ones whose org of creation is unknown).
+        """List the datastores of the active org: the org's and your teams' tables,
+        and those shared with the org or your teams — never a personal table nor one
+        shared with you as a person. Those are listed in your PERSONAL org only,
+        which also lists ALL your personal tables (whatever org they were created
+        under) and the tables shared with you as a person (`shared: true`).
 
-        A personal table created under another org is listed THERE, not here — it is
-        not gone: it still opens by its number from any org.
+        A table missing from this list is not gone: it still opens by its number
+        from any org.
 
         Each entry carries the table's NUMBER under BOTH names — `ns_id` (the form
         to pass as `datastore` from here on, and the one every other reply uses)
@@ -539,9 +541,9 @@ def register(mcp: FastMCP) -> None:
         colleague who cannot find the table and concludes it does not exist. The
         reply tells you the owner, and warns you in exactly that case.
 
-        A personal table is LISTED only in the org you create it under (`_org=`, or
-        your active org) — `data_list_datastores` from another org does not show it.
-        Its number (`ns_id`) opens it from anywhere.
+        A personal table is LISTED in your PERSONAL org, whatever org you create it
+        under — `data_list_datastores` from any other org does not show it. Its number
+        (`ns_id`) opens it from anywhere.
 
         Args:
             datastore: kebab-case identifier, unique per owner (e.g. `timetrack`).

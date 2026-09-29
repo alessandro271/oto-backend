@@ -127,10 +127,10 @@ def search_briefs_semantic(query_literal: str, project_ids: list[int], *,
         return [dict(r) for r in rows]
 
 
-def search_guides_semantic(query_literal: str, org_id: Optional[int], sub: str, *,
-                           limit: int = 20, max_distance: float = 0.6) -> list[dict]:
+def search_guides_semantic(query_literal: str, org_id: Optional[int], sub: Optional[str],
+                           *, limit: int = 20, max_distance: float = 0.6) -> list[dict]:
     """Guides on-demand proches du sens, MÊME scope que le lexical `search_guides_fts` :
-    plateforme ∪ org active ∪ user. Jointure sur `nodes` (#282) : `scope` EST
+    plateforme ∪ org active ∪ user (`sub=None` : aucun guide personnel). Jointure sur `nodes` (#282) : `scope` EST
     l'`owner_type`, la prose vit dans `props` — mêmes clés de retour qu'avant."""
     with _connect() as conn:
         rows = conn.execute(

@@ -2772,6 +2772,17 @@ crée son tableau (`upsert_row`), et le vivier provisionné par la copie d'un pr
 où la copie est rangée). Une garde d'AST (`tests/datastore/test_contexte_org_160.py`)
 refuse une voie qui l'omettrait.
 
+> ⚠️ **Remplacé le 28/09/2026 (ADR 0030 §9, `docs/ownership.md` « Dans une org, on ne
+> voit QUE l'org »)** : un tableau personnel ne se liste plus dans son org de création
+> mais dans l'org PERSO de son propriétaire, quelle que soit cette org ; hors de l'org
+> perso, `list_datastores` et la recherche ne rendent ni tableau personnel ni partage fait
+> à une personne. `ownership.tableaux_du_contexte` est retiré ; `context_org_id` reste
+> écrit, plus lu. Sans `owner`, un tableau reste à la PERSONNE depuis n'importe quelle
+> org (29/09/2026) et se liste dans l'org perso ; « partagés avec moi »
+> (`GET /api/me/datastores/shared`) n'est servi que dans l'org perso (409
+> `personal_view_outside_personal_org` ailleurs). Banc : `tests/test_listes_seule_l_org.py`.
+> Le paragraphe suivant décrit la règle d'avant.
+
 **La liste, depuis la phase 2 (25/09/2026)** : `list_datastores` — donc
 `GET /api/datastores`, `data_list_datastores`, l'index de `data_app` et la vérification
 des tableaux d'un jeton porté — et la recherche (`search._accessible_namespaces`, en
@@ -2789,7 +2800,7 @@ C'est un filtre de **liste**, pas un droit :
   seulement plus listé dans B ;
 - `oto_resource op=list` (plan de gouvernance, toutes les orgs de l'acteur) ne filtre pas.
 
-Banc : `tests/datastore/test_liste_par_org_160.py`.
+Banc (retiré le 28/09/2026 avec la règle) : `tests/datastore/test_liste_par_org_160.py`.
 
 **Les personnels d'avant la colonne** : la révision `0018_contexte_org_rempli` remplit
 ceux qu'une trace désigne sans ambiguïté — le journal des appels (la création, même

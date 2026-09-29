@@ -17,7 +17,7 @@ CTX = ResolvedCtx(sub="u1", org_id=7)
 
 @pytest.fixture
 def calls(monkeypatch):
-    rec = {"owners": [], "principals": [], "granted_want": [], "member": []}
+    rec = {"owners": [], "principals": [], "granted_want": []}
 
     monkeypatch.setattr(ownership.roles, "is_org_admin", lambda sub, org: False)
     monkeypatch.setattr(ownership.group_store, "list_groups_for_user",
@@ -26,12 +26,10 @@ def calls(monkeypatch):
     monkeypatch.setattr(ownership.db, "list_projects_for_owners",
                         lambda owners, **k: rec["owners"].append(list(owners)) or
                         [{"id": 11}, {"id": 12}])
-    # Scope MEMBRE (ADR 0030 amendé) : mes projets perso de l'org de contexte, en PARITÉ
-    # avec op=list. `accessible_project_ids` DOIT appeler ce seam (sinon perso listable
-    # mais non cherchable → « cherchable ⇔ lisible » ment).
-    monkeypatch.setattr(ownership.db, "list_member_projects",
-                        lambda sub, org, **k: rec["member"].append((sub, org)) or
-                        [{"id": 15}])
+    # Org 7 = une org de TRAVAIL (l'org perso de u1 est la 5) : décision du 28/09/2026,
+    # aucun objet personnel ni partage nominatif n'y entre. Les tests d'org perso
+    # passent `org=5`.
+    monkeypatch.setattr(ownership.org_store, "get_personal_org", lambda sub: 5)
     monkeypatch.setattr(ownership.db, "list_projects_granted_to",
                         lambda principals: rec["principals"].append(list(principals)) or
                         [{"id": 20, "permission": "read"},
@@ -41,28 +39,36 @@ def calls(monkeypatch):
 
 def test_accessible_ids_read_and_write(calls):
     ids = ownership.accessible_project_ids("u1", 7, want="read")
-    # owned (org+pôles) ∪ MEMBRE (perso de l'org) ∪ grants
-    assert ids == [11, 12, 15, 20, 21]
-    # write : owned + membre (je les possède) ; seuls les GRANTS write s'ajoutent
+    # owned (org+pôles) ∪ grants
+    assert ids == [11, 12, 20, 21]
+    # write : owned (je les possède) ; seuls les GRANTS write s'ajoutent
     ids_w = ownership.accessible_project_ids("u1", 7, want="write")
-    assert ids_w == [11, 12, 15, 21]
+    assert ids_w == [11, 12, 21]
 
 
 def test_scope_parity_with_op_list(calls):
-    """PARITÉ : les owners du contexte, les projets MEMBRE et les principals de grants
-    utilisés par la recherche sont EXACTEMENT ceux d'`oto_project op=list` (le drift de
-    l'un ferait mentir « cherchable ⇔ lisible »)."""
+    """PARITÉ : les owners et les principals de grants utilisés par la recherche sont
+    EXACTEMENT ceux d'`oto_project op=list` (le drift de l'un ferait mentir
+    « cherchable ⇔ lisible »)."""
     ownership.accessible_project_ids("u1", 7)
     search_owners, search_principals = calls["owners"][-1], calls["principals"][-1]
 
-    # côté op=list : mêmes seams (project_scope_owners + active_org_principals)
-    assert search_owners == ownership.project_scope_owners("u1", 7)
-    assert search_principals == ownership.active_org_principals("u1", 7)
-    # owners = org active + mes groupes ; principals = org + moi + mes groupes
+    # côté op=list : mêmes seams (project_list_owners + principaux_de_liste)
+    assert search_owners == ownership.project_list_owners("u1", 7)
+    assert search_principals == ownership.principaux_de_liste("u1", 7)
+    # org de travail : owners = org active + mes groupes ; principals = org + mes
+    # groupes — JAMAIS moi (28/09/2026)
     assert search_owners == [("org", "7"), ("group", "3")]
-    assert search_principals == [("org", "7"), ("user", "u1"), ("group", "3")]
-    # scope MEMBRE interrogé sur (sub, org de contexte) — même seam que op=list.
-    assert calls["member"][-1] == ("u1", 7)
+    assert search_principals == [("org", "7"), ("group", "3")]
+
+
+def test_org_perso_ajoute_moi_comme_proprietaire_et_destinataire(calls):
+    """Décision du 28/09/2026 : dans MON org perso, la liste (et donc la recherche)
+    rend tous mes projets perso — `("user", sub)` propriétaire, quel que soit leur
+    `context_org_id` — et ce qui m'est partagé en personne."""
+    ownership.accessible_project_ids("u1", 5)
+    assert calls["owners"][-1] == [("org", "5"), ("group", "3"), ("user", "u1")]
+    assert calls["principals"][-1] == [("org", "5"), ("user", "u1"), ("group", "3")]
 
 
 def test_org_admin_sees_all_org_groups(calls, monkeypatch):
@@ -109,8 +115,12 @@ def test_each_source_gets_its_predicate(monkeypatch):
     # entrer ici est le trou que ce tripwire existe pour attraper.
     monkeypatch.setattr(S.db, "search_file_contents",
                         lambda q, pids, limit: rec.setdefault("content_pids", pids) and [])
-    monkeypatch.setattr(S.ownership, "active_org_principals",
+    monkeypatch.setattr(S.ownership, "principaux_de_liste",
                         lambda sub, org: [("org", "7"), ("user", "u1")])
+    monkeypatch.setattr(S.ownership, "perso_de_la_liste",
+                        lambda sub, org: [("user", "u1")])
+    monkeypatch.setattr(S.db, "list_datastores_shared_to_user",
+                        _cap("ds_to_me", [{"id": 103, "datastore": "recu"}]))
     monkeypatch.setattr(S.db, "list_datastores_for_owners",
                         _cap("ds_owners_a", [{"id": 101, "datastore": "prospects"}]))
     monkeypatch.setattr(S.db, "list_datastores_granted_to",
@@ -126,14 +136,16 @@ def test_each_source_gets_its_predicate(monkeypatch):
             == rec["content_pids"] == [11, 12])
     # procédures : l'org active, rien d'autre
     assert rec["proc_org"] == 7
-    # guides : org active + sub
+    # guides : org active + sub (org perso simulée : le personnel y entre)
     assert rec["guides"] == (7, "u1")
-    # tableaux : principals du contexte + grants scopés org/groupes
+    # tableaux : principals de la LISTE + grants scopés org/groupes + (org perso)
+    # partagés à moi
     assert rec["ds_owners_a"][0] == [("org", "7"), ("user", "u1")]
     assert rec["ds_granted_a"] == ("u1", [7], [])
+    assert rec["ds_to_me"] == ("u1",)
     # lignes (#67 V2.1) : héritent de l'accès du datastore → scope = ids des
     # datastores accessibles (owners ∪ grants), JAMAIS un scope à part
-    assert rec["rows_ns"] == [101, 102]
+    assert rec["rows_ns"] == [101, 102, 103]
 
 
 def test_project_scope_restricts_to_one_project(monkeypatch):

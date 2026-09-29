@@ -28,7 +28,10 @@ seul ne trouvera donc jamais une valeur DANS une ligne — c'est `ligne` qu'il f
 **Invariant « cherchable ⇔ lisible »** : docs/briefs/fichiers scopés
 `ownership.accessible_project_ids` (factorisation du scoping d'`op=list` — JAMAIS
 `can_access`, cross-org) ; **tripwire par source = critère de merge**
-(`test_search_scope_tripwire.py`). Le catalogue connecteurs est INJECTÉ par la capacité
+(`test_search_scope_tripwire.py`). ⚠️ **Dans une org, on ne cherche QUE l'org**
+(28/09/2026, ADR 0030 §9) : projets, tableaux, lignes et guides personnels, et ce qui est
+partagé à une personne, ne se cherchent que depuis l'org perso — même seam que les listes
+(`ownership.principaux_de_liste` / `project_list_owners`). Le catalogue connecteurs est INJECTÉ par la capacité
 (pas d'inversion de couche). `oto_doc(op=search)` = rerouté, déprécié. Fichiers matchés sur
 `filename+title+description` (jamais `summary`, colonne morte).
 

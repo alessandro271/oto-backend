@@ -375,8 +375,10 @@ def search_procedures_fts(q: str, org_id: int, *, limit: int = 20) -> list[dict]
         (str(org_id),), q, limit, rank_vec=rank_expr("org_instructions"))
 
 
-def search_guides_fts(q: str, org_id: Optional[int], sub: str, *, limit: int = 20) -> list[dict]:
-    """Guides ON-DEMAND lisibles par l'acteur : plateforme (tous) + org active + user.
+def search_guides_fts(q: str, org_id: Optional[int], sub: Optional[str], *,
+                      limit: int = 20) -> list[dict]:
+    """Guides ON-DEMAND lisibles par l'acteur : plateforme (tous) + org active + user
+    (`sub=None` : aucun guide personnel — la recherche hors de l'org perso, 28/09/2026).
     Scope 'group' exclu V1 (même écart nommé que les procédures d'équipe).
 
     Lit `nodes` depuis #282 (les couches de contexte y ont été converties au lot M1).

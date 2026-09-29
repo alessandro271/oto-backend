@@ -87,8 +87,9 @@ def active_owner(org_id: Optional[int]) -> Optional[tuple[str, str]]:
 
 def active_org_principals(sub: str, org_id: Optional[int]) -> list[tuple[str, str]]:
     """Principals du CONTEXTE de l'org active sous lesquels une ressource est visible
-    ici : l'org active, l'acteur, et ses groupes DANS cette org. Source unique du
-    scoping par-contexte (ADR 0023), partagée par les listes et `visible_in_org`."""
+    ici : l'org active, l'acteur, et ses groupes DANS cette org. Le plan de l'ACCÈS
+    par id (`visible_in_org`, ADR 0023) ; les LISTES en retirent l'acteur hors de son
+    org perso (`principaux_de_liste`, décision du 28/09/2026)."""
     owner = active_owner(org_id)
     if owner is None:
         return []
@@ -97,24 +98,57 @@ def active_org_principals(sub: str, org_id: Optional[int]) -> list[tuple[str, st
         for g in group_store.list_groups_for_user(sub, org_id)]
 
 
-def tableaux_du_contexte(sub: str, org_id: Optional[int], lignes: list) -> list:
-    """Les tableaux POSSÉDÉS d'une liste par org (ceux que `active_org_principals` a
-    ramenés), moins les personnels de `sub` créés dans une AUTRE org (oto#160).
+def org_perso_de(sub: str, org_id: Optional[int]) -> bool:
+    """`org_id` est-elle l'org PERSO de `sub` ? — la question que pose toute LISTE
+    depuis la décision d'Alexis du 28/09/2026 : dans le contexte d'une org, on ne voit
+    QUE l'org ; ce qui est à moi, ou partagé à moi en personne, se voit dans mon org
+    perso. C'est la même source que `me.active_org_is_personal` (`org_store`)."""
+    return org_id is not None and org_store.get_personal_org(sub) == int(org_id)
 
-    Un personnel porte l'org de sa création (`context_org_id`) : il n'apparaît que là.
-    NULL — créé avant la colonne et que rien n'a permis de reconstituer — le laisse
-    visible dans toutes les orgs de son propriétaire, comme avant. Les tableaux d'org,
-    d'équipe et reçus ne sont pas touchés.
 
-    ⚠️ C'est un filtre de LISTE, jamais un droit : `active_org_principals` reste
-    inchangé, parce qu'il sert aussi `visible_in_org` et les listes de projets et de
-    pages ; et le tableau reste ouvrable par son numéro ou son nom depuis n'importe
-    quelle org (`resolve_datastore_ns` résout le personnel sans condition d'org)."""
-    return [n for n in lignes
-            if not (n.get("owner_type") == "user" and n.get("owner_id") == sub
-                    and n.get("context_org_id") is not None
-                    and org_id is not None
-                    and int(n["context_org_id"]) != int(org_id))]
+def perso_de_la_liste(sub: str, org_id: Optional[int]) -> list[tuple[str, str]]:
+    """`[("user", sub)]` dans l'org perso de `sub`, `[]` partout ailleurs.
+
+    Le principal PERSONNEL d'une liste — comme propriétaire (mes projets et tableaux
+    perso, QUEL QUE SOIT leur `context_org_id`) et comme destinataire (ce qui est
+    partagé à moi en personne). Hors de l'org perso, une liste ne rend aucun objet
+    `owner_type='user'` et aucun partage nominatif : ni les miens, ni ceux d'un autre.
+
+    ⚠️ Un filtre de LISTE, jamais un droit : `active_org_principals` et
+    `owner_in_scope` gardent le principal personnel, parce qu'ils servent l'accès par
+    id (`visible_in_org`), qui ne change pas — un projet ou un tableau perso s'ouvre
+    toujours par son identifiant depuis n'importe quelle org."""
+    return [("user", sub)] if org_perso_de(sub, org_id) else []
+
+
+def principaux_de_liste(sub: str, org_id: Optional[int]) -> list[tuple[str, str]]:
+    """Principals sous lesquels une LISTE rend ce qui est possédé ou partagé dans
+    l'org `org_id` : l'org, mes équipes dans cette org, et moi SEULEMENT dans mon org
+    perso (`perso_de_la_liste`). Source unique des listes de projets, de tableaux, de
+    pages reçues (`scope="org"`) et de la recherche — « cherchable ⇔ lisible » tient
+    parce qu'elles lisent toutes celle-ci."""
+    moi = perso_de_la_liste(sub, org_id)
+    return [p for p in active_org_principals(sub, org_id) if p[0] != "user"
+            or p in moi]
+
+
+def refus_vue_perso_hors_org_perso(sub: str, org_id: Optional[int],
+                                   quoi: str) -> tuple[str, dict]:
+    """`(message, details)` du refus 409 `personal_view_outside_personal_org` (décision
+    du 29/09/2026) : une lentille « moi » (`quoi`) n'est servie que dans l'org perso —
+    ce qui est partagé à une personne n'appartient à aucune org de travail.
+
+    `details` = `{"personal_org_id": N}` : ce qu'un écran lit pour basculer sans parser
+    la phrase. Vide en vue bornée (oto#270) — l'org_admin ne lit rien hors de O, l'org
+    perso du membre n'y est pas nommée. Les faces lèvent le refus en littéral, pour que
+    leur contrat déclaré le voie."""
+    perso = org_store.get_personal_org(sub) if vue_bornee() is None else None
+    ou = (f"ton org perso (#{perso}, `_org={perso}` côté agent, `X-Oto-Org: {perso}` "
+          "en REST)" if perso is not None else "ton org perso")
+    ici = f"dans l'org #{org_id}" if org_id is not None else "sans org active"
+    message = (f"{quoi} se lit dans ton org perso, pas {ici} : dans une org, on ne voit "
+               f"QUE l'org (décision du 28/09/2026). Bascule dans {ou} pour le lire.")
+    return message, ({"personal_org_id": perso} if perso is not None else {})
 
 
 def project_scope_owners(sub: str, org_id: Optional[int]) -> list[tuple[str, str]]:
@@ -132,28 +166,32 @@ def project_scope_owners(sub: str, org_id: Optional[int]) -> list[tuple[str, str
     return [owner] + [("group", str(g)) for g in gids]
 
 
+def project_list_owners(sub: str, org_id: Optional[int]) -> list[tuple[str, str]]:
+    """Propriétaires des projets qu'une LISTE rend dans l'org `org_id` : ceux du
+    contexte (`project_scope_owners` — l'org et ses pôles) et, dans mon org perso
+    seulement, moi (`perso_de_la_liste`) — TOUS mes projets perso, quel que soit
+    leur `context_org_id` (décision du 28/09/2026). Source unique d'`op=list`,
+    `op=list_templates`, `archived=true`, du rail et de la recherche."""
+    owners = project_scope_owners(sub, org_id)
+    return owners + perso_de_la_liste(sub, org_id) if owners else []
+
+
 def accessible_project_ids(sub: str, org_id: Optional[int],
                            want: str = "read") -> list[int]:
     """Ids des projets accessibles DANS l'org active — le scoping ENSEMBLISTE
-    d'`op=list` factorisé (lot 3) : owned par le contexte (org + pôles) ∪ partagés
-    aux principals du contexte. Sert la recherche et l'îlot « Dernières
-    modifications » (`want='read'`) ; `want='write'` n'ajoute que les grants write. **Jamais `can_access`**
-    (cross-org par construction) — cf. invariants du plan lot 3."""
-    owners = project_scope_owners(sub, org_id)
+    d'`op=list` factorisé (lot 3) : possédés par la liste (`project_list_owners`) ∪
+    partagés à ses principals (`principaux_de_liste`). Sert la recherche et l'îlot
+    « Dernières modifications » (`want='read'`) ; `want='write'` n'ajoute que les
+    grants write. **Jamais `can_access`** (cross-org par construction) — cf.
+    invariants du plan lot 3. PARITÉ STRICTE avec `oto_project op=list` (mêmes deux
+    seams) — sinon « cherchable ⇔ lisible » ment (tripwire
+    `test_search_scope_tripwire`)."""
+    owners = project_list_owners(sub, org_id)
     if not owners:
         return []
     ids = [int(r["id"]) for r in db.list_projects_for_owners(owners)]
     seen = set(ids)
-    # Scope MEMBRE (ADR 0030 amendé) : mes projets perso de CETTE org (`context_org`),
-    # possédés → read+write. En PARITÉ STRICTE avec `oto_project op=list` (même seam
-    # `db.list_member_projects`) — sinon « cherchable ⇔ lisible » ment (tripwire
-    # `test_search_scope_tripwire`). org_id non-None ici (owners non vide).
-    for r in db.list_member_projects(sub, int(org_id)):  # type: ignore[arg-type]
-        rid = int(r["id"])
-        if rid not in seen:
-            ids.append(rid)
-            seen.add(rid)
-    for r in db.list_projects_granted_to(active_org_principals(sub, org_id)):
+    for r in db.list_projects_granted_to(principaux_de_liste(sub, org_id)):
         rid = int(r["id"])
         if rid in seen:
             continue
@@ -277,8 +315,8 @@ def owner_in_scope(sub: str, org_id: Optional[int],
     if (otype, oid) == active_owner(org_id):
         return True
     # 2. Scope MEMBRE (ADR 0030 amendé) : ma ressource perso m'est visible dans tout
-    #    contexte où je suis — c'est la MIENNE. Le plan de LISTE, lui, la range dans
-    #    son org de contexte (`list_member_projects`).
+    #    contexte où je suis — c'est la MIENNE. Le plan de LISTE, lui, ne la rend que
+    #    dans mon org perso (`perso_de_la_liste`, décision du 28/09/2026).
     if otype == "user" and oid == sub:
         return True
     # 3. ADR 0049 : une ressource d'ÉQUIPE appartient au contexte de son org PARENTE —
@@ -597,11 +635,12 @@ def _project_owner(rid: str) -> Optional[tuple[str, str]]:
 def _project_context_org(row: dict, new_owner_id: str) -> Optional[int]:
     """Où RANGER un projet qui devient perso (`owner_type='user'`) — son `context_org_id`.
 
-    Un projet perso n'est listé que dans son org de contexte (`db.list_member_projects`),
-    donc sans ce calcul un transfert vers une personne produit un projet **invisible
-    partout**, y compris pour son nouveau propriétaire. On garde le projet là où il
-    travaillait déjà (org détentrice, org du groupe détenteur, ou contexte courant) si le
-    destinataire y est membre ; sinon on retombe sur SON org perso — jamais NULL."""
+    Le contexte ne décide plus où le projet est LISTÉ (un perso se liste dans l'org
+    perso, décision du 28/09/2026) ; il décide sous quelle org le projet TRAVAILLE —
+    les clés que résout son axe `project=` (`access/heritage`) et l'org d'origine
+    affichée (`org_origin`). On garde le projet là où il travaillait déjà (org
+    détentrice, org du groupe détenteur, ou contexte courant) si le destinataire y est
+    membre ; sinon on retombe sur SON org perso — jamais NULL."""
     prev_type, prev_id = row.get("owner_type"), row.get("owner_id")
     candidate: Optional[int] = None
     if prev_type == "org" and prev_id:

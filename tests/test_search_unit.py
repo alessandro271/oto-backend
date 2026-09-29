@@ -30,7 +30,8 @@ def _stub_empty(monkeypatch, **over):
         else:
             monkeypatch.setattr(S.db, n, lambda q, pids, limit, _r=rows: list(_r))
     monkeypatch.setattr(S.ownership, "accessible_project_ids", lambda *a, **k: [1])
-    monkeypatch.setattr(S.ownership, "active_org_principals", lambda *a: [])
+    monkeypatch.setattr(S.ownership, "principaux_de_liste", lambda *a: [])
+    monkeypatch.setattr(S.ownership, "perso_de_la_liste", lambda *a: [])
     monkeypatch.setattr(S.db, "list_datastores_for_owners",
                         lambda owners: over.get("tableaux", []))
     monkeypatch.setattr(S.db, "list_datastores_granted_to",

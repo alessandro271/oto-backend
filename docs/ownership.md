@@ -117,6 +117,49 @@ JAMAIS `owner_pairs()`** (union de toutes les orgs = fuite fail-open ; tripwire
 (`orgs.personal_of`), défauts de création = org active.
 **Détail (datastore pilote, oto_resource, migration, abolition du perso) : `docs/ownership.md`**.
 
+## Dans une org, on ne voit QUE l'org (décision du 28/09/2026, ADR 0030 §9)
+
+La règle des LISTES — l'accès par identifiant ne change pas (`visible_in_org`,
+`can_access`, `resolve_datastore_ns` gardent le principal personnel) :
+
+- **org qui n'est pas l'org perso de l'appelant** : projets (`oto_project op=list`,
+  `list_templates`, `archived=true`), tableaux (`list_datastores` : `GET /api/datastores`,
+  `data_list_datastores`, index de `data_app`), recherche (`accessible_project_ids`,
+  `search._accessible_namespaces`, guides), rail (`me.shell`), bloc projets du handshake,
+  « Dernières modifications » et pages reçues `scope="org"` rendent ce que possèdent
+  l'org et ses équipes, plus ce qui est partagé à l'org ou à une de ses équipes. **Aucun
+  objet `owner_type='user'`**, quel que soit son `context_org_id`, **aucun partage fait à
+  une personne** ;
+- **org perso** (`orgs.personal_of = sub`, `me.active_org_is_personal`) : s'y ajoutent
+  **tous** les projets et tableaux perso de l'appelant, quelle que soit l'org où ils ont
+  été créés, et tout ce qui lui est partagé en personne (projets, tableaux, pages).
+
+Une seule source : `ownership.perso_de_la_liste(sub, org)` (`[("user", sub)]` dans l'org
+perso, `[]` ailleurs), que composent `principaux_de_liste` (principals des listes) et
+`project_list_owners` (propriétaires des projets listés).
+
+**Les lentilles « moi »** (29/09/2026) — `oto_project op=list scope="me"`,
+`GET /api/me/datastores/shared`, `oto_doc op=shared_with_me` sans `scope` ou `scope="me"`
+— ne sont servies que dans l'org perso. Ailleurs : **409
+`personal_view_outside_personal_org`**, dont le message
+(`ownership.refus_vue_perso_hors_org_perso`) nomme l'org perso où basculer, et dont
+`details` porte `{"personal_org_id": N}` (vide en vue bornée) — jamais une liste vide, qui
+se lirait « personne ne t'a rien partagé ». Un tableau absent des listes s'ouvre par
+`GET /api/datastores/{datastore}`, qui n'en dépend pas. `GET /api/me/datastores/shared`
+ne dédoublonne plus avec la liste de l'org perso, qui rend aussi ces tableaux.
+
+**Création** (29/09/2026) : sans propriétaire nommé, un projet ou un tableau est **à la
+personne**, depuis n'importe quelle org (ADR 0068 et §8 de l'ADR 0030, inchangés) — et
+se LISTE alors dans son org perso, pas dans l'org où il a été créé. L'org ou l'équipe se
+demandent explicitement (`owner_type`/`owner`). Aucun refus à la création. Pas de
+migration : les objets existants restent où ils sont.
+
+`context_org_id` n'est plus lu par aucune liste. Il reste lu, pour un projet perso, par
+la résolution des clés de son axe `project=` (`access/heritage`), l'org d'origine
+(`org_origin`, ADR 0071), la vue bornée (`_perso_range_hors_de`, oto#270) et la portée de
+résolution des `[[…]]` (`db/backlinks`). Pour un tableau, il est écrit et plus lu. Bancs :
+`tests/test_listes_seule_l_org.py` (base réelle), `tests/test_search_scope_tripwire.py`.
+
 ## Partage unifié audience × rôle (ADR 0048)
 
 > **Partage unifié audience × rôle (ADR 0048).** Le grant porte un **rôle**
@@ -221,12 +264,15 @@ JAMAIS `owner_pairs()`** (union de toutes les orgs = fuite fail-open ; tripwire
 > resource_type="doc" resource_id=<id de la page>` + `email`/`sub` · `org_id` ·
 > `group_id` ; `op=unshare` retire ; `op=get` rend la fiche et ses bénéficiaires ;
 > `op=list` rend les pages partagées une à une. Le destinataire lit par `oto_doc op=get`
-> et retrouve par `oto_doc op=shared_with_me` (toutes orgs confondues : vue « moi »).
+> et retrouve par `oto_doc op=shared_with_me` (toutes orgs confondues : vue « moi », servie
+> dans l'org perso seulement depuis le 29/09/2026 — ailleurs 409
+> `personal_view_outside_personal_org`).
 > **Sa portée se choisit (21/09/2026)** : `scope="me"` = les pages partagées à la PERSONNE
 > seule, quelle que soit l'org ; `scope="org"` = celles partagées à l'org CONSULTÉE
 > (`X-Oto-Org` en REST, l'org de session en MCP) et aux équipes de l'appelant dans cette
-> org, jamais à lui (`ownership.active_org_principals` moins la personne) — c'est ce
-> qu'affiche l'écran des projets d'une org. Sans `scope`, l'union historique (lui, toutes
+> org, jamais à lui — sauf dans son org PERSO, où les pages partagées à lui s'y ajoutent
+> (`ownership.principaux_de_liste`, décision du 28/09/2026) — c'est ce qu'affiche
+> l'écran des projets d'une org. Sans `scope`, l'union historique (lui, toutes
 > ses orgs, toutes ses équipes) reste servie : un contrat servi se double, il ne se durcit
 > pas en place. La réponse nomme la portée appliquée (`scope`, `null` = l'union).
 > **Aucun DDL** : `resource_grants.resource_type` est un TEXT libre ; la valeur persistée

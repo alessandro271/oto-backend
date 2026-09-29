@@ -108,13 +108,13 @@ def _principaux(sub: str, scope: Optional[str], org_id: Optional[int]) -> list[t
 
     - `None` : l'appelant, toutes ses orgs et toutes ses équipes (vue historique) ;
     - `"me"` : l'appelant SEUL — un partage à une personne n'appartient à aucune org ;
-    - `"org"` : l'org CONSULTÉE et les équipes de l'appelant DANS cette org, jamais
-      l'appelant lui-même (même seam que les listes par contexte,
-      `ownership.active_org_principals`, dont on retire la personne)."""
+    - `"org"` : l'org CONSULTÉE et les équipes de l'appelant DANS cette org — et
+      l'appelant lui-même dans son org PERSO seulement (même seam que les listes de
+      projets et de tableaux, `ownership.principaux_de_liste`, décision du 28/09/2026)."""
     if scope == "me":
         return [("user", sub)]
     if scope == "org":
-        return [p for p in ownership.active_org_principals(sub, org_id) if p[0] != "user"]
+        return ownership.principaux_de_liste(sub, org_id)
     return ownership.accessor_scope(sub).principal_pairs()
 
 
@@ -122,7 +122,8 @@ def recus(sub: str, scope: Optional[str] = None, org_id: Optional[int] = None) -
     """`oto_doc op=shared_with_me` : les pages partagées à l'appelant. Sans `scope`, à
     lui, à l'une de ses orgs ou de ses équipes — toutes orgs confondues (un partage reçu
     ne disparaît pas quand on change d'org active) ; `scope="me"` à lui seul ;
-    `scope="org"` à l'org consultée (`org_id`) et à ses équipes dans cette org. La
+    `scope="org"` à l'org consultée (`org_id`) et à ses équipes dans cette org, plus à
+    lui-même quand c'est son org perso (28/09/2026). La
     réponse nomme la portée appliquée (`scope`, `null` = l'union historique).
 
     Une entrée NOMME la page, elle ne la livre pas : le corps se lit par `op=get`.

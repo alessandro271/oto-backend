@@ -11,10 +11,11 @@ Le périmètre est celui de la LECTURE, et pas plus large :
   lisible », tripwire `test_search_scope_tripwire`). Plus étroit que `can_access`
   par-id (qui traverse toutes mes orgs) : on ne montre jamais ici ce qu'une
   ouverture montrerait ailleurs ;
-- les procédures des paliers que `oto_procedure op=get` accepte : les miennes
-  (`scope='user'`), celles de l'org active, celles de mes équipes — ou de TOUTES les
-  équipes pour un admin d'org, exactement `roles.can_read_group`. C'est
-  `ownership.project_scope_owners` + la personne, la règle du rail.
+- les procédures des paliers que `oto_procedure op=get` accepte : celles de l'org
+  active, celles de mes équipes — ou de TOUTES les équipes pour un admin d'org,
+  exactement `roles.can_read_group` — et les miennes (`scope='user'`) dans mon org
+  PERSO seulement (décision du 28/09/2026). C'est `ownership.project_list_owners`, la
+  règle du rail.
 
 **Sans org active : 200 et une liste vide**, jamais un 400 — l'accueil charge cet
 îlot d'office, un refus casserait l'écran (le contrat qu'avait l'inbox remplacée).
@@ -87,7 +88,7 @@ def _recent_changes(ctx: ResolvedCtx, inp: RecentChangesInput) -> dict:
     if sub is None or org_id is None:
         return {"items": [], "limit": inp.limit}
     project_ids = ownership.accessible_project_ids(sub, org_id, want="read")
-    owners = [("user", sub)] + ownership.project_scope_owners(sub, org_id)
+    owners = ownership.project_list_owners(sub, org_id)
     rows = db_recent.recent_changes(project_ids, owners, limit=inp.limit,
                                     base_slug=org_store.BASE_SLUG)
     noms = db_shell.names_of(r["author_sub"] for r in rows)

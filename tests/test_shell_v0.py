@@ -94,13 +94,18 @@ def _ligne(pid, *, owner, oid, parent=None, nid=None, title="T", kind="page"):
 
 @pytest.fixture
 def seams(monkeypatch):
-    etat = {"lignes": [], "grants": [], "partages": []}
+    etat = {"lignes": [], "grants": [], "partages": [], "proprios": []}
+    # L'org 2 de CTX est l'org PERSO de u1 (décision du 28/09/2026 : le personnel et
+    # les partages directs ne se rangent que là) ; les bancs d'org de travail changent
+    # cette valeur.
+    monkeypatch.setattr(S.ownership.org_store, "get_personal_org", lambda sub: 2)
     monkeypatch.setattr(S.org_store, "get_org",
                         lambda oid: {"name": "Acme", "logo_url": "https://l"})
     monkeypatch.setattr(S.group_store, "list_groups_for_user",
                         lambda sub, oid: [{"group_id": 9, "name": "Finance"}])
-    monkeypatch.setattr(S.db_shell, "nodes_for_owners", lambda o: etat["lignes"])
-    monkeypatch.setattr(S.project_nodes, "lignes_pour_proprietaires", lambda o, org: [])
+    monkeypatch.setattr(S.db_shell, "nodes_for_owners",
+                        lambda o: etat["proprios"].append(list(o)) or etat["lignes"])
+    monkeypatch.setattr(S.project_nodes, "lignes_pour_proprietaires", lambda o: [])
     monkeypatch.setattr(S.db_shell, "direct_grants", lambda sub: etat["grants"])
     monkeypatch.setattr(S.db_shell, "nodes_by_public_id", lambda ids: etat["partages"])
     monkeypatch.setattr(S.db_shell, "names_of", lambda subs: {"u1": "Alexis", "u2": "Théo"})
@@ -160,6 +165,22 @@ def test_le_prive_garde_ce_que_la_personne_a_PARTAGE(seams):
                         "granted_by": "u1"}]
     prive = next(s for s in S._compose(CTX)["sections"] if s["kind"] == "private")
     assert [n["id"] for n in prive["nodes"]] == ["nod_a"]
+
+
+def test_dans_une_org_de_TRAVAIL_ni_personnel_ni_partage_direct(seams, monkeypatch):
+    """Décision du 28/09/2026 : dans une org qui n'est pas l'org perso, le rail ne
+    montre que l'org — ni mes nœuds et projets perso (le propriétaire `user` n'est même
+    pas demandé), ni la section des partages faits à moi."""
+    monkeypatch.setattr(S.ownership.org_store, "get_personal_org", lambda sub: 5)
+    monkeypatch.setattr(S, "_executions", lambda sub, oid: [])
+    lus = []
+    monkeypatch.setattr(S.db_shell, "direct_grants", lambda sub: lus.append(sub) or [
+        {"resource_type": "project", "resource_id": "7", "granted_by": "u2"}])
+    sections = S._compose(CTX)["sections"]
+    assert lus == []                        # les partages directs ne sont pas lus
+    assert [s["kind"] for s in sections] == ["everyone", "team", "private"]
+    assert next(s for s in sections if s["kind"] == "private")["nodes"] == []
+    assert seams["proprios"][-1] == [("org", "2"), ("group", "9")]
 
 
 # ── L'arbre : borné en profondeur ET en nombre, ce qui dépasse est COMPTÉ ───────

@@ -780,6 +780,18 @@ quand la face MCP recevait la liste entière : deux faces, deux résultats pour 
 demande, et l'OpenAPI promettait la forme perdue. Les deux formes se combinent
 (`?k=a,b&k=c` → `["a,b", "c"]`, puis le champ découpe s'il le fait).
 
+## Lire un tableau par son numéro : `GET /api/datastores/{datastore}`
+
+Rend UNE entrée, à la forme d'un élément de `GET /api/datastores` (`DatastoreEntry`).
+L'accès est celui de toutes les routes `/api/datastores/{datastore}/…` (possession, org,
+équipe, partage à l'org, à l'équipe ou à la personne) : il ne dépend ni des listes ni de
+l'org consultée. Depuis le 28/09/2026 une liste d'org ne rend ni le personnel ni les
+partages faits à une personne (ADR 0030 §9) : c'est par ici qu'un écran ouvre, depuis
+une org, un tableau partagé à l'appelant et lié à un projet de cette org. `shared: true`
+quand le tableau n'appartient pas au contexte de l'appel, avec `permission` = le droit
+effectif. Inconnu ou inaccessible : **404 `datastore_not_found`**, la même réponse dans
+les deux cas. Banc : `tests/test_listes_seule_l_org.py`.
+
 ## Créer un tableau : `POST /api/datastores`
 
 Corps : `{"datastore": "<kebab-case>"}`, plus **`owner`** optionnel —
@@ -797,9 +809,11 @@ créateur continuent de réussir** : rien ne cloche de son côté. Ça se décou
 agent, ou au collègue qui ne trouve pas le tableau et conclut qu'il n'existe pas — une
 heure perdue, vécue (otomata-tech/oto#45).
 
-L'en-tête décide en revanche **où un tableau personnel est LISTÉ** (oto#160) :
-`GET /api/datastores` ne le rend que dans l'org où il a été créé (`X-Oto-Org`, ou l'org
-active). Depuis une autre org il n'est pas listé, mais son numéro l'ouvre toujours.
+**Où un tableau est LISTÉ** (décision du 28/09/2026, ADR 0030 §9) : `GET /api/datastores`
+rend, dans une org, ce que possèdent l'org et ses équipes et ce qui leur est partagé ;
+un tableau PERSONNEL — créé sous n'importe quel `X-Oto-Org` — ne se liste que dans
+l'**org perso** de son propriétaire. Depuis une autre org, son numéro l'ouvre toujours.
+C'est pourquoi l'avertissement le dit aussi.
 
 La réponse (201) rend donc **qui possède** : `{datastore, id, url, owner_type, owner_id,
 is_personal}`, plus un champ **`avertissement`** dans ce cas précis — et seulement dans

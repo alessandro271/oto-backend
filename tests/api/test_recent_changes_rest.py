@@ -10,6 +10,10 @@ Ce que ce fichier prouve, et rien d'autre :
 4. une liste vide est une 200 vide, y compris SANS org active (l'accueil charge
    cet îlot d'office).
 
+Depuis la décision du 28/09/2026 (ADR 0030 §9), ce qui est à MOI ou partagé à MOI en
+personne ne se liste que dans mon org PERSO : ces cas-là sont lus sous `X-Oto-Org`
+= l'org perso du compte (`_items_perso`).
+
 Le porteur est identifié par un vérifieur factice dont le bearer EST le sub : ce qu'on
 teste est en aval de l'authentification. Une base JETABLE par module (`pg_module_dsn`).
 """
@@ -118,6 +122,20 @@ def _items(client, sub: str, **params) -> list[dict]:
     return body["items"]
 
 
+def _items_perso(sub: str, **params) -> list[dict]:
+    """La même route, consultée dans l'org PERSO de `sub` (`X-Oto-Org`, lu par
+    `ViewAsMiddleware` comme en production)."""
+    from oto_mcp import org_store
+    from oto_mcp.api import routes as api_routes
+    vue = TestClient(api_routes.ViewAsMiddleware(
+        Starlette(routes=api_routes.make_routes(_Verifier(), mcp_instance=None)),
+        verifier=_Verifier()))
+    r = vue.get("/api/me/recent-changes", params=params,
+                headers={**_h(sub), "X-Oto-Org": str(org_store.ensure_personal_org(sub))})
+    assert r.status_code == 200, r.text
+    return r.json()["items"]
+
+
 def _cles(items) -> set[tuple[str, str]]:
     return {(i["type"], i["title"]) for i in items}
 
@@ -149,9 +167,11 @@ def test_un_membre_hors_de_l_equipe_ne_voit_ni_sa_procedure_ni_celle_d_un_autre(
 
 def test_le_membre_de_l_equipe_voit_la_sienne_et_celle_de_l_equipe(client, monde):
     cles = _cles(_items(client, MEMBRE))
-    assert ("procedure", "Ma procédure") in cles
     assert ("procedure", "Procédure G") in cles
     assert ("procedure", "Procédure B") not in cles
+    # SA procédure personnelle : dans son org perso, pas dans l'org A (28/09/2026).
+    assert ("procedure", "Ma procédure") not in cles
+    assert ("procedure", "Ma procédure") in _cles(_items_perso(MEMBRE))
 
 
 def test_NEGATIF_un_compte_ne_voit_pas_les_pages_d_un_projet_qu_il_ne_lit_pas(client, monde):
@@ -164,16 +184,20 @@ def test_NEGATIF_un_compte_ne_voit_pas_les_pages_d_un_projet_qu_il_ne_lit_pas(cl
     assert ("doc", "Gamma") not in cles
     assert ("procedure", "Procédure A") not in cles
     assert ("procedure", "Procédure G") not in cles
-    assert cles == {("doc", "Delta"), ("doc", "Epsilon"), ("procedure", "Procédure B")}
+    assert cles == {("doc", "Delta"), ("procedure", "Procédure B")}
+    # Le projet partagé à TIERS en personne se lit dans son org perso, et lui seul.
+    assert _cles(_items_perso(TIERS)) == {("doc", "Epsilon")}
 
 
 def test_le_perimetre_est_celui_de_la_lecture_d_une_page(client, monde):
     """Chaque page listée s'OUVRE par le même compte ; chaque page refusée à l'ouverture
     est absente de la liste — la liste n'est ni plus large ni plus étroite que la
-    lecture (`docs.common.can`, le seam de `oto_doc op=get`)."""
+    lecture (`docs.common.can`, le seam de `oto_doc op=get`), une fois réunies l'org
+    consultée et l'org perso, où se range ce qui est partagé en personne (28/09/2026)."""
     from oto_mcp.capabilities.docs import common as docs_common
     for sub in (ADMIN, AUTRE, TIERS):
-        listees = {i["project"]["id"] for i in _items(client, sub) if i["type"] == "doc"}
+        listees = {i["project"]["id"] for i in _items(client, sub) + _items_perso(sub)
+                   if i["type"] == "doc"}
         for pid in (monde["p1"], monde["p2"], monde["p3"]):
             assert (pid in listees) == docs_common.can(sub, pid, "read"), (sub, pid)
 
@@ -252,7 +276,7 @@ def test_une_page_deplacee_n_a_pas_d_auteur_deduit(client, monde):
 
 
 def test_la_forme_d_un_element(client, monde):
-    par_titre = {i["title"]: i for i in _items(client, MEMBRE)}
+    par_titre = {i["title"]: i for i in _items(client, MEMBRE) + _items_perso(MEMBRE)}
     page = par_titre["Beta"]
     assert page["type"] == "doc" and page["id"] == monde["beta"]
     assert page["project"] == {"id": monde["p1"], "name": "Projet A1"}

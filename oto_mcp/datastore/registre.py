@@ -15,7 +15,7 @@ from typing import Optional
 from .. import db, ownership
 from . import acces_agent as aga
 from . import identite
-from .errors import DatastoreExists, DatastoreForbidden
+from .errors import DatastoreExists, DatastoreForbidden, DatastoreNotFound
 from .outils import _ns_url
 
 # Sentinelle du mémo d'org des liens : `None` est une réponse légitime (aucune org
@@ -52,9 +52,12 @@ def _avertissement_de_portee(ns_id: int, owner_type: str, *,
     demandee = session_org.current_view_org() or session_org.current_call_org()
     if not demandee:
         return None
+    # Décision du 28-29/09/2026 (ADR 0030 §9) : le perso se LISTE dans l'org perso — la
+    # phrase le dit, sinon le créateur le cherche dans la liste de l'org demandée.
     tete = (f"Tableau créé PERSONNEL : toi seul le vois, même si l'organisation "
-            f"{demandee} était le contexte de cet appel. Le contexte d'org ne décide "
-            f"pas du propriétaire — il se demande.")
+            f"{demandee} était le contexte de cet appel, et il se liste dans ton org "
+            f"perso, pas dans celle-ci (son numéro l'ouvre partout). Le contexte d'org "
+            f"ne décide pas du propriétaire — il se demande.")
     if aga.appel_d_agent():
         return (f"{tete} Pour qu'il appartienne à l'organisation : "
                 f"`oto_resource(op='transfer', resource_id='{ns_id}', "
@@ -121,33 +124,26 @@ class RegistreMixin:
         }
 
     def list_datastores(self) -> list[dict]:
-        """Datastores visibles DANS L'ORG ACTIVE (l'org est le contexte, ADR 0023) :
-        possédés par l'org active + MES tableaux personnels créés dans cette org, ou
-        d'avant la colonne qui le dit (oto#160, `ownership.tableaux_du_contexte`) +
-        accordés à elle ou à MES équipes dans cette org
-        (grants d'org/groupe — tous mes groupes de l'org active, pas seulement le
-        groupe actif : un partage d'équipe doit se voir sans basculer). Un datastore
-        possédé par une AUTRE org — ou partagé à l'acteur *en propre* (grant user,
-        cross-org) — ne fuite PLUS dans la vue d'une org tierce (scope décidé le
-        2026-07-01). Dédupliqués par id (priorité possédé). La résolution PAR NOM
-        (`_resolve`) scope désormais SUR LE MÊME contexte d'org (2026-07-03) : un
-        datastore d'une autre org ne se résout plus hors de son org non plus."""
+        """Datastores visibles DANS L'ORG ACTIVE (l'org est le contexte, ADR 0023) —
+        décision du 28/09/2026 : dans une org, on ne voit QUE l'org. Possédés par l'org
+        active et par mes équipes en elle (ADR 0049), accordés à elle ou à MES équipes
+        en elle (tous mes groupes de l'org active, pas seulement le groupe actif : un
+        partage d'équipe doit se voir sans basculer). Aucun tableau personnel, aucun
+        partage fait à moi : ils se listent dans mon org PERSO, qui rend en plus TOUS
+        mes tableaux perso (quel que soit leur `context_org_id`) et ceux partagés à moi
+        en personne (`ownership.perso_de_la_liste`). Dédupliqués par id (priorité
+        possédé). Filtre de LISTE : un tableau s'ouvre toujours par son numéro."""
         from .. import access
         if self.acting_org is not None:
             owner = ("org", str(self.acting_org))
             proprios: list = [owner]
+            moi: list = []
         else:
             org = access.current_org(self.sub)
             if ownership.active_owner(org) is None:
                 return []
-            # ⚠️ `active_org_principals` et non `active_owner` (oto-backend#870,
-            # 04/09/2026) : l'org active ET l'acteur. Depuis l'ADR 0068 un tableau créé
-            # par un agent naît PERSONNEL — et cette liste ne montrait que l'org, donc
-            # le créateur ne voyait pas ce qu'il venait de créer. Il concluait qu'il
-            # n'existait pas ; il était pourtant résoluble par nom, et la recherche le
-            # voyait. Une écriture sans lecteur, la classe oto#42 exactement.
-            # Le jeu reste borné à l'org active : rien de cross-org n'entre par là.
-            proprios = ownership.active_org_principals(self.sub, org)
+            proprios = ownership.principaux_de_liste(self.sub, org)
+            moi = ownership.perso_de_la_liste(self.sub, org)
         # ADR 0049 (cadrage 10/07) : les tableaux TEAM-OWNED de l'org active sont listés
         # comme les org-owned. `_active_scope` est la source unique du jeu de groupes
         # (mes équipes, ou TOUS les groupes de l'org pour un org_admin — même règle que
@@ -156,14 +152,13 @@ class RegistreMixin:
         owned = proprios + [("group", str(g)) for g in group_ids
                             if ("group", str(g)) not in proprios]
         out: dict[int, dict] = {}
-        possedes = db.list_datastores_for_owners(owned)
-        if self.acting_org is None:
-            # oto#160 : un personnel n'est listé que dans l'org où il a été créé (NULL :
-            # partout). Filtre de LISTE — l'ouvrir par son numéro reste permis.
-            possedes = ownership.tableaux_du_contexte(self.sub, org, possedes)
-        for n in possedes:
+        for n in db.list_datastores_for_owners(owned):
             out[int(n["id"])] = self._entry(n, shared=False)
-        for n in db.list_datastores_granted_to(self.sub, org_ids, group_ids):
+        recus = db.list_datastores_granted_to(self.sub, org_ids, group_ids)
+        if moi:
+            # Org perso : ce qui est partagé à MOI en personne s'y liste aussi.
+            recus += db.list_datastores_shared_to_user(self.sub)
+        for n in recus:
             if int(n["id"]) in out:
                 continue
             out[int(n["id"])] = self._entry(n, shared=True, permission=n.get("permission"))
@@ -259,6 +254,30 @@ class RegistreMixin:
         # justement ce que cette remise doit dire à qui vient de perdre le nom.
         return {"id": ns_id, **identite.identite(ns_id, new_name),
                 "url": _ns_url(ns_id, self.sub, org=self._org_des_liens())}
+
+    def lire_tableau(self, datastore: str) -> dict:
+        """UN tableau, par son numéro (ou son nom), à la forme d'une entrée de
+        `list_datastores` — la lecture par identifiant que les listes ne remplacent pas.
+
+        L'accès est celui de `_resolve` (possession, org, équipe, partage à l'org, à
+        l'équipe ou à moi ; bornage de la vue « en tant que »), le même que toutes les
+        routes `/api/datastores/{datastore}/…` : il ne dépend PAS des listes. Depuis le
+        28/09/2026 une liste d'org ne rend ni le personnel ni les partages faits à moi —
+        c'est ici qu'on les retrouve par leur numéro, depuis n'importe quelle org.
+        `shared` : le tableau n'appartient pas au contexte de l'appel (moi, l'org active,
+        une équipe à portée) ; `permission` est alors le droit effectif. Lève
+        `DatastoreNotFound` si inconnu ou inaccessible."""
+        from .. import access
+        ns_id = self._resolve(datastore)
+        n = db.get_datastore_by_id(ns_id)
+        if n is None:          # supprimé entre la résolution et la lecture
+            raise DatastoreNotFound(datastore)
+        if ownership.owner_in_scope(self.sub, access.current_org(self.sub),
+                                    (n["owner_type"], str(n["owner_id"]))):
+            return self._entry(n, shared=False)
+        ecrit = ownership.can_access(self.sub, ownership.TYPE_RESSOURCE_DATASTORE,
+                                     str(ns_id), "write")
+        return self._entry(n, shared=True, permission="write" if ecrit else "read")
 
     def resolve_ns_id(self, datastore: str) -> int:
         """ns_id d'un datastore visible par l'acteur (lève `DatastoreNotFound`).

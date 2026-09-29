@@ -68,14 +68,19 @@ def _prive(corps: dict) -> list[dict]:
 
 
 def test_le_rail_range_le_projet_et_ses_pages_sans_la_copie(base):
-    rail = _prive(S._compose(ResolvedCtx(sub=MOI)))
+    # Le personnel se range dans l'org PERSO (décision du 28/09/2026) — et là, TOUS
+    # les projets perso, quel que soit leur `context_org_id`.
+    from oto_mcp import db, org_store
+    db.upsert_user(MOI, email=f"{MOI}@t.invalid", name=MOI)
+    perso = org_store.ensure_personal_org(MOI)
+    rail = _prive(S._compose(ResolvedCtx(sub=MOI, org_id=perso)))
     par_nom = {n["name"]: n for n in rail}
 
     assert "Page native" in par_nom, "le proxy ne doit pas évincer un nœud natif"
     assert "Alpha figé au 01/09" not in par_nom, "une ancienne copie est servie"
     assert "Zeta archivé" not in par_nom
     assert "Chez un autre" not in par_nom
-    assert "Perso créé dans une org" not in par_nom, "un perso d'une autre org est servi"
+    assert "Perso créé dans une org" in par_nom, "un perso de l'org perso manque"
 
     alpha = par_nom["Alpha"]
     assert alpha["id"] == P.public_id("prj", base["prj"])
@@ -143,11 +148,10 @@ def test_la_cle_se_relit_depuis_l_identifiant():
     assert P.cle_de(P.public_id("prj", 7)) == ("prj", 7)
 
 
-def test_un_projet_perso_ne_sort_que_dans_son_org_de_contexte(base):
-    def noms(org_id):
-        return {l["title"] for l in P.lignes_pour_proprietaires([("user", MOI)], org_id)}
-
-    assert "Perso créé dans une org" in noms(ORG_CONTEXTE)
-    assert "Alpha" not in noms(ORG_CONTEXTE), "un perso sans org de contexte déborde"
-    assert "Perso créé dans une org" not in noms(ORG_CONTEXTE + 1)
-    assert "Alpha" in noms(None)
+def test_tous_mes_projets_perso_sortent_quel_que_soit_leur_contexte(base):
+    """Décision du 28/09/2026 : le filtre d'org est dans le jeu de propriétaires (le
+    rail n'y met `("user", sub)` que dans l'org perso) ; quand il y est, TOUS les
+    projets perso sortent, quel que soit leur `context_org_id`."""
+    noms = {l["title"] for l in P.lignes_pour_proprietaires([("user", MOI)])}
+    assert {"Perso créé dans une org", "Alpha"} <= noms
+    assert P.lignes_pour_proprietaires([]) == []

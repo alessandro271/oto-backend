@@ -310,6 +310,10 @@ def registre(monkeypatch):
     monkeypatch.setattr(D.db, "list_datastores_for_owners", lambda owners: [ligne])
     monkeypatch.setattr(D.db, "list_datastores_granted_to",
                         lambda sub, orgs, groups: [])
+    # L'org 99 est l'org PERSO de u-1 : le tableau perso s'y liste et une création
+    # sans propriétaire y reste à la personne (décision du 28/09/2026).
+    monkeypatch.setattr(ownership.org_store, "get_personal_org", lambda sub: 99)
+    monkeypatch.setattr(D.db, "list_datastores_shared_to_user", lambda sub: [])
     monkeypatch.setattr(D.ownership, "can_govern", lambda sub, t, rid: True)
     monkeypatch.setattr(ownership, "can_govern", lambda sub, t, rid: True)
     monkeypatch.setattr(D.db, "create_datastore",

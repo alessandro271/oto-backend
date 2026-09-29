@@ -10,8 +10,9 @@ Invariants (plan lot 3 §4.2) :
 - **cherchable ⇔ lisible** : docs/briefs/fichiers scopés `ownership.accessible_
   project_ids` (la factorisation du scoping d'`op=list` — JAMAIS `can_access`,
   cross-org par construction) ; tableaux scopés par les listings datastore
-  existants (owners du contexte + grants org/groupe) ; procédures = org active ;
-  guides = platform ∪ org active ∪ user.
+  existants (owners du contexte + grants org/groupe, et le personnel dans l'org perso
+  seulement — décision du 28/09/2026) ; procédures = org active ; guides = platform ∪
+  org active ∪ user (ce dernier dans l'org perso seulement).
 - **jamais de LLM au read** ; V1 lexicale (FTS `french` + repli d'accents).
 - la source connecteurs (registre en mémoire) est INJECTÉE par la capacité
   (`connectors_catalog`) — ce module ne remonte pas dans la couche adaptateur.
@@ -135,7 +136,10 @@ def search(sub: str, org_id: int, q: str, *,
             "passage": r["headline"] if _headline_ok(r.get("headline")) else None,
             "updated_at": r.get("updated_at"), "matched_by": "lexical"})
     if "guide" in wanted:
-        _add(db.search_guides_fts(q, org_id, sub, limit=per_source), lambda r: {
+        # Guides PERSONNELS (`owner_type='user'`) : dans l'org perso seulement, comme
+        # tout objet personnel d'une liste (décision du 28/09/2026). `None` : aucun.
+        guide_sub = sub if ownership.perso_de_la_liste(sub, org_id) else None
+        _add(db.search_guides_fts(q, org_id, guide_sub, limit=per_source), lambda r: {
             "kind": "guide", "ref": {"scope": r["scope"], "slug": r["slug"]},
             "title": r["title"] or r["slug"],
             "description": r.get("description") or None,
@@ -144,7 +148,8 @@ def search(sub: str, org_id: int, q: str, *,
         # Sémantique sur les guides on-demand (#6 C).
         if query_embedding is not None:
             from .embeddings import to_pg
-            _add(db.search_guides_semantic(to_pg(query_embedding), org_id, sub, limit=per_source),
+            _add(db.search_guides_semantic(to_pg(query_embedding), org_id, guide_sub,
+                                           limit=per_source),
                  lambda r: {"kind": "guide", "ref": {"scope": r["scope"], "slug": r["slug"]},
                             "title": r["title"] or r["slug"],
                             "description": r.get("description") or None,
@@ -241,23 +246,29 @@ def search(sub: str, org_id: int, q: str, *,
 
 
 def _accessible_namespaces(sub: str, org_id: int) -> list[dict]:
-    """Namespaces datastore du CONTEXTE : owners (org + moi + mes groupes, mes
-    personnels réduits à ceux de cette org, `ownership.tableaux_du_contexte`) ∪ grants
-    org/groupe — parité EXACTE du listing datastore (mêmes fonctions db, sujet du
-    tripwire d'étanchéité).
-    ⚠️ Cette parité était FAUSSE du 04/09 (ADR 0068) au 04/09 (#870) : la liste, elle,
-    ne prenait que l'org — la recherche voyait un tableau personnel que la liste
-    cachait. La phrase affirmait donc un invariant que le code ne tenait pas, et
-    personne ne pouvait le savoir en la lisant. Elle est vraie depuis, et
-    `test_parite_recherche_liste` la tient au lieu de la répéter. Source unique du scoping des sources `tableau` ET `ligne`
-    → l'invariant « cherchable ⇔ lisible » tient au grain ligne par héritage du ns."""
-    principals = ownership.active_org_principals(sub, org_id)
+    """Namespaces datastore du CONTEXTE — la liste des tableaux de l'org
+    (`DatastorePg.list_datastores`), en parité EXACTE : possédés par
+    `ownership.principaux_de_liste` (l'org, mes équipes, et moi dans mon org perso
+    seulement) ∪ accordés à l'org et à mes équipes ∪, dans mon org perso, partagés à
+    moi en personne (décision du 28/09/2026). `test_parite_recherche_liste` tient la
+    parité au lieu de la répéter. Source unique du scoping des sources `tableau` ET
+    `ligne` → l'invariant « cherchable ⇔ lisible » tient au grain ligne par héritage
+    du ns.
+
+    ⚠️ Les équipes sont celles du jeu de principals (mes équipes), pas l'escalade
+    d'org_admin de `_active_scope` : c'est l'écart que la parité de liste tolère
+    aujourd'hui pour un org_admin, inchangé par ce lot."""
+    principals = ownership.principaux_de_liste(sub, org_id)
     gids = [int(p[1]) for p in principals if p[0] == "group"]
-    rows = ownership.tableaux_du_contexte(sub, org_id,
-                                         db.list_datastores_for_owners(principals))
+    rows = db.list_datastores_for_owners(principals)
     seen = {r["id"] for r in rows}
-    rows += [r for r in db.list_datastores_granted_to(sub, [org_id], gids)
-             if r["id"] not in seen]
+    recus = db.list_datastores_granted_to(sub, [org_id], gids)
+    if ("user", sub) in principals:
+        recus += db.list_datastores_shared_to_user(sub)
+    for r in recus:
+        if r["id"] not in seen:
+            rows.append(r)
+            seen.add(r["id"])
     # Vue bornée (oto#270) : même règle que la liste des tableaux.
     return ownership.borner_a_la_vue(sub, ownership.TYPE_RESSOURCE_DATASTORE, rows,
                                      rid=lambda r: r["id"])

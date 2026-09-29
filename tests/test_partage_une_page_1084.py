@@ -112,6 +112,15 @@ def _doc(sub, org, **args):
         return ("refus", e.status, e.code, e.message)
 
 
+def _perso(sub) -> int:
+    """L'org PERSO de `sub` — seule où les lentilles « moi » (`shared_with_me` sans
+    `scope` ou `scope=me`) sont servies depuis le 29/09/2026 (ADR 0030 §9)."""
+    return org_store.ensure_personal_org(sub)
+
+
+REFUS_HORS_PERSO = ("refus", 409, "personal_view_outside_personal_org")
+
+
 def _tous_les_chemins(m) -> dict:
     """Tout ce qu'un détenteur de la seule page peut tenter par `oto_doc`, hors la
     lecture de la page elle-même."""
@@ -192,7 +201,10 @@ def test_la_sous_page_n_herite_de_rien(monde):
 def test_shared_with_me_rend_la_page_et_elle_seule(monde):
     _partage(monde, email=f"{DEST}@exemple.test")
     try:
-        ok, recus = _doc(DEST, monde["y"], op="shared_with_me")
+        # Hors de l'org perso : un refus qui nomme l'org perso, jamais une liste vide.
+        refus = _doc(DEST, monde["y"], op="shared_with_me")
+        assert refus[:3] == REFUS_HORS_PERSO and f"#{_perso(DEST)}" in refus[3]
+        ok, recus = _doc(DEST, _perso(DEST), op="shared_with_me")
         assert ok == "ok"
         assert [d["id"] for d in recus["docs"]] == [monde["recap"]]
         entree = recus["docs"][0]
@@ -201,7 +213,7 @@ def test_shared_with_me_rend_la_page_et_elle_seule(monde):
         assert entree["url"] is None and "body_md" not in entree
         _sans_sentinelle(recus)
         # Rien pour qui n'a rien reçu.
-        assert _doc(TIERS, monde["z"], op="shared_with_me")[1]["docs"] == []
+        assert _doc(TIERS, _perso(TIERS), op="shared_with_me")[1]["docs"] == []
     finally:
         _retire(monde, email=f"{DEST}@exemple.test")
 
@@ -209,7 +221,8 @@ def test_shared_with_me_rend_la_page_et_elle_seule(monde):
 def test_shared_with_me_par_portee_la_personne_ou_l_org_consultee(monde):
     """`scope` sépare ce que la PERSONNE reçoit (`me`, toutes orgs) de ce que reçoit
     l'org CONSULTÉE et les équipes de l'appelant en elle (`org`). Sans `scope`, l'union
-    historique reste servie : le contrat se double, il ne se durcit pas."""
+    historique. Depuis le 29/09/2026, `me` et l'union ne sont servies que dans l'org
+    PERSO ; `org` l'est partout (dans l'org perso, elle compte aussi la personne)."""
     _partage(monde, email=f"{DEST}@exemple.test")
     _partage(monde, org_id=monde["y"], audience="org")
     _partage(monde, group_id=monde["equipe"], audience="team")
@@ -220,19 +233,23 @@ def test_shared_with_me_par_portee_la_personne_ou_l_org_consultee(monde):
             return [(d["id"], d["via"]) for d in out["docs"]], out["scope"]
 
         page = monde["recap"]
-        # La personne : son partage nominatif, quelle que soit l'org consultée.
-        assert ids(DEST, monde["y"], scope="me") == ([(page, "person")], "me")
-        assert ids(DEST, monde["z"], scope="me") == ([(page, "person")], "me")
+        # La personne : son partage nominatif, dans son org perso ; ailleurs, refusé.
+        assert ids(DEST, _perso(DEST), scope="me") == ([(page, "person")], "me")
+        for org in (monde["y"], monde["z"]):
+            assert _doc(DEST, org, op="shared_with_me", scope="me")[:3] == REFUS_HORS_PERSO
+        # Dans son org perso, `scope=org` compte aussi la personne.
+        assert ids(DEST, _perso(DEST), scope="org") == ([(page, "person")], "org")
         # L'org consultée : le partage à l'org, jamais celui fait à la personne.
         assert ids(COLLEGUE, monde["y"], scope="org") == ([(page, "org")], "org")
-        assert ids(COLLEGUE, monde["y"], scope="me") == ([], "me")
+        assert ids(COLLEGUE, _perso(COLLEGUE), scope="me") == ([], "me")
         # L'équipe de l'appelant DANS l'org consultée compte pour l'org.
         assert ids(EQUIPIER, monde["x"], scope="org") == ([(page, "team")], "org")
         # Une autre org que celle qui a reçu : rien.
         assert ids(TIERS, monde["z"], scope="org") == ([], "org")
-        # Défaut : l'union, inchangée.
-        assert ids(COLLEGUE, monde["y"])[0] == [(page, "org")]
-        assert ids(COLLEGUE, monde["y"])[1] is None
+        # Défaut : l'union (toutes ses orgs), servie dans l'org perso seulement.
+        assert ids(COLLEGUE, _perso(COLLEGUE))[0] == [(page, "org")]
+        assert ids(COLLEGUE, _perso(COLLEGUE))[1] is None
+        assert _doc(COLLEGUE, monde["y"], op="shared_with_me")[:3] == REFUS_HORS_PERSO
     finally:
         _retire(monde, email=f"{DEST}@exemple.test")
         _retire(monde, org_id=monde["y"])
@@ -258,7 +275,8 @@ def test_audience_org_une_org_cliente_lit_la_page(monde):
             assert _doc(sub, monde["y"], op="list", project_id=monde["projet"])[:2] == \
                 ("refus", 403)
         assert _doc(TIERS, monde["z"], op="get", doc_id=monde["recap"])[:2] == ("refus", 403)
-        assert _doc(COLLEGUE, monde["y"], op="shared_with_me")[1]["docs"][0]["via"] == "org"
+        assert _doc(COLLEGUE, monde["y"], op="shared_with_me",
+                    scope="org")[1]["docs"][0]["via"] == "org"
     finally:
         _retire(monde, org_id=monde["y"])
     assert _doc(COLLEGUE, monde["y"], op="get", doc_id=monde["recap"])[:2] == ("refus", 403)
@@ -358,7 +376,7 @@ def test_unshare_ferme_la_lecture_tout_de_suite(monde):
     assert _doc(DEST, monde["y"], op="get", doc_id=monde["recap"])[0] == "ok"
     assert _retire(monde, email=f"{DEST}@exemple.test")["removed"] is True
     assert _doc(DEST, monde["y"], op="get", doc_id=monde["recap"])[:2] == ("refus", 403)
-    assert _doc(DEST, monde["y"], op="shared_with_me")[1]["docs"] == []
+    assert _doc(DEST, _perso(DEST), op="shared_with_me")[1]["docs"] == []
 
 
 # ── 6. Pas public ───────────────────────────────────────────────────────────────

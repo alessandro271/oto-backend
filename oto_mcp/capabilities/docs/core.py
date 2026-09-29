@@ -17,10 +17,10 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from ... import db
+from ... import db, ownership
 from .._authz import PROJECT_SHARED_READ
 from .. import _portee, _publication
-from .._types import Capability, ResolvedCtx, RestBinding
+from .._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
 from ..registry import CAPABILITIES
 from . import common, history, partage, patch, reads, view, writes
 from .common import require
@@ -56,8 +56,10 @@ class DocInput(BaseModel):
     # durcit pas en place.
     scope: Optional[Literal["me", "org"]] = Field(default=None, description=(
         "shared_with_me only: `me` = pages shared with YOU as a person; `org` = pages "
-        "shared with the organization you are acting in (and your teams in it). "
-        "Omitted = both, across all your organizations."))
+        "shared with the organization you are acting in (and your teams in it) — in "
+        "your PERSONAL org, those shared with you as a person too. Omitted = both, "
+        "across all your organizations. Omitted and `me` are served in your PERSONAL "
+        "org only — elsewhere 409 `personal_view_outside_personal_org`."))
     # delete (#657) : True = ne supprime RIEN, rend seulement ce que la suppression
     # emporterait (de quoi annoncer « ceci supprimera N pages » avant de la faire).
     # patch (oto#171) : True = n'écrit rien, rend la région que le patch retirerait.
@@ -129,6 +131,13 @@ def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
             require(ctx.org_id is not None, "no_active_org",
                     "scope=\"org\" lists the pages shared with the organization you act "
                     "in, and there is none: pass `org=<id>`.")
+        elif not ownership.org_perso_de(sub, ctx.org_id):
+            # Lentille « moi » (sans `scope`, ou `me`) : servie dans l'org PERSO
+            # seulement (décision du 29/09/2026) — ailleurs, un refus qui dit où basculer,
+            # jamais une liste vide qui se lirait « personne ne t'a rien partagé ».
+            message, details = ownership.refus_vue_perso_hors_org_perso(
+                sub, ctx.org_id, "La liste des pages partagées à toi")
+            raise AuthzDenied(409, "personal_view_outside_personal_org", message, details)
         return partage.recus(sub, inp.scope, ctx.org_id)
 
     # ops par doc_id (résolvent le projet pour l'autz)
@@ -282,8 +291,10 @@ CAPABILITIES += [
             "your org or your team, via oto_resource op=share resource_type=\"doc\": "
             "{id, title, updated_at, role, via, shared_by, url}; `scope` narrows it: "
             "`me` = shared with you as a person, `org` = shared with the organization "
-            "you act in and your teams in it; omitted = all of it, across all your "
-            "organizations. Such a page is readable "
+            "you act in and your teams in it (in your personal org, to you as well); "
+            "omitted = all of it, across all your organizations — omitted and `me` are "
+            "served in your personal org only, elsewhere 409 "
+            "`personal_view_outside_personal_org`. Such a page is readable "
             "with op=get ALONE: its project, sibling pages, sub-pages, revisions and "
             "backlinks stay closed, and it is read-only) "
             "/ set_public (public: true → shareable public read-only link to THIS PAGE "
@@ -308,6 +319,10 @@ CAPABILITIES += [
             "over a hand-typed summary table when the data lives in a datastore (single source "
             "of truth, no drift)."
         ),
+        errors=(DeclaredError(409, "personal_view_outside_personal_org",
+                              "op=shared_with_me sans `scope` ou avec `scope=me`, depuis "
+                              "une org qui n'est pas l'org perso de l'appelant — le "
+                              "message nomme l'org perso où basculer"),),
         mcp="oto_doc",
         rest=RestBinding("POST", "/api/me/docs"),
     ),

@@ -5,15 +5,16 @@ reste, les trois audiences (personne, équipe, organisation) coexistent — l'AD
 quelle. Le défaut à corriger était la visibilité côté DESTINATAIRE : le partage
 réussissait, la lecture du contenu l'honorait, et aucune liste ne le rendait.
 
-- `GET /api/datastores` l'exclut À DESSEIN (commit du 01/07/2026, après l'incident du
-  30/06) : un partage à une personne n'appartient à aucune org, et le faire entrer dans la
-  liste de l'org courante le ferait lire comme un tableau de cette org. Ça tient.
+- `GET /api/datastores` l'exclut dans toute org de travail (commit du 01/07/2026, après
+  l'incident du 30/06) : un partage à une personne n'appartient à aucune org, et le faire
+  entrer dans la liste d'une org le ferait lire comme un tableau de cette org. Depuis le
+  28/09/2026, il l'inclut dans l'org PERSO.
 - La section « Partagé » du chrome (`me.shell`) n'en rend aucun : elle résout chaque droit
   vers une copie du tableau dans `nodes`, et ces copies ont été retirées (0 en base au
   10/09/2026, pour 414 tableaux). Son identifiant (`nod_…`) n'est d'ailleurs pas celui des
   routes `/api/datastores/{datastore}`.
 
-D'où cette route, À CÔTÉ de la liste et jamais fusionnée avec elle : même forme d'entrée
+D'où cette route, À CÔTÉ de la liste : même forme d'entrée
 que `DatastoreEntry` (le tableau de bord la peint avec le même composant), plus
 `shared_by`. Trois garanties, éprouvées sur une vraie base
 (`tests/datastore/test_partages_recus.py`) :
@@ -21,12 +22,14 @@ que `DatastoreEntry` (le tableau de bord la peint avec le même composant), plus
 1. **Seulement ce qui a été donné à l'appelant.** La requête ne connaît qu'une clé,
    `principal_type='user' AND principal_id=<sub>` (`db.list_datastores_shared_to_user`) :
    un tiers de la même org ne voit rien, un droit d'org ou d'équipe n'entre pas ici.
-2. **Quelle que soit l'org active.** `SUB_ONLY`, aucune org requise — le chrome, lui,
-   rend 400 sans org active.
-3. **Sans doublon avec la liste de l'org.** Un tableau que la liste de l'org active rend
-   déjà n'est pas répété ici. Le jeu exclu est DÉRIVÉ de la liste elle-même
-   (`store.list_datastores()`), jamais recopié : une seconde définition de « ce que la
-   liste montre » divergerait au premier correctif.
+2. **Dans l'org PERSO seulement** (décision d'Alexis du 29/09/2026, ADR 0030 §9) :
+   dans une org, on ne voit QUE l'org. Consultée depuis une autre org, la route rend
+   409 `personal_view_outside_personal_org`, dont le message nomme l'org perso où
+   basculer — jamais une liste vide, qui se lirait « personne ne t'a rien partagé ».
+3. **Tous les partages faits à l'appelant.** La garantie « sans doublon avec la liste
+   de l'org » est retirée le 29/09/2026 : dans l'org perso, `GET /api/datastores` rend
+   aussi ces tableaux (`shared: true`), et la dédoublonner la viderait toujours. Cette
+   route en est le sous-ensemble « partagés à moi », avec `shared_by`.
 
 `mcp=None` : le besoin est celui du tableau de bord. Un jeton porté n'atteint pas cette
 route — `auth/token_scopes` est deny-by-default, et elle n'y figure pas.
@@ -37,11 +40,11 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from ... import db
+from ... import db, ownership
 from ...datastore.core import make_store
 from ...db import shell as db_shell
 from .._authz import SUB_ONLY
-from .._types import Capability, ResolvedCtx, RestBinding
+from .._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
 from ..registry import CAPABILITIES
 from .datastores import DatastoreEntry
 
@@ -63,10 +66,12 @@ class SharedWithMe(BaseModel):
 
 
 def _shared_with_me(ctx: ResolvedCtx, inp: SharedWithMeInput) -> dict:
+    if not ownership.org_perso_de(ctx.sub, ctx.org_id):
+        message, details = ownership.refus_vue_perso_hors_org_perso(
+            ctx.sub, ctx.org_id, "La liste des tableaux partagés à toi")
+        raise AuthzDenied(409, "personal_view_outside_personal_org", message, details)
     store = make_store(ctx.sub)
-    deja_listes = {int(e["id"]) for e in store.list_datastores()}
-    recus = [r for r in db.list_datastores_shared_to_user(ctx.sub)
-             if int(r["id"]) not in deja_listes]
+    recus = db.list_datastores_shared_to_user(ctx.sub)
     noms = db_shell.names_of(r.get("granted_by") for r in recus)
     out = []
     for r in recus:
@@ -88,10 +93,14 @@ CAPABILITIES += [
         description=(
             "Les tableaux partagés NOMINATIVEMENT à l'appelant (partage à une personne), "
             "et à lui seul — jamais un droit d'org ou d'équipe, qui se lisent dans "
-            "`GET /api/datastores`. Indépendant de l'org active : un partage à une "
-            "personne n'appartient à aucune org. Sans doublon avec la liste de l'org "
-            "active : un tableau qu'elle rend déjà n'est pas répété ici. Même forme que "
-            "les entrées de `GET /api/datastores`, plus `shared_by` (le nom de qui a "
-            "partagé)."),
+            "`GET /api/datastores`. Servie dans l'org PERSO de l'appelant seulement "
+            "(`X-Oto-Org`, ou l'org active) : ailleurs, 409 "
+            "`personal_view_outside_personal_org`. Dans l'org perso, "
+            "`GET /api/datastores` rend aussi ces tableaux ; celle-ci en est le "
+            "sous-ensemble. Même forme que les entrées de `GET /api/datastores`, plus "
+            "`shared_by` (le nom de qui a partagé)."),
+        errors=(DeclaredError(409, "personal_view_outside_personal_org",
+                              "consultée depuis une org qui n'est pas l'org perso de "
+                              "l'appelant — le message nomme l'org perso où basculer"),),
     ),
 ]

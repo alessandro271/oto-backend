@@ -206,9 +206,9 @@ class DatastorePg(SchemaOpsMixin, RegistreMixin, LectureMixin, EcritureMixin,
 
     def _org_de_l_appel(self) -> Optional[int]:
         """L'org active de l'appel (oto#160) — celle qu'un tableau PERSONNEL créé par ce
-        geste retient (`user_datastores.context_org_id`). Même source que
-        `_active_scope`, qui scope la liste et la résolution par nom : l'org où le
-        tableau naît est celle où l'appelant le verra."""
+        geste retient (`user_datastores.context_org_id`) — écrite, plus lue par
+        aucune liste depuis le 28/09/2026 : un tableau perso se liste dans l'org perso.
+        Même source que `_active_scope`, qui scope la liste et la résolution par nom."""
         if self.acting_org is not None:
             return int(self.acting_org)
         from .. import access
