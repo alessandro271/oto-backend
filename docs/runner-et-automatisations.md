@@ -1383,6 +1383,33 @@ sondage.
 `OTO_RUNNER_ORGS` est posé ; face à une route qui ne le déclare pas, chaque réservation
 répondrait `unknown_fields` (même leçon que `provider`, 04/09).
 
+### Une org peut être ROUTÉE vers la ferme : option `claude_farm` (29/09/2026)
+
+`org_ids` restreint un worker ; il ne retire rien aux autres. Un worker de la boucle de
+la même famille sert toujours l'org, et le premier qui réserve gagne. Pour qu'une org
+passe **entièrement** par la ferme Claude Code, on lui pose l'option d'org `claude_farm`
+(`oto_admin_set_option entity_type=org entity_id=<org> option=claude_farm on=true`, super
+admin ; `on=false` la rend à la boucle).
+
+- **Le claim.** Un travail `anthropic` (`db.FAMILLE_FERME`) d'une org routée n'est
+  réservé QUE par un worker qui se déclare de la ferme (`engine=farm`). Tout autre
+  worker ne le voit plus ; le repli d'abonnement vers `anthropic` suit la même règle.
+  Ses autres familles restent à la boucle.
+- **`engine=farm` se refuse plutôt que de se deviner** : seul un worker de plateforme
+  (`403 farm_engine_platform_only`), et seulement avec `provider=anthropic`
+  (`400 farm_engine_family`).
+- **Jamais de retombée sur la boucle.** Sans worker de ferme vivant pour l'org, le
+  travail attend. `runner_arme` rend `farm_routed: true` et ne liste `anthropic` dans
+  `families` que si un worker de ferme vivant la sert pour elle. Poser un agent
+  `anthropic` est donc refusé en `model_not_served`, et le refus nomme la ferme.
+- **Présence.** Un worker de ferme note sa famille marquée (`anthropic#ferme`, portée
+  comprise) dans `runner_platform_depots`, sans DDL. Pour une org non routée, elle se
+  lit comme `anthropic`.
+
+⚠️ **Ordre de déploiement** : le backend d'abord, puis le runner. Le runner n'envoie
+`engine` que pour un worker de ferme. Face à un backend qui ne le déclare pas, ce worker
+seul répondrait `unknown_fields`, et la boucle ne serait pas touchée.
+
 ### Un agent peut tourner sur l'ABONNEMENT de son demandeur (21/09/2026)
 
 Troisième façon de payer un modèle, après la clé de la plateforme et la clé de l'org :

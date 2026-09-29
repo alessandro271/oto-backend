@@ -68,6 +68,15 @@ class JobsInput(BaseModel):
     org_ids: Optional[list[int]] = Field(None, min_length=1, max_length=50, description=(
         "claim: only take jobs of these organizations (trial a worker on a few orgs). "
         "Unset = all."))
+    # claim — le MOTEUR d'exécution du worker (29/09/2026). `farm` = Claude Code dans la
+    # ferme : seul un tel worker réserve les travaux d'une org routée vers la ferme
+    # (option d'org `claude_farm`). Absent = la boucle, comme avant.
+    engine: Optional[Literal["farm"]] = Field(None, description=(
+        "claim: this worker's execution engine. `farm` = Claude Code in the farm. Jobs "
+        "of the `anthropic` family of an organization routed to the farm (org option "
+        "`claude_farm`) are reserved ONLY by a `farm` worker: any other worker never "
+        "sees them, and without a live `farm` worker they wait. Platform workers only, "
+        "with `provider=anthropic`. Unset = the regular loop."))
     # claim / extend —
     lease_seconds: int = 600
     # bind_run / complete / extend / get —
@@ -367,6 +376,29 @@ def _identite_invalide(sub_porteur: str, org_id: int) -> Optional[str]:
         return ("le compte qui a programmé ce travail n'a plus de rôle dans cette "
                 "organisation (parti, ou droit retiré)")
     return None
+
+
+def _engine_ferme(ctx: ResolvedCtx, inp: "JobsInput") -> bool:
+    """Le worker se déclare-t-il exécutant de la FERME (`engine=farm`) ?
+
+    ⚠️ Refusé plutôt que deviné : se dire de la ferme ouvre les travaux qu'une org a
+    réservés à la ferme (`db.OPTION_FERME`). Seul un worker de PLATEFORME (secret de
+    machine) le peut, et seulement pour la famille que la ferme sert — un worker au
+    jeton d'org, ou un `provider` d'une autre famille, qui s'en réclamerait
+    prendrait des travaux qu'il n'exécutera pas dans la ferme."""
+    if inp.engine != "farm":
+        return False
+    if not ctx.platform_worker:
+        raise AuthzDenied(
+            403, "farm_engine_platform_only",
+            "`engine=farm` est réservé aux workers de plateforme de la ferme : un "
+            "porteur au jeton d'org ne réserve pas les travaux routés vers la ferme.")
+    if inp.provider != db.FAMILLE_FERME:
+        raise AuthzDenied(
+            400, "farm_engine_family",
+            f"`engine=farm` exige `provider={db.FAMILLE_FERME}` : la ferme ne sert que "
+            f"cette famille (reçu : {inp.provider!r}).")
+    return True
 
 
 def _cle_de_modele(org_id: int, depot: str) -> tuple[Optional[str], Optional[str]]:
@@ -1025,6 +1057,7 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
                 "`org_key_only` exige `provider` : un worker qui ne tourne que sur "
                 "la clé de l'organisation doit nommer QUEL dépôt il consomme — "
                 "sans lui, il n'y a aucune clé à attendre et rien à servir.")
+        ferme = _engine_ferme(ctx, inp)
         bail = max(30, min(inp.lease_seconds, 3600))
         # ⚠️ Un worker d'ABONNEMENT ne prend QUE sa famille, qu'il l'ait demandé ou
         # non (revue du 21/09/2026). Il n'exécute rien lui-même : tout part dans le
@@ -1036,7 +1069,7 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
         famille_seule = inp.org_key_only or _abonnement.est_abonnement(inp.provider)
         job = db.claim_next_job(ctx.org_id, ctx.sub, lease_seconds=bail,
                                 depot=inp.provider, famille_seule=famille_seule,
-                                org_ids=inp.org_ids)
+                                org_ids=inp.org_ids, ferme=ferme)
         if job is None:
             # ⚠️ La file vide n'est pas la fin de l'histoire : une CAMPAGNE en
             # cours est une règle qui produit des travaux, et c'est ici qu'on
@@ -1053,7 +1086,7 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
             job = db.claim_next_job(ctx.org_id, ctx.sub, lease_seconds=bail,
                                     depot=inp.provider,
                                     famille_seule=famille_seule,
-                                    org_ids=inp.org_ids)
+                                    org_ids=inp.org_ids, ferme=ferme)
             if job is None and panne:
                 # « Rien à faire » et « je n'ai pas pu regarder » ne se disent
                 # pas de la même façon. Les confondre a coûté des jours de
@@ -1069,7 +1102,7 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
             # chemin traverse une famille que le dépôt de ce worker ne nomme pas.
             job = db.repli_disponible(ctx.org_id, inp.org_ids, ctx.sub,
                                       inp.provider, _abonnement.DEFAUT_LIMITE_PCT,
-                                      lease_seconds=bail)
+                                      lease_seconds=bail, ferme=ferme)
         if job is None:
             return {"job": None}
         # La charge servie est composée AVANT la délégation : tout ce qui se décide
@@ -1165,6 +1198,13 @@ CAPABILITIES += [
             DeclaredError(400, "org_key_only_without_provider",
                           "`claim` avec `org_key_only` mais sans `provider` : un "
                           "worker sans clé propre doit nommer le dépôt qu'il consomme"),
+            DeclaredError(403, "farm_engine_platform_only",
+                          "`claim engine=farm` par un porteur qui n'est pas un worker de "
+                          "plateforme : seul un exécutant de la ferme réserve les travaux "
+                          "d'une org routée vers elle"),
+            DeclaredError(400, "farm_engine_family",
+                          "`claim engine=farm` sans `provider=anthropic` : la ferme ne "
+                          "sert que cette famille"),
             DeclaredError(404, "fleet_not_found",
                           "`enqueue fleet_id=` désignant une automatisation qui n'est pas "
                           "celle de l'org du porteur"),

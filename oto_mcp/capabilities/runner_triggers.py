@@ -279,6 +279,13 @@ class RunnerArme(BaseModel):
     #: Vide ne veut pas dire « aucun runner » — `armed` le dit : un worker qui ne
     #: déclare pas de famille sert quand même les agents sans modèle.
     families: list[str] = []
+    #: L'org est routée vers la ferme Claude Code (option `claude_farm`) : sa famille
+    #: `anthropic` n'est servie — et donc listée dans `families` — que par un worker
+    #: de la ferme vivant pour elle.
+    farm_routed: bool = Field(False, description=(
+        "This organization is routed to the Claude Code farm (org option `claude_farm`): "
+        "its `anthropic` agents run ONLY on a farm worker, never on the regular loop, "
+        "and `families` lists `anthropic` only while a farm worker is alive for it."))
     #: Le catalogue, chaque modèle marqué `served` — ce qu'un écran propose.
     models: list["RunnerModel"] = []
 

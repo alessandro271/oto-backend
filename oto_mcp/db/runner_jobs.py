@@ -434,9 +434,34 @@ _PRESENCE_GRANULARITE_S = 30
 #: worker filtré par `org_ids` ne sert sa famille qu'à ces orgs-là.
 _PORTEE_ORG = "@org:"
 
+#: ── ROUTAGE D'UNE ORG VERS LA FERME (29/09/2026) ─────────────────────────────
+#: L'OPTION d'org (`oto_admin_set_option entity_type=org option=claude_farm`) qui
+#: réserve les travaux de la famille `FAMILLE_FERME` de cette org aux seuls workers
+#: de la ferme Claude Code (`engine=farm` au claim). Sans elle, un worker de la
+#: boucle de la même famille les prend aussi — le premier qui réserve gagne, et un
+#: moteur qu'on ne voulait pas pour cette org sert une part de ses travaux.
+#: ⚠️ Jamais de retombée sur la boucle : faute de worker ferme vivant, le travail
+#: ATTEND, et `runner_arme` ne déclare pas la famille servie pour cette org
+#: (`model_not_served` à la pose, avec la raison).
+OPTION_FERME = "claude_farm"
+#: La famille que la ferme sert — la seule qu'une org routée lui réserve.
+FAMILLE_FERME = "anthropic"
+#: La marque d'une présence de FERME dans `runner_platform_depots`
+#: (`anthropic#ferme`, `anthropic#ferme@org:178`) — sans DDL : `depot` est un TEXT.
+_MARQUE_FERME = "#ferme"
+
+
+def _org_routee_ferme(alias: str) -> str:
+    """Le prédicat SQL « l'org de `alias` est routée vers la ferme » : un don d'option
+    VIVANT, même lecture que `has_option_comp` (l'échéance mord en SQL)."""
+    return (f"EXISTS (SELECT 1 FROM option_comps oc WHERE oc.entity_type = 'org' "
+            f"AND oc.entity_id = {alias}.org_id::text AND oc.option = '{OPTION_FERME}' "
+            f"AND (oc.expires_at IS NULL OR oc.expires_at > NOW()))")
+
 
 def _touch_platform_worker_presence(worker_sub: str, depot: Optional[str],
-                                    org_ids: Optional[list] = None) -> None:
+                                    org_ids: Optional[list] = None,
+                                    ferme: bool = False) -> None:
     """Marque la présence d'un worker de PLATEFORME — SA PROPRE connexion,
     courte, committée avant que `claim_next_job` n'ouvre sa transaction de
     réservation.
@@ -460,7 +485,11 @@ def _touch_platform_worker_presence(worker_sub: str, depot: Optional[str],
     d'essai seul sur une famille la ferait lire « servie » par TOUTES les orgs, qui
     poseraient des agents qu'il ne prendra jamais — exactement ce que
     `no_runner_armed` existe pour empêcher. `runner_arme(org)` ne compte une famille
-    portée que pour les orgs qu'elle nomme. Sans DDL : `depot` est un TEXT."""
+    portée que pour les orgs qu'elle nomme. Sans DDL : `depot` est un TEXT.
+
+    ⚠️ **Un worker de FERME (`ferme`, 29/09/2026) marque sa présence** (`#ferme`
+    entre la famille et la portée) : pour une org routée vers la ferme
+    (`OPTION_FERME`), seule une présence marquée rend sa famille servie."""
     with _connect() as conn:
         conn.execute(
             f"""
@@ -478,8 +507,9 @@ def _touch_platform_worker_presence(worker_sub: str, depot: Optional[str],
         # chaîne libre, et un dépôt que rien ne route n'a rien à promettre.
         from ..runner_models import FAMILLES
         if depot in FAMILLES:
-            depots = ([f"{depot}{_PORTEE_ORG}{int(o)}" for o in org_ids]
-                      if org_ids else [depot])
+            base = f"{depot}{_MARQUE_FERME}" if ferme else depot
+            depots = ([f"{base}{_PORTEE_ORG}{int(o)}" for o in org_ids]
+                      if org_ids else [base])
             for cle in depots:
                 conn.execute(
                     f"""
@@ -498,7 +528,8 @@ def claim_next_job(org_id: Optional[int], worker_sub: str,
                    lease_seconds: int = _LEASE_DEFAULT_S,
                    depot: Optional[str] = None,
                    famille_seule: bool = False,
-                   org_ids: Optional[list] = None) -> Optional[dict]:
+                   org_ids: Optional[list] = None,
+                   ferme: bool = False) -> Optional[dict]:
     """Le prochain job, bail posé — ou None (file vide).
 
     ⚠️ `depot` = le dépôt de clé que le worker nomme, c'est-à-dire la FAMILLE de
@@ -537,7 +568,12 @@ def claim_next_job(org_id: Optional[int], worker_sub: str,
     essayer un moteur sur une organisation avant de le donner au parc. `None` = toutes,
     comme avant. Il RESTREINT, il n'élargit jamais : un appelant scopé à son org
     (`org_id`) ne voit que l'intersection. Seule la PRISE est filtrée ; les épaves et les
-    périmés de toutes les orgs se constatent toujours au sondage, comme avant."""
+    périmés de toutes les orgs se constatent toujours au sondage, comme avant.
+
+    `ferme` (29/09/2026) : le worker est un exécutant de la FERME Claude Code. Un
+    travail de la famille `FAMILLE_FERME` d'une org routée vers la ferme
+    (`OPTION_FERME`) n'est réservé QUE par lui : tout autre worker ne le voit plus,
+    et il attend plutôt que de retomber sur la boucle."""
     if org_id is None:
         # Le SONDAGE vaut présence, HORS de la transaction de réservation
         # ci-dessous (oto-backend, lot perf 17/09/2026, mesuré par oto cd :
@@ -547,7 +583,7 @@ def claim_next_job(org_id: Optional[int], worker_sub: str,
         # tenait le verrou de cette ligne pendant TOUTE la réservation : les
         # 12 workers passaient un par un. Sa propre connexion, courte,
         # committée avant que la réservation ne commence.
-        _touch_platform_worker_presence(worker_sub, depot, org_ids)
+        _touch_platform_worker_presence(worker_sub, depot, org_ids, ferme)
     with _connect() as conn:
         if org_id is not None:
             conn.execute(
@@ -645,6 +681,10 @@ def claim_next_job(org_id: Optional[int], worker_sub: str,
                    -- aussi dans les commentaires SQL.)
                    AND (payload->>'model_family' = %s
                         OR (payload->>'model_family' IS NULL AND NOT %s))
+                   -- Une org routée vers la ferme : sa famille ferme n'est prise
+                   -- que par un worker de ferme (le booléen en tête).
+                   AND (%s OR rj.payload->>'model_family' IS DISTINCT FROM '{FAMILLE_FERME}'
+                        OR NOT {_org_routee_ferme("rj")})
                    {frag['clause_abonnement']}
                  ORDER BY due_at
                    FOR UPDATE {frag['verrou_de']}SKIP LOCKED
@@ -671,7 +711,7 @@ def claim_next_job(org_id: Optional[int], worker_sub: str,
                       j.lease_until, j.sub, j.org_id{frag['retour_preteur']}
             """,
             (org_id, org_id, orgs, orgs, depot or "", bool(famille_seule),
-             worker_sub, int(lease_seconds)),
+             bool(ferme), worker_sub, int(lease_seconds)),
         ).fetchone()
         row = dict(row) if row else None
         if abonnement:
@@ -890,7 +930,7 @@ def defaire_le_repli(job_id: int, worker_sub: str, raison: str,
 
 def candidats_repli_abonnement(org_id: Optional[int], org_ids: Optional[list],
                                familles: frozenset, depot: str, seuil_defaut_pct: int,
-                               limit: int = 25) -> list[dict]:
+                               limit: int = 25, ferme: bool = False) -> list[dict]:
     """Travaux `pending` d'une famille d'ABONNEMENT que l'org PEUT replier — lecture
     SEULE, hors verrou, pour que l'appelant choisisse une cible avant le claim
     atomique (`claim_fallback_job`, qui revérifie la MÊME pause : entre les deux, une
@@ -906,9 +946,14 @@ def candidats_repli_abonnement(org_id: Optional[int], org_ids: Optional[list],
     déjà en vol se filtrent ICI, AVANT la limite : filtrés après, vingt-cinq travaux
     plus anciens d'orgs qui ne peuvent pas payer cacheraient pour toujours celui
     d'une org qui le peut. La clé se DÉCHIFFRE ensuite (`_cle_ok_pour_repli`) : la
-    présence de la ligne ne dit pas que le coffre la rendra."""
+    présence de la ligne ne dit pas que le coffre la rendra.
+
+    ⚠️ Un repli vers `FAMILLE_FERME` pour une org routée vers la ferme n'est ouvert
+    qu'à un worker de ferme (`ferme`) : sinon, le repli ferait passer par la boucle
+    un travail que l'org a réservé à la ferme."""
     if not familles:
         return []
+    hors_ferme_ok = bool(ferme) or depot != FAMILLE_FERME
     with _connect() as conn:
         rows = conn.execute(
             f"""
@@ -933,10 +978,12 @@ def candidats_repli_abonnement(org_id: Optional[int], org_ids: Optional[list],
                               AND c.connector = %s)
                AND NOT EXISTS ({_REPLI_EN_VOL.format(
                    forfait=_forfait_de_repli("rj", "modep"))})
+               AND (%s OR NOT {_org_routee_ferme("rj")})
              ORDER BY rj.due_at
              LIMIT %s
             """,
-            (org_id, org_id, org_ids, org_ids, list(familles), depot, limit),
+            (org_id, org_id, org_ids, org_ids, list(familles), depot, hors_ferme_ok,
+             limit),
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -1035,7 +1082,8 @@ def claim_fallback_job(job_id: int, worker_sub: str, to_model: str, to_family: s
 
 def repli_disponible(org_id: Optional[int], org_ids: Optional[list], worker_sub: str,
                      depot: Optional[str], seuil_defaut_pct: int,
-                     lease_seconds: int = _LEASE_DEFAULT_S) -> Optional[dict]:
+                     lease_seconds: int = _LEASE_DEFAULT_S,
+                     ferme: bool = False) -> Optional[dict]:
     """Tente un repli abonnement épuisé → clé API pour le dépôt `depot` d'un worker
     de PLATEFORME (`claim_next_job` a déjà rendu `None` pour lui) : parcourt les
     candidats du PLUS ANCIEN au plus récent, s'arrête au premier repli que l'org
@@ -1050,7 +1098,7 @@ def repli_disponible(org_id: Optional[int], org_ids: Optional[list], worker_sub:
     if not familles:
         return None
     for cand in candidats_repli_abonnement(org_id, org_ids, familles, depot,
-                                           seuil_defaut_pct):
+                                           seuil_defaut_pct, ferme=ferme):
         to_model = runner_models.repli_api(cand["model"])
         if not to_model or runner_models.famille(to_model) != depot:
             continue
@@ -1532,19 +1580,30 @@ def runner_arme(org_id: int) -> dict:
     d'org compte dans `workers` mais ne déclare aucune famille : il ne sert que
     les agents sans modèle (cf. `capabilities/_modele.exige_servi`). Une famille
     PORTÉE (`<famille>@org:<id>`, worker filtré par `org_ids`) ne compte que pour
-    l'org qu'elle nomme."""
+    l'org qu'elle nomme.
+
+    `farm_routed` (29/09/2026) : l'org est routée vers la ferme (`OPTION_FERME`).
+    Sa famille `FAMILLE_FERME` n'est alors servie que si un worker de FERME vivant
+    la sert pour elle — un worker de la boucle ne la prendra jamais."""
     with _connect() as conn:
+        routee = conn.execute(
+            f"SELECT {_org_routee_ferme('o')} AS r FROM (SELECT %s::bigint AS org_id) o",
+            (int(org_id),),
+        ).fetchone()["r"]
         familles = conn.execute(
             """
-            SELECT COALESCE(array_agg(famille ORDER BY famille), '{}') AS f
-              FROM (SELECT DISTINCT split_part(depot, %s, 1) AS famille
+            SELECT COALESCE(array_agg(DISTINCT famille ORDER BY famille), '{}') AS f
+              FROM (SELECT split_part(split_part(depot, %s, 1), %s, 1) AS famille,
+                           position(%s in depot) > 0 AS de_ferme
                       FROM runner_platform_depots
                      WHERE last_seen_at > NOW() - make_interval(secs => %s)
                        AND (position(%s in depot) = 0
                             OR depot = split_part(depot, %s, 1) || %s || %s)) t
+             WHERE NOT %s OR de_ferme OR famille <> %s
             """,
-            (_PORTEE_ORG, ARME_FENETRE_S, _PORTEE_ORG, _PORTEE_ORG, _PORTEE_ORG,
-             str(int(org_id))),
+            (_PORTEE_ORG, _MARQUE_FERME[0], _MARQUE_FERME, ARME_FENETRE_S,
+             _PORTEE_ORG, _PORTEE_ORG, _PORTEE_ORG, str(int(org_id)),
+             bool(routee), FAMILLE_FERME),
         ).fetchone()
         row = conn.execute(
             """
@@ -1569,4 +1628,5 @@ def runner_arme(org_id: int) -> dict:
     return {"armed": vivants > 0,
             "workers": vivants,
             "last_seen": str(dernier) if dernier else None,
-            "families": list(familles["f"] or []) if familles else []}
+            "families": list(familles["f"] or []) if familles else [],
+            "farm_routed": bool(routee)}

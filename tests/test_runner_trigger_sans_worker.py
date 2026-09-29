@@ -185,12 +185,15 @@ def base_bootee(pg_dsn):
     créer `runner_workers`, et un test qui poserait sa propre table prouverait que
     le SQL de lecture marche sans rien dire du DDL SERVI. `usage` est là parce que
     la réservation LIT le journal : un `start` dont le run est clos se sert sans
-    run, et la clôture est le fait `run_finish` de `tool_calls`. Aucune FK hors
-    de ces deux fragments — le boot complet demanderait `pgvector`, qui
+    run, et la clôture est le fait `run_finish` de `tool_calls`. `option_comps`
+    (fragment `billing`) est là parce que la réservation LIT le routage d'une org
+    vers la ferme (option `claude_farm`, 29/09/2026). Aucune FK hors
+    de ces fragments — le boot complet demanderait `pgvector`, qui
     n'apprendrait rien de plus ici et que `test_schema_assembly_frozen` + le rejeu
     de boot couvrent déjà."""
     psycopg = pytest.importorskip("psycopg")
     from oto_mcp.db import _conn as dbconn
+    from oto_mcp.db.schema import billing as fragment_billing
     from oto_mcp.db.schema import runs as fragment_runs
     from oto_mcp.db.schema import usage as fragment_usage
 
@@ -205,6 +208,7 @@ def base_bootee(pg_dsn):
     try:
         with dbconn._connect() as c:
             c.execute(fragment_usage.USAGE)
+            c.execute(fragment_billing.OPTION_COMPS)
             c.execute(fragment_runs.RUNS)
         yield dsn
     finally:
@@ -237,7 +241,8 @@ def test_une_org_jamais_sondee_rend_last_seen_None(base_bootee):
 
     etat = db.runner_arme(4343)
     # `families` (12/09/2026) : les familles de modèles servies — aucune ici.
-    assert etat == {"armed": False, "workers": 0, "last_seen": None, "families": []}
+    assert etat == {"armed": False, "workers": 0, "last_seen": None, "families": [],
+                    "farm_routed": False}
 
 
 def test_un_worker_tu_depuis_trop_longtemps_ne_compte_plus(base_bootee):

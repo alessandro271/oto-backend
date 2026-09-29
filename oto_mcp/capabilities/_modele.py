@@ -124,11 +124,18 @@ def exige_servi(etat: dict, famille: Optional[str]) -> None:
         return
     vivantes = (f"familles servies : {', '.join(servies)}"
                 if servies else "aucune famille n'est déclarée servie")
+    # Une org routée vers la ferme (`db.OPTION_FERME`) : sa famille ferme n'est
+    # servie que par un worker de ferme vivant. Le dire, sinon « non servie » se
+    # lit comme une panne du parc alors que la boucle tourne.
+    ferme = (" Cette organisation est routée vers la ferme Claude Code : ses agents "
+             f"`{db.FAMILLE_FERME}` n'y sont exécutés que par un worker de la ferme, et "
+             "aucun n'est vivant pour elle." if etat.get("farm_routed")
+             and famille == db.FAMILLE_FERME else "")
     raise AuthzDenied(
         400, "model_not_served",
-        f"les modèles `{famille}` ne sont pas servis en ce moment ({vivantes}). "
-        "L'exécution resterait en attente sans une erreur, puis périmerait. Choisis "
-        "un modèle servi (`runner.models` sur `op=list`).")
+        f"les modèles `{famille}` ne sont pas servis en ce moment ({vivantes})."
+        f"{ferme} L'exécution resterait en attente sans une erreur, puis périmerait. "
+        "Choisis un modèle servi (`runner.models` sur `op=list`).")
 
 
 def etat_servi(etat: dict, org_id: Optional[int] = None) -> dict:
