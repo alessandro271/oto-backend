@@ -1,0 +1,255 @@
+name: Deploy cible
+
+# Monter une INSTANCE CIBLE à un tag du tronc (#967, ADR 0070 — docs/instance-cible.md).
+#
+# Une cible ne bouge que quand quelqu'un DÉCIDE de la monter de version : ce workflow ne
+# part qu'à la main (`workflow_dispatch`), avec un tag choisi, et rien ne l'appelle. Il ne
+# consulte que la cible elle-même : sa déclaration, sa préprod, sa prod, et le tronc (le
+# tag doit être sur la branche principale). Aucun autre déploiement n'entre en compte.
+#
+# Chaque cible est un ENVIRONNEMENT GitHub (le nom est l'entrée `cible`) qui porte tout
+# ce qui la distingue : sa déclaration (`CIBLE_DECLARATION`, JSON validé contre
+# l'inventaire du tag), son accès (hôte, clé d'hôte épinglée, clé de déploiement, jeton
+# de service Cloudflare Access) et, s'il existe, le consommateur de son API. Cet
+# environnement EXIGE une approbation (un relecteur requis) : le workflow le vérifie et
+# refuse de partir sinon. Ce dépôt est public : il ne nomme aucune cible, il n'en porte
+# que la forme (`deploy/cible/declaration.gabarit.json`).
+#
+# L'ordre : entrées validées et environnement protégé → (approbation) → tag sur la
+# branche principale → déclaration jugée par l'inventaire du tag → contrat d'API du tag
+# confronté au consommateur de la cible (contrôle INVERSE, facultatif : c'est la cible
+# qui juge le tag) → préprod de la cible → prod de la cible, qui exige que sa préprod
+# SERVE déjà ce tag. Un seul job derrière l'approbation : une montée, une décision.
+#
+# Runner hébergé par GitHub : la clé de déploiement n'ouvre qu'une commande forcée
+# (`deploy/cible/porte.sh`) et passe par le tunnel Cloudflare Access de la cible.
+on:
+  workflow_dispatch:
+    inputs:
+      cible:
+        description: "Environnement GitHub de la cible (il porte sa déclaration)"
+        required: true
+      tag:
+        description: "Tag du tronc à monter (vX.Y.Z)"
+        required: true
+      etape:
+        description: "preprod, prod (exige la préprod déjà à ce tag), ou les deux à la suite"
+        type: choice
+        options: [preprod, prod, preprod-puis-prod]
+        default: preprod
+      action:
+        description: "deployer le tag, ou retour à la couleur précédente"
+        type: choice
+        options: [deployer, retour]
+        default: deployer
+
+permissions:
+  contents: read
+
+# Une montée de version à la fois PAR CIBLE ; deux cibles ne s'attendent pas.
+concurrency:
+  group: deploy-cible-${{ inputs.cible }}
+  cancel-in-progress: false
+
+env:
+  CIBLE: ${{ inputs.cible }}
+  TAG: ${{ inputs.tag }}
+  ETAPE: ${{ inputs.etape }}
+  ACTION: ${{ inputs.action }}
+
+jobs:
+  # Les entrées atterrissent dans un `ref:`, un nom d'environnement et des commandes :
+  # validées AVANT tout usage, et jamais interpolées dans un script (passées par `env`).
+  # Puis l'environnement de la cible doit EXISTER et EXIGER un relecteur : un
+  # environnement absent serait créé à la volée par GitHub, sans protection.
+  entrees:
+    name: Entrées et protection de la cible
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    steps:
+      - name: Valider les entrées
+        run: |
+          set -euo pipefail
+          [[ "$CIBLE" =~ ^[a-z][a-z0-9-]{1,38}$ ]] || { echo "::error::cible invalide : « $CIBLE »"; exit 1; }
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::tag invalide (vX.Y.Z) : « $TAG »"; exit 1; }
+          echo "### $ACTION $TAG → $CIBLE ($ETAPE)" >> "$GITHUB_STEP_SUMMARY"
+      - name: L'environnement de la cible exige une approbation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPOT: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          git clone --quiet --depth 1 --branch "$TAG" --filter=blob:none --sparse "https://github.com/${DEPOT}.git" tronc
+          git -C tronc sparse-checkout set deploy/cible
+          tronc/deploy/cible/protection.sh "$DEPOT" "$CIBLE"
+
+  # UN job derrière l'approbation : la décision couvre toute la montée demandée.
+  monter:
+    name: Monter la cible
+    needs: [entrees]
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.cible }}
+    # amorce + installation + démarrage (~40 s) + bascule, par rôle ; marge pour une naissance.
+    timeout-minutes: 60
+    env:
+      CIBLE_DECLARATION: ${{ vars.CIBLE_DECLARATION }}
+      CONSOMMATEUR: ${{ vars.CIBLE_CONSOMMATEUR }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          fetch-depth: 0
+
+      # La porte le revérifie sur la machine ; ici, on refuse avant d'avoir rien touché.
+      - name: Le tag est sur la branche principale du tronc
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          git merge-base --is-ancestor "refs/tags/$TAG" FETCH_HEAD \
+            || { echo "::error title=Tag hors du tronc::$TAG n'est pas sur la branche principale — rien n'est monté."; exit 1; }
+
+      - name: Déclaration de la cible, jugée par l'inventaire du tag
+        run: |
+          set -euo pipefail
+          printf '%s' "$CIBLE_DECLARATION" > "$RUNNER_TEMP/declaration.json"
+          python3 deploy/cible/declaration.py verifier "$RUNNER_TEMP/declaration.json"
+
+      # ── CONTRÔLE INVERSE DE COMPATIBILITÉ (facultatif) ──────────────────────────────
+      # C'est la cible qui juge le tag : le contrat d'API que CE tag servirait chez elle
+      # (dérivé par import, sans serveur) est confronté au contrat qu'épingle le
+      # consommateur qu'elle déclare (`CIBLE_CONSOMMATEUR`, JSON {nom, depot, chemin,
+      # cle: bool}). Seule une rupture d'appel ou de lecture bloque
+      # (`scripts/contrat-front.py`) ; un contrat illisible bloque aussi : on ne monte
+      # pas sans verdict. Sans consommateur déclaré, le job le DIT et ne juge rien.
+      - name: Un consommateur est-il déclaré ?
+        id: declare
+        run: |
+          set -euo pipefail
+          if [ "$ACTION" = retour ]; then
+            echo "Retour arrière : aucune version nouvelle, rien à confronter." >> "$GITHUB_STEP_SUMMARY"
+            echo "juger=non" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ -z "$CONSOMMATEUR" ]; then
+            echo "::notice title=Aucun consommateur déclaré::la cible $CIBLE ne déclare pas de consommateur (CIBLE_CONSOMMATEUR) — aucun contrat n'a été confronté."
+            echo "juger=non" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if ! jq -e '(keys - ["cle","chemin","depot","nom"]) == [] and
+                 (.nom | test("^[A-Za-z0-9._-]+$")) and
+                 (.depot | test("^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")) and
+                 (.chemin | test("^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$")) and
+                 (.cle | type == "boolean")' <<< "$CONSOMMATEUR" > /dev/null; then
+            echo "::error title=Consommateur mal déclaré::CIBLE_CONSOMMATEUR doit être {nom, depot owner/repo, chemin relatif, cle: bool} — rien n'a été jugé."
+            exit 1
+          fi
+          {
+            echo "juger=oui"
+            echo "nom=$(jq -r .nom <<< "$CONSOMMATEUR")"
+            echo "depot=$(jq -r .depot <<< "$CONSOMMATEUR")"
+            echo "chemin=$(jq -r .chemin <<< "$CONSOMMATEUR")"
+            echo "secret=$(jq -r 'if .cle then "CIBLE_CONSOMMATEUR_CLE" else "" end' <<< "$CONSOMMATEUR")"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: steps.declare.outputs.juger == 'oui'
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install (dépendances de runtime)
+        if: steps.declare.outputs.juger == 'oui'
+        run: pip install -e .
+
+      # Le contrat que CE tag servirait CHEZ LA CIBLE : la facturation n'y est exposée
+      # que si sa déclaration l'allume (sinon le défaut de l'inventaire, qui l'éteint).
+      - name: Dériver le contrat du tag
+        if: steps.declare.outputs.juger == 'oui'
+        run: |
+          set -euo pipefail
+          python - "$RUNNER_TEMP/declaration.json" <<'PY' > "$RUNNER_TEMP/facturation"
+          import json, sys
+          from oto_mcp import env_inventory as inv
+          roles = json.load(open(sys.argv[1]))["roles"]
+          valeurs = {r["env"].get("OTO_BILLING_ENABLED", inv.par_nom()["OTO_BILLING_ENABLED"].defaut)
+                     for r in roles.values()}
+          if len(valeurs) != 1:
+              sys.exit("les rôles de la cible divergent sur OTO_BILLING_ENABLED — contrat ambigu")
+          print(valeurs.pop())
+          PY
+          OTO_BILLING_ENABLED="$(cat "$RUNNER_TEMP/facturation")" python - <<'PY' > "$RUNNER_TEMP/openapi-du-tag.json"
+          import json
+          from oto_mcp import openapi, server
+          print(json.dumps(openapi.build(server.routes_rest(object()))))
+          PY
+          echo "contrat du tag : $(wc -c < "$RUNNER_TEMP/openapi-du-tag.json") octets"
+
+      - name: Lire le contrat épinglé
+        id: contrat
+        if: steps.declare.outputs.juger == 'oui'
+        env:
+          CLE_LECTURE: ${{ secrets.CIBLE_CONSOMMATEUR_CLE }}
+          NOM: ${{ steps.declare.outputs.nom }}
+          DEPOT: ${{ steps.declare.outputs.depot }}
+          CHEMIN: ${{ steps.declare.outputs.chemin }}
+          SECRET: ${{ steps.declare.outputs.secret }}
+        run: scripts/lire-contrat-consommateur.sh "$NOM" "$DEPOT" "$CHEMIN" "$SECRET"
+
+      - name: Confronter
+        if: steps.declare.outputs.juger == 'oui'
+        env:
+          NOM: ${{ steps.declare.outputs.nom }}
+          LU: ${{ steps.contrat.outputs.lu }}
+          CONTRAT: ${{ steps.contrat.outputs.contrat }}
+        run: |
+          set -uo pipefail
+          if [ "$LU" != oui ]; then
+            echo "::error title=Contrat de $NOM non jugé::le contrat épinglé n'a pas pu être lu — la montée de version ne part pas sans verdict."
+            exit 1
+          fi
+          code=0
+          python3 scripts/contrat-front.py --consommateur "$NOM" "$CONTRAT" "$RUNNER_TEMP/openapi-du-tag.json" || code=$?
+          if [ "$code" = "2" ]; then
+            echo "::error title=Contrat de $NOM — confrontation impossible::document illisible, rien n'a été jugé."; exit 1
+          fi
+          if [ "$code" != "0" ]; then
+            echo "::error title=$TAG casserait $NOM::une opération qu'il épingle disparaît, change d'entrée, ou ne rend plus ce qu'il lit. Ne pas monter la cible à ce tag avant que $NOM ait suivi."; exit 1
+          fi
+
+      - name: Effacer la clé de lecture
+        if: always()
+        env:
+          TRAVAIL: ${{ steps.contrat.outputs.travail }}
+        run: '[ -z "$TRAVAIL" ] || rm -rf "$TRAVAIL"'
+
+      # ── PRÉPROD, PUIS PROD ──────────────────────────────────────────────────────────
+      - name: Monter la préprod
+        if: inputs.etape != 'prod'
+        env:
+          CIBLE_SSH_HOTE: ${{ vars.CIBLE_SSH_HOTE }}
+          CIBLE_SSH_UTILISATEUR: ${{ vars.CIBLE_SSH_UTILISATEUR }}
+          CIBLE_SSH_KNOWN_HOSTS: ${{ vars.CIBLE_SSH_KNOWN_HOSTS }}
+          CIBLE_SSH_CLE: ${{ secrets.CIBLE_SSH_CLE }}
+          TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.CIBLE_CF_ACCESS_CLIENT_ID }}
+          TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.CIBLE_CF_ACCESS_CLIENT_SECRET }}
+        run: deploy/cible/appeler.sh "$ACTION" preprod "$TAG"
+
+      # La prod ne monte que sur un tag que la préprod de la CIBLE sert déjà — constaté
+      # sur ce qu'elle annonce (`/api/version`), pas sur un run passé.
+      - name: La préprod sert le tag
+        if: inputs.action == 'deployer'
+        run: deploy/cible/constater.sh "$RUNNER_TEMP/declaration.json" preprod "$TAG"
+
+      - name: Monter la prod
+        if: inputs.etape != 'preprod'
+        env:
+          CIBLE_SSH_HOTE: ${{ vars.CIBLE_SSH_HOTE }}
+          CIBLE_SSH_UTILISATEUR: ${{ vars.CIBLE_SSH_UTILISATEUR }}
+          CIBLE_SSH_KNOWN_HOSTS: ${{ vars.CIBLE_SSH_KNOWN_HOSTS }}
+          CIBLE_SSH_CLE: ${{ secrets.CIBLE_SSH_CLE }}
+          TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.CIBLE_CF_ACCESS_CLIENT_ID }}
+          TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.CIBLE_CF_ACCESS_CLIENT_SECRET }}
+        run: deploy/cible/appeler.sh "$ACTION" prod "$TAG"
+
+      - name: La prod sert le tag
+        if: inputs.action == 'deployer' && inputs.etape != 'preprod'
+        run: deploy/cible/constater.sh "$RUNNER_TEMP/declaration.json" prod "$TAG"

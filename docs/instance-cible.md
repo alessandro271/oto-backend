@@ -13,8 +13,9 @@ type: how-to
 
 Issue d'origine : #967 (« une chaîne de livraison, N cibles »). Les deux instances sont
 **autonomes** : déployer une cible est une décision de montée de version prise à part,
-jamais la suite automatique de nos tags, et un échec chez elle ne touche jamais notre
-chaîne (`deploy.yml` et `deploy-canari.yml` n'en savent rien).
+jamais la suite automatique d'un tag. Le workflow d'une cible ne consulte qu'elle-même
+et le tronc : aucun autre déploiement, aucune autre instance, aucun autre run n'entre
+dans sa décision, et rien d'autre ne l'appelle.
 
 ## La bibliothèque bleu/vert, commune
 
@@ -102,3 +103,50 @@ import /etc/caddy/upstream-<i>-<r>.conf          # en tête, avant le bloc globa
 
 Le service ne peut pas réécrire son code (les arbres sont à root), n'a d'état que dans
 son `StateDirectory`, et ne voit sa clé d'API que par `LoadCredential`.
+
+## La chaîne — monter une cible de version
+
+`.github/workflows/deploy-cible.yml`, **à la main seulement** (onglet Actions ou
+`gh workflow run deploy-cible.yml -f cible=<environnement> -f tag=vX.Y.Z -f etape=…`) :
+
+1. **Entrées** validées avant tout usage (elles finissent dans un `ref:` et un nom
+   d'environnement), puis **l'environnement de la cible doit exister et exiger un
+   relecteur** (`deploy/cible/protection.sh`, par l'API de GitHub) : sinon, refus.
+2. **Approbation** par le relecteur requis — un seul job derrière elle, qui porte toute
+   la montée demandée : une montée, une décision.
+3. **Le tag est sur la branche principale du tronc** (la porte le revérifie sur la
+   machine).
+4. **La déclaration** est jugée par l'inventaire du tag.
+5. **Compatibilité inverse, facultative** : si l'environnement de la cible déclare un
+   consommateur de son API (`CIBLE_CONSOMMATEUR`), le contrat que **ce tag** servirait
+   chez elle est confronté au contrat qu'il épingle (`scripts/contrat-front.py`). Le tronc
+   ne s'interdit rien pour une cible ; c'est la cible qui juge le tag au moment de
+   monter. Contrat illisible = pas de montée.
+6. **Préprod** de la cible, puis constat de ce qu'elle sert (`GET /api/version`).
+7. **Prod** de la cible — seulement si sa préprod **sert déjà** ce tag, constaté de
+   l'extérieur. `etape=prod` seul est donc le geste du lendemain.
+
+Un test (`tests/test_workflow_deploy_cible_967.py`) rougit si ce workflow, ou un script
+qu'il exécute, se met à consulter un autre déploiement que celui de la cible.
+
+`action=retour` rebascule un rôle sur sa couleur précédente, sans rien installer.
+
+**L'accès** : runner hébergé par GitHub → `cloudflared` (dépôt APT signé) → tunnel
+Cloudflare Access de la cible, authentifié par **jeton de service** → SSH par la clé de
+déploiement, hôte **épinglé** → **commande forcée** vers la porte
+(`deploy/cible/appeler.sh`). La déclaration part sur l'entrée standard.
+
+**La porte** (`deploy/cible/porte.sh`, posée une fois sur la machine à
+`/usr/local/sbin/oto-cible-porte`) est le seul fichier de la chaîne qui y vit. Elle
+n'accepte que `deployer|retour <preprod|prod> <vX.Y.Z>`, vérifie que le tag existe et
+qu'il est **sur la branche principale du tronc** (miroir local du dépôt, dont l'URL est
+écrite dans la porte et jamais reçue), extrait le `deploy/` **de ce tag** et lui passe
+la main (`deploy/cible/deployer.sh` : amorce, bleu/vert, maintenance). L'amorce, la
+bibliothèque et le lanceur sont donc toujours ceux de la version qu'on monte.
+
+## Hors de ce dépôt : les workers runner
+
+Les workers `oto-runner` vivent dans leur propre dépôt et y suivent `main`. Pour une
+cible, ils doivent tourner **au même tag** que son back-end : il faudra, dans ce dépôt-là,
+une montée pilotée par tag (même déclenchement manuel, même approbation), et une
+déclaration de l'URL du back-end de la cible. Rien de ce chantier ne le fait.

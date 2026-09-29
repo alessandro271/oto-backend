@@ -20,6 +20,7 @@ ICI = pathlib.Path(__file__).resolve().parent
 DEPOT = ICI.parents[1]
 DECLARATION = ICI / "declaration_exemple.json"
 TRONC = "https://github.com/exemple/tronc.git"
+SHA = "0123456789abcdef0123456789abcdef01234567"
 
 DOUBLURES = {
     "id": r'''
@@ -30,12 +31,36 @@ echo 0''',
 if [ "$1" = venv ]; then
   cible="${!#}"; mkdir -p "$cible/bin"
   printf '#!/bin/bash\necho %s\n' "${BANC_PYV:-3.10}" > "$cible/bin/python"; chmod +x "$cible/bin/python"
+  printf '#!/bin/bash\necho "[pip] $(pwd) $*" >> "$BANC_TRACE"\n' > "$cible/bin/pip"; chmod +x "$cible/bin/pip"
 fi''',
     "git": r'''
 if [ "$1" = clone ]; then mkdir -p "${!#}/.git"; echo "$3" > "${!#}/.git/origine"; exit 0; fi
-if [ "$1" = -C ] && [ "$3" = remote ]; then cat "$2/.git/origine"; exit 0; fi''',
+if [ "$1" = -C ] && [ "$3" = remote ]; then cat "$2/.git/origine"; exit 0; fi
+# `reset --hard <tag>` : l'arbre prend le contenu du tag (ce que le déploiement lit).
+if [ "$1" = reset ]; then
+  mkdir -p deploy && cp "$BANC_TAG/deploy/lanceur_secrets.py" deploy/ && cp "$BANC_TAG/pyproject.toml" .
+fi
+# Le miroir de la porte : le tag existe-t-il, est-il sur le tronc, que contient-il.
+case " $* " in
+  *" --verify "*) [ -n "${BANC_TAG_INCONNU:-}" ] && exit 1; echo "$BANC_SHA"; exit 0 ;;
+  *" merge-base "*) [ -n "${BANC_HORS_TRONC:-}" ] && exit 1; exit 0 ;;
+  *" archive "*) exec tar -c -C "$BANC_TAG" deploy oto_mcp pyproject.toml ;;
+esac
+for a in "$@"; do case "$a" in --short) echo 0123456; exit 0 ;; HEAD) echo "$BANC_SHA"; exit 0 ;; esac; done''',
     "caddy": "exit 0",
-    "systemctl": "exit 0",
+    "systemctl": r'''[ "$1" = is-active ] && [ -n "${BANC_DEMARRAGE_KO:-}" ] && exit 3; exit 0''',
+    "curl": r'''
+url=""; for a in "$@"; do case "$a" in http*) url="$a" ;; esac; done
+case "$url" in
+  *tls-check*) printf 404 ;;
+  http://127.0.0.1:*) : ;;
+  https://*) printf 200 ;;
+esac''',
+    "flock": "exit 0",
+    "ss": "exit 0",
+    "systemd-run": "exit 0",
+    "journalctl": "exit 0",
+    "sleep": "exit 0",
     "python3": r'''
 if [ "${2:-}" = variables ]; then
   /usr/bin/python3 "$@" | sed -e "s#=/#=$BANC_RACINE/#"; exit "${PIPESTATUS[0]}"
@@ -44,7 +69,7 @@ if [ "${2:-}" = ecrire ]; then exec /usr/bin/python3 "$1" "$2" "$3" "$4" "$BANC_
 exec /usr/bin/python3 "$@"''',
 }
 
-PREFIXES = ("/opt/", "/etc/", "/usr/local/lib/", "/var/lock/")
+PREFIXES = ("/opt/", "/etc/", "/usr/local/lib/", "/var/lock/", "/var/lib/", "/run/")
 
 
 class Banc:
@@ -79,6 +104,7 @@ class Banc:
         self.cle.write_text("cle\n")
         self.cle.chmod(0o600)
         (racine / "etc/systemd/system").mkdir(parents=True)
+        (racine / "var/lock").mkdir(parents=True)
         self.caddyfile(avec_import=True)
 
     def caddyfile(self, avec_import: bool) -> None:
@@ -92,9 +118,22 @@ class Banc:
                **env: str) -> subprocess.CompletedProcess:
         environnement = {"PATH": f"{self.bin}:/usr/bin:/bin", "BANC_TRACE": str(self.trace),
                          "BANC_RACINE": str(self.racine), "LANG": "C.UTF-8",
-                         "OTO_CIBLE_DEPOT": TRONC, **env}
+                         "OTO_CIBLE_DEPOT": TRONC, "BANC_TAG": str(self.tag),
+                         "BANC_SHA": SHA, **env}
         return subprocess.run(["/bin/bash", str(self.tag / "deploy" / "cible" / script),
                                str(declaration), *args],
+                              env=environnement, capture_output=True, text=True, timeout=60)
+
+    def porte(self, commande: str, entree: str | None = None, **env: str
+              ) -> subprocess.CompletedProcess:
+        """La porte telle que sshd l'appelle : UN argument, la déclaration sur stdin."""
+        (self.racine / "run").mkdir(exist_ok=True)
+        environnement = {"PATH": f"{self.bin}:/usr/bin:/bin", "BANC_TRACE": str(self.trace),
+                         "BANC_RACINE": str(self.racine), "LANG": "C.UTF-8",
+                         "BANC_TAG": str(self.tag), "BANC_SHA": SHA, **env}
+        return subprocess.run(["/bin/bash", str(self.tag / "deploy" / "cible" / "porte.sh"),
+                               commande],
+                              input=DECLARATION.read_text() if entree is None else entree,
                               env=environnement, capture_output=True, text=True, timeout=60)
 
     def commandes(self) -> list[str]:
