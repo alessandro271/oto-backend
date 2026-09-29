@@ -139,3 +139,27 @@ def test_a_refused_row_names_its_absolute_position(table, servir, monkeypatch):
     assert e.value.code == "bad_row"
     assert e.value.details == {"row": 5, "written": 4, "resume_from": 5}
     assert len(_lignes(ns_id)) == 4
+
+
+def test_a_sheet_with_dotted_and_empty_headers_declares_every_key(table, servir):
+    ns, ns_id = table
+    servir["data"] = ("Buy,,acme.company,acme-demo.com,acme-tool.com\n"
+                      "yes,junk,ACME,1,2\nno,,Beta,3,4\n").encode()
+    r = _importer(ns)
+    assert r["dropped_empty_headers"] == [2]
+    from oto_mcp.datastore.core import make_store
+    declared = {f["key"] for f in make_store(SUB)._schema_of(ns_id)["fields"]}
+    assert declared == {"buy", "acme_company", "acme_demo_com", "acme_tool_com"}
+    assert all(set(row) == declared for row in _lignes(ns_id)), "no undeclared key"
+
+
+def test_re_importing_the_same_sheet_reuses_its_columns(table, servir):
+    ns, ns_id = table
+    servir["data"] = "Buy,acme.company,acme-demo.com\nyes,ACME,1\n".encode()
+    _importer(ns)
+    r = _importer(ns)
+    assert "created_columns" not in r and r["inserted"] == 1
+    from oto_mcp.datastore.core import make_store
+    declared = {f["key"] for f in make_store(SUB)._schema_of(ns_id)["fields"]}
+    assert declared == {"buy", "acme_company", "acme_demo_com"}
+    assert all(set(row) == declared for row in _lignes(ns_id))

@@ -104,3 +104,27 @@ def test_a_clean_comma_key_file_reads_exactly_as_before():
 def test_cells_past_the_header_are_dropped_not_written_under_none():
     parsed = ut.parse_import(b"email\nx@y,extra\n", "csv", SCHEMA)
     assert parsed["rows"] == [{"email": "x@y"}]
+
+
+SHEET = ("Buy,,acme.company,acme-demo.com,acme-tool.com,Site,Site.comment\n"
+         "yes,junk,ACME,1,2,a.fr,checked\n").encode()
+
+
+def test_every_final_key_is_a_declared_slug_on_oto_import():
+    """A real public sheet: dotted and hyphenated headers, one empty header."""
+    parsed = ut.parse_import(SHEET, "csv", None, declare_columns=True)
+    new = {c["key"]: c["label"] for c in parsed["new_columns"]}
+    assert new == {"buy": "Buy", "acme_company": "acme.company",
+                   "acme_demo_com": "acme-demo.com", "acme_tool_com": "acme-tool.com",
+                   "site": "Site"}
+    row = parsed["rows"][0]
+    assert set(row) == set(new) | {"site.comment"}, "an annotation rides on its column"
+    assert parsed["info"]["dropped_empty_headers"] == [2]
+    assert "junk" not in row.values()
+
+
+def test_the_signed_put_keeps_its_dotted_translation():
+    parsed = ut.parse_import(SHEET, "csv", None)
+    assert parsed["traduits"]["acme.company"] == "acme_company"
+    assert parsed["new_columns"] == []
+    assert parsed["info"]["dropped_empty_headers"] == [2]

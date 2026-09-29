@@ -203,27 +203,21 @@ def parse_import(data: bytes, fmt: str, schema: Optional[dict] = None, *,
     from .datastore.points import traduire_les_entetes
     try:
         mapped = ct.map_headers(schema, headers)
-        traduits = traduire_les_entetes(schema, headers)
+        # Legacy dotted translation, signed PUT only: oto_import slugs every new key.
+        traduits = {} if declare_columns else traduire_les_entetes(schema, headers)
     except ct.CsvError as e:
         raise UploadError(400, "entete_en_collision", str(e))
     except RowValidationError as e:
         # Une collision d'en-têtes est un refus d'INGESTION, pas de schéma : elle
         # sort en 400 nommé, au même titre que « pas de l'UTF-8 ».
         raise UploadError(400, "entete_en_collision", str(e))
-    target = {h: traduits.get(h, mapped.target.get(h, h)) for h in headers if h}
-    new_columns = []
-    unmatched = [h for h in mapped.unmatched if h not in traduits]
     if declare_columns:
-        used = set(target.values()) - set(unmatched)
-        for i, h in enumerate(unmatched, 1):
-            k = ct.key_for(h) or f"column_{i}"
-            if k in used:
-                raise UploadError(400, "entete_en_collision",
-                                  f"Header `{h}` would become column `{k}`, already taken "
-                                  f"by another header. Nothing was imported: rename one.")
-            used.add(k)
-            target[h] = k
-            new_columns.append({"key": k, "label": h, "type": "text"})
+        target, new_columns = _declared_targets(schema, headers, mapped)
+        unmatched = []
+    else:
+        target = {h: traduits.get(h, mapped.target.get(h, h)) for h in headers if h}
+        new_columns = []
+        unmatched = [h for h in mapped.unmatched if h not in traduits]
     rows = [{target.get(k, k): v for k, v in r.items() if k} for r in raw]
     if not rows:
         raise UploadError(400, "empty_dataset", "Aucune ligne CSV (en-tête requis).")
@@ -231,10 +225,48 @@ def parse_import(data: bytes, fmt: str, schema: Optional[dict] = None, *,
             "separator": {"\t": "tab"}.get(sep, sep)}
     if mapped.by_label:
         info["matched_by_label"] = mapped.by_label
-    if unmatched and not declare_columns:
+    if unmatched:
         info["unmatched_headers"] = unmatched
+    empty = [i for i, h in enumerate(headers, 1) if not h]
+    if empty:
+        info["dropped_empty_headers"] = empty  # 1-based column positions
     return {"rows": rows, "traduits": traduits, "info": info, "new_columns": new_columns,
             "header_map": target}
+
+
+def _declared_targets(schema: Optional[dict], headers: list, mapped) -> tuple[dict, list]:
+    """Every header lands on a DECLARED column: a matched one, an annotation of a
+    column in the file, or a new text column keyed by its slug (label = header).
+    Dotted headers included: `acme.com` becomes `acme_com`, never an undeclared key."""
+    from . import csv_tolerant as ct
+    from .datastore import schema as dsv2
+    from .datastore.declaration import _fields
+    declared = {f.get("key") for f in _fields(schema) if f.get("key")}
+    target: dict = {}
+    for h in headers:
+        if h and (h in declared or h in mapped.by_label):
+            target[h] = mapped.target[h]
+    bases = declared | {target.get(h, ct.key_for(h)) for h in headers if h and "." not in h}
+    used = set(target.values())  # keys already taken by a header of THIS file
+    new_columns = []
+    for i, h in enumerate(headers, 1):
+        if not h or h in target:
+            continue
+        adresse = dsv2.layer_address(h) if "." in h else None
+        if adresse is not None and ct.key_for(adresse[0]) in bases:
+            target[h] = f"{ct.key_for(adresse[0])}.{adresse[1]}" \
+                if adresse[0] not in declared else h
+            continue
+        k = ct.key_for(h) or f"column_{i}"
+        if k in used:
+            raise UploadError(400, "entete_en_collision",
+                              f"Header `{h}` would become column `{k}`, already taken by "
+                              f"another header. Nothing was imported: rename one of them.")
+        used.add(k)
+        target[h] = k
+        if k not in declared:  # a re-import finds the column it declared last time
+            new_columns.append({"key": k, "label": h, "type": "text"})
+    return target, new_columns
 
 
 def _ndjson_rows(text: str) -> list:
