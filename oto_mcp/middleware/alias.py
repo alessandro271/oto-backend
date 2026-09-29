@@ -9,6 +9,7 @@ from mcp.types import ErrorData
 
 from .. import deprecations, handshake_log, tool_alias
 from ..auth.hooks import current_user_sub_from_token
+from . import _handshake
 
 logger = logging.getLogger(__name__)
 
@@ -130,25 +131,33 @@ class ToolAliasMiddleware(handshake_log.JournalListesMixin, Middleware):
         que ce middleware ferme : les outils disaient `acme_…` mais le handshake
         annonçait encore `oto`. `name` suit le `tool_prefix` déclaré (l'identifiant,
         cohérent avec les noms d'outils), `title` le nom du tenant (le libellé
-        humain). Rien de déclaré ⟹ l'annonce d'avant, à l'octet près (fail-open)."""
+        humain). Rien de déclaré ⟹ l'annonce d'avant, à l'octet près (fail-open).
+
+        ⚠️ Résolu AVANT `call_next` et posé sur la session (`_handshake`) : la réponse
+        part PENDANT `call_next`, la modifier ensuite ne change rien à ce que le client
+        reçoit. `title`, lui, n'a pas de champ dans les options de session de la
+        bibliothèque MCP (`InitializationOptions`) — il ne peut pas partir par cette
+        voie ; on le garde sur `result` pour ce qui le relit côté serveur."""
+        try:
+            name, title = tool_alias.server_identity_for(current_user_sub_from_token())
+        except Exception:  # noqa: BLE001 — une identité d'affichage ne casse pas un handshake
+            logger.warning("renommage du serverInfo échoué (fail-open)", exc_info=True)
+            name, title = None, None
+        if name:
+            _handshake.poser_avant_reponse(context, server_name=name)
         result = await call_next(context)
         handshake_log.log_initialize(context, result)
         if result is None or getattr(result, "serverInfo", None) is None:
             return result
-        try:
-            name, title = tool_alias.server_identity_for(current_user_sub_from_token())
-            if not name and not title:
-                return result
-            maj = {}
-            if name:
-                maj["name"] = name
-            if title:
-                maj["title"] = title
-            return result.model_copy(
-                update={"serverInfo": result.serverInfo.model_copy(update=maj)})
-        except Exception:  # noqa: BLE001 — une identité d'affichage ne casse pas un handshake
-            logger.warning("renommage du serverInfo échoué (fail-open)", exc_info=True)
+        if not name and not title:
             return result
+        maj = {}
+        if name:
+            maj["name"] = name
+        if title:
+            maj["title"] = title
+        return result.model_copy(
+            update={"serverInfo": result.serverInfo.model_copy(update=maj)})
 
     async def on_call_tool(self, context, call_next):
         prefix = self._prefix()

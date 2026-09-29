@@ -7,6 +7,7 @@ from fastmcp.server.middleware import Middleware
 from starlette.concurrency import run_in_threadpool
 
 from ..auth.hooks import current_user_sub_from_token
+from . import _handshake
 
 logger = logging.getLogger(__name__)
 
@@ -65,8 +66,9 @@ class DynamicInstructionsMiddleware(Middleware):
     org), au lieu de dépendre d'un appel volontaire de lecture de guide (canal fragile,
     otomata-private#49, amende ADR 0014). Deux points d'injection, selon la NATURE :
 
-    - **artefact composé** (blocs A/C, #50) → `on_initialize` REMPLACE
-      `result.instructions` par `instructions.compose_session(sub, org)`
+    - **artefact composé** (blocs A/C, #50) → `on_initialize` REMPLACE les
+      instructions de la session par `instructions.compose_session(sub, org)`, posées
+      AVANT la réponse (`_handshake.poser_avant_reponse`) — après, elles ne partent pas
       (le « cheval de Troie », relu par session ; Claude rehandshake par conversation).
     - **index des guides NOMMÉS** (skills) → `on_list_tools` enrichit la
       **description de `oto_procedure`** (l'outil qui les charge). Les skills ne sont
@@ -78,9 +80,12 @@ class DynamicInstructionsMiddleware(Middleware):
     """
 
     async def on_initialize(self, context, call_next):
-        result = await call_next(context)
-        if result is None or not getattr(result, "instructions", None):
-            return result
+        # ⚠️ Tout se résout AVANT `call_next` : la réponse au `initialize` part PENDANT
+        # `call_next` (fastmcp), construite depuis les options de la session. Modifier
+        # `result` ensuite ne change rien à ce que le client reçoit — le défaut qui
+        # laissait chaque client sur la surface statique (`_handshake`,
+        # `tests/middleware/test_handshake_livre.py`).
+        #
         # Endpoint de PROJET publié : le client est un tiers sans compte. Il reçoit la
         # prose du projet, jamais le socle plateforme (feedback #309) — cf.
         # `instructions.compose_published_project`.
@@ -88,6 +93,8 @@ class DynamicInstructionsMiddleware(Middleware):
         # ⚠️ Les DEUX compositions ci-dessous sont du DB SYNC → `run_in_threadpool`
         # obligatoire : ce hook s'exécute DANS la boucle (un middleware fastmcp est
         # async par contrat), et le serveur est mono-loop. Gel de prod du 15/08.
+        corps = None
+        projet_publie = False
         try:
             body = await run_in_threadpool(_published_project_instructions)
         except Exception:
@@ -95,21 +102,26 @@ class DynamicInstructionsMiddleware(Middleware):
                            exc_info=True)
         else:
             if body is not _PAS_DE_PROJET_PUBLIE:
-                if body:
-                    result.instructions = body
-                return result
-        try:
-            sub = current_user_sub_from_token()
-        # noqa: SILENT — dette déclarée : sub avalé, la requête devient anonyme sans dire pourquoi (#424, verdict C)
-        except Exception:
-            sub = None
-        if not sub:
-            return result
-        try:
-            result.instructions = await run_in_threadpool(_session_instructions, sub)
-        except Exception:
-            logger.warning("composition des instructions échouée pour sub=%s (fail-open)",
-                           sub, exc_info=True)
+                projet_publie, corps = True, body or None
+        if not projet_publie:
+            try:
+                sub = current_user_sub_from_token()
+            # noqa: SILENT — dette déclarée : sub avalé, la requête devient anonyme sans dire pourquoi (#424, verdict C)
+            except Exception:
+                sub = None
+            if sub:
+                try:
+                    corps = await run_in_threadpool(_session_instructions, sub)
+                except Exception:
+                    logger.warning("composition des instructions échouée pour sub=%s "
+                                   "(fail-open)", sub, exc_info=True)
+        if corps:
+            _handshake.poser_avant_reponse(context, instructions=corps)
+        result = await call_next(context)
+        # Aligné sur ce qui est parti, pour ce qui relit `result` côté serveur. Un
+        # serveur sans instructions statiques n'en reçoit pas (règle d'avant).
+        if corps and result is not None and getattr(result, "instructions", None):
+            result.instructions = corps
         return result
 
     async def on_list_tools(self, context, call_next):

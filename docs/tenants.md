@@ -151,7 +151,11 @@ naissait avec notre tenant (ADR 0070 §7.2). Elle se **déclare** désormais, sa
 >   tenant n'est pas le nôtre. **`serverInfo` du `initialize` est traduit aussi
 >   (23/08)** : `name` suit le `tool_prefix` déclaré, `title` le nom du tenant
 >   (`tool_alias.server_identity_for` + hook `on_initialize` du même middleware) —
->   rien de déclaré ⟹ l'annonce d'avant, à l'octet près.
+>   rien de déclaré ⟹ l'annonce d'avant, à l'octet près. ⚠️ **Rien de cela n'atteignait
+>   le client avant le 29/09/2026**, pas plus que le socle de tenant : le hook modifiait la
+>   réponse après son envoi (`docs/guides.md`, `middleware/_handshake.py`). Depuis,
+>   `name` part ; **`title` ne peut pas partir** — les options de session de la
+>   bibliothèque MCP n'ont pas ce champ.
 >
 > **Le suivi est un ÉCRAN depuis le 15/08** (`capabilities/tenants_admin.py` + `db.list_tenants_overview`,
 > REST `/api/admin/tenants[/{slug}]`, MCP `oto_admin_tenant`, dashboard `/platform/tenants`) : qui est
