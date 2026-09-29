@@ -14,10 +14,17 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 # Le même environnement que le backend, jamais une copie (une copie divergerait le
-# jour d'une rotation de clé) : DATABASE_URL et les fenêtres de rétention.
+# jour d'une rotation de clé) : le `.env` partagé porte le non-secret (fenêtres de
+# rétention…), et les secrets (DATABASE_URL…) arrivent par le lanceur générique, comme
+# pour le service — le `.env` n'en porte plus (#967, lot 5).
 EnvironmentFile=/opt/oto-mcp/.env
-WorkingDirectory=/opt/oto-mcp
-ExecStart=/opt/oto-mcp/.venv/bin/oto-mcp maintenance all
+EnvironmentFile=/etc/oto-mcp/lanceur-prod.env
+LoadCredential=scw:/etc/oto-mcp/scw.key
+# @ARBRE@ est réécrit à la pose (`install_timers` de deploy/oto-backend.sh) par l'arbre de
+# la couleur EN SERVICE : le lanceur est dans le tag, et l'autre couleur peut porter un tag
+# qui n'en a pas encore. Le fichier n'est pas exécutable tel quel.
+WorkingDirectory=@ARBRE@
+ExecStart=@ARBRE@/.venv/bin/python @ARBRE@/deploy/lanceur_secrets.py maintenance all
 # Ne doit jamais concurrencer le service qui répond aux utilisateurs.
 Nice=10
 IOSchedulingClass=idle

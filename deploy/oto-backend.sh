@@ -70,6 +70,8 @@ install_timers() {
     fi
     install -m 0644 "$tree/deploy/$u" "/etc/systemd/system/$u" || return 0
   done
+  # L'unité nomme l'arbre par @ARBRE@ (elle passe par le lanceur, qui est dans le tag).
+  sed -i "s|@ARBRE@|$tree|g" /etc/systemd/system/oto-mcp-maintenance.service || return 0
   systemctl daemon-reload || return 0
   systemctl enable --now oto-mcp-maintenance.timer || return 0
   echo "maintenance : timer actif, prochain tir $(systemctl show -p NextElapseUSecRealtime --value oto-mcp-maintenance.timer)"
