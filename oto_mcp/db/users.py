@@ -181,6 +181,16 @@ def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = Non
                          "(sub=%s email=%s) — l'invité ne rejoint pas son org",
                          sub, email, exc_info=True)
             manques.append("reconcile_signup_with_invitation")
+        # Les partages en attente d'UN objet (projet, tableau…) adressés à cette
+        # adresse : l'accès à chaque objet, jamais une adhésion.
+        try:
+            from .. import partage_en_attente
+            partage_en_attente.honorer_au_signup(sub, email)
+        except Exception:
+            logger.error("upsert_user: partages en attente NON honorés au signup "
+                         "(sub=%s email=%s) — l'invité n'a pas ses objets", sub, email,
+                         exc_info=True)
+            manques.append("partage_en_attente")
     if row and row.get("inserted"):
         # Suppression du perso (otomata-private) : tout user a TOUJOURS une org maison.
         # Si l'inscription ne l'a pas déjà rattaché à une org (invitation d'org

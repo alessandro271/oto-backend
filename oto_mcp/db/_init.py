@@ -18,6 +18,7 @@ from . import (_prerequis, _tenant_primaire, _version_alembic, connector_instanc
 from ._conn import _connect
 from ._ddl_garde import GardeDdl, ddl_a_faire
 from ._schema import _SCHEMA
+from .invitations_ressource import DDL_INDEX_RESSOURCE_ATTENTE
 
 logger = logging.getLogger(__name__)
 
@@ -1218,6 +1219,9 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # table : pas de travail au boot, la fenêtre du healthcheck n'en voit rien.
     conn.execute("ALTER TABLE org_invitations ADD COLUMN IF NOT EXISTS declined_at TIMESTAMPTZ")
     conn.execute("ALTER TABLE org_invitations ADD COLUMN IF NOT EXISTS declined_sub TEXT")
+    # Partage EN ATTENTE d'un objet (29/09/2026) : son index unique lit `declined_at`,
+    # donc il se pose après l'ALTER ci-dessus (colonnes : `INVITATIONS_RESSOURCE`).
+    conn.execute(DDL_INDEX_RESSOURCE_ATTENTE)
     # Primitive de ressource possédée (ADR 0030) : scope d'ownership porté par la
     # ressource (`owner_type` défaut 'user', `owner_id` = sub | org.id | group.id).
     # Phase H (cadrage 10/07) — B1 (promu prod 10/07) a purgé toute référence aux

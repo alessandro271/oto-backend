@@ -89,6 +89,10 @@ class ResourceGrant(BaseModel):
     # ÉCHU : il reste listé, marqué, comme un jeton expiré — il ne donne plus rien.
     expires_at: Optional[str] = None
     expired: bool = False
+    # Partage EN ATTENTE (29/09/2026) : l'adresse n'a pas encore de compte. Pas de
+    # `principal_id` ; `invitation_expires_at` = l'échéance du lien envoyé.
+    pending: bool = False
+    invitation_expires_at: Optional[str] = None
 
 
 class _OwnedResource(BaseModel):
@@ -228,6 +232,14 @@ class ResourceShared(_Avertissement):
     expires_at: Optional[str] = None
     cascade: Optional[list[CascadeEntry]] = None
     notified: Optional[bool] = None
+    # Partage EN ATTENTE vers une adresse sans compte (29/09/2026) : l'accès à CET
+    # objet sera donné à l'inscription, jamais une adhésion. `pending_note` le dit
+    # en clair ; `already_pending` = un partage identique attendait déjà (aucun
+    # second lien) ; `invitation_expires_at` = l'échéance du lien.
+    pending: Optional[bool] = None
+    already_pending: Optional[bool] = None
+    invitation_expires_at: Optional[str] = None
+    pending_note: Optional[str] = None
 
 
 class ResourceUnshared(_Avertissement):
@@ -349,7 +361,13 @@ REFUS: tuple[DeclaredError, ...] = (
                   "une équipe ne fait pas changer d'org"),
     DeclaredError(403, "not_org_member",
                   "`transfer` vers une org dont tu n'es pas membre"),
-    DeclaredError(404, "unknown_user", "aucun utilisateur oto avec cet email"),
+    DeclaredError(404, "unknown_user",
+                  "aucun compte : transfert vers une adresse inconnue, ou partage par "
+                  "`sub` — un partage par `email` sans compte devient un partage EN "
+                  "ATTENTE"),
+    DeclaredError(400, "pending_share_plain_only",
+                  "partage en attente (adresse sans compte) avec `cascade` ou "
+                  "`credentials='inherit'` : à refaire une fois la personne inscrite"),
     DeclaredError(404, "unknown_org", "org destinataire inconnue"),
     DeclaredError(404, "unknown_group", "groupe destinataire inconnu"),
     DeclaredError(409, "confirm_loss_of_control",

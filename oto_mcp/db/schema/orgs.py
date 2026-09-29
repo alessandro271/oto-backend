@@ -167,3 +167,25 @@ CREATE TABLE IF NOT EXISTS org_member_events (
 );
 CREATE INDEX IF NOT EXISTS idx_org_member_events_org ON org_member_events(org_id, id DESC);
 """
+
+# le PARTAGE EN ATTENTE d'un objet vers une adresse sans compte (29/09/2026)
+INVITATIONS_RESSOURCE = """
+-- Une invitation peut porter UN OBJET au lieu d'une org : partager un projet, un
+-- tableau, une procédure ou une page avec une adresse qui n'a pas encore de compte
+-- (`oto_resource op=share`). À l'inscription ou à l'acceptation du lien, la personne
+-- reçoit l'accès à CET objet (`ownership.grant`) et à rien d'autre : `org_id` reste
+-- NULL, aucune adhésion n'est créée (`oto_mcp/partage_en_attente.py`).
+--
+-- `resource_type` = la famille servie (project, datastore_namespace, procedure, doc) ;
+-- `resource_kind` = la clé de `resource_grants` qu'elle désigne ; `resource_name` =
+-- le nom à l'émission, pour l'aperçu public du lien (qui ne lit pas l'objet).
+-- `resource_ttl_days` = l'échéance du partage, comptée depuis l'acceptation. Son index
+-- unique (un partage en attente par objet et par adresse) vit HORS de l'assemblage :
+-- `db/invitations_ressource.py`, son prédicat lit `declined_at`.
+ALTER TABLE org_invitations ADD COLUMN IF NOT EXISTS resource_type TEXT;
+ALTER TABLE org_invitations ADD COLUMN IF NOT EXISTS resource_kind TEXT;
+ALTER TABLE org_invitations ADD COLUMN IF NOT EXISTS resource_id TEXT;
+ALTER TABLE org_invitations ADD COLUMN IF NOT EXISTS resource_role TEXT;
+ALTER TABLE org_invitations ADD COLUMN IF NOT EXISTS resource_ttl_days INTEGER;
+ALTER TABLE org_invitations ADD COLUMN IF NOT EXISTS resource_name TEXT;
+"""

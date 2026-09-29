@@ -180,11 +180,26 @@ def signup(monkeypatch):
                         lambda sub, email: faits.append("invitation"))
     monkeypatch.setattr(org_store, "ensure_personal_org",
                         lambda sub, email=None, name=None: faits.append("org_maison"))
+    from oto_mcp import partage_en_attente
+    monkeypatch.setattr(partage_en_attente, "honorer_au_signup",
+                        lambda sub, email: faits.append("partages"))
     return faits
 
 
 def test_signup_nominal_ne_leve_pas(signup):
     db_users.upsert_user("u-1", email="a@b.c", name="A")
+    assert signup == ["invitation", "partages", "org_maison"]
+
+
+def test_partages_en_attente_non_honores_est_une_erreur_nommee(signup, monkeypatch):
+    """Les partages d'objets reçus avant l'inscription : un échec se NOMME, comme
+    l'invitation d'org, et ne dispense pas du reste."""
+    from oto_mcp import partage_en_attente
+    monkeypatch.setattr(partage_en_attente, "honorer_au_signup",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("timeout")))
+    with pytest.raises(db_users.OnboardingIncomplet) as e:
+        db_users.upsert_user("u-1", email="a@b.c", name="A")
+    assert "partage_en_attente" in str(e.value)
     assert signup == ["invitation", "org_maison"]
 
 
@@ -211,9 +226,9 @@ def test_invitation_non_honoree_est_une_erreur_nommee(signup, monkeypatch):
     with pytest.raises(db_users.OnboardingIncomplet) as e:
         db_users.upsert_user("u-1", email="a@b.c", name="A")
     assert "reconcile_signup_with_invitation" in str(e.value)
-    # L'échec de l'un ne dispense pas de tenter l'autre : les deux sont tentés, et
+    # L'échec de l'un ne dispense pas de tenter les autres : tous sont tentés, et
     # l'erreur finale dit lesquels ont manqué.
-    assert signup == ["org_maison"]
+    assert signup == ["partages", "org_maison"]
 
 
 def test_un_login_ordinaire_ne_declenche_rien(monkeypatch):
@@ -225,5 +240,8 @@ def test_un_login_ordinaire_ne_declenche_rien(monkeypatch):
     monkeypatch.setattr(org_store, "ensure_personal_org",
                         lambda *a, **k: pytest.fail("ne doit pas être appelé"))
     monkeypatch.setattr(org_store, "reconcile_signup_with_invitation",
+                        lambda *a, **k: pytest.fail("ne doit pas être appelé"))
+    from oto_mcp import partage_en_attente
+    monkeypatch.setattr(partage_en_attente, "honorer_au_signup",
                         lambda *a, **k: pytest.fail("ne doit pas être appelé"))
     db_users.upsert_user("u-1", email="a@b.c")

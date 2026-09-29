@@ -20,7 +20,8 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
-from .. import access, db, deprecations, email, group_store, org_store, ownership, roles
+from .. import (access, db, deprecations, email, group_store, org_store, ownership,
+               partage_en_attente, roles)
 from ..access import heritage
 from . import _portee
 from ._authz import RESOURCE_GOVERN
@@ -203,11 +204,15 @@ def _resource_name(resource_type: str, rid: str) -> Optional[str]:
 
 def _notify_grant(sharer_sub: str, resource_type: str, rid: str, to_email: str,
                   dest_sub: Optional[str] = None,
-                  *, event: str, permission: Optional[str] = None) -> bool:
+                  *, event: str, permission: Optional[str] = None,
+                  lien: Optional[tuple[str, Optional[str]]] = None) -> bool:
     """Prévient par email l'utilisateur qui vient de recevoir un accès (`event`
     ='share') ou la propriété (`event`='transfer') d'une ressource. Best-effort,
     tracé — ne casse JAMAIS l'action métier. Ne notifie que les principals `user` :
-    pour une org/un groupe destinataire, « qui reçoit » reste à trancher (#77)."""
+    pour une org/un groupe destinataire, « qui reçoit » reste à trancher (#77).
+
+    `lien` = `(url, marque)` imposés : un PARTAGE EN ATTENTE pointe son lien
+    d'invitation, pas la racine du produit — le destinataire n'a pas encore de compte."""
     try:
         # L'adresse ET la marque suivent le DESTINATAIRE, pas nous : c'est lui qui
         # ouvre le lien. `front_for` les dérive de son tenant ; `(None, None)` = oto,
@@ -223,7 +228,7 @@ def _notify_grant(sharer_sub: str, resource_type: str, rid: str, to_email: str,
         # compte sans préférence posée) ⟹ les deux gabarits servent FR, comme
         # avant ce lot.
         locale = dest_user.get("locale")
-        base, marque = config.front_for(dest_sub)
+        base, marque = lien or config.front_for(dest_sub)
         app_url = base or config.dashboard_url()
         brand = marque or "oto"
         sharer = _owner_label("user", sharer_sub)
@@ -347,6 +352,15 @@ def _grants_view(resource_type: str, resource_id: str) -> list[dict]:
                                            str(g.get("principal_id"))), heritage.OWN)}
             if heritages is not None else {})}
         for g in ownership.list_grants(KIND_OF[resource_type], resource_id)
+    ] + [
+        # Partages EN ATTENTE (adresse sans compte) : listés, marqués, retirables par
+        # `op=unshare` avec la même adresse — jamais une ligne de `resource_grants`.
+        {"principal_type": "user", "principal_id": None, "email": p["email"],
+         "label": p["email"], "role": p.get("resource_role"),
+         "permission": _PERMISSION_OF_ROLE.get(p.get("resource_role") or "", "write"),
+         "granted_at": p.get("created_at"), "pending": True,
+         "invitation_expires_at": p.get("expires_at")}
+        for p in partage_en_attente.lister(KIND_OF[resource_type], resource_id)
     ]
 
 
@@ -431,6 +445,65 @@ def _share_credentials(sub: str, inp: ResourceInput, rid: str) -> Optional[str]:
             "Partage avec `credentials='own'` (le bénéficiaire pose ses propres clés), "
             "ou demande à un membre de cette org de faire le partage.")
     return inp.credentials
+
+
+def _share_pending(ctx: ResolvedCtx, inp: ResourceInput, rid: str, kind: str,
+                   role: str, perm: str) -> dict:
+    """Partage vers une adresse SANS COMPTE : un partage EN ATTENTE (29/09/2026).
+
+    Il ne porte que CET objet et son rôle — un mail avec un lien d'invitation, et
+    l'accès à l'inscription (`partage_en_attente`), jamais une adhésion à l'org.
+    Refusé avec `cascade` ou un prêt de clés : ce sont des gestes sur un compte
+    existant, à refaire une fois la personne inscrite. Un deuxième partage vers la
+    même adresse rend le premier, sans second lien ni second mail."""
+    from .orgs.invites import _INVITE_TTL_DAYS, _nominal_url
+    if inp.cascade or inp.credentials not in (None, heritage.OWN):
+        raise AuthzDenied(
+            400, "pending_share_plain_only",
+            f"{inp.email} n'a pas encore de compte oto : le partage reste en attente et ne "
+            "porte que CET objet et son rôle. `cascade` et `credentials='inherit'` se "
+            "posent une fois la personne inscrite — repartage alors.")
+    nom = _resource_name(inp.resource_type, rid)
+    r = partage_en_attente.creer(
+        resource_type=inp.resource_type, kind=kind, resource_id=rid, email=inp.email,
+        role=role, ttl_days=inp.ttl_days, invited_by=ctx.sub, nom=nom,
+        jours=_INVITE_TTL_DAYS)
+    adresse = inp.email.strip().lower()
+    emailed = False
+    if r["token"]:
+        front_base, marque = config.front_for(ctx.sub)
+        emailed = _notify_grant(ctx.sub, inp.resource_type, rid, adresse, event="share",
+                                permission=perm,
+                                lien=(_nominal_url(r["token"], adresse, front_base=front_base),
+                                      marque))
+    _portee.observer(ctx, ressource_type=inp.resource_type, ressource_id=rid,
+                     vers="person", geste=f"oto_resource op=share role={role} (en attente)",
+                     cible=adresse,
+                     **(page.portee(rid) if inp.resource_type == "doc" else {}))
+    note = (f"partage en attente : {adresse} n'a pas encore de compte oto. "
+            + ("Un email d'invitation lui est envoyé" if emailed
+               else "Le partage lui était déjà en attente" if not r["nouveau"]
+               else "L'email d'invitation n'a pas pu partir")
+            + " ; à son inscription, il aura accès à cet objet, et à rien d'autre.")
+    return {"ok": True, "resource_id": rid, "shared_with": adresse,
+            "principal_type": "user", "role": role, "permission": perm,
+            "expires_at": None, "pending": True, "already_pending": not r["nouveau"],
+            "invitation_expires_at": r["expires_at"], "pending_note": note,
+            "notified": emailed}
+
+
+# Le partage en attente, SERVI aux deux surfaces, écrit une fois.
+PENDING_DESCRIPTION = (
+    "PENDING SHARE (audience person, `email` with NO oto account yet): the share is "
+    "NOT refused — it is kept pending: the address gets an email with a link, and on "
+    "signup (or by opening the link) gets access to THIS resource with the given role "
+    "and NOTHING else — they never join your org. op=share returns `pending: true` and "
+    "`pending_note`; sharing again to the same address reuses it (`already_pending`). "
+    "op=get lists it in `grants` with `pending: true`; op=unshare with the same `email` "
+    "withdraws it. Refused with cascade=true or credentials='inherit' "
+    "(`pending_share_plain_only`): share again once they have an account. To give "
+    "someone ONE resource, share it — never invite them into your org, which opens "
+    "everything the org owns.")
 
 
 def _cascade_project(sub: str, project_id: int, op: str, *,
@@ -684,7 +757,12 @@ def _gouverner(ctx: ResolvedCtx, inp: ResourceInput) -> dict:
         perm = _PERMISSION_OF_ROLE.get(role, "write")
         if inp.resource_type == "doc":
             page.require_viewer(role)
-        ptype, pid, plabel = _share_principal(ctx.sub, inp)
+        try:
+            ptype, pid, plabel = _share_principal(ctx.sub, inp)
+        except AuthzDenied as e:
+            if e.code != "unknown_user" or not inp.email or inp.sub:
+                raise
+            return _share_pending(ctx, inp, rid, kind, role, perm)
         creds = _share_credentials(ctx.sub, inp, rid)
         expires_at = ownership.grant(kind, rid, ptype, pid, role=role, granted_by=ctx.sub,
                                      ttl_days=inp.ttl_days)
@@ -716,7 +794,14 @@ def _gouverner(ctx: ResolvedCtx, inp: ResourceInput) -> dict:
         return out
 
     # unshare
-    ptype, pid, plabel = _share_principal(ctx.sub, inp, strict=False)
+    try:
+        ptype, pid, plabel = _share_principal(ctx.sub, inp, strict=False)
+    except AuthzDenied as e:
+        if e.code != "unknown_user" or not inp.email or inp.sub:
+            raise
+        # Pas de compte à cette adresse : c'est un partage EN ATTENTE qu'on retire.
+        return {"ok": True, "resource_id": rid, "unshared_with": inp.email.strip().lower(),
+                "removed": partage_en_attente.retirer(kind, rid, inp.email)}
     removed = ownership.revoke(kind, rid, ptype, pid)
     if inp.resource_type == "project":
         # Retirer l'accès retire le prêt des clés : une arête laissée vivante le
@@ -808,6 +893,7 @@ CAPABILITIES += [
             "ownership transfer); public/secret force viewer. Legacy `permission` read|write is "
             "still accepted (mapped to viewer/editor). " + CREDENTIALS_DESCRIPTION
             + " " + EXPIRY_DESCRIPTION
+            + " " + PENDING_DESCRIPTION
             + " resource_type ∈ {datastore_namespace, "
             "project, procedure, doc} — it is the discriminant, and it also decides which shape "
             "comes back. " + TRANSFER_PROCEDURE + " " + page.DESCRIPTION

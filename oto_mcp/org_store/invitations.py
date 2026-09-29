@@ -87,6 +87,8 @@ _INV_LIST_SELECT = f"""
 
 
 def _scope_of(r: dict) -> str:
+    if r.get("resource_kind"):
+        return "resource"  # partage en attente d'UN objet (`partage_en_attente`)
     if r.get("group_id") is not None:
         return "team"
     if r.get("org_id") is not None:
@@ -179,11 +181,13 @@ def revoke_platform_invitation(inv_id: int) -> bool:
 def _preview_from_row(r: dict) -> dict:
     return {"email": r.get("email"), "inviter": r.get("inviter"),
             "org_name": r.get("org_name"), "group_name": r.get("group_name"),
-            "scope": _scope_of(r)}
+            "scope": _scope_of(r), "resource_type": r.get("resource_type"),
+            "resource_name": r.get("resource_name")}
 
 
 _PREVIEW_SELECT = f"""
     SELECT i.email, i.org_id, i.group_id,
+           i.resource_kind, i.resource_type, i.resource_name,
            u.name AS inviter,
            o.name AS org_name,
            g.name AS group_name
@@ -226,7 +230,8 @@ def _get_invitation(pred: str, val) -> Optional[dict]:
         row = conn.execute(
             f"""
             SELECT id, org_id, email, org_role, group_id, group_role,
-                   invited_by, source, expires_at
+                   invited_by, source, expires_at, resource_type, resource_kind,
+                   resource_id, resource_role, resource_ttl_days, resource_name
               FROM org_invitations
              WHERE {pred} AND {_PENDING}
             """,
@@ -241,7 +246,7 @@ _PEEK_SELECT = """
     SELECT i.id, i.org_id, i.email, i.org_role, i.group_id, i.group_role,
            i.invited_by, i.source, i.expires_at,
            i.accepted_at, i.accepted_sub, i.declined_at, i.declined_sub,
-           (i.expires_at > NOW()) AS live,
+           i.resource_kind, (i.expires_at > NOW()) AS live,
            o.name AS org_name, g.name AS group_name
       FROM org_invitations i
       LEFT JOIN orgs       o ON o.id = i.org_id
@@ -308,11 +313,15 @@ def _idempotent_accept(pred: str, val, sub: str) -> Optional[dict]:
     sub — une refusée a `accepted_sub` NULL, donc elle tombe ici sans rien rendre."""
     with _connect() as conn:
         row = conn.execute(
-            f"SELECT org_id, org_role, group_id, group_role, accepted_sub "
+            f"SELECT org_id, org_role, group_id, group_role, accepted_sub, resource_kind, "
+            f"resource_type, resource_id, resource_role, resource_name "
             f"FROM org_invitations WHERE {pred}",
             (val,),
         ).fetchone()
     if row and row["accepted_sub"] == sub:
+        if row.get("resource_kind"):
+            return {k: row.get(k) for k in ("resource_type", "resource_id",
+                                            "resource_role", "resource_name")}
         return {"org_id": row.get("org_id"), "org_role": row.get("org_role"),
                 "group_id": row.get("group_id"), "group_role": row.get("group_role")}
     return None
@@ -324,6 +333,10 @@ def accept_invitation(token: str, sub: str) -> Optional[dict]:
     if not token:
         return None
     inv = get_invitation_by_token(token)
+    if inv and inv.get("resource_kind"):
+        # Partage en attente d'UN objet : l'accès à cet objet, jamais une adhésion.
+        from .. import partage_en_attente
+        return partage_en_attente.honorer(inv, sub)
     if inv:
         return _accept_invitation_row(inv, sub, actor=sub)
     return _idempotent_accept("token_hash = %s", _hash_token(token), sub)
@@ -400,7 +413,11 @@ def reconcile_signup_with_invitation(sub: str, email: str) -> Optional[dict]:
     ⚠️ Une invitation REFUSÉE (#654) en est exclue par `_PENDING`, et c'est le point
     le plus facile à manquer : sans ça, refuser puis créer son compte avec la même
     adresse aurait fait rejoindre l'org automatiquement — le refus annulé par le
-    signup, sans que personne ne l'ait demandé."""
+    signup, sans que personne ne l'ait demandé.
+
+    Les partages en attente d'UN objet (`resource_kind`) en sont exclus : ils ne
+    rejoignent rien et se comptent par objet — `partage_en_attente.honorer_au_signup`
+    les honore tous, à côté de cette invitation d'org."""
     email = (email or "").strip().lower()
     if "@" not in email:
         return None
@@ -409,7 +426,7 @@ def reconcile_signup_with_invitation(sub: str, email: str) -> Optional[dict]:
             f"""
             SELECT id, org_id, org_role, group_id, group_role, invited_by
               FROM org_invitations
-             WHERE {_PENDING} AND lower(email) = %s
+             WHERE {_PENDING} AND lower(email) = %s AND resource_kind IS NULL
              ORDER BY created_at DESC
              LIMIT 1
             """,

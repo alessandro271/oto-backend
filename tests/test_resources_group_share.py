@@ -96,6 +96,7 @@ def test_grants_view_labels(monkeypatch):
         {"principal_type": "org", "principal_id": "35", "email": None,
          "permission": "read", "granted_at": "2026-07-01"},
     ])
+    monkeypatch.setattr(R.partage_en_attente, "lister", lambda kind, rid: [])  # hors base
     view = R._grants_view("project", "7")
     assert [g["label"] for g in view] == ["jane@x.co", "sales", "acme"]
 

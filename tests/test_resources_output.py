@@ -235,11 +235,30 @@ def test_refus_forbidden_le_gerant_ne_cede_pas_la_propriete(monkeypatch):
 
 
 def test_refus_unknown_user(monkeypatch):
+    """Un TRANSFERT vers une adresse sans compte : il n'y a personne à qui céder.
+    (Un PARTAGE vers la même adresse, lui, devient un partage en attente —
+    `tests/test_partage_en_attente_db.py`.)"""
     _wire(monkeypatch)
     monkeypatch.setattr(R.db, "get_users_by_email", lambda e: [])
     with pytest.raises(AuthzDenied) as e:
-        R._resources(CTX, _get("share", email="fantome@x.co"))
+        R._resources(CTX, _get("transfer", new_owner_email="fantome@x.co"))
     assert (e.value.status, e.value.code) == (404, "unknown_user")
+
+
+@pytest.mark.parametrize("kw", [{"cascade": True}, {"credentials": "inherit"}])
+def test_refus_pending_share_plain_only(monkeypatch, kw):
+    """Un partage EN ATTENTE ne porte que l'objet et son rôle : la cascade et le prêt
+    de clés se posent sur un compte, donc après l'inscription. Refusé avant d'écrire."""
+    _wire(monkeypatch)
+    monkeypatch.setattr(R.db, "get_users_by_email", lambda e: [])
+    monkeypatch.setattr(R.heritage, "peut_accorder", lambda sub, pid: True)
+    poses = []
+    monkeypatch.setattr(R.partage_en_attente, "creer", lambda **k: poses.append(k))
+    with pytest.raises(AuthzDenied) as e:
+        R._resources(CTX, R.ResourceInput(op="share", resource_type="project",
+                                          resource_id="7", email="fantome@x.co", **kw))
+    assert (e.value.status, e.value.code) == (400, "pending_share_plain_only")
+    assert not poses
 
 
 def test_refus_email_required_quand_aucun_principal(monkeypatch):
@@ -330,6 +349,7 @@ _REJOUES = {
     "ttl_days_grant_only",
     "not_group_member", "not_org_member", "unknown_user", "unknown_org",
     "unknown_group", "confirm_loss_of_control", "transfer_failed",
+    "pending_share_plain_only",
 }
 
 

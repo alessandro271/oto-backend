@@ -587,8 +587,13 @@ from oto_mcp.db import _schema, schema
 # clé Apollo qui a payé est la clé de lecture. Base existante par la révision Alembic
 # `0027_apollo_phone_reveals` ou le démarrage (`CREATE TABLE IF NOT EXISTS`).
 # 184 298 → 186 294 (+1 996, commentaires compris).
-EMPREINTE = "7998ee39cc93942b5da5dd884b295b0756792e5b040b17bffff7bb55ec1067dc"
-LONGUEUR = 186294
+# 29/09/2026 — le PARTAGE EN ATTENTE d'un objet vers une adresse sans compte : six
+# colonnes NULL sur `org_invitations` (fragment `schema/orgs.py::INVITATIONS_RESSOURCE`),
+# posées par `0028_partage_en_attente` ou le démarrage (`ADD COLUMN IF NOT EXISTS`) ; son
+# index unique partiel vit hors de l'assemblage (`db/invitations_ressource.py`).
+# 186 294 → 187 642 (+1 348, commentaires compris).
+EMPREINTE = "f88ffc98f1855030606be57bc10a6441c742b8c52ec9a17f270b97936ebc5b02"
+LONGUEUR = 187642
 
 
 _CREATE_TABLE = re.compile(r"^CREATE TABLE IF NOT EXISTS (\w+)", re.M)

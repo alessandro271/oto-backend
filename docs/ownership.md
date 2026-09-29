@@ -255,6 +255,28 @@ résolution des `[[…]]` (`db/backlinks`). Pour un tableau, il est écrit et pl
 > Hors périmètre : `data_share` (partage d'un tableau par sa propre surface) ne pose pas
 > d'échéance.
 
+## Partager avec une adresse sans compte : le partage EN ATTENTE (29/09/2026)
+
+> **Le besoin.** Partager UN objet (projet, tableau, procédure, page) avec quelqu'un qui
+> n'a pas encore de compte. Jusqu'ici `op=share` rendait 404 `unknown_user`, et la seule
+> issue était d'inviter la personne dans l'ORG — qui lui ouvre tout ce que l'org possède.
+> **La règle.** `oto_resource[_v2] op=share` vers un `email` sans compte ne refuse plus :
+> il pose un partage EN ATTENTE (`oto_mcp/partage_en_attente.py`). C'est une ligne
+> d'`org_invitations` qui porte l'objet (`org_id` NULL, colonnes `resource_*`, révision
+> `0028_partage_en_attente`) : même jeton long (seul son hash est persisté), même lien
+> `/invitation/<token>` envoyé par le gabarit de partage, même échéance, même refus par
+> l'invité. **À l'inscription** (adresse vérifiée, `upsert_user` →
+> `honorer_au_signup`) **ou en ouvrant le lien** (`org.invite.accept`), la personne reçoit
+> l'accès à CET objet par `ownership.grant`, et jamais une adhésion. Au moment d'honorer,
+> l'émetteur doit toujours gouverner l'objet : sinon le partage est caduc et ne donne rien.
+> **La réponse** porte `pending: true` et `pending_note` ; un second partage vers la même
+> adresse rend le premier (`already_pending`, un index unique partiel l'impose). `op=get`
+> liste le partage en attente dans `grants` (`pending: true`, sans `principal_id`) ;
+> `op=unshare` avec la même adresse le retire. **Refusé** (`pending_share_plain_only`) avec
+> `cascade=true` ou `credentials="inherit"` : ce sont des gestes sur un compte, à refaire
+> une fois la personne inscrite. `ttl_days` se garde : l'échéance court depuis
+> l'acceptation. Un `sub` inconnu reste un 404 : il désigne un compte, pas une adresse.
+
 ## Partager UNE page sans son projet (kind `doc`, signal #1084)
 
 > **Le besoin.** Faire lire une page d'un projet à des personnes d'une autre org sans leur

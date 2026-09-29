@@ -172,7 +172,7 @@ class InvitationDeclined(BaseModel):
     Re-refuser la même invitation est idempotent (même réponse)."""
     ok: bool
     declined: bool
-    scope: str                                  # platform | org | team
+    scope: str                                  # platform | org | team | resource
     org_id: Optional[int] = None
     group_id: Optional[int] = None
     name: Optional[str] = None                  # nom de l'org qu'on ne rejoindra pas
@@ -198,6 +198,12 @@ class InvitationAccepted(BaseModel):
     group_role: Optional[str] = None
     active_org: Optional[int] = None
     name: Optional[str] = None
+    # Partage EN ATTENTE d'UN objet (29/09/2026) : `org_id` null, l'accès à cet
+    # objet est donné (`resource_role`), aucune org n'est rejointe ; `name` = le nom
+    # de l'objet.
+    resource_type: Optional[str] = None
+    resource_id: Optional[str] = None
+    resource_role: Optional[str] = None
 
 
 # --- Inputs -----------------------------------------------------------------
@@ -328,6 +334,12 @@ def _invite_accept(ctx: ResolvedCtx, inp: InviteAcceptInput) -> dict:
     res = org_store.accept_invitation(inp.token, ctx.sub)
     if not res:
         raise AuthzDenied(410, "invalid_or_expired", "Invitation invalide, expirée ou déjà utilisée.")
+    if res.get("resource_type"):  # partage en attente d'UN objet : aucune org rejointe
+        return {"ok": True, "resource_type": res["resource_type"],
+                "resource_id": res.get("resource_id"),
+                "resource_role": res.get("resource_role"),
+                "name": res.get("resource_name"),
+                "active_org": org_store.get_active_org(ctx.sub)}
     org = org_store.get_org(res["org_id"]) if res.get("org_id") else None
     return {"ok": True, "org_id": res.get("org_id"), "org_role": res.get("org_role"),
             "group_id": res.get("group_id"), "group_role": res.get("group_role"),
@@ -406,7 +418,10 @@ CAPABILITIES += [
     Capability(
         key="org.invite.accept", handler=_invite_accept, Input=InviteAcceptInput,
         authz=SUB_ONLY, Output=InvitationAccepted,
-        description="Accept an org invitation by its mail token. Joins the org.",
+        description=("Accept an invitation by its mail token. An org/team invitation "
+                     "joins the org; a pending SHARE of one resource (`resource_type` "
+                     "in the answer) gives access to that resource only, and joins "
+                     "nothing."),
         rest=RestBinding("POST", "/api/me/invitations/accept"),
     ),
     Capability(

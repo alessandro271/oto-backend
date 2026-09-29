@@ -726,6 +726,19 @@ téléphone (la commande naît avant l'appel à Apollo) : la jouer **avant la fu
 comme 0020. Le retour arrière retire la table et les numéros qu'elle garde ; le sondage
 d'Apollo reste alors le seul chemin de lecture.
 
+`0028_partage_en_attente` (29/09/2026, après `0027_apollo_phone_reveals`) pose le
+PARTAGE EN ATTENTE d'un objet vers une adresse sans compte : six `ADD COLUMN IF NOT
+EXISTS` sur `org_invitations` (`resource_type`, `resource_kind`, `resource_id`,
+`resource_role`, `resource_ttl_days`, `resource_name`, toutes NULL) et l'index unique
+partiel `idx_org_invitations_ressource_attente` (un partage en attente par objet et par
+adresse) : fragment `schema/orgs.py::INVITATIONS_RESSOURCE`, puis
+`db/invitations_ressource.py::DDL_INDEX_RESSOURCE_ATTENTE` — hors assemblage, son
+prédicat lit `declined_at`, qu'un ALTER de `_init.py` pose après lui. Sans
+défaut : écriture de catalogue seule ; l'index ne porte aucune ligne existante. Le
+démarrage joue le même fragment. **Avant la fusion** : le code du lot lit ces colonnes
+à chaque acceptation d'invitation et à chaque inscription. Le retour arrière retire
+l'index et les colonnes, et perd les partages encore en attente.
+
 ### 5.2 Une base neuve naît à la tête du registre (24/09/2026, oto-backend#969)
 
 Une base neuve reçoit tout son schéma du démarrage : chaque colonne qu'une révision pose
