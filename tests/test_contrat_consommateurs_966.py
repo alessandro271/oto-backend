@@ -70,10 +70,10 @@ def test_un_appel_casse_chez_le_second_rougit_en_le_nommant_et_le_premier_reste_
     volontairement. Son verdict est rouge et le nomme ; celui du premier est rendu
     quand même, vert."""
     servi = _contrat({"/api/a": _op("a")})
-    premier = _juger(tmp_path, "oto-frontend", _contrat({"/api/a": _op("a")}), servi)
+    premier = _juger(tmp_path, "oto-commerce", _contrat({"/api/a": _op("a")}), servi)
     second = _juger(tmp_path, "oto-dashboard",
                     _contrat({"/api/a": _op("a"), "/api/b": _op("b")}), servi)
-    assert premier.returncode == 0 and "« oto-frontend »" in premier.stdout
+    assert premier.returncode == 0 and "« oto-commerce »" in premier.stdout
     assert second.returncode == 1
     assert "épinglée(s) par « oto-dashboard »" in second.stdout
     assert "CASSENT les appels de « oto-dashboard »" in second.stdout

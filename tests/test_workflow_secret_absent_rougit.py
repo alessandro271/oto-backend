@@ -43,13 +43,13 @@ def test_le_contrat_d_un_consommateur_sans_son_secret_rougit(tmp_path):
     for fork in ("", "true"):
         sortie = tmp_path / f"out{fork}"
         r = subprocess.run(
-            [str(script), "oto-frontend", "otomata-tech/oto-frontend",
-             "api/openapi-served.json", "OTO_FRONTEND_CONTRACT_KEY"],
+            [str(script), "oto-commerce", "otomata-tech/oto-commerce",
+             "api/openapi-service.json", "OTO_COMMERCE_CONTRACT_KEY"],
             env={**os.environ, "CLE_LECTURE": "", "EST_FORK": fork,
                  "GITHUB_OUTPUT": str(sortie)},
             capture_output=True, text=True)
         assert r.returncode == 1, r.stdout + r.stderr
-        assert "Contrat de oto-frontend NON JUGÉ" in r.stdout
+        assert "Contrat de oto-commerce NON JUGÉ" in r.stdout
         assert not sortie.exists() or "lu=oui" not in sortie.read_text()
 
 

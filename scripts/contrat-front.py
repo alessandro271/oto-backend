@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Confronte le contrat épinglé par un front consommateur au spec que NOUS servons.
 
-Pourquoi ici et pas seulement chez lui. Le front de JB (`otomata-tech/oto-frontend`)
-épingle un extrait verbatim de notre OpenAPI et le compare au vivant à chaque passage :
-quand nous touchons l'une des opérations qu'il consomme, c'est SA branche principale qui
-rougit et SA livraison qui se bloque, alors que le changement vient de nous. Ce script
-retourne la charge : celui qui casse l'apprend le premier, avant que l'autre ne le
-découvre dans sa journée.
+Pourquoi ici et pas seulement chez lui. Un consommateur (à l'origine le front de JB,
+`oto-frontend`, décommissionné le 29/09/2026 ; aujourd'hui la liste de
+`.github/contrat-consommateurs.json`) épingle un extrait verbatim de notre OpenAPI et le
+compare au vivant à chaque passage : quand nous touchons l'une des opérations qu'il
+consomme, c'est SA branche principale qui rougit et SA livraison qui se bloque, alors
+que le changement vient de nous. Ce script retourne la charge : celui qui casse l'apprend
+le premier, avant que l'autre ne le découvre dans sa journée.
 
 Deux niveaux, délibérément distincts — un contrôle qui crie pour tout n'est plus lu :
 

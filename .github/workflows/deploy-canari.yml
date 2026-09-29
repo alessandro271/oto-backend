@@ -258,7 +258,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────────
   # LES CONSOMMATEURS DÉCLARÉS DE NOTRE API (#966).
   #
-  # Un front (celui de JB, le dashboard) ou un service (le commerce) épingle dans SON
+  # Un front (le dashboard) ou un service (le commerce) épingle dans SON
   # dépôt ce qu'il appelle et lit de notre OpenAPI. Les deux jobs de contrat ci-dessous
   # confrontent CHAQUE contrat épinglé à ce que nous servons : celui qui casse l'apprend
   # le premier, ici, et non le lendemain dans le travail de quelqu'un d'autre (mesuré le

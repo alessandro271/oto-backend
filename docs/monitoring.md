@@ -338,7 +338,7 @@ suppression — si l'inscription échoue, rien n'est supprimé. La page d'un run
 `op=run` des deux consoles) porte alors `content_archived` — `archived_at`, `months`, et
 `message` (« Contenu archivé le … ») à afficher **à la place** du contenu. Le registre
 est lu, jamais déduit d'un corps absent : un run sans appel entre ses bornes n'est pas un
-run archivé. Rendu côté front : à faire dans `oto-frontend` (le champ est servi).
+run archivé. Rendu côté front : à faire dans `oto-dashboard` (le champ est servi).
 ⚠️ Le timer exécute une **copie installée** du script (`/usr/local/sbin/oto-journal-archive.py`,
 cf. l'unité) : elle doit être rafraîchie depuis `deploy/archive_tool_calls.py` avant le
 premier tir qui archive, sinon le mois part sans être inscrit.
