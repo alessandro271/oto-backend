@@ -75,10 +75,17 @@ d'option hors catalogue en droit.
 ## Le point de lecture unique — `access.entitlements`
 
 ```python
-value_for(sub, org_id, key, now=None) -> int
+valeur_expliquee(sub, org_id, key, now=None) -> ValeurExpliquee  # valeur, par, defaut
+value_for(sub, org_id, key, now=None) -> int                      # valeur_expliquee(...).valeur
 has_right(sub, org_id, key) -> bool     # value_for(...) >= 1
 org_has(org_id, key) -> bool            # has_right(None, org_id, key)
 ```
+
+`valeur_expliquee` est le SEUL code qui applique la règle ; il rend aussi sa provenance
+(`par` : les lignes valides lues, `defaut` : le défaut d'instance a fourni la valeur de
+l'org). `value_for` n'en rend que la valeur, et la route de service de la valeur
+effective (ci-dessous) la sert telle quelle : ce qu'elle montre est ce que lisent les
+points d'usage, par construction.
 
 **Une ligne par personne ne fait qu'ajouter** (règle tranchée le 28/09/2026) :
 
@@ -90,8 +97,9 @@ org_has(org_id, key) -> bool            # has_right(None, org_id, key)
    l'org et les lignes valides de la personne, dans l'org et partout. Une ligne de
    personne ne retire jamais rien — ni un « oui » de l'org, ni le défaut.
 
-Une lecture (`db/entitlements.valeurs_posees`) rend les deux maxima séparés ; la règle
-vit dans `value_for`.
+Une lecture (`db/entitlements.valeurs_posees`) rend les deux maxima séparés, et les
+lignes valides dont ils sont tirés (portée `org`, `personne_dans_org`,
+`personne_partout` ; source ; valeur) ; la règle vit dans `valeur_expliquee`.
 
 **Le plus généreux est le plus GRAND**, pour toute clé du catalogue : un oui/non vaut
 `1`/`0`, un quota `platform_key:<connecteur>` vaut `0` pour « pas d'accès », et « sans
@@ -198,18 +206,57 @@ identité de service (`docs/auth-logto.md` §Identité de service). REST seule, 
 | `GET /api/service/users/{sub}/entitlements` | `list_for_person_everywhere` |
 | `PUT /api/service/users/{sub}/entitlements/{right_key}/{source}` | `grant` sur la personne partout, `granted_by = service:<client_id>` ; rend la ligne |
 | `DELETE /api/service/users/{sub}/entitlements/{right_key}/{source}` | `revoke` de la personne partout seule |
+| `GET /api/service/users/{sub}/entitlements/{right_key}/effective?org_id=N` | la **valeur effective** (#1096) : ce que lisent les points d'usage pour la personne dans l'org, et d'où elle vient (ci-dessous). Lecture seule |
 | `GET /api/service/billing/export` | **temporaire** (#1085) : l'état de facturation du cœur (factures et PDF compris), pour sa reprise par le commerce ; part avec le retrait |
 
 Sous `/orgs/{id}/`, `sub` (corps ou requête) vise une personne, qui doit être membre ;
 omis, le droit vaut pour l'org. Sous `/users/{sub}/`, le droit vaut pour la personne
 dans toutes ses orgs : elle doit avoir un compte (`404 unknown_user`), pas une
-appartenance. **Chaque ligne se lit par une seule route** : une ligne d'org ou de
-personne dans l'org par l'org, une ligne de personne partout par la personne. `source`
+appartenance. **Chaque ligne se liste par une seule route** : une ligne d'org ou de
+personne dans l'org par l'org, une ligne de personne partout par la personne (la valeur
+effective ne liste pas : elle nomme les lignes valides qui entrent dans UNE lecture). `source`
 est prise dans la liste fermée `entitlements_catalogue.SOURCES`.
 ⚠️ Tant que la réconciliation interne tourne (ci-dessous), elle retire les lignes de SES
 sources qu'elle n'a pas posées — à la portée org seulement : une ligne de personne, dans
 l'org ou partout, n'est jamais à elle (#1080). Le service ne doit donc écrire de ligne
 D'ORG que sous une source qu'elle ne réconcilie pas (`trial`) jusqu'à la bascule.
+
+### La valeur effective d'un droit (#1096)
+
+Un producteur externe doit pouvoir **prouver que ses lignes suffisent** avant le retrait
+de la lecture héritée : relire ses lignes ne le dit pas, il faut ce que le cœur
+APPLIQUE. `GET /api/service/users/{sub}/entitlements/{right_key}/effective`, même
+identité et même règle (`COMMERCE_SERVICE`) que les routes voisines ; `org_id` en
+requête = l'org où la personne agit, omis = la personne hors de toute org. Aucune
+appartenance n'est exigée (comme `value_for`, limite (e)). Rend :
+
+| champ | ce qu'il dit |
+|---|---|
+| `sub`, `org_id`, `right_key` | la question posée |
+| `valeur` | `access.valeur_expliquee(sub, org_id, clé).valeur` — **le même code** que `value_for` / `has_right` des points d'usage, pas une seconde implémentation |
+| `par` | les lignes valides lues, chacune `{portee, source, valeur}` (`org`, `personne_dans_org`, `personne_partout`), dans cet ordre ; une ligne échue, à venir ou d'une autre personne n'y est pas |
+| `defaut` | vrai si c'est le défaut d'instance qui a fourni la valeur de l'org (aucune ligne d'org valide, ou hors org) |
+| `lecture_directe` | ce que rend la lecture **héritée** pour cette personne et ce droit, un seul champ selon la clé ; `null` s'il n'y en a pas |
+
+`lecture_directe`, clé par clé, valeurs dans LEUR sens hérité (limite (b)) :
+
+| clé | champ | lu par |
+|---|---|---|
+| `unipile`, `platform_unmetered` | `option_comps: {personne, org}` | `db.has_option_comp` sur le compte et sur l'org (`org` null hors org) — les dons que la réconciliation traduit (org) ou qui n'ouvrent plus rien (compte) |
+| `unipile_seats` | `plafond_messagerie: {plafond}` | `unipile_connect.plafond_de_comptes`, le plafond que le branchement applique (`0` = sans plafond) ; `lecture_directe` null hors org |
+| `platform_key:<connecteur>` | `registre: {cle_ouverte, quota_du_jour}` | `platform_key_open` du registre et `quotas.quota_for` (`0` = illimité) — sans l'arête de grant |
+| `members_max` | — | aucune lecture héritée : `null` |
+
+⚠️ **`lecture_directe` part avec la lecture héritée** : quand plus aucun point d'usage
+ne lit `option_comps`, le plafond de messagerie de l'org ni le registre pour ces clés,
+le champ est retiré de la route (le consommateur est prévenu par le contrat épinglé).
+
+Erreurs : `401`, `403 service_required` (celles des routes voisines), `404 unknown_user`,
+`404 unknown_org` (org inconnue ou archivée, comme sous `/orgs/{id}/`), `400
+entitlement_unknown_key`. La preuve : `tests/test_org_entitlements_live.py`,
+`test_la_valeur_effective_servie_est_la_lecture_des_points_d_usage`, sur la grille de
+monotonie (3 défauts × lignes d'org × personne dans l'org × personne partout, dans l'org
+et hors org).
 
 ## Les défauts de l'instance — `OTO_ENTITLEMENT_DEFAULTS`
 

@@ -89,35 +89,63 @@ def revoke(org_id: Optional[int], right_key: str, source: str, *,
     return n > 0
 
 
+# Les trois portées, nommées comme les sert la lecture expliquée (`par`).
+PORTEE_ORG = "org"
+PORTEE_PERSONNE_DANS_ORG = "personne_dans_org"
+PORTEE_PERSONNE_PARTOUT = "personne_partout"
+
+
+class LigneValide(NamedTuple):
+    """Une ligne VALIDE lue pour (org, personne, droit) : sa portée, sa source, sa
+    valeur."""
+    portee: str
+    source: str
+    valeur: int
+
+
 class Posees(NamedTuple):
     """Les lignes VALIDES d'un droit, par portée : `org` = le maximum des lignes d'org
     (`sub` NULL), `personne` = le maximum des lignes de la personne (dans l'org et
-    partout). `None` = aucune ligne valide de cette portée."""
+    partout). `None` = aucune ligne valide de cette portée. `lignes` = les lignes
+    elles-mêmes, dont ces maxima sont tirés (portée, puis source)."""
     org: Optional[int]
     personne: Optional[int]
+    lignes: tuple[LigneValide, ...] = ()
+
+
+def _portee_de(r: dict) -> str:
+    if r["sub"] is None:
+        return PORTEE_ORG
+    return PORTEE_PERSONNE_PARTOUT if r["org_id"] is None else PORTEE_PERSONNE_DANS_ORG
+
+
+_ORDRE_PORTEES = (PORTEE_ORG, PORTEE_PERSONNE_DANS_ORG, PORTEE_PERSONNE_PARTOUT)
 
 
 def valeurs_posees(org_id: Optional[int], sub: Optional[str], right_key: str,
                    now: Optional[datetime] = None) -> Posees:
     """Les lignes VALIDES à `now` (défaut : l'instant de la base) du droit `right_key`,
     toutes sources confondues, en UNE lecture : le maximum des lignes de l'org, et le
-    maximum des lignes de la personne `sub` dans l'org ET partout. `org_id` None :
-    seule la personne partout peut s'appliquer ; `sub` None : seule l'org. Les deux
-    maxima restent SÉPARÉS : la règle qui les combine (le défaut d'instance ne répond
-    qu'à l'org, la personne ne fait qu'ajouter) vit dans `access.entitlements`, seul
-    lecteur."""
+    maximum des lignes de la personne `sub` dans l'org ET partout, avec les lignes dont
+    ils sont tirés. `org_id` None : seule la personne partout peut s'appliquer ; `sub`
+    None : seule l'org. Les deux maxima restent SÉPARÉS : la règle qui les combine (le
+    défaut d'instance ne répond qu'à l'org, la personne ne fait qu'ajouter) vit dans
+    `access.entitlements`, seul lecteur."""
     _portee(org_id, sub)
     with _connect() as conn:
-        row = conn.execute(
-            "SELECT MAX(value) FILTER (WHERE sub IS NULL) AS org, "
-            "MAX(value) FILTER (WHERE sub IS NOT NULL) AS personne "
-            "FROM org_entitlements WHERE right_key = %(cle)s "
+        rows = conn.execute(
+            "SELECT org_id, sub, source, value FROM org_entitlements "
+            "WHERE right_key = %(cle)s "
             "AND ((org_id = %(org)s AND (sub IS NULL OR sub = %(sub)s)) "
             "     OR (org_id IS NULL AND sub = %(sub)s)) "
             f"AND {_VIVANT_A}",
             {"org": org_id, "cle": right_key, "sub": sub, "t": now},
-        ).fetchone()
-    return Posees(row["org"], row["personne"])
+        ).fetchall()
+    lignes = tuple(sorted((LigneValide(_portee_de(r), r["source"], r["value"]) for r in rows),
+                          key=lambda l: (_ORDRE_PORTEES.index(l.portee), l.source)))
+    de_l_org = [l.valeur for l in lignes if l.portee == PORTEE_ORG]
+    de_la_personne = [l.valeur for l in lignes if l.portee != PORTEE_ORG]
+    return Posees(max(de_l_org, default=None), max(de_la_personne, default=None), lignes)
 
 
 def list_for_org(org_id: int) -> list[dict[str, Any]]:

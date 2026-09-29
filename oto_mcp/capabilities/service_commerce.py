@@ -9,7 +9,8 @@ Ce qu'il y trouve (conception `oto-commerce`, question 4) : les orgs, leurs memb
 PAR ANCIENNETÉ avec leur dernière activité (il désigne les membres payants et écrit ses
 relances), l'usage par personne sur une fenêtre, et les droits déclarés — de l'org, d'une
 personne dans l'org, ou d'une personne dans toutes ses orgs —, qu'il pose, relit et
-retire. Il ne pose jamais de plan ni de prix : le cœur ne sait pas qui paie.
+retire, et la valeur EFFECTIVE d'un droit, telle que la lisent les points d'usage. Il ne
+pose jamais de plan ni de prix : le cœur ne sait pas qui paie.
 
 Le service n'a pas d'org (`ResolvedCtx.org_id` est None) : l'org ou la personne visée
 vient TOUJOURS du chemin, et son existence est vérifiée ici — jamais déduite d'un état
@@ -216,8 +217,9 @@ _ERREURS_CLE = (
     _SOURCE_INCONNUE,
     DeclaredError(404, "not_a_member", "la personne `sub` n'est pas membre de l'org"),
 )
+_CLE_INCONNUE = DeclaredError(400, "entitlement_unknown_key", "clé hors catalogue")
 _ERREURS_POSE = (
-    DeclaredError(400, "entitlement_unknown_key", "clé hors catalogue"),
+    _CLE_INCONNUE,
     DeclaredError(400, "entitlement_value_invalid", "valeur hors du genre de la clé"),
     DeclaredError(400, "invalid_window", "`expires_at` ne suit pas `starts_at`"),
 )
@@ -280,7 +282,7 @@ def _delete(ctx: ResolvedCtx, inp: ServiceEntitlementKey) -> dict:
 # ── Les droits d'une personne dans toutes ses orgs ───────────────────────────
 #
 # La troisième portée (`org_id` NULL) : un droit qui appartient à la personne quelle
-# que soit l'org où elle agit. Chaque ligne se lit par UNE seule route : une ligne
+# que soit l'org où elle agit. Chaque ligne se LISTE par UNE seule route : une ligne
 # d'org ou de personne dans l'org par `/orgs/{id}/entitlements`, une ligne de personne
 # partout par `/users/{sub}/entitlements`.
 
@@ -328,6 +330,102 @@ def _user_delete(ctx: ResolvedCtx, inp: ServiceUserEntitlementKey) -> dict:
                           f"Aucun droit {inp.right_key!r} de source {inp.source!r} "
                           "posé sur cette personne dans toutes ses orgs.")
     return {"ok": True}
+
+
+# ── la valeur EFFECTIVE d'un droit (#1096) ───────────────────────────────────
+#
+# Ce que le cœur APPLIQUE pour (personne, org, droit), et d'où ça vient : de quoi
+# prouver, avant le retrait de la lecture héritée, que les lignes d'un producteur
+# suffisent. Lecture seule. La valeur sort du MÊME code que les points d'usage
+# (`access.valeur_expliquee`, dont `value_for` n'est que la valeur).
+
+class ServiceEffectiveInput(BaseModel):
+    sub: str
+    right_key: str
+    # L'org où la personne agit ; omise = la personne hors de toute org.
+    org_id: Optional[int] = None
+
+
+class ServiceEffectiveRow(BaseModel):
+    portee: str = Field(description="org | personne_dans_org | personne_partout")
+    source: str
+    valeur: int
+
+
+class ServiceLegacyOptionComps(BaseModel):
+    personne: bool = Field(description="Un don vivant posé sur le compte.")
+    org: Optional[bool] = Field(None, description="Un don vivant posé sur l'org ; null "
+                                                  "hors org.")
+
+
+class ServiceLegacySeats(BaseModel):
+    plafond: int = Field(description="Le plafond que le branchement applique ; `0` = "
+                                     "sans plafond (sens hérité).")
+
+
+class ServiceLegacyRegistry(BaseModel):
+    cle_ouverte: bool = Field(description="`platform_key_open` du registre.")
+    quota_du_jour: int = Field(description="`quota_for` ; `0` = illimité (sens hérité).")
+
+
+class ServiceLegacyRead(BaseModel):
+    """Ce que rend la lecture HÉRITÉE du droit, UN SEUL champ servi selon la clé :
+    `option_comps` (droits oui/non), `plafond_messagerie` (`unipile_seats`, dans une
+    org), `registre` (`platform_key:<connecteur>`). ⚠️ Part avec la lecture héritée."""
+    option_comps: Optional[ServiceLegacyOptionComps] = None
+    plafond_messagerie: Optional[ServiceLegacySeats] = None
+    registre: Optional[ServiceLegacyRegistry] = None
+
+
+class ServiceEffective(BaseModel):
+    """`valeur` = ce que lisent les points d'usage pour (personne, org, droit) ; `par`
+    = les lignes valides lues ; `defaut` = le défaut d'instance a fourni la valeur de
+    l'org ; `lecture_directe` = la lecture héritée, `null` s'il n'y en a pas pour
+    cette clé (ou hors org pour `unipile_seats`)."""
+    sub: str
+    org_id: Optional[int] = None
+    right_key: str
+    valeur: int
+    par: list[ServiceEffectiveRow]
+    defaut: bool
+    lecture_directe: Optional[ServiceLegacyRead] = None
+
+
+def _lecture_directe(sub: str, org_id: Optional[int], cle: str) -> Optional[dict]:
+    """La lecture HÉRITÉE de `cle` pour la personne dans l'org, ou None s'il n'y en a
+    pas. ⚠️ TEMPORAIRE : part avec la lecture héritée (dons `option_comps`, plafond
+    de messagerie de l'org, registre des clés de plateforme), valeurs dans LEUR sens
+    (`0` « illimité » compris, limite (b))."""
+    from .. import access, providers, unipile_connect
+    if catalogue.droit(cle).genre is catalogue.Genre.OUI_NON:
+        return {"option_comps": {
+            "personne": db.has_option_comp("user", sub, cle),
+            "org": None if org_id is None else db.has_option_comp("org", str(org_id), cle)}}
+    if cle == catalogue.UNIPILE_SEATS:
+        if org_id is None:
+            return None
+        return {"plafond_messagerie": {"plafond": unipile_connect.plafond_de_comptes(org_id)}}
+    if cle.startswith(catalogue.PLATFORM_KEY_PREFIX):
+        connecteur = cle[len(catalogue.PLATFORM_KEY_PREFIX):]
+        return {"registre": {"cle_ouverte": providers.REGISTRY[connecteur].platform_key_open,
+                             "quota_du_jour": access.quota_for(connecteur)}}
+    return None
+
+
+def _user_effective(ctx: ResolvedCtx, inp: ServiceEffectiveInput) -> dict:
+    _compte_ou_404(inp.sub)
+    if inp.org_id is not None:
+        _org_ou_404(inp.org_id)
+    try:
+        catalogue.droit(inp.right_key)
+    except ValueError as e:
+        raise AuthzDenied(400, "entitlement_unknown_key", str(e))
+    from .. import access
+    lu = access.valeur_expliquee(inp.sub, inp.org_id, inp.right_key)
+    return {"sub": inp.sub, "org_id": inp.org_id, "right_key": inp.right_key,
+            "valeur": lu.valeur, "defaut": lu.defaut,
+            "par": [l._asdict() for l in lu.par],
+            "lecture_directe": _lecture_directe(inp.sub, inp.org_id, inp.right_key)}
 
 
 class ServiceOk(BaseModel):
@@ -391,6 +489,7 @@ def _user(ctx: ResolvedCtx, inp: ServiceUserInput) -> dict:
 
 _CHEMIN_DROIT = "/api/service/orgs/{id}/entitlements/{right_key}/{source}"
 _CHEMIN_DROIT_PERSONNE = "/api/service/users/{sub}/entitlements/{right_key}/{source}"
+_CHEMIN_DROIT_PERSONNE_EFFECTIF = "/api/service/users/{sub}/entitlements/{right_key}/effective"
 
 CAPABILITIES += [
     Capability(key="service.orgs.list", handler=_orgs, Input=ServiceOrgsInput,
@@ -463,6 +562,16 @@ CAPABILITIES += [
                            "(person, right, source); org rows and the person's rows "
                            "within an org stay.",
                rest=RestBinding("DELETE", _CHEMIN_DROIT_PERSONNE)),
+    Capability(key="service.user.entitlement.effective", handler=_user_effective,
+               Input=ServiceEffectiveInput, authz=COMMERCE_SERVICE, mcp=None,
+               Output=ServiceEffective,
+               errors=(_COMPTE_INCONNU, _ORG_INCONNUE, _CLE_INCONNUE),
+               description="[service commerce] The EFFECTIVE value of one right for a "
+                           "person acting in `org_id` (omitted = outside any org), as the "
+                           "core's usage points read it, with the valid rows it comes "
+                           "from, whether the instance default supplied the org value, "
+                           "and the legacy direct read (temporary). Read-only.",
+               rest=RestBinding("GET", _CHEMIN_DROIT_PERSONNE_EFFECTIF)),
     Capability(key="service.billing.export", handler=_billing_export, Input=ServiceNoInput,
                authz=COMMERCE_SERVICE, mcp=None, Output=ServiceBillingExport,
                description="[service commerce, temporary] The core's billing state "

@@ -28,7 +28,7 @@ import functools
 import json
 import os
 from datetime import datetime
-from typing import Optional
+from typing import NamedTuple, Optional
 
 from .. import entitlements_catalogue as catalogue
 from .. import providers
@@ -110,21 +110,42 @@ def defaut_du_droit(key: str) -> int:
     return defauts[catalogue.PLATFORM_KEY_JOKER]
 
 
+class ValeurExpliquee(NamedTuple):
+    """La valeur d'un droit ET sa provenance, telles que les calcule `value_for` :
+    `valeur` = ce que lisent les points d'usage ; `par` = les lignes valides lues
+    (portée, source, valeur), dont la valeur est tirée ; `defaut` = vrai si c'est le
+    défaut d'instance qui a fourni la valeur de l'org (aucune ligne d'org valide, ou
+    pas d'org)."""
+    valeur: int
+    par: tuple[db_entitlements.LigneValide, ...]
+    defaut: bool
+
+
+def valeur_expliquee(sub: Optional[str], org_id: Optional[int], key: str,
+                     now: Optional[datetime] = None) -> ValeurExpliquee:
+    """La règle ENTIÈRE, avec sa provenance — le seul code qui la calcule ; `value_for`
+    n'en rend que la valeur. Voir `value_for` pour la règle."""
+    catalogue.droit(key)
+    defaut = defaut_du_droit(key)
+    if org_id is None and sub is None:
+        return ValeurExpliquee(defaut, (), True)
+    posees = db_entitlements.valeurs_posees(None if org_id is None else int(org_id),
+                                            sub, key, now)
+    de_l_org = defaut if posees.org is None else posees.org
+    valeur = de_l_org if posees.personne is None else max(de_l_org, posees.personne)
+    return ValeurExpliquee(valeur, posees.lignes, posees.org is None)
+
+
 def value_for(sub: Optional[str], org_id: Optional[int], key: str,
               now: Optional[datetime] = None) -> int:
     """La valeur du droit `key` pour la personne `sub` dans l'org `org_id`, à `now`
     (défaut : maintenant, horloge de la base) : la valeur de l'org (ses lignes, sinon le
     défaut déclaré par l'instance), relevée par les lignes de la personne dans l'org et
     partout si elles sont plus généreuses. `sub` None = l'org seule ; `org_id` None =
-    le défaut, relevé par la personne partout ; les deux None = le défaut."""
-    catalogue.droit(key)
-    defaut = defaut_du_droit(key)
-    if org_id is None and sub is None:
-        return defaut
-    posees = db_entitlements.valeurs_posees(None if org_id is None else int(org_id),
-                                            sub, key, now)
-    de_l_org = defaut if posees.org is None else posees.org
-    return de_l_org if posees.personne is None else max(de_l_org, posees.personne)
+    le défaut, relevé par la personne partout ; les deux None = le défaut.
+
+    La valeur de `valeur_expliquee`, qui rend aussi d'où elle vient."""
+    return valeur_expliquee(sub, org_id, key, now).valeur
 
 
 def has_right(sub: Optional[str], org_id: Optional[int], right_key: str) -> bool:

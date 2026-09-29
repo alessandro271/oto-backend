@@ -25,7 +25,7 @@ _CLES = ("service.orgs.list", "service.org.members", "service.org.usage",
          "service.org.entitlements.list", "service.org.entitlement.put",
          "service.org.entitlement.delete", "service.billing.export", "service.users.get",
          "service.user.entitlements.list", "service.user.entitlement.put",
-         "service.user.entitlement.delete")
+         "service.user.entitlement.delete", "service.user.entitlement.effective")
 
 
 def _cap(cle):
@@ -267,6 +267,7 @@ def test_une_pose_de_personne_refusee_dit_pourquoi_et_n_ecrit_rien(live, champs,
 
 @pytest.mark.parametrize("cle, champs", [
     ("service.user.entitlements.list", {}),
+    ("service.user.entitlement.effective", dict(right_key="unipile")),
     ("service.user.entitlement.put", dict(right_key="unipile", source="trial", value=1)),
     ("service.user.entitlement.delete", dict(right_key="unipile", source="trial")),
 ])
@@ -328,3 +329,95 @@ def test_le_role_plateforme_d_un_compte(live):
     assert _appel("service.users.get", sub=membre)["role"] == "member"
     assert _appel("service.users.get", sub=admin)["role"] == "admin"
     assert _refus("service.users.get", sub="u-inconnu").code == "unknown_user"
+
+
+# ── la valeur effective d'un droit (#1096) ───────────────────────────────────
+#
+# L'égalité avec la lecture des points d'usage est prouvée sur la grille de monotonie
+# (`test_org_entitlements_live.py`) ; ici : les refus, la lecture héritée, et
+# qu'aucune écriture n'a lieu.
+
+def _effectif(sub, right_key, org_id=None):
+    return _appel("service.user.entitlement.effective", sub=sub, right_key=right_key,
+                  org_id=org_id)
+
+
+def test_la_valeur_effective_refuse_nommement(live):
+    sub = _personne()
+    assert _refus("service.user.entitlement.effective", sub=sub,
+                  right_key="inconnu").code == "entitlement_unknown_key"
+    assert _refus("service.user.entitlement.effective", sub=sub,
+                  right_key="platform_key:inconnu").code == "entitlement_unknown_key"
+    assert _refus("service.user.entitlement.effective", sub=sub, right_key="unipile",
+                  org_id=10**12).code == "unknown_org"
+    assert _refus("service.user.entitlement.effective", sub=sub, right_key="unipile",
+                  org_id=_org(archivee=True)).code == "unknown_org"
+
+
+def test_la_lecture_directe_des_dons_d_option_part_a_cote_de_la_valeur(live):
+    """Un don d'option posé sur le compte n'ouvre pas l'option payante (la valeur reste
+    le défaut) : la lecture héritée le montre, la valeur non. Celui de l'org est
+    réconcilié en ligne `offered`."""
+    org, sub = _org(), _personne()
+    db.set_option_comp("user", sub, "unipile", granted_by="admin-test")
+    out = _effectif(sub, "unipile", org)
+    assert (out["valeur"], out["defaut"], out["par"]) == (0, True, [])
+    assert out["lecture_directe"] == {"option_comps": {"personne": True, "org": False}}
+    db.set_option_comp("org", str(org), "unipile", granted_by="admin-test")
+    from oto_mcp import billing_droits
+    billing_droits.reconcilier(org)
+    out = _effectif(sub, "unipile", org)
+    assert (out["valeur"], out["defaut"]) == (1, False)
+    assert out["par"] == [{"portee": "org", "source": "offered", "valeur": 1}]
+    assert out["lecture_directe"]["option_comps"] == {"personne": True, "org": True}
+    hors = _effectif(sub, "unipile")
+    assert hors["valeur"] == 0 and hors["lecture_directe"]["option_comps"] == \
+        {"personne": True, "org": None}
+
+
+def test_la_lecture_directe_suit_la_cle(live):
+    from oto_mcp import providers, unipile_connect
+    org, sub = _org(), _personne()
+    sieges = _effectif(sub, "unipile_seats", org)
+    assert sieges["lecture_directe"]["plafond_messagerie"] == \
+        {"plafond": unipile_connect.plafond_de_comptes(org)}
+    assert _effectif(sub, "unipile_seats")["lecture_directe"] is None, \
+        "hors org, aucun plafond de messagerie ne s'applique"
+    cle = _effectif(sub, "platform_key:kaspr", org)["lecture_directe"]["registre"]
+    assert cle == {"cle_ouverte": providers.REGISTRY["kaspr"].platform_key_open,
+                   "quota_du_jour": access.quota_for("kaspr")}
+    assert _effectif(sub, "members_max", org)["lecture_directe"] is None, \
+        "aucune lecture héritée"
+
+
+def test_la_valeur_effective_n_ecrit_rien(live):
+    """Toute la lecture tient dans une session en LECTURE SEULE : une écriture lèverait
+    `ReadOnlySqlTransaction`."""
+    from oto_mcp.db._conn import reuse_connection
+    org, sub = _org(), _personne()
+    _appel("service.user.entitlement.put", sub=sub, right_key="unipile_seats",
+           source="trial", value=9)
+    with reuse_connection():
+        with _connect() as conn:
+            conn.execute("SET default_transaction_read_only = on")
+        try:
+            for cle in ("unipile", "unipile_seats", "platform_key:kaspr", "members_max"):
+                for o in (org, None):
+                    _effectif(sub, cle, o)
+            assert _effectif(sub, "unipile_seats", org)["valeur"] == 9
+        finally:
+            with _connect() as conn:
+                conn.execute("RESET default_transaction_read_only")
+
+
+def test_la_route_effective_n_est_pas_avalee_par_celle_de_la_source():
+    """`GET …/{right_key}/effective` côtoie `PUT|DELETE …/{right_key}/{source}` : la
+    route servie pour un GET est bien la lecture effective."""
+    from starlette.routing import Match
+    from oto_mcp.api import routes as api_routes
+    scope = {"type": "http", "method": "GET", "path_params": {},
+             "path": "/api/service/users/u-x/entitlements/platform_key:kaspr/effective"}
+    pleines = [r for r in api_routes.make_routes(object())
+               if r.matches(scope)[0] is Match.FULL]
+    assert [r.path for r in pleines] == [
+        "/api/service/users/{sub}/entitlements/{right_key}/effective"]

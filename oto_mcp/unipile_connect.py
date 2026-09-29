@@ -51,6 +51,16 @@ def _default_limit() -> int:
         return 5
 
 
+def plafond_de_comptes(org_id: int) -> int:
+    """Le plafond de comptes hébergés de l'org que le branchement applique : le sien
+    (`orgs.unipile_account_limit`), sinon le défaut d'env. `0` = pas de plafond.
+
+    ⚠️ Lecture HÉRITÉE du droit `unipile_seats` (limite (b) de `docs/droits-declares.md`,
+    où `0` veut dire « illimité ») : elle part quand `value_for` sera lu ici."""
+    limit = db.get_org_unipile_limit(org_id)
+    return _default_limit() if limit is None else limit
+
+
 def connections_page(sub: "str | None", org_id: "int | None") -> "str | None":
     """La page où CE compte connecte sa messagerie hébergée — chez SON produit.
 
@@ -191,9 +201,7 @@ async def hosted_auth_url(sub: str, channel: str = "linkedin",
     # Plafond de sièges hébergés (reconnexion d'un compte existant = remplacement, OK ;
     # une ADOPTION ci-dessous crée un binding dans cette org → soumise au même plafond).
     if platform_seat and db.get_unipile_account(sub, org_id, provider) is None:
-        limit = db.get_org_unipile_limit(org_id)
-        if limit is None:
-            limit = _default_limit()
+        limit = plafond_de_comptes(org_id)
         if limit and db.count_unipile_accounts_for_org(org_id) >= limit:
             logger.info("unipile cap hit org=%s limit=%s", org_id, limit)
             raise ConnectRefused(429, "unipile_account_limit_reached",

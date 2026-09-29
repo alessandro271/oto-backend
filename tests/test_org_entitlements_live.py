@@ -15,7 +15,9 @@ Ce que ces bancs tiennent :
   par l'unicité, refusée sans personne, retirée sans toucher les autres portées ;
 - **une ligne par personne ne fait qu'ajouter** : la valeur de l'org (ses lignes, sinon
   le défaut) relevée par la personne, jamais abaissée — prouvé par propriété sur une
-  grille exhaustive des trois portées et de défauts d'instance.
+  grille exhaustive des trois portées et de défauts d'instance ;
+- **la valeur effective servie** (#1096) : sur la même grille, la route de service
+  rend la lecture des points d'usage, et les lignes dont elle vient.
 """
 from __future__ import annotations
 
@@ -411,11 +413,11 @@ def _lecture_d_org(defaut, ligne_org):
     return defaut if ligne_org is None else ligne_org
 
 
-def test_monotonie_par_propriete_sur_les_trois_portees(live, monkeypatch):
-    """Pour tout défaut, toute ligne d'org, toute ligne de personne dans l'org et
-    partout : `value_for(None, org) ==` la lecture d'org, `value_for(sub, org) >=` elle
-    (exactement le plus grand des deux), et hors org la personne relève le défaut.
-    Une org et une personne neuves par cas : aucune ligne d'un cas ne fuit sur un autre."""
+def _poser_la_grille():
+    """Pose la grille : pour chaque cas (ligne d'org, ligne de personne dans l'org,
+    ligne de personne partout), une org et une personne NEUVES — aucune ligne d'un cas
+    ne fuit sur un autre —, plus une ligne échue de la personne et une ligne d'une
+    autre personne, qui ne doivent rien changer. Rend `(cas, poses)`, alignés."""
     cas = list(itertools.product(_ORG, _PERSONNE_ORG, _PERSONNE_PARTOUT))
     poses = []
     for ligne_org, ligne_perso, ligne_partout in cas:
@@ -426,16 +428,29 @@ def test_monotonie_par_propriete_sur_les_trois_portees(live, monkeypatch):
             E.grant(org, SIEGES, "offered", value=ligne_perso, sub=sub)
         if ligne_partout is not None:
             E.grant(None, SIEGES, "partner", value=ligne_partout, sub=sub)
-        # Une ligne échue ou d'une autre personne ne doit rien changer.
         E.grant(org, SIEGES, "trial", value=C.SANS_PLAFOND, sub=sub,
                 starts_at=HIER - timedelta(days=1), expires_at=HIER)
         E.grant(org, SIEGES, "trial", value=C.SANS_PLAFOND, sub=_sub())
         poses.append((org, sub))
-    verifies = 0
+    return cas, poses
+
+
+def _sous_chaque_defaut(monkeypatch):
+    """Chaque défaut d'instance de la grille, déclaré tour à tour."""
     for defaut in _DEFAUTS:
         monkeypatch.setenv("OTO_ENTITLEMENT_DEFAULTS", json.dumps({
             "unipile": 0, "platform_unmetered": 0, "unipile_seats": defaut,
             "members_max": "unlimited", "platform_key:*": 0}))
+        yield defaut
+
+
+def test_monotonie_par_propriete_sur_les_trois_portees(live, monkeypatch):
+    """Pour tout défaut, toute ligne d'org, toute ligne de personne dans l'org et
+    partout : `value_for(None, org) ==` la lecture d'org, `value_for(sub, org) >=` elle
+    (exactement le plus grand des deux), et hors org la personne relève le défaut."""
+    cas, poses = _poser_la_grille()
+    verifies = 0
+    for defaut in _sous_chaque_defaut(monkeypatch):
         for (ligne_org, ligne_perso, ligne_partout), (org, sub) in zip(cas, poses):
             ref = _lecture_d_org(defaut, ligne_org)
             personne = [v for v in (ligne_perso, ligne_partout) if v is not None]
@@ -448,5 +463,43 @@ def test_monotonie_par_propriete_sur_les_trois_portees(live, monkeypatch):
             assert hors_org >= defaut, contexte
             assert hors_org == max([defaut] + ([ligne_partout] if ligne_partout is not None
                                                else [])), contexte
+            verifies += 1
+    assert verifies == len(_DEFAUTS) * len(cas) == 288
+
+
+def test_la_valeur_effective_servie_est_la_lecture_des_points_d_usage(live, monkeypatch):
+    """#1096 : sur la même grille, la route de service `…/entitlements/{clé}/effective`
+    rend EXACTEMENT ce que lisent les points d'usage (`value_for`, `has_right`), dans
+    l'org et hors org ; `par` nomme les lignes valides lues, portée par portée (ni
+    l'échue, ni celle d'une autre personne) ; `defaut` dit si la valeur de l'org vient
+    du défaut d'instance."""
+    from oto_mcp import db
+    from oto_mcp.capabilities import registry
+    from oto_mcp.capabilities._types import ResolvedCtx
+    cap = next(c for c in registry.CAPABILITIES
+               if c.key == "service.user.entitlement.effective")
+    ctx = ResolvedCtx(sub="service:m2m-commerce", org_id=None, role="service:commerce")
+    cas, poses = _poser_la_grille()
+    for _, sub in poses:
+        db.upsert_user(sub)
+    verifies = 0
+    for defaut in _sous_chaque_defaut(monkeypatch):
+        for (ligne_org, ligne_perso, ligne_partout), (org, sub) in zip(cas, poses):
+            contexte = (defaut, ligne_org, ligne_perso, ligne_partout)
+            dans = cap.handler(ctx, cap.Input(sub=sub, right_key=SIEGES, org_id=org))
+            assert dans["valeur"] == value_for(sub, org, SIEGES), contexte
+            assert (dans["valeur"] >= 1) is access.has_right(sub, org, SIEGES), contexte
+            assert dans["defaut"] is (ligne_org is None), contexte
+            attendues = [(p, s, v) for p, s, v in (
+                ("org", "subscription", ligne_org),
+                ("personne_dans_org", "offered", ligne_perso),
+                ("personne_partout", "partner", ligne_partout)) if v is not None]
+            assert [(l["portee"], l["source"], l["valeur"]) for l in dans["par"]] == \
+                attendues, contexte
+            hors = cap.handler(ctx, cap.Input(sub=sub, right_key=SIEGES))
+            assert hors["valeur"] == value_for(sub, None, SIEGES), contexte
+            assert hors["defaut"] is True and hors["org_id"] is None, contexte
+            assert [l["portee"] for l in hors["par"]] == \
+                (["personne_partout"] if ligne_partout is not None else []), contexte
             verifies += 1
     assert verifies == len(_DEFAUTS) * len(cas) == 288
