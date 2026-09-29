@@ -101,6 +101,36 @@ def check_outputs(questions: Any, output: Any, model_column: Any, fields: dict,
         raise Refusal("Nothing sent: " + "; ".join(problems) + ".")
 
 
+def missing_columns(questions: Any, output: Any, model_column: Any,
+                    fields: dict) -> list[dict]:
+    """Column definitions to create, typed from the questions. Existing columns are
+    never touched; a bad call is left for `check_outputs` to refuse."""
+    if not isinstance(questions, dict) or not isinstance(output, dict):
+        return []
+    new: list[dict] = []
+
+    def add(key: str, **spec) -> None:
+        if key not in fields and all(f["key"] != key for f in new):
+            new.append({"key": key, **spec})
+
+    for q, col in output.items():
+        spec = questions.get(q)
+        if not isinstance(col, str) or not col or not isinstance(spec, dict):
+            continue
+        qtype, crit = spec.get("type"), spec.get("criteria")
+        if qtype == "choice" and isinstance(crit, dict) and crit:
+            add(col, type="enum", options=[str(k) for k in crit])
+        elif qtype in ("score", "noul") and crit:
+            add(col, type="number")
+        else:
+            continue
+        if qtype in ("choice", "score"):
+            add(f"{col}_p", type="number")
+    if isinstance(model_column, str) and model_column:
+        add(model_column, type="text")
+    return new
+
+
 def hidden_of(schema: Optional[dict]) -> frozenset:
     return frozenset(aga.masquees(schema) or ())
 

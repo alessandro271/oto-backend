@@ -135,3 +135,22 @@ async def test_leased_row_is_skipped_and_a_rerun_judges_nothing(monte):
     n = client.decide.call_count
     r = await _appeler(m, _args(ns))
     assert r["decided"] == 0 and client.decide.call_count == n
+
+
+@pytest.mark.asyncio
+async def test_missing_columns_are_created_on_a_real_schema(monte):
+    from oto_mcp import db
+    from oto_mcp.datastore.core import make_store
+    m, _, _ = monte
+    ns = f"jev-rows-{uuid.uuid4().hex[:6]}"
+    db.create_datastore("user", SUB, ns)
+    store = make_store(SUB)
+    store.set_schema(ns, {"fields": [{"key": "company", "type": "text"}]})
+    store.append_row(ns, {"company": "Co"})
+    r = await _appeler(m, _args(ns))
+    assert r["created_columns"] == ["q_fit", "q_fit_p", "q_model"] and r["decided"] == 1
+    keys = {f["key"]: f["type"] for f in store.get_schema(ns)["fields"]}
+    assert keys == {"company": "text", "q_fit": "number", "q_fit_p": "number",
+                    "q_model": "text"}
+    r = await _appeler(m, _args(ns))
+    assert r["created_columns"] == [] and r["decided"] == 0

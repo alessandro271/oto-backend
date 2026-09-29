@@ -350,6 +350,7 @@ class FakeStore:
                                    "description": "d" * 300, "_revision": "1"}
                      for i in range(n)}
         self.writes: list = []
+        self.patches: list = []
         self.locked: set = set()
         self.changed: set = set()
 
@@ -358,6 +359,11 @@ class FakeStore:
 
     def get_schema(self, adresse):
         return self.schema
+
+    def patch_schema(self, adresse, *, fields):
+        self.patches.append([f["key"] for f in fields])
+        self.schema = {**self.schema, "fields": list(self.schema["fields"]) + list(fields)}
+        return {"added": [f["key"] for f in fields]}
 
     def _match(self, r, filters):
         for c in filters or []:
@@ -514,7 +520,7 @@ def test_rows_overwrite_rejudges_decided_rows(rows_env):
 @pytest.mark.parametrize("kw, needle", [
     (dict(questions={"fit": {"type": "score", "instructions": "x"}}, output={"fit": "q_fit"}),
      "`criteria` is required"),
-    (dict(output={"fit": "q_nope", "seg": "q_seg"}), "q_nope"),
+    (dict(output={"fit": "company", "seg": "q_seg"}), "`company` is 'text'"),
     (dict(output={"fit": "q_fit"}), "missing ['seg']"),
     (dict(output={"fit": "q_seg", "seg": "q_fit"}), "needs"),
     (dict(model_column="q_fit"), "model_column"),
@@ -528,14 +534,54 @@ def test_rows_bad_calls_are_refused_before_any_upstream_call(rows_env, kw, needl
     assert client.decide.call_count == 0 and "quantity" not in releve
 
 
-def test_rows_enum_missing_an_option_and_missing_p_column_are_refused(rows_env):
-    fn, _, store, _ = rows_env
-    store.schema = {"fields": [f for f in SCHEMA["fields"] if f["key"] != "q_fit_p"]}
-    store.schema["fields"] = [dict(f, options=["A"]) if f["key"] == "q_seg" else f
-                              for f in store.schema["fields"]]
+def test_rows_existing_enum_missing_an_option_is_refused_never_widened(rows_env):
+    fn, client, store, _ = rows_env
+    store.schema = {"fields": [dict(f, options=["A"]) if f["key"] == "q_seg" else f
+                               for f in SCHEMA["fields"]]}
     with pytest.raises(McpError) as e:
         _call(fn)
-    assert "q_fit_p" in str(e.value) and "lacks option(s) B" in str(e.value)
+    assert "lacks option(s) B" in str(e.value)
+    assert store.patches == [] and client.decide.call_count == 0
+
+
+BARE = {"fields": [{"key": "company", "type": "text"}, {"key": "description", "type": "text"}]}
+
+
+def test_rows_creates_missing_output_columns_typed_from_the_questions(rows_env):
+    fn, client, store, _ = rows_env
+    store.schema = dict(BARE)
+    r = _call(fn, output={"fit": "q_fit", "seg": "q_seg"})
+    assert r["created_columns"] == ["q_fit", "q_fit_p", "q_seg", "q_seg_p", "q_model"]
+    types = {f["key"]: (f["type"], f.get("options")) for f in store.schema["fields"]}
+    assert types["q_fit"] == ("number", None) and types["q_fit_p"] == ("number", None)
+    assert types["q_seg"] == ("enum", ["A", "B"]) and types["q_model"] == ("text", None)
+    assert r["decided"] == 5 and store.writes[0][1]["q_seg"] == "A"
+
+
+def test_rows_column_creation_is_idempotent(rows_env):
+    fn, _, store, _ = rows_env
+    store.schema = dict(BARE)
+    _call(fn)
+    r = _call(fn)
+    assert r["created_columns"] == [] and len(store.patches) == 1
+
+
+def test_rows_dry_run_creates_nothing_and_says_what_it_would(rows_env):
+    fn, _, store, _ = rows_env
+    store.schema = dict(BARE)
+    r = _call(fn, dry_run=True)
+    assert store.patches == [] and store.writes == []
+    assert r["would_create_columns"] == ["q_fit", "q_fit_p", "q_seg", "q_seg_p", "q_model"]
+    assert len(r["rows"]) == 5
+
+
+def test_rows_noul_creates_no_p_column(rows_env):
+    fn, client, store, _ = rows_env
+    store.schema = dict(BARE)
+    client.decide.return_value = {"model": "m", "answers": {"ok": {"type": "noul", "noul": 0.7}},
+                                  "usage": {"cost": 1e-05}}
+    r = _call(fn, questions={"ok": NOUL}, output={"ok": "q_ok"})
+    assert r["created_columns"] == ["q_ok", "q_model"]
 
 
 def test_rows_noul_writes_p_and_needs_no_p_column(rows_env):

@@ -353,6 +353,8 @@ def register(mcp: FastMCP) -> None:
         model snapshot to `model_column`. A `noul` writes its probability; a score writes
         the expected level (e.g. 3.34). Rows Jev can never answer (state too large,
         upstream 400) get `jev_error: <reason>` in `model_column`.
+        Missing output, `<column>_p` and `model_column` columns are created, typed from
+        the questions (choice → enum of its criteria); existing ones are never changed.
 
         Only undecided rows are taken (`model_column` empty) unless `overwrite=true`, so a
         re-run resumes and never pays twice. Rows leased by another run are skipped, and a
@@ -370,15 +372,18 @@ def register(mcp: FastMCP) -> None:
         about 50 µ$ per row for 3 questions and a 500-character description.
 
         Returns — `{decided, jev_errors, skipped_leased, skipped_changed, errors,
-        low_confidence, thin_state, next_cursor, remaining, done, cost, model, sample}`;
-        `dry_run` returns `rows` (every judged row with its answers) and writes nothing.
+        low_confidence, thin_state, created_columns, next_cursor, remaining, done, cost,
+        model, sample}`; `dry_run` returns `rows` (every judged row with its answers) and
+        `would_create_columns`, and writes nothing.
 
         Args:
             datastore: the table number (ns_id) or `slot:<name>`.
             questions: the rubric, same shape and rules as `jev_ask`; `criteria` required.
             state_fields: columns to send, each a name or `{name: max_chars}`.
             output: `{question: column}`; choice → text/enum, score and noul → number.
-            model_column: text column for the model snapshot or `jev_error`; required.
+                Missing columns are created.
+            model_column: text column for the model snapshot or `jev_error`; required
+                (created if missing).
             filter: `data_rows` filter grammar.
             filters: `data_rows` multi-column clauses.
             limit: max rows judged in this call (default and max 500; dry run max 20).
@@ -418,14 +423,25 @@ def register(mcp: FastMCP) -> None:
         fields = jr.fields_of(schema)
         if not fields:
             raise _bad("`jev_rows` needs a declared schema on the table. Nothing sent.")
+        # Missing output columns are created (typed from the questions); existing ones
+        # are checked, never altered.
+        a_creer = jr.missing_columns(questions, output, model_column, fields)
         try:
             cols = jr.check_state_fields(state_fields, fields, jr.hidden_of(schema))
-            jr.check_outputs(questions, output, model_column, fields, jr.closed_of(schema))
+            jr.check_outputs(questions, output, model_column,
+                             {**fields, **{f["key"]: f for f in a_creer}},
+                             jr.closed_of(schema))
         except jr.Refusal as e:
             raise _bad(str(e))
+        if a_creer and not dry_run:
+            try:
+                store.patch_schema(adresse, fields=a_creer)
+            except ValueError as e:
+                raise _bad(f"Could not create the output columns: {e}. Nothing sent.")
 
         clauses = list(filters or [])
-        if not overwrite:
+        # In a dry run a column still to be created is empty everywhere: no clause.
+        if not overwrite and not (dry_run and model_column in {f["key"] for f in a_creer}):
             clauses.append({"field": model_column, "op": "empty", "value": True})
         proj = [c for c, _ in cols] + ["_revision", "_claimed_by", "_claimed_until",
                                         "_claimed_run"]
@@ -601,7 +617,10 @@ def register(mcp: FastMCP) -> None:
         tout_fait = all(fait.get(r) for r in ordre)
         done = (remaining == 0) if remaining is not None else (epuise and tout_fait)
         next_cursor = None if done else (_encode_cursor(borne) if borne else cursor)
+        creees = [f["key"] for f in a_creer]
         out = {**n, "errors": erreurs[:20], "error_count": len(erreurs),
+               **({"would_create_columns": creees} if dry_run
+                  else {"created_columns": creees}),
                "next_cursor": next_cursor, "remaining": remaining,
                "done": done, "cost": cout, "model": servi, "dry_run": dry_run}
         if dry_run:
