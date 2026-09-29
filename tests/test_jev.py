@@ -588,3 +588,37 @@ def test_rows_key_failure_stops_and_bills_what_was_given(rows_env):
         _call(fn, parallel=1)
     assert "402" in str(e.value) and "2 row(s) already written" in str(e.value)
     assert releve["quantity"] == 96 and len(store.writes) == 2
+
+
+#: Real upstream answers (typesafe/jev-1.13-20260917, a public trade-show exhibitor),
+#: legends and zero probabilities trimmed.
+REAL = {"model": "typesafe/jev-1.13-20260917",
+        "answers": {
+            "fit": {"type": "score", "score": 3.34, "confidence": 0.71,
+                    "probabilities": {"3": 0.66, "4": 0.34},
+                    "legend": {"3": "Strong", "4": "Ideal"}},
+            "segment": {"type": "choice", "choice": "Printer OEM", "confidence": 1,
+                        "probabilities": {"Printer OEM": 1, "Materials": 0}}},
+        "usage": {"input_tokens": 1150, "cost": 4.83e-05}}
+
+
+def test_rows_real_answers_land_in_the_right_cells(rows_env):
+    fn, client, store, releve = rows_env
+    store.schema = {"fields": [
+        {"key": "company", "type": "text"}, {"key": "description", "type": "text"},
+        {"key": "q_fit", "type": "number"}, {"key": "q_fit_p", "type": "number"},
+        {"key": "q_segment", "type": "enum", "options": ["Printer OEM", "Materials"]},
+        {"key": "q_segment_p", "type": "number"}, {"key": "q_model", "type": "text"}]}
+    store.rows = {"r000": {"_id": "r000", "company": "Acme Printers, Inc.",
+                           "description": "Micro-precision 3D printers.", "_revision": "1"}}
+    client.decide.return_value = REAL
+    qs = {"fit": QS["fit"],
+          "segment": {"type": "choice", "instructions": "segment?",
+                      "criteria": {"Printer OEM": "printers", "Materials": "powders"}}}
+    r = _call(fn, questions=qs, output={"fit": "q_fit", "segment": "q_segment"})
+    assert r["decided"] == 1
+    row = store.rows["r000"]
+    assert row["q_fit"] == 3.34 and row["q_fit_p"] == 0.71
+    assert row["q_segment"] == "Printer OEM" and row["q_segment_p"] == 1
+    assert row["q_model"] == "typesafe/jev-1.13-20260917"
+    assert releve["quantity"] == 49
