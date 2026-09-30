@@ -125,6 +125,7 @@ def record(tool: str, *, sub: Optional[str], ctx: NsContext, row_id: Optional[st
         # ⚠️ PAS dans `args` : `truncated_args` y stringifierait la liste et la
         # couperait au-delà de `calllog.MAX_ARG_CHARS`. Même raison que `fields`, même chemin.
         forced=forced,
+        forced_bilan=getattr(forced, "bilan", None),
     )
 
 

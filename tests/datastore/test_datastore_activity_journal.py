@@ -558,7 +558,7 @@ def test_trace_only_yields_a_closed_set_of_keys():
     `org.usage.calls`). Une clé s'ajoute ICI, à la main, dans le commit qui la provoque."""
     from oto_mcp import server
     assert server._TRACED_ARGS == ("ns_id", "doctrine_version", "instance",
-                                   "readonly_forced",
+                                   "readonly_forced", "readonly_forced_bilan",
                                    "found_work_emails", "found_personal_emails",
                                    "found_phones")
 

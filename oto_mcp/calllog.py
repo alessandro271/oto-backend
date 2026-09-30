@@ -230,7 +230,8 @@ def _fields_list(fields: Any) -> list[str]:
 
 
 def log_rest_call(tool: str, *, sub: str | None, args: dict | None = None,
-                  fields: Any = None, forced: Any = None, ok: bool = True,
+                  fields: Any = None, forced: Any = None, forced_bilan: Any = None,
+                  ok: bool = True,
                   error: str | None = None,
                   org_id: int | None = None, duration_ms: int | None = None) -> None:
     """Journalise un GESTE fait depuis le dashboard (REST) dans le flux unifié.
@@ -261,7 +262,10 @@ def log_rest_call(tool: str, *, sub: str | None, args: dict | None = None,
         "tool": tool,
         "args": {**(truncated_args(args, tool=tool) or {}),
                  "fields": _fields_list(fields),
-                 **({"readonly_forced": list(forced)} if forced else {})},
+                 **({"readonly_forced": list(forced)} if forced else {}),
+                 # Le relevé écrêté se DIT : sans cette clé, le compte d'un lecteur du
+                 # journal passerait pour un total (oto#139).
+                 **({"readonly_forced_bilan": forced_bilan} if forced_bilan else {})},
         "ok": bool(ok),
         "error": (str(error)[:MAX_ERROR_CHARS] if error else None),
         "org_id": org_id,

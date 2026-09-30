@@ -197,7 +197,9 @@ class GetRowInput(RowRefInput):
 _FORCAGE = Field(default=False, description=(
     "Remplacer les colonnes verrouillées (`readonly`) que cet appel écrit, au lieu "
     "d'être refusé. Réservé au propriétaire du tableau ou à qui le gouverne ; ne vaut "
-    "que pour cet appel ; journalisé (ligne, colonne, valeur remplacée)."))
+    "que pour cet appel ; journalisé (ligne, colonne, valeur remplacée) — relevé "
+    "borné (25 substitutions, valeurs coupées à 120 caractères), qui le dit quand il "
+    "est écrêté ; l'historique complet est celui de la ligne (`…/rows/{id}/history`)."))
 
 # oto#140 : le forçage par CIBLES. Il coexiste avec le booléen ci-dessus pendant le
 # préavis — nommer ses cibles est un geste plus précis, pas un droit différent.

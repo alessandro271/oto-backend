@@ -16,13 +16,13 @@ from __future__ import annotations
 import copy
 from typing import Optional
 
-from .. import db, ownership, session_org
+from .. import db, geste, ownership, session_org
 from . import ecartes as dsec
 from . import schema as dsv2
 from . import formule as dsformule
 from .columns import effacements_report, ignores_report
 from .errors import RowValidationError
-from .forcage import Forcage
+from .forcage import Forcage, ReleveForce
 
 
 class ControlesMixin:
@@ -130,8 +130,11 @@ class ControlesMixin:
         releve = forcage.releve()
         if not releve:
             return
-        self.off_forced = list(releve)
-        session_org.note_call_trace(readonly_forced=list(releve))
+        en_cours = geste.courant()
+        bilan = forcage.bilan(en_cours.geste_id if en_cours else None)
+        self.off_forced = ReleveForce(releve, bilan)
+        session_org.note_call_trace(readonly_forced=list(releve),
+                                    readonly_forced_bilan=bilan)
 
     def _ecarter(self, schema: Optional[dict], merged: dict, errors: list,
                  hors: list, *, prev_status=None,

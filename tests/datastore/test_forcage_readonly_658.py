@@ -501,7 +501,90 @@ def test_le_releve_est_borne_en_nombre_et_en_longueur():
         f.relever(f"col{i}", "x" * 500, "y")
         f.rattacher(f"r{i}")
     assert len(f.forcees) == fcg.MAX_RELEVE
-    assert len(f.forcees[0]["was"]) == fcg.MAX_VALEUR
+    assert len(f.forcees[0]["was"]) == fcg.MAX_VALEUR + 1     # + la marque `…`
+
+
+def test_une_valeur_coupee_le_DIT_avec_sa_longueur_d_origine():
+    """oto#139 : la coupe n'est jamais muette — `…` au bout, longueur d'origine à côté.
+    Une valeur qui tient, ou un scalaire, n'a aucune marque."""
+    f = fcg.Forcage(demande=True, autorise=True)
+    f.relever("a", "x" * 500, "court")
+    f.relever("b", 42, "y" * fcg.MAX_VALEUR)       # pile à la borne : entière
+    f.rattacher("r1")
+    a, b = f.releve()
+    assert a["was"] == "x" * fcg.MAX_VALEUR + "…" and a["was_len"] == 500
+    assert a["now"] == "court" and "now_len" not in a
+    assert b["was"] == 42 and "was_len" not in b
+    assert b["now"] == "y" * fcg.MAX_VALEUR and "now_len" not in b
+
+
+def test_un_releve_ecrete_dit_combien_il_y_en_avait_et_ou_lire_le_reste():
+    f = fcg.Forcage(demande=True, autorise=True)
+    for i in range(fcg.MAX_RELEVE + 10):
+        f.relever(f"col{i}", "a", "b")
+    f.rattacher("r1")
+    bilan = f.bilan("g123")
+    assert (bilan["relevees"], bilan["total"], bilan["plancher"]) == (
+        fcg.MAX_RELEVE, fcg.MAX_RELEVE + 10, True)
+    assert bilan["geste_id"] == "g123"
+    assert "data_row_history" in bilan["historique"] and "g123" in bilan["historique"]
+    sans_geste = f.bilan(None)
+    assert "geste_id" not in sans_geste and "data_row_history" in sans_geste["historique"]
+
+
+def test_un_releve_complet_n_a_pas_de_bilan():
+    f = fcg.Forcage(demande=True, autorise=True)
+    f.relever("a", "1", "2")
+    f.rattacher("r1")
+    assert f.bilan("g") is None
+
+
+def test_un_apply_rejoue_au_dela_de_la_borne_ne_compte_pas_deux_fois():
+    f = fcg.Forcage(demande=True, autorise=True)
+    for i in range(fcg.MAX_RELEVE):
+        f.relever(f"c{i}", "a", "b")
+    f.rattacher("r0")
+    f.relever("extra", "a", "b")
+    f.relever("extra", "a", "b")          # rejeu du même `_apply`
+    f.rattacher("r1")
+    assert f.bilan()["total"] == fcg.MAX_RELEVE + 1
+
+
+def test_un_geste_refuse_ne_compte_pas_dans_le_bilan():
+    f = fcg.Forcage(demande=True, autorise=True)
+    for i in range(fcg.MAX_RELEVE + 3):
+        f.relever(f"c{i}", "a", "b")      # jamais rattaché : l'écriture a échoué
+    assert f.bilan() is None and f.releve() == []
+
+
+def test_le_bilan_atteint_le_releve_MCP_et_la_ligne_REST(monkeypatch):
+    """Les deux journaux, par le vrai `_relever_forcage` : clé `readonly_forced_bilan`
+    sur la trace d'appel MCP (allowlistée), et sur `journal.record` côté REST."""
+    from oto_mcp import geste, server
+    from oto_mcp.datastore import journal
+    from oto_mcp.datastore.controles import ControlesMixin
+    assert "readonly_forced_bilan" in server._TRACED_ARGS
+    store = ControlesMixin()
+    f = fcg.Forcage(demande=True, autorise=True)
+    for i in range(fcg.MAX_RELEVE + 5):
+        f.relever(f"c{i}", "a", "b")
+    holder: dict = {}
+    token = session_org.set_call_trace(holder)
+    jeton = geste.poser("agent", "s", "g-42")
+    try:
+        store._relever_forcage(f, "r1")
+    finally:
+        geste.retirer(jeton)
+        session_org.reset_call_trace(token)
+    assert holder["readonly_forced_bilan"]["total"] == fcg.MAX_RELEVE + 5
+    assert holder["readonly_forced_bilan"]["geste_id"] == "g-42"
+    assert len(holder["readonly_forced"]) == fcg.MAX_RELEVE
+    lignes: list = []
+    monkeypatch.setattr(journal.calllog, "log_rest_call",
+                        lambda *a, **k: lignes.append(k))
+    journal.record("data_write", sub="s", ctx=type("C", (), {"name": "t", "ns_id": 1})(),
+                   forced=store.off_forced)
+    assert lignes[0]["forced_bilan"] == holder["readonly_forced_bilan"]
 
 
 def test_un_apply_rejoue_ne_compte_pas_deux_fois():

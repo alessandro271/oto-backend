@@ -1237,6 +1237,14 @@ Ce qui le remplace, en trois pièces (`datastore/forcage.py`) :
   journal ne remonte qu'à ~35 jours** : la trace disparaîtra alors que la valeur forcée
   restera. Arbitré en connaissance de cause le 02/09/2026 — pas de colonne de plus sur la
   ligne.
+  **Un relevé borné le dit (oto#139).** Au plus `MAX_RELEVE` = 25 substitutions par
+  appel, chaque valeur coupée à `MAX_VALEUR` = 120 caractères. Une valeur coupée finit
+  par `…` et l'entrée porte `was_len` / `now_len` (longueur d'origine) ; un relevé écrêté
+  ajoute la clé `readonly_forced_bilan` (mêmes deux faces que `readonly_forced`) —
+  `{relevees: 25, total: N, plancher: true, geste_id?, historique}`. Sans elle, le relevé
+  est complet ; avec elle, le compte des entrées est un **plancher**. L'histoire entière,
+  valeurs entières, est au journal des révisions de ligne (oto#273) : `data_row_history` /
+  `GET …/rows/{id}/history`, où les révisions de l'appel portent son `geste_id`.
 
 ## `required_layers` — la valeur n'arrive pas sans sa provenance (oto#75, 06/09/2026)
 

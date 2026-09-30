@@ -55,6 +55,12 @@ PARAMETRE = "readonly_override"
 
 # Ce que le journal garde d'un forçage, borné. Un lot force autant de lignes qu'il en
 # porte ; la ligne de journal, elle, doit rester lisible et insérable.
+#
+# ⚠️ **Borné ne veut pas dire muet** (oto#139) : un relevé écrêté le DIT (`bilan` : « 25
+# relevées sur N »), une valeur coupée porte sa longueur d'origine (`was_len` /
+# `now_len`, et `…` au bout, comme `calllog.truncated_args`). Un compte tronqué qui ne
+# s'annonce pas tronqué est pire qu'une absence de compte. L'histoire COMPLÈTE, valeurs
+# entières, est au journal des révisions de ligne (oto#273) : `data_row_history`.
 MAX_RELEVE = 25
 MAX_VALEUR = 120
 
@@ -81,14 +87,28 @@ PALIER = ("le PROPRIÉTAIRE du tableau (toi, ton org ou ton équipe) ou celui qu
           "GOUVERNE")
 
 
-def _borne(valeur: Any) -> Any:
-    """La valeur telle que le journal la gardera : les scalaires JSON tels quels, tout
-    le reste stringifié et coupé. Le journal doit dire CE QUI a été remplacé, pas
-    reporter une fiche entière dans une colonne d'audit."""
+def _borne(valeur: Any) -> tuple:
+    """`(valeur, longueur_d_origine)` telle que le journal la gardera : les scalaires
+    JSON tels quels, tout le reste stringifié et coupé (marque `…`). La longueur n'est
+    rendue (sinon `None`) que si la valeur a été COUPÉE. Le journal doit dire CE QUI a
+    été remplacé, pas reporter une fiche entière dans une colonne d'audit."""
     if valeur is None or isinstance(valeur, (bool, int, float)):
-        return valeur
+        return valeur, None
     texte = valeur if isinstance(valeur, str) else str(valeur)
-    return texte[:MAX_VALEUR]
+    if len(texte) <= MAX_VALEUR:
+        return texte, None
+    return texte[:MAX_VALEUR] + "…", len(texte)
+
+
+def _entree(colonne: str, avant: Any, apres: Any, row: Optional[str] = None) -> dict:
+    """Une substitution relevée. `was_len` / `now_len` n'existent QUE si le côté a été
+    coupé : leur présence est la marque de troncature."""
+    entree = {"row": row, "col": colonne}
+    for cle, valeur in (("was", avant), ("now", apres)):
+        entree[cle], longueur = _borne(valeur)
+        if longueur is not None:
+            entree[f"{cle}_len"] = longueur
+    return entree
 
 
 @dataclass
@@ -106,6 +126,9 @@ class Forcage:
     demande: bool = False
     autorise: bool = False
     forcees: list = field(default_factory=list)
+    #: Substitutions au-delà de `MAX_RELEVE`, comptées et non gardées : (colonne, rattachée).
+    #: Le compte total du bilan en dépend — sans elles, l'écrêtage serait muet.
+    debord: list = field(default_factory=list)
     #: Les chemins nommés par `force: [...]` (oto#140). `None` = le geste vaut pour
     #: TOUT l'appel — la forme historique du booléen.
     #:
@@ -149,15 +172,19 @@ class Forcage:
         if any(self._reprendre(e, colonne, avant, apres) for e in self.forcees):
             return
         if len(self.forcees) >= MAX_RELEVE:
+            # Écrêté : on ne garde pas l'entrée, mais on la COMPTE. Même règle de
+            # rejeu que ci-dessus pour celles qui n'ont pas encore leur ligne.
+            if not any(d["col"] == colonne and not d["rattachee"] for d in self.debord):
+                self.debord.append({"col": colonne, "rattachee": False})
             return
-        self.forcees.append({"row": None, "col": colonne,
-                             "was": _borne(avant), "now": _borne(apres)})
+        self.forcees.append(_entree(colonne, avant, apres))
 
     @staticmethod
     def _reprendre(entree: dict, colonne: str, avant: Any, apres: Any) -> bool:
         if entree.get("row") is not None or entree.get("col") != colonne:
             return False
-        entree["was"], entree["now"] = _borne(avant), _borne(apres)
+        entree.clear()
+        entree.update(_entree(colonne, avant, apres))
         return True
 
     def rattacher(self, row_id: Optional[str]) -> None:
@@ -166,10 +193,45 @@ class Forcage:
         for entree in self.forcees:
             if entree.get("row") is None:
                 entree["row"] = None if row_id is None else str(row_id)
+        for d in self.debord:
+            d["rattachee"] = True
 
     def releve(self) -> list:
         """Ce qui part au journal — les seules entrées rattachées à une ligne écrite."""
         return [e for e in self.forcees if e.get("row") is not None]
+
+    def bilan(self, geste_id: Optional[str] = None) -> Optional[dict]:
+        """Ce que le relevé dit de LUI-MÊME quand il est écrêté — `None` sinon.
+
+        `{"relevees": 25, "total": N, "plancher": True, "historique": …}` : le compte
+        lu dans le journal est un PLANCHER, jamais un total. `historique` renvoie au
+        journal des révisions de ligne (valeurs entières) : `data_row_history` par
+        ligne, où les révisions de CET appel portent `geste_id` — quand le contexte
+        le connaît, il est donné."""
+        gardees = len(self.releve())
+        ecartees = sum(1 for d in self.debord if d["rattachee"])
+        if not ecartees:
+            return None
+        bilan = {"relevees": gardees, "total": gardees + ecartees, "plancher": True}
+        if geste_id:
+            bilan["geste_id"] = geste_id
+        bilan["historique"] = (
+            "relevé écrêté : l'historique complet (valeurs entières) est au journal "
+            "des révisions — `data_row_history(datastore, row_id)`"
+            + (f", révisions dont `geste_id` = {geste_id}" if geste_id else "")
+            + " ; le compte ci-dessus est un plancher")
+        return bilan
+
+
+class ReleveForce(list):
+    """Le relevé rendu à la face REST : une liste d'entrées, plus son `bilan` quand il
+    est écrêté. Une sous-classe de `list` pour que `DatastorePg.off_forced` reste ce
+    qu'il était (une liste, passée telle quelle à `journal.record`) sans qu'aucune face
+    n'ait à changer de signature."""
+
+    def __init__(self, entrees=(), bilan: Optional[dict] = None):
+        super().__init__(entrees)
+        self.bilan = bilan
 
 
 def arbitrer(forcage: Optional[Forcage], colonne: str,

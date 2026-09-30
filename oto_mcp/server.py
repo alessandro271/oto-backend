@@ -475,6 +475,9 @@ _SERVER_INSTRUCTIONS = instructions.render()
 # remonte qu'à ~35 jours, donc la trace disparaît alors que la valeur forcée reste —
 # la question a été posée et fermée en connaissance de cause. Le « qui » n'est pas
 # répété ici : le sink stampe déjà `sub` et `org_id`.
+# `readonly_forced_bilan` (oto#139) — présent SEULEMENT quand le relevé ci-dessus est
+# écrêté : `{relevees, total, plancher, geste_id?, historique}`. Sa présence dit que le
+# compte des entrées est un plancher, et où lire le reste (`data_row_history`).
 #
 # `quantity` (21/08, facturation du partenaire) utilise le MÊME seam (`note_call_trace`) mais
 # N'EST PAS dans cette liste : elle a SA PROPRE colonne (`tool_calls.quantity`),
@@ -489,7 +492,7 @@ _SERVER_INSTRUCTIONS = instructions.render()
 # stringifié ni coupé. Ils facturent : `tools/meta._BILLING_TRACE_KEYS` les garde sur
 # la ligne CIBLE d'un `oto_call`, jamais sur l'enveloppe.
 _TRACED_ARGS = ("ns_id", "doctrine_version", "instance", "readonly_forced",
-                "found_work_emails", "found_personal_emails", "found_phones")
+                "readonly_forced_bilan", "found_work_emails", "found_personal_emails", "found_phones")
 
 
 _PREPARED = False

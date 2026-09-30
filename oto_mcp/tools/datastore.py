@@ -953,7 +953,12 @@ def register(mcp: FastMCP) -> None:
         with you in write is refused, by design. It applies to this one call and
         nothing else: there is no schema setting to reopen and therefore none to
         close back. Every forced replacement is written to the call journal (row,
-        column, replaced value) next to who called.
+        column, replaced value) next to who called. ⚠️ That journal entry is
+        BOUNDED: at most 25 replacements per call, each value cut at 120
+        characters (`…`, with `was_len`/`now_len` giving the original length). When
+        it is cut short it says so (`readonly_forced_bilan`: "25 of N") — the count
+        you read there is then a floor. The full history, whole values, is the row
+        history: `data_row_history`.
 
         On a datastore with a STRICT schema, any key you write that the schema does
         NOT declare comes back in `hors_schema` (with `hors_schema_hint`): the write
