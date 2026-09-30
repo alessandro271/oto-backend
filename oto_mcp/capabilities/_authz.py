@@ -100,6 +100,13 @@ def refus_hors_vue(quoi: str) -> AuthzDenied:
                        "cette org, la lecture est refusée.")
 
 
+def refus_de_famille(e: "db.SlugDeLAutreFamille") -> AuthzDenied:
+    """LE refus d'un slug que l'AUTRE famille porte déjà dans la portée (oto#100) —
+    guide à charger ↔ procédure. Un seul code sur les deux surfaces, et le message du
+    store tel quel : c'est lui qui NOMME l'objet en place et les gestes possibles."""
+    return AuthzDenied(409, "family_conflict", str(e), e.existant)
+
+
 def _require_sub(raw: RawCtx) -> str:
     if not raw.sub:
         raise AuthzDenied(401, "auth_required", "Authentification requise.")

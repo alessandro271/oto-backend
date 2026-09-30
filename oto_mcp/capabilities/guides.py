@@ -26,8 +26,8 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from .. import group_store, guide_store, session_org, tool_alias
-from ._authz import SUB_ONLY, refus_hors_vue
+from .. import db, group_store, guide_store, session_org, tool_alias
+from ._authz import SUB_ONLY, refus_de_famille, refus_hors_vue
 from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
@@ -361,6 +361,8 @@ def _set(ctx: ResolvedCtx, inp: GuideSetInput) -> dict:
         raise AuthzDenied(409, "delivery_conflict", str(e))
     except guide_store.GuideError as e:
         raise AuthzDenied(400, "invalid_guide", str(e))
+    except db.SlugDeLAutreFamille as e:        # une procédure porte ce slug (oto#100)
+        raise refus_de_famille(e)
 
 
 def _delete(ctx: ResolvedCtx, inp: GuideRefInput) -> dict:
@@ -387,6 +389,34 @@ def _delete(ctx: ResolvedCtx, inp: GuideRefInput) -> dict:
     return {"scope": inp.scope, "slug": inp.slug, "deleted": True}
 
 
+def _une_seule_consigne(ctx: ResolvedCtx, lu: dict) -> None:
+    """Refuse de servir À L'AGENT un guide dont une PROCÉDURE porte le slug dans la
+    même portée (oto#100).
+
+    Jusqu'ici rien ne tranchait : `oto_guide` lisait le guide, `oto_procedure` et le
+    runner la procédure, et l'agent recevait l'une ou l'autre selon l'outil appelé.
+    Mesuré en production : la procédure tenue à jour (v3), le guide resté à une
+    version antérieure — servi sans un mot. La procédure est la consigne qu'exécute
+    le runner et la seule versionnée : le refus y renvoie, en la nommant, et dit
+    comment retirer le doublon. Face MCP seulement : l'écran (`me.guides.get`) doit
+    pouvoir montrer ce guide à qui va le supprimer."""
+    owner = {"org": ctx.org_id, "user": ctx.sub}.get(lu.get("scope"))
+    if owner is None:                      # plateforme, tenant : aucune procédure là
+        return
+    p = db.procedure_du_slug(lu["scope"], str(owner), lu["slug"])
+    if p is None or p["archived"]:         # une procédure RETIRÉE n'est plus une consigne
+        return
+    s, sc = lu["slug"], lu["scope"]
+    raise AuthzDenied(
+        409, "family_conflict",
+        f"`{s}` (scope {sc}) existe en DOUBLE : ce guide, et une PROCÉDURE "
+        f"(#{p['guide_id']}, v{p['version']}) du même slug dans la même portée. Deux "
+        "textes, dont un seul est tenu à "
+        "jour — le guide n'est pas servi. La consigne est la procédure : "
+        f"`oto_procedure(op='get', slug='{s}', scope='{sc}')`. Pour retirer le "
+        f"doublon : `oto_guide(op='delete', slug='{s}', scope='{sc}')`.", p)
+
+
 def _guide_op(ctx: ResolvedCtx, inp: GuideOpInput) -> dict:
     """Dispatch de la face MCP sur les MÊMES handlers que les faces REST."""
     if inp.op == "list":
@@ -399,9 +429,12 @@ def _guide_op(ctx: ResolvedCtx, inp: GuideOpInput) -> dict:
         # Lecture on-demand : `scope` est un FILTRE optionnel (le store cherche dans
         # l'ordre de visibilité plateforme → org → user quand il est omis). Un init,
         # lui, se lit toujours à un scope donné (défaut : le sien).
-        return _get(ctx, GuideRefInput(scope=inp.scope or ("user" if init else ""),
-                                       slug=inp.slug or "", delivery=inp.delivery,
-                                       owner_id=inp.owner_id))
+        lu = _get(ctx, GuideRefInput(scope=inp.scope or ("user" if init else ""),
+                                     slug=inp.slug or "", delivery=inp.delivery,
+                                     owner_id=inp.owner_id))
+        if not init:
+            _une_seule_consigne(ctx, lu)
+        return lu
     scope = inp.scope or "user"
     if inp.op == "delete":
         return _delete(ctx, GuideRefInput(scope=scope, slug=inp.slug or "",
@@ -435,6 +468,11 @@ CAPABILITIES += [
             "This is PROSE: a repeatable process with slots is a procedure (`oto_procedure`), "
             "and what oto knows about the user is their profile card (`oto_profile`)."),
         mcp="oto_guide",
+        errors=(DeclaredError(409, "family_conflict",
+                              "une PROCÉDURE porte ce slug dans la même portée "
+                              "(oto#100) — à l'écriture, un guide neuf ne s'y crée pas ; "
+                              "à la lecture par l'agent, le guide en double n'est pas "
+                              "servi. Le refus nomme la procédure ; rien n'est écrit"),),
     ),
     Capability(
         key="me.guides.list", handler=_list, Input=_NoInput, authz=SUB_ONLY, mcp=None,
@@ -461,7 +499,11 @@ CAPABILITIES += [
                 DeclaredError(409, "delivery_conflict",
                               "ce `(scope, slug)` porte déjà une couche de l'AUTRE "
                               "livraison — un guide à charger ne remplace pas un "
-                              "readme injecté, ni l'inverse ; rien n'est écrit"),),
+                              "readme injecté, ni l'inverse ; rien n'est écrit"),
+                DeclaredError(409, "family_conflict",
+                              "une PROCÉDURE porte déjà ce slug dans la même portée "
+                              "(oto#100) — un guide neuf ne s'y crée pas ; le refus "
+                              "nomme la procédure, rien n'est écrit"),),
         description=(
             "Create/update a guide (scope=platform|org|group|user|tenant). "
             "`delivery='init'` writes that scope's injected readme (empty body clears it). "

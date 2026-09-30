@@ -13,6 +13,7 @@ from typing import Optional
 
 from . import instructions
 from ..db import _connect
+from ..db.guides import guide_du_slug
 
 
 # --- bibliothèque publique de guides (marketplace) ---
@@ -197,7 +198,10 @@ def fork_into_org(*, entry_id: int, org_id: int, new_slug: Optional[str] = None,
     base_slug = instructions.normalize_slug(new_slug or entry["slug"])
     slug = base_slug
     n = 2
-    while instructions.get_instruction("org", org_id, slug) is not None:
+    # Libre dans les DEUX familles (oto#100) : un guide à charger du même slug dans
+    # l'org ferait refuser la création.
+    while (instructions.get_instruction("org", org_id, slug) is not None
+           or guide_du_slug("org", str(org_id), slug) is not None):
         slug = f"{base_slug}-{n}"
         n += 1
     version = instructions.set_instruction(

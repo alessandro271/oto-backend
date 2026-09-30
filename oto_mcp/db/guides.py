@@ -30,7 +30,9 @@ d'exploitation, pas un geste de démarrage (docs/live-migrations.md).
 L'identifiant public (0059-D3) d'une couche de contexte est **dérivé de sa clé
 naturelle** `(scope, owner, slug)` — cf. `_PID`. Distinct des PROCÉDURES
 (`org_instructions`, slots/versioning), qui restent une table à part jusqu'à leur
-propre lot. Ré-exporté par `db/__init__`.
+propre lot — mais avec qui elles partagent l'espace des slugs d'une portée : la garde
+de cette frontière est ici (`SlugDeLAutreFamille`, oto#100). Ré-exporté par
+`db/__init__`.
 """
 from __future__ import annotations
 
@@ -77,6 +79,114 @@ _COLS = ("id, owner_type AS scope, owner_id, props->>'slug' AS slug, "
          "COALESCE(props->>'body_md', '') AS body_md, "
          "props->>'delivery' AS delivery, props->>'seed_sha256' AS seed_sha256, "
          "created_at, updated_at")
+
+# --- Un slug, une famille, par portée (otomata-tech/oto#100) ------------------
+#
+# Les guides à charger (ici) et les PROCÉDURES (`org_instructions`) partagent le même
+# espace de slugs, dans deux stockages sans lien : sous une même portée
+# `(owner_type, owner_id)`, `oto_guide` lit l'un, `oto_procedure` et le runner lisent
+# l'autre. Deux objets sous un slug, c'est deux consignes dont une seule est tenue à
+# jour — mesuré en production, un agent a exécuté la copie périmée sans que rien ne le
+# dise. D'où la règle : une CRÉATION (ou un renommage) qui ferait coexister les deux
+# familles sous un slug, dans la même portée, est refusée ; la mise à jour d'un objet
+# existant ne l'est pas (les doublons déjà en base se reconnaissent avant de se
+# refuser, cf. l'issue).
+#
+# La garde vit ICI, à la couche basse, pour les deux familles : le store des
+# procédures importe `db`, jamais l'inverse. Elle se prend sous LE MÊME verrou
+# advisory que l'écriture d'une procédure (`oi:<palier>:<owner>:<slug>`) : sans lui,
+# une création de guide et une création de procédure simultanées passeraient chacune
+# leur sonde avant l'écriture de l'autre.
+
+class SlugDeLAutreFamille(Exception):
+    """Le slug visé porte déjà un objet de l'AUTRE famille dans la même portée.
+
+    `existant` décrit ce qui occupe la place, de quoi le NOMMER dans le refus servi :
+    `{"famille": "procedure", "scope", "slug", "guide_id", "version", "archived"}` ou
+    `{"famille": "guide", "scope", "slug", "public_id", "title"}`."""
+
+    def __init__(self, existant: dict):
+        self.existant = existant
+        s, sc = existant["slug"], existant["scope"]
+        if existant["famille"] == "procedure":
+            super().__init__(
+                f"`{s}` (scope {sc}) porte déjà une PROCÉDURE (#{existant['guide_id']}, "
+                f"v{existant['version']}" + (", archivée" if existant["archived"] else "")
+                + ") : un guide du même slug dans la même portée coexisterait avec elle, "
+                "et l'agent lirait l'une ou l'autre selon l'outil — refusé, rien n'a été "
+                f"écrit. Pour changer cette consigne : `oto_procedure(op='set', "
+                f"slug='{s}', scope='{sc}')`. Pour un guide distinct : un autre slug.")
+        else:
+            super().__init__(
+                f"`{s}` (scope {sc}) porte déjà un GUIDE à charger (`{existant['public_id']}`"
+                + (f", « {existant['title']} »" if existant.get("title") else "")
+                + ") : une procédure du même slug dans la même portée coexisterait avec "
+                "lui, et l'agent lirait l'un ou l'autre selon l'outil — refusé, rien n'a "
+                f"été écrit. Pour changer ce texte : `oto_guide(op='write', slug='{s}', "
+                f"scope='{sc}')`. Pour en faire une procédure : supprime d'abord le guide "
+                f"(`oto_guide(op='delete', slug='{s}', scope='{sc}')`), ou prends un "
+                "autre slug.")
+
+
+def verrouiller_le_slug(conn, owner_type: str, owner_id: str, slug: str) -> None:
+    """LE verrou d'un slug dans une portée, commun aux deux familles — celui que
+    l'écriture d'une procédure prend depuis toujours. Transactionnel : tenu jusqu'au
+    commit de `conn`."""
+    conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))",
+                 (f"oi:{owner_type}:{owner_id}:{slug}",))
+
+
+def procedure_du_slug(owner_type: str, owner_id: str, slug: str,
+                      conn=None) -> Optional[dict]:
+    """La procédure (archivée comprise) qui porte `slug` dans la portée, ou None —
+    sous la forme `existant` de `SlugDeLAutreFamille`."""
+    if conn is None:
+        with _connect() as c:
+            return procedure_du_slug(owner_type, owner_id, slug, c)
+    row = conn.execute(
+        "SELECT id, version, archived_at FROM org_instructions "
+        "WHERE owner_type = %s AND owner_id = %s AND slug = %s",
+        (owner_type, str(owner_id), slug),
+    ).fetchone()
+    if row is None:
+        return None
+    return {"famille": "procedure", "scope": owner_type, "slug": slug,
+            "guide_id": row["id"], "version": row["version"],
+            "archived": row["archived_at"] is not None}
+
+
+def guide_du_slug(owner_type: str, owner_id: str, slug: str,
+                  conn=None) -> Optional[dict]:
+    """Le guide À CHARGER qui porte `slug` dans la portée, ou None — sous la forme
+    `existant` de `SlugDeLAutreFamille`. Un readme `init` n'en est pas un : son slug
+    est canonique (`readme`) et aucune lecture de procédure ne le confond."""
+    if conn is None:
+        with _connect() as c:
+            return guide_du_slug(owner_type, owner_id, slug, c)
+    row = conn.execute(
+        f"SELECT public_id, COALESCE(props->>'title', '') AS title FROM nodes "
+        f"WHERE public_id = {_PID} AND props->>'delivery' = 'on-demand'",
+        (owner_type, str(owner_id), slug),
+    ).fetchone()
+    if row is None:
+        return None
+    return {"famille": "guide", "scope": owner_type, "slug": slug,
+            "public_id": row["public_id"], "title": row["title"]}
+
+
+def exiger_aucun_guide(conn, owner_type: str, owner_id: str, slug: str) -> None:
+    """Refuse (`SlugDeLAutreFamille`) une procédure NEUVE sur un slug qu'un guide porte.
+    À appeler sous `verrouiller_le_slug`, dans la transaction qui écrit."""
+    existant = guide_du_slug(owner_type, owner_id, slug, conn)
+    if existant is not None:
+        raise SlugDeLAutreFamille(existant)
+
+
+def _exiger_aucune_procedure(conn, owner_type: str, owner_id: str, slug: str) -> None:
+    existant = procedure_du_slug(owner_type, owner_id, slug, conn)
+    if existant is not None:
+        raise SlugDeLAutreFamille(existant)
+
 
 # --- On-demand (catalogue `oto_guide`) : delivery='on-demand' UNIQUEMENT ------
 
@@ -144,9 +254,18 @@ def set_guide_db(scope: str, owner_id: str, slug: str, body_md: str,
     détruite, et le guide écrit restait introuvable à la lecture (qui, elle, exige
     `delivery='on-demand'`). Le refus est porté par le `WHERE` de l'`ON CONFLICT` —
     donc par l'instruction elle-même, pas par un pré-contrôle qu'une écriture
-    concurrente traverserait."""
+    concurrente traverserait.
+
+    **Lève `SlugDeLAutreFamille` quand la CRÉATION tomberait sur le slug d'une
+    procédure** de la même portée (oto#100) — rien n'est alors écrit. Mettre à jour un
+    guide qui existe déjà reste permis, doublon ou non."""
     with _connect() as conn:
+        # Une CRÉATION ne fait pas coexister un guide et une procédure (oto#100) —
+        # sous le verrou commun aux deux familles, avant la sonde et l'écriture.
+        verrouiller_le_slug(conn, scope, str(owner_id), slug)
         previous_body = _body_before_write(conn, scope, owner_id, slug)
+        if previous_body is None:
+            _exiger_aucune_procedure(conn, scope, str(owner_id), slug)
         row = conn.execute(
             f"INSERT INTO nodes (public_id, kind, owner_type, owner_id, props) "
             f"VALUES ({_PID}, '{_KIND}', %s, %s, "

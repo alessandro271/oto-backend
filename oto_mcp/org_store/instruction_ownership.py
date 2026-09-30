@@ -36,6 +36,7 @@ from typing import Optional
 
 from . import instructions
 from ..db import _connect
+from ..db.guides import exiger_aucun_guide, guide_du_slug, verrouiller_le_slug
 
 
 def get_instruction_by_id(instruction_id: int) -> Optional[dict]:
@@ -65,7 +66,9 @@ def _free_instruction_slug(conn, owner_type: str, owner_id: int | str, slug: str
     Les RÉVISIONS sont sondées aussi : elles portent la même clé (+ version), donc un
     slug libre côté table vivante mais pris côté historique ferait échouer l'insertion
     du snapshot — et un déplacement ne peut pas emmener son historique sur une
-    collision."""
+    collision.
+
+    Un slug porté par un GUIDE à charger de la cible n'est pas libre non plus (oto#100)."""
     otype, oid = instructions._owner(owner_type, owner_id)
     candidate = slug
     for i in range(2, 100):
@@ -77,7 +80,9 @@ def _free_instruction_slug(conn, owner_type: str, owner_id: int | str, slug: str
             "LIMIT 1",
             (otype, oid, candidate) * 2,
         ).fetchone()
-        if taken is None:
+        # Libre = libre dans les DEUX familles (oto#100) : un guide à charger du même
+        # slug ferait refuser la copie, ou coexister le déplacement avec lui.
+        if taken is None and guide_du_slug(otype, oid, candidate, conn) is None:
             return candidate
         candidate = f"{slug}-{i}"
     raise ValueError(f"aucun slug libre dérivé de `{slug}` chez {owner_type} {owner_id}")
@@ -158,6 +163,7 @@ def rename_instruction(owner_type: str, owner_id: int | str, slug: str,
     Pas d'alias : l'ancien slug ne résout plus, et redevient libre. Rend
     `{id, slug, previous_slug, runner}`, ou `None` si la procédure n'existe pas.
     Lève `instructions.InstructionExists` sur un slug pris (rien n'est écrasé),
+    `db.SlugDeLAutreFamille` sur un slug qu'un guide à charger porte (oto#100),
     `ValueError` sur un slug vide, identique ou réservé. Une procédure ARCHIVÉE se renomme aussi : c'est un geste
     de gouvernance, pas une écriture sur une consigne retirée."""
     otype, oid = instructions._owner(owner_type, owner_id)
@@ -173,8 +179,7 @@ def rename_instruction(owner_type: str, owner_id: int | str, slug: str,
             # Les DEUX clés sous verrou, dans un ordre fixe : l'ancienne contre une
             # écriture concurrente, la nouvelle contre une création concurrente.
             for s in sorted((old, new)):
-                conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))",
-                             (f"oi:{otype}:{oid}:{s}",))
+                verrouiller_le_slug(conn, otype, oid, s)
             cur = conn.execute(
                 "SELECT id, org_id FROM org_instructions "
                 f"WHERE {instructions._OWNER_WHERE} AND slug = %s", (otype, oid, old),
@@ -188,6 +193,8 @@ def rename_instruction(owner_type: str, owner_id: int | str, slug: str,
             if pris is not None:
                 raise instructions.InstructionExists(new, pris["version"],
                                                      pris["archived_at"] is not None)
+            # Ni un guide à charger du même slug dans la même portée (oto#100).
+            exiger_aucun_guide(conn, otype, oid, new)
             runner = _repointer_le_runner(conn, otype, oid, cur["org_id"], old, new)
             conn.execute(
                 "UPDATE org_instruction_revisions SET slug = %s "

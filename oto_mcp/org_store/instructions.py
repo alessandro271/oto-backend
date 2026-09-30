@@ -39,6 +39,7 @@ import re
 from typing import Optional
 
 from ..db import _connect
+from ..db.guides import exiger_aucun_guide, verrouiller_le_slug
 
 
 # --- instructions : guide de base + skills versionnés ----------------------
@@ -298,7 +299,10 @@ def set_instruction(owner_type: str, owner_id: int | str, slug: str, body_md: st
     `expected_version` la version que le client a lue (sinon
     `InstructionVersionConflict`, édition concurrente). Aucune par défaut : l'écriture
     nue reste l'upsert que la console MCP et le dashboard exercent depuis toujours. Le
-    défaut corrigé est l'absence de tout moyen de NE PAS écraser, pas l'upsert."""
+    défaut corrigé est l'absence de tout moyen de NE PAS écraser, pas l'upsert.
+
+    Une CRÉATION (le slug est libre côté procédures) lève `db.SlugDeLAutreFamille` si
+    un guide à charger porte ce slug dans la même portée (oto#100)."""
     otype, oid = _owner(owner_type, owner_id)
     slug = normalize_slug(slug)
     if not slug:
@@ -316,8 +320,7 @@ def set_instruction(owner_type: str, owner_id: int | str, slug: str, body_md: st
             org_id = _parent_org_id(conn, otype, oid)
             # Verrou + arbitre sur la clé OWNER : l'unicité vivante est
             # (owner_type, owner_id, slug) — la PK legacy (org_id, slug) est tombée.
-            conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))",
-                         (f"oi:{otype}:{oid}:{slug}",))
+            verrouiller_le_slug(conn, otype, oid, slug)
             cur = conn.execute(
                 "SELECT version, title, description, slots, archived_at "
                 f"FROM org_instructions WHERE {_OWNER_WHERE} AND slug = %s",
@@ -337,6 +340,10 @@ def set_instruction(owner_type: str, owner_id: int | str, slug: str, body_md: st
             if expected_version is not None and (
                     cur is None or cur["version"] != expected_version):
                 raise InstructionVersionConflict(cur["version"] if cur else None)
+            # Une CRÉATION ne fait pas coexister une procédure et un guide à charger
+            # sous le même slug de la même portée (oto#100) : `SlugDeLAutreFamille`.
+            if cur is None:
+                exiger_aucun_guide(conn, otype, oid, slug)
             new_version = (cur["version"] + 1) if cur else 1
             new_title = title if title is not None else (cur["title"] if cur else "")
             new_desc = description if description is not None else (cur["description"] if cur else "")

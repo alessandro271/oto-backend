@@ -36,7 +36,8 @@ from ... import (access, db, deprecations, group_store, guide_store, org_store,
                 slots as slots_mod, tool_alias, tool_registry)
 from .._auteurs import nommer_l_auteur, nommer_les_auteurs
 from .._authz import (ORG_ADMIN, ORG_ADMIN_OF, ORG_ADMIN_OPT, ORG_MEMBER,
-                      ORG_MEMBER_OF, SUB_ONLY, capacite_autorise)
+                      ORG_MEMBER_OF, SUB_ONLY, capacite_autorise,
+                      refus_de_famille)
 from .._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx,
                       RestBinding)
 from ..registry import CAPABILITIES
@@ -522,6 +523,15 @@ class InstructionReverted(BaseModel):
     reverted_from: int
     # Un retour en arrière peut ramener un corps d'avant le schéma requis.
     diagram_warning: Optional[str] = None
+
+
+# Le refus d'un slug qu'un guide à charger porte déjà dans la portée (oto#100) —
+# déclaré par chaque capacité qui peut CRÉER ou RENOMMER une procédure.
+_FAMILLE = DeclaredError(409, "family_conflict",
+                         "un GUIDE à charger porte déjà ce slug dans la même portée "
+                         "(oto#100) — une procédure neuve ne s'y crée pas, un "
+                         "renommage n'y va pas ; le refus nomme le guide, rien n'est "
+                         "écrit")
 
 
 def _inconnu(message: str) -> AuthzDenied:
@@ -1255,6 +1265,8 @@ def _write_instruction(ctx: ResolvedCtx, inp, must_create: bool = False) -> tupl
             409, "instruction_archived", str(e),
             {"slug": norm, "archived_at": str(e.archived_at) if e.archived_at else None,
              "unarchive": f"/api/me/instructions/{norm}/unarchive"})
+    except db.SlugDeLAutreFamille as e:        # un guide à charger porte ce slug (oto#100)
+        raise refus_de_famille(e)
     except org_store.InstructionVersionConflict as e:
         raise AuthzDenied(
             409, "version_conflict",
@@ -1397,6 +1409,8 @@ def _rename_instruction(ctx: ResolvedCtx, inp) -> dict:
             + (", archivée" if e.archived else "") + ") dans ce scope — rien n'a été "
             "renommé ni écrasé. Choisis un autre nom.",
             {"slug": neuf, "version": e.version, "archived": e.archived})
+    except db.SlugDeLAutreFamille as e:        # un guide à charger porte `new_slug` (oto#100)
+        raise refus_de_famille(e)
     if out is None:
         raise AuthzDenied(404, "not_found", f"Instruction `{norm}` absente.")
     return {"ok": True, **_scope_ref(owner), "guide_id": out["id"], "slug": out["slug"],
@@ -1600,7 +1614,8 @@ CAPABILITIES += [
                      "read) to turn a concurrent edit into a 409 instead of an overwrite."),
         errors=(DeclaredError(409, "version_conflict",
                               "`expected_version` fourni et ≠ version courante (ou "
-                              "procédure absente) — l'écriture n'a pas eu lieu"),),
+                              "procédure absente) — l'écriture n'a pas eu lieu"),
+                _FAMILLE),
         rest=RestBinding("PUT", "/api/me/instructions/{slug}"),
     ),
     # La CRÉATION, seul geste du domaine qui refuse un slug pris (#662). Verbe à part
@@ -1610,7 +1625,9 @@ CAPABILITIES += [
         key="org.instruction.create", handler=_create_instruction, Input=InstrCreateInput,
         authz=ORG_ADMIN_OPT("org"), Output=InstructionWritten,
         description=("CREATE a named procedure (org_admin) — refuses a slug that is "
-                     "already taken (409 `slug_taken`) instead of overwriting it. `slug` "
+                     "already taken (409 `slug_taken`) instead of overwriting it, and "
+                     "a slug an on-demand guide of the same scope carries (409 "
+                     "`family_conflict`: one slug, one family). `slug` "
                      "is REQUIRED and yours to choose (it is the readable reference cited "
                      "in prose and tool descriptions); it is normalized to [a-z0-9_-]. Use "
                      "PUT /api/me/instructions/{slug} to EDIT an existing one. Same body "
@@ -1618,7 +1635,8 @@ CAPABILITIES += [
                      "same cross-check warnings in the response."),
         errors=(DeclaredError(409, "slug_taken",
                               "le slug porte déjà une procédure dans ce scope (y compris "
-                              "archivée) — rien n'a été écrit"),),
+                              "archivée) — rien n'a été écrit"),
+                _FAMILLE),
         rest=RestBinding("POST", "/api/me/instructions"),
     ),
     # La CORRECTION DE VITRINE (issue `oto`#27). Troisième verbe d'écriture, pour la
@@ -1698,13 +1716,16 @@ CAPABILITIES += [
                      "(`runner` lists them; jobs already running are only named). The "
                      "old slug stops resolving (no alias): other prose that cites it "
                      "must be updated by hand. Refused, nothing changed: a `new_slug` "
-                     "already taken (409 `slug_taken`). `org` pins to an explicit org id (default = "
+                     "already taken (409 `slug_taken`), or carried by an on-demand "
+                     "guide of the same scope (409 `family_conflict`). `org` pins to an "
+                     "explicit org id (default = "
                      "active org; must be org_admin of it)."),
         errors=(DeclaredError(400, "missing_new_slug", "`new_slug` absent — rien n'a été "
                               "renommé"),
                 DeclaredError(400, "same_slug", "`new_slug` normalisé = slug actuel"),
                 DeclaredError(409, "slug_taken", "`new_slug` porte déjà une procédure "
-                              "dans ce scope (y compris archivée) — rien n'a été écrasé")),
+                              "dans ce scope (y compris archivée) — rien n'a été écrasé"),
+                _FAMILLE),
         rest=RestBinding("POST", "/api/me/instructions/{slug}/rename"),
     ),
     Capability(
@@ -1729,6 +1750,7 @@ CAPABILITIES += [
         key="org.instruction.admin_set", handler=_set_instruction, Input=AdminInstrSetInput,
         authz=ORG_ADMIN_OF("org_id"),
         description="[ADMIN] Write another org's guide by id (cross-org = platform admin).",
+        errors=(_FAMILLE,),
         rest=RestBinding("PUT", "/api/admin/orgs/{id}/instructions/{slug}", _OID_SLUG),
     ),
     Capability(
