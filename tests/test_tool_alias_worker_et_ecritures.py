@@ -162,7 +162,8 @@ def test_une_procedure_secrit_au_canonique(tenant_acme, registre, monkeypatch):
 
 def test_un_guide_relu_puis_reecrit_garde_le_canonique(tenant_acme, registre, monkeypatch):
     ecrit: dict = {}
-    monkeypatch.setattr(guides, "_owner_for_write", lambda ctx, scope, owner_id: ctx.sub)
+    monkeypatch.setattr(guides, "_owner_for_write",
+                        lambda ctx, scope, owner_id=None, *, ondemand=False: ctx.sub)
 
     def _set_guide(scope, owner, slug, body, title, description):
         ecrit["body"] = body
