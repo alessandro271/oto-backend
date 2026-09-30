@@ -293,10 +293,6 @@ def _make_handler(cap: Capability, binding, verifier, authenticate, json_respons
             reponse.headers["Deprecation"] = "true"
             reponse.headers["Sunset"] = deprecations.date_retrait_nom_de_tableau()
         return reponse
-    # Le nom de la transaction Sentry (`transaction_style="endpoint"`, `sentry_setup`) :
-    # sans lui, les routes générées porteraient toutes `_make_handler.<locals>._handler`.
-    # `__name__` ne bouge pas — c'est `route.name`, figé par la table de routes.
-    _handler.__qualname__ = f"{binding.verb} {binding.path}"
     return _handler
 
 
