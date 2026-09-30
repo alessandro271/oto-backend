@@ -1733,6 +1733,23 @@ préférer `oto_upload_url(target='datastore')` (push NDJSON/CSV out-of-bande �
 ns_id scellé au mint, autz réappliquée via `ownership.can_access(datastore_namespace, write)`).
 Cf. `docs/projects.md` §push out-of-bande (issue #105).
 
+**Server-side import (`oto_import`, capability `me.import`, `POST /api/me/import`).**
+When the file is already reachable — a link, a Drive file (a native Sheet exports its
+first tab as CSV), a project file, a Gmail attachment — the server fetches it through
+`file_source.resolve` (egress guard, 25 MB, redirects followed only here, each hop
+re-checked, no https→http) and writes it; nothing passes through the model. Targets:
+`datastore` and `project_file` only. CSV is read by `csv_tolerant` on BOTH paths (this
+one and the signed PUT): separator detected by field-count consistency (`,` `;` tab `|`,
+comma wins ties), UTF-8 / UTF-16 (BOM) / cp1252, headers matched to keys, then ignoring
+case and accents, then to declared labels; two headers on one column are refused before
+any write. `declare_columns` (default true here, off on the PUT) declares unmatched
+headers as text columns (label = header). The write runs in 500-row slices under a 40 s
+budget: an unfinished call returns `resume_from` + `source.sha256`, and a resume is
+refused if the file changed — safe without a key. A refused row names its absolute
+position in `details` (`row`, `written`, `resume_from` = the next row). The source
+URL is masked in the call log and returned without its query string. Measured on local
+Postgres: ~340 rows/s appended, ~425 rows/s upserted on a key (10k rows, 9 columns).
+
 ⚠️ **Un lot N'EST PAS atomique, et son refus le dit (#412).** Il s'arrête à la première
 ligne que le schéma refuse ; celles d'avant sont écrites et le RESTENT. Le refus nomme
 donc la ligne autant que le champ — index dans le lot, valeur de la clé métier — et

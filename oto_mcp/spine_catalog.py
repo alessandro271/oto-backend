@@ -154,10 +154,11 @@ SPINE_FAMILIES: tuple[SpineFamily, ...] = (
         "plateforme après ses tests",
     ),
     SpineFamily(
-        "oto_upload_url",
-        ("oto_upload_url",),
-        "pousser un contenu volumineux dans oto par URL signée à usage unique, au lieu "
-        "de le faire transiter par la conversation",
+        "oto_upload_url / oto_import",
+        ("oto_upload_url", "oto_import"),
+        "bring a big file into oto without passing it through the conversation: push "
+        "it to a signed URL, or have the server fetch it (link, Drive, project file, "
+        "attachment)",
     ),
     SpineFamily(
         "oto_node* / oto_shell",

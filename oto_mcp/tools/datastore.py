@@ -917,8 +917,9 @@ def register(mcp: FastMCP) -> None:
         every row carrying that key value UPSERTS (merges) onto the existing row of
         the same key instead of duplicating; rows without a key are appended. Returns
         a summary {inserted, updated, count, key, ids}. Use `data_set_schema` to
-        declare a persistent `key`. For LARGE batches, prefer `oto_upload_url` to push
-        the data out-of-band (never through your context).
+        declare a persistent `key`. For a FILE, never retype its rows here: `oto_import`
+        loads it from where it is (link, Drive, project file), `oto_upload_url` takes
+        it from your disk.
 
         ⚠️ An error on the way BACK (expired session, dropped connection, timeout)
         does NOT mean the write failed: it may have committed before the error.
