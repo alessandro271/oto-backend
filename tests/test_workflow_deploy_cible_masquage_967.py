@@ -6,7 +6,9 @@ la cible est donc un SECRET de son environnement, jamais une variable ni une ent
 qu'on en dérive est masqué (`::add-mask::`) par le premier geste de chaque job, et les
 scripts parlent de « la préprod de la cible », jamais de son hôte. Ce test fige :
 - aucune valeur de la cible n'est lue depuis `vars.` ni depuis une entrée (seule
-  `cible`, le nom de l'environnement, public par nature) ;
+  `cible`, le nom de l'environnement, public par nature) — que le workflow parte à la
+  main ou soit appelé par le dépôt du propriétaire de la cible ;
+- appelé, le dépôt appelant (qui désigne le propriétaire) est masqué aussi ;
 - le masquage est le PREMIER geste de chaque job, et d'abord du premier ;
 - tout secret qui désigne la cible et l'entrée `cible` que voit un job y sont masqués ;
 - aucun step n'affiche une valeur de la cible (echo, printf, résumé du job) ;
@@ -41,7 +43,7 @@ _DESIGNE = ("CIBLE_DECLARATION", "CIBLE_CONSOMMATEUR", "CIBLE_SSH_HOTE",
 # (interdite, mais repérée si elle revenait), et l'entrée qui nomme l'environnement.
 _VALEUR_CIBLE = re.compile(
     rf"\$\{{\{{\s*(secrets\.(?:{'|'.join(_DESIGNE)})\b|vars\.[A-Z_]+|inputs\.cible)\s*\}}\}}")
-_ENTREES = {"cible", "tag", "etape", "action"}
+_ENTREES = {"cible", "tag", "etape", "action", "acces"}
 _MASQUE = "::add-mask::"
 
 
@@ -118,8 +120,8 @@ def _lectures_hors_secret(texte: str, entrees) -> list[str]:
 
 
 def test_ce_qui_designe_la_cible_vient_d_un_secret():
-    declencheur = _WF.get("on", _WF.get(True))["workflow_dispatch"]
-    assert _lectures_hors_secret(_TEXTE, declencheur["inputs"]) == []
+    for declencheur in _WF.get("on", _WF.get(True)).values():
+        assert _lectures_hors_secret(_TEXTE, declencheur["inputs"]) == []
     for nom in _DESIGNE:
         assert f"secrets.{nom} }}}}" in _TEXTE, nom
 
@@ -276,13 +278,38 @@ def test_une_declaration_illisible_a_ses_lignes_masquees():
     assert "exemple" not in vu
 
 
-def test_une_cible_sur_plusieurs_lignes_est_masquee_ligne_a_ligne():
+def _masquer_la_cible(appelant: str) -> list[str]:
     run = _etape_masque(_JOBS["entrees"])["run"]
     fini = subprocess.run(["/bin/bash", "-c", run],
-                          env={"PATH": os.environ["PATH"], "CIBLE": "une\ndeux"},
+                          env={"PATH": os.environ["PATH"], "CIBLE": "une\ndeux",
+                               "TRONC": _WF["env"]["TRONC"], "APPELANT": appelant},
                           capture_output=True, text=True, timeout=30)
-    assert fini.returncode == 0
-    assert fini.stdout.splitlines() == [f"{_MASQUE}une", f"{_MASQUE}deux"]
+    assert fini.returncode == 0, fini.stderr
+    return fini.stdout.splitlines()
+
+
+def test_une_cible_sur_plusieurs_lignes_est_masquee_ligne_a_ligne():
+    assert _masquer_la_cible(_WF["env"]["TRONC"]) == [f"{_MASQUE}une", f"{_MASQUE}deux"]
+
+
+def test_appele_le_depot_appelant_est_masque():
+    """Le dépôt appelant nomme le propriétaire de la cible : masqué, lui et ses deux
+    moitiés, avant tout geste (le tronc, public, reste lisible)."""
+    assert _etape_masque(_JOBS["entrees"])["env"]["APPELANT"] == "${{ github.repository }}"
+    assert _masquer_la_cible("proprio-exemple/infra-privee")[2:] == [
+        f"{_MASQUE}proprio-exemple/infra-privee", f"{_MASQUE}proprio-exemple",
+        f"{_MASQUE}infra-privee"]
+
+
+def test_en_acces_ssh_l_adresse_de_la_machine_est_masquee():
+    """En accès ssh, l'hôte est la machine elle-même — souvent une adresse IP, et le
+    known_hosts peut la porter sous une autre forme (`[adresse]:22`). Adresses de
+    documentation (RFC 5737)."""
+    env = {**_ENV_CIBLE, "CIBLE_SSH_HOTE": "192.0.2.10",
+           "CIBLE_SSH_KNOWN_HOSTS": "192.0.2.10,[198.51.100.7]:22 ssh-ed25519 AAAAC3Nz"}
+    vu = _journal("ssh: connect to host 192.0.2.10 port 22: Connection refused\n"
+                  "Warning: Permanently added '198.51.100.7'", _masques(env))
+    assert "192.0.2" not in vu and "198.51.100" not in vu, vu
 
 
 # --- les scripts ne citent ni hôte, ni environnement, ni instance ------------------

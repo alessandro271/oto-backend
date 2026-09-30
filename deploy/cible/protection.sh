@@ -7,6 +7,11 @@
 # tourne AVANT tout job qui nomme l'environnement, et refuse s'il est absent, illisible
 # ou sans relecteur requis : jamais de montée qui n'aurait attendu personne.
 #
+# Le dépôt vérifié est celui DU RUN (`github.repository`) : quand le workflow est appelé
+# (`workflow_call`) depuis le dépôt du propriétaire de la cible, c'est ce dépôt-là qui
+# porte l'environnement que le job nomme, et son jeton qui le lit — le job appelant doit
+# lui accorder `actions: read`. Un environnement illisible est un REFUS, pas un passe-droit.
+#
 # Ses messages disent « l'environnement de la cible », jamais son nom : les journaux
 # d'Actions de ce dépôt sont publics (D5).
 #
@@ -14,9 +19,11 @@
 set -euo pipefail
 [ "$#" -eq 2 ] || { echo "usage : protection.sh <dépôt> <environnement>" >&2; exit 2; }
 DEPOT=$1 ENVIRONNEMENT=$2
+[[ "$DEPOT" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] \
+  || { echo "::error title=Dépôt illisible::le dépôt du run n'a pas la forme owner/repo — rien n'est monté."; exit 1; }
 
 if ! reponse=$(gh api "repos/${DEPOT}/environments/${ENVIRONNEMENT}" 2>&1); then
-  echo "::error title=Environnement de la cible introuvable::il n'existe pas ou n'a pas pu être lu ($(tr '\n' ' ' <<< "$reponse" | head -c 200)) — rien n'est monté."
+  echo "::error title=Environnement de la cible introuvable::il n'existe pas ou n'a pas pu être lu ($(tr '\n' ' ' <<< "$reponse" | head -c 200)) — rien n'est monté. Appelé depuis un autre dépôt, le job appelant doit accorder « actions: read » à son jeton."
   exit 1
 fi
 relecteurs=$(jq '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers | length] | add // 0' <<< "$reponse")

@@ -3,17 +3,25 @@ name: Deploy cible
 # Monter une INSTANCE CIBLE à un tag du tronc (#967, ADR 0070 — docs/instance-cible.md).
 #
 # Une cible ne bouge que quand quelqu'un DÉCIDE de la monter de version : ce workflow ne
-# part qu'à la main (`workflow_dispatch`), avec un tag choisi, et rien ne l'appelle. Il ne
-# consulte que la cible elle-même : sa déclaration, sa préprod, sa prod, et le tronc (le
-# tag doit être sur la branche principale). Aucun autre déploiement n'entre en compte.
+# part qu'à la main, avec un tag choisi. Son déclencheur vit dans le dépôt PRIVÉ du
+# propriétaire de la cible, qui l'appelle (`workflow_call`, épinglé sur un tag ou un SHA
+# de ce dépôt) ; `workflow_dispatch` reste pour une cible dont l'environnement est ici.
+# Rien, dans ce dépôt, ne l'appelle. Il ne consulte que la cible elle-même : sa
+# déclaration, sa préprod, sa prod, et le tronc (le tag doit être sur la branche
+# principale). Aucun autre déploiement n'entre en compte.
+#
+# Appelé, `github.repository`, `github.token` et `environment:` sont ceux du dépôt
+# APPELANT : c'est son environnement qui est vérifié puis approuvé, ses secrets
+# d'environnement qui sont lus. Le code déployé, lui, vient toujours du TRONC (`TRONC`,
+# au tag demandé), jamais du dépôt appelant.
 #
 # Chaque cible est un ENVIRONNEMENT GitHub (le nom est l'entrée `cible`) qui porte tout
 # ce qui la distingue : sa déclaration (`CIBLE_DECLARATION`, JSON validé contre
-# l'inventaire du tag), son accès (hôte, clé d'hôte épinglée, clé de déploiement, jeton
-# de service Cloudflare Access) et, s'il existe, le consommateur de son API. Cet
-# environnement EXIGE une approbation (un relecteur requis) : le workflow le vérifie et
-# refuse de partir sinon. Ce dépôt est public : il ne nomme aucune cible, il n'en porte
-# que la forme (`deploy/cible/declaration.gabarit.json`).
+# l'inventaire du tag), son accès (hôte, clé d'hôte épinglée, clé de déploiement, et en
+# accès tunnel le jeton de service Cloudflare Access) et, s'il existe, le consommateur de
+# son API. Cet environnement EXIGE une approbation (un relecteur requis) : le workflow le
+# vérifie et refuse de partir sinon. Ce dépôt est public : il ne nomme aucune cible, il
+# n'en porte que la forme (`deploy/cible/declaration.gabarit.json`).
 #
 # L'ordre : entrées validées et environnement protégé → (approbation) → tag sur la
 # branche principale → déclaration jugée par l'inventaire du tag → contrat d'API du tag
@@ -22,7 +30,9 @@ name: Deploy cible
 # SERVE déjà ce tag. Un seul job derrière l'approbation : une montée, une décision.
 #
 # Runner hébergé par GitHub : la clé de déploiement n'ouvre qu'une commande forcée
-# (`deploy/cible/porte.sh`) et passe par le tunnel Cloudflare Access de la cible.
+# (`deploy/cible/porte.sh`). Le chemin jusqu'à la machine est l'entrée `acces`, choisie
+# explicitement, sans défaut : `tunnel` (Cloudflare Access, jeton de service) ou `ssh`
+# (le `:22` de la machine, en attendant son tunnel) — hôte épinglé dans les deux cas.
 #
 # Ce dépôt est public, ses journaux d'Actions aussi : ils ne montrent JAMAIS ce qui
 # désigne la cible — hôte, domaine, nom d'instance, slug, ni aucune valeur de sa
@@ -52,6 +62,66 @@ on:
         type: choice
         options: [deployer, retour]
         default: deployer
+      acces:
+        description: "Chemin jusqu'à la machine : tunnel (Cloudflare Access) ou ssh (son :22, en attendant le tunnel)"
+        type: choice
+        options: [tunnel, ssh]
+        required: true
+  # Le déclencheur du dépôt du propriétaire de la cible. Mêmes entrées, en chaînes :
+  # `workflow_call` n'a pas de `choice`, le job `entrees` les valide donc toutes.
+  # Les secrets sont ceux de l'ENVIRONNEMENT de la cible dans le dépôt appelant, lus par
+  # le job qui le nomme (GitHub ne transmet pas un secret d'environnement par l'appel) :
+  # tous facultatifs ici, chacun exigé en le nommant par le script qui s'en sert.
+  workflow_call:
+    inputs:
+      cible:
+        description: "Environnement GitHub de la cible, dans le dépôt appelant"
+        type: string
+        required: true
+      tag:
+        description: "Tag du tronc à monter (vX.Y.Z)"
+        type: string
+        required: true
+      etape:
+        description: "preprod, prod (exige la préprod déjà à ce tag), ou preprod-puis-prod"
+        type: string
+        default: preprod
+      action:
+        description: "deployer, ou retour à la couleur précédente"
+        type: string
+        default: deployer
+      acces:
+        description: "tunnel (Cloudflare Access) ou ssh (le :22 de la machine) — sans défaut"
+        type: string
+        required: true
+    secrets:
+      CIBLE_DECLARATION:
+        description: "Déclaration de la cible (JSON, une ligne)"
+        required: false
+      CIBLE_CONSOMMATEUR:
+        description: "Consommateur de son API (JSON, une ligne), facultatif"
+        required: false
+      CIBLE_SSH_HOTE:
+        description: "Hôte SSH : l'application Access (tunnel) ou la machine (ssh)"
+        required: false
+      CIBLE_SSH_UTILISATEUR:
+        description: "Utilisateur de déploiement"
+        required: false
+      CIBLE_SSH_KNOWN_HOSTS:
+        description: "Clé d'hôte épinglée, sous le nom de l'hôte SSH"
+        required: false
+      CIBLE_SSH_CLE:
+        description: "Clé privée de déploiement (commande forcée vers la porte)"
+        required: false
+      CIBLE_CF_ACCESS_CLIENT_ID:
+        description: "Jeton de service Access, identifiant (accès tunnel)"
+        required: false
+      CIBLE_CF_ACCESS_CLIENT_SECRET:
+        description: "Jeton de service Access, secret (accès tunnel)"
+        required: false
+      CIBLE_CONSOMMATEUR_CLE:
+        description: "Clé de lecture seule du dépôt du consommateur, si cle"
+        required: false
 
 permissions:
   contents: read
@@ -62,16 +132,21 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  # Le dépôt dont vient TOUT le code exécuté, quel que soit le dépôt qui appelle.
+  TRONC: otomata-tech/oto-backend
   CIBLE: ${{ inputs.cible }}
   TAG: ${{ inputs.tag }}
   ETAPE: ${{ inputs.etape }}
   ACTION: ${{ inputs.action }}
+  ACCES: ${{ inputs.acces }}
 
 jobs:
   # Les entrées atterrissent dans un `ref:`, un nom d'environnement et des commandes :
   # validées AVANT tout usage, et jamais interpolées dans un script (passées par `env`).
   # Puis l'environnement de la cible doit EXISTER et EXIGER un relecteur : un
-  # environnement absent serait créé à la volée par GitHub, sans protection.
+  # environnement absent serait créé à la volée par GitHub, sans protection. Appelé,
+  # c'est l'environnement du dépôt appelant, lu par SON jeton (`actions: read`, que le
+  # job appelant doit accorder : un appelé ne peut qu'abaisser ses permissions).
   entrees:
     name: Entrées et protection de la cible
     runs-on: ubuntu-latest
@@ -80,26 +155,34 @@ jobs:
       actions: read
     steps:
       # Avant tout geste : le nom de la cible ne s'affiche plus (chaque ligne, une entrée
-      # peut en porter plusieurs).
+      # peut en porter plusieurs), ni le dépôt appelant qui désigne son propriétaire.
       - name: Masquer la cible
+        env:
+          APPELANT: ${{ github.repository }}
         run: |
           set -euo pipefail
           while IFS= read -r ligne; do
             if [ -n "$ligne" ]; then printf '::add-mask::%s\n' "$ligne"; fi
           done <<< "$CIBLE"
+          if [ "$APPELANT" != "$TRONC" ]; then
+            printf '::add-mask::%s\n' "$APPELANT" "${APPELANT%%/*}" "${APPELANT#*/}"
+          fi
       - name: Valider les entrées
         run: |
           set -euo pipefail
           [[ "$CIBLE" =~ ^[a-z][a-z0-9-]{1,38}$ ]] || { echo "::error::cible invalide (attendu ^[a-z][a-z0-9-]{1,38}$)"; exit 1; }
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::tag invalide (vX.Y.Z) : « $TAG »"; exit 1; }
-          echo "### $ACTION $TAG → la cible ($ETAPE)" >> "$GITHUB_STEP_SUMMARY"
+          case "$ETAPE" in preprod|prod|preprod-puis-prod) ;; *) echo "::error::etape invalide (preprod | prod | preprod-puis-prod) : « $ETAPE »"; exit 1 ;; esac
+          case "$ACTION" in deployer|retour) ;; *) echo "::error::action invalide (deployer | retour) : « $ACTION »"; exit 1 ;; esac
+          case "$ACCES" in tunnel|ssh) ;; *) echo "::error::acces invalide ou absent (tunnel | ssh, sans défaut) : « $ACCES »"; exit 1 ;; esac
+          echo "### $ACTION $TAG → la cible ($ETAPE, accès $ACCES)" >> "$GITHUB_STEP_SUMMARY"
       - name: L'environnement de la cible exige une approbation
         env:
           GH_TOKEN: ${{ github.token }}
           DEPOT: ${{ github.repository }}
         run: |
           set -euo pipefail
-          git clone --quiet --depth 1 --branch "$TAG" --filter=blob:none --sparse "https://github.com/${DEPOT}.git" tronc
+          git clone --quiet --depth 1 --branch "$TAG" --filter=blob:none --sparse "https://github.com/${TRONC}.git" tronc
           git -C tronc sparse-checkout set deploy/cible
           tronc/deploy/cible/protection.sh "$DEPOT" "$CIBLE"
 
@@ -164,10 +247,13 @@ jobs:
             if [ -n "$masque" ]; then printf '::add-mask::%s\n' "$masque"; fi
           done <<< "$masques"
 
+      # Le TRONC au tag, jamais le dépôt appelant ; son jeton n'y reste pas.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          repository: ${{ env.TRONC }}
           ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0
+          persist-credentials: false
 
       # La porte le revérifie sur la machine ; ici, on refuse avant d'avoir rien touché.
       - name: Le tag est sur la branche principale du tronc
@@ -289,6 +375,8 @@ jobs:
         run: '[ -z "$TRAVAIL" ] || rm -rf "$TRAVAIL"'
 
       # ── PRÉPROD, PUIS PROD ──────────────────────────────────────────────────────────
+      # `appeler.sh` suit l'accès choisi (`ACCES`) : en `tunnel`, il exige le jeton
+      # Access et refuse sans ; en `ssh`, il n'installe ni n'utilise `cloudflared`.
       - name: Monter la préprod
         if: inputs.etape != 'prod'
         env:

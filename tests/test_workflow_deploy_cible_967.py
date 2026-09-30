@@ -2,7 +2,12 @@
 montée de version DÉCIDÉE, qui ne consulte que la cible et le tronc.
 
 Ce que ce test fige, parce que chaque point est une décision (Alexis, 29/09/2026) :
-- déclenché à la main seulement, avec un tag choisi ; rien d'autre ne l'appelle ;
+- déclenché à la main seulement, avec un tag choisi : ici (`workflow_dispatch`), ou depuis
+  le dépôt privé du propriétaire de la cible (`workflow_call`, décision du 30/09/2026) —
+  mêmes entrées, secrets déclarés ; rien, dans ce dépôt, ne l'appelle ;
+- le code exécuté vient du TRONC au tag, jamais du dépôt appelant ; l'environnement
+  vérifié est celui du run (le dépôt appelant, quand il y en a un) ;
+- l'accès à la machine est choisi explicitement (`acces` : tunnel | ssh), sans défaut ;
 - il ne consulte AUCUN autre déploiement : ni un autre workflow, ni ses runs, ni une
   autre instance — ni dans le workflow, ni dans les scripts qu'il exécute ;
 - l'environnement de la cible doit exiger un relecteur, vérifié avant l'approbation ;
@@ -14,9 +19,12 @@ Ce que ce test fige, parce que chaque point est une décision (Alexis, 29/09/202
 from __future__ import annotations
 
 import ast
+import os
 import pathlib
 import re
+import subprocess
 
+import pytest
 import yaml
 
 _RACINE = pathlib.Path(__file__).resolve().parents[1]
@@ -32,7 +40,7 @@ _RUNS = [s.get("run", "") for s in _ETAPES]
 # noms, l'API des runs, nos gardes de mise en production, nos hôtes et notre machine.
 _AUTRE_CHAINE = re.compile(
     r"deploy\.yml|deploy-canari|release\.yml|Deploy (prod|preprod)|actions/runs|"
-    r"garde_preprod|workflow_run|workflow_call|oto-platform|/opt/deploy|oto-backend\.sh|"
+    r"garde_preprod|workflow_run|oto-platform|/opt/deploy|oto-backend\.sh|"
     r"oto\.cx|oto\.ninja|oto-mcp-canari|active-(prod|canari)")
 
 
@@ -59,9 +67,87 @@ def _code(script: pathlib.Path) -> str:
     return "\n".join(l for l in texte.splitlines() if not l.lstrip().startswith("#"))
 
 
-def test_declenche_a_la_main_seulement():
-    assert set(_DECLENCHEURS) == {"workflow_dispatch"}
-    assert {"cible", "tag", "etape", "action"} <= set(_DECLENCHEURS["workflow_dispatch"]["inputs"])
+_ENTREES = {"cible", "tag", "etape", "action", "acces"}
+_TRONC = "otomata-tech/oto-backend"
+
+
+def test_declenche_a_la_main_ici_ou_par_le_depot_du_proprietaire():
+    assert set(_DECLENCHEURS) == {"workflow_dispatch", "workflow_call"}
+    for declencheur in _DECLENCHEURS.values():
+        assert set(declencheur["inputs"]) == _ENTREES
+        for nom in ("cible", "tag", "acces"):
+            assert declencheur["inputs"][nom].get("required") is True, nom
+        # l'accès se choisit : aucun défaut, donc aucun repli silencieux
+        assert "default" not in declencheur["inputs"]["acces"]
+    assert _DECLENCHEURS["workflow_dispatch"]["inputs"]["acces"]["options"] == ["tunnel", "ssh"]
+
+
+def test_l_appel_declare_chaque_secret_qu_il_lit_sans_l_exiger():
+    """Les secrets viennent de l'environnement de la cible dans le dépôt appelant (GitHub
+    ne transmet pas un secret d'environnement par l'appel) : déclarés, jamais exigés à
+    l'appel — c'est le script qui s'en sert qui exige chacun en le nommant."""
+    declares = _DECLENCHEURS["workflow_call"]["secrets"]
+    lus = set(re.findall(r"\$\{\{\s*secrets\.([A-Z_]+)", _TEXTE))
+    assert set(declares) == lus
+    assert lus >= {"CIBLE_DECLARATION", "CIBLE_CONSOMMATEUR", "CIBLE_SSH_HOTE",
+                   "CIBLE_SSH_UTILISATEUR", "CIBLE_SSH_KNOWN_HOSTS", "CIBLE_SSH_CLE",
+                   "CIBLE_CF_ACCESS_CLIENT_ID", "CIBLE_CF_ACCESS_CLIENT_SECRET",
+                   "CIBLE_CONSOMMATEUR_CLE"}
+    assert all(d.get("required") is False for d in declares.values())
+
+
+def test_n_appelle_aucun_autre_workflow():
+    """Appelable, il n'appelle rien : aucun job réutilisable, seules des actions épinglées."""
+    for nom, job in _JOBS.items():
+        assert "uses" not in job, nom
+        for etape in job["steps"]:
+            if "uses" in etape:
+                assert re.fullmatch(r"actions/[\w-]+@[0-9a-f]{40}", etape["uses"]), etape["uses"]
+
+
+def test_le_code_execute_vient_du_tronc_jamais_de_l_appelant():
+    assert _WF["env"]["TRONC"] == _TRONC
+    # la porte, sur la machine, écrit le même dépôt
+    porte = (_RACINE / "deploy/cible/porte.sh").read_text(encoding="utf-8")
+    assert f"DEPOT=https://github.com/{_TRONC}.git" in porte
+    checkout = next(e for e in _ETAPES if "actions/checkout" in e.get("uses", ""))
+    assert checkout["with"]["repository"] == "${{ env.TRONC }}"
+    assert checkout["with"]["ref"] == "refs/tags/${{ inputs.tag }}"
+    assert checkout["with"]["persist-credentials"] is False
+    protection = next(e for e in _JOBS["entrees"]["steps"] if "protection.sh" in e.get("run", ""))
+    assert '"https://github.com/${TRONC}.git"' in protection["run"]
+    assert "${DEPOT}.git" not in protection["run"]
+    # l'environnement vérifié est celui du run : le dépôt appelant, quand il y en a un
+    assert protection["env"]["DEPOT"] == "${{ github.repository }}"
+
+
+def _valider(env: dict[str, str], tmp_path) -> subprocess.CompletedProcess:
+    etape = next(e for e in _JOBS["entrees"]["steps"] if e.get("name") == "Valider les entrées")
+    complet = {"CIBLE": "cible-exemple", "TAG": "v1.2.3", "ETAPE": "preprod",
+               "ACTION": "deployer", "ACCES": "ssh", **env}
+    return subprocess.run(["/bin/bash", "-c", etape["run"]],
+                          env={"PATH": os.environ["PATH"],
+                               "GITHUB_STEP_SUMMARY": str(tmp_path / "resume"), **complet},
+                          capture_output=True, text=True, timeout=30)
+
+
+@pytest.mark.parametrize("env, refus", [
+    ({}, None),
+    ({"ACCES": "tunnel"}, None),
+    ({"ACCES": ""}, "acces invalide ou absent"),
+    ({"ACCES": "direct"}, "acces invalide ou absent"),
+    ({"ETAPE": "tout"}, "etape invalide"),
+    ({"ACTION": "detruire"}, "action invalide"),
+    ({"TAG": "main"}, "tag invalide"),
+])
+def test_les_entrees_sont_validees_meme_appelees(tmp_path, env, refus):
+    """Appelé, rien ne borne les entrées (`workflow_call` n'a pas de `choice`) : le job
+    `entrees` refuse toute valeur hors de ses listes, en la nommant."""
+    fini = _valider(env, tmp_path)
+    if refus is None:
+        assert fini.returncode == 0, fini.stdout + fini.stderr
+    else:
+        assert fini.returncode == 1 and refus in fini.stdout, fini.stdout
 
 
 def test_ne_consulte_aucun_autre_deploiement():
@@ -79,7 +165,7 @@ def test_le_garde_fou_reconnait_une_reference_a_une_autre_chaine():
     assert _AUTRE_CHAINE.search("gh api repos/x/y/actions/runs?branch=main")
 
 
-def test_rien_d_autre_ne_l_appelle():
+def test_rien_dans_ce_depot_ne_l_appelle():
     for f in _WORKFLOWS.glob("*.yml"):
         if f.name != "deploy-cible.yml":
             texte = f.read_text(encoding="utf-8")

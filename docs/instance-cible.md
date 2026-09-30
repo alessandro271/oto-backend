@@ -15,7 +15,8 @@ Issue d'origine : #967 (« une chaîne de livraison, N cibles »). Les deux inst
 **autonomes** : déployer une cible est une décision de montée de version prise à part,
 jamais la suite automatique d'un tag. Le workflow d'une cible ne consulte qu'elle-même
 et le tronc : aucun autre déploiement, aucune autre instance, aucun autre run n'entre
-dans sa décision, et rien d'autre ne l'appelle.
+dans sa décision. Rien, dans ce dépôt, ne l'appelle : son déclencheur vit dans le dépôt
+privé du propriétaire de la cible (§ Le déclencheur, dans le dépôt du propriétaire).
 
 ## La bibliothèque bleu/vert, commune
 
@@ -116,12 +117,17 @@ son `StateDirectory`, et ne voit sa clé d'API que par `LoadCredential`.
 
 ## La chaîne — monter une cible de version
 
-`.github/workflows/deploy-cible.yml`, **à la main seulement** (onglet Actions ou
-`gh workflow run deploy-cible.yml -f cible=<environnement> -f tag=vX.Y.Z -f etape=…`) :
+`.github/workflows/deploy-cible.yml`, **à la main seulement** : depuis le dépôt privé du
+propriétaire de la cible, qui l'appelle (`workflow_call`, § Le déclencheur, dans le dépôt
+du propriétaire) — ou, pour une cible dont l'environnement serait dans ce dépôt, par
+`gh workflow run deploy-cible.yml -f cible=<environnement> -f tag=vX.Y.Z -f etape=… -f acces=…`.
+Dans les deux cas, le code exécuté vient du **tronc au tag demandé** (checkout de
+`otomata-tech/oto-backend`, jamais du dépôt appelant) :
 
 1. **Entrées** validées avant tout usage (elles finissent dans un `ref:` et un nom
-   d'environnement), puis **l'environnement de la cible doit exister et exiger un
-   relecteur** (`deploy/cible/protection.sh`, par l'API de GitHub) : sinon, refus.
+   d'environnement ; appelé, rien ne les borne d'avance), puis **l'environnement de la
+   cible doit exister et exiger un relecteur** (`deploy/cible/protection.sh`, par l'API
+   de GitHub, dans le dépôt du run — le dépôt appelant quand il y en a un) : sinon, refus.
 2. **Approbation** par le relecteur requis — un seul job derrière elle, qui porte toute
    la montée demandée : une montée, une décision.
 3. **Le tag est sur la branche principale du tronc** (la porte le revérifie sur la
@@ -141,10 +147,19 @@ qu'il exécute, se met à consulter un autre déploiement que celui de la cible.
 
 `action=retour` rebascule un rôle sur sa couleur précédente, sans rien installer.
 
-**L'accès** : runner hébergé par GitHub → `cloudflared` (dépôt APT signé) → tunnel
-Cloudflare Access de la cible, authentifié par **jeton de service** → SSH par la clé de
-déploiement, hôte **épinglé** → **commande forcée** vers la porte
-(`deploy/cible/appeler.sh`). La déclaration part sur l'entrée standard.
+**L'accès** (`deploy/cible/appeler.sh`) est l'entrée `acces`, **choisie, sans défaut** —
+absente ou inconnue, la montée refuse en la nommant ; jamais de repli d'un mode sur
+l'autre :
+
+- `tunnel` : runner hébergé par GitHub → `cloudflared` (dépôt APT signé) → tunnel
+  Cloudflare Access de la cible, authentifié par **jeton de service** (sans jeton : refus
+  nommé) → SSH ;
+- `ssh` : runner → **`:22` de la machine**, directement, sans `cloudflared`, sans jeton,
+  sans mandataire — le mode d'attente, tant que le tunnel n'existe pas.
+
+Puis, dans les deux : SSH par la clé de déploiement, hôte **épinglé**
+(`StrictHostKeyChecking=yes`, seul `CIBLE_SSH_KNOWN_HOSTS` fait foi) → **commande forcée**
+vers la porte. La déclaration part sur l'entrée standard.
 
 **La porte** (`deploy/cible/porte.sh`, posée une fois sur la machine à
 `/usr/local/sbin/oto-cible-porte`) est le seul fichier de la chaîne qui y vit. Elle
@@ -191,8 +206,10 @@ gestionnaire de mots de passe, jamais dans un dépôt ni dans une page.
 Sur une Ubuntu 24.04 du projet de la cible, montée selon le socle d'une box tierce :
 
 - `git`, `caddy`, `python3`, `uv` ;
-- le tunnel Cloudflare Access de la machine, une application SSH, et un **jeton de
-  service dédié à cette cible** dans la politique de l'application ;
+- l'accès : en attendant le tunnel, le `:22` ouvert, **par clé seulement**
+  (`PasswordAuthentication no`, `PermitRootLogin no`) — accès `ssh` ; puis le tunnel
+  Cloudflare Access de la machine, une application SSH, et un **jeton de service dédié à
+  cette cible** dans la politique de l'application — accès `tunnel` ;
 - un utilisateur de déploiement **non root**, avec la clé CI en commande forcée :
   ```
   # ~deploy/.ssh/authorized_keys
@@ -207,23 +224,25 @@ Sur une Ubuntu 24.04 du projet de la cible, montée selon le socle d'une box tie
   publics.
 
 ⚠️ Le `:22` reste ouvert jusqu'à ce qu'**un déploiement réel soit passé par le
-tunnel** ; on ne le ferme qu'après (socle, gestes J+2/J+7).
+tunnel** ; on ne le ferme qu'après (socle, gestes J+2/J+7 ; § Passer au tunnel, puis
+fermer le :22).
 
 ### 4. L'environnement GitHub de la cible
 
-Un environnement du dépôt, au nom de la cible (le nom ne s'écrit que là, et dans
-l'entrée `cible` du workflow) :
+Un environnement **du dépôt qui déclenche** — le dépôt privé du propriétaire de la
+cible (§ Le déclencheur) — au nom de la cible (le nom ne s'écrit que là, et dans l'entrée
+`cible` du workflow) :
 
 | Nom | Sorte | Contenu |
 |---|---|---|
 | `CIBLE_DECLARATION` | secret | la déclaration (JSON, sur une ligne : `jq -c`) |
-| `CIBLE_SSH_HOTE` | secret | l'hôte SSH de l'application Access |
+| `CIBLE_SSH_HOTE` | secret | accès `tunnel` : l'hôte SSH de l'application Access ; accès `ssh` : le nom (ou l'adresse) de la machine |
 | `CIBLE_SSH_UTILISATEUR` | secret | l'utilisateur de déploiement |
-| `CIBLE_SSH_KNOWN_HOSTS` | secret | la clé d'hôte de la machine, sous le nom de l'hôte SSH (épinglée) |
+| `CIBLE_SSH_KNOWN_HOSTS` | secret | la clé d'hôte de la machine, sous le nom de l'hôte SSH (épinglée) — sous les deux noms pendant la bascule vers le tunnel (`hote-access,machine ssh-ed25519 …`) |
 | `CIBLE_CONSOMMATEUR` | secret, facultatif | `{"nom", "depot": "owner/repo", "chemin", "cle": bool}` (sur une ligne) — le front qui consomme l'API de la cible |
 | `CIBLE_SSH_CLE` | secret | la clé privée de déploiement |
-| `CIBLE_CF_ACCESS_CLIENT_ID` | secret | le jeton de service Access (identifiant) |
-| `CIBLE_CF_ACCESS_CLIENT_SECRET` | secret | le jeton de service Access (secret) |
+| `CIBLE_CF_ACCESS_CLIENT_ID` | secret, accès `tunnel` | le jeton de service Access (identifiant) |
+| `CIBLE_CF_ACCESS_CLIENT_SECRET` | secret, accès `tunnel` | le jeton de service Access (secret) |
 | `CIBLE_CONSOMMATEUR_CLE` | secret, si `cle` | clé de lecture seule du dépôt du consommateur |
 
 **Tout en secret, aucune variable** : l'environnement ne porte AUCUNE variable
@@ -241,15 +260,17 @@ neutre.
 
 **Protection de l'environnement — obligatoire** : dans ses réglages, « Required
 reviewers » avec au moins un relecteur (celui qui décide des montées), et les branches de
-déploiement limitées à `main` (celle d'où l'on lance le workflow). Le workflow le vérifie à chaque montée et
+déploiement limitées à la branche par défaut du dépôt qui déclenche (celle d'où l'on lance le workflow). Le workflow le vérifie à chaque montée et
 refuse de partir sans relecteur requis — y compris quand l'environnement n'existe pas
 encore, que GitHub créerait sinon à la volée, sans protection.
 
 ### 5. Monter
 
+Depuis le dépôt du propriétaire (son workflow appelant, § Le déclencheur) :
+
 ```
-gh workflow run deploy-cible.yml -f cible=<environnement> -f tag=vX.Y.Z -f etape=preprod
-gh workflow run deploy-cible.yml -f cible=<environnement> -f tag=vX.Y.Z -f etape=prod
+gh workflow run monter-instance.yml -f tag=vX.Y.Z -f etape=preprod
+gh workflow run monter-instance.yml -f tag=vX.Y.Z -f etape=prod
 ```
 
 La première montée d'un rôle le fait naître (amorce) et installe la couleur verte. Puis,
@@ -258,6 +279,108 @@ NoNewPrivileges -p Restart`, et `curl https://<hôte>/api/version`. Les données
 à part, par l'export par périmètre (`docs/export-perimetre.md`), dans la base née.
 
 Retour arrière d'un rôle : `-f action=retour -f etape=<rôle>`.
+
+## Le déclencheur, dans le dépôt du propriétaire
+
+Ce dépôt est public, les journaux de ses runs aussi. Le **déclencheur** des montées d'une
+cible vit donc dans le dépôt **privé** de son propriétaire : un workflow d'une dizaine de
+lignes qui appelle celui-ci (`workflow_call`). Appelé, `github.repository`,
+`github.token` et `environment:` sont ceux du dépôt appelant : c'est **son** environnement
+qui est vérifié (`protection.sh`) puis approuvé, **ses** secrets d'environnement qui sont
+lus, **ses** journaux qui gardent la trace. Le code exécuté, lui, vient toujours du tronc,
+au tag demandé.
+
+### Le workflow appelant
+
+`.github/workflows/monter-instance.yml`, dans le dépôt privé :
+
+```yaml
+name: Monter l'instance
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag du tronc à monter (vX.Y.Z)"
+        required: true
+      etape:
+        type: choice
+        options: [preprod, prod, preprod-puis-prod]
+        default: preprod
+      action:
+        type: choice
+        options: [deployer, retour]
+        default: deployer
+
+jobs:
+  monter:
+    # Le plafond du jeton : l'appelé ne peut que l'abaisser. `actions: read` lit
+    # l'environnement pour vérifier qu'il exige un relecteur ; sans lui, refus.
+    permissions:
+      contents: read
+      actions: read
+    uses: otomata-tech/oto-backend/.github/workflows/deploy-cible.yml@<SHA de 40 caractères> # vX.Y.Z
+    with:
+      cible: <environnement>
+      tag: ${{ inputs.tag }}
+      etape: ${{ inputs.etape }}
+      action: ${{ inputs.action }}
+      acces: ssh          # tunnel, une fois le tunnel prouvé (§ Passer au tunnel)
+```
+
+- **La référence épinglée** est le **SHA d'un tag** du tronc, avec le tag en commentaire
+  — jamais `main` (chaque poussée sur `main` changerait ce qui s'exécute contre la prod
+  de la cible, sans relecture de son propriétaire), et plutôt le SHA que le tag (un tag
+  se déplace, un SHA non). La changer est un commit relu dans le dépôt du propriétaire.
+  Elle fixe le **workflow** ; l'entrée `tag` fixe le **code monté** (`deploy/` compris).
+  Les deux sont indépendants, mais tous deux doivent porter l'accès choisi : un tag
+  antérieur à l'entrée `acces` exige le jeton Access et refuse en accès `ssh`.
+- **Aucun `secrets:`** dans l'appel : les secrets sont ceux de l'environnement de la
+  cible, que GitHub ne transmet pas par l'appel mais donne au job qui nomme
+  l'environnement. Le workflow appelé les déclare tous, facultatifs ; chacun est exigé
+  en le nommant par le script qui s'en sert.
+- **Pas de `concurrency`** du même nom dans l'appelant (`deploy-cible-<cible>`) : le
+  workflow appelé en pose une, les deux s'attendraient l'un l'autre.
+- `cible` s'écrit ici, en dur : le dépôt est privé, ses journaux aussi. Le masquage (D5)
+  reste actif appelé : il cache aussi le nom du dépôt appelant.
+
+### Ce qu'il faut côté propriétaire
+
+| Où | Quoi |
+|---|---|
+| Réglages → Actions → General | autoriser les workflows réutilisables de `otomata-tech/oto-backend` (si la politique restreint les actions et workflows tiers) |
+| Réglages → Environments → `<environnement>` | **Required reviewers** (au moins un, celui qui décide des montées) ; branches de déploiement : la branche par défaut |
+| Environnement, secrets (jamais de variables) | `CIBLE_DECLARATION`, `CIBLE_SSH_HOTE`, `CIBLE_SSH_UTILISATEUR`, `CIBLE_SSH_KNOWN_HOSTS`, `CIBLE_SSH_CLE` ; en accès `tunnel` : `CIBLE_CF_ACCESS_CLIENT_ID`, `CIBLE_CF_ACCESS_CLIENT_SECRET` ; facultatifs : `CIBLE_CONSOMMATEUR`, `CIBLE_CONSOMMATEUR_CLE` (§ 4) |
+| Job appelant | `permissions: {contents: read, actions: read}` — le `GITHUB_TOKEN` suffit, aucun jeton dédié |
+
+⚠️ **Offre GitHub du propriétaire.** Sur un dépôt **privé**, GitHub ne donne les
+environnements et leurs secrets qu'aux offres Pro, Team ou Enterprise, et les **relecteurs
+requis qu'à Enterprise**. Sans eux, `protection.sh` refuse chaque montée — c'est voulu :
+une montée qui n'attendrait personne ne part pas. Le vérifier avant de poser le
+déclencheur.
+
+### En attendant le tunnel : l'accès `ssh`
+
+`acces: ssh` va droit au `:22` de la machine : `CIBLE_SSH_HOTE` est la machine,
+`CIBLE_SSH_KNOWN_HOSTS` sa clé d'hôte sous ce nom (relevée sur la machine,
+`ssh-keyscan` comparé à `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`), aucun jeton.
+La clé de déploiement n'ouvre que la porte (`restrict,command=…`) ; le `:22` n'accepte
+que des clés. Les runners hébergés n'ayant pas d'adresse fixe, une restriction par
+source (`from=`, pare-feu) n'est pas tenable : c'est un état d'attente, pas une fin.
+
+### Passer au tunnel, puis fermer le :22
+
+1. Le propriétaire active Zero Trust : tunnel de la machine, application SSH, **jeton de
+   service** dédié dans sa politique.
+2. Dans l'environnement : `CIBLE_CF_ACCESS_CLIENT_ID` et `_SECRET` ; `CIBLE_SSH_HOTE` =
+   l'hôte de l'application Access ; `CIBLE_SSH_KNOWN_HOSTS` porte la même clé d'hôte
+   sous les deux noms (`hote-access,machine ssh-ed25519 …`). Tant que l'appelant dit
+   `ssh`, un avertissement signale le jeton inutilisé.
+3. Commit dans le dépôt du propriétaire : `acces: tunnel`.
+4. Une montée **réelle** par le tunnel (préprod), constatée (`/api/version`).
+5. Alors seulement, fermer le `:22` au public (pare-feu du projet), et retirer l'ancien
+   nom de `CIBLE_SSH_KNOWN_HOSTS`. Un appel resté en `ssh` échouerait désormais,
+   bruyamment : il n'y a pas de repli.
 
 ## Hors de ce dépôt : les workers runner
 

@@ -3,9 +3,11 @@
 maintenance. Banc : `_banc_cible.py` (root simulé, racine jetable, doublures)."""
 from __future__ import annotations
 
+import subprocess
+
 import pytest
 
-from _banc_cible import DECLARATION, SHA, Banc
+from _banc_cible import DECLARATION, DEPOT, SHA, Banc
 
 
 @pytest.fixture
@@ -108,43 +110,134 @@ def test_la_declaration_ne_peut_pas_choisir_le_depot():
 
 
 # --- côté CI : appeler.sh --------------------------------------------------------
-def _appeler(tmp_path, **env):
-    import subprocess
-    from _banc_cible import DEPOT
+# Frapper à la porte par le chemin CHOISI (`ACCES` : tunnel | ssh), exécuté pour de vrai
+# avec des doublures qui journalisent (`ssh`, `cloudflared`, `sudo`, `curl`) :
+# - accès absent ou inconnu : refus nommé, rien n'est appelé ; aucun repli d'un mode sur
+#   l'autre ;
+# - `tunnel` exige le jeton de service Access et passe par `cloudflared` ;
+# - `ssh` va droit au `:22` de la machine, sans `cloudflared` ni jeton, sans mandataire ;
+# - dans les deux : clé d'hôte ÉPINGLÉE (seul le known_hosts de la cible compte), même
+#   clé, même commande `<action> <rôle> <tag>`, la déclaration sur l'entrée standard.
+APPELER = DEPOT / "deploy" / "cible" / "appeler.sh"
+_ENV = {
+    "CIBLE_SSH_HOTE": "machine.exemple.test",
+    "CIBLE_SSH_UTILISATEUR": "porte-exemple",
+    "CIBLE_SSH_KNOWN_HOSTS": "machine.exemple.test ssh-ed25519 AAAAC3Nz",
+    "CIBLE_SSH_CLE": "-----BEGIN OPENSSH PRIVATE KEY-----\nfausse\n-----END OPENSSH PRIVATE KEY-----",
+    "CIBLE_DECLARATION": '{"instance": "exemple"}',
+}
+_JETON = {"TUNNEL_SERVICE_TOKEN_ID": "id-exemple", "TUNNEL_SERVICE_TOKEN_SECRET": "secret-exemple"}
+
+
+def _appeler(tmp_path, env: dict[str, str]) -> tuple[subprocess.CompletedProcess, list[str], str]:
     bin_ = tmp_path / "bin"
     bin_.mkdir()
-    for nom, corps in {"cloudflared": "exit 0",
-                       "ssh": 'echo "ssh $*" > "$TRACE"; cat >> "$TRACE"'}.items():
+    trace, entree = tmp_path / "trace", tmp_path / "entree"
+    doublures = {
+        # ssh : ses arguments, et ce qu'il reçoit sur l'entrée standard ; il relit aussi
+        # le known_hosts épinglé qu'on lui désigne (preuve qu'il existe au moment de l'appel).
+        "ssh": f'''for a in "$@"; do echo "ssh $a" >> "{trace}"; done
+cat > "{entree}"
+prec=""; for a in "$@"; do
+  case "$prec$a" in -oUserKnownHostsFile=*) cat "${{a#UserKnownHostsFile=}}" > "{tmp_path}/hotes-lus" ;; esac
+  prec="$a"; done''',
+        "cloudflared": f'echo "cloudflared $*" >> "{trace}"',
+        "sudo": f'echo "sudo $*" >> "{trace}"',
+        "curl": f'echo "curl $*" >> "{trace}"',
+    }
+    for nom, corps in doublures.items():
         (bin_ / nom).write_text(f"#!/bin/bash\n{corps}\n")
         (bin_ / nom).chmod(0o755)
-    trace = tmp_path / "trace"
-    return trace, subprocess.run(
-        ["/bin/bash", str(DEPOT / "deploy/cible/appeler.sh"), "deployer", "prod", "v1.2.3"],
-        env={"PATH": f"{bin_}:/usr/bin:/bin", "TRACE": str(trace), **env},
-        capture_output=True, text=True, timeout=30)
+    fini = subprocess.run(["/bin/bash", str(APPELER), "deployer", "preprod", "v1.2.3"],
+                          env={"PATH": f"{bin_}:/usr/bin:/bin", **env},
+                          capture_output=True, text=True, timeout=30)
+    lignes = trace.read_text().splitlines() if trace.exists() else []
+    return fini, lignes, entree.read_text() if entree.exists() else ""
 
 
-_ACCES = {"CIBLE_SSH_HOTE": "ssh.exemple.test", "CIBLE_SSH_UTILISATEUR": "deploy",
-          "CIBLE_SSH_KNOWN_HOSTS": "ssh.exemple.test ssh-ed25519 AAAA",
-          "CIBLE_SSH_CLE": "cle-privee", "TUNNEL_SERVICE_TOKEN_ID": "id",
-          "TUNNEL_SERVICE_TOKEN_SECRET": "secret", "CIBLE_DECLARATION": '{"instance": "x"}'}
+def _args_ssh(lignes: list[str]) -> list[str]:
+    return [l[len("ssh "):] for l in lignes if l.startswith("ssh ")]
 
 
-def test_appeler_passe_par_le_tunnel_avec_l_hote_epingle(tmp_path):
-    trace, fini = _appeler(tmp_path, **_ACCES)
-    assert fini.returncode == 0, fini.stderr
-    appel, stdin = trace.read_text().split("\n", 1)
-    assert "-o StrictHostKeyChecking=yes" in appel and "-o BatchMode=yes" in appel
-    assert "-o ProxyCommand=cloudflared access ssh --hostname %h" in appel
-    assert appel.endswith("deploy@ssh.exemple.test deployer prod v1.2.3")
-    assert stdin == '{"instance": "x"}'
+def _options(args: list[str]) -> list[str]:
+    return [args[i + 1] for i, a in enumerate(args[:-1]) if a == "-o"]
 
 
-@pytest.mark.parametrize("absente", sorted(_ACCES))
-def test_appeler_sans_une_valeur_de_la_cible_rougit(tmp_path, absente):
-    trace, fini = _appeler(tmp_path, **{k: v for k, v in _ACCES.items() if k != absente})
-    assert fini.returncode == 1 and absente in fini.stdout
-    assert not trace.exists()
+def _commun(tmp_path, args: list[str], entree: str) -> None:
+    """Ce qui ne change pas d'un accès à l'autre."""
+    opts = _options(args)
+    assert "StrictHostKeyChecking=yes" in opts
+    assert "GlobalKnownHostsFile=/dev/null" in opts
+    assert "BatchMode=yes" in opts and "IdentitiesOnly=yes" in opts
+    assert (tmp_path / "hotes-lus").read_text() == _ENV["CIBLE_SSH_KNOWN_HOSTS"] + "\n"
+    assert args[-2:] == ["porte-exemple@machine.exemple.test", "deployer preprod v1.2.3"]
+    assert entree == _ENV["CIBLE_DECLARATION"]
+
+
+def test_acces_ssh_va_droit_au_22_epingle_sans_cloudflared(tmp_path):
+    fini, lignes, entree = _appeler(tmp_path, {**_ENV, "ACCES": "ssh"})
+    assert fini.returncode == 0, fini.stdout + fini.stderr
+    assert not [l for l in lignes if not l.startswith("ssh ")], lignes   # ni cloudflared, ni apt
+    args = _args_ssh(lignes)
+    _commun(tmp_path, args, entree)
+    assert args[args.index("-p") + 1] == "22"
+    opts = _options(args)
+    assert "ProxyCommand=none" in opts
+    assert not any("cloudflared" in a for a in args)
+    assert "::warning" not in fini.stdout
+
+
+def test_acces_ssh_signale_un_jeton_access_inutilise(tmp_path):
+    fini, lignes, _ = _appeler(tmp_path, {**_ENV, **_JETON, "ACCES": "ssh"})
+    assert fini.returncode == 0, fini.stdout + fini.stderr
+    assert "Jeton Access inutilisé" in fini.stdout
+    assert "ProxyCommand=none" in _options(_args_ssh(lignes))
+
+
+def test_acces_tunnel_passe_par_cloudflared(tmp_path):
+    fini, lignes, entree = _appeler(tmp_path, {**_ENV, **_JETON, "ACCES": "tunnel"})
+    assert fini.returncode == 0, fini.stdout + fini.stderr
+    args = _args_ssh(lignes)
+    _commun(tmp_path, args, entree)
+    assert "ProxyCommand=cloudflared access ssh --hostname %h" in _options(args)
+    assert "-p" not in args
+
+
+@pytest.mark.parametrize("jeton", [{}, {"TUNNEL_SERVICE_TOKEN_ID": "id-exemple"}])
+def test_acces_tunnel_sans_jeton_refuse(tmp_path, jeton):
+    fini, lignes, _ = _appeler(tmp_path, {**_ENV, **jeton, "ACCES": "tunnel"})
+    assert fini.returncode == 1
+    assert "Tunnel sans jeton" in fini.stdout and "TUNNEL_SERVICE_TOKEN_SECRET" in fini.stdout
+    assert lignes == []                                       # rien n'a été appelé
+
+
+@pytest.mark.parametrize("acces, titre", [(None, "Accès non choisi"), ("", "Accès non choisi"),
+                                          ("direct", "Accès inconnu")])
+def test_acces_absent_ou_inconnu_refuse(tmp_path, acces, titre):
+    env = {**_ENV, **_JETON}
+    if acces is not None:
+        env["ACCES"] = acces
+    fini, lignes, _ = _appeler(tmp_path, env)
+    assert fini.returncode == 1
+    assert titre in fini.stdout
+    assert lignes == []
+
+
+@pytest.mark.parametrize("acces", ["ssh", "tunnel"])
+@pytest.mark.parametrize("absente", sorted(_ENV))
+def test_une_valeur_de_la_cible_absente_refuse_dans_les_deux_acces(tmp_path, acces, absente):
+    env = {k: v for k, v in {**_ENV, **_JETON, "ACCES": acces}.items() if k != absente}
+    fini, lignes, _ = _appeler(tmp_path, env)
+    assert fini.returncode == 1
+    assert "Cible non déclarée" in fini.stdout and absente in fini.stdout
+    assert lignes == []
+
+
+@pytest.mark.parametrize("acces", ["ssh", "tunnel"])
+def test_les_messages_ne_citent_pas_la_cible(tmp_path, acces):
+    env = {**_ENV, "ACCES": acces}
+    fini, _, _ = _appeler(tmp_path, env)
+    assert "exemple" not in fini.stdout + fini.stderr
 
 
 # --- côté CI : protection.sh ----------------------------------------------------
@@ -184,3 +277,13 @@ def test_protection_sans_relecteur_refuse(tmp_path, reponse):
 def test_protection_environnement_absent_refuse(tmp_path):
     fini = _protection(tmp_path, '{"message": "Not Found"}', code=1)
     assert fini.returncode == 1 and "introuvable" in fini.stdout
+    assert "actions: read" in fini.stdout
+
+
+def test_protection_un_depot_mal_forme_refuse(tmp_path):
+    """Le dépôt du run est vérifié avant d'être mis dans une URL d'API."""
+    fini = subprocess.run(["/bin/bash", str(DEPOT / "deploy/cible/protection.sh"),
+                           "proprio/depot/../autre", "exemple"],
+                          env={"PATH": "/usr/bin:/bin"}, capture_output=True, text=True,
+                          timeout=30)
+    assert fini.returncode == 1 and "owner/repo" in fini.stdout
