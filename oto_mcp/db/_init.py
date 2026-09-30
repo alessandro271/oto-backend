@@ -277,6 +277,18 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     conn.execute("DROP TABLE IF EXISTS user_grants")
     conn.execute("DROP TABLE IF EXISTS org_grants")
     conn.execute("DROP TABLE IF EXISTS platform_keys")
+    # Tables orphelines : plus aucun code ne les crée ni ne les lit, mais elles restaient
+    # dans la base partagée, où l'export par périmètre (#1088) les refuse, faute de
+    # classement. Les classer n'est pas possible : une base née par ce démarrage ne les a
+    # pas, et le classement refuse aussi une entrée sans table. Aucune clé étrangère ne
+    # pointe vers elles. Archivées avant suppression (30/09/2026, sur la box de prod :
+    # sauvegardes/tables-orphelines-20260930T094502Z.json).
+    # - credit_transactions, org_credits : modèle crédits + Stripe retiré par a573435b (#82).
+    conn.execute("DROP TABLE IF EXISTS credit_transactions")
+    conn.execute("DROP TABLE IF EXISTS org_credits")
+    # - runner_job_attempts : retirée par le revert 053fdf4d (#943). Si #943 revient, il
+    #   la recrée et doit alors la classer pour l'export.
+    conn.execute("DROP TABLE IF EXISTS runner_job_attempts")
     # Idempotent column adds — `CREATE TABLE IF NOT EXISTS` ne propage pas les
     # nouvelles colonnes sur les tables existantes.
     # ADR 0052 (lot L1) — rattacher les orgs à un tenant. L'ORDRE compte : le
