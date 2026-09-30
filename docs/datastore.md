@@ -283,6 +283,9 @@ agent) :
   `row_claimed`** si un autre la tient (avec qui et jusqu'à quand) — un conflit se dit,
   il ne se devine pas. Renouvelable sans erreur par le **même** `worker` : rafraîchir son
   écran ne doit pas coûter sa ligne (`db.datastore_claim_row`, UPDATE conditionnel).
+  Renouveler prolonge le bail **sans changer son run** (`_claimed_run`, oto#230) : seule
+  une prise (ligne libre, ou bail échu) pose le run de l'appel — changer de run, c'est
+  libérer puis réserver.
   **409 `row_outside_claimable`** si le tableau déclare un périmètre que la ligne ne
   satisfait pas (#517), jugé AVANT le bail — `details.claimable` porte le périmètre.
 

@@ -22,9 +22,9 @@ Ce que ces tests verrouillent :
    `claimed_run`. `_row_to_dict` lit la colonne par CLÉ (pas `.get`) : un chemin qui
    l'oublie LÈVE au lieu de servir un faux « sans run ».
 
-⚠️ Hors périmètre, et volontairement : `datastore_release` n'efface pas `claimed_run`
-(oto-backend#664), donc la colonne peut rester garnie sur une ligne libre. Rien n'en
-sort : la projection ne parle du run que sous `claimed_by IS NOT NULL`, et le test
+Depuis oto-backend#664, la libération ligne à ligne efface aussi `claimed_run`. La
+projection, elle, ne parle du run que sous `claimed_by IS NOT NULL` : une colonne
+restée garnie (par un chemin qui l'oublierait) ne sortirait pas, et le test
 `test_une_ligne_liberee_ne_dit_plus_rien_du_run` le fige.
 """
 from __future__ import annotations
@@ -308,8 +308,8 @@ def test_une_ligne_libre_ne_porte_aucune_des_trois_cles(surface):
 
 
 def test_une_ligne_liberee_ne_dit_plus_rien_du_run(surface):
-    """`datastore_release` laisse `claimed_run` en base (oto-backend#664) — la
-    projection, elle, se tait dès que le bail tombe. La colonne périmée ne sort pas."""
+    """La projection se tait dès que le bail tombe : le run d'un bail rendu ne sort
+    pas (la colonne elle-même est effacée depuis oto-backend#664)."""
     ns, ns_id = _table(1)
     run = _run()
     rid = _claim(ns, run)["row"]["_id"]

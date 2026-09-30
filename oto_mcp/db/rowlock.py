@@ -246,24 +246,34 @@ def datastore_claim_row(ns_id: int, row_id: str, *, worker: str,
     ⚠️ Le compteur de reprises monte ici aussi (#433) — mais sur une PRISE, pas sur
     un renouvellement : reprendre une ligne dont le bail a lâché compte, la garder
     non. `claim_next`, lui, n'a pas la nuance à porter : sa clause d'éligibilité
-    exclut déjà le bail actif, donc il ne renouvelle jamais rien."""
+    exclut déjà le bail actif, donc il ne renouvelle jamais rien.
+
+    ⚠️ **Renouveler ne change pas de run** (oto#230) : la même distinction décide de
+    `claimed_run`. Une PRISE pose le run de l'appel ; un renouvellement garde celui
+    du bail qu'il prolonge. `claimed_run` est la SEULE preuve de titularité en
+    écriture (`FileDeTravailMixin._lease_guard`), alors que `worker` est un libellé
+    que l'appelant choisit : le réécrire sur la foi du libellé détachait le run qui
+    tenait la ligne (renouvelée hors run, elle ne se libérait plus à la fin du run et
+    son titulaire se voyait refuser l'écriture) ou la rattachait à un autre. Changer
+    de run, c'est libérer puis réserver — deux gestes, chacun tracé."""
     fclauses, fparams = _ds_filter_clauses(filters)
     perimetre = "".join(f" AND {c}" for c in fclauses)
+    # RÉSERVER, c'est PRENDRE une ligne : un nouveau titulaire, ou une ligne dont le
+    # bail a lâché. Le titulaire qui renouvelle ne la prend pas — elle ne lui a jamais
+    # échappé — donc son geste ne consomme pas le plafond (#433) : sur une file
+    # pilotée à la main, rafraîchir son écran est le geste le plus banal, et le
+    # compter la viderait de ses lignes. Il ne change pas non plus le run qui la
+    # tient (oto#230, cf. docstring).
+    # ⚠️ Les colonnes lues dans le SET sont celles d'AVANT l'UPDATE (PG) :
+    # `claimed_until` désigne bien le bail que cet appel remplace.
+    prise = "(claimed_until IS NULL OR claimed_until < NOW())"
     with _connect() as conn:
         row = conn.execute(
             "UPDATE datastore_rows SET claimed_by = %s, "
-            "claimed_until = NOW() + (%s || ' seconds')::interval, claimed_run = %s, "
-            # RÉSERVER, c'est PRENDRE une ligne : un nouveau titulaire, ou une ligne
-            # dont le bail a lâché. Le titulaire qui renouvelle ne la prend pas — elle
-            # ne lui a jamais échappé — donc son geste ne consomme pas le plafond
-            # (#433) : sur une file pilotée à la main, rafraîchir son écran est le
-            # geste le plus banal, et le compter la viderait de ses lignes.
-            # ⚠️ Les colonnes lues dans le SET sont celles d'AVANT l'UPDATE (PG) :
-            # `claimed_until` désigne bien le bail que cet appel remplace.
-            "claims = claims + CASE WHEN claimed_until IS NULL "
-            "                       OR claimed_until < NOW() THEN 1 ELSE 0 END "
-            "WHERE ns_id = %s AND row_id = %s AND (claimed_until IS NULL "
-            "OR claimed_until < NOW() OR claimed_by = %s)"
+            "claimed_until = NOW() + (%s || ' seconds')::interval, "
+            f"claimed_run = CASE WHEN {prise} THEN %s ELSE claimed_run END, "
+            f"claims = claims + CASE WHEN {prise} THEN 1 ELSE 0 END "
+            f"WHERE ns_id = %s AND row_id = %s AND ({prise} OR claimed_by = %s)"
             + perimetre + " " + _RENDU,
             (str(worker), int(lease_seconds), run_id, ns_id, row_id, str(worker),
              *fparams),
