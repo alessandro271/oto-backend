@@ -9,6 +9,12 @@ public en échec, lanceur figé sur un chemin) — dans une racine jetable, avec
 doublures qui JOURNALISENT chaque commande au lieu de l'exécuter, puis compare la
 trace à une référence enregistrée depuis les scripts d'avant.
 
+Lot 5 (30/09/2026) : nos deux wrappers déclarent `BG_LANCEUR=versionne`, et les
+références de leurs scénarios ont été régénérées — seule la propagation du lanceur
+(`cp -a start-encrypted.sh` + `chmod`) a disparu des gestes. Le mode historique
+`propage`, gardé jusqu'au lot 5b pour le retour arrière, est rejoué par les scénarios
+`prod-lanceur-propage` et `prod-lanceur-fige`, qui réécrivent le wrapper dans ce mode.
+
 La trace contient : chaque commande externe et ses arguments, dans l'ordre ; ce que
 le script écrit sur sa sortie ; son code de sortie ; et l'état final des fichiers
 qu'il écrit (amont Caddy, pointeur de couleur, coordonnée de version, unités posées).
@@ -57,14 +63,13 @@ SCENARIOS: dict[str, tuple[str, list[str], str, str, dict[str, str]]] = {
     "prod-caddy-refuse": ("oto-backend.sh", [TAG], "prod", "blue",
                           {"BANC_CADDY_KO": "1"}),
     "prod-lanceur-fige": ("oto-backend.sh", [TAG], "prod", "blue",
-                          {"BANC_LANCEUR_FIGE": "1"}),
+                          {"BANC_LANCEUR_PROPAGE": "1", "BANC_LANCEUR_FIGE": "1"}),
     "prod-tag-sans-maintenance": ("oto-backend.sh", [TAG], "prod", "blue",
                                   {"BANC_SANS_MAINTENANCE": "1"}),
-    # Notre box en `BG_LANCEUR=versionne` (lot 5, #967) : rien n'est propagé d'une couleur
-    # à l'autre, le lanceur est celui de l'arbre du tag. Pas de référence « d'avant » —
-    # celle-ci prouve ce que fera la bascule, elle se relit dans son fichier.
-    "prod-lanceur-versionne": ("oto-backend.sh", [TAG], "prod", "blue",
-                               {"BANC_LANCEUR_VERSIONNE": "1"}),
+    # Le mode historique `BG_LANCEUR=propage` (retour arrière du lot 5, retiré au 5b) :
+    # le lanceur hors git passe de la couleur en service à la nouvelle.
+    "prod-lanceur-propage": ("oto-backend.sh", [TAG], "prod", "blue",
+                             {"BANC_LANCEUR_PROPAGE": "1"}),
     "canari-bleu-vers-vert": ("oto-backend-canari.sh", [SHA], "canari", "blue", {}),
     "canari-vert-vers-bleu": ("oto-backend-canari.sh", [SHA], "canari", "green", {}),
     "canari-retour-arriere": ("oto-backend-canari.sh", ["--rollback"], "canari", "blue", {}),
@@ -134,8 +139,8 @@ PYPROJECT = ('dependencies = [\n'
 def _reecrire(texte: str, racine: str, variantes: dict[str, str] | None = None) -> str:
     for prefixe in ("/opt/", "/etc/", "/var/lock/"):
         texte = texte.replace(prefixe, racine + prefixe)
-    if (variantes or {}).get("BANC_LANCEUR_VERSIONNE"):
-        texte = texte.replace("BG_LANCEUR=propage", "BG_LANCEUR=versionne")
+    if (variantes or {}).get("BANC_LANCEUR_PROPAGE"):
+        texte = re.sub(r"(?m)^BG_LANCEUR=versionne$", "BG_LANCEUR=propage", texte)
     return texte
 
 
@@ -162,13 +167,13 @@ def _preparer(racine: pathlib.Path, deploy: pathlib.Path, env: str, active: str,
         pip.chmod(0o755)
         (arbre / "pyproject.toml").write_text(PYPROJECT)
         (arbre / "deploy").mkdir()
-        if variantes.get("BANC_LANCEUR_VERSIONNE"):
-            # Le lanceur est DANS le tag ; aucun start-encrypted.sh n'existe plus.
-            (arbre / "deploy" / "lanceur_secrets.py").write_text("# lanceur du tag\n")
-        else:
+        if variantes.get("BANC_LANCEUR_PROPAGE"):
             lanceur = arbre / "start-encrypted.sh"
             lanceur.write_text(LANCEUR_FIGE if variantes.get("BANC_LANCEUR_FIGE") else LANCEUR)
             lanceur.chmod(0o755)
+        else:
+            # Le lanceur est DANS le tag ; rien n'est propagé d'une couleur à l'autre.
+            (arbre / "deploy" / "lanceur_secrets.py").write_text("# lanceur du tag\n")
         if not variantes.get("BANC_SANS_MAINTENANCE"):
             for u in ("oto-mcp-maintenance.service", "oto-mcp-maintenance.timer"):
                 (arbre / "deploy" / u).write_text(f"# {u} de la couleur {couleur}\n")

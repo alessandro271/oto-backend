@@ -50,9 +50,9 @@ BG_LOCK=/var/lock/oto-mcp-bluegreen-canari.lock
 BG_CADDYFILE=/etc/caddy/Caddyfile
 BG_DRAIN=/opt/deploy/oto-mcp-drain.sh
 BG_DRAIN_UNIT=oto-mcp-drain-canari
-# Notre lanceur vit hors git dans chaque arbre et s'y édite à la main : il est PROPAGÉ
-# de la couleur en service à la nouvelle (cf. deploy/start-encrypted-canari.sh).
-BG_LANCEUR=propage
+# Notre lanceur est celui DU TAG (deploy/lanceur_secrets.py, secrets par nom sous
+# /preprod) : rien n'est propagé d'une couleur à l'autre. Box passée le 30/09/2026 (#967, lot 5).
+BG_LANCEUR=versionne
 
 . /opt/deploy/oto-mcp-bluegreen.sh
 

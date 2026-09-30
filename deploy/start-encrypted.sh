@@ -20,8 +20,8 @@
 # lanceur générique. Une autre instance démarre par `deploy/lanceur_secrets.py`, versionné
 # avec le tag, qui dérive ce qu'il tire de l'inventaire (`oto_mcp/env_secrets.py`) et le
 # tire du projet de CETTE instance, par nom (`BG_LANCEUR=versionne`). Le passage de notre box
-# est décidé (lot 5) : docs/instance-cible.md §Passer notre box au lanceur ; ce fichier est
-# retiré au lot 5b, une fois la box passée. D'ici là notre box reste en `BG_LANCEUR=propage`.
+# est fait depuis le 30/09/2026 (lot 5 : docs/instance-cible.md §Passer notre box au
+# lanceur) : ce fichier ne sert plus qu'au retour arrière du lot 5 et part au lot 5b.
 set -e
 set -a; . /etc/oto-mcp/scw.env; set +a
 

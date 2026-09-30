@@ -6,7 +6,8 @@ déclarent explicitement ce qui était codé en dur (verrou, Caddyfile, vidange,
 lanceur). Ce test rejoue chaque scénario réel de notre box — bascule dans les deux sens,
 retour arrière, préproduction, vidange et chemins d'échec — et compare la trace des
 commandes, la sortie et l'état final des fichiers à la référence enregistrée depuis les
-scripts d'avant (`tests/deploy/gestes_bleu_vert/`). Mécanisme et régénération :
+scripts d'avant (`tests/deploy/gestes_bleu_vert/`), régénérée au lot 5 pour le seul
+passage à `BG_LANCEUR=versionne`. Mécanisme et régénération :
 `tests/deploy/_banc_bleu_vert.py`.
 """
 from __future__ import annotations

@@ -795,14 +795,14 @@ Pas de framework de tests dans le repo → validation manuelle sur **PG16 jetabl
 
 ```bash
 # ⚠️ Déchiffrer un credential ad-hoc (crypto.decrypt / _reveal / credential_status) :
-# `OTO_MCP_MASTER_KEY` n'est PAS dans .env — start-encrypted.sh la fetch au boot
-# depuis Scaleway Secret Manager. Un script qui ne source que .env voit
+# `OTO_MCP_MASTER_KEY` n'est PAS dans .env — le lanceur la tire au boot du Secret
+# Manager. Un script qui ne source que .env voit
 # `encryption_enabled()=False` → tous les déchiffrements lèvent RuntimeError (FAUX
-# négatif, ≠ InvalidTag). Dès que la box est passée au lanceur générique (#967 lot 5),
-# `OTO_MCP_MASTER_KEY` est tirée par NOM par `deploy/lanceur_secrets.py` : passer par lui
-# (`lanceur --script scripts/X.py`, docs/commands.md §Un script d'entretien par le lanceur)
-# et non par le fetch ci-dessous, qui est celui de `start-encrypted.sh`. Avant ce passage,
-# répliquer le fetch :
+# négatif, ≠ InvalidTag). Depuis le passage de la box au lanceur générique (#967 lot 5,
+# 30/09/2026), `OTO_MCP_MASTER_KEY` est tirée par NOM par `deploy/lanceur_secrets.py` :
+# passer par lui (`lanceur --script scripts/X.py`, docs/commands.md §Un script d'entretien
+# par le lanceur) et non par le fetch ci-dessous, celui de l'ancien `start-encrypted.sh`,
+# qui ne vaut plus que sur une box revenue en arrière (retiré au lot 5b) :
 #   set -a; . .env; . /etc/oto-mcp/scw.env; set +a
 #   RESP=$(curl -s -H "X-Auth-Token: $SCW_SECRET_KEY" \
 #     ".../secret-manager/v1beta1/regions/fr-par/secrets/<id>/versions/latest_enabled/access")

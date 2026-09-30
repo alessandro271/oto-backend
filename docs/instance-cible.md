@@ -36,7 +36,11 @@ qui refuse, trafic public en échec, lanceur figé — avec des doublures qui jo
 chaque commande, et compare la trace (commandes, sortie, état final des fichiers) à la
 référence enregistrée depuis les scripts d'avant (`tests/deploy/gestes_bleu_vert/`).
 Un geste de notre box qui change fait rougir ce test ; le changer exprès, c'est
-régénérer la référence (`tests/deploy/_banc_bleu_vert.py`) et relire son diff.
+régénérer la référence (`tests/deploy/_banc_bleu_vert.py`) et relire son diff. Depuis le
+lot 5 (30/09/2026), nos scénarios tournent en `BG_LANCEUR=versionne` : le seul geste qui a
+changé à la régénération est la propagation du lanceur (`cp -a start-encrypted.sh`, puis
+`chmod`), disparue. Le mode historique `propage` reste rejoué (`prod-lanceur-propage`,
+`prod-lanceur-fige`) jusqu'au lot 5b.
 
 ⚠️ Le dépôt ne se propage pas seul sur notre box : `/opt/deploy/` y est une **copie**.
 Un changement de la bibliothèque n'y agit qu'une fois recopié (infra, sur go d'Alexis).
@@ -60,11 +64,11 @@ est **dans le tag** : ni propagé, ni édité sur la machine.
 - **Le `.env` ne porte que le non-secret** : un secret trouvé dans l'environnement
   refuse le démarrage.
 
-Notre box garde son lanceur (`BG_LANCEUR=propage`) : `deploy/start-encrypted.sh` et
-`-canari.sh` sont la déclaration de secrets **propre à notre cible** — identifiants de
-notre projet, Mollie, Pennylane. La passer au lanceur générique est un geste à part,
-décidé (lot 5) et décrit pas à pas plus bas (§Passer notre box au lanceur), pas une
-conséquence de ce chantier.
+Notre box démarre par ce lanceur depuis le 30/09/2026 (lot 5, décrit pas à pas plus bas,
+§Passer notre box au lanceur) : nos deux wrappers déclarent `BG_LANCEUR=versionne`.
+`deploy/start-encrypted.sh` et `-canari.sh`, l'ancienne déclaration de secrets **propre à
+notre cible** (identifiants de notre projet, Mollie, Pennylane), ne servent plus qu'au
+retour arrière du lot 5 : ils partent au lot 5b avec le mode `propage`.
 
 Le lanceur démarre le serveur, ou — `--script CHEMIN` — un script de l'arbre sous son
 Python (l'archive du journal, un script d'entretien), avec les mêmes secrets ; `--noms`
@@ -264,6 +268,8 @@ déclaration de l'URL du back-end de la cible. Rien de ce chantier ne le fait.
 
 ## Passer notre box au lanceur (#967, lot 5)
 
+**Fait le 30/09/2026**, préproduction puis production. Reste le lot 5b.
+
 Notre production (`oto-mcp`) et notre préproduction (canari) quittent `start-encrypted.sh` et
 `start-encrypted-canari.sh` pour `deploy/lanceur_secrets.py` : les secrets se lisent **par
 nom** dans notre Secret Manager, sous `/prod` et `/preprod`, et plus aucun identifiant de
@@ -378,9 +384,8 @@ contrôles se font par noms ou par code retour. Sur la box, en root. `<r>` = `pr
     `/data/infra/scripts/oto-backend-bluegreen/`.
 12. **Copies de `/opt/deploy/`** depuis le tag (`/root/lanceur-essai/deploy/`) : la bibliothèque
     `oto-mcp-bluegreen.sh`, le wrapper du rôle, `oto-mcp-drain.sh`. Le wrapper du dépôt déclare
-    encore `BG_LANCEUR=propage` : sur la box, `sed -i 's/^BG_LANCEUR=propage$/BG_LANCEUR=versionne/'
-    /opt/deploy/oto-backend{,-canari}.sh`. Contrôle : `grep -v '^#'` du fichier posé et du dépôt,
-    à la seule ligne `BG_LANCEUR` près. Puis `systemctl daemon-reload`.
+    `BG_LANCEUR=versionne` : il se pose tel quel. Contrôle : `grep -v '^#' <fichier> | sha256sum`
+    du fichier posé et du dépôt, identiques. Puis `systemctl daemon-reload`.
 13. **Déployer par le pipeline habituel** (canari : push sur main ; prod : tag) : la nouvelle couleur
     démarre par le lanceur, le bleu/vert garde l'ancienne si elle ne devient pas saine. Le tag doit
     porter `deploy/lanceur_secrets.py` (la bibliothèque refuse sinon). ⚠️ Entre les étapes 10 et 13,
@@ -404,7 +409,8 @@ contrôles se font par noms ou par code retour. Sur la box, en root. `<r>` = `pr
 ### Retour arrière, par rôle
 
 Remettre dans l'ordre : `<env>.avant-lot5` → `<env>`, l'unité et les copies de `/opt/deploy/`
-(sauvegardes de l'étape 9), `systemctl daemon-reload`, puis `/opt/deploy/oto-backend{,-canari}.sh
+(sauvegardes de l'étape 9 : elles déclarent `BG_LANCEUR=propage` ; les wrappers du dépôt,
+en `versionne`, ne servent pas au retour arrière), `systemctl daemon-reload`, puis `/opt/deploy/oto-backend{,-canari}.sh
 --rollback` : l'ancienne couleur porte encore son `start-encrypted.sh`. Ne pas rebasculer avant
 d'avoir remis le `.env` : l'ancien lanceur (`start-encrypted.sh`) attend les secrets dans le `.env`.
 Les secrets créés par nom restent : ils ne gênent personne. Les sauvegardes `.env.avant-lot5`

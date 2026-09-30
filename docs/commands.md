@@ -159,8 +159,8 @@ uv pip install --python .venv/bin/python "pytest>=8.0" "pytest-asyncio>=0.24"
 # pip install -e . + **force-reinstall oto-core depuis le tag pinné** (lu du
 # pyproject ; pip saute sinon une dép VCS déjà présente) + restart + **smoke HTTP**
 # (GET 200 /.well-known/oauth-authorization-server) + **rollback auto** si
-# install/restart/smoke échoue. Le restart relance start-encrypted (refetch master
-# key). ⚠️ start-encrypted.sh untracked → survit au git reset.
+# install/restart/smoke échoue. La couleur démarre par deploy/lanceur_secrets.py, celui
+# du tag (secrets tirés par nom, #967 lot 5, depuis le 30/09/2026).
 #
 # Preprod = travailler sur `main`, commit, push : deploy preprod auto (gate
 # `needs: test`). Claude Code (web) ouvre ses PR sur main → merge = deploy preprod.
@@ -192,7 +192,7 @@ import os, psycopg
 with psycopg.connect(os.environ[\"DATABASE_URL\"]) as c:
     for r in c.execute(\"SELECT sub, email, role FROM users\"): print(r)
 "'
-# ⚠️ Dès que la box est passée au lanceur (#967 lot 5), le `.env` ne porte plus AUCUN secret
+# ⚠️ Depuis le passage de la box au lanceur (#967 lot 5, 30/09/2026), le `.env` ne porte plus AUCUN secret
 # et `. .env` ne donne plus `DATABASE_URL` : passer par le lanceur (§Un script d'entretien
 # par le lanceur, plus bas) — son `--script` prend un fichier, ici `python -c` n'en est pas un.
 
@@ -201,8 +201,8 @@ with psycopg.connect(os.environ[\"DATABASE_URL\"]) as c:
 # « RuntimeError: DATABASE_URL not set » avant d'avoir rien fait. Sourcer d'abord :
 #   cd /opt/oto-mcp && set -a && . ./.env && set +a && ./.venv/bin/python -m scripts.X
 # Vécu 19/08 sur scripts.archive_empty_kb_projects (dry-run par défaut, --apply pour agir).
-# ⚠️ Cela ne vaut que tant que le `.env` porte les secrets : après le passage au lanceur
-# (#967 lot 5), `. ./.env` ne suffit plus → `lanceur --script scripts/X.py` (§suivant).
+# ⚠️ Cela ne valait que tant que le `.env` portait les secrets : depuis le passage au lanceur
+# (#967 lot 5, 30/09/2026), `. ./.env` ne suffit plus → `lanceur --script scripts/X.py` (§suivant).
 
 # ⚠️ Un script HORS SERVEUR ne voit AUCUN outil : `tool_registry.boot_tool_names()`
 # rend [] tant que le registre n'est pas réchauffé (le serveur le fait au lifespan).
@@ -219,7 +219,7 @@ with psycopg.connect(os.environ[\"DATABASE_URL\"]) as c:
 
 ## Un script d'entretien par le lanceur (#967 lot 5)
 
-Une fois notre box passée au lanceur générique, le `.env` ne porte plus que le non-secret :
+Depuis que notre box est passée au lanceur générique (30/09/2026), le `.env` ne porte plus que le non-secret :
 `DATABASE_URL`, `OTO_MCP_MASTER_KEY`, les clés S3… n'existent que dans l'environnement que
 `deploy/lanceur_secrets.py` construit à chaque démarrage. Un script lancé à la main les
 reçoit de lui, comme le service, et non d'un `.env` qu'on sourcerait. Le lanceur lit la clé
@@ -263,8 +263,8 @@ systemctl list-timers oto-mcp-maintenance.timer           # le prochain tir
 
 # Un travail seul, et d'abord À BLANC — sur une base PARTAGÉE prod/preprod, la
 # première question devant une purge est « combien de lignes ? ».
-# ⚠️ Ces `sudo -E env $(cat .env)` valent tant que le `.env` porte `DATABASE_URL` ; après le
-# passage au lanceur (#967 lot 5), même geste par `lanceur maintenance …` (§précédent).
+# ⚠️ Ces `sudo -E env $(cat .env)` valaient tant que le `.env` portait `DATABASE_URL` ; depuis
+# le passage au lanceur (#967 lot 5, 30/09/2026), même geste par `lanceur maintenance …` (§précédent).
 sudo -E env $(cat /opt/oto-mcp/.env | xargs) \
   /opt/oto-mcp/.venv/bin/oto-mcp maintenance retention --dry-run
 #   retention | blocks | key-indexes            les travaux du timer

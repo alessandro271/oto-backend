@@ -48,11 +48,12 @@
 #   BG_CADDYFILE      Caddyfile que `caddy validate` juge avant chaque reload
 #   BG_DRAIN          script de vidange différée (chemin STABLE : il tourne après nous)
 #   BG_DRAIN_UNIT     nom de l'unité transitoire de vidange (une par environnement)
-#   BG_LANCEUR        propage  — le lanceur `start-encrypted.sh` vit hors git dans
-#                                l'arbre et passe de la couleur en service à la
-#                                nouvelle (notre box : il s'y édite à la main) ;
-#                     versionne — le lanceur est celui DU TAG (deploy/lanceur_secrets.py),
-#                                rien n'est propagé d'une couleur à l'autre.
+#   BG_LANCEUR        versionne — le lanceur est celui DU TAG (deploy/lanceur_secrets.py),
+#                                rien n'est propagé d'une couleur à l'autre. Notre prod et
+#                                notre préprod y sont depuis le 30/09/2026 (#967, lot 5) ;
+#                     propage  — mode HISTORIQUE, gardé jusqu'au lot 5b (retour arrière du
+#                                lot 5) : le lanceur `start-encrypted.sh` vit hors git dans
+#                                l'arbre et passe de la couleur en service à la nouvelle.
 # ============================================================================
 set -uo pipefail
 
@@ -198,10 +199,11 @@ bg_install() {
   bg_log "installé : ${BG_HEAD}"
 }
 
-# --- le lanceur (résolution des secrets Secret Manager) est PROPAGÉ depuis la
-# --- couleur en service, jamais réécrit depuis une copie externe : il est édité à
-# --- la main sur la box quand un secret s'ajoute (Pennylane le 28/08, par ex.) et
-# --- l'écraser depuis le dépôt ferait disparaître ces ajouts en silence.
+# --- mode HISTORIQUE `BG_LANCEUR=propage` (retiré au lot 5b, #967) : le lanceur
+# --- (résolution des secrets Secret Manager) est PROPAGÉ depuis la couleur en
+# --- service, jamais réécrit depuis une copie externe : il s'éditait à la main sur
+# --- la box quand un secret s'ajoutait (Pennylane le 28/08, par ex.) et l'écraser
+# --- depuis le dépôt ferait disparaître ces ajouts en silence.
 # --- Il est indépendant du chemin, donc le même contenu sert les deux couleurs ;
 # --- on refuse de continuer s'il ne l'est plus (quelqu'un aurait re-figé un chemin).
 bg_propagate_start() {

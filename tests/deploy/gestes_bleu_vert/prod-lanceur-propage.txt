@@ -1,4 +1,4 @@
-### scénario prod-lanceur-versionne : oto-backend.sh v1.2.3
+### scénario prod-lanceur-propage : oto-backend.sh v1.2.3
 ### code de sortie : 0
 ### commandes
 flock -w 900 9
@@ -6,6 +6,8 @@ date +%H:%M:%S
 date +%H:%M:%S
 systemctl stop oto-mcp-drain-prod.service
 systemctl stop oto-mcp@green
+cp -a /opt/oto-mcp-blue/start-encrypted.sh /opt/oto-mcp-green/start-encrypted.sh
+chmod 0755 /opt/oto-mcp-green/start-encrypted.sh
 date +%H:%M:%S
 git fetch --tags --force origin
   (dans /opt/oto-mcp-green)
@@ -110,8 +112,6 @@ green
 # oto-mcp-maintenance.service de la couleur green
 --- /etc/systemd/system/oto-mcp-maintenance.timer
 # oto-mcp-maintenance.timer de la couleur green
---- /opt/oto-mcp-blue/deploy/lanceur_secrets.py
-# lanceur du tag
 --- /opt/oto-mcp-blue/deploy/oto-mcp-maintenance.service
 # oto-mcp-maintenance.service de la couleur blue
 --- /opt/oto-mcp-blue/deploy/oto-mcp-maintenance.timer
@@ -120,10 +120,11 @@ green
 dependencies = [
     "oto-core[anonymize] @ git+https://github.com/otomata-tech/oto-core.git@v9.9.9",
 ]
+--- /opt/oto-mcp-blue/start-encrypted.sh
+#!/bin/bash
+exec "$(cd "$(dirname "$0")" && pwd)/.venv/bin/oto-mcp"
 --- /opt/oto-mcp-green/.oto-deploy.json
 {"ref": "v1.2.3", "commit": "0123456789abcdef0123456789abcdef01234567", "deployed_at": "2026-09-29T12:00:00+02:00"}
---- /opt/oto-mcp-green/deploy/lanceur_secrets.py
-# lanceur du tag
 --- /opt/oto-mcp-green/deploy/oto-mcp-maintenance.service
 # oto-mcp-maintenance.service de la couleur green
 --- /opt/oto-mcp-green/deploy/oto-mcp-maintenance.timer
@@ -132,4 +133,7 @@ dependencies = [
 dependencies = [
     "oto-core[anonymize] @ git+https://github.com/otomata-tech/oto-core.git@v9.9.9",
 ]
+--- /opt/oto-mcp-green/start-encrypted.sh
+#!/bin/bash
+exec "$(cd "$(dirname "$0")" && pwd)/.venv/bin/oto-mcp"
 --- /var/lock/oto-mcp-bluegreen-prod.lock

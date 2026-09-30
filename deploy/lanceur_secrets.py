@@ -52,7 +52,10 @@ Notre production démarre par ce lanceur depuis la v1.398.0 : le `.env` de la bo
 porte plus aucun secret. Le passage est décrit dans docs/instance-cible.md (§Passer
 notre box au lanceur). Toute commande qui a besoin des secrets (migration, maintenance,
 script de reprise) passe donc par lui : docs/commands.md (§lanceur) et
-docs/migrations-versionnees.md §5.
+docs/migrations-versionnees.md §5. Nos deux wrappers, production et préproduction
+(secrets par nom sous /prod et /preprod), déclarent `BG_LANCEUR=versionne` (#967, lot 5) ;
+l'ancien `deploy/start-encrypted*.sh` (`BG_LANCEUR=propage`) ne sert plus qu'au retour
+arrière et part au lot 5b.
 """
 from __future__ import annotations
 
