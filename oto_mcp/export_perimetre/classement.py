@@ -22,14 +22,21 @@ table au schéma, c'est la classer ici dans le même commit — le test
 `secrets` nomme les colonnes chiffrées avec NOTRE clé maîtresse (inutilisables par la
 cible, et dont l'AAD contient l'identité du propriétaire) ; `hors_base` celles qui
 désignent un objet de l'Object Storage, à copier à part.
+
+`comptes` nomme les colonnes-COMPTE d'une table possédée par org : la ligne est celle
+d'UN compte dans l'org (sa préférence, son journal, son abonnement), et la colonne dit
+lequel. Ce compte peut être un ANCIEN membre, hors périmètre : la ligne est alors
+rattachée à son jumeau ou omise (`comptes`). Une colonne qui trace seulement l'AUTEUR
+d'un geste sur un objet de l'org (`created_by`, `actor_sub`, `edited_by`…) n'en est pas :
+l'objet est à l'org, pas à son auteur. Les règles ajoutent les leurs (`comptes_de`).
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 from ..ownership import TYPE_RESSOURCE_DATASTORE, TYPE_RESSOURCE_PROCEDURE
-from .regles import (Ou, ParEntite, ParGroupe, ParOrg, ParSub, ParSubSansOrg, ParTenant,
-                     Regle, Via)
+from .regles import (Compte, Ou, ParEntite, ParGroupe, ParOrg, ParSub, ParSubSansOrg,
+                     ParTenant, Regle, Via)
 
 POSSEDEE = "possedee"
 INDIRECTE = "indirecte"
@@ -48,16 +55,32 @@ class Table:
     # Un PARTAGE : la ligne ne part que si son destinataire est aussi du périmètre ;
     # sinon elle est omise, et comptée au manifeste (décision du 28/09/2026).
     destinataire: Regle | None = None
+    comptes: tuple[str, ...] = ()
 
 
 def possedee(regle: Regle, raison: str = "", *, secrets: tuple[str, ...] = (),
-             hors_base: tuple[str, ...] = (), destinataire: Regle | None = None) -> Table:
-    return Table(POSSEDEE, regle, raison, secrets, hors_base, destinataire)
+             hors_base: tuple[str, ...] = (), destinataire: Regle | None = None,
+             comptes: tuple[str, ...] = ()) -> Table:
+    return Table(POSSEDEE, regle, raison, secrets, hors_base, destinataire, comptes)
 
 
 def indirecte(regle: Regle, raison: str = "", *, secrets: tuple[str, ...] = (),
-              hors_base: tuple[str, ...] = (), destinataire: Regle | None = None) -> Table:
-    return Table(INDIRECTE, regle, raison, secrets, hors_base, destinataire)
+              hors_base: tuple[str, ...] = (), destinataire: Regle | None = None,
+              comptes: tuple[str, ...] = ()) -> Table:
+    return Table(INDIRECTE, regle, raison, secrets, hors_base, destinataire, comptes)
+
+
+def comptes_de(entree: Table) -> tuple[Compte, ...]:
+    """Les colonnes-compte d'une table exportée : les déclarées, puis celles que ses
+    règles connaissent (`Regle.comptes`), une fois chacune."""
+    if entree.classe not in EXPORTEES:
+        return ()
+    tous = (*(Compte.colonne_simple(c) for c in entree.comptes), *entree.regle.comptes(),
+            *(entree.destinataire.comptes() if entree.destinataire else ()))
+    uniques: dict[str, Compte] = {}
+    for k in tous:
+        uniques.setdefault(k.colonne, k)
+    return tuple(uniques.values())
 
 
 def instance(raison: str) -> Table:
@@ -84,14 +107,14 @@ CLASSEMENT: dict[str, Table] = {
     "sub_aliases": possedee(ParSub("new_sub")),
     "orgs": possedee(ParOrg("id"), hors_base=("logo_url",)),
     "org_members": possedee(ParOrg()),
-    "org_member_events": possedee(ParOrg()),
+    "org_member_events": possedee(ParOrg(), comptes=("sub",)),
     "org_invitations": possedee(ParOrg()),
     "org_groups": possedee(ParOrg()),
     "org_group_members": indirecte(Via("org_groups", ("group_id",))),
     "org_disabled_tools": possedee(ParOrg()),
     "group_disabled_tools": possedee(ParGroupe()),
-    "user_disabled_tools": possedee(ParOrg()),
-    "user_enabled_tools": possedee(ParOrg()),
+    "user_disabled_tools": possedee(ParOrg(), comptes=("sub",)),
+    "user_enabled_tools": possedee(ParOrg(), comptes=("sub",)),
     # Le tenant du périmètre PART (décision du 28/09/2026) : il devient la ligne 1 de
     # la cible, les clés qui le désignent y sont remappées (`importation`). Ses admins
     # partent s'ils sont des comptes du périmètre ; les nôtres restent.
@@ -151,9 +174,9 @@ CLASSEMENT: dict[str, Table] = {
                                        "les lignes `platform` (semées au démarrage) et "
                                        "`tenant` sont celles de l'instance"),
     "connector_settings": possedee(ParEntite("scope_type", "scope_id")),
-    "connector_selection_removed": possedee(ParOrg()),
-    "connector_selection_seeded": possedee(ParOrg()),
-    "user_selected_connectors": possedee(ParOrg()),
+    "connector_selection_removed": possedee(ParOrg(), comptes=("sub",)),
+    "connector_selection_seeded": possedee(ParOrg(), comptes=("sub",)),
+    "user_selected_connectors": possedee(ParOrg(), comptes=("sub",)),
     "connector_account_grants": possedee(ParSub("owner_sub")),
     "connector_account_group_grants": possedee(ParSub("owner_sub")),
     "credential_disparitions": possedee(ParOrg()),
@@ -172,16 +195,17 @@ CLASSEMENT: dict[str, Table] = {
                                    "recevrait jamais leurs livraisons, et le sondage "
                                    "d'Apollo les relit pendant la même fenêtre"),
     # ── messagerie hébergée ────────────────────────────────────────────────────
-    "unipile_accounts": possedee(ParOrg()),
+    "unipile_accounts": possedee(ParOrg(), comptes=("sub",)),
     "unipile_operated_accounts": possedee(ParSub()),
     "unipile_pending": exclue(ParSub(), "connexion en cours : un état éphémère, qui ne "
                               "survit pas à une bascule"),
     # ── runner, abonnements de modèle, transcription ───────────────────────────
     "runs": possedee(_ORG_OU_COMPTE),
     "run_messages": indirecte(Via("runs", ("run_id",), ("run_id",))),
-    "runner_jobs": possedee(ParOrg()),
-    "runner_fleets": possedee(ParOrg()),
-    "runner_triggers": possedee(ParOrg(), secrets=("hook_signing_secret_enc",)),
+    "runner_jobs": possedee(ParOrg(), comptes=("sub",)),
+    "runner_fleets": possedee(ParOrg(), comptes=("sub",)),
+    "runner_triggers": possedee(ParOrg(), secrets=("hook_signing_secret_enc",),
+                                comptes=("sub",)),
     "runner_hook_deliveries": possedee(ParOrg()),
     "runner_workers": possedee(ParOrg()),
     "runner_platform_workers": instance("les exécutants de plateforme : l'infrastructure "
@@ -189,7 +213,7 @@ CLASSEMENT: dict[str, Table] = {
     "runner_platform_depots": instance("les dépôts vus par les exécutants de plateforme"),
     "user_model_subscriptions": possedee(ParSub(), "`sandbox_id` désigne un bac à sable "
                                          "hors base"),
-    "user_model_subscription_loans": possedee(ParOrg()),
+    "user_model_subscription_loans": possedee(ParOrg(), comptes=("sub",)),
     "org_model_subscription_limits": possedee(ParOrg()),
     "org_model_subscription_modes": possedee(ParOrg()),
     "transcription_jobs": indirecte(_PROJETS, secrets=("api_key_enc",),

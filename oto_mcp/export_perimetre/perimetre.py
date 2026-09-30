@@ -14,6 +14,12 @@ dérivent. Rien d'autre ne se devine, et chaque ambiguïté REFUSE en se nommant
   tenant devient PRIMAIRE et ses subs y sont nus (`tenancy.qualify`) — un compte qui
   n'en porte pas le préfixe est celui d'un autre annuaire.
 
+Le périmètre porte aussi les préfixes des tenants TIERS de la source
+(`prefixes_tiers`) : un sub qui n'en porte aucun est un sub NU, celui de l'annuaire du
+tenant primaire (`tenancy.tenant_of`). C'est ce qui classe les comptes hors périmètre
+que portent des lignes du périmètre (`comptes`) — ceux-là ne sont pas des membres, et
+aucun des refus ci-dessus ne les concerne.
+
 Le tenant d'une org est son tenant EFFECTIF, l'union des trois axes de
 `db.tenants.org_tenant_slug` (colonne, marque, préfixe des membres) — lue par la même
 expression, jamais recopiée : la colonne de rattachement seule a un trou historique.
@@ -58,6 +64,7 @@ class Perimetre:
     id_tenant: int
     tenant_slug: str
     tenant_primaire_source: bool   # le tenant est-il la ligne 1 de la SOURCE ?
+    prefixes_tiers: tuple[str, ...] = ()   # `<slug>:` de chaque tenant tiers de la source
 
     def parametres(self) -> dict:
         return {
@@ -68,14 +75,22 @@ class Perimetre:
             "subs": list(self.subs),
             "tenants": [self.id_tenant],
             "tenants_slug": [self.tenant_slug],
+            "prefixe_tenant": self.prefixe_tenant,
+            "prefixes_tiers": list(self.prefixes_tiers),
         }
+
+    @property
+    def prefixe_tenant(self) -> str | None:
+        """Le préfixe que le tenant donne à ses subs ICI (`None` s'il est primaire : ses
+        subs y sont déjà nus)."""
+        return None if self.tenant_primaire_source else f"{self.tenant_slug}:"
 
     def comptes_cible(self) -> dict[str, str]:
         """Sub source → sub cible. Le tenant devient primaire sur la cible, où ses subs
         sont NUS : le préfixe `<slug>:` tombe (identité si il l'était déjà ici)."""
-        if self.tenant_primaire_source:
+        prefixe = self.prefixe_tenant
+        if prefixe is None:
             return {s: s for s in self.subs}
-        prefixe = f"{self.tenant_slug}:"
         return {s: s[len(prefixe):] for s in self.subs}
 
 
@@ -116,7 +131,10 @@ def resoudre(conn, orgs: list[int]) -> Perimetre:
                 f"{slug!r} (sub sans le préfixe `{slug}:`) : {hors}")
     groupes = _ids(conn, "SELECT id AS v FROM org_groups WHERE org_id = ANY(%s) ORDER BY id",
                    (list(toutes),))
-    return Perimetre(declarees, toutes, groupes, tuple(sorted(subs)), id_tenant, slug, primaire)
+    tiers = tuple(f"{r['v']}:" for r in conn.execute(
+        "SELECT slug AS v FROM tenants WHERE id <> 1 ORDER BY slug"))
+    return Perimetre(declarees, toutes, groupes, tuple(sorted(subs)), id_tenant, slug, primaire,
+                     tiers)
 
 
 def _tenant(conn, orgs: tuple[int, ...]) -> tuple[int, str, bool]:

@@ -17,11 +17,58 @@ Quatre formes de propriété coexistent dans le schéma, et chacune a sa règle 
 - l'héritage d'un parent (`Via`), par une clé étrangère déclarée ou LOGIQUE
   (polymorphe, sans FK possible) — la seconde se déclare avec `fk=False` ;
 - l'union (`Ou`), quand une table porte deux chemins (procédure d'org ou perso).
+
+Une règle dit aussi, quand elle le sait, à quel COMPTE la ligne appartient (`comptes`,
+des `Compte`) : la colonne de `ParSubSansOrg` (une ligne sans org est celle de son
+compte, donc toute ligne l'est), le couple polymorphe de `ParEntite` quand il désigne
+un `user` ou un `member`. Une ligne possédée par org peut porter le compte d'un ANCIEN
+membre : `comptes` dit comment la rattacher ou l'omettre (`export_perimetre.comptes`).
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Callable, Union
+
+
+@dataclass(frozen=True)
+class Compte:
+    """Une colonne-COMPTE : elle dit à quel compte la ligne appartient.
+
+    `valeur` est l'expression SQL du compte désigné (NULL si la ligne n'en désigne
+    aucun) ; `remplacer(x)` celle de la colonne `colonne` où ce compte devient
+    l'expression `x` — ce qui permet de comparer une ligne rattachée aux clés de son
+    jumeau. `simple` : la colonne EST le compte (et peut porter une clé étrangère
+    vers `users(sub)`)."""
+    colonne: str
+    valeur: str
+    type_: str | None = None     # colonne du type, pour un couple polymorphe
+
+    @property
+    def simple(self) -> bool:
+        return self.type_ is None
+
+    @property
+    def nom(self) -> str:
+        return self.colonne if self.simple else f"{self.type_}/{self.colonne}"
+
+    def remplacer(self, x: str) -> str:
+        if self.simple:
+            return x
+        t, i = self.type_, self.colonne
+        return (f"CASE {t} WHEN 'user' THEN {x} "
+                f"WHEN 'member' THEN split_part({i}, ':', 1) || ':' || {x} ELSE {i} END")
+
+    @classmethod
+    def colonne_simple(cls, colonne: str) -> "Compte":
+        return cls(colonne, colonne)
+
+    @classmethod
+    def polymorphe(cls, colonne_type: str, colonne_id: str) -> "Compte":
+        """`user` par son sub, `member` en `'<org_id>:<sub>'` (le sub peut lui-même
+        porter un `:` — celui d'un tenant tiers — d'où `strpos`, pas `split_part`)."""
+        t, i = colonne_type, colonne_id
+        return cls(i, f"(CASE {t} WHEN 'user' THEN {i} "
+                      f"WHEN 'member' THEN substr({i}, strpos({i}, ':') + 1) END)", t)
 
 
 @dataclass(frozen=True)
@@ -34,6 +81,9 @@ class ParOrg:
     def colonnes(self) -> tuple[str, ...]:
         return (self.colonne,)
 
+    def comptes(self) -> tuple[Compte, ...]:
+        return ()
+
 
 @dataclass(frozen=True)
 class ParSub:
@@ -44,6 +94,9 @@ class ParSub:
 
     def colonnes(self) -> tuple[str, ...]:
         return (self.colonne,)
+
+    def comptes(self) -> tuple[Compte, ...]:
+        return ()
 
 
 @dataclass(frozen=True)
@@ -60,6 +113,9 @@ class ParSubSansOrg:
     def colonnes(self) -> tuple[str, ...]:
         return (self.colonne, self.colonne_org)
 
+    def comptes(self) -> tuple[Compte, ...]:
+        return (Compte.colonne_simple(self.colonne),)
+
 
 @dataclass(frozen=True)
 class ParGroupe:
@@ -70,6 +126,9 @@ class ParGroupe:
 
     def colonnes(self) -> tuple[str, ...]:
         return (self.colonne,)
+
+    def comptes(self) -> tuple[Compte, ...]:
+        return ()
 
 
 @dataclass(frozen=True)
@@ -83,6 +142,9 @@ class ParTenant:
 
     def colonnes(self) -> tuple[str, ...]:
         return (self.colonne,)
+
+    def comptes(self) -> tuple[Compte, ...]:
+        return ()
 
 
 @dataclass(frozen=True)
@@ -102,6 +164,9 @@ class ParEntite:
 
     def colonnes(self) -> tuple[str, ...]:
         return (self.colonne_type, self.colonne_id)
+
+    def comptes(self) -> tuple[Compte, ...]:
+        return (Compte.polymorphe(self.colonne_type, self.colonne_id),)
 
 
 @dataclass(frozen=True)
@@ -132,6 +197,9 @@ class Via:
     def colonnes(self) -> tuple[str, ...]:
         return self.colonnes_enfant + ((self.quand[0],) if self.quand else ())
 
+    def comptes(self) -> tuple[Compte, ...]:
+        return ()
+
 
 @dataclass(frozen=True)
 class Ou:
@@ -142,6 +210,9 @@ class Ou:
 
     def colonnes(self) -> tuple[str, ...]:
         return tuple(c for r in self.regles for c in r.colonnes())
+
+    def comptes(self) -> tuple[Compte, ...]:
+        return tuple(k for r in self.regles for k in r.comptes())
 
 
 Regle = Union[ParOrg, ParSub, ParSubSansOrg, ParGroupe, ParTenant, ParEntite, Via, Ou]

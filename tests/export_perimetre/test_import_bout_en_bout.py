@@ -13,7 +13,9 @@ Ce qui est vérifié sur la cible, par des chemins indépendants de l'outil :
 - **le tenant est la ligne 1**, toutes les orgs y sont rattachées, et les comptes y
   sont NUS (le préfixe du tenant tiers est tombé, jusque dans les JSON) ;
 - **les secrets se lisent avec la clé CIBLE**, sous l'AAD de leur ligne cible, et plus
-  avec la clé source — qui n'a jamais quitté l'export.
+  avec la clé source — qui n'a jamais quitté l'export ;
+- **les lignes d'anciens comptes** sont rattachées au jumeau ou omises, comptées au
+  manifeste, et l'import passe (dernière section).
 """
 from __future__ import annotations
 
@@ -32,6 +34,7 @@ from oto_mcp import credentials_store, runner_hook, transcription_worker  # noqa
 from oto_mcp.crypto import decrypt_with_key, encrypt_with_key  # noqa: E402
 from oto_mcp.export_perimetre import commande  # noqa: E402
 from oto_mcp.export_perimetre.classement import CLASSEMENT, EXPORTEES  # noqa: E402
+from oto_mcp.export_perimetre.comptes import ComptesHorsRegle  # noqa: E402
 from oto_mcp.export_perimetre.decouverte import Cle, Schema  # noqa: E402
 from oto_mcp.export_perimetre.extraction import exporter  # noqa: E402
 from oto_mcp.export_perimetre.importation import (  # noqa: E402
@@ -40,7 +43,8 @@ from oto_mcp.export_perimetre.rechiffrement import AAD, empreinte_cle  # noqa: E
 from oto_mcp.export_perimetre.transformation import Transformation  # noqa: E402
 from oto_mcp.export_perimetre.objets import StockageS3  # noqa: E402
 from perimetre_banc import (  # noqa: E402
-    A, B, BASE_CIBLE, BASE_SOURCE, SECRET, FauxS3, semer, slug_de)
+    A, B, BASE_CIBLE, BASE_SOURCE, SECRET, FauxS3, _credential, membre, org, semer, slug_de,
+    tenant)
 
 CLE_SOURCE, CLE_CIBLE = os.urandom(32), os.urandom(32)
 NOM_A = f"tenant {A}"
@@ -523,3 +527,167 @@ def test_un_secret_chiffre_sous_une_autre_cle_que_la_cible_refuse(export_a, tmp_
             assert c.execute("SELECT count(*) AS n FROM orgs").fetchone()["n"] == 0
     finally:
         _detruire(pg_dsn, dsn)
+
+
+# --- Les anciens comptes : rattacher, sinon omettre (répétition à blanc, #1088) --------
+#
+# Sur une vraie base, les tables possédées par org portaient des lignes d'anciens comptes
+# de l'annuaire primaire (sub NU), qui ne sont plus membres. Certains ont un jumeau
+# `<slug>:<même id>` dans le périmètre : dénudé sur la cible, il heurtait leurs lignes
+# (violation d'unicité brute à l'import). La règle se tranche et se compte à l'export.
+
+JUMEAU = f"{A}-alice"          # l'ancien compte nu dont `<slug>:A7d1e-alice` est le jumeau
+ORPHELIN = "ancien-sans-jumeau"
+
+
+@pytest.fixture(scope="module")
+def anciens(pg_dsn):
+    """Une source où l'org du périmètre porte des lignes de deux anciens comptes nus :
+    `JUMEAU` (dont une en collision de clé avec une ligne de son jumeau) et `ORPHELIN`."""
+    dsn = _naitre(pg_dsn, "oto", "oto")
+    try:
+        with psycopg.connect(dsn, autocommit=True, row_factory=dict_row) as c:
+            a = semer(c, A, cle=CLE_SOURCE)
+            o, alice = a["org"], a["alice"]
+            for ancien in (JUMEAU, ORPHELIN):
+                c.execute("INSERT INTO users (sub, email) VALUES (%s, %s)",
+                          (ancien, f"{ancien}@exemple.test"))
+            c.execute("INSERT INTO connector_selection_seeded (sub, org_id) "
+                      "VALUES (%s, %s), (%s, %s)", (alice, o, JUMEAU, o))       # doublon
+            c.execute("INSERT INTO user_selected_connectors (sub, org_id, connector, origin) "
+                      "VALUES (%s, %s, 'apollo', 'jumeau'), (%s, %s, 'apollo', 'ancien'), "
+                      "(%s, %s, 'serper', 'ancien')", (alice, o, JUMEAU, o, JUMEAU, o))
+            c.execute("INSERT INTO unipile_accounts (sub, org_id, provider, account_id) "
+                      "VALUES (%s, %s, 'LINKEDIN', 'u-ancien')", (JUMEAU, o))  # FK → users
+            # Une clé unique sur EXPRESSION (`COALESCE(sub, '')`, ns_id, colonne).
+            c.execute("INSERT INTO origine_ecritures (sub, org_id, ns_id, colonne) VALUES "
+                      "(%s, %s, 1, 'nom'), (%s, %s, 1, 'nom'), (%s, %s, 1, 'autre')",
+                      (alice, o, JUMEAU, o, JUMEAU, o))
+            for ancien in (JUMEAU, ORPHELIN):
+                c.execute("INSERT INTO runs (run_id, sub, org_id, label) "
+                          "VALUES (%s, %s, %s, 'ancien')", (f"run-{ancien}", ancien, o))
+                c.execute("INSERT INTO run_messages (run_id, seq, role, content) "
+                          "VALUES (%s, 1, 'user', '{}')", (f"run-{ancien}",))
+                c.execute("INSERT INTO org_member_events (org_id, sub, action) "
+                          "VALUES (%s, %s, 'removed')", (o, ancien))
+            c.execute("INSERT INTO tool_calls (server, kind, sub, tool, org_id) "
+                      "SELECT 'oto', 'tool', %s, 'ancien', %s FROM generate_series(1, 3)",
+                      (JUMEAU, o))
+            c.execute("INSERT INTO tool_calls (server, kind, sub, tool, org_id) "
+                      "SELECT 'oto', 'tool', %s, 'ancien', %s FROM generate_series(1, 2)",
+                      (ORPHELIN, o))
+            # Le couple polymorphe : un credential de membre de l'ancien compte, l'un en
+            # doublon de celui du jumeau (`apollo`), l'autre seul (`hunter`).
+            _credential(c, CLE_SOURCE, "member", f"{o}:{JUMEAU}", "apollo", "ancien")
+            _credential(c, CLE_SOURCE, "member", f"{o}:{JUMEAU}", "hunter", "ancien")
+        yield {"dsn": dsn, A: a, "seau": FauxS3(a["objets"])}
+    finally:
+        _detruire(pg_dsn, dsn)
+
+
+@pytest.fixture(scope="module")
+def export_anciens(anciens, tmp_path_factory):
+    chemin = tmp_path_factory.mktemp("anciens") / "a.jsonl"
+    return chemin, _exporter(anciens["dsn"], anciens[A]["org"], anciens["seau"], chemin)
+
+
+@pytest.fixture(scope="module")
+def cible_anciens(export_anciens, pg_dsn):
+    dsn = _naitre(pg_dsn, slug_de(A))
+    try:
+        yield {"dsn": dsn, "rapport": _importer(dsn, export_anciens[0])}
+    finally:
+        _detruire(pg_dsn, dsn)
+
+
+def test_le_manifeste_compte_les_lignes_rattachees_et_omises(export_anciens):
+    _, manifeste = export_anciens
+    assert manifeste["comptes_hors_perimetre"] == {
+        "tables": {
+            "connector_selection_seeded": {"omises_doublon": 1},
+            "user_selected_connectors": {"rattachees": 1, "omises_doublon": 1},
+            "unipile_accounts": {"rattachees": 1},
+            "origine_ecritures": {"rattachees": 1, "omises_doublon": 1},
+            "runs": {"rattachees": 1, "omises_sans_jumeau": 1},
+            "run_messages": {"omises_avec_leur_parent": 1},
+            "org_member_events": {"rattachees": 1, "omises_sans_jumeau": 1},
+            "tool_calls": {"rattachees": 3, "omises_sans_jumeau": 2},
+            "connector_credentials": {"rattachees": 1, "omises_doublon": 1},
+        },
+        "comptes": {"rattaches": 1, "sans_jumeau": 1},
+    }
+    assert ORPHELIN not in json.dumps(manifeste)
+
+
+def test_le_fichier_ne_porte_que_les_comptes_du_perimetre_ou_leurs_jumeaux(export_anciens):
+    chemin, manifeste = export_anciens
+    lignes = [json.loads(x) for x in chemin.read_text(encoding="utf-8").splitlines()[:-1]]
+    assert not [x for x in lignes if ORPHELIN in json.dumps(x["l"])]
+    seeded = [x["l"]["sub"] for x in lignes if x["t"] == "connector_selection_seeded"]
+    assert seeded == [manifeste["tenant"]["slug"] + ":" + JUMEAU]     # le jumeau gagne
+
+
+def test_l_import_passe_et_rattache_les_lignes_au_compte_nu_du_jumeau(
+        anciens, cible_anciens, export_anciens):
+    """La relecture est conforme (sinon `VerificationEchouee`), et sur la cible les
+    lignes rattachées portent le compte nu du jumeau — celles de l'orphelin, aucune."""
+    _, manifeste = export_anciens
+    attendus = {t: v["lignes"] for t, v in manifeste["tables"].items() if v.get("lignes")}
+    assert {t: v["lignes"] for t, v in cible_anciens["rapport"].items()} == attendus
+    with psycopg.connect(cible_anciens["dsn"], row_factory=dict_row) as c:
+        for t in CLASSEMENT:
+            n = c.execute(f"SELECT count(*) AS n FROM {t} x WHERE row_to_json(x)::text "
+                          "LIKE %s", (f"%{ORPHELIN}%",)).fetchone()["n"]
+            assert n == 0, f"{t} porte une ligne de l'ancien compte sans jumeau"
+        # (hors de l'org : les sentinelles que le démarrage sème, `org_id = 0`)
+        assert c.execute("SELECT sub FROM connector_selection_seeded WHERE org_id = %s",
+                         (anciens[A]["org"],)).fetchall() == [{"sub": JUMEAU}]
+        assert c.execute("SELECT connector, origin FROM user_selected_connectors "
+                         "WHERE sub = %s ORDER BY connector", (JUMEAU,)).fetchall() == \
+            [{"connector": "apollo", "origin": "jumeau"},
+             {"connector": "serper", "origin": "ancien"}]
+        assert c.execute("SELECT sub FROM unipile_accounts").fetchall() == [{"sub": JUMEAU}]
+        assert c.execute("SELECT sub, colonne FROM origine_ecritures ORDER BY colonne"
+                         ).fetchall() == [{"sub": JUMEAU, "colonne": "autre"},
+                                          {"sub": JUMEAU, "colonne": "nom"}]
+        assert [r["run_id"] for r in c.execute(
+            "SELECT run_id FROM runs WHERE sub = %s ORDER BY run_id", (JUMEAU,))] == \
+            [f"run-{A}", f"run-{JUMEAU}"]
+        assert c.execute("SELECT count(*) AS n FROM tool_calls WHERE tool = 'ancien'"
+                         ).fetchone()["n"] == 3
+        secrets = {r["connector"]: decrypt_with_key(CLE_CIBLE, r["secret_enc"], AAD[
+            "connector_credentials"][1](r)) for r in c.execute(
+                "SELECT * FROM connector_credentials WHERE entity_type = 'member'")}
+    assert secrets == {"apollo": SECRET.format(A, "apollo"),              # le jumeau gagne
+                       "hunter": SECRET.format("ancien", "hunter")}
+
+
+def test_la_commande_affiche_les_comptes_hors_perimetre(anciens, export_anciens, tmp_path,
+                                                       monkeypatch, capsys):
+    monkeypatch.setenv("DATABASE_URL", anciens["dsn"])
+    monkeypatch.setenv("OTO_MCP_MASTER_KEY", CLE_SOURCE.hex())
+    monkeypatch.setenv("OTO_EXPORT_CLE_CIBLE", CLE_CIBLE.hex())
+    monkeypatch.setenv("OTO_MCP_S3_PUBLIC_BASE_URL", BASE_SOURCE)
+    monkeypatch.setattr(commande, "_stockage", lambda: StockageS3(anciens["seau"], "source"))
+    assert commande.main(["export", "--org", str(anciens[A]["org"]),
+                          "--sortie", str(tmp_path / "cli.jsonl")]) == 0
+    resume = json.loads(capsys.readouterr().out)
+    assert resume["comptes_hors_perimetre"] == export_anciens[1]["comptes_hors_perimetre"]
+
+
+def test_un_compte_d_un_autre_tenant_refuse_a_l_export_en_se_nommant(anciens, tmp_path):
+    """Hors de la règle — le compte d'un AUTRE tenant, ou un `<slug>:` qui n'est pas du
+    périmètre — : refus nommé (table, colonne, nombre) à l'export, rien d'écrit."""
+    with psycopg.connect(anciens["dsn"], autocommit=True, row_factory=dict_row) as c:
+        o = org(c, "org à part", tenant(c, "tautre", "tautre"))
+        membre(c, o, "tautre:zoe")
+        c.execute("INSERT INTO tool_calls (server, kind, sub, tool, org_id) "
+                  "VALUES ('oto', 'tool', %s, 'x', %s)", (anciens[A]["alice"], o))
+        c.execute("INSERT INTO connector_selection_seeded (sub, org_id) VALUES (%s, %s)",
+                  ("tautre:parti", o))
+    chemin = tmp_path / "refus.jsonl"
+    with pytest.raises(ComptesHorsRegle) as refus:
+        _exporter(anciens["dsn"], o, anciens["seau"], chemin)
+    assert refus.value.comptes == {"tool_calls.sub": 1, "connector_selection_seeded.sub": 1}
+    assert "tool_calls.sub : 1 ligne(s)" in str(refus.value)
+    assert not chemin.exists()

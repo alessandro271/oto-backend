@@ -4,9 +4,11 @@ Tout se joue dans UNE transaction `REPEATABLE READ READ ONLY` : un seul instanta
 donc un export cohérent même contre une base servie (production et préproduction
 partagent la même), et aucune écriture possible — la base le refuserait.
 
-Avant d'écrire la première ligne, trois refus possibles, chacun nommé :
+Avant d'écrire la première ligne, ces refus possibles, chacun nommé :
 - le classement ne couvre pas exactement le schéma (`ClassementIncomplet`) ;
 - le périmètre est ambigu (`perimetre.PerimetreRefuse` et ses cas) ;
+- une ligne du périmètre désigne un compte hors périmètre que la règle des anciens
+  comptes ne rattache ni n'omet (`comptes.ComptesHorsRegle`) ;
 - une ligne exportée porte une valeur chiffrée et l'appelant n'a pas donné la clé de
   l'instance cible (`SecretsChiffres`), ou une clé étrangère pointe hors de l'export
   (`ReferencesHorsPerimetre`).
@@ -43,7 +45,8 @@ from psycopg.rows import tuple_row
 
 from ..crypto import _load_master_key
 
-from .classement import CLASSEMENT, EXCLUE, EXPORTEES, INSTANCE, Table
+from .classement import CLASSEMENT, EXCLUE, EXPORTEES, INSTANCE, Table, comptes_de
+from .comptes import garde, rattache, recenser
 from .decouverte import Cle, Schema, lire_schema, verifier_classement
 from .perimetre import Perimetre, resoudre
 from .rechiffrement import AAD, empreinte_cle, rechiffrer
@@ -75,16 +78,29 @@ class ReferencesHorsPerimetre(RuntimeError):
                          f"ce qui part : {detail}")
 
 
-def compilateur(classement: dict[str, Table]) -> Callable[[str], str]:
-    """`pred(table)` : le prédicat SQL « cette ligne est du périmètre », parents composés."""
+def appartenance(entree: Table, pred: Callable[[str], str]) -> str:
+    """La règle de la table et, pour un partage, celle de son destinataire."""
+    appartient = entree.regle.predicat(pred)
+    if entree.destinataire is None:
+        return appartient
+    # Un partage ne part que si son destinataire est AUSSI du périmètre.
+    return f"({appartient}) AND ({entree.destinataire.predicat(pred)})"
+
+
+def compilateur(classement: dict[str, Table], schema: Schema, *,
+                comptes: bool = True) -> Callable[[str], str]:
+    """`pred(table)` : le prédicat SQL « cette ligne est du périmètre », parents composés.
+    Une ligne dont un compte n'est pas du périmètre n'y est que rattachée à son jumeau
+    (`comptes.garde`) ; `comptes=False` la garde telle quelle — pour compter ce que la
+    règle retire, jamais pour exporter."""
     @lru_cache(maxsize=None)
     def pred(table: str) -> str:
         entree = classement[table]
-        appartient = entree.regle.predicat(pred)
-        if entree.destinataire is None:
+        appartient = appartenance(entree, pred)
+        colonnes = comptes_de(entree) if comptes else ()
+        if not colonnes:
             return appartient
-        # Un partage ne part que si son destinataire est AUSSI du périmètre.
-        return f"({appartient}) AND ({entree.destinataire.predicat(pred)})"
+        return f"({appartient}) AND {garde(schema, table, colonnes, appartient)}"
     return pred
 
 
@@ -136,8 +152,10 @@ def compter_partages_omis(conn, classement, pred, params) -> dict[str, int]:
     return comptes
 
 
-def _jointure(k: Cle) -> str:
-    return " AND ".join(f"p.{cp} = c.{c}" for c, cp in zip(k.colonnes, k.colonnes_cible))
+def _jointure(k: Cle, comptes: set[str]) -> str:
+    """Une colonne-compte rattachée désigne, à la source, le compte de son jumeau."""
+    return " AND ".join(f"p.{cp} = {rattache(f'c.{c}') if c in comptes else f'c.{c}'}"
+                        for c, cp in zip(k.colonnes, k.colonnes_cible))
 
 
 def controler_fermeture(conn, schema: Schema, classement, pred, params) -> dict[str, list]:
@@ -148,6 +166,7 @@ def controler_fermeture(conn, schema: Schema, classement, pred, params) -> dict[
     hors: dict[str, int] = {}
     vers_instance: dict[str, list] = {}
     for t in sorted(t for t, e in classement.items() if e.classe in EXPORTEES):
+        comptes = {k.colonne for k in comptes_de(classement[t]) if k.simple}
         for k in schema.cles_de(t):
             if k.cible == "tenants" and k.colonnes_cible == ("id",):
                 continue  # remappée EN BLOC vers la ligne 1 de la cible (`importation`)
@@ -165,7 +184,7 @@ def controler_fermeture(conn, schema: Schema, classement, pred, params) -> dict[
             # Une cible EXCLUE ne part pas : toute référence non nulle sort de l'export.
             absente = ("" if cible.classe == EXCLUE else
                        f" AND NOT EXISTS (SELECT 1 FROM {k.cible} p "
-                       f"WHERE {_jointure(k)} AND ({pred(k.cible)}))")
+                       f"WHERE {_jointure(k, comptes)} AND ({pred(k.cible)}))")
             n = _compter(conn, f"SELECT count(*) AS n FROM {t} c "
                                f"WHERE ({pred(t)}) AND {non_nul}{absente}", params)
             if n:
@@ -195,6 +214,7 @@ class Lecture:
     pred: Callable[[str], str]
     params: dict
     ordre: list[str]
+    brut: Callable[[str], str]     # `pred` sans la règle des anciens comptes (`comptes`)
 
     def lignes(self, conn, t: str):
         return _lignes(conn, self.schema, t, self.pred, self.params)
@@ -209,9 +229,9 @@ def ouvrir(conn: psycopg.Connection, orgs: list[int],
     classement = verifier_classement(schema, classement)
     perimetre = resoudre(conn, orgs)
     params = perimetre.parametres()
-    pred = compilateur(classement)
-    return Lecture(schema, classement, perimetre, pred, params,
-                   ordre_d_export(schema, classement))
+    return Lecture(schema, classement, perimetre, compilateur(classement, schema), params,
+                   ordre_d_export(schema, classement),
+                   compilateur(classement, schema, comptes=False))
 
 
 def lecture_seule(conn: psycopg.Connection) -> None:
@@ -243,6 +263,7 @@ def exporter(conn: psycopg.Connection, orgs: list[int], sortie: Path | str, *,
     lecture_seule(conn)
     with conn.transaction():
         lu = ouvrir(conn, orgs, classement)
+        anciens = recenser(conn, lu, lambda t: appartenance(lu.classement[t], lu.pred))
         secrets = compter_secrets(conn, lu.classement, lu.pred, lu.params)
         if secrets and cle_cible is None:
             raise SecretsChiffres(secrets)
@@ -258,6 +279,7 @@ def exporter(conn: psycopg.Connection, orgs: list[int], sortie: Path | str, *,
                     references_instance=vers_instance, secrets=secrets, objets=objets,
                     partages_omis=compter_partages_omis(conn, lu.classement, lu.pred,
                                                         lu.params),
+                    comptes_hors_perimetre=anciens,
                     cle_cible=(empreinte_cle(cle_cible) if secrets or objets["liste"]
                                else None),
                     colonnes={t: _colonnes(lu.schema, t) for t in lu.ordre})

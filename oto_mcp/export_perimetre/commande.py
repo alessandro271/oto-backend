@@ -29,6 +29,7 @@ from psycopg.rows import dict_row
 from .. import media_store
 from ..crypto import parse_key
 from ..db._conn import _database_url
+from .comptes import ComptesHorsRegle
 from .decouverte import ClassementIncomplet
 from .extraction import ReferencesHorsPerimetre, SecretsChiffres, exporter
 from .importation import ImportRefuse, importer
@@ -36,8 +37,9 @@ from .objets import ObjetsRefuses, StockageS3
 from .perimetre import PerimetreRefuse
 from .rechiffrement import RechiffrementImpossible
 
-REFUS = (ClassementIncomplet, PerimetreRefuse, SecretsChiffres, ReferencesHorsPerimetre,
-         RechiffrementImpossible, ObjetsRefuses, ImportRefuse, FileExistsError)
+REFUS = (ClassementIncomplet, PerimetreRefuse, ComptesHorsRegle, SecretsChiffres,
+         ReferencesHorsPerimetre, RechiffrementImpossible, ObjetsRefuses, ImportRefuse,
+         FileExistsError)
 
 
 def _stockage() -> StockageS3:
@@ -66,8 +68,9 @@ def main(argv: list[str] | None = None) -> int:
                 resultat = exporter(conn, args.orgs, args.sortie, cle_cible=_cle_cible(),
                                     stockage=_stockage(),
                                     base_publique=media_store.public_base())
-                resume = {k: resultat[k] for k in ("perimetre", "tenant", "secrets",
-                                                   "partages_omis", "cle_cible", "empreinte")}
+                resume = {k: resultat[k] for k in (
+                    "perimetre", "tenant", "secrets", "partages_omis",
+                    "comptes_hors_perimetre", "cle_cible", "empreinte")}
                 resume["objets"] = {k: resultat["objets"][k] for k in ("archive", "empreinte")}
                 resume["objets"]["nombre"] = len(resultat["objets"]["liste"])
                 resume["lignes"] = {t: v["lignes"] for t, v in resultat["tables"].items()

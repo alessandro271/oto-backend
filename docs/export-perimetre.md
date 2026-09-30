@@ -6,8 +6,9 @@ description: >-
   d'autre, pour le verser dans une instance née par le démarrage normal
   (oto-backend#1088, ADR 0070 §7.6). Le classement déclaré de chaque table
   (possédée, indirecte, instance, exclue), le refus d'une table non classée, le
-  périmètre dérivé d'orgs déclarées (et de leur tenant), les refus de l'extraction,
-  et l'import dans une base née par le démarrage : tenant sur la ligne 1, comptes
+  périmètre dérivé d'orgs déclarées (et de leur tenant), les lignes d'anciens comptes
+  (rattachées au jumeau, sinon omises, comptées), les refus de l'extraction, et
+  l'import dans une base née par le démarrage : tenant sur la ligne 1, comptes
   dénudés, secrets rechiffrés à l'export, vérification par relecture, commande
   `oto-mcp perimetre`.
 ---
@@ -17,7 +18,8 @@ description: >-
 `oto_mcp/export_perimetre/`. **État : classement, extraction avec rechiffrement, import
 par lots et commande `oto-mcp perimetre` existent, éprouvés de bout en bout sur des
 bases de test (`tests/export_perimetre/test_import_bout_en_bout.py`). La répétition à
-blanc sur une copie reste à faire (#1088).**
+blanc sur une copie est en cours (#1088) : la première a mis au jour les lignes d'anciens
+comptes (ci-dessous).**
 
 ## La commande
 
@@ -61,6 +63,15 @@ silence.
 `ParEntite` ne retient jamais `platform` ni `tenant` : ces lignes sont celles de
 l'instance. Un membre s'y lit en `'<org_id>:<sub>'`.
 
+`comptes` nomme les **colonnes-compte** d'une table possédée par org : la ligne est celle
+d'UN compte dans l'org (sa préférence, son journal, son abonnement) et la colonne dit
+lequel (`connector_selection_seeded.sub`, `runner_jobs.sub`…). Les règles ajoutent les
+leurs (`classement.comptes_de`) : la colonne de `ParSubSansOrg`, le couple de `ParEntite`
+quand il désigne un `user` ou un `member`. Une colonne qui trace seulement l'auteur d'un
+geste sur un objet de l'org (`created_by`, `actor_sub`) n'en est pas.
+`test_classement_couvre_schema.py` exige que toute colonne `sub` d'une table exportée
+soit la règle, une colonne-compte, ou une exception écrite (`SUB_SANS_COMPTE`).
+
 ## Le périmètre : des orgs déclarées, et leur tenant
 
 `perimetre.resoudre(conn, orgs)`. Les équipes, les comptes (membres d'org et d'équipe),
@@ -76,6 +87,12 @@ dérivent. Le tenant d'une org est son tenant EFFECTIF, l'union des trois axes d
   tenant devient PRIMAIRE et ses subs y sont nus (`tenancy.qualify`) : un sub sans le
   préfixe est celui d'un autre annuaire.
 
+Ces refus portent sur les MEMBRES. Les comptes qui ne le sont plus mais dont des lignes
+du périmètre portent encore la trace relèvent d'une autre règle (« Les lignes d'anciens
+comptes », plus bas). Pour elle, le périmètre lit aussi les préfixes des tenants tiers
+de la source (`prefixes_tiers`) : un sub qui n'en porte aucun est NU, celui de l'annuaire
+du tenant primaire (`tenancy.tenant_of`).
+
 Décisions d'Alexis du 28/09/2026 : le tenant part et devient la ligne 1 de la cible ;
 tout le journal d'appels part ; les droits déclarés et nos acceptations légales
 restent (« exclue ») ; les orgs personnelles suivent leurs comptes.
@@ -85,8 +102,10 @@ restent (« exclue ») ; les orgs personnelles suivent leurs comptes.
 `extraction.exporter(conn, orgs, sortie)` travaille dans **une** transaction
 `REPEATABLE READ READ ONLY`, donc dans un instantané cohérent où la base elle-même refuse
 toute écriture. La connexion reste en lecture seule après l'appel. Avant la première
-ligne écrite, elle refuse dans trois cas :
+ligne écrite, elle refuse dans ces cas :
 
+- `ComptesHorsRegle` : une ligne du périmètre désigne un compte hors périmètre que la
+  règle des anciens comptes ne rattache ni n'omet (table, colonne, nombre) ;
 - `SecretsChiffres` : une ligne exportée porte une valeur chiffrée (`secrets` du
   classement : coffre, secret de signature d'un déclencheur, clé d'une transcription)
   et l'appelant n'a pas donné la clé de l'instance cible (`cle_cible`) ;
@@ -99,8 +118,9 @@ ligne écrite, elle refuse dans trois cas :
 Les identifiants sont **préservés**. Le fichier contient une ligne JSON par ligne de
 table (`{"t", "l"}`, le `row_to_json` de PostgreSQL), les parents avant leurs enfants,
 puis le manifeste. Celui-ci porte le compte par table, les lignes omises des tables
-exclues, le maximum de chaque séquence, l'inventaire hors base (clés d'Object Storage à
-copier à part), l'instantané, la version de schéma, les colonnes de chaque table, le
+exclues, les partages omis (`partages_omis`), les lignes d'anciens comptes rattachées
+ou omises (`comptes_hors_perimetre`), le maximum de chaque séquence, l'inventaire hors
+base (clés d'Object Storage à copier à part), l'instantané, la version de schéma, les colonnes de chaque table, le
 tenant (id, slug, nom), la correspondance des comptes source → cible, le compte des
 secrets, l'EMPREINTE de la clé cible (`rechiffrement.empreinte_cle`, jamais la clé) et
 l'empreinte SHA-256 des lignes. Les horodatages sont écrits en UTC. Un export existant
@@ -161,6 +181,43 @@ sans clé étrangère (`classement` : `destinataire`). Décision du 28/09/2026 :
 dont le destinataire n'est pas du périmètre **ne part pas**. Sur la cible, ce
 destinataire n'existe pas, et la ligne y emporterait l'identité d'un tiers. Le
 manifeste compte ces lignes (`partages_omis`).
+
+## Les lignes d'anciens comptes : rattachées, sinon omises
+
+`comptes`. Le périmètre dérive ses comptes des membres ; une table possédée par org
+porte pourtant aussi des lignes écrites par des comptes qui n'en sont plus membres.
+La répétition à blanc sur une vraie base (#1088) en a trouvé quatorze, tous d'anciens
+comptes de l'annuaire du tenant primaire (sub NU), d'avant que le tenant tiers ait son
+propre annuaire : quelque 8 300 appels du journal, 30 runs, des préférences. Pour sept
+d'entre eux, un compte `<slug>:<même id>` est du périmètre. La `Transformation` dénude ce
+jumeau en `<id>`, qui heurtait les lignes de l'ancien compte : l'import tombait sur une
+violation d'unicité brute (`connector_selection_seeded_pkey`) au bout de deux minutes, et
+les lignes des sept autres désignaient sur la cible un compte qui n'existe pas.
+
+Règle décidée : **rattacher, sinon omettre**, tranché et compté À L'EXPORT. Pour chaque
+colonne-compte d'une ligne du périmètre :
+
+| la valeur | la ligne |
+|---|---|
+| NULL, ou un compte du périmètre | part, inchangée |
+| un sub nu `X` dont `<slug>:X` est du périmètre | **rattachée** : elle part telle quelle et porte, sur la cible, le compte nu du jumeau |
+| … et elle y doublonnerait une ligne du jumeau sur une clé unique | **omise** : le jumeau gagne |
+| un sub nu sans jumeau | **omise** |
+| autre chose : un compte d'un AUTRE tenant, un `<slug>:` hors périmètre | **refus** `ComptesHorsRegle` (table, colonne, nombre) |
+
+Le doublon se juge sur chaque index unique qui lit une colonne-compte (`Schema.uniques`,
+expressions et index partiels compris), évalué sur la ligne où le compte est remplacé
+par son jumeau. La règle entre dans le prédicat de chaque table
+(`extraction.compilateur`) : l'écriture, les enfants (`Via`, qui suivent leur parent
+omis), la fermeture (une clé vers `users(sub)` d'une ligne rattachée vise le jumeau), les
+objets, les séquences et la relecture lisent les mêmes lignes. L'import n'a rien à
+deviner : le fichier ne porte que des comptes du périmètre, et la relecture sur la cible,
+où tous les comptes sont du périmètre, ne retire rien.
+
+Le manifeste (`comptes_hors_perimetre`) compte, par table, les lignes `rattachees`,
+`omises_doublon`, `omises_sans_jumeau` et `omises_avec_leur_parent`, et le nombre de
+comptes concernés (`rattaches`, `sans_jumeau`) — jamais leurs identifiants. Le résumé
+de `oto-mcp perimetre export` l'affiche.
 
 ## L'import
 

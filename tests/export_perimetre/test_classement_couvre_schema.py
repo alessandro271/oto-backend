@@ -129,3 +129,35 @@ def test_l_ordre_d_export_place_chaque_parent_avant_ses_enfants(schema):
         for k in schema.cles_de(t):
             if k.cible in rang and k.cible != t:
                 assert rang[k.cible] < rang[t], f"{k.cible} doit précéder {t}"
+
+
+def test_une_colonne_compte_absente_est_refusee(schema):
+    classement = {**cl.CLASSEMENT, "connector_selection_seeded": cl.possedee(
+        ParOrg(), comptes=("sub_renomme",))}
+    assert "`connector_selection_seeded` : la colonne `sub_renomme`" in \
+        _refus(schema, classement)
+
+
+# Les tables exportées dont la colonne `sub` n'est PAS le compte de la ligne, et pourquoi.
+SUB_SANS_COMPTE = {
+    "org_members": "les membres : le périmètre en dérive, ils en sont tous",
+    "org_group_members": "les membres d'équipe : le périmètre en dérive, ils en sont tous",
+    "project_activity": "l'auteur d'un geste sur le projet, qui est à l'org",
+    "transcription_jobs": "qui a demandé la transcription d'un fichier du projet",
+}
+
+
+def test_toute_colonne_sub_d_une_table_exportee_dit_a_qui_est_la_ligne(schema):
+    """Une ligne possédée par org peut porter le compte d'un ANCIEN membre : sa colonne
+    `sub` est une colonne-compte (`comptes`), que la règle rattache ou omet — sinon
+    l'import retombe sur un doublon brut. Une table ajoutée avec un `sub` se range ici
+    ou là, pas nulle part."""
+    classement = verifier_classement(schema, cl.CLASSEMENT)
+    sans_statut = sorted(
+        t for t, e in classement.items()
+        if e.classe in cl.EXPORTEES and "sub" in schema.colonnes[t]
+        and "sub" not in e.regle.colonnes()
+        and "sub" not in {k.colonne for k in cl.comptes_de(e)}
+        and t not in SUB_SANS_COMPTE)
+    assert sans_statut == []
+    assert all("sub" in schema.colonnes[t] for t in SUB_SANS_COMPTE)

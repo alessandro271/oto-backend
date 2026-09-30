@@ -10,7 +10,7 @@ et une colonne renommée dans le même lot se lisent en un seul refus, pas en de
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .classement import EXCLUE, EXPORTEES, INDIRECTE, INSTANCE, Table
 from .regles import Via, vias
@@ -26,6 +26,15 @@ class Cle:
 
 
 @dataclass(frozen=True)
+class Unique:
+    """Un index UNIQUE (contrainte comprise) : ses clés et son prédicat, en SQL tels que
+    le catalogue les rend (`pg_get_indexdef`), sur les noms nus des colonnes."""
+    cles: tuple[str, ...]
+    predicat: str | None = None
+    nulls_egaux: bool = False     # NULLS NOT DISTINCT
+
+
+@dataclass(frozen=True)
 class Schema:
     colonnes: dict[str, tuple[str, ...]]      # table → colonnes, ordre du catalogue
     generees: dict[str, frozenset[str]]       # colonnes GENERATED (ne s'exportent pas)
@@ -33,6 +42,7 @@ class Schema:
     cles: tuple[Cle, ...]
     primaires: dict[str, tuple[str, ...]]     # clé primaire (absente sur deux tables)
     vues: dict[str, str]                      # vue SIMPLE → sa seule table sous-jacente
+    uniques: dict[str, tuple[Unique, ...]] = field(default_factory=dict)
 
     def cles_de(self, table: str) -> tuple[Cle, ...]:
         return tuple(c for c in self.cles if c.table == table)
@@ -83,6 +93,18 @@ def lire_schema(conn, schema: str = "public") -> Schema:
             "        ORDER BY u.i)::text[] AS cols "
             "FROM pg_constraint k JOIN pg_namespace ns ON ns.oid = k.connamespace "
             "WHERE k.contype = 'p' AND ns.nspname = %s", (schema,))}
+    uniques: dict[str, list[Unique]] = {}
+    for r in conn.execute(
+            "SELECT i.indrelid::regclass::text AS tbl, "
+            "  ARRAY(SELECT pg_get_indexdef(i.indexrelid, k, true) "
+            "        FROM generate_series(1, i.indnkeyatts) k ORDER BY k)::text[] AS cles, "
+            "  pg_get_expr(i.indpred, i.indrelid, true) AS predicat, "
+            "  i.indnullsnotdistinct AS nulls_egaux "
+            "FROM pg_index i JOIN pg_class c ON c.oid = i.indrelid "
+            "JOIN pg_namespace ns ON ns.oid = c.relnamespace "
+            "WHERE i.indisunique AND ns.nspname = %s ORDER BY 1, i.indexrelid", (schema,)):
+        uniques.setdefault(r["tbl"], []).append(
+            Unique(tuple(r["cles"]), r["predicat"], r["nulls_egaux"]))
     sous_jacentes: dict[str, set[str]] = {}
     for r in conn.execute(
             "SELECT DISTINCT v.relname AS vue, t.relname AS tbl "
@@ -100,6 +122,7 @@ def lire_schema(conn, schema: str = "public") -> Schema:
         cles=cles,
         primaires=primaires,
         vues={v: next(iter(t)) for v, t in sous_jacentes.items() if len(t) == 1},
+        uniques={t: tuple(u) for t, u in uniques.items()},
     )
 
 
@@ -140,7 +163,8 @@ def _anomalies_table(t: str, entree: Table, schema: Schema,
         out.append(f"`{t}` (exclue) doit dire pourquoi elle ne part pas")
     presentes = set(schema.colonnes[t])
     destinataire = entree.destinataire.colonnes() if entree.destinataire else ()
-    for c in (*entree.regle.colonnes(), *entree.secrets, *entree.hors_base, *destinataire):
+    for c in (*entree.regle.colonnes(), *entree.secrets, *entree.hors_base, *destinataire,
+              *entree.comptes):
         if c not in presentes:
             out.append(f"`{t}` : la colonne `{c}` nommée par le classement n'existe pas")
     liens = vias(entree.regle)
