@@ -18,14 +18,16 @@ dependencies = [
     # SEP-1865) consommé par les tools *_app. Schéma plat des tools validé sur 3.4
     # (ADR 0009).
     #
-    # ⚠️ **Le PLANCHER est le seul levier qui atteigne la production** (mesuré le
-    # 11/09/2026). `deploy/oto-mcp-bluegreen.sh` installe par `pip install -e .` dans
-    # un venv qui existe déjà, et pip ne met JAMAIS à jour une dépendance déjà
-    # satisfaite : chaque couleur garde ce qu'elle a résolu le jour de sa création.
-    # Il n'y a rien d'autre — `uv.lock` est gitignoré et personne ne le lit, et la CI
-    # résout à neuf à chaque run, donc elle teste déjà plus récent que ce qui sert.
-    # Relevé ce jour-là : bleu (production) en 3.4.2, vert (attente) et préproduction
-    # en 3.4.7. Le plancher est donc aussi la seule façon d'ÉCRIRE une version servie.
+    # ⚠️ **Ce qui s'installe, c'est `uv.lock`, pas ces bornes** (#932, 30/09/2026).
+    # Le verrou est versionné et la CI installe par `uv sync --frozen` : les bornes
+    # ci-dessous disent ce que le code ACCEPTE, le verrou dit ce qui est INSTALLÉ.
+    # Tout changement de ce manifeste (pin oto-core compris) se fait avec `uv lock`
+    # dans le même commit — la CI refuse un verrou en retard (`uv lock --check`).
+    # Avant lui, `pip install -e .` dans un venv existant ne mettait jamais à jour une
+    # dépendance satisfaite : chaque couleur gardait ce qu'elle avait résolu le jour
+    # de sa création (mesuré le 11/09 : production en 3.4.2, attente en 3.4.7), et le
+    # plancher était le seul levier qui atteignait la production. Cf.
+    # docs/verrou-dependances.md.
     #
     # 3.4.7 — plancher monté le 11/09/2026 pour un seul correctif, celui de 3.4.5
     # (`providers/jwt.py`, amont #4515) : **une seule clé de type non supporté dans le

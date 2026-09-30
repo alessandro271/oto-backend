@@ -17,8 +17,10 @@ directement — aucune dépendance à la CLI) et une face REST `/api/*` sur le m
 
 Python `>=3.10` · `fastmcp[apps]>=3.4.2,<3.5` (plancher ET plafond : monter de version est un acte) · `psycopg[binary]`
 + `psycopg-pool` · JWT Logto ES384 · `oto-core[anonymize]` **pinné sur un tag git** (`pyproject.toml`).
-⚠️ `pip` ne réinstalle pas une dép VCS déjà présente (le deploy force-réinstalle au tag) ; le pin est édité par toutes
-les sessions parallèles → bumper en **superset**, garder la version haute à tout conflit.
+⚠️ **Ce qui s'installe, c'est `uv.lock`** (versionné) : la CI fait `uv sync --frozen`, tout changement du manifeste
+— pin oto-core compris — se fait avec `uv lock` dans le même commit (`uv lock --check` en CI), et `GET /api/version` dit
+si l'installé égale le verrou (`deps_conformes`) · le pin est édité par toutes les sessions parallèles → bumper en
+**superset**, garder la version haute à tout conflit (`docs/verrou-dependances.md`).
 ⚠️ `.venv` est **partagé** et porte une copie figée d'oto-core : une grappe de rouges sur les connecteurs récents est un
 venv en retard sur le pin — la suite le dit (bannière `PIN oto-core`, tests `exige_pin_oto_core` non concluants) ; ne
 pas trier au message, ne pas muter le venv : `docs/commands.md` §Pin oto-core → « Faux rouge ».
@@ -213,6 +215,8 @@ avatars/logos · ⚠️ **PROD et PREPROD partagent la MÊME base** : ce qu'on �
   résurrection automatique
 - `rest-api.md` — endpoints, OpenAPI, jetons, CORS
 - `version-servie.md` — dater un changement : les 3 surfaces, les 3 coordonnées qui mentent
+- `verrou-dependances.md` — `uv.lock` versionné, installation par le verrou (CI, déploiement), le job hebdomadaire
+  au plus récent, et ce que l'installation exacte retire du venv
 - `instance-cible.md` — déployer le tronc sur une autre machine (#967) : bibliothèque bleu/vert commune
   (nos gestes figés par un banc), lanceur qui tire les secrets de la cible par nom, amorce,
   workflow à la main par cible, porte en commande forcée, et comment déclarer et monter une cible ;

@@ -1,0 +1,63 @@
+name: Installer par le verrou
+description: >-
+  Python, uv, puis l'installation EXACTE que décrit `uv.lock` — le même jeu que la
+  production (oto-backend#932). Un seul endroit pour la version d'uv et la commande.
+
+# POURQUOI UNE ACTION ET PAS TROIS LIGNES PAR JOB.
+# Jusqu'au 30/09/2026, chaque job faisait `pip install -e ".[dev]"` sur un runner neuf :
+# pip résolvait au plus récent que le manifeste autorisait, donc la CI testait un autre
+# jeu que celui qui sert (fastmcp 3.4.7 + mcp 1.30.0 en CI, 3.4.2 + 1.27.2 en
+# production, mesuré le 11/09). Une CI verte ne disait rien de ce qui tourne. La CI
+# installe désormais PAR LE VERROU, comme le déploiement : une coordonnée = un jeu.
+# La version d'uv est celle de la box ; elle vit ici et nulle part ailleurs.
+#
+# `au-plus-recent` sert le SEUL job qui doit résoudre à neuf (`verrou-hebdo.yml`) :
+# l'alerte précoce que l'ancienne CI donnait par accident, rendue délibérée.
+
+inputs:
+  python-version:
+    description: "Interpréteur (3.12 pour la suite, 3.10 = celui de la box)."
+    required: true
+  extra:
+    description: "Extra du projet à installer en plus (`dev`), vide = le jeu du service."
+    required: false
+    default: ""
+  au-plus-recent:
+    description: "true = `uv lock --upgrade` avant l'installation (job hebdomadaire seulement)."
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      with:
+        python-version: ${{ inputs.python-version }}
+    - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      with:
+        # ⚠️ Celle de la box (/usr/local/bin/uv) : le verrou est lu par la même version
+        # en CI et au déploiement.
+        version: "0.12.19"
+        python-version: ${{ inputs.python-version }}
+        # `.venv` sur le PATH des étapes suivantes : `python`, `pytest` sont ceux du verrou.
+        activate-environment: true
+        enable-cache: true
+    - name: Installer
+      shell: bash
+      env:
+        EXTRA: ${{ inputs.extra }}
+        AU_PLUS_RECENT: ${{ inputs.au-plus-recent }}
+        UV_PYTHON_DOWNLOADS: never
+      run: |
+        set -euo pipefail
+        options=()
+        [ -n "$EXTRA" ] && options+=(--extra "$EXTRA")
+        if [ "$AU_PLUS_RECENT" = "true" ]; then
+          cp uv.lock "$RUNNER_TEMP/uv.lock.avant"
+          uv lock --upgrade
+          uv sync --locked "${options[@]}"
+        else
+          # `--frozen` : le verrou tel qu'il est versionné, sans le résoudre ni le
+          # réécrire — exactement ce que fait le déploiement.
+          uv sync --frozen "${options[@]}"
+        fi

@@ -1,0 +1,84 @@
+name: Verrou au plus récent
+
+# ─────────────────────────────────────────────────────────────────────────────
+# L'ALERTE PRÉCOCE QUE L'ANCIENNE CI DONNAIT PAR ACCIDENT, RENDUE DÉLIBÉRÉE (#932).
+#
+# Jusqu'au 30/09/2026, la CI installait par `pip install -e ".[dev]"` sur un runner
+# neuf : elle résolvait au plus récent que le manifeste autorisait. C'était faux pour
+# ce qu'elle prétendait juger — elle testait un autre jeu que celui qui sert — mais
+# elle prévenait, avant tout le monde, qu'une version amont cassait la suite.
+# Depuis que la CI installe PAR LE VERROU (`uv sync --frozen`), elle juge exactement
+# ce qui sert, et cette alerte-là a disparu. Ce job la rend, à part et à date fixe :
+#
+#   1. `uv lock --upgrade` — ce que le manifeste autoriserait aujourd'hui ;
+#   2. la suite entière sur CE jeu ;
+#   3. le résumé du run nomme chaque version qui bougerait, et le verrou résolu est
+#      laissé en artefact.
+#
+# ⚠️ IL NE MODIFIE RIEN. Aucune PR, aucun commit : monter une dépendance est un acte
+# daté, décidé et relu (le mcp 1.30.0 et ses trois défauts de transport en sont
+# l'exemple). Vert = on peut monter sans casser la suite ; rouge = une montée casserait,
+# et le titre de l'erreur le dit — c'est le signal, sur le même canal que les autres
+# workflows (annotation `::error` + run rouge + résumé).
+on:
+  schedule:
+    - cron: "17 5 * * 1"   # lundi, 05:17 UTC — hors des heures de déploiement
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  au-plus-recent:
+    name: La suite sur le verrou résolu au plus récent
+    runs-on: ubuntu-latest
+    # Le job `test` de deploy-canari.yml tient en 20 min ; la résolution s'y ajoute.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Résoudre au plus récent et installer
+        uses: ./.github/actions/installer-par-le-verrou
+        with:
+          python-version: "3.12"
+          extra: dev
+          au-plus-recent: "true"
+      - name: Ce qui bougerait
+        # Le relevé va dans le résumé du run : un chiffre qu'il faut déplier un journal
+        # pour lire n'est pas lu.
+        run: |
+          python - "$RUNNER_TEMP/uv.lock.avant" uv.lock <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          import sys, tomllib
+          def lire(chemin):
+              with open(chemin, "rb") as f:
+                  return {p["name"]: p.get("version", "?") for p in tomllib.load(f)["package"]}
+          avant, apres = lire(sys.argv[1]), lire(sys.argv[2])
+          lignes = [(n, avant.get(n, "—"), apres.get(n, "—"))
+                    for n in sorted(set(avant) | set(apres)) if avant.get(n) != apres.get(n)]
+          print("## Verrou au plus récent\n")
+          if not lignes:
+              print("Rien ne bougerait : le verrou versionné est déjà le plus récent autorisé.")
+          else:
+              print(f"{len(lignes)} paquet(s) bougeraient :\n")
+              print("| paquet | verrou versionné | au plus récent |")
+              print("|---|---|---|")
+              for n, a, b in lignes:
+                  print(f"| `{n}` | {a} | {b} |")
+          PY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: uv-lock-au-plus-recent
+          path: uv.lock
+      - name: Bac à sable des fonctions (ADR 0073)
+        # Comme `test` : sans lui, les bancs de l'exécuteur échouent.
+        run: |
+          python scripts/installer_bac_a_sable.py "$RUNNER_TEMP/bac-a-sable"
+          echo "OTO_FUNCTIONS_SANDBOX_DIR=$RUNNER_TEMP/bac-a-sable" >> "$GITHUB_ENV"
+      - name: Tests
+        env:
+          OTO_TEST_PG_PLACES: "4"
+        run: |
+          set -o pipefail
+          if ! pytest -q -n 4 --dist loadgroup; then
+            echo "::error title=Une montée de dépendances casserait la suite::Le verrou résolu au plus récent fait échouer des tests. Rien n'est cassé en production ni sur le tronc (ils installent par le verrou versionné) ; la prochaine montée devra traiter ces échecs. Versions en cause : résumé du run ; verrou résolu : artefact uv-lock-au-plus-recent."
+            exit 1
+          fi

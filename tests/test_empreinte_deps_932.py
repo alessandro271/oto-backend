@@ -318,3 +318,18 @@ def test_calcule_une_fois_par_processus(monkeypatch, tmp_path):
         assert appels == [tmp_path]
     finally:
         e.etat_au_demarrage.cache_clear()
+
+
+# ── le verrou du dépôt ───────────────────────────────────────────────────────
+
+def test_le_verrou_du_depot_se_parcourt_depuis_le_projet():
+    """`uv.lock` est versionné (#932) : `/api/version` le parcourt au démarrage de
+    chaque couleur. Un verrou que ce parcours refuserait ferait tomber le boot — on le
+    sait ici, pas au déploiement. `uv lock --check` (CI) juge, lui, qu'il suit le
+    manifeste."""
+    from oto_mcp.version import racine_de_l_arbre
+    verrou = tomllib.loads((racine_de_l_arbre() / e.FICHIER_VERROU).read_text("utf-8"))
+    service = e.prescrits(verrou)
+    assert {"oto-mcp", "fastmcp", "mcp", "oto-core", "prefab-ui"} <= set(service)
+    assert "pytest" not in service and "pytest" in e.prescrits(verrou, ["dev"])
+    assert "oto-core" in e.commits_du_verrou(verrou), "oto-core n'est plus pris dans git"

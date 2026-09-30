@@ -40,14 +40,17 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - name: Install (deps + dev, par le verrou)
+        uses: ./.github/actions/installer-par-le-verrou
         with:
           python-version: "3.12"
-          cache: pip
-      - name: Install (deps + dev + pytest-cov)
+          extra: dev
+      - name: Install (pytest-cov)
         # `pytest-cov` n'est PAS dans les deps dev : il ne sert qu'ici, et l'ajouter à
         # `[dev]` le ferait installer à chaque run de CI sans que personne s'en serve.
-        run: pip install -e ".[dev]" pytest-cov
+        # Posé PAR-DESSUS le verrou : l'instrument mesure le jeu verrouillé, il n'en
+        # fait pas partie.
+        run: uv pip install pytest-cov
       - name: Bac à sable des fonctions (ADR 0073)
         # Deno, Pyodide et les roues de la liste blanche, épinglés et vérifiés par
         # empreinte. Sans lui, les bancs de l'exécuteur ÉCHOUENT en CI (ils ne se taisent
