@@ -34,6 +34,7 @@ SECRETS: frozenset[str] = frozenset({
     "FOD_API_TOKEN",
     "OTO_FERME_TOKEN",
     "LOGODEV_TOKEN",
+    "BLS_API_KEY",
     "BROWSERBASE_API_KEY",
     "MISTRAL_API_KEY",
     "OTO_MAILER_SEND_BEARER",

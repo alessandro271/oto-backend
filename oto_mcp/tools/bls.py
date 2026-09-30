@@ -10,8 +10,8 @@ Un seul outil, `bls_oews_wages` : la distribution annuelle des salaires d'un mé
 ⚠️ **Le quota est celui de la PLATEFORME, pas de l'appelant** : sans clé
 d'enregistrement, l'API sert 25 requêtes par jour à l'adresse qui appelle — donc à
 toutes les orgs réunies. L'exploitant lève ce plafond (500/jour, 50 séries par
-requête) en posant `BLS_API_KEY` dans l'environnement du serveur : le client
-oto-core la lit seul, rien ne change ici. C'est aussi pourquoi `bls` n'est PAS dans
+requête) en posant `BLS_API_KEY` dans l'environnement du serveur : `_client()` la
+lit et la passe au client (la lib ne lit aucun secret). C'est aussi pourquoi `bls` n'est PAS dans
 `TESTABLE_NAMESPACES` : un bouton « tester » dépenserait le quota de tout le monde.
 
 L'appel au client est écrit en clair (`_client().oews_wages(…)`) : c'est ce qui le
@@ -19,6 +19,7 @@ rend vérifiable par la sonde version-skew.
 """
 from __future__ import annotations
 
+import os
 from typing import List, Optional
 
 from fastmcp import FastMCP
@@ -61,7 +62,11 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.common.errors import UpstreamHTTPError
 
     def _client() -> BLSClient:
-        return BLSClient()
+        # Clé d'enregistrement FACULTATIVE, posée par l'exploitant : elle lève le quota
+        # (500 requêtes/jour, 50 séries par requête). Absente, l'API sert le régime sans
+        # clé — le mode nominal d'un connecteur open data, pas un repli. C'est le
+        # serveur qui la lit : la lib ne lit plus aucun secret (oto-core v1.148.0).
+        return BLSClient(registration_key=os.environ.get("BLS_API_KEY") or None)
 
     @mcp.tool()
     def bls_oews_wages(soc: str, areas: Optional[List[str]] = None) -> dict:

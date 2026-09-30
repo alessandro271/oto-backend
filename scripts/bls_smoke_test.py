@@ -10,7 +10,7 @@ Vérité terrain (OEWS 2025, SOC 15-1299) — à réviser quand le BLS publie l'
 suivante, l'API ne servant que la dernière : le script le dit alors au lieu
 d'échouer sur les valeurs.
 
-Lancer :  PYTHONPATH=$PWD OTO_CONFIG_DISABLE_SOPS=1 .venv/bin/python -m scripts.bls_smoke_test
+Lancer :  PYTHONPATH=$PWD .venv/bin/python -m scripts.bls_smoke_test
 """
 from __future__ import annotations
 

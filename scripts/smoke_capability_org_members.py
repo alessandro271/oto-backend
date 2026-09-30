@@ -5,7 +5,7 @@ anti-lockout dernier org_admin, via le même chemin que les adaptateurs
 (validation Input → autz → handler).
 
 Lancer :  DATABASE_URL=postgresql://poc:poc@localhost:5469/poc \
-          OTO_MCP_ADMIN_SUB=padmin OTO_CONFIG_DISABLE_SOPS=1 \
+          OTO_MCP_ADMIN_SUB=padmin \
           .venv/bin/python -m scripts.smoke_capability_org_members
 """
 from __future__ import annotations

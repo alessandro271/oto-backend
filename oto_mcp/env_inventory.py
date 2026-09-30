@@ -10,9 +10,8 @@ dérivent, pour qu'il n'existe jamais deux listes qui divergent :
    FROZEN — un retrait de lecture n'oblige pas à toucher l'inventaire dans le même
    commit).
    Il parcourt AUSSI oto-core au pin : une variable lue par la dépendance au nom du
-   serveur (`OTO_CONFIG_DISABLE_SOPS`) se déclare ici comme les autres, et une lecture
-   d'oto-core qui ne concerne pas le serveur se range dans
-   `LUES_PAR_OTO_CORE_HORS_SERVEUR`, avec sa raison.
+   serveur se déclare ici comme les autres, et une lecture d'oto-core qui ne concerne
+   pas le serveur se range dans `LUES_PAR_OTO_CORE_HORS_SERVEUR`, avec sa raison.
 2. `scripts/generer_env_example.py` — régénère `.env.example` depuis `NOMS_FIXES`.
 3. Quiconque doit savoir, avant de démarrer une instance, ce qui est vraiment exigé.
 
@@ -246,14 +245,6 @@ _REGLAGES: tuple[Variable, ...] = (
              "(poste de dev, tests) : rien n'engage un tiers. Une valeur hors des "
              "deux lève `EnvironnementAmbigu`.",
              ("oto_mcp/config.py:108",)),
-    Variable("OTO_CONFIG_DISABLE_SOPS", Classe.REGLAGE, "",
-             "`1` en serveur : la résolution de secrets d'oto-core (`oto.config`) ne "
-             "lit plus que l'environnement du process — ni SOPS ni "
-             "`~/.otomata/secrets.env` — et `require_secret` échoue fort au lieu de "
-             "lire le disque. Lue par la DÉPENDANCE, pas par `oto_mcp/` : les clés "
-             "plateforme vivent au coffre (`platform_keys`), jamais dans SOPS. Absente "
-             "(poste de dev, scripts de fumée) : oto-core résout aussi ses fichiers.",
-             ("oto-core:oto/config.py:152", "oto-core:oto/config.py:212")),
     Variable("OTO_FUNCTIONS_SANDBOX_DIR", Classe.REGLAGE, "",
              "Répertoire du bac à sable des fonctions (ADR 0073), posé par "
              "`scripts/installer_bac_a_sable.py`. Absente : l'instance n'exécute pas de "
@@ -464,6 +455,11 @@ _REGLAGES: tuple[Variable, ...] = (
              "suppression du compte chez unipile. Entier ≥ 1, sinon le travail lève.",
              ("oto_mcp/unipile_fin_de_droit.py:70",)),
     # -- secrets / URLs optionnels (absence = dégradation propre) -------------
+    Variable("BLS_API_KEY", Classe.REGLAGE, None,
+             "Clé d'enregistrement BLS de l'exploitant — lève le quota de l'API publique "
+             "(500 requêtes/jour au lieu de 25, partagées par toute la plateforme). "
+             "Absente, le connecteur open data `bls` sert le régime sans clé.",
+             ("oto_mcp/tools/bls.py:69",)),
     Variable("LOGODEV_TOKEN", Classe.REGLAGE, None,
              "Jeton Logo.dev — absent, la résolution de logo dégrade sans lui.",
              ("oto_mcp/logodev.py:17",)),
@@ -540,9 +536,8 @@ NOMS_FIXES: tuple[Variable, ...] = _REQUISES + _IDENTITE + _REGLAGES
 # Lectures d'environnement d'OTO-CORE qui ne concernent PAS ce serveur : le client qui
 # les lit n'est jamais instancié par `oto_mcp/` (outil du CLI local, ou client de l'API
 # oto elle-même). Le walker parcourt aussi oto-core (au pin) : toute lecture littérale
-# qu'il y trouve est soit dans `NOMS_FIXES` (lue au nom du serveur, ex.
-# `OTO_CONFIG_DISABLE_SOPS`), soit ici avec la raison pour laquelle le serveur n'en
-# dépend pas. Une lecture neuve d'oto-core, rangée nulle part, fait rougir.
+# qu'il y trouve est soit dans `NOMS_FIXES` (lue au nom du serveur), soit ici avec la
+# raison pour laquelle le serveur n'en dépend pas. Une lecture neuve d'oto-core, rangée nulle part, fait rougir.
 LUES_PAR_OTO_CORE_HORS_SERVEUR: dict[str, str] = {
     "OTO_API_URL": "base des clients oto-core qui appellent l'API oto elle-même "
                    "(`accords`, `datastore`, `ninja`, `sirene.stock`) — le serveur EST "

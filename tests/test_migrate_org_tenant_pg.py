@@ -56,7 +56,6 @@ def base(pg_dsn, monkeypatch):
 
     url_avant, pool_avant = os.environ.get("DATABASE_URL"), dbconn._pool
     os.environ["DATABASE_URL"] = dsn
-    monkeypatch.setenv("OTO_CONFIG_DISABLE_SOPS", "1")
     monkeypatch.setattr(dbconn, "_database_url", lambda: dsn)
     dbconn._pool = None
     try:

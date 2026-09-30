@@ -3,7 +3,7 @@
 create + entitlement grant/revoke sous PLATFORM_ADMIN.
 
 Lancer :  DATABASE_URL=postgresql://poc:poc@localhost:5471/poc \
-          OTO_MCP_ADMIN_SUB=padmin OTO_CONFIG_DISABLE_SOPS=1 \
+          OTO_MCP_ADMIN_SUB=padmin \
           .venv/bin/python -m scripts.smoke_capability_org_admin
 """
 from __future__ import annotations

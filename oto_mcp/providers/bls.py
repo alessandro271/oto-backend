@@ -12,8 +12,8 @@ from ._model import _c
 # ⚠️ Sans clé d'enregistrement l'API plafonne à 25 requêtes par JOUR, comptées sur
 # l'adresse appelante : le plafond est donc partagé par toute la plateforme. La clé
 # gratuite (500/jour) se pose côté exploitant, en variable d'env `BLS_API_KEY` que le
-# client oto-core lit seul — ce n'est pas un credential d'utilisateur, d'où
-# `secret_kind="none"` et pas de cascade.
+# serveur lit et passe au client (`tools/bls.py`) — ce n'est pas un credential
+# d'utilisateur, d'où `secret_kind="none"` et pas de cascade.
 CONNECTOR = _c(
     "bls", ["bls"], secret_kind="none",
     label="Salaires US (BLS)",

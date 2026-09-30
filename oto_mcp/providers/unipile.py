@@ -14,8 +14,9 @@ from ._model import _c
 # byo_org (l'org pose l'abonnement Otomata, ses membres connectent leur LinkedIn
 # par hosted-auth). Hors socle (comme tout le catalogue, 16/07) ; l'option payante
 # (couche 3) gate l'usage plateforme, le BYO reste libre. Le **dsn** (API v2 :
-# gateway `api.unipile.com`) est résolu côté client (env `UNIPILE_DSN`, défaut
-# api.unipile.com = celui d'Otomata) — PAS un champ de credential tant qu'un BYO
+# gateway `api.unipile.com`) vient du `meta` du credential BYO ; la clé plateforme
+# prend le défaut du client oto-core (api.unipile.com), qui ne lit aucun env — PAS un
+# champ de credential tant qu'un BYO
 # sur un autre endpoint n'existe pas (déféré ; single-field = compatible avec le
 # stockage org-secret existant, mono-valeur).
 # ⚠️ Namespace des tools LinkedIn = `linkedin_unipile` (multi-token), pas `unipile` :

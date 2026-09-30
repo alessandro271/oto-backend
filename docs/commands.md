@@ -39,7 +39,7 @@ uv pip install --python .venv/bin/python "pytest>=8.0" "pytest-asyncio>=0.24"
 # Tester un CLONE (clone scratchpad, ou `git archive <commit>` pour isoler un commit du WIP
 # voisin du tree partagé) SANS réinstaller les deps : réutiliser le venv local (deps+pytest
 # présents) en résolvant `oto_mcp` depuis le clone.
-#   cd <clone> && PYTHONPATH=<clone> OTO_CONFIG_DISABLE_SOPS=1 \
+#   cd <clone> && PYTHONPATH=<clone> \
 #     /data/oto/backend/.venv/bin/python -m pytest -q tests/...
 #
 # ⚠️ **Le `cd <clone>` n'est PAS cosmétique : c'est LUI qui fait marcher la recette.**
@@ -430,7 +430,6 @@ git -C "$SP/core" checkout "$TAG"          # oto-core AU tag que CE tronc éping
 cd "$SP/bk"                                # le `cd` n'est pas cosmétique (cf. §Tests)
 export PYTHONPATH="$SP/core:$SP/bk"        # `oto` est un namespace package : PYTHONPATH
                                            # prime sur le site-packages du venv
-export OTO_CONFIG_DISABLE_SOPS=1
 /data/oto/backend/.venv/bin/python -m pytest -q > "$SP/pristine.txt" 2>&1
 ```
 

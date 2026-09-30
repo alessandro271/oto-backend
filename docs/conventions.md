@@ -629,9 +629,10 @@ rien ne rendait navigable et que rien ne tenait.
   `{{callback:/chemin}}` résolu à la lecture, car elle diffère prod/preprod (tripwire).
   C'était un dict de 850 lignes de chaînes Python : la prose y devenait intouchable, et
   la fiche Salesforce a fini par décrire un modèle d'app que Salesforce avait désactivé.
-- **Aucune résolution de secret côté serveur hors DB/env de process** : pas de
-  `get_secret`/`require_secret` oto.config dans le code serveur (l'unit pose
-  `OTO_CONFIG_DISABLE_SOPS=1`, tout résidu échoue fort).
+- **Aucune résolution de secret côté serveur hors DB/env de process** : le serveur
+  résout chaque credential (coffre ou env de process) et le PASSE au client oto-core,
+  qui n'en lit aucun lui-même (v1.148.0) — un credential absent lève
+  `MissingCredential` à la construction.
 - LinkedIn nécessite le **vrai Google Chrome système** (`google-chrome-stable`, apt)
   sur l'host — PAS le Chromium bundlé Patchright (empreinte TLS ≠ Chrome de bureau
   → bloqué par LinkedIn). `_require_chrome_channel` (`tools/linkedin.py`) force

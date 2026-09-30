@@ -6,8 +6,10 @@ Deux repos, deux déclarations du même fait — « ce champ est-il nécessaire 
 - la **carte** (`providers/<nom>.py`) est le contrat avec l'UTILISATEUR : elle pilote le
   formulaire dashboard, la validation REST et le packing au coffre
   (`CredentialField.required`) ;
-- le **client** (oto-core) est le contrat avec l'API : `self.x = x or require_secret(…)`
-  = obligatoire (il LÈVE si absent), `x or get_secret(…, None)` = facultatif.
+- le **client** (oto-core) est le contrat avec l'API : `self.x = require(x, "NOM")`
+  (`oto.tools.common.credentials`) = obligatoire (il LÈVE `MissingCredential` si
+  absent), `self.x = x` = facultatif. La lib ne lit aucun secret (v1.148.0) : le
+  consommateur passe tout.
 
 Rien ne relie structurellement les deux. Le sens dangereux est **carte plus laxiste
 que le client** : la pose réussit (le champ est facultatif au formulaire), puis le
@@ -60,25 +62,28 @@ def _client_class(tool_module: str):
     return None
 
 
+def _is_require(func: ast.expr) -> bool:
+    """L'aide commune de la lib, `oto.tools.common.credentials.require`, importée nue
+    (`require(…)`, la forme de tous les clients) ou par son module (`credentials.require`)."""
+    return ((isinstance(func, ast.Name) and func.id == "require")
+            or (isinstance(func, ast.Attribute) and func.attr == "require"))
+
+
 def _hard_required_from_source(src: str) -> set[str]:
-    """Paramètres EXIGÉS dans un source d'`__init__` : motif
-    `self.<attr> = <param> or require_secret(...)` (pas de repli sur None).
+    """Paramètres EXIGÉS dans un source d'`__init__` : tout paramètre passé en premier
+    argument à `require(<param>, "NOM")`, où que soit l'appel dans le corps
+    (`self.x = require(x, …)`, `str(require(x, …))`, `build(…, credentials=require(x, …))`).
+    Un paramètre simplement recopié (`self.x = x`) est facultatif.
     ⚠️ `textwrap.dedent`, PAS `inspect.cleandoc` (fait pour les docstrings : il
     mange l'indentation du corps → IndentationError)."""
     tree = ast.parse(textwrap.dedent(src))
+    fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef))
+    params = {a.arg for a in fn.args.args + fn.args.kwonlyargs}
     out: set[str] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.BoolOp):
-            continue
-        if not isinstance(node.value.op, ast.Or):
-            continue
-        vals = node.value.values
-        if len(vals) != 2 or not isinstance(vals[0], ast.Name):
-            continue
-        fallback = vals[1]
-        if (isinstance(fallback, ast.Call) and isinstance(fallback.func, ast.Name)
-                and fallback.func.id == "require_secret"):
-            out.add(vals[0].id)
+    for node in ast.walk(fn):
+        if (isinstance(node, ast.Call) and _is_require(node.func) and node.args
+                and isinstance(node.args[0], ast.Name) and node.args[0].id in params):
+            out.add(node.args[0].id)
     return out
 
 
@@ -88,6 +93,11 @@ def _hard_required_params(cls) -> set[str]:
         return _hard_required_from_source(inspect.getsource(cls.__init__))
     except (OSError, TypeError, SyntaxError):  # pragma: no cover
         return set()
+
+
+def _clash(cls, optional: set[str]) -> list[str]:
+    """Champs FACULTATIFS sur la carte que le client exige."""
+    return sorted(optional & _hard_required_params(cls))
 
 
 def _cases():
@@ -120,22 +130,45 @@ def test_optional_card_field_is_not_required_by_client(connector, tool_module, o
     cls = _client_class(tool_module)
     if cls is None:
         pytest.skip(f"{tool_module}: pas de `_client() -> Classe` résoluble")
-    hard = _hard_required_params(cls)
-    clash = sorted(optional & hard)
+    clash = _clash(cls, optional)
     assert not clash, (
         f"carte `{connector}` déclare {clash} FACULTATIF(S), mais {cls.__name__} "
-        f"les exige (`require_secret`) → la pose réussira et le connecteur lèvera "
-        f"au premier appel. Rendre le champ optionnel côté client "
-        f"(`get_secret(..., None)`) ou requis sur la carte (`required=True`).")
+        f"les exige (`require(...)`) → la pose réussira et le connecteur lèvera "
+        f"`MissingCredential` au premier appel. Rendre le champ optionnel côté client "
+        f"(`self.x = x`) ou requis sur la carte (`required=True`).")
 
 
-def test_detector_recognises_both_forms():
-    """La sonde distingue bien requis (`require_secret`) et facultatif
-    (`get_secret(..., None)`) — sinon elle ne prouverait rien."""
+def test_detector_recognises_the_lib_forms():
+    """La sonde distingue bien requis (`require(x, "NOM")`, sous toutes ses formes
+    d'appel) et facultatif (`self.x = x`) — sinon elle ne prouverait rien."""
     src = (
         "class C:\n"
-        "    def __init__(self, a=None, b=None):\n"
-        "        self.a = a or require_secret('A')\n"
-        "        self.b = b or get_secret('B', None)\n")
+        "    def __init__(self, a=None, b=None, c=None, d=None):\n"
+        "        self.a = require(a, 'A')\n"
+        "        self.b = b\n"
+        "        self.c = str(require(c, 'C')).strip()\n"
+        "        self.d = credentials.require(d, 'D')\n"
+        "        tok = self._token()\n"
+        "        self.t = require(tok, 'T')\n")
     init = src.split("class C:\n")[1]
-    assert _hard_required_from_source(init) == {"a"}
+    assert _hard_required_from_source(init) == {"a", "c", "d"}
+
+
+def test_probe_bites_on_the_real_lib():
+    """La sonde lit le motif RÉEL de la lib, pas seulement un source de banc : sur le
+    client du cas d'école, elle voit les champs exigés, et la garde échouerait si la
+    carte les déclarait facultatifs. Si la lib change encore de motif (comme en v1.148.0,
+    `x or require_secret(…)` → `require(x, …)`), ce test rougit au lieu de laisser la
+    garde passer à vide."""
+    from oto.tools.zohodesk.client import ZohoDeskClient
+
+    hard = _hard_required_params(ZohoDeskClient)
+    assert {"client_id", "client_secret"} <= hard, hard
+    assert "org_id" not in hard  # facultatif côté client ET carte (cas d'école du 28/07)
+    assert _clash(ZohoDeskClient, {"client_id", "org_id"}) == ["client_id"]
+    # Couverture : la sonde voit des champs exigés sur une part réelle des clients
+    # couverts — une sonde qui ne trouve rien nulle part est inerte.
+    classes = {cls for _, m, _ in _CASES if (cls := _client_class(m)) is not None}
+    assert classes, "aucun client résolu — sonde inerte ?"
+    assert any(_hard_required_params(cls) for cls in classes), (
+        "aucun client couvert n'exige un champ : le motif `require(x, …)` n'est plus reconnu")

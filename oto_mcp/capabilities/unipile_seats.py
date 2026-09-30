@@ -109,7 +109,7 @@ def _platform_client():
     api_key = credentials_store.get_credential(
         credentials_store.PLATFORM, insts[0]["label"], "unipile")
     from oto.tools.unipile import UnipileClient
-    return UnipileClient(api_key=api_key)  # dsn=None → env/api.unipile.com
+    return UnipileClient(api_key=api_key)  # dsn=None → défaut client, api.unipile.com
 
 
 def _seat_state(rows: list[dict]) -> str:

@@ -3,7 +3,7 @@
 Vérifie ORG_MEMBER_OF (lecture par id de path) + formes superset.
 
 Lancer :  DATABASE_URL=postgresql://poc:poc@localhost:5472/poc \
-          OTO_MCP_ADMIN_SUB=padmin OTO_CONFIG_DISABLE_SOPS=1 \
+          OTO_MCP_ADMIN_SUB=padmin \
           .venv/bin/python -m scripts.smoke_capability_org_reads
 """
 from __future__ import annotations

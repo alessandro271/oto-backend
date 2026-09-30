@@ -9,8 +9,8 @@ description: >-
   (plus de SOPS ; la POSE du secret brut est dashboard-only, le MCP ne porte que les
   droits via oto_admin_key_grant), le gate auth_modes pour
   les providers platform-éligibles (serper/hunter/sirene/kaspr), les providers byo-only
-  (attio/lemlist/pennylane), le cas Slack (token xoxp per-user), et le débranchement
-  SOPS (OTO_CONFIG_DISABLE_SOPS=1 en prod). À consulter pour diagnostiquer un accès
+  (attio/lemlist/pennylane), le cas Slack (token xoxp per-user), et la règle « la lib
+  de connecteurs ne lit aucun secret ». À consulter pour diagnostiquer un accès
   refusé, ajouter un grant, ou comprendre qui peut quoi sur la plateforme.
 adr:
   - "0016"
@@ -247,10 +247,9 @@ l'**équipe Otomata** (attio/lemlist) vit en **credentials de l'org Otomata
 (`xoxp`) per-user — `slack_*` postent en `as_user` (mode bot viendra avec
 l'OAuth install, issue #4).
 
-**Débranchement SOPS (oto-mcp#12)** : l'unit pose `OTO_CONFIG_DISABLE_SOPS=1`
-→ côté serveur, `oto.config.get_secret` ne résout QUE l'env du process (ni
-SOPS ni `~/.otomata/secrets.env`), et tout `require_secret` résiduel échoue
-fort. L'infra bootstrap (DATABASE_URL, Logto, OAuth Google, state secret)
+**La lib de connecteurs ne lit aucun secret (oto-core v1.148.0)** : plus de
+`oto.config` ni de résolution SOPS/fichier — le serveur passe chaque credential au
+constructeur du client, qui lève `MissingCredential` s'il manque. L'infra bootstrap (DATABASE_URL, Logto, OAuth Google, state secret)
 reste en env de process (`/opt/oto-mcp/.env`).
 
 Tous les tools API-keyed (`serper_*`, `hunter_*`, `sirene_*`, `fr_*`,

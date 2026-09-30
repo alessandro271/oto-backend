@@ -73,8 +73,8 @@ def _refuse_ignored(op: str, hint: str, **provided) -> None:
 
 
 def _champs(fields: dict) -> dict:
-    """Les quatre champs, NON VIDES. Un champ vide passé au client retomberait sur
-    la résolution de secrets locale (`require_secret`) au lieu d'être refusé."""
+    """Les quatre champs, NON VIDES. Un champ vide passé au client y lèverait un
+    `MissingCredential` au nom de la lib : on le refuse ici, au nom du connecteur."""
     vides = [n for n in _CHAMPS if not (fields.get(n) or "").strip()]
     if vides:
         raise ValueError(f"credential Inqom incomplet : {', '.join(vides)} vide(s)")

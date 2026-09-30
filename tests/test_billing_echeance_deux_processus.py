@@ -277,7 +277,7 @@ def _echeance_due() -> int:
 def _lancer(dsn, rdv, nom, org, *, lent, sans_reservation):
     env = {**os.environ, "DATABASE_URL": dsn, "BANC_RDV": str(rdv), "BANC_NOM": nom,
            "BANC_ORG": str(org), "BANC_PSP_LENT": str(lent),
-           "OTO_MCP_PUBLIC_URL": "https://mcp.oto.cx", "OTO_CONFIG_DISABLE_SOPS": "1",
+           "OTO_MCP_PUBLIC_URL": "https://mcp.oto.cx",
            "PYTHONPATH": os.pathsep.join(
                p for p in (str(RACINE), os.environ.get("PYTHONPATH", "")) if p)}
     if sans_reservation:

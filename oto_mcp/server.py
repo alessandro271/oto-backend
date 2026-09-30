@@ -444,8 +444,8 @@ def _build_auth(verifier: JWTVerifier) -> RemoteAuthProvider:
 # Plus de bootstrap SOPS→platform_keys au boot (oto-mcp#12) : la DB (coffre
 # `platform_keys`) est la SEULE source des clés plateforme. Poser/roter une clé =
 # surface admin (REST `/api/admin/platform-keys` ou meta-tool MCP), jamais SOPS.
-# L'unit pose `OTO_CONFIG_DISABLE_SOPS=1` : tout `require_secret` résiduel côté
-# serveur échoue fort au lieu de lire le filesystem.
+# La lib de connecteurs ne lit aucun secret (oto-core v1.148.0) : chaque clé lui est
+# passée par le serveur.
 
 _SERVER_INSTRUCTIONS = instructions.render()
 

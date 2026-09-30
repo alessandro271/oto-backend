@@ -8,7 +8,7 @@ crédits API par entreprise rendue). `data: []` est un résultat NORMAL (couvert
 partielle des PME), pas un échec.
 
 Lancer :  set -a; . /chemin/vers/.env; set +a   # THEIRSTACK_API_KEY
-          OTO_CONFIG_DISABLE_SOPS=1 .venv/bin/python -m scripts.theirstack_smoke_test
+          .venv/bin/python -m scripts.theirstack_smoke_test
 
 La clé n'est JAMAIS imprimée.
 """

@@ -34,5 +34,4 @@ USER otomcp
 #   OTO_MCP_MASTER_KEY        chiffrement du coffre (hex64/base64-32o). Absente =
 #                             dormant (secrets en clair). Le client la fournit
 #                             depuis SON secret store.
-#   OTO_CONFIG_DISABLE_SOPS=1 recommandé (pas de résolution SOPS serveur).
 ENTRYPOINT ["oto-mcp"]

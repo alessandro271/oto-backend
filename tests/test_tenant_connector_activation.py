@@ -38,7 +38,6 @@ def _cap(key: str):
 @pytest.fixture()
 def base(pg_module_dsn, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", pg_module_dsn)
-    monkeypatch.setenv("OTO_CONFIG_DISABLE_SOPS", "1")
     from oto_mcp.db import _conn
     monkeypatch.setattr(_conn, "_database_url", lambda: pg_module_dsn)
     _conn._pool = None

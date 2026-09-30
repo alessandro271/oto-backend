@@ -34,7 +34,7 @@ Lancer :  AIRTABLE_API_KEY=pat… \
           [AIRTABLE_TEST_BASE=app… [AIRTABLE_TEST_TABLE=tbl…
           [AIRTABLE_TEST_ATTACHMENT_FIELD="Pièces jointes"]
           [AIRTABLE_SMOKE_WRITE=1] [AIRTABLE_SMOKE_SCHEMA=1]]] \
-          OTO_CONFIG_DISABLE_SOPS=1 .venv/bin/python -m scripts.airtable_smoke_test
+          .venv/bin/python -m scripts.airtable_smoke_test
 
 Le token n'est JAMAIS imprimé.
 """

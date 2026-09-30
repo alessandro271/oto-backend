@@ -6,7 +6,7 @@ OK, org non-membre → AuthzDenied(404). + parité des surfaces (tool MCP plat,
 route REST montée).
 
 Lancer :  DATABASE_URL=postgresql://poc:poc@localhost:5468/poc \
-          OTO_CONFIG_DISABLE_SOPS=1 .venv/bin/python -m scripts.smoke_capability_use_org
+          .venv/bin/python -m scripts.smoke_capability_use_org
 """
 from __future__ import annotations
 

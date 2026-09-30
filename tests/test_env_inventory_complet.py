@@ -292,14 +292,13 @@ def test_toute_lecture_d_environnement_est_dans_l_inventaire():
 
 # ── Ce que la DÉPENDANCE lit au nom du serveur (relevé du 29/09/2026) ─────────
 #
-# `OTO_CONFIG_DISABLE_SOPS`, posée dans l'environnement de prod, n'était vue par aucune
-# garde : c'est oto-core (`oto.config`) qui la lit, et le walker ne parcourait que
-# `oto_mcp/`. Même axe pour toute lecture d'une dépendance : on parcourt oto-core AU
-# PIN (le paquet installé), et chaque lecture LITTÉRALE qu'on y trouve est rangée —
-# lue au nom du serveur (`NOMS_FIXES`) ou hors serveur, avec sa raison
-# (`LUES_PAR_OTO_CORE_HORS_SERVEUR`). Les lectures non littérales d'oto-core sont les
-# accesseurs génériques (`get_secret(name)`) : leurs noms sont des clés de connecteur,
-# qui vivent au coffre, pas des réglages du serveur.
+# Une variable lue par oto-core échappait à toute garde : le walker ne parcourait que
+# `oto_mcp/` (cas d'origine, `OTO_CONFIG_DISABLE_SOPS`, retirée avec la lecture de
+# secrets de la lib en v1.148.0). On parcourt donc oto-core AU PIN (le paquet
+# installé), et chaque lecture LITTÉRALE qu'on y trouve est rangée — lue au nom du
+# serveur (`NOMS_FIXES`) ou hors serveur, avec sa raison
+# (`LUES_PAR_OTO_CORE_HORS_SERVEUR`). Depuis v1.148.0 la lib ne lit plus aucun secret :
+# un secret de connecteur arrive toujours en argument, jamais par l'environnement.
 
 
 def _racines_oto_core() -> list[pathlib.Path]:
@@ -332,8 +331,9 @@ def test_toute_lecture_d_oto_core_est_rangee():
 
 
 def test_le_parcours_d_oto_core_mord():
-    """Preuve, pas affirmation : le parcours voit bien la lecture qui a motivé la garde."""
-    assert "OTO_CONFIG_DISABLE_SOPS" in _lectures_oto_core()
+    """Preuve, pas affirmation : le parcours voit bien une lecture réelle de la lib
+    (les clients oto-core qui appellent l'API oto lisent `OTO_API_URL`)."""
+    assert "OTO_API_URL" in _lectures_oto_core()
     arbre = ast.parse('import os\nA = os.getenv("X_G")\n')
     v = _Visiteur("<banc>", {}, {}, {})
     v.visit(arbre)

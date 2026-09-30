@@ -6,7 +6,7 @@ vraiment chez Origami. UN seul appel, en LECTURE : `origami_tables(op="list")`. 
 appel mutant ici — jamais (le connecteur écrit et ENVOIE ; ce smoke ne doit pas).
 
 Lancer :  set -a; . /chemin/vers/.env; set +a   # ORIGAMI_API_KEY (+ ORIGAMI_TABLE_ID_PILOT facultatif)
-          OTO_CONFIG_DISABLE_SOPS=1 .venv/bin/python -m scripts.origami_smoke_test
+          .venv/bin/python -m scripts.origami_smoke_test
 
 La clé n'est JAMAIS imprimée.
 """

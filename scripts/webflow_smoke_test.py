@@ -39,7 +39,7 @@ Rien n'est jamais laissé traîner.
 Lancer :  set -a; . /chemin/vers/.env; set +a   # WEBFLOW_API_TOKEN
           [WEBFLOW_TEST_COLLECTION_ID=... [WEBFLOW_TEST_FORM_ID=...
           [WEBFLOW_TEST_PAGE_ID=... [WEBFLOW_SMOKE_WRITE=1]]]]
-          OTO_CONFIG_DISABLE_SOPS=1 .venv/bin/python -m scripts.webflow_smoke_test
+          .venv/bin/python -m scripts.webflow_smoke_test
 
 Le token n'est JAMAIS imprimé.
 """

@@ -201,8 +201,9 @@ de paiement).
 >
 > **DSN par credential + sélecteur d'identité (ADR 0024).** Chaque clé Unipile est liée
 > à SON sous-domaine `api<NN>.unipile.com:port` ; le DSN vit dans le `meta` du credential
-> et voyage avec la clé via `resolve_credential` (défaut env `UNIPILE_DSN`=api25, instance
-> plateforme). Une clé BYO porte N comptes → capacités génériques **`connectors.identities`/
+> et voyage avec la clé via `resolve_credential` ; la clé plateforme prend le défaut du
+> client oto-core (`api.unipile.com`, la gateway v2) — la lib ne lit aucun env, `UNIPILE_DSN`
+> n'existe plus. Une clé BYO porte N comptes → capacités génériques **`connectors.identities`/
 > `set_default_identity`** (REST `/api/connectors/{c}/identities[/default]`, registre
 > `connectors/identities.py` ; unipile = `list_accounts` sur clé+DSN, **valide id∈liste**
 > anti-binding, **BYO-only** — en revente la liste est vide, hosted-auth conservé). Vue admin

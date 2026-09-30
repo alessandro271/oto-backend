@@ -4,7 +4,7 @@ me (catalogue+état) → select → pause → unselect ; plafond d'exposition (4
 connecteur non-exposé) ; recommend (org_admin) → orgs.default_connectors.
 
 Lancer :  DATABASE_URL=postgresql://poc:poc@localhost:5471/poc \
-          OTO_MCP_ADMIN_SUB=padmin OTO_CONFIG_DISABLE_SOPS=1 \
+          OTO_MCP_ADMIN_SUB=padmin \
           .venv/bin/python -m scripts.smoke_capability_connectors_selection
 """
 from __future__ import annotations

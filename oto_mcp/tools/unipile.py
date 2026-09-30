@@ -10,8 +10,8 @@ La clé est résolue par appel **sous le connecteur du CANAL**
 ce qui fait mordre l'ACL et l'activation DE CE CANAL, le gate lisant le nom qu'on lui
 passe. La clé, elle, reste celle du compte — la délégation
 (`Connector.credential_of`) normalise dans la cascade. Le dsn (API v2 : gateway
-`api.unipile.com`) et l'account_id sont résolus côté client (env `UNIPILE_DSN`,
-défaut api.unipile.com).
+`api.unipile.com`) vient de la config du credential BYO ; la clé plateforme prend le
+défaut du client oto-core (api.unipile.com), qui ne lit aucun env.
 
 Pourquoi à côté du connecteur browser `linkedin` : la session vit chez Unipile
 (vrai Chrome + proxy résidentiel), ce qui contourne l'empreinte TLS et
@@ -896,7 +896,7 @@ def unipile_client(provider: str = "LINKEDIN"):
                     + (f" sur {page}" if page else "")
                     + " (ou via `unipile_connect_start`) avant d'utiliser ces outils."))
     # DSN tiré de la config du credential résolu (défaut api.unipile.com côté
-    # oto-core). Clé plateforme → DSN env/défaut (instance Otomata).
+    # oto-core). Clé plateforme → défaut du client (il ne lit aucun env).
     dsn = None if rc.is_platform else rc.config.get("dsn")
     # `provider` = le CANAL du compte opéré. Il ne sert pas qu'à documenter : la
     # messagerie Unipile v2 a deux formes d'endpoint (par inbox pour LinkedIn, à plat

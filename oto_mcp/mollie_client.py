@@ -23,7 +23,7 @@ Points structurants (ADR 0043, delta vs Stancer) :
 - Auth **Bearer** (clés `test_…` sandbox / `live_…` prod ; le KYB du profil OTOMATA
   est déjà `verified` → pas de blocage go-live comme chez Stancer).
 
-Config (env de process, jamais oto.config/SOPS) : `MOLLIE_API_KEY`.
+Config (env de process) : `MOLLIE_API_KEY`.
 Clé absente → RuntimeError actionnable à l'APPEL (le module s'importe sans, le
 serveur boote sans billing configuré).
 """

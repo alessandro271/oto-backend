@@ -11,7 +11,7 @@ store (`org_store.publish_guide(author_kind='org')`), et c'est elle qui porte le
 contrats de propriété — nom gardé, fork, dépublication par son org_admin.
 
 Lancer :  DATABASE_URL=postgresql://poc:poc@localhost:5471/poc \
-          OTO_MCP_ADMIN_SUB=padmin OTO_CONFIG_DISABLE_SOPS=1 \
+          OTO_MCP_ADMIN_SUB=padmin \
           .venv/bin/python -m scripts.smoke_capability_doctrine_library
 """
 from __future__ import annotations

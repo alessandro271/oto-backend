@@ -6,7 +6,7 @@ construction d'URL publique. N'importe jamais l'adaptateur REST. Les URLs
 produites sont **publiques** (pas des secrets) → seule l'URL est persistée en
 DB (colonnes `users.avatar_url` / `orgs.logo_url`), jamais dans le coffre chiffré.
 
-Config 100% par env de process (cohérent `OTO_CONFIG_DISABLE_SOPS=1`) :
+Config 100% par env de process :
 - `OTO_MCP_S3_ENDPOINT`         ex. https://s3.fr-par.scw.cloud
 - `OTO_MCP_S3_REGION`           défaut "fr-par"
 - `OTO_MCP_S3_BUCKET`           ex. oto-media

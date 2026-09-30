@@ -29,8 +29,9 @@ def _call(**kwargs):
 
 @pytest.fixture(autouse=True)
 def _no_platform_key(monkeypatch):
+    # La clé d'exploitant n'arrive au client QUE par le serveur (`_client()` lit
+    # l'env et la passe) : la lib ne lit aucun secret. Sans elle, régime sans clé.
     monkeypatch.delenv("BLS_API_KEY", raising=False)
-    monkeypatch.setattr("oto.tools.bls.client.get_secret", lambda name, default=None: None)
 
 
 # --- registre -----------------------------------------------------------------
@@ -218,3 +219,25 @@ def test_tool_layer_with_patched_client_class():
         out = _call(soc="15-1299.00", areas=["US"])
     client_cls.return_value.oews_wages.assert_called_once_with("15-1299.00", ["US"])
     assert out["note"].endswith("cover all of 15-1299.")
+
+
+# --- clé d'exploitant : lue par le serveur, passée au client -------------------
+
+def _stub_result():
+    return {"soc": "15-1299", "onet_suffix_stripped": None, "year": "2025",
+            "requests": 1, "areas": [], "messages": []}
+
+
+def test_operator_key_is_read_by_server_and_passed_to_client(monkeypatch):
+    monkeypatch.setenv("BLS_API_KEY", "cle-de-banc")
+    with patch("oto.tools.bls.client.BLSClient") as client_cls:
+        client_cls.return_value.oews_wages.return_value = _stub_result()
+        _call(soc="15-1299", areas=["US"])
+    client_cls.assert_called_once_with(registration_key="cle-de-banc")
+
+
+def test_without_operator_key_client_runs_keyless():
+    with patch("oto.tools.bls.client.BLSClient") as client_cls:
+        client_cls.return_value.oews_wages.return_value = _stub_result()
+        _call(soc="15-1299", areas=["US"])
+    client_cls.assert_called_once_with(registration_key=None)

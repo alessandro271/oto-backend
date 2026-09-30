@@ -5,7 +5,7 @@ chiffré (OTO_MCP_MASTER_KEY factice). Même chemin que les adaptateurs.
 
 Lancer :  DATABASE_URL=postgresql://poc:poc@localhost:5470/poc \
           OTO_MCP_MASTER_KEY=$(python -c "print('0'*64)") \
-          OTO_MCP_ADMIN_SUB=padmin OTO_CONFIG_DISABLE_SOPS=1 \
+          OTO_MCP_ADMIN_SUB=padmin \
           .venv/bin/python -m scripts.smoke_capability_org_secrets
 """
 from __future__ import annotations
