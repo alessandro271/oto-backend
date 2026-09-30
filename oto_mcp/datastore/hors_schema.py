@@ -118,8 +118,9 @@ def _unknown_subkey_refusal(path: str, fields: list) -> str:
     return (f"{path}: attribut non déclaré — le tableau est en format `strict` et ce "
             f"sous-record ferme ses attributs : {dispo}. Rien n'a été écrit. "
             "Contrairement à une colonne de premier niveau, un attribut inconnu ne "
-            "crée PAS de colonne libre : il serait stocké là où ni le schéma, ni "
-            "l'interface, ni l'export à plat ne le lisent. Écris-le sous un nom "
+            "crée PAS de colonne libre : il serait stocké là où ni le schéma ni "
+            "l'interface ne le lisent (l'export CSV rend la colonne en une seule "
+            "cellule, en JSON, sans colonne par attribut). Écris-le sous un nom "
             "déclaré, ou déclare l'attribut (`data_patch_schema`) puis réécris.")
 
 

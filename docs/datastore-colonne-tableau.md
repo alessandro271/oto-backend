@@ -98,10 +98,8 @@ lecteur de chaque attribut, est servie sur `GET /api/datastore/schema/keys`.
 
 **Deux ajouts** :
 
-- `max_items` (entier, optionnel) — borne la liste à l'écriture **et** fixe le nombre
-  de colonnes de l'export à plat (§5.3). Sans lui, l'export est borné au maximum
-  observé, ce qui le rend non déterministe d'un jour à l'autre : c'est pour ça qu'il
-  faut le déclarer sur un tableau qu'on exporte.
+- `max_items` (entier, optionnel) — borne la liste à l'écriture. Il ne fixe aucune
+  colonne d'export : l'export CSV rend la colonne-liste en une seule cellule, chaque élément en JSON, joints par `; ` (§5.3).
 - `description` — aujourd'hui ni validé ni servi (le module pur laisse passer les clés
   inconnues). À faire traverser jusqu'aux consommateurs, sinon scout n'a rien à
   afficher sous un intitulé.
@@ -119,8 +117,8 @@ cran plus bas — à ceci près que le sens s'y **inverse**, et il faut le dire.
 ligne, une clé inconnue crée une **colonne** libre, que l'interface affiche : elle est
 signalée (`hors_schema`), jamais refusée, parce que c'est ce qui permet d'explorer un
 tableau avant de le typer. Dans un item, il n'existe pas de sous-colonne libre :
-`of.fields` est le seul référentiel, l'export à plat (§5.3) dérive ses colonnes de lui,
-et un attribut non déclaré serait stocké là où **rien** ne le lit. Il est donc
+`of.fields` est le seul référentiel, et un attribut non déclaré serait stocké là où ni
+le schéma ni l'interface ne le lisent (l'export CSV rend la colonne-liste en une seule cellule, chaque élément en JSON, joints par `; `, sans colonne par attribut). Il est donc
 **refusé**, en nommant l'élément : `contacts[1].email_pattern`.
 
 Trois conséquences pour qui déclare une colonne-tableau :
@@ -202,10 +200,15 @@ au-delà de `max_items` est refusé.
 **Un trou est servi comme `{}`, jamais `null`** — le rang est RÉSERVÉ, pas absent.
 Trois conséquences, toutes voulues : un consommateur itère et lit `item.get("nom")`
 sans garde de type (un `null` en imposerait une partout) ; `contacts[].attr` ne matche
-rien sur un trou, ce qui est la bonne réponse ; l'export rend des colonnes vides à ce
-rang. Même règle qu'au-dessus : une colonne-tableau vide rend `[]`, jamais `null`.
+rien sur un trou, ce qui est la bonne réponse ; l'export CSV l'écrit `{}` dans la
+cellule de la liste. Même règle qu'au-dessus : une colonne-tableau vide rend `[]`, jamais `null`.
 
-### 5.3 Aplatissement d'export DÉTERMINISTE
+### 5.3 Aplatissement d'export DÉTERMINISTE — non livré, écarté le 30/09/2026
+
+> ⚠️ **Ce qui est servi** : l'export CSV du tableau (#1006) existe, et l'export CSV rend la colonne-liste en une seule cellule, chaque élément en JSON, joints par `; `. Ce
+> comportement RESTE (décision du 30/09/2026, oto#22 point d) ; l'export sera repensé
+> à terme. Rien de ce qui suit n'est implémenté : c'est la spec d'origine, gardée pour
+> le jour où l'aplatissement reviendra au programme.
 
 Sans lui, chaque consommateur reconstruit `contact1_*` en sortie — la forme qu'on
 quitte. La projection à plat est native et **déterministe** : mêmes colonnes, même
@@ -224,10 +227,6 @@ ordre, quel que soit le contenu des lignes.
 **Éprouvé contre le cas Excel** : le test d'acceptation est un export du vivier réel
 ouvert dans Excel — colonnes stables entre deux exports, aucune colonne à rallonge,
 et la relecture du fichier redonne les mêmes items.
-
-> ⚠️ **Il n'existe aujourd'hui AUCUN export CSV/XLSX du datastore côté backend**
-> (`data_url` rend l'URL du dashboard, rien d'autre). Cette fonction est donc à créer,
-> pas à étendre — à chiffrer comme telle.
 
 ### 5.4 Composition avec les couches
 

@@ -1560,10 +1560,10 @@ différence : une clé inconnue en tête de ligne crée une vraie **colonne**, q
 l'interface affiche et qu'on peut déclarer après coup — c'est ce qui permet d'explorer
 un tableau avant de le typer. Dans un `object.fields` ou un `list.of.fields`, il n'y a
 pas de « sous-colonne libre » : la déclaration EST le seul référentiel, l'attribut
-serait stocké là où ni le schéma, ni l'interface, ni l'export à plat (§5.3 de
-`datastore-colonne-tableau.md`, dont les colonnes se dérivent de `of.fields`) ne le
-lisent. Sur un tableau `strict`, un attribut non déclaré est donc **refusé**, en
-nommant l'élément — `contacts[1].email_pattern`.
+serait stocké là où ni le schéma ni l'interface ne le lisent — et l'export CSV rend la colonne-liste en une seule cellule, chaque élément en JSON, joints par `; `, sans colonne
+par attribut (il n'existe pas d'export à plat, cf. §5.3 de
+`datastore-colonne-tableau.md`). Sur un tableau `strict`, un attribut non déclaré est
+donc **refusé**, en nommant l'élément — `contacts[1].email_pattern`.
 
 *Le fait qui l'a montré* : un tableau `strict: true` a accepté deux fois, sur un rejeu
 de nuit, une clé `email_pattern` **à l'intérieur** d'un contact — sans refus, sans
