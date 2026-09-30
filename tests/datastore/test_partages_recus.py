@@ -27,7 +27,7 @@ import pytest
 from oto_mcp import access, db, group_store, org_store, ownership
 from oto_mcp.capabilities import registry
 from oto_mcp.capabilities._authz import SUB_ONLY
-from oto_mcp.capabilities._types import ResolvedCtx
+from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
 from oto_mcp.capabilities.datastore import partages_recus as P
 from oto_mcp.datastore.core import make_store
 
@@ -81,23 +81,24 @@ def _liste_de_l_org(monkeypatch, sub, org) -> set:
     return {int(e["id"]) for e in make_store(sub).list_datastores()}
 
 
-def test_la_route_reste_hors_MCP_sans_refus_declare():
-    # 29/09/2026 : plus de 409 `personal_view_outside_personal_org` à déclarer — la
-    # lentille est servie dans toute org.
+def test_la_route_reste_hors_MCP_et_declare_son_refus():
     cap = registry.by_key("me.datastore.shared_with_me")
     assert cap.authz is SUB_ONLY
     assert cap.mcp is None
     assert [(b.verb, b.path) for b in cap.rest_bindings()] == [("GET", "/api/me/datastores/shared")]
-    assert list(cap.errors) == []
+    assert [(e.status, e.code) for e in cap.errors] == [
+        (409, "personal_view_outside_personal_org")]
 
 
 @pytest.mark.parametrize("org", ["x", "y", None])
-def test_hors_de_l_org_perso_la_lentille_rend_la_meme_chose(monde, monkeypatch, org):
-    """Décision du 29/09/2026 : une org perso est une org comme une autre, et un partage à
-    une personne n'appartient à aucune org — la lentille « moi » rend partout ce qu'elle
-    rend dans l'org perso (elle était refusée en 409 ailleurs)."""
-    assert _recus(monkeypatch, B, monde[org] if org else None) == \
-        _recus(monkeypatch, B, _perso(B))
+def test_hors_de_l_org_perso_la_lentille_est_REFUSEE_en_nommant_l_org_perso(
+        monde, monkeypatch, org):
+    """Décision du 29/09/2026 : une lentille « moi » ne se sert que dans l'org perso —
+    ailleurs un refus nommé, jamais une liste vide (« personne ne t'a rien partagé »)."""
+    with pytest.raises(AuthzDenied) as refus:
+        _recus(monkeypatch, B, monde[org] if org else None)
+    assert (refus.value.status, refus.value.code) == (409, "personal_view_outside_personal_org")
+    assert f"#{_perso(B)}" in refus.value.message
 
 
 def test_le_destinataire_voit_le_partage_personnel_dans_son_org_perso(monde, monkeypatch):

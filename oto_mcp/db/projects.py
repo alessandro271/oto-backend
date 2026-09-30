@@ -59,8 +59,8 @@ def create_project(owner_type: str, owner_id: str, name: str,
     """Crée un projet possédé par `(owner_type, owner_id)` (ADR 0030). owner_id = sub
     (perso) | org.id::text | group.id::text. `context_org_id` (ADR 0030 amendé) = l'org de CONTEXTE d'un projet perso (owner='user') — sépare la
     propriété (la personne) du contexte de travail (l'org, pour la résolution des
-    credentials, l'org d'origine affichée, et l'org où il se liste pour son propriétaire,
-    29/09/2026) ; NULL pour un projet non-perso (contexte = owner)."""
+    credentials et l'org d'origine affichée — plus le scope de liste depuis le 28/09/2026 :
+    un perso se liste dans l'org perso) ; NULL pour un projet non-perso (contexte = owner)."""
     if owner_type == "user":
         upsert_user(owner_id)
     with _connect() as conn:
@@ -88,7 +88,7 @@ def list_projects_for_owners(owners: list[tuple[str, str]], *,
                              createur: Optional[tuple[str, int, bool]] = None) -> list[dict]:
     """Projets possédés par l'un des `(owner_type, owner_id)` (perso + orgs/groupes).
     `templates_only` = ne garder que les modèles publiés (`is_template`, ADR 0032 §7 B5a).
-    `createur` = `(sub, org, tout)` (`ownership.mes_objets_ici`) : s'y ajoutent les
+    `createur` = `(sub, org, tout)` (`ownership.mes_projets_ici`) : s'y ajoutent les
     projets PERSONNELS de `sub` rangés dans l'org `org` (`context_org_id`) et, si
     `tout` (son org perso), tous ses projets personnels."""
     if not owners and createur is None:

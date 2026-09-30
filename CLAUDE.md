@@ -86,12 +86,10 @@ monotone** : l'équipe rétrécit ce que l'org expose, jamais l'inverse (ADR 001
 `ownership.py` = seam unique de la ressource possédée (`owner_type∈{user,group,org}` + `resource_grants`
 deny-by-default) ; **deux plans**, `can_access` (contenu) vs `can_govern` (gouvernance) ; le **projet** est le
 conteneur de travail possédé · ⚠️ une liste de contenu scope sur `active_owner(current_org)`, **jamais
-`owner_pairs()`** — fuite fail-open (ADR 0030/0032, `docs/ownership.md`, `docs/projects.md`) · ⚠️ **une org perso
-est une org comme une autre** (« perso » = une étiquette ; seules exceptions : créée à l'inscription, son propriétaire
-ne la quitte pas) · ⚠️ **dans une org, une liste rend l'org, ses équipes, et MES objets perso créés en elle**
-(`ownership.mes_objets_ici`) — jamais ceux d'un autre membre sans partage ; l'org perso est la maison de ce qui n'a
-pas d'org de création et des partages faits à la personne ; les lentilles « moi » sont servies dans toute org
-(`docs/ownership.md`).
+`owner_pairs()`** — fuite fail-open (ADR 0030/0032, `docs/ownership.md`, `docs/projects.md`) · ⚠️ **dans une org, une
+liste ne rend QUE l'org** : le personnel (qui naît à la personne dans toute org) et les partages faits à une personne
+se listent dans l'org perso, et les lentilles « moi » n'y sont servies que là (`ownership.perso_de_la_liste`, 409
+`personal_view_outside_personal_org`, ADR 0030 §9).
 
 ## Outils servis : visibilité, guides, journal
 

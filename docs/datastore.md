@@ -2803,11 +2803,9 @@ refuse une voie qui l'omettrait.
 > perso, `list_datastores` et la recherche ne rendent ni tableau personnel ni partage fait
 > à une personne. `ownership.tableaux_du_contexte` est retiré ; `context_org_id` reste
 > écrit, plus lu. Sans `owner`, un tableau reste à la PERSONNE depuis n'importe quelle
-> org (29/09/2026) et se liste dans l'org perso. **Amendé le 29/09/2026** (une org perso
-> est une org comme une autre) : mon tableau perso se liste aussi, pour moi seul, dans
-> l'org où je l'ai créé (`ownership.mes_tableaux_ici`, `context_org_id` est de nouveau
-> lu) ; « partagés avec moi » (`GET /api/me/datastores/shared`) est servi dans toute org.
-> Bancs : `tests/test_listes_seule_l_org.py`, `tests/test_org_perso_est_une_org.py`.
+> org (29/09/2026) et se liste dans l'org perso ; « partagés avec moi »
+> (`GET /api/me/datastores/shared`) n'est servi que dans l'org perso (409
+> `personal_view_outside_personal_org` ailleurs). Banc : `tests/test_listes_seule_l_org.py`.
 > Le paragraphe suivant décrit la règle d'avant.
 
 **La liste, depuis la phase 2 (25/09/2026)** : `list_datastores` — donc

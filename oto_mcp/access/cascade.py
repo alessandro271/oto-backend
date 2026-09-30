@@ -98,9 +98,9 @@ def personal_instance_org(sub: str, provider: str,
     """Org portant l'instance PERSONNELLE cross-org de `sub` pour un connecteur
     par-personne (issue #172, piste A ; `Connector.personal_cross_org`), ou None.
 
-    Déterministe (jamais de choix muet entre deux identités du MÊME humain) : la clé
-    la plus RÉCEMMENT posée. L'org perso n'a plus de préférence (29/09/2026 : une org
-    perso est une org comme une autre). `exclude_org` écarte l'org de contexte (déjà testée en
+    Déterministe (jamais de choix muet entre deux identités du MÊME humain) : l'org
+    PERSO d'abord (une seule par sub, ADR 0030) si elle porte une clé membre, sinon
+    la plus RÉCEMMENT posée. `exclude_org` écarte l'org de contexte (déjà testée en
     amont par le palier membre local). Sûr par construction : même `sub` ⟹ zéro
     usurpation — on ne fait que retrouver SA propre clé posée ailleurs.
 
@@ -112,7 +112,12 @@ def personal_instance_org(sub: str, provider: str,
     provider = providers.credential_provider(provider)
     orgs = [o for o in credentials_store.list_member_orgs_for(sub, provider)
             if o != exclude_org]
-    return orgs[0] if orgs else None  # set_at DESC → la plus récente
+    if not orgs:
+        return None
+    personal = org_store.get_personal_org(sub)
+    if personal is not None and personal in orgs:
+        return personal
+    return orgs[0]  # set_at DESC → la plus récente
 
 
 # ── Walker de cascade unique ───────────────────────────────────────────────────

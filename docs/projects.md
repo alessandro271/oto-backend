@@ -200,9 +200,9 @@ Partage/transfert via **`oto_resource`** (resource_type=`project` ajouté au dis
 > qui m'est partagé en personne (`shared: true`). `list_templates`, `archived=true`, la
 > recherche et le rail suivent (`ownership.project_list_owners` / `principaux_de_liste`).
 > `op=create`/`op=copy` sans `owner_type` : le projet reste « moi, org » (§8) depuis
-> n'importe quelle org, et se LISTE, pour moi seul, dans l'org où je l'ai créé (et dans
-> mon org perso). `scope="me"` est servi dans toute org (29/09/2026 : une org perso est une
-> org comme une autre). Détail : `docs/ownership.md`.
+> n'importe quelle org, et se LISTE dans l'org perso. `scope="me"` n'est servi que dans
+> l'org perso (29/09/2026) : ailleurs, 409 `personal_view_outside_personal_org`. Détail :
+> `docs/ownership.md`.
 
 > **Ce qu'une liste d'org montre des partages (21/09/2026).** `oto_project op=list` (portée
 > `org`, le défaut) rend les projets de l'org consultée, ceux de ses pôles, mes projets

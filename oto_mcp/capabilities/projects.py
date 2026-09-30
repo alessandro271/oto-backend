@@ -98,18 +98,18 @@ class ProjectInput(BaseModel):
     identity_ref: Optional[str] = None  # connecteur : identité (compte) du BINDING — clé de multiplicité (#57) ; N liens par connecteur, une identité par binding. link sans identity_ref = binding par défaut ; unlink sans identity_ref = TOUS les bindings du connecteur
     instance_ref: Optional[str] = None  # connecteur : ref d'INSTANCE (ADR 0038 B5, grammaire B4 via oto_instance op=list) — le binding désigne exactement CE credential ; la résolution le sert en dur (re-gardé pour l'appelant). Exclusif d'identity_ref (le ref porte déjà le compte). Stocké config.instance_ref.
     # list : la PORTÉE. Omis/`org` = l'org consultée (ses projets, ceux de ses équipes,
-    # ce qui est partagé à elle ou à mes équipes en elle, et mes projets perso créés
-    # en elle) — dans mon org PERSO, en plus, tous mes projets perso et ce qui est
-    # partagé à moi (décisions des 28 et 29/09/2026) ; `me` = ce qui est partagé à MOI
-    # en personne, servi dans toute org (29/09/2026 : une org perso est une org comme
-    # une autre).
+    # ce qui est partagé à elle ou à mes équipes en elle) — et, dans mon org PERSO
+    # seulement, tous mes projets perso et ce qui est partagé à moi (décision du
+    # 28/09/2026) ; `me` = ce qui est partagé à MOI en personne, servi dans l'org perso
+    # seulement (29/09/2026 : ailleurs, 409 `personal_view_outside_personal_org`).
     scope: Optional[Literal["org", "me"]] = Field(default=None, description=(
         "list only: `org` (default) = the projects of the organization you act in, of "
-        "its teams, those shared with it or with your teams in it, and your personal "
-        "projects created in it (visible to you only); your PERSONAL org also lists "
-        "all your personal projects and everything shared with you as a person; `me` "
-        "= only the projects shared with YOU as a person, whatever their "
-        "organization — served in any organization."))
+        "its teams, and those shared with it or with your teams in it — never a "
+        "personal project nor one shared with you as a person, except in your PERSONAL "
+        "org, which lists ALL your personal projects and everything shared with you as "
+        "a person; `me` = only the projects shared with YOU as a person, whatever "
+        "their organization — served in your personal org only (elsewhere 409 "
+        "`personal_view_outside_personal_org`, which names the org to switch to)."))
     # list : retrouver ce qu'on a RANGÉ (issue `oto`#38) — les projets archivés, et eux
     # seuls. Un archivage sans moyen de relire la liste de ce qu'on a archivé ne se
     # défait que si l'on se souvient de l'id.
@@ -674,16 +674,20 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
 
         if inp.scope == "me":
             # « Partagés avec moi » : le partage PERSONNEL (principal ('user', sub)) —
-            # une lentille « moi », servie dans toute org (29/09/2026 : une org perso
-            # est une org comme une autre ; un partage à une personne n'appartient à
-            # aucune org). L'ACCÈS ne dépend pas de la liste : `visible_in_org` honore
-            # le partage dans toute org.
+            # une lentille « moi », servie dans l'org PERSO seulement (décision du
+            # 29/09/2026) ; ailleurs, refus nommé qui dit où basculer, jamais une liste
+            # vide. L'ACCÈS ne dépend pas de la liste : `visible_in_org` honore le
+            # partage dans toute org.
+            if not ownership.org_perso_de(sub, ctx.org_id):
+                message, details = ownership.refus_vue_perso_hors_org_perso(
+                    sub, ctx.org_id, "La liste des projets partagés à toi (`scope=me`)")
+                raise AuthzDenied(409, "personal_view_outside_personal_org", message, details)
             return _projected(_received([("user", sub)], set()), inp.fields)
 
         # La LISTE de l'org consultée (décisions des 28 et 29/09/2026, amendent l'ADR
         # 0030 §8) : ses projets, ceux de ses pôles (ADR 0049 : mes équipes, ou toutes si
         # j'en suis admin), ce qui est partagé à elle ou à mes équipes en elle, marqué
-        # `shared` — et MES projets personnels créés dans cette org (`mes_objets_ici`),
+        # `shared` — et MES projets personnels créés dans cette org (`mes_projets_ici`),
         # invisibles des autres membres sauf partage. Aucun partage fait à MOI : il se
         # liste dans mon org PERSO. Deux seams, les mêmes que la recherche
         # (`accessible_project_ids`) : « cherchable ⇔ lisible »
@@ -1517,11 +1521,12 @@ CAPABILITIES += [
             "Projects (organization layer). op=create (name, "
             "optional brief_md; owner_type user|org + owner_id for a team project) / list "
             "(ORG-SCOPED: the ACTIVE org's projects, its teams' + projects shared with it "
-            "or with your teams in it + YOUR personal projects created in it (visible to "
-            "you only); your PERSONAL org also lists all your personal projects and those "
-            "shared with YOU as a person; pass `org=<id>` to see another org's; "
-            "`scope=\"me\"` lists only the projects shared with you as a person, in any "
-            "org; every response echoes the effective org in `_org`. An INDEX: names and `brief_md_length`, NOT the briefs — "
+            "or with your teams in it — never a personal one: your personal projects and "
+            "those shared with YOU as a person are listed in your PERSONAL org only; pass "
+            "`org=<id>` to see another org's; `scope=\"me\"` lists only the projects "
+            "shared with you as a person — served in your personal org only, elsewhere "
+            "409 `personal_view_outside_personal_org`; every response echoes the "
+            "effective org in `_org`. An INDEX: names and `brief_md_length`, NOT the briefs — "
             'read one with op=get, or pass `fields=["*"]` for whole records) / '
             "list_templates (published MODEL projects you can copy, from the ACTIVE org "
             "and the platform library) / "
@@ -1629,7 +1634,10 @@ CAPABILITIES += [
         errors=(DeclaredError(409, "confirm_required",
                               "op=archive sur un projet qui porte un brief ou une "
                               "procédure liée, sans `confirm=true` — rien n'a été "
-                              "archivé ; `details.unreachable` dit ce qui l'aurait été"),),
+                              "archivé ; `details.unreachable` dit ce qui l'aurait été"),
+                DeclaredError(409, "personal_view_outside_personal_org",
+                              "op=list `scope=me` depuis une org qui n'est pas l'org perso "
+                              "de l'appelant — le message nomme l'org perso où basculer")),
         mcp="oto_project",
         rest=RestBinding("POST", "/api/me/projects"),
     ),

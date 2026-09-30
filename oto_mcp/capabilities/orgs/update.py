@@ -137,13 +137,15 @@ def _archive_org(ctx: ResolvedCtx, inp: OrgIdInput) -> dict:
     orphelins). Si l'org archivée était l'org de session courante, on lève
     l'override → plus de bracelet pendouillant.
 
-    **Espace personnel.** Depuis le 29/09/2026, une org perso est une org comme une
-    autre (« perso » n'est qu'une étiquette) : elle s'archive par la même règle, celle
-    de `ORG_ADMIN_OF`. Si l'archivage retire à quelqu'un sa dernière org, il retrouve
-    un espace neuf (ci-dessous) ; et son propriétaire, s'il est encore membre ailleurs,
-    reçoit une nouvelle org perso au prochain boot (`backfill_personal_orgs`) ; un
-    membre que cet archivage laisse SANS AUCUNE org retrouve un espace tout de suite,
-    que ce soit l'appelant ou un autre (l'invariant ne dépend pas de qui archive).
+    **Espace personnel (2026-08-25).** Il n'est plus refusé en bloc : un compte SOLO
+    n'a QUE lui, le refus le laissait donc sans rien à supprimer du tout. Ce qui reste
+    refusé, c'est l'espace perso de QUELQU'UN D'AUTRE : `ORG_ADMIN_OF` s'obtient aussi
+    par escalade platform_admin, et ce chemin self-service ne doit pas effacer l'espace
+    privé d'un tiers (la console admin a le sien).
+
+    Depuis le 29/09/2026, un espace perso peut avoir d'autres membres : `add_org_member`
+    ne retire plus `personal_of` (une étiquette, plus un état). Son propriétaire le
+    supprime comme n'importe quel admin supprime son org.
 
     ⚠️ Ce n'est pas une suppression de compte. Si ce geste laisse l'appelant SANS
     aucune org, on lui repose immédiatement un espace perso VIDE et neuf — son contenu
@@ -156,7 +158,10 @@ def _archive_org(ctx: ResolvedCtx, inp: OrgIdInput) -> dict:
     (`_reclaim_or_create_personal` ne réclame que faute de perso existante)."""
     if not org_store.get_org(inp.org_id):
         raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
-    membres = [m["sub"] for m in org_store.list_org_members(inp.org_id)]
+    if org_store.is_personal_org(inp.org_id) and org_store.get_personal_org(ctx.sub) != inp.org_id:
+        raise AuthzDenied(400, "personal_org",
+                          "L'espace personnel d'un autre utilisateur ne peut pas être "
+                          "supprimé ici.")
     archived = archive_org_ou_409(inp.org_id)
     if archived:
         sid = session_org.current_session_id()
@@ -164,21 +169,18 @@ def _archive_org(ctx: ResolvedCtx, inp: OrgIdInput) -> dict:
         if present and ov == inp.org_id:
             session_org.set_override(sid, None)
             session_org.clear_group_override(sid)
-        # Plus aucune org pour un membre (le cas SOLO qui supprime son unique espace,
-        # ou l'org perso d'un autre archivée par un co-admin) : on rétablit l'invariant
-        # tout de suite. `ensure_personal_org` est celui du boot, avec son projet
-        # « Découverte » — donc exactement l'accueil d'un compte neuf, pas un état
-        # inventé pour l'occasion. Best-effort : la suppression, elle, a réussi, et le
-        # backfill du prochain boot reste le filet.
-        for sub in membres:
-            if org_store.list_orgs_for_user(sub):
-                continue
+        # Plus une seule org pour l'appelant (le cas SOLO qui supprime son unique
+        # espace) : on rétablit l'invariant tout de suite. `ensure_personal_org` est
+        # celui du boot, avec son projet « Découverte » — donc exactement l'accueil
+        # d'un compte neuf, pas un état inventé pour l'occasion. Best-effort : la
+        # suppression, elle, a réussi, et le backfill du prochain boot reste le filet.
+        if not org_store.list_orgs_for_user(ctx.sub):
             try:
-                u = db_users.get_user(sub) or {}
-                org_store.ensure_personal_org(sub, email=u.get("email"),
+                u = db_users.get_user(ctx.sub) or {}
+                org_store.ensure_personal_org(ctx.sub, email=u.get("email"),
                                               name=u.get("name"))
             except Exception:
-                _log.warning("archive_org: espace perso non recréé pour %s", sub,
+                _log.warning("archive_org: espace perso non recréé pour %s", ctx.sub,
                              exc_info=True)
     return {"ok": True, "org_id": inp.org_id, "archived": archived,
             "already_archived": not archived}

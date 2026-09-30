@@ -34,17 +34,15 @@ def test_ordinary_connector_is_not_personal_cross_org():
 
 # --- 2. choix déterministe de l'org porteuse ------------------------------------
 
-def test_personal_instance_org_ne_prefere_plus_l_org_perso(monkeypatch):
-    # 29/09/2026 : une org perso est une org comme une autre — la clé la plus récemment
-    # posée gagne, même quand l'org perso en porte une (elle gagnait avant).
+def test_personal_instance_org_prefers_personal_org(monkeypatch):
     monkeypatch.setattr(credentials_store, "list_member_orgs_for",
                         lambda sub, con: [5, 2, 9])  # set_at DESC
     monkeypatch.setattr(access.org_store, "get_personal_org", lambda sub: 2)
-    assert access.personal_instance_org("u1", "unipile") == 5
+    assert access.personal_instance_org("u1", "unipile") == 2
 
 
 def test_personal_instance_org_falls_back_to_most_recent(monkeypatch):
-    # La plus récente (tête de liste DESC).
+    # Pas d'org perso parmi les porteuses → la plus récente (tête de liste DESC).
     monkeypatch.setattr(credentials_store, "list_member_orgs_for",
                         lambda sub, con: [5, 2, 9])
     monkeypatch.setattr(access.org_store, "get_personal_org", lambda sub: 999)

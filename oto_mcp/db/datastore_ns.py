@@ -127,8 +127,8 @@ def set_datastore_semantic(ns_id: int, enabled: bool) -> int:
 
 def list_datastores_for_owners(owners: list[tuple[str, str]]) -> list[dict]:
     """Namespaces possédés par l'un des `(owner_type, owner_id)` fournis. Rend
-    `context_org_id`, que lit `ownership.mes_tableaux_ici` : un tableau perso se liste,
-    pour son propriétaire, dans l'org où il l'a créé (29/09/2026)."""
+    `context_org_id` — que plus aucune liste ne lit depuis le 28/09/2026 (un tableau
+    perso se liste dans l'org perso, quelle que soit son org de création)."""
     if not owners:
         return []
     otypes = [o[0] for o in owners]

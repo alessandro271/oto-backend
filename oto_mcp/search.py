@@ -248,10 +248,9 @@ def search(sub: str, org_id: int, q: str, *,
 def _accessible_namespaces(sub: str, org_id: int) -> list[dict]:
     """Namespaces datastore du CONTEXTE — la liste des tableaux de l'org
     (`DatastorePg.list_datastores`), en parité EXACTE : possédés par
-    `ownership.principaux_de_liste` (l'org, mes équipes, et moi dans mon org perso)
-    ∪ mes tableaux perso créés dans cette org (`ownership.mes_tableaux_ici`, 29/09/2026)
-    ∪ accordés à l'org et à mes équipes ∪, dans mon org perso, partagés à moi en
-    personne (décision du 28/09/2026). `test_parite_recherche_liste` tient la
+    `ownership.principaux_de_liste` (l'org, mes équipes, et moi dans mon org perso
+    seulement) ∪ accordés à l'org et à mes équipes ∪, dans mon org perso, partagés à
+    moi en personne (décision du 28/09/2026). `test_parite_recherche_liste` tient la
     parité au lieu de la répéter. Source unique du scoping des sources `tableau` ET
     `ligne` → l'invariant « cherchable ⇔ lisible » tient au grain ligne par héritage
     du ns.
@@ -263,10 +262,6 @@ def _accessible_namespaces(sub: str, org_id: int) -> list[dict]:
     gids = [int(p[1]) for p in principals if p[0] == "group"]
     rows = db.list_datastores_for_owners(principals)
     seen = {r["id"] for r in rows}
-    for r in ownership.mes_tableaux_ici(ownership.mes_objets_ici(sub, org_id)):
-        if r["id"] not in seen:
-            rows.append(r)
-            seen.add(r["id"])
     recus = db.list_datastores_granted_to(sub, [org_id], gids)
     if ("user", sub) in principals:
         recus += db.list_datastores_shared_to_user(sub)

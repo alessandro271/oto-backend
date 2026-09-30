@@ -389,9 +389,9 @@ def _compose(ctx: ResolvedCtx) -> dict:
     lignes = [l for l in db_shell.nodes_for_owners(proprios)
               if not project_nodes.est_une_copie(l)]
     # Les PROJETS, eux, se rangent dans l'org où je les ai créés (décision du
-    # 29/09/2026, `ownership.mes_objets_ici`) : section « Privé » de cette org.
+    # 29/09/2026, `ownership.mes_projets_ici`) : section « Privé » de cette org.
     lignes += project_nodes.lignes_pour_proprietaires(
-        [p for p in proprios if p[0] != "user"], ownership.mes_objets_ici(sub, org_id))
+        [p for p in proprios if p[0] != "user"], ownership.mes_projets_ici(sub, org_id))
 
     par_proprio: dict = {}
     for l in lignes:

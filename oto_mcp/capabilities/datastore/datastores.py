@@ -361,8 +361,8 @@ CAPABILITIES += [
                      "et tout continue de fonctionner pour TOI : c'est au second agent, "
                      "ou au collègue qui ne le trouve pas, que ça se voit. La réponse "
                      "rend le propriétaire et vous avertit dans ce cas précis. Un "
-                     "tableau personnel est LISTÉ, pour toi seul, dans l'org où il a été "
-                     "créé et dans ton org perso ; son numéro l'ouvre partout."),
+                     "tableau personnel est LISTÉ dans ton org perso, quelle que soit "
+                     "l'org où il a été créé ; son numéro l'ouvre partout."),
     ),
     Capability(
         key="me.datastore.delete_datastore",
