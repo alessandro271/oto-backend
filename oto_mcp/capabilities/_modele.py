@@ -42,7 +42,9 @@ def exige_un_runner(org_id: int) -> dict:
         "de la plateforme aura rétabli l'exécution pour cette org. Ce qui existe "
         "reste gérable d'ici là : une automatisation horaire ou webhook se lit, se "
         "modifie et se supprime ; une automatisation de genre file se lit, se "
-        "modifie et s'arrête (`stop`).")
+        "modifie et s'arrête (`stop`). Si le besoin est une tâche planifiée de "
+        "l'utilisateur, ce n'est pas le bon outil : voir le guide "
+        "`procedure-en-routine`.")
 
 
 def famille_declaree(model: Optional[str],

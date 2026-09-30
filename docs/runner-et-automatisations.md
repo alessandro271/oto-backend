@@ -9,6 +9,11 @@ description: >-
 
 # Runner hébergé & automatisations
 
+> ⚠️ **Pas le chemin d'une tâche qu'un utilisateur demande à son assistant de planifier**
+> (« chaque matin », « tous les lundis », pour lui ou pour un client) : celle-ci relève de son
+> client — routine Claude Code (`/schedule`), tâche programmée Claude/Cowork. Une automatisation
+> (`oto_trigger`, `oto_fleet`) pose un **agent hébergé de l'org**, sur demande explicite seulement.
+
 > Extrait de `CLAUDE.md` le 2026-08-27 — le contenu n'a pas changé, seule sa place a bougé.
 > La carte garde le résumé + le pointeur ; le détail (schémas, incidents datés et leurs
 > leçons) vit ici.
@@ -27,7 +32,7 @@ d'entrée produit, et **un worker = un jeton d'org**.
 
 ```
 LE POINT D'ENTRÉE   depuis le dashboard, sur une PROCÉDURE ou un NŒUD, un bouton
-                    bascule l'objet en agent programmé et récurrent. L'agent
+                    bascule l'objet en agent hébergé récurrent. L'agent
                     autonome est une PROPRIÉTÉ de ce qui existe déjà, pas un
                     objet séparé qu'on déclare.
 L'INSTRUCTION       minime — « lis l'objet numéro X ». La boucle agentique fait
@@ -165,7 +170,8 @@ jusqu'au 01/09/2026 : c'est faux et constaté sur la machine), gaté par le cran
   personne qui le voit). Deux gardes distinctes : *un déroulé ne LANCE pas* (un
   agent qui se relance dépense en boucle) et *un déroulé n'arrête pas CELLE QUI
   L'EXÉCUTE* — nommée, plutôt que de fermer le verbe à tout le monde.
-- **déclencheurs** `runner_triggers` — capacité + MCP `oto_trigger`, tick
+- **déclencheurs** `runner_triggers` — capacité + MCP `oto_trigger` (un agent hébergé de l'org,
+  pas la tâche planifiée qu'un utilisateur demande à son assistant — voir l'avertissement en tête), tick
   backend avec CAS sur `next_due` (prod/preprod partagent la base : un seul
   gagnant par échéance). ⚠️ **Poser (et rallumer) exige un runner ARMÉ pour
   l'org** — voir ci-dessous.
@@ -352,7 +358,7 @@ les pose d'après le schéma du tool, jamais à l'aveugle (un jeton non déclar�
 fait refuser l'appel entier à la validation). Conception + état des preuves :
 blueprint `chantier-runner.md` ; pilote = une campagne cliente (fusion R5, 14/08).
 
-### Un agent programmé se crée DEPUIS l'objet (#860, moitié serveur, 03/09/2026)
+### Un agent hébergé récurrent se crée DEPUIS l'objet (#860, moitié serveur, 03/09/2026)
 
 **L'agent autonome est une PROPRIÉTÉ de ce qui existe déjà**, pas un objet séparé
 qu'on déclare. Une procédure gagne un état « celle-ci tourne toute seule ».

@@ -13,6 +13,8 @@ Recopier la procédure dans le prompt est l'erreur qui coûte le plus cher : deu
 
 ## Monter la routine
 
+Depuis Claude Code, `/schedule` crée la routine en conversation (déclencheur planifié ou GitHub) ; le jeton du déclencheur API reste un geste web.
+
 Sur `claude.ai/code/routines`, **Nouvelle routine** :
 
 1. **Nom** — ce que fait la routine, pas la procédure qu'elle charge.
@@ -47,7 +49,7 @@ Ils se combinent sur la même routine.
 
 | | quand | à savoir |
 |---|---|---|
-| **planifié** | cadence régulière ou date unique | cron en **UTC**, intervalle **minimum une heure**. Un tir unique ne compte pas dans le plafond quotidien de runs |
+| **planifié** | cadence régulière ou date unique | heure saisie en **heure locale** puis convertie (vérifier l'heure affichée après création), intervalle **minimum une heure**. Un tir unique ne compte pas dans le plafond quotidien de runs |
 | **API** | déclenchement instantané par un tiers | endpoint `/fire` + jeton bearer. **Le jeton se crée uniquement dans l'interface** et ne s'affiche qu'une fois — aucune API publique ne le génère |
 | **GitHub** | pull requests, releases | filtres par auteur, branche, labels, état |
 
@@ -63,7 +65,7 @@ Conséquence directe : **passer une référence, jamais l'enregistrement.** « l
 
 1. **Un secret resté sur le poste.** Une procédure qui lit un vault local (SOPS, `~/.config`, variable d'environnement du shell) échoue en routine : il n'y a pas de machine. Le credential doit vivre dans le coffre oto, résolu par un connecteur.
 2. **Un fichier ou un dépôt local.** Même cause.
-3. **L'heure.** Le cron est en UTC ; en France il faut retrancher une ou deux heures selon la saison.
+3. **L'heure.** Elle se saisit en heure locale et la routine la convertit ; relire l'heure affichée après création, surtout si le cron a été écrit à la main.
 4. **Un prompt qui recopie la procédure** au lieu de la charger.
 5. **Un payload traité comme une instruction** — la routine l'ignore, et le run part sur le mauvais périmètre sans le dire.
 
@@ -86,6 +88,14 @@ Le vrai réflexe : **faire écrire à la procédure une trace datée dans un tab
 Le connecteur `routine` porte une routine par instance (`routine_id` + jeton de déclenchement, posés depuis les connecteurs du dashboard). `routine_fire` la déclenche et rend la session à ouvrir ; le résultat se lit dans cette session, pas dans la réponse.
 
 C'est utile quand le déclencheur est un agent en conversation, ou un service qui passe déjà par oto. Un outil tiers qui sait faire un POST HTTP appellera `/fire` directement — inutile de mettre oto sur ce chemin.
+
+## Selon le client
+
+- **Claude Code** (terminal, desktop) : `/schedule` crée la routine en conversation ; cadence minimale une heure.
+- **App Claude / Cowork** : c'est la tâche programmée de l'utilisateur (Scheduled → New task, ou décrite dans la conversation, que Claude propose puis fait confirmer).
+- **Ailleurs** (chat sans planification) : donner à l'utilisateur les étapes sur `claude.ai/code/routines`, avec le gabarit de prompt ci-dessus prêt à coller.
+
+Une tâche **pour un client** se crée sur le compte Claude du client, pas sur le nôtre.
 
 ## Routine ou agent hébergé
 

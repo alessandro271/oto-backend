@@ -83,7 +83,10 @@ CAPABILITIES += [
         rest=RestBinding(verb="POST", path="/api/me/automations/fire"),
         description=(
             "Fire a Claude Code routine — an autonomous agent that runs on Anthropic's "
-            "infrastructure with the oto connector attached. Returns immediately with "
+            "infrastructure with the oto connector attached. Does NOT create or "
+            "schedule a routine: it fires one the user already created "
+            "(claude.ai/code/routines or `/schedule`) and whose API token they "
+            "deposited. Returns immediately with "
             "the session id and URL; the run's RESULT is read in that session, not "
             "here. `text` is optional run context and reaches the agent as UNTRUSTED "
             "data (the routine's own prompt decides whether to act on it), so pass a "

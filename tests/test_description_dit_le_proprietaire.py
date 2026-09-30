@@ -165,12 +165,19 @@ def test_oto_procedure_n_annonce_plus_un_defaut_ORG():
 
 
 def test_oto_trigger_dit_d_entree_qu_il_n_est_pas_la_routine_de_l_assistant():
+    # 30/09/2026 : « ne pas » ne suffisait pas — l'ouverture dit aussi QUOI faire à la
+    # place, client par client, sinon l'agent retombe sur le seul outil qui planifie.
     d = _description_de_capacite("runner.triggers")
-    ouverture = d[:500]
+    ouverture = d[:750]
     assert ouverture.startswith("HOSTED AGENTS of the organization"), ouverture
-    assert "NOT the way to schedule" in ouverture, (
+    assert "NOT for scheduling a task" in ouverture, (
         "la mise en garde contre l'usage « routine de l'assistant » doit ouvrir la "
         "description — un client qui tronque ne la verrait plus")
+    assert "Instead: in Claude Code run `/schedule`" in ouverture, (
+        "le geste faisable dans Claude Code doit être nommé")
+    assert "Cowork" in ouverture and "claude.ai/code/routines" in ouverture, (
+        "les autres clients doivent avoir leur geste")
+    assert "client's own Claude account" in ouverture, "la tâche d'un client vit chez lui"
     assert "procedure-en-routine" in ouverture, "le bon chemin doit être nommé"
-    assert "/schedule" not in d, (
-        "« /schedule » refait d'oto_trigger le chemin par défaut du planifié")
+    assert "the product's /schedule" not in d, (
+        "« the product's /schedule » refait d'oto_trigger le chemin par défaut du planifié")

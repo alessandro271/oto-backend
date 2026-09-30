@@ -1,5 +1,10 @@
 """Capacité « déclencheurs du runner » — la config qui fabrique des jobs (R3).
 
+⚠️ Pas le chemin d'une tâche qu'un utilisateur demande à son assistant de planifier
+(« chaque matin », « tous les lundis », pour lui ou pour un client) : celle-ci relève de
+son client — routine Claude Code (`/schedule`), tâche programmée Claude/Cowork. Un
+déclencheur pose un AGENT HÉBERGÉ de l'org, sur demande explicite seulement.
+
 Deux faces, et c'est un choix de principe : un déclencheur est de la CONFIG
 utilisateur, pas de la plomberie worker. « Tous les matins à 8h05, joue la
 veille » doit pouvoir se poser EN CONVERSATION (`oto_trigger`) comme au
@@ -1202,13 +1207,17 @@ CAPABILITIES += [
         ),
         rest=RestBinding(verb="POST", path="/api/me/runner/triggers"),
         description=(
-            "HOSTED AGENTS of the organization: run by oto's worker fleet on the "
-            "org's model key, under their owner's identity, managed in the "
-            "dashboard. NOT the way to schedule a task or a routine for yourself "
-            "or the user (\"every Monday…\", \"remind me\", \"set up a "
-            "routine\") — that is your client's own scheduling (a Claude Code "
-            "routine; method: guide `procedure-en-routine`). Use this only when "
-            "the user explicitly asks for an oto hosted agent or a webhook. "
+            "HOSTED AGENTS of the organization (oto's worker fleet, the org's "
+            "model key, managed in the dashboard). NOT for scheduling a task for "
+            "yourself, the user or their client (\"every Monday…\", \"each "
+            "morning send…\", \"remind me\"). Instead: in Claude Code run "
+            "`/schedule` (cloud routine, hourly minimum); in the Claude app / "
+            "Cowork it is the user's own scheduled task (Scheduled → New task, or "
+            "described in the conversation); otherwise give the user the steps at "
+            "claude.ai/code/routines with the pointer prompt of guide "
+            "`procedure-en-routine`. A task for a client is created on the "
+            "client's own Claude account. Use this only when the user explicitly "
+            "asks for an oto hosted agent or a webhook. "
             "op=create "
             "(procedure slug + `cron` + `tools` allowlist ; `tz` defaults to "
             "Europe/Paris and the cron evaluates IN that timezone — say WHICH 8am "

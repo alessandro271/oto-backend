@@ -91,7 +91,9 @@ def raison_du_refus(fournisseurs: list[str]) -> str:
     return (f"cette organisation n'a pas déposé sa clé de modèle ({noms}). Les agents "
             "hébergés tournent sur la clé de l'organisation qui les demande ; sans "
             "elle, ils ne tournent pas. Dépose la clé (Connecteurs, ou la fiche de "
-            "l'agent), puis rallume l'agent.")
+            "l'agent), puis rallume l'agent. Si le besoin est une tâche planifiée de "
+            "l'utilisateur, ce n'est pas le bon outil : voir le guide "
+            "`procedure-en-routine`.")
 
 
 def exiger_a_la_pose(org_id: int, famille: Optional[str] = None) -> None:
