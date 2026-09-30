@@ -448,7 +448,8 @@ jamais échappé) et ne consomme donc rien : sur une file pilotée à la main, r
 sépare « reprise après un vrai travail » de « faux départ répété » ; rien d'autre ne
 les distingue de l'extérieur.
 
-La garde est **OPT-IN et déclarée**, sur le cycle de vie du champ `role="status"` :
+La garde se **déclare** sur le cycle de vie du champ `role="status"` — et, depuis
+oto#101, un **plafond de plateforme** s'applique à défaut (voir plus bas) :
 
 ```
 lifecycle: {
@@ -463,10 +464,33 @@ lifecycle: {
 Les deux clés vont ensemble et se refusent à la pose : `max_claims` sans
 `abandon_state` (garde qui ne pourrait pas s'appliquer), `abandon_state` non terminal
 (la ligne reviendrait dans la file qu'elle vient de quitter), `max_claims` qui n'est pas
-un entier ≥ 1. Ni l'une ni l'autre déclarée = **aucun plafond**, comportement historique.
-`data_claim_next` accepte un `max_claims` qui SERRE la déclaration pour une passe (un
-ordonnanceur peut être plus strict que le tableau) ; l'état d'abandon, lui, reste une
-affaire de schéma.
+un entier ≥ 1. `data_claim_next` accepte un `max_claims` qui ne peut qu'ASSOUPLIR le
+plafond en vigueur pour une passe, jamais le serrer (#132 : l'abandon vaut pour la ligne,
+définitivement, quand le paramètre ne vaut que pour l'appel) ; l'état d'abandon, lui,
+reste une affaire de schéma.
+
+**Sans déclaration, le plafond de plateforme (oto#101).** Ni `max_claims` ni
+`abandon_state` déclarés, la garde était inactive — et une ligne relâchée sans écriture
+revenait en tête de la file indéfiniment (livelock reproduit trois fois sur trois). Le
+réglage d'instance `OTO_MCP_CLAIM_DEFAULT_MAX_CLAIMS` (3, la valeur que déclarent les
+tableaux à file) s'applique alors : la ligne est **mise de côté** par la seule colonne de
+plateforme (`abandon_reason`, motif suffixé « défaut de la plateforme »), **sans toucher
+à ses données** — aucun état ne lui est désigné, son statut reste ce qu'il était. Même
+sortie de file, même journalisation, même réparation par une écriture. Un réglage
+illisible (pas un entier ≥ 1) fait LEVER la réservation.
+
+**L'ordre de service (oto#101).** `claim_next` servait `ORDER BY row_id` — la plus
+ancienne ligne éligible, sans mémoire de ce qu'il venait de servir : relâchée, une ligne
+qui correspondait encore au filtre revenait en tête. Il sert désormais la ligne servie
+le **moins récemment** : `claimed_at ASC NULLS FIRST, row_id` (`rowlock._ORDRE_DE_SERVICE`).
+`claimed_at` date la dernière PRISE (par `claim_next`, ou `claim_row` quand la ligne
+change de mains — pas un renouvellement) ; ni le relâchement, ni l'expiration, ni
+l'écriture ne l'effacent. Une ligne jamais servie passe donc devant toute ligne déjà
+servie, relâchée ou expirée ; entre égales, l'ordre de création. L'index partiel
+`idx_datastore_rows_file (ns_id, claimed_at NULLS FIRST, row_id) WHERE abandon_reason IS
+NULL` porte exactement cette clé (révision 0030, CONCURRENTLY ; le démarrage la pose sur
+une base neuve). ⚠️ Aucun `order_by` n'est accepté par la réservation : le jour où il
+l'est, il passe DEVANT cette clé, qui reste le départage.
 
 Au-delà du plafond, le serveur verse la ligne dans `abandon_state`, pose le motif dans
 une colonne de plateforme (`abandon_reason`, rendue `_abandon` : « abandonnée après 3
@@ -490,8 +514,8 @@ que le cycle de vie déclare la transition de retour (`"echec": ["a_traiter"]`) 
 plateforme verse la ligne dans l'état d'abandon, elle ne s'autorise pas à l'en sortir.
 
 **Un filtre de réservation DÉCLARÉ sur le tableau : `lifecycle.claimable` (#517,
-29/08/2026).** Sans lui, `data_claim_next` sert « la plus ancienne ligne dont le bail est
-libre ou expiré » — toute ligne du tableau. Mesuré sur un fichier de 8 910 lignes : un
+29/08/2026).** Sans lui, `data_claim_next` sert toute ligne du tableau dont le bail est
+libre ou expiré. Mesuré sur un fichier de 8 910 lignes : un
 jalon en cible 100 (`lot_test = jalon-100`), le harnais dicte le filtre dans la prose de
 l'ordre et l'agent le recopie — à 5 % d'oubli, cinq fiches hors lot par jalon, servies,
 écrites, payées. **Une contrainte demandée par la prose n'est pas une contrainte.** D'où

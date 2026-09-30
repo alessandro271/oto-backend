@@ -19,10 +19,20 @@ Deux règles gouvernent l'abandon :
 - **il ne s'improvise pas** — plafond et état d'abandon se déclarent au cycle de
   vie, validés à la pose. Un plafond sans état où verser la ligne LÈVE au lieu de
   se désarmer tout seul : une garde inerte est pire que pas de garde.
+
+**Et sans déclaration, un plafond de PLATEFORME** (oto#101). La garde était opt-in :
+sans `lifecycle.max_claims`, une ligne relâchée sans écriture revenait en tête de la
+file indéfiniment — livelock reproduit trois fois sur trois, chaque appel réussissant.
+Le plafond par défaut (`OTO_MCP_CLAIM_DEFAULT_MAX_CLAIMS`, 3 : la valeur que les
+tableaux déclarent) met alors la ligne DE CÔTÉ par la seule colonne de plateforme
+(`abandon_reason`, motif compris) : il ne touche pas aux données du métier — ni au
+statut, qu'aucun état déclaré ne lui désigne. Une écriture la remet dans la file,
+comme pour l'abandon déclaré.
 """
 from __future__ import annotations
 
 import logging
+import os
 from typing import NamedTuple, Optional
 
 from ..datastore.schema import (
@@ -41,21 +51,53 @@ logger = logging.getLogger(__name__)
 # eux, il se lit comme un verdict qu'on ne peut ni vérifier ni rejouer — le plafond
 # ayant pu changer depuis.
 _MOTIF = "abandonnée après {claims} réservations sans écriture, plafond {plafond}"
+# Le plafond de plateforme se NOMME dans le motif : sans ça, le propriétaire lirait
+# un plafond qu'il n'a jamais déclaré, et ne saurait pas où le régler.
+_MOTIF_DEFAUT = (_MOTIF + " (défaut de la plateforme, aucun `lifecycle.max_claims` "
+                 "déclaré) — mise de côté, statut inchangé ; une écriture la remet "
+                 "dans la file")
+
+# Le plafond quand le tableau n'en déclare aucun (oto#101). Réglage d'instance, lu à
+# chaque évaluation ; illisible, il LÈVE — jamais de repli silencieux sur une garde.
+_PLAFOND_PAR_DEFAUT = "OTO_MCP_CLAIM_DEFAULT_MAX_CLAIMS"
+
+
+def plafond_par_defaut() -> int:
+    """Le plafond de reprises d'un tableau qui n'en déclare pas (oto#101)."""
+    brut = os.environ.get(_PLAFOND_PAR_DEFAUT, "3")
+    refus = f"{_PLAFOND_PAR_DEFAUT} doit être un entier >= 1 (lu : {brut!r})"
+    try:
+        valeur = int(brut)
+    except ValueError:
+        raise ValueError(refus) from None
+    if valeur < 1:
+        raise ValueError(refus)
+    return valeur
 
 
 class Plafond(NamedTuple):
-    """La politique en vigueur sur un tableau : ce qu'il faut pour abandonner."""
+    """La politique en vigueur sur un tableau : ce qu'il faut pour abandonner.
+
+    `etat` et `champ_statut` valent None pour le plafond de PLATEFORME (aucun
+    `lifecycle.max_claims` déclaré) : la ligne est mise de côté par
+    `abandon_reason` seul, ses données restent intactes."""
     valeur: int
-    etat: str
-    champ_statut: str
+    etat: Optional[str]
+    champ_statut: Optional[str]
     namespace: str
+
+    @property
+    def par_defaut(self) -> bool:
+        return self.etat is None
 
 
 def plafond_de(ns_id: int, max_claims: Optional[int] = None) -> Optional[Plafond]:
-    """La politique d'abandon d'un tableau, ou None = garde inactive.
+    """La politique d'abandon d'un tableau, ou None = tableau introuvable.
 
-    `max_claims` (paramètre du claim) ne peut qu'ASSOUPLIR la déclaration du schéma,
-    jamais la serrer — et il n'arme rien sur un tableau qui n'en déclare aucune.
+    Sans `lifecycle.max_claims`, le plafond de PLATEFORME s'applique
+    (`plafond_par_defaut`, oto#101) : une file sans garde tournait à vide pour
+    toujours. `max_claims` (paramètre du claim) ne peut qu'ASSOUPLIR le plafond en
+    vigueur — déclaré ou par défaut —, jamais le serrer.
 
     ⚠️ **Il l'emportait, et c'était le défaut** (#132). Deux raisons, et la seconde
     est la pire :
@@ -82,22 +124,22 @@ def plafond_de(ns_id: int, max_claims: Optional[int] = None) -> Optional[Plafond
     if not ns:
         return None
     schema = ns.get("schema")
+    namespace = str(ns.get("namespace") or ns_id)
     declare = max_claims_of(schema)
+    en_vigueur = declare if declare is not None else plafond_par_defaut()
     if max_claims is None:
-        valeur = declare
+        valeur = en_vigueur
     elif isinstance(max_claims, bool) or not isinstance(max_claims, int) or max_claims < 1:
         raise ValueError(f"max_claims doit être un entier >= 1 (reçu {max_claims!r})")
-    elif declare is None:
-        # Le tableau ne plafonne pas : un appel ne l'y contraint pas. La valeur est
-        # reçue sans erreur — refuser ferait échouer la réservation elle-même, or
-        # l'appelant n'a rien fait d'illégitime — mais elle n'arme rien.
-        valeur = None
     else:
         # Le paramètre assouplit, jamais l'inverse : ce qui est en jeu n'est pas la
         # sévérité d'une passe mais la sortie DÉFINITIVE d'une ligne de la file.
-        valeur = max(declare, max_claims)
-    if valeur is None:
-        return None
+        valeur = max(en_vigueur, max_claims)
+    if declare is None:
+        # Le plafond de plateforme ne choisit pas d'état à la place du métier : même
+        # un `abandon_state` déclaré sans plafond n'est pas lu ici — un schéma posé
+        # avant sa garde de pose le rendrait illisible, et chaque réservation lèverait.
+        return Plafond(valeur, None, None, namespace)
     etat = abandon_state_of(schema)
     if not etat:
         raise ValueError(
@@ -112,7 +154,7 @@ def plafond_de(ns_id: int, max_claims: Optional[int] = None) -> Optional[Plafond
     champ = (status_field(schema) or {}).get("key")
     if not champ:
         raise ValueError("un plafond de reprises exige un champ `role=\"status\"`")
-    return Plafond(valeur, etat, str(champ), str(ns.get("namespace") or ns_id))
+    return Plafond(valeur, etat, str(champ), namespace)
 
 
 def abandonner_les_lignes_a_bout(ns_id: int, *, max_claims: Optional[int] = None,
@@ -152,22 +194,32 @@ def abandonner_les_lignes_a_bout(ns_id: int, *, max_claims: Optional[int] = None
         lignes = conn.execute(
             f"SELECT row_id, claims FROM datastore_rows {where} FOR UPDATE",
             tuple(params)).fetchall()
+        gabarit = _MOTIF_DEFAUT if politique.par_defaut else _MOTIF
         for ligne in lignes:
-            motif = _MOTIF.format(claims=ligne["claims"], plafond=politique.valeur)
-            conn.execute(
-                "UPDATE datastore_rows SET "
-                "  data = jsonb_set(data, ARRAY[%s], to_jsonb(%s::text), true), "
-                "  abandon_reason = %s, claimed_by = NULL, claimed_until = NULL, "
-                "  claimed_run = NULL, updated_at = NOW() "
-                "WHERE ns_id = %s AND row_id = %s",
-                (politique.champ_statut, politique.etat, motif, ns_id, ligne["row_id"]))
+            motif = gabarit.format(claims=ligne["claims"], plafond=politique.valeur)
+            if politique.par_defaut:
+                # Mise de côté : la colonne de plateforme seule, `data` intacte.
+                conn.execute(
+                    "UPDATE datastore_rows SET abandon_reason = %s, claimed_by = NULL, "
+                    "  claimed_until = NULL, claimed_run = NULL, updated_at = NOW() "
+                    "WHERE ns_id = %s AND row_id = %s",
+                    (motif, ns_id, ligne["row_id"]))
+            else:
+                conn.execute(
+                    "UPDATE datastore_rows SET "
+                    "  data = jsonb_set(data, ARRAY[%s], to_jsonb(%s::text), true), "
+                    "  abandon_reason = %s, claimed_by = NULL, claimed_until = NULL, "
+                    "  claimed_run = NULL, updated_at = NOW() "
+                    "WHERE ns_id = %s AND row_id = %s",
+                    (politique.champ_statut, politique.etat, motif, ns_id,
+                     ligne["row_id"]))
             # Bruyant par construction : une ligne qui sort de la file sans que
             # personne ne l'ait demandé est exactement ce qu'on veut voir passer.
             logger.warning(
                 "datastore: ligne abandonnée (plafond de reprises) — tableau=%s "
                 "ligne=%s réservations=%s plafond=%s état=%s",
                 politique.namespace, ligne["row_id"], ligne["claims"],
-                politique.valeur, politique.etat)
+                politique.valeur, politique.etat or "(inchangé, plafond par défaut)")
             abandonnees.append({"row_id": ligne["row_id"], "claims": ligne["claims"],
                                 "reason": motif})
     return abandonnees

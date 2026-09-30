@@ -19,6 +19,12 @@ est mesurée : si le filtre ne porte pas sur une colonne écrite, **aucun ordre 
 progresse**. Un autre ordre déplacerait le livelock, il ne le lèverait pas. Et un
 paramètre offert sera réglé : il donnerait l'illusion d'un remède là où la cause est le
 filtre. Ce qui manquait est la condition, pas un réglage.
+
+⚠️ **L'ordre a changé depuis (oto#101, second lot)** : la file sert la ligne servie le
+moins récemment, les jamais servies d'abord — ce n'est pas un `order_by` offert, c'est
+la mémoire de service de la plateforme. Les lignes fraîches sont donc atteintes ; mais
+la condition reste la seule qui VIDE la file : sans elle, les lignes traitées reviennent
+tour après tour. Le texte servi dit le nouvel ordre ET la condition.
 """
 from __future__ import annotations
 
@@ -42,7 +48,8 @@ def test_la_description_SERVIE_dit_la_condition_qui_fait_avancer():
     que le traitement ÉCRIT. C'est ce qui manquait, et c'est ce qui évite la boucle."""
     b = _bloc_claim_next()
     assert "MUST name a column" in b and "WRITES" in b
-    assert "oldest first" in b, "la cause — l'ordre figé — doit être dite avec l'effet"
+    assert "least recently served" in b, "l'ordre doit être dit avec l'effet"
+    assert "never empties" in b, "et ce que coûte un filtre qui n'avance pas"
 
 
 def test_elle_donne_le_moyen_de_le_VOIR_de_l_interieur():

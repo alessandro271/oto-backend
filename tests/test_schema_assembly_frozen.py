@@ -592,8 +592,13 @@ from oto_mcp.db import _schema, schema
 # posées par `0028_partage_en_attente` ou le démarrage (`ADD COLUMN IF NOT EXISTS`) ; son
 # index unique partiel vit hors de l'assemblage (`db/invitations_ressource.py`).
 # 186 294 → 187 642 (+1 348, commentaires compris).
-EMPREINTE = "f88ffc98f1855030606be57bc10a6441c742b8c52ec9a17f270b97936ebc5b02"
-LONGUEUR = 187642
+# 30/09/2026 (oto#101) — `datastore_rows` prend `claimed_at TIMESTAMPTZ` : l'instant de
+# la dernière prise, qui ordonne la file de travail. Base neuve par le `CREATE TABLE` ;
+# base existante par la révision Alembic `0030_file_de_travail_ordre` ou le démarrage
+# (`rowlock.DDL_COLONNE_DERNIERE_PRISE`) ; l'index `idx_datastore_rows_file` vit hors de
+# l'assemblage (`_init.py`, après l'ALTER). 187 642 → 188 141 (+499, commentaire compris).
+EMPREINTE = "58b759b84a05e8690030999aa7f1db3e4950c6262514861bc666a8ab9cd852f6"
+LONGUEUR = 188141
 
 
 _CREATE_TABLE = re.compile(r"^CREATE TABLE IF NOT EXISTS (\w+)", re.M)

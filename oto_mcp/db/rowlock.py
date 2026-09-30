@@ -20,7 +20,17 @@ quelqu'un ; l'ignorance ne se résout pas en faveur de l'écrivain.
 
 Le bail dit qui tient la ligne. Il ne dit pas combien de fois on l'a tenue pour rien :
 c'est le plafond de reprises (`rowabandon`, #433), armé aux deux réservations et jugé
-à chaque relâchement.
+à chaque relâchement — par défaut sur tout tableau depuis oto#101.
+
+**L'ordre de la file (oto#101).** Elle servait `ORDER BY row_id` — la plus ancienne
+ligne éligible —, sans mémoire de ce qu'elle venait de servir : une ligne relâchée
+(écrite ou non) qui correspondait encore au filtre revenait EN TÊTE, et trois workers
+ont tourné sur les deux ou trois mêmes lignes sans jamais atteindre 834 lignes
+fraîches. Livelock reproduit trois fois sur trois, chaque appel réussissant. La file
+sert désormais **la ligne servie le moins récemment** : `claimed_at` (l'instant de la
+dernière PRISE, jamais effacé) `NULLS FIRST` — une ligne jamais servie passe devant
+toute ligne déjà servie —, puis `row_id` (ordre de création) entre égales. L'index
+`idx_datastore_rows_file` porte exactement cette clé.
 """
 from __future__ import annotations
 
@@ -59,6 +69,36 @@ _RENDU = ("RETURNING row_id, created_at, updated_at, data, rev, claimed_by, "
 # et par le comptage de l'ordonnanceur, qui ne doivent jamais diverger.
 _LIBRE_ET_EN_FILE = ("ns_id = %s AND abandon_reason IS NULL "
                      "AND (claimed_until IS NULL OR claimed_until < NOW())")
+
+# L'ordre de service de `claim_next` (oto#101) : la ligne servie le MOINS récemment,
+# une ligne jamais servie d'abord, puis l'ordre de création. ⚠️ Expression figée à
+# l'identique de l'index `idx_datastore_rows_file` (même colonnes, même sens, même
+# `NULLS FIRST`) : un écart ne casserait rien de visible, il ferait seulement trier
+# tout le tableau à chaque réservation.
+#
+# Aucun `order_by` n'est accepté par la réservation (oto#101, volet 2, ouvert) : le
+# jour où il l'est, il passe DEVANT cette clé, qui reste le départage — sans quoi un
+# ordre explicite sur une colonne que le traitement ne fait pas avancer rouvrirait
+# le livelock entre lignes de même rang.
+_ORDRE_DE_SERVICE = "claimed_at ASC NULLS FIRST, row_id ASC"
+
+# `claimed_at` : l'instant de la dernière PRISE d'une ligne (réservation par
+# `claim_next`, ou par `claim_row` quand elle change de mains). Ni le relâchement,
+# ni l'expiration, ni l'écriture ne l'effacent — c'est une mémoire de service, pas
+# un bail. Posée par le démarrage (base neuve, ou existante si la révision 0030 n'a
+# pas été jouée) et par la révision 0030, idempotents l'un envers l'autre.
+DDL_COLONNE_DERNIERE_PRISE = (
+    "ALTER TABLE datastore_rows ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ")
+INDEX_FILE = "idx_datastore_rows_file"
+# Partiel sur `abandon_reason IS NULL` : une ligne sortie de la file n'y a pas de
+# place, et le pick porte ce prédicat mot pour mot (`_LIBRE_ET_EN_FILE`).
+_CORPS_INDEX_FILE = (f"{INDEX_FILE} ON datastore_rows "
+                     "(ns_id, claimed_at ASC NULLS FIRST, row_id) "
+                     "WHERE abandon_reason IS NULL")
+DDL_INDEX_FILE = f"CREATE INDEX IF NOT EXISTS {_CORPS_INDEX_FILE}"
+# Sur une base peuplée : jamais un `CREATE INDEX` ordinaire, qui bloquerait les
+# écritures de `datastore_rows` le temps du parcours (révision 0030).
+DDL_INDEX_FILE_CONCURRENT = f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {_CORPS_INDEX_FILE}"
 
 
 def _perimetre_reclamable(ns_id: int, filters: Optional[list]) -> tuple:
@@ -154,14 +194,16 @@ def datastore_claim_next(ns_id: int, *, worker: str, lease_seconds: int = 900,
                          filters: Optional[list] = None,
                          run_id: Optional[str] = None,
                          max_claims: Optional[int] = None) -> Optional[dict]:
-    """Claim atomique de la prochaine row claimable du namespace (ordre de
-    création — row_id uuid7 monotone). `filters` = mêmes filtres whitelistés que
+    """Claim atomique de la prochaine row claimable du namespace — la ligne servie
+    le moins récemment, une ligne jamais servie d'abord, puis l'ordre de création
+    (`_ORDRE_DE_SERVICE`, oto#101). `filters` = mêmes filtres whitelistés que
     la lecture (`_ds_filter_clauses`), typiquement `[{field:'status',op:'eq',…}]`.
     Renvoie la row (avec bail posé) ou None si plus rien à traiter.
 
-    `max_claims` surcharge le plafond de reprises déclaré au schéma (#433) pour
-    cette passe. La réservation INCRÉMENTE le compteur de la ligne : c'est
-    l'écriture qui le remet à zéro, jamais le fait de la reprendre.
+    `max_claims` ASSOUPLIT pour cette passe le plafond de reprises en vigueur —
+    déclaré au schéma (#433) ou de plateforme (oto#101). La réservation
+    INCRÉMENTE le compteur de la ligne : c'est l'écriture qui le remet à zéro,
+    jamais le fait de la reprendre.
 
     ⚠️ La passe d'abandon tourne AVANT le pick, hors de sa transaction : elle
     ramasse les lignes à bout que personne n'a relâchées (agent mort, bail
@@ -195,7 +237,7 @@ def _datastore_claim_next_once(ns_id: int, *, worker: str, lease_seconds: int,
     with _connect() as conn:
         picked = conn.execute(
             f"SELECT row_id FROM datastore_rows {where} "
-            "ORDER BY row_id ASC LIMIT 1 FOR UPDATE SKIP LOCKED",
+            f"ORDER BY {_ORDRE_DE_SERVICE} LIMIT 1 FOR UPDATE SKIP LOCKED",
             tuple(params),
         ).fetchone()
         if not picked:
@@ -203,7 +245,7 @@ def _datastore_claim_next_once(ns_id: int, *, worker: str, lease_seconds: int,
         row = conn.execute(
             "UPDATE datastore_rows SET claimed_by = %s, "
             "claimed_until = NOW() + (%s || ' seconds')::interval, claimed_run = %s, "
-            "claims = claims + 1 "
+            "claims = claims + 1, claimed_at = NOW() "
             "WHERE ns_id = %s AND row_id = %s "
             + _RENDU,
             (str(worker), int(lease_seconds), run_id, ns_id, picked["row_id"]),
@@ -263,7 +305,7 @@ def datastore_claim_row(ns_id: int, row_id: str, *, worker: str,
     # échappé — donc son geste ne consomme pas le plafond (#433) : sur une file
     # pilotée à la main, rafraîchir son écran est le geste le plus banal, et le
     # compter la viderait de ses lignes. Il ne change pas non plus le run qui la
-    # tient (oto#230, cf. docstring).
+    # tient (oto#230, cf. docstring), ni sa date de prise (oto#101).
     # ⚠️ Les colonnes lues dans le SET sont celles d'AVANT l'UPDATE (PG) :
     # `claimed_until` désigne bien le bail que cet appel remplace.
     prise = "(claimed_until IS NULL OR claimed_until < NOW())"
@@ -272,7 +314,10 @@ def datastore_claim_row(ns_id: int, row_id: str, *, worker: str,
             "UPDATE datastore_rows SET claimed_by = %s, "
             "claimed_until = NOW() + (%s || ' seconds')::interval, "
             f"claimed_run = CASE WHEN {prise} THEN %s ELSE claimed_run END, "
-            f"claims = claims + CASE WHEN {prise} THEN 1 ELSE 0 END "
+            f"claims = claims + CASE WHEN {prise} THEN 1 ELSE 0 END, "
+            # Même nuance pour la mémoire de service (oto#101) : une PRISE la date,
+            # un renouvellement ne déplace pas la ligne dans la file.
+            f"claimed_at = CASE WHEN {prise} THEN NOW() ELSE claimed_at END "
             f"WHERE ns_id = %s AND row_id = %s AND ({prise} OR claimed_by = %s)"
             + perimetre + " " + _RENDU,
             (str(worker), int(lease_seconds), run_id, ns_id, row_id, str(worker),

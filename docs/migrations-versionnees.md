@@ -759,6 +759,21 @@ démarrage joue le même fragment. **Avant la fusion** : le code du lot lit ces 
 à chaque acceptation d'invitation et à chaque inscription. Le retour arrière retire
 l'index et les colonnes, et perd les partages encore en attente.
 
+`0030_file_de_travail_ordre` (30/09/2026, oto#101, après `0029_cle_metier_valeur_servie`)
+pose l'ordre de service de la file de travail (`docs/datastore.md`) :
+`datastore_rows.claimed_at TIMESTAMPTZ` (sans défaut, écriture de catalogue seule,
+`AccessExclusiveLock` borné par `lock_timeout` 5 s) puis l'index partiel
+`idx_datastore_rows_file (ns_id, claimed_at ASC NULLS FIRST, row_id) WHERE
+abandon_reason IS NULL`, **CONCURRENTLY** dans un `autocommit_block` (même régime que
+0002 : la table est chaude). Les lignes existantes valent NULL, « jamais servie ». Le
+démarrage pose la même colonne et le même index s'il ne les trouve pas
+(`rowlock.DDL_COLONNE_DERNIERE_PRISE`, `rowlock.DDL_INDEX_FILE`) — mais son index n'est
+PAS concurrent : **avant la fusion**, pour que le démarrage n'ait rien à construire sur
+la base peuplée. Le code du lot écrit la colonne à chaque réservation ; l'ancien ne la
+lit ni ne l'écrit. Un échec pendant la construction laisse un index invalide, à retirer
+(`DROP INDEX CONCURRENTLY`) avant de rejouer. Le retour arrière retire l'index puis la
+colonne ; le code qui l'écrit doit être retiré avant lui.
+
 ### 5.2 Une base neuve naît à la tête du registre (24/09/2026, oto-backend#969)
 
 Une base neuve reçoit tout son schéma du démarrage : chaque colonne qu'une révision pose

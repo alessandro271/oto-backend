@@ -336,60 +336,39 @@ def test_une_ligne_sous_bail_actif_n_est_pas_abandonnee(plafonne):
     assert _brut(ns_id, tenue["_id"])["claims"] == 0
 
 
-# ══ la garde est OPT-IN ═════════════════════════════════════════════════════
+# ══ sans déclaration, le plafond de PLATEFORME (oto#101) ═════════════════════
 
-def test_sans_declaration_la_garde_est_inactive(live):
-    """Comportement d'aujourd'hui, explicitement : un tableau qui ne déclare pas
-    de plafond ne voit RIEN changer, quel que soit le nombre de faux départs."""
+def test_sans_declaration_le_plafond_par_defaut_met_la_ligne_de_cote(live):
+    """La garde était OPT-IN : un tableau qui ne déclarait pas de plafond resservait
+    la même ligne indéfiniment — le livelock d'oto#101. Le plafond de plateforme
+    (3) la met de côté par la colonne de plateforme, sans toucher à son statut :
+    aucun état ne lui est désigné."""
     st, ns, ns_id = _table(_schema())
 
-    rid = _tourner_a_vide(st, ns, 5)
+    rid = _tourner_a_vide(st, ns, 3)
 
-    encore = st.claim_next(ns, worker="agent-1")
-    assert encore is not None and encore["_id"] == rid
-    assert _brut(ns_id, rid)["abandon_reason"] is None
+    assert st.claim_next(ns, worker="agent-1") is None
+    brut = _brut(ns_id, rid)
+    assert "plafond 3 (défaut de la plateforme" in brut["abandon_reason"]
+    assert brut["data"]["statut"] == "a_faire"
 
 
-def test_le_parametre_du_claim_ne_descend_jamais_sous_le_plafond_declare(plafonne):
-    """#132 — le paramètre ASSOUPLIT, il ne serre jamais.
+def test_le_parametre_ne_descend_pas_sous_le_plafond_par_defaut(live):
+    """#132 vaut aussi pour le plafond de plateforme : le paramètre de l'appel
+    l'assouplit, il ne le serre jamais — `max_claims=1` ne sort pas la ligne au
+    premier faux départ."""
+    st, ns, ns_id = _table(_schema())
 
-    Il vaut pour l'APPEL ; l'abandon vaut pour la LIGNE, définitivement. « Serrer
-    pour une passe » sortait donc des lignes de la file pour toujours : la passe
-    finit, l'abandon reste. Mesuré en production : le plafond a été posé 219 fois
-    par le modèle, 219 fois à la valeur 1 — jamais autre chose."""
-    st, ns, ns_id = plafonne          # le tableau déclare 3
-
-    rid = ""
-    for tour in (1, 2, 3):
+    for tour in (1, 2):
         row = st.claim_next(ns, worker="agent-1", max_claims=1)
-        # Sous l'ancien comportement, le deuxième tour ne servait déjà plus rien.
         assert row is not None, f"la ligne devait encore être servie au tour {tour}"
-        rid = row["_id"]
-        assert _brut(ns_id, rid)["abandon_reason"] is None
-        st.release_claim(ns, rid, worker="agent-1")
+        st.release_claim(ns, row["_id"], worker="agent-1")
+        assert _brut(ns_id, row["_id"])["abandon_reason"] is None
 
-    # C'est la déclaration du tableau qui décide, et elle finit par mordre.
+    # C'est le plafond en vigueur qui décide, et il finit par mordre.
+    rid = _tourner_a_vide(st, ns, 1)
     assert st.claim_next(ns, worker="agent-1", max_claims=1) is None
-    assert _brut(ns_id, rid)["abandon_reason"] == \
-        "abandonnée après 3 réservations sans écriture, plafond 3"
-
-
-def test_le_parametre_n_arme_rien_sur_un_tableau_qui_ne_plafonne_pas(live):
-    """#132, l'autre moitié — et c'est la pire : sur un tableau SANS plafond
-    déclaré la garde est inactive, et un appelant qui passait une valeur l'ARMAIT
-    pour tout le tableau. Des lignes que personne n'avait décidé de plafonner
-    sortaient de la file au premier faux départ.
-
-    La valeur est reçue sans erreur — refuser ferait échouer la réservation, or
-    l'appelant n'a rien fait d'illégitime : c'est l'outil qui lui offre le
-    paramètre. Elle n'arme simplement rien."""
-    st, ns, ns_id = _table(_schema())
-
-    rid = _tourner_a_vide(st, ns, 5)
-
-    encore = st.claim_next(ns, worker="agent-1", max_claims=1)
-    assert encore is not None and encore["_id"] == rid
-    assert _brut(ns_id, rid)["abandon_reason"] is None
+    assert "plafond 3" in _brut(ns_id, rid)["abandon_reason"]
 
 
 # ══ la déclaration se valide à la pose ══════════════════════════════════════

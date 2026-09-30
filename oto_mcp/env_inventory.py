@@ -307,7 +307,13 @@ _REGLAGES: tuple[Variable, ...] = (
              "(oto-backend#990, Sentry PYTHON-STARLETTE-8Z) — victime d'un cycle "
              "contre une migration de boot, rien n'est jamais posé côté claim, "
              "un rejeu est aussi sûr qu'un premier essai.",
-             ("oto_mcp/db/rowlock.py:173",)),
+             ("oto_mcp/db/rowlock.py:215",)),
+    Variable("OTO_MCP_CLAIM_DEFAULT_MAX_CLAIMS", Classe.REGLAGE, "3",
+             "Plafond de reprises d'un tableau qui ne déclare pas "
+             "`lifecycle.max_claims` (oto#101) : une ligne réservée autant de fois "
+             "sans écriture est mise de côté (`abandon_reason`, statut inchangé). "
+             "Illisible (pas un entier ≥ 1), la réservation LÈVE.",
+             ("oto_mcp/db/rowabandon.py:67",)),
     Variable("OTO_MCP_UNIPILE_DEFAULT_LIMIT", Classe.REGLAGE, "5",
              "Taille de page par défaut des lectures Unipile.",
              ("oto_mcp/unipile_connect.py:49",)),

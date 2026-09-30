@@ -752,6 +752,8 @@ def register(mcp: FastMCP) -> None:
           platform reason in `_abandon`. Both go together: a ceiling without an
           abandon state, or an abandon state that is not terminal, is REFUSED here.
           Counter (`_claims`) resets on the first successful write to the row.
+          Undeclared, a platform default ceiling (3) still applies: the row is set
+          aside with its reason in `_abandon`, its status left untouched.
           `lifecycle.claimable: {col: val | {op: val}}` (`filter` grammar) = the
           rows the queue SERVES: no claim hands out a row outside it, whatever
           `filter` says.
@@ -1168,9 +1170,10 @@ def register(mcp: FastMCP) -> None:
         deliverable.
 
         ⚠️ **Your `filter` MUST name a column your processing WRITES.** That is the
-        one condition which makes the queue ADVANCE, and nothing enforces it. The
-        order is fixed — oldest first — so releasing a row puts it back at the head
-        if it still matches your filter.
+        one condition which makes the queue EMPTY, and nothing enforces it. The
+        order: rows never served first, then the least recently served — a
+        released row goes behind every fresh row, but it comes back once they are
+        served, for as long as it still matches your filter.
 
         ⚠️ **How to see a queue running empty**: the row carries `_claims`. Above 1
         it means « you have already been served this row and it was not written »
@@ -1189,19 +1192,21 @@ def register(mcp: FastMCP) -> None:
         call — `data_write(datastore=174, id=…)`, `data_release(datastore=174, …)`.
 
         The primitive for draining a table with N parallel (sub-)agents without
-        collisions: picks the oldest row whose claim lease is free or expired,
+        collisions: picks, among rows whose claim lease is free or expired, the one
+        served least recently (never-served rows first, then creation order),
         stamps `_claimed_by`/`_claimed_until` and returns it — two concurrent
         workers never get the same row. Returns `{row: null}` when nothing is
         left to claim.
 
-        Filter on column A, write into column B, and you will be served the same
-        two or three rows for ever. Measured on a 3 766-row table: three workers
-        filtered on a column the processing never touched. **834 fresh rows were
-        never reached**, and one worker claimed the SAME row seven times. Every
-        call succeeded and no error was raised — a livelock, not a failure, and
-        you cannot see it from inside. On a table declaring `lifecycle.max_claims`,
-        such rows eventually leave the queue in the abandon state — LOST to the
-        pass, without being at fault.
+        Filter on column A, write into column B, and the queue never empties:
+        once the fresh rows are served, your own finished rows come back, round
+        after round. Measured on a 3 766-row table, when the order was still
+        « oldest first »: three workers filtered on a column the processing never
+        touched. **834 fresh rows were never reached**, and one worker claimed the
+        SAME row seven times. Every call succeeded and no error was raised — a
+        livelock, not a failure, and you cannot see it from inside. Rows claimed
+        again and again without a write end up set aside (the ceiling below) —
+        LOST to the pass, without being at fault.
 
         A name still resolves as `datastore` until 08/11/2026 — then it is refused —
         but the number is what to carry: it survives a rename, it is unique where
@@ -1223,12 +1228,13 @@ def register(mcp: FastMCP) -> None:
 
         The row carries `_claims` = how many times it has been claimed since the
         last successful write. A row claimed over and over WITHOUT a write is a
-        queue running empty: past `lifecycle.max_claims` (declared on the table, or
-        `max_claims` here for this pass) the server moves it to
-        `lifecycle.abandon_state`, stamps `_abandon` with the reason, and STOPS
+        queue running empty: past the ceiling — `lifecycle.max_claims` declared on
+        the table, else a platform default of 3; `max_claims` here can only RAISE
+        it for this pass — the server sets it aside: it stamps `_abandon` with the
+        reason, moves it to `lifecycle.abandon_state` when the table declares a
+        ceiling (with the default one its status is left untouched), and STOPS
         serving it — whatever your filter says. It stays readable and repairable:
         an explicit data_write puts it back in the queue and resets the counter.
-        Neither declared nor passed = no ceiling.
 
         ⚠️ `layers="nested"` gives the row back in the SHAPE YOU WRITE — a cell
         that carries layers comes as `{"valeur": …, "comment": …}` instead of the

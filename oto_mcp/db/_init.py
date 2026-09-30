@@ -14,7 +14,7 @@ import time
 import psycopg
 
 from . import (_prerequis, _tenant_primaire, _version_alembic, connector_instances, datastore_ns, journal_revisions,
-               revision, transcription, user_subscriptions)
+               revision, rowlock, transcription, user_subscriptions)
 from ._conn import _connect
 from ._ddl_garde import GardeDdl, ddl_a_faire
 from ._schema import _SCHEMA
@@ -797,6 +797,14 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
         conn.execute("ALTER TABLE datastore_rows ADD COLUMN IF NOT EXISTS claims INTEGER NOT NULL DEFAULT 0")
     if _colonne_absente(conn, "datastore_rows", "abandon_reason"):
         conn.execute("ALTER TABLE datastore_rows ADD COLUMN IF NOT EXISTS abandon_reason TEXT")
+    # oto#101 : la mémoire de service de la file (`claimed_at`, l'instant de la
+    # dernière prise) et l'index qui porte son ordre. Sur une base existante, la
+    # révision 0030 les pose AVANT (l'index CONCURRENTLY) et ces deux ordres ne font
+    # rien ; ils servent la base NEUVE, estampillée à la tête sans jouer la révision.
+    if _colonne_absente(conn, "datastore_rows", "claimed_at"):
+        conn.execute(rowlock.DDL_COLONNE_DERNIERE_PRISE)
+    if _index_absent(conn, rowlock.INDEX_FILE):
+        conn.execute(rowlock.DDL_INDEX_FILE)
     # La RÉVISION de ligne (12/09/2026) : colonne `rev` + le premier déclencheur du
     # dépôt, qui l'avance quelle que soit la version du code qui écrit (bleu/vert sur
     # base partagée). Posé seulement s'il manque — cf. `db/revision.py`. Appelé par le
