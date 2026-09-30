@@ -152,8 +152,8 @@ def test_without_a_schema_the_sample_still_judges(monkeypatch):
 
 def test_posting_an_enum_reports_what_already_breaks_it(monkeypatch):
     """Poser un format ne revalide pas l'existant : sans ce comptage, la table
-    PARAÎT conforme (elle a un schéma) en contenant des valeurs invisibles au
-    filtrage. Vécu : 504 lignes en « Oui »/« Non »."""
+    PARAÎT conforme (elle a un schéma) en contenant des valeurs que le format
+    refuse. Vécu : 504 lignes en « Oui »/« Non »."""
     from oto_mcp.datastore import core as ds
 
     monkeypatch.setattr(ds.db, "datastore_offending_enum_values",
@@ -167,7 +167,33 @@ def test_posting_an_enum_reports_what_already_breaks_it(monkeypatch):
     # corriger la donnée et élargir les options.
     assert "Oui" in w and "312" in w
     assert "oui, non, inconnu" in w, "les options déclarées doivent être rappelées"
-    assert "INVISIBLES au filtrage" in w
+
+
+def test_the_enum_warning_says_what_the_code_does(monkeypatch):
+    """oto#218 : le texte FIGÉ. Il disait ces lignes « INVISIBLES au filtrage et aux
+    facettes » et les écritures futures « refusées » : les deux étaient faux. Les
+    lectures ne consultent pas les `options` (le témoin en base :
+    `test_datastore_enum_hors_options_lu_pg`), et une valeur hors options s'écarte
+    sans emporter la ligne (#667). Un agent qui croit ses lignes invisibles les
+    réécrit ou les exclut à tort."""
+    from oto_mcp.datastore import core as ds
+
+    monkeypatch.setattr(ds.db, "datastore_offending_enum_values",
+                        lambda ns_id, options, **k: [
+                            {"field": "etat", "rows": 1, "distinct": 1,
+                             "values": [{"value": "peut-être", "rows": 1}]}])
+    schema = {"strict": True, "fields": [
+        {"key": "etat", "type": "enum", "options": ["oui", "non"]}]}
+    assert ds.DatastorePg._offending_enum_warning(1, schema) == (
+        "liste de valeurs déclarée sur des données qui en sortent déjà :\n"
+        "  `etat` : 1 ligne(s) hors options — « peut-être » (1)  [options : oui, non]\n"
+        "Ces lignes restent en place, et les lectures les voient telles quelles : "
+        "les filtres, le regroupement et les comptes les rendent comme toute "
+        "valeur. Le tri sur cette colonne les range après les valeurs conformes. "
+        "Une écriture future qui pose une valeur hors options la voit écartée, et "
+        "le reste de la ligne s'écrit ; seule dans le geste ou avec un autre "
+        "refus, elle est refusée. Un patch d'un autre champ passe. Corrige-les "
+        "(réécris le champ) ou élargis les options.")
 
 
 def _no_db(monkeypatch):

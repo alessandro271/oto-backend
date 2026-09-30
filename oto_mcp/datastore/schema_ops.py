@@ -16,8 +16,8 @@ Ce que ce module a appris et garde :
 - **un format ne vaut que pour l'avenir** : le poser ne revalide pas l'existant. D'où
   les avertissements qui regardent la donnée DÉJÀ là — colonnes orphelines, valeurs
   trop longues, valeurs qu'un enum fraîchement déclaré condamne. Sans eux, un tableau
-  *a l'air* conforme parce qu'il a un schéma, et 504 lignes hors options restent
-  invisibles au filtrage comme aux facettes.
+  *a l'air* conforme parce qu'il a un schéma, et 504 lignes hors options y restent
+  sans que rien ne le dise.
 """
 from __future__ import annotations
 
@@ -498,8 +498,19 @@ class SchemaOpsMixin:
         Or l'ordre normal des choses est d'écrire d'abord et de formaliser ensuite :
         au moment où le format arrive, la table est déjà pleine. Sans cet
         avertissement elle *paraît* conforme (elle a un schéma) tout en contenant
-        des valeurs invisibles au filtrage et aux facettes. Vécu : 504 lignes en
-        « Oui »/« Non » sur un enum `oui`/`non`/`inconnu`.
+        des valeurs que le format refuse. Vécu : 504 lignes en « Oui »/« Non » sur
+        un enum `oui`/`non`/`inconnu`.
+
+        ⚠️ Le texte dit ce que le code FAIT de ces lignes, pas ce qu'on en craint
+        (oto#218). Il les a dites « invisibles au filtrage et aux facettes » : faux.
+        Les lectures ne consultent pas les `options` — `eq`, `in`, le regroupement
+        et les comptes les rendent comme toute valeur (`db/query.py`) ; seul le tri
+        typé les range après les conformes (`typed_order_sql`). Et une écriture
+        future n'est pas « refusée » en bloc : la valeur hors options est écartée,
+        le reste de la ligne s'écrit (`controles._ecarter`, #667). Un agent qui
+        croit ses lignes invisibles les réécrit ou les exclut à tort ; un banc
+        témoin (`test_datastore_enum_hors_options_lu_pg`) fait tomber le texte s'il
+        redevient faux.
 
         AVERTIT, ne refuse pas : refuser rendrait impossible de déclarer un format
         sur un tableau existant, c'est-à-dire le cas normal. Et rend les valeurs
@@ -526,9 +537,14 @@ class SchemaOpsMixin:
             + f"  [options : {', '.join(options[b['field']])}]"
             for b in bad)
         return ("liste de valeurs déclarée sur des données qui en sortent déjà :\n" + detail +
-                "\nCes lignes restent en place et resteront INVISIBLES au filtrage "
-                "et aux facettes. Corrige-les (réécris le champ) ou élargis les "
-                "options ; les écritures futures, elles, sont refusées.")
+                "\nCes lignes restent en place, et les lectures les voient telles "
+                "quelles : les filtres, le regroupement et les comptes les rendent "
+                "comme toute valeur. Le tri sur cette colonne les range après les "
+                "valeurs conformes. Une écriture future qui pose une valeur hors "
+                "options la voit écartée, et le reste de la ligne s'écrit ; seule "
+                "dans le geste ou avec un autre refus, elle est refusée. Un patch "
+                "d'un autre champ passe. Corrige-les (réécris le champ) ou élargis "
+                "les options.")
 
     def drop_column(self, datastore: str, key: str, *, confirm: bool) -> dict:
         """Retire une colonne des DONNÉES de toutes les rows (#296). Destructif et

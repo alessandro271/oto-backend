@@ -336,8 +336,9 @@ def datastore_offending_enum_values(ns_id: int, options: dict,
     Un schéma ne vaut que pour l'AVENIR : le poser ne revalide pas l'existant. Une
     colonne peut donc être pleine de valeurs que le format refuse désormais, sans
     que rien ne le dise — et le tableau *a l'air* conforme puisqu'il a un schéma.
-    Vécu : 504 lignes en « Oui »/« Non » sur un enum `oui`/`non`/`inconnu`, valeurs
-    présentes à l'écran et invisibles au filtrage comme aux facettes.
+    Vécu : 504 lignes en « Oui »/« Non » sur un enum `oui`/`non`/`inconnu`. Les
+    lectures, elles, les voient telles quelles (filtres, regroupement, comptes :
+    aucune ne consulte les `options`, oto#218).
 
     On rend les valeurs FAUTIVES avec leur compte, pas un simple total : c'est ce
     qui permet de trancher tout de suite entre corriger la donnée et élargir les
