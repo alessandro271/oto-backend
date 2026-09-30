@@ -44,6 +44,7 @@ from .core import (
     RowValidationError,
     make_store,
 )
+from .errors import RevisionConflict
 from .outils import _current_run
 
 logger = logging.getLogger(__name__)
@@ -100,6 +101,20 @@ class Lot:
                                      filters=self.filtres)
 
 
+def tableau(datastore: Any, *, ecrire: bool) -> tuple[Any, str]:
+    """Le store de l'appelant et l'adresse du tableau, le droit vérifié AVANT tout appel
+    au connecteur : ÉCRIRE si `ecrire` (la vérification même que fera `update_row` à
+    l'écriture en retour), lire sinon.
+
+    Lève `jetons.JetonMalPlace`, `DatastoreNotFound` et `DatastoreReadOnly` tels quels :
+    chaque outil les dit à sa façon."""
+    adresse, _ = jetons.resoudre(datastore, None,
+                                 resoudre_slot=access.resolve_datastore_ref)
+    store = make_store(access.current_user_sub_or_raise())
+    store._resolve(adresse, write=ecrire)
+    return store, adresse
+
+
 def ouvrir(datastore: Any, *, row_ids: Optional[list], filter: Optional[dict],
            colonne_etat: Optional[str], limite: int) -> Lot:
     """Résout le tableau, vérifie le droit d'y ÉCRIRE, et lit le lot.
@@ -124,18 +139,9 @@ def ouvrir(datastore: Any, *, row_ids: Optional[list], filter: Optional[dict],
         raise refus("push_rows_selection", "`filter` doit être un objet (grammaire de "
                     "data_rows).")
 
-    sub = access.current_user_sub_or_raise()
-    try:
-        adresse, _ = jetons.resoudre(datastore, None,
-                                     resoudre_slot=access.resolve_datastore_ref)
-    except jetons.JetonMalPlace as e:
-        raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
-    store = make_store(sub)
     filtre = filtres = None
     try:
-        # Le droit d'ÉCRIRE, avant tout appel au connecteur : c'est la vérification
-        # même que fera `update_row` à l'écriture en retour (`_resolve(write=True)`).
-        store._resolve(adresse, write=True)
+        store, adresse = tableau(datastore, ecrire=True)
         if ids:
             page = store.cursor_rows(adresse, filter={"_id": {"in": ids}}, limit=len(ids))
         else:
@@ -144,6 +150,8 @@ def ouvrir(datastore: Any, *, row_ids: Optional[list], filter: Optional[dict],
                        if colonne_etat else [])
             page = store.cursor_rows(adresse, filter=filtre, filters=filtres or None,
                                      limit=limite)
+    except jetons.JetonMalPlace as e:
+        raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
     except DatastoreNotFound as e:
         indice = getattr(e, "indice", None)
         raise refus("datastore_not_found", f"tableau `{datastore}` inconnu"
@@ -210,15 +218,27 @@ def tenue_ailleurs(ligne: dict) -> bool:
 
 
 def ecrire(lot: Lot, row_id: str, patch: dict) -> Optional[str]:
+    """Écrit `patch` sur une ligne du lot. Rend None, ou le CODE du refus."""
+    return ecrire_ligne(lot.store, lot.adresse, row_id, patch)
+
+
+def ecrire_ligne(store: Any, adresse: str, row_id: str, patch: dict, *,
+                 expected_revision: Any = None) -> Optional[str]:
     """Écrit `patch` sur la ligne. Rend None, ou le CODE du refus.
 
     Le code seulement, jamais le texte du refus : il peut citer une valeur de la
-    ligne, et ce reçu n'en porte aucune."""
+    ligne, et ce reçu n'en porte aucune. Avec `expected_revision`, une ligne changée
+    depuis la lecture n'est pas écrasée (`row_changed`)."""
     try:
-        lot.store.update_row(lot.adresse, row_id, patch)
+        if expected_revision is None:
+            store.update_row(adresse, row_id, patch)
+        else:
+            store.update_row(adresse, row_id, patch, expected_revision=expected_revision)
         return None
     except RowLocked:
         return "row_locked"
+    except RevisionConflict:
+        return "row_changed"
     except RowNotFound:
         return "row_not_found"
     except DatastoreReadOnly:
@@ -226,7 +246,7 @@ def ecrire(lot: Lot, row_id: str, patch: dict) -> Optional[str]:
     except (RowValidationError, ValueError) as e:
         # Journalisé sans le message (il peut citer une valeur de la ligne).
         logger.warning("écriture en retour refusée sur une ligne de %s : %s",
-                       lot.adresse, type(e).__name__)
+                       adresse, type(e).__name__)
         return "writeback_refused"
 
 

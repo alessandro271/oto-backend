@@ -1,35 +1,11 @@
-"""Jev — une décision TYPÉE au lieu d'un tour de modèle (TypeSafe, via OpenRouter).
+"""Jev tools: typed answers instead of a model turn (TypeSafe, via OpenRouter).
 
-Wrappe `oto.tools.jev.client.JevClient`. On donne un **état** et des **questions** ;
-Jev rend une réponse typée par question, avec sa probabilité :
-- `noul` → la probabilité que la condition tienne ;
-- `choice` → l'option retenue, la probabilité de chacune, la confiance ;
-- `score` → la position sur une échelle ordonnée, et sa légende.
+Wraps `oto.tools.jev.client.JevClient`. `jev_ask` = one state, whole rubric in one call;
+`jev_items` = many states, same rubric, nothing written; `jev_rows` = a table's rows,
+read, judged and written back on the server (helpers in `jev_rows.py`).
 
-Aucun texte, aucune justification, aucun appel d'outil : Jev ne remplace pas l'agent
-qui mène le travail, il remplace le geste « je demande au modèle et je parse sa
-réponse » — qualifier une ligne, trier un message, juger si une donnée tient.
-
-Deux gestes :
-- `jev_ask` : UN état, la grille entière en un appel (les questions d'un même appel
-  sont répondues en parallèle et ne se voient pas l'une l'autre) ;
-- `jev_items` : N états, la MÊME grille, en un appel — la forme utile quand on vient
-  de lire une page de lignes ou une liste de profils, et qu'on veut trancher avant
-  d'écrire ou de payer l'étape suivante.
-
-⚠️ **La clé est celle du TENANT, jamais celle d'une org ni de la plateforme** (cf.
-`providers/jev.py`) : un administrateur du tenant la dépose pour toutes ses orgs, et
-une clé posée plus près de l'appelant (org, équipe, personne) est refusée à l'usage
-en le disant — elle masque celle du tenant dans la cascade.
-
-⚠️ L'état part chez un TIERS (OpenRouter, qui le passe à TypeSafe) : le texte servi
-le dit, pour que l'agent n'y mette que les champs utiles au jugement.
-
-Facturation : l'amont facture l'ENTRÉE seule (sortie gratuite), et chaque réponse
-porte `usage.cost`, le coût réel en dollars. C'est ce coût — en micro-dollars — qui
-part au relevé (`note_call_trace(quantity=…)`), pas un nombre d'appels : le prix
-suit alors la dépense réelle au lieu d'un forfait qui vieillit. Même usage de
-`quantity` que `serper` (les crédits déduits par le fournisseur).
+⚠️ TENANT key only (see `providers/jev.py`); a closer key is refused, naming who removes it.
+Billing: `quantity` = the real upstream cost in micro-dollars (like `serper`), not a call count.
 """
 from __future__ import annotations
 
@@ -39,7 +15,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
-from typing import Optional
+from typing import Any, Optional
 
 import requests
 from fastmcp import FastMCP
@@ -49,45 +25,30 @@ from .. import access, credentials_store, session_org
 from ..access.resolve import CredentialUnavailable
 from ..connectors import verify as connector_verify
 from ..mcp_errors import McpError
+from . import jev_rows as jr
 
-#: Le seul barreau de la cascade que cet outil accepte : la clé du TENANT (décision du
-#: 28/09/2026 — aucune clé plateforme, le tenant qui apporte sa clé répond de la
-#: dépense et de la sous-traitance). Un dépôt plus proche de l'appelant (org, équipe,
-#: personne) gagne la cascade AVANT le tenant : il est refusé en disant qu'il masque la
-#: clé du tenant et qui peut le retirer (cf. `_client`).
+#: The only cascade rung this tool serves. A closer rung wins the cascade first and is refused.
 RANGS_SERVIS = ("tenant",)
 
-#: Qui peut retirer une clé qui masque celle du tenant, par barreau.
-QUI_RETIRE = {"org": "un administrateur de l'org",
-              "group": "un administrateur de l'équipe",
-              "user": "son titulaire, sur sa page compte"}
+#: Who can remove a key that shadows the tenant's, per rung.
+QUI_RETIRE = {"org": "an org admin",
+              "group": "a team admin",
+              "user": "its owner, on their account page"}
 
-#: Combien d'états au plus dans un `jev_items`. Mesuré le 28/09/2026 : 50 appels en
-#: vol rendent 50/50 en une seconde, sans un seul 429 ; 200 états à 10 en vol tiennent
-#: dans la fenêtre de départ ci-dessous.
+#: Max states per `jev_items` (measured 28/09/2026: 50 in flight, no 429).
 MAX_ITEMS = 200
-#: Appels en vol par défaut — volontairement en dessous du débit mesuré : ce sont des
-#: threads du pool du serveur, et un outil ne se sert pas tout seul.
+#: Default in-flight calls, below the measured rate: these are server pool threads.
 PARALLELE_DEFAUT = 10
 PARALLELE_MAX = 50
 
-#: Taille maximale d'UN état, en octets de son JSON (UTF-8). 16 Ko, c'est ~4 000
-#: jetons : très au-dessus d'une ligne de table ou d'un profil (ce que jev juge),
-#: très en dessous du contexte de 32 000 jetons — et c'est la borne qui plafonne la
-#: dépense d'un appel (200 états × 16 Ko au pire), l'entrée seule étant facturée.
-#: Un état plus gros est un document entier : c'est le signal d'un usage à tort.
+#: Max size of ONE state (UTF-8 JSON bytes), ~4k tokens; caps a call's spend (input is billed).
 MAX_ETAT_OCTETS = 16_000
 
-#: Délai de LECTURE d'une décision (la connexion garde les 10 s du client). Une
-#: décision répond en ~0,5 s : 15 s, c'est un amont en difficulté, pas une décision lente.
+#: Read timeout per answer (connect keeps the client's 10 s); answers take ~0.5 s.
 LECTURE_S = 15
-#: Plafond dur d'un appel sur le chemin REST (`capabilities/tools_me.py`,
-#: `asyncio.wait_for(..., timeout=45)`), même borne que `clay`.
+#: Hard cap on the REST path (`capabilities/tools_me.py`), same as `clay`.
 REST_CALL_LIMIT_S = 45.0
-#: Fenêtre de DÉPART d'un lot : aucune décision ne part après elle, et une décision
-#: partie juste avant peut encore durer connexion + lecture (10 + 15 s). D'où : plafond
-#: REST − la pire décision − une marge, soit un lot qui rend TOUJOURS sous ~40 s, avec
-#: les états non partis à rejouer, au lieu d'un appel coupé sans reçu.
+#: Batch send window: REST cap − worst in-flight call (10 + 15 s) − margin. Unsent states go to `retry`.
 LOT_FENETRE_S = REST_CALL_LIMIT_S - (10 + LECTURE_S) - 5.0
 
 
@@ -98,128 +59,99 @@ def _bad(msg: str) -> McpError:
 def _upstream_message(e) -> str:
     status = e.status_code
     if status in (401, 403):
-        return (f"OpenRouter a rejeté la clé (HTTP {status}) — la clé Jev du tenant "
-                "est invalide ou révoquée ; c'est un administrateur du tenant qui la "
-                "repose.")
+        return (f"OpenRouter rejected the key (HTTP {status}): the tenant's Jev key is "
+                "invalid or revoked. A tenant admin must set it again.")
     if status == 402:
-        return ("Crédits OpenRouter épuisés (402) — la clé du tenant n'a plus de "
-                "solde ; c'est un administrateur du tenant qui la recharge.")
+        return ("OpenRouter credits exhausted (402): a tenant admin must top up the "
+                "tenant's key.")
     if status == 429:
-        return "Jev : trop de requêtes (429) — réessaie dans un instant."
+        return "Jev: too many requests (429). Retry shortly."
     if status == 400:
-        # Le DIRE de l'amont, entier : il nomme la question fautive ou l'état trop
-        # long (`max_tokens_exceeded`, au-delà de 32 000 jetons), et le reformuler
-        # ferait perdre exactement ce qui permet de corriger.
-        return f"Jev a refusé la requête (400) — {e.body}"
+        # Upstream body verbatim: it names the faulty question or `max_tokens_exceeded`.
+        return f"Jev rejected the request (400): {e.body}"
     if status in (500, 502, 503, 504):
-        return f"Jev est momentanément indisponible (HTTP {status}) — réessaie plus tard."
-    return f"Jev a refusé la requête (HTTP {status}): {e.body}"
+        return f"Jev is temporarily unavailable (HTTP {status}). Retry later."
+    return f"Jev rejected the request (HTTP {status}): {e.body}"
 
 
 def _microdollars(cout: Optional[float]) -> int:
-    """Le coût d'un appel en micro-dollars, ARRONDI AU SUPÉRIEUR.
+    """Call cost in micro-dollars, rounded UP; no declared cost bills 0.
 
-    C'est l'unité du relevé (`quantity`) : un appel qui a coûté quelque chose ne doit
-    jamais se relever à zéro. Un coût absent (l'amont ne l'a pas déclaré) rend 0 — on
-    ne facture pas ce qu'on n'a pas mesuré.
-
-    ⚠️ **Le `round` avant le plafond n'est pas cosmétique** : la somme des coûts d'un
-    lot est une addition de flottants, et `3 × 1,0e-05` vaut `3,0000000000000004e-05`
-    en binaire — soit 30,000000000000004 µ$, que `ceil` seul relèverait à **31**. Un
-    micro-dollar inventé à chaque lot, toujours dans le même sens, sur une marge qui
-    se compte en multiples du coût réel : la décimale est ici une question de
-    facture, pas de présentation."""
+    ⚠️ The `round` before `ceil` matters: a batch cost is a float sum, and
+    `3 × 1e-05` = 3.0000000000000004e-05, which bare `ceil` would bill as 31 µ$."""
     return math.ceil(round(float(cout) * 1e6, 6)) if cout else 0
 
 
 def _verify(fields: dict, config: dict | None = None,  # noqa: ARG001
             instance: tuple | None = None) -> None:
-    """Sonde « tester la connexion » : la plus petite décision possible — un état d'un
-    mot, une question oui/non. Une décision coûte quelques micro-dollars ; c'est
-    l'appel authentifié le moins cher que cette API propose.
+    """"Test connection" probe: the smallest possible call (one word, one yes/no).
 
-    ⚠️ Une clé posée ailleurs que sur le TENANT échoue ici SANS appel : elle est
-    refusée à l'usage (`RANGS_SERVIS`), une carte verte mentirait. `instance` est la
-    ligne réellement sondée ; absente (vérification avant dépôt, grant sans ligne),
-    la sonde ne peut pas juger du barreau et teste la clé seule."""
+    ⚠️ A key on any rung but TENANT fails here without a call: it would be refused at use.
+    Without `instance` (check before saving), only the key is tested."""
     if instance is not None and instance[0] != credentials_store.TENANT:
         raise ValueError(
-            f"une clé `jev` posée au niveau « {instance[0]} » n'est pas servie : jev "
-            "ne tourne que sur la clé du TENANT, et celle-ci la masquerait.")
+            f"a `jev` key set at the '{instance[0]}' level is not used: Jev only runs "
+            "on the TENANT key, which this one would shadow.")
     from oto.tools.jev.client import JevClient
     JevClient(api_key=fields["key"]).decide(
-        {"mot": "test"},
-        {"ok": {"type": "noul", "instructions": "Ce mot est-il « test » ?",
-                "criteria": {"true": "c'est le mot test", "false": "c'est un autre mot"}}},
+        {"word": "test"},
+        {"ok": {"type": "noul", "instructions": "Is this word 'test'?",
+                "criteria": {"true": "the word is test", "false": "another word"}}},
         timeout=20)
 
 
 def register(mcp: FastMCP) -> None:
     from oto.tools.common.errors import UpstreamHTTPError
-    from oto.tools.jev.client import JevClient
+    from oto.tools.jev.client import DEFAULT_MODEL, JevClient
 
     connector_verify.register("jev", _verify)
 
     def _client(units: int = 1) -> JevClient:
-        """Le client sur la clé du tenant. `units` = le nombre de décisions de l'appel,
-        vérifié d'avance contre le quota de la clé (`resolve_credential`).
+        """Client on the tenant key; `units` = answers in this call (quota pre-check).
 
-        ⚠️ **Le barreau gagnant est VÉRIFIÉ, pas seulement lu.** La cascade rendrait
-        volontiers une clé posée par une org ou une personne ; cet outil ne tourne que
-        sur la clé du tenant (`providers/jev.py`), et une clé d'org servie en silence
-        ferait deux choses fausses à la fois — un travail payé par quelqu'un qui ne
-        l'a pas voulu, et un usage que le tenant ne verrait pas.
-
-        ⚠️ Sans aucune clé, le refus générique de la cascade propose de « poser ta
-        propre clé » — exactement le geste refusé ici. Il est remplacé par la seule
-        voie qui existe."""
+        ⚠️ The winning rung is CHECKED: an org/user key would bill someone who didn't
+        opt in, invisibly to the tenant. The generic "set your own key" refusal is
+        replaced by the only valid path."""
         try:
             rc = access.resolve_credential("jev", want="auto", units=units)
         except CredentialUnavailable as e:
             raise CredentialUnavailable(ErrorData(
                 code=INVALID_PARAMS,
-                message=("Aucune clé `jev` servie pour ton org : jev tourne sur la clé "
-                         "que ton TENANT dépose (un de ses administrateurs la pose une "
-                         "fois pour toutes ses orgs). oto ne fournit pas de clé "
-                         "plateforme `jev`, et une clé posée par une org, une équipe "
-                         "ou une personne n'est pas servie."))) from e
+                message=("No `jev` key for your org: Jev runs on the key your TENANT "
+                         "sets (a tenant admin sets it once for all its orgs). There is "
+                         "no platform key, and org, team or personal keys are not "
+                         "used."))) from e
         if rc.mode not in RANGS_SERVIS:
-            qui = QUI_RETIRE.get(rc.mode, "celui qui l'a posée")
+            qui = QUI_RETIRE.get(rc.mode, "whoever set it")
             raise _bad(
-                f"Une clé `jev` posée au niveau « {rc.mode} » masque celle du TENANT : "
-                "jev ne tourne que sur la clé du tenant, et cette clé-là n'est pas "
-                f"servie. Pour décider sur la clé du tenant, {qui} doit la retirer "
-                "(carte du connecteur jev).")
+                f"A `jev` key set at the '{rc.mode}' level shadows the TENANT key: "
+                "Jev only runs on the tenant key, so this one is not used. "
+                f"To use the tenant key, {qui} must remove it (Jev connector card).")
         return JevClient(api_key=rc.key)
 
     def _etat_borne(state, ou: str) -> None:
-        """Refuse un état au-delà de `MAX_ETAT_OCTETS` AVANT tout appel."""
+        """Refuse a state over `MAX_ETAT_OCTETS` before any call."""
         taille = len(json.dumps(state, ensure_ascii=False, default=str).encode("utf-8"))
         if taille > MAX_ETAT_OCTETS:
             raise _bad(
-                f"{ou} : l'état fait {taille} octets, le maximum est "
-                f"{MAX_ETAT_OCTETS} — n'envoie que les champs qui servent au "
-                "jugement, pas la fiche ou le document entier.")
+                f"{ou}: state is {taille} bytes, max is {MAX_ETAT_OCTETS}. Send only "
+                "the fields the judgement needs, not the whole record.")
 
     @contextmanager
     def _upstream():
-        """Traduit un refus de l'amont en erreur d'outil actionnable."""
+        """Turn an upstream refusal into an actionable tool error."""
         try:
             yield
         except ValueError as e:
-            # La garde de grille du client (type inconnu, `criteria` absent) : elle
-            # nomme la question fautive, c'est déjà le bon message.
+            # Client rubric guard (unknown type, missing `criteria`); names the question.
             raise _bad(str(e))
         except UpstreamHTTPError as e:
             raise _bad(_upstream_message(e))
         except (requests.ConnectionError, requests.Timeout) as e:
-            raise _bad(f"Jev injoignable (réseau/timeout) — réessaie plus tard. {e}")
+            raise _bad(f"Jev unreachable (network/timeout). Retry later. {e}")
 
     def _releve(cout_total: float) -> None:
-        """Le relevé d'un appel : sa dépense RÉELLE, en micro-dollars.
-
-        ⚠️ Sans `quantity`, un `jev_items` de deux cents décisions se relèverait comme
-        un appel unique — et le prix ne suivrait plus rien."""
+        """Record the call's REAL spend in micro-dollars (else a 200-item batch bills as one call)."""
         u = _microdollars(cout_total)
         if u:
             session_org.note_call_trace(quantity=u)
@@ -228,7 +160,7 @@ def register(mcp: FastMCP) -> None:
     def jev_ask(state: dict, questions: dict, model: Optional[str] = None) -> dict:
         """Ask Jev typed questions about one state and get answers with probabilities.
 
-        Jev is a decision model, not a chat model: it returns a typed answer per
+        Jev is not a chat model: it returns a typed answer per
         question and nothing else — no prose, no justification, no tool calls. It pays
         off on BATCHES — many rows or profiles to triage with the same rubric (see
         `jev_items`). A single case you can judge yourself does not need Jev.
@@ -297,7 +229,7 @@ def register(mcp: FastMCP) -> None:
             (about 40 s): send exactly those again. `[]` when everything was sent.
 
         A key problem (invalid key, no credits left) aborts the whole call rather than
-        turning into N identical item errors; the decisions already made are still
+        turning into N identical item errors; the answers already given are still
         billed, and the error says how many.
 
         Args:
@@ -306,19 +238,19 @@ def register(mcp: FastMCP) -> None:
                 your own id back beside each answer (`key` is echoed, never sent).
             questions: the rubric, same shape and same rules as `jev_ask`.
             model: another model id (default: the pinned dated snapshot).
-            parallel: how many decisions in flight (default 10, max 50). Raise it for
+            parallel: how many items in flight (default 10, max 50). Raise it for
                 a big batch that must finish inside one call.
         """
         if not isinstance(items, list) or not items:
-            raise _bad("`items` : au moins un état à juger est attendu.")
+            raise _bad("`items`: at least one state is required.")
         if len(items) > MAX_ITEMS:
-            raise _bad(f"`items` : {len(items)} états, le maximum est {MAX_ITEMS} par "
-                       "appel — découpe en pages et rappelle.")
+            raise _bad(f"`items`: {len(items)} states, max is {MAX_ITEMS} per call. "
+                       "Split into pages.")
         try:
             fil = max(1, min(int(parallel or PARALLELE_DEFAUT), PARALLELE_MAX))
         except (TypeError, ValueError):
-            raise _bad(f"`parallel` : un entier entre 1 et {PARALLELE_MAX} est attendu, "
-                       f"pas {parallel!r}.")
+            raise _bad(f"`parallel`: expected an integer from 1 to {PARALLELE_MAX}, "
+                       f"got {parallel!r}.")
 
         def _etat(i, x) -> tuple[Optional[str], dict]:
             if isinstance(x, dict) and "state" in x and isinstance(x["state"], dict):
@@ -327,21 +259,18 @@ def register(mcp: FastMCP) -> None:
             elif isinstance(x, dict):
                 cle, state = None, x
             else:
-                raise _bad("chaque élément de `items` est un objet (l'état), "
-                           "ou `{key, state}`.")
+                raise _bad("each `items` entry must be an object (the state) "
+                           "or `{key, state}`.")
             _etat_borne(state, f"`items[{i}]`")
             return cle, state
 
         paires = [_etat(i, x) for i, x in enumerate(items)]
         client = _client(units=len(paires))
-        # La grille est jugée UNE fois, pas une fois par état : une grille fautive
-        # n'a pas à coûter deux cents refus identiques.
+        # Check the rubric ONCE, not once per state.
         with _upstream():
             client.check_questions(questions)
 
-        # Aucune décision ne PART après la fenêtre, ni après un arrêt du lot : une
-        # décision déjà partie finit (un appel HTTP synchrone ne s'annule pas), et
-        # son coût est relevé.
+        # Nothing starts after the window or a stop; in-flight calls finish and are billed.
         fin_depart = time.monotonic() + LOT_FENETRE_S
         arret = threading.Event()
 
@@ -354,13 +283,12 @@ def register(mcp: FastMCP) -> None:
                 return {"index": i, "key": cle, "answers": r.get("answers") or {},
                         "_usage": r.get("usage") or {}, "_model": r.get("model")}
             except UpstreamHTTPError as e:
-                # ⚠️ Un problème de CLÉ ou de SOLDE n'est pas l'affaire d'un état : il
-                # remonte et arrête le lot, au lieu de se répéter deux cents fois.
+                # ⚠️ Key or balance problems stop the whole batch (not N identical errors).
                 if e.status_code in (401, 402, 403):
                     raise
                 return {"index": i, "key": cle, "error": _upstream_message(e)}
             except (requests.ConnectionError, requests.Timeout) as e:
-                return {"index": i, "key": cle, "error": f"Jev injoignable — {e}"}
+                return {"index": i, "key": cle, "error": f"Jev unreachable: {e}"}
 
         res: list[dict] = []
         panne: Optional[Exception] = None
@@ -371,23 +299,22 @@ def register(mcp: FastMCP) -> None:
                 for f in as_completed(futurs):
                     try:
                         res.append(f.result())
-                    except Exception as e:  # noqa: SILENT — retenue, relevée plus bas après le relevé
-                        # Clé, solde, ou exception inattendue sortie d'un fil : le
-                        # lot s'arrête, mais ce qui est déjà décidé reste PAYÉ.
+                    except Exception as e:  # noqa: SILENT — kept, re-raised below after billing
+                        # Stop the batch; answers already given stay billed.
                         if panne is None:
                             panne = e
                             arret.set()
                             for autre in futurs:
                                 autre.cancel()
         finally:
-            # Ce qui est parti chez l'amont compte, même si le lot s'arrête en route.
+            # Whatever reached upstream is billed, even if the batch stops.
             cout = sum((r.get("_usage") or {}).get("cost") or 0 for r in res)
             _releve(cout)
 
         decides = sum(1 for r in res if "answers" in r)
         if panne is not None:
-            deja = (f" {decides} décision(s) déjà prise(s) et relevée(s) avant l'arrêt."
-                    if decides else " Aucune décision n'avait encore été prise.")
+            deja = (f" {decides} answer(s) already given and billed before the stop."
+                    if decides else " No answer had been given yet.")
             if isinstance(panne, UpstreamHTTPError):
                 raise _bad(_upstream_message(panne) + deja) from panne
             raise panne
@@ -410,3 +337,306 @@ def register(mcp: FastMCP) -> None:
                 "retry": [r["index"] for r in res if r.get("_non_parti")],
                 "usage": {"decided": len(rendus) - rates, "failed": rates,
                           "input_tokens": jetons, "cost": cout}}
+
+    @mcp.tool()
+    def jev_rows(datastore: str, questions: dict, state_fields: list, output: dict,
+                 model_column: str, filter: Optional[dict] = None,
+                 filters: Optional[list] = None, limit: int = jr.MAX_ROWS,
+                 parallel: Optional[int] = None, dry_run: bool = False,
+                 overwrite: bool = False, cursor: Optional[str] = None,
+                 model: Optional[str] = None) -> dict:
+        """Qualify a table's rows with Jev ON THE SERVER: rows are read, judged and written
+        back here, and no row data passes through you. Write the rubric; review the sample.
+
+        Each row's `state_fields` are sent with the same `questions`; each answer is written
+        to its `output` column, its confidence to `<column>_p` (choice and score), and the
+        model snapshot to `model_column`. A `noul` writes its probability; a score writes
+        the expected level (e.g. 3.34). A row Jev can never answer as is (state too large,
+        or refused upstream as too long) or whose answer the table refuses to store gets
+        `jev_error: <reason>` in `model_column`. A row whose state fields are all empty is
+        counted in `empty_state` and left undecided: fill it, then re-run.
+        Missing output, `<column>_p` and `model_column` columns are created, typed from
+        the questions (choice → enum of its criteria); existing ones are never changed.
+        The key and the rubric are checked before anything is created or written.
+
+        Only undecided rows are taken (`model_column` empty) unless `overwrite=true`, so a
+        re-run resumes and never pays twice. Rows leased by another run are skipped, and a
+        row changed since it was read is never overwritten. Nothing reserves rows between
+        two `jev_rows` calls: do not run two at once on the same rows. Loop on
+        `next_cursor` until `done`, then finish with one pass WITHOUT cursor to pick up
+        skipped rows.
+
+        Any other upstream refusal (key, credits, a malformed request) stops the batch:
+        what was already judged stays written and billed, and the error says how much.
+
+        Run `dry_run=true` on known cases before a full run. Jev sees only the state and the
+        questions: put client context (ICP, offer) in the criteria or the state. Rows with a
+        thin state score low for lack of evidence (`thin_state` counts them). No bucketing
+        here: thresholds belong to you.
+        Validate fit against known outcomes before trusting it; combine Jev's answers with
+        structured fields in plain code.
+
+        ⚠️ Each state goes to a third party (OpenRouter, then TypeSafe). Billed on real cost,
+        about 50 µ$ per row for 3 questions and a 500-character description.
+
+        Returns — `{decided, jev_errors, empty_state, skipped_leased, skipped_changed,
+        errors, error_count, low_confidence, thin_state, created_columns, next_cursor,
+        remaining, done, cost, model, sample}`. `errors` and `sample` name rows by `_id`
+        with codes and what was written — never a value read from the table. `dry_run`
+        returns `rows` (each judged row's `_id` and answers) and `would_create_columns`,
+        and writes nothing.
+
+        Args:
+            datastore: the table number (ns_id) or `slot:<name>`.
+            questions: the rubric, same shape and rules as `jev_ask`; `criteria` required.
+            state_fields: columns to send, each a name or `{name: max_chars}`.
+            output: `{question: column}`; choice → text/enum, score and noul → number.
+                Missing columns are created.
+            model_column: text column for the model snapshot or `jev_error`; required
+                (created if missing).
+            filter: `data_rows` filter grammar.
+            filters: `data_rows` multi-column clauses.
+            limit: max rows judged in this call (default and max 500; dry run max 20).
+            parallel: rows in flight (default 25, max 50).
+            dry_run: judge and return, write nothing (still billed).
+            overwrite: also re-judge rows that already have an answer.
+            cursor: `next_cursor` from the previous call.
+            model: another model id (default: the pinned dated snapshot).
+        """
+        from ..datastore import jetons
+        from ..datastore import par_reference as pr
+        from ..datastore.core import DatastoreNotFound, DatastoreReadOnly
+        from ..datastore.errors import InvalidCursor
+        from ..datastore.outils import _encode_cursor
+
+        try:
+            limite = int(limit)
+            fil = max(1, min(int(parallel or jr.PARALLEL_DEFAULT), jr.PARALLEL_MAX))
+        except (TypeError, ValueError):
+            raise _bad("`limit` and `parallel` must be integers.")
+        limite = max(1, min(limite, jr.MAX_DRY_RUN if dry_run else jr.MAX_ROWS))
+        try:
+            store, adresse = pr.tableau(datastore, ecrire=not dry_run)
+            schema = store.get_schema(adresse)
+        except jetons.JetonMalPlace as e:
+            raise _bad(str(e))
+        except DatastoreNotFound:
+            raise _bad(f"Table `{datastore}` not found. Nothing sent.")
+        except DatastoreReadOnly:
+            raise _bad(f"Table `{datastore}` is shared read-only. Nothing sent.")
+        fields = jr.fields_of(schema)
+        if not fields:
+            raise _bad("`jev_rows` needs a declared schema on the table. Nothing sent.")
+        # Missing output columns are created (typed from the questions); existing ones
+        # are checked, never altered.
+        a_creer = jr.missing_columns(questions, output, model_column, fields)
+        try:
+            cols = jr.check_state_fields(state_fields, fields, jr.hidden_of(schema))
+            jr.check_outputs(questions, output, model_column,
+                             {**fields, **{f["key"]: f for f in a_creer}},
+                             jr.closed_of(schema))
+        except jr.Refusal as e:
+            raise _bad(str(e))
+        # ⚠️ The key, the model and the rubric BEFORE any side effect: a refused call
+        # must leave the schema and the rows as they were. Each page re-checks the quota
+        # for what it will send.
+        client = _client(units=1)
+        with _upstream():
+            client.check_model(model or DEFAULT_MODEL)
+            client.check_questions(questions)
+        if a_creer and not dry_run:
+            try:
+                store.patch_schema(adresse, fields=a_creer)
+            except ValueError as e:
+                raise _bad(f"Could not create the output columns: {e}. Nothing sent.")
+
+        clauses = list(filters or [])
+        # In a dry run a column still to be created is empty everywhere: no clause.
+        if not overwrite and not (dry_run and model_column in {f["key"] for f in a_creer}):
+            clauses.append({"field": model_column, "op": "empty", "value": True})
+        proj = [c for c, _ in cols] + ["_revision", "_claimed_by", "_claimed_until",
+                                        "_claimed_run"]
+        fin_depart = time.monotonic() + LOT_FENETRE_S
+        arret = threading.Event()
+
+        # Per row, in table order: True once handled (written, marked or skipped).
+        ordre: list[str] = []
+        fait: dict[str, bool] = {}
+        n = {"decided": 0, "jev_errors": 0, "empty_state": 0, "skipped_leased": 0,
+             "skipped_changed": 0, "low_confidence": 0, "thin_state": 0}
+        # `{_id, code}` only: a refusal's text can quote a cell, and this reply never does.
+        erreurs: list[dict] = []
+        sample: list[dict] = []
+        judged: list[dict] = []
+        cout = 0.0
+        servi = None
+        panne: Optional[Exception] = None
+        page_cursor, epuise = cursor, False
+
+        def _ecrire(rid: str, rev, patch: dict) -> Optional[str]:
+            """Write one row by id on THIS thread (journal stamps). Code or None."""
+            return pr.ecrire_ligne(store, adresse, rid, patch, expected_revision=rev)
+
+        def _marquer(rid: str, rev, raison: str) -> None:
+            code = _ecrire(rid, rev, {model_column: (jr.ERROR_PREFIX + raison)[:500]})
+            if code is None:
+                n["jev_errors"] += 1
+            _issue(rid, code)
+
+        def _issue(rid: str, code: Optional[str]) -> None:
+            if code == "row_locked":
+                n["skipped_leased"] += 1
+            elif code == "row_changed":
+                n["skipped_changed"] += 1
+            elif code and code != "row_not_found":
+                erreurs.append({"_id": rid, "code": code})
+            fait[rid] = True
+
+        def _decide(state: dict) -> dict:
+            if arret.is_set() or time.monotonic() >= fin_depart:
+                return {"_non_parti": True}
+            try:
+                return client.decide(state, questions, model=model, timeout=LECTURE_S)
+            except UpstreamHTTPError as e:
+                refus = jr.state_refusal(e.status_code, getattr(e, "body", ""))
+                # ⚠️ Key, balance or request problems stop the whole batch; only a 400
+                # about THIS state is the row's own.
+                if e.status_code in (401, 402, 403) or (e.status_code == 400
+                                                        and refus is None):
+                    raise
+                return {"_code": f"upstream_{e.status_code}", "_refus": refus}
+            except (requests.ConnectionError, requests.Timeout):
+                return {"_code": "upstream_unreachable", "_refus": None}
+
+        try:
+            while len(ordre) < limite and not epuise and not arret.is_set() \
+                    and time.monotonic() < fin_depart:
+                try:
+                    page = store.cursor_rows(adresse, filter=filter or None,
+                                             filters=clauses or None,
+                                             limit=min(jr.PAGE, limite - len(ordre)),
+                                             cursor=page_cursor, fields=proj)
+                except InvalidCursor:
+                    raise _bad("`cursor` is not a `jev_rows` cursor.")
+                except ValueError as e:
+                    raise _bad(f"`filter`: {e}")
+                rows = page.get("rows") or []
+                page_cursor = page.get("next_cursor")
+                epuise = not page_cursor
+                envoi: list[tuple[str, Any, dict]] = []
+                for row in rows:
+                    rid = str(row["_id"])
+                    ordre.append(rid)
+                    fait[rid] = False
+                    if pr.tenue_ailleurs(row):
+                        _issue(rid, "row_locked")
+                        continue
+                    state = jr.state_of(row, cols)
+                    rev = row.get("_revision")
+                    if not state:
+                        # Not the row's verdict: its fields may be filled later.
+                        n["empty_state"] += 1
+                        fait[rid] = True
+                        continue
+                    taille = len(json.dumps(state, ensure_ascii=False,
+                                            default=str).encode("utf-8"))
+                    if taille > MAX_ETAT_OCTETS:
+                        if not dry_run:
+                            _marquer(rid, rev, f"state is {taille} bytes, max {MAX_ETAT_OCTETS}")
+                        else:
+                            fait[rid] = True
+                        continue
+                    if jr.is_thin(state, cols[0][0]):
+                        n["thin_state"] += 1
+                    envoi.append((rid, rev, state))
+                if not envoi:
+                    continue
+                # Quota is checked per page, for what this page will send.
+                client = _client(units=len(envoi))
+                # Workers only make the HTTP call; reads and writes stay on this thread.
+                with ThreadPoolExecutor(max_workers=fil) as ex:
+                    futurs = {ex.submit(_decide, st): (rid, rev)
+                              for rid, rev, st in envoi}
+                    for f in as_completed(futurs):
+                        rid, rev = futurs[f]
+                        try:
+                            r = f.result()
+                        except Exception as e:  # noqa: SILENT — kept, re-raised after billing
+                            if panne is None:
+                                panne = e
+                                arret.set()
+                                for autre in futurs:
+                                    autre.cancel()
+                            continue
+                        if r.get("_non_parti"):
+                            continue          # not sent: stays undecided, not handled
+                        if "_code" in r:
+                            if r["_refus"] and not dry_run:
+                                _marquer(rid, rev, f"state refused upstream ({r['_refus']})")
+                            else:
+                                erreurs.append({"_id": rid, "code": r["_code"]})
+                            continue
+                        cout += (r.get("usage") or {}).get("cost") or 0
+                        servi = servi or r.get("model")
+                        answers = r.get("answers") or {}
+                        try:
+                            patch, conf = jr.patch_of(answers, output, model_column,
+                                                      r.get("model") or "")
+                        except (KeyError, TypeError):
+                            if not dry_run:
+                                _marquer(rid, rev, "incomplete answer")
+                            continue
+                        n["low_confidence"] += sum(1 for c in conf if c < jr.LOW_CONFIDENCE)
+                        if dry_run:
+                            judged.append({"_id": rid, "answers": jr.answers_slim(answers)})
+                            fait[rid] = True
+                            continue
+                        code = _ecrire(rid, rev, patch)
+                        if code == "writeback_refused":
+                            # Paid once: marked, so no later pass judges it again.
+                            erreurs.append({"_id": rid, "code": code})
+                            _marquer(rid, rev, "answer refused by the table schema")
+                            continue
+                        if code is None:
+                            n["decided"] += 1
+                            if len(sample) < 5:
+                                sample.append({"_id": rid, "written": patch})
+                        _issue(rid, code)
+        finally:
+            _releve(cout)
+
+        if panne is not None:
+            deja = f" {n['decided']} row(s) already written and billed."
+            if isinstance(panne, UpstreamHTTPError):
+                raise _bad(_upstream_message(panne) + " Batch stopped." + deja) from panne
+            raise panne
+
+        # Watermark: the last row with every earlier row handled.
+        borne = None
+        for rid in ordre:
+            if not fait.get(rid):
+                break
+            borne = rid
+        remaining = (None if overwrite or dry_run
+                     else store.count_rows(adresse, filter=filter or None,
+                                           filters=clauses or None))
+        tout_fait = all(fait.get(r) for r in ordre)
+        if remaining is None:
+            done = epuise and tout_fait
+        else:
+            # A full pass (no cursor) that read and handled every undecided row: the
+            # only ones left wait for their state, so re-running would change nothing.
+            done = remaining == 0 or (cursor is None and epuise and tout_fait
+                                      and remaining <= n["empty_state"])
+        next_cursor = None if done else (_encode_cursor(borne) if borne else cursor)
+        creees = [f["key"] for f in a_creer]
+        out = {**n, "errors": erreurs[:20], "error_count": len(erreurs),
+               **({"would_create_columns": creees} if dry_run
+                  else {"created_columns": creees}),
+               "next_cursor": next_cursor, "remaining": remaining,
+               "done": done, "cost": cout, "model": servi, "dry_run": dry_run}
+        if dry_run:
+            out["rows"] = judged
+        else:
+            out["sample"] = sample
+        return out

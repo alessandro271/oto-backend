@@ -138,13 +138,10 @@ def test_seuls_les_depots_de_cle_se_declarent_MONO_et_on_sait_pourquoi():
     rendrait pourtant multi, ce qui proposerait un second dépôt sans jamais dire
     lequel choisir.
 
-    `jev` (28/09/2026) est mono pour la raison de `transcription`, pas pour celle des
-    dépôts de clé : il porte des outils, mais la clé qu'il consomme est celle du
-    TENANT, posée à son barreau — jamais un compte que l'agent nommerait à
-    l'appel (`jev_ask` n'a pas de `_account` à passer). La dérivation `api_key` le
-    rendrait multi, donc l'écran proposerait un second dépôt sur le même palier, que
-    la résolution n'irait jamais choisir : deux clés pour un même appel, sans critère,
-    et un usage facturé à l'une en croyant l'autre."""
+    `jev` (28/09/2026) is mono for the `transcription` reason: it consumes the TENANT
+    key on its rung, never an account the agent names (`jev_ask` has no `_account`).
+    The `api_key` derivation would make it multi and offer a second key on the same
+    rung that resolution would never pick."""
     assert sorted(c.name for c in providers._REGISTRY_LIST
                   if c.cardinality == "mono") == ["anthropic", "jev", "mistral",
                                                   "transcription"]
