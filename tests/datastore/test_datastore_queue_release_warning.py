@@ -18,22 +18,21 @@ def _with_lifecycle(**lc):
 
 
 def test_une_colonne_qui_RESSEMBLE_a_un_etat_sans_lifecycle_avertit():
-    """⚠️ Le fait a changé le 08/09/2026, le danger non.
+    """La colonne d'état est CELLE QUI PORTE le `lifecycle` (08/09/2026) : une colonne
+    qui n'en porte pas n'est pas un état, et aucune garde du cycle de vie ne s'y
+    applique. L'avertissement le dit.
 
-    La colonne d'état est désormais CELLE QUI PORTE le `lifecycle` : une colonne qui
-    n'en porte pas n'est pas un état, et le tableau n'a donc pas de file du tout —
-    `claim_next` y rend `{}`, sans ligne ni raison.
-
-    **C'est pire que l'incident #360, pas mieux** : là-bas la file existait et ne
-    libérait rien ; ici elle n'existe pas et ne le dit pas. L'avertissement porte donc
-    sur ce qui est vrai maintenant — une colonne avec ses options, ou l'ancienne
-    étiquette, RESSEMBLE à un état sans en être un."""
+    ⚠️ **Il affirmait jusqu'au 29/09/2026 que le tableau n'avait « PAS de file de
+    travail »** (oto#91, retour 757) — alors que `claim_next` ne lit pas le
+    `lifecycle` et servait la ligne libre DANS LA MÊME RÉPONSE que l'avertissement
+    (cf. `test_claim_next_warns_the_worker`). Un agent qui lit « pas de
+    file » écrit une boucle lire-puis-marquer, non atomique : c'est ce qu'il a fait."""
     w = dsv2.queue_release_warning({"fields": [_STATUS]})
 
     assert w and "statut" in w
-    assert "n'a PAS de file de travail" in w
-    assert "sans rien dire" in w, "le silence de `claim_next` doit être nommé"
     assert "c'est le bloc `lifecycle` qui fait l'état" in w
+    assert "n'a PAS de file" not in w, "la réservation marche sans rien déclarer"
+    assert "fonctionne quand même" in w and "data_release" in w
 
 
 def test_lifecycle_without_derivable_terminal_warns():
@@ -41,8 +40,12 @@ def test_lifecycle_without_derivable_terminal_warns():
     schema = _with_lifecycle(states=["a", "b"], transitions={"a": ["b"], "b": ["a"]})
     assert dsv2.terminal_states(schema) == set()
     w = dsv2.queue_release_warning(schema)
-    assert w and "AUCUN bail" in w and "data_release" in w, (
-        "l'incident #360 lui-même : la file EXISTE et ne libère rien")
+    # oto#91 : il promettait qu'un `terminal` déclaré ferait relâcher le bail au
+    # verdict — la libération automatique est retirée (#317). Il dit ce que le
+    # terminal manquant retire vraiment, et que le bail se rend à la main.
+    assert w and "abandon_state" in w and "data_release" in w
+    assert "ne libère jamais" in w
+    assert "AUCUN bail" not in w
 
 
 def test_explicit_terminal_is_silent():
@@ -97,9 +100,9 @@ def test_claim_next_warns_the_worker(monkeypatch):
     warnings: list = []
     assert s.claim_next("vivier", worker="w-1", warnings=warnings)["_id"] == "r1"
     # Le worker reçoit l'avertissement du schéma tel qu'il est : ici la colonne
-    # ressemble à un état sans en être un, donc le tableau n'a pas de file — et
-    # `claim_next` le lui dit au lieu de le laisser conclure de son silence.
-    assert len(warnings) == 1 and "n'a PAS de file de travail" in warnings[0]
+    # ressemble à un état sans en être un — ET la ligne lui est servie quand même.
+    # Le texte ne peut donc pas dire « pas de file » (oto#91).
+    assert len(warnings) == 1 and "fonctionne quand même" in warnings[0]
 
     # schéma sain ⇒ silence ; et `warnings` reste optionnel (appelants historiques)
     monkeypatch.setattr(s, "_ns_of", lambda ns_id: {

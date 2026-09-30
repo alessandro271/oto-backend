@@ -126,7 +126,7 @@ récupération : un worker qui meurt en cours de route ne bloque pas sa ligne
 d'un traitement, avec de la marge : trop court, une ligne lente se fait voler et
 traiter deux fois ; trop long, une ligne abandonnée dort.
 
-## ⚠️ Le piège : sans états terminaux déclarés, rien n'est libéré
+## ⚠️ Le piège : écrire un état « final » ne libère rien
 
 Le verrou est **le même pour tous les tableaux** : il n'y a rien à déclarer au schéma
 pour qu'il fonctionne, et rien à régler par tableau. Un agent prend une ligne, la rend.

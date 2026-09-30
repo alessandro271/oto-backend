@@ -1531,6 +1531,8 @@ CAPABILITIES += [
             "list_templates (published MODEL projects you can copy, from the ACTIVE org "
             "and the platform library) / "
             "get (project + its links + an `audit` of those links: dead_links / unbound_slots / "
+            "unresolvable_connectors (a linked connector no org credential would resolve — "
+            "org-owned projects only, always empty otherwise) / "
             "inert_procedures — a linked entity that no longer resolves surfaces HERE, act on it) / "
             "update (name, icon = an emoji shown in the lists and headers (\"\" clears it), brief_md, is_template = publish/unpublish "
             "as a copyable model, excluded_url_prefixes = URL prefixes such as `linkedin.com/in/` "

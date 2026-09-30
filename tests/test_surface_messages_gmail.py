@@ -74,7 +74,13 @@ def test_un_outil_qui_EXISTE_mais_n_est_pas_monte_garde_son_message(monkeypatch)
     monkeypatch.setattr(T, "_connector_of_tool", lambda n: "google")
     info = T.classify(T.NotFoundError("Unknown tool: 'gmail_message'"))
     assert info.code == "tool_not_mounted"
-    assert "n'est pas installé dans ta toolbox" in info.message
+    assert "n'est pas monté dans ta session" in info.message
+    # oto#91 (retour 382) : il affirmait « le connecteur n'est pas installé » — faux
+    # quand il l'est et que la liste de la session est simplement figée ou filtrée,
+    # et lu « connecteur en panne ». Il dit les causes possibles, et que ce n'en est
+    # pas une.
+    assert "ce n'est pas une panne" in info.message
+    assert "le connecteur `google` n'est pas installé" not in info.message
     assert "oto_call" in (info.hint or "")
 
 

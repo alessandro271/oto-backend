@@ -307,10 +307,12 @@ refusée, et nommée), chaque valeur une chaîne non vide d'au plus 60 caractèr
 Deux colonnes qui porteraient un bloc sont **refusées à la pose** : sinon le premier
 trouvé gagnerait, et l'ordre de déclaration trancherait en silence.
 
-⚠️ **Et si aucune colonne n'en porte, le tableau n'a PAS de file** : `data_claim_next`
-n'y réservera jamais rien. Une colonne avec ses `options`, ou l'ancienne étiquette,
-ressemble à un état sans en être un — la réponse te le dit plutôt que de te laisser
-conclure de son silence.
+⚠️ **Et si aucune colonne n'en porte, le tableau n'a PAS de cycle de vie** — mais il a
+toujours une file : `data_claim_next` réserve sans rien déclarer. Ce qui manque, ce
+sont les gardes (transitions, plafond de reprises, état d'abandon, périmètre de
+réservation). Une colonne avec ses `options`, ou l'ancienne étiquette, ressemble à un
+état sans en être un — la réponse te le dit plutôt que de te laisser conclure de son
+silence.
 
 ## 4 septies. Une exigence déclarée s'applique, à toute profondeur
 

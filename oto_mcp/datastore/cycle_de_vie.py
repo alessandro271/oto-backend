@@ -206,44 +206,50 @@ def merge_lifecycle(current: dict, patch: dict) -> dict:
 
 
 def queue_release_warning(schema: Optional[dict]) -> Optional[str]:
-    """Le datastore se donne un STATUT mais aucun état TERMINAL : dit-le, sinon le
-    silence se paie en file de travail (signal #360).
+    """Le datastore se donne un STATUT qui n'en est pas un, ou un cycle de vie sans
+    état TERMINAL : dit-le, sinon le silence se paie en file de travail (signal #360).
 
-    L'auto-release du bail (`_release_if_terminal`) ne se déclenche que sur un état
-    terminal ; sans `lifecycle`, `terminal_states` est vide, donc l'écriture du
-    verdict ne libère RIEN et chaque ligne traitée reste réservée jusqu'à expiration
-    du bail. Un `role="status"` avec ses `options` ressemble pourtant à un cycle de
-    vie — c'est exactement la configuration où l'agent croit tenir la garantie qu'il
-    n'a pas. None = rien à signaler (pas de statut, ou terminaux dérivables)."""
+    ⚠️ **Ce texte enseignait deux choses fausses jusqu'au 29/09/2026** (oto#91) : que
+    déclarer un état terminal ferait relâcher le bail au verdict — la libération
+    automatique est retirée depuis #317 — et qu'un tableau sans `lifecycle` n'a pas de
+    file, alors que `claim_next` n'en lit rien et y sert la ligne libre dans le même
+    appel que l'avertissement. Il dit maintenant ce que le code fait : la réservation
+    marche sans rien déclarer ; ce qu'un `lifecycle` absent ou sans terminal retire,
+    ce sont les gardes (transitions, plafond de reprises, périmètre, état d'abandon).
+    None = rien à signaler (pas de statut, ou terminaux dérivables)."""
     sf = status_field(schema)
     if sf is None:
         # ⚠️ **Le cas de l'incident #360, sous sa forme d'après le 08/09/2026.**
         # La colonne d'état est désormais CELLE QUI PORTE le `lifecycle` : une colonne
-        # qui n'en porte pas n'est pas un état, et il n'y a donc pas de file du tout.
-        #
-        # Sans ce que suit, le tableau du signal #360 serait devenu SILENCIEUX :
-        # `claim_next` y rend `{}` — ni ligne, ni raison — et l'auteur, qui voit une
-        # colonne d'états avec ses options, croit tenir une file. **J'aurais remplacé
-        # un avertissement par rien**, ce qui est le défaut que ce fichier existe pour
-        # fermer. On garde donc le dire, sur le fait qui est maintenant vrai.
+        # qui n'en porte pas n'est pas un état — aucune garde du cycle de vie ne s'y
+        # applique. La RÉSERVATION, elle, n'en dépend pas : `claim_next` sert la ligne
+        # libre avec ou sans `lifecycle` (ce texte affirmait le contraire jusqu'au
+        # 29/09/2026, oto#91 — l'avertissement contredisait la ligne servie avec lui).
+        # L'auteur qui voit une colonne d'états avec ses options croit tenir des gardes
+        # qu'il n'a pas : on garde donc le dire, sur le fait qui est vrai.
         candidates = [str(f.get("key")) for f in _fields(schema)
                       if isinstance(f, dict) and f.get("key")
                       and f.get("options")]
         if not candidates:
             return None
         noms = ", ".join(f"`{c}`" for c in candidates[:3])
-        return (f"aucune colonne ne porte de `lifecycle` : ce tableau n'a PAS de file "
-                f"de travail — `data_claim_next` n'y réservera jamais rien, et sans "
-                f"rien dire. {noms} ressemble(nt) à un état (options déclarées, ou "
-                f"`options` déclarées), mais **c'est le bloc "
-                f"`lifecycle` qui fait l'état** depuis le 08/09/2026. Déclare "
-                f"`lifecycle: {{states: [...], terminal: [...]}}` sur la colonne qui "
-                f"porte l'avancement. Cf. guide `work-queue`.")
+        return (f"aucune colonne ne porte de `lifecycle` : {noms} ressemble(nt) à un "
+                f"état (`options` déclarées) sans en être un — **c'est le bloc "
+                f"`lifecycle` qui fait l'état**. Aucune transition n'y est donc "
+                f"gardée, et ni plafond de reprises, ni état d'abandon, ni périmètre "
+                f"de réservation ne s'appliquent. La file (`data_claim_next`) "
+                f"fonctionne quand même, sans rien déclarer : filtre sur une colonne "
+                f"que ton traitement ÉCRIT, et rends chaque ligne (`data_release`, ou "
+                f"`run_finish`). Pour armer ces gardes, déclare `lifecycle: {{states: "
+                f"[...], terminal: [...]}}` sur la colonne qui porte l'avancement. "
+                f"Cf. guide `work-queue`.")
     if terminal_states(schema):
         return None
     key = sf.get("key") or "status"
     return (f"champ `{key}` : un `lifecycle` sans état terminal dérivable (tout état a "
-            "une transition sortante) → la file de travail ne libérera AUCUN bail à "
-            "l'écriture du verdict (les lignes traitées restent réservées jusqu'à "
-            f"expiration). Déclare `terminal: [...]` sur le `lifecycle` de `{key}`, ou "
-            "appelle `data_release` après chaque verdict. Cf. guide `work-queue`.")
+            "une transition sortante) → aucun `abandon_state` n'y est déclarable (il "
+            "doit être terminal), et le suivi d'une campagne ne peut rien compter comme "
+            f"conclu. Déclare `terminal: [...]` sur le `lifecycle` de `{key}`. Sans "
+            "effet sur les baux : écrire un verdict, terminal ou non, ne libère jamais "
+            "une ligne — `data_release` après chaque verdict, ou `run_finish`. "
+            "Cf. guide `work-queue`.")

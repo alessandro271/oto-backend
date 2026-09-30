@@ -144,3 +144,30 @@ def test_une_societe_est_delestee_de_ses_blocs_repetes():
     c = aiark._shape(page, "companies", full=False, fields=None)["content"][0]
     assert c["summary"]["name"] == "Otomata"          # l'identité reste
     assert "technologies" not in c and "keywords" not in c and "naics" not in c
+
+
+def test_la_description_de_fields_nomme_toutes_les_cles_de_la_vue():
+    """Signal 717 (oto#91) : une projection dont les clés ne sont pas énumérées se
+    règle à l'aveugle, et une clé inconnue est écartée EN SILENCE — les fiches
+    ressortent vides. La description servie doit donc nommer CHAQUE clé de premier
+    niveau que la vue par défaut rend, sur les deux points d'accès. Dérivé de la
+    capture réelle ci-dessus : une clé que la vue gagne sans que le texte la nomme
+    fait échouer ce banc."""
+    import asyncio
+
+    from fastmcp import FastMCP
+
+    async def go():
+        m = FastMCP("t")
+        aiark.register(m)
+        # La section `Args` part dans le SCHÉMA servi, en description du paramètre.
+        t = await m.get_tool("linkedin_aiark_search")
+        return t.parameters["properties"]["fields"]["description"]
+
+    d = asyncio.run(go())
+    personne = aiark._shape(PAGE, "people", full=False, fields=None)["content"][0]
+    societe = aiark._shape({"content": [PERSON["company"]]}, "companies",
+                           full=False, fields=None)["content"][0]
+    for cle in set(personne) | set(societe):
+        assert f"`{cle}`" in d, f"clé `{cle}` rendue par la vue, absente du texte servi"
+    assert "écarté en silence" in d

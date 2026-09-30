@@ -733,7 +733,8 @@ def register(mcp: FastMCP) -> None:
           bound applies to the keys a write actually SETS, so rows already over it
           keep working until that field is rewritten — and setting a bound on a
           table that already overflows answers with a `warning` saying how many.
-        - lifecycle: on the `role:"status"` field, `lifecycle: {states:[…],
+        - lifecycle: the column that carries the block IS the status column (no
+          `role` tag needed), `lifecycle: {states:[…],
           transitions:{from:[to…]}, terminal?:[…]}` — unknown state or undeclared
           transition is refused. ⚠️ It no longer releases the work-queue claim:
           writing a "final" state does NOT free the row (#317). Release is a gesture
@@ -918,6 +919,13 @@ def register(mcp: FastMCP) -> None:
         a summary {inserted, updated, count, key, ids}. Use `data_set_schema` to
         declare a persistent `key`. For LARGE batches, prefer `oto_upload_url` to push
         the data out-of-band (never through your context).
+
+        ⚠️ An error on the way BACK (expired session, dropped connection, timeout)
+        does NOT mean the write failed: it may have committed before the error.
+        Read the row back (`data_rows`, by `id` or filtered on its key) before
+        re-sending.
+        Re-sending is safe with `id`, or on a table with a business `key` (it
+        merges); a keyless append re-sent creates a DUPLICATE.
 
         ⚠️ A table can be CLOSED by its schema (`key_required: true`, next to its
         business `key`) — `data_get_schema` says whether it is. On such a table there

@@ -437,8 +437,14 @@ def register(mcp: FastMCP) -> None:
             fields: keep ONLY these keys on each record; the envelope (totals,
                 pagination, trackId) always stays — without it you would think you
                 saw everything. Combine with `full=True` to project the raw record.
-                ⚠️ Ce sont les clés RÉELLES de premier niveau : `id`, `profile`,
-                `link`, `location`, `department`, `company`, `last_updated`. Un nom
+                ⚠️ Ce sont les clés RÉELLES de premier niveau. op="people", vue par
+                défaut : `id`, `identifier`, `profile`, `link`, `location`,
+                `industry`, `department`, `company`, `last_updated` (avec
+                `full=True`, s'y ajoutent les blocs que la vue retire).
+                op="companies", le même bloc que le `company` d'une personne, vue
+                par défaut : `id`, `summary`, `link`, `location` (+ `industries`,
+                `technologies`, `keywords`, `naics`, `languages`, `last_updated`
+                avec `full=True`). Un nom
                 non reconnu est **écarté en silence**, pas refusé : une projection de
                 noms inventés rend des enregistrements qui ont l'air VIDES, et
                 l'absence se lit « pas de donnée » au lieu de « mauvaise clé »

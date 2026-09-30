@@ -471,8 +471,10 @@ def classify(exc, parametres: Optional[list] = None) -> ErrorInfo:
         if con:
             return ErrorInfo(
                 "tool_not_mounted", False,
-                f"L'outil `{name}` n'est pas monté dans ta session : le connecteur "
-                f"`{con}` n'est pas installé dans ta toolbox (ou l'outil y est masqué).",
+                f"L'outil `{name}` n'est pas monté dans ta session — ce n'est pas "
+                f"une panne du connecteur `{con}` : il peut ne pas être installé dans "
+                f"ta toolbox, l'outil peut y être masqué ou absent de la liste figée à "
+                f"l'ouverture de la session, ou le nom n'existe plus.",
                 f"appelle-le immédiatement via oto_call(name='{name}', args={{…}}) ; "
                 f"ou installe le connecteur — oto_connector(op='select', name='{con}') "
                 f"— et ouvre une nouvelle conversation pour le voir listé",
