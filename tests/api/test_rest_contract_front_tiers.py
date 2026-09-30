@@ -552,7 +552,9 @@ def test_archiver_une_org_qui_porte_un_abonnement_rend_409_puis_passe_une_fois_r
     billing.mark_cancel_at_period_end(oid)              # « résilie d'abord »
     r = client.delete(f"/api/orgs/{oid}", headers=_h(admin))
     assert r.status_code == 200, r.text
-    assert r.json() == {"ok": True, "org_id": oid, "archived": True}
+    # `already_archived` (additif, e4b0e57d) : false ici, l'org vient d'être archivée.
+    assert r.json() == {"ok": True, "org_id": oid, "archived": True,
+                        "already_archived": False}
 
 
 # ── GET /api/me/nodes/{id} : doc_id, project_id, ordered ──────────────────────
