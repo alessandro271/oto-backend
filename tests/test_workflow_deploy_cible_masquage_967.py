@@ -38,7 +38,7 @@ _EXEMPLE = _RACINE / "tests" / "deploy" / "declaration_exemple.json"
 
 # Ce qui désigne la cible, et doit venir d'un SECRET de son environnement.
 _DESIGNE = ("CIBLE_DECLARATION", "CIBLE_CONSOMMATEUR", "CIBLE_SSH_HOTE",
-            "CIBLE_SSH_UTILISATEUR", "CIBLE_SSH_KNOWN_HOSTS")
+            "CIBLE_SSH_UTILISATEUR", "CIBLE_SSH_KNOWN_HOSTS", "CIBLE_DECLENCHEURS")
 # Ce qui porte une valeur de la cible dans le workflow : ces secrets, toute variable
 # (interdite, mais repérée si elle revenait), et l'entrée qui nomme l'environnement.
 _VALEUR_CIBLE = re.compile(
@@ -193,7 +193,9 @@ _ENV_CIBLE = {
     "CIBLE_SSH_HOTE": "ssh.exemple.test",
     "CIBLE_SSH_UTILISATEUR": "porte-exemple",
     "CIBLE_SSH_KNOWN_HOSTS": "ssh.exemple.test,[bastion.exemple.test]:2222 ssh-ed25519 AAAAC3Nz",
+    "CIBLE_DECLENCHEURS": "alice-exemple, bob-exemple\ncarol-exemple",
 }
+_DECLENCHEURS = ("alice-exemple", "bob-exemple", "carol-exemple")
 
 
 def _masques(env: dict[str, str]) -> list[str]:
@@ -244,6 +246,7 @@ def test_le_masquage_cache_tout_ce_qui_designe_la_cible(masques):
         *(v for r in doc["roles"].values() for k, v in r["env"].items()
           if k != "OTO_ENV" and any(c.isalpha() for c in v)),
         *(_CONSOMMATEUR[k] for k in ("nom", "depot", "chemin")), "exemple-org",
+        *_DECLENCHEURS,                             # chaque login de la liste, seul
     ]
     for valeur in entieres:
         for ligne in valeur.splitlines():
@@ -259,6 +262,7 @@ def test_le_masquage_cache_tout_ce_qui_designe_la_cible(masques):
         "GET https://mcp.exemple.test/api/version -> 404",
         "git clone git@github.com:exemple-org/front-app.git",
         "ssh: connect to host bastion.exemple.test port 2222",
+        "déclencheurs : bob-exemple et carol-exemple",
     ])
     vu = _journal(journal, masques)
     for trace in ("exemple", "cliente", doc["secrets"]["projet"], "bastion"):
@@ -340,15 +344,18 @@ def test_constater_ne_cite_pas_l_hote(tmp_path, curl, code):
 @pytest.mark.parametrize("reponse, code", [
     ('{"protection_rules": [{"type": "required_reviewers", "reviewers": [{"type": "User"}]}]}', 0),
     ('{"protection_rules": []}', 0),
+    ('{"protection_rules": [], "deployment_branch_policy": {"protected_branches": true}}', 0),
     ('{"message": "Not Found"}', 1),
 ])
 def test_protection_ne_cite_pas_l_environnement(tmp_path, reponse, code):
     (tmp_path / "reponse").write_text(reponse)
     fini = subprocess.run(
-        ["/bin/bash", str(_RACINE / "deploy/cible/protection.sh"), "proprio/depot", "exemple"],
-        env=_doublures(tmp_path, gh=f'cat "{tmp_path}/reponse"; exit {code}'),
+        ["/bin/bash", str(_RACINE / "deploy/cible/protection.sh"), "environnement",
+         "proprio/depot", "exemple"],
+        env={**_doublures(tmp_path, gh=f'cat "{tmp_path}/reponse"; exit {code}'),
+             "GITHUB_OUTPUT": str(tmp_path / "sortie")},
         capture_output=True, text=True, timeout=30)
-    assert fini.returncode == (0 if "User" in reponse else 1)
+    assert fini.returncode == (0 if "User" in reponse or "protected_branches" in reponse else 1)
     assert "environnement de la cible" in fini.stdout.lower()
     assert "exemple" not in fini.stdout + fini.stderr
 

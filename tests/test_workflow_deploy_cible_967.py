@@ -10,7 +10,9 @@ Ce que ce test fige, parce que chaque point est une décision (Alexis, 29/09/202
 - l'accès à la machine est choisi explicitement (`acces` : tunnel | ssh), sans défaut ;
 - il ne consulte AUCUN autre déploiement : ni un autre workflow, ni ses runs, ni une
   autre instance — ni dans le workflow, ni dans les scripts qu'il exécute ;
-- l'environnement de la cible doit exiger un relecteur, vérifié avant l'approbation ;
+- l'environnement de la cible doit être protégé, vérifié avant l'approbation : il exige
+  un relecteur, ou (dépôt privé sans relecteurs requis, décision du 30/09/2026) l'acteur
+  du run figure dans sa liste de déclencheurs, vérifiée en PREMIER par le job qui le nomme ;
 - un seul job derrière l'approbation : préprod d'abord, prod ensuite, qui exige que la
   préprod de la cible serve le tag ; le tag doit être sur la branche principale ;
 - runner hébergé ; une entrée n'est jamais interpolée dans un script ;
@@ -92,7 +94,7 @@ def test_l_appel_declare_chaque_secret_qu_il_lit_sans_l_exiger():
     assert lus >= {"CIBLE_DECLARATION", "CIBLE_CONSOMMATEUR", "CIBLE_SSH_HOTE",
                    "CIBLE_SSH_UTILISATEUR", "CIBLE_SSH_KNOWN_HOSTS", "CIBLE_SSH_CLE",
                    "CIBLE_CF_ACCESS_CLIENT_ID", "CIBLE_CF_ACCESS_CLIENT_SECRET",
-                   "CIBLE_CONSOMMATEUR_CLE"}
+                   "CIBLE_CONSOMMATEUR_CLE", "CIBLE_DECLENCHEURS"}
     assert all(d.get("required") is False for d in declares.values())
 
 
@@ -185,9 +187,27 @@ def test_une_montee_a_la_fois_par_cible():
 def test_la_protection_est_verifiee_avant_l_approbation():
     assert "environment" not in _JOBS["entrees"]
     assert _JOBS["entrees"]["permissions"] == {"actions": "read"}
-    assert any('protection.sh "$DEPOT" "$CIBLE"' in s.get("run", "")
-               for s in _JOBS["entrees"]["steps"])
+    etape = next(s for s in _JOBS["entrees"]["steps"]
+                 if 'protection.sh environnement "$DEPOT" "$CIBLE"' in s.get("run", ""))
+    assert _JOBS["entrees"]["outputs"]["protection"] == \
+        f"${{{{ steps.{etape['id']}.outputs.protection }}}}"
     assert _JOBS["monter"]["needs"] == ["entrees"]
+
+
+def test_la_decision_est_le_premier_controle_du_job_qui_nomme_l_environnement():
+    """Seul ce job lit la liste des déclencheurs (secret de l'environnement) : il la
+    vérifie avant tout geste — après le masquage et la lecture du tronc public, rien
+    d'autre. Le verdict du premier temps arrive TOUJOURS (jamais de step sauté sur un
+    verdict vide), et l'acteur est `triggering_actor` (celui qui relance décide)."""
+    noms = [e.get("uses", "").split("@")[0] or e.get("run", "") for e in _ETAPES[:3]]
+    assert "::add-mask::" in noms[0] and noms[1] == "actions/checkout"
+    decision = _ETAPES[2]
+    assert decision["run"] == "deploy/cible/protection.sh declencheurs"
+    assert "if" not in decision
+    assert decision["env"] == {"PROTECTION": "${{ needs.entrees.outputs.protection }}",
+                               "ACTEUR": "${{ github.triggering_actor }}"}
+    assert _JOBS["monter"]["env"]["CIBLE_DECLENCHEURS"] == "${{ secrets.CIBLE_DECLENCHEURS }}"
+    assert "github.actor" not in _TEXTE
 
 
 def test_un_seul_job_derriere_l_approbation():
@@ -199,13 +219,14 @@ def test_un_seul_job_derriere_l_approbation():
 def test_l_ordre_de_la_montee():
     def rang(fragment):
         return next(i for i, r in enumerate(_RUNS) if fragment in r)
+    decision = rang("protection.sh declencheurs")
     tronc = rang("git merge-base --is-ancestor")
     declaration = rang("declaration.py verifier")
     contrat = rang("scripts/contrat-front.py")
     preprod = rang('appeler.sh "$ACTION" preprod "$TAG"')
     constat_preprod = rang('constater.sh "$RUNNER_TEMP/declaration.json" preprod "$TAG"')
     prod = rang('appeler.sh "$ACTION" prod "$TAG"')
-    assert tronc < declaration < contrat < preprod < constat_preprod < prod
+    assert decision < tronc < declaration < contrat < preprod < constat_preprod < prod
     # le constat de la préprod garde la prod même quand on ne monte que la prod
     assert _ETAPES[constat_preprod]["if"] == "inputs.action == 'deployer'"
 

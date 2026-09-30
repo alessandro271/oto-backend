@@ -20,8 +20,10 @@ name: Deploy cible
 # l'inventaire du tag), son accès (hôte, clé d'hôte épinglée, clé de déploiement, et en
 # accès tunnel le jeton de service Cloudflare Access) et, s'il existe, le consommateur de
 # son API. Cet environnement EXIGE une approbation (un relecteur requis) : le workflow le
-# vérifie et refuse de partir sinon. Ce dépôt est public : il ne nomme aucune cible, il
-# n'en porte que la forme (`deploy/cible/declaration.gabarit.json`).
+# vérifie et refuse de partir sinon — ou, dans un dépôt privé sans relecteurs requis
+# (offre sans Enterprise), la liste de ceux qui peuvent la lancer (`CIBLE_DECLENCHEURS`) :
+# lancer vaut alors décider. Ce dépôt est public : il ne nomme aucune cible, il n'en porte
+# que la forme (`deploy/cible/declaration.gabarit.json`).
 #
 # L'ordre : entrées validées et environnement protégé → (approbation) → tag sur la
 # branche principale → déclaration jugée par l'inventaire du tag → contrat d'API du tag
@@ -122,6 +124,9 @@ on:
       CIBLE_CONSOMMATEUR_CLE:
         description: "Clé de lecture seule du dépôt du consommateur, si cle"
         required: false
+      CIBLE_DECLENCHEURS:
+        description: "Logins GitHub autorisés à lancer une montée, si l'environnement n'exige aucun relecteur"
+        required: false
 
 permissions:
   contents: read
@@ -143,8 +148,11 @@ env:
 jobs:
   # Les entrées atterrissent dans un `ref:`, un nom d'environnement et des commandes :
   # validées AVANT tout usage, et jamais interpolées dans un script (passées par `env`).
-  # Puis l'environnement de la cible doit EXISTER et EXIGER un relecteur : un
-  # environnement absent serait créé à la volée par GitHub, sans protection. Appelé,
+  # Puis l'environnement de la cible doit EXISTER et être protégé : un environnement
+  # absent serait créé à la volée par GitHub, sans protection. Il exige un relecteur, ou
+  # — ses déploiements limités à des branches — la liste de ses déclencheurs, vérifiée
+  # par le premier contrôle du job `monter` (seul un job qui nomme l'environnement en lit
+  # les secrets ; `protection.sh`). Appelé,
   # c'est l'environnement du dépôt appelant, lu par SON jeton (`actions: read`, que le
   # job appelant doit accorder : un appelé ne peut qu'abaisser ses permissions).
   entrees:
@@ -153,6 +161,8 @@ jobs:
     timeout-minutes: 5
     permissions:
       actions: read
+    outputs:
+      protection: ${{ steps.protection.outputs.protection }}
     steps:
       # Avant tout geste : le nom de la cible ne s'affiche plus (chaque ligne, une entrée
       # peut en porter plusieurs), ni le dépôt appelant qui désigne son propriétaire.
@@ -176,7 +186,8 @@ jobs:
           case "$ACTION" in deployer|retour) ;; *) echo "::error::action invalide (deployer | retour) : « $ACTION »"; exit 1 ;; esac
           case "$ACCES" in tunnel|ssh) ;; *) echo "::error::acces invalide ou absent (tunnel | ssh, sans défaut) : « $ACCES »"; exit 1 ;; esac
           echo "### $ACTION $TAG → la cible ($ETAPE, accès $ACCES)" >> "$GITHUB_STEP_SUMMARY"
-      - name: L'environnement de la cible exige une approbation
+      - name: L'environnement de la cible est protégé
+        id: protection
         env:
           GH_TOKEN: ${{ github.token }}
           DEPOT: ${{ github.repository }}
@@ -184,7 +195,7 @@ jobs:
           set -euo pipefail
           git clone --quiet --depth 1 --branch "$TAG" --filter=blob:none --sparse "https://github.com/${TRONC}.git" tronc
           git -C tronc sparse-checkout set deploy/cible
-          tronc/deploy/cible/protection.sh "$DEPOT" "$CIBLE"
+          tronc/deploy/cible/protection.sh environnement "$DEPOT" "$CIBLE"
 
   # UN job derrière l'approbation : la décision couvre toute la montée demandée.
   monter:
@@ -200,13 +211,15 @@ jobs:
       CIBLE_SSH_HOTE: ${{ secrets.CIBLE_SSH_HOTE }}
       CIBLE_SSH_UTILISATEUR: ${{ secrets.CIBLE_SSH_UTILISATEUR }}
       CIBLE_SSH_KNOWN_HOSTS: ${{ secrets.CIBLE_SSH_KNOWN_HOSTS }}
+      CIBLE_DECLENCHEURS: ${{ secrets.CIBLE_DECLENCHEURS }}
     steps:
       # ── MASQUAGE, AVANT TOUT GESTE (D5) ─────────────────────────────────────────────
       # Tout ce que révèlent les secrets de la cible : chaque ligne brute de chacun, et
       # ce qu'on en tire ou en dérive — instance, projet, hôtes publics et leurs URL (dont
       # `/api/version`), valeurs du `.env` de chaque rôle (domaines, slug, marque, bucket,
       # adresses), chaque domaine qui y paraît avec ses domaines parents et son libellé,
-      # l'hôte et l'utilisateur SSH, les hôtes épinglés, le consommateur et son dépôt. Un
+      # l'hôte et l'utilisateur SSH, les hôtes épinglés, le consommateur et son dépôt,
+      # chaque login de la liste des déclencheurs. Un
       # masque couvre toute chaîne qui le contient : l'instance masque ses chemins, unités
       # et utilisateur de service ; l'hôte, ses URL. Restent lisibles les rôles (preprod,
       # prod), les booléens et les petits nombres (ports), qui ne désignent personne.
@@ -218,7 +231,8 @@ jobs:
           # jq se tait (un message d'erreur citerait la valeur) : un échec arrête tout ici.
           masques=$(jq -nr --arg cible "$CIBLE" --arg decl "$CIBLE_DECLARATION" \
               --arg conso "$CONSOMMATEUR" --arg hote "$CIBLE_SSH_HOTE" \
-              --arg utilisateur "$CIBLE_SSH_UTILISATEUR" --arg hotes "$CIBLE_SSH_KNOWN_HOSTS" '
+              --arg utilisateur "$CIBLE_SSH_UTILISATEUR" --arg hotes "$CIBLE_SSH_KNOWN_HOSTS" \
+              --arg declencheurs "$CIBLE_DECLENCHEURS" '
             def bords: gsub("^[[:space:]]+|[[:space:]]+$"; "");
             def lignes: split("\n")[] | bords | select(length > 0);
             def domaines: scan("(?:[A-Za-z0-9-]+\\.)+[A-Za-z]{2,63}")
@@ -228,7 +242,8 @@ jobs:
                         (split(",")[] | bords);
             def lu: try fromjson catch null;
             ($decl | lu) as $d | ($conso | lu) as $c
-            | [ ($cible, $decl, $conso, $hote, $utilisateur, $hotes | lignes),
+            | [ ($cible, $decl, $conso, $hote, $utilisateur, $hotes, $declencheurs | lignes),
+                ($declencheurs | splits("[,[:space:]]+")),
                 ($c | objects | .nom, .depot, (.depot | strings | split("/")[0]), .chemin),
                 ( ($hote | lignes),
                   ($hotes | lignes | split(" ")[0] | split(",")[]
@@ -254,6 +269,16 @@ jobs:
           ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0
           persist-credentials: false
+
+      # Premier contrôle : la montée a été DÉCIDÉE — approuvée par un relecteur requis, ou
+      # lancée par un déclencheur de la liste de l'environnement. `triggering_actor`, pas
+      # `actor` : relancer un run garde l'`actor` d'origine, mais c'est celui qui relance
+      # qui décide ; avec `actor`, n'importe qui pourrait relancer la montée d'un autre.
+      - name: La montée est décidée
+        env:
+          PROTECTION: ${{ needs.entrees.outputs.protection }}
+          ACTEUR: ${{ github.triggering_actor }}
+        run: deploy/cible/protection.sh declencheurs
 
       # La porte le revérifie sur la machine ; ici, on refuse avant d'avoir rien touché.
       - name: Le tag est sur la branche principale du tronc

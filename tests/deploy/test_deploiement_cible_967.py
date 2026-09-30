@@ -241,37 +241,64 @@ def test_les_messages_ne_citent_pas_la_cible(tmp_path, acces):
 
 
 # --- côté CI : protection.sh ----------------------------------------------------
+# La protection est acquise dans deux cas, et ce sont les deux seuls : (a) un relecteur
+# requis ; (b) une liste de déclencheurs (`CIBLE_DECLENCHEURS`) où figure l'acteur du
+# run. Premier temps, avant l'environnement : il existe, et dit lequel des deux cas
+# s'applique ; second temps, dans le job qui le nomme : le cas (b) est vérifié.
+_PROTECTION = DEPOT / "deploy" / "cible" / "protection.sh"
+_RELECTEUR = '{"protection_rules": [{"type": "wait_timer"}, {"type": "required_reviewers", "reviewers": [{"type": "User"}]}]}'
+_BRANCHES = '"deployment_branch_policy": {"protected_branches": false, "custom_branch_policies": true}'
+
+
 def _protection(tmp_path, reponse: str, code: int = 0):
-    import subprocess
-    from _banc_cible import DEPOT
     bin_ = tmp_path / "bin"
     bin_.mkdir()
     (tmp_path / "reponse").write_text(reponse)
     (bin_ / "gh").write_text(f'#!/bin/bash\necho "$*" > "{tmp_path}/appel"\n'
                              f'cat "{tmp_path}/reponse"\nexit {code}\n')
     (bin_ / "gh").chmod(0o755)
-    return subprocess.run(["/bin/bash", str(DEPOT / "deploy/cible/protection.sh"),
-                           "proprio/depot", "exemple"],
-                          env={"PATH": f"{bin_}:/usr/bin:/bin"},
+    return subprocess.run(["/bin/bash", str(_PROTECTION), "environnement", "proprio/depot", "exemple"],
+                          env={"PATH": f"{bin_}:/usr/bin:/bin",
+                               "GITHUB_OUTPUT": str(tmp_path / "sortie")},
                           capture_output=True, text=True, timeout=30)
 
 
+def _verdict(tmp_path) -> str:
+    return (tmp_path / "sortie").read_text()
+
+
 def test_protection_un_relecteur_requis_laisse_passer(tmp_path):
-    reponse = '{"protection_rules": [{"type": "wait_timer"}, {"type": "required_reviewers", "reviewers": [{"type": "User"}]}]}'
-    fini = _protection(tmp_path, reponse)
+    fini = _protection(tmp_path, _RELECTEUR)
     assert fini.returncode == 0 and "1 relecteur(s) requis" in fini.stdout
     assert (tmp_path / "appel").read_text().strip() == "api repos/proprio/depot/environments/exemple"
+    assert _verdict(tmp_path) == "protection=relecteurs\n"
+
+
+@pytest.mark.parametrize("regles", [
+    '"protection_rules": []',
+    '"name": "exemple"',
+    '"protection_rules": [{"type": "required_reviewers", "reviewers": []}]',
+    '"protection_rules": [{"type": "branch_policy"}]',
+])
+def test_protection_sans_relecteur_renvoie_a_la_liste(tmp_path, regles):
+    """Sans relecteur, mais déploiements limités à des branches : la liste des
+    déclencheurs sera exigée par le job qui nomme l'environnement."""
+    fini = _protection(tmp_path, f"{{{regles}, {_BRANCHES}}}")
+    assert fini.returncode == 0, fini.stdout
+    assert "CIBLE_DECLENCHEURS" in fini.stdout
+    assert _verdict(tmp_path) == "protection=declencheurs\n"
 
 
 @pytest.mark.parametrize("reponse", [
     '{"protection_rules": []}',
-    '{"name": "exemple"}',
-    '{"protection_rules": [{"type": "required_reviewers", "reviewers": []}]}',
-    '{"protection_rules": [{"type": "branch_policy"}]}',
+    '{"protection_rules": [], "deployment_branch_policy": null}',
 ])
-def test_protection_sans_relecteur_refuse(tmp_path, reponse):
+def test_protection_sans_relecteur_ni_branches_refuse(tmp_path, reponse):
+    """Sans branches limitées, n'importe quel job d'une branche nommant l'environnement
+    en lirait les secrets : une liste de déclencheurs n'y protégerait rien."""
     fini = _protection(tmp_path, reponse)
-    assert fini.returncode == 1 and "n'exige aucun relecteur" in fini.stdout
+    assert fini.returncode == 1 and "Cible sans protection" in fini.stdout
+    assert not (tmp_path / "sortie").exists()
 
 
 def test_protection_environnement_absent_refuse(tmp_path):
@@ -280,10 +307,71 @@ def test_protection_environnement_absent_refuse(tmp_path):
     assert "actions: read" in fini.stdout
 
 
-def test_protection_un_depot_mal_forme_refuse(tmp_path):
+def test_protection_un_depot_mal_forme_refuse():
     """Le dépôt du run est vérifié avant d'être mis dans une URL d'API."""
-    fini = subprocess.run(["/bin/bash", str(DEPOT / "deploy/cible/protection.sh"),
+    fini = subprocess.run(["/bin/bash", str(_PROTECTION), "environnement",
                            "proprio/depot/../autre", "exemple"],
                           env={"PATH": "/usr/bin:/bin"}, capture_output=True, text=True,
                           timeout=30)
     assert fini.returncode == 1 and "owner/repo" in fini.stdout
+
+
+def _declencheurs(tmp_path, **env):
+    # le répertoire courant porte des fichiers : une liste « * » étendue les verrait
+    (tmp_path / "alice-exemple").write_text("")
+    return subprocess.run(["/bin/bash", str(_PROTECTION), "declencheurs"],
+                          env={"PATH": "/usr/bin:/bin", **env}, cwd=tmp_path,
+                          capture_output=True, text=True, timeout=30)
+
+
+def test_declencheurs_un_relecteur_a_deja_decide(tmp_path):
+    fini = _declencheurs(tmp_path, PROTECTION="relecteurs", ACTEUR="quiconque")
+    assert fini.returncode == 0 and "relecteur requis" in fini.stdout
+
+
+@pytest.mark.parametrize("liste", [
+    "alice-exemple", "bob-exemple,alice-exemple", "bob-exemple, alice-exemple",
+    "bob-exemple alice-exemple", "bob-exemple\nalice-exemple\n",
+])
+def test_declencheurs_l_acteur_de_la_liste_passe(tmp_path, liste):
+    fini = _declencheurs(tmp_path, PROTECTION="declencheurs", ACTEUR="alice-exemple",
+                         CIBLE_DECLENCHEURS=liste)
+    assert fini.returncode == 0, fini.stdout
+    assert "déclencheur autorisé" in fini.stdout and "alice" not in fini.stdout
+
+
+@pytest.mark.parametrize("acteur", ["carol-exemple", "Alice-exemple", "alice"])
+def test_declencheurs_l_acteur_hors_liste_est_refuse_et_nomme(tmp_path, acteur):
+    """Hors liste, ou à une autre casse : refus, qui nomme l'acteur — pas la liste."""
+    fini = _declencheurs(tmp_path, PROTECTION="declencheurs", ACTEUR=acteur,
+                         CIBLE_DECLENCHEURS="alice-exemple,bob-exemple")
+    assert fini.returncode == 1
+    assert "Déclencheur non autorisé" in fini.stdout and f"« {acteur} »" in fini.stdout
+    assert "bob" not in fini.stdout
+
+
+@pytest.mark.parametrize("liste", [None, "", " ", ",", " ,\n "])
+def test_declencheurs_liste_vide_ou_absente_refuse(tmp_path, liste):
+    env = {"PROTECTION": "declencheurs", "ACTEUR": "alice-exemple"}
+    if liste is not None:
+        env["CIBLE_DECLENCHEURS"] = liste
+    fini = _declencheurs(tmp_path, **env)
+    assert fini.returncode == 1 and "Cible sans protection" in fini.stdout
+
+
+@pytest.mark.parametrize("liste", ["*", "alice-exemple;bob", "@alice-exemple"])
+def test_declencheurs_liste_illisible_refuse(tmp_path, liste):
+    fini = _declencheurs(tmp_path, PROTECTION="declencheurs", ACTEUR="alice-exemple",
+                         CIBLE_DECLENCHEURS=liste)
+    assert fini.returncode == 1 and "illisible" in fini.stdout
+
+
+@pytest.mark.parametrize("env, titre", [
+    ({}, "Protection non établie"),
+    ({"PROTECTION": ""}, "Protection non établie"),
+    ({"PROTECTION": "autre"}, "Protection non établie"),
+    ({"PROTECTION": "declencheurs", "ACTEUR": ""}, "Déclencheur inconnu"),
+])
+def test_declencheurs_sans_verdict_ni_acteur_refuse(tmp_path, env, titre):
+    fini = _declencheurs(tmp_path, CIBLE_DECLENCHEURS="alice-exemple", **env)
+    assert fini.returncode == 1 and titre in fini.stdout

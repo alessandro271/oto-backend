@@ -126,10 +126,14 @@ Dans les deux cas, le code exécuté vient du **tronc au tag demandé** (checkou
 
 1. **Entrées** validées avant tout usage (elles finissent dans un `ref:` et un nom
    d'environnement ; appelé, rien ne les borne d'avance), puis **l'environnement de la
-   cible doit exister et exiger un relecteur** (`deploy/cible/protection.sh`, par l'API
-   de GitHub, dans le dépôt du run — le dépôt appelant quand il y en a un) : sinon, refus.
-2. **Approbation** par le relecteur requis — un seul job derrière elle, qui porte toute
-   la montée demandée : une montée, une décision.
+   cible doit exister et être protégé** (`deploy/cible/protection.sh`, par l'API de
+   GitHub, dans le dépôt du run — le dépôt appelant quand il y en a un) : il exige un
+   relecteur, ou ses déploiements sont limités à des branches et il déclare ses
+   déclencheurs (§ Sans relecteurs requis) ; sinon, refus.
+2. **La décision** : l'approbation du relecteur requis, ou — premier contrôle du job qui
+   nomme l'environnement, seul à en lire les secrets — l'acteur du run figure dans la
+   liste des déclencheurs. Un seul job derrière elle, qui porte toute la montée
+   demandée : une montée, une décision.
 3. **Le tag est sur la branche principale du tronc** (la porte le revérifie sur la
    machine).
 4. **La déclaration** est jugée par l'inventaire du tag.
@@ -244,6 +248,7 @@ cible (§ Le déclencheur) — au nom de la cible (le nom ne s'écrit que là, e
 | `CIBLE_CF_ACCESS_CLIENT_ID` | secret, accès `tunnel` | le jeton de service Access (identifiant) |
 | `CIBLE_CF_ACCESS_CLIENT_SECRET` | secret, accès `tunnel` | le jeton de service Access (secret) |
 | `CIBLE_CONSOMMATEUR_CLE` | secret, si `cle` | clé de lecture seule du dépôt du consommateur |
+| `CIBLE_DECLENCHEURS` | secret, sans relecteur requis | les logins GitHub autorisés à lancer une montée, séparés par des virgules ou des espaces, à la casse exacte (§ Sans relecteurs requis) |
 
 **Tout en secret, aucune variable** : l'environnement ne porte AUCUNE variable
 (`vars.`). Ce dépôt est public, les journaux de ses runs aussi, et ils ne montrent
@@ -259,10 +264,12 @@ est public par nature (entrée `cible`, page des déploiements du dépôt) : le 
 neutre.
 
 **Protection de l'environnement — obligatoire** : dans ses réglages, « Required
-reviewers » avec au moins un relecteur (celui qui décide des montées), et les branches de
-déploiement limitées à la branche par défaut du dépôt qui déclenche (celle d'où l'on lance le workflow). Le workflow le vérifie à chaque montée et
-refuse de partir sans relecteur requis — y compris quand l'environnement n'existe pas
-encore, que GitHub créerait sinon à la volée, sans protection.
+reviewers » avec au moins un relecteur (celui qui décide des montées) — ou, là où GitHub
+ne les offre pas (dépôt privé sans Enterprise), la liste `CIBLE_DECLENCHEURS` (§ Sans
+relecteurs requis) — et les branches de déploiement limitées à la branche par défaut du
+dépôt qui déclenche (celle d'où l'on lance le workflow). Le workflow le vérifie à chaque
+montée et refuse de partir sans l'un ni l'autre — y compris quand l'environnement
+n'existe pas encore, que GitHub créerait sinon à la volée, sans protection.
 
 ### 5. Monter
 
@@ -286,7 +293,8 @@ Ce dépôt est public, les journaux de ses runs aussi. Le **déclencheur** des m
 cible vit donc dans le dépôt **privé** de son propriétaire : un workflow d'une dizaine de
 lignes qui appelle celui-ci (`workflow_call`). Appelé, `github.repository`,
 `github.token` et `environment:` sont ceux du dépôt appelant : c'est **son** environnement
-qui est vérifié (`protection.sh`) puis approuvé, **ses** secrets d'environnement qui sont
+qui est vérifié (`protection.sh`) puis approuvé — ou dont la liste des
+déclencheurs est consultée —, **ses** secrets d'environnement qui sont
 lus, **ses** journaux qui gardent la trace. Le code exécuté, lui, vient toujours du tronc,
 au tag demandé.
 
@@ -315,7 +323,7 @@ on:
 jobs:
   monter:
     # Le plafond du jeton : l'appelé ne peut que l'abaisser. `actions: read` lit
-    # l'environnement pour vérifier qu'il exige un relecteur ; sans lui, refus.
+    # l'environnement pour vérifier sa protection ; sans lui, refus.
     permissions:
       contents: read
       actions: read
@@ -349,15 +357,35 @@ jobs:
 | Où | Quoi |
 |---|---|
 | Réglages → Actions → General | autoriser les workflows réutilisables de `otomata-tech/oto-backend` (si la politique restreint les actions et workflows tiers) |
-| Réglages → Environments → `<environnement>` | **Required reviewers** (au moins un, celui qui décide des montées) ; branches de déploiement : la branche par défaut |
-| Environnement, secrets (jamais de variables) | `CIBLE_DECLARATION`, `CIBLE_SSH_HOTE`, `CIBLE_SSH_UTILISATEUR`, `CIBLE_SSH_KNOWN_HOSTS`, `CIBLE_SSH_CLE` ; en accès `tunnel` : `CIBLE_CF_ACCESS_CLIENT_ID`, `CIBLE_CF_ACCESS_CLIENT_SECRET` ; facultatifs : `CIBLE_CONSOMMATEUR`, `CIBLE_CONSOMMATEUR_CLE` (§ 4) |
+| Réglages → Environments → `<environnement>` | branches de déploiement : **la branche par défaut** (exigé) ; **Required reviewers** si l'offre les donne, sinon la liste des déclencheurs (ci-dessous) |
+| Environnement, secrets (jamais de variables) | `CIBLE_DECLARATION`, `CIBLE_SSH_HOTE`, `CIBLE_SSH_UTILISATEUR`, `CIBLE_SSH_KNOWN_HOSTS`, `CIBLE_SSH_CLE` ; sans relecteur requis : `CIBLE_DECLENCHEURS` ; en accès `tunnel` : `CIBLE_CF_ACCESS_CLIENT_ID`, `CIBLE_CF_ACCESS_CLIENT_SECRET` ; facultatifs : `CIBLE_CONSOMMATEUR`, `CIBLE_CONSOMMATEUR_CLE` (§ 4) |
+| Réglages → Branches | la branche par défaut protégée (fusion par relecture) : qui peut y écrire peut changer le déclencheur |
 | Job appelant | `permissions: {contents: read, actions: read}` — le `GITHUB_TOKEN` suffit, aucun jeton dédié |
 
-⚠️ **Offre GitHub du propriétaire.** Sur un dépôt **privé**, GitHub ne donne les
-environnements et leurs secrets qu'aux offres Pro, Team ou Enterprise, et les **relecteurs
-requis qu'à Enterprise**. Sans eux, `protection.sh` refuse chaque montée — c'est voulu :
-une montée qui n'attendrait personne ne part pas. Le vérifier avant de poser le
-déclencheur.
+### Sans relecteurs requis : la liste des déclencheurs
+
+Sur un dépôt **privé**, GitHub donne les environnements et leurs secrets aux offres Pro,
+Team et Enterprise, mais les **relecteurs requis qu'à Enterprise**. En offre Team, la
+décision n'est donc pas une approbation : **lancer vaut décider**. L'environnement
+déclare qui peut lancer — le secret `CIBLE_DECLENCHEURS`, des logins GitHub séparés par
+des virgules ou des espaces, à la **casse exacte** — et le workflow vérifie, en premier
+contrôle du job qui nomme l'environnement, que l'acteur du run y figure.
+
+- **L'acteur est `github.triggering_actor`**, pas `github.actor` : relancer un run garde
+  l'`actor` d'origine, mais c'est celui qui relance qui décide. Avec `actor`, quiconque
+  peut relancer un run pourrait rejouer la montée décidée par un autre.
+- **Refus nommés, jamais de repli** : ni relecteur ni liste (une liste vide vaut une
+  absence), acteur absent de la liste (il est nommé ; la liste, jamais), liste illisible.
+- **Les branches de déploiement doivent être limitées** (la branche par défaut) : sans
+  cela, n'importe quel job d'une autre branche nommant l'environnement en lirait les
+  secrets, liste ou pas. `protection.sh` refuse un environnement sans relecteur dont les
+  déploiements ne sont pas limités à des branches.
+- **Ce que la liste ne protège pas** : qui peut écrire sur la branche par défaut du dépôt
+  peut changer le workflow appelant, donc ce qui s'exécute avec les secrets de
+  l'environnement. La liste désigne qui décide d'une montée ; la protection de la branche
+  par défaut désigne qui peut changer la manière de monter. Les deux se tiennent.
+- La liste est masquée dans les journaux (D5), login par login.
+- Relecteur requis **et** liste : le relecteur suffit, la liste n'est pas consultée.
 
 ### En attendant le tunnel : l'accès `ssh`
 
