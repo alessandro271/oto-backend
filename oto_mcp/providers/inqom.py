@@ -13,10 +13,12 @@ from ._model import CredentialField, _c
 # pratique un compte système non nominatif du cabinet) → modèle générique
 # multi-champs (ADR 0011). PAS keyed : byo-only, le credential EST le grant. Hôte
 # fixe (api.inqom.com) : aucun champ ne désigne une destination, pas de garde
-# d'egress à poser. Hors socle → installable à la demande.
+# d'egress à poser. Hors socle → installable à la demande. LECTURE SEULE : aucune
+# écriture n'est câblée (30/09/2026, comme payfit) — `inqom_entry_create` rend
+# `inqom_write_not_wired` (cf. `tools/ecriture_non_cablee.py`).
 CONNECTOR = _c(
     "inqom", ["inqom"], auth_modes={"byo_user", "byo_org"}, secret_kind="fields",
-    label="Inqom", help="compta FR — dossiers, plan comptable, balance, écritures",
+    label="Inqom", help="compta FR, en lecture : dossiers, plan comptable, balance, écritures",
     href="https://www.inqom.com", credential_fields=(
         CredentialField(
             "client_id", "Client ID", secret=True,
@@ -41,7 +43,7 @@ LOGO_DOMAIN = "inqom.com"
 DESCRIPTION = (
     "La production comptable d'un cabinet ou d'une PME dans Inqom : dossiers, "
     "exercices, plan comptable et comptes de tiers, journaux, balance, lignes "
-    "d'écriture et pièces, plus la saisie d'écritures avec aperçu préalable. "
-    "Clés d'application fournies par Inqom et compte Inqom dédié : ce compte "
-    "borne ce qui est visible."
+    "d'écriture et pièces. En lecture seulement : le connecteur n'écrit jamais "
+    "dans Inqom. Clés d'application fournies par Inqom et compte Inqom dédié : ce "
+    "compte borne ce qui est visible."
 )

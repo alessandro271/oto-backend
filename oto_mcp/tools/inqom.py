@@ -1,4 +1,5 @@
-"""Inqom — production comptable FR : dossiers, référentiels, balance, écritures, pièces.
+"""Inqom — production comptable FR, en LECTURE SEULE : dossiers, référentiels, balance,
+écritures, pièces.
 
 Credential = clés d'application (`client_id`/`client_secret`) + identifiants du
 compte Inqom au nom duquel le jeton agit (`username`/`password`), résolus par
@@ -11,21 +12,20 @@ les droits de ce compte : ce qu'il ne voit pas, aucun outil ne le voit.
 - `inqom_ref` (kind=accounts|journals|periods) — référentiels d'un dossier ;
 - `inqom_balance` — balance sur une période ;
 - `inqom_entry_line` (list/count) — lignes d'écriture paginées ;
-- `inqom_entry_create` — ÉCRITURE, laissée seule : ses paramètres (`entries`,
-  `dry_run`) sont disjoints de ceux de la lecture, et le nom porte le geste ;
+- `inqom_entry_create` — l'écriture NON CÂBLÉE : il rend le refus nommé
+  `inqom_write_not_wired`, qui décrit les écritures qu'il aurait créées ;
 - `inqom_document` — l'URL de téléchargement d'une pièce.
 
-⚠️ **L'écriture comptable n'a pas de brouillon côté Inqom** : l'endpoint pose
-immédiatement. D'où `dry_run=True` PAR DÉFAUT sur `inqom_entry_create` — l'aperçu
-contrôle la forme et l'équilibre de chaque écriture et confronte ses journaux à
-ceux du dossier, sans rien poser.
+**Aucune écriture n'est câblée** (décision du 30/09/2026, même traitement que PayFit) :
+`inqom_entry_create` ne résout pas la clé, ne construit pas le client et n'appelle
+jamais Inqom, quel que soit l'argument — `ecriture_non_cablee.refus`. L'écriture
+comptable se fait dans Inqom même.
 
 Hôte fixe (`api.inqom.com`) : aucun champ du credential ne désigne une
 destination, donc pas de garde d'egress (`oto_mcp/egress.py`) à poser ici.
 """
 from __future__ import annotations
 
-import re
 from decimal import Decimal, InvalidOperation
 from typing import Literal, Optional
 
@@ -35,10 +35,12 @@ from mcp.types import ErrorData, INVALID_PARAMS
 from .. import access, output_projection
 from ..connectors import verify as connector_verify
 from ..mcp_errors import McpError
+from . import ecriture_non_cablee
 
+_NAME = "inqom"
 _CHAMPS = ("client_id", "client_secret", "username", "password")
-_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_ENTRIES_MAX = 100
+# Écritures décrites dans le refus : au-delà, un compte. Le refus est journalisé.
+_DECRITES_MAX = 20
 
 
 def _bad(msg: str) -> McpError:
@@ -102,57 +104,39 @@ def _verify(fields: dict, config: dict | None = None) -> None:
         raise RuntimeError(f"Inqom HTTP {e.status_code}: {e.body}")
 
 
-def _montant(value, where: str) -> Decimal:
-    try:
-        d = Decimal(str(value))
-    except (InvalidOperation, ValueError):
-        raise _bad(f"{where} : montant illisible {value!r}")
-    if d < 0:
-        raise _bad(f"{where} : montant négatif {value!r} — porter le sens par DebitAmount/CreditAmount")
-    return d
+def _total(lines: list, sens: str) -> Optional[str]:
+    """Somme des montants `sens` (DebitAmount|CreditAmount) des lignes, ou None si un
+    montant est illisible : la description ne refuse rien, elle décrit ce qui se lit."""
+    total = Decimal(0)
+    for ln in lines:
+        v = ln.get(sens) if isinstance(ln, dict) else None
+        if v is None:
+            continue
+        try:
+            total += Decimal(str(v))
+        except (InvalidOperation, ValueError):
+            return None
+    return str(total)
 
 
-def _controle_entries(entries) -> list[dict]:
-    """Forme et équilibre de chaque écriture, AVANT tout appel. Rend un résumé
-    par écriture (journal, date, lignes, totaux)."""
-    if not isinstance(entries, list) or not entries:
-        raise _bad("entries : une liste non vide d'écritures est requise")
-    if len(entries) > _ENTRIES_MAX:
-        raise _bad(f"entries : {_ENTRIES_MAX} écritures au plus par appel ({len(entries)} reçues)")
-    resume = []
-    for i, e in enumerate(entries):
-        w = f"entries[{i}]"
+def _ecritures_decrites(entries) -> list[dict]:
+    """Ce que chaque écriture aurait posé : journal, date, référence, nombre de lignes
+    et totaux. Tolérant — le refus ne dépend pas de la forme des arguments. Les
+    libellés et comptes des lignes n'y figurent pas : le refus est journalisé."""
+    if not isinstance(entries, list):
+        return []
+    out = []
+    for e in entries[:_DECRITES_MAX]:
         if not isinstance(e, dict):
-            raise _bad(f"{w} : objet attendu")
-        if e.get("JournalId") is None:
-            raise _bad(f"{w} : JournalId requis")
-        if not isinstance(e.get("Date"), str) or not _DATE.match(e["Date"]):
-            raise _bad(f"{w} : Date requise au format yyyy-MM-dd")
-        lines = e.get("Lines")
-        if not isinstance(lines, list) or len(lines) < 2:
-            raise _bad(f"{w} : Lines doit compter au moins deux lignes")
-        debit = credit = Decimal(0)
-        for j, ln in enumerate(lines):
-            wl = f"{w}.Lines[{j}]"
-            if not isinstance(ln, dict):
-                raise _bad(f"{wl} : objet attendu")
-            for req in ("AccountNumber", "Label", "Currency"):
-                if not ln.get(req):
-                    raise _bad(f"{wl} : {req} requis")
-            d, c = ln.get("DebitAmount"), ln.get("CreditAmount")
-            if (d is None) == (c is None):
-                raise _bad(f"{wl} : exactement un de DebitAmount / CreditAmount")
-            if d is not None:
-                debit += _montant(d, wl)
-            else:
-                credit += _montant(c, wl)
-        if debit != credit:
-            raise _bad(f"{w} : écriture déséquilibrée — débit {debit} ≠ crédit {credit} "
-                       f"(écart {debit - credit}) ; rien n'est posé")
-        resume.append({"index": i, "JournalId": e["JournalId"], "Date": e["Date"],
-                       "EntryRef": e.get("EntryRef"), "lines": len(lines),
-                       "total_debit": str(debit), "total_credit": str(credit)})
-    return resume
+            continue
+        lines = e.get("Lines") if isinstance(e.get("Lines"), list) else []
+        out.append({k: v for k, v in {
+            "JournalId": e.get("JournalId"), "Date": e.get("Date"),
+            "EntryRef": e.get("EntryRef"), "lignes": len(lines),
+            "total_debit": _total(lines, "DebitAmount"),
+            "total_credit": _total(lines, "CreditAmount"),
+        }.items() if v is not None})
+    return out
 
 
 def register(mcp: FastMCP) -> None:
@@ -327,48 +311,28 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def inqom_entry_create(
-        dossier_id: int,
-        entries: list[dict],
-        dry_run: bool = True,
+        dossier_id: Optional[int] = None,
+        entries: Optional[list[dict]] = None,
     ) -> dict:
-        """⚠️ WRITES accounting entries into an Inqom dossier. Inqom posts them
-        at once — there is no draft state.
-
-        **dry_run is True by default**: nothing is posted; the tool checks each
-        entry (required fields, dates, one amount per line, debits = credits),
-        compares its `JournalId` with the dossier's journals, and returns the
-        summary. Show it to the human — journal, date, every line with account
-        and amount — and post only on their go, with `dry_run=False`. An
-        unbalanced or malformed entry is refused in both modes.
+        """Creating accounting entries in Inqom is NOT wired: this connector is
+        read-only. The call never reaches Inqom — nothing is posted, whatever the
+        arguments — and answers the named refusal `inqom_write_not_wired`, saying
+        which entries it would have created (journal, date, reference, line count,
+        totals). Entries are posted in Inqom itself.
 
         Args:
-            dossier_id: the dossier.
-            entries: 1-100 entries, each `{"JournalId": int, "Date": "yyyy-MM-dd",
-                "Lines": [{"AccountNumber": "606100", "Label": "...",
-                "Currency": "EUR", "DebitAmount": 120.5}, {... "CreditAmount": 120.5}],
-                "EntryRef"?: str, "ExternalId"?: str,
-                "Document"?: {"Reference"?: str, "Date": "yyyy-MM-dd"},
-                "DueDate"?: "yyyy-MM-dd"}`. Journal ids come from
-                `inqom_ref(kind="journals")`, account numbers from
-                `inqom_ref(kind="accounts")`.
-            dry_run: default True = check and preview only. False posts.
+            dossier_id: the dossier the entries were meant for.
+            entries: the entries that would have been created, each
+                `{"JournalId": int, "Date": "yyyy-MM-dd", "Lines": [...],
+                "EntryRef"?: str}`.
         """
-        resume = _controle_entries(entries)
-        client = _client()
-        if dry_run:
-            journaux = _run(lambda: client.list_journals(dossier_id))
-            connus = {j.get("Id") for j in journaux if isinstance(j, dict)}
-            avert = [f"entries[{r['index']}] : JournalId {r['JournalId']} absent des "
-                     "journaux du dossier — l'appel réel serait refusé"
-                     for r in resume if r["JournalId"] not in connus]
-            return {
-                "dry_run": True, "dossier_id": dossier_id, "entries": resume,
-                "warnings": avert,
-                "note": (f"Rien n'est posé. dry_run=False pose {len(resume)} écriture(s) "
-                         "immédiatement, sans brouillon."),
-            }
-        inserted = _run(lambda: client.create_entries(dossier_id, entries))
-        return {"dry_run": False, "dossier_id": dossier_id, "inserted": inserted}
+        decrites = _ecritures_decrites(entries)
+        n = len(entries) if isinstance(entries, list) else 0
+        raise ecriture_non_cablee.refus(
+            _NAME, "Inqom", "create",
+            f"créé {n} écriture(s) comptable(s)"
+            + (f" dans le dossier {dossier_id}" if dossier_id is not None else ""),
+            ecritures=decrites, ecritures_non_decrites=(n - len(decrites)) or None)
 
     @mcp.tool()
     def inqom_document(dossier_id: int, document_id: int) -> dict:

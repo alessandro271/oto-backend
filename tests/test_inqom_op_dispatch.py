@@ -2,9 +2,9 @@
 
 Ce que ce fichier verrouille :
 - la SURFACE (7 tools) et le routage de chaque op vers la bonne méthode du client ;
-- aucun défaut n'écrit : `inqom_entry_create` est en `dry_run=True` par défaut et
-  n'atteint jamais `create_entries` sans `dry_run=False` ;
-- une écriture mal formée ou déséquilibrée est refusée AVANT tout appel ;
+- AUCUNE écriture n'est câblée (30/09/2026) : `inqom_entry_create` rend le refus
+  nommé `inqom_write_not_wired`, qui décrit les écritures, sans résoudre la clé, sans
+  construire le client ni appeler Inqom — quels que soient les arguments ;
 - un argument hors op est refusé même quand il vaut `False`/`0` (`is not None`) ;
 - un champ de credential vide est refusé avant de construire le client (il
   retomberait sinon sur la résolution de secrets locale) — dans l'outil ET la sonde ;
@@ -136,47 +136,69 @@ def test_ref_refuse_les_filtres_de_comptes_hors_accounts(client):
     client.list_journals.assert_not_called()
 
 
-# --- l'écriture -------------------------------------------------------------------
+# --- l'écriture : NON CÂBLÉE -------------------------------------------------------
 
-def test_entry_create_par_defaut_ne_pose_rien(client):
-    client.list_journals.return_value = [{"Id": 3, "Name": "ACH"}]
-    out = _tool("inqom_entry_create")(dossier_id=12, entries=[_entry()])
-    assert out["dry_run"] is True and out["warnings"] == []
-    assert out["entries"][0]["total_debit"] == "120.50"
-    client.create_entries.assert_not_called()
+@pytest.fixture
+def rien_ne_part(construits, monkeypatch):
+    """Ni clé résolue ni client construit : un appel à l'un ou l'autre échoue."""
+    def interdit(provider):
+        raise AssertionError("la clé ne doit pas être résolue pour une écriture")
 
-
-def test_entry_create_dry_run_signale_un_journal_inconnu(client):
-    client.list_journals.return_value = [{"Id": 3}]
-    out = _tool("inqom_entry_create")(dossier_id=12, entries=[_entry(journal=99)])
-    assert "JournalId 99" in out["warnings"][0]
-    client.create_entries.assert_not_called()
+    monkeypatch.setattr("oto_mcp.access.resolve_credential_fields", interdit)
+    return construits
 
 
-def test_entry_create_pose_seulement_avec_dry_run_false(client):
-    client.create_entries.return_value = [{"Id": 1}]
-    out = _tool("inqom_entry_create")(dossier_id=12, entries=[_entry()], dry_run=False)
-    client.create_entries.assert_called_once_with(12, [_entry()])
-    assert out == {"dry_run": False, "dossier_id": 12, "inserted": [{"Id": 1}]}
+def _refus(**kwargs):
+    with pytest.raises(McpError) as exc:
+        _tool("inqom_entry_create")(**kwargs)
+    return exc.value.error
 
 
-@pytest.mark.parametrize("dry_run", [True, False])
-@pytest.mark.parametrize("entries,fragment", [
-    ([], "liste non vide"),
-    ([_entry(debit="100", credit="99.99")], "déséquilibrée"),
-    ([{**_entry(), "Date": "15/01/2026"}], "Date requise"),
-    ([{**_entry(), "JournalId": None}], "JournalId requis"),
-    ([{**_entry(), "Lines": [_entry()["Lines"][0]]}], "au moins deux lignes"),
-    ([{**_entry(), "Lines": [{**_entry()["Lines"][0], "CreditAmount": "1"},
-                             _entry()["Lines"][1]]}], "exactement un"),
-    ([_entry(debit="-5", credit="-5")], "négatif"),
+def test_entry_create_ne_part_jamais_et_decrit_les_ecritures(rien_ne_part):
+    err = _refus(dossier_id=12, entries=[_entry(), {**_entry(journal=4), "EntryRef": "F-7"}])
+    assert err.data["code"] == "inqom_write_not_wired"
+    assert err.data["retryable"] is False and err.data["op"] == "create"
+    assert "cela aurait créé 2 écriture(s) comptable(s) dans le dossier 12" in err.message
+    assert "rien n'a été envoyé à Inqom" in err.message
+    assert err.data["would_have"]["ecritures"] == [
+        {"JournalId": 3, "Date": "2026-01-15", "lignes": 2,
+         "total_debit": "120.50", "total_credit": "120.50"},
+        {"JournalId": 4, "Date": "2026-01-15", "EntryRef": "F-7", "lignes": 2,
+         "total_debit": "120.50", "total_credit": "120.50"}]
+    assert rien_ne_part[1] == []
+    rien_ne_part[0].create_entries.assert_not_called()
+
+
+@pytest.mark.parametrize("kwargs", [
+    {},
+    {"dossier_id": 12, "entries": []},
+    {"dossier_id": 12, "entries": [_entry(debit="100", credit="99.99")]},
+    {"dossier_id": 12, "entries": [{"Date": "15/01/2026"}, "pas un objet"]},
+    {"dossier_id": 12, "entries": [_entry(debit="n/a")]},
 ])
-def test_une_ecriture_invalide_est_refusee_avant_tout_appel(client, construits, dry_run,
-                                                            entries, fragment):
-    with pytest.raises(McpError, match=fragment):
-        _tool("inqom_entry_create")(dossier_id=12, entries=entries, dry_run=dry_run)
-    client.create_entries.assert_not_called()
-    client.list_journals.assert_not_called()
+def test_le_refus_ne_depend_pas_des_arguments(rien_ne_part, kwargs):
+    err = _refus(**kwargs)
+    assert err.data["code"] == "inqom_write_not_wired"
+    assert rien_ne_part[1] == []
+    rien_ne_part[0].create_entries.assert_not_called()
+
+
+def test_le_refus_ne_recopie_ni_libelles_ni_comptes(rien_ne_part):
+    """Le refus est journalisé : il ne porte que journal, date, référence et totaux."""
+    err = _refus(dossier_id=12, entries=[_entry()])
+    assert "606100" not in err.message and "achat" not in err.message
+    assert "606100" not in repr(err.data)
+
+
+def test_au_dela_de_vingt_ecritures_le_reste_se_compte(rien_ne_part):
+    err = _refus(dossier_id=12, entries=[_entry()] * 25)
+    assert len(err.data["would_have"]["ecritures"]) == 20
+    assert err.data["would_have"]["ecritures_non_decrites"] == 5
+
+
+def test_entry_create_n_a_plus_de_dry_run():
+    schema = asyncio.run(_mcp().get_tool("inqom_entry_create")).parameters
+    assert "dry_run" not in schema.get("properties", {})
 
 
 # --- credential vide ----------------------------------------------------------------

@@ -25,6 +25,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 from .. import access
 from ..connectors import verify as connector_verify
 from ..mcp_errors import McpError
+from . import ecriture_non_cablee
 
 if TYPE_CHECKING:
     from oto.tools.payfit import PayfitClient
@@ -89,34 +90,17 @@ def refuse_unknown_op(op: str, *allowed: str) -> McpError:
 # Écriture : NON CÂBLÉE, jamais (décision du 24/09/2026)
 # ---------------------------------------------------------------------------
 
-WRITE_NOT_WIRED = "payfit_write_not_wired"
-
-
 def not_wired(op: str, action: str, **what: Any) -> McpError:
     """Le refus de TOUTE écriture PayFit : rien n'est envoyé, quel que soit l'argument.
     La capacité d'écrire n'existe pas dans le connecteur tant qu'on ne la décide pas —
     pas d'interrupteur d'org, pas d'activation par un org_admin. Ni la clé ni le
-    client ne sont touchés : le refus ne dépend de rien.
-
-    Une ERREUR, pas un résultat : un `{"sent": false}` se lit trop vite comme un
-    succès, et un agent qui croit avoir mis quelqu'un en paie est pire qu'un agent
-    refusé. Même forme que les autres refus nommés (`connector_disabled`) : le code
-    dans le message ET dans `data`, `retryable: False`.
+    client ne sont touchés : le refus ne dépend de rien. Forme commune aux connecteurs
+    en lecture seule : `ecriture_non_cablee.refus`.
 
     `what` décrit l'action à l'agent. L'appelant n'y met que des identifiants, des
     dates et des libellés — jamais une valeur masquée par défaut (NIR, IBAN, motif
     d'absence), qui finirait dans le journal des appels."""
-    decrit = {k: v for k, v in what.items() if v is not None and v != "" and v != []}
-    detail = ", ".join(f"{k}={v!r}" for k, v in decrit.items())
-    return McpError(ErrorData(
-        code=INVALID_PARAMS,
-        message=(f"Refus `{WRITE_NOT_WIRED}` : cela aurait {action}"
-                 f"{f' ({detail})' if detail else ''} — mais le connecteur ne câble "
-                 "pas l'API PayFit en écriture : rien n'a été envoyé à PayFit. Ce "
-                 "connecteur ne fait que lire ; l'écriture se fait dans PayFit même."),
-        data={"code": WRITE_NOT_WIRED, "retryable": False, "op": op,
-              "would_have": decrit},
-    ))
+    return ecriture_non_cablee.refus(_NAME, "PayFit", op, action, **what)
 
 
 # ---------------------------------------------------------------------------
