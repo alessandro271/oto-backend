@@ -144,6 +144,28 @@ def test_a_lot_larger_than_what_remains_is_refused_before_the_call(
     assert "propre clé" in msg
 
 
+def test_a_lot_larger_than_the_WHOLE_quota_is_refused_by_its_name(
+        _platform_only, monkeypatch):
+    """À zéro utilisé, un lot de 30 sur un quota de 20 ne passera JAMAIS : le refus
+    le dit, avec la taille qui passe, et un code — pas « réduis le lot » sans chiffre."""
+    with pytest.raises(McpError) as e:
+        _resolve_with(monkeypatch, used=0, units=30)
+    msg = str(e.value)
+    assert "ce lot (30) dépasse le quota TOTAL" in msg
+    assert "(20/jour)" in msg
+    assert "même à zéro utilisé" in msg
+    assert "lots de ≤ 20" in msg
+    assert "propre clé" in msg
+    assert e.value.error.data["code"] == "platform_quota_lot_trop_grand"
+
+
+def test_a_lot_over_what_remains_carries_its_code(_platform_only, monkeypatch):
+    with pytest.raises(McpError) as e:
+        _resolve_with(monkeypatch, used=19, units=10)
+    assert e.value.error.data == {"code": "platform_quota_lot_depasse_le_reste",
+                                  "units": 10, "limit": 20, "used": 19}
+
+
 def test_a_lot_that_exactly_fits_is_accepted(_platform_only, monkeypatch):
     assert _resolve_with(monkeypatch, used=10, units=10).is_platform is True
 

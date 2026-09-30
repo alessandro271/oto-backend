@@ -387,16 +387,8 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
         # Un lot débite `units` d'un coup APRÈS l'appel : vérifié à `used >= limit`
         # seul, il passerait avec une unité restante et dépasserait le quota de la
         # clé commune de `units - 1` (oto#168).
-        raise McpError(ErrorData(
-            code=INVALID_PARAMS,
-            message=(
-                f"Quota plateforme {provider} : il reste {limit - used} unité(s) "
-                f"aujourd'hui ({used}/{limit}) sur la clé `{win.payload['label']}`, "
-                f"ce lot en demande {units} — réduis le lot, ou pose ta propre "
-                f"clé{links.ou_poser_la_cle(sub, org=active_org)} pour "
-                "lever la limite."
-            ),
-        ))
+        raise quotas.refus_lot(provider, win.payload["label"], used, limit, units,
+                               links.ou_poser_la_cle(sub, org=active_org))
 
     return ResolvedCredential(provider, win.payload["secret"], True, "platform",
                               credentials_store.PLATFORM, win.payload["label"])

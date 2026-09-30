@@ -231,3 +231,24 @@ def record_platform_usage(provider: str, calls: int = 1) -> None:
     db.increment_usage(sub, provider, unites)
     if grants_chain.is_chained(provider):
         grants_chain.record_usage(sub, provider, scope.current_org(sub), unites)
+
+
+def refus_lot(provider: str, label: str, used: int, limit: int, units: int,
+              ou_poser: str) -> McpError:
+    """Le refus d'un LOT que le quota du jour de la clé commune ne couvre pas
+    (oto#168), NOMMÉ selon sa cause. Plus grand que le quota ENTIER, le lot ne
+    passera jamais, même à zéro utilisé : le dire, et la taille qui passe, plutôt
+    que « réduis le lot » sans chiffre. Sinon, il dépasse le reste du jour."""
+    entier = units > limit
+    debut = (f"ce lot ({units}) dépasse le quota TOTAL de la clé `{label}` ({limit}/jour) "
+             f"et serait refusé même à zéro utilisé — découpe-le en lots de ≤ {limit}"
+             if entier else
+             f"il reste {limit - used} unité(s) aujourd'hui ({used}/{limit}) sur la clé "
+             f"`{label}`, ce lot en demande {units} — réduis le lot")
+    return McpError(ErrorData(
+        code=INVALID_PARAMS,
+        message=(f"Quota plateforme {provider} : {debut}, ou pose ta propre "
+                 f"clé{ou_poser} pour lever la limite."),
+        data={"code": "platform_quota_lot_trop_grand" if entier
+              else "platform_quota_lot_depasse_le_reste",
+              "units": units, "limit": limit, "used": used}))
