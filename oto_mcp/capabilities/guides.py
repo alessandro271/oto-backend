@@ -112,10 +112,12 @@ def _target_group(ctx: ResolvedCtx, owner_id: Optional[str]) -> int:
     return int(gid)
 
 
-def _owner_for_write(ctx: ResolvedCtx, scope: str, owner_id: Optional[str] = None) -> str:
+def _owner_for_write(ctx: ResolvedCtx, scope: str, owner_id: Optional[str] = None,
+                     *, ondemand: bool = False) -> str:
     """Le owner_id d'écriture pour `scope`, avec autz sur la cible RÉELLE. platform →
     platform_admin ; org → org_admin de l'org visée ; group → chef de l'équipe visée
-    (escalade roles.py) ; user → self. Lève AuthzDenied."""
+    (escalade roles.py) ; user → self ; tenant → platform_admin, ou (guide à la
+    demande seulement) un admin de CE tenant. Lève AuthzDenied."""
     from .. import roles
     if scope == "user":
         return ctx.sub                    # jamais d'écriture pour un AUTRE user
@@ -138,10 +140,23 @@ def _owner_for_write(ctx: ResolvedCtx, scope: str, owner_id: Optional[str] = Non
         # Le socle d'un tenant remplace le nôtre pour TOUS ses comptes : c'est la
         # marque et le mode d'emploi d'un produit tiers. L'écrire est un acte
         # d'exploitation, jamais une préférence — même palier que le socle plateforme.
-        if not roles.is_platform_admin(ctx.sub):
+        if roles.is_platform_admin(ctx.sub):
+            return _target_tenant(ctx, owner_id)
+        # Un guide À LA DEMANDE de tenant est le contenu du partenaire, pas le nôtre
+        # (décision du 30/09/2026) : son admin l'écrit, sur SON tenant seulement — le
+        # même rôle que `_authz.TENANT_ADMIN_OF`, lu sur le sub qualifié. Un membre ou
+        # un admin d'une org cliente n'a pas ce rôle.
+        if ondemand:
+            from .. import db, tenancy
+            slug = _target_tenant(ctx, owner_id)
+            if tenancy.current().tenant_of(ctx.sub) == slug and db.is_tenant_admin(
+                    slug, ctx.sub):
+                return slug
             raise AuthzDenied(403, "forbidden",
-                              "Réservé à l'admin plateforme (socle de tenant).")
-        return _target_tenant(ctx, owner_id)
+                              f"Réservé à un admin du tenant `{slug}` ou à l'admin "
+                              "plateforme (guide de tenant).")
+        raise AuthzDenied(403, "forbidden",
+                          "Réservé à l'admin plateforme (socle de tenant).")
     raise AuthzDenied(400, "bad_scope",
                       "scope éditable = platform | tenant | org | group | user.")
 
@@ -267,9 +282,21 @@ def _get(ctx: ResolvedCtx, inp: GuideRefInput) -> dict:
         return _init_view(inp.scope, slug, guide_store.get_init_guide(inp.scope, ident))
     if not inp.slug:
         raise AuthzDenied(400, "missing_slug", "`slug` requis pour un guide on-demand.")
-    # `scope` vide = pas de filtre : le store cherche plateforme → org → user (1er match).
-    g = guide_store.read_guide_scoped(inp.slug, scope=inp.scope or None,
-                                      org_id=ctx.org_id, sub=ctx.sub)
+    if inp.scope == "tenant" and inp.owner_id:
+        # Un tenant NOMMÉ : son auteur relit ce qu'il vient d'écrire. La lecture en
+        # cascade ne suit que le tenant de l'appelant, donc l'admin plateforme qui
+        # écrit pour un partenaire écrivait sans pouvoir se relire.
+        from .. import db
+        owner = _owner_for_read(ctx, "tenant", inp.owner_id)
+        row = db.get_guide_db("tenant", owner, inp.slug)
+        g = ({"slug": inp.slug, "scope": "tenant", "title": row["title"],
+              "description": row["description"], "body_md": row["body_md"]}
+             if row else None)
+    else:
+        # `scope` vide = pas de filtre : le store cherche tenant → plateforme → org →
+        # user (1er match).
+        g = guide_store.read_guide_scoped(inp.slug, scope=inp.scope or None,
+                                          org_id=ctx.org_id, sub=ctx.sub)
     if g is None:
         where = f" (scope {inp.scope})" if inp.scope else ""
         raise AuthzDenied(404, "not_found",
@@ -319,7 +346,7 @@ def _set(ctx: ResolvedCtx, inp: GuideSetInput) -> dict:
         except guide_store.GuideDeliveryConflict as e:
             raise AuthzDenied(409, "delivery_conflict", str(e))
         return _init_view(inp.scope, slug, state)
-    owner_id = _owner_for_write(ctx, inp.scope, inp.owner_id)
+    owner_id = _owner_for_write(ctx, inp.scope, inp.owner_id, ondemand=True)
     if not inp.slug:
         raise AuthzDenied(400, "missing_slug", "`slug` requis pour un guide on-demand.")
     if not body.strip():
@@ -351,7 +378,7 @@ def _delete(ctx: ResolvedCtx, inp: GuideRefInput) -> dict:
         except guide_store.GuideDeliveryConflict as e:
             raise AuthzDenied(409, "delivery_conflict", str(e))
         return {"scope": inp.scope, "slug": slug, "delivery": "init", "deleted": True}
-    owner_id = _owner_for_write(ctx, inp.scope, inp.owner_id)
+    owner_id = _owner_for_write(ctx, inp.scope, inp.owner_id, ondemand=True)
     if not inp.slug:
         raise AuthzDenied(400, "missing_slug", "`slug` requis pour un guide on-demand.")
     deleted = guide_store.delete_guide(inp.scope, owner_id, inp.slug)
@@ -394,14 +421,15 @@ CAPABILITIES += [
         key="me.guide", handler=_guide_op, Input=GuideOpInput, authz=SUB_ONLY,
         description=(
             "Load or author oto INSTRUCTION PROSE — a how-to loaded when needed, or a readme "
-            "injected into every session. Two axes: `scope` = platform | org | group | user "
-            "(who writes it, whom it applies to) and `delivery` = 'on-demand' (default: a "
+            "injected into every session. Two axes: `scope` = platform | tenant | org | group | "
+            "user (who writes it, whom it applies to) and `delivery` = 'on-demand' (default: a "
             "guide you load for a task) | 'init' (a readme concatenated into what you receive "
             "at handshake). op=list → the on-demand catalog you can see (platform ∪ your org ∪ "
             "your own) ; op=read (slug, optional scope) → its markdown body ; op=write / delete "
             "(slug, scope, body_md, title?, description?) → author for the PLATFORM (platform "
-            "admin), your ORG (org admin), your TEAM (team lead) or YOURSELF (scope=user, the "
-            "default). With delivery='init' the slug is canonical per scope — omit it (the "
+            "admin), a TENANT (its tenant admin or a platform admin; `owner_id` = the tenant "
+            "slug, which also reads it back), your ORG (org admin), your TEAM (team lead) or "
+            "YOURSELF (scope=user, the default). With delivery='init' the slug is canonical per scope — omit it (the "
             "user's own readme is `scope='user', delivery='init'`; an empty body clears that "
             "layer). Read the relevant guide BEFORE a non-trivial task (e.g. bulk-load). "
             "This is PROSE: a repeatable process with slots is a procedure (`oto_procedure`), "
@@ -439,7 +467,9 @@ CAPABILITIES += [
             "`delivery='init'` writes that scope's injected readme (empty body clears it). "
             "WHO MAY WRITE, per scope — checked on the REAL target, not the active one: "
             "`user` = yourself only; `org` = an admin of that org; `group` = that team's "
-            "lead (org admins escalate); `platform` and `tenant` = a platform admin. "
+            "lead (org admins escalate); `platform` = a platform admin; `tenant` = a platform "
+            "admin, or for an on-demand guide an admin of THAT tenant (its injected readme "
+            "stays platform-only). "
             "⚠️ The flag to read before showing an editor is `can_edit` on the org or "
             "team view — NEVER `can_write_instructions`, which governs PROCEDURES and "
             "is true for any team MEMBER: reading it here shows an editor that the "
@@ -455,7 +485,9 @@ CAPABILITIES += [
                               "ce `(scope, slug)` porte une couche de l'AUTRE "
                               "livraison — vider un readme injecté ne retire pas un "
                               "guide à charger ; rien n'est écrit"),),
-        description="Delete a guide (scope=platform|org|group|user).",
+        description=("Delete a guide (scope=platform|tenant|org|group|user) — same writers as "
+                     "`me.guides.set`: a tenant's on-demand guide by its tenant admin or a "
+                     "platform admin."),
         rest=RestBinding("DELETE", "/api/me/guides/{scope}/{slug}"),
     ),
 ]
