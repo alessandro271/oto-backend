@@ -20,6 +20,8 @@ def test_premier_deploiement_fait_naitre_le_role_et_installe_la_verte(banc):
     assert fini.returncode == 0, fini.stdout + fini.stderr
     cmds = banc.commandes()
     assert "git reset --hard v1.2.3" in cmds
+    # installée par le verrou du tag (oto-backend#932), plus par pip
+    assert "uv sync --frozen --quiet" in cmds
     assert "systemctl start exemple-prod@green" in cmds
     assert "systemctl enable exemple-prod@green" in cmds
     assert any(c.startswith("systemd-run --collect --quiet --unit=exemple-prod-vidange ")

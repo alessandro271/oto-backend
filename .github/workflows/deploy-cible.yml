@@ -329,14 +329,18 @@ jobs:
             echo "secret=$(jq -r 'if .cle then "CIBLE_CONSOMMATEUR_CLE" else "" end' <<< "$CONSOMMATEUR")"
           } >> "$GITHUB_OUTPUT"
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      # Le contrat se dérive du jeu que la cible installera : celui du verrou du tag
+      # (oto-backend#932), comme `bg_install` sur la machine. Un tag sans `uv.lock` y est
+      # refusé : on le refuse ici, nommément, avant d'avoir rien installé.
+      - name: Le tag porte son verrou
         if: steps.declare.outputs.juger == 'oui'
+        run: |
+          [ -f uv.lock ] || { echo "::error title=Tag sans verrou::$TAG ne porte pas de uv.lock (tag antérieur à #932) — la cible le refuserait, rien n'est jugé."; exit 1; }
+      - name: Install (dépendances de runtime, par le verrou)
+        if: steps.declare.outputs.juger == 'oui'
+        uses: ./.github/actions/installer-par-le-verrou
         with:
           python-version: "3.12"
-          cache: pip
-      - name: Install (dépendances de runtime)
-        if: steps.declare.outputs.juger == 'oui'
-        run: pip install -e .
 
       # Le contrat que CE tag servirait CHEZ LA CIBLE : la facturation n'y est exposée
       # que si sa déclaration l'allume (sinon le défaut de l'inventaire, qui l'éteint).

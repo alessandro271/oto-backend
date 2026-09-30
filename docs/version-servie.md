@@ -168,10 +168,10 @@ chacune « la » source ne divergent pas *si* quelqu'un se trompe — elles dive
 que deux personnes ont raison en même temps, chacune dans sa copie. Le garde-fou n'est
 pas la vigilance, c'est de n'en avoir qu'une.
 
-⚠️ **La coordonnée n'est écrite que si l'installation a réussi.** Le refus du
-manifeste illisible sort de `bg_install` **avant** le `printf` : une couleur dont
-l'installation a échoué ne porte pas un `.oto-deploy.json` qui annoncerait une version
-qu'elle n'a jamais installée. Et tant qu'une box n'a pas ce script, la plateforme
+⚠️ **La coordonnée n'est écrite que si l'installation a réussi.** Le refus d'un tag
+sans `uv.lock` (#932) et l'échec de `uv sync` sortent de `bg_install` **avant** le
+`printf` : une couleur dont l'installation a échoué ne porte pas un `.oto-deploy.json`
+qui annoncerait une version qu'elle n'a jamais installée. Et tant qu'une box n'a pas ce script, la plateforme
 répond `unknown` — elle ne ment pas, elle ne sait pas.
 
 ## Ce que ce lot ne fait pas

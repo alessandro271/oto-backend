@@ -82,7 +82,7 @@ python -m venv .venv
 Single trunk, two rings. Pushing to `main` triggers `.github/workflows/deploy-canari.yml`
 and deploys **pre-production**; pushing a `vX.Y.Z` tag triggers `.github/workflows/deploy.yml`
 and deploys **production**. Both SSH the dedicated box, reset to the ref, reinstall
-(`pip install -e .` plus a forced reinstall of oto-core at the pinned tag), restart the
+exactly what `uv.lock` pins (`uv sync --frozen`; a ref without a lock is refused), restart the
 `oto-mcp` systemd service, run an HTTP smoke check and roll back on failure. Machine-level
 details are kept in a private infrastructure repository, not here.
 

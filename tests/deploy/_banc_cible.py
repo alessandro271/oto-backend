@@ -31,14 +31,16 @@ echo 0''',
 if [ "$1" = venv ]; then
   cible="${!#}"; mkdir -p "$cible/bin"
   printf '#!/bin/bash\necho %s\n' "${BANC_PYV:-3.10}" > "$cible/bin/python"; chmod +x "$cible/bin/python"
-  printf '#!/bin/bash\necho "[pip] $(pwd) $*" >> "$BANC_TRACE"\n' > "$cible/bin/pip"; chmod +x "$cible/bin/pip"
-fi''',
+fi
+# `sync --frozen` (oto-backend#932) : comme le vrai, refuse un arbre sans verrou.
+if [ "$1" = sync ]; then [ -f uv.lock ] || { echo "uv : pas de uv.lock dans $(pwd)" >&2; exit 2; }; fi''',
     "git": r'''
 if [ "$1" = clone ]; then mkdir -p "${!#}/.git"; echo "$3" > "${!#}/.git/origine"; exit 0; fi
 if [ "$1" = -C ] && [ "$3" = remote ]; then cat "$2/.git/origine"; exit 0; fi
 # `reset --hard <tag>` : l'arbre prend le contenu du tag (ce que le déploiement lit).
 if [ "$1" = reset ]; then
-  mkdir -p deploy && cp "$BANC_TAG/deploy/lanceur_secrets.py" deploy/ && cp "$BANC_TAG/pyproject.toml" .
+  mkdir -p deploy && cp "$BANC_TAG/deploy/lanceur_secrets.py" deploy/ \
+    && cp "$BANC_TAG/pyproject.toml" "$BANC_TAG/uv.lock" .
 fi
 # Le miroir de la porte : le tag existe-t-il, est-il sur le tronc, que contient-il.
 case " $* " in
@@ -86,7 +88,8 @@ class Banc:
         shutil.copytree(DEPOT / "deploy" / "cible", self.tag / "deploy" / "cible")
         for f in ("__init__.py", "env_inventory.py", "env_secrets.py"):
             shutil.copy2(DEPOT / "oto_mcp" / f, self.tag / "oto_mcp" / f)
-        shutil.copy2(DEPOT / "pyproject.toml", self.tag / "pyproject.toml")
+        for f in ("pyproject.toml", "uv.lock"):
+            shutil.copy2(DEPOT / f, self.tag / f)
         for script in (self.tag / "deploy" / "cible").glob("*.sh"):
             texte = script.read_text(encoding="utf-8")
             for p in PREFIXES:

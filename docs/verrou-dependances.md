@@ -7,8 +7,7 @@ type: explanation
 
 > **Le fait à retenir** : ce qui s'installe, c'est `uv.lock`, versionné. Le manifeste
 > (`pyproject.toml`) dit ce que le code **accepte** ; le verrou dit ce qui est
-> **installé**, identique en CI et, une fois le déploiement passé au verrou, dans chaque
-> arbre de la box. `GET /api/version` dit si c'est le cas (`deps_conformes`).
+> **installé**, identique en CI et dans chaque arbre de la box. `GET /api/version` dit si c'est le cas (`deps_conformes`).
 
 ## Le problème (#932)
 
@@ -28,10 +27,10 @@ attente). Trois causes, une seule racine — **aucun jeu n'était décidé** :
 | où | comment |
 |---|---|
 | `uv.lock` | Versionné. **Premier verrou = le jeu que servait la production active** (v1.404.0, relevé par `pip freeze --all`) : passer au verrou ne change aucune version. |
-| CI (`deploy-canari.yml`, `couverture.yml`) | `uv sync --frozen [--extra dev]`, par l'action `.github/actions/installer-par-le-verrou` — la version d'uv (celle de la box) y vit à un seul endroit. Le job `test` refuse un verrou en retard sur le manifeste (`uv lock --check`). `garde-plancher-python` installe le verrou sous 3.10, l'interpréteur de la box. |
+| CI (`deploy-canari.yml`, `couverture.yml`, et `deploy-cible.yml` pour dériver le contrat du tag) | `uv sync --frozen [--extra dev]`, par l'action `.github/actions/installer-par-le-verrou` — la version d'uv (celle de la box) y vit à un seul endroit. Le job `test` refuse un verrou en retard sur le manifeste (`uv lock --check`). `garde-plancher-python` installe le verrou sous 3.10, l'interpréteur de la box. |
 | hebdomadaire (`verrou-hebdo.yml`) | `uv lock --upgrade` puis la suite entière : l'alerte précoce que l'ancienne CI donnait par accident. Il ne modifie rien ; rouge = une montée casserait, le résumé nomme les versions qui bougeraient. |
 | `GET /api/version` | `deps_sha`, `lock_sha`, `deps_conformes`, relevés au démarrage (`docs/version-servie.md`). |
-| déploiement (`bg_install`) | `uv sync --frozen` à la place de `pip install -e .` et du force-reinstall d'oto-core : porté par la chaîne de déploiement (#967). Tant qu'il ne l'est pas, `deps_conformes` le dit. |
+| déploiement (`bg_install`) | `UV_PYTHON_DOWNLOADS=never uv sync --frozen` dans l'arbre de la couleur, à la place de `pip install -e .` et du force-reinstall d'oto-core ; `uv` est celui du `PATH` de la machine, `.venv/bin/python` reste l'interpréteur. Un tag sans `uv.lock` (antérieur à #932) est **refusé**, rien n'est installé. Le journal dit « installé par le verrou : uv.lock <sha12> ». Vaut pour nos deux environnements et chaque cible (même bibliothèque). ⚠️ Le script de la box (`/opt/deploy/oto-mcp-bluegreen.sh`) est posé par infra depuis ce dépôt, pas par le déploiement. |
 
 ## Les gestes
 

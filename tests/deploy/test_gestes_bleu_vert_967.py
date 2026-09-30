@@ -7,7 +7,8 @@ lanceur). Ce test rejoue chaque scénario réel de notre box — bascule dans le
 retour arrière, préproduction, vidange et chemins d'échec — et compare la trace des
 commandes, la sortie et l'état final des fichiers à la référence enregistrée depuis les
 scripts d'avant (`tests/deploy/gestes_bleu_vert/`), régénérée au lot 5 pour le seul
-passage à `BG_LANCEUR=versionne`. Mécanisme et régénération :
+passage à `BG_LANCEUR=versionne`, puis pour oto-backend#932 (pip remplacé par
+`uv sync --frozen`). Mécanisme et régénération :
 `tests/deploy/_banc_bleu_vert.py`.
 """
 from __future__ import annotations
@@ -26,6 +27,18 @@ def test_chaque_reference_a_son_scenario():
     """Une référence orpheline serait une preuve qu'on ne rejoue plus."""
     fichiers = {p.stem for p in banc.REFERENCES.glob("*.txt")}
     assert fichiers == set(banc.SCENARIOS)
+
+
+def test_un_tag_sans_verrou_est_refuse_et_rien_n_est_installe():
+    """oto-backend#932 : un tag antérieur au verrou n'a pas de `uv.lock`. Le refus est
+    nommé, `uv` n'est jamais appelé, rien ne bascule ni n'est écrit dans la couleur."""
+    trace = banc.rejouer(banc.DEPLOY_DU_DEPOT, "prod-tag-sans-verrou")
+    commandes = trace.split("### commandes\n")[1].split("### sortie\n")[0]
+    assert "### code de sortie : 1\n" in trace
+    assert "ne porte pas de uv.lock" in trace and "rien n'est installé" in trace
+    assert not any(l.startswith(("uv ", "[pip]")) for l in commandes.splitlines())
+    assert ".oto-deploy.json" not in trace
+    assert "--- /etc/oto-mcp/active-prod\nblue\n" in trace
 
 
 # --- ce que la bibliothèque refuse, et que l'ancienne supposait -------------------

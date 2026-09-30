@@ -11,9 +11,9 @@ git fetch --tags --force origin
   (dans /opt/oto-mcp-canari-blue)
 git reset --hard 0123456789abcdef0123456789abcdef01234567
   (dans /opt/oto-mcp-canari-blue)
+uv sync --frozen --quiet
+  (dans /opt/oto-mcp-canari-blue ; UV_PYTHON_DOWNLOADS=never)
 date +%H:%M:%S
-[pip] /opt/oto-mcp-canari-blue install -e . --quiet
-[pip] /opt/oto-mcp-canari-blue install --force-reinstall --quiet oto-core[anonymize] @ git+https://github.com/otomata-tech/oto-core.git@v9.9.9
 git -C /opt/oto-mcp-canari-blue rev-parse HEAD
   (dans /opt/oto-mcp-canari-blue)
 date -Is
@@ -42,7 +42,7 @@ journalctl -u oto-mcp-canari@blue -n 10 --no-pager
 [12:00:00] verrou pris (/var/lock/oto-mcp-bluegreen-canari.lock)
 [12:00:00] canari: couleur en service = green, cible = blue (:9105)
 [12:00:00] install 0123456789abcdef0123456789abcdef01234567 dans /opt/oto-mcp-canari-blue (couleur blue)
-[12:00:00] oto-core requis par le manifeste : oto-core[anonymize]
+[12:00:00] installé par le verrou : uv.lock e990828a8fd4
 [12:00:00] installé : 0123456789abcdef0123456789abcdef01234567
 [12:00:00] démarrage oto-mcp-canari@blue sur :9105
 [12:00:00] couleur blue prête en Ns

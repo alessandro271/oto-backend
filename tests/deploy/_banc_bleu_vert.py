@@ -16,6 +16,12 @@ références de leurs scénarios ont été régénérées — seule la propagati
 `propage`, gardé jusqu'au lot 5b pour le retour arrière, est rejoué par les scénarios
 `prod-lanceur-propage` et `prod-lanceur-fige`, qui réécrivent le wrapper dans ce mode.
 
+oto-backend#932 : l'installation passe par le verrou. Les deux lignes `[pip] … install -e .`
+et `… --force-reinstall oto-core…`, et le log « oto-core requis par le manifeste »,
+sont remplacés par la ligne `uv sync --frozen --quiet` (doublure `uv`) et le log
+« installé par le verrou : uv.lock <sha12> » ; aucun autre geste n'a bougé. Le scénario
+`prod-tag-sans-verrou` rejoue un tag antérieur au verrou : refus nommé, rien d'installé.
+
 La trace contient : chaque commande externe et ses arguments, dans l'ordre ; ce que
 le script écrit sur sa sortie ; son code de sortie ; et l'état final des fichiers
 qu'il écrit (amont Caddy, pointeur de couleur, coordonnée de version, unités posées).
@@ -74,6 +80,9 @@ SCENARIOS: dict[str, tuple[str, list[str], str, str, dict[str, str]]] = {
                           {"BANC_LANCEUR_PROPAGE": "1", "BANC_LANCEUR_FIGE": "1"}),
     "prod-tag-sans-maintenance": ("oto-backend.sh", [TAG], "prod", "blue",
                                   {"BANC_SANS_MAINTENANCE": "1"}),
+    # Un tag antérieur à #932 ne porte pas de `uv.lock` : refusé, rien n'est installé.
+    "prod-tag-sans-verrou": ("oto-backend.sh", [TAG], "prod", "blue",
+                             {"BANC_SANS_VERROU": "1"}),
     # Le mode historique `BG_LANCEUR=propage` (retour arrière du lot 5, retiré au 5b) :
     # le lanceur hors git passe de la couleur en service à la nouvelle.
     "prod-lanceur-propage": ("oto-backend.sh", [TAG], "prod", "blue",
@@ -122,6 +131,11 @@ for a in "$@"; do
 done
 exit 0''',
     "caddy": r'''[ -n "${BANC_CADDY_KO:-}" ] && exit 1; exit 0''',
+    # Comme le vrai `uv sync --frozen`, refuse un arbre sans verrou.
+    "uv": r'''
+echo "  (dans $(pwd) ; UV_PYTHON_DOWNLOADS=${UV_PYTHON_DOWNLOADS-<absent>})" >> "$BANC_TRACE"
+[ -f uv.lock ] || { echo "uv : pas de uv.lock dans $(pwd)" >&2; exit 2; }
+exit 0''',
     "ss": "exit 0",
     "systemd-run": "exit 0",
     "journalctl": "exit 0",
@@ -138,10 +152,9 @@ esac''',
     "install": 'exec /usr/bin/install "$@"',
 }
 
-PIP = r'''#!/bin/bash
-echo "[pip] $(pwd) $*" >> "$BANC_TRACE"
-exit 0
-'''
+# Le verrou du tag : lu par `uv sync`, et attesté dans la sortie par son empreinte.
+VERROU_NOM = "uv.lock"
+VERROU = "# uv.lock du banc\nversion = 1\n"
 
 LANCEUR = '#!/bin/bash\nexec "$(cd "$(dirname "$0")" && pwd)/.venv/bin/oto-mcp"\n'
 LANCEUR_FIGE = "#!/bin/bash\nexec /opt/oto-mcp-blue/.venv/bin/oto-mcp\n"
@@ -177,10 +190,9 @@ def _preparer(racine: pathlib.Path, deploy: pathlib.Path, env: str, active: str,
     for couleur in ("blue", "green"):
         arbre = pathlib.Path(r + ARBRES[env] + "-" + couleur)
         (arbre / ".venv/bin").mkdir(parents=True)
-        pip = arbre / ".venv/bin/pip"
-        pip.write_text(PIP)
-        pip.chmod(0o755)
         (arbre / "pyproject.toml").write_text(PYPROJECT)
+        if not variantes.get("BANC_SANS_VERROU"):
+            (arbre / VERROU_NOM).write_text(VERROU)
         (arbre / "deploy").mkdir()
         if variantes.get("BANC_LANCEUR_PROPAGE"):
             lanceur = arbre / "start-encrypted.sh"
@@ -203,10 +215,13 @@ def _preparer(racine: pathlib.Path, deploy: pathlib.Path, env: str, active: str,
 
 def _etat(racine: pathlib.Path) -> list[str]:
     lignes = []
+    # Le verrou est une ENTRÉE du tag que le script ne fait que lire : son empreinte
+    # est déjà dans la sortie (« installé par le verrou : uv.lock <sha12> »).
     for rel in sorted(p.relative_to(racine).as_posix() for p in racine.rglob("*")
                       if p.is_file() and not p.relative_to(racine).as_posix()
                       .startswith(("banc-bin/", "opt/deploy/", "trace"))
-                      and "/.venv/" not in "/" + p.relative_to(racine).as_posix()):
+                      and "/.venv/" not in "/" + p.relative_to(racine).as_posix()
+                      and p.name != VERROU_NOM):
         lignes.append(f"--- /{rel}")
         lignes.extend((racine / rel).read_text(encoding="utf-8").splitlines())
     return lignes

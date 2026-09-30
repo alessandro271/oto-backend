@@ -177,23 +177,19 @@ bg_install() {
   cd "$tree" || return 1
   git fetch --tags --force origin || return 1
   git reset --hard "$ref" || return 1
-  # pip NE réinstalle PAS une dépendance VCS déjà présente → force-reinstall d'oto-core.
-  # ⚠️ On relit la LIGNE ENTIÈRE du manifeste — extras COMPRIS — et non le seul tag.
-  # Le script forçait auparavant `oto-core[browser]` en dur, alors que le manifeste
-  # déclare `oto-core[anonymize]` et explique, juste à côté, que l'extra `browser` a été
-  # RETIRÉ exprès : il ne servait qu'à tirer patchright via o-browser, la bibliothèque du
-  # Chrome LOCAL, dont cette box ne veut pas (le backend pilote un Chrome hébergé par CDP).
-  # Le déploiement défaisait donc une décision délibérée à chaque passage, en silence.
-  # Corrigé le 01/09/2026 : une seule source de vérité, le manifeste.
-  local requis
-  requis=$(grep -oP '"\Koto-core(\[[^\]]*\])? @ git\+https://github\.com/otomata-tech/oto-core\.git@[^"]+' pyproject.toml | head -1)
-  if [ -z "$requis" ]; then
-    bg_log "ERREUR : dépendance oto-core introuvable dans pyproject.toml — rien n'est installé"
+  # Installation PAR LE VERROU (oto-backend#932). `uv sync --frozen` pose EXACTEMENT le
+  # jeu de `uv.lock` dans `.venv` : monte ou redescend ce qui diffère, retire ce que le
+  # verrou ne prescrit pas (pip, setuptools et wheel exceptés : uv ne les touche pas), et
+  # prend oto-core au commit que le verrou désigne — plus de force-reinstall. Chaque
+  # couleur porte donc le jeu de SA coordonnée, et une bascule ne change plus aucune
+  # version sans commit. `.venv/bin/python` reste l'interpréteur (unité, lanceur).
+  # Un tag antérieur au verrou n'a pas de `uv.lock` : refus nommé, rien n'est installé.
+  if [ ! -f uv.lock ]; then
+    bg_log "ERREUR : ${ref} ne porte pas de uv.lock (tag antérieur à #932) — rien n'est installé"
     return 1
   fi
-  bg_log "oto-core requis par le manifeste : ${requis%% @*}"
-  ./.venv/bin/pip install -e . --quiet || return 1
-  ./.venv/bin/pip install --force-reinstall --quiet "$requis" || return 1
+  UV_PYTHON_DOWNLOADS=never uv sync --frozen --quiet || return 1
+  bg_log "installé par le verrou : uv.lock $(sha256sum uv.lock | cut -c1-12)"
   BG_HEAD=$(git -C "$tree" rev-parse HEAD)
   # --- Coordonnée de ce qui va TOURNER (oto#33). Écrite par celui qui installe,
   # --- dans l'arbre qu'il vient d'écrire, AVANT que le processus ne démarre : le

@@ -11,9 +11,9 @@ git fetch --tags --force origin
   (dans /opt/oto-mcp-green)
 git reset --hard v1.2.3
   (dans /opt/oto-mcp-green)
+uv sync --frozen --quiet
+  (dans /opt/oto-mcp-green ; UV_PYTHON_DOWNLOADS=never)
 date +%H:%M:%S
-[pip] /opt/oto-mcp-green install -e . --quiet
-[pip] /opt/oto-mcp-green install --force-reinstall --quiet oto-core[anonymize] @ git+https://github.com/otomata-tech/oto-core.git@v9.9.9
 git -C /opt/oto-mcp-green rev-parse HEAD
   (dans /opt/oto-mcp-green)
 date -Is
@@ -44,7 +44,7 @@ journalctl -u oto-mcp@green -n 10 --no-pager
 [12:00:00] verrou pris (/var/lock/oto-mcp-bluegreen-prod.lock)
 [12:00:00] prod: couleur en service = blue, cible = green (:9107)
 [12:00:00] install v1.2.3 dans /opt/oto-mcp-green (couleur green)
-[12:00:00] oto-core requis par le manifeste : oto-core[anonymize]
+[12:00:00] installé par le verrou : uv.lock e990828a8fd4
 [12:00:00] installé : 0123456789abcdef0123456789abcdef01234567
 [12:00:00] démarrage oto-mcp@green sur :9107
 [12:00:00] couleur green prête en Ns

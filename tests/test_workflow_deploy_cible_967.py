@@ -98,13 +98,32 @@ def test_l_appel_declare_chaque_secret_qu_il_lit_sans_l_exiger():
     assert all(d.get("required") is False for d in declares.values())
 
 
+_ACTION_LOCALE = re.compile(r"\./\.github/actions/[\w-]+")
+_EPINGLEE = re.compile(r"[\w-]+/[\w-]+@[0-9a-f]{40}")
+
+
 def test_n_appelle_aucun_autre_workflow():
-    """Appelable, il n'appelle rien : aucun job réutilisable, seules des actions épinglées."""
+    """Appelable, il n'appelle rien : aucun job réutilisable, seules des actions épinglées.
+
+    Une action LOCALE (`./.github/actions/…`, oto-backend#932) est du code du TRONC au
+    tag — l'espace de travail est son checkout, fait avant elle — au même titre que les
+    scripts `deploy/cible/` qu'il exécute ; ce qu'elle appelle à son tour est épinglé."""
     for nom, job in _JOBS.items():
         assert "uses" not in job, nom
+        tronc_extrait = False
         for etape in job["steps"]:
-            if "uses" in etape:
-                assert re.fullmatch(r"actions/[\w-]+@[0-9a-f]{40}", etape["uses"]), etape["uses"]
+            uses = etape.get("uses")
+            if uses is None:
+                continue
+            tronc_extrait |= uses.startswith("actions/checkout@")
+            if _ACTION_LOCALE.fullmatch(uses):
+                assert tronc_extrait, f"{uses} lu avant le checkout du tronc"
+                action = yaml.safe_load((_RACINE / uses / "action.yml").read_text(encoding="utf-8"))
+                for sous in action["runs"]["steps"]:
+                    if "uses" in sous:
+                        assert _EPINGLEE.fullmatch(sous["uses"]), f"{uses} : {sous['uses']}"
+                continue
+            assert re.fullmatch(r"actions/[\w-]+@[0-9a-f]{40}", uses), uses
 
 
 def test_le_code_execute_vient_du_tronc_jamais_de_l_appelant():
