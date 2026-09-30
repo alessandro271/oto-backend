@@ -1926,6 +1926,13 @@ porte un champ nommé `comment` est servi comme s'il portait l'annotation, donc 
 réémission renvoie les deux formes — même valeur ⟹ c'est la lecture qui revient, on ne
 touche à rien ; valeur différente ⟹ refus qui nomme les deux.
 
+⚠️ **Un nom de colonne VIDE ne s'écrit pas** (oto#231) : `""`, ou fait seulement
+d'espaces, était accepté et créait une colonne qui ne se déclare pas au schéma, ne
+s'adresse par aucun filtre et ne se lit nulle part. Refusé (`RowValidationError`, REST
+`400 row_invalid`, import `400 bad_row`) en citant la clé, rien d'écrit, par la
+validation des noms de colonne (`points._refuse_dotted_names`) — celle que la sonde de
+`test_lot_refuse_cles_pointees.py` exige devant chaque porte d'écriture en base.
+
 **Le blob lu en TEXTE** (recherche plein-texte, extrait, embedding) est reconstruit
 avec les valeurs à la place des enveloppes (`ROW_VALUES_TEXT_SQL`), sinon `q=hunter`
 matcherait toute ligne dont l'e-mail VIENT de Hunter. Gardé par un `jsonb_path_exists`

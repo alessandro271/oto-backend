@@ -874,6 +874,12 @@ CAPABILITIES += [
         mcp=None,
         # Corps LIBRE (les colonnes) + 201 : les deux contrats d'avant la migration.
         rest=RestBinding(verb="POST", path=_NS + "/rows", status=201, body_field="row"),
+        errors=_REFUS_D_ADRESSE + _REFUS_D_ECRITURE + (
+            DeclaredError(400, "row_invalid",
+                          "la ligne est refusée par le schéma, le cycle de vie ou le "
+                          "nom d'une colonne (vide, pointé) : le message nomme les "
+                          "champs fautifs"),
+        ),
         description=("Ajoute UNE ligne à un tableau — le corps EST la ligne : un objet, "
                      "une clé par colonne. Pas de lot ici : un corps dont l'unique clé "
                      "— ou la clé `rows`, quelles que soient les autres — porte une "

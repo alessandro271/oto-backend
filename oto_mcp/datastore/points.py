@@ -358,6 +358,18 @@ def traduire_les_entetes(schema: Optional[dict], entetes: list) -> dict:
     return traduits
 
 
+def _refuser_les_noms_vides(user_data: Optional[dict]) -> None:
+    """Un nom de colonne vide — `""`, ou fait seulement d'espaces — ne s'écrit pas
+    (oto#231). Refus nommé, qui cite la clé telle qu'elle est arrivée."""
+    vides = [cle for cle in user_data or {} if not str(cle).strip()]
+    if vides:
+        raise RowValidationError([
+            f"{', '.join(repr(c) for c in vides)} n'est pas un nom de colonne : un nom "
+            f"vide ou fait d'espaces ne se déclare pas au schéma, ne s'adresse par "
+            f"aucun filtre et ne se lit dans aucune page ni aucun export. Rien n'a été "
+            f"écrit. Nomme la colonne, ou retire cette clé de l'écriture."])
+
+
 def _refuse_dotted_names(user_data: Optional[dict]) -> None:
     """CAS 3 — ce qui reste pointé après le rangement est une adresse FAUTIVE.
 
@@ -378,7 +390,14 @@ def _refuse_dotted_names(user_data: Optional[dict]) -> None:
     déclarée `json` (exemptée de l'adressage) y arrivait. Elle se refuse désormais en
     amont, avec sa vraie cause. **Si un autre chemin s'ouvre un jour, c'est en amont
     qu'il se ferme — jamais en affadissant cette phrase, qui est ce qui rend le refus
-    actionnable.**"""
+    actionnable.**
+
+    ⚠️ **C'est la validation des NOMS de colonne, sur toutes les portes d'écriture** —
+    la sonde `test_tout_chemin_qui_ECRIT_en_base_refuse_les_cles_pointees` exige son
+    appel devant chaque écriture en base. Le nom VIDE s'y refuse donc aussi (oto#231),
+    en premier : `""` ou fait d'espaces, il créait une colonne qui ne se déclare pas au
+    schéma, ne s'adresse par aucun filtre et ne se lit proprement nulle part."""
+    _refuser_les_noms_vides(user_data)
     for cle in user_data or {}:
         if "." not in cle:
             continue
