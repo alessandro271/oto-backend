@@ -92,20 +92,16 @@ def _tool_prefix() -> str:
     lisait `acme_doc` dans sa liste et se voyait répondre « Unknown tool » en le
     passant à `oto_tool_schema` — le catalogue et le dispatch auraient parlé deux
     langues."""
-    try:
-        return tool_alias.prefix_for(current_user_sub_from_token())
-    # noqa: SILENT — dette déclarée : préfixe d'outil perdu ⇒ notre identité servie (#424, verdict C)
-    except Exception:  # noqa: BLE001 — fail-open : les noms canoniques
-        return ""
+    # `prefix_for` ne lève pas (registre en mémoire, fail-open journalisé chez lui) :
+    # seul l'échec d'IDENTITÉ pouvait tomber ici, et il monte — servir nos noms
+    # canoniques à un compte dont on ignore l'identité, c'était le taire (#464).
+    return tool_alias.prefix_for(current_user_sub_from_token())
 
 
 def _require_sub() -> str:
-    sub = None
-    try:
-        sub = current_user_sub_from_token()
-    # noqa: SILENT — dette déclarée : sub avalé (#424, verdict C — seam commun)
-    except Exception:
-        pass
+    # Un échec d'identité MONTE (le seam le journalise avec sa raison, #464) : seul
+    # un appel réellement sans jeton est « non authentifié ».
+    sub = current_user_sub_from_token()
     if not sub:
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
@@ -450,14 +446,10 @@ def register(mcp: FastMCP) -> None:
                 never costs a call.
         """
         # Identité ambiante : le sub du JWT porte déjà l'appel (le handler cible
-        # résout ses propres credentials dessus). Soft — sur stdio local il n'y a pas
-        # de sub et tout le catalogue est déjà accessible.
-        sub = None
-        try:
-            sub = current_user_sub_from_token()
-        # noqa: SILENT — sans sub (stdio local) tout le catalogue est déjà accessible
-        except Exception:
-            pass
+        # résout ses propres credentials dessus). Soft — sans jeton (dev local) il n'y
+        # a pas de sub et tout le catalogue est déjà accessible. Un échec d'identité,
+        # lui, n'est pas une absence de jeton : il monte (#464).
+        sub = current_user_sub_from_token()
 
         # Le nom vient du catalogue, donc éventuellement sous la forme du tenant. Il
         # redevient canonique AVANT le gate méta/spine : sans ça `acme_doc` résout un

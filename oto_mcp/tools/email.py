@@ -54,12 +54,9 @@ def _err(msg: str, code: int = INVALID_PARAMS) -> McpError:
 
 
 def _sub_or_raise() -> str:
-    sub = None
-    try:
-        sub = current_user_sub_from_token()
-    # noqa: SILENT — dette déclarée : sub avalé (#424, verdict C — seam commun)
-    except Exception:
-        pass
+    # Un échec d'identité MONTE (le seam le journalise avec sa raison, #464) : seul
+    # un appel réellement sans jeton est « non authentifié ».
+    sub = current_user_sub_from_token()
     if not sub:
         raise _err("Auth requise — ce tool ne marche que sur le transport HTTP authentifié.")
     return sub

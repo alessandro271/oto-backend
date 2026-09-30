@@ -88,12 +88,9 @@ async def pin_for_call() -> list:
     run_id = session_org.current_call_run()
     if not run_id or session_org.current_call_org() is not None:
         return []
-    sub = None
-    try:
-        sub = call_axes.current_user_sub_from_token()
-    # noqa: SILENT — sans identité (endpoint anonyme) il n'y a personne à garder : la pose est inerte
-    except Exception:  # noqa: BLE001
-        pass
+    # Sans jeton (endpoint anonyme) il n'y a personne à garder : la pose est inerte.
+    # Un échec d'identité, lui, monte (journalisé par le seam, #464).
+    sub = call_axes.current_user_sub_from_token()
     if not sub:
         return []
     try:

@@ -97,12 +97,8 @@ class CallContextMiddleware(Middleware):
         # Axe compte DYNAMIQUE : annoncé sur les connecteurs où l'appelant détient
         # plusieurs clés (une requête, threadpool — chemin inbound mono-loop). Sans sub
         # (endpoint anonyme) → rien de plus que les axes statiques.
-        sub = None
-        try:
-            sub = current_user_sub_from_token()
-        # noqa: SILENT — axe compte dynamique optionnel : sans lui, les axes statiques suffisent
-        except Exception:
-            pass
+        # Un échec d'identité n'est pas une absence de jeton : il monte (#464).
+        sub = current_user_sub_from_token()
         advertised = await run_in_threadpool(call_axes.account_axis_advertised_for, sub)
         out = []
         for t in tools:

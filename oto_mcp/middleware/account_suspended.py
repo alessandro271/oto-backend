@@ -8,6 +8,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .. import account_suspension
 from ..auth.hooks import current_user_sub_from_token
+from ..db import CompteEnPause
 from ..mcp_errors import McpError
 
 logger = logging.getLogger(__name__)
@@ -47,9 +48,14 @@ class AccountSuspendedMiddleware(Middleware):
     async def on_request(self, context, call_next):
         try:
             sub = current_user_sub_from_token()
-        # noqa: SILENT — dette déclarée : sub avalé, la requête devient anonyme sans dire pourquoi (#424, verdict C)
-        except Exception:
-            sub = None
+        except CompteEnPause as refus:
+            # L'ANCIEN identifiant d'un compte en pause : sans ligne à lui (la fusion
+            # l'a supprimée), `refus` ci-dessous ne le verrait pas — c'est `upsert_user`
+            # qui reconnaît que son alias mène à un compte neutralisé. Même refus que
+            # la face REST (`api.base._authenticate`), au contrat de ce middleware.
+            raise McpError(_erreur(str(refus))) from refus
+        # Tout autre échec d'identité MONTE (journalisé par le seam, #464) : le
+        # rattraper laissait passer la requête ANONYME, donc sans la garde de pause.
         if sub:
             refus = await run_in_threadpool(account_suspension.refus, sub)
             if refus:

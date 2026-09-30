@@ -112,12 +112,9 @@ def require_axis_sub(axis: str) -> str:
     """sub authentifié courant, requis pour garder un axe-contexte ; McpError sinon
     (un axe piloté par un tenant n'a aucun sens sans identité — vaut aussi pour
     l'endpoint MCP anonyme, cf. #108)."""
-    sub = None
-    try:
-        sub = current_user_sub_from_token()
-    # noqa: SILENT — dette déclarée : sub avalé sur l'axe d'appel (#424, verdict C)
-    except Exception:
-        pass
+    # Un échec d'identité MONTE (journalisé par le seam avec sa raison, #464) : le
+    # refus ci-dessous ne vaut que pour un appel réellement sans jeton.
+    sub = current_user_sub_from_token()
     if not sub:
         raise McpError(ErrorData(
             code=INVALID_PARAMS,

@@ -53,11 +53,11 @@ class ToolAliasMiddleware(handshake_log.JournalListesMixin, Middleware):
 
     @staticmethod
     def _prefix() -> str:
-        try:
-            return tool_alias.prefix_for(current_user_sub_from_token())
-        # noqa: SILENT — dette déclarée : préfixe de tenant perdu ⇒ notre identité servie (#424, verdict C)
-        except Exception:  # noqa: BLE001 — un nom d'outil ne casse jamais un appel
-            return ""
+        # `prefix_for` ne lève pas (registre en mémoire, fail-open journalisé chez
+        # lui) : seul l'échec d'IDENTITÉ pouvait tomber ici. Il monte — le rattraper
+        # servait nos noms canoniques, donc notre produit, à un compte dont on ignorait
+        # l'identité, et la requête continuait anonyme sans un mot (#464).
+        return tool_alias.prefix_for(current_user_sub_from_token())
 
     @staticmethod
     def _avec_alias_deprecies(tools):

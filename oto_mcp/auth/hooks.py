@@ -11,10 +11,53 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import logging
 import os
 from typing import Iterator, Optional
 
 from ..tenant_migration import alias_drain_armed
+
+logger = logging.getLogger(__name__)
+
+
+class IdentiteIndisponible(RuntimeError):
+    """La canonicalisation du `sub` a échoué pour une raison d'INFRASTRUCTURE (base
+    injoignable, pool épuisé…) — ni un alias refusé, ni un compte en pause, qui ont
+    leurs propres exceptions et se lèvent telles quelles.
+
+    Existe pour une seule raison : le texte. Les middlewares du handshake et de la
+    liste ne sont pas sous l'enveloppe d'erreur, et le SDK amont sert alors `str(exc)`
+    tel quel au client — celui d'un pilote de base peut nommer un hôte ou un port. Ce
+    message-ci dit ce qui se passe et quoi faire, sans rien de l'intérieur ; la cause
+    d'origine reste chaînée (`__cause__`) pour le journal et Sentry."""
+
+    def __init__(self, raison: str):
+        self.raison = raison
+        super().__init__(
+            f"identité indisponible ({raison}) : la requête est refusée plutôt que "
+            "servie sans identité — réessaie dans un instant")
+
+
+def _raison_d_echec(exc: BaseException) -> str:
+    """La RAISON d'un échec de canonicalisation, en une étiquette stable pour le
+    journal : `alias_<motif>` (chaîne d'alias refusée), `compte_en_pause`, sinon la
+    classe de l'erreur d'infrastructure."""
+    from ..db.sub_aliases import AliasNonResolvable
+    from ..db.users import CompteEnPause
+    if isinstance(exc, AliasNonResolvable):
+        return f"alias_{exc.motif}"
+    if isinstance(exc, CompteEnPause):
+        return "compte_en_pause"
+    return f"base_indisponible:{type(exc).__name__}"
+
+
+def _decrire_jeton(token) -> str:
+    """`client=… jeton=…` du jeton présenté — de quoi retrouver l'appelant dans le
+    journal (application OAuth, jeton nommé), jamais une valeur de jeton."""
+    claims = getattr(token, "claims", None) or {}
+    client = claims.get("azp") or claims.get("client_id") or getattr(token, "client_id", None)
+    return (f"client={client or '-'} jeton={claims.get('token_kind') or 'oauth'}"
+            f"#{claims.get('token_id') or '-'}")
 
 # Override d'identité pour la face REST (contextvar, par requête). La face MCP lit
 # le sub du token via `get_access_token()` (contextvar posé par FastMCP) ; en REST
@@ -145,35 +188,57 @@ def current_user_sub_from_token() -> Optional[str]:
     # noqa: SILENT — hors contexte de requête MCP (REST, dev local) : repli sur OTO_MCP_DEV_SUB
     except Exception:  # noqa: BLE001 — hors contexte de requête MCP (REST, dev local)
         token = None
-    if token and getattr(token, "claims", None):
-        sub = token.claims.get("sub")
-        if sub:
-            # Drain d'alias (B1, otomata#35) : canonicaliser le sub (vieux jeton →
-            # compte migré). ⚠️ Contrairement à la porte REST, `upsert_user` est ICI
-            # sous la commande du drain — un compte MCP-only n'est donc rafraîchi que
-            # commande posée. Ce passager est relevé par le test du même nom ; le
-            # sortir de là est un changement de comportement, pas un nettoyage.
-            if alias_drain_armed():
-                # Une portée ouverte ⟹ la canonicalisation (un SELECT) et le
-                # rafraîchissement (un INSERT … ON CONFLICT, donc un COMMIT) ne se
-                # paient qu'UNE fois par message, quel que soit le nombre
-                # d'intermédiaires qui redemandent la même identité dans le même
-                # appel. Mesuré le 09/09/2026 sur la chaîne servie : 10 allers-retours
-                # PG par `tools/call`, tous dans la boucle, pour UNE valeur.
-                # ⚠️ La clé est le sub BRUT du jeton : c'est ce qui rend impossible
-                # de servir l'identité d'un autre (cf. `_identity_cache`).
-                cache = _identity_cache.get()
-                if cache is not None and sub in cache:
-                    return cache[sub]
-                from .. import db
-                canonique = db.resolve_sub(sub)
-                db.upsert_user(canonique, email=token.claims.get("email"),
-                               name=token.claims.get("name"))
-                # Après les deux appels, jamais avant : un refus (`AliasNonResolvable`,
-                # `CompteEnPause`) ne se mémorise pas — il doit se lever pour CHAQUE
-                # demandeur, comme avant, plutôt que d'être rendu en valeur.
-                if cache is not None:
-                    cache[sub] = canonique
-                return canonique
-            return sub
-    return os.environ.get("OTO_MCP_DEV_SUB")
+    if token is None:
+        return os.environ.get("OTO_MCP_DEV_SUB")
+    # Un jeton VÉRIFIÉ sans `sub` n'est pas une absence de jeton : c'est une identité
+    # illisible. Elle ne se sert ni sous le compte de dev (`OTO_MCP_DEV_SUB` ne vaut
+    # que SANS jeton) ni en silence — la requête part sans identité, et le journal
+    # dit pourquoi (oto-backend#464).
+    claims = getattr(token, "claims", None) or {}
+    sub = claims.get("sub")
+    if not sub:
+        logger.warning(
+            "identité MCP illisible — raison=%s %s : la requête n'a pas d'identité",
+            "claims_absentes" if not claims else "sub_absent", _decrire_jeton(token))
+        return None
+    # Drain d'alias (B1, otomata#35) : canonicaliser le sub (vieux jeton →
+    # compte migré). ⚠️ Contrairement à la porte REST, `upsert_user` est ICI
+    # sous la commande du drain — un compte MCP-only n'est donc rafraîchi que
+    # commande posée. Ce passager est relevé par le test du même nom ; le
+    # sortir de là est un changement de comportement, pas un nettoyage.
+    if not alias_drain_armed():
+        return sub
+    # Une portée ouverte ⟹ la canonicalisation (un SELECT) et le
+    # rafraîchissement (un INSERT … ON CONFLICT, donc un COMMIT) ne se
+    # paient qu'UNE fois par message, quel que soit le nombre
+    # d'intermédiaires qui redemandent la même identité dans le même
+    # appel. Mesuré le 09/09/2026 sur la chaîne servie : 10 allers-retours
+    # PG par `tools/call`, tous dans la boucle, pour UNE valeur.
+    # ⚠️ La clé est le sub BRUT du jeton : c'est ce qui rend impossible
+    # de servir l'identité d'un autre (cf. `_identity_cache`).
+    cache = _identity_cache.get()
+    if cache is not None and sub in cache:
+        return cache[sub]
+    from .. import db
+    try:
+        canonique = db.resolve_sub(sub)
+        db.upsert_user(canonique, email=claims.get("email"), name=claims.get("name"))
+    except Exception as exc:
+        # C'est ICI, et nulle part ailleurs, que se dit POURQUOI une requête n'a pas
+        # d'identité (oto-backend#464) : les appelants ne rattrapent plus l'échec pour
+        # repartir anonymes — ils le laissent monter. La raison est une étiquette
+        # stable (`alias_<motif>`, `compte_en_pause`, `base_indisponible:<classe>`),
+        # le sub est celui du JETON (le seul qu'on connaisse à ce stade).
+        raison = _raison_d_echec(exc)
+        logger.warning("identité MCP refusée — raison=%s sub_jeton=%s %s : la requête "
+                       "est refusée, pas servie anonyme", raison, sub,
+                       _decrire_jeton(token), exc_info=raison.startswith("base_"))
+        if raison.startswith("base_"):
+            raise IdentiteIndisponible(raison) from exc
+        raise
+    # Après les deux appels, jamais avant : un refus (`AliasNonResolvable`,
+    # `CompteEnPause`) ne se mémorise pas — il doit se lever pour CHAQUE
+    # demandeur, comme avant, plutôt que d'être rendu en valeur.
+    if cache is not None:
+        cache[sub] = canonique
+    return canonique

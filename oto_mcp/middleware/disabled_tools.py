@@ -89,11 +89,9 @@ class UserDisabledToolsMiddleware(Middleware):
 
     async def on_initialize(self, context, call_next):
         result = await call_next(context)
-        try:
-            sub = current_user_sub_from_token()
-        # noqa: SILENT — dette déclarée : sub avalé, la requête devient anonyme sans dire pourquoi (#424, verdict C)
-        except Exception:
-            sub = None
+        # Un échec d'identité MONTE (journalisé par le seam, #464) : le rattraper
+        # servait le catalogue NON FILTRÉ, celui d'une session sans compte.
+        sub = current_user_sub_from_token()
         if not sub:
             return result
         ctx = context.fastmcp_context
