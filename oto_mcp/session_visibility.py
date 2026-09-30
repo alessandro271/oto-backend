@@ -192,7 +192,10 @@ def _compute_couches(sub: str, active_org, prof_org, role_plateforme: str,
     # restent) ; `oto_call` = échappatoire d'appel ponctuel d'un tool non listé
     # (ADR 0036).
     try:
-        if not connector_selection.is_seeded(sub, prof_org):
+        # Sans org active, rien n'est semé : la sentinelle `0` n'est plus une org
+        # (ADR 0030 §8) et y poser une marque ou une ligne n'est rendu par aucune
+        # lecture (#959).
+        if active_org is not None and not connector_selection.is_seeded(sub, prof_org):
             org_defaults = set(org_store.get_org_default_connectors(active_org) or []) if active_org else set()
             exposed_now = connector_activation.exposed_connectors(active_org)
             socle = providers.DEFAULT_ACTIVE_CONNECTORS & exposed_now

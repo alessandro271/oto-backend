@@ -85,14 +85,30 @@ def test_unselect_sans_ligne_a_retirer_refuse_au_lieu_de_repondre_ok(monkeypatch
     assert "instagram" in e.value.message
 
 
-def test_unselect_scope_lappel_sur_org_id_ou_zero(monkeypatch):
-    """`ctx.org_id or 0` : la même règle que `_select`/`_pause`, un espace perso
-    (org_id=None côté ctx) écrit/lit sous la sentinelle 0, jamais None en SQL."""
+def test_unselect_scope_lappel_sur_l_org_active(monkeypatch):
     seen = []
     monkeypatch.setattr(CS.connector_selection, "unselect",
                         lambda sub, name, org: seen.append((sub, name, org)) or True)
-    CS._unselect(ResolvedCtx(sub="u1", org_id=None), CS.ConnectorActionInput(name="hunter"))
-    assert seen == [("u1", "hunter", 0)]
+    CS._unselect(ResolvedCtx(sub="u1", org_id=42), CS.ConnectorActionInput(name="hunter"))
+    assert seen == [("u1", "hunter", 42)]
+
+
+@pytest.mark.parametrize("geste", ["_select", "_pause", "_unselect"])
+def test_un_geste_sans_org_active_est_refuse_au_lieu_d_ecrire_sous_zero(monkeypatch, geste):
+    """#959 — `ctx.org_id or 0` rangeait la sélection sous l'ancienne sentinelle `0`,
+    qu'aucune lecture ne rend plus (ADR 0030 §8) : le geste réussissait et ne servait
+    à rien. Sans org active, il est REFUSÉ par son nom, et rien n'est écrit."""
+    ecrit = []
+    monkeypatch.setattr(CS, "_require_exposed", lambda ctx, name: None)
+    monkeypatch.setattr(CS.connector_selection, "set_state",
+                        lambda *a, **k: ecrit.append(a))
+    monkeypatch.setattr(CS.connector_selection, "unselect",
+                        lambda *a, **k: ecrit.append(a) or True)
+    with pytest.raises(AuthzDenied) as e:
+        getattr(CS, geste)(ResolvedCtx(sub="u1", org_id=None),
+                           CS.ConnectorActionInput(name="hunter"))
+    assert e.value.code == "no_active_org" and e.value.status == 400
+    assert ecrit == []
 
 
 # ── #326 : filtre `name` (lecture d'état ciblée, plus d'échec silencieux) ──

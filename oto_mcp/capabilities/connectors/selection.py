@@ -494,17 +494,36 @@ def _activation_hint(name: str, tools: list[str]) -> str:
             f"`oto_tool_schema`), ou ouvre une NOUVELLE conversation pour les voir listés.")
 
 
+def _org_du_geste(ctx: ResolvedCtx) -> int:
+    """L'org sous laquelle un geste du membre range sa sélection — une org RÉELLE,
+    jamais l'ancienne sentinelle `0` (#959). Ce `ctx.org_id or 0` écrivait des lignes
+    qu'aucune lecture ne rend plus depuis la fin du « perso sans org » (ADR 0030 §8) :
+    sans org active, le geste est REFUSÉ par son nom plutôt que rangé hors de vue."""
+    if not ctx.org_id:
+        raise AuthzDenied(400, "no_active_org",
+                          "Aucune org active : une sélection de connecteur se range sous "
+                          "une org — choisis-en une avec oto_use_org.")
+    return ctx.org_id
+
+
+_REFUS_SANS_ORG = DeclaredError(400, "no_active_org",
+                                "aucune org active : une sélection se range sous une org "
+                                "réelle, jamais hors de vue")
+
+
 def _select(ctx: ResolvedCtx, inp: ConnectorActionInput) -> dict:
+    org_id = _org_du_geste(ctx)
     _require_exposed(ctx, inp.name)
-    connector_selection.set_state(ctx.sub, inp.name, connector_selection.ACTIVE, ctx.org_id or 0)
+    connector_selection.set_state(ctx.sub, inp.name, connector_selection.ACTIVE, org_id)
     tools = _connector_tools(inp.name)
     return {"connector": inp.name, "state": "active", "tools": tools,
             "hint": _activation_hint(inp.name, tools)}
 
 
 def _pause(ctx: ResolvedCtx, inp: ConnectorActionInput) -> dict:
+    org_id = _org_du_geste(ctx)
     _require_exposed(ctx, inp.name)
-    connector_selection.set_state(ctx.sub, inp.name, connector_selection.PAUSED, ctx.org_id or 0)
+    connector_selection.set_state(ctx.sub, inp.name, connector_selection.PAUSED, org_id)
     return {"connector": inp.name, "state": "paused"}
 
 
@@ -515,7 +534,7 @@ def _unselect(ctx: ResolvedCtx, inp: ConnectorActionInput) -> dict:
     # local dès que l'appel n'a pas levé). REFUSE nommément, sur le même patron
     # que l'unlink de projet (`d3c5de40`) : un succès qui n'a rien fait est pire
     # qu'un refus.
-    if not connector_selection.unselect(ctx.sub, inp.name, ctx.org_id or 0):
+    if not connector_selection.unselect(ctx.sub, inp.name, _org_du_geste(ctx)):
         raise AuthzDenied(404, "connector_not_selected",
                           f"`{inp.name}` n'est pas dans ta sélection active pour cette org — "
                           "rien n'a été retiré (déjà désinstallé, ou jamais installé ici). "
@@ -558,7 +577,8 @@ CAPABILITIES += [
                               "nom inconnu du registre, connecteur non exposé "
                               "pour l'org active, ou restreint par une règle — "
                               "les trois sont indistinguables côté membre, et "
-                              "tous se règlent par la même demande à un admin"),),
+                              "tous se règlent par la même demande à un admin"),
+                _REFUS_SANS_ORG),
         rest=RestBinding("POST", "/api/me/connectors/{name}/select"),
     ),
     Capability(
@@ -570,7 +590,8 @@ CAPABILITIES += [
                               "nom inconnu du registre, connecteur non exposé "
                               "pour l'org active, ou restreint par une règle — "
                               "les trois sont indistinguables côté membre, et "
-                              "tous se règlent par la même demande à un admin"),),
+                              "tous se règlent par la même demande à un admin"),
+                _REFUS_SANS_ORG),
         rest=RestBinding("POST", "/api/me/connectors/{name}/pause"),
     ),
     Capability(
@@ -583,7 +604,8 @@ CAPABILITIES += [
         errors=(DeclaredError(404, "connector_not_selected",
                               "le connecteur n'est pas dans ta sélection active pour "
                               "cette org : déjà retiré, jamais installé ici, ou "
-                              "installé sous une autre org active"),),
+                              "installé sous une autre org active"),
+                _REFUS_SANS_ORG),
         rest=RestBinding("DELETE", "/api/me/connectors/{name}"),
     ),
     Capability(
