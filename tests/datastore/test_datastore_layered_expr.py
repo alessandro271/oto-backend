@@ -77,21 +77,20 @@ def test_an_empty_string_is_not_swallowed_by_the_coalesce(conn):
 
 # --- l'expression de l'index, épinglée ------------------------------------------
 
-def test_the_index_expression_is_pinned_to_V1():
+def test_the_index_expression_is_the_read_rule():
     """Exigence ③ de la revue : pour que le planner serve le lookup d'upsert PAR
-    l'index, l'expression du WHERE doit être TEXTUELLEMENT celle de l'index.
+    l'index, l'expression du WHERE doit être celle de l'index.
 
-    Depuis oto#163, la règle de valeur (`field_value_sql`) a changé et l'index, lui,
-    ne doit PAS suivre : ses `ds_bkey_<ns_id>` sont déjà construits sur une base
-    partagée. `bkey_index_expr` ne délègue donc plus — et ce texte, au caractère
-    près, est ce qui le garde. Rétablir la délégation fait rougir ce test.
+    Depuis oto#223, cette expression EST la règle de lecture : la valeur que sert la
+    lecture fait foi pour la clé métier, sur l'index, le lookup, les doublons et la
+    fusion. Une copie de la règle, ici, finirait par diverger d'elle en silence.
 
     Le mode d'échec d'un écart ne casse rien de visible — la déduplication
     continuerait de marcher, chaque lookup passerait simplement en seq scan. La
     définition enregistrée et le plan du vrai lookup sont éprouvés contre PostgreSQL
-    dans `test_cle_metier_v1_figee_163.py`."""
+    dans `test_cle_metier_index_223.py`."""
     assert (dsdb.bkey_index_expr("siren").as_string(None)
-            == "COALESCE(data->'siren'->>'valeur', data->>'siren')")
+            == dsdb.field_value_sql("siren").as_string(None))
 
 
 @pytest.mark.parametrize("lecteur", ["field_value_sql", "bkey_index_expr"])

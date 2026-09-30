@@ -89,9 +89,11 @@ def field_value_sql(key: str) -> str:
     une clé hors couches est une donnée `json` métier : il rend son texte. Seul un
     objet fait de couches connues, et d'elles seules, vaut NULL — comme en Python.
 
-    ⚠️ **L'index d'unicité de clé métier ne passe PAS par ici** depuis oto#163 : son
-    expression est figée dans `bkey_index_expr`. Le littéral échappé reste la forme
-    des contrôles de schéma, qui composent leur requête autour.
+    ⚠️ **L'index d'unicité de clé métier passe par ici** depuis oto#223
+    (`bkey_index_expr`) : son texte est donc celui de cette règle, au caractère près,
+    et le changer oblige à reconstruire les index `ds_bkey_<ns>` par une migration.
+    Le littéral échappé reste aussi la forme des contrôles de schéma, qui composent
+    leur requête autour.
     """
     from psycopg import sql as _sql
     k = _sql.Literal(str(key))
@@ -270,26 +272,24 @@ def field_read_sql(field: str) -> tuple:
 
 
 def bkey_index_expr(key: str) -> str:
-    """Expression de l'index d'unicité de clé métier — ET de son lookup, qui la prend ici.
+    """Expression de la clé métier : celle de l'index d'unicité, du lookup, des groupes
+    de doublons et de leur fusion — tous la prennent ici (oto#223).
 
-    ⚠️ **FIGÉE au texte V1 depuis oto#163, et elle ne délègue plus à `field_value_sql`.**
-    Les index `ds_bkey_<ns_id>` sont des index d'EXPRESSION déjà construits en base,
-    partagée entre préprod et prod. Si ce texte bougeait, le lookup
-    (`db.datastore_find_row_id_by_key`) ne correspondrait plus à l'index au caractère
-    près : aucune erreur, la déduplication continuerait, et chaque lookup partirait en
-    parcours séquentiel. Le changer exigerait de reconstruire tous les index — un acte
-    hors démarrage, pas un effet de bord de la règle de valeur.
+    **C'est la règle de lecture, `field_value_sql`, et rien d'autre.** La valeur qui
+    fait foi pour la clé est celle que SERT la lecture : une case faite de couches
+    seules, ou `{"valeur": null, …}`, ne sert aucune valeur, donc n'entre pas dans
+    l'index (partiel sur `IS NOT NULL`) et ne fait doublon avec rien ; `"123"` et
+    `{"valeur": "123", "comment": "c"}` servent la même valeur, donc sont la même clé
+    pour les quatre chemins. Jusqu'à oto#223, l'index comparait le texte V1
+    (`COALESCE(data->'k'->>'valeur', data->>'k')`) et les doublons le texte brut
+    `data->>'k'` : trois règles pour une clé.
 
-    Pourquoi V1 suffit ici : le lookup ne cherche qu'une clé DÉBALLÉE et non vide
-    (`ecriture.py`, `lots.py`, `controles.py`). Sur une telle clé, V1 et la règle de
-    `field_value_sql` rendent la même chose ; ils ne divergent que sur une case sans
-    valeur, qu'aucun lookup ne cherche.
-
-    Deux épreuves la tiennent : son texte au caractère près, et le `pg_get_indexdef`
-    comparé à une chaîne fixe, avec l'`EXPLAIN` du vrai lookup qui doit porter
-    `Index Cond`."""
-    from psycopg import sql as _sql
-    k = _sql.Literal(str(key))
-    return _sql.SQL(
-        "COALESCE(data->{k}->>{v}, data->>{k})"
-    ).format(k=k, v=_sql.Literal(VALUE_LAYER))
+    ⚠️ **Le texte est celui d'index d'EXPRESSION déjà construits en base**, partagée
+    entre préprod et prod, et le lookup ne sert l'index qu'à expression identique. Il
+    dépend de `LAYER_KEYS` (via la règle) : changer la règle ou le vocabulaire des
+    couches change ce texte, et chaque lookup partirait en parcours séquentiel sans
+    une erreur. Un tel changement exige une migration qui reconstruit les
+    `ds_bkey_<ns>` (modèle : `0029_cle_metier_valeur_servie`). Le banc
+    `test_cle_metier_index_223.py` fige la définition enregistrée par PostgreSQL et
+    le plan du vrai lookup."""
+    return field_value_sql(key)

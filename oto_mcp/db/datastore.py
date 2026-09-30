@@ -147,14 +147,19 @@ def datastore_find_row_id_by_key(ns_id: int, key_field: str, key_value) -> Optio
     chaîne près. Le planner ne sert un index d'EXPRESSION que si le `WHERE` porte
     exactement la sienne : un écart ne casserait rien de visible (la déduplication
     marcherait) et ferait simplement partir chaque lookup en seq scan. C'est la panne
-    qu'on ne voit qu'au moment où le namespace est assez gros pour qu'elle coûte."""
+    qu'on ne voit qu'au moment où le namespace est assez gros pour qu'elle coûte.
+
+    `key_value` = la valeur DÉBALLÉE (`unwrap`). Son texte est rendu par la BASE
+    (`#>> '{}'` sur son JSON), comme `data->>k` rend celui de la case : `true` et non
+    `True`, `5.0` et non une conversion Python (oto#223). Une chaîne rend son texte
+    nu, un nombre et `"5"` se retrouvent, comme dans l'index."""
     from psycopg import sql as _sql
     q = _sql.SQL(
-        "SELECT row_id FROM datastore_rows WHERE ns_id = %s AND {e} = %s "
+        "SELECT row_id FROM datastore_rows WHERE ns_id = %s AND {e} = (%s::jsonb #>> '{{}}') "
         "ORDER BY created_at ASC LIMIT 1"
     ).format(e=bkey_index_expr(key_field))
     with _connect() as conn:
-        row = conn.execute(q, (ns_id, str(key_value))).fetchone()
+        row = conn.execute(q, (ns_id, json.dumps(key_value))).fetchone()
         return row["row_id"] if row else None
 
 
@@ -173,13 +178,16 @@ def _bkey_index_name(ns_id: int) -> str:
 def datastore_key_dup_groups(ns_id: int, key: str, limit: int = 10) -> list[dict]:
     """Valeurs de clé métier en DOUBLON dans les rows existantes — `[{value, n}]`,
     plus gros groupes d'abord. Sert le refus actionnable de `set_schema` (on ne
-    pose pas un UNIQUE sur des données sales sans le dire)."""
+    pose pas un UNIQUE sur des données sales sans le dire).
+
+    Comparées sur `bkey_index_expr`, l'expression MÊME de l'index (oto#223) : un
+    doublon vu ici est exactement ce qui ferait échouer sa pose, et rien d'autre."""
     from psycopg import sql as _sql
     q = _sql.SQL(
-        "SELECT data->>{k} AS value, COUNT(*) AS n FROM datastore_rows "
-        "WHERE ns_id = %s AND data->>{k} IS NOT NULL "
+        "SELECT {e} AS value, COUNT(*) AS n FROM datastore_rows "
+        "WHERE ns_id = %s AND {e} IS NOT NULL "
         "GROUP BY 1 HAVING COUNT(*) > 1 ORDER BY n DESC, 1 LIMIT %s"
-    ).format(k=_sql.Literal(str(key)))
+    ).format(e=bkey_index_expr(key))
     with _connect() as conn:
         return [dict(r) for r in conn.execute(q, (ns_id, limit)).fetchall()]
 
@@ -383,18 +391,22 @@ def datastore_merge_key_duplicates(ns_id: int, key: str) -> int:
     pour chaque valeur en doublon, MERGE les `data` dans l'ordre chronologique dans
     la row la plus ANCIENNE (celle que `find_row_id_by_key` aurait servie à chaque
     write), puis supprime les plus récentes. Renvoie le nombre de rows supprimées.
-    Une transaction par groupe (échec isolé, jamais de demi-merge)."""
+    Une transaction par groupe (échec isolé, jamais de demi-merge).
+
+    Groupées sur `bkey_index_expr`, l'expression de l'index (oto#223) : une case qui
+    ne sert aucune valeur ne fusionne avec rien, et une clé nue fusionne avec la même
+    clé enveloppée — ce que l'index, posé juste après, refuserait sinon."""
     from psycopg import sql as _sql
-    key = str(key)
     removed = 0
+    expr = bkey_index_expr(key)
     dup_q = _sql.SQL(
-        "SELECT data->>{k} AS value FROM datastore_rows "
-        "WHERE ns_id = %s AND data->>{k} IS NOT NULL GROUP BY 1 HAVING COUNT(*) > 1"
-    ).format(k=_sql.Literal(key))
+        "SELECT {e} AS value FROM datastore_rows "
+        "WHERE ns_id = %s AND {e} IS NOT NULL GROUP BY 1 HAVING COUNT(*) > 1"
+    ).format(e=expr)
     rows_q = _sql.SQL(
-        "SELECT row_id, data FROM datastore_rows WHERE ns_id = %s AND data->>{k} = %s "
+        "SELECT row_id, data FROM datastore_rows WHERE ns_id = %s AND {e} = %s "
         "ORDER BY created_at ASC, row_id ASC"
-    ).format(k=_sql.Literal(key))
+    ).format(e=expr)
     with _connect() as conn:
         values = [r["value"] for r in conn.execute(dup_q, (ns_id,)).fetchall()]
     for value in values:

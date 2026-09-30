@@ -1862,12 +1862,18 @@ son texte. Une case `{"comment": "à vérifier"}` est donc trouvée par `empty`,
 `required` ; son commentaire reste lisible par `champ.comment`. Avant oto#163, le SQL
 retombait sur le texte de l'enveloppe, et ces cinq lectures comptaient la case remplie.
 
-**L'index d'unicité de clé métier garde son expression V1** (`bkey_index_expr`,
-`COALESCE(data->'k'->>'valeur', data->>'k')`) et ne suit PAS la règle ci-dessus. C'est un
-index d'EXPRESSION déjà construit : le lookup ne le sert qu'à chaîne identique, d'où le
-littéral échappé et le texte figé. Le lookup ne cherche qu'une clé déballée et non vide,
-sur laquelle V1 et la règle coïncident. Changer ce texte obligerait à reconstruire les
-index hors démarrage.
+**La clé métier compare la valeur que sert la lecture** (oto#223) : l'index d'unicité
+`ds_bkey_<ns>`, le lookup d'upsert, les groupes de doublons de la pose de schéma et leur
+fusion par la maintenance prennent tous `bkey_index_expr`, qui EST la règle ci-dessus.
+Une case sans valeur servie (couches seules, `{"valeur": null, …}`) n'entre pas dans
+l'index partiel et ne fait doublon avec rien ; une clé nue et la même clé enveloppée
+sont la même clé. Le lookup fait rendre le texte de la valeur cherchée par la base
+(`#>> '{}'`), comme `data->>k` celui de la case : `true`, pas `True`. Jusqu'à oto#223,
+trois règles coexistaient (index en `COALESCE` V1, doublons et fusion en `data->>k`
+brut). ⚠️ L'index est d'EXPRESSION et le lookup ne le sert qu'à expression identique :
+toucher la règle ou `LAYER_KEYS` change ce texte, et impose une migration qui
+reconstruit les index (modèle : révision `0029_cle_metier_valeur_servie`) ; le banc
+`test_cle_metier_index_223.py` fige la définition et le plan.
 
 **Écrire : l'écriture ne touche QUE ce qu'elle nomme** (`_merge_column`). Une règle,
 dont découlent les deux défauts payés :
