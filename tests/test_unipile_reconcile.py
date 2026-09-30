@@ -251,3 +251,22 @@ def test_le_motif_ne_revele_pas_le_nombre_de_comptes_de_la_cle(monkeypatch):
     out = uc.reconcile_pending("u1")
     assert "compte(s) chez le fournisseur" not in out["detail"]
     assert not any(ch.isdigit() for ch in out["detail"].split(":")[0])
+
+
+def test_la_date_du_fournisseur_se_lit_sous_toutes_ses_formes():
+    """#580 : une date illisible REFUSE la liaison. Les formes que sert le fournisseur
+    doivent donc se lire sur toutes les versions de Python supportées — `Z` final et
+    fraction de 3 chiffres échouaient en 3.10 et bloquaient toute connexion."""
+    attendu = datetime(2026, 7, 16, 11, 0, 49, tzinfo=timezone.utc)
+    for v in ("2026-07-16 11:00:49+00", "2026-07-16T11:00:49Z", "2026-07-16T11:00:49.000Z",
+              "2026-07-16T11:00:49.0000000+00:00", "2026-07-16T13:00:49+02:00",
+              1784199649, 1784199649000):
+        assert uc._parse_dt(v).replace(microsecond=0) == attendu, v
+    for v in (None, "", "pas une date", True):
+        assert uc._parse_dt(v) is None, v
+
+
+def test_une_date_iso_en_z_se_lie(monkeypatch):
+    calls = _setup(monkeypatch, [_pend()], [_acc("acc_new", "Moi", created="2026-07-16T12:45:00.123Z")])
+    assert uc.reconcile_pending("sub1")["bound"] is True
+

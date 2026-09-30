@@ -465,7 +465,12 @@ créé par le fournisseur ne porte pas notre nonce, et sans preuve, le premier q
 l'identifiant), ou une **création chez le fournisseur postérieure à la demande de liaison**
 (marge d'horloge de 5 min). Ce plancher de date vivait dans la seule réconciliation et y
 cédait quand une date était illisible (« date illisible → on garde ») ; il vit au point
-d'écriture, et **une date absente ou illisible refuse**. L'inventaire vient de
+d'écriture, et **une date absente ou illisible refuse**. ⚠️ La lecture de la date est donc
+sur le chemin de TOUTE connexion : le fournisseur la sert en ISO 8601 avec `Z` final, que
+`datetime.fromisoformat` refuse avant Python 3.11. L'ancienne lecture rendait None en 3.10
+(les 26 liaisons de l'audit du 30/09 : « date illisible → on garde » laissait donc TOUT
+passer) ; `_parse_dt` lit le `Z`, une fraction de 1 à 9 chiffres et l'horodatage Unix, et
+un test la tient sur ces formes. L'inventaire vient de
 `list_accounts`, déjà lu par la réconciliation : la lecture d'un compte par identifiant
 n'était pas nécessaire. **Ce qui reste** : un compte qu'un TIERS crée sur la clé partagée
 APRÈS votre demande et avant sa propre réconciliation passe le plancher ; seul l'indice

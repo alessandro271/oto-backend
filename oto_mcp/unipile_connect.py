@@ -333,21 +333,38 @@ async def hosted_auth_url(sub: str, channel: str = "linkedin",
 # liaison v1, chemin jumeau dormant, a été retiré le 2026-08-29 (#581).
 
 def _parse_dt(v):
-    """Parse une date Unipile ('2026-07-16 11:00:49.019235+00') ou un datetime PG
-    en `datetime` aware (UTC par défaut). None si illisible."""
+    """Parse une date Unipile ou un datetime PG en `datetime` aware (UTC par défaut).
+    None si illisible — et depuis #580, une date illisible REFUSE une liaison : cette
+    lecture est donc sur le chemin de toute connexion, elle doit lire ce que sert le
+    fournisseur sur TOUTES les versions de Python supportées (>= 3.10).
+
+    Formes lues : `2026-07-16 11:00:49.019235+00` (v1), ISO 8601 avec `Z` final
+    (`2026-07-16T11:00:49.019Z`, que `fromisoformat` refuse avant 3.11), une fraction
+    de seconde de 1 à 9 chiffres (3.10 n'en lit que 3 ou 6), un horodatage Unix en
+    secondes ou en millisecondes."""
     from datetime import datetime, timezone
     import re as _re
-    if v is None:
+    if v is None or isinstance(v, bool):
         return None
     if isinstance(v, datetime):
         return v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+    if isinstance(v, (int, float)):
+        secondes = v / 1000 if v > 1e11 else v
+        try:
+            return datetime.fromtimestamp(secondes, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
     s = str(v).strip()
     if "T" not in s and " " in s:
         s = s.replace(" ", "T", 1)
+    if s[-1:] in ("Z", "z"):
+        s = s[:-1] + "+00:00"
     # normaliser un offset "+00" / "+0000" en "+00:00" (fromisoformat 3.10 strict)
     m = _re.search(r'([+-]\d{2})(\d{2})?$', s)
     if m and ":" not in s[m.start():]:
         s = s[:m.start()] + m.group(1) + ":" + (m.group(2) or "00")
+    # une fraction de seconde ramenée à 6 chiffres (3.10 n'en lit que 3 ou 6)
+    s = _re.sub(r'\.(\d+)', lambda f: "." + (f.group(1) + "000000")[:6], s, count=1)
     try:
         dt = datetime.fromisoformat(s)
     except ValueError:

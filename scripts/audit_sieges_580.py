@@ -68,6 +68,10 @@ def classer(lignes: list[dict], comptes: list[dict], marge: timedelta) -> dict:
         cree = _parse_dt(crees[l["account_id"]])
         lie = _parse_dt(l["connected_at"])
         if cree is None or lie is None:
+            # La valeur BRUTE servie : une date n'est pas une donnée personnelle, et sans
+            # elle une date illisible se devine au lieu de se lire.
+            brute = crees[l["account_id"]]
+            fiche["date_brute"] = {"type": type(brute).__name__, "valeur": repr(brute)[:60]}
             constat["date_manquante"].append(fiche)
             continue
         fiche["cree_le"] = cree.isoformat()
