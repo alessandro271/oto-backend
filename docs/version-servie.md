@@ -121,6 +121,31 @@ La coordonnée fiable est ce que **pip écrit à l'installation** — `direct_ur
 | `metadata` | Installation depuis PyPI : plus de `direct_url.json`, il ne reste que le champ `Version`. ⚠️ C'est le numéro **gelé** — servi faute de mieux, nommé pour ce qu'il est. |
 | `absent` | oto-core n'est pas installé (aucun connecteur ne peut tourner). |
 
+## Les dépendances installées, et le verrou (#932)
+
+Le code servi ne suffit pas à dire ce qui tourne : le 30/09/2026, les quatre arbres de
+déploiement portaient **quatre jeux de dépendances différents** pour des coordonnées
+de code comparables — mcp 1.27.2 sur la production active, 1.29.1 sur la couleur en
+attente. `pip install -e .` dans un venv existant ne met jamais à jour une dépendance
+déjà satisfaite, donc une bascule ordinaire changeait le SDK MCP servi sans commit.
+`GET /api/version` sert trois champs de plus, **relevés une fois, au démarrage**
+(`oto_mcp/empreinte_deps.py`) :
+
+| champ | ce qu'il dit |
+|---|---|
+| `deps_sha` | sha256 des lignes `nom==version` des distributions installées (`importlib.metadata`, nom canonique PEP 503), triées, jointes par `\n` — **sans `pip`, `setuptools` ni `wheel`**, sauf si le verrou les prescrit. Deux arbres au même `deps_sha` portent le même jeu : c'est ce qu'on compare entre les deux couleurs d'un environnement. Recalcul hors serveur, depuis l'arbre : `.venv/bin/python -c "from pathlib import Path; from oto_mcp import empreinte_deps as e; print(e.etat(Path('.'))['deps_sha'])"`. |
+| `lock_sha` | sha256 de l'`uv.lock` de l'arbre, octet pour octet. `null` quand l'arbre n'en porte pas (image installée en wheel). |
+| `deps_conformes` | `true` si l'installé est **exactement** ce que `uv sync --frozen` poserait depuis ce verrou pour cet interpréteur : même ensemble de paquets, mêmes versions, même commit pour une dépendance git. Le verrou est universel ; il est parcouru depuis le projet en évaluant les marqueurs ICI, sans extra (le service) ou avec `dev` (la CI). `false` sans verrou. |
+
+Les écarts (paquet hors verrou, manquant, autre version, autre commit) partent **une
+fois au journal**, au boot, en avertissement. Deux exceptions déclarées : `pip`,
+`setuptools` et `wheel`, posés par `python -m venv`, ne sont pas des écarts quand le
+verrou ne les prescrit pas — `uv sync --frozen` ne les retire jamais (mesuré avec uv
+0.12.19). La même règle vaut pour `deps_sha` : sans elle, deux couleurs au même
+verrou mais amorcées à des dates différentes (un pip plus récent d'un côté) auraient
+deux empreintes pour le même jeu, et la comparaison des couleurs crierait à tort. Un
+`uv.lock` présent mais illisible **lève** : ce n'est pas une conformité à supposer.
+
 ## Le script de déploiement : ce dépôt en est la source unique
 
 `deploy/oto-mcp-bluegreen.sh` **est** la source de ce que la box exécute en

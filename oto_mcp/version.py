@@ -40,6 +40,11 @@ coordonnées par l'environnement (`OTO_DEPLOY_REF` / `OTO_DEPLOY_SHA` /
 `OTO_DEPLOY_AT`), qui **prime** — c'est aussi la porte de sortie si le fichier
 manque.
 
+Le document porte aussi les DÉPENDANCES installées et leur conformité au verrou
+`uv.lock` (`deps_sha`, `lock_sha`, `deps_conformes`, #932) : le code servi ne dit pas
+ce qui tourne quand deux couleurs ont résolu leurs dépendances à des dates
+différentes. Calcul et raisons dans `empreinte_deps`.
+
 Et quand on ne sait pas, on le DIT (`"unknown"`, `source: "unknown"`) : une version
 inventée serait pire que pas de version, puisqu'on daterait un changement de
 comportement sur une coordonnée fausse.
@@ -52,6 +57,11 @@ from datetime import datetime, timezone
 from functools import lru_cache
 from importlib import metadata
 from pathlib import Path
+from typing import Literal, Optional
+
+from pydantic import BaseModel, Field
+
+from . import empreinte_deps
 
 SERVICE = "oto-backend"
 
@@ -191,7 +201,40 @@ def instantane() -> dict:
         "started_at": DEMARRE_A,
         "source": source,
         "oto_core": oto_core(),
+        # Les dépendances installées et leur conformité au verrou (#932), calculées
+        # une fois par processus — cf. `empreinte_deps`.
+        **empreinte_deps.etat_au_demarrage(racine_de_l_arbre()),
     }
+
+
+class OtoCoreInstalle(BaseModel):
+    tag: Optional[str] = Field(description="tag git demandé à l'installation")
+    commit: Optional[str] = Field(description="commit résolu à l'installation")
+    source: Literal["direct_url", "metadata", "absent"] = Field(description=(
+        "`direct_url` : coordonnée exacte (installation git) ; `metadata` : numéro "
+        "gelé du paquet, faute de mieux ; `absent` : oto-core n'est pas installé"))
+
+
+class VersionServie(BaseModel):
+    """Ce que CE processus exécute — le corps de `GET /api/version`."""
+    service: str
+    version: str = Field(description="`<ref>+<commit court>`, ou `unknown`")
+    ref: Optional[str]
+    commit: Optional[str]
+    deployed_at: Optional[str]
+    started_at: str
+    source: Literal["env", "deploy_file", "unknown"]
+    oto_core: OtoCoreInstalle
+    deps_sha: str = Field(description=(
+        "sha256 des lignes `nom==version` des distributions INSTALLÉES (nom canonique "
+        "PEP 503), triées, jointes par un saut de ligne, sans pip/setuptools/wheel "
+        "sauf si le verrou les prescrit — relevé au démarrage"))
+    lock_sha: Optional[str] = Field(description=(
+        "sha256 de l'`uv.lock` de l'arbre servi ; `null` si l'arbre n'en porte pas"))
+    deps_conformes: bool = Field(description=(
+        "vrai si l'installé est EXACTEMENT ce que `uv sync --frozen` poserait depuis "
+        "ce verrou pour cet interpréteur (sans extra, ou avec `dev`) ; faux sinon, et "
+        "faux sans verrou — relevé au démarrage"))
 
 
 def version_servie() -> str:

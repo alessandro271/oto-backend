@@ -241,7 +241,37 @@ def test_api_version_ne_sert_aucune_valeur():
     figer évite qu'on y greffe un jour un état de configuration."""
     charge = json.loads(bytes(asyncio.run(_endpoint_version()(_requete())).body).decode())
     assert set(charge) == {"service", "version", "ref", "commit", "deployed_at",
-                           "started_at", "source", "oto_core"}
+                           "started_at", "source", "oto_core",
+                           "deps_sha", "lock_sha", "deps_conformes"}
+
+
+def test_api_version_sert_l_empreinte_des_dependances(monkeypatch, tmp_path):
+    """#932 : l'empreinte de l'installé, le verrou de l'arbre et leur conformité —
+    servis tels que `empreinte_deps` les calcule pour la racine de l'arbre servi."""
+    from oto_mcp import empreinte_deps
+    monkeypatch.setattr(version, "racine_de_l_arbre", lambda: tmp_path)
+    empreinte_deps.etat_au_demarrage.cache_clear()
+    try:
+        charge = json.loads(bytes(asyncio.run(_endpoint_version()(_requete())).body).decode())
+    finally:
+        empreinte_deps.etat_au_demarrage.cache_clear()
+    assert charge["deps_sha"] == empreinte_deps.empreinte(empreinte_deps.installees())
+    assert charge["lock_sha"] is None and charge["deps_conformes"] is False, (
+        "un arbre sans uv.lock s'est dit conforme")
+
+
+def test_le_contrat_de_api_version_declare_ce_qu_elle_sert():
+    """Le corps servi et le schéma publié ne font qu'un : un champ ajouté au corps
+    sans l'être au contrat serait invisible à un client généré."""
+    doc = openapi.build(api_routes.make_routes(types.SimpleNamespace()))
+    op = doc["paths"]["/api/version"]["get"]
+    assert op["tags"] == ["_nature"] and op["security"] == []
+    schema = op["responses"]["200"]["content"]["application/json"]["schema"]
+    if "$ref" in schema:
+        schema = doc["components"]["schemas"][schema["$ref"].rsplit("/", 1)[1]]
+    charge = json.loads(bytes(asyncio.run(_endpoint_version()(_requete())).body).decode())
+    assert set(schema["properties"]) == set(charge)
+    assert {"deps_sha", "lock_sha", "deps_conformes"} <= set(schema["required"])
 
 
 # ── surface 2 : info.version de l'OpenAPI ────────────────────────────────────

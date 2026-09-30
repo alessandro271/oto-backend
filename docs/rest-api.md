@@ -926,8 +926,10 @@ d'instance dans la prose : les exemples notent `$OTO` l'adresse de `servers`.
 
 **Sans auth**, comme le descriptif ci-dessus : un ref git, un SHA, deux horodatages —
 aucune valeur. Il rend l'étiquette de ce que **le processus exécute** (`v1.2.3+6d5bf16b`),
-le tag **oto-core réellement installé**, et l'instant du déploiement comme celui du
-démarrage. La même étiquette part dans `info.version` de l'OpenAPI et en **en-tête
+le tag **oto-core réellement installé**, l'instant du déploiement comme celui du
+démarrage, et l'empreinte des dépendances installées avec leur conformité au verrou
+`uv.lock` (`deps_sha`, `lock_sha`, `deps_conformes`, relevés au démarrage — #932). Son
+contrat est déclaré (`ContratDeRoute`) : le schéma de la réponse est publié. La même étiquette part dans `info.version` de l'OpenAPI et en **en-tête
 `X-Oto-Version` de chaque réponse** — l'endpoint sert à qui pense à demander, l'en-tête
 à qui relit son journal après coup.
 

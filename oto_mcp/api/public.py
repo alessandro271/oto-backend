@@ -39,6 +39,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
 
 from .. import access, providers, db, openapi, org_store, version as oto_version
+from ..capabilities._types import ContratDeRoute
 from ..connectors import activation as connector_activation
 from ..connectors import cardinality as connector_cardinality
 from .base import _authenticate, _file, _json, _json_error, en_thread
@@ -79,6 +80,19 @@ async def version(request: Request) -> JSONResponse:
     différence, et pourquoi elle mord, sont dans `oto_mcp/version.py`.
     """
     return _json(request, oto_version.instantane())
+
+
+version.contrat = ContratDeRoute(
+    description=(
+        "La version SERVIE par ce processus, sans auth. `version` est l'étiquette "
+        "`<ref>+<commit court>` que portent aussi `info.version` de ce document et "
+        "l'en-tête `X-Oto-Version` de chaque réponse ; `oto_core` le tag oto-core "
+        "réellement installé. `deps_sha`, `lock_sha` et `deps_conformes` disent quelles "
+        "dépendances sont installées et si elles égalent le verrou `uv.lock` de l'arbre "
+        "— relevés une fois, au démarrage du processus."),
+    Output=oto_version.VersionServie,
+    authentifiee=False,
+)
 
 
 async def mcp_catalog(request: Request, *, mcp_instance) -> JSONResponse:

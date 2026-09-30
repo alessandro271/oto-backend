@@ -356,6 +356,11 @@ dependencies = [
     "requests>=2.31",
     "httpx>=0.27",
     "pydantic>=2.0",
+    # `oto_mcp/empreinte_deps.py` (#932) lit l'`uv.lock` (TOML) et en évalue les
+    # marqueurs PEP 508 pour dire si l'installé égale le verrou. `tomllib` n'existe
+    # qu'à partir de 3.11 : la box tourne en 3.10, d'où `tomli` sous ce marqueur.
+    "packaging>=23",
+    "tomli>=2.0; python_version < '3.11'",
     "google-api-python-client>=2.0",
     "google-auth>=2.0",
     # `oto.tools.google.credentials` importe `google_auth_oauthlib` au top-level
