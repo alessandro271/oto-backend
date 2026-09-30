@@ -133,3 +133,16 @@ def test_named_coexistence_refuses_anonymous_next_to_named(monkeypatch):
     monkeypatch.setattr(credentials_store, "list_accounts", lambda et, eid, con: [{"account": "eu"}])
     with pytest.raises(credentials_store.NamedAccountRequired):
         credentials_store.ensure_named_coexistence("org", "7", "serper", "")
+
+
+def test_le_refus_de_pose_anonyme_nomme_les_comptes_et_le_geste(monkeypatch):
+    """Vécu 30/09 (Slack, deux workspaces) : le refus remonte tel quel au dashboard.
+    « précise `account` » ne parle qu'à un agent — il doit nommer les comptes et le
+    geste qui les remplace."""
+    monkeypatch.setattr(credentials_store, "list_accounts",
+                        lambda *a, **k: [{"account": "principal"}, {"account": "otomata admin"}])
+    with pytest.raises(credentials_store.NamedAccountRequired) as e:
+        credentials_store.ensure_named_coexistence("member", "2:u", "slack", "")
+    msg = str(e.value)
+    assert "« otomata admin »" in msg and "« principal »" in msg
+    assert "Remplacer" in msg

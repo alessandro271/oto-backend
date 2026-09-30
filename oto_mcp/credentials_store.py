@@ -1151,8 +1151,13 @@ def ensure_named_coexistence(entity_type: str, entity_id: str, connector: str,
                 target, i = f"principal-{i}", i + 1
             rename_account(entity_type, entity_id, connector, "", target)
     elif any(a for a in existing):
+        # Le refus remonte tel quel au dashboard : il doit dire QUOI faire, pas
+        # seulement le nom d'un paramètre qui ne parle qu'à un agent.
+        noms = ", ".join(f"« {a} »" for a in sorted(a for a in existing if a))
         raise NamedAccountRequired(
-            "Ce connecteur a déjà des comptes nommés — précise `account`.")
+            f"Ce connecteur a déjà des comptes nommés ({noms}) : précise lequel "
+            f"remplacer (`account`, ou « Remplacer » sur sa ligne dans le "
+            f"dashboard), ou donne un nom pour en ajouter un.")
 
 
 @dataclass(frozen=True)
