@@ -273,8 +273,8 @@ def main(argv: list[str]) -> int:
     try:
         doc = lire(argv[2])
         if argv[1] == "verifier":
-            print(f"déclaration conforme : instance {doc['instance']}, "
-                  f"rôles {', '.join(sorted(doc['roles']))}")
+            # sans le nom d'instance : la CI d'un dépôt public l'affiche (D5)
+            print(f"déclaration conforme : rôles {', '.join(sorted(doc['roles']))}")
         elif len(argv) < 4 or argv[3] not in ROLES:
             print(USAGE, file=sys.stderr)
             return 2

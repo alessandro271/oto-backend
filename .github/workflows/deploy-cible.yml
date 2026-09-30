@@ -23,6 +23,16 @@ name: Deploy cible
 #
 # Runner hébergé par GitHub : la clé de déploiement n'ouvre qu'une commande forcée
 # (`deploy/cible/porte.sh`) et passe par le tunnel Cloudflare Access de la cible.
+#
+# Ce dépôt est public, ses journaux d'Actions aussi : ils ne montrent JAMAIS ce qui
+# désigne la cible — hôte, domaine, nom d'instance, slug, ni aucune valeur de sa
+# déclaration (#967, D5). Tout ce qui la désigne est donc un SECRET de son environnement,
+# jamais une variable (`vars.`) ni une entrée : GitHub imprime l'`env:` de chaque step en
+# tête de son journal, et ne masque d'office que les secrets. Ce qu'on en DÉRIVE (un
+# hôte tiré de la déclaration, ses URL, son domaine) ne l'est pas : chaque job commence
+# par le masquer (`::add-mask::`), avant tout autre geste, et les messages parlent de
+# « la cible », de « sa préprod », jamais de son nom. Seul le nom de l'environnement
+# (l'entrée `cible`) est public par nature : il est choisi neutre, et masqué aussi.
 on:
   workflow_dispatch:
     inputs:
@@ -69,12 +79,20 @@ jobs:
     permissions:
       actions: read
     steps:
+      # Avant tout geste : le nom de la cible ne s'affiche plus (chaque ligne, une entrée
+      # peut en porter plusieurs).
+      - name: Masquer la cible
+        run: |
+          set -euo pipefail
+          while IFS= read -r ligne; do
+            if [ -n "$ligne" ]; then printf '::add-mask::%s\n' "$ligne"; fi
+          done <<< "$CIBLE"
       - name: Valider les entrées
         run: |
           set -euo pipefail
-          [[ "$CIBLE" =~ ^[a-z][a-z0-9-]{1,38}$ ]] || { echo "::error::cible invalide : « $CIBLE »"; exit 1; }
+          [[ "$CIBLE" =~ ^[a-z][a-z0-9-]{1,38}$ ]] || { echo "::error::cible invalide (attendu ^[a-z][a-z0-9-]{1,38}$)"; exit 1; }
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::tag invalide (vX.Y.Z) : « $TAG »"; exit 1; }
-          echo "### $ACTION $TAG → $CIBLE ($ETAPE)" >> "$GITHUB_STEP_SUMMARY"
+          echo "### $ACTION $TAG → la cible ($ETAPE)" >> "$GITHUB_STEP_SUMMARY"
       - name: L'environnement de la cible exige une approbation
         env:
           GH_TOKEN: ${{ github.token }}
@@ -94,9 +112,58 @@ jobs:
     # amorce + installation + démarrage (~40 s) + bascule, par rôle ; marge pour une naissance.
     timeout-minutes: 60
     env:
-      CIBLE_DECLARATION: ${{ vars.CIBLE_DECLARATION }}
-      CONSOMMATEUR: ${{ vars.CIBLE_CONSOMMATEUR }}
+      CIBLE_DECLARATION: ${{ secrets.CIBLE_DECLARATION }}
+      CONSOMMATEUR: ${{ secrets.CIBLE_CONSOMMATEUR }}
+      CIBLE_SSH_HOTE: ${{ secrets.CIBLE_SSH_HOTE }}
+      CIBLE_SSH_UTILISATEUR: ${{ secrets.CIBLE_SSH_UTILISATEUR }}
+      CIBLE_SSH_KNOWN_HOSTS: ${{ secrets.CIBLE_SSH_KNOWN_HOSTS }}
     steps:
+      # ── MASQUAGE, AVANT TOUT GESTE (D5) ─────────────────────────────────────────────
+      # Tout ce que révèlent les secrets de la cible : chaque ligne brute de chacun, et
+      # ce qu'on en tire ou en dérive — instance, projet, hôtes publics et leurs URL (dont
+      # `/api/version`), valeurs du `.env` de chaque rôle (domaines, slug, marque, bucket,
+      # adresses), chaque domaine qui y paraît avec ses domaines parents et son libellé,
+      # l'hôte et l'utilisateur SSH, les hôtes épinglés, le consommateur et son dépôt. Un
+      # masque couvre toute chaîne qui le contient : l'instance masque ses chemins, unités
+      # et utilisateur de service ; l'hôte, ses URL. Restent lisibles les rôles (preprod,
+      # prod), les booléens et les petits nombres (ports), qui ne désignent personne.
+      # Une déclaration illisible n'a que ses lignes brutes masquées — `declaration.py
+      # verifier` la refuse plus bas. Avant le checkout : rien du dépôt n'y sert.
+      - name: Masquer les valeurs de la cible
+        run: |
+          set -euo pipefail
+          # jq se tait (un message d'erreur citerait la valeur) : un échec arrête tout ici.
+          masques=$(jq -nr --arg cible "$CIBLE" --arg decl "$CIBLE_DECLARATION" \
+              --arg conso "$CONSOMMATEUR" --arg hote "$CIBLE_SSH_HOTE" \
+              --arg utilisateur "$CIBLE_SSH_UTILISATEUR" --arg hotes "$CIBLE_SSH_KNOWN_HOSTS" '
+            def bords: gsub("^[[:space:]]+|[[:space:]]+$"; "");
+            def lignes: split("\n")[] | bords | select(length > 0);
+            def domaines: scan("(?:[A-Za-z0-9-]+\\.)+[A-Za-z]{2,63}")
+              | ., (split(".") as $l | (range(1; ($l | length) - 1) as $i | $l[$i:] | join(".")),
+                                       ($l[-2] | select(length >= 3)));
+            def jetons: ., domaines, scan("[^[:space:]<>\",;]+@[^[:space:]<>\",;]+"),
+                        (split(",")[] | bords);
+            def lu: try fromjson catch null;
+            ($decl | lu) as $d | ($conso | lu) as $c
+            | [ ($cible, $decl, $conso, $hote, $utilisateur, $hotes | lignes),
+                ($c | objects | .nom, .depot, (.depot | strings | split("/")[0]), .chemin),
+                ( ($hote | lignes),
+                  ($hotes | lignes | split(" ")[0] | split(",")[]
+                     | sub("^\\[(?<h>[^]]+)\\]:[0-9]+$"; "\(.h)")),
+                  ($d | objects | .instance, (.secrets | objects | .projet),
+                     (.roles | objects | .[] | objects
+                      | (.hote_public | strings | ., "https://\(.)", "https://\(.)/api/version"),
+                        (.env | objects | to_entries[] | select(.key != "OTO_ENV") | .value)))
+                  | strings | jetons) ]
+            | map(strings | lignes)
+            | map(select((test("[[:alpha:]]") or length >= 8)
+                  and (IN("true", "false", "null", "preprod", "prod") | not)))
+            | unique[]' 2>/dev/null) \
+            || { echo "::error title=Masquage impossible::les valeurs de la cible n'ont pas pu être masquées — rien n'est monté."; exit 1; }
+          while IFS= read -r masque; do
+            if [ -n "$masque" ]; then printf '::add-mask::%s\n' "$masque"; fi
+          done <<< "$masques"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: refs/tags/${{ inputs.tag }}
@@ -132,7 +199,7 @@ jobs:
             echo "juger=non" >> "$GITHUB_OUTPUT"; exit 0
           fi
           if [ -z "$CONSOMMATEUR" ]; then
-            echo "::notice title=Aucun consommateur déclaré::la cible $CIBLE ne déclare pas de consommateur (CIBLE_CONSOMMATEUR) — aucun contrat n'a été confronté."
+            echo "::notice title=Aucun consommateur déclaré::la cible ne déclare pas de consommateur (CIBLE_CONSOMMATEUR) — aucun contrat n'a été confronté."
             echo "juger=non" >> "$GITHUB_OUTPUT"; exit 0
           fi
           if ! jq -e '(keys - ["cle","chemin","depot","nom"]) == [] and
@@ -225,9 +292,6 @@ jobs:
       - name: Monter la préprod
         if: inputs.etape != 'prod'
         env:
-          CIBLE_SSH_HOTE: ${{ vars.CIBLE_SSH_HOTE }}
-          CIBLE_SSH_UTILISATEUR: ${{ vars.CIBLE_SSH_UTILISATEUR }}
-          CIBLE_SSH_KNOWN_HOSTS: ${{ vars.CIBLE_SSH_KNOWN_HOSTS }}
           CIBLE_SSH_CLE: ${{ secrets.CIBLE_SSH_CLE }}
           TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.CIBLE_CF_ACCESS_CLIENT_ID }}
           TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.CIBLE_CF_ACCESS_CLIENT_SECRET }}
@@ -242,9 +306,6 @@ jobs:
       - name: Monter la prod
         if: inputs.etape != 'preprod'
         env:
-          CIBLE_SSH_HOTE: ${{ vars.CIBLE_SSH_HOTE }}
-          CIBLE_SSH_UTILISATEUR: ${{ vars.CIBLE_SSH_UTILISATEUR }}
-          CIBLE_SSH_KNOWN_HOSTS: ${{ vars.CIBLE_SSH_KNOWN_HOSTS }}
           CIBLE_SSH_CLE: ${{ secrets.CIBLE_SSH_CLE }}
           TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.CIBLE_CF_ACCESS_CLIENT_ID }}
           TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.CIBLE_CF_ACCESS_CLIENT_SECRET }}

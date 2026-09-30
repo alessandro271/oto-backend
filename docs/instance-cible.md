@@ -212,15 +212,28 @@ l'entrée `cible` du workflow) :
 
 | Nom | Sorte | Contenu |
 |---|---|---|
-| `CIBLE_DECLARATION` | variable | la déclaration (JSON) |
-| `CIBLE_SSH_HOTE` | variable | l'hôte SSH de l'application Access |
-| `CIBLE_SSH_UTILISATEUR` | variable | l'utilisateur de déploiement |
-| `CIBLE_SSH_KNOWN_HOSTS` | variable | la clé d'hôte de la machine, sous le nom de l'hôte SSH (épinglée) |
-| `CIBLE_CONSOMMATEUR` | variable, facultative | `{"nom", "depot": "owner/repo", "chemin", "cle": bool}` — le front qui consomme l'API de la cible |
+| `CIBLE_DECLARATION` | secret | la déclaration (JSON, sur une ligne : `jq -c`) |
+| `CIBLE_SSH_HOTE` | secret | l'hôte SSH de l'application Access |
+| `CIBLE_SSH_UTILISATEUR` | secret | l'utilisateur de déploiement |
+| `CIBLE_SSH_KNOWN_HOSTS` | secret | la clé d'hôte de la machine, sous le nom de l'hôte SSH (épinglée) |
+| `CIBLE_CONSOMMATEUR` | secret, facultatif | `{"nom", "depot": "owner/repo", "chemin", "cle": bool}` (sur une ligne) — le front qui consomme l'API de la cible |
 | `CIBLE_SSH_CLE` | secret | la clé privée de déploiement |
 | `CIBLE_CF_ACCESS_CLIENT_ID` | secret | le jeton de service Access (identifiant) |
 | `CIBLE_CF_ACCESS_CLIENT_SECRET` | secret | le jeton de service Access (secret) |
 | `CIBLE_CONSOMMATEUR_CLE` | secret, si `cle` | clé de lecture seule du dépôt du consommateur |
+
+**Tout en secret, aucune variable** : l'environnement ne porte AUCUNE variable
+(`vars.`). Ce dépôt est public, les journaux de ses runs aussi, et ils ne montrent
+jamais ce qui désigne la cible — hôte, domaine, nom d'instance, slug, aucune valeur de
+sa déclaration (D5). GitHub imprime l'`env:` de chaque step en tête de son journal et ne
+masque d'office que les secrets : une variable s'y lirait en clair. Les secrets
+structurés (déclaration, consommateur) se posent sur une ligne, pour être masqués
+entiers. Ce qu'on en dérive (hôtes et leurs URL, domaines, instance, valeurs du `.env`,
+dépôt du consommateur) est masqué (`::add-mask::`) par le premier geste de chaque job,
+et les scripts parlent de « la préprod de la cible », jamais de son hôte
+(`tests/test_workflow_deploy_cible_masquage_967.py`). Le nom de l'environnement, seul,
+est public par nature (entrée `cible`, page des déploiements du dépôt) : le choisir
+neutre.
 
 **Protection de l'environnement — obligatoire** : dans ses réglages, « Required
 reviewers » avec au moins un relecteur (celui qui décide des montées), et les branches de

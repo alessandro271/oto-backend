@@ -10,9 +10,9 @@
 #
 # usage : appeler.sh deployer|retour <rôle> <tag>
 # Env (depuis l'environnement GitHub de la cible — voir docs/instance-cible.md) :
-#   CIBLE_SSH_HOTE, CIBLE_SSH_UTILISATEUR, CIBLE_SSH_KNOWN_HOSTS    (variables)
+#   CIBLE_SSH_HOTE, CIBLE_SSH_UTILISATEUR, CIBLE_SSH_KNOWN_HOSTS    (secrets)
 #   CIBLE_SSH_CLE, TUNNEL_SERVICE_TOKEN_ID, TUNNEL_SERVICE_TOKEN_SECRET (secrets)
-#   CIBLE_DECLARATION                                              (variable, JSON)
+#   CIBLE_DECLARATION                                              (secret, JSON)
 # Une valeur absente est un défaut de la déclaration : ROUGE, jamais un vert muet (#823).
 # ============================================================================
 set -euo pipefail
