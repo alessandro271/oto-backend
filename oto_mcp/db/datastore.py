@@ -736,6 +736,48 @@ def datastore_get_row(ns_id: int, row_id: str) -> Optional[dict]:
 # d'une whitelist → fragment SQL fixe, zéro interpolation de valeur = pas d'injection.
 
 
+# Une page de lignes voyage en UN SEUL message PostgreSQL (oto-backend#980, suite).
+#
+# Ligne à ligne, libpq lit le résultat par tranches de ~10-16 Ko (son tampon ne grandit
+# que pour un message plus gros que lui) et psycopg rend le GIL à CHAQUE tranche pour
+# attendre la socket : ~260 attentes pour une page de 500 lignes de ~4 Ko. Seul, c'est
+# gratuit ; dès qu'un autre thread du processus calcule, chaque reprise du GIL attend
+# jusqu'à `sys.getswitchinterval()` — le convoi de `docs/event-loop-perf.md`. Mesuré en
+# local, un ramassage complet (8 900 lignes × 90 colonnes) passait de ~2 s à ~11 s à
+# côté d'un seul thread de calcul, intervalle à 1 ms compris.
+#
+# Agrégée côté base en un seul `json`, la page est un message long : libpq agrandit son
+# tampon et enchaîne ses lectures sans rendre la main (4 à 7 attentes par page). Même
+# forme de ligne que `_str_dict_row` : horodatages en `AAAA-MM-JJ HH:MM:SS` dans le
+# fuseau de la session, secondes tronquées, `data` décodé à l'identique.
+#
+# ⚠️ Pour une PAGE seulement (`limit` posé) : un ramassage sans borne en un message
+# ferait décoder tout le tableau d'un bloc, GIL tenu d'un bout à l'autre.
+_HORODATAGE = "'YYYY-MM-DD HH24:MI:SS'"
+_LIGNE_JSON = (
+    "json_build_object("
+    "'row_id', t.row_id, "
+    f"'created_at', to_char(t.created_at, {_HORODATAGE}), "
+    f"'updated_at', to_char(t.updated_at, {_HORODATAGE}), "
+    "'data', t.data, 'rev', t.rev, 'claimed_by', t.claimed_by, "
+    f"'claimed_until', to_char(t.claimed_until, {_HORODATAGE}), "
+    "'claimed_run', t.claimed_run, 'claims', t.claims, "
+    "'abandon_reason', t.abandon_reason, 'claim_active', t.claim_active)"
+)
+
+
+def _page_en_un_message(conn, sql: str, params: tuple, *, stats: str = "") -> dict:
+    """Les lignes de `sql` — qui porte les colonnes de `_LIGNE_JSON` et leur rang
+    `rn` — lues en UN message, dans l'ordre de `rn`, sous `lignes`. Un rang nul
+    (page vide sous une ligne de statistiques) n'est pas une ligne. `stats` : des
+    agrégats de plus sur les mêmes lignes, rendus à côté."""
+    return conn.execute(
+        f"SELECT {stats}coalesce(json_agg({_LIGNE_JSON} ORDER BY t.rn) "
+        f"FILTER (WHERE t.rn IS NOT NULL), '[]') AS lignes FROM ({sql}) t",
+        params,
+    ).fetchone()
+
+
 def datastore_list_rows(ns_id: int, *, offset: int = 0, limit: Optional[int] = None,
                         order_by: Optional[str] = None, order_dir: str = "desc",
                         q: Optional[str] = None, filters: Optional[list] = None,
@@ -789,11 +831,11 @@ def datastore_list_rows(ns_id: int, *, offset: int = 0, limit: Optional[int] = N
                 order_sql, _op = f"created_at {direction}, row_id {direction}", []
         p_params = list(_op) + list(where_params)
         with _connect() as conn:
-            rows = conn.execute(
+            sql = (
                 f"WITH {cte_sql}, "
                 f"p AS (SELECT row_id, row_number() OVER (ORDER BY {order_sql}) AS rn "
                 f"FROM s {where_sql} ORDER BY rn{tail}) "
-                "SELECT dr.row_id, dr.created_at, dr.updated_at, dr.data, dr.rev, "
+                "SELECT p.rn, dr.row_id, dr.created_at, dr.updated_at, dr.data, dr.rev, "
                 "       dr.claimed_by, dr.claimed_until, dr.claimed_run, dr.claims, "
                 "       dr.abandon_reason, "
                 "       (dr.claimed_until IS NOT NULL AND dr.claimed_until > NOW())"
@@ -806,10 +848,12 @@ def datastore_list_rows(ns_id: int, *, offset: int = 0, limit: Optional[int] = N
                 # de la condition de jointure, pas seulement de la CTE `s`.
                 "FROM p JOIN datastore_rows dr "
                 "  ON dr.row_id = p.row_id AND dr.ns_id = %s "
-                "ORDER BY p.rn",
-                tuple(cte_params + p_params + tail_params + [ns_id]),
-            ).fetchall()
-            return [dict(r) for r in rows]
+                "ORDER BY p.rn")
+            params_ = tuple(cte_params + p_params + tail_params + [ns_id])
+            if limit is not None:
+                return _page_en_un_message(conn, sql, params_)["lignes"]
+            return [{k: v for k, v in r.items() if k != "rn"}
+                    for r in conn.execute(sql, params_).fetchall()]
     where, params = _ds_where(ns_id, q, filters)
     if order_by in (None, "", "_created_at"):
         order_sql = f"created_at {direction}, row_id {direction}"
@@ -835,13 +879,22 @@ def datastore_list_rows(ns_id: int, *, offset: int = 0, limit: Optional[int] = N
     if limit is not None:
         tail = " LIMIT %s OFFSET %s"
         params.extend([limit, offset])
+    cols = ("row_id, created_at, updated_at, data, rev, claimed_by, claimed_until, "
+            "claimed_run, claims, abandon_reason, "
+            "(claimed_until IS NOT NULL AND claimed_until > NOW()) AS claim_active")
     with _connect() as conn:
+        if limit is not None:
+            # Le rang suit `order_sql` via une clause `WINDOW`, placée APRÈS le
+            # `WHERE` : les paramètres positionnels gardent leur ordre (filtres, tri,
+            # bornes), et l'expression de tri n'est évaluée qu'une fois.
+            return _page_en_un_message(
+                conn,
+                f"SELECT {cols}, row_number() OVER w AS rn "
+                f"FROM datastore_rows {where} WINDOW w AS (ORDER BY {order_sql}) "
+                f"ORDER BY rn{tail}",
+                tuple(params))["lignes"]
         rows = conn.execute(
-            "SELECT row_id, created_at, updated_at, data, rev, claimed_by, claimed_until, "
-            "       claimed_run, claims, abandon_reason, "
-            "       (claimed_until IS NOT NULL AND claimed_until > NOW())"
-            "           AS claim_active "
-            f"FROM datastore_rows {where} ORDER BY {order_sql}{tail}",
+            f"SELECT {cols} FROM datastore_rows {where} ORDER BY {order_sql}",
             tuple(params),
         ).fetchall()
         return [dict(r) for r in rows]
@@ -863,15 +916,15 @@ def datastore_list_rows_after(ns_id: int, *, after_row_id: Optional[str] = None,
         params.append(after_row_id)
     params.append(limit)
     with _connect() as conn:
-        rows = conn.execute(
+        return _page_en_un_message(
+            conn,
             "SELECT row_id, created_at, updated_at, data, rev, claimed_by, claimed_until, "
             "       claimed_run, claims, abandon_reason, "
             "       (claimed_until IS NOT NULL AND claimed_until > NOW())"
-            "           AS claim_active "
+            "           AS claim_active, "
+            "       row_number() OVER (ORDER BY row_id ASC) AS rn "
             f"FROM datastore_rows {where} ORDER BY row_id ASC LIMIT %s",
-            tuple(params),
-        ).fetchall()
-        return [dict(r) for r in rows]
+            tuple(params))["lignes"]
 
 
 def datastore_mark_formula_dirty(ns_id: int) -> int:
@@ -1085,6 +1138,16 @@ def datastore_page_with_stats(ns_id: int, *, offset: int = 0, limit: Optional[in
     )
     params = (cte_params + where_params + health_params
               + order_params + tail_params + [ns_id])
+    if limit is not None:
+        # Une page : en un message (cf. `_page_en_un_message`), statistiques à côté —
+        # identiques sur chaque ligne de `agg LEFT JOIN p`, donc lues par `max`.
+        with _connect() as conn:
+            r = _page_en_un_message(
+                conn, sql, tuple(params),
+                stats="max(t.total) AS total, max(t.off_type) AS off_type, "
+                      "max(t.empty) AS empty, ")
+        return (r["lignes"], int(r["total"] or 0), int(r["off_type"] or 0),
+                int(r["empty"] or 0))
     with _connect() as conn:
         result = conn.execute(sql, tuple(params)).fetchall()
     if not result:

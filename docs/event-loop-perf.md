@@ -804,6 +804,24 @@ pose la valeur avant tout autre sous-système (capturée à l'appel de
 rejouée à chaque run (coûteuse, contre une vraie base), juste le fait qui compte :
 la valeur est posée, et posée tôt.
 
+**Suite (30/09) : moins de reprises du GIL, plutôt qu'une reprise plus rapide.** Le
+convoi coûte `nombre d'attentes de socket × intervalle`. Ligne à ligne, libpq lit
+par tranches de ~10-16 Ko (son tampon ne grandit que pour un message plus gros que
+lui) et psycopg rend le GIL à chaque tranche : ~260 attentes pour une page de 500
+lignes de ~4 Ko. Les lectures PAGINÉES du datastore (`datastore_list_rows` avec
+`limit`, `datastore_list_rows_after`, `datastore_page_with_stats`) agrègent donc la
+page côté base en UN `json` (`db/datastore._page_en_un_message`) : un message long,
+que libpq lit d'une traite — 4 à 7 attentes par page. Reproduit en local (8 900
+lignes × 90 colonnes, ramassage complet par la vraie route REST, intervalle à 1 ms) :
+seul, inchangé (~2,8 s) ; à côté d'un thread de calcul, **9,6-11,2 s → 6,2-6,5 s**.
+Ce qui reste est du calcul (décodage, `_row_to_dict`, rendu JSON) partagé avec le
+voisin, pas de l'attente. Un ramassage sans borne (`limit=None`, copie de projet) reste
+ligne à ligne : décoder tout un tableau d'un bloc tiendrait le GIL d'un bout à
+l'autre. ⚠️ Le rendu de la réponse (`JSONResponse`) tourne dans la boucle, mais le
+sortir au thread ne gagnerait rien : `json.dumps` en C garde le GIL de bout en bout
+(mesuré : un autre thread attend toute la durée du rendu). Preuve :
+`tests/datastore/test_page_un_message_980.py` (compte les attentes, jamais une durée).
+
 ## Mode n°1, encore : le handler `async` qui lit la base « juste avant » (`me.agent_context`, 21/09)
 
 Coupure de prod d'environ **140 s** (relayée par oto cd). Cause trouvée dans
