@@ -43,7 +43,8 @@ LOGO_DOMAIN = "inqom.com"
 DESCRIPTION = (
     "La production comptable d'un cabinet ou d'une PME dans Inqom : dossiers, "
     "exercices, plan comptable et comptes de tiers, journaux, balance, lignes "
-    "d'écriture et pièces. En lecture seulement : le connecteur n'écrit jamais "
+    "d'écriture (par compte ou par préfixes, avec le tiers de chaque écriture) et "
+    "pièces. En lecture seulement : le connecteur n'écrit jamais "
     "dans Inqom. Clés d'application fournies par Inqom et compte Inqom dédié : ce "
     "compte borne ce qui est visible."
 )

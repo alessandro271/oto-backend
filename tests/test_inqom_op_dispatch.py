@@ -5,6 +5,8 @@ Ce que ce fichier verrouille :
 - AUCUNE écriture n'est câblée (30/09/2026) : `inqom_entry_create` rend le refus
   nommé `inqom_write_not_wired`, qui décrit les écritures, sans résoudre la clé, sans
   construire le client ni appeler Inqom — quels que soient les arguments ;
+- `account_prefixes` : toute la période lue, les lignes gardées triées par date,
+  chacune avec les comptes de tiers de son écriture, paginées sur le résultat ;
 - un argument hors op est refusé même quand il vaut `False`/`0` (`is not None`) ;
 - un champ de credential vide est refusé avant de construire le client (il
   retomberait sinon sur la résolution de secrets locale) — dans l'outil ET la sonde ;
@@ -199,6 +201,79 @@ def test_au_dela_de_vingt_ecritures_le_reste_se_compte(rien_ne_part):
 def test_entry_create_n_a_plus_de_dry_run():
     schema = asyncio.run(_mcp().get_tool("inqom_entry_create")).parameters
     assert "dry_run" not in schema.get("properties", {})
+
+
+# --- préfixes de compte ------------------------------------------------------------
+
+def _ligne(id_, compte, entry, date="2026-09-10"):
+    return {"Id": id_, "AccountNumber": compte, "Label": "l", "DebitAmount": 1,
+            "CreditAmount": 0, "Entry": {"Id": entry, "Date": f"{date}T00:00:00"}}
+
+
+def _periode(client, *pages):
+    client.count_entry_lines.return_value = {"TotalPagesCount": len(pages)}
+    client.list_entry_lines.side_effect = [{"EntryLines": p} for p in pages]
+
+
+def test_prefixes_garde_trie_et_rattache_le_tiers(client):
+    _periode(client, [
+        _ligne(1, "606100", 10, "2026-09-20"), _ligne(2, "401DUPONT", 10, "2026-09-20"),
+        _ligne(3, "706000", 11, "2026-09-05"), _ligne(4, "411CLIENT", 11, "2026-09-05"),
+        _ligne(5, "512000", 12), _ligne(6, "601000", 12),
+    ])
+    out = _tool("inqom_entry_line")(dossier_id=12, start_date="2026-09-01",
+                                    end_date="2026-09-30", account_prefixes=["6", "7"])
+    lignes = out["page"]["EntryLines"]
+    assert [ln["Id"] for ln in lignes] == [3, 6, 1]
+    assert [ln["third_party_accounts"] for ln in lignes] == [["411CLIENT"], [], ["401DUPONT"]]
+    assert out["count"] == {"TotalLinesCount": 3, "TotalPagesCount": 1}
+    client.count_entry_lines.assert_called_once_with(12, "2026-09-01", "2026-09-30")
+    assert client.list_entry_lines.call_args.kwargs == {"journal_id": None}
+
+
+def test_prefixes_lit_jusqu_a_la_page_incomplete(client, monkeypatch):
+    from oto_mcp.tools import inqom as Q
+
+    monkeypatch.setattr(Q, "_PAGE", 2)
+    _periode(client, [_ligne(1, "606", 1), _ligne(2, "401A", 1)],
+             [_ligne(3, "606", 2)])
+    out = _tool("inqom_entry_line")(op="count", dossier_id=12, start_date="2026-09-01",
+                                    end_date="2026-09-30", account_prefixes=["6"])
+    assert [c.args[3] for c in client.list_entry_lines.call_args_list] == [1, 2]
+    assert out == {"count": {"TotalLinesCount": 2, "TotalPagesCount": 1}}
+
+
+def test_prefixes_pagine_le_resultat_filtre(client, monkeypatch):
+    from oto_mcp.tools import inqom as Q
+
+    monkeypatch.setattr(Q, "_PAGE", 2)
+    _periode(client, [_ligne(1, "606", 1), _ligne(2, "606", 2)], [_ligne(3, "606", 3)])
+    out = _tool("inqom_entry_line")(dossier_id=12, start_date="2026-09-01",
+                                    end_date="2026-09-30", account_prefixes=["6"],
+                                    page_number=2)
+    assert [ln["Id"] for ln in out["page"]["EntryLines"]] == [3]
+    assert out["count"] == {"TotalLinesCount": 3, "TotalPagesCount": 2}
+
+
+def test_prefixes_refuse_une_periode_trop_large_avant_de_lire(client):
+    client.count_entry_lines.return_value = {"TotalPagesCount": 51}
+    with pytest.raises(McpError, match="resserre"):
+        _tool("inqom_entry_line")(dossier_id=12, start_date="2026-01-01",
+                                  end_date="2026-12-31", account_prefixes=["6"])
+    client.list_entry_lines.assert_not_called()
+
+
+@pytest.mark.parametrize("kwargs,fragment", [
+    ({"account_prefixes": ["6"], "account_number": "606100"}, "s'excluent"),
+    ({"account_prefixes": []}, "liste non vide"),
+    ({"account_prefixes": ["6", " "]}, "préfixe vide"),
+])
+def test_prefixes_arguments_refuses_avant_tout_appel(client, kwargs, fragment):
+    with pytest.raises(McpError, match=fragment):
+        _tool("inqom_entry_line")(dossier_id=12, start_date="2026-09-01",
+                                  end_date="2026-09-30", **kwargs)
+    client.count_entry_lines.assert_not_called()
+    client.list_entry_lines.assert_not_called()
 
 
 # --- credential vide ----------------------------------------------------------------

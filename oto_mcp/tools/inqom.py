@@ -11,7 +11,8 @@ les droits de ce compte : ce qu'il ne voit pas, aucun outil ne le voit.
 - `inqom_dossier` (list/get) — les dossiers d'un cabinet, la fiche d'un dossier ;
 - `inqom_ref` (kind=accounts|journals|periods) — référentiels d'un dossier ;
 - `inqom_balance` — balance sur une période ;
-- `inqom_entry_line` (list/count) — lignes d'écriture paginées ;
+- `inqom_entry_line` (list/count) — lignes d'écriture paginées, ou filtrées par
+  préfixes de compte ;
 - `inqom_entry_create` — l'écriture NON CÂBLÉE : il rend le refus nommé
   `inqom_write_not_wired`, qui décrit les écritures qu'il aurait créées ;
 - `inqom_document` — l'URL de téléchargement d'une pièce.
@@ -20,6 +21,12 @@ les droits de ce compte : ce qu'il ne voit pas, aucun outil ne le voit.
 `inqom_entry_create` ne résout pas la clé, ne construit pas le client et n'appelle
 jamais Inqom, quel que soit l'argument — `ecriture_non_cablee.refus`. L'écriture
 comptable se fait dans Inqom même.
+
+**Filtre par préfixes** : l'API ne filtre que sur UN compte exact. Pour « les
+comptes 6 et 7 », l'outil lit toutes les lignes de la période et garde celles
+dont le compte commence par un préfixe. Lire tout a un second usage : une ligne
+de charge ne porte pas son fournisseur, il est sur la ligne de tiers (40x/41x)
+de la même écriture, que l'outil rattache (`third_party_accounts`).
 
 Hôte fixe (`api.inqom.com`) : aucun champ du credential ne désigne une
 destination, donc pas de garde d'egress (`oto_mcp/egress.py`) à poser ici.
@@ -41,6 +48,9 @@ _NAME = "inqom"
 _CHAMPS = ("client_id", "client_secret", "username", "password")
 # Écritures décrites dans le refus : au-delà, un compte. Le refus est journalisé.
 _DECRITES_MAX = 20
+_PAGE = 1000  # lignes par page, côté Inqom comme côté filtre
+_SCAN_PAGES_MAX = 50  # borne d'une lecture filtrée : au-delà, resserrer la période
+_TIERS = ("40", "41")  # comptes de tiers : fournisseurs, clients
 
 
 def _bad(msg: str) -> McpError:
@@ -137,6 +147,34 @@ def _ecritures_decrites(entries) -> list[dict]:
             "total_credit": _total(lines, "CreditAmount"),
         }.items() if v is not None})
     return out
+
+
+def _prefixes(values) -> tuple[str, ...]:
+    """Les préfixes demandés, nettoyés : une liste vide ou un préfixe blanc est une
+    erreur, pas « tous les comptes »."""
+    if not isinstance(values, list) or not values:
+        raise _bad("account_prefixes : une liste non vide de préfixes est requise (ex. [\"6\", \"7\"])")
+    nets = tuple(str(v).strip() for v in values)
+    if not all(nets):
+        raise _bad("account_prefixes : préfixe vide")
+    return nets
+
+
+def _filtrer(lines: list[dict], prefixes: tuple[str, ...]) -> list[dict]:
+    """Les lignes dont le compte commence par un préfixe, triées par date d'écriture,
+    chacune avec les comptes de tiers de SON écriture (`third_party_accounts`).
+    `lines` doit être la période ENTIÈRE : une écriture coupée perdrait son tiers."""
+    tiers: dict = {}
+    for ln in lines:
+        compte = str(ln.get("AccountNumber") or "")
+        if compte.startswith(_TIERS):
+            tiers.setdefault((ln.get("Entry") or {}).get("Id"), set()).add(compte)
+    gardees = [
+        {**ln, "third_party_accounts": sorted(tiers.get((ln.get("Entry") or {}).get("Id"), ()))}
+        for ln in lines if str(ln.get("AccountNumber") or "").startswith(prefixes)]
+    return sorted(gardees, key=lambda ln: (str((ln.get("Entry") or {}).get("Date") or ""),
+                                           (ln.get("Entry") or {}).get("Id") or 0,
+                                           ln.get("Id") or 0))
 
 
 def register(mcp: FastMCP) -> None:
@@ -269,6 +307,27 @@ def register(mcp: FastMCP) -> None:
             rows, body_fields=("AuxiliaryBalance",), fields=fields, always=("Account",))
         return {"balances": rows, **({"projection": notice} if notice else {})}
 
+    def _periode_entiere(client, dossier_id: int, start_date: str, end_date: str,
+                         journal_id: Optional[int]) -> list[dict]:
+        """Toutes les lignes de la période, page après page. Le compte amont borne
+        d'avance ; la boucle s'arrête à la première page incomplète."""
+        total = _run(lambda: client.count_entry_lines(
+            dossier_id, start_date, end_date)).get("TotalPagesCount") or 0
+        if total > _SCAN_PAGES_MAX:
+            raise _bad(f"account_prefixes : la période compte {total} pages de {_PAGE} "
+                       f"lignes, au-delà des {_SCAN_PAGES_MAX} qu'une lecture filtrée "
+                       "parcourt — resserre start_date / end_date (un mois, un trimestre)")
+        lines: list[dict] = []
+        for n in range(1, _SCAN_PAGES_MAX + 1):
+            lot = _run(lambda: client.list_entry_lines(
+                dossier_id, start_date, end_date, n, journal_id=journal_id)
+            ).get("EntryLines") or []
+            lines.extend(lot)
+            if len(lot) < _PAGE:
+                return lines
+        raise _bad(f"account_prefixes : plus de {_SCAN_PAGES_MAX} pages lues sans fin de "
+                   "période — resserre start_date / end_date")
+
     @mcp.tool()
     def inqom_entry_line(
         dossier_id: int,
@@ -277,6 +336,7 @@ def register(mcp: FastMCP) -> None:
         op: Literal["list", "count"] = "list",
         page_number: Optional[int] = None,
         account_number: Optional[str] = None,
+        account_prefixes: Optional[list[str]] = None,
         journal_id: Optional[int] = None,
     ) -> dict:
         """Entry lines of a dossier dated in a period — one page, or the size.
@@ -285,29 +345,53 @@ def register(mcp: FastMCP) -> None:
         - **"list"** (default): ONE page (≤ 1000 lines) — `page_number` starts
           at 1 (default). A full page means there may be more: use op="count".
         - **"count"**: `TotalLinesCount` and `TotalPagesCount` for the same
-          period and account.
+          period and accounts.
+
+        **Several accounts at once** — `account_prefixes=["6", "7"]` (a P&L),
+        `["401"]` (suppliers), `["606", "613"]`: lines whose account starts with
+        one of them, sorted by entry date, paginated by 1000 over that result
+        (`count` gives its size). Each line gains `third_party_accounts`: the
+        40x/41x accounts of the SAME entry — an expense line does not carry its
+        supplier, the supplier is on that other line. Reads the whole period
+        upstream, so keep it to a month or a quarter.
 
         Args:
             dossier_id: the dossier.
             start_date / end_date: yyyy-MM-dd.
             op: list (default) | count.
             page_number: op="list" only — 1-indexed, default 1.
-            account_number: both ops — one account.
+            account_number: both ops — one exact account.
+            account_prefixes: both ops — account number prefixes; excludes
+                `account_number`.
             journal_id: op="list" only — one journal.
         """
+        if account_prefixes is not None and account_number is not None:
+            raise _bad("account_number et account_prefixes s'excluent — un compte exact "
+                       "OU des préfixes")
         client = _client()
-        if op == "list":
-            rows = _run(lambda: client.list_entry_lines(
-                dossier_id, start_date, end_date,
-                1 if page_number is None else page_number,
-                account_number=account_number, journal_id=journal_id))
-            return {"page": rows}
         if op == "count":
             _refuse_ignored(op, "n'existe que sur op='list'",
                             page_number=page_number, journal_id=journal_id)
+        elif op != "list":
+            raise _bad("op doit être 'list' ou 'count'")
+        page = 1 if page_number is None else page_number
+        if account_prefixes is not None:
+            prefixes = _prefixes(account_prefixes)
+            if page < 1:
+                raise _bad(f"page_number commence à 1 — reçu {page}")
+            lines = _filtrer(_periode_entiere(client, dossier_id, start_date, end_date,
+                                              journal_id), prefixes)
+            count = {"TotalLinesCount": len(lines), "TotalPagesCount": -(-len(lines) // _PAGE)}
+            if op == "count":
+                return {"count": count}
+            return {"page": {"EntryLines": lines[(page - 1) * _PAGE:page * _PAGE],
+                             "CurrentPage": page}, "count": count}
+        if op == "count":
             return {"count": _run(lambda: client.count_entry_lines(
                 dossier_id, start_date, end_date, account_number=account_number))}
-        raise _bad("op doit être 'list' ou 'count'")
+        return {"page": _run(lambda: client.list_entry_lines(
+            dossier_id, start_date, end_date, page,
+            account_number=account_number, journal_id=journal_id))}
 
     @mcp.tool()
     def inqom_entry_create(
