@@ -83,6 +83,27 @@ def test_excludes_account_before_floor(monkeypatch):
     assert out["bound"] is False
 
 
+def test_un_siege_orphelin_sans_date_lisible_n_est_pas_lie(monkeypatch):
+    """#580 : un siège présent sur l'abonnement partagé et lié à PERSONNE chez nous.
+    Sans date de création lisible, rien ne prouve qu'il est né de CETTE demande : la
+    réconciliation le gardait (« date illisible → on garde ») — la garde le refuse,
+    même nommé par l'indice `account_id`."""
+    for created in (None, "pas une date"):
+        calls = _setup(monkeypatch, [_pend()], [_acc("acc_orphelin", "?", created=created)])
+        assert uc.reconcile_pending("sub1")["bound"] is False
+        assert uc.reconcile_pending("sub1", account_id="acc_orphelin")["bound"] is False
+        assert calls["set"] == []
+
+
+def test_sans_date_de_demande_seul_mon_compte_se_relie(monkeypatch):
+    calls = _setup(monkeypatch, [_pend(ts=None)], [_acc("acc_new", "Neuf")])
+    assert uc.reconcile_pending("sub1")["bound"] is False
+    calls = _setup(monkeypatch, [_pend(ts=None)],
+                   [_acc("acc_mine", "Moi", created="2026-07-16 11:00:00+00")],
+                   bound={"acc_mine"}, dead={"acc_mine"})
+    assert uc.reconcile_pending("sub1")["bound"] is True
+
+
 def test_rebinds_own_dead_account_despite_floor(monkeypatch):
     # reconnexion : Unipile RÉUTILISE le compte (antérieur au pending) — la ligne
     # soft-déconnectée du sub est la preuve de propriété → rebind déterministe,

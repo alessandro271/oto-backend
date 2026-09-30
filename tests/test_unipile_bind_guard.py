@@ -28,6 +28,7 @@ from __future__ import annotations
 import ast
 import pathlib
 import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from starlette.applications import Starlette
@@ -184,6 +185,12 @@ def scene(live):
     return {"org_victime": org_victime, "org_pirate": org_pirate}
 
 
+# La demande de liaison, et un compte créé chez le fournisseur APRÈS elle — la seule
+# chronologie qui prouve qu'un compte lié à personne est né de CETTE demande (#580).
+_DEMANDE = datetime(2026, 9, 30, 10, tzinfo=timezone.utc)
+_APRES = _DEMANDE + timedelta(minutes=2)
+
+
 def _pending(sub: str, org_id: int, provider: str = "LINKEDIN") -> str:
     from oto_mcp import db
 
@@ -192,11 +199,13 @@ def _pending(sub: str, org_id: int, provider: str = "LINKEDIN") -> str:
     return nonce
 
 
-def _bind(sub: str, account_id: str, org_id: int):
+def _bind(sub: str, account_id: str, org_id: int, *, a_moi: bool = False,
+          cree_le=_APRES, plancher=_DEMANDE):
     from oto_mcp import unipile_binding
 
-    return unipile_binding.bind_account(sub, account_id, org_id=org_id,
-                                        provider="LINKEDIN", platform_seat=True)
+    return unipile_binding.bind_account(
+        sub, account_id, unipile_binding.Provenance(a_moi, cree_le, plancher),
+        org_id=org_id, provider="LINKEDIN", platform_seat=True)
 
 
 def _liaisons(sub: str) -> list[dict]:
@@ -229,9 +238,23 @@ def test_bind_account_relie_ma_propre_ligne_morte(scene):
     from oto_mcp import db
 
     db.clear_unipile_account(VICTIME, scene["org_victime"], "LINKEDIN")
-    assert _bind(VICTIME, ACC_VICTIME, scene["org_victime"]).bound
+    # Le compte est antérieur à la demande : la ligne du réclamant suffit à le prouver.
+    assert _bind(VICTIME, ACC_VICTIME, scene["org_victime"], a_moi=True,
+                 cree_le=_DEMANDE - timedelta(days=30)).bound
     vivantes = [l for l in _liaisons(VICTIME) if l["disconnected_at"] is None]
     assert [l["account_id"] for l in vivantes] == [ACC_VICTIME]
+
+
+def test_bind_account_refuse_un_siege_orphelin(scene):
+    """#580 : un compte de l'abonnement partagé, lié à PERSONNE chez nous, n'est pas
+    libre pour autant. Né AVANT la demande, ou sans date lisible, rien ne prouve qu'il
+    est à celui qui le nomme — la garde refuse au point d'écriture, sans rien écrire."""
+    for cree_le, plancher in ((_DEMANDE - timedelta(days=3), _DEMANDE),
+                              (None, _DEMANDE), (_APRES, None)):
+        issue = _bind(PIRATE, "acc_orphelin", scene["org_pirate"],
+                      cree_le=cree_le, plancher=plancher)
+        assert (issue.bound, issue.reason) == (False, "account_not_claimable")
+    assert _liaisons(PIRATE) == []
 
 
 def _client_qui_voit(comptes: list[dict]):
@@ -289,7 +312,7 @@ def test_la_reconciliation_passe_par_la_garde(scene, monkeypatch):
 
     vus = []
     monkeypatch.setattr(unipile_connect.unipile_binding, "account_claimable",
-                        lambda sub, account_id, **k: vus.append(account_id) or True)
+                        lambda sub, account_id, *a, **k: vus.append(account_id) or True)
     _sur_cle_plateforme(monkeypatch, [
         {"id": "acc_tout_neuf", "provider": "linkedin",
          "created_at": "2099-01-01 00:00:00+00", "name": "Le pirate"}])

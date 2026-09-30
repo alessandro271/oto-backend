@@ -372,7 +372,6 @@ def reconcile_pending(sub: str, account_id: "str | None" = None) -> dict:
     seule (face agent, lecture de statut) : sur une clé PARTAGÉE, elle peut choisir le
     compte qu'un autre vient de connecter dans la même heure — l'indice la ferme pour
     le chemin qui en dispose."""
-    from datetime import timedelta
     pendings = db.list_unipile_pending_for_sub(sub)
     if not pendings:
         return _rien("no_pending",
@@ -427,17 +426,17 @@ def reconcile_pending(sub: str, account_id: "str | None" = None) -> dict:
                 continue
             if (a.get("provider") or a.get("type") or "").upper() != provider:
                 continue
-            if not unipile_binding.account_claimable(sub, aid, foreign=foreign):
-                continue  # à un TIERS (vivant ou mort) → jamais, la garde partagée
-            if aid in mine_dead:
-                cand.append((_parse_dt(a.get("created_at")), a))
-                continue  # à moi (ligne morte) → candidat sans condition de date
-            if aid in taken:
+            # À moi (ligne morte) → candidat sans condition de date ; sinon, créé APRÈS
+            # le pending. La garde partagée tranche les deux, et refuse un compte d'un
+            # TIERS comme un siège orphelin sans date lisible (#580).
+            prov = unipile_binding.Provenance(a_moi=aid in mine_dead,
+                                              cree_le=_parse_dt(a.get("created_at")),
+                                              plancher=floor)
+            if not unipile_binding.account_claimable(sub, aid, prov, foreign=foreign):
                 continue
-            created = _parse_dt(a.get("created_at"))
-            # créé après le pending (marge 5 min d'horloge) ; date illisible → on garde
-            if floor is None or created is None or created >= floor - timedelta(minutes=5):
-                cand.append((created, a))
+            if not prov.a_moi and aid in taken:
+                continue
+            cand.append((prov.cree_le, a, prov))
         if not cand:
             # Le cas du signal #689 : le parcours s'est terminé côté fournisseur
             # (redirection finale vue par l'utilisateur) et pourtant aucun compte
@@ -463,8 +462,8 @@ def reconcile_pending(sub: str, account_id: "str | None" = None) -> dict:
         # VIVANT. Un wizard avorté produit un compte `status:'running'` mais mort
         # (401 users/me) — le lier faisait taper l'agent sur une session morte pendant
         # que l'ancien compte sain restait ignoré (incident 2026-07-17).
-        chosen = next((a for _, a in reversed(cand)
-                       if client.account_alive(a["id"])), None)
+        chosen, prov = next(((a, p) for _, a, p in reversed(cand)
+                             if client.account_alive(a["id"])), (None, None))
         if chosen is None:
             logger.info("reconcile unipile: candidats tous morts (session 401) sub=%s", sub)
             motifs.append({
@@ -477,7 +476,8 @@ def reconcile_pending(sub: str, account_id: "str | None" = None) -> dict:
                            "redirection finale."),
             })
             continue
-        issue = unipile_binding.bind_account(sub, chosen["id"], account_name=chosen.get("name"),
+        issue = unipile_binding.bind_account(sub, chosen["id"], prov,
+                             account_name=chosen.get("name"),
                              org_id=pend["org_id"], provider=provider,
                              platform_seat=bool(pend.get("platform_seat")),
                              foreign=foreign)

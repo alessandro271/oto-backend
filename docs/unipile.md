@@ -440,9 +440,9 @@ Unipile de la plateforme **adresse tout l'abonnement, toutes orgs confondues** �
 quel siège y était donc nommable. Le chemin jumeau, lui, contrôlait
 (`bound_unipile_account_ids`, « jamais le siège d'un tiers ») : ce n'était pas une garde
 jugée inutile, c'était une garde **qui n'a pas suivi quand le second chemin est apparu**.
-Depuis, la règle vit dans **une seule fonction** — `unipile_connect.account_claimable` (un
+Depuis, la règle vit dans **une seule fonction** — `unipile_binding.account_claimable` (un
 identifiant attribué à quelqu'un d'AUTRE, ligne vivante ou morte, n'est pas réclamable) — et
-l'écriture passe par `unipile_connect.bind_account`. Le webhook est parti (#581), **la garde
+l'écriture passe par `unipile_binding.bind_account`. Le webhook est parti (#581), **la garde
 reste** : un prochain chemin d'écriture naît gardé au lieu de devoir s'en souvenir. Le
 cliquet est `tests/test_unipile_bind_guard.py` : il rejoue l'attaque contre un vrai
 PostgreSQL, tient par AST les listes fermées des écrivains de liaison (écritures directes ET
@@ -457,11 +457,19 @@ HMAC-SHA256 (`unipile-signature: t=…,v0=…`) n'existe que sur les **webhooks 
 v2**, que nous n'utilisons pas. C'est ce qui a tranché le retrait plutôt que le durcissement :
 il n'y avait rien de plus à vérifier sur ce chemin, et plus personne pour l'appeler.
 
-**Ce qui reste ouvert** : un siège présent sur l'abonnement partagé et lié à **personne** côté
-oto n'est pas couvert (la garde raisonne sur nos lignes). Le fermer demande de confronter
-l'identifiant au fournisseur — `GET /accounts/{id}` existe côté Unipile mais **pas dans le
-client oto-core**, qui n'a que `list_accounts` / `account_alive`. La réconciliation s'en
-approche déjà avec son plancher de date.
+⚠️ **Un siège orphelin ne se lie pas non plus (#580, 2026-09-30).** Un compte présent sur
+l'abonnement partagé et lié à **personne** chez nous n'est pas libre pour autant : le compte
+créé par le fournisseur ne porte pas notre nonce, et sans preuve, le premier qui le nomme
+(l'indice `account_id` du retour se forge) le prenait. La garde exige donc une **provenance**
+(`unipile_binding.Provenance`) : une ligne du réclamant (la reconnexion réutilise
+l'identifiant), ou une **création chez le fournisseur postérieure à la demande de liaison**
+(marge d'horloge de 5 min). Ce plancher de date vivait dans la seule réconciliation et y
+cédait quand une date était illisible (« date illisible → on garde ») ; il vit au point
+d'écriture, et **une date absente ou illisible refuse**. L'inventaire vient de
+`list_accounts`, déjà lu par la réconciliation : la lecture d'un compte par identifiant
+n'était pas nécessaire. **Ce qui reste** : un compte qu'un TIERS crée sur la clé partagée
+APRÈS votre demande et avant sa propre réconciliation passe le plancher ; seul l'indice
+`account_id` du retour le ferme, pour le chemin qui en dispose.
 
 **Consolidation « tout en clé plateforme » (2026-07-16).** Clé plateforme rotée en v2 (scope
 PLATFORM, label `env`) ; tous les BYO unipile supprimés ; **option comp** posée pour les orgs
