@@ -35,6 +35,17 @@ Preuves, dans l'ordre de la tâche (oto-backend, gels de prod non identifiés,
     ABSOLU du thread watchdog (`/proc/self/task/<tid>/stat`, secondes CPU réelles
     du thread SEUL), en µs/réveil — stable d'une machine à l'autre, contrairement
     à une proportion de débit concurrent.
+12. `test_un_gel_tenu_par_un_autre_fil_nomme_les_deux_fils` — la boucle attend un
+    verrou qu'un AUTRE fil tient : la ligne « tous les fils » nomme la boucle et le
+    fil qui tient, avec leurs cadres, sous le même `gel=` que la pile principale,
+    résume en une ligne le fil au repos, ne montre ni le chien ni une variable locale.
+13. `test_un_fil_qui_tient_le_gil_en_c_est_nomme` — un fil tient le GIL dans du C
+    (regex catastrophique, `re` ne rend jamais le GIL) : la boucle dort dans
+    `select` ; quel que soit le fil qui reprend le GIL le premier à sa libération,
+    UN gel est rapporté, qui nomme le fil et dit que le chien a attendu lui aussi.
+14. `test_retard_du_chien_seul_rapporte_un_gel` — la branche « la boucle a repris
+    la première », rejouée sans course : le chien se réveille en retard alors que
+    la boucle vient de battre.
 """
 from __future__ import annotations
 
@@ -42,6 +53,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
 import statistics
 import sys
 import threading
@@ -412,3 +424,135 @@ async def test_cout_isole_du_thread_watchdog_par_reveil():
     assert per_wakeup_us < 500.0, (
         f"le watchdog a coûté {per_wakeup_us:.2f} µs/réveil — inattendu"
     )
+
+
+def _tient_le_verrou(verrou: threading.Lock, tenu: threading.Event, duree: float) -> None:
+    """Le fil coupable : il prend le verrou que la boucle va demander, et le garde."""
+    secret_local = _SECRET_QUI_NE_DOIT_JAMAIS_PARAITRE
+    with verrou:
+        tenu.set()
+        time.sleep(duree)  # <-- le cadre attendu pour ce fil
+    assert secret_local
+
+
+def _attend_le_verrou(verrou: threading.Lock) -> None:
+    """La boucle, gelée par un fil voisin : un `acquire` synchrone dans la boucle."""
+    verrou.acquire()
+    verrou.release()
+
+
+@pytest.mark.asyncio
+async def test_un_gel_tenu_par_un_autre_fil_nomme_les_deux_fils(caplog):
+    verrou = threading.Lock()
+    tenu = threading.Event()
+    fin = threading.Event()
+    coupable = threading.Thread(target=_tient_le_verrou, args=(verrou, tenu, _BLOCK_S),
+                                name="fil-qui-tient-le-verrou", daemon=True)
+    au_repos = threading.Thread(target=fin.wait, name="fil-au-repos", daemon=True)
+    au_repos.start()
+    watch = HangWatch(interval=_INTERVAL)
+    watch.start()
+    try:
+        with caplog.at_level(logging.WARNING, logger=LOGGER_NAME):
+            coupable.start()
+            assert tenu.wait(1.0)
+            _attend_le_verrou(verrou)
+            await asyncio.sleep(_INTERVAL)
+    finally:
+        fin.set()
+        coupable.join(timeout=2.0)
+        _stop_and_join(watch)
+
+    warnings = _warning_texts(caplog)
+    dumps = [t for t in warnings if "pile du thread principal" in t]
+    lignes = [t for t in warnings if " fils — chien en retard de " in t]
+    assert len(dumps) == 1 and len(lignes) == 1, warnings
+    ligne = lignes[0]
+    print(f"\n[hang_watch] {ligne}")
+    assert "\n" not in ligne, "une seule ligne de journal"
+
+    gel = dumps[0].split("(gel=", 1)[1].split(")", 1)[0]
+    assert ligne.startswith(f"gel={gel} fils"), "le même identifiant que la pile principale"
+
+    # Les deux fils, nommés, avec le cadre qui dit ce qu'ils font — la boucle en tête.
+    assert ligne.split(" — ", 2)[2].startswith("MainThread(boucle)[")
+    assert "tests/test_hang_watch.py:" in ligne
+    assert " _attend_le_verrou" in ligne
+    assert "fil-qui-tient-le-verrou[" in ligne and " _tient_le_verrou" in ligne
+    # Le fil qui attend sans rien tenir : résumé, sans ses cadres.
+    assert "au repos" in ligne and "fil-au-repos [threading.wait]" in ligne
+    # Ni le chien lui-même, ni une variable locale, ni même son nom.
+    assert "oto-hang-watch" not in ligne
+    assert _SECRET_QUI_NE_DOIT_JAMAIS_PARAITRE not in ligne
+    assert "secret_local" not in ligne
+
+
+_REGEX_QUI_TIENT_LE_GIL = re.compile(r"(a+)+$")
+
+
+def _tient_le_gil_en_c(fini: threading.Event, relache: threading.Event) -> None:
+    """Retour arrière exponentiel dans le moteur `re`, en C, sans jamais rendre le
+    GIL (~1,8 s sur un poste de dev, n=25 ; chaque +1 double). Puis une attente, pour
+    que le fil soit encore dans sa fonction quand le chien le relève."""
+    _REGEX_QUI_TIENT_LE_GIL.match("a" * 25 + "b")
+    fini.set()
+    relache.wait(5.0)
+
+
+@pytest.mark.asyncio
+async def test_un_fil_qui_tient_le_gil_en_c_est_nomme(caplog):
+    watch = HangWatch(interval=_INTERVAL)
+
+    async def heartbeat() -> None:
+        while True:
+            watch.beat()
+            await asyncio.sleep(_INTERVAL / 2)
+
+    watch.start()
+    hb = asyncio.create_task(heartbeat())
+    fini, relache = threading.Event(), threading.Event()
+    fil = threading.Thread(target=_tient_le_gil_en_c, args=(fini, relache),
+                           name="fil-qui-tient-le-gil", daemon=True)
+    try:
+        with caplog.at_level(logging.WARNING, logger=LOGGER_NAME):
+            await asyncio.sleep(_INTERVAL)
+            fil.start()
+            while not fini.is_set():
+                await asyncio.sleep(0.02)  # la boucle, elle, ne fait qu'attendre
+            await asyncio.sleep(_INTERVAL)
+    finally:
+        hb.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await hb
+        _stop_and_join(watch)
+        relache.set()
+        fil.join(timeout=2.0)
+
+    lignes = [t for t in _warning_texts(caplog) if " fils — chien en retard de " in t]
+    assert len(lignes) == 1, _warning_texts(caplog)
+    ligne = lignes[0]
+    print(f"\n[hang_watch] {ligne}")
+    assert "fil-qui-tient-le-gil[" in ligne and " _tient_le_gil_en_c" in ligne
+    retard = float(ligne.split("chien en retard de ", 1)[1].split("s", 1)[0])
+    assert retard > _INTERVAL, "le chien a attendu le GIL, lui aussi"
+
+
+def test_retard_du_chien_seul_rapporte_un_gel(caplog):
+    watch = HangWatch(interval=_INTERVAL)
+    # Le chien aurait dû se réveiller il y a longtemps ; la boucle, elle, vient de battre.
+    watch._prev_check -= 4 * _INTERVAL
+    watch.beat()
+    with caplog.at_level(logging.WARNING, logger=LOGGER_NAME):
+        for _ in range(2):  # le second réveil est à l'heure : rien de plus
+            # Depuis un autre fil, comme le vrai chien : le fil appelant est exclu du relevé.
+            chien = threading.Thread(target=watch._check)
+            chien.start()
+            chien.join()
+    warnings = _warning_texts(caplog)
+    assert len(warnings) == 2, warnings
+    constat, ligne = warnings
+    assert "la boucle a repris la première" in constat
+    assert "pile du thread principal" not in constat
+    gel = constat.split("(gel=", 1)[1].split(")", 1)[0]
+    assert ligne.startswith(f"gel={gel} fils — chien en retard de ")
+    assert "MainThread(boucle)[" in ligne

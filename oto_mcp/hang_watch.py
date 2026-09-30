@@ -13,9 +13,16 @@ blocage, pas après — qui peut dumper la vraie pile.
 Adapté ici, sur le même patron mais pas la même sortie :
 - **journalise** (logger `oto_mcp.loop`, comme `loop_watch.py`) plutôt qu'écrire des
   fichiers `stacktrace-*.txt` sur la box ;
-- filtre au **seul thread principal** (celui qui fait tourner la boucle asyncio —
-  les autres threads du process sont le threadpool, jamais la boucle elle-même : les
-  dumper coûterait et bruiterait sans rien dire du gel) ;
+- la pile COMPLÈTE du **thread principal** (celui qui fait tourner la boucle asyncio),
+  puis une ligne compacte pour **tous les fils** du process, avec leur nom
+  (`sys._current_frames()` × `threading.enumerate()`) : les derniers cadres de chaque
+  fil actif, les fils au repos (selector, file d'attente, `wait`) résumés en une ligne.
+  Les deux lignes portent le même identifiant de gel (`gel=<hex>`). Pourquoi tous :
+  une boucle trouvée dans `select` n'est pas bloquée par son propre code, elle attend
+  le GIL qu'un AUTRE fil tient (`docs/event-loop-perf.md`, gels « select ») ;
+- le **retard du chien lui-même** et le CPU du process depuis son réveil précédent :
+  le chien a besoin du GIL pour vérifier, un chien en retard d'autant que le gel dit
+  que le GIL (ou le process entier) lui a manqué aussi ;
 - **aucune variable locale** (`traceback.extract_stack`, jamais `format_exc` ni rien
   qui inspecterait une frame plus profondément) — même famille de risque que le fix
   Sentry du 2026-09-15 (#564, `include_local_variables=False`) : un secret déchiffré
@@ -62,6 +69,8 @@ import sys
 import threading
 import time
 import traceback
+from collections import Counter
+from types import FrameType
 
 logger = logging.getLogger("oto_mcp.loop")
 
@@ -76,6 +85,23 @@ OTO_HANG_WATCH_ENABLED = "OTO_HANG_WATCH_ENABLED"
 # remplisse le journal de piles redondantes du même incident.
 _MAX_DUMPS_PER_MIN = 3
 
+# Cadres gardés par fil dans la ligne « tous les fils » : les plus profonds, ceux qui
+# disent ce que le fil fait. La pile complète reste celle du thread principal.
+_CADRES_PAR_FIL = 5
+
+# (fichier, fonction) du cadre le plus profond d'un fil qui ATTEND sans rien tenir :
+# résumé en une ligne, sa pile ne dit rien du gel. `threading.wait` couvre
+# `Condition.wait`, `Event.wait` et `queue.Queue.get` (pool anyio, pool psycopg,
+# transport Sentry) ; `thread.py:_worker` est l'attente d'un pool
+# `concurrent.futures` sur sa `SimpleQueue` (C, donc sans cadre Python à elle).
+_ATTENTES = frozenset({
+    ("selectors.py", "select"),
+    ("threading.py", "wait"),
+    ("threading.py", "_wait_for_tstate_lock"),
+    ("queue.py", "get"),
+    ("thread.py", "_worker"),
+})
+
 
 def enabled() -> bool:
     """Lu au démarrage (redémarrage du process pour changer d'avis, pas de redéploi).
@@ -89,7 +115,7 @@ class HangWatch(threading.Thread):
     """Thread démon : observe un timestamp partagé (mis à jour par `beat()`, appelé
     depuis la boucle) et journalise — au plus une fois par ÉPISODE de blocage, borné
     en plus par minute — la pile du thread PRINCIPAL pendant qu'elle bloque
-    réellement.
+    réellement, puis une ligne pour tous les fils, sous le même `gel=<hex>`.
 
     `_last_beat` est une liste à un élément (pas un flottant nu) : Python la passe
     par RÉFÉRENCE, donc `beat()` (thread de la boucle) et `_check()` (ce thread) voient
@@ -104,8 +130,14 @@ class HangWatch(threading.Thread):
         self._stop_event = threading.Event()
         self._episode_open = False
         self._episode_started_at = 0.0
+        self._episode_id = ""
         self._dump_times: list[float] = []
         self._main_thread_id = threading.main_thread().ident
+        # Réveil précédent du chien : horloge murale et CPU du process (tous fils).
+        # Relus à chaque réveil, pas seulement au dump — c'est leur écart qui dit si
+        # le chien a lui-même attendu le GIL pendant le gel.
+        self._prev_check = time.monotonic()
+        self._prev_cpu = time.process_time()
 
     def beat(self) -> None:
         """Appelé depuis la boucle asyncio — coût : une écriture de flottant."""
@@ -123,44 +155,123 @@ class HangWatch(threading.Thread):
 
     def _check(self) -> None:
         now = time.monotonic()
+        cpu = time.process_time()
+        depuis_reveil, self._prev_check = now - self._prev_check, now
+        cpu_depuis_reveil, self._prev_cpu = cpu - self._prev_cpu, cpu
+        # Le chien devait se réveiller `interval/2` après le réveil précédent : ce qui
+        # dépasse, il l'a passé à attendre le GIL (ou le process entier était arrêté).
+        retard = max(0.0, depuis_reveil - self._interval / 2)
+        fenetre = (retard, cpu_depuis_reveil, depuis_reveil)
         delay = now - self._last_beat[0]
         if delay > self._interval:
             if not self._episode_open:
                 self._episode_open = True
                 self._episode_started_at = now
-                self._maybe_dump(delay)
+                self._episode_id = os.urandom(3).hex()
+                self._maybe_dump(delay, fenetre, boucle_repartie=False)
             # sinon : même épisode, déjà dumpé — on attend la résorption
             return
         if self._episode_open:
             self._episode_open = False
             duration = now - self._episode_started_at
-            self._safe_log(logging.WARNING, "event loop débloquée après %.1fs", duration)
+            self._safe_log(logging.WARNING, "event loop débloquée après %.1fs (gel=%s)",
+                           duration, self._episode_id)
+        elif retard > self._interval:
+            # Gel VU PAR LE CHIEN SEUL : ni lui ni la boucle n'ont eu le GIL pendant
+            # plus que le seuil, mais à sa libération la boucle l'a repris la première
+            # et a battu — le délai de battement ne dit plus rien. Sans cette branche,
+            # un fil qui tient le GIL échappe au chien une fois sur deux ou plus
+            # (`docs/event-loop-perf.md`, relevé « tous les fils »).
+            self._episode_id = os.urandom(3).hex()
+            self._maybe_dump(retard, fenetre, boucle_repartie=True)
 
-    def _maybe_dump(self, delay: float) -> None:
+    def _maybe_dump(self, delay: float, fenetre: tuple[float, float, float], *,
+                    boucle_repartie: bool) -> None:
         """`delay` est mesuré depuis le dernier `beat()` — qui a lieu toutes les
         `interval/2` — pas depuis le début réel d'un éventuel blocage : le vrai
         blocage a pu commencer jusqu'à `interval/2` APRÈS le `delay` rapporté ici.
         D'où le libellé « sans battement depuis » plutôt que « bloquée » : ce
         nombre peut SURESTIMER le temps de blocage réel, jusqu'à `interval/2`
         (0,5s au seuil de prod) — ce n'est pas une mesure exacte du blocage, juste
-        de l'absence de battement."""
+        de l'absence de battement.
+
+        `boucle_repartie` : le gel n'est vu que par le retard du chien, la boucle
+        a déjà repris — sa pile ne montrerait que son travail ordinaire, seule la
+        ligne des fils part."""
+        constat = ("event loop et chien à l'arrêt pendant %.1fs (GIL tenu ailleurs ou "
+                   "process suspendu), la boucle a repris la première" if boucle_repartie
+                   else "event loop sans battement depuis %.1fs")
         now = time.monotonic()
         self._dump_times = [t for t in self._dump_times if now - t < 60.0]
         if len(self._dump_times) >= self._max_dumps_per_min:
             self._safe_log(
                 logging.WARNING,
-                "event loop sans battement depuis %.1fs — dump ignoré (plafond de "
-                "%d/min atteint, probablement la même salve)",
-                delay, self._max_dumps_per_min,
+                constat + " (gel=%s) — dump ignoré (plafond de %d/min atteint, "
+                "probablement la même salve)",
+                delay, self._episode_id, self._max_dumps_per_min,
             )
             return
         self._dump_times.append(now)
-        stack = self._main_thread_stack_text()
+        # Les fils d'abord : c'est l'instantané le plus proche du moment où le chien a
+        # repris le GIL ; la pile principale, elle, lit les sources (linecache).
+        try:
+            fils = self._all_threads_text()
+        except Exception:
+            # Le relevé ne doit jamais tuer le chien : la pile principale part quand même.
+            logger.warning("gel=%s : relevé des fils impossible", self._episode_id,
+                           exc_info=True)
+            fils = "(relevé impossible, cf. l'avertissement précédent)"
+        if boucle_repartie:
+            self._safe_log(logging.WARNING, constat + " (gel=%s)", delay, self._episode_id)
+        else:
+            self._safe_log(
+                logging.WARNING, constat + " (gel=%s) — pile du thread principal:\n%s",
+                delay, self._episode_id, self._main_thread_stack_text(),
+            )
+        # Un retard du chien du même ordre que le gel = il a attendu le GIL (ou le
+        # process entier était arrêté) ; le CPU du process sur la même fenêtre
+        # départage les deux (quelqu'un calculait, ou personne).
         self._safe_log(
             logging.WARNING,
-            "event loop sans battement depuis %.1fs — pile du thread principal:\n%s",
-            delay, stack,
+            "gel=%s fils — chien en retard de %.2fs, CPU du process %.2fs sur les %.2fs "
+            "depuis son réveil précédent — %s",
+            self._episode_id, *fenetre, fils,
         )
+
+    def _all_threads_text(self) -> str:
+        """Tous les fils du process sauf le chien, sur UNE ligne : `nom[cadres]`, du
+        plus profond au plus proche de la racine, séparés par ` | ` ; les fils au
+        repos regroupés en fin de ligne par (nom, point d'attente).
+
+        Rien que `f_code` et `f_lineno` : ni variable locale, ni texte source (pas de
+        `linecache`, donc aucune lecture disque tant que le chien tient le GIL)."""
+        noms = {t.ident: t.name for t in threading.enumerate()}
+        moi = threading.get_ident()
+        boucle: list[str] = []
+        actifs: list[str] = []
+        repos: Counter[str] = Counter()
+        for tid, frame in sys._current_frames().items():
+            if tid == moi:
+                continue
+            nom = noms.get(tid, f"tid-{tid}")
+            cadres = _cadres(frame)
+            fichier, _, fonction = cadres[0]
+            attente = (os.path.basename(fichier), fonction)
+            if tid != self._main_thread_id and attente in _ATTENTES:
+                repos[f"{nom} [{attente[0].removesuffix('.py')}.{fonction}]"] += 1
+                continue
+            texte = " < ".join(f"{_chemin_court(f)}:{ligne} {fn}"
+                               for f, ligne, fn in cadres)
+            if tid == self._main_thread_id:
+                # La boucle en tête, toujours détaillée — même dans `select` : c'est
+                # d'elle qu'on parle.
+                boucle.append(f"{nom}(boucle)[{texte}]")
+            else:
+                actifs.append(f"{nom}[{texte}]")
+        if repos:
+            actifs.append(f"au repos {sum(repos.values())} : " + ", ".join(
+                f"{k} ×{n}" if n > 1 else k for k, n in sorted(repos.items())))
+        return " | ".join(boucle + actifs)
 
     def _main_thread_stack_text(self) -> str:
         frame = sys._current_frames().get(self._main_thread_id)
@@ -182,6 +293,28 @@ class HangWatch(threading.Thread):
         # noqa: SILENT — la sonde de boucle ne casse jamais la boucle qu'elle observe
         except Exception:
             pass
+
+
+def _cadres(frame: FrameType | None) -> list[tuple[str, int, str]]:
+    """Les `_CADRES_PAR_FIL` cadres les plus profonds, le plus profond d'abord."""
+    cadres: list[tuple[str, int, str]] = []
+    while frame is not None and len(cadres) < _CADRES_PAR_FIL:
+        cadres.append((frame.f_code.co_filename, frame.f_lineno or 0, frame.f_code.co_name))
+        frame = frame.f_back
+    return cadres
+
+
+def _chemin_court(chemin: str) -> str:
+    """`oto_mcp/api/base.py`, `starlette/routing.py`, `selectors.py` : assez pour
+    trouver le fichier, sans le préfixe de l'installation."""
+    i = chemin.rfind("site-packages/")
+    if i >= 0:
+        return chemin[i + len("site-packages/"):]
+    for borne in ("/oto_mcp/", "/tests/"):
+        i = chemin.rfind(borne)
+        if i >= 0:
+            return chemin[i + 1:]
+    return os.path.basename(chemin)
 
 
 async def run_heartbeat_loop() -> None:

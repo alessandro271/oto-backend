@@ -696,8 +696,9 @@ même sortie ni le même filtre :
 
 - **journalise** (logger `oto_mcp.loop`, comme `loop_watch.py`) plutôt qu'écrire des
   fichiers `stacktrace-*.txt` sur la box (le patron d'origine) ;
-- filtre au **seul thread principal** (celui qui fait tourner la boucle asyncio) — les
-  autres threads du process sont le threadpool, jamais la boucle ;
+- la pile complète du **thread principal** (celui qui fait tourner la boucle asyncio),
+  puis — depuis le 30/09, §« La pile de tous les fils » plus bas — une ligne compacte
+  pour **tous les fils** du process, sous le même identifiant de gel ;
 - **aucune variable locale** (`traceback.extract_stack`, jamais `format_exc`) — même
   famille de risque que le fix Sentry du 2026-09-15 (#564, `include_local_variables=
   False`) : un secret déchiffré qui traînerait dans une frame ne doit jamais atteindre
@@ -1023,3 +1024,76 @@ dernière colle aussi aux cadres « de passage » du tableau, qui sont des sites
 chemin de chaque requête. Seul un relevé natif le tranche (`py-spy record --native --gil`
 pendant les gels). ⚠️ Le `hang_watch` a besoin du GIL pour vérifier : sous famine, il ne
 dumpe qu'**après** que le fautif l'a rendu, d'où le thread principal encore dans `select`.
+
+### La pile de tous les fils (30/09, suite)
+
+Relevé `py-spy` d'infra sur 15 min de prod : aucun fil ne tient le GIL au détriment de la
+boucle (MainThread à 78 % des échantillons GIL, aucun autre au-dessus de 2 %), pas de `gc`,
+pas de vol de CPU — mais **un seul gel** dans la fenêtre : la cause des gels « select »
+reste sans nom. Le `hang_watch` apporte donc lui-même les deux preuves qui manquaient.
+
+**Ce qu'il journalise.** Au seuil (`OTO_SLOW_CALLBACK_WARN`, 1 s), sous un identifiant de
+gel commun (`gel=<6 hex>`, repris par « dump ignoré » et « débloquée après ») :
+
+1. la pile complète du thread principal, comme avant ;
+2. **une ligne** `gel=… fils — chien en retard de R s, CPU du process C s sur les W s depuis
+   son réveil précédent — MainThread(boucle)[…] | <fil>[…] | au repos N : …`, qui porte :
+   - pour chaque fil actif, son **nom** (`threading.enumerate()`) et ses **5 cadres les plus
+     profonds** (`sys._current_frames()`, `chemin:ligne fonction`, du plus profond au plus
+     haut) — ni variable locale ni texte source (pas de `linecache`) ;
+   - les fils **au repos** (cadre le plus profond dans `selectors.select`, `threading.wait`
+     — donc `Event.wait`, `Queue.get` des pools anyio et psycopg —, `queue.get`,
+     `concurrent.futures` `_worker`) regroupés en fin de ligne par nom et point d'attente ;
+   - **le retard du chien** `R` : il devait se réveiller `interval/2` après le réveil
+     précédent, tout ce qui dépasse, il l'a passé sans GIL (ou le process était arrêté) ;
+   - **le CPU du process** `C` (`time.process_time()`, tous fils) sur la même fenêtre `W`.
+
+Le chien a lui-même besoin du GIL. D'où une **seconde branche de déclenchement** : un chien
+en retard de plus que le seuil rapporte un gel **même si la boucle a battu entre-temps**
+(« event loop et chien à l'arrêt pendant … s, la boucle a repris la première ») — seule la
+ligne des fils part, la pile de la boucle ne montrerait que son travail ordinaire. Sans
+elle, le gel dépend d'une course : à la libération du GIL, si la boucle le reprend avant le
+chien, elle bat, et le délai de battement ne voit plus rien.
+
+**Mesuré** (poste de dev, Python 3.13, intervalle de bascule 1 ms comme en prod, seuil
+1 s, boucle au repos qui bat toutes les 0,5 s) :
+
+| scénario | avant (battement seul) | après | ce que dit la ligne |
+|---|---|---|---|
+| un fil tient le GIL dans du C 3,7 s (`re`, retour arrière exponentiel) | **1 gel vu sur 4** | **8 sur 8** (3 relevés, 5 « dump ignoré » au plafond de 3/min) | boucle dans `select`, le fil nommé dans sa fonction (sur la ligne du C ou juste après) ; chien en retard ≈ 3,2-3,4 s ; **CPU ≈ 3,8 s sur 3,7-3,9 s** |
+| le process entier suspendu 2 s (`SIGSTOP`/`SIGCONT`) | **0 sur 1** | **3 sur 3** | boucle dans `select`, aucun autre fil actif ; chien en retard 1,5 s ; **CPU 0,00 s sur 2,01 s** |
+
+**Lire une ligne.**
+
+| retard du chien | CPU / fenêtre | lecture |
+|---|---|---|
+| ≈ le gel | ≈ 1 cœur | un fil tenait le GIL en calculant dans du C : chercher le fil **actif** de la ligne, hors boucle — il est dans la fonction qui a appelé le C, ou déjà un peu plus loin |
+| ≈ le gel | ≈ 0 | **personne ne calculait** : process suspendu, étranglé (quota CPU du cgroup), en swap, ou VM en pause — rien dans notre code |
+| ≈ 0 | ≈ 1 cœur | la boucle calcule elle-même en Python (le chien a eu le GIL par la bascule) : la pile principale est le coupable |
+| ≈ 0 | ≈ 0 | la boucle attend un appel bloquant qui a rendu le GIL (E/S synchrone, verrou) : la pile principale est le coupable ; un fil qui tient ce verrou apparaît dans la ligne |
+
+**Ce qu'elle ne dit pas.**
+
+- **Qui tenait le GIL, mais seulement qui est encore là.** Le relevé est pris quand le
+  chien reprend le GIL, donc **après** que le fautif l'a rendu : un fil qui a fini sa tâche
+  et est retourné attendre dans son pool est résumé « au repos », sans trace. La ligne nomme
+  le fautif s'il est encore dans sa fonction (le cas mesuré), pas autrement ; dans ce cas,
+  `CPU ≈ fenêtre` sans fil actif reste la signature d'un calcul en C hors boucle.
+- **Pas le code C lui-même** : le cadre Python le plus profond est l'appelant
+  (`json.dumps`, `re.match`, une méthode pydantic-core…), jamais l'intérieur — c'est le
+  rôle de `py-spy --native`.
+- **Pas une cause unique quand la boucle est saturée** : la limite du témoin innocent
+  (§ Observabilité) vaut aussi pour la pile principale.
+- Le CPU est celui **du process**, tous fils confondus : un fil de fond qui calcule en
+  Python pendant qu'un autre tient le GIL ne se distingue pas — seuls ses cadres le font.
+- Au plafond (3 relevés/min), les gels suivants ne sont que **comptés** (« dump ignoré »),
+  avec leur `gel=` mais sans ligne de fils.
+
+Coût : rien de plus sur la boucle (`beat()` inchangé) ; le chien lit en plus
+`time.process_time()` à chaque réveil (sans effet mesurable sur
+`test_cout_isole_du_thread_watchdog_par_reveil`, qui plafonne à la résolution du jiffy),
+et le relevé des fils ne tourne qu'au dump. Preuves : `tests/test_hang_watch.py` —
+un fil qui tient un verrou que la boucle attend donne **une ligne qui nomme les deux
+fils** sous le même `gel=`, sans le chien ni une variable locale ; un fil qui tient le GIL
+dans `re` est nommé quel que soit le gagnant de la course ; la branche « la boucle a repris
+la première » rejouée sans course.
