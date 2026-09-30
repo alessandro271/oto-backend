@@ -29,6 +29,18 @@ BASE_SOURCE = "https://stockage-source.exemple.test"
 BASE_CIBLE = "https://stockage-cible.exemple.test"
 
 
+def url_source(cle: str) -> str:
+    """L'URL qui cite `cle` sous notre base, telle que les URL stockées la portent : la
+    clé encodée d'un niveau (`images/<slug>%3A<id>/…` devient `…/images/<slug>%253A<id>/…`,
+    constaté sur une vraie copie)."""
+    return f"{BASE_SOURCE}/{quote(cle, safe='/')}"
+
+
+def url_cible(cle: str) -> str:
+    """L'URL que l'import doit avoir écrite pour `cle` : seule la base a changé."""
+    return f"{BASE_CIBLE}/{quote(cle, safe='/')}"
+
+
 class _ClientError(Exception):
     def __init__(self, code: str):
         super().__init__(code)
@@ -140,7 +152,7 @@ def semer(c, m: str, *, cle: bytes | None = None) -> dict:
               f"projets/{m}/f.txt": f"fichier {m}".encode(),
               f"images/{quote(alice, safe='')}/{m}-page.png": f"image page {m}".encode(),
               f"images/{quote(alice, safe='')}/{m}-ligne.png": f"image ligne {m}".encode()}
-    url = {cle: f"{BASE_SOURCE}/{cle}" for cle in objets}
+    url = {cle: url_source(cle) for cle in objets}
     cles = list(objets)
     c.execute("UPDATE users SET avatar_url = %s WHERE sub = %s", (url[cles[0]], alice))
     c.execute("UPDATE orgs SET logo_url = %s WHERE id = %s", (url[cles[1]], o))

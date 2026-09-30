@@ -161,9 +161,12 @@ seule. Il n'y a ni copie directe d'un seau à l'autre, ni URL signée.
   stockage public, où qu'elle soit. Cela couvre les colonnes (`users.avatar_url`,
   `orgs.logo_url`, `project_files.public_url`) comme les contenus : une image déposée
   par un agent (`images/<sub>/…`) n'a d'autre trace que son URL collée dans une page,
-  un tableau ou un JSON. L'export cherche `<base publique>/<clé>` dans chaque ligne
-  écrite (`cles_dans`). Un banc rougit si une colonne `hors_base` n'est classée ni clé
-  ni URL.
+  un tableau ou un JSON. L'export cherche `<base publique>/<chemin>` dans chaque ligne
+  écrite (`cles_dans`). Le chemin n'est pas la clé : les URL stockées la citent encodée
+  d'un niveau, et la clé s'en tire en décodant le chemin une fois, et une seule
+  (`cle_du_chemin`) — une clé `images/<slug>%3A<id>/…` est citée par
+  `…/images/<slug>%253A<id>/…`. Un banc rougit si une colonne `hors_base` n'est classée
+  ni clé ni URL.
 - **L'archive** (`<sortie>.objets.tar`) : un membre par objet, nommé par sa clé et
   scellé (`crypto.seal`, AES-256-GCM) sous la clé de l'instance CIBLE, avec une AAD
   qui le lie à sa clé d'objet. Elle est écrite chez nous, depuis notre stockage
@@ -177,9 +180,10 @@ seule. Il n'y a ni copie directe d'un seau à l'autre, ni URL signée.
   manifeste, écrit sous la MÊME clé, puis relu. Un objet déjà là avec la même
   empreinte est sauté : un import interrompu se reprend.
 - **Les URL** sont réécrites par la `Transformation` : `<notre base>/` devient `<base
-  cible>/` dans toute valeur texte, colonne ou contenu. La base cible est celle que la
-  cible déclare (`media_store.public_base`), sans défaut de notre côté. La relecture
-  refuse s'il subsiste une URL de notre stockage dans le périmètre.
+  cible>/` dans toute valeur texte, colonne ou contenu ; le chemin ne bouge pas. La
+  base cible est celle que la cible déclare (`media_store.public_base`), sans défaut de
+  notre côté. La relecture refuse s'il subsiste une URL de notre stockage dans le
+  périmètre.
 
 Les archives froides du journal mêlent tous les propriétaires : elles restent hors
 périmètre.
@@ -321,7 +325,7 @@ journal : fermeture contrôlée à l'export, relecture conforme à l'import.
 `oto-mcp perimetre journal export --org … --depuis D --jusqu-a J --sortie …
 [--faits-de-run-complets]` (`journal.exporter_tranche`) exporte les appels du même
 périmètre dont `created_at` est dans `[D, J)`, demi-ouverte ; une borne sans fuseau est en
-UTC. Même déroulé que l'export principal (`extraction.exporter_lecture`) : même instantané
+UTC, le suffixe `Z` vaut `+00:00` (accepté aussi sous Python 3.10). Même déroulé que l'export principal (`extraction.exporter_lecture`) : même instantané
 `REPEATABLE READ READ ONLY`, même règle des anciens comptes (rattachées, sinon omises,
 comptées au manifeste de la tranche), même `Transformation`, même rechiffrement, et
 l'archive scellée des objets que ses appels citent par URL. Seule la lecture change

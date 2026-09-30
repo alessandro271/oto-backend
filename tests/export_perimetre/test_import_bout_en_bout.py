@@ -43,7 +43,7 @@ from oto_mcp.export_perimetre.transformation import Transformation  # noqa: E402
 from oto_mcp.export_perimetre.objets import StockageS3  # noqa: E402
 from perimetre_banc import (  # noqa: E402
     A, B, BASE_CIBLE, BASE_SOURCE, SECRET, FauxS3, _credential, membre, naitre, org, semer,
-    slug_de, tenant)
+    slug_de, tenant, url_cible)
 from perimetre_banc import detruire as _detruire  # noqa: E402
 
 CLE_SOURCE, CLE_CIBLE = os.urandom(32), os.urandom(32)
@@ -168,9 +168,24 @@ def test_aucune_url_de_notre_stockage_ne_subsiste_sur_la_cible(source, cible):
                           ).fetchone()["body_md"]
         ligne = c.execute("SELECT data FROM datastore_rows LIMIT 1").fetchone()["data"]
     cles = list(source[A]["objets"])      # avatar, logo, fichier, image de page, de ligne
-    assert avatar == f"{BASE_CIBLE}/{cles[0]}"
-    assert f"{BASE_CIBLE}/{cles[3]}" in corps
-    assert ligne["image"] == f"{BASE_CIBLE}/{cles[4]}"
+    assert avatar == url_cible(cles[0])
+    assert url_cible(cles[3]) in corps
+    assert ligne["image"] == url_cible(cles[4])
+
+
+def test_une_cle_qui_porte_un_caractere_encode_voyage_sous_sa_cle(source, export_a, cible):
+    """Constaté sur une vraie copie : la clé `images/<slug>%3A<id>/…` (le sub
+    `<slug>:<id>` encodé à l'écriture) est citée par `…/images/<slug>%253A<id>/…`. Le
+    chemin de l'URL pris tel quel désignait un objet absent et l'export refusait. La clé
+    se tire du chemin par l'inverse exact de `public_url`."""
+    cle = next(k for k in source[A]["objets"] if k.endswith("-page.png"))
+    assert "%3A" in cle
+    assert cle in export_a[1]["objets"]["liste"]
+    assert cible["seau"].objets[cle][0] == source[A]["objets"][cle]
+    with psycopg.connect(cible["dsn"], row_factory=dict_row) as c:
+        corps = c.execute("SELECT body_md FROM docs WHERE body_md LIKE '%%![%%'"
+                          ).fetchone()["body_md"]
+    assert f"{BASE_CIBLE}/{cle.replace('%', '%25')}" in corps
 
 
 def test_un_import_interrompu_reprend_ses_objets_sans_les_recopier(source, export_a, pg_dsn):

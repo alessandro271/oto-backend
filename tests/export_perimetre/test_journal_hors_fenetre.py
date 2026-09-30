@@ -38,11 +38,12 @@ from oto_mcp.export_perimetre.extraction import exporter  # noqa: E402
 from oto_mcp.export_perimetre.importation import (  # noqa: E402
     ImportRefuse, VerificationEchouee, importer)
 from oto_mcp.export_perimetre.journal import (  # noqa: E402
-    FORMAT_TRANCHE, TrancheRefusee, exporter_tranche, importer_tranche)
+    FORMAT_TRANCHE, TrancheRefusee, exporter_tranche, importer_tranche, instant)
 from oto_mcp.export_perimetre.objets import StockageS3  # noqa: E402
 from oto_mcp.export_perimetre.regles import Via  # noqa: E402
 from perimetre_banc import (  # noqa: E402
-    A, B, BASE_CIBLE, BASE_SOURCE, FauxS3, detruire, naitre, semer, slug_de)
+    A, B, BASE_CIBLE, BASE_SOURCE, FauxS3, detruire, naitre, semer, slug_de, url_cible,
+    url_source)
 
 CLE_SOURCE, CLE_CIBLE = os.urandom(32), os.urandom(32)
 NOM_A = f"tenant {A}"
@@ -89,7 +90,7 @@ def source(pg_dsn):
             _appel(c, A, QUAND_ANCIENS, sub=ORPHELIN, org_id=o)
             cle_image = next(k for k in a["objets"] if k.endswith("-page.png"))
             _appel(c, A, MAINTENANT - timedelta(days=3), sub=alice, org_id=o,
-                   extra={"image": f"{BASE_SOURCE}/{cle_image}"})
+                   extra={"image": url_source(cle_image)})
             _appel(c, A, PUSH[1] - timedelta(minutes=30), sub=alice, org_id=o, n=2)  # recouvert
             _appel(c, A, MAINTENANT - timedelta(hours=2), sub=alice, org_id=o, n=2)
             _appel(c, A, GEL + timedelta(hours=1), sub=alice, org_id=o)    # après le gel
@@ -357,7 +358,7 @@ def test_les_objets_cites_par_le_journal_suivent_et_leurs_url_sont_reecrites(sou
     with psycopg.connect(jour_j["dsn"], row_factory=dict_row) as c:
         image = c.execute("SELECT args->>'image' AS i FROM tool_calls WHERE args ? 'image'"
                           ).fetchone()["i"]
-    assert image == f"{BASE_CIBLE}/{cle}"
+    assert image == url_cible(cle)
 
 
 # --- Les refus ------------------------------------------------------------------------
@@ -401,6 +402,17 @@ def test_un_export_principal_ne_s_importe_pas_comme_une_tranche(principal, pg_ds
             _verser(dsn, principal[0], FauxS3())
     finally:
         detruire(pg_dsn, dsn)
+
+
+def test_une_borne_en_z_se_lit_en_utc():
+    """La doc donne ses bornes en `…Z` ; `fromisoformat` ne le lit qu'à partir de 3.11,
+    et la box tourne en 3.10. Sans fuseau, la borne reste en UTC."""
+    utc = datetime(2026, 8, 31, 16, 15, 56, tzinfo=timezone.utc)
+    assert instant("2026-08-31T16:15:56Z") == utc
+    assert instant("2026-08-31T16:15:56") == utc
+    assert instant("2026-08-31T18:15:56+02:00") == utc
+    with pytest.raises(TrancheRefusee, match="pas une date ISO 8601"):
+        instant("31/08/2026")
 
 
 def test_une_tranche_vide_ou_renversee_refuse(source, tmp_path):

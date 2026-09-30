@@ -11,9 +11,12 @@ copie directe d'un seau à l'autre, aucune URL signée.
 - par une URL de notre stockage public, où qu'elle soit : dans une colonne d'URL
   (`COLONNES_D_URL`) comme dans un contenu (le corps d'une page, un JSON). Une image
   qu'un agent a déposée (`images/<sub>/…`) n'a d'autre trace que son URL, collée
-  n'importe où : on la trouve en cherchant `<base publique>/<clé>` dans chaque ligne.
+  n'importe où : on la trouve en cherchant `<base publique>/<chemin>` dans chaque ligne.
+  Le chemin n'est pas la clé : les URL stockées la citent encodée d'un niveau, et la
+  clé s'en tire en décodant le chemin une fois (`cle_du_chemin`).
 Chaque objet garde sa CLÉ sur la cible ; les URL, elles, sont réécrites vers la base
-publique de la cible à l'import (`transformation`).
+publique de la cible à l'import (`transformation`) : seule la base change, le chemin
+reste tel quel.
 
 **L'archive** : un `tar` dont chaque membre est nommé par la clé de l'objet et porte
 l'objet scellé (`crypto.seal`, AES-256-GCM) sous la clé cible, l'AAD liant le chiffré à
@@ -34,6 +37,7 @@ import tarfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Protocol
+from urllib.parse import unquote
 
 from ..crypto import seal, unseal
 
@@ -99,9 +103,20 @@ def _aad(cle: str) -> str:
     return f"oto-export-perimetre/objet:{cle}"
 
 
+def cle_du_chemin(chemin: str) -> str:
+    """La clé que désigne le chemin d'une URL de notre stockage public : le chemin
+    décodé d'UN niveau, et d'un seul. Les URL stockées encodent la clé d'un niveau —
+    constaté sur une vraie copie : la clé `images/<slug>%3A<id>/…` (le sub
+    `<slug>:<id>` encodé à l'écriture) est citée par `…/images/<slug>%253A<id>/…`. Pris
+    tel quel, le chemin désignait un objet absent ; décodé deux fois, un autre."""
+    return unquote(chemin)
+
+
 def cles_dans(texte: str, base_publique: str) -> set[str]:
-    """Les clés des objets dont une URL `<base_publique>/<clé>` figure dans `texte`."""
-    return set(re.findall(re.escape(f"{base_publique}/") + f"({_CARACTERES_DE_CLE})", texte))
+    """Les clés des objets dont une URL `<base_publique>/<chemin>` figure dans `texte`,
+    chaque chemin ramené à sa clé par `cle_du_chemin`."""
+    return {cle_du_chemin(chemin) for chemin in
+            re.findall(re.escape(f"{base_publique}/") + f"({_CARACTERES_DE_CLE})", texte)}
 
 
 def archiver(cles: Iterable[str], source: Stockage, chemin: Path,

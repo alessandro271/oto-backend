@@ -14,7 +14,7 @@ from oto_mcp.export_perimetre.classement import CLASSEMENT
 from oto_mcp.export_perimetre.objets import (
     COLONNES_D_URL, COLONNES_DE_CLES, ObjetsRefuses, StockageS3, archiver, cles_dans,
     controler_archive, verser)
-from perimetre_banc import BASE_SOURCE, FauxS3
+from perimetre_banc import BASE_SOURCE, FauxS3, url_source
 
 OBJETS = {"project-files/12/abc/rapport.pdf": b"%PDF-1.7 rapport",
           "images/t1%3Aalice/def.png": b"\x89PNG image" * 50}
@@ -81,12 +81,20 @@ def test_un_objet_absent_de_la_source_refuse_sans_archive(tmp_path):
 
 
 def test_les_cles_se_trouvent_par_leur_url_dans_n_importe_quel_texte():
-    texte = (f'{{"body_md": "voir ![s]({BASE_SOURCE}/images/t1%3Aa/x.png) et '
+    texte = (f'{{"body_md": "voir ![s]({BASE_SOURCE}/images/t1%253Aa/x.png) et '
              f'<{BASE_SOURCE}/org-logos/3/y.png>", "u": "{BASE_SOURCE}/avatars/z.png?v=2", '
              f'"autre": "https://ailleurs.test/images/w.png", '
              f'"voisin": "{BASE_SOURCE}x/images/v.png"}}')
     assert cles_dans(texte, BASE_SOURCE) == {"images/t1%3Aa/x.png", "org-logos/3/y.png",
                                              "avatars/z.png"}
+
+
+def test_la_cle_se_tire_du_chemin_de_l_url_decode_d_un_niveau():
+    """Constaté sur une vraie copie : la clé réelle porte un `%3A` littéral, son URL
+    l'encode (`%253A`). Le chemin décodé d'UN niveau, et d'un seul, redonne la clé."""
+    cle = "images/t1%3Aalice/def.png"
+    assert url_source(cle) == f"{BASE_SOURCE}/images/t1%253Aalice/def.png"
+    assert cles_dans(f"![i]({url_source(cle)})", BASE_SOURCE) == {cle}
 
 
 def test_un_seul_chemin_l_archive():

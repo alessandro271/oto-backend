@@ -52,10 +52,13 @@ class TrancheRefusee(RuntimeError):
 
 
 def instant(texte: str) -> datetime:
-    """Une borne en ISO 8601 (`2026-10-01`, `2026-10-01T18:00:00+02:00`) ; sans fuseau,
-    elle est en UTC — comme les horodatages de l'export."""
+    """Une borne en ISO 8601 (`2026-10-01`, `2026-10-01T18:00:00+02:00`,
+    `2026-10-01T16:00:00Z`) ; sans fuseau, elle est en UTC — comme les horodatages de
+    l'export. Le suffixe `Z` se lit `+00:00` : `fromisoformat` ne l'accepte qu'à
+    partir de Python 3.11, et la box tourne en 3.10."""
     try:
-        valeur = datetime.fromisoformat(texte)
+        valeur = datetime.fromisoformat(texte[:-1] + "+00:00" if texte.endswith("Z")
+                                        else texte)
     except ValueError as e:
         raise TrancheRefusee(f"borne {texte!r} : pas une date ISO 8601") from e
     return valeur if valeur.tzinfo else valeur.replace(tzinfo=timezone.utc)
