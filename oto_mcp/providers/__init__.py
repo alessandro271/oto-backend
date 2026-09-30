@@ -226,6 +226,8 @@ _DECLARATIONS: tuple[str, ...] = (
     # Voisin de `fireflies`/`grain`/`granola` par le métier (intelligence
     # conversationnelle), et l'ordre gouverne l'affichage du catalogue.
     "leexi",
+    # Same family (meeting recordings, transcripts) — wired 2026-09-29.
+    "claap",
     # Voisin de `linear` : la roadmap de Productlane est ADOSSÉE à Linear
     # (projets et issues y naissent, puis sont reflétés). Les deux cartes se
     # lisent ensemble.

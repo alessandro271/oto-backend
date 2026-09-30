@@ -51,7 +51,9 @@ dependencies = [
     # devant ça. Cf. docs/contributions-forks.md (amendement du 2026-09-01).
     # v1.148.0 = la lib ne lit plus aucun secret : chaque credential est passé par le
     # consommateur, un manquant lève `MissingCredential` (sert oto-backend#1107) ;
-    # jev : client en anglais (connectors#92).
+    # jev : client en anglais (connectors#92) ; claap : client des enregistrements de
+    # réunion, ids échappés dans le chemin, URL présignée vérifiée (connectors#93,
+    # sert oto-backend#1101).
     # v1.147.0 = jev: TypeSafe typed-answer model client, via OpenRouter
     # (connectors#91, for oto-backend#1092).
     # v1.145.0 = clay : client Public API (tables, routines, recherche) et webhooks de
