@@ -23,7 +23,7 @@ from typing import Any, Callable, Optional
 from . import couches as dsl
 from . import schema as dsv2
 from . import vide_remplace as vr
-from .declaration import cle_d_element
+from .declaration import COMPOSITE_TYPES, champ_declare, cle_d_element
 from .errors import RowValidationError
 
 # Les colonnes de la PLATEFORME : elles vivent dans la ligne sans être des
@@ -96,6 +96,62 @@ def _refuse_group_by_compose(group_by) -> None:
         "Le groupement croisé n'est pas encore servi : le jour où il le sera, il "
         "faudra d'abord décider sous quelle forme un groupe composite est rendu — clé "
         "jointe, tuple, ou objet — parce que ce choix-là ne se défait plus.")
+
+
+#: Les opérateurs qui comparent une VALEUR. `empty`/`not_empty` disent si la case est
+#: remplie, ce qui a un sens sur une colonne entière ; `contains` cherche un texte,
+#: comme `q` sur la ligne entière, et c'est le filtre par défaut qu'un écran propose.
+_OPS_DE_COMPARAISON = frozenset({"eq", "ne", "in", "gt", "gte", "lt", "lte"})
+
+
+def _refuse_composite_compare(filters: Optional[list],
+                              schema_of: Callable[[], Optional[dict]]) -> None:
+    """Une colonne `list` ou `object` ENTIÈRE ne se compare pas (oto#22, point b).
+
+    Le SQL lit la valeur d'une case en texte : sur une colonne composite, c'est le
+    TEXTE DU JSON. `{"field": "contacts", "op": "eq", "value": "DRH"}` ne matchait
+    donc jamais, `ne` matchait tout, et `gt` rangeait des blobs dans l'ordre de
+    l'alphabet — trois réponses rendues comme des résultats. La non-définition était
+    écrite dans la spec (`datastore-colonne-tableau.md` §4), pas appliquée.
+
+    Le type vient du schéma DÉCLARÉ, seul à savoir qu'une colonne est une liste : la
+    forme d'une valeur ne le dirait que ligne par ligne, et une colonne en cours de
+    conversion porte les deux. Le schéma n'est lu que si un filtre compare une valeur
+    sur un nom nu — un appel sans comparaison ne paie rien."""
+    candidats = []
+    for f in filters or []:
+        if not isinstance(f, dict) or f.get("op") not in _OPS_DE_COMPARAISON:
+            continue
+        cibles = f.get("fields") if f.get("fields") is not None else [f.get("field")]
+        if isinstance(cibles, (list, tuple)):
+            candidats += [(c, f["op"]) for c in cibles if isinstance(c, str) and c]
+    if not candidats:
+        return
+    schema = schema_of()
+    for nom, op in candidats:
+        champ = champ_declare(schema, nom)
+        type_ = (champ or {}).get("type")
+        if type_ not in COMPOSITE_TYPES:
+            continue
+        of = champ.get("of") if type_ == "list" else champ
+        attrs = [a["key"] for a in ((of or {}).get("fields") or [])
+                 if isinstance(a, dict) and isinstance(a.get("key"), str)]
+        tete = (f"filtre `{op}` sur `{nom}` refusé : `{nom}` est une colonne `{type_}`, "
+                f"qui ne se compare pas en bloc — son texte JSON n'est pas une valeur, "
+                f"et la comparaison rendrait un résultat faux sans erreur. ")
+        if type_ == "list" and attrs:
+            vise = (f"Vise un attribut de ses éléments : `{nom}[].{attrs[0]}` (« il "
+                    f"existe un élément dont… »), ex. "
+                    f"{{\"field\": \"{nom}[].{attrs[0]}\", \"op\": \"{op}\", "
+                    f"\"value\": …}} — attributs déclarés : "
+                    + ", ".join(f"`{a}`" for a in attrs) + ". ")
+        elif type_ == "list":
+            vise = ("Ses éléments ne déclarent pas d'attributs : il n'y a rien à "
+                    f"viser sous `{nom}[]`. ")
+        else:
+            vise = "Ses attributs ne sont pas adressables par un filtre. "
+        raise ValueError(tete + vise + "Sur la colonne entière, `empty` et "
+                         "`not_empty` restent permis.")
 
 
 def _scan_mixed(value: Any, path: str, errors: list) -> None:

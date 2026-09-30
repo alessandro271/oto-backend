@@ -17,6 +17,7 @@ from . import claimable
 from . import layers as dsl
 from . import schema as dsv2
 from .claimable import RowOutsideClaimable
+from .columns import _refuse_composite_compare
 from .errors import RowClaimed, RowLocked, RowNotFound
 from .outils import _backquote, _current_run, _filter_clauses
 from .precondition import revision_attendue
@@ -36,7 +37,9 @@ def perimetre_de_reservation(schema: Optional[dict], ns_id: int,
     de la réservation parce qu'il recomposait ce périmètre à sa façon ; ici il n'y a
     rien à recomposer."""
     declare = dsv2.claimable_of(schema, ns_id)
-    return declare, claimable.clauses(declare) + _filter_clauses(filter, filters)
+    appel = _filter_clauses(filter, filters)
+    _refuse_composite_compare(appel, lambda: schema)  # oto#22 : comme toute lecture
+    return declare, claimable.clauses(declare) + appel
 
 
 class FileDeTravailMixin:

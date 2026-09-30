@@ -138,8 +138,12 @@ Trois conséquences pour qui déclare une colonne-tableau :
 
 - **Ni égalité ni tri sur la colonne ENTIÈRE.** Trois emails n'ont pas « une » valeur ;
   une colonne ne se réduit pas. `{"field": "contacts", "op": "eq"}` est **refusé en le
-  nommant** (« une colonne-tableau ne se compare pas : viser `contacts[].<attribut>` »)
-  — jamais un tri arbitraire silencieux, qui rendrait un ordre reproductible et faux.
+  nommant** (« `contacts` est une colonne `list`, qui ne se compare pas en bloc… Vise
+  un attribut de ses éléments : `contacts[].fonction` ») — jamais un tri arbitraire
+  silencieux, qui rendrait un ordre reproductible et faux. Armé le 30/09/2026 : la
+  garde lit le type déclaré (`list` ou `object`) et refuse `eq`, `ne`, `in`, `gt`,
+  `gte`, `lt`, `lte` ; `empty`, `not_empty` et `contains` restent permis sur la colonne
+  entière. ⚠️ `not_empty` y lit le texte : une liste vide `[]` compte comme remplie.
 - **Une clé métier n'est JAMAIS un sous-tableau.** Refus à la DÉCLARATION du schéma,
   pas à la première écriture.
 

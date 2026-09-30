@@ -107,6 +107,14 @@ Surfaces :
 > servies vides. Une valeur de date malformée lève aussi côté Python : le cast SQL
 > aurait rendu un 500 opaque au lieu d'un `invalid_filters`.
 
+> **Une colonne composite ENTIÈRE ne se compare pas (oto#22, 30/09/2026).** Sur une
+> colonne déclarée `list` ou `object`, `eq`/`ne`/`in`/`gt`/`gte`/`lt`/`lte`
+> comparaient le TEXTE du JSON — `eq` ne matchait jamais, `ne` matchait tout. Ils sont
+> **refusés** en nommant la destination (`contacts[].<attribut>`, « il existe un
+> élément dont… ») ; `empty`, `not_empty` et `contains` (recherche de texte) restent
+> permis. La garde lit le type DÉCLARÉ (`columns._refuse_composite_compare`), sur
+> toutes les lectures, conditions de métrique et file de travail comprises.
+
 **Journal de travail : les deux surfaces, une seule table (2026-07-28).** Un geste fait
 au cockpit (dashboard, REST) était journalisé au seul grain ROUTE (`RestCallLogger`,
 `tool='PATCH /api/datastore/…'`) : on voyait qu'une écriture avait eu lieu, jamais

@@ -13,7 +13,7 @@ from .. import db
 from . import layers as dsl
 from . import versions as dsver
 from . import schema as dsv2
-from .columns import _refuse_group_by_compose
+from .columns import _refuse_composite_compare, _refuse_group_by_compose
 from .errors import InvalidCursor, RowNotFound
 from .outils import (
     _OFFSET_CURSOR_PREFIX,
@@ -39,6 +39,16 @@ class LectureMixin:
             ns_id, order_by=order_by, order_type=otype, order_options=oopts,
             q=q, filters=filters)
         return health if (health["off_type"] or health["empty"]) else None
+
+    def _clauses(self, ns_id: int, filter: Optional[dict], filters: Optional[list],
+                 *conditions: list) -> list[dict]:
+        """Les clauses d'un appel de lecture, GARDÉES contre la comparaison d'une
+        colonne composite entière (oto#22) — un seul passage pour toutes les
+        lectures, `conditions` portant les `where` des métriques d'un agrégat."""
+        clauses = _filter_clauses(filter, filters)
+        _refuse_composite_compare(clauses + [c for cs in conditions for c in cs],
+                                  lambda: self._schema_of(ns_id))
+        return clauses
 
     def get_row(self, datastore: str, row_id: str, *,
                 layers: str = dsl.DEFAUT,
@@ -70,7 +80,7 @@ class LectureMixin:
         ns_id = self._resolve(datastore)
         rows = db.datastore_list_rows(
             ns_id, limit=limit, order_by="_created_at", order_dir="asc",
-            filters=_filter_clauses(filter, None))
+            filters=self._clauses(ns_id, filter, None))
         if not rows:
             return []
         sch = self._schema_of(ns_id)
@@ -114,7 +124,7 @@ class LectureMixin:
         la page sort inchangée."""
         ns_id = self._resolve(datastore)
         proj = None if not fields or "*" in fields else frozenset(fields)
-        filters = _filter_clauses(filter, filters)
+        filters = self._clauses(ns_id, filter, filters)
         # ⚠️ Le schéma se lit une fois par PAGE, et seulement quand il y a quelque chose
         # à servir : le lire dès l'entrée ferait payer une requête à un appel qui va
         # refuser son curseur — un coût là où il n'y a même pas de résultat.
@@ -168,7 +178,7 @@ class LectureMixin:
         SQL (`COUNT(*)`) — sans rapatrier les lignes (feedback #191 : stats d'un gros
         vivier sans charger 300+ lignes en contexte)."""
         ns_id = self._resolve(datastore)
-        clauses = _filter_clauses(filter, filters)
+        clauses = self._clauses(ns_id, filter, filters)
         return db.datastore_count_rows(ns_id, q=q, filters=clauses)
 
     def aggregate(self, datastore: str, *, group_by=None,
@@ -184,7 +194,10 @@ class LectureMixin:
         `group_by` accepte une LISTE de colonnes (oto#22) : leurs valeurs sont mises en
         commun, une ligne comptant une occurrence par colonne renseignée."""
         ns_id = self._resolve(datastore)
-        clauses = _filter_clauses(filter, filters)
+        clauses = self._clauses(
+            ns_id, filter, filters,
+            *[m["where"] for m in metrics or []
+              if isinstance(m, dict) and isinstance(m.get("where"), list)])
         _refuse_group_by_compose(group_by)
         return db.datastore_aggregate(
             ns_id, group_by=group_by, metrics=metrics, q=q, filters=clauses)
@@ -231,7 +244,7 @@ class LectureMixin:
         Absent (ou `["*"]`) = même payload qu'avant ce lot."""
         ns_id = self._resolve(datastore)
         proj = None if not fields or "*" in fields else frozenset(fields)
-        clauses = _filter_clauses(filter, filters) or None
+        clauses = self._clauses(ns_id, filter, filters) or None
         sch = self._schema_of(ns_id)
         # Le tri honore le TYPE déclaré (#336) — résolu ICI, où le schéma est connu :
         # la couche db reçoit un type générique, jamais le schéma.
