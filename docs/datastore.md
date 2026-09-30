@@ -1055,6 +1055,17 @@ de fin de passage détectait après coup.
   valeur courante la présenterait comme celle de la cliente — ce que la définition
   interdit. Le marqueur rend l'ignorance explicite plutôt que muette : sans lui, « pas
   d'origine » se confondrait avec « origine vide ».
+  ⚠️ **Balayage et marqueur RETIRÉS (oto#116, 30/09/2026).** Un texte logé là où vit
+  une valeur est indistinguable d'une valeur : un écran de restitution l'a comparé à la
+  valeur courante et en a conclu à une correction. Le code qui l'écrivait
+  (`datastore_capturer_origine`, `_capturer_origine_des_colonnes_neuves`, la clé
+  `origines_capturees` et `marqueurs_poses_warning`) est supprimé, et les cases déjà
+  marquées se reprennent par `scripts/purger_origine_inconnue.py` (à blanc par défaut,
+  `--apply`, lots bornés par la clé primaire, écriture estampillée
+  `service:reprise-origine-inconnue` au journal des révisions) : la couche `origine`
+  part, la valeur reste, et une cellule réduite à sa seule valeur redevient plate.
+  **Une case sans couche `origine` n'a pas de valeur de départ connue** — l'absence de
+  la couche le dit, et « origine vide » reste `""`, qui n'a jamais été servi.
   ⚠️ **`null` efface, et le reste (oto#140, décidé le 23/09/2026).** La « fin de `null` »
   (préavis puis refus au 1er décembre 2026) est ANNULÉE : `null` efface une case quel que
   soit son type, et `@empty` (sa raison dans `comment`) dit « cherché, rien » — les deux
@@ -1149,9 +1160,9 @@ de fin de passage détectait après coup.
   ne se reconstitue — **mesuré le 08/09/2026 : 837 cellules sur 846 marquées** sur un
   tableau de production, découvert trois semaines après la pose, à la veille d'une
   restitution cliente. Ce n'est pas un défaut, c'est une inversion, et elle est évitable
-  à coût nul sur tout tableau neuf. La réponse à la pose rend le compte sous
-  `origines_capturees` — ⚠️ **nom trompeur : il compte des PERTES**, et un avertissement
-  posé à côté le dit explicitement (`marqueurs_poses_warning`). Refusé à la pose sur un composite ou un `json` (la capture rangerait
+  à coût nul sur tout tableau neuf. La réponse à la pose rendait le compte sous
+  `origines_capturees` — ⚠️ **nom trompeur : il comptait des PERTES** (clé et
+  avertissement retirés avec le balayage, oto#116). Refusé à la pose sur un composite ou un `json` (la capture rangerait
   l'objet entier dans la couche — ⚠️ **motif reformulé le 2026-09-01, #728** : il
   invoquait l'exemption `json` de la grammaire des couches, qui ne vaut plus pour
   l'adresse ; c'est la pose AUTOMATIQUE qui ne s'y déclare pas, l'annotation elle-même

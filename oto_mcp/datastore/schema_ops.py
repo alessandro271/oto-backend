@@ -48,26 +48,6 @@ class SchemaOpsMixin:
         ns = db.get_datastore_by_id(ns_id)
         return aga.schema_servi((ns or {}).get("schema"))
 
-    def _capturer_origine_des_colonnes_neuves(self, ns_id: int,
-                                              avant: Optional[dict],
-                                              apres: Optional[dict]) -> int:
-        """Pose l'origine sur les lignes existantes des colonnes qui viennent de
-        GAGNER le format `origine: "system"`.
-
-        Sans ça, une ligne créée avant la déclaration n'a aucun filet : la capture
-        paresseuse ne garde que ce qui existait à la première écriture d'APRÈS, et
-        la valeur d'avant est perdue sans que rien ne le dise (otomata-tech/oto#46).
-
-        On ne regarde que les colonnes NEUVES au sens du format : re-déclarer un
-        schéma qui portait déjà `origine: "system"` ne recapture rien, sinon chaque
-        pose de schéma écraserait les origines déjà gardées — l'inverse du but.
-        """
-        neuves = (dsv2.system_origin_fields(apres)
-                  - dsv2.system_origin_fields(avant))
-        if not neuves:
-            return 0
-        return 0        # `origine: "system"` supprimé — plus rien à baliser
-
     def _recalculer_formules_neuves_ou_modifiees(self, ns_id: int,
                                                  avant: Optional[dict],
                                                  apres: Optional[dict]) -> int:
@@ -148,12 +128,7 @@ class SchemaOpsMixin:
             raise SchemaDefinitionError(refus)
         efface = dsv2.declarations_effacees(ancien, schema, retraits_annonces)
         db.set_datastore_schema(ns_id, schema)
-        # Après l'écriture du schéma : la capture n'a de sens que si la déclaration
-        # a bien eu lieu. Avant, un refus plus bas laisserait des origines posées
-        # pour un format qui n'existe pas.
-        origines_posees = self._capturer_origine_des_colonnes_neuves(
-            ns_id, ancien, schema)
-        # Même moment, même raison : une formule neuve ou modifiée (oto-backend#1008)
+        # Après l'écriture du schéma : une formule neuve ou modifiée (oto-backend#1008)
         # ne vaut que si le schéma qui la porte est bien écrit.
         formules_marquees = self._recalculer_formules_neuves_ou_modifiees(
             ns_id, ancien, schema)
@@ -192,10 +167,6 @@ class SchemaOpsMixin:
         # connaître.
         out = {"datastore": datastore, "schema": aga.schema_servi(schema),
                "enforced": dsv2.enforced_keys()}
-        # Une écriture sur des lignes existantes ne se fait pas en silence : celui
-        # qui déclare doit savoir que sa pose a TOUCHÉ des données, et combien.
-        if origines_posees:
-            out["origines_capturees"] = origines_posees
         if formules_marquees:
             # ⚠️ Marquées, pas encore recalculées (oto-backend#1008 v2, backfill
             # asynchrone) : `formula_backfill_worker.py` drainera en fond. La clé
@@ -207,11 +178,6 @@ class SchemaOpsMixin:
         # Un statut sans état terminal = file de travail qui ne libère rien : le dire
         # ICI, à l'auteur du schéma, au moment où il le pose (les deux faces l'ont).
         warnings = [w for w in (index_differe, index_non_retire,
-                                # ⚠️ Le nombre rendu sous `origines_capturees`
-                                # se lit comme un succès alors qu'il compte
-                                # des pertes. La phrase dit ce qui s'est
-                                # vraiment passé, et l'ordre qui l'évite.
-                                dsv2.marqueurs_poses_warning(origines_posees),
                                 dsv2.queue_release_warning(schema),
                                 # Clés de déclaration qu'oto n'interprète PAS (#316) :
                                 # posées, stockées, rendues fidèlement… et jamais lues.

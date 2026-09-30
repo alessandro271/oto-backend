@@ -18,7 +18,7 @@ import psycopg
 
 logger = logging.getLogger(__name__)
 
-from ..datastore.schema import LAYER_KEYS, ORIGINE_INCONNUE, VALUE_LAYER
+from ..datastore.schema import LAYER_KEYS, VALUE_LAYER
 # Chemins et feuilles : extraits dans `paths` (#325), ré-exportés ici pour que la
 # surface plate `db.<fn>` et tous les appelants restent inchangés.
 from .paths import (  # noqa: F401
@@ -168,94 +168,6 @@ def datastore_find_row_id_by_key(ns_id: int, key_field: str, key_value) -> Optio
 
 def _bkey_index_name(ns_id: int) -> str:
     return f"ds_bkey_{int(ns_id)}"
-
-
-#: Le marqueur, tel qu'il part au SQL. ⚠️ **Brut, pas sérialisé** :
-#: `jsonb_build_object('origine', 'texte')` convertit lui-même un `text` en chaîne JSON.
-#: Lui passer `json.dumps(...)` produisait `"\"(origine inconnue)\""` — les guillemets
-#: DANS la valeur. Attrapé par le banc, pas par la relecture.
-
-
-def datastore_capturer_origine(ns_id: int, champs: list[str]) -> int:
-    """Pose `<champ>.origine` = le MARQUEUR « origine inconnue » sur les lignes
-    existantes, pour les colonnes qui viennent de gagner le format `origine: "system"`.
-
-    ⚠️ **Cette docstring annonçait « la valeur COURANTE » jusqu'au 08/09/2026, et
-    c'était faux depuis oto#70.** Le code pose le marqueur — le commentaire de la
-    requête, dix lignes plus bas, l'explique en détail. La docstring décrivait un
-    comportement retiré, et **elle est la racine d'une confusion qui est remontée
-    jusqu'au propriétaire du produit** : il a affirmé de bonne foi que les valeurs
-    d'origine étaient conservées, parce que c'est exactement ce que la plateforme
-    promettait ici. Un texte périmé ne se contente pas d'être inutile — il fabrique
-    une croyance, et il la fabrique chez ceux qui prennent la peine de lire.
-
-    **Ce que la fonction fait réellement** : sur chaque ligne existante d'une colonne
-    qui vient de gagner le cran, elle écrit `origine = "(origine inconnue)"`. C'est un
-    aveu, pas une capture. Au moment où la déclaration arrive, la valeur d'import a
-    déjà pu être écrasée par un agent, et poser la valeur courante la présenterait
-    comme celle de la cliente — ce que la définition interdit.
-
-    **Ce qui capture vraiment**, c'est l'ordre des gestes : déclarer le cran AVANT
-    l'import. La ligne n'existe alors pas encore, cette fonction ne balise rien, et la
-    capture paresseuse fige la valeur de la cliente au premier enrichissement.
-
-    Pourquoi baliser à la DÉCLARATION plutôt que de ne rien faire
-    (otomata-tech/oto#46) : sans ce passage, une ligne antérieure à la déclaration
-    n'aurait AUCUNE couche `origine`, et « pas d'origine » se confondrait avec
-    « origine vide ». Le marqueur rend l'ignorance explicite plutôt que muette.
-
-    Trois règles, chacune fermant une porte :
-
-    - une couche DÉJÀ posée n'est jamais touchée — capturer par-dessus effacerait
-      justement ce qu'on cherche à garder ;
-    - une colonne ABSENTE de la ligne ne reçoit rien : « pas de valeur » n'est pas
-      « valeur vide », et poser `""` inventerait une origine ;
-    - une colonne déjà enveloppée (elle porte d'autres couches) reçoit son
-      `origine` **à côté** des couches existantes, sans les écraser.
-
-    Une seule requête par champ, dans UNE transaction : la déclaration réussit
-    entièrement ou pas du tout. Rend le nombre de lignes touchées.
-    """
-    from psycopg import sql as _sql
-
-    if not champs:
-        return 0
-    touchees = 0
-    with ecriture_de_lignes() as conn:
-        for champ in champs:
-            # On remplace la COLONNE entière, pas une sous-clé : `jsonb_set`
-            # ne sait pas créer un chemin dans une valeur plate (une chaîne
-            # reste une chaîne, et la mise à jour ne fait rien — silencieusement).
-            # ⚠️ On pose le marqueur « origine inconnue », PAS la valeur courante
-            # (oto#70). Sur une ligne déjà travaillée, cette valeur est celle d'un
-            # AGENT : la présenter comme origine est exactement ce que la définition
-            # interdit — « l'origine est la valeur posée au départ, à l'import ».
-            # v1.207.0 la capturait, et la vraie valeur d'import était perdue sans
-            # que rien ne le dise (S1) ; sur une colonne vide à l'import, l'origine
-            # devenait même indiscernable d'un import de la valeur d'agent (S2).
-            #
-            # ⚠️ Et on ne cherche PAS à distinguer « ligne jamais retouchée » :
-            # `datastore_insert_row` accepte `created_at`/`updated_at` en override,
-            # donc les comparer serait une heuristique. Une sémantique de donnée ne
-            # se fonde pas sur une heuristique — on dit qu'on ne sait pas.
-            q = _sql.SQL(
-                "UPDATE datastore_rows SET data = jsonb_set(data, {chemin}, "
-                "  CASE WHEN jsonb_typeof(data->{k}) = 'object' "
-                # déjà enveloppée : on AJOUTE l'origine à côté des autres couches
-                "       THEN (data->{k}) || jsonb_build_object('origine', {inconnue}) "
-                # plate : on l'enveloppe, sa valeur reste la valeur
-                "       ELSE jsonb_build_object('valeur', data->{k}, "
-                "                               'origine', {inconnue}) END, true) "
-                "WHERE ns_id = %s "
-                # existe, et n'a pas déjà une origine
-                "  AND data ? {k} "
-                "  AND NOT (jsonb_typeof(data->{k}) = 'object' "
-                "           AND data->{k} ? 'origine')"
-            ).format(k=_sql.Literal(str(champ)),
-                     chemin=_sql.Literal("{" + str(champ) + "}"),
-                     inconnue=_sql.Literal(ORIGINE_INCONNUE))
-            touchees += conn.execute(q, (ns_id,)).rowcount
-    return touchees
 
 
 def datastore_key_dup_groups(ns_id: int, key: str, limit: int = 10) -> list[dict]:

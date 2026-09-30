@@ -137,7 +137,10 @@ veux garder ce que la cliente a remis, **déclare-le à l'import**.
 
 ⚠️ **Les couches `origine` déjà en base ne bougent pas** — 28 799 cases en portent une
 au moment du retrait. Elles restent lues, servies et jamais réécrites. C'est le
-mécanisme qui part, pas la donnée.
+mécanisme qui part, pas la donnée. Une seule exception : le texte « origine inconnue »
+que le balayage posait À LA PLACE d'une valeur a été retiré des cases qui le portaient.
+**Une case sans couche `origine` n'a pas de valeur de départ connue** : c'est
+l'absence de la couche qui le dit, jamais un texte à sa place.
 
 Une déclaration `origine: "system"` qui subsiste dans un schéma est désormais une clé
 qu'oto n'interprète pas : elle est stockée, servie, et sans aucun effet. L'avertissement
@@ -181,8 +184,8 @@ Trois règles qui te dispensent de précautions :
 GESTES — il fallait que `origine: "system"` ait été déclaré **avant** que la ligne
 n'existe, sans quoi la capture n'avait plus rien à figer. ⚠️ **Ce silence a coûté 837
 cellules sur 846** sur un tableau de campagne : cran déclaré après coup, valeurs de la
-cliente déjà écrasées par des agents, et un balayage qui n'a pu poser que
-`(origine inconnue)`. Un geste explicite ne se trompe pas d'ordre.
+cliente déjà écrasées par des agents, et un balayage qui n'a pu poser qu'un aveu
+d'ignorance, depuis retiré. Un geste explicite ne se trompe pas d'ordre.
 
 **Sur un import en volume** (`oto_upload_url` → `PUT /api/upload/{token}`), déclare-le
 **au mint**, avec le reste : le `PUT` signé ne porte aucun paramètre, donc celui qui

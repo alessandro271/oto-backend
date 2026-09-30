@@ -73,7 +73,7 @@ _ECRIT_DATA = re.compile(
 #: échec, pas en silence : elle doit passer par le point de passage, et se nommer.
 _ECRIVAINS = {
     "oto_mcp/db/datastore.py": {
-        "datastore_insert_row", "datastore_upsert_row", "datastore_capturer_origine",
+        "datastore_insert_row", "datastore_upsert_row",
         "datastore_drop_column", "datastore_merge_key_duplicates",
         "datastore_merge_row_locked", "datastore_delete_row"},
     "oto_mcp/db/rowabandon.py": {"abandonner_les_lignes_a_bout"},

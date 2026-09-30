@@ -10,7 +10,7 @@ d'opérations auquel personne ne pensait au bon moment — le cran `origine: "sy
 devait avoir été déclaré AVANT que la ligne n'existe, sans quoi la capture paresseuse
 n'avait plus rien à figer. ⚠️ **Ce silence a coûté 837 cellules sur 846** sur un tableau
 de campagne : le cran déclaré après coup, les valeurs de la cliente déjà écrasées par
-des agents, et un balayage qui n'a pu poser qu'un aveu — `(origine inconnue)`.
+des agents, et un balayage qui n'a pu poser qu'un aveu d'ignorance, depuis retiré (oto#116).
 
 Un geste explicite ne se trompe pas d'ordre. Il n'y a plus « avant » ni « après » :
 l'appel dit ce qu'il apporte, et la version d'origine se pose au moment où la valeur

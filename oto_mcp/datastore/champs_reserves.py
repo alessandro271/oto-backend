@@ -40,7 +40,6 @@ from .couches import (
     layer_value,
     names_layers,
     ORIGIN_LAYER,
-    ORIGINE_INCONNUE,
     same_value,
     unwrap,
     VALUE_LAYER,
@@ -181,9 +180,8 @@ def description_parametre_origine(en: bool = False) -> str:
                 f"— the current value and the origin — in the same gesture, at the "
                 f"moment the value enters. This parameter only says \"I know I am "
                 f"setting that layer\", and it applies to this call only. "
-                f"⚠️ You may still meet the marker \"{ORIGINE_INCONNUE}\" in an "
-                f"`origine` layer: it was left by the removed mechanism on rows it "
-                f"could not reconstruct. It is a LOSS, not a capture.")
+                f"A cell without an `origine` layer has no known starting value: "
+                f"the absence of the layer says so, never a text in its place.")
     return (f"`{PARAMETRE_ORIGINE}=true` déclare que cet appel pose la couche "
             f"`origine` (la valeur du DÉPART, à l'import) en le sachant. Sans lui, une "
             f"écriture d'origine est refusée à partir du {date_refus_fr()}. "
@@ -193,10 +191,9 @@ def description_parametre_origine(en: bool = False) -> str:
             f"IMPORT, préférez `donnees_d_origine=true`, qui écrit les DEUX versions "
             f"— la valeur courante et l'origine — dans le même geste, au moment où la "
             f"valeur entre. Ce paramètre-ci dit seulement « je sais que je pose cette "
-            f"couche », et il ne vaut que pour cet appel. ⚠️ Vous pouvez encore "
-            f"rencontrer le marqueur « {ORIGINE_INCONNUE} » dans une couche "
-            f"`origine` : il a été laissé par le mécanisme retiré sur les lignes "
-            f"qu'il ne pouvait pas reconstituer. C'est une PERTE, pas une capture.")
+            f"couche », et il ne vaut que pour cet appel. Une case sans couche "
+            f"`origine` n'a pas de valeur de départ connue : c'est l'absence de la "
+            f"couche qui le dit, jamais un texte à sa place.")
 
 
 def _en_francais(quand: "_date") -> str:
@@ -322,46 +319,6 @@ def origine_posee(payload: Optional[dict], avant: Optional[dict] = None) -> list
             continue
         out.append(cle)
     return sorted(out)
-
-
-def marqueurs_poses_warning(combien: int) -> Optional[str]:
-    """Ce qu'une déclaration tardive du cran `origine: "system"` faisait.
-
-    ⚠️ **Le cran est SUPPRIMÉ depuis le 08/09/2026** : cette fonction ne parle plus
-    d'aucun mécanisme vivant. Elle est gardée tant que `_capturer_origine_des_colonnes_neuves`
-    l'est — ce dernier rend `0` en nommant le retrait, et les deux s'éteindront ensemble.
-
-    ⚠️ **La clé servie s'appelle `origines_capturees`, et c'est l'inverse de ce qui
-    s'est passé.** Rien n'a été capturé : la plateforme a écrit le marqueur « origine
-    inconnue » sur des lignes dont la valeur de départ était déjà perdue. Un nombre
-    sous ce nom se lit comme un succès — « 837 origines capturées ! » — alors qu'il
-    compte des aveux.
-
-    Mesuré le 08/09/2026 : un tableau de production porte **837 marqueurs sur 846
-    couches d'origine**, et la restitution promise à une cliente y est muette. Le
-    nombre avait été rendu à la pose, personne n'avait de raison de le lire comme une
-    alerte, et la découverte s'est faite trois semaines plus tard.
-
-    ⚠️ **La clé n'est PAS renommée** — elle est servie, et un consommateur peut la
-    lire. On ajoute la phrase à côté, on ne déplace pas ce qui existe. Ce qui nuisait
-    n'était pas le nom seul, c'était le nom SANS phrase.
-
-    **Et la phrase dit le geste qui l'évite**, parce que c'est un ordre et non un
-    défaut : déclarer le cran AVANT l'import ne balise rien du tout.
-    """
-    if not combien:
-        return None
-    return (f"{combien} cellule(s) marquées « origine inconnue » — et c'est une PERTE, "
-            "pas une capture. Ces lignes existaient déjà quand le format d'origine a "
-            "été déclaré : leur valeur de départ avait pu être écrasée par un agent, "
-            "et la plateforme refuse de présenter le travail d'un agent comme la "
-            "donnée de la personne qui l'a fournie. Ce qui manque là ne se "
-            "reconstituera pas.\n"
-            "⚠️ Le geste qui l'évite entièrement : porter `donnees_d_origine=true` sur "
-            "l'appel qui APPORTE la donnée — il pose la version d'origine au moment où "
-            "la valeur entre, donc il ne dépend d'aucun ordre. (L'ancien conseil "
-            "— déclarer `origine: \"system\"` avant d'importer — n'a plus d'objet : ce "
-            "cran est SUPPRIMÉ depuis le 08/09/2026.)")
 
 
 def reserved_refusals(schema: Optional[dict], payload: Optional[dict],

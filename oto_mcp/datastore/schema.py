@@ -78,7 +78,7 @@ from . import forcage as fcg
 
 from .couches import (
     VALUE_LAYER, ORIGIN_LAYER, LAYER_KEYS, ALL_LAYER_KEYS, VALUE_BOUND_LAYERS,
-    SYSTEM_ORIGIN, ORIGINE_INCONNUE, same_value, names_layers, unknown_layers, unwrap,
+    SYSTEM_ORIGIN, same_value, names_layers, unknown_layers, unwrap,
     split_layer, layer_value, flat_layers, layer_address, served_value, _served_item,
     _is_empty, est_vide,
 )
@@ -108,7 +108,7 @@ from .champs_reserves import (
     PARAMETRE_ORIGINE, ORIGINE_REFUS_LE, ENV_ORIGINE_REFUS_LE, _MOIS_FR, date_refus,
     date_refus_fr, description_parametre_origine, _en_francais, refus_arme,
     _les_deux_gestes, avertissement_origine, refus_origine, origine_posee,
-    reserved_refusals, _origine_attendue, marqueurs_poses_warning,
+    reserved_refusals, _origine_attendue,
 )
 from .definition import (
     validate_schema_def, _erreurs_unknown_fields, _COLUMN_ONLY_KEYS,
