@@ -546,7 +546,8 @@ def _stronger_role(a: Optional[str], b: Optional[str]) -> str:
     return (a if ra >= rb else b) or "member"
 
 
-def repointer_patrimoine(conn, old_sub: str, new_sub: str) -> dict:
+def repointer_patrimoine(conn, old_sub: str, new_sub: str, *,
+                         sauf: frozenset = frozenset()) -> dict:
     """Repointe TOUT ce qui porte `old_sub` vers `new_sub` — étapes 2 à 3 ter de
     `migrate_sub`, dans la transaction de l'appelant. Rend le bilan du coffre.
 
@@ -558,7 +559,17 @@ def repointer_patrimoine(conn, old_sub: str, new_sub: str) -> dict:
     personnelles, que la fusion ne rechiffrait pas). Rejouer ce repointage sur un
     ancien identifiant sans ligne `users` est sans effet sur ce qui a déjà suivi :
     chaque étape ne touche que les lignes qui le portent encore. Ne touche ni
-    `users` (rôle, suppression) ni `sub_aliases` : c'est le métier de la fusion."""
+    `users` (rôle, suppression) ni `sub_aliases` : c'est le métier de la fusion.
+
+    `sauf` : des `(table, colonne)` de `_SUB_COLUMNS` que l'appelant repointe LUI-MÊME,
+    hors de cette transaction — la reprise des résidus les traite par lots bornés sur
+    la clé primaire, parce qu'un `UPDATE … WHERE col = …` sans index sur `col` balaie
+    la table entière (constaté le 30/09 : `statement_timeout` sur la reprise, #439).
+    Une entrée hors de l'inventaire LÈVE : un « sauf » qui n'exclut rien serait une
+    colonne crue traitée et jamais touchée."""
+    inconnues = set(sauf) - set(_SUB_COLUMNS)
+    if inconnues:
+        raise ValueError(f"repointer_patrimoine: `sauf` hors de _SUB_COLUMNS : {sorted(inconnues)}")
     # 2. user_account_profile (PK sub) : retirer le frais du new PUIS repointer
     #    l'ancien (garde l'historique). DELETE d'abord → pas de conflit PK.
     #    (La NOTE de l'user suit désormais par `("nodes", "owner_id")` dans
@@ -666,6 +677,8 @@ def repointer_patrimoine(conn, old_sub: str, new_sub: str) -> dict:
                 perso_ancienne["id"], old_sub, [r["id"] for r in demarquees])
     # 3. repointer toutes les colonnes sub.
     for table, col in _SUB_COLUMNS:
+        if (table, col) in sauf:
+            continue
         conn.execute(f"UPDATE {table} SET {col}=%s WHERE {col}=%s", (new_sub, old_sub))
     # 3 bis. Les ARÊTES du modèle d'accès (blueprint ADR 0053, L5) : `grantee_id`
     #    porte un sub quand `grantee_kind='user'` — sans repointage, un compte

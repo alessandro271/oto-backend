@@ -186,6 +186,12 @@ naissait avec notre tenant (ADR 0070 §7.2). Elle se **déclare** désormais, sa
 > attribué au sub revendiqué avant que l'authentification ne publie le porteur résolu)
 > se reprennent par `scripts/repointer_residus_alias.py` — le même `repointer_patrimoine`,
 > à blanc par défaut ; un ancien identifiant RECRÉÉ depuis est écarté et nommé.
+> ⚠️ **Deux passes** : une transaction pour ce qui se lit par un index (ou vit dans une
+> table bornée), puis des LOTS par plage de `id`, chacun validé à sa fin, pour les colonnes
+> sans index (`tool_calls.effective_sub`/`view_as_sub`, `nodes.owner_id`…) — d'un bloc,
+> elles balaient la table et tombent sur `statement_timeout` (vécu le 30/09). Reprise :
+> relancer, ou `--depuis <table>:<id>` ; la garde `test_repointer_residus_alias` refuse
+> toute colonne traitée d'un bloc sans index ni raison d'être bornée.
 >
 > ⚠️ **Une fusion de comptes emporte la MARQUE d'espace personnel — depuis le 14/08
 > seulement.** `orgs.personal_of` échappait aux deux garde-fous (pas une FK ⟹ invisible à
