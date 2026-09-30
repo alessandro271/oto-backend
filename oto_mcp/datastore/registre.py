@@ -52,12 +52,13 @@ def _avertissement_de_portee(ns_id: int, owner_type: str, *,
     demandee = session_org.current_view_org() or session_org.current_call_org()
     if not demandee:
         return None
-    # Décision du 28-29/09/2026 (ADR 0030 §9) : le perso se LISTE dans l'org perso — la
-    # phrase le dit, sinon le créateur le cherche dans la liste de l'org demandée.
-    tete = (f"Tableau créé PERSONNEL : toi seul le vois, même si l'organisation "
-            f"{demandee} était le contexte de cet appel, et il se liste dans ton org "
-            f"perso, pas dans celle-ci (son numéro l'ouvre partout). Le contexte d'org "
-            f"ne décide pas du propriétaire — il se demande.")
+    # Décision du 29/09/2026 : le perso se LISTE, pour son seul propriétaire, dans l'org
+    # où il a été créé (et dans l'org perso) — la phrase dit que les autres membres ne
+    # le voient pas.
+    tete = (f"Tableau créé PERSONNEL : toi seul le vois — il se liste pour toi dans "
+            f"l'organisation {demandee}, où tu l'as créé, et dans ton org perso, mais "
+            f"les autres membres ne le voient pas. Le contexte d'org ne décide pas du "
+            f"propriétaire — il se demande.")
     if aga.appel_d_agent():
         return (f"{tete} Pour qu'il appartienne à l'organisation : "
                 f"`oto_resource(op='transfer', resource_id='{ns_id}', "
@@ -124,16 +125,17 @@ class RegistreMixin:
         }
 
     def list_datastores(self) -> list[dict]:
-        """Datastores visibles DANS L'ORG ACTIVE (l'org est le contexte, ADR 0023) —
-        décision du 28/09/2026 : dans une org, on ne voit QUE l'org. Possédés par l'org
-        active et par mes équipes en elle (ADR 0049), accordés à elle ou à MES équipes
-        en elle (tous mes groupes de l'org active, pas seulement le groupe actif : un
-        partage d'équipe doit se voir sans basculer). Aucun tableau personnel, aucun
-        partage fait à moi : ils se listent dans mon org PERSO, qui rend en plus TOUS
-        mes tableaux perso (quel que soit leur `context_org_id`) et ceux partagés à moi
-        en personne (`ownership.perso_de_la_liste`). Dédupliqués par id (priorité
-        possédé). Filtre de LISTE : un tableau s'ouvre toujours par son numéro."""
+        """Datastores visibles DANS L'ORG ACTIVE (l'org est le contexte, ADR 0023).
+        Possédés par l'org active et par mes équipes en elle (ADR 0049), accordés à elle
+        ou à MES équipes en elle (tous mes groupes de l'org active, pas seulement le
+        groupe actif : un partage d'équipe doit se voir sans basculer), et MES tableaux
+        perso créés dans cette org (`ownership.mes_objets_ici`, même règle que les
+        projets, 29/09/2026) — jamais ceux d'un autre membre. Mon org PERSO rend en plus
+        TOUS mes tableaux perso et ceux partagés à moi en personne
+        (`ownership.perso_de_la_liste`). Dédupliqués par id (priorité possédé). Filtre
+        de LISTE : un tableau s'ouvre toujours par son numéro."""
         from .. import access
+        createur = None
         if self.acting_org is not None:
             owner = ("org", str(self.acting_org))
             proprios: list = [owner]
@@ -144,6 +146,7 @@ class RegistreMixin:
                 return []
             proprios = ownership.principaux_de_liste(self.sub, org)
             moi = ownership.perso_de_la_liste(self.sub, org)
+            createur = ownership.mes_objets_ici(self.sub, org)
         # ADR 0049 (cadrage 10/07) : les tableaux TEAM-OWNED de l'org active sont listés
         # comme les org-owned. `_active_scope` est la source unique du jeu de groupes
         # (mes équipes, ou TOUS les groupes de l'org pour un org_admin — même règle que
@@ -154,6 +157,8 @@ class RegistreMixin:
         out: dict[int, dict] = {}
         for n in db.list_datastores_for_owners(owned):
             out[int(n["id"])] = self._entry(n, shared=False)
+        for n in ownership.mes_tableaux_ici(createur):
+            out.setdefault(int(n["id"]), self._entry(n, shared=False))
         recus = db.list_datastores_granted_to(self.sub, org_ids, group_ids)
         if moi:
             # Org perso : ce qui est partagé à MOI en personne s'y liste aussi.

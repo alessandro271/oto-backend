@@ -32,6 +32,11 @@ def _stub_empty(monkeypatch, **over):
     monkeypatch.setattr(S.ownership, "accessible_project_ids", lambda *a, **k: [1])
     monkeypatch.setattr(S.ownership, "principaux_de_liste", lambda *a: [])
     monkeypatch.setattr(S.ownership, "perso_de_la_liste", lambda *a: [])
+    # Mes tableaux perso créés dans l'org (org perso = org, 29/09/2026) : une source
+    # de plus pour la parité liste/recherche, donc une doublure de plus — sans elle,
+    # `mes_objets_ici` lirait l'étiquette perso en base.
+    monkeypatch.setattr(S.ownership, "mes_objets_ici", lambda *a: None)
+    monkeypatch.setattr(S.ownership, "mes_tableaux_ici", lambda *a: [])
     monkeypatch.setattr(S.db, "list_datastores_for_owners",
                         lambda owners: over.get("tableaux", []))
     monkeypatch.setattr(S.db, "list_datastores_granted_to",

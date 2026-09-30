@@ -43,8 +43,14 @@ def _wire(monkeypatch, rec, *, org=99, groups=({"group_id": 5, "org_id": 99, "na
     monkeypatch.setattr(group_store, "list_groups_for_user", fake_groups)
 
     def fake_owned(owners):
-        rec["owners"] = owners
-        return [OWNED]
+        # Deux lectures depuis le 29/09/2026 (une org perso est une org comme une
+        # autre) : le jeu POSSÉDÉ de la liste (org, équipes, et moi dans l'org perso),
+        # puis mes tableaux perso (`ownership.mes_tableaux_ici`, `[("user", sub)]`),
+        # filtrés sur l'org de création. `owners` = la PREMIÈRE, celle que ces bancs
+        # figent ; `appels` les garde toutes.
+        rec.setdefault("owners", owners)
+        rec.setdefault("appels", []).append(owners)
+        return rec.get("rows_for", {}).get(tuple(owners), [OWNED])
 
     def fake_granted(sub, org_ids, group_ids):
         rec["granted_to"] = (sub, org_ids, group_ids)
@@ -239,17 +245,24 @@ def test_un_tableau_qu_on_vient_de_CREER_se_liste_dans_l_org_perso(monkeypatch):
     aucun ne joignait les deux — le défaut vivait exactement dans l'espace entre eux.
     Un test qui crée puis lit est le seul qui pouvait le voir.
     """
-    # Décision du 29/09/2026 : un tableau créé sans précision est À LA PERSONNE, dans
-    # toute org — et il se liste dans son org PERSO (99 ici), pas dans une org de
-    # travail (5 = l'org perso, 99 devient une org de travail).
-    for perso, liste in ((99, True), (5, False)):
-        rec = {}
+    # Décision du 29/09/2026 (org perso = org) : un tableau créé sans précision est À LA
+    # PERSONNE ; il se liste, pour elle seule, dans l'org où elle l'a CRÉÉ
+    # (`context_org_id`) et dans son org perso — plus « dans l'org perso seulement »
+    # (règle du 28/09, remplacée). 99 = org de création ; perso=5 en fait une org de
+    # travail. Un tableau créé AILLEURS (7) ne se liste que dans l'org perso.
+    ici = {"id": 11, "datastore": "cree_ici", "owner_type": "user", "owner_id": "u1",
+           "context_org_id": 99, "created_at": "2026-09-29", "schema": None}
+    ailleurs = {**ici, "id": 12, "datastore": "cree_ailleurs", "context_org_id": 7}
+    for perso, attendus in ((99, {11, 12}), (5, {11})):
+        rec = {"rows_for": {(("user", "u1"),): [ici, ailleurs]}}
         _wire(monkeypatch, rec, perso=perso)
         store = D.make_store("u1")
         assert store._default_owner() == ("user", "u1")
-        store.list_datastores()
-        assert (("user", "u1") in rec["owners"]) is liste, (
-            "un tableau personnel doit se lister dans l'org perso, et seulement là")
+        out = store.list_datastores()
+        assert [("user", "u1")] in rec["appels"], "mes tableaux perso sont consultés"
+        assert {e["id"] for e in out} & {11, 12} == attendus, (
+            "un tableau personnel se liste dans son org de création (pour son "
+            "propriétaire) et dans l'org perso")
 
 
 def test_dans_une_org_de_TRAVAIL_la_liste_ne_rend_ni_personnel_ni_partage_a_moi(monkeypatch):
@@ -262,6 +275,9 @@ def test_dans_une_org_de_TRAVAIL_la_liste_ne_rend_ni_personnel_ni_partage_a_moi(
     assert rec["owners"] == [("org", "99"), ("group", "5")]
     assert rec["granted_to"] == ("u1", [99], [5])
     assert "to_me" not in rec
+    # Mes tableaux perso CRÉÉS dans cette org s'y listent pour moi (29/09/2026) : la
+    # seconde lecture ne porte que sur moi, filtrée sur l'org de création.
+    assert rec["appels"][1:] == [[("user", "u1")]]
 
 
 def test_parite_recherche_liste(monkeypatch):

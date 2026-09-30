@@ -99,20 +99,25 @@ def active_org_principals(sub: str, org_id: Optional[int]) -> list[tuple[str, st
 
 
 def org_perso_de(sub: str, org_id: Optional[int]) -> bool:
-    """`org_id` est-elle l'org PERSO de `sub` ? — la question que pose toute LISTE
-    depuis la décision d'Alexis du 28/09/2026 : dans le contexte d'une org, on ne voit
-    QUE l'org ; ce qui est à moi, ou partagé à moi en personne, se voit dans mon org
-    perso. C'est la même source que `me.active_org_is_personal` (`org_store`)."""
+    """`org_id` porte-t-elle l'étiquette d'org PERSO de `sub` (l'org créée à son
+    inscription) ? Depuis le 29/09/2026, une org perso est fonctionnellement une org
+    comme une autre ; l'étiquette ne sert plus qu'à désigner la MAISON de ce qui n'a pas
+    d'org de création (`perso_de_la_liste`, le `tout` de `mes_objets_ici`) et à
+    interdire à son propriétaire de la quitter. Même source que
+    `me.active_org_is_personal` (`org_store`)."""
     return org_id is not None and org_store.get_personal_org(sub) == int(org_id)
 
 
 def perso_de_la_liste(sub: str, org_id: Optional[int]) -> list[tuple[str, str]]:
     """`[("user", sub)]` dans l'org perso de `sub`, `[]` partout ailleurs.
 
-    Le principal PERSONNEL d'une liste — comme propriétaire (mes projets et tableaux
-    perso, QUEL QUE SOIT leur `context_org_id`) et comme destinataire (ce qui est
-    partagé à moi en personne). Hors de l'org perso, une liste ne rend aucun objet
-    `owner_type='user'` et aucun partage nominatif : ni les miens, ni ceux d'un autre.
+    Le principal PERSONNEL d'une liste, dans la MAISON de ce qui n'a pas d'org de
+    création — comme propriétaire (mes objets perso, dont ceux qui ne portent pas de
+    `context_org_id` : procédures, guides, nœuds perso) et comme destinataire (ce qui
+    est partagé à moi en personne, qui n'appartient à aucune org et que la lentille
+    « moi » sert aussi dans toute org). Ailleurs, mes objets perso qui PORTENT leur org
+    de création passent par `mes_objets_ici` ; aucun objet d'un autre membre ni aucun
+    partage nominatif n'entre dans la liste.
 
     ⚠️ Un filtre de LISTE, jamais un droit : `active_org_principals` et
     `owner_in_scope` gardent le principal personnel, parce qu'ils servent l'accès par
@@ -130,25 +135,6 @@ def principaux_de_liste(sub: str, org_id: Optional[int]) -> list[tuple[str, str]
     moi = perso_de_la_liste(sub, org_id)
     return [p for p in active_org_principals(sub, org_id) if p[0] != "user"
             or p in moi]
-
-
-def refus_vue_perso_hors_org_perso(sub: str, org_id: Optional[int],
-                                   quoi: str) -> tuple[str, dict]:
-    """`(message, details)` du refus 409 `personal_view_outside_personal_org` (décision
-    du 29/09/2026) : une lentille « moi » (`quoi`) n'est servie que dans l'org perso —
-    ce qui est partagé à une personne n'appartient à aucune org de travail.
-
-    `details` = `{"personal_org_id": N}` : ce qu'un écran lit pour basculer sans parser
-    la phrase. Vide en vue bornée (oto#270) — l'org_admin ne lit rien hors de O, l'org
-    perso du membre n'y est pas nommée. Les faces lèvent le refus en littéral, pour que
-    leur contrat déclaré le voie."""
-    perso = org_store.get_personal_org(sub) if vue_bornee() is None else None
-    ou = (f"ton org perso (#{perso}, `_org={perso}` côté agent, `X-Oto-Org: {perso}` "
-          "en REST)" if perso is not None else "ton org perso")
-    ici = f"dans l'org #{org_id}" if org_id is not None else "sans org active"
-    message = (f"{quoi} se lit dans ton org perso, pas {ici} : dans une org, on ne voit "
-               f"QUE l'org (décision du 28/09/2026). Bascule dans {ou} pour le lire.")
-    return message, ({"personal_org_id": perso} if perso is not None else {})
 
 
 def project_scope_owners(sub: str, org_id: Optional[int]) -> list[tuple[str, str]]:
@@ -169,42 +155,55 @@ def project_scope_owners(sub: str, org_id: Optional[int]) -> list[tuple[str, str
 def project_list_owners(sub: str, org_id: Optional[int]) -> list[tuple[str, str]]:
     """Propriétaires COLLECTIFS des projets qu'une LISTE rend dans l'org `org_id` : ceux
     du contexte (`project_scope_owners` — l'org et ses pôles). Mes projets PERSONNELS
-    n'y sont pas : ils passent par `mes_projets_ici`, qui les range dans l'org où je
+    n'y sont pas : ils passent par `mes_objets_ici`, qui les range dans l'org où je
     les ai créés. Source unique d'`op=list`, `op=list_templates`, `archived=true`, du
     rail et de la recherche (`projets_possedes_ici`)."""
     return project_scope_owners(sub, org_id)
 
 
-def mes_projets_ici(sub: Optional[str], org_id: Optional[int]
-                    ) -> Optional[tuple[str, int, bool]]:
-    """`(sub, org, tout)` : les projets PERSONNELS (`owner_type='user'`) que `sub` voit
-    dans la liste de l'org `org_id` — ceux qu'il y a CRÉÉS (`context_org_id = org`)
-    et, dans son org perso (`tout`), tous ses projets personnels (28/09/2026). `None` :
-    aucun.
+def mes_objets_ici(sub: Optional[str], org_id: Optional[int]
+                   ) -> Optional[tuple[str, int, bool]]:
+    """`(sub, org, tout)` : les objets PERSONNELS (`owner_type='user'`, projets et
+    tableaux — ceux qui portent leur org de création, `context_org_id`) que `sub` voit
+    dans la liste de l'org `org_id` : ceux qu'il y a CRÉÉS (`context_org_id = org`) et,
+    dans son org perso (`tout`), tous ses objets personnels. `None` : aucun.
 
-    Décision d'Alexis du 29/09/2026 : un projet appartient à qui le crée et vit dans
-    l'org où il l'a créé ; son propriétaire l'y voit TOUJOURS, que l'org soit perso ou
-    partagée, et même quand elle cesse d'être perso (un 2ᵉ membre y entre et
-    `personal_of` retombe). Les autres membres ne le voient que s'il le leur partage :
-    la clause ne porte que sur `sub`. En vue bornée (oto#270), seul le contexte O
-    compte."""
+    Décisions d'Alexis du 29/09/2026 : un objet appartient à qui le crée et vit dans
+    l'org où il l'a créé ; son propriétaire l'y voit TOUJOURS, que l'org porte
+    l'étiquette perso ou non — « perso » n'est qu'une étiquette, fonctionnellement une
+    org comme une autre. Les autres membres ne le voient que s'il le leur partage : la
+    clause ne porte que sur `sub`. `tout` est la maison des objets sans org de
+    création (legacy, ou créés hors de toute org) : l'org créée à l'inscription.
+    En vue bornée (oto#270), seul le contexte O compte."""
     if not sub or org_id is None:
         return None
     tout = vue_bornee() is None and org_perso_de(sub, org_id)
     return (sub, int(org_id), tout)
 
 
+def mes_tableaux_ici(createur: Optional[tuple[str, int, bool]]) -> list[dict]:
+    """Mes tableaux PERSONNELS que la liste de l'org rend, selon `mes_objets_ici` : ceux
+    créés dans cette org (`context_org_id`) et, dans mon org perso (`tout`), tous.
+    Source unique de la liste des tableaux et de la recherche (parité « cherchable ⇔
+    lisible »). `[]` sans `createur`."""
+    if createur is None:
+        return []
+    csub, corg, tout = createur
+    return [n for n in db.list_datastores_for_owners([("user", csub)])
+            if tout or n.get("context_org_id") == corg]
+
+
 def projets_possedes_ici(sub: str, org_id: Optional[int], *,
                          extra: Optional[list] = None, **kw) -> list[dict]:
     """Les projets POSSÉDÉS que la liste de l'org `org_id` rend : ceux de l'org et de
     ses pôles (`project_list_owners`), plus mes projets personnels créés ici
-    (`mes_projets_ici`). `extra` ajoute des propriétaires (la plateforme, pour les
+    (`mes_objets_ici`). `extra` ajoute des propriétaires (la plateforme, pour les
     modèles) ; `kw` passe à `db.list_projects_for_owners`. `[]` sans org active."""
     owners = project_list_owners(sub, org_id)
     if not owners:
         return []
     return db.list_projects_for_owners(owners + list(extra or []),
-                                       createur=mes_projets_ici(sub, org_id), **kw)
+                                       createur=mes_objets_ici(sub, org_id), **kw)
 
 
 def accessible_project_ids(sub: str, org_id: Optional[int],

@@ -295,31 +295,22 @@ def test_personal_share_listed_in_personal_org_only(seams, monkeypatch):
                                 [("org", "5"), ("user", "u1")]]
 
 
-def test_list_scope_me_rend_les_partages_personnels(seams, monkeypatch):
+@pytest.mark.parametrize("org", [5, 42], ids=["org-perso", "org-de-travail"])
+def test_list_scope_me_rend_les_partages_personnels(seams, monkeypatch, org):
     # `scope="me"` : ce qui est partagé à la PERSONNE — une lentille « moi », servie dans
-    # l'org PERSO seulement (29/09/2026). Rien de l'org n'y entre.
+    # toute org, avec le même contenu (29/09/2026 : une org perso est une org comme une
+    # autre ; elle était refusée en 409 hors de l'org perso). Rien de l'org n'y entre.
     perso_share = dict(ROW, id=67, name="Partagé perso", owner_type="org", owner_id="188",
                        permission="write")
     monkeypatch.setattr(P.db, "list_projects_granted_to",
                         lambda principals: seams["granted"].append(list(principals)) or (
                             [perso_share] if ("user", "u1") in principals else []))
-    out = P._project(ResolvedCtx(sub="u1", org_id=5), P.ProjectInput(op="list", scope="me"))
+    out = P._project(ResolvedCtx(sub="u1", org_id=org), P.ProjectInput(op="list", scope="me"))
     assert [p["id"] for p in out["projects"]] == [67]
     assert out["projects"][0]["shared"] is True
     assert out["projects"][0]["permission"] == "write"
     assert seams["granted"] == [[("user", "u1")]]
     assert seams["list_owners"] == []                       # la liste de l'org n'est pas lue
-
-
-def test_list_scope_me_hors_de_l_org_perso_est_refuse(seams):
-    # Dans une org de travail : un refus nommé qui dit où basculer, jamais une liste vide
-    # (« personne ne t'a rien partagé »). Rien n'est lu.
-    with pytest.raises(AuthzDenied) as e:
-        P._project(ResolvedCtx(sub="u1", org_id=42), P.ProjectInput(op="list", scope="me"))
-    assert (e.value.status, e.value.code) == (409, "personal_view_outside_personal_org")
-    assert "#5" in e.value.message and "_org=5" in e.value.message
-    assert e.value.details == {"personal_org_id": 5}
-    assert seams["granted"] == [] and seams["list_owners"] == []
 
 
 def test_list_scope_org_est_le_defaut(seams):

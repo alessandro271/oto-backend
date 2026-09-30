@@ -58,7 +58,7 @@ def test_scope_parity_with_op_list(calls):
     # côté op=list : mêmes seams (project_list_owners + principaux_de_liste)
     assert search_owners == ownership.project_list_owners("u1", 7)
     assert search_principals == ownership.principaux_de_liste("u1", 7)
-    assert calls["createurs"][-1] == ownership.mes_projets_ici("u1", 7)
+    assert calls["createurs"][-1] == ownership.mes_objets_ici("u1", 7)
     # org de travail : owners = org active + mes groupes ; principals = org + mes
     # groupes — JAMAIS moi (28/09/2026). Mes projets perso créés ICI passent par
     # `createur` (29/09/2026), qui ne porte que sur moi.
@@ -125,6 +125,12 @@ def test_each_source_gets_its_predicate(monkeypatch):
                         lambda sub, org: [("org", "7"), ("user", "u1")])
     monkeypatch.setattr(S.ownership, "perso_de_la_liste",
                         lambda sub, org: [("user", "u1")])
+    # Mes tableaux perso créés dans l'org (29/09/2026 : une org perso est une org comme
+    # une autre) : la recherche lit la MÊME source que la liste (`mes_tableaux_ici`).
+    monkeypatch.setattr(S.ownership, "mes_objets_ici",
+                        lambda sub, org: rec.setdefault("createur", (sub, org)) and ("u1", 7, True))
+    monkeypatch.setattr(S.ownership, "mes_tableaux_ici",
+                        _cap("ds_crees_ici", [{"id": 104, "datastore": "le_mien"}]))
     monkeypatch.setattr(S.db, "list_datastores_shared_to_user",
                         _cap("ds_to_me", [{"id": 103, "datastore": "recu"}]))
     monkeypatch.setattr(S.db, "list_datastores_for_owners",
@@ -149,9 +155,11 @@ def test_each_source_gets_its_predicate(monkeypatch):
     assert rec["ds_owners_a"][0] == [("org", "7"), ("user", "u1")]
     assert rec["ds_granted_a"] == ("u1", [7], [])
     assert rec["ds_to_me"] == ("u1",)
+    assert rec["createur"] == ("u1", 7) and rec["ds_crees_ici"] == (("u1", 7, True),)
     # lignes (#67 V2.1) : héritent de l'accès du datastore → scope = ids des
-    # datastores accessibles (owners ∪ grants), JAMAIS un scope à part
-    assert rec["rows_ns"] == [101, 102, 103]
+    # datastores accessibles (owners ∪ mes tableaux créés ici ∪ grants), JAMAIS un
+    # scope à part
+    assert rec["rows_ns"] == [101, 104, 102, 103]
 
 
 def test_project_scope_restricts_to_one_project(monkeypatch):

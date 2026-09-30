@@ -92,7 +92,7 @@ def lignes_pour_proprietaires(owners: Iterable[tuple[str, str]],
     """Les projets non archivés de ces propriétaires, suivis de leurs pages.
 
     `owners` = les propriétaires collectifs (l'org, ses équipes). Mes projets
-    PERSONNELS passent par `createur` (`ownership.mes_projets_ici`, décision du
+    PERSONNELS passent par `createur` (`ownership.mes_objets_ici`, décision du
     29/09/2026) : ceux que j'ai créés dans cette org et, dans mon org perso, tous —
     la même règle que `oto_project op=list`.
 

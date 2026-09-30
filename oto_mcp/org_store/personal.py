@@ -19,7 +19,8 @@ _log = logging.getLogger(__name__)
 
 
 def get_personal_org(sub: str) -> Optional[int]:
-    """Org PERSO (privée, mono-membre) de `sub`, marquée `personal_of=sub`, ou None."""
+    """Org PERSO de `sub` (son étiquette `personal_of=sub`), ou None. L'étiquette fait
+    foi : l'org peut avoir d'autres membres (29/09/2026)."""
     with _connect() as conn:
         row = conn.execute(
             "SELECT id FROM orgs WHERE personal_of = %s AND archived_at IS NULL", (sub,)
@@ -42,10 +43,13 @@ def _personal_label(email: Optional[str], name: Optional[str]) -> str:
 
 
 def _reclaim_or_create_personal(sub: str, email: Optional[str], name: Optional[str]) -> int:
-    """Récupère ou crée l'org perso de `sub`. **Réclamation SÛRE** : on ne marque une
-    org existante comme perso QUE si c'est la SEULE org du user (mono-membre, créée par
-    lui) — un user multi-org garde ses orgs partagées intactes, on lui crée une perso
-    fraîche."""
+    """Récupère ou crée l'org perso de `sub`. **Réclamation** : sans étiquette, si `sub`
+    n'est membre que d'UNE org vivante et qu'il l'a créée, elle reçoit l'étiquette,
+    quel que soit son nombre de membres — « perso » n'est qu'une étiquette (29/09/2026),
+    et en recréer une à côté lui cacherait ses objets sans org de création (vécu le
+    29/09 : une org perso neuve créée au boot pour un compte dont l'org d'inscription
+    avait perdu son étiquette en accueillant un 2ᵉ membre). Un compte membre de
+    plusieurs orgs garde ses orgs telles quelles : on lui en crée une neuve."""
     with _connect() as conn:
         # Auto-soin (couvre les DEUX branches, reclaim ET create) : une org perso
         # ARCHIVÉE détient encore le slot unique `uq_orgs_personal_of` tout en étant
@@ -62,7 +66,6 @@ def _reclaim_or_create_personal(sub: str, email: Optional[str], name: Optional[s
             """
             SELECT o.id FROM orgs o
              WHERE o.created_by = %s AND o.personal_of IS NULL AND o.archived_at IS NULL
-               AND (SELECT count(*) FROM org_members m WHERE m.org_id = o.id) = 1
                AND EXISTS (SELECT 1 FROM org_members m WHERE m.org_id = o.id AND m.sub = %s)
                AND (SELECT count(*) FROM org_members m2 JOIN orgs o2 ON o2.id = m2.org_id
                      WHERE m2.sub = %s AND o2.archived_at IS NULL) = 1

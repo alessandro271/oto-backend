@@ -18,6 +18,11 @@ def _stub_sources(monkeypatch, *, lexical=(), semantic=()):
         monkeypatch.setattr(S.db, n, lambda *a, **k: [])
     monkeypatch.setattr(S.ownership, "principaux_de_liste", lambda *a: [])
     monkeypatch.setattr(S.ownership, "perso_de_la_liste", lambda *a: [])
+    # Mes tableaux perso créés dans l'org (org perso = org, 29/09/2026) : une source
+    # de plus pour la parité liste/recherche, donc une doublure de plus — sans elle,
+    # `mes_objets_ici` lirait l'étiquette perso en base.
+    monkeypatch.setattr(S.ownership, "mes_objets_ici", lambda *a: None)
+    monkeypatch.setattr(S.ownership, "mes_tableaux_ici", lambda *a: [])
     monkeypatch.setattr(S.db, "list_datastores_for_owners", lambda o: [])
     monkeypatch.setattr(S.db, "list_datastores_granted_to", lambda *a: [])
     monkeypatch.setattr(S.db, "project_labels", lambda ids: {})

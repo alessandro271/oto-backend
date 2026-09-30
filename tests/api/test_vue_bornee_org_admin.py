@@ -137,11 +137,12 @@ def test_la_vue_montre_ce_que_le_membre_voit_dans_o(client, monde):
     r = client.post("/api/me/projects", json={"op": "list"}, headers=h)
     assert r.status_code == 200, r.text
     assert _noms(r) == {"Projet de O", "Projet d'équipe O", "Perso rangé dans O"}
-    # Lentille « moi » : servie dans l'org perso seulement (29/09/2026) — O n'en est
-    # pas une, refus nommé ; il ne nomme QUE l'org perso de la cible, jamais P.
+    # Lentille « moi » : servie dans toute org depuis le 29/09/2026 (une org perso est
+    # une org comme une autre). En vue BORNÉE à O, elle ne rend rien de P : le partage
+    # fait au membre sur un projet de P reste hors de la vue.
     r = client.post("/api/me/projects", json={"op": "list", "scope": "me"}, headers=h)
-    assert (r.status_code, r.json()["error"]) == (
-        409, "personal_view_outside_personal_org"), r.text
+    assert r.status_code == 200, r.text
+    assert _noms(r) == set()
     assert MARQUE_P not in r.text
 
     r = client.post("/api/me/projects",
@@ -189,9 +190,10 @@ def test_rien_de_p_ni_aucun_secret_dans_les_lectures_ouvertes(client, monde):
     r = client.post("/api/me/docs", json={"op": "shared_with_me", "scope": "org"}, headers=h)
     assert r.status_code == 200, r.text
     corps.append(r.text)
-    # La lentille « moi » des pages : refusée dans O (29/09/2026), sans rien de P.
+    # La lentille « moi » des pages : servie dans O (29/09/2026, org perso = org), sans
+    # rien de P — c'est la vue bornée qui la tient.
     r = client.post("/api/me/docs", json={"op": "shared_with_me"}, headers=h)
-    assert r.status_code == 409, r.text
+    assert r.status_code == 200, r.text
     corps.append(r.text)
     tout = "\n".join(corps)
     assert MARQUE_P not in tout
@@ -266,9 +268,11 @@ def test_hors_vue_le_membre_lit_comme_avant(client, monde):
     # O n'est pas son org perso : O (28/09/2026) et son perso créé dans O (29/09/2026).
     r = client.post("/api/me/projects", json={"op": "list"}, headers=h)
     assert _noms(r) == {"Projet de O", "Projet d'équipe O", "Perso rangé dans O"}
-    # La lentille « moi » : refusée dans O, servie dans son org perso (29/09/2026).
+    # La lentille « moi » : servie dans toute org (29/09/2026, org perso = org) — hors
+    # vue, dans O comme dans son org perso, elle rend ce qui est partagé à lui.
     r = client.post("/api/me/projects", json={"op": "list", "scope": "me"}, headers=h)
-    assert r.status_code == 409, r.text
+    assert r.status_code == 200, r.text
+    assert _noms(r) == {f"{MARQUE_P} partagé en propre"}
     from oto_mcp import org_store
     r = client.post("/api/me/projects", json={"op": "list", "scope": "me"},
                     headers=_soi(MEMBRE, org_store.ensure_personal_org(MEMBRE)))

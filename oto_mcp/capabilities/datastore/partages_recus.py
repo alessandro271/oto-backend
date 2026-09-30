@@ -22,10 +22,9 @@ que `DatastoreEntry` (le tableau de bord la peint avec le même composant), plus
 1. **Seulement ce qui a été donné à l'appelant.** La requête ne connaît qu'une clé,
    `principal_type='user' AND principal_id=<sub>` (`db.list_datastores_shared_to_user`) :
    un tiers de la même org ne voit rien, un droit d'org ou d'équipe n'entre pas ici.
-2. **Dans l'org PERSO seulement** (décision d'Alexis du 29/09/2026, ADR 0030 §9) :
-   dans une org, on ne voit QUE l'org. Consultée depuis une autre org, la route rend
-   409 `personal_view_outside_personal_org`, dont le message nomme l'org perso où
-   basculer — jamais une liste vide, qui se lirait « personne ne t'a rien partagé ».
+2. **Dans toute org** (décision d'Alexis du 29/09/2026 : une org perso est une org
+   comme une autre, « perso » n'est qu'une étiquette). Un partage à une personne
+   n'appartient à aucune org : la lentille « moi » rend la même chose partout.
 3. **Tous les partages faits à l'appelant.** La garantie « sans doublon avec la liste
    de l'org » est retirée le 29/09/2026 : dans l'org perso, `GET /api/datastores` rend
    aussi ces tableaux (`shared: true`), et la dédoublonner la viderait toujours. Cette
@@ -40,11 +39,11 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from ... import db, ownership
+from ... import db
 from ...datastore.core import make_store
 from ...db import shell as db_shell
 from .._authz import SUB_ONLY
-from .._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
+from .._types import Capability, ResolvedCtx, RestBinding
 from ..registry import CAPABILITIES
 from .datastores import DatastoreEntry
 
@@ -66,10 +65,6 @@ class SharedWithMe(BaseModel):
 
 
 def _shared_with_me(ctx: ResolvedCtx, inp: SharedWithMeInput) -> dict:
-    if not ownership.org_perso_de(ctx.sub, ctx.org_id):
-        message, details = ownership.refus_vue_perso_hors_org_perso(
-            ctx.sub, ctx.org_id, "La liste des tableaux partagés à toi")
-        raise AuthzDenied(409, "personal_view_outside_personal_org", message, details)
     store = make_store(ctx.sub)
     recus = db.list_datastores_shared_to_user(ctx.sub)
     noms = db_shell.names_of(r.get("granted_by") for r in recus)
@@ -93,14 +88,9 @@ CAPABILITIES += [
         description=(
             "Les tableaux partagés NOMINATIVEMENT à l'appelant (partage à une personne), "
             "et à lui seul — jamais un droit d'org ou d'équipe, qui se lisent dans "
-            "`GET /api/datastores`. Servie dans l'org PERSO de l'appelant seulement "
-            "(`X-Oto-Org`, ou l'org active) : ailleurs, 409 "
-            "`personal_view_outside_personal_org`. Dans l'org perso, "
-            "`GET /api/datastores` rend aussi ces tableaux ; celle-ci en est le "
-            "sous-ensemble. Même forme que les entrées de `GET /api/datastores`, plus "
+            "`GET /api/datastores`. Servie dans toute org, avec le même contenu : un "
+            "partage à une personne n'appartient à aucune org. Dans l'org perso, "
+            "`GET /api/datastores` rend aussi ces tableaux. Même forme que les entrées de `GET /api/datastores`, plus "
             "`shared_by` (le nom de qui a partagé)."),
-        errors=(DeclaredError(409, "personal_view_outside_personal_org",
-                              "consultée depuis une org qui n'est pas l'org perso de "
-                              "l'appelant — le message nomme l'org perso où basculer"),),
     ),
 ]
