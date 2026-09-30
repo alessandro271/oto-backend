@@ -25,7 +25,7 @@ from typing import Any, Optional
 from .couches import (_is_empty, CLES_INTERNES, LAYER_KEYS, VIDE_DELIBERE, layer_value,
                       split_layer, unknown_layers, unwrap, vide_assume)
 from . import charge_a_renvoyer as car
-from .options_declarees import hors_des_options, montrable
+from .options_declarees import hors_des_options, montrable, parmi, valeur_comparee
 from .motifs import _pattern_re
 from .declaration import (_fields, borne_du_motif, cle_d_element, max_length_of,
                           pattern_of, status_field, validation_active)
@@ -178,7 +178,10 @@ def _type_error(value: Any, ftype: Optional[str], path: str,
 
     if ftype == "enum":
         # `options` absentes ⇒ enum libre (le client rend un select vide, pas d'erreur).
-        if not isinstance(value, str):
+        # Une valeur d'énumération est un SCALAIRE, jugé sous sa forme comparée
+        # (oto-backend#412) : `5` est l'option `"5"`, comme pour `required_when`, le
+        # filtre et le tri. Seul un composite n'en est pas une.
+        if valeur_comparee(value) is None:
             return _faute([f"{path}: attendu une valeur d'énumération, reçu {value!r}"])
         return _faute(_hors_options(value, options, path, hors))
     if ftype == "object":
@@ -376,11 +379,8 @@ def _row_errors(fields: list, data: dict, path: str,
             # geste NORMAL des agents (justifier en couches), et par tout merge
             # sur une ligne portant déjà une couche (prouvé en re-validation :
             # 5 fiches écartées sans motif, aucun refus).
-            required = all(
-                str(unwrap(data.get(k))) in {str(x) for x in v}
-                if isinstance(v, (list, tuple))
-                else str(unwrap(data.get(k))) == str(v)
-                for k, v in rw.items())
+            # oto-backend#412 : comparée comme les options (`parmi`), plus en `str()`.
+            required = all(parmi(unwrap(data.get(k)), v) for k, v in rw.items())
         if _is_empty(value):
             # oto#204 : le vide ASSUMÉ (marqueur posé par la résolution de `@empty`)
             # satisfait l'obligation ; une chaîne vide ordinaire, non.

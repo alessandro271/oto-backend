@@ -265,10 +265,12 @@ def datastore_offending_enum_values(ns_id: int, options: dict,
     options. Les vides (`NULL`, chaîne vide) sont écartés — une case non remplie
     n'est pas une valeur hors options, c'est l'affaire de `required`."""
     from psycopg import sql as _sql
+    from ..datastore.options_declarees import valeur_comparee
     out: list[dict] = []
     with _connect() as conn:
         for field, allowed in (options or {}).items():
-            vals = [str(o) for o in (allowed or [])]
+            # La forme comparée, celle du refus d'écriture (`options_declarees.parmi`).
+            vals = [v for v in map(valeur_comparee, allowed or []) if v is not None]
             if not vals:
                 continue  # enum libre : aucune option déclarée, rien à condamner
             q = _sql.SQL(

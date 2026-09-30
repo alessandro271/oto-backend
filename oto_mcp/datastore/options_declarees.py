@@ -12,6 +12,13 @@ sa formule (`value not in allowed` d'un côté, `str(v) not in opts` de l'autre)
 dix autres types, `options` était acceptée à la pose et n'engageait rien, tableau
 strict compris : ni refus, ni signalement. Une règle écrite deux fois finit par dire
 « conforme » d'un côté et « hors liste » de l'autre ; ici elle l'est une fois.
+
+Un quatrième lecteur pose la même question sous un autre nom : la condition de
+`required_when` (« requis quand la valeur de ce champ est / est parmi »). Jusqu'à
+oto-backend#412 elle comparait en `str()` (`5` satisfaisait `"5"`, `True` ne
+satisfaisait pas `"true"`) pendant que le contrôle d'énumération exigeait une chaîne
+(`5` refusé sur les options `"1"`…`"5"`) : un même schéma, une même valeur, acceptée
+par un chemin et refusée par l'autre. Les deux passent désormais par `parmi`.
 """
 from __future__ import annotations
 
@@ -35,6 +42,21 @@ def valeur_comparee(value: Any) -> Optional[str]:
     return None
 
 
+def parmi(value: Any, declarees: Any) -> bool:
+    """La valeur est-elle l'une des valeurs DÉCLARÉES (une valeur seule, ou une liste) ?
+
+    LA comparaison d'une valeur à une déclaration, pour les options comme pour les
+    conditions de `required_when` (oto-backend#412) : les deux côtés sous la forme où
+    la BASE les compare (`valeur_comparee`) — celle que lisent le filtre, le tri et le
+    relevé de la pose. D'où `5 ≡ "5"` et `true ≡ "true"`, mais `5.0 ≢ "5"` : la base
+    rend `5.0`. Un composite n'est parmi rien. La valeur arrive DÉBALLÉE."""
+    texte = valeur_comparee(value)
+    if texte is None:
+        return False
+    liste = declarees if isinstance(declarees, (list, tuple)) else [declarees]
+    return texte in {valeur_comparee(d) for d in liste}
+
+
 def hors_des_options(value: Any, options: Optional[list]) -> bool:
     """La valeur sort-elle de la liste ? Une liste vide ne condamne rien (enum libre).
 
@@ -43,8 +65,7 @@ def hors_des_options(value: Any, options: Optional[list]) -> bool:
     chaque appelant l'écarte avant de juger."""
     if not options:
         return False
-    texte = valeur_comparee(value)
-    return texte is None or texte not in [str(o) for o in options]
+    return not parmi(value, options)
 
 
 def montrable(value: Any) -> str:

@@ -861,6 +861,16 @@ s'éteint. Corollaire côté refus : la clause se TAIT quand l'appel écrit déj
 la condition — l'appelant vient de choisir la valeur qui arme la garde, lui dire « les
 deux dans le même appel » serait lui décrire un geste qu'il a déjà fait.
 
+**Une valeur se compare à une déclaration d'UNE façon** (oto-backend#412) : les options
+(tout type, `enum` compris) et les conditions de `required_when` passent par
+`options_declarees.parmi`, qui met les deux côtés sous la forme où la base les compare
+(`valeur_comparee`, ce que rend `data->>champ`, donc ce que lisent le filtre, le tri et
+le relevé de la pose). `5 ≡ "5"`, `true ≡ "true"` ; `5.0 ≢ "5"`. Avant, le contrôle
+d'`enum` exigeait une chaîne (`5` refusé sur les options `"1"`…`"5"`) quand
+`required_when` comparait en `str()` (`5` satisfaisait `"5"`, mais `False` ne
+satisfaisait pas `"false"`). La valeur stockée reste celle envoyée : son texte, seul lu
+par le filtre et le tri, est le même.
+
 **Contraindre la FORME d'une valeur (#387).** `field.pattern` — jumeau de
 `field.max_length`, et il dit ce que la borne ne sait pas dire. Cas mesuré : un champ qui
 doit porter une ÉNUMÉRATION de catégories séparées par des points-virgules, pas une
