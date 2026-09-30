@@ -341,8 +341,18 @@ qui pointe la version intégrale — le **guide plateforme `notice`**
 (`oto_mcp/guides/notice.md`) — et `oto_context` ; les couches suivantes (catalogue,
 bloc C) restent composées, mais seuls les clients qui ne tronquent pas les reçoivent.
 `DynamicInstructionsMiddleware.on_initialize`
-(`middleware/dynamic_instructions.py`) **remplace** `result.instructions` par `instructions.compose_session(sub, org_id)`
-— un **artefact composé de 2 blocs** (`instructions.py`, #50 ; l'ex-bloc B onboarding a été
+(`middleware/dynamic_instructions.py`) **remplace** les instructions de la session par `instructions.compose_session(sub, org_id)`.
+⚠️ **Jusqu'au 29/09/2026, ce remplacement n'atteignait AUCUN client** : fastmcp répond au
+`initialize` PENDANT `call_next` (réponse construite depuis `session._init_options`), et le
+middleware modifiait `result` APRÈS — chaque client recevait la surface statique du
+démarrage (`render()`), jamais le composé, ni un socle de tenant, ni les readmes, ni les
+noms d'outils du produit. Les tests unitaires appelaient le hook avec un `call_next`
+factice et ne voyaient rien. Depuis : tout se résout AVANT `call_next` et se pose sur les
+options de CETTE session (`middleware/_handshake.py`, seul lecteur du champ privé) ; ce que
+le client reçoit est éprouvé par un vrai `fastmcp.Client`
+(`tests/middleware/test_handshake_livre.py`). **Règle : un champ du `initialize` se pose
+avant la réponse, jamais sur `result` après.** C'est
+un **artefact composé de 2 blocs** (`instructions.py`, #50 ; l'ex-bloc B onboarding a été
 retiré le 2026-07-01 — l'onboarding est un projet, ADR 0032 §7) :
 - **bloc A « secret sauce »** (posture + boucle d'usage + **catalogue de namespaces** dérivé) —
   prose en DB — une couche de contexte `init` de slug `secret_sauce` dans `nodes` (⚠️ plus
