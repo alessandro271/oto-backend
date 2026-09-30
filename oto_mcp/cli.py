@@ -1,8 +1,9 @@
-"""Le point d'entrée `oto-mcp` — le serveur par défaut, la maintenance sur demande.
+"""Le point d'entrée `oto-mcp` — le serveur par défaut, le reste sur demande.
 
 Sans argument, c'est le serveur : `oto-mcp` démarre uvicorn, exactement comme avant
 (l'unit systemd l'appelle nu, elle n'a pas changé). Avec `maintenance <travail>`, ce
-sont les travaux de l'ADR 0065 (`oto_mcp.maintenance`).
+sont les travaux de l'ADR 0065 (`oto_mcp.maintenance`) ; avec `migrer <args alembic>`,
+Alembic sur la configuration du dépôt (`oto_mcp.migrer`).
 
 ⚠️ **L'aiguillage est là, et pas dans `server.main`, pour une raison mesurable** :
 importer `oto_mcp.server` construit une instance MCP COMPLÈTE au niveau module
@@ -45,6 +46,12 @@ def main() -> None:
     if argv and argv[0] == "maintenance":
         from . import maintenance
         raise SystemExit(maintenance.main(argv[1:]))
+    if argv and argv[0] == "migrer":
+        # `env.py` ne pose aucun journal : sans handler, les lignes `Running upgrade …`
+        # d'Alembic (INFO) tomberaient dans le vide.
+        _configurer_le_journal()
+        from . import migrer
+        raise SystemExit(migrer.main(argv[1:]))
     if argv and argv[0] == "perimetre":
         from .export_perimetre import commande
         raise SystemExit(commande.main(argv[1:]))
@@ -54,6 +61,8 @@ def main() -> None:
             "  oto-mcp                        démarre le serveur\n"
             "  oto-mcp maintenance <travail>  joue un travail de maintenance "
             "(--help pour la liste)\n"
+            "  oto-mcp migrer <args alembic>  Alembic avec la configuration du dépôt "
+            "(upgrade head, current…)\n"
             "  oto-mcp perimetre export|import  export par périmètre de propriétaire "
             "(docs/export-perimetre.md)")
     # AVANT l'import : cet import EST déjà du démarrage, et il journalise.

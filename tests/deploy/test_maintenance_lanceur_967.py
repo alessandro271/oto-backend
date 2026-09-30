@@ -67,3 +67,17 @@ def test_install_timers_ecrit_l_arbre_de_la_couleur_en_service(tmp_path):
     assert "@ARBRE@" not in pose
     assert f"ExecStart={arbre}/.venv/bin/python {arbre}/deploy/lanceur_secrets.py maintenance all" in pose
     assert f"WorkingDirectory={arbre}\n" in pose
+
+
+def test_la_migration_documentee_passe_par_le_lanceur_avec_l_environnement_des_unites():
+    """La ligne `systemd-run` de docs/migrations-versionnees.md (oto-backend#1105) porte les
+    fichiers d'environnement et la clé d'API des unités de prod : une ligne qui en
+    perdrait un tirerait les secrets d'ailleurs, ou pas du tout."""
+    doc = (DEPLOY.parent / "docs" / "migrations-versionnees.md").read_text(encoding="utf-8")
+    [ligne] = [l for l in doc.splitlines()
+               if "systemd-run" in l and "lanceur_secrets.py migrer upgrade head" in l]
+    proprietes = re.findall(r"-p (\w+)=(\S+)", ligne)
+    u = _unite("oto-mcp-maintenance.service")
+    assert [v for k, v in proprietes if k == "EnvironmentFile"] == u["EnvironmentFile"]
+    assert [v for k, v in proprietes if k == "LoadCredential"] == u["LoadCredential"]
+    assert ligne.endswith("$A/.venv/bin/python $A/deploy/lanceur_secrets.py migrer upgrade head")

@@ -236,6 +236,7 @@ lanceur() {
     /opt/oto-mcp/.venv/bin/python /opt/oto-mcp/deploy/lanceur_secrets.py "$@"
 }
 lanceur maintenance retention --dry-run                    # le serveur (`oto-mcp …`)
+lanceur migrer current                                     # Alembic (docs/migrations-versionnees.md §5)
 lanceur --script scripts/archive_empty_kb_projects.py      # un script de l'arbre, sous son Python
 lanceur --script deploy/archive_tool_calls.py --dry-run    # l'archive du journal
 lanceur --noms                                             # les NOMS de l'environnement, jamais une valeur

@@ -146,6 +146,13 @@ def test_main_execute_le_serveur_de_son_arbre_sans_ecrire_une_valeur(tmp_path, m
     assert "postgres://secret" not in capsys.readouterr().err
 
 
+def test_migrer_s_execute_comme_une_commande_oto_mcp_de_l_arbre():
+    """`lanceur_secrets.py migrer upgrade head` : Alembic reçoit les secrets du lanceur
+    (oto-backend#1105, docs/migrations-versionnees.md §5)."""
+    serveur = str(_CHEMIN.parents[1] / ".venv" / "bin" / "oto-mcp")
+    assert lanceur.cible(["migrer", "upgrade", "head"]) == [serveur, "migrer", "upgrade", "head"]
+
+
 def test_main_rend_1_et_nomme_le_refus(tmp_path, monkeypatch, capsys):
     monkeypatch.delenv("OTO_SECRETS_OPTIONNELS", raising=False)
     assert lanceur.main(["lanceur_secrets.py"]) == 1

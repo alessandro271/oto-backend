@@ -431,14 +431,34 @@ verrou consultatif PostgreSQL avant d'écrire et le rend ensuite. Ce n'est pas u
 précaution théorique — la base est partagée entre la préproduction et la production, et
 le déploiement est bleu/vert.
 
-Les commandes, depuis la racine du dépôt, avec l'environnement chargé :
+Les commandes passent par `oto-mcp migrer` (`oto_mcp/migrer.py`, oto-backend#1105) : les
+arguments de la commande `alembic`, tels quels, sur la configuration du dépôt — `alembic.ini`
+de l'arbre et le registre là où le démarrage le lit, quel que soit le répertoire courant ; la
+base est celle de `DATABASE_URL`, lue par `env.py`.
 
 ```bash
-.venv/bin/python -m alembic upgrade head --sql   # l'essai à blanc : imprime, n'écrit rien
-.venv/bin/python -m alembic upgrade head         # applique
-.venv/bin/python -m alembic revision -m "ce que ça fait"
-.venv/bin/python -m alembic current              # où en est CETTE base
+oto-mcp migrer upgrade head --sql   # l'essai à blanc : imprime, n'écrit rien
+oto-mcp migrer upgrade head         # applique
+oto-mcp migrer revision -m "ce que ça fait"
+oto-mcp migrer current              # où en est CETTE base
 ```
+
+**Sur la box**, `DATABASE_URL` n'est dans aucun `.env` : elle n'existe que dans
+l'environnement que construit le lanceur de secrets (`deploy/lanceur_secrets.py`), qui
+exécute `oto-mcp <args>` de son arbre. La commande exacte, en root, avec les fichiers
+d'environnement et la clé d'API de l'unité de prod (`oto-mcp@.service`), depuis l'arbre de la
+couleur qui sert — celui qui porte le registre déployé :
+
+```bash
+A=/opt/oto-mcp-$(cat /etc/oto-mcp/active-prod) && systemd-run --pipe --wait --quiet --collect -p WorkingDirectory=$A -p EnvironmentFile=/opt/oto-mcp/.env -p EnvironmentFile=/etc/oto-mcp/lanceur-prod.env -p LoadCredential=scw:/etc/oto-mcp/scw.key $A/.venv/bin/python $A/deploy/lanceur_secrets.py migrer upgrade head
+```
+
+`migrer current`, `migrer upgrade head --sql` : même ligne, autres arguments. Le fichier de
+port de l'unité n'y est pas : la migration ne sert rien. `migrer` joue le registre de
+**l'arbre** qui l'exécute — une révision absente de cet arbre n'est pas jouée. La base est
+partagée : une seule application vaut pour la prod et la préprod. Le banc
+`tests/deploy/test_maintenance_lanceur_967.py` garde cette ligne alignée sur les fichiers
+d'environnement des unités.
 
 **Le banc : `scripts/essai_migrations.sh`.** Il monte un PostgreSQL 17 jetable dans un
 conteneur, applique pour de vrai, pose une migration, la défait, et vérifie qu'une
@@ -467,8 +487,8 @@ ce chantier sans l'avoir décidé.
 
 Donc, une révision au-delà du point de départ (ex. `0002_runner_jobs_index_vivant`) ne
 prend effet qu'après un geste D'EXPLOITATION, manuel, joué par qui déploie — la même
-procédure que `stamp head` ci-dessus : `alembic upgrade head` sur la box, avec le
-`.env` chargé.
+procédure que `stamp head` ci-dessus : `oto-mcp migrer upgrade head` sur la box, par le
+lanceur (la ligne `systemd-run` du §5).
 
 **L'ordre entre ce geste et le tag applicatif n'importe pas** — les deux sens sont
 sûrs, jamais cassants, seulement plus ou moins rapides (vérifié le 17/09/2026, sur

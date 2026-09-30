@@ -35,7 +35,8 @@ CE QU'IL REFUSE
 Il n'écrit jamais une valeur : le journal nomme les secrets tirés, pas leur contenu.
 
 CE QU'IL DÉMARRE — une seule chose par appel, choisie par son PREMIER argument :
-  (rien d'autre)       le serveur, `<arbre>/.venv/bin/oto-mcp [args…]` (`maintenance all`…) ;
+  (rien d'autre)       le serveur, `<arbre>/.venv/bin/oto-mcp [args…]` (`maintenance all`,
+                       `migrer upgrade head`…) ;
   --script CHEMIN [args…]  un script de l'arbre, sous son Python : `<arbre>/.venv/bin/python
                        <arbre>/CHEMIN [args…]` (ex. `deploy/archive_tool_calls.py`, l'archive
                        du journal). Il reçoit le MÊME environnement, secrets compris : une
