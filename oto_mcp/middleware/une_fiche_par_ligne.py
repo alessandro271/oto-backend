@@ -18,7 +18,7 @@ par l'un des `_STYLES`, de ce qu'il porte — la forme compacte que sert un outi
 dict, ou `json.dumps` par défaut, celle que réémet la rédaction. La réécriture reprend ce
 style : seuls les blancs entre les fiches changent. Un JSON brut rendu tel quel par un
 outil (`str` : un fichier, un corps amont) n'est pas forcément l'un d'eux, et parsé puis
-réécrit il s'altérerait : `1e5` → `100000.0`, clé en double perdue, et un `\ud800`
+réécrit il s'altérerait : `1e5` → `100000.0`, clé en double perdue, et un `\\ud800`
 échappé devenu surrogate seul, que la sérialisation MCP refuse. Il reste intact.
 
 Ne s'applique qu'à :
