@@ -127,7 +127,178 @@ def test_one_exploding_file_does_not_stop_the_others(store, monkeypatch):
     traites, extraits = w._extract_batch()
 
     assert traites == 3, "le lot est compté en entier"
-    assert {e["file_id"] for e in store.ecrits} == {2, 3}, "les autres ont été traités"
+    assert {e["file_id"] for e in store.ecrits} == {1, 2, 3}, "les autres ont été traités"
+    # …et celui qui a levé est ÉCRIT, avec sa raison : sans ligne, il reviendrait à
+    # chaque tour (vécu le 30/09/2026). Imprévu = `failed`, reprenable et borné.
+    un = next(e for e in store.ecrits if e["file_id"] == 1)
+    assert un["status"] == file_extract.FAILED
+    assert un["detail"] == "RuntimeError: imprévu"
+
+
+# ── un fichier qui lève de façon déterministe ne revient pas (gels du 30/09/2026) ──
+#
+# En prod, cinq fichiers dont le texte portait un NUL faisaient lever l'écriture
+# (« PostgreSQL text fields cannot contain NUL (0x00) bytes ») : aucune ligne posée,
+# donc toujours en tête de file, retéléchargés et réextraits toutes les 30 s — et rien
+# derrière eux ne passait jamais. Le faux store ci-dessous tient la VRAIE file (le
+# prédicat de `files_pending_extraction`) et refuse une valeur comme psycopg la refuse
+# (son vrai dumper de texte), pour que « ne revient pas » se lise sur deux tours.
+
+
+class _FileReelle:
+    """La file telle que PostgreSQL la sert : un fichier y est tant qu'il n'a pas de
+    ligne, ou que sa ligne est un `failed` pas encore épuisé."""
+
+    def __init__(self, fichiers, *, leve_a_l_ecriture=None):
+        self.fichiers = list(fichiers)
+        self.lignes = {}
+        self.leve_a_l_ecriture = leve_a_l_ecriture   # f(status) -> Exception | None
+
+    def files_pending_extraction(self, limit=20):
+        from oto_mcp.db.projects import MAX_EXTRACT_ATTEMPTS
+        return [f for f in self.fichiers
+                if f["id"] not in self.lignes
+                or (self.lignes[f["id"]]["status"] == file_extract.FAILED
+                    and self.lignes[f["id"]]["attempts"] < MAX_EXTRACT_ATTEMPTS)][:limit]
+
+    def save_extracted_text(self, file_id, *, status, text="", pages=None, detail=""):
+        from psycopg.types.string import StrDumper
+        if self.leve_a_l_ecriture and (e := self.leve_a_l_ecriture(status)):
+            raise e
+        for valeur in (status, text, detail):
+            StrDumper(str).dump(valeur)          # lève comme psycopg : NUL, surrogate
+        avant = self.lignes.get(file_id, {"attempts": 0})["attempts"]
+        self.lignes[file_id] = {"status": status, "text": text, "detail": detail,
+                                "attempts": avant + 1}
+
+
+def _pdf_a_nul() -> bytes:
+    """Un vrai PDF dont le texte extrait porte un NUL (glyphe codé 0 dans `Tj`)."""
+    import io
+    pypdf = pytest.importorskip("pypdf")
+    from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
+    wr = pypdf.PdfWriter()
+    page = wr.add_blank_page(width=300, height=200)
+    police = DictionaryObject({NameObject("/Type"): NameObject("/Font"),
+                               NameObject("/Subtype"): NameObject("/Type1"),
+                               NameObject("/BaseFont"): NameObject("/Helvetica")})
+    page[NameObject("/Resources")] = DictionaryObject({NameObject("/Font"): DictionaryObject(
+        {NameObject("/F1"): wr._add_object(police)})})
+    flux = DecodedStreamObject()
+    flux.set_data(b"BT /F1 12 Tf 10 100 Td (Compte rendu\\000 de la reunion du lundi) Tj ET")
+    page[NameObject("/Contents")] = wr._add_object(flux)
+    buf = io.BytesIO()
+    wr.write(buf)
+    return buf.getvalue()
+
+
+def _telechargements(monkeypatch, data):
+    """Stub du stockage qui COMPTE les téléchargements : un fichier retraité se voit là."""
+    from oto_mcp import media_store
+    vus = []
+
+    def _fetch(key, **k):
+        vus.append(key)
+        return data
+    monkeypatch.setattr(media_store, "fetch_object", _fetch)
+    return vus
+
+
+def test_un_texte_a_nul_s_ecrit_purge_et_ne_revient_pas(monkeypatch):
+    file = _FileReelle([_fichier(74, "cr.pdf", "application/pdf")])
+    monkeypatch.setattr(w, "db", file)
+    vus = _telechargements(monkeypatch, _pdf_a_nul())
+
+    assert w._extract_batch() == (1, 1)
+    ligne = file.lignes[74]
+    assert ligne["status"] == file_extract.OK
+    assert ligne["text"] == "Compte rendu de la reunion du lundi", "le NUL est purgé, le reste gardé"
+
+    assert w._extract_batch() == (0, 0), "extrait, il ne revient pas au tour suivant"
+    assert vus == ["p/74"], "un seul téléchargement sur deux tours"
+
+
+def test_la_purge_est_faite_par_l_extraction_pour_tout_format():
+    out = file_extract.extract(b"une ligne\x00 de texte assez longue", "notes.txt")
+    assert out.ok and "\x00" not in out.text
+
+
+def test_une_valeur_refusee_par_la_base_est_terminale_et_ne_revient_pas(monkeypatch):
+    """L'erreur exacte de la prod (le NUL, rendu ici sans la purge : toute AUTRE valeur
+    que la base refusera à l'identique suit ce chemin) : le fichier est marqué
+    `unstorable` avec sa raison, et le tour suivant ne le retélécharge pas."""
+    file = _FileReelle([_fichier(75)])
+    monkeypatch.setattr(w, "db", file)
+    vus = _telechargements(monkeypatch, b"peu importe")
+    monkeypatch.setattr(w.file_extract, "extract", lambda *a: file_extract.Extraction(
+        file_extract.OK, "un texte\x00 que la base refuse"))
+
+    assert w._extract_batch() == (1, 0)
+    ligne = file.lignes[75]
+    assert ligne["status"] == file_extract.UNSTORABLE
+    assert ligne["detail"] == ("DataError: PostgreSQL text fields cannot contain "
+                               "NUL (0x00) bytes")
+    assert not file_extract.is_retryable(file_extract.UNSTORABLE)
+
+    assert w._extract_batch() == (0, 0)
+    assert vus == ["p/75"], "marqué en échec définitif, il n'est plus repris"
+
+
+def test_un_texte_non_encodable_est_terminal_aussi(monkeypatch):
+    file = _FileReelle([_fichier(76)])
+    monkeypatch.setattr(w, "db", file)
+    _telechargements(monkeypatch, b"peu importe")
+    monkeypatch.setattr(w.file_extract, "extract", lambda *a: file_extract.Extraction(
+        file_extract.OK, "un surrogate " + chr(0xD800) + " isolé"))
+
+    w._extract_batch()
+    assert file.lignes[76]["status"] == file_extract.UNSTORABLE
+    assert file.lignes[76]["detail"].startswith("UnicodeEncodeError: ")
+
+
+def test_une_base_injoignable_n_est_pas_un_echec_definitif(monkeypatch):
+    """Une panne qui passera reste reprenable (`failed`, borné par `attempts`) : la
+    marquer terminale perdrait le fichier pour un incident d'infrastructure."""
+    import psycopg
+    premier = []
+
+    def _leve(status):
+        if not premier:
+            premier.append(status)
+            return psycopg.OperationalError("connexion perdue")
+        return None
+
+    file = _FileReelle([_fichier(77)], leve_a_l_ecriture=_leve)
+    monkeypatch.setattr(w, "db", file)
+    _telechargements(monkeypatch, b"du texte parfaitement lisible et assez long")
+
+    assert w._extract_batch() == (1, 0)
+    assert file.lignes[77]["status"] == file_extract.FAILED
+    assert file.lignes[77]["detail"] == "OperationalError: connexion perdue"
+    assert w._extract_batch() == (1, 1), "reprenable : il repasse, et réussit"
+
+
+def test_un_echec_qui_ne_peut_pas_s_ecrire_laisse_le_fichier_en_file(monkeypatch):
+    """Si même l'échec ne s'écrit pas (base tombée), le fichier reste à traiter — et
+    les autres du lot passent quand même."""
+    import psycopg
+    file = _FileReelle([_fichier(78), _fichier(79)],
+                       leve_a_l_ecriture=lambda status: None)
+    monkeypatch.setattr(w, "db", file)
+    _telechargements(monkeypatch, b"du texte parfaitement lisible et assez long")
+    vrai = w._extract_one
+
+    def _base_tombee(f):
+        if int(f["id"]) == 78:
+            file.leve_a_l_ecriture = lambda status: psycopg.OperationalError("base tombée")
+            raise psycopg.OperationalError("base tombée")
+        file.leve_a_l_ecriture = lambda status: None
+        return vrai(f)
+
+    monkeypatch.setattr(w, "_extract_one", _base_tombee)
+    assert w._extract_batch() == (2, 1)
+    assert 78 not in file.lignes and 79 in file.lignes
+    assert [f["id"] for f in file.files_pending_extraction()] == [78]
 
 
 def test_a_3_mb_file_is_read_under_the_project_file_cap(monkeypatch):

@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Literal, Optional
 
 from pydantic import BaseModel, field_validator
+from starlette.concurrency import run_in_threadpool
 
 from .. import ownership, search as search_mod
 from ._authz import SUB_ONLY
@@ -97,19 +98,10 @@ class SearchInput(BaseModel):
         return max(1, min(int(v), 50))
 
 
-async def _search(ctx: ResolvedCtx, inp: SearchInput) -> dict:
-    # Handler ASYNC : l'embedding de la requête (chemin réseau) est awaité hors event
-    # loop (httpx async) ; la recherche DB elle-même reste synchrone (indexée, courte).
-    if ctx.org_id is None:
-        raise AuthzDenied(400, "no_active_org",
-                          "Aucune org active — passe `org=<id>` ou `oto_use_org`.")
-    q = (inp.q or "").strip()
-    if len(q) < 2:
-        raise AuthzDenied(400, "query_too_short", "Requête trop courte (≥ 2 caractères).")
+def _preparer(ctx: ResolvedCtx, inp: SearchInput) -> list[dict]:
+    """Le SQL d'avant l'embedding, SYNC (appelé au threadpool) : le projet demandé
+    est-il visible, puis le catalogue de connecteurs visible. Rend le catalogue."""
     if inp.scope == "project":
-        if inp.project is None:
-            raise AuthzDenied(400, "project_required",
-                              "`scope='project'` exige `project=<id>`.")
         # Refus NEUTRE (pas de distinction inexistant/inaccessible) — plan Ship 1 §3.
         if not ownership.visible_in_org(ctx.sub, ctx.org_id, "project", str(inp.project)):
             raise AuthzDenied(404, "unknown_project", f"Projet #{inp.project} inconnu.")
@@ -123,6 +115,23 @@ async def _search(ctx: ResolvedCtx, inp: SearchInput) -> dict:
     # noqa: SILENT — source de recherche optionnelle (catalogue connecteurs)
     except Exception:  # noqa: BLE001
         pass
+    return catalog
+
+
+async def _search(ctx: ResolvedCtx, inp: SearchInput) -> dict:
+    # Handler ASYNC pour l'embedding de la requête (httpx async, awaité) ; TOUT le SQL
+    # part au threadpool. La FTS n'est pas « indexée, courte » partout : `search_docs_fts`
+    # tenait la boucle mono-loop en prod, gels ≥ 1 s (cf. `docs/event-loop-perf.md`).
+    if ctx.org_id is None:
+        raise AuthzDenied(400, "no_active_org",
+                          "Aucune org active — passe `org=<id>` ou `oto_use_org`.")
+    q = (inp.q or "").strip()
+    if len(q) < 2:
+        raise AuthzDenied(400, "query_too_short", "Requête trop courte (≥ 2 caractères).")
+    if inp.scope == "project" and inp.project is None:
+        raise AuthzDenied(400, "project_required",
+                          "`scope='project'` exige `project=<id>`.")
+    catalog = await run_in_threadpool(_preparer, ctx, inp)
 
     # Vecteur de requête (fusion sémantique) — None si désactivé/échec → lexical seul.
     # Calculé dès qu'UNE source à sémantique est demandée : page/brief/guide + ligne (#67 V2.2).
@@ -131,7 +140,8 @@ async def _search(ctx: ResolvedCtx, inp: SearchInput) -> dict:
     from .. import embeddings
     qvec = await embeddings.embed_query(q) if want_semantic else None
 
-    return search_mod.search(
+    return await run_in_threadpool(
+        search_mod.search,
         ctx.sub, ctx.org_id, q, scope=inp.scope, project_id=inp.project,
         kinds=inp.kinds, limit=inp.limit, connectors_catalog=catalog,
         query_embedding=qvec)

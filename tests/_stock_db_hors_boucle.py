@@ -58,8 +58,6 @@ STOCK: dict[str, str] = {
         "_fields_config_scope, connector_health.record_health",
     "oto_mcp.capabilities.instance_health::_instance_health":
         "credentials_store.get_credential",
-    "oto_mcp.capabilities.search::_search":
-        "connectors_selection._visible_catalog, ownership.visible_in_org, search_mod.search",
     "oto_mcp.capabilities.unipile_me::_status":
         "unipile.status_for",
     "oto_mcp.connectors.identities::_unipile_list":

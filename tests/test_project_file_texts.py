@@ -61,7 +61,7 @@ def test_an_extracted_file_leaves_the_queue(projet):
 
 
 @pytest.mark.parametrize("statut", ["unsupported", "encrypted", "empty",
-                                    "too_large", "rejected_dtd"])
+                                    "too_large", "rejected_dtd", "unstorable"])
 def test_a_refusal_is_recorded_and_never_comes_back(projet, statut):
     """⚠️ Le point de conception du barreau. Un refus DOIT s'écrire : sans ligne, le
     fichier reviendrait à chaque passage du worker, pour un travail qui ne réussira
@@ -89,6 +89,25 @@ def test_only_an_unexpected_failure_is_retried_and_not_forever(projet):
 
     assert fid not in _ids_en_attente(), "mais un nombre BORNÉ de fois"
     assert db.get_extracted_text(fid)["attempts"] >= db.MAX_EXTRACT_ATTEMPTS
+
+
+def test_the_real_store_refuses_a_nul_and_the_worker_marks_it_terminal(projet):
+    """Le chemin des gels du 30/09/2026, sur la VRAIE base : le texte à NUL est refusé
+    à l'écriture (`psycopg.DataError`), le worker écrit alors `unstorable` avec sa
+    raison, et le fichier sort de la file pour de bon."""
+    import psycopg
+
+    from oto_mcp import db, file_extract_worker as w
+    fid = _fichier(projet)
+    with pytest.raises(psycopg.DataError) as e:
+        db.save_extracted_text(fid, status="ok", text="un texte\x00 à NUL")
+    assert fid in _ids_en_attente(), "l'écriture refusée n'a rien posé : c'était la boucle"
+
+    assert w._enregistrer_echec({"id": fid}, e.value) == "unstorable"
+    assert fid not in _ids_en_attente()
+    got = db.get_extracted_text(fid)
+    assert got["status"] == "unstorable"
+    assert got["detail"] == "DataError: PostgreSQL text fields cannot contain NUL (0x00) bytes"
 
 
 def test_a_retry_that_succeeds_leaves_the_queue(projet):

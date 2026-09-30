@@ -978,3 +978,48 @@ worker xdist qui le jouait. Le contrat d'`identity` est maintenant **asynchrone*
 `_calllog_identity` passe par `run_in_threadpool` (la portée voyage avec le contexte copié). Le
 journal ne casse toujours pas le service sur un échec d'identité, mais re-lève `HorsBoucle`.
 Preuve : `tests/test_calllog_identite_hors_boucle.py`, `test_db_hors_boucle.py` (relevé).
+
+## 30/09/2026 — des gels d'une seconde en continu : la recherche, et un fichier qui revenait à chaque tour
+
+Constat d'infra sur la couleur active : **126 gels ≥ 1 s en 11 h** (7 à 12 par heure, jour et
+nuit), tous juste au-dessus du seuil du `hang_watch` (« sans battement depuis 1,2-1,3 s »).
+Réparti par dernier cadre `oto_mcp` de la pile du thread principal :
+
+| cadres | lecture | verdict |
+|---|---|---|
+| 76 × `selectors.select` / `accept` | la boucle attend le GIL, un autre thread le tient | **témoin** : cause hors du thread principal |
+| 17 × `db/search.py` `_run` ← `search_docs_fts` ← `search.search` ← `me.search` | FTS **synchrone dans la boucle** | **cause**, corrigée ici |
+| 6 × `mcp_accueil.__call__` (`await self.app(...)`), 4 × `HostDispatch._http` (`return await self.authed(...)`) | ligne de passage ASGI : ce qui tourne est plus bas, hors `oto_mcp` | témoin (CPU de bibliothèque ou pause), pas d'E/S à nous |
+| 4 × `api/base._authenticate`, 2 × `server._verify_api_token` | la ligne est `await run_in_threadpool(db.verify_…)` : déjà hors boucle | témoin : la boucle rendait la main au pool quand le GIL lui a manqué |
+
+**La recherche.** `me.search` est `async def` (pour l'embedding de la requête) et appelait
+`search_mod.search` nûment — la FTS des pages, des briefs, des fichiers, les tableaux, les
+libellés de projet, tout en SQL synchrone. Le commentaire la disait « indexée, courte » ; la
+prod l'a prise 17 fois dans la boucle en 11 h. Correctif : le SQL d'avant
+l'embedding (visibilité du projet, catalogue de connecteurs) et la recherche elle-même partent
+au threadpool (`capabilities/search.py`), le site sort du stock gelé. Preuve :
+`tests/test_recherche_hors_boucle.py` (0 battement avant, ≥ 20 après, sur une FTS qui dort 0,5 s).
+
+**Le fichier qui revenait à chaque tour.** `file_extract_worker` journalisait à chaque tour
+« fichier #… ignoré : PostgreSQL text fields cannot contain NUL (0x00) bytes » pour les
+**cinq mêmes fichiers** : pypdf rend un `\x00` pour un glyphe codé 0, psycopg refuse
+l'écriture (`DataError`), aucune ligne n'est posée — et l'absence de ligne EST la file. Les
+cinq, les plus récents, occupaient tout le lot (`_BATCH = 5`, tri par date décroissante) :
+retéléchargés et réextraits toutes les 30 s, **et plus rien derrière eux n'était extrait**.
+Deux gestes : le NUL est purgé par `file_extract.extract` (un artefact, pas une donnée) ; et
+tout fichier dont le traitement lève **écrit** son échec avec sa raison — `unstorable`
+(terminal) quand la base refuse la valeur (`DataError`, texte non encodable), `failed`
+(reprenable, borné par `attempts`) sinon. Preuve : `tests/test_file_extract_worker.py` (file
+tenue comme PostgreSQL la sert, deux tours), `tests/test_project_file_texts.py` (vraie base).
+
+**L'extraction tient-elle le GIL ?** Mesuré sur douze PDF réels (1 à 17 Mo, jusqu'à 102
+pages, 1,2-1,8 s d'extraction), extraction dans un thread, intervalle de bascule à 1 ms
+comme en prod : la boucle voisine prend **au pire 23 ms** de retard. pypdf est du Python pur,
+il rend le GIL à chaque bascule. Le worker réparé cesse un travail inutile, mais **cette
+mesure ne l'accuse pas des 76 gels « select »** : il faut un code C qui garde le GIL une
+seconde d'un bloc (rendu JSON d'une grosse réponse dans un thread, validation pydantic-core,
+décodage d'un gros résultat) ou une collecte `gc` de génération 2 sur un gros tas — cette
+dernière colle aussi aux cadres « de passage » du tableau, qui sont des sites d'allocation du
+chemin de chaque requête. Seul un relevé natif le tranche (`py-spy record --native --gil`
+pendant les gels). ⚠️ Le `hang_watch` a besoin du GIL pour vérifier : sous famine, il ne
+dumpe qu'**après** que le fautif l'a rendu, d'où le thread principal encore dans `select`.

@@ -75,6 +75,7 @@ EMPTY = "empty"                  # lu, mais sans texte utile (scan sans OCR, doc
 TOO_LARGE = "too_large"          # décompresserait au-delà de la borne — refusé AVANT lecture
 REJECTED_DTD = "rejected_dtd"    # XML à déclaration d'entités — refusé AVANT parsing
 FAILED = "failed"                # imprévu (fichier tronqué, lib qui lève) — reprenable
+UNSTORABLE = "unstorable"        # texte refusé par la base, à l'identique à chaque essai
 
 
 @dataclass(frozen=True)
@@ -584,7 +585,11 @@ def extract(data: bytes, filename: str, mime: str = "") -> Extraction:
     if not out.ok:
         return out
 
-    text = out.text.strip()
+    # Le caractère NUL est un ARTEFACT d'extraction (un PDF dont la police code un
+    # glyphe à 0, un texte UTF-16 lu en UTF-8), jamais une donnée — et PostgreSQL le
+    # refuse dans un `text` : sans cette purge, l'écriture levait à chaque tour du
+    # worker et le fichier revenait en tête de file pour toujours (gels du 30/09/2026).
+    text = out.text.replace("\x00", "").strip()
     if len(text) < MIN_TEXT_CHARS:
         # Le cas le plus courant ici est le PDF SCANNÉ : la lecture réussit et ne rend
         # rien, parce que le texte est une image. Le nommer `empty` (et non `ok` avec

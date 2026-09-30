@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
+import psycopg
 from starlette.concurrency import run_in_threadpool
 
 from . import db, file_extract
@@ -52,9 +53,11 @@ _BATCH = 5
 def _extract_one(f: dict) -> str:
     """Un fichier : télécharger, extraire, enregistrer. Rend le statut obtenu.
 
-    Ne lève jamais — un fichier ne doit pas pouvoir bloquer la file. Une erreur de
-    TÉLÉCHARGEMENT (stockage indisponible, clé absente) est un `failed` reprenable :
-    contrairement à un format non supporté, elle peut disparaître d'elle-même.
+    Une erreur de TÉLÉCHARGEMENT (stockage indisponible, clé absente) est un `failed`
+    reprenable : contrairement à un format non supporté, elle peut disparaître
+    d'elle-même. L'ÉCRITURE du résultat peut lever (la base refuse le texte) : c'est
+    `_traiter` qui enregistre alors l'échec, sans quoi le fichier ne sortirait jamais
+    de la file.
     """
     from . import media_store, upload_tokens
 
@@ -75,6 +78,49 @@ def _extract_one(f: dict) -> str:
     return out.status
 
 
+def _statut_d_echec(e: Exception) -> str:
+    """Le statut d'un fichier dont le traitement a LEVÉ.
+
+    Une valeur que la base refuse (`psycopg.DataError`, texte non encodable) le sera à
+    l'identique au tour suivant : `unstorable`, terminal — la retenter, c'est
+    retélécharger et réextraire le même fichier toutes les 30 s pour toujours (vécu le
+    30/09/2026 : cinq fichiers en tête de file, retraités à chaque tour, et plus rien
+    derrière eux). Le reste (base injoignable, imprévu) est `failed`, reprenable et
+    borné par `attempts`."""
+    if isinstance(e, (psycopg.DataError, UnicodeError)):
+        return file_extract.UNSTORABLE
+    return file_extract.FAILED
+
+
+def _enregistrer_echec(f: dict, e: Exception) -> str:
+    """Écrit l'échec sur le fichier, avec sa raison — c'est ce qui le sort de la file.
+    Si l'écriture elle-même lève (base injoignable), l'exception remonte : le fichier
+    reste dans la file, ce qui est juste pour une panne qui passera."""
+    statut = _statut_d_echec(e)
+    raison = (str(e).splitlines() or [""])[0]
+    db.save_extracted_text(int(f["id"]), status=statut,
+                           detail=f"{type(e).__name__}: {raison}"[:200])
+    return statut
+
+
+def _traiter(f: dict) -> "str | None":
+    """Un fichier, ceinture comprise : quoi qu'il lève, les suivants passent, et
+    l'échec s'ÉCRIT sur le fichier — sans ligne, il reviendrait à chaque tour. Rend le
+    statut écrit, ou None si même l'échec n'a pas pu s'écrire (il reste en file)."""
+    try:
+        return _extract_one(f)
+    except Exception as e:  # noqa: BLE001 — ceinture : la file avance quoi qu'il arrive
+        try:
+            statut = _enregistrer_echec(f, e)
+        except Exception as e2:  # noqa: BLE001 — l'échec n'a pas pu s'écrire : reste en file
+            logger.warning("file_extract_worker: fichier #%s en échec (%s), non "
+                           "enregistré (%s) : reste en file", f.get("id"), e, e2)
+            return None
+        logger.warning("file_extract_worker: fichier #%s marqué %s : %s",
+                       f.get("id"), statut, e)
+        return statut
+
+
 def _extract_batch() -> tuple:
     """Un tour SYNC (exécuté en threadpool). Rend `(traités, extraits)`.
 
@@ -85,13 +131,7 @@ def _extract_batch() -> tuple:
     lot = db.files_pending_extraction(limit=_BATCH)
     if not lot:
         return 0, 0
-    extraits = 0
-    for f in lot:
-        try:
-            if _extract_one(f) == file_extract.OK:
-                extraits += 1
-        except Exception as e:  # noqa: BLE001 — ceinture : la file avance quoi qu'il arrive
-            logger.warning("file_extract_worker: fichier #%s ignoré : %s", f.get("id"), e)
+    extraits = sum(1 for f in lot if _traiter(f) == file_extract.OK)
     return len(lot), extraits
 
 
