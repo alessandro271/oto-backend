@@ -185,12 +185,17 @@ def remove_org_member(org_id: int, sub: str, *, actor: Optional[str] = None) -> 
                     "SELECT 1 FROM org_members WHERE sub = %s AND is_active", (sub,)
                 ).fetchone()
                 if not has_active:
+                    # Jamais une org ARCHIVÉE : promue org active, elle devenait le
+                    # contexte d'un compte alors qu'elle est sortie de tous les listings
+                    # (même règle que `orgs.archive_org`, plus ancienne org VIVANTE).
                     conn.execute(
                         """
                         UPDATE org_members SET is_active = TRUE
                          WHERE sub = %s AND org_id = (
-                             SELECT org_id FROM org_members
-                              WHERE sub = %s ORDER BY joined_at ASC LIMIT 1
+                             SELECT m.org_id FROM org_members m
+                               JOIN orgs o ON o.id = m.org_id
+                              WHERE m.sub = %s AND o.archived_at IS NULL
+                              ORDER BY m.joined_at ASC LIMIT 1
                          )
                         """,
                         (sub, sub),

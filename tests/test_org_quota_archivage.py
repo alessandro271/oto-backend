@@ -531,3 +531,48 @@ def test_le_quota_ne_compte_ni_l_archive_ni_le_perso(store, plafond, monkeypatch
     # et la liste elle-même ne montre ni l'archivée ni... l'espace perso, qui lui EST
     # listé (il est bien à moi) : c'est le QUOTA qui l'exclut, pas la liste.
     assert a not in [o["org_id"] for o in out["orgs"]]
+
+
+# ── l'org déjà archivée se DIT, et ne redevient jamais une org active ─────────
+#
+# Signal du 30/09/2026 : `oto_admin_org op=archive` sur une org rendait
+# `{"ok": true, "archived": false}` sans raison. L'org était archivée depuis des
+# semaines — mais un retrait l'avait promue org ACTIVE de son dernier membre, qui
+# vivait donc dans une org sortie de tous les listings.
+
+def test_archiver_une_org_deja_archivee_le_dit(store, monkeypatch):
+    """Idempotent (contrat `OrgArchived`), mais NOMMÉ : `already_archived`."""
+    monkeypatch.setattr(session_org, "current_session_id", lambda: None)
+    oid = _espace(store, SUB, "Ciao Capital")
+    _espace(store, SUB, "Autre espace")
+    premier = _archiver(SUB, oid)
+    assert premier["archived"] is True and premier["already_archived"] is False
+    second = _archiver(SUB, oid)
+    assert second["ok"] is True and second["archived"] is False
+    assert second["already_archived"] is True
+
+
+def test_la_console_admin_dit_aussi_l_org_deja_archivee(store):
+    """Le geste du signal : la console super admin, sur une org déjà archivée."""
+    from oto_mcp.capabilities.orgs import admin as orgs_admin
+
+    oid = _espace(store, SUB, "Mon espace")
+    store.archive_org(oid)
+    rep = orgs_admin._archive_org(ResolvedCtx(sub="super-admin"),
+                                  orgs_admin.OrgIdInput(org_id=oid))
+    assert rep == {"ok": True, "org_id": oid, "archived": False,
+                   "already_archived": True}
+
+
+def test_un_retrait_ne_promeut_jamais_une_org_archivee(store):
+    """Retiré de son org active, le compte bascule sur sa plus ancienne org VIVANTE :
+    une org archivée plus ancienne ne redevient pas son contexte."""
+    archivee = _espace(store, SUB, "Mon espace")          # la plus ancienne
+    store.archive_org(archivee)
+    perso = _perso(store, SUB, "Espace perso")            # vivante, plus récente
+    equipe = _espace(store, AUTRE, "Équipe")
+    store.add_org_member(equipe, SUB, "org_admin")
+    store.set_active_org(SUB, equipe)
+
+    assert store.remove_org_member(equipe, SUB, actor=AUTRE) is True
+    assert store.get_active_org(SUB) == perso

@@ -67,6 +67,10 @@ class OrgArchived(BaseModel):
     ok: bool
     org_id: int
     archived: bool
+    already_archived: bool = Field(description=(
+        "true = the org was ALREADY archived before this call: nothing was done, the "
+        "wanted state holds. `archived` is then false. Says it by name rather than "
+        "leaving `archived: false` to be read as a silent failure."))
 
 
 class UpdateOrgInput(BaseModel):
@@ -178,7 +182,8 @@ def _archive_org(ctx: ResolvedCtx, inp: OrgIdInput) -> dict:
             except Exception:
                 _log.warning("archive_org: espace perso non recréé pour %s", ctx.sub,
                              exc_info=True)
-    return {"ok": True, "org_id": inp.org_id, "archived": archived}
+    return {"ok": True, "org_id": inp.org_id, "archived": archived,
+            "already_archived": not archived}
 
 
 CAPABILITIES += [
@@ -213,7 +218,9 @@ CAPABILITIES += [
                      "active subscription: cancel it first, then archive. "
                      "You may archive YOUR OWN personal space — never someone else's. "
                      "Archiving your last remaining org immediately provisions a fresh, "
-                     "empty personal space so you are never left without one."),
+                     "empty personal space so you are never left without one. "
+                     "Idempotent: an org already archived answers `archived: false, "
+                     "already_archived: true` — nothing done, not a failure."),
         rest=RestBinding("DELETE", "/api/orgs/{id}", _ID),
         refresh_visibility=True,  # org active archivée → recharge la toolbox (repli)
     ),

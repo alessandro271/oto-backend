@@ -75,7 +75,10 @@ def _archive_org(ctx: ResolvedCtx, inp: OrgIdInput) -> dict:
     if not org_store.get_org(inp.org_id):
         raise AuthzDenied(404, "unknown_org", f"Org #{inp.org_id} inconnue.")
     archived = archive_org_ou_409(inp.org_id)
-    return {"ok": True, "org_id": inp.org_id, "archived": archived}
+    # Même contrat que `org.archive` (`OrgArchived`) : idempotent, mais DIT. Un
+    # `archived: false` nu a été lu comme un refus muet (org déjà archivée).
+    return {"ok": True, "org_id": inp.org_id, "archived": archived,
+            "already_archived": not archived}
 
 
 CAPABILITIES += [
@@ -94,7 +97,9 @@ CAPABILITIES += [
         description="[super admin] Archive (soft-delete) an org: hidden from all "
                     "listings, reversible in DB. Members fall back to their other orgs. "
                     "Refused (409 `org_has_active_subscription`) while the org has an "
-                    "active subscription: it must be canceled first.",
+                    "active subscription: it must be canceled first. Idempotent: an org "
+                    "already archived answers `archived: false, already_archived: true` "
+                    "— nothing done, not a failure.",
         # MCP fusionné dans oto_admin_org(op=archive). REST conservé (dashboard).
         rest=RestBinding("DELETE", "/api/admin/orgs/{id}", _ID),
     ),
