@@ -126,10 +126,11 @@ class CallRow(BaseModel):
     sub: Optional[str] = None
     email: Optional[str] = None
     name: Optional[str] = None
-    tool_name: Optional[str] = None
-    called_at: Optional[str] = None
+    # `tool`, `created_at` et `ok` sont NOT NULL en base : jamais absents (#437).
+    tool_name: str
+    called_at: str
     duration_ms: Optional[int] = None
-    ok: Optional[bool] = None
+    ok: bool
     error: Optional[str] = None
     session_id: Optional[str] = None
     run_id: Optional[str] = None

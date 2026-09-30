@@ -332,7 +332,7 @@ CAPABILITIES += [
                      "the person who will run it, or \"me\"/omitted for yourself; super "
                      "admin) / archive (`org_id`, super admin; an org already archived answers "
                      "`already_archived: true`, nothing done) / list (all orgs, platform admin) / get "
-                     "(`org_id` → full fiche: members, secrets, entitlements, grants; platform admin)."),
+                     "(`org_id` → full fiche: org, members, secrets, option_comps, billing; platform admin)."),
         mcp="oto_admin_org",
     ),
     Capability(

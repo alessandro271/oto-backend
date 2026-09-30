@@ -9,7 +9,7 @@ org_admin parent ou platform_admin par escalade) ; la création par
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -17,6 +17,9 @@ from ... import access, group_store, org_store, session_org
 from .._authz import GROUP_ADMIN_OF, GROUP_MEMBER_OF, ORG_ADMIN_OF, ORG_MEMBER_OF, SUB_ONLY
 from .._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
 from ..registry import CAPABILITIES
+
+# Le domaine FERMÉ d'un rôle d'équipe (validé à l'écriture par `GROUP_ROLES`) (#437).
+GroupRole = Literal[group_store.GROUP_ROLES]
 
 _GID = {"id": "group_id"}
 _OID = {"id": "org_id"}
@@ -107,7 +110,7 @@ class GroupBrief(BaseModel):
     # Toujours présente (chaîne vide si jamais renseignée) — pas de null à gérer.
     description: str
     member_count: int
-    my_role: Optional[str] = None
+    my_role: Optional[GroupRole] = None
 
 
 class GroupList(BaseModel):
@@ -209,7 +212,7 @@ class GroupMemberEntry(BaseModel):
     sub: str
     email: Optional[str] = None
     name: Optional[str] = None
-    role: str
+    role: GroupRole
     active: bool
 
 

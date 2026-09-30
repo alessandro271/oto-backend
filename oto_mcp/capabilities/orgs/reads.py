@@ -10,13 +10,14 @@ et `org.admin.get` (platform) partagent le handler, diffèrent par autz+path.
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel
 
 import logging
 
 from ... import access, billing, db, org_store, session_org
+from ...org_store.members import ORG_ROLES
 from ...tool_visibility import BETA_OPTION
 from .._authz import ORG_MEMBER_OF, PLATFORM_ADMIN, SUB_ONLY
 # Le quota de création vit avec la capacité qui REFUSE (`org.create`) : le lire ici
@@ -38,6 +39,10 @@ class OrgIdInput(BaseModel):
     org_id: int
 
 
+# Le domaine FERMÉ d'un rôle d'org (validé à l'écriture par `ORG_ROLES`) :
+# le contrat le dit, pour qu'un client ne recopie pas l'énuméré à la main (#437).
+OrgRole = Literal[ORG_ROLES]
+
 # ── Formes de réponse ────────────────────────────────────────────────────────
 # Rappel transverse : tous les horodatages de ces réponses sortent du row factory
 # `db/_conn._str_dict_row` en `"YYYY-MM-DD HH:MM:SS"` — **pas** de l'ISO-8601 : ni
@@ -56,8 +61,8 @@ class MyOrgEntry(BaseModel):
     # téléversé (c'est `logo_custom` de `org.get` qui le dit). None ⟹ monogramme.
     logo_url: Optional[str] = None
     member_count: int
-    my_role: str
-    role: str
+    my_role: OrgRole
+    role: OrgRole
     # `true` sur l'org MAISON (le défaut persistant), jamais sur une org « de
     # session » — ADR 0038 a retiré tout état de session côté serveur.
     active: bool
@@ -117,7 +122,7 @@ class OrgMemberEntry(BaseModel):
     email: Optional[str] = None
     name: Optional[str] = None
     avatar_url: Optional[str] = None
-    role: str
+    role: OrgRole
     active: bool
     # Compte mis en pause (`users.suspended_at`). Faux pour tout le monde tant qu'un
     # administrateur n'a pas posé le geste.
@@ -193,7 +198,7 @@ class OrgBrief(BaseModel):
     member_count: int
     # ⚠️ Clé **ABSENTE** (pas nulle) quand l'appelant n'est pas membre — cas réel sur
     # la face `/api/admin/orgs/{id}`, où un admin plateforme lit une org étrangère.
-    my_role: Optional[str] = None
+    my_role: Optional[OrgRole] = None
 
 
 class OrgDetail(BaseModel):
@@ -337,5 +342,6 @@ CAPABILITIES += [
     # org.secret.list (MCP-only) retiré du MCP (2026-06-25) : le dashboard lit les
     # secrets via la fiche org (org.admin.get → _org_detail). Pose = dashboard-only.
     # org.entitlement.list (MCP-only) fusionné dans oto_admin_namespace_access(op=list, scope=org).
-    # Le dashboard lit les entitlements via la fiche org (org.admin.get → _org_detail).
+    # La fiche org (`_org_detail`) ne porte PAS d'entitlements : org, members, secrets,
+    # option_comps, billing (#437).
 ]
