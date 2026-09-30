@@ -71,6 +71,8 @@ def test_set_schema_returns_the_warning(monkeypatch):
     # oto#82 : ce db stubbé ne porte aucun index — la pose reste donc faite.
     monkeypatch.setattr(D.db, "datastore_has_key_index", lambda ns_id: False)
     monkeypatch.setattr(D.db, "datastore_drop_key_index", lambda ns_id: None)
+    # oto-backend#479 : le relevé des lignes en place compte d'abord le tableau — vide ici.
+    monkeypatch.setattr(D.db, "datastore_count_rows", lambda *a, **k: 0)
     s = D.DatastorePg("u1")
     monkeypatch.setattr(s, "_resolve", lambda ns, write=False: 7)
     # `set_schema` relit le schéma en place avant de le remplacer (#388).

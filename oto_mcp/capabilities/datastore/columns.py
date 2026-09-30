@@ -157,6 +157,14 @@ class PatchSchemaResult(BaseModel):
     # une configuration douteuse et réparable, celle-ci nomme ce qui n'est plus.
     declarations_effacees: list = []
     declarations_effacees_hint: Optional[str] = None
+    # oto-backend#479 : ce que les lignes EN PLACE violent déjà du schéma posé, par
+    # chemin (`contacts[].email`) — `{rows, blocking_rows?, sample_ids, consequence}`.
+    # Absent = rien à juger (aucun champ déclaré, tableau vide) ; `{}` avec
+    # `complete: true` = examiné, rien de fautif.
+    existing_violations: Optional[dict] = None
+    # Ce qui a été examiné : `{rows_examined, rows_total, complete}`. `complete: false`
+    # = plafond de lignes atteint, les comptes sont des PLANCHERS.
+    existing_violations_scope: Optional[dict] = None
     # Avertissements héréités de la pose du schéma (file de travail sans état
     # terminal, bornes posées sur des données hors borne, colonnes orphelines).
     warning: Optional[str] = None
@@ -264,6 +272,11 @@ CAPABILITIES += [
             "makes the platform keep the previous value in `<field>.origine` — `null` "
             "lifts it without touching the rows. Field ORDER "
             "is never reshuffled. Returns the resulting schema "
-            "plus `{added, updated, removed}` and any `warning` the schema raises."),
+            "plus `{added, updated, removed}` and any `warning` the schema raises, "
+            "and `existing_violations`: per path (`contacts[].email`), how many rows "
+            "ALREADY IN PLACE break the resulting schema, a sample of their ids and the "
+            "consequence (`blocking_rows` accept no write at all until fixed) — clean "
+            "them before arming the guard. `existing_violations_scope.complete: false` "
+            "means the row cap was hit: the counts are floors."),
     ),
 ]

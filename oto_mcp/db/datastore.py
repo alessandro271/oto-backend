@@ -388,6 +388,27 @@ def datastore_row_keys(ns_id: int, sample: int = 1000) -> list[str]:
     return sorted(r["k"] for r in rows)
 
 
+def datastore_rows_data_after(ns_id: int, *, after_row_id: Optional[str] = None,
+                              limit: int = 500) -> list[dict]:
+    """Page **keyset** `[{row_id, data}]` triée par `row_id`, sans rien d'autre.
+
+    Sert le relevé des lignes existantes à la pose d'un schéma (oto-backend#479), qui
+    juge chaque ligne avec le moteur de validation : il ne lit que la donnée, donc la
+    page ne porte ni réservation ni horodatage. Même curseur que
+    `datastore_list_rows_after` (borne EXCLUSIVE sur l'uuid7)."""
+    params: list = [ns_id]
+    where = "ns_id = %s"
+    if after_row_id:
+        where += " AND row_id > %s"
+        params.append(after_row_id)
+    params.append(int(limit))
+    with _connect() as conn:
+        return [{"row_id": str(r["row_id"]), "data": r["data"] or {}}
+                for r in conn.execute(
+                    f"SELECT row_id, data FROM datastore_rows WHERE {where} "
+                    "ORDER BY row_id ASC LIMIT %s", tuple(params)).fetchall()]
+
+
 def datastore_merge_key_duplicates(ns_id: int, key: str) -> int:
     """Résorbe les doublons de clé métier en reconstituant la sémantique upsert :
     pour chaque valeur en doublon, MERGE les `data` dans l'ordre chronologique dans

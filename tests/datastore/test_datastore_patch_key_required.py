@@ -64,6 +64,8 @@ def _banc(monkeypatch, current: dict):
     monkeypatch.setattr(dsm.db, "datastore_field_values", lambda *a, **k: {})
     monkeypatch.setattr(dsm.db, "datastore_offending_enum_values", lambda *a, **k: [])
     monkeypatch.setattr(dsm.db, "datastore_row_keys", lambda ns_id, sample=1000: [])
+    # oto-backend#479 : le relevé des lignes en place compte d'abord le tableau — vide ici.
+    monkeypatch.setattr(dsm.db, "datastore_count_rows", lambda *a, **k: 0)
     return st, posed
 
 

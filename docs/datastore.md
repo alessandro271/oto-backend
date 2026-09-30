@@ -3156,3 +3156,32 @@ le plus proche d'une clé inconnue — « Rejoue `data_write(…)` avec `rows=` 
 
 Bancs : `tests/datastore/test_charge_a_renvoyer_oto135.py`,
 `tests/test_parametre_le_plus_proche_135.py`.
+
+## Les lignes en place face au schéma posé — `existing_violations` (#479, 30/09/2026)
+
+Poser un schéma ne revalide pas l'existant. Les avertissements de la pose disaient en
+PHRASES quatre crans (`required`, `max_length`, `pattern`, options) ; restaient muets
+`required_when`, les sous-champs de liste (le cas fondateur : 854 lignes sur 8 910
+portaient déjà une valeur que la garde condamnait), le type déclaré et la clé métier.
+
+`set_schema` (donc `patch_schema`) rend désormais `existing_violations`, par CHEMIN
+(`contacts[].email`) : `rows`, `blocking_rows` (lignes qui n'acceptent plus AUCUNE
+écriture, sur aucune colonne — `required`, `required_when`), `sample_ids` (5 au plus) et
+`consequence` en clair. `existing_violations_scope` dit ce qui a été examiné
+(`rows_examined`, `rows_total`, `complete`). Trois états : clé absente = rien à juger
+(rien d'armé, tableau vide) ; `{}` avec `complete: true` = examiné, rien.
+
+- **Un seul moteur** (`datastore/violations_existantes.py`) : chaque ligne est jugée par
+  `validate_row`, deux fois — réécrite en entier (tout ce que le format condamne), puis
+  sous une écriture d'une AUTRE colonne (ce qui bloque). Le jugement ne liste aucun cran :
+  ce que le moteur fera respecter demain sera relevé demain. Le chemin se lit en tête du
+  refus (`<chemin>: …`, ou `` `<colonne>` est déclarée … `` pour le type) ; le banc fixe
+  chaque famille.
+- **Ne balaie que si le schéma arme quelque chose** (`arme`) : un libellé changé ne coûte
+  pas dix mille lignes jugées. Son banc le confronte à toutes les sondes de `enforced`.
+- **Borne dite** : 10 000 lignes examinées au plus, par pages de 500. Au-delà,
+  `complete: false`, et le `warning` dit que les comptes sont des PLANCHERS.
+- Les phrases des quatre crans d'origine restent : elles comptent en SQL sur la table
+  entière, sans plafond.
+
+Banc : `tests/datastore/test_violations_existantes_479.py`.

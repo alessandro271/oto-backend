@@ -302,6 +302,8 @@ def store_mutable(monkeypatch):
     monkeypatch.setattr(
         dsm.db, "datastore_drop_column",
         lambda ns_id, key: (etat["purgees"].append(key) or etat["rows_par_colonne"]))
+    # oto-backend#479 : le relevé des lignes en place compte d'abord le tableau — vide ici.
+    monkeypatch.setattr(dsm.db, "datastore_count_rows", lambda *a, **k: 0)
     return st, etat
 
 

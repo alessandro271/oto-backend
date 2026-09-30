@@ -26,6 +26,7 @@ from typing import Optional
 from . import acces_agent as aga
 from . import formule as dsformule
 from . import schema as dsv2
+from . import violations_existantes as dsve
 from .. import db
 from .errors import ColumnAbsent, RowValidationError, SchemaDefinitionError
 from .columns import _META_COLS
@@ -175,6 +176,10 @@ class SchemaOpsMixin:
             # reste, consultable à tout instant par un nouvel appel.
             out["formules_marquees_pour_recalcul"] = formules_marquees
             out["formules_recalcul_en_cours"] = True
+        # oto-backend#479 : ce que les lignes EN PLACE violent déjà du schéma posé, par
+        # chemin, avec un échantillon d'identifiants et la conséquence — jugé par le
+        # moteur qui refusera les écritures, borné, et la borne se dit.
+        out.update(dsve.releve(ns_id, schema))
         # Un statut sans état terminal = file de travail qui ne libère rien : le dire
         # ICI, à l'auteur du schéma, au moment où il le pose (les deux faces l'ont).
         warnings = [w for w in (index_differe, index_non_retire,
@@ -218,7 +223,10 @@ class SchemaOpsMixin:
                                 self._overlong_warning(ns_id, schema),
                                 self._offpattern_warning(ns_id, schema),
                                 self._offending_enum_warning(ns_id, schema),
-                                self._orphan_columns_warning(ns_id, schema)) if w]
+                                self._orphan_columns_warning(ns_id, schema),
+                                # oto-backend#479 : la phrase qui renvoie au relevé
+                                # structuré, et qui dit quand il n'est qu'un plancher.
+                                dsve.releve_warning(out)) if w]
         if warnings:
             out["warning"] = "\n".join(warnings)
         # #388 : ce que CETTE pose vient de retirer, avec les valeurs perdues. Clé

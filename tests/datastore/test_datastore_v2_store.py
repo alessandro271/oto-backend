@@ -55,6 +55,8 @@ def store(monkeypatch):
     # n'ouvrent pas de verrou de ligne. Ces tests portent sur la validation de
     # schéma, pas sur le verrou — la ligne y est libre.
     monkeypatch.setattr(dsm.db, "datastore_active_lease", lambda ns_id, rid: None)
+    # oto-backend#479 : le relevé des lignes en place compte d'abord le tableau — vide ici.
+    monkeypatch.setattr(dsm.db, "datastore_count_rows", lambda *a, **k: 0)
     return st, calls
 
 

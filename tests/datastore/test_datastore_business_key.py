@@ -46,6 +46,8 @@ def store(monkeypatch):
     # `set_schema` RELIT le schéma en place avant de le remplacer, pour nommer ce
     # qu'il efface (#388) : sans ce stub le banc part chercher une vraie table.
     monkeypatch.setattr(st, "_ns_of", lambda ns_id: {})
+    # oto-backend#479 : le relevé des lignes en place compte d'abord le tableau — vide ici.
+    monkeypatch.setattr(dsm.db, "datastore_count_rows", lambda *a, **k: 0)
     return st, calls
 
 

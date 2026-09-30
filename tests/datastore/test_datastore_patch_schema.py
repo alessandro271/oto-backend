@@ -120,6 +120,8 @@ def store(monkeypatch):
     monkeypatch.setattr(dsm.db, "datastore_drop_key_index", lambda ns_id: None)
     monkeypatch.setattr(dsm.db, "datastore_overlong_fields", lambda ns_id, bounds: [])
     monkeypatch.setattr(dsm.db, "datastore_row_keys", lambda ns_id, sample=1000: [])
+    # oto-backend#479 : le relevé des lignes en place compte d'abord le tableau — vide ici.
+    monkeypatch.setattr(dsm.db, "datastore_count_rows", lambda *a, **k: 0)
     return st, posed
 
 

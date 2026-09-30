@@ -202,6 +202,14 @@ class SchemaPosed(BaseModel):
     # une configuration douteuse et réparable, celle-ci nomme ce qui n'est plus.
     declarations_effacees: list = []
     declarations_effacees_hint: Optional[str] = None
+    # oto-backend#479 : ce que les lignes EN PLACE violent déjà du schéma posé, par
+    # chemin (`contacts[].email`) — `{rows, blocking_rows?, sample_ids, consequence}`.
+    # Absent = rien à juger (aucun champ déclaré, tableau vide) ; `{}` avec
+    # `complete: true` = examiné, rien de fautif.
+    existing_violations: Optional[dict] = None
+    # Ce qui a été examiné : `{rows_examined, rows_total, complete}`. `complete: false`
+    # = plafond de lignes atteint, les comptes sont des PLANCHERS.
+    existing_violations_scope: Optional[dict] = None
 
 
 def _set_schema(ctx: ResolvedCtx, inp: SetSchemaInput) -> dict:
@@ -251,7 +259,10 @@ CAPABILITIES += [
             "Le schéma est posé ENTIER — relire avant d'amender. La réponse porte "
             "`enforced` (les clés de validation que CETTE version applique) et "
             "`declarations_effacees` (ce que la pose vient de RETIRER, valeurs "
-            "comprises — elle en est la seule copie)."
+            "comprises — elle en est la seule copie) et `existing_violations` (par "
+            "chemin, les lignes EN PLACE que le schéma posé condamne : compte, "
+            "échantillon d'identifiants, conséquence ; `existing_violations_scope` "
+            "dit si le relevé est complet)."
         ),
     ),
     Capability(
