@@ -6,8 +6,9 @@ schéma, version Alembic posée, tenant primaire (ligne 1) semé depuis
 valide qu'après s'être relu.
 
 Refus, tous AVANT la première écriture et chacun nommé (`ImportRefuse`) : fichier dont
-l'empreinte ou les comptes ne sont pas ceux du manifeste, schéma ou version
-différents de la source, base cible déjà peuplée, tenant primaire de la cible dont
+l'empreinte ou les comptes ne sont pas ceux du manifeste, version de schéma différente
+de la source ou colonnes qui n'y sont pas les mêmes (comparées par NOM, l'ordre ne compte
+pas : `_ecarts_de_colonnes`), base cible déjà peuplée, tenant primaire de la cible dont
 le slug ou le NOM (semé depuis `OTO_BRAND_NAME`) n'est pas celui du tenant exporté,
 secrets ou objets chiffrés sous une autre clé que celle de CETTE instance, archive des
 objets absente ou modifiée.
@@ -182,9 +183,9 @@ def _controler_cible(conn, manifeste: dict):
         raise ImportRefuse(f"version de schéma cible {version} ≠ source "
                            f"{manifeste['version_schema']} : les deux instances doivent "
                            "servir le même tronc")
-    ecarts = [t for t in manifeste["ordre"] if _colonnes(schema, t) != manifeste["colonnes"][t]]
+    ecarts = _ecarts_de_colonnes(schema, manifeste)
     if ecarts:
-        raise ImportRefuse(f"colonnes différentes de la source sur {ecarts}")
+        raise ImportRefuse("colonnes différentes de la source : " + " ; ".join(ecarts))
     peuplees = [t for t in ("orgs", "users")
                 if conn.execute(f"SELECT EXISTS (SELECT 1 FROM {t}) AS e").fetchone()["e"]]
     if peuplees:
@@ -201,6 +202,25 @@ def _controler_cible(conn, manifeste: dict):
                            f"(OTO_BRAND_NAME), le tenant exporté {exporte['nom']!r} : "
                            "l'instance déclare son nom, l'import ne l'écrase pas")
     return schema
+
+
+def _ecarts_de_colonnes(schema, manifeste: dict) -> list[str]:
+    """Par table exportée, les colonnes présentes d'un seul côté, nommées.
+
+    Comparées par NOM, pas par position : une base servie depuis longtemps porte en fin
+    de table les colonnes venues par `ALTER TABLE … ADD COLUMN`, une base née par
+    `init_db` les a à leur place de création. Rien ne dépend de l'ordre : l'écriture
+    passe par `json_populate_record`, qui associe par nom, et l'empreinte de relecture
+    trie les clés (`_canonique`)."""
+    ecarts = []
+    for t in manifeste["ordre"]:
+        source, cible = set(manifeste["colonnes"][t]), set(_colonnes(schema, t))
+        cotes = [f"{cote} : {', '.join(sorted(seules))}"
+                 for cote, seules in (("source seule", source - cible),
+                                      ("cible seule", cible - source)) if seules]
+        if cotes:
+            ecarts.append(f"{t} ({' ; '.join(cotes)})")
+    return ecarts
 
 
 def _verser(conn, chemin: Path, manifeste: dict, schema, cle,

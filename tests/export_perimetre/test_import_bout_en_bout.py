@@ -113,16 +113,19 @@ def source(live, pg_module_dsn):
                "seau": FauxS3({**a["objets"], **b["objets"]})}
 
 
+def _exporter(dsn: str, org: int, seau: FauxS3, chemin) -> dict:
+    """L'export, tel que NOTRE instance le joue : sous notre clé, pour la clé cible."""
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("OTO_MCP_MASTER_KEY", CLE_SOURCE.hex())
+        with psycopg.connect(dsn, row_factory=dict_row) as c:
+            return exporter(c, [org], chemin, cle_cible=CLE_CIBLE,
+                            stockage=StockageS3(seau, "source"), base_publique=BASE_SOURCE)
+
+
 @pytest.fixture(scope="module")
 def export_a(source, tmp_path_factory):
     chemin = tmp_path_factory.mktemp("bout") / "a.jsonl"
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setenv("OTO_MCP_MASTER_KEY", CLE_SOURCE.hex())
-        with psycopg.connect(source["dsn"], row_factory=dict_row) as c:
-            manifeste = exporter(c, [source[A]["org"]], chemin, cle_cible=CLE_CIBLE,
-                                 stockage=StockageS3(source["seau"], "source"),
-                                 base_publique=BASE_SOURCE)
-    return chemin, manifeste
+    return chemin, _exporter(source["dsn"], source[A]["org"], source["seau"], chemin)
 
 
 @pytest.fixture(scope="module")
@@ -407,6 +410,62 @@ def test_la_commande_exporte_puis_importe(source, pg_dsn, tmp_path, monkeypatch,
         assert {c: v[0] for c, v in seau_cible.objets.items()} == \
             {c: source["seau"].objets[c][0] for c in seau_cible.objets}
         assert len(seau_cible.objets) == resume["objets"]["nombre"]
+    finally:
+        _detruire(pg_dsn, dsn)
+
+
+# --- Les colonnes se comparent par NOM (répétition à blanc sur une vraie base, #1088) --
+
+
+def _colonnes_en_place(dsn: str, t: str) -> list[str]:
+    with psycopg.connect(dsn, row_factory=dict_row) as c:
+        return [r["column_name"] for r in c.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = %s ORDER BY ordinal_position",
+            (t,))]
+
+
+def test_des_colonnes_dans_un_autre_ordre_s_importent(pg_dsn, tmp_path):
+    """Une base servie porte en fin de table ce qu'`ALTER TABLE … ADD COLUMN` lui a
+    ajouté ; une base née par le démarrage l'a à sa place de création. Mêmes colonnes,
+    autre ordre : l'import passe, et la valeur arrive dans SA colonne."""
+    source, cible = _naitre(pg_dsn, "oto", "oto"), _naitre(pg_dsn, slug_de(A))
+    try:
+        with psycopg.connect(source, autocommit=True, row_factory=dict_row) as c:
+            a = semer(c, A, cle=CLE_SOURCE)
+            # `label` repasse par ADD COLUMN, valeurs gardées : elle finit en fin de table.
+            c.execute("ALTER TABLE tenant_legal_docs ADD COLUMN label_ TEXT")
+            c.execute("UPDATE tenant_legal_docs SET label_ = label")
+            c.execute("ALTER TABLE tenant_legal_docs DROP COLUMN label")
+            c.execute("ALTER TABLE tenant_legal_docs RENAME COLUMN label_ TO label")
+            c.execute("ALTER TABLE tenant_legal_docs ALTER COLUMN label SET NOT NULL")
+        en_source = _colonnes_en_place(source, "tenant_legal_docs")
+        en_cible = _colonnes_en_place(cible, "tenant_legal_docs")
+        assert en_source != en_cible and sorted(en_source) == sorted(en_cible)
+        chemin = tmp_path / "a.jsonl"
+        _exporter(source, a["org"], FauxS3(a["objets"]), chemin)
+        _importer(cible, chemin)
+        with psycopg.connect(cible, row_factory=dict_row) as c:
+            assert c.execute("SELECT label, url FROM tenant_legal_docs WHERE tenant_slug = %s",
+                             (slug_de(A),)).fetchall() == \
+                [{"label": f"CGU {A}", "url": "https://exemple.test/cgu"}]
+    finally:
+        _detruire(pg_dsn, source)
+        _detruire(pg_dsn, cible)
+
+
+def test_une_colonne_d_un_seul_cote_refuse_en_la_nommant(export_a, pg_dsn):
+    dsn = _naitre(pg_dsn, slug_de(A))
+    try:
+        with psycopg.connect(dsn, autocommit=True) as c:
+            c.execute("ALTER TABLE tenant_legal_docs DROP COLUMN url")
+            c.execute("ALTER TABLE tenant_legal_docs ADD COLUMN en_trop TEXT")
+        with pytest.raises(ImportRefuse) as refus:
+            _importer(dsn, export_a[0])
+        assert "tenant_legal_docs (source seule : url ; cible seule : en_trop)" in \
+            str(refus.value)
+        with psycopg.connect(dsn, row_factory=dict_row) as c:
+            assert c.execute("SELECT count(*) AS n FROM orgs").fetchone()["n"] == 0
     finally:
         _detruire(pg_dsn, dsn)
 

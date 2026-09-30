@@ -169,7 +169,12 @@ démarrage** pour l'instance du propriétaire, en UNE transaction. L'import ne c
 que la clé de SON instance. Avant d'écrire, il refuse (`ImportRefuse`) dans ces cas :
 
 - un fichier dont l'empreinte ou les comptes ne sont pas ceux du manifeste ;
-- une version de schéma ou des colonnes différentes ;
+- une version de schéma différente, ou des colonnes qui ne sont pas les mêmes. Elles se
+  comparent par NOM, dans n'importe quel ordre : une base servie porte en fin de table
+  les colonnes ajoutées par `ALTER TABLE … ADD COLUMN`, une base née par le démarrage à
+  leur place de création, et l'écriture comme la relecture associent par nom. Le refus
+  nomme, par table, les colonnes présentes d'un seul côté (`source seule`, `cible
+  seule`) ;
 - une base déjà peuplée (`orgs` ou `users`) ;
 - un tenant primaire cible dont le slug (`OTO_TENANT_PRIMAIRE_SLUG`) ou le NOM (semé
   depuis `OTO_BRAND_NAME`) n'est pas celui du tenant exporté : le refus donne les deux
