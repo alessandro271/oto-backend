@@ -1097,3 +1097,75 @@ un fil qui tient un verrou que la boucle attend donne **une ligne qui nomme les 
 fils** sous le même `gel=`, sans le chien ni une variable locale ; un fil qui tient le GIL
 dans `re` est nommé quel que soit le gagnant de la course ; la branche « la boucle a repris
 la première » rejouée sans course.
+
+### Alléger la boucle : Sentry ne refait plus le routage ; le rendu JSON reste où il est (30/09)
+
+**Le nommage des transactions Sentry.** Le même relevé `py-spy` attribue ~8 % du thread
+principal à `sentry_sdk.integrations.starlette._transaction_name_from_router`. Avec le style
+par défaut de l'intégration Starlette (`transaction_style="url"`, sentry-sdk 2.63.0), chaque
+requête servie par un handler Starlette (`request_response`) **rebalaie toute la table de
+routes** (~800 entrées, `route.matches` sur chacune jusqu'à la première qui colle) pour
+retrouver le gabarit que le routeur de Starlette vient de résoudre — dans la boucle. Le SDK
+n'offre que deux styles ; `endpoint` lit `scope["endpoint"]`, que le routeur a déjà posé.
+`sentry_setup.init_sentry` le pose (`integrations=[StarletteIntegration(transaction_style=
+"endpoint")]`).
+
+Mesuré sur la vraie table (`routes_rest` + l'app FastMCP, Sentry actif à transport muet,
+3 × 3 000 requêtes ASGI en processus, CPU du thread de la boucle) :
+
+| requête | nommage `url` (avant) | nommage `endpoint` (après) | CPU boucle / requête avant → après |
+|---|---|---|---|
+| `GET /api/version` (1ʳᵉ route) | 6,7 µs | 0 balayage, 9,9 µs de nommage des middlewares | 761 → 741 µs (bruit) |
+| `OPTIONS /api/me/doctrines/{id}` (dernière route) | **302 µs** | 0 balayage, 9,5 µs | **1 205 → 924 µs (−23 %)** |
+| balayage seul, sur chacune des 796 routes | médiane **142 µs**, max 324 µs | — | — |
+
+Soit **~140 µs de boucle rendus par requête REST** en moyenne sur la table (le coût dépend du
+rang de la route : l'ordre de la table est un contrat, les capacités sont au milieu). Le
+routeur de Starlette, lui, paie toujours son propre balayage : il est inhérent au premier
+match. `/mcp` n'était pas concerné (son endpoint est une app ASGI, pas un `request_response`).
+
+**Ce qui change dans Sentry** (les événements d'erreur ; aucune transaction de perf n'est
+envoyée tant que `OTO_SENTRY_TRACES_SAMPLE_RATE` reste à 0, son défaut) :
+
+- une **route de capacité** : le gabarit `/api/projects/{id}` devient
+  `oto_mcp.capabilities._rest_adapter.GET /api/projects/{id}` — grain **plus fin**, un nom
+  par verbe (`GET`, `PATCH`, `DELETE` du même chemin étaient confondus). Le nom vient de
+  `_rest_adapter._make_handler`, qui pose le `__qualname__` de la fermeture (sans lui, les
+  332 routes générées porteraient toutes `_make_handler.<locals>._handler`) ; `__name__`,
+  donc `route.name` et la table figée, ne bougent pas ;
+- une **route écrite à la main** : le nom de sa fonction (`oto_mcp.api.public.version`,
+  `oto_mcp.api.sirene.make_routes.<locals>.search`) au lieu de son chemin ;
+- **grain plus gros** : les 33 redirections d'alias dépréciés partagent
+  `oto_mcp.api.alias_routes._redirection.<locals>._handler` (une 308, sans erreur à
+  attendre) ; tous les préflights `OPTIONS`, `oto_mcp.api.base.options_handler` ;
+- une **erreur d'outil MCP** : `http://<hôte>/mcp` (l'URL) devient `mcp:<outil>` (source
+  `custom`), posé par `SentryToolErrorMiddleware` — sans lui, le style `endpoint` lui
+  donnerait le nom du dernier middleware Starlette traversé
+  (`starlette.middleware.exceptions.ExceptionMiddleware`), et c'est encore le nom d'une
+  exception de `/mcp` qui ne passe pas par un outil (erreur de transport).
+
+Le regroupement des issues, lui, suit la pile, pas la transaction : aucune issue ne se
+scinde ni ne fusionne. Preuves : `tests/test_sentry_nommage_sans_routage.py` — le style
+posé ; un nom propre à chaque route de capacité ; sur la vraie table et un vrai événement
+(processus à part, transport collecteur), **zéro appel** à `_transaction_name_from_router`
+par requête (avec `url` : un par middleware Starlette, qui rend vite la main faute de routeur
+dans le scope, et un au handler, qui balaie) et l'événement nommé d'après sa route ; l'erreur
+d'outil nommée `mcp:<outil>`.
+
+**Le rendu JSON de `api/base._json` reste dans la boucle.** `JSONResponse` sérialise
+avec `json.dumps` en C, qui garde le GIL de bout en bout. Remesuré (intervalle de bascule
+1 ms, une tâche voisine qui bat toutes les 1 ms, 5 rendus par essai, 3 essais) :
+
+| réponse | rendu dans la boucle : retard max de la voisine | rendu au threadpool : retard max |
+|---|---|---|
+| 500 lignes × 90 colonnes (1,3 Mo) | 14-19 ms | 13-24 ms |
+| 3 000 lignes × 90 colonnes (8,2 Mo) | 81-102 ms | 70-84 ms |
+
+Le voisin attend le rendu entier dans les deux cas (retard cumulé identique, 370-440 ms
+sur 5 rendus de 8 Mo) : sortir le rendu au thread déplace le travail sans rendre la main à
+la boucle, et ajoute un aller-retour au pool. Il reste donc où il est, comme l'avait déjà
+mesuré oto-backend#980. `orjson` n'est pas une dépendance : pas de changement de
+sérialiseur. Ordre de grandeur utile au lecteur d'un gel : ~10 ms par Mo rendu, donc un
+gel d'une seconde par le rendu JSON demande une réponse de l'ordre de 100 Mo ; si c'est
+lui, la pile principale le montre (`_json`, `JSONResponse.render`) quand il tourne dans la
+boucle, et la ligne « tous les fils » quand un fil du pool rend un gros JSON.

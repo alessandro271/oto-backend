@@ -584,7 +584,10 @@ JSON-RPC en **HTTP 200**, invisible à l'intégration Starlette, donc capturée 
 l'exception est vivante (vrai traceback, tag `mcp.tool` + `user.id=sub`). RGPD :
 `send_default_pii=False` **et** `include_local_variables=False`. `before_send`
 **droppe les 4xx amont** (`HTTP 4xx` d'une API tierce = input rejeté, pas un bug
-backend). Env box : `OTO_SENTRY_{DSN,ENV,RELEASE,TRACES_SAMPLE_RATE}` ; région **EU**
+backend). **Nom de transaction** (`transaction_style="endpoint"`, oto-backend#1108) : une
+route de capacité s'appelle `oto_mcp.capabilities._rest_adapter.<VERBE> <chemin>`, une route
+écrite à la main par sa fonction, une erreur d'outil `mcp:<outil>` — le style `url` rebalayait
+la table de routes dans la boucle à chaque requête (`docs/event-loop-perf.md`). Env box : `OTO_SENTRY_{DSN,ENV,RELEASE,TRACES_SAMPLE_RATE}` ; région **EU**
 `de.sentry.io` (org slug `otomata-vz`). Surveillance/triage = guide oto
 `surveillance-erreurs` (token API en SOPS `sentry_api_token`).
 

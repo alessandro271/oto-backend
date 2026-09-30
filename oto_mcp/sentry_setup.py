@@ -35,6 +35,7 @@ import sentry_sdk
 from fastmcp.server.middleware import Middleware
 from sentry_sdk.integrations.logging import ignore_logger
 from sentry_sdk.integrations.mcp import MCPIntegration
+from sentry_sdk.integrations.starlette import StarletteIntegration
 from starlette.concurrency import run_in_threadpool
 
 from .auth.hooks import current_client_id_from_token, current_user_sub_from_token
@@ -125,6 +126,17 @@ def init_sentry() -> bool:
         # Coupée ici : zéro perte d'information, le middleware reste le SEUL
         # capteur, celui qui étiquette.
         disabled_integrations=[MCPIntegration()],
+        # oto-backend#1108 — le style par défaut (`url`) REFAIT le routage à chaque
+        # requête REST : `_transaction_name_from_router` rebalaie les ~800 routes de
+        # la table, dans la boucle, pour retrouver un gabarit que Starlette vient de
+        # résoudre (mesuré, sentry-sdk 2.63.0 : ~7 µs pour la 1re route, ~140 µs en
+        # médiane, ~300 µs pour la dernière, par requête ; ~8 % du thread principal
+        # au relevé py-spy de prod). `endpoint` lit l'endpoint déjà résolu
+        # (`scope["endpoint"]`) et nomme la transaction d'après sa fonction : chaque
+        # route de capacité porte le nom de sa route (`_rest_adapter._make_handler`),
+        # une erreur d'outil celui de son outil (`SentryToolErrorMiddleware`).
+        # Grain et noms : `docs/event-loop-perf.md` et `docs/monitoring.md`.
+        integrations=[StarletteIntegration(transaction_style="endpoint")],
     )
     # oto-backend#869 — la 2ᵉ copie du triplet : la LoggingIntegration du SDK relaie
     # `logger.exception(f"Error calling tool {name!r}")` de fastmcp
@@ -184,6 +196,11 @@ class SentryToolErrorMiddleware(Middleware):
                 try:
                     with sentry_sdk.new_scope() as scope:
                         scope.set_tag("mcp.tool", context.message.name)
+                        # La transaction de `/mcp` porterait sinon le nom du dernier
+                        # middleware Starlette traversé (`transaction_style="endpoint"`,
+                        # cf. `init_sentry`) : c'est l'outil qui nomme l'appel.
+                        scope.set_transaction_name(f"mcp:{context.message.name}",
+                                                   source="custom")
                         try:
                             sub = current_user_sub_from_token()
                         # noqa: SILENT — sans sub, la trace reste anonyme plutôt que fausse
