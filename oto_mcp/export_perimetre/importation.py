@@ -30,6 +30,12 @@ URL de notre stockage dans le périmètre.
 L'écriture se fait par LOTS (`TAILLE_LOT` lignes par aller-retour) : un journal
 d'appels complet se compte en centaines de milliers de lignes.
 
+Un export SANS journal (`manifeste["journal"]["inclus"]` faux) se relit avec le même
+classement que l'export (`classement.sans_journal`) : la cible peut déjà porter des
+tranches du journal, poussées la veille (`journal`), que la relecture ne compte pas. Les
+séquences ne font jamais que monter (`avancer_sequence`) : celle du journal, déjà
+avancée par une tranche, ne recule pas.
+
 La vérification finale relit le périmètre SUR LA CIBLE, par la même lecture que
 l'export (`extraction.ouvrir`), et exige par table le même nombre de lignes que le
 manifeste et la même empreinte que les lignes écrites. L'empreinte est une somme de
@@ -45,9 +51,9 @@ from pathlib import Path
 import psycopg
 
 from ..crypto import _load_master_key
-from .classement import CLASSEMENT
+from .classement import CLASSEMENT, Table, sans_journal
 from .decouverte import lire_schema, verifier_classement
-from .extraction import FORMAT, _colonnes, ouvrir
+from .extraction import FORMAT, Lecture, _colonnes, ouvrir
 from .objets import ObjetsRefuses, Stockage, controler_archive
 from .objets import verser as verser_objets
 from .rechiffrement import AAD, empreinte_cle, lisible
@@ -65,7 +71,7 @@ class VerificationEchouee(ImportRefuse):
     """Relue, la cible ne porte pas ce que l'import y a écrit : tout est annulé."""
 
 
-def lire_manifeste(chemin: Path) -> dict:
+def lire_manifeste(chemin: Path, format_attendu: str = FORMAT) -> dict:
     derniere = None
     with chemin.open(encoding="utf-8") as f:
         for derniere in f:
@@ -73,9 +79,15 @@ def lire_manifeste(chemin: Path) -> dict:
     if derniere is None:
         raise ImportRefuse(f"{chemin} est vide")
     manifeste = json.loads(derniere).get("manifeste")
-    if not manifeste or manifeste.get("format") != FORMAT:
-        raise ImportRefuse(f"{chemin} n'est pas un export au format {FORMAT}")
+    if not manifeste or manifeste.get("format") != format_attendu:
+        raise ImportRefuse(f"{chemin} n'est pas un export au format {format_attendu} "
+                           f"(il se dit {manifeste and manifeste.get('format')!r})")
     return manifeste
+
+
+def classement_du(manifeste: dict) -> dict[str, Table]:
+    """Le classement sous lequel l'export a été lu : la relecture lit le même."""
+    return CLASSEMENT if manifeste["journal"]["inclus"] else sans_journal(CLASSEMENT)
 
 
 def _lignes_du_fichier(chemin: Path):
@@ -117,18 +129,8 @@ def importer(conn: psycopg.Connection, chemin: Path | str, *,
     chemin = Path(chemin)
     manifeste = lire_manifeste(chemin)
     controler_fichier(chemin, manifeste)
-    objets = manifeste["objets"]
-    if objets["liste"]:
-        if stockage is None or not base_publique:
-            raise ImportRefuse(f"le fichier désigne {len(objets['liste'])} objet(s) : il "
-                               "faut le stockage objet de cette instance et sa base publique")
-        archive = chemin.with_name(objets["archive"])
-        try:
-            controler_archive(archive, objets["empreinte"])
-        except ObjetsRefuses as e:
-            raise ImportRefuse(str(e)) from e
-    cle = _cle_de_l_instance(manifeste)
-    bases = (objets["base_publique"], base_publique) if objets["liste"] else None
+    archive, bases = preparer_objets(chemin, manifeste, stockage, base_publique)
+    cle = cle_de_l_instance(manifeste)
     with conn.transaction():
         schema = _controler_cible(conn, manifeste)
         # L'import REPRODUIT un état, il ne rejoue pas des gestes : les déclencheurs de
@@ -141,22 +143,49 @@ def importer(conn: psycopg.Connection, chemin: Path | str, *,
         attendu = _verser(conn, chemin, manifeste, schema, cle, bases)
         for t in tables:
             conn.execute(f"ALTER TABLE {t} ENABLE TRIGGER USER")
-        _recaler_sequences(conn, manifeste)
-        relu = _relire(conn, manifeste, bases)
-        if relu != attendu:
-            ecarts = sorted(t for t in set(attendu) | set(relu) if attendu.get(t) != relu.get(t))
-            raise VerificationEchouee(f"la cible relue diffère de ce qui a été écrit : {ecarts}")
-        if objets["liste"]:
-            # Dans la transaction, APRÈS la relecture : un objet qui ne se verse pas
-            # annule tout ; ceux déjà versés sont sautés au prochain essai.
-            try:
-                verser_objets(archive, objets["liste"], stockage, cle)
-            except ObjetsRefuses as e:
-                raise ImportRefuse(str(e)) from e
+        recaler_sequences(conn, manifeste)
+        relu = relire(conn, ouvrir(conn, manifeste["perimetre"]["orgs_declarees"],
+                                   classement_du(manifeste)), bases)
+        comparer(attendu, relu)
+        verser_archive(archive, manifeste, stockage, cle)
     return {t: {"lignes": n, "empreinte": f"{h:064x}"} for t, (n, h) in relu.items()}
 
 
-def _cle_de_l_instance(manifeste: dict) -> bytes | None:
+def preparer_objets(chemin: Path, manifeste: dict, stockage, base_publique):
+    """L'archive des objets, vérifiée avant toute écriture, et les bases (source, cible)
+    des URL à réécrire — `(None, None)` si le fichier ne désigne aucun objet."""
+    objets = manifeste["objets"]
+    if not objets["liste"]:
+        return None, None
+    if stockage is None or not base_publique:
+        raise ImportRefuse(f"le fichier désigne {len(objets['liste'])} objet(s) : il "
+                           "faut le stockage objet de cette instance et sa base publique")
+    archive = chemin.with_name(objets["archive"])
+    try:
+        controler_archive(archive, objets["empreinte"])
+    except ObjetsRefuses as e:
+        raise ImportRefuse(str(e)) from e
+    return archive, (objets["base_publique"], base_publique)
+
+
+def comparer(attendu: dict, relu: dict) -> None:
+    if relu != attendu:
+        ecarts = sorted(t for t in set(attendu) | set(relu) if attendu.get(t) != relu.get(t))
+        raise VerificationEchouee(f"la cible relue diffère de ce qui a été écrit : {ecarts}")
+
+
+def verser_archive(archive: Path | None, manifeste: dict, stockage, cle) -> None:
+    """Dans la transaction, APRÈS la relecture : un objet qui ne se verse pas annule tout ;
+    ceux déjà versés sont sautés au prochain essai."""
+    if archive is None:
+        return
+    try:
+        verser_objets(archive, manifeste["objets"]["liste"], stockage, cle)
+    except ObjetsRefuses as e:
+        raise ImportRefuse(str(e)) from e
+
+
+def cle_de_l_instance(manifeste: dict) -> bytes | None:
     """La clé de CETTE instance, si le fichier porte des secrets ou des objets — et c'est
     la leur."""
     if not manifeste["secrets"] and not manifeste["objets"]["liste"]:
@@ -176,6 +205,19 @@ def _cle_de_l_instance(manifeste: dict) -> bytes | None:
 
 
 def _controler_cible(conn, manifeste: dict):
+    schema = controler_schema(conn, manifeste)
+    # Vierge en orgs et en comptes : le journal, lui, a pu y être poussé la veille.
+    peuplees = [t for t in ("orgs", "users")
+                if conn.execute(f"SELECT EXISTS (SELECT 1 FROM {t}) AS e").fetchone()["e"]]
+    if peuplees:
+        raise ImportRefuse(f"la base cible n'est pas vierge ({peuplees} portent des lignes) : "
+                           "l'import vise une base née par le démarrage, rien d'autre")
+    controler_tenant(conn, manifeste)
+    return schema
+
+
+def controler_schema(conn, manifeste: dict):
+    """Le schéma de la cible est celui de la source : classement, version, colonnes."""
     schema = lire_schema(conn)
     verifier_classement(schema, CLASSEMENT)
     version = [r["version_num"] for r in conn.execute("SELECT version_num FROM alembic_version")]
@@ -186,11 +228,11 @@ def _controler_cible(conn, manifeste: dict):
     ecarts = _ecarts_de_colonnes(schema, manifeste)
     if ecarts:
         raise ImportRefuse("colonnes différentes de la source : " + " ; ".join(ecarts))
-    peuplees = [t for t in ("orgs", "users")
-                if conn.execute(f"SELECT EXISTS (SELECT 1 FROM {t}) AS e").fetchone()["e"]]
-    if peuplees:
-        raise ImportRefuse(f"la base cible n'est pas vierge ({peuplees} portent des lignes) : "
-                           "l'import vise une base née par le démarrage, rien d'autre")
+    return schema
+
+
+def controler_tenant(conn, manifeste: dict) -> None:
+    """Le tenant primaire de la cible est le tenant exporté : même slug, même nom."""
     primaire = conn.execute("SELECT slug, name FROM tenants WHERE id = 1").fetchone()
     exporte = manifeste["tenant"]
     if primaire is None or primaire["slug"] != exporte["slug"]:
@@ -201,7 +243,6 @@ def _controler_cible(conn, manifeste: dict):
         raise ImportRefuse(f"le tenant primaire de la cible s'appelle {primaire['name']!r} "
                            f"(OTO_BRAND_NAME), le tenant exporté {exporte['nom']!r} : "
                            "l'instance déclare son nom, l'import ne l'écrase pas")
-    return schema
 
 
 def _ecarts_de_colonnes(schema, manifeste: dict) -> list[str]:
@@ -223,15 +264,10 @@ def _ecarts_de_colonnes(schema, manifeste: dict) -> list[str]:
     return ecarts
 
 
-def _verser(conn, chemin: Path, manifeste: dict, schema, cle,
-            bases) -> dict[str, tuple[int, int]]:
+def lignes_cibles(chemin: Path, manifeste: dict, schema, cle, bases, attendu: dict):
+    """Chaque ligne du fichier telle que la cible l'écrit (`Transformation`), son secret
+    vérifié lisible sous la clé de l'instance, comptée et hachée dans `attendu`."""
     transformation = Transformation.depuis(schema, manifeste["comptes"], bases)
-    auto = {t: [k.colonnes[0] for k in schema.cles_de(t) if k.cible == t]
-            for t in manifeste["ordre"]}
-    attendu: dict[str, tuple[int, int]] = {}
-    differes: list[tuple[str, dict]] = []
-    lot: list[str] = []
-    table_du_lot = None
     for texte in _lignes_du_fichier(chemin):
         brut = json.loads(texte)
         t = brut["t"]
@@ -241,17 +277,42 @@ def _verser(conn, chemin: Path, manifeste: dict, schema, cle,
                                "instance et l'AAD de sa ligne")
         n, h = attendu.get(t, (0, 0))
         attendu[t] = (n + 1, (h + _canonique(ligne)) % _MODULE)
-        if t == "tenants":
-            _ecrire_tenant_primaire(conn, ligne)
-            continue
-        if any(ligne.get(c) is not None for c in auto[t]):
-            differes.append((t, {c: ligne[c] for c in auto[t]} | _cle(schema, t, ligne)))
-            ligne = {**ligne, **{c: None for c in auto[t]}}
-        if t != table_du_lot or len(lot) >= TAILLE_LOT:
-            _inserer(conn, table_du_lot, lot)
-            lot, table_du_lot = [], t
-        lot.append(json.dumps(ligne))
-    _inserer(conn, table_du_lot, lot)
+        yield t, ligne
+
+
+def par_lots(lignes):
+    """`(table, ligne)` regroupées en lots d'une même table, `TAILLE_LOT` au plus."""
+    lot: list[dict] = []
+    table = None
+    for t, ligne in lignes:
+        if lot and (t != table or len(lot) >= TAILLE_LOT):
+            yield table, lot
+            lot = []
+        table = t
+        lot.append(ligne)
+    if lot:
+        yield table, lot
+
+
+def _verser(conn, chemin: Path, manifeste: dict, schema, cle,
+            bases) -> dict[str, tuple[int, int]]:
+    auto = {t: [k.colonnes[0] for k in schema.cles_de(t) if k.cible == t]
+            for t in manifeste["ordre"]}
+    attendu: dict[str, tuple[int, int]] = {}
+    differes: list[tuple[str, dict]] = []
+
+    def a_inserer():
+        for t, ligne in lignes_cibles(chemin, manifeste, schema, cle, bases, attendu):
+            if t == "tenants":
+                _ecrire_tenant_primaire(conn, ligne)
+                continue
+            if any(ligne.get(c) is not None for c in auto[t]):
+                differes.append((t, {c: ligne[c] for c in auto[t]} | _cle(schema, t, ligne)))
+                ligne = {**ligne, **{c: None for c in auto[t]}}
+            yield t, ligne
+
+    for t, lot in par_lots(a_inserer()):
+        _inserer(conn, t, [json.dumps(x) for x in lot])
     # Les auto-références (une page sous une page) se posent quand toutes les lignes
     # de la table sont là : leur ordre d'insertion n'a pas à connaître l'arbre.
     for t, v in differes:
@@ -262,9 +323,7 @@ def _verser(conn, chemin: Path, manifeste: dict, schema, cle,
     return attendu
 
 
-def _inserer(conn, t: str | None, lot: list[str]) -> None:
-    if not lot:
-        return
+def _inserer(conn, t: str, lot: list[str]) -> None:
     with conn.cursor() as cur:
         cur.executemany(f"INSERT INTO {t} SELECT * FROM json_populate_record(NULL::{t}, "
                         "%s::json)", [(x,) for x in lot])
@@ -282,17 +341,24 @@ def _ecrire_tenant_primaire(conn, ligne: dict) -> None:
                  (json.dumps(ligne),))
 
 
-def _recaler_sequences(conn, manifeste: dict) -> None:
+def recaler_sequences(conn, manifeste: dict) -> None:
     for cle, maximum in manifeste["sequences"].items():
-        t, c = cle.split(".")
-        conn.execute(f"SELECT setval(pg_get_serial_sequence('{t}', '{c}'), "
-                     f"GREATEST(%s, (SELECT max({c}) FROM {t})))", (maximum,))
+        avancer_sequence(conn, *cle.split("."), maximum)
 
 
-def _relire(conn, manifeste: dict, bases) -> dict[str, tuple[int, int]]:
-    """Relit le périmètre sur la cible ; refuse s'il y subsiste une URL de NOTRE
-    stockage public — la réécriture ne doit rien avoir laissé derrière elle."""
-    lu = ouvrir(conn, manifeste["perimetre"]["orgs_declarees"])
+def avancer_sequence(conn, t: str, c: str, maximum: int) -> None:
+    """Porte la séquence de `t.c` au-delà de `maximum` et des lignes de la table, et ne
+    la fait JAMAIS reculer : celle du journal a pu être avancée par une tranche poussée
+    avant l'import principal, et la cible servie écrit ses propres appels."""
+    conn.execute(f"SELECT setval(s.seq, v.m) FROM "
+                 f"(SELECT pg_get_serial_sequence('{t}', '{c}')::regclass AS seq) s, "
+                 f"LATERAL (SELECT GREATEST(%s::bigint, (SELECT max({c}) FROM {t})) AS m) v "
+                 "WHERE v.m > COALESCE(pg_sequence_last_value(s.seq), 0)", (maximum,))
+
+
+def relire(conn, lu: Lecture, bases) -> dict[str, tuple[int, int]]:
+    """Relit, sur la cible, ce que la lecture `lu` désigne ; refuse s'il y subsiste une
+    URL de NOTRE stockage public — la réécriture ne doit rien avoir laissé derrière elle."""
     relu: dict[str, tuple[int, int]] = {}
     restes: dict[str, int] = {}
     for t in lu.ordre:

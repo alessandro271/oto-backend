@@ -23,6 +23,10 @@ table au schéma, c'est la classer ici dans le même commit — le test
 cible, et dont l'AAD contient l'identité du propriétaire) ; `hors_base` celles qui
 désignent un objet de l'Object Storage, à copier à part.
 
+`JOURNAL` nomme le JOURNAL d'appels et sa colonne d'horodatage : l'essentiel des
+lignes d'un périmètre. Il peut voyager HORS de la fenêtre de coupure, par tranches de
+dates (`sans_journal`, `journal`) ; l'export par défaut l'emporte avec le reste.
+
 `comptes` nomme les colonnes-COMPTE d'une table possédée par org : la ligne est celle
 d'UN compte dans l'org (sa préférence, son journal, son abonnement), et la colonne dit
 lequel. Ce compte peut être un ANCIEN membre, hors périmètre : la ligne est alors
@@ -220,7 +224,8 @@ CLASSEMENT: dict[str, Table] = {
                                     hors_base=("audio_key",)),
     # ── journal, usage, signaux ────────────────────────────────────────────────
     "tool_calls": possedee(_ORG_OU_COMPTE, "tout l'historique (décision du 28/09/2026) ; "
-                           "ses mois archivés au froid ne partent pas"),
+                           "ses mois archivés au froid ne partent pas ; au jour J, il "
+                           "voyage à part, par tranches (`JOURNAL`)"),
     "journal_archives": instance("registre des mois archivés au froid : les archives "
                                  "mêlent tous les propriétaires, hors base"),
     "usage": possedee(ParSub(), "compteurs par compte, sans org"),
@@ -254,3 +259,23 @@ CLASSEMENT: dict[str, Table] = {
     "platform_instructions": instance("le socle d'instructions de la plateforme"),
     "upload_tokens_used": instance("anti-rejeu des jetons d'upload signés par NOTRE clé"),
 }
+
+
+# ── le journal hors fenêtre (#1088) ────────────────────────────────────────────────
+# Mesuré sur une vraie copie : 4,33 M des 4,47 M lignes d'un périmètre sont des appels
+# du journal, et l'essentiel des ~99 min d'export et d'import. Il se transfère à part.
+JOURNAL = {"tool_calls": "created_at"}          # table du journal → colonne d'horodatage
+# Les faits qui RECONSTRUISENT un run (`deploy/archive_tool_calls.py`, `RUN_FACTS`) : la
+# source de vérité des runs. Une tranche peut les emporter TOUS, quelle que soit leur date
+# (`--faits-de-run-complets`) ; le reste du journal ne part que sur sa fenêtre.
+FAITS_DE_RUN = {"tool_calls": ("tool", ("run_start", "run_finish"))}   # colonne, valeurs
+RAISON_JOURNAL = ("journal hors fenêtre : il se verse à part, par tranches de dates, "
+                  "dans l'instance déjà importée (`oto-mcp perimetre journal`)")
+
+
+def sans_journal(classement: dict[str, Table]) -> dict[str, Table]:
+    """Le classement de l'export SANS journal : le journal y devient `exclue` — il ne part
+    pas avec le reste, le manifeste le compte, et une table qui y renverrait (clé ou
+    `Via`) est refusée comme toute référence vers ce qui ne part pas."""
+    return {t: exclue(e.regle, RAISON_JOURNAL) if t in JOURNAL else e
+            for t, e in classement.items()}

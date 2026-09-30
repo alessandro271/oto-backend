@@ -12,7 +12,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .classement import EXCLUE, EXPORTEES, INDIRECTE, INSTANCE, Table
+from .classement import (EXCLUE, EXPORTEES, FAITS_DE_RUN, INDIRECTE, INSTANCE, JOURNAL,
+                         Table)
 from .regles import Via, vias
 
 
@@ -55,6 +56,60 @@ class ClassementIncomplet(RuntimeError):
         self.anomalies = anomalies
         super().__init__("classement du périmètre incomplet — "
                          f"{len(anomalies)} anomalie(s) :\n  - " + "\n  - ".join(anomalies))
+
+
+class JournalNonDetachable(RuntimeError):
+    """Le journal ne peut pas voyager à part du reste (`classement.JOURNAL`)."""
+
+    def __init__(self, anomalies: list[str]):
+        self.anomalies = anomalies
+        super().__init__("le journal ne se détache pas du reste du périmètre — "
+                         f"{len(anomalies)} anomalie(s) :\n  - " + "\n  - ".join(anomalies))
+
+
+def verifier_journal(schema: Schema, classement: dict[str, Table]) -> None:
+    """Refuse, toutes les anomalies d'un coup, ce qui empêcherait le journal de voyager
+    par tranches, hors de la fenêtre de coupure :
+
+    - une autre table exportée qui y renvoie (clé étrangère ou `Via`) : sur la cible, sa
+      ligne viserait un appel pas encore versé ;
+    - une règle qui passe par un parent : une tranche se borne sur la table elle-même ;
+    - une clé du journal vers une table exportée : il se POUSSE dans la cible avant
+      l'import principal, quand ni orgs ni comptes n'y sont encore ;
+    - une colonne d'horodatage ou de faits de run absente, une clé primaire absente
+      (l'import d'une tranche est idempotent PAR elle).
+    """
+    anomalies: list[str] = []
+    for t, horodatage in sorted(JOURNAL.items()):
+        entree = classement.get(t)
+        if entree is None or entree.classe not in EXPORTEES:
+            anomalies.append(f"`{t}` (journal) n'est pas une table exportée")
+        elif vias(entree.regle):
+            anomalies.append(f"`{t}` (journal) : sa règle passe par un parent, une tranche "
+                             "ne se borne que sur une règle directe")
+        for role, c in (("d'horodatage", horodatage), ("des faits de run",
+                                                      FAITS_DE_RUN.get(t, (horodatage,))[0])):
+            if c not in schema.colonnes.get(t, ()):
+                anomalies.append(f"`{t}` (journal) : colonne {role} `{c}` absente")
+        if not schema.primaires.get(t):
+            anomalies.append(f"`{t}` (journal) : pas de clé primaire, l'import d'une tranche "
+                             "ne peut pas être idempotent")
+    for k in schema.cles:
+        nom = f"`{k.table}({', '.join(k.colonnes)})` → `{k.cible}`"
+        if k.cible in JOURNAL:
+            anomalies.append(f"{nom} : " + ("le journal renvoie à lui-même"
+                                            if k.table in JOURNAL else
+                                            "une table renvoie au journal, qui voyage à part"))
+        elif k.table in JOURNAL and classement.get(k.cible) is not None \
+                and classement[k.cible].classe in EXPORTEES:
+            anomalies.append(f"{nom} : le journal renvoie à une table qui n'arrive qu'avec "
+                             "l'import principal — il ne pourrait plus être poussé avant")
+    for t, entree in sorted(classement.items()):
+        if t not in JOURNAL and entree.classe in EXPORTEES:
+            anomalies.extend(f"`{t}` hérite du journal `{v.parent}`, qui voyage à part"
+                             for v in vias(entree.regle) if v.parent in JOURNAL)
+    if anomalies:
+        raise JournalNonDetachable(anomalies)
 
 
 def lire_schema(conn, schema: str = "public") -> Schema:

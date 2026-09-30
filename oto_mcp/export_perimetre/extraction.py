@@ -29,6 +29,10 @@ Format (`FORMAT`) : une ligne JSON par ligne de table, `{"t": <table>, "l": <lig
 dans un ordre où chaque parent précède ses enfants ; puis une dernière ligne
 `{"manifeste": …}`. La ligne est le `row_to_json` de PostgreSQL : elle se relit par
 `json_populate_record`, types compris.
+
+`journal=False` laisse le journal d'appels (`classement.JOURNAL`) hors de l'export : il
+voyage à part, par tranches de dates (`journal`), et le manifeste compte ce qui reste
+(lignes, bornes, maximum de sa séquence).
 """
 from __future__ import annotations
 
@@ -45,16 +49,17 @@ from psycopg.rows import tuple_row
 
 from ..crypto import _load_master_key
 
-from .classement import CLASSEMENT, EXCLUE, EXPORTEES, INSTANCE, Table, comptes_de
+from .classement import (CLASSEMENT, EXCLUE, EXPORTEES, INSTANCE, JOURNAL, RAISON_JOURNAL,
+                         Table, comptes_de, sans_journal)
 from .comptes import garde, rattache, recenser
-from .decouverte import Cle, Schema, lire_schema, verifier_classement
+from .decouverte import Cle, Schema, lire_schema, verifier_classement, verifier_journal
 from .perimetre import Perimetre, resoudre
 from .rechiffrement import AAD, empreinte_cle, rechiffrer
 from .objets import COLONNES_DE_CLES, ObjetsRefuses, Stockage, archiver, cles_dans
 from .regles import vias
 from .transformation import Transformation
 
-FORMAT = "oto-export-perimetre/1"
+FORMAT = "oto-export-perimetre/2"
 
 
 class SecretsChiffres(RuntimeError):
@@ -125,28 +130,30 @@ def _compter(conn, sql: str, params: dict) -> int:
     return conn.execute(sql, params).fetchone()["n"]
 
 
-def compter_secrets(conn, classement, pred, params) -> dict[str, int]:
+def compter_secrets(conn, lu: "Lecture") -> dict[str, int]:
     comptes = {}
-    for t, e in sorted(classement.items()):
-        if e.classe in EXPORTEES and e.secrets:
+    for t in sorted(lu.ordre):
+        e = lu.classement[t]
+        if e.secrets:
             cond = " OR ".join(f"{c} IS NOT NULL" for c in e.secrets)
-            n = _compter(conn, f"SELECT count(*) AS n FROM {t} WHERE ({pred(t)}) AND ({cond})",
-                         params)
+            n = _compter(conn, f"SELECT count(*) AS n FROM {t} WHERE ({lu.pred(t)}) "
+                               f"AND ({cond})", lu.params)
             if n:
                 comptes[t] = n
     return comptes
 
 
-def compter_partages_omis(conn, classement, pred, params) -> dict[str, int]:
+def compter_partages_omis(conn, lu: "Lecture") -> dict[str, int]:
     """Les partages du périmètre dont le destinataire n'en est pas : omis (décision du
     28/09/2026 — sur la cible ce destinataire n'existe pas, et la ligne y emporterait
     l'identité d'un tiers), et comptés au manifeste."""
     comptes = {}
-    for t, e in sorted(classement.items()):
-        if e.classe in EXPORTEES and e.destinataire is not None:
+    for t in sorted(lu.ordre):
+        e = lu.classement[t]
+        if e.destinataire is not None:
             n = _compter(conn, f"SELECT count(*) AS n FROM {t} WHERE "
-                               f"({e.regle.predicat(pred)}) "
-                               f"AND NOT ({e.destinataire.predicat(pred)})", params)
+                               f"({e.regle.predicat(lu.pred)}) "
+                               f"AND NOT ({e.destinataire.predicat(lu.pred)})", lu.params)
             if n:
                 comptes[t] = n
     return comptes
@@ -158,14 +165,15 @@ def _jointure(k: Cle, comptes: set[str]) -> str:
                         for c, cp in zip(k.colonnes, k.colonnes_cible))
 
 
-def controler_fermeture(conn, schema: Schema, classement, pred, params) -> dict[str, list]:
+def controler_fermeture(conn, lu: "Lecture") -> dict[str, list]:
     """Refuse une clé étrangère qui sort de l'export ; rend celles qui visent l'INSTANCE.
 
     Une cible `instance` (le tenant d'une org, par exemple) ne part pas par définition :
     l'instance cible doit porter ces lignes-là, et le manifeste dit lesquelles."""
+    schema, classement, pred, params = lu.schema, lu.classement, lu.pred, lu.params
     hors: dict[str, int] = {}
     vers_instance: dict[str, list] = {}
-    for t in sorted(t for t, e in classement.items() if e.classe in EXPORTEES):
+    for t in sorted(lu.ordre):
         comptes = {k.colonne for k in comptes_de(classement[t]) if k.simple}
         for k in schema.cles_de(t):
             if k.cible == "tenants" and k.colonnes_cible == ("id",):
@@ -207,7 +215,9 @@ def _lignes(conn, schema: Schema, t: str, pred, params):
 
 @dataclass(frozen=True)
 class Lecture:
-    """Tout ce qu'il faut pour lire un périmètre dans l'instantané ouvert."""
+    """Tout ce qu'il faut pour lire un périmètre dans l'instantané ouvert. `ordre` dit les
+    tables lues ; une tranche du journal (`journal.tranche`) n'en garde que le journal,
+    ses prédicats bornés à la fenêtre."""
     schema: Schema
     classement: dict[str, Table]
     perimetre: Perimetre
@@ -215,23 +225,31 @@ class Lecture:
     params: dict
     ordre: list[str]
     brut: Callable[[str], str]     # `pred` sans la règle des anciens comptes (`comptes`)
+    appartient: Callable[[str], str]   # règle et destinataire, sans la règle des comptes
 
     def lignes(self, conn, t: str):
         return _lignes(conn, self.schema, t, self.pred, self.params)
+
+
+def lire(conn: psycopg.Connection, perimetre: Perimetre,
+         classement: dict[str, Table] = CLASSEMENT) -> Lecture:
+    """Pose le fuseau (UTC) et compile la lecture du `perimetre` — à appeler DANS
+    `conn.transaction()`."""
+    conn.execute("SET LOCAL TimeZone = 'UTC'")
+    schema = lire_schema(conn)
+    classement = verifier_classement(schema, classement)
+    pred = compilateur(classement, schema)
+    return Lecture(schema, classement, perimetre, pred, perimetre.parametres(),
+                   ordre_d_export(schema, classement),
+                   compilateur(classement, schema, comptes=False),
+                   lambda t: appartenance(classement[t], pred))
 
 
 def ouvrir(conn: psycopg.Connection, orgs: list[int],
            classement: dict[str, Table] = CLASSEMENT) -> Lecture:
     """Pose l'instantané en lecture seule (UTC) et résout le périmètre — à appeler DANS
     `conn.transaction()`, sur une connexion passée en lecture seule avant."""
-    conn.execute("SET LOCAL TimeZone = 'UTC'")
-    schema = lire_schema(conn)
-    classement = verifier_classement(schema, classement)
-    perimetre = resoudre(conn, orgs)
-    params = perimetre.parametres()
-    return Lecture(schema, classement, perimetre, compilateur(classement, schema), params,
-                   ordre_d_export(schema, classement),
-                   compilateur(classement, schema, comptes=False))
+    return lire(conn, resoudre(conn, orgs), classement)
 
 
 def lecture_seule(conn: psycopg.Connection) -> None:
@@ -244,7 +262,7 @@ def lecture_seule(conn: psycopg.Connection) -> None:
 def exporter(conn: psycopg.Connection, orgs: list[int], sortie: Path | str, *,
              base_publique: str, cle_cible: bytes | None = None,
              stockage: Stockage | None = None,
-             classement: dict[str, Table] = CLASSEMENT) -> dict:
+             classement: dict[str, Table] = CLASSEMENT, journal: bool = True) -> dict:
     """Exporte le périmètre des `orgs` vers `sortie` et rend le manifeste.
 
     `conn` : une connexion psycopg à `dict_row`, HORS transaction (`lecture_seule`).
@@ -254,7 +272,42 @@ def exporter(conn: psycopg.Connection, orgs: list[int], sortie: Path | str, *,
     `cle_cible` : la clé maîtresse de l'instance cible, pour cette seule exécution —
     les secrets y sont rechiffrés depuis la clé de CETTE instance, et l'archive des
     objets y est scellée. `stockage` : NOTRE stockage objet, où l'export lit les objets
-    du périmètre. Sans eux, un périmètre qui porte des secrets ou des objets refuse."""
+    du périmètre. Sans eux, un périmètre qui porte des secrets ou des objets refuse.
+    `journal=False` : le journal d'appels reste (`JOURNAL`) — il se verse à part, par
+    tranches (`journal.exporter_tranche`) ; le manifeste le compte."""
+    def ouvrir_export(conn) -> Lecture:
+        if journal:
+            return ouvrir(conn, orgs, classement)
+        schema = lire_schema(conn)
+        verifier_journal(schema, verifier_classement(schema, classement))
+        return ouvrir(conn, orgs, sans_journal(classement))
+
+    def completer(conn, lu: Lecture, manifeste: dict) -> None:
+        if journal:
+            manifeste["tables"].update(tables_non_exportees(conn, lu))
+            manifeste["journal"] = {"inclus": True}
+            return
+        laisse, sequences = _journal_laisse(conn, lu)
+        manifeste["tables"].update(tables_non_exportees(conn, lu, sauf=tuple(JOURNAL)))
+        manifeste["tables"].update({t: {"classe": EXCLUE, "raison": RAISON_JOURNAL,
+                                        "omises": v["lignes"]} for t, v in laisse.items()})
+        manifeste["sequences"].update(sequences)
+        manifeste["journal"] = {"inclus": False, "tables": laisse}
+
+    return exporter_lecture(conn, sortie, ouvrir_export, completer,
+                            base_publique=base_publique, cle_cible=cle_cible,
+                            stockage=stockage)
+
+
+def exporter_lecture(conn: psycopg.Connection, sortie: Path | str,
+                     ouvrir_export: Callable[[psycopg.Connection], Lecture],
+                     completer: Callable[[psycopg.Connection, Lecture, dict], None], *,
+                     base_publique: str, cle_cible: bytes | None,
+                     stockage: Stockage | None) -> dict:
+    """Le déroulé commun d'un export : les tables de la lecture que rend
+    `ouvrir_export(conn)` (dans l'instantané en lecture seule), les refus, le fichier,
+    l'archive des objets et le manifeste, que `completer` achève. Un export existant ne
+    s'écrase pas, un export refusé ne laisse rien derrière lui."""
     sortie = Path(sortie)
     archive = sortie.with_name(sortie.name + ".objets.tar")
     for chemin in (sortie, archive):
@@ -262,13 +315,13 @@ def exporter(conn: psycopg.Connection, orgs: list[int], sortie: Path | str, *,
             raise FileExistsError(f"{chemin} existe déjà : un export ne s'écrase pas")
     lecture_seule(conn)
     with conn.transaction():
-        lu = ouvrir(conn, orgs, classement)
-        anciens = recenser(conn, lu, lambda t: appartenance(lu.classement[t], lu.pred))
-        secrets = compter_secrets(conn, lu.classement, lu.pred, lu.params)
+        lu = ouvrir_export(conn)
+        anciens = recenser(conn, lu, lu.appartient)
+        secrets = compter_secrets(conn, lu)
         if secrets and cle_cible is None:
             raise SecretsChiffres(secrets)
         recoder = _recodeur(lu, cle_cible) if secrets else None
-        vers_instance = controler_fermeture(conn, lu.schema, lu.classement, lu.pred, lu.params)
+        vers_instance = controler_fermeture(conn, lu)
         provisoire = sortie.with_name(sortie.name + ".partiel")
         try:
             with provisoire.open("x", encoding="utf-8") as f:
@@ -277,12 +330,12 @@ def exporter(conn: psycopg.Connection, orgs: list[int], sortie: Path | str, *,
                 manifeste.update(
                     _entete(conn, lu.perimetre), ordre=lu.ordre,
                     references_instance=vers_instance, secrets=secrets, objets=objets,
-                    partages_omis=compter_partages_omis(conn, lu.classement, lu.pred,
-                                                        lu.params),
+                    partages_omis=compter_partages_omis(conn, lu),
                     comptes_hors_perimetre=anciens,
                     cle_cible=(empreinte_cle(cle_cible) if secrets or objets["liste"]
                                else None),
                     colonnes={t: _colonnes(lu.schema, t) for t in lu.ordre})
+                completer(conn, lu, manifeste)
                 f.write(json.dumps({"manifeste": manifeste}, ensure_ascii=False) + "\n")
         except BaseException:
             # Un export refusé en chemin ne laisse rien derrière lui, ni lignes ni archive.
@@ -352,14 +405,43 @@ def _ecrire(conn, f, lu: Lecture, recoder, base_publique: str) -> tuple[dict, se
             f.write(texte)
             n += 1
         tables[t] = {"classe": classement[t].classe, "lignes": n}
-    for t, e in sorted(classement.items()):
-        if e.classe == EXCLUE:
-            tables[t] = {"classe": EXCLUE, "raison": e.raison, "omises": _compter(
-                conn, f"SELECT count(*) AS n FROM {t} WHERE {pred(t)}", params)}
-        elif e.classe == INSTANCE:
-            tables[t] = {"classe": INSTANCE, "raison": e.raison}
     return {"format": FORMAT, "tables": tables, "empreinte": empreinte.hexdigest(),
             "sequences": _sequences(conn, schema, ordre, pred, params)}, cles
+
+
+def tables_non_exportees(conn, lu: Lecture, sauf: tuple[str, ...] = ()) -> dict[str, dict]:
+    """Au manifeste, les tables qui ne partent pas : celles de l'instance (leur raison),
+    les exclues (leur raison et les lignes du périmètre laissées)."""
+    tables: dict[str, dict] = {}
+    for t, e in sorted(lu.classement.items()):
+        if t in sauf:
+            continue
+        if e.classe == EXCLUE:
+            tables[t] = {"classe": EXCLUE, "raison": e.raison, "omises": _compter(
+                conn, f"SELECT count(*) AS n FROM {t} WHERE {lu.pred(t)}", lu.params)}
+        elif e.classe == INSTANCE:
+            tables[t] = {"classe": INSTANCE, "raison": e.raison}
+    return tables
+
+
+def _journal_laisse(conn, lu: Lecture) -> tuple[dict[str, dict], dict[str, int]]:
+    """Ce que l'export sans journal laisse, en UNE lecture par table : les lignes du
+    périmètre (règle brute : ce que les tranches trancheront), les bornes de leur
+    horodatage, et le maximum de chaque séquence — que l'import pose sur la cible, pour
+    que ses propres appels n'y prennent jamais l'id d'un appel encore à verser."""
+    laisse: dict[str, dict] = {}
+    sequences: dict[str, int] = {}
+    for t, h in sorted(JOURNAL.items()):
+        seqs = lu.schema.sequences.get(t, ())
+        maxima = "".join(f", max({c}) AS max_{i}" for i, c in enumerate(seqs))
+        r = conn.execute(f"SELECT count(*) AS n, to_json(min({h})) #>> '{{}}' AS premier, "
+                         f"to_json(max({h})) #>> '{{}}' AS dernier{maxima} FROM {t} "
+                         f"WHERE {lu.pred(t)}", lu.params).fetchone()
+        laisse[t] = {"horodatage": h, "lignes": r["n"], "premier": r["premier"],
+                     "dernier": r["dernier"]}
+        sequences.update({f"{t}.{c}": r[f"max_{i}"] for i, c in enumerate(seqs)
+                          if r[f"max_{i}"] is not None})
+    return laisse, sequences
 
 
 def _sequences(conn, schema, ordre, pred, params) -> dict[str, int]:

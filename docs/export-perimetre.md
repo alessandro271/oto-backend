@@ -10,7 +10,9 @@ description: >-
   (rattachées au jumeau, sinon omises, comptées), les refus de l'extraction, et
   l'import dans une base née par le démarrage : tenant sur la ligne 1, comptes
   dénudés, secrets rechiffrés à l'export, vérification par relecture, commande
-  `oto-mcp perimetre`.
+  `oto-mcp perimetre`. Le journal d'appels hors de la fenêtre de coupure : export
+  principal sans journal, tranches de dates poussées la veille puis diff, import
+  idempotent, faits de run complets.
 ---
 
 # Export par périmètre de propriétaire
@@ -19,7 +21,8 @@ description: >-
 par lots et commande `oto-mcp perimetre` existent, éprouvés de bout en bout sur des
 bases de test (`tests/export_perimetre/test_import_bout_en_bout.py`). La répétition à
 blanc sur une copie est en cours (#1088) : la première a mis au jour les lignes d'anciens
-comptes (ci-dessous).**
+comptes (ci-dessous), et un temps dominé par le journal d'appels (« Le journal hors
+fenêtre »).**
 
 ## La commande
 
@@ -31,6 +34,12 @@ OTO_EXPORT_CLE_CIBLE=<clé de l'instance cible> \
 # Sur l'instance cible, née par le démarrage (sa DATABASE_URL, SA clé maîtresse, SON
 # stockage OTO_MCP_S3_*) — les deux fichiers côte à côte :
 oto-mcp perimetre import perimetre.jsonl
+
+# Le jour J : le journal d'appels voyage à part (« Le journal hors fenêtre ») —
+oto-mcp perimetre export --org 12 --sans-journal --sortie perimetre.jsonl
+oto-mcp perimetre journal export --org 12 --depuis <date> --jusqu-a <date> \
+  --sortie journal.jsonl [--faits-de-run-complets]
+oto-mcp perimetre journal import journal.jsonl
 ```
 
 Un refus s'imprime nommé et sort en code 2, sans rien écrire. Le résumé ne cite jamais
@@ -94,8 +103,9 @@ de la source (`prefixes_tiers`) : un sub qui n'en porte aucun est NU, celui de l
 du tenant primaire (`tenancy.tenant_of`).
 
 Décisions d'Alexis du 28/09/2026 : le tenant part et devient la ligne 1 de la cible ;
-tout le journal d'appels part ; les droits déclarés et nos acceptations légales
-restent (« exclue ») ; les orgs personnelles suivent leurs comptes.
+tout le journal d'appels part (au jour J : les 30 derniers jours et tous les faits de
+run, décision du 30/09/2026, « Le journal hors fenêtre ») ; les droits déclarés et nos
+acceptations légales restent (« exclue ») ; les orgs personnelles suivent leurs comptes.
 
 ## L'extraction
 
@@ -232,7 +242,8 @@ que la clé de SON instance. Avant d'écrire, il refuse (`ImportRefuse`) dans ce
   leur place de création, et l'écriture comme la relecture associent par nom. Le refus
   nomme, par table, les colonnes présentes d'un seul côté (`source seule`, `cible
   seule`) ;
-- une base déjà peuplée (`orgs` ou `users`) ;
+- une base déjà peuplée (`orgs` ou `users`) — le journal, lui, a pu y être poussé la
+  veille : il ne compte pas ;
 - un tenant primaire cible dont le slug (`OTO_TENANT_PRIMAIRE_SLUG`) ou le NOM (semé
   depuis `OTO_BRAND_NAME`) n'est pas celui du tenant exporté : le refus donne les deux
   noms, l'import n'écrase pas le nom que l'instance déclare (décision du 28/09/2026) ;
@@ -254,8 +265,9 @@ journal d'appels complet compte des centaines de milliers de lignes.
 Les déclencheurs de la cible (journal des révisions, vecteur de recherche) sont
 suspendus le temps de la transaction : l'import reproduit un état, il ne rejoue pas des
 gestes. Les clés étrangères restent vérifiées. Les auto-références (une page sous une
-page) se posent une fois la table remplie. Les séquences sont recalées sur le maximum
-du manifeste.
+page) se posent une fois la table remplie. Les séquences sont portées au-delà du
+maximum du manifeste, et ne reculent jamais (`avancer_sequence`) : celle du journal a pu
+être avancée par une tranche.
 
 **Vérification** : dans la même transaction, le périmètre est RELU sur la cible par la
 lecture même de l'export (`extraction.ouvrir`). Par table, il faut le même nombre de
@@ -263,7 +275,111 @@ lignes et la même empreinte que les lignes écrites, sinon tout est annulé
 (`VerificationEchouee`). Cette empreinte est une somme de hachés, indépendante de
 l'ordre, de la forme canonique de chaque ligne : c'est la seule comparaison qui
 survive aux remappages. L'empreinte brute du fichier, elle, est contrôlée avant toute
-écriture.
+écriture. Un export sans journal se relit sous le même classement que l'export
+(`classement.sans_journal`) : les appels déjà poussés ne sont pas comptés.
+
+## Le journal hors fenêtre
+
+`journal`, `classement.JOURNAL`. **Le constat** (répétition à blanc sur une vraie copie de
+production) : export en 2 079 s, dont les deux passes de recensement des anciens comptes,
+surtout sur le journal ; import en 3 847 s ; 4,47 M lignes, dont **4,33 M d'appels du
+journal** (`tool_calls`). La fenêtre de coupure du jour J tient en 30 à 60 min : presque
+tout le temps est le journal.
+
+**La décision** : le journal sort de la fenêtre. Pendant la coupure, tout part SAUF lui ;
+lui se verse par tranches de dates, sans coupure. Décision du 30/09/2026 : seuls les
+**30 derniers jours** du journal partent (le `--depuis` de la première tranche), mais les
+**faits de run** (`run_start`, `run_finish` : `classement.FAITS_DE_RUN`, les `RUN_FACTS`
+de `deploy/archive_tool_calls.py`, qu'un test tient égaux) sont la source de vérité des
+runs et partent EN ENTIER, quelle que soit leur date (`--faits-de-run-complets`).
+L'export sans option, lui, emporte toujours tout le journal.
+
+### L'export principal sans journal
+
+`oto-mcp perimetre export … --sans-journal` (`exporter(journal=False)`) lit le périmètre
+sous `classement.sans_journal` : le journal y est `exclue`. Il ne part pas, ni ses
+recensements (les deux passes coûteuses) ; le manifeste le COMPTE — `journal` :
+`{"inclus": false, "tables": {"tool_calls": {"horodatage", "lignes", "premier",
+"dernier"}}}`, lignes du périmètre à la règle brute, bornes en UTC — et porte le maximum
+de sa séquence, que l'import pose sur la cible : ses propres appels n'y prendront jamais
+l'id d'un appel encore à verser.
+
+Avant la première ligne, `decouverte.verifier_journal` refuse (`JournalNonDetachable`,
+toutes les anomalies d'un coup) ce qui empêcherait le journal de voyager à part : une
+table exportée qui y renvoie (clé étrangère ou `Via` : sa ligne viserait un appel pas
+encore versé), une clé du journal vers une table exportée (il ne pourrait plus être
+poussé avant l'import principal), une règle du journal qui passe par un parent, une
+colonne d'horodatage ou de faits de run absente, une clé primaire absente. Sur le schéma
+réel : aucune — `tool_calls` n'a aucune clé étrangère, ni vers `users` ni vers `orgs`, et
+aucune table ne renvoie à lui.
+
+L'import principal d'un tel export produit une instance complète et cohérente sans
+journal : fermeture contrôlée à l'export, relecture conforme à l'import.
+
+### Une tranche du journal
+
+`oto-mcp perimetre journal export --org … --depuis D --jusqu-a J --sortie …
+[--faits-de-run-complets]` (`journal.exporter_tranche`) exporte les appels du même
+périmètre dont `created_at` est dans `[D, J)`, demi-ouverte ; une borne sans fuseau est en
+UTC. Même déroulé que l'export principal (`extraction.exporter_lecture`) : même instantané
+`REPEATABLE READ READ ONLY`, même règle des anciens comptes (rattachées, sinon omises,
+comptées au manifeste de la tranche), même `Transformation`, même rechiffrement, et
+l'archive scellée des objets que ses appels citent par URL. Seule la lecture change
+(`journal.tranche`) : le journal seul, chaque prédicat borné à la fenêtre ; avec
+`--faits-de-run-complets`, les faits de run antérieurs à `D` en plus. Son manifeste (format
+`oto-export-perimetre-journal/1`) dit la tranche, et `apres` : les lignes du périmètre
+au-delà de `J` dans l'instantané — **0** pour une dernière tranche bornée par le gel.
+
+`oto-mcp perimetre journal import <fichier>` (`journal.importer_tranche`) vise une
+instance NÉE par le démarrage, que l'import principal ait eu lieu ou non :
+
+- il vérifie le fichier (empreinte, comptes), le schéma (version, colonnes par nom), le
+  tenant primaire (slug et nom) et la clé de l'instance s'il porte des objets ;
+- il ne demande à la cible ni les orgs ni les comptes : le périmètre vient du manifeste
+  (`perimetre_du`) — la cible n'en a pas encore la veille, elle peut en avoir de
+  nouveaux après la bascule ;
+- il refuse un fichier qui porte autre chose que le journal, et un journal cible qui
+  porterait des déclencheurs (une tranche se verse dans une instance qui peut servir :
+  suspendre ses déclencheurs verrouillerait la table) ;
+- il écrit par lots, en UNE transaction, `ON CONFLICT (<clé primaire>) DO NOTHING` : une
+  tranche rejouée, ou deux tranches qui se chevauchent, n'insèrent rien deux fois ; le
+  rapport compte `inserees` et `deja_presentes` ;
+- il relit la fenêtre sur la cible (lignes du périmètre, nombre et empreinte) et annule
+  tout en cas d'écart (`VerificationEchouee`) — c'est ce qui voit une clé primaire déjà
+  prise par une AUTRE ligne, que `DO NOTHING` aurait tue ;
+- il ne touche à aucune autre table ; la séquence du journal ne fait que monter.
+
+### L'ordre du jour J : pousser, puis le diff
+
+1. **La veille.** La base cible naît par le démarrage (`init_db` : tenant primaire en
+   ligne 1, ni orgs ni comptes). On y POUSSE les 30 derniers jours, en une ou plusieurs
+   tranches contiguës, la première avec `--faits-de-run-complets` :
+   ```bash
+   oto-mcp perimetre journal export --org 12 --depuis 2026-09-01T00:00:00Z \
+     --jusqu-a 2026-10-01T00:00:00Z --faits-de-run-complets --sortie push.jsonl
+   oto-mcp perimetre journal import push.jsonl        # sur la cible
+   ```
+2. **Le jour J, pendant la coupure**, une fois le gel posé à l'instant `G` :
+   ```bash
+   oto-mcp perimetre export --org 12 --sans-journal --sortie perimetre.jsonl
+   oto-mcp perimetre import perimetre.jsonl           # la même base : vierge en orgs et
+                                                      # comptes, elle porte déjà le push
+   oto-mcp perimetre journal export --org 12 --depuis 2026-09-30T23:00:00Z \
+     --jusqu-a <G> --sortie diff.jsonl                # le SEUL diff, avec une heure de
+   oto-mcp perimetre journal import diff.jsonl        # recouvrement de sécurité
+   ```
+
+**Couvrir sans trou.** Des tranches demi-ouvertes contiguës (`jusqu-a` de l'une = `depuis`
+de la suivante) couvrent chaque instant une fois ; un recouvrement ne coûte rien (clé
+primaire). La dernière tranche se borne par l'instant du gel `G` : son `apres` doit valoir
+0, sinon des appels du périmètre ont été écrits après le gel et la bascule n'est pas
+propre. Le diff part de la borne haute du push, un peu avant : une transaction longue
+ouverte au moment du push a pu valider après lui des appels datés d'avant.
+
+⚠️ Une tranche vaut pour le périmètre de l'instant où elle est exportée. Si ses orgs ou
+ses comptes changent entre le push et le jour J (un membre qui arrive, un qui part),
+refaire le push après l'import principal : rejouée, une tranche ne réinsère rien, et la
+relecture dit si la cible s'en écarte.
 
 ⚠️ **Jamais contre la base servie** tant que l'outil n'a pas été répété à blanc sur une
 copie : production et préproduction partagent la même base.

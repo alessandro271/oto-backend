@@ -14,7 +14,11 @@ from __future__ import annotations
 
 import io
 import json
+import uuid
 from urllib.parse import quote
+
+import psycopg
+import pytest
 
 from oto_mcp import credentials_store, runner_hook, transcription_worker
 from oto_mcp.crypto import encrypt_with_key
@@ -63,6 +67,34 @@ class FauxS3:
             raise _ClientError("404")
         donnees, meta = self.objets[Key]
         return {"ContentLength": len(donnees), "Metadata": meta}
+
+
+def naitre(pg_dsn: str, slug: str, nom: str) -> str:
+    """Une base NEUVE montée par le démarrage normal, pour l'instance du tenant `slug`
+    (nom `nom`) ; rend son DSN. À `detruire`."""
+    from oto_mcp.db import _conn, init_db
+    base = "oto_test_" + uuid.uuid4().hex[:8]
+    with psycopg.connect(pg_dsn, autocommit=True) as root:
+        root.execute(f'CREATE DATABASE "{base}"')
+    dsn = pg_dsn.rsplit("/", 1)[0] + "/" + base
+    pool_avant = _conn._pool
+    _conn._pool = None
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("DATABASE_URL", dsn)
+        mp.setenv("OTO_TENANT_PRIMAIRE_SLUG", slug)
+        mp.setenv("OTO_BRAND_NAME", nom)
+        try:
+            init_db()
+        finally:
+            if _conn._pool is not None:
+                _conn._pool.close()
+            _conn._pool = pool_avant
+    return dsn
+
+
+def detruire(pg_dsn: str, dsn: str) -> None:
+    with psycopg.connect(pg_dsn, autocommit=True) as root:
+        root.execute(f'DROP DATABASE IF EXISTS "{dsn.rsplit("/", 1)[1]}" WITH (FORCE)')
 
 
 def slug_de(m: str) -> str:

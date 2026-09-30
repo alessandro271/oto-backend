@@ -131,10 +131,14 @@ def resoudre(conn, orgs: list[int]) -> Perimetre:
                 f"{slug!r} (sub sans le préfixe `{slug}:`) : {hors}")
     groupes = _ids(conn, "SELECT id AS v FROM org_groups WHERE org_id = ANY(%s) ORDER BY id",
                    (list(toutes),))
-    tiers = tuple(f"{r['v']}:" for r in conn.execute(
-        "SELECT slug AS v FROM tenants WHERE id <> 1 ORDER BY slug"))
     return Perimetre(declarees, toutes, groupes, tuple(sorted(subs)), id_tenant, slug, primaire,
-                     tiers)
+                     prefixes_tiers(conn))
+
+
+def prefixes_tiers(conn) -> tuple[str, ...]:
+    """Le préfixe `<slug>:` de chaque tenant TIERS de la base (tout sauf la ligne 1)."""
+    return tuple(f"{r['v']}:" for r in conn.execute(
+        "SELECT slug AS v FROM tenants WHERE id <> 1 ORDER BY slug"))
 
 
 def _tenant(conn, orgs: tuple[int, ...]) -> tuple[int, str, bool]:

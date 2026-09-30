@@ -23,7 +23,6 @@ import hashlib
 import inspect
 import json
 import os
-import uuid
 
 import pytest
 
@@ -43,38 +42,16 @@ from oto_mcp.export_perimetre.rechiffrement import AAD, empreinte_cle  # noqa: E
 from oto_mcp.export_perimetre.transformation import Transformation  # noqa: E402
 from oto_mcp.export_perimetre.objets import StockageS3  # noqa: E402
 from perimetre_banc import (  # noqa: E402
-    A, B, BASE_CIBLE, BASE_SOURCE, SECRET, FauxS3, _credential, membre, org, semer, slug_de,
-    tenant)
+    A, B, BASE_CIBLE, BASE_SOURCE, SECRET, FauxS3, _credential, membre, naitre, org, semer,
+    slug_de, tenant)
+from perimetre_banc import detruire as _detruire  # noqa: E402
 
 CLE_SOURCE, CLE_CIBLE = os.urandom(32), os.urandom(32)
 NOM_A = f"tenant {A}"
 
 
 def _naitre(pg_dsn: str, slug: str, nom: str = NOM_A) -> str:
-    """Une base NEUVE montée par le démarrage normal, pour l'instance du tenant `slug`."""
-    from oto_mcp.db import _conn, init_db
-    base = "oto_test_" + uuid.uuid4().hex[:8]
-    with psycopg.connect(pg_dsn, autocommit=True) as root:
-        root.execute(f'CREATE DATABASE "{base}"')
-    dsn = pg_dsn.rsplit("/", 1)[0] + "/" + base
-    pool_avant = _conn._pool
-    _conn._pool = None
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setenv("DATABASE_URL", dsn)
-        mp.setenv("OTO_TENANT_PRIMAIRE_SLUG", slug)
-        mp.setenv("OTO_BRAND_NAME", nom)
-        try:
-            init_db()
-        finally:
-            if _conn._pool is not None:
-                _conn._pool.close()
-            _conn._pool = pool_avant
-    return dsn
-
-
-def _detruire(pg_dsn: str, dsn: str) -> None:
-    with psycopg.connect(pg_dsn, autocommit=True) as root:
-        root.execute(f'DROP DATABASE IF EXISTS "{dsn.rsplit("/", 1)[1]}" WITH (FORCE)')
+    return naitre(pg_dsn, slug, nom)
 
 
 def _importer(dsn: str, chemin, cle: bytes | None = CLE_CIBLE,
@@ -202,7 +179,7 @@ def test_un_import_interrompu_reprend_ses_objets_sans_les_recopier(source, expor
     try:
         from oto_mcp.export_perimetre import importation
         with pytest.MonkeyPatch.context() as mp:
-            mp.setattr(importation, "_recaler_sequences",
+            mp.setattr(importation, "recaler_sequences",
                        lambda conn, m: (_ for _ in ()).throw(RuntimeError("coupure")))
             with pytest.raises(RuntimeError, match="coupure"):
                 _importer(dsn, export_a[0], seau=seau)
@@ -481,13 +458,17 @@ def test_l_import_n_a_aucun_chemin_de_rechiffrement():
     """L'ancien chemin (l'import recevait les deux clés et rechiffrait) est RETIRÉ, pas
     gardé en variante : l'import ne prend aucune clé, n'en chiffre aucune, et l'export
     n'a plus de mode qui transporterait un secret sous notre clé."""
-    from oto_mcp.export_perimetre import importation
+    from oto_mcp.export_perimetre import importation, journal
     assert list(inspect.signature(importer).parameters) == ["conn", "chemin", "stockage",
                                                             "base_publique"]
+    assert list(inspect.signature(journal.importer_tranche).parameters) == \
+        ["conn", "chemin", "stockage", "base_publique"]
     assert set(inspect.signature(exporter).parameters) == {
-        "conn", "orgs", "sortie", "base_publique", "cle_cible", "stockage", "classement"}
-    source = inspect.getsource(importation)
-    assert "encrypt_with_key" not in source and "rechiffrer" not in source
+        "conn", "orgs", "sortie", "base_publique", "cle_cible", "stockage", "classement",
+        "journal"}
+    for module in (importation, journal):
+        source = inspect.getsource(module)
+        assert "encrypt_with_key" not in source and "rechiffrer" not in source
 
 
 def test_l_import_refuse_notre_cle(export_a, pg_dsn):
