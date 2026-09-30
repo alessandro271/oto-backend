@@ -14,8 +14,9 @@ La grammaire que ce module porte, du plus petit au plus grand :
     contacts[].email       le même attribut à travers TOUS les items
 
 Les trois premiers désignent UNE valeur : ils se filtrent, se trient et s'agrègent. Le
-quatrième en désigne N — il ne se filtre que par existence, et `field_read_sql` le
-refuse en le nommant.
+quatrième en désigne N — il se filtre par existence et s'agrège par occurrence (un
+élément, une occurrence : `list_items_sql`), mais ne se trie pas, et `field_read_sql`
+le refuse en le nommant.
 """
 from __future__ import annotations
 
@@ -26,7 +27,7 @@ from ..datastore.schema import LAYER_KEYS, VALUE_LAYER, split_layer  # noqa: F40
 __all__ = [
     "FIELD_VALUE_PARAM_SQL", "LAYER_VALUE_PARAM_SQL", "ROW_VALUES_TEXT_SQL",
     "bkey_index_expr", "field_read_sql", "field_value_sql", "leaf_read_sql",
-    "split_layer", "split_list_path",
+    "list_items_sql", "split_layer", "split_list_path",
 ]
 
 
@@ -220,6 +221,19 @@ def leaf_read_sql(base_sql: str, base_params: list, field: str) -> tuple:
             (list(base_params) + [base]) * _LECTURES)
 
 
+def list_items_sql(colonne: str, alias: str) -> tuple:
+    """`(fragment, params)` qui déroule les éléments de la colonne-liste `colonne`,
+    un par ligne SQL, sous `alias(v)` — le filtre d'existence (`EXISTS (SELECT 1 FROM
+    …)`) et l'agrégat par occurrence (`LATERAL …`) lisent la liste par ce seul chemin.
+
+    La garde de type est OBLIGATOIRE : `jsonb_array_elements` LÈVE sur une valeur qui
+    n'est pas un tableau, et pendant une conversion une partie des lignes ne l'est pas
+    encore — l'état NORMAL, pas un cas limite. Une telle ligne n'a aucun élément."""
+    return (f"jsonb_array_elements(CASE WHEN jsonb_typeof(data->%s) = 'array' "
+            f"THEN data->%s ELSE '[]'::jsonb END) AS {alias}(v)",
+            [colonne, colonne])
+
+
 def field_read_sql(field: str) -> tuple:
     """`(fragment SQL, paramètres)` pour lire ce que l'appelant a désigné.
 
@@ -230,16 +244,21 @@ def field_read_sql(field: str) -> tuple:
     verbe et faux sur trois, parce que la résolution était recopiée ailleurs.
 
     `contacts[].email` (TOUS les items) n'a pas sa place ici : il ne désigne pas UNE
-    valeur mais N, donc rien à trier ni à regrouper. Refusé en le nommant plutôt que
-    rendu comme s'il valait le premier item — un ordre reproductible et faux."""
+    valeur par ligne mais N. Le filtre (existence) et l'agrégat (occurrences) le lisent
+    élément par élément (`list_items_sql`) ; le TRI, lui, n'a rien à ranger. Refusé en
+    le nommant plutôt que rendu comme s'il valait le premier item — un ordre
+    reproductible et faux."""
     chemin = split_list_path(field)
     if chemin is not None:
         colonne, rang, reste = chemin
         if rang is None:
             raise ValueError(
                 f"`{field}` désigne TOUS les items de `{colonne}` : il n'a pas une "
-                f"valeur mais N, donc il ne se trie ni ne se regroupe (il se FILTRE, "
-                f"par existence). Viser un rang précis — `{colonne}[0].{reste}`.")
+                f"valeur par ligne mais N, donc il ne se trie pas et ne se met pas en "
+                f"commun avec d'autres colonnes. Il se FILTRE (par existence) et "
+                f"s'AGRÈGE seul (`group_by: \"{field}\"` compte une occurrence par "
+                f"item). Pour une valeur par ligne, viser un rang précis — "
+                f"`{colonne}[0].{reste}`.")
         # Le rang vient d'un `\d+` converti en entier : l'inscrire dans le SQL n'est
         # pas une interpolation de saisie.
         return leaf_read_sql(f"data->%s->{int(rang)}", [colonne], reste)

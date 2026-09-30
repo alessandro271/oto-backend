@@ -1596,6 +1596,16 @@ def register(mcp: FastMCP) -> None:
         pooled group, `count` counts OCCURRENCES and `count_rows` counts ROWS — two
         different questions, so ask for the one you mean.
 
+        A `list` column (e.g. `contacts`) is aggregated ACROSS ITS ITEMS with
+        `contacts[].<attribute>`. `group_by: "contacts[].fonction"` makes every item of
+        every matching row one occurrence — same vocabulary: `count` counts the
+        contacts, `count_rows` the rows; a contact without that attribute falls in the
+        `null` group. `filters` still select ROWS (a row kept by
+        `contacts[].fonction eq DRH` contributes ALL its contacts). sum/avg/min/max
+        with `field: "contacts[].<numeric attribute>"` aggregate over all items (read
+        on the current item when grouping by the same list). A list path cannot be
+        pooled with other columns, nor sorted; `contacts[0].x` targets one rank.
+
         ⚠️ Pooling is NOT a two-dimensional group-by, and `group_by: "a,b"` is not one
         either — it is REFUSED (oto#50). A comma-separated string used to be read as a
         single column name containing a comma: no row carries it, so you got 200 with
@@ -1620,13 +1630,17 @@ def register(mcp: FastMCP) -> None:
                            "op":"in","value":["DRH","DAF"]}]}]
             - which roles appear across all contact ranks:
               group_by=["contact1_fonction","contact2_fonction","contact3_fonction"]
+            - the same on a `list` column, contacts and companies counted apart:
+              group_by="contacts[].fonction",
+              metrics=[{"op":"count"}, {"op":"count_rows"}]
 
         Args:
             datastore: target datastore, or `slot:<name>` (active project).
             metrics: list of `{op, field?, where?, label?}` aggregations
                 (default = count of rows).
-            group_by: column to group by, or a LIST of columns whose values are
-                pooled (omit = global aggregate, single row).
+            group_by: column to group by, `list[].attribute` to group the items of
+                a list column, or a LIST of columns whose values are pooled (omit =
+                global aggregate, single row).
             filter: dict `{column: value}` exact match to scope the aggregate.
             filters: list of clauses, incl. multi-column ones — same grammar as
                 `data_rows.filters`. Combines with `filter` (AND).

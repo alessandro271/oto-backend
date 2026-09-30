@@ -1938,6 +1938,12 @@ commun, `count` compte les occurrences et `count_rows` les fiches.
 Surfaces : `data_rows(filters=…)`, `data_aggregate(filters=…, metrics=[{…, "where":…}],
 group_by=[…])`, et le même `filters` côté REST.
 
+**Sur une colonne-liste**, la même question se pose sans énumérer les rangs :
+`group_by: "contacts[].fonction"` compte une occurrence par item de chaque ligne
+retenue (`count` = les contacts, `count_rows` = les fiches), et `sum`/`avg`/`min`/`max`
+sur `contacts[].<attribut>` portent sur tous les items. Le tri reste refusé. Détail :
+`datastore-colonne-tableau.md` §5.1.
+
 ## Setup GCP (one-shot, par projet)
 
 1. **Console GCP** → choisir/créer un projet (peut être le même que celui

@@ -147,19 +147,39 @@ Trois conséquences pour qui déclare une colonne-tableau :
 
 ### 5.1 Existence et agrégat à travers les items
 
-Le chemin `contacts[].fonction` devient une cible de `filters` et de `group_by`, avec
-la grammaire du barreau 1 inchangée :
+Le chemin `contacts[].fonction` est une cible de `filters`, de `group_by` et des
+métriques, avec la grammaire du barreau 1 inchangée :
 
 ```jsonc
 filters: [{"field": "contacts[].fonction", "op": "in", "value": ["DRH", "DAF"]}]
 group_by: "contacts[].fonction"
+metrics: [{"op": "count"}, {"op": "count_rows"},
+          {"op": "avg", "field": "contacts[].anciennete"}]
 ```
 
-`match` garde son sens (`any` = un item suffit ; `all` = tous les items). SQL :
-`jsonb_path_exists` pour l'existence, `jsonb_array_elements` pour le dégroupement —
-**le même patron `LATERAL` que l'union multi-colonnes du barreau 1**, dont la sortie
-distingue déjà occurrences (`count`) et fiches (`count_rows`). Mesurer avant tout
-index : une liste de 4 items sur 9 000 lignes ne justifie sans doute rien.
+- **Filtre = existence** : « il existe un contact dont… ». `match` ne descend jamais
+  dans les items, il joint les CIBLES déclarées (`fields`), comme au premier niveau.
+  Le filtre choisit des LIGNES : une fiche retenue apporte tous ses contacts à
+  l'agrégat.
+- **`group_by` = occurrences** (livré le 30/09/2026) : chaque item de chaque ligne
+  retenue compte une fois. Même vocabulaire que l'union multi-colonnes : `count`
+  compte les contacts, `count_rows` les fiches. Un item sans l'attribut tombe dans le
+  groupe `null`, comme une ligne sans valeur sous un `group_by` ordinaire ; une liste
+  vide, absente ou pas encore convertie n'apporte rien. La couche d'un attribut se
+  regroupe pareil (`contacts[].email.origine` : « combien d'adresses viennent de
+  telle source »).
+- **Métriques** (`count`, `sum`, `avg`, `min`, `max` sur `contacts[].<attribut>`) :
+  sur tous les items. Groupé par la même liste, l'attribut se lit sur l'item courant ;
+  sinon chaque ligne réduit ses items avant l'agrégat, et `avg` pèse chaque ITEM (somme
+  des sommes sur somme des comptes), jamais une moyenne de moyennes par fiche.
+- **Refusés en le nommant** : le tri, la mise en commun d'un `contacts[].x` avec
+  d'autres colonnes (`group_by` en liste), et une métrique sur une AUTRE liste que
+  celle que `group_by` déroule (le grain serait ambigu).
+
+SQL : `jsonb_array_elements` sous garde de type (`list_items_sql`, `db/paths.py`) —
+dans un `EXISTS` pour le filtre, dans un `LATERAL` pour le `group_by`, au même endroit
+que l'union multi-colonnes. Mesurer avant tout index : une liste de 4 items sur 9 000
+lignes ne justifie sans doute rien.
 
 ### 5.2 Adressage d'un rang à l'écriture
 

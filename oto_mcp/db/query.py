@@ -24,6 +24,7 @@ from .paths import (
     ROW_VALUES_TEXT_SQL,
     field_read_sql,
     leaf_read_sql,
+    list_items_sql,
     split_layer,
     split_list_path,
 )
@@ -336,13 +337,8 @@ def _ds_one_field_clause(field: str, op: str, val) -> tuple[Optional[str], list]
         # toujours un fragment depuis que le `in` vide LÈVE au lieu de disparaître.
         # Garder la branche laisserait croire qu'une clause peut encore s'évaporer.
         clause, cparams = _ds_leaf_predicate(V, fp, op, val, field)
-        # La garde de type est OBLIGATOIRE : `jsonb_array_elements` LÈVE sur une
-        # valeur qui n'est pas un tableau, et pendant une conversion une partie
-        # des lignes ne l'est pas encore — l'état NORMAL, pas un cas limite.
-        return (f"EXISTS (SELECT 1 FROM jsonb_array_elements("
-                f"CASE WHEN jsonb_typeof(data->%s) = 'array' THEN data->%s "
-                f"ELSE '[]'::jsonb END) AS _i(v) WHERE {clause})",
-                [colonne, colonne] + cparams)
+        items, iparams = list_items_sql(colonne, "_i")
+        return f"EXISTS (SELECT 1 FROM {items} WHERE {clause})", iparams + cparams
     V, fp = field_read_sql(field)
     return _ds_leaf_predicate(V, fp, op, val, field)
 
@@ -670,6 +666,45 @@ def group_key(group_by) -> Optional[str]:
     return group_by
 
 
+def _items_path(field) -> Optional[tuple]:
+    """`(colonne, attribut)` quand `field` vise TOUS les items d'une colonne-liste
+    (`contacts[].fonction`), sinon None — un rang nommé reste une valeur par ligne."""
+    chemin = split_list_path(field) if isinstance(field, str) else None
+    if chemin is None or chemin[1] is not None:
+        return None
+    return chemin[0], chemin[2]
+
+
+def _metric_across_items(op: str, colonne: str, attribut: str,
+                         fsql: str, fparams: list) -> tuple[str, list]:
+    """Une métrique sur `contacts[].attr` quand la requête n'est PAS déroulée sur
+    cette liste (agrégat global, ou groupé par une colonne de la ligne) — oto#22.
+
+    Chaque ligne réduit ses éléments dans une sous-requête, puis l'agrégat externe
+    réduit les lignes : la somme, le minimum et le maximum se composent ainsi, et la
+    moyenne se recompose en somme des sommes sur somme des comptes — une moyenne de
+    moyennes par ligne pèserait une fiche à un contact autant qu'une fiche à quatre.
+    Dérouler la liste dans le FROM aurait multiplié les lignes pour TOUTES les autres
+    métriques de l'appel : un `count` voisin se serait mis à compter des items."""
+    items, iparams = list_items_sql(colonne, "_m")
+    V, vp = leaf_read_sql("_m.v", [], attribut)
+    num, nump = f"CASE WHEN {V} ~ %s THEN ({V})::numeric END", vp + [_NUMERIC_RE] + vp
+
+    def par_ligne(agg: str, expr: str, eparams: list) -> tuple[str, list]:
+        return f"(SELECT {agg}({expr}) FROM {items})", eparams + iparams
+
+    if op == "count":
+        sub, sp = par_ligne("COUNT", V, vp)
+        return f"COALESCE(SUM({sub}){fsql}, 0)", sp + fparams
+    if op == "avg":
+        somme, sp = par_ligne("SUM", num, nump)
+        compte, cp = par_ligne("COUNT", num, nump)
+        return (f"(SUM({somme}){fsql} / NULLIF(SUM({compte}){fsql}, 0))",
+                sp + fparams + cp + fparams)
+    sub, sp = par_ligne(op.upper(), num, nump)
+    return f"{op.upper()}({sub}){fsql}", sp + fparams
+
+
 def _build_aggregate(ns_id: int, group_by, metrics: Optional[list],
                      q: Optional[str], filters: Optional[list],
                      limit: int) -> tuple[str, list, list]:
@@ -684,11 +719,19 @@ def _build_aggregate(ns_id: int, group_by, metrics: Optional[list],
     `group_by` accepte une LISTE de colonnes (oto#22) : leurs valeurs sont alors mises
     en commun, une ligne contribuant une occurrence par colonne renseignée — la
     « répartition tous rangs confondus ». Le dégroupement passe par un `LATERAL
-    (VALUES …)`, dont les paramètres s'insèrent entre ceux du SELECT et ceux du WHERE."""
+    (VALUES …)`, dont les paramètres s'insèrent entre ceux du SELECT et ceux du WHERE.
+
+    `group_by: "contacts[].fonction"` (oto#22) déroule la colonne-liste : chaque ITEM
+    de chaque ligne retenue est une occurrence, par un `LATERAL jsonb_array_elements`
+    placé au même endroit. Même vocabulaire que l'union : `count` compte les
+    occurrences (les contacts), `count_rows` les lignes (les fiches). Une métrique sur
+    un attribut de la MÊME liste se lit sur l'item courant ; sur une autre liste, le
+    grain serait ambigu, et c'est refusé en le nommant."""
     metrics = metrics or [{"op": "count"}]
     pooled = _group_fields(group_by)
     select, sparams, names = [], [], []  # noms lisibles alignés sur les alias mN
     lateral, lparams = "", []
+    deroule = None  # la colonne-liste dont chaque item est une occurrence
     if pooled:
         vals = []
         for k in pooled:
@@ -698,7 +741,14 @@ def _build_aggregate(ns_id: int, group_by, metrics: Optional[list],
         lateral = " , LATERAL (VALUES " + ", ".join(vals) + ") AS _u(v)"
         select.append("_u.v AS grp")
     elif group_by:
-        _v, _vp = field_read_sql(group_by)
+        chemin = _items_path(group_by)
+        if chemin:
+            deroule = chemin[0]
+            items, lparams = list_items_sql(deroule, "_el")
+            lateral = f" , LATERAL {items}"
+            _v, _vp = leaf_read_sql("_el.v", [], chemin[1])
+        else:
+            _v, _vp = field_read_sql(group_by)
         select.append(f"{_v} AS grp")
         sparams.extend(_vp)
     pris: set = set()
@@ -719,19 +769,34 @@ def _build_aggregate(ns_id: int, group_by, metrics: Optional[list],
             select.append(f"COUNT(DISTINCT row_id){fsql} AS {alias}")
             sparams.extend(fparams)
             names.append((alias, _metric_label(m, "count_rows", pris)))
-        elif op == "count":
-            _v, _vp = field_read_sql(field)
-            select.append(f"COUNT({_v}){fsql} AS {alias}")
-            sparams.extend(_vp + fparams)
-            names.append((alias, _metric_label(m, f"count_{field}", pris)))
-        elif op in ("sum", "avg", "min", "max"):
+        elif op in ("count", "sum", "avg", "min", "max"):
             if not field:
                 raise ValueError(f"agrégat: op '{op}' exige un `field`")
-            _v, _vp = field_read_sql(field)
-            select.append(
-                f"{op.upper()}(CASE WHEN {_v} ~ %s "
-                f"THEN ({_v})::numeric END){fsql} AS {alias}")
-            sparams.extend(_vp + [_NUMERIC_RE] + _vp + fparams)
+            chemin = _items_path(field)
+            if chemin and chemin[0] != deroule:
+                if deroule is not None:
+                    raise ValueError(
+                        f"agrégat : `{field}` parcourt `{chemin[0]}` alors que "
+                        f"`group_by` déroule `{deroule}` — une occurrence est un item "
+                        f"de `{deroule}`, et les items d'une autre liste n'ont pas de "
+                        f"rang commun avec lui. Mesure un attribut de `{deroule}[]`, "
+                        f"ou fais un appel par liste.")
+                expr, eparams = _metric_across_items(op, chemin[0], chemin[1],
+                                                     fsql, fparams)
+                select.append(f"{expr} AS {alias}")
+                sparams.extend(eparams)
+            else:
+                # Sur la liste déroulée, l'attribut se lit sur l'item COURANT.
+                _v, _vp = (leaf_read_sql("_el.v", [], chemin[1]) if chemin
+                           else field_read_sql(field))
+                if op == "count":
+                    select.append(f"COUNT({_v}){fsql} AS {alias}")
+                    sparams.extend(_vp + fparams)
+                else:
+                    select.append(
+                        f"{op.upper()}(CASE WHEN {_v} ~ %s "
+                        f"THEN ({_v})::numeric END){fsql} AS {alias}")
+                    sparams.extend(_vp + [_NUMERIC_RE] + _vp + fparams)
             names.append((alias, _metric_label(m, f"{op}_{field}", pris)))
         else:
             raise ValueError(
