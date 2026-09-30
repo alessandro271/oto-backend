@@ -94,11 +94,15 @@ _LECTEURS_ADMIS = {
 
 # Dans le coffre, les SEULES fonctions admises à nommer une instance. Ce sont les
 # primitives d'ÉCRITURE, et elles seules : l'entonnoir (`_upsert`/`_delete`), les deux
-# purges en masse qui l'empruntent désormais, et le renommage — le seul geste qui
-# DÉPLACE une ligne de coffre, donc le seul qui doive faire suivre l'instance.
+# purges en masse qui l'empruntent désormais, et les deux gestes qui DÉPLACENT une
+# ligne de coffre, donc les seuls qui doivent faire suivre l'instance : le renommage
+# de compte, et le rechiffrement des clés personnelles à la fusion de deux comptes
+# (#439, `rekey_personal_credentials`). Ce dernier lit aussi `connector_instances`,
+# mais pour une seule raison d'ÉCRITURE : ne pas déplacer une clé sur une place déjà
+# occupée chez le compte canonique. Il ne désigne ni ne résout aucune clé par instance.
 _ECRIVAINS_DU_COFFRE = {
     "_upsert", "_delete", "clear_entity_credentials", "clear_connector_credentials",
-    "rename_account",
+    "rename_account", "rekey_personal_credentials",
 }
 
 # La table, et les symboles du module — chercher le CONCEPT, pas seulement le nom de
