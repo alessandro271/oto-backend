@@ -1097,3 +1097,16 @@ un fil qui tient un verrou que la boucle attend donne **une ligne qui nomme les 
 fils** sous le même `gel=`, sans le chien ni une variable locale ; un fil qui tient le GIL
 dans `re` est nommé quel que soit le gagnant de la course ; la branche « la boucle a repris
 la première » rejouée sans course.
+
+
+### Sentry : le routage refait à chaque requête — essayé, retiré (01/10/2026)
+
+L'intégration Starlette de sentry-sdk refait la correspondance de route à chaque requête
+REST, dans la boucle (~140 µs en médiane sur ~800 routes, relevé py-spy du 30/09).
+`transaction_style="endpoint"` l'évite jusqu'à sentry-sdk 2.68 ; **à partir de 2.69,
+l'intégration rebalaie la table quel que soit le style** (pour poser `http.route`), et la
+dépendance n'est pas plafonnée (décision du 01/10 : pas de plafond). Le réglage a donc été
+retiré. Pour s'en débarrasser un jour : retirer l'intégration Starlette et ne poser que
+`SentryAsgiMiddleware` (perte : capture des `HTTPException` 5xx gérées, infos de requête).
+Le rendu JSON de `api/base._json` reste dans la boucle : le sortir au thread ne rend pas la
+main à la boucle (`json.dumps` en C garde le GIL ; ~10 ms par Mo mesurés).

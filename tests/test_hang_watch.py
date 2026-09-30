@@ -492,11 +492,14 @@ _REGEX_QUI_TIENT_LE_GIL = re.compile(r"(a+)+$")
 
 def _tient_le_gil_en_c(fini: threading.Event, relache: threading.Event) -> None:
     """Retour arrière exponentiel dans le moteur `re`, en C, sans jamais rendre le
-    GIL (~1,8 s sur un poste de dev, n=25 ; chaque +1 double). Puis une attente, pour
-    que le fil soit encore dans sa fonction quand le chien le relève."""
+    GIL (~1,8 s sur un poste de dev, n=25 ; chaque +1 double). Puis le fil reste DANS
+    sa fonction, par des `time.sleep` (du C : pas de cadre à lui) : un `Event.wait` le
+    ferait classer « au repos », sans ses cadres, dès qu'il y entre avant le relevé."""
     _REGEX_QUI_TIENT_LE_GIL.match("a" * 25 + "b")
     fini.set()
-    relache.wait(5.0)
+    fin = time.monotonic() + 5.0
+    while not relache.is_set() and time.monotonic() < fin:
+        time.sleep(0.01)
 
 
 @pytest.mark.asyncio
