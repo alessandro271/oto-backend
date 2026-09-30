@@ -425,12 +425,11 @@ def test_l_invariant_voit_aussi_l_instance_orpheline(live):
 
 
 def test_une_bascule_de_compte_ne_detache_pas_l_instance_de_sa_ligne(live):
-    """Migrer un compte vers un autre annuaire ne repointe JAMAIS la ligne du coffre
-    (l'identité entre dans le sceau du chiffrement : la repointer rendrait le secret
-    illisible ; l'utilisateur repose ses clés). L'instance ne bouge donc pas non plus
-    — la repointer seule la détacherait de sa ligne, et l'invariant s'en plaindrait
-    des DEUX côtés à la fois. Le garde-fou d'inventaire disait « à archiver par le lot
-    suivant » : ce lot le corrige, il n'y a rien à archiver."""
+    """Migrer un compte ne repointe JAMAIS la ligne du coffre par un UPDATE nu
+    (l'identité entre dans le sceau du chiffrement). Depuis #439 la clé personnelle
+    SUIT pourtant la personne : rechiffrée en place sous la nouvelle entité — et son
+    instance la suit AVEC SON ID. L'invariant tient des deux côtés : aucune orpheline,
+    aucune ligne sans instance, et la clé s'ouvre sous son nouveau nom."""
     from oto_mcp import credentials_store as cs
     from oto_mcp.db import users
 
@@ -438,9 +437,14 @@ def test_une_bascule_de_compte_ne_detache_pas_l_instance_de_sa_ligne(live):
     for s in (SUB, "usr_neuf"):
         _exec("INSERT INTO users (sub) VALUES (%s) ON CONFLICT DO NOTHING", (s,))
     cs.set_credential("member", MEMBER, "hunter", "k", set_by=SUB)
+    avant = _instances(vivantes=True)
 
     users.migrate_sub(SUB, "usr_neuf")
-    assert _quad(_instances(vivantes=True)) == [("member", MEMBER, "hunter", "")]
+    nouveau = cs.member_id(ORG, "usr_neuf")
+    apres = _instances(vivantes=True)
+    assert _quad(apres) == [("member", nouveau, "hunter", "")]
+    assert [i["id"] for i in apres] == [i["id"] for i in avant], "l'instance a changé d'id"
+    assert cs.get_credential("member", nouveau, "hunter") == "k"
     assert not _ecarts()
 
 

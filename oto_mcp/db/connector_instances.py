@@ -285,6 +285,32 @@ def move_instance_to_account(conn, owner_type: str, owner_id: str, connector: st
     return (True, None, depart)
 
 
+
+def move_instance_to_owner(conn, owner_type: str, old_owner_id: str,
+                           new_owner_id: str, connector: str,
+                           account: str = "") -> "int | None":
+    """Fait SUIVRE l'instance vivante d'une ligne de coffre qui change de
+    PROPRIÉTAIRE — **son id ne change pas** (oto-backend#439).
+
+    Pendant de `move_instance_to_account` pour l'autre segment du quadruplet : une
+    fusion de comptes rechiffre les clés personnelles de l'ancien identifiant sous le
+    nouveau (`credentials_store.rekey_personal_credentials`). Ne pas la déplacer
+    laisserait l'instance désigner une ligne partie — une orpheline — et casserait
+    tout binding, arête ou consommation qui la nomme par `inst:{id}`.
+
+    L'appelant a vérifié que l'arrivée est LIBRE (ni ligne de coffre, ni instance
+    vivante) : l'index unique partiel lèverait sinon, et c'est le bon comportement —
+    un écart pareil ne se répare pas au fond d'une fusion. Rend l'id déplacé, ou
+    `None` si la ligne n'avait pas d'instance (le crochet de pose n'est pas appelé
+    ici : une ligne sans instance le reste, le backfill de boot la nommera)."""
+    row = conn.execute(
+        "UPDATE connector_instances SET owner_id = %s "
+        "WHERE owner_type = %s AND owner_id = %s AND connector = %s AND account = %s "
+        "AND revoked_at IS NULL RETURNING id",
+        (str(new_owner_id), owner_type, str(old_owner_id), connector,
+         account or "")).fetchone()
+    return row["id"] if row else None
+
 # ── La maintenance : l'ORPHELINE ──────────────────────────────────────────────
 #
 # Une instance vivante SANS ligne de coffre est un objet qui désigne une clé qui

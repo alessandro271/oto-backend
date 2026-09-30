@@ -92,9 +92,11 @@ def test_migrate_sub_sub_bearing_columns_are_triaged():
     """
     from oto_mcp.db.users import _MEMBERSHIP_TABLES, _PK_SUB_TABLES
 
-    NAMES = ("sub|old_sub|new_sub|effective_sub|owner_sub|grantee_sub|accepted_sub|"
-             "personal_of|requested_by|resolved_by|granted_by|created_by|set_by|"
-             "invited_by|published_by|suspended_by|principal_id|entity_id|grantee_id|owner_id")
+    # La FORME, pas une liste de noms (#439) : la liste d'avant (`created_by`,
+    # `set_by`…) laissait passer `updated_by`, `edited_by`, `disabled_by`,
+    # `view_as_sub`, `acteur_sub` — neuf colonnes abandonnées par chaque fusion sans
+    # qu'aucune garde ne rougisse. Toute colonne `*sub` ou `*_by` est désormais vue.
+    NAMES = (r"\w*sub|\w+_by|personal_of|principal_id|entity_id|grantee_id|owner_id")
     porteurs: set[tuple[str, str]] = set()
     for m in re.finditer(r"CREATE TABLE IF NOT EXISTS (\w+)\s*\((.*?)\n\);",
                          _SCHEMA, re.S):
@@ -124,12 +126,17 @@ def test_migrate_sub_sub_bearing_columns_are_triaged():
         # et la table disparaît avec le préavis. C'est le seul endroit où cet argument
         # vaut : ailleurs, une ligne abandonnée est une donnée perdue.
         ("origine_ecritures", "sub"),
-        # L'ENTITÉ du coffre entre dans l'AAD : une ligne repointée sans rechiffrement
-        # est indéchiffrable — pire qu'absente (0052 §Migrer : l'utilisateur repose
-        # ses clés, jamais d'UPDATE ici).
+        # L'ENTITÉ du coffre entre dans l'AAD : jamais d'UPDATE nu (la ligne serait
+        # indéchiffrable). Elle SUIT pourtant la personne depuis #439 — rechiffrée,
+        # pas repointée : `credentials_store.rekey_personal_credentials`, appelé par
+        # `repointer_patrimoine` (étape 3 ter), garde `tests/test_migrate_sub_vault.py`.
         ("connector_credentials", "entity_id"),
         # L'instance (lot L6) SUIT la ligne de coffre : son `owner_id` EST
         # l'`entity_id` juste au-dessus, et le lien entre les deux est ce quadruplet.
+        # ⚠️ Depuis #439, elle suit le RECHIFFREMENT d'une clé personnelle, avec son
+        # id (`connector_instances.move_instance_to_owner`) — jamais un UPDATE nu
+        # d'inventaire, qui la détacherait de sa ligne. L'historique ci-dessous
+        # décrit l'état d'avant, où la ligne de coffre restait en place.
         # Repointer l'instance seule la DÉTACHERAIT de sa ligne de coffre — un objet
         # qui désigne une clé qui n'existe pas, strictement pire que rien. Elle ne
         # peut donc pas être repointée tant que la ligne du coffre ne l'est pas, et
@@ -164,6 +171,18 @@ def test_migrate_sub_sub_bearing_columns_are_triaged():
         ("user_account_profile", "sub"),
         # Le sujet même du merge (étapes 1 et 4).
         ("users", "sub"),
+        # Identités de MACHINE, pas de personne : le worker du runner s'authentifie
+        # par un secret de machine déclaré en base (jamais un compte `users`), et
+        # l'ordonnanceur d'une flotte DÉCLARE son identifiant à la prise. Une fusion
+        # de comptes de personne n'a rien à y repointer.
+        ("runner_jobs", "claimed_by"), ("runner_fleets", "taken_by"),
+        ("runner_workers", "worker_sub"), ("runner_platform_workers", "worker_sub"),
+        ("runner_platform_depots", "worker_sub"),
+        # Le BAIL d'une ligne de file de travail (`data_claim_next`) : un verrou
+        # éphémère, borné par `claimed_until`, qui expire seul. Le repointer
+        # prolongerait sous un autre nom un bail que son run a pris sous l'ancien —
+        # et `claimed_run`, qui le justifie, ne suit pas.
+        ("datastore_rows", "claimed_by"), ("nodes", "claimed_by"),
     }
     couvertes = (set(_SUB_COLUMNS)
                  | {(t, c) for t, c, _ in _PK_SUB_TABLES}

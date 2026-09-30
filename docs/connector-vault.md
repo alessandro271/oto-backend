@@ -401,9 +401,12 @@ déjà l'arrivée (un écart), l'arrivée gagne, le départ s'archive, et l'obje
 lequel au profit duquel.
 
 **Une bascule de compte ne détache pas l'instance de sa ligne.** Migrer un sub vers
-l'annuaire d'un tenant ne repointe **jamais** `connector_credentials.entity_id` (l'AAD :
-la ligne deviendrait indéchiffrable ; l'utilisateur repose ses clés). La ligne reste donc
-en place, vivante — et son instance aussi. Repointer l'instance seule la **détacherait**
+l'annuaire d'un tenant ne repointe **jamais** `connector_credentials.entity_id` par un
+`UPDATE` nu (l'AAD : la ligne deviendrait indéchiffrable). Depuis #439, la clé
+personnelle (`user`, `member`) est **rechiffrée en place** sous la nouvelle entité
+(`rekey_personal_credentials`) et son instance la suit avec son id
+(`connector_instances.move_instance_to_owner`) ; une collision ou une ligne illisible
+reste en place, et son instance aussi. Repointer l'instance seule la **détacherait**
 de sa ligne : un objet qui désigne une clé qui n'existe pas, strictement pire que rien.
 Le garde-fou d'inventaire (`tests/test_migrate_sub_inventory.py`) portait la consigne
 inverse jusqu'au 28/08 ; elle est corrigée sur place.

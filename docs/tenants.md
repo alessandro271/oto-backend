@@ -171,12 +171,21 @@ naissait avec notre tenant (ADR 0070 §7.2). Elle se **déclare** désormais, sa
 > interdiction totale à une **allowlist** de deux fichiers (`test_tenant_l1_migration.py`) — un chemin de
 > **résolution** qui dépendrait du rattachement d'org le casse toujours, et c'est voulu.
 >
-> ⚠️ **OPS — une bascule de tenant ABANDONNE les clés personnelles.** L'AAD dérive de
-> l'entité : `migrate_sub` ne repointe plus `connector_credentials.entity_id` (une ligne
-> repointée sans rechiffrement est indéchiffrable — pire qu'absente, la fiche la dit posée).
-> Toute fenêtre doit donc s'accompagner de la LISTE « qui repose quelles clés », prévenue
-> avant. ⚠️ Le scope `member` a `entity_id = "<org_id>:<sub>"` : une requête qui cherche le
-> sub nu ne les voit PAS (elles sont pourtant la majorité).
+> ✅ **Une fusion de comptes RECHIFFRE les clés personnelles** (oto-backend#439). L'AAD
+> dérive de l'entité : un `UPDATE entity_id` nu rendrait la ligne indéchiffrable, et c'est
+> pourquoi `migrate_sub` les ABANDONNAIT sous l'ancien identifiant — invisibles pour leur
+> propriétaire, qui ne savait pas devoir les reposer (13 clés membre sur 43 après la
+> bascule du 13/08). `credentials_store.rekey_personal_credentials` (étape 3 ter de
+> `repointer_patrimoine`) les déchiffre sous l'ancienne entité et les rechiffre EN PLACE
+> sous la nouvelle ; l'instance suit avec son id. Une collision (le compte canonique a
+> déjà la même clé : la sienne gagne) ou une ligne illisible reste en place, journalisée
+> et comptée. ⚠️ Le scope `member` a `entity_id = "<org_id>:<sub>"` : une requête qui
+> cherche le sub nu ne les voit PAS (elles sont pourtant la majorité), et un filtre par
+> suffixe prendrait celles d'un sub qualifié qui se termine pareil.
+> **Les résidus d'une fusion passée** (clés abandonnées avant #439, journal REST
+> attribué au sub revendiqué avant que l'authentification ne publie le porteur résolu)
+> se reprennent par `scripts/repointer_residus_alias.py` — le même `repointer_patrimoine`,
+> à blanc par défaut ; un ancien identifiant RECRÉÉ depuis est écarté et nommé.
 >
 > ⚠️ **Une fusion de comptes emporte la MARQUE d'espace personnel — depuis le 14/08
 > seulement.** `orgs.personal_of` échappait aux deux garde-fous (pas une FK ⟹ invisible à
@@ -206,8 +215,12 @@ naissait avec notre tenant (ADR 0070 §7.2). Elle se **déclare** désormais, sa
 > méthode est fermé par le **tripwire inverse** `test_migrate_sub_sub_bearing_columns_are_
 > triaged` : toute colonne du DDL de la famille « porte un sub » doit être repointée,
 > pré-traitée ou allowlistée AVEC sa raison — une colonne neuve arrive rouge. Restent
-> hors repointage, par construction : `connector_credentials.entity_id` (AAD) et la
-> mécanique du merge lui-même (`sub_aliases`, `users.sub`, `orgs.personal_of`).
+> hors repointage NU : `connector_credentials.entity_id` (AAD — rechiffré, cf. plus haut)
+> et la mécanique du merge lui-même (`sub_aliases`, `users.sub`, `orgs.personal_of`).
+> ⚠️ Le tripwire reconnaissait une LISTE de noms, et laissait passer `updated_by`,
+> `edited_by`, `disabled_by`, `view_as_sub`, `acteur_sub` : neuf colonnes abandonnées
+> jusqu'au 29/09 (#439). Il lit désormais la FORME (`*sub`, `*_by`) ; les identités de
+> machine (worker, ordonnanceur) et les baux éphémères sont allowlistés avec leur raison.
 >
 > ⚠️ **Une TROISIÈME famille depuis le 2026-09-02 : `_UNIQUE_INDEX_SUB_TABLES`** (étape
 > 2 quinquies). Elle existe parce que les deux premières répondent à des questions

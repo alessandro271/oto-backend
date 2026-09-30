@@ -1333,6 +1333,87 @@ def list_member_orgs_for(sub: str, connector: str) -> list[int]:
     return out
 
 
+
+def rekey_personal_credentials(conn, old_sub: str, new_sub: str) -> dict:
+    """Les clés PERSONNELLES d'un compte fusionné suivent la personne (#439).
+
+    Clé personnelle = entité `user` (`entity_id` = sub) ou `member` (`org:sub`). Ce
+    sont les deux seules dont l'entité porte un sub, donc les deux seules qu'une
+    fusion de comptes (`db.migrate_sub`) laissait derrière elle : l'AAD dérive de
+    l'entité, et un `UPDATE entity_id` nu fabriquerait une ligne indéchiffrable. Elles
+    restaient donc keyées sur l'ancien identifiant — **invisibles** pour leur
+    propriétaire, puisque la résolution les cherche sous le sub canonique.
+
+    Même geste que `backfill_member_scope` et `rename_account` : déchiffrer avec
+    l'AAD de l'ancienne entité, rechiffrer avec celle de la nouvelle. Mais **en
+    place** (un `UPDATE` de `entity_id` + `secret_enc`) plutôt que par pose + retrait :
+    la ligne garde tout le reste — partages, version, date de pose, auteur — et son
+    instance la suit avec son id (`move_instance_to_owner`).
+
+    Dans la transaction de l'appelant (`conn`), lignes verrouillées. Deux cas laissent
+    la ligne EN PLACE, journalisés et comptés, jamais avalés :
+    - `collision` — le compte canonique porte déjà une clé sur ce même
+      (connecteur, compte), ou une instance vivante l'occupe : la sienne gagne (c'est
+      celle qu'il sert aujourd'hui) ; l'ancienne n'est ni écrasée ni supprimée ;
+    - `illisible` — la ligne ne se déchiffre pas (clé maîtresse périmée) : la
+      rechiffrer est impossible, la déplacer la rendrait pire.
+
+    Idempotent : rejoué, il ne trouve plus rien sous l'ancien sub (hors cas laissés).
+    Ne journalise jamais un secret — des connecteurs, des comptes et des entités."""
+    bilan = {"rekeyed": 0, "collisions": 0, "illisibles": 0}
+    if not old_sub or not new_sub or old_sub == new_sub:
+        return bilan
+    rows = conn.execute(
+        "SELECT entity_type, entity_id, connector, account, secret_enc "
+        "FROM connector_credentials "
+        "WHERE (entity_type = %s AND entity_id = %s) "
+        "   OR (entity_type = %s AND entity_id ~ '^[0-9]+:' "
+        "       AND substr(entity_id, strpos(entity_id, ':') + 1) = %s) "
+        "ORDER BY entity_type, entity_id, connector, account FOR UPDATE",
+        (USER, old_sub, MEMBER, old_sub)).fetchall()
+    for r in rows:
+        etype, ancien = r["entity_type"], r["entity_id"]
+        connector, account = r["connector"], r["account"]
+        nouveau = (new_sub if etype == USER
+                   else member_id(int(ancien.split(":", 1)[0]), new_sub))
+        occupe = conn.execute(
+            "SELECT 1 FROM connector_credentials WHERE entity_type = %s "
+            "AND entity_id = %s AND connector = %s AND account = %s "
+            "UNION ALL SELECT 1 FROM connector_instances WHERE owner_type = %s "
+            "AND owner_id = %s AND connector = %s AND account = %s "
+            "AND revoked_at IS NULL LIMIT 1",
+            (etype, nouveau, connector, account,
+             etype, nouveau, connector, account)).fetchone()
+        if occupe:
+            logger.warning(
+                "rekey clés personnelles : %s %s/%s (compte %r) LAISSÉE sous %s — le "
+                "compte canonique porte déjà cette clé (%s), elle est gardée",
+                etype, connector, ancien, account, old_sub, nouveau)
+            bilan["collisions"] += 1
+            continue
+        try:
+            secret = crypto.decrypt(r["secret_enc"],
+                                    _aad(etype, ancien, connector, account))
+        except Exception:
+            logger.warning(
+                "rekey clés personnelles : %s %s/%s (compte %r) indéchiffrable — "
+                "LAISSÉE sous %s, rien n'est rechiffré", etype, connector, ancien,
+                account, old_sub, exc_info=True)
+            bilan["illisibles"] += 1
+            continue
+        conn.execute(
+            "UPDATE connector_credentials SET entity_id = %s, secret_enc = %s "
+            "WHERE entity_type = %s AND entity_id = %s AND connector = %s "
+            "AND account = %s",
+            (nouveau, crypto.encrypt(secret, _aad(etype, nouveau, connector, account)),
+             etype, ancien, connector, account))
+        connector_instances.move_instance_to_owner(conn, etype, ancien, nouveau,
+                                                   connector, account)
+        bilan["rekeyed"] += 1
+    if rows:
+        logger.info("rekey clés personnelles %s → %s : %s", old_sub, new_sub, bilan)
+    return bilan
+
 def backfill_member_scope() -> dict:
     """One-shot idempotent (boot, ADR 0033) : chaque credential per-user hors famille
     oauth passe du scope `('user', sub)` au scope `('member', '{home_org}:{sub}')`.

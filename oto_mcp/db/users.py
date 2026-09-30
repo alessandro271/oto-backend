@@ -506,6 +506,25 @@ _SUB_COLUMNS = [
     # désignant un identifiant disparu, donc la signature ne deviendrait pas
     # historique, elle deviendrait illisible. L'étape 3 tourne AVANT ce DELETE.
     ("users", "suspended_by"),
+    # Dossier du 29/09 (#439) — neuf colonnes à sub que la garde d'inventaire ne VOYAIT
+    # pas : sa famille de noms (`created_by`, `set_by`…) ignorait `updated_by`,
+    # `edited_by`, `disabled_by` et tout `*_sub` qui n'était pas dans sa liste. Elle
+    # attrape désormais toute la forme (`*sub`, `*_by`), et chacune est triée ici :
+    # - attribution (soft) — qui a édité un document, une révision, les instructions
+    #   de plateforme, qui a masqué un outil pour son org ou son équipe. Hors PK
+    #   (PK `(org_id|group_id, tool_name)` pour les masquages), sans FK ni unicité :
+    #   UPDATE nu. Laissées, elles désignaient un compte disparu (« inconnu ») ;
+    ("docs", "updated_by"), ("doc_revisions", "edited_by"),
+    ("platform_instructions", "updated_by"),
+    ("org_disabled_tools", "disabled_by"), ("group_disabled_tools", "disabled_by"),
+    # - le journal : la CIBLE d'un « voir en tant que » est une personne, et la
+    #   lentille de son compte la cherche sous son sub canonique ;
+    ("tool_calls", "view_as_sub"),
+    # - les relevés d'alerte (clé disparue, portée élargie) : l'acteur et le
+    #   propriétaire lésé sont des personnes, et « que s'est-il passé pour CETTE
+    #   personne » se lit par son sub (`idx_portee_proprietaire`).
+    ("credential_disparitions", "acteur_sub"),
+    ("portee_elargissements", "acteur_sub"), ("portee_elargissements", "proprietaire_sub"),
 ]
 
 
@@ -525,6 +544,151 @@ def _stronger_role(a: Optional[str], b: Optional[str]) -> str:
     """Le plus haut des deux rôles (une fusion n'enlève pas un privilège)."""
     ra, rb = _ROLE_RANK.get(a or "member", 0), _ROLE_RANK.get(b or "member", 0)
     return (a if ra >= rb else b) or "member"
+
+
+def repointer_patrimoine(conn, old_sub: str, new_sub: str) -> dict:
+    """Repointe TOUT ce qui porte `old_sub` vers `new_sub` — étapes 2 à 3 ter de
+    `migrate_sub`, dans la transaction de l'appelant. Rend le bilan du coffre.
+
+    Sortie de `migrate_sub` pour avoir DEUX appelants et une seule écriture
+    (oto-backend#439) : la fusion elle-même, et la reprise des RÉSIDUS d'une fusion
+    passée (`scripts/repointer_residus_alias.py`) — des lignes écrites sous l'ancien
+    identifiant APRÈS la bascule (journal REST attribué au sub revendiqué, avant que
+    l'authentification ne publie le porteur résolu) ou abandonnées par elle (clés
+    personnelles, que la fusion ne rechiffrait pas). Rejouer ce repointage sur un
+    ancien identifiant sans ligne `users` est sans effet sur ce qui a déjà suivi :
+    chaque étape ne touche que les lignes qui le portent encore. Ne touche ni
+    `users` (rôle, suppression) ni `sub_aliases` : c'est le métier de la fusion."""
+    # 2. user_account_profile (PK sub) : retirer le frais du new PUIS repointer
+    #    l'ancien (garde l'historique). DELETE d'abord → pas de conflit PK.
+    #    (La NOTE de l'user suit désormais par `("nodes", "owner_id")` dans
+    #    `_SUB_COLUMNS` — elle a quitté `user_agent_readme` avec l'ADR 0042, puis
+    #    la table `guides` avec le lot M1.)
+    #    ⚠️ SEULEMENT si l'ancien en porte un : sans lui, le DELETE effaçait le
+    #    profil du canonique pour rien — sans conséquence tant que le canonique était
+    #    un stub frais, destructeur dès qu'on rejoue ce repointage sur des RÉSIDUS
+    #    (`scripts/repointer_residus_alias.py`, #439), où le canonique est établi.
+    if conn.execute("SELECT 1 FROM user_account_profile WHERE sub=%s",
+                    (old_sub,)).fetchone():
+        conn.execute("DELETE FROM user_account_profile WHERE sub=%s", (new_sub,))
+        conn.execute("UPDATE user_account_profile SET sub=%s WHERE sub=%s",
+                     (new_sub, old_sub))
+    # 2 bis. APPARTENANCES (org_members / org_group_members) : elles ne se repointent
+    #    pas en bloc, à cause de DEUX invariants que l'`UPDATE … SET sub=` de l'étape 3
+    #    violerait. Vécu prod 2026-07-28 (un user à 2 comptes) : merge en échec
+    #    à CHAQUE requête de l'user, donc jamais fusionné + un round-trip Logto et un
+    #    traceback par appel.
+    #    (a) PK (org_id, sub) : si les deux comptes sont dans la MÊME org, repointer
+    #        crée un doublon → on garde la ligne du compte canonique (le new, dont le
+    #        rôle vient d'être fusionné au plus fort) et on jette celle de l'ancien.
+    #    (b) index partiel `*_one_active` (≤ 1 appartenance ACTIVE par sub) : l'ancien
+    #        apporte SA ligne active → deux actives après repointage. Le contexte
+    #        courant appartient au compte canonique : les appartenances reprises
+    #        arrivent INACTIVES (elles restent accessibles via `oto_use_org`).
+    #        ⚠️ Désactivation CONDITIONNELLE : si le new n'a AUCUNE active (stub frais),
+    #        celle de l'ancien est la seule → la garder, sinon le compte fusionné se
+    #        retrouverait sans org maison.
+    for table, key in _MEMBERSHIP_TABLES:
+        conn.execute(
+            f"DELETE FROM {table} WHERE sub=%s AND {key} IN "
+            f"(SELECT {key} FROM {table} WHERE sub=%s)", (old_sub, new_sub))
+        conn.execute(
+            f"UPDATE {table} SET is_active=FALSE WHERE sub=%s "
+            f"AND EXISTS (SELECT 1 FROM {table} WHERE sub=%s AND is_active)",
+            (old_sub, new_sub))
+    # 2 ter. Colonnes de sub ENTRANT DANS UNE PK (canal opéré, prêts de compte) :
+    #    même raison qu'en 2 bis — l'UPDATE nu violerait la PK quand les deux
+    #    comptes portent la même ligne. On jette celle de l'ancien, puis on
+    #    repointe. Sans ce pré-traitement, ces lignes partaient en CASCADE avec
+    #    l'ancien compte à l'étape 4 : un canal de messagerie à reconnecter et
+    #    des prêts à re-consentir, sans trace de ce qui a disparu.
+    for table, col, reste in _PK_SUB_TABLES:
+        # `reste` VIDE = la colonne de sub est à elle seule la clé (PK `sub`
+        # nue) : « la même ligne » veut alors dire « une ligne, n'importe
+        # laquelle ». Sans ce repli, le `AND` resterait suspendu et le SQL
+        # serait invalide — un merge qui échoue en entier sur une syntaxe.
+        meme_ligne = " AND ".join(f"a.{c} = b.{c}" for c in reste) or "TRUE"
+        conn.execute(
+            f"DELETE FROM {table} a WHERE a.{col}=%s AND EXISTS ("
+            f"SELECT 1 FROM {table} b WHERE b.{col}=%s AND {meme_ligne})",
+            (old_sub, new_sub))
+        conn.execute(f"UPDATE {table} SET {col}=%s WHERE {col}=%s",
+                     (new_sub, old_sub))
+    # 2 quinquies. Colonnes de sub sous un INDEX UNIQUE qui n'est PAS la PK.
+    #    Même geste qu'en 2 ter, mais la clé de « la même ligne » est celle de
+    #    l'INDEX, pas celle de la table : la ranger en 2 ter aurait pris ses
+    #    colonnes de prédicat (`kind`) pour des colonnes de clé et supprimé des
+    #    lignes qu'aucune contrainte ne menaçait. Le prédicat partiel est
+    #    reporté sur LES DEUX côtés — sans lui, on dédoublonnerait des lignes
+    #    que l'index ne regarde même pas.
+    #    Le repointage lui-même reste l'UPDATE nu de l'étape 3.
+    for table, col, autres, predicat in _UNIQUE_INDEX_SUB_TABLES:
+        meme_ligne = " AND ".join(f"a.{c} IS NOT DISTINCT FROM b.{c}"
+                                  for c in autres) or "TRUE"
+        filtre_a = f" AND {predicat.format(a='a')}" if predicat else ""
+        filtre_b = f" AND {predicat.format(a='b')}" if predicat else ""
+        conn.execute(
+            f"DELETE FROM {table} a WHERE a.{col}=%s{filtre_a} AND EXISTS ("
+            f"SELECT 1 FROM {table} b WHERE b.{col}=%s{filtre_b} AND {meme_ligne})",
+            (old_sub, new_sub))
+    # 2 quater. La MARQUE d'espace personnel (`orgs.personal_of`) : hors de
+    #    `_SUB_COLUMNS` parce qu'un UPDATE nu y violerait l'index unique
+    #    `uq_orgs_personal_of` — et pas dans un cas tordu, dans le cas NOMINAL :
+    #    le login crée le stub (donc son espace) AVANT que le merge ne le fusionne,
+    #    si bien que les deux comptes en ont un.
+    #    Sans ce traitement, la marque restait sur un identifiant qui n'existe plus.
+    #    `get_personal_org` ne trouvait donc plus rien pour le compte survivant, et
+    #    `ensure_personal_org` fabriquait un espace NEUF au boot suivant : deux
+    #    organisations au même nom dans la liste de l'utilisateur, dont l'ancienne —
+    #    celle qui porte son historique — n'est plus reconnue comme son espace.
+    #    Constaté le 2026-08-14 sur 14 comptes, dont les 9 de la bascule de tenant
+    #    du 13/08 (un espace en double par personne migrée).
+    #    Règle : l'espace de l'ANCIEN compte porte l'historique ⟹ c'est lui qui
+    #    reste l'espace personnel. Celui du nouveau est simplement DÉMARQUÉ — il
+    #    redevient une organisation ordinaire, que son propriétaire peut supprimer.
+    #    On ne l'archive pas ici : « cet espace n'a jamais servi » ne se décide pas
+    #    au fond d'une transaction de merge, et un archivage automatique effacerait
+    #    de la vue un espace qui, lui, aurait servi. L'avertissement ci-dessous le
+    #    nomme pour que le ménage reste un acte explicite.
+    perso_ancienne = conn.execute(
+        "SELECT id FROM orgs WHERE personal_of=%s AND archived_at IS NULL",
+        (old_sub,)).fetchone()
+    if perso_ancienne:
+        demarquees = conn.execute(
+            "UPDATE orgs SET personal_of=NULL WHERE personal_of=%s "
+            "AND archived_at IS NULL RETURNING id", (new_sub,)).fetchall()
+        conn.execute("UPDATE orgs SET personal_of=%s WHERE id=%s",
+                     (new_sub, perso_ancienne["id"]))
+        if demarquees:
+            logger.warning(
+                "tenant migration: espace personnel conservé = org #%s (celui de %s) ; "
+                "org(s) %s démarquée(s), à archiver si elles n'ont jamais servi",
+                perso_ancienne["id"], old_sub, [r["id"] for r in demarquees])
+    # 3. repointer toutes les colonnes sub.
+    for table, col in _SUB_COLUMNS:
+        conn.execute(f"UPDATE {table} SET {col}=%s WHERE {col}=%s", (new_sub, old_sub))
+    # 3 bis. Les ARÊTES du modèle d'accès (blueprint ADR 0053, L5) : `grantee_id`
+    #    porte un sub quand `grantee_kind='user'` — sans repointage, un compte
+    #    fusionné perdait ses grants de clé plateforme (la chaîne dit MUET, repli
+    #    free-tier au mieux, rien au pire). Filtré par kind, pas dans
+    #    `_SUB_COLUMNS` : `grantee_id` porte aussi des ids d'org. Pas de contrainte
+    #    unique sur (resource, grantee) : si les DEUX comptes portaient une arête
+    #    vivante vers la même instance, les deux survivent et « la plus favorable
+    #    gagne » (sémantique 0053-D5, déjà celle des arêtes multiples). Les
+    #    compteurs suivent l'arête par id — rien à toucher.
+    conn.execute(
+        "UPDATE grants SET grantee_id=%s WHERE grantee_kind='user' AND grantee_id=%s",
+        (new_sub, old_sub))
+    # 3 ter. Le COFFRE personnel : l'AUTEUR se repointe (hors AAD, cf.
+    #    `_SUB_COLUMNS`), et l'ENTITÉ se RECHIFFRE (#439). Pendant des mois, l'entité
+    #    était abandonnée derrière — parce qu'un `UPDATE entity_id` nu rend la ligne
+    #    indéchiffrable (l'AAD dérive de l'entité). Mais l'abandon rendait la clé
+    #    INVISIBLE à son propriétaire, qui ne savait pas qu'il devait la reposer :
+    #    constaté après la bascule du 13/08, 13 clés membre sur 43 restées sous un
+    #    identifiant pré-alias. Le rechiffrement lève l'obstacle au lieu de le
+    #    contourner ; une collision ou une ligne illisible reste en place, et le dit.
+    from .. import credentials_store
+    return credentials_store.rekey_personal_credentials(conn, old_sub, new_sub)
 
 
 def migrate_sub(old_sub: str, new_sub: str, *, operator_source: str = "") -> bool:
@@ -603,134 +767,7 @@ def migrate_sub(old_sub: str, new_sub: str, *, operator_source: str = "") -> boo
             {"role": _stronger_role(old["role"], new.get("role")),
              "av": old.get("avatar_url"), "new": new_sub},
         )
-        # 2. user_account_profile (PK sub) : retirer le frais du new PUIS repointer
-        #    l'ancien (garde l'historique). DELETE d'abord → pas de conflit PK.
-        #    (La NOTE de l'user suit désormais par `("nodes", "owner_id")` dans
-        #    `_SUB_COLUMNS` — elle a quitté `user_agent_readme` avec l'ADR 0042, puis
-        #    la table `guides` avec le lot M1.)
-        conn.execute("DELETE FROM user_account_profile WHERE sub=%s", (new_sub,))
-        conn.execute("UPDATE user_account_profile SET sub=%s WHERE sub=%s", (new_sub, old_sub))
-        # 2 bis. APPARTENANCES (org_members / org_group_members) : elles ne se repointent
-        #    pas en bloc, à cause de DEUX invariants que l'`UPDATE … SET sub=` de l'étape 3
-        #    violerait. Vécu prod 2026-07-28 (un user à 2 comptes) : merge en échec
-        #    à CHAQUE requête de l'user, donc jamais fusionné + un round-trip Logto et un
-        #    traceback par appel.
-        #    (a) PK (org_id, sub) : si les deux comptes sont dans la MÊME org, repointer
-        #        crée un doublon → on garde la ligne du compte canonique (le new, dont le
-        #        rôle vient d'être fusionné au plus fort) et on jette celle de l'ancien.
-        #    (b) index partiel `*_one_active` (≤ 1 appartenance ACTIVE par sub) : l'ancien
-        #        apporte SA ligne active → deux actives après repointage. Le contexte
-        #        courant appartient au compte canonique : les appartenances reprises
-        #        arrivent INACTIVES (elles restent accessibles via `oto_use_org`).
-        #        ⚠️ Désactivation CONDITIONNELLE : si le new n'a AUCUNE active (stub frais),
-        #        celle de l'ancien est la seule → la garder, sinon le compte fusionné se
-        #        retrouverait sans org maison.
-        for table, key in _MEMBERSHIP_TABLES:
-            conn.execute(
-                f"DELETE FROM {table} WHERE sub=%s AND {key} IN "
-                f"(SELECT {key} FROM {table} WHERE sub=%s)", (old_sub, new_sub))
-            conn.execute(
-                f"UPDATE {table} SET is_active=FALSE WHERE sub=%s "
-                f"AND EXISTS (SELECT 1 FROM {table} WHERE sub=%s AND is_active)",
-                (old_sub, new_sub))
-        # 2 ter. Colonnes de sub ENTRANT DANS UNE PK (canal opéré, prêts de compte) :
-        #    même raison qu'en 2 bis — l'UPDATE nu violerait la PK quand les deux
-        #    comptes portent la même ligne. On jette celle de l'ancien, puis on
-        #    repointe. Sans ce pré-traitement, ces lignes partaient en CASCADE avec
-        #    l'ancien compte à l'étape 4 : un canal de messagerie à reconnecter et
-        #    des prêts à re-consentir, sans trace de ce qui a disparu.
-        for table, col, reste in _PK_SUB_TABLES:
-            # `reste` VIDE = la colonne de sub est à elle seule la clé (PK `sub`
-            # nue) : « la même ligne » veut alors dire « une ligne, n'importe
-            # laquelle ». Sans ce repli, le `AND` resterait suspendu et le SQL
-            # serait invalide — un merge qui échoue en entier sur une syntaxe.
-            meme_ligne = " AND ".join(f"a.{c} = b.{c}" for c in reste) or "TRUE"
-            conn.execute(
-                f"DELETE FROM {table} a WHERE a.{col}=%s AND EXISTS ("
-                f"SELECT 1 FROM {table} b WHERE b.{col}=%s AND {meme_ligne})",
-                (old_sub, new_sub))
-            conn.execute(f"UPDATE {table} SET {col}=%s WHERE {col}=%s",
-                         (new_sub, old_sub))
-        # 2 quinquies. Colonnes de sub sous un INDEX UNIQUE qui n'est PAS la PK.
-        #    Même geste qu'en 2 ter, mais la clé de « la même ligne » est celle de
-        #    l'INDEX, pas celle de la table : la ranger en 2 ter aurait pris ses
-        #    colonnes de prédicat (`kind`) pour des colonnes de clé et supprimé des
-        #    lignes qu'aucune contrainte ne menaçait. Le prédicat partiel est
-        #    reporté sur LES DEUX côtés — sans lui, on dédoublonnerait des lignes
-        #    que l'index ne regarde même pas.
-        #    Le repointage lui-même reste l'UPDATE nu de l'étape 3.
-        for table, col, autres, predicat in _UNIQUE_INDEX_SUB_TABLES:
-            meme_ligne = " AND ".join(f"a.{c} IS NOT DISTINCT FROM b.{c}"
-                                      for c in autres) or "TRUE"
-            filtre_a = f" AND {predicat.format(a='a')}" if predicat else ""
-            filtre_b = f" AND {predicat.format(a='b')}" if predicat else ""
-            conn.execute(
-                f"DELETE FROM {table} a WHERE a.{col}=%s{filtre_a} AND EXISTS ("
-                f"SELECT 1 FROM {table} b WHERE b.{col}=%s{filtre_b} AND {meme_ligne})",
-                (old_sub, new_sub))
-        # 2 quater. La MARQUE d'espace personnel (`orgs.personal_of`) : hors de
-        #    `_SUB_COLUMNS` parce qu'un UPDATE nu y violerait l'index unique
-        #    `uq_orgs_personal_of` — et pas dans un cas tordu, dans le cas NOMINAL :
-        #    le login crée le stub (donc son espace) AVANT que le merge ne le fusionne,
-        #    si bien que les deux comptes en ont un.
-        #    Sans ce traitement, la marque restait sur un identifiant qui n'existe plus.
-        #    `get_personal_org` ne trouvait donc plus rien pour le compte survivant, et
-        #    `ensure_personal_org` fabriquait un espace NEUF au boot suivant : deux
-        #    organisations au même nom dans la liste de l'utilisateur, dont l'ancienne —
-        #    celle qui porte son historique — n'est plus reconnue comme son espace.
-        #    Constaté le 2026-08-14 sur 14 comptes, dont les 9 de la bascule de tenant
-        #    du 13/08 (un espace en double par personne migrée).
-        #    Règle : l'espace de l'ANCIEN compte porte l'historique ⟹ c'est lui qui
-        #    reste l'espace personnel. Celui du nouveau est simplement DÉMARQUÉ — il
-        #    redevient une organisation ordinaire, que son propriétaire peut supprimer.
-        #    On ne l'archive pas ici : « cet espace n'a jamais servi » ne se décide pas
-        #    au fond d'une transaction de merge, et un archivage automatique effacerait
-        #    de la vue un espace qui, lui, aurait servi. L'avertissement ci-dessous le
-        #    nomme pour que le ménage reste un acte explicite.
-        perso_ancienne = conn.execute(
-            "SELECT id FROM orgs WHERE personal_of=%s AND archived_at IS NULL",
-            (old_sub,)).fetchone()
-        if perso_ancienne:
-            demarquees = conn.execute(
-                "UPDATE orgs SET personal_of=NULL WHERE personal_of=%s "
-                "AND archived_at IS NULL RETURNING id", (new_sub,)).fetchall()
-            conn.execute("UPDATE orgs SET personal_of=%s WHERE id=%s",
-                         (new_sub, perso_ancienne["id"]))
-            if demarquees:
-                logger.warning(
-                    "tenant migration: espace personnel conservé = org #%s (celui de %s) ; "
-                    "org(s) %s démarquée(s), à archiver si elles n'ont jamais servi",
-                    perso_ancienne["id"], old_sub, [r["id"] for r in demarquees])
-        # 3. repointer toutes les colonnes sub.
-        for table, col in _SUB_COLUMNS:
-            conn.execute(f"UPDATE {table} SET {col}=%s WHERE {col}=%s", (new_sub, old_sub))
-        # 3 bis. Les ARÊTES du modèle d'accès (blueprint ADR 0053, L5) : `grantee_id`
-        #    porte un sub quand `grantee_kind='user'` — sans repointage, un compte
-        #    fusionné perdait ses grants de clé plateforme (la chaîne dit MUET, repli
-        #    free-tier au mieux, rien au pire). Filtré par kind, pas dans
-        #    `_SUB_COLUMNS` : `grantee_id` porte aussi des ids d'org. Pas de contrainte
-        #    unique sur (resource, grantee) : si les DEUX comptes portaient une arête
-        #    vivante vers la même instance, les deux survivent et « la plus favorable
-        #    gagne » (sémantique 0053-D5, déjà celle des arêtes multiples). Les
-        #    compteurs suivent l'arête par id — rien à toucher.
-        conn.execute(
-            "UPDATE grants SET grantee_id=%s WHERE grantee_kind='user' AND grantee_id=%s",
-            (new_sub, old_sub))
-        # coffre user : on repointe l'AUTEUR, jamais l'ENTITÉ.
-        #
-        # `_aad(entity_type, entity_id, connector, account)` — l'entité entre dans l'AAD,
-        # pas l'auteur. Repointer `entity_id` sans rechiffrer donnait donc une ligne
-        # que plus rien ne peut ouvrir : la fiche affiche « clé posée », chaque appel
-        # échoue en `InvalidTag`, et le diagnostic accuse le connecteur. Une clé
-        # ABSENTE se voit et se repose en dix secondes ; une clé présente-et-morte se
-        # débogue une demi-journée (mode d'échec déjà vécu, cf. coffre / clé périmée).
-        #
-        # On abandonne donc la ligne user derrière : l'utilisateur repose sa clé et
-        # l'interface dit la vérité. La ligne orpheline n'est pas supprimée — elle
-        # reste rechiffrable à la main si on décide un jour de la récupérer.
-        # ⚠️ Toute bascule de tenant doit donc s'accompagner de la LISTE des clés
-        # personnelles à reposer, prévenue avant la fenêtre (ADR 0052 §Migrer).
-        conn.execute("UPDATE connector_credentials SET set_by=%s WHERE set_by=%s", (new_sub, old_sub))
+        repointer_patrimoine(conn, old_sub, new_sub)
         # 4. supprimer l'ancienne ligne users (enfants FK déjà repointés).
         conn.execute("DELETE FROM users WHERE sub=%s", (old_sub,))
         # 5. alias (drain des vieux tokens → compte canonique).
