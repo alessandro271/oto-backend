@@ -229,11 +229,13 @@ d'API du Secret Manager dans `$CREDENTIALS_DIRECTORY/scw` : hors d'une unité, c
 ```bash
 # Sur la box (prod ; pour la préprod : /opt/oto-mcp-canari et lanceur-canari.env).
 lanceur() {
+  # l'arbre de la couleur ACTIVE, pas /opt/oto-mcp (qui est l'arbre bleu)
+  local A=/opt/oto-mcp-$(cat /etc/oto-mcp/active-prod)
   sudo systemd-run --pipe --wait --quiet --collect \
-    -p WorkingDirectory=/opt/oto-mcp \
+    -p WorkingDirectory="$A" \
     -p EnvironmentFile=/opt/oto-mcp/.env -p EnvironmentFile=/etc/oto-mcp/lanceur-prod.env \
     -p LoadCredential=scw:/etc/oto-mcp/scw.key \
-    /opt/oto-mcp/.venv/bin/python /opt/oto-mcp/deploy/lanceur_secrets.py "$@"
+    "$A/.venv/bin/python" "$A/deploy/lanceur_secrets.py" "$@"
 }
 lanceur maintenance retention --dry-run                    # le serveur (`oto-mcp …`)
 lanceur migrer current                                     # Alembic (docs/migrations-versionnees.md §5)

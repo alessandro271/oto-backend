@@ -48,10 +48,11 @@ CE QU'IL DÉMARRE — une seule chose par appel, choisie par son PREMIER argumen
                        comparer, par noms, aux `/proc/<pid>/environ` du service qu'il remplace.
 Ces trois formes ne se combinent pas : `--script` et `--noms` doivent venir en premier.
 
-Notre production n'utilise PAS encore ce lanceur : son `start-encrypted.sh` vit hors git
-et se propage d'une couleur à l'autre (`BG_LANCEUR=propage`, cf.
-`deploy/start-encrypted.sh`). La passer ici est un geste à part, décrit pas à pas dans
-docs/instance-cible.md (§Passer notre box au lanceur).
+Notre production démarre par ce lanceur depuis la v1.398.0 : le `.env` de la box ne
+porte plus aucun secret. Le passage est décrit dans docs/instance-cible.md (§Passer
+notre box au lanceur). Toute commande qui a besoin des secrets (migration, maintenance,
+script de reprise) passe donc par lui : docs/commands.md (§lanceur) et
+docs/migrations-versionnees.md §5.
 """
 from __future__ import annotations
 
