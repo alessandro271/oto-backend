@@ -60,6 +60,7 @@ son écriture reste possible sans le catalogue (validation dégradée, annoncée
 """
 from __future__ import annotations
 
+import logging
 import warnings
 from typing import Any, Literal, Optional
 
@@ -69,6 +70,8 @@ from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access, apollo_receiver, output_projection, session_org
 from ..datastore.identite import AdresseJson as Adresse
+
+logger = logging.getLogger(__name__)
 
 
 def _bad(msg: str) -> McpError:
@@ -825,17 +828,22 @@ def register(mcp: FastMCP) -> None:
                 apollo_receiver.abandonner(jeton)
             raise
 
-        # Le compteur plateforme débite ce qu'APOLLO a facturé : sa réponse porte
-        # `credits_consumed` (0 si rien de facturable n'a été trouvé, pas de crédit
-        # pour une personne sans correspondance). Jamais 1 pour l'appel, jamais
-        # `len(people)` quand l'amont dit son chiffre (oto#168). Repli sur
-        # `len(people)` seulement si la réponse ne le porte pas : l'amont est alors
-        # muet et le plus sûr est de compter ce qu'on a soumis. 0 ne débite rien
-        # (`record_platform_usage` plancherait à 1).
+        # Ce qu'APOLLO a facturé : sa réponse porte `credits_consumed` (0 si rien de
+        # facturable n'a été trouvé, pas de crédit pour une personne sans
+        # correspondance ; +8 pour un mobile). C'est le chiffre des DEUX compteurs
+        # ci-dessous — jamais 1 pour l'appel, jamais `len(people)` quand l'amont dit
+        # le sien (oto#168). Réponse muette : on compte ce qu'on a soumis, le plus sûr
+        # pour le quota, mais EN LE DISANT au journal — un repli silencieux ferait
+        # passer une réponse inattendue pour un comptage juste.
+        credits = out.get("credits_consumed")
+        if not isinstance(credits, int) or isinstance(credits, bool) or credits < 0:
+            logger.warning("apollo_bulk_match : `credits_consumed` absent ou illisible "
+                           "(%r) dans la réponse d'Apollo — quota et quantité comptés "
+                           "sur les %d personnes soumises", credits, len(people))
+            credits = len(people)
+        # Le quota de la clé commune. 0 ne débite rien (`record_platform_usage`
+        # plancherait à 1).
         if is_platform:
-            credits = out.get("credits_consumed")
-            if not isinstance(credits, int) or isinstance(credits, bool):
-                credits = len(people)
             if credits > 0:
                 access.record_platform_usage("apollo", credits)
             quota = access.platform_quota_hint("apollo")
@@ -845,9 +853,10 @@ def register(mcp: FastMCP) -> None:
         # le facturier d'un partenaire) est un AUTRE compteur que le quota ci-dessus.
         # Inconditionnelle, clé commune OU propre, comme `fullenrich` : c'est
         # `key_mode`, posé par le résolveur, qui dit s'il y a quelque chose à facturer.
-        # Sans elle `quantity` reste NULL, que le consommateur lit 1 : un lot de 10 se
-        # facturait 1. Compte les personnes SOUMISES, comme le débit de quota.
-        session_org.note_call_trace(quantity=len(people))
+        # Sans elle `quantity` reste NULL, que le consommateur lit 1. Son unité est le
+        # CRÉDIT Apollo (oto#168), comme `serper` porte ses crédits : un 0 tracé dit
+        # « rien de facturé », pas « non mesuré ».
+        session_org.note_call_trace(quantity=credits)
 
         out = _stringify_request_id(out)
         matches = out.get("matches")

@@ -313,3 +313,37 @@ def test_a_lot_apollo_billed_nothing_for_debits_nothing(monkeypatch):
         "matches": [], "credits_consumed": 0})
     _tool(m, "apollo_bulk_match")(people=[{"id": "p1"}, {"id": "p2"}])
     assert usage == []
+
+
+# --------------------------------------------------------------------------- #
+# La ligne FACTURÉE porte les crédits qu'Apollo a facturés (oto#168)
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize("byo,kwargs", [(False, {}),
+                                        (True, {"reveal_personal_emails": True})])
+@pytest.mark.parametrize("factures", [3, 0])
+def test_the_BILLED_quantity_is_what_apollo_billed(monkeypatch, byo, kwargs, factures):
+    """10 soumises, `factures` crédits rendus par Apollo : la ligne facturée porte le
+    chiffre de l'amont, 0 compris (un 0 tracé = rien de facturé), sur toute clé."""
+    from oto_mcp import session_org
+    traces = []
+    monkeypatch.setattr(session_org, "note_call_trace", lambda **kw: traces.append(kw))
+    m, _, _ = _mount(monkeypatch, byo=byo, bulk_return={
+        "matches": [], "credits_consumed": factures})
+    _tool(m, "apollo_bulk_match")(people=[{"id": f"p{i}"} for i in range(10)], **kwargs)
+    assert [t["quantity"] for t in traces if "quantity" in t] == [factures]
+
+
+def test_a_silent_apollo_answer_counts_what_was_submitted_AND_SAYS_SO(monkeypatch, caplog):
+    """Réponse sans `credits_consumed` : on compte les personnes soumises (le plus sûr
+    pour le quota), mais le journal le dit — jamais un repli silencieux."""
+    import logging
+    from oto_mcp import session_org
+    traces = []
+    monkeypatch.setattr(session_org, "note_call_trace", lambda **kw: traces.append(kw))
+    m, _, usage = _mount(monkeypatch, byo=False, bulk_return={"matches": []})
+    with caplog.at_level(logging.WARNING, logger="oto_mcp.tools.apollo"):
+        _tool(m, "apollo_bulk_match")(people=[{"id": f"p{i}"} for i in range(4)])
+    assert usage == [("apollo", 4)]
+    assert [t["quantity"] for t in traces if "quantity" in t] == [4]
+    assert any("credits_consumed" in r.getMessage() for r in caplog.records)
