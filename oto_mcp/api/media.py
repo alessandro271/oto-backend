@@ -14,10 +14,12 @@ La table de routes (chemins, méthodes, ORDRE) reste assemblée dans
 from __future__ import annotations
 
 from fastmcp.server.auth.providers.jwt import JWTVerifier
+from pydantic import BaseModel
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from .. import db, org_store
+from .. import db, media_store, org_store
+from ..capabilities._types import ContratDeRoute, DeclaredError
 from .base import _authenticate, _json, _json_error
 
 
@@ -40,7 +42,6 @@ async def avatar_save(request: Request, *, verifier: JWTVerifier) -> JSONRespons
     data, err = await _read_upload(request)
     if err:
         return err
-    from .. import media_store
     try:
         url = media_store.upload_image("avatars", sub, data, "")
     except media_store.MediaError as e:
@@ -76,7 +77,6 @@ async def org_logo_save(request: Request, *, verifier: JWTVerifier) -> JSONRespo
     data, err = await _read_upload(request)
     if err:
         return err
-    from .. import media_store
     try:
         url = media_store.upload_image("org-logos", str(org_id), data, "")
     except media_store.MediaError as e:
@@ -86,3 +86,64 @@ async def org_logo_save(request: Request, *, verifier: JWTVerifier) -> JSONRespo
     if old and old != url:
         media_store.delete_by_url(old)
     return _json(request, {"ok": True, "logo_url": url})
+
+
+# ── Le contrat publié (#655) ─────────────────────────────────────────────────────
+# Routes de NATURE (corps multipart, hors du moule capacité) : elles portent leur
+# contrat comme la réception d'un upload signé (`ContratDeRoute`, oto#106). Les refus
+# déclarés sont ceux que les handlers ci-dessus rendent — la garde
+# `tests/test_capability_declared_errors.py` le vérifie sur le chemin réel.
+
+class AvatarSaved(BaseModel):
+    ok: bool
+    avatar_url: str
+
+
+class LogoSaved(BaseModel):
+    ok: bool
+    logo_url: str
+
+
+_IMAGE = {
+    "type": "object", "required": ["file"],
+    "properties": {"file": {
+        "type": "string", "format": "binary",
+        "description": ("png, jpeg, gif ou webp — jugé sur les OCTETS, jamais sur le "
+                        "`Content-Type` déclaré ; 2 Mo au plus par défaut (borne "
+                        "réglable par instance, refus `image_too_large` au-delà)")}},
+}
+
+_REFUS_IMAGE = (
+    DeclaredError(400, "invalid_multipart", "le corps n'est pas un multipart lisible"),
+    DeclaredError(400, "missing_file", "aucune partie `file`, ou un fichier vide"),
+    DeclaredError(400, "unsupported_type",
+                  "ni png, ni jpeg, ni gif, ni webp (jugé sur les octets)"),
+    DeclaredError(413, "image_too_large", "au-delà de la borne d'image (2 Mo par défaut)"),
+)
+
+avatar_save.contrat = ContratDeRoute(
+    description=(
+        "Pose mon avatar. Corps multipart, une seule partie `file` : l'image (png, jpeg, "
+        "gif ou webp, reconnue à ses octets). L'ancienne image stockée est supprimée. "
+        "Rend l'adresse publique de la nouvelle. Pour l'effacer : `DELETE` sur le même "
+        "chemin."),
+    Output=AvatarSaved,
+    errors=_REFUS_IMAGE,
+    corps={"POST": {"multipart/form-data": _IMAGE}},
+)
+
+org_logo_save.contrat = ContratDeRoute(
+    description=(
+        "Pose le logo UPLOADÉ de l'org (org_admin). Corps multipart, une seule partie "
+        "`file` : l'image (png, jpeg, gif ou webp, reconnue à ses octets). Le logo "
+        "AFFICHÉ est l'upload s'il existe, sinon celui dérivé du domaine de marque "
+        "déclaré. Pour retirer l'upload : `DELETE` sur le même chemin."),
+    Output=LogoSaved,
+    errors=(
+        DeclaredError(400, "invalid_id", "l'identifiant d'org du chemin n'est pas un entier"),
+        DeclaredError(404, "unknown_org", "aucune org sous cet identifiant"),
+        DeclaredError(403, "forbidden", "l'appelant n'est pas org_admin de cette org"),
+        *_REFUS_IMAGE,
+    ),
+    corps={"POST": {"multipart/form-data": _IMAGE}},
+)

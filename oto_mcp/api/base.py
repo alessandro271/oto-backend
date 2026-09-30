@@ -464,8 +464,8 @@ def bind(handler: Callable[..., Awaitable[Response]], **deps):
     async def endpoint(request: Request):
         return await handler(request, **deps)
 
-    endpoint.__name__ = handler.__name__
-    endpoint.__qualname__ = handler.__qualname__
-    endpoint.__doc__ = handler.__doc__
-    endpoint.__module__ = handler.__module__
-    return endpoint
+    # Nom, qualname, doc, module — et les ATTRIBUTS du handler (`__dict__`), dont le
+    # `contrat` d'une route de nature (`ContratDeRoute`, oto#106) : sans eux, le
+    # document publiait une route liée par `bind` en souche « écrite à la main »
+    # (#655). `__wrapped__` mène au vrai corps (garde des refus atteignables).
+    return functools.update_wrapper(endpoint, handler)
