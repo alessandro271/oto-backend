@@ -158,7 +158,8 @@ def test_page_au_dela_du_total_garde_le_total(vivier):
 def test_une_page_coute_une_poignee_d_attentes_pas_une_par_tranche(vivier):
     """Le cœur du lot. La lecture ligne à ligne de la même page (~1 Mo) coûte des
     dizaines d'attentes — le contrôle qui prouve que le compteur voit quelque chose ;
-    chacune des quatre lectures servies doit tenir en quelques-unes."""
+    chacune des quatre lectures servies doit en coûter au plus le quart (rapport
+    relatif : le nombre absolu dépend de la machine)."""
     from oto_mcp import db
 
     with _attentes() as ligne_a_ligne:
@@ -183,8 +184,12 @@ def test_une_page_coute_une_poignee_d_attentes_pas_une_par_tranche(vivier):
         with _attentes() as n:
             rows = lire()
         assert len(rows) == PAGE, nom
-        assert n[0] <= 15, (
+        # Seuil RELATIF : le nombre absolu d'attentes dépend de la machine (tampons
+        # libpq, charge : 4-7 en local, 16 vu en CI), le rapport à la lecture ligne à
+        # ligne du même jeu, mesurée dans ce test, non. Ancien comportement : rapport
+        # ~1 ; correctif : ~1/10. On exige au plus un quart.
+        assert n[0] * 4 <= ligne_a_ligne[0], (
             f"{nom} : {n[0]} attentes de socket pour une page de {PAGE} lignes "
-            f"({ligne_a_ligne[0]} ligne à ligne) — chaque attente rend le GIL, et à "
-            f"côté d'un thread qui calcule chacune coûte jusqu'à l'intervalle de "
-            f"bascule (oto-backend#980)")
+            f"({ligne_a_ligne[0]} ligne à ligne ; il en faut au plus un quart) — chaque "
+            f"attente rend le GIL, et à côté d'un thread qui calcule chacune coûte "
+            f"jusqu'à l'intervalle de bascule (oto-backend#980)")
