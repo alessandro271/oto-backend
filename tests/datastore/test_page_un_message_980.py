@@ -7,9 +7,14 @@ thread qui calcule, chaque reprise du GIL attend jusqu'à `sys.getswitchinterval
 8 900 lignes × 90 colonnes : un ramassage complet par la route REST passait de
 ~2 s à ~11 s à côté d'un seul thread de calcul, intervalle à 1 ms compris.
 
-⚠️ Banc de COMPTE, jamais de durée : il compte les attentes de socket de psycopg
-(chacune = un GIL rendu puis repris), ce qui ne dépend pas de la machine. Le
-contrôle qui mord : la même page lue ligne à ligne en coûte des dizaines.
+⚠️ Banc de PROTOCOLE, ni de durée ni d'attentes de socket : il vérifie qu'une page
+servie est UNE requête dont PostgreSQL rend UNE ligne (un seul `DataRow`, le `json`
+agrégé), là où la lecture ligne à ligne en rend une par ligne. Le nombre d'attentes
+de socket, qu'il comptait d'abord, suit le TRANSPORT et l'ordonnanceur, pas le
+correctif : un même message de ~650 Ko arrive d'une traite par le proxy de docker
+d'un poste rapide (3 attentes), mais par rafales de ~64 Ko quand l'expéditeur est
+plus lent que le lecteur (10 à 16 attentes, la CI) ; et la lecture ligne à ligne,
+son « contrôle », tombait de 75 à 3 attentes sur un seul cœur partagé avec la base.
 """
 from __future__ import annotations
 
@@ -70,31 +75,22 @@ def _reference(sql: str, params: tuple) -> list[dict]:
 
 
 @contextmanager
-def _attentes():
-    """Compte les attentes de socket de psycopg (un GIL rendu à chacune)."""
-    import psycopg.waiting as waiting
+def _requetes():
+    """Le nombre de lignes que PostgreSQL rend à chaque requête exécutée dans le bloc
+    (`PGresult.ntuples` : une ligne = un message `DataRow` du protocole)."""
+    vrai = psycopg.Cursor.execute
+    vues: list[int] = []
 
-    vrai = waiting.wait
-    compte = [0]
+    def execute(self, *a, **kw):
+        cur = vrai(self, *a, **kw)
+        vues.append(self.pgresult.ntuples)
+        return cur
 
-    def compte_les_attentes(gen):
-        try:
-            etat = next(gen)
-            while True:
-                compte[0] += 1
-                pret = yield etat
-                etat = gen.send(pret)
-        except StopIteration as fin:
-            return fin.value
-
-    def wait(gen, *a, **kw):
-        return vrai(compte_les_attentes(gen), *a, **kw)
-
-    waiting.wait = wait
+    psycopg.Cursor.execute = execute
     try:
-        yield compte
+        yield vues
     finally:
-        waiting.wait = vrai
+        psycopg.Cursor.execute = vrai
 
 
 def test_liste_historique_identique_a_la_lecture_ligne_a_ligne(vivier):
@@ -155,18 +151,17 @@ def test_page_au_dela_du_total_garde_le_total(vivier):
     assert rows == [] and total == N_LIGNES // 3
 
 
-def test_une_page_coute_une_poignee_d_attentes_pas_une_par_tranche(vivier):
-    """Le cœur du lot. La lecture ligne à ligne de la même page (~1 Mo) coûte des
-    dizaines d'attentes — le contrôle qui prouve que le compteur voit quelque chose ;
-    chacune des quatre lectures servies doit en coûter au plus le quart (rapport
-    relatif : le nombre absolu dépend de la machine)."""
+def test_une_page_est_une_requete_qui_rend_une_seule_ligne(vivier):
+    """Le cœur du lot. Chacune des quatre lectures servies d'une page de 250 lignes
+    (~650 Ko) est UNE requête dont PostgreSQL rend UNE ligne. Le contrôle qui prouve
+    que l'espion voit les lignes : la même page lue ligne à ligne en rend 250."""
     from oto_mcp import db
 
-    with _attentes() as ligne_a_ligne:
+    with _requetes() as ligne_a_ligne:
         ref = _reference(f"SELECT {COLS} FROM datastore_rows WHERE ns_id = %s "
                          "ORDER BY row_id ASC LIMIT %s", (vivier, PAGE))
     assert len(ref) == PAGE
-    assert ligne_a_ligne[0] >= 30, ligne_a_ligne[0]
+    assert ligne_a_ligne == [PAGE], ligne_a_ligne
 
     lectures = {
         "historique": lambda: db.datastore_list_rows(
@@ -180,16 +175,12 @@ def test_une_page_coute_une_poignee_d_attentes_pas_une_par_tranche(vivier):
             filters=[{"field": "statut", "op": "ne", "value": "absent"}])[0],
     }
     for nom, lire in lectures.items():
-        lire()  # connexion chaude : la mesure ne compte que la page
-        with _attentes() as n:
+        with _requetes() as n:
             rows = lire()
         assert len(rows) == PAGE, nom
-        # Seuil RELATIF : le nombre absolu d'attentes dépend de la machine (tampons
-        # libpq, charge : 4-7 en local, 16 vu en CI), le rapport à la lecture ligne à
-        # ligne du même jeu, mesurée dans ce test, non. Ancien comportement : rapport
-        # ~1 ; correctif : ~1/10. On exige au plus un quart.
-        assert n[0] * 4 <= ligne_a_ligne[0], (
-            f"{nom} : {n[0]} attentes de socket pour une page de {PAGE} lignes "
-            f"({ligne_a_ligne[0]} ligne à ligne ; il en faut au plus un quart) — chaque "
-            f"attente rend le GIL, et à côté d'un thread qui calcule chacune coûte "
-            f"jusqu'à l'intervalle de bascule (oto-backend#980)")
+        assert n == [1], (
+            f"{nom} : {n} ligne(s) PostgreSQL par requête pour une page de {PAGE} "
+            f"lignes — attendu UNE requête rendant UNE ligne (la page agrégée en un "
+            f"`json`, `_page_en_un_message`). Une ligne par ligne de page, c'est un "
+            f"message par ligne et libpq relit par tranches en rendant le GIL à chaque "
+            f"attente de socket (oto-backend#980)")

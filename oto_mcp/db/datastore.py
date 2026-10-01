@@ -723,9 +723,11 @@ def datastore_get_row(ns_id: int, row_id: str) -> Optional[dict]:
 # côté d'un seul thread de calcul, intervalle à 1 ms compris.
 #
 # Agrégée côté base en un seul `json`, la page est un message long : libpq agrandit son
-# tampon et enchaîne ses lectures sans rendre la main (4 à 7 attentes par page). Même
-# forme de ligne que `_str_dict_row` : horodatages en `AAAA-MM-JJ HH:MM:SS` dans le
-# fuseau de la session, secondes tronquées, `data` décodé à l'identique.
+# tampon et enchaîne ses lectures sans rendre la main — tant que le transport livre le
+# message d'un bloc ; par rafales, une attente par rafale (cf. le banc, qui vérifie le
+# protocole et non ce compte). Même forme de ligne que `_str_dict_row` : horodatages
+# en `AAAA-MM-JJ HH:MM:SS` dans le fuseau de la session, secondes tronquées, `data`
+# décodé à l'identique.
 #
 # ⚠️ Pour une PAGE seulement (`limit` posé) : un ramassage sans borne en un message
 # ferait décoder tout le tableau d'un bloc, GIL tenu d'un bout à l'autre.

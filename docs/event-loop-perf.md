@@ -812,7 +812,9 @@ lui) et psycopg rend le GIL à chaque tranche : ~260 attentes pour une page de 5
 lignes de ~4 Ko. Les lectures PAGINÉES du datastore (`datastore_list_rows` avec
 `limit`, `datastore_list_rows_after`, `datastore_page_with_stats`) agrègent donc la
 page côté base en UN `json` (`db/datastore._page_en_un_message`) : un message long,
-que libpq lit d'une traite — 4 à 7 attentes par page. Reproduit en local (8 900
+que libpq lit d'une traite — 3 à 7 attentes par page quand le transport le livre d'un
+bloc, une par rafale quand l'expéditeur est plus lent que le lecteur (~64 Ko, 10 à 16
+pour une page de ~650 Ko, vu en CI). Reproduit en local (8 900
 lignes × 90 colonnes, ramassage complet par la vraie route REST, intervalle à 1 ms) :
 seul, inchangé (~2,8 s) ; à côté d'un thread de calcul, **9,6-11,2 s → 6,2-6,5 s**.
 Ce qui reste est du calcul (décodage, `_row_to_dict`, rendu JSON) partagé avec le
@@ -821,7 +823,10 @@ ligne à ligne : décoder tout un tableau d'un bloc tiendrait le GIL d'un bout �
 l'autre. ⚠️ Le rendu de la réponse (`JSONResponse`) tourne dans la boucle, mais le
 sortir au thread ne gagnerait rien : `json.dumps` en C garde le GIL de bout en bout
 (mesuré : un autre thread attend toute la durée du rendu). Preuve :
-`tests/datastore/test_page_un_message_980.py` (compte les attentes, jamais une durée).
+`tests/datastore/test_page_un_message_980.py` : une page servie est UNE requête dont
+PostgreSQL rend UNE ligne. Ni une durée, ni un compte d'attentes de socket : ce compte
+suit le transport et l'ordonnanceur (la lecture ligne à ligne y est passée de 75 à 3
+attentes sur un cœur partagé avec la base), il a fait rougir la CI à correctif en place.
 
 ## Mode n°1, encore : le handler `async` qui lit la base « juste avant » (`me.agent_context`, 21/09)
 
