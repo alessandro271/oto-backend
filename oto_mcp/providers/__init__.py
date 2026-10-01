@@ -112,6 +112,7 @@ _DECLARATIONS: tuple[str, ...] = (
     "forager",
     "lucca",
     "inqom",
+    "threecx",
     # --- gocardless : keyed BYO self-serve -----------------------------------
     "gocardless",
     # --- yousign : BYO self-serve (clé + environnement), écrit réellement (envoie des invitations)
