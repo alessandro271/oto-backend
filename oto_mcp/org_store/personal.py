@@ -101,9 +101,27 @@ def ensure_personal_org(sub: str, email: Optional[str] = None, name: Optional[st
     return pid
 
 
+# Les seuls comptes que `ensure_personal_org` aurait à toucher : sans org perso vivante
+# (`get_personal_org`) OU sans org active (`get_active_org`). Pour tout autre compte,
+# `ensure_personal_org` ne fait que ces deux lectures — et le boot les payait, par compte.
+_A_RATTRAPER = """
+    SELECT u.sub, u.email, u.name FROM users u
+     WHERE NOT EXISTS (SELECT 1 FROM orgs o
+                        WHERE o.personal_of = u.sub AND o.archived_at IS NULL)
+        OR NOT EXISTS (SELECT 1 FROM org_members m WHERE m.sub = u.sub AND m.is_active)
+"""
+
+
 def backfill_personal_orgs() -> dict:
     """Idempotent (boot) : chaque user a une **org perso** marquée, et une org active
-    (la perso si aucune autre).
+    (la perso si aucune autre). Rend `{"users": <comptes rattrapés>}`.
+
+    **Garde « déjà fait », par compte** (oto-backend#534) : une seule requête retient les
+    comptes à rattraper — le prédicat même d'`ensure_personal_org` — au lieu de lire
+    TOUS les users et de faire deux allers-retours par compte à chaque boot (1,4 s
+    mesurés en préproduction, croissant avec la base d'utilisateurs). Le filet reste
+    entier : un compte laissé sans espace (naissance incomplète, archivage) est
+    toujours réparé au boot suivant (`db/users.py`, `capabilities/orgs/update.py`).
 
     ⚠️ Ne TOUCHE PLUS aux ressources. La migration `owner_type='user'` → org perso qui
     vivait ici datait de la suppression du perso `org_id=0` ; depuis l'amendement ADR
@@ -114,7 +132,7 @@ def backfill_personal_orgs() -> dict:
     2026-07-28, aucun projet `owner_type='user'` ne survivait en prod)."""
     counts = {"users": 0}
     with _connect() as conn:
-        users = conn.execute("SELECT sub, email, name FROM users").fetchall()
+        users = conn.execute(_A_RATTRAPER).fetchall()
     for u in users:
         sub = u["sub"]
         try:
