@@ -267,14 +267,26 @@ def test_en_plan_personnalise_le_lookup_est_servi_par_l_index(peuplee, monkeypat
 
 
 @pytest.mark.parametrize("mode", MODES)
-def test_le_plan_generique_ne_regresse_pas(peuplee, monkeypatch, mode):
-    """En plan générique, `ns_id` est un paramètre et l'index est PARTIEL : PostgreSQL
-    ne peut pas prouver le prédicat — état antérieur à oto#223, relevé ici pour qu'un
-    changement se voie. Le lookup rend la bonne ligne dans les deux modes."""
+def test_le_lookup_est_servi_par_l_index_dans_les_deux_plans(peuplee, monkeypatch, mode):
+    """`ns_id` est un LITTÉRAL dans le lookup, comme dans le prédicat de l'index partiel
+    (oto#225) : le prédicat se prouve aussi en plan GÉNÉRIQUE, celui que PostgreSQL peut
+    retenir une fois que psycopg a préparé la requête. Le lookup rend la bonne ligne."""
     requete, params, trouve = _lookup_capture(monkeypatch, "552081317")
     assert trouve == "a"
+    assert "ns_id = 1 " in requete and len(params) == 1, (requete, params)
     plan = _plan(peuplee, requete, params, mode)
-    assert ("ds_bkey_1" in plan) == (mode == "force_custom_plan"), plan
+    assert "Index Scan using ds_bkey_1" in plan, plan
+
+
+def test_temoin_ns_id_en_parametre_perd_l_index_en_plan_generique(peuplee, monkeypatch):
+    """Sans ce témoin, l'épreuve précédente pourrait être verte par construction : le même
+    lookup, `ns_id` repassé en paramètre (la forme d'avant oto#225), ne trouve PAS l'index
+    en plan générique — il lit tout le tableau."""
+    requete, params, _ = _lookup_capture(monkeypatch, "552081317")
+    parametree = requete.replace("ns_id = 1 ", "ns_id = %s ", 1)
+    assert parametree != requete
+    plan = _plan(peuplee, parametree, (1, *params), "force_generic_plan")
+    assert "ds_bkey_1" not in plan, plan
 
 
 def test_temoin_l_expression_V1_ne_sert_plus_l_index(peuplee, monkeypatch):

@@ -152,23 +152,35 @@ def datastore_find_row_id_by_key(ns_id: int, key_field: str, key_value) -> Optio
     `key_value` = la valeur DÉBALLÉE (`unwrap`). Son texte est rendu par la BASE
     (`#>> '{}'` sur son JSON), comme `data->>k` rend celui de la case : `true` et non
     `True`, `5.0` et non une conversion Python (oto#223). Une chaîne rend son texte
-    nu, un nombre et `"5"` se retrouvent, comme dans l'index."""
+    nu, un nombre et `"5"` se retrouvent, comme dans l'index.
+
+    ⚠️ **`ns_id` est un LITTÉRAL, pas un paramètre** (oto#225), comme dans le prédicat
+    de l'index partiel (`WHERE ns_id = <littéral> …`). psycopg prépare côté serveur une
+    requête répétée sur une connexion ; PostgreSQL peut alors retenir un plan GÉNÉRIQUE,
+    où un `ns_id` paramétré ne prouve plus le prédicat : l'index n'est plus empruntable
+    et le lookup lit tout le tableau. Mesuré sur PostgreSQL 17, 50 000 lignes : 0,01 ms
+    et 3 blocs par l'index, 29 ms et 962 blocs sans. Le basculement n'est pas théorique :
+    la requête préparée est partagée, sur une connexion, par tous les tableaux dont la
+    clé porte le même nom, et cinq lookups sur un grand tableau SANS index (clé `key=`
+    non déclarée, index manquant) l'ont provoqué pour les suivants (mesuré). Le littéral
+    rend le plan générique aussi bon que le personnalisé. `int()` : jamais une saisie."""
     from psycopg import sql as _sql
     q = _sql.SQL(
-        "SELECT row_id FROM datastore_rows WHERE ns_id = %s AND {e} = (%s::jsonb #>> '{{}}') "
+        "SELECT row_id FROM datastore_rows WHERE ns_id = {ns} AND {e} = (%s::jsonb #>> '{{}}') "
         "ORDER BY created_at ASC LIMIT 1"
-    ).format(e=bkey_index_expr(key_field))
+    ).format(ns=_sql.Literal(int(ns_id)), e=bkey_index_expr(key_field))
     with _connect() as conn:
-        row = conn.execute(q, (ns_id, json.dumps(key_value))).fetchone()
+        row = conn.execute(q, (json.dumps(key_value),)).fetchone()
         return row["row_id"] if row else None
 
 
 # ── Clé métier = contrainte (#109 ch.3) ──────────────────────────────────────
 # Quand `schema.key` est déclarée, elle cesse d'être purement applicative : un
-# index UNIQUE PARTIEL par namespace (`ds_bkey_<ns_id>`, expression `data->>key`,
-# prédicat ns_id + clé non nulle) rend la dédup concurrent-safe (deux writes
-# parallèles du même member_id ⇒ le perdant prend une UniqueViolation, convertie
-# en update par le store) et le lookup indexé. Cycle de vie : posé/déposé par
+# index UNIQUE PARTIEL par namespace (`ds_bkey_<ns_id>`, expression `bkey_index_expr`
+# — la règle de lecture depuis oto#223 —, prédicat ns_id littéral + clé non nulle)
+# rend la dédup concurrent-safe (deux writes parallèles du même member_id ⇒ le
+# perdant prend une UniqueViolation, convertie en update par le store) et le lookup
+# indexé, en plan personnalisé comme générique (ns_id littéral aussi, oto#225). Cycle de vie : posé/déposé par
 # `set_schema` (source unique de schema.key) + migration boot pour l'existant.
 
 def _bkey_index_name(ns_id: int) -> str:
