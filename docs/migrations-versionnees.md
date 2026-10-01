@@ -836,8 +836,11 @@ Rien ne compare encore le schéma d'une base neuve à celui d'une base remise à
   payés sur la base partagée. **À lire avant toute migration destructive**, quelle
   que soit l'option retenue.
 - `oto_mcp/db/_schema.py` — le DDL déclaratif, assemblé par domaine depuis le
-  2026-08-27 (`db/schema/<domaine>.py`), gelé par
-  `tests/test_schema_assembly_frozen.py`.
+  2026-08-27 (`db/schema/<domaine>.py`), gelé fragment par fragment dans
+  `tests/schema_gele/` (un `.sql` normalisé par fragment, plus `ORDRE`) et comparé par
+  `tests/test_schema_assembly_frozen.py`. Une révision qui pose aussi sa colonne dans
+  un fragment régénère le figé en local (`python -m scripts.schema_gele --regen`) et
+  commite son diff avec elle ; plus d'empreinte à recalculer (oto-backend#789).
 - `oto_mcp/db/_init.py` — l'objet de cette note.
 - ADR 0020 (stratégie de release) et CLAUDE.md racine §Déploiement — le modèle
   tronc unique et la fenêtre de healthcheck.

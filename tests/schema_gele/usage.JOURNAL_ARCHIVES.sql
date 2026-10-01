@@ -1,0 +1,6 @@
+CREATE TABLE IF NOT EXISTS journal_archives (
+mois TEXT PRIMARY KEY,
+cle TEXT NOT NULL,
+lignes BIGINT NOT NULL,
+archived_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

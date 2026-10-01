@@ -11,10 +11,12 @@ d'exécution : y toucher se vérifie contre une base neuve.
 `CREATE TABLE IF NOT EXISTS` seulement — les évolutions de colonnes sur tables
 existantes vivent dans `_init.init_db`, jamais ici (`docs/live-migrations.md`).
 
-⚠️ Réordonner, ajouter ou réécrire un fragment change la chaîne servie :
-`tests/test_schema_assembly_frozen.py` en gèle l'empreinte, pour qu'un tel
-changement soit un acte délibéré (le hash s'y met à jour à la main, dans le même
-commit) et jamais l'effet de bord d'un déplacement de fichier.
+⚠️ Réordonner, ajouter ou réécrire un fragment change la chaîne servie : chaque
+fragment est figé dans `tests/schema_gele/<module>.<CONSTANTE>.sql` (sans ses
+commentaires) et cet ordre dans `tests/schema_gele/ORDRE`, que
+`tests/test_schema_assembly_frozen.py` compare au servi. Un tel changement est un acte
+délibéré — `python -m scripts.schema_gele --regen` en local, et le diff des fichiers
+figés dans le même commit — jamais l'effet de bord d'un déplacement de fichier.
 """
 from __future__ import annotations
 

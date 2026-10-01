@@ -1,0 +1,6 @@
+CREATE TABLE IF NOT EXISTS user_account_profile (
+sub TEXT PRIMARY KEY,
+profile JSONB NOT NULL DEFAULT '{}'::jsonb,
+created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

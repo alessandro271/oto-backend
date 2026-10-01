@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS sub_aliases (
+old_sub TEXT PRIMARY KEY,
+new_sub TEXT NOT NULL,
+migrated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS connector_schemas (
+service TEXT PRIMARY KEY,
+schema JSONB NOT NULL DEFAULT '{}'::jsonb,
+updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

@@ -1,0 +1,13 @@
+CREATE TABLE IF NOT EXISTS billing_contracts (
+org_id BIGINT PRIMARY KEY REFERENCES orgs(id) ON DELETE CASCADE,
+seats INTEGER NOT NULL,
+unit_amount INTEGER,
+currency TEXT NOT NULL DEFAULT 'eur',
+interval TEXT NOT NULL DEFAULT 'month',
+starts_at TIMESTAMPTZ NOT NULL,
+ends_at TIMESTAMPTZ,
+reference TEXT,
+granted_by TEXT,
+created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

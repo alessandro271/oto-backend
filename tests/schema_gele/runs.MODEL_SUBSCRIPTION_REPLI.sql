@@ -1,0 +1,6 @@
+ALTER TABLE org_model_subscription_modes
+ADD COLUMN IF NOT EXISTS repli_api BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE user_model_subscriptions
+ADD COLUMN IF NOT EXISTS limit_epuise BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE user_model_subscriptions
+ADD COLUMN IF NOT EXISTS limit_utilisation DOUBLE PRECISION;
