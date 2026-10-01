@@ -52,6 +52,8 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from .. import access, deprecations, providers, db, tool_alias, tool_registry
+from ..connectors import credential_presence
+from ..connectors.credential_presence import CredentialPresence
 from ..auth import hooks as auth_hooks
 from ..tool_visibility import (
     PROTECTED_TOOLS, is_default_hidden, is_testable, namespace_of)
@@ -169,6 +171,9 @@ class ToolsGroup(BaseModel):
     state: EtatCatalogue
     tools: list[str]
     states: Optional[dict[str, EtatCatalogue]] = None
+    # Une clé ou un compte existe pour toi (#1112) — la même fonction que la ligne
+    # d'`oto_connector`. Absent = aucun ne résout. L'état des outils n'en dit rien.
+    credential: Optional[CredentialPresence] = None
 
 
 class ToolboxScope(BaseModel):
@@ -201,6 +206,12 @@ class ToolsSearchView(BaseModel):
     tools: Optional[list[ToolSearchHit]] = None
     connectors: Optional[list[ToolsGroup]] = None
     projection: Optional[str] = None
+    # `computed` | `unavailable` (#1112) : le calcul de `credential`, dit toujours —
+    # sur `unavailable`, une absence de `credential` ne veut rien dire.
+    credentials: str
+    # Recherche et `full=True` (une ligne par OUTIL) : le credential de chaque
+    # connecteur des outils rendus qui en a un, une fois par connecteur.
+    connector_credentials: Optional[dict[str, CredentialPresence]] = None
 
 
 class ToolConnector(BaseModel):
@@ -397,6 +408,10 @@ async def _search(ctx: ResolvedCtx, inp: ToolsSearchInput) -> dict:
                           f"`state` ∈ {' | '.join(catalogue.ETATS)}.")
     prefix = tool_alias.prefix_for(ctx.sub)
     entries = await catalogue.catalogue_avec_etat(get_context(), ctx.sub, prefix)
+    # Le credential DISPONIBLE (#1112), par la même fonction qu'`oto_connector` :
+    # l'état d'un outil dit sa visibilité, jamais la connexion.
+    presence, out_credentials = await run_in_threadpool(
+        lambda: credential_presence.lire(ctx.sub, org=ctx.org_id))
     par_etat = {e: sum(1 for x in entries if x["state"] == e) for e in catalogue.ETATS}
     out: dict = {"op": op, "catalog_total": len(entries), "catalog_by_state": par_etat}
     # L'aveu du décalage de boîte (#577, signaux #616/#639) : la session a été montée
@@ -430,15 +445,18 @@ async def _search(ctx: ResolvedCtx, inp: ToolsSearchInput) -> dict:
             f"{len(entries)} outils correspondent, {len(shown)} rendus. Affine la "
             "recherche, ou relance avec `limit` plus haut pour les voir tous.")
     out["legend"] = catalogue.LEGENDE
-    if op == "search":
-        cle = "description_full" if inp.full else "description"
+    out["credentials"] = out_credentials
+    if op == "search" or inp.full:
+        cle = "description_full" if op == "search" and inp.full else "description"
         out["tools"] = [{"name": e["name"], "namespace": e["namespace"],
                          "state": e["state"], "description": e[cle]} for e in shown]
-    elif inp.full:
-        out["tools"] = [{k: e[k] for k in ("name", "namespace", "state", "description")}
-                        for e in shown]
+        noms = {con.name for e in shown
+                if (con := providers.connector_for_namespace(e["namespace"])) is not None}
+        cc = {n: presence[n] for n in sorted(noms) if n in presence}
+        if cc:
+            out["connector_credentials"] = cc
     else:
-        out["connectors"] = catalogue.grouper_par_connecteur(shown)
+        out["connectors"] = catalogue.grouper_par_connecteur(shown, presence)
         out["projection"] = ("un groupe par connecteur, avec ses outils par nom ; "
                              "`full=True` rend une ligne de description par outil, "
                              "`oto_tool_schema(name)` le détail d'un outil.")

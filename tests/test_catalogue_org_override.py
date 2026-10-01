@@ -27,7 +27,7 @@ async def test_org_explicite_voyage_jusqu_a_compute_hidden_layers(monkeypatch):
     async def _faux_provider_list_tools(_fastmcp):
         return []
 
-    async def _faux_compute_hidden_layers(ctx, sub, *, org=sv._DERIVE_ORG):
+    async def _faux_compute_hidden_layers(ctx, sub, *, org=sv._DERIVE_ORG, noms=None):
         vu["org"] = org
         return {}
 
@@ -51,7 +51,7 @@ async def test_sans_org_explicite_le_defaut_reste_la_derivation_de_session(monke
     async def _faux_provider_list_tools(_fastmcp):
         return []
 
-    async def _faux_compute_hidden_layers(ctx, sub, *, org=sv._DERIVE_ORG):
+    async def _faux_compute_hidden_layers(ctx, sub, *, org=sv._DERIVE_ORG, noms=None):
         vu["org"] = org
         return {}
 

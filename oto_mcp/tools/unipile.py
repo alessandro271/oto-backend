@@ -672,6 +672,15 @@ def _status_pending_action(sub: str, org, group, entry: dict):
 
 status_hints.register("unipile", _status_pending_action)
 
+# Le geste qui VÉRIFIE un LinkedIn disponible (oto-backend#1112) : le catalogue dit
+# « un compte est lié », jamais « sa session vit » — c'est `op=status` qui le sait.
+# Deux agents ont dit « ton LinkedIn n'est pas connecté » sans l'avoir appelé.
+status_hints.register_verify_step(
+    "linkedin_unipile",
+    "Disponible, pas encore vérifié vivant : `linkedin_unipile_account(op='status')` "
+    "rend `connected` et `alive` (session vivante chez le fournisseur) — à appeler "
+    "AVANT de dire que le LinkedIn n'est pas connecté.")
+
 
 def _channel_pending_action(canal: str, libelle: str):
     """Hook `status_hints` d'UNE carte de canal (split du 2026-08-28).

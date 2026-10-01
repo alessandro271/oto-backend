@@ -337,6 +337,30 @@ l'aptitude — les mélanger recréerait la confusion de #476 sous un autre nom.
 > contourne la sélection par construction. `state: not_selected` + `ready: true` +
 > `oto_call` qui passe est l'état NORMAL, et c'est celui qui a été lu comme une panne.
 
+### `credential` — « une clé ou un compte existe », sur TOUT le catalogue (#1112)
+
+`ready` ne se calcule que sur une lecture ciblée ; or c'est sur le **catalogue** que
+l'agent conclut. Deux agents ont dit « ton LinkedIn n'est pas connecté » en lisant
+`state: not_selected`, sans appeler l'outil de statut, alors que le compte était lié et
+vivant. Trois axes, désormais servis séparément sur chaque ligne d'`oto_connector op=list`
+et sur chaque groupe d'`oto_list_my_tools` :
+
+- **sélectionné** — `state` (visibilité des outils, rien d'autre) ;
+- **credential disponible** — `credential: {status: connected|pending_step, level,
+  nature, next_step}`, présent dès qu'une clé ou un compte résout à un palier de la
+  cascade, **même `not_selected`** ; absent = rien ne résout. Source unique :
+  `connectors/credential_presence.py`, adossé au snapshot `access.status_for` que
+  `/api/me` sert déjà (sonde préchargée) — les deux surfaces agent l'appellent, aucune ne
+  re-dérive. L'enveloppe dit toujours `credentials: computed|unavailable` ;
+- **vérifié vivant** — jamais calculé par le catalogue : `credential.next_step` nomme
+  l'outil qui le vérifie, déclaré par le connecteur (`status_hints.register_verify_step`
+  — `linkedin_unipile_account op=status`), sinon la sonde `oto_instance op=verify`.
+
+`name=` accepte aussi un libellé ou un namespace d'outils (« linkedin » rend
+`linkedin_unipile` et `aiark`, tous deux) et refuse un nom inconnu en **proposant** les noms
+proches, lus au registre `providers/` (aucun alias persisté, cf. #905). Les gestes
+(`select`/`pause`/`unselect`) gardent le nom exact.
+
 ### Une couche que rien ne regardait : QUI la clé authentifie
 
 Les trois couches disent si un appel **partirait**. Aucune ne dit **au nom de qui**. Une

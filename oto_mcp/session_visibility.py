@@ -61,7 +61,8 @@ async def compute_hidden_tools(ctx, sub: str, *, org=_DERIVE_ORG) -> set[str]:
     return set().union(*couches.values())
 
 
-async def compute_hidden_layers(ctx, sub: str, *, org=_DERIVE_ORG) -> dict[str, set[str]]:
+async def compute_hidden_layers(ctx, sub: str, *, org=_DERIVE_ORG,
+                                noms: "set[str] | None" = None) -> dict[str, set[str]]:
     """Les tools à masquer pour `(sub, org active)`, PAR COUCHE (`COUCHE_*` → noms).
     Chaque couche est déjà amputée des outils protégés (anti-lockout) ; leur union
     est exactement ce que `compute_hidden_tools` masque.
@@ -84,12 +85,21 @@ async def compute_hidden_layers(ctx, sub: str, *, org=_DERIVE_ORG) -> dict[str, 
     handshake `initialize` par `UserDisabledToolsMiddleware`) gèle tout le serveur
     mono-loop le temps d'une bonne dizaine de lectures/écritures PG : mode n°2 de
     `docs/event-loop-perf.md`, même classe que la composition d'instructions du
-    15/08, restée ouverte ici faute d'un garde-fou qui la voie."""
+    15/08, restée ouverte ici faute d'un garde-fou qui la voie.
+
+    `noms` = les outils sur lesquels calculer les couches, quand l'appelant les a
+    déjà (le catalogue : le registre BRUT). ⚠️ Sans lui, la base est
+    `ctx.fastmcp.list_tools`, qui applique les transformations de visibilité de la
+    SESSION : juste au handshake (rien n'est encore masqué), FAUX en cours de session
+    — un outil déjà masqué n'y figure plus, donc dans aucune couche, et un lecteur
+    qui part du registre brut le croit « installé ». C'est ce qui faisait dire à
+    `oto_list_my_tools` que les 818 outils étaient installés pendant qu'`oto_connector`
+    rendait leurs connecteurs `not_selected` (oto-backend#1112)."""
     active_org, prof_org, disabled, enabled_override, role_plateforme = (
         await run_in_threadpool(_resolve_toggle_context, sub, org))
     try:
-        all_tools = await ctx.fastmcp.list_tools(run_middleware=False)
-        all_names = {t.name for t in all_tools}
+        all_names = (set(noms) if noms is not None else
+                     {t.name for t in await ctx.fastmcp.list_tools(run_middleware=False)})
     except Exception as e:
         logger.warning("Cannot list tools for %s: %s", sub, e)
         # repli FAIL-CLOSED : disabled explicites + masqués-par-défaut

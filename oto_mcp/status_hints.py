@@ -104,6 +104,25 @@ def require_complete(connector: str, fields: dict) -> None:
         raise ValueError(st.next_action)
 
 
+# --- le geste qui VÉRIFIE qu'un credential disponible vit (oto-backend#1112) -----
+#
+# « Disponible » (une clé résout, un compte est lié) ne dit pas « vivant » : une
+# session LinkedIn peut être morte chez le fournisseur alors que le compte reste lié.
+# Le catalogue ne sonde jamais (un aller-retour réseau par ligne) ; il NOMME l'outil
+# qui le fait. Un connecteur qui a son propre outil de statut le déclare ici, à côté
+# de l'outil — le catalogue n'a pas à connaître les connecteurs par leur nom.
+_VERIFY_STEPS: dict[str, str] = {}
+
+
+def register_verify_step(connector: str, step: str) -> None:
+    _VERIFY_STEPS[connector] = step
+
+
+def verify_step(connector: str) -> Optional[str]:
+    """Le geste de vérification DÉCLARÉ par ce connecteur, ou None."""
+    return _VERIFY_STEPS.get(connector)
+
+
 def pending_action(connector: str, sub: str, org: Optional[int],
                    group: Optional[int], entry: dict) -> Optional[str]:
     """Étape manquante pour ce (sub, connecteur), ou None. Fail-open."""

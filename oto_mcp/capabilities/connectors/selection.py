@@ -18,7 +18,10 @@ session suivante (`session_visibility`).
 """
 from __future__ import annotations
 
+import difflib
 import logging
+import re
+import unicodedata
 from typing import Literal, Optional
 
 from pydantic import BaseModel
@@ -26,6 +29,8 @@ from pydantic import BaseModel
 from ... import access, org_store, providers, session_org, tool_registry
 from ...connectors import activation as connector_activation
 from ...connectors import cardinality as connector_cardinality
+from ...connectors import credential_presence
+from ...connectors.credential_presence import CredentialPresence
 from ...connectors import readiness as connector_readiness
 from ...connectors import selection as connector_selection
 from .._authz import ORG_ADMIN_OF, SUB_ONLY
@@ -55,7 +60,10 @@ class MyConnectorsInput(BaseModel):
     vide : un filtre muet est ce qui a coûté le contexte."""
     verbose: bool = False                # True = payload complet (dashboard / setup credential)
     state: Optional[str] = None          # filtre : not_selected | active | paused
-    name: Optional[str] = None           # filtre : UN connecteur (lecture d'état ciblée)
+    # filtre : UN connecteur (lecture d'état ciblée). Nom exact, ou libellé / namespace /
+    # mot du nom (#1112 : « linkedin » trouve `linkedin_unipile` ET `aiark`, dont les
+    # outils sont `linkedin_aiark_*`) — plusieurs candidats sont TOUS rendus.
+    name: Optional[str] = None
 
 
 class ConnectorActionInput(BaseModel):
@@ -150,6 +158,12 @@ class MyConnectorRow(BaseModel):
     # credential_rejected | pending_step. Absent quand `ready` est vrai.
     not_ready: Optional[str] = None
     next_step: Optional[str] = None         # le geste, rendu tel quel (jamais reformulé)
+    # ── Credential DISPONIBLE (#1112) — sur TOUT le catalogue, pas seulement en
+    # lecture ciblée. Présent quand une clé ou un compte existe pour toi à un palier
+    # de la cascade, MÊME si `state` vaut `not_selected` : c'est la ligne qui manquait
+    # quand deux agents ont lu `not_selected` comme « non connecté ». Troisième axe,
+    # « vérifié vivant », jamais calculé ici : `credential.next_step` nomme l'outil.
+    credential: Optional[CredentialPresence] = None
 
     # ── La CARTE (`verbose=true` seulement) ──────────────────────────────────────
     # Les treize clés que `providers.public_catalog()` pose sur la ligne entière.
@@ -192,6 +206,15 @@ class ToolboxScope(BaseModel):
     note: str
 
 
+class NameMatch(BaseModel):
+    """`name` n'était pas un nom exact : ce qu'il a trouvé, et par où (#1112). Absent
+    sur un nom exact. Plusieurs candidats = tous rendus en lignes, aucun n'est choisi
+    à la place de l'appelant."""
+    query: str
+    candidates: list[str]
+    note: str
+
+
 class MyConnectors(BaseModel):
     """Le catalogue exposé à l'org active, fusionné avec l'état per-membre.
     Source UNIQUE de la library ET de « mes connecteurs » du dashboard."""
@@ -205,6 +228,11 @@ class MyConnectors(BaseModel):
     # signaler », et c'est ce raccourci qui a coûté cinq jours (#476).
     readiness: str = "not_computed"
     readiness_hint: Optional[str] = None    # le geste pour l'obtenir, quand on ne l'a pas
+    # `computed` | `unavailable` (#1112) — le calcul de `credential` sur les lignes.
+    # `unavailable` = le snapshot ne s'est pas lu : une ligne SANS `credential` ne dit
+    # alors RIEN (elle ne veut pas dire « rien n'est connecté »).
+    credentials: str = "computed"
+    name_match: Optional[NameMatch] = None
     toolbox_scope: Optional[ToolboxScope] = None
 
 
@@ -325,6 +353,92 @@ def _toolbox_scope(sub: str) -> Optional[dict]:
     }
 
 
+# ── Retrouver un connecteur par ce que l'appelant en SAIT (#1112) ─────────────────
+# L'agent ne connaît pas `linkedin_unipile` : il sait « LinkedIn », le libellé de la
+# carte. `name="linkedin"` répondait « inconnu ou indisponible » — un refus sec, que
+# l'agent a relu « pas de LinkedIn » et rendu à l'utilisateur. Même chose pour
+# `linkedin_aiark`, qui est le NAMESPACE des outils du connecteur `aiark`.
+#
+# Le registre `providers/` est la seule source (le catalogue n'est pas une table,
+# #905) : aucun alias persisté, on lit ce que chaque connecteur déclare déjà — son nom,
+# son libellé, ses namespaces.
+
+# Au-delà, la lecture ciblée cesse d'en être une : le verdict d'aptitude (~244 ms
+# l'unité, `connectors/readiness.py`) n'est pas calculé, et on le dit.
+_CANDIDATS_DIAGNOSTIQUES = 5
+
+
+def _normalise(texte: str) -> str:
+    """Casse, accents et séparateurs neutralisés : « LinkedIn », `linkedin`,
+    `linked-in` ne diffèrent pas pour qui cherche."""
+    plat = unicodedata.normalize("NFKD", texte or "")
+    plat = "".join(ch for ch in plat if not unicodedata.combining(ch)).lower()
+    return " ".join(re.split(r"[^a-z0-9]+", plat)).strip()
+
+
+def _formes(c: dict) -> set[str]:
+    """Les noms sous lesquels on peut DÉSIGNER ce connecteur : nom, libellé,
+    namespaces — normalisés."""
+    return {f for f in (_normalise(c.get("name") or ""), _normalise(c.get("label") or ""),
+                        *(_normalise(ns) for ns in c.get("namespaces") or [])) if f}
+
+
+def _resoudre_nom(catalog: list[dict], demande: str) -> list[dict]:
+    """Les lignes que `demande` désigne : le nom exact d'abord (seul), sinon toute
+    ligne dont une forme (nom, libellé, namespace) ÉGALE la demande ou en contient
+    chaque mot. « linkedin » → `linkedin_unipile` (libellé) et `aiark` (namespace
+    `linkedin_aiark`). Vide = rien ne correspond ; c'est à l'appelant de refuser."""
+    exact = [c for c in catalog if c["name"] == demande]
+    if exact:
+        return exact
+    q = _normalise(demande)
+    if not q:
+        return []
+    mots = set(q.split())
+    egal, contient = [], []
+    for c in catalog:
+        formes = _formes(c)
+        if q in formes:
+            egal.append(c)
+        elif any(mots <= set(f.split()) for f in formes):
+            contient.append(c)
+    return egal + contient
+
+
+def _suggestions(catalog: list[dict], demande: str, n: int = 5) -> list[str]:
+    """Les noms PROCHES de `demande` (orthographe, préfixe) — ce qu'un refus propose
+    au lieu d'un « inconnu » sec. Nom exact du connecteur, jamais son libellé : c'est
+    lui que l'appel suivant doit porter."""
+    q = _normalise(demande)
+    if not q:
+        return []
+    par_forme: dict[str, str] = {}
+    for c in catalog:
+        for f in _formes(c):
+            par_forme.setdefault(f, c["name"])
+    proches = [par_forme[f] for f in difflib.get_close_matches(q, par_forme, n=n * 2,
+                                                               cutoff=0.6)]
+    proches += [nom for f, nom in par_forme.items() if q in f or f in q]
+    return list(dict.fromkeys(proches))[:n]
+
+
+def _refus_nom_inconnu(catalog: list[dict], demande: str) -> AuthzDenied:
+    """Le refus d'un nom qui ne désigne rien — NOMMÉ et qui propose (#1112)."""
+    proches = _suggestions(catalog, demande)
+    if proches:
+        suite = (f" Noms proches : {', '.join(f'`{n}`' for n in proches)} — relance avec "
+                 f"l'un d'eux (`oto_connector(op='list', name='{proches[0]}')`).")
+    else:
+        suite = (" Aucun nom proche : `oto_connector(op='list')` sans `name` rend le "
+                 "catalogue compact avec les noms exacts.")
+    return AuthzDenied(
+        404, "unknown_connector",
+        f"Aucun connecteur disponible pour ton org active ne s'appelle `{demande}` ni ne "
+        f"porte ce libellé (ou il n'est pas ouvert à ton org).{suite} Ce refus ne dit "
+        f"RIEN de tes connexions : il porte sur le nom.",
+        details={"query": demande, "suggestions": proches})
+
+
 def _with_readiness(ctx: ResolvedCtx, row: dict) -> dict:
     """Pose `ready` / `not_ready` / `next_step` sur LA ligne demandée, et renvoie ce
     que l'enveloppe doit dire du calcul.
@@ -370,14 +484,30 @@ def _me(ctx: ResolvedCtx, inp: MyConnectorsInput) -> dict:
     # BATCHÉE, hors boucle, pour ne pas payer N×M requêtes.
     reach = access.reachable_instances_map(ctx.sub, ctx.org_id)
     catalog = _visible_catalog(ctx)
+    name_match: Optional[dict] = None
     if inp.name:
-        catalog = [c for c in catalog if c["name"] == inp.name]
-        if not catalog:
-            # Même verdict que `_require_exposed` (select/pause) : non exposé pour
-            # l'org active, restreint par le RBAC d'org, ou nom inconnu — indistinguables
-            # côté membre, et tous actionnables par le même message.
-            raise AuthzDenied(404, "unknown_connector",
-                              f"Connecteur `{inp.name}` inconnu ou indisponible pour ton org active.")
+        trouves = _resoudre_nom(catalog, inp.name)
+        if not trouves:
+            # Non exposé pour l'org active, restreint par le RBAC d'org, ou nom inconnu
+            # — indistinguables côté membre (même verdict que `_require_exposed`). Mais
+            # le refus PROPOSE : un « inconnu » sec a été relu « pas connecté » (#1112).
+            raise _refus_nom_inconnu(catalog, inp.name)
+        if [c["name"] for c in trouves] != [inp.name]:
+            name_match = {
+                "query": inp.name,
+                "candidates": [c["name"] for c in trouves],
+                "note": (f"`{inp.name}` n'est pas un nom exact : "
+                         + (f"il désigne `{trouves[0]['name']}`." if len(trouves) == 1 else
+                            f"{len(trouves)} connecteurs y répondent, tous rendus — "
+                            f"aucun n'est choisi à ta place.")
+                         + " Les gestes (select/pause/unselect) prennent le nom exact."),
+            }
+        catalog = trouves
+    # Credential DISPONIBLE (#1112), sur toutes les lignes — la même fonction que
+    # `oto_list_my_tools`. Fail-VISIBLE : un snapshot illisible se DIT dans
+    # l'enveloppe, sinon des lignes sans `credential` se reliraient « rien n'est
+    # connecté », la conclusion même qu'on répare.
+    presence, credentials = credential_presence.lire(ctx.sub, org=ctx.org_id)
     connectors = []
     for c in catalog:
         state = selection.get(c["name"], "not_selected")
@@ -428,6 +558,8 @@ def _me(ctx: ResolvedCtx, inp: MyConnectorsInput) -> dict:
         # le réglage d'org. C'est de la VISIBILITÉ : l'accès se juge à l'appel.
         if reach.get(c["name"]):
             row["reachable_instances"] = reach[c["name"]]
+        if c["name"] in presence:
+            row["credential"] = presence[c["name"]]
         # Provenance et retrait (ADR 0050 §E7) : posés seulement quand ils disent
         # quelque chose, pour la même raison que `reachable_instances`.
         if c["name"] in detail:
@@ -437,22 +569,31 @@ def _me(ctx: ResolvedCtx, inp: MyConnectorsInput) -> dict:
             # « AAAA-MM-JJ HH:MM:SS » (UTC, sans fuseau) — servie telle quelle.
             row["removed_at"] = str(removed[c["name"]])
         connectors.append(row)
-    out: dict = {"connectors": connectors, "verbose": inp.verbose}
+    out: dict = {"connectors": connectors, "verbose": inp.verbose,
+                 "credentials": credentials}
+    if name_match is not None:
+        out["name_match"] = name_match
     # Verdict d'aptitude (#476) — sur une lecture CIBLÉE seulement. Mesuré sur la prod
     # le 28/08/2026 : le rendre sur tout le catalogue coûte 1 993 ms pour 90
     # connecteurs, sur un serveur MONO-LOOP. On ne le calcule donc pas — mais on le
     # DIT, sinon l'absence de `ready` se relit « rien à signaler », qui est
-    # précisément le raccourci qu'on répare.
-    if inp.name and connectors:
-        out.update(_with_readiness(ctx, connectors[0]))
+    # précisément le raccourci qu'on répare. Une recherche par libellé peut rendre
+    # quelques candidats (#1112) : chacun reçoit son verdict, dans une borne.
+    if inp.name and connectors and len(connectors) <= _CANDIDATS_DIAGNOSTIQUES:
+        verdicts = [_with_readiness(ctx, row) for row in connectors]
+        out.update(next((v for v in verdicts if v["readiness"] == "unavailable"),
+                        verdicts[0]))
     else:
         out["readiness"] = "not_computed"
         out["readiness_hint"] = (
-            "État réel non calculé sur un catalogue (trop cher pour un serveur "
-            "mono-loop). `state` ne dit QUE ta sélection : pour savoir si un "
-            "connecteur MARCHE, redemande-le seul — "
-            "`oto_connector(op='list', name='<connecteur>')` rend alors `ready` et, "
-            "s'il ne l'est pas, l'étape qui manque.")
+            "Aptitude non calculée sur un catalogue (trop cher pour un serveur "
+            "mono-loop). TROIS axes, à ne pas confondre : `state` = ta SÉLECTION dans "
+            "la toolbox (`not_selected` ne veut PAS dire non connecté) ; `credential` "
+            "= une clé ou un compte existe pour toi (absent = aucun ne résout) ; "
+            "vivant = jamais vérifié ici, `credential.next_step` nomme l'outil qui le "
+            "vérifie. Pour l'aptitude d'un connecteur, redemande-le seul — "
+            "`oto_connector(op='list', name='<connecteur>')` rend `ready` et, s'il "
+            "ne l'est pas, l'étape qui manque.")
     tb = _toolbox_scope(ctx.sub)
     if tb is not None:
         out["toolbox_scope"] = tb
@@ -463,8 +604,9 @@ def _require_exposed(ctx: ResolvedCtx, name: str) -> None:
     """Plafond : un connecteur non-exposé pour l'org active ne peut être ni
     sélectionné ni mis en pause (deny-by-default jamais relâché)."""
     if name not in connector_activation.exposed_connectors(ctx.org_id):
-        raise AuthzDenied(404, "unknown_connector",
-                          f"Connecteur `{name}` indisponible pour ton org active.")
+        # Un geste ne se résout PAS par libellé (il écrit) : il exige le nom exact, mais
+        # son refus propose les noms proches, comme la lecture (#1112).
+        raise _refus_nom_inconnu(_visible_catalog(ctx), name)
 
 
 # Guidage post-activation (oto-backend#111). Le registre d'outils d'une session MCP est
@@ -554,11 +696,16 @@ CAPABILITIES += [
                     "full card (doc, auth descriptor, credential fields). Filter with state="
                     "active|paused|not_selected, or with name=<connector> to read the state of "
                     "a SINGLE connector (pair it with verbose=true instead of pulling the whole "
-                    "catalog). ⚠️ `state` is only YOUR SELECTION — it does NOT say the connector "
-                    "works. A name=<connector> lookup also returns `ready` (key resolves, paid "
-                    "option open, no step left) plus `not_ready`/`next_step` when it doesn't; the "
-                    "whole catalog returns readiness:not_computed (too costly) rather than a "
-                    "silent blank, so ask by name before concluding a connector is connected.",
+                    "catalog). `name` also accepts a label or a tool namespace (\"linkedin\" "
+                    "finds every LinkedIn connector, all returned); an unmatched name is refused "
+                    "with the closest names. ⚠️ `state` is only YOUR SELECTION in the toolbox — "
+                    "`not_selected` does NOT mean not connected. `credential` (on every row, even "
+                    "not_selected) says a key or an account exists for you, at which level, and "
+                    "its `next_step` names the tool that checks it is ALIVE (e.g. "
+                    "linkedin_unipile_account op=status) — call it before telling anyone a "
+                    "connector is not connected. A name=<connector> lookup also returns `ready` "
+                    "(key resolves, paid option open, no step left) plus `not_ready`/`next_step` "
+                    "when it doesn't; the whole catalog returns readiness:not_computed.",
         errors=(DeclaredError(404, "unknown_connector",
                               "nom inconnu du registre, connecteur non exposé "
                               "pour l'org active, ou restreint par une règle — "

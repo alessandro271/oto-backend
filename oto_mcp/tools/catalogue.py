@@ -37,6 +37,12 @@ def namespace_help(ns: str) -> str:
 ETATS = ("installed", "installable", "not_exposed")
 LEGENDE = {
     "installed": "dans ta boîte à outils : appelle-le directement.",
+    # #1112 : l'état d'un outil dit sa VISIBILITÉ, jamais la connexion — un agent a
+    # dit « LinkedIn non connecté » en lisant un état de sélection.
+    "credential": "sur un groupe : une clé ou un compte EXISTE pour toi (palier, nature), "
+                  "quel que soit l'état des outils ; jamais vérifié vivant ici — son "
+                  "`next_step` nomme l'outil qui le vérifie. Un état `installable` ne veut "
+                  "PAS dire non connecté.",
     "installable": "appelable tout de suite par oto_call(name, arguments) ; pour l'installer "
                    "durablement : oto_connector(op='select', name=<connecteur>) — ou "
                    "oto_enable_tool(name) si c'est toi qui l'avais masqué.",
@@ -77,7 +83,11 @@ async def catalogue_avec_etat(ctx: Context, sub: str, prefix: str,
     # le pin est exact, et un déplacement casse ici au premier import, pas en silence.
     bruts = [t for t in await Provider.list_tools(ctx.fastmcp)
              if is_enabled(t) and not _is_backend_tool(t)]
-    couches = await session_visibility.compute_hidden_layers(ctx, sub, org=org)
+    # Les couches se calculent sur CE registre brut, pas sur la liste de la session :
+    # en cours de session, un outil déjà masqué n'y est plus, n'entre dans aucune
+    # couche, et sortait `installed` — les 818 outils l'étaient (oto-backend#1112).
+    couches = await session_visibility.compute_hidden_layers(
+        ctx, sub, org=org, noms={t.name for t in bruts})
     masques = set().union(*couches.values())
     non_appelables = set().union(*(noms for nom, noms in couches.items()
                                    if nom not in session_visibility.COUCHES_INSTALLABLES))
@@ -106,12 +116,17 @@ async def catalogue_avec_etat(ctx: Context, sub: str, prefix: str,
     return sorted(entries, key=lambda e: e["name"])
 
 
-def grouper_par_connecteur(entries: list[dict]) -> list[dict]:
+def grouper_par_connecteur(entries: list[dict],
+                           credentials: Optional[dict[str, dict]] = None) -> list[dict]:
     """La projection par défaut d'`op=list` : un groupe par namespace, l'état du groupe
     et ses outils par nom — les exceptions (un outil dans un autre état que son
     connecteur : masqué par la personne, masqué par défaut, hors de portée) nommées
     à part sous `states`. Mesuré le 12/09/2026 sur 724 outils : 25 k caractères,
-    contre 53 k pour une ligne par outil sans description et 115 k avec."""
+    contre 53 k pour une ligne par outil sans description et 115 k avec.
+
+    `credentials` = `connectors.credential_presence.par_connecteur` — la MÊME fonction
+    que la ligne d'`oto_connector` (#1112) : le groupe d'un connecteur dont une clé ou
+    un compte existe porte `credential`, sinon rien."""
     groupes: dict[str, list[dict]] = {}
     for e in entries:
         groupes.setdefault(e["namespace"], []).append(e)
@@ -130,6 +145,8 @@ def grouper_par_connecteur(entries: list[dict]) -> list[dict]:
         ecarts = {e["name"]: e["state"] for e in outils if e["state"] != etat}
         if ecarts:
             groupe["states"] = ecarts
+        if con is not None and con.name in (credentials or {}):
+            groupe["credential"] = credentials[con.name]
         out.append(groupe)
     return out
 
