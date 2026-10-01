@@ -24,8 +24,9 @@
 #   3. on réécrit le seul fichier d'amont importé par le Caddyfile, `caddy validate`,
 #      puis `systemctl reload caddy` — gracieux : les connexions établies CONTINUENT
 #      sur l'ancienne couleur, seules les nouvelles requêtes vont sur la nouvelle ;
-#   4. on vérifie le trafic public, puis on DRAINE l'ancienne couleur (on attend que
-#      ses connexions établies tombent à 0, plafond BG_DRAIN_MAX) ;
+#   4. on vérifie le trafic public (attente bornée tant qu'aucune réponse HTTP ne
+#      revient : certificat en cours d'émission), puis on DRAINE l'ancienne couleur
+#      (on attend que ses connexions établies tombent à 0, plafond BG_DRAIN_MAX) ;
 #   5. seulement alors on l'arrête. Échec à n'importe quelle étape : on ne bascule
 #      pas (ou on rebascule), l'ancienne couleur n'a jamais cessé de servir.
 #
@@ -58,6 +59,18 @@
 set -uo pipefail
 
 HEALTH_PATH="/.well-known/oauth-authorization-server"
+# Attente du trafic public après le reload de Caddy (bg_public_ok) : un essai toutes
+# les PUBLIC_PAS secondes, au plus PUBLIC_ESSAIS essais et jamais au-delà de
+# PUBLIC_ATTENTE_MAX secondes — puis échec net. Pourquoi : au premier déploiement sur un
+# nom d'hôte NEUF, Caddy obtient le certificat ACME APRÈS le reload (≈ 4 s mesurées le
+# 01/10/2026) ; un contrôle immédiat ne reçoit aucune réponse (code 000) et rebascule
+# une montée saine. 20 s couvrent cinq fois cette mesure sans retenir un échec réel
+# plus longtemps que le démarrage d'une couleur. Seule l'ABSENCE de réponse HTTP se
+# réessaie : un code reçu, quel qu'il soit, veut dire que Caddy route et que la
+# couleur répond mal — chaque seconde d'attente serait alors servie au public.
+PUBLIC_PAS=2
+PUBLIC_ESSAIS=10
+PUBLIC_ATTENTE_MAX=20
 # Qui réécrit l'amont — nommé dans l'en-tête du fichier généré.
 BG_LIB="${BASH_SOURCE[0]}"
 
@@ -266,10 +279,30 @@ bg_switch() {
 }
 
 bg_public_ok() {
-  local code
-  code=$(curl -fsS --max-time 20 -o /dev/null -w '%{http_code}' "$BG_PUBLIC" 2>/dev/null)
-  [ "$code" = 200 ] || { bg_log "trafic public KO sur $BG_PUBLIC (code=${code:-aucun})"; return 1; }
-  bg_log "trafic public OK sur $BG_PUBLIC"
+  local code essai=0 t0=$SECONDS
+  while :; do
+    essai=$((essai + 1))
+    code=$(curl -fsS --max-time 20 -o /dev/null -w '%{http_code}' "$BG_PUBLIC" 2>/dev/null)
+    if [ "$code" = 200 ]; then
+      if [ "$essai" -eq 1 ]; then
+        bg_log "trafic public OK sur $BG_PUBLIC"
+      else
+        bg_log "trafic public OK sur $BG_PUBLIC au ${essai}e essai, après $((SECONDS - t0))s"
+      fi
+      return 0
+    fi
+    # Une réponse HTTP autre que 200 : la couleur répond mal, on n'attend pas.
+    if [ -n "$code" ] && [ "$code" != 000 ]; then
+      bg_log "trafic public KO sur $BG_PUBLIC (code=${code})"
+      return 1
+    fi
+    if [ "$essai" -ge "$PUBLIC_ESSAIS" ] || [ $((SECONDS - t0 + PUBLIC_PAS)) -gt "$PUBLIC_ATTENTE_MAX" ]; then
+      bg_log "trafic public KO sur $BG_PUBLIC : aucune réponse HTTP après $((SECONDS - t0))s et ${essai} essais (plafond ${PUBLIC_ESSAIS} essais, ${PUBLIC_ATTENTE_MAX}s ; dernier code=${code:-aucun})"
+      return 1
+    fi
+    bg_log "trafic public sans réponse sur $BG_PUBLIC (code=${code:-aucun}, essai ${essai}/${PUBLIC_ESSAIS}) — certificat en cours d'émission ? nouvel essai dans ${PUBLIC_PAS}s"
+    sleep "$PUBLIC_PAS"
+  done
 }
 
 # --- VIDANGE DIFFÉRÉE : le déploiement NE L'ATTEND PAS. Il se termine dès la

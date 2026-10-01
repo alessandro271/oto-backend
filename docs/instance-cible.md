@@ -28,6 +28,13 @@ des ports, arbres, amont et couleur qu'elle recevait déjà. **Aucune n'a de dé
 variable oubliée refuse le chargement en la nommant, et un pointeur de couleur absent est
 une panne nommée, plus une invitation à supposer « bleu ».
 
+Le contrôle du trafic public après le reload de Caddy **attend, borné**, tant qu'aucune
+réponse HTTP ne revient (code 000) : au premier déploiement sur un nom d'hôte neuf, Caddy
+obtient le certificat ACME quelques secondes après le reload. Un essai toutes les 2 s, au
+plus 10 essais et 20 s (`PUBLIC_PAS`, `PUBLIC_ESSAIS`, `PUBLIC_ATTENTE_MAX`), puis échec net
+— nombre d'essais, durée, dernier code — et rebascule comme avant. Un code HTTP reçu autre
+que 200 échoue tout de suite : la couleur répond mal, l'attente serait servie au public.
+
 **Notre box fait exactement les mêmes gestes qu'avant.** Nos deux wrappers
 (`deploy/oto-backend.sh`, `deploy/oto-backend-canari.sh`) déclarent les valeurs qui
 étaient en dur, à l'identique. La preuve est un banc, pas une relecture :

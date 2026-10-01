@@ -5,7 +5,8 @@ que nos deux déploiements (`deploy/oto-backend.sh` pour la production,
 `deploy/oto-backend-canari.sh` pour la préproduction) font sur la machine. Il rejoue
 chaque scénario réel — bascule dans les deux sens, retour arrière, préproduction, et
 les chemins d'échec (couleur morte au démarrage, `caddy validate` qui refuse, trafic
-public en échec, lanceur figé sur un chemin) — dans une racine jetable, avec des
+public en échec, certificat pas encore prêt puis jamais prêt, lanceur figé sur un
+chemin) — dans une racine jetable, avec des
 doublures qui JOURNALISENT chaque commande au lieu de l'exécuter, puis compare la
 trace à une référence enregistrée depuis les scripts d'avant.
 
@@ -58,6 +59,13 @@ SCENARIOS: dict[str, tuple[str, list[str], str, str, dict[str, str]]] = {
     "prod-sans-argument": ("oto-backend.sh", [], "prod", "blue", {}),
     "prod-public-ko-rebascule": ("oto-backend.sh", [TAG], "prod", "blue",
                                  {"BANC_PUBLIC_KO": "1"}),
+    # Nom d'hôte neuf : Caddy obtient le certificat après le reload, le public ne
+    # répond pas (000) aux deux premiers essais puis répond — la bascule tient.
+    "prod-certificat-pas-pret": ("oto-backend.sh", [TAG], "prod", "blue",
+                                 {"BANC_PUBLIC_SANS_REPONSE": "2"}),
+    # Toujours aucune réponse au plafond : échec net, rebascule comme avant.
+    "prod-certificat-jamais-pret": ("oto-backend.sh", [TAG], "prod", "blue",
+                                    {"BANC_PUBLIC_SANS_REPONSE": "99"}),
     "prod-couleur-morte": ("oto-backend.sh", [TAG], "prod", "blue",
                            {"BANC_DEMARRAGE_KO": "1"}),
     "prod-caddy-refuse": ("oto-backend.sh", [TAG], "prod", "blue",
@@ -94,7 +102,14 @@ url=""; for a in "$@"; do case "$a" in http*) url="$a" ;; esac; done
 case "$url" in
   *tls-check*) printf 404 ;;
   http://127.0.0.1:*) : ;;
-  https://*) if [ -n "${BANC_PUBLIC_KO:-}" ]; then printf 503; exit 22; fi; printf 200 ;;
+  https://*)
+    if [ -n "${BANC_PUBLIC_KO:-}" ]; then printf 503; exit 22; fi
+    # Les BANC_PUBLIC_SANS_REPONSE premiers appels publics (celui-ci compris, déjà
+    # journalisé) n'obtiennent aucune réponse HTTP : poignée TLS refusée, code 000.
+    if [ "$(grep -c '^curl .*https://' "$BANC_TRACE")" -le "${BANC_PUBLIC_SANS_REPONSE:-0}" ]; then
+      printf 000; exit 35
+    fi
+    printf 200 ;;
 esac
 exit 0''',
     "git": r'''
