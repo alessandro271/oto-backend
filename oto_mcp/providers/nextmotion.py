@@ -17,8 +17,9 @@ from ._model import _c
 # (dossier, antécédents, photos, ordonnances, consentements, soins, consultations,
 # visites, questionnaires) n'est PAS servi ; tout ce qui sort passe par une liste
 # blanche, et le patient n'y est servi que par son id — cf. `tools/nextmotion.py`.
+# La liste des patients n'est lue que pour des AGRÉGATS à seuil — `nextmotion_analyse`.
 #
-# Cinq modules, une seule clé : les outils de `nextmotion.py` et ses frères, montés
+# Six modules, une seule clé : les outils de `nextmotion.py` et ses frères, montés
 # ensemble par `modules`.
 CONNECTOR = _c(
     "nextmotion", ["nextmotion"], auth_modes={"byo_user", "byo_org"}, keyed=True,
@@ -27,7 +28,7 @@ CONNECTOR = _c(
          "statistiques, stock (sans le dossier médical)",
     href="https://www.nextmotion.net",
     modules=("nextmotion", "nextmotion_catalogue", "nextmotion_agenda",
-             "nextmotion_ventes", "nextmotion_crm"),
+             "nextmotion_ventes", "nextmotion_crm", "nextmotion_analyse"),
 )
 
 CATEGORY = "Métier"
@@ -39,6 +40,7 @@ DESCRIPTION = (
     "Nextmotion : cliniques, praticiens, agenda (salles, appareils, plages, "
     "absences, demandes en ligne, créneaux libres), catalogue et forfaits, devis, "
     "factures et paiements, leads, statistiques de chiffre d'affaires, stock et "
-    "réglages. Le dossier médical n'est pas servi, et un patient n'y apparaît que "
+    "réglages ; patientèle (code postal, âge, genre) et occupation des appareils en "
+    "agrégats. Le dossier médical n'est pas servi, et un patient n'y apparaît que "
     "par un identifiant, sans nom ni coordonnées."
 )

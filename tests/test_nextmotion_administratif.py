@@ -300,7 +300,9 @@ def test_aucune_sentinelle_ne_sort(monkeypatch, tool, kwargs, sans):
 
 def test_chaque_outil_est_couvert_par_le_poison():
     outils = {t.name for t in asyncio.run(_mcp().list_tools())}
-    exemptes = {"nextmotion_practitioner"}  # un praticien a un nom : il est servi
+    exemptes = {"nextmotion_practitioner",  # un praticien a un nom : il est servi
+                # agrégats : leur poison vit dans test_nextmotion_analyse.py
+                "nextmotion_patient_demographics", "nextmotion_device_usage"}
     assert outils - exemptes - {t for t, _, _ in _APPELS} == set()
 
 

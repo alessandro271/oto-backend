@@ -11,10 +11,11 @@ sur les cliniques dont il est employé — il n'y a pas de clé plateforme.
 Nextmotion porte des dossiers patients. Tout ce qui est contenu médical — dossier et
 antécédents, photos et médias, ordonnances, consentements, soins réalisés,
 consultations, visites (notes cliniques), questionnaires de santé, suivi post-soin —
-est **hors périmètre**, comme la liste et la fiche des patients et le chat : le client
-oto-core n'a aucune méthode vers ces endpoints, et ces modules n'en ajoutent pas. Les
-ouvrir est une décision de gouvernance (RGPD art. 9, hébergement HDS), pas une
-extension de surface.
+est **hors périmètre**, comme la fiche des patients et le chat : le client oto-core
+n'a aucune méthode vers ces endpoints, et ces modules n'en ajoutent pas. Les ouvrir est
+une décision de gouvernance (RGPD art. 9, hébergement HDS), pas une extension de
+surface. La LISTE des patients est lue par `nextmotion_analyse` seul, pour des
+agrégats à seuil (décision du 2026-10-01) : aucune de ses lignes ne sort.
 
 ⚠️ **Des ressources du périmètre EMBARQUENT quand même de la donnée personnelle** :
 rendez-vous, parcours, devis, factures et paiements portent un objet `patient` complet ;
@@ -45,7 +46,8 @@ Modules frères (même clé, même client, montés par `Connector.modules`) :
 `nextmotion_catalogue` (catalogue, forfaits, répartitions comptables, produits
 globaux), `nextmotion_agenda` (salles, appareils, plages, absences, demandes en ligne,
 parcours), `nextmotion_ventes` (paiements, statistiques, totaux d'un patient),
-`nextmotion_crm` (leads, réglages de la clinique).
+`nextmotion_crm` (leads, réglages de la clinique), `nextmotion_analyse` (patientèle et
+occupation des appareils, en agrégats).
 
 **Aucun argument n'est retenu au silence** (`is not None`) → `nextmotion_garde`.
 

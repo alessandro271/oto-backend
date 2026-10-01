@@ -5,7 +5,7 @@ connecte-toi à l'[application web Nextmotion](https://app.nextmotion.net), puis
 - l'accès API est inclus dans l'offre Scale, ou en option payante à partir de l'offre Growth (grille publique [nextmotion.net/tarifs](https://www.nextmotion.net/tarifs)) ; qui peut générer une clé selon le rôle dans la clinique n'est pas documenté
 - BYO seulement : pas de clé oto partagée
 
-## usage — agenda, catalogue, ventes, leads, statistiques et stock
+## usage — agenda, catalogue, ventes, leads, statistiques, stock et agrégats
 
 commence par `nextmotion_clinic()` : chaque autre outil demande un `clinic_id`.
 - « qui travaille dans la clinique ? » → `nextmotion_practitioner(op="list", clinic_id=…)`
@@ -24,6 +24,8 @@ commence par `nextmotion_clinic()` : chaque autre outil demande un `clinic_id`.
 - « le chiffre d'affaires par mois, par type de soin » → `nextmotion_statistics(kind="appointment_income"|"treatment_types"|"treatment_types_income", clinic_id=…, period_type="month")`
 - « combien ce patient a-t-il facturé, payé ? » → `nextmotion_patient_stats(patient_id=…)` avec l'id servi par un rendez-vous, un devis ou une facture
 - « le pipeline des prospects » → `nextmotion_lead(op="list", clinic_id=…)`, et les libellés de source ou de statut → `nextmotion_setting(kind="object_label", clinic_id=…, label_types=["lead_source"])`
+- « d'où viennent nos patients, quel âge, quel genre ? » → `nextmotion_patient_demographics(clinic_id=…, by=["department","age_band"])` — effectifs seulement ; le profil socio-démographique d'une commune (population, revenus) se lit en open data : `urba_socio(code_insee)`
+- « nos machines tournent-elles ? » → `nextmotion_device_usage(clinic_id=…, start_date=…, end_date=…, period_type="month")` — 93 jours au plus par appel
 - « abonnement Nextmotion, moyens de paiement, gabarits, webhooks » → `nextmotion_setting(kind="feature"|"payment_medium"|"communication_template"|"document_template"|"webhook", clinic_id=…)`
 
 ## note — factures par période : un parcours complet, borné
@@ -39,9 +41,15 @@ commence par `nextmotion_clinic()` : chaque autre outil demande un `clinic_id`.
 - `nextmotion_product` lit le stock de la clinique (un lot par ligne : numéro de lot, péremption, niveaux de stock, prix unitaire, produit et marque), en lecture seule
 - l'API Nextmotion n'expose **aucun consommable ni lot par facture ou par soin** : une ligne de facture porte l'acte et ses montants, jamais les lots consommés, et rien ne relie un lot à une facture ou à un patient
 
+## note — patientèle et appareils : des agrégats, jamais une ligne
+
+- `nextmotion_patient_demographics` lit toute la liste des patients pour **compter** : par code postal, département, ville, pays, genre ou tranche d'âge ; aucune ligne, aucun id, aucun nom ne sort, et **une case de moins de 10 patients est masquée** (seul le total masqué est rendu) — croiser beaucoup de dimensions masque beaucoup : commence large
+- l'âge sort en tranche (0-17, 18-24, 25-34, 35-44, 45-54, 55-64, 65+), jamais en date de naissance ; le département se déduit d'un code postal français, « étranger » si le pays n'est pas la France
+- `nextmotion_device_usage` compte, par appareil, les rendez-vous tenus, leurs minutes et les non tenus, en lisant l'agenda jour par jour : c'est l'usage **réservé**, pas l'usage réel de la machine (tirs, durée effective), que Nextmotion ne connaît pas ; aucun taux d'occupation, l'API ne donne pas la capacité d'un appareil
+
 ## note — données de santé : ce qui n'est pas servi
 
-- **aucun contenu médical** : dossier et liste des patients, antécédents, photos et médias, ordonnances, consentements, soins réalisés, consultations, visites et leurs notes, questionnaires de santé et suivi post-soin restent hors du connecteur, comme le chat avec les patients
+- **aucun contenu médical** : dossier des patients (leur liste n'est lue que pour les agrégats ci-dessus), antécédents, photos et médias, ordonnances, consentements, soins réalisés, consultations, visites et leurs notes, questionnaires de santé et suivi post-soin restent hors du connecteur, comme le chat avec les patients
 - **tout ce qui sort passe par une liste blanche** écrite d'après la spec : un champ que Nextmotion ajouterait demain ne sort pas, et `fields=["*"]` rend la vue par défaut, jamais le brut
 - **le patient n'est servi que par son id** dans les rendez-vous, parcours, devis, factures et paiements (aperçu `dry_run` compris) : ni nom, ni prénom, ni email, ni téléphone, et aucun outil ne résout cet id en personne — n'essaie pas de deviner qui c'est. `nextmotion_patient_stats` rend ses totaux financiers et ses dates de visite, rien de plus
 - **la personne d'une demande en ligne ou d'un lead n'est pas servie** : ni nom, ni coordonnées, ni date de naissance, ni notes, ni référence externe ; aucune recherche par nom n'est proposée
