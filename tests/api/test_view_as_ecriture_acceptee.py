@@ -30,7 +30,6 @@ from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from oto_mcp import access, db, org_store, session_org
-from oto_mcp.access import scope as access_scope
 from oto_mcp.api import routes as api_routes
 
 ORG = 353
@@ -57,7 +56,7 @@ def monter(monkeypatch):
         async def authentifie(request, verifier, **kw):
             return OPERATEUR, None
         monkeypatch.setattr(api_routes, "_authenticate", authentifie)
-        monkeypatch.setattr(access_scope, "get_user_role",
+        monkeypatch.setattr(access, "get_user_role",
                             lambda sub: plateforme if sub == OPERATEUR else "member")
         monkeypatch.setattr(db, "get_user", lambda sub: {"sub": sub})
         # L'opérateur n'est membre d'aucune org ; la cible l'est de l'org consultée.
@@ -150,7 +149,7 @@ def _journaliser(monkeypatch, *, plateforme="super_admin", entetes, corps=CORPS_
         request.scope["oto_principal"] = {"sub": OPERATEUR}
         return OPERATEUR, None
     monkeypatch.setattr(api_routes, "_authenticate", authentifie)
-    monkeypatch.setattr(access_scope, "get_user_role",
+    monkeypatch.setattr(access, "get_user_role",
                         lambda sub: plateforme if sub == OPERATEUR else "member")
     monkeypatch.setattr(db, "get_user", lambda sub: {"sub": sub})
     monkeypatch.setattr(org_store, "get_org_role",

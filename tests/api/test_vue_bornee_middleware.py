@@ -21,7 +21,6 @@ from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from oto_mcp import access, db, group_store, org_store, session_org
-from oto_mcp.access import scope as access_scope
 from oto_mcp.api import routes as api_routes
 
 ORG, AUTRE = 270, 271
@@ -54,7 +53,7 @@ def client(monkeypatch):
             request.scope["oto_principal"] = {"sub": appelant}
             return appelant, None
         monkeypatch.setattr(api_routes, "_authenticate", authentifie)
-        monkeypatch.setattr(access_scope, "get_user_role",
+        monkeypatch.setattr(access, "get_user_role",
                             lambda sub: "admin" if sub == OPERATEUR else "member")
         monkeypatch.setattr(db, "get_user", lambda sub: {"sub": sub})
         monkeypatch.setattr(org_store, "get_org_role",
@@ -200,7 +199,7 @@ def _journal(monkeypatch, appelant, entetes, chemin="/api/me"):
         request.scope["oto_principal"] = {"sub": appelant}
         return appelant, None
     monkeypatch.setattr(api_routes, "_authenticate", authentifie)
-    monkeypatch.setattr(access_scope, "get_user_role", lambda sub: "member")
+    monkeypatch.setattr(access, "get_user_role", lambda sub: "member")
     monkeypatch.setattr(db, "get_user", lambda sub: {"sub": sub})
     monkeypatch.setattr(org_store, "get_org_role",
                         lambda org_id, sub: ROLES.get((int(org_id), sub)))

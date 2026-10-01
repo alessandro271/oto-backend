@@ -143,8 +143,8 @@ def test_org_filter_unreadable_serves_nothing_of_the_filtered_data(monkeypatch):
     une raison étrangère à la rédaction (incident du 21/09). Rien du brut ne sort."""
     sentinelle = "SENTINELLE-NOM-1045"
     politique = {"unipile": {"rules": [{"fields": ["last_name"], "action": "drop"}]}}
-    monkeypatch.setattr("oto_mcp.access.rbac.current_user_sub_from_token", lambda: "sub-test")
-    monkeypatch.setattr("oto_mcp.access.rbac.scope.current_org", lambda sub: 1)
+    monkeypatch.setattr("oto_mcp.access.current_user_sub_from_token", lambda: "sub-test")
+    monkeypatch.setattr("oto_mcp.access.current_org", lambda sub: 1)
     monkeypatch.setattr("oto_mcp.access.rbac.org_store.get_org_field_filters",
                         lambda org_id: politique)
     monkeypatch.setattr(field_redaction, "_observe_schema", lambda *_a: None)

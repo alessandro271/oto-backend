@@ -15,8 +15,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from oto_mcp import db, group_store, org_store
-from oto_mcp.access import scope as access_scope
+from oto_mcp import access, db, group_store, org_store
 from oto_mcp.api import routes as api_routes
 
 ORG, EQUIPE = 172, 7
@@ -34,7 +33,7 @@ def client(monkeypatch):
         async def authentifie(request, verifier, **kw):
             return "u-acteur", None
         monkeypatch.setattr(api_routes, "_authenticate", authentifie)
-        monkeypatch.setattr(access_scope, "get_user_role", lambda sub: plateforme)
+        monkeypatch.setattr(access, "get_user_role", lambda sub: plateforme)
         monkeypatch.setattr(org_store, "get_org_role", lambda org_id, sub: role_org)
         monkeypatch.setattr(group_store, "get_group", lambda gid: {"id": gid, "org_id": ORG})
         monkeypatch.setattr(group_store, "get_group_role", lambda gid, sub: role_equipe)
