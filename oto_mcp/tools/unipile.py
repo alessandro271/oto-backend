@@ -97,6 +97,9 @@ _TEXTUAL_FIELDS = ("text", "original_text")
 # puis fait checkpoint/déconnecte le compte). + cache fiches société (route la plus
 # contrainte, ~100/fenêtre) = 0 appel amont, 0 quota. Garde-fous PROCESS-LOCAL (mono-loop).
 _CHAT_LIST_MAX = 25      # page max de `linkedin_unipile_chat op=list` (#873, LinkedIn)
+_ENGAGEMENT_DEFAULT = 100  # personnes rendues par `linkedin_unipile_post op=engagement`
+_ENGAGEMENT_MAX = 500      #  … et leur borne haute (oto#177)
+_ENGAGEMENT_BUDGET_S = 20  # durée max de la boucle de pages (jamais un appel qui gèle)
 _RATE_LIMIT_UNTIL: dict[str, float] = {}   # sub -> epoch de fin de cooldown
 _COMPANY_CACHE: dict[tuple, tuple] = {}     # (sub, ident_lower) -> (epoch, résultat)
 _COMPANY_TTL = 6 * 3600                      # fiches société ~statiques → 6h
@@ -111,19 +114,31 @@ def _fmt_wait(secs: float) -> str:
     return f"~{s}s" if s < 90 else f"~{s // 60 + 1} min"
 
 
+def _rate_limited(wait_secs: float, detail: str) -> McpError:
+    """Le refus nommé `unipile_rate_limited` : Unipile a atteint la limite de ce compte
+    LinkedIn. `retryable: true` avec le délai à attendre (celui qu'Unipile a demandé,
+    en-tête `Retry-After` ou corps) dans `data.retry_after_seconds` (oto#177)."""
+    secs = max(1, int(wait_secs) + 1)
+    return McpError(ErrorData(code=INVALID_PARAMS, message=(
+        f"Refus `unipile_rate_limited` : {detail} Réessaie dans {_fmt_wait(wait_secs)} et "
+        "RALENTIS la cadence des appels linkedin_* plutôt que de les enchaîner en rafale "
+        "(c'est ce qui déclenche le throttle, puis dégrade et déconnecte le compte) ; si "
+        "l'attente est longue, passe à autre chose et reviens, plutôt que de sonder en "
+        "boucle."),
+        data={"code": "unipile_rate_limited", "retryable": True,
+              "retry_after_seconds": secs}))
+
+
 def _rate_limit_guard(sub: str) -> None:
     """Refuse un scrape pendant le cooldown 429 en cours (sans taper Unipile) — la durée
     est CELLE qu'Unipile a demandée. Évite de marteler pendant le backoff."""
     until = _RATE_LIMIT_UNTIL.get(sub, 0.0)
     now = time.time()
     if until > now:
-        raise McpError(ErrorData(code=INVALID_PARAMS, message=(
-            f"⏳ Unipile rate-limite ce compte LinkedIn — réessaie dans {_fmt_wait(until - now)} "
-            "(délai demandé par Unipile : de quelques secondes après une rafale légère à "
-            "~1h quand la cadence récente a été soutenue — c'est le délai affiché qui fait "
-            "foi, pas une moyenne). RALENTIS la cadence des appels linkedin_* plutôt que de "
-            "les enchaîner en rafale ; si l'attente est longue, passe à autre chose et "
-            "reviens, plutôt que de sonder en boucle.")))
+        raise _rate_limited(until - now, (
+            "Unipile rate-limite ce compte LinkedIn (délai demandé par Unipile : de "
+            "quelques secondes après une rafale légère à ~1h quand la cadence récente a "
+            "été soutenue — c'est le délai affiché qui fait foi, pas une moyenne)."))
 
 
 def _note_rate_limited(sub: str, err) -> None:
@@ -159,12 +174,9 @@ def _scrape(sub: str, fn):
         return fn()
     except UnipileRateLimited as e:
         _note_rate_limited(sub, e)
-        wait = _fmt_wait(_RATE_LIMIT_UNTIL[sub] - time.time())
-        raise McpError(ErrorData(code=INVALID_PARAMS, message=(
-            f"⏳ Unipile rate-limite ce compte LinkedIn ({e}). Réessaie dans {wait} et "
-            "RALENTIS : n'enchaîne pas des dizaines d'appels linkedin_* en rafale (c'est ce qui "
-            "déclenche le throttle, puis dégrade et déconnecte le compte). Les fiches société "
-            "déjà vues sont servies du cache — inutile de les relire.")))
+        raise _rate_limited(_RATE_LIMIT_UNTIL[sub] - time.time(), (
+            f"Unipile rate-limite ce compte LinkedIn ({e}). Les fiches société déjà vues "
+            "sont servies du cache — inutile de les relire."))
 
 
 # Filtres STRUCTURÉS de `linkedin_unipile_search` (≠ mots-clés) : ce sont eux que
@@ -1460,6 +1472,78 @@ def register(mcp: FastMCP) -> None:
 
     # ---- publications ----------------------------------------------------
 
+    def _engagement(client, kind: str, post_id: str, comment_id: Optional[str],
+                    offset: int, want: int) -> dict:
+        """Suit les pages d'engagement (par `offset`, seule pagination d'Unipile ici)
+        jusqu'à `want` personnes, une page vide, ou le budget de temps (oto#177). Chaque
+        page passe par `_scrape` : un 429 arme le cooldown. Sur un 429 APRÈS la première
+        page, on rend ce qui est déjà lu plutôt que de le perdre, en disant où reprendre."""
+        fetch = client.list_reactions if kind == "reactions" else client.list_comments
+        sub = _actor_key()
+        items: list = []
+        seen: set = set()
+        off = max(0, offset)
+        next_offset: Optional[int] = None
+        stopped = "end"
+        retry_after = None
+        deadline = time.monotonic() + _ENGAGEMENT_BUDGET_S
+        while True:
+            if time.monotonic() > deadline:
+                stopped, next_offset = "time_budget", off
+                break
+            try:
+                page = _scrape(sub, lambda o=off: fetch(post_id, offset=o or None,
+                                                        comment_id=comment_id))
+            except McpError as e:
+                data = getattr(getattr(e, "error", None), "data", None) or {}
+                if items and data.get("code") == "unipile_rate_limited":
+                    stopped, next_offset = "rate_limited", off
+                    retry_after = data.get("retry_after_seconds")
+                    break
+                raise
+            data = page.get("items") if isinstance(page, dict) else None
+            if not isinstance(data, list) or not data:
+                break  # page vide : fin de liste (contrat Unipile)
+            added = 0
+            for i, it in enumerate(data):
+                key = (it.get("id") or it.get("author_id") or repr(it)) \
+                    if isinstance(it, dict) else repr(it)
+                if key in seen:
+                    continue
+                seen.add(key)
+                items.append(it)
+                added += 1
+                if len(items) >= want:
+                    next_offset = off + i + 1
+                    break
+            if len(items) >= want:
+                stopped = "limit"
+                break
+            if not added:
+                stopped = "upstream_repeats"  # l'amont resservait une page déjà lue
+                break
+            off += len(data)
+        out = {"kind": kind, "post_id": post_id, "comment_id": comment_id,
+               "items": items, "count": len(items), "offset": max(0, offset),
+               "truncated": stopped in ("limit", "time_budget", "rate_limited"),
+               "next_offset": next_offset if stopped != "end" else None,
+               "stopped": stopped}
+        if stopped == "limit":
+            out["note"] = (f"Arrêt à `limit`={want} : il peut en rester d'autres — "
+                           f"rappelle avec `offset`={next_offset} pour la suite.")
+        elif stopped == "time_budget":
+            out["note"] = (f"Arrêt au budget de temps ({_ENGAGEMENT_BUDGET_S}s) : liste "
+                           f"PARTIELLE — rappelle avec `offset`={next_offset}.")
+        elif stopped == "rate_limited":
+            out["retry_after_seconds"] = retry_after
+            out["note"] = ("Arrêt sur la limite Unipile (`unipile_rate_limited`) : liste "
+                           f"PARTIELLE — attends ~{retry_after}s puis rappelle avec "
+                           f"`offset`={next_offset}.")
+        elif stopped == "upstream_repeats":
+            out["note"] = ("Pagination arrêtée : l'amont a resservi des personnes déjà "
+                           "lues, il n'avance plus. Rien d'autre à demander.")
+        return out
+
     @mcp.tool()
     def linkedin_unipile_post(
         op: Literal["feed", "get", "engagement", "create", "comment",
@@ -1468,10 +1552,11 @@ def register(mcp: FastMCP) -> None:
         text: Optional[str] = None,
         kind: Literal["comments", "reactions"] = "comments",
         value: str = "LIKE",
-        limit: int = 20,
+        limit: Optional[int] = None,
         page: int = 0,
         refresh: bool = False,
-        cursor: Optional[str] = None,
+        offset: int = 0,
+        comment_id: Optional[str] = None,
         fields: Optional[list[str]] = None,
         text_max_chars: Optional[int] = _TEXT_EXCERPT_CHARS,
     ) -> dict:
@@ -1501,6 +1586,12 @@ def register(mcp: FastMCP) -> None:
         - **"get"** : un post — `post_id` = social_id (`urn:li:…`) d'un résultat
           `linkedin_unipile_profile(op="posts")`.
         - **"engagement"** : qui a réagi/commenté — `kind`='comments' ou 'reactions'.
+          Suit les pages jusqu'à `limit` personnes (défaut 100, max 500) ; rend
+          `{items, count, truncated, next_offset, stopped}` — `truncated: true` dit que
+          la liste est PARTIELLE, reprends avec `offset=next_offset`. `comment_id` vise
+          les réponses (comments) ou les réactions (reactions) d'un commentaire. Un
+          429 d'Unipile est le refus `unipile_rate_limited` (délai dans
+          `retry_after_seconds`) ; après une première page, il rend le partiel.
         - **"create"** : publie un post depuis le compte connecté.
         - **"comment"** : commente un post (social-selling).
         - **"react"** : réagit à un post — `value`: LIKE | PRAISE | EMPATHY |
@@ -1512,10 +1603,14 @@ def register(mcp: FastMCP) -> None:
             text: op="create"/"comment" — le contenu.
             kind: op="engagement" — 'comments' (défaut) ou 'reactions'.
             value: op="react" — le type de réaction.
-            limit: op="feed" — posts renvoyés pour cette page (défaut 20).
+            limit: op="feed" — posts renvoyés pour cette page (défaut 20) ;
+                op="engagement" — personnes à rendre au plus (défaut 100, max 500).
             page: op="feed" — page du miroir (0 = la plus récente ; >0 ne rafraîchit pas).
             refresh: op="feed" — force un rafraîchissement live.
-            cursor: op="engagement" — pagination.
+            offset: op="engagement" — où reprendre (le `next_offset` d'un appel
+                précédent ; 0 = début).
+            comment_id: op="engagement" — un commentaire du post : ses réponses
+                (kind='comments') ou ses réactions (kind='reactions').
             fields: op="feed" — projection de colonnes, même sémantique que `data_rows`
                 (les colonnes demandées, plus `_id`/`urn` toujours gardés pour adresser
                 le post). Omis = la vue de tri ; `["*"]` = toutes les colonnes du miroir.
@@ -1540,21 +1635,26 @@ def register(mcp: FastMCP) -> None:
                 rows = []
             rows.sort(key=lambda r: r.get("posted_at") or "", reverse=True)
 
-            offset = max(0, page) * limit
-            window = rows[offset:offset + limit]
+            per_page = limit if limit is not None else 20
+            start = max(0, page) * per_page
+            window = rows[start:start + per_page]
             return _shape_feed({"items": window, "total": len(rows), "page": page,
-                                "limit": limit, "synced": synced},
+                                "limit": per_page, "synced": synced},
                                fields, text_max_chars)
 
         client = unipile_client()
 
         if op == "get":
-            return client.get_post(_need(post_id, "post_id", op))
+            pid = _need(post_id, "post_id", op)
+            return _scrape(_actor_key(), lambda: client.get_post(pid))
 
         if op == "engagement":
-            pid = _need(post_id, "post_id", op)
-            return client.list_reactions(pid, cursor=cursor) if kind == "reactions" \
-                else client.list_comments(pid, cursor=cursor)
+            want = _ENGAGEMENT_DEFAULT if limit is None else limit
+            if not 1 <= want <= _ENGAGEMENT_MAX:
+                raise _bad(f"op='engagement' : limit entre 1 et {_ENGAGEMENT_MAX} "
+                           f"(reçu {want}).")
+            return _engagement(client, kind, _need(post_id, "post_id", op),
+                               comment_id, offset, want)
 
         if op == "create":
             return client.create_post(_need(text, "text", op))
