@@ -111,7 +111,7 @@ def test_verify_niveau_auto_enregistre_le_verdict_sur_la_cle_dorg(monkeypatch):
         fields, config = {"key": "lin_xxx"}, {}
 
     monkeypatch.setattr(V.access, "resolve_credential",
-                        lambda p, want="auto", sub=None, emit_on_failure=True: _RC())
+                        lambda p, want="auto", sub=None, account=None, emit_on_failure=True: _RC())
     _, _, scope, instance, cible = V._fields_config_scope(
         ResolvedCtx(sub="u1", org_id=7), V.VerifyInput(provider="linear", level="auto"))
     assert scope is not None, "un verdict sur une clé d'org ne s'enregistre nulle part"
@@ -133,7 +133,7 @@ def test_une_cle_partagee_au_dela_de_lorg_nest_pas_flaguee(monkeypatch):
         fields, config = {"key": "k"}, {}
 
     monkeypatch.setattr(V.access, "resolve_credential",
-                        lambda p, want="auto", sub=None, emit_on_failure=True: _RC())
+                        lambda p, want="auto", sub=None, account=None, emit_on_failure=True: _RC())
     _, _, scope, _, _ = V._fields_config_scope(
         ResolvedCtx(sub="u1", org_id=7), V.VerifyInput(provider="linear", level="auto"))
     assert scope is None

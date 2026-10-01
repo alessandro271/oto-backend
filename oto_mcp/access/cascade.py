@@ -60,6 +60,12 @@ def account_noun(provider: str) -> str:
     return (getattr(con, "account_noun", "") or "compte") if con else "compte"
 
 
+class CompteAmbigu(McpError):
+    """Plusieurs comptes au même palier, sans défaut unique : l'appelant doit en nommer
+    un. Typée pour qu'une face REST la rende en refus nommé (`account_required`) au lieu
+    d'un 500 nu — reconnue par sa classe, jamais par son texte."""
+
+
 def _shared_auto_account(entity_type: str, entity_id: str, provider: str,
                          where: str, scope: Optional[str] = None) -> str:
     """Compte AUTOMATIQUE d'un palier multi-compte, quand l'appelant n'en a nommé
@@ -84,7 +90,7 @@ def _shared_auto_account(entity_type: str, entity_id: str, provider: str,
     # Tournure sans accord : le nom du compte vient du registre et peut être féminin
     # (« société », « organisation ») — « configurés… marqué » faisait une faute sur deux.
     noms = ", ".join(f"`{a['account']}`" for a in accts)
-    raise McpError(ErrorData(
+    raise CompteAmbigu(ErrorData(
         code=INVALID_PARAMS,
         message=(
             f"Plusieurs {noun}s `{provider}` {where} ({noms}), sans défaut unique — "

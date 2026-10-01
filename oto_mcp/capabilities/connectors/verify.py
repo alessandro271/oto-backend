@@ -27,8 +27,10 @@ class VerifyInput(BaseModel):
     level: Literal["auto", "org"] = "auto"     # auto = credential effectif ; org = clé de l'org
     # Discrimine plusieurs instances du même connecteur au même niveau (multi-compte,
     # même vocabulaire que `ConnectorInstance.account` — `instances.py`) : `""` = la
-    # clé par défaut. Ne s'applique qu'à `level="org"` — `auto` teste le credential
-    # EFFECTIF de la cascade, pas une instance choisie à la main.
+    # clé par défaut. Sous `level="org"` : le compte de la clé d'org ; sous `auto` : le
+    # compte à retenir quand le palier gagnant de la cascade en porte plusieurs (sans
+    # lui, une sonde juste après l'ajout d'un 2ᵉ compte nommé n'a aucun moyen de dire
+    # lequel tester — refus `account_required`).
     account: str = ""
 
 
@@ -193,9 +195,16 @@ def _fields_config_scope(ctx: ResolvedCtx, inp: VerifyInput) -> tuple[dict, dict
                 ("org", str(ctx.org_id), account),
                 {"level": "org", "ref": _ref("org", str(ctx.org_id), inp.provider)},
                 ("org", str(ctx.org_id), account))
-    rc = access.resolve_credential(
-        inp.provider, want="auto", sub=ctx.sub, emit_on_failure=False,
-    )
+    try:
+        rc = access.resolve_credential(
+            inp.provider, want="auto", sub=ctx.sub, account=inp.account or None,
+            emit_on_failure=False,
+        )
+    except access.CompteAmbigu as e:
+        # Plusieurs comptes au palier gagnant, aucun nommé ni par défaut : un refus
+        # NOMMÉ, pas une exception qui sortirait en 500 nu (sans CORS — le navigateur
+        # n'y lisait que « Failed to fetch », alors que la clé était bien posée).
+        raise AuthzDenied(400, "account_required", e.error.message) from e
     etype, eid = getattr(rc, "entity_type", None), getattr(rc, "entity_id", None)
     scope = ((etype, eid, getattr(rc, "account", "") or "")
              if etype in connector_health.FLAGGABLE_SCOPES and eid else None)
@@ -292,8 +301,10 @@ CAP_DOC = (
     "(side-effect-free probe), returning {ok, error}. Use it to diagnose a connector "
     "that is set but not working (wrong region, expired token…) before reporting a gap. "
     "'auto' tests the credential that resolves for you; 'org' tests the org shared key "
-    "— pass `account` to pick one of several org-level instances of the same connector "
-    "(e.g. several companies each with their own key), default `\"\"` for the default one. "
+    "— pass `account` to pick one of several instances of the same connector (e.g. "
+    "several companies each with their own key), under 'org' or under 'auto' when the "
+    "resolved level holds several named accounts with no default (otherwise refused "
+    "`account_required`); default `\"\"` for the default one. "
     "The reply names the instance actually probed (`level` + `ref`) — under 'auto' the "
     "cascade may have fallen through to a shared key, and `ok` alone would not say so. "
     "⚠️ READ `coverage` WITH `ok`: it says what the probe actually measured. "
@@ -350,7 +361,11 @@ CAPABILITIES += [
                               "n'y a rien à vérifier"),
                 DeclaredError(400, "verify_unavailable",
                               "ce connecteur ne déclare aucune sonde de "
-                              "vérification"),),
+                              "vérification"),
+                DeclaredError(400, "account_required",
+                              "plusieurs comptes de ce connecteur au palier "
+                              "résolu, sans défaut unique : passe `account` "
+                              "(le nom du compte à tester)"),),
         rest=RestBinding("POST", "/api/me/connectors/{provider}/verify"),
     ),
     Capability(

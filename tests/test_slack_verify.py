@@ -170,7 +170,7 @@ def test_l_identite_arrive_dans_le_PAYLOAD_de_la_capacite(monkeypatch):
         sub, org_id = "acme:abc123def456", 9249
 
     class _Inp:
-        provider, level = "slack", "auto"
+        provider, level, account = "slack", "auto", ""
 
     out = asyncio.run(cv._verify(_Ctx(), _Inp()))
     assert out["ok"] is True
