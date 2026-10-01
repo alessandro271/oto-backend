@@ -195,6 +195,14 @@ python3 deploy/cible/declaration.py verifier declaration.json
 Un test (`tests/deploy/test_gabarit_cible_967.py`) garde le gabarit en phase avec
 l'inventaire : une variable qui devient exigée y apparaît, ou le test rougit.
 
+Le gabarit porte aussi `OTO_MCP_CLAUDE_APP_ID`, exigée **non vide** par le bleu/vert et non
+par l'inventaire : la santé d'une couleur (`HEALTH_PATH`, en local puis en public) lit
+`/.well-known/oauth-authorization-server`, que seule la façade DCR sert, et la façade n'est
+montée que si cette variable est posée. Sans elle, la couleur démarre mais répond 404 et
+la montée échoue en « couleur pas devenue saine » ; `verifier` la refuse donc en le disant.
+La règle lit `HEALTH_PATH` dans la bibliothèque du tag : elle tombe si la santé change de
+chemin.
+
 ### 2. Le Secret Manager du projet de la cible
 
 Un secret par variable, **nommé comme la variable**, sous le chemin du rôle (`/preprod`,

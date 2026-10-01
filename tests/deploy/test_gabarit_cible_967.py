@@ -33,8 +33,9 @@ def test_le_gabarit_a_la_forme_d_une_declaration_conforme():
 
 
 def test_le_gabarit_porte_chaque_variable_exigee_et_rien_d_autre():
+    exigees = set(decl.exigees_dans_env()) | set(decl.exigees_par_la_sante()) | {"OTO_ENV"}
     for role, r in GABARIT["roles"].items():
-        assert set(r["env"]) == set(decl.exigees_dans_env()) | {"OTO_ENV"}, role
+        assert set(r["env"]) == exigees, role
         assert r["env"]["OTO_ENV"] == role
 
 

@@ -51,6 +51,10 @@ def test_l_exemple_est_conforme(doc):
     (lambda d: d["roles"]["prod"]["env"].update(OTO_ENV="a\nb"), "chaîne sur une ligne"),
     (lambda d: d["roles"]["prod"]["env"].pop("OTO_BRAND_NAME"),
      "OTO_BRAND_NAME : exigée par l'inventaire"),
+    (lambda d: d["roles"]["prod"]["env"].pop("OTO_MCP_CLAUDE_APP_ID"),
+     "OTO_MCP_CLAUDE_APP_ID : exigée non vide par le bleu/vert"),
+    (lambda d: d["roles"]["preprod"]["env"].update(OTO_MCP_CLAUDE_APP_ID=""),
+     "roles.preprod.env.OTO_MCP_CLAUDE_APP_ID : exigée non vide par le bleu/vert"),
     (lambda d: d["roles"]["prod"].update(secrets_optionnels=["OTO_ENV"]),
      "OTO_ENV n'est pas un secret facultatif"),
     (lambda d: d["roles"]["prod"].update(secrets_optionnels=["DATABASE_URL"]),
@@ -67,6 +71,48 @@ def test_tous_les_ecarts_sont_nommes_d_un_coup(doc):
     doc["instance"] = "X"
     doc["roles"]["prod"]["env"]["DATABASE_URL"] = "x"
     assert len(_refus(doc)) == 2
+
+
+# --- la santé du bleu/vert lit un chemin que seule la façade DCR sert ---------------
+def test_sans_la_facade_le_refus_dit_pourquoi(doc):
+    for r in doc["roles"].values():
+        del r["env"]["OTO_MCP_CLAUDE_APP_ID"]
+    ecarts = [e for e in _refus(doc) if "OTO_MCP_CLAUDE_APP_ID" in e]
+    assert [e.split(" :")[0] for e in ecarts] == ["roles.preprod.env.OTO_MCP_CLAUDE_APP_ID",
+                                                  "roles.prod.env.OTO_MCP_CLAUDE_APP_ID"]
+    for e in ecarts:
+        assert "/.well-known/oauth-authorization-server" in e
+        assert "seule la façade DCR" in e and "404" in e
+        assert "couleur pas devenue saine" in e
+
+
+def test_la_regle_suit_le_chemin_de_sante_de_la_bibliotheque(doc, tmp_path, monkeypatch):
+    # Aujourd'hui, la bibliothèque du dépôt juge la santé sur le chemin de la façade.
+    assert decl.chemin_de_sante() == decl.CHEMIN_DE_LA_FACADE
+    assert decl.exigees_par_la_sante() == ("OTO_MCP_CLAUDE_APP_ID",)
+    # Que la santé change de chemin, et la règle tombe d'elle-même — BG_PUBLIC suit.
+    autre = tmp_path / "oto-mcp-bluegreen.sh"
+    autre.write_text('#!/bin/bash\nHEALTH_PATH="/api/version"\n')
+    monkeypatch.setattr(decl, "BIBLIOTHEQUE_BLEU_VERT", autre)
+    assert decl.exigees_par_la_sante() == ()
+    for r in doc["roles"].values():
+        del r["env"]["OTO_MCP_CLAUDE_APP_ID"]
+    decl.valider(doc)
+    assert decl.variables(doc, "prod")["BG_PUBLIC"] == "https://mcp.exemple.test/api/version"
+    # Une bibliothèque sans HEALTH_PATH est une panne, pas une règle muette.
+    autre.write_text("#!/bin/bash\n")
+    with pytest.raises(RuntimeError, match="HEALTH_PATH"):
+        decl.exigees_par_la_sante()
+
+
+def test_le_chemin_de_la_facade_est_bien_celui_qu_elle_sert():
+    """Les deux constantes de la règle disent vrai : la façade sert ce chemin, et le
+    serveur ne la monte que sur son interrupteur."""
+    facade = (DEPOT / "oto_mcp/auth/facade.py").read_text(encoding="utf-8")
+    serveur = (DEPOT / "oto_mcp/server.py").read_text(encoding="utf-8")
+    assert f'Route("{decl.CHEMIN_DE_LA_FACADE}"' in facade
+    assert f'os.environ.get("{decl.INTERRUPTEUR_DE_LA_FACADE}")' in serveur
+    assert "from .auth import facade" in serveur
 
 
 def test_tout_se_derive_du_nom_et_du_role(doc):

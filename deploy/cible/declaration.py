@@ -30,6 +30,9 @@ Validation contre l'inventaire de CE tag (`oto_mcp/env_inventory.py`,
 `oto_mcp/env_secrets.py`) : le `.env` d'un rôle ne porte que des variables inventoriées
 et NON secrètes, et il porte toutes celles dont l'instance ne peut se passer (identité,
 requises non secrètes) — le refus arrive ici, avant le déploiement, plutôt qu'au boot.
+Et contre la bibliothèque bleu/vert de CE tag : tant que sa santé (`HEALTH_PATH`) lit un
+chemin que seule la façade DCR sert, chaque rôle déclare l'interrupteur de la façade
+(`exigees_par_la_sante`) — sans lui, la première montée échouerait sur un 404.
 
 Pur : bibliothèque standard seulement, exécuté par le Python du système de la cible.
 """
@@ -59,6 +62,13 @@ PORTEES_PAR_L_UNITE = frozenset({"HOST", "PORT", "MCP_TRANSPORT"})
 CLES = {"instance", "secrets", "roles"}
 CLES_SECRETS = {"region", "projet"}
 CLES_ROLE = {"ports", "hote_public", "ask", "drain_max", "secrets_optionnels", "env"}
+# La santé du bleu/vert : le chemin que la bibliothèque DU TAG interroge, en local sur
+# la couleur qui démarre puis en public après la bascule (`HEALTH_PATH`).
+BIBLIOTHEQUE_BLEU_VERT = ARBRE / "deploy" / "oto-mcp-bluegreen.sh"
+# Ce chemin n'est servi QUE par la façade DCR (`oto_mcp/auth/facade.py`), que
+# `oto_mcp/server.py` ne monte que si son interrupteur est posé et non vide.
+CHEMIN_DE_LA_FACADE = "/.well-known/oauth-authorization-server"
+INTERRUPTEUR_DE_LA_FACADE = "OTO_MCP_CLAUDE_APP_ID"
 
 
 class Refus(Exception):
@@ -91,6 +101,22 @@ def exigees_dans_env() -> tuple[str, ...]:
     return tuple(v.nom for v in inv.NOMS_FIXES
                  if v.classe in (inv.Classe.IDENTITE, inv.Classe.REQUISE)
                  and not env_secrets.est_secret(v.nom))
+
+
+def chemin_de_sante() -> str:
+    """Le chemin dont le 200 rend une couleur saine, lu dans la bibliothèque du tag :
+    la règle qui en dépend suit la bibliothèque, elle ne la recopie pas."""
+    m = re.search(r'(?m)^HEALTH_PATH="(/[^"]*)"$',
+                  BIBLIOTHEQUE_BLEU_VERT.read_text(encoding="utf-8"))
+    if not m:
+        raise RuntimeError(f"{BIBLIOTHEQUE_BLEU_VERT} ne déclare pas HEALTH_PATH")
+    return m.group(1)
+
+
+def exigees_par_la_sante() -> tuple[str, ...]:
+    """Ce que le `.env` d'un rôle doit porter, non vide, pour que sa couleur puisse
+    devenir saine : l'interrupteur de la façade DCR, tant que la santé lit son chemin."""
+    return (INTERRUPTEUR_DE_LA_FACADE,) if chemin_de_sante() == CHEMIN_DE_LA_FACADE else ()
 
 
 def _role(ecarts: list[str], nom: str, r) -> None:
@@ -136,6 +162,13 @@ def _role(ecarts: list[str], nom: str, r) -> None:
     for n in exigees_dans_env():
         if n not in env:
             ecarts.append(f"{ou}.env.{n} : exigée par l'inventaire, manquante")
+    for n in exigees_par_la_sante():
+        if not env.get(n):
+            ecarts.append(
+                f"{ou}.env.{n} : exigée non vide par le bleu/vert — sa santé lit "
+                f"{CHEMIN_DE_LA_FACADE}, que seule la façade DCR sert, et la façade n'est "
+                f"montée que si {n} est posée ; sans elle, la couleur répond 404 et la "
+                "montée échoue en « couleur pas devenue saine »")
     # Ce que le process DÉCLARE être (`config.est_la_production`) est le rôle qu'on
     # déploie : une préprod qui se dirait prod agirait sur des tiers avec son code.
     if env.get("OTO_ENV") != nom:
@@ -209,7 +242,7 @@ def variables(doc: dict, role: str) -> dict[str, str]:
         "BG_DOCSHARE_HOST": r["hote_public"],
         "BG_ASK": "1" if r["ask"] else "",
         "BG_ACTIVE": f"{etc}/active",
-        "BG_PUBLIC": f"https://{r['hote_public']}/.well-known/oauth-authorization-server",
+        "BG_PUBLIC": f"https://{r['hote_public']}{chemin_de_sante()}",
         "BG_DRAIN_MAX": str(r["drain_max"]),
         "BG_LOCK": f"/var/lock/{unite}-bleu-vert.lock",
         "BG_CADDYFILE": "/etc/caddy/Caddyfile",
