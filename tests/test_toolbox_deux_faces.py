@@ -19,7 +19,7 @@ from _mcp_app import static_mcp as _test_mcp
 import fastmcp.server.context as _fc
 import pytest
 
-from mcp.shared.exceptions import McpError
+from oto_mcp.mcp_errors import McpError
 
 from oto_mcp import tenancy
 from oto_mcp.capabilities import _mcp_adapter

@@ -147,6 +147,62 @@ class ToolsRegistryView(BaseModel):
     count: int
 
 
+# Les trois états d'un outil du catalogue (`tools/catalogue.ETATS`).
+EtatCatalogue = Literal["installed", "installable", "not_exposed"]
+
+
+class ToolSearchHit(BaseModel):
+    """Un outil d'`op=search`, ou d'`op=list` avec `full=True` : une ligne par outil."""
+    name: str
+    namespace: str
+    state: EtatCatalogue
+    description: str
+
+
+class ToolsGroup(BaseModel):
+    """Un groupe d'`op=list` par défaut : un connecteur, son état majoritaire et ses
+    outils par nom. `states` nomme les exceptions (un outil dans un autre état que
+    son connecteur), absent s'il n'y en a aucune."""
+    namespace: str
+    connector: Optional[str] = None
+    label: str
+    state: EtatCatalogue
+    tools: list[str]
+    states: Optional[dict[str, EtatCatalogue]] = None
+
+
+class ToolboxScope(BaseModel):
+    """L'écart entre l'org pour laquelle la session a été montée et celle que l'appel
+    épingle (#577) — présent seulement s'il existe."""
+    mounted_for_org: Optional[int] = None
+    listing_for_org: int
+    note: str
+
+
+class ToolsSearchView(BaseModel):
+    """La toolbox vue par l'agent (`oto_list_my_tools`, #429) : le catalogue ENTIER avec
+    l'état de chaque outil, en liste groupée par connecteur (`connectors`) ou en
+    recherche (`tools`). Les clés optionnelles n'apparaissent que dans leur cas : la
+    recherche (`query`, et `namespaces`/`hint` sur zéro résultat), la troncature, le
+    filtre `state`, l'écart de boîte (`toolbox_scope`)."""
+    op: Literal["list", "search"]
+    catalog_total: int
+    catalog_by_state: dict[str, int]
+    toolbox_scope: Optional[ToolboxScope] = None
+    state: Optional[EtatCatalogue] = None
+    query: Optional[str] = None
+    namespaces: Optional[str] = None
+    hint: Optional[str] = None
+    total: int
+    shown: int
+    truncated: Optional[bool] = None
+    hint_truncated: Optional[str] = None
+    legend: dict[str, str]
+    tools: Optional[list[ToolSearchHit]] = None
+    connectors: Optional[list[ToolsGroup]] = None
+    projection: Optional[str] = None
+
+
 class ToolConnector(BaseModel):
     name: str
     label: Optional[str] = None
@@ -534,7 +590,7 @@ CAPABILITIES += [
     # ou en recherche. MCP seul — le dashboard peint sa grille avec `me.tools.list`.
     Capability(
         key="me.tools.search", handler=_search, Input=ToolsSearchInput, authz=SUB_ONLY,
-        description=_DOC_SEARCH,
+        Output=ToolsSearchView, description=_DOC_SEARCH,
         mcp="oto_list_my_tools",
     ),
     # ⚠️ `registry` AVANT `{name}` : Starlette prend le premier match, et `{name}`
