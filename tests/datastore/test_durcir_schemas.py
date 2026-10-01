@@ -7,13 +7,19 @@ une base (à blanc par défaut, `--appliquer` pour écrire, par le chemin normal
 from __future__ import annotations
 
 import copy
+import pathlib
+import sys
 import uuid
 
 import pytest
 
 from oto_mcp.datastore import schema_keys as K
 from oto_mcp.datastore.definition import validate_schema_def
-from scripts import durcir_schemas as M
+
+# La racine du dépôt n'est pas dans `sys.path` en CI (pas de `__init__.py`, paquet
+# installé sans elle) : le chemin se calcule, comme dans les autres bancs de `scripts/`.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
+from scripts import durcir_schemas as M  # noqa: E402
 
 
 # ── le plan, pur ─────────────────────────────────────────────────────────────

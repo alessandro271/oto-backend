@@ -7,11 +7,16 @@ sautée et listée, et une relance ne trouve plus rien.
 """
 from __future__ import annotations
 
+import pathlib
+import sys
 import uuid
 
 import pytest
 
-from scripts import normaliser_dates as reprise
+# La racine du dépôt n'est pas dans `sys.path` en CI : l'import ne passait que parce
+# qu'un banc collecté avant (`test_migrer_colonnes_fantomes_957.py`) l'y avait mise.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
+from scripts import normaliser_dates as reprise  # noqa: E402
 
 SCHEMA = {"fields": [
     {"key": "d", "type": "datetime"},
