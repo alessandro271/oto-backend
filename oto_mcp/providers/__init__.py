@@ -217,6 +217,8 @@ _DECLARATIONS: tuple[str, ...] = (
     "waalaxy",
     "airtable",
     "tally",
+    # Voisin de `tally` par le métier (formulaires en ligne) ; en lecture seule.
+    "typeform",
     # --- signature électronique — câblé 2026-09-16 ---------------------------
     "signwell",
     # --- prospection téléphonique — câblé 2026-08-31 -------------------------
