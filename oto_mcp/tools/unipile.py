@@ -523,7 +523,8 @@ def status_for(sub: str, *, org=access._UNSET, group=access._UNSET) -> dict:
     }
 
 
-def account_status(provider: str = "LINKEDIN") -> dict:
+def account_status(provider: str = "LINKEDIN",
+                   account_id_hint: "str | None" = None) -> dict:
     """« Mon compte {provider} est-il connecté, et sa session est-elle vivante ? »
 
     Né du signal **#452** (org 2, 14/08/2026). Le NOM `linkedin_unipile_account`
@@ -556,6 +557,11 @@ def account_status(provider: str = "LINKEDIN") -> dict:
     carte dans un tableau de bord dans l'heure (vécu : org 270, 2026-09-03/14). No-op
     sans pending (aucun appel réseau), jamais fatal. Quand rien n'a été lié, le motif
     établi remonte dans `binding` — `no_candidate` était jusqu'ici muet partout.
+
+    `account_id_hint` = l'`account_id` que la page de retour du parcours porte dans
+    son adresse, relayé par l'agent : c'est la PREUVE qui manque à la face agent
+    (oto#247). Sans lui, la réconciliation refuse de choisir entre plusieurs comptes
+    connectés dans la même fenêtre sur la clé partagée (`ambiguous_candidates`).
     """
     from .. import unipile_connect
     from ..connectors import identities as connector_identities
@@ -567,7 +573,7 @@ def account_status(provider: str = "LINKEDIN") -> dict:
 
     binding = None
     try:
-        binding = unipile_connect.reconcile_pending(sub)
+        binding = unipile_connect.reconcile_pending(sub, account_id=account_id_hint)
     except Exception:  # noqa: BLE001 — réconciliation opportuniste, jamais bloquante
         logger.warning("unipile account_status : reconcile best-effort échoué",
                        exc_info=True)
@@ -1059,7 +1065,11 @@ def register(mcp: FastMCP) -> None:
             f"Transmets `url` à l'utilisateur : il ouvre le lien (valable 1 h) et connecte "
             f"son compte {ch} jusqu'au bout. Aucun webhook ne lie le compte : "
             + ("quand il a terminé, appelle linkedin_unipile_account(op='status') — "
-               "c'est ce qui le LIE ; `binding` dit pourquoi si rien ne l'a été."
+               "c'est ce qui le LIE ; `binding` dit pourquoi si rien ne l'a été. "
+               "Demande-lui l'adresse de la page où il a atterri : si elle porte "
+               "`account_id=…`, passe-le (`account_id=`) — sans cette preuve, la "
+               "liaison est refusée quand plusieurs connexions ont eu lieu en même "
+               "temps sur la clé partagée."
                if str(ch).lower() == "linkedin" else
                "la liaison se fait quand il rouvre sa page de connexions, dans l'heure."))
         return out
@@ -1663,6 +1673,7 @@ def register(mcp: FastMCP) -> None:
     def linkedin_unipile_account(
         op: Literal["status", "contracts", "select", "inmail_balance"] = "contracts",
         contract_id: Optional[str] = None,
+        account_id: Optional[str] = None,
     ) -> dict:
         """Le compte LinkedIn connecté : son ÉTAT (op="status"), et son ardoise
         premium Recruiter / Sales Navigator (les trois autres op).
@@ -1673,7 +1684,11 @@ def register(mcp: FastMCP) -> None:
           `connected:false` porte `next_step`, le geste qui manque. **C'est l'op à
           prendre pour vérifier un onboarding messagerie** (#452 : un agent l'avait
           inventée, s'était pris un `invalid_arguments` et en avait conclu, à tort,
-          que le canal n'était pas connecté).
+          que le canal n'était pas connecté). Juste après un parcours de connexion,
+          passe `account_id` = la valeur `account_id=…` de l'adresse de la page de
+          retour : c'est ce qui prouve QUEL compte lier ; sans elle, la liaison est
+          refusée (`binding.reason = "ambiguous_candidates"`) si plusieurs
+          connexions ont eu lieu en même temps sur la clé partagée.
         - **"contracts"** (défaut) : les contrats premium disponibles — l'`id` à
           passer à op="select".
         - **"select"** : active un contrat pour les appels premium qui suivent.
@@ -1687,11 +1702,17 @@ def register(mcp: FastMCP) -> None:
         Args:
             op: status | contracts (défaut) | select | inmail_balance.
             contract_id: op="select" — id renvoyé par op="contracts".
+            account_id: op="status" — l'`account_id` lu dans l'adresse de la page
+                de retour du parcours de connexion (preuve du compte à lier).
         """
         # AVANT `unipile_client()` : celui-ci LÈVE quand aucun compte n'est lié, ce
         # qui est exactement l'état que `status` doit pouvoir rapporter (#452).
         if op == "status":
-            return account_status("LINKEDIN")
+            return account_status("LINKEDIN",
+                                  account_id_hint=(account_id or "").strip() or None)
+        if account_id is not None:
+            raise _bad("`account_id` ne vaut que pour op='status' (la preuve du compte "
+                       "à lier au retour d'un parcours de connexion)")
 
         client = unipile_client()
 

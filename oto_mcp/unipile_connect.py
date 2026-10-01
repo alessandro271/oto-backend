@@ -327,10 +327,12 @@ async def hosted_auth_url(sub: str, channel: str = "linkedin",
 # --- Réconciliation poll-and-bind : LE chemin de liaison ----------------------
 # Le hosted-auth v2 ne rappelle aucun callback par lien (le webhook v2 se configure au
 # niveau de l'APPLICATION Unipile) et le compte ne porte pas notre nonce → rien à
-# corréler au retour. On LISTE donc les comptes Unipile et on lie au `sub` le plus
-# récent, NON déjà lié, du bon provider, créé APRÈS son pending (le floor évite de
-# rebinder un siège pré-existant d'un tiers). Idempotent, best-effort. Le webhook de
-# liaison v1, chemin jumeau dormant, a été retiré le 2026-08-29 (#581).
+# corréler au retour. On LISTE donc les comptes Unipile, NON déjà liés, du bon
+# provider, créés APRÈS le pending (le floor évite de rebinder un siège pré-existant
+# d'un tiers) — et on ne lie que ce qui est identifié SANS ambiguïté (oto#247) :
+# l'`account_id` rendu au retour, une ligne morte du sub (preuve de propriété), ou un
+# candidat UNIQUE que personne d'autre n'attend. Sinon, refus nommé. Idempotent. Le
+# webhook de liaison v1, chemin jumeau dormant, a été retiré le 2026-08-29 (#581).
 
 def _parse_dt(v):
     """Parse une date Unipile ou un datetime PG en `datetime` aware (UTC par défaut).
@@ -377,18 +379,37 @@ def _rien(reason: str, detail: str) -> dict:
     return {"bound": False, "accounts": [], "reason": reason, "detail": detail}
 
 
+def _attendu_ailleurs(sub: str, pend: dict, provider: str, created) -> bool:
+    """Une demande d'un AUTRE `sub` (même canal, même population de clé) attend-elle
+    dans une fenêtre qui couvre ce compte créé à `created` ? Date illisible ⟹ oui :
+    on ne sait pas l'exclure."""
+    planchers = db.unipile_pending_floors_elsewhere(
+        sub, provider, bool(pend.get("platform_seat")))
+    if created is None:
+        return bool(planchers)
+    return any(created >= _parse_dt(f) - unipile_binding.MARGE_HORLOGE
+               for f in planchers)
+
+
 def reconcile_pending(sub: str, account_id: "str | None" = None) -> dict:
     """Lie le(s) compte(s) fraîchement connecté(s) par `sub` sans dépendre du
     webhook. No-op si pas de pending / pas de clé / pas de nouveau compte.
     Renvoie `{bound: bool, accounts: [{account_id, name, org_id}]}`.
 
     `account_id` = l'identifiant qu'Unipile ajoute à `redirect_uri` au succès, relu
-    par le front qui reçoit le retour. Il RESTREINT les candidats à ce seul compte —
-    il n'élargit rien : toutes les gardes (provider, tiers, déjà pris, floor, sonde)
-    s'appliquent comme sans lui. Sans lui, la sélection par fenêtre de temps reste la
-    seule (face agent, lecture de statut) : sur une clé PARTAGÉE, elle peut choisir le
-    compte qu'un autre vient de connecter dans la même heure — l'indice la ferme pour
-    le chemin qui en dispose."""
+    par le front qui reçoit le retour (ou passé par l'agent,
+    `linkedin_unipile_account(op="status", account_id=…)`). Il RESTREINT les
+    candidats à ce seul compte — il n'élargit rien : toutes les gardes (provider,
+    tiers, déjà pris, floor, sonde) s'appliquent comme sans lui.
+
+    ⚠️ **Sans lui, on ne choisit plus** (oto#247). La clé est PARTAGÉE : deux
+    personnes qui connectent dans la même fenêtre rendent leurs deux comptes
+    candidats pour chacune, et « le plus récent vivant » a lié un compte à la
+    mauvaise personne. Sans indice, un compte n'est lié que s'il est le SEUL
+    candidat vivant ET (une ligne morte de `sub` prouve qu'il est à lui, OU aucun
+    autre `sub` n'a de demande en attente, même canal, dont la fenêtre le couvre).
+    Autrement : refus `ambiguous_candidates`, rien n'est écrit, le pending reste —
+    un appel porteur de l'`account_id` le liera."""
     pendings = db.list_unipile_pending_for_sub(sub)
     if not pendings:
         return _rien("no_pending",
@@ -473,14 +494,45 @@ def reconcile_pending(sub: str, account_id: "str | None" = None) -> dict:
                            "chez son porteur."),
             })
             continue
-        from datetime import datetime, timezone
-        cand.sort(key=lambda t: t[0] or datetime.min.replace(tzinfo=timezone.utc))
-        # Sonde de SESSION (du plus récent au plus ancien) : ne binder qu'un compte
-        # VIVANT. Un wizard avorté produit un compte `status:'running'` mais mort
-        # (401 users/me) — le lier faisait taper l'agent sur une session morte pendant
-        # que l'ancien compte sain restait ignoré (incident 2026-07-17).
-        chosen, prov = next(((a, p) for _, a, p in reversed(cand)
-                             if client.account_alive(a["id"])), (None, None))
+        # Sonde de SESSION sur CHAQUE candidat : ne binder qu'un compte VIVANT. Un
+        # wizard avorté produit un compte `status:'running'` mais mort (401 users/me)
+        # — le lier faisait taper l'agent sur une session morte pendant que l'ancien
+        # compte sain restait ignoré (incident 2026-07-17). Tous sondés, et plus
+        # seulement jusqu'au premier vivant : c'est le NOMBRE de vivants qui dit s'il
+        # y a un choix à faire (oto#247).
+        vivants = [(created, a, p) for created, a, p in cand
+                   if client.account_alive(a["id"])]
+        chosen, prov = (vivants[0][1], vivants[0][2]) if len(vivants) == 1 else (None, None)
+        # Sans preuve (ni indice, ni ligne du sub), un candidat unique n'est à `sub`
+        # que si personne d'autre n'attend un compte dans la même fenêtre.
+        sans_preuve = chosen is not None and not account_id and not prov.a_moi
+        if len(vivants) > 1 or (sans_preuve and _attendu_ailleurs(
+                sub, pend, provider, prov.cree_le)):
+            # oto#247 : plusieurs candidats vivants, ou un seul qu'une demande d'un
+            # AUTRE sub pourrait réclamer — et aucune preuve pour trancher (l'indice
+            # restreint à un compte, `vivants` n'en a donc jamais deux avec lui).
+            # « Le plus récent » a lié le compte d'une personne à une autre : on ne
+            # devine plus. Le pending reste, un appel porteur de l'`account_id` liera.
+            logger.warning("reconcile unipile: refus ambigu sub=%s provider=%s "
+                           "candidats=%s", sub, provider,
+                           [a["id"] for _, a, _ in vivants])
+            motifs.append({
+                "nonce": pend.get("nonce"), "provider": provider,
+                "reason": "ambiguous_candidates",
+                # Ni le nombre de comptes ni l'existence d'un tiers : la possibilité
+                # seule, qui suffit à dire le geste.
+                "detail": ("Plus d'un compte peut correspondre à cette connexion "
+                           f"{provider} sur la clé partagée (plusieurs connexions dans "
+                           "la même fenêtre) : sans preuve, rien n'a été lié, pour ne "
+                           "pas rattacher le compte de quelqu'un d'autre. Termine le "
+                           "parcours du lien jusqu'à la page de retour : son adresse "
+                           "porte `account_id=…`, à repasser (`POST "
+                           "/api/me/unipile/reconcile`, ou "
+                           "`linkedin_unipile_account(op=\"status\", account_id=…)`). "
+                           "Sinon, relance la connexion par un nouveau lien "
+                           "(`op=connect`) dans quelques minutes."),
+            })
+            continue
         if chosen is None:
             logger.info("reconcile unipile: candidats tous morts (session 401) sub=%s", sub)
             motifs.append({

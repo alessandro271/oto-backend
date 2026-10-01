@@ -131,8 +131,11 @@ class UnipileReconcileView(BaseModel):
     """`bound: false` avec `accounts: []` = rien à lier, pas une panne (aucun pending).
 
     Quand rien n'a été lié, `reason` porte le motif établi (`no_pending`,
-    `no_candidate`, `candidates_dead`, `no_credential`, `provider_unreachable`) et
-    `detail` la phrase qui l'explique. Le front de Tulina les affiche au retour du
+    `no_candidate`, `candidates_dead`, `ambiguous_candidates`, `no_credential`,
+    `provider_unreachable`) et `detail` la phrase qui l'explique.
+    `ambiguous_candidates` (oto#247) : sans `account_id`, plusieurs comptes
+    connectés dans la même fenêtre sur la clé partagée peuvent être le mien — rien
+    n'est lié tant que l'`account_id` de l'adresse de retour n'est pas repassé. Le front d'un tenant les affiche au retour du
     parcours hébergé : c'est la seule surface où `no_candidate` cesse d'être muet."""
     bound: bool
     accounts: list[Any]
@@ -219,8 +222,10 @@ _DOC_CONNECT = (
 )
 _DOC_RECONCILE = (
     "Lie explicitement le compte que je viens de connecter (poll-and-bind), à appeler au "
-    "retour du consentement. Idempotent. `bound: false` avec `accounts: []` veut dire "
-    "« rien à lier », pas « panne »."
+    "retour du consentement avec l'`account_id` que porte l'adresse de retour : sans "
+    "lui, rien n'est lié quand plusieurs connexions de la même fenêtre peuvent être la "
+    "mienne (`reason: ambiguous_candidates`). Idempotent. `bound: false` avec "
+    "`accounts: []` veut dire « rien à lier », pas « panne »."
 )
 _DOC_STATUS = (
     "L'état de ma messagerie hébergée DANS L'ORG COURANTE : canaux connectés, origine de "

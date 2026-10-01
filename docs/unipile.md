@@ -394,10 +394,30 @@ clé member/org/plateforme, carte `status_for`) ni de sélecteur dashboard. Le `
 **Hosted-auth v2 : pas de callback par lien → réconciliation poll-and-bind, LE chemin de
 liaison.** Le hosted-auth v2 ne rappelle **aucun** `notify_url` (le webhook v2 est au niveau
 APP Unipile, pas par-lien) et le compte connecté **ne porte pas notre nonce** → rien à corréler
-au retour. Le chemin : `unipile_connect.reconcile_pending(sub)` liste les comptes Unipile et
-lie au sub le plus **récent, non déjà lié, du bon provider, créé APRÈS son pending** (floor =
-anti-rebind d'un siège tiers). **Self-heal** dans `GET /api/me/unipile` (no-op sans pending,
-donc sans appel Unipile) + endpoint explicite `POST /api/me/unipile/reconcile`.
+au retour. Le chemin : `unipile_connect.reconcile_pending(sub)` liste les comptes Unipile
+**non déjà liés, du bon provider, créés APRÈS son pending** (floor = anti-rebind d'un siège
+tiers). **Self-heal** dans `GET /api/me/unipile` (no-op sans pending, donc sans appel
+Unipile) + endpoint explicite `POST /api/me/unipile/reconcile`.
+
+⚠️ **La réconciliation ne CHOISIT plus (oto#247).** Elle prenait « le plus récent vivant » :
+sur une clé PARTAGÉE, deux personnes qui connectent dans la même fenêtre rendent leurs deux
+comptes candidats pour chacune, et un compte de messagerie a été rattaché à la mauvaise
+personne. Un compte n'est désormais lié que s'il est identifié SANS ambiguïté :
+- **l'`account_id`** qu'Unipile ajoute à l'adresse de retour — repassé par le front
+  (`POST /api/me/unipile/reconcile`) ou par l'agent (`linkedin_unipile_account(op="status",
+  account_id=…)`) ; il restreint à ce compte, sans lever aucune garde ;
+- **une ligne morte du sub** (preuve de propriété, reconnexion qui réutilise le compte) —
+  seule candidate vivante ;
+- **un candidat vivant UNIQUE, sans preuve**, seulement si aucune demande d'un AUTRE sub
+  (même canal, même population de clé — plateforme ou BYO) n'attend dans une fenêtre qui le
+  couvre. Le nom du lien (notre nonce) ne revient pas dans `/accounts` : la seule chose
+  vérifiable sans retour navigateur est l'absence de concurrent, que nos pendings disent.
+
+Tout le reste — plusieurs vivants, ou un seul qu'un autre pourrait réclamer — rend
+`reason: ambiguous_candidates`, n'écrit rien, journalise les candidats et **laisse le
+pending** : l'appel suivant porteur de l'`account_id` liera. Deux connexions simultanées
+sans indice restent donc refusées toutes deux jusqu'à ce que l'une passe l'`account_id`
+(ou que les demandes expirent, 1 h) — c'est le prix de ne plus deviner.
 
 ⚠️ **Une réconciliation qui ne lie rien DIT pourquoi (03/09/2026, signal #689).** Elle
 avait six sorties, toutes rendant le même `{bound: false, accounts: []}` : pas de pending,
@@ -472,9 +492,10 @@ sur le chemin de TOUTE connexion : le fournisseur la sert en ISO 8601 avec `Z` f
 passer) ; `_parse_dt` lit le `Z`, une fraction de 1 à 9 chiffres et l'horodatage Unix, et
 un test la tient sur ces formes. L'inventaire vient de
 `list_accounts`, déjà lu par la réconciliation : la lecture d'un compte par identifiant
-n'était pas nécessaire. **Ce qui reste** : un compte qu'un TIERS crée sur la clé partagée
-APRÈS votre demande et avant sa propre réconciliation passe le plancher ; seul l'indice
-`account_id` du retour le ferme, pour le chemin qui en dispose.
+n'était pas nécessaire. **Ce qui restait** — un compte qu'un TIERS crée sur la clé partagée
+APRÈS votre demande et avant sa propre réconciliation passait le plancher — est fermé par
+oto#247 : sans l'indice `account_id`, la réconciliation refuse dès qu'une autre demande
+attend dans la même fenêtre (`ambiguous_candidates`, plus haut).
 
 **Consolidation « tout en clé plateforme » (2026-07-16).** Clé plateforme rotée en v2 (scope
 PLATFORM, label `env`) ; tous les BYO unipile supprimés ; **option comp** posée pour les orgs

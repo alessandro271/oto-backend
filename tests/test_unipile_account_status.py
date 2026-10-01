@@ -78,8 +78,9 @@ def wired(monkeypatch):
     from oto_mcp import unipile_connect
     state["reconciled"] = []
 
-    def _reconcile(sub):
+    def _reconcile(sub, account_id=None):
         state["reconciled"].append(sub)
+        state.setdefault("hints", []).append(account_id)
         return state.get("reconcile", lambda s: {"bound": False, "accounts": [],
                                                   "reason": "no_pending",
                                                   "detail": "rien en attente"})(sub)
@@ -203,3 +204,36 @@ def test_une_reconciliation_qui_casse_ne_casse_pas_le_statut(wired):
     wired["reconcile"] = lambda sub: (_ for _ in ()).throw(RuntimeError("amont"))
     out = _tool("linkedin_unipile_account")(op="status")
     assert out["connected"] is True
+
+
+# ── oto#247 : la face agent porte la preuve jusqu'à la réconciliation ────────
+# Sans l'`account_id` du retour, la réconciliation refuse de choisir entre comptes
+# connectés dans la même fenêtre sur la clé partagée. L'agent n'a pas de retour
+# navigateur : il relaie ce que la personne lit dans l'adresse de sa page de retour.
+
+def test_op_status_transmet_l_account_id_a_la_reconciliation(wired):
+    _tool("linkedin_unipile_account")(op="status", account_id=" acc_du_retour ")
+    assert wired["hints"] == ["acc_du_retour"]
+
+
+def test_op_status_sans_account_id_ne_fabrique_pas_d_indice(wired):
+    _tool("linkedin_unipile_account")(op="status")
+    assert wired["hints"] == [None]
+
+
+def test_op_status_rend_le_refus_ambigu_a_l_agent(wired):
+    wired["accounts"] = []
+    wired["reconcile"] = lambda sub: {
+        "bound": False, "accounts": [], "reason": "ambiguous_candidates",
+        "detail": "repasse account_id=",
+        "pendings": [{"nonce": "N", "provider": "LINKEDIN",
+                      "reason": "ambiguous_candidates", "detail": "repasse account_id="}]}
+    out = _tool("linkedin_unipile_account")(op="status")
+    assert out["connected"] is False
+    assert out["binding"]["reason"] == "ambiguous_candidates"
+
+
+def test_account_id_hors_status_est_refuse(wired):
+    """Pas d'argument avalé en silence : hors `status`, il ne veut rien dire."""
+    with pytest.raises(McpError, match="account_id"):
+        _tool("linkedin_unipile_account")(op="contracts", account_id="acc_x")
