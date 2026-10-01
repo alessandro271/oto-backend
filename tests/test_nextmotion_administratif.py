@@ -226,14 +226,71 @@ class _Empoisonne:
     def __getattr__(self, name):
         def call(*args, **kwargs):
             self.appels.append(name)
-            if name.startswith("list_") or name == "search_time_slots":
+            if name.startswith(("list_", "reorder_", "set_")) or name == "search_time_slots":
                 return {"count": 1, "next": None, "data": [self._ligne()]}
             return {"data": self._ligne()}
         return call
 
 
+#: L'identité que `nextmotion_patient` SERT : retirée du poison pour cet outil seul.
+_IDENTITE = ("first_name", "last_name", "email", "phone_number", "birth_date", "age",
+             "gender")
+_CONTACT = ("first_name", "last_name", "email", "phone_number")
+_EVENT = {"start_time": "t0", "end_time": "t1"}
+
 _APPELS = [
     ("nextmotion_appointment", {"clinic_id": C}, ()),
+    # Les écritures, aperçu (`dry_run` par défaut, qui relit l'objet) et réponse.
+    ("nextmotion_appointment", {"op": "update", "appointment_id": X,
+                                "data": {"calendar_event": _EVENT}}, ()),
+    ("nextmotion_appointment", {"op": "update", "appointment_id": X, "dry_run": False,
+                                "data": {"calendar_event": _EVENT}}, ()),
+    ("nextmotion_quote", {"op": "delete", "quote_id": X}, ()),
+    ("nextmotion_quote", {"op": "validate", "quote_id": X, "dry_run": False}, ()),
+    ("nextmotion_invoice", {"op": "pay", "invoice_id": X, "dry_run": False,
+                            "data": {"card": "1.00"}}, ()),
+    ("nextmotion_invoice", {"op": "credit_note", "clinic_id": C, "dry_run": False,
+                            "data": {"patient": X, "items": [{"amount": "1.00"}]}}, ()),
+    ("nextmotion_payment", {"op": "update", "payment_id": X, "dry_run": False,
+                            "data": {"cash": "1.00"}}, ()),
+    ("nextmotion_lead", {"op": "update", "lead_id": X,
+                         "data": {"first_name": "f", "last_name": "l"}}, _CONTACT),
+    ("nextmotion_lead", {"op": "create", "clinic_id": C, "dry_run": False,
+                         "data": {"first_name": "f", "last_name": "l"}}, _CONTACT),
+    ("nextmotion_lead", {"op": "convert", "lead_id": X, "dry_run": False}, ()),
+    ("nextmotion_product", {"op": "delete", "product_id": X, "dry_run": False}, ()),
+    ("nextmotion_calendar", {"kind": "appointment_request", "op": "create",
+                             "dry_run": False,
+                             "data": {"visit_type_opening_hour": X, "time_slot": "t",
+                                      "email": "e", "first_name": "f", "last_name": "l",
+                                      "birth_date": "b", "phone_number": "p"}}, ()),
+    ("nextmotion_calendar", {"kind": "absence", "op": "update", "item_id": X,
+                             "dry_run": False, "data": {"calendar_event": _EVENT}}, ()),
+    ("nextmotion_communication", {"kind": "call", "clinic_id": C, "dry_run": False,
+                                  "data": {"patient": X, "notes": "n"}}, ()),
+    ("nextmotion_communication", {"kind": "message", "clinic_id": C, "dry_run": False,
+                                  "data": {"communication_template_kind": "sms",
+                                           "communication_template_type": "quote",
+                                           "object": X}}, ()),
+    ("nextmotion_setting", {"kind": "webhook", "op": "create", "clinic_id": C,
+                            "dry_run": False,
+                            "data": {"action_type": "a", "url": "u",
+                                     "headers": {"Authorization": S}}}, ()),
+    ("nextmotion_setting", {"kind": "survey_form", "op": "placeholders",
+                            "survey_type": "bolt_note"}, ()),
+    ("nextmotion_setting", {"kind": "document_template", "op": "duplicate", "item_id": X,
+                            "dry_run": False}, ()),
+    ("nextmotion_catalog", {"kind": "treatment_type", "op": "post_treatment",
+                            "item_id": X}, ()),
+    ("nextmotion_catalog", {"kind": "treatment_package", "op": "set_distributions",
+                            "item_id": X, "dry_run": False,
+                            "data": [{"user": C, "accounting_distribution": X}]}, ()),
+    # L'outil patient sert l'identité ; tout le reste du poison doit rester dehors.
+    ("nextmotion_patient", {"clinic_id": C}, _IDENTITE),
+    ("nextmotion_patient", {"op": "get", "patient_id": X}, _IDENTITE),
+    ("nextmotion_patient", {"op": "update", "patient_id": X, "dry_run": False,
+                            "data": {"email": "e", "first_name": "f", "last_name": "l",
+                                     "gender": "0"}}, _IDENTITE),
     ("nextmotion_appointment", {"op": "get", "appointment_id": X}, ()),
     ("nextmotion_quote", {"op": "get", "quote_id": X}, ()),
     ("nextmotion_invoice", {"clinic_id": C}, ()),
@@ -245,8 +302,9 @@ _APPELS = [
     ("nextmotion_payment", {"clinic_id": C}, ()),
     ("nextmotion_payment", {"op": "get", "payment_id": X}, ()),
     ("nextmotion_patient_stats", {"patient_id": X}, ()),
-    ("nextmotion_lead", {"clinic_id": C}, ()),
-    ("nextmotion_lead", {"op": "get", "lead_id": X}, ()),
+    # Un lead sert son identité de contact ; ses notes et sa référence externe non.
+    ("nextmotion_lead", {"clinic_id": C}, _CONTACT),
+    ("nextmotion_lead", {"op": "get", "lead_id": X}, _CONTACT),
     # Un graphique a un titre (celui du graphique, pas d'un patient).
     ("nextmotion_statistics", {"kind": "appointment_income", "clinic_id": C}, ("title",)),
     ("nextmotion_statistics", {"kind": "treatment_types", "clinic_id": C}, ("title",)),
@@ -261,7 +319,8 @@ _APPELS = [
 ] + [
     ("nextmotion_setting", {"kind": k, **o}, ())
     for k, ops in (("feature", 1), ("object_label", 1), ("payment_medium", 2),
-                   ("communication_template", 2), ("document_template", 2), ("webhook", 2))
+                   ("communication_template", 2), ("document_template", 2),
+                   ("survey_form", 2), ("webhook", 2))
     for o in ({"clinic_id": C}, {"op": "get", "item_id": X})[:ops]
 ] + [
     # `details` d'un tarif et `subject` d'un type de visite du CATALOGUE sont des libellés
@@ -341,7 +400,7 @@ def test_paiement_rend_ses_montants_et_sa_facture_projetee(client):
 def test_lead_garde_le_pipeline(client):
     label = {"id": C, "type": "lead_source", "name": "Source-Test", "color": "#000"}
     client.get_lead.return_value = {"data": {
-        "id": X, "first_name": S, "source": label, "desired_treatment": label,
+        "id": X, "notes": S, "source": label, "desired_treatment": label,
         "follow_up_count": 3, "assigned_doctor": {"id": C, "prefixed_name": "Dr Test"}}}
     out = _tool("nextmotion_lead")(op="get", lead_id=X)
     assert out["lead"] == {"id": X, "source": label, "desired_treatment": label,

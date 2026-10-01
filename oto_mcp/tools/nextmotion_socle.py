@@ -13,9 +13,13 @@ ne passent que les scalaires — un champ non typé par la spec ne devient pas u
 échappatoire.
 
 Règles qui valent partout :
-- **le patient n'est servi que par son `id`** (`_PATIENT`) ; la personne d'une demande
-  de rendez-vous en ligne et celle d'un lead ne sont pas servies du tout (nom, email,
-  téléphone, date de naissance, sexe) ;
+- **hors de l'outil patient, le patient n'est servi que par son `id`** (`_PATIENT`) ;
+  son identité se lit par `nextmotion_patient` (`_PATIENT_IDENTITY` : nom, coordonnées,
+  date de naissance, âge, genre, adresse, consentements de contact, numéro, archivé),
+  jamais les commentaires du praticien, la photo ni les coordonnées GPS. Un lead sert
+  son identité de contact (nom, prénom, email, téléphone), jamais ses notes ni sa
+  référence externe ; la personne d'une demande de rendez-vous en ligne n'est pas
+  servie du tout (nom, email, téléphone, date de naissance, sexe) ;
 - **aucun texte libre sur un patient** : `notes`, `free_text`, `details` d'une ligne de
   devis/facture, `rebate_details`, titres, sous-titres et notes d'un évènement d'agenda,
   textes des SMS/WhatsApp de rappel, `pre_payment_message` ;
@@ -37,12 +41,15 @@ from typing import Any, Callable, Optional
 
 from .. import output_projection
 
-_WITHHELD = ("patient anonymisé : servi par son seul id, sans nom ni coordonnées, et "
-             "rien ne permet d'en retrouver l'identité ; données de santé et textes "
-             "libres retirés.")
+_WITHHELD = ("patient servi par son seul id, sans nom ni coordonnées — son identité se "
+             "lit par nextmotion_patient(op='get') ; données de santé et textes libres "
+             "retirés.")
+_IDENTITE = ("identité du patient seule : commentaires du praticien, photo, coordonnées "
+             "GPS et dossier médical retirés.")
 _TEXTES = "titres, notes et textes libres retirés."
 _PERSONNE = ("personne anonymisée : ni nom, ni email, ni téléphone, ni date de "
              "naissance ; notes retirées.")
+_LEAD_RETIRE = "notes, textes libres et référence externe du lead retirés."
 
 _T = ("id", "created_time", "modified_time")
 _PATIENT = ("id",)
@@ -165,7 +172,10 @@ _CHART = ("title", "labels", ("datasets", ("data", "color")))
 _PATIENT_STATS = ("first_visit_time", "last_visit_time", "review_request_count",
                   "review_click_count", "quoted_total", "invoiced_total", "paid_total",
                   "credit_note_total", "reimbursments_total", "reimbursed_total")
-_LEAD = _T + (("source", _LABEL), "is_done", ("desired_treatment", _LABEL),
+# L'identité de contact du prospect est servie (décision du 2026-10-01) ; ni ses notes
+# ni sa référence externe (un identifiant chez un tiers).
+_LEAD = _T + ("first_name", "last_name", "email", "phone_number", ("source", _LABEL),
+              "is_done", ("desired_treatment", _LABEL),
               ("treatment_zone", _LABEL), ("status", _LABEL), "last_contact_time",
               ("last_channel_used", _LABEL), "response_received", "response_time",
               "scheduled_appointment_time", ("assigned_doctor", _DOCTOR_NAME),
@@ -180,6 +190,37 @@ _DOCUMENT_TEMPLATE = _T + ("has_source", ("master", ("id", "name")),
                            "display_in_consultations", "autoshow", "is_default", "has_slave")
 # Sans `headers` : ils portent d'ordinaire le secret du destinataire.
 _WEBHOOK = _T + ("clinic_id", "action_type", "url")
+_PLACEHOLDER = ("code", "label", "required")
+_PLACEHOLDERS = ("type", ("autocomplete_list", _PLACEHOLDER), ("link_list", _PLACEHOLDER))
+# Modèle de questionnaire : métadonnées et champs de fusion, sans son corps (objet libre).
+_SURVEY_FORM = _T + ("clinic_chain", "clinic", "type", "name",
+                     ("note_tmpl", _PLACEHOLDERS[1:]),
+                     ("custom_patient_fields_tmpl", _PLACEHOLDERS[1:]))
+# Sans la pièce jointe (un fichier) ni le corps des emails.
+_FOLLOW_UP_EMAIL = ("delay_seconds", "is_enabled", ("survey_form", ("id", "type", "name")))
+_POST_TREATMENT_CONFIG = _T + ("deal_lost_after_seconds",
+                               ("post_follow_up_email", _FOLLOW_UP_EMAIL),
+                               ("reminder_email", _FOLLOW_UP_EMAIL))
+# Un appel : ni le numéro appelé, ni les notes, la transcription, le résumé ou
+# l'enregistrement — ce qu'une personne a dit au téléphone.
+_CALL = _T + ("source", "time", "time_utc_offset", "time_utc_offset_seconds",
+              ("status", _LABEL), "direction", "duration", "is_appointment_made", "is_new",
+              ("patient", _PATIENT))
+# Un message envoyé : ni son destinataire (email, téléphone), ni son objet.
+_COMMUNICATION_RECORD = _T + ("communication_template_kind", "communication_template_type",
+                              "object_type", "object_id",
+                              ("events", _T + ("source", "type", "error_code", "has_error")))
+_CREDIT_NOTE = _T + ("issued_time", "void_time", "invoice", ("patient", _PATIENT),
+                     "is_patient_deleted", ("issuer_details", _DOCTOR_NAME), "number_id",
+                     "value", "vat_rate", "status", "vat_value", "vat_excl_value",
+                     "can_download_document", "allow_cancel")
+# L'identité du patient, pour `nextmotion_patient` SEUL : ni `doctor_comments`, ni
+# photographie, ni latitude / longitude.
+_PATIENT_IDENTITY = _T + ("first_name", "last_name", "email", "phone_number", "birth_date",
+                          "age", "gender", "postal_address", "zip_code", "city", "country",
+                          "has_email_contact_consent", "has_phone_contact_consent",
+                          "has_sms_contact_consent", "has_post_contact_consent",
+                          "patient_number", "is_archived")
 
 
 def _leaf(value: Any) -> Any:

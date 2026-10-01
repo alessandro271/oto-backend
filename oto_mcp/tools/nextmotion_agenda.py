@@ -3,10 +3,13 @@ absences, demandes de rendez-vous en ligne, et parcours patient du jour.
 
 Module frère de `nextmotion.py` (cf. `Connector.modules`). Les rendez-vous eux-mêmes
 et les créneaux libres restent dans `nextmotion.py` (`nextmotion_appointment` porte
-les deux écritures). Deux outils :
+leurs écritures). Deux outils :
 
-- `nextmotion_calendar` — les ressources et réglages de l'agenda, `kind` × list | get :
-  tous partagent clinique + identifiant, chaque kind a au plus ses filtres (ADR 0047).
+- `nextmotion_calendar` — les ressources et réglages de l'agenda, `kind` × list | get |
+  create | update | delete : tous partagent clinique + identifiant, chaque kind a au
+  plus ses filtres (ADR 0047). Les écritures ont `dry_run=True` par défaut et leur
+  `data` passe la liste blanche d'entrée (`nextmotion_entrees`) ; une demande en ligne
+  se crée (pour une personne, nommée dans `data`) mais ne se modifie ni ne s'efface.
 - `nextmotion_journey` — le parcours d'un patient sur un rendez-vous (étapes
   requises / faites) : une liste seule, à douze filtres qui ne recouvrent rien des
   autres, d'où un outil à part.
@@ -25,34 +28,57 @@ from typing import Literal, Optional
 
 from fastmcp import FastMCP
 
-from .nextmotion_garde import Kind, _client, _need, _paging, _run, _serve_kind
+from .nextmotion_entrees import (_IN_ABSENCE, _IN_APPOINTMENT_REQUEST, _IN_DEVICE,
+                                 _IN_OPENING_HOUR, _IN_ROOM)
+from .nextmotion_garde import Kind, Write, _client, _crud, _need, _paging, _run, _serve
 from .nextmotion_socle import (_ABSENCE, _APPOINTMENT_REQUEST, _DEVICE, _JOURNEY,
                                _OPENING_HOUR, _PERSONNE, _ROOM, _TEXTES, _page, _shape)
 
+_EVENT = ("calendar_event",)
 _KINDS = {
     "room": Kind(
         "rooms", _shape(_ROOM), lambda c, cid, **p: c.list_appointment_rooms(cid, **p),
-        lambda c, i: c.get_appointment_room(i)),
+        lambda c, i: c.get_appointment_room(i),
+        writes=_crud(lambda c, cid, b: c.create_appointment_room(cid, body=b),
+                     lambda c, i, b: c.update_appointment_room(i, body=b),
+                     lambda c, i, b: c.delete_appointment_room(i), _IN_ROOM, ("name",))),
     "device": Kind(
         "devices", _shape(_DEVICE),
         lambda c, cid, **p: c.list_appointment_devices(cid, **p),
-        lambda c, i: c.get_appointment_device(i)),
+        lambda c, i: c.get_appointment_device(i),
+        writes=_crud(lambda c, cid, b: c.create_appointment_device(cid, body=b),
+                     lambda c, i, b: c.update_appointment_device(i, body=b),
+                     lambda c, i, b: c.delete_appointment_device(i), _IN_DEVICE,
+                     ("name",))),
     "opening_hour": Kind(
         "opening_hours", _shape(_OPENING_HOUR),
         lambda c, cid, show_all, **p: c.list_calendar_opening_hours(
             cid, show_all=show_all, **p),
-        lambda c, i: c.get_calendar_opening_hour(i), ("show_all",), _TEXTES),
+        lambda c, i: c.get_calendar_opening_hour(i), ("show_all",), _TEXTES,
+        writes=_crud(lambda c, cid, b: c.create_calendar_opening_hour(cid, body=b),
+                     lambda c, i, b: c.update_calendar_opening_hour(i, body=b),
+                     lambda c, i, b: c.delete_calendar_opening_hour(i), _IN_OPENING_HOUR,
+                     _EVENT, required_update=())),
     "absence": Kind(
         "absences", _shape(_ABSENCE),
         lambda c, cid, start_date, end_date, show_all, **p: c.list_calendar_absences(
             cid, start_date=start_date, end_date=end_date, show_all=show_all, **p),
         lambda c, i: c.get_calendar_absence(i), ("start_date", "end_date", "show_all"),
-        _TEXTES),
+        _TEXTES,
+        writes=_crud(lambda c, cid, b: c.create_calendar_absence(cid, body=b),
+                     lambda c, i, b: c.update_calendar_absence(i, body=b),
+                     lambda c, i, b: c.delete_calendar_absence(i), _IN_ABSENCE, _EVENT,
+                     required_update=())),
     "appointment_request": Kind(
         "appointment_requests", _shape(_APPOINTMENT_REQUEST),
         lambda c, cid, request_status, **p: c.list_appointment_requests(
             cid, status=request_status, **p),
-        lambda c, i: c.get_appointment_request(i), ("request_status",), _PERSONNE),
+        lambda c, i: c.get_appointment_request(i), ("request_status",), _PERSONNE,
+        writes={"create": Write(
+            lambda c, _, b: c.create_appointment_request(body=b), "none",
+            _IN_APPOINTMENT_REQUEST,
+            ("visit_type_opening_hour", "time_slot", "email", "first_name", "last_name",
+             "birth_date", "phone_number"))}),
 }
 
 _journey = _shape(_JOURNEY)
@@ -63,7 +89,7 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     def nextmotion_calendar(
         kind: Literal["room", "device", "opening_hour", "absence", "appointment_request"],
-        op: Literal["list", "get"] = "list",
+        op: Literal["list", "get", "create", "update", "delete"] = "list",
         clinic_id: Optional[str] = None,
         item_id: Optional[str] = None,
         show_all: Optional[bool] = None,
@@ -71,48 +97,51 @@ def register(mcp: FastMCP) -> None:
         end_date: Optional[str] = None,
         request_status: Optional[Literal["new", "pending_pre_payment", "accepted",
                                          "rejected"]] = None,
+        data: Optional[dict] = None,
+        dry_run: Optional[bool] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         fields: Optional[list] = None,
     ) -> dict:
         """How a Nextmotion clinic's calendar is organised — rooms, devices, opening
-        hours, absences — and the appointment requests made online. Appointments
-        themselves: `nextmotion_appointment`; free slots: `nextmotion_availability`.
+        hours, absences — and online appointment requests; read and write.
+        Appointments: `nextmotion_appointment`; free slots: `nextmotion_availability`.
 
-        `kind`:
-        - "room" — appointment rooms (online booking, visit types served).
-        - "device" — appointment devices (availability, visit types served).
-        - "opening_hour" — opening-hour events (slots, visit types, practitioners,
-          recurrence); filter `show_all`.
-        - "absence" — practitioners' absences (dates, recurrence); filters
-          `start_date`, `end_date`, `show_all`.
-        - "appointment_request" — online booking requests (requested slot, visit
-          type, practitioner); filter `request_status`. The requesting person is
-          NOT served: no name, email, phone or birth date, and nothing identifies them.
-        Event titles, notes and reminder texts are withheld.
+        `kind`: "room" | "device" | "opening_hour" (filter `show_all`) | "absence"
+        (filters `start_date`, `end_date`, `show_all`) | "appointment_request" (filter
+        `request_status`; the requesting person is NOT served back). Event titles,
+        notes and reminder texts are withheld.
 
-        `op`: **"list"** (default, needs `clinic_id`) | **"get"** (`item_id`).
-        Each filter belongs to its kinds only; the others refuse it.
+        `op`: "list" (default, `clinic_id`) | "get" (`item_id`) | "create" (`clinic_id`
+        + `data`) | "update" (`item_id` + `data`) | "delete" (`item_id`).
+        appointment_request: create only, no `clinic_id`; `data` = a slot from
+        `nextmotion_availability` (`visit_type_opening_hour`, `time_slot`) and the
+        person (`first_name`, `last_name`, `email`, `phone_number`, `birth_date`).
+        Required: room/device `name`; opening_hour/absence `calendar_event`
+        (`start_time`, `end_time`, …) on create. `data` takes the fields the Nextmotion spec
+        accepts for the op; any other field is refused.
+
+        ⚠️ Writes DEFAULT to `dry_run=True`: `data` is checked, the current object and
+        what would be sent are returned, nothing is written. `dry_run=False` to act.
 
         Args:
             kind: which calendar object.
-            op: list (default) | get.
-            clinic_id: op="list" — the clinic.
-            item_id: op="get" — the object of that kind.
-            show_all: op="list", opening_hour/absence — every one of the clinic, not
-                only the key user's (Nextmotion default: false).
-            start_date / end_date: op="list", absence — YYYY-MM-DD.
-            request_status: op="list", appointment_request — new |
-                pending_pre_payment | accepted | rejected.
-            limit / offset: op="list" — pagination (limit 1..100, default 50).
-            fields: op="list" — keep only these keys per row (`id` always kept);
-                omitted or `["*"]` = the default view.
-        """
+            op: see above (default "list").
+            clinic_id: op="list"/"create".
+            item_id: op="get"/"update"/"delete".
+            show_all: opening_hour/absence list — the whole clinic, not only the key user.
+            start_date / end_date: absence list — YYYY-MM-DD.
+            request_status: appointment_request list — new | pending_pre_payment |
+                accepted | rejected.
+            data: create/update — the fields to send.
+            dry_run: writes — default True.
+            limit / offset: list — pagination (limit 1..100, default 50).
+            fields: list — keep only these keys per row (`id` kept; `["*"]` = default)."""
         filters = {"show_all": show_all, "start_date": start_date, "end_date": end_date,
                    "request_status": request_status}
-        return _serve_kind(_KINDS, kind, op, client=_client, clinic_id=clinic_id,
-                           item_id=item_id, filters=filters, limit=limit, offset=offset,
-                           fields=fields)
+        return _serve(_KINDS, kind, op, client=_client, clinic_id=clinic_id,
+                      item_id=item_id, filters=filters, limit=limit, offset=offset,
+                      fields=fields, data=data, dry_run=dry_run)
 
     @mcp.tool()
     def nextmotion_journey(
@@ -133,9 +162,10 @@ def register(mcp: FastMCP) -> None:
         """Patient journeys of a Nextmotion clinic — for each appointment, the steps
         required and completed, visit type, room and schedule. Read only.
 
-        The patient is served by their ID ONLY — no name, email or phone, and no tool
-        resolves that id to a person. The consultation, event titles and notes are
-        withheld; searching or sorting by patient name is not offered.
+        The patient is served by their ID ONLY — no name, email or phone; resolve it
+        with `nextmotion_patient(op="get")` when the identity is needed. The
+        consultation, event titles and notes are withheld; searching or sorting by
+        patient name is not offered.
 
         Args:
             clinic_id: the clinic.

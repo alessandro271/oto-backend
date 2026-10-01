@@ -1,13 +1,14 @@
 """Connecteur Nextmotion — dispatch `op=`, projection des données de santé, sonde.
 
 Ce que ce fichier verrouille :
-- la SURFACE (15 tools, sur les cinq modules du connecteur) et le routage de chaque op
+- la SURFACE (19 tools, sur les sept modules du connecteur) et le routage de chaque op
   vers la bonne méthode du client — les ressources ajoutées le 2026-09-17 ont leur
-  propre fichier, `test_nextmotion_administratif.py` ;
+  propre fichier, `test_nextmotion_administratif.py`, les écritures et l'identité du
+  patient (2026-10-01) le leur, `test_nextmotion_ecritures.py` ;
 - un argument requis manquant nommé, un argument non pertinent REFUSÉ — « fourni » se
   lit `is not None`, donc `dry_run=False` et `offset=0` comptent ;
-- `dry_run` vaut True par défaut sur les deux écritures et n'atteint JAMAIS la méthode
-  mutante ;
+- `dry_run` vaut True par défaut sur reschedule/delete et n'atteint JAMAIS la méthode
+  mutante (toutes les autres écritures : `test_nextmotion_ecritures.py`) ;
 - la projection en liste blanche : un rendez-vous, un devis, une facture ne rendent
   aucun champ de santé ni texte libre, même quand l'API les envoie ;
 - le filtre de période des factures : parcours de toutes les pages sans supposer un
@@ -60,14 +61,15 @@ def _tool(name: str):
     return asyncio.run(_mcp().get_tool(name)).fn
 
 
-def test_the_surface_is_exactly_seventeen_tools(client):
+def test_the_surface_is_exactly_nineteen_tools(client):
     assert sorted(t.name for t in asyncio.run(_mcp().list_tools())) == [
         "nextmotion_appointment", "nextmotion_availability", "nextmotion_calendar",
-        "nextmotion_catalog", "nextmotion_clinic", "nextmotion_device_usage",
-        "nextmotion_invoice", "nextmotion_journey", "nextmotion_lead",
-        "nextmotion_patient_demographics", "nextmotion_patient_stats",
-        "nextmotion_payment", "nextmotion_practitioner", "nextmotion_product",
-        "nextmotion_quote", "nextmotion_setting", "nextmotion_statistics",
+        "nextmotion_catalog", "nextmotion_clinic", "nextmotion_communication",
+        "nextmotion_device_usage", "nextmotion_invoice", "nextmotion_journey",
+        "nextmotion_lead", "nextmotion_patient", "nextmotion_patient_demographics",
+        "nextmotion_patient_stats", "nextmotion_payment", "nextmotion_practitioner",
+        "nextmotion_product", "nextmotion_quote", "nextmotion_setting",
+        "nextmotion_statistics",
     ]
 
 

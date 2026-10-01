@@ -1,6 +1,7 @@
-"""Nextmotion — logiciel de gestion de cliniques de médecine esthétique, côté
-ADMINISTRATIF, en lecture (plus deux gestes d'agenda) : cliniques, praticiens, agenda,
-catalogue, ventes, leads, statistiques, stock, réglages.
+"""Nextmotion — logiciel de gestion de cliniques de médecine esthétique : tout le côté
+ADMINISTRATIF, en lecture ET en écriture (cliniques, praticiens, agenda, catalogue,
+ventes, leads, appels et messages, statistiques, stock, réglages), plus l'IDENTITÉ du
+patient (`nextmotion_patient`).
 
 Wrappe `oto.tools.nextmotion.NextmotionClient` (Bearer, API « External » v4). keyed
 `api_key`, BYO (membre ou org) : une clé agit au nom de l'utilisateur qui l'a générée,
@@ -8,52 +9,70 @@ sur les cliniques dont il est employé — il n'y a pas de clé plateforme.
 
 ## Données de santé : ce que ce connecteur ne sert PAS
 
-Nextmotion porte des dossiers patients. Tout ce qui est contenu médical — dossier et
-antécédents, photos et médias, ordonnances, consentements, soins réalisés,
-consultations, visites (notes cliniques), questionnaires de santé, suivi post-soin —
-est **hors périmètre**, comme la fiche des patients et le chat : le client oto-core
-n'a aucune méthode vers ces endpoints, et ces modules n'en ajoutent pas. Les ouvrir est
-une décision de gouvernance (RGPD art. 9, hébergement HDS), pas une extension de
-surface. La LISTE des patients est lue par `nextmotion_analyse` seul, pour des
-agrégats à seuil (décision du 2026-10-01) : aucune de ses lignes ne sort.
+Nextmotion porte des dossiers patients. Tout ce qui est contenu médical — antécédents,
+photos et médias, ordonnances et leur signature, consentements signés, soins réalisés,
+consultations, visites (notes cliniques), devis et factures créés sous une
+consultation — est **hors périmètre**, comme le chat : le client oto-core n'a aucune
+méthode vers ces endpoints, et ces modules n'en ajoutent pas. Les ouvrir est une
+décision de gouvernance (RGPD art. 9, hébergement HDS), pas une extension de surface.
+Ne se suppriment pas non plus : un patient, une facture, un paiement.
 
-⚠️ **Des ressources du périmètre EMBARQUENT quand même de la donnée personnelle** :
-rendez-vous, parcours, devis, factures et paiements portent un objet `patient` complet ;
-une demande de rendez-vous en ligne et un lead portent le nom, l'email et le téléphone
-de la personne ; beaucoup portent du texte libre. **Tout ce qui sort passe donc par une
-LISTE BLANCHE** (`nextmotion_socle`) : seuls les champs nommés passent, un champ que
-l'API ajouterait demain reste dehors. **Le patient n'est servi que par son `id`**, la
-personne d'une demande ou d'un lead pas du tout. **Il n'existe aucune échappatoire vers
-le brut** (`fields=["*"]` rend la vue par défaut), aucun outil ne résout un id patient
-en identité, et aucun filtre qui cherche sur le nom d'une personne n'est exposé.
+**L'identité du patient est servie, par un seul outil** (décision du propriétaire,
+2026-10-01) : `nextmotion_patient` lit (liste avec recherche, fiche), crée et modifie
+nom, prénom, email, téléphone, date de naissance, âge, genre, adresse, consentements de
+contact, numéro de patient, archivé — jamais les commentaires du praticien, la photo ni
+les coordonnées GPS. `nextmotion_analyse` lit la même liste pour des agrégats à seuil.
+
+⚠️ **Des ressources du périmètre EMBARQUENT de la donnée personnelle** : rendez-vous,
+parcours, devis, factures et paiements portent un objet `patient` complet ; une demande
+de rendez-vous en ligne et un lead portent le nom, l'email et le téléphone de la
+personne ; beaucoup portent du texte libre. **Tout ce qui sort passe donc par une LISTE
+BLANCHE** (`nextmotion_socle`) : seuls les champs nommés passent, un champ que l'API
+ajouterait demain reste dehors. **Hors de `nextmotion_patient`, le patient n'est servi
+que par son `id`** (qui s'y résout) ; un lead sert son identité de contact (nom, email,
+téléphone), jamais ses notes ; la personne d'une demande en ligne pas du tout. **Il
+n'existe aucune échappatoire vers le brut** (`fields=["*"]` rend la vue par défaut), et
+aucun filtre qui cherche sur le nom d'une personne n'est exposé hors de la liste des
+patients.
+
+## Écritures : un aperçu tant qu'on ne dit pas le contraire
+
+Toute écriture (create, update, delete, et les verbes propres : reschedule, validate,
+pay, convert…) a **`dry_run=True` par défaut** : l'outil valide les arguments, relit
+l'objet visé (projeté) et rend ce qui partirait, sans appeler aucune méthode d'écriture.
+**Jamais de notification implicite** : les drapeaux d'envoi que la spec met à `true` par
+défaut (modification d'un rendez-vous) partent à `false` sauf demande explicite, et
+l'aperçu dit qui serait prévenu. Le corps passe en `data`, validé contre la liste
+blanche d'ENTRÉE de l'op (`nextmotion_entrees`, tirée du `requestBody` de la spec) :
+**un champ inconnu est refusé nommément**, jamais ignoré. La réponse d'une écriture
+repasse par la liste blanche de la ressource. Mécanique commune → `nextmotion_garde`
+(`Write`, `_serve_write`).
 
 ## Surface (ADR 0047), verbe en `op`, défaut toujours en lecture
 
 Ce module :
 - `nextmotion_clinic` — découverte : les cliniques de la clé (seul, sans op).
-- `nextmotion_practitioner` — list | get.
-- `nextmotion_appointment` — list | get | reschedule | delete. Les deux écritures
-  touchent un vrai patient : `dry_run` vaut **True par défaut** sur elles et rend
-  l'état actuel du rendez-vous sans rien écrire.
+- `nextmotion_practitioner` — list | get | create | update | delete.
+- `nextmotion_appointment` — list | get | update | reschedule | delete.
 - `nextmotion_availability` — créneaux libres (params disjoints de l'agenda, d'où
-  un tool à part) ; fournit l'`id` et le `time_slot` qu'exige `reschedule`.
-- `nextmotion_quote`, `nextmotion_invoice` — list | get ; filtre de période des
-  factures appliqué CÔTÉ OUTIL → `nextmotion_periode` (pas sur les devis : `OApiQuote`
-  n'a pas d'`invoiced_time`, son `issued_time` est nullable).
-- `nextmotion_product` — stock (lots), list | get, NON rattaché aux factures.
+  un tool à part) ; fournit l'`id` et le `time_slot` qu'exigent `reschedule` et une
+  demande de rendez-vous en ligne.
+- `nextmotion_product` — stock (lots), list | get | create | update | delete, NON
+  rattaché aux factures.
 
 Modules frères (même clé, même client, montés par `Connector.modules`) :
-`nextmotion_catalogue` (catalogue, forfaits, répartitions comptables, produits
-globaux), `nextmotion_agenda` (salles, appareils, plages, absences, demandes en ligne,
-parcours), `nextmotion_ventes` (paiements, statistiques, totaux d'un patient),
-`nextmotion_crm` (leads, réglages de la clinique), `nextmotion_analyse` (patientèle et
-occupation des appareils, en agrégats).
+`nextmotion_catalogue` (catalogue, forfaits, répartitions comptables, configuration
+post-soin), `nextmotion_agenda` (salles, appareils, plages, absences, demandes en
+ligne, parcours), `nextmotion_ventes` (devis, factures et avoirs, paiements,
+statistiques, totaux d'un patient), `nextmotion_crm` (leads, appels et messages,
+réglages, modèles de questionnaires, webhooks), `nextmotion_patient` (l'identité),
+`nextmotion_analyse` (patientèle et occupation des appareils, en agrégats).
 
 **Aucun argument n'est retenu au silence** (`is not None`) → `nextmotion_garde`.
 
-Dérivé de la spec OpenAPI publique (lue le 2026-09-17). **Aucun appel réel** : pas
-de clé disponible — la forme exacte des réponses, les effets de bord d'une
-suppression ou d'un report (notification au patient ?) ne sont pas vérifiés.
+Dérivé de la spec OpenAPI publique (lue le 2026-09-17, écritures le 2026-10-01).
+**Aucun appel réel** : pas de clé disponible — la forme exacte des réponses, les effets
+de bord d'une écriture (notification au patient ?) ne sont pas vérifiés.
 """
 from __future__ import annotations
 
@@ -62,15 +81,38 @@ from typing import Literal, Optional
 from fastmcp import FastMCP
 
 from ..connectors import verify as connector_verify
-from . import nextmotion_periode as periode
-from .nextmotion_garde import (_NAME, _bad, _client, _need, _paging, _refuse_ignored, _run,
-                               _verify)
-from .nextmotion_socle import (_CLINIC, _COLLAB, _appointment, _invoice, _one, _page,
-                               _product, _quote, _shape)
+from .nextmotion_entrees import (_IN_APPOINTMENT, _IN_DOCTOR_CREATE, _IN_DOCTOR_UPDATE,
+                                 _IN_PRODUCT_CREATE, _IN_PRODUCT_UPDATE,
+                                 _NO_NOTIFY_APPOINTMENT)
+from .nextmotion_garde import (_NAME, Kind, Write, _bad, _client, _crud, _need, _paging,
+                               _refuse_ignored, _run, _serve_write, _verify)
+from .nextmotion_socle import (_CLINIC, _COLLAB, _WITHHELD, _appointment, _one, _page,
+                               _product, _shape)
 
 _clinic = _shape(_CLINIC)
 _collab = _shape(_COLLAB)
 _slot = _shape(("id", "type", "time_slot", "utc_offset"))
+
+_PRACTITIONERS = {"practitioner": Kind(
+    "practitioners", _collab, lire=lambda c, i: c.get_doctor(i),
+    writes=_crud(lambda c, cid, b: c.create_doctor(cid, body=b),
+                 lambda c, i, b: c.update_doctor(i, body=b),
+                 lambda c, i, b: c.delete_doctor(i), _IN_DOCTOR_CREATE, ("email", "kind"),
+                 accepted_update=_IN_DOCTOR_UPDATE, required_update=("speciality",)))}
+_APPOINTMENTS = {"appointment": Kind(
+    "appointments", _appointment, lire=lambda c, i: c.get_appointment(i),
+    withheld=_WITHHELD,
+    writes={"update": Write(lambda c, i, b: c.update_appointment(i, body=b), "item",
+                            _IN_APPOINTMENT, ("calendar_event",),
+                            defaults=_NO_NOTIFY_APPOINTMENT,
+                            notify=tuple(_NO_NOTIFY_APPOINTMENT))})}
+_PRODUCTS = {"product": Kind(
+    "products", _product, lire=lambda c, i: c.get_product(i),
+    writes=_crud(lambda c, cid, b: c.create_product(cid, body=b),
+                 lambda c, i, b: c.update_product(i, body=b),
+                 lambda c, i, b: c.delete_product(i), _IN_PRODUCT_CREATE,
+                 ("global_product",), accepted_update=_IN_PRODUCT_UPDATE,
+                 required_update=()))}
 
 
 def register(mcp: FastMCP) -> None:
@@ -93,27 +135,39 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def nextmotion_practitioner(
-        op: Literal["list", "get"] = "list",
+        op: Literal["list", "get", "create", "update", "delete"] = "list",
         clinic_id: Optional[str] = None,
         doctor_id: Optional[str] = None,
+        data: Optional[dict] = None,
+        dry_run: Optional[bool] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         fields: Optional[list] = None,
     ) -> dict:
-        """Practitioners (doctors, staff) of a Nextmotion clinic.
+        """Practitioners (doctors, staff) of a Nextmotion clinic — read and write.
 
-        `op`:
-        - **"list"** (default): the clinic's practitioners (`clinic_id`).
-        - **"get"**: one practitioner (`doctor_id`).
+        `op`: "list" (default, `clinic_id`) | "get" (`doctor_id`) | "create" (`clinic_id`
+        + `data`: `email`, `kind` required; names when the email is unknown) | "update"
+        (`doctor_id` + `data`, `speciality` required) | "delete" (`doctor_id`). `data` takes
+        the fields the Nextmotion spec accepts for the op; any other field is refused.
+
+        ⚠️ Writes DEFAULT to `dry_run=True`: `data` is checked, the current object and
+        what would be sent are returned, nothing is written. `dry_run=False` to act.
 
         Args:
-            op: list (default) | get.
-            clinic_id: op="list" — the clinic.
-            doctor_id: op="get" — the practitioner.
+            op: list (default) | get | create | update | delete.
+            clinic_id: op="list"/"create".
+            doctor_id: op="get"/"update"/"delete".
+            data: op="create"/"update" — the fields to send.
+            dry_run: writes — default True.
             limit / offset: op="list" — pagination (limit 1..100, default 50).
-            fields: op="list" — keep only these keys per row (`id` always kept);
-                omitted or `["*"]` = the default view.
-        """
+            fields: op="list" — keep only these keys per row (`id` kept)."""
+        if op in ("create", "update", "delete"):
+            return _serve_write(_PRACTITIONERS, "practitioner", op, client=_client,
+                                clinic_id=clinic_id, item_id=doctor_id, data=data,
+                                dry_run=dry_run, item_name="doctor_id",
+                                unused={"limit": limit, "offset": offset, "fields": fields})
+        _refuse_ignored(op, data=data, dry_run=dry_run)
         c = _client()
         if op == "list":
             _need(op, clinic_id=clinic_id)
@@ -126,57 +180,69 @@ def register(mcp: FastMCP) -> None:
                             fields=fields)
             return _one(_run(lambda: c.get_doctor(doctor_id)), "practitioner", _collab,
                         withheld=None)
-        raise _bad("op doit être 'list' ou 'get'.")
+        raise _bad("op doit être 'list', 'get', 'create', 'update' ou 'delete'.")
 
     @mcp.tool()
     def nextmotion_appointment(
-        op: Literal["list", "get", "reschedule", "delete"] = "list",
+        op: Literal["list", "get", "update", "reschedule", "delete"] = "list",
         clinic_id: Optional[str] = None,
         appointment_id: Optional[str] = None,
         date: Optional[str] = None,
         patient_id: Optional[str] = None,
         visit_type_opening_hour_id: Optional[str] = None,
         time_slot: Optional[str] = None,
+        data: Optional[dict] = None,
         dry_run: Optional[bool] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         fields: Optional[list] = None,
     ) -> dict:
-        """Calendar appointments of a Nextmotion clinic — read the agenda, move or
-        delete an appointment.
+        """Calendar appointments of a Nextmotion clinic — read the agenda, update, move
+        or delete an appointment.
 
-        Health data is withheld: each appointment keeps its schedule, status, visit
-        type, room and practitioners. The patient is served by their ID ONLY — no
-        name, email or phone, and no tool resolves that id to a person: do not try
-        to infer who the patient is. No title, notes or anything clinical.
+        Health data is withheld: schedule, status, visit type, room and practitioners
+        stay. The patient is served by ID ONLY — resolve it with
+        `nextmotion_patient(op="get")` when needed. No title, notes or anything clinical.
 
         `op`:
-        - **"list"** (default): the clinic's appointments (`clinic_id`), optionally
-          on one `date` (YYYY-MM-DD) or for one `patient_id`.
-        - **"get"**: one appointment (`appointment_id`).
-        - **"reschedule"**: moves `appointment_id` to a free slot —
-          `visit_type_opening_hour_id` and `time_slot` both come from ONE entry of
-          `nextmotion_availability`. ⚠️ Touches a real patient.
-        - **"delete"**: deletes `appointment_id`. ⚠️ Touches a real patient; whether
-          Nextmotion notifies them is not documented.
+        - "list" (default, `clinic_id`, optional `date` YYYY-MM-DD or `patient_id`) |
+          "get" (`appointment_id`).
+        - "update" (`appointment_id` + `data`, `calendar_event` with `start_time` /
+          `end_time` required; the link to a clinical visit is refused). ⚠️ Nextmotion
+          would email/SMS the patient by default: this tool sends
+          `send_appointment_modified_email` / `_sms` = false unless you pass true; the
+          preview lists who is notified (`notifie_le_patient`). `data` takes the fields the
+          Nextmotion spec accepts for the op; any other field is refused.
+        - "reschedule" (`appointment_id`, `visit_type_opening_hour_id` + `time_slot` from
+          ONE `nextmotion_availability` entry). ⚠️ Touches a real patient.
+        - "delete" (`appointment_id`). ⚠️ Touches a real patient; whether Nextmotion
+          notifies them is not documented.
 
-        ⚠️ `dry_run` DEFAULTS TO TRUE on reschedule/delete: the call returns the
-        appointment as it stands and what would change, and writes nothing. Pass
-        `dry_run=False` deliberately to act.
+        ⚠️ Writes DEFAULT to `dry_run=True`: `data` is checked, the current object and
+        what would be sent are returned, nothing is written. `dry_run=False` to act.
 
         Args:
-            op: list (default) | get | reschedule | delete.
-            clinic_id: op="list" — the clinic.
-            appointment_id: op="get"/"reschedule"/"delete".
+            op: list (default) | get | update | reschedule | delete.
+            clinic_id: op="list".
+            appointment_id: every op but list.
             date: op="list" — YYYY-MM-DD.
             patient_id: op="list" — only this patient's appointments.
             visit_type_opening_hour_id: op="reschedule" — slot `id`.
             time_slot: op="reschedule" — slot `time_slot` (date-time).
-            dry_run: op="reschedule"/"delete" — default True.
+            data: op="update" — the fields to send.
+            dry_run: writes — default True.
             limit / offset: op="list" — pagination (limit 1..100, default 50).
-            fields: op="list" — keep only these keys per row (`id` always kept);
-                omitted or `["*"]` = the default view.
-        """
+            fields: op="list" — keep only these keys per row (`id` kept)."""
+        if op == "update":
+            return _serve_write(
+                _APPOINTMENTS, "appointment", op, client=_client, clinic_id=clinic_id,
+                item_id=appointment_id, data=data, dry_run=dry_run,
+                item_name="appointment_id",
+                unused={"date": date, "patient_id": patient_id, "limit": limit,
+                        "offset": offset, "fields": fields,
+                        "visit_type_opening_hour_id": visit_type_opening_hour_id,
+                        "time_slot": time_slot})
+        _refuse_ignored(op, data=data)
         c = _client()
         if op == "list":
             _need(op, clinic_id=clinic_id)
@@ -187,7 +253,7 @@ def register(mcp: FastMCP) -> None:
                 clinic_id, date=date, patient_id=patient_id, **_paging(limit, offset))),
                 "appointments", _appointment, fields=fields)
         if op not in ("get", "reschedule", "delete"):
-            raise _bad("op doit être 'list', 'get', 'reschedule' ou 'delete'.")
+            raise _bad("op doit être 'list', 'get', 'update', 'reschedule' ou 'delete'.")
         _refuse_ignored(op, clinic_id=clinic_id, date=date, patient_id=patient_id,
                         limit=limit, offset=offset, fields=fields)
         _need(op, appointment_id=appointment_id)
@@ -247,123 +313,8 @@ def register(mcp: FastMCP) -> None:
         return {"slots": [_slot(r) for r in (env or {}).get("data") or []]}
 
     @mcp.tool()
-    def nextmotion_quote(
-        op: Literal["list", "get"] = "list",
-        clinic_id: Optional[str] = None,
-        quote_id: Optional[str] = None,
-        patient_id: Optional[str] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        fields: Optional[list] = None,
-    ) -> dict:
-        """Quotes (devis) of a Nextmotion clinic — number, status, lines (with
-        sub-pricings, markup, accounting codes), totals, follow-up and channel.
-        Health data, titles and free text are withheld; the patient is served by
-        their ID ONLY (no name, email or phone; no tool resolves it to a person).
-
-        Status codes: 1 NEW, 2 QUOTED, 3 ACCEPTED, 4 REJECTED, 5 INVOICED,
-        6 ACQUAINTED.
-
-        `op`: **"list"** (default, `clinic_id`, optional `patient_id`) |
-        **"get"** (`quote_id`).
-
-        Args:
-            op: list (default) | get.
-            clinic_id: op="list" — the clinic.
-            quote_id: op="get" — the quote.
-            patient_id: op="list" — only this patient's quotes.
-            limit / offset: op="list" — pagination (limit 1..100, default 50).
-            fields: op="list" — keep only these keys per row (`id` always kept);
-                omitted or `["*"]` = the default view.
-        """
-        c = _client()
-        if op == "list":
-            _need(op, clinic_id=clinic_id)
-            _refuse_ignored(op, quote_id=quote_id)
-            return _page(_run(lambda: c.list_quotes(
-                clinic_id, patient_id=patient_id, **_paging(limit, offset))),
-                "quotes", _quote, fields=fields)
-        if op == "get":
-            _need(op, quote_id=quote_id)
-            _refuse_ignored(op, clinic_id=clinic_id, patient_id=patient_id,
-                            limit=limit, offset=offset, fields=fields)
-            return _one(_run(lambda: c.get_quote(quote_id)), "quote", _quote)
-        raise _bad("op doit être 'list' ou 'get'.")
-
-    @mcp.tool()
-    def nextmotion_invoice(
-        op: Literal["list", "get"] = "list",
-        clinic_id: Optional[str] = None,
-        invoice_id: Optional[str] = None,
-        invoiced_from: Optional[str] = None,
-        invoiced_to: Optional[str] = None,
-        max_pages: Optional[int] = None,
-        limit: Optional[int] = None,
-        offset: Optional[int] = None,
-        fields: Optional[list] = None,
-    ) -> dict:
-        """Invoices of a Nextmotion clinic — number, status, lines, totals, payment
-        methods. Health data, titles and free text are withheld; the patient
-        is served by their ID ONLY (no name, email or phone; no tool resolves it to a person).
-
-        Status codes: 2 NEW, 3 VALIDATED, 4 NEW_ONLY_DEPOSITS, 5 NEW_ISSUED,
-        6 NEW_DEPOSITS_PAID, 9 ONLY_DEPOSITS, 10 ISSUED, 11 DEPOSITS_PAID,
-        12 NEUTRALIZED.
-
-        `op`: **"list"** (default, `clinic_id`) | **"get"** (`invoice_id`).
-
-        Period filter (op="list"): `invoiced_from` / `invoiced_to` (YYYY-MM-DD, both
-        inclusive, on `invoiced_time`). Nextmotion neither filters nor promises an
-        order, so the tool reads EVERY page (100 invoices per call, up to `max_pages`)
-        and says what it did: `pages_lues`, `factures_parcourues`, `complet`.
-        `complet: false` = the page cap cut the scan, the result is PARTIAL: call again
-        with `offset=offset_suivant` and the same period. With a period, `limit` is
-        refused and `offset` is where the scan starts in the upstream list.
-        Lines carry the act name, price, quantity, rebate, markup, VAT and their
-        sub-pricings (accounting code, clinic/provider split); no consumables nor
-        lots per invoice in the API (`nextmotion_product` is not linked to invoices).
-        Payments of an invoice: `nextmotion_payment(invoice_id=…)`.
-
-        Args:
-            op: list (default) | get.
-            clinic_id: op="list" — the clinic.
-            invoice_id: op="get" — the invoice.
-            invoiced_from / invoiced_to: op="list" — period bounds, YYYY-MM-DD.
-            max_pages: op="list" with a period — page cap, 1..100 (default 20).
-            limit / offset: op="list" — pagination (limit 1..100, default 50).
-            fields: op="list" — keep only these keys per row (`id` always kept);
-                omitted or `["*"]` = the default view.
-        """
-        c = _client()
-        if op == "list":
-            _need(op, clinic_id=clinic_id)
-            _refuse_ignored(op, invoice_id=invoice_id)
-            if invoiced_from is None and invoiced_to is None:
-                if max_pages is not None:
-                    raise _bad(f"op={op!r} n'utilise pas `max_pages` sans "
-                               "`invoiced_from`/`invoiced_to`.")
-                return _page(_run(lambda: c.list_invoices(
-                    clinic_id, **_paging(limit, offset))), "invoices", _invoice,
-                    fields=fields)
-            if limit is not None:
-                raise _bad(f"op={op!r} n'utilise pas `limit` avec une période : toutes les "
-                           "factures de la période lues sont rendues ; `offset` y est le "
-                           "point de départ du parcours.")
-            return _run(lambda: periode.lister(
-                lambda o: c.list_invoices(clinic_id, limit=periode.PAGE, offset=o),
-                invoiced_from, invoiced_to, offset=0 if offset is None else offset,
-                max_pages=max_pages, fields=fields))
-        if op == "get":
-            _need(op, invoice_id=invoice_id)
-            _refuse_ignored(op, clinic_id=clinic_id, limit=limit, offset=offset,
-                            fields=fields, invoiced_from=invoiced_from,
-                            invoiced_to=invoiced_to, max_pages=max_pages)
-            return _one(_run(lambda: c.get_invoice(invoice_id)), "invoice", _invoice)
-        raise _bad("op doit être 'list' ou 'get'.")
-
-    @mcp.tool()
     def nextmotion_product(
-        op: Literal["list", "get"] = "list",
+        op: Literal["list", "get", "create", "update", "delete"] = "list",
         clinic_id: Optional[str] = None,
         product_id: Optional[str] = None,
         search: Optional[str] = None,
@@ -371,30 +322,45 @@ def register(mcp: FastMCP) -> None:
         expiring_within_days: Optional[int] = None,
         order: Optional[Literal["name", "-name", "brand_name", "-brand_name", "stock_level",
                                 "-stock_level", "warning_level", "-warning_level"]] = None,
+        data: Optional[dict] = None,
+        dry_run: Optional[bool] = None,
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         fields: Optional[list] = None,
     ) -> dict:
-        """Product stock of a Nextmotion clinic, read only — one row per lot: lot
-        number, expiration date, digital and physical stock levels, warning level,
-        unit price, catalogue product (`global_product`: name, brand).
-        ⚠️ The stock is not linked to invoices, quotes or treatments: the Nextmotion
-        API does not expose which consumables or lots an invoice used. Never pair a
-        lot with an invoice or a patient.
-        `op`: **"list"** (default, `clinic_id`, filters) | **"get"** (`product_id`).
+        """Product stock of a Nextmotion clinic — one row per lot: lot number,
+        expiration date, digital and physical stock levels, warning level, unit price,
+        catalogue product (`global_product`: name, brand).
+        ⚠️ The stock is not linked to invoices, quotes or treatments: the Nextmotion API
+        does not expose which consumables or lots an invoice used. Never pair a lot with
+        an invoice or a patient.
+
+        `op`: "list" (default, `clinic_id`, filters) | "get" (`product_id`) | "create"
+        (`clinic_id` + `data`, `global_product` required) | "update" (`product_id` +
+        `data`) | "delete" (`product_id`; answers the deleted lot). `data` takes the fields
+        the Nextmotion spec accepts for the op; any other field is refused.
+        ⚠️ `dry_run` DEFAULTS TO TRUE on writes.
 
         Args:
-            op: list (default) | get.
-            clinic_id: op="list" — the clinic.
-            product_id: op="get" — the product (lot).
+            op: list (default) | get | create | update | delete.
+            clinic_id: op="list"/"create".
+            product_id: op="get"/"update"/"delete" — the lot.
             search: op="list" — free-text search.
             stock_state: op="list" — low | out | ok.
             expiring_within_days: op="list" — lots expiring within N days (>= 1).
             order: op="list" — sort (default brand_name; `-` = descending).
+            data: op="create"/"update" — the fields to send.
+            dry_run: writes — default True.
             limit / offset: op="list" — pagination (limit 1..100, default 50).
-            fields: op="list" — keep only these keys per row (`id` always kept);
-                omitted or `["*"]` = the default view.
-        """
+            fields: op="list" — keep only these keys per row (`id` kept)."""
+        if op in ("create", "update", "delete"):
+            return _serve_write(
+                _PRODUCTS, "product", op, client=_client, clinic_id=clinic_id,
+                item_id=product_id, data=data, dry_run=dry_run, item_name="product_id",
+                unused={"search": search, "stock_state": stock_state,
+                        "expiring_within_days": expiring_within_days, "order": order,
+                        "limit": limit, "offset": offset, "fields": fields})
+        _refuse_ignored(op, data=data, dry_run=dry_run)
         c = _client()
         if op == "list":
             _need(op, clinic_id=clinic_id)
@@ -413,4 +379,4 @@ def register(mcp: FastMCP) -> None:
                             limit=limit, offset=offset, fields=fields)
             return _one(_run(lambda: c.get_product(product_id)), "product", _product,
                         withheld=None)
-        raise _bad("op doit être 'list' ou 'get'.")
+        raise _bad("op doit être 'list', 'get', 'create', 'update' ou 'delete'.")

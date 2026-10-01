@@ -6,8 +6,8 @@ Module frère de `nextmotion.py` (cf. `Connector.modules`).
 ## La patientèle : la liste des patients, lue pour COMPTER
 
 Décision du 2026-10-01 (demande du marketing d'une clinique cliente) : la liste des
-patients, hors périmètre jusque-là (cf. `nextmotion.py`), est lue par CE module et par
-lui seul, pour en tirer des comptages. Ce qui tient la garde :
+patients est lue par CE module pour en tirer des comptages (l'identité, elle, se lit
+par `nextmotion_patient`, décision du même jour). Ce qui tient la garde ici :
 
 - **rien d'individuel ne sort** : ni ligne, ni id, ni nom ; l'outil lit chaque page,
   incrémente des compteurs et jette la page. Seuls les champs de dimension sont lus

@@ -7,28 +7,33 @@ from __future__ import annotations
 
 from ._model import _c
 
-# nextmotion : gestion de cliniques de médecine esthétique, côté ADMINISTRATIF
-# (cliniques, praticiens, agenda, catalogue, ventes, leads, statistiques, stock,
-# réglages). keyed api_key (Bearer), BYO seulement : une clé agit au nom de
+# nextmotion : gestion de cliniques de médecine esthétique, côté ADMINISTRATIF en
+# lecture et en écriture (cliniques, praticiens, agenda, catalogue, ventes, leads,
+# appels et messages, statistiques, stock, réglages), plus l'IDENTITÉ du patient.
+# keyed api_key (Bearer), BYO seulement : une clé agit au nom de
 # l'utilisateur de l'application qui l'a générée, sur les cliniques dont il est
 # employé — une clé plateforme n'aurait aucun sens.
 #
 # ⚠️ Éditeur d'un logiciel qui HÉBERGE DES DONNÉES DE SANTÉ. Le contenu médical
-# (dossier, antécédents, photos, ordonnances, consentements, soins, consultations,
-# visites, questionnaires) n'est PAS servi ; tout ce qui sort passe par une liste
-# blanche, et le patient n'y est servi que par son id — cf. `tools/nextmotion.py`.
-# La liste des patients n'est lue que pour des AGRÉGATS à seuil — `nextmotion_analyse`.
+# (antécédents, photos, ordonnances, consentements signés, soins, consultations,
+# visites, réponses aux questionnaires) n'est PAS servi ; tout ce qui sort passe par
+# une liste blanche, tout ce qui entre aussi, et toute écriture est un aperçu
+# (`dry_run`) tant qu'on ne dit pas le contraire. L'identité du patient n'est servie
+# que par `nextmotion_patient` ; ailleurs le patient n'est qu'un id — cf.
+# `tools/nextmotion.py`.
 #
-# Six modules, une seule clé : les outils de `nextmotion.py` et ses frères, montés
+# Sept modules, une seule clé : les outils de `nextmotion.py` et ses frères, montés
 # ensemble par `modules`.
 CONNECTOR = _c(
     "nextmotion", ["nextmotion"], auth_modes={"byo_user", "byo_org"}, keyed=True,
     secret_kind="api_key", label="Nextmotion",
     help="clinique esthétique : agenda, catalogue, devis, factures, paiements, leads, "
-         "statistiques, stock (sans le dossier médical)",
+         "statistiques, stock, réglages, identité des patients — lecture et écriture "
+         "(sans le dossier médical)",
     href="https://www.nextmotion.net",
     modules=("nextmotion", "nextmotion_catalogue", "nextmotion_agenda",
-             "nextmotion_ventes", "nextmotion_crm", "nextmotion_analyse"),
+             "nextmotion_ventes", "nextmotion_crm", "nextmotion_patient",
+             "nextmotion_analyse"),
 )
 
 CATEGORY = "Métier"
@@ -37,10 +42,12 @@ LOGO_DOMAIN = "nextmotion.net"
 
 DESCRIPTION = (
     "Le côté administratif d'une clinique de médecine esthétique gérée avec "
-    "Nextmotion : cliniques, praticiens, agenda (salles, appareils, plages, "
-    "absences, demandes en ligne, créneaux libres), catalogue et forfaits, devis, "
-    "factures et paiements, leads, statistiques de chiffre d'affaires, stock et "
-    "réglages ; patientèle (code postal, âge, genre) et occupation des appareils en "
-    "agrégats. Le dossier médical n'est pas servi, et un patient n'y apparaît que "
-    "par un identifiant, sans nom ni coordonnées."
+    "Nextmotion, en lecture et en écriture : cliniques, praticiens, agenda (salles, "
+    "appareils, plages, absences, rendez-vous, demandes en ligne, créneaux libres), "
+    "catalogue et forfaits, devis, factures, avoirs et paiements, leads, appels et "
+    "messages, statistiques de chiffre d'affaires, stock, gabarits et réglages ; "
+    "l'identité des patients (fiche, recherche, création, modification) ; patientèle "
+    "et occupation des appareils en agrégats. Toute écriture est d'abord un aperçu. "
+    "Le dossier médical n'est pas servi : ni antécédents, ni photos, ni ordonnances, "
+    "ni soins, ni consultations."
 )
