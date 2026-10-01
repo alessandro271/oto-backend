@@ -163,6 +163,8 @@ class LotsMixin:
                 _refuse_dotted_names(user_data)
                 refuser_cles_internes(user_data)
                 refuser_les_mots_mal_places(schema, user_data)
+                # #859 : les dates en une forme, AVANT la recherche par clé.
+                user_data = self._normaliser_les_dates(schema, user_data)
                 # Signal feedback 994 : la clé DÉCLARÉE (celle de l'index), pas le
                 # `key=` de l'appel — cf. `cle_metier`.
                 refuser_cle_metier_vide(schema, user_data)

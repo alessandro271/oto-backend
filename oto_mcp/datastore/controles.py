@@ -17,6 +17,7 @@ import copy
 from typing import Optional
 
 from .. import db, geste, ownership, session_org
+from . import dates as dsdates
 from . import ecartes as dsec
 from . import schema as dsv2
 from . import formule as dsformule
@@ -218,6 +219,20 @@ class ControlesMixin:
             if "comment" in resultat:
                 couches["comment"] = resultat["comment"]
             merged[cle] = couches
+
+    def _normaliser_les_dates(self, schema: Optional[dict], data: dict) -> dict:
+        """Le PAYLOAD d'une écriture, dates normalisées (#859, `dates.normaliser_ligne`),
+        et ce qu'il faut en dire versé aux notices.
+
+        Sur le payload, AVANT la fusion, et c'est délibéré : la fusion juge « même
+        valeur » au caractère près (`_merge_column`) — une même date réécrite sous une
+        autre forme y ferait tomber ses couches `comment`/`link`, et un champ
+        `readonly` la prendrait pour une modification. Appelée par les quatre portes
+        (création et fusion d'`append_row`, lot, patch par `id`, remplacement) ;
+        idempotente, deux passages ne disent rien de plus qu'un."""
+        data, notices = dsdates.normaliser_ligne(schema, data)
+        self.off_notices.update(notices)
+        return data
 
     def _check_row(self, schema: Optional[dict], merged: dict, *,
                    prev_status=None, written: Optional[set] = None,

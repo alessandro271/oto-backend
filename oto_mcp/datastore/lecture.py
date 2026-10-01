@@ -14,6 +14,7 @@ from . import layers as dsl
 from . import versions as dsver
 from . import schema as dsv2
 from .columns import _refuse_composite_compare, _refuse_group_by_compose
+from .dates import typer_les_clauses
 from .errors import InvalidCursor, RowNotFound
 from .outils import (
     _OFFSET_CURSOR_PREFIX,
@@ -48,7 +49,8 @@ class LectureMixin:
         clauses = _filter_clauses(filter, filters)
         _refuse_composite_compare(clauses + [c for cs in conditions for c in cs],
                                   lambda: self._schema_of(ns_id))
-        return clauses
+        # #859 : une colonne déclarée date se compare en instants, pas en texte.
+        return typer_les_clauses(clauses, lambda: self._schema_of(ns_id))
 
     def get_row(self, datastore: str, row_id: str, *,
                 layers: str = dsl.DEFAUT,

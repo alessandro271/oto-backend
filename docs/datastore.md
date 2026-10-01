@@ -107,6 +107,39 @@ Surfaces :
 > servies vides. Une valeur de date malformée lève aussi côté Python : le cast SQL
 > aurait rendu un 500 opaque au lieu d'un `invalid_filters`.
 
+> **Les colonnes `date`/`datetime` : lire large, stocker une forme (#859, 01/10/2026).**
+> Mesuré le 30/09 sur 225 tableaux : les agents écrivent une date sous toutes les formes,
+> et le tri comme les filtres comparaient du texte. Un seul juge, `datastore/dates.lire`,
+> sert l'écriture, la validation, les filtres et la reprise de l'existant.
+> - **Lu** : ISO sous toutes ses variantes (`Z`, offset `+02:00`/`+0200`/`+02`,
+>   fractions, sans secondes, séparateur espace), `JJ/MM/AAAA` et `JJ/MM/AAAA HH:MM`
+>   (jour d'abord, toujours), un horodatage Unix — nombre, ou chaîne de 9 chiffres et
+>   plus : secondes sous 10¹¹, millisecondes au-delà ; sous 10⁸ (mars 1973), refusé,
+>   `2026` ou `45900` n'étant pas des instants —, et une date imprécise `2026-09-04`,
+>   `2026-09`, `2026`.
+> - **Stocké** (`normaliser_ligne`, sur le PAYLOAD, avant la fusion — sinon une même
+>   date sous une autre forme ferait tomber `comment`/`link`) : un instant en
+>   `AAAA-MM-JJTHH:MM:SSZ` UTC, fractions retirées ; un instant SANS fuseau est supposé
+>   UTC et la réponse le dit dans `notices` ; une date imprécise reste à sa précision,
+>   sans minuit fabriqué. Dans une colonne `date`, `AAAA-MM-JJ` — et un instant avec
+>   fuseau y devient la date QU'IL PORTE dans ce fuseau, pas en UTC
+>   (`2026-09-04T00:30:00+02:00` reste le 4). Couvert à tout niveau qu'une déclaration
+>   atteint (`object.fields`, `list.of`). La couche `origine` posée par
+>   `donnees_d_origine` reçoit la forme stockée.
+> - **Illisible** : jamais réécrit. Au premier niveau, le type déclaré s'arme seul
+>   (`types_declares`) : refusé, sur tout tableau. Un sous-champ sur un tableau sans
+>   validation est gardé et signalé dans `notices`.
+> - **Tri et filtres** lisent une case à son DÉBUT de période (`db.query.date_debut_sql`,
+>   `2026-09` = le 1ᵉʳ à minuit UTC, garde `pg_input_is_valid`). La BORNE d'un filtre
+>   couvre sa période entière (`dates.bornes_du_filtre`) : `gte` = depuis son début,
+>   `lte` = jusqu'à sa fin (`lte 2026-09-04` retrouve `2026-09-04T10:00:00Z`), `gt` =
+>   après sa fin, `lt` = avant son début, `eq` = la case commence dans la borne (`eq
+>   2026-09` retrouve `2026-09-15` et `2026-09` ; `eq 2026-09-04` ne retrouve pas
+>   `2026-09`), `ne` = le contraire, cases sans date comprises. Un instant est un point.
+>   Typé au premier niveau seulement (`dates.typer_les_clauses`, depuis `_clauses` et le
+>   périmètre de réservation) ; `contains` reste textuel ; une borne illisible est
+>   refusée.
+
 > **Une colonne composite ENTIÈRE ne se compare pas (oto#22, 30/09/2026).** Sur une
 > colonne déclarée `list` ou `object`, `eq`/`ne`/`in`/`gt`/`gte`/`lt`/`lte`
 > comparaient le TEXTE du JSON — `eq` ne matchait jamais, `ne` matchait tout. Ils sont

@@ -886,6 +886,12 @@ def register(mcp: FastMCP) -> None:
         `of.key`, only the elements your write CHANGES are judged: an element sent
         back unchanged never blocks yours — its defect comes back in `hors_type`.
 
+        Dates: a `date`/`datetime` column reads ISO in any variant, `04/09/2026`
+        (day first) and Unix timestamps, and STORES one form — `2026-09-04T10:00:00Z`
+        (UTC) for an instant, `2026-09-04` for a day; known only to the month or the
+        year, it stays `2026-09` / `2026`. An instant without a time zone is taken as
+        UTC, and `notices` says so: write its offset (`+02:00`) if it is local time.
+
         A schema refusal ends with the payload to send back: only the fields to fix,
         a `<…>` template in place of each value, `| @empty` where that is allowed —
         `{"contacts": [{"role": "RH", "nom": "<texte> | @empty"}]}`. Fill the

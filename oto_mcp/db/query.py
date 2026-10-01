@@ -225,9 +225,10 @@ def _ds_filter_clauses(filters: Optional[list]) -> tuple[list[str], list]:
     `_id`), routées vers la vraie colonne au lieu de `data ->>` (cf.
     `_DS_META_TS_COLS`). Champ paramétré + op whitelisté → pas d'injection. Les comparaisons
     ordonnées (`gt/gte/lt/lte`) sont numériques si la valeur EST numérique (cast
-    gardé `::numeric`, les rows non numériques sont écartées), sinon textuelles
-    (l'ISO `YYYY-MM-DD` se compare correctement en lexicographique). Lève
-    `ValueError` sur un filtre malformé (→ 400 côté route).
+    gardé `::numeric`, les rows non numériques sont écartées), sinon textuelles —
+    sauf sur une colonne DÉCLARÉE date, dont la clause porte ses `bornes` (#859) :
+    là, on compare des instants (`_ds_date_predicate`). Lève `ValueError` sur un
+    filtre malformé (→ 400 côté route).
 
     Un filtre vise UNE colonne (`field`) ou PLUSIEURS déclarées (`fields` + `match`,
     oto#22) : le prédicat est alors évalué sur chaque membre et les résultats joints
@@ -255,7 +256,10 @@ def _ds_filter_clauses(filters: Optional[list]) -> tuple[list[str], list]:
         subs: list[str] = []
         subparams: list = []
         for field in targets:
-            clause, cparams = _ds_one_field_clause(field, op, val)
+            # #859 : une colonne DÉCLARÉE date porte ses bornes, posées par le store
+            # (`datastore.dates.typer_les_clauses`) — elle se compare en instants.
+            bornes = f.get("bornes") if field in (f.get("dates") or ()) else None
+            clause, cparams = _ds_one_field_clause(field, op, val, bornes=bornes)
             if clause is None:      # filtre inerte (ex. `in` sur une liste vide)
                 continue
             subs.append(clause)
@@ -292,10 +296,15 @@ def _refus_in_vide(field: str, val) -> ValueError:
         f"c'est `{{\"{field}\": {{\"empty\": true}}}}`.")
 
 
-def _ds_one_field_clause(field: str, op: str, val) -> tuple[Optional[str], list]:
+def _ds_one_field_clause(field: str, op: str, val, *,
+                         bornes: Optional[list] = None) -> tuple[Optional[str], list]:
     """Le prédicat sur UNE colonne — `(fragment, params)`. Depuis #353 il n'y a plus
     de forme « inerte » : un filtre qui ne peut pas restreindre LÈVE, il ne s'évapore
-    inerte. Point unique : `fields` boucle dessus, il n'en existe pas de copie."""
+    inerte. Point unique : `fields` boucle dessus, il n'en existe pas de copie.
+
+    `bornes` (#859) = la colonne est une date déclarée, et la valeur du filtre a été
+    lue en périodes `[debut, fin]` (une par valeur) : le prédicat compare des instants
+    (`_ds_date_predicate`), plus du texte."""
     if field in _DS_META_TS_COLS:
         if op not in _DS_META_TS_OPS:
             raise ValueError(
@@ -340,7 +349,86 @@ def _ds_one_field_clause(field: str, op: str, val) -> tuple[Optional[str], list]
         items, iparams = list_items_sql(colonne, "_i")
         return f"EXISTS (SELECT 1 FROM {items} WHERE {clause})", iparams + cparams
     V, fp = field_read_sql(field)
+    if bornes is not None:
+        return _ds_date_predicate(V, fp, op, bornes, field, val)
     return _ds_leaf_predicate(V, fp, op, val, field)
+
+
+# Les formes qu'une case de date peut porter en base, en motifs POSIX (pas de `\d`
+# côté PostgreSQL) : la date à sa précision (année, mois, jour) que l'écriture stocke
+# telle quelle (#859), et l'instant ISO — la forme canonique `…Z`, et celles d'avant la
+# normalisation (offset, fraction, sans secondes, sans fuseau, séparateur espace).
+_DATE_ANNEE_RE = "^[0-9]{4}$"
+_DATE_MOIS_RE = "^[0-9]{4}-[0-9]{2}$"
+_DATE_JOUR_RE = "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+_DATE_INSTANT_RE = ("^[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9]{2}:[0-9]{2}"
+                    "(:[0-9]{2}([.][0-9]+)?)?(Z|[+-][0-9]{2}(:?[0-9]{2})?)?$")
+
+
+def date_debut_sql(value_sql: str) -> str:
+    """Le DÉBUT de période d'une case de date, en `timestamptz` — NULL si elle n'en
+    est pas une. La valeur n'apparaît qu'UNE fois (sous-requête), donc ses paramètres
+    aussi : l'appelant passe `value_params` une fois par occurrence de ce fragment.
+
+    Une date imprécise est lue à son premier instant UTC (`2026-09` = le 1ᵉʳ à
+    minuit) ; une date nue aussi (`T00:00:00Z` explicite, plus le fuseau de la
+    session). Un instant SANS fuseau (forme d'avant la normalisation) est lu dans le
+    fuseau de la session — UTC en prod, ce que l'écriture suppose aussi.
+
+    ⚠️ Le motif ne valide pas le calendrier (`2026-02-31` le passe) : c'est
+    `pg_input_is_valid` (PostgreSQL 16+) qui garde le cast, sans quoi UNE case
+    invalide ferait échouer la requête entière."""
+    return ("(SELECT CASE WHEN pg_input_is_valid(_d.s, 'timestamptz') "
+            "THEN _d.s::timestamptz END FROM (SELECT CASE "
+            f"WHEN _x.v ~ '{_DATE_ANNEE_RE}' THEN _x.v || '-01-01T00:00:00Z' "
+            f"WHEN _x.v ~ '{_DATE_MOIS_RE}' THEN _x.v || '-01T00:00:00Z' "
+            f"WHEN _x.v ~ '{_DATE_JOUR_RE}' THEN _x.v || 'T00:00:00Z' "
+            f"WHEN _x.v ~ '{_DATE_INSTANT_RE}' THEN _x.v END AS s "
+            f"FROM (SELECT {value_sql} AS v) _x) _d)")
+
+
+def _ds_date_predicate(V: str, fp: list, op: str, bornes: list,
+                       field: str = "?", val=None) -> tuple:
+    """Le prédicat d'une colonne DATE (#859) : la case lue à son début de période
+    (`date_debut_sql`), la borne du filtre sur sa période entière `[debut, fin[`
+    (`datastore.dates.bornes_du_filtre`) — un instant est un point.
+
+    `gte` = à partir du début de la borne ; `lte` = jusqu'à sa FIN (`lte 2026-09-04`
+    couvre la journée) ; `gt` = après sa fin ; `lt` = avant son début ; `eq` = la case
+    commence DANS la borne ; `ne` = le contraire, cases sans date comprises (comme le
+    `IS DISTINCT FROM` textuel) ; `in` = l'une des bornes."""
+    D = date_debut_sql(V)
+
+    def _dans(lo: str, hi: str) -> tuple:
+        if lo == hi:
+            return f"{D} = %s::timestamptz", fp + [lo]
+        return (f"({D} >= %s::timestamptz AND {D} < %s::timestamptz)",
+                fp + [lo] + fp + [hi])
+
+    if op == "in":
+        if not bornes:
+            raise _refus_in_vide(field, val)
+        parts = [_dans(lo, hi) for lo, hi in bornes]
+        return ("(" + " OR ".join(p for p, _ in parts) + ")",
+                [x for _, ps in parts for x in ps])
+    (lo, hi), = bornes
+    if op == "eq":
+        return _dans(lo, hi)
+    if op == "ne":
+        clause, params = _dans(lo, hi)
+        return f"NOT COALESCE({clause}, FALSE)", params
+    point = lo == hi
+    if op == "gte":
+        return f"{D} >= %s::timestamptz", fp + [lo]
+    if op == "lt":
+        return f"{D} < %s::timestamptz", fp + [lo]
+    if op == "gt":
+        return (f"{D} > %s::timestamptz", fp + [lo]) if point else (
+            f"{D} >= %s::timestamptz", fp + [hi])
+    if op == "lte":
+        return (f"{D} <= %s::timestamptz", fp + [lo]) if point else (
+            f"{D} < %s::timestamptz", fp + [hi])
+    raise ValueError(f"opérateur `{op}` non applicable à une date (`{field}`)")
 
 
 def _ds_leaf_predicate(V: str, fp: list, op: str, val,
@@ -405,18 +493,6 @@ def _ds_where(ns_id: int, q: Optional[str], filters: Optional[list]) -> tuple[st
 
 _NUMERIC_RE = r'^\s*-?[0-9]+(\.[0-9]+)?\s*$'
 
-# Un horodatage ISO 8601 tel que le datastore en reçoit : date seule, ou date +
-# heure avec séparateur `T` ou espace, secondes et fraction optionnelles, décalage
-# `Z` ou `±HH:MM` optionnel. Motif POSIX (pas de `\d` côté PostgreSQL).
-#
-# ⚠️ Il ne valide pas une date, il reconnaît une FORME castable — `2026-02-31`
-# passe le motif et fait échouer le cast. Le bloc conforme le sait : la garde sert
-# à ne caster que ce qui a une chance, pas à remplacer la validation d'écriture.
-_ISO_DT_RE = (r'^[0-9]{4}-[0-9]{2}-[0-9]{2}'
-              r'([T ][0-9]{2}:[0-9]{2}(:[0-9]{2}([.][0-9]+)?)?'
-              r'(Z|[+-][0-9]{2}:?[0-9]{2})?)?$')
-
-
 def _order_guards(value_sql: str, value_params: list, order_type: str,
                   options) -> tuple:
     """Les trois prédicats d'un tri typé (#336), fragments + params appariés :
@@ -442,25 +518,18 @@ def _order_guards(value_sql: str, value_params: list, order_type: str,
     else:
         # date/datetime — le tri était TEXTUEL, sur l'idée qu'« ISO trie juste par
         # l'alphabet ». C'est vrai d'un seul format dans un seul fuseau, et faux
-        # dès qu'une colonne en mélange deux, ce qu'aucune validation d'écriture
-        # n'empêche (oto-backend#859). Deux ruptures mesurées :
-        #   • un DÉCALAGE horaire range à l'envers — `…T23:00:00+02:00` (21 h UTC)
-        #     passe après `…T22:00:00Z` alphabétiquement, avant temporellement ;
-        #   • `conforme = TRUE` déclarait TOUTE valeur rangeable, donc le compteur
-        #     d'écart du tri restait à zéro par construction et une valeur qui
-        #     n'est pas une date du tout se rangeait comme si elle en était une.
-        #     La garde ne gardait rien : elle affirmait.
-        # On caste donc en `timestamptz`, qui ramène tout à un instant — et on ne
-        # caste QUE ce qui a la forme, sans quoi une seule valeur libre ferait
-        # échouer la requête entière (la raison d'être de la garde du bloc number).
-        # ⚠️ Une date SEULE est prise à minuit dans le fuseau de la base : deux
-        # valeurs du même jour à quelques heures d'écart peuvent donc se ranger
-        # autrement qu'attendu. C'est le prix d'une colonne qui mélange les formats,
-        # et le vrai remède est la normalisation à l'écriture.
-        conforme = f"{value_sql} ~ %s"
-        conforme_p = list(value_params) + [_ISO_DT_RE]
-        typed = f"({value_sql})::timestamptz"
+        # dès qu'une colonne en mélange deux (oto-backend#859) : un DÉCALAGE horaire
+        # range à l'envers (`…T23:00:00+02:00`, 21 h UTC, passe après `…T22:00:00Z`),
+        # et `conforme = TRUE` déclarait toute valeur rangeable — le compteur d'écart
+        # restait à zéro par construction.
+        # On range donc par le DÉBUT DE PÉRIODE (`date_debut_sql`), la même lecture
+        # que les filtres : un instant, ou le premier instant UTC d'une date
+        # imprécise (`2026`, `2026-09`, `2026-09-04`). Est conforme ce qui s'y lit ;
+        # le reste va au bloc suivant, et le compteur le dit.
+        typed = date_debut_sql(value_sql)
         typed_p = list(value_params)
+        conforme = f"{typed} IS NOT NULL"
+        conforme_p = list(value_params)
     return vide, vide_p, conforme, conforme_p, typed, typed_p
 
 

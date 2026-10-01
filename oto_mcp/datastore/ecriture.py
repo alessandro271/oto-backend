@@ -130,6 +130,8 @@ class EcritureMixin:
         refuser_cles_internes(user_data)
         refuser_les_mots_mal_places(schema, user_data)
         _refuse_mixed_layers(schema, user_data)
+        # #859 : les dates en une forme, AVANT la recherche par clé et la fusion.
+        user_data = self._normaliser_les_dates(schema, user_data)
         # Signal feedback 994 : une clé métier vide entrerait dans l'index d'unicité
         # comme `""` — refusée ici, avant toute recherche et tout insert.
         refuser_cle_metier_vide(schema, user_data)
@@ -280,6 +282,8 @@ class EcritureMixin:
         refuser_cles_internes(user_data)
         refuser_les_mots_mal_places(schema, user_data)
         _refuse_mixed_layers(schema, user_data)
+        # #859 : le lot arrive ici sans être passé par `append_row`.
+        user_data = self._normaliser_les_dates(schema, user_data)
         sk = (dsv2.status_field(schema) or {}).get("key")
 
         def _apply(current: dict) -> dict:
@@ -397,6 +401,8 @@ class EcritureMixin:
         refuser_cles_internes(user_data)
         refuser_les_mots_mal_places(schema, user_data)
         _refuse_mixed_layers(schema, user_data)
+        # #859 : le remplacement aussi — il ne passe par `_check_row` que sous validation.
+        user_data = self._normaliser_les_dates(schema, user_data)
         refuser_cle_metier_vide(schema, user_data)
         valide = dsv2.validation_active(schema) or dsv2.lifecycle_of(schema)
         reserves = bool(dsv2.readonly_fields(schema)

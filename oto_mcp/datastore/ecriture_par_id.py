@@ -107,6 +107,8 @@ class EcritureParIdMixin:
             refuser_cles_internes(corps)
             refuser_les_mots_mal_places(schema, corps)
             _refuse_mixed_layers(schema, corps)
+            # #859 : avant l'arbitrage et la fusion, qui comparent les valeurs.
+            corps = self._normaliser_les_dates(schema, corps)
             prev_status = data.get(status_key) if status_key else None
             self._trace(trace, ns_id, ns, prev_status=prev_status)
             # MÊME garde que la fusion : un effacement qui ne détruit rien (la donnée

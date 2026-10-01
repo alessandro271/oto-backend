@@ -61,8 +61,12 @@ _OU_METTRE_QUOI = {
               "contexte ou la source vont dans `<colonne>.comment`"),
     "number": ("écris le nombre seul ; l'unité, l'exercice ou la tranche vont dans "
                "`<colonne>.comment`"),
-    "date": "écris la date au format `AAAA-MM-JJ` ; la précision va dans `.comment`",
-    "datetime": "écris l'horodatage au format `AAAA-MM-JJ` (ou ISO complet)",
+    # #859 : ce qui se LIT est large (`dates.FORMES_ACCEPTEES`), ce qui se STOCKE est
+    # une forme ; le refus donne la forme stockée, la plus sûre à recopier.
+    "date": ("écris la date `AAAA-MM-JJ` (ou `AAAA-MM`, `AAAA` si tu ne la connais "
+             "qu'au mois ou à l'année)"),
+    "datetime": ("écris l'instant `AAAA-MM-JJTHH:MM:SSZ` (ou avec son fuseau, "
+                 "`+02:00`), ou la date seule `AAAA-MM-JJ` à sa précision"),
     "bool": "écris `true` ou `false`, pas leur texte",
 }
 

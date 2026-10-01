@@ -19,7 +19,6 @@ ligne seule ; le coût d'un motif (`motifs.py`), qu'on ne fait ici qu'exécuter.
 from __future__ import annotations
 
 import re
-from datetime import datetime
 from typing import Any, Optional
 
 from .couches import (_is_empty, CLES_INTERNES, LAYER_KEYS, VIDE_DELIBERE, layer_value,
@@ -29,7 +28,7 @@ from .options_declarees import hors_des_options, montrable, parmi, valeur_compar
 from .motifs import _pattern_re
 from .declaration import (_fields, borne_du_motif, cle_d_element, max_length_of,
                           pattern_of, status_field, validation_active)
-from . import telephone
+from . import dates, telephone
 from .etats_declares import etats_trahis
 from .types_declares import types_trahis
 from .cycle_de_vie import lifecycle_of, refus_de_transition
@@ -60,13 +59,12 @@ def _conformite_scalaire(value: Any, ftype: Optional[str], path: str) -> list[st
     if ftype == "bool":
         return [] if isinstance(value, bool) else [f"{path}: attendu bool, reçu {value!r}"]
     if ftype in ("date", "datetime"):
-        if isinstance(value, str):
-            try:
-                datetime.fromisoformat(value.replace("Z", "+00:00"))
-                return []
-            except ValueError:
-                pass
-        return [f"{path}: attendu {ftype} ISO, reçu {value!r}"]
+        # #859 : LE juge des dates est `dates.lire` — la même lecture que la
+        # normalisation d'écriture, les filtres et le script de reprise.
+        if dates.est_lisible(value, ftype):
+            return []
+        return [f"{path}: attendu une date lisible ({ftype}) — {dates.FORMES_ACCEPTEES} "
+                f"—, reçu {value!r}"]
     if ftype == "url":
         if isinstance(value, str) and value.startswith(("http://", "https://")):
             return []
