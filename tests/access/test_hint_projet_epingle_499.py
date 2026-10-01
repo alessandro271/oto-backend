@@ -16,12 +16,24 @@ import pytest
 from oto_mcp import access, db, ownership, providers
 
 
+def _portee(rows):
+    """Les instances à portée, en doublure qui se souvient d'avoir été lue. Le hint
+    est fail-soft : une lecture qui échoue rend la même chaîne qu'une portée vide, donc
+    un test qui ne vérifie pas que SA portée a été lue passe aussi quand elle ne l'est
+    pas (#896)."""
+    def _f(sub, org, p):
+        _f.appels.append((sub, org, p))
+        return rows
+    _f.appels = []
+    return _f
+
+
 @pytest.fixture
 def wired(monkeypatch):
     """Une clé `zoho` sur l'équipe « sales » à portée ; le projet 59 est lisible."""
-    monkeypatch.setattr(access, "reachable_instances",
-                        lambda sub, org, p: [{"kind": "group", "id": 2, "name": "sales"}])
-    lus: dict = {}
+    portee = _portee([{"kind": "group", "id": 2, "name": "sales"}])
+    monkeypatch.setattr(access, "reachable_instances", portee)
+    lus: dict = {"portee": portee}
 
     def _lisibles(sub, org, want="read"):
         lus["appel"] = (sub, org)
@@ -66,6 +78,7 @@ def test_seuls_les_projets_LISIBLES_sont_interroges(wired, monkeypatch):
     access._reachable_hint("u1", 35, "zoho")
     assert wired["appel"] == ("u1", 35)
     assert f.appels == [([59, 60], "zoho")]
+    assert wired["portee"].appels, "la portée n'a pas été lue"
 
 
 def test_le_lien_se_cherche_sous_le_PORTEUR(wired, monkeypatch):
@@ -77,22 +90,27 @@ def test_le_lien_se_cherche_sous_le_PORTEUR(wired, monkeypatch):
                         lambda n: "unipile" if n == "whatsapp" else n)
     access._reachable_hint("u1", 35, "whatsapp")
     assert f.appels[0][1] == "unipile"
+    assert wired["portee"].appels, "la portée n'a pas été lue"
 
 
 def test_un_projet_qui_epingle_suffit_meme_sans_cle_a_portee(wired, monkeypatch):
-    monkeypatch.setattr(access, "reachable_instances", lambda sub, org, p: [])
+    vide = _portee([])
+    monkeypatch.setattr(access, "reachable_instances", vide)
     monkeypatch.setattr(db, "projects_pinning_instance",
                         _epingles([{"id": 59, "name": "Dev"}]))
     txt = access._reachable_hint("u1", 35, "zoho")
     assert "_project=59" in txt
     # La réserve « aux frais de l'entité » vaut aussi pour un projet épinglé.
     assert "aux frais de l'entité" in txt
+    assert vide.appels, "« sans clé à portée » doit venir de la portée LUE, vide"
 
 
 def test_rien_a_portee_ni_epingle_rend_une_chaine_vide(wired, monkeypatch):
-    monkeypatch.setattr(access, "reachable_instances", lambda sub, org, p: [])
+    vide = _portee([])
+    monkeypatch.setattr(access, "reachable_instances", vide)
     monkeypatch.setattr(db, "projects_pinning_instance", _epingles([]))
     assert access._reachable_hint("u1", 35, "zoho") == ""
+    assert vide.appels, "« rien à portée » doit venir de la portée LUE, vide"
 
 
 def test_un_hoquet_de_lecture_rend_le_hint_d_avant(wired, monkeypatch):

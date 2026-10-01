@@ -118,5 +118,7 @@ def test_resolve_credential_byo_skips_platform(monkeypatch):
     _wire(monkeypatch, user=None, group=None, org=None)
     monkeypatch.setattr(access, "_resolve_platform_grant",
                         lambda *a, **k: pytest.fail("platform consulté en mode byo"))
-    with pytest.raises(McpError):
+    # Le refus ATTENDU, nommé : `McpError` nu avalerait aussi un refus d'identité
+    # levé avant la cascade (#896) — et le test passerait sans l'avoir parcourue.
+    with pytest.raises(McpError, match="Aucun credential `unipile` configuré"):
         access.resolve_credential("unipile", want="byo")

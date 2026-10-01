@@ -59,18 +59,31 @@ def run_start_fn():
 
 
 def _wire(monkeypatch, *, sub="u1", org=35, group=None,
-          org_procedures=None, group_procedures=None):
+          org_procedures=None, group_procedures=None) -> dict:
+    """Rend le relevé de ce que les doublures ont VU. Un test qui affirme une absence
+    (« pas de version ») le lit : la résolution de version est best-effort, donc une
+    doublure que rien n'atteint — base absente, refus d'identité — rend la même
+    absence, avalée en silence, et le test passerait sans avoir rien parcouru (#896)."""
+    lus: dict = {"org": 0, "procedures": []}
+
+    def _org(s):
+        lus["org"] += 1
+        return org
+
+    def _procedure(otype, oid, slug):
+        lus["procedures"].append((otype, oid, slug))
+        return ((org_procedures if otype == "org" else group_procedures) or {}).get(slug)
+
     monkeypatch.setattr(call_axes, "current_user_sub_from_token", lambda: sub)
     monkeypatch.setattr(auth_hooks, "current_user_sub_from_token", lambda: sub)
-    monkeypatch.setattr(org_store, "get_active_org", lambda s: org)
+    monkeypatch.setattr(org_store, "get_active_org", _org)
     monkeypatch.setattr(access, "current_group", lambda s=None, **kw: group)
     # UN seul store depuis #681 : le palier est le PREMIER argument, plus un module
     # par palier. Un stub qui ignorerait `otype` rendrait la procédure d'org pour une
     # lecture d'équipe — et le test « l'org prime sur l'équipe » passerait à vide.
-    monkeypatch.setattr(org_store, "get_instruction",
-                        lambda otype, oid, slug: ((org_procedures if otype == "org"
-                                                   else group_procedures) or {}).get(slug))
+    monkeypatch.setattr(org_store, "get_instruction", _procedure)
     monkeypatch.setattr(db, "insert_run", lambda run_id, **kw: None)
+    return lus
 
 
 async def _start(run_start_fn, **args) -> tuple[dict, dict]:
@@ -123,19 +136,23 @@ async def test_lorg_prime_sur_lequipe(monkeypatch, run_start_fn):
 
 @pytest.mark.asyncio
 async def test_un_run_ad_hoc_ne_prétend_à_aucune_version(monkeypatch, run_start_fn):
-    _wire(monkeypatch, org_procedures={"prospection": {"version": 7}})
+    lus = _wire(monkeypatch, org_procedures={"prospection": {"version": 7}})
     out, trace = await _start(run_start_fn, label="un truc vite fait")
     assert out["doctrine_version"] is None and "doctrine_version" not in trace
+    assert lus["org"], "l'org du run n'a pas été lue : l'absence ne prouve rien"
+    assert lus["procedures"] == [], "un run ad hoc ne cherche aucune procédure"
 
 
 @pytest.mark.asyncio
 async def test_un_slug_inconnu_ouvre_le_run_sans_version(monkeypatch, run_start_fn):
     """Un slug qui ne désigne rien de lisible ici (guide d'un autre foyer, faute de
     frappe) : pas de version, mais le run s'ouvre — l'empreinte n'est pas un gate."""
-    _wire(monkeypatch)
+    lus = _wire(monkeypatch)
     out, trace = await _start(run_start_fn, label="?", doctrine="ce-slug-nexiste-pas")
     assert out["run_id"] and out["doctrine_version"] is None
     assert "doctrine_version" not in trace
+    # Le slug a été CHERCHÉ dans l'org du run, et rien n'y répondait.
+    assert ("org", 35, "ce-slug-nexiste-pas") in lus["procedures"]
 
 
 @pytest.mark.asyncio
@@ -143,7 +160,10 @@ async def test_une_lecture_de_version_en_panne_nempeche_pas_le_run(monkeypatch,
                                                                    run_start_fn):
     """Best-effort, comme tout ce qui entoure un run : la base indisponible au moment
     de résoudre la version ne doit pas faire échouer l'ouverture du déroulé."""
+    pannes: list = []
+
     def _boom(*a, **kw):
+        pannes.append(a)
         raise RuntimeError("pool épuisé")
 
     _wire(monkeypatch)
@@ -151,6 +171,9 @@ async def test_une_lecture_de_version_en_panne_nempeche_pas_le_run(monkeypatch,
     out, trace = await _start(run_start_fn, label="prospection", doctrine="prospection")
     assert out["run_id"] and out["doctrine_version"] is None
     assert trace == {}
+    # La panne avalée est CELLE-CI : une autre (base absente plus haut) donnerait le
+    # même run sans version, et le test passerait sans avoir éprouvé la sienne.
+    assert pannes, "la lecture de version n'a jamais été tentée"
 
 
 # ── Le relevé d'appel, et ce qu'il laisse passer ────────────────────────────

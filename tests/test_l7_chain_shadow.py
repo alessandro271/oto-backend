@@ -210,6 +210,11 @@ def test_l_accord_ne_produit_pas_une_ecriture_par_appel(vide, ecritures):
         "l'accord — le cas nominal, donc le volume — doit être accumulé et versé au "
         "battement, jamais écrit par appel : c'est ce qui garde le compteur hors du "
         "chemin chaud et hors de la contention de ligne.")
+    # Et les cinquante accords sont COMPTÉS, versés ou en attente. Sans cette ligne,
+    # une observation qui échoue (avalée par `observe`, best-effort) n'écrit rien non
+    # plus, et `<= 1` passe sans qu'aucun accord n'ait été constaté (#896).
+    comptes = sum(n for *_, n in ecritures) + sum(chain_shadow._accords.values())
+    assert comptes == 50
 
 
 def test_une_divergence_s_ecrit_a_l_occurrence(vide, ecritures, monkeypatch):

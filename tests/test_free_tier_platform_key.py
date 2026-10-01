@@ -5,6 +5,7 @@ atteint qu'en l'absence de toute clé BYO (la cascade est testée ailleurs).
 import pytest
 
 from oto_mcp import access
+from oto_mcp.mcp_errors import McpError
 
 # Sans base : le palier plateforme lit les droits de la personne (#1090).
 pytestmark = pytest.mark.usefixtures("sans_droit_declare")
@@ -44,11 +45,13 @@ def test_free_tier_resolves_platform_key_under_quota(_no_byo_no_grant, monkeypat
 def test_free_tier_quota_exceeded_raises(_no_byo_no_grant, monkeypatch):
     monkeypatch.setattr(access.credentials_store, "list_platform_instances", lambda p: _FREE_SERPER)
     monkeypatch.setattr(access.db, "get_usage_today", lambda sub, p: 200)  # = rate_limit
-    with pytest.raises(Exception):  # McpError « quota dépassé »
+    # Le refus nommé, pas `Exception` : une capture large passait aussi sur une base
+    # absente ou un refus d'identité, sans que le quota ait été lu (#896).
+    with pytest.raises(McpError, match="Quota plateforme serper dépassé"):
         access.resolve_credential("serper", sub="u")
 
 
 def test_free_tier_absent_platform_key_raises(_no_byo_no_grant, monkeypatch):
     # platform_key_open mais AUCUNE instance plateforme (fixture: list_platform_instances=[]).
-    with pytest.raises(Exception):
+    with pytest.raises(McpError, match="Aucune clé `serper` configurée"):
         access.resolve_credential("serper", sub="u")
