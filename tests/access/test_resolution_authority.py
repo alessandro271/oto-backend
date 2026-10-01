@@ -6,7 +6,7 @@ import pytest
 
 from oto_mcp import access, credentials_store, db, group_store, org_store, providers
 from oto_mcp import session_org, status_hints, tenant_vault
-from oto_mcp.access import cascade, chain_resolution, chain_shadow, resolve, scope, tenant_budget
+from oto_mcp.access import cascade, chain_resolution, chain_shadow
 from oto_mcp.connectors import readiness
 
 
@@ -16,14 +16,14 @@ def vault(monkeypatch):
     monkeypatch.setenv("OTO_L7_SHADOW", "0")
     rows = {("group", "3"): "GROUP_KEY"}
     monkeypatch.setattr(access, "current_org", lambda sub: 7)  # external Unipile caller
-    monkeypatch.setattr(scope, "current_org", lambda sub: 7)  # internal resolution
-    monkeypatch.setattr(scope, "current_group", lambda sub: 99)
-    monkeypatch.setattr(scope, "get_user_role", lambda sub: "member")
-    monkeypatch.setattr(scope, "project_pinned_instance", lambda p: None)
-    monkeypatch.setattr(scope, "project_pinned_identity", lambda p: None)
+    monkeypatch.setattr(access, "current_org", lambda sub: 7)  # internal resolution
+    monkeypatch.setattr(access, "current_group", lambda sub: 99)
+    monkeypatch.setattr(access, "get_user_role", lambda sub: "member")
+    monkeypatch.setattr(access, "project_pinned_instance", lambda p: None)
+    monkeypatch.setattr(access, "project_pinned_identity", lambda p: None)
     monkeypatch.setattr(session_org, "current_call_instance", lambda: None)
-    monkeypatch.setattr(cascade, "_is_multi_account", lambda *a: False)
-    monkeypatch.setattr(cascade, "personal_instance_org", lambda *a, **k: None)
+    monkeypatch.setattr(access, "_is_multi_account", lambda *a: False)
+    monkeypatch.setattr(access, "personal_instance_org", lambda *a, **k: None)
     monkeypatch.setattr(credentials_store, "has_credential",
                         lambda et, eid, p, account=None: (et, eid) in rows)
     monkeypatch.setattr(credentials_store, "get_credential",
@@ -45,8 +45,8 @@ def vault(monkeypatch):
     monkeypatch.setattr(tenant_vault, "rung_tenant", lambda sub: None)
     monkeypatch.setattr(db, "get_usage_today", lambda *a: 0)
     monkeypatch.setattr(db, "usage_today_map", lambda *a: {})
-    monkeypatch.setattr(cascade, "group_secret_map", lambda groups: {3: {"serper"}})
-    monkeypatch.setattr(cascade, "preloaded_presence_probe",
+    monkeypatch.setattr(access, "group_secret_map", lambda groups: {3: {"serper"}})
+    monkeypatch.setattr(access, "preloaded_presence_probe",
                         lambda *a, **k: cascade.PRESENCE_PROBE)
     monkeypatch.setattr(status_hints, "has_hook", lambda p: False)
     monkeypatch.setattr(status_hints, "pending_action", lambda *a: None)
@@ -73,7 +73,7 @@ def test_health_follows_the_same_winning_team(vault, monkeypatch):
 def test_explicit_subject_context_does_not_read_requesters_group(vault, monkeypatch):
     def wrong_context(*a):
         raise AssertionError("requester group was read")
-    monkeypatch.setattr(scope, "current_group", wrong_context)
+    monkeypatch.setattr(access, "current_group", wrong_context)
     assert access.credential_mode_for("subject", "serper", org=7, group=None) == "group"
 
 
@@ -106,7 +106,7 @@ def test_connection_does_not_spend_tenant_budget(vault, monkeypatch):
     win = cascade.CascadeRung("tenant", "tenant", "acme", "TENANT_KEY")
     monkeypatch.setattr(chain_shadow, "barreau_gagnant", lambda *a, **k: win)
     spends = []
-    monkeypatch.setattr(tenant_budget, "enforce", lambda *a: spends.append(a))
+    monkeypatch.setattr(access, "enforce", lambda *a: spends.append(a))
     assert access.resolve_credential("unipile", sub="acme:u", check_usage=False).key == "TENANT_KEY"
     assert spends == []
     access.resolve_credential("unipile", sub="acme:u")
@@ -120,7 +120,7 @@ def test_connection_does_not_apply_execution_quota(vault, monkeypatch):
     # Le droit de l'option payante a son banc (`test_option_relue_a_l_usage_live`).
     monkeypatch.setattr(access, "exiger_option_payante", lambda *a: None)
     reads = []
-    monkeypatch.setattr(resolve, "_win_quota", lambda *a: reads.append(a) or (1, 1))
+    monkeypatch.setattr(access, "_win_quota", lambda *a: reads.append(a) or (1, 1))
     assert access.resolve_credential("unipile", sub="u", check_usage=False).key == "KEY"
     assert reads == []
     with pytest.raises(McpError):
@@ -149,7 +149,7 @@ def test_channel_config_reads_credential_owner_not_channel(monkeypatch):
 @pytest.mark.parametrize("authority", ["legacy", "chain"])
 def test_suspended_member_never_beats_team(vault, monkeypatch, authority):
     monkeypatch.setenv("OTO_L7_DECIDE", authority)
-    monkeypatch.setattr(scope, "current_group", lambda sub: 3)
+    monkeypatch.setattr(access, "current_group", lambda sub: 3)
     vault[("member", "7:u")] = "SUSPENDED_KEY"
     monkeypatch.setattr(credentials_store, "instance_suspended",
                         lambda et, *a, **k: et == "member")
@@ -159,8 +159,8 @@ def test_suspended_member_never_beats_team(vault, monkeypatch, authority):
 @pytest.mark.parametrize("authority", ["legacy", "chain"])
 def test_named_account_crosses_missing_rung_but_never_changes_name(vault, monkeypatch, authority):
     monkeypatch.setenv("OTO_L7_DECIDE", authority)
-    monkeypatch.setattr(scope, "current_group", lambda sub: 3)
-    monkeypatch.setattr(cascade, "_is_multi_account", lambda *a: True)
+    monkeypatch.setattr(access, "current_group", lambda sub: 3)
+    monkeypatch.setattr(access, "_is_multi_account", lambda *a: True)
     vault[("member", "7:u")] = "OTHER_ACCOUNT"
     monkeypatch.setattr(db, "get_member_api_key", lambda *a: None)
     monkeypatch.setattr(group_store, "get_group_secret",
@@ -178,7 +178,7 @@ def test_unipile_connect_uses_one_group_credential(vault, monkeypatch, authority
     from oto.tools import unipile as core
 
     monkeypatch.setenv("OTO_L7_DECIDE", authority)
-    monkeypatch.setattr(scope, "current_group", lambda sub: 3)
+    monkeypatch.setattr(access, "current_group", lambda sub: 3)
     vault[("org", "7")] = "ORG_KEY"
     monkeypatch.setattr(credentials_store, "get_credential_with_meta",
                         lambda et, eid, p, account="": {
@@ -190,7 +190,7 @@ def test_unipile_connect_uses_one_group_credential(vault, monkeypatch, authority
         raise AssertionError("BYO must not check platform seats or consumption")
     monkeypatch.setattr(access, "has_option", unused)
     monkeypatch.setattr(db, "get_org_unipile_limit", unused)
-    monkeypatch.setattr(tenant_budget, "enforce", unused)
+    monkeypatch.setattr(access, "enforce", unused)
     calls, clients = [], []
     real_resolve = access.resolve_credential
     def recording_resolve(*a, **k):

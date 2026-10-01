@@ -22,7 +22,8 @@ from __future__ import annotations
 import pytest
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from oto_mcp.access import resolve, views
+from oto_mcp import access
+from oto_mcp.access import views
 from oto_mcp.access.resolved_credential import ResolvedCredential
 from oto_mcp.mcp_errors import McpError
 
@@ -41,7 +42,7 @@ def appels(monkeypatch):
         vus.append({"provider": provider, "want": want, "account": account, **kw})
         return _credential()
 
-    monkeypatch.setattr(resolve, "resolve_credential", _faux)
+    monkeypatch.setattr(access, "resolve_credential", _faux)
     return vus
 
 
@@ -75,7 +76,7 @@ def test_le_connecteur_demande_est_celui_qu_on_passe(appels):
 def test_elle_rend_la_cle_puis_son_origine_dans_cet_ordre(monkeypatch):
     # Inverser le couple donnerait un BOOLÉEN comme clé d'API : le client partirait
     # s'authentifier avec `False`, et l'erreur remonterait du fournisseur, pas d'ici.
-    monkeypatch.setattr(resolve, "resolve_credential",
+    monkeypatch.setattr(access, "resolve_credential",
                         lambda *a, **k: _credential(secret="sk-42", is_platform=True))
     cle, plateforme = views.resolve_api_key("apollo")
     assert cle == "sk-42"
@@ -83,7 +84,7 @@ def test_elle_rend_la_cle_puis_son_origine_dans_cet_ordre(monkeypatch):
 
 
 def test_la_cle_rendue_est_le_secret_du_credential_gagnant(monkeypatch):
-    monkeypatch.setattr(resolve, "resolve_credential",
+    monkeypatch.setattr(access, "resolve_credential",
                         lambda *a, **k: _credential(secret="sk-du-gagnant"))
     assert views.resolve_api_key("apollo")[0] == "sk-du-gagnant"
 
@@ -91,7 +92,7 @@ def test_la_cle_rendue_est_le_secret_du_credential_gagnant(monkeypatch):
 def test_une_cle_byo_n_est_pas_annoncee_comme_plateforme(monkeypatch):
     # `is_platform` commande le décompte de quota côté appelant : le dire à tort
     # ferait débiter un siège plateforme pour une clé que l'org a apportée.
-    monkeypatch.setattr(resolve, "resolve_credential",
+    monkeypatch.setattr(access, "resolve_credential",
                         lambda *a, **k: _credential(is_platform=False, mode="org"))
     assert views.resolve_api_key("apollo")[1] is False
 
@@ -104,7 +105,7 @@ def test_la_cle_servie_n_est_jamais_vide(monkeypatch):
     vide part chez le fournisseur et revient en 401 — l'erreur accuse alors le
     fournisseur, jamais le coffre.
     """
-    monkeypatch.setattr(resolve, "resolve_credential", lambda *a, **k: _credential())
+    monkeypatch.setattr(access, "resolve_credential", lambda *a, **k: _credential())
     cle, _ = views.resolve_api_key("apollo")
     assert cle, "une clé vide ne doit jamais sortir de cette vue"
 
@@ -117,6 +118,6 @@ def test_un_refus_de_la_cascade_remonte_tel_quel(monkeypatch):
     def _refuse(*a, **k):
         raise McpError(ErrorData(code=INVALID_PARAMS, message="aucun credential apollo"))
 
-    monkeypatch.setattr(resolve, "resolve_credential", _refuse)
+    monkeypatch.setattr(access, "resolve_credential", _refuse)
     with pytest.raises(McpError, match="aucun credential apollo"):
         views.resolve_api_key("apollo")
