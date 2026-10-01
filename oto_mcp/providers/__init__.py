@@ -183,6 +183,8 @@ _DECLARATIONS: tuple[str, ...] = (
     "teamtailor",
     "recruitee",
     "spott",
+    # Voisin de `spott` : l'ATS de Welcome to the Jungle, côté recruteur.
+    "wttj",
     "serpapi",
     "searchapi",
     "brightdata",
