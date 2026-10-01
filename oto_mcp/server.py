@@ -1076,6 +1076,11 @@ def main():
         # /api/* en priorité.
         for route in reversed(routes_rest(verifier, mcp_instance=mcp)):
             app.router.routes.insert(0, route)
+        # Une exception non gérée sous /api/* répond en JSON AVEC son CORS (sinon le
+        # navigateur ne lit qu'un « Failed to fetch »), puis est relevée pour rester
+        # journalisée. Premier ajouté → le plus INTÉRIEUR : le journal REST voit le 500.
+        from .api.erreur_interne import ErreurInterneAvecCors
+        app.add_middleware(ErreurInterneAvecCors)
 
         # Façade DCR (oauth_facade) : sert /.well-known/oauth-authorization-server
         # + /oauth/register pour que claude.ai s'auto-enregistre sans coller le
