@@ -17,7 +17,7 @@ from pydantic import BaseModel
 import logging
 
 from ... import access, billing, db, org_store, session_org
-from ...org_store.members import ORG_ROLES
+from ...org_store import ORG_ROLES
 from ...tool_visibility import BETA_OPTION
 from .._authz import ORG_MEMBER_OF, PLATFORM_ADMIN, SUB_ONLY
 # Le quota de création vit avec la capacité qui REFUSE (`org.create`) : le lire ici

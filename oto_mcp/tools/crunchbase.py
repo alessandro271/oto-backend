@@ -33,7 +33,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .. import access, browser_session, browserbase
 from ..auth.hooks import current_user_sub_from_token
-from ..access.resolved_credential import ResolvedCredential
+from ..access import ResolvedCredential
 from ..connectors import health as connector_health
 
 # Couple (API privée, page d'origine) propre à Crunchbase. Le `fetch` est

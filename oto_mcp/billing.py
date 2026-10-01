@@ -141,7 +141,7 @@ def plan_rights(plan: str) -> tuple[str, ...]:
     """Les droits déclarés (`org_entitlements.right_key`) qu'un plan ouvre : ses options,
     plus la levée du quota plateforme s'il est `unmetered`. Plan inconnu = rien. Lu par
     l'export de reprise d'oto-commerce (`service_commerce`) : le cœur ne les pose plus."""
-    from .access.entitlements import PLATFORM_UNMETERED
+    from .access import PLATFORM_UNMETERED
     droits = tuple(sorted(plan_options(plan)))
     return droits + ((PLATFORM_UNMETERED,) if plan_is_unmetered(plan) else ())
 

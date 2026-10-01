@@ -39,7 +39,7 @@ import secrets
 from typing import Any, Optional
 
 from . import access, config
-from .access.resolved_credential import ResolvedCredential
+from .access import ResolvedCredential
 from .db import apollo_reveals as db_apollo
 
 logger = logging.getLogger(__name__)

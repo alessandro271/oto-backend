@@ -17,7 +17,7 @@ import secrets
 
 from .mcp_errors import McpError
 from . import access, db, unipile_binding
-from .access.resolve import CredentialUnavailable
+from .access import CredentialUnavailable
 from . import config
 
 logger = logging.getLogger(__name__)

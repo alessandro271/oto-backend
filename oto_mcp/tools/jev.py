@@ -22,7 +22,7 @@ from fastmcp import FastMCP
 from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access, credentials_store, session_org
-from ..access.resolve import CredentialUnavailable
+from ..access import CredentialUnavailable
 from ..connectors import verify as connector_verify
 from ..mcp_errors import McpError
 from . import jev_rows as jr

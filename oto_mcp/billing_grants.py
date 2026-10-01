@@ -40,7 +40,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from . import db, entitlements_catalogue as catalogue, providers, tenancy
-from .access import quotas
+from . import access
 # Le format de date servi par l'API est défini UNE fois, dans la couche DB (même
 # raison qu'en tête de `billing.py`) : une réponse qui construit sa date à côté
 # fabrique un second format pour le même champ.
@@ -74,7 +74,7 @@ def _catalogue() -> dict[str, dict]:
                 out[opt] = {"amount": meta["amount"], "currency": meta["currency"],
                             "interval": meta["interval"], "label": opt, "detail": None}
     for name, con in providers.REGISTRY.items():
-        opt = quotas.paid_option_for(name)
+        opt = access.paid_option_for(name)
         if opt in out and providers.credential_provider(name) == name:
             out[opt]["label"] = con.label or opt
             out[opt]["detail"] = con.help or None

@@ -22,7 +22,7 @@ import secrets
 from typing import Optional
 
 from .db import _connect, _hash_token
-from .org_store.invitations import _PENDING
+from .org_store import _PENDING
 
 logger = logging.getLogger(__name__)
 
