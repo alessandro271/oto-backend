@@ -774,6 +774,17 @@ lit ni ne l'écrit. Un échec pendant la construction laisse un index invalide, 
 (`DROP INDEX CONCURRENTLY`) avant de rejouer. Le retour arrière retire l'index puis la
 colonne ; le code qui l'écrit doit être retiré avant lui.
 
+`0031_selection_org_reelle` (01/10/2026, oto-backend#959, après
+`0030_file_de_travail_ordre`) interdit en base la sélection de connecteur sous
+l'ancienne sentinelle `org_id = 0` : `CHECK (org_id > 0)` VALIDÉ
+(`user_selected_connectors_org_reelle`, `connector_selection_removed_org_reelle`) et
+`DROP DEFAULT` sur les deux ; `connector_selection_seeded` garde `0` pour ses
+sentinelles de démarrage. Verrou exclusif bref (quelques milliers de lignes), sous
+`lock_timeout` 5 s. **Échoue tant qu'une ligne sous `0` reste** : à jouer APRÈS
+`scripts/selections_org_zero.py --appliquer` (947a59c4), dans un tag postérieur — le
+script et son banc partent avec elle. Le retour arrière retire les `CHECK` et repose
+`DEFAULT 0`.
+
 ### 5.2 Une base neuve naît à la tête du registre (24/09/2026, oto-backend#969)
 
 Une base neuve reçoit tout son schéma du démarrage : chaque colonne qu'une révision pose

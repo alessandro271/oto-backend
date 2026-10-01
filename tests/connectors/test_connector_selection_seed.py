@@ -88,7 +88,7 @@ def test_backfill_seeds_previously_visible_and_marks_sentinel():
         {"connector": "zoho", "scope_type": "platform", "scope_id": "", "enabled": False},
         {"connector": "aiark", "scope_type": "org", "scope_id": "7", "enabled": False},      # override org 7
     ]
-    pairs = [{"sub": "u1", "org_id": 7}, {"sub": "u2", "org_id": 0}]
+    pairs = [{"sub": "u1", "org_id": 7}, {"sub": "u2", "org_id": 9}]
     conn = _FakeConn(activation=activation, pairs=pairs)
     connector_selection.backfill_preexisting(conn)
     got = {(s, o): set() for s, o, _ in conn.selected}
@@ -96,10 +96,10 @@ def test_backfill_seeds_previously_visible_and_marks_sentinel():
         got[(s, o)].add(name)
     # u1 (org 7) : aiark coupé par l'override, attio jamais visible (ex-hidden)
     assert got[("u1", 7)] == {"serper"}
-    # u2 (perso/global) : l'exposé master moins l'ex-hidden
-    assert got[("u2", 0)] == {"serper", "aiark"}
+    # u2 (org 9, sans override) : l'exposé master moins l'ex-hidden
+    assert got[("u2", 9)] == {"serper", "aiark"}
     # chaque pair marqué seedé + la sentinelle en dernier
-    assert ("u1", 7) in conn.seeded and ("u2", 0) in conn.seeded
+    assert ("u1", 7) in conn.seeded and ("u2", 9) in conn.seeded
     assert conn.seeded[-1] == (connector_selection._BACKFILL_MARK,)
 
 

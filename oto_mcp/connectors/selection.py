@@ -48,7 +48,12 @@ ORIGINS = (SOCLE, KIT, ADMIN, MEMBRE, INCONNUE)
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS user_selected_connectors (
     sub         TEXT   NOT NULL,
-    org_id      BIGINT NOT NULL DEFAULT 0,   -- 0 = espace perso (ADR 0015)
+    -- L'org où la sélection vaut. Jamais `0` : l'ancienne sentinelle « perso sans
+    -- org » (ADR 0015) n'est lue par aucune surface depuis l'ADR 0030 §8 — une ligne
+    -- posée là était invisible (#959). La base le refuse, et sans défaut : une
+    -- écriture qui oublie l'org échoue au lieu de se ranger sous `0`.
+    org_id      BIGINT NOT NULL CONSTRAINT user_selected_connectors_org_reelle
+                                CHECK (org_id > 0),
     connector   TEXT   NOT NULL,             -- nom de connecteur (registre providers/)
     state       TEXT   NOT NULL DEFAULT 'active',  -- 'active' | 'paused'
     selected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -67,7 +72,8 @@ CREATE TABLE IF NOT EXISTS user_selected_connectors (
 -- l'efface (son dernier geste n'est plus un retrait).
 CREATE TABLE IF NOT EXISTS connector_selection_removed (
     sub        TEXT   NOT NULL,
-    org_id     BIGINT NOT NULL DEFAULT 0,
+    org_id     BIGINT NOT NULL CONSTRAINT connector_selection_removed_org_reelle
+                               CHECK (org_id > 0),   -- jamais `0` (#959), cf. plus haut
     connector  TEXT   NOT NULL,
     removed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (sub, org_id, connector)
@@ -484,11 +490,11 @@ def backfill_preexisting(conn) -> None:
         else:
             overrides.setdefault(int(r["scope_id"]), {})[r["connector"]] = bool(r["enabled"])
     # Tous les couples (sub, org) susceptibles d'un profil de visibilité : les
-    # memberships + la sentinelle perso/globale org_id=0 (ADR 0015) — moins les
-    # pairs déjà seedés.
+    # memberships — moins les pairs déjà seedés. Plus la sentinelle `0` : elle a
+    # semé, le 10/07, 2 090 lignes qu'aucune surface ne lisait (#959), et la base
+    # la refuse désormais (`…_org_reelle`).
     pairs = conn.execute(
         "SELECT sub, org_id FROM org_members "
-        "UNION SELECT sub, 0 FROM users "
         "EXCEPT SELECT sub, org_id FROM connector_selection_seeded").fetchall()
     for p in pairs:
         exposed = _resolve(global_map, overrides.get(p["org_id"], {}))

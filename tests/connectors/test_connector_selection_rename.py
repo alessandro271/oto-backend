@@ -98,7 +98,7 @@ def test_replay_is_a_noop(conn):
     """La migration tourne à CHAQUE boot (base partagée preprod/prod) : le second
     passage ne doit rien trouver, ni rien abîmer."""
     _seed(conn, [("s1", 2, "linkedin", "active"), ("s1", 2, "aiark", "paused"),
-                 ("s2", 2, "linkedin", "paused"), ("s3", 0, "aiark", "active")])
+                 ("s2", 2, "linkedin", "paused"), ("s3", 5, "aiark", "active")])
     sel.rename_selection(conn, "linkedin", "aiark")
     after = _selection(conn)
     assert sel.rename_selection(conn, "linkedin", "aiark") == 0
