@@ -127,6 +127,8 @@ _DECLARATIONS: tuple[str, ...] = (
     "instagram_meta",
     "cognism",
     "lighton",
+    # --- sharepoint : app Entra de l'org (byo_org, client credentials), fichiers M365
+    "sharepoint",
     "promptwatch",
     # --- sessions per-user (hors resolve_api_key, stockage dédié) ------------
     "crunchbase",
