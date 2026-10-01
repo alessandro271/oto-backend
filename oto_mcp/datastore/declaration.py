@@ -273,7 +273,11 @@ def order_spec(schema: Optional[dict], key) -> tuple:
 #: Ce qui fait d'un `lifecycle` une FILE plutôt qu'une simple suite d'états : un
 #: périmètre de réservation, un plafond de reprises, un état d'abandon. Dérivé des
 #: schémas de production, pas décrété — c'est la distinction qu'ils portaient déjà.
-FILE_KEYS = ("claimable", "max_claims", "abandon_state", "lease", "claims")
+#: ⚠️ `lease` et `claims` en sont SORTIS le 01/10/2026 : aucune déclaration ne les
+#: admettait (`schema_keys.CLES_DU_CYCLE`), aucun schéma du parc ne les portait, et le
+#: bloc `lifecycle` refuse désormais une clé qu'il n'admet pas — un marqueur que nul ne
+#: peut poser ne désigne rien.
+FILE_KEYS = ("claimable", "max_claims", "abandon_state")
 
 
 def status_field(schema: Optional[dict]) -> Optional[dict]:

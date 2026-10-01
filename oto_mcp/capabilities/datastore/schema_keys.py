@@ -1,16 +1,13 @@
-"""Servir la déclaration des attributs de colonne — pour qu'un front puisse s'y
-confronter (oto#56).
+"""Servir la déclaration des clés de schéma, niveau par niveau — pour qu'un front
+puisse s'y confronter (oto#56), et qu'un auteur sache ce qui sera admis (01/10/2026).
 
-`datastore/schema_keys.py` déclare ce qu'une colonne a le droit de porter, et **qui lit
-chaque attribut** : le validateur, le front, ou les deux. Le validateur en dérive ses
-crans, l'avertissement `unknown_keys_warning` s'en sert de référence.
+`datastore/schema_keys.py` déclare ce que chacun des cinq niveaux d'un schéma admet
+(tête, colonne, sous-champ, élément de liste, bloc `lifecycle`), et **qui lit chaque
+clé** : le validateur, le front, ou personne (`meta`). C'est la référence du REFUS :
+une clé absente de son niveau est refusée à la pose.
 
-⚠️ **La moitié `front` est déclarée à la main, et rien ne la vérifie encore.** C'est la
-dette assumée du lot : personne ne garantit que le dashboard lit bien ces attributs-là
-et pas d'autres. Le palier suivant est un contrôle **côté dashboard** qui confronte les
-clés qu'il lit à ce qui est déclaré ici — et il ne peut exister que si la déclaration
-est SERVIE. C'est tout l'objet de cette route : elle n'a pas de lecteur aujourd'hui,
-elle en aura un, et sans elle ce lecteur serait impossible à écrire.
+`keys` est le niveau COLONNE — le contrat que le dashboard confronte à ce qu'il lit
+(`schema-keys-check.mjs`) ; `levels` sert les cinq.
 
 Lecture seule, sans paramètre, identique pour tout le monde : la déclaration est un fait
 de plateforme, pas une donnée d'org. `SUB_ONLY` — il faut être authentifié, rien de plus.
@@ -45,10 +42,16 @@ class SchemaKey(BaseModel):
 class SchemaKeys(BaseModel):
     keys: list[SchemaKey] = Field(
         description="Tout ce qu'une colonne de schéma a le droit de porter.")
+    levels: dict[str, list[SchemaKey]] = Field(description=(
+        "Ce que chaque niveau admet : `head`, `field` (= `keys`), `subfield`, `item` "
+        "(l'élément d'une liste, `of`) et `lifecycle`. Une clé absente de son niveau "
+        "est refusée à la pose."))
+    meta_max_bytes: int = Field(description=(
+        "La taille maximale d'un objet `meta`, en octets de JSON compact."))
 
 
 def _schema_keys(ctx: ResolvedCtx, inp: _NoInput) -> dict:
-    return {"keys": decl.servie()}
+    return decl.servie()
 
 
 CAPABILITIES += [
@@ -59,11 +62,12 @@ CAPABILITIES += [
         mcp=None,  # contrat de FRONT : un agent lit la description de l'outil, pas ça
         rest=RestBinding("GET", "/api/datastore/schema/keys"),
         description=(
-            "Every attribute a schema column may carry, and WHO reads each one — the "
-            "validator, the front-end, or both. Served so a client can check what it "
-            "reads against what is declared: an attribute nobody reads is accepted "
-            "silently, so a typo (`read_only` for `readonly`) disarms a guard without "
-            "a word. Posting a schema returns `unknown_keys_warning` on the same "
-            "basis."),
+            "Every key a schema may carry, level by level (`levels`: head, field, "
+            "subfield, item, lifecycle — `keys` is the field level), and WHO reads each "
+            "one: the validator, the front-end, or nobody (`meta`, the free zone, "
+            "carried as is, at most `meta_max_bytes`). Posting or patching a schema "
+            "REFUSES a key its level does not admit, naming the path, the key and the "
+            "closest known one — so a typo (`read_only` for `readonly`) can no longer "
+            "disarm a guard in silence."),
     ),
 ]

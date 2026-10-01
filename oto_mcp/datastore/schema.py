@@ -47,6 +47,7 @@ c'est ce qui rend la coupe relisable (un fichier, pas cinquante appelants).
 | `hors_schema.py` | une clé que la déclaration ne nomme pas — signalée en haut, refusée dessous |
 | `champs_reserves.py` | `readonly` / `origine: system` / `agent_access`, et le préavis daté |
 | `definition.py` | valider le SCHÉMA lui-même, à la pose |
+| `cles_inconnues.py` | refuser une clé que son niveau n'admet pas (`schema_keys.ADMISES`) |
 | `couches_exigees.py` | `required_layers` — ce que la valeur doit porter avec elle |
 | `validation.py` | VALIDER une ligne à l'écriture, et ses textes de refus |
 | `effacements.py` | fusionner / retirer un format, et le relevé de ce qui a disparu |
@@ -54,8 +55,8 @@ c'est ce qui rend la coupe relisable (un fichier, pas cinquante appelants).
 | `non_applique.py` | ce qu'un tableau déclare et que la plateforme laisse inerte |
 
 ⚠️ **Un nouveau module qui LIT un attribut de colonne doit être ajouté à la liste de
-fichiers de `vocabulaire._read_keys`** — sinon le vocabulaire dérivé le déclare mort et
-l'avertissement accuse une clé parfaitement lue.
+fichiers de `vocabulaire._read_keys`** — sinon la garde ne le voit pas, et une clé lue
+pourrait n'être déclarée nulle part, donc refusée à la pose.
 """
 from __future__ import annotations
 
@@ -131,16 +132,12 @@ from .effacements import (
 )
 from .vocabulaire import (
     _ENFORCEMENT_PROBES, _ENFORCED, reset_enforced_keys, enforced_keys, _read_keys,
-    _READ_KEYS, interpreted_keys, vocabulaire_vivant, _NEAR_MISS,
-    unknown_declaration_keys, unknown_keys_warning, unknown_keys_read_warning,
+    _READ_KEYS, interpreted_keys,
 )
 from .donnees_d_origine import (
     PARAMETRE as PARAMETRE_DONNEES_D_ORIGINE,
     poser_les_deux_versions,
     description_parametre as description_donnees_d_origine,
-)
-from .cles_jumelles import (
-    sont_jumelles, cles_libres_jumelles, cles_jumelles_warning,
 )
 from .non_applique import (
     _options_already_enforced, unenforced_options, unenforced_options_warning,

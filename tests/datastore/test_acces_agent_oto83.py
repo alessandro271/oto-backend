@@ -340,7 +340,7 @@ def test_le_vocabulaire_declare_la_cle():
     """La déclaration est SERVIE (`GET /api/datastore/schema/keys`) : une clé appliquée
     et non déclarée ferait mentir l'avertissement des clés non lues."""
     from oto_mcp.datastore import schema_keys as K
-    assert "agent_access" in K.RECONNUES
+    assert "agent_access" in K.ADMISES["champ"]
     assert "agent_access" in K.LUES_PAR_LE_VALIDATEUR
     assert "agent_access" in K.COLONNE_SEULEMENT
     assert "agent_access" in dsv2.interpreted_keys()
@@ -435,7 +435,9 @@ def _table(sub="sub-a83"):
     ns = "t-" + uuid.uuid4().hex[:6]
     ns_id = db.create_datastore("user", sub, ns)
     st = make_store(sub)
-    st.set_schema(ns, SCHEMA)
+    # La tête n'admet pas `claimable` (01/10/2026) : posé là, il n'était lu par aucun
+    # moteur — c'est la fixture que le rinçage de `schema_servi` éprouve à part.
+    st.set_schema(ns, {k: v for k, v in SCHEMA.items() if k != "claimable"})
     return st, ns, ns_id
 
 

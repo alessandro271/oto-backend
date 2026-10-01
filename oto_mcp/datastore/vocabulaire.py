@@ -7,22 +7,21 @@ lui rend deux relevés, et **aucun des deux n'est une liste** :
   faisant tourner le validateur sur des sondes (`_ENFORCEMENT_PROBES`) : un schéma
   minimal qui doit être refusé, et parfois un témoin qui doit passer. Une clé est
   annoncée si, et seulement si, elle mord ici et maintenant ;
-- `interpreted_keys` / `vocabulaire_vivant` — les clés que le code LIT, dérivées de
-  son propre source par AST (`_read_keys`), d'où `unknown_declaration_keys` tire le
-  signalement d'un attribut inconnu et `_NEAR_MISS` la suggestion de correction.
+- `interpreted_keys` — les clés que le code LIT, dérivées de son propre source par AST
+  (`_read_keys`). ⚠️ Depuis le 01/10/2026 ce relevé ne FONDE plus rien : il en
+  comptait trop (`strict` ou `states` posés sur une colonne passaient, lus à un autre
+  niveau). Le refus des clés inconnues repose sur la DÉCLARATION par niveau
+  (`schema_keys.ADMISES`) ; ce relevé n'en est plus que la garde de banc — tout ce que
+  le code lit doit être déclaré (`tests/test_schema_keys_oto56.py`).
 
 ⚠️ **`_read_keys` scanne une liste de FICHIERS.** Un module du paquet qui se met à
-lire un attribut de colonne doit y être ajouté, sinon le dérivé le déclare mort et
-l'avertissement accuse une clé parfaitement lue. C'est la seule dépendance de ce
+lire un attribut de colonne doit y être ajouté, sinon la garde ne le voit pas et la
+clé pourrait n'être déclarée nulle part — donc refusée. C'est la seule dépendance de ce
 fichier envers la DISPOSITION du code, et elle est explicite pour cette raison.
 
-⚠️ **« Oto ne les interprète pas », jamais « personne ne les lit »** : la plateforme ne
-sait pas qui lit en aval — un consommateur affiche `label`, `help`, `hint` qu'elle ne
-regarde pas. Le message n'a le droit de parler que d'elle.
-
 Ce qu'il ne tient pas :
-- **la liste DÉCLARÉE des attributs légitimes** (celle qu'on maintient à la main, et
-  ce qu'elle a coûté) → `schema_keys.py` et `cles_inconnues.py` ;
+- **la liste DÉCLARÉE des attributs admis, par niveau, et le refus du reste** →
+  `schema_keys.py` et `cles_inconnues.py` ;
 - **ce qu'un tableau déclare et que le moteur laisse inerte** → `non_applique.py` ;
 - **les clés hors référentiel d'une LIGNE** → `hors_schema.py` : ici, un format.
 """
@@ -31,10 +30,8 @@ from __future__ import annotations
 from typing import Optional
 
 from . import claimable
-from . import schema_keys
 
-from .couches import ORIGIN_LAYER, SYSTEM_ORIGIN
-from .declaration import _fields, key_required_of
+from .declaration import key_required_of
 from .hors_schema import off_schema_refusal
 from .champs_reserves import reserved_refusals
 from .validation import validate_row
@@ -51,9 +48,9 @@ from .validation import validate_row
 # et de cause vieille de plusieurs semaines — personne ne relie « les agents
 # n'écrivent plus sur ces lignes » à « quelqu'un a posé une borne un mardi ».
 #
-# `unknown_declaration_keys` (#316) dit déjà la moitié NÉGATIVE — « cette clé, je ne
-# la lis pas ». Il manquait la moitié POSITIVE, la seule qu'un client puisse vérifier
-# contre le serveur qui lui répond plutôt que contre une documentation.
+# Le refus des clés inconnues (`cles_inconnues`) dit la moitié NÉGATIVE — « cette
+# clé, je ne la connais pas ». Il manquait la moitié POSITIVE, la seule qu'un client
+# puisse vérifier contre le serveur qui lui répond plutôt que contre une documentation.
 #
 # ⚠️ **Le relevé s'établit en FAISANT TOURNER le validateur**, jamais en recopiant une
 # liste. Une liste parallèle diverge le jour où quelqu'un exécute une clé de plus (ou
@@ -158,9 +155,6 @@ def enforced_keys() -> list[str]:
         if reserved_refusals({"fields": [{"key": "x", "readonly": True}]},
                              {"x": "b"}, {"x": "a"})[0]:
             vues.append("readonly")
-        if reserved_refusals({"fields": [{"key": "x", "origine": SYSTEM_ORIGIN}]},
-                             {"x": {ORIGIN_LAYER: "y"}})[0]:
-            vues.append("origine")
         # oto#83 : le cran ne mord que sur la face agent — la sonde le dit donc
         # explicitement (`agent=True`), sinon elle mesurerait l'absence de contexte
         # d'appel et annoncerait « pas appliqué » sur un déploiement qui l'applique.
@@ -182,36 +176,18 @@ def enforced_keys() -> list[str]:
     return list(_ENFORCED)
 
 
-# ── Clés de déclaration non interprétées (#316) ──────────────────────────────
-#
-# Le cas réel : trois champs posés avec `enum: [...]` au lieu d'`options: [...]`.
-# La clé a été stockée, rendue fidèlement, affichée — et jamais lue. Les trois
-# énumérations étaient LIBRES sans que rien ne le dise, et 504 valeurs sont entrées
-# sur un tableau qui se croyait contraint. Comportement conforme au contrat, et
-# indistinguable d'un enum contraint À L'USAGE.
-#
-# ⚠️ **On ne ferme PAS le vocabulaire**, et c'est doctrinal : les consommateurs posent
-# leurs propres déclarations (`role: qualif`, `dated_by`, `compare_by`, `initial_of`)
-# que le datastore transporte sans les interpréter. Refuser l'inconnu casserait ce
-# contrat. On SIGNALE — même patron que `hors_schema` à l'écriture d'une ligne : on
-# n'empêche rien, on rend la chose visible et actionnable.
+# ── Ce que le code LIT (#316) — la garde de la déclaration ───────────────────
 
 
 def _read_keys() -> frozenset:
     """Les clés que le code LIT réellement, dérivées de son source.
 
-    ⚠️ **Dérivées, pas listées** — et ce n'est pas du zèle : une liste parallèle du
-    vocabulaire diverge le jour où quelqu'un lit une clé de plus (ou cesse d'en lire
-    une), et le signal se met alors à mentir dans les deux sens — taire une vraie
-    faute de frappe, ou accuser une clé parfaitement lue. C'est exactement ce que
-    `lifecycle` et `role` s'apprêtent à faire : ils sont en cours de recadrage
-    (#315/#317), et les figer ici en dur les laisserait dans le vocabulaire après
-    que le code aura cessé de les lire.
-
-    La dérivation surestime (elle ramasse aussi des clés de ligne ou de datastore,
-    `data`, `owner_id`…) et c'est le BON côté de l'erreur : on signale moins, jamais
-    à tort. Un faux positif — accuser une clé qui marche — est ce qui ferait ignorer
-    l'avertissement, donc le rendrait inutile.
+    La GARDE de la déclaration par niveau (`schema_keys.ADMISES`), jamais son
+    fondement : une clé lue ici et non déclarée serait REFUSÉE à la pose alors que le
+    code s'en sert — `tests/test_schema_keys_oto56.py` l'interdit. La dérivation
+    surestime (elle ramasse aussi des clés de ligne ou de datastore, `data`,
+    `owner_id`…) et ne voit aucun NIVEAU : c'est exactement pourquoi elle ne peut pas
+    fonder un refus.
     """
     import ast
     import pathlib
@@ -219,8 +195,8 @@ def _read_keys() -> frozenset:
     keys: set = set()
     ici = pathlib.Path(__file__).parent
     # ⚠️ La liste est celle des FICHIERS, jamais celle des clés : un module qui se met
-    # à lire un attribut de colonne doit être ajouté ici, sinon le dérivé le déclare
-    # mort et l'avertissement accuse une clé parfaitement lue. `acces_agent.py`
+    # à lire un attribut de colonne doit être ajouté ici, sinon la garde ne le voit
+    # pas et une clé lue pourrait n'être déclarée nulle part — donc refusée. `acces_agent.py`
     # (oto#83) lit `agent_access` par sa constante — c'est le cas qui l'a imposée.
     #
     # ⚠️ **Le second cas est la COUPE de `schema.py`** : les douze modules ci-dessous en
@@ -283,136 +259,3 @@ def interpreted_keys() -> frozenset:
     if _READ_KEYS is None:
         _READ_KEYS = _read_keys()
     return _READ_KEYS
-
-
-def vocabulaire_vivant() -> frozenset:
-    """Toute clé qu'un lecteur consulte : le validateur OU le front. **La** référence.
-
-    ⚠️ Il y avait DEUX inventaires, et ils se trompaient sur des ensembles disjoints —
-    dans la même réponse. Le dérivé ci-dessus ne voit que le validateur : il dénonçait
-    `label`, `help`, `hint`, `placeholder`, `description`, cinq attributs vivants que
-    seul le front lit, donc presque tous les tableaux existants. La déclaration écrite
-    à la main (`schema_keys`) ne voyait pas ce que le validateur applique : elle
-    dénonçait `options`, `required` et `max_items`. Chacun était aveugle exactement là
-    où l'autre voyait, et un agent qui posait un schéma recevait deux verdicts
-    contradictoires sur le sien.
-
-    Un faux positif dans un signal de qualité est pire que pas de signal : on apprend à
-    l'ignorer, et il ne sert plus le jour où il a raison. Deux signaux qui se
-    contredisent apprennent la même chose deux fois plus vite.
-
-    La moitié `front` ne peut pas être dérivée d'ici — elle est lue dans un autre
-    dépôt. Elle reste donc déclarée, et c'est une dette assumée que `schema_keys`
-    documente. La moitié `validateur`, elle, est dérivée ET confrontée dans les DEUX
-    sens par `tests/test_schema_keys_oto56.py`."""
-    return interpreted_keys() | schema_keys.LUES_PAR_LE_FRONT
-
-
-# Fautes de frappe qui MÉRITENT d'être nommées : une clé inconnue proche d'une clé
-# lue n'est presque jamais une déclaration tierce délibérée. Dérivé lui aussi — les
-# variantes pointent vers la clé réelle, qui doit exister dans le vocabulaire lu.
-_NEAR_MISS = {
-    "enum": "options", "enums": "options", "option": "options",
-    "choices": "options", "choix": "options", "values": "options",
-    "valeurs": "options", "allowed": "options",
-    "maxlength": "max_length", "max_len": "max_length", "maxLength": "max_length",
-    "requiredWhen": "required_when", "required_if": "required_when",
-    "mandatory": "required", "obligatoire": "required",
-    "champs": "fields", "columns": "fields",
-    "cle": "key", "name": "key", "nom": "key",
-    "read_only": "readonly", "readOnly": "readonly", "writable_by": "readonly",
-    "origin": "origine",
-}
-
-
-def unknown_declaration_keys(schema: Optional[dict]) -> list[dict]:
-    """Par champ, les clés de déclaration qu'oto n'interprète pas.
-
-    Rend `[{field, keys: [...], near_miss: {clé: clé_réelle}}]` — vide quand tout est
-    lu. Le near-miss est ce qui rend l'avertissement ACTIONNABLE : « `enum` n'est pas
-    lue par oto ; si tu voulais contraindre les valeurs, la clé est `options` » vaut
-    infiniment mieux que « clé inconnue ».
-    """
-    if not isinstance(schema, dict):
-        return []
-    lues = vocabulaire_vivant()
-    if not interpreted_keys():         # dérivation indisponible : ne rien affirmer
-        return []
-    out: list[dict] = []
-
-    def _visiter(fields: list, prefixe: str = "") -> None:
-        for f in fields:
-            if not isinstance(f, dict):
-                continue
-            nom = f"{prefixe}{f.get('key') or '?'}"
-            inconnues = sorted(k for k in f if k not in lues)
-            if inconnues:
-                near = {k: _NEAR_MISS[k] for k in inconnues
-                        if k in _NEAR_MISS and _NEAR_MISS[k] in lues}
-                out.append({"field": nom, "keys": inconnues, "near_miss": near})
-            if isinstance(f.get("fields"), list):
-                _visiter(f["fields"], f"{nom}.")
-            of = f.get("of")
-            if isinstance(of, dict) and isinstance(of.get("fields"), list):
-                _visiter(of["fields"], f"{nom}[].")
-
-    _visiter(_fields(schema))
-    return out
-
-
-def unknown_keys_warning(inconnues: list[dict]) -> str:
-    """Le message rendu à l'appelant — une phrase, pas un dump.
-
-    Il dit la CONSÉQUENCE (« stockée et rendue, mais jamais lue ») avant la
-    correction : sans elle, un lecteur pressé prend l'avertissement pour un détail de
-    style, alors qu'il signale une contrainte qui n'existe pas."""
-    if not inconnues:
-        return ""
-    corrections = [f"{k} → {v}" for e in inconnues
-                   for k, v in (e.get("near_miss") or {}).items()]
-    champs = ", ".join(f"{e['field']} ({', '.join(e['keys'])})" for e in inconnues[:5])
-    msg = (f"Clés non interprétées par oto : {champs}"
-           + (" …" if len(inconnues) > 5 else "")
-           + ". Elles sont stockées et rendues telles quelles, mais AUCUNE ne "
-             "contraint quoi que ce soit ici. ⚠️ « Non interprétée par oto » ne veut "
-             "pas dire « inutile » : un consommateur peut la lire en aval, et la "
-             "plateforme ne sait pas qui lit quoi.")
-    if corrections:
-        msg += " Vouliez-vous écrire : " + ", ".join(sorted(set(corrections))) + " ?"
-    return msg
-
-
-def unknown_keys_read_warning(inconnues: list[dict]) -> str:
-    """Le MÊME relevé, dit au LECTEUR d'un schéma plutôt qu'à son auteur (#416).
-
-    ⚠️ Ce n'est pas une variante de style : l'avertissement de pose demande « vouliez-
-    vous écrire `options` ? », question qui n'a aucun sens pour qui lit le schéma d'un
-    tableau qu'il n'a pas déclaré — il n'a rien voulu écrire, il cherche à savoir à
-    quoi s'en tenir. Ce qu'il lui faut, c'est **laquelle des deux clés fait foi**.
-
-    Le défaut mesuré : un champ portant à la fois `enum` (jamais lue) et `options`
-    (qui contraint) donne deux réponses contradictoires à « quelles valeurs sont
-    admises ». Un agent se fie au plus court, `enum` — qui a l'air le plus officiel —
-    et se restreint à tort, ou attend un rejet qui n'arrivera jamais.
-
-    La liste vient de `unknown_declaration_keys`, comme à la pose : une seule
-    dérivation, deux formulations. Le jour où une clé entre dans le vocabulaire lu,
-    les deux messages s'éteignent ensemble."""
-    if not inconnues:
-        return ""
-    champs = ", ".join(f"{e['field']} ({', '.join(e['keys'])})" for e in inconnues[:5])
-    # Ce qui FAIT FOI, quand la clé morte a une cousine vivante : c'est la seule
-    # information qui permette d'écrire juste sans reposer le schéma.
-    autorite = sorted({v for e in inconnues for v in (e.get("near_miss") or {}).values()})
-    msg = (f"Ce schéma porte des clés qu'oto n'INTERPRÈTE PAS : {champs}"
-           + (" …" if len(inconnues) > 5 else "")
-           + ". Elles sont stockées et rendues fidèlement, mais aucun contrôle de la "
-             "plateforme ne s'appuie dessus — ne t'y fie pas pour savoir ce qui est "
-             "admis ICI. ⚠️ Cela ne dit PAS qu'elles sont inutiles : un consommateur "
-             "peut parfaitement les lire (un front les affiche), et oto ne sait pas "
-             "qui lit quoi en aval. Ne retire rien sur la seule foi de ce message.")
-    if autorite:
-        msg += (" Ce qui fait foi : " + ", ".join(f"`{k}`" for k in autorite)
-                + ". En cas de contradiction entre les deux, c'est cette clé-là qui "
-                  "décide, et l'autre est un résidu.")
-    return msg

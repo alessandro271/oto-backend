@@ -643,14 +643,20 @@ def register(mcp: FastMCP) -> None:
         A typed datastore renders as readable cards/records instead of a flat table.
         `schema` = {"fields": [{"key": str, "label"?: str, "type"?: "text|number|date|
         datetime|bool|json|object|list|url|email|phone|enum",
-        "display"?: "title", "role"?: "status|metric|note|qualif"}],
-        "key"?: str, "strict"?: bool}.
-        ⚠️ **An attribute nobody reads is accepted in SILENCE**, so a typo disarms the
-        guard you thought you set: `read_only` instead of `readonly` locks nothing, and
-        nothing says so. The reply now carries `unknown_keys_warning` naming those keys
-        column by column — a warning, never a refusal, so existing schemas keep
-        working. The declared attributes, and who reads each one (validator /
-        front-end), are served at `GET /api/datastore/schema/keys`.
+        "display"?: "title", "role"?: "status|metric|note|qualif",
+        "description"?: str, "meta"?: {…}}],
+        "key"?: str, "strict"?: bool, "description"?: str, "meta"?: {…}}.
+        ⚠️ **The vocabulary is CLOSED: a key its level does not admit is REFUSED** —
+        at the head, on a field, on a sub-field, in `of`, in `lifecycle`. The refusal
+        names the path, the key and the closest known one (`read_only` → `readonly`),
+        or where it belongs (`states` → `lifecycle.states`, `semantic_search` → a
+        parameter of this call). An unknown key ALREADY stored and left unchanged is
+        tolerated (named in `warning`), never one you add or change. Your own
+        annotations go in `meta` — an object, allowed at every level, carried as is,
+        never read, bounded in size. Help text goes in `description` (`note`,
+        `help`, `hint`, `placeholder` are refused). Each level's keys, who reads
+        each one and the `meta` bound (`meta_max_bytes`) are served at
+        `GET /api/datastore/schema/keys`.
         ⚠️ This REPLACES the schema — it does not merge. Any setting absent from the
         body you send DISAPPEARS (a field note, a bound, options, the business key and
         its UNIQUE index). The response now names what it just removed
@@ -689,9 +695,9 @@ def register(mcp: FastMCP) -> None:
         - `display: "title"` NAMES the row: that field titles the record everywhere
           the server names a line (work queue, undo, cards) instead of a raw `_id`.
           One per table.
-        - `role: "status"` is what `lifecycle` attaches to — declaring a lifecycle on
-          any other field is refused. `metric`/`note`/`qualif` only steer the
-          dashboard's rendering (metric tiles, notes placed last).
+        - `role` only steers the dashboard's rendering (`metric` tiles, `note`
+          placed last, `status` badges) — oto does not read it: a `lifecycle` block
+          designates its own column, no role needed.
           ⚠️ The dashboard still titles rows from `role: "title"`, which the server
           no longer reads. On a table meant to look right in BOTH, declare both until
           they converge.
@@ -744,9 +750,8 @@ def register(mcp: FastMCP) -> None:
           and each refusal names the field, the reason and where the thing goes:
           `field.readonly: true` refuses a write that CHANGES the value in place
           (layers stay open — what another source says goes in `<field>.comment`);
-          ⚠️ `field.origine: "system"` was REMOVED on 2026-09-08 — a schema that
-          still carries it declares a key oto does not interpret, and the
-          unknown-key warning says so. Nothing captures a previous value
+          ⚠️ `field.origine: "system"` was REMOVED on 2026-09-08 and is now
+          REFUSED like any unknown key. Nothing captures a previous value
           automatically any more: the origin is set by the call that BRINGS the
           data, with `donnees_d_origine=true` (`data_write` says how). Re-sending
           the SAME value is never a write, so re-emitting a record you just read
@@ -792,9 +797,9 @@ def register(mcp: FastMCP) -> None:
             schema: the schema object, or null to clear it. Head key
                 `unknown_fields: "report"|"reject"` decides an undeclared column's
                 fate; a field may carry `readonly: true` (value locked, layers
-                open). ⚠️ `origine: "system"` was REMOVED on 2026-09-08 and is no
-                longer interpreted — the origin is now set by the call that brings
-                the data (`donnees_d_origine=true`), not by a schema format.
+                open). ⚠️ `origine` was REMOVED on 2026-09-08 and is refused — the
+                origin is set by the call that brings the data
+                (`donnees_d_origine=true`), not by a schema format.
             semantic_search: true/false to toggle semantic row search; null = leave as is.
         """
         store = _acting_store()

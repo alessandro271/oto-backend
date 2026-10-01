@@ -90,8 +90,8 @@ def test_display_is_seen_as_interpreted_without_editing_any_list():
     dérivation était une copie déguisée — un finding, pas une ligne à éditer."""
     assert "display" in dsv2.interpreted_keys()
 
-    # Corollaire : un schéma qui déclare `display` ne doit plus être averti.
-    assert dsv2.unknown_declaration_keys(
+    # Corollaire : un schéma qui déclare `display` est admis.
+    assert dsv2.validate_schema_def(
         {"fields": [{"key": "a", "type": "text", "display": "title"}]}) == []
 
 

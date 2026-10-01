@@ -144,9 +144,9 @@ que le balayage posait À LA PLACE d'une valeur a été retiré des cases qui le
 **Une case sans couche `origine` n'a pas de valeur de départ connue** : c'est
 l'absence de la couche qui le dit, jamais un texte à sa place.
 
-Une déclaration `origine: "system"` qui subsiste dans un schéma est désormais une clé
-qu'oto n'interprète pas : elle est stockée, servie, et sans aucun effet. L'avertissement
-des clés non interprétées la signale.
+Une déclaration `origine` est **refusée** depuis le 01/10/2026, comme toute clé que son
+niveau n'admet pas (§ 4 octies) ; celles qui subsistaient sont retirées par la migration
+de la fermeture.
 
 ## 4 bis. `donnees_d_origine: true` — quand TU apportes la donnée de la cliente
 
@@ -337,6 +337,34 @@ Dans une liste à `of.key`, seuls les éléments que ton écriture **change** so
 Un élément renvoyé tel quel, qui ne respectait pas une exigence posée après lui, ne
 bloque pas ton écriture : il est signalé dans `hors_type`, à corriger quand tu y
 reviens.
+
+## 4 octies. Le vocabulaire d'un schéma est FERMÉ
+
+Depuis le 01/10/2026, chaque niveau d'un schéma déclare les clés qu'il admet — la
+**tête**, une **colonne**, un **sous-champ** (`fields` d'un objet ou d'un élément), l'**élément
+d'une liste** (`of`) et le bloc **`lifecycle`** — et une clé absente de son niveau est
+**refusée**, à la pose (`data_set_schema`, `PUT …/schema`) comme au patch
+(`data_patch_schema`, `PATCH …/schema`). Les listes, et qui lit chaque clé, sont servies
+sur `GET /api/datastore/schema/keys` (`levels`).
+
+Le refus nomme le chemin, la clé, et où elle va :
+
+```
+fields.statut : `enum` n'est pas admise sur une colonne — voulais-tu `options` ?
+fields.etat : `states` n'est pas admise sur une colonne — elle se pose DANS le bloc `lifecycle` de la colonne (`lifecycle.states`) …
+tête : `semantic_search` n'est pas admise en tête du schéma — c'est un PARAMÈTRE de l'appel …
+```
+
+- **un texte d'aide** va dans `description` — le seul : `note`, `help`, `hint` et
+  `placeholder` y ont été repliés et sont refusés ;
+- **une annotation à toi** (une dépendance, un libellé de valeur, une provenance du
+  format) va dans `meta` : un objet, admis à chaque niveau, transporté tel quel,
+  **jamais lu**, borné en taille (`meta_max_bytes`). Rien de ce qui est dans `meta` ne
+  devient actif — un `readonly` rangé là ne verrouille rien ;
+- **une clé déjà stockée** et inchangée ne bloque rien : le refus porte sur ce que le
+  geste POSE ou MODIFIE. Le patch d'une autre colonne passe ; la réponse et
+  `data_get_schema` la nomment dans `warning`. Pour la retirer :
+  `data_patch_schema(remove_attrs={"colonne": ["clé"]})`.
 
 ## 5. Ce que `readonly: true` protège — et ne protège pas
 

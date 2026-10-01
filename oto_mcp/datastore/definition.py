@@ -2,10 +2,10 @@
 
 `validate_schema_def` est le seul point d'entrée : elle rend la liste des raisons pour
 lesquelles un schéma est refusé À LA POSE, avant qu'une seule ligne ne soit écrite.
-Elle délègue à deux aides qui portent le gros du texte : `_validate_fields_def`
-(récursive — types, bornes, motifs, couches, composites) et `_validate_reserved_def`
-(les crans `readonly` / `origine` / `agent_access`, et les endroits où ils n'ont pas
-le droit de se poser).
+Elle juge d'abord le VOCABULAIRE, à chaque niveau (`cles_inconnues.refus`), puis
+délègue à deux aides qui portent le gros du texte : `_validate_fields_def` (récursive —
+types, bornes, motifs, couches, composites) et `_validate_reserved_def` (les valeurs
+des crans `readonly` et `agent_access`).
 
 **La différence avec `validation.py` est le MOMENT, et il change tout** : ici on juge
 un format, une fois, à la pose ; là on juge une ligne, à chaque écriture. Un refus
@@ -18,9 +18,9 @@ schéma qu'il suppose valide ; ici on décide s'il l'est. Ce module appelle donc
 jamais l'inverse.
 
 Ce qu'il ne tient pas :
-- **la liste fermée des attributs** qu'une colonne peut porter → `schema_keys.py` ;
-- **le signalement (non bloquant) d'un attribut inconnu** → `vocabulaire.py` et
-  `cles_inconnues.py` — le vocabulaire ne se ferme PAS, on signale ;
+- **la liste fermée des attributs**, par niveau → `schema_keys.py` ;
+- **le refus d'une clé qu'aucun niveau n'admet** → `cles_inconnues.py`, appelé d'ici
+  en premier ;
 - **le refus d'une ligne** contre le format ainsi validé → `validation.py` ;
 - **la validité du périmètre de réservation** → `claimable.erreurs`, appelée d'ici.
 """
@@ -30,9 +30,10 @@ from typing import Optional
 
 from . import acces_agent as aga
 from . import claimable
+from . import cles_inconnues
 from . import schema_keys
 
-from .couches import LAYER_KEYS, split_layer, SYSTEM_ORIGIN
+from .couches import LAYER_KEYS, split_layer
 from .motifs import PATTERN_MAX_SUBJECT, pattern_refusal
 from .declaration import (
     FILE_KEYS,
@@ -51,14 +52,21 @@ from . import formule as _formule
 
 # ── validation de la DÉFINITION du schéma ────────────────────────────────────
 
-def validate_schema_def(schema: Optional[dict]) -> list[str]:
+def validate_schema_def(schema: Optional[dict],
+                        ancien: Optional[dict] = None) -> list[str]:
     """Erreurs de structure de la définition elle-même (posée par data_set_schema).
-    Un schéma 0016 plat reste valide tel quel."""
+    Un schéma 0016 plat reste valide tel quel.
+
+    `ancien` = le schéma EN PLACE, quand il y en a un : une clé inconnue qui y figure
+    déjà, au même endroit et avec la même valeur, n'est pas posée par ce geste et ne
+    se refuse pas (`cles_inconnues.refus`). Sans `ancien`, tout est jugé comme posé."""
     if schema is None:
         return []
     if not isinstance(schema, dict):
         return ["schema doit être un objet {fields:[...]} ou null"]
-    errors: list[str] = []
+    # Le vocabulaire d'abord : une clé que son niveau n'admet pas est la faute la plus
+    # fréquente, et les refus suivants supposent les clés bien nommées.
+    errors: list[str] = cles_inconnues.refus(schema, ancien)
     _validate_fields_def(_fields(schema), "fields", errors)
     errors.extend(_validate_formulas_def(_fields(schema)))
     # Une colonne titre par tableau (#317) : deux candidats, et le nom d'une ligne
@@ -301,38 +309,23 @@ def _erreurs_unknown_fields(schema: dict) -> list[str]:
 _COLUMN_ONLY_KEYS = schema_keys.COLONNE_SEULEMENT
 
 
-def _validate_reserved_def(f: dict, fpath: str, errors: list[str], *,
-                           top: bool) -> None:
+def _validate_reserved_def(f: dict, fpath: str, errors: list[str]) -> None:
     """#586/#606 : un cran qui ne peut pas s'appliquer se refuse à la POSE, devant
     celui qui peut corriger — jamais accepté-inerte (#347). `None` passe : c'est
     la forme par laquelle un patch LÈVE le cran sans réécrire le schéma."""
-    ro, so, ftype = f.get("readonly"), f.get("origine"), f.get("type")
+    ro = f.get("readonly")
     if ro is not None and not isinstance(ro, bool):
         errors.append(
             f"{fpath}: readonly doit être true ou false (reçu {ro!r}) — `true` = "
             f"colonne du fichier source, dont la valeur ne change pas par une "
             f"écriture (ses couches `comment`/`link` restent ouvertes)")
-    # ⚠️ **`origine` n'est PLUS validée ici, et son absence est le correctif.**
+    # `origine` n'est plus lue ici depuis le 08/09/2026, et elle est REFUSÉE depuis
+    # le 01/10/2026 comme toute clé retirée (`schema_keys.CLES_RETIREES`) — l'origine
+    # se déclare à l'import (`donnees_d_origine`), plus par le format.
     #
-    # Ces deux refus décrivaient la CAPTURE : « la couche est alors posée par la
-    # plateforme, à partir de la valeur en place ». Le cran `origine: "system"` a été
-    # supprimé le 08/09/2026 au profit de `donnees_d_origine`, déclaré à l'import — et
-    # plus rien ne pose cette couche. Les refus survivaient donc à leur raison : ils
-    # exigeaient la bonne forme d'un attribut devenu inerte, et leur MOTIF promettait
-    # un mécanisme mort. C'est exactement ce qu'un des deux commentaires ci-dessous
-    # nommait, un mois plus tôt, sans se l'appliquer : *un motif qui survit à sa raison
-    # est un mensonge en attente.*
-    #
-    # La clé n'est pas refusée pour autant — 500 colonnes de production la portent, et
-    # un refus à la pose gèlerait dix tableaux vivants. Elle est déclarée **non
-    # appliquée** dans `schema_keys`, ce qui la fait nommer par l'avertissement des
-    # clés que la plateforme ne lit pas. Dire « je ne m'en sers pas » est le seul geste
-    # honnête pour un attribut qu'on ne peut ni appliquer ni retirer.
-
     # oto#83 — quatrième cran de la famille : à QUI la colonne est servie.
-    # ⚠️ La valeur inconnue est REFUSÉE, et c'est le point du cran. Le vocabulaire des
-    # CLÉS reste ouvert (on signale, on n'empêche pas) ; celui d'une VALEUR que le
-    # validateur exécute ne peut pas l'être : `agent_access: "non"` retomberait en
+    # ⚠️ La valeur inconnue est REFUSÉE, et c'est le point du cran : une VALEUR que le
+    # validateur exécute ne peut pas rester ouverte. `agent_access: "non"` retomberait en
     # silence sur le défaut « write », et le propriétaire croirait sa colonne fermée
     # alors qu'elle est grande ouverte. C'est mot pour mot la plaie de `read_only`
     # écrit pour `readonly`, à ceci près qu'ici on peut la fermer.
@@ -345,16 +338,9 @@ def _validate_reserved_def(f: dict, fpath: str, errors: list[str], *,
             f"mais n'en écrit pas la valeur ; {aga.AUCUN!r} = un agent ne la voit pas "
             f"du tout). Une valeur que la plateforme ne sait pas lire laisserait la "
             f"colonne ouverte sous un réglage qui promet le contraire")
-    if not top and aa is not None:
-        errors.append(
-            f"{fpath}: {aga.CLE} ne se pose qu'au premier niveau — sous un sous-record "
-            f"ni le masquage ni le refus ne le lisent, et une déclaration que rien ne "
-            f"lit n'est pas inerte, elle ment")
-    if not top and (ro is True or so == SYSTEM_ORIGIN):
-        errors.append(
-            f"{fpath}: readonly / origine: \"{SYSTEM_ORIGIN}\" ne se posent qu'au "
-            f"premier niveau — sous un sous-record la garde ne les lit pas, et une "
-            f"déclaration que rien ne lit n'est pas inerte, elle ment")
+    # Sous un sous-record, `readonly` et `agent_access` ne sont pas admis : c'est le
+    # vocabulaire du niveau qui le refuse (`schema_keys.PREMIER_NIVEAU_SEULEMENT`) —
+    # d'où un appel au premier niveau seulement.
 
 
 def _validate_fields_def(fields: list, path: str, errors: list[str]) -> None:
@@ -424,16 +410,8 @@ def _validate_fields_def(fields: list, path: str, errors: list[str]) -> None:
             if of is None:
                 errors.append(f"{fpath}: type=list exige of:<field-def>")
             elif isinstance(of, dict):
-                # oto#137 : `max_items` borne la LISTE, et le validateur ne le lit que
-                # là. Posé sur l'objet qui décrit un élément, il était accepté et ne
-                # faisait rien. Mesuré le 24/09/2026 : aucun schéma ne porte la forme.
-                if "max_items" in of:
-                    errors.append(
-                        f"{fpath}.of: `max_items` borne le nombre d'éléments de la "
-                        f"LISTE, pas un élément — posé dans `of`, personne ne le lit. "
-                        f"Pose-le sur la colonne, à côté de son type : "
-                        f"{{\"key\": \"{key}\", \"type\": \"list\", "
-                        f"\"max_items\": {of['max_items']!r}, \"of\": {{...}}}}.")
+                # `max_items` posé dans `of` (oto#137) est refusé par le vocabulaire
+                # de l'élément, avec la forme correcte (`cles_inconnues.phrase`).
                 if isinstance(of.get("fields"), list):
                     _validate_fields_def(
                         [x for x in of["fields"] if isinstance(x, dict)], fpath, errors)
@@ -526,8 +504,8 @@ def _validate_fields_def(fields: list, path: str, errors: list[str]) -> None:
                                   f"{sans_borne}")
         # #586/#606 : les champs que l'appelant n'écrit pas. Sur une cible de couche,
         # `_COLUMN_ONLY_KEYS` a déjà parlé.
-        if not layer:
-            _validate_reserved_def(f, fpath, errors, top=(path == "fields"))
+        if not layer and path == "fields":
+            _validate_reserved_def(f, fpath, errors)
 
 
 # ── colonnes calculées (oto-backend#1008) ───────────────────────────────────

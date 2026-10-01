@@ -1184,15 +1184,23 @@ def _write_instruction(ctx: ResolvedCtx, inp, must_create: bool = False) -> tupl
     # `from_version` (restauration) n'existe pas sur l'entrée de CRÉATION : restaurer
     # suppose une procédure existante — cf. `InstrCreateInput`.
     from_version = getattr(inp, "from_version", None)
+    # Les slots STOCKÉS contre lesquels juger le schéma cible d'un slot : seule une clé
+    # que ce geste pose ou modifie est refusée (`slots.validate_slots`). Une version
+    # restaurée est jugée contre elle-même — elle vient de l'historique, pas de
+    # l'appelant.
+    anciens = None
     if from_version is not None:
         old = org_store.get_instruction(*owner, norm, from_version)
         if not old:
             raise AuthzDenied(404, "unknown_version", f"Pas de version {from_version} pour `{norm}`.")
         body_md, title, description = old["body_md"], old["title"], old["description"]
         slots_in = old.get("slots") or []
+        anciens = slots_in
+    elif slots_in is not None:
+        anciens = (org_store.get_instruction(*owner, norm) or {}).get("slots")
     if slots_in is not None:
         try:
-            slots_in = slots_mod.validate_slots(slots_in)
+            slots_in = slots_mod.validate_slots(slots_in, anciens)
         except ValueError as e:
             raise AuthzDenied(400, "invalid_slots", str(e))
     body_md = (body_md or "").strip()

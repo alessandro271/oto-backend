@@ -169,10 +169,10 @@ def _errs(fields):
 # la POSE refuse une déclaration inapplicable — c'était juste tant que `origine:
 # "system"` armait une capture. Le cran a été supprimé au profit de `donnees_d_origine`
 # déclaré à l'import : ces refus promettaient donc un mécanisme mort, et leur motif
-# décrivait une capture qui n'a plus lieu. La clé n'est pas refusée pour autant (500
-# colonnes de production la portent, un refus gèlerait dix tableaux vivants) : elle est
-# déclarée NON APPLIQUÉE dans `schema_keys`, donc nommée par l'avertissement des clés
-# que la plateforme ne lit pas. `readonly`, lui, s'applique toujours et reste gardé.
+# décrivait une capture qui n'a plus lieu. Depuis le 01/10/2026 la clé est refusée comme
+# toute clé RETIRÉE (`schema_keys.CLES_RETIREES`) quand un geste la pose ; celle que
+# des colonnes portaient déjà est rangée par `scripts/durcir_schemas.py`. `readonly`,
+# lui, s'applique toujours et reste gardé.
 @pytest.mark.parametrize("field, attendu", [
     ({"key": "x", "readonly": "oui"}, "readonly"),
 ])
@@ -185,8 +185,13 @@ def test_une_declaration_qui_ne_peut_pas_s_appliquer_se_refuse_a_la_POSE(field, 
 def test_les_crans_ne_se_posent_qu_au_PREMIER_niveau():
     errs = _errs([{"key": "o", "type": "object",
                    "fields": [{"key": "a", "readonly": True},
-                              {"key": "b", "origine": "system"}]}])
-    assert len([e for e in errs if "premier niveau" in e]) == 2
+                              {"key": "b", "agent_access": "read"}]}])
+    assert len([e for e in errs if "premier niveau" in e]) == 2, errs
+
+
+def test_origine_est_REFUSEE_a_la_pose():
+    errs = _errs([{"key": "b", "origine": "system"}])
+    assert len(errs) == 1 and "retirée le 08/09/2026" in errs[0], errs
 
 
 def test_les_crans_ne_se_posent_pas_sur_une_cible_de_couche():
@@ -197,14 +202,14 @@ def test_les_crans_ne_se_posent_pas_sur_une_cible_de_couche():
 def test_le_retrait_est_une_valeur_nulle():
     """`data_patch_schema(fields=[{key, readonly: null}])` lève le cran sans
     réécrire : `null` est une absence, pour le lecteur comme pour la pose."""
-    schema = {"fields": [{"key": "a", "readonly": None}, {"key": "b", "origine": None}]}
+    schema = {"fields": [{"key": "a", "readonly": None}, {"key": "b"}]}
     assert dsv2.validate_schema_def(schema) == []
     assert dsv2.readonly_fields(schema) == set() == dsv2.system_origin_fields(schema)
 
 
-def test_les_clefs_sont_INTERPRETEES():
-    """Sans quoi `data_set_schema` avertirait « clé non lue » sur un cran qui mord."""
-    assert dsv2.unknown_declaration_keys(_SCHEMA) == []
+def test_les_clefs_sont_ADMISES():
+    """Sans quoi `data_set_schema` refuserait un cran qui mord."""
+    assert dsv2.validate_schema_def(_SCHEMA) == []
 
 
 def test_la_face_REST_garde_son_code_et_porte_la_colonne_attendue():

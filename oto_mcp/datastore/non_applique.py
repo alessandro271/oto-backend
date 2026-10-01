@@ -250,23 +250,17 @@ def lifecycle_hors_statut_warning(champs: list[str],
 
     Les manques sont donc MESURÉS un par un, sur ce que la file lit réellement.
 
-    ⚠️ Et le conseil ne suppose plus que l'ancre n'a pas de cycle de vie : quand les
-    DEUX colonnes en portent un — le cas rencontré —, « déplace le rôle sur la colonne
-    qui porte le cycle de vie » ne désigne rien.
+    ⚠️ **Le 01/10/2026, la phrase parlait encore de `role: "status"`**, que plus rien
+    ne lit depuis le 08/09 : le bloc DÉSIGNE sa colonne, et la colonne de file est celle
+    dont le bloc déclare un périmètre, un plafond ou un état d'abandon
+    (`declaration.status_field`). Elle conseillait de « déplacer le rôle » — un geste
+    sans effet. Il y a toujours une ancre dès qu'un bloc existe : la phrase part d'elle.
     """
     if not champs:
         return None
     noms = ", ".join(f"`{c}`" for c in champs)
     ancre = status_field(schema)
     cle = (ancre or {}).get("key")
-
-    if not cle:
-        return (f"cycle de vie NON LU : {noms} — oto ne lit le `lifecycle` que sur le "
-                "champ déclaré `role: \"status\"`, et **aucune colonne ne porte ce "
-                "rôle sur ce tableau**. La file n'a donc aucune ancre : rien de ce "
-                "cycle de vie n'est appliqué. Déclare `role: \"status\"` sur la "
-                "colonne qui porte l'état de travail — jamais pendant qu'une vague "
-                "tourne.")
 
     # Ce que la file lit VRAIMENT, cran par cran. Dérivé des fonctions qui décident,
     # jamais d'une hypothèse sur ce que l'ancre contient.
@@ -292,19 +286,12 @@ def lifecycle_hors_statut_warning(champs: list[str],
         ("périmètre de réservation", _perimetre_utilisable()),
     ) if not present]
 
-    lc_ancre = lifecycle_of(schema)
-    if not lc_ancre:
-        etat = (f"C'est `{cle}` qui porte `role: \"status\"`, et **il n'a aucun cycle "
-                "de vie** : rien n'est appliqué.")
-        conseil = (f"Déplace `role: \"status\"` sur la colonne qui porte le cycle de "
-                   f"vie, ou déplace le cycle de vie sur `{cle}`.")
-    else:
-        etat = (f"C'est `{cle}` qui porte `role: \"status\"`, et **son cycle de vie "
-                "est le seul appliqué**.")
-        conseil = (f"Les deux colonnes portent un cycle de vie : seul celui de `{cle}` "
-                   f"compte. Reporte sur `{cle}` ce que tu veux voir appliqué, ou "
-                   f"déplace le rôle si c'est {noms} qui décrit le vrai état de "
-                   "travail.")
+    etat = (f"La colonne de FILE est `{cle}` — celle dont le bloc déclare "
+            "`claimable`, `max_claims` ou `abandon_state`, à défaut la première qui "
+            "porte un bloc —, et **son cycle de vie est le seul appliqué**.")
+    conseil = (f"Reporte sur `{cle}` ce que tu veux voir appliqué, ou déclare la "
+               f"file (`claimable`, `max_claims` + `abandon_state`) sur le bloc de "
+               f"{noms} si c'est lui qui décrit le vrai état de travail.")
 
     if manques:
         # « pas d'état », « pas de plafond » : l'élision se calcule, elle ne se
@@ -320,8 +307,8 @@ def lifecycle_hors_statut_warning(champs: list[str],
         consequence = ("Tous les crans de la file sont par ailleurs déclarés sur "
                        f"`{cle}` : cette déclaration-ci n'a aucun effet POUR OTO.")
 
-    return (f"cycle de vie NON LU : {noms} — oto ne lit le `lifecycle` que sur le "
-            f"champ déclaré `role: \"status\"`. {etat} {consequence} {conseil} "
+    return (f"cycle de vie NON LU : {noms} — oto ne valide les transitions que sur "
+            f"la colonne de file. {etat} {consequence} {conseil} "
             "Jamais pendant qu'une vague tourne. ⚠️ « Non lu par oto » ne veut pas dire "
             "« lu par personne » : un consommateur en aval peut parfaitement s'en "
             "servir, et la plateforme ne sait pas qui lit quoi. Ne le retire pas sur "

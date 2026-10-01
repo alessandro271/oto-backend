@@ -124,7 +124,7 @@ def test_aucune_exception_du_module_ne_sort_hors_des_types_traduits():
 
 def _pose(st, ns, transitions):
     return st.set_schema(ns, {"fields": [
-        {"key": "s", "role": "status", "values": ["a", "b"],
+        {"key": "s", "role": "status",
          "lifecycle": {"states": ["a", "b"], "transitions": transitions}}]})
 
 
@@ -174,13 +174,13 @@ def test_les_refus_DEJA_bons_du_lifecycle_ne_sont_pas_touches(live):
     st = make_store("sub-refus")
 
     for schema, attendu in (
-        ({"fields": [{"key": "s", "role": "status", "values": ["a"],
+        ({"fields": [{"key": "s", "role": "status",
                       "lifecycle": {"states": ["a"], "transitions": {"a": ["ZZZ"]}}}]},
          "état cible inconnu"),
-        ({"fields": [{"key": "s", "role": "status", "values": ["a"],
+        ({"fields": [{"key": "s", "role": "status",
                       "lifecycle": {"states": ["a"], "max_claims": 3}}]},
          "abandon_state"),
-        ({"fields": [{"key": "s", "role": "status", "values": ["a"],
+        ({"fields": [{"key": "s", "role": "status",
                       "lifecycle": {"states": "a", "transitions": {}}}]},
          "liste non vide"),
         ({"fields": [{"key": "x", "type": "licorne"}]}, "type inconnu"),

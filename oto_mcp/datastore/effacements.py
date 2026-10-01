@@ -181,9 +181,9 @@ _DECL_VALEUR_MAX = 300
 
 
 def _field_index(schema: Optional[dict]) -> dict:
-    """`{chemin: field-def}` — même convention de chemin que
-    `unknown_declaration_keys` (`occupant.nom`, `contacts[].email`), pour qu'un agent
-    lise le même nom dans les deux relevés."""
+    """`{chemin: field-def}` — même convention de chemin que le relevé des lignes en
+    place (`occupant.nom`, `contacts[].email`), pour qu'un agent lise le même nom dans
+    les deux relevés."""
     out: dict = {}
 
     def _visiter(fields: list, prefixe: str = "") -> None:

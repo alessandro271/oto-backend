@@ -109,7 +109,6 @@ def test_le_perimetre_du_TABLEAU_passe_toujours_devant(live):
         {"key": "ref", "type": "text"},
         {"key": "score", "type": "number"},
         {"key": "statut", "type": "text", "role": "status",
-         "values": ["a_faire", "fait"],
          "lifecycle": {"states": ["a_faire", "fait"],
                        "transitions": {"a_faire": ["fait"]},
                        "claimable": {"statut": "a_faire"}}}]})

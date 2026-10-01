@@ -34,13 +34,14 @@ import pytest
 
 # Le tableau de l'incident, réduit à ce qui porte la règle : une colonne d'état avec
 # son cycle de vie, ET le cran d'origine posé dessus — c'est leur RENCONTRE qui casse.
+# ⚠️ Le cran `origine: "system"` n'est plus lu depuis le 08/09/2026 et il est refusé
+# depuis le 01/10/2026 : l'origine se déclare par l'appel qui apporte la donnée.
 SCHEMA = {
     "key": "siren",
     "fields": [
         {"key": "siren", "type": "text"},
-        {"key": "raison_sociale", "type": "text", "origine": "system"},
+        {"key": "raison_sociale", "type": "text"},
         {"key": "statut", "role": "status", "type": "enum",
-         "origine": "system",
          "options": ["a_enrichir", "en_cours", "enrichi", "echec"],
          "lifecycle": {"states": ["a_enrichir", "en_cours", "enrichi", "echec"],
                        "terminal": ["enrichi", "echec"],

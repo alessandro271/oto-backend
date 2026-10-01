@@ -74,8 +74,9 @@ class SchemaOut(BaseModel):
     # #389 : les clés de validation que cette version applique — la seule parade au
     # décalage entre le code écrit et la version servie.
     enforced: list = []
-    # #416 : ce que le schéma SERVI contient et qu'oto ne lit pas. Absent (None) dans
-    # le cas normal — un champ toujours présent finirait ignoré comme un ornement.
+    # #416 : ce que le schéma SERVI contient et qu'aucun niveau n'admet (stocké avant
+    # la fermeture du vocabulaire, 01/10/2026). Absent (None) dans le cas normal — un
+    # champ toujours présent finirait ignoré comme un ornement.
     warning: Optional[str] = None
     # oto-backend#1008 v2 : le statut CONSULTABLE du backfill de formule, posé par
     # `set_schema` puis drainé en fond (`formula_backfill_worker.py`). Absent quand
@@ -116,37 +117,18 @@ def _get_schema(ctx: ResolvedCtx, inp: GetSchemaInput) -> dict:
             restantes = db.datastore_formula_dirty_count(ns_id)
             if restantes:
                 out["formules_a_recalculer"] = restantes
-    # #416 : le garde des clés non lues existait, mais UNIQUEMENT à la pose — et un
-    # schéma déjà pollué ne se repose jamais. Mesuré en production le 28/08 : trois
-    # tableaux (9 454 lignes) portent un attribut `enum` résiduel à côté de l'`options`
-    # qui, elle, fait foi. Leur auteur a reçu l'avertissement il y a des semaines ou ne
-    # l'a jamais reçu ; leurs LECTEURS, eux, en ont besoin à chaque lecture, parce que
-    # c'est là que la contradiction se consomme.
-    #
-    # ⚠️ On AVERTIT, on ne nettoie pas. Réécrire le schéma d'un client pour en retirer
-    # une clé serait détruire une déclaration qu'il a posée et que le datastore
-    # s'engage à TRANSPORTER (les consommateurs y mettent les leurs) — et une
-    # migration qui retouche des schémas se rejoue à chaque boot. Le résidu est
-    # inerte : ce qui nuisait, c'était son silence.
-    averts = [dsv2.unknown_keys_read_warning(dsv2.unknown_declaration_keys(schema)),
-              # 08/09/2026 — deux orthographes libres d'une même clé dans ce schéma.
-              # Servi au LECTEUR autant qu'à l'auteur : c'est le consommateur en aval
-              # qui découvre qu'une colonne manque à son regroupement, et lui seul
-              # sait laquelle des deux formes il lit vraiment.
-              dsv2.cles_jumelles_warning(
-                  dsv2.cles_libres_jumelles(dsv2.unknown_declaration_keys(schema))),
-              # 07/09/2026 — MÊME défaut, autre clé, et celui-ci coûte une file de
-              # travail entière. `lifecycle` n'est lu que sur le champ `role: "status"`
-              # : posé ailleurs, il est stocké, servi… et sans le moindre effet. Plus
-              # d'état terminal, plus de plafond de reprises, plus d'état d'abandon,
-              # plus de périmètre de réservation — et le schéma affiche le contraire.
-              #
-              # ⚠️ **La pose le refuse déjà, et c'est justement pourquoi il faut le
-              # dire ICI.** Le refus ne parle qu'à qui écrit un schéma NEUF ; celui
-              # qui a posé le sien avant la garde ne l'entendra jamais, puisqu'un
-              # schéma en base ne se repose pas. Cas trouvé sur un tableau de
-              # production d'une campagne vivante — par un tiers comparant deux
-              # schémas, pas par la plateforme.
+    # #416 : ce qu'un schéma STOCKÉ porte encore d'inconnu se dit à chaque LECTURE.
+    # Depuis le 01/10/2026 une clé inconnue est refusée à la pose, mais celles posées
+    # avant restent (le refus ne porte que sur ce qu'un geste pose) jusqu'à la
+    # migration — et c'est le LECTEUR qui consomme la contradiction : un `enum`
+    # résiduel à côté de l'`options` qui fait foi se lit comme la liste admise.
+    averts = [cles_inconnues.residus_warning(schema),
+              # 07/09/2026 — un `lifecycle` que la file ne lit pas. Seule la colonne
+              # de FILE (`declaration.status_field` : celle dont le bloc déclare
+              # `claimable`, `max_claims` ou `abandon_state`, à défaut la première qui
+              # porte un bloc) voit ses transitions validées ; un second bloc est
+              # stocké, servi… et sans effet pour oto. Dit à la lecture, parce qu'un
+              # schéma en base ne se repose pas.
               dsv2.lifecycle_hors_statut_warning(
                   dsv2.lifecycle_hors_statut(schema), schema),
               # 08/09/2026 — deux gardes qui ont l'air de mordre. Dites ICI autant
@@ -191,11 +173,6 @@ class SchemaPosed(BaseModel):
     # posées sur des données déjà hors borne, colonnes orphelines) : présent seulement
     # quand il y a quelque chose à dire, et adressé à l'auteur du schéma.
     warning: Optional[str] = None
-    # Les attributs de colonne que PERSONNE ne lit (oto#56). `None` = rien à
-    # signaler ; la clé est toujours là, pour distinguer « rien à dire » d'un serveur
-    # trop vieux. Avertissement, jamais refus : refuser durcirait un contrat servi et
-    # casserait les schémas qui portent déjà des clés mortes.
-    unknown_keys_warning: Optional[str] = None
 
     # #388 : ce que cette pose vient de RETIRER, avec les valeurs perdues — la
     # réponse en est la seule copie. Clé distincte de `warning` : les autres décrivent
@@ -214,11 +191,9 @@ class SchemaPosed(BaseModel):
 
 def _set_schema(ctx: ResolvedCtx, inp: SetSchemaInput) -> dict:
     try:
-        # L'avertissement se calcule sur ce que l'appelant a ENVOYÉ, pas sur ce que le
-        # store rend : c'est son texte à lui qui porte la faute de frappe, et le store
-        # peut normaliser (oto#56).
-        return {**make_store(ctx.sub).set_schema(inp.datastore, inp.schema),
-                **cles_inconnues.check(inp.schema)}
+        # Une clé inconnue est REFUSÉE par le store (`validate_schema_def`), sur les
+        # deux faces : rien à ajouter ici.
+        return make_store(ctx.sub).set_schema(inp.datastore, inp.schema)
     except DatastoreNotFound:
         raise ns_not_found(ctx.sub, inp.datastore)
     except DatastoreReadOnly:
@@ -256,7 +231,13 @@ CAPABILITIES += [
                          path="/api/datastores/{datastore}/schema"),
         description=(
             "Pose (ou retire, avec `schema: null`) le schéma typé d'un tableau. "
-            "Le schéma est posé ENTIER — relire avant d'amender. La réponse porte "
+            "Le schéma est posé ENTIER — relire avant d'amender. Une clé qu'aucun "
+            "niveau n'admet (tête, colonne, sous-champ, `of`, `lifecycle` — listes sur "
+            "`GET /api/datastore/schema/keys`) est REFUSÉE (400), en nommant le chemin, "
+            "la clé et la plus proche ; une clé inconnue DÉJÀ stockée et inchangée "
+            "passe. Une annotation à soi va dans `meta` (un objet, à chaque niveau, "
+            "transporté, jamais lu, borné en taille) ; un texte d'aide dans "
+            "`description`. La réponse porte "
             "`enforced` (les clés de validation que CETTE version applique) et "
             "`declarations_effacees` (ce que la pose vient de RETIRER, valeurs "
             "comprises — elle en est la seule copie) et `existing_violations` (par "
@@ -300,10 +281,11 @@ CAPABILITIES += [
             "is not dead — presentation keys are read by whoever renders the table, "
             "and oto cannot know who reads what downstream. Never drop a key on the "
             "strength of its absence here. "
-            "`warning` appears only when the stored schema carries declaration keys oto "
-            "does NOT read — typically a leftover `enum` sitting beside the `options` "
-            "that actually constrains the field. When it does, trust the key the warning "
-            "names: the unread one is a residue, whatever it says."
+            "`warning` appears only when the stored schema still carries keys no level "
+            "admits — posted before the vocabulary was closed (2026-10-01), typically "
+            "a leftover `enum` beside the `options` that actually constrains the field. "
+            "When it does, trust the key the warning names: the other is a residue, "
+            "whatever it says. Writing a NEW unknown key, or changing one, is refused."
         ),
     ),
 ]

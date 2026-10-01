@@ -24,6 +24,7 @@ from __future__ import annotations
 from typing import Optional
 
 from . import acces_agent as aga
+from . import cles_inconnues
 from . import formule as dsformule
 from . import schema as dsv2
 from . import violations_existantes as dsve
@@ -90,18 +91,22 @@ class SchemaOpsMixin:
         ns_id = self._resolve(datastore, write=True)
         if schema is not None and not isinstance(schema, dict):
             raise SchemaDefinitionError("schema doit être un objet {fields:[...]} ou null")
-        def_errors = dsv2.validate_schema_def(schema)
+        # L'ancien schéma se lit AVANT la validation : le refus des clés inconnues
+        # (01/10/2026) ne porte que sur ce que CE geste pose ou modifie — une clé déjà
+        # stockée, inchangée, passe, sinon le patch d'une autre colonne serait refusé
+        # sur un tableau pas encore migré (`cles_inconnues`).
+        # oto#82 : c'est aussi la COMPARAISON des clés métier qui décide du travail
+        # d'index — le calcul regardait ce qui EXISTE, pas ce qui a CHANGÉ, donc toute
+        # pose (un libellé) rescannait les lignes puis reposait l'index, et son `DROP`
+        # prend un verrou exclusif sur `datastore_rows`, commune à TOUS les tableaux.
+        # « Inchangée » ne suffit pas : si l'index MANQUE (borne coupée au tir
+        # précédent), il se repose.
+        ancien = self._schema_of(ns_id)
+        def_errors = dsv2.validate_schema_def(schema, ancien)
         if def_errors:
             raise SchemaDefinitionError("schéma invalide : " + " ; ".join(def_errors))
         new_key = (schema or {}).get("key")
         new_key = new_key if isinstance(new_key, str) and new_key else None
-        # oto#82 : l'ancien schéma se lit ICI, avant le scan, parce que c'est la
-        # COMPARAISON des clés qui décide du travail — le calcul regardait ce qui EXISTE,
-        # pas ce qui a CHANGÉ, donc toute pose (un libellé) rescannait les lignes puis
-        # reposait l'index, et son `DROP` prend un verrou exclusif sur `datastore_rows`,
-        # commune à TOUS les tableaux. « Inchangée » ne suffit pas : si l'index MANQUE
-        # (borne coupée au tir précédent), il se repose.
-        ancien = self._schema_of(ns_id)
         ancienne_cle = (ancien or {}).get("key")
         ancienne_cle = ancienne_cle if isinstance(ancienne_cle, str) and ancienne_cle else None
         poser_index = bool(new_key) and (new_key != ancienne_cle
@@ -184,23 +189,12 @@ class SchemaOpsMixin:
         # ICI, à l'auteur du schéma, au moment où il le pose (les deux faces l'ont).
         warnings = [w for w in (index_differe, index_non_retire,
                                 dsv2.queue_release_warning(schema),
-                                # Clés de déclaration qu'oto n'interprète PAS (#316) :
-                                # posées, stockées, rendues fidèlement… et jamais lues.
-                                # Le cas réel : `enum:` au lieu d'`options:` sur trois
-                                # champs — 504 valeurs libres sur un tableau qui se
-                                # croyait contraint, sans le moindre signal. On ne
-                                # refuse pas (les consommateurs posent leurs propres
-                                # déclarations, que le datastore transporte), on DIT.
-                                dsv2.unknown_keys_warning(
-                                    dsv2.unknown_declaration_keys(schema)),
-                                # 08/09/2026 — l'angle MORT de l'avertissement
-                                # ci-dessus, montré par un consommateur : quand les
-                                # DEUX orthographes sont libres, aucune n'a de cousine
-                                # dans le vocabulaire d'oto, et la coquille sort dans
-                                # la même phrase que la clé voulue, indistincte.
-                                dsv2.cles_jumelles_warning(
-                                    dsv2.cles_libres_jumelles(
-                                        dsv2.unknown_declaration_keys(schema))),
+                                # Les clés inconnues sont REFUSÉES depuis le
+                                # 01/10/2026 — sauf celles déjà stockées, que ce geste
+                                # n'a pas touchées. Elles restent jusqu'à la migration
+                                # (`scripts/durcir_schemas.py`), et se DISENT : le
+                                # premier qui voudra les modifier sera refusé.
+                                cles_inconnues.residus_warning(schema),
                                 # #319 : des options déclarées mais qu'aucun régime ne
                                 # fait respecter — dit AU MOMENT où on pose le schéma,
                                 # pas six semaines plus tard devant des valeurs libres.

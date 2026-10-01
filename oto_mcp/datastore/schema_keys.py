@@ -1,42 +1,35 @@
-"""Les attributs qu'une colonne de schéma peut porter — **la déclaration**, une seule.
+"""Ce qu'un schéma de tableau peut porter — **la déclaration**, une seule, par niveau.
 
 Le validateur acceptait n'importe quelle clé. `readonly` passe, `editable` passe,
-`zorglub` passe : aucune n'est refusée, aucune n'est signalée. Le cas fondateur
-(oto#56, signal 658) est un agent qui pose `readonly: true` **et** `editable: true` en
-espérant que le second rouvre le premier pour un humain — `editable` n'existe nulle
-part, il n'a donc pas été « accepté puis ignoré » par une implémentation partielle, il a
-été accepté **parce que rien ne regardait**.
+`zorglub` passe. Le cas fondateur (oto#56, signal 658) est un agent qui pose
+`readonly: true` **et** `editable: true` en espérant que le second rouvre le premier
+pour un humain — `editable` n'existe nulle part, il a été accepté **parce que rien ne
+regardait**. ⚠️ Le cas grave est l'autre : qui écrit `read_only` au lieu de `readonly`
+croit avoir verrouillé sa colonne et n'a rien verrouillé.
 
-⚠️ **Le cas grave est l'autre** : qui écrit `read_only` au lieu de `readonly` croit
-avoir verrouillé sa colonne et n'a rien verrouillé. La faute de frappe est silencieuse
-**et** elle désarme le cran. Elle ne se découvre qu'à la première écriture qui passe là
-où on croyait un verrou.
+## Le vocabulaire est FERMÉ (01/10/2026)
+
+Pendant un mois, une clé inconnue n'a valu qu'un avertissement — et l'avertissement ne
+suffisait pas : mesuré le 01/10 sur 442 tableaux à schéma, 45 portaient des clés que
+personne ne lisait (`labels` sur une colonne, `enum` pour `options`, `note`, `editable`,
+`depends_on`…). Désormais une clé qu'un niveau n'admet pas est REFUSÉE à la pose comme
+au patch (`cles_inconnues.refus`, appelé par `validate_schema_def`), et ce qu'un
+consommateur veut ranger dans un schéma va dans `meta` — la zone libre, transportée,
+jamais lue, bornée en taille.
 
 ## Pourquoi une déclaration, et pas « ce que le validateur lit »
 
-Première idée, écartée **par la mesure** : dériver la liste en observant le validateur.
-Elle est fausse, et de peu — le schéma n'est pas seulement validé, il est **servi**.
-C'est un contrat que le dashboard et les fronts tiers lisent. Cinq attributs vivants y
-échappaient (`label`, lu 40 fois côté dashboard, `help`, `placeholder`, `hint`,
-`description`) : un avertissement bâti là-dessus aurait crié « `label` n'est lue par
-personne » sur presque tous les tableaux existants. Un faux positif dans un signal de
-qualité est pire que pas de signal — on apprend à l'ignorer, et il ne sert plus le jour
-où il a raison.
+Le schéma n'est pas seulement validé, il est **servi** : c'est un contrat que le
+dashboard lit. Une liste dérivée des `.get()` du validateur manquait `label` (lu par
+tous les écrans) et en comptait trop (`strict` ou `states` sur une colonne passaient,
+lus à un AUTRE niveau). Chaque attribut dit donc **qui le lit** : le validateur, le
+front, ou personne (`meta`, qui le dit dans sa description).
 
-D'où la forme retenue : **une déclaration, deux clients.** Le validateur en est le
-premier (il en dérive ses crans de niveau colonne), l'avertissement le second. Rien
-n'est recopié, et ce qui manquait cruellement est écrit ici : **qui lit quoi.**
-
-⚠️ **Les clés `front` sont déclarées à la main, et c'est une dette assumée.** Rien ne
-vérifie aujourd'hui que le dashboard lit bien celles-là et rien d'autre. Le palier
-suivant — pas ce lot — est un contrôle CÔTÉ DASHBOARD qui confronte les clés qu'il lit à
-cette déclaration ; c'est pour ça qu'elle est **servie** (`GET /api/datastore/schema/
-keys`) plutôt que gardée en Python.
-
-⚠️ Ce qui garde la moitié `validateur`, en revanche, est mécanique :
-`tests/test_schema_keys_oto56.py` observe le validateur et exige que **tout ce qu'il lit
-soit déclaré ici**. Un `f.get("nouveau")` ajouté sans déclaration rougit avant que
-l'avertissement ne se mette à mentir.
+⚠️ Les clés `front` sont confrontées au dashboard CÔTÉ DASHBOARD
+(`schema-keys-check.mjs`), contre la déclaration servie sur
+`GET /api/datastore/schema/keys`. La moitié `validateur` est gardée ici :
+`tests/test_schema_keys_oto56.py` exige que **tout ce que le validateur lit soit
+déclaré**, à chaque niveau — sinon le refus tomberait sur une clé lue.
 """
 from __future__ import annotations
 
@@ -60,8 +53,27 @@ class Cle:
     colonne_seulement: bool = False
 
 
-#: LA déclaration. Ajouter un attribut au schéma passe par cette liste — c'est ce qui
-#: rend l'avertissement vrai, et c'est aussi ce qui le rend maintenable.
+#: La ZONE LIBRE (01/10/2026). Un objet, admis à chaque niveau, transporté tel quel et
+#: jamais lu par la plateforme : c'est là qu'un consommateur range SES déclarations
+#: (`depends_on`, `explained_by`, des libellés de valeurs…) au lieu d'inventer une clé
+#: à côté de celles qu'oto interprète. Le vocabulaire est fermé ; `meta` est la porte.
+#: Seule sa TAILLE est bornée, sérialisée en JSON compact (UTF-8) : un schéma est relu
+#: à chaque écriture de ligne, une annotation n'a pas à le faire grossir sans limite.
+META = "meta"
+META_MAX_OCTETS = 4096
+
+
+def taille_json(valeur) -> int:
+    """La mesure de la borne : la taille d'une valeur en JSON compact, en octets UTF-8."""
+    return len(json.dumps(valeur, ensure_ascii=False, separators=(",", ":"))
+               .encode("utf-8"))
+
+_CLE_META = Cle(META, (), "zone libre : un objet transporté tel quel, jamais lu — SANS "
+                f"EFFET sur la plateforme ; au plus {META_MAX_OCTETS} octets en JSON")
+
+
+#: LA déclaration du niveau COLONNE. Ajouter un attribut au schéma passe par cette
+#: liste — sans elle, le refus des clés inconnues le rejette.
 CLES: tuple[Cle, ...] = (
     # — structure, lues des deux côtés —
     Cle("key", ("validateur", "front"), "le nom de la colonne (ou `colonne.couche`)"),
@@ -75,13 +87,6 @@ CLES: tuple[Cle, ...] = (
     Cle("agent_access", ("validateur", "front"),
         "à qui la colonne est servie : \"write\" (défaut), \"read\" (un agent la voit, "
         "n'écrit pas sa valeur), \"none\" (un agent ne la voit pas du tout)", True),
-    # ⚠️ Lue par PERSONNE depuis le 08/09/2026 — et c'est pour ça qu'elle est déclarée
-    # avec un tuple VIDE plutôt que retirée de la liste. Retirer la ligne la ferait
-    # passer pour une clé inconnue ; la garder sans lecteur la fait nommer pour ce
-    # qu'elle est : un attribut que 500 colonnes portent et que la plateforme n'applique
-    # plus. Le cran est remplacé par `donnees_d_origine`, déclaré à l'import.
-    Cle("origine", (), "SANS EFFET — le cran est remplacé par `donnees_d_origine`, "
-        "déclaré à l'import ; cet attribut n'est plus lu", True),
     Cle("max_length", ("validateur", "front"), "borne de longueur, publiée dans le contrat"),
     Cle("pattern", ("validateur",), "forme exigée de la valeur"),
     Cle("required_when", ("validateur", "front"), "obligatoire sous condition"),
@@ -113,10 +118,14 @@ CLES: tuple[Cle, ...] = (
     # — présentation, lues par le FRONT SEUL : invisibles au validateur, et c'est
     #   exactement ce qui a fait échouer la première forme de ce lot —
     Cle("label", ("front",), "le nom affiché de la colonne (le plus lu de tous)"),
-    Cle("description", ("front",), "le texte long de la colonne"),
-    Cle("help", ("front",), "l'aide affichée à la saisie"),
-    Cle("hint", ("front",), "l'indice court à côté du champ"),
-    Cle("placeholder", ("front",), "le texte fantôme d'un champ vide"),
+    # ⚠️ **Le seul texte d'aide.** `note`, `help`, `hint` et `placeholder` y ont été
+    # REPLIÉS (01/10/2026, `scripts/durcir_schemas.py`) : quatre noms pour un même
+    # geste, dont aucun n'était lu par un écran — le dashboard ne lit aucun des
+    # quatre, et un agent qui cherchait « l'aide de cette colonne » devait deviner
+    # laquelle était posée. Ils sont désormais REFUSÉS avec un renvoi ici.
+    Cle("description", ("front",),
+        "le texte long de la colonne — son aide, sa consigne de saisie : c'est LE "
+        "texte d'aide (`note`, `help`, `hint`, `placeholder` y sont repliés)"),
     # ⚠️ **`hidden` et `width` manquaient, et leur absence coûtait 87 % du bruit du
     # canal d'avertissement.** Mesuré le 10/09/2026 : sur 363 tableaux à schéma,
     # **224 (61 %) portaient un avertissement à la lecture** — et `hidden` (186) plus
@@ -151,28 +160,23 @@ CLES: tuple[Cle, ...] = (
     # quoi écrire.
     Cle("role", ("front",), "indication d'affichage, lue par un consommateur — oto "
         "ne l'interprète pas", False),
+    _CLE_META,
 )
-
-#: Tout ce qu'une colonne a le droit de porter. C'est CE nom que l'avertissement
-#: consulte — jamais une liste recopiée à côté.
-RECONNUES: frozenset[str] = frozenset(c.nom for c in CLES)
 
 #: Les clés qui n'ont de sens que sur une colonne, jamais sur une couche. Le validateur
 #: s'en sert pour refuser `colonne.comment: {readonly: true}` — c'est ce qui fait de
 #: cette déclaration le premier client de sa propre liste, et pas une documentation.
 COLONNE_SEULEMENT: tuple[str, ...] = tuple(c.nom for c in CLES if c.colonne_seulement)
 
-#: Ce que le validateur consulte réellement. Le banc de garde exige que ce soit un
-#: sous-ensemble de `RECONNUES` : une clé lue et non déclarée ferait mentir
-#: l'avertissement, et personne ne s'en apercevrait avant qu'un utilisateur ne le
-#: signale.
+#: Ce que le validateur consulte réellement au niveau colonne. Le banc de garde exige
+#: que chaque clé déclarée « validateur » soit lue par le code — sinon la liste servie
+#: promettrait un cran qui n'existe pas.
 LUES_PAR_LE_VALIDATEUR: frozenset[str] = frozenset(
     c.nom for c in CLES if "validateur" in c.lecteurs)
 
 #: La moitié que RIEN ne peut dériver ici : elle est lue dans un autre dépôt. C'est
 #: exactement ce qui manquait au vocabulaire dérivé du code, et ce qui lui faisait
-#: dénoncer `label` sur presque tous les tableaux. `schema.vocabulaire_vivant()` en
-#: fait l'union avec le dérivé — une seule référence pour les deux avertissements.
+#: dénoncer `label` sur presque tous les tableaux.
 LUES_PAR_LE_FRONT: frozenset[str] = frozenset(
     c.nom for c in CLES if "front" in c.lecteurs)
 
@@ -204,20 +208,8 @@ CLES_DU_CYCLE: tuple[Cle, ...] = (
     Cle("labels", ("front",),
         "`{état: \"libellé\"}` — le nom affiché de chaque étape ; présentation, "
         "jamais validation : aucune écriture ne le lit"),
+    _CLE_META,
 )
-
-#: Ce qu'un bloc `lifecycle` a le droit de porter.
-CYCLE_RECONNUES: frozenset[str] = frozenset(c.nom for c in CLES_DU_CYCLE)
-
-
-def servie() -> list[dict]:
-    """La déclaration, telle qu'elle part sur la face REST.
-
-    Servie plutôt que gardée en Python pour que le dashboard puisse un jour confronter
-    ce qu'il lit à ce qui est déclaré — c'est le seul chemin qui rendra la moitié
-    `front` aussi sûre que la moitié `validateur`."""
-    return [{"key": c.nom, "readers": list(c.lecteurs), "what": c.quoi,
-             "column_only": c.colonne_seulement} for c in CLES]
 
 
 # ── La TÊTE du schéma (#97) ──────────────────────────────────────────────────
@@ -231,8 +223,8 @@ def servie() -> list[dict]:
 # Mesuré sur le parc avant d'écrire cette liste — c'est ce qui la rend sûre plutôt que
 # devinée : sur 362 tableaux à schéma, **deux clés de tête seulement** sortent de ce que
 # le code lit, `description` (15 tableaux) et `semantic_search` (1). La déclaration
-# ci-dessous couvre donc l'existant légitime, et l'avertissement ne criera pas sur le
-# régime normal — celui qu'on apprend à ignorer.
+# ci-dessous couvre donc l'existant légitime (`semantic_search`, un paramètre d'appel,
+# est refusé avec sa propre phrase).
 
 CLES_DE_TETE: tuple[Cle, ...] = (
     Cle("fields", ("validateur", "front"), "les colonnes du tableau"),
@@ -249,10 +241,8 @@ CLES_DE_TETE: tuple[Cle, ...] = (
     # pas » n'est pas « personne ne la lit » — la leçon des six attributs portés comme
     # morts dont un seul l'était.
     Cle("description", ("front",), "la description du tableau, servie telle quelle"),
+    _CLE_META,
 )
-
-#: Ce qu'une tête de schéma a le droit de porter.
-TETE_RECONNUES: frozenset[str] = frozenset(c.nom for c in CLES_DE_TETE)
 
 #: ⚠️ Des PARAMÈTRES de `data_set_schema`, jamais des clés de schéma. Posés dans le
 #: schéma ils sont stockés, servis, et **sans effet** — l'auteur croit avoir réglé
@@ -264,43 +254,114 @@ PARAMETRES_HORS_SCHEMA: frozenset[str] = frozenset({"semantic_search", "datastor
                                                     "namespace", "owner"})
 
 
-# ── La fermeture du vocabulaire, niveau par niveau (01/10/2026) ───────────────
+# ── Les CINQ niveaux d'un schéma (01/10/2026) ─────────────────────────────────
 #
-# Ce que chacun des cinq niveaux d'un schéma ADMETTRA quand le vocabulaire se fermera
-# (oto#34, #35, #127) : la tête, une colonne, un sous-champ (`fields` d'un objet ou
-# d'un élément), l'élément d'une liste (`of`) et le bloc `lifecycle`. Ces listes
-# servent d'abord au rangement des schémas existants (`scripts/durcir_schemas.py`),
-# lancé AVANT la bascule ; le refus s'en servira ensuite, sans autre liste.
+# Un schéma n'a pas un vocabulaire, il en a cinq : sa tête, ses colonnes, les
+# sous-champs d'un objet (ou d'un élément de liste), l'élément d'une liste (`of`) et
+# le bloc `lifecycle`. Le relevé des clés inconnues n'en regardait que deux (la tête
+# et les colonnes), et il les jugeait contre une liste DÉRIVÉE des `.get()` du code —
+# qui en comptait trop : `strict`, `states` ou `terminal` posés sur une colonne
+# passaient en silence, parce qu'ils sont lus… à un autre niveau.
+#
+# Chaque niveau DÉCLARE donc ce qu'il admet, et c'est cette déclaration — jamais la
+# dérivation — qui fonde le refus (`cles_inconnues.refus`).
 
-#: La ZONE LIBRE : un objet, admis à chaque niveau, transporté tel quel, jamais lu.
-#: Seule sa TAILLE est bornée, sérialisée en JSON compact (UTF-8).
-META = "meta"
-META_MAX_OCTETS = 4096
-
-
-def taille_json(valeur) -> int:
-    """La mesure de la borne : la taille d'une valeur en JSON compact, en octets UTF-8."""
-    return len(json.dumps(valeur, ensure_ascii=False, separators=(",", ":"))
-               .encode("utf-8"))
-
-
-#: Quatre noms pour un même geste, repliés dans `description` — le seul texte d'aide.
-TEXTES_D_AIDE: tuple[str, ...] = ("note", "help", "hint", "placeholder")
-
-#: Ce qu'une colonne admet et qu'un sous-champ n'admet pas : sous un sous-record, rien
-#: ne lit le verrou, l'accès agent, le cycle de vie, la formule ni le titre de ligne.
+#: Ce qu'une colonne admet et qu'un sous-champ n'admet pas : sous un sous-record, ni le
+#: verrou (`readonly`), ni l'accès agent, ni le cycle de vie, ni la formule, ni le titre
+#: de ligne ne sont lus — la garde ne descend pas, l'écran non plus.
 PREMIER_NIVEAU_SEULEMENT: tuple[str, ...] = (
     "readonly", "agent_access", "lifecycle", "formula", "display")
 
-_COLONNE_ADMISES = (RECONNUES - set(TEXTES_D_AIDE) - {"origine"}) | {META}
+#: Un sous-champ — `fields` d'une colonne `object`, ou `of.fields` d'une liste de
+#: sous-records. DÉRIVÉ des colonnes : un attribut ajouté à une colonne descend seul.
+CLES_DE_SOUS_CHAMP: tuple[Cle, ...] = tuple(
+    c for c in CLES if c.nom not in PREMIER_NIVEAU_SEULEMENT)
 
-#: Ce que chaque niveau admettra.
-ADMISES: dict[str, frozenset[str]] = {
-    "tete": TETE_RECONNUES | {META},
-    "champ": _COLONNE_ADMISES,
-    "sous_champ": _COLONNE_ADMISES - set(PREMIER_NIVEAU_SEULEMENT),
-    # Le validateur ne lit d'un élément que le type, les options et les sous-champs.
-    "element": frozenset({"key", "type", "fields", "of", "options", "label",
-                          "description", META}),
-    "cycle": CYCLE_RECONNUES | {META},
+_COLONNE = {c.nom: c for c in CLES}
+
+#: L'élément d'une liste (`of`). Le validateur n'en lit que le type, les options et
+#: les sous-champs (`validation._type_error`) : une borne ou un motif posés ICI ne
+#: contraignent rien — ils vont sur un sous-champ.
+CLES_D_ELEMENT: tuple[Cle, ...] = (
+    Cle("key", ("validateur", "front"),
+        "le sous-champ qui identifie un élément d'une liste de sous-records"),
+    _COLONNE["type"], _COLONNE["fields"], _COLONNE["of"], _COLONNE["options"],
+    _COLONNE["label"], _COLONNE["description"], _CLE_META,
+)
+
+#: Les cinq niveaux, dans l'ordre où un schéma se lit. Les CLÉS de ce dict sont les
+#: noms internes ; `NIVEAUX_SERVIS` donne ceux du contrat REST.
+NIVEAUX: dict[str, tuple[Cle, ...]] = {
+    "tete": CLES_DE_TETE,
+    "champ": CLES,
+    "sous_champ": CLES_DE_SOUS_CHAMP,
+    "element": CLES_D_ELEMENT,
+    "cycle": CLES_DU_CYCLE,
 }
+
+#: Ce que chaque niveau admet — LA référence du refus et du script de migration.
+ADMISES: dict[str, frozenset[str]] = {
+    n: frozenset(c.nom for c in cles) for n, cles in NIVEAUX.items()}
+
+#: Où l'on est, dans une phrase de refus : « `x` n'est pas admise <ici> ».
+NOMS_DE_NIVEAU: dict[str, str] = {
+    "tete": "en tête du schéma",
+    "champ": "sur une colonne",
+    "sous_champ": "sur un sous-champ",
+    "element": "sur l'élément d'une liste (`of`)",
+    "cycle": "dans un bloc `lifecycle`",
+}
+
+#: Le nom d'un niveau sur le contrat REST (`GET /api/datastore/schema/keys`).
+NIVEAUX_SERVIS: dict[str, str] = {
+    "tete": "head", "champ": "field", "sous_champ": "subfield",
+    "element": "item", "cycle": "lifecycle",
+}
+
+#: Les fautes qui MÉRITENT d'être nommées : une clé inconnue proche d'une clé admise
+#: n'est presque jamais une déclaration délibérée. Le cas fondateur (#316) : trois champs
+#: posés avec `enum: [...]` au lieu d'`options: [...]`, et 504 valeurs libres sur un
+#: tableau qui se croyait contraint. Une correction n'est proposée que si sa cible est
+#: admise au niveau de la faute.
+FAUTES_CONNUES: dict[str, str] = {
+    "enum": "options", "enums": "options", "option": "options",
+    "choices": "options", "choix": "options", "values": "options",
+    "valeurs": "options", "allowed": "options",
+    "maxlength": "max_length", "max_len": "max_length", "maxLength": "max_length",
+    "requiredWhen": "required_when", "required_if": "required_when",
+    "mandatory": "required", "obligatoire": "required",
+    "champs": "fields", "columns": "fields",
+    "cle": "key", "name": "key", "nom": "key",
+    "read_only": "readonly", "readOnly": "readonly", "writable_by": "readonly",
+}
+
+#: Quatre noms pour un même geste, repliés dans `description` le 01/10/2026 et
+#: refusés depuis, avec un renvoi vers elle. L'ORDRE est celui du repli.
+TEXTES_D_AIDE: tuple[str, ...] = ("note", "help", "hint", "placeholder")
+
+#: Des clés qui ont EXISTÉ et que plus rien ne lit : leur refus dit pourquoi, et où
+#: est passé ce qu'elles faisaient — « clé inconnue » ferait chercher une faute de
+#: frappe sur un mot qui était juste.
+CLES_RETIREES: dict[str, str] = {
+    "origine": ("retirée le 08/09/2026, elle n'est plus lue : l'origine d'une valeur "
+                "se déclare par l'appel qui APPORTE la donnée "
+                "(`data_write(donnees_d_origine=true)`), plus par le schéma"),
+}
+
+
+def _entree(c: Cle) -> dict:
+    return {"key": c.nom, "readers": list(c.lecteurs), "what": c.quoi,
+            "column_only": c.colonne_seulement}
+
+
+def servie() -> dict:
+    """La déclaration, telle qu'elle part sur la face REST.
+
+    `keys` est le niveau COLONNE (le contrat que le dashboard confronte depuis le
+    06/09, `schema-keys-check.mjs`) ; `levels` sert les CINQ niveaux, colonne
+    comprise. Servie plutôt que gardée en Python pour qu'un front confronte ce qu'il
+    lit à ce qui est déclaré."""
+    return {"keys": [_entree(c) for c in CLES],
+            "levels": {NIVEAUX_SERVIS[n]: [_entree(c) for c in cles]
+                       for n, cles in NIVEAUX.items()},
+            "meta_max_bytes": META_MAX_OCTETS}

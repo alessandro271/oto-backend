@@ -104,7 +104,7 @@ def _lire(monkeypatch, schema):
 
 
 def test_le_schema_servi_avec_une_cle_morte_porte_son_avertissement(monkeypatch):
-    """#416 : `unknown_declaration_keys` existait déjà, mais ne parlait qu'à la POSE
+    """#416 : le relevé des clés inconnues existait déjà, mais ne parlait qu'à la POSE
     — et un schéma déjà pollué ne se repose jamais. Trois tableaux mesurés en
     production le 28/08 (9 454 lignes) servaient un `enum` résiduel à côté de
     l'`options` qui fait foi, sans un mot."""

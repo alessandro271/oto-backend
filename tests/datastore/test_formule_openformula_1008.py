@@ -287,7 +287,7 @@ def test_colonne_formule_est_readonly_implicite():
 
 def test_colonne_formule_apparait_dans_les_cles_reconnues():
     from oto_mcp.datastore import schema_keys
-    assert "formula" in schema_keys.RECONNUES
+    assert "formula" in schema_keys.ADMISES["champ"]
 
 
 # ── recalcul à l'écriture (seam _check_row, via le mixin réel) ───────────────

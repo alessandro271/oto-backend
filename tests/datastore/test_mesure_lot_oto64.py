@@ -41,7 +41,6 @@ SCHEMA = {
     "fields": [
         {"key": "ref", "type": "text"},
         {"key": "statut", "type": "text", "role": "status",
-         "values": ["neuf", "en_cours", "gagne", "perdu"],
          "lifecycle": {"states": ["neuf", "en_cours", "gagne", "perdu"],
                        "transitions": {"neuf": ["en_cours"],
                                        "en_cours": ["gagne", "perdu"]},
@@ -150,7 +149,6 @@ def test_la_SORTIE_d_un_etat_terminal_est_DEJA_declarable(live):
     st.set_schema(ns, {"key": "ref", "fields": [
         {"key": "ref", "type": "text"},
         {"key": "statut", "type": "text", "role": "status",
-         "values": ["neuf", "en_cours", "perdu"],
          # `perdu` reste déclaré terminal, ET porte une transition de retour.
          "lifecycle": {"states": ["neuf", "en_cours", "perdu"],
                        "transitions": {"neuf": ["en_cours"],

@@ -118,11 +118,26 @@ def normalize_name(name: object) -> str:
     return n
 
 
-def validate_slots(raw: object) -> list[dict]:
+def schema_du_slot(slots: object, name: str) -> Optional[dict]:
+    """Le schéma CIBLE que déclare le slot `name` d'une liste de slots STOCKÉE, ou
+    `None`. Les noms stockés sont déjà normalisés (`validate_slots`)."""
+    for s in slots if isinstance(slots, list) else []:
+        if isinstance(s, dict) and s.get("name") == name \
+                and isinstance(s.get("schema"), dict):
+            return s["schema"]
+    return None
+
+
+def validate_slots(raw: object, anciens: object = None) -> list[dict]:
     """Valide et normalise une déclaration de slots. Lève `ValueError` avec un
     message ACTIONNABLE (structure, type inconnu, nom invalide/dupliqué) — les
     incohérences DOUCES (connecteur inconnu du registre, slot jamais référencé)
-    sont des warnings de `slots_check`, jamais un refus (soft-binding 0014)."""
+    sont des warnings de `slots_check`, jamais un refus (soft-binding 0014).
+
+    `anciens` = les slots STOCKÉS de la procédure : le schéma cible d'un slot se juge
+    comme une pose de schéma, et une clé inconnue déjà stockée dans le slot du même
+    nom, inchangée, n'est pas posée par ce geste (`cles_inconnues`, 01/10/2026) —
+    sans quoi une procédure pas encore migrée ne s'enregistrerait plus."""
     if raw is None:
         return []
     if not isinstance(raw, list):
@@ -166,7 +181,7 @@ def validate_slots(raw: object) -> list[dict]:
             if not isinstance(schema, dict):
                 raise ValueError(f"`slots[{i}].schema` doit être un objet schéma datastore.")
             from .datastore import schema as dsv2
-            errors = dsv2.validate_schema_def(schema)
+            errors = dsv2.validate_schema_def(schema, schema_du_slot(anciens, name))
             if errors:
                 raise ValueError(
                     f"`slots[{i}].schema` invalide : " + " ; ".join(errors))

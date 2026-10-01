@@ -225,7 +225,7 @@ def _table_a_cran():
     ns_id = db.create_datastore("user", "sub-test", ns)
     st = _store()
     st.set_schema(ns, {"key": "siren", "strict": True, "fields": [
-        {"key": "siren", "type": "text", "origine": "system"},
+        {"key": "siren", "type": "text"},
         {"key": "libre", "type": "text"}]})
     return st, ns, ns_id
 

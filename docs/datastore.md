@@ -713,28 +713,12 @@ chose portent en plus un **témoin** qui doit PASSER : `strict` n'interdit rien 
 lui-même, et sans témoin on l'annoncerait dès que la conformité de type est vérifiée,
 c'est-à-dire vrai par accident.
 
-La moitié NÉGATIVE du signal — « `pattern` reçu : stocké mais non appliqué » — était
-déjà servie depuis le 13/08 par `unknown_keys_warning` (#316, avec near-miss) et
-`options_not_enforced_warning` (#319). `enforced` en est la moitié positive, la seule
-qu'un client puisse vérifier contre le serveur qui lui répond.
-
-⚠️ **L'angle MORT de `unknown_keys_warning`, comblé le 08/09/2026 par
-`cles_jumelles_warning`** (`datastore/cles_jumelles.py`). Son near-miss compare une clé
-morte au vocabulaire d'oto : il est aveugle par construction quand les DEUX orthographes
-sont libres. Cas apporté par un consommateur : `proprietaire` sur une colonne,
-`propietaire` sur une autre — aucune n'a de cousine chez oto, les deux ressortent dans
-la même phrase, `near_miss` vide, rien ne distingue la clé voulue de la coquille. Ce que
-coûte la coquille : la colonne mal étiquetée n'est pas EN ERREUR devant le consommateur
-qui la regroupe, elle est **silencieusement ABSENTE** — un décompte servi devient faux et
-garde l'air juste. L'axe mesuré est la **coexistence**, pas l'orthographe : oto ne tient
-pas le dictionnaire de ses consommateurs, mais il peut constater que deux clés libres à
-un caractère l'une de l'autre vivent dans le même schéma. Seuil volontairement étroit —
-insertion/suppression et transposition SEULEMENT, jamais la substitution (`label_fr` /
-`label_en`, `seuil_min` / `seuil_max` sont sains), et cinq caractères minimum. ⚠️ Mesuré
-avant de servir, sur les **332 schémas du parc** : 204 portent des clés libres, **zéro
-paire signalée** — la garde est préventive et ne crie sur rien d'existant. Un faux
-positif dans un signal de qualité est pire que pas de signal : on apprend à l'ignorer,
-et il ne sert plus le jour où il a raison.
+La moitié NÉGATIVE du signal — « cette clé, je ne la connais pas » — est depuis le
+01/10/2026 un REFUS (§ « Le vocabulaire d'un schéma est fermé ») ; `enforced` en est la
+moitié positive, la seule qu'un client puisse vérifier contre le serveur qui lui répond.
+⚠️ `cles_jumelles_warning` (deux clés libres à un caractère l'une de l'autre) est
+RETIRÉ avec la fermeture : une clé libre ne peut plus être posée hors de `meta`, que la
+plateforme ne lit pas.
 
 **Une ligne créée sans la clé métier le DIT (#390, 3ᵉ demande).** Les deux premières
 sont servies depuis le 13-15/08 : le bail protège l'ÉCRITURE et pas seulement
@@ -1084,8 +1068,9 @@ de fin de passage détectait après coup.
   automatiquement** : une valeur qu'un agent écrase n'est plus retenue. Mesuré au
   moment du retrait : 500 colonnes déclaraient le cran sur 10 tableaux, et 28 799
   cases portaient une couche `origine` — **ces données ne bougent pas**, elles restent
-  lues et servies ; c'est le mécanisme qui part. Une déclaration qui subsiste devient
-  une clé non interprétée, signalée comme telle. `system_origin_fields()` est GARDÉE
+  lues et servies ; c'est le mécanisme qui part. Une déclaration `origine` est REFUSÉE
+  depuis le 01/10/2026, et celles qui subsistaient sont retirées par
+  `scripts/durcir_schemas.py`. `system_origin_fields()` est GARDÉE
   et rendue vide plutôt que supprimée : ses six appelants s'éteignent d'eux-mêmes, au
   lieu de disparaître un par un au risque d'en oublier un.
   ⚠️ **Ce que le cran faisait encore la veille du retrait** : sur un tableau de
@@ -1433,8 +1418,8 @@ distincts — « pas éditable par l'agent » et « pas même montrée ». Un `h
 les aurait soudés : impossible ensuite de servir en lecture une colonne qu'un agent doit
 CONSULTER pour décider sans avoir le droit de la réécrire.
 
-⚠️ **La valeur inconnue est refusée à la pose**, contrairement au vocabulaire des CLÉS
-qui reste ouvert (on signale, on n'empêche pas). Un `agent_access: "non"` retomberait en
+⚠️ **La valeur inconnue est refusée à la pose**, comme l'est depuis le 01/10/2026 une
+CLÉ que son niveau n'admet pas. Un `agent_access: "non"` retomberait en
 silence sur le défaut et le propriétaire croirait sa colonne fermée : c'est mot pour mot
 la plaie de `read_only` écrit pour `readonly`, à ceci près qu'ici on peut la fermer.
 ⚠️ **La clé métier ne se ferme pas** — elle figure dans chaque écriture pour désigner la
@@ -2179,6 +2164,7 @@ mêmes fichiers en une semaine (gels en série, un incident de tree). Où poser 
 | `datastore/hors_schema.py` | une clé que la déclaration ne nomme pas — signalée en haut, refusée dessous |
 | `datastore/champs_reserves.py` | `readonly` / `origine: system` / `agent_access`, et le préavis daté |
 | `datastore/definition.py` | valider le SCHÉMA lui-même, à la pose |
+| `datastore/cles_inconnues.py` | refuser une clé que son niveau n'admet pas (`schema_keys.ADMISES`) |
 | `datastore/couches_exigees.py` | `required_layers` — ce que la valeur doit porter avec elle |
 | `datastore/validation.py` | VALIDER une ligne à l'écriture, et ses textes de refus |
 | `datastore/effacements.py` | fusionner / retirer un format, et le relevé de ce qui a disparu |
@@ -2207,9 +2193,9 @@ bancs visaient encore la porte d'entrée. Ils frapperont la prochaine :
 
 - **`vocabulaire._read_keys` scanne une liste de FICHIERS**, pas de clés : c'est ainsi
   que le serveur établit ce qu'il interprète, en lisant son propre source. Un module
-  qui se met à lire un attribut de colonne doit y être ajouté — sinon le dérivé le
-  déclare mort et l'avertissement accuse une clé parfaitement lue. Un déplacement pur
-  suffit à déclencher ça, sans qu'aucun banc ne rougisse.
+  qui se met à lire un attribut de colonne doit y être ajouté — sinon la garde de la
+  déclaration (`tests/test_schema_keys_oto56.py`) ne le voit pas, et une clé lue
+  pourrait n'être admise nulle part, donc refusée à la pose.
 - **Un banc qui remplace une fonction SUR LA FAÇADE ne mord plus.** Une ré-exportation
   est une seconde référence vers le même objet : le module appelant, lui, a importé
   l'originale. Cinq bancs ont rougi bruyamment ; le vrai danger est celui qui reste
@@ -3296,3 +3282,71 @@ portaient déjà une valeur que la garde condamnait), le type déclaré et la cl
   entière, sans plafond.
 
 Banc : `tests/datastore/test_violations_existantes_479.py`.
+
+
+## Le vocabulaire d'un schéma est fermé (oto#34, oto#35, oto#127, 01/10/2026)
+
+**Avant** : une clé inconnue était acceptée, puis SIGNALÉE (`unknown_keys_warning`,
+#316/oto#56). Mesuré le 01/10/2026 sur 442 tableaux à schéma : 45 portaient des clés
+que personne ne lisait — `labels` sur une colonne (31 tableaux), `explained_by` (29),
+`editable` (26), `depends_on` (25), `enum` pour `options` (23), `note` (12)… et
+`origine` (29), déclarée sans lecteur depuis le 08/09. L'avertissement ne suffisait
+pas : il parle sur un appel qui réussit, et la liste qui le fondait — dérivée des
+`.get()` du code — en comptait trop (`strict` ou `states` posés sur une colonne
+passaient, lus à un AUTRE niveau).
+
+**Désormais** : chaque niveau DÉCLARE ce qu'il admet (`schema_keys.ADMISES`) — la tête,
+une colonne, un sous-champ (dérivé de la colonne, moins
+`PREMIER_NIVEAU_SEULEMENT` : `readonly`, `agent_access`, `lifecycle`, `formula`,
+`display`), l'élément d'une liste (`of` : `key`, `type`, `fields`, `of`, `options`,
+`label`, `description`) et le bloc `lifecycle`. Une clé absente de son niveau est
+REFUSÉE par `cles_inconnues.refus`, appelé en tête de `validate_schema_def` — donc à la
+pose et au patch, MCP et REST. Le refus (400 `invalid_schema` / `invalid_patch_schema`)
+nomme le chemin (`fields.contacts.of.fields.email`), la clé, et où elle va : la clé
+proche (`FAUTES_CONNUES`, puis `phrases_de_refus.cle_la_plus_proche`), un autre niveau
+(`states` → `lifecycle.states`), un paramètre d'appel (`semantic_search`), `description`
+pour un texte d'aide, une clé retirée (`origine`), sinon la liste du niveau et `meta`.
+Les listes sont servies par niveau sur `GET /api/datastore/schema/keys` (`levels` ;
+`keys` reste le niveau colonne, que le dashboard confronte).
+
+- **`meta`, la zone libre** : un objet, admis à chaque niveau (cycle et élément
+  compris — le rangement en a besoin pour `lifecycle.initial`), transporté tel quel,
+  jamais lu, borné à `META_MAX_OCTETS` = **4096 octets** de JSON compact (UTF-8). Un
+  schéma est relu à chaque écriture de ligne : une annotation n'a pas à le faire
+  grossir sans limite.
+- **Les textes d'aide** : `description` est le seul. `note`, `help`, `hint` et
+  `placeholder` (aucun lu par le dashboard, vérifié sur son `origin/main`) y sont
+  repliés par la migration et refusés depuis.
+- ⚠️ **Le refus porte sur ce que le GESTE pose ou modifie, jamais sur ce qui est
+  stocké.** `validate_schema_def(schema, ancien)` reçoit le schéma en place
+  (`set_schema` le lit AVANT de valider) ; une clé inconnue qui y figure au même chemin
+  avec la même valeur passe. Sans quoi le patch d'une AUTRE colonne — qui repasse le
+  schéma fusionné par `set_schema` — serait refusé sur tout tableau pas encore migré.
+  Modifier une clé stockée (y compris la passer à `null`) est un geste : refusé ; la
+  retirer passe par `remove_attrs`. Ce qui reste stocké est dit en `warning`
+  (`residus_warning`), à la pose comme à la lecture (`data_get_schema`), avec la clé qui
+  fait foi quand sa cousine est posée à côté (`enum` → `options`).
+- `FILE_KEYS` perd `lease` et `claims` : aucune déclaration ne les admettait, aucun
+  schéma ne les portait, et un marqueur que nul ne peut poser ne désigne rien.
+
+**La migration** (`scripts/durcir_schemas.py`), lancée une fois par l'exploitation
+depuis le commit qui l'apporte, AVANT la bascule — jamais au boot. À blanc par défaut,
+`--appliquer` pour écrire. Elle replie les textes d'aide, supprime `enum` quand
+`options` existe (renomme sinon — ce qui ARME la liste sur un tableau strict : la pose
+rend le relevé des lignes qui la violent), supprime `origine` et `semantic_search` en
+tête, et range TOUTE autre clé inconnue dans `meta` au même niveau — jamais convertie en
+clé active. Chaque schéma s'écrit par `DatastorePg.set_schema` (store système : sans
+principal, résolu par numéro), journalisé dans `tool_calls` (`data_set_schema`, `sub`
+nul, `args.migration_systeme`). Un tableau qui demanderait un arbitrage (`meta` qui
+n'est pas un objet, conflit de clé dans `meta`, borne dépassée) est listé, jamais
+écrit ; un schéma qui a bougé depuis l'inventaire est sauté.
+
+**Les schémas cibles des slots de procédure** (`org_instructions.slots[*].schema`, ADR
+0035 × 0046) suivent les mêmes règles : `slots.validate_slots` les juge comme une pose,
+contre les slots STOCKÉS de la procédure (le slot du même nom ; une restauration
+`from_version` est jugée contre la version restaurée) — une procédure pas encore
+migrée reste enregistrable. La migration les range aussi, par `org_store.set_instruction`
+(nouvelle version, ancienne gardée dans `org_instruction_revisions`, `set_by` =
+`migration:durcir_schemas`, `expected_version` contre l'écrasement) ; une procédure
+retirée est listée, jamais écrite. Ce schéma est provisionné tel quel sur le tableau
+lié (`provision_tableau_schema`) : non rangé, il réintroduirait l'ancien vocabulaire.

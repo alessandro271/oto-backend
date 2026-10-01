@@ -51,7 +51,7 @@ SCHEMA = {
         {"key": "siren", "type": "text"},
         {"key": "raison_sociale", "type": "text"},
         {"key": "entreprise_email", "type": "email"},
-        {"key": "moteur", "type": "enum", "enum": ["mistral", "sonnet"]},
+        {"key": "moteur", "type": "enum", "options": ["mistral", "sonnet"]},
         {"key": "origine_ligne", "type": "text"},
     ],
 }

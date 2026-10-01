@@ -25,6 +25,7 @@ jamais par le validateur.
 """
 from __future__ import annotations
 
+from oto_mcp.datastore import cles_inconnues
 from oto_mcp.datastore import schema as dsv2
 from oto_mcp.datastore import schema_keys as sk
 
@@ -35,39 +36,37 @@ def test_elles_sont_declarees_FRONT_et_pas_validateur():
     """⚠️ La nuance porte tout : le serveur ne les applique pas, et le prétendre serait
     le défaut inverse. Elles sont lues en aval, comme `label`."""
     for cle in PRESCRITES:
-        assert cle in sk.RECONNUES, f"`{cle}` est prescrite par le produit"
+        assert cle in sk.ADMISES["champ"], f"`{cle}` est prescrite par le produit"
         assert cle in sk.LUES_PAR_LE_FRONT, f"`{cle}` est lue par le front"
         assert cle not in sk.LUES_PAR_LE_VALIDATEUR, (
             f"`{cle}` ne contraint RIEN côté serveur — la déclarer appliquée serait "
             f"la même faute, dans l'autre sens")
 
 
-def test_un_schema_qui_les_porte_ne_declenche_plus_rien():
-    """Le cas des 194 tableaux : ils suivaient la consigne et recevaient un reproche."""
+def test_un_schema_qui_les_porte_est_admis_et_ne_dit_rien():
+    """Le cas des 194 tableaux : ils suivaient la consigne et recevaient un reproche.
+    Depuis la fermeture du vocabulaire (01/10/2026), le reproche serait un REFUS."""
     S = {"fields": [{"key": "ident", "type": "text", "hidden": True, "width": "half"}]}
-    assert dsv2.unknown_declaration_keys(S) == [], "aucune clé à dénoncer"
-    # ⚠️ La fonction rend `""` (faux) et non `None` quand il n'y a rien à dire : on
-    # juge la VÉRACITÉ, pas l'identité — sinon le banc rougirait sur une convention.
-    assert not dsv2.unknown_keys_read_warning(dsv2.unknown_declaration_keys(S))
+    assert dsv2.validate_schema_def(S) == []
+    assert cles_inconnues.residus_warning(S) is None
 
 
 def test_le_SIGNAL_survit_a_la_desaturation():
-    """⚠️ L'autre moitié de l'exigence, et elle compte autant : un correctif qui aurait
-    fait taire le bruit ET le signal aurait été pire que le défaut. `enum` à côté d'un
-    `options` qui fait foi reste dénoncé — 26 tableaux du parc, et c'est la clé qui a
-    laissé passer 504 valeurs libres."""
+    """⚠️ L'autre moitié : `enum` à côté d'un `options` qui fait foi reste dénoncé —
+    refusé s'il est posé, dit à la lecture s'il est déjà stocké, avec la clé qui
+    décide."""
     S = {"fields": [{"key": "statut", "type": "enum",
                      "enum": ["a", "b"], "options": ["a", "b", "c"],
                      "hidden": True, "width": "full"}]}
-    entrees = dsv2.unknown_declaration_keys(S)
-    assert entrees, "un `enum` résiduel doit rester dénoncé"
-    assert any((e.get("near_miss") or {}).get("enum") == "options" for e in entrees), (
-        "et le near-miss doit dire laquelle des deux décide")
-    assert dsv2.unknown_keys_read_warning(entrees), "l'avertissement doit être servi"
+    errs = dsv2.validate_schema_def(S)
+    assert len(errs) == 1 and "voulais-tu `options` ?" in errs[0], errs
+    w = cles_inconnues.residus_warning(S)
+    assert w and "`fields.statut.enum`" in w and "Ce qui fait foi : `options`" in w
 
 
 def test_ce_qui_reste_denonce_ne_contient_PAS_les_prescrites():
-    """Le canal redevient lisible : ce qui parle encore est ce qui mérite d'être lu."""
+    """Le canal reste lisible : ce qui parle est ce qui mérite d'être lu."""
     S = {"fields": [{"key": "x", "hidden": True, "width": "full", "zorglub": 1}]}
-    dites = {k for e in dsv2.unknown_declaration_keys(S) for k in (e.get("keys") or [])}
-    assert dites == {"zorglub"}, dites
+    errs = dsv2.validate_schema_def(S)
+    assert len(errs) == 1 and "`zorglub`" in errs[0], errs
+    assert "hidden" not in errs[0].split(" — ")[0] and "width" not in errs[0].split(" — ")[0]

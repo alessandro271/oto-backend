@@ -117,4 +117,4 @@ def test_declaree_front_seul_dans_la_liste_fermee():
     # tout ce que les modules du cycle de vie lisent dans le bloc y est déclaré
     for nom in ("states", "transitions", "terminal", "max_claims", "abandon_state",
                 "claimable", "labels"):
-        assert nom in K.CYCLE_RECONNUES, nom
+        assert nom in K.ADMISES["cycle"], nom

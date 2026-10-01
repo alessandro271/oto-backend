@@ -38,8 +38,8 @@ ownership) — un tableau hors périmètre répond 404, comme partout dans le da
 from __future__ import annotations
 
 from ...datastore.identite import Adresse
-from ...datastore import cles_inconnues
 from ...datastore import upsert_implicite as upi
+from ...datastore.schema_keys import META_MAX_OCTETS as _META_MAX
 
 from typing import Optional
 
@@ -166,28 +166,22 @@ class PatchSchemaResult(BaseModel):
     # Ce qui a été examiné : `{rows_examined, rows_total, complete}`. `complete: false`
     # = plafond de lignes atteint, les comptes sont des PLANCHERS.
     existing_violations_scope: Optional[dict] = None
-    # Avertissements héréités de la pose du schéma (file de travail sans état
-    # terminal, bornes posées sur des données hors borne, colonnes orphelines).
+    # Avertissements hérités de la pose du schéma (file de travail sans état
+    # terminal, bornes posées sur des données hors borne, colonnes orphelines, clés
+    # inconnues encore stockées).
     warning: Optional[str] = None
-    # Les attributs de colonne que PERSONNE ne lit (oto#56). `None` = rien à
-    # signaler ; la clé est toujours là, pour distinguer « rien à dire » d'un serveur
-    # trop vieux. Avertissement, jamais refus : refuser durcirait un contrat servi et
-    # casserait les schémas qui portent déjà des clés mortes.
-    unknown_keys_warning: Optional[str] = None
 
 
 def _patch_schema(ctx: ResolvedCtx, inp: PatchSchemaInput) -> dict:
     datastore = access.resolve_datastore_ref(inp.datastore)
     try:
-        # Même avertissement qu'à la pose (oto#56) : un patch qui ajoute une colonne
-        # peut porter la même faute de frappe, et c'est le chemin d'édition RECOMMANDÉ
-        # — le rater ici laisserait la classe ouverte sur la route la plus empruntée.
-        return {**make_store(ctx.sub).patch_schema(
+        # Une clé inconnue posée ou modifiée par le patch est REFUSÉE par le store :
+        # le schéma fusionné repasse par `set_schema`, donc par `validate_schema_def`.
+        return make_store(ctx.sub).patch_schema(
             datastore, fields=inp.fields, remove=inp.remove,
             remove_attrs=inp.remove_attrs,
             strict=inp.strict, key=inp.key, key_required=inp.key_required,
-            unknown_fields=inp.unknown_fields),
-            **cles_inconnues.check({"fields": inp.fields or []})}
+            unknown_fields=inp.unknown_fields)
     except DatastoreNotFound:
         raise AuthzDenied(404, "datastore_not_found")
     except DatastoreReadOnly:
@@ -261,8 +255,8 @@ CAPABILITIES += [
             "in place (layers such as `.comment` stay open) — the table's OWNER, or "
             "whoever GOVERNS it, can still replace such a value with "
             "`data_write(readonly_override=true)`, for that one call and journaled, "
-            "so locking a column never means nobody can correct it again — "
-            "On the `role:\"status\"` field, `lifecycle` merges KEY BY KEY and its "
+            "so locking a column never means nobody can correct it again. "
+            "On the field that carries `lifecycle`, the block merges KEY BY KEY and its "
             "`transitions` merge STATE BY STATE: naming one state leaves the others "
             "alone, so declaring a way OUT of a terminal state is one line and costs "
             "nothing else. Taking one out is explicit — `transitions: {\"lost\": null}` "
@@ -270,9 +264,15 @@ CAPABILITIES += [
             "table. `labels` (the displayed name of each state) merges STATE BY STATE "
             "too: `lifecycle: {labels: {\"lost\": \"Lost\"}}` names that step and "
             "keeps the others' labels, `{\"lost\": null}` drops that one label. "
-            "`origine: \"system\"` "
-            "makes the platform keep the previous value in `<field>.origine` — `null` "
-            "lifts it without touching the rows. Field ORDER "
+            "A key that its level does not admit (head, column, sub-field, `of`, "
+            "`lifecycle`) is REFUSED when the patch posts or changes it — the refusal "
+            "names the path, the key and the closest known one; an unknown key "
+            "ALREADY stored and left untouched does not block a patch of another "
+            "column, and `remove_attrs` takes it off. Your own annotations go in "
+            "`meta` (an object, at every level, carried as is, never read, at most "
+            + str(_META_MAX) + " bytes as JSON; a patch replaces it whole); help "
+            "text goes in `description` (`note`, `help`, `hint`, `placeholder` are "
+            "refused). Field ORDER "
             "is never reshuffled. Returns the resulting schema "
             "plus `{added, updated, removed}` and any `warning` the schema raises, "
             "and `existing_violations`: per path (`contacts[].email`), how many rows "
