@@ -84,7 +84,7 @@ def coffre(monkeypatch):
     # connecteurs personal_cross_org : il touche la base, on le neutralise ici. C'est
     # aussi ce qui documente la limite de la sonde préchargée — ce barreau-là n'est pas
     # préchargeable sans toucher au walker, et on refuse d'y toucher.
-    monkeypatch.setattr(access.cascade, "personal_instance_org",
+    monkeypatch.setattr(access, "personal_instance_org",
                         lambda sub, provider, exclude_org=None: None)
     return etat
 
@@ -156,8 +156,8 @@ def test_le_quota_reste_traduit_par_le_SEAM_pas_par_l_appelant(coffre, monkeypat
     fonction : passer la sonde EN PARAMÈTRE le garde, et c'est pour ça que le paramètre
     existe plutôt qu'un accès direct au walker.
     """
-    monkeypatch.setattr(access.scope, "current_org", lambda s: 2)
-    monkeypatch.setattr(access.scope, "current_group", lambda s: None)
+    monkeypatch.setattr(access, "current_org", lambda s: 2)
+    monkeypatch.setattr(access, "current_group", lambda s: None)
     monkeypatch.setattr(db, "get_usage_today", lambda s, p: 999)
     sonde = access.preloaded_presence_probe("u1", org=2, groups=[])
     from dataclasses import replace

@@ -112,7 +112,7 @@ def test_single_account_connector_has_no_multi_account_section():
 def test_ambiguity_names_the_accounts_without_gender_agreement(monkeypatch):
     monkeypatch.setattr(credentials_store, "list_accounts", lambda et, eid, con: [
         {"account": "alpha", "meta": {}}, {"account": "beta", "meta": {}}])
-    monkeypatch.setattr(cascade, "account_noun", lambda p: "société")
+    monkeypatch.setattr(access, "account_noun", lambda p: "société")
     with pytest.raises(McpError) as e:
         cascade._shared_auto_account("org", "1", "zoho", "pour ton org", scope="org")
     msg = e.value.error.message

@@ -69,16 +69,16 @@ def test_une_exception_du_palier_plateforme_ne_ramasse_pas_le_secret(monkeypatch
     pendant que la frame tient le grant plateforme. On sérialise ensuite chaque
     frame du traceback comme le ferait un collecteur d'erreurs, et le secret ne
     doit s'y trouver nulle part."""
-    from oto_mcp import session_org
-    from oto_mcp.access import cascade, quotas, rbac, resolve, scope
+    from oto_mcp import access, session_org
+    from oto_mcp.access import cascade, rbac, resolve
 
     SECRET = "sk_live_TRESSECRET"
     monkeypatch.setattr(session_org, "current_call_instance", lambda: None)
-    monkeypatch.setattr(scope, "project_pinned_instance", lambda p: None)
-    monkeypatch.setattr(scope, "current_org", lambda s: 1)
-    monkeypatch.setattr(cascade, "_is_multi_account", lambda p, o: False)
+    monkeypatch.setattr(access, "project_pinned_instance", lambda p: None)
+    monkeypatch.setattr(access, "current_org", lambda s: 1)
+    monkeypatch.setattr(access, "_is_multi_account", lambda p, o: False)
     monkeypatch.setattr(
-        cascade, "cascade_winner",
+        access, "cascade_winner",
         lambda *a, **k: cascade.CascadeRung(
             "platform", "platform", "cle-plateforme",
             {"secret": SECRET, "label": "cle-plateforme", "daily_quota": 10}))
@@ -86,7 +86,7 @@ def test_une_exception_du_palier_plateforme_ne_ramasse_pas_le_secret(monkeypatch
     def _panne(sub, provider):
         raise RuntimeError("compteur de quota indisponible")
 
-    monkeypatch.setattr(quotas, "usage_today", _panne)
+    monkeypatch.setattr(access, "usage_today", _panne)
 
     tb = None
     try:

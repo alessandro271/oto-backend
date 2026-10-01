@@ -41,8 +41,8 @@ def _platform_only(monkeypatch):
     """Aucune clé BYO (user/group/org) ni grant nominatif → seule l'instance
     `open` du coffre peut gagner (ADR 0044 §F)."""
     monkeypatch.setattr(db, "get_member_api_key", lambda sub, org, p: None)
-    monkeypatch.setattr(access.scope, "current_group", lambda sub: None)
-    monkeypatch.setattr(access.scope, "current_org", lambda sub: None)
+    monkeypatch.setattr(access, "current_group", lambda sub: None)
+    monkeypatch.setattr(access, "current_org", lambda sub: None)
     monkeypatch.setattr(credentials_store, "list_platform_instances",
                         lambda p: _INSTANCE)
     monkeypatch.setattr(credentials_store, "get_credential",
@@ -77,8 +77,8 @@ def test_hint_is_none_without_a_platform_grant(monkeypatch):
     """Aucune instance plateforme configurée : la question ne se pose pas — on
     ne rend PAS un faux 0/0 qui se lirait comme un quota épuisé."""
     monkeypatch.setattr(db, "get_member_api_key", lambda sub, org, p: None)
-    monkeypatch.setattr(access.scope, "current_group", lambda sub: None)
-    monkeypatch.setattr(access.scope, "current_org", lambda sub: None)
+    monkeypatch.setattr(access, "current_group", lambda sub: None)
+    monkeypatch.setattr(access, "current_org", lambda sub: None)
     monkeypatch.setattr(credentials_store, "list_platform_instances", lambda p: [])
     monkeypatch.setattr(grants_chain.db_grants, "edges_for", lambda ref, grantees: [])
     assert access.platform_quota_hint("apollo", sub="u") is None
@@ -87,7 +87,7 @@ def test_hint_is_none_without_a_platform_grant(monkeypatch):
 def test_hint_is_none_when_org_is_unmetered(_platform_only, monkeypatch):
     """Org sur un plan `unmetered` (ADR 0043) : plus de plafond — la sonde ne
     prétend pas en avoir un."""
-    monkeypatch.setattr(access.scope, "current_org", lambda sub: 7)
+    monkeypatch.setattr(access, "current_org", lambda sub: 7)
     # `active_org` non-None réveille le barreau MEMBRE de la sonde de présence
     # (walk_cascade) — sondes DB à blanc, pour ne pas taper une base absente ici.
     monkeypatch.setattr(db, "has_member_api_key", lambda s, o, p: False)
@@ -108,7 +108,7 @@ def test_exceeded_message_keeps_the_pinned_contract_and_adds_what_was_missing(
     caractère près pour fullenrich — cette même forme doit survivre ici pour
     apollo, avec en plus 0 restant / un délai / un repli explicite."""
     monkeypatch.setattr(session_org, "current_call_instance", lambda: None)
-    monkeypatch.setattr(access.scope, "project_pinned_instance", lambda p, *a: None)
+    monkeypatch.setattr(access, "project_pinned_instance", lambda p, *a: None)
     monkeypatch.setattr(db, "get_usage_today", lambda sub, p: 20)  # = rate_limit
     with pytest.raises(McpError) as e:
         access.resolve._resolve_credential_impl("apollo", "auto", "u")
@@ -124,7 +124,7 @@ def test_exceeded_message_keeps_the_pinned_contract_and_adds_what_was_missing(
 
 def _resolve_with(monkeypatch, used, units=None):
     monkeypatch.setattr(session_org, "current_call_instance", lambda: None)
-    monkeypatch.setattr(access.scope, "project_pinned_instance", lambda p, *a: None)
+    monkeypatch.setattr(access, "project_pinned_instance", lambda p, *a: None)
     monkeypatch.setattr(db, "get_usage_today", lambda sub, p: used)
     kw = {} if units is None else {"units": units}
     return access.resolve.resolve_credential("apollo", "auto", "u", **kw)

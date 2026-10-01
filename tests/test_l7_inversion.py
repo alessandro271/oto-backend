@@ -20,7 +20,7 @@ from __future__ import annotations
 import pytest
 
 from oto_mcp import access, credentials_store, grants_chain, group_store, org_store
-from oto_mcp.access import cascade, chain_resolution, chain_shadow
+from oto_mcp.access import chain_resolution, chain_shadow
 from oto_mcp.db import access_shadow as db_shadow
 from oto_mcp.db import grants as db_grants
 
@@ -250,7 +250,7 @@ def test_sous_chain_un_releve_inverse_qui_explose_ne_casse_pas_la_resolution(mon
 
     def _boum(*a, **k):
         raise RuntimeError("l'ancien chemin est cassé")
-    monkeypatch.setattr(cascade, "cascade_winner", _boum)
+    monkeypatch.setattr(access, "cascade_winner", _boum)
     assert access.resolve_credential("serper", sub="u").key == "PLAT"
 
 

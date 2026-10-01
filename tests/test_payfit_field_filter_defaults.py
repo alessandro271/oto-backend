@@ -71,9 +71,9 @@ def _payload() -> dict:
 @pytest.fixture
 def org_sans_politique(monkeypatch):
     """Une org qui n'a RIEN posé : le repli est le défaut serveur."""
-    monkeypatch.setattr("oto_mcp.access.rbac.current_user_sub_from_token",
+    monkeypatch.setattr("oto_mcp.access.current_user_sub_from_token",
                         lambda: "sub-test")
-    monkeypatch.setattr("oto_mcp.access.rbac.scope.current_org", lambda sub: 1)
+    monkeypatch.setattr("oto_mcp.access.current_org", lambda sub: 1)
     monkeypatch.setattr("oto_mcp.access.rbac.org_store.get_org_field_filters",
                         lambda org_id: {})
 
@@ -82,9 +82,9 @@ def org_sans_politique(monkeypatch):
 def org_qui_leve(monkeypatch):
     """Un org_admin a posé `rules: []` sur `payfit` : sa politique est AUTORITAIRE
     et vide ⟹ plus rien n'est masqué. C'est le geste exact qui lève le plancher."""
-    monkeypatch.setattr("oto_mcp.access.rbac.current_user_sub_from_token",
+    monkeypatch.setattr("oto_mcp.access.current_user_sub_from_token",
                         lambda: "sub-test")
-    monkeypatch.setattr("oto_mcp.access.rbac.scope.current_org", lambda sub: 1)
+    monkeypatch.setattr("oto_mcp.access.current_org", lambda sub: 1)
     monkeypatch.setattr("oto_mcp.access.rbac.org_store.get_org_field_filters",
                         lambda org_id: {"payfit": {"rules": []}})
 
@@ -184,9 +184,9 @@ def test_an_org_that_lifts_the_filter_gets_everything(org_qui_leve, sentinelle):
 def test_clearing_the_policy_does_the_OPPOSITE_of_lifting(monkeypatch):
     """⚠️ Le piège : `rules: null` EFFACE la politique d'org, donc REMET le défaut
     serveur. Lever un plancher se fait avec `rules: []`, jamais en effaçant."""
-    monkeypatch.setattr("oto_mcp.access.rbac.current_user_sub_from_token",
+    monkeypatch.setattr("oto_mcp.access.current_user_sub_from_token",
                         lambda: "sub-test")
-    monkeypatch.setattr("oto_mcp.access.rbac.scope.current_org", lambda sub: 1)
+    monkeypatch.setattr("oto_mcp.access.current_org", lambda sub: 1)
     monkeypatch.setattr("oto_mcp.access.rbac.org_store.get_org_field_filters",
                         lambda org_id: {})       # politique effacée = clé absente
     assert NIR not in _rendu(_payload())

@@ -31,7 +31,7 @@ def _sonde_sans_base(monkeypatch, *, appels_unitaires: list, appels_groupes: lis
         return dict(instances_par_provider)
     monkeypatch.setattr(credentials_store, "list_all_platform_instances", _groupees)
     monkeypatch.setattr(credentials_store, "list_credentials", lambda et, eid: [])
-    monkeypatch.setattr(access.cascade, "group_secret_map", lambda groups=None: {})
+    monkeypatch.setattr(access, "group_secret_map", lambda groups=None: {})
     monkeypatch.setattr(db, "has_member_api_key", lambda s, o, p, account=None: False)
     monkeypatch.setattr(group_store, "has_group_secret", lambda g, p: False)
     monkeypatch.setattr(org_store, "has_org_secret", lambda o, p: False)

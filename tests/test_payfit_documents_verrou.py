@@ -65,9 +65,9 @@ def client(monkeypatch):
 def _politique(monkeypatch, filtres):
     """La politique de l'org active, lue par le VRAI `resolve_field_filter` : on ne
     remplace que ses sources (qui appelle, dans quelle org, ce que l'org a posé)."""
-    monkeypatch.setattr("oto_mcp.access.rbac.current_user_sub_from_token",
+    monkeypatch.setattr("oto_mcp.access.current_user_sub_from_token",
                         lambda: "sub-test")
-    monkeypatch.setattr("oto_mcp.access.rbac.scope.current_org", lambda sub: 1)
+    monkeypatch.setattr("oto_mcp.access.current_org", lambda sub: 1)
     monkeypatch.setattr("oto_mcp.access.rbac.org_store.get_org_field_filters",
                         filtres if callable(filtres) else (lambda org_id: filtres))
 

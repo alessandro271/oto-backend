@@ -20,8 +20,8 @@ import pathlib
 
 import pytest
 
-from oto_mcp import session_org, tenancy
-from oto_mcp.access import cascade, chain_shadow, indices, resolve, scope
+from oto_mcp import access, session_org, tenancy
+from oto_mcp.access import chain_shadow, resolve
 from oto_mcp.connectors import readiness
 from oto_mcp.mcp_errors import McpError
 
@@ -66,14 +66,14 @@ REFUS = ("aucune_cle", "cle_propre_exigee", "quota", "compte_introuvable")
 def refus(monkeypatch):
     monkeypatch.setattr(session_org, "current_call_instance", lambda: None)
     monkeypatch.setattr(session_org, "current_call_account", lambda: "compte-x")
-    monkeypatch.setattr(scope, "project_pinned_instance", lambda *a, **k: None)
-    monkeypatch.setattr(scope, "current_org", lambda sub: 7)
-    monkeypatch.setattr(indices, "_revoked_hint", lambda *a, **k: "")
-    monkeypatch.setattr(indices, "_reachable_hint", lambda *a, **k: "")
-    monkeypatch.setattr(resolve, "_win_quota", lambda *a, **k: (5, 5))
+    monkeypatch.setattr(access, "project_pinned_instance", lambda *a, **k: None)
+    monkeypatch.setattr(access, "current_org", lambda sub: 7)
+    monkeypatch.setattr(access, "_revoked_hint", lambda *a, **k: "")
+    monkeypatch.setattr(access, "_reachable_hint", lambda *a, **k: "")
+    monkeypatch.setattr(access, "_win_quota", lambda *a, **k: (5, 5))
 
     def _message(sub, cas):
-        monkeypatch.setattr(cascade, "_is_multi_account",
+        monkeypatch.setattr(access, "_is_multi_account",
                             lambda *a, **k: cas == "compte_introuvable")
         monkeypatch.setattr(chain_shadow, "barreau_gagnant",
                             lambda *a, **k: _Plateforme() if cas == "quota" else None)

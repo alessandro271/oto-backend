@@ -182,7 +182,7 @@ def _wire_un_forbidden(monkeypatch, *, group_secret_map, preloaded_presence_prob
     monkeypatch.setattr(access.providers, "REGISTRY", {})
     # Org-partageable de force : indépendant du registre réel, on ne teste que le
     # câblage des deux préchargements, pas la liste des connecteurs partageables.
-    monkeypatch.setattr(access.cascade, "ORG_SHAREABLE_PROVIDERS", frozenset({"zoho"}))
+    monkeypatch.setattr(access, "ORG_SHAREABLE_PROVIDERS", frozenset({"zoho"}))
     monkeypatch.setattr(access, "group_secret_map", group_secret_map)
     monkeypatch.setattr(access, "preloaded_presence_probe", preloaded_presence_probe)
 

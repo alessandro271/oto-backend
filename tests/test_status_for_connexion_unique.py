@@ -100,7 +100,7 @@ def test_status_for_enveloppe_bien_son_appel_dans_reuse_connection(monkeypatch):
         return {"role": "member", "providers": {}}
 
     monkeypatch.setattr(access.status.db, "reuse_connection", _reuse_espionne)
-    monkeypatch.setattr(access.status, "_status_for_projection", _projection_stub)
+    monkeypatch.setattr(access, "_status_for_projection", _projection_stub)
 
     out = access.status_for("sub-banc")
 

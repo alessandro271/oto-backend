@@ -54,12 +54,12 @@ def gagnant(monkeypatch):
     etat = {"mode": "platform", "org": None}
     monkeypatch.setattr(access.chain_shadow, "barreau_gagnant",
                         lambda *a, **k: _barreau(etat["mode"]))
-    monkeypatch.setattr(access.cascade, "cascade_winner",
+    monkeypatch.setattr(access, "cascade_winner",
                         lambda *a, **k: _barreau(etat["mode"]))
-    monkeypatch.setattr(access.cascade, "_is_multi_account", lambda p, o: False)
+    monkeypatch.setattr(access, "_is_multi_account", lambda p, o: False)
     monkeypatch.setattr(session_org, "current_call_instance", lambda: None)
-    monkeypatch.setattr(access.scope, "project_pinned_instance", lambda p, *a: None)
-    monkeypatch.setattr(access.scope, "current_org", lambda sub: etat["org"])
+    monkeypatch.setattr(access, "project_pinned_instance", lambda p, *a: None)
+    monkeypatch.setattr(access, "current_org", lambda sub: etat["org"])
     monkeypatch.setattr(db, "get_usage_today", lambda sub, p: 0)
     return etat
 

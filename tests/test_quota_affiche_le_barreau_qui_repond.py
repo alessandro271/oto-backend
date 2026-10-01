@@ -28,13 +28,13 @@ def fiche(monkeypatch):
     from oto_mcp import db
 
     monkeypatch.setattr(db, "KEY_PROVIDERS", ("serper",))
-    monkeypatch.setattr(A_status.scope, "get_user_role", lambda s: "member")
+    monkeypatch.setattr(access, "get_user_role", lambda s: "member")
     monkeypatch.setattr(A_status.group_store, "list_groups_for_user", lambda s, o: [])
-    monkeypatch.setattr(A_status.cascade, "group_secret_map", lambda g: {})
-    monkeypatch.setattr(A_status.cascade, "preloaded_presence_probe",
+    monkeypatch.setattr(access, "group_secret_map", lambda g: {})
+    monkeypatch.setattr(access, "preloaded_presence_probe",
                         lambda s, org=None, groups=None: A_status.cascade.PRESENCE_PROBE)
     monkeypatch.setattr(A_status.db, "usage_today_map", lambda s: {"serper": 0})
-    monkeypatch.setattr(A_status.rbac, "reachable_team_key", lambda *a, **k: None)
+    monkeypatch.setattr(access, "reachable_team_key", lambda *a, **k: None)
     # Les connecteurs à SESSION (secret_kind="cookie") sont projetés par une
     # seconde boucle, qui sonde le coffre : hors sujet ici, et seule chose qui
     # restait à toucher la base.

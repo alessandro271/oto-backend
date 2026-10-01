@@ -22,7 +22,7 @@ from __future__ import annotations
 import pytest
 from fastmcp import FastMCP
 
-from oto_mcp import providers
+from oto_mcp import access, providers
 from oto_mcp.access import quotas
 from oto_mcp.connectors import flow as connector_flow
 from oto_mcp.tool_visibility import namespace_of
@@ -229,11 +229,11 @@ def test_api_me_ne_marche_pas_six_fois_la_meme_cascade(monkeypatch):
     from oto_mcp.access import status as st
 
     marches = []
-    monkeypatch.setattr(st.cascade, "walk_cascade",
+    monkeypatch.setattr(access, "walk_cascade",
                         lambda sub, provider, **kw: (marches.append(provider), iter(()))[1])
-    monkeypatch.setattr(st.scope, "get_user_role", lambda s: "user")
+    monkeypatch.setattr(access, "get_user_role", lambda s: "user")
     monkeypatch.setattr(st.group_store, "list_groups_for_user", lambda s, o: [])
-    monkeypatch.setattr(st.cascade, "preloaded_presence_probe",
+    monkeypatch.setattr(access, "preloaded_presence_probe",
                         lambda *a, **k: st.cascade.PRESENCE_PROBE)
     monkeypatch.setattr(st.db, "usage_today_map", lambda s: {})
     monkeypatch.setattr(st.db, "get_usage_today", lambda s, p: 0)
@@ -323,10 +323,10 @@ def test_la_cascade_recoit_le_nom_NU_et_normalise_elle_meme(monkeypatch):
     marches = []
     monkeypatch.setattr(res.session_org, "current_call_instance", lambda: None)
     monkeypatch.setattr(res.session_org, "current_call_account", lambda: None)
-    monkeypatch.setattr(res.scope, "project_pinned_instance", lambda p: None)
-    monkeypatch.setattr(res.scope, "current_org", lambda s: 1)
-    monkeypatch.setattr(res.scope, "current_group", lambda s: None)
-    monkeypatch.setattr(res.cascade, "walk_cascade",
+    monkeypatch.setattr(access, "project_pinned_instance", lambda p: None)
+    monkeypatch.setattr(access, "current_org", lambda s: 1)
+    monkeypatch.setattr(access, "current_group", lambda s: None)
+    monkeypatch.setattr(access, "walk_cascade",
                         lambda sub, provider, **kw: (marches.append(provider), iter(()))[1])
     with pytest.raises(Exception):
         res._resolve_credential_impl("whatsapp", "auto", "u1")
@@ -379,8 +379,8 @@ def test_une_identite_epinglee_resout_sur_la_cle_du_compte(monkeypatch, canal):
     monkeypatch.setattr(res.credentials_store, "get_credential", _get_credential)
     monkeypatch.setattr(res.session_org, "current_call_instance", lambda: _RefEpingle())
     monkeypatch.setattr(res.session_org, "current_call_account", lambda: None)
-    monkeypatch.setattr(res.scope, "current_org", lambda s: 1)
-    monkeypatch.setattr(res.scope, "current_group", lambda s: None)
+    monkeypatch.setattr(access, "current_org", lambda s: 1)
+    monkeypatch.setattr(access, "current_group", lambda s: None)
 
     rc = res._resolve_credential_impl(canal, "auto", "u1")
 
@@ -403,14 +403,14 @@ def test_un_projet_relie_a_une_instance_resout_aussi(monkeypatch, canal):
         return "SECRET"
 
     monkeypatch.setattr(res.credentials_store, "get_credential", _get_credential)
-    monkeypatch.setattr(res.rbac, "guard_instance_access",
+    monkeypatch.setattr(access, "guard_instance_access",
                         lambda sub, ref: gardes.append(ref))
     monkeypatch.setattr(res.session_org, "current_call_instance", lambda: None)
     monkeypatch.setattr(res.session_org, "current_call_account", lambda: None)
-    monkeypatch.setattr(res.scope, "project_pinned_instance",
+    monkeypatch.setattr(access, "project_pinned_instance",
                         lambda p: _RefEpingle() if p == "unipile" else None)
-    monkeypatch.setattr(res.scope, "current_org", lambda s: 1)
-    monkeypatch.setattr(res.scope, "current_group", lambda s: None)
+    monkeypatch.setattr(access, "current_org", lambda s: 1)
+    monkeypatch.setattr(access, "current_group", lambda s: None)
 
     rc = res._resolve_credential_impl(canal, "auto", "u1")
 
