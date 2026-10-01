@@ -39,6 +39,7 @@ from __future__ import annotations
 
 from ...datastore.identite import Adresse
 from ...datastore import cles_inconnues
+from ...datastore import upsert_implicite as upi
 
 from typing import Optional
 
@@ -249,7 +250,8 @@ CAPABILITIES += [
             "only way to drop one declaration without reposting the whole schema; an "
             "unknown column or attribute is refused, and `key` cannot be dropped. "
             "`strict`/`key`/`key_required`/`unknown_fields` "
-            "change the head keys, untouched when omitted — `key_required: true` "
+            "change the head keys, untouched when omitted — `key` names the BUSINESS "
+            "KEY: " + upi.description_cle_schema() + " `key_required: true` "
             "CLOSES the table (a write designating no existing row is refused), "
             "`false` reopens it. `unknown_fields` decides what happens to a column "
             "the schema does NOT declare: `\"report\"` (the default) CREATES it and "

@@ -38,6 +38,8 @@ from .cle_metier import ligne_de_la_course_perdue, refuser_cle_metier_vide
 from .controles import _relever_origine_module
 from .errors import DatastoreNotFound, RowNotFound, RowValidationError
 from . import mots_deprecies as mdp
+from . import jetons
+from . import upsert_implicite as upi
 from . import vide_remplace as vr
 from . import reliques as rq
 from .forcage import Forcage
@@ -59,11 +61,19 @@ class EcritureMixin:
                    readonly_override: bool = False,
                    origine_override: bool = False,
                    donnees_d_origine: bool = False,
-                   force: Optional[frozenset] = None) -> dict:
-        """Écrit UNE row. Si le datastore déclare une clé métier (`schema.key`),
-        applique la MÊME dédup upsert que le batch `write_rows` : une row de même
-        valeur de clé est MERGÉE (pas de doublon, l'index `ds_bkey_<ns>` la refuse) ;
-        sinon append. Renvoie la row (nouvelle ou mise à jour).
+                   force: Optional[frozenset] = None,
+                   upsert: bool = False,
+                   key: Optional[str] = None) -> dict:
+        """Écrit UNE row. Si le datastore déclare une clé métier (`schema.key`) et
+        qu'une row porte déjà cette valeur de clé (pas de doublon, l'index
+        `ds_bkey_<ns>` la refuse) : l'écriture qui la DÉSIGNE (`key` = la clé
+        déclarée, ou tableau fermé) la modifie ; celle qui AJOUTE la fusionne avec
+        `upsert=True`, et sans lui est avertie puis REFUSÉE à la date de
+        `upsert_implicite` (oto#141). Sinon append. Renvoie la row.
+
+        `key` (oto#141) = l'appel NOMME la clé : elle doit être la clé déclarée, et la
+        row en porter la valeur — sinon refus, jamais un paramètre ignoré (cf.
+        `jetons.refus_de_key_sans_lot`).
 
         ⚠️ Sur un tableau qui déclare `key_required` (#516), l'append n'existe plus :
         une écriture qui ne désigne aucune ligne existante est REFUSÉE
@@ -136,13 +146,28 @@ class EcritureMixin:
         self._trace(trace, ns_id, ns)
         # La clé métier sort du MÊME schéma que ci-dessus (`declared_key` re-résolvait
         # le datastore et relisait la ligne pour le même résultat).
-        key = self._declared_key_of(schema)
+        cle_nommee, key = key, self._declared_key_of(schema)
+        # oto#141 : `key` NOMMÉ par l'appel désigne la ligne par la clé — il doit nommer
+        # la clé déclarée, la ligne en porter la valeur. Sinon il ne désignerait rien :
+        # refusé, jamais ignoré (la même règle que la face MCP, `jetons`).
+        if cle_nommee is not None and not jetons.key_unitaire_redondant(
+                cle_nommee, key, data, None):
+            raise ValueError(jetons.refus_de_key_sans_lot(cle_nommee, key))
+        designation = upi.designe(schema, cle_nommee is not None)
         # ⚠️ DÉBALLÉ — une clé métier annotée est la MÊME identité qu'une clé nue
         # (cf. `lots.py`). Enrichir la provenance ne change pas ce qu'une donnée est.
         kv = dsv2.unwrap(user_data.get(key)) if key else None
+        # oto#141 : `upsert=true` sans clé ne fusionnerait rien — refusé, pas ignoré.
+        upi.refuser_upsert_sans_cle(upsert, key, ns.get("datastore") or datastore)
         if key and kv is not None:
             existing_id = db.datastore_find_row_id_by_key(ns_id, key, kv)
             if existing_id is not None:
+                # oto#141 : DÉSIGNÉE, la ligne se modifie ; AJOUTÉE, la fusion n'est
+                # plus implicite — avertie jusqu'à sa date, refusée à partir d'elle.
+                upi.controler_fusion(self.off_notices, designation=designation,
+                                     upsert=upsert,
+                                     datastore=ns.get("datastore") or datastore,
+                                     key=key, kv=kv, row_id=existing_id)
                 return self._row_to_dict(
                     self._merge_into_row(ns_id, existing_id, user_data, schema=schema,
                                          forcage=forcage,
@@ -201,6 +226,12 @@ class EcritureMixin:
             # concurrent a inséré la même clé entre le lookup et l'insert — le doublon
             # que la contrainte empêche. On converge en merge (même chemin que le batch).
             existing_id = ligne_de_la_course_perdue(ns_id, key, kv, e)
+            # oto#141 : perdre la course, c'est découvrir que la clé EXISTE — même règle
+            # que le lookup ci-dessus.
+            upi.controler_fusion(self.off_notices, designation=designation,
+                                 upsert=upsert,
+                                 datastore=ns.get("datastore") or datastore,
+                                 key=key, kv=kv, row_id=existing_id)
             # `donnees_d_origine` voyage ici : le geste d'origine n'a pas été touché
             # ci-dessus, la fusion pose donc elle-même les deux versions (cf. `lots.py`).
             return self._row_to_dict(
@@ -409,18 +440,23 @@ class EcritureMixin:
                    readonly_override: bool = False,
                    origine_override: bool = False,
                    donnees_d_origine: bool = False,
-                   force: Optional[frozenset] = None) -> dict:
+                   force: Optional[frozenset] = None,
+                   upsert: bool = False) -> dict:
         """Écrit un LOT de rows en un appel. Si une clé métier est en vigueur (param
-        `key` explicite, sinon `schema.key` déclarée), chaque row qui la porte fait un
-        UPSERT (merge) sur la row existante de même valeur de clé — pas de doublon ;
-        sinon append d'une nouvelle row. Renvoie un récap {inserted, updated, count,
-        key, ids}. Résout le datastore UNE fois (write) pour tout le lot."""
+        `key` explicite, sinon `schema.key` déclarée), une row dont la valeur de clé
+        existe déjà en base est MODIFIÉE si le lot la DÉSIGNE (`key` nommé, tableau
+        fermé), et sinon — un AJOUT — fusionne avec `upsert=True`, avertie puis REFUSÉE
+        sans lui à la date de `upsert_implicite` (oto#141). Deux rows du lot à la même
+        clé suivent cette dernière règle dans les deux cas. Sinon append. Renvoie un récap {inserted, updated, count,
+        key, ids, fusions?}. Résout le datastore UNE fois (write) pour tout le lot."""
         ns_id = self._resolve(datastore, write=True)
         return self._write_rows_to_ns(ns_id, rows, key=key or self.declared_key(datastore),
                                       readonly_override=readonly_override,
                                       origine_override=origine_override,
                                       donnees_d_origine=donnees_d_origine,
-                                      force=force)
+                                      force=force, upsert=upsert,
+                                      # oto#141 : `key` NOMMÉ = le lot DÉSIGNE.
+                                      cle_passee=key is not None)
 
     def delete_row(self, datastore: str, row_id: str, *,
                    trace: Optional[dict] = None,

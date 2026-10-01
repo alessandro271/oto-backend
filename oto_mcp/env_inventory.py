@@ -280,6 +280,13 @@ _REGLAGES: tuple[Variable, ...] = (
              "(oto#140 J3). Une valeur illisible LÈVE plutôt que de retomber sur le "
              "défaut.",
              ("oto_mcp/datastore/mots_deprecies.py:54",)),
+    Variable("OTO_UPSERT_IMPLICITE_REFUSE_LE", Classe.REGLAGE, None,
+             "Déplace la date par défaut "
+             "(`datastore/upsert_implicite.py:UPSERT_IMPLICITE_REFUSE_LE`, 2026-10-21) "
+             "à partir de laquelle une écriture sans `id` dont la valeur de clé métier "
+             "existe déjà est refusée sans `upsert=true` (oto#141). Une valeur illisible "
+             "LÈVE plutôt que de retomber sur le défaut.",
+             ("oto_mcp/datastore/upsert_implicite.py:59",)),
     # -- timeouts / cadences / tailles / rétention -----------------------------
     Variable("OTO_SLOW_CALLBACK_WARN", Classe.REGLAGE, "1.0",
              "Seuil (s) d'avertissement d'un callback lent (event loop).",

@@ -84,8 +84,10 @@ nommant la clé et les trois endroits regardés — jamais une colonne littéral
 
 ## 3. Ce qu'une écriture fait — et détruit
 
-Une écriture ne touche **que ce qu'elle nomme**. Sur une colonne ouverte il n'y a ni
-historique ni annulation : la valeur précédente disparaît quand la tienne arrive.
+Une écriture ne touche **que ce qu'elle nomme**. Sur une colonne ouverte il n'y a pas
+d'annulation : la valeur précédente quitte la ligne quand la tienne arrive. Elle ne
+survit que dans le journal des révisions — `data_row_history` rend l'avant et l'après
+de chaque écriture, 90 jours par défaut — et rien ne la remet en place pour toi.
 
 | tu écris | effet |
 |---|---|
@@ -171,9 +173,9 @@ et le genre d'erreur qu'on ne découvre qu'à la restitution, devant elle.
 
 Trois règles qui te dispensent de précautions :
 
-- une **origine déjà posée n'est jamais réécrite**. Un ré-import du même fichier met à
-  jour la version courante et laisse l'origine du premier — tu peux rejouer un import
-  sans rien détruire ;
+- une **origine déjà posée n'est jamais réécrite**. Un ré-import du même fichier (avec
+  `key=`, qui désigne les lignes, cf. §6) met à jour la version courante et laisse
+  l'origine du premier — tu peux rejouer un import sans rien détruire ;
 - une **case vide ne reçoit rien**. « La cliente n'a rien remis » et « la cliente a
   remis du vide » sont deux faits différents ; `0` et `false`, eux, sont des valeurs
   remises et gardent leur origine ;
@@ -355,11 +357,42 @@ et chaque remplacement forcé est journalisé (ligne, colonne, valeur remplacée
 
 ## 6. Ce que la clé métier fait à l'écriture
 
-Quand le schéma déclare une `key` (`data_set_schema`), une écriture qui porte une valeur
-de clé **déjà présente fusionne sur cette ligne** (upsert, retour de son `_id`) au lieu
-d'en créer une — ligne seule comme lot ; un index unique le garantit. Une ligne créée
-sans valeur de clé est créée quand même et la réponse le signale (`notices`) : aucune
-écriture ultérieure ne la retrouvera par sa clé.
+Quand le schéma déclare une `key` (`data_set_schema`), une écriture **sans `id`** qui
+porte une valeur de clé **déjà présente** ne crée pas de doublon : un index unique le
+garantit. Ce qu'elle fait de cette ligne dépend de ce que **ton appel dit** (oto#141) :
+
+- **Tu DÉSIGNES** — par `id=`, ou en nommant la clé avec **`key=`** (un lot, ou une ligne
+  seule avec `key=` = la clé déclarée ; REST `?key=` ; la frappe d'un upload) : une
+  valeur déjà présente **modifie** sa ligne (retour de son `_id`), une valeur neuve la
+  crée. Pas besoin d'`upsert`.
+- **Tu AJOUTES** — ni `id` ni `key=` : une valeur déjà présente est un doublon que tu
+  n'as pas vu.
+
+| | jusqu'au 20 octobre 2026 | à partir du **21 octobre 2026** |
+|---|---|---|
+| ajout, clé déjà présente, sans `upsert` | fusionne, et `notices` avertit, daté | **refusé** `business_key_exists` : le refus nomme la ligne en place et les gestes |
+| ajout, clé déjà présente, `upsert=true` | **fusionne** (retour de son `_id`) | **fusionne** |
+| deux lignes d'un même appel à la même clé, sans `upsert` (désignation comme ajout) | fusionnent, averties | le lot est **refusé ENTIER** avant sa première ligne, rangs nommés (« lignes 1 et 2 : même siren '111' ») |
+
+On ne désigne pas deux fois la même ligne dans un appel : retire le doublon, ou passe
+`upsert=true` s'il doit fusionner. `upsert` vaut sur toutes les faces — ligne seule,
+lot, REST, `oto_upload_url` (déclaré à la frappe, scellé dans le jeton, comme `key`) et
+`oto_import` —, et il est refusé là où il ne fusionnerait rien : avec `id=`, ou sur un
+tableau sans clé (et, pour un lot, sans `key=`).
+
+Un lot rend chaque fusion dans **`fusions`** : `{rang, dans_rang, id, cle}` — `rang` le
+rang de la ligne dans le lot (à partir de 1), `dans_rang` le rang de la ligne du **même**
+lot qui a posé la ligne visée, `null` pour une ligne déjà en base, `cle`
+`{colonne: valeur}`. **`ids` reste aligné rang pour rang** : deux entrées peuvent
+désigner la même ligne, et `fusions` dit lesquelles. L'accusé d'un upload signé, lu par
+un porteur de lien, rend `fusions` sans `id`.
+
+Sur un tableau **fermé** (`key_required`, ci-dessous), toute écriture sans `id` est une
+désignation par la clé : il ne crée jamais, la valeur de clé y est la façon de viser
+sa ligne.
+
+Une ligne créée sans valeur de clé est créée quand même et la réponse le signale
+(`notices`) : aucune écriture ultérieure ne la retrouvera par sa clé.
 
 `key_required: true` ferme le tableau : une écriture qui ne désigne aucune ligne
 existante — ni `id`, ni valeur de clé déjà portée ; une clé simplement **nouvelle**
@@ -372,8 +405,11 @@ Ouvrir, écrire, refermer : `data_patch_schema(key_required=false)` puis `…=tr
 
 Un **lot** (`data_write(rows=[…])`, `oto_upload_url`) n'est pas atomique : il s'arrête à
 la première ligne refusée, les précédentes restent écrites, le refus nomme la ligne et
-dit combien ont atterri. `key=` sur le lot dédoublonne sur une autre colonne que la clé
-déclarée ; sur une ligne seule, seule la clé déclarée joue.
+dit combien ont atterri. Deux refus font exception, jugés sur le lot ENTIER avant sa
+première ligne : un mot déprécié (`@keep`, `@clear`) et, sans `upsert`, une clé en
+doublon ou déjà portée par un ajout (ci-dessus). `key=` sur le lot désigne par une autre
+colonne que la clé déclarée s'il le faut ; sur une ligne seule, seule la clé déclarée
+joue.
 
 ## 7. Deux faces, un seul stockage
 
@@ -405,10 +441,11 @@ l'autre, à l'identique.
   "siren"}`), est refusé `400 batch_body`, rien n'est écrit — sauf si une colonne de
   ce nom est déclarée au schéma. Un corps qui est une liste JSON est refusé `400
   invalid_body`. Le lot REST est `POST …/rows/batch`, corps `{"rows": [...], "key":
-  "siren", "donnees_d_origine": true}` (`key` et `donnees_d_origine` facultatifs) :
-  le même geste que `data_write(rows=[…])` — même moteur, mêmes refus nommant la
-  ligne, mêmes notices, même réponse (`inserted`, `updated`, `count`, `ids`). Pour
-  un volume, `oto_upload_url`.
+  "siren", "donnees_d_origine": true}` (`key`, `upsert` et
+  `donnees_d_origine` facultatifs) : le même geste que `data_write(rows=[…])` — même
+  moteur, mêmes refus nommant la ligne, mêmes notices, même réponse (`inserted`,
+  `updated`, `count`, `ids`, `fusions`). `POST …/rows` prend `?key=` et `?upsert=true` en query
+  (son corps est la ligne). Pour un volume, `oto_upload_url`.
 - **Projection.** `fields` n'existe que sur `data_rows` ; REST rend la ligne entière.
 - **Paramètres inconnus.** REST refuse tout paramètre de query ou de chemin qu'il ne
   connaît pas — 400 `unknown_fields`, qui nomme le champ et les attendus. Le corps de
@@ -421,7 +458,9 @@ l'autre, à l'identique.
   n'existe pas. La forme **liste** `["a", "b"]` n'existe que sur `data_aggregate`, et
   elle **fusionne** les valeurs des champs sous une même clé, elle ne croise pas ;
   REST prend une colonne.
-- **`key=` du lot** : MCP seulement ; REST joue toujours la clé déclarée.
+- **`key=`** : sur un lot, MCP et REST (`…/rows/batch`) prennent n'importe quelle
+  colonne ; sur une ligne seule (`data_write(row=)`, `POST …/rows?key=`), seule la clé
+  déclarée.
 - **Refus de schéma : la charge à renvoyer.** Un refus de validation (requis manquant,
   type ou format, sous-champ inconnu, couche exigée) porte le fragment de `row` à
   renvoyer : seuls les champs à corriger, un gabarit `<…>` à la place de chaque valeur
@@ -433,8 +472,11 @@ l'autre, à l'identique.
   (`row_invalid`, `business_key_required`, `invalid_row_input`, `jeton_mal_place`,
   `invalid_filters`…), 403 `datastore_read_only` (tableau partagé en lecture seule),
   404 `datastore_not_found` (avec l'org où il vit, s'il existe dans une autre des
-  tiennes) ou `row_not_found` ; 409 `row_locked` (ligne réservée par un autre) ou
-  `revision_conflict` (la ligne a changé depuis la `_revision` passée).
+  tiennes) ou `row_not_found` ; 409 `row_locked` (ligne réservée par un autre),
+  `revision_conflict` (la ligne a changé depuis la `_revision` passée) ou
+  `business_key_exists` (ajout sur une clé déjà portée, ou doublon dans l'appel, sans
+  `upsert`, §6 — `details` : `id` de la
+  ligne en place, ou `doublons` et `existantes` d'un lot).
 
 ## 8. Ce qu'une réponse ne contient pas
 

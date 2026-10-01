@@ -107,8 +107,11 @@ def race(monkeypatch):
 def test_lost_race_converges_to_update(race):
     st, state = race
     out = st._write_rows_to_ns(7, [{"member_id": "A", "y": 2}], key="member_id")
+    # oto#141 : la fusion de la course perdue est DITE, rang et clé compris.
     assert out == {"inserted": 0, "updated": 1, "count": 1,
-                   "key": "member_id", "ids": ["winner"]}
+                   "key": "member_id", "ids": ["winner"],
+                   "fusions": [{"rang": 1, "dans_rang": None, "id": "winner",
+                                "cle": {"member_id": "A"}}]}
     assert state["rows"]["winner"] == {"member_id": "A", "x": 1, "y": 2}  # merge
 
 

@@ -27,10 +27,12 @@ from .columns import (
 )
 from .cle_metier import ligne_de_la_course_perdue, refuser_cle_metier_vide
 from .controles import _relever_origine_module
-from .errors import BusinessKeyRequired, RowLocked, RowValidationError
+from .errors import (BusinessKeyExists, BusinessKeyRequired, RowLocked,
+                     RowValidationError)
 from .outils import _new_id, _refus_de_creation
 from .points import _refuse_dotted_names, ranger_les_couches
 from . import mots_deprecies as mdp
+from . import upsert_implicite as upi
 from . import donnees_d_origine as ddo
 from .reserves import refuser_champs_reserves
 
@@ -66,12 +68,23 @@ class LotsMixin:
                           readonly_override: bool = False,
                           origine_override: bool = False,
                           donnees_d_origine: bool = False,
-                          force: Optional[frozenset] = None) -> dict:
+                          force: Optional[frozenset] = None,
+                          upsert: bool = False,
+                          cle_passee: bool = False,
+                          fusions: Optional[upi.Fusions] = None) -> dict:
         """Cœur du batch, keyé par `ns_id` déjà résolu (réutilisable hors contexte
         d'org — matérialisation d'un upload signé, où l'org de session est absente).
         Le schéma v2 (validation/lifecycle, ADR 0046) s'applique à CHAQUE row du
         lot, sur son résultat mergé — une row fautive fait échouer le lot en NOMMANT
-        la ligne autant que le champ (#412), et en disant ce qui est déjà écrit."""
+        la ligne autant que le champ (#412), et en disant ce qui est déjà écrit.
+
+        `cle_passee` (oto#141) = `key` a été NOMMÉ par l'appel : le lot DÉSIGNE par la
+        clé, une valeur en place modifie sa ligne. Sinon il AJOUTE, et une valeur en
+        place n'y fusionne qu'avec `upsert` — sans lui avertie, puis refusée à sa date.
+        Deux lignes du lot à la même clé : refusées sans `upsert`, dans les deux cas. Le
+        lot est jugé ENTIER avant sa première ligne.
+        `fusions` = le relevé partagé d'un geste découpé en tranches (`import_rows`),
+        pour que les rangs et `dans_rang` soient ceux du fichier ; `None` = ce lot seul."""
         ns = self._ns_of(ns_id)
         schema = ns.get("schema")
         nom_ns = ns.get("datastore") or f"#{ns_id}"
@@ -84,7 +97,30 @@ class LotsMixin:
         # lot ENTIER avant la première ligne : l'avertissement en une phrase et non
         # cinq cents, et le refus daté (J3) sans moitié de lot déjà écrite.
         mdp.controler(self.off_notices, *(r for r in rows if isinstance(r, dict)))
+        # oto#141 : AJOUTER sur une clé existante ne fusionne plus en silence ; la
+        # DÉSIGNER (`key=` nommé, tableau fermé) la modifie. `upsert` sans clé ne
+        # fusionnerait rien ; sans `upsert`, à partir de la date, le lot est jugé ENTIER
+        # ici — doublons internes, et clés en base s'il ajoute —, avant toute écriture.
+        upi.refuser_upsert_sans_cle(upsert, key, nom_ns, lot=True)
+        designation = upi.designe(schema, cle_passee)
+        suivi = fusions if fusions is not None else upi.Fusions()
+        if key and not upsert and not suivi.juge and upi.refus_arme():
+            upi.juger_le_lot(
+                rows, key=key, datastore=nom_ns, designation=designation,
+                decalage=suivi.decalage,
+                nommer=suivi.nommer, textes=db.datastore_textes_de_cle,
+                chercher=lambda kv: db.datastore_find_row_id_by_key(ns_id, key, kv))
         inserted, updated, ids = 0, 0, []
+        fusionnees: list[dict] = []
+
+        def _fusion(rang: int, row_id: str, colonne: str, valeur: Any) -> None:
+            entree = suivi.fusion(rang, row_id, colonne, valeur)
+            upi.controler_fusion(self.off_notices, designation=designation,
+                                 upsert=upsert, datastore=nom_ns, key=colonne,
+                                 kv=valeur, row_id=row_id,
+                                 dans_rang=entree["dans_rang"], rang=entree["rang"],
+                                 lot=True, nommer=suivi.nommer)
+            fusionnees.append(entree)
         total = len(rows)
         for rang, data in enumerate(rows, 1):
             self._lot_rang = rang  # read by a sliced import to name the absolute row
@@ -138,6 +174,7 @@ class LotsMixin:
                 # puis `UniqueViolation` sur l'index de clé. Mesuré le 08/09/2026.
                 kv = dsv2.unwrap(user_data.get(key)) if key else None
                 existing_id = None
+                par = (key, kv)  # la colonne et la valeur qui ont trouvé la ligne
                 if key and kv is not None and str(kv) != "":
                     existing_id = db.datastore_find_row_id_by_key(ns_id, key, kv)
                 # #516 : le LOT est le second chemin de création, et le plus
@@ -150,10 +187,12 @@ class LotsMixin:
                     dkv = dsv2.unwrap(user_data.get(dk))
                     if dk != key and dkv is not None and str(dkv) != "":
                         existing_id = db.datastore_find_row_id_by_key(ns_id, dk, dkv)
+                        par = (dk, dkv)
                     if existing_id is None:
                         raise _refus_de_creation(nom_ns, dk, dkv, schema=schema,
                                                  ligne=user_data, cle_du_lot=key)
                 if existing_id is not None:
+                    _fusion(rang, existing_id, *par)
                     self._merge_into_row(ns_id, existing_id, user_data, schema=schema,
                                          forcage=forcage,
                                          origine_override=origine_override,
@@ -194,6 +233,7 @@ class LotsMixin:
                           or {}).get("key")
                     dkv = dsv2.unwrap(user_data.get(dk)) if dk else None
                     existing_id = ligne_de_la_course_perdue(ns_id, dk, dkv, e)
+                    _fusion(rang, existing_id, dk, dkv)
                     # ⚠️ `donnees_d_origine` voyage ICI aussi (oto#72) : ce chemin est
                     # la COURSE PERDUE sous l'index de clé métier, qui converge en
                     # update — « même merge que le chemin nominal », disait le
@@ -219,6 +259,14 @@ class LotsMixin:
                 # le message du bail, exactement le défaut qu'on vient de fermer.
                 raise RowLocked(
                     e.row_id, e.claimed_by, e.claimed_until, e.claimed_run,
+                    row=self._designation_de_lot(rang, total, key, data,
+                                                 inserted + updated)) from None
+            except BusinessKeyExists as e:
+                # oto#141 : une COURSE perdue sans `upsert`, après la date (le lot, lui,
+                # a été jugé entier avant sa première ligne). Même parti : la classe
+                # reste, la désignation s'ajoute. AVANT `ValueError`, dont elle dérive.
+                raise BusinessKeyExists(
+                    e.motif, key=e.key, details=e.details,
                     row=self._designation_de_lot(rang, total, key, data,
                                                  inserted + updated)) from None
             except BusinessKeyRequired as e:
@@ -248,5 +296,11 @@ class LotsMixin:
                     f" : {e}") from None
             inserted += 1
             ids.append(row["row_id"])
-        return {"inserted": inserted, "updated": updated, "count": inserted + updated,
-                "key": key, "ids": ids}
+            suivi.creee(rang, row["row_id"])
+        recap = {"inserted": inserted, "updated": updated, "count": inserted + updated,
+                 "key": key, "ids": ids}
+        # oto#141 : `ids` reste aligné rang pour rang ; ce qui dit que deux entrées
+        # désignent la même ligne, c'est `fusions`.
+        if fusionnees:
+            recap["fusions"] = fusionnees
+        return recap

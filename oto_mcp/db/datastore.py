@@ -174,6 +174,22 @@ def datastore_find_row_id_by_key(ns_id: int, key_field: str, key_value) -> Optio
         return row["row_id"] if row else None
 
 
+def datastore_textes_de_cle(valeurs: list) -> list[str]:
+    """Le texte de chaque valeur de clé métier DÉBALLÉE, rendu par la BASE — pour juger
+    si deux lignes d'un même lot portent « la même clé » (oto#141) sans tenir en Python
+    une seconde règle de comparaison. C'est la conversion que le lookup applique à la
+    valeur cherchée (oto#223 : `%s::jsonb #>> '{}'`, `true` et non `True`), en une
+    requête pour tout le lot."""
+    if not valeurs:
+        return []
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT e.v #>> '{}' AS t FROM jsonb_array_elements(%s::jsonb) "
+            "WITH ORDINALITY AS e(v, i) ORDER BY e.i",
+            (json.dumps(list(valeurs)),)).fetchall()
+    return [r["t"] for r in rows]
+
+
 # ── Clé métier = contrainte (#109 ch.3) ──────────────────────────────────────
 # Quand `schema.key` est déclarée, elle cesse d'être purement applicative : un
 # index UNIQUE PARTIEL par namespace (`ds_bkey_<ns_id>`, expression `bkey_index_expr`

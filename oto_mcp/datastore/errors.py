@@ -111,6 +111,28 @@ class BusinessKeyRequired(ValueError):
         super().__init__(f"{row} : {message}" if row else message)
 
 
+class BusinessKeyExists(ValueError):
+    """Écriture SANS `id` refusée parce que sa valeur de clé métier désigne déjà une
+    ligne — ou une autre ligne du même lot — et que l'appel n'a pas demandé la fusion
+    (`upsert=true`, oto#141). Armé à la date de `upsert_implicite`.
+
+    Le pendant de `BusinessKeyRequired` : l'un refuse une création qui ne désigne rien
+    sur un tableau fermé, celui-ci une création qui désigne quelque chose sans le dire.
+    Même héritage de `ValueError` (actionnable côté MCP), même `motif` conservé nu pour
+    que le lot ré-emballe le refus avec la désignation de sa ligne sans le reformuler.
+
+    `details` : `key`, et soit `valeur` + `id` (une ligne), soit `doublons` + `existantes`
+    (un lot refusé entier avant sa première écriture)."""
+
+    def __init__(self, message: str, *, key: str, details: Optional[dict] = None,
+                 row: Optional[str] = None):
+        self.motif = message
+        self.key = key
+        self.details = details
+        self.row = row
+        super().__init__(f"{row} : {message}" if row else message)
+
+
 class ColumnAbsent(ValueError):
     """Purge de colonne qui n'a touché AUCUNE ligne (#680) — nommée, pas seulement
     dite.

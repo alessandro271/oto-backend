@@ -269,7 +269,11 @@ def test_mint_datastore_seals_resolved_ns_id(monkeypatch, seams):
                            # oto#140 : scellé au mint pour la MÊME raison — le PUT ne
                            # porte aucun paramètre, donc « ce fichier EST la donnée de
                            # la cliente » se déclare par celui qui prépare l'import.
-                           "donnees_d_origine": False}
+                           "donnees_d_origine": False,
+                           # oto#141 : la fusion sur la clé se DEMANDE, au mint aussi.
+                           "upsert": False,
+                           # oto#141 : une clé NOMMÉE à la frappe désigne — absente ici.
+                           "cle_passee": False}
 
 
 def test_target_label():

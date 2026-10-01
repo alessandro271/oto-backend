@@ -146,11 +146,12 @@ def verifier_retire(champ: str, valeur: object) -> None:
 
 def key_unitaire_redondant(key: object, declaree: Optional[str], row: object,
                            id: object) -> bool:
-    """Vrai quand un `key=` posé sur une écriture UNITAIRE ne fait que redire ce qu'elle
-    fait déjà : il nomme la clé métier DÉCLARÉE du tableau, la ligne en porte la valeur,
-    et aucun `id=` ne vise de ligne. L'écriture unitaire rapproche d'elle-même sur cette
-    clé (`append_row` : upsert sur `schema.key`) — le paramètre est alors RÉGLÉ, pas
-    ignoré, et le refuser coûtait un aller-retour à chaque procédure qui l'écrit
+    """Vrai quand un `key=` posé sur une écriture UNITAIRE est une DÉSIGNATION valable :
+    il nomme la clé métier DÉCLARÉE du tableau, la ligne en porte la valeur, et aucun
+    `id=` ne vise de ligne. Depuis oto#141 il est plus que réglé : c'est lui qui fait de
+    l'écriture une désignation (une valeur en place modifie sa ligne) et non un AJOUT
+    (qui, sur une valeur en place, demande `upsert`). Le refuser coûtait un
+    aller-retour à chaque procédure qui l'écrit
     (signaux 986, 1125, 1135, 1154 : l'idiome « upsert sur la clé métier » s'écrit
     naturellement ainsi, et une ligne de journal de plusieurs milliers de caractères
     était renvoyée entière).
@@ -198,9 +199,10 @@ def refus_de_key_sans_lot(key: object, declaree: Optional[str] = None) -> str:
         f"{clause}\n"
         f"• pour VISER une ligne existante : `data_write(datastore=…, id=\"<le _id "
         f"rendu par data_claim_next ou data_rows>\", row={{…}})` ;\n"
-        f"• pour la retrouver par sa CLÉ MÉTIER : mets la valeur dans `row` — "
-        f"l'écriture unitaire rapproche d'elle-même sur la clé déclarée du tableau ;\n"
-        f"• pour DÉDOUBLER sur `{key}`, même une seule ligne : "
+        f"• pour la DÉSIGNER par sa CLÉ MÉTIER : mets la valeur dans `row` et passe "
+        f"`key=` = la clé déclarée du tableau — une valeur en place modifie sa ligne, "
+        f"une valeur neuve la crée ;\n"
+        f"• pour DÉSIGNER par `{key}`, même une seule ligne : "
         f"`data_write(datastore=…, rows=[{{…}}], key={key!r})` — la même ligne "
         f"enveloppée dans `rows=[…]`.")
 

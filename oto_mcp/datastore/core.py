@@ -49,6 +49,7 @@ from .reserves import (
     refuser_champs_reserves,
 )
 from .errors import (  # noqa: F401
+    BusinessKeyExists,
     BusinessKeyRequired,
     InvalidCursor,
     DatastoreAmbigu,

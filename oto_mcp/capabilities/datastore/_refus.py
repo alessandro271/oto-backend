@@ -51,6 +51,16 @@ _PRECONDITION_REFUSEE = DeclaredError(
     "`details.current_revision` porte la révision actuelle — relire, décider de "
     "nouveau, rejouer")
 
+#: oto#141 — la fusion implicite sur la clé métier, refusée à partir de sa date.
+_CLE_DEJA_PORTEE = DeclaredError(
+    409, "business_key_exists",
+    "sans `upsert=true` (à partir de la date annoncée par `upsert`) : une écriture qui "
+    "AJOUTE (ni `id` ni `key`) porte une valeur de clé métier qu'une ligne a déjà, ou "
+    "deux lignes d'un même lot portent la même : rien n'est écrit (un lot est jugé "
+    "ENTIER avant sa première ligne). Le message et `details` nomment la ligne en place "
+    "(`id`) ou les rangs (`doublons`, `existantes`) ; désigner par `id`/`key` pour "
+    "modifier, ou passer `upsert=true` pour fusionner")
+
 _LIGNE_ABSENTE = DeclaredError(
     404, "row_not_found", "aucune ligne de cet `_id` dans ce tableau")
 

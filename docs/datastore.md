@@ -1782,14 +1782,63 @@ avait fait écarter un refus dur en #608 ; elle ne s'applique pas ici.
 **Batch write + clé métier (2026-07-03).** `data_write` accepte un LOT `rows` (list[dict])
 écrit en un appel — importer un dataset sans faire transiter chaque ligne par le contexte
 du LLM. Un datastore peut déclarer une **clé métier** au schéma (`schema.key`, ex.
-`"email"`/`"siren"` ; cf. `data_set_schema`) : toute écriture qui porte cette clé fait alors
-un **UPSERT (merge)** sur elle au lieu de dupliquer (param `key` explicite prioritaire) — les
-rows sans clé sont appendées. Renvoie `{inserted, updated, count, key, ids}`.
+`"email"`/`"siren"` ; cf. `data_set_schema`) : une écriture qui porte une valeur de clé
+déjà présente ne duplique pas (param `key` explicite prioritaire) — nommée par l'appel
+(`key=`), elle **désigne** la ligne et la modifie ; sinon l'écriture **ajoute**, et ne
+fusionne qu'avec `upsert=true` (sans lui avertie, puis refusée à partir du 21 octobre
+2026 : oto#141, ci-dessous) ; les rows sans clé sont appendées. Renvoie `{inserted,
+updated, count, key, ids, fusions?}`.
+⚠️ **Ajouter n'est pas désigner (oto#141, arbitré le 30/09/2026, précisé le 01/10).**
+Jusque-là, toute écriture SANS `id` dont la valeur de clé existait déjà mettait la ligne
+en place à jour en silence — ligne seule, lot, REST, upload signé —, et deux lignes d'un
+même lot à la même clé fusionnaient entre elles (`ids: [r1, r1, r2, r3]` pour trois
+lignes écrites, rien ne le disant). La règle :
+  - **Désigner** — `id=`, ou `key=` passé EXPLICITEMENT (lot ; ligne seule quand il nomme
+    la clé déclarée, `data_write(row=, key=)` ou `POST …/rows?key=` ; clé nommée à la
+    frappe d'un upload signé ou à `oto_import`, scellée dans le jeton —
+    `target.cle_passee`), ou toute écriture sans `id` sur un tableau FERMÉ
+    (`key_required`) : une valeur présente MODIFIE sa ligne, sans `upsert` ni
+    avertissement ; une valeur absente crée la ligne (sauf tableau fermé).
+  - **Ajouter** — ni `id` ni `key=` : une valeur déjà présente fusionne avec
+    `upsert=true` ; sans lui, avertie puis refusée à la date.
+  - **Deux lignes du même appel à la même clé** : on ne désigne pas deux fois la même
+    ligne — sans `upsert`, avertie puis lot refusé ENTIER à la date, en désignation
+    comme en ajout.
+  - Paramètre `upsert: bool` (défaut `false`) sur toutes les faces qui prennent une clé :
+    `data_write` (ligne et lot), `POST …/rows` (`?upsert=true`), `POST …/rows/batch`, la
+    frappe d'un upload signé (scellé comme `donnees_d_origine`) et `oto_import`. Livré
+    en **préavis daté** (`datastore/upsert_implicite.py`, patron de `vide_remplace` et
+    `mots_deprecies`) : une date `UPSERT_IMPLICITE_REFUSE_LE` (2026-10-21), déplaçable
+    par `OTO_UPSERT_IMPLICITE_REFUSE_LE` (illisible ⇒ lève, `champs_reserves.date_reglee`),
+    dont le texte servi est dérivé.
+  - **Avant la date** : rien ne change à l'écriture ; un ajout qui fusionne, ou un
+    doublon dans l'appel, porte dans `notices` un avertissement daté (ligne seule : la
+    ligne visée, `id=<r1>` et `key=` ; lot : une phrase par clé, pas par ligne).
+  - **À partir de la date** : refus `business_key_exists` (MCP : `INVALID_PARAMS` ;
+    REST et réception d'upload : 409), qui nomme la ligne en place et les gestes
+    (désigner par `id=`/`key=`, ou `upsert=true`) ; un lot est jugé ENTIER avant sa
+    première ligne — doublons internes toujours, clés déjà en base s'il ajoute
+    (`juger_le_lot` ; lookup `db.datastore_find_row_id_by_key` par valeur distincte,
+    texte de clé rendu par la base `db.datastore_textes_de_cle` : aucune règle de
+    comparaison à part) —, un import en tranches sur le fichier entier avant la
+    première tranche. Une course perdue sous l'index suit la même règle.
+  - **`fusions`** (lot, upload, import), rendu dès maintenant quand il y en a :
+    `[{rang, dans_rang, id, cle}]`, `dans_rang` = la ligne du MÊME geste qui a posé la
+    ligne visée (`null` : déjà en base), à travers les tranches d'un import ; `ids`
+    reste aligné rang pour rang. L'accusé d'un upload signé, lu par un porteur de lien
+    anonyme, le rend SANS `id`, et son refus ne nomme aucune ligne par son identifiant
+    (oto#86).
+  - `upsert=true` est refusé là où il ne fusionnerait rien : avec `id=` (MCP), et sans
+    clé en vigueur (`upsert_without_key` à la frappe d'un upload, refus d'entrée
+    ailleurs). Un `key=` de ligne seule qui ne nomme pas la clé déclarée reste refusé
+    (`jetons.refus_de_key_sans_lot`), sur la face REST aussi.
+  - Bancs : `tests/datastore/test_upsert_implicite_141_live.py` (chaque face, avant et
+    après la date).
 ⚠️ **La fusion par clé n'est PAS réservée au lot** (vérifié le 28/08 sur table jetable, et
 la doc servie disait le contraire jusqu'au 29/08) : `data_write(row={siren: X})` **sans
 `id`**, sur un tableau qui déclare `key: "siren"` et où X existe, met à jour la ligne
 existante et rend son identifiant — `append_row` applique la même dédup que le batch
-depuis #109 ch.3. Croire l'inverse fait écrire en lots de un pour obtenir une fusion, ou
+depuis #109 ch.3 (et la même règle `upsert` depuis oto#141). Croire l'inverse fait écrire en lots de un pour obtenir une fusion, ou
 pire, fait chercher un `id` qu'on n'a pas. Cœur : `store.write_rows` →
 `_write_rows_to_ns(ns_id, rows, key)` (keyé par ns_id → réutilisable **hors contexte d'org**)
 + `db.datastore_find_row_id_by_key` (lookup dédup JSONB paramétré). Pour du **volumineux**,

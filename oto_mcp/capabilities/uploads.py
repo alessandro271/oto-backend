@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .. import config, file_source, upload_tokens
 from ..datastore import schema as dsv2
+from ..datastore import upsert_implicite as upi
 from ._authz import SUB_ONLY
 from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
@@ -43,7 +44,12 @@ class UploadUrlInput(BaseModel):
     content_type: Optional[str] = None                # project_file (sinon déduit à la réception)
     datastore: Optional[str] = None                   # le tableau visé (requis)
     format: Optional[Literal["ndjson", "csv"]] = None  # datastore (défaut ndjson)
-    key: Optional[str] = None                         # datastore : clé de batch upsert (sinon schema.key)
+    #: datastore : la clé qui DÉSIGNE les lignes (oto#141) — nommée, une valeur en place
+    #: modifie sa ligne ; omise, le fichier se rapproche sur `schema.key` mais AJOUTE.
+    key: Optional[str] = Field(default=None, description=(
+        "datastore: the column that DESIGNATES rows — an existing key value modifies "
+        "its row, a new one creates it, no `upsert` needed. Omitted: the file matches "
+        "on the table's declared key but ADDS (an existing value follows `upsert`)."))
     #: datastore — l'upload est LA porte de l'import, donc celle où poser la couche
     #: `origine` est le plus légitime (oto#70 lot 2). Le PUT, lui, ne porte aucun
     #: paramètre : c'est une URL signée qu'un socle appelle sans rien décider. La
@@ -62,6 +68,9 @@ class UploadUrlInput(BaseModel):
     #: PRÉPARE l'import qui le déclare, et c'est scellé dans le jeton.
     donnees_d_origine: bool = Field(
         default=False, description=dsv2.description_donnees_d_origine(en=True))
+    #: datastore — oto#141. Même raison que les deux précédents : le PUT ne porte aucun
+    #: paramètre, donc la fusion sur la clé se DEMANDE ici, au mint, et se scelle.
+    upsert: bool = Field(default=False, description=upi.description_parametre())
 
 
 class UploadUrlOutput(BaseModel):
@@ -100,6 +109,9 @@ _REFUS_DU_MINT = (
     DeclaredError(404, "unknown_doc", "la page visée (`doc_id`) n'existe pas"),
     DeclaredError(404, "unknown_project", "le projet visé (`project_id`) n'existe pas"),
     DeclaredError(403, "forbidden", "l'appelant n'a pas l'écriture sur la cible"),
+    DeclaredError(400, "upsert_without_key",
+                  "`upsert=true` sur un tableau sans clé métier, et sans `key` : il n'y "
+                  "aurait rien sur quoi fusionner"),
 )
 
 
@@ -127,10 +139,19 @@ def _datastore_target(sub: str, inp, fmt: str) -> dict:
         raise AuthzDenied(403, "read_only", f"Tableau `{ns}` partagé en lecture seule.")
     # Clé effective figée au mint (param explicite, sinon clé déclarée au schéma).
     eff_key = inp.key or store.declared_key(ns)
+    # oto#141 : refusé ICI, au mint, et pas à la réception — celui qui livre les octets
+    # ne peut plus rien corriger au jeton.
+    try:
+        upi.refuser_upsert_sans_cle(bool(inp.upsert), eff_key, ns, lot=True)
+    except ValueError as e:
+        raise AuthzDenied(400, "upsert_without_key", str(e))
     return {"kind": "datastore", "ns_id": ns_id, "namespace": ns,
             "format": fmt, "key": eff_key,
             "origine_override": bool(inp.origine_override),
-            "donnees_d_origine": bool(inp.donnees_d_origine)}
+            "donnees_d_origine": bool(inp.donnees_d_origine),
+            "upsert": bool(inp.upsert),
+            # oto#141 : la clé NOMMÉE à la frappe désigne ; scellé comme le reste.
+            "cle_passee": bool(inp.key)}
 
 
 def _upload_url(ctx: ResolvedCtx, inp: UploadUrlInput) -> dict:
@@ -213,7 +234,8 @@ CAPABILITIES += [
             "'<url>'`. Without one, give the URL to the user: it opens an upload form. If "
             "the file is already reachable (a link, a Drive file, a project file, a Gmail "
             "attachment), use `oto_import` instead: the server fetches it. Targets: "
-            "`datastore` (CSV or NDJSON rows, upsert on `key`), `doc`, `project_file`, "
+            "`datastore` (CSV or NDJSON rows; `key` designates rows by that column), `doc`, "
+            "`project_file`, "
             "`image` (public permanent URL, 2 MB). With neither a shell nor a user, send "
             "rows inline with `data_write`. The URL is signed, not encrypted: keep "
             "confidential names out of it."
@@ -254,8 +276,8 @@ class ImportInput(BaseModel):
     separator: Optional[Literal[",", ";", "tab", "|"]] = Field(
         default=None, description="CSV only. Default: detected.")
     key: Optional[str] = Field(default=None, description=(
-        "Column that identifies a row: a re-run then updates instead of appending. "
-        "Default: the table's declared key."))
+        "Column that DESIGNATES a row: a re-run then updates instead of appending, no "
+        "`upsert` needed. Omitted, the file matches on the declared key but ADDS. Default: the table's declared key."))
     declare_columns: bool = Field(default=True, description=(
         "Declare headers that match no column as text columns (label = header). "
         "Existing columns are never changed."))
@@ -273,6 +295,7 @@ class ImportInput(BaseModel):
         default=False, description=dsv2.description_parametre_origine(en=True))
     donnees_d_origine: bool = Field(
         default=False, description=dsv2.description_donnees_d_origine(en=True))
+    upsert: bool = Field(default=False, description=upi.description_parametre())
 
 
 class ImportOutput(BaseModel):
@@ -441,6 +464,13 @@ CAPABILITIES += [
             DeclaredError(400, "bad_ndjson", "an NDJSON line is not an object"),
             DeclaredError(400, "bad_row",
                           "a row was refused: `details` gives the row and `resume_from`"),
+            DeclaredError(400, "upsert_without_key",
+                          "`upsert=true` on a table with no business key and no `key`"),
+            DeclaredError(409, "business_key_exists",
+                          "without `upsert=true`, rows of the file share a key value, or "
+                          "the file ADDS (no `key`) rows whose key the table already holds: `details` names them "
+                          "(`doublons`, `existantes`) — nothing written when judged "
+                          "before the first slice, else `resume_from`"),
         ),
         description=(
             "Load a file the server can reach into a table or a project — the content "

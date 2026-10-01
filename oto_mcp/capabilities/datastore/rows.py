@@ -36,7 +36,9 @@ from ...datastore import couches, identite, jetons
 from ...datastore import forcage as fcg
 from ...datastore import layers as dsl
 from ...datastore import schema as dsv2
+from ...datastore import upsert_implicite as upi
 from ...datastore.core import (
+    BusinessKeyExists,
     BusinessKeyRequired,
     DatastoreNotFound,
     DatastoreReadOnly,
@@ -53,8 +55,9 @@ from .lot import refuser_un_lot
 from ..registry import CAPABILITIES
 from ._forme import (_EMPTIES, _LAYERS, _REFUS_DE_FORME, _VERSIONS, _layers,
                      _relais_empties, _versions)
-from ._refus import (_JETON_MAL_PLACE, _LIGNE_ABSENTE, _PRECONDITION_REFUSEE,
-                     _REFUS_D_ADRESSE, _REFUS_D_ECRITURE, _WORKER_REQUIS)
+from ._refus import (_CLE_DEJA_PORTEE, _JETON_MAL_PLACE, _LIGNE_ABSENTE,
+                     _PRECONDITION_REFUSEE, _REFUS_D_ADRESSE, _REFUS_D_ECRITURE,
+                     _WORKER_REQUIS)
 
 
 def _tolerant_int(v):
@@ -219,6 +222,11 @@ _ORIGINE = Field(default=False,
 _DONNEES_D_ORIGINE = Field(default=False,
                            description=dsv2.description_donnees_d_origine())
 
+# oto#141 : la fusion sur la clé métier se DEMANDE. Même passage que les trois
+# au-dessus (query sur l'ajout d'une ligne, dont le corps EST la ligne ; corps ou query
+# sur le lot) ; aucun palier — c'est un geste à nommer, pas un droit à obtenir.
+_UPSERT = Field(default=False, description=upi.description_parametre())
+
 
 class AppendRowInput(EntreeDatastore):
     datastore: Adresse
@@ -228,6 +236,14 @@ class AppendRowInput(EntreeDatastore):
     force: Optional[list[str] | str] = _FORCE
     origine_override: bool = _ORIGINE
     donnees_d_origine: bool = _DONNEES_D_ORIGINE
+    upsert: bool = _UPSERT
+    # oto#141 : en QUERY (le corps est la ligne). Nommer la clé déclarée DÉSIGNE la
+    # ligne par sa valeur ; toute autre colonne est refusée, jamais ignorée.
+    key: Optional[str] = Field(default=None, description=(
+        "`?key=<the declared business key>` DESIGNATES the row by its key value: an "
+        "existing value modifies that row, a new one creates it — no `upsert` needed. "
+        "Without it the write ADDS a row (see `upsert`). Any other column is refused: "
+        "to designate by another column, use `POST …/rows/batch`."))
 
     @field_validator("force", mode="after")
     @classmethod
@@ -260,13 +276,15 @@ class WriteRowsInput(EntreeDatastore):
         "The rows, one object per row, one key per column — the same objects "
         "`POST …/rows` takes one at a time."))
     key: Optional[str] = Field(default=None, description=(
-        "Business-key column used to dedup: a row whose key value already exists "
-        "is MERGED into that row, otherwise it is created. Defaults to the table's "
-        "declared key (`schema.key`)."))
+        "Business-key column that DESIGNATES the rows: a row whose key value already "
+        "exists MODIFIES that row, a new value creates one — no `upsert` needed. "
+        "Omitted, the batch matches on the table's declared key (`schema.key`) but "
+        "ADDS: an existing value then follows `upsert`."))
     readonly_override: bool = _FORCAGE
     force: Optional[list[str] | str] = _FORCE
     origine_override: bool = _ORIGINE
     donnees_d_origine: bool = _DONNEES_D_ORIGINE
+    upsert: bool = _UPSERT
 
     @field_validator("force", mode="after")
     @classmethod
@@ -426,7 +444,14 @@ class WrittenBatch(BaseModel):
     updated: int
     count: int
     key: Optional[str] = None
-    ids: list[str]
+    ids: list[str] = Field(description=(
+        "one `_id` per row sent, rank for rank — two entries can name the same row "
+        "when rows merged: `fusions` says which"))
+    fusions: Optional[list[dict]] = Field(default=None, description=(
+        "the rows that MERGED on the key (oto#141): `{rang, dans_rang, id, cle}` — "
+        "`rang` the row's rank in the batch (from 1), `dans_rang` the earlier row of "
+        "the SAME batch that made the target row (`null`: the row was already in the "
+        "table), `id` that row, `cle` `{column: value}`. Absent when nothing merged"))
     hors_schema: Optional[list[str]] = None
     hors_schema_hint: Optional[str] = None
     valeurs_ecartees: Optional[list[dict]] = None
@@ -636,6 +661,10 @@ def _write_refusal(e: Exception) -> AuthzDenied:
         return AuthzDenied(409, "row_locked", str(e))
     if isinstance(e, BusinessKeyRequired):
         return AuthzDenied(400, "business_key_required", str(e), e.details)
+    if isinstance(e, BusinessKeyExists):
+        # oto#141 : 409 comme `row_locked` — la requête est bien formée, c'est l'ÉTAT du
+        # tableau (une ligne porte déjà cette clé) qui s'y oppose.
+        return AuthzDenied(409, "business_key_exists", str(e), e.details)
     if isinstance(e, RowValidationError):
         return AuthzDenied(400, "row_invalid", str(e), e.details)
     return AuthzDenied(400, "invalid_row_input", str(e))
@@ -652,8 +681,10 @@ def _conflit_de_revision(e: RevisionConflict) -> AuthzDenied:
 
 _ECRITURE_DETRUIT = (
     " ⚠️ Une écriture DÉTRUIT ce qui est dans la colonne : sur une colonne "
-    "ouverte il n'y a ni annulation ni historique, la valeur précédente "
-    "disparaît au moment où la vôtre arrive. ⚠️ **Et il n'y a AUCUN filet "
+    "ouverte il n'y a pas d'annulation, la valeur précédente quitte la ligne "
+    "au moment où la vôtre arrive — elle ne survit que dans le journal des "
+    "révisions de la ligne (`GET …/rows/{row_id}/history`, `data_row_history` : "
+    "l'avant et l'après de chaque écriture, 90 jours par défaut). ⚠️ **Et il n'y a AUCUN filet "
     "automatique** : le format `origine: \"system\"` a été SUPPRIMÉ le "
     "08/09/2026 — il capturait la valeur précédente à la première écriture "
     "qui la changeait, ce qui exigeait d'avoir été déclaré AVANT que la "
@@ -661,7 +692,8 @@ _ECRITURE_DETRUIT = (
     "remplace est un geste DÉCLARÉ, porté par l'appel qui apporte la "
     "donnée : `donnees_d_origine=true` écrit les DEUX versions — la valeur "
     "courante et l'origine — au moment où la valeur entre. Sans lui, un "
-    "écrasement est définitif et rien ne vous le dira après. La face "
+    "écrasement est définitif dans la ligne : seul l'historique garde la "
+    "valeur d'avant. La face "
     "d'appel n'y change rien : une ligne créée ici et une ligne créée par "
     "l'outil agent se comportent à l'identique.")
 
@@ -677,7 +709,8 @@ def _append_row(ctx: ResolvedCtx, inp: AppendRowInput) -> dict:
                                    readonly_override=inp.readonly_override,
                                    origine_override=inp.origine_override,
                                    donnees_d_origine=inp.donnees_d_origine,
-                                   force=fcg.chemins_forces(inp.force))
+                                   force=fcg.chemins_forces(inp.force),
+                                   upsert=inp.upsert, key=inp.key)
     except DatastoreNotFound:
         raise ns_not_found(ctx.sub, ns)
     except DatastoreReadOnly:
@@ -712,7 +745,8 @@ def _write_rows(ctx: ResolvedCtx, inp: WriteRowsInput) -> dict:
                                  readonly_override=inp.readonly_override,
                                  origine_override=inp.origine_override,
                                  donnees_d_origine=inp.donnees_d_origine,
-                                 force=fcg.chemins_forces(inp.force))
+                                 force=fcg.chemins_forces(inp.force),
+                                 upsert=inp.upsert)
     except DatastoreNotFound:
         raise ns_not_found(ctx.sub, ns)
     except DatastoreReadOnly:
@@ -881,6 +915,7 @@ CAPABILITIES += [
                           "la ligne est refusée par le schéma, le cycle de vie ou le "
                           "nom d'une colonne (vide, pointé) : le message nomme les "
                           "champs fautifs"),
+            _CLE_DEJA_PORTEE,
         ),
         description=("Ajoute UNE ligne à un tableau — le corps EST la ligne : un objet, "
                      "une clé par colonne. Pas de lot ici : un corps dont l'unique clé "
@@ -893,6 +928,7 @@ CAPABILITIES += [
                      "de cet appel — propriétaire ou gouvernant du tableau seulement, "
                      "et journalisé. " + dsv2.description_parametre_origine()
                      + " " + couches.DESCRIPTION_ECRITURE
+                     + " " + upi.description_cle_schema()
                      + " `readonly`, clé métier, ce qu'une écriture détruit : guide "
                      "`datastore-semantics`." + _ECRITURE_DETRUIT),
     ),
@@ -916,15 +952,17 @@ CAPABILITIES += [
                           "existante : le message nomme la ligne ; "
                           "`details.cle_portee` dit si elle portait la clé, "
                           "`details.a_renvoyer` le fragment à renvoyer"),
+            _CLE_DEJA_PORTEE,
         ),
         description=("Écrit un LOT de lignes en un appel — le même geste que "
                      "`data_write(rows=[…])` côté agent : même moteur, mêmes refus, "
                      "mêmes notices. Corps `{\"rows\": [{…}, …], \"key\": "
                      "\"<colonne>\"}` ; `key` facultatif, défaut = la clé métier "
-                     "déclarée. Une ligne dont la clé existe déjà est FUSIONNÉE dans "
-                     "celle-ci, sinon elle est créée. Réponse : `inserted`, "
-                     "`updated`, `count`, `ids`, et les relevés du geste cumulés sur "
-                     "le lot. Une écriture qui porte un mot refusé (`@keep`, "
+                     "déclarée — nommée, elle DÉSIGNE : une ligne dont la clé existe "
+                     "déjà la modifie, sinon elle est créée ; omise, le lot AJOUTE. " + upi.description_cle_schema() + " Réponse : "
+                     "`inserted`, `updated`, `count`, `ids` (un par ligne envoyée, "
+                     "rang pour rang), `fusions` (les lignes qui ont fusionné), et "
+                     "les relevés du geste cumulés sur le lot. Une écriture qui porte un mot refusé (`@keep`, "
                      "`@clear`, après leur date) est refusée ENTIÈRE, rien n'est "
                      "écrit. ⚠️ Sinon le lot n'est PAS atomique : une ligne refusée "
                      "arrête le lot, les lignes d'avant restent écrites, et le refus "

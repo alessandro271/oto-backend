@@ -21,6 +21,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access, db, ownership
 from ..datastore import claimable, couches, identite, jetons, mots_deprecies, vide_remplace
+from ..datastore import upsert_implicite
 from ..datastore import charge_a_renvoyer
 from ..datastore import forcage as fcg
 from ..datastore import layers as dsl
@@ -47,24 +48,41 @@ from ..datastore.core import (
 _MARQUE_COUCHES = "<<couches>>"
 _MARQUE_MOTS_DEPRECIES = "<<mots_deprecies>>"
 _MARQUE_VIDE_REMPLACE = "<<vide_remplace>>"
+_MARQUE_UPSERT_IMPLICITE = "<<upsert_implicite>>"
+_MARQUE_UPSERT = "<<upsert>>"
+_MARQUE_CLE_METIER = "<<cle_metier>>"
 
 
-def _avec_la_phrase_des_couches(fn):
-    """Insère dans la description servie la phrase des couches, tenue par
-    `couches.DESCRIPTION_ECRITURE` — la même que sert la face REST (oto#91) —,
-    l'annonce datée des mots dépréciés, DÉRIVÉE de la date qui les refusera, et celle
-    de `""`/`[]` qui remplaceront la valeur en place (oto#140 J2). Une
-    marque absente lève : une description qui aurait perdu sa phrase servirait
-    l'écriture sans son vocabulaire, et personne ne le verrait."""
-    phrases = {_MARQUE_COUCHES: couches.DESCRIPTION_ECRITURE,
-               _MARQUE_MOTS_DEPRECIES: mots_deprecies.DESCRIPTION_ECRITURE,
-               _MARQUE_VIDE_REMPLACE: vide_remplace.DESCRIPTION_ECRITURE}
+def _inserer(fn, phrases: dict):
+    """Remplace chaque marque de la description servie par sa phrase. Une marque
+    absente LÈVE : une description qui aurait perdu sa phrase servirait l'écriture sans
+    son vocabulaire, et personne ne le verrait."""
     for marque, phrase in phrases.items():
         if marque not in (fn.__doc__ or ""):
             raise RuntimeError(f"{fn.__name__} : marque {marque} absente de la "
                                "description")
         fn.__doc__ = fn.__doc__.replace(marque, phrase)
     return fn
+
+
+def _avec_la_phrase_des_couches(fn):
+    """Insère dans la description servie la phrase des couches, tenue par
+    `couches.DESCRIPTION_ECRITURE` — la même que sert la face REST (oto#91) —,
+    l'annonce datée des mots dépréciés, DÉRIVÉE de la date qui les refusera, celle
+    de `""`/`[]` qui remplaceront la valeur en place (oto#140 J2), et celle de la
+    fusion sur la clé métier qui se DEMANDE (`upsert`, oto#141)."""
+    return _inserer(fn, {
+        _MARQUE_COUCHES: couches.DESCRIPTION_ECRITURE,
+        _MARQUE_MOTS_DEPRECIES: mots_deprecies.DESCRIPTION_ECRITURE,
+        _MARQUE_VIDE_REMPLACE: vide_remplace.DESCRIPTION_ECRITURE,
+        _MARQUE_UPSERT_IMPLICITE: upsert_implicite.DESCRIPTION_ECRITURE,
+        _MARQUE_UPSERT: upsert_implicite.description_parametre()})
+
+
+def _avec_la_regle_de_cle(fn):
+    """Ce que la clé métier déclarée fait à l'écriture (oto#141), DÉRIVÉ de la date —
+    la même phrase que `data_patch_schema` et la face REST."""
+    return _inserer(fn, {_MARQUE_CLE_METIER: upsert_implicite.description_cle_schema()})
 
 
 def _store_for(sub: str):
@@ -617,6 +635,7 @@ def register(mcp: FastMCP) -> None:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
 
     @mcp.tool()
+    @_avec_la_regle_de_cle
     def data_set_schema(datastore: Adresse, schema: Optional[dict] = None,
                         semantic_search: Optional[bool] = None) -> dict:
         """Declare (or clear with schema=null) a datastore's TYPED schema (ADR 0032 §6).
@@ -639,12 +658,16 @@ def register(mcp: FastMCP) -> None:
         `enforced` (the validation keys THIS version applies). To EDIT a schema without
         risking part of it, use `data_patch_schema`: it merges by key and cannot
         destroy what it does not name.
+        The response also carries `existing_violations`: per path (`contacts[].email`),
+        the rows ALREADY IN PLACE that the posed schema condemns — `rows`,
+        `blocking_rows` (rows that accept no write at all until fixed), `sample_ids`
+        and `consequence`. Clean them before arming the guard;
+        `existing_violations_scope.complete: false` means the row cap was hit and the
+        counts are floors.
 
         The optional top-level `"key"` names the field that is the row's BUSINESS KEY
-        (e.g. "email", "siren"): EVERY write carrying that key value then UPSERTs on it
-        — a single `data_write(row=…)` as much as a batch (`rows=…`) or
-        `oto_upload_url` — the same key value updates the existing row instead of
-        duplicating. Default is SOFT (rendering/dedup only, no write validation).
+        (e.g. "email", "siren"). <<cle_metier>>
+        Default is SOFT (rendering/dedup only, no write validation).
         Add `"key_required": true` to CLOSE the table: a write that designates NO
         existing row (no `id`, and no key value the table already carries) is then
         REFUSED instead of creating one. Off by default — a table often fills up
@@ -805,7 +828,8 @@ def register(mcp: FastMCP) -> None:
                    origine_override: bool = False,
                    donnees_d_origine: bool = False,
                    force: list | None = None,
-                   expected_revision: str | None = None) -> dict:
+                   expected_revision: str | None = None,
+                   upsert: bool = False) -> dict:
         """Write one row, or a BATCH of rows in a single call.
 
         ⚠️ **Provenance goes in `comment`, never in `origine`.** Put WHAT you
@@ -843,6 +867,8 @@ def register(mcp: FastMCP) -> None:
 
         <<vide_remplace>>
 
+        <<upsert_implicite>>
+
         ⚠️ **`@empty` must be the ENTIRE sub-field, alone.** Mixed into a sentence it
         is just text and gets stored as such — `"@empty ; nothing on the imprint"`
         lands in the cell verbatim, and a client reads it in their deliverable. The
@@ -867,10 +893,11 @@ def register(mcp: FastMCP) -> None:
         its place (by its `of.key`, else its rank), the others as they were.
 
         ⚠️ **A write DESTROYS what is in the column.** On an open column there is no
-        undo and no history: the previous value is gone the moment yours lands. If
-        the value was supplied by the table's owner and you overwrite it, they get
-        nothing back — announce what you are about to change on a column you did not
-        fill yourself.
+        undo: the previous value leaves the row the moment yours lands. It survives
+        only in the row's revision journal — `data_row_history` serves each write's
+        before and after, kept 90 days by default — and nothing puts it back for you.
+        If the value was supplied by the table's owner, announce what you are about to
+        change on a column you did not fill yourself.
 
         ⚠️ **There is NO automatic safety net.** `origine: "system"` was REMOVED on
         2026-09-08. It captured the previous value lazily, on the first write that
@@ -886,8 +913,8 @@ def register(mcp: FastMCP) -> None:
         an EMPTY column receives nothing (supplying nothing is not supplying blank) ;
         the call's layers go into BOTH versions.
 
-        So on a column whose origin was never captured, overwriting is FINAL and
-        nothing will tell you afterwards. The 28 799 `origine` layers already in the
+        So on a column whose origin was never captured, overwriting is FINAL in the
+        row: only `data_row_history` still shows the previous value. The 28 799 `origine` layers already in the
         base are untouched — they are still read, served and protected; it is the
         mechanism that went, not the data.
 
@@ -896,11 +923,13 @@ def register(mcp: FastMCP) -> None:
         the MCP tool and one created through the REST face behave identically
         (measured 2026-09-04, both faces call the same store).
 
-        SINGLE (`row`): WITHOUT `id` = append a NEW row (new JSON keys auto-create
-        columns, unless the table is CLOSED — see below) — UNLESS the table declares
-        a business `key` and your row carries a value that already exists: it then
-        MERGES onto that row, exactly like a batch, and returns its `_id`. WITH `id`
-        = PARTIAL update of that row (only provided fields change). Returns the row
+        SINGLE (`row`): WITHOUT `id` = ADD a NEW row (new JSON keys auto-create
+        columns, unless the table is CLOSED — see below); if the table declares a
+        business `key` and your row carries a value that already exists, the
+        business-key rule above applies. WITH `key=<the declared key>` = DESIGNATE the
+        row by its key value: an existing value modifies that row and returns its
+        `_id`, a new one creates it. WITH `id` = PARTIAL update of that row (only
+        provided fields change). Returns the row
         (with `_id`/`_created_at`/`_updated_at`/`_revision`).
 
         `expected_revision` (with `id` only) — Only when what you write was COMPUTED
@@ -915,10 +944,14 @@ def register(mcp: FastMCP) -> None:
 
         BATCH (`rows` = list of dicts): write them all at once — for importing a
         dataset without round-tripping each row through your context. If a business
-        KEY is in effect (the `key` arg, else the datastore's declared `schema.key`),
-        every row carrying that key value UPSERTS (merges) onto the existing row of
-        the same key instead of duplicating; rows without a key are appended. Returns
-        a summary {inserted, updated, count, key, ids}. Use `data_set_schema` to
+        KEY is in effect (the `key` arg, else the datastore's declared `schema.key`):
+        with `key=` the batch DESIGNATES — a row whose key value exists modifies that
+        row, a new value creates one; without `key=` it ADDS, and the business-key
+        rule above applies to values already in the table. Two rows of the batch
+        with the same key value follow that rule either way; rows without a key are
+        appended. Returns a summary
+        {inserted, updated, count, key, ids, fusions?} — `ids` holds one `_id` per row
+        sent, rank for rank. Use `data_set_schema` to
         declare a persistent `key`. For a FILE, never retype its rows here: `oto_import`
         loads it from where it is (link, Drive, project file), `oto_upload_url` takes
         it from your disk.
@@ -927,8 +960,9 @@ def register(mcp: FastMCP) -> None:
         does NOT mean the write failed: it may have committed before the error.
         Read the row back (`data_rows`, by `id` or filtered on its key) before
         re-sending.
-        Re-sending is safe with `id`, or on a table with a business `key` (it
-        merges); a keyless append re-sent creates a DUPLICATE.
+        Re-sending is safe with `id`, or with `key=` (or `upsert=true`) on a table
+        with a business `key`: the row is designated, or merged; a keyless append
+        re-sent creates a DUPLICATE.
 
         ⚠️ A table can be CLOSED by its schema (`key_required: true`, next to its
         business `key`) — `data_get_schema` says whether it is. On such a table there
@@ -1009,11 +1043,14 @@ def register(mcp: FastMCP) -> None:
                 empty cell gets nothing — the client handed over nothing there,
                 which is not the same as handing over an empty value.
             rows: BATCH mode — a list of row dicts written in one call.
-            key: BATCH (with `rows=[…]`) — business key field for upsert/dedup
-                (else `schema.key`). Alongside a single `row`, accepted only when it
-                names the table's DECLARED business key, `row` carries its value and
-                no `id` is given (the single write already upserts on it); refused
-                otherwise — wrap the row in `rows=[…]` to dedup on another column.
+            key: DESIGNATES rows by this business key column: an existing value
+                modifies its row, a new one creates it — no `upsert` needed. BATCH
+                (with `rows=[…]`): any column (default `schema.key`, but then the
+                batch ADDS). Alongside a single `row`, accepted only when it names the
+                table's DECLARED business key, `row` carries its value and no `id`
+                is given; refused otherwise — wrap the row in `rows=[…]` to designate
+                by another column.
+            upsert: without `id` only. <<upsert>>
             readonly_override: `true` = overwrite the `readonly` columns THIS CALL
                 writes, instead of being refused. Owner or governor of the table
                 only ; valid for this call alone ; journaled.
@@ -1054,9 +1091,9 @@ def register(mcp: FastMCP) -> None:
             # et repartirait pour dix écritures muettes.
             #
             # Une exception, et une seule : `key` qui nomme la clé métier DÉCLARÉE,
-            # avec sa valeur dans `row` et sans `id=`. L'écriture unitaire rapproche
-            # déjà sur elle : le paramètre est réglé, pas ignoré (signaux 986, 1125,
-            # 1135, 1154 — l'idiome « upsert sur la clé » s'écrit ainsi).
+            # avec sa valeur dans `row` et sans `id=` : l'écriture DÉSIGNE alors la
+            # ligne par sa clé (oto#141, passé au store), sans `upsert` (signaux 986,
+            # 1125, 1135, 1154 — l'idiome « upsert sur la clé » s'écrit ainsi).
             if key is not None and rows is None:
                 declaree = (store.get_schema(datastore) or {}).get("key")
                 if not jetons.key_unitaire_redondant(key, declaree, row, id):
@@ -1070,6 +1107,12 @@ def register(mcp: FastMCP) -> None:
                 raise McpError(ErrorData(code=INVALID_PARAMS, message=(
                     "`expected_revision` ne vaut qu'avec `id=` — la ligne que tu as lue : "
                     "sans elle il n'y a rien à comparer, et rien n'est écrit.")))
+            # oto#141, MÊME axe : `id=` vise déjà sa ligne, il n'y a rien à fusionner.
+            if upsert and id is not None:
+                raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+                    "`upsert=true` ne vaut que SANS `id=` : avec `id=`, l'écriture vise "
+                    "déjà sa ligne et ne fusionne rien. Rien n'est écrit — retire l'un "
+                    "des deux.")))
             if rows is not None:
                 if row is not None or id is not None:
                     raise McpError(ErrorData(code=INVALID_PARAMS,
@@ -1080,7 +1123,7 @@ def register(mcp: FastMCP) -> None:
                                          readonly_override=readonly_override,
                                          origine_override=origine_override,
                                          donnees_d_origine=donnees_d_origine,
-                                         force=cibles)
+                                         force=cibles, upsert=upsert)
                 # Le lot a une ENVELOPPE (son corps n'est pas une ligne) : elle porte
                 # l'identité entière — le nom CANONIQUE, plus l'écho de la chaîne
                 # reçue, et le numéro à employer ensuite.
@@ -1096,7 +1139,9 @@ def register(mcp: FastMCP) -> None:
                                        readonly_override=readonly_override,
                                        origine_override=origine_override,
                                        donnees_d_origine=donnees_d_origine,
-                                       force=cibles) \
+                                       force=cibles, upsert=upsert,
+                                       # oto#141 : `key=` nommé = DÉSIGNATION.
+                                       key=key) \
                     if id is None \
                     else store.update_row(datastore, id, row,
                                           readonly_override=readonly_override,

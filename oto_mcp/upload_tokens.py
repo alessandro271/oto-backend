@@ -299,24 +299,59 @@ def import_rows(sub: str, target: dict, rows: list, *, deadline: float,
     """Write `rows[resume_from:]` into a table in slices, until done or `deadline`
     (`time.monotonic()`). A refusal names the absolute row and what is already written.
     Assumes authz checked (`check_target_access`) and columns already declared."""
-    from .datastore import core as ds  # lazy : évite tout cycle d'import au boot
+    from . import db  # lazy : évite tout cycle d'import au boot
+    from .datastore import core as ds
     from .datastore import mots_deprecies as mdp
+    from .datastore import upsert_implicite as upi
     store = ds.make_store(sub)
     ns_id = int(target["ns_id"])
     # Deprecated-word refusals are judged on the whole file before the first slice.
     mdp.controler(set(), *(r for r in rows[resume_from:] if isinstance(r, dict)))
+    # oto#141: so is the business key (from its date, without `upsert`): duplicates
+    # inside the file — and, when the file ADDS (no `key` named at the call), keys
+    # already in the table — refuse the WHOLE file before the first slice. One record
+    # for all slices, so that `fusions` carries the file's ranks and `dans_rang`
+    # crosses slices.
+    key, upsert = target.get("key"), bool(target.get("upsert"))
+    cle_passee = bool(target.get("cle_passee"))
+    fusions = upi.Fusions()
+    fusions.decalage = resume_from
+    if key and not upsert and upi.refus_arme():
+        try:
+            upi.juger_le_lot(
+                rows[resume_from:], key=key, decalage=resume_from,
+                designation=upi.designe(store._schema_of(ns_id), cle_passee),
+                datastore=target.get("namespace") or f"#{ns_id}",
+                textes=db.datastore_textes_de_cle,
+                chercher=lambda kv: db.datastore_find_row_id_by_key(ns_id, key, kv))
+        except ds.BusinessKeyExists as e:
+            raise UploadError(409, "business_key_exists", str(e), details={
+                **(e.details or {}), "row": resume_from + 1, "written": 0,
+                "resume_from": resume_from})
+        fusions.juge = True
     inserted = updated = 0
+    fusionnees: list = []
     i, last = resume_from, 0.0
     while i < len(rows):
         if i > resume_from and time.monotonic() + last > deadline:
             break
         start = time.monotonic()
         store._lot_rang = 0
+        fusions.decalage = i
         try:
             out = store._write_rows_to_ns(
-                ns_id, rows[i:i + IMPORT_SLICE], key=target.get("key"),
+                ns_id, rows[i:i + IMPORT_SLICE], key=key,
                 origine_override=bool(target.get("origine_override")),
-                donnees_d_origine=bool(target.get("donnees_d_origine")))
+                donnees_d_origine=bool(target.get("donnees_d_origine")),
+                upsert=upsert, cle_passee=cle_passee, fusions=fusions)
+        except ds.BusinessKeyExists as e:
+            # A race lost after the whole-file judgement: the row is named, what is
+            # already written stays, and the resume point is said — like `bad_row`.
+            rang = getattr(store, "_lot_rang", 0) or 1
+            done = i + rang - 1
+            raise UploadError(409, "business_key_exists", str(e), details={
+                **(e.details or {}), "row": done + 1,
+                "written": inserted + updated + rang - 1, "resume_from": done + 1})
         except ValueError as e:
             rang = getattr(store, "_lot_rang", 0) or 1
             done = i + rang - 1
@@ -324,12 +359,14 @@ def import_rows(sub: str, target: dict, rows: list, *, deadline: float,
                 "row": done + 1, "written": inserted + updated + rang - 1,
                 "resume_from": done + 1})
         inserted, updated = inserted + out["inserted"], updated + out["updated"]
+        fusionnees += out.get("fusions") or []
         i += IMPORT_SLICE
         last = time.monotonic() - start
     done = min(i, len(rows))
     return {"inserted": inserted, "updated": updated, "count": inserted + updated,
             "total_rows": len(rows), "done": done >= len(rows),
             **({} if done >= len(rows) else {"resume_from": done}),
+            **({"fusions": fusionnees} if fusionnees else {}),
             **store.off_schema_report()}
 
 
@@ -431,6 +468,7 @@ def materialize(sub: str, target: dict, data: bytes, request_ct: Optional[str]) 
 
     if kind == "datastore":
         from .datastore import core as ds  # lazy : évite tout cycle d'import au boot
+        from .datastore import upsert_implicite as upi
         store = ds.make_store(sub)
         # Le schéma n'entre en jeu que pour un CSV, seul format qui porte des
         # EN-TÊTES : une colonne déclarée rend `site_web.comment` lisible comme une
@@ -455,7 +493,21 @@ def materialize(sub: str, target: dict, data: bytes, request_ct: Optional[str]) 
                 # elle entre — plus d'ordre de gestes à respecter, plus de cran à
                 # déclarer avant, donc plus de « (origine inconnue) » à découvrir
                 # trois semaines plus tard.
-                donnees_d_origine=bool(target.get("donnees_d_origine")))
+                donnees_d_origine=bool(target.get("donnees_d_origine")),
+                # oto#141 : déclaré au MINT et scellé comme les deux précédents — celui
+                # qui livre les octets ne décide pas qu'ils fusionnent. Un jeton frappé
+                # sans lui (ou avant lui) vaut `false`. L'accusé est lu par un porteur
+                # de lien ANONYME : ni `fusions` ni le refus n'y nomment une ligne par
+                # son identifiant interne (oto#86).
+                upsert=bool(target.get("upsert")),
+                # oto#141 : la clé NOMMÉE au mint (scellée) DÉSIGNE ; sinon le fichier
+                # AJOUTE. Un jeton d'avant ce champ ajoute.
+                cle_passee=bool(target.get("cle_passee")),
+                fusions=upi.Fusions(nommer=False))
+        except ds.BusinessKeyExists as e:
+            # 409 et non `bad_row` : la requête est bien formée, c'est l'ÉTAT du tableau
+            # qui s'y oppose — le refus nomme les lignes et les deux gestes.
+            raise UploadError(409, "business_key_exists", str(e), details=e.details)
         except ValueError as e:
             raise UploadError(400, "bad_row", str(e))
         # Le chemin de bulk load est celui où le silence coûte le plus cher (#294) :
@@ -467,6 +519,7 @@ def materialize(sub: str, target: dict, data: bytes, request_ct: Optional[str]) 
         rendu = {"ok": True, "kind": "datastore", "datastore": target.get("namespace"),
                  "inserted": out["inserted"], "updated": out["updated"],
                  "count": out["count"], "bytes": len(data),
+                 **({"fusions": out["fusions"]} if out.get("fusions") else {}),
                  **parsed["info"], **store.off_schema_report()}
         if entetes_traduits:
             # DITE, jamais silencieuse : sans cette ligne, le client reçoit une colonne

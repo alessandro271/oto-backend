@@ -252,6 +252,10 @@ class AccuseDeDepot(BaseModel):
     updated: Optional[int] = Field(None, description="`datastore` : lignes mises à jour "
                                                      "(même clé d'upsert)")
     count: Optional[int] = Field(None, description="`datastore` : lignes du fichier")
+    fusions: Optional[list[dict]] = Field(None, description=(
+        "`datastore` : les lignes du fichier qui ont FUSIONNÉ sur la clé (oto#141) — "
+        "`{rang, dans_rang, id, cle}`, `dans_rang` = la ligne du fichier qui a posé la "
+        "ligne visée, `null` pour une ligne déjà en base"))
     entetes_traduits: Optional[dict[str, str]] = Field(None, description=(
         "`datastore` CSV : en-têtes renommés (un point ne peut pas figurer dans un nom "
         "de colonne) — ancien → nouveau"))
@@ -291,6 +295,12 @@ _REFUS_DE_LA_RECEPTION = (
     DeclaredError(400, "bad_row",
                   "`datastore` : une ligne est refusée par le stockage — `detail` dit "
                   "laquelle et pourquoi"),
+    DeclaredError(409, "business_key_exists",
+                  "`datastore`, jeton frappé sans `upsert` (oto#141, à partir de sa "
+                  "date) : des lignes du fichier partagent une valeur de clé, ou — "
+                  "frappé sans `key`, le fichier AJOUTE — en portent une que le "
+                  "tableau a déjà. `detail` les nomme, rien n'est écrit ; frapper un "
+                  "jeton avec `key` (désigner) ou `upsert=true` (fusionner)"),
     DeclaredError(413, "image_too_large", "`image` : au-delà de 2 Mo"),
     DeclaredError(400, "unsupported_type",
                   "`image` : ni png, ni jpeg, ni gif, ni webp (jugé sur les octets)"),
