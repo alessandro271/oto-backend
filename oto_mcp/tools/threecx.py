@@ -31,7 +31,8 @@ from ..connectors import verify as connector_verify
 from ..mcp_errors import McpError
 
 _NAME = "threecx"
-_ACCES = (("client_id", "client_secret"), ("username", "password"))
+# Les champs de chaque mode d'accès (`auth_mode`, discriminant de la carte).
+_ACCES = {"api_client": ("client_id", "client_secret"), "user": ("username", "password")}
 # Colonnes-corps d'une ligne du journal : rendues en taille dans la vue de tri.
 _CORPS = ("QualityReport", "Summary", "Transcription")
 _ADRESSE = ("CallHistoryId", "StartTime", "SrcRecId", "DstRecId")
@@ -55,19 +56,18 @@ def _bad(msg: str) -> McpError:
 
 
 def _champs(fields: dict) -> dict:
-    """`base_url` + UNE paire complète, non vide. Un champ vide passé au client y
-    déclencherait la résolution de secrets locale : on le refuse ici, au nom du
-    connecteur. Deux paires posées, c'est une ambiguïté : refusée aussi."""
-    def plein(n):
-        return bool((fields.get(n) or "").strip())
-
-    if not plein("base_url"):
-        raise ValueError("credential 3CX incomplet : base_url vide")
-    completes = [p for p in _ACCES if all(plein(n) for n in p)]
-    if len(completes) != 1:
-        raise ValueError("credential 3CX : renseigne soit client_id + client_secret, "
-                         "soit username + password (une seule des deux paires)")
-    return {"base_url": fields["base_url"], **{n: fields[n] for n in completes[0]}}
+    """`base_url` + la paire du mode choisi (`auth_mode`), NON VIDES. Un champ vide
+    passé au client y lèverait `MissingCredential` au nom de la lib : on le refuse
+    ici, au nom du connecteur."""
+    mode = (fields.get("auth_mode") or "").strip()
+    if mode not in _ACCES:
+        raise ValueError(f"credential 3CX : auth_mode doit valoir l'un de "
+                         f"{sorted(_ACCES)} — reçu {mode!r}")
+    noms = ("base_url",) + _ACCES[mode]
+    vides = [n for n in noms if not (fields.get(n) or "").strip()]
+    if vides:
+        raise ValueError(f"credential 3CX incomplet ({mode}) : {', '.join(vides)} vide(s)")
+    return {n: fields[n] for n in noms}
 
 
 def _refuse_ignored(op: str, hint: str, **provided) -> None:

@@ -2,9 +2,9 @@
 
 Ce que ce fichier verrouille :
 - la SURFACE (2 tools) et le routage vers la bonne méthode du client ;
-- le credential : `base_url` + UNE paire complète (client API ou compte), passés
-  tels quels au client ; incomplet, mixte ou sans `base_url` → refusé avant de
-  construire le client, dans l'outil ET la sonde ;
+- le credential : `base_url` + la paire du mode `auth_mode` (client API ou
+  compte), seule passée au client ; mode inconnu, paire incomplète ou sans
+  `base_url` → refusé avant de construire le client, dans l'outil ET la sonde ;
 - la garde d'egress sur `base_url` à chaque construction du client ;
 - la vue de tri du journal (corps rendus en taille) et le rendu de l'audio par
   `file_content.render_for_agent` ;
@@ -16,9 +16,10 @@ from unittest.mock import MagicMock
 import pytest
 from oto_mcp.mcp_errors import McpError
 
-_USER = {"base_url": "https://pbx.exemple.fr", "username": "u@exemple.fr", "password": "p",
-         "client_id": "", "client_secret": ""}
-_API = {"base_url": "https://pbx.exemple.fr", "client_id": "cid", "client_secret": "s"}
+_USER = {"base_url": "https://pbx.exemple.fr", "auth_mode": "user", "username": "u@exemple.fr",
+         "password": "p", "client_id": "", "client_secret": ""}
+_API = {"base_url": "https://pbx.exemple.fr", "auth_mode": "api_client", "client_id": "cid",
+        "client_secret": "s", "username": "restes", "password": "d-un-autre-mode"}
 
 
 @pytest.fixture
@@ -79,12 +80,13 @@ def test_credential_passe_tel_quel(construits, egress_vu, monkeypatch, creds, at
 
 
 @pytest.mark.parametrize("creds", [
-    {"base_url": "", "username": "u", "password": "p"},
-    {"base_url": "https://pbx.exemple.fr", "username": "u", "password": " "},
-    {"base_url": "https://pbx.exemple.fr", "client_id": "cid"},
-    {**_API, "username": "u", "password": "p"},
+    {**_USER, "base_url": ""},
+    {**_USER, "password": " "},
+    {**_API, "client_secret": ""},
+    {**_API, "auth_mode": ""},
+    {**_API, "auth_mode": "basic"},
 ])
-def test_credential_incomplet_ou_mixte_refuse(construits, egress_vu, monkeypatch, creds):
+def test_credential_incomplet_ou_mode_inconnu_refuse(construits, egress_vu, monkeypatch, creds):
     _creds(monkeypatch, creds)
     with pytest.raises(McpError):
         _tool("threecx_call")("2026-09-01", "2026-09-02")
@@ -167,7 +169,7 @@ def test_sonde_refuse_credential_incomplet(construits, egress_vu):
     from oto_mcp.tools import threecx as X
 
     with pytest.raises(connector_verify.NonAutorise):
-        X._verify({"base_url": "https://pbx.exemple.fr", "username": "u"})
+        X._verify({"base_url": "https://pbx.exemple.fr", "auth_mode": "user", "username": "u"})
     assert construits[1] == [] and egress_vu == []
 
 
@@ -255,3 +257,15 @@ def test_duree_illisible_rendue_telle_quelle():
 
     assert X._secondes("PT41.037054S") == 41.0
     assert X._secondes("n/a") == "n/a" and X._secondes(None) is None
+
+
+def test_carte_chaque_paire_requise_dans_son_mode():
+    from oto_mcp import providers
+
+    c = providers.REGISTRY["threecx"]
+    assert c.field_discriminator == "auth_mode"
+    for mode, paire in (("api_client", {"client_id", "client_secret"}),
+                        ("user", {"username", "password"})):
+        champs = {f.name: f for f in c.fields_for({"auth_mode": mode})}
+        assert set(champs) == {"base_url", "auth_mode"} | paire
+        assert all(champs[n].required for n in paire)

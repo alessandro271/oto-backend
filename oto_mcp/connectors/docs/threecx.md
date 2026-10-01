@@ -1,10 +1,10 @@
 ## prerequisite — tes accès 3cx
 
-le connecteur lit ton standard 3cx avec son adresse et un des deux accès suivants. les droits de cet accès bornent ce qui est visible.
+le connecteur lit ton standard 3cx avec son adresse et un des deux accès suivants, choisi par `auth_mode`. les droits de cet accès bornent ce qui est visible.
 - `base_url` — l'adresse https du client web 3cx, celle de la barre d'adresse quand tu ouvres 3cx dans ton navigateur (ex. `https://votre-societe.3cx.fr`)
-- `username` et `password` — un compte 3cx qui voit les appels et les enregistrements des groupes voulus (un responsable de groupe suffit) ; la double authentification doit y être désactivée ; un compte dédié vaut mieux qu'un compte personnel
-- ou `client_id` et `client_secret` — un client api créé dans la console d'administration 3cx (intégrations > api), si ta licence le permet
-renseigne `base_url` et une seule des deux paires dans tes clés de connecteur oto sous `3cx`
+- `auth_mode=user` : `username` et `password` — un compte 3cx qui voit les appels et les enregistrements des groupes voulus (un responsable de groupe suffit) ; la double authentification doit y être désactivée ; un compte dédié vaut mieux qu'un compte personnel
+- `auth_mode=api_client` : `client_id` et `client_secret` — un client api créé dans la console d'administration 3cx (intégrations > api), si ta licence le permet ; rôle system admin pour voir tout le standard
+renseigne `base_url`, `auth_mode` et la paire correspondante dans tes clés de connecteur oto sous `3cx`
 
 ## usage — traces d'appels et enregistrements
 
