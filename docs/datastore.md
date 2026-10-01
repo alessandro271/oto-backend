@@ -139,6 +139,8 @@ Surfaces :
 >   Typé au premier niveau seulement (`dates.typer_les_clauses`, depuis `_clauses` et le
 >   périmètre de réservation) ; `contains` reste textuel ; une borne illisible est
 >   refusée.
+> - **L'existant** : `scripts/normaliser_dates.py` (à blanc par défaut, `--appliquer`),
+>   lancé une fois depuis le commit.
 
 > **Une colonne composite ENTIÈRE ne se compare pas (oto#22, 30/09/2026).** Sur une
 > colonne déclarée `list` ou `object`, `eq`/`ne`/`in`/`gt`/`gte`/`lt`/`lte`
