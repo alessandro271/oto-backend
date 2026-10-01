@@ -40,6 +40,7 @@ l'avertissement ne se mette à mentir.
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 from .declaration import COMPOSITE_TYPES, SCALAR_TYPES
@@ -261,3 +262,45 @@ TETE_RECONNUES: frozenset[str] = frozenset(c.nom for c in CLES_DE_TETE)
 #: corrige en un geste, « clé inconnue » fait chercher une faute de frappe.
 PARAMETRES_HORS_SCHEMA: frozenset[str] = frozenset({"semantic_search", "datastore",
                                                     "namespace", "owner"})
+
+
+# ── La fermeture du vocabulaire, niveau par niveau (01/10/2026) ───────────────
+#
+# Ce que chacun des cinq niveaux d'un schéma ADMETTRA quand le vocabulaire se fermera
+# (oto#34, #35, #127) : la tête, une colonne, un sous-champ (`fields` d'un objet ou
+# d'un élément), l'élément d'une liste (`of`) et le bloc `lifecycle`. Ces listes
+# servent d'abord au rangement des schémas existants (`scripts/durcir_schemas.py`),
+# lancé AVANT la bascule ; le refus s'en servira ensuite, sans autre liste.
+
+#: La ZONE LIBRE : un objet, admis à chaque niveau, transporté tel quel, jamais lu.
+#: Seule sa TAILLE est bornée, sérialisée en JSON compact (UTF-8).
+META = "meta"
+META_MAX_OCTETS = 4096
+
+
+def taille_json(valeur) -> int:
+    """La mesure de la borne : la taille d'une valeur en JSON compact, en octets UTF-8."""
+    return len(json.dumps(valeur, ensure_ascii=False, separators=(",", ":"))
+               .encode("utf-8"))
+
+
+#: Quatre noms pour un même geste, repliés dans `description` — le seul texte d'aide.
+TEXTES_D_AIDE: tuple[str, ...] = ("note", "help", "hint", "placeholder")
+
+#: Ce qu'une colonne admet et qu'un sous-champ n'admet pas : sous un sous-record, rien
+#: ne lit le verrou, l'accès agent, le cycle de vie, la formule ni le titre de ligne.
+PREMIER_NIVEAU_SEULEMENT: tuple[str, ...] = (
+    "readonly", "agent_access", "lifecycle", "formula", "display")
+
+_COLONNE_ADMISES = (RECONNUES - set(TEXTES_D_AIDE) - {"origine"}) | {META}
+
+#: Ce que chaque niveau admettra.
+ADMISES: dict[str, frozenset[str]] = {
+    "tete": TETE_RECONNUES | {META},
+    "champ": _COLONNE_ADMISES,
+    "sous_champ": _COLONNE_ADMISES - set(PREMIER_NIVEAU_SEULEMENT),
+    # Le validateur ne lit d'un élément que le type, les options et les sous-champs.
+    "element": frozenset({"key", "type", "fields", "of", "options", "label",
+                          "description", META}),
+    "cycle": CYCLE_RECONNUES | {META},
+}
