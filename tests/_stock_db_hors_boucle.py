@@ -122,12 +122,6 @@ STOCK: dict[str, str] = {
         "access.current_org",
     "oto_mcp.tools.meta::register.<locals>.oto_call":
         "_tool_prefix, access.current_org, call_axes.axes_for_call, current_user_sub_from_token, redaction.redact_payload",
-    "oto_mcp.tools.meta::register.<locals>.oto_disable_tool":
-        "_active_org, _require_sub, _tool_prefix, db.add_user_disabled_tool, db.remove_user_enabled_tool",
-    "oto_mcp.tools.meta::register.<locals>.oto_enable_tool":
-        "_active_org, _require_sub, _tool_prefix, db.add_user_enabled_tool, db.remove_user_disabled_tool",
-    "oto_mcp.tools.meta::register.<locals>.oto_list_my_tools":
-        "_require_sub, _tool_prefix, _toolbox_scope",
     "oto_mcp.tools.meta::register.<locals>.oto_tool_schema":
         "[dormant] _require_sub, _tool_prefix",
     "oto_mcp.tools.pennylaneged::_call_raw":

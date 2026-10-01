@@ -44,6 +44,11 @@ def compte(monkeypatch):
     """Un compte dont l'org expose tout SAUF `whatsapp`, et qui n'a installé
     qu'`apollo` : le reste est installable, whatsapp non exposé."""
     monkeypatch.setattr(_meta, "current_user_sub_from_token", lambda: _SUB)
+    # `oto_list_my_tools` est une capacité (#429) : l'identité se lit au seuil de
+    # l'adaptateur, et la règle `SUB_ONLY` résout aussi le rôle.
+    from oto_mcp.capabilities import _mcp_adapter
+    monkeypatch.setattr(_mcp_adapter, "current_user_sub_from_token", lambda: _SUB)
+    monkeypatch.setattr(_meta.access, "get_user_role", lambda s: "member")
     monkeypatch.setattr(sv.db, "list_user_disabled_tools", lambda s, o=None: [])
     monkeypatch.setattr(sv.db, "list_user_enabled_tools", lambda s, o=None: [])
     monkeypatch.setattr(sv.access, "current_org", lambda s: _ORG)

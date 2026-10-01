@@ -7,6 +7,8 @@ recopié d'une règle. Trois états, et une légende qui dit le geste de chacun.
 """
 from __future__ import annotations
 
+from typing import Optional
+
 from fastmcp import Context
 
 from .. import providers, session_visibility, tool_alias, tool_registry
@@ -131,3 +133,27 @@ def grouper_par_connecteur(entries: list[dict]) -> list[dict]:
         out.append(groupe)
     return out
 
+
+def hint_zero_resultat(tb: Optional[dict]) -> str:
+    """Le hint d'une recherche d'outils qui ne trouve rien.
+
+    Deux causes possibles, et **la mauvaise réponse coûte un rapport faux**. Sans
+    écart de boîte, zéro veut bien dire « reformule » — la recherche est lexicale sur
+    des docstrings anglaises. Avec écart (#577), zéro ne dit RIEN de l'existence de
+    l'outil : la session a été montée pour l'org maison au handshake, les outils des
+    connecteurs de l'org épinglée n'y sont pas listés, et ils restent appelables.
+
+    Servir le premier texte dans le second cas est ce qui a produit le rapport
+    « source injoignable » du signal #616, sur un connecteur actif et joignable."""
+    if tb:
+        return ("Zéro résultat ICI ne veut PAS dire que l'outil n'existe pas : la boîte "
+                "de cette session est montée pour une autre org (voir `toolbox_scope`), "
+                "donc les outils des connecteurs de l'org épinglée n'y sont pas listés. "
+                "Appelle-le par `oto_call(name=..., arguments={...})` avant de conclure "
+                "qu'une source est injoignable.")
+    return ("Aucun outil ne porte ces mots. La recherche est LEXICALE et les docstrings "
+            "sont en ANGLAIS : relance la même intention en anglais avant toute autre "
+            "conclusion — mesuré le 08/09/2026, « transférer propriétaire équipe "
+            "ressource » rend 0 outil et « transfer ownership resource team » rend "
+            "`oto_resource` en tête. Sinon, repère le domaine dans `namespaces`, ou "
+            "relance sans `query` pour le catalogue complet.")

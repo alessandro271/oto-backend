@@ -284,6 +284,11 @@ from oto_mcp.tools import meta as _meta  # noqa: E402
 def compte_acme(tenant_avec_prefixe, monkeypatch):
     """Un compte du tenant `acme`, vu par les tools méta."""
     monkeypatch.setattr(_meta, "current_user_sub_from_token", lambda: _SUB_TENANT)
+    # `oto_list_my_tools` est une capacité (#429) : l'identité se lit au seuil de
+    # l'adaptateur, et la règle `SUB_ONLY` résout aussi le rôle.
+    from oto_mcp.capabilities import _mcp_adapter
+    monkeypatch.setattr(_mcp_adapter, "current_user_sub_from_token", lambda: _SUB_TENANT)
+    monkeypatch.setattr(_meta.access, "get_user_role", lambda s: "member")
 
 
 async def _appelle(nom_du_tool: str, args: dict):

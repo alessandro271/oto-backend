@@ -46,7 +46,7 @@ import pytest
 from fastmcp import FastMCP
 
 from oto_mcp import tool_registry
-from oto_mcp.tools.meta import _CATALOG_BLURB
+from oto_mcp.tools.catalogue import CATALOG_BLURB as _CATALOG_BLURB
 
 
 # Les deux budgets RÉELLEMENT servis, pas un budget de test : 100 = la ligne de

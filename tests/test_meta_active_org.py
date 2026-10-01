@@ -1,4 +1,6 @@
-"""`_active_org` (meta.py) scope les toggles/presets via le seam `access.current_org`.
+"""`_org_de_visibilite` (`capabilities/tools_me.py`) scope les toggles de visibilité via le
+seam `access.current_org` — ex-`meta._active_org`, avant que les bascules deviennent des
+capacités (#429).
 
 ADR 0038 B3 : le BRACELET de session (`oto_use_org`) est retiré — le seam résout
 `jeton d'appel ?? consultation ?? maison`. Régressions couvertes : le jeton `org=`
@@ -8,7 +10,7 @@ IGNORÉ, membre ou pas ; sans jeton → maison.
 import pytest
 
 from oto_mcp import org_store, session_org
-from oto_mcp.tools.meta import _active_org
+from oto_mcp.capabilities.tools_me import _org_de_visibilite as _active_org
 
 
 @pytest.fixture(autouse=True)

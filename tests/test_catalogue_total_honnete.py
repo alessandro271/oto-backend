@@ -28,6 +28,11 @@ _SUB = "u-catalogue"
 def compte(monkeypatch):
     """Un compte nu : aucun outil désactivé, aucune denylist, aucun écart de boîte."""
     monkeypatch.setattr(_meta, "current_user_sub_from_token", lambda: _SUB)
+    # `oto_list_my_tools` est une capacité (#429) : l'identité se lit au seuil de
+    # l'adaptateur, et la règle `SUB_ONLY` résout aussi le rôle.
+    from oto_mcp.capabilities import _mcp_adapter
+    monkeypatch.setattr(_mcp_adapter, "current_user_sub_from_token", lambda: _SUB)
+    monkeypatch.setattr(_meta.access, "get_user_role", lambda s: "member")
     monkeypatch.setattr(_meta.db, "list_user_disabled_tools", lambda s, o=None: [])
     monkeypatch.setattr(_meta.db, "list_user_enabled_tools", lambda s, o=None: [])
     monkeypatch.setattr(_meta.access, "current_org", lambda s: None)

@@ -178,6 +178,16 @@ def test_un_outil_protege_refuse_le_masquage(monkeypatch, socle):
     assert socle == [], "rien ne doit être écrit quand la bascule est refusée"
 
 
+def test_masquer_un_outil_inconnu_est_un_404_nomme(monkeypatch, socle):
+    """Depuis que la face agent et la face REST sont la même capacité (#429), masquer
+    un nom que le serveur ne sert pas est refusé sur les DEUX faces — avant, la face
+    REST posait une ligne de denylist qui ne désignait rien."""
+    stub_authz(monkeypatch)
+    code, out = call("me.tools.disable", path_params={"name": "pas_un_outil"})
+    assert code == 404 and out["error"] == "unknown_tool:pas_un_outil"
+    assert socle == []
+
+
 # --- 4. La fiche ------------------------------------------------------------
 
 def test_la_fiche_rend_la_description_entiere_et_les_schemas(monkeypatch, socle):

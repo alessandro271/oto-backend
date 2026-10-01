@@ -229,10 +229,9 @@ _KNOWN: dict[str, str] = {
     # segment, donc `…/tools/registry` doit précéder `…/tools/{name}` — or les routes de
     # capacité sont montées à la FIN de `make_routes`, migrer l'une sans l'autre aurait
     # fait servir `registry` comme un nom d'outil.
-    #     Le miroir MCP (`oto_list_my_tools`/`oto_enable_tool`/`oto_disable_tool`, nommé
-    # DETTE dans `test_platform_tools_are_capabilities.py`) n'est PAS remboursé ici : les
-    # deux faces n'ont pas la même forme, les unifier casserait l'une des deux. Décision
-    # de contrat, suivie en oto-backend#429.
+    #     Le miroir MCP écrit à la main est remboursé depuis #429 : `oto_disable_tool`
+    # et `oto_enable_tool` sont la face MCP des mêmes capacités, `oto_list_my_tools`
+    # une capacité MCP-only (`me.tools.search`) sur le noyau `tools/catalogue.py`.
     # ⚠️ La CONNEXION PAR SESSION NAVIGATEUR a quitté cette liste le 2026-08-27 :
     # `…/session/{start,finalize}` sont des capacités (`capabilities/browser_sessions.py`),
     # et `api_routes_credentials.py` a été SUPPRIMÉ. La pose d'un secret reste

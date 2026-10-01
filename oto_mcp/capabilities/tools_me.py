@@ -22,13 +22,15 @@ Les routes de capacité sont montées à la FIN de `make_routes` : migrer `regis
 `{name}` (ou l'inverse) placerait le générique avant le spécifique et `registry`
 serait servi comme un nom d'outil. L'ordre de déclaration ci-dessous EST cet ordre.
 
-**Pas de face MCP** (`mcp=None`). Non par nature : `oto_list_my_tools`, `oto_enable_tool`
-et `oto_disable_tool` sont bien le miroir écrit à la main de ces chemins, et
-`tests/test_platform_tools_are_capabilities.py` le dit en toutes lettres. Mais leurs
-FORMES diffèrent (l'outil MCP prend un `query` et rend une projection de recherche ;
-le REST rend la liste complète pour peindre une grille de gouvernance) : les unifier
-casserait une des deux surfaces, ce qui sort du « mêmes réponses au caractère près »
-de ce chantier. La réconciliation est une décision de contrat — issue #429.
+**Deux faces depuis #429.** La toolbox avait un miroir MCP écrit à la main
+(`tools/meta.py`) : deux implémentations du même geste, deux autz à tenir en phase.
+Masquer/démasquer est désormais UNE capacité par geste, servie aux deux faces
+(`oto_disable_tool` / `oto_enable_tool`). La liste, elle, reste DEUX capacités sur un
+noyau partagé, parce que les deux faces ne posent pas la même question :
+`GET /api/me/tools` peint la grille de gouvernance (liste complète, `{name, enabled,
+protected}`), `oto_list_my_tools` sert l'agent qui CHERCHE un outil (catalogue avec
+l'état de chaque outil, recherche lexicale, projection). Les fondre aurait cassé l'une
+des deux surfaces ; le noyau commun est `tools/catalogue.py`.
 
 `mcp_instance` était passé de `make_routes` jusqu'au handler ; il est désormais résolu
 à l'APPEL via `tool_registry.bound_instance()` (le singleton lié au boot par
@@ -42,12 +44,14 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
-from pydantic import BaseModel
+from fastmcp.server.dependencies import get_context
+from fastmcp.server.transforms.visibility import disable_components, enable_components
+from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from .. import access, providers, db, tool_registry
+from .. import access, deprecations, providers, db, tool_alias, tool_registry
 from ..auth import hooks as auth_hooks
 from ..tool_visibility import (
     PROTECTED_TOOLS, is_default_hidden, is_testable, namespace_of)
@@ -56,6 +60,9 @@ from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
 _PAR_NOM = "/api/me/tools/{name}"
+# Recherche : borne par défaut. Au-delà, l'agent relit le catalogue entier — c'est le
+# signe que la requête était trop large, pas qu'il manque des résultats.
+_SEARCH_LIMIT = 40
 
 
 # --- Entrées ----------------------------------------------------------------
@@ -70,6 +77,24 @@ class ToolsRegistryInput(BaseModel):
 
 class ToolNameInput(BaseModel):
     name: str          # placeholder {name}, auto-mappé
+
+
+class ToolToggleInput(BaseModel):
+    # Placeholder {name} côté REST (auto-mappé) ; paramètre plat côté MCP.
+    name: str = Field(description=(
+        "Exact tool name (e.g. `attio_create_deal`, `linkedin_unipile_search`)."))
+
+
+class ToolsSearchInput(BaseModel):
+    op: Optional[Literal["list", "search"]] = Field(None, description=(
+        "`list` | `search`; derived from `query` when omitted."))
+    query: Optional[str] = Field(None, description=(
+        'words to search (op=search), e.g. "linkedin message", "invoice".'))
+    state: Optional[str] = Field(None, description="keep only the tools in this state.")
+    limit: Optional[int] = Field(None, description=(
+        "cap the entries (search: 40 by default; list: none)."))
+    full: bool = Field(False, description=(
+        "more description — list: one line per tool; search: whole docstrings."))
 
 
 class ToolCallInput(BaseModel):
@@ -146,7 +171,8 @@ class ToolDetailView(BaseModel):
 
 
 class ToolToggled(BaseModel):
-    """L'état APRÈS la bascule, pas l'ordre reçu."""
+    """L'état APRÈS la bascule, pas l'ordre reçu. `name` est le nom tel que l'appelant
+    le VOIT : canonique sur la face REST, préfixé du tenant sur la face MCP."""
     ok: bool
     name: str
     enabled: bool
@@ -169,10 +195,18 @@ class ToolCallResult(BaseModel):
 
 # --- Handlers ---------------------------------------------------------------
 
+def _org_de_visibilite(sub: str) -> int:
+    """L'org qui scope les préférences de visibilité de `sub` (toggles stockés par
+    `(sub, org)`, ADR 0015/0023). Lue par le seam unique `access.current_org` — jeton
+    d'appel `_org`, sinon consultation, sinon maison — jamais `org_store.get_active_org`
+    en direct, qui ignorerait le jeton. `0` = aucune org. SQL synchrone : au thread."""
+    return access.current_org(sub) or 0
+
+
 def _disabled_tools(sub: str) -> list:
     """Outils désactivés par `sub` dans son org active — SQL synchrone (`current_org` +
     `list_user_disabled_tools`) : à appeler via `run_in_threadpool` depuis un handler async."""
-    return db.list_user_disabled_tools(sub, access.current_org(sub) or 0)
+    return db.list_user_disabled_tools(sub, _org_de_visibilite(sub))
 
 
 async def _tool_by_name(name: str):
@@ -221,29 +255,138 @@ async def _registry(ctx: ResolvedCtx, inp: ToolsRegistryInput) -> dict:
     return {"tools": out, "count": len(out)}
 
 
-def _disable(ctx: ResolvedCtx, inp: ToolNameInput) -> dict:
-    """Désactive un tool pour l'utilisateur courant (live)."""
-    if inp.name in PROTECTED_TOOLS:
-        raise AuthzDenied(400, f"protected_tool:{inp.name}")
-    org = access.current_org(ctx.sub) or 0
-    db.add_user_disabled_tool(ctx.sub, inp.name, org)
-    db.remove_user_enabled_tool(ctx.sub, inp.name, org)  # lève un éventuel override positif
-    return {"ok": True, "name": inp.name, "enabled": False}
+def _nom_canonique(sub: str, name: str) -> tuple[str, str]:
+    """`(nom canonique, préfixe du tenant)`. Le nom peut arriver sous la forme du tenant
+    (`acme_doc`, ce qu'un agent lit dans sa liste) ou sous un nom DÉPRÉCIÉ (#519, que
+    `tools/list` sert encore) : la denylist s'écrit en canonique — sinon le même outil
+    s'y retrouverait deux fois, et la bascule ne mordrait plus après un changement de
+    préfixe. `prefix_for` lit un registre en mémoire : aucun accès base."""
+    prefix = tool_alias.prefix_for(sub)
+    return deprecations.tool_canonique(tool_alias.canonical(name, prefix)), prefix
 
 
-def _enable(ctx: ResolvedCtx, inp: ToolNameInput) -> dict:
-    """Réactive un tool pour l'utilisateur courant (live).
+def _nom_montre(ctx: ResolvedCtx, name: str, prefix: str) -> str:
+    """Le nom tel que l'appelant le VOIT : l'agent lit les noms préfixés du tenant
+    (`ToolAliasMiddleware`), le dashboard les noms canoniques de `GET /api/me/tools`."""
+    return tool_alias.public(name, prefix) if ctx.channel == "mcp" else name
 
-    Visibilité-only (ADR 0031) — même modèle que le meta-tool `oto_enable_tool` :
-    activer = préférence d'affichage, pas une autorisation (accès réel gardé au
-    call-time : credential + activation).
-    """
-    org = access.current_org(ctx.sub) or 0
-    db.remove_user_disabled_tool(ctx.sub, inp.name, org)
-    # Override positif requis pour rendre visible un masqué-par-défaut.
-    if is_default_hidden(inp.name):
-        db.add_user_enabled_tool(ctx.sub, inp.name, org)
-    return {"ok": True, "name": inp.name, "enabled": True}
+
+async def _disable(ctx: ResolvedCtx, inp: ToolToggleInput) -> dict:
+    """Masque un outil pour l'appelant, dans son org active."""
+    name, prefix = _nom_canonique(ctx.sub, inp.name)
+    instance = tool_registry.bound_instance()
+    # Hors session (REST), `list_tools` rend tout le catalogue ; dans une session MCP,
+    # la liste qu'elle VOIT — un outil qu'on ne voit pas n'a pas à être masqué.
+    connus = ({t.name for t in await instance.list_tools(run_middleware=False)}
+              if instance is not None else set())
+    if name not in connus:
+        raise AuthzDenied(404, f"unknown_tool:{name}",
+                          f"Unknown tool `{name}`. Use oto_list_my_tools to see "
+                          "available names.")
+    if name in PROTECTED_TOOLS:
+        raise AuthzDenied(400, f"protected_tool:{name}",
+                          f"`{name}` is protected (toolset management, context switching "
+                          "or usage loop) — refusing to disable.")
+
+    def _ecrire():
+        org = _org_de_visibilite(ctx.sub)
+        db.add_user_disabled_tool(ctx.sub, name, org)
+        db.remove_user_enabled_tool(ctx.sub, name, org)  # lève un éventuel override positif
+
+    await run_in_threadpool(_ecrire)
+    if ctx.channel == "mcp":
+        # La session courante le perd TOUT DE SUITE (`tools/list_changed`), sans
+        # attendre la prochaine.
+        await disable_components(get_context(), names={name}, components={"tool"})
+    return {"ok": True, "name": _nom_montre(ctx, name, prefix), "enabled": False}
+
+
+async def _enable(ctx: ResolvedCtx, inp: ToolToggleInput) -> dict:
+    """Démasque un outil pour l'appelant, dans son org active.
+
+    Visibilité seule (ADR 0031) : activer est une préférence d'AFFICHAGE, jamais une
+    autorisation. Rendre un outil visible ne donne pas accès à son credential : l'accès
+    réel est gardé à l'appel (`resolve_credential`, le cran d'activation, la résolution
+    du credential bridge, ADR 0034)."""
+    name, prefix = _nom_canonique(ctx.sub, inp.name)
+
+    def _ecrire():
+        org = _org_de_visibilite(ctx.sub)
+        db.remove_user_disabled_tool(ctx.sub, name, org)
+        # Override positif requis pour rendre visible un masqué-par-défaut.
+        if is_default_hidden(name):
+            db.add_user_enabled_tool(ctx.sub, name, org)
+
+    await run_in_threadpool(_ecrire)
+    if ctx.channel == "mcp":
+        await enable_components(get_context(), names={name}, components={"tool"})
+    return {"ok": True, "name": _nom_montre(ctx, name, prefix), "enabled": True}
+
+
+async def _search(ctx: ResolvedCtx, inp: ToolsSearchInput) -> dict:
+    """Le catalogue ENTIER avec l'état de chaque outil pour l'appelant, en liste groupée
+    ou en recherche lexicale. Le calcul de l'état vit dans `tools/catalogue.py`, noyau
+    de cette face ; la grille du dashboard (`_list`) pose une autre question."""
+    from ..tools import catalogue
+    from .connectors.selection import _toolbox_scope
+    op = inp.op or ("search" if inp.query else "list")
+    if op == "search" and not (inp.query or "").strip():
+        raise AuthzDenied(400, "query_required",
+                          "op=search : `query` requis (les mots à chercher).")
+    if op == "list" and inp.query:
+        raise AuthzDenied(400, "query_on_list",
+                          "op=list ne filtre pas par `query` — pour chercher, op=search.")
+    if inp.state is not None and inp.state not in catalogue.ETATS:
+        raise AuthzDenied(400, "invalid_state",
+                          f"`state` ∈ {' | '.join(catalogue.ETATS)}.")
+    prefix = tool_alias.prefix_for(ctx.sub)
+    entries = await catalogue.catalogue_avec_etat(get_context(), ctx.sub, prefix)
+    par_etat = {e: sum(1 for x in entries if x["state"] == e) for e in catalogue.ETATS}
+    out: dict = {"op": op, "catalog_total": len(entries), "catalog_by_state": par_etat}
+    # L'aveu du décalage de boîte (#577, signaux #616/#639) : la session a été montée
+    # pour l'org MAISON au handshake, l'appel épingle peut-être une autre org — les
+    # outils de ses connecteurs ne sont alors PAS listés, tout en restant appelables.
+    # Ici est l'endroit où un agent cherche un outil, et où il concluait « indisponible ».
+    tb = await run_in_threadpool(_toolbox_scope, ctx.sub)
+    if tb:
+        out["toolbox_scope"] = tb
+    if inp.state:
+        entries = [e for e in entries if e["state"] == inp.state]
+        out["state"] = inp.state
+    if op == "search":
+        entries = tool_registry.match(inp.query, entries)
+        out["query"] = inp.query
+        if not entries:
+            # Zéro résultat lexical ≠ « oto ne sait pas faire » : on rend la carte des
+            # capacités, l'agent repart du domaine au lieu de conclure à une lacune.
+            out["namespaces"] = providers.render_namespace_catalog()
+            out["hint"] = catalogue.hint_zero_resultat(tb)
+    # oto#42 : `total` décrit le jeu qu'il accompagne — sur une recherche, le nombre de
+    # CORRESPONDANCES, jamais le catalogue entier (rendu à part, `catalog_total`).
+    out["total"] = len(entries)
+    cap = (inp.limit if inp.limit is not None
+           else (_SEARCH_LIMIT if op == "search" else None))
+    shown = entries[:cap] if cap else entries
+    out["shown"] = len(shown)
+    if len(shown) < len(entries):
+        out["truncated"] = True
+        out["hint_truncated"] = (
+            f"{len(entries)} outils correspondent, {len(shown)} rendus. Affine la "
+            "recherche, ou relance avec `limit` plus haut pour les voir tous.")
+    out["legend"] = catalogue.LEGENDE
+    if op == "search":
+        cle = "description_full" if inp.full else "description"
+        out["tools"] = [{"name": e["name"], "namespace": e["namespace"],
+                         "state": e["state"], "description": e[cle]} for e in shown]
+    elif inp.full:
+        out["tools"] = [{k: e[k] for k in ("name", "namespace", "state", "description")}
+                        for e in shown]
+    else:
+        out["connectors"] = catalogue.grouper_par_connecteur(shown)
+        out["projection"] = ("un groupe par connecteur, avec ses outils par nom ; "
+                             "`full=True` rend une ligne de description par outil, "
+                             "`oto_tool_schema(name)` le détail d'un outil.")
+    return out
 
 
 async def _detail(ctx: ResolvedCtx, inp: ToolNameInput) -> dict:
@@ -330,14 +473,42 @@ _DOC_REGISTRY = (
     "et de l'autocomplétion. Immunisé à la visibilité de session — il dit ce qui "
     "EXISTE, pas ce qui m'est visible."
 )
+# Les trois textes servis aux agents depuis l'origine (`tools/meta.py`, avant #429),
+# repris tels quels : la description d'une capacité vaut pour ses deux faces.
+_DOC_SEARCH = (
+    "The oto tool CATALOG — EVERY tool of the platform (~725), each with its STATE\n"
+    "for you: `installed` (in your toolbox: call it directly), `installable`\n"
+    "(callable right now with `oto_call`, installed durably with\n"
+    "`oto_connector(op='select', name=<connector>)`) or `not_exposed` (NOT\n"
+    "callable: the connector is not opened to your organization, or the tool is\n"
+    "beyond your role — an org admin opens it). A tool absent from your toolbox is\n"
+    "never a missing capability: it is here, with the state that says what to do.\n"
+    "\n"
+    "op=list (default without `query`) → the whole catalog GROUPED by connector:\n"
+    "`{namespace, connector, label, state, tools: [names]}` (~25k chars in all).\n"
+    "`full=True` flattens it, one entry per tool with a one-line description\n"
+    "(~115k chars: prefer `state=` or a search). `state=installed|installable|\n"
+    "not_exposed` keeps one state.\n"
+    "op=search (default with `query`) → tools RANKED by how many words of `query`\n"
+    "match their name, their connector's catalog line and their description.\n"
+    "LEXICAL, docstrings in ENGLISH: zero result means « rephrase, try English, or\n"
+    "op=list » — never « oto cannot do this ». 40 entries by default (`limit`),\n"
+    "one-line descriptions; `full=True` = whole descriptions.\n"
+    "\n"
+    "Entry point of the deferred mode — `oto_list_my_tools` → `oto_tool_schema(name)`\n"
+    "(the exact arguments, read BEFORE calling) → `oto_call` — the way an agent\n"
+    "reaches oto without loading ~725 schemas."
+)
 _DOC_DISABLE = (
-    "MASQUE un outil pour moi (visibilité seule, ADR 0031). Le chemin nomme la ligne "
-    "de denylist : la poser (POST) masque, la retirer (DELETE) démasque. Un outil "
-    "protégé est refusé (400 `protected_tool:<nom>`) — le masquer n'aurait aucun effet."
+    "Disable a tool for the current user — persistent across sessions.\n"
+    "\n"
+    "The tool disappears from the visible list immediately (the server\n"
+    "notifies the client via tools/list_changed). Re-enable with\n"
+    "`oto_enable_tool`."
 )
 _DOC_ENABLE = (
-    "DÉMASQUE un outil pour moi. Sur un outil masqué par défaut au niveau plateforme, "
-    "pose en plus l'override positif qui lève ce masquage."
+    "Re-enable a previously disabled tool for the current user. On a tool hidden\n"
+    "by default at platform level, also sets the positive override that lifts it."
 )
 _DOC_DETAIL = (
     "La fiche complète d'un outil : description, schémas d'entrée et de sortie dérivés "
@@ -356,8 +527,15 @@ CAPABILITIES += [
     Capability(
         key="me.tools.list", handler=_list, Input=ToolsListInput, authz=SUB_ONLY,
         Output=ToolsListView, description=_DOC_LIST,
-        mcp=None,   # miroir `oto_list_my_tools` de forme différente — issue #429
+        mcp=None,   # la face agent est `me.tools.search` : autre question (#429)
         rest=RestBinding("GET", "/api/me/tools"),
+    ),
+    # La face AGENT de la toolbox : le catalogue avec l'état de chaque outil, en liste
+    # ou en recherche. MCP seul — le dashboard peint sa grille avec `me.tools.list`.
+    Capability(
+        key="me.tools.search", handler=_search, Input=ToolsSearchInput, authz=SUB_ONLY,
+        description=_DOC_SEARCH,
+        mcp="oto_list_my_tools",
     ),
     # ⚠️ `registry` AVANT `{name}` : Starlette prend le premier match, et `{name}`
     # capturerait « registry » comme un nom d'outil. Cet ordre EST le contrat.
@@ -368,15 +546,16 @@ CAPABILITIES += [
         rest=RestBinding("GET", "/api/me/tools/registry"),
     ),
     Capability(
-        key="me.tools.disable", handler=_disable, Input=ToolNameInput, authz=SUB_ONLY,
+        key="me.tools.disable", handler=_disable, Input=ToolToggleInput, authz=SUB_ONLY,
         Output=ToolToggled, description=_DOC_DISABLE,
-        mcp=None,   # miroir `oto_disable_tool` — issue #429
+        mcp="oto_disable_tool",
+        # ⚠️ POST MASQUE : le chemin nomme la ligne de denylist (cf. en-tête du module).
         rest=RestBinding("POST", _PAR_NOM),
     ),
     Capability(
-        key="me.tools.enable", handler=_enable, Input=ToolNameInput, authz=SUB_ONLY,
+        key="me.tools.enable", handler=_enable, Input=ToolToggleInput, authz=SUB_ONLY,
         Output=ToolToggled, description=_DOC_ENABLE,
-        mcp=None,   # miroir `oto_enable_tool` — issue #429
+        mcp="oto_enable_tool",
         rest=RestBinding("DELETE", _PAR_NOM),
     ),
     Capability(

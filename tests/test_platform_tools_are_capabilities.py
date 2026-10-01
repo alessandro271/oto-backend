@@ -45,16 +45,6 @@ _KNOWN: dict[str, bool] = {
     # (`feedback`, lui, est DÉJÀ une capacité — `capabilities/usage.py`.)
     "run_start": True,
     "run_finish": True,
-    # DETTE — miroir de `/api/me/tools…`, donc deux implémentations de la même règle
-    # de visibilité. ⚠️ Depuis le 2026-08-27 la face REST n'est plus écrite à la main :
-    # ce sont des capacités (`capabilities/tools_me.py`). La dette restante est celle-ci,
-    # et elle seule — mais elle ne se rembourse PAS par un refactor : les deux faces n'ont
-    # pas la même forme (l'outil MCP prend un `query` et rend une projection de recherche ;
-    # le REST rend la liste complète pour peindre une grille de gouvernance). Les unifier
-    # casse l'une des deux : décision de contrat, suivie en oto-backend#429.
-    "oto_list_my_tools": False,
-    "oto_enable_tool": False,
-    "oto_disable_tool": False,
     # DETTE — le datastore expose data_* en MCP et /api/datastore/* en REST (deux
     # implémentations du même métier, antérieures à la couche capacité).
     "data_rows": False,
@@ -116,3 +106,16 @@ def test_converged_verbs_are_capabilities_with_both_faces():
     keys = {c.key for c in CAPABILITIES}
     for rest_key in ("me.profile.get", "me.profile.set", "me.guides.get", "me.guides.set"):
         assert rest_key in keys, f"{rest_key} (face REST) manquante"
+
+
+def test_la_toolbox_est_une_capacite_a_deux_faces():
+    """#429 : masquer/démasquer est UNE capacité par geste, servie au dashboard et à
+    l'agent ; la liste a deux capacités sur un noyau partagé (`tools/catalogue.py`),
+    parce que les deux faces ne posent pas la même question."""
+    from oto_mcp.capabilities.registry import CAPABILITIES
+    par_cle = {c.key: c for c in CAPABILITIES}
+    for cle, outil in (("me.tools.disable", "oto_disable_tool"),
+                       ("me.tools.enable", "oto_enable_tool")):
+        assert par_cle[cle].mcp == outil and par_cle[cle].rest, cle
+    assert par_cle["me.tools.search"].mcp == "oto_list_my_tools"
+    assert par_cle["me.tools.list"].rest and par_cle["me.tools.list"].mcp is None

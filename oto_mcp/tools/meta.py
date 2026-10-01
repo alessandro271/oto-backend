@@ -1,40 +1,28 @@
-"""Méta-tools — pilotage des préférences de l'user depuis la conversation.
+"""Méta-tools du mode différé — atteindre un outil sans charger son schéma.
 
-Permet à l'assistant (Claude.ai, Claude Code) de désactiver/réactiver des
-tools individuellement sans passer par l'UI /account. La persistance reste
-en DB (`user_disabled_tools`), et les changements émettent immédiatement
-`tools/list_changed` à la session courante grâce à `disable_components` /
-`enable_components` (fastmcp).
+`oto_tool_schema` rend le schéma d'entrée d'un outil par son nom, `oto_call` l'exécute
+(dispatch universel, ADR 0036). Ils sont MCP-only par nature : ils agissent sur
+l'instance FastMCP elle-même. La toolbox du membre (catalogue, masquer/démasquer un
+outil) n'est plus ici : ce sont des capacités, `capabilities/tools_me.py` (#429).
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
-from typing import Literal, Optional
+from typing import Optional
 
 from fastmcp import Context, FastMCP
-from fastmcp.server.transforms.visibility import (
-    disable_components,
-    enable_components,
-    reset_visibility,
-)
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 from pydantic import ValidationError
 
 from .. import (access, call_axes, calllog, db, deprecations, error_taxonomy, guide_run,
-                outils_retires, providers, redaction, run_org, session_org, tool_alias,
-                tool_registry)
+                outils_retires, redaction, run_org, session_org, tool_alias)
 from ..auth.hooks import current_user_sub_from_token
 from ..connectors import activation_gate
 from ..connectors import health as connector_health
-from ..tool_visibility import (
-    PROTECTED_TOOLS,
-    is_default_hidden,
-    namespace_of,
-)
-from . import catalogue
+from ..tool_visibility import namespace_of
 
 # Méta/spine non dispatchables via `oto_call` (ADR 0036 §4) : déjà toujours visibles,
 # aucun intérêt à passer par le dispatch, et anti-boucle (`oto_call` sur lui-même).
@@ -49,46 +37,16 @@ def _refuser_si_retire(name: str) -> None:
     if retire is not None:
         raise McpError(ErrorData(code=INVALID_PARAMS, message=retire.message))
 
-# Le budget d'une ligne de catalogue vit avec le catalogue (`tools/catalogue.py`).
-_CATALOG_BLURB = catalogue.CATALOG_BLURB
-# Recherche : borne par défaut. Au-delà, l'agent relit le catalogue entier — c'est le
-# signe que la requête était trop large, pas qu'il manque des résultats.
-_SEARCH_LIMIT = 40
-
 logger = logging.getLogger(__name__)
-
-
-def hint_zero_resultat(tb: Optional[dict]) -> str:
-    """Le hint d'une recherche d'outils qui ne trouve rien.
-
-    Deux causes possibles, et **la mauvaise réponse coûte un rapport faux**. Sans
-    écart de boîte, zéro veut bien dire « reformule » — la recherche est lexicale sur
-    des docstrings anglaises. Avec écart (#577), zéro ne dit RIEN de l'existence de
-    l'outil : la session a été montée pour l'org maison au handshake, les outils des
-    connecteurs de l'org épinglée n'y sont pas listés, et ils restent appelables.
-
-    Servir le premier texte dans le second cas est ce qui a produit le rapport
-    « source injoignable » du signal #616, sur un connecteur actif et joignable."""
-    if tb:
-        return ("Zéro résultat ICI ne veut PAS dire que l'outil n'existe pas : la boîte "
-                "de cette session est montée pour une autre org (voir `toolbox_scope`), "
-                "donc les outils des connecteurs de l'org épinglée n'y sont pas listés. "
-                "Appelle-le par `oto_call(name=..., arguments={...})` avant de conclure "
-                "qu'une source est injoignable.")
-    return ("Aucun outil ne porte ces mots. La recherche est LEXICALE et les docstrings "
-            "sont en ANGLAIS : relance la même intention en anglais avant toute autre "
-            "conclusion — mesuré le 08/09/2026, « transférer propriétaire équipe "
-            "ressource » rend 0 outil et « transfer ownership resource team » rend "
-            "`oto_resource` en tête. Sinon, repère le domaine dans `namespaces`, ou "
-            "relance sans `query` pour le catalogue complet.")
 
 
 def _tool_prefix() -> str:
     """Le préfixe d'outils du tenant courant (`""` = noms canoniques).
 
-    Ces cinq tools prennent un NOM en argument : ce sont les seuls endroits où un nom
-    traverse un HANDLER au lieu du bord du protocole, donc les seuls que le
-    `ToolAliasMiddleware` ne couvre pas. Sans ce rappel, un compte de tenant tiers
+    Ces tools prennent un NOM en argument (comme `oto_disable_tool`/`oto_enable_tool`,
+    `capabilities/tools_me.py`) : ce sont les seuls endroits où un nom traverse un
+    HANDLER au lieu du bord du protocole, donc les seuls que le `ToolAliasMiddleware`
+    ne couvre pas. Sans ce rappel, un compte de tenant tiers
     lisait `acme_doc` dans sa liste et se voyait répondre « Unknown tool » en le
     passant à `oto_tool_schema` — le catalogue et le dispatch auraient parlé deux
     langues."""
@@ -108,14 +66,6 @@ def _require_sub() -> str:
             message="Auth requise — ces tools ne marchent que sur le transport HTTP authentifié.",
         ))
     return sub
-
-
-def _active_org(sub: str) -> int:
-    """Org de session du sub = scope du profil de visibilité (ADR 0015/0023). 0 = perso/global.
-    Toggles perso sont stockés par (sub, org_id) → on lit l'org **de session** via le seam
-    unique `access.current_org` (ADR 0023 ; jamais `org_store.get_active_org` en direct, qui
-    renverrait l'org maison et désynchroniserait l'UX après `oto_use_org`). ADR 0030 §6 barreau 1."""
-    return access.current_org(sub) or 0
 
 
 async def _resolve_tool(ctx: Context, name: str):
@@ -198,175 +148,6 @@ async def _trace_target_call(sub: Optional[str], name: str, args: dict, ok: bool
 
 
 def register(mcp: FastMCP) -> None:
-    @mcp.tool()
-    async def oto_list_my_tools(ctx: Context, op: Optional[Literal["list", "search"]] = None,
-                                query: Optional[str] = None, state: Optional[str] = None,
-                                limit: Optional[int] = None, full: bool = False) -> dict:
-        """The oto tool CATALOG — EVERY tool of the platform (~725), each with its STATE
-        for you: `installed` (in your toolbox: call it directly), `installable`
-        (callable right now with `oto_call`, installed durably with
-        `oto_connector(op='select', name=<connector>)`) or `not_exposed` (NOT
-        callable: the connector is not opened to your organization, or the tool is
-        beyond your role — an org admin opens it). A tool absent from your toolbox is
-        never a missing capability: it is here, with the state that says what to do.
-
-        op=list (default without `query`) → the whole catalog GROUPED by connector:
-        `{namespace, connector, label, state, tools: [names]}` (~25k chars in all).
-        `full=True` flattens it, one entry per tool with a one-line description
-        (~115k chars: prefer `state=` or a search). `state=installed|installable|
-        not_exposed` keeps one state.
-        op=search (default with `query`) → tools RANKED by how many words of `query`
-        match their name, their connector's catalog line and their description.
-        LEXICAL, docstrings in ENGLISH: zero result means « rephrase, try English, or
-        op=list » — never « oto cannot do this ». 40 entries by default (`limit`),
-        one-line descriptions; `full=True` = whole descriptions.
-
-        Entry point of the deferred mode — `oto_list_my_tools` → `oto_tool_schema(name)`
-        (the exact arguments, read BEFORE calling) → `oto_call` — the way an agent
-        reaches oto without loading ~725 schemas.
-
-        Args:
-            op: `list` | `search`; derived from `query` when omitted.
-            query: words to search (op=search), e.g. "linkedin message", "invoice".
-            state: keep only the tools in this state.
-            limit: cap the entries (search: 40 by default; list: none).
-            full: more description — list: one line per tool; search: whole docstrings.
-        """
-        sub = _require_sub()
-        if op is None:
-            op = "search" if query else "list"
-        if op == "search" and not (query or "").strip():
-            raise McpError(ErrorData(code=INVALID_PARAMS,
-                                     message="op=search : `query` requis (les mots à chercher)."))
-        if op == "list" and query:
-            raise McpError(ErrorData(code=INVALID_PARAMS,
-                                     message="op=list ne filtre pas par `query` — pour chercher, op=search."))
-        if state is not None and state not in catalogue.ETATS:
-            raise McpError(ErrorData(code=INVALID_PARAMS,
-                                     message=f"`state` ∈ {' | '.join(catalogue.ETATS)}."))
-        entries = await catalogue.catalogue_avec_etat(ctx, sub, _tool_prefix())
-        catalogue_entier = len(entries)
-        par_etat = {e: sum(1 for x in entries if x["state"] == e) for e in catalogue.ETATS}
-        out: dict = {"op": op, "catalog_total": catalogue_entier,
-                     "catalog_by_state": par_etat}
-        # L'aveu du décalage de boîte (#577, signaux #616/#639) : la session a été
-        # montée pour l'org MAISON au handshake, l'appel épingle peut-être une autre
-        # org — les outils de ses connecteurs ne sont alors PAS listés, tout en restant
-        # appelables. Il vivait sur `oto_connector op=list` seulement, c'est-à-dire là
-        # où on ne va que si on soupçonne déjà quelque chose. Ici est l'endroit où un
-        # agent cherche un outil, et où il concluait « indisponible ».
-        from ..capabilities.connectors.selection import _toolbox_scope
-        tb = _toolbox_scope(sub)
-        if tb:
-            out["toolbox_scope"] = tb
-        if state:
-            entries = [e for e in entries if e["state"] == state]
-            out["state"] = state
-        if op == "search":
-            entries = tool_registry.match(query, entries)
-            out["query"] = query
-            if not entries:
-                # Zéro résultat lexical ≠ « oto ne sait pas faire » (le piège que la
-                # recherche pourrait CRÉER). On rend la carte des capacités : l'agent
-                # repart du domaine au lieu de conclure à une lacune.
-                out["namespaces"] = providers.render_namespace_catalog()
-                out["hint"] = hint_zero_resultat(tb)
-        # oto#42, entrée 1 : `total` décrit le jeu qu'il accompagne — sur une recherche,
-        # le nombre de CORRESPONDANCES, jamais le catalogue entier (rendu à côté sous
-        # son propre nom, `catalog_total`, pour que « 3 outils » ne se lise pas « oto
-        # n'en a que 3 »).
-        out["total"] = len(entries)
-        cap = limit if limit is not None else (_SEARCH_LIMIT if op == "search" else None)
-        shown = entries[:cap] if cap else entries
-        out["shown"] = len(shown)
-        if len(shown) < len(entries):
-            # La branche « trop de résultats » était la seule non traitée : la branche
-            # zéro rendait la carte des namespaces, celle-ci ne disait rien.
-            out["truncated"] = True
-            out["hint_truncated"] = (
-                f"{len(entries)} outils correspondent, {len(shown)} rendus. Affine la "
-                "recherche, ou relance avec `limit` plus haut pour les voir tous.")
-        out["legend"] = catalogue.LEGENDE
-        if op == "search":
-            cle = "description_full" if full else "description"
-            out["tools"] = [{"name": e["name"], "namespace": e["namespace"],
-                             "state": e["state"], "description": e[cle]} for e in shown]
-        elif full:
-            out["tools"] = [{k: e[k] for k in ("name", "namespace", "state", "description")}
-                            for e in shown]
-        else:
-            out["connectors"] = catalogue.grouper_par_connecteur(shown)
-            out["projection"] = ("un groupe par connecteur, avec ses outils par nom ; "
-                                 "`full=True` rend une ligne de description par outil, "
-                                 "`oto_tool_schema(name)` le détail d'un outil.")
-        return out
-
-    @mcp.tool()
-    async def oto_disable_tool(name: str, ctx: Context) -> dict:
-        """Disable a tool for the current user — persistent across sessions.
-
-        The tool disappears from the visible list immediately (the server
-        notifies the client via tools/list_changed). Re-enable with
-        `oto_enable_tool`.
-
-        Args:
-            name: Exact tool name (e.g. `attio_create_deal`, `linkedin_unipile_search`).
-        """
-        sub = _require_sub()
-        # Le nom peut arriver sous la forme du tenant (`acme_doc`) : la denylist,
-        # elle, s'écrit en canonique — sinon le même outil s'y retrouverait deux fois,
-        # et le toggle ne mordrait plus après un changement de préfixe. Le retour
-        # reprend la forme MONTRÉE, celle que l'agent vient de lire dans sa liste.
-        # Il peut aussi être un nom DÉPRÉCIÉ (#519) : `tools/list` le sert, donc il
-        # doit se résoudre ici — un nom listé et injoignable est pire qu'absent.
-        prefix = _tool_prefix()
-        name = deprecations.tool_canonique(tool_alias.canonical(name, prefix))
-        all_tools = await ctx.fastmcp.list_tools(run_middleware=False)
-        known = {t.name for t in all_tools}
-        if name not in known:
-            raise McpError(ErrorData(
-                code=INVALID_PARAMS,
-                message=f"Unknown tool `{name}`. Use oto_list_my_tools to see available names.",
-            ))
-        if name in PROTECTED_TOOLS:
-            raise McpError(ErrorData(
-                code=INVALID_PARAMS,
-                message=f"`{name}` is protected (toolset management, context switching or "
-                        "usage loop) — refusing to disable.",
-            ))
-        org = _active_org(sub)
-        db.add_user_disabled_tool(sub, name, org)
-        db.remove_user_enabled_tool(sub, name, org)  # lève un éventuel override
-        await disable_components(ctx, names={name}, components={"tool"})
-        return {"name": tool_alias.public(name, prefix), "enabled": False,
-                "persistent": True}
-
-    @mcp.tool()
-    async def oto_enable_tool(name: str, ctx: Context) -> dict:
-        """Re-enable a previously disabled tool for the current user.
-
-        Args:
-            name: Exact tool name to re-enable.
-        """
-        sub = _require_sub()
-        prefix = _tool_prefix()
-        name = deprecations.tool_canonique(tool_alias.canonical(name, prefix))
-        # SÉCURITÉ — visibilité-only (ADR 0031) : (dés)activer un outil = préférence
-        # d'AFFICHAGE, jamais une autorisation. Rendre un outil visible ne donne PAS
-        # accès à son credential. L'accès réel d'un connecteur sensible est gardé au
-        # call-time, indépendamment de cette visibilité : `resolve_credential` (la clé
-        # posée au bon niveau, ADR 0053 D1) + le cran d'activation + la résolution du
-        # credential bridge (ADR 0034). Plus
-        # de garde « grant-only » ici (concept retiré : `is_grant_only` est mort).
-        org = _active_org(sub)
-        db.remove_user_disabled_tool(sub, name, org)
-        # Override positif requis pour rendre visible un masqué-par-défaut.
-        if is_default_hidden(name):
-            db.add_user_enabled_tool(sub, name, org)
-        await enable_components(ctx, names={name}, components={"tool"})
-        return {"name": tool_alias.public(name, prefix), "enabled": True,
-                "persistent": True}
-
     # --- dispatch universel (ADR 0036) --------------------------------------
 
     @mcp.tool()

@@ -18,7 +18,7 @@ import pytest
 
 import pathlib
 
-from oto_mcp.tools import meta
+from oto_mcp.tools import catalogue
 
 from oto_mcp import tool_registry
 
@@ -147,7 +147,7 @@ def test_zero_resultat_sur_ecart_de_boite_ne_dit_PAS_reformule():
     Le hint doit alors dire l'inverse de « reformule » : l'outil existe, il n'est pas
     monté ici, et il reste appelable. Servir le texte lexical dans ce cas est ce qui a
     coûté le rapport."""
-    h = meta.hint_zero_resultat({"mounted_for_org": 42, "listing_for_org": 196,
+    h = catalogue.hint_zero_resultat({"mounted_for_org": 42, "listing_for_org": 196,
                                  "note": "..."})
     assert "oto_call" in h
     assert "n'existe pas" in h          # il nie explicitement la conclusion fautive
@@ -157,7 +157,7 @@ def test_zero_resultat_sur_ecart_de_boite_ne_dit_PAS_reformule():
 def test_sans_ecart_le_hint_reste_celui_qui_fait_reformuler():
     """Le cas nominal ne doit pas hériter de la remarque : là, zéro veut bien dire
     « reformule », et parler d'org embrouillerait."""
-    h = meta.hint_zero_resultat(None)
+    h = catalogue.hint_zero_resultat(None)
     assert "namespaces" in h and "oto_call" not in h
 
 
@@ -166,6 +166,8 @@ def test_la_liste_doutils_CONSULTE_le_seam_de_boite():
     va que si on soupçonne déjà. Cette sonde tient qu'il est aussi consulté LÀ OÙ
     l'agent cherche un outil ; sans elle, un remaniement de `oto_list_my_tools` le
     reperdrait en silence, et le signal #616 reviendrait."""
-    src = pathlib.Path(meta.__file__).read_text()
-    assert "_toolbox_scope(sub)" in src
+    # `oto_list_my_tools` est la capacité `me.tools.search` depuis #429.
+    from oto_mcp.capabilities import tools_me
+    src = pathlib.Path(tools_me.__file__).read_text()
+    assert "_toolbox_scope, ctx.sub" in src
     assert '"toolbox_scope"' in src
