@@ -51,6 +51,11 @@ dizaine de tests — écrirait sur la façade pendant que `personal.py` continue
 d'appeler le vrai `orgs.create_org` : le stub serait MORT SILENCIEUSEMENT, et
 c'est exactement le faux vert qu'une découpe ne doit pas introduire. Le report
 est ce qui rend « surface figée » vrai jusque sous les tests.
+
+Le report DESCEND, il ne remonte pas : une écriture sur un sous-module
+(`org_store.vault.get_org_secret`) n'atteint pas qui lit la façade. Dehors, on lit et
+on patche donc `org_store.<nom>`, jamais un sous-module — règle de #896, gardée à zéro
+par `tests/test_facades_lecteurs_cible.py` (même cible que le paquet `access`).
 """
 from __future__ import annotations
 

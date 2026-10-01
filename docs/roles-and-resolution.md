@@ -134,6 +134,23 @@ Deux règles internes, et elles ne sont pas cosmétiques :
   tenait ses compteurs du jour dans une locale `quotas`, et l'appel
   `quotas.quota_for(...)` est parti chercher la méthode sur un dict.
 
+Et une règle pour tout ce qui est DEHORS (#896), la même pour `org_store` : la
+propagation descend, elle ne remonte jamais. Une doublure posée sur un sous-module
+(`access.scope.current_org`) atteint les lecteurs internes et **rate en silence** les
+quelque 680 appels qui lisent la façade. D'où la cible, gardée à zéro par
+`tests/test_facades_lecteurs_cible.py` :
+
+- un lecteur hors du paquet lit la façade (`access.<nom>`), jamais un sous-module
+  qu'elle ré-exporte, et n'importe jamais une **fonction** par son nom (le lien serait
+  figé à l'import) — types et constantes, oui ;
+- un test patche la façade, jamais un sous-module qu'elle ré-exporte ;
+- un sous-module que la façade ne ré-exporte pas (`heritage`, `chain_shadow`,
+  `chain_resolution`) n'a pas d'autre adresse : il se lit et se patche en direct.
+
+La garde ne voit pas une assertion que tient une capture trop large quand la doublure
+n'est pas atteinte (`pytest.raises(Exception)`, un chemin best-effort) : cette classe
+se rejoue en remplaçant la règle d'écriture de la façade, pas en lisant le code.
+
 > **Ce que l'AGENT voit du choix de compte (27/08).** Le multi-compte n'existe pour lui
 > que par quatre surfaces, et chacune avait un trou :
 > - **le schéma** — l'axe `_account=` apparaît sur les outils du connecteur dès qu'il

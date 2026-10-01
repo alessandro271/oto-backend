@@ -101,6 +101,12 @@ Deux mécanismes, tous les deux ici et nulle part ailleurs :
    qui DÉFINISSENT ce nom. Sans ça, le déplacement changerait le comportement de
    tests qu'il n'était pas censé toucher — et il le changerait en SILENCE, en
    les laissant verts sur un chemin qui n'est plus celui qu'ils croient exercer.
+
+La propagation DESCEND, elle ne remonte pas : une écriture sur un sous-module
+(`access.scope.current_org`) n'atteint pas qui lit la façade. D'où la cible de #896,
+gardée à zéro par `tests/test_facades_lecteurs_cible.py` — dehors, on lit et on
+patche la façade, jamais un sous-module qu'elle ré-exporte ; dedans, on lit son
+voisin par le module (`docs/roles-and-resolution.md`).
 """
 from __future__ import annotations
 
