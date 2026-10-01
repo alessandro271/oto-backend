@@ -643,9 +643,8 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     # manifeste « referenced_tools » sans se faire passer l'instance.
     from . import tool_registry
     tool_registry.bind(instance)
-    # oto-backend#534 : `_build_mcp` tourne deux fois par boot (instance anonyme +
-    # authentifiée) — le label porte `transport` pour distinguer les deux dans le
-    # journal, jamais mesuré séparément jusqu'ici (ADR 0065, « mesurer d'abord »).
+    # Le poste le plus lourd du démarrage (ADR 0065, « mesurer d'abord ») : payé UNE
+    # fois par boot depuis oto-backend#534 — les deux faces servent ce registre.
     with _timed(f"register_all[{transport}]"):
         register_all(instance)
 
@@ -884,11 +883,20 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     )
 
     # 8. Capture des exceptions de tools vers Sentry (no-op si OTO_SENTRY_DSN absent) —
-    # INNERMOST : au plus près du handler, capture le vrai traceback AVANT le calllog
+    # INNERMOST des appels d'outil (la visibilité anonyme, sous lui, n'agit qu'au handshake) :
+    # au plus près du handler, capture le vrai traceback AVANT le calllog
     # (qui pourra stamper l'event_id) et l'enveloppe (qui scrubbe). Les erreurs de tool
     # sont des erreurs JSON-RPC en HTTP 200 → invisibles à l'intégration Starlette.
     from .sentry_setup import SentryToolErrorMiddleware
     instance.add_middleware(SentryToolErrorMiddleware())
+
+    # 9. Visibilité de la FACE ANONYME (ADR 0032, oto-backend#534) — un registre, deux
+    # faces : ce middleware ne restreint que les sessions nées sur `face_anonyme`, à
+    # l'allowlist du projet publié ; ailleurs il ne fait rien. Le plus INTERNE, comme
+    # quand il était seul sur une instance anonyme construite à part : il masque APRÈS
+    # que tout le reste de la chaîne a servi l'`initialize`.
+    from .anon_visibility import AnonymousVisibilityMiddleware
+    instance.add_middleware(AnonymousVisibilityMiddleware())
 
     logger.info("boot: middleware_chain[%s] %.0f ms", transport,
                 (time.monotonic() - _debut_middlewares) * 1000)
@@ -908,23 +916,23 @@ mcp: FastMCP | None = None
 def build_root_app(app, anon_app):
     """L'app ASGI servie par uvicorn, de l'intérieur vers l'extérieur.
 
-    1. **dispatch par Host** (ADR 0032) : `<slug>.mcp.oto.cx` publié anonyme → instance
+    1. **dispatch par Host** (ADR 0032) : `<slug>.mcp.oto.cx` publié anonyme → face
        anonyme ; publié `org` → authentifiée + org épinglée ; sinon (host canonique ou
-       slug inconnu) → authentifiée. Compose les lifespans des deux instances FastMCP.
+       slug inconnu) → authentifiée. Compose les lifespans des deux faces du registre MCP.
     2. **étiquetage du charset** (#472) : `text/event-stream` et `application/json`
        partent complétés d'un `charset=utf-8`. Posée SOUS la garde mais AU-DESSUS du
-       dispatch, donc elle couvre les deux instances (canonique et anonyme) et toute
+       dispatch, donc elle couvre les deux faces (canonique et anonyme) et toute
        la face REST d'un seul geste. Cf. `response_charset` pour le pourquoi.
     3. **étiquette de version** (oto#33) : chaque réponse part avec `X-Oto-Version`,
        de sorte qu'un journal d'appels DÉJÀ écrit permette de dater rétrospectivement
        un changement de comportement. Posée au-dessus du charset et du dispatch pour
-       la même raison que lui — elle couvre les deux instances FastMCP et toute la
+       la même raison que lui — elle couvre les deux faces MCP et toute la
        face REST d'un seul geste. Cf. `version_header`.
     4. **compteur des refus du transport** : une requête refusée par le transport du
        SDK `mcp` l'est AVANT tout dispatch de session — elle ne traverse aucun
        middleware FastMCP, donc ni `tool_calls`, ni Sentry, ni rien. ~2,2 % des
        `POST /mcp` de production, en régime permanent, sans qu'on sache ce qu'on
-       refuse. Posé au-dessus du dispatch pour couvrir les deux instances FastMCP
+       refuse. Posé au-dessus du dispatch pour couvrir les deux faces MCP
        d'un seul geste, et SOUS la garde de déconnexion pour ne pas compter la
        réponse que celle-ci synthétise. Cf. `transport_refusals` pour les trois
        garanties qui le rendent acceptable sur le chemin du transport.
@@ -1047,28 +1055,16 @@ def main():
         host = os.environ.get("HOST", "127.0.0.1")
         port = int(os.environ.get("PORT", "9103"))
 
-        # Instance MCP ANONYME (ADR 0032, `<slug>.mcp.oto.cx`) : sans auth, visibilité =
-        # allowlist figée du preset de projet. On RÉUTILISE l'instance no-auth DÉJÀ
-        # construite au niveau module (`mcp = _build_mcp("noauth")` en haut) au lieu d'en
-        # construire une 3ᵉ : un _build_mcp de plus (register_all + init_db/
-        # backfill/seed) DOUBLAIT le temps de boot (~53 s) et dépassait la fenêtre du
-        # healthcheck du deploy → KO + rollback avant que uvicorn ne bind (vécu 2026-07-01).
-        # `mcp` pointe encore ici sur l'instance no-auth ; on la capture AVANT de le
-        # réassigner à l'authentifiée (tool_registry.bind finit donc lié à l'authentifiée).
-        from .anon_visibility import AnonymousVisibilityMiddleware
-        anon_mcp = _build_mcp("noauth")
-        anon_mcp.add_middleware(AnonymousVisibilityMiddleware())
-        anon_app = anon_mcp.http_app()
-        # Shim OAuth ANONYME (ADR 0032) : claude.ai/Mistral exigent un flux OAuth pour un
-        # connecteur custom, même sans auth → sans ces routes, DCR 404 = « impossible de
-        # s'inscrire ». Le shim auto-approuve (zéro login) et délivre un token sans privilège
-        # (l'app anonyme /mcp ne le vérifie pas). Inséré avant le catch /mcp de FastMCP.
-        from .auth import anon as anon_oauth
-        for route in reversed(anon_oauth.make_routes()):
-            anon_app.router.routes.insert(0, route)
-
+        # UN registre, deux faces (oto-backend#534) : `register_all` et le montage des
+        # capacités se paient UNE fois. La face authentifiée est `mcp.http_app()` ; la
+        # face ANONYME (ADR 0032, `<slug>.mcp.oto.cx` / `<slug>.share.oto.cx`) sert le
+        # MÊME serveur sans auth, restreint à l'allowlist du projet publié
+        # (`anon_visibility`). Elle était une seconde instance, construite par un
+        # second `_build_mcp` : la moitié de la construction MCP du boot.
         verifier = _build_verifier()
         mcp = _build_mcp(transport, verifier)
+        from .anon_visibility import face_anonyme
+        anon_app = face_anonyme(mcp)
 
         # (Le `db.init_db()` qui était ici a été RETIRÉ — ADR 0065 lot 0. C'était le
         # TROISIÈME du boot : `_build_mcp` l'appelait déjà, deux fois, et il rejouait

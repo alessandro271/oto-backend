@@ -46,8 +46,12 @@ invariants gardés ici :
   brute, l'enveloppe scrubbe en dernier.
 - `UserDisabledToolsMiddleware` plus externe que `ToolCallLogger` : un refus de gate
   n'est pas journalisé.
-- `SentryToolErrorMiddleware` INNERMOST : capture le vrai traceback en premier et
+- `SentryToolErrorMiddleware` sous eux : capture le vrai traceback en premier et
   pose `last_event_id` que le calllog (plus externe) stampe sur la ligne tool_calls.
+- `AnonymousVisibilityMiddleware` INNERMOST (oto-backend#534) : il n'agit que sur la
+  face anonyme, au handshake, et masque APRÈS que tout le reste a servi l'`initialize`
+  — la place qu'il avait, seul, sur l'instance anonyme construite à part. Il ne touche
+  ni aux appels ni aux résultats : sous Sentry, il ne lui dérobe aucun traceback.
 """
 from oto_mcp import server
 
@@ -70,6 +74,7 @@ OURS = [
     "DynamicInstructionsMiddleware",
     "ToolCallLogger",
     "SentryToolErrorMiddleware",
+    "AnonymousVisibilityMiddleware",
 ]
 
 

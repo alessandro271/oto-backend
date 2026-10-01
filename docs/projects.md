@@ -310,7 +310,7 @@ Partage/transfert via **`oto_resource`** (resource_type=`project` ajouté au dis
 >   allowlist **figée = `mcp_tools`** (fail-closed, aucun autre tool visible), credential résolu via
 >   l'**org propriétaire** du projet (`access.current_org(None)`→org du projet, `_resolve_credential_anon` :
 >   org_secret > grant > clé plateforme, **sans quota**), rate-limité (token-bucket in-memory par IP+projet).
-> - **`secret`** : **identique à `anonymous` côté serving** (même 2ᵉ instance FastMCP sans auth, même
+> - **`secret`** : **identique à `anonymous` côté serving** (même face anonyme du registre MCP — le même serveur monté sans auth, oto-backend#534 —, même
 >   résolution de credential, même allowlist), mais **non listé** dans l'annuaire (`list_published_mcp_projects`
 >   ne rend que `= 'anonymous'`) et **slug non devinable généré serveur** (`_gen_secret_slug` : préfixe
 >   optionnel issu du slug saisi + suffixe `secrets.token_hex(6)`) → une **URL secrète**. Re-publier réutilise

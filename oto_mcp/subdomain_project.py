@@ -7,8 +7,9 @@ branche comme un outil) ; `<slug>.share.oto.cx` = partage de projet secret **nav
 en lecture seule à la racine + `/procedures`/`/data`/`/docs`, le MCP au path dédié `/mcp`). Trois
 postures :
 
-- **anonymous** — AUCUN login. Le sous-domaine est servi par une **2ᵉ instance FastMCP
-  sans auth** ; la visibilité y fige l'**allowlist** du preset (`AnonymousVisibilityMiddleware`)
+- **anonymous** — AUCUN login. Le sous-domaine est servi par la **face anonyme** du
+  registre MCP (`anon_visibility.face_anonyme` : le même serveur, monté sans auth —
+  oto-backend#534) ; la visibilité y fige l'**allowlist** du preset (`AnonymousVisibilityMiddleware`)
   et la résolution de credential tape l'org **propriétaire** du projet (pas de `sub` —
   cf. `access._resolve_credential_anon`). Contourne 100 % du blocage OAuth de #44. LISTÉ
   dans l'annuaire public (`db.list_published_mcp_projects`).
@@ -342,8 +343,9 @@ def _root_to_mcp(scope: dict) -> dict:
 
 # ── App ASGI racine : dispatch par Host (anonyme vs authentifié) ─────────────
 class HostDispatch:
-    """App ASGI racine. Compose les lifespans des DEUX instances FastMCP (chacune a
-    son session-manager streamable_http à démarrer) et route chaque requête HTTP par
+    """App ASGI racine. Compose les lifespans des DEUX faces du registre MCP (chacune
+    a son session-manager streamable_http à démarrer ; fastmcp compte les entrées dans
+    le lifespan du serveur qu'elles partagent) et route chaque requête HTTP par
     Host. Lit le Host sans consommer le body → n'altère jamais le streaming /mcp."""
 
     def __init__(self, authed_app, anon_app):

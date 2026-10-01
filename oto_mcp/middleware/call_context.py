@@ -126,8 +126,9 @@ class CallContextMiddleware(Middleware):
             #
             # Ici plutôt que dans les deux adaptateurs : ce middleware voit TOUS les
             # appels d'outils — capacités montées ET tools écrits à la main (`data_*`)
-            # — et il est monté sur chaque instance par `_build_mcp`, l'anonyme
-            # comprise. Deux poses valent deux occasions d'en oublier une.
+            # — et il est monté UNE fois par `_build_mcp`, sur le registre que servent
+            # les deux faces, l'anonyme comprise. Deux poses vaudraient deux occasions
+            # d'en oublier une.
             undo.append((session_org.reset_call_face,
                          session_org.set_call_face(session_org.FACE_MCP)))
             # Relevé de résolution : posé EN PREMIER (donc reset EN DERNIER, LIFO) pour

@@ -159,8 +159,8 @@ def current_call_run() -> Optional[str]:
 # l'injecter du tout), un `client_id` est celui du client OAuth, un user-agent
 # s'écrit. La porte empruntée, non.
 #
-# Posée par `CallContextMiddleware` (donc sur TOUTE instance MCP, authentifiée comme
-# anonyme : les middlewares sont ajoutés dans `_build_mcp`), remise à sa valeur
+# Posée par `CallContextMiddleware` (donc sur les DEUX faces MCP, authentifiée comme
+# anonyme : elles servent le même registre, dont `_build_mcp` pose les middlewares), remise à sa valeur
 # d'avant dans le `finally`. Jamais posée sur le chemin REST — une requête REST tourne
 # dans sa propre tâche, dont le contexte n'a jamais vu cette variable.
 FACE_MCP = "mcp"

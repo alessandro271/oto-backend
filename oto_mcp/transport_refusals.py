@@ -222,7 +222,7 @@ class TransportRefusalCounter:
 
     Placé SOUS `ClientDisconnectGuard` (donc il ne voit pas la réponse que celle-ci
     synthétise quand un client est parti — ce n'est pas un refus) et AU-DESSUS du
-    dispatch par Host, donc il couvre les deux instances FastMCP d'un seul geste.
+    dispatch par Host, donc il couvre les deux faces MCP d'un seul geste.
 
     Le comptage se fait dans l'enveloppe de `send`, au moment du dernier morceau de
     corps — et non après le retour de l'app. C'est délibéré : une exception qui
