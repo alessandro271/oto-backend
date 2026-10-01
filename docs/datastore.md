@@ -2153,6 +2153,7 @@ mêmes fichiers en une semaine (gels en série, un incident de tree). Où poser 
 | `db/datastore.py` | les LIGNES : CRUD + clé métier/index |
 | `datastore/errors.py` | les refus — **aucune dépendance**, importable de partout |
 | `datastore/columns.py` | la colonne côté Python : fusion des couches, résolution des anciens noms |
+| `datastore/rangs.py` | l'écriture PAR RANG d'une colonne-liste (`contacts[0].email`, `contacts[+]`, `contacts[0]: null`) : grammaire, refus, gardes à l'élément, résolution contre la ligne en place (oto#22) |
 | `datastore/reserves.py` | les champs que l'appelant n'écrit pas : refuser, et poser l'origine à sa place (#586/#606) |
 | `datastore/claimable.py` | le périmètre de réservation déclaré (`lifecycle.claimable`, #517) : décision, clauses du pick, refus, phrase — **n'importe le moteur qu'à l'appel** |
 | `datastore/schema.py` | **une FAÇADE, plus un corps** : elle ré-exporte les douze modules ci-dessous et rien d'autre. Une cinquantaine de sites importent `datastore.schema` — ce contrat les tient tous |
@@ -3242,7 +3243,8 @@ Rien n'est noté pour une colonne gelée ni pour un élément que le geste n'éc
 **Les faces.** REST rend `details` tel quel (`_write_refusal`). MCP n'a pas d'enveloppe :
 `data_write` attrape `RowValidationError` avant `ValueError` et finit le message par
 `charge_a_renvoyer.clause` — la charge en JSON, et pour une liste la règle du renvoi (la
-liste entière, l'élément corrigé à sa place : un élément omis est retiré). Un lot garde
+liste entière, l'élément corrigé à sa place : un élément omis est retiré ; ou chaque
+attribut à son rang, `contacts[1].nom`, sans renvoyer la liste). Un lot garde
 `details` en changeant de désignation (`lots.py`).
 
 **Le refus de signature** (`error_taxonomy._arg_error_message`) nomme en plus le paramètre
@@ -3253,6 +3255,54 @@ le plus proche d'une clé inconnue — « Rejoue `data_write(…)` avec `rows=` 
 
 Bancs : `tests/datastore/test_charge_a_renvoyer_oto135.py`,
 `tests/test_parametre_le_plus_proche_135.py`.
+
+## L'écriture par rang dans une colonne-liste (oto#22 point c, 01/10/2026)
+
+On écrit à l'adresse qu'on lit. `contacts[0].email` était refusé à l'écriture
+(`_refuse_dotted_names`) alors que le filtre, le tri et l'agrégat le comprenaient : pour
+corriger un email, il fallait reposer la liste entière, couches de tous les éléments
+réémises. La spec, les refus et ce qui est écarté : `docs/datastore-colonne-tableau.md`
+§5.2. Ici, comment c'est tenu.
+
+**La grammaire est celle de la lecture** (`db/paths.split_list_path`), un cran de plus :
+`contacts[0].email`, `contacts[0].email.comment`, `contacts[+]` (une fiche ajoutée),
+`contacts[0]: null` (l'élément supprimé). `rangs.sortir_les_rangs` la lit sur CHAQUE
+porte d'écriture, AVANT toute autre garde — laissée dans le payload, l'adresse tomberait
+dans `_refuse_dotted_names` comme un nom pointé — et refuse en nommant la forme qui
+aboutit (rang vide, forme imbriquée `contacts[0]: {…}`, identité `contacts[role=X]`,
+attribut d'un ajout, colonne entière ET rang dans un geste, colonne déclarée non-liste).
+Ce qui ressemble sans en être (`Prix [EUR]`, `note[a]`) reste un nom de colonne.
+
+**Les gardes du payload jugent chaque élément à son VRAI rang** (`EcrituresParRang.
+preparer`) : rangement des couches pointées (`points._ranger_une_fiche`), clés internes,
+mots réservés (`columns.mots_dans_l_element`, l'identité `of.key` comprise), couches mal
+orthographiées, dates (la normalisation du store, l'élément déclaré à son adresse). Une
+liste reconstituée pour les faire tourner aurait nommé `contacts[0]` pour un geste sur
+`contacts[3]` — et l'agent aurait corrigé le mauvais contact.
+
+**La résolution se fait sous le verrou** (`appliquer`, appelée dans le `_apply` de
+`_merge_into_row` et d'`update_row`, contre `{}` à la création) : les rangs désignent la
+liste EN PLACE, avant le geste ; chaque attribut se fusionne dans son élément par
+`_merge_column` (la règle de `_merge_items` pour un élément apparié) ; les suppressions
+se font du plus grand rang au plus petit ; l'ajout en dernier ; sous `of.key`, une
+identité qui deviendrait double se refuse. Le résultat est une colonne-liste COMPLÈTE,
+qui suit l'arbitrage des vides, les champs réservés, la validation et le journal comme
+toute colonne — d'où « même fusion, même journal » sans copie du chemin. Deux points :
+
+- la boucle de fusion passe par `rangs.fusionner` : une colonne écrite par rang arrive
+  déjà fusionnée, elle est REPOSÉE dans ses couches de colonne (`reposer_la_liste`, le
+  même geste que la branche `of.key` de `_merge_column`), jamais refusionnée — sans
+  `of.key` la liste serait remplacée en bloc, avec `of.key` un attribut effacé par le
+  geste reviendrait de l'élément en place ;
+- la validation reçoit `ecrits_par_rang` (`{colonne: rangs}` dans la liste résultante) :
+  `_row_errors` et `couches_exigees` ne jugent que ces éléments, `of.key` ou non (J4 —
+  sans `of.key`, `elements_reecrits` ne savait rien distinguer).
+
+Une liste vidée par le geste efface la colonne (`None`) plutôt que de poser `[]` : jusqu'à
+la bascule d'oto#140 J2, `[]` est un vide ÉCARTÉ, et supprimer le dernier contact aurait
+été refusé « sans effet ». Le remplacement (`upsert_row`) refuse un rang. Le banc :
+`tests/datastore/test_ecriture_par_rang_oto22_live.py` (store, REST, MCP ; patch, clé,
+lot, création).
 
 ## Les lignes en place face au schéma posé — `existing_violations` (#479, 30/09/2026)
 

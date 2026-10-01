@@ -155,10 +155,22 @@ def test_un_nom_a_point_SUR_UNE_COLONNE_REELLE_est_range(monkeypatch):
     assert "naf.comment" not in db.rows["r1"]["data"], "rangée, pas littérale"
 
 
-def test_une_adresse_ditem_en_nom_de_colonne_est_refusee(monkeypatch):
+def test_une_adresse_ditem_est_un_RANG_jamais_un_nom_de_colonne(monkeypatch):
+    """oto#22 : `contacts[0].email` s'écrit désormais à son rang. Sur une ligne qui ne
+    porte aucun contact, le rang 0 n'existe pas : refus nommé, qui donne l'ajout — et
+    jamais la colonne littérale `contacts[0].email`, invisible au filtre du même nom."""
     s, db = _monte(monkeypatch)
-    with pytest.raises(RowValidationError):
+    with pytest.raises(RowValidationError) as e:
         s.update_row("t", "r1", {"contacts[0].email": "x@y.z"})
+    assert "rang 0 inexistant" in str(e.value) and "`contacts[+]`" in str(e.value)
+    assert "contacts[0].email" not in db.rows["r1"]["data"]
+
+
+def test_une_adresse_ditem_ecrit_l_attribut_a_son_rang(monkeypatch):
+    s, db = _monte(monkeypatch)
+    db.rows["r1"]["data"]["contacts"] = [{"nom": "Ada", "email": "a@b.c"}]
+    s.update_row("t", "r1", {"contacts[0].email": "x@y.z"})
+    assert db.rows["r1"]["data"]["contacts"] == [{"nom": "Ada", "email": "x@y.z"}]
 
 
 # ── non-régression : tout ce qui était légitime le reste ─────────────────────

@@ -886,10 +886,20 @@ def register(mcp: FastMCP) -> None:
         empty stays `"@empty"`. Refused on an element's identity (`of.key`), in a list
         of plain values, and inside an object or a `json` column.
 
+        ONE element of a list is written at its RANK — the address you read and
+        filter by: `{"contacts[1].email": "d@x.fr"}` (or `{"valeur": …, "comment":
+        …}`; `contacts[1].email.comment` alone annotates it, `null` erases it).
+        `{"contacts[+]": {…a whole record…}}` appends, `{"contacts[0]": null}` removes.
+        Ranks start at 0 and point at the list AS YOU READ IT; the append comes last.
+        Refused, with the form that works: a rank that does not exist (append with
+        `contacts[+]`), `contacts[0]: {…}` (write its fields), `contacts[].x`, and the
+        whole column together with one of its ranks.
+
         A requirement declared on a sub-field (`required`, `options`, `max_length`…
         on an element's `nom`) is enforced like one on a column. In a list with
         `of.key`, only the elements your write CHANGES are judged: an element sent
         back unchanged never blocks yours — its defect comes back in `hors_type`.
+        Written at its rank, only that element is judged, with or without `of.key`.
 
         Dates: a `date`/`datetime` column reads ISO in any variant, `04/09/2026`
         (day first) and Unix timestamps, and STORES one form — `2026-09-04T10:00:00Z`
@@ -901,7 +911,8 @@ def register(mcp: FastMCP) -> None:
         a `<…>` template in place of each value, `| @empty` where that is allowed —
         `{"contacts": [{"role": "RH", "nom": "<texte> | @empty"}]}`. Fill the
         templates and write again; a list goes back WHOLE, that element fixed in
-        its place (by its `of.key`, else its rank), the others as they were.
+        its place (by its `of.key`, else its rank), the others as they were — or
+        write only that element's fields at its rank (`contacts[1].nom`).
 
         ⚠️ **A write DESTROYS what is in the column.** On an open column there is no
         undo: the previous value leaves the row the moment yours lands. It survives

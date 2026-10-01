@@ -357,20 +357,28 @@ def _mots_dans_la_valeur(valeur: Any, chemin: str, errors: list, *, fiches: bool
         _aucun_mot(valeur, chemin, errors)       # un objet, un contenu `json`
         return
     for i, element in enumerate(valeur):
-        ici = f"{chemin}[{i}]"
-        if not isinstance(element, dict):
-            _aucun_mot(element, ici, errors)     # une liste de VALEURS
+        mots_dans_l_element(element, f"{chemin}[{i}]", errors, cle_item=cle_item)
+
+
+def mots_dans_l_element(element: Any, ici: str, errors: list, *,
+                        cle_item: Optional[str]) -> None:
+    """Les mots d'UN élément de liste, à son adresse `ici` : chacun de ses attributs est
+    une case, sauf son identité (`of.key`) ; l'élément d'une liste de VALEURS n'en est
+    pas une. Sortie de la boucle pour l'écriture par rang (oto#22), qui juge un élément
+    à son VRAI rang — `contacts[3]`, jamais le rang d'une liste reconstituée."""
+    if not isinstance(element, dict):
+        _aucun_mot(element, ici, errors)         # une liste de VALEURS
+        return
+    for attribut, sous in element.items():
+        ou = f"{ici}.{attribut}"
+        if attribut == cle_item and _mot(dsv2.unwrap(sous)) is not None:
+            errors.append(
+                f"`{ou}` porte `{dsv2.unwrap(sous)}` : c'est l'IDENTITÉ de l'élément "
+                f"(`of.key` = `{cle_item}`) — une identité ne se déclare ni vide ni "
+                "effacée, et ne se garde pas sans valeur. Rien n'a été écrit. Donne-lui "
+                "sa valeur.")
             continue
-        for attribut, sous in element.items():
-            ou = f"{ici}.{attribut}"
-            if attribut == cle_item and _mot(dsv2.unwrap(sous)) is not None:
-                errors.append(
-                    f"`{ou}` porte `{dsv2.unwrap(sous)}` : c'est l'IDENTITÉ de l'élément "
-                    f"(`of.key` = `{cle_item}`) — une identité ne se déclare ni vide ni "
-                    "effacée, et ne se garde pas sans valeur. Rien n'a été écrit. Donne-lui "
-                    "sa valeur.")
-                continue
-            _mots_dans_la_case(sous, ou, errors, fiches=False, cle_item=None)
+        _mots_dans_la_case(sous, ou, errors, fiches=False, cle_item=None)
 
 
 def refuser_les_mots_mal_places(schema: Optional[dict], user_data: Optional[dict]) -> None:
@@ -1155,6 +1163,20 @@ def _sentinelles_dans_les_items(nouveaux: Any, chemin: str) -> Any:
     return out
 
 
+def reposer_la_liste(existing: Any, liste: list) -> Any:
+    """La liste d'une colonne REPOSÉE dans les couches qui l'entouraient.
+
+    Une liste que la fusion a construite élément par élément (`of.key`, ou l'écriture
+    par rang, oto#22) n'est pas une RÉÉCRITURE de la colonne : ses couches de colonne
+    — `origine`, mais aussi `comment`/`link` — restent. La liste est la VALEUR de la
+    colonne, pas la colonne ; sans couches autour, elle reste nue."""
+    couches = _existing_layers(existing)
+    if len(couches) > 1 or dsv2.ORIGIN_LAYER in couches:
+        couches[dsv2.VALUE_LAYER] = liste
+        return couches
+    return liste
+
+
 def _merge_column(existing: Any, new: Any, champ: Any = None) -> Any:
     """Fusion d'UNE colonne. **Aucune couche ne s'écrit implicitement, dans aucun sens.**
 
@@ -1222,13 +1244,10 @@ def _merge_column(existing: Any, new: Any, champ: Any = None) -> Any:
             # On déballe donc pour fusionner, et on REPOSE le résultat dans les
             # couches qui étaient là. Deux gestes, parce que la liste est la valeur
             # de la colonne, pas la colonne.
-            couches = _existing_layers(existing)
-            fusion = _merge_items(couches.get(dsv2.VALUE_LAYER), new, cle_item,
+            fusion = _merge_items(_existing_layers(existing).get(dsv2.VALUE_LAYER),
+                                  new, cle_item,
                                   str((champ or {}).get("key") or "liste"))
-            if len(couches) > 1 or dsv2.ORIGIN_LAYER in couches:
-                couches[dsv2.VALUE_LAYER] = fusion
-                return couches
-            return fusion
+            return reposer_la_liste(existing, fusion)
         # Remplacement en bloc : personne ne descend plus dans les éléments après
         # cette ligne, donc les deux mots réservés se règlent ICI ou jamais.
         nom = str((champ or {}).get("key") or "liste")

@@ -23,7 +23,6 @@ from . import acces_agent as aga
 from . import schema as dsv2
 from .columns import (
     _META_COLS,
-    _merge_column,
     _refuse_mixed_layers,
     arbitrer_les_vides,
     mots_resolus_a_la_creation,
@@ -45,6 +44,7 @@ from . import reliques as rq
 from .forcage import Forcage
 from .outils import _new_id, _now_iso, _refus_de_creation
 from .points import _refuse_dotted_names, ranger_les_couches
+from . import rangs as rg
 from .precondition import revision_attendue
 from . import donnees_d_origine as ddo
 from .reserves import refuser_champs_reserves
@@ -105,6 +105,13 @@ class EcritureMixin:
         user_data = {k: v for k, v in data.items() if k not in _META_COLS}
         ns = self._ns_of(ns_id)
         schema = ns.get("schema")
+        # oto#22 : l'écriture PAR RANG (`contacts[0].email`, `contacts[+]`) sort du
+        # payload AVANT toute garde — laissée dedans, elle serait jugée comme un nom
+        # pointé. Ses éléments passent les mêmes gardes, à leur vrai rang ; elle se
+        # résout contre la ligne en place, sous le verrou de la fusion.
+        user_data, rangs = rg.sortir_les_rangs(schema, user_data)
+        if rangs is not None:
+            rangs.preparer(schema, self._normaliser_les_dates)
         # CAS 1 avant le refus : une fiche relue et réémise entière porte
         # `site_web` ET `site_web.comment`, et c'est notre propre lecture. On range
         # l'annotation à sa place AVANT de juger quoi que ce soit — sinon les gardes
@@ -125,7 +132,7 @@ class EcritureMixin:
         # oto#140 : `@keep` et `@clear` — avertis jusqu'à leur date, REFUSÉS à partir
         # d'elle (J3), dit à l'instant où l'appelant les emploie, le seul moment
         # actionnable.
-        mdp.controler(self.off_notices, user_data)
+        mdp.controler(self.off_notices, user_data, rangs.brut if rangs else None)
         _refuse_dotted_names(user_data)
         refuser_cles_internes(user_data)
         refuser_les_mots_mal_places(schema, user_data)
@@ -174,7 +181,8 @@ class EcritureMixin:
                     self._merge_into_row(ns_id, existing_id, user_data, schema=schema,
                                          forcage=forcage,
                                          origine_override=origine_override,
-                                         donnees_d_origine=donnees_d_origine),
+                                         donnees_d_origine=donnees_d_origine,
+                                         rangs=rangs),
                     schema)
         # #516 : sur un tableau FERMÉ, on ne crée pas — on vise. Le geste est arrivé
         # jusqu'ici sans désigner de ligne : ni par son `_id` (promu plus haut, et
@@ -215,7 +223,15 @@ class EcritureMixin:
         # un texte satisfaisant `required`). Sur une COPIE : si la course est perdue
         # ci-dessous, la fusion reçoit le geste d'origine et le résout elle-même — lui
         # passer un marqueur le ferait refuser comme clé interne.
-        a_creer = mots_resolus_a_la_creation(schema, user_data)
+        # oto#22 : la ligne naît — un rang n'y vise rien, `contacts[+]` y ajoute. Les
+        # colonnes ainsi produites passent la garde des champs réservés, qui n'a vu
+        # plus haut que le payload sans elles.
+        cree = user_data
+        if rangs is not None:
+            par_rang = rangs.appliquer({}, schema, creation=True)
+            refuser_champs_reserves(schema, par_rang, agent=aga.appel_d_agent())
+            cree = {**user_data, **par_rang}
+        a_creer = mots_resolus_a_la_creation(schema, cree)
         releve = ddo.poser_les_deux_versions(a_creer) if donnees_d_origine else None
         # `creation=True` : c'est ici qu'une colonne parasite NAÎT (#117). Un patch par
         # `id` vise une ligne existante et peut légitimement ne toucher qu'une colonne
@@ -240,7 +256,8 @@ class EcritureMixin:
                 self._merge_into_row(ns_id, existing_id, user_data, schema=schema,
                                      forcage=forcage,
                                      origine_override=origine_override,
-                                     donnees_d_origine=donnees_d_origine),
+                                     donnees_d_origine=donnees_d_origine,
+                                     rangs=rangs),
                 schema)
         # oto#164 : relevé APRÈS l'insert — une course perdue ne compte pas deux fois,
         # la fusion ci-dessus relève elle-même ce qu'elle pose.
@@ -253,7 +270,8 @@ class EcritureMixin:
                         forcage: Optional[Forcage] = None,
                         origine_override: bool = False,
                         donnees_d_origine: bool = False,
-                        lot: bool = False) -> dict:
+                        lot: bool = False,
+                        rangs: Optional[rg.EcrituresParRang] = None) -> dict:
         """MERGE `user_data` dans la row existante (dernier écrit gagne par champ),
         en appliquant le schéma v2 (ADR 0046) au résultat mergé : validation avec
         `prev_status` (transition de lifecycle) puis release du claim si l'état
@@ -268,7 +286,10 @@ class EcritureMixin:
         `lot` = ce geste vient d'un LOT (oto#72). Il ne change rien à la fusion, il
         change le REFUS : hors lot, celui d'un `id` nu conseille deux gestes que le mode
         lot refuse ailleurs. La ligne de lot qui retrouve une ligne EXISTANTE passe ici,
-        et recevait donc le conseil qui échoue au tour suivant."""
+        et recevait donc le conseil qui échoue au tour suivant.
+
+        `rangs` = l'écriture PAR RANG du geste (oto#22), sortie du payload par
+        l'appelant : elle se résout ICI, contre la ligne lue sous le verrou."""
         if schema is None:
             schema = self._schema_of(ns_id)
         # La ligne visée est connue ICI : ses colonnes comptent pour « colonne réelle »,
@@ -289,6 +310,11 @@ class EcritureMixin:
         def _apply(current: dict) -> dict:
             merged = dict(current or {})
             prev_status = merged.get(sk) if sk else None
+            # oto#22 : les rangs se résolvent ICI, contre la ligne lue sous le verrou —
+            # deux gestes concurrents sur deux éléments ne s'écrasent pas. Ensuite la
+            # colonne-liste résultante suit la fusion comme toute colonne.
+            ecrit = (user_data if rangs is None
+                     else {**user_data, **rangs.appliquer(current, schema)})
             # Arbitrage AVANT la fusion : après, l'ancienne valeur n'existe plus
             # nulle part. Il rend d'un coup ce que l'écriture pose VRAIMENT (les
             # vides non-`null` qui auraient déplacé une valeur en sont retirés,
@@ -307,12 +333,12 @@ class EcritureMixin:
             # avoir retiré une donnée personnelle. Un zéro se met en doute ; un succès
             # ne se met pas en doute — d'où un REFUS, et seulement sur l'effacement :
             # l'écriture ordinaire vise l'imbriqué à juste titre.
-            vises = rq.effacements_sur_relique(user_data, current)
+            vises = rq.effacements_sur_relique(ecrit, current)
             if vises:
                 raise RowValidationError([rq.refus(vises)])
-            releve = (ddo.poser_les_deux_versions(user_data, avant=current)
+            releve = (ddo.poser_les_deux_versions(ecrit, avant=current)
                       if donnees_d_origine else None)
-            pose, vidages, ecartes = arbitrer_les_vides(current, user_data, row_id)
+            pose, vidages, ecartes = arbitrer_les_vides(current, ecrit, row_id)
             # #724 : préserver et le DIRE ne suffit pas quand l'écarté était TOUT ce
             # que l'écriture portait — l'appel n'a alors aucun effet et répond 200.
             # ⚠️ Par CE chemin le refus ne peut pas parler : on n'arrive ici (append
@@ -322,7 +348,7 @@ class EcritureMixin:
             # de règles (#322), ils partagent la fonction, pas seulement l'intention.
             # oto#140 J2 : ce vide écarté REMPLACERA la valeur à une date annoncée — dit
             # dans la réponse comme dans le refus.
-            annonce = vr.annonce(user_data, ecartes)
+            annonce = vr.annonce(ecrit, ecartes)
             refuser_geste_sans_effet(pose, ecartes, annonce)
             # Colonne par colonne, pour que l'origine survive à une écriture
             # ordinaire. Un `update` en bloc l'emporterait avec le reste — et
@@ -331,8 +357,8 @@ class EcritureMixin:
             # nomme l'identité de ses éléments (`of.key`) se remplacerait quand même
             # en bloc, et la déclaration serait une clé de plus que rien ne lit.
             for _k, _v in pose.items():
-                merged[_k] = _merge_column(merged.get(_k), _v,
-                                           dsv2.champ_declare(schema, _k))
+                merged[_k] = rg.fusionner(rangs, _k, merged.get(_k), _v,
+                                          dsv2.champ_declare(schema, _k))
             # oto#204 : un vide ASSUMÉ redevenu vide ordinaire par le remplacement d'une
             # liste se relève. Sur un requis, `_check_row` refuse juste après ; ailleurs
             # il tomberait sans un mot.
@@ -355,7 +381,7 @@ class EcritureMixin:
             # se réarmer sur une colonne préservée, dont la valeur n'a pas bougé.
             self._check_row(schema, merged, prev_status=prev_status,
                             written=set(pose), en_place=current or {}, pose=pose,
-                            lot=lot)
+                            lot=lot, ecrits_par_rang=rangs.ecrits if rangs else None)
             self.off_erased.extend(vidages)
             self.off_ignored.extend(ecartes)
             if annonce:
@@ -391,6 +417,14 @@ class EcritureMixin:
             ns_id = self._resolve(datastore, write=True)
         user_data = {k: v for k, v in data.items() if k not in _META_COLS}
         schema = self._schema_of(ns_id)
+        # oto#22 : un REMPLACEMENT n'a pas d'élément en place à viser — un rang s'y
+        # refuse en le disant, plutôt que de tomber dans le refus des noms pointés.
+        _sans_rang, rangs = rg.sortir_les_rangs(schema, user_data)
+        if rangs is not None:
+            raise RowValidationError([
+                f"{', '.join('`' + c + '`' for c in rangs.brut)} : ce chemin REMPLACE "
+                f"la ligne entière, il n'y a pas d'élément en place à viser par rang. "
+                f"Rien n'a été écrit. Écris chaque colonne-liste entière."])
         # ⚠️ Pas de `colonnes_en_place` ici, et c'est délibéré : l'upsert REMPLACE la
         # ligne. Ranger une annotation sur une colonne qui n'est que dans l'ancienne
         # ligne poserait une couche sur une valeur qui tombe dans le même geste.

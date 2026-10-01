@@ -1,0 +1,392 @@
+"""L'ÉCRITURE PAR RANG dans une colonne-liste de fiches (oto#22, point c).
+
+Avant ce module, modifier UN attribut d'UN élément obligeait à reposer la liste
+entière, couches de tous les éléments réémises : `contacts[0].email` était refusé à
+l'écriture alors que la lecture, le filtre et l'agrégat le comprenaient. On écrit
+désormais à l'adresse qu'on lit.
+
+## La grammaire — celle de la lecture, un cran de plus
+
+La forme canonique est le CHEMIN À PLAT, celui de `db/paths.split_list_path` : c'est
+lui que servent le filtre, le tri et l'agrégat, et c'est la forme qu'une fiche
+servie rend pour ses couches (`item["email.comment"]`). Une forme imbriquée
+(`{"contacts[0]": {"email": …}}`) aurait fait deux adresses pour une case.
+
+    contacts[0].email            l'attribut `email` de l'élément de rang 0
+    contacts[0].email.comment    une couche de cet attribut
+    contacts[+]                  un élément AJOUTÉ en fin de liste, fiche complète
+    contacts[0]: null            l'élément de rang 0 SUPPRIMÉ
+
+Un attribut s'écrit comme une colonne : valeur nue, `{"valeur": …, "comment": …}`,
+`null` (efface l'attribut), `@empty`. Il se FUSIONNE dans l'élément en place par la
+règle des colonnes (`_merge_column`) : l'origine survit, `comment`/`link` tombent
+avec une valeur qui change, les autres attributs ne bougent pas.
+
+⚠️ **Tous les rangs d'un geste désignent la liste TELLE QU'ELLE EST EN PLACE**, avant
+le geste : `{"contacts[0]": null, "contacts[2].email": …}` vise le troisième élément
+lu, pas celui qui le deviendrait après la suppression. L'ajout se fait en dernier.
+Le geste se résout SOUS LE VERROU de la ligne, contre la liste exacte — deux rangs
+écrits par deux appels concurrents ne s'écrasent pas.
+
+## Ce qui est refusé, et vers quoi on oriente
+
+- un rang hors bornes : la taille de la liste, le rang demandé, et `contacts[+]` ;
+- `contacts[0]: {…}` : la forme imbriquée — on écrit les attributs à leur adresse ;
+- `contacts[].email` : TOUS les éléments, une adresse de lecture, pas d'écriture ;
+- `contacts[+].email` : un élément s'ajoute ENTIER ;
+- `contacts[role=DAF].email` : la désignation par identité (`of.key`) n'est pas
+  servie — ni à l'écriture ni à la lecture ; une valeur d'identité qui porterait un
+  point ou un crochet casserait la grammaire sans règle de citation ;
+- la colonne ENTIÈRE et l'un de ses rangs dans le même geste : deux écritures d'une
+  même colonne, l'une écraserait l'autre selon l'ordre.
+
+Ce module ne fusionne rien lui-même : il TRADUIT le geste en une colonne-liste
+complète, que les chemins d'écriture font passer par leurs gardes, leur arbitrage
+des vides, leur validation et leur journal comme n'importe quelle colonne.
+"""
+from __future__ import annotations
+
+import re
+from collections import Counter
+from dataclasses import dataclass, field
+from typing import Any, Callable, Optional
+
+from . import schema as dsv2
+from .columns import (
+    _existing_layers,
+    _merge_column,
+    _resoudre_la_fiche,
+    _scan_mixed,
+    mots_dans_l_element,
+    refuser_cles_internes,
+    reposer_la_liste,
+)
+from .couches import GARDE, VIDE_DELIBERE, layer_address
+from .declaration import champ_declare, cle_d_element
+from .errors import RowValidationError
+from .points import _ranger_une_fiche
+
+#: Une adresse de rang : une colonne (sans espace, point ni crochet), un rang entre
+#: crochets, et peut-être un attribut. Ce qui ressemble sans être de cette forme —
+#: `Prix [EUR]`, `note[a]` — reste un nom de colonne ordinaire, comme avant.
+_ADRESSE = re.compile(r"^(?P<col>[^\s\[\].]+)\[(?P<rang>[^\]]*)\](?:\.(?P<reste>.+))?$")
+_RANG = re.compile(r"^(?:\d+|\+|)$|=")
+
+AJOUT = "+"
+
+
+def _refus(message: str) -> RowValidationError:
+    return RowValidationError([message + " Rien n'a été écrit."])
+
+
+@dataclass
+class _Colonne:
+    """Ce qu'un geste écrit par rang dans UNE colonne."""
+    nom: str
+    modifs: dict = field(default_factory=dict)       # rang → fiche partielle
+    suppressions: set = field(default_factory=set)   # rangs supprimés
+    ajout: Any = None
+    a_un_ajout: bool = False
+
+
+@dataclass
+class EcrituresParRang:
+    """Le geste par rang d'une écriture, colonne par colonne — sorti du payload par
+    `sortir_les_rangs`, préparé (`preparer`), puis résolu contre la ligne en place
+    (`appliquer`). `ecrits` = les rangs, dans la liste RÉSULTANTE, des éléments que le
+    geste modifie ou ajoute : la validation ne juge qu'eux (J4, oto#140)."""
+    colonnes: dict = field(default_factory=dict)
+    brut: dict = field(default_factory=dict)
+    ecrits: dict = field(default_factory=dict)
+
+    def vise(self, colonne: str) -> bool:
+        return colonne in self.colonnes
+
+    # ── la préparation : les gardes du payload, élément par élément ──────────────
+
+    def preparer(self, schema: Optional[dict],
+                 normaliser: Callable[[Optional[dict], dict], dict]) -> None:
+        """Les gardes que le payload subit sur toute écriture, appliquées à chaque
+        élément ÉCRIT, à son VRAI rang : un refus qui nommerait `contacts[0]` pour un
+        geste sur `contacts[3]` ferait corriger le mauvais contact.
+
+        Le rangement des couches pointées (`email.comment` à côté d'`email`), les clés
+        internes, les mots réservés hors case ou sur l'identité, les couches mal
+        orthographiées, puis la normalisation des dates (`normaliser`, celle du store).
+        """
+        errors: list = []
+        for col in self.colonnes.values():
+            champ = champ_declare(schema, col.nom)
+            cle_item = cle_d_element(champ)
+            of = champ.get("of") if isinstance(champ, dict) else None
+            elements = [(f"{col.nom}[{r}]", r) for r in sorted(col.modifs)]
+            if col.a_un_ajout:
+                elements.append((f"{col.nom}[{AJOUT}]", AJOUT))
+            for adresse, r in elements:
+                element = col.ajout if r == AJOUT else col.modifs[r]
+                if isinstance(element, dict):
+                    element = _ranger_une_fiche(element, adresse)
+                refuser_cles_internes({adresse: element})
+                mots_dans_l_element(element, adresse, errors, cle_item=cle_item)
+                _scan_mixed(element, adresse, errors)
+                element = _dates(schema, of, adresse, element, normaliser)
+                if r == AJOUT:
+                    col.ajout = element
+                else:
+                    col.modifs[r] = element
+        if errors:
+            raise RowValidationError(errors)
+
+    # ── la résolution : contre la ligne EN PLACE ──────────────────────────────────
+
+    def appliquer(self, en_place: Optional[dict], schema: Optional[dict], *,
+                  creation: bool = False) -> dict:
+        """`{colonne: liste résultante}` — `None` quand le geste vide la liste (la
+        colonne s'efface alors comme sous un `null`, et la valeur partie se relève).
+
+        `en_place` = la ligne lue sous le verrou ; `{}` sur une création, où il n'y a
+        aucun élément à viser."""
+        out: dict = {}
+        self.ecrits = {}
+        for col in self.colonnes.values():
+            avant = _liste_en_place(col.nom, (en_place or {}).get(col.nom), creation)
+            cle_item = cle_d_element(champ_declare(schema, col.nom))
+            vises = sorted(set(col.modifs) | col.suppressions)
+            if vises and vises[-1] >= len(avant):
+                raise _refus_hors_bornes(col.nom, vises[-1], len(avant), creation)
+            apres = list(avant)
+            for r, partielle in col.modifs.items():
+                apres[r] = _fusionner_l_element(col.nom, r, avant[r], partielle)
+            for r in sorted(col.suppressions, reverse=True):
+                del apres[r]
+            ecrits = {r - sum(1 for s in col.suppressions if s < r) for r in col.modifs}
+            if col.a_un_ajout:
+                apres.append(_nouvel_element(col.nom, col.ajout))
+                ecrits.add(len(apres) - 1)
+            if cle_item:
+                _refuser_identite_doublee(col.nom, cle_item, avant, apres)
+            self.ecrits[col.nom] = ecrits
+            out[col.nom] = apres or None
+        return out
+
+
+def sortir_les_rangs(schema: Optional[dict], user_data: Optional[dict]
+                     ) -> tuple[dict, Optional[EcrituresParRang]]:
+    """`(payload sans les adresses de rang, geste par rang ou None)`.
+
+    Lit la grammaire et refuse ce qu'elle ne sert pas — AVANT toute autre garde : une
+    adresse de rang laissée dans le payload serait jugée comme un nom de colonne
+    pointé, et `_refuse_dotted_names` la refuserait pour une raison fausse."""
+    if not user_data:
+        return dict(user_data or {}), None
+    reste: dict = {}
+    rangs = EcrituresParRang()
+    couches: dict = {}
+    for cle, valeur in user_data.items():
+        m = _ADRESSE.match(cle) if isinstance(cle, str) else None
+        if m is None or not _RANG.search(m.group("rang")):
+            reste[cle] = valeur
+            continue
+        nom, rang, attribut = m.group("col"), m.group("rang"), m.group("reste")
+        _refuser_la_forme(cle, nom, rang, attribut, valeur, schema)
+        rangs.brut[cle] = valeur
+        col = rangs.colonnes.setdefault(nom, _Colonne(nom))
+        if rang == AJOUT:
+            col.ajout, col.a_un_ajout = valeur, True
+            continue
+        r = int(rang)
+        if attribut is None:
+            col.suppressions.add(r)
+            continue
+        adresse = layer_address(attribut)
+        if adresse is not None:
+            couches.setdefault((nom, r), []).append((cle, *adresse, valeur))
+        else:
+            col.modifs.setdefault(r, {})[attribut] = valeur
+    if not rangs.colonnes:
+        return reste, None
+    # Une couche nommée SEULE annote l'attribut en place : on la range imbriquée. À
+    # côté de son attribut, elle reste pointée — `_ranger_une_fiche` les réunit, avec
+    # le refus de collision des colonnes.
+    for (nom, r), liste in couches.items():
+        fiche = rangs.colonnes[nom].modifs.setdefault(r, {})
+        for _cle, attribut, couche, valeur in liste:
+            if attribut in fiche:
+                fiche[f"{attribut}.{couche}"] = valeur
+            else:
+                fiche[attribut] = {couche: valeur}
+    for nom, col in rangs.colonnes.items():
+        if nom in reste:
+            raise _refus(
+                f"`{nom}` est écrite ENTIÈRE et par rang ({_cites(rangs.brut, nom)}) dans "
+                f"le même geste : deux écritures d'une même colonne, l'une écraserait "
+                f"l'autre. Garde l'une des deux formes.")
+        doubles = sorted(set(col.modifs) & col.suppressions)
+        if doubles:
+            r = doubles[0]
+            raise _refus(
+                f"`{nom}[{r}]` est supprimé et modifié dans le même geste. Garde l'un "
+                f"des deux : `{nom}[{r}]: null` supprime l'élément, "
+                f"`{nom}[{r}].<attribut>` le modifie.")
+    return reste, rangs
+
+
+def fusionner(rangs: Optional[EcrituresParRang], cle: str, existant: Any,
+              valeur: Any, champ: Any) -> Any:
+    """La fusion d'une colonne dans la ligne. Une colonne écrite par rang arrive DÉJÀ
+    fusionnée élément par élément (`appliquer`) : on la repose dans ses couches de
+    colonne sans la refusionner — `_merge_column` la remplacerait en bloc, ou, sous
+    `of.key`, reprendrait un attribut que le geste vient d'effacer."""
+    if rangs is not None and rangs.vise(cle) and isinstance(valeur, list):
+        return reposer_la_liste(existant, valeur)
+    return _merge_column(existant, valeur, champ)
+
+
+# ── les refus de la grammaire ───────────────────────────────────────────────────
+
+def _refuser_la_forme(cle: str, nom: str, rang: str, attribut: Optional[str],
+                      valeur: Any, schema: Optional[dict]) -> None:
+    champ = champ_declare(schema, nom)
+    if champ is not None and champ.get("type") != "list":
+        raise _refus(
+            f"`{cle}` vise un rang de `{nom}`, déclarée `{champ.get('type')}` : seule une "
+            f"colonne-liste (`type: list`) s'adresse par rang. Écris `{nom}` entière.")
+    if rang == "":
+        raise _refus(
+            f"`{cle}` désigne TOUS les éléments de `{nom}` : c'est une adresse de "
+            f"lecture (filtre, agrégat), pas d'écriture. Vise un rang — "
+            f"`{nom}[0]{'.' + attribut if attribut else ''}` — lu dans data_rows.")
+    if "=" in rang:
+        raise _refus(
+            f"`{cle}` désigne un élément par son identité : ce n'est pas servi. Vise "
+            f"son RANG, lu dans data_rows — `{nom}[0]"
+            f"{'.' + attribut if attribut else ''}`. Les rangs d'un geste désignent la "
+            f"liste telle qu'elle est en place.")
+    if rang == AJOUT:
+        if attribut is not None:
+            raise _refus(
+                f"`{cle}` : un élément s'ajoute ENTIER, en une fiche — "
+                f'`"{nom}[+]": {{"{attribut.split(".")[0]}": …, …}}`. Pour modifier un '
+                f"élément existant : `{nom}[<rang>].{attribut}`.")
+        if valeur is None or isinstance(valeur, list):
+            raise _refus(
+                f"`{cle}` ajoute UN élément : il porte une fiche (`{{…}}`) ou, dans une "
+                f"liste de valeurs, une valeur — reçu {_forme(valeur)}. Un geste ajoute "
+                f"un élément ; pour en ajouter plusieurs, écris `{nom}` entière.")
+        return
+    if attribut is None:
+        if valeur is not None:
+            raise _refus(
+                f"`{cle}` : un élément se modifie attribut par attribut — "
+                f"`{nom}[{int(rang)}].<attribut>` —, se supprime par "
+                f"`{nom}[{int(rang)}]: null`, s'ajoute par `{nom}[+]`. La forme "
+                f"imbriquée n'est pas servie : une case n'a qu'une adresse.")
+        return
+    if "." in attribut and layer_address(attribut) is None:
+        tete = attribut.split(".")[0]
+        raise _refus(
+            f"`{cle}` descend sous l'attribut `{tete}` : un attribut d'élément s'écrit "
+            f"entier — `{nom}[{int(rang)}].{tete}` —, ou par l'une de ses couches "
+            f"({', '.join('`' + c + '`' for c in dsv2.LAYER_KEYS)}).")
+
+
+def _refus_hors_bornes(nom: str, rang: int, taille: int, creation: bool
+                       ) -> RowValidationError:
+    if creation:
+        etat = f"cette écriture CRÉE la ligne : `{nom}` n'y a encore aucun élément"
+    elif taille == 0:
+        etat = f"`{nom}` n'a aucun élément sur cette ligne"
+    else:
+        etat = (f"`{nom}` a {taille} élément{'s' if taille > 1 else ''} "
+                f"(rangs 0 à {taille - 1})")
+    return _refus(f"{etat} ; rang {rang} inexistant. Pour ajouter : `{nom}[+]`.")
+
+
+def _liste_en_place(nom: str, cellule: Any, creation: bool) -> list:
+    valeur = _existing_layers(cellule).get(dsv2.VALUE_LAYER)
+    if valeur is None:
+        return []
+    if not isinstance(valeur, list):
+        raise _refus(
+            f"`{nom}` porte une valeur qui n'est pas une liste ({_forme(valeur)}) : un "
+            f"rang ne s'y adresse pas. Écris `{nom}` entière — et si `{nom}[…]` est le "
+            f"NOM d'une colonne, renomme-la : un crochet désigne un rang.")
+    return valeur
+
+
+def _fusionner_l_element(nom: str, rang: int, element: Any, partielle: dict) -> dict:
+    """L'élément en place, ses attributs nommés fusionnés par la règle des colonnes —
+    exactement ce que `_merge_items` fait d'un élément apparié par `of.key`."""
+    if not isinstance(element, dict):
+        raise _refus(
+            f"`{nom}[{rang}]` n'est pas une fiche ({_forme(element)}) : il n'a pas "
+            f"d'attribut. Supprime-le (`{nom}[{rang}]: null`) puis ajoute la fiche "
+            f"(`{nom}[+]`), ou écris `{nom}` entière.")
+    fusion = dict(element)
+    for attribut, cellule in partielle.items():
+        v = _merge_column(element.get(attribut), cellule)
+        if v is None:
+            fusion.pop(attribut, None)
+        else:
+            fusion[attribut] = v
+    return fusion
+
+
+def _nouvel_element(nom: str, element: Any) -> Any:
+    """L'élément AJOUTÉ n'a rien en place : ses mots se résolvent contre rien, et
+    `@keep` n'a rien à tenir (même règle qu'un élément neuf de `_merge_items`)."""
+    if not isinstance(element, dict):
+        return element
+    refus: list = []
+    propre = _resoudre_la_fiche(element, f"{nom}[{AJOUT}]", refus)
+    if refus:
+        raise _refus(
+            f"`{GARDE}` ne peut rien tenir dans un élément AJOUTÉ : "
+            f"{', '.join('`' + r + '`' for r in refus)} — rien n'est en place. Écris le "
+            f"contenu, ou `{VIDE_DELIBERE}` pour « cherché, rien ».")
+    return propre
+
+
+def _identites(liste: list, cle: str) -> list:
+    return [dsv2.unwrap(x.get(cle)) for x in liste if isinstance(x, dict)
+            and dsv2.unwrap(x.get(cle)) not in (None, "")]
+
+
+def _refuser_identite_doublee(nom: str, cle: str, avant: list, apres: list) -> None:
+    """Sous `of.key`, deux éléments ne portent pas la même identité : le geste par
+    rang ne doit pas fabriquer le doublon que la liste posée entière refuse."""
+    deja = {v for v, n in Counter(_identites(avant, cle)).items() if n > 1}
+    doubles = {v for v, n in Counter(_identites(apres, cle)).items()
+               if n > 1 and v not in deja}
+    if doubles:
+        raise _refus(
+            f"`{cle}` en double dans `{nom}` après ce geste : "
+            + ", ".join(repr(d) for d in sorted(doubles, key=str))
+            + f" — `{cle}` est l'identité des éléments (`of.key`), deux éléments ne la "
+            f"partagent pas. Modifie l'élément qui la porte déjà, à son rang.")
+
+
+def _dates(schema: Optional[dict], of: Any, adresse: str, element: Any,
+           normaliser: Callable[[Optional[dict], dict], dict]) -> Any:
+    """Les dates d'un élément normalisées par la règle du store, l'élément déclaré à
+    son adresse — les notices nomment `contacts[3].debut`, pas un rang reconstitué."""
+    if not isinstance(of, dict):
+        return element
+    if isinstance(element, dict):
+        decl = {"key": adresse, "type": "object", "fields": of.get("fields") or []}
+    else:
+        decl = {**of, "key": adresse}
+    mini = {**(schema or {}), "fields": [decl]}
+    return normaliser(mini, {adresse: element}).get(adresse, element)
+
+
+def _forme(valeur: Any) -> str:
+    if isinstance(valeur, dict):
+        return "un objet"
+    if isinstance(valeur, list):
+        return "une liste"
+    return repr(valeur)
+
+
+def _cites(brut: dict, nom: str) -> str:
+    return ", ".join(f"`{c}`" for c in brut if c.split("[")[0] == nom)

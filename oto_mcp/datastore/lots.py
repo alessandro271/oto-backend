@@ -31,6 +31,7 @@ from .errors import (BusinessKeyExists, BusinessKeyRequired, RowLocked,
                      RowValidationError)
 from .outils import _new_id, _refus_de_creation
 from .points import _refuse_dotted_names, ranger_les_couches
+from . import rangs as rg
 from . import mots_deprecies as mdp
 from . import upsert_implicite as upi
 from . import donnees_d_origine as ddo
@@ -129,6 +130,12 @@ class LotsMixin:
                     raise ValueError("chaque row doit être un objet")
                 self._reject_misplaced_id(data, None, batch=True)
                 user_data = {k: v for k, v in data.items() if k not in _META_COLS}
+                # oto#22 : l'écriture PAR RANG, sortie avant toute garde (cf.
+                # `append_row`). Les mots dépréciés de ses valeurs ont été jugés sur le
+                # lot ENTIER, plus haut, clés de rang comprises.
+                user_data, rangs = rg.sortir_les_rangs(schema, user_data)
+                if rangs is not None:
+                    rangs.preparer(schema, self._normaliser_les_dates)
                 # ⚠️ #329 volet 2, appliqué au QUATRIÈME chemin — il y manquait.
                 # `append_row`, `upsert_row` et la fusion refusent une clé littérale
                 # pointée ; le LOT, non. Or c'est LUI qui porte les imports : la garde
@@ -199,15 +206,20 @@ class LotsMixin:
                                          forcage=forcage,
                                          origine_override=origine_override,
                                          donnees_d_origine=donnees_d_origine,
-                                         lot=True)
+                                         lot=True, rangs=rangs)
                     updated += 1
                     ids.append(existing_id)
                     continue
                 # #586 : la création dans le LOT (même chemin que l'upload signé) —
                 # la couche d'origine d'un champ système ne s'écrit pas.
-                refuser_champs_reserves(schema, user_data,
+                # oto#22 : la ligne naît — un rang n'y vise rien, `contacts[+]` y
+                # ajoute (cf. `append_row`). La course perdue, plus bas, fusionne le
+                # geste d'origine, rangs compris.
+                cree = (user_data if rangs is None else
+                        {**user_data, **rangs.appliquer({}, schema, creation=True)})
+                refuser_champs_reserves(schema, cree,
                                         agent=aga.appel_d_agent())
-                _relever_origine_module(self, ns_id, user_data, schema=schema,
+                _relever_origine_module(self, ns_id, cree, schema=schema,
                                         declare=origine_override)
                 # CRÉATION : pas de ligne en base, donc rien à préserver — mais la
                 # règle « une origine déjà posée ne se réécrit pas » vaut quand même,
@@ -215,7 +227,7 @@ class LotsMixin:
                 # oto#204 : la ligne NEUVE d'un lot ne passe pas par la fusion — ses mots
                 # réservés se résolvent ici, sur une copie (cf. `append_row`) : la course
                 # perdue ci-dessous fusionne le geste d'origine.
-                a_creer = mots_resolus_a_la_creation(schema, user_data)
+                a_creer = mots_resolus_a_la_creation(schema, cree)
                 releve = (ddo.poser_les_deux_versions(a_creer)
                           if donnees_d_origine else None)
                 # `lot=True` : le refus de l'`id` nu doit nommer un geste qui
@@ -245,7 +257,7 @@ class LotsMixin:
                                          forcage=forcage,
                                          origine_override=origine_override,
                                          donnees_d_origine=donnees_d_origine,
-                                         lot=True)
+                                         lot=True, rangs=rangs)
                     updated += 1
                     ids.append(existing_id)
                     continue

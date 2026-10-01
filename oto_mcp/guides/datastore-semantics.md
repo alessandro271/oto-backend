@@ -82,6 +82,32 @@ la ligne visée ou au schéma. Si elle n'existe nulle part, l'écriture est refu
 nommant la clé et les trois endroits regardés — jamais une colonne littérale
 `adresse.comment` créée en silence.
 
+## 2 bis. Un élément de liste s'écrit à son RANG
+
+Pour toucher UN élément d'une colonne-liste, tu n'as pas à renvoyer la liste : écris à
+l'adresse que tu lis — la même que dans `filters` et `group_by`.
+
+| ce que tu veux | ce que tu écris |
+|---|---|
+| modifier un attribut | `{"contacts[1].email": "d@x.fr"}` — ou `{"valeur": …, "comment": …}` |
+| annoter un attribut sans le réécrire | `{"contacts[1].email.comment": "site officiel"}` |
+| effacer un attribut | `{"contacts[1].email": null}` |
+| ajouter un élément en fin de liste | `{"contacts[+]": {"nom": "Cy", "email": "c@x.fr"}}` — une fiche complète |
+| supprimer un élément | `{"contacts[0]": null}` |
+
+L'attribut suit la règle d'une colonne (§3) : `comment`/`link` tombent avec une valeur
+qui change, l'origine reste, les autres attributs et les autres éléments ne bougent pas.
+Le rang part de 0 et **désigne la liste telle que tu l'as lue** : dans un même appel,
+`{"contacts[0]": null, "contacts[2].email": …}` vise le troisième élément lu ; l'ajout
+se fait en dernier. Supprimer le dernier élément efface la colonne. Seul l'élément que
+tu écris est jugé par le schéma.
+
+Refusé, avec la forme qui marche : un rang qui n'existe pas (« `contacts` a 2 éléments ;
+rang 5 inexistant ; pour ajouter : `contacts[+]` »), `{"contacts[0]": {…}}` (écris ses
+attributs), `contacts[].email` (adresse de lecture), `contacts[+].email` (un élément
+s'ajoute entier), `contacts[role=DAF].email` (vise le rang), et la colonne entière avec
+l'un de ses rangs dans le même appel.
+
 ## 3. Ce qu'une écriture fait — et détruit
 
 Une écriture ne touche **que ce qu'elle nomme**. Sur une colonne ouverte il n'y a pas
@@ -333,7 +359,8 @@ Deux formes qui ne s'appliqueraient pas sont **refusées à la pose**, avec la b
 jamais dans `of` ; des sous-champs (`fields`, `of`) exigent le `type` de leur colonne
 (`object` ou `list`).
 
-Dans une liste à `of.key`, seuls les éléments que ton écriture **change** sont jugés.
+Dans une liste à `of.key`, seuls les éléments que ton écriture **change** sont jugés —
+et, dans toute liste, seuls ceux que tu écris par leur rang (§2 bis).
 Un élément renvoyé tel quel, qui ne respectait pas une exigence posée après lui, ne
 bloque pas ton écriture : il est signalé dans `hors_type`, à corriger quand tu y
 reviens.
@@ -495,7 +522,8 @@ l'autre, à l'identique.
   (`"<texte>"`, `"<nombre>"`, `"<a | b>"`), `| @empty` là où ce geste est permis, et dans
   une liste l'élément fautif SEUL, désigné par son `of.key` (sinon son rang, dans
   `a_renvoyer_elements`). MCP : en fin de message. REST : `details.a_renvoyer`. Remplace
-  les gabarits et réécris ; une liste se renvoie entière, cet élément corrigé à sa place.
+  les gabarits et réécris ; une liste se renvoie entière, cet élément corrigé à sa place
+  — ou n'écris que ses attributs, à son rang (§2 bis).
 - **Refus.** MCP : erreur `INVALID_PARAMS` qui porte le message. REST : 400 nommé
   (`row_invalid`, `business_key_required`, `invalid_row_input`, `jeton_mal_place`,
   `invalid_filters`…), 403 `datastore_read_only` (tableau partagé en lecture seule),

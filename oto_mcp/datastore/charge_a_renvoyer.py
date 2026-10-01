@@ -146,5 +146,6 @@ def clause(details: Optional[dict]) -> str:
     if elements:
         texte += (f" (élément visé : {', '.join(elements)}). Une liste se renvoie "
                   "ENTIÈRE : cet élément corrigé à sa place, les autres tels quels — "
-                  "un élément omis est retiré")
+                  "un élément omis est retiré ; ou, sans renvoyer la liste, écris "
+                  "chaque attribut à son RANG — `<liste>[<rang>].<attribut>`")
     return texte + "."

@@ -35,7 +35,6 @@ from . import vide_remplace as vr
 from .cle_metier import cle_reecrite
 from .columns import (
     _META_COLS,
-    _merge_column,
     _refuse_mixed_layers,
     arbitrer_les_vides,
     refuser_cles_internes,
@@ -50,6 +49,7 @@ from . import donnees_d_origine as ddo
 from .errors import RowNotFound, RowValidationError
 from .outils import _now_iso
 from .points import _refuse_dotted_names, ranger_les_couches
+from . import rangs as rg
 from .precondition import revision_attendue
 from .reserves import refuser_champs_reserves
 
@@ -86,6 +86,12 @@ class EcritureParIdMixin:
         # `force` implique la demande : nommer une cible EST le geste.
         forcage = self._forcage_readonly(
             ns_id, schema, readonly_override or bool(force), force)
+        # oto#22 : l'écriture PAR RANG sort du patch avant toute garde, ses éléments
+        # passent les mêmes à leur vrai rang, et elle se résout SOUS le verrou,
+        # contre la liste exacte (`_apply`).
+        patch, rangs = rg.sortir_les_rangs(schema, patch)
+        if rangs is not None:
+            rangs.preparer(schema, self._normaliser_les_dates)
         ecrit: dict = {}
 
         def _apply(en_place: dict) -> dict:
@@ -102,13 +108,15 @@ class EcritureParIdMixin:
             self.off_rejected.extend(objets_vides)
             # oto#140 : `@keep` et `@clear` avertis, puis REFUSÉS à leur date (cf.
             # `append_row`).
-            mdp.controler(self.off_notices, corps)
+            mdp.controler(self.off_notices, corps, rangs.brut if rangs else None)
             _refuse_dotted_names(corps)
             refuser_cles_internes(corps)
             refuser_les_mots_mal_places(schema, corps)
             _refuse_mixed_layers(schema, corps)
             # #859 : avant l'arbitrage et la fusion, qui comparent les valeurs.
             corps = self._normaliser_les_dates(schema, corps)
+            if rangs is not None:
+                corps = {**corps, **rangs.appliquer(data, schema)}
             prev_status = data.get(status_key) if status_key else None
             self._trace(trace, ns_id, ns, prev_status=prev_status)
             # MÊME garde que la fusion : un effacement qui ne détruit rien (la donnée
@@ -157,7 +165,8 @@ class EcritureParIdMixin:
                 if k in _META_COLS:
                     continue
                 # MÊME fusion que le batch : l'origine survit ici aussi.
-                data[k] = _merge_column(data.get(k), v, dsv2.champ_declare(schema, k))
+                data[k] = rg.fusionner(rangs, k, data.get(k), v,
+                                       dsv2.champ_declare(schema, k))
                 written.add(k)
             # oto#204 : MÊME relevé que la fusion — le vide assumé qu'un remplacement de
             # liste rend ordinaire ne tombe pas sans un mot.
@@ -179,7 +188,8 @@ class EcritureParIdMixin:
             # sur un requis déjà présent) + transition de cycle de vie (ADR 0046 B/C).
             # Seule la borne de longueur se limite aux clés du patch (#383).
             self._check_row(schema, data, prev_status=prev_status, written=written,
-                            en_place=avant, pose=pose)
+                            en_place=avant, pose=pose,
+                            ecrits_par_rang=rangs.ecrits if rangs else None)
             self.off_erased.extend(vidages)
             self.off_ignored.extend(ecartes)
             if annonce:

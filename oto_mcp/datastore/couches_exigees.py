@@ -143,7 +143,8 @@ def _couches_exigees_errors(fields: list, data: dict, path: str,
                             top: bool = True,
                             charge: Optional[dict] = None,
                             chemin: tuple = car.RACINE,
-                            pose: Optional[dict] = None) -> list[str]:
+                            pose: Optional[dict] = None,
+                            ecrits_par_rang: Optional[dict] = None) -> list[str]:
     """Les refus de couche manquante d'un (sous-)record.
 
     `written` (premier niveau SEULEMENT) = les clés que le geste NOMME. La garde s'y
@@ -214,14 +215,16 @@ def _couches_exigees_errors(fields: list, data: dict, path: str,
                 car.noter(charge, car.champ(chemin, key),
                           {"valeur": gabarit(f),
                            **{c: gabarit_de_couche(c) for c in manquantes}})
-        errors.extend(_couches_exigees_sous(f, unwrap(brut), fpath,
-                                            charge=charge, chemin=car.champ(chemin, key)))
+        errors.extend(_couches_exigees_sous(
+            f, unwrap(brut), fpath, charge=charge, chemin=car.champ(chemin, key),
+            ecrits=(ecrits_par_rang or {}).get(key) if top else None))
     return errors
 
 
 def _couches_exigees_sous(field: dict, valeur: Any, path: str, *,
                           charge: Optional[dict] = None,
-                          chemin: tuple = car.RACINE) -> list[str]:
+                          chemin: tuple = car.RACINE,
+                          ecrits: Optional[set] = None) -> list[str]:
     """La portée DESCEND dans les composites — l'issue l'exige sur les sous-champs
     d'une liste, et c'est là que la perte est la plus lourde : une liste réémise
     remplace l'ancienne EN BLOC, couches comprises.
@@ -229,7 +232,11 @@ def _couches_exigees_sous(field: dict, valeur: Any, path: str, *,
     Un attribut fautif se nomme UNE fois pour toute la colonne, sur le premier élément
     qui le porte — même borne que le refus de sous-champ inconnu, et même raison : 300
     contacts diraient 300 fois la même chose, et un refus qu'on ne peut pas lire ne
-    vaut pas mieux qu'un silence."""
+    vaut pas mieux qu'un silence.
+
+    `ecrits` = les rangs qu'une écriture PAR RANG modifie ou ajoute (oto#22) : seuls
+    eux sont jugés — l'élément voisin incomplet ne bloque pas celui qu'on écrit.
+    `None` = tous."""
     ftype = field.get("type")
     if ftype == "object" and isinstance(valeur, dict):
         sub = [x for x in (field.get("fields") or []) if isinstance(x, dict)]
@@ -245,7 +252,7 @@ def _couches_exigees_sous(field: dict, valeur: Any, path: str, *,
         vus: set = set()
         cle_id = cle_d_element(field)
         for i, item in enumerate(valeur):
-            if not isinstance(item, dict):
+            if not isinstance(item, dict) or (ecrits is not None and i not in ecrits):
                 continue
             ident = unwrap(item.get(cle_id)) if cle_id else None
             ichemin = car.element(chemin, i, (cle_id, ident)
@@ -267,7 +274,8 @@ def _couches_exigees_sous(field: dict, valeur: Any, path: str, *,
 def couches_manquantes(schema: Optional[dict], merged: dict, *,
                        written: Optional[set] = None,
                        charge: Optional[dict] = None,
-                       pose: Optional[dict] = None) -> list[str]:
+                       pose: Optional[dict] = None,
+                       ecrits_par_rang: Optional[dict] = None) -> list[str]:
     """Les colonnes qui portent une valeur sans la couche que leur schéma exige.
 
     ⚠️ **Armée par sa PROPRE déclaration**, comme le cycle de vie et pour la même
@@ -285,4 +293,4 @@ def couches_manquantes(schema: Optional[dict], merged: dict, *,
     if not any(required_layers_of(f) for f in _walk_fields(fields)):
         return []
     return _couches_exigees_errors(fields, merged, "", written, charge=charge,
-                                   pose=pose)
+                                   pose=pose, ecrits_par_rang=ecrits_par_rang)

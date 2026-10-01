@@ -1,15 +1,15 @@
-"""Une adresse indexée ne s'écrit pas, et le seul geste qui marche est prouvé.
+"""Une adresse indexée s'écrit à son rang, et reposer la liste entière marche toujours.
 
 ⚠️ **Ce banc est né d'un refus qui n'existe plus.** Le refus opposé au nom projeté
 d'une migration (`contact1_nom`) prescrivait « écrire `contacts[0].nom` » — une forme
-que `_refuse_dotted_names` rejette deux gardes plus loin : deux appels, deux refus,
+que `_refuse_dotted_names` rejetait deux gardes plus loin : deux appels, deux refus,
 rien d'écrit. `flat_alias` est retirée le 07/09/2026 (zéro colonne de production), et
 les trois tests qui pesaient les mots de ce message sont partis avec elle.
 
-Ce qui RESTE, et qui n'a jamais dépendu de l'alias : une adresse indexée est une
-adresse de LECTURE, pas une clé d'écriture — elle se refuse. Et il n'existe aucune
-écriture au grain de l'élément : le seul geste qui écrit est de reposer la
-colonne-liste ENTIÈRE, couches réémises (oto#120).
+Depuis oto#22 (point c), `contacts[0].nom` EST la forme d'écriture d'un attribut à
+son rang — la même adresse qu'à la lecture. Le banc prouve qu'elle écrit, couches de
+l'élément préservées, et que l'autre geste — reposer la colonne-liste ENTIÈRE, couches
+réémises (oto#120) — écrit toujours.
 
 ⚠️ Le banc ÉCRIT réellement — c'est le seul moyen de prouver qu'une destination est
 valide. Une assertion sur le texte d'un message prouverait seulement que le test est
@@ -68,21 +68,29 @@ def _refus(st, ns, rid, payload) -> str:
 
 # ══ le fait qui rendait l'indication invalide ═══════════════════════════════════
 
-def test_une_adresse_indexee_est_bien_refusee_a_l_ecriture(table):
-    """Le second refus — celui sur lequel retombait qui suivait l'indication. Il est
-    JUSTE et ne bouge pas : c'est le premier message qui avait tort d'y envoyer."""
+def test_une_adresse_indexee_ecrit_l_attribut_a_son_rang(table):
+    """Le geste qu'indiquait le message d'alors aboutit désormais : l'attribut s'écrit,
+    et la couche que l'élément portait sur un AUTRE attribut ne bouge pas."""
+    st, ns, ns_id, rid = table
+
+    st.update_row(ns, rid, {"contacts[0].email": "ada@lovelace.fr"})
+
+    assert _donnees(ns_id, rid)["contacts"] == [
+        {"nom": {"valeur": "Ada", "comment": "registre"}, "email": "ada@lovelace.fr"}]
+
+
+def test_une_adresse_indexee_hors_bornes_est_refusee_en_donnant_l_ajout(table):
     st, ns, _ns_id, rid = table
 
-    assert "n'est pas un nom de colonne" in _refus(
-        st, ns, rid, {"contacts[0].nom": "Ada"})
+    msg = _refus(st, ns, rid, {"contacts[3].nom": "Ada"})
+    assert "rang 3 inexistant" in msg and "`contacts[+]`" in msg
 
 
 # ══ le seul geste qui écrit passe VRAIMENT ══════════════════════════════════════
 
 def test_reposer_la_liste_ENTIERE_ecrit_pour_de_bon(table):
-    """La contrepartie du refus ci-dessus : puisque `contacts[0].nom` ne s'écrit pas,
-    il faut que reposer la liste ENTIÈRE, couches réémises, écrive vraiment — sans
-    quoi le refus fermerait la seule porte au lieu d'en indiquer une autre."""
+    """L'autre geste : reposer la liste ENTIÈRE, couches réémises, écrit vraiment —
+    l'écriture par rang s'ajoute à lui, elle ne le remplace pas."""
     st, ns, ns_id, rid = table
 
     st.update_row(ns, rid, {"contacts": [

@@ -260,7 +260,8 @@ def _row_errors(fields: list, data: dict, path: str,
                 en_place: Optional[dict] = None,
                 charge: Optional[dict] = None,
                 chemin: tuple = car.RACINE,
-                cle_d_identite: Optional[str] = None) -> list[str]:
+                cle_d_identite: Optional[str] = None,
+                ecrits_par_rang: Optional[dict] = None) -> list[str]:
     """Erreurs d'un (sous-)record. `written` = clés effectivement RÉÉCRITES par ce
     geste (None = toutes) : la borne de longueur, le motif, la fermeture d'un
     composite **et le TYPE** s'y restreignent — eux seuls, cf. `validate_row`. La
@@ -417,9 +418,12 @@ def _row_errors(fields: list, data: dict, path: str,
         # `options` sans type compte aussi (#98) : la liste est déclarée, la valeur doit
         # y être — le type absent dit seulement qu'il n'y a pas de FORME à tenir.
         if f.get("type") or f.get("options"):
-            ecrits = (elements_reecrits(value, unwrap((en_place or {}).get(key)),
-                                        cle_d_element(f))
-                      if pose and en_place is not None else None)
+            if ecrits_par_rang and key in ecrits_par_rang:
+                ecrits = ecrits_par_rang[key]        # le geste par rang le DIT (oto#22)
+            else:
+                ecrits = (elements_reecrits(value, unwrap((en_place or {}).get(key)),
+                                            cle_d_element(f))
+                          if pose and en_place is not None else None)
             errs_type = _type_error(value, f.get("type"), fpath,
                                     f.get("fields"), f.get("of"), f.get("options"),
                                     closed=closed or (strict and pose),
@@ -529,7 +533,8 @@ def validate_row(schema: Optional[dict], merged: dict, *,
                  hors: Optional[list] = None,
                  gelees: Optional[list] = None,
                  en_place: Optional[dict] = None,
-                 pose: Optional[dict] = None) -> list[str]:
+                 pose: Optional[dict] = None,
+                 ecrits_par_rang: Optional[dict] = None) -> list[str]:
     """Erreurs d'une row TELLE QU'ELLE SERA ÉCRITE (le résultat mergé, pas le
     patch) : required / required_when / types / structure imbriquée — si la
     validation est active — plus le cycle de vie (états + transitions) dès qu'un
@@ -579,7 +584,12 @@ def validate_row(schema: Optional[dict], merged: dict, *,
 
     `pose` = ce que CE geste a nommé par colonne, AVANT fusion, sur les chemins qui
     fusionnent. Seul `required_layers` le lit (oto#75, complément du 11/09/2026) : une
-    écriture qui ne pose que des couches ne juge pas la valeur EN PLACE."""
+    écriture qui ne pose que des couches ne juge pas la valeur EN PLACE.
+
+    `ecrits_par_rang` = `{colonne: rangs}` des éléments qu'une écriture PAR RANG
+    (`contacts[0].email`, `contacts[+]`, oto#22) modifie ou ajoute, rangs de la liste
+    résultante. Ils SEULS sont jugés — types, requis, options, couches exigées —, avec
+    ou sans `of.key` : le geste dit lui-même ce qu'il écrit, il n'y a rien à déduire."""
     errors: list[str] = []
     charge: Optional[dict] = {} if details is not None else None
     if validation_active(schema):
@@ -587,11 +597,12 @@ def validate_row(schema: Optional[dict], merged: dict, *,
         errors.extend(_row_errors(_fields(schema), merged, "", written,
                                   strict=bool(schema.get("strict")),
                                   details=details, hors=hors, gelees=gelees,
-                                  en_place=en_place, charge=charge))
+                                  en_place=en_place, charge=charge,
+                                  ecrits_par_rang=ecrits_par_rang))
     # oto#75 barreau 1 : HORS du garde `validation_active`, comme le cycle de vie
     # ci-dessous — la déclaration `required_layers` s'arme elle-même.
     errors.extend(couches_manquantes(schema, merged, written=written, charge=charge,
-                                     pose=pose))
+                                     pose=pose, ecrits_par_rang=ecrits_par_rang))
     # 08/09/2026 — même raison, même place : un `type` déclaré s'arme lui-même. Le
     # contrôle existait sous `validation_active` et n'y voyait rien passer (0 violation
     # sur 88 tableaux) pendant que 248 tableaux sans validation en portaient 118.

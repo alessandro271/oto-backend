@@ -411,10 +411,16 @@ def _refuse_dotted_names(user_data: Optional[dict]) -> None:
                 f'Écris la colonne dans le même geste, ou nomme-la en forme imbriquée '
                 f'— {{"{base}": {{"{couche}": …}}}} — si tu veux l\'annoter seule.'])
         base = cle.split("[")[0].split(".")[0]
+        # oto#22 : un attribut d'élément s'écrit désormais à son RANG — la grammaire
+        # que `rangs.sortir_les_rangs` lit en amont. Ce qui arrive ici avec un crochet
+        # n'en est pas (rang illisible, colonne qui porte un espace) : on dit la forme.
+        rang = (f" Un attribut d'élément de liste s'écrit à son RANG : "
+                f"`{base}[0].<attribut>` (rang entier, lu dans data_rows), "
+                f"`{base}[+]` pour ajouter un élément." if "[" in cle else "")
         raise RowValidationError([
             f"`{cle}` n'est pas un nom de colonne — les points désignent des "
             f"couches ou des attributs, qui s'écrivent en forme imbriquée : "
             f'{{"{base}": {{…}}}}. Les annotations connues sont '
-            f"{', '.join('`' + k + '`' for k in dsv2.LAYER_KEYS)}. Une colonne "
+            f"{', '.join('`' + k + '`' for k in dsv2.LAYER_KEYS)}.{rang} Une colonne "
             f"littérale nommée `{cle}` serait invisible au filtre et au tri du même "
             "nom. Rien n'a été écrit."])

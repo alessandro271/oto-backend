@@ -183,25 +183,70 @@ dans un `EXISTS` pour le filtre, dans un `LATERAL` pour le `group_by`, au même 
 que l'union multi-colonnes. Mesurer avant tout index : une liste de 4 items sur 9 000
 lignes ne justifie sans doute rien.
 
-### 5.2 Adressage d'un rang à l'écriture
+### 5.2 Adressage d'un rang à l'écriture — livré (oto#22, point c)
 
-L'enrichissement pose une valeur sur un item sans réécrire la liste :
+L'enrichissement pose une valeur sur un élément sans réécrire la liste. La forme
+canonique est le **chemin à plat de la lecture** (`split_list_path`, §5.1) : une case
+n'a qu'une adresse, la même pour lire, filtrer, agréger et écrire.
 
 ```jsonc
-data_write(id=…, row={"contacts[1].email": "d@x.fr",
-                      "contacts[1].email.origine": "hunter"})
+data_write(id=…, row={"contacts[1].email": "d@x.fr",            // l'attribut
+                      "contacts[1].email.comment": "site officiel"}) // une couche
+data_write(id=…, row={"contacts[+]": {"nom": "Cy", "email": "c@x.fr"}}) // ajout
+data_write(id=…, row={"contacts[0]": null})                        // suppression
 ```
 
-La fusion est celle de #322/#326, un cran plus bas : **l'écriture ne touche que ce
-qu'elle nomme**. Écrire `contacts` en entier remplace la liste ; écrire un rang ne
-touche que lui. Un rang au-delà de la longueur actuelle **étend** la liste, un rang
-au-delà de `max_items` est refusé.
+- **Un attribut s'écrit comme une colonne**, et se FUSIONNE dans l'élément en place par
+  la règle de #322/#326 (`_merge_column`) : valeur nue ou `{"valeur": …, "comment": …}`,
+  l'origine survit, `comment`/`link` tombent avec une valeur qui change, `null` efface
+  l'attribut, `@empty` dit « cherché, rien ». Les autres attributs et les autres
+  éléments ne bougent pas — couches comprises, et les couches de la COLONNE aussi.
+- **Une couche seule** (`contacts[1].email.comment`) annote l'attribut en place.
+- **`contacts[+]`** ajoute UNE fiche complète en fin de liste ; ses couches pointées
+  (`"email.comment"`) se rangent comme dans une liste posée entière.
+- **`contacts[n]: null`** supprime l'élément. Supprimer le dernier efface la colonne,
+  comme un `null` (la valeur partie revient dans `valeurs_effacees`).
+- **Tous les rangs d'un geste désignent la liste EN PLACE**, avant le geste ; l'ajout se
+  fait en dernier. Le geste se résout sous le verrou de la ligne : deux écritures
+  concurrentes sur deux éléments ne s'écrasent pas.
+- **Validation** (J4) : seuls les éléments que le geste modifie ou ajoute sont jugés —
+  types, `required`, `options`, `required_layers` —, avec ou sans `of.key` ; la charge
+  `a_renvoyer` ne porte que l'élément fautif.
+- **Même fusion, même journal, toutes les faces** : `data_write` (unitaire, `id`, lot),
+  REST (`POST`/`PATCH` d'une ligne, lot). La révision porte l'avant et l'après de la
+  colonne entière. Le REMPLACEMENT d'une ligne (`upsert_row`) refuse un rang : il n'a
+  pas d'élément en place à viser.
 
-**Un trou est servi comme `{}`, jamais `null`** — le rang est RÉSERVÉ, pas absent.
-Trois conséquences, toutes voulues : un consommateur itère et lit `item.get("nom")`
-sans garde de type (un `null` en imposerait une partout) ; `contacts[].attr` ne matche
-rien sur un trou, ce qui est la bonne réponse ; l'export CSV l'écrit `{}` dans la
-cellule de la liste. Même règle qu'au-dessus : une colonne-tableau vide rend `[]`, jamais `null`.
+**Refus nommés, chacun avec la forme qui aboutit** :
+
+| geste | refus |
+| --- | --- |
+| `contacts[5].email` sur 2 éléments | « `contacts` a 2 éléments (rangs 0 à 1) ; rang 5 inexistant. Pour ajouter : `contacts[+]` » — sur une ligne créée par le geste : « cette écriture CRÉE la ligne » |
+| `contacts[0]: {…}` | la forme imbriquée n'est pas servie : `contacts[0].<attribut>` |
+| `contacts[].email` | adresse de lecture (TOUS les éléments), pas d'écriture |
+| `contacts[+].email` | un élément s'ajoute entier : `"contacts[+]": {…}` |
+| `contacts[0].adresse.ville` | un attribut d'élément s'écrit entier, ou par une couche |
+| `contacts` et `contacts[0].x` ensemble | deux écritures d'une même colonne |
+| `contacts[0]: null` et `contacts[0].x` | supprimé et modifié à la fois |
+| `siren[0].x` (colonne déclarée non-liste) | seule une colonne `type: list` s'adresse par rang |
+| sous `of.key`, une identité qui deviendrait double | refus nommant la valeur |
+
+**Écarté** : la spec d'origine voulait qu'un rang au-delà de la longueur ÉTENDE la
+liste, avec des trous servis `{}`. Un rang hors bornes est une adresse fautive — le
+plus souvent une liste relue avant qu'un autre geste ne la raccourcisse — et
+l'étendre fabriquerait des éléments vides que personne n'a demandés : il se refuse,
+et l'ajout a son verbe (`contacts[+]`).
+
+**Proposé, non livré : la désignation par identité** — `contacts[role=DAF].email`, sur
+une liste qui déclare `of.key`. Plus robuste qu'un rang (il ne bouge pas quand un
+élément part), mais il faut une règle de citation pour une valeur d'identité qui
+porte un point ou un crochet, et la même adresse en LECTURE (filtre, `group_by`) —
+sinon on ouvre une forme d'écriture que rien ne relit. Refusée aujourd'hui en
+orientant vers le rang.
+
+**Ce qui ressemble sans être une adresse de rang reste un nom de colonne** : la
+grammaire exige un nom sans espace ni point et un rang entier, `+`, vide ou
+`clé=valeur`. `Prix [EUR]` ou `note[a]` restent des colonnes ordinaires, comme avant.
 
 ### 5.3 Aplatissement d'export DÉTERMINISTE — non livré, écarté le 30/09/2026
 
