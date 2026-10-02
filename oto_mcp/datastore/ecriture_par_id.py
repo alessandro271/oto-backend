@@ -46,6 +46,8 @@ from .columns import (
 )
 from .controles import _relever_origine_module
 from . import donnees_d_origine as ddo
+from . import layers as dsl
+from . import versions as dsver
 from .errors import RowNotFound, RowValidationError
 from .outils import _now_iso
 from .points import _refuse_dotted_names, ranger_les_couches
@@ -64,7 +66,10 @@ class EcritureParIdMixin:
                    origine_override: bool = False,
                    donnees_d_origine: bool = False,
                    force: Optional[frozenset] = None,
-                   expected_revision: Any = None) -> dict:
+                   expected_revision: Any = None,
+                   layers: str = dsl.DEFAUT,
+                   versions: tuple = dsver.DEFAUT,
+                   empties: str = dsl.EMPTIES_DEFAUT) -> dict:
         """Patch partiel d'une row. `trace` (dict mutable, optionnel) = relevé pour
         le journal — dont l'état AVANT, celui-là même sur lequel la transition de
         cycle de vie est validée (cf. `_trace`) : lu SOUS le verrou, il est vrai.
@@ -221,4 +226,4 @@ class EcritureParIdMixin:
         # #658 : après l'UPDATE — un forçage n'est journalisé que s'il a ABOUTI.
         self._relever_forcage(forcage, row_id)
         self._terminal_write_notice(schema, ns_id, row_id, data)
-        return self._row_to_dict(row, schema)
+        return self._row_to_dict(row, schema, layers=layers, versions=versions, empties=empties)

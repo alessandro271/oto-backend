@@ -18,6 +18,8 @@ surface qu'on utilise.
 """
 from __future__ import annotations
 
+from _origine_servie import AVEC_ORIGINE, row_to_dict_avec_origine  # noqa: E402
+
 import pytest
 
 from oto_mcp.datastore.core import DatastorePg
@@ -56,11 +58,11 @@ def store(monkeypatch):
 
 
 def _lu(db, key="naf"):
-    return DatastorePg._row_to_dict(db.rows["r1"]).get(key)
+    return row_to_dict_avec_origine(db.rows["r1"]).get(key)
 
 
 def _couche(db, couche, key="naf"):
-    return DatastorePg._row_to_dict(db.rows["r1"]).get(f"{key}.{couche}")
+    return row_to_dict_avec_origine(db.rows["r1"]).get(f"{key}.{couche}")
 
 
 def _brut(db, key="naf"):

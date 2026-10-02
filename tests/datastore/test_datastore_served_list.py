@@ -12,12 +12,14 @@ forme servie n'est pas celle-là. Scout la rebranche à partir de ce contrat.
 """
 from __future__ import annotations
 
+from _origine_servie import AVEC_ORIGINE, row_to_dict_avec_origine  # noqa: E402
+
 from oto_mcp.datastore import schema as dsv2
 from oto_mcp.datastore.core import DatastorePg
 
 
 def _lu(data: dict) -> dict:
-    return DatastorePg._row_to_dict(
+    return row_to_dict_avec_origine(
         {"row_id": "r1", "created_at": "t", "updated_at": "t", "data": data})
 
 

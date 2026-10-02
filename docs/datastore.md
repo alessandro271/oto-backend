@@ -1191,9 +1191,12 @@ de fin de passage détectait après coup.
   qu'elle a servi sous `versions_servies` : sans cette déclaration, « pas demandée » et
   « absente de cette case » se lisent pareil. ⚠️ **Le nom NU garde toujours la version
   courante** — faire porter deux sens à `champ` selon un paramètre serait le piège
-  qu'on retire ailleurs du produit. Le défaut sert encore les deux ; la bascule vers
-  `current` seul viendra avec préavis daté et 24 h d'annonce au consommateur dont
-  l'écran des écarts lit la valeur de départ. ⚠️ Cette bascule n'est pas une économie
+  qu'on retire ailleurs du produit. **Par défaut, la valeur actuelle seule (décision du
+  02/10/2026)** : l'origine (la première version de la donnée) se demande avec
+  `versions`. Les réponses d'ÉCRITURE de ligne seule se lisent comme une lecture :
+  `PATCH …/rows/{id}`, `POST …/rows` et `data_write` (mode ligne) acceptent `versions`,
+  `layers` et `empties` (mêmes défauts) et rendent `versions_servies` ; un lot ne rend
+  aucune ligne. ⚠️ Cette bascule n'est pas une économie
   de données : elle supprime la surface d'un incident — un écran s'apprêtait à annoncer
   à une cliente « nous avons corrigé votre valeur » en lui montrant du texte de la
   plateforme, et ce genre d'accident demande que la donnée soit là **sans qu'on l'ait

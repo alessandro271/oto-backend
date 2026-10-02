@@ -284,7 +284,8 @@ def test_avant_la_date_l_ecriture_passe_avec_son_avertissement(live, monkeypatch
     """Le barreau 1 tient tel quel : rien n'est refusé tant que la date n'est pas là."""
     _arme(monkeypatch, arme=False)
     st, ns, ns_id = _table()
-    row = st.append_row(ns, {"ref": "a", "prio": {"valeur": "B", "origine": "A"}})
+    row = st.append_row(ns, {"ref": "a", "prio": {"valeur": "B", "origine": "A"}},
+                        versions=("current", "origine"))
     assert (row["prio"], row["prio.origine"]) == ("B", "A")
     assert dsv2.PARAMETRE_ORIGINE in st.off_schema_report()["origine_warning"]
 
@@ -304,7 +305,7 @@ def test_apres_la_date_la_MEME_ecriture_DECLAREE_passe(live, monkeypatch):
     _arme(monkeypatch)
     st, ns, ns_id = _table()
     row = st.append_row(ns, {"ref": "c", "prio": {"valeur": "B", "origine": "A"}},
-                        origine_override=True)
+                        origine_override=True, versions=("current", "origine"))
     assert (row["prio"], row["prio.origine"]) == ("B", "A")
 
 

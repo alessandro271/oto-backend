@@ -834,7 +834,10 @@ def register(mcp: FastMCP) -> None:
                    donnees_d_origine: bool = False,
                    force: list | None = None,
                    expected_revision: str | None = None,
-                   upsert: bool = False) -> dict:
+                   upsert: bool = False,
+                   layers: str = dsl.DEFAUT,
+                   versions: Optional[list[str]] = None,
+                   empties: str = dsl.EMPTIES_DEFAUT) -> dict:
         """Write one row, or a BATCH of rows in a single call.
 
         ⚠️ **Provenance goes in `comment`, never in `origine`.** Put WHAT you
@@ -928,8 +931,9 @@ def register(mcp: FastMCP) -> None:
         campaign table, the owner's values already overwritten by agents.
 
         What replaces it is a DECLARED gesture, carried by the call that brings the
-        data in: `donnees_d_origine=true`. It writes BOTH versions at once — the
-        current value and the origin — at the moment the value enters, so there is
+        data in: `donnees_d_origine=true`. It sets the FIRST version of the data (the
+        origin) and marks the write as an import in the journal — the current value
+        and the origin both go in at the moment the value enters, so there is
         no "before" and no "after" to get wrong. Three rules: an origin ALREADY set
         is never touched (a re-import updates the current value, never the origin) ;
         an EMPTY column receives nothing (supplying nothing is not supplying blank) ;
@@ -999,7 +1003,7 @@ def register(mcp: FastMCP) -> None:
         `origine_override=true` belongs to an IMPORT, not to a write of your own:
         it declares that this call knowingly sets the `origine` layer — refused
         without it from 2026-10-01 on. ⚠️ For a real import, prefer
-        `donnees_d_origine=true`, which sets both versions in one gesture; the
+        `donnees_d_origine=true`, which sets the first version (origin) in one gesture; the
         override only says "I know what I am doing on this layer".
 
         ⚠️ A COLUMN can be LOCKED by the schema (`readonly: true`) — it holds a
@@ -1055,8 +1059,9 @@ def register(mcp: FastMCP) -> None:
                 changes the SCOPE, not the right: forcing stays reserved to the
                 table's owner or whoever governs it. A locked column absent from
                 the list is refused normally, and the refusal says so.
-            donnees_d_origine: this call brings data AS THE CLIENT HANDED IT
-                OVER — an import. Each cell gets its `origine` version frozen at
+            donnees_d_origine: sets the FIRST version of the data (the origin) and
+                marks the write as an import in the journal: this call brings data
+                AS THE CLIENT HANDED IT OVER. Each cell gets its `origine` version frozen at
                 the same time as its current value, carrying the same layers, so
                 `comment` says where the data came from. Use it for the import
                 itself, NOT for enrichment: an agent's findings are the current
@@ -1081,6 +1086,14 @@ def register(mcp: FastMCP) -> None:
                 2026-10-01 on). ⚠️ `origine: "system"` was removed on 2026-09-08:
                 there is no longer a "formatted column". For a real import, prefer
                 `donnees_d_origine`. This call only.
+            layers: shape of the ROW this write returns (`flat` default, `nested`) —
+                same as `data_rows`. Single row only.
+            versions: which versions of each cell the returned row carries. Default:
+                the current value only; the origin (the FIRST version of the data)
+                is asked for with `versions=["current","origine"]`. Single row only;
+                the reply states what it served in `versions_servies`.
+            empties: how the returned row serves an assumed empty (`plain` default,
+                `sentinel`) — same as `data_rows`. Single row only.
         """
         store = _acting_store()
         try:
@@ -1093,6 +1106,16 @@ def register(mcp: FastMCP) -> None:
             # Refus qui NOMME le paramètre et sa forme, au moment où l'appelant peut
             # encore corriger — jamais un `invalid_input` nu.
             cibles = fcg.chemins_forces(force)
+            layers = dsl.check(layers)
+            vers = dsver.check(versions)
+            empties = dsl.check_empties(empties)
+            # Un lot ne rend aucune ligne : une forme de ligne demandée n'y vaudrait
+            # rien — refusée, pas ignorée.
+            if rows is not None and (versions is not None or layers != dsl.DEFAUT
+                                    or empties != dsl.EMPTIES_DEFAUT):
+                raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+                    "`layers`/`versions` règlent la LIGNE rendue : un lot (`rows=`) n'en "
+                    "rend aucune. Retire-les, ou écris une ligne seule (`row=`).")))
             jetons.verifier_contenu(row)
             jetons.verifier_contenu(rows)
             # ⚠️ **`key` n'a de sens QUE sur un lot** — il nomme la colonne de dédup de
@@ -1163,7 +1186,8 @@ def register(mcp: FastMCP) -> None:
                                        donnees_d_origine=donnees_d_origine,
                                        force=cibles, upsert=upsert,
                                        # oto#141 : `key=` nommé = DÉSIGNATION.
-                                       key=key) \
+                                       key=key, layers=layers, versions=vers,
+                                       **dsl.relayer_empties(empties)) \
                     if id is None \
                     else store.update_row(datastore, id, row,
                                           readonly_override=readonly_override,
@@ -1172,7 +1196,9 @@ def register(mcp: FastMCP) -> None:
                                           force=cibles,
                                           # `RevisionConflict` est une `ValueError` :
                                           # INVALID_PARAMS, le texte du refus REST.
-                                          expected_revision=expected_revision)
+                                          expected_revision=expected_revision,
+                                          layers=layers, versions=vers,
+                                          **dsl.relayer_empties(empties))
             # Champs posés hors du format déclaré (#294) : l'écriture est acceptée (un
             # champ libre reste un droit du contrat), mais elle n'est plus silencieuse.
             # Le NUMÉRO du tableau part avec (`ns_id`) : l'écriture est le geste que
@@ -1181,6 +1207,8 @@ def register(mcp: FastMCP) -> None:
             # EST la ligne, et `datastore` y serait en collision avec une colonne.
             out = {**out, **store.off_schema_report(),
                    **identite.numero(store.dernier_tableau)}
+            if rows is None:
+                out["versions_servies"] = list(vers)
             hint = _project_hint(datastore)
             return {**out, "project_hint": hint} if hint else out
         except (RowValidationError, BusinessKeyRequired) as e:
@@ -1430,8 +1458,10 @@ def register(mcp: FastMCP) -> None:
         (same datastore/filter/order) — repeat until `next_cursor` is null. A page
         is not the table.
 
-        `versions=["current","origine"]` picks which VERSIONS of each cell you get:
-        `current` is what we established, `origine` what the client handed over.
+        `versions` picks which VERSIONS of each cell you get. By default, the current
+        value only; the origin (the FIRST version of the data) is asked for with
+        `versions=["current","origine"]`: `current` is what we established,
+        `origine` what the client handed over.
         ⚠️ Ask for BOTH in ONE call when you compare them — two calls are not atomic,
         and an write in between would make you compare the before of one state with
         the after of another.

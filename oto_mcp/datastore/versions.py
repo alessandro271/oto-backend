@@ -25,11 +25,11 @@ et **« elle n'existe pas sur cette case »** — sans quoi le lecteur réinvent
 marqueur, en pire, puisque cette fois il l'aurait deviné. Ça ne coûte rien par cellule
 et la réponse devient autoportante : elle dit ce qu'elle contient.
 
-## Palier 1 d'une bascule en trois temps
+## Le défaut : la valeur actuelle seule (décision du 02/10/2026)
 
-Le défaut REND ENCORE LES DEUX, donc rien ne change pour personne aujourd'hui. Le
-contrat prévoit qu'il serve `current` seul — ce qui fera disparaître `champ.origine`
-des lectures qui ne le demandent pas.
+Une lecture qui ne précise pas `versions` ne sert que `current`. L'origine — la
+PREMIÈRE version de la donnée, posée par `donnees_d_origine=true` — se demande :
+`versions=["current","origine"]`. La couche `origine` elle-même ne change pas.
 
 ⚠️ **Cette bascule n'est pas une économie de données, elle supprime la surface d'un
 incident.** Un écran avait comparé la valeur de départ à la valeur courante et
@@ -51,11 +51,8 @@ CURRENT = "current"
 ORIGINE = "origine"
 VERSIONS = (CURRENT, ORIGINE)
 
-#: ⚠️ Palier 3 : bascule vers `(CURRENT,)`, avec préavis daté et 24 h d'annonce au
-#: consommateur qui lit la version de départ — il l'a demandé, et il a raison : ce
-#: n'est pas la longueur du travail qui commande, c'est de pouvoir le vérifier à
-#: l'écran un jour où ce n'est pas la veille d'une revue cliente.
-DEFAUT = (CURRENT, ORIGINE)
+#: La valeur actuelle seule : l'origine se demande (`versions=["current","origine"]`).
+DEFAUT = (CURRENT,)
 
 
 def check(value: Any) -> tuple:

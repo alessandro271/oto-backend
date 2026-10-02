@@ -145,7 +145,7 @@ def _meme_contenu(flat: dict, nested: dict) -> None:
 def test_REST_meme_ligne_en_flat_et_en_nested_meme_contenu(client, table):
     ns, rid = table
     url = f"/api/datastores/{ns}/rows/{rid}"
-    flat = client.get(url, headers=_h(), params={"layers": "flat"}).json()
+    flat = client.get(url, headers=_h(), params={"layers": "flat", "versions": "current,origine"}).json()
     nested = client.get(url, headers=_h(), params={"layers": "nested"}).json()
     # La forme imbriquée est la forme ÉCRITE : ce qu'on a posé revient tel quel.
     assert nested["suivi"] == {"valeur": "a_traiter", "comment": "à rappeler"}
@@ -160,7 +160,7 @@ def test_REST_meme_ligne_en_flat_et_en_nested_meme_contenu(client, table):
 def test_REST_cellule_sans_couche_identique_dans_les_deux_formes(client, table):
     ns, rid = table
     url = f"/api/datastores/{ns}/rows/{rid}"
-    flat = client.get(url, headers=_h(), params={"layers": "flat"}).json()
+    flat = client.get(url, headers=_h(), params={"layers": "flat", "versions": "current,origine"}).json()
     nested = client.get(url, headers=_h(), params={"layers": "nested"}).json()
     for k in ("siren", "ville", "tags", "_id", "_created_at", "_updated_at"):
         assert flat[k] == nested[k], k
@@ -171,7 +171,7 @@ def test_REST_cellule_sans_couche_identique_dans_les_deux_formes(client, table):
 def test_REST_la_liste_sert_la_meme_forme_que_la_fiche(client, table):
     ns, rid = table
     url = f"/api/datastores/{ns}/rows"
-    flat = client.get(url, headers=_h(), params={"layers": "flat"}).json()["rows"]
+    flat = client.get(url, headers=_h(), params={"layers": "flat", "versions": "current,origine"}).json()["rows"]
     nested = client.get(url, headers=_h(), params={"layers": "nested"}).json()["rows"]
     assert [r["_id"] for r in flat] == [r["_id"] for r in nested] == [rid]
     _meme_contenu(flat[0], nested[0])
@@ -234,14 +234,14 @@ def acteur(monkeypatch):
 
 def test_MCP_meme_ligne_en_flat_et_en_nested_meme_contenu(data_rows, table, acteur):
     ns, rid = table
-    flat = data_rows(datastore=ns, id=rid, layers="flat")
+    flat = data_rows(datastore=ns, id=rid, layers="flat", versions=["current", "origine"])
     nested = data_rows(datastore=ns, id=rid, layers="nested")
     assert nested["suivi"] == {"valeur": "a_traiter", "comment": "à rappeler"}
     assert nested["ville"] == "Lyon"
     _meme_contenu(flat, nested)
     # En liste aussi, et une projection garde la cellule imbriquée ENTIÈRE.
     page = data_rows(datastore=ns, layers="nested")
-    _meme_contenu(data_rows(datastore=ns)["rows"][0], page["rows"][0])
+    _meme_contenu(data_rows(datastore=ns, versions=["current", "origine"])["rows"][0], page["rows"][0])
     projete = data_rows(datastore=ns, layers="nested", fields=["suivi"])["rows"][0]
     assert projete == {"_id": rid, "suivi": {"valeur": "a_traiter", "comment": "à rappeler"}}
 

@@ -21,6 +21,8 @@ passer. Un banc qui ne mesure que le refus serait vert avec une garde qui refuse
 """
 from __future__ import annotations
 
+from _origine_servie import AVEC_ORIGINE, row_to_dict_avec_origine  # noqa: E402
+
 import uuid
 
 import pytest
@@ -123,7 +125,7 @@ LIGNE = {
 
 def _projeter():
     from oto_mcp.datastore.core import DatastorePg
-    return DatastorePg._row_to_dict(dict(LIGNE), SCHEMA)
+    return row_to_dict_avec_origine(dict(LIGNE), SCHEMA)
 
 
 def test_la_ligne_servie_a_un_humain_porte_tout():

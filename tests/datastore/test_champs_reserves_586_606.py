@@ -60,7 +60,8 @@ def test_une_couche_deja_ecrite_par_un_agent_reste_lue_telle_quelle(banc):
     l'agent AVANT la pose du cran. Elle n'est ni réécrite ni effacée."""
     st, etat = banc
     etat["lignes"]["r1"]["raison_sociale"] = {"valeur": "ACME", "origine": "fichier client"}
-    out = st.update_row("viviers", "r1", {"raison_sociale": "ACME SA"})
+    out = st.update_row("viviers", "r1", {"raison_sociale": "ACME SA"},
+                        versions=("current", "origine"))
     assert etat["lignes"]["r1"]["raison_sociale"] == {"valeur": "ACME SA",
                                                      "origine": "fichier client"}
     assert out["raison_sociale.origine"] == "fichier client"

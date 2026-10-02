@@ -30,6 +30,8 @@ migration ; il est parti avec `flat_alias`, le 07/09/2026.)
 """
 from __future__ import annotations
 
+from _origine_servie import AVEC_ORIGINE, row_to_dict_avec_origine  # noqa: E402
+
 import uuid
 
 import pytest
@@ -100,7 +102,7 @@ def test_annoter_une_colonne_OBJET_passe_comme_une_colonne_SCALAIRE(table):
     except RowValidationError as e:
         pytest.fail(f"le geste dominant est refusé, et le refus MENT : {e}")
 
-    lu = st.list_rows(ns)[0]
+    lu = st.list_rows(ns, versions=AVEC_ORIGINE)[0]
     assert lu["entreprise_social"] == {"forme": "SAS", "capital": 10000}, (
         "le nom nu rend l'objet métier, intact")
     assert lu["entreprise_social.comment"] == "extrait du registre"
@@ -116,13 +118,13 @@ def test_l_aller_retour_se_referme_sur_une_colonne_OBJET(table):
     st.append_row(ns, {"siren": "1",
                        "entreprise_social": {"valeur": {"forme": "SAS"},
                                              "comment": "registre"}})
-    lu = st.list_rows(ns)[0]
+    lu = st.list_rows(ns, versions=AVEC_ORIGINE)[0]
     assert lu["entreprise_social"] == {"forme": "SAS"}
     assert lu["entreprise_social.comment"] == "registre"
 
     st.append_row(ns, _tel_quel(lu))              # réémission EXACTE de la lecture
 
-    assert _sans_horodatage(st.list_rows(ns)[0]) == _sans_horodatage(lu)
+    assert _sans_horodatage(st.list_rows(ns, versions=AVEC_ORIGINE)[0]) == _sans_horodatage(lu)
     assert _brut(ns_id)["entreprise_social"] == {"valeur": {"forme": "SAS"},
                                                  "comment": "registre"}
     assert not any("." in c for c in _colonnes(ns_id))
@@ -135,7 +137,7 @@ def test_annoter_SEULE_une_colonne_objet_que_la_ligne_porte_deja(table):
     row = st.append_row(ns, {"siren": "1", "entreprise_social": {"forme": "SAS"}})
     st.update_row(ns, row["_id"], {"entreprise_social.origine": "registre"},
                   origine_override=True)
-    lu = st.list_rows(ns)[0]
+    lu = st.list_rows(ns, versions=AVEC_ORIGINE)[0]
     assert lu["entreprise_social"] == {"forme": "SAS"}, "la valeur n'a pas bougé"
     assert lu["entreprise_social.origine"] == "registre"
     assert not any("." in c for c in _colonnes(ns_id))
@@ -154,7 +156,7 @@ def test_un_champ_de_l_objet_qui_PORTE_le_nom_d_une_couche(table):
     st, ns, ns_id = table
     st.append_row(ns, {"siren": "1",
                        "entreprise_social": {"comment": "champ métier", "n": 1}})
-    lu = st.list_rows(ns)[0]
+    lu = st.list_rows(ns, versions=AVEC_ORIGINE)[0]
     assert lu["entreprise_social.comment"] == "champ métier", "servi à plat"
 
     st.append_row(ns, _tel_quel(lu))              # réémission EXACTE de la lecture

@@ -25,6 +25,8 @@ colonne créée.
 """
 from __future__ import annotations
 
+from _origine_servie import AVEC_ORIGINE, row_to_dict_avec_origine  # noqa: E402
+
 import uuid
 
 import pytest
@@ -82,13 +84,13 @@ def test_aller_retour_relire_puis_reemettre_rend_la_ligne_IDENTIQUE(table):
                                     "origine": "registre",
                                     "comment": "site vérifié le 12/07"}},
                   origine_override=True)
-    lu = st.list_rows(ns)[0]
+    lu = st.list_rows(ns, versions=AVEC_ORIGINE)[0]
     assert lu["site_web"] == "https://a.fr", "le nom nu rend la VALEUR"
     assert lu["site_web.comment"] == "site vérifié le 12/07", "les couches, à plat"
 
     st.append_row(ns, _tel_quel(lu))          # réémission EXACTE de ce qu'on a lu
 
-    relu = st.list_rows(ns)[0]
+    relu = st.list_rows(ns, versions=AVEC_ORIGINE)[0]
     assert _sans_horodatage(relu) == _sans_horodatage(lu), (
         "la ligne relue doit être identique à la ligne lue")
     assert _colonnes(ns_id) == {"siren", "site_web"}, "aucune colonne créée"
@@ -100,9 +102,9 @@ def test_aller_retour_par_le_LOT_le_chemin_de_l_import(table):
     st, ns, ns_id = table
     st.write_rows(ns, [{"siren": "1", "site_web": {"valeur": "a.fr",
                                                   "comment": "trouvé au registre"}}])
-    lu = st.list_rows(ns)[0]
+    lu = st.list_rows(ns, versions=AVEC_ORIGINE)[0]
     st.write_rows(ns, [{k: v for k, v in _tel_quel(lu).items() if k != "_id"}])
-    assert _sans_horodatage(st.list_rows(ns)[0]) == _sans_horodatage(lu)
+    assert _sans_horodatage(st.list_rows(ns, versions=AVEC_ORIGINE)[0]) == _sans_horodatage(lu)
     assert not any("." in c for c in _colonnes(ns_id))
 
 
@@ -113,13 +115,13 @@ def test_aller_retour_dans_une_colonne_TABLEAU(table):
     st, ns, ns_id = table
     st.append_row(ns, {"siren": "1", "contacts": [
         {"nom": "Jo", "email": {"valeur": "jo@a.fr", "origine": "hunter"}}]})
-    lu = st.list_rows(ns)[0]
+    lu = st.list_rows(ns, versions=AVEC_ORIGINE)[0]
     assert lu["contacts"] == [{"nom": "Jo", "email": "jo@a.fr",
                                "email.origine": "hunter"}]
 
     st.append_row(ns, _tel_quel(lu))
 
-    assert _sans_horodatage(st.list_rows(ns)[0]) == _sans_horodatage(lu)
+    assert _sans_horodatage(st.list_rows(ns, versions=AVEC_ORIGINE)[0]) == _sans_horodatage(lu)
     from oto_mcp.db._conn import _connect
     with _connect() as conn:
         brut = conn.execute("SELECT data FROM datastore_rows WHERE ns_id = %s",
@@ -134,7 +136,7 @@ def test_les_QUATRE_PORTES_referment_l_aller_retour(table):
     portes refusaient et une acceptait ; le remède ne vaut que s'il est aux quatre."""
     st, ns, ns_id = table
     st.append_row(ns, {"siren": "1", "site_web": {"valeur": "a.fr", "comment": "c"}})
-    lu = st.list_rows(ns)[0]
+    lu = st.list_rows(ns, versions=AVEC_ORIGINE)[0]
     nu = {k: v for k, v in _tel_quel(lu).items() if k != "_id"}
 
     st.append_row(ns, _tel_quel(lu))                              # append (promu update)
@@ -143,7 +145,7 @@ def test_les_QUATRE_PORTES_referment_l_aller_retour(table):
     st.upsert_row(ns, lu["_id"], nu)
     st.write_rows(ns, [nu])
 
-    assert st.list_rows(ns)[0]["site_web.comment"] == "c"
+    assert st.list_rows(ns, versions=AVEC_ORIGINE)[0]["site_web.comment"] == "c"
     assert not any("." in c for c in _colonnes(ns_id))
 
 
@@ -155,7 +157,7 @@ def test_annotation_seule_sur_une_colonne_DE_LA_LIGNE(table):
     st, ns, ns_id = table
     row = st.append_row(ns, {"siren": "1", "libre": "en place"})   # hors schéma, souple
     st.update_row(ns, row["_id"], {"libre.comment": "posé après coup"})
-    lu = st.list_rows(ns)[0]
+    lu = st.list_rows(ns, versions=AVEC_ORIGINE)[0]
     assert lu["libre"] == "en place", "la valeur n'a pas bougé"
     assert lu["libre.comment"] == "posé après coup"
     assert "libre.comment" not in _colonnes(ns_id)
@@ -168,7 +170,7 @@ def test_annotation_seule_sur_une_colonne_DU_SCHEMA(table):
     row = st.append_row(ns, {"siren": "1"})
     st.update_row(ns, row["_id"], {"site_web.origine": "registre"},
                   origine_override=True)
-    assert st.list_rows(ns)[0]["site_web.origine"] == "registre"
+    assert st.list_rows(ns, versions=AVEC_ORIGINE)[0]["site_web.origine"] == "registre"
     assert "site_web.origine" not in _colonnes(ns_id)
 
 
@@ -271,7 +273,7 @@ def test_le_CONTENU_d_une_colonne_json_n_est_pas_reinterprete(table):
     assert brut["brut"] == {"comment": "un champ métier", "a": 1}, "intacte"
 
     st.append_row(ns, {"siren": "2", "brut": {"a": 1}, "brut.comment": "x"})
-    lu = next(r for r in st.list_rows(ns) if r["siren"] == "2")
+    lu = next(r for r in st.list_rows(ns, versions=AVEC_ORIGINE) if r["siren"] == "2")
     assert lu["brut"] == {"a": 1}, "le nom nu rend l'objet, jamais l'enveloppe"
     assert lu["brut.comment"] == "x", "l'annotation est rangée, pas refusée"
 
@@ -286,7 +288,7 @@ def test_un_CSV_d_export_se_reimporte_et_referme_l_aller_retour(table):
     st, ns, ns_id = table
     st.append_row(ns, {"siren": "1", "site_web": {"valeur": "a.fr",
                                                   "comment": "vérifié"}})
-    lu = st.list_rows(ns)[0]
+    lu = st.list_rows(ns, versions=AVEC_ORIGINE)[0]
     entetes = [k for k in lu if not k.startswith("_")]
     # Comme l'export du tableau de bord (`lib/csv.ts`) : une valeur `null` part en cellule
     # VIDE. Un CSV ne sait pas dire `null`.
@@ -305,7 +307,7 @@ def test_un_CSV_d_export_se_reimporte_et_referme_l_aller_retour(table):
     # n'y avait rien (#608). Après un tour CSV, ces colonnes-là reviennent donc `""` — et
     # la révision tourne, puisqu'une valeur a été écrite. Tout le reste est identique.
     jamais_ecrites = {k for k in entetes if lu[k] is None}
-    relu, attendu = _sans_horodatage(st.list_rows(ns)[0]), _sans_horodatage(lu)
+    relu, attendu = _sans_horodatage(st.list_rows(ns, versions=AVEC_ORIGINE)[0]), _sans_horodatage(lu)
     attendu.update({k: "" for k in jamais_ecrites})
     if jamais_ecrites:
         relu.pop("_revision"), attendu.pop("_revision")
@@ -378,4 +380,4 @@ def test_annoter_un_OBJET_METIER_est_refuse_pour_LA_BONNE_RAISON(table):
     assert '"brut": {"valeur"' in msg, "la forme qui marche est nommée"
 
     st.append_row(ns, {"siren": "1", "brut": {"valeur": {"a": 1}, "comment": "x"}})
-    assert st.list_rows(ns)[0]["brut.comment"] == "x"
+    assert st.list_rows(ns, versions=AVEC_ORIGINE)[0]["brut.comment"] == "x"

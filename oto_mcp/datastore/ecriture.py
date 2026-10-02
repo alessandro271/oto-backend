@@ -47,6 +47,8 @@ from .points import _refuse_dotted_names, ranger_les_couches
 from . import rangs as rg
 from .precondition import revision_attendue
 from . import donnees_d_origine as ddo
+from . import layers as dsl
+from . import versions as dsver
 from .reserves import refuser_champs_reserves
 
 
@@ -63,7 +65,10 @@ class EcritureMixin:
                    donnees_d_origine: bool = False,
                    force: Optional[frozenset] = None,
                    upsert: bool = False,
-                   key: Optional[str] = None) -> dict:
+                   key: Optional[str] = None,
+                   layers: str = dsl.DEFAUT,
+                   versions: tuple = dsver.DEFAUT,
+                   empties: str = dsl.EMPTIES_DEFAUT) -> dict:
         """Écrit UNE row. Si le datastore déclare une clé métier (`schema.key`) et
         qu'une row porte déjà cette valeur de clé (pas de doublon, l'index
         `ds_bkey_<ns>` la refuse) : l'écriture qui la DÉSIGNE (`key` = la clé
@@ -94,7 +99,8 @@ class EcritureMixin:
             try:
                 return self.update_row(datastore, cible, reste, trace=trace,
                                        readonly_override=readonly_override,
-                                       donnees_d_origine=donnees_d_origine)
+                                       donnees_d_origine=donnees_d_origine,
+                                       layers=layers, versions=versions, empties=empties)
             except RowNotFound:
                 raise ValueError(
                     f"`_id` ({cible!r}) ne correspond à aucune ligne de "
@@ -183,7 +189,7 @@ class EcritureMixin:
                                          origine_override=origine_override,
                                          donnees_d_origine=donnees_d_origine,
                                          rangs=rangs),
-                    schema)
+                    schema, layers=layers, versions=versions, empties=empties)
         # #516 : sur un tableau FERMÉ, on ne crée pas — on vise. Le geste est arrivé
         # jusqu'ici sans désigner de ligne : ni par son `_id` (promu plus haut, et
         # refusé s'il ne matche rien), ni par une valeur de clé que le tableau porte.
@@ -258,12 +264,12 @@ class EcritureMixin:
                                      origine_override=origine_override,
                                      donnees_d_origine=donnees_d_origine,
                                      rangs=rangs),
-                schema)
+                schema, layers=layers, versions=versions, empties=empties)
         # oto#164 : relevé APRÈS l'insert — une course perdue ne compte pas deux fois,
         # la fusion ci-dessus relève elle-même ce qu'elle pose.
         if releve is not None:
             ddo.relever(self, releve)
-        return self._row_to_dict(row, schema)
+        return self._row_to_dict(row, schema, layers=layers, versions=versions, empties=empties)
 
     def _merge_into_row(self, ns_id: int, row_id: str, user_data: dict,
                         *, schema: Optional[dict] = None,

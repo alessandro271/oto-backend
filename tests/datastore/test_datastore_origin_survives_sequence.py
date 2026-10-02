@@ -14,6 +14,8 @@ vraie surface (`data_write`, préprod) — le store est ce que la surface appell
 """
 from __future__ import annotations
 
+from _origine_servie import AVEC_ORIGINE, row_to_dict_avec_origine  # noqa: E402
+
 import pytest
 
 from oto_mcp.datastore.core import DatastorePg
@@ -58,11 +60,11 @@ def store(monkeypatch):
 
 
 def _val(db, key="contact1_nom"):
-    return DatastorePg._row_to_dict(db.rows["r1"]).get(key)
+    return row_to_dict_avec_origine(db.rows["r1"]).get(key)
 
 
 def _origine(db, key="contact1_nom"):
-    return DatastorePg._row_to_dict(db.rows["r1"]).get(f"{key}.origine")
+    return row_to_dict_avec_origine(db.rows["r1"]).get(f"{key}.origine")
 
 
 # --- les quatre cas de la campagne, en SÉQUENCE ------------------------------------
@@ -149,7 +151,7 @@ def test_un_null_sur_une_origine_VIDE_ne_laisse_pas_de_coquille(store):
     s, db = store
     s.update_row("t", "r1", {"qualification": {"valeur": "qualifie", "origine": ""}}, origine_override=True)
     s.update_row("t", "r1", {"qualification": None})
-    ligne = DatastorePg._row_to_dict(db.rows["r1"])
+    ligne = row_to_dict_avec_origine(db.rows["r1"])
     assert ligne.get("qualification") is None
     assert "qualification.origine" not in ligne, (
         "la coquille est de retour : la ligne redevient invisible au filtrage")
@@ -172,7 +174,7 @@ def test_un_null_sur_une_origine_PLEINE_la_preserve(store):
                                                "origine": "brut-source"}},
                   origine_override=True)
     s.update_row("t", "r1", {"qualification": None})
-    ligne = DatastorePg._row_to_dict(db.rows["r1"])
+    ligne = row_to_dict_avec_origine(db.rows["r1"])
     assert ligne.get("qualification") is None          # la valeur est bien effacée
     assert ligne.get("qualification.origine") == "brut-source", \
         "l'origine réelle a été détruite — c'était peut-être son unique copie"

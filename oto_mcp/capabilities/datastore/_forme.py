@@ -91,8 +91,9 @@ _VERSIONS = Field(default=None, description=(
     "TOUJOURS la version courante ; ce paramètre décide seulement de ce qui s'ajoute "
     "à côté (`champ.origine` et ses sous-champs). La réponse déclare ce qu'elle a "
     "servi dans `versions_servies`, pour que « je ne l'ai pas demandée » ne ressemble "
-    "jamais à « cette case n'en a pas ». Le défaut sert encore les deux ; il "
-    "basculera vers `current` seul, avec préavis daté."))
+    "jamais à « cette case n'en a pas ». Par défaut, la valeur actuelle "
+    "seule : l'origine (la première version de la donnée) se demande avec "
+    "`versions=[\"current\",\"origine\"]`."))
 
 
 def _versions(raw) -> tuple:

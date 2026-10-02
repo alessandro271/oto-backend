@@ -226,7 +226,7 @@ la cliente a remis. Une écriture vise toujours la courante et n'a pas à le dir
 lecture, elle, nomme ce qu'elle veut.
 
 ```
-data_rows(datastore="…", versions=["current", "origine"])
+data_rows(datastore="…", versions=["current", "origine"])   # sans `versions` : current seul
 ```
 
 ⚠️ **Demande les DEUX dans le MÊME appel quand tu les compares.** Deux appels ne sont
@@ -243,8 +243,8 @@ une commodité.
 discernables « je ne l'ai pas demandée » et « cette case n'en a pas » — sans quoi tu
 réinventerais un marqueur, en pire, puisque cette fois tu l'aurais deviné.
 
-Le défaut sert encore les deux. **Il basculera vers `current` seul, avec préavis daté**
-— si un écran chez toi lit la valeur de départ, nomme-la dès maintenant.
+**Par défaut, la valeur actuelle seule** : l'origine (la première version de la donnée)
+se demande avec `versions`.
 
 ## 4 quater. `force` — forcer ce qu'on NOMME, pas tout l'appel
 

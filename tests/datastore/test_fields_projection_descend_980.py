@@ -12,6 +12,8 @@ la machine qui l'exécute, pas le code. Ce fichier compare des COMPTES d'appels
 à `flat_layers`, avec et sans projection, sur la MÊME page."""
 from __future__ import annotations
 
+from _origine_servie import AVEC_ORIGINE, row_to_dict_avec_origine  # noqa: E402
+
 from unittest.mock import patch
 
 import pytest
@@ -31,11 +33,11 @@ def test_projection_reduit_les_appels_a_flat_layers():
     """Demander 2 colonnes sur 20 doit appeler `flat_layers` ~2 fois, pas ~20."""
     reel = dsv2.flat_layers
     with patch.object(dsv2, "flat_layers", wraps=reel) as espion:
-        D.DatastorePg._row_to_dict(_ROW, _SCHEMA, fields=frozenset({"c0", "c1"}))
+        row_to_dict_avec_origine(_ROW, _SCHEMA, fields=frozenset({"c0", "c1"}))
         appels_projetes = espion.call_count
     espion.reset_mock()
     with patch.object(dsv2, "flat_layers", wraps=reel) as espion:
-        D.DatastorePg._row_to_dict(_ROW, _SCHEMA, fields=None)
+        row_to_dict_avec_origine(_ROW, _SCHEMA, fields=None)
         appels_complets = espion.call_count
     assert appels_projetes <= 2, appels_projetes
     assert appels_complets >= 20, appels_complets
@@ -45,19 +47,19 @@ def test_projection_reduit_les_appels_a_flat_layers():
 def test_sans_fields_le_payload_est_identique_a_avant_ce_lot():
     """`fields=None` (l'écrasante majorité des appelants existants) ne doit RIEN
     changer — même colonnes, mêmes clés méta."""
-    out = D.DatastorePg._row_to_dict(_ROW, _SCHEMA, fields=None)
+    out = row_to_dict_avec_origine(_ROW, _SCHEMA, fields=None)
     assert set(out) >= {"_id", "_created_at", "_updated_at"} | {f"c{i}" for i in range(20)}
 
 
 def test_projection_garde_toujours_id_meme_non_demande():
-    out = D.DatastorePg._row_to_dict(_ROW, _SCHEMA, fields=frozenset({"c0"}))
+    out = row_to_dict_avec_origine(_ROW, _SCHEMA, fields=frozenset({"c0"}))
     assert out == {"_id": "r01", "c0": "v0"}
 
 
 def test_projection_TOUT_jamais_passee_ici_reste_hors_scope():
     """Le jeton `*` se résout en amont (`cursor_rows`/`page_rows`, `fields=None`
     passé au noyau) — `_row_to_dict` ne connaît que `None` ou un set concret."""
-    out = D.DatastorePg._row_to_dict(_ROW, _SCHEMA, fields=frozenset({"c0", "c1"}))
+    out = row_to_dict_avec_origine(_ROW, _SCHEMA, fields=frozenset({"c0", "c1"}))
     assert set(out) == {"_id", "c0", "c1"}
 
 
@@ -66,9 +68,9 @@ def test_une_couche_ne_survit_que_nommee_elle_meme():
     filtrage a posteriori (`_project_row`)."""
     row = {"row_id": "r02", "created_at": "t", "updated_at": "t",
            "data": {"c0": {"valeur": "v", "origine": "import"}}}
-    out = D.DatastorePg._row_to_dict(row, _SCHEMA, fields=frozenset({"c0"}))
+    out = row_to_dict_avec_origine(row, _SCHEMA, fields=frozenset({"c0"}))
     assert "c0.origine" not in out
-    out2 = D.DatastorePg._row_to_dict(row, _SCHEMA, fields=frozenset({"c0", "c0.origine"}))
+    out2 = row_to_dict_avec_origine(row, _SCHEMA, fields=frozenset({"c0", "c0.origine"}))
     assert out2.get("c0.origine") == "import"
 
 
@@ -84,7 +86,7 @@ def test_fields_email_point_origine_en_mode_plat_rend_la_couche():
     """`fields=["email.origine"]`, `layers="flat"` — la couche nommée survit à la
     projection en amont (elle sait reconnaître `email.origine` comme une couche
     de la colonne `email`, pas une colonne inconnue)."""
-    out = D.DatastorePg._row_to_dict(
+    out = row_to_dict_avec_origine(
         _ROW_EMAIL, _SCHEMA_EMAIL, fields=frozenset({"email.origine"}))
     assert out.get("email.origine") == "import"
     # Le nom nu n'a pas été demandé : il ne doit pas apparaître.
@@ -96,7 +98,7 @@ def test_fields_email_seul_en_mode_plat_ne_ramene_pas_ses_couches():
     couches : demander `email` ne fait pas apparaître `email.origine` (même
     règle que l'ancien filtrage a posteriori `_project_row`, INCHANGÉE par ce
     lot — ce n'est pas une régression, c'est le contrat déjà servi)."""
-    out = D.DatastorePg._row_to_dict(
+    out = row_to_dict_avec_origine(
         _ROW_EMAIL, _SCHEMA_EMAIL, fields=frozenset({"email"}))
     assert out.get("email") == "a@b.c"
     assert "email.origine" not in out
@@ -106,7 +108,7 @@ def test_fields_email_en_mode_nested_garde_ses_couches():
     """`fields=["email"]`, `layers="nested"` — en nested, `fields` nomme des
     COLONNES (jamais de couches) ; la cellule projetée garde sa forme nested
     complète (`valeur`/`origine`/…), rien n'est aplati à côté."""
-    out = D.DatastorePg._row_to_dict(
+    out = row_to_dict_avec_origine(
         _ROW_EMAIL, _SCHEMA_EMAIL, fields=frozenset({"email"}), layers=dsl.NESTED)
     assert out.get("email") == {"valeur": "a@b.c", "origine": "import"}
     assert "email.origine" not in out
@@ -121,7 +123,7 @@ def test_ordre_la_projection_doit_operer_AVANT_l_aplatissement():
     réintroduit ce chemin."""
     reel = dsv2.flat_layers
     with patch.object(dsv2, "flat_layers", wraps=reel) as espion:
-        D.DatastorePg._row_to_dict(_ROW, _SCHEMA, fields=frozenset({"c0"}))
+        row_to_dict_avec_origine(_ROW, _SCHEMA, fields=frozenset({"c0"}))
     assert espion.call_count == 1, (
         "flat_layers a été appelée pour des colonnes non demandées : "
         "la projection est appliquée APRÈS l'aplatissement, pas avant")
@@ -163,11 +165,11 @@ def test_le_balayage_de_fields_ne_depend_plus_du_nombre_de_cles_de_la_ligne():
                "data": {f"c{i}": f"v{i}" for i in range(200)}}
 
     fields_5 = _FieldsCompteIterations({"c0", "c1"})
-    D.DatastorePg._row_to_dict(row_5, schema_5, fields=fields_5)
+    row_to_dict_avec_origine(row_5, schema_5, fields=fields_5)
     iterations_5_cles = len(fields_5.iterations)
 
     fields_200 = _FieldsCompteIterations({"c0", "c1"})
-    D.DatastorePg._row_to_dict(row_200, schema_200, fields=fields_200)
+    row_to_dict_avec_origine(row_200, schema_200, fields=fields_200)
     iterations_200_cles = len(fields_200.iterations)
 
     assert iterations_5_cles == iterations_200_cles, (

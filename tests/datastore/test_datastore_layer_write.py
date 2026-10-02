@@ -11,6 +11,8 @@ Deux règles, et elles ont la même raison — l'agent ne doit avoir à penser �
 """
 from __future__ import annotations
 
+from _origine_servie import AVEC_ORIGINE, row_to_dict_avec_origine  # noqa: E402
+
 import pytest
 
 from oto_mcp.datastore import schema as dsv2
@@ -112,7 +114,7 @@ def test_a_column_without_an_origin_is_replaced_plainly():
 
 def _read(data: dict) -> dict:
     from oto_mcp.datastore.core import DatastorePg
-    return DatastorePg._row_to_dict(
+    return row_to_dict_avec_origine(
         {"row_id": "r1", "created_at": "t", "updated_at": "t", "data": data})
 
 

@@ -4,10 +4,7 @@ Une case existe en deux versions : `current`, ce qu'on a établi, et `origine`, 
 la cliente a remis. Une écriture vise toujours la courante ; une lecture doit pouvoir
 dire ce qu'elle veut recevoir.
 
-Palier 1 : l'option existe, **le défaut ne bouge pas**. La bascule vers `current` seul
-viendra avec un préavis daté et 24 h d'annonce au consommateur qui lit la version de
-départ — son écran des écarts et celui de complétude en dépendent, c'est toute leur
-raison d'être.
+Le défaut sert `current` seul (décision du 02/10/2026) ; l'origine se demande.
 
 ⚠️ Cette bascule n'est pas une économie de données : elle **supprime la surface d'un
 incident**. Un écran avait comparé la valeur de départ à la valeur courante et
@@ -57,10 +54,10 @@ def _table():
 
 # ── le paramètre : ce qu'il admet et ce qu'il refuse ──────────────────────────
 
-def test_le_defaut_ne_bouge_PAS_encore():
-    """Palier 1. Un défaut qui basculerait dans le même lot ferait changer les écrans
-    deux fois : une fois pour nommer, une fois pour ne plus recevoir."""
-    assert dsver.check(None) == (dsver.CURRENT, dsver.ORIGINE)
+def test_le_defaut_sert_la_valeur_actuelle_SEULE():
+    """Décision du 02/10/2026 : sans `versions`, `current` seul ; l'origine se demande."""
+    assert dsver.check(None) == (dsver.CURRENT,)
+    assert not dsver.sert_l_origine(dsver.check(None))
 
 
 def test_l_ordre_demande_ne_change_PAS_ce_qui_est_declare():
@@ -192,3 +189,90 @@ def test_le_refus_REST_NOMME_le_parametre():
         _versions(["actuel"])
     assert e.value.code == "invalid_versions"
     assert "current" in str(e.value.message if hasattr(e.value, "message") else e.value)
+
+
+# ── l'écriture rend sa ligne COMME une lecture ────────────────────────────────
+
+def _table_de(sub: str):
+    from oto_mcp import db
+    from oto_mcp.datastore.core import make_store
+    ns = "t-" + uuid.uuid4().hex[:6]
+    db.create_datastore("user", sub, ns)
+    st = make_store(sub)
+    st.set_schema(ns, {"key": "siren", "fields": [
+        {"key": "siren", "type": "text"}, {"key": "raison_sociale", "type": "text"}]})
+    st.append_row(ns, {"siren": "1", "raison_sociale": "DUPONT"}, donnees_d_origine=True)
+    return ns, st.list_rows(ns)[0]["_id"]
+
+
+def test_le_PATCH_REST_ne_rend_PAS_l_origine_par_defaut(live, monkeypatch):
+    from _datastore_rest import call, stub_authz
+    stub_authz(monkeypatch)
+    ns, rid = _table_de("u-1")
+    status, ligne = call("me.datastore.update_row",
+                         path_params={"datastore": ns, "row_id": rid},
+                         body={"raison_sociale": "Dupont SAS"})
+    assert status == 200, ligne
+    assert ligne["raison_sociale"] == "Dupont SAS"
+    assert not [k for k in ligne if k.startswith("raison_sociale.origine")]
+    assert ligne["versions_servies"] == ["current"]
+
+
+def test_le_PATCH_REST_rend_l_origine_quand_on_la_demande(live, monkeypatch):
+    from _datastore_rest import call, stub_authz
+    stub_authz(monkeypatch)
+    ns, rid = _table_de("u-1")
+    status, ligne = call("me.datastore.update_row",
+                         path_params={"datastore": ns, "row_id": rid},
+                         body={"raison_sociale": "Dupont SAS"},
+                         query=b"versions=current&versions=origine")
+    assert status == 200, ligne
+    assert ligne["raison_sociale"] == "Dupont SAS"
+    assert ligne["raison_sociale.origine"] == "DUPONT"
+    assert ligne["versions_servies"] == ["current", "origine"]
+    # la forme virgule vaut la forme répétée (#367)
+    status, ligne = call("me.datastore.update_row",
+                         path_params={"datastore": ns, "row_id": rid},
+                         body={"raison_sociale": "Dupont SA"},
+                         query=b"versions=current,origine&layers=nested")
+    assert status == 200, ligne
+    assert ligne["raison_sociale"]["origine"] == {"valeur": "DUPONT"}
+
+
+def test_l_ajout_REST_se_lit_comme_une_lecture(live, monkeypatch):
+    from _datastore_rest import call, stub_authz
+    stub_authz(monkeypatch)
+    ns, _ = _table_de("u-1")
+    status, ligne = call("me.datastore.append_row", path_params={"datastore": ns},
+                         body={"siren": "1", "raison_sociale": "Dupont SAS"},
+                         query=b"versions=current,origine&upsert=true&key=siren")
+    assert status in (200, 201), ligne
+    assert ligne["raison_sociale.origine"] == "DUPONT"
+    assert ligne["versions_servies"] == ["current", "origine"]
+    status, ligne = call("me.datastore.append_row", path_params={"datastore": ns},
+                         body={"siren": "2", "raison_sociale": "Autre"})
+    assert status in (200, 201), ligne
+    assert ligne["versions_servies"] == ["current"]
+
+
+def test_un_refus_de_forme_REST_n_ecrit_RIEN(live, monkeypatch):
+    from _datastore_rest import call, stub_authz
+    stub_authz(monkeypatch)
+    ns, rid = _table_de("u-1")
+    status, corps = call("me.datastore.update_row",
+                         path_params={"datastore": ns, "row_id": rid},
+                         body={"raison_sociale": "Jamais"}, query=b"versions=actuel")
+    assert (status, corps["error"]) == (400, "invalid_versions")
+    from oto_mcp.datastore.core import make_store
+    assert make_store("u-1").get_row(ns, rid)["raison_sociale"] == "DUPONT"
+
+
+def test_l_ecriture_du_store_se_lit_comme_une_lecture(live):
+    ns, rid = _table_de("sub-test")
+    from oto_mcp.datastore.core import make_store
+    st = make_store("sub-test")
+    ligne = st.update_row(ns, rid, {"raison_sociale": "Dupont SAS"})
+    assert "raison_sociale.origine" not in ligne
+    ligne = st.update_row(ns, rid, {"raison_sociale": "Dupont SA"},
+                          versions=(dsver.CURRENT, dsver.ORIGINE))
+    assert ligne["raison_sociale.origine"] == "DUPONT"

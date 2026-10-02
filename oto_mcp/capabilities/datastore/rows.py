@@ -237,6 +237,11 @@ class AppendRowInput(EntreeDatastore):
     origine_override: bool = _ORIGINE
     donnees_d_origine: bool = _DONNEES_D_ORIGINE
     upsert: bool = _UPSERT
+    # Une écriture RENDRE la ligne : elle se lit comme une lecture (mêmes paramètres,
+    # même défaut — la valeur actuelle seule), jamais sous une autre forme.
+    layers: str = _LAYERS
+    versions: Optional[list[str] | str] = _VERSIONS
+    empties: str = _EMPTIES
     # oto#141 : en QUERY (le corps est la ligne). Nommer la clé déclarée DÉSIGNE la
     # ligne par sa valeur ; toute autre colonne est refusée, jamais ignorée.
     key: Optional[str] = Field(default=None, description=(
@@ -261,6 +266,14 @@ class AppendRowInput(EntreeDatastore):
         brut = v if isinstance(v, list) else str(v).split(",")
         return [m for m in (str(x).strip() for x in brut) if m]
 
+    @field_validator("versions", mode="after")
+    @classmethod
+    def _versions_en_liste(cls, v):
+        """Même patron que `GetRowInput` (#367) : `?versions=a,b` arrive en chaîne."""
+        if v is None:
+            return None
+        brut = v if isinstance(v, list) else str(v).split(",")
+        return [m for m in (str(x).strip() for x in brut) if m]
 
 
 class WriteRowsInput(EntreeDatastore):
@@ -306,6 +319,20 @@ class UpdateRowInput(EntreeDatastore):
     origine_override: bool = _ORIGINE
     donnees_d_origine: bool = _DONNEES_D_ORIGINE
     expected_revision: Optional[str] = _precondition("nothing is written")
+    # Une écriture RENDRE la ligne : elle se lit comme une lecture (mêmes paramètres,
+    # même défaut — la valeur actuelle seule), jamais sous une autre forme.
+    layers: str = _LAYERS
+    versions: Optional[list[str] | str] = _VERSIONS
+    empties: str = _EMPTIES
+
+    @field_validator("versions", mode="after")
+    @classmethod
+    def _versions_en_liste(cls, v):
+        """Même patron que `GetRowInput` (#367) : `?versions=a,b` arrive en chaîne."""
+        if v is None:
+            return None
+        brut = v if isinstance(v, list) else str(v).split(",")
+        return [m for m in (str(x).strip() for x in brut) if m]
 
     @field_validator("force", mode="after")
     @classmethod
@@ -382,6 +409,9 @@ class WrittenRow(Row):
     Les deux clés n'apparaissent QUE si l'écriture a posé des champs absents du schéma
     déclaré — leur présence est le signal, leur absence est le cas normal.
     """
+    versions_servies: Optional[list[str]] = Field(default=None, description=(
+        "the VERSIONS of each cell this reply carries (`current`, `origine`) — what "
+        "`versions` asked for; absent from an error"))
     hors_schema: Optional[list[str]] = None
     hors_schema_hint: Optional[str] = None
     # #319 — valeurs écrites hors des `options` déclarées, sur un tableau qui n'est
@@ -690,8 +720,8 @@ _ECRITURE_DETRUIT = (
     "qui la changeait, ce qui exigeait d'avoir été déclaré AVANT que la "
     "ligne existe ; déclaré après coup il ne gardait rien. Ce qui le "
     "remplace est un geste DÉCLARÉ, porté par l'appel qui apporte la "
-    "donnée : `donnees_d_origine=true` écrit les DEUX versions — la valeur "
-    "courante et l'origine — au moment où la valeur entre. Sans lui, un "
+    "donnée : `donnees_d_origine=true` pose la PREMIÈRE version de la donnée (l'origine) "
+    "et marque l'écriture comme import au journal, au moment où la valeur entre. Sans lui, un "
     "écrasement est définitif dans la ligne : seul l'historique garde la "
     "valeur d'avant. La face "
     "d'appel n'y change rien : une ligne créée ici et une ligne créée par "
@@ -701,6 +731,10 @@ _ECRITURE_DETRUIT = (
 def _append_row(ctx: ResolvedCtx, inp: AppendRowInput) -> dict:
     ns, _ = _adresse(inp.datastore)
     _verifier_contenu(inp.row)
+    # Validés AVANT toute écriture : un refus de forme ne doit pas laisser une ligne écrite.
+    vers = _versions(inp.versions)
+    layers = _layers(inp.layers)
+    empties = _relais_empties(inp.empties)
     trace: dict = {}
     store = make_store(ctx.sub)
     try:
@@ -710,7 +744,8 @@ def _append_row(ctx: ResolvedCtx, inp: AppendRowInput) -> dict:
                                    origine_override=inp.origine_override,
                                    donnees_d_origine=inp.donnees_d_origine,
                                    force=fcg.chemins_forces(inp.force),
-                                   upsert=inp.upsert, key=inp.key)
+                                   upsert=inp.upsert, key=inp.key,
+                                   layers=layers, versions=vers, **empties)
     except DatastoreNotFound:
         raise ns_not_found(ctx.sub, ns)
     except DatastoreReadOnly:
@@ -726,7 +761,7 @@ def _append_row(ctx: ResolvedCtx, inp: AppendRowInput) -> dict:
     # pas diverger sur ce qu'elles signalent d'une écriture — le numéro du tableau
     # non plus.
     return {**created, **store.off_schema_report(),
-            **identite.numero(store.dernier_tableau)}
+            **identite.numero(store.dernier_tableau), "versions_servies": list(vers)}
 
 
 def _write_rows(ctx: ResolvedCtx, inp: WriteRowsInput) -> dict:
@@ -772,6 +807,9 @@ def _update_row(ctx: ResolvedCtx, inp: UpdateRowInput) -> dict:
     # cockpit proposerait d'annuler vers un état que la ligne n'a jamais eu.
     ns, rid = _adresse(inp.datastore, inp.row_id)
     _verifier_contenu(inp.patch)
+    vers = _versions(inp.versions)  # avant toute écriture, comme l'ajout
+    layers = _layers(inp.layers)
+    empties = _relais_empties(inp.empties)
     trace: dict = {}
     store = make_store(ctx.sub)
     try:
@@ -780,7 +818,8 @@ def _update_row(ctx: ResolvedCtx, inp: UpdateRowInput) -> dict:
                                    origine_override=inp.origine_override,
                                    donnees_d_origine=inp.donnees_d_origine,
                                    force=fcg.chemins_forces(inp.force),
-                                   expected_revision=inp.expected_revision)
+                                   expected_revision=inp.expected_revision,
+                                   layers=layers, versions=vers, **empties)
     except DatastoreNotFound:
         raise ns_not_found(ctx.sub, ns)
     except DatastoreReadOnly:
@@ -798,7 +837,7 @@ def _update_row(ctx: ResolvedCtx, inp: UpdateRowInput) -> dict:
         from_status=trace.get("prev_status"),
         to_status=datastore_journal.status_of(updated, nsctx))
     return {**updated, **store.off_schema_report(),
-            **identite.numero(store.dernier_tableau)}
+            **identite.numero(store.dernier_tableau), "versions_servies": list(vers)}
 
 
 def _delete_row(ctx: ResolvedCtx, inp: DeleteRowInput) -> dict:

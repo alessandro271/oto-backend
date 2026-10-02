@@ -216,8 +216,9 @@ def description_parametre(en: bool = False) -> str:
       a remis du vide » sont deux faits différents, et l'écart se lit à la restitution.
     """
     if en:
-        return (f"`{PARAMETRE}=true` states that this call brings data AS THE CLIENT "
-                f"HANDED IT OVER — an import. Each cell gets its `origine` version "
+        return (f"`{PARAMETRE}=true` sets the FIRST version of the data (the origin) and "
+                f"marks the write as an import in the journal: this call brings data AS THE "
+                f"CLIENT HANDED IT OVER. Each cell gets its `origine` version "
                 f"frozen at the same time as its current value, carrying the same "
                 f"layers: put the provenance in `<field>.comment` and it lands in "
                 f"both. Use it for the import itself, NOT for enrichment — what an "
@@ -226,8 +227,9 @@ def description_parametre(en: bool = False) -> str:
                 f"leaves the origin alone), and an empty cell gets nothing: the "
                 f"client handed over nothing there, which is not the same as handing "
                 f"over an empty value.")
-    return (f"`{PARAMETRE}=true` déclare que cet appel apporte la donnée TELLE QUE LA "
-            f"CLIENTE L'A REMISE — un import. Chaque case reçoit sa version "
+    return (f"`{PARAMETRE}=true` pose la PREMIÈRE version de la donnée (l'origine) et "
+            f"marque l'écriture comme import au journal : cet appel apporte la donnée "
+            f"TELLE QUE LA CLIENTE L'A REMISE. Chaque case reçoit sa version "
             f"`origine`, figée en même temps que sa valeur courante et portant les "
             f"mêmes couches : mets donc la provenance dans `<champ>.comment`, elle "
             f"sera dans les deux. À réserver à l'IMPORT, pas à l'enrichissement — ce "
