@@ -649,9 +649,11 @@ def test_le_refus_d_ecriture_NOMME_le_palier_equipe(monde):
     assert msg.index("scope='user'") < msg.index("scope='group'"), (
         "le plus restreint d'abord : on propose de partager après avoir proposé de "
         "ne pas le faire, jamais l'inverse")
-    assert "pas même les administrateurs" in msg, (
+    assert "lecture seule et de façon tracée" in msg, (
         "« qui n'appartient qu'à toi » se vérifie sur la question qu'on se pose "
-        "vraiment — les admins la voient-ils ?")
+        "vraiment — les admins la voient-ils ? Oui, en lecture seule et sous trace "
+        "(oto#270) : ne jamais promettre le contraire")
+    assert "pas même les administrateurs" not in msg
 
 
 def test_le_refus_du_palier_EQUIPE_ne_renvoie_pas_vers_l_equipe(monde):

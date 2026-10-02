@@ -55,7 +55,9 @@ retiré).
 n'est pas toujours un risque : CRM/inbox/annuaire = c'est le but ; un défaut large
 casserait ces connecteurs). L'org **active explicitement** ce qu'elle veut.
 `TEMPLATES` (`candidate`, `bank_details`) = jeux de règles **applicables en 1 clic**
-depuis le dashboard (≠ défaut imposé).
+via la capacité `org.field_filters.set` (route `field-filters`) (≠ défaut imposé). Le dashboard
+(manage.oto.cx) n'affiche que la politique en **lecture seule** depuis oto#192 (12/09/2026) :
+plus de règle à éditer ni de template à appliquer depuis l'écran.
 
 **Exception depuis le 2026-09-17 : le plancher `payfit`.** Le connecteur de paie retirait
 en dur NIR, IBAN et motifs d'absence, sans que l'entreprise propriétaire de ses données
@@ -110,7 +112,7 @@ le dry-run charge depuis un échantillon.
 Capacité `org.field_filters.preview` (MCP `oto_preview_org_field_filter` + REST
 `POST /api/orgs/{id}/field-filters/{service}/preview`) : passe un échantillon réel dans
 le filtre, renvoie le redacté → on **voit** ce qui est masqué (clés imbriquées incluses),
-sans deviner. Alimente le panneau « tester le filtrage » du dashboard.
+sans deviner. Le panneau « tester le filtrage » du dashboard a été retiré (oto#192) : seuls les agents et le front du tenant partenaire appellent encore cette route.
 
 ## Moteur (oto-core `FieldFilter`)
 
@@ -392,5 +394,6 @@ dans ce lot (hors périmètre demandé) ; à nommer si un prochain audit y revie
   (curé, libellés), `capabilities/orgs/field_filters.py` (get/set/preview), `db.py`
   (`connector_schemas`).
 - oto-core : `oto/tools/common/field_filter.py`.
-- dashboard : `ConnectorTransforms.vue` (schéma + toggle on/off + éditer + templates),
-  `FieldRuleDialog.vue`, `RedactionPreview.vue` (dry-run).
+- dashboard : `ConnectorTransforms.vue`, **lecture seule** depuis oto#192 (schéma observé
+  + politique en place, aucun geste d'écriture ; `FieldRuleDialog.vue` et
+  `RedactionPreview.vue` retirés).

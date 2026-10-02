@@ -240,10 +240,12 @@ def _visible_to(row: dict) -> str:
         # MÉTADONNÉES (nom + propriétaire, jamais le contenu) via cette console. On le
         # dit : un nom de projet est parfois plus révélateur que son contenu.
         return (prefix
-                + "toi seul — ni les autres membres, ni les administrateurs de ton org "
-                  "ne le voient, ni en liste, ni par recherche, ni en l'ouvrant par son id"
+                + "toi seul — les autres membres ne le voient ni en liste, ni par "
+                  "recherche, ni en l'ouvrant par son id"
                 + (f" ; il est rangé dans le contexte de l'org {org}, ce qui n'est PAS "
-                   "la même chose qu'y être partagé" if org is not None else "")
+                   "la même chose qu'y être partagé : l'administrateur de ton org peut "
+                   "le consulter, en lecture seule et de façon tracée (« voir en tant "
+                   "que », oto#270)" if org is not None else "")
                 + ". Seul un opérateur de la plateforme en voit le NOM, jamais le "
                   "contenu.")
     if otype == "org":

@@ -118,7 +118,8 @@ class DatastoreEntry(BaseModel):
     owner_type: Optional[Literal["user", "org", "group"]] = Field(
         default=None, description=(
             "Qui possède ce tableau (ADR 0068). `user` : vous, privé par défaut — "
-            "personne d'autre, pas même les admins de votre org, ne le voit. "
+            "les autres membres ne le voient pas ; l'admin de votre org peut le "
+            "consulter, en lecture seule et de façon tracée. "
             "`group` : votre équipe. `org` : votre organisation entière. "
             "`null` : reçu par partage (`shared=true`), pas possédé."))
     owner_id: Optional[str] = None

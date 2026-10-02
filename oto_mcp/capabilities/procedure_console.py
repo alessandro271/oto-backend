@@ -73,8 +73,9 @@ _LIRE = BY_OP({None: ORG_MEMBER_OPT("org"), "user": SUB_ONLY, "org": ORG_MEMBER_
 # celle de son équipe, partagée avec elle, sans savoir que l'autre existait.
 _AUTRES_PALIERS = (
     "Tu n'as pas besoin de l'être pour écrire une procédure — deux paliers te sont "
-    "ouverts. `scope='user'` : une procédure qui n'appartient qu'à TOI, que personne "
-    "d'autre ne voit, pas même les administrateurs de ton org. `scope='group'` "
+    "ouverts. `scope='user'` : une procédure qui n'appartient qu'à TOI, que les autres "
+    "membres ne voient pas (l'administrateur de ton org peut la consulter, en lecture "
+    "seule et de façon tracée). `scope='group'` "
     "(+ `group=<id>` si tu es dans plusieurs équipes) : celle de ton ÉQUIPE, partagée "
     "avec ses membres — y écrire demande d'en être MEMBRE, pas chef. "
     "`oto_procedure(op='list')` montre celles que tu vois déjà."

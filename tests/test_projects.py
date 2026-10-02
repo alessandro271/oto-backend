@@ -966,7 +966,10 @@ def test_un_projet_perso_dit_qu_il_n_est_vu_que_de_son_proprietaire():
     visibilité, exactement comme elle."""
     dit = P._visible_to({"owner_type": "user", "context_org_id": "35"})
     assert "toi seul" in dit
-    assert "administrateurs de ton org" in dit, "c'est LA question qu'on se pose"
+    assert "administrateur de ton org" in dit, "c'est LA question qu'on se pose"
+    # oto#270 : l'admin d'org voit, en lecture seule et sous trace — jamais « personne ».
+    assert "lecture seule" in dit and "tracée" in dit
+    assert "ni les administrateurs" not in dit
     # Le contexte n'est pas la visibilité : c'est la confusion qui a coûté la matinée.
     assert "n'est PAS la même chose" in dit
     # Et on ne promet pas « personne » : l'opérateur plateforme voit le nom.
@@ -1028,5 +1031,5 @@ def test_un_projet_perso_ne_porte_PLUS_la_reserve_des_propositions():
     chemin qui n'existe plus, et un texte servi qui inquiète pour rien ment autant
     qu'un texte qui rassure à tort. Ici on garde seulement le texte aligné sur le code."""
     dit = P._visible_to({"owner_type": "user", "context_org_id": "35"})
-    assert "administrateurs de ton org" in dit, "le cas nominal tient toujours"
+    assert "administrateur de ton org" in dit, "le cas nominal tient toujours"
     assert "PROPOSÉE" not in dit and "e-mail" not in dit
