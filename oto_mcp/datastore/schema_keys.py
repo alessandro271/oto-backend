@@ -303,6 +303,15 @@ NIVEAUX: dict[str, tuple[Cle, ...]] = {
 ADMISES: dict[str, frozenset[str]] = {
     n: frozenset(c.nom for c in cles) for n, cles in NIVEAUX.items()}
 
+#: Ce que la LECTURE COMPACTE garde à chaque niveau (oto#35) : les clés que le
+#: VALIDATEUR lit — la structure et les contraintes. Tout ce qui n'est lu que par un
+#: écran (`label`, `description`, `hidden`, `width`, `role`, les `labels` d'un cycle) ou
+#: par personne (`meta`) en sort. DÉRIVÉ des lecteurs déclarés, jamais listé à part : une
+#: clé ajoutée au vocabulaire entre ou sort de la lecture compacte avec sa déclaration.
+CONTRAINTES: dict[str, frozenset[str]] = {
+    n: frozenset(c.nom for c in cles if "validateur" in c.lecteurs)
+    for n, cles in NIVEAUX.items()}
+
 #: Où l'on est, dans une phrase de refus : « `x` n'est pas admise <ici> ».
 NOMS_DE_NIVEAU: dict[str, str] = {
     "tete": "en tête du schéma",

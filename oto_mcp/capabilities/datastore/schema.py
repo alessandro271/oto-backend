@@ -32,7 +32,7 @@ from ...datastore.identite import Adresse
 from ...datastore import cles_inconnues
 
 import warnings
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -40,8 +40,10 @@ from ... import access, deprecations
 from ... import db
 from ...datastore import formule as dsformule
 from ...datastore import identite
+from ...datastore import lecture_du_schema
 from ...datastore import schema as dsv2
-from ...datastore.core import DatastoreNotFound, DatastoreReadOnly, make_store
+from ...datastore.core import (DatastoreForbidden, DatastoreNotFound, DatastoreReadOnly,
+                               make_store)
 from ...datastore.errors import SchemaDefinitionError
 from .._authz import SUB_ONLY
 from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
@@ -51,6 +53,22 @@ from ..registry import CAPABILITIES
 
 class GetSchemaInput(EntreeDatastore):
     datastore: Adresse
+    # oto#35 : la forme d'INSPECTION. Deux paramètres et pas une seconde capacité : la
+    # même lecture, les mêmes droits, les mêmes avertissements — seule la réduction
+    # change, et une seconde route aurait doublé le reste.
+    forme: Literal["complete", "compacte"] = Field(default="complete", description=(
+        "`complete` (default): the schema as served, every key. `compacte`: only the "
+        "keys that constrain — structure and validation (`type`, `options`, "
+        "`required`, `lifecycle`…) — without `description`, `label`, `meta` or null "
+        "keys. To INSPECT a schema only: NEVER post a compact schema back, "
+        "`data_set_schema` would erase every description and label of the table."))
+    # oto#94 : ce que le tableau PORTE, distinct de ce qu'un agent REÇOIT.
+    tel_que: Literal["servi", "stocke"] = Field(default="servi", description=(
+        "`servi` (default): the schema as served to YOU — through this tool, columns "
+        "the owner keeps from agents (`agent_access: \"none\"`) are left out. "
+        "`stocke`: the schema as STORED, whole, with `gardes` — what each column guard "
+        "actually does on this table. Reserved to whoever owns or governs the table "
+        "(403 otherwise)."))
 
 
 class SchemaOut(BaseModel):
@@ -83,6 +101,21 @@ class SchemaOut(BaseModel):
     # le tableau n'a jamais eu de formule à recalculer — un champ à `0` en
     # permanence serait aussi peu lu qu'un `warning` toujours présent.
     formules_a_recalculer: Optional[int] = None
+    # oto#94 : QUELLE lecture vient d'être rendue — toujours présent, c'est le seul
+    # moyen de distinguer deux réponses de même forme. `servi` = ce que reçoit
+    # l'appelant (amputé des colonnes masquées sur la face outil) ; `stocke` = entier.
+    tel_que: Literal["servi", "stocke"] = "servi"
+    # oto#35 : présent seulement en forme compacte — une réduction qui ne se dirait pas
+    # serait relue, un jour, comme le schéma entier, et reposée.
+    forme: Optional[Literal["compacte"]] = None
+    # oto#94 : combien de colonnes la lecture SERVIE a retirées (face outil, colonnes
+    # `agent_access: "none"`). Le compte, jamais le nom. Absent quand rien n'est retiré.
+    colonnes_masquees: Optional[int] = None
+    # oto#94 : lecture `stocke` seulement — ce que les gardes de colonne FONT ici :
+    # `verrouillees`, `masquees_a_l_agent`, `lecture_seule_agent` (listes de colonnes)
+    # et `sans_effet` (`[{chemin, cle, raison}]` : déclaré, et que rien n'applique).
+    # Une liste vide est omise ; `{}` = rien de déclaré, rien d'inerte.
+    gardes: Optional[dict] = None
 
 
 def _get_schema(ctx: ResolvedCtx, inp: GetSchemaInput) -> dict:
@@ -92,10 +125,19 @@ def _get_schema(ctx: ResolvedCtx, inp: GetSchemaInput) -> dict:
     # l'appelant doit voir sur quel tableau il vient de lire.
     datastore = access.resolve_datastore_ref(inp.datastore)
     store = make_store(ctx.sub)
+    masquees = 0
     try:
-        schema = store.get_schema(datastore)
+        if inp.tel_que == "stocke":
+            schema = store.schema_stocke(datastore)
+        else:
+            schema, masquees = store.schema_servi_et_masquees(datastore)
     except DatastoreNotFound:
         raise AuthzDenied(404, "datastore_not_found")
+    except DatastoreForbidden:
+        raise AuthzDenied(403, "forbidden", (
+            "le schéma tel qu'il est STOCKÉ se lit par qui possède ce tableau ou le "
+            "gouverne ; un accès partagé n'y suffit pas. `tel_que=servi` (le défaut) "
+            "rend ce qui t'est servi."))
     # #389 : la liste des clés de validation que CETTE version exécute. Servie ICI
     # autant qu'à la pose — sans quoi il faudrait ÉCRIRE un schéma pour savoir ce que
     # le serveur applique, c'est-à-dire produire un effet de bord pour poser une
@@ -103,8 +145,18 @@ def _get_schema(ctx: ResolvedCtx, inp: GetSchemaInput) -> dict:
     # ⚠️ « Le nom RÉSOLU est renvoyé » ci-dessus ne valait que pour `slot:<nom>` : un
     # numéro restait un numéro. C'est désormais l'IDENTITÉ du tableau — son nom
     # canonique ET son numéro — quelle que soit la forme de l'adresse reçue.
-    out = {**identite.de_releve(store.dernier_tableau, datastore), "schema": schema,
-           "enforced": dsv2.enforced_keys()}
+    out = {**identite.de_releve(store.dernier_tableau, datastore),
+           "schema": (lecture_du_schema.compacte(schema) if inp.forme == "compacte"
+                      else schema),
+           "enforced": dsv2.enforced_keys(), "tel_que": inp.tel_que}
+    if inp.forme == "compacte":
+        out["forme"] = "compacte"
+    if masquees:
+        out["colonnes_masquees"] = masquees
+    # Les gardes se lisent sur le schéma ENTIER, jamais sur la réduction : `compacte`
+    # garde bien les clés de garde, mais une garde ne se juge pas sur une copie.
+    if inp.tel_que == "stocke":
+        out["gardes"] = lecture_du_schema.gardes(schema)
     # oto-backend#1008 v2 : combien de rows restent `formula_dirty` — lu via l'index
     # partiel, jamais un balayage, et SEULEMENT si le schéma déclare au moins une
     # colonne formule (la lecture la plus fréquente n'en a aucune : sans cette
@@ -285,7 +337,16 @@ CAPABILITIES += [
             "admits — posted before the vocabulary was closed (2026-10-01), typically "
             "a leftover `enum` beside the `options` that actually constrains the field. "
             "When it does, trust the key the warning names: the other is a residue, "
-            "whatever it says. Writing a NEW unknown key, or changing one, is refused."
+            "whatever it says. Writing a NEW unknown key, or changing one, is refused. "
+            "`tel_que` says which reading this is. `servi` (default) is the schema as "
+            "served to you: through this tool, columns the owner keeps from agents "
+            "are left out, and `colonnes_masquees` counts them. `stocke` — owner or "
+            "governor only — is the schema as stored, whole, plus `gardes`: per "
+            "column, what the guards actually do HERE (`verrouillees`, "
+            "`masquees_a_l_agent`, `lecture_seule_agent`) and `sans_effet`, what is "
+            "declared and applied by nothing, with the reason. `forme=compacte` keeps "
+            "only the keys that constrain, without prose or null keys — for "
+            "inspection, never to post back."
         ),
     ),
 ]

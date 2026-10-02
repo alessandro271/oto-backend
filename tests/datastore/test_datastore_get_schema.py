@@ -74,6 +74,10 @@ def test_an_unknown_datastore_is_a_404_not_a_crash(monkeypatch):
 
             def get_schema(self, ns):
                 raise D.DatastoreNotFound(ns)
+
+            def schema_servi_et_masquees(self, ns):
+                # La lecture SERVIE de la capacité (oto#94) : rien de masqué ici.
+                return self.get_schema(ns), 0
         return _S()
     monkeypatch.setattr(CAP, "make_store", _boom)
     with pytest.raises(AuthzDenied) as e:
@@ -99,6 +103,10 @@ def _lire(monkeypatch, schema):
 
         def get_schema(self, ns):
             return schema
+
+        def schema_servi_et_masquees(self, ns):
+            # La lecture SERVIE de la capacité (oto#94) : rien de masqué ici.
+            return self.get_schema(ns), 0
     monkeypatch.setattr(CAP, "make_store", lambda sub: _S())
     return CAP._get_schema(_Ctx(), CAP.GetSchemaInput(datastore="vivier"))
 

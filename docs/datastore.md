@@ -3403,3 +3403,34 @@ migrée reste enregistrable. La migration les range aussi, par `org_store.set_in
 `migration:durcir_schemas`, `expected_version` contre l'écrasement) ; une procédure
 retirée est listée, jamais écrite. Ce schéma est provisionné tel quel sur le tableau
 lié (`provision_tableau_schema`) : non rangé, il réintroduirait l'ancien vocabulaire.
+
+## Lire un schéma : compact, et tel qu'il est stocké (oto#35, oto#94, 01/10/2026)
+
+`data_get_schema` / `GET /api/datastores/{ds}/schema` prennent deux paramètres, sur les
+deux faces (une capacité, une autz, un handler) :
+
+- **`forme=compacte`** (oto#35) : `schema` ne garde, à chaque niveau, que les clés que le
+  VALIDATEUR lit (`schema_keys.CONTRAINTES`, dérivée des lecteurs déclarés), sans clé
+  nulle — ni `description`, ni `label`, ni `meta`, ni `hidden`/`width`/`role`, ni les
+  `labels` d'un cycle, ni une clé résiduelle. La réponse porte `forme: "compacte"`.
+  ⚠️ **Une forme compacte ne se repose jamais** : `set_schema` REMPLACE, elle effacerait
+  toutes les descriptions. Lecture d'inspection seulement. Les avertissements se
+  calculent toujours sur le schéma entier.
+- **`tel_que=stocke`** (oto#94) : le schéma STOCKÉ, entier, colonnes `agent_access:
+  "none"` comprises, quelle que soit la face. Réservé au TITRE — possède ou gouverne
+  (`_peut_forcer`, le palier qui pose `agent_access`) — sinon `403 forbidden`, avec la
+  phrase qui renvoie au défaut. La réponse porte `gardes` : `verrouillees`
+  (`readonly_fields`, formules comprises), `masquees_a_l_agent`, `lecture_seule_agent`
+  (`acces_agent.masquees`/`fermees`) et `sans_effet` (`[{chemin, cle, raison}]` :
+  `agent_access` sur la clé métier ou à valeur inconnue, `options` d'un tableau non
+  strict, `lifecycle` hors colonne de file, clé qu'aucun niveau n'admet). Tout est lu
+  des prédicats qui DÉCIDENT, jamais d'une copie de leur règle.
+
+**`tel_que` est toujours dans la réponse** (`servi` par défaut) : deux réponses de même
+forme ne se distinguaient pas. Sur la lecture servie, **`colonnes_masquees`** dit
+combien de colonnes la face outil a retirées — le compte, jamais le nom ; absent quand
+rien n'est retiré (toujours sur REST, qui ne masque pas).
+
+Reste hors de ce lot : un marqueur de champ ABANDONNÉ (oto#35 §4) — aucune clé du
+vocabulaire ne le porte, la forme compacte ne peut donc pas encore les écarter ; et
+l'état actif/inerte de CHAQUE contrainte de validation (oto#34).

@@ -29,7 +29,8 @@ from . import formule as dsformule
 from . import schema as dsv2
 from . import violations_existantes as dsve
 from .. import db
-from .errors import ColumnAbsent, RowValidationError, SchemaDefinitionError
+from .errors import (ColumnAbsent, DatastoreForbidden, RowValidationError,
+                     SchemaDefinitionError)
 from .columns import _META_COLS
 
 
@@ -46,9 +47,30 @@ class SchemaOpsMixin:
         ⚠️ Le store, lui, continue de lire le schéma ENTIER par `_schema_of` : la
         validation et les refus ont besoin de la colonne masquée, sans quoi une
         écriture d'agent y passerait comme un champ hors schéma — l'inverse du but."""
+        return self.schema_servi_et_masquees(datastore)[0]
+
+    def schema_servi_et_masquees(self, datastore: str) -> tuple[Optional[dict], int]:
+        """Le schéma SERVI, et COMBIEN de colonnes il a perdues en route (oto#94).
+
+        La face outil servait quatre colonnes d'un tableau qui en porte cinq, sous la
+        même forme exacte que l'écran : rien ne disait qu'une colonne manquait. Le
+        compte se dit, jamais le nom — c'est le nom que le propriétaire retient."""
         ns_id = self._resolve(datastore)
-        ns = db.get_datastore_by_id(ns_id)
-        return aga.schema_servi((ns or {}).get("schema"))
+        stocke = (db.get_datastore_by_id(ns_id) or {}).get("schema")
+        servi = aga.schema_servi(stocke)
+        return servi, (0 if servi is stocke else len(aga.masquees(stocke)))
+
+    def schema_stocke(self, datastore: str) -> Optional[dict]:
+        """Le schéma tel qu'il est STOCKÉ, entier, sur toutes les faces (oto#94).
+
+        Réservé au TITRE — qui possède le tableau ou le gouverne (`_peut_forcer`),
+        le palier qui pose `agent_access` (oto#93) : qui décide à qui une colonne est
+        servie lit ce qu'elle porte. Un accès partagé, en lecture comme en écriture,
+        n'y suffit pas (`DatastoreForbidden`)."""
+        ns_id = self._resolve(datastore)
+        if not self._peut_forcer(ns_id):
+            raise DatastoreForbidden(datastore)
+        return self._schema_of(ns_id)
 
     def _recalculer_formules_neuves_ou_modifiees(self, ns_id: int,
                                                  avant: Optional[dict],

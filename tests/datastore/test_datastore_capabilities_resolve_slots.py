@@ -69,6 +69,10 @@ def test_get_schema_resolves_the_slot_and_answers_with_the_real_name(monkeypatch
             assert datastore == "edition-echantillon-500"
             return {"strict": True, "fields": []}
 
+        def schema_servi_et_masquees(self, ns):
+            # La lecture SERVIE de la capacité (oto#94) : rien de masqué ici.
+            return self.get_schema(ns), 0
+
     monkeypatch.setattr(sch, "make_store", lambda sub: _Store())
     out = sch._get_schema(_Ctx(), sch.GetSchemaInput(datastore="slot:vivier"))
     # le nom RÉSOLU revient : l'appelant doit voir sur quel tableau il a lu

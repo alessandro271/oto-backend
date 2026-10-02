@@ -53,6 +53,7 @@ c'est ce qui rend la coupe relisable (un fichier, pas cinquante appelants).
 | `effacements.py` | fusionner / retirer un format, et le relevé de ce qui a disparu |
 | `vocabulaire.py` | ce que CETTE version lit et fait respecter, dérivé du code |
 | `non_applique.py` | ce qu'un tableau déclare et que la plateforme laisse inerte |
+| `lecture_du_schema.py` | LIRE un schéma : forme compacte, gardes appliquées ici |
 
 ⚠️ **Un nouveau module qui LIT un attribut de colonne doit être ajouté à la liste de
 fichiers de `vocabulaire._read_keys`** — sinon la garde ne le voit pas, et une clé lue

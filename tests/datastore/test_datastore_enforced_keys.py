@@ -107,6 +107,8 @@ def test_la_lecture_l_annonce_aussi(monkeypatch):
     monkeypatch.setattr(CAP, "make_store",
                         lambda sub: type("S", (), {
                             "dernier_tableau": {"ns_id": 7, "datastore": "v"},
-                            "get_schema": staticmethod(lambda ns: {"fields": []})})())
+                            "get_schema": staticmethod(lambda ns: {"fields": []}),
+                            "schema_servi_et_masquees": staticmethod(
+                                lambda ns: ({"fields": []}, 0))})())
     out = CAP._get_schema(ResolvedCtx(sub="u"), CAP.GetSchemaInput(datastore="v"))
     assert out["enforced"] == S.enforced_keys()

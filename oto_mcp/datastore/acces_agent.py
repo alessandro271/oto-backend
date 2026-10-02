@@ -140,6 +140,29 @@ def fermees(schema: Optional[dict]) -> set:
     return _cles_par_acces(schema, (LECTURE, AUCUN))
 
 
+def sans_effet(schema: Optional[dict]) -> list[tuple[str, str]]:
+    """`(colonne, raison)` pour chaque accès agent DÉCLARÉ que le cran n'applique pas
+    (oto#94) — lu par la lecture du schéma tel qu'il est stocké.
+
+    Dérivé de `masquees`/`fermees`, les deux prédicats que la sortie et le refus
+    consultent, jamais d'une copie de leur règle : une colonne déclarée `"none"` qui
+    n'est pas dans `masquees` n'est pas masquée, quelle qu'en soit la raison. La
+    raison, elle, se nomme : une valeur que `acces_of` ne reconnaît pas, ou la clé
+    métier, que `_cles_par_acces` écarte."""
+    masq, ferm = masquees(schema), fermees(schema)
+    cle_metier = schema.get("key") if isinstance(schema, dict) else None
+    out = []
+    for cle, v in _acces_declares(schema).items():
+        if v is None or v == ECRITURE:
+            continue
+        if v not in VALEURS:
+            out.append((cle, f"valeur {v!r} non reconnue : lue comme \"{ECRITURE}\""))
+        elif cle not in (masq if v == AUCUN else ferm):
+            out.append((cle, "clé métier : jamais masquée ni fermée à un agent"
+                        if cle == cle_metier else "non appliqué"))
+    return out
+
+
 def appel_d_agent() -> bool:
     """Cet appel est-il piloté par un modèle ?
 

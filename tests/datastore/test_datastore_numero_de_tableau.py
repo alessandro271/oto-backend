@@ -124,6 +124,10 @@ class _Store:
     def get_schema(self, datastore):
         return {"fields": []}
 
+    def schema_servi_et_masquees(self, ns):
+        # La lecture SERVIE de la capacité (oto#94) : rien de masqué ici.
+        return self.get_schema(ns), 0
+
 
 @pytest.fixture()
 def store(monkeypatch):
