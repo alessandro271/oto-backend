@@ -138,7 +138,7 @@ The mechanism is **subject qualification at a single entry point**: a subject fr
 
 ## 8. Sub-processors
 
-The maintained list is the trust center: **<https://trust.oto.zone>**. It currently names Cloudflare, FullEnrich, Hunter, Kaspr, PostHog, Scaleway, Sentry, Unipile, and a payment provider. The Data Processing Agreement served at <https://oto.cx/dpa> (version 2.0, 2026-07-10) names a partly different set: Scaleway, Logto, PostHog, Sentry, Anthropic, a payment provider, and optional connector services.
+The maintained list is the trust center: **<https://trust.oto.cx>**. It currently names Cloudflare, FullEnrich, Hunter, Kaspr, PostHog, Scaleway, Sentry, Unipile, and a payment provider. The Data Processing Agreement served at <https://oto.cx/dpa> (version 2.0, 2026-07-10) names a partly different set: Scaleway, Logto, PostHog, Sentry, Anthropic, a payment provider, and optional connector services.
 
 ⚠️ **These two published lists do not currently agree with each other, nor with this code, on the identity of the payment provider.** The payment integration in this repository is Mollie (switched 2026-07-24); the trust center and the DPA each still name an earlier candidate. Reconciling them — along with stale pricing in the terms — is tracked in [oto-websites#74](https://github.com/otomata-tech/oto-websites/issues/74). Until it lands, treat the trust center as the list under active maintenance, and this paragraph as the correction.
 
