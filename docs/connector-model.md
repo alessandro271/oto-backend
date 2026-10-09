@@ -110,9 +110,9 @@ La plupart des connecteurs n'ont que **1 + 2**. Seuls les **connecteurs à optio
   table `connector_acl`, outil `oto_connector_access`, routes `/api/{orgs,groups}/{id}/connectors/…/access`)
   n'existe plus. **Restreindre, c'est placer la clé au bon niveau** : une clé perso ne se résout
   que pour son porteur, une clé d'équipe que pour les membres de l'équipe, une clé d'org pour
-  toute l'org. La table `connector_acl` n'est plus lue par le service ; elle reste déclarée tant
-  que `scripts/deplacer_cles_org.py` y lit qui était autorisé (`connector-vault.md`), et son
-  retrait passera par une révision (`migrations-versionnees.md` §5.3).
+  toute l'org. La table `connector_acl` n'est plus lue ; elle part par la révision
+  `0053_connector_acl_retiree`, qui exige d'abord son export attesté (oto-backend#1169,
+  `docs/connector-vault.md` §« Retirer connector_acl »).
 
 ## Couche 2 — Authentification (quelle clé ?)
 

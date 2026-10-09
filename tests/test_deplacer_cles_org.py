@@ -241,24 +241,12 @@ def _membres_equipe(gid):
             "SELECT sub, group_role FROM org_group_members WHERE group_id = %s", (gid,))}
 
 
-def _reserver(connector, sub):
-    _exec("INSERT INTO connector_acl (scope_type, scope_id, connector, principal_type, "
-          "principal_id) VALUES ('org', %s, %s, 'user', %s) ON CONFLICT DO NOTHING",
-          (str(ORG), connector, sub))
-
-
-@pytest.fixture
-def sans_acl(propre):
-    _exec("DELETE FROM connector_acl WHERE scope_id = %s", (str(ORG),))
-    yield
-    _exec("DELETE FROM connector_acl WHERE scope_id = %s", (str(ORG),))
-
-
 def _vers_equipe(*connectors, **kw):
+    kw.setdefault("membres", [CIBLE, ADMIN])
     return _lancer(*connectors, vers="equipe", equipe_nom=EQUIPE, **kw)
 
 
-def test_equipe_passe_a_blanc_ne_cree_rien(sans_acl):
+def test_equipe_passe_a_blanc_ne_cree_rien(propre):
     _poser(cs.ORG, ORG, MULTI, "")
     code, sortie = _vers_equipe(MULTI)
     assert code == 0, sortie
@@ -267,12 +255,9 @@ def test_equipe_passe_a_blanc_ne_cree_rien(sans_acl):
     assert _ligne(cs.ORG, ORG, MULTI, "") is not None
 
 
-def test_equipe_apply_cree_l_equipe_avec_ceux_qui_resolvent_et_deplace(sans_acl):
-    # Réservé à CIBLE : aujourd'hui seuls CIBLE et l'org_admin le résolvent.
+def test_equipe_apply_cree_l_equipe_avec_les_membres_designes_et_deplace(propre):
     _poser(cs.ORG, ORG, MULTI, "", meta={"note": "gardée"}, set_by=CIBLE)
     _poser(cs.ORG, ORG, ORG_ONLY, "")
-    _reserver(MULTI, CIBLE)
-    _reserver(ORG_ONLY, CIBLE)
     code, sortie = _vers_equipe(MULTI, ORG_ONLY, apply=True)
     assert code == 0, sortie
     gid = _equipe()["id"]
@@ -288,13 +273,47 @@ def test_equipe_apply_cree_l_equipe_avec_ceux_qui_resolvent_et_deplace(sans_acl)
     assert row["meta"]["_deplacement"]["to"] == "equipe"
 
 
-def test_equipe_sans_reservation_embarque_tous_les_membres(sans_acl):
+def test_equipe_n_embarque_que_la_liste_explicite(propre):
+    """Ni l'org_admin ni tout membre d'office : la liste, et elle seule (#1169)."""
     _poser(cs.ORG, ORG, MULTI, "")
-    assert _vers_equipe(MULTI, apply=True)[0] == 0
-    assert set(_membres_equipe(_equipe()["id"])) == {CIBLE, ADMIN, MEMBRE}
+    code, sortie = _vers_equipe(MULTI, apply=True, membres=[MEMBRE, CIBLE])
+    assert code == 0, sortie
+    assert _membres_equipe(_equipe()["id"]) == {CIBLE: "group_admin", MEMBRE: "group_member"}
+    assert "hors de l'équipe : 1 (perdront ces clés)" in sortie
 
 
-def test_equipe_connecteur_non_lu_au_palier_equipe_refuse_tout(sans_acl):
+def test_equipe_sans_membres_refuse_en_le_nommant(propre):
+    """Sans la table qui disait qui était autorisé, le script ne devine pas : il
+    n'ouvre pas l'équipe à toute l'org en silence (#1169)."""
+    _poser(cs.ORG, ORG, MULTI, "")
+    code, sortie = _vers_equipe(MULTI, apply=True, membres=None)
+    assert code == 2, sortie
+    assert "--vers equipe exige --membres" in sortie and "connector_acl" in sortie
+    assert _equipe() is None
+    assert _ligne(cs.ORG, ORG, MULTI, "") is not None
+    from scripts.deplacer_cles_org import main
+    assert main(["--org", str(ORG), "--sub", CIBLE, "--connectors", MULTI, "--vers",
+                 "equipe", "--equipe-nom", EQUIPE, "--apply"]) == 2
+    assert _equipe() is None
+
+
+def test_equipe_membre_hors_de_l_org_refuse(propre):
+    _poser(cs.ORG, ORG, MULTI, "")
+    code, sortie = _vers_equipe(MULTI, apply=True, membres=[ADMIN, ETRANGER])
+    assert code == 2, sortie
+    assert "pas membres de l'org" in sortie and ETRANGER in sortie
+    assert _equipe() is None
+    assert _ligne(cs.ORG, ORG, MULTI, "") is not None
+
+
+def test_membres_refuse_hors_du_mode_equipe(propre):
+    _poser(cs.ORG, ORG, MULTI, "")
+    code, sortie = _lancer(MULTI, apply=True, membres=[ADMIN])
+    assert code == 2, sortie
+    assert _ligne(cs.ORG, ORG, MULTI, "") is not None
+
+
+def test_equipe_connecteur_non_lu_au_palier_equipe_refuse_tout(propre):
     _poser(cs.ORG, ORG, MULTI, "")
     _poser(cs.ORG, ORG, NON_LUE_EN_EQUIPE, "")
     code, sortie = _vers_equipe(MULTI, NON_LUE_EN_EQUIPE, apply=True)
@@ -304,7 +323,7 @@ def test_equipe_connecteur_non_lu_au_palier_equipe_refuse_tout(sans_acl):
     assert _ligne(cs.ORG, ORG, MULTI, "") is not None
 
 
-def test_equipe_deja_existante_refuse(sans_acl):
+def test_equipe_deja_existante_refuse(propre):
     _poser(cs.ORG, ORG, MULTI, "")
     _exec("INSERT INTO org_groups (org_id, name) VALUES (%s, %s)", (ORG, EQUIPE.upper()))
     code, sortie = _vers_equipe(MULTI, apply=True)
@@ -313,7 +332,7 @@ def test_equipe_deja_existante_refuse(sans_acl):
     assert _ligne(cs.ORG, ORG, MULTI, "") is not None
 
 
-def test_equipe_relecture_en_echec_annule_aussi_la_creation(sans_acl, monkeypatch):
+def test_equipe_relecture_en_echec_annule_aussi_la_creation(propre, monkeypatch):
     import scripts.deplacer_cles_org as script
     _poser(cs.ORG, ORG, MULTI, "")
     empreintes = iter(["a", "b"])
@@ -324,13 +343,12 @@ def test_equipe_relecture_en_echec_annule_aussi_la_creation(sans_acl, monkeypatc
     assert _ligne(cs.ORG, ORG, MULTI, "") is not None
 
 
-def test_equipe_la_cle_n_est_lue_que_dans_l_equipe_active(sans_acl):
+def test_equipe_la_cle_n_est_lue_que_dans_l_equipe_active(propre):
     """Point 1 : un membre de l'équipe résout la clé d'équipe quand l'équipe est
     son équipe ACTIVE ; sans elle (équipe neuve, pas `--rendre-active`), il ne la
     résout pas ; un non-membre ne la résout jamais."""
     from oto_mcp.access import scope
     _poser(cs.ORG, ORG, MULTI, "")
-    _reserver(MULTI, CIBLE)
     assert _vers_equipe(MULTI, apply=True)[0] == 0
     gid = _equipe()["id"]
     assert scope.current_group(CIBLE) is None          # équipe neuve : active de personne
@@ -348,7 +366,7 @@ def test_equipe_la_cle_n_est_lue_que_dans_l_equipe_active(sans_acl):
     assert scope.current_group(MEMBRE) is None         # hors équipe : jamais la clé
 
 
-def test_rendre_active_ne_touche_pas_une_autre_equipe_active(sans_acl):
+def test_rendre_active_ne_touche_pas_une_autre_equipe_active(propre):
     _poser(cs.ORG, ORG, MULTI, "")
     autre = _one("INSERT INTO org_groups (org_id, name) VALUES (%s, 'autre') RETURNING id",
                  (ORG,))["id"]
@@ -361,12 +379,13 @@ def test_rendre_active_ne_touche_pas_une_autre_equipe_active(sans_acl):
     assert scope.current_group(ADMIN) == autre         # laissé tel quel, compté
 
 
-def test_equipe_aucun_secret_dans_la_sortie_ni_les_logs(sans_acl, caplog, capsys):
+def test_equipe_aucun_secret_dans_la_sortie_ni_les_logs(propre, caplog, capsys):
     _poser(cs.ORG, ORG, MULTI, "")
     caplog.set_level(logging.DEBUG)
     from scripts.deplacer_cles_org import main
     base = ["--org", str(ORG), "--sub", CIBLE, "--connectors", MULTI,
-            "--vers", "equipe", "--equipe-nom", EQUIPE, "--show-members"]
+            "--vers", "equipe", "--equipe-nom", EQUIPE, "--membres", f"{CIBLE},{ADMIN}",
+            "--show-members"]
     assert main(base) == 0
     assert main(base + ["--rendre-active", "--apply"]) == 0
     capture = capsys.readouterr()
@@ -374,7 +393,7 @@ def test_equipe_aucun_secret_dans_la_sortie_ni_les_logs(sans_acl, caplog, capsys
         assert SECRET not in texte
 
 
-def test_partage_par_defaut_n_est_pas_compte(sans_acl):
+def test_partage_par_defaut_n_est_pas_compte(propre):
     """`share_mode='open'` est la valeur PAR DÉFAUT : ce n'est pas un partage. La
     première version du script comptait chaque ligne (« 14 partages » sur 14)."""
     _poser(cs.ORG, ORG, MULTI, "")

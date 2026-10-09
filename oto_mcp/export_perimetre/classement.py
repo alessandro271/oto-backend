@@ -210,8 +210,6 @@ CLASSEMENT: dict[str, Table] = {
                        "(ADR 0070 §6)",
                        destinataire=ParEntite("grantee_kind", "grantee_id")),
     "grant_counters": indirecte(Via("grants", ("grant_id",))),
-    "connector_acl": exclue(ParEntite("scope_type", "scope_id"),
-                            "plus lue depuis le 24/09/2026 (ADR 0053 D1)"),
     "connector_schemas": instance("cache des schémas d'outils, reconstruit par l'instance"),
     "apollo_phone_reveals": exclue(_ORG_OU_COMPTE,
                                    "commandes de reveal Apollo de trente jours, adressées "

@@ -3,10 +3,9 @@ les clés personnelles d'UN membre (`--vers membre`), ou une ÉQUIPE dédiée cr
 l'occasion (`--vers equipe`).
 
 Pourquoi un script : **restreindre un connecteur, c'est placer la clé au bon niveau**
-(ADR 0053 D1). La réservation d'un connecteur à une partie des membres d'une org
-(`connector_acl`) disparaît ; une org qui s'en servait pour réserver ses clés doit voir
-ces clés descendre au bon niveau AVANT le retrait, sinon elles s'ouvrent à tous ses
-membres.
+(ADR 0053 D1). La réservation d'un connecteur à une partie des membres d'une org a
+disparu le 24/09/2026 ; une org qui s'en servait pour réserver ses clés les voit
+descendre au bon niveau par ce script.
 
 Ce qu'il fait, pour chaque ligne de coffre `(org, <org>, <connecteur>, <compte>)` :
 
@@ -24,10 +23,12 @@ Ce qu'il fait, pour chaque ligne de coffre `(org, <org>, <connecteur>, <compte>)
 `--vers equipe` crée d'abord, DANS LA MÊME TRANSACTION, l'équipe `--equipe-nom` : le
 membre `--sub` en est le chef (`group_admin`, et `created_by` — comme à la création
 d'une équipe dans le produit, où le créateur devient chef) ; y entrent aussi, en
-`group_member`, tous les membres qui résolvent AUJOURD'HUI une des clés d'org
-déplacées (les `org_admin`, qui échappaient à la réservation ; les autorisés de
-`connector_acl` ; tout membre si le connecteur n'était pas réservé). Les subs viennent
-de la base au lancement, jamais d'un paramètre ni du dépôt.
+`group_member`, les membres de la liste EXPLICITE `--membres a,b,c`, et eux seuls.
+⚠️ `--membres` est exigé : la table qui disait qui était autorisé (`connector_acl`) est
+retirée (oto-backend#1169, son contenu est dans l'export attesté
+`archives/connector_acl/…`), et le script ne devine pas — sans la liste, il ouvrirait
+l'équipe à tous les membres en silence. Le chef seul : `--membres <sub du chef>`.
+Chaque sub de la liste doit être membre de l'org.
 
 ⚠️ **Une clé d'équipe n'est lue que dans l'équipe ACTIVE** (`scope.current_group` :
 jeton d'appel `_group=`, consultation, sinon l'équipe « maison » — UNE par sub, toutes
@@ -47,6 +48,7 @@ casserait en vrai casse déjà ici. `--apply` valide.
 
 Refus (sortie non nulle, rien d'écrit en `--apply`) :
 - le sub n'est pas membre de l'org ;
+- `--vers equipe` sans `--membres`, ou un sub de `--membres` hors de l'org ;
 - un connecteur demandé n'a pas de clé d'org, ou ne se lit pas au niveau cible
   (membre : `providers.require_credential("member", …)` ; équipe : le walker ne
   traverse le palier équipe que pour un connecteur org-partageable) ;
@@ -74,10 +76,10 @@ contient que des comptes, des noms de connecteur, de compte et d'équipe, et (av
     python -m scripts.deplacer_cles_org --org <id> --sub <sub> --connectors a,b \\
         --vers membre                                   # passe à blanc
     python -m scripts.deplacer_cles_org --org <id> --sub <sub> --connectors a,b \\
-        --vers equipe --equipe-nom "<nom>" [--rendre-active] --apply
+        --vers equipe --equipe-nom "<nom>" --membres a,b,c [--rendre-active] --apply
 
-Sorties : 0 = fait (ou passe à blanc sans refus) ; 2 = paramètres ou sub hors de
-l'org ; 3 = refus (connecteur, collision, équipe existante, références) ; 4 =
+Sorties : 0 = fait (ou passe à blanc sans refus) ; 2 = paramètres, sub ou membre
+hors de l'org ; 3 = refus (connecteur, collision, équipe existante, références) ; 4 =
 relecture en échec (ROLLBACK).
 """
 from __future__ import annotations
@@ -219,35 +221,12 @@ def _planifier(conn, org: int, cible: Cible, connectors: list) -> Plan:
     return plan
 
 
-def _resolvent_aujourdhui(conn, org: int, sub: str, connectors: list) -> tuple[list, dict]:
-    """(autres membres de l'org, {connecteur: subs qui résolvent la clé d'org
-    aujourd'hui hors la cible}). Aujourd'hui = org_admin, ou autorisé par
-    `connector_acl` si le connecteur y est restreint, sinon tout membre."""
-    autres = conn.execute(
-        "SELECT sub, org_role FROM org_members WHERE org_id = %s AND sub <> %s ORDER BY sub",
-        (org, sub)).fetchall()
-    acl = _table_existe(conn, "connector_acl")
-    par_connecteur = {}
-    for connector in connectors:
-        autorises = None
-        if acl:
-            regles = conn.execute(
-                "SELECT principal_type, principal_id FROM connector_acl "
-                "WHERE scope_type = 'org' AND scope_id = %s AND connector = %s",
-                (str(org), connector)).fetchall()
-            if regles:
-                autorises = {r["principal_id"] for r in regles if r["principal_type"] == "user"}
-                groupes = [r["principal_id"] for r in regles if r["principal_type"] == "group"]
-                if groupes:
-                    autorises |= {r["sub"] for r in conn.execute(
-                        "SELECT gm.sub FROM org_group_members gm "
-                        "JOIN org_groups g ON g.id = gm.group_id "
-                        "WHERE g.org_id = %s AND gm.group_id::text = ANY(%s)",
-                        (org, groupes)).fetchall()}
-        par_connecteur[connector] = [
-            r["sub"] for r in autres
-            if autorises is None or r["org_role"] == "org_admin" or r["sub"] in autorises]
-    return [r["sub"] for r in autres], par_connecteur
+def _autres_membres(conn, org: int, sub: str) -> list:
+    """Les autres membres de l'org : tous résolvent aujourd'hui une clé d'org (plus
+    aucune réservation n'est lue depuis le 24/09/2026)."""
+    return [r["sub"] for r in conn.execute(
+        "SELECT sub FROM org_members WHERE org_id = %s AND sub <> %s ORDER BY sub",
+        (org, sub)).fetchall()]
 
 
 def _references(conn, org: int, deplacements: list) -> dict:
@@ -378,7 +357,8 @@ def _rendre_active(conn, org: int, gid: int, subs: list) -> None:
 
 
 def deplacer(org: int, sub: str, connectors: list, *, vers: str = MEMBRE,
-             equipe_nom: Optional[str] = None, rendre_active: bool = False,
+             equipe_nom: Optional[str] = None, membres: Optional[list] = None,
+             rendre_active: bool = False,
              apply: bool = False, show_members: bool = False,
              force_orphan_bindings: bool = False,
              out: Callable[[str], None] = print) -> int:
@@ -395,6 +375,16 @@ def deplacer(org: int, sub: str, connectors: list, *, vers: str = MEMBRE,
     if rendre_active and vers != EQUIPE:
         out("--rendre-active ne vaut que pour --vers equipe")
         return ERR_PARAMS
+    liste = sorted({s.strip() for s in (membres or []) if s and s.strip()})
+    if vers == EQUIPE and not liste:
+        out("refus : --vers equipe exige --membres a,b,c, la liste explicite de qui entre "
+            "dans l'équipe (le chef seul : --membres <sub du chef>). `connector_acl`, qui "
+            "disait qui était autorisé, est retirée (oto-backend#1169) : son contenu est "
+            "dans l'export attesté archives/connector_acl/…")
+        return ERR_PARAMS
+    if vers != EQUIPE and liste:
+        out("--membres ne vaut que pour --vers equipe")
+        return ERR_PARAMS
     mode = "APPLY" if apply else "DRY-RUN"
     with _connect() as conn:
         conn.execute(f"SET LOCAL statement_timeout = '{STATEMENT_TIMEOUT}'")
@@ -407,7 +397,13 @@ def deplacer(org: int, sub: str, connectors: list, *, vers: str = MEMBRE,
             out(f"[{mode}] refus : ce sub n'est pas membre de l'org {org}")
             return ERR_PARAMS
 
-        autres, resolvent = _resolvent_aujourdhui(conn, org, sub, connectors)
+        autres = _autres_membres(conn, org, sub)
+        hors_org = [s for s in liste if s != sub and s not in autres]
+        if hors_org:
+            conn.rollback()
+            out(f"[{mode}] refus : {len(hors_org)} sub(s) de --membres ne sont pas membres "
+                f"de l'org {org} : {', '.join(hors_org)}")
+            return ERR_PARAMS
         equipe_refus = None
         gid = None
         membres_equipe: list = []
@@ -415,7 +411,7 @@ def deplacer(org: int, sub: str, connectors: list, *, vers: str = MEMBRE,
             cible = Cible(MEMBRE, cs.MEMBER, cs.member_id(org, sub), "le membre")
         else:
             nom = equipe_nom.strip()
-            membres_equipe = sorted({s for subs in resolvent.values() for s in subs})
+            membres_equipe = [s for s in liste if s != sub]
             if _equipe_existe(conn, org, nom):
                 equipe_refus = f"une équipe « {nom} » existe déjà dans l'org {org}"
                 cible = Cible(EQUIPE, GROUP, "", "l'équipe")
@@ -449,10 +445,10 @@ def deplacer(org: int, sub: str, connectors: list, *, vers: str = MEMBRE,
 
         actifs = []
         if vers == MEMBRE:
-            for connector in connectors:
-                if resolvent.get(connector):
-                    out(f"  {connector} : {len(resolvent[connector])} membre(s) résolvent la "
-                        "clé d'org aujourd'hui et la perdront")
+            if autres:
+                for connector in connectors:
+                    out(f"  {connector} : {len(autres)} membre(s) résolvent la clé d'org "
+                        "aujourd'hui et la perdront")
             if show_members:
                 for s in autres:
                     out(f"    membre : {s}")
@@ -461,7 +457,8 @@ def deplacer(org: int, sub: str, connectors: list, *, vers: str = MEMBRE,
             etat = _etat_actif(conn, org, tous)
             libres = [s for s in tous if etat[s] == "libre"]
             out(f"  membres de l'équipe : {len(tous)} (1 chef, {len(membres_equipe)} "
-                "membre(s) qui résolvent une de ces clés d'org aujourd'hui)")
+                "membre(s) désigné(s) par --membres) ; autres membres de l'org hors de "
+                f"l'équipe : {len(autres) - len(membres_equipe)} (perdront ces clés)")
             out(f"  équipe active aujourd'hui : aucune {len(libres)}, "
                 f"autre équipe {sum(etat[s] == 'autre_equipe' for s in tous)}, "
                 f"org active différente {sum(etat[s] == 'autre_org' for s in tous)}")
@@ -516,6 +513,8 @@ def main(argv: Optional[list] = None) -> int:
     p.add_argument("--connectors", required=True, help="liste séparée par des virgules")
     p.add_argument("--vers", choices=(MEMBRE, EQUIPE), required=True)
     p.add_argument("--equipe-nom", help="nom de l'équipe à créer (--vers equipe)")
+    p.add_argument("--membres", help="vers equipe : subs qui entrent dans l'équipe, séparés "
+                   "par des virgules (exigé ; le chef seul : son propre sub)")
     p.add_argument("--rendre-active", action="store_true",
                    help="rend l'équipe active pour ses membres sans équipe active dans cette org")
     p.add_argument("--apply", action="store_true", help="valide (défaut : passe à blanc)")
@@ -523,7 +522,9 @@ def main(argv: Optional[list] = None) -> int:
     p.add_argument("--force-orphan-bindings", action="store_true")
     a = p.parse_args(argv)
     return deplacer(a.org, a.sub, a.connectors.split(","), vers=a.vers,
-                    equipe_nom=a.equipe_nom, rendre_active=a.rendre_active,
+                    equipe_nom=a.equipe_nom,
+                    membres=a.membres.split(",") if a.membres else None,
+                    rendre_active=a.rendre_active,
                     apply=a.apply, show_members=a.show_members,
                     force_orphan_bindings=a.force_orphan_bindings)
 

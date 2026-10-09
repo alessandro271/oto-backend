@@ -162,8 +162,7 @@ _RETIRES = {
                    "list_doc_change_requests", "resolve_doc_change_request")},
     **{nom: ("24/09/2026 — la restriction d'accès « vers le bas » d'un connecteur "
              "disparaît (ADR 0053 D1 : restreindre, c'est placer la clé au bon niveau). "
-             "`connector_acl` n'est plus lue par le service ; la table reste tant que "
-             "`scripts/deplacer_cles_org.py` la lit, son retrait sera une révision")
+             "`connector_acl` n'est plus lue ; retirée par la révision 0053 (#1169)")
        for nom in ("set_connector_access", "clear_connector_access",
                    "list_connector_access", "org_restricted_connectors",
                    "member_allowed_connectors", "set_group_connector_access",

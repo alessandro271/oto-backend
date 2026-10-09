@@ -11,33 +11,6 @@ particulier le piège du `CREATE INDEX` sur une colonne ajoutée par migration.
 """
 from __future__ import annotations
 
-# RBAC connecteur interne à l'org
-ACL = """
--- RBAC connecteur — table UNIQUE `connector_acl` (chantier ACL, cadrage 10/07 :
--- fusion d'org_connector_access + group_connector_access ; le grain est une COLONNE
--- de scope, pas une table par grain). Sémantique INCHANGÉE par scope :
--- · scope 'org' (ADR 0025) : l'org_admin réserve un connecteur à un sous-ensemble de
---   son org. ≥1 ligne pour (scope, connector) ⟹ RESTREINT (deny-by-default) ; absence
---   ⟹ ouvert à tous les membres. principal = un groupe (department) ou un user. DUR :
---   enforced en visibilité + au call-time (access.require_connector_access) ;
---   l'escalade org_admin transcende (0044 §G). Ouvert par défaut = zéro disruption.
--- · scope 'group' (ADR 0012 B2, restrict-only) : narrowing pur de l'ACL d'org — le
---   principal est toujours un MEMBRE ('user', sub) ; l'équipe restreint davantage,
---   ne débloque jamais ce que l'org autorise.
--- (Les tables legacy vivent encore en base jusqu'au B2 — copiées au boot par _init,
---  DROP une fois ce code promu en prod : DB partagée canari/prod.)
-CREATE TABLE IF NOT EXISTS connector_acl (
-    scope_type TEXT NOT NULL CHECK (scope_type IN ('org', 'group')),
-    scope_id TEXT NOT NULL,       -- org.id / group.id en texte
-    connector TEXT NOT NULL,
-    principal_type TEXT NOT NULL CHECK (principal_type IN ('group', 'user')),
-    principal_id TEXT NOT NULL,   -- group_id (en texte) ou sub
-    granted_by TEXT,
-    granted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (scope_type, scope_id, connector, principal_type, principal_id)
-);
-"""
-
 # coffre des credentials (ADR 0002/0033)
 CREDENTIALS = """
 -- Coffre unique des credentials per-entité (membre, user, org, group, tenant,

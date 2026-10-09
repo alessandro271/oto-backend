@@ -1491,10 +1491,8 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
                    "scope_type", ("platform", "org", "tenant", "group"))
     _conn_act.seed_initial(conn)
     # Chantier ACL B2 : les 4 tables legacy ne sont plus lues par aucun code — DROP.
-    # (La table qui les avait remplacées, `connector_acl`, n'est plus lue par le
-    # service depuis le 24/09/2026 : la restriction d'accès « vers le bas » a disparu,
-    # ADR 0053 D1. Elle reste déclarée tant que `scripts/deplacer_cles_org.py` y lit
-    # qui était autorisé ; son retrait passera par une révision, §5.3.)
+    # (La table qui les avait remplacées, `connector_acl`, part par la révision
+    # `0053_connector_acl_retiree`, après export attesté — oto-backend#1169.)
     conn.execute("DROP TABLE IF EXISTS org_connector_access")
     conn.execute("DROP TABLE IF EXISTS group_connector_access")
     conn.execute("DROP TABLE IF EXISTS connector_activation")

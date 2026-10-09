@@ -32,7 +32,6 @@ ASSEMBLAGE: tuple[str, ...] = (
     schema.visibility.TOOL_TOGGLES,  # bascules de visibilité d'outils
     schema.users.PROFILE,            # fiche profil du compte
     schema.legal.LEGAL,              # acceptations et documents légaux
-    schema.connectors.ACL,           # RBAC connecteur interne à l'org
     schema.datastore.DATASTORE,      # namespaces et lignes du datastore
     schema.datastore.REVISIONS,      # journal des révisions de ligne (oto#273)
     schema.projects.PROJECTS,        # projets, pages, révisions, liens

@@ -6,7 +6,6 @@ runs.RUNS
 visibility.TOOL_TOGGLES
 users.PROFILE
 legal.LEGAL
-connectors.ACL
 datastore.DATASTORE
 datastore.REVISIONS
 projects.PROJECTS

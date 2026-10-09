@@ -827,10 +827,10 @@ Pas de framework de tests dans le repo → validation manuelle sur **PG16 jetabl
 ## Déplacer des clés d'org vers un membre ou une équipe dédiée (ops, 24/09/2026)
 
 Restreindre un connecteur, c'est **placer la clé au bon niveau** (ADR 0053 D1) : la
-réservation d'un connecteur à une partie des membres (`connector_acl`) disparaît. Une
-org qui s'en servait pour réserver ses clés doit voir ces clés descendre au bon niveau
-avant le retrait — les clés personnelles d'UN membre (`--vers membre`), ou une ÉQUIPE
-dédiée (`--vers equipe`). Le geste est `scripts/deplacer_cles_org.py` — jamais un
+réservation d'un connecteur à une partie des membres (`connector_acl`) a disparu le
+24/09/2026. Une org qui s'en servait pour réserver ses clés les voit descendre au bon
+niveau — les clés personnelles d'UN membre (`--vers membre`), ou une ÉQUIPE dédiée
+(`--vers equipe`). Le geste est `scripts/deplacer_cles_org.py` — jamais un
 `UPDATE` : l'AAD porte `entity_type:entity_id`, donc une ligne se **déchiffre avec le
 sceau de l'org puis se réécrit** par `_upsert` (sceau du membre, `member_id(org, sub)`,
 ou de l'équipe, `group:<id>`), et l'ancienne sort par `_delete` (son instance
@@ -840,7 +840,7 @@ s'archive, la nouvelle naît), comme `backfill_member_scope`.
 # passe à blanc (défaut) : rejoue les écritures ET la relecture dans une transaction, puis ANNULE
 python -m scripts.deplacer_cles_org --org <id> --sub <sub> --connectors a,b,c --vers membre
 python -m scripts.deplacer_cles_org --org <id> --sub <sub> --connectors a,b,c \
-    --vers equipe --equipe-nom "<nom>" [--rendre-active]
+    --vers equipe --equipe-nom "<nom>" --membres a,b,c [--rendre-active]
 # valide : la même commande + --apply
 ```
 
@@ -850,10 +850,12 @@ python -m scripts.deplacer_cles_org --org <id> --sub <sub> --connectors a,b,c \
   égale à l'original, ligne d'org absente — sinon ROLLBACK (sortie 4), création de
   l'équipe comprise.
 - **`--vers equipe`** crée l'équipe dans la même transaction : `--sub` en est le chef
-  (`group_admin`, `created_by`), y entrent en `group_member` tous ceux qui résolvent
-  AUJOURD'HUI une des clés d'org (les `org_admin`, qui échappaient à la réservation ;
-  les autorisés de `connector_acl` ; tout membre si le connecteur n'était pas
-  réservé) — lus en base au lancement. Un connecteur non org-partageable est refusé :
+  (`group_admin`, `created_by`), y entrent en `group_member` les subs de `--membres`,
+  et eux seuls. ⚠️ **`--membres` est exigé** (sortie 2 sinon, refus nommé) : la table
+  qui disait qui était autorisé est retirée (#1169), et le script ne devine pas — sans
+  liste, il ouvrirait l'équipe à toute l'org en silence. Qui était autorisé se lit dans
+  l'export attesté (ci-dessous) ; le chef seul : `--membres <sub du chef>`. Un sub de la
+  liste hors de l'org : sortie 2. Un connecteur non org-partageable est refusé :
   le walker ne lit le palier équipe que pour un connecteur org-partageable.
 - ⚠️ **Une clé d'équipe n'est lue que dans l'équipe ACTIVE** (`scope.current_group` :
   `_group=` de l'appel, consultation, sinon l'équipe « maison », UNE par sub toutes
@@ -879,3 +881,25 @@ python -m scripts.deplacer_cles_org --org <id> --sub <sub> --connectors a,b,c \
   `share_mode='open'` est la valeur par défaut, pas un partage.
 - **Aucun secret** dans la sortie ni les logs (banc `tests/test_deplacer_cles_org.py`).
   Même prérequis que ci-dessus : `OTO_MCP_MASTER_KEY` doit être chargée comme au boot.
+
+## Retirer `connector_acl` : l'export d'abord (ops, oto-backend#1169)
+
+La table n'a plus de lecteur ni d'écrivain, mais porte encore des réservations. Elle
+part par la révision `0053_connector_acl_retiree`, qui **refuse** (`ExportNonAtteste`,
+rien supprimé) tant qu'une table non vide n'a pas d'export attesté. Le geste, unique,
+joué AVANT `migrer upgrade head`, par le lanceur (même ligne `systemd-run` que `migrer`,
+docs/migrations-versionnees.md §5, avec `--script deploy/archive_connector_acl.py` à la
+place de `migrer upgrade head`) :
+
+1. une transaction en lecture répétable exporte la table entière en CSV gzip vers
+   `s3://<OTO_MCP_S3_BUCKET>/archives/connector_acl/<horodatage UTC>.csv.gz` (privé) —
+   **jamais d'écrasement** : un objet présent est un refus, le bucket n'est pas versionné ;
+2. il RELIT l'objet (mêmes octets, autant d'enregistrements que de lignes) ;
+3. il pose l'attestation : `COMMENT ON TABLE connector_acl IS 'oto:exportee {objet,
+   lignes, empreinte, le}'` (`oto_mcp/db/export_avant_retrait.py`). La révision, sous
+   `ACCESS EXCLUSIVE`, recalcule compte et empreinte (md5 des lignes en JSON, triées,
+   en UTC) et ne supprime que s'ils sont ceux attestés. Une table VIDE part sans
+   attestation (base neuve, instance cible).
+
+La sortie ne porte que la clé de l'objet, le compte et l'empreinte. Rejoué sur une table
+attestée inchangée, le script ne refait rien ; table absente ou vide : rien à exporter.
