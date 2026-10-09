@@ -12,8 +12,12 @@ from ._model import _c
 # court, city or full text, and counts. NO credential, no quota of ours.
 # ⚠️ Not a duplicate of `sirene`: `fr_events` / `fr_events_batch` read the notices
 # of companies ALREADY KNOWN by their SIREN; `bodacc_*` finds the companies from the
-# notices (every receivership in a department this week). The two stay separate
-# connectors because a connector carries one credential model, and `sirene` is keyed.
+# notices (every receivership in a department this week). A connector of its own for
+# ONE reason — ACTIVATION: `sirene` is on by default for everyone, while sweeping the
+# whole bulletin is a capability an org opts into (`default_active=False`). Not a
+# credential matter: `sirene` already carries ~20 keyless tools. The FR open-data
+# convention (ADR 0028, via the FOD service) stays open for later: the client lives in
+# the public lib so the switch is a routing change, not a rewrite.
 CONNECTOR = _c(
     "bodacc", ["bodacc"], secret_kind="none",
     label="BODACC legal notices",

@@ -12,4 +12,5 @@ the whole french bulletin of civil and commercial notices, no key. one tool, `bo
 - **always bound by date**: the bulletin holds tens of millions of notices since 2008; filed accounts (`dpc`) alone are ~70 000 a week
 - **count before paging**: `op="count"` sizes a set in one call; pagination stops at offset + limit = 10 000 — past it, split the period, never page further
 - **`q` and `commercant`/`ville`/`tribunal` are word searches**, not exact matches: `commercant="ACME"` also returns "ACME FRANCE"
-- `siren` is null on a line when the notice carries no RCS number (some traders and older notices)
+- `siren` is null on a line when the notice carries no RCS number (some traders and older notices) — **and on every sale that names two companies** (seller and buyer, 80 sales out of 100): read `parties` then, each SIREN with its role (`ancien_proprietaire`, `titulaire` = the buyer, `indeterminee` when the notice does not say). Never attribute a sale to the first SIREN.
+- the company's own fields (`activite`, `forme_juridique`, `capital`, `adresse_siege`, `denomination`) come from the notice's person block; `region` is the official region name

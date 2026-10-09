@@ -22,6 +22,7 @@ from fastmcp import FastMCP
 from mcp.types import ErrorData, INVALID_PARAMS
 
 from ..mcp_errors import McpError
+from .lecture import LECTURE
 
 _SOURCE = "BODACC — DILA open data (annonces-commerciales), Licence Ouverte 2.0"
 
@@ -42,13 +43,16 @@ def _upstream_message(e) -> str:
 
 def register(mcp: FastMCP) -> None:
     import requests
-    from oto.tools.bodacc.notices import BodaccNoticesClient, BodaccQueryError
+    from oto.tools.bodacc.notices import (BodaccNoticesClient, BodaccPayloadError,
+                                          BodaccQueryError)
     from oto.tools.common.errors import UpstreamHTTPError
 
     def _client() -> BodaccNoticesClient:
         return BodaccNoticesClient()
 
-    @mcp.tool()
+    # LECTURE : trois ops qui lisent de l'open data, rien d'écrit nulle part — donc
+    # utilisable par une recette (annonces → tableau est son cas type).
+    @mcp.tool(annotations=LECTURE)
     def bodacc_notice(
         op: Literal["search", "count", "get"] = "search",
         q: Optional[str] = None,
@@ -77,12 +81,13 @@ def register(mcp: FastMCP) -> None:
         For the notices of ONE known company, `fr_events(siren)` is the shorter path.
 
         op="search" (default) — notices matching the filters, most recent first.
-        Returns `total_count`, `next_offset` (null on the last page) and `notices`:
-        flat lines `{id, date_parution, famille, type_avis, siren, commercant, ville,
-        cp, departement, tribunal, jugement_nature, jugement_date, date_cloture,
-        activite, resume, url}` — `resume` is the notice's own text. `full=true`
-        returns the full notices instead (heavy: officers, establishments, judgment). ⚠️ Pagination stops at offset+limit = 10000:
-        past it, narrow the period (`date_from`/`date_to`) rather than paging.
+        Returns `total_count`, `next_offset` (null on the last page) and `notices`: flat
+        lines — the company (`siren`, `parties`, `commercant`, `denomination`,
+        `forme_juridique`, `capital`, `adresse_siege`, `activite`), the place (`ville`,
+        `departement`, `region`, `tribunal`), the judgment, `resume` (the notice's own
+        text). ⚠️ A SALE names two companies: `siren` is null and `parties` gives each
+        SIREN with its role. `full=true` returns the full notices (heavy). ⚠️ Pagination
+        stops at offset+limit = 10000: past it, narrow the period rather than paging.
 
         op="count" — the number of matching notices grouped by `group_by` (required),
         largest first; `mois`/`jour` come in date order. Count BEFORE paging a large
@@ -139,6 +144,10 @@ def register(mcp: FastMCP) -> None:
                                        **filters)}
         except BodaccQueryError as e:
             raise _bad(str(e))
+        except BodaccPayloadError as e:
+            # L'amont a servi une annonce illisible : dit tel quel, jamais des colonnes
+            # vides en silence.
+            raise _bad(f"BODACC served an unreadable notice: {e}")
         except UpstreamHTTPError as e:
             raise _bad(_upstream_message(e))
         except requests.RequestException as e:
