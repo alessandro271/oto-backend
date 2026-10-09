@@ -28,12 +28,14 @@ from __future__ import annotations
 from typing import Optional
 
 from ._conn import _connect
+from .lecture_d_appel import lecture_d_appel
 
 # Le scope « toute la plateforme ». Convention maison — `platform` n'a pas d'id, comme
 # `guides.owner_id` et `grants.grantor_id`.
 PLATFORM_SCOPE_ID = "platform"
 
 
+@lecture_d_appel
 def list_connector_settings(key: Optional[str] = None, conn=None) -> list[dict]:
     """Toutes les surcharges (ou celles d'une `key`). La table se lit ENTIÈREMENT :
     elle porte une poignée de lignes, et son seul lecteur en veut l'intégralité pour

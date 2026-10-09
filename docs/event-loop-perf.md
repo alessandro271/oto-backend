@@ -1168,3 +1168,34 @@ multiplie la contention, d'où la queue.
 
 Preuves : `tests/test_connecteurs_me_une_connexion_1148.py`,
 `tests/test_declencheurs_liste_une_passe_1148.py`.
+
+### Une lecture par fait et par appel (#1148, 09/10/2026)
+
+Une connexion par appel ne suffisait pas : `GET /api/me/connectors` restait à 1,75 s de
+médiane (p95 4,41 s, 87 appels sur trois jours). Le profil, sur un jeu réaliste (trois
+orgs, trois équipes, des clés à tous les paliers, des prêts, Google et Microsoft liés,
+réseau coupé : aucun appel sortant) : **~200 requêtes par appel**, dont 157 dans
+`access.status_for`. Chaque module du chemin relit ce dont il a besoin sans savoir qu'un
+voisin vient de le lire — l'org active 28 fois, l'équipe active 14, les comptes Google
+une fois par service Google, les réglages des connecteurs une fois par service
+Microsoft, le rôle et la pause du prêteur à chaque passage. À 3,14 ms l'aller-retour
+vers la base managée, ~0,77 s de requêtes à elles seules.
+
+- **`db.lecture_d_appel`** (`db/lecture_d_appel.py`) : une lecture PURE de la base,
+  décorée, ne se fait qu'une fois par arguments dans une portée `db.reuse_connection()`.
+  Sa mémoire est portée par l'emprunt de la portée et meurt avec lui — l'invalidation
+  est la fin de l'appel ; la portée ne fait que lire (la condition de
+  `reuse_connection`, gardée par un banc), donc aucune écriture de l'appel ne la rend
+  périmée ; chaque appelant reçoit sa copie profonde. Une transaction explicite
+  (`conn=`) lit toujours la base. Décorées : `get_active_org`, `get_org_role`,
+  `get_active_group`, `get_group`, `list_groups_for_user`, `get_user`,
+  `get_suspension`, `list_connector_settings`, `list_shared_with`, `list_accounts`,
+  `list_credentials`, `has_credential`, `list_member_orgs_for`.
+- **Sessions navigateur** dans `status_for` : lues dans l'inventaire de chaque palier
+  (`credentials_store.statuts_mono_compte`, la lecture déjà faite par la sonde) au lieu
+  d'une requête par connecteur et par palier.
+
+Mesuré sur le jeu, aller-retour simulé à 3,14 ms, médiane de 20 appels : liste verbeuse
+199 requêtes et 773 ms → 44 et 180 ms ; `status_for` (le chemin commun de `/api/me`,
+`oto_connector op=list` et `oto_list_my_tools`) 159 et 617 ms → 25 et 102 ms. Réponses
+identiques octet pour octet. Preuves : `tests/test_connecteurs_me_rapide_1148.py`.

@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import Optional
 
 from ..db import _connect, upsert_user
+from ..db.lecture_d_appel import lecture_d_appel
 
 
 ORG_ROLES = ("org_admin", "org_member")
@@ -24,6 +25,7 @@ ORG_ROLES = ("org_admin", "org_member")
 
 # --- reads consommés par la résolution de clé (barreau 2) -------------------
 
+@lecture_d_appel
 def get_active_org(sub: str) -> Optional[int]:
     """org_id de l'organisation active du `sub`, ou None s'il n'en a aucune.
 
@@ -389,6 +391,7 @@ def get_org_member_by_email(org_id: int, email: str) -> Optional[dict]:
         return dict(row) if row else None
 
 
+@lecture_d_appel
 def get_org_role(org_id: int, sub: str) -> Optional[str]:
     with _connect() as conn:
         row = conn.execute(

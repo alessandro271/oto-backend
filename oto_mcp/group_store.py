@@ -24,6 +24,7 @@ from typing import Optional
 
 from . import providers, credentials_store
 from .db import _connect
+from .db.lecture_d_appel import lecture_d_appel
 
 GROUP_ROLES = ("group_admin", "group_member")
 
@@ -44,6 +45,7 @@ def create_group(org_id: int, name: str, description: str = "",
         return int(row["id"])
 
 
+@lecture_d_appel
 def get_group(group_id: int) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute(
@@ -169,6 +171,7 @@ def count_group_admins(group_id: int) -> int:
 
 # --- groupe actif (mirroir org_store.get/set_active_org) --------------------
 
+@lecture_d_appel
 def get_active_group(sub: str) -> Optional[int]:
     """group_id du groupe actif du sub, ou None. L'index partiel
     `org_group_members_one_active` garantit au plus une ligne active par sub."""
@@ -196,6 +199,7 @@ def default_group_in_org(sub: str, org_id: int) -> Optional[int]:
         return int(row["group_id"]) if row else None
 
 
+@lecture_d_appel
 def list_groups_for_user(sub: str, org_id: Optional[int] = None) -> list[dict]:
     """Groupes auxquels le sub appartient (option : filtrés sur une org)."""
     q = (

@@ -277,15 +277,18 @@ def _status_for_projection(sub: str, *, org: "int | None | object" = scope._UNSE
         if c.name in out["providers"] or c.secret_kind != "cookie":
             continue
         shareable = c.name in cascade.ORG_SHAREABLE_PROVIDERS
-        st = (credentials_store.credential_status(
+        # One read of each level's inventory for ALL the session connectors — the
+        # same rows the presence probe already read (#1148), never one query per
+        # connector and per level.
+        st = (credentials_store.statuts_mono_compte(
                   credentials_store.MEMBER,
-                  credentials_store.member_id(active_org, sub), c.name)
+                  credentials_store.member_id(active_org, sub)).get(c.name)
               if active_org is not None else None)
         # Shared sessions (org-shareable connector): active team then org.
         # Mirror of the resolution cascade (member > group > org).
-        grp_st = (credentials_store.credential_status("group", str(active_group), c.name)
+        grp_st = (credentials_store.statuts_mono_compte("group", str(active_group)).get(c.name)
                   if shareable and active_group is not None else None)
-        org_st = (credentials_store.credential_status("org", str(active_org), c.name)
+        org_st = (credentials_store.statuts_mono_compte("org", str(active_org)).get(c.name)
                   if shareable and active_org is not None else None)
         meta = (st or {}).get("meta") or {}
         # `mode` = winning level of the cascade (member > group > org), so the

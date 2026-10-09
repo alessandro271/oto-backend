@@ -169,8 +169,8 @@ def _wire_status(monkeypatch, *, member=False, group_secret=False, org_secret=Fa
                         lambda gid, prov: group_secret)
     monkeypatch.setattr(access.org_store, "has_org_secret",
                         lambda oid, prov: org_secret)
-    monkeypatch.setattr(access.credentials_store, "credential_status",
-                        lambda *a, **k: None)
+    monkeypatch.setattr(access.credentials_store, "statuts_mono_compte",
+                        lambda *a, **k: {})
     monkeypatch.setattr(access.group_store, "list_groups_for_user",
                         lambda sub, org_id=None: [])
     return lambda: access.status_for("u1", org=35, group=active_group)

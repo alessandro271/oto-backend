@@ -38,8 +38,8 @@ def fiche(monkeypatch):
     # Les connecteurs à SESSION (secret_kind="cookie") sont projetés par une
     # seconde boucle, qui sonde le coffre : hors sujet ici, et seule chose qui
     # restait à toucher la base.
-    monkeypatch.setattr(A_status.credentials_store, "credential_status",
-                        lambda *a, **k: None)
+    monkeypatch.setattr(A_status.credentials_store, "statuts_mono_compte",
+                        lambda *a, **k: {})
     # Sans base : aucun droit déclaré posé, le défaut d'instance (quotas non levés).
     monkeypatch.setattr(access.db_entitlements, "valeurs_posees",
                         lambda oid, sub, droit, now=None:

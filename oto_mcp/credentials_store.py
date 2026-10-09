@@ -32,6 +32,7 @@ from typing import Optional, Sequence
 
 from . import providers, crypto
 from .db import _connect, connector_instances
+from .db.lecture_d_appel import lecture_d_appel
 
 _WHITESPACE = re.compile(r"\s+")
 
@@ -135,6 +136,7 @@ def sharing_for_vault_rows(
             for r in rows}
 
 
+@lecture_d_appel
 def list_shared_with(scopes: list) -> list[dict]:
     """Instances dont le `share_side` vise l'un des `scopes` (ex. `['user:sub',
     'group:2']`) — le « partagé avec moi » (ADR 0044). Métadonnées seulement (secret
@@ -929,6 +931,7 @@ def update_meta(entity_type: str, entity_id: str, connector: str, account: str,
         return _do(c)
 
 
+@lecture_d_appel
 def list_accounts(entity_type: str, entity_id: str, connector: str) -> list[dict]:
     """Lignes (account, meta, set_at) d'un connecteur multi-compte SANS secret
     (ni le secret chiffré, ni les bearers de `meta` — cf. `_public_meta`) — pour
@@ -959,6 +962,16 @@ def credential_status(entity_type: str, entity_id: str, connector: str,
     return {"set_at": row["set_at"], "meta": _public_meta(row["meta"])}
 
 
+def statuts_mono_compte(entity_type: str, entity_id: str) -> dict[str, dict]:
+    """`{connector: credential_status(entity_type, entity_id, connector)}` for every
+    MONO-account row (`account=''`) of the entity — the same projection, from ONE read
+    of its inventory (`list_credentials`, read once per call under
+    `db.reuse_connection()`) instead of one query per connector (#1148)."""
+    return {r["connector"]: {"set_at": r["set_at"], "meta": r["meta"]}
+            for r in list_credentials(entity_type, entity_id) if r["account"] == ""}
+
+
+@lecture_d_appel
 def has_credential(entity_type: str, entity_id: str, connector: str, account: Optional[str] = None) -> bool:
     """Présence d'un secret SANS déchiffrer (pour status_for / surface d'attaque
     réduite : /api/me n'a besoin que du booléen, jamais de la valeur).
@@ -1273,6 +1286,7 @@ def rename_account(entity_type: str, entity_id: str, connector: str,
                          kept_instance_id=conservee)
 
 
+@lecture_d_appel
 def list_credentials(entity_type: str, entity_id: str) -> list[dict]:
     """Connecteurs configurés pour l'entité — SANS le secret (jamais exposé) ni les
     bearers de `meta` (filtré par `_public_meta`), mais AVEC les satellites non-secrets
@@ -1383,6 +1397,7 @@ def first_entity_with(entity_type: str, connector: str,
         return row["entity_id"] if row else None
 
 
+@lecture_d_appel
 def list_member_orgs_for(sub: str, connector: str) -> list[int]:
     """Org ids où `sub` détient un credential MEMBRE pour `connector`, triés récent
     d'abord (`set_at` DESC). Base de l'instance PERSONNELLE cross-org (issue #172,

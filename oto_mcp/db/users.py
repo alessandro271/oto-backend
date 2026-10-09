@@ -19,6 +19,7 @@ import psycopg
 logger = logging.getLogger(__name__)
 
 from ._conn import _connect
+from .lecture_d_appel import lecture_d_appel
 
 
 class OnboardingIncomplet(RuntimeError):
@@ -238,6 +239,7 @@ def upsert_user(sub: str, email: Optional[str] = None, name: Optional[str] = Non
     # du code (ADR 0052 §6). Ce qui est retiré, c'est son déclenchement automatique.
 
 
+@lecture_d_appel
 def get_user(sub: str) -> Optional[dict]:
     with _connect() as conn:
         row = conn.execute("SELECT * FROM users WHERE sub = %s", (sub,)).fetchone()
@@ -939,6 +941,7 @@ def set_user_role(sub: str, role: str) -> None:
         )
 
 
+@lecture_d_appel
 def get_suspension(sub: str) -> Optional[dict]:
     """L'état de pause d'un compte : `None` s'il est vivant (le cas de tout le monde).
 

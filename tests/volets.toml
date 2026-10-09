@@ -259,6 +259,7 @@ chemins = [
   "oto_mcp/db/invitations_ressource.py",
   "oto_mcp/db/keys.py",
   "oto_mcp/db/lecture_bornee.py",
+  "oto_mcp/db/lecture_d_appel.py",
   "oto_mcp/db/node_tables.py",
   "oto_mcp/db/node_view.py",
   "oto_mcp/db/nodes.py",

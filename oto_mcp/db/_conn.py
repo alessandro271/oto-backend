@@ -171,6 +171,9 @@ class _EmpruntParesseux:
     def __init__(self):
         self._cm = None
         self._conn: Optional[psycopg.Connection] = None
+        # Les lectures déjà faites dans la portée, par (fonction, arguments) — cf.
+        # `lecture_d_appel` (#1148). Meurent avec l'emprunt, donc avec l'appel.
+        self.lectures: dict = {}
 
     def obtenir(self) -> psycopg.Connection:
         if self._conn is None:
@@ -233,7 +236,11 @@ def reuse_connection() -> Iterator[None]:
     et rougit sur une écriture (`tests/test_connecteurs_me_une_connexion_1148.py`).
 
     Ré-entrant : un `reuse_connection()` imbriqué dans un autre ne fait rien (la
-    connexion déjà empruntée par le bloc englobant sert aux deux)."""
+    connexion déjà empruntée par le bloc englobant sert aux deux).
+
+    La portée porte aussi la mémoire des lectures décorées par `lecture_d_appel`
+    (#1148) : une par arguments, effacée à la sortie du bloc — la lecture seule est ce
+    qui la rend juste."""
     if _emprunt_partage.get() is not None:
         yield
         return
