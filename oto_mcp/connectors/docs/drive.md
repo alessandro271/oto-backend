@@ -10,3 +10,4 @@ from this card, click **connect**: Google asks you to authorize **Google Drive o
 - "list the files modified this week in the `clients` folder"
 - "read this `.xlsx` from my Drive, `quotes` tab" — a spreadsheet comes back as CSV per sheet, bounded; `sheet` picks the tab, `max_rows` the bound
 - "share this folder read-only with jane@…"
+- "export this Google Sheet as `.xlsx` to send it" — `drive_file(op=export, format=xlsx)` keeps every tab and returns a signed URL to the file ; `csv` exports the first tab only, inline

@@ -36,8 +36,16 @@ from ..auth import google as google_oauth
 
 # Ops of `sheets_spreadsheet`. Checked BEFORE any client is built: an unknown op
 # must reach no client method, never fall back on a default.
-_SPREADSHEET_OPS = ("metadata", "read", "write", "clear")
-_SPREADSHEET_OPS_HINT = "op must be 'metadata', 'read', 'write' or 'clear'"
+_SPREADSHEET_OPS = ("metadata", "read", "write", "clear", "add_sheet", "rename_sheet",
+                    "delete_sheet", "delete_rows", "number_format")
+_SPREADSHEET_OPS_HINT = ("op must be 'metadata', 'read', 'write', 'clear', 'add_sheet', "
+                        "'rename_sheet', 'delete_sheet', 'delete_rows' or 'number_format'")
+
+# The two ops that DESTROY data (a tab and everything in it ; rows, the ones below
+# moving up) are dry-run by default (signals #1384/#1386, 10/10/2026): the call says
+# what would go, `dry_run=false` does it. `clear` keeps its historical contract
+# (explicit range, no dry-run): it empties values, the cells stay.
+_DRY_RUN_OPS = ("delete_sheet", "delete_rows")
 
 # Default range of the READ only (historical contract of `sheets_read`). Neither
 # write nor clear inherit it: "the whole sheet" is an acceptable default for
@@ -108,29 +116,46 @@ def _need(value, name: str, op: str):
 def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
-    async def sheets_create(title: str, account: Optional[str] = None) -> dict:
-        """Create a new empty Google spreadsheet. Returns {id, title, url}.
+    async def sheets_create(title: str, sheets: Optional[list[str]] = None,
+                            account: Optional[str] = None) -> dict:
+        """Create a new empty Google spreadsheet. Returns {id, title, url, sheets}.
+
+        Name the tabs with `sheets` (in order): without it, Google creates ONE tab
+        named in the account's locale (`Sheet1`, `Feuille 1`…), and a write to
+        `'Prospects'!A1` right after fails because no such tab exists.
 
         Args:
             title: the new spreadsheet's title.
+            sheets: the tab titles to create, in order (e.g. ["Hypothèses", "P&L"]).
+                Omitted = Google's single default tab.
             account: Google account (email) to act as — same choice as `_account`.
         """
         client = await _client_for_user_async(account)
-        return await asyncio.to_thread(client.create, title)
+        return await asyncio.to_thread(client.create, title, sheets)
 
     @mcp.tool()
     async def sheets_spreadsheet(
         spreadsheet_id: str,
-        op: Literal["metadata", "read", "write", "clear"] = "metadata",
+        op: Literal["metadata", "read", "write", "clear", "add_sheet", "rename_sheet",
+                    "delete_sheet", "delete_rows", "number_format"] = "metadata",
         range: Optional[str] = None,
         values: Optional[list[list[Any]]] = None,
         formatted: bool = True,
         append: bool = False,
         source: Optional[dict] = None,
         allow_formulas: bool = False,
+        sheet: Optional[str] = None,
+        title: Optional[str] = None,
+        index: Optional[int] = None,
+        start_row: Optional[int] = None,
+        end_row: Optional[int] = None,
+        pattern: Optional[str] = None,
+        type: str = "NUMBER",
+        dry_run: bool = True,
         account: Optional[str] = None,
     ) -> dict:
-        """An existing spreadsheet and the cells it holds — describe, read, write, clear.
+        """An existing spreadsheet: its cells (describe, read, write, clear) and its
+        tabs, rows and number formats.
 
         `op`:
         - **"metadata"** (default): get a spreadsheet's metadata: title + the
@@ -147,6 +172,13 @@ def register(mcp: FastMCP) -> None:
           formula is written as text unless `allow_formulas=True`.
         - **"clear"**: clear all values in a range (keeps formatting). Destructive —
           `range` is required, it has no default here.
+        - **"add_sheet"** (`title`, `index`) ; **"rename_sheet"** (`sheet` → `title`).
+        - **"delete_sheet"** (the tab and EVERYTHING in it) and **"delete_rows"**
+          (`start_row`..`end_row`, 1-based inclusive): irreversible, so **dry-run by
+          default** — the call says what would go ; `dry_run=false` does it.
+        - **"number_format"**: `pattern` (`#,##0.00`, `0.0%`, `dd/mm/yyyy`) and
+          `type` applied to every cell of `range` (e.g. `'P&L'!B2:D`).
+        An unknown tab is refused, naming the existing ones.
 
         Args:
             spreadsheet_id: the spreadsheet to act on (every op).
@@ -167,12 +199,63 @@ def register(mcp: FastMCP) -> None:
             append: op="write" — False (default) OVERWRITES the range ; True appends
                 rows after the existing data (no overwrite), from the range's first
                 column.
+            sheet: op="rename_sheet"/"delete_sheet"/"delete_rows" — the tab, by title
+                or numeric id.
+            title: op="add_sheet" — the new tab's title ; op="rename_sheet" — the new
+                title.
+            index: op="add_sheet" — 0-based position of the new tab (end by default).
+            start_row: op="delete_rows" — first row to delete (1-based, as displayed).
+            end_row: op="delete_rows" — last row to delete, inclusive.
+            pattern: op="number_format" — the format pattern, as in the sheet UI.
+            type: op="number_format" — NUMBER (default) | CURRENCY | PERCENT | DATE |
+                TIME | DATE_TIME | SCIENTIFIC | TEXT.
+            dry_run: op="delete_sheet"/"delete_rows" — True (default) only says what
+                would be deleted ; False deletes.
             account: Google account (email) to act as — same choice as `_account`.
         """
         if op not in _SPREADSHEET_OPS:
             raise _bad(_SPREADSHEET_OPS_HINT)
 
         client = await _client_for_user_async(account)
+        from oto.tools.google.sheets.lib.sheets_client import SheetsClientError
+
+        def _structurel(fn, *args):
+            """A tab/row/format op: a refusal of the client (tab unknown, bounds, type)
+            comes back as an actionable error, never a bare internal error."""
+            try:
+                return fn(*args)
+            except SheetsClientError as e:
+                raise _bad(str(e)) from None
+
+        if op == "add_sheet":
+            return await asyncio.to_thread(
+                _structurel, client.add_sheet, spreadsheet_id, _need(title, "title", op), index)
+        if op == "rename_sheet":
+            return await asyncio.to_thread(
+                _structurel, client.rename_sheet, spreadsheet_id,
+                _need(sheet, "sheet", op), _need(title, "title", op))
+        if op in _DRY_RUN_OPS:
+            _need(sheet, "sheet", op)
+            if op == "delete_rows":
+                _need(start_row, "start_row", op)
+                _need(end_row, "end_row", op)
+            if dry_run:
+                sid = await asyncio.to_thread(_structurel, client.sheet_id, spreadsheet_id, sheet)
+                if op == "delete_rows" and (start_row < 1 or end_row < start_row):
+                    raise _bad("op='delete_rows': start_row >= 1 and end_row >= start_row")
+                would = ({"tab": sheet, "id": sid, "everything_in_it": True} if op == "delete_sheet"
+                         else {"tab": sheet, "id": sid, "from_row": start_row, "to_row": end_row,
+                               "rows": end_row - start_row + 1})
+                return {"dry_run": True, "would_delete": would,
+                        "note": "Nothing deleted. Irreversible: call again with dry_run=false."}
+            if op == "delete_sheet":
+                return await asyncio.to_thread(_structurel, client.delete_sheet, spreadsheet_id, sheet)
+            return await asyncio.to_thread(
+                _structurel, client.delete_rows, spreadsheet_id, sheet, start_row, end_row)
+        if op == "number_format":
+            return await asyncio.to_thread(
+                _structurel, client.number_format, spreadsheet_id,
+                _need(range, "range", op), _need(pattern, "pattern", op), type)
 
         if op == "metadata":
             return await asyncio.to_thread(client.get_metadata, spreadsheet_id)

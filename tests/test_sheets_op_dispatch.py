@@ -86,7 +86,7 @@ def test_ops_route_to_the_right_client_method(client, op, kwargs, method):
 def test_create_routes_to_create_and_touches_nothing_else(client):
     client.create.return_value = {"id": "sid", "title": "T", "url": "u"}
     assert _call("sheets_create", title="T")["id"] == "sid"
-    client.create.assert_called_once_with("T")
+    client.create.assert_called_once_with("T", None)
     for m in WRITE_METHODS:
         getattr(client, m).assert_not_called()
 

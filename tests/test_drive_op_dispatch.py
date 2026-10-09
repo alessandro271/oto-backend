@@ -346,3 +346,27 @@ def test_access_revokes_and_never_grants(client):
     _call("drive_access", file_id="f1", email="a@b.c", remove=True)
     assert client.unshare.call_args.args == ("f1", "a@b.c")
     client.share.assert_not_called()
+
+
+# --- export xlsx : un FICHIER à transmettre, pas un contenu à lire -----------------
+
+def test_export_xlsx_sert_une_url_signee_et_ne_rend_pas_le_contenu(client, monkeypatch):
+    """Signal oto #1376 : un classeur à envoyer. Le rendu générique relirait le .xlsx en
+    CSV ; ici l'agent reçoit une URL vers le fichier, avec l'extension attendue."""
+    from oto_mcp.tools import drive as D
+
+    depose = {}
+    monkeypatch.setattr(D.file_content, "render_for_agent",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("rendu inline")))
+    import oto_mcp.media_store as ms
+    monkeypatch.setattr(ms, "upload_private",
+                        lambda prefix, sub, data, mime, name: depose.update(
+                            prefix=prefix, sub=sub, mime=mime, name=name, n=len(data)) or "https://s/x")
+    monkeypatch.setattr(ms, "presign_expiry", lambda: 3600)
+    client.export_file_bytes.return_value = {"data": b"PK\x03\x04", "filename": "BP v6"}
+    out = _call("drive_file", op="export", file_id="f1", format="xlsx")
+    assert client.export_file_bytes.call_args.args[1] == D._XLSX
+    assert out == {"filename": "BP v6.xlsx", "mimeType": D._XLSX, "size": 4,
+                   "encoding": "url", "url": "https://s/x", "expires_in": 3600}
+    assert depose == {"prefix": "drive-exports", "sub": "sub-1", "mime": D._XLSX,
+                      "name": "BP v6.xlsx", "n": 4}
