@@ -274,11 +274,75 @@ def test_depot_base64_et_conflit(construits, monkeypatch):
 
 
 @pytest.mark.parametrize("kw", [{}, {"content_text": "a", "content_base64": "YQ=="},
-                                {"content_base64": "pas du base64!"}])
+                                {"content_base64": "pas du base64!"},
+                                {"content_text": "a", "source": {"kind": "url", "url": "https://x.test/a"}}])
 def test_depot_contenu_invalide(construits, monkeypatch, kw):
     with pytest.raises(McpError):
         _tool("sharepoint_file")(op="upload", drive_id="d1", name="a.txt", **kw)
     construits[0].upload.assert_not_called()
+
+
+# --- dépôt depuis une source côté serveur (signaux 1382/1385 : des PDF de plusieurs
+# Mo qu'un agent ne peut pas porter en base64 dans son contexte) ---------------------
+
+def _source_resolue(monkeypatch, data=b"%PDF-1.7", filename="rapport.pdf",
+                    mime="application/pdf"):
+    from oto_mcp import file_source
+    vus = []
+
+    def resolve(source, *, max_bytes=file_source.DEFAULT_MAX_BYTES, **kw):
+        vus.append((source, max_bytes))
+        if len(data) > max_bytes:
+            raise file_source.FileSourceError(
+                f"source {source['kind']}: fichier de {len(data)} octets, limite {max_bytes}.")
+        return file_source.ResolvedFile(data, filename, mime)
+
+    monkeypatch.setattr("oto_mcp.file_source.resolve", resolve)
+    return vus
+
+
+def test_depot_depuis_un_fichier_de_projet(construits, monkeypatch):
+    inst, _ = construits
+    inst.upload.return_value = {"id": "n1"}
+    vus = _source_resolue(monkeypatch)
+    src = {"kind": "project_file", "project_id": 7, "file_id": 42}
+    _tool("sharepoint_file")(op="upload", drive_id="d1", path="Suivi", source=src)
+    args, kw = inst.upload.call_args
+    # Le nom et le type viennent de la source quand `name` est omis ; la limite
+    # passée au résolveur est CELLE du dépôt, pas le défaut de file_source.
+    assert args == ("d1", "rapport.pdf", b"%PDF-1.7")
+    assert kw["content_type"] == "application/pdf" and kw["parent_path"] == "Suivi"
+    assert vus == [(src, X_UPLOAD_MAX())]
+
+
+def test_depot_depuis_une_url_signee_avec_nom_impose(construits, monkeypatch):
+    inst, _ = construits
+    inst.upload.return_value = {"id": "n1"}
+    _source_resolue(monkeypatch, data=b"col;val\n", filename="export.csv", mime="text/csv")
+    _tool("sharepoint_file")(op="upload", drive_id="d1", name="machines.csv",
+                             source={"kind": "url", "url": "https://s3.test/x?sig=1"})
+    args, kw = inst.upload.call_args
+    assert args[1] == "machines.csv" and kw["content_type"] == "text/csv"
+
+
+def test_depot_source_trop_grosse_refusee_nommement(construits, monkeypatch):
+    _source_resolue(monkeypatch, data=b"x" * (X_UPLOAD_MAX() + 1))
+    with pytest.raises(McpError, match="source"):
+        _tool("sharepoint_file")(op="upload", drive_id="d1",
+                                 source={"kind": "project_file", "project_id": 7, "file_id": 1})
+    construits[0].upload.assert_not_called()
+
+
+def test_source_hors_upload_refusee(construits, monkeypatch):
+    with pytest.raises(McpError, match="source"):
+        _tool("sharepoint_file")(op="list", drive_id="d1",
+                                 source={"kind": "url", "url": "https://x.test/a"})
+    construits[0].list_children.assert_not_called()
+
+
+def X_UPLOAD_MAX():
+    from oto_mcp.tools import sharepoint as X
+    return X._UPLOAD_MAX
 
 
 # --- refus amont ----------------------------------------------------------------

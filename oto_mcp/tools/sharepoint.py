@@ -31,7 +31,7 @@ from urllib.parse import urlsplit
 
 from fastmcp import FastMCP
 
-from .. import access
+from .. import access, file_source
 from ._microsoft_graph import bad as _bad, need as _need, raw as _brut
 from ._microsoft_graph import refuse_ignored as _refuse_ignored
 from ._microsoft_graph import run, token
@@ -76,9 +76,28 @@ def _item(i: dict) -> dict:
     }
 
 
-def _contenu(content_base64: Optional[str], content_text: Optional[str]) -> bytes:
-    if (content_base64 is None) == (content_text is None):
-        raise _bad("op='upload' requires `content_base64` OR `content_text` (only one).")
+def _contenu(content_base64: Optional[str], content_text: Optional[str],
+             source: Optional[dict] = None) -> tuple[bytes, Optional[str], Optional[str]]:
+    """The bytes to upload, and the (filename, mime) a server-side `source` carries.
+
+    `source` lets an agent drop a file it never held in its context (a PDF of
+    several MB from a project, a signed URL from another tool): the server fetches
+    it (`file_source.resolve`, same shapes as everywhere else) under the same
+    `_UPLOAD_MAX` as the inline forms — never a bigger file by the back door."""
+    donnes = [k for k, v in (("content_base64", content_base64),
+                             ("content_text", content_text), ("source", source))
+              if v is not None]
+    if len(donnes) != 1:
+        raise _bad("op='upload' requires exactly one of `content_base64`, `content_text` "
+                   f"or `source` (got {', '.join(donnes) or 'none'}).")
+    if source is not None:
+        try:
+            rf = file_source.resolve(source, max_bytes=_UPLOAD_MAX)
+        except file_source.FileSourceError as e:
+            raise _bad(f"`source`: {e}") from None
+        if not rf.data:
+            raise _bad("the content to upload is empty.")
+        return rf.data, rf.filename, rf.mime
     if content_text is not None:
         data = content_text.encode("utf-8")
     else:
@@ -92,7 +111,7 @@ def _contenu(content_base64: Optional[str], content_text: Optional[str]) -> byte
     if len(data) > _UPLOAD_MAX:
         raise _bad(f"{len(data) // (1024 * 1024)} MB file: this tool uploads "
                    f"up to {_UPLOAD_MAX // (1024 * 1024)} MB.")
-    return data
+    return data, None, None
 
 
 def register(mcp: FastMCP) -> None:
@@ -186,6 +205,7 @@ def register(mcp: FastMCP) -> None:
         name: Optional[str] = None,
         content_base64: Optional[str] = None,
         content_text: Optional[str] = None,
+        source: Optional[dict] = None,
         conflict: Literal["fail", "rename", "replace"] = "fail",
         as_pdf: Optional[bool] = None,
         sheet: Optional[Union[int, str]] = None,
@@ -216,10 +236,14 @@ def register(mcp: FastMCP) -> None:
           `as_pdf=true` converts another Office type, `as_pdf=false` returns the
           original bytes. Up to 50 MB.
         - **"upload"**: ⚠️ WRITES — drop a file `name` into the folder
-          `item_id`/`path` (root when omitted), from `content_base64` (any file)
-          or `content_text` (UTF-8 text). Up to 25 MB. An existing name is
-          refused by default (`conflict="fail"`); "rename" keeps both,
-          "replace" overwrites.
+          `item_id`/`path` (root when omitted), from `content_base64` (any file),
+          `content_text` (UTF-8 text) or `source` (a file the SERVER fetches, so
+          it never transits through your context: `{"kind":"project_file",
+          "project_id":…,"file_id":…}`, `{"kind":"url","url":"https://…"}` — a
+          signed URL from another tool —, `{"kind":"drive",…}`, `{"kind":"gmail",
+          …}`; `name` may be omitted, the source's filename is used). Up to 25 MB
+          whatever the form. An existing name is refused by default
+          (`conflict="fail"`); "rename" keeps both, "replace" overwrites.
         - **"create_folder"**: ⚠️ WRITES — a folder `name` inside `item_id`/
           `path` (root when omitted), same `conflict` rule.
 
@@ -232,9 +256,12 @@ def register(mcp: FastMCP) -> None:
             item_id: the item (folder for list/upload/create_folder) by id.
             path: the item by path from the drive root, instead of `item_id`.
             query: op="search" — words to look for.
-            name: op="upload"/"create_folder" — the new file or folder name.
+            name: op="upload"/"create_folder" — the new file or folder name
+                (op="upload" with `source`: defaults to the source's filename).
             content_base64: op="upload" — the file, base64-encoded.
             content_text: op="upload" — the file as plain text, instead.
+            source: op="upload" — a server-side file reference, instead
+                ({kind: project_file|url|drive|gmail, …}, ≤ 25 MB).
             conflict: op="upload"/"create_folder" — fail (default) | rename |
                 replace.
             as_pdf: op="download" — force (true) or skip (false) the PDF
@@ -249,9 +276,10 @@ def register(mcp: FastMCP) -> None:
                 and op != "download":
             raise _bad(f"`as_pdf`/`sheet`/`max_rows` only apply to op='download' "
                        f"(got op='{op}').")
-        if (content_base64 is not None or content_text is not None) and op != "upload":
-            raise _bad(f"`content_base64`/`content_text` only apply to op='upload' "
-                       f"(got op='{op}').")
+        if (content_base64 is not None or content_text is not None
+                or source is not None) and op != "upload":
+            raise _bad(f"`content_base64`/`content_text`/`source` only apply to "
+                       f"op='upload' (got op='{op}').")
         c = _client()
         drive = _drive_id(c, drive_id, user)
 
@@ -306,9 +334,11 @@ def register(mcp: FastMCP) -> None:
 
         if op == "upload":
             _refuse_ignored(op, query=query)
-            data = _contenu(content_base64, content_text)
-            fichier = _need(name, "name", op)
-            mime = mimetypes.guess_type(fichier)[0] or (
+            data, nom_source, mime_source = _contenu(content_base64, content_text, source)
+            fichier = name or nom_source
+            if not fichier:
+                fichier = _need(name, "name", op)
+            mime = mimetypes.guess_type(fichier)[0] or mime_source or (
                 "text/plain; charset=utf-8" if content_text is not None
                 else "application/octet-stream")
             return vue(_run(lambda: c.upload(drive, fichier, data, parent_id=item_id,
