@@ -17,10 +17,13 @@ money, is dry-run by default**: inviting people (`luma_guest_admin
 op="invite"`), emailing guests (`luma_blasts op="send"`), cancelling an event
 (`luma_event_admin op="cancel"`), making someone a calendar admin
 (`luma_calendar op="add_admins"`), sending the calendar's notifications to a
-URL (`luma_webhooks op="create"`) and changing a member's status, which
-captures or cancels a payment (`luma_memberships op="set_status"`). Other
-writes that may email a guest (`add`, `set_status`) say so in their docstring
-and expose `send_email`.
+URL (`luma_webhooks op="create"`), changing a member's status, which
+captures or cancels a payment (`luma_memberships op="set_status"`), putting
+someone in a tier (`luma_memberships op="add"`, payment possible), handing an
+outside email host access to an event (`luma_event_admin op="add_host"`) and
+changing a guest's status, which emails them and may refund
+(`luma_guest_admin op="set_status"`). `luma_guest_admin op="add"` may also
+email the people added: its docstring says so and it exposes `send_email`.
 """
 from __future__ import annotations
 
@@ -123,6 +126,13 @@ GUEST_ROW_OMITTED = (
     "registration_answers", "phone_number")
 CONTACT_ROW_OMITTED = ("avatar_url",)
 TIER_ROW_OMITTED = ("registration_questions", "access_info")
+#: Coupons, stock images and the organization's calendars: the `api_id`
+#: duplicates of `id` and the heavy presentation fields, as for events. A key
+#: absent from an entry is simply not removed (and not named).
+COUPON_ROW_OMITTED = ("api_id", "event_api_id", "ticket_type_api_id")
+IMAGE_ROW_OMITTED = ("api_id", "blurhash")
+CALENDAR_ROW_OMITTED = ("api_id", "description", "description_md", "cover_url",
+                        "avatar_url", "coordinate", "geo_latitude", "geo_longitude")
 #: A webhook's signing secret NEVER comes back — not in a list, not from
 #: `get`, `create` or `update` (all three return the webhook object, secret
 #: included): an agent has no use for it, and whatever it reads can end up in a

@@ -148,7 +148,9 @@ def register(mcp: FastMCP) -> None:
           `reject` emails the submitter only with `notify_submitter` or a
           `message`.
         - `add_host` / `update_host` / `remove_host` — by `email`;
-          `access_level`: manager (co-host), check-in (staff), none.
+          `access_level`: manager (co-host), check-in (staff), none. ⚠️ A
+          manager edits the event, its guest list and settings: `add_host` is
+          **dry-run by default**.
         - `transfer` — move the event to another calendar of the organization
           (`to_calendar_id`; organization key).
 
@@ -164,7 +166,8 @@ def register(mcp: FastMCP) -> None:
             message: op='reject' — note emailed to the submitter.
             notify_submitter: op='reject' — email the submitter.
             should_refund: op='cancel' — refund paid guests.
-            dry_run: op='cancel' — True (default) describes without cancelling.
+            dry_run: op='cancel' / op='add_host' — True (default) describes
+                without cancelling or granting.
             calendar_id: with an ORGANIZATION key, the calendar (`cal-…`).
         """
         c = _client(calendar_id)
@@ -206,6 +209,13 @@ def register(mcp: FastMCP) -> None:
             need(event_id, "event_id", op)
             need(email, "email", op)
             if op == "add_host":
+                if dry_run:
+                    return dry_run_reply(
+                        "give this person host access to the event",
+                        "a manager co-hosts: edits the event, its guest list "
+                        "and settings; check-in staff sees every guest",
+                        event_id=event_id, email=email,
+                        access_level=access_level, is_visible=is_visible)
                 return run(lambda: c.add_host(event_id, email,
                                               access_level=access_level,
                                               is_visible=is_visible))
@@ -301,7 +311,7 @@ def register(mcp: FastMCP) -> None:
         - `set_status` — `guest` → approved (going) | declined |
           pending_approval | waitlist. ⚠️ Luma EMAILS the guest unless
           `send_email=false`; `message` adds a note; `should_refund` refunds a
-          paid guest moved out of approved.
+          paid guest moved out of approved. **Dry-run by default.**
         - `set_tickets` — give complimentary tickets (`ticket_type_ids`) or
           invalidate tickets (`remove_ticket_ids`, refunded only with
           `should_refund`).
@@ -323,7 +333,8 @@ def register(mcp: FastMCP) -> None:
             send_email: add / set_status / set_tickets — let Luma email the guest.
             should_refund: set_status / set_tickets — refund what was paid.
             message: set_status / invite — personal note in the email.
-            dry_run: op='invite' — True (default) describes without sending.
+            dry_run: op='invite' / op='set_status' — True (default) describes
+                without sending or changing.
             calendar_id: with an ORGANIZATION key, the calendar (`cal-…`).
         """
         c = _client(calendar_id)
@@ -338,6 +349,14 @@ def register(mcp: FastMCP) -> None:
         if op == "set_status":
             need(guest, "guest", op)
             need(status, "status", op)
+            if dry_run:
+                return dry_run_reply(
+                    f"set this guest's status to {status}",
+                    "Luma emails the guest unless send_email=false; "
+                    "should_refund refunds a paid guest moved out of approved",
+                    event_id=event_id, guest=guest, status=status,
+                    send_email=send_email, should_refund=should_refund,
+                    message=message)
             return run(lambda: c.update_guest_status(
                 event_id, guest, status, should_refund=should_refund,
                 send_email=send_email, message=message))

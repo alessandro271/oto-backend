@@ -14,7 +14,8 @@ from typing import Any, Dict, List, Literal, Optional
 
 from fastmcp import FastMCP
 
-from .luma_socle import (CONTACT_ROW_OMITTED, TIER_ROW_OMITTED, WEBHOOK_SECRET,
+from .luma_socle import (CALENDAR_ROW_OMITTED, COUPON_ROW_OMITTED,
+                         IMAGE_ROW_OMITTED, CONTACT_ROW_OMITTED, TIER_ROW_OMITTED, WEBHOOK_SECRET,
                          WEBHOOK_SECRET_HOW, _client, _slim, bad_op,
                          dry_run_reply, need, run, without_secret)
 
@@ -39,6 +40,7 @@ def register(mcp: FastMCP) -> None:
         remaining_count: Optional[int] = None,
         valid_start_at: Optional[str] = None,
         valid_end_at: Optional[str] = None,
+        full: bool = False,
         calendar_id: Optional[str] = None,
         cursor: Optional[str] = None,
         limit: Optional[int] = None,
@@ -75,6 +77,8 @@ def register(mcp: FastMCP) -> None:
             remaining_count: coupon uses left.
             valid_start_at: coupon validity start (ISO 8601).
             valid_end_at: coupon validity end (ISO 8601).
+            full: op='coupons' — every field of each coupon (default: a
+                tightened view, `omitted` names what is left out).
             calendar_id: with an ORGANIZATION key, the calendar (`cal-…`).
             cursor: next page (`next_cursor` of the previous answer).
             limit: rows per page (the server caps it).
@@ -100,9 +104,11 @@ def register(mcp: FastMCP) -> None:
             return run(lambda: c.delete_ticket_type(ticket_type_id))
         if op == "coupons":
             if event_id:
-                return run(lambda: c.list_event_coupons(event_id, limit=limit,
-                                                        cursor=cursor))
-            return run(lambda: c.list_calendar_coupons(limit=limit, cursor=cursor))
+                return _slim(run(lambda: c.list_event_coupons(
+                    event_id, limit=limit, cursor=cursor)), COUPON_ROW_OMITTED, full)
+            return _slim(run(lambda: c.list_calendar_coupons(limit=limit,
+                                                             cursor=cursor)),
+                         COUPON_ROW_OMITTED, full)
         if op == "create_coupon":
             need(code, "code", op)
             need(discount, "discount", op)
@@ -238,6 +244,7 @@ def register(mcp: FastMCP) -> None:
         event_ids: Optional[List[str]] = None,
         query: Optional[str] = None,
         content_type: Optional[Literal["image/jpeg", "image/png"]] = None,
+        full: bool = False,
         dry_run: bool = True,
         calendar_id: Optional[str] = None,
         cursor: Optional[str] = None,
@@ -276,6 +283,8 @@ def register(mcp: FastMCP) -> None:
             event_ids: tag_events / untag_events.
             query: places / images.
             content_type: op='upload_url'.
+            full: images / org_calendars — every field of each entry (default:
+                a tightened view, `omitted` names what is left out).
             dry_run: op='add_admins' — True (default) describes without granting.
             calendar_id: the calendar (`cal-…`) — required by op='update';
                 with an ORGANIZATION key, the calendar every op acts on.
@@ -324,14 +333,16 @@ def register(mcp: FastMCP) -> None:
             return run(lambda: c.search_places(query))
         if op == "images":
             need(query, "query", op)
-            return run(lambda: c.search_images(query, limit=limit, cursor=cursor))
+            return _slim(run(lambda: c.search_images(query, limit=limit,
+                                                     cursor=cursor)),
+                         IMAGE_ROW_OMITTED, full)
         if op == "upload_url":
             return run(lambda: c.create_upload_url(content_type))
         if op == "org_admins":
             return run(lambda: c.list_organization_admins())
         if op == "org_calendars":
-            return run(lambda: c.list_organization_calendars(limit=limit,
-                                                             cursor=cursor))
+            return _slim(run(lambda: c.list_organization_calendars(
+                limit=limit, cursor=cursor)), CALENDAR_ROW_OMITTED, full)
         if op == "create_calendar":
             need(name, "name", op)
             return run(lambda: c.create_organization_calendar(name, fields=fields))
@@ -363,7 +374,8 @@ def register(mcp: FastMCP) -> None:
         - `tiers` — the calendar's membership tiers, hidden ones included.
           Members themselves are contacts: `luma_contacts op="list"`.
         - `add` — put `email` in `tier_id`; for a paid tier, `skip_payment`
-          when payment is handled outside Luma.
+          when payment is handled outside Luma. ⚠️ A paid tier charges the
+          person unless `skip_payment`: **dry-run by default**.
         - `set_status` — `user_id` → approved or declined. ⚠️ Approving a
           member of a PAID tier captures their payment; declining cancels
           their subscription. **Dry-run by default.**
@@ -377,7 +389,8 @@ def register(mcp: FastMCP) -> None:
             skip_payment: op='add' — payment handled outside Luma.
             registration_answers: op='add' — answers to the tier's questions.
             full: op='tiers' — with each tier's questions and access info.
-            dry_run: op='set_status' — True (default) describes without changing.
+            dry_run: op='add' / op='set_status' — True (default) describes
+                without adding or changing.
             calendar_id: with an ORGANIZATION key, the calendar (`cal-…`).
             cursor: next page (`next_cursor` of the previous answer).
             limit: rows per page (the server caps it).
@@ -390,6 +403,12 @@ def register(mcp: FastMCP) -> None:
         if op == "add":
             need(email, "email", op)
             need(tier_id, "tier_id", op)
+            if dry_run:
+                return dry_run_reply(
+                    "put this person in the membership tier",
+                    "a paid tier charges the member unless skip_payment; Luma "
+                    "may email them",
+                    email=email, tier_id=tier_id, skip_payment=skip_payment)
             return run(lambda: c.add_member(
                 email, tier_id, skip_payment=skip_payment,
                 registration_answers=registration_answers))
@@ -430,8 +449,9 @@ def register(mcp: FastMCP) -> None:
 
         ⚠️ `create` sends the calendar's notifications — guest names, emails
         and registrations included — to `url`: it is **dry-run by default**.
-        The signing `secret` is never returned, by any op (named in
-        `omitted`): whoever verifies signatures reads it in Luma's dashboard.
+        The signing `secret` is never returned, by any op, `delete` included
+        (named in `omitted`): whoever verifies signatures reads it in Luma's
+        dashboard.
 
         Args:
             op: list | get | create | update | delete.
@@ -470,5 +490,5 @@ def register(mcp: FastMCP) -> None:
                 webhook_id, event_types=event_types, status=status)))
         if op == "delete":
             need(webhook_id, "webhook_id", op)
-            return run(lambda: c.delete_webhook(webhook_id))
+            return without_secret(run(lambda: c.delete_webhook(webhook_id)))
         raise bad_op(op, "list | get | create | update | delete")

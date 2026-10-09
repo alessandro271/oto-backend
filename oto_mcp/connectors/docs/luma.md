@@ -11,7 +11,7 @@ create a key in Luma, on the calendar or on the organization (Settings → Devel
 - "this lu.ma link" → `luma_events(op="resolve", url="https://lu.ma/…")` gives the `evt-…` id
 - "who is coming?" → `luma_guests(event_id="evt-…", status="approved")`; "who checked in" → `sort_column="checked_in_at"`; one person's answers and payment → `op="get", guest="<email>"`
 - "create an event" → `luma_calendar(op="places", query="…")` for the place, then `luma_event_admin(op="create", fields={"name": …, "start_at": …, "timezone": "Europe/Paris", "geo_address_json": {"type": "google", "place_id": …}})`
-- "approve the waitlist" → `luma_guest_admin(event_id=…, op="set_status", guest="<email>", status="approved")` — Luma emails the guest unless `send_email=false`
+- "approve the waitlist" → `luma_guest_admin(event_id=…, op="set_status", guest="<email>", status="approved")` (dry-run first) — Luma emails the guest unless `send_email=false`
 - "register these people" → `luma_guest_admin(op="add", guests=[{"email": …, "name": …}])`; "invite them" → `op="invite"` (dry-run first)
 - "email the attendees" → `luma_blasts(op="send", event_id=…, content_md="…")` (dry-run first)
 - "our audience" → `luma_contacts(op="list", sort_column="event_checked_in_count", sort_direction="desc")`; segment with tags (`op="tag"`)
@@ -19,12 +19,14 @@ create a key in Luma, on the calendar or on the organization (Settings → Devel
 
 ## note — what reaches people outside your organization
 
-six gestures are **dry-run by default** and need `dry_run=false` to happen: `luma_guest_admin(op="invite")`, `luma_blasts(op="send")`, `luma_event_admin(op="cancel")`, `luma_calendar(op="add_admins")`, `luma_webhooks(op="create")` and `luma_memberships(op="set_status")`.
+nine gestures are **dry-run by default** and need `dry_run=false` to happen: `luma_guest_admin(op="invite")` and `op="set_status"`, `luma_blasts(op="send")`, `luma_event_admin(op="cancel")` and `op="add_host"`, `luma_calendar(op="add_admins")`, `luma_webhooks(op="create")`, `luma_memberships(op="set_status")` and `op="add"`.
 - ⚠️ **a calendar admin manages every event, guest list and setting** of the calendar
 - ⚠️ **a webhook sends the calendar's notifications to a URL**, guest names, emails and registrations included; its signing secret is **never** returned by oto — read it in Luma's dashboard
 - ⚠️ **cancelling an event is irreversible**: every guest is notified, the event is **deleted**, and if guests paid you must say `should_refund` explicitly
 - ⚠️ **a sent blast cannot be recalled**; deleting it only removes the post from the event page
 - ⚠️ **changing a guest's status emails them** unless `send_email=false`; `should_refund` refunds a paid guest moved out of "going"
+- ⚠️ **a host with `access_level="manager"` co-hosts the event**: they edit it, its guest list and its settings
+- ⚠️ **adding a member to a paid tier charges them** unless `skip_payment`
 - ⚠️ **approving a member of a paid membership tier captures their payment**; declining cancels their subscription
 - adding guests and sending invites runs in the background: the answer lists who will be **skipped** (unsubscribed, removed, blocked), not the final list — read it back with `luma_guests`
 

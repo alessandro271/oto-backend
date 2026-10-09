@@ -6,17 +6,22 @@ Ce que ce fichier verrouille — les tripwires génériques couvrent déjà regi
   `luma_events` et `luma_guests`, dont TOUTES les ops lisent ;
 - la clé passée telle quelle, et `calendar_id` (clé d'ORGANISATION) transmis
   au client ;
-- les trois gestes qui sortent de l'organisation sont en dry-run par défaut,
-  et le dry-run ne touche à rien d'autre que la demande de jeton d'annulation ;
+- les gestes qui sortent de l'organisation sont en dry-run par défaut, et le
+  dry-run ne touche à rien d'autre que la demande de jeton d'annulation ;
 - l'annulation d'un événement payant exige `should_refund` explicite ;
 - la vue resserrée des listes : clés nommées retirées à toute profondeur,
   enveloppe intacte, bloc `omitted` qui NOMME ce qui manque, `full=True` brut ;
 - le secret de signature d'un webhook ne sort JAMAIS : ni d'une liste, ni de
-  `get`, `create` ou `update` (qui rendent tous trois l'objet webhook) ;
-- six gestes en dry-run par défaut : invitations, blast, annulation, ajout
-  d'admins, création de webhook, statut d'un membre (qui prélève ou résilie) ;
+  `get`, `create`, `update` ou `delete` (qui rendent tous l'objet webhook) ;
+- neuf gestes en dry-run par défaut : invitations, blast, annulation, ajout
+  d'admins, création de webhook, statut d'un membre (qui prélève ou résilie),
+  statut d'un invité (qui l'emaile), hôte ajouté à un événement, membre mis
+  dans un palier (payant possible) ;
+- toute liste paginée est projetée : coupons, images et calendriers de
+  l'organisation aussi, avec `full=True` brut ;
 - les champs personnels des invités et contacts déclarés au schéma de sortie,
-  sous leurs VRAIS noms de clé, sans `name` (homonyme d'un événement, d'un tag) ;
+  sous leurs noms de clé Luma, sans `name` (homonyme d'un événement, d'un tag) —
+  cohérence interne avec les colonnes omises, PAS une preuve contre l'API ;
 - la traduction des refus amont et la sonde.
 """
 import asyncio
@@ -146,6 +151,31 @@ def test_liste_d_invites_resserree_et_nommee(client):
     assert _tool("luma_guests")(event_id="evt-1", full=True) is _GUESTS
 
 
+_COUPONS = {"entries": [{"id": "cpn-1", "api_id": "cpn-1", "code": "EARLY",
+                         "event_api_id": "evt-1"}], "has_more": False}
+
+
+@pytest.mark.parametrize("tool,kw,method,reply,retire", [
+    ("luma_tickets", {"op": "coupons", "event_id": "evt-1"}, "list_event_coupons",
+     _COUPONS, ["api_id", "event_api_id"]),
+    ("luma_calendar", {"op": "images", "query": "paris"}, "search_images",
+     {"entries": [{"id": "img-1", "image_url": "https://i.test/1.jpg",
+                   "blurhash": "LEHV6n"}], "has_more": False}, ["blurhash"]),
+    ("luma_calendar", {"op": "org_calendars"}, "list_organization_calendars",
+     {"entries": [{"id": "cal-1", "name": "N", "description": "long…",
+                   "cover_url": "https://i.test/c.jpg"}], "has_more": False},
+     ["cover_url", "description"]),
+])
+def test_coupons_images_et_calendriers_sont_projetes(client, tool, kw, method,
+                                                     reply, retire):
+    getattr(client, method).return_value = reply
+    out = _tool(tool)(**kw)
+    assert out["omitted"]["keys"] == retire
+    assert all(k not in out["entries"][0] for k in retire)
+    assert out["entries"][0]["id"] == reply["entries"][0]["id"]
+    assert _tool(tool)(full=True, **kw) is reply
+
+
 def test_rien_retire_pas_de_bloc_omitted(client):
     client.list_events.return_value = {"entries": [{"event": {"name": "N"}}],
                                        "has_more": False}
@@ -162,6 +192,7 @@ _WEBHOOK = {"id": "wh-1", "url": "https://x.test", "status": "active",
     ("create", "create_webhook", {"url": "https://x.test", "event_types": ["*"],
                                   "dry_run": False}),
     ("update", "update_webhook", {"webhook_id": "wh-1", "status": "paused"}),
+    ("delete", "delete_webhook", {"webhook_id": "wh-1"}),
 ])
 def test_le_secret_d_un_webhook_ne_sort_jamais(client, op, method, kw):
     reply = ({"entries": [dict(_WEBHOOK)], "has_more": False} if op == "list"
@@ -230,6 +261,14 @@ def test_annulation_gratuite_passe_sans_should_refund(client):
                        "event_types": ["guest.registered"]}, "create_webhook"),
     ("luma_memberships", {"op": "set_status", "user_id": "usr-1",
                           "status": "approved"}, "update_member_status"),
+    ("luma_memberships", {"op": "add", "email": "a@example.test",
+                          "tier_id": "tier-1"}, "add_member"),
+    ("luma_guest_admin", {"event_id": "evt-1", "op": "set_status",
+                          "guest": "gst-1", "status": "approved"},
+     "update_guest_status"),
+    ("luma_event_admin", {"op": "add_host", "event_id": "evt-1",
+                          "email": "a@example.test", "access_level": "manager"},
+     "add_host"),
 ])
 def test_acces_webhook_et_paiement_en_dry_run_par_defaut(client, tool, kw, method):
     out = _tool(tool)(**kw)
@@ -256,9 +295,12 @@ def test_champs_personnels_declares_sous_leurs_vrais_noms():
     assert all(f["sensitive"] for f in schema_for("luma"))
 
 
-def test_les_champs_declares_existent_dans_les_reponses_luma():
-    """Un nom inventé ne masque rien : chaque champ déclaré est une clé que
-    l'API Luma rend vraiment (invité, contact ou hôte)."""
+def test_schema_de_sortie_coherent_avec_les_colonnes_omises():
+    """Cohérence INTERNE : chaque champ déclaré au schéma est soit une colonne
+    qu'une vue resserrée omet, soit un des noms de clé que les outils citent.
+    Ce banc ne prouve rien contre l'API Luma : la lib n'embarque aucune réponse
+    capturée ; les noms viennent de la doc publique de Luma (invité, contact,
+    hôte) et un nom qui y serait faux ne masquerait rien."""
     from oto_mcp.connectors.field_schema import schema_for
     from oto_mcp.tools import luma_socle as S
     connus = {"user_email", "user_name", "user_first_name", "user_last_name",
@@ -270,7 +312,7 @@ def test_les_champs_declares_existent_dans_les_reponses_luma():
 # --- écritures directes -------------------------------------------------------
 
 def test_changement_de_statut_transmet_send_email(client):
-    _tool("luma_guest_admin")(event_id="evt-1", op="set_status",
+    _tool("luma_guest_admin")(event_id="evt-1", op="set_status", dry_run=False,
                               guest="gst-1", status="approved", send_email=False)
     client.update_guest_status.assert_called_once_with(
         "evt-1", "gst-1", "approved", should_refund=None, send_email=False,
