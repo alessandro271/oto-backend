@@ -27,11 +27,11 @@ CREATE INDEX IF NOT EXISTS idx_doc_embeddings_hnsw
     ON doc_embeddings USING hnsw (embedding halfvec_cosine_ops);
 
 -- Embeddings des sources NON-page (oto/#6 C) : briefs de projet + guides on-demand.
--- Table générique keyée (kind, ref) — ref = projects.id (brief) | guides.id (guide) ;
--- même modèle 1024d que doc_embeddings. Le worker draine `embed_dirty` de projects/guides.
+-- Table générique keyée (kind, ref) — ref = projects.id (brief) | nodes.id (node) ;
+-- même modèle 1024d que doc_embeddings. Le worker draine `embed_dirty` de projects/nodes.
 CREATE TABLE IF NOT EXISTS aux_embeddings (
-    kind TEXT NOT NULL,                          -- 'brief' | 'guide'
-    ref BIGINT NOT NULL,                         -- projects.id | guides.id
+    kind TEXT NOT NULL,                          -- 'brief' | 'node'
+    ref BIGINT NOT NULL,                         -- projects.id | nodes.id
     content_sha TEXT NOT NULL,
     embedding halfvec(1024) NOT NULL,
     model TEXT NOT NULL,

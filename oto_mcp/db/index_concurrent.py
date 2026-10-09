@@ -74,16 +74,22 @@ class IndexConcurrent:
     #: pour un index antérieur à la référence du registre : aucune révision à rejouer.
     revision: Optional[str] = None
     max_lignes: int = CONSTRUCTION_MAX_LIGNES
+    #: Un index UNIQUE (une clé portée par un index, faute de clé primaire possible).
+    unique: bool = False
+
+    @property
+    def _create(self) -> str:
+        return "CREATE UNIQUE INDEX" if self.unique else "CREATE INDEX"
 
     @property
     def ddl_concurrent(self) -> str:
         """La construction de la révision : concurrente, hors transaction."""
-        return f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {self.nom} ON {self.table} {self.forme}"
+        return f"{self._create} CONCURRENTLY IF NOT EXISTS {self.nom} ON {self.table} {self.forme}"
 
     @property
     def ddl_demarrage(self) -> str:
         """La construction du démarrage d'une base neuve : dans sa transaction."""
-        return f"CREATE INDEX IF NOT EXISTS {self.nom} ON {self.table} {self.forme}"
+        return f"{self._create} IF NOT EXISTS {self.nom} ON {self.table} {self.forme}"
 
     @property
     def sql_validite(self) -> str:
@@ -255,8 +261,9 @@ def declares() -> tuple[IndexConcurrent, ...]:
     pas le poser : un banc compare cette liste aux déclarations du code.
 
     Import tardif : les modules déclarants importent celui-ci."""
-    from . import index_releve, search
-    return (index_releve.RELEVE, *index_releve.OUVERTURES, *search.INDEX_VALEURS)
+    from . import access_shadow, index_releve, search
+    return (index_releve.RELEVE, *index_releve.OUVERTURES, *search.INDEX_VALEURS,
+            access_shadow.CLE_ORIGINE)
 
 
 class RevisionSansIndex(ValueError):

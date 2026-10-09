@@ -11,13 +11,14 @@ process sait de lui-même (`config.origine_du_process`), et vaut `NULL` quand il
 peut pas savoir (dev, tests) comme sur les lignes écrites avant elle : un inconnu se
 déclare, il ne se devine pas.
 
-⚠️ **L'écriture ne suppose PAS la forme de la clé primaire**, et c'est délibéré.
-Étendre la clé à `origine` est un ordre NON additif, donc une commande explicite
-(`scripts/migrate_shadow_origine.py`, ADR 0065) qui ne tourne pas au même instant que
-le déploiement. Entre les deux, l'ancienne clé tient encore et deux origines se
-partagent une ligne : l'écriture le détecte et **fusionne**, c'est-à-dire qu'elle rend
-exactement le comportement d'avant la colonne. Un `ON CONFLICT` figé sur l'une des deux
-formes, lui, casserait d'un côté ou de l'autre de la migration.
+**La clé porte l'origine** : un index unique `(day, connector, org_id, classe, origine)
+NULLS NOT DISTINCT` (`CLE_ORIGINE`), et aucune clé primaire — une clé primaire refuse le
+NULL, et les lignes d'origine inconnue doivent rester uniques entre elles. Une base
+neuve la reçoit du démarrage ; une base servie, de la révision
+`0052_shadow_l7_cle_origine`, qui retire l'ancienne clé primaire `(day, connector,
+org_id, classe)` une fois l'index posé. Sous l'ancienne clé, deux origines ne peuvent
+pas avoir chacune leur ligne : l'écriture le DIT (elle lève) au lieu de mélanger les
+compteurs.
 """
 from __future__ import annotations
 
@@ -29,10 +30,31 @@ import psycopg
 
 from .. import config
 from ._conn import _connect
+from .index_concurrent import IndexConcurrent
 
 logger = logging.getLogger(__name__)
 
+#: La révision qui étend la clé à l'origine sur une base servie.
+REVISION_CLE_ORIGINE = "0052_shadow_l7_cle_origine"
+
+#: La clé du compteur : posée CONCURRENTLY par la révision (ou à la main au-delà du
+#: seuil de taille, docs/migrations-versionnees.md §5.1), dans sa transaction par le
+#: démarrage d'une base neuve. `NULLS NOT DISTINCT` : deux lignes d'origine inconnue
+#: pour la même (jour, connecteur, org, classe) sont un doublon, pas deux lignes.
+CLE_ORIGINE = IndexConcurrent(
+    nom="access_shadow_l7_origine_key",
+    table="access_shadow_l7",
+    forme="(day, connector, org_id, classe, origine) NULLS NOT DISTINCT",
+    revision=REVISION_CLE_ORIGINE,
+    unique=True,
+)
+
 _COLONNES = "day, connector, org_id, classe, n, first_at, last_at, sample, origine"
+
+#: Créditer la ligne du jour de CETTE origine (`IS NOT DISTINCT FROM` : l'inconnue comprise).
+_CREDITER = ("UPDATE access_shadow_l7 SET n = n + %s, last_at = NOW() "
+             "WHERE day = CURRENT_DATE AND connector = %s AND org_id = %s "
+             "AND classe = %s AND origine IS NOT DISTINCT FROM %s")
 
 # « L'appelant n'a rien dit » ≠ « l'appelant dit : origine inconnue ». Les deux
 # existent, et `None` ne peut pas porter les deux sens : sans cette sentinelle, un
@@ -52,13 +74,9 @@ def bump_shadow(connector: str, org_id: Optional[int], classe: str, n: int = 1,
         return
     origine = config.origine_du_process() if origine is _AUTO else origine
     payload = json.dumps(sample or {}, ensure_ascii=False, sort_keys=True)
+    cle = (int(n), connector, int(org_id or 0), classe, origine)
     with _connect() as conn:
-        touchees = conn.execute(
-            "UPDATE access_shadow_l7 SET n = n + %s, last_at = NOW() "
-            "WHERE day = CURRENT_DATE AND connector = %s AND org_id = %s "
-            "AND classe = %s AND origine IS NOT DISTINCT FROM %s",
-            (int(n), connector, int(org_id or 0), classe, origine)).rowcount
-        if touchees:
+        if conn.execute(_CREDITER, cle).rowcount:
             return
         try:
             # Bloc imbriqué : un échec d'unicité ne doit pas condamner la transaction
@@ -72,15 +90,16 @@ def bump_shadow(connector: str, org_id: Optional[int], classe: str, n: int = 1,
             return
         except psycopg.errors.UniqueViolation:
             pass
-        # L'ANCIENNE clé primaire tient encore (la commande de migration n'a pas
-        # tourné) : une ligne existe déjà pour ce jour, cette classe et cette org,
-        # sous une AUTRE origine. On la crédite — les deux environnements se
-        # partagent la ligne, exactement comme avant la colonne. Perdre le compte
-        # serait pire que le mélanger.
-        conn.execute(
-            "UPDATE access_shadow_l7 SET n = n + %s, last_at = NOW() "
-            "WHERE day = CURRENT_DATE AND connector = %s AND org_id = %s AND classe = %s",
-            (int(n), connector, int(org_id or 0), classe))
+        # Une COURSE : un autre process a créé la ligne de cette origine entre notre
+        # UPDATE et notre INSERT. On la crédite.
+        if conn.execute(_CREDITER, cle).rowcount:
+            return
+    # L'unicité a refusé une ligne que la clé à l'origine aurait acceptée : la base
+    # porte encore l'ANCIENNE clé primaire, qui ne connaît pas l'origine.
+    raise RuntimeError(
+        "access_shadow_l7 : une ligne d'une autre origine occupe la même (jour, "
+        "connecteur, org, classe) — la clé n'est pas étendue à `origine` sur cette base. "
+        f"Jouer la révision {REVISION_CLE_ORIGINE} (oto-mcp migrer upgrade head).")
 
 
 def read_shadow(days: int = 7, connector: Optional[str] = None,

@@ -264,8 +264,7 @@ def index_ddl() -> list[str]:
         # (Les deux index `idx_guides_*` ne sont plus POSÉS ici depuis le 23/09/2026,
         # oto#239 : ils ne servaient plus aucune requête — la recherche lit `nodes`
         # depuis #282 — et leur DDL faisait de ce fichier un écrivain de la table
-        # morte. Les index EXISTANTS en base ne sont pas droppés ici : DDL non
-        # additive, geste d'exploitation, docs/live-migrations.md.)
+        # morte. Les index existants partent avec elle, révision 0051.)
         # Couches de contexte converties en NŒUDS (#282). Index sur `nodes` ENTIÈRE,
         # sans prédicat partiel : la table porte des dizaines de lignes (seule la
         # façade des guides y écrit), et le prédicat se décidera quand les lignes de

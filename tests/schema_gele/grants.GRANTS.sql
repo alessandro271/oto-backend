@@ -53,6 +53,5 @@ classe TEXT NOT NULL,
 n BIGINT NOT NULL DEFAULT 0,
 first_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 last_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-sample JSONB NOT NULL DEFAULT '{}'::jsonb,
-CONSTRAINT access_shadow_l7_pkey PRIMARY KEY (day, connector, org_id, classe)
+sample JSONB NOT NULL DEFAULT '{}'::jsonb
 );

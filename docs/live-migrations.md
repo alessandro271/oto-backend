@@ -39,7 +39,7 @@ geste) ; un geste manuel, nulle part. **Un commentaire de code n'est jamais la t
 d'un DDL** (`docs/migrations-versionnees.md` §5.3, vécu sur
 `unipile_accounts.feed_synced_at`, #1162).
 
-### En cours : la table `guides` (oto#239)
+### Fait : la table `guides` (oto#239)
 
 - **Lot 1 — livré le 23/09/2026** : plus aucune ligne de code ne touche `guides`. Sont
   partis dans le même commit son `CREATE TABLE IF NOT EXISTS` (`db/schema/guides.py`),
@@ -50,10 +50,10 @@ d'un DDL** (`docs/migrations-versionnees.md` §5.3, vécu sur
   `tests/test_search_reads_nodes.py` §4.
   ⚠️ **Le `CREATE TABLE IF NOT EXISTS` devait partir en premier** : tant qu'il restait,
   un démarrage RECRÉAIT la table après son `DROP`, et le lot 2 n'aurait rien retiré.
-- **Lot 2 — à faire, pas ici** : `DROP TABLE guides` (et, à sa suite, les index
-  `idx_guides_*` et les lignes `aux_embeddings` de genre `guide`, keyées sur
-  `guides.id`). DDL non additive, jamais au démarrage : **décision d'Alexis**, exécutée
-  par l'opérationnel une fois le lot 1 en production.
+- **Lot 2 — la révision `0051_guides_retiree`** (oto-backend#1169) : `DROP TABLE guides`
+  (ses index `idx_guides_*` partent avec elle) et `DELETE` des lignes `aux_embeddings` de
+  genre `guide`, keyées sur `guides.id`. Idempotente, sans verrou là où c'est déjà fait ;
+  jamais au démarrage.
 
 ## Les techniques (toutes vécues, toutes nécessaires)
 

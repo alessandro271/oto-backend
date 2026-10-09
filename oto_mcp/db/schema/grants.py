@@ -197,6 +197,12 @@ CREATE TABLE IF NOT EXISTS grant_counters (
 -- `sample` porte la PREMIÈRE occurrence du jour pour cette classe, et rien de
 -- nominatif : le sub y est HACHÉ, seuls les paliers et l'équipe en cause sont en
 -- clair (une équipe est ce sur quoi on agit, un sub ne l'est pas).
+--
+-- ⚠️ **Aucune clé primaire, et c'est voulu** : la clé porte aussi `origine` (posée par
+-- `_init.py`), NULL quand l'environnement ne se nomme pas — ce qu'une clé primaire
+-- refuse. Elle est l'index unique `access_shadow_l7_origine_key` … NULLS NOT DISTINCT,
+-- posé au démarrage après la colonne (`db/access_shadow.CLE_ORIGINE`) ; une base servie
+-- l'a reçu de la révision 0052, qui a retiré l'ancienne clé primaire.
 CREATE TABLE IF NOT EXISTS access_shadow_l7 (
     day       DATE   NOT NULL,
     connector TEXT   NOT NULL,
@@ -206,7 +212,6 @@ CREATE TABLE IF NOT EXISTS access_shadow_l7 (
     n         BIGINT NOT NULL DEFAULT 0,
     first_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    sample    JSONB  NOT NULL DEFAULT '{}'::jsonb,
-    CONSTRAINT access_shadow_l7_pkey PRIMARY KEY (day, connector, org_id, classe)
+    sample    JSONB  NOT NULL DEFAULT '{}'::jsonb
 );
 """

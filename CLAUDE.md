@@ -118,7 +118,7 @@ surface `me.guide{,s}` (ADR 0042) ; **procédure** = guide nommé chargé à la 
 (le « digest d'ouverture » a été retiré le 10/09/2026, oto#159) · ⚠️ l'injection au handshake **n'est pas garantie** : le bloc A est un socle ≤ 2 000 c. (budget CI
 `tests/test_instructions_budget.py`) qui pointe le guide `notice` et `oto_context` ; tant que `oto_context` n'est pas lu depuis la
 dernière modification du README de l'org de l'appel, **chaque réponse d'outil le rappelle en tête** (`rappel_contexte.py`, sans état) · ⚠️ guides = **tout-DB** (dans `nodes` ; la table `guides` est sortie
-du code le 23/09/2026, oto#239 — son DROP reste un geste d'exploitation),
+du code le 23/09/2026, oto#239, et retirée des bases par la révision 0051),
 `oto_mcp/guides/*.md` sont les **seeds** : le semis de démarrage empreinte ce qu'il pose, met à jour un guide dont la
 base n'a pas bougé, CONSERVE et signale une base éditée — défauts servis par `oto_admin_guides_semis`, geste unique
 `scripts/aligner_guides_plateforme.py` (oto#236, `docs/guides.md`, `docs/alias-deprecies.md`).

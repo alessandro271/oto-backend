@@ -35,7 +35,6 @@ CREATE TABLE IF NOT EXISTS platform_instructions (
 -- ne la crée, ne l'altère, ne l'indexe ni ne la recopie — un `CREATE TABLE IF NOT
 -- EXISTS` laissé en place la faisait RENAÎTRE au démarrage suivant un `DROP`, et le
 -- boot continuait d'écrire dans une table que plus rien ne lit pour servir.
--- Le `DROP TABLE guides` lui-même n'est PAS ici : DDL non additive sur une base
--- partagée, jamais au démarrage — décision d'Alexis, exécutée par l'opérationnel
--- une fois ce code livré en production (docs/live-migrations.md, « la danse en N lots »).
+-- Une base servie la perd par la révision `0051_guides_retiree` : un retrait n'est
+-- jamais au démarrage (docs/migrations-versionnees.md §5.3).
 """

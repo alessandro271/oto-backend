@@ -13,7 +13,7 @@ import time
 
 import psycopg
 
-from . import (_prerequis, index_concurrent, index_releve, _tenant_primaire, _version_alembic, connector_instances, datastore_ns, journal_revisions,
+from . import (_prerequis, access_shadow, index_concurrent, index_releve, _tenant_primaire, _version_alembic, connector_instances, datastore_ns, journal_revisions,
                revision, rowlock, transcription, user_subscriptions)
 from ._conn import _connect
 from ._ddl_garde import GardeDdl, ddl_a_faire
@@ -310,12 +310,12 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # **NULLABLE, et c'est le point** : les lignes écrites avant cette colonne
     # restent NULL — elles sont réellement ambiguës, et on ne réécrit pas l'histoire
     # en leur prêtant une origine qu'on ne connaît pas.
-    # ⚠️ La clé primaire, elle, ne bouge PAS ici : l'y étendre est un ordre NON
-    # additif (DROP CONSTRAINT), donc une commande explicite — `scripts/
-    # migrate_shadow_origine.py`, ADR 0065. Tant qu'elle n'a pas tourné, deux
-    # origines partagent une ligne ; l'écriture le sait et se dégrade au
-    # comportement d'avant (cf. `db/access_shadow.bump_shadow`).
+    # La CLÉ porte l'origine : un index unique NULLS NOT DISTINCT, posé ici après la
+    # colonne sur une base neuve (le fragment ne déclare plus de clé primaire). Une
+    # base servie le reçoit de la révision 0052 (CONCURRENTLY), qui retire aussi
+    # l'ancienne clé primaire — un retrait n'est jamais au démarrage (§5.3).
     conn.execute("ALTER TABLE access_shadow_l7 ADD COLUMN IF NOT EXISTS origine TEXT")
+    index_concurrent.poser_au_demarrage(conn, access_shadow.CLE_ORIGINE)
     # ADR 0052 (lot L2) — le tenant PORTE son émetteur, et les domaines qui le
     # désigneront en L3. Contrairement à L1, aucun ordre à tenir vis-à-vis des
     # données : colonnes nullables ou defaultées, aucune FK à satisfaire, donc
@@ -906,9 +906,8 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # Les 23 lignes mesurées en production le 2026-09-01 étaient déjà toutes dans
     # `nodes`, aucune plus récente que son nœud.
     #
-    # Le `DROP TABLE guides` n'est PAS ici : DDL non additive sur une base partagée
-    # prod/preprod, jamais au démarrage — décision d'Alexis, exécutée par
-    # l'opérationnel une fois ce code livré (docs/live-migrations.md).
+    # Le `DROP TABLE guides` n'est PAS ici — un retrait n'est jamais au démarrage :
+    # c'est la révision 0051 (docs/migrations-versionnees.md §5.3).
     # Outbox sémantique des couches de contexte (#282) : `nodes` ne porte pas de
     # colonne `embed_dirty` (la forme de la table est mesurée, 0063-D3 garde-fou 1)
     # → le marqueur est une clé de `props`, et son index est PARTIEL sur elle seule
@@ -1492,9 +1491,10 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
                    "scope_type", ("platform", "org", "tenant", "group"))
     _conn_act.seed_initial(conn)
     # Chantier ACL B2 : les 4 tables legacy ne sont plus lues par aucun code — DROP.
-    # (La table qui les avait remplacées, `connector_acl`, n'est plus lue non plus
-    # depuis le 24/09/2026 : la restriction d'accès « vers le bas » a disparu, ADR
-    # 0053 D1. Elle reste déclarée tant qu'un DDL posé à la main ne l'a pas retirée.)
+    # (La table qui les avait remplacées, `connector_acl`, n'est plus lue par le
+    # service depuis le 24/09/2026 : la restriction d'accès « vers le bas » a disparu,
+    # ADR 0053 D1. Elle reste déclarée tant que `scripts/deplacer_cles_org.py` y lit
+    # qui était autorisé ; son retrait passera par une révision, §5.3.)
     conn.execute("DROP TABLE IF EXISTS org_connector_access")
     conn.execute("DROP TABLE IF EXISTS group_connector_access")
     conn.execute("DROP TABLE IF EXISTS connector_activation")

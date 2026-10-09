@@ -179,10 +179,8 @@ def test_writing_a_guide_puts_it_back_in_the_outbox():
 # « la plus récente gagne » jouée à chaque boot, c'est-à-dire une synchronisation
 # permanente là où il fallait une fenêtre de promotion.
 #
-# ⚠️ Ce que ces tests ne gardent PAS, et c'est voulu : le `DROP TABLE guides`. DDL non
-# additive sur une base partagée prod/preprod, jamais au démarrage — décision
-# d'Alexis, exécutée par l'opérationnel une fois ce code livré
-# (docs/live-migrations.md). Le code qui ne la touche plus part d'abord.
+# ⚠️ Ce que ces tests ne gardent PAS : le `DROP TABLE guides`. Un retrait n'est jamais
+# au démarrage ; c'est la révision 0051 (`tests/test_retraits_en_revision_1169.py`).
 
 def test_no_code_path_touches_the_legacy_table():
     """Plus une seule instruction SQL ne nomme `guides` dans la couche base."""

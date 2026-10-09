@@ -15,8 +15,8 @@ désormais un `nodes.id`, alors que les lignes `kind='guide'` déjà en base por
 `guides.id` — deux séquences indépendantes. Sous le même genre, les deux keyings se
 recouvriraient (`UNIQUE (kind, ref)`) et la PROD, qui tourne l'ancien code sur CETTE
 MÊME base, servirait l'embedding d'un AUTRE guide sans la moindre erreur. Les lignes
-`kind='guide'` restent donc intactes le temps de la fenêtre ; leur purge appartient
-au lot qui suivra le tag prod (docs/live-migrations.md).
+`kind='guide'` sont restées intactes le temps de la fenêtre ; la révision
+`0051_guides_retiree` les purge avec la table.
 """
 from __future__ import annotations
 
