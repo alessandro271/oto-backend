@@ -35,6 +35,7 @@ coupe CES attentes aussi : à 2 s, une construction a échoué en production
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
@@ -45,6 +46,16 @@ logger = logging.getLogger(__name__)
 #: fait à la main. 100 000 lignes de `tool_calls` se construisent en une fraction de
 #: seconde ; un index d'expression coûteux déclare un seuil plus bas.
 CONSTRUCTION_MAX_LIGNES = 100_000
+
+#: Le plafond qu'un APPELANT impose au seul chemin révision (`poser_par_revision`), par
+#: l'environnement de la commande `migrer` qu'il lance. Né pour la porte d'une instance
+#: cible (#1195, `deploy/cible/migrations_a_jour.py`) : sa montée joue les migrations sans
+#: geste humain, en CONCURRENTLY (rien de bloqué) et sous une limite de 1 200 s — le seul
+#: risque y est la durée, pas la fenêtre de démarrage. Elle relève donc le plafond, borné
+#: (~10 M lignes, calculé là-bas). Absente : le plafond de l'index. Présente : sa valeur,
+#: validée — jamais un défaut silencieux. Le démarrage (`poser_au_demarrage`) et la
+#: commande manuelle ne la lisent pas.
+PLAFOND_ENV = "OTO_MIGRATION_INDEX_MAX_LIGNES"
 
 #: Hors transaction, un `SET` vaut pour la SESSION : il est remis à zéro en sortie.
 ATTENTE_MAX = "SET lock_timeout = '5min'"
@@ -125,6 +136,29 @@ class IndexInvalide(RuntimeError):
             "interrompue). " + index.procedure)
 
 
+class PlafondInvalide(ValueError):
+    """`PLAFOND_ENV` posée mais illisible : un entier strictement positif, rien d'autre."""
+
+    def __init__(self, brut: str) -> None:
+        super().__init__(
+            f"{PLAFOND_ENV}={brut!r} : attendu un entier strictement positif (le plafond de "
+            "lignes au-delà duquel la révision renvoie au geste manuel).")
+
+
+def plafond_impose() -> Optional[int]:
+    """Le plafond imposé par l'appelant de `migrer`, ou `None` s'il n'en impose pas."""
+    brut = os.environ.get(PLAFOND_ENV)
+    if brut is None or brut == "":
+        return None
+    try:
+        plafond = int(brut)
+    except ValueError:
+        raise PlafondInvalide(brut) from None
+    if plafond <= 0:
+        raise PlafondInvalide(brut)
+    return plafond
+
+
 class ConstructionManuelleRequise(RuntimeError):
     """L'index est absent d'une table trop grosse pour le construire ici."""
 
@@ -176,14 +210,22 @@ def poser_au_demarrage(conn, index: IndexConcurrent) -> None:
 def poser_par_revision(op, index: IndexConcurrent) -> None:
     """Le corps d'`upgrade()` d'une révision de ce régime, sous `autocommit_block` :
     construire si le verdict le permet, puis VÉRIFIER la validité — un index laissé
-    invalide lève au lieu d'être estampillé fait."""
+    invalide lève au lieu d'être estampillé fait.
+
+    Le seul chemin qui lit `PLAFOND_ENV` : l'appelant de `migrer` (la porte d'une cible)
+    peut relever le plafond de taille, et lui seul. Un plafond illisible lève avant toute
+    lecture de la base."""
+    plafond = plafond_impose()
+    if plafond is not None:
+        logger.info("%s : plafond de construction imposé par l'appelant, %d lignes "
+                    "(défaut %d)", index.nom, plafond, index.max_lignes)
     with op.get_context().autocommit_block():
         bind = op.get_bind()
 
         def scalaire(sql: str):
             return bind.exec_driver_sql(sql).scalar()
 
-        if not a_construire(index, scalaire):
+        if not a_construire(index, scalaire, max_lignes=plafond):
             return
         op.execute(ATTENTE_MAX)
         try:

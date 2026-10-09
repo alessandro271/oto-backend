@@ -14,15 +14,28 @@ from oto_mcp.db import index_concurrent as ic
 from oto_mcp.db.index_releve import RELEVE
 
 
-def _faux(*, valide, trop_grosse=False):
+def _faux(*, valide, trop_grosse=False, seuil=ic.CONSTRUCTION_MAX_LIGNES):
     vus: list[str] = []
 
     def scalaire(sql: str):
         vus.append(sql)
         if sql == RELEVE.sql_validite:
             return valide
-        assert sql == RELEVE.sql_table_trop_grosse(ic.CONSTRUCTION_MAX_LIGNES)
+        assert sql == RELEVE.sql_table_trop_grosse(seuil)
         return trop_grosse
+    return scalaire, vus
+
+
+def _table_de(lignes: int):
+    """Une base dont la table compte `lignes` : le verdict lit `reltuples > seuil`."""
+    vus: list[str] = []
+
+    def scalaire(sql: str):
+        vus.append(sql)
+        if sql == RELEVE.sql_validite:
+            return None
+        seuil = int(sql.split("reltuples > ")[1].split(" ")[0])
+        return lignes > seuil
     return scalaire, vus
 
 
@@ -51,6 +64,85 @@ def test_valide_ne_fait_rien():
     scalaire, vus = _faux(valide=True)
     assert ic.a_construire(RELEVE, scalaire) is False
     assert vus == [RELEVE.sql_validite]
+
+
+# --- le plafond imposé par l'appelant de `migrer` (#1195, porte d'une cible) -------------
+
+def test_sans_plafond_impose_le_seuil_est_celui_de_l_index(monkeypatch):
+    monkeypatch.delenv(ic.PLAFOND_ENV, raising=False)
+    assert ic.plafond_impose() is None
+    scalaire, _ = _table_de(150_000)
+    with pytest.raises(ic.ConstructionManuelleRequise):
+        ic.a_construire(RELEVE, scalaire, max_lignes=ic.plafond_impose())
+
+
+def test_le_plafond_impose_construit_en_dessous_et_refuse_au_dessus(monkeypatch):
+    monkeypatch.setenv(ic.PLAFOND_ENV, "10000000")
+    assert ic.plafond_impose() == 10_000_000
+    scalaire, _ = _table_de(5_000_000)
+    assert ic.a_construire(RELEVE, scalaire, max_lignes=ic.plafond_impose()) is True
+    scalaire, _ = _table_de(15_000_000)
+    with pytest.raises(ic.ConstructionManuelleRequise) as e:
+        ic.a_construire(RELEVE, scalaire, max_lignes=ic.plafond_impose())
+    assert "10000000 lignes" in str(e.value)
+
+
+@pytest.mark.parametrize("brut", ["dix", "0", "-5", "1.5"])
+def test_un_plafond_illisible_est_une_erreur_nommee(monkeypatch, brut):
+    monkeypatch.setenv(ic.PLAFOND_ENV, brut)
+    with pytest.raises(ic.PlafondInvalide, match=ic.PLAFOND_ENV):
+        ic.plafond_impose()
+
+
+def test_la_revision_lit_le_plafond_la_porte_ne_le_voit_pas(monkeypatch):
+    """`poser_par_revision` passe le plafond au verdict ; sans plafond, le seuil de l'index."""
+    monkeypatch.setenv(ic.PLAFOND_ENV, "10000000")
+    scalaire, vus = _table_de(5_000_000)
+    executes: list[str] = []
+
+    class _Bind:
+        def exec_driver_sql(self, sql):
+            class _R:
+                def scalar(_self, _sql=sql):
+                    return True if "indisvalid" in _sql and executes else scalaire(_sql)
+            return _R()
+
+    class _Ctx:
+        def autocommit_block(self):
+            import contextlib
+            return contextlib.nullcontext()
+
+    class _Op:
+        def get_context(self): return _Ctx()
+        def get_bind(self): return _Bind()
+        def execute(self, sql): executes.append(sql)
+
+    ic.poser_par_revision(_Op(), RELEVE)
+    assert RELEVE.ddl_concurrent in executes
+    assert any("reltuples > 10000000" in v for v in vus)
+
+
+def test_le_demarrage_ignore_le_plafond_impose(monkeypatch, caplog):
+    """La fenêtre de démarrage bloque les écritures : son seuil ne se relève pas."""
+    monkeypatch.setenv(ic.PLAFOND_ENV, "10000000")
+    scalaire, vus = _table_de(5_000_000)
+    executes: list[str] = []
+
+    class _Conn:
+        def execute(self, sql):
+            executes.append(sql)
+            class _Cur:
+                def fetchone(_self):
+                    v = scalaire(sql)
+                    return {"v": v}
+            return _Cur()
+
+    import logging
+    with caplog.at_level(logging.ERROR):
+        ic.poser_au_demarrage(_Conn(), RELEVE)
+    assert RELEVE.ddl_demarrage not in executes
+    assert any(f"reltuples > {ic.CONSTRUCTION_MAX_LIGNES}" in v for v in vus)
+    assert "dépasse 100000 lignes" in caplog.text
 
 
 def test_le_verdict_contre_une_vraie_base(live):

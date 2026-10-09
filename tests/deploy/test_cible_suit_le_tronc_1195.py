@@ -20,6 +20,7 @@ base dicté ; la chaîne en root simulé (`_banc_cible.py`).
 from __future__ import annotations
 
 import importlib.util
+import os
 import subprocess
 import textwrap
 
@@ -104,6 +105,8 @@ def test_une_base_en_retard_lineaire_est_migree_puis_relue(lineaire, monkeypatch
     sortie = capsys.readouterr()
     assert "chaîne linéaire : 0035 → 0037" in sortie.err
     assert "on joue `migrer upgrade head` depuis l'arbre du tag (0031 → 0037)" in sortie.out
+    assert ("un index CONCURRENTLY se construit jusqu'à 10_000_000 lignes (défaut 100_000)"
+            in sortie.out)
     assert "migrations : base migrée de 0031 vers 0037" in sortie.out
 
 
@@ -204,15 +207,30 @@ def test_un_argument_inconnu_refuse(lineaire, monkeypatch, capsys):
 def test_la_migration_part_de_l_arbre_du_tag(monkeypatch):
     lances = []
 
-    def lancer(commande, timeout):
-        lances.append((commande, timeout))
+    def lancer(commande, timeout, env):
+        lances.append((commande, timeout, env))
         return subprocess.CompletedProcess(commande, 0)
     monkeypatch.setattr(garde.subprocess, "run", lancer)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://exemple.invalid/base")
+    monkeypatch.delenv(garde.index_concurrent.PLAFOND_ENV, raising=False)
     garde.migrer_la_base()
-    (commande, delai), = lances
+    (commande, delai, env), = lances
     assert commande == [str(garde.ARBRE / ".venv" / "bin" / "oto-mcp"),
                         "migrer", "upgrade", "head"]
     assert delai == garde.DELAI_MIGRATION_S
+    # Le plafond relevé des index CONCURRENTLY : sur CETTE commande, par-dessus
+    # l'environnement du lanceur (`DATABASE_URL` comprise) — jamais dans celui de la porte.
+    assert env[garde.index_concurrent.PLAFOND_ENV] == str(garde.PLAFOND_INDEX_LIGNES)
+    assert env["DATABASE_URL"] == "postgresql://exemple.invalid/base"
+    assert garde.index_concurrent.PLAFOND_ENV not in os.environ
+
+
+def test_le_plafond_releve_tient_dans_la_fenetre_de_migration():
+    """172 s par index pour ~12 M lignes (prod, 04/10/2026), trois index pour 0049 :
+    le plafond doit laisser la construction sous `DELAI_MIGRATION_S`."""
+    secondes_par_ligne = 172 / 12_000_000
+    assert 3 * garde.PLAFOND_INDEX_LIGNES * secondes_par_ligne < garde.DELAI_MIGRATION_S
+    assert garde.PLAFOND_INDEX_LIGNES > garde.index_concurrent.CONSTRUCTION_MAX_LIGNES
 
 
 @pytest.mark.parametrize("issue, motif", [
@@ -220,7 +238,7 @@ def test_la_migration_part_de_l_arbre_du_tag(monkeypatch):
     (subprocess.TimeoutExpired([], 1), "n'a pas fini en"),
 ])
 def test_une_migration_qui_echoue_ou_pend_est_un_refus(monkeypatch, issue, motif):
-    def lancer(commande, timeout):
+    def lancer(commande, timeout, env):
         if isinstance(issue, Exception):
             raise issue
         return issue

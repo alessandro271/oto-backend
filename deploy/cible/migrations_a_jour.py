@@ -53,6 +53,7 @@ import psycopg  # noqa: E402
 from alembic.script import ScriptDirectory  # noqa: E402
 from psycopg.rows import dict_row  # noqa: E402
 
+from oto_mcp.db import index_concurrent  # noqa: E402
 from oto_mcp.db._version_alembic import (_REGISTRE, BaseAnterieureALaReference,  # noqa: E402
                                          EtatRegistre, constater, versions_de)
 
@@ -63,6 +64,16 @@ DELAI_S = 15
 # Une migration peut réécrire une grosse table : large, mais borné — une montée suspendue
 # tient le verrou de la porte et toutes les montées suivantes derrière elle.
 DELAI_MIGRATION_S = 1200
+# Jusqu'où une révision construit elle-même un index CONCURRENTLY pendant CETTE migration
+# (`index_concurrent.PLAFOND_ENV`, lu par le seul chemin révision). Le plafond commun
+# (100 000 lignes) protège la fenêtre de démarrage, où la construction bloque les écritures ;
+# ici elle est concurrente (rien de bloqué) et le seul risque est la durée. Calibré sur la
+# mesure, pas deviné : 172 s par index pour ~12 M lignes en production (04/10/2026) ; la
+# révision 0049 en pose trois, soit ~9 min pour 12 M lignes, sous `DELAI_MIGRATION_S`
+# (1 200 s). 10 M lignes gardent la marge. Au-delà : `ConstructionManuelleRequise`, et le
+# geste est `oto-mcp maintenance index-concurrents <révision>` sur le rôle. Un index
+# INVALIDE reste un geste manuel, ici comme partout (décision du 09/10/2026).
+PLAFOND_INDEX_LIGNES = 10_000_000
 
 
 class Refus(Exception):
@@ -131,12 +142,16 @@ def lire_base(dsn: str) -> tuple[EtatRegistre, list[str]]:
 def migrer_la_base() -> None:
     """`oto-mcp migrer upgrade head` DEPUIS CET ARBRE — le registre du tag qu'on monte.
 
-    Il hérite de l'environnement du lanceur (`DATABASE_URL` comprise) ; sa sortie va au
-    journal du run. Un échec refuse : la couleur ne démarre pas, et la base peut s'être
-    arrêtée entre deux révisions — le refus dit comment le lire."""
+    Il hérite de l'environnement du lanceur (`DATABASE_URL` comprise), plus le plafond de
+    construction des index (`PLAFOND_INDEX_LIGNES`) — posé sur cette commande seulement,
+    jamais dans l'environnement de la porte ; sa sortie va au journal du run. Un échec
+    refuse : la couleur ne démarre pas, et la base peut s'être arrêtée entre deux révisions
+    — le refus dit comment le lire."""
     commande = [str(ARBRE / ".venv" / "bin" / "oto-mcp"), "migrer", "upgrade", "head"]
+    environnement = {**os.environ,
+                     index_concurrent.PLAFOND_ENV: str(PLAFOND_INDEX_LIGNES)}
     try:
-        fini = subprocess.run(commande, timeout=DELAI_MIGRATION_S)
+        fini = subprocess.run(commande, timeout=DELAI_MIGRATION_S, env=environnement)
     except subprocess.TimeoutExpired as depasse:
         raise Refus(f"`migrer upgrade head` n'a pas fini en {DELAI_MIGRATION_S} s") from depasse
     if fini.returncode != 0:
@@ -234,6 +249,10 @@ def main(argv: Sequence[str] = (),
             print(message, file=sys.stderr)
             print(f"migrations : on joue `migrer upgrade head` depuis l'arbre du tag "
                   f"({depuis} → {tete})")
+            print(f"migrations : un index CONCURRENTLY se construit jusqu'à "
+                  f"{PLAFOND_INDEX_LIGNES:_} lignes (défaut "
+                  f"{index_concurrent.CONSTRUCTION_MAX_LIGNES:_}) ; au-delà, "
+                  f"`oto-mcp maintenance index-concurrents <révision>`")
             sys.stdout.flush()
             migrer()
             apres = verdict(tete, connues, *lire(dsn))

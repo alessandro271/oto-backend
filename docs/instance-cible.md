@@ -157,14 +157,20 @@ root par la porte : aucun droit de plus à donner au runner ni à la clé de dé
 | registre du tag à plusieurs têtes ou vide | **refus**, sans lire la base |
 | migration en échec, ou pas à la tête une fois jouée | **refus** : la couleur ne démarre pas ; la base peut s'être arrêtée entre deux révisions — lire `migrer current` avant toute relance |
 
-**Un index trop gros pour la montée.** Une révision qui pose un index CONCURRENTLY
-(`migrations-versionnees.md` §5.1 — 0049 par exemple) refuse de le construire au-delà de son
-seuil de taille : la montée s'arrête sur `ConstructionManuelleRequise`, la couleur ne démarre
-pas. Le geste est une commande de l'arbre, jouée par le même lanceur que `migrer current`
-ci-dessous, sur le rôle concerné (sa préprod d'abord, puis sa prod) : `lanceur_secrets.py
-maintenance index-concurrents <révision>`, puis relancer la montée — la révision constate
-ses index et passe. Un index **invalide** est nommé avec son `DROP` à jouer à la main, jamais
-retiré par la commande ni par la montée.
+**Un index CONCURRENTLY, construit par la montée jusqu'à ~10 M lignes.** Une révision qui
+pose un index CONCURRENTLY (`migrations-versionnees.md` §5.1 — 0049 par exemple) ne le
+construit d'elle-même que sur une petite table (100 000 lignes) : ce plafond protège la
+fenêtre de démarrage, où la construction bloque les écritures. Pendant la montée, elle est
+concurrente (rien de bloqué) et bornée par les 20 min de la migration : la porte relève donc
+le plafond à **10 000 000 lignes** (`OTO_MIGRATION_INDEX_MAX_LIGNES`, posée sur la seule
+commande `migrer` qu'elle lance — calibrage : 172 s par index pour ~12 M lignes mesurés en
+production, trois index pour 0049, soit ~9 min), et le journal du run le dit. Au-delà, la
+montée s'arrête sur `ConstructionManuelleRequise`, la couleur ne démarre pas, et le geste est
+une commande de l'arbre, jouée par le même lanceur que `migrer current` ci-dessous, sur le
+rôle concerné (sa préprod d'abord, puis sa prod) : `lanceur_secrets.py maintenance
+index-concurrents <révision>`, puis relancer la montée — la révision constate ses index et
+passe. Un index **invalide** (construction interrompue) est nommé avec son `DROP` à jouer à
+la main, jamais retiré par la commande ni par la montée.
 
 Sur un refus, ce qui sert n'a pas été touché : rien n'a démarré, rien n'a basculé. Une base
 injoignable est nommée par la classe de l'erreur seulement : son message peut porter l'hôte ou

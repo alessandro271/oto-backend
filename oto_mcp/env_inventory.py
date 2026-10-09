@@ -418,6 +418,12 @@ _REGLAGES: tuple[Variable, ...] = (
     Variable("OTO_MCP_DDL_STATEMENT_TIMEOUT_MS", Classe.REGLAGE, "60000",
              "`statement_timeout` du DDL à chaud.",
              ("oto_mcp/db/_conn.py:98", "oto_mcp/db/_conn.py:105")),
+    Variable("OTO_MIGRATION_INDEX_MAX_LIGNES", Classe.REGLAGE, "",
+             "Plafond de lignes jusqu'où une RÉVISION construit elle-même un index "
+             "CONCURRENTLY — posé par l'appelant de `migrer` (la porte d'une instance "
+             "cible, #1195) ; absent = le plafond de l'index (100 000). Le démarrage ne "
+             "le lit pas.",
+             ("oto_mcp/db/index_concurrent.py:150",)),
     Variable("OTO_MCP_DB_POOL_MAX", Classe.REGLAGE, "24",
              "Taille max du pool de connexions PG applicatif.",
              ("oto_mcp/db/_conn.py:126",)),

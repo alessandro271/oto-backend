@@ -520,9 +520,14 @@ neuve : `poser_au_demarrage`, non concurrent). Au-delà du seuil de taille (esti
 `pg_class.reltuples`), ni la révision ni le démarrage ne le construisent — mesuré en
 production, 172 s pour environ 12 M lignes de `tool_calls`, au-delà des 120 s de la
 fenêtre de démarrage : la révision lève `ConstructionManuelleRequise`, le démarrage le dit
-en erreur et continue. Le geste manuel est une **commande versionnée**, jouée par le
-lanceur comme `migrer` (la ligne `systemd-run` du §5), puis la révision rejouée constate
-les index et ne construit rien :
+en erreur et continue. **Exception : la montée d'une instance cible** (`instance-cible.md`
+§ Les migrations, jouées par la montée), qui joue `migrer` en CONCURRENTLY sous une limite
+de 20 min : elle pose `OTO_MIGRATION_INDEX_MAX_LIGNES` sur cette seule commande, et la
+révision construit jusqu'à ~10 M lignes (172 s par index pour ~12 M lignes, trois index
+pour 0049). Sur notre box, rien ne change. Au-delà du plafond, ou sur notre box dès
+100 000 lignes, le geste manuel est une **commande versionnée**, jouée par le lanceur
+comme `migrer` (la ligne `systemd-run` du §5), puis la révision rejouée constate les index
+et ne construit rien :
 
 ```
 oto-mcp maintenance index-concurrents 0049      # ou l'identifiant complet de la révision
