@@ -193,9 +193,10 @@ def test_live_status_map_probe_failsoft(monkeypatch):
     assert asyncio.run(connector_identities._unipile_live_status_map("u1")) == {"H1": "OK"}
 
 
-def test_unipile_hosted_status_failsoft_ok(monkeypatch):
-    # Lecture live indisponible (panne / clé absente) → fallback « ok », jamais de
-    # régression d'affichage (comportement d'avant préservé).
+def test_unipile_hosted_status_failsoft_unknown(monkeypatch):
+    # Lecture live indisponible (panne / clé absente) → la liste est servie quand même
+    # (fail-soft), mais le statut est `unknown`, plus le défaut « ok » qui faisait lire
+    # un compte mort comme vivant (signal 1360, décision du 10/10/2026).
     monkeypatch.setattr(access, "credential_mode_for", lambda sub, prov: "platform")
     monkeypatch.setattr(access, "current_org", lambda sub: 39)
     monkeypatch.setattr("oto_mcp.db.list_account_grants_to", lambda sub: [])
@@ -209,7 +210,8 @@ def test_unipile_hosted_status_failsoft_ok(monkeypatch):
         return {}
     monkeypatch.setattr(connector_identities, "_unipile_live_status_map", _live_map)
     ids = asyncio.run(connector_identities.list_identities("u1", "unipile"))
-    assert ids[0]["status"] == "ok"
+    assert ids[0]["status"] == "unknown"
+    assert ids[0]["status_measured"] is False
 
 
 def test_unipile_hosted_scopes_accounts_to_current_org(monkeypatch):

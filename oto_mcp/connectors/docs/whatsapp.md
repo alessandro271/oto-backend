@@ -11,6 +11,10 @@ your WhatsApp is connected as a **linked device** — like WhatsApp Web, but the
 - "reply to [contact]: let's meet Thursday at 2pm"
 - "summarize the thread with [contact] since Monday"
 
+## note — the 100 most recent threads
+
+`op=list` returns at most 100 threads per call, newest first, and Unipile does not paginate WhatsApp: an older thread is read by its `chat_id`, not reached by the list. a message whose photo, voice note or poll Unipile did not pass on is marked `content_unavailable` — its content is unknown, not empty.
+
 ## note — the phone stays the master of the account
 
 your phone stays the master of the account: if it unlinks the device, the session dies and the card goes back to needing a connection.

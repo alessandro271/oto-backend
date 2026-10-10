@@ -31,6 +31,7 @@ from mcp.types import ErrorData, INTERNAL_ERROR, INVALID_PARAMS
 from .. import access, db, providers, session_org, status_hints
 from ..connectors import flow as connector_flow
 from ..connectors import verify as connector_verify
+from . import unipile_messagerie
 
 logger = logging.getLogger(__name__)
 
@@ -948,10 +949,14 @@ def register_messaging_tools(mcp: FastMCP, channel: str) -> None:
         description=(
             f"{channel} messaging (DM) via Unipile.\n\n"
             "`op`:\n"
-            "- **\"list\"** (default): the conversations, paginated (`limit` + `cursor`). "
-            "Each 1-to-1 thread is enriched with the counterpart's name (`attendee_name`); "
-            "`with_names=False` turns this enrichment off (raw payload, one API call fewer).\n"
-            "- **\"read\"**: the messages of a thread (`chat_id` from op=\"list\").\n"
+            "- **\"list\"** (default): the conversations, newest first, in `items` "
+            f"(`limit` 1-{unipile_messagerie.LISTE_MAX}). A `cursor` is returned only when "
+            "Unipile paginates the channel (WhatsApp does not: a full page carries "
+            "`truncated`). Each 1-to-1 thread is enriched with the counterpart's name "
+            "(`attendee_name`); `with_names=False` turns this enrichment off (one API call "
+            "fewer).\n"
+            "- **\"read\"**: the messages of a thread (`chat_id` from op=\"list\"). A message "
+            "Unipile passed on without text nor attachment carries `content_unavailable`.\n"
             "- **\"send\"**: sends a message. `chat_id` → replies in an existing thread; "
             "otherwise `recipient_id` → opens a new thread."),
     )
@@ -968,13 +973,18 @@ def register_messaging_tools(mcp: FastMCP, channel: str) -> None:
             return McpError(ErrorData(code=INVALID_PARAMS, message=msg))
 
         if op == "list":
-            return client.list_chats(limit=limit if limit is not None else 20,
-                                     cursor=cursor, with_attendee_names=with_names)
+            refus = unipile_messagerie.borne_de_liste(limit)
+            if refus:
+                raise _bad(refus)
+            page = limit if limit is not None else 20
+            return unipile_messagerie.page_de_fils(
+                client.list_chats(limit=page, cursor=cursor,
+                                  with_attendee_names=with_names), page)
         if op == "read":
             if chat_id is None:
                 raise _bad("op='read' requires chat_id")
-            return client.list_messages(chat_id,
-                                        limit=limit if limit is not None else 30)
+            return unipile_messagerie.page_de_messages(client.list_messages(
+                chat_id, limit=limit if limit is not None else 30))
         if op == "send":
             if text is None:
                 raise _bad("op='send' requires text")

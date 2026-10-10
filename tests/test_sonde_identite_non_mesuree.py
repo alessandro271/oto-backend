@@ -9,8 +9,8 @@ C'est le défaut #201/#236 par un TROISIÈME chemin : non plus le statut périm�
 PANNE DE SONDE. Le fail-soft était assumé et documenté ; ce qui manquait, c'est qu'il
 se dise.
 
-⚠️ On ne change PAS la valeur servie (le front la lit) : on ajoute le fait qu'elle n'a
-pas été mesurée. La corriger en `unknown` demanderait une décision de contrat.
+La décision de contrat est prise (10/10/2026, signal 1360) : la valeur servie devient
+`unknown` quand elle n'a pas été mesurée, et le fait est dit à côté.
 """
 from __future__ import annotations
 
@@ -38,15 +38,16 @@ def revente(monkeypatch):
 
 
 def test_sonde_en_panne_le_statut_est_dit_NON_mesure(revente, monkeypatch):
-    """La sonde échoue en bloc → map vide. Le statut reste « ok » (contrat inchangé),
-    mais l'appelant apprend que personne ne l'a constaté."""
+    """La sonde échoue en bloc → map vide. Le statut est `unknown`, jamais le défaut
+    « ok » (signal 1360, décision du 10/10/2026 : un compte mort se lisait vivant
+    pendant que chaque appel rendait 500), et l'appelant apprend pourquoi."""
     async def _live_map(sub):
         return {}
     monkeypatch.setattr(I, "_unipile_live_status_map", _live_map)
     ident = asyncio.run(I._unipile_list("u1"))[0]
-    assert ident["status"] == "ok"
+    assert ident["status"] == "unknown"
     assert ident["status_measured"] is False
-    assert "last KNOWN state" in ident["status_hint"]
+    assert "UNKNOWN, not ok" in ident["status_hint"]
     assert "dead" in ident["status_hint"], "le hint doit nommer le risque, pas le taire"
 
 
@@ -68,5 +69,5 @@ def test_compte_absent_de_la_sonde_est_aussi_non_mesure(revente, monkeypatch):
         return {"autre": "ok"}
     monkeypatch.setattr(I, "_unipile_live_status_map", _live_map)
     ident = asyncio.run(I._unipile_list("u1"))[0]
-    assert ident["status"] == "ok"
+    assert ident["status"] == "unknown"
     assert ident["status_measured"] is False

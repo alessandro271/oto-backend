@@ -328,8 +328,10 @@ async def _unipile_list(sub: str, canal: str | None = None) -> list[dict]:
         "ok" without any trace warning it: a really dead account
         showed up as connected, which is the #201/#236 defect through a third
         path — that of the PROBE OUTAGE, not that of the stale status.
-        We don't change the served value (the front reads it), we say whether it was
-        MEASURED. False ⟹ `status` is the stored status, not an observation."""
+        Since 10/10/2026 (signal 1360, Alexis's decision): an unmeasured status is served
+        as `unknown`, never as the « ok » default — an agent that reads `status` alone
+        took a dead account for a live one while every call answered 500. The front
+        shows `unknown` as a non-ok status."""
         return account_id in _live.get("map", {})
     if cli is not None:  # BYO: the key's accounts (existing list)
         # oto-backend#867 — NO LONGER swallow the failure: this is the list itself
@@ -363,18 +365,20 @@ async def _unipile_list(sub: str, canal: str | None = None) -> list[dict]:
             org = access.current_org(sub)
             accounts = [a for a in accounts if a.get("org_id") == org]
         for a in accounts:
+            mesure = await _live_status(a["account_id"])
             out.append({
                 "id": a["account_id"],
                 "label": a.get("account_name") or a["account_id"],
-                "status": await _live_status(a["account_id"]),
+                "status": mesure if _statut_mesure(a["account_id"]) else "unknown",
                 # Said ONLY on a discrepancy: an always-present field becomes noise
                 # that people stop reading. Absent ⟹ the status was indeed measured.
                 **({} if _statut_mesure(a["account_id"]) else {
                     "status_measured": False,
                     "status_hint": (
-                        "the liveness probe did not answer for this account: "
-                        "`status` is the last KNOWN state, not an observation. A dead "
-                        "account may show up there as \"ok\". Retry to measure."),
+                        "the liveness probe did not answer for this account: its "
+                        "state is UNKNOWN, not ok — a dead account looks exactly like "
+                        "this. Retry to measure, or call the channel's tool and read its "
+                        "error."),
                 }),
                 "is_default": a["account_id"] == _unipile_chosen(sub, a["provider"]),
                 "channel": a["provider"],
@@ -403,10 +407,12 @@ async def _unipile_list(sub: str, canal: str | None = None) -> list[dict]:
             libelle = f"team account ({via_group['name'] or via_group_id})"
         else:
             libelle = f"account of {g.get('owner_name') or g.get('owner_email') or g['owner_sub']}"
+        mesure = await _live_status(g["account_id"])
         out.append({
             "id": g["account_id"],
             "label": f"{g.get('account_name') or g['account_id']} — {libelle}",
-            "status": await _live_status(g["account_id"]),
+            "status": mesure if _statut_mesure(g["account_id"]) else "unknown",
+            **({} if _statut_mesure(g["account_id"]) else {"status_measured": False}),
             "is_default": g["account_id"] == _unipile_chosen(sub, g["provider"]),
             "channel": g["provider"],
             "granted": True,

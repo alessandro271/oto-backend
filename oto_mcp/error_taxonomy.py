@@ -420,6 +420,20 @@ def _first_upstream_message(exc) -> str:
     return str(exc)
 
 
+#: Longest upstream detail echoed on a 5xx: a body can be a whole error page.
+_DETAIL_5XX_MAX = 300
+
+
+def _detail_5xx(raw: str) -> str:
+    """The upstream's own words on a 5xx, or "" when they say nothing useful: empty,
+    an HTML page (a proxy's error page), or a bare restatement of the status."""
+    texte = (raw or "").strip()
+    if not texte or "<html" in texte.lower() or "<!doctype" in texte.lower():
+        return ""
+    texte = " ".join(texte.split())
+    return texte if len(texte) <= _DETAIL_5XX_MAX else texte[:_DETAIL_5XX_MAX] + "…"
+
+
 def _looks_like_timeout(exc) -> bool:
     for e in _chain(exc):
         if isinstance(e, (asyncio.TimeoutError, TimeoutError)):
@@ -538,8 +552,13 @@ def classify(exc, parametres: Optional[list] = None) -> ErrorInfo:
             return ErrorInfo("upstream_4xx", False,
                              raw or f"Request refused by the upstream service ({sc}).")
         if 500 <= sc < 600:
+            # Its message, when it says something (scrubbed, bounded, never an HTML page):
+            # « the upstream service hit an error (500) » alone could not tell an outage
+            # from a disconnected account (WhatsApp, 05/10/2026, signals 1354 and 1359).
+            detail = _detail_5xx(raw)
             return ErrorInfo("upstream_5xx", True,
-                             f"The upstream service hit an error ({sc}).",
+                             f"The upstream service hit an error ({sc})"
+                             + (f": {detail}" if detail else "."),
                              "retry later")
 
     # (4) Timeout not carried by a status.
