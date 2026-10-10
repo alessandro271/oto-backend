@@ -47,6 +47,7 @@
 #   BG_DRAIN_MAX      plafond du drain, en secondes
 #   BG_LOCK           verrou du déploiement (un par environnement)
 #   BG_CADDYFILE      Caddyfile que `caddy validate` juge avant chaque reload
+#   BG_CADDY          FACULTATIF : le binaire Caddy qui juge (défaut : caddy-custom, sinon caddy)
 #   BG_DRAIN          script de vidange différée (chemin STABLE : il tourne après nous)
 #   BG_DRAIN_UNIT     nom de l'unité transitoire de vidange (une par environnement)
 #   BG_LANCEUR        versionne — le lanceur est celui DU TAG (deploy/lanceur_secrets.py),
@@ -67,6 +68,15 @@
 # la base est à la tête que connaît ce code, #1195).
 # ============================================================================
 set -uo pipefail
+
+# Le binaire Caddy qui JUGE la config est celui que l'unité `caddy` LANCE, pas forcément
+# celui du paquet : sur une box dont le Caddyfile porte une directive d'un module tiers
+# (`rate_limit`, limite de débit posée le 09/10/2026), `/usr/bin/caddy` la refuse et
+# toute bascule bleu/vert est bloquée — préprod rouge le 10/10, amont restauré, aucun
+# dégât. `caddy-custom` (le binaire xcaddy de la box) prime donc, puis `caddy` ; `BG_CADDY`
+# surcharge les deux (une cible qui nomme son binaire). Même règle que le déploiement
+# de Caddy lui-même (`deploy-caddy.sh` d'infra).
+bg_caddy() { echo "${BG_CADDY:-$(command -v caddy-custom || command -v caddy)}"; }
 
 HEALTH_PATH="/.well-known/oauth-authorization-server"
 # Attente du trafic public après le reload de Caddy (bg_public_ok) : un essai toutes
@@ -270,7 +280,8 @@ bg_switch() {
   local color=$1
   cp -a "$BG_UPSTREAM" "${BG_UPSTREAM}.prev" 2>/dev/null
   bg_write_upstream "$color"
-  if ! caddy validate --config "$BG_CADDYFILE" --adapter caddyfile >/dev/null 2>&1; then
+  local caddy; caddy=$(bg_caddy)
+  if ! "$caddy" validate --config "$BG_CADDYFILE" --adapter caddyfile >/dev/null 2>&1; then
     bg_log "caddy validate REFUSE la config — amont restauré, pas de bascule"
     [ -f "${BG_UPSTREAM}.prev" ] && cp -a "${BG_UPSTREAM}.prev" "$BG_UPSTREAM"
     return 1

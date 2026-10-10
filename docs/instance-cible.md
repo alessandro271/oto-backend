@@ -25,7 +25,9 @@ propriétaire de la cible (§ Le déclencheur, dans le dépôt du propriétaire)
 
 `deploy/oto-mcp-bluegreen.sh` sert nos deux environnements **et** chaque cible. Tout ce
 qu'elle codait en dur pour notre box est devenu une variable que le wrapper **déclare** :
-verrou (`BG_LOCK`), Caddyfile validé avant chaque reload (`BG_CADDYFILE`), script et
+verrou (`BG_LOCK`), Caddyfile validé avant chaque reload (`BG_CADDYFILE` ; le binaire qui juge
+est celui que l'unité lance, `caddy-custom` s'il existe, sinon `caddy`, ou `BG_CADDY` s'il est
+déclaré : un Caddyfile qui porte une directive d'un module tiers serait refusé par le paquet), script et
 unité de vidange (`BG_DRAIN`, `BG_DRAIN_UNIT`), mode du lanceur (`BG_LANCEUR`), en plus
 des ports, arbres, amont et couleur qu'elle recevait déjà. **Aucune n'a de défaut** : une
 variable oubliée refuse le chargement en la nommant, et un pointeur de couleur absent est
