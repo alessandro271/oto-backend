@@ -110,6 +110,9 @@ _REFUS_DU_MINT = (
     DeclaredError(404, "unknown_doc", "la page visée (`doc_id`) n'existe pas"),
     DeclaredError(404, "unknown_project", "le projet visé (`project_id`) n'existe pas"),
     DeclaredError(403, "forbidden", "l'appelant n'a pas l'écriture sur la cible"),
+    DeclaredError(400, "bad_parent",
+                  "`target=doc`, `op=create` : `parent_id` n'existe pas ou n'est pas une "
+                  "page du projet visé (même garde qu'`oto_doc op=create`)"),
     DeclaredError(400, "upsert_without_key",
                   "`upsert=true` sur un tableau sans clé métier, et sans `key` : il n'y "
                   "aurait rien sur quoi fusionner"),
