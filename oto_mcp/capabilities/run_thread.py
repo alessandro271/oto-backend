@@ -33,7 +33,6 @@ jamais reprendre un `_claimed_run` lu sur une ligne.
 from __future__ import annotations
 
 import json
-import os
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel
@@ -156,8 +155,9 @@ def run_de_l_en_tete(sub: Optional[str], run_id: str) -> Optional[int]:
     org = run["org_id"]
     if org is not None:
         org = int(org)
-        super_admin = (run["role"] == access.SUPER_ADMIN
-                       or sub == os.environ.get("OTO_MCP_ADMIN_SUB"))
+        # `role_effectif` : surcharge d'amorçage ET borne d'un jeton de délégation,
+        # sur la colonne déjà lue — pas une requête de plus.
+        super_admin = access.role_effectif(sub, run["role"]) == access.SUPER_ADMIN
         if run["org_role"] is None and not super_admin:
             raise AuthzDenied(403, "forbidden",
                               f"Le run se déroule dans l'org #{org}, dont tu n'es pas membre.")

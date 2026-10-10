@@ -39,17 +39,35 @@ SUPER_ADMIN = "super_admin"
 ROLES = (MEMBER, ADMIN, SUPER_ADMIN)
 
 
+def role_effectif(sub: Optional[str], role: Optional[str]) -> str:
+    """THE platform role of `sub`, from a `users.role` value ALREADY READ — the single
+    point every platform predicate derives from (`get_user_role`, `is_operator_role`,
+    and a caller that read the column in its own SQL, e.g. `run_thread`).
+
+    Order: `OTO_MCP_ADMIN_SUB` override, then validation against `ROLES`, then the
+    delegation bound (`verrou_org.role_plateforme`): under a runner job's delegation
+    token the bearer is not the operator — `admin`/`super_admin` read `member` in
+    `enforce` (`OTO_VERROU_ROLES_PLATEFORME`). The bound comes LAST, so the bootstrap
+    sub does not escape it."""
+    from .. import verrou_org
+    admin_sub = os.environ.get("OTO_MCP_ADMIN_SUB")
+    if admin_sub and sub == admin_sub:
+        role = SUPER_ADMIN
+    role = role if role in ROLES else MEMBER
+    return verrou_org.role_plateforme(sub, role)
+
+
 def get_user_role(sub: str) -> str:
-    """Effective role of the user — env override > DB > default member.
+    """Effective role of the user — env override > DB > default member, bounded under
+    a delegation token (`role_effectif`).
 
     The `OTO_MCP_ADMIN_SUB` bootstrap forces **super_admin** (the all-powerful)
     — it is the platform owner's sub."""
     admin_sub = os.environ.get("OTO_MCP_ADMIN_SUB")
     if admin_sub and sub == admin_sub:
-        return SUPER_ADMIN
+        return role_effectif(sub, SUPER_ADMIN)
     user = db.get_user(sub)
-    role = (user or {}).get("role") or MEMBER
-    return role if role in ROLES else MEMBER
+    return role_effectif(sub, (user or {}).get("role") or MEMBER)
 
 
 def is_super_admin(sub: str) -> bool:
@@ -72,10 +90,7 @@ def is_operator_role(sub: str, role: Optional[str]) -> bool:
     `OTO_MCP_ADMIN_SUB` override, same fallback on `role` (no validation against `ROLES`:
     a role outside the enumeration matches neither `ADMIN` nor `SUPER_ADMIN`, hence `False`,
     like `get_user_role` which would bring it back to `MEMBER`)."""
-    admin_sub = os.environ.get("OTO_MCP_ADMIN_SUB")
-    if admin_sub and sub == admin_sub:
-        return True
-    return role in (ADMIN, SUPER_ADMIN)
+    return role_effectif(sub, role) in (ADMIN, SUPER_ADMIN)
 
 
 def current_org(sub: str | None) -> Optional[int]:
