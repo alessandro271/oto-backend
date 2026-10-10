@@ -187,9 +187,14 @@ _MAISON_HORS_TRAVAIL = ("A hosted agent's token acts for its job's organization;
                         "cannot change its owner's home organization.")
 
 
-def _refuser_maison_sous_verrou(ctx: ResolvedCtx, route: str) -> None:
+def refuser_maison_sous_verrou(ctx: ResolvedCtx, route: str) -> None:
     """Le jeton d'un agent hébergé porte l'org de son travail, pas le défaut de la
-    personne : changer l'org maison sous ce jeton est refusé, nommément."""
+    personne : changer l'org maison sous ce jeton est refusé, nommément.
+
+    Seule garde de TOUT geste qui déplace la maison ou l'appartenance de la personne :
+    `org.set_home`, `org.clear`, et aussi `group.set_home` / la face REST de
+    `group.use` (l'équipe maison pose son org parente en maison) et `me.leave_org`
+    (le départ promeut une autre org en maison) — appelée par eux, jamais recopiée."""
     from ... import verrou_org
     if verrou_org.interdit(ctx.sub, route=route):
         raise AuthzDenied(403, "org_out_of_job", _MAISON_HORS_TRAVAIL)
@@ -201,7 +206,7 @@ def _set_home_org(ctx: ResolvedCtx, inp: UseOrgInput) -> dict:
     toutes les autres conversations (vécu : « workaround fiable » spontané des
     agents après le retrait du bracelet) → le binding MCP est retiré, seule
     l'action « définir par défaut » du dashboard y accède (`PUT /api/me/active-org`)."""
-    _refuser_maison_sous_verrou(ctx, "org.set_home")
+    refuser_maison_sous_verrou(ctx, "org.set_home")
     try:
         org_id = org_store.resolve_org_for_user(ctx.sub, inp.org)
     except ValueError as e:
@@ -222,7 +227,7 @@ def _clear_org(ctx: ResolvedCtx, inp: NoInput) -> dict:
                 "how_to": ("Aucun état de session à effacer (ADR 0038) : sans `_org=`, "
                            "chaque appel résout ton org maison (elle ne se change que "
                            "dans le dashboard).")}
-    _refuser_maison_sous_verrou(ctx, "org.clear")
+    refuser_maison_sous_verrou(ctx, "org.clear")
     pid = org_store.ensure_personal_org(ctx.sub)     # REST : maison = org perso
     org_store.set_active_org(ctx.sub, pid)
     return {"active_org": pid}
