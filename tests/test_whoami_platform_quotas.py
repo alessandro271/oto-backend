@@ -40,7 +40,8 @@ def test_platform_quota_surfaced_for_capped_connector(monkeypatch):
     })
     assert out["connectors"]["platform_available"] == ["apollo"]
     assert out["connectors"]["platform_quotas"] == {
-        "apollo": {"used": 5, "limit": 20, "remaining": 15},
+        "apollo": {"kind": "oto_daily_allowance", "used": 5, "limit": 20,
+                   "remaining": 15},
     }
 
 
@@ -74,3 +75,14 @@ def test_configured_connector_never_gets_a_quota_entry(monkeypatch):
     })
     assert out["connectors"]["configured"] == ["folk"]
     assert out["connectors"]["platform_quotas"] == {}
+
+
+def test_le_quota_affiche_dit_qu_il_est_celui_d_oto_pas_le_solde_du_fournisseur():
+    """Signal #1066 : `platform_quotas.serper = {remaining: 200}`, puis Serper
+    refuse « Not enough credits ». Le compteur est la franchise d'oto sur la clé
+    partagée, jamais le solde du compte chez le fournisseur : l'entrée le dit, et la
+    description servie aussi."""
+    from oto_mcp.tools import whoami
+    src = (whoami.__file__ and open(whoami.__file__, encoding="utf-8").read())
+    assert '"kind": "oto_daily_allowance"' in src
+    assert "NOT the provider's account balance" in src

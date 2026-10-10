@@ -60,7 +60,7 @@ def _platform_only(monkeypatch):
 def test_hint_reflects_usage_under_quota(_platform_only, monkeypatch):
     monkeypatch.setattr(db, "get_usage_today", lambda sub, p: 4)
     assert access.platform_quota_hint("apollo", sub="u") == {
-        "used": 4, "limit": 20, "remaining": 16,
+        "kind": "oto_daily_allowance", "used": 4, "limit": 20, "remaining": 16,
     }
 
 
@@ -69,7 +69,7 @@ def test_hint_remaining_floors_at_zero_over_quota(_platform_only, monkeypatch):
     ne doit jamais devenir négatif (ce serait pire à lire que 0)."""
     monkeypatch.setattr(db, "get_usage_today", lambda sub, p: 25)
     assert access.platform_quota_hint("apollo", sub="u") == {
-        "used": 25, "limit": 20, "remaining": 0,
+        "kind": "oto_daily_allowance", "used": 25, "limit": 20, "remaining": 0,
     }
 
 

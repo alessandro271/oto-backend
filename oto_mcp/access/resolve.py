@@ -448,7 +448,12 @@ def platform_quota_hint(provider: str, sub: Optional[str] = None) -> Optional[di
     used, limit = _win_quota(winner, sub, provider, active_org)
     if not limit:
         return None
-    return {"used": used, "limit": limit, "remaining": max(0, limit - used)}
+    # `kind` says WHAT this counts: oto's daily allowance on the shared platform key,
+    # never the provider's account balance — which can be empty while this reads
+    # 200 left (signal #1066: `remaining: 200`, then Serper "Not enough credits").
+    # Same entry as `oto_whoami`'s `platform_quotas`.
+    return {"kind": "oto_daily_allowance", "used": used, "limit": limit,
+            "remaining": max(0, limit - used)}
 
 
 def _resolve_pinned_instance(provider: str, sub: str, ref) -> ResolvedCredential:

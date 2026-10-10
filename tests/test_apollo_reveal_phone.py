@@ -416,3 +416,47 @@ def test_a_reveal_says_in_its_served_text_that_it_needs_your_own_key(
         f"{outil} : la réserve de clé ne se lit pas près de « {marqueur} »")
     assert re.search(r"credit|bill|charge|cost", voisinage, re.I), (
         f"{outil} : la réserve est annoncée sans son motif (le coût)")
+
+
+
+# --------------------------------------------------------------------------- #
+# 6. Compte à sec (signaux #1026, #1114, #1283, #1348)
+# --------------------------------------------------------------------------- #
+
+def test_an_order_closed_for_lack_of_credits_says_so_at_the_top(monkeypatch):
+    """« done: true » sans numéro, la raison enfouie sous `result` : l'agent lisait
+    « fini » et recommandait. La réponse dit qu'il n'y aura rien, et pourquoi."""
+    payload = {"request_id": 1, "webhook_status": "failed",
+               "failure_reason": "You ran out of mobile number credits",
+               "webhook_result": {"people": []}}
+    m, _, _ = _mount(monkeypatch, poll_return={"done": True, "result": payload})
+    out = _tool(m, "apollo_reveal_phone_result")(request_id="1")
+    assert out["done"] is True and out["delivered"] is False
+    assert out["reason"] == "out_of_credits"
+    assert "out of credits" in out["next_step"] and "do not order again" in out["next_step"]
+
+
+def test_another_failure_is_named_without_blaming_credits(monkeypatch):
+    payload = {"failure_reason": "webhook expired", "webhook_result": {}}
+    m, _, _ = _mount(monkeypatch, poll_return={"done": True, "result": payload})
+    out = _tool(m, "apollo_reveal_phone_result")(request_id="1")
+    assert out["delivered"] is False and out["reason"] == "not_delivered"
+    assert out["failure_reason"] == "webhook expired"
+
+
+def test_an_empty_account_at_order_time_is_quota_exhausted(monkeypatch):
+    """Le client (oto-core ≥ ApolloCreditsExhausted) lève une erreur qui porte
+    `status_code = 402` pour le 422 « insufficient credits » : la taxonomie la lit
+    `quota_exhausted`, et la commande née avant l'appel est abandonnée."""
+    from oto_mcp import error_taxonomy
+
+    class _ASec(RuntimeError):
+        status_code = 402
+
+    m, client, _ = _mount(monkeypatch)
+    client.match_person.side_effect = _ASec(
+        "Apollo 422 on people/match: You have insufficient credits")
+    with pytest.raises(_ASec) as e:
+        _tool(m, "apollo_reveal_phone")(person_id="p1")
+    assert ("abandon", "jeton") in client.receveur
+    assert error_taxonomy.classify(e.value).code == "quota_exhausted"

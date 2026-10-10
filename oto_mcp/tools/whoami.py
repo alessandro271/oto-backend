@@ -58,10 +58,12 @@ def register(mcp: FastMCP) -> None:
         docs), `org` (active org —
         id, name, role; you are ALWAYS in an org), `group` (possible active group),
         `connectors` (summary of the configured connectors
-        — including `platform_quotas`, the day's quota `{used, limit,
-        remaining}` of the platform connectors with a capped quota: look at it before
-        a batch of calls that spend, to decide without discovering the limit in the
-        middle of the batch), and a readable `summary`. Read-only.
+        — including `platform_quotas`, OTO's daily allowance `{used, limit,
+        remaining}` on the shared platform key of the connectors that cap it: look at
+        it before a batch of calls that spend, to decide without discovering the limit
+        in the middle of the batch. ⚠️ It is NOT the provider's account balance: the
+        provider can still refuse an empty account (`quota_exhausted`) while this
+        shows calls left), and a readable `summary`. Read-only.
 
         To act under another org/team/project: pass the token `_org=` /
         `_group=` / `_project=` directly on each work call (no session
@@ -164,7 +166,10 @@ def register(mcp: FastMCP) -> None:
                     limit = st.get("quota_daily")
                     if limit:
                         used = st.get("quota_used_today") or 0
+                        # Same entry as `access.platform_quota_hint`, `kind` included:
+                        # oto's allowance, never the provider's balance (signal #1066).
                         platform_quotas[name] = {
+                            "kind": "oto_daily_allowance",
                             "used": used, "limit": limit,
                             "remaining": max(0, limit - used),
                         }

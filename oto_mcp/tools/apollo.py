@@ -687,8 +687,9 @@ def register(mcp: FastMCP) -> None:
 
         `done: false` carries `retry_after_seconds` — wait that long, call again.
         When done, the numbers are at `result.webhook_result.people[].phone_numbers[]`
-        (nested: `result` is Apollo's envelope, and `result.failure_reason` says why
-        if it never delivered). Each number carries `sanitized_number`, `type_cd`
+        (nested: `result` is Apollo's envelope). An order Apollo closed without
+        numbers comes back as `delivered: false` with its `reason` (`out_of_credits`
+        when the account ran dry): nothing more will arrive for it. Each number carries `sanitized_number`, `type_cd`
         ("mobile"/"work_direct") and `dnc_status_cd` (do-not-call: read it before
         dialling). Kept 30 DAYS, then gone.
 
@@ -731,6 +732,26 @@ def register(mcp: FastMCP) -> None:
                                   f"again in ~{wait or 10}s."),
                 }
             result = out.get("result") or {}
+        # ⚠️ DONE IS NOT DELIVERED. Apollo closes an order it could not honour with a
+        # `failure_reason` — "you ran out of mobile number credits" on an empty
+        # account (signal #1283) — and an envelope with no number. Served as is, the
+        # reason sat nested under `result` while the response opened on `done: true`:
+        # an agent reads "finished", finds no number, and orders again. We say it at
+        # the top, with what to do.
+        echec = (result.get("failure_reason") or "").strip() if isinstance(
+            result.get("failure_reason"), str) else ""
+        if echec:
+            a_sec = "credit" in echec.lower()
+            return {"done": True, "delivered": False,
+                    "reason": "out_of_credits" if a_sec else "not_delivered",
+                    "failure_reason": echec,
+                    "next_step": (
+                        "Apollo closed this order WITHOUT numbers: the Apollo account "
+                        "behind your key is out of credits. Nothing more will arrive "
+                        "for this request_id; do not order again until the account "
+                        "is topped up with Apollo." if a_sec else
+                        "Apollo closed this order WITHOUT numbers (reason above). "
+                        "Nothing more will arrive for this request_id.")}
         if datastore is not None:
             return {"done": True, "written": apollo_receiver.ecrire_numeros(
                 result, datastore=datastore, row_id=row_id,
