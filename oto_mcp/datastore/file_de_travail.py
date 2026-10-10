@@ -325,8 +325,14 @@ class FileDeTravailMixin:
             return [], []
         ns_id = self._resolve(datastore)
         ici = [str(b["row_id"]) for b in baux if b["ns_id"] == ns_id]
-        ailleurs = sorted({str(self._ns_of(b["ns_id"]).get("datastore") or b["ns_id"])
-                           for b in baux if b["ns_id"] != ns_id})
+        # ⚠️ `_run_id` est une poignée, pas un droit : seuls les tableaux que l'appelant
+        # peut LIRE sont nommés — sinon le run d'un autre (d'une autre org) livrait ses
+        # noms de tableaux. Même garde que `hors_org.tenu_par_le_run`, AVANT de lire le nom.
+        from .. import ownership
+        autres = {int(b["ns_id"]) for b in baux if b["ns_id"] != ns_id}
+        lisibles = [n for n in autres if self.sub and ownership.can_access(
+            self.sub, ownership.TYPE_RESSOURCE_DATASTORE, str(n), "read")]
+        ailleurs = sorted({str(self._ns_of(n).get("datastore") or n) for n in lisibles})
         return ici, ailleurs
 
     def queue(self, datastore: str) -> list[dict]:

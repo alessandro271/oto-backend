@@ -66,16 +66,18 @@ class PasMembre(ValueError):
 def _resoudre(sub: str, run_id: str) -> Optional[int]:
     """Sync (threadpool) : l'org du run, gardée par l'appartenance du sub — la même
     appartenance que lit l'autz (`roles.is_org_member`). None = rien à poser."""
-    from . import org_store, roles
+    from . import roles
     org = org_of_run(run_id)
     if org is None:
         return None
     if not roles.is_org_member(sub, org):
-        nom = (org_store.get_org(org) or {}).get("name") or "sans nom"
+        # ⚠️ Ni le numéro ni le nom de l'org : un `_run_id` est une poignée que
+        # n'importe qui peut taper, et le refus d'un NON-membre lui aurait appris où
+        # se déroule le run d'autrui. Le refus reste nommé et dit quoi faire.
         raise PasMembre(
-            f"Le run `{run_id}` se déroule dans l'org {org} « {nom} », dont tu n'es pas "
-            "membre : l'appel n'y est pas résolu, et il ne l'est pas non plus dans ton "
-            "org maison à sa place. Passe `_org=<une de tes orgs>` sur l'appel (liste : "
+            f"Le run `{run_id}` se déroule dans une org dont tu n'es pas membre : "
+            "l'appel n'y est pas résolu, et il ne l'est pas non plus dans ton org maison "
+            "à sa place. Passe `_org=<une de tes orgs>` sur l'appel (liste : "
             "`oto_list_orgs`), ou ouvre ton propre run avec `run_start`.")
     return org
 

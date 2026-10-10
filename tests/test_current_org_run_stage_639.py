@@ -136,7 +136,9 @@ async def test_non_membre_refus_nomme_jamais_un_repli(garde, monkeypatch):
     with pytest.raises(McpError) as e:
         await _dans_le_run(garde, run)
     msg = str(e.value)
-    assert "226" in msg and "Travail" in msg and "membre" in msg and run in msg, msg
+    assert "membre" in msg and run in msg, msg
+    # Le refus d'un NON-membre ne lui apprend ni le numéro ni le nom de l'org du run.
+    assert "226" not in msg and "Travail" not in msg, msg
     assert session_org.current_call_run_org() is None
 
 
