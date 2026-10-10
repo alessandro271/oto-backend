@@ -57,9 +57,11 @@ def test_les_jobs_de_contrat_passent_le_secret_de_chaque_consommateur():
     """Le secret d'un consommateur est lu par son NOM déclaré : un nom mal recopié dans
     le workflow retomberait sur une clé vide — que le script refuse (ci-dessus)."""
     texte = (_WORKFLOWS / "deploy-canari.yml").read_text()
+    # Trois lectures : le contrat du constat (`contrat-front`), celui de la garde
+    # (`contrat-front-code`) et, dans la même garde, le contrat ADMIN (#1196).
     assert texte.count(
         "CLE_LECTURE: ${{ matrix.consommateur.secret && "
-        "secrets[matrix.consommateur.secret] || '' }}") == 2
+        "secrets[matrix.consommateur.secret] || '' }}") == 3
 
 
 def test_un_secret_absent_ne_sort_jamais_vert():

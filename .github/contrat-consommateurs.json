@@ -3,6 +3,7 @@
     "nom": "oto-dashboard",
     "depot": "otomata-tech/oto-app",
     "chemin": "dashboard/frontend/openapi/oto-openapi.json",
+    "chemin_admin": "dashboard/frontend/openapi/oto-openapi-admin.json",
     "secret": "OTO_COMMERCE_CONTRACT_KEY"
   },
   {

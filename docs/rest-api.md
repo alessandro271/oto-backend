@@ -622,6 +622,32 @@ Déclaré au 28/09/2026 : **oto-commerce**, le service de facturation (dépôt p
 les routes `/api/service/*` qu'il appelle (`api/openapi-service.json`, secret
 `OTO_COMMERCE_CONTRACT_KEY`).
 
+### Le second contrat : l'administration (`chemin_admin`, #1196)
+
+Le document public ne contient pas `/api/admin/*` : un consommateur qui appelle
+l'administration ne pouvait ni l'épingler ni être prévenu d'une casse. Il déclare donc un
+**second** contrat, `chemin_admin` dans son entrée (même dépôt, même clé de lecture) : les
+opérations qu'il épingle du document d'administration (`GET /api/admin/openapi.json`,
+ci-dessus). Le document est complet ; **le jugement ne porte que sur ce qu'il épingle**.
+
+- **avant déploiement seulement** (Alexis, 09/10/2026) : `contrat-front-code` dérive les
+  deux documents par import (`openapi.build(routes, admin=…)`), sans serveur ni jeton, et
+  juge le second contrat dans ses propres étapes, qui tournent même si le contrat public a
+  rougi (`!cancelled()`) — un rouge sur l'un ne tait pas l'autre ; le second verdict se
+  nomme `« <consommateur> (admin) »` ;
+- **pas après la préproduction** : le document servi exige un jeton d'admin, et **aucun
+  jeton d'admin n'entre dans les secrets de la CI**. `contrat-front` ignore `chemin_admin`.
+
+Mêmes règles de verdict que le contrat public (`scripts/contrat-front.py`), même lecteur
+(`scripts/lire-contrat-consommateur.sh`, appelé une seconde fois sur `chemin_admin`) : un
+`chemin_admin` absent chez le consommateur avertit sans rougir. Une instance cible
+(`docs/instance-cible.md`) déclare de même `chemin_admin` dans `CIBLE_CONSOMMATEUR`, et
+`scripts/contrat-cible.sh` le juge contre le document d'administration du tag.
+
+Déclaré au 09/10/2026 : le **dashboard**, pour les opérations d'administration du cœur
+qu'appelle sa console (`dashboard/frontend/openapi/oto-openapi-admin.json`, extrait par son
+script d'épinglage — pas un instantané complet, contrairement à son contrat public).
+
 ## Le contrat dit ce que le serveur rend — retours d'un front tiers (29/08/2026)
 
 Un front tiers, consommateur pur de cette API, a dérivé son comportement du contrat
@@ -918,6 +944,16 @@ Bancs : `tests/api/test_runs_rest.py` (vraie base, routes montées) ;
 vivante** de l'app pour les routes encore écrites à la main (chemin + méthodes, sans schéma,
 taggées `_legacy`). Rien n'est saisi à la main, donc rien ne peut mentir. `/api/admin/*` en
 est retiré (console de la plateforme, pas d'intégrateur tiers).
+
+**Le document d'administration — `GET /api/admin/openapi.json`** (#1196, capacité
+`admin.openapi`, garde d'admin plateforme comme `/api/admin/capabilities`). Même recette,
+`openapi.build(admin=True)` : **toutes** les opérations `/api/admin/*` et elles seules,
+sans liste à tenir — une capacité neuve sous ce préfixe y entre d'elle-même. Le partage
+se fait par le seul `openapi._du_document` : un chemin est dans l'un des deux documents,
+jamais dans les deux, et le document public n'a pas bougé d'un octet en le séparant. Le
+handler ne voit pas la table de routes (ADR 0004) ; il n'en a pas besoin, toute route
+d'admin étant une capacité — `tests/test_openapi_admin_1196.py` prouve que le document
+servi égale celui que la CI dérive de `server.routes_rest`.
 
 ⚠️ **À lire avant de conclure qu'une surface manque.** La consolidation ADR 0047 a déplacé le
 verbe dans le CORPS : `POST /api/me/projects {"op":"list"}` n'est pas « créer un projet »,

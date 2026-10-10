@@ -23,6 +23,14 @@ projet » — c'est **la** surface projet (`op` ∈ create|list|get|runs|…), e
 Le document est **public** (comme `/api/mcp/catalog`) : il décrit des formes, aucune
 valeur. `/api/admin/*` en est retiré — la console de la plateforme n'a pas
 d'intégrateur tiers, et sa carte n'a pas à être publiée.
+
+**Deux documents, une seule recette** (oto-backend#1196) : `build(admin=True)` rend le
+document d'ADMINISTRATION, les opérations `/api/admin/*` et elles seules, TOUTES (aucune
+liste à tenir : une capacité neuve sous ce préfixe y entre d'elle-même). Il est servi
+derrière la garde d'admin plateforme (`GET /api/admin/openapi.json`, capacité
+`admin.openapi`), et c'est lui que la garde d'avant déploiement confronte au contrat
+admin qu'un consommateur épingle. Les deux documents se partagent le préfixe, jamais un
+chemin : le public n'a pas changé d'un octet.
 """
 from __future__ import annotations
 
@@ -33,6 +41,7 @@ from .capabilities import registry
 from .capabilities._types import Capability, ContratDeRoute, RestBinding
 
 _TITLE = "Oto REST API"
+_TITLE_ADMIN = "Oto REST API — administration"
 _BODY_VERBS = ("POST", "PUT", "PATCH")
 _ADMIN_PREFIX = "/api/admin/"
 # Les routes de NATURE qui déclarent leur contrat : ni capacités (aucun en-tête de run,
@@ -176,6 +185,23 @@ deux dettes se résorbent côté serveur, et ce document suivra sans interventio
 opérations taguées `_nature` sont hors du moule par construction (corps brut, jeton dans
 l'adresse) mais DÉCLARENT leur contrat : corps, réponse et refus y sont décrits.
 """
+
+# Le document d'ADMINISTRATION (#1196) ne répète pas le mode d'emploi : son lecteur est un
+# consommateur de la console (qui épingle ce qu'il appelle), pas un intégrateur qui débute.
+_DESCRIPTION_ADMIN = """\
+Les opérations d'administration de la plateforme (`/api/admin/*`), toutes, dérivées du
+serveur comme le document public — qui ne les contient pas. Réservé aux administrateurs
+de la plateforme. Jeton, organisation, enveloppe d'erreur : voir le document public
+(`/api/openapi.json`), dont ce document reprend les composants.
+"""
+
+
+def _du_document(path: str, admin: bool) -> bool:
+    """Un chemin appartient à UN document : l'administration (`/api/admin/*`) ou le
+    public (tout le reste). Le seul aiguillage entre les deux — un second, ailleurs,
+    finirait par publier une route d'admin dans le document servi sans authentification."""
+    return path.startswith(_ADMIN_PREFIX) == admin
+
 
 # L'enveloppe d'erreur REST (`api/base._json_error`), publiée UNE fois en composant :
 # un client généré la type une seule fois, et un `$ref` cassé ferait échouer la
@@ -484,7 +510,8 @@ def _operation_de_nature(contrat: ContratDeRoute, verb: str, path: str,
     return op
 
 
-def _handwritten(routes: Iterable, defs: Optional[dict] = None) -> dict:
+def _handwritten(routes: Iterable, defs: Optional[dict] = None, *,
+                 admin: bool = False) -> dict:
     """Routes Starlette écrites à la main : chemin + méthodes, sans schéma.
 
     Les documenter sans corps vaut mieux que les taire — l'intégrateur sait au moins
@@ -511,7 +538,7 @@ def _handwritten(routes: Iterable, defs: Optional[dict] = None) -> dict:
         methods = getattr(route, "methods", None)
         if not path or not methods or not path.startswith("/api/"):
             continue
-        if path.startswith(_ADMIN_PREFIX):
+        if not _du_document(path, admin):
             continue
         if path in alias:
             continue      # décrit par `_alias_deprecies` : « déprécié », pas « legacy »
@@ -603,17 +630,22 @@ def _capability_operation_ids(cap: Capability, bindings: list) -> list[str]:
     return ids
 
 
-def build(routes: Optional[Iterable] = None, *, server_url: Optional[str] = None) -> dict:
+def build(routes: Optional[Iterable] = None, *, server_url: Optional[str] = None,
+          admin: bool = False) -> dict:
     """Document OpenAPI 3.1 complet. `routes` = table de routes vivante (facultative :
-    sans elle, seules les capacités sont décrites)."""
+    sans elle, seules les capacités sont décrites).
+
+    `admin=False` : le document PUBLIC, sans `/api/admin/*`. `admin=True` : le document
+    d'ADMINISTRATION, `/api/admin/*` seul et entier (#1196)."""
     schemas: dict = {"Erreur": _ERREUR}
-    paths = _handwritten(routes, schemas)
+    paths = _handwritten(routes, schemas, admin=admin)
     for chemin, item in _alias_deprecies().items():
-        paths.setdefault(chemin, {}).update(item)
+        if _du_document(chemin, admin):
+            paths.setdefault(chemin, {}).update(item)
     for cap in registry.CAPABILITIES:
         if not cap.is_exposed():
             continue
-        publies = [b for b in cap.rest_bindings() if not b.path.startswith(_ADMIN_PREFIX)]
+        publies = [b for b in cap.rest_bindings() if _du_document(b.path, admin)]
         for binding, operation_id in zip(publies, _capability_operation_ids(cap, publies)):
             op, defs = _operation(cap, binding, operation_id)
             # L'en-tête de run : LA passe qui le référence, sur les capacités et elles
@@ -642,8 +674,9 @@ def build(routes: Optional[Iterable] = None, *, server_url: Optional[str] = None
         # qui constate une dérive de forme n'avait rien pour la situer. Même
         # étiquette que l'en-tête `X-Oto-Version` et que `GET /api/version`, pour
         # qu'un descriptif et un journal d'appels se recoupent sans traduction.
-        "info": {"title": _TITLE, "version": version.version_servie(),
-                 "description": _DESCRIPTION},
+        "info": {"title": _TITLE_ADMIN if admin else _TITLE,
+                 "version": version.version_servie(),
+                 "description": _DESCRIPTION_ADMIN if admin else _DESCRIPTION},
         "paths": dict(sorted(paths.items())),
         "components": {
             "parameters": _parametres(),

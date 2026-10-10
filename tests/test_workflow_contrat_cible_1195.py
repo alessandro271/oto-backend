@@ -144,7 +144,18 @@ def test_un_consommateur_declare_est_juge(tmp_path):
     fini, sortie = _consommateur(tmp_path, _CONSO, verrou=True)
     assert fini.returncode == 0, fini.stdout + fini.stderr
     assert sortie.splitlines() == ["juger=oui", "nom=front-exemple", "depot=exemple-org/front-app",
-                                   "chemin=contrat/openapi.json", "secret=CIBLE_CONSOMMATEUR_CLE"]
+                                   "chemin=contrat/openapi.json", "chemin_admin=",
+                                   "secret=CIBLE_CONSOMMATEUR_CLE"]
+
+
+def test_un_consommateur_peut_epingler_un_contrat_admin(tmp_path):
+    """#1196 : `chemin_admin` facultatif, la console `/api/admin/*` épinglée à part."""
+    conso = _CONSO[:-1] + ', "chemin_admin": "contrat/openapi-admin.json"}'
+    fini, sortie = _consommateur(tmp_path, conso, verrou=True)
+    assert fini.returncode == 0, fini.stdout + fini.stderr
+    assert "chemin_admin=contrat/openapi-admin.json" in sortie.splitlines()
+    fini, sortie = _consommateur(tmp_path, _CONSO[:-1] + ', "chemin_admin": "/abs"}', verrou=True)
+    assert fini.returncode == 1 and "Consommateur mal déclaré" in fini.stdout
 
 
 def _executable(chemin: pathlib.Path, texte: str) -> None:
@@ -168,8 +179,12 @@ echo "travail=$TRAVAIL" >> "$GITHUB_OUTPUT"
 echo "contrat=$TRAVAIL/contrat.json" >> "$GITHUB_OUTPUT"
 echo "lu=$DOUBLURE_LU" >> "$GITHUB_OUTPUT"
 """)
+    # Le verdict se pilote par document jugé : `DOUBLURE_CODE` pour le contrat public,
+    # `DOUBLURE_CODE_ADMIN` (sinon le même) pour le contrat admin (#1196).
     (tmp_path / "scripts" / "contrat-front.py").write_text(
-        "import os, sys\nsys.exit(int(os.environ['DOUBLURE_CODE']))\n")
+        "import os, sys\n"
+        "cle = 'DOUBLURE_CODE_ADMIN' if sys.argv[-1].endswith('openapi-admin-du-tag.json') else 'DOUBLURE_CODE'\n"
+        "sys.exit(int(os.environ.get(cle, os.environ['DOUBLURE_CODE'])))\n")
     (tmp_path / "bin").mkdir()
     _executable(tmp_path / "bin" / "python", """#!/usr/bin/env bash
 if grep -q env_inventory; then echo false; else echo '{}'; fi
@@ -179,15 +194,18 @@ if grep -q env_inventory; then echo false; else echo '{}'; fi
     return tmp_path
 
 
-def _juger(arbre, lu="oui", code=0) -> subprocess.CompletedProcess:
+def _juger(arbre, lu="oui", code=0, chemin_admin="", code_admin=None) -> subprocess.CompletedProcess:
+    env = {"PATH": f"{arbre / 'bin'}:{os.environ['PATH']}", "TAG": "v1.2.3",
+           "NOM": "front-exemple", "DEPOT": "exemple-org/front-app",
+           "CHEMIN": "contrat/openapi.json", "CHEMIN_ADMIN": chemin_admin,
+           "SECRET": "CIBLE_CONSOMMATEUR_CLE",
+           "CLE_LECTURE": "cle", "BAC": str(arbre / "bac"),
+           "DOUBLURE_LU": lu, "DOUBLURE_CODE": str(code)}
+    if code_admin is not None:
+        env["DOUBLURE_CODE_ADMIN"] = str(code_admin)
     return subprocess.run(
         ["scripts/contrat-cible.sh", "juger", str(arbre / "declaration.json")], cwd=arbre,
-        env={"PATH": f"{arbre / 'bin'}:{os.environ['PATH']}", "TAG": "v1.2.3",
-             "NOM": "front-exemple", "DEPOT": "exemple-org/front-app",
-             "CHEMIN": "contrat/openapi.json", "SECRET": "CIBLE_CONSOMMATEUR_CLE",
-             "CLE_LECTURE": "cle", "BAC": str(arbre / "bac"),
-             "DOUBLURE_LU": lu, "DOUBLURE_CODE": str(code)},
-        capture_output=True, text=True, timeout=60)
+        env=env, capture_output=True, text=True, timeout=60)
 
 
 @pytest.mark.parametrize("lu, code, retour, message", [
@@ -204,3 +222,25 @@ def test_le_verdict_et_la_cle_effacee_quelle_que_soit_l_issue(arbre, lu, code, r
     assert "contrat du tag :" in fini.stdout
     travail = pathlib.Path((arbre / "bac" / "travail-cree").read_text().strip())
     assert not travail.exists(), "la clé de lecture est restée sur le disque"
+
+
+def test_sans_chemin_admin_le_contrat_admin_n_est_pas_derive(arbre):
+    fini = _juger(arbre)
+    assert fini.returncode == 0 and "contrat admin du tag :" not in fini.stdout
+
+
+@pytest.mark.parametrize("code_admin, retour, message", [
+    (0, 0, None),
+    (1, 1, "v1.2.3 casserait la console chez front-exemple"),
+    (2, 1, "Contrat admin de front-exemple — confrontation impossible"),
+])
+def test_le_contrat_admin_est_juge_a_part_et_nomme(arbre, code_admin, retour, message):
+    """#1196 : le contrat public passe, le contrat ADMIN est jugé ensuite contre le
+    document admin du tag, avec son propre verdict nommé « console »."""
+    fini = _juger(arbre, chemin_admin="contrat/openapi-admin.json", code_admin=code_admin)
+    assert fini.returncode == retour, fini.stdout + fini.stderr
+    assert "contrat du tag :" in fini.stdout and "contrat admin du tag :" in fini.stdout
+    if message:
+        assert message in fini.stdout, fini.stdout
+    travail = pathlib.Path((arbre / "bac" / "travail-cree").read_text().strip())
+    assert not travail.exists(), "la clé de lecture du contrat admin est restée sur le disque"

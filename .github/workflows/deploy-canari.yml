@@ -286,7 +286,9 @@ jobs:
   # des changements venus de nous).
   #
   # La liste vit dans `.github/contrat-consommateurs.json` : nom, dépôt, chemin du
-  # contrat, secret de lecture (`null` = dépôt public, lu sans clé). Jusqu'au 25/09 ce
+  # contrat, secret de lecture (`null` = dépôt public, lu sans clé), et depuis #1196 un
+  # `chemin_admin` FACULTATIF — le contrat qu'il épingle sur la console `/api/admin/*`,
+  # qui a son propre document (`build(admin=True)`), jugé avant déploiement seulement. Jusqu'au 25/09 ce
   # mécanisme était écrit au singulier — un dépôt, un chemin, un secret en dur : un
   # second consommateur aurait été INVISIBLE, jamais lu ni jugé, et on se serait cru
   # gardé. Déclarer un consommateur, c'est ajouter une entrée ; rien d'autre.
@@ -312,9 +314,10 @@ jobs:
                  (.nom | test("^[A-Za-z0-9._-]+$")) and
                  (.depot | test("^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")) and
                  (.chemin | test("^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$")) and
+                 ((.chemin_admin // null) == null or (.chemin_admin | test("^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$"))) and
                  (.secret == null or (.secret | test("^[A-Z][A-Z0-9_]*$"))))' \
                .github/contrat-consommateurs.json > /dev/null; then
-            echo "::error title=Liste des consommateurs refusée::.github/contrat-consommateurs.json ne respecte pas la forme attendue (nom, dépôt owner/repo, chemin relatif, secret en MAJUSCULES ou null) — aucun contrat n'est jugé."
+            echo "::error title=Liste des consommateurs refusée::.github/contrat-consommateurs.json ne respecte pas la forme attendue (nom, dépôt owner/repo, chemin relatif, chemin_admin relatif facultatif, secret en MAJUSCULES ou null) — aucun contrat n'est jugé."
             exit 1
           fi
           echo "liste=$(jq -c . .github/contrat-consommateurs.json)" >> "$GITHUB_OUTPUT"
@@ -477,3 +480,61 @@ jobs:
         env:
           TRAVAIL: ${{ steps.contrat.outputs.travail }}
         run: rm -rf "$TRAVAIL"
+
+      # ── Le contrat ADMIN du consommateur, s'il en épingle un (#1196) ──────────────
+      # `/api/admin/*` est absent du document public ; le consommateur qui appelle la
+      # console (un front d'instance, un service d'usage) épingle ces opérations dans
+      # un SECOND contrat, `chemin_admin`, jugé ICI contre le document admin dérivé du
+      # même code (`build(admin=True)`) — avant déploiement seulement, jamais sur la
+      # préproduction servie : pas de clé admin en CI (décision du 09/10/2026). Mêmes
+      # règles de verdict, même outil de lecture, même secret. Sans `chemin_admin`,
+      # ces quatre étapes sont sautées et rien ne change.
+      - name: Dériver le contrat ADMIN que CE code servirait
+        # `!cancelled()` : un rouge sur le contrat PUBLIC ne saute pas le verdict admin — les
+        # deux se rendent, un consommateur lit ses deux casses d'un coup.
+        if: ${{ !cancelled() && matrix.consommateur.chemin_admin }}
+        env:
+          OTO_BILLING_ENABLED: "1"
+        run: |
+          set -euo pipefail
+          python - <<'PY' > /tmp/openapi-admin-de-la-pr.json
+          import json
+          from oto_mcp import openapi, server
+          print(json.dumps(openapi.build(server.routes_rest(object()), admin=True)))
+          PY
+          echo "contrat admin dérivé : $(wc -c < /tmp/openapi-admin-de-la-pr.json) octets"
+
+      - name: Lire le contrat ADMIN épinglé
+        id: contrat_admin
+        if: ${{ !cancelled() && matrix.consommateur.chemin_admin }}
+        env:
+          CLE_LECTURE: ${{ matrix.consommateur.secret && secrets[matrix.consommateur.secret] || '' }}
+          EST_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          NOM: ${{ matrix.consommateur.nom }}
+          DEPOT: ${{ matrix.consommateur.depot }}
+          CHEMIN: ${{ matrix.consommateur.chemin_admin }}
+          SECRET: ${{ matrix.consommateur.secret || '' }}
+        run: scripts/lire-contrat-consommateur.sh "$NOM" "$DEPOT" "$CHEMIN" "$SECRET"
+
+      - name: Confronter (admin)
+        if: ${{ !cancelled() && steps.contrat_admin.outputs.lu == 'oui' }}
+        env:
+          NOM: ${{ matrix.consommateur.nom }}
+          CONTRAT: ${{ steps.contrat_admin.outputs.contrat }}
+        run: |
+          set -uo pipefail
+          code=0
+          python3 scripts/contrat-front.py --consommateur "$NOM (admin)" \
+            "$CONTRAT" /tmp/openapi-admin-de-la-pr.json || code=$?
+          if [ "$code" = "2" ]; then
+            echo "::error title=Contrat admin de $NOM — confrontation impossible::Document illisible — le contrat admin N'A PAS été jugé."; exit 1
+          fi
+          if [ "$code" != "0" ]; then
+            echo "::error title=Ce code casserait la console chez $NOM::Une opération /api/admin/* qu'il épingle disparaît, change d'entrée, ou ne rend plus ce qu'il lit. Garder la compatibilité, ou le prévenir AVANT de livrer."; exit 1
+          fi
+
+      - name: Effacer la clé de lecture (admin)
+        if: always()
+        env:
+          TRAVAIL: ${{ steps.contrat_admin.outputs.travail }}
+        run: if [ -n "$TRAVAIL" ]; then rm -rf "$TRAVAIL"; fi

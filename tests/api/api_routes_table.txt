@@ -614,6 +614,8 @@ POST /api/resources/v2 -> _handler
 OPTIONS /api/resources/v2 -> options_handler
 GET,HEAD /api/admin/capabilities -> _handler
 OPTIONS /api/admin/capabilities -> options_handler
+GET,HEAD /api/admin/openapi.json -> _handler
+OPTIONS /api/admin/openapi.json -> options_handler
 GET,HEAD /api/me/agent-context -> _handler
 OPTIONS /api/me/agent-context -> options_handler
 GET,HEAD /api/orgs/{id}/context/preview -> _handler

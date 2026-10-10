@@ -145,7 +145,7 @@ from . import service_commerce  # noqa: F401 — service.{orgs,org.members,org.u
 from . import resources  # noqa: F401 — resources.govern (oto_resource)
 from . import resources_v2  # noqa: F401 — resources.govern.v2 (oto_resource_v2, BÊTA)
 # Catalogue du registre de capacités (ADR 0030) — alimente l'object-browser admin.
-from . import capabilities_catalog  # noqa: F401 — admin.capabilities (GET /api/admin/capabilities)
+from . import capabilities_catalog  # noqa: F401 — admin.capabilities + admin.openapi (GET /api/admin/{capabilities,openapi.json})
 # Vue de transparence « contexte agent » (otomata-private#49) — ce que Claude reçoit.
 from . import agent_context  # noqa: F401 — me.agent_context (GET /api/me/agent-context)
 # La boîte à outils de l'agent, calculée par la fonction du handshake (ADR 0050 §E10, oto#166).

@@ -30,7 +30,12 @@ def test_la_liste_declaree_est_bien_formee():
     noms = [c["nom"] for c in liste]
     assert len(set(noms)) == len(noms), "deux jambes au même nom seraient indiscernables"
     for c in liste:
-        assert set(c) == {"nom", "depot", "chemin", "secret"}, c
+        # `chemin_admin` (#1196) : facultatif — le contrat qu'il épingle sur la console
+        # `/api/admin/*`, absente du document public.
+        assert {"nom", "depot", "chemin", "secret"} <= set(c) <= \
+            {"nom", "depot", "chemin", "secret", "chemin_admin"}, c
+        if "chemin_admin" in c and c["chemin_admin"] is not None:
+            assert not c["chemin_admin"].startswith("/"), c
         assert re.fullmatch(r"[\w.-]+/[\w.-]+", c["depot"]), c
         assert not c["chemin"].startswith("/"), c
         # `null` = dépôt public, lu sans clé ; sinon le NOM d'un secret du dépôt.

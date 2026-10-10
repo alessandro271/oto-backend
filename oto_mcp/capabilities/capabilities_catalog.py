@@ -7,10 +7,14 @@ catalogue — *derive don't duplicate* : pas d'écran codé par capacité.
 
 REST-only (`mcp=None`), gate `PLATFORM_ADMIN`. Le catalogue se liste lui-même (sans
 conséquence). N'expose aucune valeur de secret — uniquement la forme des opérations.
+
+Même matière, même garde : le document OpenAPI d'ADMINISTRATION (`admin.openapi`,
+`GET /api/admin/openapi.json`, oto-backend#1196) — toutes les opérations `/api/admin/*`,
+que le document public (`/api/openapi.json`, sans authentification) ne publie pas.
 """
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from ._authz import PLATFORM_ADMIN
 from ._types import Capability, ResolvedCtx, RestBinding
@@ -52,6 +56,32 @@ def _catalog(ctx: ResolvedCtx, inp: _CatalogInput) -> dict:
     return {"capabilities": out}
 
 
+class _OpenApiAdminInput(BaseModel):
+    pass
+
+
+class DocumentOpenApi(BaseModel):
+    """Un document OpenAPI 3.1 — DÉCRIT la réponse, ne la valide pas (régime de
+    `Capability.Output`). Son contenu est celui de `openapi.build(admin=True)`."""
+    model_config = ConfigDict(extra="allow")
+
+    openapi: str
+    info: dict
+    paths: dict
+    components: dict
+    security: list
+
+
+def _openapi_admin(ctx: ResolvedCtx, inp: _OpenApiAdminInput) -> dict:
+    """Sans la table de routes vivante (un handler ne voit pas la requête, ADR 0004) :
+    toute route `/api/admin/*` est une capacité (`test_rest_modules_are_capabilities`),
+    donc le registre suffit — et un banc prouve que ce document égale celui que la CI
+    dérive de `server.routes_rest` (`tests/test_openapi_admin_1196.py`). Import
+    paresseux : `openapi` lit le registre que ce paquet remplit."""
+    from .. import openapi
+    return openapi.build(admin=True)
+
+
 CAPABILITIES += [
     Capability(
         key="admin.capabilities",
@@ -60,5 +90,17 @@ CAPABILITIES += [
         authz=PLATFORM_ADMIN,
         description="List the platform capability registry (keys, surfaces, input JSON schemas).",
         rest=RestBinding("GET", "/api/admin/capabilities"),
+    ),
+    Capability(
+        key="admin.openapi",
+        handler=_openapi_admin,
+        Input=_OpenApiAdminInput,
+        Output=DocumentOpenApi,
+        authz=PLATFORM_ADMIN,
+        description=(
+            "The OpenAPI document of the platform administration surface: every "
+            "/api/admin/* operation, derived from the capability registry. The public "
+            "document (/api/openapi.json) does not contain them."),
+        rest=RestBinding("GET", "/api/admin/openapi.json"),
     ),
 ]

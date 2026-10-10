@@ -362,7 +362,7 @@ cible (§ Le déclencheur) — au nom de la cible (le nom ne s'écrit que là, e
 | `CIBLE_SSH_HOTE` | secret | accès `tunnel` : l'hôte SSH de l'application Access ; accès `ssh` : le nom (ou l'adresse) de la machine |
 | `CIBLE_SSH_UTILISATEUR` | secret | l'utilisateur de déploiement |
 | `CIBLE_SSH_KNOWN_HOSTS` | secret | la clé d'hôte de la machine, sous le nom de l'hôte SSH (épinglée) — sous les deux noms pendant la bascule vers le tunnel (`hote-access,machine ssh-ed25519 …`) |
-| `CIBLE_CONSOMMATEUR` | secret, facultatif | `{"nom", "depot": "owner/repo", "chemin", "cle": bool}` (sur une ligne) — le front qui consomme l'API de la cible |
+| `CIBLE_CONSOMMATEUR` | secret, facultatif | `{"nom", "depot": "owner/repo", "chemin", "cle": bool, "chemin_admin"?}` (sur une ligne) — le front qui consomme l'API de la cible ; `chemin_admin` (#1196, facultatif) : le contrat qu'il épingle sur la console `/api/admin/*`, absente du document public, jugé contre le document admin du tag |
 | `CIBLE_SSH_CLE` | secret | la clé privée de déploiement |
 | `CIBLE_CF_ACCESS_CLIENT_ID` | secret, accès `tunnel` | le jeton de service Access (identifiant) |
 | `CIBLE_CF_ACCESS_CLIENT_SECRET` | secret, accès `tunnel` | le jeton de service Access (secret) |
@@ -576,6 +576,11 @@ garde sa branche contre le prochain tag du tronc.
   dit si la facturation est servie, donc quel contrat), `CIBLE_CONSOMMATEUR`,
   `CIBLE_CONSOMMATEUR_CLE`. Le job nomme l'environnement : s'il exige un relecteur, ce
   contrôle attend l'approbation lui aussi.
+- **Le contrat admin aussi** (#1196) : si `CIBLE_CONSOMMATEUR` porte `chemin_admin`, le
+  contrat que le consommateur épingle sur la console `/api/admin/*` (absente du document
+  public, servie à un admin plateforme sur `GET /api/admin/openapi.json`) est jugé à la
+  suite, contre le document admin du tag, verdict nommé « console ». Même lecture, même
+  règle : une rupture ou un contrat illisible → rouge.
 - **Le runner se choisit** (`runner`, en JSON) : hébergé par GitHub par défaut, ou le runner
   auto-hébergé du propriétaire (`'["self-hosted", "<label>"]'`), qui doit porter bash, git
   et jq ; Python et uv s'installent par le verrou du tag.
