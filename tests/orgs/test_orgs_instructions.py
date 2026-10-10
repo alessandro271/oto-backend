@@ -178,18 +178,26 @@ def test_archive_handler_marks_and_404s(monkeypatch):
     seen: list = []
     monkeypatch.setattr(oi.org_store, "normalize_slug", lambda s: (s or "").strip().lower())
 
-    monkeypatch.setattr(oi.org_store, "archive_instruction",
-                        lambda otype, oid, slug: seen.append((otype, oid, slug)) or True)
+    etat = {"daily-digest": None}
+
+    def _archive(otype, oid, slug):
+        seen.append((otype, oid, slug))
+        etat[slug] = "2026-10-10 09:00:00+00"
+        return True
+    monkeypatch.setattr(oi.org_store, "archive_instruction", _archive)
+    monkeypatch.setattr(oi.org_store, "get_instruction",
+                        lambda otype, oid, slug, version=None: (
+                            {"slug": slug, "archived_at": etat[slug]} if slug in etat else None))
     out = oi._archive_instruction(ResolvedCtx(sub="u1", org_id=7), _Slug(slug="Daily-Digest"))
     assert seen == [("org", "7", "daily-digest")], "le slug doit être normalisé avant l'écriture"
     # `scope` dit quel palier a été écrit — la clé d'identité change de nom avec lui
     # (#681). L'archivage, lui, n'est servi qu'au palier org.
     assert out == {"ok": True, "org_id": 7, "scope": "org", "slug": "daily-digest",
-                   "archived": True}
+                   "archived": True, "archived_at": "2026-10-10 09:00:00+00",
+                   "already_archived": False}
 
     # Un slug absent est un 404, pas un `archived: false` silencieux — même
     # contrat d'écho que la suppression.
-    monkeypatch.setattr(oi.org_store, "archive_instruction", lambda otype, oid, slug: False)
     with pytest.raises(AuthzDenied) as e:
         oi._archive_instruction(ResolvedCtx(sub="u1", org_id=7), _Slug(slug="nope"))
     assert e.value.status == 404 and e.value.code == "not_found"

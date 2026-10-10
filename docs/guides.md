@@ -104,6 +104,13 @@ par id (réservé platform_admin). Autz conditionnelle dans `tools/orgs.py`
 - **Versioning** : chaque écriture incrémente `version` (sur le courant) et archive un snapshot
   append-only. Revert = re-poser le corps d'une version → nouvelle version (jamais d'effacement
   d'historique sauf `delete`).
+- **Archiver** (signal #1374) : `oto_procedure(op='archive'|'unarchive', slug[, scope, org,
+  group])`, même garde que `set` — rien n'est détruit, le geste se défait par son inverse ;
+  idempotent (`archived_at` garde la date du premier retrait). Une procédure archivée sort
+  des listes (`op=list include_archived=true` la remontre), se lit encore par son slug, et
+  un agent planifié ou webhook qui la nomme est REFUSÉ (`refused_procedure_archived` sur sa
+  page, 409 `procedure_archived` au webhook — `procedure_retiree.py` : palier personnel du
+  propriétaire, puis l'org ; une procédure d'équipe n'y est pas lue).
 - **Renommer** (issue `oto`#261) : `oto_procedure(op='rename', slug, new_slug[, scope, org,
   group])` + `POST /api/me/instructions/{slug}/rename` (palier org). Le slug change, l'IDENTITÉ
   reste : l'`id` stable (`guide_id`, que les liens de projet, les partages et le nœud dérivé

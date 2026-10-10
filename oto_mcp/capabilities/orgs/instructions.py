@@ -534,6 +534,12 @@ class InstructionArchived(BaseModel):
     scope: Optional[str] = None
     slug: str
     archived: bool
+    # Le geste est IDEMPOTENT (10/10/2026, signal #1374) : ré-archiver ne rafraîchit
+    # plus la date — la procédure était déjà retirée, et la date dit DEPUIS QUAND.
+    archived_at: Optional[str] = Field(default=None, description=(
+        "When the procedure left service — on a second archive, the date of the first."))
+    already_archived: Optional[bool] = Field(default=None, description=(
+        "true when the procedure was already archived: nothing changed."))
 
 
 class InstructionReverted(BaseModel):
@@ -595,6 +601,11 @@ class GuideListInput(BaseModel):
     scope: Optional[str] = None
     # Face MCP : la description est résumée (cf. `_resume`). `verbose=true` la rend entière.
     verbose: bool = False
+    # Les procédures RETIRÉES du service, en plus des vivantes, chacune avec son
+    # `archived_at` — le seul moyen de retrouver par liste ce qu'on a archivé pour le
+    # remettre en service (signal #1374). Faux par défaut : l'index que suit l'agent ne
+    # propose jamais une procédure retirée.
+    include_archived: bool = False
 
 
 class InstrGetInput(BaseModel):
@@ -1156,6 +1167,16 @@ def _catalogue_pour_l_agent(guides: list, ctx: ResolvedCtx, inp) -> list:
              "summary": _resume(g.get("description"))} for g in guides]
 
 
+def _repond_a(row: dict, query: Optional[str]) -> bool:
+    """Une procédure RETIRÉE répond-elle à `query` ? Les retirées ne sont pas dans
+    l'index de recherche (qui ne sert que les vivantes) : on lit la chaîne dans le
+    slug, le titre ou la description, sans casse. Pas de requête = toutes."""
+    if not query:
+        return True
+    q = query.strip().lower()
+    return any(q in str(row.get(k) or "").lower() for k in ("slug", "title", "description"))
+
+
 def _list_guides(ctx: ResolvedCtx, inp) -> dict:
     """Catalogue des guides nommés (slug/title/description/version, sans corps)."""
     org_id = ctx.org_id
@@ -1184,6 +1205,20 @@ def _list_guides(ctx: ResolvedCtx, inp) -> dict:
         rows = (org_store.search_instructions("group", group_id, query) if query
                 else org_store.list_instructions("group", group_id))
         out += [{**r, "scope": "group"} for r in rows]
+    if getattr(inp, "include_archived", False):
+        # Les RETIRÉES, des mêmes paliers que la liste vivante — et d'eux seuls : une
+        # liste qui en montrerait d'autres ouvrirait une lecture que la liste n'ouvre pas.
+        paliers = []
+        if member_mode and scope in (None, "user") and ctx.sub is not None:
+            paliers.append(("user", str(ctx.sub)))
+        if scope in (None, "org"):
+            paliers.append(("org", org_id))
+        if group_id is not None:
+            paliers.append(("group", group_id))
+        for otype, oid in paliers:
+            out += [{**r, "scope": otype}
+                    for r in org_store.list_archived_instructions(otype, oid)
+                    if _repond_a(r, query)]
     return deprecations.avec_les_deux_noms(
         {"org_id": org_id, "group_id": group_id,
          "guides": _catalogue_pour_l_agent(out, ctx, inp)})
@@ -1399,14 +1434,25 @@ def _delete_instruction(ctx: ResolvedCtx, inp) -> dict:
 
 
 def _archive_instruction(ctx: ResolvedCtx, inp) -> dict:
+    """Retire une procédure du service. IDEMPOTENT : une procédure déjà archivée garde
+    la date de son retrait (`already_archived: true`) — ré-archiver la rafraîchissait,
+    et la date ne disait plus depuis quand la procédure n'était plus suivie."""
     owner = _owner_of(ctx, inp)
     norm = org_store.normalize_slug(inp.slug)
     if not norm:
         raise AuthzDenied(400, "invalid_slug", "slug requis.")
-    archived = org_store.archive_instruction(*owner, norm)
-    if not archived:
+    avant = org_store.get_instruction(*owner, norm)
+    if not avant:
         raise AuthzDenied(404, "not_found", f"Instruction `{norm}` absente.")
-    return {"ok": True, **_scope_ref(owner), "slug": norm, "archived": True}
+    deja = avant.get("archived_at")
+    if deja is None:
+        org_store.archive_instruction(*owner, norm)
+        date = (org_store.get_instruction(*owner, norm) or {}).get("archived_at")
+    else:
+        date = deja
+    return {"ok": True, **_scope_ref(owner), "slug": norm, "archived": True,
+            "archived_at": str(date) if date is not None else None,
+            "already_archived": deja is not None}
 
 
 def _rename_instruction(ctx: ResolvedCtx, inp) -> dict:

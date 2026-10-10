@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 
 from croniter import croniter
 
-from . import db, org_suspension, runner_models
+from . import db, org_suspension, procedure_retiree, runner_models
 from .capabilities import _abonnement, _instruction, _limites_du_run
 
 log = logging.getLogger(__name__)
@@ -62,14 +62,16 @@ def next_due(expr: str, tz: str,
     return croniter(expr, base).get_next(datetime.datetime)
 
 
-def _occurrence_sautee(t: dict) -> None:
-    """Trace d'une échéance consommée sans rien enfiler parce que l'org est
-    suspendue : un journal, et une livraison `refused_suspended` (sans créneau)
-    visible sur la page de l'agent, comme pour un webhook refusé."""
-    log.warning("déclencheur %s : org %s suspendue, échéance %s sautée",
-                t["id"], t["org_id"], t.get("next_due"))
+def _occurrence_sautee(t: dict, issue: str = db.REFUSE_SUSPENDED) -> None:
+    """Trace d'une échéance consommée sans rien enfiler — org suspendue, ou procédure
+    archivée : un journal, et une livraison `refused_*` (sans créneau) visible sur la
+    page de l'agent, comme pour un webhook refusé."""
+    cause = ("procédure archivée" if issue == db.REFUSE_PROCEDURE_ARCHIVED
+             else f"org {t['org_id']} suspendue")
+    log.warning("déclencheur %s : %s, échéance %s sautée",
+                t["id"], cause, t.get("next_due"))
     with db._connect() as conn:
-        db.enregistrer(conn, t["id"], t["org_id"], db.REFUSE_SUSPENDED, source="schedule")
+        db.enregistrer(conn, t["id"], t["org_id"], issue, source="schedule")
 
 
 def _tick() -> int:
@@ -98,6 +100,15 @@ def _tick() -> int:
                 continue
         except Exception as e:  # noqa: BLE001 — la réservation garde de toute façon
             log.warning("déclencheur %s : état de suspension illisible (%s)", t["id"], e)
+        # Procédure ARCHIVÉE : retirer une procédure arrête ce qui la déroule. Même
+        # trace qu'une org suspendue, avec son motif. Une lecture qui échoue laisse
+        # partir le travail (l'agent lit alors la procédure avec son `archived_at`).
+        try:
+            if procedure_retiree.archivee(t["org_id"], t.get("sub"), t.get("procedure")):
+                _occurrence_sautee(t, db.REFUSE_PROCEDURE_ARCHIVED)
+                continue
+        except Exception as e:  # noqa: BLE001 — voir ci-dessus
+            log.warning("déclencheur %s : état de la procédure illisible (%s)", t["id"], e)
         payload = {
             "procedure": t["procedure"],
             "project_id": t["project_id"],

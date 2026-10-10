@@ -129,6 +129,14 @@ def audit_project(project_id: int, links: Optional[list[dict]] = None, *,
                     unbound.append({"procedure": instr["slug"],
                                     "ref": str(l.get("target_ref")),
                                     "slots": missing})
+            elif t == "doc":
+                if light:
+                    continue   # une lecture de page par lien → audit COMPLET seul
+                ref = str(l.get("target_ref") or "")
+                if not (ref.isdigit() and db.get_doc_by_id(int(ref))):
+                    dead.append({"target_type": t, "target_ref": l.get("target_ref"),
+                                 "slot": l.get("slot"),
+                                 "why": "la page pointée n'existe plus"})
             elif t == "connecteur":
                 ref = l.get("target_ref")
                 if ref not in providers.REGISTRY:

@@ -111,8 +111,9 @@ def _need(val, code: str, msg: str):
 
 
 class ProcedureInput(BaseModel):
-    op: Literal["get", "list", "create", "set", "describe", "rename", "delete",
-                "library_list", "library_get", "publish", "fork", "unpublish",
+    op: Literal["get", "list", "create", "set", "describe", "rename", "archive",
+                "unarchive", "delete", "library_list", "library_get", "publish", "fork",
+                "unpublish",
                 "share_get", "share_publish", "share_unpublish", "share_set",
                 "share_readers"]
     slug: Optional[str] = None
@@ -124,6 +125,7 @@ class ProcedureInput(BaseModel):
     full: bool = False                     # get : le dessin et la description avec le corps
     query: Optional[str] = None            # list / library_list
     verbose: bool = False                  # list : la description entière, pas le résumé
+    include_archived: bool = False         # list : les procédures retirées aussi
     body_md: Optional[str] = None          # set
     title: Optional[str] = None            # set / describe / publish
     description: Optional[str] = None      # set / describe / publish
@@ -171,7 +173,8 @@ def _dispatch_procedure(ctx: ResolvedCtx, inp: ProcedureInput):
             version=inp.version, with_history=inp.with_history, full=inp.full))
     if inp.op == "list":
         return oi._list_guides(ctx, oi.GuideListInput(query=inp.query, scope=inp.scope,
-                                                      verbose=inp.verbose))
+                                                      verbose=inp.verbose,
+                                                      include_archived=inp.include_archived))
     if inp.op == "create":
         return oi._create_instruction(ctx, oi.ConsoleInstrCreateInput(
             slug=_need(inp.slug, "missing_slug", "`slug` requis pour create."),
@@ -194,6 +197,14 @@ def _dispatch_procedure(ctx: ResolvedCtx, inp: ProcedureInput):
             slug=_need(inp.slug, "missing_slug", "`slug` requis pour rename."),
             new_slug=inp.new_slug, org=inp.org, scope=_ECRIT_SCOPE(inp),
             group=inp.group))
+    if inp.op in ("archive", "unarchive"):
+        # Les handlers de la face REST, tels quels, au palier de la console : retirer
+        # n'est pas détruire (la procédure et son historique restent), donc la garde
+        # est celle de l'écriture, pas celle de la suppression.
+        geste = oi._archive_instruction if inp.op == "archive" else oi._unarchive_instruction
+        return geste(ctx, oi.ConsoleGuideDeleteInput(
+            slug=_need(inp.slug, "missing_slug", f"`slug` requis pour {inp.op}."),
+            org=inp.org, scope=_ECRIT_SCOPE(inp), group=inp.group))
     if inp.op == "delete":
         return oi._delete_instruction(ctx, oi.ConsoleGuideDeleteInput(
             slug=_need(inp.slug, "missing_slug", "`slug` requis pour delete."),
@@ -271,6 +282,11 @@ CAPABILITIES += [
             # `rename` aussi : il ne détruit rien (id et historique restent) et se
             # défait en renommant de nouveau (issue `oto`#261).
             "create": _ECRIRE, "set": _ECRIRE, "describe": _ECRIRE, "rename": _ECRIRE,
+            # `archive`/`unarchive` aussi : la procédure et tout son historique restent,
+            # et le geste se défait par son inverse. C'est `delete`, qui emporte
+            # l'historique, qui reste au chef (signal #1374 : des agents supprimaient
+            # faute de pouvoir retirer).
+            "archive": _ECRIRE, "unarchive": _ECRIRE,
             "delete": _SUPPRIMER,
             "library_list": SUB_ONLY, "library_get": SUB_ONLY,
             # `publish` porte la règle de `library.publish` (super_admin plateforme) :
@@ -332,6 +348,10 @@ CAPABILITIES += [
             "not move; runner triggers, campaigns and pending jobs naming the old slug "
             "follow in the same transaction (`runner`); the old slug stops resolving, no "
             "alias. A taken `new_slug` is refused, nothing changed) "
+            "/ archive (exact `slug`, same axes and permission as `set`: the procedure "
+            "leaves every listing and stops being offered, its history is KEPT; "
+            "idempotent, `archived_at` says since when) / unarchive (puts it back in "
+            "service; `was_archived_at` echoes what was undone) — prefer archive to delete "
             "/ delete (exact `slug`; same `scope`/`group`/`org` "
             "axes as set, but DESTRUCTIVE — it takes the whole version history, so "
             "`scope='group'` needs the team LEAD) — and the PUBLIC library: "
@@ -343,8 +363,9 @@ CAPABILITIES += [
             "/ unpublish (`id`). WEB LINK of one org procedure (org_admin): "
             "op=share_get / share_readers (who read it) / share_unpublish / share_set "
             "(`show_readers`); share_publish is done by a person in the app, never by "
-            "an agent. An ARCHIVED procedure is left out of op=list; op=get "
-            "still reads it by slug, with `archived_at` set. set/create answer "
+            "an agent. An ARCHIVED procedure is left out of op=list (`include_archived="
+            "true` lists it too); op=get still reads it by slug, with `archived_at` set, "
+            "and a scheduled or webhook agent on it is refused (`procedure_archived`). set/create answer "
             "`body_sha256`, the SHA-256 of the body as STORED (trimmed, tool names "
             "canonical): compare it with your hash of the trimmed body you sent — a "
             "mismatch means the stored text is not what you published."),

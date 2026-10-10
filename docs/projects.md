@@ -10,8 +10,10 @@ type: reference
 
 Conteneur de travail **possédé** (owned resource ADR 0030) : un but + ses entités. Tables
 `projects` (owner_type/owner_id, `brief_md` = doc d'entrée, soft-delete `archived_at`),
-`project_links` (pointeur typé `target_type∈{tableau,procedure,connecteur,base}` + `target_ref`
-+ label, pas de FK cross-store), `docs` (pages markdown **en arbre** `parent_id`, héritent de
+`project_links` (pointeur typé `target_type∈{tableau,procedure,connecteur,doc,base}` + `target_ref`
++ label, pas de FK cross-store ; `doc` = une page Documents par son id, lisible par qui la
+lie — c'est ainsi qu'on binde le slot `doc` d'une procédure, et la purge du boot qui
+l'effaçait depuis le lot 3 est retirée, 10/10/2026), `docs` (pages markdown **en arbre** `parent_id`, héritent de
 l'accès du projet — pas d'ownership propre), `project_activity` (journal best-effort).
 Capacités co-déclarées : **`oto_project`** (`capabilities/projects.py`, op create/list/get/
 update/archive/link/unlink/activity, `POST /api/me/projects`), **`oto_doc`** (`capabilities/

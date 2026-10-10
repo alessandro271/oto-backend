@@ -43,7 +43,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Literal, Optional
 
-from . import db, org_suspension, runner_models
+from . import db, org_suspension, procedure_retiree, runner_models
 from .capabilities import _limites_du_run
 
 logger = logging.getLogger(__name__)
@@ -655,6 +655,13 @@ def declencher(trigger_id: int, secret: Optional[str], corps: Any,
     # Lue AVANT d'ouvrir la transaction : une seconde connexion du pool tenue pendant
     # que celle-ci verrouille le déclencheur ne sert à rien.
     suspendue = bool(org_suspension.etat(t["org_id"]))
+    # Procédure ARCHIVÉE : refus nommé. Une lecture qui échoue laisse partir la
+    # livraison — l'agent lit alors la procédure avec son `archived_at`, comme au tick.
+    try:
+        retiree = procedure_retiree.archivee(t["org_id"], t.get("sub"), t.get("procedure"))
+    except Exception as e:  # noqa: BLE001 — voir ci-dessus
+        logger.warning("déclencheur %s : état de la procédure illisible (%s)", trigger_id, e)
+        retiree = None
     with db._connect() as conn:
         if not t["enabled"]:
             db.enregistrer(conn, trigger_id, t["org_id"], db.REFUSE_PAUSED,
@@ -671,6 +678,14 @@ def declencher(trigger_id: int, secret: Optional[str], corps: Any,
                 409, org_suspension.CODE,
                 "This agent's workspace is suspended: it will not run until the "
                 "workspace has a plan. The delivery is recorded and visible on its page.")
+        elif retiree:
+            db.enregistrer(conn, trigger_id, t["org_id"], db.REFUSE_PROCEDURE_ARCHIVED,
+                           source=source, **marque)
+            refus = HookRefus(
+                409, procedure_retiree.CODE,
+                "This agent's procedure is archived: it will not run until the procedure "
+                "is put back in service (oto_procedure op=unarchive). The delivery is "
+                "recorded and visible on its page.")
         else:
             # ⚠️ AVANT de compter. Une rafale est concurrente par définition : sans
             # ce verrou, toutes les livraisons lisent le même compte et partent

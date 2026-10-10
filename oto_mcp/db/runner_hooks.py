@@ -52,6 +52,9 @@ REFUSE_SUSPENDED = "refused_suspended"
 #: livraison est REFUSÉE (429), pas retardée. C'est la borne de dépense d'un
 #: credential fuité, là où le lissage ne fait que repousser.
 REFUSE_DAILY_CAP = "refused_daily_cap"
+#: La procédure que l'agent déroulerait est ARCHIVÉE (`procedure_retiree`) : retirer
+#: une procédure doit arrêter ce qui la déroule, pas seulement la sortir des listes.
+REFUSE_PROCEDURE_ARCHIVED = "refused_procedure_archived"
 
 #: Ce qu'on rend du corps reçu quand on RELIT une livraison — borné parce qu'une
 #: page de livraisons en sert jusqu'à 200, et qu'un corps entier × 200 n'est plus
