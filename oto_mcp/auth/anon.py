@@ -13,7 +13,9 @@ s'inscrire auprès du service de connexion »). Ce shim satisfait leur flux en
 Sécurité : le seul risque réel est l'open-redirect → `redirect_uri` validé STRICTEMENT
 (mêmes hôtes que la façade DCR : claude.ai/.com, chatgpt, mistral). PKCE (S256) respecté,
 code à usage unique + TTL court. Mono-process → store in-memory suffisant. Host-aware :
-resource/issuer dérivés du Host de la requête (= le sous-domaine servi).
+resource/issuer dérivés du Host de la requête (= le sous-domaine servi), validé sur la
+forme d'un endpoint de projet (`subdomain_project.hote_de_projet`), sinon l'adresse
+publique de l'instance.
 """
 from __future__ import annotations
 
@@ -43,7 +45,20 @@ _CAP = 10_000
 
 
 def _host_base(request: Request) -> str:
-    host = (request.headers.get("host") or "").split(",")[0].strip()
+    """La base annoncée par la découverte : l'hôte SERVI, jamais un Host arbitraire.
+
+    ⚠️ Le Host est lu comme `HostDispatch` le lit (dernier en-tête `host` du scope) — c'est
+    celui dont il a prouvé le projet publié avant de router ici. Starlette rend le
+    PREMIER : deux en-têtes `Host` faisaient annoncer comme issuer et `resource` un hôte
+    qu'aucun projet ne sert. Un hôte qui n'a pas la forme d'un endpoint de projet retombe
+    sur l'adresse publique de l'instance."""
+    from .. import config, subdomain_project
+    brut = dict(request.scope.get("headers") or []).get(b"host", b"").decode("latin-1")
+    host = subdomain_project.hote_de_projet(brut)
+    if host is None:
+        logger.warning("anon discovery: hôte hors forme de projet %r, repli canonique",
+                       brut[:100])
+        return config.public_base_url()
     return f"https://{host}"
 
 

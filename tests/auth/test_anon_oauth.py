@@ -255,3 +255,33 @@ def test_un_enregistrement_sans_corps_garde_le_comportement_d_avant(client):
     assert r.status_code == 201
     assert r.json()["client_id"] == anon._ANON_CLIENT_ID
     assert r.json()["token_endpoint_auth_method"] == "none"
+
+
+# ── l'hôte annoncé est l'hôte SERVI, jamais un Host arbitraire ────────────────
+
+@pytest.mark.parametrize("hote", ["evil.example", "un-projet.mcp.oto.cx.evil.example",
+                                  "a.b.mcp.oto.cx", "un_projet@evil.mcp.oto.cx", ""])
+def test_un_hote_hors_forme_de_projet_retombe_sur_l_adresse_publique(
+        client, monkeypatch, hote):
+    monkeypatch.setenv("OTO_MCP_PUBLIC_URL", "https://mcp.oto.cx")
+    for route, cle in (("/.well-known/oauth-authorization-server", "issuer"),
+                       ("/.well-known/openid-configuration", "issuer")):
+        assert client.get(route, headers={"host": hote}).json()[cle] == "https://mcp.oto.cx"
+    r = client.get("/.well-known/oauth-protected-resource", headers={"host": hote})
+    assert r.json()["resource"] == "https://mcp.oto.cx/mcp"
+
+
+def test_deux_entetes_host_annoncent_celui_que_le_dispatch_a_prouve(monkeypatch):
+    """`HostDispatch` lit le DERNIER `host` du scope ; la découverte lit le même — jamais
+    un premier en-tête glissé devant celui du projet publié."""
+    from starlette.requests import Request
+    monkeypatch.setenv("OTO_MCP_PUBLIC_URL", "https://mcp.oto.cx")
+    scope = {"type": "http", "method": "GET", "path": "/", "query_string": b"",
+             "headers": [(b"host", b"evil.example"), (b"host", b"un-projet.mcp.oto.cx")]}
+    assert anon._host_base(Request(scope)) == "https://un-projet.mcp.oto.cx"
+
+
+def test_le_port_ne_fait_pas_partie_de_l_hote_annonce(client):
+    r = client.get("/.well-known/oauth-protected-resource",
+                   headers={"host": "un-projet.share.oto.cx:443"})
+    assert r.json()["resource"] == "https://un-projet.share.oto.cx/mcp"
