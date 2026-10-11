@@ -496,8 +496,19 @@ _SERVER_INSTRUCTIONS = instructions.render()
 # rejoignent `args` APRÈS `truncated_args` — un entier n'y est de toute façon ni
 # stringifié ni coupé. Ils facturent : `tools/meta._BILLING_TRACE_KEYS` les garde sur
 # la ligne CIBLE d'un `oto_call`, jamais sur l'enveloppe.
+#
+# `apify_run_id` (11/10/2026, facturation du partenaire) — le run Apify dont l'appel
+# relève le coût FINAL (`tools/apify.py`). C'est l'identité du JOB de la ligne : un run
+# terminé relevé N fois trace N fois le même coût, et la lentille la sert comme
+# `job_id` (liste fermée `db.usage.BILLABLE_JOB_ARGS`) pour qu'il ne se compte qu'une
+# fois. Elle passe par le relevé et non par l'argument de l'appel, comme le fait
+# FullEnrich (`enrichment_id`), parce que l'argument s'appelle `run_id` — un nom que
+# d'autres outils portent pour tout autre chose (le run d'oto de `run_finish`, un run
+# de CI…), et que la lentille servirait alors comme un job. Elle facture : même règle
+# que `found_*`, gardée sur la ligne CIBLE par `tools/meta._BILLING_TRACE_KEYS`.
 _TRACED_ARGS = ("ns_id", "doctrine_version", "instance", "readonly_forced",
-                "readonly_forced_bilan", "found_work_emails", "found_personal_emails", "found_phones")
+                "readonly_forced_bilan", "found_work_emails", "found_personal_emails", "found_phones",
+                "apify_run_id")
 
 
 _PREPARED = False

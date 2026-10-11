@@ -548,6 +548,15 @@ Le consommateur qui relisait chaque outil à chaque rafraîchissement (une requ�
 outil, toutes dans la même seconde) lit `usage/tools`, puis `usage/calls` pour le
 seul outil dont il veut le détail.
 
+**Le job d'une ligne** (`job_id`) se lit dans les args journalisés, pour la liste
+fermée `db.usage.BILLABLE_JOB_ARGS` : `enrichment_id` (l'argument de `fullenrich_result`)
+et `apify_run_id` (le run dont `apify_run_status` relève le coût final — posé par
+l'outil dans le relevé de l'appel, parce que son argument `run_id` porte un nom que
+d'autres outils emploient pour autre chose). Un job relevé plusieurs fois trace
+plusieurs fois le même coût : c'est au consommateur de le compter une fois, et
+`usage/tools` le fait déjà (`jobs` distincts). On n'y ajoute qu'un nom qu'aucune ligne
+déjà journalisée ne porte : les jours consolidés ne se recalculent pas d'eux-mêmes.
+
 **Bornes, servies et nommées** : une fenêtre d'au plus `RELEVE_FENETRE_MAX_JOURS`
 (92 j, la rétention du journal plus une marge) — sans `since`, la fenêtre maximale
 s'applique et `since_effectif` la rend ; au-delà, `400 window_too_large`, jamais une

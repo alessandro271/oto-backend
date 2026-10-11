@@ -326,6 +326,48 @@ def test_le_store_rend_le_job_d_un_releve_sans_aucun_autre_argument(live):
     assert "contacts" not in soumis["calls"][0] and "args" not in soumis["calls"][0]
 
 
+def test_le_store_rend_le_run_apify_releve_comme_job_et_pas_un_argument_run_id(live):
+    """Contre la base : le coût d'un run Apify TERMINÉ, relevé deux fois, sort sur deux
+    lignes au MÊME `job_id` (posé par l'outil dans le relevé, versé dans `args` sous
+    `apify_run_id`) — le consommateur le compte une fois. Un relevé de run EN COURS n'a
+    ni quantité ni job. Et l'ARGUMENT `run_id` ne désigne jamais un job : celui d'un
+    autre outil (`run_finish`, le run d'oto) reste hors de la lentille."""
+    from oto_mcp import db, org_store, server
+    from oto_mcp.calllog import apply_call_trace, truncated_args
+
+    sub = "sub-apify-" + uuid.uuid4().hex[:6]
+    org = org_store.create_org("Runs Apify relevés", created_by=sub)
+    run = "HG7ML7M8z78YcAPEB"                      # la forme d'un id de run, fictif
+    appel = truncated_args({"run_id": run}, tool="apify_run_status")
+    termine = apply_call_trace({"args": dict(appel)},
+                               {"quantity": 42100, "apify_run_id": run},
+                               server._TRACED_ARGS)["args"]
+    assert termine == {"run_id": run, "apify_run_id": run}
+
+    _poser(sub, org, quand="2026-08-20T10:00:00+00:00", tool="apify_run_status",
+           key_mode="platform", args=dict(appel))                   # run encore en cours
+    for minute in (1, 2):                                           # terminé, relevé 2 fois
+        _poser(sub, org, quand=f"2026-08-20T10:0{minute}:00+00:00", tool="apify_run_status",
+               quantity=42100, key_mode="platform", args=termine)
+    _poser(sub, org, quand="2026-08-20T10:03:00+00:00", tool="run_finish",
+           args=truncated_args({"run_id": "run-oto-1", "status": "done"}, tool="run_finish"))
+
+    fenetre = {"since": "2026-08-10T00:00:00+00:00", "until": "2026-08-21T00:00:00+00:00"}
+    releves = db.list_billable_calls_for_org(org, "apify_run_status", **fenetre)
+    assert releves["total"] == 3
+    assert sorted(((c["job_id"], c["quantity"]) for c in releves["calls"]),
+                  key=lambda t: t[0] or "") == [(None, None), (run, 42100), (run, 42100)]
+    assert not {"args", "apify_run_id"} & set(releves["calls"][0])
+
+    autre = db.list_billable_calls_for_org(org, "run_finish", **fenetre)
+    assert [c["job_id"] for c in autre["calls"]] == [None]
+
+    _consolider_le_journal()
+    par_outil = {t["tool"]: t for t in db.billable_usage_by_tool_for_org(org, **fenetre)["tools"]}
+    assert par_outil["apify_run_status"]["jobs"] == 1, "un run relevé deux fois = UN job"
+    assert par_outil["run_finish"]["jobs"] == 0
+
+
 @pytest.fixture
 def journal(live):
     """Sept appels facturables de l'outil dans la fenêtre — dont trois à la MÊME
