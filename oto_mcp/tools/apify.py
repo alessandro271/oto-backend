@@ -20,6 +20,7 @@ by name: that is what makes them verifiable by the version-skew probe.
 """
 from __future__ import annotations
 
+import math
 from contextlib import contextmanager
 from typing import Any, Optional
 
@@ -27,7 +28,7 @@ from fastmcp import FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import access
+from .. import access, session_org
 from ..connectors import verify as connector_verify
 
 
@@ -54,6 +55,45 @@ def _upstream_message(e) -> str:
     if status in (500, 502, 503, 504):
         return f"Apify is temporarily unavailable (HTTP {status}) — retry later."
     return f"Apify refused the request (HTTP {status}): {e.body}"
+
+
+# The states a run never leaves: its `usageTotalUsd` is final there, and only there.
+_TERMINAL = frozenset({"SUCCEEDED", "FAILED", "TIMED-OUT", "ABORTED"})
+
+
+def _microdollars(cout: float) -> int:
+    """Run cost in micro-dollars, rounded UP — the unit and the rounding of Jev
+    (`tools/jev.py::_microdollars`: the `round` before `ceil` keeps float noise from
+    billing one micro-dollar too many)."""
+    return math.ceil(round(float(cout) * 1e6, 6))
+
+
+def _releve(out: Any, run_id: str) -> None:
+    """Record a FINISHED run's real cost on the current call's trace: `quantity` in
+    micro-dollars, and the run as the JOB of the line (`apify_run_id`, served as
+    `job_id` by the billing lens) — a finished run polled N times traces N times the
+    same cost, and the biller counts a job once.
+
+    ⚠️ Nothing is traced while the run is not in a terminal state: `usageTotalUsd`
+    is then "what it cost SO FAR", and a biller that keeps the first figure it sees
+    for a job would keep a partial one. Nothing either when the response carries no
+    readable cost: an absent figure is not a zero, and a guessed one would be billed.
+    A terminal run at 0 traces 0 — measured, nothing to bill."""
+    run = out.get("data") if isinstance(out, dict) else None
+    if not isinstance(run, dict):
+        # A flat body (no `data` envelope) is read as the run itself.
+        run = out if isinstance(out, dict) else {}
+    status = run.get("status")
+    if not isinstance(status, str) or status not in _TERMINAL:
+        return
+    cout = run.get("usageTotalUsd")
+    if (isinstance(cout, bool) or not isinstance(cout, (int, float))
+            or not math.isfinite(cout) or cout < 0):
+        return
+    rid = run.get("id")
+    session_org.note_call_trace(
+        quantity=_microdollars(cout),
+        apify_run_id=rid if isinstance(rid, str) and rid else run_id)
 
 
 def _verify(fields: dict, config: dict | None = None) -> None:  # noqa: ARG001
@@ -201,7 +241,9 @@ def register(mcp: FastMCP) -> None:
         ABORTED), `defaultDatasetId` (where the output is) and `usageTotalUsd`
         (what it cost so far)."""
         with _upstream():
-            return _client().run_status(run_id, wait_for_finish=wait_for_finish)
+            out = _client().run_status(run_id, wait_for_finish=wait_for_finish)
+        _releve(out, run_id)
+        return out
 
     @mcp.tool()
     def apify_abort_run(run_id: str, gracefully: Optional[bool] = None) -> dict:
