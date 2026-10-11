@@ -324,3 +324,90 @@ def test_mcp_face(live, monkeypatch):
     out = asyncio.run(_appel())
     assert out["updated"] == 1 and out["matched"] == 1
     assert _base(ns_id)["a"]["tier"] == "Hot"
+
+
+# ── l'ajout `col[+]` ─────────────────────────────────────────────────────────────
+
+SCHEMA_JOURNAL = {"fields": SCHEMA["fields"] + [
+    {"key": "journal", "type": "text"},
+    {"key": "tags", "type": "list", "of": {"type": "text"}},
+    {"key": "fige", "type": "text", "readonly": True}]}
+
+
+def _valeur(cellule):
+    return cellule.get("valeur") if isinstance(cellule, dict) else cellule
+
+
+def test_append_adds_a_line_to_each_matching_row_without_reading_it(store):
+    ns, ns_id = _table([{**l, "journal": "debut"} for l in LIGNES], SCHEMA_JOURNAL)
+    out = store.update_where(ns, {"journal[+]": "relance J+3", "tags[+]": "relance"},
+                             filter={"fit": {"gte": 8}})
+    assert (out["matched"], out["updated"], out["unchanged"]) == (2, 2, 0)
+    base = _base(ns_id)
+    assert _valeur(base["a"]["journal"]) == "debut\nrelance J+3"
+    assert _valeur(base["a"]["tags"]) == ["relance"]
+    assert _valeur(base["c"]["journal"]) == "debut"
+    # Un ajout n'est jamais « déjà en place » : rejouer la règle ajoute encore.
+    again = store.update_where(ns, {"journal[+]": "relance J+3"}, filter={"fit": {"gte": 8}})
+    assert (again["updated"], again["unchanged"]) == (2, 0)
+    assert _valeur(_base(ns_id)["b"]["journal"]) == "debut\nrelance J+3\nrelance J+3"
+
+
+def test_concurrent_append_rules_all_land_without_conflicts(store):
+    import threading
+
+    from oto_mcp.datastore.core import make_store
+    ns, ns_id = _table([{"nom": "a", "fit": 9}], SCHEMA_JOURNAL)
+    tours, sorties, erreurs = 6, [], []
+
+    def courir(texte):
+        barriere.wait()
+        try:
+            sorties.append(make_store(SUB).update_where(ns, {"journal[+]": texte},
+                                                        filter={"nom": "a"}))
+        except BaseException as e:  # noqa: BLE001 — rendue au test
+            erreurs.append(e)
+
+    for i in range(tours):
+        barriere = threading.Barrier(2)
+        fils = [threading.Thread(target=courir, args=(f"{p}{i}",)) for p in "xy"]
+        for f in fils:
+            f.start()
+        for f in fils:
+            f.join(timeout=60)
+    assert erreurs == []
+    assert all(o["conflicts"] == 0 and o["updated"] == 1 for o in sorties)
+    lignes = _valeur(_base(ns_id)["a"]["journal"]).split("\n")
+    assert sorted(lignes) == sorted(f"{p}{i}" for p in "xy" for i in range(tours))
+
+
+def test_append_on_a_table_without_schema_extends_the_text_in_place(store):
+    ns, ns_id = _table([{"nom": "a", "journal": "debut"}], schema=None)
+    store.update_where(ns, {"journal[+]": "suite"}, filter={"nom": "a"})
+    assert _valeur(_base(ns_id)["a"]["journal"]) == "debut\nsuite"
+
+
+@pytest.mark.parametrize("set_, kw, attendu", [
+    ({"inconnue[+]": "x"}, {}, "Déclare-la d'abord"),
+    ({"journal[+]": "x"}, {"only_if_empty": True}, "only_if_empty"),
+    ({"fige[+]": "x"}, {}, "readonly"),
+    ({"tags[0]": "x"}, {}, "RANG de liste"),
+    ({"tags[-]": "x"}, {}, "RANG de liste"),
+])
+def test_append_rule_faults_are_refused_before_any_row(store, set_, kw, attendu):
+    ns, ns_id = _table([{"nom": "a", "fit": 9, "journal": "debut"}], SCHEMA_JOURNAL)
+    with pytest.raises(ValueError) as exc:
+        store.update_where(ns, set_, **kw)
+    assert attendu in str(exc.value)
+    assert _valeur(_base(ns_id)["a"]["journal"]) == "debut"
+
+
+def test_append_past_the_bound_is_refused_per_row(store, monkeypatch):
+    from oto_mcp.datastore import rangs
+    monkeypatch.setattr(rangs, "TAILLE_MAX_APRES_AJOUT", 30)
+    ns, ns_id = _table([{"nom": "a", "fit": 9, "journal": "court"},
+                        {"nom": "b", "fit": 9, "journal": "z" * 28}], SCHEMA_JOURNAL)
+    out = store.update_where(ns, {"journal[+]": "suite"}, filter={"fit": 9})
+    assert (out["updated"], out["refused"]) == (1, 1)
+    assert "TABLE" in out["refused_sample"][0]["error"]
+    assert _valeur(_base(ns_id)["b"]["journal"]) == "z" * 28

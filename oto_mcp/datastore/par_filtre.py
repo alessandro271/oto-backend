@@ -19,7 +19,8 @@ et la règle la remplit — même grammaire sur les deux verbes, pas une excepti
 
 **Refusé AVANT la première ligne** — une faute de la RÈGLE, qui le serait sur toutes :
 une valeur qui EFFACE (`null`, `""`, `[]`, `{}`, `@empty`, une couche vide) — effacer
-en masse sans `confirm`, c'est `data_drop_column` ; la clé métier ; un rang de liste ;
+en masse sans `confirm`, c'est `data_drop_column` ; la clé métier ; un rang de liste
+(l'AJOUT `col[+]` excepté, ci-dessous) ;
 la couche `origine` ; une valeur hors des `options` déclarées ; une colonne
 `readonly` hors `only_if_empty` (le verrou laisse remplir une case vide, pas
 remplacer). Au-delà : si les `ESSAIS` premières lignes tentées sont TOUTES refusées
@@ -45,6 +46,18 @@ non déclarée est refusée (`colonnes_non_declarees`). Seulement sur un tableau
 déclare déjà des colonnes : poser un premier champ sur un tableau SANS schéma rendrait
 toutes ses autres colonnes « non déclarées » d'un coup.
 
+**L'ajout `col[+]`** (une ligne à un journal texte, un élément à une liste) est la
+seule adresse de rang servie : il ne lit rien, chaque ligne le résout sous son verrou
+(`rangs`), avec sa borne (`TAILLE_MAX_APRES_AJOUT`). Trois écarts au reste du geste :
+- une règle FAITE D'AJOUTS seulement s'écrit SANS précondition de révision — deux
+  agents qui ajoutent en même temps sont le cas que l'ajout sert, pas un conflit ; le
+  filtre est jugé à la sélection ;
+- un ajout n'est jamais « déjà en place » (`unchanged`) : rejouer la règle ajoute une
+  seconde fois — reprendre par `next_cursor`, ou filtrer sur un état que la règle pose ;
+- sa colonne doit être DÉCLARÉE sur un tableau qui a un schéma : `text` ou `list` ne se
+  devine pas d'une valeur. `only_if_empty` lui est refusé : un ajout n'attend pas une
+  case vide.
+
 **Borné en temps, pas en lignes.** La face REST coupe à 45 s (`api_routes`) ; le
 geste s'arrête au budget et rend `next_cursor` (le dernier `_id` traité, keyset sur
 `row_id`) — repasser le même appel avec ce curseur continue. Avec `only_if_empty`,
@@ -62,6 +75,7 @@ from .couches import (ORIGIN_LAYER, VALUE_LAYER, est_vide, est_vide_delibere,
 from .declaration import _fields, champ_declare, readonly_fields
 from .errors import RevisionConflict, RowLocked, RowNotFound, RowValidationError
 from .options_declarees import hors_des_options
+from .rangs import colonne_ajoutee
 
 #: Secondes de travail avant de rendre la main avec un curseur — sous les 45 s de la
 #: face REST, marge comprise pour la réponse et le journal.
@@ -114,6 +128,8 @@ def _type_infere(valeur: Any) -> str:
 
 
 def _deja_en_place(data: dict, set_: dict) -> bool:
+    if any(colonne_ajoutee(cle) for cle in set_):
+        return False                    # un ajout change toujours la cellule
     for cle, v in set_.items():
         base, couche = split_layer(cle)
         stocke = data.get(base)
@@ -142,10 +158,11 @@ def _verifier_set(set_: Any) -> dict:
         if cle.startswith("_"):
             raise ValueError(
                 f"`set` : `{cle}` est une colonne de la plateforme, pas une donnée.")
-        if "[" in cle:
+        if "[" in cle and colonne_ajoutee(cle) is None:
             raise ValueError(
                 f"`set` : `{cle}` vise un RANG de liste — une règle par filtre pose une "
-                f"colonne entière. Écris ce rang ligne par ligne avec `data_write`.")
+                f"colonne entière, ou AJOUTE (`col[+]`). Écris ce rang ligne par ligne "
+                f"avec `data_write`.")
         if _efface(v):
             # Effacer une colonne sur N lignes d'un seul geste, sans `confirm` : le
             # verbe détruirait en masse là où `data_drop_column` exige une confirmation.
@@ -171,10 +188,17 @@ class ParFiltreMixin:
                      cursor: Optional[str] = None) -> dict:
         set_ = _verifier_set(set_)
         ns_id = self._resolve(datastore, write=True)
-        poses = [_valeur_posee(k, v) for k, v in set_.items()]
-        colonnes = sorted({c for c, _, _ in poses})
+        ajoutees = sorted({c for c in map(colonne_ajoutee, set_) if c})
+        poses = [_valeur_posee(k, v) for k, v in set_.items()
+                 if colonne_ajoutee(k) is None]
+        colonnes = sorted({c for c, _, _ in poses} | set(ajoutees))
         a_valeur = {c: val for c, porte, val in poses if porte}
         clauses = self._clauses(ns_id, filter, filters)
+        if only_if_empty and ajoutees:
+            raise ValueError(
+                f"`only_if_empty` attend une case vide, et `{ajoutees[0]}[+]` AJOUTE à "
+                f"la cellule quelle qu'elle soit. Retire `only_if_empty`, ou filtre sur "
+                f"l'état qui dit que l'entrée manque.")
         if only_if_empty:
             if not a_valeur:
                 raise ValueError(
@@ -192,6 +216,7 @@ class ParFiltreMixin:
                 f"écrit.")
         self._juger_la_regle(schema, colonnes, a_valeur, only_if_empty)
         declarees = {f.get("key") for f in _fields(schema)}
+        self._juger_les_ajouts(schema, ajoutees, declarees)
         a_declarer = ([{"key": c, "type": _type_infere(a_valeur[c])}
                        for c in sorted(a_valeur) if c not in declarees]
                       if declarees else [])
@@ -219,7 +244,8 @@ class ParFiltreMixin:
         self._ns_of = lambda i: ns_fige if i == ns_id else type(self)._ns_of(self, i)
         try:
             try:
-                out = self._boucle(datastore, ns_id, set_, clauses, cursor)
+                out = self._boucle(datastore, ns_id, set_, clauses, cursor,
+                                   precondition=len(ajoutees) < len(set_))
             finally:
                 del self._resolve, self._ns_of
         except _RegleRefusee as e:
@@ -251,7 +277,26 @@ class ParFiltreMixin:
                     f"({', '.join(str(o) for o in opts)}) — la règle la poserait sur "
                     f"chaque ligne. Rien n'est écrit."])
 
-    def _boucle(self, datastore, ns_id, set_, clauses, cursor) -> dict:
+    @staticmethod
+    def _juger_les_ajouts(schema: Optional[dict], ajoutees: list,
+                          declarees: set) -> None:
+        """Les fautes d'une règle qui AJOUTE, jugées une fois avant toute ligne."""
+        verrouillees = sorted(set(ajoutees) & readonly_fields(schema))
+        if verrouillees:
+            raise ValueError(
+                f"`set` ajoute à `{verrouillees[0]}`, colonne verrouillée (`readonly`) : "
+                f"une règle ne force pas un verrou. Rien n'est écrit.")
+        manquantes = [c for c in ajoutees if declarees and c not in declarees]
+        if manquantes:
+            c = manquantes[0]
+            raise ValueError(
+                f"`set` ajoute à `{c}`, que le schéma ne déclare pas : une règle ne devine "
+                f"pas si c'est un journal ou une liste. Déclare-la d'abord "
+                f"(`data_patch_schema`, `{{\"key\": \"{c}\", \"type\": \"text\"}}` pour un "
+                f"journal, `\"list\"` pour des éléments), puis relance. Rien n'est écrit.")
+
+    def _boucle(self, datastore, ns_id, set_, clauses, cursor, *,
+                precondition: bool = True) -> dict:
         updated = unchanged = essais = 0
         conflicts: list = []
         refused: list = []
@@ -279,8 +324,9 @@ class ParFiltreMixin:
                     continue
                 essais += 1
                 try:
-                    ecrite = self.update_row(datastore, rid, dict(set_),
-                                             expected_revision=r.get("rev"))
+                    ecrite = self.update_row(
+                        datastore, rid, dict(set_),
+                        expected_revision=r.get("rev") if precondition else None)
                 except RowNotFound:
                     continue                      # supprimée entre-temps
                 except (RevisionConflict, RowLocked) as e:

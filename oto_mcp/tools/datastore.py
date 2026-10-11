@@ -1011,7 +1011,9 @@ def register(mcp: FastMCP) -> None:
         only — a record is removed at its rank; an absent value is refused). Both are
         applied under the row lock: two concurrent appends both land. On a `text`
         column, `{"journal[+]": "…"}` appends a line to the cell (a list = several
-        lines) without resending it; a log kept by many is better as a table.
+        lines) without resending it; a log kept by many is better as a table — past
+        64 000 characters (unless the column declares `max_length`) an append is
+        refused: move the log to a table, one row per entry.
         Refused, with the form that works: a rank that does not exist (append with
         `contacts[+]`), `contacts[0]: {…}` (write its fields), `contacts[].x`, and the
         whole column together with one of its ranks.

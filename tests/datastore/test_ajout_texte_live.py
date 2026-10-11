@@ -25,6 +25,7 @@ SCHEMA = {"key": "siren", "fields": [
     {"key": "siren", "type": "text"},
     {"key": "journal", "type": "text"},
     {"key": "court", "type": "text", "max_length": 10},
+    {"key": "long", "type": "text", "max_length": 100_000},
     {"key": "score", "type": "number"},
     {"key": "tags", "type": "list", "of": {"type": "text"}},
 ]}
@@ -227,3 +228,39 @@ def test_une_colonne_non_declaree_vide_reste_une_liste(base):
     st, ns, ns_id, rid = _table()
     st.update_row(ns, rid, {"etapes[+]": "a"})
     assert _valeur(_stockee(ns_id, rid)["etapes"]) == ["a"]
+
+
+# ══ la borne de l'ajout ════════════════════════════════════════════════════════
+
+def test_un_ajout_qui_deborde_est_refuse_et_oriente_vers_une_table(base):
+    from oto_mcp.datastore.rangs import TAILLE_MAX_APRES_AJOUT
+    plein = "x" * (TAILLE_MAX_APRES_AJOUT - 3)
+    st, ns, ns_id, rid = _table(journal=plein)
+    st.update_row(ns, rid, {"journal[+]": "a"})          # \n + a : 64 000 pile
+    msg = _refus(lambda: st.update_row(ns, rid, {"journal[+]": "b"}))
+    assert "`journal[+]`" in msg and "TABLE" in msg and "Rien n'a été écrit" in msg
+    assert _valeur(_stockee(ns_id, rid)["journal"]) == plein + "\na"
+
+
+def test_une_ecriture_entiere_n_est_pas_jugee_par_la_borne(table):
+    from oto_mcp.datastore.rangs import TAILLE_MAX_APRES_AJOUT
+    st, ns, ns_id, rid = table
+    gros = "y" * (TAILLE_MAX_APRES_AJOUT + 10)
+    st.update_row(ns, rid, {"journal": gros})
+    assert _valeur(_stockee(ns_id, rid)["journal"]) == gros
+
+
+def test_un_max_length_declare_est_seul_juge(base):
+    from oto_mcp.datastore.rangs import TAILLE_MAX_APRES_AJOUT
+    st, ns, ns_id, rid = _table(long="z" * TAILLE_MAX_APRES_AJOUT)
+    st.update_row(ns, rid, {"long[+]": "encore"})
+    assert _valeur(_stockee(ns_id, rid)["long"]).endswith("\nencore")
+
+
+def test_une_liste_qui_deborde_refuse_l_ajout(base, monkeypatch):
+    from oto_mcp.datastore import rangs
+    monkeypatch.setattr(rangs, "TAILLE_MAX_APRES_AJOUT", 20)
+    st, ns, ns_id, rid = _table(tags=["aaaa", "bbbb"])
+    msg = _refus(lambda: st.update_row(ns, rid, {"tags[+]": "cccccccc"}))
+    assert "`tags[+]`" in msg and "TABLE" in msg
+    assert _valeur(_stockee(ns_id, rid)["tags"]) == ["aaaa", "bbbb"]

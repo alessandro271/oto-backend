@@ -64,6 +64,16 @@ une cellule de 25 000 caractères. Le texte résultant passe la validation de la
 rang, ni retrait — un texte n'a pas d'éléments. Un journal tenu à plusieurs vit mieux
 dans une TABLE, une ligne par passage ; la cellule allongée reste un pis-aller.
 
+## La borne de l'ajout
+
+Une cellule qu'on allonge à chaque passage finit par déborder : relue, elle remplit le
+contexte de l'agent ; servie, elle alourdit chaque `data_rows`. Au-delà de
+`TAILLE_MAX_APRES_AJOUT` caractères APRÈS l'ajout (le texte, ou la liste sérialisée),
+`[+]` est REFUSÉ et le refus oriente vers une table, une ligne par entrée — jamais une
+troncature, qui perdrait le début du journal sans le dire. La borne ne juge que
+l'ajout : une écriture entière reste sous la validation de sa colonne. Une colonne
+qui déclare son `max_length` en est seule juge.
+
 ## Ce qui est refusé, et vers quoi on oriente
 
 - un rang hors bornes : la taille de la liste, le rang demandé, et `contacts[+]` ;
@@ -114,6 +124,9 @@ AJOUT = "+"
 RETRAIT = "-"
 #: Entre le texte en place et ce que `col[+]` lui ajoute, et entre deux morceaux.
 SEPARATEUR_DE_LIGNE = "\n"
+#: Caractères qu'une cellule peut porter APRÈS un `[+]` — le texte, ou la liste
+#: sérialisée. Au-delà, l'ajout est refusé : un journal de cette taille est une table.
+TAILLE_MAX_APRES_AJOUT = 64_000
 
 
 def _refus(message: str) -> RowValidationError:
@@ -196,8 +209,10 @@ class EcrituresParRang:
         self.ecrits = {}
         for col in self.colonnes.values():
             cellule = (en_place or {}).get(col.nom)
-            if _ajout_de_texte(champ_declare(schema, col.nom), cellule, col):
+            champ = champ_declare(schema, col.nom)
+            if _ajout_de_texte(champ, cellule, col):
                 out[col.nom] = _ajouter_le_texte(col, cellule)
+                _borner_l_ajout(col, champ, out[col.nom])
                 continue
             avant = _liste_en_place(col.nom, cellule, creation)
             cle_item = cle_d_element(champ_declare(schema, col.nom))
@@ -218,7 +233,32 @@ class EcrituresParRang:
                 _refuser_identite_doublee(col.nom, cle_item, avant, apres)
             self.ecrits[col.nom] = {i for i, (_, ecrit) in enumerate(suivis) if ecrit}
             out[col.nom] = apres or None
+            _borner_l_ajout(col, champ, apres)
         return out
+
+
+def colonne_ajoutee(cle: Any) -> Optional[str]:
+    """La colonne que `cle` ALLONGE (`journal[+]` → `journal`), sinon `None` — un
+    rang, un retrait ou un attribut n'est pas un ajout."""
+    m = _ADRESSE.match(cle) if isinstance(cle, str) else None
+    if m is None or m.group("rang") != AJOUT or m.group("reste") is not None:
+        return None
+    return m.group("col")
+
+
+def _borner_l_ajout(col: _Colonne, champ: Optional[dict], apres: Any) -> None:
+    """Refuse un `[+]` qui porterait la cellule au-delà de `TAILLE_MAX_APRES_AJOUT`."""
+    if not col.ajouts or (isinstance(champ, dict) and champ.get("max_length")):
+        return
+    taille = (len(apres) if isinstance(apres, str)
+              else len(json.dumps(apres, ensure_ascii=False, default=str)))
+    if taille > TAILLE_MAX_APRES_AJOUT:
+        raise _refus(
+            f"`{col.nom}[+]` porterait la cellule à {taille} caractères, au-delà de "
+            f"{TAILLE_MAX_APRES_AJOUT} : un journal de cette taille ne tient plus dans une "
+            f"cellule. Tiens-le dans une TABLE, une ligne par entrée "
+            f"(`data_create_datastore`, puis `data_write` à chaque passage), et garde "
+            f"ici un résumé ou le dernier état.")
 
 
 def sortir_les_rangs(schema: Optional[dict], user_data: Optional[dict]

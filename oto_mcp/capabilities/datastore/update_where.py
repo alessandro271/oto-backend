@@ -31,7 +31,9 @@ class UpdateWhereInput(EntreeDatastore):
         "The columns to set on every matching row: `{\"tier\": \"Tier 1\"}`. A value may "
         "carry its layers (`{\"valeur\": \"Tier 1\", \"comment\": \"rule: fit>=8\"}`). "
         "A column the schema does not declare yet is DECLARED first (type inferred). "
-        "A value that would ERASE (null, \"\", [], `@empty`) is refused."))
+        "A value that would ERASE (null, \"\", [], `@empty`) is refused. "
+        "`{\"journal[+]\": \"…\"}` APPENDS a line to a declared `text` column (or an "
+        "element to a `list` one) on every matching row, without reading it."))
     filter: Optional[dict] = Field(default=None, description=(
         "Same grammar as `data_rows`: `{col: value}` or `{col: {op: value}}`."))
     filters: Optional[list] = Field(default=None, description=(
@@ -117,7 +119,9 @@ CAPABILITIES += [
             DeclaredError(400, "invalid_row_input",
                           "`set` ou le filtre est mal formé, ou la règle est fautive "
                           "(valeur qui efface, clé métier, couche `origine`, colonne "
-                          "`readonly` hors `only_if_empty`) : le message dit laquelle"),
+                          "`readonly` hors `only_if_empty`, ajout `col[+]` à une colonne "
+                          "non déclarée ou avec `only_if_empty`) : le message dit "
+                          "laquelle"),
         ),
         description=(
             "Set columns on EVERY row matching a filter, server-side, without pulling "
@@ -131,6 +135,11 @@ CAPABILITIES += [
             "`data_row_history`; a row changed since selection is skipped "
             "(`conflicts`), never overwritten. A missing target column is declared "
             "first. Returns counts, not rows. If `next_cursor` is set, the time budget "
-            "ran out: call again with `cursor=<next_cursor>`."),
+            "ran out: call again with `cursor=<next_cursor>`. "
+            "`set={\"journal[+]\": \"…\"}` appends a line to each row's `text` cell "
+            "(or an element to a `list`), under the row lock, without a revision check: "
+            "concurrent appends all land. An append is never `unchanged` — rerunning "
+            "the rule appends again. Past 64 000 characters a cell refuses the append: "
+            "a log that long belongs in a table, one row per entry."),
     ),
 ]
