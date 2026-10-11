@@ -207,9 +207,61 @@ _BOITE = set("┌┐└┘│╔╗╚╝║")
 _STRUCTUREL = re.compile(r"[─-╿▶▼]")
 
 
+# Une boîte, colonne par colonne : ses coins ouvrent et ferment, ses flancs tiennent
+# les deux colonnes des coins du haut sur chaque ligne entre les deux. Le parseur du
+# front refuse le dessin ENTIER dès qu'un flanc glisse d'une colonne (« a box edge
+# that does not line up with its corners ») — vu le 12/10/2026 sur un dessin écrit par
+# un modèle, une ligne courte d'une espace : `diagram_check` ne disait rien.
+_COIN_HG = "┌╔╭"
+_COIN_HD = "┐╗╮"
+_COIN_BG = "└╚╰"
+_COIN_BD = "┘╝╯"
+_FLANC_G = "│║├╟╠"
+_FLANC_D = "│║┤╢╣"
+
+
+def _bords_de_boites(lignes: list[str]) -> list[dict]:
+    """Les lignes où un flanc ou un coin du bas manque à la colonne de son coin du
+    haut. Une BOÎTE seulement : un coin du haut dont la ligne suivante porte un flanc
+    gauche à sa colonne (un embranchement `┌──┴──┐` n'en a pas), jugée jusqu'à la
+    première ligne sans flanc gauche — qui doit être son coin du bas. Ce qu'on ne sait
+    pas lire comme une boîte n'est pas jugé : zéro faux positif d'abord."""
+    fautes: list[dict] = []
+    for i, ligne in enumerate(lignes[:-1]):
+        for g, c in enumerate(ligne):
+            if c not in _COIN_HG:
+                continue
+            d = next((j for j in range(g + 1, len(ligne)) if ligne[j] in _COIN_HD), None)
+            suivante = lignes[i + 1]
+            if d is None or len(suivante) <= g or suivante[g] not in _FLANC_G:
+                continue
+            k = i + 1
+            while k < len(lignes) and len(lignes[k]) > g and lignes[k][g] in _FLANC_G:
+                l = lignes[k]
+                if len(l) <= d or l[d] not in _FLANC_D:
+                    break
+                k += 1
+            if k >= len(lignes):
+                continue                  # jamais refermée : pas jugée
+            l = lignes[k]
+            if len(l) > g and l[g] in _FLANC_G:
+                pass                      # un flanc droit qui glisse, sur une ligne de flanc
+            elif len(l) > g and l[g] in _COIN_BG and len(l) > d and l[d] in _COIN_BD:
+                continue                  # refermée aux bonnes colonnes
+            elif not (len(l) > g and l[g] in _COIN_BG):
+                continue                  # pas une fermeture qu'on sait lire : pas jugé
+            fautes.append({
+                "line": k + 1, "rule": "box-edge",
+                "says": "a box edge does not line up with its corners",
+                "fix": f"make every line of that box the same width, its sides in "
+                       f"columns {g + 1} and {d + 1} like its top corners",
+            })
+    return fautes
+
+
 def lint_du_trace(block: str) -> list[dict]:
     """Les fautes visibles ligne à ligne. `[]` = rien de LOCALEMENT faux."""
-    fautes: list[dict] = []
+    fautes: list[dict] = _bords_de_boites(block.split("\n"))
     une_boite_vue = False
     for i, ligne in enumerate(block.split("\n"), start=1):
         # `prepare()` refuse le dessin entier à la première tabulation : elle rend
@@ -345,6 +397,16 @@ def dessin_tague(body_md: str) -> str | None:
         if lang and is_drawing(block):
             return lang
     return None
+
+
+def dessin_hors_fence(body_md: str) -> bool:
+    """Un tracé écrit À NU dans la prose, sans bloc fencé — vu le 12/10/2026 sur un
+    modèle qui avait pourtant lu la consigne. La page ne le dessine pas et
+    `diagram_check` n'en dit rien (il ne compte que les blocs) : seul ce test permet de
+    demander « mets-le dans un bloc » plutôt qu'un dessin de plus."""
+    if has_diagram(body_md):
+        return False
+    return is_drawing(_FENCE.sub("", body_md or ""))
 
 
 def indice_du_graphe(sub: str | None, slug: str | None = None) -> str | None:

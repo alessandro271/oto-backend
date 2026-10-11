@@ -119,6 +119,24 @@ def _aux_noms_du_produit(sub: str, texte: str) -> str:
     return tool_alias.rewrite_prose(texte, prefix) if prefix else texte
 
 
+# The shape to copy, from the drawing guide's own worked example: a trigger line, one
+# box per step (every row the box's width), a named exit, a labelled continuation.
+_FORME = "\n".join([
+    "              <trigger, in plain words>",
+    "                         │",
+    "                         ▼",
+    "┌─────────────────────────────────────────────────┐",
+    "│  <Step title>                                   │   <tool_name>",
+    "│  <what it does, one line>                       │",
+    "└────────────────────────┬────────────────────────┘",
+    "                         ├───────────────▶  ▪ <exit>          <why it leaves>",
+    "                         ▼  <what goes on>",
+    "┌─────────────────────────────────────────────────┐",
+    "│  <Next step>                                    │",
+    "└─────────────────────────────────────────────────┘",
+])
+
+
 def _a_dessiner(slug: str, scope: str, version) -> str:
     """No drawing yet: the agent draws one in the grammar the front turns into its
     figure — never Mermaid, never a tagged fence (the front only draws an UNTAGGED
@@ -131,7 +149,10 @@ def _a_dessiner(slug: str, scope: str, version) -> str:
         f"exactly. 2) oto_procedure op=get slug={slug} — the body. 3) Draw the flow from "
         f"ITS steps: the trigger, each step in a box naming the tools it uses, the checks "
         f"as decisions, the rows that leave as exits — box-drawing characters (┌ ─ ┐ │ └ "
-        f"┘ ┬ ▼ ├ ▶ ▪) in ONE untagged ``` fence. Never Mermaid, never ```text: those are "
+        f"┘ ┬ ▼ ├ ▶ ▪) INSIDE ONE untagged fence: a line with ``` alone before it and "
+        f"another after it. EVERY line of a box has exactly the width of its top line "
+        f"(pad with spaces): one column off and the whole drawing is refused. Shape: "
+        f"{_FORME!r}. Never Mermaid, never ```text, never bare lines: those are "
         f"not drawn as the figure. 4) Put it where the guide says (after the intro or the "
         f"summary table, before the first phase heading), change NOTHING else, and write "
         f"it: oto_procedure op=set slug={slug} scope={scope} expected_version={version} "
@@ -141,6 +162,16 @@ def _a_dessiner(slug: str, scope: str, version) -> str:
         f"in this conversation: if you already wrote a drawing and this still says there "
         f"is none, stop and tell the user. If the write is refused, tell the user you "
         f"could not add the drawing and summarise the steps.")
+
+
+def _a_encadrer(slug: str, scope: str, version) -> str:
+    """The drawing was written bare, outside any fence: wrap it, never redraw it."""
+    return (f"The drawing is in the body but NOT inside a ``` fence, so the page does not "
+            f"draw it. Fix ONLY that: oto_procedure op=get slug={slug}, put a line with ``` "
+            f"alone right before the drawing's first line and another right after its last "
+            f"line, change nothing else, then oto_procedure op=set slug={slug} scope={scope} "
+            f"expected_version={version} body_md=<the whole body>, and call "
+            f"oto_procedure_app slug={slug} again. If it still says so, stop and tell the user.")
 
 
 def _a_detaguer(slug: str, scope: str, version, lang: str) -> str:
@@ -189,7 +220,7 @@ def register(mcp: FastMCP) -> None:
             slug: the procedure's slug (cf. `oto_procedure op=list`).
         """
         from .. import access, tool_alias
-        from ..procedure_diagram import dessin_tague, le_trace
+        from ..procedure_diagram import dessin_hors_fence, dessin_tague, diagram_check, le_trace
         sub = access.current_user_sub_or_raise()
         lu = _lire(sub, slug)
         if lu is None:
@@ -207,9 +238,21 @@ def register(mcp: FastMCP) -> None:
                  # script's origin once the host's sandbox has re-served it.
                  "origin": _origin(bundle)}
         entete = f"{title} (`{slug}`, v{version})"
-        if trace:
+        casse = (diagram_check(row.get("body_md") or "")["diagram_warning"]
+                 if trace else None)
+        if trace and not casse:
             texte = (f"{entete} — the graph is drawn for the user. "
                      f"Its steps: oto_procedure op=get slug={slug}.")
+        elif trace and (tool_alias.sert_un_worker() or not _peut_ecrire(sub, scope)):
+            texte = (f"{entete} — its drawing shows as raw characters ({casse}). "
+                     f"Its steps: oto_procedure op=get slug={slug}.")
+        elif trace:
+            texte = (f"{entete} — the user sees the drawing as RAW CHARACTERS, not the "
+                     f"graph: {casse} Fix ONLY those lines, ONCE: oto_procedure op=get "
+                     f"slug={slug}, correct them, oto_procedure op=set slug={slug} "
+                     f"scope={scope} expected_version={version} body_md=<the whole body>, "
+                     f"then call oto_procedure_app slug={slug} again. If it still says so, "
+                     f"stop and tell the user.")
         elif tool_alias.sert_un_worker():
             # A runner job renders nothing to anyone: never send it to rewrite a
             # procedure unattended.
@@ -220,6 +263,8 @@ def register(mcp: FastMCP) -> None:
                      f"oto_procedure op=get slug={slug}.")
         elif (lang := dessin_tague(row.get("body_md") or "")) is not None:
             texte = f"{entete}. " + _a_detaguer(slug, scope, version, lang)
+        elif dessin_hors_fence(row.get("body_md") or ""):
+            texte = f"{entete}. " + _a_encadrer(slug, scope, version)
         else:
             texte = f"{entete}. " + _a_dessiner(slug, scope, version)
         return ToolResult(content=[TextContent(type="text", text=_aux_noms_du_produit(sub, texte))],

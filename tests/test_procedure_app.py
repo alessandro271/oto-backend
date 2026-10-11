@@ -277,3 +277,33 @@ def test_les_outils_cites_portent_le_nom_du_produit(monkeypatch):
     assert "tulina_guide op=read" in texte and "tulina_procedure op=set" in texte
     assert "tulina_procedure_app slug=prose again" in texte
     assert "oto_procedure" not in texte
+
+
+def test_un_dessin_ecrit_a_nu_se_met_dans_un_bloc(monkeypatch):
+    """Vu le 12/10 : un modèle a écrit le tracé sans fence — la page ne le dessine pas,
+    `diagram_check` n'en dit rien. L'outil demande de l'encadrer, pas de le redessiner."""
+    pytest.importorskip("fastmcp.apps")
+    monkeypatch.setenv("OTO_PROCEDURE_APP_BUNDLE", BUNDLE)
+    nu = {**PROSE, "body_md": f"# Prose\n\n{TRACE}\n\n## 1. Faire\n"}
+    _, texte = _appeler(monkeypatch, {("org", 42, "prose"): nu}, "prose")
+    assert "NOT inside a ``` fence" in texte and "REQUIRED NEXT STEP" not in texte
+
+
+def test_un_dessin_qui_ne_se_dessinera_pas_se_corrige_une_fois(monkeypatch):
+    """Le tracé existe mais un flanc glisse : la vue montre les caractères bruts. Le
+    modèle est envoyé corriger CES lignes, une fois — pas dessiner de nouveau."""
+    pytest.importorskip("fastmcp.apps")
+    monkeypatch.setenv("OTO_PROCEDURE_APP_BUNDLE", BUNDLE)
+    decale = TRACE.replace("│ 1. Trigger        │", "│ 1. Trigger       │")
+    casse = {**PROSE, "body_md": f"# Prose\n\n```\n{decale}\n```\n"}
+    r, texte = _appeler(monkeypatch, {("org", 42, "prose"): casse}, "prose")
+    assert r.structured_content["drawing"] == decale
+    assert "RAW CHARACTERS" in texte and "box edge" in texte and "ONCE" in texte
+    assert "REQUIRED NEXT STEP" not in texte
+
+
+def test_la_consigne_de_dessin_donne_la_forme_a_recopier(monkeypatch):
+    pytest.importorskip("fastmcp.apps")
+    monkeypatch.setenv("OTO_PROCEDURE_APP_BUNDLE", BUNDLE)
+    _, texte = _appeler(monkeypatch, {("org", 42, "prose"): PROSE}, "prose")
+    assert "exactly the width of its top line" in texte and "<Step title>" in texte
