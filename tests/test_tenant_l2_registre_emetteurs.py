@@ -159,6 +159,27 @@ def test_une_ligne_qui_reclame_un_drain_est_ignoree():
     assert registre.slug_for(_DRAIN) == tenancy.primary_slug()
 
 
+def test_la_ligne_du_primaire_qui_redit_lemetteur_de_lenv_passe_sans_alerte(monkeypatch):
+    """La ligne 1 de `tenants` d'une instance dont le tenant était un tiers avant de
+    devenir primaire garde son émetteur : il CONCORDE avec l'env, rien à refuser."""
+    refus = []
+    monkeypatch.setattr(tenancy, "_refus", lambda message, *args: refus.append(args))
+    primaire = tenancy.primary_slug()
+    registre = _registry({"slug": primaire, "issuer": _PRIMARY + "/"},
+                         {"slug": primaire, "issuer": _DRAIN}, drains=[_DRAIN])
+    assert refus == []
+    assert registre.slug_for(_PRIMARY) == primaire
+    assert registre.qualify_claims({"sub": "abc123", "iss": _PRIMARY}) == "abc123"
+
+
+def test_la_ligne_du_primaire_avec_un_autre_emetteur_reste_refusee(monkeypatch):
+    refus = []
+    monkeypatch.setattr(tenancy, "_refus", lambda message, *args: refus.append(args))
+    registre = _registry({"slug": tenancy.primary_slug(), "issuer": _TIERS})
+    assert len(refus) == 1
+    assert registre.get(_TIERS) is None
+
+
 def test_un_emetteur_deja_tenu_ne_se_reprend_pas():
     """Premier arrivé (ordre `tenants.id`) : la sélection par `iss` ne doit jamais
     dépendre de l'ordre de lecture pour décider QUI est l'appelant."""
