@@ -259,6 +259,52 @@ def _bords_de_boites(lignes: list[str]) -> list[dict]:
     return fautes
 
 
+_HORIZ = "─═"
+
+
+def reparer_les_bords(trace: str) -> str | None:
+    """Le tracé dont chaque flanc droit (et coin du bas droit) est remis à la colonne de
+    son coin du haut — en complétant d'espaces une ligne de flanc, de `─`/`═` une ligne
+    de fond, en retirant ce qui dépasse s'il n'est que du blanc ou du trait. `None` si
+    rien n'est à réparer, ou si une ligne déborde de texte (on ne coupe jamais un mot),
+    ou si le résultat n'est pas propre.
+
+    Pourquoi c'est mécanique : un modèle qui dessine rate l'alignement d'une colonne
+    et ne le rattrape pas — vu le 12/10/2026, cinq réécritures de suite sans jamais
+    aligner la boîte. Recopier un bloc juste, il le fait ; compter des colonnes, non.
+    Ne touche que la position des bords : ni le texte, ni la forme du flux."""
+    lignes = trace.split("\n")
+    if not _bords_de_boites(lignes):
+        return None
+    for faute in range(len(lignes) * 2):
+        trouvees = _bords_de_boites(lignes)
+        if not trouvees:
+            break
+        k = trouvees[0]["line"] - 1
+        g, d = (int(x) - 1 for x in re.findall(r"columns (\d+) and (\d+)", trouvees[0]["fix"])[0])
+        l = lignes[k]
+        fond = len(l) > g and l[g] in _COIN_BG
+        bords = _COIN_BD if fond else _FLANC_D
+        r = next((j for j in range(g + 1, len(l)) if l[j] in bords), None)
+        if r is None:
+            return None
+        dedans = l[g + 1:r]
+        largeur = d - g - 1
+        remplissage = (dedans[-1] if dedans and dedans[-1] in _HORIZ else "─") if fond else " "
+        if len(dedans) > largeur:
+            surplus = dedans[largeur:]
+            if surplus.strip(" " + _HORIZ):
+                return None       # du texte dépasse : on ne coupe pas un mot
+            dedans = dedans[:largeur]
+        else:
+            dedans = dedans + remplissage * (largeur - len(dedans))
+        lignes[k] = l[:g + 1] + dedans + l[r:]
+    else:
+        return None
+    repare = "\n".join(lignes)
+    return repare if not lint_du_trace(repare) else None
+
+
 def lint_du_trace(block: str) -> list[dict]:
     """Les fautes visibles ligne à ligne. `[]` = rien de LOCALEMENT faux."""
     fautes: list[dict] = _bords_de_boites(block.split("\n"))

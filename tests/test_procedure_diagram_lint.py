@@ -128,3 +128,14 @@ def test_a_split_bracket_is_not_a_box():
     drawing = ("┌──────┐\n│ step │\n└──┬───┘\n   ▼\n ┌─┴────┐\n ▼      ▼\n"
                "┌──┐   ┌──┐\n│a │   │b │\n└──┘   └──┘")
     assert lint_du_trace(drawing) == []
+
+
+
+def test_a_box_edge_is_repaired_by_moving_the_edge_never_the_words():
+    from oto_mcp.procedure_diagram import reparer_les_bords
+    drawing = ("┌──────────────┐\n│  1 · Find    │\n│  Keep them. │\n└──────┬──────┘")
+    assert reparer_les_bords(drawing) == (
+        "┌──────────────┐\n│  1 · Find    │\n│  Keep them.  │\n└──────┬───────┘")
+    # Text past the edge: never cut.
+    assert reparer_les_bords("┌────┐\n│ too long │\n└────┘") is None
+    assert reparer_les_bords("┌────┐\n│ ok │\n└────┘") is None   # nothing to repair

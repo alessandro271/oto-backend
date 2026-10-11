@@ -156,8 +156,8 @@ def _a_dessiner(slug: str, scope: str, version) -> str:
         f"not drawn as the figure. 4) Put it where the guide says (after the intro or the "
         f"summary table, before the first phase heading), change NOTHING else, and write "
         f"it: oto_procedure op=set slug={slug} scope={scope} expected_version={version} "
-        f"body_md=<the whole body>. A non-null `diagram_warning` in the answer means it "
-        f"will not render: fix the named line and set again. 5) Call oto_procedure_app "
+        f"body_md=<the whole body>. ONE set only: whatever `diagram_warning` says, go "
+        f"to step 5 — the app repairs what it can and tells you. 5) Call oto_procedure_app "
         f"slug={slug} again — the user sees the graph. ONLY THEN answer. Draw at most ONCE "
         f"in this conversation: if you already wrote a drawing and this still says there "
         f"is none, stop and tell the user. If the write is refused, tell the user you "
@@ -220,7 +220,8 @@ def register(mcp: FastMCP) -> None:
             slug: the procedure's slug (cf. `oto_procedure op=list`).
         """
         from .. import access, tool_alias
-        from ..procedure_diagram import dessin_hors_fence, dessin_tague, diagram_check, le_trace
+        from ..procedure_diagram import (dessin_hors_fence, dessin_tague, diagram_check,
+                                         le_trace, reparer_les_bords)
         sub = access.current_user_sub_or_raise()
         lu = _lire(sub, slug)
         if lu is None:
@@ -232,18 +233,36 @@ def register(mcp: FastMCP) -> None:
         title = row.get("title") or slug
         version = row.get("version")
         trace = le_trace(row.get("body_md") or "")
-        rendu = {"slug": slug, "title": title, "version": version, "drawing": trace,
-                 "connectors": _connectors_named(trace, access.current_org(sub)) if trace else [],
+        casse = (diagram_check(row.get("body_md") or "")["diagram_warning"]
+                 if trace else None)
+        # Box edges off by a column are the usual way a model's drawing fails: the user
+        # sees the repaired one now, and the model is handed it to save — copying a
+        # block is reliable, re-counting columns is not.
+        repare = reparer_les_bords(trace) if casse else None
+        montre = repare or trace
+        rendu = {"slug": slug, "title": title, "version": version, "drawing": montre,
+                 "connectors": _connectors_named(montre, access.current_org(sub)) if montre else [],
                  # Where `/brand/…` logos resolve: the view cannot always tell its own
                  # script's origin once the host's sandbox has re-served it.
                  "origin": _origin(bundle)}
         entete = f"{title} (`{slug}`, v{version})"
-        casse = (diagram_check(row.get("body_md") or "")["diagram_warning"]
-                 if trace else None)
+        ecrivain = not tool_alias.sert_un_worker() and _peut_ecrire(sub, scope)
         if trace and not casse:
             texte = (f"{entete} — the graph is drawn for the user. "
                      f"Its steps: oto_procedure op=get slug={slug}.")
-        elif trace and (tool_alias.sert_un_worker() or not _peut_ecrire(sub, scope)):
+        elif repare and ecrivain:
+            texte = (f"{entete} — its drawing had box edges off by a column; the user sees "
+                     f"it REPAIRED. Save the repair ONCE, without redrawing: oto_procedure "
+                     f"op=get slug={slug}, replace the lines between the drawing's ``` "
+                     f"fences by EXACTLY the block below (nothing else changes), then "
+                     f"oto_procedure op=set slug={slug} scope={scope} "
+                     f"expected_version={version} body_md=<the whole body>. Then answer — "
+                     f"do not call this again for it.\n```\n{repare}\n```")
+        elif repare:
+            texte = (f"{entete} — the graph is drawn for the user (its stored drawing has "
+                     f"box edges off by a column; an editor of this procedure can fix it). "
+                     f"Its steps: oto_procedure op=get slug={slug}.")
+        elif trace and not ecrivain:
             texte = (f"{entete} — its drawing shows as raw characters ({casse}). "
                      f"Its steps: oto_procedure op=get slug={slug}.")
         elif trace:

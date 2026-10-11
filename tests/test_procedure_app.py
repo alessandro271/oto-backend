@@ -18,11 +18,11 @@ from fastmcp import Client, FastMCP
 BUNDLE = "https://app.example.com/mcp-app/process-graph.js"
 
 TRACE = """┌──────────────────┐
-│ 1. Trigger        │
+│ 1. Trigger       │
 └────────┬─────────┘
          ▼
 ┌──────────────────┐
-│ 2. serper_search  │
+│ 2. serper_search │
 └──────────────────┘"""
 
 CORPS = f"# Veille\n\nLe déroulé.\n\n```\n{TRACE}\n```\n\n## Étapes\n\n1. Chercher.\n"
@@ -289,17 +289,32 @@ def test_un_dessin_ecrit_a_nu_se_met_dans_un_bloc(monkeypatch):
     assert "NOT inside a ``` fence" in texte and "REQUIRED NEXT STEP" not in texte
 
 
-def test_un_dessin_qui_ne_se_dessinera_pas_se_corrige_une_fois(monkeypatch):
-    """Le tracé existe mais un flanc glisse : la vue montre les caractères bruts. Le
-    modèle est envoyé corriger CES lignes, une fois — pas dessiner de nouveau."""
+def test_un_flanc_decale_se_repare_pour_l_utilisateur_et_se_recopie_une_fois(monkeypatch):
+    """Le tracé existe mais un flanc glisse d'une colonne : l'utilisateur voit le tracé
+    RÉPARÉ tout de suite, le modèle reçoit le bloc juste à recopier — une fois, sans
+    redessiner (vu : cinq réécritures sans jamais aligner)."""
     pytest.importorskip("fastmcp.apps")
     monkeypatch.setenv("OTO_PROCEDURE_APP_BUNDLE", BUNDLE)
-    decale = TRACE.replace("│ 1. Trigger        │", "│ 1. Trigger       │")
+    decale = TRACE.replace("│ 1. Trigger       │", "│ 1. Trigger      │")
     casse = {**PROSE, "body_md": f"# Prose\n\n```\n{decale}\n```\n"}
     r, texte = _appeler(monkeypatch, {("org", 42, "prose"): casse}, "prose")
-    assert r.structured_content["drawing"] == decale
-    assert "RAW CHARACTERS" in texte and "box edge" in texte and "ONCE" in texte
+    assert r.structured_content["drawing"] == TRACE
+    assert "REPAIRED" in texte and "ONCE" in texte and f"```\n{TRACE}\n```" in texte
     assert "REQUIRED NEXT STEP" not in texte
+
+    _, lecteur = _appeler(monkeypatch, {("org", 42, "prose"): casse}, "prose", admin=False)
+    assert "op=set" not in lecteur and "the graph is drawn" in lecteur
+
+
+def test_un_dessin_qu_on_ne_sait_pas_reparer_se_corrige_une_fois(monkeypatch):
+    pytest.importorskip("fastmcp.apps")
+    monkeypatch.setenv("OTO_PROCEDURE_APP_BUNDLE", BUNDLE)
+    # Du texte déborde du flanc : on ne coupe pas un mot.
+    deborde = TRACE.replace("│ 1. Trigger       │", "│ 1. Trigger and more words │")
+    casse = {**PROSE, "body_md": f"# Prose\n\n```\n{deborde}\n```\n"}
+    r, texte = _appeler(monkeypatch, {("org", 42, "prose"): casse}, "prose")
+    assert r.structured_content["drawing"] == deborde
+    assert "RAW CHARACTERS" in texte and "ONCE" in texte
 
 
 def test_la_consigne_de_dessin_donne_la_forme_a_recopier(monkeypatch):
