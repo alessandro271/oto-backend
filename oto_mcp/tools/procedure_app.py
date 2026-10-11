@@ -151,8 +151,8 @@ def _a_dessiner(slug: str, scope: str, version) -> str:
         f"as decisions, the rows that leave as exits — box-drawing characters (┌ ─ ┐ │ └ "
         f"┘ ┬ ▼ ├ ▶ ▪) INSIDE ONE untagged fence: a line with ``` alone before it and "
         f"another after it. EVERY line of a box has exactly the width of its top line "
-        f"(pad with spaces): one column off and the whole drawing is refused. Shape: "
-        f"{_FORME!r}. Never Mermaid, never ```text, never bare lines: those are "
+        f"(pad with spaces): one column off and the whole drawing is refused; copy the "
+        f"shape at the end of this message. Never Mermaid, never ```text, never bare lines: those are "
         f"not drawn as the figure. 4) Put it where the guide says (after the intro or the "
         f"summary table, before the first phase heading), change NOTHING else, and write "
         f"it: oto_procedure op=set slug={slug} scope={scope} expected_version={version} "
@@ -161,7 +161,8 @@ def _a_dessiner(slug: str, scope: str, version) -> str:
         f"slug={slug} again — the user sees the graph. ONLY THEN answer. Draw at most ONCE "
         f"in this conversation: if you already wrote a drawing and this still says there "
         f"is none, stop and tell the user. If the write is refused, tell the user you "
-        f"could not add the drawing and summarise the steps.")
+        f"could not add the drawing and summarise the steps.\nShape to copy:\n```\n"
+        f"{_FORME}\n```")
 
 
 def _a_encadrer(slug: str, scope: str, version) -> str:
@@ -220,8 +221,8 @@ def register(mcp: FastMCP) -> None:
             slug: the procedure's slug (cf. `oto_procedure op=list`).
         """
         from .. import access, tool_alias
-        from ..procedure_diagram import (dessin_hors_fence, dessin_tague, diagram_check,
-                                         le_trace, reparer_les_bords)
+        from ..procedure_diagram import (DOUBLE, dessin_hors_fence, dessin_tague,
+                                         diagram_check, le_trace, reparer_les_bords)
         sub = access.current_user_sub_or_raise()
         lu = _lire(sub, slug)
         if lu is None:
@@ -235,6 +236,10 @@ def register(mcp: FastMCP) -> None:
         trace = le_trace(row.get("body_md") or "")
         casse = (diagram_check(row.get("body_md") or "")["diagram_warning"]
                  if trace else None)
+        # Two drawings: the page draws the FIRST — a warning for the author, not a
+        # drawing the user cannot see.
+        if casse == DOUBLE:
+            casse = None
         # Box edges off by a column are the usual way a model's drawing fails: the user
         # sees the repaired one now, and the model is handed it to save — copying a
         # block is reliable, re-counting columns is not.
@@ -248,8 +253,9 @@ def register(mcp: FastMCP) -> None:
         entete = f"{title} (`{slug}`, v{version})"
         ecrivain = not tool_alias.sert_un_worker() and _peut_ecrire(sub, scope)
         if trace and not casse:
-            texte = (f"{entete} — the graph is drawn for the user. "
-                     f"Its steps: oto_procedure op=get slug={slug}.")
+            texte = (f"{entete} — the graph is shown to the user (the card says so if "
+                     f"the page cannot read it). Do not call this again for the same "
+                     f"question. Its steps: oto_procedure op=get slug={slug}.")
         elif repare and ecrivain:
             texte = (f"{entete} — its drawing had box edges off by a column; the user sees "
                      f"it REPAIRED. Save the repair ONCE, without redrawing: oto_procedure "

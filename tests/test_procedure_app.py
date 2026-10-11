@@ -321,4 +321,15 @@ def test_la_consigne_de_dessin_donne_la_forme_a_recopier(monkeypatch):
     pytest.importorskip("fastmcp.apps")
     monkeypatch.setenv("OTO_PROCEDURE_APP_BUNDLE", BUNDLE)
     _, texte = _appeler(monkeypatch, {("org", 42, "prose"): PROSE}, "prose")
-    assert "exactly the width of its top line" in texte and "<Step title>" in texte
+    assert "exactly the width of its top line" in texte
+    # The shape arrives as lines to copy, not as an escaped one-liner.
+    assert "\n┌─────" in texte and "│  <Step title>" in texte and "\\n" not in texte
+
+
+def test_deux_dessins_ne_sont_pas_des_caracteres_bruts(monkeypatch):
+    """La page dessine le PREMIER : l'utilisateur voit un graphe, rien à réparer."""
+    pytest.importorskip("fastmcp.apps")
+    monkeypatch.setenv("OTO_PROCEDURE_APP_BUNDLE", BUNDLE)
+    deux = {**PROSE, "body_md": f"# P\n\n```\n{TRACE}\n```\n\n```\n{TRACE}\n```\n"}
+    _, texte = _appeler(monkeypatch, {("org", 42, "prose"): deux}, "prose")
+    assert "shown to the user" in texte and "RAW" not in texte
