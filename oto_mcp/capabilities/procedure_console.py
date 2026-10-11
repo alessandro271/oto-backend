@@ -163,10 +163,12 @@ def _ECRIT_SCOPE(inp) -> str:
 async def _avec_le_graphe(ctx: ResolvedCtx, inp: ProcedureInput, lecture):
     """La procédure lue, plus — là où l'instance sait la peindre — la ligne qui envoie
     l'agent la MONTRER (`procedure_diagram.indice_du_graphe`). Seulement pour une
-    lecture par `slug` dans son org ou son équipe : c'est ce que l'outil sait relire,
-    pas une procédure partagée d'ailleurs (`guide_id`) ni une version archivée."""
+    lecture par `slug` chez soi, dans son org ou son équipe : c'est ce que l'outil sait
+    relire — pas une procédure partagée d'ailleurs (`guide_id`), lue dans une autre org
+    (`org`), ni une version archivée."""
     out = await lecture
-    if not isinstance(out, dict) or not inp.slug or inp.guide_id or inp.version is not None:
+    if (not isinstance(out, dict) or not inp.slug or inp.guide_id or inp.org is not None
+            or inp.version is not None):
         return out
     indice = procedure_diagram.indice_du_graphe(ctx.sub, out.get("slug") or inp.slug)
     return {**out, "show_graph": indice} if indice else out

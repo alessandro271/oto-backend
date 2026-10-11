@@ -334,16 +334,30 @@ def bundle_du_graphe() -> str | None:
     return None
 
 
+def dessin_tague(body_md: str) -> str | None:
+    """Le langage d'un bloc TAGUÉ qui dessine (```text, ```mermaid…), quand le corps
+    n'a aucun dessin non tagué — le tracé est là, la page ne le dessinera pas. C'est ce
+    qui distingue « dessine-le » de « retire le tag » : sans ça, un dessin écrit sous
+    ```text était redemandé à chaque appel, une version de plus à chaque tour."""
+    if has_diagram(body_md):
+        return None
+    for lang, block in _FENCE.findall(body_md or ""):
+        if lang and is_drawing(block):
+            return lang
+    return None
+
+
 def indice_du_graphe(sub: str | None, slug: str | None = None) -> str | None:
     """La ligne qui envoie l'agent MONTRER le process — `None` là où l'outil n'existe
-    pas. Aux noms d'outils de CE compte (`tool_alias`), comme le corps qu'elle
-    accompagne."""
-    if bundle_du_graphe() is None:
+    pas, et pour un travail du runner : il ne rend rien à personne, et la consigne de
+    dessin lui ferait réécrire une procédure sans témoin. Aux noms d'outils de CE
+    compte (`tool_alias`), comme le corps qu'elle accompagne."""
+    from . import tool_alias
+    if bundle_du_graphe() is None or tool_alias.sert_un_worker():
         return None
     cible = f"oto_procedure_app slug={slug}" if slug else "oto_procedure_app slug=<slug>"
     texte = (f"Whenever the user asks about this process, SHOW it: call {cible} "
              "first — it draws the process graph inline (and tells you how to draw one "
              "when there is none yet).")
-    from . import tool_alias
     prefix = tool_alias.prefix_for(sub)
     return tool_alias.rewrite_prose(texte, prefix) if prefix else texte

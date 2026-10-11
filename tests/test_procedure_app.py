@@ -34,8 +34,12 @@ def _module(monkeypatch):
     return pa
 
 
-def _stub_backend(monkeypatch, procedures: dict):
-    from oto_mcp import access, org_store, providers
+def _stub_backend(monkeypatch, procedures: dict, *, admin: bool = True, worker: bool = False,
+                  prefix: str = ""):
+    from oto_mcp import access, org_store, providers, roles, tool_alias
+    monkeypatch.setattr(roles, "is_org_admin", lambda sub, org: admin)
+    monkeypatch.setattr(tool_alias, "sert_un_worker", lambda: worker)
+    monkeypatch.setattr(tool_alias, "prefix_for", lambda sub: prefix)
     monkeypatch.setattr(access, "current_user_sub_or_raise", lambda: "sub1")
     monkeypatch.setattr(access, "current_org", lambda sub: 42)
     monkeypatch.setattr(access, "current_group", lambda sub: None)
@@ -114,6 +118,7 @@ def test_bout_en_bout_la_vue_recoit_le_trace_et_le_modele_une_ligne(monkeypatch)
     assert vue["drawing"] == TRACE
     assert vue["title"] == "Veille" and vue["version"] == 3
     assert [c["name"] for c in vue["connectors"]] == ["serper"]
+    assert vue["origin"] == "https://app.example.com"
 
     # Le modèle : une ligne, qui l'envoie lire les étapes ailleurs — pas le tracé.
     texte = "".join(getattr(b, "text", "") for b in r.content)
@@ -174,6 +179,7 @@ def test_oto_procedure_propose_le_graphe_la_ou_il_existe(monkeypatch):
     from oto_mcp import procedure_diagram, tool_alias
     from oto_mcp.capabilities import procedure_console as pc
     monkeypatch.setattr(tool_alias, "prefix_for", lambda sub: "")
+    monkeypatch.setattr(tool_alias, "sert_un_worker", lambda: False)
 
     async def lecture():
         return {"slug": "veille", "body_md": "…"}
@@ -190,6 +196,7 @@ def test_oto_procedure_propose_le_graphe_la_ou_il_existe(monkeypatch):
     # Une version archivée ou une procédure lue par son id : l'outil ne la relirait pas.
     assert "show_graph" not in lire(version=2)
     assert "show_graph" not in lire(guide_id=9)
+    assert "show_graph" not in lire(org=7)
     assert "oto_procedure_app slug=<slug>" in procedure_diagram.indice_du_graphe("s")
 
 
@@ -198,3 +205,75 @@ def test_un_bundle_qui_n_est_pas_un_script_est_refuse(monkeypatch):
     monkeypatch.setenv("OTO_PROCEDURE_APP_BUNDLE", "ftp://x/process-graph.js")
     assert procedure_diagram.bundle_du_graphe() is None
     assert procedure_diagram.indice_du_graphe("s", "veille") is None
+
+
+def _appeler(monkeypatch, procedures, slug, **stub):
+    pa = _module(monkeypatch)
+    m = _banc(monkeypatch, pa)
+    _stub_backend(monkeypatch, procedures, **stub)
+
+    async def appel():
+        async with Client(m) as c:
+            return await c.call_tool("oto_procedure_app", {"slug": slug}, raise_on_error=False)
+
+    r = asyncio.run(appel())
+    return r, "".join(getattr(b, "text", "") for b in r.content)
+
+
+PROSE = {"slug": "prose", "title": "Prose", "version": 1, "body_md": "# Prose\n\n1. Faire.\n"}
+
+
+def test_ma_procedure_perso_passe_avant_l_org_et_s_ecrit_chez_moi(monkeypatch):
+    """`op=get` lit chez SOI d'abord (ADR 0068) : l'app aussi, et la consigne d'écriture
+    vise le palier lu — pas l'org, qui ferait une copie ailleurs."""
+    pytest.importorskip("fastmcp.apps")
+    monkeypatch.setenv("OTO_PROCEDURE_APP_BUNDLE", BUNDLE)
+    r, texte = _appeler(monkeypatch, {("user", "sub1", "prose"): PROSE,
+                                      ("org", 42, "prose"): {**PROSE, "title": "Celle de l'org"}},
+                        "prose", admin=False)
+    assert r.structured_content["title"] == "Prose"
+    assert "scope=user" in texte and "REQUIRED NEXT STEP" in texte
+
+
+def test_un_travail_du_runner_n_est_jamais_envoye_dessiner(monkeypatch):
+    pytest.importorskip("fastmcp.apps")
+    monkeypatch.setenv("OTO_PROCEDURE_APP_BUNDLE", BUNDLE)
+    _, texte = _appeler(monkeypatch, {("org", 42, "prose"): PROSE}, "prose", worker=True)
+    assert "rendering hosts only" in texte
+    assert "op=set" not in texte and "REQUIRED" not in texte
+    from oto_mcp import procedure_diagram
+    assert procedure_diagram.indice_du_graphe("sub1", "prose") is None
+
+
+def test_un_membre_qui_ne_peut_pas_ecrire_n_est_pas_envoye_a_un_refus(monkeypatch):
+    pytest.importorskip("fastmcp.apps")
+    monkeypatch.setenv("OTO_PROCEDURE_APP_BUNDLE", BUNDLE)
+    _, texte = _appeler(monkeypatch, {("org", 42, "prose"): PROSE}, "prose", admin=False)
+    assert "needs an admin" in texte and "op=set" not in texte
+
+
+def test_un_dessin_sous_un_tag_se_detague_il_ne_se_redessine_pas(monkeypatch):
+    """La boucle sans plancher : un tracé écrit en ```text n'est pas un dessin pour la
+    page — le redemander ajouterait une version à chaque appel."""
+    pytest.importorskip("fastmcp.apps")
+    monkeypatch.setenv("OTO_PROCEDURE_APP_BUNDLE", BUNDLE)
+    tague = {**PROSE, "body_md": f"# Prose\n\n```text\n{TRACE}\n```\n"}
+    _, texte = _appeler(monkeypatch, {("org", 42, "prose"): tague}, "prose")
+    assert "```text fence" in texte and "remove the `text` tag" in texte
+    assert "REQUIRED NEXT STEP" not in texte
+
+
+def test_la_consigne_de_dessin_ne_se_joue_qu_une_fois(monkeypatch):
+    pytest.importorskip("fastmcp.apps")
+    monkeypatch.setenv("OTO_PROCEDURE_APP_BUNDLE", BUNDLE)
+    _, texte = _appeler(monkeypatch, {("org", 42, "prose"): PROSE}, "prose")
+    assert "Draw at most ONCE" in texte and "stop and tell the user" in texte
+
+
+def test_les_outils_cites_portent_le_nom_du_produit(monkeypatch):
+    pytest.importorskip("fastmcp.apps")
+    monkeypatch.setenv("OTO_PROCEDURE_APP_BUNDLE", BUNDLE)
+    _, texte = _appeler(monkeypatch, {("org", 42, "prose"): PROSE}, "prose", prefix="tulina")
+    assert "tulina_guide op=read" in texte and "tulina_procedure op=set" in texte
+    assert "tulina_procedure_app slug=prose again" in texte
+    assert "oto_procedure" not in texte

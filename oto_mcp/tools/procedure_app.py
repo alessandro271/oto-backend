@@ -79,10 +79,14 @@ def _connectors_named(trace: str, org_id: int | None) -> list[dict]:
 
 
 def _lire(sub: str, slug: str) -> tuple[dict, str] | None:
-    """The procedure `slug` and its scope (`org`|`group`), in the order
-    `oto_procedure(op='get')` serves it: the active org first, the active team as a
-    complement (`guide_run.version_de_procedure`)."""
+    """The procedure `slug` and the scope it was read at (`user`|`org`|`group`) — the
+    one a write must target. The order of `oto_procedure(op='get')`'s cascade: MINE
+    first (the default write scope, ADR 0068), then the active org; the active team as
+    a complement (`guide_run.version_de_procedure`)."""
     from .. import access, org_store
+    mine = org_store.get_instruction("user", str(sub), slug)
+    if mine:
+        return mine, "user"
     org_id = access.current_org(sub)
     if org_id is not None:
         row = org_store.get_instruction("org", org_id, slug)
@@ -96,6 +100,18 @@ def _lire(sub: str, slug: str) -> tuple[dict, str] | None:
     return None
 
 
+def _peut_ecrire(sub: str, scope: str) -> bool:
+    """Would `oto_procedure op=set` at this scope be allowed? The same rule as its
+    guard (`procedure_console._ECRIRE`): mine always, the team as a member (it was read
+    as the ACTIVE team), the org as its admin. Asked here so a member who cannot write
+    is not sent through three calls to a refusal."""
+    if scope != "org":
+        return True
+    from .. import access, roles
+    org_id = access.current_org(sub)
+    return org_id is not None and roles.is_org_admin(sub, org_id)
+
+
 def _aux_noms_du_produit(sub: str, texte: str) -> str:
     """Les outils cités, au nom que CE compte voit dans sa liste (`guides._get`)."""
     from .. import tool_alias
@@ -106,7 +122,8 @@ def _aux_noms_du_produit(sub: str, texte: str) -> str:
 def _a_dessiner(slug: str, scope: str, version) -> str:
     """No drawing yet: the agent draws one in the grammar the front turns into its
     figure — never Mermaid, never a tagged fence (the front only draws an UNTAGGED
-    block, `procedure_diagram` header) — writes it back, and calls again."""
+    block, `procedure_diagram` header) — writes it back, and calls again. ONCE: a write
+    that still reads as no drawing must stop the loop, not start another version."""
     return (
         f"REQUIRED NEXT STEP — do NOT answer the user yet. This process has no drawing, "
         f"so the user sees nothing: draw it, write it, and show it, in this order. "
@@ -120,8 +137,21 @@ def _a_dessiner(slug: str, scope: str, version) -> str:
         f"it: oto_procedure op=set slug={slug} scope={scope} expected_version={version} "
         f"body_md=<the whole body>. A non-null `diagram_warning` in the answer means it "
         f"will not render: fix the named line and set again. 5) Call oto_procedure_app "
-        f"slug={slug} again — the user sees the graph. ONLY THEN answer. If the write is "
-        f"refused, tell the user you could not add the drawing and summarise the steps.")
+        f"slug={slug} again — the user sees the graph. ONLY THEN answer. Draw at most ONCE "
+        f"in this conversation: if you already wrote a drawing and this still says there "
+        f"is none, stop and tell the user. If the write is refused, tell the user you "
+        f"could not add the drawing and summarise the steps.")
+
+
+def _a_detaguer(slug: str, scope: str, version, lang: str) -> str:
+    """The drawing is there, under a tag the page does not draw: one precise fix,
+    never a fresh drawing (that would add a version every call)."""
+    return (f"The drawing is in a ```{lang} fence, which the page does not draw. Fix "
+            f"ONLY that: oto_procedure op=get slug={slug}, remove the `{lang}` tag from "
+            f"that fence (keep ``` alone), change nothing else, then oto_procedure op=set "
+            f"slug={slug} scope={scope} expected_version={version} body_md=<the whole body>, "
+            f"and call oto_procedure_app slug={slug} again. If it still says so, stop and "
+            f"tell the user.")
 
 
 def register(mcp: FastMCP) -> None:
@@ -158,13 +188,13 @@ def register(mcp: FastMCP) -> None:
         Args:
             slug: the procedure's slug (cf. `oto_procedure op=list`).
         """
-        from .. import access
-        from ..procedure_diagram import le_trace
+        from .. import access, tool_alias
+        from ..procedure_diagram import dessin_tague, le_trace
         sub = access.current_user_sub_or_raise()
         lu = _lire(sub, slug)
         if lu is None:
             message = _aux_noms_du_produit(
-                sub, f"No procedure `{slug}` in your active org or team — list them with oto_procedure op=list.")
+                sub, f"No procedure `{slug}` of yours, in your active org or in your team — list them with oto_procedure op=list.")
             return ToolResult(content=[TextContent(type="text", text=message)],
                               structured_content={"slug": slug, "message": message})
         row, scope = lu
@@ -172,11 +202,25 @@ def register(mcp: FastMCP) -> None:
         version = row.get("version")
         trace = le_trace(row.get("body_md") or "")
         rendu = {"slug": slug, "title": title, "version": version, "drawing": trace,
-                 "connectors": _connectors_named(trace, access.current_org(sub)) if trace else []}
+                 "connectors": _connectors_named(trace, access.current_org(sub)) if trace else [],
+                 # Where `/brand/…` logos resolve: the view cannot always tell its own
+                 # script's origin once the host's sandbox has re-served it.
+                 "origin": _origin(bundle)}
+        entete = f"{title} (`{slug}`, v{version})"
         if trace:
-            texte = (f"{title} (`{slug}`, v{version}) — the graph is drawn for the user. "
+            texte = (f"{entete} — the graph is drawn for the user. "
                      f"Its steps: oto_procedure op=get slug={slug}.")
+        elif tool_alias.sert_un_worker():
+            # A runner job renders nothing to anyone: never send it to rewrite a
+            # procedure unattended.
+            texte = f"{entete} — no drawing; rendering hosts only. Its steps: oto_procedure op=get slug={slug}."
+        elif not _peut_ecrire(sub, scope):
+            texte = (f"{entete} — no drawing yet, and adding one needs an admin of this "
+                     f"org. Tell the user, and explain the process from its steps: "
+                     f"oto_procedure op=get slug={slug}.")
+        elif (lang := dessin_tague(row.get("body_md") or "")) is not None:
+            texte = f"{entete}. " + _a_detaguer(slug, scope, version, lang)
         else:
-            texte = f"{title} (`{slug}`, v{version}). " + _a_dessiner(slug, scope, version)
+            texte = f"{entete}. " + _a_dessiner(slug, scope, version)
         return ToolResult(content=[TextContent(type="text", text=_aux_noms_du_produit(sub, texte))],
                           structured_content=rendu)
