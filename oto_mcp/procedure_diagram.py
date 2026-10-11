@@ -260,6 +260,13 @@ def _trace_et_offset(body_md: str) -> tuple[str, int] | None:
     return "\n".join(lignes), (body_md or "").count("\n", 0, debut) + 2
 
 
+def le_trace(body_md: str) -> str | None:
+    """Le tracé que la page rend, sans ses fences — ce que le graphe rendu dans
+    l'hôte (`tools/procedure_app.py`) reparse côté front. `None` sans dessin."""
+    trouve = _trace_et_offset(body_md)
+    return trouve[0] if trouve else None
+
+
 # Au plus deux fautes nommées : la première est presque toujours la cause, et un
 # mur d'avertissements se lit comme du bruit.
 _MAX_FAUTES = 2
