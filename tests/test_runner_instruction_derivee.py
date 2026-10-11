@@ -205,8 +205,34 @@ def test_un_declencheur_sans_instruction_en_recoit_une_au_tick(monkeypatch):
 
 def test_une_instruction_ecrite_part_intacte(monkeypatch):
     charge = _tick_avec(monkeypatch, input="Ne regarde que les appels d'hier.")
-    assert charge["input"] == "Ne regarde que les appels d'hier.", (
+    tete, _, date = charge["input"].partition("\n\n")
+    assert tete == "Ne regarde que les appels d'hier.", (
         "composer ne se substitue à personne : ce qui est écrit est servi")
+    assert date.startswith("Cette exécution est l'occurrence du "), (
+        "seule la date de l'occurrence la suit")
+
+
+def test_l_occurrence_part_DATEE_dans_le_fuseau_du_declencheur(monkeypatch):
+    """⚠️ Un agent hébergé n'a pas d'horloge : le premier passage d'un agent
+    quotidien a conclu `blocked`, faute de savoir quel jour couvrir (01/10/2026).
+    L'échéance relue de la base est naïve et UTC (`TimeZone=UTC`)."""
+    charge = _tick_avec(monkeypatch, next_due="2026-09-12 04:05:00")
+    assert charge["input"].endswith(
+        "Cette exécution est l'occurrence du samedi 12/09/2026 à 06:05 "
+        "(Europe/Paris), soit 2026-09-12T04:05:00Z.")
+
+
+def test_un_fuseau_illisible_leve_au_lieu_d_inventer_une_heure():
+    with pytest.raises(Exception):
+        _instruction.horodatee("x", "2026-09-12 04:05:00", "Europe/Nulle-Part")
+
+
+def test_une_echeance_avec_fuseau_garde_son_instant():
+    from datetime import datetime, timedelta, timezone
+    paris_ete = timezone(timedelta(hours=2))
+    assert _instruction.horodatee(
+        "x", datetime(2026, 10, 10, 8, 0, tzinfo=paris_ete), "Europe/Paris").endswith(
+        "samedi 10/10/2026 à 08:00 (Europe/Paris), soit 2026-10-10T06:00:00Z.")
 
 
 def test_une_invite_videe_depuis_le_produit_ne_casse_pas_l_agent(monkeypatch):

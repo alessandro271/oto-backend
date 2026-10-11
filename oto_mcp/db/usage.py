@@ -198,7 +198,8 @@ _VERBES_USAGE = {"oto_procedure": "slug", "run_start": _ARG_PROCEDURE}
 
 def _runs_from_journal(extra: str = "") -> str:
     """Le run RECONSTRUIT depuis ses faits : l'ouverture (`run_start`) porte label,
-    guide, acteur, org et date de début ; la clôture porte l'issue et la date de fin.
+    guide, acteur, org et date de début ; la clôture porte l'issue, sa note et la date
+    de fin.
     `outcome` NULL = pas de fait de clôture = run ouvert.
 
     `last_seen_at` = le dernier signe de vie du run (son appel le plus récent, à
@@ -218,6 +219,7 @@ def _runs_from_journal(extra: str = "") -> str:
                    s.created_at                 AS started_at,
                    f.created_at                 AS finished_at,
                    f.args->>'outcome'           AS outcome,
+                   f.args->>'note'              AS note,
                    GREATEST(s.created_at,
                             COALESCE(v.last_call_at, s.created_at)) AS last_seen_at
               FROM tool_calls s{_run_closure("s")}
@@ -513,7 +515,7 @@ def project_runs(project_id: int, guide: Optional[str] = None,
         return [dict(r) for r in conn.execute(
             f"""
             WITH j AS ({_runs_from_journal(_PROJECT_SCOPE)})
-            SELECT j.run_id, j.label, j.doctrine, j.outcome, j.started_at,
+            SELECT j.run_id, j.label, j.doctrine, j.outcome, j.note, j.started_at,
                    j.finished_at, j.last_seen_at
               FROM runs x JOIN j ON j.run_id = x.run_id
              WHERE x.project_id = %s{guide_clause}
@@ -956,7 +958,7 @@ def list_runs(limit: int = 100, *, org_id: Optional[int] = None) -> list[dict]:
                    COALESCE(j.doctrine, j.label) AS slug,
                    j.label, j.doctrine, j.doctrine_version,
                    j.sub, u.email, u.name,
-                   j.started_at, j.finished_at, j.outcome, j.last_seen_at,
+                   j.started_at, j.finished_at, j.outcome, j.note, j.last_seen_at,
                    c.n_calls
               FROM j
               LEFT JOIN users u ON u.sub = j.sub

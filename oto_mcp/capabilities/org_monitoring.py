@@ -321,6 +321,10 @@ class RunRow(BaseModel):
     started_at: Optional[str] = None
     finished_at: Optional[str] = None
     outcome: Optional[str] = None
+    note: Optional[str] = Field(default=None, description=(
+        "The `note` of the run's close (`run_finish`): for a hosted run that died, "
+        "the reason the runner gave — the provider's refusal, the transport error. "
+        "Null when the close carried none, or the run is not closed."))
     n_calls: int
 
 

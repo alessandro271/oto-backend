@@ -130,7 +130,12 @@ def _tick() -> int:
             # ⚠️ Toujours par `_instruction`, jamais rédigée sur place : une
             # variante écrite ici rouvrirait le « second domicile du métier » que
             # ce module existe pour fermer.
-            "input": t.get("input") or _instruction.derivee(t["procedure"]),
+            #
+            # Et l'occurrence se DATE (`horodatee`) : un agent hébergé n'a pas
+            # d'horloge, il apprend ici quel jour et quelle heure il représente.
+            "input": _instruction.horodatee(
+                t.get("input") or _instruction.derivee(t["procedure"]),
+                t["next_due"], t["tz"]),
             "label": t.get("label") or f"planifié — {t['procedure']}",
             "max_steps": t.get("max_steps"),
             # Les limites du run déclarées sur l'agent — seulement si déclarées.

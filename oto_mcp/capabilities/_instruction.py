@@ -21,10 +21,42 @@ domicile à l'échelle du dépôt.
 from __future__ import annotations
 
 import json
-from typing import Any, Optional
+from datetime import datetime, timezone
+from typing import Any, Optional, Union
+from zoneinfo import ZoneInfo
 
 _BILAN = ("conclus par un bilan bref de ce que tu as fait et de ce qui t'a "
           "manqué.")
+
+
+_JOURS = ("lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche")
+
+
+def horodatee(instruction: str, echeance: Union[datetime, str], tz: str) -> str:
+    """L'instruction d'une occurrence PLANIFIÉE, plus le moment qu'elle représente.
+
+    ⚠️ Un agent hébergé n'a pas d'horloge. Le 01/10/2026, le premier passage d'un
+    agent quotidien a conclu `blocked` : il ne pouvait pas savoir quel jour on
+    était, donc quelle veille couvrir. Le moment n'est pas du métier — c'est un
+    FAIT de l'occurrence, que seule la plateforme connaît : l'échéance, et le
+    fuseau dans lequel le déclencheur a été posé.
+
+    L'échéance, et non l'heure de réservation : une veille du matin réservée
+    quelques minutes plus tard couvre toujours le jour de son échéance.
+
+    L'instruction écrite reste en tête, intacte ; le moment la suit, sur sa ligne.
+    `echeance` naïve = UTC (la base se lit en `TimeZone=UTC`, cf. `db._conn`). Un
+    fuseau inconnu LÈVE : la pose le valide (`validate_cron`), un fuseau devenu
+    illisible est un défaut à voir, pas une heure à deviner."""
+    if isinstance(echeance, str):
+        echeance = datetime.fromisoformat(echeance)
+    if echeance.tzinfo is None:
+        echeance = echeance.replace(tzinfo=timezone.utc)
+    locale = echeance.astimezone(ZoneInfo(tz))
+    utc = echeance.astimezone(timezone.utc)
+    return (f"{instruction}\n\nCette exécution est l'occurrence du "
+            f"{_JOURS[locale.weekday()]} {locale:%d/%m/%Y à %H:%M} ({tz}), "
+            f"soit {utc:%Y-%m-%dT%H:%M:%SZ}.")
 
 
 def derivee(slug: str) -> str:

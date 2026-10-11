@@ -88,9 +88,11 @@ def _journal_open(conn, run_id, *, label, doctrine=None, version=None, sub="u1",
     _fact(conn, run_id, "run_start", args, sub=sub, org_id=org_id, ago=ago)
 
 
-def _journal_close(conn, run_id, *, outcome, sub="u1", org_id=None, ago=5.0):
-    _fact(conn, run_id, "run_finish", {"run_id": run_id, "outcome": outcome},
-          sub=sub, org_id=org_id, ago=ago)
+def _journal_close(conn, run_id, *, outcome, sub="u1", org_id=None, ago=5.0, note=None):
+    args = {"run_id": run_id, "outcome": outcome}
+    if note is not None:
+        args["note"] = note
+    _fact(conn, run_id, "run_finish", args, sub=sub, org_id=org_id, ago=ago)
 
 
 def _index(conn, run_id, *, label="étiquette", doctrine=None, outcome=None, sub="u1",
@@ -362,3 +364,17 @@ def test_les_lectures_d_un_projet_ne_reconstruisent_que_ses_runs_recents(conn, m
     assert stats["runs"] == 2 and sorted(stats["doctrines"]) == ["prospection", "relance"]
     outils = usage.project_run_tools(9)
     assert "outil_ancien" not in outils and {"outil_a", "outil_b"} <= set(outils)
+
+
+def test_la_note_de_cloture_se_lit_sur_le_run(conn):
+    """⚠️ Un run hébergé qui meurt se clôt `failed` avec la RAISON en note (le
+    runner l'écrit). Le journal la portait, aucune surface ne la servait : trois
+    tentatives d'un agent planifié mortes en une seconde, le 02/10/2026, se lisaient
+    `failed` sans pourquoi, ni sur la lentille d'org ni sur la pastille du projet."""
+    raison = "travail interrompu — BadRequestError : HTTP 400 invalid_request_error — x"
+    _index(conn, "r9", org_id=35, project_id=9)
+    _journal_open(conn, "r9", label="planifié", org_id=35)
+    _journal_close(conn, "r9", outcome="failed", org_id=35, note=raison)
+    assert usage.list_runs(100, org_id=35)[0]["note"] == raison
+    assert usage.project_runs(9)[0]["note"] == raison
+
