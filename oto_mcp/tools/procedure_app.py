@@ -23,8 +23,6 @@ line of text pointing at `oto_procedure op=get` for the steps.
 from __future__ import annotations
 
 import html
-import logging
-import os
 import re
 from urllib.parse import urlsplit
 
@@ -32,9 +30,6 @@ from fastmcp import FastMCP
 from fastmcp.tools import ToolResult
 from mcp.types import TextContent
 
-logger = logging.getLogger(__name__)
-
-ENV_BUNDLE = "OTO_PROCEDURE_APP_BUNDLE"
 URI = "ui://oto/procedure-graph.html"
 
 # Logos come from the registry (logo.dev for almost all); a host that blocks one
@@ -81,18 +76,21 @@ def _connectors_named(trace: str) -> list[dict]:
     return retenus
 
 
-def _lire(sub: str, slug: str) -> dict | None:
-    """The procedure `slug` in the order `oto_procedure(op='get')` serves it: the
-    active org first, the active team as a complement (`guide_run.version_de_procedure`)."""
+def _lire(sub: str, slug: str) -> tuple[dict, str] | None:
+    """The procedure `slug` and its scope (`org`|`group`), in the order
+    `oto_procedure(op='get')` serves it: the active org first, the active team as a
+    complement (`guide_run.version_de_procedure`)."""
     from .. import access, org_store
     org_id = access.current_org(sub)
     if org_id is not None:
         row = org_store.get_instruction("org", org_id, slug)
         if row:
-            return row
+            return row, "org"
     gid = access.current_group(sub)
     if gid is not None:
-        return org_store.get_instruction("group", gid, slug)
+        row = org_store.get_instruction("group", gid, slug)
+        if row:
+            return row, "group"
     return None
 
 
@@ -103,12 +101,31 @@ def _aux_noms_du_produit(sub: str, texte: str) -> str:
     return tool_alias.rewrite_prose(texte, prefix) if prefix else texte
 
 
+def _a_dessiner(slug: str, scope: str, version) -> str:
+    """No drawing yet: the agent draws one in the grammar the front turns into its
+    figure — never Mermaid, never a tagged fence (the front only draws an UNTAGGED
+    block, `procedure_diagram` header) — writes it back, and calls again."""
+    return (
+        f"REQUIRED NEXT STEP — do NOT answer the user yet. This process has no drawing, "
+        f"so the user sees nothing: draw it, write it, and show it, in this order. "
+        f"1) oto_guide op=read slug=procedure-flowchart — the drawing grammar; follow it "
+        f"exactly. 2) oto_procedure op=get slug={slug} — the body. 3) Draw the flow from "
+        f"ITS steps: the trigger, each step in a box naming the tools it uses, the checks "
+        f"as decisions, the rows that leave as exits — box-drawing characters (┌ ─ ┐ │ └ "
+        f"┘ ┬ ▼ ├ ▶ ▪) in ONE untagged ``` fence. Never Mermaid, never ```text: those are "
+        f"not drawn as the figure. 4) Put it where the guide says (after the intro or the "
+        f"summary table, before the first phase heading), change NOTHING else, and write "
+        f"it: oto_procedure op=set slug={slug} scope={scope} expected_version={version} "
+        f"body_md=<the whole body>. A non-null `diagram_warning` in the answer means it "
+        f"will not render: fix the named line and set again. 5) Call oto_procedure_app "
+        f"slug={slug} again — the user sees the graph. ONLY THEN answer. If the write is "
+        f"refused, tell the user you could not add the drawing and summarise the steps.")
+
+
 def register(mcp: FastMCP) -> None:
-    bundle = (os.environ.get(ENV_BUNDLE) or "").strip()
-    if not bundle:
-        return
-    if not bundle.endswith(".js") or urlsplit(bundle).scheme not in ("https", "http"):
-        logger.error("%s=%r is not a .js URL — oto_procedure_app not registered", ENV_BUNDLE, bundle)
+    from ..procedure_diagram import bundle_du_graphe
+    bundle = bundle_du_graphe()
+    if bundle is None:
         return
     try:
         from fastmcp.apps import AppConfig, ResourceCSP, UI_MIME_TYPE
@@ -127,12 +144,14 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool(app=AppConfig(resource_uri=URI))
     def oto_procedure_app(slug: str) -> ToolResult:
-        """Draw a procedure's process graph INLINE (MCP App, rendering hosts only) — READ ONLY.
+        """SHOW a process to the user: draws the procedure's process graph INLINE in the
+        conversation (MCP App) — trigger, steps, checks and the connectors each step uses.
 
-        Shows the procedure's flowchart as the process page draws it: trigger,
-        steps, checks and the connectors each step uses. Use when the user wants
-        to SEE a process. It gives YOU only its title: to read the steps, use
-        `oto_procedure op=get`; to change the drawing, edit the procedure there.
+        ALWAYS call it, FIRST, whenever the user asks about a process or procedure:
+        to see it, understand it, explain it, review it, or after you create or change
+        one. Then answer in text — the graph replaces no explanation. It gives YOU only
+        the title: the steps are in `oto_procedure op=get`. If the process has no
+        drawing yet, the answer tells you how to draw one: do it, then call this again.
 
         Args:
             slug: the procedure's slug (cf. `oto_procedure op=list`).
@@ -140,19 +159,22 @@ def register(mcp: FastMCP) -> None:
         from .. import access
         from ..procedure_diagram import le_trace
         sub = access.current_user_sub_or_raise()
-        row = _lire(sub, slug)
-        if row is None:
+        lu = _lire(sub, slug)
+        if lu is None:
             message = _aux_noms_du_produit(
                 sub, f"No procedure `{slug}` in your active org or team — list them with oto_procedure op=list.")
             return ToolResult(content=[TextContent(type="text", text=message)],
                               structured_content={"slug": slug, "message": message})
+        row, scope = lu
         title = row.get("title") or slug
         version = row.get("version")
         trace = le_trace(row.get("body_md") or "")
         rendu = {"slug": slug, "title": title, "version": version, "drawing": trace,
                  "connectors": _connectors_named(trace) if trace else []}
-        quoi = "graph drawn for the user" if trace else "no diagram to draw"
-        texte = (f"{title} (`{slug}`, v{version}) — {quoi}. "
-                 f"Its steps: oto_procedure op=get slug={slug}.")
+        if trace:
+            texte = (f"{title} (`{slug}`, v{version}) — the graph is drawn for the user. "
+                     f"Its steps: oto_procedure op=get slug={slug}.")
+        else:
+            texte = f"{title} (`{slug}`, v{version}). " + _a_dessiner(slug, scope, version)
         return ToolResult(content=[TextContent(type="text", text=_aux_noms_du_produit(sub, texte))],
                           structured_content=rendu)

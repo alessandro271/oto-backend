@@ -137,7 +137,8 @@ def test_l_equipe_active_complete_l_org(monkeypatch):
         "slug": "veille", "title": "Veille d'équipe", "version": 1, "body_md": CORPS}})
     from oto_mcp import access
     monkeypatch.setattr(access, "current_group", lambda sub: 7)
-    assert pa._lire("sub1", "veille")["title"] == "Veille d'équipe"
+    row, scope = pa._lire("sub1", "veille")
+    assert row["title"] == "Veille d'équipe" and scope == "group"
 
 
 def test_sans_dessin_ou_sans_procedure_la_vue_le_dit(monkeypatch):
@@ -155,7 +156,45 @@ def test_sans_dessin_ou_sans_procedure_la_vue_le_dit(monkeypatch):
     sans_dessin = asyncio.run(appel("prose"))
     assert sans_dessin.structured_content["drawing"] is None
     assert sans_dessin.structured_content["connectors"] == []
+    # Sans dessin, le modèle est envoyé en dessiner un — jamais en Mermaid — puis rappeler.
+    consigne = "".join(getattr(b, "text", "") for b in sans_dessin.content)
+    assert "REQUIRED NEXT STEP" in consigne and "slug=procedure-flowchart" in consigne
+    assert "oto_procedure op=set slug=prose scope=org expected_version=1" in consigne
+    assert "Never Mermaid" in consigne and "oto_procedure_app slug=prose again" in consigne
+    assert "ONLY THEN answer" in consigne
 
     absente = asyncio.run(appel("inconnue"))
     assert "inconnue" in absente.structured_content["message"]
     assert "oto_procedure op=list" in "".join(getattr(b, "text", "") for b in absente.content)
+
+
+def test_oto_procedure_propose_le_graphe_la_ou_il_existe(monkeypatch):
+    """La lecture d'une procédure par son slug renvoie l'agent la MONTRER ; une
+    instance sans bundle ne propose pas un outil qu'elle n'a pas."""
+    from oto_mcp import procedure_diagram, tool_alias
+    from oto_mcp.capabilities import procedure_console as pc
+    monkeypatch.setattr(tool_alias, "prefix_for", lambda sub: "")
+
+    async def lecture():
+        return {"slug": "veille", "body_md": "…"}
+
+    def lire(**kw):
+        inp = pc.ProcedureInput(op="get", slug="veille", **kw)
+        return asyncio.run(pc._avec_le_graphe(type("Ctx", (), {"sub": "s"})(), inp, lecture()))
+
+    monkeypatch.delenv("OTO_PROCEDURE_APP_BUNDLE", raising=False)
+    assert "show_graph" not in lire()
+
+    monkeypatch.setenv("OTO_PROCEDURE_APP_BUNDLE", BUNDLE)
+    assert "oto_procedure_app slug=veille" in lire()["show_graph"]
+    # Une version archivée ou une procédure lue par son id : l'outil ne la relirait pas.
+    assert "show_graph" not in lire(version=2)
+    assert "show_graph" not in lire(guide_id=9)
+    assert "oto_procedure_app slug=<slug>" in procedure_diagram.indice_du_graphe("s")
+
+
+def test_un_bundle_qui_n_est_pas_un_script_est_refuse(monkeypatch):
+    from oto_mcp import procedure_diagram
+    monkeypatch.setenv("OTO_PROCEDURE_APP_BUNDLE", "ftp://x/process-graph.js")
+    assert procedure_diagram.bundle_du_graphe() is None
+    assert procedure_diagram.indice_du_graphe("s", "veille") is None

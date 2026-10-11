@@ -307,3 +307,43 @@ def diagram_check(body_md: str, *, marqueur_perdu: bool = False) -> dict:
     # noqa: SILENT — contrôle de forme optionnel : pas d'avertissement plutôt qu'un faux
     except Exception:  # noqa: BLE001 — cf. `slots_check`
         return {"diagram_warning": None}
+
+
+# ── Le dessin montré dans l'hôte MCP : `oto_procedure_app` ────────────────────
+#
+# Une instance dont le front sait peindre le dessin dans la conversation le déclare
+# par `OTO_PROCEDURE_APP_BUNDLE` (l'URL du bundle). Lu ICI, une seule fois pour les
+# deux qui en dépendent : l'outil (`tools/procedure_app.py`), qui ne s'enregistre pas
+# sans elle, et la console procédures, qui ne propose pas un outil absent.
+ENV_BUNDLE = "OTO_PROCEDURE_APP_BUNDLE"
+
+
+def bundle_du_graphe() -> str | None:
+    """L'URL du bundle qui peint le graphe, ou `None` : absente, ou pas l'URL d'un
+    script — refus journalisé, puisque l'outil, lui, ne s'enregistre pas sans un mot."""
+    import logging
+    import os
+    from urllib.parse import urlsplit
+    bundle = (os.environ.get(ENV_BUNDLE) or "").strip()
+    if not bundle:
+        return None
+    if bundle.endswith(".js") and urlsplit(bundle).scheme in ("https", "http"):
+        return bundle
+    logging.getLogger(__name__).error(
+        "%s n'est pas l'URL d'un bundle .js — oto_procedure_app non enregistré", ENV_BUNDLE)
+    return None
+
+
+def indice_du_graphe(sub: str | None, slug: str | None = None) -> str | None:
+    """La ligne qui envoie l'agent MONTRER le process — `None` là où l'outil n'existe
+    pas. Aux noms d'outils de CE compte (`tool_alias`), comme le corps qu'elle
+    accompagne."""
+    if bundle_du_graphe() is None:
+        return None
+    cible = f"oto_procedure_app slug={slug}" if slug else "oto_procedure_app slug=<slug>"
+    texte = (f"Whenever the user asks about this process, SHOW it: call {cible} "
+             "first — it draws the process graph inline (and tells you how to draw one "
+             "when there is none yet).")
+    from . import tool_alias
+    prefix = tool_alias.prefix_for(sub)
+    return tool_alias.rewrite_prose(texte, prefix) if prefix else texte

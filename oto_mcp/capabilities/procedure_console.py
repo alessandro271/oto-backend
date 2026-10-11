@@ -26,6 +26,7 @@ from .orgs import instructions as orgs_instructions
 from ._authz import (BY_OP, GROUP_ADMIN_OPT, GROUP_MEMBER_OPT, LIBRARY_PUBLISHER,
                      ORG_ADMIN_OPT, ORG_MEMBER, ORG_MEMBER_OPT, SUB_ONLY)
 from . import _publication
+from .. import procedure_diagram
 from ._types import AuthzDenied, Capability, ResolvedCtx
 from .registry import CAPABILITIES
 
@@ -159,19 +160,34 @@ def _ECRIT_SCOPE(inp) -> str:
     return getattr(inp, "scope", None) or "user"
 
 
+async def _avec_le_graphe(ctx: ResolvedCtx, inp: ProcedureInput, lecture):
+    """La procédure lue, plus — là où l'instance sait la peindre — la ligne qui envoie
+    l'agent la MONTRER (`procedure_diagram.indice_du_graphe`). Seulement pour une
+    lecture par `slug` dans son org ou son équipe : c'est ce que l'outil sait relire,
+    pas une procédure partagée d'ailleurs (`guide_id`) ni une version archivée."""
+    out = await lecture
+    if (not isinstance(out, dict) or not inp.slug or inp.guide_id or inp.doctrine_id
+            or inp.version is not None):
+        return out
+    indice = procedure_diagram.indice_du_graphe(ctx.sub, out.get("slug") or inp.slug)
+    return {**out, "show_graph": indice} if indice else out
+
+
 def _dispatch_procedure(ctx: ResolvedCtx, inp: ProcedureInput):
     oi, lib = orgs_instructions, guide_library
     if inp.op == "get":
-        return oi._get_guide(ctx, oi.GuideGetInput(
+        return _avec_le_graphe(ctx, inp, oi._get_guide(ctx, oi.GuideGetInput(
             slug=inp.slug, guide_id=inp.guide_id, doctrine_id=inp.doctrine_id,
             # Pas de repli sur "org" : `None` déclenche la CASCADE de lecture
             # (chez soi d'abord, puis l'org). Écrire à soi par défaut et relire
             # ailleurs par défaut ferait « perdre » la procédure qu'on vient d'écrire.
             scope=inp.scope,
-            version=inp.version, with_history=inp.with_history, full=inp.full))
+            version=inp.version, with_history=inp.with_history, full=inp.full)))
     if inp.op == "list":
-        return oi._list_guides(ctx, oi.GuideListInput(query=inp.query, scope=inp.scope,
-                                                      verbose=inp.verbose))
+        liste = oi._list_guides(ctx, oi.GuideListInput(query=inp.query, scope=inp.scope,
+                                                       verbose=inp.verbose))
+        indice = procedure_diagram.indice_du_graphe(ctx.sub)
+        return {**liste, "show_graph": indice} if indice and isinstance(liste, dict) else liste
     if inp.op == "create":
         return oi._create_instruction(ctx, oi.ConsoleInstrCreateInput(
             slug=_need(inp.slug, "missing_slug", "`slug` requis pour create."),
