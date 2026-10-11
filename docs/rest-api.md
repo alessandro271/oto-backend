@@ -897,6 +897,12 @@ PATCH /api/me/runs/{run_id} {outcome, note?}       → {outcome, rows_released}
   même compte : c'est au consommateur de lier SON run à SA session, et de ne jamais
   reprendre un `_claimed_run` lu sur une ligne. ⚠️ `_run_id` dans le CORPS d'un PATCH est
   refusé `400 jeton_mal_place` : le run se passe en en-tête.
+- **Lister MES runs** : `GET /api/me/runs?limit=` (capacité `runs.mine`, membre) rend les
+  derniers runs de l'appelant sous l'org active — `run_id`, `label`, `guide`, `outcome`
+  (`null` = pas clos), `project_id`, bornes —, plafonné à 50. C'est le bloc C du handshake
+  (`db.recent_runs`) en REST : jamais les runs d'un autre membre, l'org entière reste la
+  lentille org_admin `GET /api/orgs/{id}/monitoring/runs`. La page d'onboarding la lit
+  pour cocher « premier process déroulé » chez un membre.
 - **Le journal estampille le run** (oto#229) : la ligne `kind='rest'` d'un appel fait sous
   `X-Oto-Run` porte son `run_id`, et l'org du run pour `org_id` — la timeline du run (et
   celle de son org) montre donc les réservations et écritures faites entre l'ouverture et

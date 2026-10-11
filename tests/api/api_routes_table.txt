@@ -748,6 +748,8 @@ POST /api/me/runs/thread -> _handler
 OPTIONS /api/me/runs/thread -> options_handler
 POST /api/me/runs -> _handler
 OPTIONS /api/me/runs -> options_handler
+GET,HEAD /api/me/runs -> _handler
+OPTIONS /api/me/runs -> options_handler
 PATCH /api/me/runs/{run_id} -> _handler
 OPTIONS /api/me/runs/{run_id} -> options_handler
 POST /api/me/runner/jobs -> _handler
