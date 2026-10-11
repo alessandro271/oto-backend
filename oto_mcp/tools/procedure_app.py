@@ -55,15 +55,17 @@ def _origin(url: str) -> str:
     return f"{parts.scheme}://{parts.netloc}"
 
 
-def _connectors_named(trace: str) -> list[dict]:
+def _connectors_named(trace: str, org_id: int | None) -> list[dict]:
     """The registry connectors the drawing may name — a SUPERSET of what the front's
     matching will keep (a namespace as a token, or the label as a word), so the view
-    re-runs the real matching on a roster of a few entries instead of 600 KB."""
+    re-runs the real matching on a roster of a few entries instead of 600 KB. Through
+    the org's effective overlay, like every surface that serves the catalogue (#732)."""
     from .. import providers
+    from ..connectors import cardinality
     texte = trace.lower()
     mots = set(re.findall(r"[a-z0-9]+", texte))
     retenus = []
-    for c in providers.public_catalog():
+    for c in cardinality.overlay_for_org(providers.public_catalog(), org_id):
         namespaces = c.get("namespaces") or []
         label = (c.get("label") or "").lower()
         if any(ns in mots or f"{ns}_" in texte for ns in namespaces) or (
@@ -170,7 +172,7 @@ def register(mcp: FastMCP) -> None:
         version = row.get("version")
         trace = le_trace(row.get("body_md") or "")
         rendu = {"slug": slug, "title": title, "version": version, "drawing": trace,
-                 "connectors": _connectors_named(trace) if trace else []}
+                 "connectors": _connectors_named(trace, access.current_org(sub)) if trace else []}
         if trace:
             texte = (f"{title} (`{slug}`, v{version}) — the graph is drawn for the user. "
                      f"Its steps: oto_procedure op=get slug={slug}.")

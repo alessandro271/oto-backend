@@ -166,8 +166,7 @@ async def _avec_le_graphe(ctx: ResolvedCtx, inp: ProcedureInput, lecture):
     lecture par `slug` dans son org ou son équipe : c'est ce que l'outil sait relire,
     pas une procédure partagée d'ailleurs (`guide_id`) ni une version archivée."""
     out = await lecture
-    if (not isinstance(out, dict) or not inp.slug or inp.guide_id or inp.doctrine_id
-            or inp.version is not None):
+    if not isinstance(out, dict) or not inp.slug or inp.guide_id or inp.version is not None:
         return out
     indice = procedure_diagram.indice_du_graphe(ctx.sub, out.get("slug") or inp.slug)
     return {**out, "show_graph": indice} if indice else out
