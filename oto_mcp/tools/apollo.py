@@ -88,6 +88,33 @@ def register(mcp: FastMCP) -> None:
         key, is_platform = access.resolve_api_key("apollo", units=units)
         return ApolloClient(api_key=key), is_platform
 
+    def _credits_billed(out: Any, tool: str, served: Optional[int]) -> int:
+        """The Apollo CREDITS this call consumed, for the BILLED line
+        (`tool_calls.quantity`) — same counter and same unit as `apollo_bulk_match`
+        (oto#168), which keeps its own reading.
+
+        Upstream's `credits_consumed` wins whenever it is a usable count. Otherwise
+        `served` — what the RESPONSE shows was returned (a person, an organization,
+        a number of organizations), never what was submitted and never 1 "for the
+        call": the biller invoices what is traced, so a figure guessed upward would
+        be invoiced. A field that is there but unreadable is SAID in the log, as in
+        `apollo_bulk_match`; its absence is not — nothing shows these endpoints
+        declare it, and a warning per call would say nothing. `served=None` (a
+        response in which nothing can be counted) traces 0 and SAYS SO: nothing is
+        billed on a response we could not read."""
+        credits = out.get("credits_consumed") if isinstance(out, dict) else None
+        if isinstance(credits, int) and not isinstance(credits, bool) and credits >= 0:
+            return credits
+        if credits is not None:
+            logger.warning("%s: `credits_consumed` unreadable (%r) in Apollo's response "
+                           "— quantity counted on what the response returned (%r)",
+                           tool, credits, served)
+        if served is None:
+            logger.warning("%s: nothing countable in Apollo's response — quantity "
+                           "traced 0, nothing will be billed for this call", tool)
+            return 0
+        return served
+
     _BYO_ESPACE_PRIVE = (
         "this ONLY concerns sequences/emails/conversations (your own "
         "data): Apollo search and enrichment remain usable "
@@ -248,7 +275,15 @@ def register(mcp: FastMCP) -> None:
         at once, prefer apollo_bulk_enrich_organizations (same cost, 10× fewer calls).
         """
         client, _ = _client()
-        return client.enrich_organization(domain)
+        out = client.enrich_organization(domain)
+        # The BILLED line, as in `apollo_bulk_match`: unconditional, common key OR
+        # own (`key_mode`, set by the resolver, says whose key answered). 1 credit
+        # when an organization came back, 0 when none did — a traced 0 says "nothing
+        # billed", not "not measured".
+        session_org.note_call_trace(quantity=_credits_billed(
+            out, "apollo_enrich_organization",
+            1 if isinstance(out, dict) and out.get("organization") else 0))
+        return out
 
     @mcp.tool(annotations=LECTURE)
     def apollo_bulk_enrich_organizations(domains: list[str]) -> dict:
@@ -260,7 +295,14 @@ def register(mcp: FastMCP) -> None:
         Over 10 domains, split into batches yourself — the API refuses more.
         """
         client, _ = _client()
-        return client.bulk_enrich_organizations(domains)
+        out = client.bulk_enrich_organizations(domains)
+        # The BILLED line: 1 credit per organization RETURNED, never per domain
+        # submitted — a domain that brings no record back is not counted.
+        orgs = out.get("organizations") if isinstance(out, dict) else None
+        session_org.note_call_trace(quantity=_credits_billed(
+            out, "apollo_bulk_enrich_organizations",
+            sum(1 for o in orgs if o) if isinstance(orgs, list) else None))
+        return out
 
     @mcp.tool(annotations=LECTURE)
     def apollo_search_people(
@@ -533,6 +575,16 @@ def register(mcp: FastMCP) -> None:
             quota = access.platform_quota_hint("apollo")
             if quota is not None:
                 result = {**result, "platform_quota": quota}
+        # The BILLED line (`tool_calls.quantity`) is ANOTHER counter than the quota
+        # above, which stays 1 per call: same rule as `apollo_bulk_match` —
+        # unconditional, common key OR own, in Apollo CREDITS. Without a figure from
+        # upstream, a returned `person` counts 1 — the `_stub` shell included, Apollo
+        # mints it and bills it — and no person counts 0.
+        # ⚠️ Two cases this UNDER-counts, for lack of a figure in the response: a
+        # non-match Apollo may still have billed (nothing has ever shown it is
+        # refunded), and the surcharge of `reveal_personal_emails`.
+        session_org.note_call_trace(quantity=_credits_billed(
+            result, "apollo_match_person", 1 if result.get("person") else 0))
         result = _stringify_request_id(result)
         return result if full else _light_person(result)
 
