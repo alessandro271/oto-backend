@@ -1,19 +1,21 @@
-"""Apollo — la ligne FACTURÉE des trois outils qui consomment un crédit hors lot.
+"""Apollo — la ligne FACTURÉE des quatre outils qui consomment un crédit hors lot.
 
 `apollo_bulk_match` traçait déjà ses crédits (`tests/test_apollo_bulk_and_payload.py`,
-oto#168). `apollo_match_person`, `apollo_enrich_organization` et
-`apollo_bulk_enrich_organizations` ne traçaient rien : leur `tool_calls.quantity`
-restait NULL, et un facturier qui ne compte que ce qui est tracé ne les voyait pas.
+oto#168). `apollo_match_person`, `apollo_enrich_organization`,
+`apollo_bulk_enrich_organizations` et `apollo_search_organizations` (1 crédit par
+PAGE) ne traçaient rien : leur `tool_calls.quantity` restait NULL, et un facturier
+qui ne compte que ce qui est tracé ne les voyait pas.
 Ce fichier fige, dans la MÊME unité (le crédit Apollo) :
 
 - le chiffre de l'amont (`credits_consumed`) gagne dès qu'il est lisible, 0 compris ;
 - sans lui, on compte ce que la RÉPONSE a servi — une personne, une organisation, le
-  nombre d'organisations rendues — jamais ce qui a été soumis, jamais 1 pour l'appel ;
+  nombre d'organisations rendues, une page non vide — jamais ce qui a été soumis,
+  jamais 1 pour l'appel ;
 - rien de servi trace 0 (un 0 tracé = rien de facturé), jamais une ligne sans compte ;
 - la trace est INCONDITIONNELLE (clé commune comme clé propre) et ne touche pas au
   quota de la clé commune (`record_platform_usage`, 1 par match) ;
 - un appel refusé ou en échec ne trace rien ;
-- les recherches (`apollo_search_*`, `apollo_job_postings`) ne tracent AUCUNE quantité.
+- `apollo_search_people` et `apollo_job_postings` ne tracent AUCUNE quantité.
 
 Mock la CLASSE client (jamais `requests`) — cf. `tests/test_apollo_location_filters.py`.
 """
@@ -246,15 +248,83 @@ def test_a_refused_bulk_enrich_traces_nothing(apollo):
 
 
 # --------------------------------------------------------------------------- #
+# apollo_search_organizations — 1 crédit par PAGE servie
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize("reponse,attendu", [
+    ({"organizations": [dict(ORG)], "accounts": []}, 1),
+    ({"organizations": [dict(ORG)] * 100, "accounts": []}, 1),   # la PAGE, pas ses lignes
+    ({"organizations": [], "accounts": [dict(ORG)]}, 1),         # sociétés déjà au compte
+    ({"organizations": [dict(ORG)]}, 1),
+    ({"organizations": [], "accounts": []}, 0),                  # page vide
+    ({"organizations": None}, 0),
+    ({}, 0),
+    ({"organizations": [dict(ORG)], "credits_consumed": 0}, 0),  # l'amont gagne, 0 compris
+    ({"organizations": [dict(ORG)], "credits_consumed": 2}, 2),
+    ({"organizations": [], "accounts": [], "credits_consumed": 1}, 1),   # vide MAIS facturée
+])
+def test_an_organization_search_traces_one_credit_per_page_served(apollo, reponse, attendu):
+    """Une page qui rend au moins une société (`organizations` ou `accounts`) compte 1,
+    quelle que soit sa taille ; une page vide compte 0 — sauf si l'amont dit autre chose."""
+    outil, client, traces, usage, _ = apollo
+    client.search_organizations.return_value = reponse
+    out = outil("apollo_search_organizations")(name="Acme", per_page=100)
+    assert traces == [{"quantity": attendu}]
+    assert out == reponse, "sans `fields`, la page est servie telle quelle"
+    assert usage == [], "une recherche ne débite pas le quota de la clé commune"
+
+
+@pytest.mark.parametrize("illisible", [-1, "1", 1.0, True])
+def test_an_unreadable_search_figure_falls_back_on_the_page_AND_SAYS_SO(
+        apollo, caplog, illisible):
+    outil, client, traces, _, _ = apollo
+    client.search_organizations.return_value = {"organizations": [dict(ORG)],
+                                                "credits_consumed": illisible}
+    with caplog.at_level(logging.WARNING, logger="oto_mcp.tools.apollo"):
+        outil("apollo_search_organizations")(name="Acme")
+    assert traces == [{"quantity": 1}]
+    assert any("credits_consumed" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize("platform", [True, False])
+def test_the_search_is_traced_on_any_key(apollo, platform):
+    outil, client, traces, usage, mode = apollo
+    mode["platform"] = platform
+    client.search_organizations.return_value = {"organizations": [dict(ORG)]}
+    outil("apollo_search_organizations")(name="Acme")
+    assert traces == [{"quantity": 1}] and usage == []
+
+
+def test_a_projected_search_is_traced_once_on_the_page_apollo_served(apollo):
+    """`fields` rétrécit ce qui est SERVI, pas ce qu'Apollo a facturé : une seule
+    trace, comptée sur la page de l'amont."""
+    outil, client, traces, _, _ = apollo
+    client.search_organizations.return_value = {"organizations": [dict(ORG)],
+                                                "accounts": []}
+    out = outil("apollo_search_organizations")(name="Acme", fields=["name"])
+    assert traces == [{"quantity": 1}]
+    assert out["organizations"] == [{"name": "Acme"}]
+
+
+def test_a_failed_search_traces_nothing(apollo):
+    from oto.tools.apollo.client import ApolloError
+
+    outil, client, traces, _, _ = apollo
+    client.search_organizations.side_effect = ApolloError("Apollo 429", status_code=429)
+    with pytest.raises(ApolloError):
+        outil("apollo_search_organizations")(name="Acme")
+    assert traces == []
+
+
+# --------------------------------------------------------------------------- #
 # Ce qui ne consomme aucun crédit ne trace AUCUNE quantité
 # --------------------------------------------------------------------------- #
 
 @pytest.mark.parametrize("nom,methode,kwargs", [
-    ("apollo_search_organizations", "search_organizations", {"name": "Acme"}),
     ("apollo_search_people", "search_people", {"domains": ["acme.test"]}),
     ("apollo_job_postings", "get_job_postings", {"org_id": "o1"}),
 ])
-def test_a_search_traces_no_quantity(apollo, nom, methode, kwargs):
+def test_a_people_search_or_job_postings_traces_no_quantity(apollo, nom, methode, kwargs):
     """Même quand l'amont glisserait un `credits_consumed` : ces outils restent hors
     du relevé facturé — aucune ligne, pas même un 0."""
     outil, client, traces, usage, _ = apollo

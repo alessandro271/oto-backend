@@ -234,6 +234,18 @@ def register(mcp: FastMCP) -> None:
             employee_ranges=employee_ranges, revenue_min=revenue_min,
             revenue_max=revenue_max, locations=locations, keywords=keywords,
             technologies=technologies, org_ids=org_ids)
+        # The BILLED line, as for the enrichments below: unconditional, common key
+        # OR own. Apollo charges this search 1 credit per PAGE, whatever its size
+        # (docstring above). Without a figure from upstream, a page that came back
+        # with at least one company — in `organizations` or in `accounts`, the two
+        # lists of this endpoint — counts 1, and an empty page 0: nothing shows that
+        # Apollo bills a page that returned nothing. The common key's quota
+        # (`record_platform_usage`) is not debited by a search, and still is not.
+        session_org.note_call_trace(quantity=_credits_billed(
+            found, "apollo_search_organizations",
+            1 if isinstance(found, dict) and any(
+                isinstance(found.get(k), list) and found[k]
+                for k in ("organizations", "accounts")) else 0))
         # OPT-IN projection (`fields` omitted ⇒ payload unchanged). The default is not
         # touched here: choosing it would require measuring which keys of an organization
         # record are never useful, as `_CONTACT_NOISE` was above.
