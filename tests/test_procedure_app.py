@@ -17,6 +17,8 @@ from fastmcp import Client, FastMCP
 
 BUNDLE = "https://app.example.com/mcp-app/process-graph.js"
 
+from oto_mcp.procedure_diagram import client_affiche_les_apps as _VRAIE_DETECTION  # noqa: E402
+
 TRACE = """┌──────────────────┐
 │ 1. Trigger       │
 └────────┬─────────┘
@@ -35,8 +37,10 @@ def _module(monkeypatch):
 
 
 def _stub_backend(monkeypatch, procedures: dict, *, admin: bool = True, worker: bool = False,
-                  prefix: str = ""):
-    from oto_mcp import access, org_store, providers, roles, tool_alias
+                  prefix: str = "", ui: bool = True):
+    from oto_mcp import access, org_store, procedure_diagram, providers, roles, tool_alias
+    # The test client advertises no MCP Apps extension: say what the host would.
+    monkeypatch.setattr(procedure_diagram, "client_affiche_les_apps", lambda: ui)
     monkeypatch.setattr(roles, "is_org_admin", lambda sub, org: admin)
     monkeypatch.setattr(tool_alias, "sert_un_worker", lambda: worker)
     monkeypatch.setattr(tool_alias, "prefix_for", lambda sub: prefix)
@@ -180,6 +184,7 @@ def test_oto_procedure_propose_le_graphe_la_ou_il_existe(monkeypatch):
     from oto_mcp.capabilities import procedure_console as pc
     monkeypatch.setattr(tool_alias, "prefix_for", lambda sub: "")
     monkeypatch.setattr(tool_alias, "sert_un_worker", lambda: False)
+    monkeypatch.setattr(procedure_diagram, "client_affiche_les_apps", lambda: True)
 
     async def lecture():
         return {"slug": "veille", "body_md": "…"}
@@ -333,3 +338,50 @@ def test_deux_dessins_ne_sont_pas_des_caracteres_bruts(monkeypatch):
     deux = {**PROSE, "body_md": f"# P\n\n```\n{TRACE}\n```\n\n```\n{TRACE}\n```\n"}
     _, texte = _appeler(monkeypatch, {("org", 42, "prose"): deux}, "prose")
     assert "shown to the user" in texte and "RAW" not in texte
+
+
+def test_un_client_texte_ne_recoit_ni_trace_ni_consigne(monkeypatch):
+    """Claude Code, oto-runner : rien n'est peint et `structuredContent` va au MODÈLE.
+    Le tracé (~1 000 jetons), le roster et la consigne de dessin n'y partent pas — à
+    travers la vraie détection : le client de test n'annonce pas l'extension."""
+    pytest.importorskip("fastmcp.apps")
+    monkeypatch.setenv("OTO_PROCEDURE_APP_BUNDLE", BUNDLE)
+    pa = _module(monkeypatch)
+    m = _banc(monkeypatch, pa)
+    _stub_backend(monkeypatch, {("org", 42, "veille"): {
+        "slug": "veille", "title": "Veille", "version": 3, "body_md": CORPS},
+        ("org", 42, "prose"): PROSE})
+    from oto_mcp import procedure_diagram
+    # The REAL detection: the test client advertises no MCP Apps extension.
+    monkeypatch.setattr(procedure_diagram, "client_affiche_les_apps", _VRAIE_DETECTION)
+
+    async def appel(slug):
+        async with Client(m) as c:
+            return await c.call_tool("oto_procedure_app", {"slug": slug}, raise_on_error=False)
+
+    for slug in ("veille", "prose"):
+        r = asyncio.run(appel(slug))
+        texte = "".join(getattr(b, "text", "") for b in r.content)
+        assert set(r.structured_content) == {"slug", "title", "version"}
+        assert "does not display the graph" in texte
+        assert "┌" not in texte and "REQUIRED" not in texte
+    assert procedure_diagram.indice_du_graphe("sub1", "veille") is None
+
+
+def test_la_detection_lit_l_extension_annoncee_par_le_client(monkeypatch):
+    from fastmcp.server import dependencies
+    from oto_mcp import procedure_diagram
+
+    class Ctx:
+        def __init__(self, oui):
+            self.oui = oui
+
+        def client_supports_extension(self, ext):
+            return self.oui and ext == "io.modelcontextprotocol/ui"
+
+    monkeypatch.setattr(dependencies, "get_context", lambda: Ctx(True))
+    assert _VRAIE_DETECTION() is True
+    monkeypatch.setattr(dependencies, "get_context", lambda: Ctx(False))
+    assert _VRAIE_DETECTION() is False
+    monkeypatch.setattr(dependencies, "get_context", lambda: (_ for _ in ()).throw(RuntimeError()))
+    assert _VRAIE_DETECTION() is False

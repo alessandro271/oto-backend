@@ -455,13 +455,31 @@ def dessin_hors_fence(body_md: str) -> bool:
     return is_drawing(_FENCE.sub("", body_md or ""))
 
 
+def client_affiche_les_apps() -> bool:
+    """Le client MCP de CETTE requête peint-il les apps (extension
+    `io.modelcontextprotocol/ui`, déclarée à l'initialisation — la spec MCP Apps la fait
+    annoncer par tout hôte qui les affiche) ? Hors requête MCP : non.
+
+    Ce qui en dépend : le tracé (~1 000 jetons) ne part qu'à un client qui le peint. Un
+    client texte (Claude Code, oto-runner) donne `structuredContent` au MODÈLE à la place
+    du texte (`un_seul_canal`) : lui servir le tracé, c'était le facturer pour rien."""
+    try:
+        from fastmcp.apps.config import UI_EXTENSION_ID
+        from fastmcp.server.dependencies import get_context
+        return bool(get_context().client_supports_extension(UI_EXTENSION_ID))
+    # noqa: SILENT — hors requête MCP (REST, boot, tests) : aucun client à peindre
+    except Exception:
+        return False
+
+
 def indice_du_graphe(sub: str | None, slug: str | None = None) -> str | None:
     """La ligne qui envoie l'agent MONTRER le process — `None` là où l'outil n'existe
-    pas, et pour un travail du runner : il ne rend rien à personne, et la consigne de
-    dessin lui ferait réécrire une procédure sans témoin. Aux noms d'outils de CE
+    pas, pour un client qui ne peint pas les apps (l'appel ne montrerait rien), et pour
+    un travail du runner : il ne rend rien à personne, et la consigne de dessin lui
+    ferait réécrire une procédure sans témoin. Aux noms d'outils de CE
     compte (`tool_alias`), comme le corps qu'elle accompagne."""
     from . import tool_alias
-    if bundle_du_graphe() is None or tool_alias.sert_un_worker():
+    if bundle_du_graphe() is None or tool_alias.sert_un_worker() or not client_affiche_les_apps():
         return None
     cible = f"oto_procedure_app slug={slug}" if slug else "oto_procedure_app slug=<slug>"
     texte = (f"Whenever the user asks about this process, SHOW it: call {cible} "

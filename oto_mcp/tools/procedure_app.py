@@ -221,8 +221,9 @@ def register(mcp: FastMCP) -> None:
             slug: the procedure's slug (cf. `oto_procedure op=list`).
         """
         from .. import access, tool_alias
-        from ..procedure_diagram import (DOUBLE, dessin_hors_fence, dessin_tague,
-                                         diagram_check, le_trace, reparer_les_bords)
+        from ..procedure_diagram import (DOUBLE, client_affiche_les_apps, dessin_hors_fence,
+                                         dessin_tague, diagram_check, le_trace,
+                                         reparer_les_bords)
         sub = access.current_user_sub_or_raise()
         lu = _lire(sub, slug)
         if lu is None:
@@ -233,6 +234,14 @@ def register(mcp: FastMCP) -> None:
         row, scope = lu
         title = row.get("title") or slug
         version = row.get("version")
+        if not client_affiche_les_apps():
+            # A text client (Claude Code, a runner job) paints nothing and hands
+            # structuredContent to the MODEL: no drawing, no roster, no drawing orders —
+            # the steps are what it needs, and they are one call away.
+            texte = (f"{title} (`{slug}`, v{version}) — this client does not display the "
+                     f"graph. Its steps: oto_procedure op=get slug={slug}.")
+            return ToolResult(content=[TextContent(type="text", text=_aux_noms_du_produit(sub, texte))],
+                              structured_content={"slug": slug, "title": title, "version": version})
         trace = le_trace(row.get("body_md") or "")
         casse = (diagram_check(row.get("body_md") or "")["diagram_warning"]
                  if trace else None)
