@@ -60,6 +60,12 @@ def register_all(mcp: FastMCP) -> None:
     from . import datastore_review_app
     datastore_review_app.register(mcp)
 
+    # Procedure graph — a procedure's drawing rendered by a partner front's own
+    # bundle. Registers only where the instance declares that bundle
+    # (OTO_PROCEDURE_APP_BUNDLE); spine, outside the activation gate.
+    from . import procedure_app
+    procedure_app.register(mcp)
+
     # Runs (ADR 0017) — run_start/finish verbs (spine). The run_id set in
     # session state is stamped on every tool_call by the calllog sink. No
     # external dependency.

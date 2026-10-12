@@ -207,9 +207,107 @@ _BOITE = set("┌┐└┘│╔╗╚╝║")
 _STRUCTUREL = re.compile(r"[─-╿▶▼]")
 
 
+# Une boîte, colonne par colonne : ses coins ouvrent et ferment, ses flancs tiennent
+# les deux colonnes des coins du haut sur chaque ligne entre les deux. Le parseur du
+# front refuse le dessin ENTIER dès qu'un flanc glisse d'une colonne (« a box edge
+# that does not line up with its corners ») — vu le 12/10/2026 sur un dessin écrit par
+# un modèle, une ligne courte d'une espace : `diagram_check` ne disait rien.
+_COIN_HG = "┌╔╭"
+_COIN_HD = "┐╗╮"
+_COIN_BG = "└╚╰"
+_COIN_BD = "┘╝╯"
+_FLANC_G = "│║├╟╠"
+_FLANC_D = "│║┤╢╣"
+
+
+def _bords_de_boites(lignes: list[str]) -> list[dict]:
+    """Les lignes où un flanc ou un coin du bas manque à la colonne de son coin du
+    haut. Une BOÎTE seulement : un coin du haut dont la ligne suivante porte un flanc
+    gauche à sa colonne (un embranchement `┌──┴──┐` n'en a pas), jugée jusqu'à la
+    première ligne sans flanc gauche — qui doit être son coin du bas. Ce qu'on ne sait
+    pas lire comme une boîte n'est pas jugé : zéro faux positif d'abord."""
+    fautes: list[dict] = []
+    for i, ligne in enumerate(lignes[:-1]):
+        for g, c in enumerate(ligne):
+            if c not in _COIN_HG:
+                continue
+            d = next((j for j in range(g + 1, len(ligne)) if ligne[j] in _COIN_HD), None)
+            suivante = lignes[i + 1]
+            if d is None or len(suivante) <= g or suivante[g] not in _FLANC_G:
+                continue
+            k = i + 1
+            while k < len(lignes) and len(lignes[k]) > g and lignes[k][g] in _FLANC_G:
+                l = lignes[k]
+                if len(l) <= d or l[d] not in _FLANC_D:
+                    break
+                k += 1
+            if k >= len(lignes):
+                continue                  # jamais refermée : pas jugée
+            l = lignes[k]
+            if len(l) > g and l[g] in _FLANC_G:
+                pass                      # un flanc droit qui glisse, sur une ligne de flanc
+            elif len(l) > g and l[g] in _COIN_BG and len(l) > d and l[d] in _COIN_BD:
+                continue                  # refermée aux bonnes colonnes
+            elif not (len(l) > g and l[g] in _COIN_BG):
+                continue                  # pas une fermeture qu'on sait lire : pas jugé
+            fautes.append({
+                "line": k + 1, "rule": "box-edge",
+                "says": "a box edge does not line up with its corners",
+                "fix": f"make every line of that box the same width, its sides in "
+                       f"columns {g + 1} and {d + 1} like its top corners",
+            })
+    return fautes
+
+
+_HORIZ = "─═"
+
+
+def reparer_les_bords(trace: str) -> str | None:
+    """Le tracé dont chaque flanc droit (et coin du bas droit) est remis à la colonne de
+    son coin du haut — en complétant d'espaces une ligne de flanc, de `─`/`═` une ligne
+    de fond, en retirant ce qui dépasse s'il n'est que du blanc ou du trait. `None` si
+    rien n'est à réparer, ou si une ligne déborde de texte (on ne coupe jamais un mot),
+    ou si le résultat n'est pas propre.
+
+    Pourquoi c'est mécanique : un modèle qui dessine rate l'alignement d'une colonne
+    et ne le rattrape pas — vu le 12/10/2026, cinq réécritures de suite sans jamais
+    aligner la boîte. Recopier un bloc juste, il le fait ; compter des colonnes, non.
+    Ne touche que la position des bords : ni le texte, ni la forme du flux."""
+    lignes = trace.split("\n")
+    if not _bords_de_boites(lignes):
+        return None
+    for faute in range(len(lignes) * 2):
+        trouvees = _bords_de_boites(lignes)
+        if not trouvees:
+            break
+        k = trouvees[0]["line"] - 1
+        g, d = (int(x) - 1 for x in re.findall(r"columns (\d+) and (\d+)", trouvees[0]["fix"])[0])
+        l = lignes[k]
+        fond = len(l) > g and l[g] in _COIN_BG
+        bords = _COIN_BD if fond else _FLANC_D
+        r = next((j for j in range(g + 1, len(l)) if l[j] in bords), None)
+        if r is None:
+            return None
+        dedans = l[g + 1:r]
+        largeur = d - g - 1
+        remplissage = (dedans[-1] if dedans and dedans[-1] in _HORIZ else "─") if fond else " "
+        if len(dedans) > largeur:
+            surplus = dedans[largeur:]
+            if surplus.strip(" " + _HORIZ):
+                return None       # du texte dépasse : on ne coupe pas un mot
+            dedans = dedans[:largeur]
+        else:
+            dedans = dedans + remplissage * (largeur - len(dedans))
+        lignes[k] = l[:g + 1] + dedans + l[r:]
+    else:
+        return None
+    repare = "\n".join(lignes)
+    return repare if not lint_du_trace(repare) else None
+
+
 def lint_du_trace(block: str) -> list[dict]:
     """Les fautes visibles ligne à ligne. `[]` = rien de LOCALEMENT faux."""
-    fautes: list[dict] = []
+    fautes: list[dict] = _bords_de_boites(block.split("\n"))
     une_boite_vue = False
     for i, ligne in enumerate(block.split("\n"), start=1):
         # `prepare()` refuse le dessin entier à la première tabulation : elle rend
@@ -260,6 +358,13 @@ def _trace_et_offset(body_md: str) -> tuple[str, int] | None:
     return "\n".join(lignes), (body_md or "").count("\n", 0, debut) + 2
 
 
+def le_trace(body_md: str) -> str | None:
+    """Le tracé que la page rend, sans ses fences — ce que le graphe rendu dans
+    l'hôte (`tools/procedure_app.py`) reparse côté front. `None` sans dessin."""
+    trouve = _trace_et_offset(body_md)
+    return trouve[0] if trouve else None
+
+
 # Au plus deux fautes nommées : la première est presque toujours la cause, et un
 # mur d'avertissements se lit comme du bruit.
 _MAX_FAUTES = 2
@@ -300,3 +405,85 @@ def diagram_check(body_md: str, *, marqueur_perdu: bool = False) -> dict:
     # noqa: SILENT — contrôle de forme optionnel : pas d'avertissement plutôt qu'un faux
     except Exception:  # noqa: BLE001 — cf. `slots_check`
         return {"diagram_warning": None}
+
+
+# ── Le dessin montré dans l'hôte MCP : `oto_procedure_app` ────────────────────
+#
+# Une instance dont le front sait peindre le dessin dans la conversation le déclare
+# par `OTO_PROCEDURE_APP_BUNDLE` (l'URL du bundle). Lu ICI, une seule fois pour les
+# deux qui en dépendent : l'outil (`tools/procedure_app.py`), qui ne s'enregistre pas
+# sans elle, et la console procédures, qui ne propose pas un outil absent.
+ENV_BUNDLE = "OTO_PROCEDURE_APP_BUNDLE"
+
+
+def bundle_du_graphe() -> str | None:
+    """L'URL du bundle qui peint le graphe, ou `None` : absente, ou pas l'URL d'un
+    script — refus journalisé, puisque l'outil, lui, ne s'enregistre pas sans un mot."""
+    import logging
+    import os
+    from urllib.parse import urlsplit
+    bundle = (os.environ.get(ENV_BUNDLE) or "").strip()
+    if not bundle:
+        return None
+    if bundle.endswith(".js") and urlsplit(bundle).scheme in ("https", "http"):
+        return bundle
+    logging.getLogger(__name__).error(
+        "%s n'est pas l'URL d'un bundle .js — oto_procedure_app non enregistré", ENV_BUNDLE)
+    return None
+
+
+def dessin_tague(body_md: str) -> str | None:
+    """Le langage d'un bloc TAGUÉ qui dessine (```text, ```mermaid…), quand le corps
+    n'a aucun dessin non tagué — le tracé est là, la page ne le dessinera pas. C'est ce
+    qui distingue « dessine-le » de « retire le tag » : sans ça, un dessin écrit sous
+    ```text était redemandé à chaque appel, une version de plus à chaque tour."""
+    if has_diagram(body_md):
+        return None
+    for lang, block in _FENCE.findall(body_md or ""):
+        if lang and is_drawing(block):
+            return lang
+    return None
+
+
+def dessin_hors_fence(body_md: str) -> bool:
+    """Un tracé écrit À NU dans la prose, sans bloc fencé — vu le 12/10/2026 sur un
+    modèle qui avait pourtant lu la consigne. La page ne le dessine pas et
+    `diagram_check` n'en dit rien (il ne compte que les blocs) : seul ce test permet de
+    demander « mets-le dans un bloc » plutôt qu'un dessin de plus."""
+    if has_diagram(body_md):
+        return False
+    return is_drawing(_FENCE.sub("", body_md or ""))
+
+
+def client_affiche_les_apps() -> bool:
+    """Le client MCP de CETTE requête peint-il les apps (extension
+    `io.modelcontextprotocol/ui`, déclarée à l'initialisation — la spec MCP Apps la fait
+    annoncer par tout hôte qui les affiche) ? Hors requête MCP : non.
+
+    Ce qui en dépend : le tracé (~1 000 jetons) ne part qu'à un client qui le peint. Un
+    client texte (Claude Code, oto-runner) donne `structuredContent` au MODÈLE à la place
+    du texte (`un_seul_canal`) : lui servir le tracé, c'était le facturer pour rien."""
+    try:
+        from fastmcp.apps.config import UI_EXTENSION_ID
+        from fastmcp.server.dependencies import get_context
+        return bool(get_context().client_supports_extension(UI_EXTENSION_ID))
+    # noqa: SILENT — hors requête MCP (REST, boot, tests) : aucun client à peindre
+    except Exception:
+        return False
+
+
+def indice_du_graphe(sub: str | None, slug: str | None = None) -> str | None:
+    """La ligne qui envoie l'agent MONTRER le process — `None` là où l'outil n'existe
+    pas, pour un client qui ne peint pas les apps (l'appel ne montrerait rien), et pour
+    un travail du runner : il ne rend rien à personne, et la consigne de dessin lui
+    ferait réécrire une procédure sans témoin. Aux noms d'outils de CE
+    compte (`tool_alias`), comme le corps qu'elle accompagne."""
+    from . import tool_alias
+    if bundle_du_graphe() is None or tool_alias.sert_un_worker() or not client_affiche_les_apps():
+        return None
+    cible = f"oto_procedure_app slug={slug}" if slug else "oto_procedure_app slug=<slug>"
+    texte = (f"Whenever the user asks about this process, SHOW it: call {cible} "
+             "first — it draws the process graph inline (and tells you how to draw one "
+             "when there is none yet).")
+    prefix = tool_alias.prefix_for(sub)
+    return tool_alias.rewrite_prose(texte, prefix) if prefix else texte

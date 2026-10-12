@@ -280,6 +280,12 @@ _REGLAGES: tuple[Variable, ...] = (
              "« sans équipe » : faute d'équipe désignée, l'équipe du sub dans l'org "
              "résolue. Absente = aucun tenant, le niveau org de toujours.",
              ("oto_mcp/access/scope.py:156",)),
+    Variable("OTO_PROCEDURE_APP_BUNDLE", Classe.REGLAGE, "",
+             "URL du bundle JS (`…/process-graph.js`, sa feuille `.css` à côté) qui "
+             "peint le graphe d'une procédure dans l'hôte MCP (`oto_procedure_app`). "
+             "Absente = l'app ne s'enregistre pas : une instance sans front qui la "
+             "porte ne sert aucune page qui pointerait vers personne.",
+             ("oto_mcp/procedure_diagram.py:425",)),
     Variable("OTO_EGRESS_ALLOW", Classe.REGLAGE, "",
              "Destinations internes autorisées en egress (`nom=adresse:port`, "
              "virgules). Absente = aucune exception : fail-closed, jamais un défaut "

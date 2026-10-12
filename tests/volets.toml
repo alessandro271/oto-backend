@@ -644,5 +644,5 @@ tests = ["tests/**/test_apollo*.py"]
 
 [[volet]]
 nom = "procédure de diagramme"
-sources = ["oto_mcp/procedure_diagram.py"]
-tests = ["tests/**/test_procedure_diagram*.py"]
+sources = ["oto_mcp/procedure_diagram.py", "oto_mcp/tools/procedure_app.py"]
+tests = ["tests/**/test_procedure_diagram*.py", "tests/test_procedure_app.py"]

@@ -140,3 +140,23 @@ son `_meta.ui.resourceUri` (`est_une_app`). Les deux sont prouvés bout en bout 
 - **La PR annonce** l'empreinte (`scripts/empreinte_servie.py`) et ce qui reste à éprouver
   sur claude.ai (appel d'un outil absent de `tools/list`, `ui/message`, thème clair,
   cadre) — en préprod, sur une COPIE de tableau : préprod et prod partagent la base.
+
+## Une app peinte par un front — `oto_procedure_app`
+
+Le graphe d'une procédure (son dessin, `procedure_diagram.py`) se lit dans un front
+partenaire, qui en tient SEUL la grammaire : le cœur refuse d'en écrire un jumeau Python.
+`oto_procedure_app` (`tools/procedure_app.py`) ne dessine donc rien : sa page ui:// est une
+coquille qui charge le bundle du front, et l'outil ne livre que le tracé (sans ses fences)
+et les connecteurs qu'il peut nommer (pour leurs logos). Ce n'est pas une carte Prefab :
+une ressource MCP Apps nue, dont la CSP (`resourceDomains`) admet l'origine du bundle et
+`img.logo.dev`, et qui demande le cadre du host (`prefersBorder`).
+
+- ⚠️ **Par instance, jamais par tenant** : `OTO_PROCEDURE_APP_BUNDLE` (l'URL du
+  `….js`, sa feuille `.css` à côté) est l'adresse ET l'interrupteur. Absente, ni outil ni
+  page — l'empreinte servie d'une instance sans front ne bouge pas.
+- **La poignée de main est écrite à la main côté front** (`ui/initialize`,
+  `size-changed`, `request-display-mode`, `resource-teardown`), méthodes et recette de
+  hauteur du SDK `@modelcontextprotocol/ext-apps` : sans `size-changed`, l'iframe reste à
+  la hauteur par défaut du host.
+- **Un chemin relatif du front se résout contre le bac à sable du host**, pas contre son
+  origine : le bundle rend absolus ses chemins d'images contre l'origine de son script.

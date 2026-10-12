@@ -145,7 +145,7 @@ def declared_prefix_of_tenant(slug: Optional[str]) -> str:
     return normalize_prefix(getattr(entry, "tool_prefix", "")) if entry else ""
 
 
-def _sert_un_worker() -> bool:
+def sert_un_worker() -> bool:
     """La requête MCP en cours porte-t-elle un jeton de DÉLÉGATION — un travail du runner ?
 
     Le renommage est un AFFICHAGE : il sert le produit d'une personne, dans son client.
@@ -183,11 +183,11 @@ def declared_prefix_for(sub: Optional[str]) -> str:
 def prefix_for(sub: Optional[str]) -> str:
     """Le préfixe d'outils SERVI à ce compte, ou `""`.
 
-    `""` aussi pour un travail du runner (`_sert_un_worker`), même sous un compte de
+    `""` aussi pour un travail du runner (`sert_un_worker`), même sous un compte de
     tenant : ses noms sont les canoniques. Le jeton n'est lu que si un préfixe est
     déclaré — un compte de la plateforme ne paie rien de plus."""
     prefix = declared_prefix_for(sub)
-    if prefix and _sert_un_worker():
+    if prefix and sert_un_worker():
         return ""
     return prefix
 
@@ -206,7 +206,7 @@ def server_identity_for(sub: Optional[str]) -> tuple[str, str]:
     entry = _tenant_entry(sub)
     # Un travail du runner n'a pas de produit à afficher : il garde l'annonce d'avant,
     # comme ses noms d'outils (`prefix_for`).
-    if entry is None or _sert_un_worker():
+    if entry is None or sert_un_worker():
         return ("", "")
     return (normalize_prefix(getattr(entry, "tool_prefix", "")),
             str(getattr(entry, "name", "") or ""))
