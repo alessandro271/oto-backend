@@ -98,7 +98,10 @@ def _creds(fields: dict, config: Optional[dict] = None) -> tuple[str, str]:
 def _upstream_message(e, is_platform: bool) -> str:
     status = e.status_code
     detail = e.body.get("status_message") if isinstance(e.body, dict) else e.body
-    if status in (401, 403):
+    if status == 403:
+        # e.g. 40104, an account not yet verified: DataForSEO's own words say what to do.
+        return f"DataForSEO refused access (HTTP 403): {detail}"
+    if status == 401:
         return ("DataForSEO rejected the API login/password (HTTP 401) — check the "
                 "credential on this connector (DataForSEO dashboard → API Access; the "
                 "API password is not the sign-in password).")

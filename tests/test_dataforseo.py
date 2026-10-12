@@ -222,6 +222,17 @@ def test_upstream_refusal_bills_nothing(env):
 
 # --- account ----------------------------------------------------------------------
 
+def test_unverified_account_says_so(env):
+    from oto.tools.common.errors import UpstreamHTTPError
+    env.client.backlinks_summary.side_effect = UpstreamHTTPError(
+        403, {"status_code": 40104,
+              "status_message": "Please verify your account before using the API."},
+        service="dataforseo")
+    with pytest.raises(McpError, match="verify your account") as e:
+        env.call("dataforseo_backlinks", op="summary", target="a.com")
+    assert "login/password" not in str(e.value)
+
+
 def test_balance_of_own_key(env):
     env.client.user_data.return_value = _task(
         result=[{"login": "me@example.com", "money": {"balance": 41.5, "total": 50}}], cost=0)

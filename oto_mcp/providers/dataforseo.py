@@ -26,7 +26,8 @@ CONNECTOR = _c(
          "competitors, backlinks (pay-as-you-go)",
     publisher="DataForSEO", href="https://app.dataforseo.com/api-access",
     credential_fields=(
-        CredentialField("login", "API login (your DataForSEO email)", secret=False),
+        CredentialField("login", "API login", secret=False,
+                        help="Dashboard → API Access."),
         CredentialField("password", "API password", secret=True,
                         help="Dashboard → API Access. Not your sign-in password."),
     ),

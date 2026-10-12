@@ -1,8 +1,9 @@
 ## prerequisite — a DataForSEO API login, or the shared key
 
 DataForSEO is pay-as-you-go: no plan, no seat, a prepaid USD balance drawn per call (minimum top-up $50, the balance does not expire).
-- your own key: in the [DataForSEO dashboard](https://app.dataforseo.com/api-access), copy the **API login** (your email) and the **API password** — not your sign-in password — into oto
+- your own key: in the [DataForSEO dashboard](https://app.dataforseo.com/api-access), copy the **API login** and the **API password** — not your sign-in password — into oto
 - the platform key, when the instance has one, serves the orgs it is granted to; the super-admin posts it as ONE value, `login:password`
+- a new DataForSEO account must be verified in its dashboard before the data endpoints answer (until then: HTTP 403, code 40104; the balance still reads)
 - `dataforseo_account(op="balance")` reads the balance of YOUR key; it is refused on the shared key, whose balance is the platform's
 
 ## usage — keywords, domains, backlinks
