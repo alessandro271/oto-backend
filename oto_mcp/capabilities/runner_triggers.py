@@ -447,6 +447,26 @@ _REGLAGES_WEBHOOK = ("payload_mode", "payload_fields", "max_per_hour",
                      "freshness_seconds", "max_per_day", "private_address")
 
 
+def _exiger_projet_de_l_org(ctx: ResolvedCtx, project_id: Optional[int]) -> None:
+    """Le projet d'un agent est un projet de SON org, que son auteur lit.
+
+    ⚠️ Il était écrit tel quel, à la création comme à la retouche : un agent de l'org A
+    pouvait porter le numéro de n'importe quel projet. L'appel du run le re-garde
+    (`call_axes._resolve_project_context_guarded`, lecture du `sub`), mais un projet
+    lisible d'une AUTRE org y co-posait l'org de ce projet — l'agent de A travaillait
+    alors sous le contexte, les clés et le quota de B. Refus 404, même message pour
+    « inconnu » et « ailleurs »."""
+    if project_id is None:
+        return
+    pid = str(int(project_id))
+    if (db.get_project_by_id(int(pid)) is None
+            or not ownership.can_access(ctx.sub, "project", pid, "read")
+            or not ownership.visible_in_org(ctx.sub, ctx.org_id, "project", pid)):
+        raise AuthzDenied(404, "unknown_project",
+                          f"Projet #{pid} inconnu dans cette org : l'agent ne peut "
+                          "travailler que pour un projet de l'org où il est posé.")
+
+
 def _valide_le_webhook(inp: TriggerInput, actuel: Optional[dict] = None) -> None:
     """Les réglages du webhook, refusés à la POSE plutôt qu'ignorés en silence —
     à la création (`actuel` absent) comme à la retouche (`actuel` = l'état
@@ -696,6 +716,7 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
                 "une automatisation `webhook` n'a pas de cadencement : c'est la source "
                 "qui décide quand. Retire `cron`, ou déclare une automatisation horaire.")
         _valide_le_webhook(inp)
+        _exiger_projet_de_l_org(ctx, inp.project_id)
         # ⚠️ `tools` n'est plus exigé : il se DÉDUIT de la procédure quand il
         # n'est pas fourni. C'est ce qui rend le geste possible depuis un bouton.
         outils = list(inp.tools or []) or _outils_de_la_procedure(ctx, inp.procedure)
@@ -996,6 +1017,7 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         v = getattr(inp, c)
         if v is not None:
             champs[c] = v
+    _exiger_projet_de_l_org(ctx, champs.get("project_id"))
     for c in ("max_tokens", "max_run_seconds"):
         v = getattr(inp, c)
         if v is not None:

@@ -528,6 +528,95 @@ def _portee_du_projet(proprio: dict) -> dict:
     return {"sub": oid, "org_ids": [int(ctx)] if ctx else [], "group_ids": []}
 
 
+def _paires_et_orgs_du_projet(proprio: dict) -> tuple[list[str], list[int]]:
+    """Les principaux `"type:id"` qui portent un projet (son propriétaire, plus l'org de
+    contexte d'un projet perso ou l'org parente d'une équipe — la portée de
+    `_portee_du_projet`) et les orgs où il se range. Pur."""
+    t, oid = str(proprio["owner_type"]), str(proprio["owner_id"])
+    paires = [f"{t}:{oid}"]
+    if t == "org":
+        orgs = [int(oid)]
+    else:
+        o = proprio.get("group_org_id") if t == "group" else proprio.get("context_org_id")
+        orgs = [int(o)] if o else []
+    paires += [f"org:{o}" for o in orgs if f"org:{o}" not in paires]
+    return paires, orgs
+
+
+#: Ce qu'un lien par IDENTIFIANT a le droit de désigner, par type de cible : la table,
+#: la colonne de l'org où la cible se range, et le type de ressource de ses partages.
+_PORTEE_SQL = {
+    "tableau": (
+        "SELECT t.id FROM user_datastores t "
+        "LEFT JOIN org_groups tg ON t.owner_type = 'group' AND tg.id::text = t.owner_id "
+        "WHERE t.id = ANY(%(ids)s) AND ("
+        "     t.owner_type = 'platform'"
+        "  OR (t.owner_type || ':' || t.owner_id) = ANY(%(paires)s)"
+        "  OR (t.owner_type = 'org' AND t.owner_id = ANY(%(orgs_txt)s))"
+        "  OR (t.owner_type = 'group' AND tg.org_id = ANY(%(orgs)s))"
+        "  OR (t.owner_type = 'user' AND t.context_org_id = ANY(%(orgs)s))"
+        "  OR EXISTS (SELECT 1 FROM resource_grants g "
+        "             WHERE g.resource_type = 'datastore_namespace' "
+        "               AND g.resource_id = t.id::text "
+        "               AND (g.principal_type || ':' || g.principal_id) = ANY(%(paires)s) "
+        f"              AND {PARTAGE_VIVANT_G}))"),
+    "procedure": (
+        "SELECT t.id FROM org_instructions t "
+        "WHERE t.id = ANY(%(ids)s) AND ("
+        "     t.owner_type = 'platform'"
+        "  OR (t.owner_type || ':' || t.owner_id) = ANY(%(paires)s)"
+        "  OR t.org_id = ANY(%(orgs)s)"
+        # Une procédure PERSONNELLE ne se range dans aucune org (`org_id` NULL, ADR
+        # 0068) : celle d'un MEMBRE de l'org du projet en relève — c'est ainsi qu'un
+        # membre range sa procédure perso dans un projet de son org.
+        "  OR (t.owner_type = 'user' AND EXISTS (SELECT 1 FROM org_members om "
+        "        WHERE om.sub = t.owner_id AND om.org_id = ANY(%(orgs)s)))"
+        "  OR EXISTS (SELECT 1 FROM resource_grants g "
+        "             WHERE g.resource_type = 'doctrine' "
+        "               AND g.resource_id = t.id::text "
+        "               AND (g.principal_type || ':' || g.principal_id) = ANY(%(paires)s) "
+        f"              AND {PARTAGE_VIVANT_G}))"),
+}
+
+
+def _ids_dans_la_portee(conn, proprio: Optional[dict], target_type: str,
+                        ids: list[int]) -> set[int]:
+    """Parmi `ids`, ceux qu'un lien `target_type` (tableau, procédure) de ce projet a le
+    droit de DÉSIGNER : possédés par son propriétaire ou rangés dans son org (org,
+    équipe de l'org, objet perso créé dans l'org), partagés (partage vivant) à l'un de
+    ses principaux, ou de la bibliothèque plateforme. Projet introuvable ⇒ aucun."""
+    if not ids or proprio is None:
+        return set()
+    paires, orgs = _paires_et_orgs_du_projet(proprio)
+    rows = conn.execute(_PORTEE_SQL[target_type], {
+        "ids": list(ids), "paires": paires, "orgs": orgs,
+        "orgs_txt": [str(o) for o in orgs]}).fetchall()
+    return {int(r["id"]) for r in rows}
+
+
+_PROPRIO_SQL = ("SELECT p.owner_type, p.owner_id, p.context_org_id, g.org_id AS group_org_id "
+                "FROM projects p LEFT JOIN org_groups g "
+                "  ON p.owner_type = 'group' AND g.id::text = p.owner_id "
+                "WHERE p.id = %s")
+
+
+def refs_dans_la_portee(project_id: int, target_type: str, refs: list) -> set[int]:
+    """Les identifiants de `refs` qu'un lien `target_type` du projet peut désigner — la
+    règle de `list_project_links`, pour qui doit trancher AVANT de poser un lien.
+
+    ⚠️ **Un lien par IDENTIFIANT ne prouvait rien.** Le lien par NOM se résout dans la
+    portée du propriétaire depuis #365 ; l'identifiant, lui, était stocké tel quel et
+    servi tel quel : n'importe quel tableau ou procédure de la plateforme, lié à un
+    projet que l'on peut écrire, devenait lisible par ce projet — libellé et titre dans
+    les liens, lignes et corps sur la page publiée, lignes recopiées par `op=copy`."""
+    ids = [int(r) for r in refs if str(r).isdigit()]
+    if not ids:
+        return set()
+    with _connect() as conn:
+        proprio = conn.execute(_PROPRIO_SQL, (int(project_id),)).fetchone()
+        return _ids_dans_la_portee(conn, proprio, target_type, ids)
+
+
 def _apply_tableau_name_ids(links: list[dict], id_by_name: dict[str, int],
                             ambigus: set = frozenset()) -> None:
     """Résout un lien `tableau` dont le `target_ref` est un NOM, dans la portée du
@@ -564,12 +653,20 @@ def _apply_procedure_titles(links: list[dict], title_by_id: dict[int, str]) -> N
     """Attache le TITRE du guide à chaque lien `procedure` (résolu depuis l'id
     stable porté par `target_ref`, ADR 0032 « stop using slug ») — sans lui, un lien
     posé sans `label` (agent) s'affiche comme un id nu. Pur (mutation en place). Ref
-    non numérique (slug legacy) / guide disparu → pas de clé `title`."""
+    non numérique (slug legacy) / guide disparu / hors de la portée du projet → ni
+    `title` ni `procedure_id`.
+
+    `procedure_id` est le pendant de `datastore_id` : l'identifiant d'une procédure que
+    le projet a le droit de désigner. Un lecteur qui ouvre la procédure d'un lien (page
+    publiée, copie, inventaire, audit, schéma cible d'un slot) lit CETTE clé, jamais le
+    `target_ref` brut — qui n'est que ce qu'un rédacteur du projet a écrit."""
     for l in links:
         if l.get("target_type") == "procedure" and str(l.get("target_ref", "")).isdigit():
-            t = title_by_id.get(int(l["target_ref"]))
-            if t is not None:
-                l["title"] = t
+            if int(l["target_ref"]) not in title_by_id:
+                continue
+            l["procedure_id"] = int(l["target_ref"])
+            if title_by_id[int(l["target_ref"])] is not None:
+                l["title"] = title_by_id[int(l["target_ref"])]
 
 
 def list_project_links(project_id: int) -> list[dict]:
@@ -602,9 +699,17 @@ def list_project_links(project_id: int) -> list[dict]:
             if d.get("target_type") == "connecteur" and d.get("identity_ref"):
                 d["config"] = {**(d.get("config") or {}), "identity_id": d["identity_ref"]}
             out.append(d)
+        # Le propriétaire du projet : la portée où se résout CHAQUE lien, par nom comme
+        # par identifiant — une requête, et seulement s'il y a un lien à résoudre.
+        a_resoudre = any(l.get("target_type") in ("tableau", "procedure") for l in out)
+        proprio = conn.execute(_PROPRIO_SQL, (project_id,)).fetchone() if a_resoudre else None
         # Résolution des noms de namespace des tableaux, en UNE requête (même connexion).
+        # ⚠️ Seuls les identifiants DANS LA PORTÉE du projet (`_ids_dans_la_portee`) :
+        # un identifiant pris ailleurs ne reçoit ni libellé ni `datastore_id`, donc rien
+        # de ce qui lit ce dernier (page publiée, copie, `slot:`) ne l'ouvre.
         ids = [int(l["target_ref"]) for l in out
                if l.get("target_type") == "tableau" and str(l.get("target_ref", "")).isdigit()]
+        ids = sorted(_ids_dans_la_portee(conn, proprio, "tableau", ids))
         if ids:
             nrows = conn.execute(
                 "SELECT id, namespace FROM user_datastores WHERE id = ANY(%s)", (ids,),
@@ -617,15 +722,11 @@ def list_project_links(project_id: int) -> list[dict]:
         name_refs = [l["target_ref"] for l in out
                      if l.get("target_type") == "tableau" and not l.get("datastore")
                      and l.get("target_ref") and not str(l["target_ref"]).isdigit()]
-        proprio = conn.execute(
-            "SELECT p.owner_type, p.owner_id, p.context_org_id, g.org_id AS group_org_id "
-            "FROM projects p LEFT JOIN org_groups g "
-            "  ON p.owner_type = 'group' AND g.id::text = p.owner_id "
-            "WHERE p.id = %s",
-            (project_id,)).fetchone() if name_refs else None
-        # Idem pour les titres de guide des procédures (id stable, ADR 0032).
+        # Idem pour les titres de guide des procédures (id stable, ADR 0032) — même
+        # portée : une procédure d'ailleurs ne reçoit ni titre ni `procedure_id`.
         doc_ids = [int(l["target_ref"]) for l in out
                    if l.get("target_type") == "procedure" and str(l.get("target_ref", "")).isdigit()]
+        doc_ids = sorted(_ids_dans_la_portee(conn, proprio, "procedure", doc_ids))
         if doc_ids:
             drows = conn.execute(
                 "SELECT id, title FROM org_instructions WHERE id = ANY(%s)", (doc_ids,),
@@ -1546,8 +1647,13 @@ def duplicate_project(src_id: int, new_name: str, owner_type: str, owner_id: str
         target_ref = link["target_ref"]
         if link["target_type"] == "tableau":
             mode = (link.get("config") or {}).get("provision")
+            # `datastore_id` : posé par `list_project_links` sur un tableau DANS la portée
+            # du projet source, et sur lui seul. Un identifiant pris ailleurs (lien posé
+            # avant la garde de `op=link`) se traite comme un lien mort : le recopier en
+            # mode `seeded` versait les lignes d'un tableau tiers dans la copie.
             src_ns = (get_datastore_by_id(int(target_ref))
-                      if str(target_ref).isdigit() else None)
+                      if str(target_ref).isdigit() and link.get("datastore_id") is not None
+                      else None)
             label = link.get("label") or (src_ns or {}).get("datastore") or f"#{target_ref}"
             if src_ns is None:
                 # Lien mort dans la source (namespace supprimé/introuvable) : on NE le
@@ -1579,7 +1685,10 @@ def duplicate_project(src_id: int, new_name: str, owner_type: str, owner_id: str
             # l'org cible, on garde le pointeur (savoir partagé de l'org) ; sinon on la COPIE
             # dans l'org cible (non destructif, slug suffixé) et on repointe le lien dessus.
             from .. import org_store
-            src_instr = org_store.get_instruction_by_id(int(target_ref))
+            # `procedure_id` : la procédure est dans la portée du projet source. Sinon,
+            # lien mort — la copier versait le corps d'une procédure tierce dans l'org cible.
+            src_instr = (org_store.get_instruction_by_id(int(target_ref))
+                         if link.get("procedure_id") is not None else None)
             label = link.get("label") or (src_instr or {}).get("title") or f"#{target_ref}"
             if src_instr is None:
                 warnings.append(f"procédure « {label} » : lien ignoré (la source ne résout plus).")

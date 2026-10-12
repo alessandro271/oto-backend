@@ -67,6 +67,12 @@ def seams(monkeypatch):
     monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": True)
     monkeypatch.setattr(P.ownership, "can_govern", lambda sub, t, rid: True)
     monkeypatch.setattr(P.roles, "is_org_member", lambda sub, oid: True)
+    # Garde de portée d'`op=link` : tout identifiant passe (ce banc décrit autre chose).
+    monkeypatch.setattr(P.db, "refs_dans_la_portee",
+                        lambda pid, t, refs: {int(r) for r in refs if str(r).isdigit()})
+    _owner_of = P.ownership.owner_of
+    monkeypatch.setattr(P.ownership, "owner_of", lambda t, rid: None if t in (
+        "datastore_namespace", "doctrine") else _owner_of(t, rid))
     # ADR 0049 : défauts neutres — pas d'escalade admin, membre des équipes qu'il vise,
     # aucun groupe dans l'org active. Les tests dédiés surchargent.
     monkeypatch.setattr(P.roles, "is_org_admin", lambda sub, oid: False)

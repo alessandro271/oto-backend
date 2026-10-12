@@ -28,10 +28,11 @@ def _resolved_procedure(link: dict):
     """L'instruction d'un lien `procedure`, ou None (réf non numérique legacy /
     guide disparu). Import paresseux (pas de cycle au boot)."""
     from . import org_store
-    ref = str(link.get("target_ref") or "")
-    if not ref.isdigit():
+    # `procedure_id` = résolue DANS LA PORTÉE du projet (`db.list_project_links`) ;
+    # sans elle, le lien est mort pour l'audit — et son slug ne se lit pas.
+    if link.get("procedure_id") is None:
         return None
-    return org_store.get_instruction_by_id(int(ref))
+    return org_store.get_instruction_by_id(int(link["procedure_id"]))
 
 
 def _unresolvable_connector_why(name: str, org_id: int, link: dict) -> Optional[str]:

@@ -32,7 +32,25 @@ def _wire(monkeypatch, *, src):
     monkeypatch.setattr(PJ, "create_project", create_project)
     monkeypatch.setattr(PJ, "list_docs_for_project", lambda pid: list(src["docs"]))
     monkeypatch.setattr(PJ, "create_doc", create_doc)
-    monkeypatch.setattr(PJ, "list_project_links", lambda pid: list(src["links"]))
+    def _liens(pid):
+        # La forme RÉELLE de `db.list_project_links` : un lien tableau/procédure DANS la
+        # portée du projet porte son `datastore_id` / `procedure_id` — la clé que la
+        # copie lit. Ce banc tient tout lien numérique pour dans la portée, sauf ceux
+        # que `src["hors_portee"]` nomme.
+        hors = set(src.get("hors_portee", ()))
+        out = []
+        for l in src["links"]:
+            l = dict(l)
+            ref = str(l.get("target_ref") or "")
+            if ref.isdigit() and ref not in hors:
+                if l["target_type"] == "tableau":
+                    l["datastore_id"] = int(ref)
+                elif l["target_type"] == "procedure":
+                    l["procedure_id"] = int(ref)
+            out.append(l)
+        return out
+
+    monkeypatch.setattr(PJ, "list_project_links", _liens)
     monkeypatch.setattr(PJ, "add_project_link",
                         lambda pid, tt, tr, label=None, role=None, config=None, slot=None:
                         created["links"].append((pid, tt, tr, label, role, config)))

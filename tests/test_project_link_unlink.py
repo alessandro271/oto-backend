@@ -84,6 +84,12 @@ def surface(monkeypatch):
                                                if slug in GUIDES else None))
     monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": True)
     monkeypatch.setattr(P.ownership, "visible_in_org", lambda sub, org, t, rid: True)
+    # Garde de portée d'`op=link` : tout identifiant passe (ce banc décrit autre chose).
+    monkeypatch.setattr(P.db, "refs_dans_la_portee",
+                        lambda pid, t, refs: {int(r) for r in refs if str(r).isdigit()})
+    _owner_of = P.ownership.owner_of
+    monkeypatch.setattr(P.ownership, "owner_of", lambda t, rid: None if t in (
+        "datastore_namespace", "doctrine") else _owner_of(t, rid))
     monkeypatch.setattr(P.group_store, "get_group",
                         lambda gid: {"id": gid, "org_id": 2, "name": "pôle"})
     monkeypatch.setattr(P.ownership, "accessor_scope",

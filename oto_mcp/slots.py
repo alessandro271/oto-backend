@@ -272,12 +272,11 @@ def target_schema_for(slot_name: str, links: list) -> Optional[dict]:
     aucune procédure liée ne prescrit ce slot."""
     from . import org_store
     for l in links or []:
-        if l.get("target_type") != "procedure":
+        # `procedure_id` (portée du projet, `db.list_project_links`), jamais le
+        # `target_ref` brut : le schéma d'une procédure d'ailleurs ne se lit pas ici.
+        if l.get("target_type") != "procedure" or l.get("procedure_id") is None:
             continue
-        ref = str(l.get("target_ref") or "")
-        if not ref.isdigit():
-            continue
-        instr = org_store.get_instruction_by_id(int(ref))
+        instr = org_store.get_instruction_by_id(int(l["procedure_id"]))
         for s in (instr or {}).get("slots") or []:
             if s.get("name") == slot_name and s.get("type") == "tableau" \
                     and isinstance(s.get("schema"), dict):
@@ -285,7 +284,7 @@ def target_schema_for(slot_name: str, links: list) -> Optional[dict]:
     return None
 
 
-def provision_tableau_schema(ns_id: int, target: dict) -> dict:
+def provision_tableau_schema(ns_id: int, target: dict, *, project_id: int) -> dict:
     """Applique le schéma CIBLE d'un slot au namespace bindé (ADR 0035 × 0046) :
     - namespace SANS schéma → **provisionné** (le tableau naît avec le contrat —
       la clé métier déclarée pose aussi son index UNIQUE, sauf données déjà en
@@ -293,8 +292,15 @@ def provision_tableau_schema(ns_id: int, target: dict) -> dict:
     - schéma déjà IDENTIQUE → no-op (`conform`) ;
     - schéma DIFFÉRENT → on ne touche à rien, warning non bloquant (`mismatch`) —
       écraser un schéma posé serait une perte silencieuse.
-    Renvoie {status: provisioned|conform|mismatch|dirty_key, warning?}."""
+    Renvoie {status: provisioned|conform|mismatch|dirty_key|out_of_scope, warning?}.
+
+    ⚠️ **Le tableau doit être dans la portée du projet** (`db.refs_dans_la_portee`) —
+    vérifié ICI, pas laissé à l'appelant : ce geste ÉCRIT un schéma et pose un index
+    sur un tableau désigné par son seul numéro. Hors portée, rien n'est lu ni écrit, et
+    la réponse ne dit pas si le tableau existe."""
     from . import db
+    if int(ns_id) not in db.refs_dans_la_portee(int(project_id), "tableau", [ns_id]):
+        return {"status": "out_of_scope"}
     ns = db.get_datastore_by_id(int(ns_id)) or {}
     current = ns.get("schema")
     if current:

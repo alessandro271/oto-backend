@@ -640,6 +640,19 @@ def _tableau_entries(links: list) -> list[dict]:
             if l.get("target_type") == "tableau" and l.get("datastore_id") is not None]
 
 
+def _procedure_entries(links: list) -> list[dict]:
+    """Procédures liées au projet, en `{id, label, role}` — l'identifiant que
+    `db.list_project_links` a résolu DANS LA PORTÉE du projet (`procedure_id`), et lui
+    seul. Le `target_ref` brut n'est que ce qu'un rédacteur du projet a écrit : servi
+    tel quel, il publiait le titre puis le corps de n'importe quelle procédure de la
+    plateforme dont on connaissait le numéro."""
+    return [{"id": int(l["procedure_id"]),
+             "label": l.get("label") or l.get("title") or f"#{l['procedure_id']}",
+             "role": l.get("role")}
+            for l in links
+            if l.get("target_type") == "procedure" and l.get("procedure_id") is not None]
+
+
 # ── Routeur (lectures DB SYNC → appeler en threadpool) ────────────────────────
 def build_page(project: dict, path: str, *, offset: int = 0,
                connect_url: str = "") -> tuple[Optional[str], int]:
@@ -664,12 +677,7 @@ def build_page(project: dict, path: str, *, offset: int = 0,
 
     if p == "/":
         links = db.list_project_links(pid)
-        procedures = [
-            {"id": int(l["target_ref"]),
-             "label": l.get("label") or l.get("title") or f"#{l['target_ref']}",
-             "role": l.get("role")}
-            for l in links
-            if l.get("target_type") == "procedure" and str(l.get("target_ref", "")).isdigit()]
+        procedures = _procedure_entries(links)
         tables = (_tableau_entries(links) if show_data else [])
         # Docs : les pages de l'arbre du projet, sur opt-in seulement — sans lui on ne
         # les LIT même pas (titre et chapô en disent déjà trop). (Le lien `doc` — pointeur
@@ -694,10 +702,11 @@ def build_page(project: dict, path: str, *, offset: int = 0,
             # `title` du guide et rien d'autre — un déroulé opératoire livré sans
             # dire ce qu'on vient y chercher (oto-dashboard#119). Le titre du guide
             # reste le repli, pour un lien posé sans label.
+            # `procedure_id`, jamais le `target_ref` brut : une procédure hors de la
+            # portée du projet n'en a pas, et cette page publique n'en rend pas le corps.
             link = next((l for l in links
                          if l.get("target_type") == "procedure"
-                         and str(l.get("target_ref", "")).isdigit()
-                         and int(l["target_ref"]) == rid), None)
+                         and l.get("procedure_id") == rid), None)
             instr = org_store.get_instruction_by_id(rid) if link else None
             if not instr:
                 return render_not_found(marque=marque), 404
