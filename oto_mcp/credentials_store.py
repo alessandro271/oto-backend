@@ -684,7 +684,8 @@ def merge_with_existing(entity_type: str, entity_id: str, connector: str,
     repointer une `base_url` sans détenir le bearer — le piège à perte de données que
     formait « lecture impossible + écriture par remplacement total ».
 
-    Un existant ILLISIBLE (ligne écrite sous une clé de chiffrement périmée) n'est pas
+    Un existant ILLISIBLE (ligne écrite sous une clé de chiffrement périmée, ou blob
+    qui ne se relit pas au format du connecteur) n'est pas
     une erreur ici : on rend la saisie telle quelle, et la validation nommera ce qui
     manque. Une repose complète doit rester possible quand le coffre ne se relit plus."""
     c = providers.REGISTRY.get(connector)
@@ -693,20 +694,21 @@ def merge_with_existing(entity_type: str, entity_id: str, connector: str,
         return dict(provided)          # mono-champ, ou saisie déjà complète
     try:
         ligne = get_credential_with_meta(entity_type, entity_id, connector, account)
+        prior = ({**unpack_secret(connector, ligne["secret"]),
+                  **meta_fields(connector, ligne.get("meta") or {})}
+                 if ligne and ligne.get("secret") else None)
     except Exception:
-        # Une ligne illisible (écrite sous une clé de chiffrement périmée) ne doit pas
+        # Une ligne illisible (clé de chiffrement périmée, blob hors format) ne doit pas
         # interdire de la RÉÉCRIRE en entier — mais elle se journalise : c'est un fait
         # d'exploitation, pas un détail.
         logger.warning("merge credential : coffre illisible pour %s/%s/%s (account=%r) "
                        "— saisie prise telle quelle",
                        entity_type, entity_id, connector, account, exc_info=True)
         return dict(provided)
-    if not ligne or not ligne.get("secret"):
+    if prior is None:
         return dict(provided)
     # Le chiffré ET les champs `in_meta` de la même ligne : un champ rangé dans `meta` se
     # conserve à la repose comme un champ du chiffré.
-    prior = {**unpack_secret(connector, ligne["secret"]),
-             **meta_fields(connector, ligne.get("meta") or {})}
     return {**{k: v for k, v in prior.items() if k in declared and k not in provided},
             **provided}
 
@@ -762,11 +764,18 @@ def preparer_pose(entity_type: str, entity_id: str, connector: str, account: str
     - une clé posée SEULE par `api_key` — la forme d'avant l'ajout du champ, que des
       fronts envoient encore — se lit comme le champ unique du chiffré, et l'écriture
       partielle conserve le champ `in_meta` déjà posé au lieu de l'effacer ;
-    - un champ `in_meta` envoyé VIDE s'efface, comme tout champ (#448)."""
+    - un champ `in_meta` envoyé VIDE s'efface, comme tout champ (#448).
+
+    Une clé posée SEULE par `api_key` sur un connecteur dont le chiffré porte plusieurs
+    champs (`forager` : clé + compte) se lit aussi comme son premier champ SECRET, et
+    l'écriture partielle conserve les autres. C'est ici, à la pose, que la valeur brute
+    prend la forme du coffre — jamais à la lecture."""
     c = providers.REGISTRY.get(connector)
     en_meta = _noms_en_meta(c)
-    if fields is None and en_meta and (api_key or "").strip():
-        fields = {c.vault_fields[0].name: api_key}
+    if (fields is None and (api_key or "").strip()
+            and (en_meta or len(c.vault_fields) >= 2)):
+        champ = next((f.name for f in c.vault_fields if f.secret), c.vault_fields[0].name)
+        fields = {champ: api_key}
     if fields is not None:
         fields = merge_with_existing(entity_type, entity_id, connector, account, fields)
     if not en_meta:
@@ -1156,7 +1165,7 @@ def set_credential(
 
 
 def set_platform_key(label: str, connector: str, secret: str,
-                     set_by: Optional[str] = None) -> None:
+                     set_by: Optional[str] = None, meta: Optional[dict] = None) -> None:
     """Pose une clé PLATEFORME (console admin). Un connecteur sans palier gratuit
     (`platform_key_open=False`) la reçoit FERMÉE : elle ne sert que les orgs accordées
     (`grant_platform`). Sans ça, la ligne naissait `share_mode='open'` (défaut de la
@@ -1164,11 +1173,15 @@ def set_platform_key(label: str, connector: str, secret: str,
     tous » : entre la pose et le premier accord, n'importe quel compte sans clé à lui
     consommait la clé payante d'oto, sans plafond (`default_quota=0`). Une rotation
     sur une clé déjà accordée la laisse fermée ; un connecteur à palier gratuit garde
-    sa clé ouverte."""
+    sa clé ouverte.
+
+    `secret` est déjà à la forme du coffre : la pose passe par `preparer_pose`, comme
+    les paliers org, équipe et tenant (`capabilities/api_tokens._keys_create`)."""
     c = providers.REGISTRY.get(connector)
     ouverte = bool(c and getattr(c, "platform_key_open", False))
     with _connect() as conn:
-        set_credential(PLATFORM, label, connector, secret, set_by=set_by, conn=conn)
+        set_credential(PLATFORM, label, connector, secret, set_by=set_by, meta=meta,
+                       conn=conn)
         if not ouverte:
             conn.execute(
                 "UPDATE connector_credentials SET share_mode = 'closed' "

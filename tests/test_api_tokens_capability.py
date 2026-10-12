@@ -118,8 +118,11 @@ def socle(monkeypatch):
     monkeypatch.setattr(credentials_store, "clear_credential",
                         lambda et, eid, conn, **kw: vus.append(("clear", et, eid, conn)) or True)
     monkeypatch.setattr(credentials_store, "set_platform_key",
-                        lambda label, conn, secret, set_by=None:
+                        lambda label, conn, secret, set_by=None, meta=None:
                         vus.append(("set", credentials_store.PLATFORM, label, conn, set_by)))
+    # Pas de base : l'écriture partielle (`merge_with_existing`) ne trouve rien à compléter.
+    monkeypatch.setattr(credentials_store, "get_credential_with_meta",
+                        lambda *a, **kw: None)
 
     class _Store:
         def list_datastores(self):
@@ -471,6 +474,55 @@ def test_un_connecteur_non_keyed_en_mode_platform_accepte_une_cle_plateforme(
     assert code == 200 and out["provider"] == "transcription"
     assert [v[:4] for v in socle if v[0] == "set"] == [
         ("set", "platform", "oto", "transcription")]
+
+
+def _pose_capturee(monkeypatch):
+    poses = []
+    monkeypatch.setattr(credentials_store, "set_platform_key",
+                        lambda label, conn, secret, set_by=None, meta=None:
+                        poses.append((conn, label, secret, meta)))
+    return poses
+
+
+def test_une_cle_seule_prend_la_forme_du_coffre_a_la_pose(monkeypatch, socle, super_admin):
+    """`forager` porte deux champs au coffre (clé + compte). La console n'envoie que
+    `api_key` : la pose la range sous le premier champ secret, au format que la
+    lecture (`unpack_secret`) relit. Stockée brute, elle ne se relisait pas."""
+    import json
+    poses = _pose_capturee(monkeypatch)
+    code, _ = call("platform.key.create",
+                   body={"provider": "forager", "label": "oto", "api_key": "fg-K"})
+    assert code == 200
+    ((conn, label, secret, meta),) = poses
+    assert (conn, label, meta) == ("forager", "oto", None)
+    assert json.loads(secret) == {"api_key": "fg-K"}
+    assert credentials_store.unpack_secret("forager", secret) == {"api_key": "fg-K"}
+
+
+def test_les_champs_d_un_multi_champs_se_posent_par_fields(monkeypatch, socle, super_admin):
+    import json
+    poses = _pose_capturee(monkeypatch)
+    code, _ = call("platform.key.create",
+                   body={"provider": "forager", "label": "oto",
+                         "fields": {"api_key": "fg-K", "account_id": "42"}})
+    assert code == 200
+    assert json.loads(poses[0][2]) == {"api_key": "fg-K", "account_id": "42"}
+
+
+def test_un_champ_requis_manquant_est_nomme(monkeypatch, socle, super_admin):
+    poses = _pose_capturee(monkeypatch)
+    code, out = call("platform.key.create",
+                     body={"provider": "forager", "label": "oto",
+                           "fields": {"account_id": "42"}})
+    assert code == 400 and out["error"] == "missing_credentials"
+    assert poses == []
+
+
+def test_un_mono_champ_reste_la_valeur_brute(monkeypatch, socle, super_admin):
+    poses = _pose_capturee(monkeypatch)
+    code, _ = call("platform.key.create",
+                   body={"provider": "serper", "label": "oto", "api_key": "sk-1"})
+    assert code == 200 and poses[0][2] == "sk-1"
 
 
 # --- #523 : la révocation laisse une trace -----------------------------------
