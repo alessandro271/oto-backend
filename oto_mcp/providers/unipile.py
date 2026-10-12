@@ -99,7 +99,7 @@ def channel(name: str, *, hosted_channel: str, label: str, help: str,
     ⚠️ `publisher` is the ONLY field of the card that names the provider, and its
     definition requires it: the publisher names **who receives the call**
     (`docs/connector-vault.md` §"What the card SAYS", 2026-09-02). A
-    `whatsapp_chat(op=send)` goes to Unipile, which holds the operated account's
+    `whatsapp_send` goes to Unipile, which holds the operated account's
     session — the message is sent BY a third-party gateway. Until 2026-09-02
     these six cards fell back on the default "Otomata": we were attributing the
     sending to ourselves. It's declared HERE, in a single copy, because it's a property of the
