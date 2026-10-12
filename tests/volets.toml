@@ -140,6 +140,7 @@ chemins = [
   "oto_mcp/middleware/**",
   "oto_mcp/org_store/**",
   "oto_mcp/credentials_store.py",
+  "oto_mcp/cles_plateforme_format.py",
   "oto_mcp/tenancy.py",
   "oto_mcp/session_org.py",
   "oto_mcp/session_visibility.py",

@@ -48,6 +48,12 @@ Ils sont ici, chacun nommé, chacun jouable seul :
     oto-mcp maintenance journal-tokens      purge rétroactive des jetons écrits en
                                             clair dans le journal (#558) — À BLANC
                                             par défaut, `--apply` pour écrire
+    oto-mcp maintenance cles-plateforme-au-format
+                                            réécrit au format du coffre les clés
+                                            plateforme posées brutes d'un connecteur
+                                            multi-champs — À BLANC par défaut,
+                                            `--apply` pour écrire, `--strict` pour
+                                            qu'une clé illisible sorte en erreur
 
 Trois propriétés qu'aucun de ces travaux ne perd en changeant de porte :
 **idempotents** (les rejouer ne change rien), **fail-open par travail** (un échec
@@ -553,6 +559,18 @@ def oauth_relay_callbacks(*, dry_run: bool = False) -> dict:
     return relay_maintenance.poser_les_rappels(dry_run=dry_run)
 
 
+def cles_plateforme_au_format(*, dry_run: bool = True) -> dict:
+    """Réécrit au format du coffre les clés plateforme posées BRUTES avant que leur pose
+    passe par `preparer_pose` (`cles_plateforme_format`). Le rapport ne porte que
+    connecteur, libellé, compte et verdict — jamais une valeur.
+
+    ⚠️ **À BLANC PAR DÉFAUT, et hors de `all`** : elle réécrit le coffre d'une base
+    PARTAGÉE prod/preprod, une fois. Une clé illisible lève AVANT toute écriture : rien
+    n'est réécrit, et `--strict` en fait un code de sortie 1."""
+    from . import cles_plateforme_format
+    return cles_plateforme_format.remettre_au_format(dry_run=dry_run)
+
+
 def apollo_phones(*, dry_run: bool = False) -> dict:
     """Retire les reveals de téléphone Apollo reçus au-delà de trente jours.
 
@@ -595,6 +613,7 @@ _TRAVAUX: dict[str, Callable[..., dict]] = {
     "key-indexes": key_indexes,
     "key-index-rebuild": key_index_rebuild,
     "journal-tokens": journal_tokens,
+    "cles-plateforme-au-format": cles_plateforme_au_format,
     "check-boot": check_boot,
     "residu-projete": residu_projete,
     "portee-observation": portee_observation,
@@ -608,7 +627,8 @@ _TRAVAUX: dict[str, Callable[..., dict]] = {
 }
 # Travaux dont l'écriture est un ACTE, pas une routine : à blanc par défaut, et
 # c'est `--apply` qui écrit. Ils ne sont dans aucun timer et jamais dans `all`.
-_ACTES = ("journal-tokens", "residu-projete", "oauth-relay-callbacks")
+_ACTES = ("journal-tokens", "residu-projete", "oauth-relay-callbacks",
+          "cles-plateforme-au-format")
 # ⚠️ `alertes-credential` est dans `_ALL` — donc dans le timer quotidien — ET son
 # envoi est fermé par `OTO_ALERTE_CREDENTIAL`. Les deux ensemble sont le dispositif :
 # le mécanisme tourne dès le tag (on voit ce qui partirait), l'effet attend une
