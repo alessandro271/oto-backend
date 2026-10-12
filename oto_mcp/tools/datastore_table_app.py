@@ -161,11 +161,13 @@ def register(mcp: FastMCP) -> None:
                        "shared": bool(s.get("shared")), "url": s.get("url")}
                       for s in store.list_datastores()]
             result = {"view": "tables", "tables": tables, "origin": origin}
+            # The numbers go to the model too: without them it guesses a name or a
+            # number to show one (measured: "event log", then a number that did not exist).
+            index = ", ".join(f"{t['ns_id']} {t['name']}" for t in tables) or "none"
             if not affiche:
-                lines = [f"{t['ns_id']} · {t['name']}" for t in tables] or ["(no table)"]
-                return _text(result, "Your tables:\n" + "\n".join(lines))
-            return _text(result, f"{len(tables)} table(s) shown to the user. To show "
-                                 f"one: data_app datastore=<number>.")
+                return _text(result, f"Your tables (number name): {index}.")
+            return _text(result, f"{len(tables)} table(s) shown to the user (number name): "
+                                 f"{index}. To show one: data_app datastore=<number>.")
 
         ref = _ns(str(datastore))
         limit = max(1, min(int(limit or DEFAULT_LIMIT), MAX_LIMIT))
@@ -184,7 +186,8 @@ def register(mcp: FastMCP) -> None:
             table_url = store.get_url(ref)
         except DatastoreNotFound:
             message = f"No table “{datastore}” in your active org or your teams."
-            return _text({"view": "note", "message": message, "origin": origin}, message)
+            return _text({"view": "note", "message": message, "origin": origin},
+                         message + " Their numbers: data_app without datastore.")
         except (ValueError, InvalidCursor) as e:
             # A malformed filter or a cursor from another regime: refused by name — an
             # empty table would read as "no such data" (oto#74).
@@ -206,7 +209,7 @@ def register(mcp: FastMCP) -> None:
             # No view to draw them: the rows ARE the answer.
             body = json.dumps(rows, ensure_ascii=False, default=str)
             return _text(result, f"{name} — {len(rows)} of {total} row(s):\n{body}")
-        line = (f"{name} — {len(rows)} of {total} row(s) shown to the user, columns: "
+        line = (f"Table {numero.get('ns_id')} {name} — {len(rows)} of {total} row(s) shown to the user, columns: "
                 f"{', '.join(c['key'] for c in columns) or '—'}.")
         if page_.get("next_cursor"):
             line += f" More: same call with cursor={page_['next_cursor']}."

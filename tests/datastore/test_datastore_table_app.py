@@ -180,6 +180,8 @@ def test_sans_tableau_la_liste_et_tableau_inconnu_une_note(monkeypatch):
     m, _ = _banc(monkeypatch)
     liste = _appel(m, {}).structured_content
     assert liste["view"] == "tables" and liste["tables"][0]["ns_id"] == 7
+    # The model gets the numbers too, or it guesses one to show a table.
+    assert "7 leads" in _texte(_appel(m, {}))
     note = _appel(m, {"datastore": "inconnu"}).structured_content
     assert note["view"] == "note" and "inconnu" in note["message"]
 
