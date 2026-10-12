@@ -208,8 +208,10 @@ async def test_un_jeton_deja_accepte_passe_malgre_le_budget_epuise():
     for i in range(2):
         await _appel(garde, _scope(jeton=f"faux{i}"))
     assert _statut(await _appel(garde, _scope(jeton="faux-suivant"))) == 429
-    assert _statut(await _appel(garde, _scope())) == 429
     assert _statut(await _appel(garde, _scope(jeton="bon"))) == 200
+    # la découverte OAuth sans jeton (classe `anonyme`) n'est jamais fermée par les
+    # 401 des voisins : elle paie son propre seau par adresse.
+    assert _statut(await _appel(garde, _scope())) == 401
 
 
 @pytest.mark.asyncio

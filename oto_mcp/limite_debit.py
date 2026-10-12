@@ -30,10 +30,14 @@ régulier `par_minute`, rafale `par_minute / 2`), et sa clé :
 PRÉSENCE de l'en-tête — un `Bearer <aléatoire>` par requête aurait chacun son seau neuf.
 D'où une cinquième borne, `echecs`, par adresse : chaque réponse 401/403 (et 404 sur les
 classes `sensible` et `webhook`, où un 404 est un secret deviné de travers) consomme
-un jeton de l'adresse ; une adresse qui a épuisé ce budget est refusée — SAUF pour un
-jeton qui a déjà obtenu une réponse acceptée de ce processus (`_reconnus`). Le trafic
-légitime d'un client hébergé passe donc même si ses 401 de découverte remplissent le
-compteur ; le fuzzer, lui, n'a jamais de jeton reconnu.
+un jeton de l'adresse ; une adresse qui a épuisé ce budget voit refuser ses jetons
+INCONNUS et ses requêtes `sensible`/`webhook` — jamais un jeton qui a déjà obtenu une
+réponse acceptée de ce processus (`_reconnus`), jamais la classe `anonyme` (qui paie
+déjà son seau par adresse, et porte la découverte OAuth). Le trafic légitime d'un
+client hébergé passe donc même si ses 401 de découverte remplissent le compteur ; le
+fuzzer, lui, n'a jamais de jeton reconnu. ⚠️ Le prix assumé : depuis une adresse au
+budget épuisé, le PREMIER appel d'un jeton tout juste émis est refusé jusqu'à ce que
+le budget remonte (`Retry-After`) — d'où un budget large et le mode `report`.
 
 **L'adresse** est celle de la règle unique du dépôt (`subdomain_project._client_ip`,
 c'est-à-dire `client_trace.pick_ip`) : `CF-Connecting-IP`, puis le premier saut de
@@ -278,7 +282,11 @@ class LimiteDebit:
         """None = passe ; sinon (classe qui refuse, clé, attente). Le budget d'échecs se
         juge d'abord et ne consomme rien : seul un échec CONSTATÉ le débite."""
         echecs = self._seaux.get("echecs")
-        if echecs is not None and (jeton is None or jeton not in self._reconnus):
+        # `anonyme` n'y passe pas : il paie déjà son seau par adresse, et c'est la
+        # découverte OAuth (`POST /mcp` sans jeton) qu'une adresse partagée par un
+        # client hébergé ne doit jamais se voir fermer par les 401 de ses voisins.
+        if echecs is not None and classe != "anonyme" and (
+                jeton is None or jeton not in self._reconnus):
             attente = echecs.prendre(ip, maintenant, debiter=False)
             if attente is not None:
                 return "echecs", ip, attente

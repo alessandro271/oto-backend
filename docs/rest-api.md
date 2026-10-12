@@ -1158,7 +1158,7 @@ lire en base, et lui fait payer un seau à jetons (débit régulier, rafale = la
 | `sensible` | sans jeton : secret dans le chemin (`/api/invitations/*`, `/api/public/*`, `/p/d/*`, `/o/{u,d,r}/*`) ou geste d'auth (`/oauth/register`, `/oauth/authorize`, `/oauth/relay/authorize`, `/oauth/callback`, `/api/mcp/auth_callback`, `*/oauth/callback`) | adresse | 60 |
 | `webhook` | `/api/hooks/*`, `/api/receivers/*`, `/api/billing/webhook` | (adresse, chemin) | 300 |
 | `anonyme` | tout le reste sans jeton (`/.well-known/*`, `/mcp` avant connexion, upload signé, relais, `/oauth/token`) | adresse | 600 |
-| `echecs` | chaque réponse 401/403 (et 404 sur `sensible`/`webhook`) en consomme un ; épuisé, l'adresse est refusée **sauf jeton déjà accepté** par ce processus | adresse | 120 |
+| `echecs` | chaque réponse 401/403 (et 404 sur `sensible`/`webhook`) en consomme un ; épuisé, l'adresse voit refuser ses jetons **inconnus** et ses requêtes `sensible`/`webhook` — jamais un jeton déjà accepté par ce processus, jamais la classe `anonyme` (découverte OAuth) | adresse | 120 |
 
 - **Pourquoi un principal, et pas une adresse, pour le trafic authentifié** : un client
   hébergé sert tous ses utilisateurs depuis quelques adresses ; une borne par adresse les
@@ -1166,7 +1166,8 @@ lire en base, et lui fait payer un seau à jetons (débit régulier, rafale = la
   de l'en-tête — un `Bearer <aléatoire>` par requête aurait chacun son seau neuf ; le
   budget d'échecs de l'adresse referme ce contournement sans toucher aux jetons qui ont
   déjà été acceptés (les 401 de découverte d'un client hébergé ne coupent pas ses
-  utilisateurs connectés).
+  utilisateurs connectés). ⚠️ Prix assumé : depuis une adresse au budget épuisé, le
+  premier appel d'un jeton tout juste émis est refusé jusqu'à ce que le budget remonte.
 - **L'adresse** est la règle unique du dépôt (`client_trace.pick_ip` :
   `CF-Connecting-IP` > premier saut de `X-Forwarded-For` > pair TCP). ⚠️ Elle ne vaut que
   ce que vaut le proxy : une instance doit ÉCRASER ces deux en-têtes avec le pair qu'elle
