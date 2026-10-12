@@ -134,7 +134,8 @@ def register(mcp: FastMCP) -> None:
 
         CHOOSE the columns: pass `fields` with only those that matter for the question
         (in the order to show them) — most tables have more columns than a reader
-        needs. Omitted = the declared columns, in schema order.
+        needs. Omitted = the declared columns, in schema order. Keep `limit` small:
+        the user scrolls and asks for more; the default (25) is usually right.
 
         Sort, filter and search are arguments, same grammar as `data_rows`: call again
         to change them. Next page = the `next_cursor` of the previous call, with the
@@ -213,4 +214,5 @@ def register(mcp: FastMCP) -> None:
                 f"{', '.join(c['key'] for c in columns) or '—'}.")
         if page_.get("next_cursor"):
             line += f" More: same call with cursor={page_['next_cursor']}."
-        return _text(result, line + " To read rows yourself: data_rows.")
+        return _text(result, line + " Do not call this again for the same question."
+                                    " To read rows yourself: data_rows.")

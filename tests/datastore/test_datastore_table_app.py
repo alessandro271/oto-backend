@@ -155,6 +155,8 @@ def test_la_vue_recoit_la_page_et_le_modele_une_ligne(monkeypatch):
     # The model: one line, no row values.
     texte = _texte(r)
     assert "2 of 2 row(s) shown to the user" in texte and "Alpha" not in texte
+    # Measured in MCPJam: without it, Haiku called twice for one question.
+    assert "Do not call this again for the same question" in texte
     assert store.appels[0]["limit"] == 25
 
 
