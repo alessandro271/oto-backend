@@ -104,10 +104,7 @@ fr_search
 fr_stock_search
 frenchtech_search_annuaire
 github_actions
-github_issues
 github_orgs
-github_pulls
-github_repos
 github_search
 gocardless_events
 gocardless_failed

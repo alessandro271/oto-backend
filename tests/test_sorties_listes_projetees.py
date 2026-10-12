@@ -67,7 +67,9 @@ _PROJECTION_APPELS = ("output_projection", "_shape(", "summarize(", "_project(",
 # septembre, un critère qui blanchissait. Le paramètre `fields` comptait comme projection
 # par son seul nom ; 17 outils où il désigne un corps d'écriture ou un filtre de
 # recherche sont désormais nommés dans la dette (cf. `_fields_projette`).
-_PLAFOND = 213
+# 213 → 210 le même jour : github_repos, github_issues, github_pulls payés (index par
+# défaut, `full=True` le brut — `tools/github_index.py`).
+_PLAFOND = 210
 
 
 def _debt() -> set[str]:
