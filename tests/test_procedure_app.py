@@ -205,6 +205,29 @@ def test_oto_procedure_propose_le_graphe_la_ou_il_existe(monkeypatch):
     assert "oto_procedure_app slug=<slug>" in procedure_diagram.indice_du_graphe("s")
 
 
+def test_la_liste_des_procedures_propose_le_graphe(monkeypatch):
+    """`op=list` porte la ligne qui envoie MONTRER une procédure, posée après le
+    dispatch : la liste elle-même (et `include_archived`) n'y est pas touchée."""
+    from oto_mcp import procedure_diagram, tool_alias
+    from oto_mcp.capabilities import _execution, procedure_console as pc
+    monkeypatch.setattr(tool_alias, "prefix_for", lambda sub: "")
+    monkeypatch.setattr(tool_alias, "sert_un_worker", lambda: False)
+    monkeypatch.setattr(procedure_diagram, "client_affiche_les_apps", lambda: True)
+
+    async def execute(_dispatch, _args):
+        return None, {"items": [{"slug": "veille"}]}
+    monkeypatch.setattr(_execution, "execute", execute)
+
+    def lister():
+        inp = pc.ProcedureInput(op="list")
+        return asyncio.run(pc._procedure(type("Ctx", (), {"sub": "s"})(), inp))
+
+    monkeypatch.delenv("OTO_PROCEDURE_APP_BUNDLE", raising=False)
+    assert lister() == {"items": [{"slug": "veille"}]}
+    monkeypatch.setenv("OTO_PROCEDURE_APP_BUNDLE", BUNDLE)
+    assert "oto_procedure_app slug=<slug>" in lister()["show_graph"]
+
+
 def test_un_bundle_qui_n_est_pas_un_script_est_refuse(monkeypatch):
     from oto_mcp import procedure_diagram
     monkeypatch.setenv("OTO_PROCEDURE_APP_BUNDLE", "ftp://x/process-graph.js")
@@ -278,9 +301,9 @@ def test_la_consigne_de_dessin_ne_se_joue_qu_une_fois(monkeypatch):
 def test_les_outils_cites_portent_le_nom_du_produit(monkeypatch):
     pytest.importorskip("fastmcp.apps")
     monkeypatch.setenv("OTO_PROCEDURE_APP_BUNDLE", BUNDLE)
-    _, texte = _appeler(monkeypatch, {("org", 42, "prose"): PROSE}, "prose", prefix="tulina")
-    assert "tulina_guide op=read" in texte and "tulina_procedure op=set" in texte
-    assert "tulina_procedure_app slug=prose again" in texte
+    _, texte = _appeler(monkeypatch, {("org", 42, "prose"): PROSE}, "prose", prefix="acme")
+    assert "acme_guide op=read" in texte and "acme_procedure op=set" in texte
+    assert "acme_procedure_app slug=prose again" in texte
     assert "oto_procedure" not in texte
 
 

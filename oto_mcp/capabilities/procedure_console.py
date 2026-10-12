@@ -185,10 +185,8 @@ def _dispatch_procedure(ctx: ResolvedCtx, inp: ProcedureInput):
             scope=inp.scope,
             version=inp.version, with_history=inp.with_history, full=inp.full)))
     if inp.op == "list":
-        liste = oi._list_guides(ctx, oi.GuideListInput(query=inp.query, scope=inp.scope,
-                                                       verbose=inp.verbose))
-        indice = procedure_diagram.indice_du_graphe(ctx.sub)
-        return {**liste, "show_graph": indice} if indice and isinstance(liste, dict) else liste
+        return oi._list_guides(ctx, oi.GuideListInput(query=inp.query, scope=inp.scope,
+                                                      verbose=inp.verbose))
     if inp.op == "create":
         return oi._create_instruction(ctx, oi.ConsoleInstrCreateInput(
             slug=_need(inp.slug, "missing_slug", "`slug` requis pour create."),
@@ -268,6 +266,11 @@ def _dispatch_share(ctx: ResolvedCtx, inp: ProcedureInput):
 async def _procedure(ctx: ResolvedCtx, inp: ProcedureInput) -> dict:
     from ._execution import execute
     _, result = await execute(_dispatch_procedure, lambda: (ctx, inp))
+    if inp.op == "list" and isinstance(result, dict):
+        # La liste, plus — là où l'instance sait la peindre — la ligne qui envoie l'agent
+        # MONTRER une procédure. Posé ici, hors du dispatch, pour laisser `list` tel quel.
+        indice = procedure_diagram.indice_du_graphe(ctx.sub)
+        return {**result, "show_graph": indice} if indice else result
     return result
 
 
