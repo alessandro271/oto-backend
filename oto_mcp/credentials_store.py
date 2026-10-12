@@ -224,6 +224,16 @@ def list_platform_credentials(provider: "str | None" = None) -> list[dict]:
             for r in rows]
 
 
+#: La clé de `meta` qui porte les scopes RÉVOQUÉS d'une instance plateforme (F-046).
+#: Miroir de `access.platform_grant.DENIED_META_KEY` (la couche `access` lit ce module,
+#: pas l'inverse) ; `tests/test_cle_plateforme_equite_f046_live.py` tient l'égalité.
+_REVOQUES = "share_denied"
+
+#: Ce que `meta` porte des ACCORDS d'une clé plateforme — pas de la clé elle-même. Une
+#: re-pose (rotation du secret) les garde : `set_platform_key`.
+_META_DES_ACCORDS = ("rate_limit", "rate_limit_by", _REVOQUES)
+
+
 def _latest_platform_label(conn, provider: str) -> "str | None":
     r = conn.execute(
         "SELECT entity_id FROM connector_credentials WHERE entity_type=%s AND connector=%s "
@@ -259,10 +269,21 @@ def platform_grant(provider: str, scope: str, daily_quota: "int | None" = None,
             "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=''",
             (PLATFORM, label, provider)).fetchone()
         down, meta, mode = list(row["share_down"] or []), dict(row["meta"] or {}), row["share_mode"]
-        if not free_tier:
+        # F-046 : une clé payante OUVERTE À TOUS (`open`, `share_down` vide) le reste.
+        # Accorder y ajoutait le scope au `share_down` en la FERMANT : lever le blocage
+        # d'une org coupait la clé à toutes les autres — le geste du 31/07, par l'autre
+        # bout. Sur une telle clé, accorder = lever la révocation + poser le quota.
+        ouverte_a_tous = mode != "closed" and not down
+        if not free_tier and not ouverte_a_tous:
             mode = "closed"
             if scope not in down:
                 down.append(scope)
+        # Accorder lève la révocation de CE scope (`access.platform_grant._platform_denied`).
+        refus = [s for s in (meta.get(_REVOQUES) or []) if s != scope]
+        if refus:
+            meta[_REVOQUES] = refus
+        else:
+            meta.pop(_REVOQUES, None)
         rlb = dict(meta.get("rate_limit_by") or {})
         if daily_quota is not None:
             rlb[scope] = daily_quota
@@ -276,7 +297,14 @@ def platform_grant(provider: str, scope: str, daily_quota: "int | None" = None,
 
 
 def platform_revoke(provider: str, scope: str, label: "str | None" = None) -> None:
-    """ADR 0044 §F R4 : retire l'accès de `scope` (retire du share_down + du rate_limit_by)."""
+    """ADR 0044 §F R4 : retire l'accès de `scope` (retire du share_down + du rate_limit_by).
+
+    F-046 : retirer du `share_down` ne coupait RIEN sur une clé ouverte à tous (`open`,
+    `share_down` vide) — un blocage de crédit sans effet. Le scope est désormais
+    INSCRIT comme révoqué (`meta.share_denied`), refus qui prime sur tout le reste à la
+    lecture (`access.platform_grant._platform_denied`) ; seul `platform_grant` l'efface.
+    Et retirer le DERNIER bénéficiaire d'une clé `open` à liste ne la rend plus
+    ouverte à tous : elle passe `closed` (liste vide = personne), ce qu'elle disait."""
     from . import grants_chain  # import tardif (grants_chain lit ce module)
 
     if grants_chain.is_chained(provider):
@@ -290,12 +318,16 @@ def platform_revoke(provider: str, scope: str, label: "str | None" = None) -> No
         if label is None:
             return
         row = conn.execute(
-            "SELECT share_down, meta FROM connector_credentials "
+            "SELECT share_mode, share_down, meta FROM connector_credentials "
             "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=''",
             (PLATFORM, label, provider)).fetchone()
         if not row:
             return
-        down = [s for s in (row["share_down"] or []) if s != scope]
+        avant = list(row["share_down"] or [])
+        down = [s for s in avant if s != scope]
+        mode = row["share_mode"]
+        if mode != "closed" and avant and not down:
+            mode = "closed"
         meta = dict(row["meta"] or {})
         rlb = dict(meta.get("rate_limit_by") or {})
         rlb.pop(scope, None)
@@ -303,10 +335,15 @@ def platform_revoke(provider: str, scope: str, label: "str | None" = None) -> No
             meta["rate_limit_by"] = rlb
         else:
             meta.pop("rate_limit_by", None)
+        refus = list(meta.get(_REVOQUES) or [])
+        if scope not in refus:
+            refus.append(scope)
+        meta[_REVOQUES] = refus
         conn.execute(
-            "UPDATE connector_credentials SET share_down=%s::jsonb, meta=%s::jsonb, "
-            "version=version+1 WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=''",
-            (json.dumps(down), json.dumps(meta), PLATFORM, label, provider))
+            "UPDATE connector_credentials SET share_mode=%s, share_down=%s::jsonb, "
+            "meta=%s::jsonb, version=version+1 "
+            "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=''",
+            (mode, json.dumps(down), json.dumps(meta), PLATFORM, label, provider))
 
 
 # --- app OAuth de l'ÉDITEUR ---------------------------------------------------
@@ -1156,17 +1193,36 @@ def set_platform_key(label: str, connector: str, secret: str,
     colonne) avec un `share_down` vide, que `access.platform_grant` lit « ouvert à
     tous » : entre la pose et le premier accord, n'importe quel compte sans clé à lui
     consommait la clé payante d'oto, sans plafond (`default_quota=0`). Une rotation
-    sur une clé déjà accordée la laisse fermée ; un connecteur à palier gratuit garde
-    sa clé ouverte.
+    (re-pose sous le même libellé) garde l'état de la ligne tel quel — fermée reste
+    fermée, ouverte reste ouverte, bénéficiaires, quotas et révocations compris
+    (F-046) ; un connecteur à palier gratuit garde sa clé ouverte.
 
     `secret` est déjà à la forme du coffre : la pose passe par `preparer_pose`, comme
     les paliers org, équipe et tenant (`capabilities/api_tokens._keys_create`)."""
     c = providers.REGISTRY.get(connector)
     ouverte = bool(c and getattr(c, "platform_key_open", False))
     with _connect() as conn:
+        # F-046 : une RE-POSE (même libellé) est une rotation du secret, pas une
+        # nouvelle clé. Elle fermait toute clé payante (une clé ouverte à tous ne
+        # servait plus personne, sans un mot) et l'upsert écrasait `meta` — quotas
+        # par bénéficiaire et révocations compris. On relit la ligne : son
+        # `share_mode` reste le sien (`share_down`/`share_side` ne sont pas dans le
+        # SET de l'upsert) et les clés d'accord de `meta` sont reportées, sauf si la
+        # pose les nomme elle-même.
+        existante = conn.execute(
+            "SELECT meta FROM connector_credentials WHERE entity_type = %s "
+            "AND entity_id = %s AND connector = %s AND account = ''",
+            (PLATFORM, label, connector)).fetchone()
+        if existante is not None:
+            reportee = dict(meta or {})
+            ancienne = existante["meta"] or {}
+            for k in _META_DES_ACCORDS:
+                if k in ancienne and k not in reportee:
+                    reportee[k] = ancienne[k]
+            meta = reportee or None
         set_credential(PLATFORM, label, connector, secret, set_by=set_by, meta=meta,
                        conn=conn)
-        if not ouverte:
+        if not ouverte and existante is None:
             conn.execute(
                 "UPDATE connector_credentials SET share_mode = 'closed' "
                 "WHERE entity_type = %s AND entity_id = %s AND connector = %s "

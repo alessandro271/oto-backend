@@ -444,14 +444,30 @@ def grant(provider: str, scope: str, daily_quota: Optional[int] = None,
 
 def revoke(provider: str, scope: str, label: Optional[str] = None) -> int:
     """Archive les arêtes vivantes de `scope` sur l'instance. L'accès est coupé à la
-    lecture SUIVANTE — rien à invalider, aucun cache à purger."""
+    lecture SUIVANTE — rien à invalider, aucun cache à purger.
+
+    F-046 : sans AUCUNE arête pour ce scope, il n'y avait rien à archiver, donc la chaîne
+    restait MUETTE (`platform_rung` → None) et l'appelant retombait sur l'ancien chemin —
+    une clé ouverte le servait comme avant. Révoquer sur une clé ouverte jamais accordée
+    (le blocage de crédit d'une org gratuite) ne coupait rien. On pose alors une arête
+    aussitôt archivée : la chaîne a un avis (« révoqué ») et refuse sans repli. Un
+    `grant` ultérieur la remplace, comme toute arête. Pose puis archive ne sont pas
+    atomiques : l'écart est un accès que l'appelant avait déjà par le chemin ouvert."""
     grantee = _parse_scope(scope)
     if grantee is None:
         return 0
     label = label or _latest_label(provider)
     if label is None:
         return 0
-    return db_grants.revoke_edges(instance_ref(label, provider), *grantee)
+    ref = instance_ref(label, provider)
+    n = db_grants.revoke_edges(ref, *grantee)
+    if n == 0 and not db_grants.edge_exists(ref, *grantee):
+        db_grants.insert_grant(
+            resource_id=ref, grantor_kind=PLATFORM_SCOPE[0], grantor_id=PLATFORM_SCOPE[1],
+            grantee_kind=grantee[0], grantee_id=grantee[1], constraints={},
+            source="manual", created_by=None)
+        n = db_grants.revoke_edges(ref, *grantee)
+    return n
 
 
 def granted_instances(scope_kind: str, scope_id: str) -> list[dict]:

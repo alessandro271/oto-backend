@@ -265,7 +265,19 @@ par cas. Modèle : clé membre (sub, org de contexte — ADR 0033, prio, no quot
 erreur. **Seuls les providers `platform`-éligibles au registre (`auth_modes`
 inclut `platform` : `serper/hunter/sirene/kaspr`) peuvent avoir une clé
 plateforme** — `resolve_api_key` **gate** le chemin platform-grant sur
-`auth_modes` (audit 2026-06-11). Les comptes **privés / byo-only**
+`auth_modes` (audit 2026-06-11).
+**Révoquer COUPE, re-poser ne touche pas aux accords (F-046).** `platform_revoke` inscrit
+le scope (`org:<id>` | `user:<sub>`) dans `meta.share_denied` de l'instance : le refus
+prime sur tout (`access.platform_grant._platform_denied` — palier ouvert, `share_down`,
+`share_side`), y compris sur une clé `open` à `share_down` vide qu'un simple retrait de
+liste ne coupait pas ; seul `platform_grant` l'efface, et sur une clé ouverte à tous il
+n'y pose que le quota, sans la fermer. Retirer le dernier bénéficiaire d'une clé `open` à
+liste la passe `closed`, jamais « ouverte à tous ». Côté chaîne, révoquer un scope sans
+arête pose une arête aussitôt archivée (la chaîne refuse au lieu de se taire). Une
+re-pose sous le même libellé est une **rotation** : `share_mode` et les clés d'accord de
+`meta` (`rate_limit`, `rate_limit_by`, `share_denied`) restent ; seule une clé NEUVE
+payante naît `closed`.
+Les comptes **privés / byo-only**
 (`attio/lemlist/pennylane/fullenrich/slack`) **n'ont PAS de clé plateforme** :
 les clés résiduelles du seed SOPS ont été supprimées, et le compte partagé de
 l'**équipe Otomata** (attio/lemlist) vit en **credentials de l'org Otomata
