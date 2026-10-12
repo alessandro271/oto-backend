@@ -1,6 +1,7 @@
 """Attio CRM — full CRUD on records + notes/tasks/lists/entries/comments/meta.
 
-Covers create/read/update/delete on companies, people, deals, and
+Covers create/read/update/delete on the records of any object of the workspace
+(companies, people, deals and custom objects), and
 create/list/delete for notes (the Attio API does not allow editing a note's
 body), and create/list/update/delete for tasks (update limited to
 `deadline_at`, `is_completed`, `linked_records`, `assignees` on the API side).
@@ -16,9 +17,10 @@ OBJECT-BASED CRM: the `create_X`/`get_X`/`update_X`/`delete_X`/`list_X` pattern 
 repeated identically there on a dozen objects, with the SAME parameters each
 time. This is the nominal case of the amendment.
 
-- `attio_record` (18 → 1) — companies/people/deals share the SAME resource
-  on the client side (`AttioResource`) and therefore the same signature: the object becomes a
-  parameter (`object=`), like `module=` at zoho.
+- `attio_record` (18 → 1) — every object shares the SAME resource on the
+  client side (`AttioResource`) and therefore the same signature: the object becomes a
+  parameter (`object=`), like `module=` at zoho — any slug or id of the workspace,
+  custom objects included (be#1158).
 - `attio_note` (4 → 1) · `attio_task` (5 → 1) · `attio_list` (5 → 1)
   · `attio_entry` (5 → 1) · `attio_workspace_member` (2 → 1)
   · `attio_meeting` (5 → 1, meeting + its recordings + the transcript: everything
@@ -98,7 +100,6 @@ from ..connectors import verify as connector_verify
 # no longer in the tool name, so the enum is what announces it to the client), input
 # validation AND the refusal message derive from it — an added op cannot
 # be accepted without being announced (nor the reverse).
-_RecordObject = Literal["companies", "people", "deals"]
 _RecordOp = Literal["list", "get", "search", "create", "update", "merge", "delete"]
 _NoteOp = Literal["list", "get", "create", "delete"]
 _TaskOp = Literal["list", "get", "create", "update", "delete"]
@@ -118,7 +119,11 @@ _ObjectOp = Literal["list", "get", "views"]
 _AttributeOp = Literal["list", "get", "options", "statuses",
                        "create", "create_option", "create_status"]
 
-_RECORD_OBJECTS = get_args(_RecordObject)
+# `object` of `attio_record`: any object of the workspace, standard or custom, by
+# slug or id (be#1158). It lands in the URL path (`objects/{object}/records`): the
+# form is checked before any credential resolution, so that nothing but a slug or
+# an id — no `/`, no `..` — ever reaches the client.
+_OBJECT_REF = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _RECORD_OPS = get_args(_RecordOp)
 _NOTE_OPS = get_args(_NoteOp)
 _TASK_OPS = get_args(_TaskOp)
@@ -351,7 +356,7 @@ def _verify(fields: dict, config: dict | None = None) -> None:
 
 
 def register(mcp: FastMCP) -> None:
-    from oto.tools.attio.client import AttioClient
+    from oto.tools.attio.client import AttioClient, AttioResource
 
     connector_verify.register("attio", _verify)
 
@@ -366,11 +371,11 @@ def register(mcp: FastMCP) -> None:
         if is_platform:
             access.record_platform_usage("attio")
 
-    # --- records : companies / people / deals ------------------------------
+    # --- records : any object of the workspace ---------------------------
 
     @mcp.tool()
     def attio_record(
-        object: _RecordObject,
+        object: str,
         op: _RecordOp = "list",
         record_id: Optional[str] = None,
         secondary_record_id: Optional[str] = None,
@@ -381,18 +386,21 @@ def register(mcp: FastMCP) -> None:
         limit: int = 50,
         offset: int = 0,
     ) -> dict:
-        """A CRM record — company, person or deal: list, read, search, create,
-        update, merge, delete.
+        """A CRM record — company, person, deal or a record of a custom object:
+        list, read, search, create, update, merge, delete.
 
-        `object` picks the Attio object the record lives in: "companies",
-        "people" or "deals".
+        `object` picks the Attio object the record lives in, by slug or id:
+        "companies", "people", "deals", or any custom object of the workspace.
+        The objects that exist are listed by `attio_object(op="list")` — read it
+        before writing to a custom object, never guess its slug.
 
         `op`:
         - **"list"** (default): list records of that object in the Attio CRM
           workspace. Paginated (`limit` / `offset`).
         - **"get"**: fetch a record by its Attio record ID.
         - **"search"**: records whose NAME contains `query` (case-insensitive
-          substring — an email address or a domain does NOT match), or records
+          substring — an email address or a domain does NOT match; on a custom
+          object without a `name` attribute, use `filter`), or records
           matching `filter`, an Attio filter object: `{"email_addresses":
           "ada@acme.com"}` finds the person carrying that address — the check to
           run before creating a person. One of the two, never both.
@@ -410,7 +418,8 @@ def register(mcp: FastMCP) -> None:
         - **"delete"** — ⚠️ WRITES: delete a record by ID. Irreversible.
 
         Args:
-            object: companies | people | deals.
+            object: slug or id of the Attio object — companies | people | deals
+                | a custom object (`attio_object(op="list")` lists them).
             op: list (default) | get | search | create | update | merge | delete.
             record_id: op="get"/"update"/"delete"/"merge" — Attio record ID (for
                 merge, the PRIMARY record — the one whose values win).
@@ -429,6 +438,7 @@ def register(mcp: FastMCP) -> None:
                   when omitted), `value`, `associated_company` /
                   `associated_people` ([{"target_object": "companies",
                   "target_record_id": ...}]).
+                - custom object: its own attributes, nothing assumed.
                 Every other slug, and the deal stages, belong to the workspace:
                 read them with `attio_attribute(target="objects",
                 identifier="<object>", op="list")` and `op="statuses",
@@ -448,15 +458,17 @@ def register(mcp: FastMCP) -> None:
         # a write to the CRM.
         if op not in _RECORD_OPS:
             raise _bad(_one_of("op", _RECORD_OPS))
-        if object not in _RECORD_OBJECTS:
-            raise _bad(_one_of("object", _RECORD_OBJECTS))
+        if not isinstance(object, str) or not _OBJECT_REF.fullmatch(object):
+            raise _bad("object must be the slug or id of an Attio object "
+                       "(letters, digits, '_' or '-') — list them with "
+                       "attio_object(op='list')")
         # #880 — the client lets `filters` overwrite `query` silently: both
         # together would only perform one of the two searches.
         if op == "search" and query and filter:
             raise _bad("op='search': query OR filter, not both — the filter "
                        "would replace the name search without saying so")
         client, is_platform = _client()
-        resource = getattr(client, object)
+        resource = AttioResource(client, object)
 
         if op == "list":
             result = resource.list(limit=limit, offset=offset)
@@ -1009,8 +1021,7 @@ def register(mcp: FastMCP) -> None:
         - **"list"** (default): list all objects (system + custom) defined in the
           workspace. Useful for an LLM to discover what record types exist beyond
           the standard companies/people/deals (e.g. custom objects like
-          "products"). Note that `attio_record` only does CRUD on the three
-          standard objects.
+          "products") — the `object` that `attio_record` then reads and writes.
         - **"get"**: get a single object definition by ID or slug.
         - **"views"**: list the saved views of an object.
 
