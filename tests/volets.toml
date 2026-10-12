@@ -190,6 +190,7 @@ chemins = [
   "oto_mcp/capabilities/org_api_keys.py",
   "oto_mcp/capabilities/org_console.py",
   "oto_mcp/capabilities/org_suspension.py",
+  "oto_mcp/capabilities/platform_balances.py",
   "oto_mcp/capabilities/platform_connectors.py",
   "oto_mcp/capabilities/platform_instructions.py",
   "oto_mcp/capabilities/platform_invites.py",
