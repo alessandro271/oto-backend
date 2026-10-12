@@ -210,6 +210,13 @@ def _epingler_org(ctx: ResolvedCtx):
     return session_org.set_call_org(ctx.org_id) if ctx.org_id is not None else None
 
 
+#: Les arrêts qui sont une BORNE (la page d'épreuve s'est arrêtée parce qu'on l'a
+#: bornée), pas un refus : avec des lignes bâties, l'épreuve a réussi. Une borne que le
+#: moteur ajouterait s'inscrit ici ; un refus (`call_refused`, `mapping_drift`,
+#: `repeated_failure`, un tableau indisponible…) n'y entre jamais.
+BORNES_D_EPREUVE = frozenset({None, "max_pages", "spend_cap", "time_budget"})
+
+
 async def _plateforme_pour_le_code(ctx: ResolvedCtx, corps: dict, op: str) -> None:
     """Éprouver ou publier une recette-CODE : la plateforme seule, comme une fonction.
     Le code tourne avec les droits de qui l'exécute, pas de qui l'a écrit (#1202)."""
@@ -306,11 +313,15 @@ async def _recipe(ctx: ResolvedCtx, inp: RecipeInput) -> dict:
                                                   fiche["owner_id"], fiche["slug"]),
                 "version": {"version": version["version"], "status": "publiee"},
                 "receipt": recu}
-    # publish : l'épreuve doit avoir produit des lignes, sans refus.
-    if recu["stopped"] not in (None, "max_pages") or not recu["rows_built"]:
+    # publish : l'épreuve doit avoir produit des lignes, sans refus. Une BORNE atteinte
+    # (pages, dépense, horloge) n'est pas un refus : une recette à petit `max_units`
+    # s'arrête sur `spend_cap` au milieu de sa première page, lignes bâties.
+    if recu["stopped"] not in BORNES_D_EPREUVE or not recu["rows_built"]:
         raise AuthzDenied(409, "test_failed",
-                          "The test page produced no row (or was refused): fix the recipe "
-                          "or its params before publishing.", details={"receipt": recu})
+                          f"The test page built {recu['rows_built']} row(s) and stopped on "
+                          f"`{recu['stopped'] or 'end of results'}`: publishing needs at "
+                          "least one row and no refusal. Fix the recipe or its params "
+                          "before publishing.", details={"receipt": recu})
     rapport = {k: recu[k] for k in ("items_seen", "rows_built", "skipped_where",
                                     "skipped_no_key", "fill")}
     await run_in_threadpool(db_recipes.decide_version, fiche["id"], version["version"],
@@ -342,7 +353,9 @@ CAPABILITIES += [
             "key gets the recipe's key on the first run) · op=list · op=get · op=versions. "
             "`for_each` fans out: each row of a parent table whose `status_column` is empty "
             "drives the call (people per company…), then gets `done`, `empty` or "
-            "`failed:<code>`; the parent table must be writable. A column the published "
+            "`failed:<code>`; a parent whose cited input is empty is not selected (never "
+            "called nor marked) and is counted in `skipped_empty_input` when the run ends; "
+            "the parent table must be writable. A column the published "
             "test filled that comes back empty on a whole page is `mapping_drift`: the run "
             "stops (or, under `for_each`, that parent is marked and the next one runs). "
             "op=test under `for_each` bills up to 3 pages. A fresh run (no `resume`) starts "

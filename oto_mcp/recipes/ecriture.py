@@ -292,6 +292,21 @@ def parents_en_attente(p: Parents, *, limite: int, premiere: Optional[str],
     return out[:limite]
 
 
+def parents_aux_entrees_vides(p: Parents) -> int:
+    """Les lignes en attente (état vide, filtre) qu'une entrée vide écarte de la
+    sélection (`requises`) : jamais appelées, jamais marquées. Comptées pour que le reçu
+    le dise — sans cela une exécution `done` les laisse en attente sans un mot."""
+    if not p.requises:
+        return 0
+    attente = [{"field": p.etat, "op": "empty", "value": True}]
+
+    def _compter() -> int:
+        toutes = p.store.count_rows(p.adresse, filter=p.filtre, filters=attente)
+        pleines = p.store.count_rows(p.adresse, filter=p.filtre, filters=p.clauses())
+        return max(0, toutes - pleines)
+    return _lu_borne("lignes parentes d'une recette", _compter)
+
+
 def portee_ligne(ligne: dict) -> dict:
     """La portée `row` d'une ligne parente : ses valeurs nues (couches retirées), et
     son `_id`."""

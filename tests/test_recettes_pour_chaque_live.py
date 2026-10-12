@@ -131,6 +131,7 @@ def test_chaque_ligne_parente_declenche_l_appel_puis_recoit_son_etat(serveur):
     recu = _executer(m, _corps(parents), cible)
     assert recu["done"] and recu["written"] == 7
     assert recu["parents"] == {"done": 2, "empty": 1, "failed": 0}
+    assert recu["skipped_empty_input"] == 0
     assert _etats(parents) == {"acme": "done", "globex": "empty", "initech": "done"}
     assert {l["company"] for l in _lignes(cible)} == {"acme", "initech"}
     # Une exécution suivante ne repaie aucune ligne faite.
@@ -258,6 +259,9 @@ def test_le_filtre_et_les_entrees_vides_ecartent_des_parents_sans_appel(serveur)
     assert {a["company"] for a in appels} == {"acme"}
     etats = {(l.get("slug"), l["tier"]): l.get("people_status") for l in _lignes(parents)}
     assert etats == {("acme", "a"): "done", ("initech", "b"): None, (None, "a"): None}
+    # La ligne sans `slug` attend encore : le reçu le dit (Initech est hors filtre, pas
+    # comptée).
+    assert recu["skipped_empty_input"] == 1
 
 
 def test_un_filtre_refuse_l_est_avant_tout_appel(serveur):

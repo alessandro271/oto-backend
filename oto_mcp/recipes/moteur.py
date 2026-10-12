@@ -449,7 +449,9 @@ async def _parcourir(fe: dict, parents, ecrire: bool, etat: dict, recu: dict,
                      tirer, *, fin: float, appels: dict) -> None:
     """Les lignes parentes EN ATTENTE (colonne d'état vide, filtre, entrées remplies),
     une à une : leur appel, puis leur état — `done` (des éléments), `empty` (aucun),
-    `failed:<code>` (son entrée refusée : `ECHECS_DE_LIGNE`, ou sa page en dérive). Une ligne coupée par un
+    `failed:<code>` (son entrée refusée : `ECHECS_DE_LIGNE`, ou sa page en dérive). Une
+    ligne dont une entrée citée est vide n'est pas sélectionnée : jamais appelée ni
+    marquée, elle est comptée au reçu (`skipped_empty_input`) quand l'exécution s'achève. Une ligne coupée par un
     plafond ou un échec du compte reste en attente — le jeton `resume` la reprend à sa
     page, une exécution neuve du début (les lignes déjà écrites sont reconnues par leur
     clé). Une série d'échecs identiques (`DISJONCTEUR`) arrête tout : ses lignes sont
@@ -497,6 +499,14 @@ async def _parcourir(fe: dict, parents, ecrire: bool, etat: dict, recu: dict,
                 return
             premiere = None
             if not lot:
+                # `done` dit que plus AUCUNE ligne sélectionnable n'attend ; celles qu'une
+                # entrée vide écarte attendent encore, et le reçu les compte.
+                try:
+                    recu["skipped_empty_input"] = await run_in_threadpool(
+                        ecriture.parents_aux_entrees_vides, parents)
+                except ecriture.TableauIndisponible as e:
+                    _arreter(recu, e.code, error=str(e))
+                    return
                 recu["done"] = True
                 return
             for ligne in lot:

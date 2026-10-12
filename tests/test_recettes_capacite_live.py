@@ -4,6 +4,7 @@ son jeton de délégation lance une recette comme une personne, dans l'org de so
 from __future__ import annotations
 
 import asyncio
+import sys
 import uuid
 
 import pytest
@@ -84,6 +85,31 @@ def test_ecrire_publier_executer(capa):
     fiche = appeler(op="get", slug=slug)
     assert fiche["recipe"]["published_version"] == 1
     assert fiche["version"]["test_report"]["fill"] == {"linkedin_url": 1.0, "title": 1.0}
+
+
+def test_une_epreuve_arretee_par_son_plafond_de_depense_se_publie(capa):
+    """Une recette à petit `max_units` s'arrête sur `spend_cap` au milieu de sa première
+    page, lignes bâties : c'est une BORNE, pas un refus — elle se publie."""
+    appeler, _ = capa
+    slug = f"acme-{uuid.uuid4().hex[:6]}"
+    corps = {**CORPS, "units": "calls", "limits": {"max_units": 1}}
+    appeler(op="create", slug=slug, title="t", recipe=corps)
+    pub = appeler(op="publish", slug=slug, version=1)
+    assert pub["version"]["status"] == "publiee"
+    assert pub["receipt"]["stopped"] == "spend_cap" and pub["receipt"]["rows_built"] == 2
+    assert appeler(op="get", slug=slug)["version"]["test_report"]["rows_built"] == 2
+
+
+def test_une_epreuve_sans_ligne_est_refusee_en_le_disant(capa):
+    from oto_mcp.capabilities._types import AuthzDenied
+    appeler, monkeypatch = capa
+    slug = f"acme-{uuid.uuid4().hex[:6]}"
+    monkeypatch.setattr(sys.modules[__name__], "PERSONNES", [])
+    appeler(op="create", slug=slug, title="t", recipe=CORPS)
+    with pytest.raises(AuthzDenied) as e:
+        appeler(op="publish", slug=slug, version=1)
+    assert _code(e) == "test_failed"
+    assert "built 0 row(s)" in str(e.value)
 
 
 def test_proposer_exige_la_derniere_version_lue(capa):
