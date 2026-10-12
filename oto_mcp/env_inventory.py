@@ -596,7 +596,8 @@ _REGLAGES: tuple[Variable, ...] = (
              "pas.",
              ("oto_mcp/sentry_setup.py:102", "oto_mcp/config.py:151")),
     Variable("OTO_SENTRY_RELEASE", Classe.REGLAGE, None,
-             "Release annoncée à Sentry (ex. SHA du deploy).",
+             "Release annoncée à Sentry — vide, l'étiquette de la version servie "
+             "(`v1.2.3+6d5bf16b`, celle de `/api/version`).",
              ("oto_mcp/sentry_setup.py:103",)),
     Variable("OTO_SENTRY_TRACES_SAMPLE_RATE", Classe.REGLAGE, "0",
              "Taux d'échantillonnage du tracing de perf Sentry — 0 = off.",

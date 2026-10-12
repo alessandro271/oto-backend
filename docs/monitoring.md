@@ -838,7 +838,9 @@ JSON-RPC en **HTTP 200**, invisible à l'intégration Starlette, donc capturée 
 l'exception est vivante (vrai traceback, tag `mcp.tool` + `user.id=sub`). RGPD :
 `send_default_pii=False` **et** `include_local_variables=False`. `before_send`
 **droppe les 4xx amont** (`HTTP 4xx` d'une API tierce = input rejeté, pas un bug
-backend). Env box : `OTO_SENTRY_{DSN,ENV,RELEASE,TRACES_SAMPLE_RATE}` ; région **EU**
+backend). Release : `OTO_SENTRY_RELEASE` s'il est posé, sinon l'étiquette de la version
+servie (`v1.2.3+6d5bf16b`, celle de `/api/version`) — une instance montée par le lanceur
+n'a pas à la recopier. Env box : `OTO_SENTRY_{DSN,ENV,RELEASE,TRACES_SAMPLE_RATE}` ; région **EU**
 `de.sentry.io` (org slug `otomata-vz`). Surveillance/triage = guide oto
 `surveillance-erreurs` (token API en SOPS `sentry_api_token`).
 
