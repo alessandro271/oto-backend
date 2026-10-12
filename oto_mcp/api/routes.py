@@ -17,7 +17,7 @@ Les handlers vivent par DOMAINE, chacun une fonction de module appelable seule :
 | `api/media.py`      | avatar user, logo d'org (multipart)                   |
 | `api/projects.py`   | fichiers bruts d'un projet, export ZIP                |
 | `api/uploads.py`    | réception d'un upload signé (`/api/upload/{token}`)   |
-| `api/pennylane_firm.py` | relais d'upload vers la GED Pennylane (`/api/relay/{token}`) |
+| `api/pennylane_firm.py` | relais d'upload vers la GED Pennylane (`/api/relay/{token}`, manifeste d'un lot `/api/relay/batch/{token}`) |
 
 Les modules ANTÉRIEURS à la découpe gardent leur forme : datastore, sirene,
 accords, zoho, salesforce, billing — ils exposent un
@@ -879,6 +879,9 @@ def make_routes(verifier: JWTVerifier, mcp_instance=None) -> Iterable:
         # jeton `typ="relay"` : multipart débordé sur disque, relayé en flux, jamais
         # lu en mémoire (`api/pennylane_firm.py`). Un `curl -F`, aucun formulaire.
         Route("/api/relay/{token}", api_pennylane_firm.relay_receive, methods=["POST"]),
+        # Le manifeste d'un lot de liens de relais (TSV), jeton `typ="relay_batch"`.
+        # Aucune collision avec la ligne au-dessus : `{token}` n'avale pas de `/`.
+        Route("/api/relay/batch/{token}", api_pennylane_firm.relay_manifest, methods=["GET"]),
         # Page de partage publique server-rendered (lisible par un agent, ADR gap
         # « pages SPA non lisibles »). Servie sous dashboard.oto.ninja via Caddy.
         Route("/p/d/{token}", public.public_doc_view, methods=["GET"]),

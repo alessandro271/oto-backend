@@ -20,11 +20,18 @@ base, le coffre ou Pennylane, appelé depuis un thread (`run_in_threadpool`).
 - **Aucune connexion base pendant le transfert** : `preparer` lit tout ce qu'il faut
   (appartenance, suspension, activation, coffre, doublon) et rend la main ;
   `relayer` ne parle qu'à Pennylane.
+- **Par lots** (`frapper_lot`) : jusqu'à `LOT_MAX` liens d'un coup, chacun le même
+  jeton `relay` qu'à l'unité. Les URL ne sont PAS rendues à l'agent (il devrait les
+  recopier, ~550 caractères de jeton chacune) : elles vont au MANIFESTE, gardé en
+  mémoire du processus (`deposer_manifeste`) et servi en TSV par
+  `GET /api/relay/batch/{token}` sous un jeton `relay_batch` distinct.
 """
 from __future__ import annotations
 
 import os
+import secrets
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -36,6 +43,21 @@ TYP = "relay"
 KIND = "pennylane_firm_dms"
 TTL_S = 900
 NOM_MAX = 255
+
+#: Le jeton du MANIFESTE d'un lot : une famille à part, qui ne s'ouvre ni sur
+#: `/api/upload/{token}` ni sur `POST /api/relay/{token}`, et inversement.
+TYP_LOT = "relay_batch"
+KIND_LOT = "pennylane_firm_manifest"
+
+#: Taille maximale d'un lot. Les liens vivent 15 min (`TTL_S`) : 100 fichiers de
+#: 100 Mo (le plafond du relais) sur 4 flux à ~9 Mo/s montent en ~280 s, dans le TTL
+#: avec de la marge ; sur une montée plus lente, la description conseille des lots
+#: plus petits pour les gros fichiers. Et la réponse comme le manifeste (≈550
+#: caractères de jeton par lien, ~55 Ko à 100) restent de taille bornée.
+LOT_MAX = 100
+#: Manifestes vivants au plus dans le processus. Au-delà, refus nommé réessayable
+#: plutôt qu'une éviction silencieuse d'un lot en cours.
+MANIFESTES_MAX = 500
 
 #: PROVISOIRE : à relever après mesure de la limite réelle de Pennylane, que sa
 #: documentation ne donne pas.
@@ -110,6 +132,170 @@ def verifier(jeton: str) -> Optional[dict]:
     if cible.get("kind") != KIND or cible.get("parent_folder_id") is None:
         return None
     return payload
+
+
+# ── Par lots : frappe, et le manifeste qui porte les liens ──────────────────────────
+
+def valider_nom_de_lot(name: Optional[str]) -> str:
+    """`valider_nom`, plus ce que le manifeste TSV exige : une tabulation ou un saut de
+    ligne dans un nom casserait sa ligne. Refusé plutôt qu'échappé."""
+    nom = valider_nom(name)
+    if any(c in nom for c in "\t\r\n"):
+        raise Refus(400, "invalid_name",
+                    "`name` cannot contain a tab or a line break: the batch manifest "
+                    "is tab-separated, one line per file.")
+    return nom
+
+
+def _ligne_refusee(dossier, nom, e: Refus) -> dict:
+    return {"parent_folder_id": dossier, "name": nom, "code": e.code,
+            "message": e.message}
+
+
+def _dossier_existe(c, company_id: int, dossier: int) -> bool:
+    """UNE lecture filtrée par id (forme `eq` + valeur chaîne, celle mesurée en réel).
+    L'id rendu est relu : un filtre ignoré en amont ne passerait pas pour « trouvé »."""
+    page = socle.traduire(lambda: c.list_dms_folders(
+        company_id, filter=[{"field": "id", "operator": "eq", "value": str(dossier)}]),
+        f"the lookup of folder {dossier}")
+    return any(str(it.get("id")) == str(dossier) for it in page.get("items") or [])
+
+
+def frapper_lot(c, sub: str, org_id: int, company_id: int, items: list) -> dict:
+    """Contrôle chaque élément, frappe un lien par élément accepté, dépose le
+    manifeste. Un refus PROPRE à un élément le range dans `refused` sans faire échouer
+    le lot ; une erreur de Pennylane qui ne l'est pas (429, 401, scope, 5xx, société
+    introuvable) lève son `Refus` AVANT toute frappe. Synchrone (réseau)."""
+    if not items:
+        raise Refus(400, "empty_batch", f"`items` holds 1 to {LOT_MAX} files.")
+    if len(items) > LOT_MAX:
+        raise Refus(400, "batch_too_large",
+                    f"{len(items)} files: a batch holds {LOT_MAX} at most (the links "
+                    f"live {TTL_S // 60} minutes). Split it.")
+    refuses: dict[int, dict] = {}
+    vivants: list[tuple[int, int, str]] = []   # (rang, dossier, nom)
+    vus: set[tuple[int, str]] = set()
+    for rang, it in enumerate(items):
+        dossier, brut = int(it["parent_folder_id"]), it.get("name")
+        try:
+            nom = valider_nom_de_lot(brut)
+        except Refus as e:
+            refuses[rang] = _ligne_refusee(dossier, brut, e)
+            continue
+        if (dossier, nom) in vus:
+            refuses[rang] = _ligne_refusee(dossier, nom, Refus(
+                400, "duplicate_in_batch",
+                "The same name and folder appear earlier in this batch: only the first "
+                "one gets a link."))
+            continue
+        vus.add((dossier, nom))
+        vivants.append((rang, dossier, nom))
+
+    dossiers = list(dict.fromkeys(d for _, d, _ in vivants))
+    absents = {d for d in dossiers if not _dossier_existe(c, company_id, d)}
+    incomplets: dict[int, Refus] = {}
+    acceptes: list[tuple[int, int, str]] = []
+    for rang, dossier, nom in vivants:
+        if dossier in absents:
+            refuses[rang] = _ligne_refusee(dossier, nom, Refus(
+                404, "folder_not_found",
+                f"No folder {dossier} in company {company_id}: take its id from "
+                "`pennylane_firm_tree` (kind=folders)."))
+            continue
+        if dossier in incomplets:
+            refuses[rang] = _ligne_refusee(dossier, nom, incomplets[dossier])
+            continue
+        try:
+            socle.verifier_absent(c, org_id, company_id, dossier, nom)
+        except Refus as e:
+            if e.code == "duplicate_check_incomplete":
+                incomplets[dossier] = e
+            elif e.code != "name_already_exists":
+                raise
+            refuses[rang] = _ligne_refusee(dossier, nom, e)
+            continue
+        acceptes.append((rang, dossier, nom))
+
+    pret = [{"parent_folder_id": d, "name": n} for _, d, n in acceptes]
+    refuse = [refuses[r] for r in sorted(refuses)]
+    if not acceptes:
+        return {"manifest_url": None, "expires_at": None, "ready": pret,
+                "refused": refuse}
+    lignes, expire = [], 0
+    for _, dossier, nom in acceptes:
+        lien = frapper(sub, org_id, company_id, dossier, nom)
+        lignes.append((dossier, nom, lien["url"]))
+        expire = max(expire, int(lien["expires_at"]))
+    manifest_id = deposer_manifeste(sub, org_id, lignes, expire)
+    jeton, exp = upload_tokens.sign(sub, org_id, {"kind": KIND_LOT,
+                                                  "manifest_id": manifest_id},
+                                    ttl=TTL_S, typ=TYP_LOT)
+    return {"manifest_url": f"{config.public_base_url()}/api/relay/batch/{jeton}",
+            "expires_at": exp, "ready": pret, "refused": refuse}
+
+
+# Le magasin des manifestes : EN MÉMOIRE du processus (le serveur est mono-processus).
+# Un redémarrage les perd — assumé : la route le dit (« mint the batch again »), et
+# les liens eux-mêmes ne sont rien de plus que des jetons signés, refrappables.
+_MANIFESTES_VERROU = threading.Lock()
+# id -> {"sub", "org", "expire": epoch, "lignes": [(dossier, nom, url)]}
+_MANIFESTES: dict[str, dict] = {}
+
+
+def deposer_manifeste(sub: str, org_id: int, lignes: list, expire: int) -> str:
+    """Garde les lignes d'un lot sous un id aléatoire jusqu'à `expire` (epoch, celle
+    des liens). Purge les expirés à chaque écriture ; plein, refuse (réessayable)."""
+    with _MANIFESTES_VERROU:
+        maintenant = time.time()
+        for mid in [m for m, e in _MANIFESTES.items() if e["expire"] <= maintenant]:
+            del _MANIFESTES[mid]
+        if len(_MANIFESTES) >= MANIFESTES_MAX:
+            raise Refus(503, "manifest_store_full",
+                        f"{MANIFESTES_MAX} batches are already waiting on this server: "
+                        "retry in a minute.", retryable=True, retry_after=60)
+        mid = secrets.token_urlsafe(16)
+        _MANIFESTES[mid] = {"sub": sub, "org": org_id, "expire": expire,
+                            "lignes": list(lignes)}
+    return mid
+
+
+def verifier_manifeste(jeton: str) -> Optional[dict]:
+    """Le payload d'un jeton de MANIFESTE valide (signature, `typ`, expiration, cible),
+    `None` sinon."""
+    payload = upload_tokens.verify(jeton, typ=TYP_LOT)
+    if payload is None:
+        return None
+    cible = payload.get("target") or {}
+    if cible.get("kind") != KIND_LOT or not cible.get("manifest_id"):
+        return None
+    return payload
+
+
+def lire_manifeste(sub: str, org_id: Optional[int], manifest_id: str) -> str:
+    """Le manifeste en TSV (`parent_folder_id`, `name`, `url`), pour le compte et l'org
+    SCELLÉS. Rejoue l'appartenance (base) : synchrone, appelé hors boucle. Lectures
+    répétées permises tant qu'il vit ; les liens, eux, restent à usage unique."""
+    from .. import roles
+
+    if org_id is None:
+        raise Refus(403, "no_organization",
+                    "This manifest was minted outside any organization: mint the batch "
+                    "again within the organization that holds the firm token.")
+    if not roles.is_org_member(sub, org_id):
+        raise Refus(403, "not_an_org_member",
+                    f"The account that minted this batch is no longer a member of "
+                    f"organization {org_id}.")
+    with _MANIFESTES_VERROU:
+        e = _MANIFESTES.get(manifest_id)
+        vivant = (e is not None and e["expire"] > time.time() and e["sub"] == sub
+                  and e["org"] == org_id)
+        lignes = list(e["lignes"]) if vivant else None
+    if lignes is None:
+        raise Refus(404, "manifest_expired",
+                    "This batch manifest is gone (15 minutes passed, or the server "
+                    "restarted): mint the batch again.")
+    return "".join(f"{d}\t{n}\t{u}\n" for d, n, u in
+                   [("parent_folder_id", "name", "url"), *lignes])
 
 
 # ── Préparer (base, coffre) puis relayer (Pennylane seul) ──────────────────────────
