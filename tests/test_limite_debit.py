@@ -62,10 +62,24 @@ def _entetes(msgs):
     return {k: v for k, v in msgs[0]["headers"]}
 
 
-def _garde(app=None, mode=ld.ENFORCE, horloge=None, **par_minute):
+def _garde(app=None, mode=ld.ENFORCE, horloge=None, exemptees=(), publiees=None,
+           murale=None, **par_minute):
     bornes = {c: ld.Borne(par_minute.get(c, d)) for c, d in ld.DEFAUTS.items()}
     return ld.LimiteDebit(app or _app_qui_rend(), mode=mode, bornes=bornes,
-                          horloge=horloge or Horloge())
+                          horloge=horloge or Horloge(), exemptees=exemptees,
+                          horloge_murale=murale or (lambda: 60_000.0),
+                          publier=(publiees.extend if publiees is not None
+                                   else (lambda lignes: None)))
+
+
+def _app_par_jeton(statuts: dict, defaut: int = 401):
+    """Rend le statut associé au jeton porté (`defaut` sinon)."""
+    async def app(scope, receive, send):
+        auth = dict(scope["headers"]).get(b"authorization", b"").decode()
+        statut = statuts.get(auth.removeprefix("Bearer "), defaut)
+        await send({"type": "http.response.start", "status": statut, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+    return app
 
 
 # ── la classe d'une requête ────────────────────────────────────────────────
@@ -81,7 +95,7 @@ def _garde(app=None, mode=ld.ENFORCE, horloge=None, **par_minute):
     ("GET", "/api/public/docs/abc", False, "sensible"),
     ("GET", "/p/d/abc", False, "sensible"),
     ("POST", "/o/u/abc", False, "sensible"),
-    ("POST", "/oauth/register", False, "sensible"),
+    ("POST", "/oauth/register", False, "anonyme"),
     ("GET", "/oauth/authorize", False, "sensible"),
     ("GET", "/api/zoho/oauth/callback", False, "sensible"),
     ("POST", "/api/hooks/42", False, "webhook"),
@@ -195,15 +209,7 @@ async def test_des_jetons_inventes_epuisent_le_budget_de_ladresse():
 async def test_un_jeton_deja_accepte_passe_malgre_le_budget_epuise():
     """Les 401 de découverte d'un client hébergé remplissent le compteur de son
     adresse ; ses utilisateurs déjà connectés ne doivent pas en pâtir."""
-    statuts = {"bon": 200}
-
-    async def app(scope, receive, send):
-        auth = dict(scope["headers"]).get(b"authorization", b"").decode()
-        statut = statuts.get(auth.removeprefix("Bearer "), 401)
-        await send({"type": "http.response.start", "status": statut, "headers": []})
-        await send({"type": "http.response.body", "body": b""})
-
-    garde = _garde(app=app, echecs=4)
+    garde = _garde(app=_app_par_jeton({"bon": 200}), echecs=4)
     assert _statut(await _appel(garde, _scope(jeton="bon"))) == 200
     for i in range(2):
         await _appel(garde, _scope(jeton=f"faux{i}"))
@@ -223,6 +229,75 @@ async def test_un_404_compte_comme_echec_sur_une_route_a_secret_seulement():
     for _ in range(2):
         await _appel(garde, _scope("/api/invitations/devine", "GET"))
     assert _statut(await _appel(garde, _scope("/api/invitations/autre", "GET"))) == 429
+
+
+@pytest.mark.asyncio
+async def test_le_401_dun_jeton_reconnu_ne_coute_rien_a_ses_voisins():
+    """Un jeton déjà accepté qui expire (401, puis rafraîchissement) ne débite pas le
+    budget de l'adresse qu'il partage : ses voisins inconnus passent toujours."""
+    statuts = {"connu": 200}
+    garde = _garde(app=_app_par_jeton(statuts), echecs=4, jeton=600)   # rafale 2
+    assert _statut(await _appel(garde, _scope(jeton="connu"))) == 200
+    statuts["connu"] = 401                                 # il expire
+    for _ in range(10):
+        assert _statut(await _appel(garde, _scope(jeton="connu"))) == 401
+    statuts["voisin"] = 200
+    assert _statut(await _appel(garde, _scope(jeton="voisin"))) == 200
+
+
+@pytest.mark.asyncio
+async def test_un_webhook_ne_consomme_ni_ne_subit_le_budget_dechecs():
+    """Un envoyeur partagé qui retente pendant des jours sur un crochet supprimé (404)
+    n'épuise pas le budget de son adresse, et un budget épuisé par ailleurs ne ferme
+    pas ses crochets vivants."""
+    garde = _garde(app=_app_qui_rend(404), echecs=4, webhook=600)
+    for _ in range(20):
+        assert _statut(await _appel(garde, _scope("/api/hooks/supprime"))) == 404
+    assert _statut(await _appel(garde, _scope("/api/invitations/x", "GET"))) == 404
+
+    garde = _garde(app=_app_par_jeton({}, 401), echecs=4, webhook=600)
+    for i in range(2):
+        await _appel(garde, _scope(jeton=f"faux{i}"))
+    assert _statut(await _appel(garde, _scope(jeton="faux-suivant"))) == 429
+    assert _statut(await _appel(garde, _scope("/api/hooks/vivant"))) == 401
+
+
+@pytest.mark.asyncio
+async def test_faire_tourner_le_chemin_dun_webhook_bute_sur_le_plafond_dadresse():
+    """Sans plafond par adresse, `/api/hooks/<deviné>` rendrait un seau neuf à chaque
+    essai."""
+    garde = _garde(app=_app_qui_rend(404), webhook=2)        # plafond 20/min, rafale 10
+    statuts = [_statut(await _appel(garde, _scope(f"/api/hooks/{i}"))) for i in range(11)]
+    assert statuts[:10] == [404] * 10 and statuts[10] == 429
+    assert _statut(await _appel(garde, _scope("/api/hooks/0", ip=B))) == 404
+
+
+@pytest.mark.asyncio
+async def test_une_adresse_exemptee_ne_paie_que_ses_jetons():
+    garde = _garde(app=_app_par_jeton({}, 401), exemptees=("192.0.2.0/24",),
+                   anonyme=2, sensible=2, echecs=2, jeton=2)
+    for _ in range(10):
+        assert _statut(await _appel(garde, _scope(ip=A))) == 401
+        assert _statut(await _appel(garde, _scope("/p/d/x", "GET", ip=A))) == 401
+    for i in range(10):
+        assert _statut(await _appel(garde, _scope(jeton=f"faux{i}", ip=A))) == 401
+    # la classe `jeton` s'applique toujours
+    assert _statut(await _appel(garde, _scope(jeton="meme", ip=A))) == 401
+    assert _statut(await _appel(garde, _scope(jeton="meme", ip=A))) == 429
+    # une adresse hors du réseau exempté est bornée comme toute autre
+    assert _statut(await _appel(garde, _scope(ip=B))) == 401
+    assert _statut(await _appel(garde, _scope(ip=B))) == 429
+
+
+def test_adresses_exemptees_lues_dans_lenv(monkeypatch, caplog):
+    monkeypatch.setenv("OTO_DEBIT_ADRESSES_EXEMPTEES",
+                       " 192.0.2.7, 198.51.100.0/24 ,pas-une-adresse,")
+    with caplog.at_level(logging.WARNING, logger="oto_mcp.limite_debit"):
+        reseaux = ld.adresses_exemptees_depuis_env()
+    assert [str(r) for r in reseaux] == ["192.0.2.7/32", "198.51.100.0/24"]
+    assert any("pas-une-adresse" in r.getMessage() for r in caplog.records)
+    monkeypatch.delenv("OTO_DEBIT_ADRESSES_EXEMPTEES")
+    assert ld.adresses_exemptees_depuis_env() == ()
 
 
 # ── modes, transport ───────────────────────────────────────────────────────
@@ -279,13 +354,17 @@ async def test_hors_http_rien_nest_touche():
 
 # ── réglages ───────────────────────────────────────────────────────────────
 
-def test_mode_inconnu_vaut_enforce(monkeypatch):
-    monkeypatch.setenv("OTO_DEBIT_MODE", "enforced")
-    assert ld.mode_depuis_env() == ld.ENFORCE
-    monkeypatch.setenv("OTO_DEBIT_MODE", "Report")
+def test_le_defaut_est_report_et_linconnu_aussi(monkeypatch):
+    """La même image tourne derrière des proxys qui n'écrasent pas les en-têtes
+    d'adresse : `enforce` se pose instance par instance, jamais par défaut."""
+    monkeypatch.delenv("OTO_DEBIT_MODE", raising=False)
     assert ld.mode_depuis_env() == ld.REPORT
-    monkeypatch.delenv("OTO_DEBIT_MODE")
+    monkeypatch.setenv("OTO_DEBIT_MODE", "enforced")
+    assert ld.mode_depuis_env() == ld.REPORT
+    monkeypatch.setenv("OTO_DEBIT_MODE", " Enforce ")
     assert ld.mode_depuis_env() == ld.ENFORCE
+    monkeypatch.setenv("OTO_DEBIT_MODE", "off")
+    assert ld.mode_depuis_env() == ld.OFF
 
 
 def test_bornes_lues_dans_lenv(monkeypatch):
@@ -300,9 +379,92 @@ def test_bornes_lues_dans_lenv(monkeypatch):
     assert b["webhook"].par_minute == ld.DEFAUTS["webhook"]
 
 
-def test_le_defaut_par_jeton_ne_contredit_aucune_route_lourde():
-    """Le débit par jeton s'applique EN PLUS des routes lourdes : réglé plus bas que
-    l'une d'elles, il couperait le relevé légitime qu'elle a été réglée pour laisser
-    passer (#1145)."""
+def test_le_debit_par_jeton_couvre_la_minute_de_chaque_route_lourde():
+    """Le débit par jeton s'applique EN PLUS des routes lourdes (#1145). Ce qu'on
+    garantit : le débit SOUTENU et ce qu'un seau plein laisse passer en une minute
+    couvrent la borne par minute de chacune. Ce qu'on ne garantit PAS : une rafale
+    instantanée de toute une minute de route lourde (sa fenêtre glissante l'admet,
+    notre rafale est la moitié du débit) — aucun consommateur recensé n'en émet."""
     from oto_mcp.api.routes_lourdes import ROUTES_LOURDES
-    assert ld.DEFAUTS["jeton"] >= max(r.par_minute for r in ROUTES_LOURDES)
+    jeton = ld.Borne(ld.DEFAUTS["jeton"])
+    plus_haute = max(r.par_minute for r in ROUTES_LOURDES)
+    assert jeton.par_minute >= plus_haute
+    assert jeton.rafale + jeton.par_minute >= plus_haute
+
+
+# ── la mesure : agrégée en mémoire, écrite au plus une fois par classe et par minute ──
+
+@pytest.mark.asyncio
+async def test_la_mesure_compte_par_classe_et_ne_publie_qua_la_minute_suivante():
+    publiees, murale = [], {"t": 60_000.0}
+    garde = _garde(mode=ld.REPORT, anonyme=4, jeton=600, publiees=publiees,
+                   murale=lambda: murale["t"])
+    for _ in range(5):
+        await _appel(garde, _scope(ip=A))           # rafale 2 : 2 passent, 3 « refusés »
+    await _appel(garde, _scope(jeton="t"))
+    assert publiees == [], "rien n'est écrit tant que la minute n'est pas close"
+
+    murale["t"] += 60
+    await _appel(garde, _scope(ip=B))
+    par_classe = {l["tool"]: l for l in publiees}
+    assert set(par_classe) == {"debit:anonyme", "debit:jeton"}
+    anon = par_classe["debit:anonyme"]
+    assert anon["kind"] == "debit" and anon["ok"] is False and "sub" not in anon
+    assert {k: anon["args"][k] for k in ("mode", "allowed", "would_refuse", "refused",
+                                         "peak_pct", "limit_per_minute")} == {
+        "mode": "report", "allowed": 2, "would_refuse": 3, "refused": 0,
+        "peak_pct": 100.0, "limit_per_minute": 4}
+    assert anon["args"]["minute"] == "1970-01-01T16:40:00+00:00"
+    assert par_classe["debit:jeton"]["args"]["allowed"] == 1
+    assert par_classe["debit:jeton"]["ok"] is True
+    assert A not in json.dumps(publiees), "jamais une adresse dans la mesure"
+
+
+@pytest.mark.asyncio
+async def test_en_enforce_la_mesure_compte_les_refus_servis():
+    publiees, murale = [], {"t": 60_000.0}
+    garde = _garde(anonyme=2, publiees=publiees, murale=lambda: murale["t"])
+    for _ in range(3):
+        await _appel(garde, _scope())
+    murale["t"] += 61
+    await _appel(garde, _scope(ip=B))
+    (anon,) = [l for l in publiees if l["tool"] == "debit:anonyme"]
+    assert (anon["args"]["allowed"], anon["args"]["would_refuse"],
+            anon["args"]["refused"]) == (1, 0, 2)
+
+
+@pytest.mark.asyncio
+async def test_mille_requetes_dans_la_minute_font_une_ligne_par_classe():
+    publiees, murale = [], {"t": 60_000.0}
+    garde = _garde(mode=ld.REPORT, publiees=publiees, murale=lambda: murale["t"])
+    for i in range(1000):
+        await _appel(garde, _scope(ip=f"192.0.2.{i % 200}"))
+    murale["t"] += 60
+    await _appel(garde, _scope())
+    assert [l["tool"] for l in publiees] == ["debit:anonyme"]
+    assert publiees[0]["args"]["allowed"] == 1000
+
+
+def test_publier_ecrit_dans_le_journal_hors_boucle(monkeypatch):
+    from oto_mcp import db, limite_debit_mesure as mesure
+    ecrites = []
+    monkeypatch.setattr(db, "insert_tool_call", ecrites.append)
+    m = mesure.Mesure("report")
+    m.basculer(1000, {})
+    m.noter_decision("anonyme", "allowed")
+    lignes = m.basculer(1001, {"anonyme": 600.0})
+    mesure.publier(lignes)
+    assert len(ecrites) == 1 and ecrites[0]["tool"] == "debit:anonyme"
+    assert ecrites[0]["args"]["limit_per_minute"] == 600
+
+
+def test_un_echec_decriture_de_la_mesure_ne_leve_pas(monkeypatch, caplog):
+    from oto_mcp import db, limite_debit_mesure as mesure
+
+    def boom(_):
+        raise RuntimeError("base indisponible")
+
+    monkeypatch.setattr(db, "insert_tool_call", boom)
+    with caplog.at_level(logging.WARNING, logger="oto_mcp.limite_debit_mesure"):
+        mesure.publier([{"tool": "debit:anonyme"}])
+    assert any("en échec" in r.getMessage() for r in caplog.records)

@@ -17,43 +17,64 @@ régulier `par_minute`, rafale `par_minute / 2`), et sa clé :
   adresse : un client hébergé (claude.ai) sert TOUS ses utilisateurs depuis quelques
   adresses, une borne par adresse sur le trafic authentifié les couperait ensemble ;
 - `sensible` — sans jeton, une route dont le chemin porte un secret ou qui ouvre un
-  geste d'authentification (invitation, partage public, désabonnement, DCR, autorisation,
-  retours OAuth) : clé = adresse, borne STRICTE — c'est la surface d'énumération ;
+  geste d'authentification interactif (invitation, partage public, désabonnement,
+  autorisation, retours OAuth) : clé = adresse, borne STRICTE — c'est la surface
+  d'énumération. `/oauth/register` (DCR) n'y est PAS : un client hébergé enregistre
+  un client par connexion d'utilisateur, depuis sa sortie partagée — il est `anonyme` ;
 - `webhook` — un tiers qui déclenche (`/api/hooks/*`, `/api/receivers/*`, webhook de
   facturation) : clé = (adresse, chemin), pour qu'un envoyeur partagé (une plateforme
   d'automatisation sert mille clients depuis ses adresses) ne s'épuise pas d'un crochet
-  sur l'autre ;
-- `anonyme` — tout le reste sans jeton (découverte `/.well-known/*`, `/mcp` avant
+  sur l'autre ; plus un plafond par adresse, tous chemins confondus, à dix fois ce
+  débit — sans lui, faire tourner le chemin (`/api/hooks/<deviné>`) rendrait un seau
+  neuf à chaque essai ;
+- `anonyme` — tout le reste sans jeton (découverte `/.well-known/*`, DCR, `/mcp` avant
   connexion, upload signé, relais) : clé = adresse.
 
 **Le contournement qu'il referme : le jeton inventé.** La classe `jeton` se décide à la
 PRÉSENCE de l'en-tête — un `Bearer <aléatoire>` par requête aurait chacun son seau neuf.
-D'où une cinquième borne, `echecs`, par adresse : chaque réponse 401/403 (et 404 sur les
-classes `sensible` et `webhook`, où un 404 est un secret deviné de travers) consomme
-un jeton de l'adresse ; une adresse qui a épuisé ce budget voit refuser ses jetons
-INCONNUS et ses requêtes `sensible`/`webhook` — jamais un jeton qui a déjà obtenu une
-réponse acceptée de ce processus (`_reconnus`), jamais la classe `anonyme` (qui paie
-déjà son seau par adresse, et porte la découverte OAuth). Le trafic légitime d'un
-client hébergé passe donc même si ses 401 de découverte remplissent le compteur ; le
-fuzzer, lui, n'a jamais de jeton reconnu. ⚠️ Le prix assumé : depuis une adresse au
-budget épuisé, le PREMIER appel d'un jeton tout juste émis est refusé jusqu'à ce que
-le budget remonte (`Retry-After`) — d'où un budget large et le mode `report`.
+D'où une cinquième borne, `echecs`, par adresse : chaque réponse 401/403 (et 404 sur la
+classe `sensible`, où un 404 est un secret deviné de travers) consomme un jeton de
+l'adresse ; une adresse qui a épuisé ce budget voit refuser ses jetons INCONNUS et ses
+requêtes `sensible`. Elle ne touche JAMAIS :
+
+- un jeton qui a déjà obtenu une réponse acceptée de ce processus (`_reconnus`) — ni
+  au refus, ni au débit : son 401 (jeton expiré qui va se rafraîchir) ne coûte rien à
+  ses voisins d'adresse ;
+- la classe `anonyme` (elle paie déjà son seau par adresse, et porte la découverte
+  OAuth d'un client hébergé) ;
+- la classe `webhook` (ni refus, ni débit) : un envoyeur retente pendant des jours sur
+  un crochet supprimé, et ses 404 ne doivent pas épuiser le budget de l'adresse qu'il
+  partage avec mille autres clients ; son seau (adresse, chemin) et son plafond par
+  adresse sont sa limite ;
+- une adresse exemptée (ci-dessous).
+
+⚠️ Le prix assumé : depuis une adresse au budget épuisé, le PREMIER appel d'un jeton
+tout juste émis est refusé jusqu'à ce que le budget remonte (`Retry-After`).
 
 **L'adresse** est celle de la règle unique du dépôt (`subdomain_project._client_ip`,
 c'est-à-dire `client_trace.pick_ip`) : `CF-Connecting-IP`, puis le premier saut de
-`X-Forwarded-For`, puis le pair TCP. ⚠️ **Elle ne vaut que ce que vaut le proxy** :
-une instance doit, comme le Caddy de nos boxes depuis F-024, ÉCRASER ces deux en-têtes
-avec le pair qu'elle a vu ; servie sans proxy qui les écrase, un client les écrit et
-choisit son seau. Une seconde règle ici divergerait de la trace de consentement et du
-seau des projets publiés à la première évolution de la chaîne de relais.
+`X-Forwarded-For`, puis le pair TCP. ⚠️⚠️ **Elle ne vaut que ce que vaut le proxy** :
+servie sans un proxy qui ÉCRASE ces DEUX en-têtes avec le pair qu'il a vu (le Caddy de
+nos boxes depuis F-024), une instance laisse le client les écrire et choisir son seau —
+les classes par adresse et le budget d'échecs y sont alors contournables. D'où le
+défaut `report` : **`enforce` ne se pose QUE derrière un proxy qui écrase les deux
+en-têtes**, instance par instance. Une seconde règle d'adresse ici divergerait de la
+trace de consentement et du seau des projets publiés.
+
+**Adresses exemptées** (`OTO_DEBIT_ADRESSES_EXEMPTEES`, adresses ou CIDR séparés par des
+virgules, vide par défaut) : nos propres machines (runner, front, back) ne passent ni
+par les classes par adresse ni par le budget d'échecs ; leurs jetons paient toujours la
+classe `jeton`. Les adresses se déclarent dans la configuration de l'instance, jamais
+dans ce dépôt public.
 
 **Le refus** : `429 rate_limited`, `Retry-After` = le temps qu'il faut au seau pour
 rendre un jeton, corps de l'enveloppe d'erreur ordinaire (`{error, detail, details}`,
 même forme que `routes_lourdes`), en-têtes CORS de l'origine et `X-Oto-Version`. Il est
 décidé AVANT d'appeler la suite — rien n'est lu du corps, rien n'est mis en tampon (le
 SSE de `/mcp` passe intact) ; seule la ligne de statut de la réponse est lue, pour
-`echecs`. Un refus n'écrit RIEN en base (sous un flot, journaliser chaque refus serait
-le flot) : une ligne de journal par clé et par minute au plus.
+`echecs`. Un refus n'écrit RIEN en base sur son chemin : une ligne de journal par clé et
+par minute au plus, et la mesure (`limite_debit_mesure`) agrège en mémoire et n'écrit
+qu'une ligne par classe et par minute, en tâche de fond.
 
 **Où il est posé** (`server.build_root_app`) : sous la garde de déconnexion, AU-DESSUS du
 compteur des refus du transport — un 429 de débit n'est pas un refus du transport, et
@@ -64,17 +85,18 @@ toute la face REST d'un seul geste.
 canari : chacun les siens) : c'est une protection de CE processus, pas un quota de
 facturation. `OPTIONS` passe toujours (un pré-vol ne coûte rien et un navigateur en
 paie un par appel). Les bornes plus fines restent où elles sont et s'appliquent EN
-PLUS (`routes_lourdes`, relais, projets publiés) : le défaut `jeton` (1 200/min) est
-réglé au-dessus du plus haut débit légitime recensé (900/min sur
-`/api/orgs/{id}/usage/calls`) pour ne jamais les contredire.
+PLUS (`routes_lourdes`, relais, projets publiés).
 
-**Réglages** (`env_inventory`) : `OTO_DEBIT_MODE` = `enforce` (défaut) | `report`
-(journalise ce qui serait refusé, ne refuse rien) | `off` ; un débit par classe,
-`OTO_DEBIT_<CLASSE>_PAR_MIN`, `0` désarme la classe.
+**Réglages** (`env_inventory`), lus UNE fois au démarrage — en changer demande un
+redémarrage : `OTO_DEBIT_MODE` = `report` (défaut : mesure et journalise ce qui serait
+refusé, ne refuse rien) | `enforce` | `off`, une valeur inconnue vaut `report` ; un
+débit par classe, `OTO_DEBIT_<CLASSE>_PAR_MIN`, `0` désarme la classe ;
+`OTO_DEBIT_ADRESSES_EXEMPTEES`.
 """
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import logging
 import math
@@ -102,7 +124,7 @@ DEFAUTS: dict[str, float] = {
 #: partage public, page publique, désabonnement) ou un geste d'authentification.
 _SENSIBLES_PREFIXES = ("/api/invitations/", "/api/public/", "/p/d/", "/o/u/", "/o/d/",
                        "/o/r/")
-_SENSIBLES_EXACTS = frozenset({"/oauth/register", "/oauth/authorize",
+_SENSIBLES_EXACTS = frozenset({"/oauth/authorize",
                                "/oauth/relay/authorize", "/oauth/callback",
                                "/api/mcp/auth_callback"})
 #: Tout retour OAuth d'un connecteur (`/api/<connecteur>/oauth/callback`).
@@ -111,10 +133,15 @@ _SENSIBLES_SUFFIXES = ("/oauth/callback",)
 _WEBHOOKS_PREFIXES = ("/api/hooks/", "/api/receivers/")
 _WEBHOOKS_EXACTS = frozenset({"/api/billing/webhook"})
 
+#: Le plafond d'une adresse sur TOUS ses crochets, en multiple du débit par crochet.
+_WEBHOOK_ADRESSE_FACTEUR = 10
+
 #: Les statuts qui disent « tu n'as pas le droit » : ils consomment le budget `echecs`
-#: de l'adresse. 404 seulement là où il signifie « secret inconnu ».
+#: de l'adresse. 404 seulement là où il signifie « secret inconnu ». Rien sur `webhook`.
 _ECHECS = frozenset({401, 403})
 _ECHECS_SI_SECRET = frozenset({401, 403, 404})
+_ECHECS_PAR_CLASSE = {"jeton": _ECHECS, "anonyme": _ECHECS,
+                      "sensible": _ECHECS_SI_SECRET, "webhook": frozenset()}
 
 _SEAUX_MAX = 50_000          # par classe ; au-delà, le plus ancien sort
 _RECONNUS_MAX = 50_000
@@ -135,10 +162,26 @@ class Borne:
 
 
 def mode_depuis_env() -> str:
-    """`enforce` | `report` | `off` ; une valeur inconnue vaut `enforce` — une faute de
-    frappe ne doit pas désarmer la garde."""
-    brut = (os.environ.get("OTO_DEBIT_MODE") or ENFORCE).strip().lower()
-    return brut if brut in (ENFORCE, REPORT, OFF) else ENFORCE
+    """`report` (défaut) | `enforce` | `off` ; une valeur inconnue vaut `report` : la
+    même image tourne sur des instances dont le proxy n'écrase pas les en-têtes
+    d'adresse, et `enforce` s'y contournerait (cf. la docstring du module)."""
+    brut = (os.environ.get("OTO_DEBIT_MODE") or REPORT).strip().lower()
+    return brut if brut in (ENFORCE, REPORT, OFF) else REPORT
+
+
+def adresses_exemptees_depuis_env() -> tuple:
+    """Les réseaux exemptés, lus UNE fois au démarrage. Une entrée illisible est
+    ignorée en le disant — jamais une exemption devinée."""
+    reseaux = []
+    for brut in (os.environ.get("OTO_DEBIT_ADRESSES_EXEMPTEES") or "").split(","):
+        brut = brut.strip()
+        if not brut:
+            continue
+        try:
+            reseaux.append(ipaddress.ip_network(brut, strict=False))
+        except ValueError:
+            logger.warning("OTO_DEBIT_ADRESSES_EXEMPTEES : %r illisible, ignorée", brut)
+    return tuple(reseaux)
 
 
 def _borne(nom: str, brut: Optional[str], defaut: float) -> Borne:
@@ -208,43 +251,80 @@ class _Seaux:
         while len(self.etat) > _SEAUX_MAX:
             del self.etat[next(iter(self.etat))]
 
+    def usage_pct(self, jetons: float) -> float:
+        """La part de la rafale consommée : 100 = la clé est à sec."""
+        return max(0.0, min(100.0, (1.0 - jetons / self.borne.rafale) * 100.0))
+
     def attente(self, jetons: float) -> int:
         """Secondes avant qu'un jeton soit rendu (au moins 1)."""
         return max(1, math.ceil((1.0 - jetons) / self.borne.par_seconde))
 
-    def prendre(self, cle, maintenant: float, debiter: bool = True) -> Optional[int]:
-        """None = passe (un jeton pris si `debiter`) ; sinon l'attente à annoncer."""
+    def prendre(self, cle, maintenant: float,
+                debiter: bool = True) -> tuple[Optional[int], float]:
+        """(None, usage) = passe (un jeton pris si `debiter`) ; sinon (attente, usage)."""
         jetons = self._remplir(cle, maintenant)
         if jetons < 1.0:
             self._poser(cle, jetons, maintenant)
-            return self.attente(jetons)
-        self._poser(cle, jetons - 1.0 if debiter else jetons, maintenant)
-        return None
+            return self.attente(jetons), 100.0
+        reste = jetons - 1.0 if debiter else jetons
+        self._poser(cle, reste, maintenant)
+        return None, self.usage_pct(reste)
 
-    def debiter(self, cle, maintenant: float) -> None:
-        """Consomme un jeton sans jamais passer sous zéro (un échec constaté)."""
-        self._poser(cle, max(0.0, self._remplir(cle, maintenant) - 1.0), maintenant)
+    def debiter(self, cle, maintenant: float) -> float:
+        """Consomme un jeton sans jamais passer sous zéro (un échec constaté) ; rend
+        l'usage qui en résulte."""
+        reste = max(0.0, self._remplir(cle, maintenant) - 1.0)
+        self._poser(cle, reste, maintenant)
+        return self.usage_pct(reste)
 
 
 class LimiteDebit:
     """Middleware ASGI : borne le débit de chaque requête HTTP selon sa classe, plus un
-    budget d'échecs d'authentification par adresse. Compteurs propres à l'instance,
-    donc au processus. Cf. la docstring du module."""
+    budget d'échecs d'authentification par adresse, et en mesure l'usage. Compteurs
+    propres à l'instance, donc au processus. Cf. la docstring du module."""
 
     def __init__(self, app, mode: Optional[str] = None,
-                 bornes: Optional[dict[str, Borne]] = None, horloge=time.monotonic):
-        from . import version, version_header
+                 bornes: Optional[dict[str, Borne]] = None, horloge=time.monotonic,
+                 exemptees: Optional[tuple] = None, horloge_murale=time.time,
+                 publier=None):
+        from . import limite_debit_mesure, version, version_header
         from .subdomain_project import _client_ip
         self.app = app
         self._ip = _client_ip
         self.mode = mode or mode_depuis_env()
         bornes = bornes or bornes_depuis_env()
         self._seaux = {c: _Seaux(b) for c, b in bornes.items() if b.par_minute > 0}
+        if "webhook" in self._seaux:
+            self._seaux["webhook_adresse"] = _Seaux(
+                Borne(bornes["webhook"].par_minute * _WEBHOOK_ADRESSE_FACTEUR))
+        self._exemptees = (adresses_exemptees_depuis_env() if exemptees is None
+                           else tuple(ipaddress.ip_network(e, strict=False)
+                                      for e in exemptees))
         self._reconnus: dict[str, float] = {}
         self._journalise: dict = {}
         self._horloge = horloge
+        self._horloge_murale = horloge_murale
+        self._mesure = limite_debit_mesure.Mesure(self.mode)
+        self._publier = publier or limite_debit_mesure.publier
+        self._par_minute = {c: s.borne.par_minute for c, s in self._seaux.items()}
         self._version = (b"x-oto-version",
                          version_header.valeur_entete(version.version_servie()))
+
+    def _est_exemptee(self, ip: str) -> bool:
+        if not self._exemptees:
+            return False
+        try:
+            adresse = ipaddress.ip_address(ip)
+        except ValueError:
+            return False
+        return any(adresse in reseau for reseau in self._exemptees)
+
+    def _basculer_minute(self) -> None:
+        """Ferme la minute murale écoulée : ses lignes partent en tâche de fond, au plus
+        une par classe — jamais sur le chemin d'une décision."""
+        lignes = self._mesure.basculer(int(self._horloge_murale() // 60), self._par_minute)
+        if lignes:
+            self._publier(lignes)
 
     async def __call__(self, scope, receive, send):
         if scope.get("type") != "http" or self.mode == OFF:
@@ -257,18 +337,24 @@ class LimiteDebit:
         if classe is None:
             return await self.app(scope, receive, send)
 
+        self._basculer_minute()
         ip = self._ip(scope, dict(entetes))
+        exemptee = self._est_exemptee(ip)
         jeton = _empreinte(autorisation) if autorisation is not None else None
         maintenant = self._horloge()
 
-        refus = self._decider(classe, ip, jeton, chemin, maintenant)
+        refus = self._decider(classe, ip, exemptee, jeton, chemin, maintenant)
         if refus is not None:
             classe_refus, cle, attente = refus
+            self._mesure.noter_decision(
+                classe_refus, "refused" if self.mode == ENFORCE else "would_refuse")
             self._journaliser(classe_refus, cle, ip, chemin, maintenant)
             if self.mode == ENFORCE:
                 return await self._refuser(scope, send, classe_refus, attente)
+        else:
+            self._mesure.noter_decision(classe, "allowed")
 
-        echecs = _ECHECS_SI_SECRET if classe in ("sensible", "webhook") else _ECHECS
+        echecs = frozenset() if exemptee else _ECHECS_PAR_CLASSE[classe]
 
         async def envoyer(message):
             if message.get("type") == "http.response.start":
@@ -277,33 +363,39 @@ class LimiteDebit:
 
         await self.app(scope, receive, envoyer)
 
-    def _decider(self, classe: str, ip: str, jeton: Optional[str], chemin: str,
-                 maintenant: float):
+    def _decider(self, classe: str, ip: str, exemptee: bool, jeton: Optional[str],
+                 chemin: str, maintenant: float):
         """None = passe ; sinon (classe qui refuse, clé, attente). Le budget d'échecs se
         juge d'abord et ne consomme rien : seul un échec CONSTATÉ le débite."""
         echecs = self._seaux.get("echecs")
-        # `anonyme` n'y passe pas : il paie déjà son seau par adresse, et c'est la
-        # découverte OAuth (`POST /mcp` sans jeton) qu'une adresse partagée par un
-        # client hébergé ne doit jamais se voir fermer par les 401 de ses voisins.
-        if echecs is not None and classe != "anonyme" and (
-                jeton is None or jeton not in self._reconnus):
-            attente = echecs.prendre(ip, maintenant, debiter=False)
+        if (echecs is not None and not exemptee and classe in ("jeton", "sensible")
+                and (jeton is None or jeton not in self._reconnus)):
+            attente, _ = echecs.prendre(ip, maintenant, debiter=False)
             if attente is not None:
                 return "echecs", ip, attente
+        if classe != "jeton" and exemptee:
+            return None
+        if classe == "webhook" and "webhook_adresse" in self._seaux:
+            attente, usage = self._seaux["webhook_adresse"].prendre(ip, maintenant)
+            self._mesure.noter_usage("webhook_adresse", usage)
+            if attente is not None:
+                return "webhook_adresse", ip, attente
         seaux = self._seaux.get(classe)
         if seaux is None:
             return None
         cle = {"jeton": jeton, "webhook": (ip, chemin)}.get(classe, ip)
-        attente = seaux.prendre(cle, maintenant)
+        attente, usage = seaux.prendre(cle, maintenant)
+        self._mesure.noter_usage(classe, usage)
         return None if attente is None else (classe, cle, attente)
 
     def _constater(self, statut: int, echecs: frozenset, ip: str,
                    jeton: Optional[str]) -> None:
         maintenant = self._horloge()
-        if statut in echecs:
+        reconnu = jeton is not None and jeton in self._reconnus
+        if statut in echecs and not reconnu:
             seaux = self._seaux.get("echecs")
             if seaux is not None:
-                seaux.debiter(ip, maintenant)
+                self._mesure.noter_usage("echecs", seaux.debiter(ip, maintenant))
         elif jeton is not None and statut < 400:
             self._reconnus.pop(jeton, None)
             self._reconnus[jeton] = maintenant

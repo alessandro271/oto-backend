@@ -85,3 +85,44 @@ def test_une_fenetre_hors_bornes_est_ecretee_et_non_refusee(base):
     assert db.transport_refusal_stats(since_days=100000)["since_days"] == 365
     out = db.transport_refusal_stats(since_days=7)
     assert isinstance(out["total"], int) and isinstance(out["by_cause"], list)
+
+
+def test_la_mesure_du_debit_se_lit_par_environnement_classe_et_mode(base):
+    """La limite de débit (F-025) écrit une ligne par classe et par minute
+    (`kind='debit'`) ; la lentille les somme. Les lignes de la vraie fabrique, pas une
+    imitation : c'est leur forme que le SQL découpe."""
+    from oto_mcp import db
+    from oto_mcp import limite_debit_mesure as mesure
+
+    def minute(env: str, mode: str, n: int, **compte):
+        os.environ["OTO_SENTRY_ENV"] = env
+        m = mesure.Mesure(mode)
+        m.basculer(n, {})
+        for issue, fois in compte.items():
+            for _ in range(fois):
+                m.noter_decision("anonyme", issue)
+        m.noter_usage("anonyme", 40.0 + n % 10)
+        return m.basculer(n + 1, {"anonyme": 600.0})
+
+    avant = os.environ.get("OTO_SENTRY_ENV")
+    try:
+        lignes = (minute("production", "report", 1001, allowed=5, would_refuse=2)
+                  + minute("production", "report", 1002, allowed=3, would_refuse=1)
+                  + minute("canari", "enforce", 1003, allowed=1, refused=4))
+    finally:
+        if avant is None:
+            os.environ.pop("OTO_SENTRY_ENV", None)
+        else:
+            os.environ["OTO_SENTRY_ENV"] = avant
+    mesure.publier(lignes)
+
+    out = db.transport_refusal_stats(since_days=7)
+    par_cle = {(r["env"], r["classe"], r["mode"]): r for r in out["rate_limit"]}
+    prod = par_cle[("production", "anonyme", "report")]
+    assert (prod["minutes"], prod["allowed"], prod["would_refuse"], prod["refused"]) \
+        == (2, 8, 3, 0)
+    assert prod["peak_pct"] == 42.0 and prod["limit_per_minute"] == 600
+    canari = par_cle[("canari", "anonyme", "enforce")]
+    assert (canari["allowed"], canari["refused"]) == (1, 4)
+    # la mesure n'entre pas dans le compte des refus du transport
+    assert all(not r["cause"].startswith("anonyme") for r in out["by_cause"])

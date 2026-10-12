@@ -434,7 +434,7 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
     - **plateforme** : `POST|GET /api/admin/invitations` + `DELETE …/{inv}` (platform_admin ; `oto_admin_invite` op=create/list/revoke). `org_id` optionnel (vide = onboarding pur, sinon rattachement direct).
     - **acceptation commune** : `POST /api/me/invitations/accept` (`SUB_ONLY`, `token` + expiry). ⚠️ **Modèle BEARER** : le secret suffit, l'identité de l'accepteur n'est PAS confrontée à l'email invité — cette ligne a longtemps dit « match email vérifié », ce qui était faux du code servi (corrigé le 2026-09-01, cf. le commentaire de `_invite_accept`). Email via `oto_mcp/email.py` (otomata-mailer `mailer.oto.zone/api/send`, env `OTO_MAILER_SEND_BEARER`, best-effort → `invite_url` en repli ; **plus de Resend**).
     - **refus commun** : `POST /api/me/invitations/reject` (`SUB_ONLY`, `token` — même entrée que l'acceptation ; `oto_org` op=reject_invite), depuis le 2026-09-01 (#654). Ferme l'invitation (`org_invitations.declined_at`/`.declined_sub`) **sans créer ni retirer aucune appartenance** : elle quitte la file de l'émetteur, et plus rien ne peut la consommer — ni `accept`, ni la reprise automatique au signup par l'email (`reconcile_signup_with_invitation`). ⚠️ **Le refus n'est PAS bearer, contrairement à l'acceptation** : l'invitation doit être adressée à l'email du compte appelant (403 `not_the_invitee` sinon, invitation anonyme comprise) — accepter avec un secret qu'on détient est un geste sur soi, refuser détruirait l'invitation d'un tiers. Le refus **ne notifie pas** l'émetteur (aucune préférence de notification n'existe encore) et **ne bloque pas** une réinvitation : le 409 `already_invited` de #622 ne voit plus une invitation refusée.
-    - **aperçu PUBLIC, sans auth** : `GET /api/invitations/{token}` (`api/public.py::invite_preview` → `org_store.preview_invitation`), le jeton EST le secret — alimente l'accueil « vous êtes invité·e » avant création de compte (`email`, `inviter`, `org_name`/`group_name`, `scope`). ⚠️ **Le repli de l'inviteur vers son email a été retiré (oto#86)** : `_PREVIEW_SELECT` projetait `COALESCE(nom, email)` — un compte invitant sans nom déclaré servait son adresse à l'anonyme. `inviter` reste `string | null` (le dashboard dégrade déjà vers un message générique). Écrite à la main, hors de l'adaptateur des capacités qui authentifie toujours : son seul frein est la classe `sensible` de la limite de débit applicative (par adresse, 60/min par défaut, et le budget d'échecs que consomme chaque 404 — §Limite de débit applicative).
+    - **aperçu PUBLIC, sans auth** : `GET /api/invitations/{token}` (`api/public.py::invite_preview` → `org_store.preview_invitation`), le jeton EST le secret — alimente l'accueil « vous êtes invité·e » avant création de compte (`email`, `inviter`, `org_name`/`group_name`, `scope`). ⚠️ **Le repli de l'inviteur vers son email a été retiré (oto#86)** : `_PREVIEW_SELECT` projetait `COALESCE(nom, email)` — un compte invitant sans nom déclaré servait son adresse à l'anonyme. `inviter` reste `string | null` (le dashboard dégrade déjà vers un message générique). Écrite à la main, hors de l'adaptateur des capacités qui authentifie toujours : son seul frein est la classe `sensible` de la limite de débit applicative (par adresse, 60/min par défaut, et le budget d'échecs que consomme chaque 404 ; mode `report` par défaut — §Limite de débit applicative).
     - ⚠️ **Le CODE COURT d'invitation (7 caractères, ~34 bits, lien `/invitation/<code>` +
       `GET /api/invitations/code/{code}`) a été ENTIÈREMENT RETIRÉ le 15/09/2026**
       (oto-backend#560, brute-forçable) — arbitrage d'Alexis : plus de mécanisme
@@ -1155,38 +1155,55 @@ lire en base, et lui fait payer un seau à jetons (débit régulier, rafale = la
 | classe | quand | clé | défaut / min |
 |---|---|---|---|
 | `jeton` | la requête porte `Authorization` | empreinte du jeton | 1 200 |
-| `sensible` | sans jeton : secret dans le chemin (`/api/invitations/*`, `/api/public/*`, `/p/d/*`, `/o/{u,d,r}/*`) ou geste d'auth (`/oauth/register`, `/oauth/authorize`, `/oauth/relay/authorize`, `/oauth/callback`, `/api/mcp/auth_callback`, `*/oauth/callback`) | adresse | 60 |
-| `webhook` | `/api/hooks/*`, `/api/receivers/*`, `/api/billing/webhook` | (adresse, chemin) | 300 |
-| `anonyme` | tout le reste sans jeton (`/.well-known/*`, `/mcp` avant connexion, upload signé, relais, `/oauth/token`) | adresse | 600 |
-| `echecs` | chaque réponse 401/403 (et 404 sur `sensible`/`webhook`) en consomme un ; épuisé, l'adresse voit refuser ses jetons **inconnus** et ses requêtes `sensible`/`webhook` — jamais un jeton déjà accepté par ce processus, jamais la classe `anonyme` (découverte OAuth) | adresse | 120 |
+| `sensible` | sans jeton : secret dans le chemin (`/api/invitations/*`, `/api/public/*`, `/p/d/*`, `/o/{u,d,r}/*`) ou geste d'auth interactif (`/oauth/authorize`, `/oauth/relay/authorize`, `/oauth/callback`, `/api/mcp/auth_callback`, `*/oauth/callback`) | adresse | 60 |
+| `webhook` | `/api/hooks/*`, `/api/receivers/*`, `/api/billing/webhook` | (adresse, chemin), plus un plafond par adresse à 10 × ce débit (`webhook_adresse`) | 300 |
+| `anonyme` | tout le reste sans jeton (`/.well-known/*`, `/oauth/register` — un client hébergé enregistre un client par connexion, depuis sa sortie partagée —, `/mcp` avant connexion, upload signé, relais, `/oauth/token`) | adresse | 600 |
+| `echecs` | chaque 401/403 (et 404 sur `sensible`) en consomme un ; épuisé, l'adresse voit refuser ses jetons **inconnus** et ses requêtes `sensible` | adresse | 120 |
 
 - **Pourquoi un principal, et pas une adresse, pour le trafic authentifié** : un client
   hébergé sert tous ses utilisateurs depuis quelques adresses ; une borne par adresse les
   couperait ensemble. **Pourquoi `echecs`** : la classe `jeton` se décide à la PRÉSENCE
-  de l'en-tête — un `Bearer <aléatoire>` par requête aurait chacun son seau neuf ; le
-  budget d'échecs de l'adresse referme ce contournement sans toucher aux jetons qui ont
-  déjà été acceptés (les 401 de découverte d'un client hébergé ne coupent pas ses
-  utilisateurs connectés). ⚠️ Prix assumé : depuis une adresse au budget épuisé, le
-  premier appel d'un jeton tout juste émis est refusé jusqu'à ce que le budget remonte.
+  de l'en-tête — un `Bearer <aléatoire>` par requête aurait chacun son seau neuf.
+- **Ce que `echecs` ne touche jamais** : un jeton déjà accepté par ce processus (ni
+  refusé, ni débiteur : le 401 d'un jeton expiré ne coûte rien à ses voisins
+  d'adresse), la classe `anonyme` (la découverte OAuth), la classe `webhook` (un
+  envoyeur partagé retente des jours sur un crochet supprimé : ses 404 n'épuisent pas
+  l'adresse de mille autres clients), une adresse exemptée. ⚠️ Prix assumé : depuis une
+  adresse au budget épuisé, le premier appel d'un jeton tout juste émis est refusé
+  jusqu'à ce que le budget remonte.
 - **L'adresse** est la règle unique du dépôt (`client_trace.pick_ip` :
-  `CF-Connecting-IP` > premier saut de `X-Forwarded-For` > pair TCP). ⚠️ Elle ne vaut que
-  ce que vaut le proxy : une instance doit ÉCRASER ces deux en-têtes avec le pair qu'elle
-  a vu (le Caddy de nos boxes le fait depuis F-024) — sinon un client choisit son seau.
-- **Refus** : `429 rate_limited`, `Retry-After`, corps `{error, detail, details:
-  {retryable, retry_after_seconds, limit_per_minute, scope}}`, en-têtes CORS de
+  `CF-Connecting-IP` > premier saut de `X-Forwarded-For` > pair TCP). ⚠️⚠️ Elle ne vaut
+  que ce que vaut le proxy : derrière un proxy qui n'ÉCRASE pas ces deux en-têtes avec
+  le pair qu'il a vu, un client choisit son seau. D'où le défaut **`report`** :
+  **`enforce` ne se pose QUE derrière un proxy qui écrase les deux en-têtes** (nos boxes
+  depuis F-024), instance par instance, dans sa configuration.
+- **Adresses exemptées** (`OTO_DEBIT_ADRESSES_EXEMPTEES`, adresses ou CIDR) : nos propres
+  machines sortent des classes par adresse et du budget d'échecs ; leurs jetons paient
+  toujours `jeton`. Elles se déclarent dans la configuration de l'instance, jamais dans
+  ce dépôt.
+- **Refus** (mode `enforce`) : `429 rate_limited`, `Retry-After`, corps `{error, detail,
+  details: {retryable, retry_after_seconds, limit_per_minute, scope}}`, en-têtes CORS de
   l'origine et `X-Oto-Version`. Décidé avant d'appeler la suite ; rien n'est mis en
-  tampon (le SSE passe intact). Il n'écrit RIEN en base (sous un flot, journaliser
-  chaque refus serait le flot) : une ligne de journal par clé et par minute, jamais le
-  jeton.
+  tampon (le SSE passe intact) ; rien n'est écrit en base sur ce chemin ; une ligne de
+  journal par clé et par minute, jamais le jeton.
+- **Mesure** (`oto_mcp/limite_debit_mesure.py`) : par classe et par minute, en mémoire,
+  `allowed` / `would_refuse` (mode `report`) / `refused` (mode `enforce`) et `peak_pct`
+  (plus haut usage d'un seau, en % de sa rafale, toutes clés confondues). Au plus UNE
+  ligne par classe et par minute part dans le journal d'appels (`kind='debit'`,
+  `tool='debit:<classe>'`, jamais une adresse ni un jeton), en tâche de fond quand la
+  minute change. Lue par `oto_admin_monitoring op=transport` (REST
+  `GET /api/admin/monitoring/transport`), champ `rate_limit`, par environnement, classe
+  et mode : en `report`, `would_refuse` est ce qu'`enforce` couperait — c'est sur lui
+  qu'on règle les bornes avant de basculer.
 - `OPTIONS` passe toujours. Les bornes plus fines s'appliquent EN PLUS : routes lourdes
-  (ci-dessus), seau du relais sur `/oauth/token`, seau des projets publiés. Le défaut
-  `jeton` est tenu au-dessus de la plus haute route lourde
-  (`test_le_defaut_par_jeton_ne_contredit_aucune_route_lourde`).
+  (ci-dessus), seau du relais sur `/oauth/token`, seau des projets publiés.
 - ⚠️ Compteurs **par processus** (bleu/vert, canari : chacun les siens) : une protection
   du service, pas un quota.
-- **Réglages** : `OTO_DEBIT_MODE` = `enforce` (défaut) | `report` (journalise ce qui
-  serait refusé, ne refuse rien) | `off` ; `OTO_DEBIT_{JETON,ANONYME,SENSIBLE,WEBHOOK,ECHECS}_PAR_MIN`,
-  `0` désarme la classe. Preuves : `tests/test_limite_debit.py`.
+- **Réglages, lus au DÉMARRAGE — en changer demande un redémarrage** : `OTO_DEBIT_MODE`
+  = `report` (défaut, et toute valeur inconnue) | `enforce` | `off` ;
+  `OTO_DEBIT_{JETON,ANONYME,SENSIBLE,WEBHOOK,ECHECS}_PAR_MIN`, `0` désarme la classe ;
+  `OTO_DEBIT_ADRESSES_EXEMPTEES`. Preuves : `tests/test_limite_debit.py`,
+  `tests/test_transport_refusals_db.py`.
 
 ## CORS — les origines se DÉCLARENT, il n'y a plus de liste dans le code
 

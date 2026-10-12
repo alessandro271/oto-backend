@@ -79,14 +79,32 @@ class TransportVersionRow(BaseModel):
     n: int
 
 
+class RateLimitRow(BaseModel):
+    env: str                      # `production` | `canari` | `inconnu`
+    classe: str                   # jeton | anonyme | sensible | webhook | webhook_adresse | echecs
+    mode: str                     # report | enforce — `would_refuse` se lit en report
+    minutes: int                  # minutes de la fenêtre où la classe a servi
+    allowed: Optional[int] = None
+    would_refuse: Optional[int] = None
+    refused: Optional[int] = None
+    peak_pct: Optional[float] = None   # plus haut usage d'un seau (% de sa rafale)
+    limit_per_minute: Optional[int] = None
+    last_at: Optional[datetime] = None
+
+
 class TransportRefusals(BaseModel):
-    """Ce que le transport refuse avant tout dispatch, ventilé par cause."""
+    """Ce que le transport refuse avant tout dispatch, ventilé par cause, et la mesure
+    de la limite de débit applicative."""
     since_days: int
     total: int
     by_cause: list[TransportRefusalRow]
     # Les versions de protocole réclamées puis refusées : le signal qui dira, le jour
     # venu, qu'un logiciel client est écarté par notre plancher de protocole.
     protocol_versions_refused: list[TransportVersionRow]
+    # La limite de débit (F-025, `limite_debit_mesure`) : une ligne par
+    # (environnement, classe, mode), sommée sur la fenêtre. De quoi régler les bornes
+    # sur le trafic réel avant de passer `OTO_DEBIT_MODE` en `enforce`.
+    rate_limit: list[RateLimitRow] = []
 
 
 class FunnelInput(BaseModel):
@@ -193,7 +211,12 @@ def _transport_stats(ctx: ResolvedCtx, inp: TransportInput) -> dict:
     ⚠️ Un volume non nul est le RÉGIME NORMAL, pas une panne : ~2,2 % des `POST /mcp`
     de production sont refusés en permanence, et toutes les adresses sources mesurées
     le 11/09/2026 appartenaient à la plage de sortie de claude.ai — aucune à nos
-    propres machines. Lire une hausse comme un incident interne serait une erreur."""
+    propres machines. Lire une hausse comme un incident interne serait une erreur.
+
+    `rate_limit` porte la mesure de la limite de débit applicative (F-025) : par
+    environnement, classe et mode, les décisions qui passent, celles qu'`enforce`
+    refuserait (`would_refuse`, mode `report`) ou a refusées, et le plus haut usage
+    d'un seau. Cf. `oto_mcp/limite_debit_mesure.py`."""
     return db.transport_refusal_stats(since_days=inp.days)
 
 
@@ -468,7 +491,10 @@ CAPABILITIES += [
             "APPLIED to (operator verified, existing target other than themself), "
             "null otherwise — a refused or no-op X-Oto-View-As header leaves it null. "
             "Rows logged before 2026-09-21 carry the header as claimed, unverified) / "
-            "connectors (credential resolution failures; optional `org_id`) / funnel "
+            "connectors (credential resolution failures; optional `org_id`) / transport "
+            "(MCP transport refusals by cause, plus `rate_limit`: the app rate limiter "
+            "per env/class/mode — `would_refuse` is what `enforce` would cut, "
+            "`peak_pct` the fullest bucket; `days`) / funnel "
             "(accounts vs real usage) / gaps · tool_quality (aggregated usage signals) / "
             "agents_en_echec (hosted agents whose JOBS are dying, grouped by agent AND "
             "by reason — `days` (default 1), optional `org_id`; each row carries "

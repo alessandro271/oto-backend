@@ -2114,7 +2114,8 @@ def connector_failure_stats(since_days: int = 7, *, org_id: Optional[int] = None
 def transport_refusal_stats(since_days: int = 7) -> dict:
     """Lentille des refus du TRANSPORT MCP (`kind='transport'`, cf.
     `oto_mcp/transport_refusals.py`) : ce qu'on refuse AVANT tout dispatch de session,
-    ventilé par cause, par code HTTP et par environnement.
+    ventilé par cause, par code HTTP et par environnement — plus, sous `rate_limit`,
+    la mesure de la limite de débit applicative (`kind='debit'`, F-025).
 
     ⚠️ **Ventilé par environnement, et ce n'est pas un luxe** : préproduction et
     production écrivent dans la MÊME base et `tool_calls.server` est un littéral
@@ -2157,11 +2158,37 @@ def transport_refusal_stats(since_days: int = 7) -> dict:
             """,
             (since_days,),
         ).fetchall()
+        # La limite de débit applicative (`kind='debit'`, cf. `limite_debit_mesure`) :
+        # une ligne par classe et par minute, sommée ici par environnement, classe et
+        # mode. `would_refuse` est le chiffre qu'on lit en mode `report` ; `peak_pct`
+        # le plus haut usage d'un seau sur la fenêtre (100 = une clé à sec).
+        debit = conn.execute(
+            """
+            SELECT COALESCE(l.args->>'env', 'inconnu')            AS env,
+                   substring(l.tool from 7)                       AS classe,
+                   COALESCE(l.args->>'mode', 'inconnu')           AS mode,
+                   COUNT(*)                                       AS minutes,
+                   SUM((l.args->>'allowed')::bigint)              AS allowed,
+                   SUM((l.args->>'would_refuse')::bigint)         AS would_refuse,
+                   SUM((l.args->>'refused')::bigint)              AS refused,
+                   MAX((l.args->>'peak_pct')::float)              AS peak_pct,
+                   MAX((l.args->>'limit_per_minute')::int)        AS limit_per_minute,
+                   MAX(l.created_at)                              AS last_at
+            FROM tool_calls l
+            WHERE l.kind = 'debit'
+              AND l.created_at >= NOW() - make_interval(days => %s)
+            GROUP BY 1, 2, 3
+            ORDER BY 1, 2, 3
+            LIMIT 100
+            """,
+            (since_days,),
+        ).fetchall()
     return {
         "since_days": since_days,
         "total": sum(int(r["n"]) for r in par_cause),
         "by_cause": list(par_cause),
         "protocol_versions_refused": list(versions),
+        "rate_limit": list(debit),
     }
 
 
