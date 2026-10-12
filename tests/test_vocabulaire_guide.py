@@ -60,7 +60,8 @@ MOT = re.compile("doctrine", re.I)
 # raison servie n'a rien à faire ici : elle se renomme.
 #
 # Total : 267 (fin du lot A) → 266 (B1) → 262 (B2) → 226 (B3) → 217 (B4) → 162 (B5)
-# → 164 (#659, 2026-09-01) → 145 (otomata-tech/oto#65, 2026-09-23).
+# → 164 (#659, 2026-09-01) → 145 (otomata-tech/oto#65, 2026-09-23)
+# → 139 (2026-10-12, la lecture `recent_runs` sert `guide`).
 # Le compte descend à chaque PR, jamais l'inverse. Zéro au lot D (#526).
 #
 # ⚠️ **La seule remontée, et pourquoi elle n'est pas une dérive** : #659 a DÉCLARÉ le
@@ -157,7 +158,6 @@ PLAFONDS: dict[str, int] = {
     #   de réponse, et l'arg tracé `doctrine_version` (écrit dans `tool_calls.args`).
     "oto_mcp/guide_run.py": 1,
     "oto_mcp/tools/guide_run.py": 6,
-    "oto_mcp/instructions.py": 4,
     "oto_mcp/server.py": 3,
 }
 

@@ -396,7 +396,7 @@ def recent_runs(sub: str, org_id: Optional[int], limit: int = 5) -> list[dict]:
         rows = conn.execute(
             f"""
             WITH j AS ({_runs_from_journal(_derniers_runs(portee))})
-            SELECT j.run_id, j.label, j.doctrine, j.outcome, x.project_id,
+            SELECT j.run_id, j.label, j.doctrine AS guide, j.outcome, x.project_id,
                    j.started_at, j.finished_at, j.last_seen_at
               FROM j LEFT JOIN runs x ON x.run_id = j.run_id
              ORDER BY j.started_at DESC LIMIT %s

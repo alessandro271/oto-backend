@@ -235,7 +235,7 @@ def _mes_runs(ctx: ResolvedCtx, inp: MesRunsInput) -> dict:
     personne n'avait pas déjà à chaque session."""
     rows = db.recent_runs(ctx.sub, ctx.org_id, limit=inp.limit)
     return {"runs": [
-        {"run_id": r["run_id"], "label": r.get("label"), "guide": r.get("doctrine"),
+        {"run_id": r["run_id"], "label": r.get("label"), "guide": r.get("guide"),
          "outcome": r.get("outcome"), "project_id": r.get("project_id"),
          "started_at": _iso(r.get("started_at")), "finished_at": _iso(r.get("finished_at"))}
         for r in rows

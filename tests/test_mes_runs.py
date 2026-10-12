@@ -40,7 +40,7 @@ def test_limit_borne(monkeypatch):
 
 def test_forme_servie(monkeypatch):
     debut = datetime(2026, 10, 11, 9, 0, tzinfo=timezone.utc)
-    _espion(monkeypatch, [{"run_id": "r1", "label": "relances", "doctrine": "relances",
+    _espion(monkeypatch, [{"run_id": "r1", "label": "relances", "guide": "relances",
                            "outcome": "done", "project_id": 7,
                            "started_at": debut, "finished_at": None}])
     out = RT._mes_runs(ResolvedCtx(sub="alice", org_id=35), RT.MesRunsInput())
