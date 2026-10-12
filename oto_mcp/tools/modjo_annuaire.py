@@ -14,6 +14,14 @@ shared base lives in `modjo_socle.py`). Four tools:
 The first three only read and are declared so (`LECTURE`). `modjo_ask` writes
 nothing either, but it runs a model at Modjo for up to five minutes: it is not
 offered to recipes.
+
+**A list is an index** (ADR 0047): each list op serves its records without the
+fields an agent does not decide on — timestamps, colours, CRM identifiers served
+twice (`crmIdentifier` repeats `crmId`), CRM links, phone numbers and timezones of
+members, the ids and positions of review answers. A DENYLIST of named keys, read
+in Modjo's public OpenAPI v2: a field Modjo adds tomorrow is served, never lost.
+`full=True` returns the records as Modjo sends them; one object (`op="account"`,
+`op="user"`…) is always served whole.
 """
 from __future__ import annotations
 
@@ -21,23 +29,71 @@ from typing import Any, Dict, Literal, Optional, Union
 
 from fastmcp import FastMCP
 
+from .. import output_projection
 from .lecture import LECTURE
 from .modjo_socle import _bad, _client, hors_op, need, paged, run
 
 _WORKSPACE_PERMIS = {
-    "tags": ("page", "size"), "topics": ("page", "size"),
-    "users": ("email", "page", "size"), "user": ("user_id",),
-    "teams": ("name", "page", "size"), "team": ("team_id",),
-    "team_members": ("team_id", "page", "size"),
-    "crm_templates": ("status", "page", "size"), "crm_template": ("template_uuid",),
-    "crm_template_fields": ("template_uuid", "page", "size"),
+    "tags": ("page", "size", "full"), "topics": ("page", "size", "full"),
+    "users": ("email", "page", "size", "full"), "user": ("user_id",),
+    "teams": ("name", "page", "size", "full"), "team": ("team_id",),
+    "team_members": ("team_id", "page", "size", "full"),
+    "crm_templates": ("status", "page", "size", "full"),
+    "crm_template": ("template_uuid",),
+    "crm_template_fields": ("template_uuid", "page", "size", "full"),
 }
 _CRM_PERMIS = {
-    "accounts": ("name", "page", "size"), "account": ("account_id",),
-    "contacts": ("name", "page", "size"), "contact": ("contact_id",),
-    "deals": ("name", "account_id", "status", "page", "size"),
+    "accounts": ("name", "page", "size", "full"), "account": ("account_id",),
+    "contacts": ("name", "page", "size", "full"), "contact": ("contact_id",),
+    "deals": ("name", "account_id", "status", "page", "size", "full"),
     "deal_summary": ("deal_id",),
 }
+
+#: What each list's DEFAULT view removes from every record (`full=True` keeps it).
+_DATES = ("createdOn", "modifiedOn")
+_CRM = ("crmIdentifier", "crmLink")
+_MEMBRE = _DATES + ("phoneNumber", "timezone")
+_RETIRE = {
+    "accounts": _DATES + _CRM,
+    "contacts": _DATES + _CRM,
+    "deals": _DATES + _CRM,
+    "tags": _DATES + ("color",),
+    "topics": _DATES + ("color", "slug"),
+    "users": _MEMBRE,
+    "team_members": _MEMBRE,
+    "teams": _DATES,
+    "crm_templates": _DATES,
+    "crm_template_fields": _DATES,
+    "reviews": ("modifiedOn",),
+}
+
+
+def _shape(res: Any, op: str, full: bool) -> Any:
+    """The default view of one list page: the `data` records without the keys
+    `_RETIRE[op]` names; the envelope (`pagination`) is untouched. A review keeps
+    each answer's question title, rating and feedback."""
+    if full:
+        return res
+    vue = output_projection.project(res, items_path="data", item_drop=_RETIRE[op])
+    if op == "reviews" and isinstance(vue, dict) and isinstance(vue.get("data"), list):
+        vue["data"] = [_review(r) for r in vue["data"]]
+    return vue
+
+
+def _review(r: Any) -> Any:
+    if not isinstance(r, dict):
+        return r
+    out = dict(r)
+    if isinstance(r.get("template"), dict):
+        out["template"] = r["template"].get("title")
+    if isinstance(r.get("answers"), list):
+        out["answers"] = [
+            {"question": (a.get("question") or {}).get("title")
+             if isinstance(a.get("question"), dict) else a.get("question"),
+             "rating": a.get("rating"), "feedback": a.get("feedback")}
+            if isinstance(a, dict) else a
+            for a in r["answers"]]
+    return out
 
 
 def _check_op(op: str, permis: Dict[str, tuple], fournis: Dict[str, Any]) -> None:
@@ -55,12 +111,15 @@ def register(mcp: FastMCP) -> None:
         order: Optional[Literal["asc", "desc"]] = None,
         page: Optional[int] = None,
         size: Optional[int] = None,
+        full: bool = False,
     ) -> Any:
         """Modjo — call reviews (coaching scorecards), read only: template, reviewee,
         overall rating and the answer to each question (ratings 0-4, -1 = not
         applicable). Newest first; `order="asc"` for an incremental sync. Private
         reviews are returned too (`isPrivate` is informative). Paged
-        (`pagination.next_page`).
+        (`pagination.next_page`). The default view gives each review's template
+        TITLE and, per answer, the question title, rating and feedback;
+        `full=True` returns the reviews as Modjo sends them.
 
         Args:
             start_date_time: reviews created from this ISO 8601 date-time.
@@ -68,10 +127,11 @@ def register(mcp: FastMCP) -> None:
             order: asc | desc (default desc).
             page: page number, from 1.
             size: items per page, 1-100 (default 25).
+            full: True = the raw reviews (answer ids and positions, template id).
         """
-        return paged(run(lambda: _client().list_call_reviews(
+        return _shape(paged(run(lambda: _client().list_call_reviews(
             start_date_time=start_date_time, end_date_time=end_date_time,
-            order=order, page=page, size=size)))
+            order=order, page=page, size=size))), "reviews", full)
 
     @mcp.tool(annotations=LECTURE)
     def modjo_crm(
@@ -85,6 +145,7 @@ def register(mcp: FastMCP) -> None:
                                  "Deleted"]] = None,
         page: Optional[int] = None,
         size: Optional[int] = None,
+        full: bool = False,
     ) -> Any:
         """Modjo — the CRM objects Modjo mirrors from the connected CRM, read only:
         accounts, contacts, deals (status, stage, amount, close date, owner), and
@@ -92,7 +153,9 @@ def register(mcp: FastMCP) -> None:
         CRM id and link. Their ids filter `modjo_calls op=list`.
 
         `op`: `accounts` | `contacts` | `deals` (lists, paged, `name` filter) ·
-        `account` | `contact` (one, by id) · `deal_summary` (`deal_id`).
+        `account` | `contact` (one, by id) · `deal_summary` (`deal_id`). A list
+        leaves out timestamps and CRM links (`full=True` for everything); one
+        object is served whole.
 
         Args:
             op: see above.
@@ -103,18 +166,22 @@ def register(mcp: FastMCP) -> None:
             status: deals — Open | Closed won | Closed lost | Closed | Deleted.
             page: lists — page number, from 1.
             size: lists — items per page, 1-100 (default 25).
+            full: lists — True = the raw records (timestamps, CRM links).
         """
         _check_op(op, _CRM_PERMIS, dict(name=name, account_id=account_id,
                                         contact_id=contact_id, deal_id=deal_id,
-                                        status=status, page=page, size=size))
+                                        status=status, page=page, size=size, full=full))
         c = _client()
         if op == "accounts":
-            return paged(run(lambda: c.list_accounts(name=name, page=page, size=size)))
+            return _shape(paged(run(lambda: c.list_accounts(
+                name=name, page=page, size=size))), op, full)
         if op == "contacts":
-            return paged(run(lambda: c.list_contacts(name=name, page=page, size=size)))
+            return _shape(paged(run(lambda: c.list_contacts(
+                name=name, page=page, size=size))), op, full)
         if op == "deals":
-            return paged(run(lambda: c.list_deals(name=name, account_id=account_id,
-                                                  status=status, page=page, size=size)))
+            return _shape(paged(run(lambda: c.list_deals(
+                name=name, account_id=account_id, status=status, page=page,
+                size=size))), op, full)
         if op == "account":
             need(op, account_id=account_id)
             return run(lambda: c.get_account(account_id), "no account with this id")
@@ -137,6 +204,7 @@ def register(mcp: FastMCP) -> None:
         template_uuid: Optional[str] = None,
         page: Optional[int] = None,
         size: Optional[int] = None,
+        full: bool = False,
     ) -> Any:
         """Modjo — the workspace, read only: tags (ids for `modjo_calls
         op=add_tag`), topics detected in calls, members (role user, manager or
@@ -147,7 +215,9 @@ def register(mcp: FastMCP) -> None:
 
         `op`: `tags` | `topics` | `users` | `teams` | `team_members` |
         `crm_templates` | `crm_template_fields` (lists, paged) · `user` | `team` |
-        `crm_template` (one).
+        `crm_template` (one). A list leaves out timestamps, colours, and members'
+        phone numbers and timezones (`full=True` for everything); one object is
+        served whole.
 
         Args:
             op: see above.
@@ -159,23 +229,26 @@ def register(mcp: FastMCP) -> None:
             template_uuid: crm_template / crm_template_fields — the template UUID.
             page: lists — page number, from 1.
             size: lists — items per page, 1-100 (default 25).
+            full: lists — True = the raw records.
         """
         _check_op(op, _WORKSPACE_PERMIS, dict(email=email, user_id=user_id, name=name,
                                               team_id=team_id, status=status,
                                               template_uuid=template_uuid, page=page,
-                                              size=size))
+                                              size=size, full=full))
         c = _client()
         if op == "tags":
-            return paged(run(lambda: c.list_tags(page=page, size=size)))
+            return _shape(paged(run(lambda: c.list_tags(page=page, size=size))), op, full)
         if op == "topics":
-            return paged(run(lambda: c.list_topics(page=page, size=size)))
+            return _shape(paged(run(lambda: c.list_topics(page=page, size=size))), op, full)
         if op == "users":
-            return paged(run(lambda: c.list_users(email=email, page=page, size=size)))
+            return _shape(paged(run(lambda: c.list_users(
+                email=email, page=page, size=size))), op, full)
         if op == "teams":
-            return paged(run(lambda: c.list_teams(name=name, page=page, size=size)))
+            return _shape(paged(run(lambda: c.list_teams(
+                name=name, page=page, size=size))), op, full)
         if op == "crm_templates":
-            return paged(run(lambda: c.list_crm_filling_templates(
-                status=status, page=page, size=size)))
+            return _shape(paged(run(lambda: c.list_crm_filling_templates(
+                status=status, page=page, size=size))), op, full)
         if op == "user":
             need(op, user_id=user_id)
             return run(lambda: c.get_user(user_id), "no member with this id")
@@ -183,14 +256,15 @@ def register(mcp: FastMCP) -> None:
             need(op, team_id=team_id)
             if op == "team":
                 return run(lambda: c.get_team(team_id), "no team with this id")
-            return paged(run(lambda: c.list_team_members(team_id, page=page, size=size),
-                             "no team with this id"))
+            return _shape(paged(run(lambda: c.list_team_members(
+                team_id, page=page, size=size), "no team with this id")), op, full)
         need(op, template_uuid=template_uuid)
         if op == "crm_template":
             return run(lambda: c.get_crm_filling_template(template_uuid),
                        "no CRM filling template with this uuid")
-        return paged(run(lambda: c.list_crm_filling_template_fields(
-            template_uuid, page=page, size=size), "no CRM filling template with this uuid"))
+        return _shape(paged(run(lambda: c.list_crm_filling_template_fields(
+            template_uuid, page=page, size=size),
+            "no CRM filling template with this uuid")), op, full)
 
     @mcp.tool()
     def modjo_ask(

@@ -207,6 +207,58 @@ def test_crm_et_workspace(banc):
     assert "does not use `email`" in _refus(banc, "modjo_workspace", op="tags", email="x@y.z")
 
 
+_DEAL = {"id": 7, "name": "Renouvellement", "crmId": "d-1", "crmIdentifier": "d-1",
+         "crmLink": "https://crm.example/deals/d-1", "crm": "hubspot", "status": "Open",
+         "stage": "Proposal", "amount": 1200, "currency": "EUR", "accountId": 4,
+         "ownerId": 2, "createdOn": "2026-10-01T00:00:00Z",
+         "modifiedOn": "2026-10-02T00:00:00Z", "champ_de_demain": "servi"}
+_PAGE = {"page": 1, "size": 25, "total": 1}
+
+
+def test_une_liste_crm_rend_l_index_et_full_le_brut(banc):
+    """ADR 0047 : le défaut retire les clés nommées (dates, lien et identifiant CRM
+    servi deux fois) ; un champ que Modjo ajoute demain passe ; `full=True` rend tout."""
+    banc.prepare = _rendre("list_deals", {"data": [dict(_DEAL)], "pagination": _PAGE})
+    (deal,) = _appeler(banc, "modjo_crm", op="deals")["data"]
+    assert deal == {"id": 7, "name": "Renouvellement", "crmId": "d-1", "crm": "hubspot",
+                    "status": "Open", "stage": "Proposal", "amount": 1200,
+                    "currency": "EUR", "accountId": 4, "ownerId": 2,
+                    "champ_de_demain": "servi"}
+    assert _appeler(banc, "modjo_crm", op="deals", full=True)["data"] == [_DEAL]
+
+
+def test_un_objet_seul_est_servi_entier_et_refuse_full(banc):
+    assert "does not use `full`" in _refus(banc, "modjo_crm", op="account", account_id=4,
+                                           full=True)
+    assert "does not use `full`" in _refus(banc, "modjo_workspace", op="user", user_id=2,
+                                           full=True)
+
+
+def test_les_membres_sans_telephone_ni_fuseau(banc):
+    banc.prepare = _rendre("list_users", {"data": [{
+        "id": 2, "email": "jane@company.example", "firstName": "Jane", "lastName": "Doe",
+        "phoneNumber": "+33100000000", "jobTitle": "AE", "role": "user",
+        "timezone": "Europe/Paris", "createdOn": "x", "modifiedOn": "y"}],
+        "pagination": _PAGE})
+    (u,) = _appeler(banc, "modjo_workspace", op="users")["data"]
+    assert u == {"id": 2, "email": "jane@company.example", "firstName": "Jane",
+                 "lastName": "Doe", "jobTitle": "AE", "role": "user"}
+
+
+def test_une_revue_garde_question_note_et_commentaire(banc):
+    revue = {"id": 1, "callId": 9, "template": {"id": 3, "title": "Découverte"},
+             "revieweeId": 2, "rating": 3.5, "isPrivate": False, "isAiGenerated": False,
+             "createdById": 5, "createdOn": "2026-10-01T00:00:00Z", "modifiedOn": "z",
+             "answers": [{"id": 11, "weight": 0, "rating": 4, "feedback": "Bien",
+                          "question": {"id": 21, "title": "Besoin qualifié ?"}}]}
+    banc.prepare = _rendre("list_call_reviews", {"data": [revue], "pagination": _PAGE})
+    (r,) = _appeler(banc, "modjo_reviews")["data"]
+    assert r["template"] == "Découverte" and "modifiedOn" not in r
+    assert r["answers"] == [{"question": "Besoin qualifié ?", "rating": 4,
+                             "feedback": "Bien"}]
+    assert _appeler(banc, "modjo_reviews", full=True)["data"] == [revue]
+
+
 def test_la_question_a_l_ia(banc):
     _appeler(banc, "modjo_ask", scope_type="deal", scope_id="42", question="Budget?",
              answer_schema={"type": "object", "properties": {"b": {"type": "boolean"}}})
