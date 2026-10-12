@@ -22,6 +22,14 @@ sont remplacés par la ligne `uv sync --frozen --quiet` (doublure `uv`) et le lo
 « installé par le verrou : uv.lock <sha12> » ; aucun autre geste n'a bougé. Le scénario
 `prod-tag-sans-verrou` rejoue un tag antérieur au verrou : refus nommé, rien d'installé.
 
+Bac à sable des fonctions (#1202) : après `uv sync`, `bg_install` pose le bac à sable
+dans l'arbre de la couleur (`.venv/bin/python scripts/installer_bac_a_sable.py
+<arbre>/.bac-a-sable`, doublure `PYTHON_DU_VENV`) ; chaque scénario qui installe gagne
+cet appel et le log « bac à sable posé », et l'état final les deux installateurs. Deux
+scénarios neufs : `prod-bac-a-sable-ko` (la pose échoue : rien ne démarre, l'ancienne
+couleur reste) et `prod-tag-sans-bac-a-sable` (un tag sans installateur : les gestes
+d'avant, à l'identique).
+
 La trace contient : chaque commande externe et ses arguments, dans l'ordre ; ce que
 le script écrit sur sa sortie ; son code de sortie ; et l'état final des fichiers
 qu'il écrit (amont Caddy, pointeur de couleur, coordonnée de version, unités posées).
@@ -87,6 +95,14 @@ SCENARIOS: dict[str, tuple[str, list[str], str, str, dict[str, str]]] = {
     # le lanceur hors git passe de la couleur en service à la nouvelle.
     "prod-lanceur-propage": ("oto-backend.sh", [TAG], "prod", "blue",
                              {"BANC_LANCEUR_PROPAGE": "1"}),
+    # La pose du bac à sable des fonctions échoue (réseau, empreinte, contrôle) : la
+    # couleur n'est pas démarrée, l'ancienne reste en service.
+    "prod-bac-a-sable-ko": ("oto-backend.sh", [TAG], "prod", "blue",
+                            {"BANC_BAC_A_SABLE_KO": "1"}),
+    # Un tag antérieur à la pose du bac à sable ne porte pas son installateur : rien
+    # n'est posé, l'installation continue comme avant.
+    "prod-tag-sans-bac-a-sable": ("oto-backend.sh", [TAG], "prod", "blue",
+                                  {"BANC_SANS_BAC_A_SABLE": "1"}),
     "canari-bleu-vers-vert": ("oto-backend-canari.sh", [SHA], "canari", "blue", {}),
     "canari-vert-vers-bleu": ("oto-backend-canari.sh", [SHA], "canari", "green", {}),
     "canari-retour-arriere": ("oto-backend-canari.sh", ["--rollback"], "canari", "blue", {}),
@@ -156,6 +172,12 @@ esac''',
 VERROU_NOM = "uv.lock"
 VERROU = "# uv.lock du banc\nversion = 1\n"
 
+# L'interpréteur du venv de la couleur : appelé par son chemin (jamais par le PATH),
+# il est posé dans chaque arbre et journalise comme une doublure.
+PYTHON_DU_VENV = ('#!/bin/bash\necho "python $*" >> "$BANC_TRACE"\n'
+                  'echo "  (dans $(pwd))" >> "$BANC_TRACE"\n'
+                  '[ -n "${BANC_BAC_A_SABLE_KO:-}" ] && exit 1\nexit 0\n')
+
 LANCEUR = '#!/bin/bash\nexec "$(cd "$(dirname "$0")" && pwd)/.venv/bin/oto-mcp"\n'
 LANCEUR_FIGE = "#!/bin/bash\nexec /opt/oto-mcp-blue/.venv/bin/oto-mcp\n"
 
@@ -190,6 +212,12 @@ def _preparer(racine: pathlib.Path, deploy: pathlib.Path, env: str, active: str,
     for couleur in ("blue", "green"):
         arbre = pathlib.Path(r + ARBRES[env] + "-" + couleur)
         (arbre / ".venv/bin").mkdir(parents=True)
+        python = arbre / ".venv/bin/python"
+        python.write_text(PYTHON_DU_VENV)
+        python.chmod(0o755)
+        if not variantes.get("BANC_SANS_BAC_A_SABLE"):
+            (arbre / "scripts").mkdir()
+            (arbre / "scripts/installer_bac_a_sable.py").write_text("# installateur du tag\n")
         (arbre / "pyproject.toml").write_text(PYPROJECT)
         if not variantes.get("BANC_SANS_VERROU"):
             (arbre / VERROU_NOM).write_text(VERROU)

@@ -14,6 +14,9 @@ git reset --hard v1.2.3
 uv sync --frozen --quiet
   (dans /opt/oto-mcp-green ; UV_PYTHON_DOWNLOADS=never)
 date +%H:%M:%S
+python scripts/installer_bac_a_sable.py /opt/oto-mcp-green/.bac-a-sable
+  (dans /opt/oto-mcp-green)
+date +%H:%M:%S
 git -C /opt/oto-mcp-green rev-parse HEAD
   (dans /opt/oto-mcp-green)
 date -Is
@@ -48,6 +51,7 @@ date +%H:%M:%S
 [12:00:00] prod: couleur en service = blue, cible = green (:9107)
 [12:00:00] install v1.2.3 dans /opt/oto-mcp-green (couleur green)
 [12:00:00] installé par le verrou : uv.lock e990828a8fd4
+[12:00:00] bac à sable posé : /opt/oto-mcp-green/.bac-a-sable
 [12:00:00] installé : 0123456789abcdef0123456789abcdef01234567
 [12:00:00] démarrage oto-mcp@green sur :9107
 [12:00:00] couleur green prête en Ns
@@ -153,6 +157,8 @@ blue
 dependencies = [
     "oto-core[anonymize] @ git+https://github.com/otomata-tech/oto-core.git@v9.9.9",
 ]
+--- /opt/oto-mcp-blue/scripts/installer_bac_a_sable.py
+# installateur du tag
 --- /opt/oto-mcp-green/.oto-deploy.json
 {"ref": "v1.2.3", "commit": "0123456789abcdef0123456789abcdef01234567", "deployed_at": "2026-09-29T12:00:00+02:00"}
 --- /opt/oto-mcp-green/deploy/lanceur_secrets.py
@@ -165,4 +171,6 @@ dependencies = [
 dependencies = [
     "oto-core[anonymize] @ git+https://github.com/otomata-tech/oto-core.git@v9.9.9",
 ]
+--- /opt/oto-mcp-green/scripts/installer_bac_a_sable.py
+# installateur du tag
 --- /var/lock/oto-mcp-bluegreen-prod.lock

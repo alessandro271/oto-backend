@@ -29,6 +29,8 @@ green
 dependencies = [
     "oto-core[anonymize] @ git+https://github.com/otomata-tech/oto-core.git@v9.9.9",
 ]
+--- /opt/oto-mcp-blue/scripts/installer_bac_a_sable.py
+# installateur du tag
 --- /opt/oto-mcp-green/deploy/lanceur_secrets.py
 # lanceur du tag
 --- /opt/oto-mcp-green/deploy/oto-mcp-maintenance.service
@@ -39,3 +41,5 @@ dependencies = [
 dependencies = [
     "oto-core[anonymize] @ git+https://github.com/otomata-tech/oto-core.git@v9.9.9",
 ]
+--- /opt/oto-mcp-green/scripts/installer_bac_a_sable.py
+# installateur du tag
