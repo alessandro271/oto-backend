@@ -36,9 +36,9 @@ Preuves, dans l'ordre de la tâche (oto-backend, gels de prod non identifiés,
     du thread SEUL), en µs/réveil — stable d'une machine à l'autre, contrairement
     à une proportion de débit concurrent.
 12. `test_un_gel_tenu_par_un_autre_fil_nomme_les_deux_fils` — la boucle attend un
-    verrou qu'un AUTRE fil tient : la ligne « tous les fils » nomme la boucle et le
-    fil qui tient, avec leurs cadres, sous le même `gel=` que la pile principale,
-    résume en une ligne le fil au repos, ne montre ni le chien ni une variable locale.
+    verrou qu'un AUTRE fil tient : le relevé (UNE entrée, chaque ligne sous le même
+    `gel=`) nomme la boucle en tête et le fil qui tient, avec leurs cadres, marque
+    au repos le fil qui attend, ne montre ni le chien ni une variable locale.
 13. `test_un_fil_qui_tient_le_gil_en_c_est_nomme` — un fil tient le GIL dans du C
     (regex catastrophique, `re` ne rend jamais le GIL) : la boucle dort dans
     `select` ; quel que soit le fil qui reprend le GIL le premier à sa libération,
@@ -46,11 +46,22 @@ Preuves, dans l'ordre de la tâche (oto-backend, gels de prod non identifiés,
 14. `test_retard_du_chien_seul_rapporte_un_gel` — la branche « la boucle a repris
     la première », rejouée sans course : le chien se réveille en retard alors que
     la boucle vient de battre.
+15. `test_releve_boucle_bloquee_et_fil_actif` (#1108) — la boucle bloquée par un
+    `time.sleep` : le relevé porte la boucle (marquée, sur la ligne du sleep,
+    « appel C »), un fil qui calcule en Python (« en Python ») et un fil qui dort en
+    C, chacun avec nom, ident, tid noyau, démon, état et CPU.
+16. `test_une_seule_capture_par_gel_meme_long` (#1108) — un gel vu à une quinzaine de
+    réveils du chien : un relevé, une résorption, le même `gel=`.
+17. `test_plafond_de_taille_du_releve` (#1108) — quarante fils profonds : le relevé
+    tient sous son plafond, dit combien de fils il tait, garde la boucle en tête.
+18. `test_fils_au_repos_regroupes_par_pile` (#1108) — cinq fils qui attendent au même
+    endroit : un bloc, qui les nomme tous.
 """
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 import logging
 import os
 import re
@@ -95,6 +106,34 @@ def _bloque_avec_une_variable_secrete(duration: float) -> None:
     assert secret_local  # garde la variable "utilisée" aux yeux d'un lint éventuel
 
 
+_LIGNE_DU_SLEEP = next(
+    i for i, ligne in enumerate(inspect.getsourcelines(_bloque_avec_une_variable_secrete)[0],
+                                start=_bloque_avec_une_variable_secrete.__code__.co_firstlineno)
+    if "# <-- la ligne attendue" in ligne)
+
+
+# Marque de l'entrée unique d'un gel (`hang_watch.releve_des_fils`).
+_RELEVE = "fils relevés, cadres du plus profond au plus haut"
+
+
+def _gel_de(texte: str) -> str:
+    return texte.split("(gel=", 1)[1].split(")", 1)[0]
+
+
+def _blocs(releve: str) -> list[tuple[str, list[str]]]:
+    """Les blocs d'un relevé : (ligne d'en-tête du fil sans le préfixe `gel=`, ses cadres)."""
+    prefixe = f"gel={_gel_de(releve)} "
+    blocs: list[tuple[str, list[str]]] = []
+    for ligne in releve.split("\n")[1:]:
+        assert ligne.startswith(prefixe), ligne
+        corps = ligne[len(prefixe):]
+        if corps.startswith("» "):
+            blocs.append((corps, []))
+        elif corps.startswith("    ") and blocs:
+            blocs[-1][1].append(corps.strip())
+    return blocs
+
+
 def _warning_texts(caplog: pytest.LogCaptureFixture) -> list[str]:
     return [r.getMessage() for r in caplog.records if r.name == LOGGER_NAME]
 
@@ -110,11 +149,14 @@ async def test_capture_la_vraie_pile_pendant_un_vrai_blocage(caplog):
     finally:
         _stop_and_join(watch)
 
-    dumps = [t for t in _warning_texts(caplog) if "pile du thread principal" in t]
+    dumps = [t for t in _warning_texts(caplog) if _RELEVE in t]
     assert len(dumps) == 1, f"un seul dump attendu, {len(dumps)} obtenu(s) : {dumps}"
-    assert "_bloque_avec_une_variable_secrete" in dumps[0]
-    assert "time.sleep(duration)" in dumps[0]
-    assert "test_hang_watch.py" in dumps[0]
+    assert "event loop sans battement depuis" in dumps[0]
+    # Le cadre le plus profond du fil de la boucle : la ligne exacte du `time.sleep`.
+    bloc = dumps[0].split(" BOUCLE ", 1)[1].split("\n")
+    assert bloc[0] == "appel C", bloc[0]
+    assert bloc[1].endswith(
+        f"tests/test_hang_watch.py:{_LIGNE_DU_SLEEP} _bloque_avec_une_variable_secrete")
 
 
 @pytest.mark.asyncio
@@ -128,7 +170,7 @@ async def test_aucune_variable_locale_dans_le_dump(caplog):
     finally:
         _stop_and_join(watch)
 
-    dumps = [t for t in _warning_texts(caplog) if "pile du thread principal" in t]
+    dumps = [t for t in _warning_texts(caplog) if _RELEVE in t]
     assert len(dumps) == 1
     assert _SECRET_QUI_NE_DOIT_JAMAIS_PARAITRE not in dumps[0], (
         "une variable locale a fuité dans le dump — traceback.extract_stack ne "
@@ -182,7 +224,7 @@ async def test_un_seul_dump_par_episode_de_blocage_continu(caplog):
     finally:
         _stop_and_join(watch)
 
-    dumps = [t for t in _warning_texts(caplog) if "pile du thread principal" in t]
+    dumps = [t for t in _warning_texts(caplog) if _RELEVE in t]
     assert len(dumps) == 1, f"l'état d'épisode n'a pas tenu : {len(dumps)} dumps"
 
 
@@ -211,7 +253,7 @@ async def test_episode_se_rearme_apres_resorption(caplog):
         _stop_and_join(watch)
 
     warnings = _warning_texts(caplog)
-    dumps = [t for t in warnings if "pile du thread principal" in t]
+    dumps = [t for t in warnings if _RELEVE in t]
     resorptions = [t for t in warnings if "débloquée après" in t]
     assert len(dumps) == 2, f"le réarmement a échoué : {len(dumps)} dump(s) : {dumps}"
     # Une résorption après CHAQUE épisode (le 2e, laissé le temps de se résorber par le
@@ -247,7 +289,7 @@ async def test_plafond_par_minute_toutes_causes_confondues(caplog):
         _stop_and_join(watch)
 
     warnings = _warning_texts(caplog)
-    dumps = [t for t in warnings if "pile du thread principal" in t]
+    dumps = [t for t in warnings if _RELEVE in t]
     refuses = [t for t in warnings if "dump ignoré" in t]
     assert len(dumps) == 2, f"plafond non respecté côté dumps : {dumps}"
     assert len(refuses) == 2, f"les épisodes au-delà du plafond doivent se DIRE : {refuses}"
@@ -464,27 +506,28 @@ async def test_un_gel_tenu_par_un_autre_fil_nomme_les_deux_fils(caplog):
         _stop_and_join(watch)
 
     warnings = _warning_texts(caplog)
-    dumps = [t for t in warnings if "pile du thread principal" in t]
-    lignes = [t for t in warnings if " fils — chien en retard de " in t]
-    assert len(dumps) == 1 and len(lignes) == 1, warnings
-    ligne = lignes[0]
-    print(f"\n[hang_watch] {ligne}")
-    assert "\n" not in ligne, "une seule ligne de journal"
-
-    gel = dumps[0].split("(gel=", 1)[1].split(")", 1)[0]
-    assert ligne.startswith(f"gel={gel} fils"), "le même identifiant que la pile principale"
+    dumps = [t for t in warnings if _RELEVE in t]
+    assert len(dumps) == 1, warnings
+    releve = dumps[0]
+    print(f"\n[hang_watch]\n{releve}")
+    gel = _gel_de(releve)
+    # UNE entrée, chaque ligne après la première sous le même identifiant de gel.
+    assert all(l.startswith(f"gel={gel} ") for l in releve.split("\n")[1:])
 
     # Les deux fils, nommés, avec le cadre qui dit ce qu'ils font — la boucle en tête.
-    assert ligne.split(" — ", 2)[2].startswith("MainThread(boucle)[")
-    assert "tests/test_hang_watch.py:" in ligne
-    assert " _attend_le_verrou" in ligne
-    assert "fil-qui-tient-le-verrou[" in ligne and " _tient_le_verrou" in ligne
-    # Le fil qui attend sans rien tenir : résumé, sans ses cadres.
-    assert "au repos" in ligne and "fil-au-repos [threading.wait]" in ligne
+    blocs = _blocs(releve)
+    assert blocs[0][0].startswith("» « MainThread » ") and " BOUCLE " in blocs[0][0]
+    assert blocs[0][1][0].endswith(" _attend_le_verrou")
+    (coupable_bloc,) = [b for b in blocs if "« fil-qui-tient-le-verrou »" in b[0]]
+    assert any(c.endswith(" _tient_le_verrou") for c in coupable_bloc[1])
+    # Le fil qui attend sans rien tenir : marqué au repos, ses seuls cadres d'attente.
+    (repos,) = [b for b in blocs if "« fil-au-repos »" in b[0]]
+    assert "au repos (threading.wait)" in repos[0]
+    assert len(repos[1]) <= hang_watch._CADRES_AU_REPOS
     # Ni le chien lui-même, ni une variable locale, ni même son nom.
-    assert "oto-hang-watch" not in ligne
-    assert _SECRET_QUI_NE_DOIT_JAMAIS_PARAITRE not in ligne
-    assert "secret_local" not in ligne
+    assert "oto-hang-watch" not in releve
+    assert _SECRET_QUI_NE_DOIT_JAMAIS_PARAITRE not in releve
+    assert "secret_local" not in releve
 
 
 _REGEX_QUI_TIENT_LE_GIL = re.compile(r"(a+)+$")
@@ -531,12 +574,13 @@ async def test_un_fil_qui_tient_le_gil_en_c_est_nomme(caplog):
         relache.set()
         fil.join(timeout=2.0)
 
-    lignes = [t for t in _warning_texts(caplog) if " fils — chien en retard de " in t]
-    assert len(lignes) == 1, _warning_texts(caplog)
-    ligne = lignes[0]
-    print(f"\n[hang_watch] {ligne}")
-    assert "fil-qui-tient-le-gil[" in ligne and " _tient_le_gil_en_c" in ligne
-    retard = float(ligne.split("chien en retard de ", 1)[1].split("s", 1)[0])
+    releves = [t for t in _warning_texts(caplog) if _RELEVE in t]
+    assert len(releves) == 1, _warning_texts(caplog)
+    releve = releves[0]
+    print(f"\n[hang_watch]\n{releve}")
+    (bloc,) = [b for b in _blocs(releve) if "« fil-qui-tient-le-gil »" in b[0]]
+    assert any(c.endswith(" _tient_le_gil_en_c") for c in bloc[1])
+    retard = float(releve.split("chien en retard de ", 1)[1].split("s", 1)[0])
     assert retard > _INTERVAL, "le chien a attendu le GIL, lui aussi"
 
 
@@ -552,10 +596,188 @@ def test_retard_du_chien_seul_rapporte_un_gel(caplog):
             chien.start()
             chien.join()
     warnings = _warning_texts(caplog)
+    assert len(warnings) == 1, warnings
+    (releve,) = warnings
+    assert "la boucle a repris la première" in releve and _RELEVE in releve
+    assert "chien en retard de " in releve
+    assert " BOUCLE " in _blocs(releve)[0][0]
+
+
+def _calcule_en_python(arret: list, pret: threading.Event) -> None:
+    """Un fil qui calcule en Python pur (aucun appel dans la boucle) : il cède le GIL
+    à chaque bascule, entre deux instructions — jamais dans un appel."""
+    pret.set()
+    n = 0
+    while not arret:
+        n += 1
+
+
+def _dort_en_c(arret: threading.Event) -> None:
+    while not arret.is_set():
+        time.sleep(0.01)  # du C, sans cadre Python à lui
+
+
+@pytest.mark.asyncio
+async def test_releve_boucle_bloquee_et_fil_actif(caplog):
+    """La boucle bloquée par un `time.sleep` : UNE entrée qui porte le fil de la boucle
+    (marqué, sur la ligne du sleep, « appel C »), le fil qui calcule en Python
+    (« en Python », dans sa fonction), le fil qui dort dans du C, chacun avec son nom,
+    son ident, son tid noyau et s'il est démon."""
+    arret: list = []
+    pret, arret_c = threading.Event(), threading.Event()
+    calcule = threading.Thread(target=_calcule_en_python, args=(arret, pret),
+                               name="fil-qui-calcule", daemon=True)
+    dort = threading.Thread(target=_dort_en_c, args=(arret_c,), name="fil-qui-dort-en-c")
+    calcule.start()
+    dort.start()
+    assert pret.wait(1.0)
+    watch = HangWatch(interval=_INTERVAL)
+    watch.start()
+    try:
+        with caplog.at_level(logging.WARNING, logger=LOGGER_NAME):
+            _bloque_avec_une_variable_secrete(_BLOCK_S)
+            await asyncio.sleep(_INTERVAL)
+    finally:
+        arret.append(1)
+        arret_c.set()
+        calcule.join(timeout=2.0)
+        dort.join(timeout=2.0)
+        _stop_and_join(watch)
+
+    releves = [t for t in _warning_texts(caplog) if _RELEVE in t]
+    assert len(releves) == 1, _warning_texts(caplog)
+    releve = releves[0]
+    print(f"\n[hang_watch]\n{releve}")
+    assert releve.startswith("event loop sans battement depuis ")
+    blocs = _blocs(releve)
+
+    tete, cadres = blocs[0]
+    principal = threading.main_thread()
+    assert tete.startswith(f"» « MainThread » ident={principal.ident} "
+                           f"tid={principal.native_id} démon=non")
+    assert tete.endswith(" BOUCLE appel C")
+    assert cadres[0] == (f"tests/test_hang_watch.py:{_LIGNE_DU_SLEEP} "
+                         "_bloque_avec_une_variable_secrete")
+
+    (tete, cadres), = [b for b in blocs if "« fil-qui-calcule »" in b[0]]
+    assert f"ident={calcule.ident} tid={calcule.native_id} démon=oui" in tete
+    assert tete.endswith(" en Python"), tete
+    assert cadres[0].endswith(" _calcule_en_python")
+
+    (tete, cadres), = [b for b in blocs if "« fil-qui-dort-en-c »" in b[0]]
+    assert f"ident={dort.ident} tid={dort.native_id} démon=non" in tete
+    assert tete.endswith(" appel C"), tete
+    assert cadres[0].endswith(" _dort_en_c")
+
+    if sys.platform.startswith("linux"):
+        assert re.search(r"« fil-qui-calcule » .* état=[A-Z] cpu=\d+\.\d\ds", releve)
+    assert "oto-hang-watch" not in releve
+    assert _SECRET_QUI_NE_DOIT_JAMAIS_PARAITRE not in releve
+    assert releve.split("\n")[-1].endswith(f"fin du relevé : {_compte(blocs)} fils")
+
+
+def _compte(blocs: list[tuple[str, list[str]]]) -> int:
+    return sum(int(t.split(" ", 2)[1][1:]) if t.startswith("» ×") else 1 for t, _ in blocs)
+
+
+@pytest.mark.asyncio
+async def test_une_seule_capture_par_gel_meme_long(caplog):
+    """Un gel de ~8 fois le seuil, vu à une quinzaine de réveils du chien : un seul
+    relevé, une seule résorption, le même identifiant de gel."""
+    watch = HangWatch(interval=_INTERVAL)
+    watch.start()
+
+    async def heartbeat() -> None:
+        while True:
+            watch.beat()
+            await asyncio.sleep(_INTERVAL / 2)
+
+    hb = asyncio.create_task(heartbeat())
+    try:
+        with caplog.at_level(logging.WARNING, logger=LOGGER_NAME):
+            await asyncio.sleep(_INTERVAL)
+            time.sleep(_INTERVAL * 8)
+            await asyncio.sleep(_INTERVAL)
+    finally:
+        hb.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await hb
+        _stop_and_join(watch)
+
+    warnings = _warning_texts(caplog)
+    releves = [t for t in warnings if _RELEVE in t]
+    resorptions = [t for t in warnings if "débloquée après" in t]
+    assert len(releves) == 1, warnings
+    assert len(resorptions) == 1, warnings
+    assert _gel_de(releves[0]) == _gel_de(resorptions[0])
     assert len(warnings) == 2, warnings
-    constat, ligne = warnings
-    assert "la boucle a repris la première" in constat
-    assert "pile du thread principal" not in constat
-    gel = constat.split("(gel=", 1)[1].split(")", 1)[0]
-    assert ligne.startswith(f"gel={gel} fils — chien en retard de ")
-    assert "MainThread(boucle)[" in ligne
+
+
+def _attend_au_fond(profondeur: int, fin: threading.Event) -> None:
+    """Une pile profonde de `profondeur` cadres, puis une attente dans du C."""
+    if profondeur:
+        _attend_au_fond(profondeur - 1, fin)
+        return
+    while not fin.is_set():
+        time.sleep(0.01)
+
+
+def _releve_depuis_un_autre_fil(**kwargs) -> str:
+    """`releve_des_fils` exclut le fil appelant (le chien) : on l'appelle d'ailleurs,
+    pour que le fil principal y figure comme la boucle."""
+    rendu: list[str] = []
+    fil = threading.Thread(target=lambda: rendu.append(hang_watch.releve_des_fils(
+        "abc123", "entête (gel=abc123)", boucle=threading.main_thread().ident, **kwargs)))
+    fil.start()
+    fil.join()
+    return rendu[0]
+
+
+def test_plafond_de_taille_du_releve():
+    """Quarante fils actifs à 25 cadres dépasseraient le plafond : le relevé s'arrête
+    avant, le DIT avec le nombre de fils non montrés, et garde la boucle en tête."""
+    fin = threading.Event()
+    fils = [threading.Thread(target=_attend_au_fond, args=(40, fin), name=f"profond-{i}",
+                             daemon=True) for i in range(40)]
+    for f in fils:
+        f.start()
+    try:
+        time.sleep(0.1)
+        petit = _releve_depuis_un_autre_fil(plafond=4_000)
+        defaut = _releve_depuis_un_autre_fil()
+    finally:
+        fin.set()
+        for f in fils:
+            f.join(timeout=2.0)
+
+    assert len(petit) <= 4_000, len(petit)
+    derniere = petit.split("\n")[-1]
+    assert re.fullmatch(r"gel=abc123 … relevé tronqué au plafond de 4000 caractères : "
+                        r"\d+ fil\(s\) non montré\(s\)", derniere), derniere
+    assert " BOUCLE " in _blocs(petit)[0][0]
+
+    assert len(defaut) <= hang_watch._PLAFOND_RELEVE, len(defaut)
+    assert "relevé tronqué" in defaut.split("\n")[-1]
+    # Chaque fil montré l'est avec ses N derniers cadres, pas plus.
+    profonds = [c for t, c in _blocs(defaut) if "« profond-" in t]
+    assert profonds and all(len(c) == hang_watch._CADRES_PAR_FIL for c in profonds)
+
+
+def test_fils_au_repos_regroupes_par_pile():
+    """Cinq fils qui attendent au même endroit : un seul bloc, qui les nomme tous."""
+    fin = threading.Event()
+    fils = [threading.Thread(target=fin.wait, name=f"attente-{i}", daemon=True)
+            for i in range(5)]
+    for f in fils:
+        f.start()
+    try:
+        time.sleep(0.05)
+        releve = _releve_depuis_un_autre_fil()
+    finally:
+        fin.set()
+        for f in fils:
+            f.join(timeout=2.0)
+    (tete, cadres), = [b for b in _blocs(releve) if "« attente-0 »" in b[0]]
+    assert tete.startswith("» ×5 au repos (threading.wait), appel C : "), tete
+    assert all(f"« attente-{i} » ident={f.ident}" in tete for i, f in enumerate(fils))
+    assert len(cadres) == hang_watch._CADRES_AU_REPOS
