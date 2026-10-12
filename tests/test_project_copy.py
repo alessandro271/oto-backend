@@ -7,6 +7,10 @@ import oto_mcp.db.projects as PJ
 import oto_mcp.media_store as MS
 import oto_mcp.org_store as OS
 
+# Le copieur lit tout : ce banc décrit la copie, pas la garde de lecture (tests dédiés
+# en bas : `test_duplicate_skips_*_the_copier_cannot_read`).
+_LIT = lambda t, rid: True  # noqa: E731
+
 
 def _wire(monkeypatch, *, src):
     """Câble les seams de domaine + un compteur d'id pour les créations."""
@@ -92,7 +96,7 @@ def _wire(monkeypatch, *, src):
 def test_duplicate_copies_brief_and_owner(monkeypatch):
     src = {"project": {"id": 7, "brief_md": "le brief"}, "docs": [], "links": [], "files": []}
     created = _wire(monkeypatch, src=src)
-    new_id, warnings = PJ.duplicate_project(7, "Copie", "org", "42", copied_by="u1")
+    new_id, warnings = PJ.duplicate_project(7, "Copie", "org", "42", copied_by="u1", lisible=_LIT)
     assert new_id == 101 and warnings == []
     # Le dernier None = `context_org_id` : NULL pour une copie d'ORG, dont le contexte
     # se dérive de son propriétaire (ADR 0030 amendé).
@@ -110,7 +114,7 @@ def test_une_copie_PERSONNELLE_garde_son_org_de_contexte(monkeypatch):
     travaille — et on aurait remplacé un excès de partage par une disparition."""
     src = {"project": {"id": 7, "brief_md": "b"}, "docs": [], "links": [], "files": []}
     created = _wire(monkeypatch, src=src)
-    PJ.duplicate_project(7, "La mienne", "user", "u1", copied_by="u1", context_org_id=35)
+    PJ.duplicate_project(7, "La mienne", "user", "u1", copied_by="u1", context_org_id=35, lisible=_LIT)
     (_pid, ot, oid, _n, _b, _by, ctx_org) = created["projects"][0]
     assert (ot, oid) == ("user", "u1"), "la copie appartient à la personne"
     assert ctx_org == 35, "et reste rangée dans l'org où elle a été faite"
@@ -126,7 +130,7 @@ def test_duplicate_remaps_doc_tree(monkeypatch):
     ]
     src = {"project": {"id": 7, "brief_md": ""}, "docs": docs, "links": [], "files": []}
     created = _wire(monkeypatch, src=src)
-    PJ.duplicate_project(7, "Copie", "org", "42")
+    PJ.duplicate_project(7, "Copie", "org", "42", lisible=_LIT)
     by_title = {d["title"]: d for d in created["docs"]}
     # Hiérarchie préservée : chaque parent pointe sur le NOUVEL id de son parent.
     assert by_title["R"]["parent_id"] is None
@@ -141,7 +145,7 @@ def test_duplicate_preserves_links(monkeypatch):
               "role": "données société", "config": {"identity_id": "acc_1"}}]
     src = {"project": {"id": 7, "brief_md": ""}, "docs": [], "links": links, "files": []}
     created = _wire(monkeypatch, src=src)
-    PJ.duplicate_project(7, "Copie", "org", "42")
+    PJ.duplicate_project(7, "Copie", "org", "42", lisible=_LIT)
     assert created["links"] == [
         (101, "connecteur", "fr", "Entreprises", "données société", {"identity_id": "acc_1"})]
 
@@ -155,7 +159,7 @@ def test_duplicate_provisions_empty_tableau(monkeypatch):
                            "schema": {"fields": [{"key": "name"}]}}],
            "ns_rows": {5: [{"row_id": "r1", "data": {"name": "A"}}]}}
     created = _wire(monkeypatch, src=src)
-    PJ.duplicate_project(7, "Campagne 1", "org", "42")
+    PJ.duplicate_project(7, "Campagne 1", "org", "42", lisible=_LIT)
     # Datastore frais possédé par la copie (org 42), nom dérivé du source.
     assert len(created["provisioned_ns"]) == 1
     new_ns = created["provisioned_ns"][0]
@@ -177,7 +181,7 @@ def test_duplicate_seeds_tableau(monkeypatch):
            "ns_rows": {5: [{"row_id": "r1", "data": {"k": 1}},
                            {"row_id": "r2", "data": {"k": 2}}]}}
     created = _wire(monkeypatch, src=src)
-    PJ.duplicate_project(7, "Copie", "org", "42")
+    PJ.duplicate_project(7, "Copie", "org", "42", lisible=_LIT)
     new_ns = created["provisioned_ns"][0]
     assert created["rows_inserted"] == [
         (new_ns["id"], "r1", {"k": 1}), (new_ns["id"], "r2", {"k": 2})]
@@ -193,7 +197,7 @@ def test_duplicate_shared_tableau_stays_pointer(monkeypatch):
            "datastores": [{"id": 5, "datastore": "suppression", "schema": None,
                            "owner_type": "org", "owner_id": "42"}]}
     created = _wire(monkeypatch, src=src)
-    new_id, warnings = PJ.duplicate_project(7, "Copie", "org", "42")
+    new_id, warnings = PJ.duplicate_project(7, "Copie", "org", "42", lisible=_LIT)
     assert created["provisioned_ns"] == []               # rien de provisionné
     assert created["links"] == [(101, "tableau", "5", "Commun", None, None)]
     assert warnings == []
@@ -210,7 +214,7 @@ def test_duplicate_reprovisions_cross_owner_tableau(monkeypatch):
                            "owner_id": "2", "schema": {"fields": [{"key": "urn"}]}}],
            "ns_rows": {5: [{"row_id": "r1", "data": {"urn": "secret"}}]}}
     created = _wire(monkeypatch, src=src)
-    new_id, warnings = PJ.duplicate_project(7, "Copie", "org", "42")
+    new_id, warnings = PJ.duplicate_project(7, "Copie", "org", "42", lisible=_LIT)
     # Un datastore frais possédé par l'org 42, schéma cloné, AUCUNE row de la source.
     assert len(created["provisioned_ns"]) == 1
     new_ns = created["provisioned_ns"][0]
@@ -230,7 +234,7 @@ def test_duplicate_skips_dead_tableau_link(monkeypatch):
     src = {"project": {"id": 7, "brief_md": ""}, "docs": [], "links": links, "files": [],
            "datastores": []}                              # ns 5 n'existe plus
     created = _wire(monkeypatch, src=src)
-    new_id, warnings = PJ.duplicate_project(7, "Copie", "org", "42")
+    new_id, warnings = PJ.duplicate_project(7, "Copie", "org", "42", lisible=_LIT)
     assert created["links"] == []                         # lien mort non copié
     assert created["provisioned_ns"] == []
     assert len(warnings) == 1 and "ne résout plus" in warnings[0]
@@ -273,7 +277,7 @@ def test_duplicate_copies_files_via_s3(monkeypatch):
               "public": True, "public_url": "https://x"}]
     src = {"project": {"id": 7, "brief_md": ""}, "docs": [], "links": [], "files": files}
     created = _wire(monkeypatch, src=src)
-    PJ.duplicate_project(7, "Copie", "org", "42")
+    PJ.duplicate_project(7, "Copie", "org", "42", lisible=_LIT)
     assert len(created["files"]) == 1
     pid, key, fn, kw = created["files"][0]
     assert pid == 101 and fn == "doc.pdf"
@@ -305,7 +309,7 @@ def test_duplicate_copies_procedure_from_other_org(monkeypatch):
     created = _wire(monkeypatch, src=src)
     proc = _wire_procedures(monkeypatch, instr={11: {"id": 11, "org_id": 77, "owner_type": "org",
                                                      "owner_id": "77", "title": "Enrichir"}})
-    PJ.duplicate_project(7, "Copie", "org", "42", copied_by="u1")
+    PJ.duplicate_project(7, "Copie", "org", "42", copied_by="u1", lisible=_LIT)
     assert proc["copies"] == [(11, 42, "u1")]                 # copiée dans l'org cible
     assert created["links"] == [(101, "procedure", "911", "Enrichir", "étapes", None)]
 
@@ -319,7 +323,7 @@ def test_duplicate_keeps_procedure_pointer_same_org(monkeypatch):
     created = _wire(monkeypatch, src=src)
     proc = _wire_procedures(monkeypatch, instr={11: {"id": 11, "org_id": 42, "owner_type": "org",
                                                      "owner_id": "42", "title": "Enrichir"}})
-    PJ.duplicate_project(7, "Copie", "org", "42")
+    PJ.duplicate_project(7, "Copie", "org", "42", lisible=_LIT)
     assert proc["copies"] == []                               # aucune copie
     assert created["links"] == [(101, "procedure", "11", "Enrichir", None, None)]
 
@@ -337,7 +341,7 @@ def test_duplicate_copies_a_team_procedure_of_the_same_org(monkeypatch):
     created = _wire(monkeypatch, src=src)
     proc = _wire_procedures(monkeypatch, instr={11: {"id": 11, "org_id": 42, "owner_type": "group",
                                                      "owner_id": "9", "title": "Enrichir"}})
-    PJ.duplicate_project(7, "Copie", "org", "42", copied_by="u1")
+    PJ.duplicate_project(7, "Copie", "org", "42", copied_by="u1", lisible=_LIT)
     assert proc["copies"] == [(11, 42, "u1")]
     assert created["links"] == [(101, "procedure", "911", "Enrichir", None, None)]
 
@@ -349,6 +353,38 @@ def test_duplicate_skips_dead_procedure(monkeypatch):
     src = {"project": {"id": 7, "brief_md": ""}, "docs": [], "links": links, "files": []}
     created = _wire(monkeypatch, src=src)
     _wire_procedures(monkeypatch, instr={})                   # #11 absente
-    _new, warnings = PJ.duplicate_project(7, "Copie", "org", "42")
+    _new, warnings = PJ.duplicate_project(7, "Copie", "org", "42", lisible=_LIT)
     assert created["links"] == []
     assert any("Fantôme" in w for w in warnings)
+
+
+def test_duplicate_skips_a_seeded_tableau_the_copier_cannot_read(monkeypatch):
+    """F-063 : lire le projet n'est pas lire son tableau. Le lien `seeded` est écarté
+    (ni lignes, ni schéma recopiés), la copie aboutit et le dit."""
+    links = [{"target_type": "tableau", "target_ref": "5", "label": "Vivier",
+              "role": None, "config": {"provision": "seeded"}}]
+    src = {"project": {"id": 7, "brief_md": ""}, "docs": [], "links": links, "files": [],
+           "datastores": [{"id": 5, "datastore": "vivier", "schema": {"fields": []}}],
+           "ns_rows": {5: [{"row_id": "r1", "data": {"name": "A"}}]}}
+    created = _wire(monkeypatch, src=src)
+    lus = []
+    _new, warnings = PJ.duplicate_project(
+        7, "Copie", "org", "42", copied_by="u1",
+        lisible=lambda t, rid: lus.append((t, rid)) or False)
+    assert lus == [("datastore_namespace", "5")]
+    assert created["links"] == [] and created["provisioned_ns"] == []
+    assert created["rows_inserted"] == [] and created["schemas_set"] == []
+    assert warnings == ["tableau « Vivier » : lien ignoré (source illisible pour toi)."]
+
+
+def test_duplicate_skips_a_procedure_the_copier_cannot_read(monkeypatch):
+    links = [{"target_type": "procedure", "target_ref": "11", "label": "Enrichir",
+              "role": None, "config": None, "slot": None}]
+    src = {"project": {"id": 7, "brief_md": ""}, "docs": [], "links": links, "files": []}
+    created = _wire(monkeypatch, src=src)
+    proc = _wire_procedures(monkeypatch, instr={11: {"id": 11, "org_id": 77, "owner_type": "org",
+                                                     "owner_id": "77", "title": "Enrichir"}})
+    _new, warnings = PJ.duplicate_project(7, "Copie", "org", "42", copied_by="u1",
+                                          lisible=lambda t, rid: t != "doctrine")
+    assert proc["copies"] == [] and created["links"] == []
+    assert warnings == ["procédure « Enrichir » : lien ignoré (source illisible pour toi)."]

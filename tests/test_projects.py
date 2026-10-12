@@ -43,7 +43,7 @@ def seams(monkeypatch):
     # elle a été faite, sans y être partagée. Le stub le RETIENT — un seam qui accepte
     # le paramètre et l'avale ne prouverait plus que la copie est bien perso.
     monkeypatch.setattr(P.db, "duplicate_project",
-                        lambda src, name, ot, oid, copied_by=None, context_org_id=None:
+                        lambda src, name, ot, oid, copied_by=None, context_org_id=None, **k:
                         rec["copy"].append((src, name, ot, oid, copied_by, context_org_id))
                         or (8, []))
     monkeypatch.setattr(P.db, "archive_project", lambda pid: rec["archive"].append(pid))

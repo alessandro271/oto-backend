@@ -24,6 +24,12 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
+#: Un lien vers une cible qui existe, mais hors de la portée du projet (posé avant la
+#: garde d'`op=link`) : rien ne le sert, et le remède n'est pas celui d'un lien mort.
+_HORS_PORTEE = ("hors de la portée du projet — rien ne le sert ; retire ce lien "
+                "(`op=unlink`)")
+
+
 def _resolved_procedure(link: dict):
     """L'instruction d'un lien `procedure`, ou None (réf non numérique legacy /
     guide disparu). Import paresseux (pas de cycle au boot)."""
@@ -112,6 +118,10 @@ def audit_project(project_id: int, links: Optional[list[dict]] = None, *,
                                  "slot": l.get("slot"),
                                  "why": "ce nom désigne plusieurs tableaux dans la portée "
                                         "du projet — re-lie-le par identifiant"})
+                elif l.get("hors_portee"):
+                    dead.append({"target_type": t, "target_ref": l.get("target_ref"),
+                                 "slot": l.get("slot"),
+                                 "why": _HORS_PORTEE})
                 elif not l.get("datastore"):
                     dead.append({"target_type": t, "target_ref": l.get("target_ref"),
                                  "slot": l.get("slot"),
@@ -122,7 +132,8 @@ def audit_project(project_id: int, links: Optional[list[dict]] = None, *,
                 instr = _resolved_procedure(l)
                 if instr is None:
                     dead.append({"target_type": t, "target_ref": l.get("target_ref"),
-                                 "why": "la procédure pointée ne résout plus"})
+                                 "why": (_HORS_PORTEE if l.get("hors_portee")
+                                         else "la procédure pointée ne résout plus")})
                     continue
                 procedures.append(instr)
                 missing = unbound_slots_for(instr, links)

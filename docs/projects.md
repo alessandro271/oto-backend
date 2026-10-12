@@ -141,9 +141,14 @@ Partage/transfert via **`oto_resource`** (resource_type=`project` ajouté au dis
 > d'un de ses membres — une procédure perso ne se range dans aucune org), lui est partagée
 > (partage vivant à l'un de ses principaux), ou vient de la bibliothèque plateforme.
 > (1) **À la pose**, `op=link` refuse en 404 (`unknown_tableau` / `unknown_procedure`,
-> même message que pour un numéro inexistant) une cible hors de cette portée — et, si
-> elle n'appartient pas au propriétaire du projet lui-même, une cible que le lieur ne
-> LIT pas. (2) **À la lecture**, `list_project_links` ne pose `datastore_id` (tableau)
+> même message que pour un numéro inexistant) une cible hors de cette portée, ET une
+> cible que le lieur ne LIT pas — même quand elle appartient au propriétaire du projet :
+> écrire un projet n'est pas en être membre (un bénéficiaire extérieur d'un partage en
+> écriture liait les tableaux de l'org, puis les recopiait chez lui). Un lien posé avant
+> la garde vers une cible qui existe ailleurs porte `hors_portee: true`, et l'audit le
+> dit « hors de la portée du projet » plutôt que « n'existe plus ». **La copie** (`op=copy`)
+> écarte, en le disant, tout tableau ou procédure que le COPIEUR ne lit pas
+> (`duplicate_project(lisible=…)`) : lire le projet n'est pas lire ses tableaux. (2) **À la lecture**, `list_project_links` ne pose `datastore_id` (tableau)
 > et `procedure_id` (procédure, clé neuve, même sens) que sur une cible dans la
 > portée ; la page publiée, la copie, l'inventaire, l'audit et le schéma cible d'un slot
 > lisent CES clés, jamais le `target_ref` brut — un lien posé avant la garde reste en

@@ -11,7 +11,7 @@ import logging
 import os
 import re
 from datetime import date, datetime, timezone
-from typing import Any, Iterator, Optional
+from typing import Any, Callable, Iterator, Optional
 
 import psycopg
 
@@ -594,6 +594,26 @@ def _ids_dans_la_portee(conn, proprio: Optional[dict], target_type: str,
     return {int(r["id"]) for r in rows}
 
 
+_TABLE_DE_CIBLE = {"tableau": "user_datastores", "procedure": "org_instructions"}
+
+
+def _marquer_hors_portee(conn, links: list[dict], target_type: str, ids: set) -> None:
+    """Pose `hors_portee: true` sur les liens `target_type` dont l'identifiant EXISTE
+    mais hors de la portée du projet — un lien posé avant la garde d'`op=link`. Sans
+    cette marque, l'audit le disait « n'existe plus », ce qui envoyait chercher un
+    tableau supprimé là où il fallait retirer un lien. Rien d'autre n'est servi : ni
+    nom, ni titre, ni identifiant résolu."""
+    if not ids:
+        return
+    rows = conn.execute(f"SELECT id FROM {_TABLE_DE_CIBLE[target_type]} WHERE id = ANY(%s)",
+                        (sorted(ids),)).fetchall()
+    existants = {int(r["id"]) for r in rows}
+    for l in links:
+        if (l.get("target_type") == target_type and str(l.get("target_ref", "")).isdigit()
+                and int(l["target_ref"]) in existants):
+            l["hors_portee"] = True
+
+
 _PROPRIO_SQL = ("SELECT p.owner_type, p.owner_id, p.context_org_id, g.org_id AS group_org_id "
                 "FROM projects p LEFT JOIN org_groups g "
                 "  ON p.owner_type = 'group' AND g.id::text = p.owner_id "
@@ -707,9 +727,11 @@ def list_project_links(project_id: int) -> list[dict]:
         # ⚠️ Seuls les identifiants DANS LA PORTÉE du projet (`_ids_dans_la_portee`) :
         # un identifiant pris ailleurs ne reçoit ni libellé ni `datastore_id`, donc rien
         # de ce qui lit ce dernier (page publiée, copie, `slot:`) ne l'ouvre.
-        ids = [int(l["target_ref"]) for l in out
-               if l.get("target_type") == "tableau" and str(l.get("target_ref", "")).isdigit()]
-        ids = sorted(_ids_dans_la_portee(conn, proprio, "tableau", ids))
+        ids_bruts = [int(l["target_ref"]) for l in out
+                     if l.get("target_type") == "tableau"
+                     and str(l.get("target_ref", "")).isdigit()]
+        ids = sorted(_ids_dans_la_portee(conn, proprio, "tableau", ids_bruts))
+        _marquer_hors_portee(conn, out, "tableau", set(ids_bruts) - set(ids))
         if ids:
             nrows = conn.execute(
                 "SELECT id, namespace FROM user_datastores WHERE id = ANY(%s)", (ids,),
@@ -724,9 +746,11 @@ def list_project_links(project_id: int) -> list[dict]:
                      and l.get("target_ref") and not str(l["target_ref"]).isdigit()]
         # Idem pour les titres de guide des procédures (id stable, ADR 0032) — même
         # portée : une procédure d'ailleurs ne reçoit ni titre ni `procedure_id`.
-        doc_ids = [int(l["target_ref"]) for l in out
-                   if l.get("target_type") == "procedure" and str(l.get("target_ref", "")).isdigit()]
-        doc_ids = sorted(_ids_dans_la_portee(conn, proprio, "procedure", doc_ids))
+        doc_bruts = [int(l["target_ref"]) for l in out
+                     if l.get("target_type") == "procedure"
+                     and str(l.get("target_ref", "")).isdigit()]
+        doc_ids = sorted(_ids_dans_la_portee(conn, proprio, "procedure", doc_bruts))
+        _marquer_hors_portee(conn, out, "procedure", set(doc_bruts) - set(doc_ids))
         if doc_ids:
             drows = conn.execute(
                 "SELECT id, title FROM org_instructions WHERE id = ANY(%s)", (doc_ids,),
@@ -1581,7 +1605,8 @@ def _provision_tableau(owner_type: str, owner_id: str, src_ref: str, *,
 
 def duplicate_project(src_id: int, new_name: str, owner_type: str, owner_id: str,
                       copied_by: Optional[str] = None,
-                      context_org_id: Optional[int] = None) -> int:
+                      context_org_id: Optional[int] = None, *,
+                      lisible: Callable[[str, str], bool]) -> int:
     """Copie un projet en un NOUVEAU projet possédé par `(owner_type, owner_id)` :
     brief + arbre des docs (hiérarchie préservée) + liens (label/role/config) +
     fichiers bruts (copie S3, repartis PRIVÉS). Un lien `procedure` vers une procédure
@@ -1660,6 +1685,14 @@ def duplicate_project(src_id: int, new_name: str, owner_type: str, owner_id: str
                 # réplique PAS, sinon la copie hérite d'un dead_link (oto-backend#112).
                 warnings.append(f"tableau « {label} » : lien ignoré (la source ne résout plus).")
                 continue
+            # ⚠️ **Le COPIEUR doit lire la source** (`lisible`, la règle de contenu de
+            # l'appelant — la couche `db` ne la connaît pas). Lire le projet n'est pas
+            # lire ses tableaux : sans cette garde, `seeded` versait chez le copieur
+            # les lignes d'un tableau qu'il ne voit pas, et `empty`/le re-provisionnement
+            # son schéma. Le lien est écarté, la copie continue.
+            if not lisible("datastore_namespace", str(target_ref)):
+                warnings.append(f"tableau « {label} » : lien ignoré (source illisible pour toi).")
+                continue
             if mode in ("empty", "seeded"):
                 target_ref = _provision_tableau(
                     owner_type, owner_id, target_ref, seed=(mode == "seeded"),
@@ -1698,6 +1731,11 @@ def duplicate_project(src_id: int, new_name: str, owner_type: str, owner_id: str
             # pour « déjà chez la cible » — le lien copié pointait alors une procédure
             # que l'org ne possède pas (#681).
             if (str(src_instr["owner_type"]), str(src_instr["owner_id"])) != ("org", str(owner_id)):
+                # Même garde que les tableaux : on ne recopie pas le corps d'une
+                # procédure que le copieur ne lit pas.
+                if not lisible("doctrine", str(target_ref)):
+                    warnings.append(f"procédure « {label} » : lien ignoré (source illisible pour toi).")
+                    continue
                 try:
                     copied = org_store.copy_instruction_to_owner(
                         int(target_ref), "org", owner_id, set_by=copied_by)

@@ -69,6 +69,11 @@ def monde(live):
     return m
 
 
+def _lit(sub):
+    from oto_mcp import ownership
+    return lambda t, rid: ownership.can_access(sub, t, rid, "read")
+
+
 def _link(m, target_type: str, ref) -> dict:
     from oto_mcp.capabilities import projects as P
     from oto_mcp.capabilities._types import ResolvedCtx
@@ -141,7 +146,8 @@ def test_la_copie_ne_recopie_ni_les_lignes_ni_le_corps_d_ailleurs(monde):
     org_c = org_store.create_org(f"c_{uuid.uuid4().hex[:6]}", created_by=monde["moi"])
     org_store.add_org_member(org_c, monde["moi"])
     new_id, warnings = db.duplicate_project(monde["piege"], "copie", "org", str(org_c),
-                                            copied_by=monde["moi"])
+                                            copied_by=monde["moi"],
+                                            lisible=_lit(monde["moi"]))
     liens = db.list_project_links(new_id)
     assert not any(l["target_ref"] in (str(monde["ns_v"]), str(monde["proc_v"]))
                    for l in liens)
@@ -212,3 +218,132 @@ def test_les_liens_legitimes_d_un_projet_d_equipe_ou_perso_restent_vivants(monde
     # Et le tableau de V reste hors de chacune de ces portées.
     for pid, _, _ in cas:
         assert db.refs_dans_la_portee(pid, "tableau", [monde["ns_v"]]) == set()
+
+
+# ── Revue du 12/10 : le lieur doit LIRE la cible, même quand elle est au propriétaire ─
+
+@pytest.fixture(scope="module")
+def externe(monde):
+    """Un compte EXTÉRIEUR à l'org A, bénéficiaire d'un partage en ÉCRITURE du projet."""
+    from oto_mcp import db
+    sub = f"ext_{uuid.uuid4().hex[:8]}"
+    db.upsert_user(sub, email=f"{sub}@example.test")
+    db.grant_resource("project", str(monde["projet"]), "user", sub, role="editor")
+    db.grant_resource("project", str(monde["piege"]), "user", sub, role="viewer")
+    return sub
+
+
+def _link_par(m, sub, target_type, ref, **kw) -> dict:
+    from oto_mcp.capabilities import projects as P
+    from oto_mcp.capabilities._types import ResolvedCtx
+    return P._project(ResolvedCtx(sub=sub, org_id=m["org_a"]),
+                      P.ProjectInput(op="link", project_id=m["projet"],
+                                     target_type=target_type, target_ref=str(ref), **kw))
+
+
+def test_un_beneficiaire_exterieur_ne_lie_pas_un_tableau_de_l_org(monde, externe):
+    """B1 : la cible est à l'org propriétaire du projet, donc DANS sa portée — mais le
+    lieur n'est pas membre et ne la lit pas. Un membre, lui, la lie."""
+    from oto_mcp import ownership
+    from oto_mcp.capabilities._types import AuthzDenied
+    assert ownership.can_access(externe, "project", str(monde["projet"]), "write")
+    with pytest.raises(AuthzDenied) as e:
+        _link_par(monde, externe, "tableau", monde["ns_a"])
+    assert (e.value.status, e.value.code) == (404, "unknown_tableau")
+    with pytest.raises(AuthzDenied) as e:
+        _link_par(monde, externe, "procedure", monde["proc_a"])
+    assert (e.value.status, e.value.code) == (404, "unknown_procedure")
+    out = _link_par(monde, monde["moi"], "tableau", monde["ns_a"])
+    assert any(l.get("datastore_id") == monde["ns_a"] for l in out["links"])
+
+
+def test_la_copie_ecarte_ce_que_le_copieur_ne_lit_pas(monde, externe):
+    """F-063 : le lien `seeded` vers le tableau de l'org A est DANS la portée du projet
+    source ; un lecteur extérieur qui copie ne reçoit pourtant ni ses lignes, ni la
+    procédure de A. La copie aboutit, le lien est écarté et le dit."""
+    from oto_mcp import db, org_store
+    _ligne(monde["ns_a"], "donnée de A")
+    org_x = org_store.create_org(f"x_{uuid.uuid4().hex[:6]}", created_by=externe)
+    org_store.add_org_member(org_x, externe)
+    src = db.create_project("org", str(monde["org_a"]), "seme", created_by=monde["moi"])
+    db.add_project_link(src, "tableau", str(monde["ns_a"]), "Vivier",
+                        config={"provision": "seeded"})
+    db.add_project_link(src, "procedure", str(monde["proc_a"]), None)
+    db.grant_resource("project", str(src), "user", externe, role="viewer")
+    new_id, warnings = db.duplicate_project(src, "copie", "org", str(org_x),
+                                            copied_by=externe, lisible=_lit(externe))
+    assert db.list_project_links(new_id) == []
+    assert len([w for w in warnings if "illisible pour toi" in w]) == 2
+    assert "Procédure A" not in [i.get("title")
+                                 for i in org_store.list_instructions("org", org_x)]
+    # Contrôle positif : le membre, lui, reçoit le vivier semé.
+    org_y = org_store.create_org(f"y_{uuid.uuid4().hex[:6]}", created_by=monde["moi"])
+    org_store.add_org_member(org_y, monde["moi"])
+    new_id, _ = db.duplicate_project(src, "copie", "org", str(org_y),
+                                     copied_by=monde["moi"], lisible=_lit(monde["moi"]))
+    seme = next(l for l in db.list_project_links(new_id) if l["target_type"] == "tableau")
+    assert [r["data"]["nom"] for r in db.datastore_list_rows(seme["datastore_id"],
+                                                             limit=None)] == ["donnée de A"]
+
+
+def test_un_lien_hors_portee_le_dit_a_l_audit(monde):
+    """N3 : un lien posé avant la garde vers une cible qui EXISTE ailleurs n'est pas
+    « supprimé » — il est hors portée, et le remède est de le retirer."""
+    from oto_mcp import db, project_audit
+    db.add_project_link(monde["piege"], "tableau", "2000000001", None)   # n'existe pas
+    liens = db.list_project_links(monde["piege"])
+    par_ref = {l["target_ref"]: l for l in liens}
+    assert par_ref[str(monde["ns_v"])].get("hors_portee") is True
+    assert par_ref[str(monde["proc_v"])].get("hors_portee") is True
+    assert "hors_portee" not in par_ref["2000000001"]
+    assert "hors_portee" not in par_ref[str(monde["ns_a"])]
+    morts = {d["target_ref"]: d["why"]
+             for d in project_audit.audit_project(monde["piege"], liens)["dead_links"]}
+    assert morts[str(monde["ns_v"])].startswith("hors de la portée du projet")
+    assert morts[str(monde["proc_v"])].startswith("hors de la portée du projet")
+    assert morts["2000000001"] == "le tableau pointé n'existe plus"
+
+
+def test_la_procedure_d_une_equipe_se_lie_par_ses_membres_seulement(monde):
+    """N9 : procédure d'ÉQUIPE de l'org A, projet de l'org A. Dans la portée ; le
+    membre de l'équipe la lie, un membre de l'org hors de l'équipe non."""
+    from oto_mcp import db, group_store, org_store
+    from oto_mcp.capabilities._types import AuthzDenied
+    u = uuid.uuid4().hex[:6]
+    collegue = f"col_{u}"
+    db.upsert_user(collegue, email=f"{collegue}@example.test")
+    org_store.add_org_member(monde["org_a"], collegue)
+    equipe = group_store.create_group(monde["org_a"], f"t_{u}")
+    group_store.add_group_member(equipe, collegue)
+    org_store.set_instruction("group", equipe, f"eq-{u}", "# eq\n", title="Eq",
+                              set_by=collegue)
+    proc = int(org_store.get_instruction("group", equipe, f"eq-{u}")["id"])
+    with pytest.raises(AuthzDenied) as e:
+        _link_par(monde, monde["moi"], "procedure", proc)   # moi : pas dans l'équipe
+    assert e.value.status == 404
+    db.grant_resource("project", str(monde["projet"]), "user", collegue, role="editor")
+    out = _link_par(monde, collegue, "procedure", proc)
+    assert any(l.get("procedure_id") == proc for l in out["links"])
+
+
+def test_un_tableau_de_la_bibliotheque_plateforme_se_lie(monde):
+    """N9 : un tableau PLATEFORME est lisible par tous, et dans toute portée."""
+    from oto_mcp import db
+    try:
+        ns = db.create_datastore("platform", "platform", f"biblio_{uuid.uuid4().hex[:6]}")
+    except Exception as e:  # noqa: BLE001 — la base refuse ce propriétaire : rien à lier
+        pytest.skip(f"pas de tableau plateforme créable ici : {e}")
+    out = _link(monde, "tableau", ns)
+    assert any(l.get("datastore_id") == ns for l in out["links"])
+
+
+def test_le_slot_par_le_vrai_chemin_ne_lie_ni_ne_schematise_un_tableau_d_ailleurs(monde):
+    """N9 : `op=link … slot=` sur le tableau de V — refus 404 avant toute écriture,
+    schéma de V intact, aucun lien posé."""
+    from oto_mcp import db
+    from oto_mcp.capabilities._types import AuthzDenied
+    with pytest.raises(AuthzDenied) as e:
+        _link_par(monde, monde["moi"], "tableau", monde["ns_v"], slot="vivier")
+    assert (e.value.status, e.value.code) == (404, "unknown_tableau")
+    assert db.get_datastore_by_id(monde["ns_v"])["schema"] in (None, {})
+    assert not any(l.get("slot") == "vivier" for l in db.list_project_links(monde["projet"]))
