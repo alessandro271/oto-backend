@@ -28,6 +28,19 @@ def test_secret_from_input_single_key_raw():
     assert credentials_store.secret_from_input("serper", api_key="K") == "K"
 
 
+def test_secret_from_input_single_key_lue_sous_le_nom_de_son_champ():
+    """Une fenêtre de saisie rend `{"key": …}` : la clé unique s'y lit, comme au palier
+    membre. Avant, elle était ignorée et la pose refusée « clé d'API vide »."""
+    assert credentials_store.secret_from_input("serper", fields={"key": " K "}) == "K"
+
+
+def test_secret_from_input_single_key_deux_valeurs_differentes_refusees():
+    with pytest.raises(ValueError, match="conflicting_api_key"):
+        credentials_store.secret_from_input("serper", api_key="A", fields={"key": "B"})
+    assert credentials_store.secret_from_input("serper", api_key="A",
+                                               fields={"key": "A"}) == "A"
+
+
 def test_secret_from_input_single_key_empty_raises():
     with pytest.raises(ValueError, match="empty_api_key"):
         credentials_store.secret_from_input("serper", api_key="  ")

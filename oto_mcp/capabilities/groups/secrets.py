@@ -133,7 +133,8 @@ CAPABILITIES += [
         key="group.secret.set", handler=_set_secret, Input=SetGroupSecretInput,
         authz=GROUP_ADMIN_OF("group_id"), Output=GroupSecretSet,
         description=("Set/rotate a group's shared account credential for a provider "
-                     "(org-shareable only). Single-key connectors: pass `api_key`. "
+                     "(org-shareable only). Single-key connectors: pass `api_key`, or `fields` "
+                     "with the key under its declared field name. "
                      "Multi-field connectors (zoho/silae…): pass `fields` (all declared "
                      "credential fields). Resolves BEFORE the org secret for members."),
         errors=(DeclaredError(400, "single_account_connector",

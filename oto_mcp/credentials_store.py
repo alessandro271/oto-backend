@@ -718,18 +718,32 @@ def secret_from_input(
     du connecteur — SOURCE UNIQUE des capacités org.secret.set / group.secret.set
     (miroir du set-path user `api_routes_credentials.api_key_save`).
 
-    - mono-champ (≤1 `secret_field`, api_key) → la valeur brute ;
+    - mono-champ (≤1 `secret_field`) → la valeur brute, reçue par `api_key` OU sous le
+      NOM de son champ déclaré dans `fields` (`{"key": …}`) — la forme que la route du
+      palier membre lit déjà ;
     - multi-champs (≥2, ex. zoho/silae) → `validate_fields` (jeu fermé, pertinence
       par discriminant, `required` non vides), packés via `pack_secret`.
 
     Lève `CredentialFieldsInvalid` (une `ValueError`) actionnable : `empty_api_key`
-    (mono vide), `missing_credentials` (champ requis absent/vide, ou aucun champ) ou
+    (mono vide), `conflicting_api_key` (deux valeurs différentes pour la même clé),
+    `missing_credentials` (champ requis absent/vide, ou aucun champ) ou
     `invalid_field_value` (valeur hors jeu fermé)."""
     c = providers.REGISTRY.get(connector)
     sfields = c.secret_fields if c is not None else ()
     if len(sfields) >= 2:
         return pack_secret(connector, validate_fields(connector, fields or {}))
+    # La clé UNIQUE se lit aussi sous le nom de son champ : les fenêtres de saisie
+    # rendent les valeurs par nom de champ, et chaque écran devait sinon la recopier
+    # dans `api_key`. Deux fois oublié (PayFit, puis l'API cabinet de Pennylane) : la clé
+    # partait dans `fields`, ignorée, et la pose était refusée « clé d'API vide » alors
+    # que l'utilisateur l'avait collée.
     key = (api_key or "").strip()
+    du_champ = str((fields or {}).get(sfields[0].name) or "").strip() if sfields else ""
+    if key and du_champ and key != du_champ:
+        raise CredentialFieldsInvalid(
+            "conflicting_api_key",
+            f"deux clés différentes : `api_key` et le champ `{sfields[0].name}`.")
+    key = key or du_champ
     if not key:
         raise CredentialFieldsInvalid("empty_api_key", "clé d'API vide.")
     return key
