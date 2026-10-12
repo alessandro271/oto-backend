@@ -2552,8 +2552,18 @@ def _ds_activity_entry(r: dict) -> dict:
     })
 
 
+#: L'axe « clé métier » ne retrouve QUE l'écriture qui a créé la ligne (append/batch :
+#: l'`id` n'existait pas encore). Elle a eu lieu quand la ligne est née : on ne la
+#: cherche que dans cette fenêtre autour de `_created_at`, une plage étroite de
+#: `idx_tool_calls_ns`. Dix minutes couvrent un lot long ; les écritures par clé
+#: POSTÉRIEURES (upsert) ont leur révision estampillée par geste (oto#273,
+#: `_joindre_les_revisions`), qui les rend au parcours sans relire le journal.
+_FENETRE_CREATION = "10 minutes"
+
+
 def datastore_row_activity(row_id: str, key_value: Optional[str] = None,
                            *, ns_id: int,
+                           created_at: Any = None,
                            owner_type: Optional[str] = None,
                            owner_id: Optional[str] = None,
                            limit: int = 50) -> list[dict]:
@@ -2563,40 +2573,47 @@ def datastore_row_activity(row_id: str, key_value: Optional[str] = None,
     outcome, ADR 0017). Appels d'AGENT (kind='mcp') **et** gestes de dashboard
     (kind='rest'). Fenêtre = la rétention du calllog (prune 30 j) : c'est un journal
     de travail, pas un audit permanent.
-    Le match clé passe par `args::text ILIKE` (les args sont petits et le scan est
-    borné par `tool LIKE 'data_%'` + rétention) — une valeur de clé courte/ambiguë
-    peut sur-matcher, assumé pour un journal indicatif. ⚠️ Assumé DANS LE TENANT
-    seulement : cet axe est une recherche de SOUS-CHAÎNE, il est donc borné au
-    propriétaire du tableau (même raison qu'en dessous — sans borne, une clé métier
-    banale ferait remonter les gestes d'une autre org). L'axe `id`, lui, reste nu :
-    c'est un uuid4 non devinable et l'appelant a déjà prouvé son accès à CETTE row.
+
+    Deux axes, deux branches en `UNION ALL`, chacune avec sa propre page — jamais un
+    OU : un OU entre deux filtres hors index parcourait tout l'historique du tableau,
+    du plus récent au plus ancien, jusqu'à remplir la page (12/10/2026 : trois 503 à
+    10 s sur un tableau très actif, pour une ligne qui y a peu de gestes).
+    - **`id`** : `idx_tool_calls_ns_row` (`index_releve.GESTES_DE_LIGNE`, révision
+      0054), une lecture directe des gestes de la ligne. Nu : c'est un uuid4 non
+      devinable et l'appelant a déjà prouvé son accès à CETTE row.
+    - **clé métier** : `args::text ILIKE`, une recherche de SOUS-CHAÎNE — bornée au
+      propriétaire du tableau (sans borne, une clé banale ferait remonter les gestes
+      d'une autre org) ET à la naissance de la ligne (`_FENETRE_CREATION`). Sans
+      `created_at` ni propriétaire, l'axe est abandonné : sous-couvrir plutôt que
+      parcourir le tableau.
 
     ⚠️ **Toujours bornée au TABLEAU de la ligne** (`ns_id` résolu serveur, journalisé
     sur les deux faces depuis le 31/07/2026). Incident du 08/10/2026 : sans cette
-    borne, aucun des deux axes ne tombait sur un index — `args->>'id'` n'en a pas, la
-    sous-chaîne non plus —, et `ORDER BY created_at DESC LIMIT` parcourait le journal
-    entier (~12 M lignes) jusqu'à trouver de quoi remplir la page : jusqu'à 302 s par
-    appel, douze connexions sur vingt-six prises, la prod MCP par terre. Le `ns_id`
-    passe par `idx_tool_calls_ns` (partiel, `data_*` seulement) : on ne lit plus que
-    les appels de CE tableau. Prix assumé : un geste antérieur à la journalisation du
-    `ns_id` n'y figure plus — il sort de toute façon de la rétention.
-    La lecture est en plus bornée en durée (`_agregat`, #1145)."""
+    borne, aucun des deux axes ne tombait sur un index, et `ORDER BY created_at DESC
+    LIMIT` parcourait le journal entier (~12 M lignes) : jusqu'à 302 s par appel, la
+    prod MCP par terre. La lecture est en plus bornée en durée (`_agregat`, #1145)."""
     limit = max(1, min(int(limit), 200))
-    clauses = [_DS_ACTIVITY_KINDS, "l.tool LIKE 'data\\_%%'", "l.args->>'ns_id' = %s"]
-    params: list[Any] = [str(int(ns_id))]
-    match = ["l.args->>'id' = %s"]
-    params.append(str(row_id))
+    ns = str(int(ns_id))
+    tableau = f"{_DS_ACTIVITY_KINDS} AND l.tool LIKE 'data\\_%%' AND l.args->>'ns_id' = %s"
+    branches = [("l.args->>'id' = %s", [ns, str(row_id)])]
     key_bound = _owner_clause(owner_type, owner_id)
-    if key_value is not None and str(key_value).strip() and key_bound:
+    if key_value is not None and str(key_value).strip() and key_bound and created_at:
         sql, bound = key_bound
-        match.append(f"(l.args::text ILIKE %s AND {sql})")
-        params += [f"%{str(key_value).strip()}%", bound]
-    clauses.append("(" + " OR ".join(match) + ")")
+        branches.append((
+            f"l.created_at BETWEEN %s::timestamptz - interval '{_FENETRE_CREATION}' "
+            f"AND %s::timestamptz + interval '{_FENETRE_CREATION}' "
+            f"AND l.args::text ILIKE %s AND {sql}",
+            [ns, created_at, created_at, f"%{str(key_value).strip()}%", bound]))
+    pages, params = [], []
+    for axe, valeurs in branches:
+        pages.append(f"(SELECT l.id FROM tool_calls l WHERE {tableau} AND {axe} "
+                     "ORDER BY l.created_at DESC LIMIT %s)")
+        params += [*valeurs, limit]
     params.append(limit)
     with _agregat("parcours d'une ligne") as conn:
         rows = conn.execute(
             f"""{_DS_ACTIVITY_SELECT}
-            WHERE {' AND '.join(clauses)}
+            WHERE l.id IN ({' UNION ALL '.join(pages)})
             ORDER BY l.created_at DESC LIMIT %s
             """,
             tuple(params),

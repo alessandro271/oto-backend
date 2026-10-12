@@ -1114,6 +1114,8 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # servie les reçoit de la révision 0049 ou à la main (§5.1).
     for index in index_releve.OUVERTURES:
         index_concurrent.poser_au_demarrage(conn, index)
+    # Le parcours d'une ligne de datastore : même régime, révision 0054 ou à la main.
+    index_concurrent.poser_au_demarrage(conn, index_releve.GESTES_DE_LIGNE)
     # Application OAuth cliente porteuse du grant (`azp` du JWT — claude.ai,
     # Claude Code, ChatGPT…) : axe de télémétrie par surface, extension OTO-LOCALE.
     conn.execute("ALTER TABLE tool_calls ADD COLUMN IF NOT EXISTS client_id TEXT")
