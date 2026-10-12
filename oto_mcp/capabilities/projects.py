@@ -83,9 +83,7 @@ class ProjectInput(BaseModel):
             "with oto_resource op=transfer resource_type=project."))
     owner_id: Optional[str] = None   # org.id si owner_type='org' ; group.id si 'group' ; ignoré sinon
     # link / unlink : un pointeur typé vers une entité regroupée par le projet.
-    # `doc` = une page Documents par son id (signal #1265) : c'est le seul moyen de
-    # binder un slot `doc` qu'une procédure déclare.
-    target_type: Optional[Literal["tableau", "procedure", "connecteur", "doc"]] = None
+    target_type: Optional[Literal["tableau", "procedure", "connecteur"]] = None
     # Opt-ins d'op=get, cumulables : 'spine' (l'arbre des pages, Ship 2 lot 3, +
     # drill/bornage ci-dessous) · 'procedures' (le CORPS des procédures liées, #313).
     # Une valeur inconnue est ignorée en silence — l'absence d'un champ optionnel se
@@ -1069,20 +1067,6 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
             elif inp.op == "link":
                 _require(False, "unknown_tableau",
                          f"Aucun tableau nommé « {target_ref} » dans le datastore du projet.", 404)
-        elif inp.target_type == "doc" and inp.op == "link":
-            # Une page Documents, par son ID — vérifiée lisible par qui la lie (par son
-            # projet ou par un partage de la page) : un lien ne doit pas ouvrir une page
-            # que son auteur ne lit pas. L'unlink garde la réf brute : on délie aussi un
-            # lien vers une page supprimée depuis.
-            from .docs.common import acces_a_la_page
-            ref = str(target_ref).strip()
-            page = db.get_doc_by_id(int(ref)) if ref.isdigit() else None
-            _require(page is not None, "unknown_doc",
-                     f"Aucune page Documents d'id « {target_ref} » — un lien `doc` prend "
-                     "l'id de la page (oto_doc op=list).", 404)
-            _require(acces_a_la_page(sub, page) is not None, "forbidden",
-                     "Cette page ne t'est pas lisible : tu ne peux pas la lier.", 403)
-            target_ref = str(page["id"])
         elif inp.target_type == "connecteur":
             # L'identité est la clé du BINDING (#57). Fin du doublon : on la sort de
             # config.identity_id vers `identity_ref`. `identity_ref` explicite (front B4 /
@@ -1638,9 +1622,7 @@ CAPABILITIES += [
             "unarchive (puts an archived project back; `was_archived_at` echoes what it "
             "undid; find archived ones with op=list `archived=true`) / link & unlink "
             "(attach an entity: "
-            "target_type tableau|procedure|connecteur|doc + target_ref = its id/slug/name "
-            "(a doc = a Documents page by id, readable by you: it binds a procedure's "
-            "`doc` slot), "
+            "target_type tableau|procedure|connecteur + target_ref = its id/slug/name, "
             "optional label + optional "
             "role = why this entity belongs to the project + optional config = the entity's "
             "PRE-MADE per-project override; for a connecteur: {identity_id?, instructions_md?} "

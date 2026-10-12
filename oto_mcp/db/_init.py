@@ -698,10 +698,10 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
         conn.execute(_paths.DDL_FONCTION_VALEURS_TEXTE)
     for index in _search.INDEX_VALEURS:
         index_concurrent.poser_au_demarrage(conn, index)
-    # ⚠️ La purge des liens `doc` (lot 3, chantier 0.4 : 4 liens en prod au 17/07,
-    # 0 ensuite) n'est PLUS jouée au boot depuis le 10/10/2026 : le type revient,
-    # pour binder le slot `doc` d'une procédure (signal #1265), et la rejouer à chaque
-    # démarrage effacerait ces liens à chaque déploiement.
+    # Lot 3 chantier 0.4 : purge du type de lien `doc` (pointeur
+    # manuel vers une page, subsumé par les backlinks [[…]] de Ship 4). 4 liens en
+    # prod au comptage du 17/07. Idempotent (0 row ensuite).
+    conn.execute("DELETE FROM project_links WHERE target_type = 'doc'")
     # Lot 3 chantier 0.3 : le projet KB est ancré PAR ID (fin de l'identification
     # par nom — renommable, transférable, 2 appels concurrents = 2 KB). ON DELETE
     # SET NULL : un hard-delete du projet vide l'ancre, kb.py recrée.

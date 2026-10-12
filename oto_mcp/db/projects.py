@@ -1597,15 +1597,6 @@ def duplicate_project(src_id: int, new_name: str, owner_type: str, owner_id: str
                     logger.warning("duplicate_project: copie procédure #%s échouée", target_ref)
                     warnings.append(f"procédure « {label} » : copie impossible, lien ignoré.")
                     continue
-        elif link["target_type"] == "doc" and str(target_ref).isdigit():
-            # Une page du projet SOURCE est copiée avec lui : le lien suit sa copie. Une
-            # page d'ailleurs garde son pointeur, et sa lecture reste gardée par la page.
-            copie = id_map.get(int(target_ref))
-            if copie is not None:
-                target_ref = str(copie)
-            else:
-                warnings.append(f"page « {link.get('label') or target_ref} » : hors du "
-                                "projet copié, le lien pointe toujours la page d'origine.")
         add_project_link(new_id, link["target_type"], target_ref,
                          label=link.get("label"), role=link.get("role"),
                          config=link.get("config") or None,
