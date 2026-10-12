@@ -4,8 +4,9 @@
 #
 # La règle, par OUTIL : un outil servi qui expose un paramètre de pagination (`page`,
 # `size`, `limit`, `cursor`, `page_size`, `per_page`, `offset`) rend une liste par
-# construction. Il doit alors, soit exposer `fields` ou `full` (l'appelant peut
-# projeter, et le défaut est la vue resserrée — ADR 0047), soit appeler une projection
+# construction. Il doit alors, soit exposer `full`, ou un `fields` qui NOMME des clés à
+# garder (l'appelant peut projeter, et le défaut est la vue resserrée — ADR 0047 ; un
+# `fields` objet est un corps d'écriture, pas une projection), soit appeler une projection
 # dans son propre corps (`output_projection`, `_shape(`, `summarize(`, `_project(`,
 # `_slim…`). Sinon il est ici.
 #
@@ -37,6 +38,10 @@
 #   l'amont) n'est pas vu.
 #
 # Payer une ligne = une PR à part, avec sa mesure avant/après (#918 est le modèle).
+# ⚠️ 2026-10-12 : 17 outils entrent, et la dette ne grossit pas plus qu'en septembre —
+# le critère les blanchissait par le seul NOM de leur paramètre `fields`, qui est chez
+# eux le corps d'une écriture (`{clé: valeur}`) ou le champ d'une recherche
+# (pipedrive_search). Ils rendaient déjà tout ; ils sont désormais comptés.
 ahrefs_gsc
 ahrefs_keywords_explorer
 ahrefs_rank_tracker
@@ -59,6 +64,7 @@ attio_meeting
 attio_note
 attio_record
 attio_task
+brevo_campaign
 brevo_contact
 brevo_crm_list
 brevo_list
@@ -98,7 +104,10 @@ fr_search
 fr_stock_search
 frenchtech_search_annuaire
 github_actions
+github_issues
 github_orgs
+github_pulls
+github_repos
 github_search
 gocardless_events
 gocardless_failed
@@ -115,11 +124,16 @@ infosec_domain
 instagram_chat
 instagram_meta_get_recent_media
 juris_decision
+leexi_calls
+leexi_meetings
 leexi_notes
+leexi_teams
+leexi_users
 lemlist_contact
 lemlist_database
 lemlist_get_activities
 lemlist_inbox
+lemlist_lead
 lemlist_schedule
 lemlist_task
 lemlist_unsubscribe
@@ -153,6 +167,7 @@ phantombuster_list_containers
 pipedrive_lead
 pipedrive_note
 pipedrive_record
+pipedrive_search
 planity_get_customer_receipts
 planity_list_appointments
 planity_list_mass_stock_removals
@@ -165,6 +180,13 @@ posthog_insight
 posthog_person
 posthog_project
 posthog_recording
+productlane_changelogs
+productlane_companies
+productlane_contacts
+productlane_docs
+productlane_tags
+productlane_threads
+productlane_workspace
 promptwatch_actions
 promptwatch_ads
 promptwatch_citation
