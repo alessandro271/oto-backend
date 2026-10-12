@@ -286,6 +286,11 @@ _REGLAGES: tuple[Variable, ...] = (
              "Absente = l'app ne s'enregistre pas : une instance sans front qui la "
              "porte ne sert aucune page qui pointerait vers personne.",
              ("oto_mcp/procedure_diagram.py:425",)),
+    Variable("OTO_DATA_APP_BUNDLE", Classe.REGLAGE, "",
+             "URL du bundle JS d'un front (`…/process-graph.js`, sa feuille `.css` à "
+             "côté) qui peint `data_app` dans l'hôte MCP, au lieu de la carte Prefab. "
+             "Absente = la carte Prefab, inchangée.",
+             ("oto_mcp/tools/datastore_table_app.py:54",)),
     Variable("OTO_EGRESS_ALLOW", Classe.REGLAGE, "",
              "Destinations internes autorisées en egress (`nom=adresse:port`, "
              "virgules). Absente = aucune exception : fail-closed, jamais un défaut "

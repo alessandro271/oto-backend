@@ -2235,6 +2235,12 @@ def register(mcp: FastMCP) -> None:
                     return r
         return None
 
+    # An instance that declares a front bundle (`OTO_DATA_APP_BUNDLE`) draws `data_app`
+    # in that front's look instead — `tools/datastore_table_app.py` registers it.
+    from .datastore_table_app import bundle as _front_bundle
+    if _front_bundle() is not None:
+        return
+
     @mcp.tool(app=True)
     def data_app(
         datastore: Optional[Adresse] = None,
