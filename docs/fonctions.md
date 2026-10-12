@@ -87,7 +87,7 @@ verrou (`--lock --frozen`) : sans lui, Deno refait une résolution que le cache 
 L'exécution ci-dessus est un ALLER SIMPLE : la tâche entre, une réponse sort, le code n'a
 rien pu demander. `functions/pont.py` ouvre un second mode, **conversationnel**, à côté —
 l'aller simple d'`oto_function` n'en est pas touché. C'est la fondation des recettes en
-code (#1202) ; ce lot n'est branché sur aucune surface servie.
+code (#1202) : `oto_recipe` le sert aux recettes `kind: "code"` (`docs/recettes.md`).
 
 - **Le code** reçoit `oto` et fait `await oto.call(outil, arguments)` : le résultat de
   l'outil, ou `oto.ToolError` (`code`, `message`). Point d'entrée `async def` (une
@@ -104,7 +104,9 @@ code (#1202) ; ce lot n'est branché sur aucune surface servie.
 - **Le pont ne décide d'aucun droit** : il passe chaque demande à `appeler`, que
   l'appelant lui donne. Dans ce lot, le seul est `recipes/pont.appeleur_en_lecture` :
   les outils DÉCLARÉS EN LECTURE, sous les gardes d'`oto_call` (`meta.executer_cible`),
-  avec l'identité de l'appelant — un outil qui écrit est refusé avant tout appel.
+  avec l'identité de l'appelant — un outil qui écrit est refusé avant tout appel. Une
+  recette-code y ajoute `data_rows` et `data_write` (`recipes/pont.appeleur_de_recette`),
+  par le même `meta.executer_cible` : mêmes gardes, même journal.
 - **Le budget** (`pont.Budget`) borne une exécution : appels, unités FACTURÉES
   (`quantity`), durée. Atteint, les appels suivants sont refusés (`budget_exhausted`) et
   le reçu dit lequel (`stopped`). La durée laisse ensuite `GRACE_S` au code pour rendre

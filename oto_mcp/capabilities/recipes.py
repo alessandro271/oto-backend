@@ -26,9 +26,10 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from .. import session_org, tool_alias, tool_registry
+from .. import access, session_org, tool_alias, tool_registry
 from ..db import recipes as db_recipes
-from ..recipes import contrat, moteur
+from ..functions import executor as bac
+from ..recipes import code, contrat, moteur
 from ._authz import BY_OP, ORG_MEMBER_OPT, SUB_ONLY
 from ._types import AuthzDenied, Capability, ResolvedCtx
 from .registry import CAPABILITIES
@@ -61,7 +62,13 @@ class RecipeInput(BaseModel):
         "in_table / not_in_table {table, column} (match against another table); any clause "
         "takes `normalize`. Templates: {{params.x}}, {{item.a.b}}, {{row.col}}, filters "
         "|slug |lower |upper |strip |unaccent |domain |email |email_domain |linkedin_slug "
-        "|url |digits."))
+        "|url |digits. "
+        "A CODE recipe instead: {kind: \"code\", sources: {\"recipe.py\": \"async def "
+        "run(oto, params): ...\"}, entrypoint: \"recipe:run\", params, limits {max_units, "
+        "max_calls?, max_seconds?}} — the code calls `await oto.call(tool, arguments)` "
+        "(read-only connector tools, `data_rows`, and `data_write(rows, key)` into the "
+        "run's `datastore` only) and returns a receipt of counts; test/publish of a code "
+        "recipe are platform-only."))
     note: Optional[str] = None
     expected_version: Optional[int] = Field(default=None, description=(
         "propose: the latest version you read."))
@@ -104,8 +111,10 @@ def _proprietaire(ctx: ResolvedCtx, inp: RecipeInput) -> tuple[str, str]:
 
 def _corps(ctx: ResolvedCtx, brut: Any) -> dict:
     """Le corps validé, l'outil ramené à son nom canonique (un agent de tenant le lit
-    sous son préfixe)."""
+    sous son préfixe). Une recette-code (`kind: "code"`) a son propre contrat."""
     try:
+        if code.est_code(brut):
+            return code.valider(brut)
         corps = contrat.valider(brut)
     except contrat.RecetteInvalide as e:
         raise AuthzDenied(400, "invalid_recipe", str(e),
@@ -208,17 +217,40 @@ def _epingler_org(ctx: ResolvedCtx):
 BORNES_D_EPREUVE = frozenset({None, "max_pages", "spend_cap", "time_budget"})
 
 
+async def _plateforme_pour_le_code(ctx: ResolvedCtx, corps: dict, op: str) -> None:
+    """Éprouver ou publier une recette-CODE : la plateforme seule, comme une fonction.
+    Le code tourne avec les droits de qui l'exécute, pas de qui l'a écrit (#1202)."""
+    if code.est_code(corps) and not await run_in_threadpool(access.is_platform_operator,
+                                                            ctx.sub):
+        raise AuthzDenied(403, "platform_only",
+                          f"op={op} on a code recipe is reserved to the platform: the code "
+                          "runs with the rights of whoever runs it. `create` / `propose` "
+                          "it, and ask the platform to test and publish it.")
+
+
 async def _executer(ctx: ResolvedCtx, inp: RecipeInput, corps: dict, *, ecrire: bool,
                     pages_max: Optional[int] = None, temoin: Optional[dict] = None) -> dict:
     fastmcp = _instance()
+    if code.est_code(corps) and inp.resume:
+        raise AuthzDenied(400, "resume_not_supported",
+                          "A code recipe has no resume token: run it again, it starts over "
+                          "and its keyed writes do not duplicate.")
     jeton = _epingler_org(ctx)
     try:
+        if code.est_code(corps):
+            return await code.executer(corps, _params(corps, inp.params), fastmcp=fastmcp,
+                                       sub=ctx.sub, datastore=inp.datastore, ecrire=ecrire)
         return await moteur.executer(corps, _params(corps, inp.params), fastmcp=fastmcp,
                                      sub=ctx.sub, datastore=inp.datastore,
                                      reprise=inp.resume, ecrire=ecrire, pages_max=pages_max,
                                      temoin=temoin)
     except moteur.RecetteRefusee as e:
         raise AuthzDenied(400, e.code, str(e)) from None
+    except bac.BacASableAbsent:
+        raise AuthzDenied(503, "sandbox_unavailable",
+                          "This instance has no sandbox: it cannot run a code recipe.") from None
+    except bac.ExecutionEchouee as e:
+        raise AuthzDenied(502, "sandbox_failed", str(e)[:500]) from None
     finally:
         if jeton is not None:
             session_org.reset_call_org(jeton)
@@ -249,6 +281,7 @@ async def _recipe(ctx: ResolvedCtx, inp: RecipeInput) -> dict:
     if inp.slug is None and inp.op == "test":
         corps = _corps(ctx, _besoin(inp.recipe, "missing_recipe",
                                     "Pass `slug` (a stored recipe) or `recipe` (inline)."))
+        await _plateforme_pour_le_code(ctx, corps, "test")
         recu = await _executer(ctx, inp, corps, ecrire=False, pages_max=1)
         return {"receipt": recu}
     fiche = await run_in_threadpool(_fiche, ctx, inp)
@@ -262,9 +295,24 @@ async def _recipe(ctx: ResolvedCtx, inp: RecipeInput) -> dict:
         return {"recipe": fiche, "version": {"version": version["version"]},
                 "receipt": await _executer(ctx, inp, version["body"], ecrire=True,
                                            temoin=version.get("test_report"))}
+    await _plateforme_pour_le_code(ctx, version["body"], inp.op)
     recu = await _executer(ctx, inp, version["body"], ecrire=False, pages_max=1)
     if inp.op == "test":
         return {"recipe": fiche, "version": {"version": version["version"]}, "receipt": recu}
+    if code.est_code(version["body"]):
+        # publish d'une recette-code : l'épreuve doit avoir tourné sans erreur. Une borne
+        # atteinte n'est pas un refus ; une erreur du code, si.
+        if not recu["ok"]:
+            raise AuthzDenied(409, "test_failed",
+                              f"The test run failed: {str(recu.get('error'))[:500]}",
+                              details={"receipt": recu})
+        rapport = {k: recu[k] for k in ("calls", "units", "stopped")}
+        await run_in_threadpool(db_recipes.decide_version, fiche["id"], version["version"],
+                                status="publiee", decided_by=ctx.sub, test_report=rapport)
+        return {"recipe": await run_in_threadpool(db_recipes.get_recipe, fiche["owner_type"],
+                                                  fiche["owner_id"], fiche["slug"]),
+                "version": {"version": version["version"], "status": "publiee"},
+                "receipt": recu}
     # publish : l'épreuve doit avoir produit des lignes, sans refus. Une BORNE atteinte
     # (pages, dépense, horloge) n'est pas un refus : une recette à petit `max_units`
     # s'arrête sur `spend_cap` au milieu de sa première page, lignes bâties.
@@ -317,7 +365,9 @@ CAPABILITIES += [
             "count). op=run with a `datastore` WRITES rows into that table, with the "
             "caller's own rights on it. Scope: your active org (default) or "
             "`scope='user'`. A hosted agent runs recipes like any caller: its identity and "
-            "its job's org. PROVISIONAL surface."),
+            "its job's org. A recipe can also be CODE (`kind: \"code\"`, Python in the "
+            "function sandbox calling tools through `oto.call`): anyone in scope creates "
+            "and runs it, only the platform tests and publishes it. PROVISIONAL surface."),
         mcp="oto_recipe",
     ),
 ]

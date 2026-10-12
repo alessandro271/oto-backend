@@ -8,17 +8,43 @@ de plateforme ni outil à modèle, déclaré en lecture — refus nommé sinon) 
 run, journal sous le nom de l'outil, facturation, rédaction). L'identité est celle de
 l'appelant (`sub`) : le code qui tourne n'en a aucune à lui.
 
-Aucune écriture dans ce lot : un outil qui écrit est refusé ici, avant tout appel, comme
-pour une recette. L'ouverture à une liste fermée d'outils d'écriture attend la règle de
-publication (auteur ≠ appelant, #1202).
+Aucun outil de connecteur qui écrit : il est refusé ici, avant tout appel, comme pour une
+recette déclarative. Une recette-code (`appeleur_de_recette`) écrit seulement dans le
+tableau que son exécution désigne. L'ouverture à une liste fermée d'outils d'écriture
+attend la règle de publication (auteur ≠ appelant, #1202).
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 from .. import redaction
 from ..mcp_errors import McpError
 from . import moteur
+
+
+def _reponse(issue) -> dict:
+    """L'issue d'`executer_cible`, dans la forme que le pont rend au code."""
+    if not issue.ok:
+        return {"ok": False, "code": issue.code or "tool_failed",
+                "message": issue.message or "", "quantity": issue.quantity}
+    if issue.retenu:
+        return {"ok": False, "code": "redaction_withheld",
+                "message": "The org's redaction policy withheld this tool's output.",
+                "quantity": issue.quantity}
+    return {"ok": True, "result": redaction.extract_payload(issue.result),
+            "quantity": issue.quantity}
+
+
+async def _executer(tool, sub: Optional[str], outil: str, arguments: dict) -> dict:
+    """UN appel ordinaire de l'outil (`moteur._appeler` → `meta.executer_cible`) : ses
+    gardes, son journal (`tool_calls`), sa rédaction. Un refus de garde est une réponse."""
+    try:
+        issue = await moteur._appeler(tool, sub, outil, dict(arguments))
+    except McpError as e:
+        # Arguments refusés par le schéma de l'outil, garde d'activation ou de
+        # suspension : rien n'a été appelé.
+        return {"ok": False, "code": "call_refused", "message": str(e.error.message)[:500]}
+    return _reponse(issue)
 
 
 def appeleur_en_lecture(fastmcp, sub: Optional[str]):
@@ -29,19 +55,95 @@ def appeleur_en_lecture(fastmcp, sub: Optional[str]):
             tool = await moteur._outil(fastmcp, outil)
         except moteur.RecetteRefusee as e:
             return {"ok": False, "code": e.code, "message": str(e)}
-        try:
-            issue = await moteur._appeler(tool, sub, outil, dict(arguments))
-        except McpError as e:
-            # Arguments refusés par le schéma de l'outil, garde d'activation : rien n'a
-            # été appelé.
-            return {"ok": False, "code": "call_refused", "message": str(e.error.message)[:500]}
-        if not issue.ok:
-            return {"ok": False, "code": issue.code or "tool_failed",
-                    "message": issue.message or "", "quantity": issue.quantity}
-        if issue.retenu:
-            return {"ok": False, "code": "redaction_withheld",
-                    "message": "The org's redaction policy withheld this tool's output.",
-                    "quantity": issue.quantity}
-        return {"ok": True, "result": redaction.extract_payload(issue.result),
-                "quantity": issue.quantity}
+        return await _executer(tool, sub, outil, arguments)
     return appeler
+
+
+#: Ce qu'une page de `data_rows` peut rendre au code.
+MAX_LIGNES_LUES = 500
+_ARGS_LIRE = frozenset({"datastore", "filter", "fields", "limit", "cursor"})
+_ARGS_ECRIRE = frozenset({"rows", "key", "datastore"})
+
+
+def appeleur_de_recette(fastmcp, sub: Optional[str], *, datastore: Any, ecrire: bool):
+    """L'`appeler` d'une recette-code (lot 2) : celui de la lecture, plus les tableaux.
+
+    - `data_rows(datastore, filter?, fields?, limit?, cursor?)` : lire un tableau que
+      l'appelant peut lire — une page à la fois (`MAX_LIGNES_LUES`).
+    - `data_write(rows, key)` : écrire dans le SEUL tableau que `op=run` a désigné
+      (`datastore`), avec les droits de l'appelant ; jamais en épreuve (`ecrire=False`).
+      `key` est exigée : une relance repart du début, l'écriture doit être idempotente.
+
+    Ces deux noms sont des appels ORDINAIRES des outils `data_rows` / `data_write`
+    (`meta.executer_cible`, comme tout outil du pont) : leurs gardes (droits sur le
+    tableau, org suspendue, axes, org du run), leur ligne dans `tool_calls`, leur
+    rédaction. Le pont ne fait que RÉTRÉCIR ce que le code peut leur passer (arguments,
+    tableau cible) ; il n'ouvre jamais le store lui-même. Tout autre nom suit
+    `appeleur_en_lecture`."""
+    lecture = appeleur_en_lecture(fastmcp, sub)
+
+    async def appeler(outil: str, arguments: dict) -> dict:
+        if outil == "data_rows":
+            refus = _refus_lire(arguments)
+            if refus:
+                return refus
+            return await _outil_de_tableau(fastmcp, sub, outil, arguments)
+        if outil == "data_write":
+            if not ecrire:
+                return {"ok": False, "code": "write_in_test",
+                        "message": "A test writes nothing: `data_write` only runs in "
+                                   "`op=run`."}
+            if datastore is None:
+                return {"ok": False, "code": "no_target_table",
+                        "message": "`data_write` writes into the table `op=run` names: "
+                                   "pass `datastore` to the run."}
+            refus = _refus_ecrire(arguments, datastore)
+            if refus:
+                return refus
+            return await _outil_de_tableau(fastmcp, sub, outil,
+                                           {**arguments, "datastore": datastore})
+        return await lecture(outil, arguments)
+    return appeler
+
+
+async def _outil_de_tableau(fastmcp, sub: Optional[str], outil: str,
+                            arguments: dict) -> dict:
+    from ..tools import meta
+    tool = await meta.resoudre_outil(fastmcp, outil)
+    if tool is None:
+        # Un défaut de l'instance, pas du code : le pont le journalise (`bridge_error`).
+        raise LookupError(f"`{outil}` is not served by this instance")
+    return await _executer(tool, sub, outil, arguments)
+
+
+def _refus_lire(arguments: dict) -> Optional[dict]:
+    inconnus = sorted(set(arguments) - _ARGS_LIRE)
+    if inconnus or "datastore" not in arguments:
+        return {"ok": False, "code": "invalid_call",
+                "message": "`data_rows` takes datastore, filter?, fields?, limit?, cursor?"
+                           + (f" (unknown: {inconnus})" if inconnus else "")}
+    limite = arguments.get("limit", 100)
+    if not isinstance(limite, int) or isinstance(limite, bool) \
+            or not 1 <= limite <= MAX_LIGNES_LUES:
+        return {"ok": False, "code": "invalid_call",
+                "message": f"`limit`: 1 to {MAX_LIGNES_LUES}"}
+    return None
+
+
+def _refus_ecrire(arguments: dict, cible: Any) -> Optional[dict]:
+    inconnus = sorted(set(arguments) - _ARGS_ECRIRE)
+    lignes, cle = arguments.get("rows"), arguments.get("key")
+    if inconnus or not isinstance(lignes, list) or not lignes \
+            or not all(isinstance(r, dict) for r in lignes) \
+            or not isinstance(cle, str) or not cle:
+        return {"ok": False, "code": "invalid_call",
+                "message": "`data_write` takes rows (a non-empty list of objects) and key "
+                           "(the column that identifies a row: a re-run must not duplicate)"
+                           + (f" (unknown: {inconnus})" if inconnus else "")}
+    # Le tableau est celui de l'exécution, posé par le pont : le code peut le taire ou
+    # le répéter tel qu'`op=run` l'a reçu, jamais en nommer un autre.
+    if "datastore" in arguments and str(arguments["datastore"]) != str(cible):
+        return {"ok": False, "code": "write_outside_target",
+                "message": "`data_write` only writes into the table `op=run` names: "
+                           "leave `datastore` out."}
+    return None

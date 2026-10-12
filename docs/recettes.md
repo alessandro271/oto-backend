@@ -96,6 +96,40 @@ du dépôt : ajouter un connecteur, c'est écrire une recette — ni PR ni versi
 - Tout ce qui demande davantage (expression régulière, condition, calcul) ira dans une
   fonction (`oto_function`) — on ne fait pas grandir ce langage.
 
+## Les recettes en code (#1202)
+
+Le langage déclaratif ci-dessus est GELÉ (#1202) : ce qu'il ne dit pas s'écrit désormais
+en Python. Une recette-code se range comme les autres (mêmes tables, même cycle, même
+`oto_recipe`) et se reconnaît à `kind: "code"` (`recipes/code.py`) :
+
+```json
+{"kind": "code", "sources": {"recette.py": "async def run(oto, params): ..."},
+ "entrypoint": "recette:run", "params": {"company": {"required": true}},
+ "limits": {"max_units": 200, "max_calls": 100, "max_seconds": 120}}
+```
+
+- **Le code** tourne dans le bac à sable d'`oto_function` par le pont
+  (`docs/fonctions.md` §Le pont) : `await oto.call(outil, arguments)`. Il peut appeler
+  les outils de connecteur DÉCLARÉS EN LECTURE (mêmes refus que ci-dessous), `data_rows`
+  (une page d'un tableau que l'appelant lit, `MAX_LIGNES_LUES`) et `data_write(rows, key)`
+  — dans le SEUL tableau qu'`op=run` désigne (`datastore`), jamais en épreuve, `key`
+  exigée (`write_outside_target`, `write_in_test`). Aucun outil de connecteur qui écrit.
+  Ces deux-là sont des appels ORDINAIRES des outils `data_*` (`meta.executer_cible`,
+  comme tout appel du pont) : leurs gardes (droits sur le tableau, org suspendue, org du
+  run), leur ligne dans `tool_calls`. Le pont rétrécit ce que le code leur passe, il
+  n'ouvre jamais le store lui-même.
+- **Le budget** est `limits` : unités facturées (`max_units`, obligatoire), appels,
+  secondes. Atteint, les appels suivants sont refusés et le reçu le dit (`stopped`).
+- **Pas de reprise** (`resume_not_supported`) : une relance repart du début, et ses
+  écritures par clé ne doublent rien.
+- **Le reçu** est ce que rend le code, borné à `code.MAX_RECU` caractères : des
+  comptes, pas des données (`receipt_too_large`). L'épreuve rend en plus le `journal`.
+- **Qui fait quoi** : le membre écrit (`create`, `propose`) et exécute (`run`) ; la
+  PLATEFORME seule éprouve (`test`) et publie (`publish`, `platform_only` sinon). Le code
+  tourne avec les droits de qui l'EXÉCUTE, pas de qui l'a écrit : tant que cette règle
+  n'est pas tranchée (#1202), c'est celle d'`oto_function`. La publication exige une
+  épreuve sans erreur ; une borne atteinte n'en est pas une.
+
 ## Les garde-fous
 
 - **Seul un outil DÉCLARÉ EN LECTURE est appelable** (`@mcp.tool(annotations=LECTURE)`,
