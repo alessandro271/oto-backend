@@ -103,6 +103,8 @@ SECRET_TOOL_ARGS: dict[str, frozenset] = {
     "lemlist_mailbox": frozenset({"smtp_password", "imap_password"}),
     "lemlist_webhook": frozenset({"secret"}),
     "typeform_webhooks": frozenset({"secret"}),
+    # The media of an imported call is often a presigned link, its credential in the query.
+    "modjo_calls": frozenset({"media_url"}),
     # A signed download link carries its credential in the query string.
     "oto_import": frozenset({"url"}),
 }

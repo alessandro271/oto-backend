@@ -273,6 +273,8 @@ _DECLARATIONS: tuple[str, ...] = (
     "aircall",
     # Same family (meeting recordings, transcripts) — wired 2026-09-29.
     "claap",
+    # Same family (sales calls, transcripts, AI summaries) — wired 2026-10-12.
+    "modjo",
     # Neighbour of `linear`: Productlane's roadmap is BACKED by Linear
     # (projects and issues are born there, then mirrored). The two cards
     # read together.
