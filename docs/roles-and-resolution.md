@@ -277,6 +277,17 @@ arête pose une arête aussitôt archivée (la chaîne refuse au lieu de se tair
 re-pose sous le même libellé est une **rotation** : `share_mode` et les clés d'accord de
 `meta` (`rate_limit`, `rate_limit_by`, `share_denied`) restent ; seule une clé NEUVE
 payante naît `closed`.
+**Une org ne vide pas seule une clé commune (F-051).** Au palier plateforme d'une
+exécution (`check_usage`), `access/platform_rate.enforce` compte un appel pour l'org
+dont la clé est consommée (`heritage.org_des_cles` ; `user:<sub>` sans org ; l'org du
+projet pour l'endpoint anonyme) dans la table `platform_key_rate`, par fenêtre FIXE
+sur l'horloge de la base. Au-delà de `OTO_PLATFORM_KEY_ORG_RATE_LIMIT` (120) appels par
+`OTO_PLATFORM_KEY_ORG_RATE_WINDOW_S` (60 s), surchargeable par porteur
+(`OTO_PLATFORM_KEY_ORG_RATE_OVERRIDES=serper=600,aiark=0`) :
+`OTO_PLATFORM_KEY_ORG_RATE=report` (défaut) journalise une fois par fenêtre,
+`enforce` refuse (`platform_key_org_rate_limited`, « réessayez, ou posez votre clé »),
+`off` ne compte rien. Un appel, pas des `units` : la limite protège le débit du
+fournisseur, le volume reste au quota du jour. Compteur en panne ⟹ appel servi, journalisé.
 Les comptes **privés / byo-only**
 (`attio/lemlist/pennylane/fullenrich/slack`) **n'ont PAS de clé plateforme** :
 les clés résiduelles du seed SOPS ont été supprimées, et le compte partagé de

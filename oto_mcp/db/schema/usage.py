@@ -329,3 +329,26 @@ CREATE TABLE IF NOT EXISTS journal_jobs_jour (
 );
 CREATE INDEX IF NOT EXISTS idx_journal_jobs_jour_org ON journal_jobs_jour (org_id, jour);
 """
+
+# F-051 : la fenêtre de débit d'une org sur une clé PLATEFORME partagée
+# (`access/platform_rate.py`). Une ligne par (porteur, connecteur), réécrite à chaque
+# fenêtre : la table ne grandit qu'avec le nombre d'orgs qui ont appelé une clé
+# commune — aucun nettoyage à prévoir.
+PLATFORM_KEY_RATE = """
+-- L'ÉQUITÉ d'une clé plateforme (F-051) : une clé partagée par toutes les orgs a UN
+-- plafond chez son fournisseur, et une org qui l'appelle en rafale le consomme pour
+-- toutes. Le compteur est tenu ICI, en base, parce que le serveur tourne en plusieurs
+-- processus (bleu/vert, préprod) qui partagent la même base et rien d'autre.
+--
+-- `scope` = `org:<id>` (l'org dont la clé est consommée), ou `user:<sub>` pour un
+-- appel sans org. `window_start` = début de la fenêtre FIXE en cours (horloge de la
+-- base, la même pour tous les processus) ; `calls` = appels résolus sur la clé dans
+-- cette fenêtre. Une fenêtre neuve REMPLACE l'ancienne sur la même ligne.
+CREATE TABLE IF NOT EXISTS platform_key_rate (
+    scope TEXT NOT NULL,
+    connector TEXT NOT NULL,
+    window_start TIMESTAMPTZ NOT NULL,
+    calls INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (scope, connector)
+);
+"""
