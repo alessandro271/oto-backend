@@ -18,7 +18,16 @@ from oto_mcp.tool_visibility import namespace_of
 from oto_mcp.tools import dataforseo as dfs_tool
 
 EXPECTED_TOOLS = {"dataforseo_keywords", "dataforseo_domain", "dataforseo_backlinks",
-                  "dataforseo_account"}
+                  "dataforseo_account", "dataforseo_ai_visibility",
+                  "dataforseo_web_mentions", "dataforseo_site_audit",
+                  "dataforseo_technologies"}
+
+
+def _register_all(m):
+    from oto_mcp.tools import dataforseo_insights, dataforseo_site
+    dfs_tool.register(m)
+    dataforseo_insights.register(m)
+    dataforseo_site.register(m)
 
 
 def _task(result=None, cost=0.0103):
@@ -35,13 +44,10 @@ def env():
         rc=SimpleNamespace(fields={"login": "me@example.com", "password": "pw"},
                            config={}, is_platform=False),
         traces=[], client=MagicMock())
-    for m in ("keyword_overview", "google_ads_search_volume", "bulk_keyword_difficulty",
-              "search_intent", "keyword_ideas", "keyword_suggestions", "related_keywords",
-              "domain_rank_overview", "ranked_keywords", "relevant_pages",
-              "competitors_domain", "keywords_for_site", "domain_intersection",
-              "bulk_traffic_estimation", "backlinks_summary", "backlinks_list",
-              "referring_domains", "anchors", "bulk_ranks"):
-        getattr(state.client, m).return_value = _task()
+    from oto.tools.dataforseo import DataForSeoClient
+    for m in dir(DataForSeoClient):
+        if not m.startswith("_"):
+            getattr(state.client, m).return_value = _task()
     with patch("oto.tools.dataforseo.DataForSeoClient") as cls, \
             patch.object(dfs_tool.access, "resolve_credential",
                          side_effect=lambda *a, **k: state.rc), \
@@ -50,7 +56,7 @@ def env():
         cls.side_effect = lambda login, password: (
             state.__setattr__("creds", (login, password)) or state.client)
         m = FastMCP("t")
-        dfs_tool.register(m)
+        _register_all(m)
         state.call = lambda name, **kw: asyncio.run(m.get_tool(name)).fn(**kw)
         yield state
 
@@ -66,6 +72,7 @@ def test_registry_entry():
     assert c.platform_key_open is False
     assert [(f.name, f.secret) for f in c.secret_fields] == [("login", False),
                                                             ("password", True)]
+    assert c.modules == ("dataforseo", "dataforseo_insights", "dataforseo_site")
     assert c.category == "Marketing"
     assert c.publisher_name == "DataForSEO"
 
@@ -78,7 +85,7 @@ def test_has_onboarding_doc():
 def test_tools_register_under_namespace(env):
     from fastmcp import FastMCP
     m = FastMCP("t")
-    dfs_tool.register(m)
+    _register_all(m)
     tools = {t.name: t for t in asyncio.run(m._list_tools())}
     assert set(tools) == EXPECTED_TOOLS
     assert all(namespace_of(n) == "dataforseo" for n in tools)
@@ -286,3 +293,137 @@ def test_verify_probe_uses_the_free_call():
         dfs_tool._verify({"password": "pw"}, {"login": "me@example.com"})
     cls.assert_called_once_with(login="me@example.com", password="pw")
     cls.return_value.user_data.assert_called_once_with()
+
+
+# --- added families -----------------------------------------------------------------
+
+@pytest.mark.parametrize("tool,kw,method", [
+    ("dataforseo_keywords", dict(op="trends", keywords=["a", "b"], time_range="past_5_years"),
+     "google_trends_explore"),
+    ("dataforseo_keywords", dict(op="ai_volume", keywords=["a"], location=2840, language="en"),
+     "ai_keyword_search_volume"),
+    ("dataforseo_domain", dict(op="history", target="a.com", location=2840, language="en",
+                               date_from="2026-01-01"), "historical_rank_overview"),
+    ("dataforseo_domain", dict(op="serp_competitors", keywords=["crm"], location=2840,
+                               language="en"), "serp_competitors"),
+    ("dataforseo_domain", dict(op="subdomains", target="a.com"), "subdomains"),
+    ("dataforseo_backlinks", dict(op="top_pages", target="a.com"), "backlinks_domain_pages"),
+    ("dataforseo_backlinks", dict(op="competitors", target="a.com"), "backlinks_competitors"),
+    ("dataforseo_backlinks", dict(op="history", target="a.com"), "backlinks_history"),
+    ("dataforseo_ai_visibility", dict(op="metrics", domain="a.com"), "llm_mentions_metrics"),
+    ("dataforseo_ai_visibility", dict(op="mentions", keyword="acme"), "llm_mentions_search"),
+    ("dataforseo_ai_visibility", dict(op="top_domains", keyword="crm"),
+     "llm_mentions_top_domains"),
+    ("dataforseo_ai_visibility", dict(op="top_pages", keyword="crm"), "llm_mentions_top_pages"),
+    ("dataforseo_ai_visibility", dict(op="history", domain="a.com"), "llm_mentions_history"),
+    ("dataforseo_ai_visibility", dict(op="ai_mode", keyword="best crm", location=2840,
+                                      language="en"), "google_ai_mode"),
+    ("dataforseo_web_mentions", dict(op="summary", keyword="acme"), "content_summary"),
+    ("dataforseo_web_mentions", dict(op="search", keyword="acme"), "content_search"),
+    ("dataforseo_site_audit", dict(op="page", url="https://a.com"), "onpage_instant"),
+    ("dataforseo_site_audit", dict(op="content", url="https://a.com"), "onpage_content"),
+    ("dataforseo_site_audit", dict(op="crawl_status", task_id="t1"), "onpage_summary"),
+    ("dataforseo_technologies", dict(op="domain", target="a.com"), "domain_technologies"),
+    ("dataforseo_technologies", dict(op="domains_using", technologies=["Shopify"]),
+     "domains_by_technology"),
+    ("dataforseo_technologies", dict(op="summary", keywords=["bakery"]),
+     "technologies_summary"),
+])
+def test_added_ops_reach_their_method(env, tool, kw, method):
+    env.call(tool, **kw)
+    assert getattr(env.client, method).call_count == 1
+
+
+@pytest.mark.parametrize("tool,kw,match", [
+    ("dataforseo_keywords", dict(op="trends", keywords=list("abcdef")), "at most 5"),
+    ("dataforseo_keywords", dict(op="overview", keywords=["a"], location=1, language="en",
+                                 time_range="past_5_years"), "time_range"),
+    ("dataforseo_domain", dict(op="history", target="a.com"), "location"),
+    ("dataforseo_domain", dict(op="keywords", target="a.com", keywords=["x"]), "keywords"),
+    ("dataforseo_backlinks", dict(op="new_lost", target="a.com"), "date_from"),
+    ("dataforseo_backlinks", dict(op="summary", target="a.com", group_range="month"),
+     "group_range"),
+    ("dataforseo_backlinks", dict(op="gap", target="a.com"), "target"),
+    ("dataforseo_ai_visibility", dict(op="metrics"), "domain"),
+    ("dataforseo_ai_visibility", dict(op="metrics", domain="a.com",
+                                      targets=[{"domain": "b.com"}]), "not both"),
+    ("dataforseo_ai_visibility", dict(op="ask", engine="claude", model="m"), "prompt"),
+    ("dataforseo_ai_visibility", dict(op="ai_mode", keyword="x", language="en"), "location"),
+    ("dataforseo_ai_visibility", dict(op="metrics", domain="a.com", prompt="x"), "prompt"),
+    ("dataforseo_web_mentions", dict(op="search", keyword="a", limit=500), "limit"),
+    ("dataforseo_site_audit", dict(op="lighthouse"), "url"),
+    ("dataforseo_site_audit", dict(op="crawl_results", task_id="t1"), "report"),
+    ("dataforseo_site_audit", dict(op="crawl_start", target="a.com", max_pages=50000),
+     "limit"),
+    ("dataforseo_site_audit", dict(op="page", url="https://a.com", task_id="t"), "task_id"),
+    ("dataforseo_technologies", dict(op="domains_using"), "technologies"),
+])
+def test_added_refusals(env, tool, kw, match):
+    with pytest.raises(McpError, match=match):
+        env.call(tool, **kw)
+    assert env.traces == []
+
+
+def test_backlink_gap_and_new_lost_defaults(env):
+    env.call("dataforseo_backlinks", op="gap", targets=["c1.com", "c2.com"],
+             exclude_targets=["me.com"])
+    gap = env.client.backlinks_intersection.call_args
+    assert gap.args == (["c1.com", "c2.com"],)
+    assert gap.kwargs["exclude_targets"] == ["me.com"] and gap.kwargs["limit"] == 20
+    env.call("dataforseo_backlinks", op="new_lost", target="a.com", date_from="2026-08-01")
+    kw = env.client.backlinks_new_lost.call_args.kwargs
+    assert kw["date_from"] == "2026-08-01" and kw["date_to"] == dfs_tool.yesterday()
+
+
+def test_mentions_targets_and_default_limit(env):
+    env.call("dataforseo_ai_visibility", op="mentions", domain="a.com", keyword="acme",
+             platform="google")
+    args = env.client.llm_mentions_search.call_args
+    assert args.args == ([{"domain": "a.com"}, {"keyword": "acme"}],)
+    assert args.kwargs["limit"] == 5 and args.kwargs["platform"] == "google"
+
+
+def test_ask_and_models(env):
+    env.call("dataforseo_ai_visibility", op="ask", engine="perplexity", model="sonar",
+             prompt="best crm in France?", web_search=True, country="FR")
+    env.client.llm_response.assert_called_once_with(
+        "perplexity", "best crm in France?", "sonar", web_search=True,
+        web_search_country_iso_code="FR", options=None)
+    env.client.llm_models.return_value = _task(
+        result=[{"model_name": "sonar"}, {"model_name": "sonar-pro"}], cost=0)
+    assert env.call("dataforseo_ai_visibility", op="models", engine="perplexity") == {
+        "items": ["sonar", "sonar-pro"]}
+
+
+def test_lighthouse_keeps_scores_and_failed_audits(env):
+    env.client.lighthouse.return_value = _task(result=[{
+        "finalUrl": "https://a.com/", "fetchTime": "t",
+        "categories": {"seo": {"score": 0.92}, "performance": {"score": 0.41}},
+        "audits": {"a": {"title": "A", "score": 1}, "b": {"title": "B", "score": 0.2},
+                   "c": {"title": "C", "score": 0.5, "displayValue": "3 s"},
+                   "d": {"title": "D", "score": None}}}], cost=0.005)
+    out = env.call("dataforseo_site_audit", op="lighthouse", url="https://a.com")
+    assert out["scores"] == {"seo": 92, "performance": 41}
+    assert [a["id"] for a in out["failed_audits"]] == ["b", "c"]
+    assert out["cost_usd"] == 0.005 and env.traces == [{"quantity": 5000}]
+
+
+def test_crawl_start_returns_the_task_id(env):
+    env.client.onpage_crawl_start.return_value = {"id": "t-9", "status_code": 20100,
+                                                  "cost": 0.00075, "result": None}
+    out = env.call("dataforseo_site_audit", op="crawl_start", target="a.com", max_pages=5)
+    env.client.onpage_crawl_start.assert_called_once_with("a.com", 5, options=None)
+    assert out["task_id"] == "t-9" and out["max_pages"] == 5
+    assert env.traces == [{"quantity": 750}]
+
+
+def test_broken_links_report_filters_for_you(env):
+    env.call("dataforseo_site_audit", op="crawl_results", task_id="t1", report="broken_links")
+    assert env.client.onpage_links.call_args.kwargs["filters"] == [["is_broken", "=", True]]
+
+
+def test_free_read_traces_zero_not_null(env):
+    env.client.onpage_summary.return_value = _task(result=[{"crawl_progress": "finished"}],
+                                                   cost=0)
+    env.call("dataforseo_site_audit", op="crawl_status", task_id="t1")
+    assert env.traces == [{"quantity": 0}]

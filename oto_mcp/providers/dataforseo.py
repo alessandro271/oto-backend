@@ -22,9 +22,12 @@ CONNECTOR = _c(
     "dataforseo", ["dataforseo"], auth_modes={"byo_user", "byo_org", "platform"},
     default_quota=0, platform_key_open=False, secret_kind="fields",
     label="DataForSEO",
-    help="SEO data — keyword volume and ideas, a domain's rankings, traffic and "
-         "competitors, backlinks (pay-as-you-go)",
+    help="SEO data — keywords, a domain's rankings and traffic, backlinks, AI-search "
+         "visibility, site audits, technologies (pay-as-you-go)",
     publisher="DataForSEO", href="https://app.dataforseo.com/api-access",
+    # Seven tools over three modules: keywords/domain/backlinks/account, AI and web
+    # mentions, site audit and technologies (tools/dataforseo*.py).
+    modules=("dataforseo", "dataforseo_insights", "dataforseo_site"),
     credential_fields=(
         CredentialField("login", "API login", secret=False,
                         help="Dashboard → API Access."),
@@ -38,10 +41,13 @@ PUBLISHER = "DataForSEO"
 LOGO_DOMAIN = "dataforseo.com"
 
 DESCRIPTION = (
-    "SEO data from DataForSEO: Google keyword volume, CPC, difficulty, intent and "
-    "ideas; a domain's ranking keywords, estimated traffic, top pages and "
-    "competitors, and the keyword gap between two sites; backlinks, referring "
-    "domains and anchors. Pay-as-you-go, billed per call on its real cost. "
+    "SEO data from DataForSEO: Google keyword volume, CPC, difficulty, intent, "
+    "ideas and trends; a domain's ranking keywords, estimated traffic and its "
+    "history, top pages and competitors, and the keyword gap between two sites; "
+    "backlinks, referring domains, link gap and new/lost links; brand mentions "
+    "in AI answers (Google AI Overviews, ChatGPT) and on the web; technical "
+    "audits (one page, Lighthouse, site crawl); the technologies a site runs on, "
+    "and the sites using one. Pay-as-you-go, billed per call on its real cost. "
     "Runs on your own DataForSEO API login, or on the shared key when it is "
     "granted to your org."
 )
