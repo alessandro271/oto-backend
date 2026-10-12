@@ -30,9 +30,7 @@ from __future__ import annotations
 from typing import Literal, Optional
 
 from fastmcp import FastMCP
-# `typing_extensions` et non `typing` : pydantic refuse le `TypedDict` de `typing`
-# sous Python < 3.12 (une étape de déploiement tourne en 3.10).
-from typing_extensions import TypedDict
+from pydantic import BaseModel
 
 from .. import access, output_projection
 from ..auth.hooks import current_user_sub_from_token
@@ -48,8 +46,11 @@ _SOCIETE_RETIREE = ("billing_company_name", "address", "city", "postal_code",
 _GED_RETIREE = ("url", "files", "created_at", "updated_at")
 
 
-class ElementDeLot(TypedDict):
-    """Un fichier d'un lot : son dossier cible et son nom dans la GED."""
+class ElementDeLot(BaseModel):
+    """Un fichier d'un lot : son dossier cible et son nom dans la GED.
+
+    Un modèle pydantic et non un `TypedDict` : pydantic refuse celui de `typing` sous
+    Python < 3.12, et celui de `typing_extensions` serait une dépendance non déclarée."""
     parent_folder_id: int
     name: str
 
@@ -301,7 +302,8 @@ def register(mcp: FastMCP) -> None:
         """
         sub, org = _appelant()
         try:
-            lot = relais.frapper_lot(_client(), sub, org, company_id, list(items or []))
+            elements = [ElementDeLot.model_validate(i).model_dump() for i in items or []]
+            lot = relais.frapper_lot(_client(), sub, org, company_id, elements)
         except Refus as e:
             raise socle.vers_mcp(e) from e
         if lot["manifest_url"] is None:
