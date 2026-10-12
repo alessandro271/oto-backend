@@ -505,7 +505,16 @@ def _is_org_scopable_tool(name: str) -> bool:
 
     L'axe `_group=` partage ce prédicat : un run ouvert sous une équipe co-pose l'org
     parente, invariant `groupe ⊂ org` par construction (cf. `_pin_group`)."""
-    return _is_work_tool(name) or name == "oto_whoami" or name in _RUN_VERBS
+    return (_is_work_tool(name) or name == "oto_whoami" or name in _RUN_VERBS
+            or name in _LECTURES_D_ORG_ECRITES_A_LA_MAIN)
+
+
+# Tools `oto_*` écrits à la main (`@mcp.tool` brut, ni capacité ni tool de travail) qui
+# LISENT dans l'org active : sans l'axe, un compte multi-org ne peut viser que son org
+# maison. `oto_procedure_app` cherche la procédure par `access.current_org` /
+# `current_group`, comme `oto_procedure op=get` (capacité, qui reçoit `_org=` par
+# `_mcp_adapter`) — les deux doivent atteindre la même org.
+_LECTURES_D_ORG_ECRITES_A_LA_MAIN = frozenset({"oto_procedure_app"})
 
 
 async def _pin_org_flat(value: object) -> list[UndoEntry]:

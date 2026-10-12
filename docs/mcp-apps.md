@@ -154,6 +154,10 @@ une ressource MCP Apps nue, dont la CSP (`resourceDomains`) admet l'origine du b
 - ⚠️ **Par instance, jamais par tenant** : `OTO_PROCEDURE_APP_BUNDLE` (l'URL du
   `….js`, sa feuille `.css` à côté) est l'adresse ET l'interrupteur. Absente, ni outil ni
   page — l'empreinte servie d'une instance sans front ne bouge pas.
+- **Il accepte `_org=` et `_group=`** comme `oto_procedure op=get` : écrit à la main, il ne
+  les recevait par aucun des deux mécanismes (ni capacité, ni tool de travail), et un
+  compte multi-org ne pouvait montrer que les procédures de son org maison. Il est nommé
+  dans `call_axes._LECTURES_D_ORG_ECRITES_A_LA_MAIN`.
 - **La poignée de main est écrite à la main côté front** (`ui/initialize`,
   `size-changed`, `request-display-mode`, `resource-teardown`), méthodes et recette de
   hauteur du SDK `@modelcontextprotocol/ext-apps` : sans `size-changed`, l'iframe reste à
