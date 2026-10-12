@@ -64,11 +64,13 @@ class RecipeInput(BaseModel):
         "|slug |lower |upper |strip |unaccent |domain |email |email_domain |linkedin_slug "
         "|url |digits. "
         "A CODE recipe instead: {kind: \"code\", sources: {\"recipe.py\": \"async def "
-        "run(oto, params): ...\"}, entrypoint: \"recipe:run\", params, limits {max_units, "
-        "max_calls?, max_seconds?}} — the code calls `await oto.call(tool, arguments)` "
-        "(read-only connector tools, `data_rows`, and `data_write(rows, key)` into the "
-        "run's `datastore` only) and returns a receipt of counts; test/publish of a code "
-        "recipe are platform-only."))
+        "run(oto, params): ...\"}, entrypoint: \"recipe:run\", params, writes?, "
+        "allow_sending?, limits {max_units, max_calls?, max_seconds?, max_writes?}} — the "
+        "code calls `await oto.call(tool, arguments)` (read-only connector tools, "
+        "`data_rows`, `data_write(rows, key)` into the run's `datastore` only, and the "
+        "CRM writes it declares in `writes`, e.g. \"folk_record:create\" — never in a "
+        "test, never delete/merge/bulk) and returns a receipt of counts; test/publish of "
+        "a code recipe are platform-only."))
     note: Optional[str] = None
     expected_version: Optional[int] = Field(default=None, description=(
         "propose: the latest version you read."))
@@ -367,7 +369,10 @@ CAPABILITIES += [
             "`scope='user'`. A hosted agent runs recipes like any caller: its identity and "
             "its job's org. A recipe can also be CODE (`kind: \"code\"`, Python in the "
             "function sandbox calling tools through `oto.call`): anyone in scope creates "
-            "and runs it, only the platform tests and publishes it. PROVISIONAL surface."),
+            "and runs it, only the platform tests and publishes it. A code recipe may also "
+            "create or update CRM records through a closed list of tools, only the writes "
+            "it declares (`writes`), at most `limits.max_writes` per run (default 50), in "
+            "the run's org, with the caller's own connector account. PROVISIONAL surface."),
         mcp="oto_recipe",
     ),
 ]
