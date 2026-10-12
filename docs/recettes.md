@@ -109,6 +109,10 @@ en Python. Une recette-code se range comme les autres (mêmes tables, même cycl
   (une page d'un tableau que l'appelant lit, `MAX_LIGNES_LUES`) et `data_write(rows, key)`
   — dans le SEUL tableau qu'`op=run` désigne (`datastore`), jamais en épreuve, `key`
   exigée (`write_outside_target`, `write_in_test`). Aucun outil de connecteur qui écrit.
+  Ces deux-là sont des appels ORDINAIRES des outils `data_*` (`meta.executer_cible`,
+  comme tout appel du pont) : leurs gardes (droits sur le tableau, org suspendue, org du
+  run), leur ligne dans `tool_calls`. Le pont rétrécit ce que le code leur passe, il
+  n'ouvre jamais le store lui-même.
 - **Le budget** est `limits` : unités facturées (`max_units`, obligatoire), appels,
   secondes. Atteint, les appels suivants sont refusés et le reçu le dit (`stopped`).
 - **Pas de reprise** (`resume_not_supported`) : une relance repart du début, et ses

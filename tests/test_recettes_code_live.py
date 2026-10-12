@@ -51,6 +51,7 @@ def capa(compte, monkeypatch):
     from oto_mcp.capabilities import recipes
     from oto_mcp.capabilities._types import ResolvedCtx
     from oto_mcp.functions import executor
+    from oto_mcp.tools import datastore as outils_tableaux
     from oto_mcp.tools.lecture import LECTURE
     if not os.environ.get(executor.ENV_DIR):
         if os.environ.get("CI"):
@@ -58,6 +59,9 @@ def capa(compte, monkeypatch):
         pytest.skip(f"{executor.ENV_DIR} absente : pas de bac à sable sur ce poste")
     monkeypatch.setattr(access, "current_user_sub_or_raise", lambda: SUB)
     monkeypatch.setattr(hooks, "current_user_sub_from_token", lambda: SUB)
+    # `data_rows` / `data_write` sont les VRAIS outils, appelés par `executer_cible` :
+    # ils lisent l'acteur par `access`.
+    monkeypatch.setattr(access, "current_user_sub_from_token", lambda: SUB)
     plateforme = {"oui": False}
     monkeypatch.setattr(access, "is_platform_operator", lambda sub: plateforme["oui"])
     m = FastMCP("t-recettes-code")
@@ -69,6 +73,7 @@ def capa(compte, monkeypatch):
     @m.tool()
     def acme_post(text: str = "") -> dict:
         return {"posted": True}
+    outils_tableaux.register(m)
     monkeypatch.setattr(tool_registry, "bound_instance", lambda: m)
     ctx = ResolvedCtx(sub=SUB, org_id=None)
 
