@@ -42,7 +42,8 @@ import urllib.parse
 from typing import Optional
 
 from ..mcp_errors import McpError
-from .. import access, credentials_store, providers
+from .. import access, credentials_store, group_store, providers
+from ..access import chain_shadow
 from . import flow as oauth_flow
 
 logger = logging.getLogger(__name__)
@@ -169,12 +170,41 @@ def has_app(connector: str, sub: str, data_center: str = "") -> bool:
     return _has_editor_app(connector)
 
 
+def app_ready(connector: str, sub: str) -> bool:
+    """The promise of the connection screen (`connect.app_ready`, served row by row by
+    `GET /api/me/connectors`): `has_app` without a region — the same answer, at the
+    price of one read per fact and per call (oto-backend#1148).
+
+    `has_app` asks the RESOLUTION whether an app was brought: on a member who brought
+    none — the common case — the failed cascade builds its diagnostic (reachable
+    instances, pinning projects, revoked instances) and observes the L7 shadow: ~30
+    queries per Zoho connector, three connectors, ~90 queries the listing threw away.
+    Here the PRESENCE answers first, with the walker and the preloaded probe of
+    `status_for` (`want="byo"`, no platform tier), from the inventory the same call has
+    already read: no credential within reach ⟹ nothing brought, and the resolution is
+    not asked. A credential within reach ⟹ `has_app`, unchanged (the fields still decide).
+    """
+    org = access.current_org(sub)
+    groups = group_store.list_groups_for_user(sub, org) if org is not None else []
+    sonde = access.preloaded_presence_probe(sub, org=org, groups=groups)
+    a_portee = next(chain_shadow.resolution_rungs(
+        sub, connector, org=org, group=access.current_group(sub), probe=sonde,
+        want="byo"), None)
+    if a_portee is not None:
+        return has_app(connector, sub)
+    return _has_editor_app(connector)
+
+
 def _has_editor_app(connector: str) -> bool:
     """Does oto publish an app for this connector, in any region?
     Fail-open: a read outage must not hide the button (at worst, `start`
-    will return an actionable message)."""
+    will return an actionable message).
+
+    The WHOLE list, filtered here: the three Zoho connectors of one listing share one
+    read of it (`lecture_d_appel`, oto-backend#1148), not one per connector."""
     try:
-        return bool(credentials_store.list_editor_apps(connector))
+        return any(a["connector"] == connector
+                   for a in credentials_store.list_editor_apps())
     # noqa: SILENT — fail-open: a read outage must not hide the button
     except Exception:  # noqa: BLE001
         return False

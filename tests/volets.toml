@@ -251,6 +251,9 @@ chemins = [
   "oto_mcp/db/doc_grants.py",
   "oto_mcp/db/entitlements.py",
   "oto_mcp/db/estampille.py",
+  # L'attestation d'export qu'exige une révision de retrait (#1169) : lue par la migration
+  # comme `index_concurrent`, elle en suit le rangement.
+  "oto_mcp/db/export_avant_retrait.py",
   "oto_mcp/db/google.py",
   "oto_mcp/db/grants.py",
   "oto_mcp/db/historique.py",

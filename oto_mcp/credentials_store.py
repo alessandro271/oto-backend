@@ -188,6 +188,7 @@ def list_platform_instances(provider: str) -> list[dict]:
              "meta": r["meta"] or {}} for r in rows]
 
 
+@lecture_d_appel
 def list_all_platform_instances() -> dict[str, list[dict]]:
     """`{provider: [instances]}` pour TOUT le scope PLATEFORME, en UNE lecture —
     même forme que `list_platform_instances(provider)`, groupée. Destinée au
@@ -432,6 +433,7 @@ def get_editor_app(connector: str, data_center: str) -> Optional[dict]:
     return {"client_id": cid, "client_secret": sec} if cid and sec else None
 
 
+@lecture_d_appel
 def list_editor_apps(connector: "str | None" = None) -> list[dict]:
     """Apps d'éditeur posées (connecteur + région + date), **sans secret** — surface
     admin. Le `client_id` lui-même n'est pas rendu : inutile pour décider, et il finit

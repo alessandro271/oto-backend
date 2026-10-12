@@ -34,11 +34,19 @@ INDEXDEF = ("CREATE UNIQUE INDEX access_shadow_l7_origine_key ON public.access_s
 
 
 @pytest.fixture()
-def live(pg_dsn):
+def live(pg_dsn, monkeypatch):
     """Une base JETABLE par test — la forme de la CLÉ change au cours de ces tests,
-    donc les partager les rendrait dépendants de l'ordre."""
-    import os
+    donc les partager les rendrait dépendants de l'ordre.
 
+    ⚠️ `DATABASE_URL` est posée par `monkeypatch`, jamais à la main : un test qui la
+    repose lui-même par `monkeypatch.setenv` (le `lock_timeout` de
+    `test_deja_faite_…`) voit sa remise jouée APRÈS le démontage de cette fixture —
+    `monkeypatch` est installé avant elle, par une fixture autouse du conftest. Posée à
+    la main, la variable était rendue ici, puis `monkeypatch` remettait par-dessus
+    le DSN de cette base, détruite entre-temps : le reste du worker ouvrait son pool
+    dessus (`database "oto_l7o_…" does not exist`, PoolTimeout dans des bancs sans
+    rapport, rouge du tronc du 12/10/2026). Par `monkeypatch`, les remises se
+    défont dans l'ordre inverse des poses."""
     psycopg = pytest.importorskip("psycopg")
     from oto_mcp.db import _conn as dbconn
 
@@ -47,8 +55,8 @@ def live(pg_dsn):
     root.execute(f'CREATE DATABASE "{name}"')
     dsn = pg_dsn.rsplit("/", 1)[0] + "/" + name
 
-    previous_url, previous_pool = os.environ.get("DATABASE_URL"), dbconn._pool
-    os.environ["DATABASE_URL"] = dsn
+    previous_pool = dbconn._pool
+    monkeypatch.setenv("DATABASE_URL", dsn)
     dbconn._pool = None
     try:
         from oto_mcp.db import init_db
@@ -58,10 +66,6 @@ def live(pg_dsn):
         if dbconn._pool is not None:
             dbconn._pool.close()
         dbconn._pool = previous_pool
-        if previous_url is None:
-            os.environ.pop("DATABASE_URL", None)
-        else:
-            os.environ["DATABASE_URL"] = previous_url
         root.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
         root.close()
 
