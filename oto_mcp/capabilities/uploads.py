@@ -209,6 +209,17 @@ def _upload_url(ctx: ResolvedCtx, inp: UploadUrlInput) -> dict:
         limite = media_store.max_image_bytes()
     else:
         limite = upload_tokens.max_bytes()
+    # Sans PUT ni humain, le repli dépend de la cible : un texte (page, tableau) peut
+    # passer en ligne ; un FICHIER (projet, image) n'a pas de voie en ligne — le
+    # base64 dans un argument casse dès quelques centaines de Ko.
+    if target["kind"] in ("doc", "datastore"):
+        repli = ("send the content INLINE instead: `data_write(rows=[…], key=…)` in "
+                 "slices for a table, `oto_doc op=create|update|patch` for a page.")
+    else:
+        repli = ("a FILE has no inline path — never base64 it into an argument. If it "
+                 "already lives somewhere reachable (a link, a Drive file, a Gmail "
+                 "attachment), `oto_import` makes the server fetch it; otherwise report "
+                 "the URL to a human and stop.")
     return {
         "url": url,
         "method": "PUT",
@@ -221,9 +232,8 @@ def _upload_url(ctx: ResolvedCtx, inp: UploadUrlInput) -> dict:
                  f"--data-binary @FILE '{url}'`. If you DON'T (no shell), hand this URL to "
                  "the user — opening it in a browser shows an upload form. With neither "
                  "(unattended scheduled run, or the PUT blocked by your sandbox's egress "
-                 "policy), send the content INLINE instead: `data_write(rows=[…], key=…)` in "
-                 "slices for a table, `oto_doc op=create|update|patch` for a page. Single-use, "
-                 "expires soon; the body never returns through you (only a light receipt)."),
+                 f"policy), {repli} Single-use, expires soon; the body never returns through "
+                 "you (only a light receipt)."),
         "target": target,
     }
 
