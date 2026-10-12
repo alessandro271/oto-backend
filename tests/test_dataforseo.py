@@ -17,6 +17,8 @@ from oto_mcp.mcp_errors import McpError
 from oto_mcp.tool_visibility import namespace_of
 from oto_mcp.tools import dataforseo as dfs_tool
 
+pytestmark = pytest.mark.exige_pin_oto_core
+
 EXPECTED_TOOLS = {"dataforseo_keywords", "dataforseo_domain", "dataforseo_backlinks",
                   "dataforseo_account", "dataforseo_ai_visibility",
                   "dataforseo_web_mentions", "dataforseo_site_audit",
@@ -354,7 +356,7 @@ def test_added_ops_reach_their_method(env, tool, kw, method):
     ("dataforseo_site_audit", dict(op="lighthouse"), "url"),
     ("dataforseo_site_audit", dict(op="crawl_results", task_id="t1"), "report"),
     ("dataforseo_site_audit", dict(op="crawl_start", target="a.com", max_pages=50000),
-     "limit"),
+     "max_pages"),
     ("dataforseo_site_audit", dict(op="page", url="https://a.com", task_id="t"), "task_id"),
     ("dataforseo_technologies", dict(op="domains_using"), "technologies"),
 ])

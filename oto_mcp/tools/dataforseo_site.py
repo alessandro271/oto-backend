@@ -132,7 +132,8 @@ def register(mcp: FastMCP) -> None:
                 return {"cost_usd": task.get("cost"), "result": task.get("result")} if full \
                     else _lighthouse_view(task)
             elif op == "crawl_start":
-                pages = d.limit_of(max_pages, _CRAWL_PAGES_DEFAULT, _CRAWL_PAGES_MAX)
+                pages = d.limit_of(max_pages, _CRAWL_PAGES_DEFAULT, _CRAWL_PAGES_MAX,
+                                   name="max_pages")
                 task = c.onpage_crawl_start(d.need(target, "target", op), pages,
                                             options=options)
                 d.bill(task)

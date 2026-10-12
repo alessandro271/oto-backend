@@ -4,7 +4,7 @@ Wraps `oto.tools.dataforseo.DataForSeoClient` (API v3). Credential = API login +
 API password (`secret_kind="fields"`); byo user/org and a paid platform key
 posted closed (providers/dataforseo.py).
 
-Seven tools over three modules (`providers/dataforseo.py::modules`), one per
+Eight tools over three modules (`providers/dataforseo.py::modules`), one per
 family (ADR 0047), each with an `op`:
 - here: `dataforseo_keywords` (volume, CPC, difficulty, intent, ideas, Google
   Trends), `dataforseo_domain` (rankings, traffic and its history, pages,
@@ -230,11 +230,11 @@ def view(task: dict, full: bool, flat: bool = False) -> dict:
 
 
 def limit_of(limit: Optional[int], default: int = _LIMIT_DEFAULT,
-             maximum: int = _LIMIT_MAX) -> int:
+             maximum: int = _LIMIT_MAX, name: str = "limit") -> int:
     if limit is None:
         return default
     if not 1 <= int(limit) <= maximum:
-        raise bad(f"limit must be between 1 and {maximum}.")
+        raise bad(f"{name} must be between 1 and {maximum}.")
     return int(limit)
 
 

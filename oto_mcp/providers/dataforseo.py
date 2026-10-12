@@ -25,7 +25,7 @@ CONNECTOR = _c(
     help="SEO data — keywords, a domain's rankings and traffic, backlinks, AI-search "
          "visibility, site audits, technologies (pay-as-you-go)",
     publisher="DataForSEO", href="https://app.dataforseo.com/api-access",
-    # Seven tools over three modules: keywords/domain/backlinks/account, AI and web
+    # Eight tools over three modules: keywords/domain/backlinks/account, AI and web
     # mentions, site audit and technologies (tools/dataforseo*.py).
     modules=("dataforseo", "dataforseo_insights", "dataforseo_site"),
     credential_fields=(
