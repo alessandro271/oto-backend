@@ -82,6 +82,37 @@ def _roues(racine: Path, requirements: list[str]) -> list[str]:
     return chemins
 
 
+def commande(racine: Path, script: Path) -> list[str]:
+    """La ligne de commande de Deno pour `script` : seule permission, la LECTURE de
+    Pyodide et des roues. `--lock` + `--frozen` : la résolution des paquets est celle du
+    verrou, jamais une résolution neuve — sans eux Deno réclame des métadonnées que le
+    cache n'a pas. Partagée par l'exécution aller simple et par le pont (`pont.py`)."""
+    lecture = ",".join([str(racine / _PYODIDE_REL), str(racine / "wheels")])
+    return [str(racine / "deno"), "run", "--no-prompt", "--no-config", "--cached-only",
+            "--no-remote", f"--lock={_VERROU}", "--frozen", f"--allow-read={lecture}",
+            f"--v8-flags=--max-old-space-size={TAS_V8_MO}", str(script)]
+
+
+def environnement(racine: Path) -> dict:
+    """L'environnement VIDÉ du processus : il n'hérite d'aucun secret du serveur."""
+    return {"DENO_DIR": str(racine / "deno_dir"), "NO_COLOR": "1", "PATH": "/usr/bin:/bin"}
+
+
+def chemin_pyodide(racine: Path) -> Path:
+    """Le runtime de Pyodide dans le bac à sable."""
+    return racine / _PYODIDE_REL
+
+
+def repertoire() -> Path:
+    """Le répertoire du bac à sable, vérifié (`BacASableAbsent` sinon)."""
+    return _repertoire()
+
+
+def roues(racine: Path, requirements: list[str]) -> list[str]:
+    """Les roues de la liste blanche pour `requirements` (`ValueError` hors liste)."""
+    return _roues(racine, requirements)
+
+
 def executer(*, sources: dict, entrypoint: str, requirements: list[str], mode: str,
              entree: Optional[dict] = None) -> dict:
     """Joue la fonction (`mode='run'`) ou ses tests (`mode='test'`) dans le bac à sable.
@@ -102,17 +133,11 @@ def executer(*, sources: dict, entrypoint: str, requirements: list[str], mode: s
         "job": {"sources": sources, "entrypoint": entrypoint, "mode": mode,
                 "input": entree if entree is not None else {}},
     }
-    lecture = ",".join([str(pyodide), str(racine / "wheels")])
-    env = {"DENO_DIR": str(racine / "deno_dir"), "NO_COLOR": "1", "PATH": "/usr/bin:/bin"}
-    # `--lock` + `--frozen` : la résolution des paquets est celle du verrou, jamais une
-    # résolution neuve — sans eux Deno réclame des métadonnées que le cache n'a pas.
-    commande = [str(racine / "deno"), "run", "--no-prompt", "--no-config", "--cached-only",
-                "--no-remote", f"--lock={_VERROU}", "--frozen", f"--allow-read={lecture}",
-                f"--v8-flags=--max-old-space-size={TAS_V8_MO}", str(_SCRIPT)]
     debut = time.monotonic()
     try:
-        fini = subprocess.run(commande, input=json.dumps(tache).encode(), env=env,
-                              capture_output=True, timeout=DELAI_S, cwd=str(racine))
+        fini = subprocess.run(commande(racine, _SCRIPT), input=json.dumps(tache).encode(),
+                              env=environnement(racine), capture_output=True,
+                              timeout=DELAI_S, cwd=str(racine))
     except subprocess.TimeoutExpired:
         raise ExecutionEchouee(f"délai dépassé ({DELAI_S} s)") from None
     duree = int((time.monotonic() - debut) * 1000)
