@@ -2,6 +2,7 @@
 
 the regulatory and territorial envelope of a point or a commune — open data, no key. geocode the address first (`foncier_geocode`).
 - `urba_zonage(lat, lon)` — enforceable plu/plui zoning (géoportail de l'urbanisme), with the pdf regulation if available
+- `urba_lieu(address= | idu= | geom=)` — everything that applies to a whole PARCEL (or an address, a geometry): planning document, zones, prescriptions, public-utility servitudes (AC1, PM1…), grouped, no geometry; no geocoding needed. read its `notes`: an empty list does not prove absence
 - `urba_risques(code_insee)` / `urba_argiles(lat, lon)` — natural/technological risks and clay shrink-swell hazard
 - `urba_qpv(code_insee)` / `urba_qpv_proximite(lat, lon)` — priority neighbourhoods (quartiers prioritaires de la ville)
 - `urba_epfif(code_insee)` / `urba_socio(code_insee)` — epfif sectors (île-de-france) and insee socio-demographic profile

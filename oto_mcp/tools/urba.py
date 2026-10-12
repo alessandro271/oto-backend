@@ -9,15 +9,18 @@ territorial envelope** of a point or a commune:
 - EPFIF intervention sectors (land control, Île-de-France),
 - commune-level socio-demographics (INSEE Mélodi) and at IRIS/neighbourhood level (bundled INSEE parquet).
 
-All clients come from `france-opendata` (open data, no key). Geocode the
-address beforehand via `foncier_geocode` (→ lat/lon + INSEE code).
+All clients come from `france-opendata` (open data, no key), except `urba_lieu`,
+which wraps oto-core's `UrbanismeClient` (IGN API Carto GPU + cadastre + geocoder,
+called directly): what applies to a PARCEL or an address, grouped, without geometries.
+For the point tools, geocode the address beforehand via `foncier_geocode` (→ lat/lon +
+INSEE code).
 
 Open-data connector: no credential. Exposed only if enabled in DB
 (activation gate, ADR 0010) — register_all gates on `connector_activation`.
 """
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from fastmcp import FastMCP
 from mcp.types import INVALID_PARAMS, ErrorData
@@ -79,6 +82,54 @@ def register(mcp: FastMCP) -> None:
 
         return fod_reglement.extraits(idurba, zone=zone, query=query,
                                       max_extraits=max_extraits, context_lignes=context_lignes)
+
+    @mcp.tool()
+    def urba_lieu(address: Optional[str] = None, idu: Optional[str] = None,
+                  geom: Optional[dict[str, Any]] = None, on_parcel: bool = True,
+                  sup_categories: Optional[list[str]] = None) -> dict:
+        """Every planning rule that applies to a PLACE — an address, a cadastral
+        parcel or a geometry — via the Géoportail de l'Urbanisme (open data, no key).
+
+        Unlike `urba_zonage` (one point), this queries the WHOLE parcel: a zone,
+        prescription or servitude that only touches a corner of the plot is found.
+        Returns, without geometries: `location` (what was queried: the parcel under
+        the address when `on_parcel`, else the point), `municipalities` (`is_rnu`),
+        `documents` (PLU, PLUi, CC, PSMV…), `zones`, `cc_sectors`, `prescriptions`,
+        `informations`, `servitudes` (public-utility easements: category such as AC1
+        historic monument surroundings or PM1 risk plan, footprints and generators),
+        and `notes` — READ them: an empty list does NOT prove absence, the GPU is not
+        complete. Identical objects are grouped with a `count`.
+
+        Give EXACTLY ONE of `address`, `idu`, `geom`.
+
+        Args:
+            address: a postal address, geocoded (Géoplateforme/BAN).
+            idu: cadastral parcel identifier, 14 characters (e.g. "35238000AC0680").
+            geom: a GeoJSON geometry (Point, Polygon or MultiPolygon, WGS84).
+            on_parcel: with `address` — query the parcel under the point (default)
+                rather than the point itself.
+            sup_categories: restrict servitudes to these categories (e.g. ["AC1"]).
+        """
+        import requests
+        from oto.tools.common.errors import UpstreamHTTPError
+        from oto.tools.urbanisme import UrbanismeClient, UrbanismeNotFound
+
+        try:
+            return UrbanismeClient().report(address=address, idu=idu, geom=geom,
+                                            on_parcel=on_parcel,
+                                            sup_categories=sup_categories)
+        except (ValueError, UrbanismeNotFound) as e:
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e))) from e
+        except UpstreamHTTPError as e:
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message=f"The Géoportail de l'Urbanisme refused the request "
+                        f"(HTTP {e.status_code}): {str(e.body)[:300]}")) from e
+        except requests.RequestException as e:
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message=f"The IGN planning services could not be reached "
+                        f"({type(e).__name__}) — retry later.")) from e
 
     # --- risks (Géorisques) ------------------------------------------------
 
