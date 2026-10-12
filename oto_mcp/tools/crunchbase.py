@@ -57,7 +57,7 @@ async def _verify_session(session_id: str) -> browser_session.Verdict:
     user), to be found in the SPA bundle."""
     from patchright.async_api import async_playwright
     async with async_playwright() as p:
-        b = await p.chromium.connect_over_cdp(browserbase.connect_url(session_id))
+        b = await browserbase.connect_cdp(p, browserbase.connect_url(session_id))
         try:
             c = b.contexts[0] if b.contexts else await b.new_context()
             pg = c.pages[0] if c.pages else await c.new_page()

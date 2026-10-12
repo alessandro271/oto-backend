@@ -117,6 +117,30 @@ def connect_url(session_id: str) -> str:
     return f"wss://connect.browserbase.com?apiKey={_key()}&sessionId={session_id}"
 
 
+async def connect_cdp(p, url: str):
+    """`p.chromium.connect_over_cdp(url)`, sans jamais laisser fuir `url` (F-049).
+
+    L'URL CDP porte le secret de la plateforme (`?apiKey=` pour `connect_url`,
+    `?signingKey=` pour la `connectUrl` d'une session) et Playwright la recopie
+    ENTIÈRE dans son message d'échec (« WebSocket error: wss://…?apiKey=… 410 Gone »,
+    plus le journal d'appel). Ce message remontait tel quel : servi à l'agent par les
+    outils qui interpolent l'erreur, et écrit dans `tool_calls.error`, que lisent les
+    admins d'org. On relève donc une `BrowserbaseError` PROPRE : le détail amont
+    masqué (`journal_secrets.masquer_urls`), sans chaînage (`from None`) — la cause
+    brute ne voyage ni dans `__cause__`/`__context__`, ni vers Sentry."""
+    try:
+        return await p.chromium.connect_over_cdp(url)
+    except Exception as e:  # noqa: BLE001 — relevée juste dessous, sans l'URL
+        from .journal_secrets import MASQUE_DE_REQUETE, masquer_urls
+        detail = masquer_urls(str(e).replace(url, "[cdp url]"))
+        cle = os.environ.get("BROWSERBASE_API_KEY")
+        if cle:                      # la clé nue, hors de toute URL reconnue
+            detail = detail.replace(cle, MASQUE_DE_REQUETE)
+        detail = detail[:300]
+        raise BrowserbaseError(
+            f"Browserbase CDP connection failed ({type(e).__name__}): {detail}") from None
+
+
 def live_view_url(session_id: str) -> str:
     """URL Live View interactive (l'utilisateur prend la main pour se loguer)."""
     dbg = _req("GET", f"/sessions/{session_id}/debug")
@@ -135,7 +159,7 @@ async def navigate(session_id: str, url: str) -> None:
     from patchright.async_api import async_playwright
 
     async with async_playwright() as p:
-        b = await p.chromium.connect_over_cdp(connect_url(session_id))
+        b = await connect_cdp(p, connect_url(session_id))
         try:
             ctx = b.contexts[0] if b.contexts else await b.new_context()
             pg = ctx.pages[0] if ctx.pages else await ctx.new_page()
@@ -185,7 +209,7 @@ async def run_page_eval(context_id: str, app: str, page_function: str,
     sid = sess["id"]
     try:
         async with async_playwright() as p:
-            b = await p.chromium.connect_over_cdp(sess["connectUrl"])
+            b = await connect_cdp(p, sess["connectUrl"])
             try:
                 ctx = b.contexts[0] if b.contexts else await b.new_context()
                 pg = ctx.pages[0] if ctx.pages else await ctx.new_page()
@@ -220,7 +244,7 @@ async def fetch_page(context_id: str, url: str, *, as_html: bool = False,
     sid = sess["id"]
     try:
         async with async_playwright() as p:
-            b = await p.chromium.connect_over_cdp(sess["connectUrl"])
+            b = await connect_cdp(p, sess["connectUrl"])
             try:
                 ctx = b.contexts[0] if b.contexts else await b.new_context()
                 pg = ctx.pages[0] if ctx.pages else await ctx.new_page()
@@ -250,7 +274,7 @@ async def fetch_page_ephemeral(url: str, *, as_html: bool = False,
     sid = sess["id"]
     try:
         async with async_playwright() as p:
-            b = await p.chromium.connect_over_cdp(sess["connectUrl"])
+            b = await connect_cdp(p, sess["connectUrl"])
             try:
                 ctx = b.contexts[0] if b.contexts else await b.new_context()
                 pg = ctx.pages[0] if ctx.pages else await ctx.new_page()
@@ -276,7 +300,7 @@ async def host_cookies(session_id: str, url: str) -> int:
     from patchright.async_api import async_playwright
 
     async with async_playwright() as p:
-        b = await p.chromium.connect_over_cdp(connect_url(session_id))
+        b = await connect_cdp(p, connect_url(session_id))
         try:
             ctx = b.contexts[0] if b.contexts else await b.new_context()
             return len(await ctx.cookies(url))

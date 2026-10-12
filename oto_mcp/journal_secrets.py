@@ -293,6 +293,9 @@ def requete_secrete(chemin: str) -> bool:
 CLES_DE_REQUETE_SECRETES = frozenset({
     "code", "state", "session_state", "id_token", "access_token", "refresh_token",
     "client_secret", "token", "key", "apikey", "api_key", "access_key",
+    # La `connectUrl` CDP que Browserbase rend à l'ouverture d'une session porte
+    # `signingKey` (F-049) : ni « key » exact, ni un fragment de la liste ci-dessous.
+    "signingkey",
 })
 # … et toute clé dont le nom CONTIENT l'un de ces fragments (`api_token`, `password`,
 # `app_secret`…).
@@ -378,6 +381,25 @@ def masquer_requetes(texte: str) -> str:
     `requete_pour_journal_acces` — la même règle que le journal d'accès."""
     return _REQUETE_DANS_UN_TEXTE.sub(
         lambda m: "?" + requete_pour_journal_acces(m.group(1)), texte)
+
+
+# L'identité d'une URL (`scheme://user:pass@hôte`) dans un texte libre : tout ce qui
+# précède le `@` de l'autorité, sans blanc, guillemet, chevron, `/`, `?` ni `#`.
+_IDENTITE_D_URL_DANS_UN_TEXTE = re.compile(
+    r"(\b[A-Za-z][A-Za-z0-9+.\-]*://)[^\s/?#@\"'<>]+@")
+
+
+def masquer_urls(texte: str) -> str:
+    """Chaque URL de `texte` sans ses secrets : l'identité (`user:pass@`) devient
+    `***@`, la valeur de chaque clé de query secrète devient `***`
+    (`masquer_requetes`). Pour un texte d'ERREUR (F-049, 2026-10-12) : un client
+    qui échoue à se brancher recopie souvent l'adresse ENTIÈRE dans son message
+    (Playwright : `connect_over_cdp` → `wss://connect.browserbase.com?apiKey=…`), et
+    ce message part dans `tool_calls.error`, que lisent les admins d'org."""
+    if not texte:
+        return texte
+    texte = _IDENTITE_D_URL_DANS_UN_TEXTE.sub(rf"\1{MASQUE_DE_REQUETE}@", texte)
+    return masquer_requetes(texte) if "?" in texte else texte
 
 
 def _argument_masque(arg):
