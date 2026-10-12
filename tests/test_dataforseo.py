@@ -3,7 +3,7 @@
 Locks: the registry entry (two-field credential, byo + CLOSED paid platform
 key), the MCP surface, the op dispatch to the oto-core client, the refusals
 made BEFORE a paid call (missing location/language, unused argument, limit),
-the `login:password` platform key split, the billing trace (real USD cost →
+the admin path (both fields posted, read back), the billing trace (real USD cost →
 micro-dollars), the shared key's balance kept private, and the trimmed view.
 """
 import asyncio
@@ -427,3 +427,21 @@ def test_free_read_traces_zero_not_null(env):
                                                    cost=0)
     env.call("dataforseo_site_audit", op="crawl_status", task_id="t1")
     assert env.traces == [{"quantity": 0}]
+
+
+# --- the /admin platform-key path ----------------------------------------------------
+
+def test_admin_posts_both_fields_and_the_tool_reads_them():
+    """/admin (`/api/admin/platform-keys`) posts `fields` for DataForSEO; the stored
+    secret reads back (`ResolvedCredential.fields` → `unpack_secret`) into the pair."""
+    from oto_mcp import credentials_store as cs
+    secret = cs.secret_from_input("dataforseo", None,
+                                  {"login": "abc123", "password": "p:w"})
+    assert dfs_tool.creds(cs.unpack_secret("dataforseo", secret)) == ("abc123", "p:w")
+
+
+def test_admin_lone_password_is_refused_for_the_missing_login():
+    from oto_mcp import credentials_store as cs
+    with pytest.raises(cs.CredentialFieldsInvalid) as e:
+        cs.secret_from_input("dataforseo", None, {"password": "pw"})
+    assert e.value.code == "missing_credentials" and "API login" in e.value.message

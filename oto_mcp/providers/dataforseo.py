@@ -16,8 +16,8 @@ from ._model import CredentialField, _c
 # so billing is the real spend times a rate.
 # Paid platform key, like `forager`: posted CLOSED (`set_platform_key`), it serves
 # only the orgs granted to it — the host enrols and cuts orgs on its own billing.
-# ⚠️ /admin posts a platform key as ONE value: it is `login:password`, split by
-# `tools/dataforseo.py::_creds` (a JSON blob of both fields works too).
+# /admin posts the platform key as BOTH fields (`fields`): the login is required and
+# not secret, so a lone password is refused at posting (`validate_fields`).
 CONNECTOR = _c(
     "dataforseo", ["dataforseo"], auth_modes={"byo_user", "byo_org", "platform"},
     default_quota=0, platform_key_open=False, secret_kind="fields",
