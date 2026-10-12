@@ -49,10 +49,16 @@ class ResolvedCredential:
     @property
     def fields(self) -> dict:
         porteur = providers.credential_provider(self.provider)
-        if self.is_platform:
-            # A platform key is posted as ONE raw value (`credentials_store.platform_fields`).
-            return credentials_store.platform_fields(porteur, self.secret)
-        return credentials_store.unpack_secret(porteur, self.secret)
+        try:
+            return credentials_store.unpack_secret(porteur, self.secret)
+        except credentials_store.SecretUnpackError as e:
+            if not self.is_platform:
+                raise
+            # A platform key is shaped at POSE time (`preparer_pose`); one that does not
+            # unpack was stored raw before that, and is rewritten once by the command.
+            raise credentials_store.SecretUnpackError(
+                f"{e} Platform key `{self.entity_id}` was stored raw: run "
+                "`oto-mcp maintenance cles-plateforme-au-format --apply`.") from None
 
     @property
     def config(self) -> dict:
