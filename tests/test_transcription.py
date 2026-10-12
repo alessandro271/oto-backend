@@ -165,13 +165,14 @@ def monde(monkeypatch):
             return dict(etat["creds"])
 
     class _CredPlateforme:
-        """Le secret plateforme est la clé nue : `.fields` la relirait comme du JSON."""
+        """Le secret plateforme est le pack JSON, comme une clé d'org : `.secret`
+        n'est pas la clé."""
         is_platform = True
-        secret = "k-plateforme"
+        secret = json.dumps({"api_key": "k-plateforme"})
 
         @property
         def fields(self):
-            raise AssertionError("un secret plateforme ne se déballe pas en JSON")
+            return json.loads(self.secret)
 
     def _resolve(provider, want="auto", **kw):
         etat["want"] = want
@@ -435,7 +436,7 @@ def test_le_vocabulaire_de_l_appel_peut_remplacer(all_tools, monde):
     assert _champs(monde["envois"][0])["context_bias"] == ["zinguerie"]
 
 
-def test_une_cle_plateforme_est_la_cle_nue_langue_par_defaut(all_tools, monde):
+def test_une_cle_plateforme_se_deballe_comme_une_cle_d_org_langue_par_defaut(all_tools, monde):
     monde["plateforme"] = True
     _appeler(all_tools, source=_pf(), vocabulary="zinguerie")
     _tourner(monde)
