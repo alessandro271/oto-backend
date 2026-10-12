@@ -87,7 +87,12 @@ du dépôt : ajouter un connecteur, c'est écrire une recette — ni PR ni versi
   `{{row.col}}` dans les arguments, la correspondance, les valeurs et la clé — et nulle
   part ailleurs : `row` hors `for_each` est refusé à l'écriture. Ses pages repartent de
   zéro à chaque parent ; `max_items_per_row` borne ce qu'un parent apporte, et réduit la
-  taille demandée au fournisseur (au curseur, et sur la première page au numéro).
+  taille demandée au fournisseur (au curseur, et sur la première page au numéro). Une
+  ligne dont une colonne citée dans les `arguments` est vide n'est **pas sélectionnée** —
+  l'appel serait payé pour rien : elle n'est ni appelée ni marquée, et reste en attente
+  jusqu'à ce qu'on la remplisse. Pour qu'une exécution `done` ne la taise pas, le reçu
+  compte ces lignes (`skipped_empty_input`) sur l'exécution qui s'achève (`done`) — un
+  reçu partiel (reprise, plafond) ne le porte pas, un reçu sans `for_each` non plus.
 - Tout ce qui demande davantage (expression régulière, condition, calcul) ira dans une
   fonction (`oto_function`) — on ne fait pas grandir ce langage.
 
@@ -169,9 +174,12 @@ du dépôt : ajouter un connecteur, c'est écrire une recette — ni PR ni versi
   jeton porte l'empreinte de la recette (une autre recette, ou une autre version, le
   refuse : `invalid_resume`) et jamais une dépense négative. Le
   plafond de dépense, lui, vaut pour toute la chaîne (le jeton porte la dépense faite).
-- **Seule une version PUBLIÉE écrit.** `publish` éprouve une page réelle sans écrire ;
-  une recette passée en ligne (`recipe`) ne sert qu'à `test` — `run` la refuse
-  (`inline_recipe_cannot_write`).
+- **Seule une version PUBLIÉE écrit.** `publish` éprouve une page réelle sans écrire :
+  elle doit bâtir au moins une ligne, et s'arrêter sur la fin des résultats ou sur une
+  BORNE (`max_pages`, `spend_cap`, `time_budget` — `BORNES_D_EPREUVE`), jamais sur un
+  refus. Une recette à petit `max_units` s'arrête sur `spend_cap` au milieu de sa
+  première page, lignes bâties : elle se publie. Une recette passée en ligne (`recipe`)
+  ne sert qu'à `test` — `run` la refuse (`inline_recipe_cannot_write`).
 - **Le reçu ne porte que des comptes et des codes** : pages, éléments vus, unités,
   lignes écrites / mises à jour / laissées intactes / écartées, codes d'échec.
 - **`run` avec un `datastore` écrit dans ce tableau**, avec les droits de l'appelant sur
