@@ -385,8 +385,10 @@ def masquer_requetes(texte: str) -> str:
 
 # L'identité d'une URL (`scheme://user:pass@hôte`) dans un texte libre : tout ce qui
 # précède le `@` de l'autorité, sans blanc, guillemet, chevron, `/`, `?` ni `#`.
+# Le schéma ne démarre qu'en TÊTE d'une suite `[A-Za-z0-9+.-]` (pas sur chaque `\b`
+# intérieur) : sinon `"a-" * 20000` coûte des secondes (quadratique).
 _IDENTITE_D_URL_DANS_UN_TEXTE = re.compile(
-    r"(\b[A-Za-z][A-Za-z0-9+.\-]*://)[^\s/?#@\"'<>]+@")
+    r"((?<![A-Za-z0-9+.\-])[A-Za-z][A-Za-z0-9+.\-]*://)[^\s/?#@\"'<>]+@")
 
 
 def masquer_urls(texte: str) -> str:

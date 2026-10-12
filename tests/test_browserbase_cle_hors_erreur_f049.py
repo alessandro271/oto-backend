@@ -209,3 +209,13 @@ def test_sentry_masque_l_url_du_message_d_exception():
     out = sentry_setup._before_send(event, {})
     assert out is not None
     assert FAUSSE_CLE not in str(out) and FAUX_SIGNING not in str(out)
+
+
+def test_masquer_urls_reste_lineaire_sur_un_long_texte():
+    # Le schéma ne démarre qu'en tête d'une suite `[A-Za-z0-9+.-]` : sinon chaque
+    # `\b` intérieur relance une tentative, et ce texte coûtait des secondes.
+    import time
+    debut = time.perf_counter()
+    js.masquer_urls("a-" * 20000)
+    assert time.perf_counter() - debut < 0.5
+    assert js.masquer_urls("x https://u:p@h.example/ y") == "x https://***@h.example/ y"
