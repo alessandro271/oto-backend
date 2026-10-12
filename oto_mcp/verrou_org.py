@@ -161,7 +161,8 @@ def hors(sub: Optional[str], org_id: object, *, route: str) -> bool:
 
 def interdit(sub: Optional[str], *, route: str) -> bool:
     """Un geste interdit au porteur verrouillé QUELLE QUE SOIT l'org visée : changer
-    l'org maison de l'humain (`org.set_home`, `org.clear`). Le jeton porte une org de
+    l'org maison de l'humain (`org.set_home`, `org.clear`, `group.set_home`, la face REST
+    de `group.use`) ou le faire quitter une org (`me.leave_org`). Le jeton porte une org de
     travail ; il ne déplace pas le défaut de la personne. En `report`, le dit au journal
     et rend False. Un tiers n'est jamais concerné."""
     v = courant()

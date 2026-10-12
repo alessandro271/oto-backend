@@ -131,8 +131,11 @@ toute résolution du porteur se borne à cette org (`oto_mcp/verrou_org.py`) :
 
 Les gestes qui viseraient une autre org sont REFUSÉS (`org_out_of_job`), jamais ignorés :
 `X-Oto-Org` d'une autre org (`ViewAsMiddleware`), et changer l'org maison de la personne
-(`PUT`/`DELETE /api/me/active-org`) — le jeton porte une org de travail, pas le défaut
-de l'humain.
+(`PUT`/`DELETE /api/me/active-org`, mais aussi `PUT /api/me/home-group` et
+`PUT /api/me/active-group`, qui posent l'org parente de l'équipe en maison, et
+`DELETE /api/me/orgs/{id}/membership`, dont le départ promeut une autre maison) — le jeton
+porte une org de travail, pas le défaut de l'humain. Une seule garde pour tous
+(`orgs/core.refuser_maison_sous_verrou`).
 
 **Les rôles plateforme du porteur** (super_admin, opérateur) ne passent pas le jeton
 (10/10/2026) : un agent hébergé agit au nom de son porteur, il n'est pas l'opérateur.

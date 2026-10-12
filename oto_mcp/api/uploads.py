@@ -288,6 +288,9 @@ _REFUS_DE_LA_RECEPTION = (
                   "n'y a plus l'écriture"),
     DeclaredError(404, "unknown_doc", "`doc` : la page visée n'existe plus"),
     DeclaredError(404, "unknown_project", "le projet visé n'existe plus"),
+    DeclaredError(400, "bad_parent",
+                  "`doc` (`op=create`) : la page parente n'existe plus, ou n'est pas "
+                  "dans le projet de la cible"),
     DeclaredError(400, "not_utf8", "`doc` ou `datastore` : le corps n'est pas de l'UTF-8"),
     DeclaredError(400, "bad_ndjson",
                   "`datastore` NDJSON : une ligne n'est pas un objet JSON — `detail` "

@@ -299,6 +299,14 @@ def current_anon_project_id() -> Optional[int]:
     return ctx.project_id if ctx else None
 
 
+def hote_de_projet(host: str) -> Optional[str]:
+    """L'hôte normalisé (minuscules, sans port) s'il a la FORME d'un endpoint de projet
+    (`<slug>.{mcp,share}.<D>`, slug au motif de `_org_aud_re`), sinon None. Purement
+    structurel — ne lit pas la base : c'est `HostDispatch` qui prouve le projet."""
+    h = (host or "").split(":")[0].strip().lower()
+    return h if _org_aud_re().match(f"https://{h}/mcp") else None
+
+
 def _slug_from_host(host: str) -> Optional[str]:
     h = (host or "").split(":")[0].strip().lower()
     for suffix in _suffixes():

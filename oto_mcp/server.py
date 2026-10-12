@@ -170,8 +170,12 @@ class _IatGatedVerifier(JWTVerifier):
         else:
             try:
                 result = await verifier.verify_token(token)
-            # noqa: SILENT — dette déclarée : panne JWKS de tenant ⇒ vague de 401 sans une ligne (#424, verdict C)
-            except Exception:
+            except Exception as e:  # noqa: BLE001
+                # Toujours un 401 (rien ne passe sur une vérification qui a levé), mais
+                # DIT : une panne JWKS de tenant faisait une vague de 401 sans une ligne
+                # (#424, verdict C). Le type et le message, jamais le jeton.
+                logger.warning("vérification du jeton du tenant %s en échec (%s: %s) — 401",
+                               slug, type(e).__name__, str(e)[:200])
                 result = None
         if not result:
             return None

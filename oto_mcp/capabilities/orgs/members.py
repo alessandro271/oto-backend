@@ -20,6 +20,7 @@ from .._authz import ORG_ADMIN_OF, ORG_ADMIN_OF_OR_OPERATOR, SUB_ONLY
 from .._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding,
                       cap_limit)
 from ..registry import CAPABILITIES
+from .core import refuser_maison_sous_verrou
 
 _ID = {"id": "org_id"}  # placeholder de route {id} → champ Input org_id
 
@@ -184,7 +185,11 @@ def _remove_member(ctx: ResolvedCtx, inp: RemoveMemberInput) -> dict:
 def _leave_org(ctx: ResolvedCtx, inp: LeaveOrgInput) -> dict:
     """Auto-retrait : l'appelant quitte une org dont il est membre (SUB_ONLY). Distinct
     de `org.member.remove` (org_admin retire un TIERS). L'org active bascule côté store
-    (`remove_org_member` promeut la plus ancienne restante ; l'org perso est le repli)."""
+    (`remove_org_member` promeut la plus ancienne restante ; l'org perso est le repli).
+
+    Sous le jeton d'un agent hébergé, refusé d'emblée (`verrou_org.py`) : quitter une
+    org déplace la maison de la personne, et le jeton ne porte que l'org de son travail."""
+    refuser_maison_sous_verrou(ctx, "me.leave_org")
     _require_org_exists(inp.org_id)
     # On ne quitte pas SON espace perso (c'est le repli d'identité, jamais supprimable).
     # Celui d'un autre, où l'on a été invité, se quitte comme toute org (29/09/2026 :
@@ -301,7 +306,10 @@ CAPABILITIES += [
         authz=SUB_ONLY, Output=LeftOrg,
         # Dans l'ORDRE des gardes du handler : c'est un contrat (le premier refus qui
         # s'applique est rendu, les suivants ne sont pas évalués).
-        errors=(DeclaredError(404, "unknown_org", "l'org n'existe pas"),
+        errors=(DeclaredError(403, "org_out_of_job",
+                              "sous le jeton d'un agent hébergé : il ne fait pas quitter "
+                              "une org à la personne"),
+                DeclaredError(404, "unknown_org", "l'org n'existe pas"),
                 DeclaredError(409, "personal_org",
                               "on ne quitte pas son espace personnel"),
                 DeclaredError(404, "not_a_member", "tu n'es pas membre de cette org"),

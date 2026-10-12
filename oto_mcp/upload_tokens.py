@@ -436,6 +436,14 @@ def check_target_access(sub: str, target: dict) -> None:
         raise UploadError(404, "unknown_project", f"Projet #{pid} inconnu.")
     if not ownership.can_access(sub, "project", str(pid), "write"):
         raise UploadError(403, "forbidden", "Écriture refusée sur ce projet.")
+    # Le parent d'une page créée appartient au MÊME projet — la garde d'`oto_doc
+    # op=create` (`capabilities/docs/writes.create`) : sans elle, un parent d'un autre
+    # projet rattachait la page à un arbre que l'appelant ne peut pas écrire. Jugée au
+    # mint ET à la réception, comme le reste de cette fonction.
+    if kind == "doc" and target.get("op") != "update" and target.get("parent_id") is not None:
+        parent = db.get_doc_by_id(int(target["parent_id"]))
+        if not parent or parent["project_id"] != int(pid):
+            raise UploadError(400, "bad_parent", "Parent invalide (autre projet ou inexistant).")
 
 
 def _resolve_content_type(target: dict, request_ct: Optional[str]) -> str:
