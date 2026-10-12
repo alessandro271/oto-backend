@@ -17,7 +17,7 @@ from typing import Literal, Optional, Union
 
 from fastmcp import FastMCP
 
-from .pennylane_socle import _bad, _client, _ecrit, _need
+from .pennylane_socle import _analytique, _bad, _client, _ecrit, _need
 
 _CHAMPS_FACTURE = ("label", "date", "deadline", "invoice_number", "supplier_id",
                    "currency", "currency_amount_before_tax", "currency_amount",
@@ -28,7 +28,8 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def pennylane_supplier_invoice(
-        op: Literal["list", "get", "lines", "import", "update", "validate"] = "list",
+        op: Literal["list", "get", "lines", "import", "update", "validate",
+                    "categories", "categorize"] = "list",
         invoice_id: Optional[int] = None,
         max_pages: Optional[int] = None,
         file_attachment_id: Optional[int] = None,
@@ -44,6 +45,7 @@ def register(mcp: FastMCP) -> None:
         import_as_incomplete: bool = False,
         invoice_number: Optional[str] = None,
         label: Optional[str] = None,
+        categories: Optional[list] = None,
     ) -> dict | list:
         """PURCHASE invoices (supplier invoices received) — the "expenses" side.
 
@@ -75,6 +77,13 @@ def register(mcp: FastMCP) -> None:
           call it on explicit user request, invoice by
           invoice, never right after an import. 422 refusal if the entry
           lines are not balanced.
+        - "categories" (`invoice_id`): the ANALYTICAL categories set on the invoice,
+          each with its `weight`.
+        - "categorize" (`invoice_id`, `categories`): REPLACES all the analytical
+          categories of the invoice with `[{"id": …, "weight": "0.5"}]` — weight as a
+          STRING between 0 and 1, the weights of ONE axis sum to 1, axes are
+          independent; `[]` removes them all. Ids from `pennylane_ref(kind=
+          "categories")`. Reversible: re-send the list read with op="categories".
 
         A line's `vat_rate` = Pennylane code: 20 %→"FR_200", 10 %→"FR_100",
         5.5 %→"FR_55", exempt→"exempt". REVERSE-CHARGE codes of the v2
@@ -89,8 +98,10 @@ def register(mcp: FastMCP) -> None:
         purchases, pass `_instance="org:<id>:pennylane"`.
 
         Args:
-            op: "list" (default) | "get" | "lines" | "import" | "update" | "validate".
-            invoice_id: required for get / lines / update / validate.
+            op: "list" (default) | "get" | "lines" | "import" | "update" | "validate"
+                | "categories" | "categorize".
+            invoice_id: required for get / lines / update / validate / categories /
+                categorize.
             max_pages: op="list" / "lines" — bounds the pagination.
             file_attachment_id: op="import" — id returned by `pennylane_upload_file`.
             supplier_id: op="import" (required) / "update" — existing supplier
@@ -108,6 +119,7 @@ def register(mcp: FastMCP) -> None:
             import_as_incomplete: op="import" — leaves the invoice in
                 `validation_needed`.
             invoice_number / label: supplier number / accounting label.
+            categories: op="categorize" — `[{"id", "weight"}]`, replaces everything.
         """
         c = _client()
         if op == "list":
@@ -158,4 +170,8 @@ def register(mcp: FastMCP) -> None:
             return _ecrit(lambda: c.validate_supplier_invoice_accounting(
                 _need(invoice_id, "invoice_id", op)),
                 "supplier invoice accounting validation")
-        raise _bad("op must be 'list', 'get', 'lines', 'import', 'update' or 'validate'")
+        if op in ("categories", "categorize"):
+            return _analytique(c, op, "supplier_invoice",
+                               _need(invoice_id, "invoice_id", op), categories)
+        raise _bad("op must be 'list', 'get', 'lines', 'import', 'update', 'validate', "
+                   "'categories' or 'categorize'")

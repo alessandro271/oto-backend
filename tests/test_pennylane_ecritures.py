@@ -53,7 +53,8 @@ def _modules_du_connecteur() -> list[pathlib.Path]:
 # du client. Le préfixe est le critère parce qu'il survit à l'ajout d'un verbe :
 # `create_ledger_entry` sera couvert sans que personne ait à y penser.
 VERBES_ECRITURE = ("create_", "update_", "finalize_", "send_", "delete_",
-                   "match_", "import_", "link_", "upload_", "letter", "unletter")
+                   "match_", "import_", "link_", "upload_", "letter", "unletter",
+                   "categorize")
 
 
 def _ecritures_nues(source: str) -> list[tuple[str, int]]:
@@ -166,6 +167,8 @@ GESTES = [
      "update_invoice"),
     ("pennylane_supplier", {"op": "create", "name": "ACME"}, "create_supplier"),
     ("pennylane_match", {"invoice_id": 1, "transaction_id": 2}, "match_transaction"),
+    ("pennylane_invoice", {"op": "categorize", "invoice_id": 1,
+                           "categories": [{"id": 3, "weight": "1"}]}, "categorize"),
 ]
 
 

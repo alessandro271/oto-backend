@@ -55,6 +55,22 @@ def _need(value, name: str, op: str):
     return value
 
 
+def _analytique(c: PennylaneClient, op: str, target: str, target_id, categories):
+    """`op="categories"` / `op="categorize"` — the analytics of ONE object.
+
+    Shared by the three objects that carry analytical categories (customer invoice,
+    supplier invoice, ledger entry line): same reading, same replacing write, so it
+    lives once. `target` is the client's name of the object.
+    """
+    if op == "categories":
+        return c.get_categories_of(target, target_id)
+    liste = _need(categories, "categories", op)
+    try:
+        return _ecrit(lambda: c.categorize(target, target_id, liste), "categorization")
+    except ValueError as e:      # malformed body, refused before any call
+        raise _bad(f"op='categorize': {e}") from e
+
+
 def _ecrit(appel, geste: str):
     """EXECUTE a Pennylane write and return its result, or RAISE with guidance.
 

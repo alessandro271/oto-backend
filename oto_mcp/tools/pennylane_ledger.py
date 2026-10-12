@@ -21,7 +21,7 @@ from typing import Literal, Optional
 
 from fastmcp import FastMCP
 
-from .pennylane_socle import _bad, _client, _ecrit, _need
+from .pennylane_socle import _analytique, _bad, _client, _ecrit, _need
 
 
 def register(mcp: FastMCP) -> None:
@@ -29,7 +29,7 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     def pennylane_ledger_entry(
         op: Literal["list", "get", "lines", "lettered", "create",
-                    "update"] = "list",
+                    "update", "categories", "categorize"] = "list",
         entry_id: Optional[int] = None,
         line_id: Optional[int] = None,
         clauses: Optional[list] = None,
@@ -42,6 +42,7 @@ def register(mcp: FastMCP) -> None:
         currency: Optional[str] = None,
         piece_number: Optional[str] = None,
         fields: Optional[dict] = None,
+        categories: Optional[list] = None,
     ) -> dict | list:
         """General-ledger entries: read, post an entry, correct it.
 
@@ -66,9 +67,14 @@ def register(mcp: FastMCP) -> None:
                 "lines" — the lines of an entry, with their `id` (this is the
                     id that lettering consumes, not the entry's);
                 "lettered" — the lines lettered WITH the line `line_id`, to
-                    see what a lettering actually associated.
+                    see what a lettering actually associated;
+                "categories" — the ANALYTICAL categories of the LINE `line_id`,
+                    each with its `weight`;
+                "categorize" — REPLACES all the analytical categories of the LINE
+                    `line_id` with `categories` (see below).
             entry_id: entry id — required by "get" and "lines".
-            line_id: id of an entry LINE — required by "lettered".
+            line_id: id of an entry LINE (from op="lines") — required by
+                "lettered", "categories" and "categorize".
             clauses: server-side filter, list of `{"field", "operator", "value"}`.
                 Filterable fields: `id`, `date`, `journal_id`. Operators:
                 `lt`, `lteq`, `gt`, `gteq`, `eq`, `not_eq`, plus `in` and
@@ -92,6 +98,11 @@ def register(mcp: FastMCP) -> None:
                 ⚠️ `ledger_entry_lines` takes `create`/`update`/`delete` there: this
                 action can DELETE lines: it commits as much as a
                 creation, and is announced in the same way.
+            categories: op="categorize" — `[{"id": …, "weight": "0.5"}]`, weight as a
+                STRING between 0 and 1, the weights of ONE axis sum to 1, axes are
+                independent; `[]` removes them all. Ids from `pennylane_ref(kind=
+                "categories")`. Reversible: re-send the list read with
+                op="categories".
         """
         c = _client()
         if op == "list":
@@ -115,8 +126,11 @@ def register(mcp: FastMCP) -> None:
             return _ecrit(lambda: c.update_ledger_entry(_need(entry_id, "entry_id", op),
                                                 **(fields or {})),
                           "accounting entry correction")
-        raise _bad("op must be 'list', 'get', 'lines', 'lettered', 'create' "
-                   "or 'update'")
+        if op in ("categories", "categorize"):
+            return _analytique(c, op, "ledger_entry_line",
+                               _need(line_id, "line_id", op), categories)
+        raise _bad("op must be 'list', 'get', 'lines', 'lettered', 'create', "
+                   "'update', 'categories' or 'categorize'")
 
     @mcp.tool()
     def pennylane_ledger_lettering(
