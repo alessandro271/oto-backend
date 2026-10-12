@@ -36,7 +36,7 @@ import json
 import os
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from .. import access, db, ownership, roles, run_status, session_org
 from ._authz import ORG_MEMBER, SUB_ONLY
@@ -194,6 +194,58 @@ class RunCycleOut(BaseModel):
     rows_released: Optional[int] = None
 
 
+class MesRunsInput(BaseModel):
+    limit: int = 20
+
+    @field_validator("limit", mode="before")
+    @classmethod
+    def _borne(cls, v):
+        try:
+            return max(1, min(int(v), _MES_RUNS_MAX))
+        except (TypeError, ValueError):
+            return 20
+
+
+class MonRun(BaseModel):
+    run_id: str
+    label: Optional[str] = None
+    guide: Optional[str] = None
+    outcome: Optional[str] = None
+    project_id: Optional[int] = None
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+
+
+class MesRuns(BaseModel):
+    """MES derniers runs dans l'org active, plus récent d'abord. `outcome` à `null` = pas
+    (encore) clos. Plafonné à `_MES_RUNS_MAX`."""
+    runs: list[MonRun]
+
+
+# La page d'un compte dans une org se choisit par l'index `idx_tool_calls_run_start_sub`
+# (révision 0049) : un parcours d'index seul arrêté au LIMIT. 50 suffit à « ai-je déjà
+# un run clos `done` sur une procédure ? » — la question de la page d'onboarding.
+_MES_RUNS_MAX = 50
+
+
+def _mes_runs(ctx: ResolvedCtx, inp: MesRunsInput) -> dict:
+    """La lentille MEMBRE des runs : les miens, sous l'org active — exactement le bloc C
+    du handshake (`db.recent_runs`), servi en REST. Ni l'org entière (lentille org_admin,
+    `org.monitoring.runs`), ni les autres orgs : lister n'ouvre aucun accès que la
+    personne n'avait pas déjà à chaque session."""
+    rows = db.recent_runs(ctx.sub, ctx.org_id, limit=inp.limit)
+    return {"runs": [
+        {"run_id": r["run_id"], "label": r.get("label"), "guide": r.get("doctrine"),
+         "outcome": r.get("outcome"), "project_id": r.get("project_id"),
+         "started_at": _iso(r.get("started_at")), "finished_at": _iso(r.get("finished_at"))}
+        for r in rows
+    ]}
+
+
+def _iso(v: Any) -> Optional[str]:
+    return v.isoformat() if hasattr(v, "isoformat") else v
+
+
 def _fait(sub: str, tool: str, run_id: str, org_id: Optional[int], args: dict) -> None:
     """Le FAIT de journal, écrit comme le MCP l'écrit. ⚠️ Sans lui le run n'existe pas :
     le suivi et la clôture se lisent des faits `run_start`/`run_finish`, et une requête
@@ -279,6 +331,21 @@ CAPABILITIES += [
             "claim_next / claim / PATCH row / release so the lease and the write are "
             "yours. A run is not an identity: bind it to YOUR session, never reuse a "
             "`_claimed_run` read on a row."
+        ),
+    ),
+    Capability(
+        key="runs.mine",
+        handler=_mes_runs,
+        Input=MesRunsInput,
+        Output=MesRuns,
+        authz=ORG_MEMBER,
+        mcp=None,   # le MCP a le bloc C du handshake
+        rest=RestBinding(verb="GET", path="/api/me/runs"),
+        description=(
+            "YOUR recent runs in the active org (or `X-Oto-Org`), newest first: label, "
+            "`guide` (the process it ran, if any), `outcome` (null = not closed), "
+            "project. Never another member's runs — the whole org is the org admin's "
+            "monitoring lens. `limit` defaults to 20, capped at 50."
         ),
     ),
     Capability(
