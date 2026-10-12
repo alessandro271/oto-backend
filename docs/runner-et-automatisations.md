@@ -733,6 +733,18 @@ phrase plutôt que d'inventer une distinction que la base ne fait pas.
 ⚠️ **Vérifié à la RÉSERVATION seulement** (arbitrage explicite) : un travail long
 continue avec un droit retiré en cours de route. C'est assumé, pas oublié.
 
+⚠️ **Un MEMBRE ne réserve que SES travaux** (10/10/2026). Le jeton émis à la réservation
+est au nom du PORTEUR du travail, pas de celui qui réserve : tant que le claim d'un membre
+(`WORKER_OR_ORG_MEMBER` → `ORG_MEMBER`) ne filtrait que l'org, n'importe quel membre
+réservait le travail d'un collègue et recevait un jeton qui agit EN SON NOM — un admin
+d'org compris. Le filtre vit dans la prise SQL (`claim_next_job(porteur=…)`) : un membre
+ne prend que `runner_jobs.sub = lui`, jamais un travail sans porteur ; le worker de
+PLATEFORME (secret de machine, aucune identité métier) garde la file entière. Aucun flux
+servi ne reposait sur l'inverse : le worker au jeton d'org est l'ancien chemin, aucune org
+de production n'est servie ainsi (`_modele.exige_servi`), et abonnement, ferme, repli et
+pool sont réservés au worker de plateforme. Une campagne produite au sondage d'un membre
+reste au nom de son déclarant (`fleet["sub"]`) : elle attend un worker de plateforme.
+
 ### La clé de modèle de l'org part avec le travail réservé (#874, 04/09/2026)
 
 La clé de modèle **vit avec les autres secrets de connecteurs de l'org**, et le

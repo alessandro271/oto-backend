@@ -1,9 +1,21 @@
-"""Déclarer, lister, révoquer les workers de plateforme — `oto_admin_runner_worker`.
+"""Déclarer, lister, révoquer les workers de plateforme — REST seule
+(`POST /api/admin/runner/workers`), super admin.
 
 Le seul endroit d'où un worker naît. Il en sort avec son secret (`otow_…`),
 montré UNE fois : le backend n'en garde que le haché. Le secret va dans
 l'environnement de l'unité systemd du worker (`OTO_WORKER_SECRET`) — et c'est
 tout ce que le worker possède, avec l'adresse du backend.
+
+⚠️ **Aucune face MCP, super admin seul** (10/10/2026). `op=create` REND un secret
+brut : servi en outil MCP (`oto_admin_runner_worker`, alors PLATFORM_ADMIN), il
+transitait dans le contexte d'un modèle — et de tout agent hébergé d'un admin, sous
+son jeton de délégation. Même règle que la pose de secret (« secret brut jamais en
+argument ni en réponse MCP », `docs/couches-et-capacites.md`). Et un secret de worker
+ouvre la file de TOUTES les orgs, avec un jeton délégué au nom de chaque porteur :
+le geste est celui du tout-puissant, pas de l'opérateur de supervision.
+
+⚠️ DETTE : le secret n'a ni échéance ni rotation — `revoke` puis `create` est le seul
+geste. Une échéance demande une colonne (migration), pas faite ici.
 """
 from __future__ import annotations
 
@@ -12,7 +24,7 @@ from typing import Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, RootModel
 
 from .. import db
-from ._authz import PLATFORM_ADMIN
+from ._authz import SUPER_ADMIN
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
@@ -81,11 +93,11 @@ def _workers(ctx: ResolvedCtx, inp: WorkerInput) -> dict:
 CAPABILITIES += [
     Capability(
         key="platform.runner.worker", handler=_workers, Input=WorkerInput,
-        Output=WorkerOut, authz=PLATFORM_ADMIN,
-        mcp="oto_admin_runner_worker",
+        Output=WorkerOut, authz=SUPER_ADMIN,
+        mcp=None,   # secret brut en réponse : jamais dans un contexte de modèle
         rest=RestBinding("POST", "/api/admin/runner/workers"),
         description=(
-            "[platform admin] Platform workers of the hosted runner — machine "
+            "[super admin, REST only] Platform workers of the hosted runner — machine "
             "secrets, not accounts. op=create (label → secret shown ONCE, put it in "
             "the worker's OTO_WORKER_SECRET) / list / revoke (worker_sub). A worker "
             "has no org: the backend commands it a complete job (org, delegated "

@@ -578,7 +578,8 @@ def claim_next_job(org_id: Optional[int], worker_sub: str,
                    depot: Optional[str] = None,
                    famille_seule: bool = False,
                    org_ids: Optional[list] = None,
-                   ferme: bool = False) -> Optional[dict]:
+                   ferme: bool = False,
+                   porteur: Optional[str] = None) -> Optional[dict]:
     """Le prochain job, bail posé — ou None (file vide).
 
     ⚠️ `depot` = le dépôt de clé que le worker nomme, c'est-à-dire la FAMILLE de
@@ -622,7 +623,16 @@ def claim_next_job(org_id: Optional[int], worker_sub: str,
     `ferme` (29/09/2026) : le worker est un exécutant de la FERME Claude Code. Un
     travail de la famille `FAMILLE_FERME` d'une org routée vers la ferme
     (`OPTION_FERME`) n'est réservé QUE par lui : tout autre worker ne le voit plus,
-    et il attend plutôt que de retomber sur la boucle."""
+    et il attend plutôt que de retomber sur la boucle.
+
+    `porteur` (10/10/2026) : ne réserver QUE les travaux de ce porteur (`runner_jobs.sub`).
+    C'est la garde d'un claim par un MEMBRE d'org (jeton d'API, pas un secret de
+    machine) : le travail réservé revient avec un jeton de délégation AU NOM de son
+    porteur (`capabilities/runner_jobs._delegue`), et un membre qui réservait le travail
+    d'un collègue recevait donc un jeton qui agit en son nom. En SQL, dans la prise :
+    filtrer après coup laisserait le travail d'autrui `claimed` par lui. `None` = tout
+    porteur — le worker de PLATEFORME seul. Un travail sans porteur (`sub` NULL) n'est
+    jamais pris sous ce filtre. Seule la PRISE est filtrée, comme `org_ids`."""
     if org_id is None:
         # Le SONDAGE vaut présence, HORS de la transaction de réservation
         # ci-dessous (oto-backend, lot perf 17/09/2026, mesuré par oto cd :
@@ -709,6 +719,8 @@ def claim_next_job(org_id: Optional[int], worker_sub: str,
                 {frag['jointure_pret']}
                  WHERE (%s::bigint IS NULL OR org_id = %s) AND due_at <= NOW()
                    AND (%s::bigint[] IS NULL OR org_id = ANY(%s::bigint[]))
+                   -- Un membre ne réserve que SES travaux (voir `porteur`).
+                   AND (%s::text IS NULL OR rj.sub = %s)
                    -- Org SUSPENDUE (`org_suspension`) : ses travaux restent en file,
                    -- intacts, et ne sont pas réservés. Ils repartent à la levée.
                    AND NOT EXISTS (SELECT 1 FROM orgs o_susp WHERE o_susp.id = rj.org_id
@@ -763,7 +775,8 @@ def claim_next_job(org_id: Optional[int], worker_sub: str,
             RETURNING j.id, j.kind, j.run_id, j.payload, j.attempts, j.max_attempts,
                       j.lease_until, j.sub, j.org_id{frag['retour_preteur']}
             """,
-            (org_id, org_id, orgs, orgs, depot or "", bool(famille_seule),
+            (org_id, org_id, orgs, orgs, porteur, porteur, depot or "",
+             bool(famille_seule),
              bool(ferme), worker_sub, int(lease_seconds)),
         ).fetchone()
         row = dict(row) if row else None

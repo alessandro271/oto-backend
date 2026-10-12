@@ -132,8 +132,22 @@ toute résolution du porteur se borne à cette org (`oto_mcp/verrou_org.py`) :
 Les gestes qui viseraient une autre org sont REFUSÉS (`org_out_of_job`), jamais ignorés :
 `X-Oto-Org` d'une autre org (`ViewAsMiddleware`), et changer l'org maison de la personne
 (`PUT`/`DELETE /api/me/active-org`) — le jeton porte une org de travail, pas le défaut
-de l'humain. Les rôles plateforme du porteur (super_admin, opérateur) restent les siens :
-un agent hébergé est un client MCP, ses droits sont ceux que porte son jeton.
+de l'humain.
+
+**Les rôles plateforme du porteur** (super_admin, opérateur) ne passent pas le jeton
+(10/10/2026) : un agent hébergé agit au nom de son porteur, il n'est pas l'opérateur.
+Le verrou d'org ne bornait que le rôle d'ORG ; l'escalade plateforme (`PLATFORM_ADMIN`,
+`SUPER_ADMIN`, `ORG_ADMIN_OF_OR_OPERATOR`, `roles.is_platform_admin`, la gouvernance
+d'`ownership`, la visibilité des `oto_admin_*`) restait ouverte à tout travail d'un
+compte admin. Un seul point, d'où dérivent tous ces prédicats :
+`access.scope.role_effectif` (derrière `get_user_role` et `is_operator_role`, et relu par
+`run_thread` sur sa colonne SQL) rend `member` au porteur sous le jeton.
+`OTO_VERROU_ROLES_PLATEFORME`, réglage propre : `enforce`, `report` (**défaut** —
+journalise une fois par requête le rôle qui serait retiré, avec le travail, et ne retire
+rien) ou `off`. Il ne suit pas `OTO_VERROU_ORG_DELEGATION` : couper l'un ne rend pas
+l'autre. ⚠️ Avant `enforce`, relever au journal (`verrou des rôles plateforme (report)`)
+les travaux qui agissent avec un rôle plateforme : sous `enforce`, leurs `oto_admin_*`
+disparaissent de `tools/list` et toute garde plateforme les refuse.
 
 Le verrou ne vise que le porteur : une lecture sur un tiers garde son chemin. Il est posé
 pour la requête par le bord — l'authentification REST et `middleware/verrou_org.py` côté
