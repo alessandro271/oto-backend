@@ -3,8 +3,10 @@
 Le seam résout `jeton d'appel ?? org du run ?? consultation ?? maison` (ADR 0023/0038,
 amendées le 30/08/2026). L'org du run n'est PAS relue par le seam : le middleware la
 pose une fois par appel (`run_org.pin_for_call`), après les axes — donc seulement quand
-aucun `_org=`/`_project=` n'a déjà posé l'org — et après garde d'appartenance. Ici, sans
-base : l'ordre du seam, l'invariant groupe ⊂ org, et les six sorties de la pose.
+aucun `_org=`/`_project=` n'a déjà posé l'org — et après garde d'appartenance. Le run,
+lui, est gardé à chaque appel qui le porte : il faut en être le PROPRIÉTAIRE (F-014,
+12/10/2026), `_org=` explicite ou non. Ici, sans base : l'ordre du seam, l'invariant
+groupe ⊂ org, et les sorties de la pose.
 """
 from __future__ import annotations
 
@@ -76,10 +78,10 @@ def garde(monkeypatch):
     return run_org
 
 
-def _run_de(monkeypatch, org_id, *, membre=True):
+def _run_de(monkeypatch, org_id, *, membre=True, sub="u"):
     run = uuid.uuid4().hex
     monkeypatch.setattr(db, "get_run_head",
-                        lambda r: {"sub": "u", "org_id": org_id} if r == run else None)
+                        lambda r: {"sub": sub, "org_id": org_id} if r == run else None)
     monkeypatch.setattr(roles, "is_org_member", lambda sub, org: membre)
     return run
 
@@ -99,16 +101,31 @@ async def test_sans_run_rien_n_est_pose_ni_lu(garde, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_sous_un_org_explicite_l_org_du_run_n_est_pas_lue(garde, monkeypatch):
-    """`_org=`/`_project=` ont déjà posé l'org : ni lecture, ni garde — l'agent
-    multi-org ne paie rien et n'est jamais refusé au nom d'un run qu'il ne suit pas."""
+async def test_sous_un_org_explicite_l_org_du_run_n_est_ni_posee_ni_jugee(garde, monkeypatch):
+    """`_org=`/`_project=` ont déjà posé l'org : celle du run n'est ni posée ni jugée —
+    l'agent multi-org n'est jamais refusé au nom de l'org d'un run qu'il ne suit pas.
+    Le run, lui, reste gardé : c'est le sien."""
     run = _run_de(monkeypatch, 226, membre=False)
-    monkeypatch.setattr(db, "get_run_head", lambda r: pytest.fail("lecture inutile"))
+    monkeypatch.setattr(roles, "is_org_member", lambda sub, org: pytest.fail("garde inutile"))
     tok = session_org.set_call_org(255)
     try:
         assert await _dans_le_run(garde, run) == []
     finally:
         session_org.reset_call_org(tok)
+
+
+@pytest.mark.asyncio
+async def test_sous_un_org_explicite_le_run_d_autrui_reste_refuse(garde, monkeypatch):
+    """`_org=` ne blanchit pas le `_run_id` d'un autre : c'est avec lui qu'on écrit
+    sur les lignes que ce run tient en réservation."""
+    run = _run_de(monkeypatch, 255, sub="collegue")
+    tok = session_org.set_call_org(255)
+    try:
+        with pytest.raises(McpError) as e:
+            await _dans_le_run(garde, run)
+    finally:
+        session_org.reset_call_org(tok)
+    assert "pas le tien" in str(e.value), e.value
 
 
 @pytest.mark.asyncio
@@ -131,13 +148,26 @@ async def test_membre_l_org_du_run_est_posee_puis_retiree(garde, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_non_membre_refus_nomme_jamais_un_repli(garde, monkeypatch):
+async def test_le_run_d_un_collegue_de_la_meme_org_est_refuse(garde, monkeypatch):
+    """F-014 (12/10/2026, remplace #639 sur ce point) : être membre de l'org du run ne
+    suffit plus, il faut en être le propriétaire. Le refus ne dit ni l'org ni à qui
+    est le run."""
+    run = _run_de(monkeypatch, 226, sub="collegue")
+    with pytest.raises(McpError) as e:
+        await _dans_le_run(garde, run)
+    msg = str(e.value)
+    assert "pas le tien" in msg and run in msg, msg
+    assert "226" not in msg and "Travail" not in msg and "collegue" not in msg, msg
+    assert session_org.current_call_run_org() is None
+
+
+@pytest.mark.asyncio
+async def test_proprietaire_sorti_de_l_org_refus_nomme_jamais_un_repli(garde, monkeypatch):
     run = _run_de(monkeypatch, 226, membre=False)
     with pytest.raises(McpError) as e:
         await _dans_le_run(garde, run)
     msg = str(e.value)
     assert "membre" in msg and run in msg, msg
-    # Le refus d'un NON-membre ne lui apprend ni le numéro ni le nom de l'org du run.
     assert "226" not in msg and "Travail" not in msg, msg
     assert session_org.current_call_run_org() is None
 

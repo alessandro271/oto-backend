@@ -79,19 +79,26 @@ reste : il couvre un run mal posé.
 Ce que l'étage fait, et ne fait pas :
 
 - **posé par le middleware, pas relu par le seam** — `run_org.pin_for_call` tourne
-  APRÈS les axes de l'appel : une lecture de `runs` par run (cache mémoire, `runs.org_id`
-  est immuable), une garde d'appartenance par appel (`roles.is_org_member`), hors
-  boucle. `current_org` relit une ContextVar, il ne fait aucune requête ;
+  APRÈS les axes de l'appel : une lecture de `runs` par run (cache mémoire, `runs.sub`
+  et `runs.org_id` sont immuables), la garde du propriétaire et une garde
+  d'appartenance par appel (`roles.is_org_member`), hors boucle. `current_org` relit une ContextVar, il ne fait aucune requête ;
 - **`_org=`/`_project=` explicites gardent la priorité** — l'agent multi-org (run
-  ouvert dans une org, travail dans une autre avec l'axe) ne change pas. Mesuré sur
+  ouvert dans une org, travail dans une autre avec l'axe) ne change pas : l'org du run
+  n'est alors ni posée ni jugée (le run, lui, reste gardé). Mesuré sur
   sept jours : 32 115 appels en run, 30 021 déjà dans l'org du run, 1 873 ailleurs avec
   un axe (inchangés), **166 changeraient d'org** (borne haute : « résolu dans la maison »
   est la seule lecture possible de « sans axe » — dont les 109 refus `data_write`) ;
-- **l'appartenance reste exigée** : un sub qui n'est pas (plus) membre de l'org du run
-  est refusé, nommément (« le run se déroule dans l'org X, dont tu n'es pas membre… ») —
-  jamais un repli silencieux sur la maison. Mesuré : 40 appels sur sept jours (un sub,
-  deux runs ouverts dans une org dont il n'est plus membre) deviendraient ce
-  refus ;
+- **le run appartient à son propriétaire** (12/10/2026, revue de sécurité F-014 —
+  remplace « membre de l'org du run suffit ») : un `_run_id` est une poignée que
+  n'importe qui peut taper, et celui d'un collègue de la même org lui donnait les lignes
+  que ce run tient en réservation. Un run connu dont `runs.sub` n'est pas l'appelant est
+  refusé à chaque appel qui le porte, **`_org=` explicite ou non** (« le run … n'est pas
+  le tien »), sans dire ni son org ni son propriétaire. C'est la règle de la clôture
+  (`db.finish_run`), de la libération (`run_finish`) et de l'en-tête REST `X-Oto-Run` ;
+- **l'appartenance reste exigée** : le propriétaire qui n'est plus membre de l'org du
+  run est refusé, nommément, sans que le refus dise l'org — jamais un repli silencieux
+  sur la maison. Mesuré au 30/08 : 40 appels sur sept jours (un sub, deux runs ouverts
+  dans une org dont il n'est plus membre) ;
 - **un run inconnu de `runs`, ou hors org, ne pose rien** : `_run_id` y reste ce qu'il
   était, un identifiant de corrélation ; l'appel se résout comme avant (maison) ;
 - **le journal stampe l'org résolue**, donc l'org du run : la vue `op=calls org_id=X`

@@ -138,8 +138,8 @@ def run_de_l_en_tete(sub: Optional[str], run_id: str) -> Optional[int]:
     lève un refus NOMMÉ, avant que la capacité ne touche quoi que ce soit :
 
     - run inconnu, ou run d'un AUTRE compte → 404 `run_not_found`, sans oracle (même
-      refus que le fil). ⚠️ Plus strict que l'axe MCP, qui ne garde que l'appartenance :
-      en REST il n'y a pas de pile de session, le run est tout ce qui désigne le titulaire ;
+      refus que le fil). Même règle que l'axe MCP `_run_id` (`run_org.pin_for_call`,
+      F-014) : le run appartient à son propriétaire ;
     - porteur non membre de l'org du run → 403 `forbidden`, jamais un repli sur son org ;
     - `X-Oto-Org` qui désigne une autre org → 400 `run_org_mismatch` : l'org du run prime
       sur la consultation (`access.current_org`), et l'ignorer en silence ferait écrire

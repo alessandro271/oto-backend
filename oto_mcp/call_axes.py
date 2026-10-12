@@ -442,9 +442,9 @@ async def _pin_run(value: object) -> list[UndoEntry]:
     """Épingle le run_id de l'appel courant (corrélation calllog, modèle sans état de
     session : la pile session-scopée de `guide_run` ne survit pas au renouvellement
     de session claude.ai). Le sink calllog lit `current_call_run()` EN PRIORITÉ, repli
-    sur la pile. Pas de garde : un run_id est un identifiant opaque de corrélation, pas
-    un axe de droits. None/'' ⇒ inerte. L'ORG du run, elle, se pose après tous les axes
-    et gardée (`run_org.pin_for_call`, #639) — une autre pose, pas celle-ci."""
+    sur la pile. Pas de garde ICI : le run se garde après tous les axes
+    (`run_org.pin_for_call`) — il faut en être le propriétaire (F-014), et son ORG s'y
+    pose, appartenance gardée (#639). None/'' ⇒ inerte."""
     if value is None or value == "":
         return []
     return [(session_org.reset_call_run, session_org.set_call_run(str(value)))]

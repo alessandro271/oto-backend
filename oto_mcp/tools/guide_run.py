@@ -61,6 +61,9 @@ def _run_d_autrui(run_id: str) -> bool:
                        "(fail-closed)", run_id, exc_info=True)
         return True
     return head is not None and head.get("sub") != sub
+
+
+def version_de_procedure(sub: str | None, slug: str) -> int | None:
     """CURRENT version of the procedure `slug`, read in the order
     `oto_procedure(op='get')` serves it: the active org first, the active team as a
     complement. None if the slug designates no procedure — an ad-hoc run, a
