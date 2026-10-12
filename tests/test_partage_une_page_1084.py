@@ -162,7 +162,9 @@ def test_le_destinataire_lit_la_page_et_RIEN_d_autre_du_projet(monde):
 
         recu = {nom: _doc(DEST, monde["y"], **args)
                 for nom, args in _tous_les_chemins(monde).items()}
-        ouverts = {nom: r for nom, r in recu.items() if r[0] != "refus" or r[1] != 403}
+        # F-016 : par `doc_id`, une page illisible rend 404 `unknown_doc` (comme une
+        # page absente) ; par `project_id`, le refus reste 403.
+        ouverts = {nom: r for nom, r in recu.items() if r[0] != "refus" or r[1] not in (403, 404)}
         assert not ouverts, f"chemins qui ne refusent pas : {ouverts}"
         _sans_sentinelle({"page": page, "refus": recu})
         # La page n'a pas bougé : lecture seule.
@@ -189,7 +191,7 @@ def test_la_sous_page_n_herite_de_rien(monde):
     try:
         assert not ownership.can_access(DEST, "doc", str(monde["enfant"]))
         assert _doc(DEST, monde["y"], op="get", doc_id=monde["enfant"])[:3] == \
-            ("refus", 403, "forbidden")
+            ("refus", 404, "unknown_doc")
     finally:
         _retire(monde, email=f"{DEST}@exemple.test")
 
@@ -269,25 +271,25 @@ def test_audience_org_une_org_cliente_lit_la_page(monde):
     try:
         for sub in (DEST, COLLEGUE):
             assert _doc(sub, monde["y"], op="get", doc_id=monde["recap"])[0] == "ok"
-            assert _doc(sub, monde["y"], op="get", doc_id=monde["soeur"])[:2] == ("refus", 403)
+            assert _doc(sub, monde["y"], op="get", doc_id=monde["soeur"])[:2] == ("refus", 404)
             assert _doc(sub, monde["y"], op="list", project_id=monde["projet"])[:2] == \
                 ("refus", 403)
-        assert _doc(TIERS, monde["z"], op="get", doc_id=monde["recap"])[:2] == ("refus", 403)
+        assert _doc(TIERS, monde["z"], op="get", doc_id=monde["recap"])[:2] == ("refus", 404)
         assert _doc(COLLEGUE, monde["y"], op="shared_with_me",
                     scope="org")[1]["docs"][0]["via"] == "org"
     finally:
         _retire(monde, org_id=monde["y"])
-    assert _doc(COLLEGUE, monde["y"], op="get", doc_id=monde["recap"])[:2] == ("refus", 403)
+    assert _doc(COLLEGUE, monde["y"], op="get", doc_id=monde["recap"])[:2] == ("refus", 404)
 
 
 def test_audience_equipe(monde):
     """L'équipe ne lit pas le projet (il est personnel) ; le partage lui ouvre la page."""
-    assert _doc(EQUIPIER, monde["x"], op="get", doc_id=monde["recap"])[:2] == ("refus", 403)
+    assert _doc(EQUIPIER, monde["x"], op="get", doc_id=monde["recap"])[:2] == ("refus", 404)
     _partage(monde, group_id=monde["equipe"], audience="team")
     try:
         assert _doc(EQUIPIER, monde["x"], op="get", doc_id=monde["recap"])[0] == "ok"
         assert _doc(EQUIPIER, monde["x"], op="get", doc_id=monde["enfant"])[:2] == \
-            ("refus", 403)
+            ("refus", 404)
     finally:
         _retire(monde, group_id=monde["equipe"])
 
@@ -373,7 +375,7 @@ def test_unshare_ferme_la_lecture_tout_de_suite(monde):
     _partage(monde, email=f"{DEST}@exemple.test")
     assert _doc(DEST, monde["y"], op="get", doc_id=monde["recap"])[0] == "ok"
     assert _retire(monde, email=f"{DEST}@exemple.test")["removed"] is True
-    assert _doc(DEST, monde["y"], op="get", doc_id=monde["recap"])[:2] == ("refus", 403)
+    assert _doc(DEST, monde["y"], op="get", doc_id=monde["recap"])[:2] == ("refus", 404)
     assert _doc(DEST, _perso(DEST), op="shared_with_me")[1]["docs"] == []
 
 
@@ -384,7 +386,7 @@ def test_partager_la_page_ne_la_rend_pas_publique(monde):
     try:
         assert db.get_doc_by_id(monde["recap"])["public_token"] is None
         # Sans compte, rien : ni par `oto_doc`, ni par la porte de lecture.
-        assert _doc(None, None, op="get", doc_id=monde["recap"])[:2] == ("refus", 403)
+        assert _doc(None, None, op="get", doc_id=monde["recap"])[:2] == ("refus", 404)
         from oto_mcp.capabilities.docs import common
         assert common.acces_a_la_page(None, db.get_doc_by_id(monde["recap"])) is None
     finally:

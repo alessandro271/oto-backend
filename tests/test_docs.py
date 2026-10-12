@@ -209,3 +209,35 @@ def test_capability_registered():
     from oto_mcp.capabilities.registry import CAPABILITIES
     cap = next((c for c in CAPABILITIES if c.key == "me.doc"), None)
     assert cap is not None and cap.mcp == "oto_doc" and cap.rest.path == "/api/me/docs"
+
+
+# --- F-016 : pas d'oracle d'existence sur les ids de page / de projet --------------
+
+@pytest.mark.parametrize("op", ["get", "revisions", "backlinks", "update", "delete", "move"])
+def test_une_page_illisible_rend_le_meme_404_qu_une_page_absente(seams, monkeypatch, op):
+    """F-016 : une page d'une autre org rendait 403 `forbidden`, un id absent 404
+    `unknown_doc` — les ids étant séquentiels, n'importe quel compte cartographiait
+    les pages existantes de toute la plateforme. Même réponse, désormais."""
+    monkeypatch.setattr(ownership, "can_access", lambda sub, t, rid, want="read": False)
+    refus = []
+    for doc_id in (3, 999):        # 3 existe (hors de portée), 999 n'existe pas
+        with pytest.raises(AuthzDenied) as e:
+            D._doc(CTX, D.DocInput(op=op, doc_id=doc_id, body_md="x"))
+        refus.append((e.value.status, e.value.code, e.value.message))
+    assert refus[0][:2] == refus[1][:2] == (404, "unknown_doc")
+    assert seams["update"] == seams["delete"] == seams["move"] == []
+
+
+def test_deplacer_vers_un_projet_hors_de_portee_ne_dit_pas_s_il_existe(seams, monkeypatch):
+    """F-016 : `move` vers `to_project` rendait 404 `unknown_project` pour un id absent
+    et 403 `forbidden` pour un projet d'autrui. Le droit passe d'abord : même 403."""
+    monkeypatch.setattr(ownership, "can_access",
+                        lambda sub, t, rid, want="read": str(rid) == "7")
+    monkeypatch.setattr(db, "get_project_by_id", lambda i: {"id": i} if i in (7, 8) else None)
+    monkeypatch.setattr(db, "move_doc_to_project", lambda *a, **k: pytest.fail("déplacé !"))
+    refus = []
+    for tgt in (8, 999):           # 8 existe (pas à moi), 999 n'existe pas
+        with pytest.raises(AuthzDenied) as e:
+            D._doc(CTX, D.DocInput(op="move", doc_id=3, to_project=tgt))
+        refus.append((e.value.status, e.value.code))
+    assert refus == [(403, "forbidden"), (403, "forbidden")]

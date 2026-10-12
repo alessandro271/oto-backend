@@ -132,10 +132,12 @@ def move(sub: Optional[str], inp, row: dict, pid: int) -> dict:
     # fourni) doit appartenir au projet cible.
     if inp.to_project is not None and int(inp.to_project) != pid:
         tgt = int(inp.to_project)
-        require(db.get_project_by_id(tgt) is not None, "unknown_project",
-                f"Projet cible #{tgt} inconnu.", 404)
+        # F-016 : le droit AVANT l'existence — `can` est faux sur un projet absent, donc
+        # même 403 pour « n'existe pas » et « pas à toi » (sinon oracle sur les ids).
         require(common.can(sub, tgt, "write"), "forbidden",
                 "Écriture refusée sur le projet cible.", 403)
+        require(db.get_project_by_id(tgt) is not None, "unknown_project",
+                f"Projet cible #{tgt} inconnu.", 404)
         if inp.parent_id is not None:
             require(int(inp.parent_id) != int(inp.doc_id), "bad_parent",
                     "Un doc ne peut pas être son propre parent.")
