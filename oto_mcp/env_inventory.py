@@ -412,6 +412,33 @@ _REGLAGES: tuple[Variable, ...] = (
     Variable("OTO_ANON_RATE_BURST", Classe.REGLAGE, "60",
              "Rafale anonyme autorisée en plus du débit régulier.",
              ("oto_mcp/subdomain_project.py:139",)),
+    Variable("OTO_DEBIT_MODE", Classe.REGLAGE, "enforce",
+             "Limite de débit applicative (`limite_debit.py`, F-025) : `enforce` (défaut) "
+             "refuse en 429, `report` journalise ce qui serait refusé et laisse passer, "
+             "`off` la coupe. Une valeur inconnue vaut `enforce`.",
+             ("oto_mcp/limite_debit.py:136",)),
+    Variable("OTO_DEBIT_JETON_PAR_MIN", Classe.REGLAGE, "1200",
+             "Débit (req/min) par jeton porté (`Authorization`), rafale = la moitié ; "
+             "`0` désarme la classe.",
+             ("oto_mcp/limite_debit.py:158",)),
+    Variable("OTO_DEBIT_ANONYME_PAR_MIN", Classe.REGLAGE, "600",
+             "Débit (req/min) par adresse d'une requête sans jeton, hors routes "
+             "sensibles et webhooks ; rafale = la moitié ; `0` désarme la classe.",
+             ("oto_mcp/limite_debit.py:160",)),
+    Variable("OTO_DEBIT_SENSIBLE_PAR_MIN", Classe.REGLAGE, "60",
+             "Débit (req/min) par adresse sur les routes à secret dans le chemin et les "
+             "gestes d'authentification (invitation, partage public, DCR, autorisation, "
+             "retours OAuth) ; rafale = la moitié ; `0` désarme la classe.",
+             ("oto_mcp/limite_debit.py:162",)),
+    Variable("OTO_DEBIT_WEBHOOK_PAR_MIN", Classe.REGLAGE, "300",
+             "Débit (req/min) par (adresse, chemin) des webhooks entrants ; rafale = la "
+             "moitié ; `0` désarme la classe.",
+             ("oto_mcp/limite_debit.py:164",)),
+    Variable("OTO_DEBIT_ECHECS_PAR_MIN", Classe.REGLAGE, "120",
+             "Budget (par min) de réponses 401/403 (et 404 sur routes à secret et "
+             "webhooks) par adresse ; épuisé, l'adresse est refusée sauf jeton déjà "
+             "accepté ; `0` désarme ce budget.",
+             ("oto_mcp/limite_debit.py:165",)),
     Variable("OTO_MCP_MAX_ORGS_PER_USER", Classe.REGLAGE, "10",
              "Plafond d'orgs créées par un même compte (hors super_admin et admin de son tenant).",
              ("oto_mcp/capabilities/orgs/core.py:19",)),

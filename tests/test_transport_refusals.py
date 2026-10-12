@@ -322,11 +322,16 @@ def test_le_compteur_est_pose_dans_lapp_racine_servie_par_uvicorn():
     from oto_mcp.server import build_root_app
     from oto_mcp.subdomain_project import HostDispatch
 
+    from oto_mcp.limite_debit import LimiteDebit
+
     racine = build_root_app(object(), object())
     assert isinstance(racine, ClientDisconnectGuard)
-    assert isinstance(racine.app, TransportRefusalCounter)
+    # La limite de débit est AU-DESSUS du compteur : un 429 de débit n'est pas un refus
+    # du transport, et le compter noierait le signal.
+    assert isinstance(racine.app, LimiteDebit)
+    assert isinstance(racine.app.app, TransportRefusalCounter)
     # …et le dispatch est bien SOUS lui.
-    couche = racine.app.app
+    couche = racine.app.app.app
     while not isinstance(couche, HostDispatch):
         couche = couche.app
     assert isinstance(couche, HostDispatch)

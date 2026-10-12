@@ -961,7 +961,13 @@ def build_root_app(app, anon_app):
        d'un seul geste, et SOUS la garde de déconnexion pour ne pas compter la
        réponse que celle-ci synthétise. Cf. `transport_refusals` pour les trois
        garanties qui le rendent acceptable sur le chemin du transport.
-    5. **garde de déconnexion client** (#352), la couche la plus EXTERNE — entre uvicorn
+    5. **limite de débit** (F-025) : une classe par requête (jeton porté, anonyme,
+       route à secret ou d'authentification, webhook), un seau par clé, plus un budget
+       d'échecs d'authentification par adresse ; refus `429` décidé AVANT la suite,
+       rien n'est mis en tampon. AU-DESSUS du compteur des refus du transport (un 429
+       de débit n'est pas un refus du transport), SOUS la garde de déconnexion.
+       Cf. `limite_debit`.
+    6. **garde de déconnexion client** (#352), la couche la plus EXTERNE — entre uvicorn
        et tout le reste. Un POST `/mcp` dont le client est parti en cours de route
        laissait une réponse ASGI incomplète ; uvicorn fermait alors le transport, et
        Caddy rendait des 502 sur cette connexion **et sur les requêtes voisines** qui
@@ -977,13 +983,15 @@ def build_root_app(app, anon_app):
     (`tests/test_client_disconnect_guard.py`)."""
     from . import subdomain_project
     from .client_disconnect_guard import ClientDisconnectGuard
+    from .limite_debit import LimiteDebit
     from .response_charset import ResponseCharset
     from .transport_refusals import TransportRefusalCounter
     from .version_header import VersionHeader
     return ClientDisconnectGuard(
-        TransportRefusalCounter(
-            VersionHeader(
-                ResponseCharset(subdomain_project.HostDispatch(app, anon_app)))))
+        LimiteDebit(
+            TransportRefusalCounter(
+                VersionHeader(
+                    ResponseCharset(subdomain_project.HostDispatch(app, anon_app))))))
 
 
 def main():
