@@ -21,6 +21,8 @@ vrai PostgreSQL dans `test_grants_l5_migration_live.py`.
 """
 from __future__ import annotations
 
+import contextlib
+
 import pytest
 
 from oto_mcp import access, credentials_store, grants_chain, providers
@@ -309,7 +311,7 @@ def test_revoking_without_edge_never_opens_a_live_edge(monkeypatch):
         seen.append(grants_chain.platform_rung("x", "fullenrich", None))
         return len(edges)
 
-    def revoke_edges(ref, kind, ident):
+    def revoke_edges(ref, kind, ident, conn=None):
         live = [e for e in edges if (e["grantee_kind"], e["grantee_id"]) == (kind, ident)
                 and e["revoked_at"] is None]
         for e in live:
@@ -317,11 +319,12 @@ def test_revoking_without_edge_never_opens_a_live_edge(monkeypatch):
         return len(live)
 
     seen: list = []
+    monkeypatch.setattr(grants_chain, "_connect", contextlib.nullcontext)
     monkeypatch.setattr(credentials_store, "list_platform_instances",
                         lambda p: [{**PROD_INSTANCE, "share_mode": "closed"}])
     monkeypatch.setattr(db_grants, "edges_for", lambda ref, scopes: [
         e for e in edges if (e["grantee_kind"], e["grantee_id"]) in scopes])
-    monkeypatch.setattr(db_grants, "edge_exists", lambda ref, kind, ident: any(
+    monkeypatch.setattr(db_grants, "edge_exists", lambda ref, kind, ident, conn=None: any(
         (e["grantee_kind"], e["grantee_id"]) == (kind, ident) for e in edges))
     monkeypatch.setattr(db_grants, "insert_grant", insert_grant)
     monkeypatch.setattr(db_grants, "revoke_edges", revoke_edges)

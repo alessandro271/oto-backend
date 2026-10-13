@@ -97,17 +97,21 @@ def insert_grant(*, resource_id: str, grantor_kind: str, grantor_id: str,
         return int(c.execute(sql, params).fetchone()["id"])
 
 
-def revoke_edges(resource_id: str, grantee_kind: str, grantee_id: str) -> int:
+def revoke_edges(resource_id: str, grantee_kind: str, grantee_id: str,
+                 conn=None) -> int:
     """ARCHIVE (jamais ne supprime, 0053-D7) les arêtes vivantes de ce couple.
     Rend le nombre d'arêtes révoquées. La révocation se voit à la lecture suivante,
-    sans rien propager : c'est l'argument du banc L0 contre tout cache."""
-    with _connect() as conn:
-        rows = conn.execute(
-            "UPDATE grants SET revoked_at = NOW() WHERE resource_id = %s "
-            "AND grantee_kind = %s AND grantee_id = %s AND revoked_at IS NULL "
-            "RETURNING id",
-            (resource_id, grantee_kind, str(grantee_id))).fetchall()
-    return len(rows)
+    sans rien propager : c'est l'argument du banc L0 contre tout cache.
+    `conn` = connexion existante (une révocation sur plusieurs clés tient en UNE
+    transaction) ; None = connexion du pool."""
+    sql = ("UPDATE grants SET revoked_at = NOW() WHERE resource_id = %s "
+           "AND grantee_kind = %s AND grantee_id = %s AND revoked_at IS NULL "
+           "RETURNING id")
+    params = (resource_id, grantee_kind, str(grantee_id))
+    if conn is not None:
+        return len(conn.execute(sql, params).fetchall())
+    with _connect() as c:
+        return len(c.execute(sql, params).fetchall())
 
 
 def revoke_unconstrained_edges(resource_ids: Iterable[str], conn) -> int:

@@ -45,6 +45,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from . import credentials_store, instance_refs
+from .db import _connect
 from .db import grants as db_grants
 
 logger = logging.getLogger(__name__)
@@ -453,21 +454,32 @@ def revoke(provider: str, scope: str, label: Optional[str] = None) -> int:
     née archivée : la chaîne a un avis (« révoqué ») et refuse sans repli. Un `grant`
     ultérieur la remplace, comme toute arête. Une seule écriture : posée vivante puis
     archivée, elle accordait la clé sans quota entre les deux — sur une clé fermée
-    comme ouverte — et pour toujours si l'archivage échouait."""
+    comme ouverte — et pour toujours si l'archivage échouait.
+
+    Sans `label`, la révocation vaut pour le CONNECTEUR : elle archive les arêtes du
+    scope sur TOUTES ses clés. N'archiver que la plus récente laissait `platform_rung`
+    servir l'appelant révoqué par l'arête vivante d'une autre clé. L'arête née archivée
+    se pose sur la plus récente ; une clé posée ensuite, sans arête, ne rouvre rien
+    (`platform_rung` rend le refus vu sur l'autre clé). Une seule transaction : une
+    révocation n'est jamais à moitié faite."""
     grantee = _parse_scope(scope)
     if grantee is None:
         return 0
-    label = label or _latest_label(provider)
-    if label is None:
+    labels = ([label] if label
+              else [i["label"] for i in credentials_store.list_platform_instances(provider)])
+    if not labels:
         return 0
-    ref = instance_ref(label, provider)
-    n = db_grants.revoke_edges(ref, *grantee)
-    if n == 0 and not db_grants.edge_exists(ref, *grantee):
-        db_grants.insert_grant(
-            resource_id=ref, grantor_kind=PLATFORM_SCOPE[0], grantor_id=PLATFORM_SCOPE[1],
-            grantee_kind=grantee[0], grantee_id=grantee[1], constraints={},
-            source="manual", created_by=None, revoked=True)
-        n = 1
+    refs = [instance_ref(lb, provider) for lb in labels]
+    with _connect() as conn:
+        n = sum(db_grants.revoke_edges(ref, *grantee, conn=conn) for ref in refs)
+        if n == 0 and not any(db_grants.edge_exists(ref, *grantee, conn=conn)
+                              for ref in refs):
+            db_grants.insert_grant(
+                resource_id=refs[0], grantor_kind=PLATFORM_SCOPE[0],
+                grantor_id=PLATFORM_SCOPE[1], grantee_kind=grantee[0],
+                grantee_id=grantee[1], constraints={}, source="manual",
+                created_by=None, revoked=True, conn=conn)
+            n = 1
     return n
 
 
