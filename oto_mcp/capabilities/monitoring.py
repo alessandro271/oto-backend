@@ -96,8 +96,11 @@ class RateLimitTopRow(BaseModel):
     """Une clé HACHÉE que `enforce` refuse ou refuserait, un jour donné (#1232)."""
     jour: date                    # jour UTC
     env: str                      # `production` | `canari` | `inconnu`
-    limiteur: str                 # debit | platform_rate
-    classe: str                   # debit : la classe du seau ; platform_rate : le connecteur
+    limiteur: str                 # debit | platform_rate | corps | outil | sql | session
+    # debit : la classe du seau ; platform_rate : le connecteur ; bornes du processus
+    # (`bornes_processus`) : corps → defaut|upload, outil → l'outil, sql → la fonction
+    # appelante, session → mcp
+    classe: str
     cle: str                      # empreinte (sha256 tronqué) ; `*` = clés au-delà de la borne
     rang: int                     # 1 = la clé la plus refusée du (jour, env, limiteur)
     refus: int
@@ -120,7 +123,8 @@ class TransportRefusals(BaseModel):
     # sur le trafic réel avant de passer `OTO_DEBIT_MODE` en `enforce`.
     rate_limit: list[RateLimitRow] = []
     # QUI serait coupé (#1232, `limite_refus_top`) : les premières clés hachées par
-    # (jour, environnement, limiteur), limite de débit et clé plateforme.
+    # (jour, environnement, limiteur), limite de débit, clé plateforme et bornes
+    # globales du processus (corps, délai d'outil, `statement_timeout`, sessions).
     rate_limit_top: list[RateLimitTopRow] = []
 
 

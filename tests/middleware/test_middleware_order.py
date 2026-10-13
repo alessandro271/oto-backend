@@ -46,6 +46,10 @@ invariants gardés ici :
   brute, l'enveloppe scrubbe en dernier.
 - `UserDisabledToolsMiddleware` plus externe que `ToolCallLogger` : un refus de gate
   n'est pas journalisé.
+- `DelaiOutilMiddleware` (#1232, lot 4) juste sous `ToolCallLogger` : le délai d'un
+  appel d'outil, borne globale. Plus interne que le journal, qui écrit l'appel coupé
+  avec son erreur, et que l'enveloppe, qui la rend (`tool_timeout`) ; plus externe que
+  Sentry, à qui une annulation n'apprend rien.
 - `SentryToolErrorMiddleware` sous eux : capture le vrai traceback en premier et
   pose `last_event_id` que le calllog (plus externe) stampe sur la ligne tool_calls.
 - `AnonymousVisibilityMiddleware` INNERMOST (oto-backend#534) : il n'agit que sur la
@@ -73,6 +77,7 @@ OURS = [
     "UserDisabledToolsMiddleware",
     "DynamicInstructionsMiddleware",
     "ToolCallLogger",
+    "DelaiOutilMiddleware",
     "SentryToolErrorMiddleware",
     "AnonymousVisibilityMiddleware",
 ]

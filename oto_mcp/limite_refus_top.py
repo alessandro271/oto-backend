@@ -17,7 +17,12 @@ semaine, qui aurait été coupé, combien de fois, par jour et par limiteur.
   l'empreinte de l'adresse (de « adresse chemin » pour `webhook` : le chemin d'un
   crochet porte un secret) ;
 - `platform_rate` — la classe est le connecteur porteur de la clé plateforme ; la clé
-  est l'empreinte du porteur `org:<id>` ou `user:<sub>`.
+  est l'empreinte du porteur `org:<id>` ou `user:<sub>` ;
+- les BORNES GLOBALES du processus (`bornes_processus`, #1232 lot 4), un limiteur par
+  borne : `corps` (classe `defaut` | `upload`, clé = empreinte du jeton ou de
+  l'adresse), `outil` (classe = l'outil, clé = empreinte de `user:<sub>`), `sql`
+  (classe = la fonction appelante, clé = empreinte du texte SQL), `session` (classe
+  `mcp`, clé = empreinte du jeton ou de l'adresse).
 
 Jamais un jeton, une adresse, un e-mail ni un identifiant en clair : une empreinte se
 VÉRIFIE (on calcule celle d'un candidat, `empreinte("org:42")`), elle ne se lit pas.
@@ -54,6 +59,8 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 DEBIT, PLATEFORME = "debit", "platform_rate"
+#: Les limiteurs des bornes globales du processus (`bornes_processus`).
+CORPS, OUTIL, SQL, SESSION = "corps", "outil", "sql", "session"
 #: Clés distinctes retenues par limiteur et par minute ; au-delà, `DEBORDEMENT`.
 MAX_CLES = 1000
 #: La clé qui reçoit les refus des clés au-delà de `MAX_CLES` (jamais une empreinte).
@@ -127,6 +134,9 @@ class Palmares:
 #: Le palmarès de la clé plateforme : un par processus (le compteur F-051 est en base,
 #: le palmarès des refus en mémoire, comme la mesure du débit).
 PALMARES_PLATEFORME = Palmares(PLATEFORME)
+#: Ceux des bornes globales du processus (#1232, lot 4) : un par borne, par processus.
+PALMARES_BORNES = {limiteur: Palmares(limiteur)
+                   for limiteur in (CORPS, OUTIL, SQL, SESSION)}
 
 _FILE: queue.Queue = queue.Queue(maxsize=FILE_MAX)
 _FIL: Optional[threading.Thread] = None

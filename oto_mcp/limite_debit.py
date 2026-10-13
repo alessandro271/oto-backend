@@ -329,7 +329,7 @@ class LimiteDebit:
                  bornes: Optional[dict[str, Borne]] = None, horloge=time.monotonic,
                  exemptees: Optional[tuple] = None, horloge_murale=time.time,
                  publier=None, publier_refus=None):
-        from . import limite_debit_mesure, limite_refus_top, version, version_header
+        from . import limite_debit_mesure, limite_refus_top
         from .subdomain_project import _client_ip
         self.app = app
         self._ip = _client_ip
@@ -351,10 +351,9 @@ class LimiteDebit:
         # QUI serait refusé (#1232) : le palmarès des clés hachées, par jour.
         self._palmares = limite_refus_top.Palmares(limite_refus_top.DEBIT)
         self._palmares_plateforme = limite_refus_top.PALMARES_PLATEFORME
+        self._palmares_bornes = tuple(limite_refus_top.PALMARES_BORNES.values())
         self._publier_refus = publier_refus or limite_refus_top.publier
         self._par_minute = {c: s.borne.par_minute for c, s in self._seaux.items()}
-        self._version = (b"x-oto-version",
-                         version_header.valeur_entete(version.version_servie()))
 
     def _est_exemptee(self, ip: str) -> bool:
         if not self._exemptees:
@@ -372,9 +371,11 @@ class LimiteDebit:
         lignes = self._mesure.basculer(int(murale // 60), self._par_minute)
         if lignes:
             self._publier(lignes)
-        # Les palmarès des refus aussi — celui de la clé plateforme compris, qui sinon
-        # n'écrirait sa minute close qu'à son prochain refus.
-        for palmares in (self._palmares, self._palmares_plateforme):
+        # Les palmarès des refus aussi — celui de la clé plateforme et ceux des bornes
+        # du processus (`bornes_processus`) compris, qui sinon n'écriraient leur
+        # minute close qu'à leur prochain dépassement.
+        for palmares in (self._palmares, self._palmares_plateforme,
+                         *self._palmares_bornes):
             self._publier_refus(palmares.basculer(murale))
 
     async def __call__(self, scope, receive, send):
@@ -475,22 +476,30 @@ class LimiteDebit:
                        qui, classe, int(self._seaux[classe].borne.par_minute), chemin)
 
     async def _refuser(self, scope, send, classe: str, attente: int) -> None:
-        from .api.base import _cors_headers
         par_minute = int(self._seaux[classe].borne.par_minute)
-        corps = json.dumps({
+        await envoyer_refus(scope, send, 429, {
             "error": "rate_limited",
             "detail": (f"trop de requêtes (classe {classe} : au plus {par_minute} par "
                        f"minute). Réessaie dans {attente} s."),
             "details": {"retryable": True, "retry_after_seconds": attente,
                         "limit_per_minute": par_minute, "scope": classe},
-        }).encode()
-        origine = next((v.decode("latin-1") for k, v in scope.get("headers") or []
-                        if k == b"origin"), None)
-        entetes = [(b"content-type", b"application/json; charset=utf-8"),
-                   (b"content-length", str(len(corps)).encode()),
-                   (b"retry-after", str(attente).encode()),
-                   self._version]
-        entetes += [(k.lower().encode(), v.encode())
-                    for k, v in _cors_headers(origine).items()]
-        await send({"type": "http.response.start", "status": 429, "headers": entetes})
-        await send({"type": "http.response.body", "body": corps})
+        }, entetes=[(b"retry-after", str(attente).encode())])
+
+
+async def envoyer_refus(scope, send, statut: int, enveloppe: dict, *,
+                        entetes=()) -> None:
+    """Un refus servi AU-DESSUS de l'application (débit, borne de corps) : l'enveloppe
+    d'erreur ordinaire (`{error, detail, details}`), avec les en-têtes CORS de
+    l'origine et `X-Oto-Version` — ces couches sont au-dessus de celles qui les posent."""
+    from . import version, version_header
+    from .api.base import _cors_headers
+    corps = json.dumps(enveloppe).encode()
+    origine = next((v.decode("latin-1") for k, v in scope.get("headers") or []
+                    if k == b"origin"), None)
+    tete = [(b"content-type", b"application/json; charset=utf-8"),
+            (b"content-length", str(len(corps)).encode()), *entetes,
+            (b"x-oto-version", version_header.valeur_entete(version.version_servie()))]
+    tete += [(k.lower().encode(), v.encode())
+             for k, v in _cors_headers(origine).items()]
+    await send({"type": "http.response.start", "status": statut, "headers": tete})
+    await send({"type": "http.response.body", "body": corps})

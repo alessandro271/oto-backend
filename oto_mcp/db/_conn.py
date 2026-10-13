@@ -20,6 +20,7 @@ from psycopg_pool import ConnectionPool
 from .. import providers
 from ..config import require_env
 from . import _hors_boucle, journal_revisions
+from .borne_sql import CurseurBorne
 
 def _normalize_value(v: Any) -> Any:
     # Match the string shape SQLite returned ("YYYY-MM-DD HH:MM:SS") so downstream
@@ -60,7 +61,7 @@ def _database_url() -> str:
     return require_env("DATABASE_URL")
 
 
-def _connect_options() -> str:
+def _connect_options(borne_par_defaut: bool = True) -> str:
     """Bornes serveur posées par connexion via l'option libpq `options` (issue #70).
 
     `idle_in_transaction_session_timeout` (défaut 60 s) tue une transaction laissée
@@ -68,19 +69,23 @@ def _connect_options() -> str:
     qui bloquerait le boot suivant (`init_db`, incident 2026-06-25). Sans effet sur
     une requête EN COURS (seules les txns inactives sont coupées).
 
-    `statement_timeout` est **opt-in** (défaut 0 = off) : on ne l'active pas par
-    défaut car un `CREATE INDEX` de migration sur une grosse table (tool_calls,
-    datastore_rows) pourrait dépasser le seuil au boot. Le borné cold-S3 du scan
-    SIRENE est déjà porté par le service FOD (watchdog 90 s), pas par ce pool.
+    `statement_timeout` est une borne GLOBALE du processus (#1232, lot 4,
+    `db/borne_sql`) : 30 s par défaut (`OTO_MCP_DB_STATEMENT_TIMEOUT_MS`), posée ICI
+    seulement en application (`OTO_DEBIT_MODE=enforce`) — en mesure, le curseur du pool
+    compte ce qu'elle aurait coupé, sans rien couper. `borne_par_defaut=False` pour les
+    connexions qui ont le droit d'être longues ou portent la leur (DDL à chaud, travail
+    de fond hors pool). La préparation de la base au démarrage, qui passe par le pool,
+    la remet à 0 pour sa transaction (`_init.apply_boot_schema`).
     """
+    from .. import bornes_processus
     idle = os.environ.get("OTO_MCP_DB_IDLE_TX_TIMEOUT_MS", "60000")
-    stmt = os.environ.get("OTO_MCP_DB_STATEMENT_TIMEOUT_MS", "0")
     # `TimeZone=UTC` : la fabrique de lignes (`_str_dict_row`) retire le fuseau des dates
     # et les rend en texte ; ce texte n'est de l'UTC que si la SESSION l'est. Posé ici,
     # c'est vrai par construction, pas par le réglage du serveur (#1073).
     parts = [f"-c idle_in_transaction_session_timeout={idle}", "-c TimeZone=UTC"]
-    if stmt and stmt != "0":
-        parts.append(f"-c statement_timeout={stmt}")
+    bornes = bornes_processus.reglages()
+    if borne_par_defaut and bornes.applique and bornes.sql_ms > 0:
+        parts.append(f"-c statement_timeout={bornes.sql_ms}")
     # L'interrupteur du journal des révisions (oto#273) : lu par le déclencheur, par
     # connexion, donc pour les seules écritures de CE processus. Posé seulement coupé.
     if journal_revisions.journal_coupe():
@@ -100,7 +105,8 @@ def _connect_options() -> str:
 # 60 s laissent trois ordres de grandeur de marge.
 #
 # ⚠️ Ces bornes ne valent QUE pour le DDL à chaud (`_connect_autocommit`). Le pool
-# ordinaire garde `statement_timeout=0` : c'est lui qui porte les migrations de boot, où
+# ordinaire porte la borne GLOBALE du processus (#1232, 30 s, en application seulement) ;
+# les migrations de boot, qui passent par lui, la remettent à 0 pour leur transaction :
 # un index sur une grosse table a le droit de prendre son temps (personne ne sert encore).
 _DDL_LOCK_TIMEOUT_MS = "OTO_MCP_DDL_LOCK_TIMEOUT_MS"
 _DDL_STATEMENT_TIMEOUT_MS = "OTO_MCP_DDL_STATEMENT_TIMEOUT_MS"
@@ -108,7 +114,7 @@ _DDL_STATEMENT_TIMEOUT_MS = "OTO_MCP_DDL_STATEMENT_TIMEOUT_MS"
 
 def _ddl_options() -> str:
     """`_connect_options()` + les deux bornes du DDL à chaud. `0` désarme une borne."""
-    parts = [_connect_options()]
+    parts = [_connect_options(borne_par_defaut=False)]
     lock = os.environ.get(_DDL_LOCK_TIMEOUT_MS, "5000")
     stmt = os.environ.get(_DDL_STATEMENT_TIMEOUT_MS, "60000")
     if lock and lock != "0":
@@ -134,7 +140,10 @@ def _get_pool() -> ConnectionPool:
             # traitements se disputent désormais le pool (mesuré : 7/8 en
             # heure CREUSE, avant tout pic).
             max_size=int(os.environ.get("OTO_MCP_DB_POOL_MAX", "24")),
-            kwargs={"row_factory": _str_dict_row, "options": _connect_options()},
+            # Le curseur MESURE la borne `statement_timeout` du processus (#1232) :
+            # ce qu'elle couperait, ou a coupé — cf. `borne_sql`.
+            kwargs={"row_factory": _str_dict_row, "options": _connect_options(),
+                    "cursor_factory": CurseurBorne},
             open=True,
             # Attente MAX d'une connexion (défaut psycopg_pool : 30s !). Pendant un
             # blip DB (SSL eof, saturation), le pool se vide et `getconn` ATTEND —
@@ -308,7 +317,7 @@ def _connect_autocommit(*, bornee: bool = True) -> Iterator[psycopg.Connection]:
     en plein appel, et un verrou de session oublié survivrait au retour de la connexion
     dans le pool ; ici, la fermeture de la connexion le rend."""
     _hors_boucle.verifier()
-    options = _ddl_options() if bornee else _connect_options()
+    options = _ddl_options() if bornee else _connect_options(borne_par_defaut=False)
     with _place_hors_pool(attendre=not bornee):
         with psycopg.connect(_database_url(), options=options,
                              row_factory=_str_dict_row, autocommit=True) as conn:

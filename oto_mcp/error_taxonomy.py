@@ -22,6 +22,7 @@ from typing import Iterator, Optional
 
 from fastmcp.exceptions import NotFoundError
 from . import outils_retires
+from .bornes_processus import DelaiOutilDepasse
 from .mcp_errors import McpError
 from mcp.types import INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST
 from pydantic import ValidationError
@@ -450,6 +451,18 @@ def classify(exc, parametres: Optional[list] = None) -> ErrorInfo:
     args; (3) upstream HTTP status (timeout/rate-limit/not-found/authz/4xx/5xx);
     (4) untyped timeout; (5) the rest = internal — **no echo of `str(exc)`** (anti-leak).
     """
+    # (00) The process-wide tool-call bound (#1232, `bornes_processus`, enforced mode):
+    # the call was abandoned by US after the bound. Said as such, with the bound —
+    # never "internal error", nor an upstream timeout the agent could just retry.
+    for e in _chain(exc):
+        if isinstance(e, DelaiOutilDepasse):
+            return ErrorInfo(
+                "tool_timeout", False,
+                f"The tool call exceeded the server's limit of {e.secondes:g} s and "
+                "was abandoned.",
+                "narrow the request (fewer rows, pages or items) and call again; a "
+                "write may still have completed — check before repeating it")
+
     # (0) Credits exhausted: an upstream 402, wherever it is in the chain — including
     # under the curated `McpError` that a tool raises in its `except` (theirstack, AI Ark
     # do this). Without this, the curation won and the agent received `invalid_input`:

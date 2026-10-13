@@ -393,11 +393,12 @@ def test_la_couche_est_bien_servie_par_lapp_racine():
     from oto_mcp.subdomain_project import HostDispatch
 
     racine = build_root_app(object(), object())
-    assert isinstance(racine.app.app.app, VersionHeader), (
+    sous_le_compteur = racine.app.app.app.app.app       # garde, débit, bornes, compteur
+    assert isinstance(sous_le_compteur, VersionHeader), (
         "l'étiquetage de version n'est plus sous la garde de déconnexion, la limite "
-        "de débit et le compteur de refus du transport")
-    assert isinstance(racine.app.app.app.app, ResponseCharset)
-    assert isinstance(racine.app.app.app.app.app, HostDispatch), (
+        "de débit, les bornes du processus et le compteur de refus du transport")
+    assert isinstance(sous_le_compteur.app, ResponseCharset)
+    assert isinstance(sous_le_compteur.app.app, HostDispatch), (
         "posée sous le dispatch, elle raterait l'app anonyme des sous-domaines")
 
 

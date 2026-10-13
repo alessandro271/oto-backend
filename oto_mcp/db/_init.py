@@ -254,6 +254,10 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
         "SELECT set_config('lock_timeout', %s, true)",
         (os.environ.get("OTO_MCP_INIT_DB_LOCK_TIMEOUT_MS", "5000"),),
     )
+    # Et LIBÈRE la durée d'exécution : la borne `statement_timeout` du pool (#1232, posée
+    # en application, `db/borne_sql`) vaut pour le service, pas pour la préparation de
+    # la base, où un gros CREATE INDEX a le droit de prendre son temps. LOCAL aussi.
+    conn.execute("SELECT set_config('statement_timeout', '0', true)")
     # AVANT tout ordre, sous le verrou : la base est-elle NEUVE (aucune table) ? C'est
     # ce constat, et lui seul, qui autorise à poser la version Alembic en fin de
     # transaction (#969, `_version_alembic`). Constaté après le premier `CREATE`, il

@@ -26,6 +26,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from .. import access, db, doc_export, ownership
+from ..capabilities._types import ContratDeRoute
 from .base import _authenticate, _file, _json, _json_error
 
 
@@ -121,3 +122,22 @@ async def me_project_export(request: Request, *, verifier: JWTVerifier) -> Respo
     # `_file` : même raison que le PDF de facture — une `Response` nue sort SANS
     # CORS, et le ZIP n'arrive jamais au navigateur qui l'a demandé.
     return _file(request, blob, media_type="application/zip", filename=fname)
+
+
+# ── Le contrat publié ────────────────────────────────────────────────────────────
+# Route de NATURE (corps multipart, hors du moule capacité) : son corps déclaré est aussi
+# ce qui la fait reconnaître comme une route d'UPLOAD par la borne de corps du processus
+# (`borne_corps`, #1232) — sans lui, un fichier de projet de plus de 4 Mo y serait compté
+# (et refusé en application) comme un corps ordinaire.
+project_files_upload.contrat = ContratDeRoute(
+    description=(
+        "Dépose un fichier brut dans un projet (droit d'écriture requis). Corps "
+        "multipart : une partie `file` (le fichier, son type est jugé sur les octets), "
+        "et en option `title` et `description`. Rend la fiche du fichier, avec une "
+        "adresse de téléchargement signée."),
+    corps={"POST": {"multipart/form-data": {
+        "type": "object", "required": ["file"],
+        "properties": {"file": {"type": "string", "format": "binary"},
+                       "title": {"type": "string"},
+                       "description": {"type": "string"}}}}},
+)

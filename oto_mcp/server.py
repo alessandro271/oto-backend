@@ -923,6 +923,13 @@ def _build_mcp(transport: str, verifier: JWTVerifier | None = None) -> FastMCP:
     # au plus près du handler, capture le vrai traceback AVANT le calllog
     # (qui pourra stamper l'event_id) et l'enveloppe (qui scrubbe). Les erreurs de tool
     # sont des erreurs JSON-RPC en HTTP 200 → invisibles à l'intégration Starlette.
+    # 7 bis. Le DÉLAI d'un appel d'outil (#1232, lot 4) : une borne GLOBALE, la même pour
+    # tous les outils, mesurée par défaut (`bornes_processus`). Sous le journal d'appels
+    # (qui écrit l'appel coupé avec son erreur) et sous l'enveloppe (qui la rend à
+    # l'agent : `tool_timeout`), au-dessus de Sentry — une annulation ne lui apprend rien.
+    from .middleware.delai_outil import DelaiOutilMiddleware
+    instance.add_middleware(DelaiOutilMiddleware())
+
     from .sentry_setup import SentryToolErrorMiddleware
     instance.add_middleware(SentryToolErrorMiddleware())
 
@@ -978,6 +985,13 @@ def build_root_app(app, anon_app):
        rien n'est mis en tampon. AU-DESSUS du compteur des refus du transport (un 429
        de débit n'est pas un refus du transport), SOUS la garde de déconnexion.
        Cf. `limite_debit`.
+    5 bis. **bornes globales du processus** (#1232, lot 4, `bornes_processus`), sous la
+       limite de débit (une requête refusée pour son débit ne lit pas son corps) et
+       au-dessus du compteur des refus du transport : la TAILLE DU CORPS (`borne_corps`,
+       routes d'upload reconnues à leur contrat dans la table vivante de `app`), puis
+       l'INACTIVITÉ des sessions MCP (`borne_session`, qui arme aussi, en application,
+       le gestionnaire de session des deux faces au démarrage). Mode mesure par défaut,
+       sous le même interrupteur que la limite de débit.
     6. **garde de déconnexion client** (#352), la couche la plus EXTERNE — entre uvicorn
        et tout le reste. Un POST `/mcp` dont le client est parti en cours de route
        laissait une réponse ASGI incomplète ; uvicorn fermait alors le transport, et
@@ -993,16 +1007,24 @@ def build_root_app(app, anon_app):
     qu'on peut retirer sans faire rougir la suite n'est pas une garde
     (`tests/test_client_disconnect_guard.py`)."""
     from . import subdomain_project
+    from .borne_corps import BorneCorps
+    from .borne_session import BorneSession
     from .client_disconnect_guard import ClientDisconnectGuard
     from .limite_debit import LimiteDebit
     from .response_charset import ResponseCharset
     from .transport_refusals import TransportRefusalCounter
     from .version_header import VersionHeader
+    routes = getattr(getattr(app, "router", None), "routes", None) or ()
     return ClientDisconnectGuard(
         LimiteDebit(
-            TransportRefusalCounter(
-                VersionHeader(
-                    ResponseCharset(subdomain_project.HostDispatch(app, anon_app))))))
+            BorneCorps(
+                BorneSession(
+                    TransportRefusalCounter(
+                        VersionHeader(
+                            ResponseCharset(
+                                subdomain_project.HostDispatch(app, anon_app)))),
+                    faces=(app, anon_app)),
+                routes=routes)))
 
 
 def main():
@@ -1062,6 +1084,10 @@ def main():
     # démarrer — jamais des en-têtes d'adresse crus (ou ignorés) sans décision.
     from . import client_trace
     client_trace.verifier_configuration()
+    # Bornes globales du processus (#1232, lot 4) : corps, délai d'outil,
+    # `statement_timeout`, inactivité des sessions — un réglage illisible refuse ici.
+    from . import bornes_processus
+    bornes_processus.verifier_configuration()
     # Le journal d'accès d'uvicorn n'écrit en clair ni un jeton porté DANS le chemin
     # (`{token}`, `{code}` des routes servies : leur masque), ni la valeur d'une clé de
     # query secrète (`code`/`state` d'un retour OAuth, `*token*`, `key`… : `***`), sur

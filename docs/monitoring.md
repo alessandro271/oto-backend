@@ -346,6 +346,24 @@ l'empreinte d'un candidat (`limite_refus_top.empreinte("org:42")`). Table
 clés par limiteur et par minute (au-delà, la ligne `*`), purgée au-delà de trente jours.
 La lecture rend les dix premières clés par (jour, environnement, limiteur).
 
+**Les bornes globales du processus y sont aussi** (#1232 lot 4, `oto_mcp/bornes_processus.py`),
+une par limiteur, sous le même interrupteur que la limite de débit (`OTO_DEBIT_MODE` :
+`report` mesure sans rien refuser, `enforce` applique) :
+
+| limiteur | borne (réglage, défaut) | classe | clé hachée | en `enforce` |
+| --- | --- | --- | --- | --- |
+| `corps` | `OTO_BORNE_CORPS_OCTETS` 4 Mo, `OTO_BORNE_CORPS_UPLOAD_OCTETS` 30 Mo | `defaut` \| `upload` | jeton porté, sinon adresse | `413 payload_too_large` |
+| `outil` | `OTO_BORNE_OUTIL_S` 120 s | le nom de l'outil | `user:<sub>` | erreur MCP `tool_timeout` |
+| `sql` | `OTO_MCP_DB_STATEMENT_TIMEOUT_MS` 30 s | la fonction appelante (`module:fonction`) | le texte SQL (jamais ses paramètres) | `statement_timeout` posé sur le pool |
+| `session` | `OTO_BORNE_SESSION_INACTIVE_S` 30 min | `mcp` | jeton porté, sinon adresse | `session_idle_timeout` de l'SDK `mcp` |
+
+Une route d'upload se reconnaît à son contrat (`ContratDeRoute.corps` d'un type autre que
+JSON), jamais à une liste de chemins. En `report`, `sql` compte les ordres qui ont duré
+plus que la borne sans en avoir posé une plus longue eux-mêmes ; `session` compte les
+sessions reprises après plus que la borne d'inactivité (celles que l'application aurait
+fermées). Chaque dépassement est aussi journalisé (`borne <limiteur> …`, une ligne par clé
+et par minute au plus, empreinte tronquée).
+
 Pas la connexion d'un connecteur, pas le `tools/list`. (Ce paragraphe disait « uniquement
 les invocations d'outils » jusqu'au 2026-08-29 : les appels `/api/*` y sont écrits depuis
 `RestCallLogger`, et le handshake depuis `on_initialize` — c'est cet angle mort de lecture

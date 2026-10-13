@@ -329,9 +329,15 @@ def test_le_compteur_est_pose_dans_lapp_racine_servie_par_uvicorn():
     # La limite de débit est AU-DESSUS du compteur : un 429 de débit n'est pas un refus
     # du transport, et le compter noierait le signal.
     assert isinstance(racine.app, LimiteDebit)
-    assert isinstance(racine.app.app, TransportRefusalCounter)
+    # Les bornes du processus (#1232, lot 4 : corps, sessions) aussi : un 413 de borne
+    # n'est pas un refus du transport.
+    from oto_mcp.borne_corps import BorneCorps
+    from oto_mcp.borne_session import BorneSession
+    assert isinstance(racine.app.app, BorneCorps)
+    assert isinstance(racine.app.app.app, BorneSession)
+    assert isinstance(racine.app.app.app.app, TransportRefusalCounter)
     # …et le dispatch est bien SOUS lui.
-    couche = racine.app.app.app
+    couche = racine.app.app.app.app.app
     while not isinstance(couche, HostDispatch):
         couche = couche.app
     assert isinstance(couche, HostDispatch)

@@ -278,6 +278,8 @@ def test_lapp_racine_servie_par_uvicorn_est_gardee():
     Le compteur est SOUS la garde, délibérément : la garde synthétise une réponse
     quand le client est parti en cours de route, et cette réponse-là n'est pas un
     refus. Posé au-dessus, il la compterait."""
+    from oto_mcp.borne_corps import BorneCorps
+    from oto_mcp.borne_session import BorneSession
     from oto_mcp.limite_debit import LimiteDebit
     from oto_mcp.response_charset import ResponseCharset
     from oto_mcp.server import build_root_app
@@ -288,10 +290,15 @@ def test_lapp_racine_servie_par_uvicorn_est_gardee():
     racine = build_root_app(object(), object())
     assert isinstance(racine, ClientDisconnectGuard)
     assert isinstance(racine.app, LimiteDebit)
-    assert isinstance(racine.app.app, TransportRefusalCounter)
-    assert isinstance(racine.app.app.app, VersionHeader)
-    assert isinstance(racine.app.app.app.app, ResponseCharset)
-    assert isinstance(racine.app.app.app.app.app, HostDispatch)
+    # Les bornes globales du processus (#1232, lot 4) : sous le débit, au-dessus du
+    # compteur des refus du transport.
+    assert isinstance(racine.app.app, BorneCorps)
+    assert isinstance(racine.app.app.app, BorneSession)
+    couche = racine.app.app.app.app
+    assert isinstance(couche, TransportRefusalCounter)
+    assert isinstance(couche.app, VersionHeader)
+    assert isinstance(couche.app.app, ResponseCharset)
+    assert isinstance(couche.app.app.app, HostDispatch)
 
 
 # --- le warning de visibilité (2e moitié de #352) ----------------------------

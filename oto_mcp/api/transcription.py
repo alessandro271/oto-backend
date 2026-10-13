@@ -23,7 +23,7 @@ from starlette.responses import JSONResponse
 
 from .. import db, file_source, ownership
 from ..capabilities import transcription as _transcription
-from ..capabilities._types import AuthzDenied
+from ..capabilities._types import AuthzDenied, ContratDeRoute
 from .base import _authenticate, _json, _json_error
 from .projects import _project_org_context_error
 from .uploads import CorpsRefuse, lire_multipart_borne
@@ -69,3 +69,21 @@ async def transcription_upload(request: Request, *, verifier: JWTVerifier) -> JS
     except AuthzDenied as d:
         return _json_error(request, d.status, d.code, d.message or None, d.details)
     return _json(request, ref, status=202)
+
+
+# Route de NATURE (corps multipart) : son corps déclaré la fait reconnaître comme une route
+# d'UPLOAD par la borne de corps du processus (`borne_corps`, #1232).
+transcription_upload.contrat = ContratDeRoute(
+    description=(
+        "Dépose un audio à transcrire dans un projet (droit d'écriture requis). Corps "
+        "multipart : une partie `file` (l'audio), et en option `vocabulary` (mots "
+        "séparés par des virgules ou des retours à la ligne) et `vocabulary_replace` "
+        "(`true` | `false`). Rend `202 {job_id, status}` ; le travail se relit par "
+        "`GET /api/me/transcriptions/{job_id}`."),
+    corps={"POST": {"multipart/form-data": {
+        "type": "object", "required": ["file"],
+        "properties": {"file": {"type": "string", "format": "binary"},
+                       "vocabulary": {"type": "string"},
+                       "vocabulary_replace": {"type": "string",
+                                              "enum": ["true", "false"]}}}}},
+)
