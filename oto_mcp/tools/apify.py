@@ -20,6 +20,7 @@ by name: that is what makes them verifiable by the version-skew probe.
 """
 from __future__ import annotations
 
+import logging
 import math
 from contextlib import contextmanager
 from typing import Any, Optional
@@ -30,6 +31,8 @@ from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access, session_org
 from ..connectors import verify as connector_verify
+
+logger = logging.getLogger(__name__)
 
 
 def _bad(msg: str) -> McpError:
@@ -68,27 +71,50 @@ def _microdollars(cout: float) -> int:
     return math.ceil(round(float(cout) * 1e6, 6))
 
 
+def _gratuit() -> None:
+    """Trace the call as FREE (`quantity=0`). A call never leaves its quantity NULL:
+    the ledger reads NULL as 1 (`tool_calls.quantity`), and 1 µ$ per read, mixed into
+    the micro-dollars of the finished runs, would be billed."""
+    session_org.note_call_trace(quantity=0)
+
+
 def _releve(out: Any, run_id: str) -> None:
     """Record a FINISHED run's real cost on the current call's trace: `quantity` in
     micro-dollars, and the run as the JOB of the line (`apify_run_id`, served as
     `job_id` by the billing lens) — a finished run polled N times traces N times the
     same cost, and the biller counts a job once.
 
-    ⚠️ Nothing is traced while the run is not in a terminal state: `usageTotalUsd`
-    is then "what it cost SO FAR", and a biller that keeps the first figure it sees
-    for a job would keep a partial one. Nothing either when the response carries no
-    readable cost: an absent figure is not a zero, and a guessed one would be billed.
-    A terminal run at 0 traces 0 — measured, nothing to bill."""
+    ⚠️ While the run is not in a terminal state, `usageTotalUsd` is "what it cost SO
+    FAR": the poll traces 0 WITHOUT the job — the poll itself is free, and a biller
+    that keeps the first figure it sees for a job would keep a partial one. A response
+    whose state or cost cannot be read traces 0 without the job too, and SAYS so in
+    the log (run id and type only): an absent figure is not a zero, a guessed one would
+    be billed, and a silent one would be lost. A terminal run at 0 traces 0 with its
+    job — measured, nothing to bill."""
     run = out.get("data") if isinstance(out, dict) else None
     if not isinstance(run, dict):
         # A flat body (no `data` envelope) is read as the run itself.
-        run = out if isinstance(out, dict) else {}
+        run = out if isinstance(out, dict) else None
+    if run is None:
+        logger.warning("apify_run_status %s: unreadable response (%s), cost not recorded",
+                       run_id, type(out).__name__)
+        _gratuit()
+        return
     status = run.get("status")
-    if not isinstance(status, str) or status not in _TERMINAL:
+    if not isinstance(status, str):
+        logger.warning("apify_run_status %s: unreadable status (%s), cost not recorded",
+                       run_id, type(status).__name__)
+        _gratuit()
+        return
+    if status not in _TERMINAL:
+        _gratuit()
         return
     cout = run.get("usageTotalUsd")
     if (isinstance(cout, bool) or not isinstance(cout, (int, float))
             or not math.isfinite(cout) or cout < 0):
+        logger.warning("apify_run_status %s: finished (%s) without a readable cost "
+                       "(%s), cost not recorded", run_id, status, type(cout).__name__)
+        _gratuit()
         return
     rid = run.get("id")
     session_org.note_call_trace(
@@ -178,14 +204,18 @@ def register(mcp: FastMCP) -> None:
             sort_by: `"relevance"` | `"popularity"` | `"newest"` | `"lastUpdate"`.
         """
         with _upstream():
-            return _client().store_search(search=search, limit=limit,
-                                          category=category, sort_by=sort_by)
+            out = _client().store_search(search=search, limit=limit,
+                                         category=category, sort_by=sort_by)
+        _gratuit()
+        return out
 
     @mcp.tool()
     def apify_actors(limit: int = 50, offset: Optional[int] = None) -> dict:
         """List the actors of THIS account (not the public Store)."""
         with _upstream():
-            return _client().actors(limit=limit, offset=offset)
+            out = _client().actors(limit=limit, offset=offset)
+        _gratuit()
+        return out
 
     @mcp.tool()
     def apify_actor(actor_id: str) -> dict:
@@ -199,7 +229,9 @@ def register(mcp: FastMCP) -> None:
             actor_id: `username/actor-name` (as shown in the Store) or its id.
         """
         with _upstream():
-            return _client().actor(actor_id)
+            out = _client().actor(actor_id)
+        _gratuit()
+        return out
 
     # --- launch -------------------------------------------------------------
 
@@ -234,11 +266,18 @@ def register(mcp: FastMCP) -> None:
             max_total_charge_usd: hard cost ceiling for this run.
         """
         with _upstream():
-            return _client().run_sync_dataset_items(
+            out = _client().run_sync_dataset_items(
                 actor_id, run_input=run_input, max_items=max_items, limit=limit,
                 fields=fields, timeout_secs=timeout_secs,
                 memory_mbytes=memory_mbytes,
                 max_total_charge_usd=max_total_charge_usd)
+        # The synchronous endpoint answers with the dataset items only — no run id,
+        # no cost, and the client keeps no header: the run's cost cannot be read back.
+        # Traced 0 and SAID, never NULL (read 1) nor a guessed figure.
+        logger.warning("apify_run_sync %s: the synchronous endpoint returns no run id "
+                       "nor cost, run cost not recorded", actor_id)
+        _gratuit()
+        return out
 
     @mcp.tool()
     def apify_run(
@@ -260,11 +299,14 @@ def register(mcp: FastMCP) -> None:
                 catch a short run without polling.
         """
         with _upstream():
-            return _client().run(
+            out = _client().run(
                 actor_id, run_input=run_input, max_items=max_items,
                 timeout_secs=timeout_secs, memory_mbytes=memory_mbytes,
                 max_total_charge_usd=max_total_charge_usd,
                 wait_for_finish=wait_for_finish)
+        # Launching is free; the run's cost is recorded by `apify_run_status`.
+        _gratuit()
+        return out
 
     @mcp.tool()
     def apify_run_status(run_id: str, wait_for_finish: Optional[int] = None) -> dict:
@@ -285,7 +327,10 @@ def register(mcp: FastMCP) -> None:
                 (a hard abort may lose what wasn't pushed yet).
         """
         with _upstream():
-            return _client().abort_run(run_id, gracefully=gracefully)
+            out = _client().abort_run(run_id, gracefully=gracefully)
+        # Aborting is free; the run's final cost is recorded by `apify_run_status`.
+        _gratuit()
+        return out
 
     # --- read the output ----------------------------------------------------
 
@@ -309,6 +354,8 @@ def register(mcp: FastMCP) -> None:
             clean: skip empty/hidden items.
         """
         with _upstream():
-            return _client().dataset_items(
+            out = _client().dataset_items(
                 dataset_id, limit=limit, offset=offset, fields=fields,
                 omit=omit, clean=clean)
+        _gratuit()
+        return out

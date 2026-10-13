@@ -154,12 +154,14 @@ def test_a_finished_run_traces_its_cost_in_microdollars_and_its_run(status):
 
 
 @pytest.mark.parametrize("status", ["READY", "RUNNING", "TIMING-OUT", "ABORTING",
-                                    None, "", "succeeded", ["SUCCEEDED"]])
-def test_a_run_that_is_not_finished_traces_NOTHING(status):
-    """Le coût n'est pas final : rien, pas même un 0 — `TIMING-OUT` et `ABORTING` sont
-    des états de TRANSITION, pas des états terminaux."""
+                                    "", "succeeded"])
+def test_a_run_that_is_not_finished_traces_a_free_poll_without_its_job(status):
+    """Le coût n'est pas final : la consultation trace 0 (gratuite, jamais NULL que le
+    registre lirait 1) et SANS le run — un facturier qui garde le premier chiffre d'un
+    job garderait sinon un partiel. `TIMING-OUT` et `ABORTING` sont des états de
+    TRANSITION, pas des états terminaux."""
     _, traces = _statut({"data": {"id": RUN, "status": status, "usageTotalUsd": 0.5}})
-    assert traces == []
+    assert traces == [{"quantity": 0}]
 
 
 @pytest.mark.parametrize("run", [
@@ -171,10 +173,22 @@ def test_a_run_that_is_not_finished_traces_NOTHING(status):
     {"id": RUN, "status": "SUCCEEDED", "usageTotalUsd": float("nan")},
     {"id": RUN, "status": "SUCCEEDED", "usageTotalUsd": float("inf")},
 ])
-def test_a_finished_run_without_a_readable_cost_traces_NOTHING(run):
-    """Un chiffre absent n'est pas un zéro, et un chiffre deviné serait facturé."""
-    _, traces = _statut({"data": run})
-    assert traces == []
+def test_a_finished_run_without_a_readable_cost_traces_0_and_says_so(run, caplog):
+    """Un chiffre absent n'est pas un zéro facturé, un chiffre deviné serait facturé,
+    et un chiffre muet serait perdu : 0 sans le run, et un avertissement qui nomme le
+    run et le TYPE reçu — jamais la valeur."""
+    with caplog.at_level("WARNING", logger="oto_mcp.tools.apify"):
+        _, traces = _statut({"data": run})
+    assert traces == [{"quantity": 0}]
+    assert len(caplog.records) == 1 and RUN in caplog.records[0].getMessage()
+
+
+@pytest.mark.parametrize("status", [None, ["SUCCEEDED"], 3])
+def test_an_unreadable_status_traces_0_and_says_so(status, caplog):
+    with caplog.at_level("WARNING", logger="oto_mcp.tools.apify"):
+        _, traces = _statut({"data": {"id": RUN, "status": status, "usageTotalUsd": 0.5}})
+    assert traces == [{"quantity": 0}]
+    assert len(caplog.records) == 1 and RUN in caplog.records[0].getMessage()
 
 
 @pytest.mark.parametrize("usd,micro", [
@@ -212,9 +226,11 @@ def test_a_flat_answer_is_read_like_the_enveloped_one():
 
 
 @pytest.mark.parametrize("reponse", [{}, {"data": None}, {"data": []}, [], None])
-def test_an_unreadable_answer_traces_nothing_and_does_not_break_the_call(reponse):
-    out, traces = _statut(reponse)
-    assert traces == [] and out == reponse
+def test_an_unreadable_answer_traces_0_says_so_and_does_not_break_the_call(reponse, caplog):
+    with caplog.at_level("WARNING", logger="oto_mcp.tools.apify"):
+        out, traces = _statut(reponse)
+    assert traces == [{"quantity": 0}] and out == reponse
+    assert len(caplog.records) == 1 and RUN in caplog.records[0].getMessage()
 
 
 def test_a_refused_status_call_traces_nothing():
@@ -231,10 +247,11 @@ def test_a_refused_status_call_traces_nothing():
     trace.assert_not_called()
 
 
-def test_no_other_apify_tool_traces_a_quantity():
-    """Lancer, arrêter, lire : aucun ne trace, même quand l'amont rend un run TERMINÉ
-    avec son coût (`apify_run` avec `wait_for_finish`, `apify_abort_run`). Le coût
-    d'un run se relève par `apify_run_status`, et par lui seul."""
+def test_every_other_apify_tool_traces_a_free_call():
+    """Lancer, arrêter, lire : chacun trace 0 — jamais NULL, que le registre lirait 1 —
+    même quand l'amont rend un run TERMINÉ avec son coût (`apify_run` avec
+    `wait_for_finish`, `apify_abort_run`). Le coût d'un run se relève par
+    `apify_run_status`, et par lui seul."""
     fini = {"data": {"id": RUN, "status": "SUCCEEDED", "usageTotalUsd": 0.5,
                      "defaultDatasetId": "ds1"}}
     appels = {
@@ -247,13 +264,29 @@ def test_no_other_apify_tool_traces_a_quantity():
         "apify_store_search": ("store_search", {"search": "maps"}),
     }
     assert set(appels) == EXPECTED_TOOLS - {"apify_run_status"}
-    key, cls = _with_fake_client()
-    with key, cls as client_cls, \
-            patch("oto_mcp.tools.apify.session_org.note_call_trace") as trace:
-        for outil, (methode, kwargs) in appels.items():
+    for outil, (methode, kwargs) in appels.items():
+        key, cls = _with_fake_client()
+        with key, cls as client_cls, \
+                patch("oto_mcp.tools.apify.session_org.note_call_trace") as trace:
             getattr(client_cls.return_value, methode).return_value = fini
             _tool(outil).fn(**kwargs)
-    trace.assert_not_called()
+        assert [c.kwargs for c in trace.call_args_list] == [{"quantity": 0}], outil
+
+
+def test_run_sync_says_its_run_cost_is_not_recorded(caplog):
+    """L'appel synchrone ne rend que les éléments du dataset — ni id de run ni coût,
+    et le client ne garde aucun en-tête : le coût n'est pas relevé, et le journal le
+    DIT à chaque appel plutôt qu'un NULL facturé 1."""
+    key, cls = _with_fake_client()
+    with key, cls as client_cls, \
+            patch("oto_mcp.tools.apify.session_org.note_call_trace") as trace, \
+            caplog.at_level("WARNING", logger="oto_mcp.tools.apify"):
+        client_cls.return_value.run_sync_dataset_items.return_value = [{"a": 1}]
+        out = _tool("apify_run_sync").fn(actor_id="apify/x")
+    assert out == [{"a": 1}]
+    assert [c.kwargs for c in trace.call_args_list] == [{"quantity": 0}]
+    assert any("apify_run_sync" in r.getMessage() and "not recorded" in r.getMessage()
+               for r in caplog.records)
 
 
 def test_the_run_reaches_the_journal_as_the_job_of_the_billed_line():
