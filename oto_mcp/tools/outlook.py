@@ -31,6 +31,7 @@ Graph does not expose the Outlook signature, so nothing is appended to a body.
 from __future__ import annotations
 
 import base64
+import logging
 import os
 from typing import Literal, Optional, Union
 
@@ -38,6 +39,8 @@ from fastmcp import FastMCP
 
 from .. import access, file_content, file_source, output_projection
 from ._microsoft_graph import bad, markdown_html, need, raw, refuse_ignored, run, token
+
+logger = logging.getLogger(__name__)
 
 #: The Microsoft service these tools call: its scopes, its card (`auth/microsoft`).
 _SERVICE = "outlook"
@@ -463,6 +466,8 @@ def register(mcp: FastMCP) -> None:
         try:
             copie = _run(lambda: c.sent_message(envoye))
         except Exception as e:  # noqa: BLE001 — the mail LEFT: said, not raised
+            logger.warning("outlook: mail %s sent, reading its Sent Items copy failed: %s",
+                           envoye, type(e).__name__)
             return {**envoi, "webLink": None,
                     "note": f"The mail LEFT, but reading its copy in Sent Items failed "
                             f"({e}): no link to give."}
