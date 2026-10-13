@@ -204,6 +204,15 @@ Partage/transfert via **`oto_resource`** (resource_type=`project` ajouté au dis
 > l'existence du fichier. Plafond = celui de `file_source` (`max_bytes`, 25 Mo par défaut),
 > vérifié AVANT de matérialiser (`head_object`).
 
+> **Déposer par référence, et un fichier PRODUIT par l'agent (oto-backend#1149).** Le
+> dépôt côté serveur est `oto_import(source=…, target="project_file", project_id=…)` :
+> n'importe quelle `source` de `file_source` est résolue côté serveur et posée telle quelle
+> dans les fichiers du projet (écriture, `me.import`), avec le contrat d'erreur du seam
+> (`source_unreadable` : taille, source injoignable, type inconnu). Un fichier produit par
+> un run (un `.xlsx`) passe EN LIGNE par `{"kind":"content","filename":…,"base64":…}` (ou
+> `text` pour de l'UTF-8), borné à `file_source.CONTENT_MAX_BYTES` (256 Ko, vérifié sur la
+> longueur encodée avant décodage) : au-delà, le PUT signé d'`oto_upload_url`.
+
 > **Livraison d'un projet COMPLET vers l'org d'un client (otomata-private#52).**
 > `oto_resource` : share/unshare acceptent un principal **org** (`org_id`, sans exigence
 > d'appartenance — on donne un accès) ; **`cascade=true`** sur share/transfer d'un projet

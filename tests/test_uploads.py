@@ -69,11 +69,22 @@ def test_mint_project_file_requires_filename(seams):
 
 def test_le_repli_d_un_fichier_n_est_jamais_en_ligne(seams):
     """Un DWG de 5 Mo ne passe pas dans un argument : sans PUT possible, le repli d'un
-    fichier est `oto_import` depuis sa source ou un humain — jamais `data_write`."""
+    fichier est `oto_import` depuis sa source ou un humain — jamais `data_write`. Seul
+    un fichier PRODUIT et petit passe en ligne, borné (`file_source` `content`, #1149)."""
     out = U._upload_url(CTX, U.UploadUrlInput(target="project_file", project_id=5,
                                               filename="plan.dwg"))
     assert "oto_import" in out["hint"] and "base64" in out["hint"]
     assert "data_write" not in out["hint"]
+    from oto_mcp import file_source
+    assert f"up to {file_source.CONTENT_MAX_BYTES // 1024} KB" in out["hint"]
+
+
+def test_le_repli_d_une_image_n_a_aucune_voie_en_ligne(seams, monkeypatch):
+    """`oto_import` ne vise pas une image : son repli ne promet pas la voie en ligne."""
+    from oto_mcp import media_store
+    monkeypatch.setattr(media_store, "max_image_bytes", lambda: 2 * 1024 * 1024)
+    out = U._upload_url(CTX, U.UploadUrlInput(target="image"))
+    assert "no inline path" in out["hint"] and '{kind:"content"' not in out["hint"]
 
 
 def test_le_repli_d_une_page_reste_en_ligne(seams):

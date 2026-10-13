@@ -136,3 +136,38 @@ def test_a_project_file_keeps_the_source_name(monkeypatch):
     assert ecrit["filename"] == "deck.pdf"
     assert out["source"]["url"] == "https://x/deck.pdf"
     assert len(out["source"]["sha256"]) == 64
+
+
+def test_a_file_the_agent_produced_is_filed_in_the_project_as_is(monkeypatch):
+    """oto-backend#1149: a `.xlsx` a run produced goes INLINE (`{kind: "content"}`),
+    resolved by the real `file_source`, and lands in the project byte for byte."""
+    import base64
+    monkeypatch.setattr(upload_tokens, "check_target_access", lambda sub, t: None)
+    ecrit = {}
+
+    def materialize(sub, target, data, ct):
+        ecrit.update(target, data=data, ct=ct)
+        return {"ok": True, "kind": "project_file", "filename": target["filename"],
+                "bytes": len(data)}
+    monkeypatch.setattr(upload_tokens, "materialize", materialize)
+    xlsx = b"PK\x03\x04" + bytes(range(256))
+    out = up._import(_ctx(), up.ImportInput(
+        source={"kind": "content", "filename": "synthese.xlsx",
+                "base64": base64.b64encode(xlsx).decode()},
+        target="project_file", project_id=3))
+    assert ecrit["data"] == xlsx and ecrit["filename"] == "synthese.xlsx"
+    assert ecrit["ct"].endswith("spreadsheetml.sheet")
+    assert out["source"]["kind"] == "content" and out["source"]["bytes"] == len(xlsx)
+
+
+def test_an_inline_file_beyond_the_bound_is_refused_with_the_seam_contract(monkeypatch):
+    import base64
+    monkeypatch.setattr(upload_tokens, "check_target_access", lambda sub, t: None)
+    monkeypatch.setattr(upload_tokens, "materialize",
+                        lambda *a: pytest.fail("rien ne s'écrit au-delà du plafond"))
+    trop = base64.b64encode(b"x" * (file_source.CONTENT_MAX_BYTES + 1)).decode()
+    with pytest.raises(AuthzDenied) as e:
+        up._import(_ctx(), up.ImportInput(
+            source={"kind": "content", "filename": "a.bin", "base64": trop},
+            target="project_file", project_id=3))
+    assert e.value.code == "source_unreadable"

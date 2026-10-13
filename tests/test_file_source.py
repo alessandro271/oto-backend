@@ -255,3 +255,72 @@ def test_http_exige_un_chemin_relatif():
         fs.resolve({"kind": "http", "path": "x.csv"})
     with pytest.raises(fs.FileSourceError, match="params"):
         fs.resolve({"kind": "http", "path": "/x.csv", "params": "a=1"})
+
+
+# --- un fichier PRODUIT par l'agent, passé en ligne (oto-backend#1149) -----------
+
+def _b64(data: bytes) -> str:
+    import base64
+    return base64.b64encode(data).decode()
+
+
+def test_content_base64_rend_les_octets_le_nom_et_le_type():
+    rf = fs.resolve({"kind": "content", "filename": "rapport.xlsx",
+                     "base64": _b64(b"PK\x03\x04xlsx")})
+    assert rf.data == b"PK\x03\x04xlsx" and rf.filename == "rapport.xlsx"
+    assert rf.mime == ("application/vnd.openxmlformats-officedocument."
+                       "spreadsheetml.sheet")
+
+
+def test_content_text_est_de_l_utf8_et_le_type_vient_du_nom():
+    rf = fs.resolve({"kind": "content", "filename": "leads.csv", "text": "nom\nÉlise\n"})
+    assert rf.data == "nom\nÉlise\n".encode() and rf.mime == "text/csv"
+
+
+def test_content_le_type_declare_l_emporte_et_le_chemin_ne_passe_pas():
+    rf = fs.resolve({"kind": "content", "filename": "../../x/notes", "text": "a",
+                     "mime": "text/markdown"})
+    assert rf.filename == "notes" and rf.mime == "text/markdown"
+
+
+@pytest.mark.parametrize("source, motif", [
+    ({"kind": "content", "base64": "YQ=="}, "filename"),
+    ({"kind": "content", "filename": "a.bin"}, "exactement un"),
+    ({"kind": "content", "filename": "a.bin", "base64": "YQ==", "text": "a"}, "exactement un"),
+    ({"kind": "content", "filename": "a.bin", "base64": "pas du base64 !"}, "invalide"),
+    ({"kind": "content", "filename": "a.bin", "base64": "data:x;base64,YQ=="}, "invalide"),
+    ({"kind": "content", "filename": "a.txt", "text": 3}, "chaîne"),
+])
+def test_content_mal_forme_est_refuse_par_son_nom(source, motif):
+    with pytest.raises(fs.FileSourceError, match=motif):
+        fs.resolve(source)
+
+
+def test_content_borne_avant_de_decoder(monkeypatch):
+    """Au-delà du plafond en ligne, refusé sur la longueur ENCODÉE : rien n'est décodé."""
+    import base64 as b64mod
+    trop = _b64(b"x" * (fs.CONTENT_MAX_BYTES + 3))
+    monkeypatch.setattr(b64mod, "b64decode",
+                        lambda *a, **k: pytest.fail("décodé malgré le plafond"))
+    with pytest.raises(fs.FileSourceError, match="oto_upload_url"):
+        fs.resolve({"kind": "content", "filename": "a.bin", "base64": trop})
+
+
+def test_content_juste_au_plafond_passe_et_un_texte_au_dela_est_refuse():
+    pile = b"x" * fs.CONTENT_MAX_BYTES
+    assert len(fs.resolve({"kind": "content", "filename": "a.bin",
+                           "base64": _b64(pile)}).data) == fs.CONTENT_MAX_BYTES
+    with pytest.raises(fs.FileSourceError, match="en ligne"):
+        fs.resolve({"kind": "content", "filename": "a.txt",
+                    "text": "x" * (fs.CONTENT_MAX_BYTES + 1)})
+
+
+def test_content_respecte_un_plafond_d_appelant_plus_bas():
+    with pytest.raises(fs.FileSourceError, match="10 octets"):
+        fs.resolve({"kind": "content", "filename": "a.txt", "text": "x" * 11},
+                   max_bytes=10)
+
+
+def test_le_type_content_est_annonce():
+    with pytest.raises(fs.FileSourceError, match="content"):
+        fs.resolve({"kind": "ftp"})

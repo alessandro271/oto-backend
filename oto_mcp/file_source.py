@@ -12,6 +12,10 @@ ou inconnue lève `FileSourceError` (traduite en erreur actionnable par l'appela
 """
 from __future__ import annotations
 
+import base64
+import binascii
+import mimetypes
+import os
 import time
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -22,6 +26,12 @@ from .auth import google as google_oauth
 # Plafond par défaut : Pennylane accepte 100 Mo, mais on borne pour ne pas charger
 # un fichier géant en RAM par mégarde. Override par appel via `max_bytes`.
 DEFAULT_MAX_BYTES = 25 * 1024 * 1024  # 25 Mo
+
+#: Plafond d'un contenu passé EN LIGNE (`{kind: "content"}`, oto-backend#1149) : un
+#: argument d'outil généré par l'agent casse dès quelques centaines de Ko (constat
+#: porté par `oto_upload_url`). Au-delà, le fichier passe par le PUT signé ou par une
+#: source que le serveur atteint.
+CONTENT_MAX_BYTES = 256 * 1024
 
 
 class FileSourceError(RuntimeError):
@@ -134,7 +144,6 @@ def _from_url(src: dict, max_bytes: int, follow_redirects: bool = False,
     url_perimeter.refuse_if_excluded(src.get("url"), url_perimeter.perimeter_of_call())
     url = src.get("url")
     _check_url(url)
-    import os
     from urllib.parse import unquote, urljoin, urlsplit
 
     import httpx
@@ -256,10 +265,51 @@ def _from_http(src: dict, max_bytes: int) -> ResolvedFile:
     return ResolvedFile(data, nom, ctype.split(";")[0].strip() or "application/octet-stream")
 
 
+def _from_content(src: dict, max_bytes: int) -> ResolvedFile:
+    """Un fichier PRODUIT par l'agent (un .xlsx d'un run, un CSV), passé dans l'appel :
+    `base64` pour du binaire, `text` pour de l'UTF-8 — exactement l'un des deux.
+    Borné à `CONTENT_MAX_BYTES` (et au plafond de l'appelant), vérifié AVANT de décoder
+    sur la longueur encodée. `filename` est requis : son extension type le fichier."""
+    nom = src.get("filename")
+    if not isinstance(nom, str) or not os.path.basename(nom.strip()):
+        raise FileSourceError(
+            "source content : `filename` requis (son extension type le fichier, "
+            "ex. rapport.xlsx).")
+    b64, texte = src.get("base64"), src.get("text")
+    if (b64 is None) == (texte is None):
+        raise FileSourceError(
+            "source content : exactement un de `base64` (binaire) ou `text` (UTF-8).")
+    plafond = min(max_bytes, CONTENT_MAX_BYTES)
+    trop = (f"source content : au-delà de {plafond} octets, un fichier ne passe pas "
+            "en ligne — oto_upload_url (PUT), ou une source que le serveur atteint.")
+    if texte is not None:
+        if not isinstance(texte, str):
+            raise FileSourceError("source content : `text` doit être une chaîne.")
+        data = texte.encode("utf-8")
+    else:
+        if not isinstance(b64, str):
+            raise FileSourceError("source content : `base64` doit être une chaîne.")
+        b64 = "".join(b64.split())
+        if len(b64) > 4 * ((plafond + 2) // 3):
+            raise FileSourceError(trop)
+        try:
+            data = base64.b64decode(b64, validate=True)
+        except (binascii.Error, ValueError):
+            raise FileSourceError(
+                "source content : `base64` invalide (base64 standard, sans préfixe "
+                "`data:`).") from None
+    if len(data) > plafond:
+        raise FileSourceError(trop)
+    nom = os.path.basename(nom.strip())
+    mime = (src.get("mime") or mimetypes.guess_type(nom)[0]
+            or ("text/plain" if texte is not None else "application/octet-stream"))
+    return ResolvedFile(data, nom, str(mime))
+
+
 _RESOLVERS = {"drive": _from_drive, "gmail": _from_gmail}
 # Les résolveurs qui bornent la taille EUX-MÊMES, avant de matérialiser les octets.
 _RESOLVERS_BORNES = {"url": _from_url, "project_file": _from_project_file,
-                     "http": _from_http}
+                     "http": _from_http, "content": _from_content}
 
 
 def resolve(source: Any, *, max_bytes: int = DEFAULT_MAX_BYTES,
@@ -267,12 +317,14 @@ def resolve(source: Any, *, max_bytes: int = DEFAULT_MAX_BYTES,
             deadline: Optional[float] = None) -> ResolvedFile:
     """Résout une référence de fichier côté oto vers ses octets + métadonnées.
 
-    `source` = dict `{"kind": "drive"|"gmail"|"url"|"project_file"|"http", …}` :
+    `source` = dict `{"kind": "drive"|"gmail"|"url"|"project_file"|"http"|"content", …}` :
       - drive        : `{file_id, account?}`
       - gmail        : `{message_id, filename, index?, account?}`
       - url          : `{url}` (http/https, redirections refusées)
       - project_file : `{project_id, file_id}` (ids d'`oto_project_files op=list`)
       - http         : `{path, params?}` (GET via le connecteur `http` de l'appelant)
+      - content      : `{filename, base64 | text, mime?}` (fichier produit par l'agent,
+                       ≤ `CONTENT_MAX_BYTES`)
     Lève `FileSourceError` si `kind` manque/inconnu, source illisible, ou taille
     dépassée. Borne la taille à `max_bytes` (charge en RAM). `deadline` (horloge
     monotone) borne le téléchargement d'une URL de bout en bout, sauts compris."""
@@ -287,7 +339,8 @@ def resolve(source: Any, *, max_bytes: int = DEFAULT_MAX_BYTES,
         fn = _RESOLVERS.get(kind)
         if fn is None:
             raise FileSourceError(
-                f"source `kind`={kind!r} inconnu (attendu : drive, gmail, url, project_file, http).")
+                f"source `kind`={kind!r} inconnu (attendu : drive, gmail, url, project_file, "
+                "http, content).")
         try:
             rf = fn(source)
         except FileSourceError:

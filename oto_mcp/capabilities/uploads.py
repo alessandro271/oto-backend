@@ -31,6 +31,10 @@ from ._authz import SUB_ONLY
 from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
+#: The inline bound of a file the agent produced (`file_source` `{kind: "content"}`), as
+#: the descriptions say it.
+_EN_LIGNE_KO = file_source.CONTENT_MAX_BYTES // 1024
+
 
 class UploadUrlInput(BaseModel):
     target: Literal["doc", "project_file", "datastore", "image"]
@@ -210,16 +214,24 @@ def _upload_url(ctx: ResolvedCtx, inp: UploadUrlInput) -> dict:
     else:
         limite = upload_tokens.max_bytes()
     # Sans PUT ni humain, le repli dépend de la cible : un texte (page, tableau) peut
-    # passer en ligne ; un FICHIER (projet, image) n'a pas de voie en ligne — le
-    # base64 dans un argument casse dès quelques centaines de Ko.
+    # passer en ligne ; une image n'a pas de voie en ligne, un fichier de projet une voie
+    # BORNÉE (`file_source` `content`, oto-backend#1149) — le base64 dans un argument
+    # casse dès quelques centaines de Ko.
     if target["kind"] in ("doc", "datastore"):
         repli = ("send the content INLINE instead: `data_write(rows=[…], key=…)` in "
                  "slices for a table, `oto_doc op=create|update|patch` for a page.")
-    else:
+    elif target["kind"] == "image":
         repli = ("a FILE has no inline path — never base64 it into an argument. If it "
                  "already lives somewhere reachable (a link, a Drive file, a Gmail "
                  "attachment), `oto_import` makes the server fetch it; otherwise report "
                  "the URL to a human and stop.")
+    else:
+        repli = ("if the file already lives somewhere reachable (a link, a Drive file, a "
+                 "Gmail attachment), `oto_import` makes the server fetch it; "
+                 f"a file you produced, up to {_EN_LIGNE_KO} KB, goes through "
+                 "`oto_import(source={kind:\"content\", filename, base64}, "
+                 "target=\"project_file\")` — never base64 a bigger one into an "
+                 "argument; otherwise report the URL to a human and stop.")
     return {
         "url": url,
         "method": "PUT",
@@ -247,7 +259,8 @@ CAPABILITIES += [
             "through the conversation. With a shell: `curl -X PUT --data-binary @FILE "
             "'<url>'`. Without one, give the URL to the user: it opens an upload form. If "
             "the file is already reachable (a link, a Drive file, a project file, a Gmail "
-            "attachment), use `oto_import` instead: the server fetches it. Targets: "
+            "attachment), use `oto_import` instead: the server fetches it — as for a "
+            f"file you produced up to {_EN_LIGNE_KO} KB (`{{kind:\"content\"}}`). Targets: "
             "`datastore` (CSV or NDJSON rows; `key` designates rows by that column), `doc`, "
             "`project_file`, "
             "`image` (public permanent URL, 2 MB). With neither a shell nor a user, send "
@@ -281,8 +294,10 @@ class ImportInput(BaseModel):
         "Where the file is: `{kind:\"url\", url}` (public link; a Google Sheets share "
         "link works if the sheet is public, `gid` picks the tab), `{kind:\"drive\", "
         "file_id}` (your Google account; a native Sheet exports its first tab as CSV), "
-        "`{kind:\"project_file\", project_id, file_id}`, or `{kind:\"gmail\", "
-        "message_id, filename}`."))
+        "`{kind:\"project_file\", project_id, file_id}`, `{kind:\"gmail\", "
+        "message_id, filename}`, or a file YOU produced: `{kind:\"content\", "
+        f"filename, base64}}` (or `text` instead of `base64`), {_EN_LIGNE_KO} KB at most. With "
+        "`target=\"project_file\"`, the file is filed in the project as is."))
     target: Literal["datastore", "project_file"] = "datastore"
     datastore: Optional[str] = None
     format: Optional[Literal["csv", "ndjson"]] = Field(
