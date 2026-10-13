@@ -1,7 +1,7 @@
 """Tools `teams_*` du connecteur Teams (service du porteur `microsoft`).
 
 Ce que ce fichier verrouille :
-- la SURFACE (2 tools), le jeton du service `teams`, le refus nommé d'un compte qui
+- la SURFACE (3 tools : lire et écrire sont deux outils, #1231), le jeton du service `teams`, le refus nommé d'un compte qui
   ne l'a pas autorisé ;
 - le dispatch vers les VRAIES méthodes de `TeamsClient` (autospec), le lieu : un canal
   (`team_id` + `channel_id`) OU une conversation (`chat_id`), jamais les deux ;
@@ -90,7 +90,7 @@ MSG = {"id": "1700", "from": {"user": {"displayName": "Jane"}},
 
 def test_surface(env):
     assert {t.name for t in asyncio.run(_mcp().list_tools())} == {
-        "teams_spaces", "teams_message"}
+        "teams_spaces", "teams_message", "teams_send"}
 
 
 def test_un_compte_sans_teams_recoit_le_refus_du_porteur(env, monkeypatch):
@@ -147,26 +147,42 @@ def test_lire_une_conversation_sans_palier_admin(env):
 def test_publier_dans_un_canal_et_une_conversation(env):
     c = env.client
     c.post_channel_message.return_value = {"id": "m1"}
-    _tool("teams_message")(op="post", team_id="t1", channel_id="ch", body="**Point** à 14 h")
+    _tool("teams_send")(team_id="t1", channel_id="ch", body="**Point** à 14 h")
     args, kw = c.post_channel_message.call_args
     assert args == ("t1", "ch") and "<strong>Point</strong>" in kw["html"]
     c.post_chat_message.return_value = {"id": "m2"}
-    _tool("teams_message")(op="post", chat_id="c1", body="ok")
+    _tool("teams_send")(op="post", chat_id="c1", body="ok")
     assert c.post_chat_message.call_args.args == ("c1",)
     c.reply_channel_message.return_value = {"id": "m3"}
-    _tool("teams_message")(op="reply", team_id="t1", channel_id="ch", message_id="1700",
-                           body="vu")
+    _tool("teams_send")(op="reply", team_id="t1", channel_id="ch", message_id="1700",
+                        body="vu")
     assert c.reply_channel_message.call_args.args == ("t1", "ch", "1700")
     assert env.liens == [], "publier n'a pas besoin du palier admin"
 
 
 def test_une_conversation_n_a_pas_de_fil(env):
-    for op, extra in (("replies", {"message_id": "1"}), ("reply", {"message_id": "1",
-                                                                   "body": "x"})):
-        with pytest.raises(McpError, match="no threads"):
-            _tool("teams_message")(op=op, chat_id="c1", **extra)
+    with pytest.raises(McpError, match="no threads"):
+        _tool("teams_message")(op="replies", chat_id="c1", message_id="1")
+    with pytest.raises(McpError, match="no threads"):
+        _tool("teams_send")(op="reply", chat_id="c1", message_id="1", body="x")
     with pytest.raises(McpError, match="requires `body`"):
-        _tool("teams_message")(op="post", chat_id="c1")
+        _tool("teams_send")(op="post", chat_id="c1")
+    assert env.jetons == [], "un envoi refusé ne résout aucun jeton"
+
+
+@pytest.mark.parametrize("lieu", [{}, {"team_id": "t1", "chat_id": "c1"},
+                                  {"channel_id": "ch"}])
+def test_l_ecrivain_refuse_un_lieu_ambigu_avant_tout_jeton(env, lieu):
+    with pytest.raises(McpError, match="exactly one|requires `team_id`"):
+        _tool("teams_send")(body="x", **lieu)
+    assert env.jetons == []
+
+
+def test_une_op_inconnue_du_lecteur_nomme_l_ecrivain(env):
+    """Une op inconnue du lecteur est refusée en nommant l'écrivain — jamais un envoi."""
+    with pytest.raises(McpError, match="teams_send"):
+        _tool("teams_message")(op="send", chat_id="c1", body="x")
+    assert env.jetons == []
 
 
 # --- le palier admin ------------------------------------------------------------

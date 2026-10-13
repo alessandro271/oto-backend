@@ -882,7 +882,7 @@ def test_l_axe_account_est_accepte_sur_les_outils(env):
 
     for outil in ("sharepoint_file", "sharepoint_site", "outlook_message",
                   "outlook_compose", "outlook_calendar_calendars", "outlook_calendar_event",
-                  "teams_spaces", "teams_message"):
+                  "teams_spaces", "teams_message", "teams_send"):
         assert "_account" in {a.param for a in call_axes.axes_for_call(outil)}, outil
 
 

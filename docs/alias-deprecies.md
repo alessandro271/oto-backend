@@ -215,6 +215,27 @@ encore est refusé en nommant l'outil d'envoi (`op_moved`). La garde datée
 `tests/test_unipile_transition_envoi_1189.py` rougit à partir du 11/12/2026 tant qu'une
 de ces ops est servie.
 
+### Des ops d'envoi sorties de `chat_message` et `teams_message` (oto-backend#1231, 13/10/2026)
+
+**La même date que #1189 : servies jusqu'au 10/12/2026 inclus, retirées au premier tag
+posé à partir du 11/12/2026** (`deprecations.RETRAIT_OPS_ENVOI`, décision d'Alexis du
+13/10/2026 : même découpage, même transition). Même raison : un client MCP autorise des
+outils, pas des opérations — « toujours autoriser » la lecture d'un espace Google Chat ou
+d'un canal Teams autorisait aussi d'y poster en ton nom.
+
+| Surface | Ancien appel (part le 10/12/2026 au soir) | Nouvel appel | Forme |
+| --- | --- | --- | --- |
+| Op d'outil MCP | `chat_message(op=send)` | `chat_send` (mêmes arguments `space` OU `user`, `text`, `account`, sans `op`) | servie PAR la fonction de `chat_send` (mêmes refus, avant toute résolution de compte) ; la réponse porte `deprecation_warning` ; la description de `chat_message` commence par « ⚠️ op=send est déprécié, utiliser `chat_send` ; retrait le 10/12/2026. » |
+| Op d'outil MCP | `teams_message(op=post/reply)` | `teams_send(op=post/reply)` (mêmes `op` et arguments) | idem ; « ⚠️ op=post/reply est déprécié, utiliser `teams_send` ; retrait le 10/12/2026. » |
+
+`chat_send` est un nom qui a déjà servi : l'envoi Google Chat d'avant la consolidation
+`op=` (11/08/2026), retiré sans alias. Il revient pour le même geste, `text` toujours
+requis.
+
+Comme pour #1189, **les lecteurs restent déclarés `ENVOI` pendant la transition** et
+repassent `LECTURE` au retrait. La garde datée `tests/test_chat_teams_transition_envoi_1231.py`
+rougit à partir du 11/12/2026 tant qu'une de ces ops est servie.
+
 ### Pourquoi les clés de capacité n'ont pas d'alias
 
 Une clé de capacité ne sort du serveur qu'à deux endroits : `/api/admin/capabilities`

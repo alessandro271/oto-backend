@@ -293,7 +293,8 @@ Pas de retrait sec : des procédures en base et des mémoires d'agent appellent 
 (`deprecations.RETRAIT_OPS_ENVOI`), l'ancienne op marche :
 
 - elle est servie **par la fonction de l'écrivain**, appelée telle quelle
-  (`_OpsDepreciees.servir`, `tools/unipile.py`) : mêmes refus d'arguments, avant toute
+  (`OpsDepreciees.servir`, `tools/lecture.py`, partagé depuis avec `chat_message` et
+  `teams_message`, #1231) : mêmes refus d'arguments, avant toute
   résolution de clé, même client, même compte opéré — aucun code copié ;
 - sa réponse porte `deprecation_warning`, qui nomme l'appel servi, l'outil à appeler
   désormais et la date de retrait ;

@@ -19,21 +19,20 @@ local browser's session isolation (issue #5) — at the price of a paid SaaS.
 """
 from __future__ import annotations
 
-import inspect
 import logging
 import time
 import unicodedata
-from typing import Literal, NamedTuple, Optional
+from typing import Literal, Optional
 
 from fastmcp import FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INTERNAL_ERROR, INVALID_PARAMS
 
-from .. import access, db, deprecations, providers, session_org, status_hints
+from .. import access, db, providers, session_org, status_hints
 from ..connectors import flow as connector_flow
 from ..connectors import verify as connector_verify
 from . import unipile_messagerie
-from .lecture import ENVOI
+from .lecture import ENVOI, OpsDepreciees, en_transition
 
 logger = logging.getLogger(__name__)
 
@@ -938,60 +937,17 @@ def _verify(fields: dict, config: dict | None = None) -> None:
 # on `whatsapp_chat` to read used to allow sending a message to a third party too,
 # without a confirmation. So everything that acts AT a third party or IN THE PERSON'S
 # NAME has a tool of its own (Gmail's shape: `gmail_message` reads, `gmail_compose`
-# writes), declared `ENVOI`.
-#
-# TRANSITION until `deprecations.RETRAIT_OPS_ENVOI` (10/12/2026 included, Alexis's
-# decision of 12/10/2026): the old op of a reader still works. It is served BY the
-# writer's own function — same refusals, before any credential — and its response
-# carries `deprecation_warning`. While a reader can send, it stays declared `ENVOI`,
-# never `LECTURE`: a client that took it for a reader would send without asking. At the
-# retirement, the ops leave the readers' schema, the readers become `LECTURE`, and a call
-# that still sends an old op is refused by naming its writer (`op_moved`).
-
-
-class _OpsDepreciees(NamedTuple):
-    """The send ops a reader still serves until the retirement, and their writer."""
-    outil: str           # the reader
-    cible: str           # the writer that serves them
-    ops: tuple           # the deprecated ops, in the reader's `op`
-    garde_op: bool = True  # the writer takes `op` (LinkedIn) — `{canal}_send` does not
-
-    def avis(self) -> str:
-        """The ONE line of the reader's description, at its head: a long description is
-        often truncated, and the head is what the model reads to pick its tool."""
-        return (f"⚠️ op={'/'.join(self.ops)} est déprécié, utiliser `{self.cible}` ; "
-                f"retrait le {deprecations.date_retrait_ops_envoi()}.")
-
-    def servir(self, op: str, ecrivain, /, **arguments) -> dict:
-        """`op` served by the writer's function itself — never a copy of it — and SAID
-        in the response, with the call to make from now on."""
-        appel = (f'`{self.cible}(op="{op}", …)` avec les mêmes arguments' if self.garde_op
-                 else f"`{self.cible}(…)` avec les mêmes arguments, sans `op`")
-        out = ecrivain(**arguments)
-        return {**out, "deprecation_warning": (
-            f'Déprécié : `{self.outil}(op="{op}")` est retiré le '
-            f"{deprecations.date_retrait_ops_envoi()}. L'appel a été servi par "
-            f"`{self.cible}` ; appelle désormais {appel}.")}
-
-
-def _en_transition(mcp: FastMCP, depreciees: _OpsDepreciees,
-                   description: Optional[str] = None):
-    """Mount a reader that still serves send ops: declared `ENVOI` (it sends), the
-    deprecation line at the head of its description (its docstring when not given)."""
-    def monter(fn):
-        corps = description if description is not None else inspect.getdoc(fn)
-        return mcp.tool(name=depreciees.outil, annotations=ENVOI,
-                        description=f"{depreciees.avis()}\n\n{corps}")(fn)
-    return monter
+# writes), declared `ENVOI`. The transition of the old ops (`OpsDepreciees`,
+# `en_transition`) is shared with the other messaging readers: `tools/lecture.py`.
 
 
 # The LinkedIn readers and the writer that serves their send ops.
-_OPS_CHAT = _OpsDepreciees("linkedin_unipile_chat", "linkedin_unipile_send",
-                           ("send", "update", "react"))
-_OPS_POST = _OpsDepreciees("linkedin_unipile_post", "linkedin_unipile_publish",
-                           ("create", "comment", "react"))
-_OPS_RESEAU = _OpsDepreciees("linkedin_unipile_network", "linkedin_unipile_invite",
-                             ("invite", "handle", "cancel"))
+_OPS_CHAT = OpsDepreciees("linkedin_unipile_chat", "linkedin_unipile_send",
+                          ("send", "update", "react"))
+_OPS_POST = OpsDepreciees("linkedin_unipile_post", "linkedin_unipile_publish",
+                          ("create", "comment", "react"))
+_OPS_RESEAU = OpsDepreciees("linkedin_unipile_network", "linkedin_unipile_invite",
+                            ("invite", "handle", "cancel"))
 
 
 def register_messaging_tools(mcp: FastMCP, channel: str) -> None:
@@ -1008,7 +964,7 @@ def register_messaging_tools(mcp: FastMCP, channel: str) -> None:
     cl = channel.lower()
     prov = channel.upper()
     envoi = f"{cl}_send"
-    depreciees = _OpsDepreciees(f"{cl}_chat", envoi, ("send",), garde_op=False)
+    depreciees = OpsDepreciees(f"{cl}_chat", envoi, ("send",), garde_op=False)
 
     def _bad(msg: str) -> McpError:
         return McpError(ErrorData(code=INVALID_PARAMS, message=msg))
@@ -1035,7 +991,7 @@ def register_messaging_tools(mcp: FastMCP, channel: str) -> None:
         return unipile_client(prov).send_message(text, chat_id=chat_id,
                                                  attendee_id=recipient_id)
 
-    @_en_transition(mcp, depreciees, description=(
+    @en_transition(mcp, depreciees, description=(
         f"{channel} messaging (DM) via Unipile.\n\n"
         "`op`:\n"
         "- **\"list\"** (default): the conversations, newest first, in `items` "
@@ -1428,7 +1384,7 @@ def register(mcp: FastMCP) -> None:
 
     # ---- messaging -------------------------------------------------------
 
-    @_en_transition(mcp, _OPS_CHAT)
+    @en_transition(mcp, _OPS_CHAT)
     def linkedin_unipile_chat(
         op: Literal["list", "read", "send", "attendees", "contacts", "update",
                     "react"] = "list",
@@ -1643,7 +1599,7 @@ def register(mcp: FastMCP) -> None:
                            "read, it no longer advances. Nothing else to ask for.")
         return out
 
-    @_en_transition(mcp, _OPS_POST)
+    @en_transition(mcp, _OPS_POST)
     def linkedin_unipile_post(
         op: Literal["feed", "get", "engagement", "create", "comment",
                     "react"] = "feed",
@@ -1766,7 +1722,7 @@ def register(mcp: FastMCP) -> None:
 
     # ---- network: connections & invitations -------------------------------
 
-    @_en_transition(mcp, _OPS_RESEAU)
+    @en_transition(mcp, _OPS_RESEAU)
     def linkedin_unipile_network(
         op: Literal["relations", "invitations", "invite", "handle",
                     "cancel"] = "relations",

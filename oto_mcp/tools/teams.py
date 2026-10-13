@@ -4,10 +4,13 @@ Credential = the PERSON's Microsoft 365 account (carrier `microsoft`, OAuth, del
 permissions) that has authorized THIS service (scopes `TEAMS`); several linked accounts
 are chosen by the generic `_account=` axis.
 
-**Surface**, one tool per object:
+**Surface**:
 - `teams_spaces` (teams/channels/chats) — where one can read and post;
-- `teams_message` (list/replies/post/reply) — the messages of a channel
-  (`team_id` + `channel_id`) or of a chat (`chat_id`), exactly one of the two.
+- `teams_message` (list/replies) — READS the messages of a channel (`team_id` +
+  `channel_id`) or of a chat (`chat_id`), exactly one of the two;
+- `teams_send` (post/reply) — WRITES one, at the same place. Reading and writing are TWO
+  tools (oto-backend#1231, the shape of #1189): an MCP client authorizes a TOOL, never an
+  op — "always allow" on a reader must never allow a post.
 
 **Two consent levels** (`oto.tools.microsoft.teams`): the person consents alone to
 teams, channels, posting and chats; READING a channel's messages (`list`/`replies` on a
@@ -18,8 +21,13 @@ never a mute 403. An approval is only seen at a token renewal: when the vault do
 know it yet, or Graph still answers 403 while the vault says it is granted (a token
 cached before the approval), the read renews the token ONCE, then decides.
 
-⚠️ `post` and `reply` WRITE: a message is visible at once to the channel or chat
-members; Teams has no draft. The default `op` of `teams_message` is `list` — a READ.
+⚠️ `teams_send` WRITES: a message is visible at once to the channel or chat members;
+Teams has no draft.
+
+TRANSITION until `deprecations.RETRAIT_OPS_ENVOI` (10/12/2026 included, Alexis's decision
+of 13/10/2026): `teams_message(op="post"|"reply")` is still served — BY `teams_send`'s own
+function, with `deprecation_warning` — and `teams_message` stays declared `ENVOI` while it
+can post (`tools/lecture.OpsDepreciees`).
 """
 from __future__ import annotations
 
@@ -32,11 +40,16 @@ from fastmcp import FastMCP
 from .. import access
 from ._microsoft_graph import (bad, markdown_html, need, raise_refusal, raw, refuse_ignored,
                                run, token)
+from .lecture import ENVOI, OpsDepreciees, en_transition
 
 #: The Microsoft service these tools call: its scopes, its card (`auth/microsoft`).
 _SERVICE = "teams"
 _LABEL = "Teams"
 _BALISE = re.compile(r"<[^>]+>")
+
+#: `teams_message(op="post"|"reply")` is served by `teams_send` until the retirement
+#: (#1231) — same ops, same arguments.
+_OPS_MESSAGE = OpsDepreciees("teams_message", "teams_send", ("post", "reply"))
 
 
 def _equipe(t: dict) -> dict:
@@ -59,6 +72,19 @@ def _texte(corps: Optional[dict]) -> Optional[str]:
     if contenu is None or str((corps or {}).get("contentType")).lower() != "html":
         return contenu
     return html.unescape(_BALISE.sub("", contenu)).strip()
+
+
+def _lieu(op: str, team_id: Optional[str], channel_id: Optional[str],
+          chat_id: Optional[str]) -> tuple:
+    """The place of a message: `(True, team, channel)` for a channel, `(False, None,
+    None)` for a chat — exactly one of the two, refused otherwise (never guessed)."""
+    canal = team_id is not None or channel_id is not None
+    if canal == (chat_id is not None):
+        raise bad("name the place: `team_id` + `channel_id` (a channel) OR `chat_id` "
+                  "(a chat) — exactly one of the two.")
+    if not canal:
+        return False, None, None
+    return True, need(team_id, "team_id", op), need(channel_id, "channel_id", op)
 
 
 def _message(m: dict) -> dict:
@@ -189,7 +215,7 @@ def register(mcp: FastMCP) -> None:
                     "count": len(chats)}
         raise bad("op must be 'teams', 'channels' or 'chats'.")
 
-    @mcp.tool()
+    @en_transition(mcp, _OPS_MESSAGE)
     def teams_message(
         op: Literal["list", "replies", "post", "reply"] = "list",
         team_id: Optional[str] = None,
@@ -200,7 +226,8 @@ def register(mcp: FastMCP) -> None:
         limit: int = 50,
         full: bool = False,
     ) -> dict:
-        """A message in a Teams channel or chat — read, read a thread, post, reply.
+        """The messages of a Teams channel or chat — read them, read a thread. Posting
+        and replying is `teams_send`.
 
         The place is a CHANNEL (`team_id` + `channel_id`, from teams_spaces) OR a CHAT
         (`chat_id`) — exactly one of the two.
@@ -210,67 +237,99 @@ def register(mcp: FastMCP) -> None:
           messages (without their replies), or a chat's messages.
         - **"replies"**: the replies to the channel message `message_id` (a chat has no
           threads).
-        - **"post"**: ⚠️ WRITES — a new message (`body`, markdown): a new thread in the
-          channel, or a message in the chat.
-        - **"reply"**: ⚠️ WRITES — a reply (`body`) in the thread of the channel
-          message `message_id`. In a chat, use op="post".
-        ⚠️ A post is visible AT ONCE to the members: Teams has no draft.
 
-        ⚠️ Reading a CHANNEL's messages ("list"/"replies" on a channel) requires your
-        Microsoft admin's approval, once for the whole organization: without it the call
-        is refused and returns the approval link to send to the administrator. Chats and
-        posting do not need it.
+        ⚠️ Reading a CHANNEL's messages requires your Microsoft admin's approval, once for
+        the whole organization: without it the call is refused and returns the approval
+        link to send to the administrator. Chats do not need it.
 
         Args:
-            op: list (default) | replies | post | reply.
+            op: list (default) | replies.
             team_id: a channel's team (with `channel_id`).
             channel_id: the channel (with `team_id`).
             chat_id: the chat, instead of a channel.
-            message_id: op="replies"/"reply" — the channel message (from op="list").
-            body: op="post"/"reply" — the message, in markdown.
-            limit: op="list"/"replies" — max messages (default 50).
+            message_id: op="replies" — the channel message (from op="list").
+            body: the deprecated ops' argument — that of `teams_send`.
+            limit: max messages (default 50).
             full: return Graph's raw messages instead of the trimmed view.
         """
-        canal = team_id is not None or channel_id is not None
-        if canal == (chat_id is not None):
-            raise bad("name the place: `team_id` + `channel_id` (a channel) OR `chat_id` "
-                      "(a chat) — exactly one of the two.")
-        if canal:
-            equipe = need(team_id, "team_id", op)
-            fil = need(channel_id, "channel_id", op)
+        if op in _OPS_MESSAGE.ops:
+            return _OPS_MESSAGE.servir(op, teams_send, op=op, team_id=team_id,
+                                       channel_id=channel_id, chat_id=chat_id,
+                                       message_id=message_id, body=body, full=full)
+        if op not in ("list", "replies"):
+            raise bad("op must be 'list' or 'replies' — posting and replying is "
+                      "`teams_send`.")
+        canal, equipe, fil = _lieu(op, team_id, channel_id, chat_id)
+        refuse_ignored(op, body=body)
         vue = raw if full else _message
 
         def _liste(messages: list) -> dict:
             return {"messages": [vue(m) for m in messages], "count": len(messages)}
 
-        if op in ("list", "replies"):
-            refuse_ignored(op, body=body)
-            if op == "list":
-                refuse_ignored(op, message_id=message_id)
-                if not canal:
-                    c = _client()
-                    return _liste(_run(lambda: c.list_chat_messages(chat_id, limit=limit)))
-                return _liste(_lecture_canal(
-                    lambda c: c.list_channel_messages(equipe, fil, limit=limit)))
+        if op == "list":
+            refuse_ignored(op, message_id=message_id)
             if not canal:
-                raise bad("a chat has no threads: read it with op='list'.")
-            racine = need(message_id, "message_id", op)
+                c = _client()
+                return _liste(_run(lambda: c.list_chat_messages(chat_id, limit=limit)))
             return _liste(_lecture_canal(
-                lambda c: c.list_replies(equipe, fil, racine, limit=limit)))
+                lambda c: c.list_channel_messages(equipe, fil, limit=limit)))
+        if not canal:
+            raise bad("a chat has no threads: read it with op='list'.")
+        racine = need(message_id, "message_id", op)
+        return _liste(_lecture_canal(
+            lambda c: c.list_replies(equipe, fil, racine, limit=limit)))
 
-        if op in ("post", "reply"):
-            contenu = markdown_html(need(body, "body", op))
+    @mcp.tool(annotations=ENVOI)
+    def teams_send(
+        op: Literal["post", "reply"] = "post",
+        team_id: Optional[str] = None,
+        channel_id: Optional[str] = None,
+        chat_id: Optional[str] = None,
+        message_id: Optional[str] = None,
+        body: Optional[str] = None,
+        full: bool = False,
+    ) -> dict:
+        """⚠️ WRITES in Microsoft Teams, in the person's name: a message is visible AT
+        ONCE to the channel or chat members — Teams has no draft. Reading is
+        `teams_message`.
+
+        The place is a CHANNEL (`team_id` + `channel_id`, from teams_spaces) OR a CHAT
+        (`chat_id`) — exactly one of the two.
+
+        `op`:
+        - **"post"** (default): a new message (`body`, markdown): a new thread in the
+          channel, or a message in the chat.
+        - **"reply"**: a reply (`body`) in the thread of the channel message
+          `message_id` (from `teams_message(op="list")`). In a chat, use op="post".
+
+        Posting needs no administrator's approval.
+
+        Args:
+            op: post (default) | reply.
+            team_id: a channel's team (with `channel_id`).
+            channel_id: the channel (with `team_id`).
+            chat_id: the chat, instead of a channel.
+            message_id: op="reply" — the channel message to reply to.
+            body: the message, in markdown.
+            full: return Graph's raw message instead of the trimmed view.
+        """
+        if op not in ("post", "reply"):
+            raise bad("op must be 'post' or 'reply'.")
+        # Refused BEFORE any credential resolution: a post without a place or a body
+        # never reaches Graph.
+        canal, equipe, fil = _lieu(op, team_id, channel_id, chat_id)
+        contenu = markdown_html(need(body, "body", op))
+        vue = raw if full else _message
+        if op == "post":
+            refuse_ignored(op, message_id=message_id)
             c = _client()
-            if op == "post":
-                refuse_ignored(op, message_id=message_id)
-                if canal:
-                    return vue(_run(lambda: c.post_channel_message(equipe, fil,
-                                                                   html=contenu)))
-                return vue(_run(lambda: c.post_chat_message(chat_id, html=contenu)))
-            if not canal:
-                raise bad("a chat has no threads: post in it with op='post'.")
-            racine = need(message_id, "message_id", op)
-            return vue(_run(lambda: c.reply_channel_message(equipe, fil, racine,
-                                                            html=contenu)))
-
-        raise bad("op must be 'list', 'replies', 'post' or 'reply'.")
+            if canal:
+                return vue(_run(lambda: c.post_channel_message(equipe, fil,
+                                                               html=contenu)))
+            return vue(_run(lambda: c.post_chat_message(chat_id, html=contenu)))
+        if not canal:
+            raise bad("a chat has no threads: post in it with op='post'.")
+        racine = need(message_id, "message_id", op)
+        c = _client()
+        return vue(_run(lambda: c.reply_channel_message(equipe, fil, racine,
+                                                        html=contenu)))

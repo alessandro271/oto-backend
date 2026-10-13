@@ -73,6 +73,7 @@ async def test_aucun_outil_de_plateforme_ni_ecrivain_connu_n_est_declare():
     for nom in ("email_send", "slack_post_message", "gmail_compose", "http_post",
                 "lemlist_push_rows", "hubspot_push_rows", "routine_fire", "oto_call",
                 "data_write", "whatsapp_send", "linkedin_unipile_send",
-                "linkedin_unipile_invite", "linkedin_unipile_publish"):
+                "linkedin_unipile_invite", "linkedin_unipile_publish", "chat_send",
+                "teams_send", "chat_message", "teams_message"):
         if nom in servis:
             assert not en_lecture(servis[nom]), nom

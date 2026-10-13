@@ -398,6 +398,11 @@ def avis_nom_de_tableau(nom: str, ns_id: int) -> str:
 # nommant l'outil d'envoi (`op_moved`, le refus du commit d'origine de #1189).
 # `tests/test_unipile_transition_envoi_1189.py` rougit à partir du 11/12/2026 tant
 # qu'une de ces ops est encore servie.
+#
+# MÊME date pour Google Chat et Teams (oto-backend#1231, décision d'Alexis du
+# 13/10/2026 : même découpage, même transition) : `chat_message(op="send")` → `chat_send`,
+# `teams_message(op="post"|"reply")` → `teams_send` ; garde datée
+# `tests/test_chat_teams_transition_envoi_1231.py`.
 RETRAIT_OPS_ENVOI = datetime.date(2026, 12, 10)
 
 
