@@ -26,9 +26,10 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from .. import db, doc_patch, group_store, guide_store, session_org, tool_alias
+from .. import db, group_store, guide_store, session_org, tool_alias
 from ._authz import SUB_ONLY, refus_de_famille, refus_hors_vue
 from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
+from .docs import region
 from .registry import CAPABILITIES
 
 _MAX_BODY_BYTES = 64 * 1024
@@ -419,47 +420,6 @@ def _delete(ctx: ResolvedCtx, inp: GuideRefInput) -> dict:
 # jamais avalés : un `expected_rev` ignoré par `op=write` laisserait croire à un
 # contrôle de conflit qui n'a pas lieu.
 _PATCH_ONLY = ("section", "region", "mode", "expected_rev")
-_POIGNEE_PREAMBULE = 'region="preamble"'
-
-
-def _refus_du_patch(e: Exception, section: Optional[str], corps: str) -> AuthzDenied:
-    """Un refus du moteur `doc_patch`, sous les MÊMES codes que `oto_doc op=patch`
-    (`capabilities/docs/patch.py`) — seule la phrase parle de guide, et d'`op=write`
-    là où une page dit `op=update`."""
-    if isinstance(e, doc_patch.SectionNotFound):
-        msg = (f"No section « {section} » in this guide. Available sections: "
-               f"{', '.join(e.available) or '(none)'}.")
-        if doc_patch.preamble(corps).strip():
-            msg += (" The guide also has a PREAMBLE (what precedes its first heading): "
-                    f"it is not a section, target it with {_POIGNEE_PREAMBULE}.")
-        return AuthzDenied(404, "unknown_section", msg)
-    if isinstance(e, doc_patch.AmbiguousSection):
-        liste = " ; ".join(f"n°{k} `{'#' * niveau} {texte}` (line {ligne})"
-                           for k, (ligne, niveau, texte) in enumerate(e.matches, 1))
-        return AuthzDenied(
-            409, "ambiguous_section",
-            f"Section « {section} » is ambiguous: {len(e.matches)} headings match — "
-            f"{liste}. `section` compares the heading TEXT, level and case ignored: "
-            "none of them can be targeted alone, and NOTHING was changed. Make the "
-            "headings unique first — mode=replace on a uniquely-titled PARENT section "
-            "that contains them, renaming one in its `body_md`, or op=write with the "
-            "whole body.")
-    if isinstance(e, doc_patch.HeadingInPreamble):
-        return AuthzDenied(
-            400, "heading_in_preamble",
-            "The preamble is what PRECEDES the first heading: writing a heading there "
-            f"({', '.join(e.found)}) would close it, and the next patch would no longer "
-            "reach it. Remove the heading from `body_md`, or target that section with "
-            "`section`.")
-    if isinstance(e, doc_patch.PreambleAbsent):
-        return AuthzDenied(404, "empty_preamble",
-                           "This guide has no preamble: its first heading opens the "
-                           "body, there is nothing to delete above it.")
-    return AuthzDenied(
-        400, "preamble_is_whole_page",
-        "This guide has no heading: « what precedes the first heading » is the WHOLE "
-        "guide, and deleting it would empty it. If that is what you want: op=write "
-        "with the new body, or op=delete for the guide.")
 
 
 def _patch(ctx: ResolvedCtx, inp: GuideOpInput) -> dict:
@@ -467,9 +427,9 @@ def _patch(ctx: ResolvedCtx, inp: GuideOpInput) -> dict:
 
     Le manque : `op=write` REMPLACE le corps. Ajouter une ligne datée à un journal de
     ~60 000 caractères tenu dans un guide voulait dire le relire et le réémettre en
-    entier — et risquer d'en abîmer le reste sans le voir. Le moteur est celui
-    d'`oto_doc op=patch` (`doc_patch`, fonctions pures), avec ses paramètres et ses
-    codes de refus : aucune seconde grammaire à apprendre.
+    entier — et risquer d'en abîmer le reste sans le voir. La grammaire, le moteur et
+    les refus sont ceux d'`oto_doc op=patch`, par le même code (`docs/region`) : aucune
+    seconde grammaire à apprendre, aucune seconde copie des phrases.
 
     ⚠️ Trois choses propres au guide :
     - le DROIT est celui d'`op=write`, résolu par la même ligne (`_owner_for_write`)
@@ -490,30 +450,8 @@ def _patch(ctx: ResolvedCtx, inp: GuideOpInput) -> dict:
     owner_id = _owner_for_write(ctx, scope, inp.owner_id, ondemand=True)
     slug = inp.slug or ""
     mode = inp.mode or "replace"
-    vise_section = bool(inp.section and inp.section.strip())
-    # Deux axes d'adressage, jamais un mot réservé — cf. `capabilities/docs/patch.py`.
-    if vise_section and inp.region:
-        raise AuthzDenied(
-            400, "ambiguous_target",
-            "`section` and `region` name two different targets: pass only one. "
-            "`section` = a markdown heading (the section runs to the next heading of "
-            f"equal or higher level); {_POIGNEE_PREAMBULE} = what precedes the first "
-            "heading.")
-    if not (vise_section or inp.region):
-        raise AuthzDenied(
-            400, "missing_target",
-            "Target required: `section` (the markdown heading of the section to edit) "
-            f"or {_POIGNEE_PREAMBULE} (what precedes the first heading, which belongs "
-            "to no section).")
-    if mode == "delete":
-        if inp.body_md is not None:
-            raise AuthzDenied(
-                400, "unexpected_body",
-                "mode=delete removes the target: it takes no `body_md`. To EMPTY a "
-                "section and keep its heading, use mode=replace with an empty "
-                "`body_md`.")
-    elif inp.body_md is None:
-        raise AuthzDenied(400, "missing_body", "`body_md` (the new content) is required.")
+    # La forme de l'appel est celle d'`oto_doc op=patch`, jugée par le même code.
+    vise_section = region.valider(inp.section, inp.region, mode, inp.body_md)
     if inp.title is not None or inp.description is not None:
         raise AuthzDenied(
             400, "unsupported_on_patch",
@@ -528,24 +466,14 @@ def _patch(ctx: ResolvedCtx, inp: GuideOpInput) -> dict:
 
     def appliquer(corps: str) -> str:
         """Le corps patché, ou un refus — joué par la base sous le verrou de la ligne."""
-        try:
-            # Une section court jusqu'au prochain titre de niveau ≤ : replace/delete
-            # emportent ses sous-sections — on ne refuse pas, on l'ANNONCE (accusé).
-            enfants = (doc_patch.subsections(corps, section)
-                       if section and mode in ("replace", "delete") else [])
-            if section:
-                nouveau = doc_patch.patch_section(corps, section, contenu, mode=mode)
-            else:
-                nouveau = doc_patch.patch_preamble(corps, contenu, mode=mode)
-            emporte.update(removed=doc_patch.emprise(corps, section, mode),
-                           subsections=enfants)
-        except (doc_patch.SectionNotFound, doc_patch.AmbiguousSection,
-                doc_patch.HeadingInPreamble, doc_patch.PreambleAbsent,
-                doc_patch.PreambleIsWholePage) as e:
-            raise _refus_du_patch(e, inp.section, corps) from e
+        # Le moteur et ses refus sont ceux d'`oto_doc op=patch` ; seuls le nom de ce
+        # qu'on patche et le verbe qui le réécrit entier changent (`region.GUIDE`).
+        fait = region.appliquer(corps, section, contenu, mode, region.GUIDE,
+                                affiche=inp.section)
+        emporte.update(removed=fait.emporte, subsections=fait.sous_sections)
         # Les deux bornes d'`op=write`, jugées sur le RÉSULTAT : un guide on-demand
         # n'est jamais vide, et son corps tient sous `_MAX_BODY_BYTES`.
-        nouveau = nouveau.strip()
+        nouveau = fait.corps.strip()
         if not nouveau:
             raise AuthzDenied(
                 400, "empty_guide",
