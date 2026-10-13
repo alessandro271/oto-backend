@@ -157,7 +157,9 @@ async def test_le_run_d_un_collegue_de_la_meme_org_est_refuse(garde, monkeypatch
         await _dans_le_run(garde, run)
     msg = str(e.value)
     assert "pas le tien" in msg and run in msg, msg
-    assert "226" not in msg and "Travail" not in msg and "collegue" not in msg, msg
+    # L'id du run est de l'hexa aléatoire : il peut contenir « 226 ».
+    hors_run = msg.replace(run, "")
+    assert "226" not in hors_run and "Travail" not in msg and "collegue" not in msg, msg
     assert session_org.current_call_run_org() is None
 
 
@@ -168,7 +170,7 @@ async def test_proprietaire_sorti_de_l_org_refus_nomme_jamais_un_repli(garde, mo
         await _dans_le_run(garde, run)
     msg = str(e.value)
     assert "membre" in msg and run in msg, msg
-    assert "226" not in msg and "Travail" not in msg, msg
+    assert "226" not in msg.replace(run, "") and "Travail" not in msg, msg
     assert session_org.current_call_run_org() is None
 
 
