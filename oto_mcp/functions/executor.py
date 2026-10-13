@@ -56,11 +56,18 @@ class ExecutionEchouee(RuntimeError):
     """Le bac à sable n'a pas rendu de réponse exploitable (délai, plantage, protocole)."""
 
 
+#: Où le DÉPLOIEMENT pose le bac à sable, dans l'arbre de la couleur qu'il installe
+#: (`deploy/oto-mcp-bluegreen.sh`, `bg_install`) : il suit donc le tag, comme le code.
+#: Non versionné (`.gitignore`), conservé d'une installation à l'autre de la couleur.
+DEFAUT = _ICI.parents[1] / ".bac-a-sable"
+
+
 def _repertoire() -> Path:
-    brut = os.environ.get(ENV_DIR)
+    brut = os.environ.get(ENV_DIR) or (str(DEFAUT) if DEFAUT.is_dir() else "")
     if not brut:
-        raise BacASableAbsent(f"{ENV_DIR} n'est pas posée : cette instance n'exécute pas "
-                              "de fonction (cf. scripts/installer_bac_a_sable.py).")
+        raise BacASableAbsent(f"{ENV_DIR} n'est pas posée et {DEFAUT} n'existe pas : cette "
+                              "instance n'exécute pas de fonction (cf. "
+                              "scripts/installer_bac_a_sable.py).")
     racine = Path(brut)
     for requis in ("deno", f"{_PYODIDE_REL}/pyodide.mjs", "wheels"):
         if not (racine / requis).exists():

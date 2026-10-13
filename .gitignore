@@ -15,3 +15,7 @@ build/
 
 # Mémoires d'agent : locales au poste, jamais versionnées (peuvent charrier un secret).
 .claude/agent-memory/
+
+# Le bac à sable des fonctions, posé par le déploiement dans l'arbre de chaque couleur
+# (scripts/installer_bac_a_sable.py, deploy/oto-mcp-bluegreen.sh) : jamais versionné.
+/.bac-a-sable/
