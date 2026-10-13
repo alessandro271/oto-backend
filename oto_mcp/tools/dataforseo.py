@@ -99,15 +99,11 @@ def bill(task: dict) -> None:
 
 
 def creds(fields: dict, config: Optional[dict] = None) -> tuple[str, str]:
-    """`(login, password)` from the stored fields. A single `login:password` value
-    in one field (a credential posted before both fields were asked) is split."""
+    """`(login, password)` from the stored fields — both are asked at posting, the
+    platform key included. A single `login:password` value is NOT split: a credential
+    posted wrong is refused by name, never guessed into shape."""
     f = {**(config or {}), **(fields or {})}
     login, password = f.get("login"), f.get("password")
-    if not (login and password):
-        for v in (password, login, f.get("key"), f.get("api_key")):
-            if isinstance(v, str) and ":" in v:
-                login, _, password = v.partition(":")
-                break
     if not (login and password):
         raise bad("The DataForSEO credential needs both the API login and the API "
                   "password.")

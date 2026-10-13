@@ -102,21 +102,15 @@ def test_two_fields(env):
 
 
 @pytest.mark.parametrize("fields", [
-    {"password": "me@example.com:pw"},          # raw platform value → first secret field
+    {"password": "me@example.com:pw"},
     {"login": "me@example.com:pw"},
     {"key": "me@example.com:pw"},
 ])
-def test_platform_value_login_colon_password(env, fields):
+def test_a_single_login_colon_password_value_is_refused(env, fields):
+    """One value for two fields is a credential posted wrong: refused, not split."""
     env.rc = SimpleNamespace(fields=fields, config={}, is_platform=True)
-    env.call("dataforseo_backlinks", op="summary", target="example.com")
-    assert env.creds == ("me@example.com", "pw")
-
-
-def test_password_may_contain_a_colon(env):
-    env.rc = SimpleNamespace(fields={"password": "me@example.com:p:w"}, config={},
-                             is_platform=True)
-    env.call("dataforseo_backlinks", op="summary", target="example.com")
-    assert env.creds == ("me@example.com", "p:w")
+    with pytest.raises(McpError, match="login"):
+        env.call("dataforseo_backlinks", op="summary", target="example.com")
 
 
 def test_incomplete_credential_is_named(env):
@@ -223,7 +217,8 @@ def test_upstream_refusal_bills_nothing(env):
     env.client.backlinks_summary.side_effect = UpstreamHTTPError(
         402, {"status_code": 40200, "status_message": "Payment Required."},
         service="dataforseo")
-    env.rc = SimpleNamespace(fields={"password": "a@b.c:pw"}, config={}, is_platform=True)
+    env.rc = SimpleNamespace(fields={"login": "a@b.c", "password": "pw"}, config={},
+                             is_platform=True)
     with pytest.raises(McpError, match="shared DataForSEO balance is empty"):
         env.call("dataforseo_backlinks", op="summary", target="a.com")
     assert env.traces == []
@@ -250,7 +245,8 @@ def test_balance_of_own_key(env):
 
 
 def test_balance_refused_on_the_shared_key(env):
-    env.rc = SimpleNamespace(fields={"password": "a@b.c:pw"}, config={}, is_platform=True)
+    env.rc = SimpleNamespace(fields={"login": "a@b.c", "password": "pw"}, config={},
+                             is_platform=True)
     with pytest.raises(McpError, match="shared key"):
         env.call("dataforseo_account", op="balance")
     env.client.user_data.assert_not_called()
