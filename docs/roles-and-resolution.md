@@ -292,7 +292,10 @@ jamais lu comme une révocation, et seul un `grant` sur ce même scope lève le 
 La priorité `user:` > `org:` ne sert qu'à choisir le **quota** de l'arête gagnante. Une
 re-pose sous le même libellé est une **rotation** : `share_mode` et les clés d'accord de
 `meta` (`rate_limit`, `rate_limit_by`, `share_denied`) restent ; seule une clé NEUVE
-payante naît `closed`.
+payante naît `closed`. **Une clé payante naît fermée et s'ouvre org par org** (décision du
+13/10/2026) ; seule une clé à palier gratuit (`platform_key_open`) naît ouverte. Une
+rotation ne rouvre jamais une clé fermée, y compris vidée par la révocation de son
+dernier bénéficiaire (liste vide = personne).
 **Une org ne vide pas seule une clé commune (F-051).** Au palier plateforme d'une
 exécution (`check_usage`), `access/platform_rate.enforce` compte un appel pour l'org
 dont la clé est consommée (`heritage.org_des_cles` ; `user:<sub>` sans org ; l'org du

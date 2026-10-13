@@ -59,6 +59,56 @@ def test_une_rotation_laisse_fermee_une_cle_deja_accordee(base):
     assert not _platform_instance_usable("membre", 77, inst)
 
 
+def test_une_rotation_ne_rouvre_pas_une_cle_fermee_jamais_accordee(base):
+    """Changer le secret d'une clé payante fermée, sans aucun bénéficiaire, la laisse
+    fermée : une rotation n'est pas une ouverture."""
+    from oto_mcp import credentials_store
+    from oto_mcp.access.platform_grant import _platform_instance_usable
+
+    credentials_store.set_platform_key("partenaire", "forager", "fg-1", set_by="op")
+    credentials_store.set_platform_key("partenaire", "forager", "fg-2", set_by="op")
+    inst = _instance("forager")
+    assert inst["share_mode"] == "closed" and inst["share_down"] == []
+    assert not _platform_instance_usable("quelconque", 77, inst)
+
+
+def test_une_rotation_ne_rouvre_pas_une_cle_videe_de_son_dernier_beneficiaire(base):
+    """Une clé fermée dont le dernier bénéficiaire est révoqué (liste vide = personne)
+    reste fermée quand on change son secret : ni l'org révoquée ni une autre n'est
+    servie."""
+    from oto_mcp import credentials_store
+    from oto_mcp.access.platform_grant import _platform_instance_usable
+
+    credentials_store.set_platform_key("partenaire", "forager", "fg-1", set_by="op")
+    credentials_store.platform_grant("forager", "org:7")
+    credentials_store.platform_revoke("forager", "org:7")
+    credentials_store.set_platform_key("partenaire", "forager", "fg-2", set_by="op")
+    inst = _instance("forager")
+    assert inst["share_mode"] == "closed" and inst["share_down"] == []
+    assert not _platform_instance_usable("membre", 7, inst)
+    assert not _platform_instance_usable("quelconque", 77, inst)
+
+
+def test_une_rotation_garde_la_liste_d_une_cle_ouverte_a_liste(base):
+    """Une clé `open` à liste (état hérité) garde sa liste quand on change son secret :
+    elle ne devient pas « ouverte à tous »."""
+    from oto_mcp import credentials_store
+    from oto_mcp.access.platform_grant import _platform_instance_usable
+
+    credentials_store.set_platform_key("partenaire", "forager", "fg-1", set_by="op")
+    with credentials_store._connect() as conn:
+        conn.execute(
+            "UPDATE connector_credentials SET share_mode = 'open', "
+            "share_down = '[\"org:42\"]'::jsonb "
+            "WHERE entity_type = %s AND connector = 'forager'",
+            (credentials_store.PLATFORM,))
+    credentials_store.set_platform_key("partenaire", "forager", "fg-2", set_by="op")
+    inst = _instance("forager")
+    assert inst["share_mode"] == "open" and inst["share_down"] == ["org:42"]
+    assert _platform_instance_usable("membre", 42, inst)
+    assert not _platform_instance_usable("quelconque", 77, inst)
+
+
 def test_un_palier_gratuit_garde_sa_cle_ouverte(base):
     from oto_mcp import credentials_store, providers
     from oto_mcp.access.platform_grant import _platform_instance_usable
