@@ -936,6 +936,11 @@ def register(mcp: FastMCP) -> None:
                 absent and creating.** For another operator, pass
                 {field: {op: value}} — op ∈ eq, not_eq, like, not_like, empty,
                 not_empty, gt (dates), in / not_in (relations).
+                `empty` / `not_empty` take no operand — write
+                `{"emails": {"empty": True}}`, the value is ignored. A date is a
+                CALENDAR DAY, `YYYY-MM-DD` (`{"createdAt": {"gt":
+                "2026-10-05"}}`): Folk refuses a date-time (`…T00:00:00Z`) with
+                a 422 `Invalid date` that does not name the format.
                 **Relations (`groups`, `companies`): the value is the BARE id** —
                 `{"groups": "grp_…"}` (= `group_id`), `{"groups": {"not_in":
                 "grp_…"}}`, `{"groups": {"in": ["grp_…", "grp_…"]}}`. Do NOT nest
