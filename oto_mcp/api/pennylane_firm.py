@@ -1,4 +1,5 @@
-"""Handler du RELAIS d'upload Pennylane (cabinet) — `POST /api/relay/{token}`.
+"""Handlers du RELAIS d'upload Pennylane (cabinet) — `POST /api/relay/{token}`, et
+le manifeste d'un lot, `GET /api/relay/batch/{token}` (en fin de fichier).
 
 Route SŒUR de `/api/upload/{token}`, pas la même : celle-ci lit tout le corps en
 mémoire (`lire_multipart_borne`, 25 Mo), ce qu'un fichier de cent mégaoctets interdit.
@@ -41,7 +42,7 @@ from .. import db, garde_identite
 from ..capabilities._types import ContratDeRoute, DeclaredError
 from ..tools import pennylane_firm_relais as relais
 from ..tools import pennylane_firm_socle as socle
-from .base import _json, _json_error
+from .base import _file, _json, _json_error
 
 logger = logging.getLogger(__name__)
 
@@ -264,5 +265,59 @@ relay_receive.contrat = ContratDeRoute(
     corps={"POST": {"multipart/form-data": {
         "type": "object", "required": ["file"],
         "properties": {"file": {"type": "string", "format": "binary"}}}}},
+    authentifiee=False,
+)
+
+
+# ── Le manifeste d'un lot : `GET /api/relay/batch/{token}` ────────────────────────
+#
+# Les liens d'un lot (`pennylane_firm_upload_urls`) ne sont pas rendus à l'agent : ils
+# sont servis ici, en TSV, au script qui les consomme. Jeton `typ="relay_batch"` (une
+# famille à part : ni `/api/upload/{token}` ni `POST /api/relay/{token}` ne l'ouvrent,
+# et il n'ouvre ni l'un ni l'autre). Lectures répétées permises tant que le manifeste
+# vit ; les liens qu'il porte restent à usage unique. Le magasin est en mémoire du
+# processus : un redémarrage le vide, et le refus le dit.
+
+async def relay_manifest(request: Request):
+    """Le manifeste d'un lot de liens de relais, en TSV : `parent_folder_id`, `name`,
+    `url`, une ligne par lien."""
+    payload = relais.verifier_manifeste(request.path_params.get("token", ""))
+    if payload is None:
+        return _json_error(request, 401, "invalid_or_expired_token",
+                           "Unreadable, forged or expired manifest link: mint the batch "
+                           "again.")
+    sub = payload["sub"]
+    try:
+        if (coupe := await run_in_threadpool(garde_identite.refus, sub)):
+            raise socle.Refus(403, coupe[0], coupe[1])
+        corps = await run_in_threadpool(relais.lire_manifeste, sub, payload.get("org"),
+                                        payload["target"]["manifest_id"])
+    except socle.Refus as e:
+        return _refus(request, e)
+    return _file(request, corps, media_type="text/tab-separated-values; charset=utf-8")
+
+
+relay_manifest.contrat = ContratDeRoute(
+    description=(
+        "The manifest of a batch of relay links minted by the agent tool "
+        "`pennylane_firm_upload_urls`, as tab-separated values: a header line "
+        "`parent_folder_id<TAB>name<TAB>url`, then one line per link. No "
+        "`Authorization` header: the token of the address seals the account and the "
+        "organization, and lives 15 minutes like the links. It can be read again while "
+        "it lives; each link still serves once (`POST /api/relay/{token}`). The "
+        "manifest is kept in the server's memory: a restart loses it — mint the batch "
+        "again."),
+    errors=(
+        DeclaredError(401, "invalid_or_expired_token",
+                      "le jeton de l'adresse est illisible, falsifié, expiré, ou n'est "
+                      "pas un jeton de manifeste (`typ=relay_batch`) : refrapper le lot"),
+        DeclaredError(403, "no_organization", "le manifeste n'a pas d'org scellée"),
+        DeclaredError(403, "not_an_org_member",
+                      "le compte qui a frappé le lot n'est plus membre de l'org scellée"),
+        DeclaredError(404, "manifest_expired",
+                      "le manifeste n'existe plus (15 min écoulées, ou redémarrage du "
+                      "serveur, qui le garde en mémoire) : refrapper le lot"),
+    ),
+    media="text/tab-separated-values",
     authentifiee=False,
 )

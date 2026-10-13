@@ -19,6 +19,16 @@ lignes, 0,8 % du journal) : trois index partiels de quelques Mo, chacun dans l'O
 EXACT du `ORDER BY created_at DESC, id DESC` de la page — un parcours d'index seul qui
 s'arrête au `LIMIT`. Leur prédicat est celui de `_derniers_runs`, mot pour mot : un
 prédicat d'index que la requête n'implique pas ne sert aucune lecture.
+
+**`GESTES_DE_LIGNE`** — le parcours d'UNE ligne de datastore (révision 0054).
+`usage.datastore_row_activity` cherche les gestes `data_*` qui portent l'`id` de la
+ligne. `idx_tool_calls_ns` ne connaît que le tableau : sur un tableau très actif, une
+ligne qui y a peu de gestes faisait parcourir tout son historique jusqu'à remplir la
+page — mesuré en production le 12/10/2026, compter les gestes de 30 jours d'un seul
+tableau par cet index dépassait 15 s, et la route rendait 503 à 10 s. L'index ajoute
+l'`id` derrière le tableau : une lecture directe. Partiel sur les seuls gestes `data_*`
+qui portent un `id` — son prédicat est celui de la requête, que l'égalité sur
+`ns_id` et sur `id` implique.
 """
 from __future__ import annotations
 
@@ -50,4 +60,17 @@ OUVERTURES: tuple[IndexConcurrent, ...] = (
     IndexConcurrent(nom="idx_tool_calls_run_start_sub", table="tool_calls",
                     forme=f"(sub, org_id, created_at DESC, id DESC) WHERE {PREDICAT_OUVERTURE}",
                     revision=REVISION_OUVERTURES),
+)
+
+#: La révision qui pose l'index des gestes d'une ligne.
+REVISION_GESTES_DE_LIGNE = "0054_tool_calls_gestes_de_ligne"
+
+#: Le parcours d'une ligne (`usage.datastore_row_activity`, branche `id`).
+GESTES_DE_LIGNE = IndexConcurrent(
+    nom="idx_tool_calls_ns_row",
+    table="tool_calls",
+    forme=("((args->>'ns_id'), (args->>'id'), created_at DESC) "
+           "WHERE tool LIKE 'data\\_%' AND args->>'ns_id' IS NOT NULL "
+           "AND args->>'id' IS NOT NULL"),
+    revision=REVISION_GESTES_DE_LIGNE,
 )

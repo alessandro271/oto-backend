@@ -181,7 +181,7 @@ for _c in ("zoho", "zohodesk", "zohoanalytics"):
         # Without region: "an app exists somewhere" (their own, their org's,
         # or oto's for at least one region). The region is only chosen at click time,
         # so the promise displayed before the click cannot depend on it.
-        app_ready=lambda sub, _c=_c: zoho_oauth.has_app(_c, sub),
+        app_ready=lambda sub, _c=_c: zoho_oauth.app_ready(_c, sub),
         params=(connector_flow.FlowParam(
             name="data_center", label="Region of your Zoho account", default="eu",
             help="the OAuth app and the token are bound to their data center",

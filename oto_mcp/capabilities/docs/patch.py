@@ -1,57 +1,17 @@
 """`op=patch` — éditer UNE région d'une page sans la réémettre.
 
-Le module existe pour une raison qui tient en une phrase : **deux axes d'adressage,
-jamais un mot réservé**. `section` est l'espace de noms des titres markdown ; `region`
-celui des régions SANS titre (aujourd'hui le seul préambule). Les faire tenir dans un
-seul axe (`section="__preamble__"`, proposé par les signaux #481/#492/#507) rendrait
-inadressable toute page portant réellement ce titre — le jour où ça arrive, rien ne le
-signalerait.
+La grammaire (deux axes d'adressage `section` / `region`, jamais un mot réservé), le
+moteur et ses refus vivent dans `region`, partagés avec `oto_guide op=patch`. Ce qui
+reste ici est propre à la PAGE : le droit d'écrire au projet, la simulation
+(`dry_run`), l'écriture versionnée (`update_doc`) et l'accusé.
 """
 from __future__ import annotations
 
 from typing import Optional
 
-from ... import db, doc_patch
-from . import common, view
+from ... import db
+from . import common, region, view
 from .common import require
-
-# La poignée du préambule, écrite UNE seule fois : elle sert dans le refus d'ambiguïté,
-# dans le refus « cible manquante » et dans le refus « section introuvable » qui la
-# pointe. Trois formulations divergeraient à la première évolution.
-POIGNEE_PREAMBULE = 'region="preamble"'
-
-
-def refus_section_introuvable(heading: str, disponibles: list, corps: str) -> str:
-    """Le message d'un `section=` qui ne résout pas : les sections DISPONIBLES, et —
-    si la page en a un — le rappel que le préambule existe et n'est pas une section.
-
-    C'est le garde-fou du piège du mot réservé (signaux #481/#492/#507, qui
-    proposaient `section="__preamble__"`) : cette forme-là ne devient JAMAIS un
-    synonyme silencieux de la région — elle se heurte à ce refus, qui apprend la
-    bonne poignée. Sans quoi une page portant un vrai titre « __preamble__ »
-    deviendrait inadressable, et le jour où ça arrive rien ne le signalerait."""
-    dispo = ", ".join(disponibles) or "(aucune)"
-    msg = f"Section « {heading} » introuvable. Sections disponibles : {dispo}."
-    if doc_patch.preamble(corps).strip():
-        msg += (f" Cette page a aussi un PRÉAMBULE (ce qui précède le premier titre : "
-                f"bandeau de provenance, front-matter) : ce n'est pas une section, il "
-                f"s'adresse par {POIGNEE_PREAMBULE}.")
-    return msg
-
-
-def refus_section_ambigue(heading: str, candidats: list) -> str:
-    """Le message d'un `section=` qui désigne PLUSIEURS titres (#828, #869) : lesquels,
-    avec leur niveau et leur ligne, et la seule sortie qui existe aujourd'hui. Sans la
-    liste, l'agent ne peut que réessayer à l'identique ; sans la sortie, il réécrit la
-    page entière — ce que le patch existe pour éviter."""
-    liste = " ; ".join(f"n°{k} `{'#' * niveau} {texte}` (ligne {ligne})"
-                       for k, (ligne, niveau, texte) in enumerate(candidats, 1))
-    return (f"Section « {heading} » ambiguë : {len(candidats)} titres y correspondent — "
-            f"{liste}. `section` compare le TEXTE du titre, sans son niveau ni sa casse : "
-            "aucun ne peut être visé seul, et RIEN n'a été modifié. Pour en viser un, "
-            "rends d'abord les titres uniques — `mode=replace` sur une section PARENTE au "
-            "titre unique qui les contient, en renommant l'un d'eux dans son `body_md`, "
-            "ou `op=update` avec le corps complet.")
 
 
 def patch(sub: Optional[str], inp, row: dict, pid: int) -> dict:
@@ -62,84 +22,18 @@ def patch(sub: Optional[str], inp, row: dict, pid: int) -> dict:
     require(common.can(sub, pid, "write"), "forbidden", "Écriture refusée.", 403)
     corps = row.get("body_md") or ""
     mode = inp.mode or "replace"
-    vise_section = bool(inp.section and inp.section.strip())
-
-    # ── DEUX AXES D'ADRESSAGE, jamais un mot réservé (signaux #481, #492, #507) ──
-    # `section` = l'espace de noms des TITRES markdown ; `region` = celui des régions
-    # SANS titre (aujourd'hui le seul préambule : ce qui précède le premier titre —
-    # bandeau de provenance, front-matter). Les signaux proposaient de faire tenir la
-    # seconde dans la première (`section="__preamble__"`) : refusé. Rien n'empêche une
-    # page d'écrire `## __preamble__` en titre, et ce jour-là la même chaîne
-    # désignerait deux choses. Sur un axe séparé, la collision est impossible par
-    # CONSTRUCTION — pas par improbabilité — et les deux restent adressables.
-    # Les deux ensemble, ou aucun des deux : on refuse, on ne devine pas laquelle prime.
-    require(not (vise_section and inp.region), "ambiguous_target",
-            "`section` et `region` désignent deux cibles différentes : n'en passe "
-            "qu'une. `section` = un titre markdown (la section court jusqu'au "
-            f"prochain titre de niveau ≤) ; {POIGNEE_PREAMBULE} = ce qui précède le "
-            "premier titre.")
-    require(vise_section or inp.region, "missing_target",
-            "Cible requise : `section` (le titre markdown de la section à modifier) "
-            f"ou {POIGNEE_PREAMBULE} (ce qui précède le premier titre — bandeau de "
-            "provenance, front-matter, tout ce qui n'appartient à aucune section).")
-
-    # `mode=delete` retire la cible : il ne prend pas de contenu, et les trois autres
-    # en exigent un. Refusé et NOMMÉ des deux côtés — un argument accepté-et-ignoré
-    # coûte exactement ce qu'il prétendait économiser, et rien ne le signale à
-    # l'appelant (leçon générale du signal #461).
-    if mode == "delete":
-        require(inp.body_md is None, "unexpected_body",
-                "`mode=delete` retire la cible : il ne prend pas de `body_md`. Pour "
-                "VIDER une section en gardant son titre, c'est `mode=replace` avec "
-                "`body_md` vide.")
-    else:
-        require(inp.body_md is not None, "missing_body",
-                "`body_md` (nouveau contenu) requis.")
+    # Deux axes d'adressage (`section` / `region`), jamais un mot réservé, et un
+    # contenu si et seulement si le mode en prend un : `region.valider`.
+    vise_section = region.valider(inp.section, inp.region, mode, inp.body_md)
 
     # Une section court jusqu'au prochain titre de niveau ≤ : un `replace` — ou un
-    # `delete` — sur un `###` emporte donc ses `####`. C'est la sémantique voulue (on
-    # remplace / retire une section ENTIÈRE), mais silencieuse elle transforme le
-    # patch — vendu comme le mode sûr — en écrasement du travail d'un autre auteur
-    # (signal #334). On ne refuse pas : on ANNONCE ce qui part, la révision précédente
-    # permettant de revenir en arrière (op=revisions).
-    # Dans le `try` : sur un titre AMBIGU, dire quels enfants partiraient est impossible,
-    # donc le refus doit sortir par le même chemin que celui du patch (#869).
-    try:
-        removed = (doc_patch.subsections(corps, inp.section)
-                   if vise_section and mode in ("replace", "delete") else [])
-        if vise_section:
-            new_body = doc_patch.patch_section(corps, inp.section, inp.body_md,
-                                               mode=mode)
-        else:
-            new_body = doc_patch.patch_preamble(corps, inp.body_md, mode=mode)
-        # Après le patch, qui a déjà refusé une cible absente ou ambiguë.
-        emporte = doc_patch.emprise(corps, inp.section if vise_section else None, mode)
-    except doc_patch.SectionNotFound as e:
-        # Le refus nomme les sections disponibles ET, si la page a un préambule,
-        # la poignée qui l'atteint : c'est ici que `section="__preamble__"` se heurte
-        # à un mur qui apprend, plutôt qu'à un synonyme deviné.
-        require(False, "unknown_section",
-                refus_section_introuvable(inp.section, e.available, corps), 404)
-    except doc_patch.AmbiguousSection as e:
-        # Le premier titre venu était pris en silence : un replace visant le second
-        # écrasait le premier, et l'accusé disait « ok » (#828, #869).
-        require(False, "ambiguous_section",
-                refus_section_ambigue(inp.section, e.matches), 409)
-    except doc_patch.HeadingInPreamble as e:
-        require(False, "heading_in_preamble",
-                f"Le préambule est ce qui PRÉCÈDE le premier titre : y écrire un "
-                f"titre ({', '.join(e.found)}) le refermerait, et le patch suivant "
-                f"n'atteindrait plus ce bandeau. Retire le titre du `body_md`, ou "
-                f"vise cette section par `section`.")
-    except doc_patch.PreambleAbsent:
-        require(False, "empty_preamble",
-                "Cette page n'a pas de préambule : son premier titre ouvre le corps, "
-                "il n'y a rien à supprimer au-dessus.", 404)
-    except doc_patch.PreambleIsWholePage:
-        require(False, "preamble_is_whole_page",
-                "Cette page n'a aucun titre : « ce qui précède le premier titre » y "
-                "est la page ENTIÈRE, et la supprimer la viderait. Si c'est ce que "
-                "tu veux : op=update avec le nouveau corps, ou op=delete pour la page.")
+    # `delete` — sur un `###` emporte donc ses `####`. C'est la sémantique voulue, mais
+    # silencieuse elle transforme le patch — vendu comme le mode sûr — en écrasement du
+    # travail d'un autre auteur (signal #334). On ne refuse pas : on ANNONCE ce qui part,
+    # la révision précédente permettant de revenir en arrière (op=revisions).
+    fait = region.appliquer(corps, inp.section if vise_section else None, inp.body_md,
+                            mode, region.PAGE)
+    new_body, removed, emporte = fait.corps, fait.sous_sections, fait.emporte
     cible = inp.section if vise_section else "(préambule)"
     if inp.dry_run:
         # oto#171 : sans simulation, le seul moyen de savoir ce qu'un `replace` emporte

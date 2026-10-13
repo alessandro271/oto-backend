@@ -175,3 +175,40 @@ def test_la_description_tient_compte_de_l_outil_absent():
     assert "Never write your intent into the row" in d, d
     assert "_action" in d and "_liberation" in d, (
         "les colonnes fabriquées sont nommées : c'est le geste vu, pas un geste supposé")
+
+
+# ── la libération appartient au PROPRIÉTAIRE du run (comme la clôture, #108) ──
+
+def _indexer(run: str, sub: str) -> None:
+    from oto_mcp import db
+    db.insert_run(run, sub=sub, org_id=None, label="t-613-proprietaire", guide=None)
+
+
+@pytest.fixture
+def appelant(monkeypatch):
+    from oto_mcp.auth import hooks
+    monkeypatch.setattr(hooks, "current_user_sub_from_token", lambda: SUB)
+
+
+def test_fermer_le_run_d_un_autre_compte_ne_libere_pas_ses_lignes(surface, appelant):
+    """Un run_id est une poignée, pas un droit : `run_finish` sur le run d'un AUTRE
+    compte ne rend pas ses baux à la file — la ligne reste à son titulaire."""
+    ns, ns_id = _table(1)
+    run_autrui = _run()
+    _indexer(run_autrui, "sub-autre-compte-613")
+    ligne = _claim(ns, run_autrui)["row"]
+    assert ligne
+
+    out = _finish(run_autrui, "done")
+    assert out["ok"] and out["rows_released"] == 0, out
+    assert _bail(ns_id, ligne["_id"])["claimed_run"] == run_autrui
+
+
+def test_fermer_son_propre_run_indexe_libere_toujours(surface, appelant):
+    ns, ns_id = _table(1)
+    run_r = _run()
+    _indexer(run_r, SUB)
+    ligne = _claim(ns, run_r)["row"]
+    out = _finish(run_r, "done")
+    assert out["rows_released"] == 1, out
+    assert _bail(ns_id, ligne["_id"])["claimed_run"] is None

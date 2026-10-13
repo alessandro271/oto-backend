@@ -467,3 +467,41 @@ en place — plus aucun backfill ne la lit ; son DROP est une migration à part)
 ({{org}}/{{user}}/{{équipe}}/{{connecteurs_actifs}}). **Procédure** = guide nommé
 (skill), chargé à la demande. Prose opératoire versionnée par org — le reste de ce
 document en détaille le mécanisme.
+
+## `oto_guide op=patch` : éditer une région sans réémettre le corps
+
+`op=write` REMPLACE le corps. Un guide tenu en journal — une entrée datée par passage —
+grossit : vers 60 000 caractères, y ajouter une ligne voulait dire relire le corps entier
+et le réémettre à l'identique, avec le risque d'en abîmer le reste sans que rien ne le
+signale. `op=patch` modifie UNE région d'un guide **on-demand existant** et ne fait
+voyager ni le corps à l'aller, ni le corps au retour.
+
+- **Même grammaire que `oto_doc op=patch`**, même moteur (`oto_mcp/doc_patch.py`,
+  fonctions pures) : `mode` replace | append | prepend | delete, et UNE cible —
+  `section` (le texte d'un titre markdown) ou `region="preamble"` (ce qui précède le
+  premier titre). Les codes de refus sont ceux des pages (`unknown_section`,
+  `ambiguous_section`, `ambiguous_target`, `missing_target`, `heading_in_preamble`…).
+- **Même droit qu'`op=write`**, résolu par la même ligne (`_owner_for_write`) et AVANT
+  toute lecture : un refus ne décrit jamais un guide à qui ne l'écrit pas. Les deux
+  bornes de l'écriture valent pour le RÉSULTAT (`body_too_large` au-delà de 65 536
+  octets, jamais de guide vide).
+- **Un patch ne crée rien** : guide absent = `404 not_found`. Un guide plateforme
+  encore servi par son fichier de semis n'a pas de ligne en base — il se pose d'abord
+  par `op=write`.
+- **Rien ne se perd entre deux auteurs.** Le lire-modifier-écrire se joue dans UNE
+  transaction, ligne verrouillée (`db.patch_guide_db`) : deux ajouts simultanés au
+  même journal s'enchaînent. `expected_rev` y ajoute le contrôle optimiste des pages —
+  `409 conflict` si le guide a changé depuis la lecture. `rev` est un ETag dérivé du
+  contenu (titre, description, corps : `db.guide_rev`), rendu par `op=read` et par
+  l'accusé d'un patch ; aucune colonne, aucune migration.
+- **La réponse est un accusé** : `slug`, `scope`, `title`, `description`, `updated_at`,
+  `rev`, `body_md_length`, plus `removed` (replace/delete) et `removed_subsections`
+  quand une section parente emporte ses enfants. ⚠️ Un guide n'a pas d'historique de
+  révisions : ce qu'un `replace` emporte n'est pas restaurable, l'accusé le dit.
+- **Pas de readme `init`** (`400 unsupported_delivery`) : il est injecté entier dans
+  chaque session, donc tenu court, et se réécrit par `op=write`. Viser son slug
+  canonique comme un guide à charger rend `409 delivery_conflict`.
+- **Face MCP seule** : les routes `/api/me/guides/…` n'ont pas de verbe de patch.
+  `GET` y rend désormais `rev` (ajout au contrat, `GuideView`). Les arguments du patch
+  passés à une autre op sont refusés (`unsupported_patch_arg`) — `op=write` n'honore
+  pas `expected_rev`, et l'avaler ferait croire à un contrôle qui n'a pas lieu.

@@ -39,6 +39,13 @@ import _jeu_connecteurs_1148 as jeu_1148
 # Le relevé du 09/10/2026 sur le jeu : 44 requêtes (liste verbeuse ou compacte), 50
 # (lecture ciblée, qui calcule en plus l'aptitude de deux connecteurs), 25
 # (`status_for`). Une marge, pas un chèque en blanc : avant, ~200.
+# ⚠️ Ce relevé-là était fait sur un registre PARTIEL (rouge du tronc, 12/10/2026) : les
+# flux de connexion (`connect.app_ready`) et les sondes d'état se déclarent à l'import
+# du module de leur connecteur, que ce fichier seul n'importait pas. Dans un worker qui
+# les avait importés — et en production, où le serveur les importe tous —, la liste
+# verbeuse faisait 129 à 136 requêtes : l'`app_ready` des trois connecteurs Zoho
+# demandait chacun la résolution complète (~30 requêtes). Le jeu charge désormais le
+# registre du serveur (`_mcp_app.static_mcp`) : verbeuse 50, compacte 48.
 _BORNE_LISTE = 55
 _BORNE_CIBLEE = 65
 _BORNE_STATUT = 32
@@ -46,6 +53,11 @@ _BORNE_STATUT = 32
 
 @pytest.fixture(scope="module")
 def jeu(live):
+    # Le registre du SERVEUR (flux de connexion, sondes d'état), pas celui que les
+    # tests joués avant dans le worker ont laissé : sans lui, le compte de requêtes
+    # dépend de l'ordre de la suite, et mesure un chemin qui n'est pas celui servi.
+    import _mcp_app
+    _mcp_app.static_mcp()
     avant = os.environ.get("OTO_MCP_MASTER_KEY")
     os.environ["OTO_MCP_MASTER_KEY"] = "7" * 64
     try:
@@ -170,6 +182,39 @@ def test_le_nombre_de_requetes_ne_suit_pas_le_nombre_de_connecteurs(jeu):
                   meta={"scopes": "openid", "granted_at": "2026-09-04T00:00:00"})
     apres = {nom: _compter(appels[nom])[1] for nom in avant}
     assert apres == avant, f"le compte de requêtes suit les connecteurs branchés : {avant} → {apres}"
+
+
+def test_le_registre_mesure_est_celui_du_serveur(jeu):
+    """Le banc mesure le chemin SERVI : les flux qui posent `connect.app_ready` sur la
+    liste verbeuse sont déclarés, Zoho compris (c'est lui qui pesait)."""
+    from oto_mcp.connectors import flow as connector_flow
+    assert {"zoho", "zohodesk", "zohoanalytics", "microsoft", "google"} <= set(
+        connector_flow._FLOWS), sorted(connector_flow._FLOWS)
+
+
+@pytest.mark.parametrize("apportee", [False, True])
+def test_l_app_zoho_promise_est_celle_de_la_resolution(jeu, apportee):
+    """`connect.app_ready` d'un connecteur Zoho : la présence répond d'abord, la
+    résolution seulement si un credential est à portée — et la réponse est STRICTEMENT
+    celle de `has_app`, sans app apportée comme avec une app apportée au palier membre."""
+    from oto_mcp import credentials_store as cs
+    from oto_mcp import db
+    from oto_mcp.auth import zoho as zoho_oauth
+    moi = cs.member_id(jeu.org, jeu.sub)
+    if apportee:
+        cs.set_credential(cs.MEMBER, moi, "zohodesk", cs.pack_secret(
+            "zohodesk", {"client_id": "1000.FACTICE", "client_secret": "s"}), set_by=jeu.sub)
+    try:
+        for nom in ("zoho", "zohodesk", "zohoanalytics"):
+            with db.reuse_connection():
+                promise = zoho_oauth.app_ready(nom, jeu.sub)
+            assert promise is zoho_oauth.has_app(nom, jeu.sub), nom
+        if apportee:
+            with db.reuse_connection():
+                assert zoho_oauth.app_ready("zohodesk", jeu.sub) is True
+    finally:
+        if apportee:
+            cs.clear_credential(cs.MEMBER, moi, "zohodesk")
 
 
 def test_un_service_de_plus_ne_coute_aucune_requete(jeu):

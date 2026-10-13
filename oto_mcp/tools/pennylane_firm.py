@@ -10,7 +10,11 @@ atteint toutes les sociétés du portefeuille. Quatre outils :
 - `pennylane_firm_create_folder` — ÉCRITURE ;
 - `pennylane_firm_upload_url` — frappe le lien du RELAIS d'upload
   (`tools/pennylane_firm_relais.py`, route `POST /api/relay/{token}`), gardé par le
-  contrôle de doublon.
+  contrôle de doublon ;
+- `pennylane_firm_upload_urls` — la même frappe PAR LOTS (≤ 100) : les liens partent
+  dans un MANIFESTE (`GET /api/relay/batch/{token}`), jamais dans la réponse, et le
+  `SCRIPT_LOT` fourni les consomme (mesure du 12/10 : ~6,7 s de frappe par fichier à
+  l'unité, contre 0,87 s de transfert).
 
 ⚠️ `company_id` est l'id CÔTÉ CABINET : rien à voir avec les ids du connecteur
 `pennylane` (API Company), et les mêmes que la GED vue par `pennylaneged`. L'API n'a
@@ -26,6 +30,7 @@ from __future__ import annotations
 from typing import Literal, Optional
 
 from fastmcp import FastMCP
+from pydantic import BaseModel
 
 from .. import access, output_projection
 from ..auth.hooks import current_user_sub_from_token
@@ -39,6 +44,63 @@ from .pennylane_firm_socle import Refus, _client
 _SOCIETE_RETIREE = ("billing_company_name", "address", "city", "postal_code",
                     "activity_nomenclature", "activity_code")
 _GED_RETIREE = ("url", "files", "created_at", "updated_at")
+
+
+class ElementDeLot(BaseModel):
+    """Un fichier d'un lot : son dossier cible et son nom dans la GED.
+
+    Un modèle pydantic et non un `TypedDict` : pydantic refuse celui de `typing` sous
+    Python < 3.12, et celui de `typing_extensions` serait une dépendance non déclarée."""
+    parent_folder_id: int
+    name: str
+
+
+#: Le script qui consomme un lot : bash + coreutils + awk + curl (et xargs). Constant :
+#: l'URL du manifeste est son argument, jamais recopiée dedans. Il joint `paths.tsv`
+#: (dossier, nom, chemin local) au manifeste sur (dossier, nom), envoie au plus 4
+#: fichiers à la fois (la concurrence du relais par processus) avec des séparateurs NUL
+#: (chemins à espaces, accents, `;`, `,`), réessaie le même lien sur un 503
+#: `relay_busy` (non consommé), et écrit `results.tsv` ; une ligne sans lien
+#: (refusée, ou déjà envoyée) y sort en `NO_LINK`, sans envoi. Le chemin est passé à
+#: `-F` entre guillemets DOUBLES, `"` et `\` échappés : sinon curl lit `;` et `,`.
+SCRIPT_LOT = r"""#!/usr/bin/env bash
+# Uploads a batch of local files through the relay links of an oto manifest.
+# usage: bash pennylane_batch.sh '<manifest_url>' [paths.tsv] [results.tsv]
+# paths.tsv: one line per file: parent_folder_id<TAB>name<TAB>local path
+set -euo pipefail
+manifest_url="${1:?usage: bash pennylane_batch.sh <manifest_url> [paths.tsv] [results.tsv]}"
+paths="${2:-paths.tsv}"
+results="${3:-results.tsv}"
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+code="$(curl -sS -o "$work/manifest.tsv" -w '%{http_code}' "$manifest_url")" || true
+if [ "$code" != "200" ]; then
+  echo "manifest download failed (HTTP ${code:-000}):" >&2
+  cat "$work/manifest.tsv" >&2 2>/dev/null || true
+  exit 1
+fi
+printf 'code_http\tname\tpath\n' > "$results"
+awk -F '\t' -v OFS='\t' -v nolink="$results" '
+  { sub(/\r$/, "") }
+  $1 !~ /^[0-9]+$/ || NF < 3 { next }
+  FILENAME == ARGV[1] { url[($1 + 0) SUBSEP $2] = $3; next }
+  { k = ($1 + 0) SUBSEP $2
+    if (k in url) { print url[k], $2, $3; delete url[k] }
+    else print "NO_LINK", $2, $3 >> nolink }
+' "$work/manifest.tsv" "$paths" > "$work/jobs.tsv"
+tr '\t\n' '\0\0' < "$work/jobs.tsv" | xargs -0 -r -n 3 -P 4 bash -c '
+  url="$1"; name="$2"; path="$3"
+  p="${path//\\/\\\\}"; p="${p//\"/\\\"}"
+  for try in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    code="$(curl -sS -o /dev/null -w "%{http_code}" -F "file=@\"$p\"" "$url")" || true
+    [ "$code" = "503" ] || break
+    sleep 5
+  done
+  printf "%s\t%s\t%s\n" "${code:-000}" "$name" "$path"
+' _ >> "$results"
+awk -F '\t' 'NR > 1 { n[$1]++ } END { for (c in n) printf "%s: %d\n", c, n[c] }' "$results" >&2
+echo "details: $results" >&2
+"""
 
 
 def _verify(fields: dict, config: dict | None = None) -> None:
@@ -206,3 +268,51 @@ def register(mcp: FastMCP) -> None:
                      "Pennylane created. Single use; on `pennylane_rate_limited` wait "
                      "60 s and mint a new link."),
         }
+
+    @mcp.tool()
+    def pennylane_firm_upload_urls(company_id: int, items: list[ElementDeLot]) -> dict:
+        """Mint single-use upload links (15 min) for a BATCH of 1 to 100 local files
+        going into folders of one company's GED — the way to upload many files. The
+        links are NOT in the answer: they sit in a manifest that the provided
+        `script` downloads, so never copy links around. Steps:
+        (1) call this tool with up to 100 items;
+        (2) write `paths.tsv`, one line per file:
+            parent_folder_id<TAB>name<TAB>local path (same folder and name as the item);
+        (3) save `script` to a file and run it ONCE:
+            `bash <file> '<manifest_url>' paths.tsv` — it downloads the manifest,
+            uploads with at most 4 parallel streams and writes `results.tsv`
+            (http code<TAB>name<TAB>path; NO_LINK = no link for that line: refused
+            here, or already sent);
+        (4) check the folder with `pennylane_firm_tree`.
+        Each item is checked on its own: an invalid name (tabs and line breaks
+        included), a repeat within the batch, an unknown folder or a name already in
+        the folder lands in `refused`, the others still get a link. In results: 200 =
+        created; 409 = already present; 000 = not sent (unreadable file, network);
+        429 = Pennylane's rate limit: wait 60 s, then mint a new batch with ONLY the
+        failed lines. Big files on a slow uplink: use smaller batches, every upload
+        must start within the 15 minutes. Pennylane cannot delete, move or rename a
+        file through the API: an upload is final.
+        Token scope dms_files:all.
+
+        Args:
+            company_id: firm-side id, from `pennylane_firm_companies`.
+            items: 1 to 100 files, each {parent_folder_id: the target folder (never
+                the root), from `pennylane_firm_tree`; name: the file's name in the
+                GED, extension included}.
+        """
+        sub, org = _appelant()
+        try:
+            elements = [ElementDeLot.model_validate(i).model_dump() for i in items or []]
+            lot = relais.frapper_lot(_client(), sub, org, company_id, elements)
+        except Refus as e:
+            raise socle.vers_mcp(e) from e
+        if lot["manifest_url"] is None:
+            hint = "No file got a link: read `refused`, fix and mint again."
+        else:
+            hint = ("Write paths.tsv (parent_folder_id<TAB>name<TAB>local path, one "
+                    "line per file of `ready`), save `script` to a file, then run "
+                    f"once: bash <file> '{lot['manifest_url']}' paths.tsv — and read "
+                    "results.tsv. On 429 wait 60 s and mint a batch of the failed lines "
+                    "only.")
+        return {**lot, "max_bytes": relais.max_bytes(), "script": SCRIPT_LOT,
+                "hint": hint}

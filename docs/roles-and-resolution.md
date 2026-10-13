@@ -250,7 +250,9 @@ posée par une commande explicite — `scripts/seed_everyone_edges.py`, dry-run 
 chaîne : `grants_chain.platform_rung`, qui décide encore aujourd'hui pour les
 connecteurs basculés de L5, reste aveugle à elle — sans quoi un accès individuel révoqué
 sur une clé ouverte serait ressuscité. Et sous la chaîne, **une arête qui NOMME
-l'appelant prime, révoquée comprise** : c'est ce qui garde « la révocation est vraie ».
+l'appelant prime sur « tout le monde »**, et une révocation prime sur tout (règle
+ci-dessous) : une clé ouverte posée après une révocation, avec son arête « tout le
+monde », ne sert pas l'appelant révoqué.
 
 Quota daily per-grant : colonne `user_grants.daily_quota` (posé par l'admin
 au moment du grant). Si NULL, fallback sur env `OTO_MCP_QUOTA_<PROVIDER>_DAILY`
@@ -265,7 +267,44 @@ par cas. Modèle : clé membre (sub, org de contexte — ADR 0033, prio, no quot
 erreur. **Seuls les providers `platform`-éligibles au registre (`auth_modes`
 inclut `platform` : `serper/hunter/sirene/kaspr`) peuvent avoir une clé
 plateforme** — `resolve_api_key` **gate** le chemin platform-grant sur
-`auth_modes` (audit 2026-06-11). Les comptes **privés / byo-only**
+`auth_modes` (audit 2026-06-11).
+**Révoquer COUPE, re-poser ne touche pas aux accords (F-046).** `platform_revoke` inscrit
+le scope (`org:<id>` | `user:<sub>`) dans `meta.share_denied` de **chaque** clé
+plateforme du connecteur, et la lecture refuse dès qu'**une** clé porte le refus : une
+autre clé ouverte, ou une clé posée après la révocation, ne sert pas l'appelant révoqué.
+Accorder, révoquer et re-poser verrouillent les lignes lues (`FOR UPDATE`) : deux gestes
+concurrents ne s'effacent plus. Le refus
+prime sur tout (`access.platform_grant._platform_denied` — palier ouvert, `share_down`,
+`share_side`), y compris sur une clé `open` à `share_down` vide qu'un simple retrait de
+liste ne coupait pas ; seul `platform_grant` l'efface, et sur une clé ouverte à tous il
+n'y pose que le quota, sans la fermer. Retirer le dernier bénéficiaire d'une clé `open` à
+liste la passe `closed`, jamais « ouverte à tous ». Côté chaîne, révoquer un scope sans
+arête pose une arête née archivée (la chaîne refuse au lieu de se taire), et révoquer
+sans libellé archive les arêtes du scope sur **toutes** les clés du connecteur.
+**La révocation prime sur tout accord, quel que soit le grain** — chemin non chaîné
+(`_platform_denied`), L5 (`grants_chain.platform_rung`) et L7
+(`chain_resolution._platform_pick`) : un scope de l'appelant (`user:<sub>` ou
+`org:<org active>`) révoqué sur le connecteur le refuse, même s'il a un accord vivant
+sur l'autre scope. Côté chaîne, « révoqué » = des arêtes du scope, **aucune vivante**,
+sur l'ensemble des clés (`grants_chain.revoked_scopes`) : un `grant` archive l'arête
+qu'il remplace mais en pose une vivante du même scope, donc un remplacement n'est
+jamais lu comme une révocation, et seul un `grant` sur ce même scope lève le refus.
+La priorité `user:` > `org:` ne sert qu'à choisir le **quota** de l'arête gagnante. Une
+re-pose sous le même libellé est une **rotation** : `share_mode` et les clés d'accord de
+`meta` (`rate_limit`, `rate_limit_by`, `share_denied`) restent ; seule une clé NEUVE
+payante naît `closed`.
+**Une org ne vide pas seule une clé commune (F-051).** Au palier plateforme d'une
+exécution (`check_usage`), `access/platform_rate.enforce` compte un appel pour l'org
+dont la clé est consommée (`heritage.org_des_cles` ; `user:<sub>` sans org ; l'org du
+projet pour l'endpoint anonyme) dans la table `platform_key_rate`, par fenêtre FIXE
+sur l'horloge de la base. Au-delà de `OTO_PLATFORM_KEY_ORG_RATE_LIMIT` (120) appels par
+`OTO_PLATFORM_KEY_ORG_RATE_WINDOW_S` (60 s), surchargeable par porteur
+(`OTO_PLATFORM_KEY_ORG_RATE_OVERRIDES=serper=600,aiark=0`) :
+`OTO_PLATFORM_KEY_ORG_RATE=report` (défaut) journalise une fois par fenêtre,
+`enforce` refuse (`platform_key_org_rate_limited`, « réessayez, ou posez votre clé »),
+`off` ne compte rien. Un appel, pas des `units` : la limite protège le débit du
+fournisseur, le volume reste au quota du jour. Compteur en panne ⟹ appel servi, journalisé.
+Les comptes **privés / byo-only**
 (`attio/lemlist/pennylane/fullenrich/slack`) **n'ont PAS de clé plateforme** :
 les clés résiduelles du seed SOPS ont été supprimées, et le compte partagé de
 l'**équipe Otomata** (attio/lemlist) vit en **credentials de l'org Otomata

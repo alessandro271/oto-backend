@@ -77,33 +77,41 @@ def insert_grant(*, resource_id: str, grantor_kind: str, grantor_id: str,
                  constraints: Optional[dict] = None,
                  resource_kind: str = "connector_instance",
                  parent_id: Optional[int] = None, source: str = "manual",
-                 created_by: Optional[str] = None, conn=None) -> int:
+                 created_by: Optional[str] = None, revoked: bool = False,
+                 conn=None) -> int:
     """Pose une arête et rend son id. `conn` = connexion existante (la migration de
-    boot tourne DANS la transaction de schéma) ; None = connexion du pool."""
+    boot tourne DANS la transaction de schéma) ; None = connexion du pool.
+    `revoked` = l'arête naît ARCHIVÉE, dans la même écriture : elle n'est jamais lue
+    vivante, pas même entre deux requêtes."""
     sql = (
         "INSERT INTO grants (resource_kind, resource_id, grantor_kind, grantor_id, "
-        "grantee_kind, grantee_id, constraints, parent_id, source, created_by) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s) RETURNING id")
+        "grantee_kind, grantee_id, constraints, parent_id, source, created_by, "
+        "revoked_at) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, "
+        "CASE WHEN %s THEN NOW() END) RETURNING id")
     params = (resource_kind, resource_id, grantor_kind, str(grantor_id),
               grantee_kind, str(grantee_id), json.dumps(constraints or {}),
-              parent_id, source, created_by)
+              parent_id, source, created_by, revoked)
     if conn is not None:
         return int(conn.execute(sql, params).fetchone()["id"])
     with _connect() as c:
         return int(c.execute(sql, params).fetchone()["id"])
 
 
-def revoke_edges(resource_id: str, grantee_kind: str, grantee_id: str) -> int:
+def revoke_edges(resource_id: str, grantee_kind: str, grantee_id: str,
+                 conn=None) -> int:
     """ARCHIVE (jamais ne supprime, 0053-D7) les arêtes vivantes de ce couple.
     Rend le nombre d'arêtes révoquées. La révocation se voit à la lecture suivante,
-    sans rien propager : c'est l'argument du banc L0 contre tout cache."""
-    with _connect() as conn:
-        rows = conn.execute(
-            "UPDATE grants SET revoked_at = NOW() WHERE resource_id = %s "
-            "AND grantee_kind = %s AND grantee_id = %s AND revoked_at IS NULL "
-            "RETURNING id",
-            (resource_id, grantee_kind, str(grantee_id))).fetchall()
-    return len(rows)
+    sans rien propager : c'est l'argument du banc L0 contre tout cache.
+    `conn` = connexion existante (une révocation sur plusieurs clés tient en UNE
+    transaction) ; None = connexion du pool."""
+    sql = ("UPDATE grants SET revoked_at = NOW() WHERE resource_id = %s "
+           "AND grantee_kind = %s AND grantee_id = %s AND revoked_at IS NULL "
+           "RETURNING id")
+    params = (resource_id, grantee_kind, str(grantee_id))
+    if conn is not None:
+        return len(conn.execute(sql, params).fetchall())
+    with _connect() as c:
+        return len(c.execute(sql, params).fetchall())
 
 
 def revoke_unconstrained_edges(resource_ids: Iterable[str], conn) -> int:

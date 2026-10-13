@@ -393,11 +393,11 @@ def test_la_couche_est_bien_servie_par_lapp_racine():
     from oto_mcp.subdomain_project import HostDispatch
 
     racine = build_root_app(object(), object())
-    assert isinstance(racine.app.app, VersionHeader), (
-        "l'étiquetage de version n'est plus sous la garde de déconnexion et le "
-        "compteur de refus du transport")
-    assert isinstance(racine.app.app.app, ResponseCharset)
-    assert isinstance(racine.app.app.app.app, HostDispatch), (
+    assert isinstance(racine.app.app.app, VersionHeader), (
+        "l'étiquetage de version n'est plus sous la garde de déconnexion, la limite "
+        "de débit et le compteur de refus du transport")
+    assert isinstance(racine.app.app.app.app, ResponseCharset)
+    assert isinstance(racine.app.app.app.app.app, HostDispatch), (
         "posée sous le dispatch, elle raterait l'app anonyme des sous-domaines")
 
 
@@ -431,3 +431,12 @@ def test_len_tete_est_lisible_par_un_navigateur():
 
     entetes = _cors_headers(_allowed_origins()[0])
     assert "X-Oto-Version" in entetes["Access-Control-Expose-Headers"]
+
+
+def test_retry_after_est_lisible_par_un_navigateur():
+    """Un refus `route_busy` (503) ou de débit (429) porte `Retry-After` : sans
+    exposition CORS, le front ne peut pas le lire et rafale à l'aveugle."""
+    from oto_mcp.api.base import _allowed_origins, _cors_headers
+
+    entetes = _cors_headers(_allowed_origins()[0])
+    assert "Retry-After" in entetes["Access-Control-Expose-Headers"]

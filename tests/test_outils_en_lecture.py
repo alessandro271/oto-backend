@@ -24,6 +24,13 @@ _ECRIT = re.compile(r"(^|_)(send|post|push|compose|create|update|delete|write|se
                     r"cancel|pause|resume|connect|disconnect|reveal)(_|$)")
 
 
+#: Noms où le mot d'écriture est un NOM, pas un verbe : `linkedin_unipile_post` désigne
+#: LA publication (#1189 : publier vit dans `linkedin_unipile_publish` ; l'outil repasse
+#: `LECTURE` au retrait de ses ops d'envoi dépréciées, le 10/12/2026 — d'ici là il est
+#: déclaré `ENVOI` et ses ops restent jugées une à une ci-dessous). Liste fermée.
+_NOM_PAS_VERBE = frozenset({"linkedin_unipile_post"})
+
+
 async def _outils():
     return await static_mcp().list_tools(run_middleware=False)
 
@@ -45,7 +52,7 @@ async def test_un_outil_declare_en_lecture_n_a_pas_la_forme_d_un_ecrivain():
             continue
         if namespace_of(t.name) in contrat.NAMESPACES_A_MODELE:
             fautifs.append(f"{t.name} : connecteur à modèle")
-        if _ECRIT.search(t.name):
+        if _ECRIT.search(t.name) and t.name not in _NOM_PAS_VERBE:
             fautifs.append(f"{t.name} : verbe d'écriture dans le nom")
         fautifs += [f"{t.name} : op d'écriture `{o}`" for o in _ops(t) if _ECRIT.search(o)]
     assert not fautifs, fautifs
@@ -65,6 +72,8 @@ async def test_aucun_outil_de_plateforme_ni_ecrivain_connu_n_est_declare():
     servis = {t.name: t for t in await _outils()}
     for nom in ("email_send", "slack_post_message", "gmail_compose", "http_post",
                 "lemlist_push_rows", "hubspot_push_rows", "routine_fire", "oto_call",
-                "data_write"):
+                "data_write", "whatsapp_send", "linkedin_unipile_send",
+                "linkedin_unipile_invite", "linkedin_unipile_publish", "chat_send",
+                "teams_send", "chat_message", "teams_message"):
         if nom in servis:
             assert not en_lecture(servis[nom]), nom

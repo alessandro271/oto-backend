@@ -43,7 +43,8 @@ def stub_authz(monkeypatch, *, org_id: int = 35, role: str = "member") -> None:
 def call(key: str, *, path_params: Optional[dict] = None, body=None,
          query: bytes = b"", sub: str = "u-1", no_body: bool = False,
          binding_index: int = 0,
-         headers: Optional[list] = None) -> tuple[int, dict]:
+         headers: Optional[list] = None,
+         client: Optional[tuple] = None) -> tuple[int, dict]:
     """Joue la route de la capacité `key` et rend `(code HTTP, corps décodé)`.
 
     `no_body=True` = requête SANS corps du tout (le geste de supervision du dashboard,
@@ -51,7 +52,9 @@ def call(key: str, *, path_params: Optional[dict] = None, body=None,
 
     `headers` = en-têtes ASGI bruts `[(b"nom", b"valeur")]`, pour les capacités qui
     lisent l'empreinte du client (IP réelle, user-agent) : c'est l'adaptateur qui la
-    pose, donc elle ne se teste qu'en passant par ici.
+    pose, donc elle ne se teste qu'en passant par ici. `client` = le pair TCP
+    `(hôte, port)` : sans lui, aucune adresse (les en-têtes ne se lisent que derrière
+    un proxy de confiance, `client_trace.pick_ip`).
     """
     capability = cap(key)
     binding = capability.rest_bindings()[binding_index]
@@ -90,7 +93,7 @@ def call(key: str, *, path_params: Optional[dict] = None, body=None,
 
     req = Request({"type": "http", "method": binding.verb, "path": binding.path,
                    "headers": headers or [], "query_string": query,
-                   "path_params": path_params or {}}, _receive)
+                   "path_params": path_params or {}, "client": client}, _receive)
     rep = asyncio.run(handler(req))
     return rep.status_code, json.loads(bytes(rep.body))
 

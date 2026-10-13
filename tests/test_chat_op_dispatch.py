@@ -1,9 +1,11 @@
 """Dispatch `op=` des tools `chat_*` (ADR 0047 §Amendement, appliqué au produit
-Google Chat le 2026-08-11 : 3 tools → 2).
+Google Chat le 2026-08-11 : 3 tools → 2 ; puis #1231, le 13/10/2026 : poster sort du
+lecteur vers `chat_send` — 3 tools, l'ancien `chat_message(op="send")` servi par
+`chat_send` jusqu'au 10/12/2026, cf. `test_chat_teams_transition_envoi_1231.py`).
 
 Ce que ce fichier verrouille : la SURFACE. Le seul test voisin (`test_chat_error.py`)
 exerce la normalisation d'un `HttpError` — jamais le câblage tool → méthode du client.
-Or ce module **ÉCRIT** : `op="send"` poste pour de bon dans un espace Google Chat réel,
+Or ce module **ÉCRIT** : `chat_send` poste pour de bon dans un espace Google Chat réel,
 sous l'identité de l'utilisateur. Une op mal câblée n'échoue pas au boot, elle publie.
 D'où, pour chaque op : la méthode client appelée ET la preuve qu'aucune des voisines
 dangereuses ne l'est, le fait que le défaut soit une LECTURE, le refus explicite d'une
@@ -99,12 +101,12 @@ def test_message_list_requires_the_space(client):
     client.list_messages.assert_not_called()
 
 
-# --- messages : ÉCRITURE (poste dans un espace Google Chat réel) ---------------
+# --- chat_send : ÉCRITURE (poste dans un espace Google Chat réel) -------------
 
 def test_message_send_to_a_space_posts_only_there(client):
-    """op="send" + `space` → `send(space, text)` et RIEN d'autre : ni DM (qui
-    partirait à un tiers), ni lecture."""
-    _tool("chat_message")(op="send", space="spaces/A", text="bonjour")
+    """`space` → `send(space, text)` et RIEN d'autre : ni DM (qui partirait à un
+    tiers), ni lecture."""
+    _tool("chat_send")(space="spaces/A", text="bonjour")
     client.send.assert_called_once()
     assert client.send.call_args.args == ("spaces/A", "bonjour")
     client.send_dm.assert_not_called()
@@ -113,9 +115,9 @@ def test_message_send_to_a_space_posts_only_there(client):
 
 
 def test_message_send_to_a_user_resolves_the_dm_and_nothing_else(client):
-    """op="send" + `user` → `send_dm(user, text)` (qui résout l'espace DM côté
-    client) : `send` ne doit PAS être appelée avec un email en guise d'espace."""
-    _tool("chat_message")(op="send", user="marie@exemple.fr", text="bonjour")
+    """`user` → `send_dm(user, text)` (qui résout l'espace DM côté client) : `send`
+    ne doit PAS être appelée avec un email en guise d'espace."""
+    _tool("chat_send")(user="marie@exemple.fr", text="bonjour")
     client.send_dm.assert_called_once()
     assert client.send_dm.call_args.args == ("marie@exemple.fr", "bonjour")
     client.send.assert_not_called()
@@ -128,22 +130,27 @@ def test_message_send_to_a_user_resolves_the_dm_and_nothing_else(client):
 ])
 def test_message_send_refuses_an_ambiguous_destination(client, kwargs):
     """Ni deviné, ni « les deux » : un envoi dont la destination est ambiguë est
-    refusé AVANT d'atteindre Google — sinon le message part au mauvais endroit."""
+    refusé AVANT d'atteindre Google — sinon le message part au mauvais endroit — et
+    avant toute résolution de compte."""
     with pytest.raises(McpError, match="either"):
-        _tool("chat_message")(op="send", text="bonjour", **kwargs)
+        _tool("chat_send")(text="bonjour", **kwargs)
     client.send.assert_not_called()
     client.send_dm.assert_not_called()
+    assert client.accounts == []
 
 
 @pytest.mark.parametrize("dest", [{"space": "spaces/A"}, {"user": "marie@exemple.fr"}])
 def test_message_send_requires_the_text(client, dest):
-    """`text` n'est plus exigé par la signature (il l'était sur l'ex-`chat_send`) :
-    c'est ce check runtime qui interdit de poster un message vide."""
-    with pytest.raises(McpError, match="text") as e:
-        _tool("chat_message")(op="send", **dest)
-    assert "op='send'" in str(e.value)
+    """`text` est exigé par la signature de `chat_send`, mais l'ancien
+    `chat_message(op="send")` l'appelle tel quel, sans validation : c'est ce check
+    runtime qui interdit de poster un message vide."""
+    for vide in (None, ""):
+        with pytest.raises(McpError, match="text") as e:
+            _tool("chat_send")(text=vide, **dest)
+        assert "chat_send" in str(e.value)
     client.send.assert_not_called()
     client.send_dm.assert_not_called()
+    assert client.accounts == []
 
 
 # --- refus ---------------------------------------------------------------------
@@ -154,8 +161,8 @@ def test_unknown_op_is_refused_with_the_allowed_list(client):
     jamais sur l'envoi."""
     with pytest.raises(McpError, match="op must be") as e:
         _tool("chat_message")(op="metadata", space="spaces/A", text="bonjour")
-    assert "'list'" in str(e.value) and "'send'" in str(e.value)
-    assert client.mock_calls == []
+    assert "'list'" in str(e.value) and "`chat_send`" in str(e.value)
+    assert client.mock_calls == [] and client.accounts == []
 
 
 def test_no_op_reaches_a_write_by_accident(client):
@@ -171,28 +178,31 @@ def test_no_op_reaches_a_write_by_accident(client):
 
 # --- compte ciblé ---------------------------------------------------------------
 
-def test_account_is_forwarded_by_both_tools(client):
+def test_account_is_forwarded_by_every_tool(client):
     """Multi-compte : `account` doit atteindre la résolution de credentials, sinon
     on lirait/posterait depuis le mauvais compte Google."""
     client.list_spaces.return_value = []
     client.list_messages.return_value = []
+    client.send.return_value = {"name": "spaces/A/messages/1"}
     _tool("chat_spaces")(account="alexis@otomata.tech")
     _tool("chat_message")(space="spaces/A", account="alexis@otomata.tech")
-    assert client.accounts == ["alexis@otomata.tech", "alexis@otomata.tech"]
+    _tool("chat_send")(space="spaces/A", text="ok", account="alexis@otomata.tech")
+    assert client.accounts == ["alexis@otomata.tech"] * 3
 
 
 # --- inventaire de surface ------------------------------------------------------
 
-def test_the_product_exposes_exactly_two_tools(client):
-    """3 → 2, zéro capacité perdue : `chat_spaces` (découverte, filtre `space_type`,
-    aucun `space`) reste SEUL — ses params ne recouvrent pas ceux de `chat_message`."""
+def test_the_product_exposes_exactly_three_tools(client):
+    """`chat_spaces` (découverte, filtre `space_type`, aucun `space`) reste SEUL — ses
+    params ne recouvrent pas ceux de `chat_message` ; lire et poster sont deux outils
+    (#1231)."""
     from fastmcp import FastMCP
     from oto_mcp.tools import chat as C
 
     m = FastMCP("t")
     C.register(m)
     names = {t.name for t in asyncio.run(m.list_tools())}
-    assert names == {"chat_spaces", "chat_message"}
+    assert names == {"chat_spaces", "chat_message", "chat_send"}
 
 
 def test_nothing_is_required_by_the_schema_so_op_gates_everything(client):
@@ -207,3 +217,14 @@ def test_nothing_is_required_by_the_schema_so_op_gates_everything(client):
     msg = asyncio.run(m.get_tool("chat_message")).parameters
     assert msg.get("required", []) == []
     assert msg["properties"]["op"]["default"] == "list"
+
+
+def test_chat_send_requires_its_text_in_the_schema(client):
+    """L'écrivain exige `text` dès la signature ; la destination (l'un OU l'autre) reste
+    au contrôle runtime."""
+    from fastmcp import FastMCP
+    from oto_mcp.tools import chat as C
+
+    m = FastMCP("t")
+    C.register(m)
+    assert asyncio.run(m.get_tool("chat_send")).parameters["required"] == ["text"]

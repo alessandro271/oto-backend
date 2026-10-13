@@ -55,6 +55,8 @@ def _need(value, name: str, op: str):
     return value
 
 
+_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
 # Export formats offered to the agent (a single word, not a mime to copy out).
 _EXPORT_MIME = {
     "markdown": "text/markdown",
@@ -64,6 +66,9 @@ _EXPORT_MIME = {
     "html": "text/html",
     "pdf": "application/pdf",
     "csv": "text/csv",
+    # A Sheets workbook with ALL its tabs (csv exports the first one only). Binary:
+    # served as a signed URL, never rendered inline (signal #1376, 10/10/2026).
+    "xlsx": _XLSX,
 }
 
 # Default per SOURCE type: a spreadsheet has no markdown, nor does a presentation.
@@ -73,6 +78,18 @@ _DEFAULT_EXPORT_BY_SOURCE = {
     "application/vnd.google-apps.spreadsheet": "text/csv",
     "application/vnd.google-apps.presentation": "text/plain",
 }
+
+
+def _xlsx_url(data: bytes, filename: str, sub: str) -> dict:
+    """An exported workbook, deposited privately and served as a signed URL."""
+    from .. import media_store
+    name = filename if filename.lower().endswith(".xlsx") else f"{filename}.xlsx"
+    try:
+        url = media_store.upload_private("drive-exports", sub, data, _XLSX, name)
+    except media_store.MediaError as e:
+        raise _bad(f"xlsx export: temporary storage unavailable ({e}).") from None
+    return {"filename": name, "mimeType": _XLSX, "size": len(data),
+            "encoding": "url", "url": url, "expires_in": media_store.presign_expiry()}
 
 
 def _client_for_user(account: Optional[str] = None):
@@ -157,7 +174,7 @@ def register(mcp: FastMCP) -> None:
           download (403 "Only files with binary content can be downloaded"), its
           content comes out of an EXPORT — that's this op. Use it to actually READ
           meeting notes ("… - Notes par Gemini"), specs, or any Doc you found with
-          op="list". `format` = markdown | text | html | pdf | csv ; omit it for a
+          op="list". `format` = markdown | text | html | pdf | csv | xlsx ; omit it for a
           sensible default per type (Doc→markdown, Sheet→csv (first sheet),
           Slides→text). Returns {filename, mimeType, encoding, content|url, …}:
           text formats come back INLINE, `pdf` as its extracted text + `raw_url`.
@@ -183,7 +200,7 @@ def register(mcp: FastMCP) -> None:
             query: op="list" — raw Drive query (e.g. "name contains 'report'",
                 "mimeType='application/pdf'").
             page_size: op="list" — max results (paginates).
-            format: op="export" — markdown | text | html | pdf | csv. Omit for a
+            format: op="export" — markdown | text | html | pdf | csv | xlsx. Omit for a
                 sensible default per type (Doc→markdown, Sheet→csv (first sheet),
                 Slides→text).
             name: op="create_folder" — the folder name.
@@ -245,6 +262,11 @@ def register(mcp: FastMCP) -> None:
             except Exception as e:
                 raise _bad(str(e))
             sub = access.current_user_sub_or_raise()
+            if mime == _XLSX:
+                # The agent asked for a FILE to pass on (a workbook to send), not for
+                # its content: the generic renderer would read it back as CSV. Signed
+                # URL, with the extension the receiver expects.
+                return await asyncio.to_thread(_xlsx_url, f["data"], f["filename"], sub)
             try:
                 return await asyncio.to_thread(
                     file_content.render_for_agent, f["data"], f["filename"], mime,

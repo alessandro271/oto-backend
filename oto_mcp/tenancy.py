@@ -284,6 +284,12 @@ def build(primary_issuer: str, drain_issuers: Iterable[str] = (),
         iss = normalize_issuer((row or {}).get("issuer"))
         if not iss:
             continue
+        # La ligne du tenant primaire qui redit l'émetteur de l'env (ou un drain) : rien
+        # à refuser, l'env le tient déjà. Le cas d'une instance dont le tenant était un
+        # tiers avant de devenir primaire : sa ligne garde son émetteur et alertait à
+        # chaque démarrage. Un émetteur DIFFÉRENT reste un refus, alerté.
+        if slug == primaire and entries.get(iss) is not None and entries[iss].slug == primaire:
+            continue
         if not _SLUG_RE.match(slug) or slug == primaire:
             _refus(
                 "registre d'émetteurs : slug %r refusé (invalide, ou réservé au "

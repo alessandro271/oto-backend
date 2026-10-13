@@ -13,8 +13,9 @@ arguments bruts, vrai PostgreSQL, runs réels dans `runs`) :
   1. sans `_org`, dans un run d'org X, par un sub dont la maison est Y → résolu en X ;
      et le journal stampe X (la même expression que le sink, dans la vraie chaîne) ;
   2. `_org=Z` explicite garde la priorité — l'agent multi-org ne change pas ;
-  3. un sub qui n'est pas (plus) membre de X ne gagne rien : refus NOMMÉ, jamais un
-     repli silencieux sur la maison ;
+  3. le run appartient à son propriétaire (F-014, 12/10/2026) : un collègue membre de X,
+     comme un étranger, ne gagne rien avec son `_run_id` — refus NOMMÉ, qui ne dit pas
+     l'org, jamais un repli silencieux sur la maison ;
   4. hors run, la maison reste le défaut ; un run inconnu de `runs` (ou sans org) ne
      pose rien — `_run_id` y reste ce qu'il était, un identifiant de corrélation ;
   5. une lecture de `runs` par run, pas une par appel ni une par seam.
@@ -28,13 +29,15 @@ import pytest
 
 SUB = "sub-runner-639"
 ETRANGER = "sub-etranger-639"
+COLLEGUE = "sub-collegue-639"
 
 
 @pytest.fixture(scope="module")
 def orgs(live) -> dict:
     """Trois orgs RÉELLES du même sub — `maison` (active, comme l'org 2 en prod),
-    `travail` (celle du run, comme l'org 226) et `autre` (pour l'axe explicite) — et
-    un étranger qui a sa propre org, membre ni de `travail` ni d'`autre`."""
+    `travail` (celle du run, comme l'org 226) et `autre` (pour l'axe explicite) — un
+    collègue membre de `travail`, et un étranger qui a sa propre org, membre ni de
+    `travail` ni d'`autre`."""
     from oto_mcp import org_store
     maison = org_store.create_org("Maison 639", created_by=SUB)
     travail = org_store.create_org("Travail 639", created_by=SUB)
@@ -43,6 +46,7 @@ def orgs(live) -> dict:
         org_store.add_org_member(o, SUB)
     assert org_store.set_active_org(SUB, maison)
     assert org_store.get_active_org(SUB) == maison
+    org_store.add_org_member(travail, COLLEGUE)
     ailleurs = org_store.create_org("Ailleurs 639", created_by=ETRANGER)
     org_store.add_org_member(ailleurs, ETRANGER)
     assert org_store.set_active_org(ETRANGER, ailleurs)
@@ -216,20 +220,25 @@ def test_l_axe_org_explicite_garde_la_priorite(surface):
     assert f"org {surface['autre']}" in msg and f"`_org={surface['travail']}`" in msg, msg
 
 
-# ── 3. non-membre de l'org du run : refus nommé ───────────────────────────────
+# ── 3. le run d'autrui : refus nommé, qui ne dit pas l'org ────────────────────
 
-def test_un_sub_qui_n_est_pas_membre_de_l_org_du_run_est_refuse_nommement(orgs, monkeypatch):
-    """Le jeton d'un run n'est pas un axe de droits : un tiers qui le connaît n'entre
-    pas dans l'org du run. Et il n'est pas non plus renvoyé en silence vers sa maison —
-    le refus dit l'org, et qu'il n'en est pas membre."""
-    _acteur(monkeypatch, ETRANGER)
+@pytest.mark.parametrize("tiers", [ETRANGER, COLLEGUE])
+def test_le_run_d_autrui_est_refuse_nommement(orgs, monkeypatch, tiers):
+    """Le jeton d'un run n'est pas un axe de droits : un tiers qui le connaît — étranger,
+    ou collègue membre de l'org du run (F-014, 12/10/2026) — n'y entre pas, avec ou sans
+    `_org=`. Et il n'est pas non plus renvoyé en silence vers sa maison — le refus dit
+    que le run n'est pas le sien, sans dire où il se déroule."""
+    _acteur(monkeypatch, tiers)
     ns, ns_id = _table(orgs["travail"])
     run = _run(orgs["travail"])
 
-    msg = _refus({"datastore": ns, "id": "r0", "row": {"statut": "vole"},
-                  "_run_id": run})
-    assert f"org {orgs['travail']}" in msg and "membre" in msg, msg
-    assert run in msg, msg
+    for axe in ({}, {"_org": orgs["travail"]}):
+        if axe and tiers == ETRANGER:
+            continue  # l'étranger est refusé par l'axe `_org=` lui-même
+        msg = _refus({"datastore": ns, "id": "r0", "row": {"statut": "vole"},
+                      "_run_id": run, **axe})
+        assert "pas le tien" in msg and run in msg, msg
+        assert f"org {orgs['travail']}" not in msg and "Travail 639" not in msg, msg
     assert _valeur(ns_id, "r0", "statut") == "a_faire"
 
 

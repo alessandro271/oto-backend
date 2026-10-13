@@ -37,9 +37,19 @@ _DEBT_FILE = pathlib.Path(__file__).resolve().parent / "tool_output_debt.txt"
 _PAGINATION = frozenset({"page", "size", "limit", "cursor", "page_size", "per_page",
                          "offset"})
 
-# Un de ces paramètres ⟹ l'appelant peut projeter, et le défaut est la vue resserrée
-# (`full=True` rend le brut, ADR 0047).
-_PROJECTION_PARAMS = frozenset({"fields", "full"})
+# `full` ⟹ l'appelant peut projeter, et le défaut est la vue resserrée (`full=True` rend
+# le brut, ADR 0047).
+# `fields` ⟹ seulement s'il NOMME des clés à garder (une liste, ou une chaîne de noms).
+# ⚠️ Jusqu'au 2026-10-12 le seul NOM `fields` suffisait, et il blanchissait 17 outils
+# qui ne retirent rien : chez eux `fields` est le CORPS d'une écriture (un objet
+# `{clé: valeur}` — github, leexi, productlane, lemlist_lead, brevo_campaign) ou les
+# champs où CHERCHER (pipedrive_search). Un homonyme n'est pas une projection : c'est
+# la forme du paramètre qui le dit, pas son nom.
+_FIELDS_QUI_NE_PROJETTENT_PAS = {
+    # Une chaîne de noms, comme une vraie projection — mais ce sont les champs où
+    # l'amont CHERCHE le terme, pas ceux qu'il rend. La forme ne peut pas le dire.
+    "pipedrive_search": "champs où chercher, pas champs rendus",
+}
 
 # Un de ces appels dans le CORPS de l'outil ⟹ il retire quelque chose avant de rendre.
 # ⚠️ Confrontés à l'APPELÉ (`_appeles`), jamais au texte de la source : cf. `_projette`.
@@ -52,7 +62,14 @@ _PROJECTION_APPELS = ("output_projection", "_shape(", "summarize(", "_project(",
 # le critère d'origine lisait la source en entier, prose comprise, et blanchissait
 # deux outils qui ne projettent rien (cf. `_appeles`). Un plafond posé sur un critère
 # faux garantit la décroissance d'un chiffre qui ne décrit personne.
-_PLAFOND = 197
+#
+# ⚠️ **Seconde et dernière remontée, 196 → 213 le 2026-10-12** : même cause qu'en
+# septembre, un critère qui blanchissait. Le paramètre `fields` comptait comme projection
+# par son seul nom ; 17 outils où il désigne un corps d'écriture ou un filtre de
+# recherche sont désormais nommés dans la dette (cf. `_fields_projette`).
+# 213 → 210 le même jour : github_repos, github_issues, github_pulls payés (index par
+# défaut, `full=True` le brut — `tools/github_index.py`).
+_PLAFOND = 210
 
 
 def _debt() -> set[str]:
@@ -114,8 +131,18 @@ def _appeles(fn) -> set[str] | None:
             if isinstance(n, ast.Call)}
 
 
+def _fields_projette(tool) -> bool:
+    """`fields` NOMME-t-il des clés à garder ? Un objet est un corps à écrire, jamais une
+    projection ; une liste ou une chaîne de noms en est une, sauf homonyme déclaré."""
+    schema = (tool.parameters or {}).get("properties", {}).get("fields")
+    if schema is None or tool.name in _FIELDS_QUI_NE_PROJETTENT_PAS:
+        return False
+    variantes = schema.get("anyOf") or [schema]
+    return not any(v.get("type") == "object" for v in variantes)
+
+
 def _projette(tool) -> bool:
-    if _PROJECTION_PARAMS & set((tool.parameters or {}).get("properties", {})):
+    if "full" in (tool.parameters or {}).get("properties", {}) or _fields_projette(tool):
         return True
     appeles = _appeles(tool.fn)
     if appeles is None:
@@ -166,10 +193,11 @@ def test_la_dette_ne_fait_que_baisser():
 
 # ── Le critère lui-même : ce qu'il doit refuser de lire ────────────────────────
 class _Outil:
-    """Un outil minimal : `_projette` ne lit que `parameters` et `fn`."""
+    """Un outil minimal : `_projette` ne lit que `name`, `parameters` et `fn`."""
 
-    def __init__(self, fn):
-        self.parameters = {"properties": {"limit": {}}}
+    def __init__(self, fn, *, name="outil_de_banc", **props):
+        self.name = name
+        self.parameters = {"properties": {"limit": {}, **props}}
         self.fn = fn
 
 
@@ -221,3 +249,24 @@ def resolve_project_id(x):
 def _shape_submissions_page(x):
     """Idem : `_shape_submissions_page(` ne contient pas `_shape(`."""
     return x
+
+
+def _liste_brute(limit: int = 10, fields=None):
+    """Cible des bancs `fields` ci-dessous : ne retire rien."""
+    return {"rows": []}
+
+
+def test_un_fields_homonyme_n_est_pas_une_projection():
+    """`fields` comptait par son seul nom : 17 outils servis étaient blanchis alors que
+    leur `fields` est le corps d'une écriture ou le champ d'une recherche."""
+    corps = {"anyOf": [{"type": "object", "additionalProperties": True},
+                       {"type": "null"}]}
+    noms = {"anyOf": [{"type": "array", "items": {"type": "string"}}, {"type": "null"}]}
+    assert not _projette(_Outil(_liste_brute, fields=corps)), (
+        "un `fields` objet est un corps à écrire, pas une projection")
+    assert _projette(_Outil(_liste_brute, fields=noms)), (
+        "un `fields` qui nomme des clés reste une projection")
+    assert not _projette(_Outil(_liste_brute, name="pipedrive_search",
+                                fields={"type": "string"})), (
+        "un homonyme déclaré ne projette pas, même sous la forme d'une chaîne de noms")
+    assert _projette(_Outil(_liste_brute, full={"type": "boolean"}))

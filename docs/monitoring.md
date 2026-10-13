@@ -33,7 +33,10 @@ l'écriture**), `ok`, `error`, `error_kind`, `duration_ms`, `created_at`.
 ### `error_kind` — le résultat de la taxonomie, en colonne (oto#25 lot b1)
 
 `error` est un texte brut tronqué (`str(e)[:500]`) : lisible par un humain, pas
-filtrable. `error_kind` porte le `.code` que rend `error_taxonomy.classify(exc)` sur
+filtrable. Il passe par `journal_secrets.masquer_urls` dans `db.insert_tool_call` (seul
+point d'écriture) : identité d'URL et valeur des clés de query secrètes masquées — un
+message amont recopie parfois une URL à clé (F-049, `connectUrl` Browserbase). Sentry
+applique le même masque aux messages d'exception (`_before_send`). `error_kind` porte le `.code` que rend `error_taxonomy.classify(exc)` sur
 l'exception CAPTURÉE (ex. `not_authorized` sur un 401/403 amont, `upstream_timeout`,
 `internal`…) — écrit par `calllog._record` (via `calllog._error_kind`) sur un échec,
 `NULL` sur un succès et sur tout l'historique antérieur à ce lot (non
@@ -323,6 +326,25 @@ Lecture : `oto_admin_monitoring op=transport` / `GET /api/admin/monitoring/trans
 ⚠️ **Un volume non nul est le régime NORMAL, pas une panne.** Toutes les adresses
 sources mesurées le 11/09/2026 étaient dans `160.79.106.0/24`, la plage de sortie de
 claude.ai — aucune de nos machines. Ce sont des clients tiers qui parlent mal.
+
+**La même lecture porte la limite de débit applicative** (F-025, champ `rate_limit`) :
+`oto_mcp/limite_debit_mesure.py` écrit AU PLUS une ligne par classe et par minute
+(`kind='debit'`, `tool='debit:<classe>'`, compteurs `allowed` / `would_refuse` /
+`refused` et `peak_pct` dans `args`, environnement comme ci-dessus, jamais une adresse
+ni un jeton), en tâche de fond. En mode `report`, `would_refuse` est ce qu'`enforce`
+couperait : c'est le chiffre sur lequel on règle les bornes avant de basculer
+(`docs/rest-api.md` §Limite de débit applicative).
+
+**Et QUI serait coupé** (#1232, champ `rate_limit_top`) : `oto_mcp/limite_refus_top.py`
+cumule, par jour UTC, environnement, limiteur (`debit` = la limite de débit ci-dessus,
+`platform_rate` = l'équité d'une clé plateforme, F-051) et classe (le seau, ou le
+connecteur), les refus qu'`enforce` servirait, par clé HACHÉE — empreinte du jeton
+(celle des lignes de journal `jeton abcd1234…`), de l'adresse, ou du porteur
+`org:<id>` / `user:<sub>` ; jamais la valeur en clair. On identifie une clé en calculant
+l'empreinte d'un candidat (`limite_refus_top.empreinte("org:42")`). Table
+`limite_refus_jour`, écrite une fois par minute close sur un fil à part, au plus 1 000
+clés par limiteur et par minute (au-delà, la ligne `*`), purgée au-delà de trente jours.
+La lecture rend les dix premières clés par (jour, environnement, limiteur).
 
 Pas la connexion d'un connecteur, pas le `tools/list`. (Ce paragraphe disait « uniquement
 les invocations d'outils » jusqu'au 2026-08-29 : les appels `/api/*` y sont écrits depuis
@@ -847,7 +869,9 @@ JSON-RPC en **HTTP 200**, invisible à l'intégration Starlette, donc capturée 
 l'exception est vivante (vrai traceback, tag `mcp.tool` + `user.id=sub`). RGPD :
 `send_default_pii=False` **et** `include_local_variables=False`. `before_send`
 **droppe les 4xx amont** (`HTTP 4xx` d'une API tierce = input rejeté, pas un bug
-backend). Env box : `OTO_SENTRY_{DSN,ENV,RELEASE,TRACES_SAMPLE_RATE}` ; région **EU**
+backend). Release : `OTO_SENTRY_RELEASE` s'il est posé, sinon l'étiquette de la version
+servie (`v1.2.3+6d5bf16b`, celle de `/api/version`) — une instance montée par le lanceur
+n'a pas à la recopier. Env box : `OTO_SENTRY_{DSN,ENV,RELEASE,TRACES_SAMPLE_RATE}` ; région **EU**
 `de.sentry.io` (org slug `otomata-vz`). Surveillance/triage = guide oto
 `surveillance-erreurs` (token API en SOPS `sentry_api_token`).
 

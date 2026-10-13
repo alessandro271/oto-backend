@@ -19,7 +19,7 @@ from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import credentials_store, org_store, providers
-from . import cascade, quotas, tenant_budget
+from . import cascade, platform_rate, quotas, tenant_budget
 from .resolved_credential import ResolvedCredential
 
 
@@ -103,6 +103,9 @@ def _resolve_credential_anon(provider: str, want: str, org_id: Optional[int],
     # the project's owner org must hold the live entitlement.
     if check_usage:
         quotas.exiger_option_payante(provider, None, org_id)
+        # Per-org fairness on the shared key (F-051): the anonymous visitors of a
+        # published project draw on their owner org's share, like its members.
+        platform_rate.enforce(provider, None, org_id)
     # Same rule as at the platform rung of the identified path: the secret stays
     # in the `CascadeRung` (redacted repr), never in a bare dict of this frame.
     return ResolvedCredential(provider, win.payload["secret"], True, "platform",

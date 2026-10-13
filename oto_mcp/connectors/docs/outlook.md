@@ -12,19 +12,20 @@ on the "Outlook" card, click **Authorize Outlook** and choose your work account.
 `outlook_message(op=search|get|attachment|drafts|folders|archive|trash|move)` and `outlook_compose`, under the account the call names (`_account="me@fabrikam.com"`), otherwise the default one.
 - "this week's unread emails" → `outlook_message(unread=true)`; "the invoices from Jane" → `outlook_message(query="from:jane invoice")`
 - "read this email" → `outlook_message(op="get", message_id="…")`: its text and its attachments; "open the PDF attached" → `op="attachment"` with `attachment_id` or `filename` — a PDF or a text comes back as text, an Excel as CSV
-- "draft a reply" → `outlook_compose(reply_to="…", body="…")`; "send it" → the same with `mode="send"`
+- "draft a reply" → `outlook_compose(reply_to="…", body="…")`, attachments and inline images accepted; "send it" → the same with `mode="send"`
 - "write to Marc with the contract" → `outlook_compose(to=["marc@…"], subject="…", body="…", attachments=[{"kind":"drive","file_id":"…"}])` — a draft unless `mode="send"`
+- "send this HTML newsletter" → `outlook_compose(to=[…], subject="…", html="<html>…")`, or `html_source={"kind":"project_file",…}` for an HTML file: sent exactly as given, nothing rewritten. An image shown in it is an attachment with `"content_id":"logo"`, referenced as `<img src="cid:logo">`; Outlook's rendering has its limits, see the oto guide "Mails HTML compatibles Outlook" (`outlook-html`)
 - "archive the newsletters" → `outlook_message(op="archive", message_ids=[…])`; `op="trash"` moves to Deleted Items, `op="move"` to any folder (`op="folders"` lists them)
 - each response is a trimmed view; `full=true` returns the complete Microsoft Graph object, `fields=[…]` keeps only some keys of each message
 
 ## note — what is misleading
 
-- ⚠️ **a draft is the default**: `outlook_compose` sends only with `mode="send"`. Its answer says `kind`: `draft` (saved in Drafts, nothing left) or `sent`
+- ⚠️ **a draft is the default**: `outlook_compose` sends only with `mode="send"`. Its answer says `kind`: `draft` (saved in Drafts, nothing left) or `sent` — with the link of the sent message, unless Microsoft has not filed it in Sent Items yet (`webLink` null and a `note`: the mail did leave)
 - ⚠️ **no signature is added**: Microsoft does not let an application read your Outlook signature. Write the sign-off in the body
-- ⚠️ **a moved message changes id** (archive, trash, move): the answer gives `new_id` — the old id no longer exists
+- a message keeps its id when it is moved (archive, trash, move) or sent: the id an answer gives stays valid
 - a search (`query`) cannot be combined with `unread`: Microsoft refuses it. Put the condition in the query, or list without one
 - a search comes back in Microsoft's order (most recent first), from its index: a message received seconds ago may not be found yet
-- an attachment is limited to 3 MB when writing; reading one has the usual limits
+- an attachment is limited to 3 MB when writing, an HTML body read from a file to 1 MB; reading one has the usual limits
 
 ## note — scope
 

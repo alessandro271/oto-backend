@@ -243,9 +243,9 @@ def _format_context(ctx: dict) -> str:
         bits = []
         for r in ctx["runs"]:
             label = r.get("label") or r.get("run_id") or "?"
-            # `doctrine` est la clé SERVIE d'hier du journal de runs (#519) : la
-            # colonne `runs.doctrine` ne se renomme qu'au lot D (#526).
-            doc = f" [{r['doctrine']}]" if r.get("doctrine") else ""
+            # `guide` : `recent_runs` renomme la colonne d'hier dans sa lecture (#519,
+            # la colonne elle-même ne se renomme qu'au lot D, #526).
+            doc = f" [{r['guide']}]" if r.get("guide") else ""
             # Un run muet ne s'annonce plus « en cours » : l'agent lisait ça au
             # handshake et croyait reprendre un travail que personne ne menait plus.
             bits.append(f"{label}{doc} {run_status.describe(r)}")

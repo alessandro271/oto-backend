@@ -84,7 +84,29 @@ def _before_send(event, hint):
         return None
     _redact_sensitive_query(event)
     _redact_hook_request(event)
+    _redact_urls_in_messages(event)
     return event
+
+
+def _redact_urls_in_messages(event) -> None:
+    """Le message d'une exception (et d'une ligne de journal relayée) peut recopier
+    une URL avec sa clé — Playwright y écrit la `connectUrl` Browserbase
+    `?apiKey=…` (F-049). Même masque que `tool_calls.error`
+    (`journal_secrets.masquer_urls`)."""
+    from .journal_secrets import masquer_urls
+
+    if not isinstance(event, dict):
+        return
+    for exc in ((event.get("exception") or {}).get("values") or []):
+        if isinstance(exc, dict) and isinstance(exc.get("value"), str):
+            exc["value"] = masquer_urls(exc["value"])
+    logentry = event.get("logentry")
+    if isinstance(logentry, dict):
+        for champ in ("message", "formatted"):
+            if isinstance(logentry.get(champ), str):
+                logentry[champ] = masquer_urls(logentry[champ])
+    if isinstance(event.get("message"), str):
+        event["message"] = masquer_urls(event["message"])
 
 
 def _before_send_transaction(event, hint):
@@ -129,6 +151,25 @@ def _redact_sensitive_query(event) -> None:
         req["query_string"] = "[redacted]"
 
 
+def _release() -> Optional[str]:
+    """`OTO_SENTRY_RELEASE` s'il est posé ; sinon l'étiquette de la version servie
+    (`v1.2.3+6d5bf16b`, `version.etiquette`) — la même que `/api/version` et
+    `X-Oto-Version`, pour qu'un événement Sentry se rapproche d'un déploiement sans
+    que l'exploitant ait à recopier le tag dans une variable. Inconnue : None (pas
+    de release), plutôt qu'une étiquette `unknown` qui regrouperait tout."""
+    posee = (os.environ.get("OTO_SENTRY_RELEASE") or "").strip()
+    if posee:
+        return posee
+    try:
+        from . import version
+        ref, commit, _at, _source = version._coordonnees()
+        etiquette = version.etiquette(ref, commit)
+    except Exception as e:  # noqa: SILENT — une release manquante ne doit pas empêcher Sentry de démarrer
+        logger.warning("Sentry : version servie illisible, pas de release (%s)", type(e).__name__)
+        return None
+    return None if etiquette == version.INCONNU else etiquette
+
+
 def init_sentry() -> bool:
     """Initialise Sentry si `OTO_SENTRY_DSN` est posé. Retourne True si actif."""
     dsn = os.environ.get("OTO_SENTRY_DSN", "").strip()
@@ -144,7 +185,7 @@ def init_sentry() -> bool:
         # avec `OTO_ENV`, quand les deux sont posées, reste vérifiée ailleurs
         # (config.py:152-156).
         environment=os.environ.get("OTO_SENTRY_ENV", ""),
-        release=os.environ.get("OTO_SENTRY_RELEASE") or None,
+        release=_release(),
         # RGPD : pas d'IP / cookies / headers auto-collectés.
         send_default_pii=False,
         # ⚠️ NE PAS RETIRER — le défaut du SDK est `True` (vérifié sentry-sdk 2.63.0),

@@ -28,11 +28,37 @@ def _platform_grantee_scope(sub, active_org, scopes) -> "str | None":
     return None
 
 
+#: The meta key that carries the REVOKED scopes of a platform instance (F-046). Written
+#: by `credentials_store.platform_revoke`, cleared by `platform_grant`; read here only.
+DENIED_META_KEY = "share_denied"
+
+
+def _platform_denied(sub, active_org, inst: dict) -> bool:
+    """Has `sub` (or its active org) been REVOKED on this platform instance? (F-046)
+
+    A revocation used to be "remove from `share_down`" and nothing else — on an OPEN key
+    with an empty `share_down` (open to all), that removed nothing, and the next call was
+    served exactly as before: a credit block that did not block. The revoked scope is
+    now remembered in `meta.share_denied`, and a denial wins over everything: the open
+    tier, a `share_down` grant of the other scope, a `share_side` loan. Any matching
+    scope refuses — `user:<sub>` or `org:<active org>` — because a block is aimed at
+    one of them, and the other must not reopen it."""
+    denied = (inst.get("meta") or {}).get(DENIED_META_KEY) or []
+    if not denied:
+        return False
+    if sub and f"user:{sub}" in denied:
+        return True
+    return active_org is not None and f"org:{active_org}" in denied
+
+
 def _platform_instance_usable(sub, active_org, inst: dict) -> bool:
-    """Is the platform instance usable by `sub`? (ADR 0044 §F, mode-aware). A `share_side`
+    """Is the platform instance usable by `sub`? (ADR 0044 §F, mode-aware). A REVOKED
+    scope (`meta.share_denied`, F-046) refuses first, whatever follows. A `share_side`
     loan authorizes (membership, like a BYO loan). Otherwise per `share_mode`:
     'open' = empty `share_down` (free tier, open to all) OR `sub` is a grantee; 'closed' =
     `sub` is a grantee (closed by default)."""
+    if _platform_denied(sub, active_org, inst):
+        return False
     down, side = inst.get("share_down") or [], inst.get("share_side") or []
     if scope._sub_matches_scopes(sub, side):
         return True
@@ -63,9 +89,16 @@ def _legacy_platform_grant_meta(sub, provider, active_org, *,
     beneficiary the chain does not know. The `_legacy_` prefix does not deprecate it —
     it names one of the two paths of the double-read window.
 
-    `instances`: read in advance (cf. `cascade.preloaded_presence_probe`) — `None` rereads."""
-    for inst in (instances if instances is not None
-                 else credentials_store.list_platform_instances(provider)):
+    `instances`: read in advance (cf. `cascade.preloaded_presence_probe`) — `None` rereads.
+
+    A revocation holds for the CONNECTOR, not for one of its keys: as soon as one
+    instance denies the caller, none serves it. Otherwise an older key open to all, or
+    a key set after the revocation, served the revoked caller again."""
+    insts = (instances if instances is not None
+             else credentials_store.list_platform_instances(provider))
+    if any(_platform_denied(sub, active_org, inst) for inst in insts):
+        return None
+    for inst in insts:
         if _platform_instance_usable(sub, active_org, inst):
             return {"label": inst["label"],
                     "daily_quota": _platform_quota(sub, active_org, inst.get("meta"))}

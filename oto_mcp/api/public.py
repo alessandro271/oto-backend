@@ -35,6 +35,10 @@ endroit. Ce module ne porte que les handlers.
 """
 from __future__ import annotations
 
+import hashlib
+import threading
+import weakref
+
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
@@ -125,21 +129,95 @@ async def mcp_catalog(request: Request, *, mcp_instance) -> JSONResponse:
     return _json(request, {"tools": payload, "count": len(payload)})
 
 
-async def openapi_doc(request: Request) -> JSONResponse:
+# Le descriptif public pèse ~1,2 Mo et sa construction tient la boucle des centaines de
+# millisecondes (oto-backend#1232) : sur une route anonyme, c'était le moyen le moins cher
+# de charger le processus. Il ne dépend que de ce qui est figé au démarrage — la table de
+# routes, le registre de capacités, la version servie, les drapeaux d'environnement —, et
+# de l'adresse par laquelle on est entré (`servers`). On le rend donc UNE fois par
+# application, sans `servers`, et on ajoute `servers` à chaque réponse : c'est la dernière
+# clé du document, le corps reste octet pour octet celui que `_json` sérialisait.
+_DESCRIPTIFS: "weakref.WeakKeyDictionary[object, _DescriptifRendu]" = weakref.WeakKeyDictionary()
+_VERROU_DESCRIPTIF = threading.Lock()
+# Il ne change qu'au déploiement : cinq minutes de fraîcheur, puis une revalidation que
+# l'`ETag` rend gratuite (304, sans corps). `Vary: Origin` parce que l'en-tête CORS, lui,
+# suit l'origine : un cache partagé ne doit pas resservir celui d'une autre.
+_ENTETES_DESCRIPTIF = {"Cache-Control": "public, max-age=300", "Vary": "Origin"}
+
+
+def _en_json(contenu) -> bytes:
+    """La sérialisation de `_json` (celle de `JSONResponse`), pour en garder les octets."""
+    return JSONResponse(contenu).body
+
+
+class _DescriptifRendu:
+    """Le document public rendu, sans `servers`, et son empreinte."""
+
+    __slots__ = ("corps", "empreinte")
+
+    def __init__(self, corps: bytes):
+        if not corps.endswith(b"}"):
+            raise ValueError("le descriptif OpenAPI rendu n'est pas un objet JSON")
+        self.corps = corps
+        self.empreinte = hashlib.sha256(corps).digest()
+
+    def etag(self, server_url: str | None) -> str:
+        """`ETag` FORT : l'empreinte du corps servi, que fixent le document rendu et
+        l'adresse ajoutée. Composée plutôt que recalculée sur 1,2 Mo à chaque requête."""
+        h = hashlib.sha256(self.empreinte)
+        h.update((server_url or "").encode())
+        return f'"{h.hexdigest()[:32]}"'
+
+    def corps_pour(self, server_url: str | None) -> bytes:
+        if not server_url:
+            return self.corps
+        return self.corps[:-1] + b',"servers":' + _en_json([{"url": server_url}]) + b"}"
+
+
+def _descriptif_de(app) -> _DescriptifRendu:
+    """Rend le descriptif de `app` une seule fois, dans le threadpool : plusieurs
+    premières requêtes simultanées attendent le même rendu au lieu d'en lancer chacune un."""
+    with _VERROU_DESCRIPTIF:
+        rendu = _DESCRIPTIFS.get(app)
+        if rendu is None:
+            rendu = _DescriptifRendu(_en_json(openapi.build(app.routes)))
+            _DESCRIPTIFS[app] = rendu
+        return rendu
+
+
+def _deja_en_main(si_aucun: str | None, etag: str) -> bool:
+    """`If-None-Match` (RFC 9110 §13.1.2) : comparaison FAIBLE, `*` compris."""
+    if not si_aucun:
+        return False
+    for candidat in si_aucun.split(","):
+        candidat = candidat.strip()
+        if candidat == "*" or candidat.removeprefix("W/") == etag:
+            return True
+    return False
+
+
+async def openapi_doc(request: Request) -> Response:
     """Descriptif OpenAPI de l'API REST — **dérivé** du registre de capacités et
     de la table de routes VIVANTE (`request.app.routes`), donc jamais désynchronisé.
 
     Pas d'auth, comme `/api/mcp/catalog` : un descriptif d'API décrit des FORMES,
     aucune valeur. Sans lui, chaque intégrateur redécouvre la surface par sondage
     de chemins — et conclut faux (cf. `openapi.py`). `/api/admin/*` est exclu.
+
+    Rendu une fois par application, jamais sur la boucle, puis servi de la mémoire avec
+    un `ETag` fort et un 304 sur `If-None-Match` (oto-backend#1232).
     """
-    try:
-        routes = getattr(request.app, "routes", None)
-    # noqa: SILENT — document OpenAPI servi même si la table de routes n'est pas lisible
-    except Exception:                                   # pas d'app Starlette exposée
-        routes = None
+    app = request.app
+    rendu = _DESCRIPTIFS.get(app)
+    if rendu is None:
+        rendu = await run_in_threadpool(_descriptif_de, app)
     base = str(request.base_url).rstrip("/") or None
-    return _json(request, openapi.build(routes, server_url=base))
+    etag = rendu.etag(base)
+    entetes = {**_ENTETES_DESCRIPTIF, "ETag": etag}
+    if _deja_en_main(request.headers.get("if-none-match"), etag):
+        return _file(request, b"", media_type="application/json", headers=entetes,
+                     status_code=304)
+    return _file(request, rendu.corps_pour(base), media_type="application/json",
+                 headers=entetes)
 
 
 async def connectors_catalog(request: Request, *, verifier: JWTVerifier) -> JSONResponse:

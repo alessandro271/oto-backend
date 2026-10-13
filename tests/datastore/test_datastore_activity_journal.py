@@ -363,13 +363,33 @@ def test_row_activity_key_axis_is_bounded_to_the_owner(monkeypatch):
     monkeypatch.setattr(usage, "_agregat", lambda objet, **kw: usage._connect())
 
     usage.datastore_row_activity("row-1", "TEMOIN", ns_id=160, owner_type="org",
-                                 owner_id="35")
+                                 owner_id="35", created_at="2026-10-01T09:00:00+00:00")
     assert "l.args::text ILIKE %s AND l.org_id = %s" in sink["sql"]
 
     # propriétaire inconnu ⇒ l'axe flou disparaît, il ne reste que l'id
-    usage.datastore_row_activity("row-1", "TEMOIN", ns_id=160)
+    usage.datastore_row_activity("row-1", "TEMOIN", ns_id=160,
+                                 created_at="2026-10-01T09:00:00+00:00")
     assert "ILIKE" not in sink["sql"]
     assert "l.args->>'id' = %s" in sink["sql"]
+
+
+def test_row_activity_key_axis_is_bounded_to_the_row_birth(monkeypatch):
+    """12/10/2026 : l'axe « clé métier », une sous-chaîne hors index, parcourait tout
+    l'historique du tableau. Il ne cherche plus que l'écriture qui a CRÉÉ la ligne,
+    autour de sa naissance ; sans date de naissance, il est abandonné."""
+    sink: dict = {}
+    monkeypatch.setattr(usage, "_connect", lambda: _FakeConn(sink, []))
+    monkeypatch.setattr(usage, "_agregat", lambda objet, **kw: usage._connect())
+
+    usage.datastore_row_activity("row-1", "TEMOIN", ns_id=160, owner_type="org",
+                                 owner_id="35", created_at="2026-10-01T09:00:00+00:00")
+    assert (f"l.created_at BETWEEN %s::timestamptz - interval '{usage._FENETRE_CREATION}' "
+            f"AND %s::timestamptz + interval '{usage._FENETRE_CREATION}'") in sink["sql"]
+    assert sink["params"].count("2026-10-01T09:00:00+00:00") == 2
+
+    usage.datastore_row_activity("row-1", "TEMOIN", ns_id=160, owner_type="org",
+                                 owner_id="35")
+    assert "ILIKE" not in sink["sql"]
 
 
 def test_datastore_activity_name_axis_is_bounded_to_the_owner(monkeypatch):
@@ -602,14 +622,15 @@ def test_row_activity_est_bornee_au_tableau(monkeypatch):
     (`args->>'id'` et la sous-chaîne de clé), et `ORDER BY created_at DESC LIMIT`
     parcourait tout le journal — jusqu'à 302 s, la prod par terre. Le `ns_id` résolu
     est désormais une borne obligatoire, posée HORS du OU des axes : c'est elle qui
-    tombe sur `idx_tool_calls_ns`."""
+    tombe sur `idx_tool_calls_ns`. Depuis le 12/10/2026, chaque axe est sa propre
+    branche, et le tableau borne CHACUNE."""
     sink: dict = {}
     monkeypatch.setattr(usage, "_connect", lambda: _FakeConn(sink, []))
     monkeypatch.setattr(usage, "_agregat", lambda objet, **kw: usage._connect())
     usage.datastore_row_activity("row-1", "TEMOIN", ns_id=160, owner_type="org",
-                                 owner_id="35")
+                                 owner_id="35", created_at="2026-10-01T09:00:00+00:00")
     sql = sink["sql"]
-    assert "AND l.args->>'ns_id' = %s AND (" in sql, sql
+    assert sql.count("AND l.args->>'ns_id' = %s AND ") == 2, sql
     assert sink["params"][0] == "160"
     with pytest.raises(TypeError):
         usage.datastore_row_activity("row-1")   # la borne n'est jamais facultative

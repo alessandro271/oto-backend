@@ -103,6 +103,8 @@ SECRET_TOOL_ARGS: dict[str, frozenset] = {
     "lemlist_mailbox": frozenset({"smtp_password", "imap_password"}),
     "lemlist_webhook": frozenset({"secret"}),
     "typeform_webhooks": frozenset({"secret"}),
+    # The media of an imported call is often a presigned link, its credential in the query.
+    "modjo_calls": frozenset({"media_url"}),
     # A signed download link carries its credential in the query string.
     "oto_import": frozenset({"url"}),
 }
@@ -291,6 +293,9 @@ def requete_secrete(chemin: str) -> bool:
 CLES_DE_REQUETE_SECRETES = frozenset({
     "code", "state", "session_state", "id_token", "access_token", "refresh_token",
     "client_secret", "token", "key", "apikey", "api_key", "access_key",
+    # La `connectUrl` CDP que Browserbase rend à l'ouverture d'une session porte
+    # `signingKey` (F-049) : ni « key » exact, ni un fragment de la liste ci-dessous.
+    "signingkey",
 })
 # … et toute clé dont le nom CONTIENT l'un de ces fragments (`api_token`, `password`,
 # `app_secret`…).
@@ -376,6 +381,27 @@ def masquer_requetes(texte: str) -> str:
     `requete_pour_journal_acces` — la même règle que le journal d'accès."""
     return _REQUETE_DANS_UN_TEXTE.sub(
         lambda m: "?" + requete_pour_journal_acces(m.group(1)), texte)
+
+
+# L'identité d'une URL (`scheme://user:pass@hôte`) dans un texte libre : tout ce qui
+# précède le `@` de l'autorité, sans blanc, guillemet, chevron, `/`, `?` ni `#`.
+# Le schéma ne démarre qu'en TÊTE d'une suite `[A-Za-z0-9+.-]` (pas sur chaque `\b`
+# intérieur) : sinon `"a-" * 20000` coûte des secondes (quadratique).
+_IDENTITE_D_URL_DANS_UN_TEXTE = re.compile(
+    r"((?<![A-Za-z0-9+.\-])[A-Za-z][A-Za-z0-9+.\-]*://)[^\s/?#@\"'<>]+@")
+
+
+def masquer_urls(texte: str) -> str:
+    """Chaque URL de `texte` sans ses secrets : l'identité (`user:pass@`) devient
+    `***@`, la valeur de chaque clé de query secrète devient `***`
+    (`masquer_requetes`). Pour un texte d'ERREUR (F-049, 2026-10-12) : un client
+    qui échoue à se brancher recopie souvent l'adresse ENTIÈRE dans son message
+    (Playwright : `connect_over_cdp` → `wss://connect.browserbase.com?apiKey=…`), et
+    ce message part dans `tool_calls.error`, que lisent les admins d'org."""
+    if not texte:
+        return texte
+    texte = _IDENTITE_D_URL_DANS_UN_TEXTE.sub(rf"\1{MASQUE_DE_REQUETE}@", texte)
+    return masquer_requetes(texte) if "?" in texte else texte
 
 
 def _argument_masque(arg):

@@ -68,9 +68,9 @@ def test_catches_a_tab():
 
 
 def test_catches_loose_prose_inside_the_drawing():
-    drawing = ("┌──────────┐\n│  1 · Step │\n└─────┬────┘\n"
+    drawing = ("┌──────────┐\n│ 1 · Step │\n└─────┬────┘\n"
                "   note: worth a second look\n         ▼\n"
-               "┌──────────┐\n│  2 · Next │\n└─────┬────┘")
+               "┌──────────┐\n│ 2 · Next │\n└─────┬────┘")
     assert [p["rule"] for p in lint_du_trace(drawing)] == ["loose-text"]
 
 
@@ -107,3 +107,35 @@ def test_a_rejoining_lane_is_legal():
         "      ▼  cold or partner\n┌──────────┐\n└──────────┘\n"
         "  ▷ known account   rejoins at the recap"
     ) == []
+
+
+
+# ── une boîte dont un flanc glisse (12/10/2026, dessin écrit par un modèle) ──
+
+def test_catches_a_box_edge_off_by_one_column():
+    drawing = ("┌──────────────┐\n│  1 · Find    │\n│  Keep them. │\n└──────┬───────┘")
+    fautes = lint_du_trace(drawing)
+    assert [f["rule"] for f in fautes] == ["box-edge"] and fautes[0]["line"] == 3
+    assert "columns 1 and 16" in fautes[0]["fix"]
+
+
+def test_catches_a_bottom_corner_off_its_column():
+    assert [f["rule"] for f in lint_du_trace("┌────┐\n│ ok │\n└───┘")] == ["box-edge"]
+
+
+def test_a_split_bracket_is_not_a_box():
+    """`┌──┴──┐` ouvre deux voies, pas une boîte : sa ligne suivante n'a pas de flanc."""
+    drawing = ("┌──────┐\n│ step │\n└──┬───┘\n   ▼\n ┌─┴────┐\n ▼      ▼\n"
+               "┌──┐   ┌──┐\n│a │   │b │\n└──┘   └──┘")
+    assert lint_du_trace(drawing) == []
+
+
+
+def test_a_box_edge_is_repaired_by_moving_the_edge_never_the_words():
+    from oto_mcp.procedure_diagram import reparer_les_bords
+    drawing = ("┌──────────────┐\n│  1 · Find    │\n│  Keep them. │\n└──────┬──────┘")
+    assert reparer_les_bords(drawing) == (
+        "┌──────────────┐\n│  1 · Find    │\n│  Keep them.  │\n└──────┬───────┘")
+    # Text past the edge: never cut.
+    assert reparer_les_bords("┌────┐\n│ too long │\n└────┘") is None
+    assert reparer_les_bords("┌────┐\n│ ok │\n└────┘") is None   # nothing to repair

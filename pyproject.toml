@@ -51,6 +51,22 @@ dependencies = [
     # branche : on n'écrit pas dans le dépôt d'autrui (l'API Contents rend 404 dessus).
     # Le mainteneur bump ici, puis `update-branch` la PR. L'atomicité du revert cède
     # devant ça. Cf. docs/contributions-forks.md (amendement du 2026-09-01).
+    # v1.175.0 = microsoft mail : ids immuables sur tous les appels, copie envoyée
+    # relue (`sent_message`, ~10 s bornées) pour son `webLink` ; pièces jointes d'un
+    # brouillon existant (`add_attachments`) et d'une réponse. Aucun extra.
+    # v1.174.0 = microsoft mail : une pièce jointe portant `content_id` part en ligne
+    # (`isInline` + `contentId`, pour `<img src="cid:…">`), vérifiée avant toute écriture.
+    # Aucun extra.
+    # v1.173.0 = folk (`empty`/`not_empty` partent sans valeur : plus de 422), unipile (une
+    # section de profil inconnue est refusée en nommant celles qui existent). Aucun extra.
+    # v1.172.0 = dataforseo (nouveau client v3 : mots-clés, domaines, backlinks, IA, audit) ;
+    # google_analytics : une redirection est refusée sur l'appel de jeton. Aucun extra.
+    # v1.171.0 = modjo (nouveau client : Public API v2, appels, transcripts, résumés IA,
+    # revues, objets reflétés du CRM, tags d'un appel, import) ; sert `modjo_*`. Aucun extra.
+    # v1.170.0 = clients : une redirection est refusée partout où la clé voyage hors
+    # `Authorization` ; sheets (onglets, lignes, formats, export xlsx), bodacc (le BODACC
+    # entier), pennylane analytique, urbanisme (open data IGN), whatsapp (un fil se nomme
+    # par son objet `user`), apollo (compte à sec nommé). Aucun extra.
     # v1.169.0 = luma : client Luma (lu.ma, contribution Tulina, connectors#125) ; une
     # redirection est refusée, la clé ne part pas vers un autre hôte. Aucun extra.
     # v1.168.1 = silae : en-tête `dossiers` posé sur tous les appels (vide hors dossier),
@@ -388,7 +404,7 @@ dependencies = [
     # antérieur, pip ignore un extra inconnu (avec un avertissement) — le
     # connecteur marcherait par accident, en tirant les deux libs du socle. Cette
     # ligne et ce tag se déplacent donc ENSEMBLE.
-    "oto-core[anonymize,planity] @ git+https://github.com/otomata-tech/oto-core.git@v1.169.0",
+    "oto-core[anonymize,planity] @ git+https://github.com/otomata-tech/oto-core.git@v1.175.0",
     # Patchright = client CDP qui pilote le Chrome HÉBERGÉ Browserbase (connect_over_cdp)
     # pour les connecteurs d'API privée cookie-bound (tools/brevo.py, tools/crunchbase.py).
     # AUCUN browser local sur la box (connect_over_cdp ne lance rien → pas de binaire Chrome

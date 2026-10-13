@@ -203,6 +203,12 @@ def _wire_link(monkeypatch, add=None):
     monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": True)
     monkeypatch.setattr(P.db, "log_project_activity", lambda *a, **k: None)
     monkeypatch.setattr(P.db, "list_project_links", lambda pid: [])
+    # Garde de portée d'`op=link` : tout identifiant passe (ce banc décrit autre chose).
+    monkeypatch.setattr(P.db, "refs_dans_la_portee",
+                        lambda pid, t, refs: {int(r) for r in refs if str(r).isdigit()})
+    _owner_of = P.ownership.owner_of
+    monkeypatch.setattr(P.ownership, "owner_of", lambda t, rid: None if t in (
+        "datastore_namespace", "doctrine") else _owner_of(t, rid))
     rec = {}
 
     def _add(pid, tt, tr, label=None, role=None, config=None, identity_ref=None, slot=None,
@@ -339,15 +345,15 @@ def test_audit_project(monkeypatch):
     links = [
         {"target_type": "tableau", "target_ref": "9", "slot": "sortie", "datastore": "leads", "namespace": "leads"},
         {"target_type": "tableau", "target_ref": "99", "slot": None},              # mort
-        {"target_type": "procedure", "target_ref": "42"},                          # ok, slots bindés sauf crm
+        {"target_type": "procedure", "target_ref": "42", "procedure_id": 42},      # ok, slots bindés sauf crm
         {"target_type": "procedure", "target_ref": "43"},                          # morte
         {"target_type": "connecteur", "target_ref": "nexiste"},                    # mort
     ]
-    monkeypatch.setattr(org_store_mod, "get_instruction_by_id",
-                        lambda iid: ({"slug": "prospection",
-                                      "slots": [{"name": "sortie", "type": "tableau"},
-                                                {"name": "crm", "type": "connecteur"}]}
-                                     if iid == 42 else None))
+    monkeypatch.setattr(org_store_mod, "get_instructions_by_ids",
+                        lambda ids: {i: {"slug": "prospection",
+                                         "slots": [{"name": "sortie", "type": "tableau"},
+                                                   {"name": "crm", "type": "connecteur"}]}
+                                     for i in ids if i == 42})
     monkeypatch.setattr(providers_mod, "REGISTRY", {"folk": object()})
     monkeypatch.setattr(db_mod, "project_run_stats",
                         lambda pid: {"runs": 3, "doctrines": ["autre-doctrine"]})
@@ -367,6 +373,9 @@ def test_link_procedure_unbound_warning(monkeypatch):
     P, _ = _wire_link(monkeypatch)
     import oto_mcp.org_store as org_store_mod
     monkeypatch.setattr(P, "_procedure_ref_to_id", lambda org, ref: "42")
+    # Après la pose, la vraie liste rend le lien résolu dans la portée du projet.
+    monkeypatch.setattr(P.db, "list_project_links", lambda pid: [
+        {"target_type": "procedure", "target_ref": "42", "procedure_id": 42}])
     monkeypatch.setattr(org_store_mod, "get_instruction_by_id",
                         lambda iid: {"slug": "prospection",
                                      "slots": [{"name": "sortie", "type": "tableau"}]})
@@ -397,7 +406,7 @@ def test_inventory_derives_union(monkeypatch):
     monkeypatch.setattr(P.db, "get_project_by_id", lambda pid: dict(row, id=pid))
     monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": True)
     monkeypatch.setattr(P.db, "list_project_links", lambda pid: [
-        {"target_type": "procedure", "target_ref": "42"},
+        {"target_type": "procedure", "target_ref": "42", "procedure_id": 42},
         {"target_type": "procedure", "target_ref": "morte"},        # slug legacy → non résolue
         {"target_type": "connecteur", "target_ref": "unipile"},
         {"target_type": "tableau", "target_ref": "9", "slot": "sortie", "datastore": "leads_q3", "namespace": "leads_q3"},
@@ -463,7 +472,7 @@ def test_slot_schema_definition_validated():
 
 def test_target_schema_for_resolves_from_linked_procedures(monkeypatch):
     links = [{"target_type": "tableau", "target_ref": "125", "slot": "leads"},
-             {"target_type": "procedure", "target_ref": "111"}]
+             {"target_type": "procedure", "target_ref": "111", "procedure_id": 111}]
     monkeypatch.setattr("oto_mcp.org_store.get_instruction_by_id",
                         lambda i: {"slug": "qualifier-fact-pv",
                                    "slots": [{"name": "leads", "type": "tableau",
@@ -476,6 +485,7 @@ def test_target_schema_for_resolves_from_linked_procedures(monkeypatch):
 
 def test_provision_on_virgin_datastore(monkeypatch):
     import oto_mcp.slots as S
+    monkeypatch.setattr("oto_mcp.db.refs_dans_la_portee", lambda pid, t, refs: {125})
     calls = {"set": [], "index": []}
     monkeypatch.setattr("oto_mcp.db.get_datastore_by_id",
                         lambda i: {"id": i, "datastore": "leads-pv", "schema": None})
@@ -484,23 +494,25 @@ def test_provision_on_virgin_datastore(monkeypatch):
                         lambda i, sc: calls["set"].append((i, sc)))
     monkeypatch.setattr("oto_mcp.db.datastore_ensure_key_index",
                         lambda i, k: calls["index"].append((i, k)))
-    res = S.provision_tableau_schema(125, _TARGET)
+    res = S.provision_tableau_schema(125, _TARGET, project_id=7)
     assert res == {"status": "provisioned"}
     assert calls["set"] == [(125, _TARGET)] and calls["index"] == [(125, "fact_id")]
 
 
 def test_provision_conform_and_mismatch(monkeypatch):
     import oto_mcp.slots as S
+    monkeypatch.setattr("oto_mcp.db.refs_dans_la_portee", lambda pid, t, refs: {125})
     monkeypatch.setattr("oto_mcp.db.get_datastore_by_id",
                         lambda i: {"id": i, "datastore": "leads-pv", "schema": _TARGET})
-    assert S.provision_tableau_schema(125, _TARGET)["status"] == "conform"
+    assert S.provision_tableau_schema(125, _TARGET, project_id=7)["status"] == "conform"
     other = {"fields": [{"key": "autre"}]}
-    res = S.provision_tableau_schema(125, other)
+    res = S.provision_tableau_schema(125, other, project_id=7)
     assert res["status"] == "mismatch" and "DIFFÉRENT" in res["warning"]
 
 
 def test_provision_refuses_key_on_dirty_data(monkeypatch):
     import oto_mcp.slots as S
+    monkeypatch.setattr("oto_mcp.db.refs_dans_la_portee", lambda pid, t, refs: {125})
     wrote = []
     monkeypatch.setattr("oto_mcp.db.get_datastore_by_id",
                         lambda i: {"id": i, "datastore": "leads-pv", "schema": None})
@@ -508,5 +520,5 @@ def test_provision_refuses_key_on_dirty_data(monkeypatch):
                         lambda i, k: [{"value": "f1", "n": 2}])
     monkeypatch.setattr("oto_mcp.db.set_datastore_schema",
                         lambda i, sc: wrote.append(sc))
-    res = S.provision_tableau_schema(125, _TARGET)
+    res = S.provision_tableau_schema(125, _TARGET, project_id=7)
     assert res["status"] == "dirty_key" and wrote == []

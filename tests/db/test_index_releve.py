@@ -8,6 +8,8 @@ NOMMANT, de construire sur une grosse table, et de prendre un index invalide pou
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from oto_mcp.db import index_concurrent as ic
@@ -223,3 +225,120 @@ def test_les_index_d_ouvertures_servent_les_trois_pages(live):
                 "ORDER BY d.created_at DESC, d.id DESC LIMIT 5").fetchall())
             assert nom in plan and "Sort" not in plan, plan
         conn.rollback()
+
+
+# ── Les gestes d'une ligne de datastore (révision 0054) ──────────────────────
+
+def test_le_parcours_d_une_ligne_porte_le_predicat_de_son_index(monkeypatch):
+    """Un index partiel ne sert que la requête qui IMPLIQUE son prédicat : le
+    `tool LIKE 'data\\_%'` de l'index figure dans chaque branche du parcours, et les
+    deux axes sont deux pages en `UNION ALL`, jamais un OU."""
+    from contextlib import contextmanager
+
+    from oto_mcp.db import usage
+    from oto_mcp.db.index_releve import GESTES_DE_LIGNE
+
+    vus: dict = {}
+
+    class _Conn:
+        def execute(self, sql, params):
+            vus.update(sql=sql, params=params)
+            return type("C", (), {"fetchall": lambda _s: []})()
+
+    @contextmanager
+    def _agregat(objet, **kw):
+        yield _Conn()
+
+    monkeypatch.setattr(usage, "_agregat", _agregat)
+    usage.datastore_row_activity("row-1", "TEMOIN", ns_id=160,
+                                 created_at="2026-10-01T09:00:00+00:00",
+                                 owner_type="org", owner_id="35")
+    sql = vus["sql"]
+    assert " OR " not in sql and sql.count("UNION ALL") == 1
+    assert sql.count("l.tool LIKE 'data\\_%%'") == 2
+    assert "WHERE tool LIKE 'data\\_%' AND " in GESTES_DE_LIGNE.forme
+    assert GESTES_DE_LIGNE.forme.startswith("((args->>'ns_id'), (args->>'id'), created_at DESC)")
+
+
+def test_la_revision_0054_pose_l_index_des_gestes_de_ligne():
+    import importlib.util
+    from pathlib import Path
+
+    from oto_mcp.db.index_releve import GESTES_DE_LIGNE, REVISION_GESTES_DE_LIGNE
+
+    (chemin,) = Path("oto_mcp/db/migrations/versions").glob("*_0054_*.py")
+    spec = importlib.util.spec_from_file_location("rev_0054", chemin)
+    rev = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rev)
+    assert rev.revision == REVISION_GESTES_DE_LIGNE and len(rev.revision) <= 32
+    assert GESTES_DE_LIGNE.revision == REVISION_GESTES_DE_LIGNE
+    assert ic.index_de_revision("0054") == (GESTES_DE_LIGNE,)
+    assert "index-concurrents 0054_tool_calls_gestes_de_ligne" in GESTES_DE_LIGNE.procedure
+
+
+def test_une_ligne_discrete_d_un_tableau_tres_actif_rend_ses_gestes(live, monkeypatch):
+    """Contre une vraie base : 20 000 gestes sur un tableau, trois sur la ligne visée,
+    dont un très ancien. La branche `id` passe par `idx_tool_calls_ns_row` ; la page
+    rend les trois gestes de la ligne et l'écriture qui l'a créée par sa clé métier —
+    pas celle d'une homonyme hors de la fenêtre de naissance."""
+    from contextlib import contextmanager
+
+    from oto_mcp.db import usage
+    from oto_mcp.db._conn import _connect
+    from oto_mcp.db.index_releve import GESTES_DE_LIGNE
+
+    ns, ligne = "987654", "cible-0054"
+    with _connect() as conn:
+        assert ic.scalaire_de(conn)(GESTES_DE_LIGNE.sql_validite) is True
+        conn.execute(
+            "INSERT INTO tool_calls (tool, kind, org_id, args, created_at) "
+            "SELECT 'data_write', 'mcp', 35, jsonb_build_object('ns_id', %s::text, "
+            "'id', 'autre-' || g), now() - g * interval '1 minute' "
+            "FROM generate_series(1, 20000) g", (ns,))
+        for minutes, args in (
+                (3, {"ns_id": ns, "id": ligne}),
+                (900, {"ns_id": ns, "id": ligne}),
+                (19990, {"ns_id": ns, "id": ligne}),
+                # la naissance, par la clé (pas encore d'id)
+                (20001, {"ns_id": ns, "rows": [{"siren": "TEMOIN-0054"}]}),
+                # une homonyme, bien après la naissance : hors fenêtre
+                (100, {"ns_id": ns, "rows": [{"siren": "TEMOIN-0054"}]})):
+            conn.execute(
+                "INSERT INTO tool_calls (tool, kind, org_id, args, created_at) "
+                "VALUES ('data_write', 'mcp', 35, %s::jsonb, "
+                "now() - %s * interval '1 minute')", (json.dumps(args), minutes))
+        naissance = conn.execute(
+            "SELECT now() - 20001 * interval '1 minute' AS t").fetchone()["t"]
+        conn.execute("ANALYZE tool_calls")
+        conn.commit()
+
+    vus: dict = {}
+
+    class _Espion:
+        def __init__(self, conn):
+            self._conn = conn
+
+        def execute(self, sql, params=None):
+            vus.update(sql=sql, params=params)
+            return self._conn.execute(sql, params)
+
+    @contextmanager
+    def _agregat(objet, **kw):
+        with _connect() as conn:
+            yield _Espion(conn)
+
+    monkeypatch.setattr(usage, "_agregat", _agregat)
+    try:
+        out = usage.datastore_row_activity(ligne, "TEMOIN-0054", ns_id=int(ns),
+                                           created_at=naissance,
+                                           owner_type="org", owner_id="35")
+        assert len(out) == 4
+        assert sum(1 for e in out if e["row_id"] == ligne) == 3
+        with _connect() as conn:
+            plan = "\n".join(next(iter(r.values())) for r in conn.execute(
+                "EXPLAIN " + vus["sql"], vus["params"]).fetchall())
+        assert "idx_tool_calls_ns_row" in plan, plan
+    finally:
+        with _connect() as conn:
+            conn.execute("DELETE FROM tool_calls WHERE args->>'ns_id' = %s", (ns,))
+            conn.commit()

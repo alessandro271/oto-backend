@@ -259,10 +259,11 @@ _REGLAGES: tuple[Variable, ...] = (
              ("oto_mcp/config.py:108",)),
     Variable("OTO_FUNCTIONS_SANDBOX_DIR", Classe.REGLAGE, "",
              "Répertoire du bac à sable des fonctions (ADR 0073), posé par "
-             "`scripts/installer_bac_a_sable.py`. Absente : l'instance n'exécute pas de "
-             "fonction — `oto_function` op=run/test/publish rend 503 "
-             "`sandbox_unavailable`, le reste répond.",
-             ("oto_mcp/functions/executor.py:60",)),
+             "`scripts/installer_bac_a_sable.py`. Absente : `<arbre>/.bac-a-sable`, que le "
+             "déploiement bleu/vert pose dans l'arbre de chaque couleur ; s'il n'existe "
+             "pas non plus, l'instance n'exécute pas de fonction — `oto_function` et les "
+             "recettes-code rendent 503 `sandbox_unavailable`, le reste répond.",
+             ("oto_mcp/functions/executor.py:66",)),
     Variable("OTO_ABONNEMENT_OUVERT_A_TOUS", Classe.REGLAGE, "",
              "Agents sur l'abonnement Claude de la personne : ouverts à TOUT compte "
              "de l'instance (`1`, `true`, `yes`, `on`). Absente, vide ou un non = "
@@ -280,6 +281,17 @@ _REGLAGES: tuple[Variable, ...] = (
              "« sans équipe » : faute d'équipe désignée, l'équipe du sub dans l'org "
              "résolue. Absente = aucun tenant, le niveau org de toujours.",
              ("oto_mcp/access/scope.py:156",)),
+    Variable("OTO_PROCEDURE_APP_BUNDLE", Classe.REGLAGE, "",
+             "URL du bundle JS (`…/process-graph.js`, sa feuille `.css` à côté) qui "
+             "peint le graphe d'une procédure dans l'hôte MCP (`oto_procedure_app`). "
+             "Absente = l'app ne s'enregistre pas : une instance sans front qui la "
+             "porte ne sert aucune page qui pointerait vers personne.",
+             ("oto_mcp/procedure_diagram.py:439",)),
+    Variable("OTO_DATA_APP_BUNDLE", Classe.REGLAGE, "",
+             "URL du bundle JS d'un front (`…/process-graph.js`, sa feuille `.css` à "
+             "côté) qui peint `data_app` dans l'hôte MCP, au lieu de la carte Prefab. "
+             "Absente = la carte Prefab, inchangée.",
+             ("oto_mcp/tools/datastore_table_app.py:51",)),
     Variable("OTO_EGRESS_ALLOW", Classe.REGLAGE, "",
              "Destinations internes autorisées en egress (`nom=adresse:port`, "
              "virgules). Absente = aucune exception : fail-closed, jamais un défaut "
@@ -296,7 +308,34 @@ _REGLAGES: tuple[Variable, ...] = (
              "(défaut) refuse toute résolution du porteur hors de l'org de son travail, "
              "`report` la journalise et la laisse passer, `off` le coupe. Une valeur "
              "inconnue vaut `enforce`.",
-             ("oto_mcp/verrou_org.py:92",)),
+             ("oto_mcp/verrou_org.py:111",)),
+    Variable("OTO_VERROU_ROLES_PLATEFORME", Classe.REGLAGE, "report",
+             "Verrou des rôles PLATEFORME des jetons de délégation (`verrou_org.py`) : "
+             "`enforce` lit `member` le porteur `admin`/`super_admin` d'un travail du "
+             "runner (aucune garde plateforme, aucun `oto_admin_*`), `report` (défaut) "
+             "journalise ce qui serait retiré et ne retire rien, `off` le coupe. Une "
+             "valeur inconnue vaut `report`. Indépendant d'`OTO_VERROU_ORG_DELEGATION`.",
+             ("oto_mcp/verrou_org.py:188",)),
+    Variable("OTO_PLATFORM_KEY_ORG_RATE", Classe.REGLAGE, "report",
+             "Équité d'une clé PLATEFORME partagée entre orgs (F-051, "
+             "`access/platform_rate.py`) : `enforce` refuse l'appel d'une org au-delà "
+             "de sa part de la fenêtre, `report` (défaut) journalise une fois par "
+             "fenêtre l'org qui la dépasse et ne refuse rien, `off` ne compte rien. "
+             "Une valeur inconnue LÈVE au boot.",
+             ("oto_mcp/access/platform_rate.py:64",)),
+    Variable("OTO_PLATFORM_KEY_ORG_RATE_LIMIT", Classe.REGLAGE, None,
+             "Appels d'UNE org sur UNE clé plateforme partagée par fenêtre (défaut 120 "
+             "dans le code ; 0 = sans limite). Illisible : LÈVE au boot.",
+             ("oto_mcp/access/platform_rate.py:111",)),
+    Variable("OTO_PLATFORM_KEY_ORG_RATE_WINDOW_S", Classe.REGLAGE, None,
+             "Durée en secondes de la fenêtre fixe de l'équité des clés plateforme "
+             "(défaut 60 dans le code, 1 au moins). Illisible : LÈVE au boot.",
+             ("oto_mcp/access/platform_rate.py:87",)),
+    Variable("OTO_PLATFORM_KEY_ORG_RATE_OVERRIDES", Classe.REGLAGE, "",
+             "Limites par connecteur porteur de la clé, `serper=600,aiark=30` ; "
+             "`0` = sans limite pour ce connecteur. Vide = la limite commune partout. "
+             "Une paire illisible LÈVE au boot.",
+             ("oto_mcp/access/platform_rate.py:97",)),
     Variable("OTO_JOURNAL_REVISIONS", Classe.REGLAGE, "on",
              "Interrupteur du journal des révisions de ligne du datastore (oto#273) : "
              "`off` le coupe pour les écritures de CE processus, sans redéployer (un "
@@ -399,6 +438,50 @@ _REGLAGES: tuple[Variable, ...] = (
     Variable("OTO_ANON_RATE_BURST", Classe.REGLAGE, "60",
              "Rafale anonyme autorisée en plus du débit régulier.",
              ("oto_mcp/subdomain_project.py:139",)),
+    Variable("OTO_DEBIT_MODE", Classe.REGLAGE, "report",
+             "Limite de débit applicative (`limite_debit.py`, F-025) : `report` (défaut) "
+             "mesure et journalise ce qui serait refusé sans rien refuser, `enforce` "
+             "refuse en 429, `off` la coupe ; une valeur inconnue empêche le démarrage. "
+             "`enforce` SEULEMENT derrière un proxy qui écrase `CF-Connecting-IP` et "
+             "`X-Forwarded-For` (sinon les classes par adresse se contournent). Lue au "
+             "démarrage : en changer demande un redémarrage.",
+             ("oto_mcp/limite_debit.py:179",)),
+    Variable("OTO_DEBIT_ADRESSES_EXEMPTEES", Classe.REGLAGE, "",
+             "Adresses ou CIDR (séparés par des virgules) de NOS machines, exemptés des "
+             "classes de débit par adresse et du budget d'échecs ; leurs jetons paient "
+             "toujours la classe par jeton. Vide par défaut ; une entrée illisible "
+             "empêche le démarrage. Lue au démarrage.",
+             ("oto_mcp/limite_debit.py:190",)),
+    Variable("OTO_PROXIES_DE_CONFIANCE", Classe.REGLAGE, "",
+             "Adresses ou CIDR (séparés par des virgules) des proxies dont on croit les "
+             "en-têtes d'adresse (`CF-Connecting-IP`, `X-Forwarded-For`) : lus seulement "
+             "si le pair TCP en fait partie. Vide par défaut : on lit le pair TCP — derrière "
+             "un proxy, TOUT le trafic aurait alors son adresse. Une entrée illisible "
+             "empêche le démarrage. Lue au démarrage.",
+             ("oto_mcp/client_trace.py:56",)),
+    Variable("OTO_DEBIT_JETON_PAR_MIN", Classe.REGLAGE, "1200",
+             "Débit (req/min) par jeton porté (`Authorization`), rafale = la moitié ; "
+             "`0` désarme la classe.",
+             ("oto_mcp/limite_debit.py:221",)),
+    Variable("OTO_DEBIT_ANONYME_PAR_MIN", Classe.REGLAGE, "600",
+             "Débit (req/min) par adresse d'une requête sans jeton, hors routes "
+             "sensibles et webhooks (DCR compris) ; rafale = la moitié ; `0` désarme.",
+             ("oto_mcp/limite_debit.py:223",)),
+    Variable("OTO_DEBIT_SENSIBLE_PAR_MIN", Classe.REGLAGE, "60",
+             "Débit (req/min) par adresse sur les routes à secret dans le chemin et les "
+             "gestes d'authentification interactifs (invitation, partage public, "
+             "autorisation, retours OAuth) ; rafale = la moitié ; `0` désarme.",
+             ("oto_mcp/limite_debit.py:225",)),
+    Variable("OTO_DEBIT_WEBHOOK_PAR_MIN", Classe.REGLAGE, "300",
+             "Débit (req/min) par (adresse, chemin) des webhooks entrants, plus un "
+             "plafond par adresse à dix fois ce débit ; rafale = la moitié ; `0` désarme.",
+             ("oto_mcp/limite_debit.py:227",)),
+    Variable("OTO_DEBIT_ECHECS_PAR_MIN", Classe.REGLAGE, "120",
+             "Budget (par min) de réponses 401/403 (et 404 sur routes à secret) par "
+             "adresse ; épuisé, l'adresse voit refuser ses jetons inconnus et ses routes "
+             "à secret — jamais un jeton déjà accepté, ni l'anonyme, ni un webhook ; "
+             "`0` désarme ce budget.",
+             ("oto_mcp/limite_debit.py:228",)),
     Variable("OTO_MCP_MAX_ORGS_PER_USER", Classe.REGLAGE, "10",
              "Plafond d'orgs créées par un même compte (hors super_admin et admin de son tenant).",
              ("oto_mcp/capabilities/orgs/core.py:19",)),
@@ -423,7 +506,7 @@ _REGLAGES: tuple[Variable, ...] = (
              "CONCURRENTLY — posé par l'appelant de `migrer` (la porte d'une instance "
              "cible, #1195) ; absent = le plafond de l'index (100 000). Le démarrage ne "
              "le lit pas.",
-             ("oto_mcp/db/index_concurrent.py:150",)),
+             ("oto_mcp/db/index_concurrent.py:156",)),
     Variable("OTO_MCP_DB_POOL_MAX", Classe.REGLAGE, "24",
              "Taille max du pool de connexions PG applicatif.",
              ("oto_mcp/db/_conn.py:126",)),
@@ -596,7 +679,8 @@ _REGLAGES: tuple[Variable, ...] = (
              "pas.",
              ("oto_mcp/sentry_setup.py:102", "oto_mcp/config.py:151")),
     Variable("OTO_SENTRY_RELEASE", Classe.REGLAGE, None,
-             "Release annoncée à Sentry (ex. SHA du deploy).",
+             "Release annoncée à Sentry — vide, l'étiquette de la version servie "
+             "(`v1.2.3+6d5bf16b`, celle de `/api/version`).",
              ("oto_mcp/sentry_setup.py:103",)),
     Variable("OTO_SENTRY_TRACES_SAMPLE_RATE", Classe.REGLAGE, "0",
              "Taux d'échantillonnage du tracing de perf Sentry — 0 = off.",

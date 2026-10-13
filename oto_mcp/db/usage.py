@@ -19,6 +19,7 @@ import psycopg
 logger = logging.getLogger(__name__)
 
 from .. import deprecations
+from ..journal_secrets import masquer_urls
 from . import journal_calls, journal_jour
 from ._conn import _connect
 from .index_releve import PREDICAT_OUVERTURE
@@ -65,7 +66,16 @@ def insert_tool_call(row: dict) -> None:
     args, ok, error, duration_ms) + corrélation OTO-LOCALE (session_id, run_id ;
     ADR 0017, absents du contrat canonique → enrichis par le sink). `kind` discrimine
     l'événement ('mcp' défaut / 'rest' / 'connector', ADR 0017 « un seul flux »).
-    Best-effort côté middleware — jamais bloquant."""
+    Best-effort côté middleware — jamais bloquant.
+
+    `error` passe par `journal_secrets.masquer_urls` ICI, au seul point d'écriture
+    commun à tous les écrivains (middleware MCP, gestes REST, worker…) : un texte
+    d'erreur amont recopie parfois une URL avec sa clé (F-049 : Playwright et la
+    `connectUrl` Browserbase `?apiKey=…`), et `tool_calls.error` est lu par les
+    admins d'org."""
+    error = row.get("error")
+    if error:
+        error = masquer_urls(str(error))
     with _connect() as conn:
         conn.execute(
             """
@@ -82,7 +92,7 @@ def insert_tool_call(row: dict) -> None:
                 row.get("server") or "oto", row.get("kind") or "mcp",
                 row.get("sub"), row.get("email"),
                 row["tool"], json.dumps(row.get("args")) if row.get("args") is not None else None,
-                bool(row.get("ok")), row.get("error"), row.get("duration_ms"),
+                bool(row.get("ok")), error, row.get("duration_ms"),
                 row.get("session_id"), row.get("run_id"), row.get("org_id"),
                 row.get("client_id"), row.get("sentry_event_id"),
                 # #117 — discriminant par appel. `request_id` et `effective_sub` sont
@@ -396,7 +406,7 @@ def recent_runs(sub: str, org_id: Optional[int], limit: int = 5) -> list[dict]:
         rows = conn.execute(
             f"""
             WITH j AS ({_runs_from_journal(_derniers_runs(portee))})
-            SELECT j.run_id, j.label, j.doctrine, j.outcome, x.project_id,
+            SELECT j.run_id, j.label, j.doctrine AS guide, j.outcome, x.project_id,
                    j.started_at, j.finished_at, j.last_seen_at
               FROM j LEFT JOIN runs x ON x.run_id = j.run_id
              ORDER BY j.started_at DESC LIMIT %s
@@ -2120,7 +2130,8 @@ def connector_failure_stats(since_days: int = 7, *, org_id: Optional[int] = None
 def transport_refusal_stats(since_days: int = 7) -> dict:
     """Lentille des refus du TRANSPORT MCP (`kind='transport'`, cf.
     `oto_mcp/transport_refusals.py`) : ce qu'on refuse AVANT tout dispatch de session,
-    ventilé par cause, par code HTTP et par environnement.
+    ventilé par cause, par code HTTP et par environnement — plus, sous `rate_limit`,
+    la mesure de la limite de débit applicative (`kind='debit'`, F-025).
 
     ⚠️ **Ventilé par environnement, et ce n'est pas un luxe** : préproduction et
     production écrivent dans la MÊME base et `tool_calls.server` est un littéral
@@ -2130,6 +2141,8 @@ def transport_refusal_stats(since_days: int = 7) -> dict:
     La cause vit dans `tool`, préfixée `refus:` — un `GROUP BY` la rend directement,
     sans toucher au JSON. Aucune ligne ne porte de `sub` : à cette couche il n'y a pas
     encore d'identité."""
+    from . import limite_refus_jour
+    from ..limite_refus_top import TOP_N
     since_days = max(1, min(int(since_days), 365))
     with _agregat("refus du transport") as conn:
         par_cause = conn.execute(
@@ -2163,11 +2176,41 @@ def transport_refusal_stats(since_days: int = 7) -> dict:
             """,
             (since_days,),
         ).fetchall()
+        # La limite de débit applicative (`kind='debit'`, cf. `limite_debit_mesure`) :
+        # une ligne par classe et par minute, sommée ici par environnement, classe et
+        # mode. `would_refuse` est le chiffre qu'on lit en mode `report` ; `peak_pct`
+        # le plus haut usage d'un seau sur la fenêtre (100 = une clé à sec).
+        debit = conn.execute(
+            """
+            SELECT COALESCE(l.args->>'env', 'inconnu')            AS env,
+                   substring(l.tool from 7)                       AS classe,
+                   COALESCE(l.args->>'mode', 'inconnu')           AS mode,
+                   COUNT(DISTINCT l.args->>'minute')              AS minutes,
+                   SUM((l.args->>'allowed')::bigint)              AS allowed,
+                   SUM((l.args->>'would_refuse')::bigint)         AS would_refuse,
+                   SUM((l.args->>'refused')::bigint)              AS refused,
+                   MAX((l.args->>'peak_pct')::float)              AS peak_pct,
+                   MAX((l.args->>'limit_per_minute')::int)        AS limit_per_minute,
+                   MAX(l.created_at)                              AS last_at
+            FROM tool_calls l
+            WHERE l.kind = 'debit'
+              AND l.created_at >= NOW() - make_interval(days => %s)
+            GROUP BY 1, 2, 3
+            ORDER BY 1, 2, 3
+            LIMIT 100
+            """,
+            (since_days,),
+        ).fetchall()
+        # QUI serait coupé (#1232, `limite_refus_top`) : les `TOP_N` clés hachées par
+        # jour, environnement et limiteur.
+        palmares = limite_refus_jour.top(conn, since_days, TOP_N)
     return {
         "since_days": since_days,
         "total": sum(int(r["n"]) for r in par_cause),
         "by_cause": list(par_cause),
         "protocol_versions_refused": list(versions),
+        "rate_limit": list(debit),
+        "rate_limit_top": list(palmares),
     }
 
 
@@ -2558,8 +2601,18 @@ def _ds_activity_entry(r: dict) -> dict:
     })
 
 
+#: L'axe « clé métier » ne retrouve QUE l'écriture qui a créé la ligne (append/batch :
+#: l'`id` n'existait pas encore). Elle a eu lieu quand la ligne est née : on ne la
+#: cherche que dans cette fenêtre autour de `_created_at`, une plage étroite de
+#: `idx_tool_calls_ns`. Dix minutes couvrent un lot long ; les écritures par clé
+#: POSTÉRIEURES (upsert) ont leur révision estampillée par geste (oto#273,
+#: `_joindre_les_revisions`), qui les rend au parcours sans relire le journal.
+_FENETRE_CREATION = "10 minutes"
+
+
 def datastore_row_activity(row_id: str, key_value: Optional[str] = None,
                            *, ns_id: int,
+                           created_at: Any = None,
                            owner_type: Optional[str] = None,
                            owner_id: Optional[str] = None,
                            limit: int = 50) -> list[dict]:
@@ -2569,40 +2622,47 @@ def datastore_row_activity(row_id: str, key_value: Optional[str] = None,
     outcome, ADR 0017). Appels d'AGENT (kind='mcp') **et** gestes de dashboard
     (kind='rest'). Fenêtre = la rétention du calllog (prune 30 j) : c'est un journal
     de travail, pas un audit permanent.
-    Le match clé passe par `args::text ILIKE` (les args sont petits et le scan est
-    borné par `tool LIKE 'data_%'` + rétention) — une valeur de clé courte/ambiguë
-    peut sur-matcher, assumé pour un journal indicatif. ⚠️ Assumé DANS LE TENANT
-    seulement : cet axe est une recherche de SOUS-CHAÎNE, il est donc borné au
-    propriétaire du tableau (même raison qu'en dessous — sans borne, une clé métier
-    banale ferait remonter les gestes d'une autre org). L'axe `id`, lui, reste nu :
-    c'est un uuid4 non devinable et l'appelant a déjà prouvé son accès à CETTE row.
+
+    Deux axes, deux branches en `UNION ALL`, chacune avec sa propre page — jamais un
+    OU : un OU entre deux filtres hors index parcourait tout l'historique du tableau,
+    du plus récent au plus ancien, jusqu'à remplir la page (12/10/2026 : trois 503 à
+    10 s sur un tableau très actif, pour une ligne qui y a peu de gestes).
+    - **`id`** : `idx_tool_calls_ns_row` (`index_releve.GESTES_DE_LIGNE`, révision
+      0054), une lecture directe des gestes de la ligne. Nu : c'est un uuid4 non
+      devinable et l'appelant a déjà prouvé son accès à CETTE row.
+    - **clé métier** : `args::text ILIKE`, une recherche de SOUS-CHAÎNE — bornée au
+      propriétaire du tableau (sans borne, une clé banale ferait remonter les gestes
+      d'une autre org) ET à la naissance de la ligne (`_FENETRE_CREATION`). Sans
+      `created_at` ni propriétaire, l'axe est abandonné : sous-couvrir plutôt que
+      parcourir le tableau.
 
     ⚠️ **Toujours bornée au TABLEAU de la ligne** (`ns_id` résolu serveur, journalisé
     sur les deux faces depuis le 31/07/2026). Incident du 08/10/2026 : sans cette
-    borne, aucun des deux axes ne tombait sur un index — `args->>'id'` n'en a pas, la
-    sous-chaîne non plus —, et `ORDER BY created_at DESC LIMIT` parcourait le journal
-    entier (~12 M lignes) jusqu'à trouver de quoi remplir la page : jusqu'à 302 s par
-    appel, douze connexions sur vingt-six prises, la prod MCP par terre. Le `ns_id`
-    passe par `idx_tool_calls_ns` (partiel, `data_*` seulement) : on ne lit plus que
-    les appels de CE tableau. Prix assumé : un geste antérieur à la journalisation du
-    `ns_id` n'y figure plus — il sort de toute façon de la rétention.
-    La lecture est en plus bornée en durée (`_agregat`, #1145)."""
+    borne, aucun des deux axes ne tombait sur un index, et `ORDER BY created_at DESC
+    LIMIT` parcourait le journal entier (~12 M lignes) : jusqu'à 302 s par appel, la
+    prod MCP par terre. La lecture est en plus bornée en durée (`_agregat`, #1145)."""
     limit = max(1, min(int(limit), 200))
-    clauses = [_DS_ACTIVITY_KINDS, "l.tool LIKE 'data\\_%%'", "l.args->>'ns_id' = %s"]
-    params: list[Any] = [str(int(ns_id))]
-    match = ["l.args->>'id' = %s"]
-    params.append(str(row_id))
+    ns = str(int(ns_id))
+    tableau = f"{_DS_ACTIVITY_KINDS} AND l.tool LIKE 'data\\_%%' AND l.args->>'ns_id' = %s"
+    branches = [("l.args->>'id' = %s", [ns, str(row_id)])]
     key_bound = _owner_clause(owner_type, owner_id)
-    if key_value is not None and str(key_value).strip() and key_bound:
+    if key_value is not None and str(key_value).strip() and key_bound and created_at:
         sql, bound = key_bound
-        match.append(f"(l.args::text ILIKE %s AND {sql})")
-        params += [f"%{str(key_value).strip()}%", bound]
-    clauses.append("(" + " OR ".join(match) + ")")
+        branches.append((
+            f"l.created_at BETWEEN %s::timestamptz - interval '{_FENETRE_CREATION}' "
+            f"AND %s::timestamptz + interval '{_FENETRE_CREATION}' "
+            f"AND l.args::text ILIKE %s AND {sql}",
+            [ns, created_at, created_at, f"%{str(key_value).strip()}%", bound]))
+    pages, params = [], []
+    for axe, valeurs in branches:
+        pages.append(f"(SELECT l.id FROM tool_calls l WHERE {tableau} AND {axe} "
+                     "ORDER BY l.created_at DESC LIMIT %s)")
+        params += [*valeurs, limit]
     params.append(limit)
     with _agregat("parcours d'une ligne") as conn:
         rows = conn.execute(
             f"""{_DS_ACTIVITY_SELECT}
-            WHERE {' AND '.join(clauses)}
+            WHERE l.id IN ({' UNION ALL '.join(pages)})
             ORDER BY l.created_at DESC LIMIT %s
             """,
             tuple(params),

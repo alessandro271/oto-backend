@@ -67,6 +67,20 @@ def test_mint_project_file_requires_filename(seams):
     assert e.value.code == "missing_filename"
 
 
+def test_le_repli_d_un_fichier_n_est_jamais_en_ligne(seams):
+    """Un DWG de 5 Mo ne passe pas dans un argument : sans PUT possible, le repli d'un
+    fichier est `oto_import` depuis sa source ou un humain — jamais `data_write`."""
+    out = U._upload_url(CTX, U.UploadUrlInput(target="project_file", project_id=5,
+                                              filename="plan.dwg"))
+    assert "oto_import" in out["hint"] and "base64" in out["hint"]
+    assert "data_write" not in out["hint"]
+
+
+def test_le_repli_d_une_page_reste_en_ligne(seams):
+    out = U._upload_url(CTX, U.UploadUrlInput(target="doc", op="update", doc_id=9))
+    assert "oto_doc op=create|update|patch" in out["hint"]
+
+
 def test_mint_fail_fast_on_no_write(monkeypatch):
     def deny(sub, target):
         raise ut.UploadError(403, "forbidden", "nope")
@@ -312,3 +326,41 @@ def test_materialize_project_file_prefers_declared_ct(monkeypatch):
     res = ut.materialize("u1", target, b"a,b,c", "application/x-www-form-urlencoded")
     assert seen["ctype"] == "text/csv"
     assert res == {"ok": True, "kind": "project_file", "filename": "r.csv", "bytes": 5}
+
+
+# --- le parent d'une page créée (même garde qu'`oto_doc op=create`) ------------
+
+@pytest.fixture
+def projet_5_ecrivable(monkeypatch):
+    from oto_mcp import db, ownership
+    pages = {7: {"project_id": 5}, 8: {"project_id": 6}}
+    monkeypatch.setattr(db, "get_project_by_id", lambda pid: {"id": pid})
+    monkeypatch.setattr(db, "get_doc_by_id", lambda did: pages.get(did))
+    monkeypatch.setattr(ownership, "can_access", lambda sub, t, rid, lvl: rid == "5")
+
+
+def _cible_doc(parent_id):
+    return {"kind": "doc", "op": "create", "project_id": 5, "parent_id": parent_id,
+            "title": "T", "doc_kind": "source"}
+
+
+@pytest.mark.parametrize("parent_id", [8, 404])
+def test_un_parent_hors_du_projet_est_refuse(projet_5_ecrivable, parent_id):
+    """Un parent d'un AUTRE projet (que l'appelant n'écrit pas), ou inexistant : refusé
+    par `check_target_access` — donc au mint ET à la réception, qui l'appellent tous deux."""
+    with pytest.raises(ut.UploadError) as e:
+        ut.check_target_access("u1", _cible_doc(parent_id))
+    assert (e.value.status, e.value.code) == (400, "bad_parent")
+
+
+@pytest.mark.parametrize("parent_id", [7, None])
+def test_un_parent_du_projet_ou_aucun_passe(projet_5_ecrivable, parent_id):
+    assert ut.check_target_access("u1", _cible_doc(parent_id)) is None
+
+
+def test_le_mint_refuse_un_parent_hors_du_projet(projet_5_ecrivable, monkeypatch):
+    monkeypatch.setenv("OTO_MCP_PUBLIC_URL", "https://mcp.oto.ninja")
+    with pytest.raises(AuthzDenied) as e:
+        U._upload_url(CTX, U.UploadUrlInput(target="doc", op="create", project_id=5,
+                                            parent_id=8, title="T"))
+    assert e.value.code == "bad_parent"

@@ -698,8 +698,11 @@ même sortie ni le même filtre :
   fichiers `stacktrace-*.txt` sur la box (le patron d'origine) ;
 - la pile complète du **thread principal** (celui qui fait tourner la boucle asyncio),
   puis — depuis le 30/09, §« La pile de tous les fils » plus bas — une ligne compacte
-  pour **tous les fils** du process, sous le même identifiant de gel ;
-- **aucune variable locale** (`traceback.extract_stack`, jamais `format_exc`) — même
+  pour **tous les fils** du process, sous le même identifiant de gel ; **depuis le
+  12/10, une seule entrée par gel** qui porte la pile de tous les fils, boucle en tête
+  (§« Le relevé d'un gel, en une entrée » plus bas) ;
+- **aucune variable locale** (cadres lus par `f_code`/`f_lineno`, jamais `f_locals` ni
+  `format_exc`) — même
   famille de risque que le fix Sentry du 2026-09-15 (#564, `include_local_variables=
   False`) : un secret déchiffré qui traînerait dans une frame ne doit jamais atteindre
   un journal ;
@@ -1037,7 +1040,8 @@ boucle (MainThread à 78 % des échantillons GIL, aucun autre au-dessus de 2 %),
 pas de vol de CPU — mais **un seul gel** dans la fenêtre : la cause des gels « select »
 reste sans nom. Le `hang_watch` apporte donc lui-même les deux preuves qui manquaient.
 
-**Ce qu'il journalise.** Au seuil (`OTO_SLOW_CALLBACK_WARN`, 1 s), sous un identifiant de
+**Ce qu'il journalisait** (format remplacé le 12/10 par une entrée unique, § suivant ; la
+lecture du retard et du CPU ci-dessous vaut toujours). Au seuil (`OTO_SLOW_CALLBACK_WARN`, 1 s), sous un identifiant de
 gel commun (`gel=<6 hex>`, repris par « dump ignoré » et « débloquée après ») :
 
 1. la pile complète du thread principal, comme avant ;
@@ -1103,6 +1107,124 @@ fils** sous le même `gel=`, sans le chien ni une variable locale ; un fil qui t
 dans `re` est nommé quel que soit le gagnant de la course ; la branche « la boucle a repris
 la première » rejouée sans course.
 
+
+### Le relevé d'un gel, en une entrée (12/10/2026, #1108)
+
+Après le 30/09, il restait **~39 gels ≥ 1 s par jour, au plus 3,6 s, en grappes** — et le
+journal de prod ne permettait pas de les attribuer. Deux raisons de forme, pas de fond :
+
+- le journal de la box est **journald**, qui range **chaque ligne de stderr à part** : la
+  pile principale (une ligne d'en-tête puis des `File "…", line …` sans identifiant) se
+  dispersait en entrées anonymes, et un `grep gel=` ne rendait que les en-têtes ;
+- la ligne des fils ne gardait que **5 cadres** par fil et **taisait la pile des fils au
+  repos** — or un fil qui vient de rendre le GIL est souvent déjà retourné attendre.
+
+Décision : au gel, **la pile de tous les fils**, en **une** entrée. `hang_watch.
+releve_des_fils`, appelé par le chien (son fil à lui, jamais la boucle), écrit un seul
+enregistrement `WARNING` du logger `oto_mcp.loop` :
+
+```
+event loop sans battement depuis 0.3s (gel=186772) — chien en retard de 0.00s, CPU du process 0.13s sur les 0.13s depuis son réveil précédent — 3 fils relevés, cadres du plus profond au plus haut
+gel=186772 » « MainThread » ident=126459718453120 tid=2493557 démon=non état=S cpu=0.59s BOUCLE appel C
+gel=186772     tests/test_hang_watch.py:105 _bloque_avec_une_variable_secrete
+gel=186772     tests/test_hang_watch.py:638 test_releve_boucle_bloquee_et_fil_actif
+gel=186772     events.py:88 _run
+gel=186772     base_events.py:1999 _run_once
+gel=186772     …
+gel=186772 » « fil-qui-calcule » ident=126459601483456 tid=2493631 démon=oui état=R cpu=0.30s en Python
+gel=186772     tests/test_hang_watch.py:611 _calcule_en_python
+gel=186772     threading.py:1012 run
+gel=186772     threading.py:1075 _bootstrap_inner
+gel=186772     threading.py:1032 _bootstrap
+gel=186772 » « fil-qui-dort-en-c » ident=126459593090752 tid=2493632 démon=non état=R cpu=0.00s appel C
+gel=186772     tests/test_hang_watch.py:617 _dort_en_c
+gel=186772     …
+gel=186772 fin du relevé : 3 fils
+```
+
+(relevé réel de `tests/test_hang_watch.py::test_releve_boucle_bloquee_et_fil_actif`, seuil
+de test 0,25 s, la boucle bloquée par un `time.sleep`, élagué. Un groupe au repos s'écrit
+`gel=… » ×37 au repos (threading.wait), appel C : « AnyIO worker thread » ident=… ; …`, suivi
+de ses trois cadres d'attente.)
+
+- **L'en-tête** garde le libellé d'avant (« sans battement depuis », ou « à l'arrêt
+  pendant … la boucle a repris la première ») : un comptage des gels par ce libellé reste
+  juste. La durée est celle **au moment du relevé** ; la durée totale part toujours à la
+  résorption (« débloquée après X s (gel=…) »).
+- **Un bloc par fil** : `» « nom » ident=<threading> tid=<noyau, celui de py-spy et de
+  /proc> démon=oui|non`, son **état** ordonnanceur (`R` en cours ou prêt, `S` endormi, `D`
+  E/S disque) et son **CPU cumulé depuis sa naissance** (`/proc/self/task/<tid>/stat`,
+  Linux), puis ses **20 derniers cadres**, `chemin:ligne fonction`, **du plus profond au
+  plus haut**. Le fil de la boucle est en tête, marqué `BOUCLE`. Ni variable locale ni
+  texte source (pas de `linecache`, aucune lecture disque pendant que le chien tient le
+  GIL).
+- **`appel C` / `en Python`** : l'instruction où s'est arrêté le cadre le plus profond du
+  fil (`f_lasti`). Sur un appel (`CALL…`, entrée d'un `with`), le fil est **dans du code
+  natif** : un appel bloquant qui a rendu le GIL (`sleep`, `acquire`, `select`, E/S) ou un
+  calcul C qui **vient** de le rendre. Ailleurs, il s'est arrêté **entre deux
+  instructions Python** : il calculait en Python et a cédé le GIL à la bascule — il
+  le **veut**.
+- **Les fils au repos** (cadre le plus profond dans `selectors.select`, `threading.wait`,
+  `queue.get`, `concurrent.futures` `_worker`) sont **regroupés par pile identique**
+  (`×N`), leurs 3 cadres d'attente une fois, chaque membre nommé avec son ident ; ils
+  passent après les fils actifs (en Python d'abord, puis en C).
+- **Chaque ligne après la première porte `gel=<id>`** : un `grep` rend l'entrée entière,
+  dans l'ordre, même découpée par journald.
+- **Plafond** : 32 000 caractères par relevé (`_PLAFOND_RELEVE` ; mesuré : 61 fils, dont 20
+  actifs à 20 cadres et un pool de 40 au repos, font ~20 Ko). Au-delà, les derniers blocs tombent (les groupes au repos les
+  premiers) et la dernière ligne le **dit** : `… relevé tronqué au plafond de 32000
+  caractères : N fil(s) non montré(s)`. Sinon elle dit `fin du relevé : N fils` — une
+  entrée sans l'une ou l'autre est une entrée coupée en route. Le plafond borne aussi le fil
+  d'Ariane que la LoggingIntegration de Sentry tire de ce `WARNING` (le chien n'envoie
+  aucun événement Sentry à lui).
+- **Un relevé par gel** : l'épisode (un relevé tant que le battement manque, réarmé à la
+  résorption) et le plafond de 3 relevés/min sont inchangés ; au-delà, « dump ignoré ».
+
+**Ce qu'il ne sait toujours pas dire : qui TENAIT le GIL.** Le chien est un fil Python : il
+ne relève qu'une fois le GIL repris, donc **après** que le fautif l'a rendu, et aucune API
+sans dépendance ne nomme le détenteur. Ce qu'on en déduit :
+
+| relevé | lecture |
+|---|---|
+| retard du chien ≈ gel, CPU du process ≈ fenêtre, un fil actif hors boucle en `appel C` | ce fil sort d'un calcul C qui gardait le GIL (`json.dumps`, `re`, pydantic-core…) : son cadre le plus profond est l'appelant |
+| idem, un fil actif `en Python` | ce fil calculait en Python et monopolisait la bascule (rare : il rend le GIL toutes les 1 à 5 ms) |
+| idem, aucun fil actif hors boucle | le fautif est déjà retourné attendre : regarder les groupes au repos et leur `cpu=` ; sinon un `gc` de génération 2 (aucun cadre à lui) |
+| CPU du process ≈ 0 | personne ne calculait : process suspendu, cgroup étranglé, swap (cf. table du 30/09) |
+| `BOUCLE` sur un appel C hors `select`, retard du chien ≈ 0 | la boucle elle-même est dans un appel bloquant : son cadre le plus profond est le coupable |
+
+Le `cpu=` est **cumulé depuis la naissance du fil**, pas mesuré sur le gel : le mesurer sur
+la fenêtre demanderait une lecture par fil à chaque réveil du chien, un coût hors gel
+refusé. Il départage tout de même un fil de pool qui a beaucoup calculé de ses voisins
+identiques, et deux relevés successifs d'un même `ident` donnent l'écart.
+
+**Coût.** Hors gel : **nul** — `beat()` et le réveil du chien (`_check`) sont inchangés,
+rien n'est lu tant que le battement est à l'heure. Pendant un gel : le relevé tourne dans
+le fil du chien, une fois ; mesuré à **~2 ms de CPU** (médiane sur 30, 4,3 ms au pire)
+pour 61 fils dont 20 à 30 cadres de profondeur, relevé de 19,6 Ko. Le chien rend le GIL à
+la bascule comme tout fil Python : le relevé ne peut retarder la boucle que de ce qu'il
+calcule, jamais du gel lui-même.
+
+**Extraire les relevés en prod** (lecture seule, unités colorées — pas `oto-mcp`) :
+
+```bash
+# les gels de la journée, un par ligne (en-têtes seulement)
+journalctl -u 'oto-mcp@*' --since today -o cat --no-pager \
+  | grep -E 'sans battement depuis|à l.arrêt pendant|dump ignoré|débloquée après'
+# un relevé entier, par son identifiant
+journalctl -u 'oto-mcp@*' --since today -o cat --no-pager | grep -F 'gel=186772'
+# tous les relevés de la journée dans un fichier, pour les lire hors de la box
+journalctl -u 'oto-mcp@*' --since today -o short-iso --no-pager | grep -F 'gel=' > releves.txt
+```
+
+Le journal de la box ne remonte qu'à quelques heures (plafond de taille) : une semaine
+d'observation, c'est une extraction par jour au moins.
+
+Preuves : `tests/test_hang_watch.py` — la boucle bloquée par un `time.sleep` donne **une**
+entrée qui porte la boucle (sur la ligne du sleep, `appel C`), un fil qui calcule
+(`en Python`) et un fil qui dort en C, chacun avec ident, tid, démon, état, CPU ; un gel de
+huit seuils ne donne qu'un relevé et une résorption sous le même `gel=` ; quarante fils
+profonds tiennent sous le plafond, la troncature dite et la boucle gardée ; cinq fils qui
+attendent au même endroit tiennent en un bloc qui les nomme tous.
 
 ### Sentry : le routage refait à chaque requête — essayé, retiré (01/10/2026)
 

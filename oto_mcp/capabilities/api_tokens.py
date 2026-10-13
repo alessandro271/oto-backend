@@ -166,9 +166,10 @@ class PlatformKeyListInput(BaseModel):
 class PlatformKeyCreateInput(BaseModel):
     provider: str = ""
     label: str = ""
-    # ⚠️ Le seul secret en CLAIR de ce module. Il est chiffré au coffre et ne ressort
-    # jamais : la réponse ne porte que l'identité de la clé.
-    api_key: str = ""
+    # ⚠️ Les seuls secrets en CLAIR de ce module. Ils sont chiffrés au coffre et ne
+    # ressortent jamais : la réponse ne porte que l'identité de la clé.
+    api_key: str = ""                          # la clé seule (premier champ secret)
+    fields: Optional[dict[str, str]] = None    # connecteurs multi-champs (forager…)
 
 
 class PlatformKeyDeleteInput(BaseModel):
@@ -531,10 +532,20 @@ def _keys_create(ctx: ResolvedCtx, inp: PlatformKeyCreateInput) -> dict:
     api_key = (inp.api_key or "").strip()
     if provider not in db.KEY_PROVIDERS and not _porte_une_cle_plateforme(provider):
         raise AuthzDenied(400, "invalid_provider")
-    if not label or not api_key:
+    if not label or not (api_key or inp.fields):
         raise AuthzDenied(400, "missing_fields")
+    # La forme du coffre se décide À LA POSE, par la source unique des paliers partagés
+    # (`preparer_pose`) : une clé seule d'un connecteur multi-champs y devient son premier
+    # champ secret. Stockée brute, elle ne se relisait pas (`unpack_secret`).
     try:
-        credentials_store.set_platform_key(label, provider, api_key, set_by=ctx.sub)
+        secret, meta_champs = credentials_store.preparer_pose(
+            credentials_store.PLATFORM, label, provider, "", api_key or None, inp.fields)
+    except ValueError as e:
+        raise AuthzDenied(400, getattr(e, "code", str(e)),
+                          getattr(e, "message", "Credential incomplet ou vide."))
+    try:
+        credentials_store.set_platform_key(label, provider, secret, set_by=ctx.sub,
+                                           meta=meta_champs or None)
     except ValueError as e:
         raise AuthzDenied(400, "invalid_platform_provider", str(e))
     return {"provider": provider, "label": label}
@@ -582,8 +593,11 @@ _D_A_DELETE = ("Révoque un jeton d'un compte tiers, en gardant la trace (qui, q
 _D_K_LIST = ("Les clés PLATEFORME posées, sans leur secret : provider, libellé, date de "
              "pose. Le secret n'est ni déchiffré ni rendu par cette surface.")
 _D_K_CREATE = ("Pose une clé plateforme. Elle est chiffrée au coffre et ne ressort "
-               "jamais. Refus nommés : `invalid_provider` (hors registre), "
-               "`missing_fields`, `invalid_platform_provider`.")
+               "jamais. `api_key` seule suffit : sur un connecteur multi-champs, elle "
+               "remplit son premier champ secret ; les autres champs passent par "
+               "`fields`. Refus nommés : `invalid_provider` (hors registre), "
+               "`missing_fields`, `missing_credentials`, `invalid_field_value`, "
+               "`invalid_platform_provider`.")
 _D_K_DELETE = ("Retire une clé plateforme. Ses grants vivent sur sa ligne : ils partent "
                "avec elle, sans orphelin.")
 

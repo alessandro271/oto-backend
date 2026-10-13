@@ -257,6 +257,10 @@ CLASSEMENT: dict[str, Table] = {
                                     "l'instance, qui les recalcule"),
     "journal_jobs_jour": instance("jobs distincts par jour du journal, dérivés du "
                                   "journal de l'instance, qui les recalcule"),
+    "platform_key_rate": instance("fenêtre de débit des clés plateforme de "
+                                  "l'instance (F-051) : éphémère, une minute"),
+    "limite_refus_jour": instance("palmarès des refus des limiteurs de l'instance "
+                                  "(#1232) : empreintes, trente jours"),
     "usage": possedee(ParSub(), "compteurs par compte, sans org"),
     "usage_signals": possedee(_ORG_OU_COMPTE),
     "usage_signal_occurrences": indirecte(Via("usage_signals", ("signal_id",)),

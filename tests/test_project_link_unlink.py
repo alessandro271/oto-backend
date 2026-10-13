@@ -84,6 +84,12 @@ def surface(monkeypatch):
                                                if slug in GUIDES else None))
     monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": True)
     monkeypatch.setattr(P.ownership, "visible_in_org", lambda sub, org, t, rid: True)
+    # Garde de portée d'`op=link` : tout identifiant passe (ce banc décrit autre chose).
+    monkeypatch.setattr(P.db, "refs_dans_la_portee",
+                        lambda pid, t, refs: {int(r) for r in refs if str(r).isdigit()})
+    _owner_of = P.ownership.owner_of
+    monkeypatch.setattr(P.ownership, "owner_of", lambda t, rid: None if t in (
+        "datastore_namespace", "doctrine") else _owner_of(t, rid))
     monkeypatch.setattr(P.group_store, "get_group",
                         lambda gid: {"id": gid, "org_id": 2, "name": "pôle"})
     monkeypatch.setattr(P.ownership, "accessor_scope",
@@ -205,3 +211,17 @@ def test_link_dun_tableau_deja_stocke_par_id_ne_reecrit_rien(surface, monkeypatc
                                          target_ref="linkedin-feed", role="flux"))
     assert vu["rewrite_from"] is None
     assert "duplicate_refs" not in out
+
+
+def test_une_procedure_sans_proprietaire_se_refuse_en_404(surface, monkeypatch):
+    """N4 : `ownership._guide_owner` lève sur une ligne sans propriétaire — la pose
+    répond « inconnue » (404), pas une 500."""
+    def _leve(sub, t, rid, want="read"):
+        if t == "doctrine":
+            raise ValueError("procédure #94 sans propriétaire")
+        return True
+    monkeypatch.setattr(P.ownership, "can_access", _leve)
+    with pytest.raises(AuthzDenied) as e:
+        P._project(CTX, P.ProjectInput(op="link", project_id=59, target_type="procedure",
+                                       target_ref="94"))
+    assert (e.value.status, e.value.code) == (404, "unknown_procedure")

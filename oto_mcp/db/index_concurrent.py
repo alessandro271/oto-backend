@@ -262,8 +262,8 @@ def declares() -> tuple[IndexConcurrent, ...]:
 
     Import tardif : les modules déclarants importent celui-ci."""
     from . import access_shadow, index_releve, search
-    return (index_releve.RELEVE, *index_releve.OUVERTURES, *search.INDEX_VALEURS,
-            access_shadow.CLE_ORIGINE)
+    return (index_releve.RELEVE, *index_releve.OUVERTURES, index_releve.GESTES_DE_LIGNE,
+            *search.INDEX_VALEURS, access_shadow.CLE_ORIGINE)
 
 
 class RevisionSansIndex(ValueError):

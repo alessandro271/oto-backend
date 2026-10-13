@@ -166,7 +166,8 @@ def _row_activity(ctx: ResolvedCtx, inp: RowActivityInput) -> dict:
     # remonterait les gestes d'une autre org).
     activity = db.datastore_row_activity(
         inp.row_id, str(key_value) if key_value is not None else None,
-        ns_id=ns_id, owner_type=nsctx.owner_type, owner_id=nsctx.owner_id,
+        ns_id=ns_id, created_at=row.get("_created_at"),
+        owner_type=nsctx.owner_type, owner_id=nsctx.owner_id,
         limit=LIMITE_PARCOURS)
     activity = _joindre_les_revisions(activity, nsctx.ns_id, inp.row_id,
                                       nsctx.status_key, LIMITE_PARCOURS)

@@ -24,6 +24,17 @@ elle, rien n'est verrouillé : un jeton humain ou d'API n'en porte jamais.
 
 `OTO_VERROU_ORG_DELEGATION` : `enforce` (défaut), `report` (journalise ce qui serait
 refusé et laisse passer) ou `off` — un retour arrière sans déploiement.
+
+**Les rôles PLATEFORME du porteur** (10/10/2026) : le verrou d'org ne bornait que le
+rôle d'ORG ; `super_admin`/`admin` restaient les siens sous le jeton, et avec eux toute
+garde plateforme (`PLATFORM_ADMIN`, `SUPER_ADMIN`, l'escalade `roles.is_platform_admin`,
+la visibilité des `oto_admin_*`, la gouvernance de `ownership`). Sous un jeton de
+délégation, un agent hébergé n'est pas l'opérateur : `role_plateforme` ramène ces rôles
+à `member` — UN seul point, `access.scope.role_effectif`, d'où tous les prédicats
+plateforme dérivent. Réglage PROPRE, `OTO_VERROU_ROLES_PLATEFORME` : `enforce`,
+`report` (DÉFAUT : journalise ce qui serait retiré, ne retire rien — des agents
+hébergés de comptes admin servent peut-être des outils d'admin, à relever avant de
+mordre) ou `off`. Indépendant du verrou d'org : couper l'un ne coupe pas l'autre.
 """
 from __future__ import annotations
 
@@ -64,6 +75,14 @@ class HorsVerrou(Exception):
 
 _COURANT: contextvars.ContextVar[Optional[Verrou]] = contextvars.ContextVar(
     "oto_verrou_org", default=None)
+
+_ENV_ROLES = "OTO_VERROU_ROLES_PLATEFORME"
+#: Les rôles plateforme qu'un jeton de délégation ne porte pas (`access.scope`).
+_ROLES_PLATEFORME = ("admin", "super_admin")
+#: Le verrou dont le rôle plateforme a déjà été signalé en `report` : une ligne par
+#: requête, pas une par prédicat — `get_user_role` est lu des dizaines de fois.
+_ROLE_SIGNALE: contextvars.ContextVar[Optional[Verrou]] = contextvars.ContextVar(
+    "oto_verrou_role_signale", default=None)
 
 
 def poser(verrou: Optional[Verrou]) -> contextvars.Token:
@@ -142,7 +161,8 @@ def hors(sub: Optional[str], org_id: object, *, route: str) -> bool:
 
 def interdit(sub: Optional[str], *, route: str) -> bool:
     """Un geste interdit au porteur verrouillé QUELLE QUE SOIT l'org visée : changer
-    l'org maison de l'humain (`org.set_home`, `org.clear`). Le jeton porte une org de
+    l'org maison de l'humain (`org.set_home`, `org.clear`, `group.set_home`, la face REST
+    de `group.use`) ou le faire quitter une org (`me.leave_org`). Le jeton porte une org de
     travail ; il ne déplace pas le défaut de la personne. En `report`, le dit au journal
     et rend False. Un tiers n'est jamais concerné."""
     v = courant()
@@ -161,3 +181,36 @@ def exiger(sub: Optional[str], org_id: object, *, route: str) -> None:
     """Lève `HorsVerrou` si `org_id` est hors de l'org du travail du porteur."""
     if hors(sub, org_id, route=route):
         raise HorsVerrou(org_id, courant())  # type: ignore[arg-type]
+
+
+def mode_roles() -> str:
+    """Le mode du verrou des rôles plateforme, lu à chaque appel. Une valeur inconnue
+    vaut `report` — le défaut : on n'a pas encore relevé ce qu'`enforce` couperait."""
+    m = (os.environ.get(_ENV_ROLES) or "report").strip().lower()
+    return m if m in _MODES else "report"
+
+
+def role_plateforme(sub: Optional[str], role: str) -> str:
+    """Le rôle plateforme de `sub` sous la requête courante : `member` à la place
+    d'`admin`/`super_admin` pour le PORTEUR d'un jeton de délégation, en `enforce`.
+
+    Lit la ContextVar BRUTE, pas `courant()` : `OTO_VERROU_ORG_DELEGATION=off` ne doit
+    pas rendre au porteur ses rôles plateforme — chaque réglage coupe son verrou. Un
+    tiers (`sub` ≠ porteur) n'est jamais concerné : lister les opérateurs d'une org
+    reste exact."""
+    if role not in _ROLES_PLATEFORME:
+        return role
+    v = _COURANT.get()
+    if v is None or sub is None or str(sub) != v.sub:
+        return role
+    m = mode_roles()
+    if m == "off":
+        return role
+    if m == "report":
+        if _ROLE_SIGNALE.get() is not v:
+            _ROLE_SIGNALE.set(v)
+            logger.warning("verrou des rôles plateforme (report) : le porteur du travail "
+                           "%s (org %s) agit avec le rôle `%s` — `enforce` le lirait "
+                           "`member`", v.job_id, v.org_id, role)
+        return role
+    return "member"

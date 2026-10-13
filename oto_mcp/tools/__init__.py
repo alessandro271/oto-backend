@@ -48,6 +48,10 @@ def register_all(mcp: FastMCP) -> None:
     # activation gate. No external dependency.
     from . import datastore
     datastore.register(mcp)
+    # `data_app` in a partner front's own table look — only where the instance
+    # declares that front's bundle (OTO_DATA_APP_BUNDLE); else the Prefab card above.
+    from . import datastore_table_app
+    datastore_table_app.register(mcp)
 
     # Docs app — MCP App variant rendered from `oto_doc` (read/browse a project's
     # pages + org KB). Spine, outside the activation gate; only registers if the
@@ -59,6 +63,12 @@ def register_all(mcp: FastMCP) -> None:
     # row). Spine `data_*`, prefab_ui import guarded as above.
     from . import datastore_review_app
     datastore_review_app.register(mcp)
+
+    # Procedure graph — a procedure's drawing rendered by a partner front's own
+    # bundle. Registers only where the instance declares that bundle
+    # (OTO_PROCEDURE_APP_BUNDLE); spine, outside the activation gate.
+    from . import procedure_app
+    procedure_app.register(mcp)
 
     # Runs (ADR 0017) — run_start/finish verbs (spine). The run_id set in
     # session state is stamped on every tool_call by the calllog sink. No

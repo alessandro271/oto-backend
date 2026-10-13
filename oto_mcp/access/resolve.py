@@ -28,7 +28,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 from .. import links
 from .. import (providers, credentials_store, db, group_store, instance_refs, org_store,
                 session_org, tenant_vault)
-from . import (cascade, chain_shadow, heritage, indices, quotas, rbac,
+from . import (cascade, chain_shadow, heritage, indices, platform_rate, quotas, rbac,
                resolve_anon, scope, tenant_budget)
 from .resolved_credential import ResolvedCredential
 
@@ -367,6 +367,8 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
                                   win.entity_type, win.entity_id, account=win.account)
     if check_usage:  # paid option RE-READ on every use (ADR 0070 §7), no fallback
         quotas.exiger_option_payante(provider, sub, active_org)
+        platform_rate.enforce(provider, sub, heritage.org_des_cles(sub, active_org),
+                              hint=lambda: links.ou_poser_la_cle(sub, org=active_org))
 
     # ADR 0044 §F R3: the platform tier reads the PLATFORM-scope instances of the
     # unified vault (share_mode/share_down = access; meta.rate_limit* = quota).
@@ -405,15 +407,13 @@ def _win_quota(win, sub: str, provider: str,
               active_org: Optional[int]) -> tuple[int, int]:
     """Today's (used, limit) for the winning PLATFORM edge `win`. `limit=0` =
     unlimited (registry without a default ceiling, OR quotas lifted by the person's
-    `platform_unmetered` right in their org, ADR 0070 §7) — never a real ceiling
-    of 0, `quota_for` does not return one.
+    `platform_unmetered` right in their org, ADR 0070 §7) — never a real ceiling of 0.
 
     SINGLE function for the pair: the refusal above, the read-only probe
     `platform_quota_hint` (below) and the displayed mode (`views.credential_mode_for`)
     all go through it. The ceiling itself comes from `quotas.plafond_du_jour`, which the
     `/api/me` snapshot also reads. The same number computed in two places ends up diverging —
-    that is why the `cascade` walker exists for the cascade itself (seen
-    2026-07-07, option rule copied 3×), the same discipline applies here."""
+    that is why the `cascade` walker exists (seen 2026-07-07, option rule copied 3×)."""
     used = quotas.usage_today(sub, provider)
     limit = quotas.plafond_du_jour(win.payload, provider,
                                    lambda: quotas.quotas_leves(sub, active_org))
@@ -448,10 +448,9 @@ def platform_quota_hint(provider: str, sub: Optional[str] = None) -> Optional[di
     used, limit = _win_quota(winner, sub, provider, active_org)
     if not limit:
         return None
-    # `kind` says WHAT this counts: oto's daily allowance on the shared platform key,
-    # never the provider's account balance — which can be empty while this reads
-    # 200 left (signal #1066: `remaining: 200`, then Serper "Not enough credits").
-    # Same entry as `oto_whoami`'s `platform_quotas`.
+    # `kind` says WHAT this counts: oto's daily allowance on the shared platform key (as
+    # `oto_whoami`'s `platform_quotas`), never the provider's balance — which can be empty
+    # while this reads 200 left (#1066: `remaining: 200`, then "Not enough credits").
     return {"kind": "oto_daily_allowance", "used": used, "limit": limit,
             "remaining": max(0, limit - used)}
 

@@ -83,3 +83,32 @@ def test_leave_last_admin_refused(monkeypatch):
     with pytest.raises(AuthzDenied) as e:
         om._leave_org(_ctx(), om.LeaveOrgInput(org_id=7))
     assert e.value.code == "last_org_admin"
+
+
+# ── sous le jeton d'un agent hébergé (`verrou_org.py`) ───────────────────────
+
+@pytest.fixture
+def verrou():
+    """Un jeton de délégation pour `u1`, verrouillé sur l'org 7 (celle de son travail)."""
+    from oto_mcp import verrou_org
+    t = verrou_org.poser(verrou_org.Verrou(sub="u1", org_id=7, job_id=1))
+    yield
+    verrou_org.lever(t)
+
+
+def test_leave_refused_under_a_delegation_token(monkeypatch, verrou):
+    """Quitter une org promeut une autre maison : le jeton d'un travail ne déplace pas
+    le défaut de la personne — même l'org de son propre travail, et rien n'est retiré."""
+    calls = _patch(monkeypatch, role="org_member")
+    for org_id in (7, 8):
+        with pytest.raises(AuthzDenied) as e:
+            om._leave_org(_ctx("u1"), om.LeaveOrgInput(org_id=org_id))
+        assert e.value.code == "org_out_of_job"
+    assert "removed" not in calls
+
+
+def test_leave_ok_for_someone_else_than_the_token_bearer(monkeypatch, verrou):
+    """Le verrou ne vise que le porteur : un autre compte quitte normalement."""
+    calls = _patch(monkeypatch, role="org_member")
+    assert om._leave_org(_ctx("u2"), om.LeaveOrgInput(org_id=7))["left"] is True
+    assert calls["removed"] == (7, "u2")

@@ -262,6 +262,60 @@ def test_open_tier_change_la_lecture_de_la_liste(socle, admin, monkeypatch):
                for b in out["beneficiaries"])
 
 
+def test_un_connecteur_par_chaine_liste_ses_aretes_vivantes(socle, admin, monkeypatch):
+    """Un connecteur par chaîne (`grants_chain`) accorde par ARÊTE, jamais par
+    `share_down`. Lue sur `share_down` seul, sa clé FERMÉE ne listait personne, qui
+    qu'on ait accordé : la console disait « ne sert aucun espace » après un grant
+    réussi, et un service de facturation qui décide sur cette liste ne pouvait ni
+    converger ni couper (vu le 2026-10-12 sur une clé re-posée fermée). La vue liste
+    donc les arêtes VIVANTES, et le dit par `chain_grants`."""
+    from oto_mcp import credentials_store, grants_chain
+    from oto_mcp.db import grants as db_grants
+    monkeypatch.setattr(pc.access, "paid_option_for", lambda n: None)
+    monkeypatch.setattr(credentials_store, "list_platform_instances", lambda p: [
+        {"label": "main", "share_mode": "closed", "share_down": []},
+        {"share_mode": "closed", "share_down": ["org:7"]},   # sans label : pas d'arêtes à lire
+    ])
+    lus = []
+
+    def _aretes(ref):
+        lus.append(ref)
+        return [
+            {"grantee_kind": "org", "grantee_id": "42", "constraints": {"quota": 30}},
+            {"grantee_kind": "org", "grantee_id": "43", "constraints": {}},
+            {"grantee_kind": "user", "grantee_id": "u-9", "constraints": None},
+            # « tout le monde » n'est pas un bénéficiaire nommé : c'est `open_tier`.
+            {"grantee_kind": grants_chain.EVERYONE[0], "grantee_id": grants_chain.EVERYONE[1],
+             "constraints": {}},
+        ]
+    monkeypatch.setattr(db_grants, "live_edges_for_resource", _aretes)
+
+    code, out = call("platform.connector.access_list", path_params={"provider": "serper"})
+    assert code == 200, out
+    assert set(out) == set(pc.PlatformAccessView.model_fields)
+    assert out["chain_grants"] is True and out["open_tier"] is False
+    assert lus == [grants_chain.instance_ref("main", "serper")]
+    by = {(b["scope"], b["id"]): b for b in out["beneficiaries"]}
+    assert set(by) == {("org", "42"), ("org", "43"), ("org", "7"), ("user", "u-9")}
+    assert all(b["has_key"] for b in by.values())
+    # Le quota d'un grant par chaîne est la contrainte de son arête.
+    assert by[("org", "42")]["daily_quota"] == 30
+    assert by[("org", "43")]["daily_quota"] is None
+
+
+def test_hors_chaine_les_aretes_ne_sont_pas_lues(socle, admin, monkeypatch):
+    """Un connecteur hors chaîne ne lit que `share_down` : `chain_grants` reste faux,
+    et la table des arêtes n'est pas interrogée."""
+    from oto_mcp.db import grants as db_grants
+
+    def _interdit(ref):
+        raise AssertionError("un connecteur hors chaîne ne lit pas les arêtes")
+    monkeypatch.setattr(db_grants, "live_edges_for_resource", _interdit)
+    code, out = call("platform.connector.access_list", path_params={"provider": "unipile"})
+    assert code == 200, out
+    assert out["chain_grants"] is False
+
+
 def test_un_connecteur_inconnu_est_un_404(socle, admin):
     code, out = call("platform.connector.access_list", path_params={"provider": "zzz"})
     assert code == 404 and out["error"] == "unknown_connector"

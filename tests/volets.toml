@@ -114,6 +114,9 @@ chemins = [
   "oto_mcp/handshake_log.py",
   "oto_mcp/empreinte_deps.py",
   "oto_mcp/entetes_securite.py",
+  "oto_mcp/limite_debit.py",
+  "oto_mcp/limite_debit_mesure.py",
+  "oto_mcp/limite_refus_top.py",
   "oto_mcp/egress.py",
   "oto_mcp/crypto.py",
   "oto_mcp/env_inventory.py",
@@ -140,6 +143,7 @@ chemins = [
   "oto_mcp/middleware/**",
   "oto_mcp/org_store/**",
   "oto_mcp/credentials_store.py",
+  "oto_mcp/cles_plateforme_format.py",
   "oto_mcp/tenancy.py",
   "oto_mcp/session_org.py",
   "oto_mcp/session_visibility.py",
@@ -190,6 +194,7 @@ chemins = [
   "oto_mcp/capabilities/org_api_keys.py",
   "oto_mcp/capabilities/org_console.py",
   "oto_mcp/capabilities/org_suspension.py",
+  "oto_mcp/capabilities/platform_balances.py",
   "oto_mcp/capabilities/platform_connectors.py",
   "oto_mcp/capabilities/platform_instructions.py",
   "oto_mcp/capabilities/platform_invites.py",
@@ -251,6 +256,9 @@ chemins = [
   "oto_mcp/db/doc_grants.py",
   "oto_mcp/db/entitlements.py",
   "oto_mcp/db/estampille.py",
+  # L'attestation d'export qu'exige une révision de retrait (#1169) : lue par la migration
+  # comme `index_concurrent`, elle en suit le rangement.
+  "oto_mcp/db/export_avant_retrait.py",
   "oto_mcp/db/google.py",
   "oto_mcp/db/grants.py",
   "oto_mcp/db/historique.py",
@@ -260,10 +268,12 @@ chemins = [
   "oto_mcp/db/keys.py",
   "oto_mcp/db/lecture_bornee.py",
   "oto_mcp/db/lecture_d_appel.py",
+  "oto_mcp/db/limite_refus_jour.py",
   "oto_mcp/db/node_tables.py",
   "oto_mcp/db/node_view.py",
   "oto_mcp/db/nodes.py",
   "oto_mcp/db/paths.py",
+  "oto_mcp/db/platform_key_rate.py",
   "oto_mcp/db/platform_instructions.py",
   "oto_mcp/db/portee.py",
   "oto_mcp/db/query.py",
@@ -640,5 +650,5 @@ tests = ["tests/**/test_apollo*.py"]
 
 [[volet]]
 nom = "procédure de diagramme"
-sources = ["oto_mcp/procedure_diagram.py"]
-tests = ["tests/**/test_procedure_diagram*.py"]
+sources = ["oto_mcp/procedure_diagram.py", "oto_mcp/tools/procedure_app.py"]
+tests = ["tests/**/test_procedure_diagram*.py", "tests/test_procedure_app.py"]

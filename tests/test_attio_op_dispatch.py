@@ -75,6 +75,10 @@ def client(monkeypatch):
 
     inst = MagicMock()
     monkeypatch.setattr(core, "AttioClient", lambda **kw: inst)
+    # `attio_record` bâtit sa ressource sur l'objet demandé (be#1158) : la
+    # doublure la sert sous le nom de l'objet, `client.<objet>.<méthode>`.
+    monkeypatch.setattr(core, "AttioResource",
+                        lambda c, object_type: getattr(c, object_type))
     monkeypatch.setattr("oto_mcp.access.resolve_api_key", lambda *a, **k: ("k", False))
     # Défaut inoffensif : pas de membre ⟹ pas d'auto-remplissage d'`owner` sur la
     # création de deal (le cas nominal a son propre test).
@@ -82,9 +86,10 @@ def client(monkeypatch):
     return inst
 
 
-# --- records : companies / people / deals -------------------------------------
+# --- records : tout objet de l'espace -----------------------------------------
 
-@pytest.mark.parametrize("object", ["companies", "people", "deals"])
+@pytest.mark.parametrize("object", ["companies", "people", "deals", "products",
+                                    "0b8f6c1e-2d4a-4f1b-9c3e-7a5d2e1f0c9b"])
 @pytest.mark.parametrize("op,kwargs,method", [
     ("list", {}, "list"),
     ("get", {"record_id": "r1"}, "get"),
@@ -143,12 +148,49 @@ def test_record_merge_names_the_primary_then_the_secondary(client):
     _assert_no_stray_write(client, expected="people.merge")
 
 
-def test_record_refuses_an_unknown_object(client):
-    """Attio a des objets CUSTOM, mais le client n'expose que les trois standard :
-    un objet inconnu doit être nommé, pas silencieusement traité."""
-    with pytest.raises(McpError, match="object must be"):
-        _tool("attio_record")(object="products", op="list")
-    _assert_no_stray_write(client)
+@pytest.mark.parametrize("object", ["", "products/../people", "a b", "companies?x=1",
+                                    "x" * 65])
+@pytest.mark.parametrize("op,kwargs", [
+    ("list", {}),
+    ("create", {"attributes": {"name": "A"}}),
+    ("delete", {"record_id": "r1"}),
+])
+def test_record_refuses_an_object_that_is_not_a_slug_or_an_id(client, object, op, kwargs):
+    """`object` entre dans le chemin de l'URL (`objects/{object}/records`) : ce qui
+    n'a pas la forme d'un slug ou d'un id est refusé AVANT le client — ni lecture,
+    ni écriture, et le refus dit où lister les objets."""
+    with pytest.raises(McpError, match="attio_object"):
+        _tool("attio_record")(object=object, op=op, **kwargs)
+    assert client.mock_calls == []
+
+
+def test_record_builds_the_resource_on_the_custom_object(monkeypatch):
+    """Sans doublure de la ressource : la VRAIE `AttioResource` d'oto-core écrit
+    sous `objects/<slug>/records` — l'objet personnalisé atteint l'API tel quel."""
+    import oto.tools.attio.client as core
+
+    inst = MagicMock()
+    # Gardé à part : le tool enveloppe `_request` sur l'instance (oto#42).
+    http = inst._request
+    http.return_value = {"data": {}}
+    monkeypatch.setattr(core, "AttioClient", lambda **kw: inst)
+    monkeypatch.setattr("oto_mcp.access.resolve_api_key", lambda *a, **k: ("k", False))
+    _tool("attio_record")(object="products", op="create",
+                          attributes={"name": [{"value": "P"}]})
+    method, endpoint = http.call_args.args
+    assert (method, endpoint) == ("POST", "objects/products/records")
+    assert http.call_args.kwargs["json"] == {
+        "data": {"values": {"name": [{"value": "P"}]}}}
+
+
+def test_record_create_custom_object_does_not_invent_an_owner(client):
+    """L'auto-remplissage d'`owner` reste propre à deals : un objet personnalisé
+    n'hérite d'aucun champ inventé."""
+    client.workspace_members.list.return_value = {
+        "data": [{"id": {"workspace_member_id": "wm-1"}}]}
+    _tool("attio_record")(object="products", op="create", attributes={"name": "P"})
+    assert "owner" not in client.products.create.call_args.kwargs
+    _assert_no_stray_write(client, expected="products.create")
 
 
 def test_record_list_is_paginated(client):

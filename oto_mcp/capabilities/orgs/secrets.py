@@ -113,7 +113,8 @@ CAPABILITIES += [
         key="org.secret.set", handler=_set_secret, Input=SetSecretInput,
         authz=ORG_ADMIN_OF("org_id"), Output=OrgSecretSet,
         description=("Set/rotate an org's shared account credential for a provider "
-                     "(org-shareable only). Single-key connectors: pass `api_key`. "
+                     "(org-shareable only). Single-key connectors: pass `api_key`, or `fields` "
+                     "with the key under its declared field name. "
                      "Multi-field connectors (zoho/silae…): pass `fields` "
                      "(all declared credential fields). base_url for remote bridges."),
         errors=(DeclaredError(400, "single_account_connector",

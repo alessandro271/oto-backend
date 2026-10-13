@@ -13,18 +13,24 @@ blocage, pas après — qui peut dumper la vraie pile.
 Adapté ici, sur le même patron mais pas la même sortie :
 - **journalise** (logger `oto_mcp.loop`, comme `loop_watch.py`) plutôt qu'écrire des
   fichiers `stacktrace-*.txt` sur la box ;
-- la pile COMPLÈTE du **thread principal** (celui qui fait tourner la boucle asyncio),
-  puis une ligne compacte pour **tous les fils** du process, avec leur nom
-  (`sys._current_frames()` × `threading.enumerate()`) : les derniers cadres de chaque
-  fil actif, les fils au repos (selector, file d'attente, `wait`) résumés en une ligne.
-  Les deux lignes portent le même identifiant de gel (`gel=<hex>`). Pourquoi tous :
-  une boucle trouvée dans `select` n'est pas bloquée par son propre code, elle attend
-  le GIL qu'un AUTRE fil tient (`docs/event-loop-perf.md`, gels « select ») ;
+- **UNE entrée de journal par gel** (#1108, 12/10) : la pile de **tous les fils** du
+  process (`sys._current_frames()` × `threading.enumerate()`), chacun avec son nom,
+  son `ident`, son `tid` noyau, s'il est démon, ses `_CADRES_PAR_FIL` derniers cadres
+  (`chemin:ligne fonction`, du plus profond au plus haut), le fil de la BOUCLE marqué
+  et en tête, et ce que le relevé sait dire sans dépendance : le fil est-il dans un
+  appel C (instruction courante de son cadre le plus profond) ou entre deux
+  instructions Python, son état et son CPU cumulé (`/proc/self/task/<tid>/stat`). Les
+  fils au repos (selector, file d'attente, `wait`) sont regroupés par pile identique.
+  Chaque ligne de l'entrée porte `gel=<hex>` : le journal de la box (journald) range
+  chaque ligne de stderr à part, un `grep gel=<hex>` rend l'entrée entière. Plafonnée à
+  `_PLAFOND_RELEVE` caractères, la troncature dite. Pourquoi tous : une boucle trouvée
+  dans `select` n'est pas bloquée par son propre code, elle attend le GIL qu'un AUTRE
+  fil tient (`docs/event-loop-perf.md`, gels « select ») ;
 - le **retard du chien lui-même** et le CPU du process depuis son réveil précédent :
   le chien a besoin du GIL pour vérifier, un chien en retard d'autant que le gel dit
   que le GIL (ou le process entier) lui a manqué aussi ;
-- **aucune variable locale** (`traceback.extract_stack`, jamais `format_exc` ni rien
-  qui inspecterait une frame plus profondément) — même famille de risque que le fix
+- **aucune variable locale** (rien que `f_code`, `f_lineno` et `f_lasti` de chaque
+  cadre, jamais `f_locals`, `format_exc` ni texte source) — même famille de risque que le fix
   Sentry du 2026-09-15 (#564, `include_local_variables=False`) : un secret déchiffré
   qui traînerait dans une frame ne doit jamais atteindre un journal ;
 - **débit limité** (nuit du 14-15/09 : une salve de 6 blocages courts en ~1 min suite
@@ -63,14 +69,14 @@ qu'écrire un flottant avant de redormir.
 from __future__ import annotations
 
 import asyncio
+import dis
 import logging
 import os
 import sys
 import threading
 import time
-import traceback
-from collections import Counter
 from types import FrameType
+from typing import NamedTuple
 
 logger = logging.getLogger("oto_mcp.loop")
 
@@ -85,12 +91,27 @@ OTO_HANG_WATCH_ENABLED = "OTO_HANG_WATCH_ENABLED"
 # remplisse le journal de piles redondantes du même incident.
 _MAX_DUMPS_PER_MIN = 3
 
-# Cadres gardés par fil dans la ligne « tous les fils » : les plus profonds, ceux qui
-# disent ce que le fil fait. La pile complète reste celle du thread principal.
-_CADRES_PAR_FIL = 5
+# Cadres gardés par fil : les plus profonds, ceux qui disent ce que le fil fait. 20
+# couvrent le chemin d'une requête depuis le cadre qui bloque jusqu'au handler (la
+# racine uvicorn/starlette, au-delà, ne dit rien d'un gel). Un fil au repos n'en garde
+# que `_CADRES_AU_REPOS` : son point d'attente et qui l'y a mis.
+_CADRES_PAR_FIL = 20
+_CADRES_AU_REPOS = 3
+
+# Taille maximale d'un relevé (caractères, toutes lignes comprises). Un relevé part
+# dans le journal ET, par la LoggingIntegration, en fil d'Ariane du prochain événement
+# Sentry : sans plafond, un process à cent fils actifs écrirait plus de 100 Ko par gel
+# dans un journal qui ne garde déjà que quelques heures. 32 000 : la boucle, une
+# vingtaine de fils actifs à 20 cadres et un pool de quarante fils au repos (mesuré :
+# 61 fils, ~20 Ko) ; au-delà, la troncature se DIT, avec le nombre de fils non
+# montrés, et les fils au repos partent les premiers.
+_PLAFOND_RELEVE = 32_000
+# Réservés sous le plafond pour la ligne finale (« fin du relevé » ou « tronqué ») et
+# l'éventuel avertissement « fil de la boucle absent ».
+_RESERVE_FIN = 300
 
 # (fichier, fonction) du cadre le plus profond d'un fil qui ATTEND sans rien tenir :
-# résumé en une ligne, sa pile ne dit rien du gel. `threading.wait` couvre
+# regroupé avec ses semblables, sa pile ne dit rien du gel. `threading.wait` couvre
 # `Condition.wait`, `Event.wait` et `queue.Queue.get` (pool anyio, pool psycopg,
 # transport Sentry) ; `thread.py:_worker` est l'attente d'un pool
 # `concurrent.futures` sur sa `SimpleQueue` (C, donc sans cadre Python à elle).
@@ -101,6 +122,15 @@ _ATTENTES = frozenset({
     ("queue.py", "get"),
     ("thread.py", "_worker"),
 })
+
+# Instructions qui appellent du code (C quand aucun cadre Python n'est au-dessus) :
+# `CALL*` (3.10 à 3.14), `PRECALL` (3.11), l'entrée d'un `with` (3.11-3.13 ; un CALL
+# en 3.14). Le cadre le plus profond d'un fil arrêté sur l'une d'elles est DANS un appel
+# natif : `time.sleep`, `lock.acquire`, `select`, `json.dumps`, `re.match`…
+_APPELS = frozenset(
+    nom for nom in dis.opname
+    if nom.startswith("CALL") or nom in {"PRECALL", "BEFORE_WITH", "BEFORE_ASYNC_WITH"}
+)
 
 
 def enabled() -> bool:
@@ -114,18 +144,20 @@ def enabled() -> bool:
 class HangWatch(threading.Thread):
     """Thread démon : observe un timestamp partagé (mis à jour par `beat()`, appelé
     depuis la boucle) et journalise — au plus une fois par ÉPISODE de blocage, borné
-    en plus par minute — la pile du thread PRINCIPAL pendant qu'elle bloque
-    réellement, puis une ligne pour tous les fils, sous le même `gel=<hex>`.
+    en plus par minute — UN relevé de tous les fils (`releve_des_fils`), pris pendant
+    que la boucle bloque réellement, sous un identifiant `gel=<hex>`.
 
     `_last_beat` est une liste à un élément (pas un flottant nu) : Python la passe
     par RÉFÉRENCE, donc `beat()` (thread de la boucle) et `_check()` (ce thread) voient
     la même case — même patron qu'`aiodebug.hang_inspection`. Aucun verrou : sous le
     GIL, une écriture/lecture d'un flottant dans une liste ne se déchire pas."""
 
-    def __init__(self, interval: float, max_dumps_per_min: int = _MAX_DUMPS_PER_MIN) -> None:
+    def __init__(self, interval: float, max_dumps_per_min: int = _MAX_DUMPS_PER_MIN,
+                 plafond: int = _PLAFOND_RELEVE) -> None:
         super().__init__(daemon=True, name="oto-hang-watch")
         self._interval = interval
         self._max_dumps_per_min = max_dumps_per_min
+        self._plafond = plafond
         self._last_beat = [time.monotonic()]
         self._stop_event = threading.Event()
         self._episode_open = False
@@ -169,7 +201,7 @@ class HangWatch(threading.Thread):
                 self._episode_started_at = now
                 self._episode_id = os.urandom(3).hex()
                 self._maybe_dump(delay, fenetre, boucle_repartie=False)
-            # sinon : même épisode, déjà dumpé — on attend la résorption
+            # sinon : même épisode, déjà relevé — on attend la résorption
             return
         if self._episode_open:
             self._episode_open = False
@@ -193,11 +225,11 @@ class HangWatch(threading.Thread):
         D'où le libellé « sans battement depuis » plutôt que « bloquée » : ce
         nombre peut SURESTIMER le temps de blocage réel, jusqu'à `interval/2`
         (0,5s au seuil de prod) — ce n'est pas une mesure exacte du blocage, juste
-        de l'absence de battement.
+        de l'absence de battement. La durée totale du gel, elle, part à la
+        résorption (« débloquée après »).
 
         `boucle_repartie` : le gel n'est vu que par le retard du chien, la boucle
-        a déjà repris — sa pile ne montrerait que son travail ordinaire, seule la
-        ligne des fils part."""
+        a déjà repris — son cadre ne montre que son travail ordinaire."""
         constat = ("event loop et chien à l'arrêt pendant %.1fs (GIL tenu ailleurs ou "
                    "process suspendu), la boucle a repris la première" if boucle_repartie
                    else "event loop sans battement depuis %.1fs")
@@ -212,79 +244,21 @@ class HangWatch(threading.Thread):
             )
             return
         self._dump_times.append(now)
-        # Les fils d'abord : c'est l'instantané le plus proche du moment où le chien a
-        # repris le GIL ; la pile principale, elle, lit les sources (linecache).
-        try:
-            fils = self._all_threads_text()
-        except Exception:
-            # Le relevé ne doit jamais tuer le chien : la pile principale part quand même.
-            logger.warning("gel=%s : relevé des fils impossible", self._episode_id,
-                           exc_info=True)
-            fils = "(relevé impossible, cf. l'avertissement précédent)"
-        if boucle_repartie:
-            self._safe_log(logging.WARNING, constat + " (gel=%s)", delay, self._episode_id)
-        else:
-            self._safe_log(
-                logging.WARNING, constat + " (gel=%s) — pile du thread principal:\n%s",
-                delay, self._episode_id, self._main_thread_stack_text(),
-            )
         # Un retard du chien du même ordre que le gel = il a attendu le GIL (ou le
         # process entier était arrêté) ; le CPU du process sur la même fenêtre
         # départage les deux (quelqu'un calculait, ou personne).
-        self._safe_log(
-            logging.WARNING,
-            "gel=%s fils — chien en retard de %.2fs, CPU du process %.2fs sur les %.2fs "
-            "depuis son réveil précédent — %s",
-            self._episode_id, *fenetre, fils,
-        )
-
-    def _all_threads_text(self) -> str:
-        """Tous les fils du process sauf le chien, sur UNE ligne : `nom[cadres]`, du
-        plus profond au plus proche de la racine, séparés par ` | ` ; les fils au
-        repos regroupés en fin de ligne par (nom, point d'attente).
-
-        Rien que `f_code` et `f_lineno` : ni variable locale, ni texte source (pas de
-        `linecache`, donc aucune lecture disque tant que le chien tient le GIL)."""
-        noms = {t.ident: t.name for t in threading.enumerate()}
-        moi = threading.get_ident()
-        boucle: list[str] = []
-        actifs: list[str] = []
-        repos: Counter[str] = Counter()
-        for tid, frame in sys._current_frames().items():
-            if tid == moi:
-                continue
-            nom = noms.get(tid, f"tid-{tid}")
-            cadres = _cadres(frame)
-            fichier, _, fonction = cadres[0]
-            attente = (os.path.basename(fichier), fonction)
-            if tid != self._main_thread_id and attente in _ATTENTES:
-                repos[f"{nom} [{attente[0].removesuffix('.py')}.{fonction}]"] += 1
-                continue
-            texte = " < ".join(f"{_chemin_court(f)}:{ligne} {fn}"
-                               for f, ligne, fn in cadres)
-            if tid == self._main_thread_id:
-                # La boucle en tête, toujours détaillée — même dans `select` : c'est
-                # d'elle qu'on parle.
-                boucle.append(f"{nom}(boucle)[{texte}]")
-            else:
-                actifs.append(f"{nom}[{texte}]")
-        if repos:
-            actifs.append(f"au repos {sum(repos.values())} : " + ", ".join(
-                f"{k} ×{n}" if n > 1 else k for k, n in sorted(repos.items())))
-        return " | ".join(boucle + actifs)
-
-    def _main_thread_stack_text(self) -> str:
-        frame = sys._current_frames().get(self._main_thread_id)
-        if frame is None:
-            return "(thread principal introuvable dans sys._current_frames())"
-        lines: list[str] = []
-        # extract_stack ne rend jamais les variables locales (capture_locals=False,
-        # son défaut) — fichier/ligne/fonction/texte de la ligne, rien de plus.
-        for filename, line_no, name, text in traceback.extract_stack(frame):
-            lines.append(f'  File "{filename}", line {line_no}, in {name}')
-            if text:
-                lines.append(f"    {text}")
-        return "\n".join(lines)
+        entete = (constat % delay + " (gel=%s) — chien en retard de %.2fs, CPU du process "
+                  "%.2fs sur les %.2fs depuis son réveil précédent") % (
+                      self._episode_id, *fenetre)
+        try:
+            texte = releve_des_fils(self._episode_id, entete, boucle=self._main_thread_id,
+                                    plafond=self._plafond)
+        except Exception:
+            # Le relevé ne doit jamais tuer le chien : le constat part quand même.
+            logger.warning("gel=%s : relevé des fils impossible", self._episode_id,
+                           exc_info=True)
+            texte = entete + " — relevé des fils impossible, cf. l'avertissement précédent"
+        self._safe_log(logging.WARNING, "%s", texte)
 
     @staticmethod
     def _safe_log(level: int, msg: str, *args: object) -> None:
@@ -295,13 +269,160 @@ class HangWatch(threading.Thread):
             pass
 
 
-def _cadres(frame: FrameType | None) -> list[tuple[str, int, str]]:
-    """Les `_CADRES_PAR_FIL` cadres les plus profonds, le plus profond d'abord."""
+class _Fil(NamedTuple):
+    nom: str
+    ident: int
+    tid: int | None       # identifiant noyau (`Thread.native_id`), celui de py-spy et de /proc
+    demon: bool | None    # None : fil inconnu de `threading` (créé hors du module)
+    cadres: tuple[tuple[str, int, str], ...]
+    natif: bool           # cadre le plus profond arrêté sur un appel : DANS du code C
+    attente: str | None   # « threading.wait »… si le fil est au repos
+
+
+def releve_des_fils(gel: str, entete: str, *, boucle: int | None,
+                    plafond: int = _PLAFOND_RELEVE) -> str:
+    """Le relevé d'un gel : UNE entrée multi-lignes, `entete` en tête, puis un bloc par
+    fil (ou par groupe de fils au repos à pile identique), chaque ligne après la
+    première préfixée de `gel=<gel>`. Le fil appelant (le chien) est exclu.
+
+    Rien que `f_code`, `f_lineno` et `f_lasti` : ni variable locale, ni texte source
+    (pas de `linecache`, donc aucune lecture disque tant que le chien tient le GIL).
+    Le CPU et l'état de chaque fil se lisent dans `/proc` (Linux ; ailleurs, omis).
+
+    Ordre : la boucle ; les fils actifs entre deux instructions Python (ils
+    calculaient en Python et attendent le GIL) ; les fils actifs dans un appel C ;
+    les groupes au repos. Au plafond, les derniers blocs tombent et la dernière ligne
+    le dit."""
+    # L'instantané d'abord, au plus près du moment où le chien a repris le GIL.
+    frames = sys._current_frames()
+    connus = {t.ident: t for t in threading.enumerate()}
+    moi = threading.get_ident()
+    fil_boucle: _Fil | None = None
+    actifs: list[_Fil] = []
+    repos: list[_Fil] = []
+    for ident, frame in frames.items():
+        if ident == moi:
+            continue
+        t = connus.get(ident)
+        cadres = _cadres(frame, _CADRES_PAR_FIL)
+        fichier, _, fonction = cadres[0] if cadres else ("?", 0, "?")
+        point = (os.path.basename(fichier), fonction)
+        attente = (f"{point[0].removesuffix('.py')}.{fonction}"
+                   if ident != boucle and point in _ATTENTES else None)
+        fil = _Fil(
+            nom=t.name if t is not None else f"tid-{ident}",
+            ident=ident,
+            tid=getattr(t, "native_id", None) if t is not None else None,
+            demon=t.daemon if t is not None else None,
+            cadres=cadres[:_CADRES_AU_REPOS] if attente else cadres,
+            natif=_dans_un_appel(frame),
+            attente=attente,
+        )
+        if ident == boucle:
+            fil_boucle = fil
+        elif attente:
+            repos.append(fil)
+        else:
+            actifs.append(fil)
+
+    blocs: list[tuple[list[_Fil], str]] = []
+    if fil_boucle is not None:
+        blocs.append(([fil_boucle], "BOUCLE"))
+    actifs.sort(key=lambda f: f.natif)  # stable : les fils « en Python » d'abord
+    blocs.extend(([f], "") for f in actifs)
+    groupes: dict[tuple, list[_Fil]] = {}
+    for f in repos:
+        groupes.setdefault((f.attente, f.cadres, f.natif), []).append(f)
+    blocs.extend((membres, f"au repos ({membres[0].attente})") for membres in groupes.values())
+
+    n_fils = sum(len(m) for m, _ in blocs)
+    prefixe = f"gel={gel} "
+    lignes = [f"{entete} — {n_fils} fils relevés, cadres du plus profond au plus haut"]
+    taille = len(lignes[0])
+    montres = 0
+    for membres, marque in blocs:
+        bloc = _bloc(prefixe, membres, marque)
+        poids = sum(len(l) + 1 for l in bloc)
+        if taille + poids > plafond - _RESERVE_FIN:
+            break
+        lignes.extend(bloc)
+        taille += poids
+        montres += len(membres)
+    if montres < n_fils:
+        lignes.append(f"{prefixe}… relevé tronqué au plafond de {plafond} caractères : "
+                      f"{n_fils - montres} fil(s) non montré(s)")
+    else:
+        lignes.append(f"{prefixe}fin du relevé : {n_fils} fils")
+    if boucle is not None and fil_boucle is None:
+        lignes.insert(1, f"{prefixe}⚠ fil de la boucle (ident={boucle}) absent de "
+                         "sys._current_frames()")
+    return "\n".join(lignes)
+
+
+def _bloc(prefixe: str, membres: list[_Fil], marque: str) -> list[str]:
+    """`» <fil> [BOUCLE] <appel C|en Python> …` puis un cadre par ligne. Un groupe au
+    repos : `» ×N au repos (…) : <fil> ; <fil> …`, ses cadres une seule fois."""
+    tete = membres[0]
+    nature = "appel C" if tete.natif else "en Python"
+    if len(membres) == 1:
+        entete = f"{prefixe}» {_identite(tete)} " + " ".join(
+            x for x in (marque, nature) if x)
+    else:
+        entete = (f"{prefixe}» ×{len(membres)} {marque}, {nature} : "
+                  + " ; ".join(_identite(f) for f in membres))
+    return [entete] + [f"{prefixe}    {_chemin_court(fichier)}:{ligne} {fonction}"
+                       for fichier, ligne, fonction in tete.cadres]
+
+
+def _identite(fil: _Fil) -> str:
+    demon = {True: "oui", False: "non", None: "?"}[fil.demon]
+    texte = f"« {fil.nom} » ident={fil.ident} tid={fil.tid if fil.tid else '?'} démon={demon}"
+    etat_cpu = _etat_et_cpu(fil.tid)
+    if etat_cpu is not None:
+        texte += f" état={etat_cpu[0]} cpu={etat_cpu[1]:.2f}s"
+    return texte
+
+
+def _cadres(frame: FrameType | None, n: int) -> tuple[tuple[str, int, str], ...]:
+    """Les `n` cadres les plus profonds, le plus profond d'abord."""
     cadres: list[tuple[str, int, str]] = []
-    while frame is not None and len(cadres) < _CADRES_PAR_FIL:
+    while frame is not None and len(cadres) < n:
         cadres.append((frame.f_code.co_filename, frame.f_lineno or 0, frame.f_code.co_name))
         frame = frame.f_back
-    return cadres
+    return tuple(cadres)
+
+
+def _dans_un_appel(frame: FrameType) -> bool:
+    """Le fil est-il DANS du code natif ? Son cadre Python le plus profond est arrêté
+    sur une instruction d'appel (`_APPELS`) : l'appelé n'a pas de cadre Python, c'est
+    du C — un appel bloquant qui a rendu le GIL (`sleep`, `acquire`, `select`, E/S)
+    ou un calcul C qui vient de le rendre. Sinon, le fil s'est arrêté ENTRE deux
+    instructions Python : il calculait en Python et a cédé le GIL à la bascule.
+
+    `f_lasti` est en octets depuis 3.10 et `co_code` rend le code non spécialisé : une
+    lecture d'octet, sans désassembler."""
+    lasti = frame.f_lasti
+    code = frame.f_code.co_code
+    if lasti < 0 or lasti >= len(code):
+        return False
+    return dis.opname[code[lasti]] in _APPELS
+
+
+def _etat_et_cpu(tid: int | None) -> tuple[str, float] | None:
+    """État ordonnanceur (`R` en cours/prêt, `S` endormi, `D` E/S disque…) et CPU
+    cumulé (utime+stime, depuis la naissance du fil) d'un fil, lus dans
+    `/proc/self/task/<tid>/stat`. None hors Linux ou si le fil vient de finir."""
+    if not tid:
+        return None
+    try:
+        with open(f"/proc/self/task/{tid}/stat", "rb") as f:
+            brut = f.read()
+    except OSError:
+        return None  # fil fini entre l'instantané et la lecture, ou pas de /proc
+    # Le nom du fil (champ 2) est entre parenthèses et peut contenir des espaces.
+    champs = brut[brut.rfind(b")") + 2:].split()
+    tic = os.sysconf("SC_CLK_TCK")
+    return champs[0].decode(), (int(champs[11]) + int(champs[12])) / tic
 
 
 def _chemin_court(chemin: str) -> str:

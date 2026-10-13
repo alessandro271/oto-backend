@@ -1,5 +1,7 @@
-"""Dispatch `op=` des 8 tools `linkedin_unipile_*` (ADR 0047 §Amendement, appliqué au
-connecteur unipile le 2026-08-10 : 38 tools → 8).
+"""Dispatch `op=` des tools `linkedin_unipile_*` (ADR 0047 §Amendement, appliqué au
+connecteur unipile le 2026-08-10 : 38 tools → 8 ; l'envoi sorti des lecteurs dans trois
+outils d'écriture le 09/10/2026, #1189 — la garde de ce découpage vit dans
+`tests/test_unipile_lecture_envoi_1189.py`).
 
 Ce que ce fichier verrouille, et que les autres tests unipile ne couvraient PAS : ils
 exercent des helpers purs (`_slim`, `_canonical_li_identifier`, rate-limit) — aucun ne
@@ -77,14 +79,21 @@ def test_profile_company_is_cached(client):
 @pytest.mark.parametrize("op,kwargs,method", [
     ("list", {}, "list_chats"),
     ("read", {"chat_id": "c1"}, "list_messages"),
-    ("send", {"chat_id": "c1", "text": "hello"}, "send_message"),
     ("attendees", {"chat_id": "c1"}, "list_chat_attendees"),
     ("contacts", {}, "list_attendees"),
-    ("update", {"chat_id": "c1", "action": "setReadStatus", "value": True}, "patch_chat"),
-    ("react", {"message_id": "m1", "reaction": "👍", "chat_id": "c1"}, "react_message"),
 ])
 def test_chat_ops_route_to_the_right_client_method(client, op, kwargs, method):
     _tool("linkedin_unipile_chat")(op=op, **kwargs)
+    getattr(client, method).assert_called_once()
+
+
+@pytest.mark.parametrize("op,kwargs,method", [
+    ("send", {"chat_id": "c1", "text": "hello"}, "send_message"),
+    ("update", {"chat_id": "c1", "action": "setReadStatus", "value": True}, "patch_chat"),
+    ("react", {"message_id": "m1", "reaction": "👍", "chat_id": "c1"}, "react_message"),
+])
+def test_send_ops_route_to_the_right_client_method(client, op, kwargs, method):
+    _tool("linkedin_unipile_send")(op=op, **kwargs)
     getattr(client, method).assert_called_once()
 
 
@@ -92,7 +101,7 @@ def test_chat_send_refuses_without_a_destination(client):
     """Ni fil ni destinataire = message qui part nulle part : refus explicite, pas un
     appel amont qui échouera plus loin avec un message opaque."""
     with pytest.raises(McpError, match="chat_id"):
-        _tool("linkedin_unipile_chat")(op="send", text="hello")
+        _tool("linkedin_unipile_send")(op="send", text="hello")
     client.send_message.assert_not_called()
 
 
@@ -115,7 +124,7 @@ def test_chat_list_accepts_the_bound_itself(client):
 def test_chat_react_omits_chat_id_when_absent(client):
     """`chat_id` est requis par l'API v2 mais absent de la v1 : on ne passe le kwarg
     que s'il est fourni, pour rester compatible d'un oto-core plus ancien."""
-    _tool("linkedin_unipile_chat")(op="react", message_id="m1", reaction="👍")
+    _tool("linkedin_unipile_send")(op="react", message_id="m1", reaction="👍")
     assert "chat_id" not in client.react_message.call_args.kwargs
 
 
@@ -124,12 +133,19 @@ def test_chat_react_omits_chat_id_when_absent(client):
 @pytest.mark.parametrize("op,kwargs,method", [
     ("get", {"post_id": "urn:li:1"}, "get_post"),
     ("engagement", {"post_id": "urn:li:1"}, "list_comments"),
+])
+def test_post_ops_route_to_the_right_client_method(client, op, kwargs, method):
+    _tool("linkedin_unipile_post")(op=op, **kwargs)
+    getattr(client, method).assert_called_once()
+
+
+@pytest.mark.parametrize("op,kwargs,method", [
     ("create", {"text": "hello"}, "create_post"),
     ("comment", {"post_id": "urn:li:1", "text": "bravo"}, "comment_post"),
     ("react", {"post_id": "urn:li:1"}, "react_post"),
 ])
-def test_post_ops_route_to_the_right_client_method(client, op, kwargs, method):
-    _tool("linkedin_unipile_post")(op=op, **kwargs)
+def test_publish_ops_route_to_the_right_client_method(client, op, kwargs, method):
+    _tool("linkedin_unipile_publish")(op=op, **kwargs)
     getattr(client, method).assert_called_once()
 
 
@@ -144,12 +160,19 @@ def test_post_engagement_switches_on_kind(client):
 @pytest.mark.parametrize("op,kwargs,method", [
     ("relations", {}, "list_relations"),
     ("invitations", {}, "list_invitations"),
+])
+def test_network_ops_route_to_the_right_client_method(client, op, kwargs, method):
+    _tool("linkedin_unipile_network")(op=op, **kwargs)
+    getattr(client, method).assert_called_once()
+
+
+@pytest.mark.parametrize("op,kwargs,method", [
     ("invite", {"provider_id": "ACoAA1"}, "send_invitation"),
     ("handle", {"invitation_id": "i1", "shared_secret": "s1"}, "handle_invitation"),
     ("cancel", {"invitation_id": "i1"}, "cancel_invitation"),
 ])
-def test_network_ops_route_to_the_right_client_method(client, op, kwargs, method):
-    _tool("linkedin_unipile_network")(op=op, **kwargs)
+def test_invite_ops_route_to_the_right_client_method(client, op, kwargs, method):
+    _tool("linkedin_unipile_invite")(op=op, **kwargs)
     getattr(client, method).assert_called_once()
 
 
@@ -187,7 +210,8 @@ def test_network_handle_requires_the_shared_secret(client):
     """`invitation_id` et `shared_secret` viennent du MÊME item : sans le second,
     l'appel amont échoue — autant le dire ici."""
     with pytest.raises(McpError, match="shared_secret"):
-        _tool("linkedin_unipile_network")(op="handle", invitation_id="i1")
+        _tool("linkedin_unipile_invite")(op="handle", invitation_id="i1")
+    client.handle_invitation.assert_not_called()
 
 
 # --- compte premium & recruiter -----------------------------------------------
@@ -219,6 +243,7 @@ def test_job_ops_route_to_the_right_client_method(client, op, kwargs, method):
 @pytest.mark.parametrize("tool", [
     "linkedin_unipile_profile", "linkedin_unipile_chat", "linkedin_unipile_post",
     "linkedin_unipile_network", "linkedin_unipile_account", "linkedin_unipile_job",
+    "linkedin_unipile_send", "linkedin_unipile_publish", "linkedin_unipile_invite",
 ])
 def test_unknown_op_is_refused_with_the_allowed_list(client, tool):
     """Une op inconnue doit lever en nommant les ops valides — jamais retomber
@@ -231,8 +256,10 @@ def test_unknown_op_is_refused_with_the_allowed_list(client, tool):
     ("linkedin_unipile_profile", "person", "identifier"),
     ("linkedin_unipile_profile", "endorse", "skill_endorsement_id"),
     ("linkedin_unipile_chat", "read", "chat_id"),
-    ("linkedin_unipile_post", "create", "text"),
-    ("linkedin_unipile_network", "invite", "provider_id"),
+    ("linkedin_unipile_publish", "create", "text"),
+    ("linkedin_unipile_publish", "comment", "post_id"),
+    ("linkedin_unipile_send", "update", "chat_id"),
+    ("linkedin_unipile_invite", "invite", "provider_id"),
     ("linkedin_unipile_account", "select", "contract_id"),
     ("linkedin_unipile_job", "applicant", "applicant_id"),
 ])
@@ -250,11 +277,10 @@ def test_missing_required_arg_names_the_op_and_the_arg(client, tool, op, missing
 @pytest.mark.parametrize("op,kwargs,method", [
     ("list", {}, "list_chats"),
     ("read", {"chat_id": "c1"}, "list_messages"),
-    ("send", {"chat_id": "c1", "text": "hello"}, "send_message"),
 ])
 def test_channel_chat_ops_route_to_the_right_client_method(
         client, channel, op, kwargs, method):
-    """Les 5 canaux passent par la MÊME factory : un seul jeu de cas les couvre
+    """Les canaux passent par la MÊME factory : un seul jeu de cas les couvre
     tous, et une régression sur la factory les casserait tous ensemble."""
     from fastmcp import FastMCP
     from oto_mcp.tools import unipile as U
@@ -263,6 +289,17 @@ def test_channel_chat_ops_route_to_the_right_client_method(
     U.register_messaging_tools(m, channel.upper())
     asyncio.run(m.get_tool(f"{channel}_chat")).fn(op=op, **kwargs)
     getattr(client, method).assert_called_once()
+
+
+@pytest.mark.parametrize("channel", ["whatsapp", "telegram", "instagram"])
+def test_channel_send_routes_to_send_message(client, channel):
+    from fastmcp import FastMCP
+    from oto_mcp.tools import unipile as U
+
+    m = FastMCP("t")
+    U.register_messaging_tools(m, channel.upper())
+    asyncio.run(m.get_tool(f"{channel}_send")).fn(text="hello", chat_id="c1")
+    client.send_message.assert_called_once_with("hello", chat_id="c1", attendee_id=None)
 
 
 def test_channel_chat_refuses_unknown_op_and_missing_args(client):
@@ -276,8 +313,9 @@ def test_channel_chat_refuses_unknown_op_and_missing_args(client):
         fn(op="nope")
     with pytest.raises(McpError, match="chat_id"):
         fn(op="read")
+    send = asyncio.run(m.get_tool("whatsapp_send")).fn
     with pytest.raises(McpError, match="text"):
-        fn(op="send", chat_id="c1")
+        send(text="", chat_id="c1")
     with pytest.raises(McpError, match="chat_id"):
-        fn(op="send", text="hello")
+        send(text="hello")
     client.send_message.assert_not_called()

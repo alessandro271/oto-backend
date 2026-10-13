@@ -326,6 +326,26 @@ def test_changer_l_org_maison_est_refuse_nommement(verrouille, orgs):
     assert e.value.code == "org_out_of_job"
 
 
+def test_l_equipe_maison_et_le_depart_d_une_org_sont_refuses_nommement(
+        verrouille, orgs, monkeypatch):
+    """Trois portes REST qui déplacent aussi la maison : l'équipe maison (deux routes,
+    qui posent l'org parente en maison) et le départ d'une org. Refusées, rien d'écrit."""
+    from oto_mcp import org_store, session_org
+    from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
+    from oto_mcp.capabilities.groups import core as groupes
+    from oto_mcp.capabilities.orgs import members
+    monkeypatch.setattr(session_org, "current_session_id", lambda: None)
+    ctx = ResolvedCtx(sub=PORTEUR, org_id=orgs["a"])
+    for geste in (groupes._set_home_group, groupes._use_group):
+        with pytest.raises(AuthzDenied) as e:
+            geste(ctx, groupes.UseGroupInput(group_id=orgs["equipe_b"]))
+        assert e.value.code == "org_out_of_job"
+    with pytest.raises(AuthzDenied) as e:
+        members._leave_org(ctx, members.LeaveOrgInput(org_id=orgs["b"]))
+    assert e.value.code == "org_out_of_job"
+    assert org_store.get_org_role(orgs["b"], PORTEUR) == "org_admin"
+
+
 def test_x_oto_org_hors_du_travail_est_refuse_nommement(jeton, orgs):
     """Sous un jeton verrouillé sur A, `X-Oto-Org: B` est refusé (403 nommé) au lieu
     d'être ignoré en silence."""

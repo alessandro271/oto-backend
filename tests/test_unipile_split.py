@@ -279,7 +279,11 @@ def test_laxe_account_survit_sur_les_six_canaux():
     les six canaux d'un coup."""
     from oto_mcp import call_axes
     for tool in ("whatsapp_chat", "telegram_chat", "instagram_chat",
-                 "linkedin_unipile_chat"):
+                 "linkedin_unipile_chat",
+                 # les écrivains de #1189 : envoyer sous le compte accordé, comme lire
+                 "whatsapp_send", "telegram_send", "instagram_send",
+                 "linkedin_unipile_send", "linkedin_unipile_invite",
+                 "linkedin_unipile_publish"):
         assert call_axes.accepts_account_axis(tool), tool
         assert call_axes._has_account_axis(tool), tool
 

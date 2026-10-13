@@ -87,9 +87,65 @@ du dépôt : ajouter un connecteur, c'est écrire une recette — ni PR ni versi
   `{{row.col}}` dans les arguments, la correspondance, les valeurs et la clé — et nulle
   part ailleurs : `row` hors `for_each` est refusé à l'écriture. Ses pages repartent de
   zéro à chaque parent ; `max_items_per_row` borne ce qu'un parent apporte, et réduit la
-  taille demandée au fournisseur (au curseur, et sur la première page au numéro).
+  taille demandée au fournisseur (au curseur, et sur la première page au numéro). Une
+  ligne dont une colonne citée dans les `arguments` est vide n'est **pas sélectionnée** —
+  l'appel serait payé pour rien : elle n'est ni appelée ni marquée, et reste en attente
+  jusqu'à ce qu'on la remplisse. Pour qu'une exécution `done` ne la taise pas, le reçu
+  compte ces lignes (`skipped_empty_input`) sur l'exécution qui s'achève (`done`) — un
+  reçu partiel (reprise, plafond) ne le porte pas, un reçu sans `for_each` non plus.
 - Tout ce qui demande davantage (expression régulière, condition, calcul) ira dans une
   fonction (`oto_function`) — on ne fait pas grandir ce langage.
+
+## Les recettes en code (#1202)
+
+Le langage déclaratif ci-dessus est GELÉ (#1202) : ce qu'il ne dit pas s'écrit désormais
+en Python. Une recette-code se range comme les autres (mêmes tables, même cycle, même
+`oto_recipe`) et se reconnaît à `kind: "code"` (`recipes/code.py`) :
+
+```json
+{"kind": "code", "sources": {"recette.py": "async def run(oto, params): ..."},
+ "entrypoint": "recette:run", "params": {"company": {"required": true}},
+ "limits": {"max_units": 200, "max_calls": 100, "max_seconds": 120}}
+```
+
+- **Le code** tourne dans le bac à sable d'`oto_function` par le pont
+  (`docs/fonctions.md` §Le pont) : `await oto.call(outil, arguments)`. Il peut appeler
+  les outils de connecteur DÉCLARÉS EN LECTURE (mêmes refus que ci-dessous), `data_rows`
+  (une page d'un tableau que l'appelant lit, `MAX_LIGNES_LUES`) et `data_write(rows, key)`
+  — dans le SEUL tableau qu'`op=run` désigne (`datastore`), jamais en épreuve, `key`
+  exigée (`write_outside_target`, `write_in_test`). Aucun autre outil de connecteur qui
+  écrit, hors la liste fermée ci-dessous (« Écrire chez un tiers »).
+  Ces deux-là sont des appels ORDINAIRES des outils `data_*` (`meta.executer_cible`,
+  comme tout appel du pont) : leurs gardes (droits sur le tableau, org suspendue, org du
+  run), leur ligne dans `tool_calls`. Le pont rétrécit ce que le code leur passe, il
+  n'ouvre jamais le store lui-même.
+- **Le budget** est `limits` : unités facturées (`max_units`, obligatoire), appels,
+  secondes. Atteint, les appels suivants sont refusés et le reçu le dit (`stopped`).
+- **Pas de reprise** (`resume_not_supported`) : une relance repart du début, et ses
+  écritures par clé ne doublent rien.
+- **Le reçu** est ce que rend le code, borné à `code.MAX_RECU` caractères : des
+  comptes, pas des données (`receipt_too_large`). L'épreuve rend en plus le `journal`.
+- **Écrire chez un tiers** (lot 3) : un CRM, par une liste FERMÉE d'outils
+  (`recipes/ecritures.py`) — créer, mettre à jour, ajouter à un groupe ; jamais
+  supprimer, fusionner ni écrire en masse. Chaque écriture se DÉCLARE dans le corps,
+  `writes: ["folk_record:create", "folk_record:update"]` : c'est ce que la plateforme relit
+  avant de publier, et le pont refuse toute autre (`write_not_declared`). Les ops qui
+  lisent de ces outils (`search`, `get`) passent sans déclaration ; un outil multiplexé
+  exige son `op` littérale (`write_op_not_allowed` sinon). Une écriture n'est jamais
+  jouée en épreuve (`write_in_test`), se fait dans l'org du run (`_org`, `_group`,
+  `_project` refusés : `write_outside_run_org` ; `_account` choisit le compte), avec le
+  compte de connecteur de qui exécute, et compte dans `limits.max_writes` (50 par défaut
+  dès qu'une écriture est déclarée, 1 000 au plus), compté à la TENTATIVE — atteint,
+  `stopped: "max_writes"`. Le reçu compte les écritures par nom (`writes`). Un outil qui
+  peut déclencher un envoi (`lemlist_create_lead`) exige `allow_sending: true`. Pas de
+  reprise ici non plus : une recette qui écrit cherche avant de créer, pour qu'une relance
+  ne crée pas deux fois. Chaque appel reste un appel ordinaire de l'outil
+  (`meta.executer_cible`) : sa garde d'activation, son journal, sa facturation.
+- **Qui fait quoi** : le membre écrit (`create`, `propose`) et exécute (`run`) ; la
+  PLATEFORME seule éprouve (`test`) et publie (`publish`, `platform_only` sinon). Le code
+  tourne avec les droits de qui l'EXÉCUTE, pas de qui l'a écrit : tant que cette règle
+  n'est pas tranchée (#1202), c'est celle d'`oto_function`. La publication exige une
+  épreuve sans erreur ; une borne atteinte n'en est pas une.
 
 ## Les garde-fous
 
@@ -169,9 +225,12 @@ du dépôt : ajouter un connecteur, c'est écrire une recette — ni PR ni versi
   jeton porte l'empreinte de la recette (une autre recette, ou une autre version, le
   refuse : `invalid_resume`) et jamais une dépense négative. Le
   plafond de dépense, lui, vaut pour toute la chaîne (le jeton porte la dépense faite).
-- **Seule une version PUBLIÉE écrit.** `publish` éprouve une page réelle sans écrire ;
-  une recette passée en ligne (`recipe`) ne sert qu'à `test` — `run` la refuse
-  (`inline_recipe_cannot_write`).
+- **Seule une version PUBLIÉE écrit.** `publish` éprouve une page réelle sans écrire :
+  elle doit bâtir au moins une ligne, et s'arrêter sur la fin des résultats ou sur une
+  BORNE (`max_pages`, `spend_cap`, `time_budget` — `BORNES_D_EPREUVE`), jamais sur un
+  refus. Une recette à petit `max_units` s'arrête sur `spend_cap` au milieu de sa
+  première page, lignes bâties : elle se publie. Une recette passée en ligne (`recipe`)
+  ne sert qu'à `test` — `run` la refuse (`inline_recipe_cannot_write`).
 - **Le reçu ne porte que des comptes et des codes** : pages, éléments vus, unités,
   lignes écrites / mises à jour / laissées intactes / écartées, codes d'échec.
 - **`run` avec un `datastore` écrit dans ce tableau**, avec les droits de l'appelant sur

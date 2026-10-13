@@ -170,8 +170,12 @@ class _IatGatedVerifier(JWTVerifier):
         else:
             try:
                 result = await verifier.verify_token(token)
-            # noqa: SILENT — dette déclarée : panne JWKS de tenant ⇒ vague de 401 sans une ligne (#424, verdict C)
-            except Exception:
+            except Exception as e:  # noqa: BLE001
+                # Toujours un 401 (rien ne passe sur une vérification qui a levé), mais
+                # DIT : une panne JWKS de tenant faisait une vague de 401 sans une ligne
+                # (#424, verdict C). Le type et le message, jamais le jeton.
+                logger.warning("vérification du jeton du tenant %s en échec (%s: %s) — 401",
+                               slug, type(e).__name__, str(e)[:200])
                 result = None
         if not result:
             return None
@@ -968,7 +972,13 @@ def build_root_app(app, anon_app):
        d'un seul geste, et SOUS la garde de déconnexion pour ne pas compter la
        réponse que celle-ci synthétise. Cf. `transport_refusals` pour les trois
        garanties qui le rendent acceptable sur le chemin du transport.
-    5. **garde de déconnexion client** (#352), la couche la plus EXTERNE — entre uvicorn
+    5. **limite de débit** (F-025) : une classe par requête (jeton porté, anonyme,
+       route à secret ou d'authentification, webhook), un seau par clé, plus un budget
+       d'échecs d'authentification par adresse ; refus `429` décidé AVANT la suite,
+       rien n'est mis en tampon. AU-DESSUS du compteur des refus du transport (un 429
+       de débit n'est pas un refus du transport), SOUS la garde de déconnexion.
+       Cf. `limite_debit`.
+    6. **garde de déconnexion client** (#352), la couche la plus EXTERNE — entre uvicorn
        et tout le reste. Un POST `/mcp` dont le client est parti en cours de route
        laissait une réponse ASGI incomplète ; uvicorn fermait alors le transport, et
        Caddy rendait des 502 sur cette connexion **et sur les requêtes voisines** qui
@@ -984,13 +994,15 @@ def build_root_app(app, anon_app):
     (`tests/test_client_disconnect_guard.py`)."""
     from . import subdomain_project
     from .client_disconnect_guard import ClientDisconnectGuard
+    from .limite_debit import LimiteDebit
     from .response_charset import ResponseCharset
     from .transport_refusals import TransportRefusalCounter
     from .version_header import VersionHeader
     return ClientDisconnectGuard(
-        TransportRefusalCounter(
-            VersionHeader(
-                ResponseCharset(subdomain_project.HostDispatch(app, anon_app)))))
+        LimiteDebit(
+            TransportRefusalCounter(
+                VersionHeader(
+                    ResponseCharset(subdomain_project.HostDispatch(app, anon_app))))))
 
 
 def main():
@@ -1046,6 +1058,10 @@ def main():
     # INCOMPLÈTE — refuser de démarrer en la nommant, avant d'avoir rien écrit.
     from .auth import relay as oauth_relay
     oauth_relay.verifier_configuration()
+    # Proxies de confiance (#1232) : lus UNE fois ici ; un réglage illisible refuse de
+    # démarrer — jamais des en-têtes d'adresse crus (ou ignorés) sans décision.
+    from . import client_trace
+    client_trace.verifier_configuration()
     # Le journal d'accès d'uvicorn n'écrit en clair ni un jeton porté DANS le chemin
     # (`{token}`, `{code}` des routes servies : leur masque), ni la valeur d'une clé de
     # query secrète (`code`/`state` d'un retour OAuth, `*token*`, `key`… : `***`), sur
@@ -1060,6 +1076,10 @@ def main():
     # démarrage ICI, avant d'avoir rien écrit — jamais un 0 silencieux au premier usage.
     from . import access
     access.verifier_defauts()
+    # Équité des clés plateforme (F-051) : un réglage illisible refuse le démarrage ici,
+    # jamais lu « défaut » en silence. Cf. `access/platform_rate.verifier_reglages`.
+    from .access import platform_rate
+    platform_rate.verifier_reglages()
 
     # Identité de l'instance (#968, décision du 28/09/2026) : adresses, email, marque,
     # contrats — tout ce qui pointerait chez quelqu'un d'autre sans déclaration. Un

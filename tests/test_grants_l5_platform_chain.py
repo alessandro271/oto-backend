@@ -21,6 +21,8 @@ vrai PostgreSQL dans `test_grants_l5_migration_live.py`.
 """
 from __future__ import annotations
 
+import contextlib
+
 import pytest
 
 from oto_mcp import access, credentials_store, grants_chain, providers
@@ -292,6 +294,43 @@ def test_regrant_archives_the_previous_edge(monkeypatch):
                         lambda **k: calls.append(("insert", k["constraints"])) or 9)
     grants_chain.grant("fullenrich", "user:x", daily_quota=50)
     assert calls == [("revoke", REF, "user", "x"), ("insert", {"quota": 50})]
+
+
+
+def test_revoking_without_edge_never_opens_a_live_edge(monkeypatch):
+    """F-046 pose une arête pour qu'une révocation sans arête ait un avis. Posée VIVANTE
+    puis archivée, elle accordait la clé SANS quota entre les deux écritures — à un
+    appelant jamais accordé, sur une clé fermée — et pour toujours si l'archivage
+    échouait. Un lecteur concurrent, juste après la pose, doit déjà lire « révoqué »."""
+    edges: list[dict] = []
+
+    def insert_grant(**k):
+        edges.append({**_edge(k["grantee_kind"], k["grantee_id"], quota=None,
+                              edge_id=len(edges) + 1),
+                      "revoked_at": "now" if k.get("revoked") else None})
+        seen.append(grants_chain.platform_rung("x", "fullenrich", None))
+        return len(edges)
+
+    def revoke_edges(ref, kind, ident, conn=None):
+        live = [e for e in edges if (e["grantee_kind"], e["grantee_id"]) == (kind, ident)
+                and e["revoked_at"] is None]
+        for e in live:
+            e["revoked_at"] = "now"
+        return len(live)
+
+    seen: list = []
+    monkeypatch.setattr(grants_chain, "_connect", contextlib.nullcontext)
+    monkeypatch.setattr(credentials_store, "list_platform_instances",
+                        lambda p: [{**PROD_INSTANCE, "share_mode": "closed"}])
+    monkeypatch.setattr(db_grants, "edges_for", lambda ref, scopes: [
+        e for e in edges if (e["grantee_kind"], e["grantee_id"]) in scopes])
+    monkeypatch.setattr(db_grants, "edge_exists", lambda ref, kind, ident, conn=None: any(
+        (e["grantee_kind"], e["grantee_id"]) == (kind, ident) for e in edges))
+    monkeypatch.setattr(db_grants, "insert_grant", insert_grant)
+    monkeypatch.setattr(db_grants, "revoke_edges", revoke_edges)
+    grants_chain.revoke("fullenrich", "user:x")
+    assert [v.granted for v in seen] == [False]
+    assert grants_chain.platform_rung("x", "fullenrich", None).granted is False
 
 
 # ── 5. La désignation de l'instance ────────────────────────────────────────────

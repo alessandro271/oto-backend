@@ -1075,9 +1075,16 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
         # garantissait déjà… à condition que l'unité systemd le pose. Une garde qui
         # dépend d'une variable d'environnement bien écrite n'en est pas une.
         famille_seule = inp.org_key_only or _abonnement.est_abonnement(inp.provider)
+        # ⚠️ Un MEMBRE ne réserve que SES travaux (10/10/2026). Le travail réservé
+        # revient avec un jeton de délégation au nom de SON porteur (`_delegue`) :
+        # un membre qui réservait le travail d'un collègue en recevait un qui agit au
+        # nom du collègue — usurpation de compte par un simple `claim`, le collègue
+        # fût-il admin de l'org. Le worker de PLATEFORME (secret de machine) garde la
+        # file entière : c'est son rôle, et il n'a pas d'identité à confondre.
+        porteur = None if ctx.platform_worker else ctx.sub
         job = db.claim_next_job(ctx.org_id, ctx.sub, lease_seconds=bail,
                                 depot=inp.provider, famille_seule=famille_seule,
-                                org_ids=inp.org_ids, ferme=ferme)
+                                org_ids=inp.org_ids, ferme=ferme, porteur=porteur)
         if job is None:
             # ⚠️ La file vide n'est pas la fin de l'histoire : une CAMPAGNE en
             # cours est une règle qui produit des travaux, et c'est ici qu'on
@@ -1094,7 +1101,8 @@ def _jobs(ctx: ResolvedCtx, inp: JobsInput) -> dict:
             job = db.claim_next_job(ctx.org_id, ctx.sub, lease_seconds=bail,
                                     depot=inp.provider,
                                     famille_seule=famille_seule,
-                                    org_ids=inp.org_ids, ferme=ferme)
+                                    org_ids=inp.org_ids, ferme=ferme,
+                                    porteur=porteur)
             if job is None and panne:
                 # « Rien à faire » et « je n'ai pas pu regarder » ne se disent
                 # pas de la même façon. Les confondre a coûté des jours de
@@ -1241,7 +1249,9 @@ CAPABILITIES += [
             "claim (atomic, org-scoped, lease — also reclaims expired leases: that "
             "IS the resume) / bind_run / extend (heartbeat) / complete (ok=false "
             "backs off, then marks `failed` VISIBLY at the attempts cap — never "
-            "loops) / get. All claim-side verbs are scoped to the claimant."
+            "loops) / get. All claim-side verbs are scoped to the claimant. An org "
+            "member (API token) claims only the jobs it carries itself (`sub`); only "
+            "a platform worker takes any job."
         ),
     ),
 ]

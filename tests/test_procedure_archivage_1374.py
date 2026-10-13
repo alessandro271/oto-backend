@@ -1,12 +1,9 @@
-"""Retirer une procédure sans la détruire, et binder le slot `doc` d'un projet.
+"""Retirer une procédure sans la détruire.
 
 Signaux #1374 et #1196 : `oto_procedure` ne savait que SUPPRIMER — un geste qui emporte
 tout l'historique, réservé au chef d'équipe. L'archivage existait sur la face REST
 (org_admin seul) et nulle part pour un agent. Les agents supprimaient faute de pouvoir
-retirer. Signaux #1265, #1222, #1206 : une procédure peut déclarer un slot `doc`, mais
-`oto_project op=link` n'acceptait aucun type pour le binder, et la purge du boot
-effaçait de toute façon les liens `doc` à chaque démarrage — l'audit marquait donc ce
-slot « non lié » pour toujours.
+retirer.
 
 Sans base : chaque banc passe par le handler SERVI et n'assert que sur ce qu'il rend.
 """
@@ -18,7 +15,6 @@ import inspect
 import pytest
 
 from oto_mcp.capabilities import procedure_console as PC
-from oto_mcp.capabilities import projects as P
 from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
 from oto_mcp.capabilities.orgs import instructions as OI
 
@@ -177,72 +173,3 @@ def test_le_webhook_refuse_nommement_et_le_journal_le_dit(monkeypatch):
         runner_hook.declencher(7, "secret", None)
     assert (e.value.statut, e.value.code) == (409, "procedure_archived")
     assert ecrit == [(7, "refused_procedure_archived")]
-
-
-# ── lier une page Documents au slot `doc` d'un projet ────────────────────────────
-
-ROW = {"id": 59, "owner_type": "org", "owner_id": "2", "name": "P", "brief_md": "",
-       "created_by": "u1", "archived_at": None, "created_at": "x", "updated_at": "x"}
-
-
-@pytest.fixture
-def projet(monkeypatch):
-    from oto_mcp.capabilities.docs import common
-    vu: dict = {}
-    pages = {77: {"id": 77, "project_id": 59}, 88: {"id": 88, "project_id": 60}}
-    monkeypatch.setattr(P.db, "get_project_by_id", lambda pid: dict(ROW))
-    monkeypatch.setattr(P.db, "list_project_links", lambda pid: [])
-    monkeypatch.setattr(P.db, "log_project_activity", lambda *a, **k: None)
-    monkeypatch.setattr(P.db, "get_doc_by_id", lambda i: pages.get(int(i)))
-    monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": True)
-    monkeypatch.setattr(common, "acces_a_la_page",
-                        lambda sub, row: "project" if row["project_id"] == 59 else None)
-
-    def _add(pid, tt, tr, label=None, **k):
-        vu.update({"target_type": tt, "target_ref": tr, **k})
-        return {"status": "created", "changed": []}
-    monkeypatch.setattr(P.db, "add_project_link", _add)
-    return vu
-
-
-def _link(**kw):
-    return P._project(CTX, P.ProjectInput(op="link", project_id=59, target_type="doc", **kw))
-
-
-def test_une_page_lisible_se_lie_par_son_id_et_binde_le_slot(projet):
-    out = _link(target_ref="77", slot="fiche")
-    assert out["link_status"] == "created"
-    assert (projet["target_type"], projet["target_ref"], projet["slot"]) == ("doc", "77", "fiche")
-
-
-def test_une_page_inconnue_est_refusee_nommement(projet):
-    with pytest.raises(AuthzDenied) as e:
-        _link(target_ref="404")
-    assert (e.value.status, e.value.code) == (404, "unknown_doc")
-
-
-def test_une_page_que_l_auteur_ne_lit_pas_ne_se_lie_pas(projet):
-    with pytest.raises(AuthzDenied) as e:
-        _link(target_ref="88")
-    assert (e.value.status, e.value.code) == (403, "forbidden")
-
-
-def test_l_audit_compte_le_slot_doc_comme_lie_et_dit_une_page_morte(monkeypatch):
-    from oto_mcp import db, project_audit
-    monkeypatch.setattr(project_audit, "_resolved_procedure",
-                        lambda l: {"slug": "veille", "slots": [{"name": "fiche", "type": "doc"}]})
-    monkeypatch.setattr(db, "get_project_by_id", lambda pid: None)
-    monkeypatch.setattr(db, "project_run_stats", lambda pid: {}, raising=False)
-    monkeypatch.setattr(db, "get_doc_by_id", lambda i: None)
-    links = [{"target_type": "procedure", "target_ref": "4"},
-             {"target_type": "doc", "target_ref": "77", "slot": "fiche"}]
-    audit = project_audit.audit_project(59, links)
-    assert audit["unbound_slots"] == []
-    assert [d["target_type"] for d in audit["dead_links"]] == ["doc"]
-
-
-def test_le_boot_ne_purge_plus_les_liens_doc():
-    """Rejouée à chaque démarrage, la purge du lot 3 effaçait à chaque déploiement les
-    liens que ce type sert de nouveau à poser."""
-    from oto_mcp.db import _init
-    assert "DELETE FROM project_links WHERE target_type = 'doc'" not in inspect.getsource(_init)

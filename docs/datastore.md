@@ -2690,6 +2690,12 @@ par `tests/test_run_finish_releases_613.py`, sur le chemin réel (middleware + o
 montés par `register_all`, PostgreSQL) — y compris « un autre run qui se ferme ne rend
 rien » et « la ligne rendue est reprise par le claim suivant ».
 
+⚠️ **La libération appartient au PROPRIÉTAIRE du run**, comme la clôture (`db.finish_run`,
+#108) et la clôture REST (`run_thread._clore`) : un `run_id` est une poignée que
+n'importe qui peut taper, pas un droit. `run_finish` sur un run indexé sous un AUTRE
+compte ne rend rien (`rows_released: 0`) ; un run absent de l'index (`run_start` le pose
+en best-effort) garde le comportement d'avant. Figé par le même banc.
+
 **La description dit désormais ce qui se passe sans l'outil**, en une phrase : « Release
 the row with `data_release` if you have it; otherwise finishing your run (`run_finish`)
 releases it. Never write your intent into the row (no `_action`/`_liberation`

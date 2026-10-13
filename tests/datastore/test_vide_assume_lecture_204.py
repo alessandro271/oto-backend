@@ -172,11 +172,19 @@ def test_la_page_publique_d_un_tableau_partage_ne_montre_pas_le_marqueur(monkeyp
     monkeypatch.setattr(db, "get_datastore_by_id",
                         lambda rid: {"datastore": "vivier", "schema": SCHEMA})
     monkeypatch.setattr(db, "datastore_count_rows", lambda rid: 1)
-    monkeypatch.setattr(db, "datastore_list_rows", lambda rid, **kw: [{"data": {
-        "raison": "Alice SA", "fonction": {**MARQUEE, "comment": "rien trouvé"},
-        "contacts": [{"nom": "X", "fonction": MARQUEE}]}}])
+    monkeypatch.setattr(db, "datastore_list_rows", lambda rid, **kw: [{
+        "row_id": "r1", "created_at": "2026-10-01 10:00:00",
+        "updated_at": "2026-10-01 10:00:00", "rev": 1, "data": {
+            "raison": "Alice SA", "fonction": {**MARQUEE, "comment": "rien trouvé"},
+            "contacts": [{"nom": "X", "fonction": MARQUEE}]}}])
 
-    html, status = share_ui.build_page(projet, "/data/22", connect_url="u")
+    # La page se lit sous le contexte de son endpoint (`HostDispatch`).
+    from oto_mcp import subdomain_project as sp
+    tok = sp._CTX.set(sp.AnonContext(5, None, frozenset(), datastore_exposed=True))
+    try:
+        html, status = share_ui.build_page(projet, "/data/22", connect_url="u")
+    finally:
+        sp._CTX.reset(tok)
 
     assert status == 200 and "Alice SA" in html
     assert "vide_assume" not in html, "le marqueur interne fuit dans la page publique"

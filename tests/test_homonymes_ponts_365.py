@@ -207,9 +207,10 @@ EXEMPTIONS = {
     ("oto_mcp/datastore/core.py", "_resolve"):
         "l'adressage du store lui-même : le nom (ou l'identifiant) que l'APPELANT a "
         "tapé, résolu dans SA portée — c'est la règle, pas un pont",
-    ("oto_mcp/db/projects.py", "list_project_links"):
+    ("oto_mcp/db/projects.py", "list_project_links_many"):
         "LE lieu où un lien de projet posé par nom se résout, dans la portée du "
-        "propriétaire du projet, ambiguïté refusée (#365)",
+        "propriétaire de SON projet (groupe par groupe quand plusieurs projets se lisent "
+        "en lot), ambiguïté refusée (#365)",
     ("oto_mcp/capabilities/projects.py", "_resolve_tableau_id"):
         "normalisation nom→id À LA POSE du lien, sur les propriétaires du projet ; "
         "l'identifiant retenu est rendu à qui pose le lien (`rewritten_from`)",

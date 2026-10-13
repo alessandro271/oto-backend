@@ -188,6 +188,7 @@ def list_platform_instances(provider: str) -> list[dict]:
              "meta": r["meta"] or {}} for r in rows]
 
 
+@lecture_d_appel
 def list_all_platform_instances() -> dict[str, list[dict]]:
     """`{provider: [instances]}` pour TOUT le scope PLATEFORME, en UNE lecture —
     même forme que `list_platform_instances(provider)`, groupée. Destinée au
@@ -223,11 +224,36 @@ def list_platform_credentials(provider: "str | None" = None) -> list[dict]:
             for r in rows]
 
 
-def _latest_platform_label(conn, provider: str) -> "str | None":
-    r = conn.execute(
-        "SELECT entity_id FROM connector_credentials WHERE entity_type=%s AND connector=%s "
-        "ORDER BY set_at DESC LIMIT 1", (PLATFORM, provider)).fetchone()
-    return r["entity_id"] if r else None
+#: La clé de `meta` qui porte les scopes RÉVOQUÉS d'une instance plateforme (F-046).
+#: Miroir de `access.platform_grant.DENIED_META_KEY` (la couche `access` lit ce module,
+#: pas l'inverse) ; `tests/test_cle_plateforme_equite_f046_live.py` tient l'égalité.
+_REVOQUES = "share_denied"
+
+#: Ce que `meta` porte des ACCORDS d'une clé plateforme — pas de la clé elle-même. Une
+#: re-pose (rotation du secret) les garde : `set_platform_key`.
+_META_DES_ACCORDS = ("rate_limit", "rate_limit_by", _REVOQUES)
+
+
+def _lignes_plateforme_verrouillees(conn, provider: str) -> list[dict]:
+    """Les lignes PLATEFORME de `provider`, récente d'abord, VERROUILLÉES jusqu'à la fin
+    de la transaction. Accorder, révoquer et re-poser relisent `meta` puis la
+    réécrivent : sans verrou, deux gestes concurrents se croisent et le dernier écrit
+    efface l'autre — une révocation perdue sans un mot."""
+    return conn.execute(
+        "SELECT entity_id AS label, share_mode, share_down, meta FROM connector_credentials "
+        "WHERE entity_type=%s AND connector=%s AND account='' ORDER BY set_at DESC "
+        "FOR UPDATE", (PLATFORM, provider)).fetchall()
+
+
+def _sans_refus(meta: dict, scope: str) -> dict:
+    """`meta` dont le refus de `scope` est levé (`share_denied` retiré s'il se vide)."""
+    meta = dict(meta)
+    refus = [s for s in (meta.get(_REVOQUES) or []) if s != scope]
+    if refus:
+        meta[_REVOQUES] = refus
+    else:
+        meta.pop(_REVOQUES, None)
+    return meta
 
 
 def platform_grant(provider: str, scope: str, daily_quota: "int | None" = None,
@@ -250,18 +276,35 @@ def platform_grant(provider: str, scope: str, daily_quota: "int | None" = None,
     con = providers.REGISTRY.get(provider)
     free_tier = bool(con and getattr(con, "platform_key_open", False))
     with _connect() as conn:
-        label = label or _latest_platform_label(conn, provider)
+        lignes = _lignes_plateforme_verrouillees(conn, provider)
+        label = label or (lignes[0]["label"] if lignes else None)
         if label is None:
             raise ValueError(f"aucune instance plateforme pour {provider!r}")
-        row = conn.execute(
-            "SELECT share_mode, share_down, meta FROM connector_credentials "
-            "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=''",
-            (PLATFORM, label, provider)).fetchone()
+        # Le refus se lit sur toutes les clés du connecteur (`platform_revoke`) : lever le
+        # blocage le lève sur chacune, sinon une autre clé refuserait encore.
+        for autre in lignes:
+            refus = (autre["meta"] or {}).get(_REVOQUES) or []
+            if autre["label"] != label and scope in refus:
+                conn.execute(
+                    "UPDATE connector_credentials SET meta=%s::jsonb, version=version+1 "
+                    "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=''",
+                    (json.dumps(_sans_refus(autre["meta"] or {}, scope)), PLATFORM,
+                     autre["label"], provider))
+        row = next((r for r in lignes if r["label"] == label), None)
+        if row is None:
+            raise ValueError(f"aucune instance plateforme {label!r} pour {provider!r}")
         down, meta, mode = list(row["share_down"] or []), dict(row["meta"] or {}), row["share_mode"]
-        if not free_tier:
+        # F-046 : une clé payante OUVERTE À TOUS (`open`, `share_down` vide) le reste.
+        # Accorder y ajoutait le scope au `share_down` en la FERMANT : lever le blocage
+        # d'une org coupait la clé à toutes les autres — le geste du 31/07, par l'autre
+        # bout. Sur une telle clé, accorder = lever la révocation + poser le quota.
+        ouverte_a_tous = mode != "closed" and not down
+        if not free_tier and not ouverte_a_tous:
             mode = "closed"
             if scope not in down:
                 down.append(scope)
+        # Accorder lève la révocation de CE scope (`access.platform_grant._platform_denied`).
+        meta = _sans_refus(meta, scope)
         rlb = dict(meta.get("rate_limit_by") or {})
         if daily_quota is not None:
             rlb[scope] = daily_quota
@@ -275,7 +318,19 @@ def platform_grant(provider: str, scope: str, daily_quota: "int | None" = None,
 
 
 def platform_revoke(provider: str, scope: str, label: "str | None" = None) -> None:
-    """ADR 0044 §F R4 : retire l'accès de `scope` (retire du share_down + du rate_limit_by)."""
+    """ADR 0044 §F R4 : retire l'accès de `scope` (retire du share_down + du rate_limit_by).
+
+    F-046 : retirer du `share_down` ne coupait RIEN sur une clé ouverte à tous (`open`,
+    `share_down` vide) — un blocage de crédit sans effet. Le scope est désormais
+    INSCRIT comme révoqué (`meta.share_denied`), refus qui prime sur tout le reste à la
+    lecture (`access.platform_grant._platform_denied`) ; seul `platform_grant` l'efface.
+    Et retirer le DERNIER bénéficiaire d'une clé `open` à liste ne la rend plus
+    ouverte à tous : elle passe `closed` (liste vide = personne), ce qu'elle disait.
+
+    Sans `label`, le refus s'inscrit sur TOUTES les clés plateforme du connecteur : en
+    ne marquant que la plus récente, une autre clé ouverte servait l'appelant révoqué
+    au tour suivant de la résolution. La lecture, elle, refuse dès qu'une clé du
+    connecteur porte le refus — une clé posée après la révocation ne la lève pas."""
     from . import grants_chain  # import tardif (grants_chain lit ce module)
 
     if grants_chain.is_chained(provider):
@@ -285,27 +340,36 @@ def platform_revoke(provider: str, scope: str, label: "str | None" = None) -> No
         grants_chain.revoke(provider, scope, label=label)
         return
     with _connect() as conn:
-        label = label or _latest_platform_label(conn, provider)
-        if label is None:
-            return
-        row = conn.execute(
-            "SELECT share_down, meta FROM connector_credentials "
-            "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=''",
-            (PLATFORM, label, provider)).fetchone()
-        if not row:
-            return
-        down = [s for s in (row["share_down"] or []) if s != scope]
-        meta = dict(row["meta"] or {})
-        rlb = dict(meta.get("rate_limit_by") or {})
-        rlb.pop(scope, None)
-        if rlb:
-            meta["rate_limit_by"] = rlb
-        else:
-            meta.pop("rate_limit_by", None)
-        conn.execute(
-            "UPDATE connector_credentials SET share_down=%s::jsonb, meta=%s::jsonb, "
-            "version=version+1 WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=''",
-            (json.dumps(down), json.dumps(meta), PLATFORM, label, provider))
+        lignes = _lignes_plateforme_verrouillees(conn, provider)
+        for row in lignes:
+            if label is None or row["label"] == label:
+                _revoquer_ligne(conn, provider, scope, row)
+
+
+def _revoquer_ligne(conn, provider: str, scope: str, row: dict) -> None:
+    """Retire `scope` d'UNE ligne plateforme (verrouillée par l'appelant) et l'inscrit
+    révoqué (`meta.share_denied`)."""
+    avant = list(row["share_down"] or [])
+    down = [s for s in avant if s != scope]
+    mode = row["share_mode"]
+    if mode != "closed" and avant and not down:
+        mode = "closed"
+    meta = dict(row["meta"] or {})
+    rlb = dict(meta.get("rate_limit_by") or {})
+    rlb.pop(scope, None)
+    if rlb:
+        meta["rate_limit_by"] = rlb
+    else:
+        meta.pop("rate_limit_by", None)
+    refus = list(meta.get(_REVOQUES) or [])
+    if scope not in refus:
+        refus.append(scope)
+    meta[_REVOQUES] = refus
+    conn.execute(
+        "UPDATE connector_credentials SET share_mode=%s, share_down=%s::jsonb, "
+        "meta=%s::jsonb, version=version+1 "
+        "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=''",
+        (mode, json.dumps(down), json.dumps(meta), PLATFORM, row["label"], provider))
 
 
 # --- app OAuth de l'ÉDITEUR ---------------------------------------------------
@@ -432,6 +496,7 @@ def get_editor_app(connector: str, data_center: str) -> Optional[dict]:
     return {"client_id": cid, "client_secret": sec} if cid and sec else None
 
 
+@lecture_d_appel
 def list_editor_apps(connector: "str | None" = None) -> list[dict]:
     """Apps d'éditeur posées (connecteur + région + date), **sans secret** — surface
     admin. Le `client_id` lui-même n'est pas rendu : inutile pour décider, et il finit
@@ -527,22 +592,6 @@ class SecretUnpackError(RuntimeError):
     DU FOURNISSEUR : on accusait la clé du client là où la cause était chez nous
     (clé maître périmée ⇒ `InvalidTag`, cas vécu ; inventaire des silences du
     2026-08-27, site B6)."""
-
-
-def platform_fields(connector: str, secret: str) -> dict:
-    """The fields of a PLATFORM key. `/api/admin/platform-keys` posts ONE raw value
-    (`api_key`), even for a multi-field connector: a blob that does not unpack is that
-    value, and fills the connector's first SECRET field. Without it, `unpack_secret`
-    refused every raw platform key of a multi-field connector (`forager`,
-    `transcription`), and the "Test the connection" probe answered a 500 for a key
-    that works. A JSON blob posted by other means still unpacks as such."""
-    try:
-        return unpack_secret(connector, secret)
-    except SecretUnpackError:
-        c = providers.REGISTRY.get(connector)
-        champ = next((f.name for f in (c.vault_fields if c is not None else ())
-                      if f.secret), "key")
-        return {champ: secret}
 
 
 def unpack_secret(connector: str, secret: str) -> dict:
@@ -682,7 +731,8 @@ def merge_with_existing(entity_type: str, entity_id: str, connector: str,
     repointer une `base_url` sans détenir le bearer — le piège à perte de données que
     formait « lecture impossible + écriture par remplacement total ».
 
-    Un existant ILLISIBLE (ligne écrite sous une clé de chiffrement périmée) n'est pas
+    Un existant ILLISIBLE (ligne écrite sous une clé de chiffrement périmée, ou blob
+    qui ne se relit pas au format du connecteur) n'est pas
     une erreur ici : on rend la saisie telle quelle, et la validation nommera ce qui
     manque. Une repose complète doit rester possible quand le coffre ne se relit plus."""
     c = providers.REGISTRY.get(connector)
@@ -691,20 +741,21 @@ def merge_with_existing(entity_type: str, entity_id: str, connector: str,
         return dict(provided)          # mono-champ, ou saisie déjà complète
     try:
         ligne = get_credential_with_meta(entity_type, entity_id, connector, account)
+        prior = ({**unpack_secret(connector, ligne["secret"]),
+                  **meta_fields(connector, ligne.get("meta") or {})}
+                 if ligne and ligne.get("secret") else None)
     except Exception:
-        # Une ligne illisible (écrite sous une clé de chiffrement périmée) ne doit pas
+        # Une ligne illisible (clé de chiffrement périmée, blob hors format) ne doit pas
         # interdire de la RÉÉCRIRE en entier — mais elle se journalise : c'est un fait
         # d'exploitation, pas un détail.
         logger.warning("merge credential : coffre illisible pour %s/%s/%s (account=%r) "
                        "— saisie prise telle quelle",
                        entity_type, entity_id, connector, account, exc_info=True)
         return dict(provided)
-    if not ligne or not ligne.get("secret"):
+    if prior is None:
         return dict(provided)
     # Le chiffré ET les champs `in_meta` de la même ligne : un champ rangé dans `meta` se
     # conserve à la repose comme un champ du chiffré.
-    prior = {**unpack_secret(connector, ligne["secret"]),
-             **meta_fields(connector, ligne.get("meta") or {})}
     return {**{k: v for k, v in prior.items() if k in declared and k not in provided},
             **provided}
 
@@ -716,18 +767,32 @@ def secret_from_input(
     du connecteur — SOURCE UNIQUE des capacités org.secret.set / group.secret.set
     (miroir du set-path user `api_routes_credentials.api_key_save`).
 
-    - mono-champ (≤1 `secret_field`, api_key) → la valeur brute ;
+    - mono-champ (≤1 `secret_field`) → la valeur brute, reçue par `api_key` OU sous le
+      NOM de son champ déclaré dans `fields` (`{"key": …}`) — la forme que la route du
+      palier membre lit déjà ;
     - multi-champs (≥2, ex. zoho/silae) → `validate_fields` (jeu fermé, pertinence
       par discriminant, `required` non vides), packés via `pack_secret`.
 
     Lève `CredentialFieldsInvalid` (une `ValueError`) actionnable : `empty_api_key`
-    (mono vide), `missing_credentials` (champ requis absent/vide, ou aucun champ) ou
+    (mono vide), `conflicting_api_key` (deux valeurs différentes pour la même clé),
+    `missing_credentials` (champ requis absent/vide, ou aucun champ) ou
     `invalid_field_value` (valeur hors jeu fermé)."""
     c = providers.REGISTRY.get(connector)
     sfields = c.secret_fields if c is not None else ()
     if len(sfields) >= 2:
         return pack_secret(connector, validate_fields(connector, fields or {}))
+    # La clé UNIQUE se lit aussi sous le nom de son champ : les fenêtres de saisie
+    # rendent les valeurs par nom de champ, et chaque écran devait sinon la recopier
+    # dans `api_key`. Deux fois oublié (PayFit, puis l'API cabinet de Pennylane) : la clé
+    # partait dans `fields`, ignorée, et la pose était refusée « clé d'API vide » alors
+    # que l'utilisateur l'avait collée.
     key = (api_key or "").strip()
+    du_champ = str((fields or {}).get(sfields[0].name) or "").strip() if sfields else ""
+    if key and du_champ and key != du_champ:
+        raise CredentialFieldsInvalid(
+            "conflicting_api_key",
+            f"deux clés différentes : `api_key` et le champ `{sfields[0].name}`.")
+    key = key or du_champ
     if not key:
         raise CredentialFieldsInvalid("empty_api_key", "clé d'API vide.")
     return key
@@ -746,11 +811,18 @@ def preparer_pose(entity_type: str, entity_id: str, connector: str, account: str
     - une clé posée SEULE par `api_key` — la forme d'avant l'ajout du champ, que des
       fronts envoient encore — se lit comme le champ unique du chiffré, et l'écriture
       partielle conserve le champ `in_meta` déjà posé au lieu de l'effacer ;
-    - un champ `in_meta` envoyé VIDE s'efface, comme tout champ (#448)."""
+    - un champ `in_meta` envoyé VIDE s'efface, comme tout champ (#448).
+
+    Une clé posée SEULE par `api_key` sur un connecteur dont le chiffré porte plusieurs
+    champs (`forager` : clé + compte) se lit aussi comme son premier champ SECRET, et
+    l'écriture partielle conserve les autres. C'est ici, à la pose, que la valeur brute
+    prend la forme du coffre — jamais à la lecture."""
     c = providers.REGISTRY.get(connector)
     en_meta = _noms_en_meta(c)
-    if fields is None and en_meta and (api_key or "").strip():
-        fields = {c.vault_fields[0].name: api_key}
+    if (fields is None and (api_key or "").strip()
+            and (en_meta or len(c.vault_fields) >= 2)):
+        champ = next((f.name for f in c.vault_fields if f.secret), c.vault_fields[0].name)
+        fields = {champ: api_key}
     if fields is not None:
         fields = merge_with_existing(entity_type, entity_id, connector, account, fields)
     if not en_meta:
@@ -1140,20 +1212,45 @@ def set_credential(
 
 
 def set_platform_key(label: str, connector: str, secret: str,
-                     set_by: Optional[str] = None) -> None:
+                     set_by: Optional[str] = None, meta: Optional[dict] = None) -> None:
     """Pose une clé PLATEFORME (console admin). Un connecteur sans palier gratuit
     (`platform_key_open=False`) la reçoit FERMÉE : elle ne sert que les orgs accordées
     (`grant_platform`). Sans ça, la ligne naissait `share_mode='open'` (défaut de la
     colonne) avec un `share_down` vide, que `access.platform_grant` lit « ouvert à
     tous » : entre la pose et le premier accord, n'importe quel compte sans clé à lui
     consommait la clé payante d'oto, sans plafond (`default_quota=0`). Une rotation
-    sur une clé déjà accordée la laisse fermée ; un connecteur à palier gratuit garde
-    sa clé ouverte."""
+    (re-pose sous le même libellé) garde l'état de la ligne tel quel — fermée reste
+    fermée, ouverte reste ouverte, bénéficiaires, quotas et révocations compris
+    (F-046) ; un connecteur à palier gratuit garde sa clé ouverte.
+
+    `secret` est déjà à la forme du coffre : la pose passe par `preparer_pose`, comme
+    les paliers org, équipe et tenant (`capabilities/api_tokens._keys_create`)."""
     c = providers.REGISTRY.get(connector)
     ouverte = bool(c and getattr(c, "platform_key_open", False))
     with _connect() as conn:
-        set_credential(PLATFORM, label, connector, secret, set_by=set_by, conn=conn)
-        if not ouverte:
+        # F-046 : une RE-POSE (même libellé) est une rotation du secret, pas une
+        # nouvelle clé. Elle fermait toute clé payante (une clé ouverte à tous ne
+        # servait plus personne, sans un mot) et l'upsert écrasait `meta` — quotas
+        # par bénéficiaire et révocations compris. On relit la ligne : son
+        # `share_mode` reste le sien (`share_down`/`share_side` ne sont pas dans le
+        # SET de l'upsert) et les clés d'accord de `meta` sont reportées, sauf si la
+        # pose les nomme elle-même.
+        # Verrouillée : un accord ou une révocation entre cette lecture et l'upsert
+        # serait écrasé par le `meta` relu ici.
+        existante = conn.execute(
+            "SELECT meta FROM connector_credentials WHERE entity_type = %s "
+            "AND entity_id = %s AND connector = %s AND account = '' FOR UPDATE",
+            (PLATFORM, label, connector)).fetchone()
+        if existante is not None:
+            reportee = dict(meta or {})
+            ancienne = existante["meta"] or {}
+            for k in _META_DES_ACCORDS:
+                if k in ancienne and k not in reportee:
+                    reportee[k] = ancienne[k]
+            meta = reportee or None
+        set_credential(PLATFORM, label, connector, secret, set_by=set_by, meta=meta,
+                       conn=conn)
+        if not ouverte and existante is None:
             conn.execute(
                 "UPDATE connector_credentials SET share_mode = 'closed' "
                 "WHERE entity_type = %s AND entity_id = %s AND connector = %s "

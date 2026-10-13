@@ -1,8 +1,11 @@
 """UI web navigable d'un projet partagé (`share_ui.py`, ADR 0032) — routeur `build_page`
 (gating fail-closed par appartenance au projet), rendus, dérivation de colonnes."""
+import contextlib
+
 import pytest
 
 from oto_mcp import db, org_store, share_ui
+from oto_mcp import subdomain_project as sp
 
 # `secret` = partage navigable, ET les deux opt-ins posés : c'est le projet dont le
 # propriétaire a consenti à publier ses tableaux ET ses pages. Les flags sont dans la
@@ -12,7 +15,8 @@ _PROJECT = {"id": 5, "name": "Projet démo", "brief_md": "Un projet de démonstr
             "mcp_access": "secret", "mcp_expose_datastore": True, "mcp_expose_docs": True}
 
 _LINKS = [
-    {"target_type": "procedure", "target_ref": "11", "label": "Enrichir", "title": "Enrichissement"},
+    {"target_type": "procedure", "target_ref": "11", "label": "Enrichir", "title": "Enrichissement",
+     "procedure_id": 11},
     # La forme RÉELLE de `db.list_project_links` : un lien tableau résolu porte son
     # `datastore_id` — la seule clé que la page lit (#365).
     {"target_type": "tableau", "target_ref": "22", "label": "Prospects", "datastore": "prospects",
@@ -28,6 +32,26 @@ def _wire(monkeypatch, *, links=None):
     monkeypatch.setattr(db, "org_tenant_slug", lambda org_id: "oto")
     monkeypatch.setattr(db, "list_project_links", lambda pid: list(links if links is not None else _LINKS))
     monkeypatch.setattr(db, "list_docs_for_project", lambda pid: [{"id": 44, "title": "Notes internes"}])
+
+
+def _ligne(data, row_id="r1"):
+    """Une ligne telle que `db.datastore_list_rows` la rend (la page la projette comme
+    `data_rows`, qui lit ces colonnes)."""
+    return {"row_id": row_id, "created_at": "2026-10-01 10:00:00",
+            "updated_at": "2026-10-01 10:00:00", "rev": 1, "data": data}
+
+
+@contextlib.contextmanager
+def _sous_l_endpoint(projet):
+    """Le contexte que `HostDispatch` pose avant la page (org propriétaire = celle dont
+    la politique de rédaction s'applique)."""
+    org = int(projet["owner_id"]) if projet.get("owner_type") == "org" else None
+    tok = sp._CTX.set(sp.AnonContext(int(projet["id"]), org, frozenset(),
+                                     datastore_exposed=True))
+    try:
+        yield
+    finally:
+        sp._CTX.reset(tok)
 
 
 # ── Index ─────────────────────────────────────────────────────────────────────
@@ -168,9 +192,10 @@ def test_data_allowed_on_secret(monkeypatch):
                         lambda rid: {"datastore": "prospects", "schema": None})
     monkeypatch.setattr(db, "datastore_count_rows", lambda rid: 2)
     monkeypatch.setattr(db, "datastore_list_rows",
-                        lambda rid, **kw: [{"data": {"nom": "Alice", "email": "a@x.fr"}},
-                                           {"data": {"nom": "Bob"}}])
-    html, status = share_ui.build_page(_PROJECT, "/data/22", connect_url="u")
+                        lambda rid, **kw: [_ligne({"nom": "Alice", "email": "a@x.fr"}),
+                                           _ligne({"nom": "Bob"}, "r2")])
+    with _sous_l_endpoint(_PROJECT):
+        html, status = share_ui.build_page(_PROJECT, "/data/22", connect_url="u")
     assert status == 200
     assert "prospects" in html and "nom" in html and "email" in html and "Alice" in html
     assert "1–2 sur 2" in html
@@ -238,8 +263,10 @@ def test_data_allowed_via_name_link(monkeypatch):
     monkeypatch.setattr(db, "get_datastore_by_id",
                         lambda rid: {"datastore": "accords_dormants", "schema": None})
     monkeypatch.setattr(db, "datastore_count_rows", lambda rid: 1)
-    monkeypatch.setattr(db, "datastore_list_rows", lambda rid, **kw: [{"data": {"siren": "123"}}])
-    html, status = share_ui.build_page(_PROJECT_OWNED, "/data/65", connect_url="u")
+    monkeypatch.setattr(db, "datastore_list_rows", lambda rid, **kw: [_ligne({"siren": "123"})])
+    monkeypatch.setattr(org_store, "get_org_field_filters", lambda org_id: {})
+    with _sous_l_endpoint(_PROJECT_OWNED):
+        html, status = share_ui.build_page(_PROJECT_OWNED, "/data/65", connect_url="u")
     assert status == 200 and "accords_dormants" in html and "siren" in html
 
 
@@ -293,12 +320,15 @@ def test_non_ui_paths_fall_through(monkeypatch):
 
 # ── Dérivation de colonnes / cellules ────────────────────────────────────────
 def test_derive_columns_from_schema():
-    schema = {"fields": [{"name": "nom"}, {"name": "ville"}]}
-    assert share_ui._derive_columns(schema, [{"data": {"nom": "A", "autre": 1}}]) == ["nom", "ville"]
+    # Une colonne se déclare par `key` ; les colonnes déclarées d'abord, dans l'ordre
+    # du schéma, puis les autres clés SERVIES ; les métadonnées `_…` jamais.
+    schema = {"fields": [{"key": "nom"}, {"key": "ville"}]}
+    rows = [{"_id": "r1", "autre": 1, "ville": None, "nom": "A"}]
+    assert share_ui._derive_columns(schema, rows) == ["nom", "ville", "autre"]
 
 
 def test_derive_columns_union_of_rows():
-    rows = [{"data": {"a": 1, "b": 2}}, {"data": {"b": 3, "c": 4}}]
+    rows = [{"_id": "r1", "a": 1, "b": 2}, {"_id": "r2", "b": 3, "c": 4}]
     assert share_ui._derive_columns(None, rows) == ["a", "b", "c"]
 
 
@@ -355,7 +385,7 @@ def test_cell_td_wraps_and_marks_rich():
 
 _LINKS_WITH_ROLE = [
     {"target_type": "procedure", "target_ref": "11", "label": "Enrichir",
-     "title": "Enrichissement", "role": "Ce que chaque agent worker exécute, une ligne à la fois."},
+     "title": "Enrichissement", "procedure_id": 11, "role": "Ce que chaque agent worker exécute, une ligne à la fois."},
     {"target_type": "tableau", "target_ref": "22", "label": "Prospects",
      "datastore": "prospects", "datastore_id": 22,
      "role": "Périmètre sourcé par convention collective."},
@@ -379,7 +409,7 @@ def test_the_label_still_wins_over_the_procedure_title(monkeypatch):
 
 def test_a_link_without_role_renders_no_empty_line(monkeypatch):
     _wire(monkeypatch, links=[{"target_type": "procedure", "target_ref": "11",
-                               "label": "Enrichir", "role": None}])
+                               "procedure_id": 11, "label": "Enrichir", "role": None}])
     html, _ = share_ui.build_page(_PROJECT, "/", connect_url="https://x/mcp")
     assert "class=r" not in html
 
@@ -387,7 +417,7 @@ def test_a_link_without_role_renders_no_empty_line(monkeypatch):
 def test_the_role_is_escaped(monkeypatch):
     """Le `role` est saisi par un humain et rendu sur une page PUBLIQUE."""
     _wire(monkeypatch, links=[{"target_type": "procedure", "target_ref": "11",
-                               "label": "P", "role": "<script>alert(1)</script>"}])
+                               "procedure_id": 11, "label": "P", "role": "<script>alert(1)</script>"}])
     html, _ = share_ui.build_page(_PROJECT, "/", connect_url="https://x/mcp")
     assert "<script>" not in html and "&lt;script&gt;" in html
 
@@ -419,7 +449,8 @@ def test_procedure_page_shows_the_project_label_and_role(monkeypatch):
 
 def test_procedure_page_falls_back_to_the_guide_title(monkeypatch):
     """Un lien posé sans label (l'agent lie souvent ainsi) doit rester lisible."""
-    _wire(monkeypatch, links=[{"target_type": "procedure", "target_ref": "11"}])
+    _wire(monkeypatch, links=[{"target_type": "procedure", "target_ref": "11",
+                               "procedure_id": 11}])
     monkeypatch.setattr(org_store, "get_instruction_by_id",
                         lambda i: {"title": "Titre canonique", "body_md": "x"})
     html, _ = share_ui.build_page(_PROJECT, "/procedures/11", connect_url="https://x/mcp")

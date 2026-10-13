@@ -24,6 +24,16 @@ récents, 3 sources en parallèle). Pour le bilan INPI complet (~13 ratios, jarg
 inclus) : `fr_bilan(siren, date_cloture)`. Les anciens noms (`recherche_entreprises_*`,
 `sirene_*`) n'existent plus.
 
+⚠️ Le BODACC de `fr_` part d'un **SIREN connu** (`fr_events`, `fr_events_batch`). Trouver les
+entreprises **à partir** des annonces (les procédures collectives d'un département cette
+semaine, les cessions d'une ville) est un autre connecteur, `bodacc` (`bodacc_notice`,
+op=search|count|get, client `oto.tools.bodacc.notices`). Connecteur à part pour une seule
+raison, l'**activation** : `sirene` est actif pour tous, balayer le bulletin entier est une
+capacité qu'une org choisit (`default_active=False`). Ce n'est pas une affaire de credential
+(`sirene` porte déjà une vingtaine d'outils sans clé). Le passage par le service FOD
+(ADR 0028) reste possible plus tard : le client vit dans la lib publique, la bascule serait
+un changement de routage.
+
 ## Deux stocks SIRENE, pas un
 
 Le parquet historique porte les **établissements** (implantation : adresse, NAF,

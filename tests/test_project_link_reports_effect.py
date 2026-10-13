@@ -85,10 +85,15 @@ def _link(monde, ref: str, **args) -> dict:
     return cap.handler(cap.authz(RawCtx(sub="u-admin"), inp), inp)
 
 
-def _ref() -> str:
-    """Une référence de procédure à moi seul. Numérique : l'ADR 0032 a fixé l'id comme
-    référence stable, et le handler laisse passer les chiffres sans les résoudre."""
-    return str(900_000_000 + uuid.uuid4().int % 10_000_000)
+def _ref(monde) -> str:
+    """Une procédure à moi seul, VRAIE : une procédure de l'org du projet, que son admin
+    lit. Numérique : l'ADR 0032 a fixé l'id comme référence stable — et un identifiant
+    ne se lie que s'il désigne une cible de la portée du projet que le lieur LIT."""
+    from oto_mcp import org_store
+    slug = "proc-" + uuid.uuid4().hex[:8]
+    org_store.set_instruction("org", monde["org"], slug, "1. Une étape",
+                              title=slug, set_by="u-admin")
+    return str(org_store.get_instruction("org", monde["org"], slug)["id"])
 
 
 # ── Le défaut, tel qu'il se vit : le même geste, deux fois ───────────────────
@@ -112,7 +117,7 @@ def test_les_liens_rendus_eux_ne_disent_toujours_rien(monde):
     par ses propres moyens : la partie de la réponse qui décrit l'ÉTAT — `links`, avec
     jusqu'à la date de création de chaque ligne — est rigoureusement la même après un
     rattachement effectif et après un rejeu. Seul `link_status` porte l'événement."""
-    ref = _ref()
+    ref = _ref(monde)
     _link(monde, ref, label="Relance")
     a = _link(monde, ref, label="Relance")
     b = _link(monde, ref, label="Relance")
@@ -125,7 +130,7 @@ def test_une_vraie_reecriture_se_nomme_et_dit_ses_champs(monde):
     """Le troisième cas, entre les deux : le lien existait, et cet appel l'a CHANGÉ.
     Dire « created » serait faux, dire « unchanged » aussi — et un appelant qui
     corrige un libellé a besoin de savoir qu'il a écrit, et sur quoi."""
-    ref = _ref()
+    ref = _ref(monde)
     _link(monde, ref, label="Clôture")
     out = _link(monde, ref, label="Clôture annuelle")
 
@@ -139,7 +144,7 @@ def test_sans_reecriture_aucun_champ_nest_annonce(monde):
     """`changed_fields` n'apparaît QUE sur une vraie réécriture : une liste vide sur un
     rejeu se lirait comme « j'ai écrit, mais rien n'a bougé », soit un troisième
     message pour un non-événement."""
-    ref = _ref()
+    ref = _ref(monde)
     _link(monde, ref, label="Veille")
     out = _link(monde, ref, label="Veille")
 
@@ -154,7 +159,7 @@ def test_le_delta_porte_sur_des_valeurs_pas_sur_une_intention(monde):
     snapshot que l'écriture) à celui d'APRÈS. Reposer le même `role` ne le déclare
     donc pas changé, et réécrire trois champs les nomme tous les trois."""
     from oto_mcp import db
-    ref = _ref()
+    ref = _ref(monde)
 
     assert db.add_project_link(monde["projet"], "procedure", ref, "A",
                                role="le pourquoi") == {"status": "created",
@@ -174,7 +179,7 @@ def test_un_champ_tu_nest_ni_efface_ni_compte_comme_un_changement(monde):
     sont pas écrasés (`COALESCE`). Un re-lien qui les tait n'écrit donc rien — et
     l'annoncer comme une mise à jour serait le même mensonge que l'inverse."""
     from oto_mcp import db
-    ref = _ref()
+    ref = _ref(monde)
     db.add_project_link(monde["projet"], "procedure", ref, "A", role="le pourquoi",
                         config={"x": 1})
 
@@ -221,7 +226,7 @@ def test_relier_avec_le_seul_role_garde_le_libelle(monde):
     """Piège 1, vécu le 11/09/2026 : re-lier en ne passant que `role` rendait
     `changed_fields=[label, role]` et le libellé repartait à NULL — alors que le texte
     servi promet de préserver ce qu'on tait. Un champ omis n'est plus jamais écrasé."""
-    ref = _ref()
+    ref = _ref(monde)
     _link(monde, ref, label="Vivier", role="le pourquoi")
     out = _link(monde, ref, role="un autre pourquoi")
 

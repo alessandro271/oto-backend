@@ -10,10 +10,8 @@ type: reference
 
 Conteneur de travail **possédé** (owned resource ADR 0030) : un but + ses entités. Tables
 `projects` (owner_type/owner_id, `brief_md` = doc d'entrée, soft-delete `archived_at`),
-`project_links` (pointeur typé `target_type∈{tableau,procedure,connecteur,doc,base}` + `target_ref`
-+ label, pas de FK cross-store ; `doc` = une page Documents par son id, lisible par qui la
-lie — c'est ainsi qu'on binde le slot `doc` d'une procédure, et la purge du boot qui
-l'effaçait depuis le lot 3 est retirée, 10/10/2026), `docs` (pages markdown **en arbre** `parent_id`, héritent de
+`project_links` (pointeur typé `target_type∈{tableau,procedure,connecteur,base}` + `target_ref`
++ label, pas de FK cross-store), `docs` (pages markdown **en arbre** `parent_id`, héritent de
 l'accès du projet — pas d'ownership propre), `project_activity` (journal best-effort).
 Capacités co-déclarées : **`oto_project`** (`capabilities/projects.py`, op create/list/get/
 update/archive/link/unlink/activity, `POST /api/me/projects`), **`oto_doc`** (`capabilities/
@@ -130,6 +128,37 @@ Partage/transfert via **`oto_resource`** (resource_type=`project` ajouté au dis
 > nommant. L'endpoint MCP partagé et la page partagée lisent le même `datastore_id`
 > au lieu de refaire chacun leur résolution (le premier cherchait dans l'org et
 > exposait, sur un projet d'équipe, le tableau de l'org au lieu de celui de l'équipe).
+
+> **Un lien par IDENTIFIANT se juge dans la même portée qu'un lien par nom (12/10/2026).**
+> Nom et slug se résolvaient dans la portée du projet ; un identifiant numérique était
+> stocké tel quel, sous la seule garde d'écriture du PROJET, puis servi tel quel par tous
+> ses lecteurs : libellé et titre dans les liens, lignes et corps sur la page publiée,
+> lignes recopiées par `op=copy` (mode `seeded`), corps recopié dans l'org de la copie,
+> schéma posé par un slot. Le numéro d'un tableau ou d'une procédure de n'importe quelle
+> org suffisait. Une seule règle, `db.refs_dans_la_portee` (le prédicat de
+> `list_project_links`) : la cible appartient au propriétaire du projet, se range dans
+> son org (l'org, une de ses équipes, un tableau perso créé en elle, la procédure perso
+> d'un de ses membres — une procédure perso ne se range dans aucune org), lui est partagée
+> (partage vivant à l'un de ses principaux), ou vient de la bibliothèque plateforme.
+> (1) **À la pose**, `op=link` refuse en 404 (`unknown_tableau` / `unknown_procedure`,
+> même message que pour un numéro inexistant) une cible hors de cette portée, ET une
+> cible que le lieur ne LIT pas — même quand elle appartient au propriétaire du projet :
+> écrire un projet n'est pas en être membre (un bénéficiaire extérieur d'un partage en
+> écriture liait les tableaux de l'org, puis les recopiait chez lui). Exception au même
+> message : une cible que le lieur LIT mais hors de la portée (le tableau d'une autre org
+> dont il est aussi membre) est refusée en 403 `target_out_of_scope`, qui dit quoi faire —
+> la copier dans l'org du projet, ou la partager à cette org ; l'existence ne lui apprend rien.
+> Un lien posé avant
+> la garde vers une cible qui existe ailleurs porte `hors_portee: true`, et l'audit le
+> dit « hors de la portée du projet » plutôt que « n'existe plus ». **La copie** (`op=copy`)
+> écarte, en le disant, tout tableau ou procédure que le COPIEUR ne lit pas
+> (`duplicate_project(lisible=…)`) : lire le projet n'est pas lire ses tableaux. (2) **À la lecture**, `list_project_links` ne pose `datastore_id` (tableau)
+> et `procedure_id` (procédure, clé neuve, même sens) que sur une cible dans la
+> portée ; la page publiée, la copie, l'inventaire, l'audit et le schéma cible d'un slot
+> lisent CES clés, jamais le `target_ref` brut — un lien posé avant la garde reste en
+> base, mort pour tous. `slots.provision_tableau_schema` re-vérifie lui-même la portée
+> (`project_id` obligatoire). L'unlink n'est pas gardé : un lien hors portée doit
+> pouvoir se retirer.
 
 > **Push out-of-bande de gros contenu par un agent (issue #105).** Écrire un GROS contenu
 > via `oto_doc(body_md=…)`/multipart le fait transiter INLINE par le contexte du LLM (coût

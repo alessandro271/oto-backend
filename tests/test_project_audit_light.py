@@ -10,7 +10,7 @@ def test_light_audit_skips_expensive_calls(monkeypatch):
         raise AssertionError("appel coûteux interdit en mode light")
     monkeypatch.setattr(db, "get_project_by_id", _boom)
     monkeypatch.setattr(db, "project_run_stats", _boom)
-    monkeypatch.setattr(project_audit, "_resolved_procedure", _boom)
+    monkeypatch.setattr(project_audit, "_resolved_procedures", _boom)
     monkeypatch.setattr(project_audit, "_unresolvable_connector_why", _boom)
     links = [
         {"target_type": "tableau", "target_ref": "9", "namespace": None},        # mort (cheap)

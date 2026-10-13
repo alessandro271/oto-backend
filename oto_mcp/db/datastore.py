@@ -43,6 +43,7 @@ from .estampille import ecriture_de_lignes
 # pour que la surface plate `db.<fn>` et tous les appelants restent inchangés.
 from .datastore_ns import (  # noqa: F401
     AdresseAmbigue,
+    best_resource_grants,
     count_datastore_rows_for_ns,
     create_datastore,
     delete_datastore_by_id,

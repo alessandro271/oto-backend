@@ -12,6 +12,7 @@ les **liens** vers tableaux/procédures/connecteurs/bases, et le **Doc arboresce
 """
 from __future__ import annotations
 
+import logging
 import re
 import secrets
 from typing import Literal, Optional
@@ -24,6 +25,8 @@ from ._authz import SUB_ONLY, refus_hors_vue
 from . import _portee, _publication
 from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
+
+logger = logging.getLogger(__name__)
 
 RTYPE = "project"
 
@@ -83,14 +86,22 @@ class ProjectInput(BaseModel):
             "with oto_resource op=transfer resource_type=project."))
     owner_id: Optional[str] = None   # org.id si owner_type='org' ; group.id si 'group' ; ignoré sinon
     # link / unlink : un pointeur typé vers une entité regroupée par le projet.
-    # `doc` = une page Documents par son id (signal #1265) : c'est le seul moyen de
-    # binder un slot `doc` qu'une procédure déclare.
-    target_type: Optional[Literal["tableau", "procedure", "connecteur", "doc"]] = None
+    target_type: Optional[Literal["tableau", "procedure", "connecteur"]] = None
     # Opt-ins d'op=get, cumulables : 'spine' (l'arbre des pages, Ship 2 lot 3, +
     # drill/bornage ci-dessous) · 'procedures' (le CORPS des procédures liées, #313).
+    # Opt-ins d'op=list, cumulables : 'links' (les liens de chaque projet, ceux d'op=get
+    # — un écran qui cherche quels projets lient une cible lit UNE liste, pas un op=get
+    # par projet ; incident du 13/10/2026) · 'audit' (l'audit LÉGER de chaque projet,
+    # mêmes clés que celui d'op=get plus `light: true`).
     # Une valeur inconnue est ignorée en silence — l'absence d'un champ optionnel se
     # lit dans la réponse, et refuser ferait d'un ajout futur une rupture de contrat.
-    include: Optional[list[str]] = None
+    include: Optional[list[str]] = Field(default=None, description=(
+        "get: `spine` (page tree) and/or `procedures` (bodies of linked procedures). "
+        "list: `links` adds each project's links, as op=get serves them — to find which "
+        "projects link a target in ONE call instead of one op=get per project; `audit` "
+        "adds each project's LIGHT audit — op=get's keys plus `light: true`: dead "
+        "tableaux and connectors missing from the registry only; dead procedures and "
+        "unresolvable connectors are checked by op=get alone."))
     from_doc: Optional[int] = None     # enraciner l'épine sur un nœud (drill)
     depth: Optional[int] = None        # profondeur (défaut 2)
     target_ref: Optional[str] = None   # datastore.id | guide slug | connecteur name | doc.id (page Documents)
@@ -497,6 +508,65 @@ def _resolve_tableau_id(row: dict, ref: str) -> Optional[str]:
     return None
 
 
+#: Le type de ressource (ownership) de chaque cible de lien qu'on désigne par numéro.
+_RTYPE_CIBLE = {"tableau": ownership.TYPE_RESSOURCE_DATASTORE,
+                "procedure": ownership.TYPE_RESSOURCE_PROCEDURE}
+
+
+def _exiger_cible_dans_la_portee(sub: str, row: dict, target_type: str, ref: str) -> None:
+    """Un lien `tableau`/`procedure` ne se POSE que vers une cible que le projet a le
+    droit de désigner — la règle qui sert ensuite le lien (`db.refs_dans_la_portee`,
+    celle de `list_project_links`) — ET que le lieur LIT : on ne range pas dans un projet
+    ce qu'on ne voit pas (le tableau perso d'un autre membre, la procédure d'une équipe
+    dont on n'est pas).
+
+    ⚠️ **Aucune exemption pour une cible du propriétaire du projet.** Écrire un projet
+    n'est pas en être membre : un bénéficiaire d'un partage en écriture, extérieur à
+    l'org, liait n'importe quel tableau de cette org par son numéro, puis le recopiait
+    chez lui (`op=copy`, gardé par la seule lecture du projet). Membres, objets à soi,
+    bibliothèque plateforme et partages reçus par l'org passent tous `can_access`.
+
+    ⚠️ **Le numéro ne prouvait rien** (avant ce correctif) : nom et slug se résolvaient
+    dans la portée du projet, mais un identifiant était stocké tel quel — et servi tel
+    quel : libellé et titre dans les liens, lignes et corps sur la page publiée, lignes
+    recopiées par `op=copy`, schéma posé par un slot. N'importe quel tableau ou
+    procédure de la plateforme, pour qui en devinait le numéro.
+
+    Refus 404, MÊME message pour « n'existe pas » et « existe ailleurs » : distinguer
+    les deux dirait qu'il existe. Seule exception : une cible que le lieur LIT déjà
+    (typiquement, celle d'une autre org dont il est aussi membre) — son existence ne
+    lui apprend rien ; on lui dit pourquoi le lien est refusé et quoi faire à la place
+    (la copier dans l'org du projet, ou la partager à cette org), en 403
+    `target_out_of_scope`."""
+    if not str(ref).isdigit():
+        return
+    rtype = _RTYPE_CIBLE[target_type]
+    dans_la_portee = int(ref) in db.refs_dans_la_portee(int(row["id"]), target_type, [ref])
+    try:
+        lisible = ownership.can_access(sub, rtype, str(ref), "read")
+    except ValueError as e:
+        # Une procédure sans propriétaire (`ownership._guide_owner`) est une
+        # incohérence de données : elle se signale, et ne se lie pas — refus 404
+        # comme une cible inconnue, pas une 500.
+        logger.warning("link %s #%s : propriétaire illisible (%s)", target_type, ref, e)
+        lisible = False
+    if dans_la_portee and lisible:
+        return
+    if lisible:
+        quoi = "Ce tableau" if target_type == "tableau" else "Cette procédure"
+        _require(False, "target_out_of_scope",
+                 f"{quoi} (#{ref}) n'appartient pas à l'org du projet : un lien le "
+                 "montrerait à tout le projet, y compris à qui ne le lit pas. "
+                 "Copie-le dans cette org, ou partage-le à l'org du projet "
+                 "(`oto_resource op=share audience=org`), puis lie la copie ou le partage.",
+                 403)
+    if target_type == "tableau":
+        _require(False, "unknown_tableau",
+                 f"Aucun tableau « {ref} » dans le datastore du projet.", 404)
+    _require(False, "unknown_procedure",
+             f"Aucune procédure « {ref} » dans la portée du projet.", 404)
+
+
 def _mcp_unresolvable_tools(row: dict, tools: list[str],
                             expose_datastore: bool = False) -> list[str]:
     """Sonde de publication SANS LOGIN (anonymous/secret, ADR 0032) : un endpoint sans
@@ -704,34 +774,57 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
     if inp.op == "list":
         from .. import project_audit
         # Pastilles d'ÉTAT de l'index (refonte UX, ADR 0032) : nb d'entités liées +
-        # partagé + « à vérifier » (audit). Le nb de grants est batché (1 requête) ; les
-        # liens/audit sont par projet (les listes d'org sont petites) et best-effort.
+        # partagé + « à vérifier » (audit) + droit d'écriture. Tout se lit EN LOT, pour
+        # tous les projets de la liste à la fois : le nombre de requêtes ne dépend pas
+        # du nombre de projets (incident du 13/10/2026 — par projet, la liste d'une org
+        # de vingt projets faisait plus de deux cents requêtes).
+        # `include=["links"]` rend en plus les liens de chaque projet, ceux d'op=get :
+        # un écran qui cherche quels projets lient une cible lit UNE liste, au lieu d'un
+        # op=get par projet.
+        avec_liens = bool(inp.include and "links" in inp.include)
+        # `include=["audit"]` rend l'audit LÉGER de chaque projet, déjà calculé pour
+        # `has_audit` : sans requête de plus. Mêmes clés que l'audit d'op=get, plus
+        # `light: true` — ni procédure morte ni connecteur non résolvable n'y figurent
+        # (leur vérification est une requête par lien : op=get seul).
+        avec_audit = bool(inp.include and "audit" in inp.include)
         grant_counts: dict[int, int] = {}
 
-        def _enrich(r: dict, shared: bool) -> dict:
-            links = db.list_project_links(r["id"])
-            # LISTE : audit LÉGER (checks en mémoire seuls) — l'audit complet par projet
-            # (résolution procédures + résolvabilité connecteur + run_stats) produisait un
-            # N+1 → timeout 180 s (oto/#6 A7). Le badge « à vérifier » reste sur les liens
-            # morts détectables sans requête ; le détail complet est servi par op=get.
-            aud = project_audit.audit_project(r["id"], links, light=True)
-            has_audit = bool(aud.get("dead_links") or aud.get("unbound_slots")
-                             or aud.get("inert_procedures"))
-            return {**_view(r, sub, grant_counts.get(r["id"], 0)), "entity_count": len(links),
+        def _enrich(rows: list[dict], shared: bool) -> list[dict]:
+            liens = db.list_project_links_many([r["id"] for r in rows])
+            ecriture = ownership.can_access_many(
+                sub, RTYPE, {str(r["id"]): (r["owner_type"], str(r["owner_id"])) for r in rows},
+                "write")
+            out = []
+            for r in rows:
+                links = liens[int(r["id"])]
+                # LISTE : audit LÉGER (checks en mémoire seuls) — l'audit complet par
+                # projet (résolution procédures + résolvabilité connecteur + run_stats)
+                # produisait un N+1 → timeout 180 s (oto/#6 A7). Le badge « à vérifier »
+                # reste sur les liens morts détectables sans requête ; le détail complet
+                # est servi par op=get.
+                aud = project_audit.audit_project(r["id"], links, light=True)
+                has_audit = bool(aud.get("dead_links") or aud.get("unbound_slots")
+                                 or aud.get("inert_procedures"))
+                out.append({
+                    **_view(r, sub, grant_counts.get(r["id"], 0)), "entity_count": len(links),
                     "has_audit": has_audit,
                     "shared": shared or grant_counts.get(r["id"], 0) > 0,
-                    # `can_write` sur la LISTE (pastille « lecture ») — même source que op=get :
-                    # un projet partagé en lecture seule remonte false. Own = accès effectif.
-                    "can_write": ownership.can_access(sub, RTYPE, str(r["id"]), "write")}
+                    # `can_write` sur la LISTE (pastille « lecture ») — même règle qu'op=get :
+                    # un projet partagé en lecture seule remonte false.
+                    "can_write": ecriture[str(r["id"])],
+                    **({"links": links} if avec_liens else {}),
+                    **({"audit": {**aud, "light": True}} if avec_audit else {})})
+            return out
 
         def _received(principals: list[tuple[str, str]], seen: set) -> list[dict]:
             # Vue bornée (oto#270) : un partage reçu ne passe que visible dans O.
             recus = ownership.borner_a_la_vue(sub, RTYPE,
                                               db.list_projects_granted_to(principals),
                                               rid=lambda r: r["id"])
+            recus = [r for r in recus if r["id"] not in seen]
             grant_counts.update(db.project_grant_counts([r["id"] for r in recus]))
-            return [{**_enrich(r, True), "permission": r.get("permission")}
-                    for r in recus if r["id"] not in seen]
+            return [{**v, "permission": r.get("permission")}
+                    for r, v in zip(recus, _enrich(recus, True))]
 
         if inp.archived:
             _require(inp.scope != "me", "unsupported_scope",
@@ -761,7 +854,7 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         own_rows = ownership.projets_possedes_ici(sub, ctx.org_id)
         grant_counts.update(db.project_grant_counts([r["id"] for r in own_rows]))
 
-        own = [_enrich(r, False) for r in own_rows]
+        own = _enrich(own_rows, False)
         shared = _received(ownership.principaux_de_liste(sub, ctx.org_id),
                            {p["id"] for p in own})
         return _projected(own + shared, inp.fields)
@@ -894,7 +987,10 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
             if l["target_type"] != "procedure":
                 continue
             ref = str(l["target_ref"])
-            instr = org_store.get_instruction_by_id(int(ref)) if ref.isdigit() else None
+            # `procedure_id` : dans la portée du projet (`db.list_project_links`) ; une
+            # procédure d'ailleurs ne livre ni son slug ni ses outils.
+            instr = (org_store.get_instruction_by_id(int(l["procedure_id"]))
+                     if l.get("procedure_id") is not None else None)
             if not instr:
                 procedures.append({"ref": ref, "resolved": False})
                 continue
@@ -1033,7 +1129,9 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
             cible = ("user", sub, int(ctx.org_id))
         new_id, warnings = db.duplicate_project(int(inp.project_id), inp.name.strip(),
                                                 cible[0], cible[1], copied_by=sub,
-                                                context_org_id=cible[2])
+                                                context_org_id=cible[2],
+                                                lisible=lambda t, rid: ownership.can_access(
+                                                    sub, t, rid, "read"))
         if cible[0] != "user":
             _portee.observer(ctx, ressource_type="project", ressource_id=new_id,
                              ressource_nom=inp.name.strip(), vers=cible[0],
@@ -1069,20 +1167,6 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
             elif inp.op == "link":
                 _require(False, "unknown_tableau",
                          f"Aucun tableau nommé « {target_ref} » dans le datastore du projet.", 404)
-        elif inp.target_type == "doc" and inp.op == "link":
-            # Une page Documents, par son ID — vérifiée lisible par qui la lie (par son
-            # projet ou par un partage de la page) : un lien ne doit pas ouvrir une page
-            # que son auteur ne lit pas. L'unlink garde la réf brute : on délie aussi un
-            # lien vers une page supprimée depuis.
-            from .docs.common import acces_a_la_page
-            ref = str(target_ref).strip()
-            page = db.get_doc_by_id(int(ref)) if ref.isdigit() else None
-            _require(page is not None, "unknown_doc",
-                     f"Aucune page Documents d'id « {target_ref} » — un lien `doc` prend "
-                     "l'id de la page (oto_doc op=list).", 404)
-            _require(acces_a_la_page(sub, page) is not None, "forbidden",
-                     "Cette page ne t'est pas lisible : tu ne peux pas la lier.", 403)
-            target_ref = str(page["id"])
         elif inp.target_type == "connecteur":
             # L'identité est la clé du BINDING (#57). Fin du doublon : on la sort de
             # config.identity_id vers `identity_ref`. `identity_ref` explicite (front B4 /
@@ -1129,6 +1213,8 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
                 if len(existing) == 1 and existing[0].get("identity_ref") != identity_ref:
                     db.remove_project_link(int(inp.project_id), "connecteur", target_ref,
                                            identity_ref=existing[0].get("identity_ref"))
+        if inp.op == "link" and inp.target_type in _RTYPE_CIBLE:
+            _exiger_cible_dans_la_portee(sub, row, inp.target_type, str(target_ref))
         # ADR 0035 (B2) : nom de slot bindé par ce lien — validé (hygiène de clé) puis
         # unicité (projet, slot) imposée par la DB (ValueError slot_taken → 409).
         slot = None
@@ -1217,7 +1303,8 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
                 from .. import slots as slots_mod
                 target = slots_mod.target_schema_for(slot, out["links"])
                 if target is not None:
-                    res = slots_mod.provision_tableau_schema(int(target_ref), target)
+                    res = slots_mod.provision_tableau_schema(
+                        int(target_ref), target, project_id=int(inp.project_id))
                     out["slot_schema"] = res["status"]
                     if res.get("warning"):
                         out["warning"] = res["warning"]
@@ -1251,7 +1338,9 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
             try:
                 from .. import org_store, project_audit
                 instr = (org_store.get_instruction_by_id(int(target_ref))
-                         if str(target_ref).isdigit() else None)
+                         if any(l.get("procedure_id") == int(target_ref)
+                                for l in out["links"] if str(target_ref).isdigit())
+                         else None)
                 missing = project_audit.unbound_slots_for(instr, out["links"]) if instr else []
                 if missing:
                     out["unbound_slots"] = missing
@@ -1453,7 +1542,8 @@ class ProjectAudit(BaseModel):
     ⚠️ Ce modèle décrit l'audit COMPLET, celui de la lecture par id. La LISTE de
     projets sert le même nom sous une forme allégée (checks en mémoire seuls, pour
     éviter un N+1) : `inert_procedures` y est toujours vide et les procédures
-    cassées n'y remontent pas. Deux payloads, deux profondeurs."""
+    cassées n'y remontent pas. Deux payloads, deux profondeurs : celui de la liste
+    (`include=["audit"]`) porte en plus `light: true`."""
     # Lien dont la cible n'existe plus : namespace de tableau disparu (ou nom de tableau
     # AMBIGU dans la portée du projet, #365), procédure qui ne résout plus, connecteur
     # absent du registre. `{target_type, target_ref, why}`.
@@ -1610,7 +1700,9 @@ CAPABILITIES += [
             "`org=<id>` to see another org's; "
             "`scope=\"me\"` lists only the projects shared with you as a person, in any "
             "org; every response echoes the effective org in `_org`. An INDEX: names and `brief_md_length`, NOT the briefs — "
-            'read one with op=get, or pass `fields=["*"]` for whole records) / '
+            'read one with op=get, or pass `fields=["*"]` for whole records; '
+            '`include=["links"]` adds every project\'s links in the same call, '
+            '`include=["audit"]` its LIGHT audit, flagged `light: true`) / '
             "list_templates (published MODEL projects you can copy, from the ACTIVE org "
             "and the platform library) / "
             "get (project + its links + an `audit` of those links: dead_links / unbound_slots / "
@@ -1638,9 +1730,7 @@ CAPABILITIES += [
             "unarchive (puts an archived project back; `was_archived_at` echoes what it "
             "undid; find archived ones with op=list `archived=true`) / link & unlink "
             "(attach an entity: "
-            "target_type tableau|procedure|connecteur|doc + target_ref = its id/slug/name "
-            "(a doc = a Documents page by id, readable by you: it binds a procedure's "
-            "`doc` slot), "
+            "target_type tableau|procedure|connecteur + target_ref = its id/slug/name, "
             "optional label + optional "
             "role = why this entity belongs to the project + optional config = the entity's "
             "PRE-MADE per-project override; for a connecteur: {identity_id?, instructions_md?} "

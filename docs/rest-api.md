@@ -233,7 +233,7 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   écrits à la main, leurs formes diffèrent de celles-ci — réconciliation suivie en
   oto-backend#429.
 - `GET /api/me/instructions` (index des procédures ; le readme d'org est un guide `delivery=init`, plus servi ici) + `GET|PUT|DELETE /api/me/instructions/{slug}` + `GET /api/me/instructions/{slug}/versions` + `POST /api/me/instructions/{slug}/revert` — procédures de l'**org active** (le slug `claude_md` est RÉSERVÉ au readme et refusé ici) (cf. §Guides). Lecture = membre ; écriture = `org_admin` (ou platform admin). Édité par le dashboard (`/procedures`). ⚠️ Le bundle sert **trois** droits de l'appelant : `can_edit` (administrer l'org) et — depuis la suite de #695 — `can_write_instructions` / `can_delete_instructions`, un par verbe. Ce sont ces deux-là que les boutons d'une procédure lisent, ici comme sur `GET /api/groups/{id}/instructions` où ils ne valent PAS la même chose (membre pour écrire, chef pour supprimer). Le bundle d'org porte aussi **`archived`** : les procédures archivées, la plus récemment retirée d'abord, avec leur `archived_at` — servie à qui peut les remettre en service (`POST /api/me/instructions/{slug}/unarchive`, org_admin), vide pour les autres. C'est le seul endroit où une procédure archivée se LISTE : sans lui, la remettre en service exigeait de connaître déjà son slug. Jamais dans `instructions`, jamais dans l'index que lit l'IA (`org_store.list_archived_instructions`, à part de `list_instructions`). ⚠️ Le `PUT` renvoie un **`diagram_warning`** (toujours présent ; `null` = rien à signaler) quand le corps n'embarque pas le SCHÉMA requis de la procédure — non bloquant, comme `unresolved_tools`/`slot_warnings` (cf. §Guides). Son accusé porte aussi **`guide_id`**, l'identifiant STABLE de la ligne écrite (deux paliers portent le même slug en production : le slug ne désigne pas une ligne), et — au seul palier personnel — **`scope_note`**, qui dit ce que cette portée implique plutôt que de la nommer. Il porte enfin **`body_sha256`** (oto#133, aussi sur `POST /api/me/instructions` et `PUT /api/groups/{id}/instructions/{slug}`) : le SHA-256 hex du corps **relu en base pour la version écrite**, jamais celui de l'envoi — à comparer au SHA-256 de ce qu'on a envoyé, blancs de tête et de fin retirés (le store les retire, et ramène au canonique les outils cités sous un nom de produit). Un écart dit que la base porte autre chose que ce qu'on croit avoir publié (`oto_mcp/procedure_empreinte.py`).
-- `GET|PUT|DELETE /api/me/guides/{scope}/{slug}` (+ `GET /api/me/guides`) — **la prose d'instruction**, un seul primitif sur deux axes (ADR 0042 §Convergence des surfaces) : `scope` ∈ platform|org|group|user × `delivery` ∈ `on-demand` (défaut, un how-to chargé au besoin) | `init` (**readme injecté à chaque session**, slug canonique `readme` — corps vide = couche effacée). Miroir REST d'`oto_guide`, mêmes handlers. Écriture gatée par scope (platform_admin / org_admin / chef d'équipe / self). Variantes par-id pour viser une org/équipe précise plutôt que l'active : `GET|PUT /api/orgs/{id}/guides/{scope}/{slug}` et `/api/groups/{id}/guides/{scope}/{slug}` — ⚠️ **aucun code ne les appelle avec un slug libre** (mesuré le 09/09/2026 sur les 7 arbres : le seul appelant, `oto-dashboard/frontend/src/api/console.ts:306`, ne les emprunte qu'avec `slug=readme&delivery=init`) ; leur consommateur plausible est un agent qui suit cette page. ⚠️ **`409 delivery_conflict`** (09/09/2026) : l'identifiant de la ligne dérive de `(scope, owner, slug)` et **ignore `delivery`**, alors que toutes les lectures filtrent dessus — un `PUT …/guides/org/readme` on-demand tombait donc sur la MÊME ligne que le readme injecté de l'org, en remplaçait le corps, laissait `delivery='init'` et rendait 200 : prose de toutes les sessions détruite, guide écrit introuvable. L'écriture est désormais refusée dans les deux sens, rien n'est écrit, et le message nomme le geste à faire. *(Remplace `GET|PUT /api/me/agent-readme`, retiré le 2026-07-28.)*
+- `GET|PUT|DELETE /api/me/guides/{scope}/{slug}` (+ `GET /api/me/guides`) — **la prose d'instruction**, un seul primitif sur deux axes (ADR 0042 §Convergence des surfaces) : `scope` ∈ platform|org|group|user × `delivery` ∈ `on-demand` (défaut, un how-to chargé au besoin) | `init` (**readme injecté à chaque session**, slug canonique `readme` — corps vide = couche effacée). Miroir REST d'`oto_guide`, mêmes handlers. Le `GET` d'un guide on-demand rend aussi `rev`, l'ETag de son contenu ; l'édition partielle (`oto_guide op=patch`, `docs/guides.md`) est MCP seule, sans route REST. Écriture gatée par scope (platform_admin / org_admin / chef d'équipe / self). Variantes par-id pour viser une org/équipe précise plutôt que l'active : `GET|PUT /api/orgs/{id}/guides/{scope}/{slug}` et `/api/groups/{id}/guides/{scope}/{slug}` — ⚠️ **aucun code ne les appelle avec un slug libre** (mesuré le 09/09/2026 sur les 7 arbres : le seul appelant, `oto-dashboard/frontend/src/api/console.ts:306`, ne les emprunte qu'avec `slug=readme&delivery=init`) ; leur consommateur plausible est un agent qui suit cette page. ⚠️ **`409 delivery_conflict`** (09/09/2026) : l'identifiant de la ligne dérive de `(scope, owner, slug)` et **ignore `delivery`**, alors que toutes les lectures filtrent dessus — un `PUT …/guides/org/readme` on-demand tombait donc sur la MÊME ligne que le readme injecté de l'org, en remplaçait le corps, laissait `delivery='init'` et rendait 200 : prose de toutes les sessions détruite, guide écrit introuvable. L'écriture est désormais refusée dans les deux sens, rien n'est écrit, et le message nomme le geste à faire. *(Remplace `GET|PUT /api/me/agent-readme`, retiré le 2026-07-28.)*
 - `POST|DELETE /api/me/projects/{id}/public-share` — **partage public CHIFFRÉ** d'un projet (ADR 0032 §3, zero-knowledge). Le dashboard chiffre le snapshot (brief + pages) côté navigateur et POSTe uniquement `{ciphertext}` ; renvoie `{token, public_base_url}`. Écriture = `ownership.can_access(project, write)`. La clé de déchiffrement n'atteint JAMAIS le serveur (fragment d'URL).
 - `GET /api/public/projects/{token}` — **sans auth** : renvoie `{ciphertext, updated_at}` du snapshot chiffré. Déchiffrement côté navigateur (route `/p/p/{token}#<clé>`). Pendant public de `GET /api/public/docs/{token}` (#4a).
 - `POST /api/me/upload-url` — **frappe le lien signé** (oto#106, capacité `me.upload_url`, la même que l'outil agent `oto_upload_url` : mêmes paramètres, `Output` et refus déclarés). Avant, la frappe était MCP-only : un client REST pur voyait la réception publiée sans pouvoir obtenir le jeton. Hors portée d'un jeton **porté** (la cible vit dans le corps).
@@ -375,8 +375,11 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   grant** : `beneficiaries` ne dit alors plus la population servie. Chaque bénéficiaire
   porte `daily_quota`, le quota du grant de clé lu dans `meta.rate_limit_by` de
   l'instance (`null` = aucun quota, ou pas de clé) ; ⚠️ `platform_revoke` l'efface, donc
-  le relever AVANT de révoquer pour ré-accorder à l'identique, et un connecteur par
-  chaîne (`grants_chain`) garde le sien sur l'arête, non rapporté ici. Lecture =
+  le relever AVANT de révoquer pour ré-accorder à l'identique. Un connecteur par
+  chaîne (`grants_chain`) accorde par ARÊTE, jamais par `share_down` : la vue liste
+  alors chaque org ou membre qui en porte une VIVANTE (`has_key`, `daily_quota` = la
+  contrainte de l'arête) et le dit par `chain_grants: true` — sans quoi une clé fermée
+  d'un tel connecteur se lisait « ne sert personne » après un grant réussi. Lecture =
   `PLATFORM_ADMIN`, écriture = `SUPER_ADMIN`. Refus : `404 unknown_connector`,
   `400 invalid_body`, `404 unknown_org`/`unknown_user`, `400 no_platform_access`.
   **Pas de face MCP** : basculer le master global est un acte de déploiement, ouvrir un
@@ -434,7 +437,7 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
     - **plateforme** : `POST|GET /api/admin/invitations` + `DELETE …/{inv}` (platform_admin ; `oto_admin_invite` op=create/list/revoke). `org_id` optionnel (vide = onboarding pur, sinon rattachement direct).
     - **acceptation commune** : `POST /api/me/invitations/accept` (`SUB_ONLY`, `token` + expiry). ⚠️ **Modèle BEARER** : le secret suffit, l'identité de l'accepteur n'est PAS confrontée à l'email invité — cette ligne a longtemps dit « match email vérifié », ce qui était faux du code servi (corrigé le 2026-09-01, cf. le commentaire de `_invite_accept`). Email via `oto_mcp/email.py` (otomata-mailer `mailer.oto.zone/api/send`, env `OTO_MAILER_SEND_BEARER`, best-effort → `invite_url` en repli ; **plus de Resend**).
     - **refus commun** : `POST /api/me/invitations/reject` (`SUB_ONLY`, `token` — même entrée que l'acceptation ; `oto_org` op=reject_invite), depuis le 2026-09-01 (#654). Ferme l'invitation (`org_invitations.declined_at`/`.declined_sub`) **sans créer ni retirer aucune appartenance** : elle quitte la file de l'émetteur, et plus rien ne peut la consommer — ni `accept`, ni la reprise automatique au signup par l'email (`reconcile_signup_with_invitation`). ⚠️ **Le refus n'est PAS bearer, contrairement à l'acceptation** : l'invitation doit être adressée à l'email du compte appelant (403 `not_the_invitee` sinon, invitation anonyme comprise) — accepter avec un secret qu'on détient est un geste sur soi, refuser détruirait l'invitation d'un tiers. Le refus **ne notifie pas** l'émetteur (aucune préférence de notification n'existe encore) et **ne bloque pas** une réinvitation : le 409 `already_invited` de #622 ne voit plus une invitation refusée.
-    - **aperçu PUBLIC, sans auth** : `GET /api/invitations/{token}` (`api/public.py::invite_preview` → `org_store.preview_invitation`), le jeton EST le secret — alimente l'accueil « vous êtes invité·e » avant création de compte (`email`, `inviter`, `org_name`/`group_name`, `scope`). ⚠️ **Le repli de l'inviteur vers son email a été retiré (oto#86)** : `_PREVIEW_SELECT` projetait `COALESCE(nom, email)` — un compte invitant sans nom déclaré servait son adresse à l'anonyme. `inviter` reste `string | null` (le dashboard dégrade déjà vers un message générique). Aucun rate-limit applicatif ne garde cette route (écrite à la main, hors de l'adaptateur des capacités qui authentifie toujours) — seul le token-bucket de `subdomain_project.py` existe dans ce dépôt, et il ne couvre que les sous-domaines MCP de projet.
+    - **aperçu PUBLIC, sans auth** : `GET /api/invitations/{token}` (`api/public.py::invite_preview` → `org_store.preview_invitation`), le jeton EST le secret — alimente l'accueil « vous êtes invité·e » avant création de compte (`email`, `inviter`, `org_name`/`group_name`, `scope`). ⚠️ **Le repli de l'inviteur vers son email a été retiré (oto#86)** : `_PREVIEW_SELECT` projetait `COALESCE(nom, email)` — un compte invitant sans nom déclaré servait son adresse à l'anonyme. `inviter` reste `string | null` (le dashboard dégrade déjà vers un message générique). Écrite à la main, hors de l'adaptateur des capacités qui authentifie toujours : son seul frein est la classe `sensible` de la limite de débit applicative (par adresse, 60/min par défaut, et le budget d'échecs que consomme chaque 404 ; mode `report` par défaut — §Limite de débit applicative).
     - ⚠️ **Le CODE COURT d'invitation (7 caractères, ~34 bits, lien `/invitation/<code>` +
       `GET /api/invitations/code/{code}`) a été ENTIÈREMENT RETIRÉ le 15/09/2026**
       (oto-backend#560, brute-forçable) — arbitrage d'Alexis : plus de mécanisme
@@ -923,6 +926,12 @@ PATCH /api/me/runs/{run_id} {outcome, note?}       → {outcome, rows_released}
   même compte : c'est au consommateur de lier SON run à SA session, et de ne jamais
   reprendre un `_claimed_run` lu sur une ligne. ⚠️ `_run_id` dans le CORPS d'un PATCH est
   refusé `400 jeton_mal_place` : le run se passe en en-tête.
+- **Lister MES runs** : `GET /api/me/runs?limit=` (capacité `runs.mine`, membre) rend les
+  derniers runs de l'appelant sous l'org active — `run_id`, `label`, `guide`, `outcome`
+  (`null` = pas clos), `project_id`, bornes —, plafonné à 50. C'est le bloc C du handshake
+  (`db.recent_runs`) en REST : jamais les runs d'un autre membre, l'org entière reste la
+  lentille org_admin `GET /api/orgs/{id}/monitoring/runs`. La page d'onboarding la lit
+  pour cocher « premier process déroulé » chez un membre.
 - **Le journal estampille le run** (oto#229) : la ligne `kind='rest'` d'un appel fait sous
   `X-Oto-Run` porte son `run_id`, et l'org du run pour `org_id` — la timeline du run (et
   celle de son org) montre donc les réservations et écritures faites entre l'ouverture et
@@ -1135,6 +1144,91 @@ concurrence bornée ajouterait un `503 route_busy` sur un geste d'écriture
 (`op=update`, `delete`) sans protéger le pool de rien de plus.
 Chaque gabarit est confronté à la table figée des routes
 (`tests/api/test_routes_lourdes_declarees_1145.py`).
+
+## Limite de débit applicative — tout ce que sert le processus (F-025)
+
+Avant elle, rien dans l'application ne bornait `/mcp`, le reste de `/api/*`, les
+webhooks ni les routes d'authentification : un scanner, un fuzzer ou un seul client qui
+martèle dégradait le service de tous (serveur mono-loop, pool partagé).
+`oto_mcp/limite_debit.py` (`LimiteDebit`, posé dans `server.build_root_app` sous la garde
+de déconnexion et au-dessus du compteur des refus du transport, donc sur les deux faces
+MCP et toute la face REST) range chaque requête dans UNE classe, sans rien vérifier ni
+lire en base, et lui fait payer un seau à jetons (débit régulier, rafale = la moitié) :
+
+| classe | quand | clé | défaut / min |
+|---|---|---|---|
+| `jeton` | la requête porte `Authorization` | empreinte du jeton | 1 200 |
+| `sensible` | sans jeton : secret dans le chemin (`/api/invitations/*`, `/api/public/*`, `/p/d/*`, `/o/{u,d,r}/*`) ou geste d'auth interactif (`/oauth/authorize`, `/oauth/relay/authorize`, `/oauth/callback`, `/api/mcp/auth_callback`, `*/oauth/callback`) | adresse | 60 |
+| `webhook` | `/api/hooks/*`, `/api/receivers/*`, `/api/billing/webhook` | (adresse, chemin), plus un plafond par adresse à 10 × ce débit (`webhook_adresse`) | 300 |
+| `anonyme` | tout le reste sans jeton (`/.well-known/*`, `/oauth/register` — un client hébergé enregistre un client par connexion, depuis sa sortie partagée —, `/mcp` avant connexion, upload signé, relais, `/oauth/token`) | adresse | 600 |
+| `echecs` | chaque 401/403 (et 404 sur `sensible`) en consomme un ; épuisé, l'adresse voit refuser ses jetons **inconnus** et ses requêtes `sensible` | adresse | 120 |
+
+- **Pourquoi un principal, et pas une adresse, pour le trafic authentifié** : un client
+  hébergé sert tous ses utilisateurs depuis quelques adresses ; une borne par adresse les
+  couperait ensemble. **Pourquoi `echecs`** : la classe `jeton` se décide à la PRÉSENCE
+  de l'en-tête — un `Bearer <aléatoire>` par requête aurait chacun son seau neuf.
+- **Ce que `echecs` ne touche jamais** : un jeton déjà accepté par ce processus (ni
+  refusé, ni débiteur : le 401 d'un jeton expiré ne coûte rien à ses voisins
+  d'adresse), la classe `anonyme` (la découverte OAuth), la classe `webhook` (un
+  envoyeur partagé retente des jours sur un crochet supprimé : ses 404 n'épuisent pas
+  l'adresse de mille autres clients), une adresse exemptée. ⚠️ Prix assumé : depuis une
+  adresse au budget épuisé, le premier appel d'un jeton tout juste émis est refusé
+  jusqu'à ce que le budget remonte.
+- **L'adresse** est la règle unique du dépôt (`client_trace.pick_ip`) : le pair TCP ;
+  les en-têtes seulement si ce pair est un proxy déclaré dans `OTO_PROXIES_DE_CONFIANCE`
+  (adresses ou CIDR, lu au démarrage, illisible = refus de démarrer), et alors
+  `CF-Connecting-IP` > adresse la plus à droite de `X-Forwarded-For` hors des réseaux de
+  confiance. ⚠️ Sans ce réglage, derrière un proxy, TOUT le trafic a l'adresse du proxy.
+  ⚠️⚠️ Elle ne vaut que ce que vaut le proxy : derrière un proxy déclaré qui n'ÉCRASE pas
+  ces deux en-têtes avec le pair qu'il a vu, un client choisit son seau. D'où le défaut **`report`** :
+  **`enforce` ne se pose QUE derrière un proxy qui écrase les deux en-têtes** (nos boxes
+  depuis F-024), instance par instance, dans sa configuration.
+- **Adresses exemptées** (`OTO_DEBIT_ADRESSES_EXEMPTEES`, adresses ou CIDR) : nos propres
+  machines sortent des classes par adresse et du budget d'échecs ; leurs jetons paient
+  toujours `jeton`. Elles se déclarent dans la configuration de l'instance, jamais dans
+  ce dépôt.
+- **Refus** (mode `enforce`) : `429 rate_limited`, `Retry-After`, corps `{error, detail,
+  details: {retryable, retry_after_seconds, limit_per_minute, scope}}`, en-têtes CORS de
+  l'origine et `X-Oto-Version`. Décidé avant d'appeler la suite ; rien n'est mis en
+  tampon (le SSE passe intact) ; rien n'est écrit en base sur ce chemin ; une ligne de
+  journal par clé et par minute, jamais le jeton.
+- **Mesure** (`oto_mcp/limite_debit_mesure.py`) : par classe et par minute, en mémoire,
+  `allowed` / `would_refuse` (mode `report`) / `refused` (mode `enforce`) et `peak_pct`
+  (plus haut usage d'un seau, en % de sa rafale, toutes clés confondues). Au plus UNE
+  ligne par classe et par minute part dans le journal d'appels (`kind='debit'`,
+  `tool='debit:<classe>'`, jamais une adresse ni un jeton), en tâche de fond quand la
+  minute change. Lue par `oto_admin_monitoring op=transport` (REST
+  `GET /api/admin/monitoring/transport`), champ `rate_limit`, par environnement, classe
+  et mode : en `report`, `would_refuse` est ce qu'`enforce` couperait — c'est sur lui
+  qu'on règle les bornes avant de basculer.
+- `OPTIONS` passe toujours. Les bornes plus fines s'appliquent EN PLUS : routes lourdes
+  (ci-dessus), seau du relais sur `/oauth/token`, seau des projets publiés.
+- ⚠️ Compteurs **par processus** (bleu/vert, canari : chacun les siens) : une protection
+  du service, pas un quota.
+- **Réglages, lus au DÉMARRAGE — en changer demande un redémarrage** : `OTO_DEBIT_MODE`
+  = `report` (défaut) | `enforce` | `off` ;
+  `OTO_DEBIT_{JETON,ANONYME,SENSIBLE,WEBHOOK,ECHECS}_PAR_MIN`, `0` désarme la classe ;
+  `OTO_DEBIT_ADRESSES_EXEMPTEES`. **Un réglage illisible empêche le démarrage**
+  (`ReglageDebitInvalide`) : un mode inconnu, une borne non numérique ou négative, une
+  adresse exemptée qui n'est ni une adresse ni un CIDR — jamais un défaut deviné.
+  Preuves : `tests/test_limite_debit.py`, `tests/test_transport_refusals_db.py`.
+
+### Deux couches : le proxy, puis l'application (décision du 13/10/2026)
+
+La limite de débit vit à deux endroits, chacun pour ce qu'il sait faire :
+
+| couche | où | ce qu'elle arrête | ce qu'elle ne sait pas faire |
+|---|---|---|---|
+| **proxy** | le Caddy devant chaque instance, dans la configuration de l'infra de l'instance | les inondations par adresse, toutes instances et couleurs confondues ; les corps trop gros, avant qu'ils n'atteignent le processus | compter par jeton, distinguer une route sensible d'une autre, savoir qu'une réponse est un 401/403 |
+| **application** | `LimiteDebit`, ci-dessus | les quotas par jeton, le seuil serré des routes sensibles, le budget d'échecs 401/403 par adresse | voir une inondation dans son ensemble : ses compteurs sont par processus |
+
+- **Mise en service** : l'application tourne en **`report`** (elle mesure, ne refuse
+  rien). On ne passe une instance en `enforce` qu'après une semaine de mesures
+  (`would_refuse` par classe, `oto_admin_monitoring op=transport`), et seulement derrière
+  un proxy qui écrase les en-têtes d'adresse.
+- **Ni l'une ni l'autre ne remplace l'autre** : retirer le proxy laisserait passer une
+  inondation répartie sur les processus ; retirer l'application perdrait tout ce qui se
+  compte par jeton.
 
 ## CORS — les origines se DÉCLARENT, il n'y a plus de liste dans le code
 

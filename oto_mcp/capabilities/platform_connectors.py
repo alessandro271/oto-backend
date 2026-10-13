@@ -136,9 +136,10 @@ class Beneficiary(BaseModel):
     `daily_quota` = the daily quota of the key grant, read from `meta.rate_limit_by`
     of the platform instance whose `share_down` names this beneficiary; `null` = no
     quota set, or no key grant. ⚠️ `platform_revoke` ERASES this quota: anyone who
-    wants to re-grant identically must note it BEFORE revoking. ⚠️ For a
-    connector moved to the chain model (`grants_chain.CHAIN_CONNECTORS`), the quota
-    lives on the grant's edge and is NOT reported here."""
+    wants to re-grant identically must note it BEFORE revoking. For a connector
+    moved to the chain model (`grants_chain.CHAIN_CONNECTORS`), the grant is a live
+    EDGE and its quota the edge's constraint: both are reported here too — see
+    `PlatformAccessView.chain_grants`."""
     scope: str                         # 'org' | 'user'
     id: str
     has_key: bool
@@ -155,11 +156,19 @@ class PlatformAccessView(BaseModel):
 
     ⚠️ `open_tier: true` changes how `beneficiaries` is read: a platform instance
     with `open` sharing opens the connector to EVERYONE without a named grant, so the list
-    is no longer the population served — it only lists the explicit grants."""
+    is no longer the population served — it only lists the explicit grants.
+
+    `chain_grants: true` = this connector's grants are EDGES (`grants_chain`), and
+    `beneficiaries` includes every org or member holding a LIVE one. A reader that
+    decides on this list (who is served by a CLOSED key, who still has to be granted
+    or cut) can then trust it for a chain connector as for any other. Absent or
+    false on a chain connector means a backend that does not list them: there the
+    list is blind to those grants, and must not be read as « serves nobody »."""
     connector: str
     paid_option: Optional[str] = None   # None = no paid option (layer 3)
     platform_key: bool                  # a platform key exists (layer 2)
     open_tier: bool                     # free-tier: open to everyone without a grant
+    chain_grants: bool = False          # chain connector: live edges are listed
     beneficiaries: list[Beneficiary]
 
 
@@ -243,7 +252,8 @@ def _platform_access(ctx: ResolvedCtx, inp: PlatformAccessInput) -> dict:
     grantees of the platform key (`share_down` of PLATFORM-scope instances, ADR 0044
     §F) ∪ beneficiaries of the comp option (layer 3). No secret."""
     _known(inp.provider, code="unknown_connector", status=404)
-    from .. import credentials_store
+    from .. import credentials_store, grants_chain
+    from ..db import grants as db_grants
     option = access.paid_option_for(inp.provider)
 
     acc: dict[str, dict] = {}
@@ -269,6 +279,25 @@ def _platform_access(ctx: ResolvedCtx, inp: PlatformAccessInput) -> dict:
                 rec["has_key"] = True
                 if rec["daily_quota"] is None:
                     rec["daily_quota"] = quotas.get(str(g))
+    # A chain connector's grant is an EDGE, never a `share_down` entry
+    # (`credentials_store.platform_grant`). Read from `share_down` alone, a closed
+    # key of such a connector listed NOBODY whoever had been granted: the console
+    # said « serves no workspace » after a grant that had worked, and a billing
+    # service that diffs on this list could neither converge nor cut (seen on
+    # 2026-10-12, a chain key re-posted closed). Live edges only — a revoked one
+    # grants nothing — and only named grantees: the « everyone » edge is `open_tier`'s.
+    chain = grants_chain.is_chained(inp.provider)
+    if chain:
+        for inst in insts:
+            if not inst.get("label"):
+                continue
+            ref = grants_chain.instance_ref(inst["label"], inp.provider)
+            for edge in db_grants.live_edges_for_resource(ref):
+                if edge.get("grantee_kind") in ("user", "org") and edge.get("grantee_id"):
+                    rec = touch(edge["grantee_kind"], str(edge["grantee_id"]))
+                    rec["has_key"] = True
+                    if rec["daily_quota"] is None:
+                        rec["daily_quota"] = grants_chain.quota_of(edge)
     if option:
         for c in db.list_option_comps_for_option(option):
             if c["entity_type"] in ("user", "org"):
@@ -291,6 +320,7 @@ def _platform_access(ctx: ResolvedCtx, inp: PlatformAccessInput) -> dict:
         "paid_option": option,          # None = no paid option (layer 3)
         "platform_key": bool(insts),    # a platform key exists (layer 2)
         "open_tier": open_tier,         # free-tier: open to everyone without a grant
+        "chain_grants": chain,          # chain connector: live edges are listed above
         "beneficiaries": out,
     }
 
@@ -367,7 +397,8 @@ _DOC_ACCESS = (
     "(`option_comps`), not the entitlement: the entitlement of a paid option is set by the "
     "billing service (oto-commerce) and is read from the declared entitlements. ⚠️ If "
     "`open_tier` is true, the connector is open to everyone without a grant: the list then "
-    "no longer shows the population served."
+    "no longer shows the population served. `chain_grants: true` = a chain connector, "
+    "whose grants are edges: every org or member holding a LIVE one is listed (`has_key`)."
 )
 _DOC_SET_ACCESS = (
     "Opens or closes an org's or a member's platform access to a connector, in one "

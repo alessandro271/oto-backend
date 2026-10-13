@@ -417,7 +417,11 @@ def _prose_query(table: str, text_expr: str, select_cols: str, headline_col: str
             # couvre AUSSI les symboles/stopwords (numnode=0, tsq vide ne matche rien).
             f"WHERE {_lexical_ou_fragment(text_expr, 'qq.tsq', 'qq.raw')} "
             f"  AND ({where_scope}) "
-            "ORDER BY rank DESC LIMIT %s"
+            # Départage par les trois premières colonnes servies (l'id ou la clé de la
+            # ligne dans chaque source) : les hits substring-seul sont TOUS à rang 0, et
+            # sans départage leur ordre suivait la place physique de la ligne — qu'un
+            # UPDATE déplace (le rattrapage du vecteur suffisait à les permuter).
+            "ORDER BY rank DESC, 1, 2, 3 LIMIT %s"
         )
         # Params : tsq (1×q) + raw (1×q) dans le CTE, puis scope, puis limit.
         with _connect() as conn:

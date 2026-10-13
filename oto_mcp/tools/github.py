@@ -24,6 +24,12 @@ potentially a deployment. It is the only action of this connector that acts
 outside GitHub, and it is **dry-run by default**, like `lightfield`'s email sending
 and `origami`'s campaign launch.
 
+**A list is an index** (`github_index.py`): the list ops of `github_repos`,
+`github_issues` and `github_pulls` serve their rows without API links, with nested
+users, labels, milestones and repositories reduced to their name, and a body
+reduced to its size. `full=True` returns the page as GitHub sends it; one object
+(`op='get'`…) is always served whole.
+
 Client calls are written in plain sight (`_client().list_issues(…)`): this is
 what makes them checkable by the version-skew probe
 (`test_tools_client_methods_exist`).
@@ -38,6 +44,16 @@ from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access, egress
 from ..connectors import verify as connector_verify
+from . import github_index
+
+#: The ops of each tool that return a LIST, and the body keys their default view
+#: reduces to a size. `full` is refused elsewhere: one object is served whole.
+_LISTES_REPOS = {"mine": (), "org": (), "user": (), "branches": (), "commits": (),
+                 "tags": (), "contributors": (), "releases": ("body",)}
+_LISTES_ISSUES = {"search": ("body",), "comments": (), "labels": (),
+                  "milestones": ()}
+_LISTES_PULLS = {"search": ("body",), "files": ("patch",), "commits": (),
+                 "reviews": (), "review_comments": ()}
 
 
 def _bad(msg: str) -> McpError:
@@ -143,6 +159,19 @@ def register(mcp: FastMCP) -> None:
         except UpstreamHTTPError as e:
             raise _bad(_upstream_message(e))
 
+    def _vue(listes: dict, op: str, full: bool):
+        """`vue(fn)` runs a LIST op: the index view by default, GitHub's page on
+        `full=True`. `full` on any other op is refused — one object is served
+        whole."""
+        if full and op not in listes:
+            raise _bad(f"`full` only applies to list ops ({' | '.join(listes)}); "
+                       f"op='{op}' already returns the whole object.")
+
+        def vue(fn):
+            res = _run(fn)
+            return res if full else github_index.index(res, bodies=listes[op])
+        return vue
+
     def _need(value, nom: str, op: str):
         if value in (None, "", [], {}):
             raise _bad(f"op='{op}': `{nom}` required.")
@@ -180,6 +209,7 @@ def register(mcp: FastMCP) -> None:
         fields: Optional[dict] = None,
         page: Optional[int] = None,
         per_page: int = 30,
+        full: bool = False,
     ) -> Any:
         """GitHub — repositories: profile, branches, commits, tags, releases.
 
@@ -219,29 +249,34 @@ def register(mcp: FastMCP) -> None:
             fields: op='create_release'/'update_release' — the body (tag_name required).
             page: page number.
             per_page: rows per page (1-100, default 30).
+            full: list ops only (mine | org | user | branches | commits | tags |
+                contributors | releases) — the page as GitHub
+                sends it. Default: the index view (no API links; users, labels,
+                milestones, repositories by name; a body by its `_length`).
         """
+        vue = _vue(_LISTES_REPOS, op, full)
         c = _client()
         if op == "mine":
-            return _run(lambda: c.list_my_repos(sort=sort, per_page=per_page,
-                                                page=page))
+            return vue(lambda: c.list_my_repos(sort=sort, per_page=per_page,
+                                               page=page))
         if op == "org":
             _need(org, "org", op)
-            return _run(lambda: c.list_org_repos(org, sort=sort,
-                                                 per_page=per_page, page=page))
+            return vue(lambda: c.list_org_repos(org, sort=sort,
+                                                per_page=per_page, page=page))
         if op == "user":
             _need(username, "username", op)
-            return _run(lambda: c.list_user_repos(username, sort=sort,
-                                                  per_page=per_page, page=page))
+            return vue(lambda: c.list_user_repos(username, sort=sort,
+                                                 per_page=per_page, page=page))
         o, r = _repo(owner, repo, op)
         if op == "get":
             return _run(lambda: c.get_repo(o, r))
         if op == "branches":
-            return _run(lambda: c.list_branches(o, r, per_page=per_page, page=page))
+            return vue(lambda: c.list_branches(o, r, per_page=per_page, page=page))
         if op == "commits":
-            return _run(lambda: c.list_commits(o, r, sha=ref, path=path,
-                                               author=author, since=since,
-                                               until=until, per_page=per_page,
-                                               page=page))
+            return vue(lambda: c.list_commits(o, r, sha=ref, path=path,
+                                              author=author, since=since,
+                                              until=until, per_page=per_page,
+                                              page=page))
         if op == "commit":
             _need(ref, "ref", op)
             return _run(lambda: c.get_commit(o, r, ref))
@@ -251,16 +286,16 @@ def register(mcp: FastMCP) -> None:
             return _run(lambda: c.compare_commits(o, r, base, head,
                                                   per_page=per_page, page=page))
         if op == "tags":
-            return _run(lambda: c.list_tags(o, r, per_page=per_page, page=page))
+            return vue(lambda: c.list_tags(o, r, per_page=per_page, page=page))
         if op == "contributors":
-            return _run(lambda: c.list_contributors(o, r, per_page=per_page,
-                                                    page=page))
+            return vue(lambda: c.list_contributors(o, r, per_page=per_page,
+                                                   page=page))
         if op == "languages":
             return _run(lambda: c.list_languages(o, r))
         if op == "topics":
             return _run(lambda: c.list_topics(o, r))
         if op == "releases":
-            return _run(lambda: c.list_releases(o, r, per_page=per_page, page=page))
+            return vue(lambda: c.list_releases(o, r, per_page=per_page, page=page))
         if op == "release":
             _need(release_id, "release_id", op)
             return _run(lambda: c.get_release(o, r, release_id))
@@ -376,6 +411,7 @@ def register(mcp: FastMCP) -> None:
         fields: Optional[dict] = None,
         page: Optional[int] = None,
         per_page: int = 30,
+        full: bool = False,
     ) -> Any:
         """GitHub — a repository's issues, their comments and their labels.
 
@@ -421,15 +457,20 @@ def register(mcp: FastMCP) -> None:
             fields: op='create'/'update'/'create_label'/'create_milestone' — the body.
             page: page number.
             per_page: rows per page (1-100, default 30).
+            full: list ops only (search | comments | labels |
+                milestones) — the page as GitHub
+                sends it. Default: the index view (no API links; users, labels,
+                milestones, repositories by name; a body by its `_length`).
         """
+        vue = _vue(_LISTES_ISSUES, op, full)
         c = _client()
         o, r = _repo(owner, repo, op)
         if op == "search":
-            return _run(lambda: c.list_issues(
-                o, r, state=state, labels=labels, assignee=assignee,
-                creator=creator, milestone=milestone, since=since, sort=sort,
-                include_pull_requests=include_pull_requests,
-                per_page=per_page, page=page))
+            return vue(lambda: c.list_issues(
+               o, r, state=state, labels=labels, assignee=assignee,
+               creator=creator, milestone=milestone, since=since, sort=sort,
+               include_pull_requests=include_pull_requests,
+               per_page=per_page, page=page))
         if op == "get":
             _need(number, "number", op)
             return _run(lambda: c.get_issue(o, r, number))
@@ -442,9 +483,9 @@ def register(mcp: FastMCP) -> None:
             return _run(lambda: c.update_issue(o, r, number, fields))
         if op == "comments":
             _need(number, "number", op)
-            return _run(lambda: c.list_issue_comments(o, r, number, since=since,
-                                                      per_page=per_page,
-                                                      page=page))
+            return vue(lambda: c.list_issue_comments(o, r, number, since=since,
+                                                     per_page=per_page,
+                                                     page=page))
         if op == "comment":
             _need(number, "number", op)
             _need(body, "body", op)
@@ -457,7 +498,7 @@ def register(mcp: FastMCP) -> None:
             _need(comment_id, "comment_id", op)
             return _run(lambda: c.delete_issue_comment(o, r, comment_id))
         if op == "labels":
-            return _run(lambda: c.list_labels(o, r, per_page=per_page, page=page))
+            return vue(lambda: c.list_labels(o, r, per_page=per_page, page=page))
         if op == "add_labels":
             _need(number, "number", op)
             _need(labels, "labels", op)
@@ -493,8 +534,8 @@ def register(mcp: FastMCP) -> None:
             _need(number, "number", op)
             return _run(lambda: c.unlock_issue(o, r, number))
         if op == "milestones":
-            return _run(lambda: c.list_milestones(o, r, state=state,
-                                                  per_page=per_page, page=page))
+            return vue(lambda: c.list_milestones(o, r, state=state,
+                                                 per_page=per_page, page=page))
         if op == "create_milestone":
             _need(fields, "fields", op)
             return _run(lambda: c.create_milestone(o, r, fields.get("title"),
@@ -531,6 +572,7 @@ def register(mcp: FastMCP) -> None:
         fields: Optional[dict] = None,
         page: Optional[int] = None,
         per_page: int = 30,
+        full: bool = False,
     ) -> Any:
         """GitHub — pull requests: diff, reviews, reviewers, merging.
 
@@ -582,13 +624,18 @@ def register(mcp: FastMCP) -> None:
             fields: op='create'/'update'/'review_comment' — the body.
             page: page number.
             per_page: rows per page (1-100, default 30).
+            full: list ops only (search | files | commits | reviews |
+                review_comments) — the page as GitHub
+                sends it. Default: the index view (no API links; users, labels,
+                milestones, repositories by name; a body by its `_length`).
         """
+        vue = _vue(_LISTES_PULLS, op, full)
         c = _client()
         o, r = _repo(owner, repo, op)
         if op == "search":
-            return _run(lambda: c.list_pulls(o, r, state=state, head=head,
-                                             base=base, sort=sort,
-                                             per_page=per_page, page=page))
+            return vue(lambda: c.list_pulls(o, r, state=state, head=head,
+                                            base=base, sort=sort,
+                                            per_page=per_page, page=page))
         if op == "get":
             _need(number, "number", op)
             return _run(lambda: c.get_pull(o, r, number))
@@ -601,12 +648,12 @@ def register(mcp: FastMCP) -> None:
             return _run(lambda: c.update_pull(o, r, number, fields))
         if op == "files":
             _need(number, "number", op)
-            return _run(lambda: c.list_pull_files(o, r, number,
-                                                  per_page=per_page, page=page))
+            return vue(lambda: c.list_pull_files(o, r, number,
+                                                 per_page=per_page, page=page))
         if op == "commits":
             _need(number, "number", op)
-            return _run(lambda: c.list_pull_commits(o, r, number,
-                                                    per_page=per_page, page=page))
+            return vue(lambda: c.list_pull_commits(o, r, number,
+                                                   per_page=per_page, page=page))
         if op == "merged":
             _need(number, "number", op)
             return _run(lambda: {"number": number,
@@ -622,8 +669,8 @@ def register(mcp: FastMCP) -> None:
             return _run(lambda: c.update_pull_branch(o, r, number, sha))
         if op == "reviews":
             _need(number, "number", op)
-            return _run(lambda: c.list_reviews(o, r, number, per_page=per_page,
-                                               page=page))
+            return vue(lambda: c.list_reviews(o, r, number, per_page=per_page,
+                                              page=page))
         if op == "review":
             _need(number, "number", op)
             payload = dict(fields or {})
@@ -640,9 +687,9 @@ def register(mcp: FastMCP) -> None:
                                                 body))
         if op == "review_comments":
             _need(number, "number", op)
-            return _run(lambda: c.list_review_comments(o, r, number,
-                                                       per_page=per_page,
-                                                       page=page))
+            return vue(lambda: c.list_review_comments(o, r, number,
+                                                      per_page=per_page,
+                                                      page=page))
         if op == "review_comment":
             _need(number, "number", op)
             _need(fields, "fields", op)

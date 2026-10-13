@@ -9,8 +9,14 @@ Ce que ce fichier verrouille :
 - la vue resserrée par défaut, le brut avec `full=True`, `fields` ;
 - les déplacements (archive, trash, move) : nouvel id rendu, échec partiel nommé ;
 - `outlook_compose` : BROUILLON par défaut, envoi explicite = brouillon puis
-  `send_draft`, `kind` qui dit l'acte, réponse sans destinataires ni pièces, pièces
-  jointes résolues en octets et bornées à 3 Mo avant toute écriture.
+  `send_draft` puis relecture de la copie envoyée (son `webLink`, ou `null` et une
+  `note` si elle n'est pas encore visible), `kind` qui dit l'acte, réponse sans
+  destinataires mais avec pièces, pièces jointes résolues en octets et bornées à
+  3 Mo avant toute écriture ;
+- le corps : exactement un de `body` (markdown), `html` ou `html_source` (HTML
+  transmis À L'IDENTIQUE jusqu'à la requête Graph, aucun passage markdown), un
+  `html_source` borné à 1 Mo ; l'image en ligne (`content_id` → `isInline`) ; le
+  `webLink` du brouillon rendu.
 """
 import asyncio
 import base64
@@ -185,12 +191,14 @@ def test_argument_d_une_autre_op_refuse(client):
 # --- déplacements ---------------------------------------------------------------
 
 @pytest.mark.parametrize("op, cible", [("archive", "archive"), ("trash", "deleteditems")])
-def test_archive_et_trash_deplacent_et_rendent_le_nouvel_id(client, op, cible):
-    client.move.side_effect = lambda mid, dest: {"id": f"nouveau-{mid}"}
-    out = _tool("outlook_message")(op=op, message_ids=["m1", "m2"])
-    assert [c.args for c in client.move.call_args_list] == [("m1", cible), ("m2", cible)]
+def test_archive_et_trash_deplacent_et_rendent_l_id_de_graph(client, op, cible):
+    # Ids immuables : Graph rend le même id ; un id à l'ancien format revient converti.
+    client.move.side_effect = lambda mid, dest: {"id": {"m1": "m1", "rest-m2": "imm-m2"}[mid]}
+    out = _tool("outlook_message")(op=op, message_ids=["m1", "rest-m2"])
+    assert [c.args for c in client.move.call_args_list] == [("m1", cible),
+                                                            ("rest-m2", cible)]
     assert out == {"destination": cible, "moved": [
-        {"id": "m1", "new_id": "nouveau-m1"}, {"id": "m2", "new_id": "nouveau-m2"}]}
+        {"id": "m1", "new_id": "m1"}, {"id": "rest-m2", "new_id": "imm-m2"}]}
     client.delete.assert_not_called()
 
 
@@ -234,13 +242,30 @@ def test_brouillon_par_defaut_markdown_en_html(client):
     assert out["to"] == ["marc@fabrikam.example"]
 
 
-def test_send_explicite_passe_par_le_brouillon(client):
-    client.create_draft.return_value = {"id": "d1"}
+def test_send_explicite_passe_par_le_brouillon_et_rend_le_lien_envoye(client):
+    client.create_draft.return_value = {"id": "d1", "webLink": "https://o/brouillon"}
     client.send_draft.return_value = "d1"
+    client.sent_message.return_value = {"id": "d1", "webLink": "https://o/envoye",
+                                        "sentDateTime": "2026-10-13T10:00:00Z"}
     out = _tool("outlook_compose")(body="x", to=["marc@fabrikam.example"], mode="send")
     client.create_draft.assert_called_once()
     client.send_draft.assert_called_once_with("d1")
-    assert out["kind"] == "sent" and out["draft_id"] == "d1"
+    client.sent_message.assert_called_once_with("d1")
+    assert out["kind"] == "sent" and out["id"] == "d1"
+    assert out["webLink"] == "https://o/envoye" and "note" not in out
+
+
+def test_envoye_pas_encore_visible_lien_nul_et_note(client):
+    client.create_draft.return_value = {"id": "d1", "webLink": "https://o/brouillon"}
+    client.send_draft.return_value = "d1"
+    client.sent_message.return_value = None
+    out = _tool("outlook_compose")(body="x", to=["m@f.example"], mode="send")
+    assert out["kind"] == "sent" and out["id"] == "d1" and out["webLink"] is None
+    assert "LEFT" in out["note"] and "not visible yet" in out["note"]
+    client.sent_message.side_effect = _upstream(403)
+    out = _tool("outlook_compose")(body="x", to=["m@f.example"], mode="send")
+    assert out["kind"] == "sent" and out["webLink"] is None
+    assert "LEFT" in out["note"] and "failed" in out["note"]
 
 
 def test_envoi_echoue_le_brouillon_reste_et_c_est_dit(client):
@@ -250,14 +275,14 @@ def test_envoi_echoue_le_brouillon_reste_et_c_est_dit(client):
         _tool("outlook_compose")(body="x", to=["m@f.example"], mode="send")
 
 
-def test_reponse_sans_destinataires_ni_pieces(client):
+def test_reponse_sans_destinataires(client):
     client.create_reply_draft.return_value = {"id": "r1"}
     out = _tool("outlook_compose")(body="Merci", reply_to="m1", reply_all=True)
     args, kw = client.create_reply_draft.call_args
     assert args == ("m1",) and kw["reply_all"] is True and "Merci" in kw["body_html"]
-    assert out["kind"] == "draft"
-    for extra in ({"to": ["a@b.example"]}, {"subject": "x"},
-                  {"attachments": [{"kind": "url", "url": "https://x"}]}):
+    assert kw["attachments"] == [] and out["kind"] == "draft"
+    for extra in ({"to": ["a@b.example"]}, {"cc": ["a@b.example"]},
+                  {"bcc": ["a@b.example"]}, {"subject": "x"}):
         with pytest.raises(McpError, match="not accepted on a reply"):
             _tool("outlook_compose")(body="x", reply_to="m1", **extra)
     with pytest.raises(McpError, match="`to` is required"):
@@ -298,3 +323,219 @@ def test_la_description_dit_brouillon_par_defaut_et_pas_de_signature():
 
     desc = asyncio.run(_mcp().get_tool("outlook_compose")).description
     assert "DRAFT by default" in desc and "No signature" in desc
+
+
+# --- corps HTML, images en ligne ------------------------------------------------
+
+#: Ce qu'un rendu markdown abîmerait : une `<img>` isolée (Python-Markdown l'enveloppe
+#: dans `<p>`), les commentaires conditionnels d'Outlook, des blancs significatifs.
+HTML_OUTLOOK = (
+    '<!DOCTYPE html>\n<html><head><meta charset="utf-8">\n'
+    '<!--[if mso]><style>td{font-family:Arial}</style><![endif]--></head>\n'
+    '<body>\n<img src="cid:logo" width="120" alt="Logo">\n\n'
+    '<table role="presentation"><tr><td style="padding:0 8px">Été &amp; *pas* '
+    'du markdown_</td></tr></table>\n  \n</body></html>\n')
+
+
+def test_html_transmis_tel_quel_sans_passage_markdown(client):
+    client.create_draft.return_value = {"id": "d1"}
+    _tool("outlook_compose")(html=HTML_OUTLOOK, to=["m@f.example"], subject="Lettre")
+    assert client.create_draft.call_args.kwargs["body_html"].encode() == HTML_OUTLOOK.encode()
+    client.create_reply_draft.return_value = {"id": "r1"}
+    _tool("outlook_compose")(html=HTML_OUTLOOK, reply_to="m1")
+    assert client.create_reply_draft.call_args.kwargs["body_html"] == HTML_OUTLOOK
+
+
+@pytest.mark.parametrize("source", [
+    {"kind": "project_file", "project_id": 7, "file_id": 3},
+    {"kind": "url", "url": "https://files.example/lettre.html?sig=x"}])
+def test_html_source_lu_et_transmis_tel_quel(client, monkeypatch, source):
+    from oto_mcp import file_source
+
+    lus = []
+
+    def resolve(src, max_bytes):
+        lus.append((src, max_bytes))
+        return file_source.ResolvedFile(HTML_OUTLOOK.encode("utf-8"), "lettre.html",
+                                        "text/html")
+
+    monkeypatch.setattr(file_source, "resolve", resolve)
+    client.create_draft.return_value = {"id": "d1"}
+    _tool("outlook_compose")(html_source=source, to=["m@f.example"])
+    assert lus == [(source, 1024 * 1024)]
+    assert client.create_draft.call_args.kwargs["body_html"] == HTML_OUTLOOK
+
+
+def test_html_source_au_dela_du_plafond_ou_illisible_refuse_avant_ecriture(
+        client, monkeypatch):
+    from oto_mcp import file_source
+
+    def trop_gros(src, max_bytes):
+        raise file_source.FileSourceError(f"fichier de 2000000 octets > plafond {max_bytes}")
+
+    monkeypatch.setattr(file_source, "resolve", trop_gros)
+    with pytest.raises(McpError, match="`html_source` could not be read.*limited to 1 MB"):
+        _tool("outlook_compose")(html_source={"kind": "url", "url": "https://x/a"},
+                                 to=["m@f.example"])
+    monkeypatch.setattr(file_source, "resolve", lambda src, max_bytes: file_source.
+                        ResolvedFile(b"\xff\xfe%PDF", "devis.pdf", "application/pdf"))
+    with pytest.raises(McpError, match="not UTF-8 text"):
+        _tool("outlook_compose")(html_source={"kind": "url", "url": "https://x/a"},
+                                 to=["m@f.example"])
+    client.create_draft.assert_not_called()
+
+
+@pytest.mark.parametrize("corps", [
+    {}, {"body": "x", "html": "<p>x</p>"},
+    {"html": "<p>x</p>", "html_source": {"kind": "url", "url": "https://x"}},
+    {"body": "x", "html": "<p>x</p>", "html_source": {"kind": "url", "url": "https://x"}}])
+def test_exactement_un_corps(client, corps):
+    with pytest.raises(McpError, match="exactly one of `body`"):
+        _tool("outlook_compose")(to=["m@f.example"], **corps)
+    with pytest.raises(McpError, match="exactly one of `body`"):
+        _tool("outlook_compose")(reply_to="m1", **corps)
+    client.create_draft.assert_not_called()
+    client.create_reply_draft.assert_not_called()
+
+
+def test_html_vide_refuse(client):
+    with pytest.raises(McpError, match="`html` is empty"):
+        _tool("outlook_compose")(html="  \n", to=["m@f.example"])
+    client.create_draft.assert_not_called()
+
+
+def test_le_brouillon_rend_son_weblink(client):
+    client.create_draft.return_value = {"id": "d1", "webLink": "https://outlook.office.com/d1"}
+    out = _tool("outlook_compose")(html="<p>x</p>", to=["m@f.example"])
+    assert out["kind"] == "draft" and out["webLink"] == "https://outlook.office.com/d1"
+
+
+def test_image_en_ligne_jusqu_a_la_requete_graph(monkeypatch):
+    """Le VRAI `MailClient` (HTTP doublé) : le HTML arrive à Graph octet pour octet, la
+    pièce au `content_id` part en ligne, le PDF reste une pièce ordinaire."""
+    import json
+
+    from oto_mcp import file_source
+
+    monkeypatch.setattr("oto_mcp.access.current_user_sub_or_raise", lambda: "sub-1")
+    monkeypatch.setattr("oto_mcp.auth.microsoft.access_token_for",
+                        lambda sub, service: "AT")
+    fichiers = {"https://a/logo.png": (b"\x89PNG", "logo.png", "image/png"),
+                "https://a/devis.pdf": (b"%PDF", "devis.pdf", "application/pdf")}
+    monkeypatch.setattr(file_source, "resolve", lambda src, max_bytes: file_source.
+                        ResolvedFile(*fichiers[src["url"]]))
+    envoyes = []
+
+    class _Resp:
+        status_code = 201
+
+        def __init__(self, payload):
+            self.content = json.dumps(payload).encode()
+
+        def json(self):
+            return json.loads(self.content)
+
+    def request(self, method, url, **kw):
+        envoyes.append((method, url, kw.get("json")))
+        return _Resp({"id": "d1", "webLink": "https://outlook.office.com/d1"})
+
+    monkeypatch.setattr("requests.Session.request", request)
+    out = _tool("outlook_compose")(
+        html=HTML_OUTLOOK, to=["m@f.example"], subject="Lettre",
+        attachments=[{"kind": "url", "url": "https://a/logo.png", "content_id": "logo"},
+                     {"kind": "url", "url": "https://a/devis.pdf"}])
+    (_, url, message), (_, _, logo), (_, _, devis) = envoyes
+    assert url.endswith("/me/messages")
+    assert message["body"] == {"contentType": "HTML", "content": HTML_OUTLOOK}
+    assert logo["isInline"] is True and logo["contentId"] == "logo"
+    assert logo["contentBytes"] == base64.b64encode(b"\x89PNG").decode()
+    assert "isInline" not in devis and "contentId" not in devis
+    assert out["webLink"] == "https://outlook.office.com/d1"
+    envoyes.clear()
+    with pytest.raises(McpError, match="content_id"):
+        _tool("outlook_compose")(
+            html=HTML_OUTLOOK, to=["m@f.example"],
+            attachments=[{"kind": "url", "url": "https://a/logo.png",
+                          "content_id": "<logo>"}])
+    assert envoyes == [], "un content_id refusé ne laisse aucun brouillon"
+
+
+def test_la_description_dit_qu_un_message_deplace_garde_son_id():
+    import oto.tools.microsoft  # noqa: F401
+
+    desc = asyncio.run(_mcp().get_tool("outlook_message")).description
+    assert "KEEPS its id" in desc and "NEW id" not in desc
+
+
+def test_schema_le_corps_se_donne_d_une_des_trois_facons():
+    import oto.tools.microsoft  # noqa: F401
+
+    outil = asyncio.run(_mcp().get_tool("outlook_compose"))
+    schema = outil.parameters
+    assert {"body", "html", "html_source"} <= set(schema["properties"])
+    assert "body" not in schema.get("required", [])
+    desc = outil.description
+    for attendu in ("exactly one of three", "AS IS", "slug=outlook-html", "cid:logo",
+                    'mode="send"', "webLink", "keeps the same `id`", "(inline images included)"):
+        assert attendu in desc, attendu
+
+
+def test_reponse_avec_image_en_ligne_et_piece(client, monkeypatch):
+    from oto_mcp import file_source
+
+    fichiers = {"https://a/logo.png": (b"\x89PNG", "logo.png", "image/png"),
+                "https://a/devis.pdf": (b"%PDF", "devis.pdf", "application/pdf")}
+    monkeypatch.setattr(file_source, "resolve", lambda src, max_bytes: file_source.
+                        ResolvedFile(*fichiers[src["url"]]))
+    client.create_reply_draft.return_value = {"id": "r1", "webLink": "https://o/r1"}
+    out = _tool("outlook_compose")(
+        html='<p>Merci</p><img src="cid:logo">', reply_to="m1",
+        attachments=[{"kind": "url", "url": "https://a/logo.png", "content_id": "logo"},
+                     {"kind": "url", "url": "https://a/devis.pdf"}])
+    kw = client.create_reply_draft.call_args.kwargs
+    assert kw["body_html"] == '<p>Merci</p><img src="cid:logo">'
+    assert kw["attachments"] == [
+        {"name": "logo.png", "content_type": "image/png", "content_bytes": b"\x89PNG",
+         "content_id": "logo"},
+        {"name": "devis.pdf", "content_type": "application/pdf", "content_bytes": b"%PDF"}]
+    assert out["kind"] == "draft" and out["webLink"] == "https://o/r1"
+
+
+def test_envoi_relu_jusqu_a_la_requete_graph(monkeypatch):
+    """Le VRAI `MailClient` (HTTP doublé) : id immuable demandé à chaque écriture, la
+    copie envoyée relue par le même id après un 404, son `webLink` rendu."""
+    import json
+
+    from oto.tools.microsoft import mail
+
+    monkeypatch.setattr("oto_mcp.access.current_user_sub_or_raise", lambda: "sub-1")
+    monkeypatch.setattr("oto_mcp.auth.microsoft.access_token_for",
+                        lambda sub, service: "AT")
+    monkeypatch.setattr(mail.time, "sleep", lambda d: None)
+    vus = []
+
+    class _Resp:
+        def __init__(self, status_code, payload=None):
+            self.status_code = status_code
+            self.content = b"" if payload is None else json.dumps(payload).encode()
+            self.text = self.content.decode()
+
+        def json(self):
+            return json.loads(self.content)
+
+    reponses = [_Resp(201, {"id": "IMM1", "webLink": "https://o/brouillon"}),
+                _Resp(202), _Resp(404, {"error": {"code": "ErrorItemNotFound"}}),
+                _Resp(200, {"id": "IMM1", "webLink": "https://o/envoye",
+                            "sentDateTime": "2026-10-13T10:00:00Z"})]
+
+    def request(self, method, url, **kw):
+        vus.append((method, url.split("/v1.0")[-1], (kw.get("headers") or {}).get("Prefer")))
+        return reponses.pop(0)
+
+    monkeypatch.setattr("requests.Session.request", request)
+    out = _tool("outlook_compose")(html="<p>x</p>", to=["m@f.example"], mode="send")
+    imm = 'IdType="ImmutableId"'
+    assert vus == [("POST", "/me/messages", imm), ("POST", "/me/messages/IMM1/send", imm),
+                   ("GET", "/me/messages/IMM1", imm), ("GET", "/me/messages/IMM1", imm)]
+    assert out == {"kind": "sent", "id": "IMM1", "subject": None, "to": [], "cc": [],
+                   "webLink": "https://o/envoye", "sentDateTime": "2026-10-13T10:00:00Z"}

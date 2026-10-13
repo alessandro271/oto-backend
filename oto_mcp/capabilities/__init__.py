@@ -24,6 +24,7 @@ from . import org_suspension  # noqa: F401 — admin.org_suspension (suspendre u
 from . import outreach  # noqa: F401 — admin.outreach (relance des comptes jamais actifs)
 from . import instance_health  # noqa: F401 — admin.instance_health (session d'un tiers vivante ?, #863)
 from . import vault_health  # noqa: F401 — admin.vault_health (scan credentials indéchiffrables, #72)
+from . import platform_balances  # noqa: F401 — admin.platform_balances (solde de chaque clé plateforme)
 from . import guides_semis  # noqa: F401 — admin.guides_semis (le dépôt est-il servi ?, oto#236)
 from . import tenants_admin  # noqa: F401 — admin.tenant{s,_console} (suivi de l'étage tenant, ADR 0052)
 from . import tenant_keys  # noqa: F401 — admin.tenant_key{s,_set,_clear} (la clé de connecteur d'un tenant, L-clés PR 1)
@@ -199,7 +200,7 @@ from . import run_thread  # noqa: F401 — runs.thread append/read (MCP oto_run_
 from . import runner_jobs  # noqa: F401 — runner.jobs (REST-only, worker) — chantier runner R2
 from . import runner_triggers  # noqa: F401 — runner.triggers (MCP oto_trigger + REST) — chantier runner R3
 from . import runner_fleets  # noqa: F401 — runner.fleets (MCP oto_fleet + REST) — chantier runner R4
-from . import runner_workers  # noqa: F401 — platform.runner.worker (MCP oto_admin_runner_worker + REST) — workers = secrets de machine
+from . import runner_workers  # noqa: F401 — platform.runner.worker (REST seule, super admin) — workers = secrets de machine
 from . import functions  # noqa: F401 — me.function (MCP oto_function + REST) — ADR 0073, code pur exécuté par Oto
 from . import recipes  # noqa: F401 — me.recipe (MCP oto_recipe) — recettes connecteur → tableau, sans modèle
 

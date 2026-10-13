@@ -576,8 +576,8 @@ ses jetons sur un rafraîchissement non-200.
   (même jeton, sans le pare-feu applicatif) ; 30 s au plus, jamais de nouvel essai (un code ou
   un jeton de rafraîchissement rejoué fait révoquer toute la délégation), 504 au-delà. Freins sur
   `/oauth/token` : corps borné à 64 Ko (`Content-Length` puis lecture en flux, 413 au-delà), un
-  seau de 120/min par IP — le pair TCP, ou le dernier segment de `X-Forwarded-For` quand le pair
-  est le proxy de la box (boucle locale), jamais `CF-Connecting-IP` — et 32 échanges en vol au
+  seau de 120/min par IP — la règle unique `client_trace.pick_ip` : le pair TCP, ou les en-têtes
+  quand le pair est un proxy déclaré dans `OTO_PROXIES_DE_CONFIANCE` — et 32 échanges en vol au
   plus (503).
 
 **Lire le relais en production** : `journalctl … | grep oauth.relay` (les valeurs écrites par le

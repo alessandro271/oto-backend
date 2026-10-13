@@ -180,6 +180,9 @@ _DECLARATIONS: tuple[str, ...] = (
     "infosec",
     # Open data too, but from the United States: wages and employment by occupation (OEWS).
     "bls",
+    # French open data again: the BODACC as a whole, searched by period, family,
+    # department — not by SIREN, which `sirene` (`fr_events`) already serves.
+    "bodacc",
     # --- third-party API connectors (oto-core clients already written, wired 2026-06-19) ---
     "hubspot",
     "brevo",
@@ -253,6 +256,9 @@ _DECLARATIONS: tuple[str, ...] = (
     "tally",
     # Neighbour of `tally` by trade (online forms); read-only.
     "typeform",
+    # --- event management — wired 2026-10-09 ---------------------------------
+    # Events on Luma (lu.ma): guest lists, invites, blasts, calendar audience.
+    "luma",
     # --- electronic signature — wired 2026-09-16 -----------------------------
     "signwell",
     # --- phone prospecting — wired 2026-08-31 --------------------------------
@@ -267,6 +273,8 @@ _DECLARATIONS: tuple[str, ...] = (
     "aircall",
     # Same family (meeting recordings, transcripts) — wired 2026-09-29.
     "claap",
+    # Same family (sales calls, transcripts, AI summaries) — wired 2026-10-12.
+    "modjo",
     # Neighbour of `linear`: Productlane's roadmap is BACKED by Linear
     # (projects and issues are born there, then mirrored). The two cards
     # read together.

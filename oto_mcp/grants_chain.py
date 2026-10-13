@@ -45,6 +45,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from . import credentials_store, instance_refs
+from .db import _connect
 from .db import grants as db_grants
 
 logger = logging.getLogger(__name__)
@@ -195,12 +196,35 @@ class ChainVerdict:
     grantee: Optional[tuple[str, str]] = None
 
 
+def revoked_scopes(edges: list[dict], scopes: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Les scopes de l'appelant RÉVOQUÉS sur le connecteur : des arêtes, aucune vivante.
+
+    `edges` = les arêtes de TOUTES les clés du connecteur. Une arête archivée n'est pas
+    forcément une révocation : `grant` archive la précédente avant de poser la neuve.
+    Mais un remplacement laisse toujours une arête VIVANTE du même scope, et une
+    révocation (sans libellé) archive celles de toutes les clés : « des arêtes, aucune
+    vivante » est donc exactement « révoqué, et aucun grant ne l'a levé depuis ».
+    Aucune marque de plus, aucune comparaison de dates."""
+    out = []
+    for sc in scopes:
+        mine = [e for e in edges if (e["grantee_kind"], e["grantee_id"]) == sc]
+        if mine and all(e.get("revoked_at") is not None for e in mine):
+            out.append(sc)
+    return out
+
+
 def platform_rung(sub: Optional[str], provider: str,
                   active_org: Optional[int], *,
                   instances: "list[dict] | None" = None) -> Optional[ChainVerdict]:
     """Le barreau plateforme, vu par la chaîne. `None` = la chaîne n'a pas d'avis
     (connecteur non basculé, ou aucune arête n'a jamais visé cet appelant) ⟹
     l'appelant retombe sur l'ancien chemin, à l'identique.
+
+    **La révocation prime sur tout accord, quel que soit le grain** (même règle que
+    `access.platform_grant._platform_denied`) : un scope de l'appelant révoqué sur le
+    connecteur (`revoked_scopes`) le refuse, même s'il a une arête vivante sur l'autre
+    scope — sinon un accord individuel rouvrait le blocage de crédit de son org. La
+    priorité `user:` > `org:` ne sert qu'à choisir le QUOTA de l'arête gagnante.
 
     Profondeur 1 : toutes les arêtes de ce lot sont des racines (`parent_id IS NULL`)
     posées par le propriétaire plateforme. Le « min des contraintes le long de la
@@ -217,19 +241,22 @@ def platform_rung(sub: Optional[str], provider: str,
     scopes = grantee_scopes(sub, active_org)
     if not scopes:
         return None
-    revoked_seen: Optional[ChainVerdict] = None
     # Ordre des instances = celui de l'ancien chemin (récente d'abord), pour que la
     # clé gagnante soit la même des deux côtés.
+    par_cle = []
     for inst in (instances if instances is not None
                  else credentials_store.list_platform_instances(provider)):
         ref = instance_ref(inst["label"], provider)
-        edges = db_grants.edges_for(ref, scopes)
-        if not edges:
-            continue
+        par_cle.append((inst, ref, db_grants.edges_for(ref, scopes)))
+    revoques = revoked_scopes([e for _, _, edges in par_cle for e in edges], scopes)
+    if revoques:
+        inst, ref = next((i, r) for i, r, edges in par_cle
+                         if any((e["grantee_kind"], e["grantee_id"]) == revoques[0]
+                                for e in edges))
+        return ChainVerdict(False, inst["label"], resource_id=ref, grantee=revoques[0])
+    for inst, ref, edges in par_cle:
         live = [e for e in edges if e.get("revoked_at") is None]
         if not live:
-            revoked_seen = revoked_seen or ChainVerdict(
-                False, inst["label"], resource_id=ref)
             continue
         # Plusieurs voies vers la MÊME instance (0053-D5) : la plus favorable
         # s'applique. `grantee_scopes` est ordonné du plus spécifique au moins ;
@@ -238,7 +265,7 @@ def platform_rung(sub: Optional[str], provider: str,
                    if (e["grantee_kind"], e["grantee_id"]) in scopes else len(scopes))
         return ChainVerdict(True, inst["label"], quota_of(best), int(best["id"]), ref,
                             (best["grantee_kind"], best["grantee_id"]))
-    return revoked_seen
+    return None
 
 
 # ── L'arête tenant→org (L-clés PR 2, 0053-D3 : « le tenant s'insère dans la même chaîne ») ──
@@ -444,14 +471,42 @@ def grant(provider: str, scope: str, daily_quota: Optional[int] = None,
 
 def revoke(provider: str, scope: str, label: Optional[str] = None) -> int:
     """Archive les arêtes vivantes de `scope` sur l'instance. L'accès est coupé à la
-    lecture SUIVANTE — rien à invalider, aucun cache à purger."""
+    lecture SUIVANTE — rien à invalider, aucun cache à purger.
+
+    F-046 : sans AUCUNE arête pour ce scope, il n'y avait rien à archiver, donc la chaîne
+    restait MUETTE (`platform_rung` → None) et l'appelant retombait sur l'ancien chemin —
+    une clé ouverte le servait comme avant. Révoquer sur une clé ouverte jamais accordée
+    (le blocage de crédit d'une org gratuite) ne coupait rien. On pose alors une arête
+    née archivée : la chaîne a un avis (« révoqué ») et refuse sans repli. Un `grant`
+    ultérieur la remplace, comme toute arête. Une seule écriture : posée vivante puis
+    archivée, elle accordait la clé sans quota entre les deux — sur une clé fermée
+    comme ouverte — et pour toujours si l'archivage échouait.
+
+    Sans `label`, la révocation vaut pour le CONNECTEUR : elle archive les arêtes du
+    scope sur TOUTES ses clés. N'archiver que la plus récente laissait `platform_rung`
+    servir l'appelant révoqué par l'arête vivante d'une autre clé. L'arête née archivée
+    se pose sur la plus récente ; une clé posée ensuite, sans arête, ne rouvre rien
+    (`platform_rung` rend le refus vu sur l'autre clé). Une seule transaction : une
+    révocation n'est jamais à moitié faite."""
     grantee = _parse_scope(scope)
     if grantee is None:
         return 0
-    label = label or _latest_label(provider)
-    if label is None:
+    labels = ([label] if label
+              else [i["label"] for i in credentials_store.list_platform_instances(provider)])
+    if not labels:
         return 0
-    return db_grants.revoke_edges(instance_ref(label, provider), *grantee)
+    refs = [instance_ref(lb, provider) for lb in labels]
+    with _connect() as conn:
+        n = sum(db_grants.revoke_edges(ref, *grantee, conn=conn) for ref in refs)
+        if n == 0 and not any(db_grants.edge_exists(ref, *grantee, conn=conn)
+                              for ref in refs):
+            db_grants.insert_grant(
+                resource_id=refs[0], grantor_kind=PLATFORM_SCOPE[0],
+                grantor_id=PLATFORM_SCOPE[1], grantee_kind=grantee[0],
+                grantee_id=grantee[1], constraints={}, source="manual",
+                created_by=None, revoked=True, conn=conn)
+            n = 1
+    return n
 
 
 def granted_instances(scope_kind: str, scope_id: str) -> list[dict]:

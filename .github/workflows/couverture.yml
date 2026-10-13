@@ -64,23 +64,28 @@ jobs:
           # Même raison que le job `test` : ce conteneur est isolé, la garde à 2 places
           # de `_jeton_de_suite.py` ne protège ici aucune session voisine.
           OTO_TEST_PG_PLACES: "4"
+          # L'entrée passe par l'environnement, jamais interpolée dans le script : une
+          # valeur tapée au lancement deviendrait du shell exécuté.
+          CIBLE: ${{ inputs.cible || 'oto_mcp' }}
         # `--cov-report=term-missing:skip-covered` ne liste QUE les modules qui ont des
         # lignes non couvertes : c'est exactement la question posée ici, et ça évite de
         # noyer la réponse sous 709 fichiers à 100 %.
         run: |
           pytest -q -n 4 --dist loadgroup \
-            --cov=${{ inputs.cible || 'oto_mcp' }} \
+            --cov="$CIBLE" \
             --cov-report=term-missing:skip-covered \
             --cov-report=xml \
             --cov-report=json \
             | tee couverture.txt
       - name: Résumé
         if: always()
+        env:
+          CIBLE: ${{ inputs.cible || 'oto_mcp' }}
         # Le chiffre atterrit dans le récapitulatif du run : on vient le lire, on ne le
         # télécharge pas. Les modules les moins couverts d'abord — c'est ce qu'on cherche.
         run: |
           {
-            echo "## Couverture — \`${{ inputs.cible || 'oto_mcp' }}\`"
+            echo "## Couverture — \`$CIBLE\`"
             echo
             if [ -f coverage.json ]; then
               python3 - <<'PY'

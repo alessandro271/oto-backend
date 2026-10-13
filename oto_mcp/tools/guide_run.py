@@ -42,6 +42,27 @@ def liberer_les_lignes_du_run(run_id: str) -> int | None:
         return None
 
 
+def _run_d_autrui(run_id: str) -> bool:
+    """Is `run_id` a run indexed under ANOTHER account than the caller's? The guard of
+    `run_finish`'s release (the REST close has its own, `run_thread._clore`).
+
+    Same ownership rule as `db.finish_run`: `sub IS NOT DISTINCT FROM` — local stdio
+    (no sub) owns the runs without a sub. A run absent from the index (`run_start`
+    persists it best-effort) keeps the behaviour from before: released, nobody else
+    can be proven to own it. An unreadable index fails CLOSED on the release only —
+    the close itself never depends on it. Sync: called outside the loop."""
+    from .. import db
+    from ..auth.hooks import current_user_sub_from_token
+    try:
+        head = db.get_run_head(run_id)
+        sub = current_user_sub_from_token()
+    except Exception:  # noqa: BLE001
+        logger.warning("owner of run %s unreadable: its rows are not released "
+                       "(fail-closed)", run_id, exc_info=True)
+        return True
+    return head is not None and head.get("sub") != sub
+
+
 def version_de_procedure(sub: str | None, slug: str) -> int | None:
     """CURRENT version of the procedure `slug`, read in the order
     `oto_procedure(op='get')` serves it: the active org first, the active team as a
@@ -206,7 +227,14 @@ def register(mcp: FastMCP) -> None:
         # The count is ALWAYS written (#633): a fleet post tells "zero
         # rows returned" (0) apart from "nothing was attempted" (null — the database coughed, the
         # journal says so); an absent field said neither.
+        # The release belongs to the run's OWNER, like the close itself (`_persist_close`,
+        # #108) and the REST close (`run_thread._clore`): a run_id is a handle, not a
+        # right — someone else's would otherwise hand that run's leases back to the
+        # queue mid-work. Someone else's run releases nothing (`0`, nothing was ours).
         from starlette.concurrency import run_in_threadpool
-        liberees = await run_in_threadpool(liberer_les_lignes_du_run, run_id)
+        if await run_in_threadpool(_run_d_autrui, run_id):
+            liberees = 0
+        else:
+            liberees = await run_in_threadpool(liberer_les_lignes_du_run, run_id)
         return {"ok": True, "run_id": run_id, "outcome": outcome,
                 "was_open": removed is not None, "rows_released": liberees}

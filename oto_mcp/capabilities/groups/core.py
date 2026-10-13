@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from ... import access, group_store, org_store, session_org
 from .._authz import GROUP_ADMIN_OF, GROUP_MEMBER_OF, ORG_ADMIN_OF, ORG_MEMBER_OF, SUB_ONLY
 from .._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
+from ..orgs.core import refuser_maison_sous_verrou
 from ..registry import CAPABILITIES
 
 # Le domaine FERMÉ d'un rôle d'équipe (validé à l'écriture par `GROUP_ROLES`) (#437).
@@ -342,18 +343,25 @@ def _list_my_groups(ctx: ResolvedCtx, inp: NoInput) -> dict:
     return {"org_id": org_id, "active_group": active_group, "groups": groups}
 
 
+def _pas_membre() -> AuthzDenied:
+    """LE refus de `group.use` / `group.set_home` — groupe absent ou pas membre, une
+    seule réponse (F-016)."""
+    return AuthzDenied(403, "not_a_member",
+                       "Tu n'es pas membre de ce groupe — demande au chef d'équipe.")
+
+
 def _use_group(ctx: ResolvedCtx, inp: UseGroupInput) -> dict:
     """MCP = hint SANS ÉTAT (ADR 0038 B3 — le bracelet de session est retiré) :
     valide l'appartenance et renvoie le geste fiable (`_group=` par appel, qui
     co-pose l'org parente). REST = pose l'équipe MAISON persistante."""
+    # F-016 : un groupe absent rend le MÊME refus qu'un groupe dont on n'est pas
+    # membre (`_PAS_MEMBRE`) — les ids sont séquentiels, un 404 distinct les rendait
+    # énumérables par tout compte. Même parti pris que `_authz.GROUP_MEMBER_OF` (#300).
     g = group_store.get_group(inp.group_id)
-    if not g:
-        raise AuthzDenied(404, "unknown_group", f"Groupe #{inp.group_id} inconnu.")
     sid = session_org.current_session_id()
     if sid is not None:  # MCP : hint sans état
-        if not group_store.is_group_member(ctx.sub, inp.group_id):
-            raise AuthzDenied(403, "not_a_member",
-                              "Tu n'es pas membre de ce groupe — demande au chef d'équipe.")
+        if not g or not group_store.is_group_member(ctx.sub, inp.group_id):
+            raise _pas_membre()
         return {
             "group": inp.group_id, "name": g["name"], "org": g["org_id"],
             "session_state": None,
@@ -361,9 +369,12 @@ def _use_group(ctx: ResolvedCtx, inp: UseGroupInput) -> dict:
                        "sur chaque appel scopé équipe (l'org parente en est dérivée). "
                        "L'équipe par défaut ne se change que dans le dashboard."),
         }
-    if not group_store.set_active_group(ctx.sub, inp.group_id):  # REST : maison (persiste)
-        raise AuthzDenied(403, "not_a_member",
-                          "Tu n'es pas membre de ce groupe — demande au chef d'équipe.")
+    # REST : l'équipe maison pose AUSSI son org parente en maison — même garde que
+    # `org.set_home` sous le jeton d'un agent hébergé (`verrou_org.py`).
+    refuser_maison_sous_verrou(ctx, "group.use")
+    # `set_active_group` rend False pour un groupe absent comme pour un non-membre.
+    if not g or not group_store.set_active_group(ctx.sub, inp.group_id):  # REST : maison
+        raise _pas_membre()
     return {"active_group": inp.group_id, "name": g["name"], "active_org": g["org_id"]}
 
 
@@ -386,12 +397,12 @@ def _clear_group(ctx: ResolvedCtx, inp: NoInput) -> dict:
 def _set_home_group(ctx: ResolvedCtx, inp: UseGroupInput) -> dict:
     """Pose l'équipe MAISON persistante (défaut des nouvelles conversations) + son
     org parente — depuis n'importe quelle face, ≠ oto_use_group (session)."""
+    # F-016 : verrou d'abord (il ne dépend que de l'appelant), puis un seul refus pour
+    # « groupe absent » et « pas membre » — cf. `_use_group`.
+    refuser_maison_sous_verrou(ctx, "group.set_home")
     g = group_store.get_group(inp.group_id)
-    if not g:
-        raise AuthzDenied(404, "unknown_group", f"Groupe #{inp.group_id} inconnu.")
-    if not group_store.set_active_group(ctx.sub, inp.group_id):
-        raise AuthzDenied(403, "not_a_member",
-                          "Tu n'es pas membre de ce groupe — demande au chef d'équipe.")
+    if not g or not group_store.set_active_group(ctx.sub, inp.group_id):
+        raise _pas_membre()
     return {"home_group": inp.group_id, "name": g["name"], "home_org": g["org_id"]}
 
 
@@ -460,6 +471,9 @@ CAPABILITIES += [
                      "secrets apply."),
         mcp="oto_use_group",
         rest=RestBinding("PUT", "/api/me/active-group"),  # REST : équipe maison
+        errors=(DeclaredError(403, "org_out_of_job",
+                              "sous le jeton d'un agent hébergé (face REST) : il ne "
+                              "change pas l'org maison de la personne"),),
     ),
     Capability(
         key="group.clear", handler=_clear_group, Input=NoInput, authz=SUB_ONLY,
@@ -478,6 +492,9 @@ CAPABILITIES += [
                      "l'agent ne mute pas le défaut (il pose aussi l'org parente en "
                      "maison — double mutation)."),
         rest=RestBinding("PUT", "/api/me/home-group"),
+        errors=(DeclaredError(403, "org_out_of_job",
+                              "sous le jeton d'un agent hébergé : il porte l'org de son "
+                              "travail et ne change pas l'org maison de la personne"),),
     ),
     Capability(
         key="group.get", handler=_group_detail, Input=GroupIdInput,

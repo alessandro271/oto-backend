@@ -43,7 +43,7 @@ def seams(monkeypatch):
     # elle a été faite, sans y être partagée. Le stub le RETIENT — un seam qui accepte
     # le paramètre et l'avale ne prouverait plus que la copie est bien perso.
     monkeypatch.setattr(P.db, "duplicate_project",
-                        lambda src, name, ot, oid, copied_by=None, context_org_id=None:
+                        lambda src, name, ot, oid, copied_by=None, context_org_id=None, **k:
                         rec["copy"].append((src, name, ot, oid, copied_by, context_org_id))
                         or (8, []))
     monkeypatch.setattr(P.db, "archive_project", lambda pid: rec["archive"].append(pid))
@@ -59,14 +59,25 @@ def seams(monkeypatch):
     monkeypatch.setattr(P.db, "add_project_link", _add_link)
     monkeypatch.setattr(P.db, "remove_project_link",
                         lambda pid, tt, tr, identity_ref=None: rec["unlink"].append((pid, tt, tr, identity_ref)) or 1)
-    monkeypatch.setattr(P.db, "list_project_links",
-                        lambda pid: [{"target_type": "tableau", "target_ref": "7", "label": "Leads",
-                                      "role": "vivier de leads", "config": {}, "cross_project": False}])
+    def _liens(pid):
+        return [{"target_type": "tableau", "target_ref": "7", "label": "Leads",
+                 "role": "vivier de leads", "config": {}, "cross_project": False}]
+    monkeypatch.setattr(P.db, "list_project_links", _liens)
+    monkeypatch.setattr(P.db, "list_project_links_many",
+                        lambda pids: {int(p): _liens(p) for p in pids})
     monkeypatch.setattr(P.ownership, "accessor_scope",
                         lambda sub: types.SimpleNamespace(owner_pairs=lambda: [("user", sub)]))
     monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": True)
+    monkeypatch.setattr(P.ownership, "can_access_many",
+                        lambda sub, t, owners, want="read": {r: True for r in owners})
     monkeypatch.setattr(P.ownership, "can_govern", lambda sub, t, rid: True)
     monkeypatch.setattr(P.roles, "is_org_member", lambda sub, oid: True)
+    # Garde de portée d'`op=link` : tout identifiant passe (ce banc décrit autre chose).
+    monkeypatch.setattr(P.db, "refs_dans_la_portee",
+                        lambda pid, t, refs: {int(r) for r in refs if str(r).isdigit()})
+    _owner_of = P.ownership.owner_of
+    monkeypatch.setattr(P.ownership, "owner_of", lambda t, rid: None if t in (
+        "datastore_namespace", "doctrine") else _owner_of(t, rid))
     # ADR 0049 : défauts neutres — pas d'escalade admin, membre des équipes qu'il vise,
     # aucun groupe dans l'org active. Les tests dédiés surchargent.
     monkeypatch.setattr(P.roles, "is_org_admin", lambda sub, oid: False)

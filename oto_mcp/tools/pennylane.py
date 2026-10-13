@@ -10,7 +10,7 @@ OBJECT, the verb as an `op` parameter — `pennylane_customer`, `pennylane_invoi
 (sales), `pennylane_supplier` (purchases; supplier invoices live
 in `pennylane_achats.py`, `pennylane_supplier_invoice`), plus a single
 `pennylane_ref` for read-only reference data (company, fiscal years,
-chart of accounts, categories, invoice templates, products). The heterogeneous verbs that
+chart of accounts, analytical axes and categories, invoice templates, products). The heterogeneous verbs that
 merging would not factor out stay named: `pennylane_transactions`,
 `pennylane_trial_balance`, `pennylane_match`, `pennylane_upload_file`.
 
@@ -34,7 +34,7 @@ from fastmcp import FastMCP
 from ..connectors import verify as connector_verify
 
 from .. import file_source
-from .pennylane_socle import _bad, _client, _ecrit, _need
+from .pennylane_socle import _analytique, _bad, _client, _ecrit, _need
 
 
 def _verify(fields: dict, config: dict | None = None) -> None:
@@ -84,9 +84,10 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def pennylane_ref(kind: Literal["company", "fiscal_years", "ledger_accounts",
-                                    "journals", "categories", "invoice_templates",
-                                    "products"],
+                                    "journals", "category_groups", "categories",
+                                    "invoice_templates", "products"],
                       product_id: Optional[int] = None,
+                      category_group_id: Optional[int] = None,
                       max_pages: Optional[int] = None) -> dict | list:
         """Pennylane reference data, READ-ONLY — what must be resolved BEFORE
         writing (product ids, invoice templates, accounts, categories).
@@ -100,7 +101,13 @@ def register(mcp: FastMCP) -> None:
           requires a `journal_id`: these ids are SPECIFIC TO THE COMPANY, resolve them
           here rather than hard-coding them. Scope `journals:*`, distinct from that
           of entries — a key can read one without the other.
-        - "categories": expense categories.
+        - "category_groups": the ANALYTICAL axes `{id, label}` ("Projects",
+          "Cost centres"…). Scope `categories:readonly`.
+        - "categories": the analytical categories, ALL of them (every page) —
+          `{id, label, category_group, analytical_code, ledger_account}`; with
+          `category_group_id`, those of ONE axis only. The ids to pass to
+          `op="categorize"` of `pennylane_invoice`, `pennylane_supplier_invoice` and
+          `pennylane_ledger_entry`.
         - "invoice_templates": invoicing templates. The template drives the PDF
           RENDERING — notably the "Avoir" (credit note) template (without payment/IBAN block), the only API
           way to get the credit-note rendering: pass its id as
@@ -116,8 +123,9 @@ def register(mcp: FastMCP) -> None:
         Args:
             kind: the desired reference data (see above).
             product_id: kind="products" — the record of a single product.
+            category_group_id: kind="categories" — the categories of ONE axis.
             max_pages: pagination limit (paginated kinds: products,
-                invoice_templates).
+                invoice_templates, category_groups, categories).
         """
         c = _client()
         if kind == "company":
@@ -128,8 +136,10 @@ def register(mcp: FastMCP) -> None:
             return c.get_ledger_accounts()
         if kind == "journals":
             return c.get_journals(max_pages=max_pages)
+        if kind == "category_groups":
+            return c.list_category_groups(max_pages=max_pages)
         if kind == "categories":
-            return c.get_categories()
+            return c.get_categories(category_group_id, max_pages=max_pages)
         if kind == "invoice_templates":
             return c.list_invoice_templates(max_pages=max_pages)
         if kind == "products":
@@ -137,7 +147,8 @@ def register(mcp: FastMCP) -> None:
                 return c.get_product(product_id)
             return c.list_products(max_pages=max_pages)
         raise _bad("kind must be 'company', 'fiscal_years', 'ledger_accounts', "
-                   "'journals', 'categories', 'invoice_templates' or 'products'")
+                   "'journals', 'category_groups', 'categories', 'invoice_templates' "
+                   "or 'products'")
 
     # --- customers -----------------------------------------------------------
 
@@ -212,7 +223,7 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     def pennylane_invoice(
         op: Literal["list", "find", "create", "credit_note", "update",
-                    "finalize", "send", "delete"] = "list",
+                    "finalize", "send", "delete", "categories", "categorize"] = "list",
         invoice_id: Optional[int] = None,
         customer_id: Optional[int] = None,
         date: Optional[str] = None,
@@ -223,6 +234,7 @@ def register(mcp: FastMCP) -> None:
         customer_invoice_template_id: Optional[int] = None,
         credited_invoice_id: Optional[int] = None,
         fields: Optional[dict] = None,
+        categories: Optional[list] = None,
         max_pages: Optional[int] = None,
     ) -> dict | list:
         """SALES invoices (customer invoices) and CREDIT NOTES — the "revenue" side.
@@ -264,6 +276,14 @@ def register(mcp: FastMCP) -> None:
           finalized by mistake. Pennylane refuses an already FINALIZED document (it must be
           cancelled by credit note instead) — the refusal is surfaced as is, never a
           silent fallback.
+        - "categories" (`invoice_id`): the ANALYTICAL categories set on the invoice,
+          each with its `weight`.
+        - "categorize" (`invoice_id`, `categories`): REPLACES all the analytical
+          categories of the invoice with `[{"id": …, "weight": "0.5"}]` — weight as a
+          STRING between 0 and 1, the weights of ONE axis sum to 1, axes are
+          independent; `[]` removes them all. Ids from `pennylane_ref(kind=
+          "categories")`. A DRAFT cannot be categorized (finalize first). Reversible:
+          re-send the list read with op="categories".
 
         ⚠️ Strict LINE schema for create/credit_note (any deviation → opaque 400
         `NotAnyOf`) — a line = ONE of 2 forms, no field outside the list:
@@ -279,8 +299,9 @@ def register(mcp: FastMCP) -> None:
 
         Args:
             op: "list" (default) | "find" | "create" | "credit_note" | "update" |
-                "finalize" | "send" | "delete".
-            invoice_id: required for update / finalize / send / delete.
+                "finalize" | "send" | "delete" | "categories" | "categorize".
+            invoice_id: required for update / finalize / send / delete /
+                categories / categorize.
             customer_id: required for create / credit_note.
             date: issue date of the invoice / credit note (YYYY-MM-DD).
             deadline: due date (YYYY-MM-DD).
@@ -296,6 +317,7 @@ def register(mcp: FastMCP) -> None:
             credited_invoice_id: op="credit_note" — invoice to credit; the link is
                 set after creation (2nd call), never at create.
             fields: op="update" — fields to update.
+            categories: op="categorize" — `[{"id", "weight"}]`, replaces everything.
             max_pages: op="list" — bounds the pagination (⚠️ see above).
         """
         c = _client()
@@ -338,8 +360,11 @@ def register(mcp: FastMCP) -> None:
         if op == "delete":
             return _ecrit(lambda: c.delete_invoice(_need(invoice_id, "invoice_id", op)),
                           "invoice deletion")
+        if op in ("categories", "categorize"):
+            return _analytique(c, op, "customer_invoice",
+                               _need(invoice_id, "invoice_id", op), categories)
         raise _bad("op must be 'list', 'find', 'create', 'credit_note', 'update', "
-                   "'finalize', 'send' or 'delete'")
+                   "'finalize', 'send', 'delete', 'categories' or 'categorize'")
 
     # --- purchases: suppliers + supplier invoices ----------------------------
 

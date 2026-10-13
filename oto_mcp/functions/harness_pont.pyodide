@@ -1,0 +1,80 @@
+"""Le harnais du bac à sable CONVERSATIONNEL (#1202), joué DANS Pyodide, jamais par le
+serveur.
+
+`sandbox_pont.ts` pose `_tache_json` et `_appel_outil` (une fonction JS qui envoie un
+appel d'outil au serveur et rend une promesse de sa réponse), puis joue ce harnais par
+`runPythonAsync`. Le harnais écrit les sources dans le système de fichiers EN MÉMOIRE
+de Pyodide, appelle le point d'entrée avec `oto` et l'entrée, et rend du JSON.
+
+Le point d'entrée reçoit `oto` : `await oto.call(outil, arguments)` rend le résultat de
+l'outil, ou lève `oto.ToolError` (`code`, `message`) — refus du pont, budget épuisé,
+échec de l'outil. Une fonction `async def` est attendue ; une fonction ordinaire est
+acceptée, elle ne peut simplement pas appeler d'outil.
+
+⚠️ Comme pour `harness.pyodide`, le code tourne dans le MÊME interpréteur que ce
+harnais : il peut tromper le harnais sur son propre résultat, pas le serveur sur ce
+qu'il fait — tout ce qui agit passe par le pont, qui juge chaque appel.
+
+Lu comme du TEXTE par `pont.py`, jamais importé côté serveur (d'où son extension).
+"""
+import importlib
+import inspect
+import json
+import os
+import sys
+import traceback
+
+_TACHE = json.loads(_tache_json)  # noqa: F821 — posé par sandbox_pont.ts
+_DOSSIER = "/fonction"
+_MAX_TRACE = 2000
+
+
+class ToolError(Exception):
+    """Un appel d'outil refusé ou en échec. `code` dit lequel, sans relire le texte."""
+
+    def __init__(self, code, message=""):
+        super().__init__(f"{code}: {message}" if message else code)
+        self.code = code
+        self.message = message
+
+
+class Oto:
+    """Ce que le code voit du serveur : des appels d'outils, rien d'autre."""
+
+    ToolError = ToolError
+
+    async def call(self, tool, arguments=None):
+        if not isinstance(tool, str) or not tool:
+            raise ToolError("invalid_call", "`tool` is the tool's name")
+        if arguments is not None and not isinstance(arguments, dict):
+            raise ToolError("invalid_call", "`arguments` is a dict")
+        brut = await _appel_outil(tool, json.dumps(arguments or {}))  # noqa: F821
+        reponse = json.loads(brut)
+        if not reponse.get("ok"):
+            raise ToolError(reponse.get("code") or "tool_failed", reponse.get("message") or "")
+        return reponse.get("result")
+
+
+def _poser_les_sources():
+    os.makedirs(_DOSSIER, exist_ok=True)
+    for nom, contenu in _TACHE["sources"].items():
+        with open(os.path.join(_DOSSIER, nom), "w", encoding="utf-8") as f:
+            f.write(contenu)
+    os.chdir(_DOSSIER)
+    sys.path.insert(0, _DOSSIER)
+
+
+async def _executer():
+    module, fonction = _TACHE["entrypoint"].split(":")
+    try:
+        sortie = getattr(importlib.import_module(module), fonction)(Oto(), _TACHE["input"])
+        if inspect.isawaitable(sortie):
+            sortie = await sortie
+        json.dumps(sortie)
+        return {"ok": True, "result": sortie}
+    except Exception:  # noqa: SILENT — l'erreur du code EST le résultat : rendue avec sa trace
+        return {"ok": False, "error": traceback.format_exc(limit=8)[-_MAX_TRACE:]}
+
+
+_poser_les_sources()
+json.dumps(await _executer())  # noqa: F704 — joué par runPythonAsync

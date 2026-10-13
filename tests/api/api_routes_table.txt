@@ -24,6 +24,7 @@ POST,PUT /api/upload/{token} -> upload_receive
 GET,HEAD /api/upload/{token} -> upload_form
 OPTIONS /api/upload/{token} -> options_handler
 POST /api/relay/{token} -> relay_receive
+GET,HEAD /api/relay/batch/{token} -> relay_manifest
 GET,HEAD /p/d/{token} -> public_doc_view
 GET,HEAD,POST /o/u/{token} -> outreach_unsubscribe
 GET,HEAD,POST /o/d/{token} -> digest_unsubscribe
@@ -188,6 +189,8 @@ POST /api/admin/instances/{instance_id:int}/health -> _handler
 OPTIONS /api/admin/instances/{instance_id:int}/health -> options_handler
 GET,HEAD /api/admin/vault/health -> _handler
 OPTIONS /api/admin/vault/health -> options_handler
+GET,HEAD /api/admin/platform-keys/balances -> _handler
+OPTIONS /api/admin/platform-keys/balances -> options_handler
 GET,HEAD /api/admin/tenants/{slug}/admins -> _handler
 OPTIONS /api/admin/tenants/{slug}/admins -> options_handler
 POST /api/admin/tenants/{slug}/admins -> _handler
@@ -749,6 +752,8 @@ OPTIONS /api/me/automations/fire -> options_handler
 POST /api/me/runs/thread -> _handler
 OPTIONS /api/me/runs/thread -> options_handler
 POST /api/me/runs -> _handler
+OPTIONS /api/me/runs -> options_handler
+GET,HEAD /api/me/runs -> _handler
 OPTIONS /api/me/runs -> options_handler
 PATCH /api/me/runs/{run_id} -> _handler
 OPTIONS /api/me/runs/{run_id} -> options_handler

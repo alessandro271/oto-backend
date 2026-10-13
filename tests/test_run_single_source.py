@@ -137,6 +137,7 @@ def test_le_bloc_c_du_handshake_sert_le_journal(divergent):
     Annoncer « prospection Q3 → done » quand le déroulé a échoué oriente l'agent."""
     (run,) = usage.recent_runs("u1", 35)
     assert run["outcome"] == "failed" and run["label"] == "prospection été"
+    assert run["guide"] == "prospection-ete"
     # …et l'index garde son unique champ crédible.
     assert run["project_id"] == 9
 

@@ -186,6 +186,10 @@ _KNOWN: dict[str, str] = {
     # `typ="relay"` dans l'URL, aucun JWT, corps multipart d'un `curl -F`), et un
     # corps qui ne passe pas en mémoire — c'est la raison d'être d'une route à part.
     "/api/relay/{token}": NATURE,
+    # Le manifeste d'un LOT de liens de relais : même régime (jeton `typ="relay_batch"`
+    # dans l'URL, aucun JWT, lu par le `curl` d'un script), et une réponse TSV, pas du
+    # JSON — ce n'est pas la forme d'une capacité.
+    "/api/relay/batch/{token}": NATURE,
     # Icône de marque servie au NAVIGATEUR (l'endpoint MCP n'a pas de page racine) :
     # du SVG, pas du JSON, pas d'autz à tenir. Ce n'est pas une opération d'API.
     "/favicon.svg": NATURE,

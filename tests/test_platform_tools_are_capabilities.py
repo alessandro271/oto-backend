@@ -41,6 +41,8 @@ _KNOWN: dict[str, bool] = {
     # ses boutons (`@app.tool()`, app-only, jamais listé au modèle).
     "data_review_app": True,
     "data_review_decide": True,
+    # …et le graphe d'une procédure, peint par le bundle d'un front (`procedure_app`).
+    "oto_procedure_app": True,
     # Boucle d'usage (ADR 0017) : la pile de run est session-scopée côté MCP.
     # (`feedback`, lui, est DÉJÀ une capacité — `capabilities/usage.py`.)
     "run_start": True,

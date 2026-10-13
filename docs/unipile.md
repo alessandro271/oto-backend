@@ -35,7 +35,8 @@ sélection de membre, visibilité des tools, carte. Avec sept namespaces sous un
 nom, ces cinq choses étaient indivisibles — réserver WhatsApp à un département sans
 ouvrir LinkedIn était impossible, et installer WhatsApp montait 40 outils LinkedIn.
 
-**Les noms de tools ne bougent pas.** `linkedin_unipile_*`, `whatsapp_chat`… sont un
+**Les noms de tools ne bougent pas** (au split ; l'envoi en est sorti depuis, #1189,
+§Lecture et envoi séparés). `linkedin_unipile_*`, `whatsapp_chat`… sont un
 CONTRAT consommé hors dépôt (procédures en base de plusieurs orgs, guides plateforme
 servis depuis la DB, un métrage d'usage). Ce qui change, c'est la CARTE : elle
 porte le nom du réseau (« LinkedIn », « WhatsApp »), renvoie à sa marque, et ne
@@ -99,9 +100,10 @@ l'un des six canaux se relit « pas encore migrée » et rejouerait une dernièr
 
 ---
 
-Tools `whatsapp_chat` / `telegram_chat` / `instagram_chat` / `messenger_chat` /
-`twitter_chat` (`op=list|read|send`) = messagerie **hébergée Unipile**, chacun sous
-**son** connecteur (cf. le tableau ci-dessus). Générés par la factory
+Tools `whatsapp_chat` / `telegram_chat` / `instagram_chat` (`op=list|read` ; `op=send`
+déprécié, servi jusqu'au 10/12/2026) et `whatsapp_send` / `telegram_send` /
+`instagram_send` (ENVOI, #1189 — cf. §Lecture et envoi séparés ci-dessous) = messagerie **hébergée Unipile**, chacun sous **son** connecteur
+(cf. le tableau ci-dessus). Générés par la factory
 `tools/unipile.register_messaging_tools(mcp, channel)` — l'API `/chats` d'Unipile est
 channel-agnostic ; chaque tool résout l'`account_id` du canal pour le user
 (no-fallback, `tools/unipile.unipile_client(provider)`, qui résout le credential
@@ -258,6 +260,65 @@ de paiement).
 > construction — pas d'escalade org_admin, y compris pour une cible groupe). ⚠️ La clé
 > du grantee doit joindre le compte (clé partagée org/plateforme OK ; owner sur une clé
 > BYO perso ≠ celle du grantee → 404 Unipile surfacé).
+
+## Lecture et envoi séparés (#1189, 09/10/2026)
+
+**Un client MCP autorise des OUTILS, jamais des opérations.** Sur claude.ai ou ChatGPT,
+« toujours autoriser » `whatsapp_chat` pour lire autorisait aussi l'envoi d'un message à
+un tiers, sans confirmation — le seul garde-fou par `op` vivait dans le hook du plugin
+Claude Code, qui ne protège aucun autre client. Décision d'Alexis le 09/10/2026 : tout ce
+qui agit CHEZ un tiers ou EN SON NOM sort des lecteurs, dans un outil dédié, sur le
+patron Gmail (`gmail_message` lit, `gmail_compose` écrit).
+
+| lecteur | ops de lecture | écrivain (`ENVOI`, `destructiveHint` + `openWorldHint`) | ops déplacées (dépréciées dans le lecteur jusqu'au 10/12/2026) |
+|---|---|---|---|
+| `{whatsapp,telegram,instagram}_chat` | list, read | `{canal}_send` | send (sans `op`) |
+| `linkedin_unipile_chat` | list, read, attendees, contacts | `linkedin_unipile_send` | send, update, react |
+| `linkedin_unipile_network` | relations, invitations | `linkedin_unipile_invite` | invite, handle, cancel |
+| `linkedin_unipile_post` | feed, get, engagement | `linkedin_unipile_publish` | create, comment, react |
+
+Le découpage suit une seule règle : **ce qui agit chez un tiers ou en son nom est un
+outil d'écriture.** `react` (un message, une publication) se voit de l'autre côté ;
+`handle` (accepter, refuser) et `cancel` (retirer) changent l'état d'une invitation que
+l'autre membre voit ; `update` d'un fil peut montrer « lu » à l'interlocuteur
+(`setReadStatus`) et, pour le reste, écrit — un lecteur déclaré `readOnlyHint` ne
+peut porter aucune op qui écrit (`tools/lecture.py`, garde `tests/test_outils_en_lecture.py`).
+Les ops gardent leur nom dans l'écrivain (`linkedin_unipile_publish(op="create")`) :
+seul l'outil change ; pour `{canal}_send`, il n'y a plus d'`op`.
+
+### Transition jusqu'au 10/12/2026 inclus (décision d'Alexis du 12/10/2026)
+
+Pas de retrait sec : des procédures en base et des mémoires d'agent appellent encore
+`whatsapp_chat(op="send")`. Jusqu'au **10/12/2026 inclus**
+(`deprecations.RETRAIT_OPS_ENVOI`), l'ancienne op marche :
+
+- elle est servie **par la fonction de l'écrivain**, appelée telle quelle
+  (`OpsDepreciees.servir`, `tools/lecture.py`, partagé depuis avec `chat_message` et
+  `teams_message`, #1231) : mêmes refus d'arguments, avant toute
+  résolution de clé, même client, même compte opéré — aucun code copié ;
+- sa réponse porte `deprecation_warning`, qui nomme l'appel servi, l'outil à appeler
+  désormais et la date de retrait ;
+- la description du lecteur commence par UNE ligne : « ⚠️ op=send est déprécié,
+  utiliser `whatsapp_send` ; retrait le 10/12/2026. » ;
+- **le lecteur reste déclaré `ENVOI`, pas `LECTURE`**, tant qu'il peut envoyer : un
+  client qui le croirait en lecture seule enverrait sans demander, et une recette
+  « pull » (qui n'appelle que des outils `LECTURE`) l'appellerait. Il retrouvera
+  `readOnlyHint` au retrait, pas avant.
+
+**Le retrait** (premier tag `vX.Y.Z` posé à partir du 11/12/2026) : les ops quittent le
+schéma des lecteurs, qui repassent `LECTURE` ; un appel qui envoie encore une ancienne op
+est refusé AVANT toute résolution de clé, avec un refus nommé `op_moved` qui donne le
+nouvel outil et ses arguments (le `BeforeValidator` `_op_deplacee` du commit d'origine de
+#1189) — jamais un « Input should be 'list' or 'read' » muet, jamais une exécution.
+`tests/test_unipile_transition_envoi_1189.py` rougit à partir du 11/12/2026 tant qu'une
+op dépréciée est encore servie. Entrée datée : `docs/alias-deprecies.md`.
+
+Côté plugin Claude Code, le hook `guard-outbound.mjs` doit couvrir les nouveaux outils
+d'envoi ET, jusqu'au retrait, les anciennes ops.
+
+Reste mélangé, hors de ce lot : `linkedin_unipile_profile` porte `endorse` (une
+recommandation de compétence, visible du membre) et `action` (geste Recruiter sur un
+candidat) — à sortir de la même façon si on l'arbitre.
 
 ## « Mon LinkedIn est-il connecté ? » → `linkedin_unipile_account(op="status")`
 

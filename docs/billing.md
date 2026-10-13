@@ -245,8 +245,9 @@ portent la même).
 
 L'IP et le user-agent viennent de la requête via `client_trace`, posé par
 l'adaptateur REST autour du handler (un handler ne voit pas la requête, ADR 0004) ;
-l'IP réelle se lit `CF-Connecting-IP` > **premier** hop de `X-Forwarded-For` >
-socket. Hors requête REST, les deux valent `NULL` — une trace absente reste absente.
+l'IP réelle suit la règle unique `client_trace.pick_ip` : le pair TCP, sauf s'il est
+un proxy déclaré dans `OTO_PROXIES_DE_CONFIANCE` — alors `CF-Connecting-IP`, sinon
+l'adresse la plus à droite de `X-Forwarded-For` qui n'est pas de confiance. Hors requête REST, les deux valent `NULL` — une trace absente reste absente.
 
 **Et la preuve se SORT** : `oto_admin_legal_proof` / `GET /api/admin/users/{sub}/legal/
 acceptances` (palier plateforme) rend l'historique entier d'un compte — chaque

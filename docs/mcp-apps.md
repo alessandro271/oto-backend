@@ -140,3 +140,49 @@ son `_meta.ui.resourceUri` (`est_une_app`). Les deux sont prouvés bout en bout 
 - **La PR annonce** l'empreinte (`scripts/empreinte_servie.py`) et ce qui reste à éprouver
   sur claude.ai (appel d'un outil absent de `tools/list`, `ui/message`, thème clair,
   cadre) — en préprod, sur une COPIE de tableau : préprod et prod partagent la base.
+
+## Une app peinte par un front — `oto_procedure_app`
+
+Le graphe d'une procédure (son dessin, `procedure_diagram.py`) se lit dans un front
+partenaire, qui en tient SEUL la grammaire : le cœur refuse d'en écrire un jumeau Python.
+`oto_procedure_app` (`tools/procedure_app.py`) ne dessine donc rien : sa page ui:// est une
+coquille qui charge le bundle du front, et l'outil ne livre que le tracé (sans ses fences)
+et les connecteurs qu'il peut nommer (pour leurs logos). Ce n'est pas une carte Prefab :
+une ressource MCP Apps nue, dont la CSP (`resourceDomains`) admet l'origine du bundle et
+`img.logo.dev`, et qui demande le cadre du host (`prefersBorder`).
+
+- ⚠️ **Par instance, jamais par tenant** : `OTO_PROCEDURE_APP_BUNDLE` (l'URL du
+  `….js`, sa feuille `.css` à côté) est l'adresse ET l'interrupteur. Absente, ni outil ni
+  page — l'empreinte servie d'une instance sans front ne bouge pas.
+- **Il accepte `_org=` et `_group=`** comme `oto_procedure op=get` : écrit à la main, il ne
+  les recevait par aucun des deux mécanismes (ni capacité, ni tool de travail), et un
+  compte multi-org ne pouvait montrer que les procédures de son org maison. Il est nommé
+  dans `call_axes._LECTURES_D_ORG_ECRITES_A_LA_MAIN`.
+- **La poignée de main est écrite à la main côté front** (`ui/initialize`,
+  `size-changed`, `request-display-mode`, `resource-teardown`), méthodes et recette de
+  hauteur du SDK `@modelcontextprotocol/ext-apps` : sans `size-changed`, l'iframe reste à
+  la hauteur par défaut du host.
+- **Un chemin relatif du front se résout contre le bac à sable du host**, pas contre son
+  origine : le bundle rend absolus ses chemins d'images contre l'origine de son script.
+
+## Un tableau peint par un front — `data_app` (`OTO_DATA_APP_BUNDLE`)
+
+Même montage que le graphe : `tools/datastore_table_app.py` enregistre `data_app` avec
+une page ui:// qui charge le bundle déclaré par `OTO_DATA_APP_BUNDLE` (adresse ET
+interrupteur, par instance). Déclaré, la carte Prefab de `tools/datastore.py` se retire
+— un seul `data_app`, jamais deux enregistrements du même nom ; absent, rien ne change.
+
+- **Un outil, un gabarit** : le bundle peint TOUTES les réponses de `data_app` — les
+  lignes d'un tableau (`view: "table"`), la liste des tableaux (`"tables"`), une note
+  (`"note"` : tableau inconnu). La carte Prefab ne peut pas servir une branche et le
+  bundle une autre.
+- **L'agent choisit** les colonnes (`fields`, dans son ordre) et la page (`limit`, 25
+  par défaut, 200 au plus) ; tri, filtre, recherche et page suivante sont des
+  arguments, même grammaire que `data_rows` (un curseur ne passe jamais d'un régime de
+  tri à l'autre). La vue ne trie rien elle-même : une page triée n'est pas le tableau
+  trié.
+- **Deux canaux** : les lignes vont à la vue (`structuredContent`), le modèle lit une
+  ligne. Un client qui ne peint pas les apps reçoit les lignes en texte — il a demandé
+  à les voir, rien d'autre ne les montrera.
+- **Lecture seule**, et les colonnes gardées des agents (`agent_access`) absentes comme
+  partout sur la face agent ; la vue en dit le nombre (`hidden_columns`), jamais le nom.

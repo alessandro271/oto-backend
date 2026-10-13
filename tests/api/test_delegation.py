@@ -83,6 +83,14 @@ def org(live):
     return {"id": oid, "membre": membre}
 
 
+@pytest.fixture(scope="module")
+def worker(live):
+    """Un worker de PLATEFORME (secret de machine) : depuis le 10/10/2026, lui seul
+    réserve le travail d'un autre porteur — un membre ne prend que les siens."""
+    from oto_mcp import db
+    return db.create_platform_worker("banc délégation")["secret"]
+
+
 _DEFAUT = object()   # ⚠️ sentinelle : `None` est une VALEUR ici (pas de porteur
                      # connu), pas une absence d'argument. Les confondre rendait
                      # le cas « travail ancien » intestable — le test passait le
@@ -133,7 +141,7 @@ def test_le_jeton_delegue_EXPIRE_avec_le_bail(client, org):
     assert row and row["borne"], "jeton de délégation SANS échéance"
 
 
-def test_un_porteur_sans_role_arrete_le_travail_EN_LE_DISANT(client, org):
+def test_un_porteur_sans_role_arrete_le_travail_EN_LE_DISANT(client, org, worker):
     """Les deux moitiés comptent : le travail s'arrête, **et** la raison est
     écrite. Un arrêt muet et un travail qui boucle se ressemblent de l'extérieur."""
     from oto_mcp import db, org_store
@@ -144,7 +152,7 @@ def test_un_porteur_sans_role_arrete_le_travail_EN_LE_DISANT(client, org):
     job = _enfile(client, org, porteur=parti)
     org_store.remove_org_member(org["id"], parti)   # rôle retiré
 
-    r = client.post(ROUTE, headers=_h(org["membre"]),
+    r = client.post(ROUTE, headers=_h(worker),
                     json={"op": "claim", "lease_seconds": 60})
     assert r.status_code == 200, r.text
     rendu = r.json()["job"]
@@ -159,7 +167,7 @@ def test_un_porteur_sans_role_arrete_le_travail_EN_LE_DISANT(client, org):
     assert "identité invalide" in (en_base["last_error"] or "")
 
 
-def test_un_travail_sans_porteur_connu_est_REFUSE(client, org):
+def test_un_travail_sans_porteur_connu_est_REFUSE(client, org, worker):
     """⚠️ Renversement assumé du 05/09/2026. Ce banc disait « ce n'est pas un
     refus, c'est une absence » : les travaux d'avant le 02/09 n'ont pas de
     demandeur, on n'en inventait pas, et le worker retombait sur son propre
@@ -174,7 +182,7 @@ def test_un_travail_sans_porteur_connu_est_REFUSE(client, org):
 
     Une absence de porteur est donc bien un refus, et il s'écrit en base."""
     _enfile(client, org, porteur=None)
-    r = client.post(ROUTE, headers=_h(org["membre"]),
+    r = client.post(ROUTE, headers=_h(worker),
                     json={"op": "claim", "lease_seconds": 60})
     job = r.json()["job"]
     assert job["sub"] is None
@@ -185,6 +193,27 @@ def test_un_travail_sans_porteur_connu_est_REFUSE(client, org):
     en_base = db.get_job(job["id"], org["id"])
     assert en_base["status"] == "failed", (
         "le refus se pose EN BASE : sinon le travail repart au worker suivant")
+
+
+def test_un_membre_ne_reserve_PAS_le_travail_d_un_collegue(client, org, worker):
+    """Le jeton émis est au nom du PORTEUR du travail : un collègue qui le
+    réservait repartait avec un jeton qui agit au nom de l'autre."""
+    from oto_mcp import db, org_store
+
+    collegue = "usr_deleg_collegue"
+    db.upsert_user(collegue, email=f"{collegue}@deleg.invalid", name=collegue)
+    org_store.add_org_member(org["id"], collegue, "org_member")
+    org_store.set_active_org(collegue, org["id"])
+    job = _enfile(client, org)          # porté par le demandeur
+    r = client.post(ROUTE, headers=_h(collegue),
+                    json={"op": "claim", "lease_seconds": 60})
+    assert r.status_code == 200, r.text
+    assert r.json()["job"] is None, "le collègue a reçu le travail — et son jeton"
+    assert db.get_job(job["id"], org["id"])["status"] == "pending"
+    # Le porteur, lui, le prend.
+    r = client.post(ROUTE, headers=_h(org["membre"]),
+                    json={"op": "claim", "lease_seconds": 60})
+    assert r.json()["job"]["id"] == job["id"]
 
 
 def test_une_file_vide_ne_delegue_rien_et_ne_casse_pas(client, org):

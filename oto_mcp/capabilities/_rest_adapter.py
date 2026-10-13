@@ -205,9 +205,7 @@ def _make_handler(cap: Capability, binding, verifier, authenticate, json_respons
         # dans une route. `finally` obligatoire : une ContextVar non reset fuit sur
         # la requête suivante servie par la même tâche.
         jeton_client = client_trace.set_current(
-            ip=client_trace.pick_ip(request.headers.get("cf-connecting-ip"),
-                                    request.headers.get("x-forwarded-for"),
-                                    request.client.host if request.client else None),
+            ip=client_trace.ip_de_requete(request),
             user_agent=request.headers.get("user-agent"))
         # Le GESTE de la requête (oto#273), autour du handler comme l'empreinte : QUI
         # écrit et par quel porteur, tel que l'authentification l'a résolu
