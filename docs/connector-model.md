@@ -113,6 +113,31 @@ La plupart des connecteurs n'ont que **1 + 2**. Seuls les **connecteurs à optio
   toute l'org. La table `connector_acl` n'est plus lue ; elle part par la révision
   `0053_connector_acl_retiree`, qui exige d'abord son export attesté (oto-backend#1169,
   `docs/connector-vault.md` §« Retirer connector_acl »).
+- **Clé perso interdite, par connecteur et par org (13/10/2026, oto-backend#1239).** Un admin
+  d'org déclare « pour `<connecteur>`, pas de clé perso dans cette org »
+  (`PUT /api/orgs/{id}/connectors/{name}/personal-key-policy` `{forbidden}`, lu par
+  `GET /api/orgs/{id}/connectors/personal-key-policy`, capacités
+  `connectors.personal_key_policy.{set_org,org_list}`, `ORG_ADMIN_OF`). Ce n'est PAS la
+  restriction par membre ci-dessus : personne n'est nommé, la politique retire le **palier
+  membre** de la cascade pour toute l'org. Restent résolues les clés partagées : équipe du
+  membre, org, tenant, clé incluse (clé plateforme accordée). Effets :
+  - **à l'appel** : le walker et la chaîne sautent la clé perso (y compris l'instance
+    perso cross-org), lue à sa source (`connectors/cle_perso.interdite`) seulement quand une
+    clé perso existe ; quand plus rien ne sert, la résolution lève `personal_key_forbidden`
+    (`ClePersoInterdite`) — le refus nomme l'org et la politique, et renvoie vers un admin
+    de l'org, jamais « aucune clé ». Une instance perso désignée (`_instance=`, binding de
+    projet) est refusée de même ;
+  - **à la connexion** : `activation_gate.exiger_connectable(…, perso=True)` refuse
+    `personal_key_forbidden` avant tout consentement (flux communs : `perso` sauf
+    `scope` org|group ; Google selon son `scope` ; Live View au `finalize` perso) ; la pose
+    d'une clé perso (`me.credential.set`) refuse 403 `personal_key_forbidden` ;
+  - **l'activation ne bouge pas** : le connecteur reste exposé ; c'est la résolution qui
+    refuse.
+  Stockage : une ligne `connector_settings` (scope `org`, clé `personal_key`, valeur
+  `forbidden`, connecteur = PORTEUR du credential) — aucune migration. Lue à la demande
+  (clé primaire), pas d'instantané : une politique posée vaut sur toutes les couleurs dès
+  l'appel suivant. **Réserver un connecteur à une équipe** = cette politique + la clé posée
+  sur l'équipe (ou la clé incluse accordée à l'équipe).
 
 ## Couche 2 — Authentification (quelle clé ?)
 

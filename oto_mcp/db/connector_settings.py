@@ -22,6 +22,12 @@ client suivant, sans que chacune ait à recharger.
 La question à poser en ajoutant un lecteur n'est donc pas « boot ou appel ? » mais
 **« à quelle fréquence, et dans la boucle ? »** — un lecteur chaud prend l'instantané,
 un lecteur froid hors boucle peut lire la table.
+
+La politique « clé perso interdite » d'une org (`connectors.cle_perso`, #1239) se lit à
+l'APPEL, dans la traversée des clés (`org_settings_for_key`) — une lecture indexée par
+org, seulement quand une clé perso existe, mémorisée pour tout l'appel (`status_for`
+traverse chaque connecteur), sur le chemin de résolution qui lit déjà le coffre. Sans instantané, exprès : une politique de sécurité posée sur une couleur doit
+valoir sur toutes dès l'appel suivant, ce que l'instantané par process ne donne pas.
 """
 from __future__ import annotations
 
@@ -101,6 +107,19 @@ def clear_connector_setting(scope_type: str, scope_id: str, connector: str,
             "AND connector = %s AND key = %s",
             (scope_type, str(scope_id), connector, key))
     return (cur.rowcount or 0) > 0
+
+
+@lecture_d_appel
+def org_settings_for_key(org_id: str, key: str) -> dict:
+    """`{connecteur: valeur}` des surcharges `key` posées par UNE org — une requête pour
+    tous ses connecteurs. Mémorisée par appel (`lecture_d_appel`) : `status_for` traverse
+    la cascade de chaque connecteur, et la politique de clé perso (#1239) ne doit pas y
+    coûter une requête par connecteur."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT connector, value FROM connector_settings WHERE scope_type = 'org' "
+            "AND scope_id = %s AND key = %s", (str(org_id), key)).fetchall()
+    return {r["connector"]: r["value"] for r in rows}
 
 
 def get_connector_setting(scope_type: str, scope_id: str, connector: str,

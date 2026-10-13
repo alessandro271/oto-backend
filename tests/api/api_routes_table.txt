@@ -443,6 +443,10 @@ PUT /api/orgs/{id}/connectors/{name}/activation -> _handler
 OPTIONS /api/orgs/{id}/connectors/{name}/activation -> options_handler
 DELETE /api/orgs/{id}/connectors/{name}/activation -> _handler
 OPTIONS /api/orgs/{id}/connectors/{name}/activation -> options_handler
+GET,HEAD /api/orgs/{id}/connectors/personal-key-policy -> _handler
+OPTIONS /api/orgs/{id}/connectors/personal-key-policy -> options_handler
+PUT /api/orgs/{id}/connectors/{name}/personal-key-policy -> _handler
+OPTIONS /api/orgs/{id}/connectors/{name}/personal-key-policy -> options_handler
 GET,HEAD /api/admin/connectors/activation -> _handler
 OPTIONS /api/admin/connectors/activation -> options_handler
 POST /api/admin/connectors/activation -> _handler

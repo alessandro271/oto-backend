@@ -216,6 +216,18 @@ def _org_active_sans_base(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _cle_perso_permise_sans_base(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sans base, aucune org n'interdit la clé perso. La traversée lit la politique
+    (`connectors.cle_perso`, #1239) dès qu'une clé perso existe ; un banc qui double le
+    coffre membre sans base n'a rien à y lire. Un banc sur base réelle lit la vraie
+    ligne ; un banc qui teste la politique la double lui-même."""
+    if os.environ.get("DATABASE_URL"):
+        return
+    from oto_mcp.connectors import cle_perso
+    monkeypatch.setattr(cle_perso, "interdite", lambda org_id, connector: False)
+
+
+@pytest.fixture(autouse=True)
 def _aucun_pret_sans_base(monkeypatch: pytest.MonkeyPatch) -> None:
     """Sans base, aucune instance n'est prêtée. Le palier équipe lit les instances
     prêtées à l'équipe (`group_store.lent_instances` → `list_shared_with`) à chaque

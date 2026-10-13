@@ -21,7 +21,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import (providers, credentials_store, db, grants_chain, group_store, org_store,
                 tenant_vault)
-from ..connectors import cardinality
+from ..connectors import cardinality, cle_perso
 from . import heritage, platform_grant, secret_repr
 
 # DERIVED from the single-source registry (`providers/` package): providers whose
@@ -361,9 +361,11 @@ def walk_cascade(sub: Optional[str], provider: str, *, org: Optional[int],
     # access): the context one, except for a beneficiary outside the org to whom
     # nothing was lent.
     org_cles = heritage.org_partagee(org, cles)
+    # A PERSONAL key is skipped when the org forbids it for this connector (#1239) — read
+    # only once one exists, so a keyless member pays nothing. Same rule in the chain.
     if sub is not None and org is not None and providers.is_byo_user(provider):
         hit = probe.member(sub, org, provider)
-        if hit is not None:
+        if hit is not None and not cle_perso.interdite(org, provider):
             payload, account = hit
             yield CascadeRung("user", credentials_store.MEMBER,
                               credentials_store.member_id(org, sub), payload, account)
@@ -383,7 +385,7 @@ def walk_cascade(sub: Optional[str], provider: str, *, org: Optional[int],
                 payload, account = probe.member(sub, pio, provider) or (None, "")
             else:
                 payload, account = probe.member_cross(sub, pio, provider), ""
-            if payload is not None:
+            if payload is not None and not cle_perso.interdite(org, provider):
                 yield CascadeRung("user", credentials_store.MEMBER,
                                   credentials_store.member_id(pio, sub), payload,
                                   account, via="cross_org")

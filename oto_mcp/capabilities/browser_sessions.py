@@ -109,9 +109,11 @@ def _session_connector(name: str):
 
 async def _start(ctx: ResolvedCtx, inp: SessionStartInput) -> dict:
     browser_session = _session_connector(inp.name)
-    # A cut connector opens no Live View: refused before the session is created.
+    # A cut connector opens no Live View: refused before the session is created. The
+    # tier (member, team, org) is only chosen at `finalize`: the org's personal-key
+    # policy (#1239) is read there.
     from ..connectors.activation_gate import exiger_connectable_capacite
-    await asyncio.to_thread(exiger_connectable_capacite, inp.name, ctx.sub)
+    await asyncio.to_thread(exiger_connectable_capacite, inp.name, ctx.sub, perso=False)
     from .. import browserbase
     url = (inp.url or "").strip() or None
     viewport = browserbase.clamp_viewport(inp.width, inp.height)
@@ -131,6 +133,10 @@ async def _finalize(ctx: ResolvedCtx, inp: SessionFinalizeInput) -> dict:
     if scope not in _SCOPES:
         raise AuthzDenied(400, "invalid_scope")
     group_id = None
+    if scope == "member":
+        # Une session PERSO ne se pose pas si l'org l'interdit pour ce connecteur (#1239).
+        from ..connectors.activation_gate import exiger_connectable_capacite
+        await asyncio.to_thread(exiger_connectable_capacite, inp.name, ctx.sub)
     if scope in ("org", "group"):
         # ⚠️ Ordre des refus PRÉSERVÉ : contexte manquant (400) avant partageabilité
         # du connecteur (400) avant droit d'admin (403).

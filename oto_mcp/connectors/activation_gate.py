@@ -36,7 +36,7 @@ from starlette.concurrency import run_in_threadpool
 from .. import access, call_axes, org_suspension, providers
 from ..mcp_errors import McpError
 from ..tool_visibility import namespace_of
-from . import activation
+from . import activation, cle_perso
 
 CODE = "connector_disabled"
 
@@ -111,7 +111,8 @@ def _refus(connector: str) -> Optional[ErrorData]:
 
 
 class ConnecteurCoupe(Exception):
-    """A connection was asked for a connector cut for the caller (`connector_disabled`).
+    """A connection was asked for a connector cut for the caller (`connector_disabled`),
+    or for a personal key the org forbids for it (`personal_key_forbidden`, #1239).
 
     Raised BEFORE any consent URL is built and before anything is written: a cut
     connector must not be connectable either — through the API, a card or its own
@@ -120,24 +121,34 @@ class ConnecteurCoupe(Exception):
     for a closed list of services, that consent asked for scopes outside the list.
     Each entry point translates it into its own refusal type, with the same code."""
 
-    def __init__(self, connector: str, message: str, details: dict):
+    def __init__(self, connector: str, message: str, details: dict, code: str = CODE):
         super().__init__(message)
         self.connector = connector
-        self.code = CODE
+        self.code = code
         self.message = message
         self.details = details
 
 
-def exiger_connectable(connector: str, sub: Optional[str]) -> None:
+def exiger_connectable(connector: str, sub: Optional[str], *, perso: bool = True) -> None:
     """Sync: raises `ConnecteurCoupe` if `connector` is cut for the org and team under
     which `sub` acts — the SAME resolution as the call guard (`access.current_org` /
-    `current_group`, view and call axes included). Without a sub, nothing is guarded."""
+    `current_group`, view and call axes included). Without a sub, nothing is guarded.
+
+    `perso`: the connection writes a PERSONAL key (member tier) — the default, true of
+    every flow but a shared Google/Salesforce/WordPress account (`scope` org|group). The
+    org may forbid personal keys for this connector (#1239): refused `personal_key_forbidden`
+    before any consent, since resolution would never serve the key."""
     if not sub:
         return
     org = access.current_org(sub)
     group = access.current_group(sub)
     coupure = _coupure(connector, org, group)
     if coupure is None:
+        if perso and cle_perso.interdite(org, connector):
+            raise ConnecteurCoupe(
+                connector, cle_perso.texte_refus(org, connector, cle_perso.A_LA_CONNEXION),
+                {"connector": cle_perso.porteur(connector), "org_id": org},
+                code=cle_perso.CODE)
         return
     cran, pourquoi, geste = coupure
     raise ConnecteurCoupe(
@@ -148,14 +159,15 @@ def exiger_connectable(connector: str, sub: Optional[str]) -> None:
     )
 
 
-def exiger_connectable_capacite(connector: str, sub: Optional[str]) -> None:
+def exiger_connectable_capacite(connector: str, sub: Optional[str], *,
+                                perso: bool = True) -> None:
     """`exiger_connectable` for a capability handler: the refusal is an `AuthzDenied`
     403 with the same code, its structure in `details`."""
     from ..capabilities._types import AuthzDenied
     try:
-        exiger_connectable(connector, sub)
+        exiger_connectable(connector, sub, perso=perso)
     except ConnecteurCoupe as e:
-        raise AuthzDenied(403, CODE, e.message, details=e.details) from None
+        raise AuthzDenied(403, e.code, e.message, details=e.details) from None
 
 
 async def require_active(tool_name: str) -> None:

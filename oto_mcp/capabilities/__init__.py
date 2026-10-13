@@ -78,6 +78,7 @@ from . import me_abonnements  # noqa: F401 — me.model_subscriptions.{list,remo
 from . import browser_sessions  # noqa: F401 — me.browser_session.{start,finalize}
 # Plafond DUR d'org (ADR 0022) — override d'activation per-org, éditable org_admin.
 import oto_mcp.capabilities.connectors.activation  # noqa: F401 — connectors.activation.{org_list,set_org,clear_org}
+import oto_mcp.capabilities.connectors.cle_perso  # noqa: F401 — connectors.personal_key_policy.{org_list,set_org} (#1239)
 # Palier PLATEFORME de la même famille (#121) — cran d'activation global + accès
 # plateforme (ADR 0010 B4, ADR 0044 §H). Ex-routes écrites à la main : les paliers org
 # et équipe étaient déjà des capacités, c'est l'étage qui manquait.

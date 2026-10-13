@@ -28,6 +28,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 from .. import links
 from .. import (providers, credentials_store, db, group_store, instance_refs, org_store,
                 session_org, tenant_vault)
+from ..connectors import cle_perso
 from . import (cascade, chain_shadow, heritage, indices, platform_rate, quotas, rbac,
                resolve_anon, scope, tenant_budget)
 from .resolved_credential import ResolvedCredential
@@ -299,10 +300,7 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
             raise _not_found(eff, mprov)
         return (key, eff) if key else None
 
-    # Single walk of the cascade (walker) — the fetch probe only decrypts the
-    # winner; the member tier carries the multi-account selection above.
-    # `group` passed LAZILY: the active team (DB lookup) is only resolved if
-    # no closer rung has won.
+    # Single walk (only the winner is decrypted); `group` LAZY: resolved only if needed.
     probe = cascade.CascadeProbe(member=_member_fetch, member_cross=cascade.FETCH_PROBE.member_cross,
                          legacy_user=cascade.FETCH_PROBE.legacy_user,
                          group=_group_fetch, org=_org_fetch, tenant=_tenant_fetch,
@@ -314,6 +312,9 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
         provider, sub, active_org, probe=probe, want=want,
         group=lambda: scope.current_group(sub))
 
+    # The org forbids personal keys here (#1239) and nothing shared serves: say so.
+    if win is None or (named_account and win.mode == "platform"):
+        cle_perso.refuser_si_interdite(active_org, porteur, cle_perso.A_L_APPEL)
     # Post-walk guard (review #399 F2): a NAMED account (param/axis/pin)
     # that won at NO keyed tier raises "not found" — never a PLATFORM key
     # silently (the platform tier has no accounts: answering there
@@ -338,9 +339,7 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
                     + heritage.indice_refus(sub, active_org, provider)
                 ),
             ))
-        # Defense in depth: the platform tier only exists if the registry
-        # ALLOWS `platform` (gate INSIDE the walker) — a byo-only provider is
-        # NEVER resolved via a residual platform key (audited 2026-06-11).
+        # The platform tier only exists if the registry ALLOWS it (gate in the walker).
         raise CredentialUnavailable(ErrorData(
             code=INVALID_PARAMS,
             # The key is set on the CARRIER (delegation): sending someone to
@@ -474,6 +473,7 @@ def _resolve_pinned_instance(provider: str, sub: str, ref) -> ResolvedCredential
         # existed, it was just looked up under the wrong identity.
         etype, eid = credentials_store.MEMBER, credentials_store.member_id(ref.org_id, ref.sub)
         mode = "user"
+        cle_perso.refuser_si_interdite(ref.org_id, provider, cle_perso.A_L_INSTANCE)  # #1239
     elif ref.level == "group":
         etype, eid, mode = "group", str(ref.group_id), "group"
     elif ref.level == "org":

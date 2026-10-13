@@ -153,9 +153,12 @@ async def start(connector: str, ctx, values: dict) -> FlowStart:
     # A connector CUT for the caller (`connector_availability`, any tier) opens no
     # consent: refused here, before the flow builds anything — one guard for every
     # declared flow, the same reading of the cut as the call guard.
+    # A flow writes a PERSONAL key unless it says `scope` org|group (Google, Salesforce,
+    # WordPress): the org may forbid those for this connector (#1239).
     from .activation_gate import exiger_connectable_capacite
     await asyncio.to_thread(exiger_connectable_capacite, connector,
-                            getattr(ctx, "sub", None))
+                            getattr(ctx, "sub", None),
+                            perso=((values or {}).get("scope") or "member") == "member")
     fabrique = _FLOWS[connector].start
     if inspect.iscoroutinefunction(fabrique):
         # A flow can be ASYNCHRONOUS — that of a hosted messaging service queries the

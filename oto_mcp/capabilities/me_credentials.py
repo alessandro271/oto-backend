@@ -389,6 +389,12 @@ def _set_preparer(ctx: ResolvedCtx, inp: CredentialSetInput) -> _PoseCredentiell
     # Scope MEMBRE (ADR 0033) : la clé est posée DANS l'org de contexte — poser en
     # consultant une org, c'est scoper cette org.
     org_id = _org_of(ctx.sub)
+    # L'org peut interdire la clé perso pour ce connecteur (#1239) : la poser ne
+    # servirait jamais, la résolution la saute. Refus nommé, avant toute écriture.
+    from ..connectors import cle_perso
+    if cle_perso.interdite(org_id, inp.provider):
+        raise AuthzDenied(403, "personal_key_forbidden", cle_perso.texte_refus(
+            org_id, inp.provider, cle_perso.A_LA_CONNEXION))
     eid = credentials_store.member_id(org_id, ctx.sub)
     # Écriture PARTIELLE (#448) : les champs absents du corps sont complétés par le
     # coffre, côté serveur. Un champ envoyé vide reste vide — c'est un effacement
@@ -651,6 +657,9 @@ CAPABILITIES += [
                 DeclaredError(400, "verify_failed",
                               "la clé a été refusée par le service : elle n'est PAS "
                               "enregistrée, il n'y a rien à retirer"),
+                DeclaredError(403, "personal_key_forbidden",
+                              "l'org interdit la clé perso pour ce connecteur : seule "
+                              "une clé d'équipe, d'org ou la clé incluse y sert"),
                 DeclaredError(409, "account_required",
                               "connecteur multi-compte sans `account` : il faut "
                               "nommer le compte, sans quoi la pose est ambiguë"),

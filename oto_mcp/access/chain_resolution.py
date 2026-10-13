@@ -18,7 +18,9 @@ what we install with what we throw away.
 
 There is no restriction on top: 0053-D1 — restricting means PLACING
 ownership at the right level, never laying a prohibition on top (the `connector_acl`
-table has not been read since 2026-09-24).
+table has not been read since 2026-09-24). The org's personal-key policy (#1239,
+`connectors.cle_perso`) is not one either: it names nobody, it removes the MEMBER tier
+from the traversal for everyone in the org, read at its source like the other notches.
 
 **Two method rules, held mechanically:**
 
@@ -40,6 +42,7 @@ from typing import Optional
 
 from .. import (credentials_store, grants_chain, group_store, org_store, providers,
                 tenant_vault)
+from ..connectors import cle_perso
 from ..db import grants as db_grants
 from . import heritage, scope
 
@@ -175,7 +178,8 @@ def _paliers(sub: str, provider: str, org: Optional[int], want: str,
                 credentials_store.MEMBER, credentials_store.member_id(org, sub),
                 porteur, account=None)
                 and not credentials_store.instance_suspended(
-                    credentials_store.MEMBER, credentials_store.member_id(org, sub), porteur)):
+                    credentials_store.MEMBER, credentials_store.member_id(org, sub), porteur)
+                and not cle_perso.interdite(org, porteur)):   # the org's policy (#1239)
             # The free-tier flag is only used if the chain stays silent.
             yield ChainPick("user", credentials_store.MEMBER,
                             credentials_store.member_id(org, sub))
