@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import contextvars
 import ipaddress
+import logging
 import os
 from typing import Optional
 
@@ -31,6 +32,8 @@ from typing import Optional
 # mieux tronquée qu'absente.
 MAX_USER_AGENT = 512
 
+logger = logging.getLogger(__name__)
+
 _CLIENT: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
     "oto_client_trace", default=None)
 
@@ -40,6 +43,10 @@ VIDE = {"ip": None, "user_agent": None}
 #: Les réseaux des proxies dont on croit les en-têtes d'adresse. Lus UNE fois, au
 #: démarrage (`verifier_configuration`) ; `None` = pas encore lus.
 _RESEAUX: Optional[tuple] = None
+
+#: Le pair en boucle locale sans proxy déclaré a-t-il déjà été signalé ? Une fois par
+#: processus : c'est un défaut de déploiement, pas un événement par requête.
+_BOUCLE_SIGNALEE = False
 
 
 class ProxiesDeConfianceInvalides(RuntimeError):
@@ -92,6 +99,27 @@ def _de_confiance(adresse: str, reseaux: tuple) -> bool:
     return any(ip in r for r in reseaux)
 
 
+def _signaler_boucle_sans_reglage(pair: str) -> None:
+    """Un pair en boucle locale alors qu'aucun proxy n'est déclaré : le processus est
+    presque sûrement derrière un proxy de la box, et TOUTES ses requêtes portent alors
+    la même adresse — un seul seau pour chaque borne par adresse (relais
+    d'autorisation, limite de débit, projets publiés). Le comportement reste le sûr
+    (le pair TCP) ; on le dit fort, une fois."""
+    global _BOUCLE_SIGNALEE
+    if _BOUCLE_SIGNALEE:
+        return
+    try:
+        boucle = ipaddress.ip_address(pair).is_loopback
+    except ValueError:
+        return
+    if boucle:
+        _BOUCLE_SIGNALEE = True
+        logger.error(
+            "OTO_PROXIES_DE_CONFIANCE est vide et le pair TCP est en boucle locale : "
+            "toutes les requêtes partagent l'adresse du proxy, donc un seul seau par "
+            "borne d'adresse. Déclarer le proxy (ex. 127.0.0.1/32,::1/128).")
+
+
 def pick_ip(cf_connecting_ip: Optional[str], x_forwarded_for: Optional[str],
             peer: Optional[str]) -> Optional[str]:
     """L'IP réelle du client — la RÈGLE UNIQUE du dépôt (#1232).
@@ -118,6 +146,8 @@ def pick_ip(cf_connecting_ip: Optional[str], x_forwarded_for: Optional[str],
     pair = (peer or "").strip() or None
     reseaux = _reseaux()
     if pair is None or not _de_confiance(pair, reseaux):
+        if not reseaux and pair is not None:
+            _signaler_boucle_sans_reglage(pair)
         return pair
     if cf_connecting_ip and cf_connecting_ip.strip():
         return cf_connecting_ip.strip()

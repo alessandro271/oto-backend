@@ -18,6 +18,7 @@ def _poser(monkeypatch, valeur):
     else:
         monkeypatch.setenv("OTO_PROXIES_DE_CONFIANCE", valeur)
     monkeypatch.setattr(ct, "_RESEAUX", None)
+    monkeypatch.setattr(ct, "_BOUCLE_SIGNALEE", False)
 
 
 @pytest.mark.parametrize("valeur", [None, "", " , "])
@@ -79,3 +80,22 @@ def test_ip_de_requete_lit_une_requete_starlette(monkeypatch):
     req = Request({"type": "http", "headers": [(b"cf-connecting-ip", CLIENT.encode())],
                    "client": None})
     assert ct.ip_de_requete(req) is None
+
+
+def test_boucle_locale_sans_reglage_signalee_une_fois(monkeypatch, caplog):
+    """Derrière le proxy de la box sans réglage, tout porte 127.0.0.1 : le défaut de
+    déploiement se dit fort, une seule fois, et le comportement reste le pair TCP."""
+    _poser(monkeypatch, None)
+    with caplog.at_level("ERROR", logger=ct.__name__):
+        assert ct.pick_ip(CLIENT, AUTRE, "127.0.0.1") == "127.0.0.1"
+        assert ct.pick_ip(CLIENT, AUTRE, "::1") == "::1"
+    signalements = [r for r in caplog.records if "OTO_PROXIES_DE_CONFIANCE" in r.getMessage()]
+    assert len(signalements) == 1
+
+
+def test_pair_public_sans_reglage_ne_signale_rien(monkeypatch, caplog):
+    _poser(monkeypatch, None)
+    with caplog.at_level("ERROR", logger=ct.__name__):
+        assert ct.pick_ip(CLIENT, AUTRE, "192.0.2.50") == "192.0.2.50"
+        assert ct.pick_ip(None, None, "testclient") == "testclient"
+    assert not [r for r in caplog.records if "OTO_PROXIES_DE_CONFIANCE" in r.getMessage()]
