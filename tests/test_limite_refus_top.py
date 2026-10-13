@@ -12,12 +12,21 @@ from datetime import date
 
 import pytest
 
+from oto_mcp import client_trace
 from oto_mcp import limite_debit as ld
 from oto_mcp import limite_refus_top as top
 
 A, B = "192.0.2.10", "198.51.100.20"
 T0 = 1_760_000_000.0      # 2025-10-09 08:53:20 UTC : une minute murale quelconque
 
+
+
+@pytest.fixture(autouse=True)
+def _proxy_de_la_box(monkeypatch):
+    """Les requêtes de ce banc arrivent du proxy de la box (pair `127.0.0.1`), déclaré
+    de confiance : son `CF-Connecting-IP` est l'adresse du client (#1232)."""
+    monkeypatch.setenv("OTO_PROXIES_DE_CONFIANCE", "127.0.0.1/32,::1/128")
+    monkeypatch.setattr(client_trace, "_RESEAUX", None)
 
 def test_le_palmares_cumule_par_cle_et_ne_rend_qu_a_la_minute_close():
     p = top.Palmares(top.DEBIT)

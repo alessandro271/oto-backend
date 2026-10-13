@@ -332,7 +332,13 @@ def resolve_org_field_policy(service: str) -> Optional[dict]:
     outils et ses tableaux à un tiers sans compte. C'est elle qui a posé la
     politique, et c'est là qu'elle compte le plus. Hors d'un tel endpoint, None."""
     sub = current_user_sub_from_token()
-    active_org = scope.current_org(sub)
+    if sub:
+        active_org = scope.current_org(sub)
+    else:
+        # Sans appelant, SEUL un endpoint publié porte une org : son propriétaire.
+        # Hors d'un tel endpoint, aucune — jamais une org persistée ou devinée.
+        from .. import subdomain_project
+        active_org = subdomain_project.current_anon_org()
     if active_org is None:
         return None
     return org_store.get_org_field_filters(active_org).get(service)
