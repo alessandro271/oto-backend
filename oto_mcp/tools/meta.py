@@ -93,8 +93,11 @@ async def resoudre_outil(fastmcp, name: str):
 # stopped filtering by tool name.
 # The `found_*` counters (contacts of a FullEnrich job where a value of each kind
 # was found) also BILL: they carry the per-result price.
+# `apify_run_id` (the Apify run whose final cost the call records) BILLS too: it is
+# the job the biller counts once — on the envelope it would name a second row for it.
 _BILLING_TRACE_KEYS = ("quantity", "key_mode",
-                       "found_work_emails", "found_personal_emails", "found_phones")
+                       "found_work_emails", "found_personal_emails", "found_phones",
+                       "apify_run_id")
 _UNSET = object()
 
 

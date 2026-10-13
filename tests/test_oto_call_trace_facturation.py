@@ -125,6 +125,30 @@ def test_l_enveloppe_garde_l_echo_mais_ne_porte_rien_qui_facture(monkeypatch, ba
     assert "key_mode" not in enveloppe and "quantity" not in enveloppe
 
 
+def test_le_job_releve_par_la_cible_reste_sur_sa_ligne(monkeypatch, banc):
+    """`apify_run_id` — le run dont l'appel relève le coût — est le JOB que le facturier
+    compte une fois. Sur la ligne cible il rejoint `args` ; recopié dans le relevé
+    enveloppe, il nommerait une seconde ligne pour le même job, sous `oto_call`."""
+    async def run(args):
+        session_org.note_call_trace(key_mode="platform", quantity=42100,
+                                    apify_run_id="run-apify-1",
+                                    resolved_connector="apify")
+        return {"content": []}
+
+    _cible(monkeypatch, run)
+    outer: dict = {}
+    _appeler(outer, name="apify_run_status", arguments={}, _org=178)
+
+    (ligne,) = banc
+    assert (ligne["tool"], ligne["quantity"]) == ("apify_run_status", 42100)
+    assert ligne["args"]["apify_run_id"] == "run-apify-1"
+    assert "apify_run_id" not in outer and outer.get("resolved_connector") == "apify"
+    from oto_mcp import server
+    enveloppe = calllog.apply_call_trace({"tool": "oto_call", "args": {}}, outer,
+                                         server._TRACED_ARGS)
+    assert "apify_run_id" not in enveloppe["args"] and "quantity" not in enveloppe
+
+
 def test_une_cible_en_echec_trace_quand_meme_sous_la_bonne_org(monkeypatch, banc):
     async def run(args):
         session_org.note_call_trace(key_mode="platform")
