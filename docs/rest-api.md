@@ -375,8 +375,11 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   grant** : `beneficiaries` ne dit alors plus la population servie. Chaque bénéficiaire
   porte `daily_quota`, le quota du grant de clé lu dans `meta.rate_limit_by` de
   l'instance (`null` = aucun quota, ou pas de clé) ; ⚠️ `platform_revoke` l'efface, donc
-  le relever AVANT de révoquer pour ré-accorder à l'identique, et un connecteur par
-  chaîne (`grants_chain`) garde le sien sur l'arête, non rapporté ici. Lecture =
+  le relever AVANT de révoquer pour ré-accorder à l'identique. Un connecteur par
+  chaîne (`grants_chain`) accorde par ARÊTE, jamais par `share_down` : la vue liste
+  alors chaque org ou membre qui en porte une VIVANTE (`has_key`, `daily_quota` = la
+  contrainte de l'arête) et le dit par `chain_grants: true` — sans quoi une clé fermée
+  d'un tel connecteur se lisait « ne sert personne » après un grant réussi. Lecture =
   `PLATFORM_ADMIN`, écriture = `SUPER_ADMIN`. Refus : `404 unknown_connector`,
   `400 invalid_body`, `404 unknown_org`/`unknown_user`, `400 no_platform_access`.
   **Pas de face MCP** : basculer le master global est un acte de déploiement, ouvrir un
