@@ -82,7 +82,10 @@ def _cors_headers(origin: str | None) -> dict[str, str]:
             # réponses fichier (PDF de facture, export ZIP) portent leur nom de
             # fichier LÀ et nulle part ailleurs. Non exposé, le front télécharge un
             # document qu'il ne peut pas nommer.
-            "Access-Control-Expose-Headers": "X-Oto-Version, Content-Disposition",
+            #
+            # `Retry-After` : les refus 503 `route_busy` et 429 disent combien
+            # attendre ; non exposé, un front ne peut que deviner son backoff.
+            "Access-Control-Expose-Headers": "X-Oto-Version, Content-Disposition, Retry-After",
             "Access-Control-Max-Age": "600",
             "Vary": "Origin",
         }
