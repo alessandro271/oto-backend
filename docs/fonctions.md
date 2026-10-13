@@ -119,8 +119,11 @@ code (#1202) : `oto_recipe` le sert aux recettes `kind: "code"` (`docs/recettes.
   sont attendus sur la boucle, sans fil ni SQL dans ce module.
 
 ⚠️ **Auteur ≠ appelant** : le code d'une recette publiée tourne avec les droits de qui
-l'exécute, pas de qui l'a écrite. Tant que la règle de publication n'est pas tranchée
-(#1202), le pont n'appelle que des outils en lecture.
+l'exécute, pas de qui l'a écrite. C'est pourquoi l'épreuve et la publication d'une
+recette-code restent à la plateforme (#1202). Le pont en lecture
+(`appeleur_en_lecture`) n'appelle que des outils en lecture ; une recette-code y ajoute
+les tableaux et, depuis le lot 3, les écritures chez un tiers qu'elle DÉCLARE, par une
+liste fermée (`recipes/ecritures.py`, `docs/recettes.md`).
 
 ## Où vit le bac à sable
 

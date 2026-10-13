@@ -192,3 +192,97 @@ def test_data_write_du_pont_n_ecrit_que_dans_le_tableau_de_l_execution(tableaux)
                           {"datastore": autre, "rows": [{"slug": "x"}], "key": "slug"})
     assert reponse["code"] == "write_outside_target"
     assert _lignes(autre) == [] and _journal("data_write", autre) == []
+
+
+# ── lot 3 : les écritures chez un tiers, par la liste fermée ──────────────────────────
+
+@pytest.fixture
+def crm(serveur, monkeypatch):
+    """Un faux CRM inscrit dans la liste fermée : `search` lit, `create` écrit."""
+    from oto_mcp.recipes import ecritures as ec
+    m, appels = serveur
+    monkeypatch.setitem(ec.ECRITURES, "acme_crm", ec.Ecriture(
+        frozenset({"search"}), frozenset({"create"})))
+
+    @m.tool()
+    def acme_crm(op: str = "search", name: str = "") -> dict:
+        appels.append(f"acme_crm:{op}")
+        return {"op": op, "id": f"rec-{name}"}
+    return m, appels
+
+
+def _ecrire(m, outil, arguments, *, ecrire=True, declarees=("acme_crm:create",),
+            max_ecritures=5, compteur=None):
+    from oto_mcp.recipes import pont
+    return asyncio.run(pont.appeleur_de_recette(
+        m, SUB, datastore=None, ecrire=ecrire, ecritures=frozenset(declarees),
+        max_ecritures=max_ecritures, compteur=compteur)(outil, arguments))
+
+
+def test_une_op_qui_lit_passe_sans_declaration_meme_en_epreuve(crm):
+    m, appels = crm
+    reponse = _ecrire(m, "acme_crm", {"op": "search", "name": "a"}, ecrire=False,
+                      declarees=())
+    assert reponse["ok"] and appels == ["acme_crm:search"]
+
+
+def test_une_ecriture_non_declaree_n_appelle_rien(crm):
+    m, appels = crm
+    assert _ecrire(m, "acme_crm", {"op": "create"}, declarees=())["code"] == \
+        "write_not_declared"
+    assert appels == []
+
+
+def test_une_ecriture_declaree_n_est_jamais_jouee_en_epreuve(crm):
+    m, appels = crm
+    assert _ecrire(m, "acme_crm", {"op": "create"}, ecrire=False)["code"] == "write_in_test"
+    assert appels == []
+
+
+def test_une_ecriture_declaree_est_appelee_comptee_et_journalisee(crm):
+    from oto_mcp.db._conn import _connect
+    from oto_mcp.recipes import pont
+    m, appels = crm
+    compteur = pont.compteur_neuf()
+    reponse = _ecrire(m, "acme_crm", {"op": "create", "name": "a"}, compteur=compteur)
+    assert reponse["ok"] and reponse["result"]["id"] == "rec-a"
+    assert appels == ["acme_crm:create"]
+    assert compteur == {"writes": {"acme_crm:create": 1}, "total": 1, "stopped": None}
+    with _connect() as conn:
+        lignes = conn.execute("SELECT ok FROM tool_calls WHERE sub = %s AND tool = %s "
+                              "AND args->>'op' = 'create'", (SUB, "acme_crm")).fetchall()
+    assert [r["ok"] for r in lignes][-1:] == [True]
+
+
+def test_une_op_absente_ou_destructrice_est_refusee(crm):
+    m, appels = crm
+    assert _ecrire(m, "acme_crm", {"name": "a"})["code"] == "write_op_not_allowed"
+    assert _ecrire(m, "acme_crm", {"op": "delete"})["code"] == "write_op_not_allowed"
+    assert appels == []
+
+
+def test_une_ecriture_reste_dans_l_org_du_run(crm):
+    m, appels = crm
+    for axe in ("_org", "_group", "_project"):
+        assert _ecrire(m, "acme_crm", {"op": "create", axe: 1})["code"] == \
+            "write_outside_run_org"
+    assert appels == []
+
+
+def test_le_plafond_d_ecritures_arrete_les_suivantes(crm):
+    from oto_mcp.recipes import pont
+    m, appels = crm
+    compteur = pont.compteur_neuf()
+    assert _ecrire(m, "acme_crm", {"op": "create"}, max_ecritures=1, compteur=compteur)["ok"]
+    refus = _ecrire(m, "acme_crm", {"op": "create"}, max_ecritures=1, compteur=compteur)
+    assert refus["code"] == "budget_exhausted"
+    assert compteur["stopped"] == "max_writes" and compteur["total"] == 1
+    # Une lecture du même outil n'est pas une écriture : le plafond ne la touche pas.
+    assert _ecrire(m, "acme_crm", {"op": "search"}, max_ecritures=1, compteur=compteur)["ok"]
+    assert appels == ["acme_crm:create", "acme_crm:search"]
+
+
+def test_un_outil_qui_ecrit_hors_liste_reste_refuse(crm):
+    m, appels = crm
+    assert _ecrire(m, "acme_post", {"text": "x"})["code"] == "recipe_tool_not_read_only"
+    assert appels == []

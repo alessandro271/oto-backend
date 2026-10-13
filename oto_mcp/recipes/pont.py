@@ -8,10 +8,12 @@ de plateforme ni outil à modèle, déclaré en lecture — refus nommé sinon) 
 run, journal sous le nom de l'outil, facturation, rédaction). L'identité est celle de
 l'appelant (`sub`) : le code qui tourne n'en a aucune à lui.
 
-Aucun outil de connecteur qui écrit : il est refusé ici, avant tout appel, comme pour une
-recette déclarative. Une recette-code (`appeleur_de_recette`) écrit seulement dans le
-tableau que son exécution désigne. L'ouverture à une liste fermée d'outils d'écriture
-attend la règle de publication (auteur ≠ appelant, #1202).
+Aucun outil de connecteur qui écrit pour une recette déclarative ni pour le pont en
+lecture : il est refusé ici, avant tout appel. Une recette-code (`appeleur_de_recette`)
+écrit dans le tableau que son exécution désigne et, depuis le lot 3, chez un tiers par
+les seuls outils de la liste fermée `recipes/ecritures.py` — les écritures qu'elle
+DÉCLARE (`writes`), jamais en épreuve, dans l'org du run, bornées par `max_writes`. Sa
+publication reste à la plateforme (auteur ≠ appelant, #1202).
 """
 from __future__ import annotations
 
@@ -19,6 +21,7 @@ from typing import Any, Optional
 
 from .. import redaction
 from ..mcp_errors import McpError
+from . import ecritures as ec
 from . import moteur
 
 
@@ -65,7 +68,20 @@ _ARGS_LIRE = frozenset({"datastore", "filter", "fields", "limit", "cursor"})
 _ARGS_ECRIRE = frozenset({"rows", "key", "datastore"})
 
 
-def appeleur_de_recette(fastmcp, sub: Optional[str], *, datastore: Any, ecrire: bool):
+#: Les jetons de contexte qu'une écriture chez un tiers ne prend pas : elle se fait dans
+#: l'org du run, jamais ailleurs. `_account` / `_instance` (quel compte du connecteur)
+#: restent permis.
+_AXES_HORS_RUN = frozenset({"_org", "_group", "_project"})
+
+
+def compteur_neuf() -> dict:
+    """L'état des écritures chez un tiers d'UNE exécution, lu par le reçu."""
+    return {"writes": {}, "total": 0, "stopped": None}
+
+
+def appeleur_de_recette(fastmcp, sub: Optional[str], *, datastore: Any, ecrire: bool,
+                        ecritures: frozenset = frozenset(), max_ecritures: int = 0,
+                        compteur: Optional[dict] = None):
     """L'`appeler` d'une recette-code (lot 2) : celui de la lecture, plus les tableaux.
 
     - `data_rows(datastore, filter?, fields?, limit?, cursor?)` : lire un tableau que
@@ -78,9 +94,15 @@ def appeleur_de_recette(fastmcp, sub: Optional[str], *, datastore: Any, ecrire: 
     (`meta.executer_cible`, comme tout outil du pont) : leurs gardes (droits sur le
     tableau, org suspendue, axes, org du run), leur ligne dans `tool_calls`, leur
     rédaction. Le pont ne fait que RÉTRÉCIR ce que le code peut leur passer (arguments,
-    tableau cible) ; il n'ouvre jamais le store lui-même. Tout autre nom suit
-    `appeleur_en_lecture`."""
+    tableau cible) ; il n'ouvre jamais le store lui-même.
+
+    Un outil de `ecritures.ECRITURES` (lot 3) : ses ops de lecture passent ; une op qui
+    écrit doit être dans `ecritures` (ce que la recette déclare), hors épreuve, sans
+    jeton qui l'emmène hors de l'org du run, et dans la limite de `max_ecritures` —
+    comptée À LA TENTATIVE (un délai dépassé a pu écrire). `compteur` reçoit les
+    comptes. Tout autre nom suit `appeleur_en_lecture`."""
     lecture = appeleur_en_lecture(fastmcp, sub)
+    etat = compteur if compteur is not None else compteur_neuf()
 
     async def appeler(outil: str, arguments: dict) -> dict:
         if outil == "data_rows":
@@ -102,7 +124,47 @@ def appeleur_de_recette(fastmcp, sub: Optional[str], *, datastore: Any, ecrire: 
                 return refus
             return await _outil_de_tableau(fastmcp, sub, outil,
                                            {**arguments, "datastore": datastore})
+        if outil in ec.ECRITURES:
+            return await _chez_un_tiers(outil, arguments)
         return await lecture(outil, arguments)
+
+    async def _chez_un_tiers(outil: str, arguments: dict) -> dict:
+        sens, nom = ec.juger(outil, arguments)
+        if sens == "refus":
+            return {"ok": False, "code": "write_op_not_allowed", "message": nom}
+        if sens == "ecrire":
+            refus = _refus_ecrire_chez_un_tiers(nom, arguments)
+            if refus:
+                return refus
+        from ..tools import meta
+        tool = await meta.resoudre_outil(fastmcp, outil)
+        if tool is None:
+            return {"ok": False, "code": "unknown_tool",
+                    "message": f"`{outil}` is not served by this instance."}
+        if sens == "ecrire":
+            etat["total"] += 1
+            etat["writes"][nom] = etat["writes"].get(nom, 0) + 1
+        return await _executer(tool, sub, outil, arguments)
+
+    def _refus_ecrire_chez_un_tiers(nom: str, arguments: dict) -> Optional[dict]:
+        if nom not in ecritures:
+            return {"ok": False, "code": "write_not_declared",
+                    "message": f"`{nom}` writes at the provider and this recipe does not "
+                               f"declare it (`writes`: {sorted(ecritures)}). Nothing was "
+                               "called."}
+        if not ecrire:
+            return {"ok": False, "code": "write_in_test",
+                    "message": f"A test writes nothing: `{nom}` only runs in `op=run`."}
+        hors = sorted(_AXES_HORS_RUN & set(arguments))
+        if hors:
+            return {"ok": False, "code": "write_outside_run_org",
+                    "message": f"A write lands in the run's org: leave {hors} out."}
+        if etat["total"] >= max_ecritures:
+            etat["stopped"] = etat["stopped"] or "max_writes"
+            return {"ok": False, "code": "budget_exhausted",
+                    "message": f"This run's write budget is spent (max_writes="
+                               f"{max_ecritures}). Nothing was called."}
+        return None
     return appeler
 
 

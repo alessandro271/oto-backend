@@ -73,6 +73,14 @@ def capa(compte, monkeypatch):
     @m.tool()
     def acme_post(text: str = "") -> dict:
         return {"posted": True}
+
+    # Un faux CRM : la liste fermée des écritures ne le connaît que dans les bancs du
+    # lot 3 (`crm`).
+    @m.tool()
+    def acme_crm(op: str = "search", name: str = "") -> dict:
+        crees.append((op, name))
+        return {"id": f"rec-{name}"} if op == "create" else {"items": []}
+    crees: list = []
     outils_tableaux.register(m)
     monkeypatch.setattr(tool_registry, "bound_instance", lambda: m)
     ctx = ResolvedCtx(sub=SUB, org_id=None)
@@ -80,6 +88,7 @@ def capa(compte, monkeypatch):
     def appeler(**kw):
         kw.setdefault("scope", "user")
         return asyncio.run(recipes._recipe(ctx, recipes.RecipeInput(**kw)))
+    appeler.crees = crees
     return appeler, plateforme
 
 
@@ -225,3 +234,89 @@ def test_une_recette_code_n_a_pas_de_reprise(capa):
     with pytest.raises(AuthzDenied) as e:
         appeler(op="run", slug=slug, params={"company": "acme"}, resume="abc")
     assert _code(e) == "resume_not_supported"
+
+
+# ── lot 3 : écrire chez un tiers ─────────────────────────────────────────────────────
+
+CODE_CRM = (
+    "async def run(oto, params):\n"
+    "    lu = await oto.call('acme_people', {'company': params['company']})\n"
+    "    crees, refus = 0, None\n"
+    "    for p in lu['content']:\n"
+    "        trouve = await oto.call('acme_crm', {'op': 'search', 'name': p['id']})\n"
+    "        if trouve['items']:\n"
+    "            continue\n"
+    "        try:\n"
+    "            await oto.call('acme_crm', {'op': 'create', 'name': p['id']})\n"
+    "            crees += 1\n"
+    "        except oto.ToolError as e:\n"
+    "            refus = e.code\n"
+    "            break\n"
+    "    return {'crees': crees, 'refus': refus}\n")
+
+
+@pytest.fixture
+def crm(capa, monkeypatch):
+    from oto_mcp.recipes import ecritures as ec
+    monkeypatch.setitem(ec.ECRITURES, "acme_crm", ec.Ecriture(
+        frozenset({"search"}), frozenset({"create"})))
+    return capa
+
+
+def _corps_crm(**autres) -> dict:
+    return {**_corps(CODE_CRM), "writes": ["acme_crm:create"], **autres}
+
+
+def test_le_contrat_des_ecritures(crm):
+    from oto_mcp.capabilities._types import AuthzDenied
+    appeler, _ = crm
+    for corps in (_corps_crm(writes=["acme_crm:delete"]),
+                  _corps_crm(writes=["acme_crm:search"]),
+                  _corps_crm(writes=["acme_crm:create", "acme_crm:create"]),
+                  _corps_crm(writes="acme_crm:create"),
+                  {**_corps_crm(), "limits": {"max_units": 50, "max_writes": 5000}},
+                  {**_corps(), "writes": ["lemlist_create_lead"]},
+                  {**_corps(), "writes": ["lemlist_create_lead"], "allow_sending": "yes"}):
+        with pytest.raises(AuthzDenied) as e:
+            appeler(op="create", slug=f"code-{uuid.uuid4().hex[:6]}", title="t", recipe=corps)
+        assert _code(e) == "invalid_recipe", corps
+    envoi = {**_corps(), "writes": ["lemlist_create_lead"], "allow_sending": True}
+    assert appeler(op="create", slug=f"code-{uuid.uuid4().hex[:6]}", title="t",
+                   recipe=envoi)["version"]["version"] == 1
+
+
+def test_l_epreuve_lit_le_crm_mais_n_y_ecrit_rien(crm):
+    appeler, plateforme = crm
+    plateforme["oui"] = True
+    essai = appeler(op="test", recipe=_corps_crm(), params={"company": "acme"})["receipt"]
+    assert essai["ok"] and essai["result"] == {"crees": 0, "refus": "write_in_test"}
+    assert essai["writes"] == {}
+    assert [op for op, _ in appeler.crees] == ["search"]
+
+
+def test_une_execution_ecrit_ce_qu_elle_declare_et_le_compte(crm):
+    appeler, plateforme = crm
+    slug = _publiee(appeler, plateforme, _corps_crm())
+    appeler.crees.clear()
+    run = appeler(op="run", slug=slug, params={"company": "acme"})["receipt"]
+    assert run["ok"] and run["done"] and run["result"] == {"crees": 3, "refus": None}
+    assert run["writes"] == {"acme_crm:create": 3}
+    assert [n for op, n in appeler.crees if op == "create"] == ["acme-0", "acme-1", "acme-2"]
+
+
+def test_le_plafond_d_ecritures_arrete_le_code_et_le_recu_le_dit(crm):
+    appeler, plateforme = crm
+    corps = {**_corps_crm(), "limits": {"max_units": 50, "max_writes": 2}}
+    slug = _publiee(appeler, plateforme, corps)
+    run = appeler(op="run", slug=slug, params={"company": "acme"})["receipt"]
+    assert run["result"] == {"crees": 2, "refus": "budget_exhausted"}
+    assert run["stopped"] == "max_writes" and run["done"] is False
+    assert run["writes"] == {"acme_crm:create": 2}
+
+
+def test_une_recette_sans_writes_ne_peut_pas_ecrire(crm):
+    appeler, plateforme = crm
+    slug = _publiee(appeler, plateforme, _corps(CODE_CRM))
+    run = appeler(op="run", slug=slug, params={"company": "acme"})["receipt"]
+    assert run["result"] == {"crees": 0, "refus": "write_not_declared"}
+    assert not [op for op, _ in appeler.crees if op == "create"]
