@@ -28,11 +28,37 @@ def _platform_grantee_scope(sub, active_org, scopes) -> "str | None":
     return None
 
 
+#: The meta key that carries the REVOKED scopes of a platform instance (F-046). Written
+#: by `credentials_store.platform_revoke`, cleared by `platform_grant`; read here only.
+DENIED_META_KEY = "share_denied"
+
+
+def _platform_denied(sub, active_org, inst: dict) -> bool:
+    """Has `sub` (or its active org) been REVOKED on this platform instance? (F-046)
+
+    A revocation used to be "remove from `share_down`" and nothing else — on an OPEN key
+    with an empty `share_down` (open to all), that removed nothing, and the next call was
+    served exactly as before: a credit block that did not block. The revoked scope is
+    now remembered in `meta.share_denied`, and a denial wins over everything: the open
+    tier, a `share_down` grant of the other scope, a `share_side` loan. Any matching
+    scope refuses — `user:<sub>` or `org:<active org>` — because a block is aimed at
+    one of them, and the other must not reopen it."""
+    denied = (inst.get("meta") or {}).get(DENIED_META_KEY) or []
+    if not denied:
+        return False
+    if sub and f"user:{sub}" in denied:
+        return True
+    return active_org is not None and f"org:{active_org}" in denied
+
+
 def _platform_instance_usable(sub, active_org, inst: dict) -> bool:
-    """Is the platform instance usable by `sub`? (ADR 0044 §F, mode-aware). A `share_side`
+    """Is the platform instance usable by `sub`? (ADR 0044 §F, mode-aware). A REVOKED
+    scope (`meta.share_denied`, F-046) refuses first, whatever follows. A `share_side`
     loan authorizes (membership, like a BYO loan). Otherwise per `share_mode`:
     'open' = empty `share_down` (free tier, open to all) OR `sub` is a grantee; 'closed' =
     `sub` is a grantee (closed by default)."""
+    if _platform_denied(sub, active_org, inst):
+        return False
     down, side = inst.get("share_down") or [], inst.get("share_side") or []
     if scope._sub_matches_scopes(sub, side):
         return True
