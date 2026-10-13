@@ -588,6 +588,21 @@ def _destinataire(email: str, recipient_sub: str) -> dict:
     return porteurs[0]
 
 
+def pick_fiche(rows: list, schema: Optional[dict], row: str) -> Optional[dict]:
+    """Find ONE record by `row`: match on `_id`, the declared business key
+    (`schema.key`), or the title field's value — the agent's natural landmark. Shared by
+    both faces of `data_app` (the Prefab card here, the front's bundle in
+    `datastore_table_app`)."""
+    biz_key = (schema or {}).get("key")
+    title_key = (dsv2.title_field(schema) or {}).get("key")
+    target = str(row)
+    for r in rows:
+        for probe in ("_id", biz_key, title_key):
+            if probe and str(r.get(probe)) == target:
+                return r
+    return None
+
+
 def register(mcp: FastMCP) -> None:
 
     # ⚠️ The docstring names `ns_id` DELIBERATELY (oto#176). This catalog only returned
@@ -2223,17 +2238,11 @@ def register(mcp: FastMCP) -> None:
                     _render_composite(k, v, fdef)
         return card
 
-    def _pick_fiche(rows: list, schema: Optional[dict], row: str) -> Optional[dict]:
-        """Find ONE record by `row`: match on `_id`, the declared business key
-        (`schema.key`), or the title field's value — the agent's natural landmark."""
-        biz_key = (schema or {}).get("key")
-        title_key = _role_key(schema, "title")
-        target = str(row)
-        for r in rows:
-            for probe in ("_id", biz_key, title_key):
-                if probe and str(r.get(probe)) == target:
-                    return r
-        return None
+    # An instance that declares a front bundle (`OTO_DATA_APP_BUNDLE`) draws `data_app`
+    # in that front's look instead — `tools/datastore_table_app.py` registers it.
+    from .datastore_table_app import bundle as _front_bundle
+    if _front_bundle() is not None:
+        return
 
     @mcp.tool(app=True)
     def data_app(
@@ -2322,7 +2331,7 @@ def register(mcp: FastMCP) -> None:
         # DETAIL view of a record: explicit `row`, or a `filter` that isolates 1 row.
         fiche = None
         if row is not None:
-            fiche = _pick_fiche(rows, schema, row)
+            fiche = pick_fiche(rows, schema, row)
             if fiche is None:
                 return _message_card(
                     "Record not found",

@@ -164,3 +164,25 @@ une ressource MCP Apps nue, dont la CSP (`resourceDomains`) admet l'origine du b
   la hauteur par défaut du host.
 - **Un chemin relatif du front se résout contre le bac à sable du host**, pas contre son
   origine : le bundle rend absolus ses chemins d'images contre l'origine de son script.
+
+## Un tableau peint par un front — `data_app` (`OTO_DATA_APP_BUNDLE`)
+
+Même montage que le graphe : `tools/datastore_table_app.py` enregistre `data_app` avec
+une page ui:// qui charge le bundle déclaré par `OTO_DATA_APP_BUNDLE` (adresse ET
+interrupteur, par instance). Déclaré, la carte Prefab de `tools/datastore.py` se retire
+— un seul `data_app`, jamais deux enregistrements du même nom ; absent, rien ne change.
+
+- **Un outil, un gabarit** : le bundle peint TOUTES les réponses de `data_app` — les
+  lignes d'un tableau (`view: "table"`), la liste des tableaux (`"tables"`), une note
+  (`"note"` : tableau inconnu). La carte Prefab ne peut pas servir une branche et le
+  bundle une autre.
+- **L'agent choisit** les colonnes (`fields`, dans son ordre) et la page (`limit`, 25
+  par défaut, 200 au plus) ; tri, filtre, recherche et page suivante sont des
+  arguments, même grammaire que `data_rows` (un curseur ne passe jamais d'un régime de
+  tri à l'autre). La vue ne trie rien elle-même : une page triée n'est pas le tableau
+  trié.
+- **Deux canaux** : les lignes vont à la vue (`structuredContent`), le modèle lit une
+  ligne. Un client qui ne peint pas les apps reçoit les lignes en texte — il a demandé
+  à les voir, rien d'autre ne les montrera.
+- **Lecture seule**, et les colonnes gardées des agents (`agent_access`) absentes comme
+  partout sur la face agent ; la vue en dit le nombre (`hidden_columns`), jamais le nom.

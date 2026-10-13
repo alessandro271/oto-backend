@@ -48,6 +48,10 @@ def register_all(mcp: FastMCP) -> None:
     # activation gate. No external dependency.
     from . import datastore
     datastore.register(mcp)
+    # `data_app` in a partner front's own table look — only where the instance
+    # declares that front's bundle (OTO_DATA_APP_BUNDLE); else the Prefab card above.
+    from . import datastore_table_app
+    datastore_table_app.register(mcp)
 
     # Docs app — MCP App variant rendered from `oto_doc` (read/browse a project's
     # pages + org KB). Spine, outside the activation gate; only registers if the
