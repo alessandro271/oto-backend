@@ -175,6 +175,25 @@ def test_un_guide_relu_puis_reecrit_garde_le_canonique(tenant_acme, registre, mo
     assert ecrit["body"] == "Range avec `oto_doc`."
 
 
+def test_un_guide_patche_depuis_le_produit_stocke_le_canonique(tenant_acme, registre,
+                                                               monkeypatch):
+    """`op=patch` est un second chemin d'écriture du corps : le titre VISÉ (lu en
+    `acme_doc`) et le contenu ajouté reviennent au canonique, comme à `op=write`."""
+    stocke = {"body": "## Ranger avec oto_doc\n\nRien encore."}
+    monkeypatch.setattr(guides, "_owner_for_write",
+                        lambda ctx, scope, owner_id=None, *, ondemand=False: ctx.sub)
+
+    def _patch_guide(scope, owner, slug, appliquer, *, expected_rev=None):
+        stocke["body"] = appliquer(stocke["body"])
+        return {"slug": slug, "scope": scope}
+
+    monkeypatch.setattr(guides.guide_store, "patch_guide", _patch_guide)
+    guides._guide_op(ResolvedCtx(sub=_SUB_TENANT), guides.GuideOpInput(
+        op="patch", slug="notes", section="Ranger avec acme_doc", mode="append",
+        body_md="Puis `acme_call`."))
+    assert stocke["body"] == "## Ranger avec oto_doc\n\nRien encore.\n\nPuis `oto_call`."
+
+
 def test_une_procedure_dequipe_secrit_au_canonique(tenant_acme, registre, monkeypatch):
     ecrit: dict = {}
     monkeypatch.setattr(org_store, "set_instruction",

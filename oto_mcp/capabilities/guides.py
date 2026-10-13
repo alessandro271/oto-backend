@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field
 from .. import db, group_store, guide_store, session_org, tool_alias
 from ._authz import SUB_ONLY, refus_de_famille, refus_hors_vue
 from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
+from .docs import region
 from .registry import CAPABILITIES
 
 _MAX_BODY_BYTES = 64 * 1024
@@ -70,7 +71,7 @@ class GuideSetInput(BaseModel):
 class GuideOpInput(BaseModel):
     """Face MCP op-aware (`oto_guide`). `scope` défaut 'user' à l'écriture — un agent
     qui rédige sans préciser écrit POUR SON utilisateur, jamais pour l'org/la plateforme."""
-    op: Literal["list", "read", "write", "delete"] = "list"
+    op: Literal["list", "read", "write", "patch", "delete"] = "list"
     slug: Optional[str] = None
     scope: Optional[str] = None
     delivery: Delivery = "on-demand"
@@ -78,6 +79,20 @@ class GuideOpInput(BaseModel):
     body_md: Optional[str] = None
     title: Optional[str] = None
     description: Optional[str] = None
+    # op=patch — les MÊMES noms et la même sémantique que `oto_doc op=patch` (`DocInput`) :
+    # qui connaît l'un connaît l'autre. Refusés sur toute autre op (`_PATCH_ONLY`).
+    section: Optional[str] = Field(default=None, description=(
+        "op=patch: the heading text of the section to edit (level and case ignored); "
+        "`body_md` = its body, without the heading."))
+    region: Optional[Literal["preamble"]] = Field(default=None, description=(
+        "op=patch: `preamble` = what precedes the first heading, instead of `section`."))
+    mode: Optional[Literal["replace", "append", "prepend", "delete"]] = Field(
+        default=None, description=(
+            "op=patch: replace (default) | append | prepend | delete (the target, "
+            "heading included; no `body_md`)."))
+    expected_rev: Optional[str] = Field(default=None, description=(
+        "op=patch: the `rev` from op=read or a previous patch — refused if the guide "
+        "changed since."))
 
 
 def _target_org(ctx: ResolvedCtx, owner_id: Optional[str]) -> int:
@@ -243,7 +258,9 @@ class GuideView(BaseModel):
     optionnels, qui ne coexistent pas tous :
     - un readme `init` porte `delivery` et `updated_at`, jamais de titre ;
     - un guide `on-demand` porte titre/description ;
-    - `set` d'un on-demand ne renvoie PAS le corps (l'appelant vient de l'écrire).
+    - `set` d'un on-demand ne renvoie PAS le corps (l'appelant vient de l'écrire) ;
+    - la lecture d'un on-demand porte `rev`, l'ETag de son contenu — ce qu'`oto_guide
+      op=patch` attend en `expected_rev`.
     """
     scope: str
     slug: str
@@ -252,6 +269,7 @@ class GuideView(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     updated_at: Optional[str] = None
+    rev: Optional[str] = None
 
 
 class GuideDeleted(BaseModel):
@@ -272,6 +290,14 @@ def _init_view(scope: str, slug: str, state: dict) -> dict:
     """Forme d'un readme init, alignée sur celle d'un guide on-demand."""
     return {"scope": scope, "slug": slug, "delivery": "init",
             "body_md": state.get("body_md") or "", "updated_at": state.get("updated_at")}
+
+
+def _avec_rev(g: dict) -> dict:
+    """Le guide lu, plus `rev` : l'ETag de son contenu STOCKÉ (`db.guide_rev`), à
+    repasser en `expected_rev` à `op=patch`. À poser AVANT la réécriture aux noms du
+    produit — c'est le canonique que la base compare."""
+    return {**g, "rev": db.guide_rev(g.get("title"), g.get("description"),
+                                     g.get("body_md"))}
 
 
 def _get(ctx: ResolvedCtx, inp: GuideRefInput) -> dict:
@@ -314,6 +340,7 @@ def _get(ctx: ResolvedCtx, inp: GuideRefInput) -> dict:
     # est du contenu, et la réécrire par substitution serait réécrire le texte de
     # quelqu'un. Le remède de ce cas-là est l'étage tenant ci-dessus : un partenaire que
     # notre prose gêne écrit la sienne.
+    g = _avec_rev(g)
     prefix = tool_alias.prefix_for(ctx.sub)
     if not prefix:
         return g
@@ -389,6 +416,120 @@ def _delete(ctx: ResolvedCtx, inp: GuideRefInput) -> dict:
     return {"scope": inp.scope, "slug": inp.slug, "deleted": True}
 
 
+# Les arguments qui n'ont de sens que pour `op=patch`. Refusés sur toute autre op,
+# jamais avalés : un `expected_rev` ignoré par `op=write` laisserait croire à un
+# contrôle de conflit qui n'a pas lieu.
+_PATCH_ONLY = ("section", "region", "mode", "expected_rev")
+
+
+def _patch(ctx: ResolvedCtx, inp: GuideOpInput) -> dict:
+    """`op=patch` : éditer UNE région d'un guide on-demand sans en réémettre le corps.
+
+    Le manque : `op=write` REMPLACE le corps. Ajouter une ligne datée à un journal de
+    ~60 000 caractères tenu dans un guide voulait dire le relire et le réémettre en
+    entier — et risquer d'en abîmer le reste sans le voir. La grammaire, le moteur et
+    les refus sont ceux d'`oto_doc op=patch`, par le même code (`docs/region`) : aucune
+    seconde grammaire à apprendre, aucune seconde copie des phrases.
+
+    ⚠️ Trois choses propres au guide :
+    - le DROIT est celui d'`op=write`, résolu par la même ligne (`_owner_for_write`)
+      et AVANT toute lecture — un refus ne décrit jamais un guide à qui ne l'écrit pas ;
+    - le patch porte sur un guide EXISTANT : il ne crée rien (`not_found`) ;
+    - lecture et écriture se font sous le verrou de la ligne (`db.patch_guide_db`) :
+      sans `expected_rev`, deux ajouts simultanés s'enchaînent au lieu de s'écraser.
+
+    Un readme `init` est refusé : il est injecté entier dans chaque session, donc
+    tenu court — il se réécrit, il ne se rapièce pas."""
+    scope = inp.scope or "user"
+    if inp.delivery == "init":
+        raise AuthzDenied(
+            400, "unsupported_delivery",
+            "op=patch edits an on-demand guide. A readme (delivery='init') is injected "
+            "whole into every session, so it is kept short and rewritten whole: "
+            "op=write with delivery='init'.")
+    owner_id = _owner_for_write(ctx, scope, inp.owner_id, ondemand=True)
+    slug = inp.slug or ""
+    mode = inp.mode or "replace"
+    # La forme de l'appel est celle d'`oto_doc op=patch`, jugée par le même code.
+    vise_section = region.valider(inp.section, inp.region, mode, inp.body_md)
+    if inp.title is not None or inp.description is not None:
+        raise AuthzDenied(
+            400, "unsupported_on_patch",
+            "op=patch edits the body only: `title` and `description` are set with "
+            "op=write. Remove them.")
+    # Le symétrique de `_get`, comme dans `_set` : ce qui a été LU aux noms du produit
+    # revient au canonique — le titre visé comme le contenu ajouté.
+    section = tool_alias.canonical_prose(inp.section, ctx.sub) if vise_section else None
+    contenu = (None if inp.body_md is None
+               else tool_alias.canonical_prose(inp.body_md, ctx.sub))
+    emporte: dict = {}
+
+    def appliquer(corps: str) -> str:
+        """Le corps patché, ou un refus — joué par la base sous le verrou de la ligne."""
+        # Le moteur et ses refus sont ceux d'`oto_doc op=patch` ; seuls le nom de ce
+        # qu'on patche et le verbe qui le réécrit entier changent (`region.GUIDE`).
+        fait = region.appliquer(corps, section, contenu, mode, region.GUIDE,
+                                affiche=inp.section)
+        emporte.update(removed=fait.emporte, subsections=fait.sous_sections)
+        # Les deux bornes d'`op=write`, jugées sur le RÉSULTAT : un guide on-demand
+        # n'est jamais vide, et son corps tient sous `_MAX_BODY_BYTES`.
+        nouveau = fait.corps.strip()
+        if not nouveau:
+            raise AuthzDenied(
+                400, "empty_guide",
+                "This patch would leave the guide empty, and an on-demand guide cannot "
+                "be: nothing was written. To remove the guide: op=delete.")
+        poids = len(nouveau.encode())
+        if poids > _MAX_BODY_BYTES:
+            raise AuthzDenied(
+                400, "body_too_large",
+                f"After this patch the guide would weigh {poids} UTF-8 bytes for "
+                f"{_MAX_BODY_BYTES} at most ({poids - _MAX_BODY_BYTES} too many) — the "
+                "cap is in BYTES, an accented character weighs two. Nothing was "
+                "written. Make room first: mode=delete on a section that is no longer "
+                "needed, or move older content to another guide.")
+        return nouveau
+
+    try:
+        accuse = guide_store.patch_guide(scope, owner_id, slug, appliquer,
+                                         expected_rev=inp.expected_rev)
+    except db.GuideConflict as e:
+        raise AuthzDenied(
+            409, "conflict",
+            f"The guide changed since you read it (current rev {e.current_rev}). "
+            "Nothing was written. Read it again (op=read) and redo your patch on the "
+            "current version.")
+    # ⚠️ AVANT `GuideError`, dont c'est une sous-classe — même ordre que `_set`.
+    except guide_store.GuideDeliveryConflict as e:
+        raise AuthzDenied(409, "delivery_conflict", str(e))
+    except guide_store.GuideError as e:
+        raise AuthzDenied(400, "invalid_guide", str(e))
+    if accuse is None:
+        graine = (" A platform guide still served from its seed file has no stored "
+                  "copy yet: op=write stores one."
+                  if scope == "platform" and guide_store.file_guide(slug) else "")
+        raise AuthzDenied(
+            404, "not_found",
+            f"No guide `{slug}` (scope {scope}) to patch: op=patch edits an EXISTING "
+            f"guide and creates nothing. List them with op=list, create one with "
+            f"op=write.{graine}")
+    # Un ACCUSÉ, jamais le corps : ce patch existe pour ne pas faire voyager 60 000
+    # caractères, dans un sens comme dans l'autre.
+    out = dict(accuse)
+    if emporte.get("removed") is not None:
+        out["removed"] = emporte["removed"]
+    if emporte.get("subsections"):
+        enfants = emporte["subsections"]
+        out["removed_subsections"] = enfants
+        verbe = ("removed the WHOLE section, heading included" if mode == "delete"
+                 else "replaced the WHOLE section")
+        out["warning"] = (
+            f"mode={mode} on « {inp.section} » {verbe}, so also {len(enfants)} "
+            f"sub-section(s): {', '.join(enfants)}. A guide keeps no revision "
+            "history: if you did not mean to lose them, write them back now.")
+    return out
+
+
 def _une_seule_consigne(ctx: ResolvedCtx, lu: dict) -> None:
     """Refuse de servir À L'AGENT un guide dont une PROCÉDURE porte le slug dans la
     même portée (oto#100).
@@ -419,6 +560,13 @@ def _une_seule_consigne(ctx: ResolvedCtx, lu: dict) -> None:
 
 def _guide_op(ctx: ResolvedCtx, inp: GuideOpInput) -> dict:
     """Dispatch de la face MCP sur les MÊMES handlers que les faces REST."""
+    if inp.op != "patch":
+        en_trop = [n for n in _PATCH_ONLY if getattr(inp, n) is not None]
+        if en_trop:
+            raise AuthzDenied(
+                400, "unsupported_patch_arg",
+                f"{', '.join(f'`{n}`' for n in en_trop)}: op=patch only — op={inp.op} "
+                "would ignore it. Remove it, or use op=patch.")
     if inp.op == "list":
         return _list(ctx, _NoInput())
     init = inp.delivery == "init"
@@ -439,6 +587,8 @@ def _guide_op(ctx: ResolvedCtx, inp: GuideOpInput) -> dict:
     if inp.op == "delete":
         return _delete(ctx, GuideRefInput(scope=scope, slug=inp.slug or "",
                                           delivery=inp.delivery, owner_id=inp.owner_id))
+    if inp.op == "patch":
+        return _patch(ctx, inp)
     return _set(ctx, GuideSetInput(scope=scope, slug=inp.slug or "", delivery=inp.delivery,
                                    owner_id=inp.owner_id, body_md=inp.body_md or "",
                                    title=inp.title or "", description=inp.description or ""))
@@ -458,13 +608,18 @@ CAPABILITIES += [
             "user (who writes it, whom it applies to) and `delivery` = 'on-demand' (default: a "
             "guide you load for a task) | 'init' (a readme concatenated into what you receive "
             "at handshake). op=list → the on-demand catalog you can see (platform ∪ your org ∪ "
-            "your own) ; op=read (slug, optional scope) → its markdown body ; op=write / delete "
+            "your own) ; op=read (slug, optional scope) → its markdown body and `rev` ; op=write / delete "
             "(slug, scope, body_md, title?, description?) → author for the PLATFORM (platform "
             "admin), a TENANT (its tenant admin or a platform admin; `owner_id` = the tenant "
             "slug, which also reads it back), your ORG (org admin), your TEAM (team lead) or "
             "YOURSELF (scope=user, the default). With delivery='init' the slug is canonical per scope — omit it (the "
             "user's own readme is `scope='user', delivery='init'`; an empty body clears that "
-            "layer). Read the relevant guide BEFORE a non-trivial task (e.g. bulk-load). "
+            "layer). op=patch (slug, scope, `mode`, ONE target: `section` or `region`) → edit "
+            "ONE region of an existing on-demand guide WITHOUT re-sending its body (how you "
+            "append to a long guide or a journal): same grammar as `oto_doc` op=patch, same "
+            "writers as op=write, and the reply is a receipt, not the body. `expected_rev` = "
+            "the `rev` of op=read: refused if the guide changed since. "
+            "Read the relevant guide BEFORE a non-trivial task (e.g. bulk-load). "
             "This is PROSE: a repeatable process with slots is a procedure (`oto_procedure`), "
             "and what oto knows about the user is their profile card (`oto_profile`)."),
         mcp="oto_guide",

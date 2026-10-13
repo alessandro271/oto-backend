@@ -16,7 +16,8 @@ domaines qu'elle traverse, pas la surface qu'elle sert.
 | `view` | la FORME servie : adresses, `rev`, projection de sortie |
 | `reads` | ce qui LIT sans écrire : `list`, `search`, `get`, `backlinks` |
 | `writes` | ce qui écrit l'arbre : `create`, `bulk_create`, `update`, `move`, `delete`, `set_public` |
-| `patch` | l'édition d'UNE région (`patch`) et ses deux axes d'adressage |
+| `patch` | l'édition d'UNE région d'une page (`patch`) : droit, simulation, écriture, accusé |
+| `region` | la grammaire commune du patch d'une région — deux axes d'adressage, moteur, refus — partagée avec `oto_guide op=patch` |
 | `history` | les versions : `revisions`, `revert` |
 | `partage` | partager UNE page (#1084) : ce que `oto_resource` route pour `resource_type="doc"`, et `shared_with_me` |
 | `core` | `DocInput`, le dispatcher — dont l'ORDRE des branches est un contrat — et le descripteur |

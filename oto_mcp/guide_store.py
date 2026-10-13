@@ -434,6 +434,38 @@ def set_guide(scope: str, owner_id: str, slug: str, body_md: str,
             "description": row["description"]}
 
 
+def patch_guide(scope: str, owner_id: str, slug: str, appliquer, *,
+                expected_rev: Optional[str] = None) -> Optional[dict]:
+    """Modifie le CORPS d'un guide on-demand EXISTANT : `appliquer(corps) -> corps`,
+    joué par la base sous le verrou de la ligne (`db.patch_guide_db`) — l'édition
+    partielle ne réémet pas le corps et ne perd pas une écriture concurrente.
+
+    Mêmes gardes de scope et de slug que `set_guide`, même AUTZ du ressort de
+    l'appelant. Renvoie l'ACCUSÉ `{slug, scope, title, description, updated_at, rev,
+    body_md_length}` — jamais le corps —, ou `None` si aucun guide ne porte ce slug
+    (un patch ne crée rien). Lève `db.GuideConflict` si `expected_rev` n'est plus la
+    version en base, `GuideDeliveryConflict` si la clé porte le readme injecté."""
+    if scope not in _ONDEMAND_EDITABLE:
+        raise GuideError(_ONDEMAND_EDITABLE_MSG)
+    if not _slug_ok(slug):
+        raise GuideError("slug invalide (min. `^[a-z0-9][a-z0-9-]*$`).")
+    from . import db
+    row = db.patch_guide_db(scope, str(owner_id), slug, appliquer,
+                            expected_rev=expected_rev)
+    if row is None:
+        if db.get_init_guide_db(scope, str(owner_id), slug) is not None:
+            raise GuideDeliveryConflict(
+                f"`{slug}` (scope {scope}) is not an on-demand guide: it is the "
+                f"readme INJECTED into every session of that scope. Nothing was "
+                f"written. A readme is not patched, it is rewritten whole: "
+                f"`oto_guide(op='write', scope='{scope}', delivery='init')`.")
+        return None
+    return {"slug": slug, "scope": scope, "title": row["title"],
+            "description": row["description"], "updated_at": row.get("updated_at"),
+            "rev": db.guide_rev(row["title"], row["description"], row["body_md"]),
+            "body_md_length": len(row["body_md"] or "")}
+
+
 def delete_guide(scope: str, owner_id: str, slug: str) -> bool:
     if scope not in _ONDEMAND_EDITABLE:
         raise GuideError(_ONDEMAND_EDITABLE_MSG)

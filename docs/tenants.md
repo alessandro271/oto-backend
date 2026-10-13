@@ -251,7 +251,7 @@ l'administrons) est une autre décision non prise (`tenancy.ForeignTenantDirecto
 >   PRESCRIT d'aller les lire : les tenant-iser à moitié laissait le texte le plus lu
 >   après lui au niveau plateforme. ⚠️ **Rien ne change tant que personne n'a rédigé** —
 >   un tenant sans guide propre reçoit le nôtre, à l'octet. **L'écriture a suivi la
->   lecture** : `oto_guide op=write|delete scope=tenant owner_id=<slug>` (on-demand),
+>   lecture** : `oto_guide op=write|patch|delete scope=tenant owner_id=<slug>` (on-demand),
 >   au même palier que le socle — admin plateforme, tenant connu du registre. Avant,
 >   `guide_store.set_guide` refusait le scope : l'étage se lisait sans pouvoir s'écrire,
 >   et un besoin propre à un partenaire (un guide que le cœur a retiré, par exemple)
