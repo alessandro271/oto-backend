@@ -227,7 +227,7 @@ def _upload_url(ctx: ResolvedCtx, inp: UploadUrlInput) -> dict:
                  "the URL to a human and stop.")
     else:
         repli = ("if the file already lives somewhere reachable (a link, a Drive file, a "
-                 "Gmail attachment), `oto_import` makes the server fetch it; "
+                 "Gmail or messaging attachment), `oto_import` makes the server fetch it; "
                  f"a file you produced, up to {_EN_LIGNE_KO} KB, goes through "
                  "`oto_import(source={kind:\"content\", filename, base64}, "
                  "target=\"project_file\")` — never base64 a bigger one into an "
@@ -295,7 +295,8 @@ class ImportInput(BaseModel):
         "link works if the sheet is public, `gid` picks the tab), `{kind:\"drive\", "
         "file_id}` (your Google account; a native Sheet exports its first tab as CSV), "
         "`{kind:\"project_file\", project_id, file_id}`, `{kind:\"gmail\", "
-        "message_id, filename}`, or a file YOU produced: `{kind:\"content\", "
+        "message_id, filename}`, a messaging attachment's `source` as read (`{kind:"
+        "\"unipile\", channel, url}`), or a file YOU produced: `{kind:\"content\", "
         f"filename, base64}}` (or `text` instead of `base64`), {_EN_LIGNE_KO} KB at most. With "
         "`target=\"project_file\"`, the file is filed in the project as is."))
     target: Literal["datastore", "project_file"] = "datastore"

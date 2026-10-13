@@ -319,3 +319,14 @@ def test_channel_chat_refuses_unknown_op_and_missing_args(client):
     with pytest.raises(McpError, match="chat_id"):
         send(text="hello")
     client.send_message.assert_not_called()
+
+
+def test_linkedin_read_pose_la_reference_des_pieces(client):
+    """#1149 : la pièce d'un message LinkedIn se récupère par sa `source`, comme sur les
+    autres canaux — la page reste la page brute, la référence s'y ajoute."""
+    url = "https://unipile.example/v2/acc_forme/messages/m1/attachments/a1"
+    msgs = [{"id": "m1", "attachments": [{"url": url}]}]
+    client.list_messages.return_value = {"data": msgs, "items": msgs}
+    out = _tool("linkedin_unipile_chat")(op="read", chat_id="c1")
+    assert out["items"][0]["attachments"][0]["source"] == {
+        "kind": "unipile", "channel": "linkedin", "url": url}

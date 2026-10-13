@@ -265,6 +265,100 @@ def _from_http(src: dict, max_bytes: int) -> ResolvedFile:
     return ResolvedFile(data, nom, ctype.split(";")[0].strip() or "application/octet-stream")
 
 
+#: Whole-download budget of an attachment (each read is also bounded by its timeout):
+#: a server that drips one byte per read must not hold a thread.
+_UNIPILE_BUDGET_S = 90.0
+
+
+def _nom_de_disposition(valeur: Optional[str]) -> Optional[str]:
+    """The file name a `Content-Disposition` header carries (`filename*` RFC 2231
+    included), without any path."""
+    if not valeur:
+        return None
+    from email.message import Message
+    m = Message()
+    m["content-disposition"] = valeur
+    nom = m.get_filename()
+    return os.path.basename(nom) if nom else None
+
+
+def _from_unipile(src: dict, max_bytes: int) -> ResolvedFile:
+    """Une pièce jointe d'un message reçu sur une messagerie hébergée (LinkedIn,
+    WhatsApp, Telegram, Instagram), désignée par la `source` que le lecteur pose sur
+    chaque pièce (`attachments[].source`, `{channel, url}`).
+
+    L'URL est celle qu'Unipile sert dans le message ; elle exige la clé. Le client est
+    celui du COMPTE OPÉRÉ du canal (`unipile_client` : la même résolution que la
+    lecture, même refus sans compte), et l'URL doit désigner CE compte sur CETTE
+    instance : `https://<dsn>/v2/<account_id>/…` (le chemin v2 porte le compte). Sans
+    cette garde, une clé partagée lirait la pièce d'un autre compte. La clé ne part
+    que vers l'instance qui la porte : redirection refusée (elle l'emporterait)."""
+    from urllib.parse import quote, urlsplit
+
+    from .mcp_errors import McpError
+    from .tools import unipile as messagerie
+    canal, url = src.get("channel"), src.get("url")
+    provider = messagerie.UNIPILE_CHANNELS.get(str(canal or "").lower())
+    if provider is None:
+        raise FileSourceError(
+            "source unipile : `channel` attendu parmi "
+            f"{', '.join(messagerie.UNIPILE_CHANNELS)}.")
+    if not isinstance(url, str) or not url:
+        raise FileSourceError(
+            "source unipile : `url` requise — passer telle quelle la `source` d'une "
+            "pièce jointe lue (`attachments[].source`).")
+    try:
+        client = messagerie.unipile_client(provider)
+    except McpError as e:
+        raise FileSourceError(f"source unipile : {e.error.message}") from None
+    p = urlsplit(url)
+    compte = quote(client.account_id(), safe="")
+    if (p.scheme != "https" or p.netloc != client.dsn
+            or not p.path.startswith(f"/v2/{compte}/")):
+        raise FileSourceError(
+            f"source unipile : cette URL ne désigne pas une pièce du compte {canal} "
+            "opéré par cet appel — relire le message avec ce compte et passer la "
+            "`source` rendue.")
+    import requests
+    deadline = time.monotonic() + _UNIPILE_BUDGET_S
+    lent = FileSourceError(
+        "source unipile : le téléchargement n'a pas fini dans le budget de l'appel.")
+    try:
+        with client.session.get(url, headers={"accept": "*/*"}, stream=True,
+                                allow_redirects=False, timeout=(10, 60)) as r:
+            if 300 <= r.status_code < 400:
+                raise FileSourceError(
+                    "source unipile : redirection refusée (elle emporterait la clé).")
+            if r.status_code >= 400:
+                raise FileSourceError(
+                    f"source unipile : Unipile a répondu {r.status_code} sur la pièce "
+                    "jointe (message supprimé, pièce expirée ou compte déconnecté).")
+            declared = r.headers.get("content-length")
+            if declared and declared.isdigit() and int(declared) > max_bytes:
+                raise FileSourceError(
+                    f"pièce jointe trop volumineuse ({declared} > {max_bytes} octets).")
+            chunks, total = [], 0
+            for chunk in r.iter_content(64 * 1024):
+                if time.monotonic() > deadline:
+                    raise lent
+                total += len(chunk)
+                if total > max_bytes:
+                    raise FileSourceError(f"pièce jointe > {max_bytes} octets.")
+                chunks.append(chunk)
+            mime = (r.headers.get("content-type")
+                    or "application/octet-stream").split(";")[0].strip()
+            nom = _nom_de_disposition(r.headers.get("content-disposition"))
+    except requests.RequestException as e:
+        # The type only: the text of a network error carries the URL, and the URL the
+        # operated account.
+        raise FileSourceError(
+            f"source unipile : Unipile n'a pas répondu ({type(e).__name__}).") from None
+    if not nom:
+        dernier = p.path.rstrip("/").rsplit("/", 1)[-1]
+        nom = f"{str(canal).lower()}-{dernier}" + (mimetypes.guess_extension(mime) or "")
+    return ResolvedFile(b"".join(chunks), nom, mime or "application/octet-stream")
+
+
 def _from_content(src: dict, max_bytes: int) -> ResolvedFile:
     """Un fichier PRODUIT par l'agent (un .xlsx d'un run, un CSV), passé dans l'appel :
     `base64` pour du binaire, `text` pour de l'UTF-8 — exactement l'un des deux.
@@ -309,7 +403,8 @@ def _from_content(src: dict, max_bytes: int) -> ResolvedFile:
 _RESOLVERS = {"drive": _from_drive, "gmail": _from_gmail}
 # Les résolveurs qui bornent la taille EUX-MÊMES, avant de matérialiser les octets.
 _RESOLVERS_BORNES = {"url": _from_url, "project_file": _from_project_file,
-                     "http": _from_http, "content": _from_content}
+                     "http": _from_http, "content": _from_content,
+                     "unipile": _from_unipile}
 
 
 def resolve(source: Any, *, max_bytes: int = DEFAULT_MAX_BYTES,
@@ -317,7 +412,8 @@ def resolve(source: Any, *, max_bytes: int = DEFAULT_MAX_BYTES,
             deadline: Optional[float] = None) -> ResolvedFile:
     """Résout une référence de fichier côté oto vers ses octets + métadonnées.
 
-    `source` = dict `{"kind": "drive"|"gmail"|"url"|"project_file"|"http"|"content", …}` :
+    `source` = dict `{"kind": "drive"|"gmail"|"url"|"project_file"|"http"|"content"|
+    "unipile", …}` :
       - drive        : `{file_id, account?}`
       - gmail        : `{message_id, filename, index?, account?}`
       - url          : `{url}` (http/https, redirections refusées)
@@ -325,6 +421,8 @@ def resolve(source: Any, *, max_bytes: int = DEFAULT_MAX_BYTES,
       - http         : `{path, params?}` (GET via le connecteur `http` de l'appelant)
       - content      : `{filename, base64 | text, mime?}` (fichier produit par l'agent,
                        ≤ `CONTENT_MAX_BYTES`)
+      - unipile      : `{channel, url}` (pièce jointe d'un message, telle que le lecteur
+                       de la messagerie la rend dans `attachments[].source`)
     Lève `FileSourceError` si `kind` manque/inconnu, source illisible, ou taille
     dépassée. Borne la taille à `max_bytes` (charge en RAM). `deadline` (horloge
     monotone) borne le téléchargement d'une URL de bout en bout, sauts compris."""
@@ -340,7 +438,7 @@ def resolve(source: Any, *, max_bytes: int = DEFAULT_MAX_BYTES,
         if fn is None:
             raise FileSourceError(
                 f"source `kind`={kind!r} inconnu (attendu : drive, gmail, url, project_file, "
-                "http, content).")
+                "http, content, unipile).")
         try:
             rf = fn(source)
         except FileSourceError:

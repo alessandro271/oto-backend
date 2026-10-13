@@ -1001,7 +1001,10 @@ def register_messaging_tools(mcp: FastMCP, channel: str) -> None:
         "(`attendee_name`); `with_names=False` turns this enrichment off (one API call "
         "fewer).\n"
         "- **\"read\"**: the messages of a thread (`chat_id` from op=\"list\"). A message "
-        "Unipile passed on without text nor attachment carries `content_unavailable`."))
+        "Unipile passed on without text nor attachment carries `content_unavailable`. "
+        "Each attachment carries a `source`: pass it to `oto_import` (target="
+        "\"project_file\") to file it, or to any tool taking a `source` — the server "
+        "fetches the file, never through the conversation."))
     def _chat(op: Literal["list", "read", "send"] = "list",
               chat_id: Optional[str] = None,
               text: Optional[str] = None,
@@ -1024,8 +1027,9 @@ def register_messaging_tools(mcp: FastMCP, channel: str) -> None:
         if op == "read":
             if chat_id is None:
                 raise _bad("op='read' requires chat_id")
-            return unipile_messagerie.page_de_messages(client.list_messages(
-                chat_id, limit=limit if limit is not None else 30))
+            return unipile_messagerie.references_des_pieces(
+                unipile_messagerie.page_de_messages(client.list_messages(
+                    chat_id, limit=limit if limit is not None else 30)), cl)
         raise _bad("op must be 'list' or 'read'")
 
 
@@ -1427,7 +1431,9 @@ def register(mcp: FastMCP) -> None:
           field distinguishes nothing: relying on it leads to concluding a reply on every
           thread, or the opposite. Compare `last_message.sender_id` (or
           `last_message.sender.display_name`) with the account's identity.
-        - **"read"**: the messages of a thread (`chat_id`).
+        - **"read"**: the messages of a thread (`chat_id`). Each attachment carries a
+          `source`: pass it to `oto_import` (target="project_file") to file it, or to
+          any tool taking a `source` — the server fetches the file.
         - **"attendees"**: participants of a thread (`chat_id`).
         - **"contacts"**: your messaging contact book (counterparts). Paginated.
 
@@ -1458,8 +1464,10 @@ def register(mcp: FastMCP) -> None:
                                      cursor=cursor, with_attendee_names=with_names)
 
         if op == "read":
-            return client.list_messages(_need(chat_id, "chat_id", op),
-                                        limit=limit if limit is not None else 30)
+            return unipile_messagerie.references_des_pieces(
+                client.list_messages(_need(chat_id, "chat_id", op),
+                                     limit=limit if limit is not None else 30),
+                "linkedin")
 
         if op == "attendees":
             return client.list_chat_attendees(_need(chat_id, "chat_id", op))

@@ -163,11 +163,43 @@ def page_de_messages(page: Any) -> Any:
                       "(typically a photo, a voice note, a poll or a sticker it does not "
                       "sync): their content is unknown, not empty.",
         }
-    if any(isinstance(m, dict) and m.get("attachments") for m in out["items"]):
-        out["attachments_note"] = (
-            "an attachment's `url` points to the Unipile API and requires its key: it is "
-            "not readable with http_get, and no oto tool downloads it yet.")
     return out
+
+
+def references_des_pieces(page: Any, canal: str) -> Any:
+    """`op=read`, every channel: each attachment Unipile serves with a `url` gets a
+    `source` — the REFERENCE `file_source` resolves server-side with the account's key
+    (oto-backend#1149). Retrieving an attachment is reading its message: the bytes never
+    go through the conversation, the reference goes to `oto_import` (to file it in a
+    project) or to any tool that takes a `source`."""
+    if not isinstance(page, dict):
+        return page
+    items = page.get("items") if isinstance(page.get("items"), list) else page.get("data")
+    if not isinstance(items, list):
+        return page
+    designees = sans_url = 0
+    for m in items:
+        pieces = m.get("attachments") if isinstance(m, dict) else None
+        for att in pieces if isinstance(pieces, list) else ():
+            if not isinstance(att, dict):
+                continue
+            url = att.get("url")
+            if isinstance(url, str) and url.startswith("https://"):
+                att["source"] = {"kind": "unipile", "channel": canal.lower(), "url": url}
+                designees += 1
+            else:
+                sans_url += 1
+    if designees:
+        page["attachments_note"] = (
+            "an attachment's `url` points to the Unipile API and requires its key (not "
+            "readable with http_get): pass its `source` instead — to `oto_import("
+            "source=…, target=\"project_file\", project_id=…)` to file it in a project, "
+            "or to any tool that takes a `source`. The server fetches the bytes.")
+    if sans_url:
+        page["attachments_without_url"] = (
+            f"{sans_url} attachment(s) came without a `url` from Unipile: they cannot be "
+            "retrieved.")
+    return page
 
 
 def borne_de_liste(limit: Optional[int]) -> Optional[str]:

@@ -212,6 +212,12 @@ Partage/transfert via **`oto_resource`** (resource_type=`project` ajouté au dis
 > un run (un `.xlsx`) passe EN LIGNE par `{"kind":"content","filename":…,"base64":…}` (ou
 > `text` pour de l'UTF-8), borné à `file_source.CONTENT_MAX_BYTES` (256 Ko, vérifié sur la
 > longueur encodée avant décodage) : au-delà, le PUT signé d'`oto_upload_url`.
+> **Le retour** : une pièce jointe reçue sur une messagerie hébergée (`linkedin_unipile_chat`,
+> `whatsapp_chat`, `telegram_chat`, `instagram_chat`, `op="read"`, une LECTURE) porte une
+> `source` `{"kind":"unipile","channel":…,"url":…}` — l'URL que sert Unipile, qui exige la
+> clé. `file_source` la résout avec le client du compte OPÉRÉ du canal et refuse une URL
+> hors de `https://<dsn>/v2/<ce compte>/…` (une clé partagée lirait sinon la pièce d'un
+> autre compte) ; redirection refusée, flux borné par `max_bytes`, budget de 90 s.
 
 > **Livraison d'un projet COMPLET vers l'org d'un client (otomata-private#52).**
 > `oto_resource` : share/unshare acceptent un principal **org** (`org_id`, sans exigence

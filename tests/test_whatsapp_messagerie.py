@@ -127,9 +127,45 @@ def test_un_message_sans_texte_ni_piece_jointe_est_dit_illisible():
 
 def test_une_piece_jointe_dit_que_son_url_exige_la_cle():
     msgs = [{"id": "m1", "text": "", "attachments": [{"url": "https://unipile.example/x"}]}]
-    out = M.page_de_messages(_page(msgs))
+    out = M.references_des_pieces(M.page_de_messages(_page(msgs)), "whatsapp")
     assert "content_unavailable" not in out["items"][0]
     assert "requires its key" in out["attachments_note"]
+
+
+# --- récupérer une pièce jointe : une RÉFÉRENCE, jamais les octets (#1149) ---------
+
+def test_chaque_piece_porte_la_reference_que_file_source_resout():
+    url = "https://unipile.example/v2/acc_forme/messages/m1/attachments/a1"
+    msgs = [{"id": "m1", "attachments": [{"id": "a1", "type": "audio", "url": url}]}]
+    out = M.references_des_pieces(M.page_de_messages(_page(msgs)), "WHATSAPP")
+    assert out["items"][0]["attachments"][0]["source"] == {
+        "kind": "unipile", "channel": "whatsapp", "url": url}
+    assert "oto_import" in out["attachments_note"]
+    assert "attachments_without_url" not in out
+
+
+def test_une_piece_sans_url_est_dite_irrecuperable():
+    msgs = [{"id": "m1", "attachments": [{"id": "a1", "type": "img"},
+                                         {"id": "a2", "url": "http://x.example/a2"}]}]
+    out = M.references_des_pieces(_page(msgs), "telegram")
+    assert all("source" not in a for a in out["items"][0]["attachments"])
+    assert out["attachments_without_url"].startswith("2 attachment(s)")
+    assert "attachments_note" not in out
+
+
+def test_une_page_linkedin_garde_sa_forme_et_gagne_les_references():
+    """LinkedIn sert sa page brute (`data` ET `items`, même liste) : seule la référence
+    s'ajoute, une seule fois par pièce."""
+    url = "https://unipile.example/v2/acc_forme/messages/m1/attachments/a1"
+    msgs = [{"id": "m1", "attachments": [{"url": url}]}]
+    out = M.references_des_pieces(_page(msgs), "linkedin")
+    assert out["data"] is out["items"]
+    assert out["data"][0]["attachments"][0]["source"]["channel"] == "linkedin"
+
+
+def test_une_page_qui_n_est_pas_un_objet_passe_telle_quelle():
+    assert M.references_des_pieces(None, "whatsapp") is None
+    assert M.references_des_pieces({"items": "x"}, "whatsapp") == {"items": "x"}
 
 
 # --- l'outil branché (le même pour les trois canaux) ---------------------------
@@ -165,6 +201,15 @@ def test_la_lecture_passe_par_la_remise_en_forme(monkeypatch):
     client.list_messages.return_value = _page([{"id": "m1", "text": ""}])
     out = fn(op="read", chat_id="c1")
     assert out["items"][0]["content_unavailable"] is True
+
+
+def test_la_lecture_pose_la_reference_du_canal_lu(monkeypatch):
+    fn, client = _outil(monkeypatch, "INSTAGRAM")
+    url = "https://unipile.example/v2/acc_forme/messages/m1/attachments/a1"
+    client.list_messages.return_value = _page([{"id": "m1", "attachments": [{"url": url}]}])
+    out = fn(op="read", chat_id="c1")
+    assert out["items"][0]["attachments"][0]["source"] == {
+        "kind": "unipile", "channel": "instagram", "url": url}
 
 
 # --- une panne amont dit ce qu'elle dit (1354, 1359) ---------------------------

@@ -324,3 +324,145 @@ def test_content_respecte_un_plafond_d_appelant_plus_bas():
 def test_le_type_content_est_annonce():
     with pytest.raises(fs.FileSourceError, match="content"):
         fs.resolve({"kind": "ftp"})
+
+
+# --- une pièce jointe d'une messagerie hébergée (oto-backend#1149) ---------------
+# Formes seulement : ni vrai compte, ni vraie pièce.
+
+COMPTE = "acc_forme01"
+DSN = "api.unipile.example"
+PIECE = f"https://{DSN}/v2/{COMPTE}/messages/msg_1/attachments/att_1"
+
+
+class _Reponse:
+    def __init__(self, status=200, corps=b"OggS-audio", entetes=None):
+        self.status_code, self._corps = status, corps
+        self.headers = {"content-type": "audio/ogg; codecs=opus",
+                        "content-length": str(len(corps)), **(entetes or {})}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def iter_content(self, taille):
+        for i in range(0, len(self._corps), 4):
+            yield self._corps[i:i + 4]
+
+
+class _Session:
+    def __init__(self, reponse):
+        self.reponse, self.appels = reponse, []
+
+    def get(self, url, **kw):
+        self.appels.append((url, kw))
+        if isinstance(self.reponse, Exception):
+            raise self.reponse
+        return self.reponse
+
+
+class _Client:
+    def __init__(self, reponse):
+        self.dsn, self.session = DSN, _Session(reponse)
+
+    def account_id(self):
+        return COMPTE
+
+
+@pytest.fixture
+def unipile(monkeypatch):
+    """Le client du compte opéré, stubé ; `etat["canaux"]` dit pour quel canal il a été
+    résolu (la même résolution que la lecture)."""
+    from oto_mcp.tools import unipile as U
+    etat = {"canaux": [], "client": _Client(_Reponse())}
+
+    def _resoudre(provider="LINKEDIN"):
+        etat["canaux"].append(provider)
+        return etat["client"]
+    monkeypatch.setattr(U, "unipile_client", _resoudre)
+    return etat
+
+
+def _src(**kw):
+    return {"kind": "unipile", "channel": "whatsapp", "url": PIECE, **kw}
+
+
+def test_unipile_rend_la_piece_du_compte_opere(unipile):
+    unipile["client"] = _Client(_Reponse(entetes={
+        "content-disposition": "attachment; filename*=UTF-8''note%20vocale.ogg"}))
+    rf = fs.resolve(_src())
+    assert (rf.data, rf.filename, rf.mime) == (b"OggS-audio", "note vocale.ogg", "audio/ogg")
+    assert unipile["canaux"] == ["WHATSAPP"]
+    url, kw = unipile["client"].session.appels[0]
+    assert url == PIECE and kw["allow_redirects"] is False and kw["stream"] is True
+
+
+def test_unipile_sans_nom_servi_nomme_par_le_canal_et_le_type(unipile):
+    assert fs.resolve(_src()).filename.startswith("whatsapp-att_1")
+
+
+@pytest.mark.parametrize("url", [
+    f"https://{DSN}/v2/acc_autre/messages/msg_1/attachments/att_1",   # un autre compte
+    f"https://{DSN}/v2/{COMPTE}x/messages/msg_1/attachments/att_1",   # préfixe trompeur
+    f"https://ailleurs.example/v2/{COMPTE}/messages/msg_1/attachments/att_1",
+    f"http://{DSN}/v2/{COMPTE}/messages/msg_1/attachments/att_1",
+    f"https://{DSN}/{COMPTE}/messages/msg_1",
+])
+def test_unipile_refuse_une_url_hors_du_compte_opere_sans_rien_appeler(unipile, url):
+    """La clé est partagée : sans cette garde, elle lirait la pièce d'un autre compte,
+    ou partirait vers un autre hôte."""
+    with pytest.raises(fs.FileSourceError, match="compte whatsapp") as e:
+        fs.resolve(_src(url=url))
+    assert unipile["client"].session.appels == []
+    assert COMPTE not in str(e.value)
+
+
+@pytest.mark.parametrize("source, motif", [
+    ({"kind": "unipile", "channel": "fax", "url": PIECE}, "channel"),
+    ({"kind": "unipile", "url": PIECE}, "channel"),
+    ({"kind": "unipile", "channel": "telegram"}, "url"),
+])
+def test_unipile_mal_formee_est_refusee_avant_toute_resolution(unipile, source, motif):
+    with pytest.raises(fs.FileSourceError, match=motif):
+        fs.resolve(source)
+    assert unipile["canaux"] == []
+
+
+def test_unipile_sans_compte_connecte_dit_le_refus_de_la_lecture(monkeypatch):
+    from mcp.types import ErrorData, INVALID_PARAMS
+    from oto_mcp.mcp_errors import McpError
+    from oto_mcp.tools import unipile as U
+
+    def _refus(provider):
+        raise McpError(ErrorData(code=INVALID_PARAMS,
+                                 message="Connect your Whatsapp account first."))
+    monkeypatch.setattr(U, "unipile_client", _refus)
+    with pytest.raises(fs.FileSourceError, match="Connect your Whatsapp account"):
+        fs.resolve(_src())
+
+
+@pytest.mark.parametrize("reponse, motif", [
+    (_Reponse(status=302, entetes={"location": "https://ailleurs.example/x"}),
+     "redirection refusée"),
+    (_Reponse(status=404), "404"),
+    (_Reponse(corps=b"x" * 64), "trop volumineuse"),
+    (_Reponse(corps=b"x" * 64, entetes={"content-length": ""}), "> 32 octets"),
+])
+def test_unipile_refus_au_telechargement(unipile, reponse, motif):
+    unipile["client"] = _Client(reponse)
+    with pytest.raises(fs.FileSourceError, match=motif):
+        fs.resolve(_src(), max_bytes=32)
+
+
+def test_unipile_panne_reseau_ne_rend_que_son_type(unipile):
+    import requests
+    unipile["client"] = _Client(requests.ConnectionError(f"boom {PIECE}"))
+    with pytest.raises(fs.FileSourceError, match="ConnectionError") as e:
+        fs.resolve(_src())
+    assert COMPTE not in str(e.value)
+
+
+def test_le_type_unipile_est_annonce():
+    with pytest.raises(fs.FileSourceError, match="unipile"):
+        fs.resolve({"kind": "ftp"})
