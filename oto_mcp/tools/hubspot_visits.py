@@ -41,6 +41,7 @@ The HubSpot client (oto-core) has no events method; we call its `_request`, as
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Literal, Optional
 
@@ -48,6 +49,8 @@ from fastmcp import FastMCP
 
 from .. import access
 from .lecture import LECTURE
+
+logger = logging.getLogger(__name__)
 
 #: The property HubSpot fills with a tracked company's last de-anonymised visit —
 #: what `op="companies"` filters and sorts on.
@@ -156,6 +159,7 @@ def tracking_diagnosis(client, windowed: bool) -> dict:
             filters=[{"propertyName": COMPANY_TRACKED, "operator": "EQ",
                       "value": "true"}]) or {}
     except Exception as e:  # noqa: BLE001 — degraded to a NAMED diagnosis below
+        logger.warning("hubspot_visits: tracking diagnosis failed (%s)", type(e).__name__)
         return {"tracked_companies": None,
                 "note": "could not count the tracked companies "
                         f"({type(e).__name__}): the empty result is not explained"}

@@ -175,12 +175,14 @@ def test_an_empty_page_behind_a_cursor_is_not_diagnosed(client):
     assert "diagnosis" not in out and client.search_objects.call_count == 1
 
 
-def test_a_diagnosis_that_fails_does_not_break_the_empty_answer(client):
+def test_a_diagnosis_that_fails_does_not_break_the_empty_answer(client, caplog):
     client.search_objects.side_effect = [{"total": 0, "results": []},
                                          _upstream(400, {"message": "no such property"})]
-    out = _tool()(op="companies")
+    with caplog.at_level("WARNING", logger=V.__name__):
+        out = _tool()(op="companies")
     assert out["results"] == [] and out["diagnosis"]["tracked_companies"] is None
     assert "not explained" in out["diagnosis"]["note"]
+    assert "tracking diagnosis failed" in caplog.text, "a failed diagnosis is logged"
 
 
 # --- contacts: the people HubSpot already knows ----------------------------------------
