@@ -22,11 +22,12 @@ from .. import (access, billing_grants, providers, credentials_store, db,
 from . import _facturation_externe as facturation_externe
 from . import _identite
 from ._authz import PLATFORM_ADMIN, SUPER_ADMIN
-from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
+from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
 _SUB = {"sub": "target"}   # route {sub} (dashboard) → champ Input `target`
 _ID = {"id": "org_id"}
+_GID = {"id": "group_id"}
 
 
 def _resolve_target(target: str) -> str:
@@ -91,6 +92,26 @@ class OrgGrantKeyInput(BaseModel):
 class OrgRevokeKeyInput(BaseModel):
     org_id: int
     provider: str
+
+
+class GroupGrantKeyInput(BaseModel):
+    group_id: int
+    provider: str
+    daily_quota: Optional[int] = None
+
+
+class GroupRevokeKeyInput(BaseModel):
+    group_id: int
+    provider: str
+
+
+class GroupKeyGrant(BaseModel):
+    """Echo of a platform-key grant (or revocation) on a TEAM (#1239). `daily_quota`
+    is absent on a revocation; on a grant, `null` = unlimited."""
+    ok: bool
+    group_id: int
+    provider: str
+    daily_quota: Optional[int] = None
 
 
 class OrgUnipileLimitInput(BaseModel):
@@ -234,6 +255,25 @@ def _grant_org_key(ctx: ResolvedCtx, inp: OrgGrantKeyInput) -> dict:
 def _revoke_org_key(ctx: ResolvedCtx, inp: OrgRevokeKeyInput) -> dict:
     credentials_store.platform_revoke(inp.provider, f"org:{inp.org_id}")
     return {"ok": True, "org_id": inp.org_id, "provider": inp.provider}
+
+
+def _grant_group_key(ctx: ResolvedCtx, inp: GroupGrantKeyInput) -> dict:
+    """The included key granted to a TEAM (#1239): its members resolve it while that team
+    is their active one — with the org's personal-key policy, this is what reserves a
+    connector to the team."""
+    if not group_store.get_group(inp.group_id):
+        raise AuthzDenied(404, "unknown_group", f"Équipe #{inp.group_id} inconnue.")
+    if not _has_platform_instance(inp.provider):
+        raise AuthzDenied(404, "unknown_key", f"Aucune clé plateforme `{inp.provider}`.")
+    dq = max(1, inp.daily_quota) if inp.daily_quota is not None else None
+    credentials_store.platform_grant(inp.provider, f"group:{inp.group_id}", daily_quota=dq)
+    return {"ok": True, "group_id": inp.group_id, "provider": inp.provider,
+            "daily_quota": dq}
+
+
+def _revoke_group_key(ctx: ResolvedCtx, inp: GroupRevokeKeyInput) -> dict:
+    credentials_store.platform_revoke(inp.provider, f"group:{inp.group_id}")
+    return {"ok": True, "group_id": inp.group_id, "provider": inp.provider}
 
 
 def _unipile_limit_view(org_id: int) -> dict:
@@ -474,6 +514,23 @@ CAPABILITIES += [
         authz=SUPER_ADMIN,
         description="[super admin] Revoke an org's share of a connector's platform key.",
         rest=RestBinding("DELETE", "/api/admin/orgs/{id}/grants/{provider}", _ID),
+    ),
+    Capability(
+        key="platform.group.grant_key", handler=_grant_group_key, Input=GroupGrantKeyInput,
+        Output=GroupKeyGrant, authz=SUPER_ADMIN,
+        errors=(DeclaredError(404, "unknown_group", "l'équipe n'existe pas"),
+                DeclaredError(404, "unknown_key", "aucune clé plateforme pour ce connecteur")),
+        description="[super admin] Grant a connector's platform key (the included key) to a "
+                    "TEAM — its members resolve it while the team is their active one. "
+                    "Optional per-day quota. With the org forbidding personal keys for the "
+                    "connector, this reserves it to the team.",
+        rest=RestBinding("POST", "/api/admin/groups/{id}/grants/{provider}", _GID),
+    ),
+    Capability(
+        key="platform.group.revoke_key", handler=_revoke_group_key, Input=GroupRevokeKeyInput,
+        Output=GroupKeyGrant, authz=SUPER_ADMIN,
+        description="[super admin] Revoke a team's grant of a connector's platform key.",
+        rest=RestBinding("DELETE", "/api/admin/groups/{id}/grants/{provider}", _GID),
     ),
     Capability(
         key="platform.org.unipile_limit_get", handler=_get_unipile_limit,

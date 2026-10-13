@@ -142,15 +142,30 @@ def test_user_edge_beats_org_edge(vault, monkeypatch):
     """Plusieurs voies vers la même instance ⟹ la plus FAVORABLE (0053-D5), et
     l'ordre de spécificité est celui de l'ancien chemin : `user:` prime sur l'org
     active — miroir exact d'`_platform_grantee_scope`."""
+    monkeypatch.setattr(access, "current_group", lambda sub: None)
     _edges(monkeypatch, [_edge(quota=10, edge_id=2),
                          _edge("org", "42", quota=1000, edge_id=3)])
     assert access._platform_grant_meta("granted-sub", "fullenrich", 42)["daily_quota"] == 10
 
 
-def test_org_scope_is_the_ACTIVE_org_never_membership():
+def test_org_scope_is_the_ACTIVE_org_never_membership(monkeypatch):
     """Un grant d'org est métré per-contexte-d'org : un membre de X actif dans Y n'en
     profite pas. La migration doit reproduire ça, donc la liste des scopes aussi."""
+    monkeypatch.setattr(access, "current_group", lambda sub: None)
     assert grants_chain.grantee_scopes("s", 7) == [("user", "s"), ("org", "7")]
+    assert grants_chain.grantee_scopes("s", None) == [("user", "s")]
+
+
+def test_group_scope_is_the_ACTIVE_team_and_only_one_of_his(monkeypatch):
+    """#1239 : l'équipe ACTIVE entre `user` et `org`, si l'appelant en est membre dans
+    l'org active — jamais une équipe qu'il ne fait que nommer."""
+    from oto_mcp import group_store
+    monkeypatch.setattr(access, "current_group", lambda sub: 5)
+    monkeypatch.setattr(group_store, "list_groups_for_user",
+                        lambda sub, org: [{"group_id": 5}] if sub == "s" else [])
+    assert grants_chain.grantee_scopes("s", 7) == [("user", "s"), ("group", "5"),
+                                                    ("org", "7")]
+    assert grants_chain.grantee_scopes("x", 7) == [("user", "x"), ("org", "7")]
     assert grants_chain.grantee_scopes("s", None) == [("user", "s")]
 
 

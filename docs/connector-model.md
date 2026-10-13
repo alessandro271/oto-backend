@@ -138,6 +138,18 @@ La plupart des connecteurs n'ont que **1 + 2**. Seuls les **connecteurs à optio
   (clé primaire), pas d'instantané : une politique posée vaut sur toutes les couleurs dès
   l'appel suivant. **Réserver un connecteur à une équipe** = cette politique + la clé posée
   sur l'équipe (ou la clé incluse accordée à l'équipe).
+- **La clé incluse s'accorde à une ÉQUIPE (13/10/2026, oto-backend#1239).** Le scope `group`
+  entre `user` et `org` — tranché par Alexis, que `grants_chain.grantee_scopes` réservait à
+  l'ADR : `user:<sub>` > `group:<gid>` > `org:<id>`, dans la chaîne (arêtes `grants`) et en
+  miroir dans l'ancien chemin (`access.platform_grant._platform_grantee_scope`,
+  `share_down` / `rate_limit_by` / `share_denied`). Le grain est celui de l'org : l'équipe
+  ACTIVE, et seulement si l'appelant en est membre dans l'org active
+  (`grants_chain.active_group`) — un axe `_group=` lisible sans appartenance n'ouvre rien.
+  La révocation prime toujours sur tout accord, quel que soit le grain. Pose : super admin
+  (`POST/DELETE /api/admin/groups/{id}/grants/{provider}`, capacités
+  `platform.group.{grant_key,revoke_key}`, `oto_admin_key_grant scope=group`). **Pas d'arête
+  tenant→équipe** : la convention du 08/10/2026 gèle le tenant (`docs/tenants.md`) ; sur une
+  instance dédiée, c'est l'opérateur de l'instance qui pose la clé incluse sur l'équipe.
 
 ## Couche 2 — Authentification (quelle clé ?)
 

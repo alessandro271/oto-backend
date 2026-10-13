@@ -116,11 +116,12 @@ def _user(ctx: ResolvedCtx, inp: UserAdminInput) -> dict:
     return users_admin._set_role(ctx, users_admin.SetRoleInput(target=target, role=role))
 
 
-# ── oto_admin_key_grant : list / grant / revoke · scope user|org (DROITS, pas de secret) ─
+# ── oto_admin_key_grant : list / grant / revoke · scope user|group|org (DROITS, pas de secret) ─
 class KeyGrantInput(BaseModel):
     op: Literal["list", "grant", "revoke"]
-    scope: Optional[Literal["user", "org"]] = None  # grant/revoke seulement
+    scope: Optional[Literal["user", "group", "org"]] = None  # grant/revoke seulement
     target: Optional[str] = None      # scope=user : email ou sub
+    group_id: Optional[int] = None    # scope=group (équipe, #1239)
     org_id: Optional[int] = None      # scope=org
     provider: Optional[str] = None    # grant/revoke : connecteur ciblé ; op=list : filtre
     daily_quota: Optional[int] = None  # grant (optionnel)
@@ -133,7 +134,8 @@ def _key_grant(ctx: ResolvedCtx, inp: KeyGrantInput) -> dict:
         # ADR 0044 §F : instances scope PLATFORM du coffre unifié (plus platform_keys).
         keys = credentials_store.list_platform_credentials(inp.provider)
         return {"keys": keys, "count": len(keys)}
-    scope = _need(inp.scope, "missing_scope", "`scope` (user|org) requis pour grant/revoke.")
+    scope = _need(inp.scope, "missing_scope",
+                  "`scope` (user|group|org) requis pour grant/revoke.")
     provider = _need(inp.provider, "missing_provider", "`provider` (connecteur) requis.")
     if inp.scope == "user":
         target = _need(inp.target, "missing_target", "scope=user : `target` requis.")
@@ -141,6 +143,13 @@ def _key_grant(ctx: ResolvedCtx, inp: KeyGrantInput) -> dict:
             return users_admin._grant_key(ctx, users_admin.GrantKeyInput(
                 target=target, provider=provider, daily_quota=inp.daily_quota))
         return users_admin._revoke_key(ctx, users_admin.RevokeKeyInput(target=target, provider=provider))
+    if inp.scope == "group":
+        group_id = _need(inp.group_id, "missing_group", "scope=group : `group_id` requis.")
+        if inp.op == "grant":
+            return users_admin._grant_group_key(ctx, users_admin.GroupGrantKeyInput(
+                group_id=group_id, provider=provider, daily_quota=inp.daily_quota))
+        return users_admin._revoke_group_key(ctx, users_admin.GroupRevokeKeyInput(
+            group_id=group_id, provider=provider))
     org_id = _need(inp.org_id, "missing_org", "scope=org : `org_id` requis.")
     if inp.op == "grant":
         return users_admin._grant_org_key(ctx, users_admin.OrgGrantKeyInput(
@@ -367,7 +376,8 @@ CAPABILITIES += [
         description=("Platform keys as a RIGHT — never reveals the secret. "
                      "op=list (which vendors oto contracts: provider, label; optional "
                      "`provider` filter; platform admin) / grant|revoke (by `provider`, super admin) · "
-                     "scope=user (`target` email|sub) | org (`org_id`); grant takes optional "
+                     "scope=user (`target` email|sub) | group (`group_id`, the team's "
+                     "members while it is their active one) | org (`org_id`); grant takes optional "
                      "`daily_quota`. To POSE a raw key/secret, use the dashboard."),
         mcp="oto_admin_key_grant",
     ),

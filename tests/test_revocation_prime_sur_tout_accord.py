@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import pytest
 
-from oto_mcp import credentials_store, grants_chain
+from oto_mcp import access, credentials_store, grants_chain, group_store
 from oto_mcp.access import chain_resolution
 from oto_mcp.db import grants as db_grants
 
@@ -33,8 +33,12 @@ def _edge(label, grantee, revoked=None, quota=None, edge_id=1):
             "revoked_at": revoked}
 
 
-def _monde(monkeypatch, instances, aretes):
-    """`edges_for` filtre par clé ET par grantee, comme le vrai SQL."""
+def _monde(monkeypatch, instances, aretes, equipe=None):
+    """`edges_for` filtre par clé ET par grantee, comme le vrai SQL. `equipe` = l'équipe
+    ACTIVE de l'appelant, dont il est membre (#1239) ; aucune par défaut."""
+    monkeypatch.setattr(access, "current_group", lambda sub: equipe)
+    monkeypatch.setattr(group_store, "list_groups_for_user",
+                        lambda sub, org: [{"group_id": equipe}] if equipe else [])
     monkeypatch.setattr(credentials_store, "list_platform_instances",
                         lambda p: [dict(i) for i in instances] if p == "serper" else [])
     monkeypatch.setattr(db_grants, "edges_for", lambda ref, grantees: [
@@ -43,6 +47,15 @@ def _monde(monkeypatch, instances, aretes):
 
 
 # ── L5 : `platform_rung`, servi en prod ───────────────────────────────────────
+
+def test_l5_la_revocation_de_l_equipe_prime_sur_l_accord_individuel(monkeypatch):
+    """#1239 : le grain `group` (équipe active) suit la même règle que l'org."""
+    _monde(monkeypatch, [ANCIENNE], [
+        _edge("env", ("user", "x"), quota=500, edge_id=1),
+        _edge("env", ("group", "9"), revoked="2026-10-13", edge_id=2)], equipe=9)
+    v = grants_chain.platform_rung("x", "serper", 42)
+    assert v is not None and v.granted is False and v.grantee == ("group", "9")
+
 
 def test_l5_un_accord_individuel_ne_rouvre_pas_la_revocation_de_l_org(monkeypatch):
     _monde(monkeypatch, [ANCIENNE], [

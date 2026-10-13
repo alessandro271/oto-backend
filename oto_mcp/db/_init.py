@@ -1874,10 +1874,12 @@ def _seed_platform_grants_as_edges(conn: psycopg.Connection) -> None:
     RESSUSCITE pas un accès retiré à la main entre deux boots.
 
     **Ce qui n'est pas migré, et se voit dans les logs** : un scope hors `user:`/`org:`
-    (`group:<id>`, ou le `org` nu « tout le monde »). L'ancien chemin ne les résout de
-    toute façon jamais sur une clé plateforme (`access._platform_grantee_scope` ne
-    connaît que user et org), et le vocabulaire de 0053 n'a pas de scope « tout le
-    monde ». Les inventer ici serait décider à la place de l'ADR.
+    (`group:<id>`, ou le `org` nu « tout le monde »). Le vocabulaire de 0053 n'a pas de
+    scope « tout le monde ». Le scope `group:` existe depuis le 13/10/2026 (#1239 :
+    l'équipe ACTIVE, lue par la chaîne ET par l'ancien chemin) ; une arête d'équipe se
+    POSE (`platform.group.grant_key`), elle ne se sème pas au boot depuis une ligne
+    écrite avant que le scope ait un sens — ce serait ouvrir un accès que personne n'a
+    décidé.
     """
     from .. import grants_chain
     from . import grants as db_grants

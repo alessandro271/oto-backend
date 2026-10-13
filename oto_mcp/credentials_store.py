@@ -258,7 +258,8 @@ def _sans_refus(meta: dict, scope: str) -> dict:
 
 def platform_grant(provider: str, scope: str, daily_quota: "int | None" = None,
                    label: "str | None" = None) -> None:
-    """ADR 0044 §F R4 : accorde l'accès plateforme à `scope` (`user:<sub>` | `org:<id>`) sur
+    """ADR 0044 §F R4 : accorde l'accès plateforme à `scope` (`user:<sub>` | `group:<gid>`
+    (#1239) | `org:<id>`) sur
     l'instance du `provider` (label = clé la plus récente par défaut) — remplace
     grant_platform_key/grant_org_platform_key. Non free-tier ⟹ ajoute au `share_down`
     (mode 'closed'). Free-tier (`platform_key_open`) ⟹ accès déjà ouvert à tous : on ne pose

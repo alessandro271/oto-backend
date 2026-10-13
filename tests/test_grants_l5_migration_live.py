@@ -111,9 +111,9 @@ def test_migration_maps_every_existing_grant_to_an_edge(live):
 
 
 def test_migration_skips_scopes_the_old_path_cannot_resolve(live):
-    """`group:7` est dans `rate_limit_by` mais l'ancien chemin ne le résout JAMAIS
-    sur une clé plateforme (`_platform_grantee_scope` ne connaît que user et org).
-    Le migrer inventerait un accès qui n'existe pas."""
+    """`group:7` est dans `rate_limit_by`, écrit avant que le scope `group` ait un sens
+    sur une clé plateforme (#1239, 13/10/2026). Le semer au boot ouvrirait un accès
+    que personne n'a décidé : une arête d'équipe se pose, elle ne se migre pas."""
     _seed_prod_shaped_platform_key()
     live()
     assert not [e for e in _edges() if e["grantee_kind"] == "group"]

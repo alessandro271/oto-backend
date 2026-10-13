@@ -148,21 +148,45 @@ def parse_instance_ref(ref: str) -> Optional[tuple[str, str]]:
     return (parsed.label, parsed.connector)
 
 
+def active_group(sub: Optional[str], active_org: Optional[int]) -> Optional[int]:
+    """L'équipe ACTIVE de l'appelant, si elle est l'une des SIENNES dans l'org active —
+    le scope `group` d'une arête (#1239). `None` sans sub, sans org, sans équipe active,
+    ou si l'équipe active n'est pas une équipe dont il est membre dans cette org (un axe
+    `_group=` lisible sans appartenance n'ouvre pas la clé incluse d'une équipe).
+
+    Le même grain que l'org : l'équipe ACTIVE, jamais toutes les appartenances — un grant
+    d'équipe se métre par contexte, comme le grant d'org."""
+    if not sub or active_org is None:
+        return None
+    from . import access                    # tardif : `access` lit ce module
+    g = access.current_group(sub)
+    if g is None:
+        return None
+    from . import group_store
+    siennes = {int(r["group_id"]) for r in group_store.list_groups_for_user(sub, active_org)}
+    return int(g) if int(g) in siennes else None
+
+
 def grantee_scopes(sub: Optional[str], active_org: Optional[int]) -> list[tuple[str, str]]:
-    """Les scopes qui peuvent viser cet appelant, du plus spécifique au moins.
+    """Les scopes qui peuvent viser cet appelant, du plus spécifique au moins :
+    `user:<sub>`, puis l'équipe ACTIVE (`group:<gid>`), puis l'org ACTIVE.
 
-    **Miroir EXACT d'`access._platform_grantee_scope`** : `user:<sub>` prime, puis
-    l'org **ACTIVE** — jamais l'appartenance. Un membre de l'org X actif dans Y ne
-    profite pas du grant de X : le grant d'org est métré per-contexte-d'org, et ce
-    n'est pas un détail d'implémentation mais la sémantique que la migration doit
-    reproduire au caractère près.
+    **Miroir EXACT d'`access._platform_grantee_scope`** : jamais l'appartenance seule.
+    Un membre de l'org X actif dans Y ne profite pas du grant de X : le grant d'org est
+    métré per-contexte-d'org, et ce n'est pas un détail d'implémentation mais la
+    sémantique que la migration doit reproduire au caractère près.
 
-    Le scope `group` n'est PAS lu : l'ancien chemin ne l'exprime nulle part pour une
-    clé plateforme (`_platform_grantee_scope` ne connaît que user et org), donc rien
-    ne le produit — et l'inventer ici serait décider à la place de l'ADR."""
+    **Le scope `group` (décision d'Alexis du 13/10/2026, #1239)** — que cette docstring
+    réservait à l'ADR : la clé incluse s'accorde aussi à une ÉQUIPE, entre l'utilisateur et
+    l'org. Il se lit sur l'équipe ACTIVE, et seulement si l'appelant en est membre dans
+    l'org active (`active_group`) : le même grain par contexte que l'org. Avec la politique
+    « clé perso interdite », c'est ce qui réserve un connecteur à une équipe."""
     out: list[tuple[str, str]] = []
     if sub:
         out.append(("user", sub))
+    g = active_group(sub, active_org)
+    if g is not None:
+        out.append(("group", str(g)))
     if active_org is not None:
         out.append(("org", str(active_org)))
     return out
@@ -444,15 +468,16 @@ def _journal_counters(provider: str, sub: str, verdict: ChainVerdict) -> None:
 
 def grant(provider: str, scope: str, daily_quota: Optional[int] = None,
           label: Optional[str] = None, created_by: Optional[str] = None) -> Optional[int]:
-    """Accorde l'accès plateforme à `scope` (`user:<sub>` | `org:<id>`) en posant une
-    ARÊTE. Rend son id, ou None si le scope est hors vocabulaire.
+    """Accorde l'accès plateforme à `scope` (`user:<sub>` | `group:<gid>` | `org:<id>`)
+    en posant une ARÊTE. Rend son id, ou None si le scope est hors vocabulaire.
 
     **Additif par construction** : aucune écriture ne touche la ligne du coffre, donc
     accorder à l'un ne peut plus retirer à l'autre. C'est la sortie de l'incident du
     31/07 — pas un garde-fou de plus autour du même geste, l'absence du geste."""
     grantee = _parse_scope(scope)
     if grantee is None:
-        logger.warning("grants-chain: scope %r hors vocabulaire (user:/org:) — ignoré", scope)
+        logger.warning("grants-chain: scope %r hors vocabulaire (user:/group:/org:) — ignoré",
+                       scope)
         return None
     label = label or _latest_label(provider)
     if label is None:
@@ -526,7 +551,7 @@ def granted_instances(scope_kind: str, scope_id: str) -> list[dict]:
 
 def _parse_scope(scope: str) -> Optional[tuple[str, str]]:
     kind, _, ident = str(scope).partition(":")
-    return (kind, ident) if kind in ("user", "org") and ident else None
+    return (kind, ident) if kind in ("user", "group", "org") and ident else None
 
 
 def _latest_label(provider: str) -> Optional[str]:

@@ -15,14 +15,21 @@ from . import scope
 
 def _platform_grantee_scope(sub, active_org, scopes) -> "str | None":
     """The scope in `scopes` that targets `sub` on a PLATFORM instance, or None (ADR 0044
-    §F). `user:<sub>` wins (the most specific); `org:<id>` gated on the **ACTIVE** org
-    (EXACT mirror of the old `get_active_org_grant(active_org)` — an org grant is metered
-    per org context, not per membership: a member of org X active in Y does not benefit
-    from it). Serves access (closed) AND quota (rate_limit_by)."""
+    §F). `user:<sub>` wins (the most specific); then the **ACTIVE** team `group:<gid>`
+    (#1239, decision of 13/10/2026), only if `sub` is one of its members in the active
+    org; then `org:<id>` gated on the **ACTIVE** org (EXACT mirror of the old
+    `get_active_org_grant(active_org)` — an org grant is metered per org context, not per
+    membership: a member of org X active in Y does not benefit from it). Serves access
+    (closed) AND quota (rate_limit_by). EXACT mirror of `grants_chain.grantee_scopes`; the
+    team is only looked up when a `group:` scope is listed (the old path pays nothing)."""
     if not scopes:
         return None
     if f"user:{sub}" in scopes:
         return f"user:{sub}"
+    if any(str(s).startswith("group:") for s in scopes):
+        g = grants_chain.active_group(sub, active_org)
+        if g is not None and f"group:{g}" in scopes:
+            return f"group:{g}"
     if active_org is not None and f"org:{active_org}" in scopes:
         return f"org:{active_org}"
     return None
@@ -41,13 +48,18 @@ def _platform_denied(sub, active_org, inst: dict) -> bool:
     served exactly as before: a credit block that did not block. The revoked scope is
     now remembered in `meta.share_denied`, and a denial wins over everything: the open
     tier, a `share_down` grant of the other scope, a `share_side` loan. Any matching
-    scope refuses — `user:<sub>` or `org:<active org>` — because a block is aimed at
-    one of them, and the other must not reopen it."""
+    scope refuses — `user:<sub>`, the active team `group:<gid>` (#1239) or
+    `org:<active org>` — because a block is aimed at one of them, and the others must
+    not reopen it."""
     denied = (inst.get("meta") or {}).get(DENIED_META_KEY) or []
     if not denied:
         return False
     if sub and f"user:{sub}" in denied:
         return True
+    if any(str(s).startswith("group:") for s in denied):
+        g = grants_chain.active_group(sub, active_org)
+        if g is not None and f"group:{g}" in denied:
+            return True
     return active_org is not None and f"org:{active_org}" in denied
 
 
