@@ -114,6 +114,8 @@ chemins = [
   "oto_mcp/handshake_log.py",
   "oto_mcp/empreinte_deps.py",
   "oto_mcp/entetes_securite.py",
+  "oto_mcp/limite_debit.py",
+  "oto_mcp/limite_debit_mesure.py",
   "oto_mcp/egress.py",
   "oto_mcp/crypto.py",
   "oto_mcp/env_inventory.py",
