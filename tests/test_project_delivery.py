@@ -356,11 +356,17 @@ def test_get_guide_by_id_with_grant(monkeypatch):
 
 
 def test_get_guide_by_id_denied_without_grant(monkeypatch):
+    """F-016 : sans accès, le refus est CELUI d'un id absent (404 `unknown_guide`) —
+    un 403 ici disait quelles procédures existent dans les autres orgs."""
     _wire_guide_read(monkeypatch, can_access=False)
-    with pytest.raises(AuthzDenied) as e:
-        asyncio.run(oi._get_guide(ResolvedCtx(sub="intrus", org_id=9),
-                                     oi.GuideGetInput(doctrine_id=77)))
-    assert e.value.status == 403
+    refus = []
+    for gid in (77, 999):          # 77 existe (hors de portée), 999 n'existe pas
+        with pytest.raises(AuthzDenied) as e:
+            asyncio.run(oi._get_guide(ResolvedCtx(sub="intrus", org_id=9),
+                                         oi.GuideGetInput(guide_id=gid)))
+        refus.append((e.value.status, e.value.code, e.value.details))
+    assert refus[0] == refus[1]
+    assert refus[0][:2] == (404, "unknown_guide")
 
 
 def test_get_guide_by_id_unknown_404(monkeypatch):

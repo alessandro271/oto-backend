@@ -137,7 +137,13 @@ def _doc(ctx: ResolvedCtx, inp: DocInput) -> dict:
     # ops par doc_id (résolvent le projet pour l'autz)
     require(inp.doc_id is not None, "missing_doc", "`doc_id` requis.")
     row = db.get_doc_by_id(int(inp.doc_id))
-    require(row is not None, "unknown_doc", f"Doc #{inp.doc_id} inconnu.", 404)
+    # F-016 : une page qu'on ne peut pas LIRE (ni par son projet, ni par un partage de
+    # la page) n'existe pas pour l'appelant — même 404 qu'un id absent. Les ids sont
+    # des entiers séquentiels globaux : un 403 ici les rendait énumérables, toutes orgs
+    # confondues. Le 403 des ops d'écriture reste à qui lit la page sans pouvoir
+    # l'écrire (il sait déjà qu'elle existe). Écrire implique lire (`can_access`).
+    require(row is not None and common.acces_a_la_page(sub, row) is not None,
+            "unknown_doc", f"Doc #{inp.doc_id} inconnu.", 404)
     pid = row["project_id"]
 
     if inp.op == "get":

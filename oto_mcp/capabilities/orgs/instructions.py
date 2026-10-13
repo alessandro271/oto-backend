@@ -968,10 +968,12 @@ def _read_guide(ctx: ResolvedCtx, inp) -> tuple[dict, tuple[str, ...] | None]:
     if guide_id is not None:
         from ... import ownership   # import paresseux (miroir _authz, zéro cycle au boot)
         instr = org_store.get_instruction_by_id(int(guide_id))
-        if not instr:
+        # F-016 : un guide qu'on ne peut pas lire n'existe pas pour l'appelant — même
+        # 404 qu'un id absent. Les ids sont séquentiels : un 403 ici disait quelles
+        # procédures existent dans les autres orgs.
+        if not instr or not ownership.can_access(ctx.sub, "doctrine", str(guide_id),
+                                                 "read"):
             raise _inconnu(f"Aucun guide #{guide_id}.")
-        if not ownership.can_access(ctx.sub, "doctrine", str(guide_id), "read"):
-            raise AuthzDenied(403, "forbidden", "Accès refusé à ce guide.")
         # Le scope se lit sur les colonnes qui le portent, pas sur `org_id` (l'org
         # PARENTE, identique pour une procédure d'équipe et pour celles de son org).
         # `scope` était écrit « org » en dur : vrai tant qu'aucune procédure d'équipe
