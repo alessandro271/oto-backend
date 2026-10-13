@@ -128,14 +128,15 @@ def test_le_blocage_se_voit_a_la_resolution_reelle(base, monkeypatch):
     """Bout en bout : `resolve_credential` refuse le membre de l'org bloquée et sert
     celui d'une autre org, sans clé à eux ni l'un ni l'autre."""
     from oto_mcp import credentials_store
-    from oto_mcp.access import resolve, scope
+    from oto_mcp import access
+    from oto_mcp.access import resolve
     from oto_mcp.mcp_errors import McpError
 
     _cle_payante_ouverte_a_tous()
     credentials_store.platform_revoke("aiark", "org:42")
 
     org_de = {"membre": 42, "autre": 77}
-    monkeypatch.setattr(scope, "current_org", lambda sub: org_de.get(sub))
+    monkeypatch.setattr(access, "current_org", lambda sub: org_de.get(sub))
     with pytest.raises(McpError):
         resolve._resolve_credential_impl("aiark", "auto", "membre")
     servi = resolve._resolve_credential_impl("aiark", "auto", "autre")

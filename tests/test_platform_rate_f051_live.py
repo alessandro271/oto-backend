@@ -143,13 +143,14 @@ def test_la_resolution_reelle_applique_la_limite_au_palier_plateforme(base, monk
     """Bout en bout : la clé plateforme est servie trois fois à l'org, refusée la
     quatrième ; une configuration de connexion (`check_usage=False`) ne compte pas."""
     from oto_mcp import credentials_store
-    from oto_mcp.access import platform_rate, resolve, scope
+    from oto_mcp import access
+    from oto_mcp.access import platform_rate, resolve
     from oto_mcp.mcp_errors import McpError
 
     monkeypatch.setenv("OTO_PLATFORM_KEY_ORG_RATE", "enforce")
     credentials_store.set_credential(credentials_store.PLATFORM, "commune", "aiark",
                                      "k-1", set_by="op")      # ouverte à tous
-    monkeypatch.setattr(scope, "current_org", lambda sub: 42)
+    monkeypatch.setattr(access, "current_org", lambda sub: 42)
 
     for _ in range(5):
         resolve._resolve_credential_impl("aiark", "auto", "membre", check_usage=False)
