@@ -17,15 +17,50 @@ from _base_jetable import base_jetable
 
 # ── Réglages (sans base) ──────────────────────────────────────────────────────
 
-def test_le_mode_par_defaut_est_report_et_une_valeur_inconnue_aussi(monkeypatch):
+def test_le_mode_par_defaut_est_report(monkeypatch):
     from oto_mcp.access import platform_rate
 
     monkeypatch.delenv("OTO_PLATFORM_KEY_ORG_RATE", raising=False)
     assert platform_rate.mode() == "report"
-    monkeypatch.setenv("OTO_PLATFORM_KEY_ORG_RATE", "nimporte")
-    assert platform_rate.mode() == "report"
     monkeypatch.setenv("OTO_PLATFORM_KEY_ORG_RATE", " Enforce ")
     assert platform_rate.mode() == "enforce"
+
+
+_REGLAGES = ("OTO_PLATFORM_KEY_ORG_RATE", "OTO_PLATFORM_KEY_ORG_RATE_LIMIT",
+             "OTO_PLATFORM_KEY_ORG_RATE_WINDOW_S", "OTO_PLATFORM_KEY_ORG_RATE_OVERRIDES")
+
+
+@pytest.mark.parametrize("variable,valeur", [
+    ("OTO_PLATFORM_KEY_ORG_RATE", "nimporte"),
+    ("OTO_PLATFORM_KEY_ORG_RATE_LIMIT", "cent"),
+    ("OTO_PLATFORM_KEY_ORG_RATE_LIMIT", "-1"),
+    ("OTO_PLATFORM_KEY_ORG_RATE_WINDOW_S", "0"),
+    ("OTO_PLATFORM_KEY_ORG_RATE_WINDOW_S", "1m"),
+    ("OTO_PLATFORM_KEY_ORG_RATE_OVERRIDES", "serper:600"),
+    ("OTO_PLATFORM_KEY_ORG_RATE_OVERRIDES", "serper=beaucoup"),
+    ("OTO_PLATFORM_KEY_ORG_RATE_OVERRIDES", "=30"),
+])
+def test_un_reglage_illisible_refuse_le_demarrage_en_le_nommant(monkeypatch, variable,
+                                                                 valeur):
+    """Jamais lu « défaut » en silence : la garde de boot lève et nomme la variable."""
+    from oto_mcp.access import platform_rate
+
+    for nom in _REGLAGES:
+        monkeypatch.delenv(nom, raising=False)
+    platform_rate.verifier_reglages()
+    monkeypatch.setenv(variable, valeur)
+    with pytest.raises(ValueError, match=variable):
+        platform_rate.verifier_reglages()
+
+
+def test_la_garde_de_boot_est_appelee_au_demarrage():
+    """`server.main` appelle la garde avant de servir, à côté des droits déclarés."""
+    import inspect
+
+    from oto_mcp import server
+
+    source = inspect.getsource(server.main)
+    assert "platform_rate.verifier_reglages()" in source
 
 
 def test_limite_commune_et_par_connecteur(monkeypatch):

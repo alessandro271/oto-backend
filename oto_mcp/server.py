@@ -1053,6 +1053,10 @@ def main():
     # démarrage ICI, avant d'avoir rien écrit — jamais un 0 silencieux au premier usage.
     from . import access
     access.verifier_defauts()
+    # Équité des clés plateforme (F-051) : un réglage illisible refuse le démarrage ici,
+    # jamais lu « défaut » en silence. Cf. `access/platform_rate.verifier_reglages`.
+    from .access import platform_rate
+    platform_rate.verifier_reglages()
 
     # Identité de l'instance (#968, décision du 28/09/2026) : adresses, email, marque,
     # contrats — tout ce qui pointerait chez quelqu'un d'autre sans déclaration. Un

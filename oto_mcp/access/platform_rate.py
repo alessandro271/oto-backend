@@ -20,11 +20,14 @@ processes that share the database and nothing else.
   for the person (`user:<sub>`). The anonymous endpoint counts for the project's org.
 - **Rollout**: `OTO_PLATFORM_KEY_ORG_RATE` = `enforce` | `report` (DEFAULT: logs
   each window an org crosses the limit, refuses nothing) | `off` (no counting at
-  all). An unknown value reads `report`.
+  all).
 - **Limits**: `OTO_PLATFORM_KEY_ORG_RATE_LIMIT` calls (default 120) per
   `OTO_PLATFORM_KEY_ORG_RATE_WINDOW_S` seconds (default 60);
   `OTO_PLATFORM_KEY_ORG_RATE_OVERRIDES` = `serper=600,aiark=30` per key carrier,
   `0` = no limit for that connector.
+- **An unreadable setting refuses to start** (`verifier_reglages`, called at boot): a
+  misspelt mode or a limit that is not a whole number is a configuration error, never
+  read as the default in silence.
 
 The counter failing never refuses a call: it is logged, and the call goes through.
 """
@@ -55,31 +58,75 @@ DEFAULT_WINDOW_S = 60
 
 
 def mode() -> str:
-    """Read on each call (a flip bites at the next restart, without code). Unknown
-    value = `report`, the default: measure before biting."""
-    m = (os.environ.get(_ENV_MODE) or "report").strip().lower()
-    return m if m in _MODES else "report"
+    """Read on each call (a flip bites at the next restart, without code). Absent =
+    `report`, the default: measure before biting. Unknown value: raises."""
+    # Names LITERAL: the inventory (`env_inventory.py`) finds its reads by the AST.
+    lu = os.environ.get("OTO_PLATFORM_KEY_ORG_RATE", "report")
+    m = lu.strip().lower()
+    if m not in _MODES:
+        raise ValueError(f"{_ENV_MODE}={lu!r}: unreadable value, expected one of "
+                         f"{', '.join(_MODES)}")
+    return m
 
 
-def _entier(raw: Optional[str], defaut: int) -> int:
-    try:
-        return max(0, int((raw or "").strip()))
-    except ValueError:
+def _entier(raw: Optional[str], defaut: int, nom: str) -> int:
+    """`raw` as a whole number ≥ 0; absent or empty = `defaut`; anything else raises."""
+    if raw is None or not raw.strip():
         return defaut
+    try:
+        n = int(raw.strip())
+    except ValueError:
+        n = -1
+    if n < 0:
+        raise ValueError(f"{nom}={raw!r}: unreadable value, expected a whole number "
+                         f"(0 or more)")
+    return n
 
 
 def window_s() -> int:
-    return max(1, _entier(os.environ.get(_ENV_WINDOW), DEFAULT_WINDOW_S) or DEFAULT_WINDOW_S)
+    lu = os.environ.get("OTO_PLATFORM_KEY_ORG_RATE_WINDOW_S")
+    n = _entier(lu, DEFAULT_WINDOW_S, _ENV_WINDOW)
+    if n < 1:
+        raise ValueError(f"{_ENV_WINDOW}={lu!r}: a window lasts at least one second")
+    return n
+
+
+def _overrides() -> dict[str, int]:
+    """`OTO_PLATFORM_KEY_ORG_RATE_OVERRIDES` = `serper=600,aiark=30`; a pair without
+    `=`, without a name, or without a whole number raises."""
+    lu = os.environ.get("OTO_PLATFORM_KEY_ORG_RATE_OVERRIDES") or ""
+    limites: dict[str, int] = {}
+    for paire in lu.split(","):
+        if not paire.strip():
+            continue
+        nom, egal, valeur = paire.partition("=")
+        if not egal or not nom.strip() or not valeur.strip():
+            raise ValueError(f"{_ENV_OVERRIDES}={lu!r}: `{paire.strip()}` is not "
+                             f"`connector=limit`")
+        limites[nom.strip().lower()] = _entier(valeur, DEFAULT_LIMIT, _ENV_OVERRIDES)
+    return limites
+
+
+def _limite_commune() -> int:
+    return _entier(os.environ.get("OTO_PLATFORM_KEY_ORG_RATE_LIMIT"), DEFAULT_LIMIT,
+                   _ENV_LIMIT)
 
 
 def limit_for(carrier: str) -> int:
     """Calls per window for one org on `carrier`'s shared key; `0` = no limit."""
-    for paire in (os.environ.get(_ENV_OVERRIDES) or "").split(","):
-        nom, egal, valeur = paire.partition("=")
-        if egal and nom.strip().lower() == carrier:
-            return _entier(valeur, DEFAULT_LIMIT)
-    raw = os.environ.get(_ENV_LIMIT)
-    return DEFAULT_LIMIT if raw is None else _entier(raw, DEFAULT_LIMIT)
+    limites = _overrides()
+    if carrier in limites:
+        return limites[carrier]
+    return _limite_commune()
+
+
+def verifier_reglages() -> None:
+    """The startup guard: every `OTO_PLATFORM_KEY_ORG_RATE*` setting is read once, and
+    an unreadable one refuses to start, naming it — never a silent default."""
+    mode()
+    window_s()
+    _overrides()
+    _limite_commune()
 
 
 def _porteur(sub: Optional[str], org: Optional[int]) -> Optional[str]:

@@ -315,20 +315,21 @@ _REGLAGES: tuple[Variable, ...] = (
              "`access/platform_rate.py`) : `enforce` refuse l'appel d'une org au-delà "
              "de sa part de la fenêtre, `report` (défaut) journalise une fois par "
              "fenêtre l'org qui la dépasse et ne refuse rien, `off` ne compte rien. "
-             "Une valeur inconnue vaut `report`.",
-             ("oto_mcp/access/platform_rate.py:60",)),
+             "Une valeur inconnue LÈVE au boot.",
+             ("oto_mcp/access/platform_rate.py:64",)),
     Variable("OTO_PLATFORM_KEY_ORG_RATE_LIMIT", Classe.REGLAGE, None,
              "Appels d'UNE org sur UNE clé plateforme partagée par fenêtre (défaut 120 "
-             "dans le code ; 0 = sans limite).",
-             ("oto_mcp/access/platform_rate.py:81",)),
+             "dans le code ; 0 = sans limite). Illisible : LÈVE au boot.",
+             ("oto_mcp/access/platform_rate.py:111",)),
     Variable("OTO_PLATFORM_KEY_ORG_RATE_WINDOW_S", Classe.REGLAGE, None,
              "Durée en secondes de la fenêtre fixe de l'équité des clés plateforme "
-             "(défaut 60 dans le code).",
-             ("oto_mcp/access/platform_rate.py:72",)),
+             "(défaut 60 dans le code, 1 au moins). Illisible : LÈVE au boot.",
+             ("oto_mcp/access/platform_rate.py:87",)),
     Variable("OTO_PLATFORM_KEY_ORG_RATE_OVERRIDES", Classe.REGLAGE, "",
              "Limites par connecteur porteur de la clé, `serper=600,aiark=30` ; "
-             "`0` = sans limite pour ce connecteur. Vide = la limite commune partout.",
-             ("oto_mcp/access/platform_rate.py:77",)),
+             "`0` = sans limite pour ce connecteur. Vide = la limite commune partout. "
+             "Une paire illisible LÈVE au boot.",
+             ("oto_mcp/access/platform_rate.py:97",)),
     Variable("OTO_JOURNAL_REVISIONS", Classe.REGLAGE, "on",
              "Interrupteur du journal des révisions de ligne du datastore (oto#273) : "
              "`off` le coupe pour les écritures de CE processus, sans redéployer (un "
