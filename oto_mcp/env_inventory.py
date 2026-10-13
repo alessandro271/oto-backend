@@ -285,12 +285,12 @@ _REGLAGES: tuple[Variable, ...] = (
              "peint le graphe d'une procédure dans l'hôte MCP (`oto_procedure_app`). "
              "Absente = l'app ne s'enregistre pas : une instance sans front qui la "
              "porte ne sert aucune page qui pointerait vers personne.",
-             ("oto_mcp/procedure_diagram.py:425",)),
+             ("oto_mcp/procedure_diagram.py:439",)),
     Variable("OTO_DATA_APP_BUNDLE", Classe.REGLAGE, "",
              "URL du bundle JS d'un front (`…/process-graph.js`, sa feuille `.css` à "
              "côté) qui peint `data_app` dans l'hôte MCP, au lieu de la carte Prefab. "
              "Absente = la carte Prefab, inchangée.",
-             ("oto_mcp/tools/datastore_table_app.py:54",)),
+             ("oto_mcp/tools/datastore_table_app.py:51",)),
     Variable("OTO_EGRESS_ALLOW", Classe.REGLAGE, "",
              "Destinations internes autorisées en egress (`nom=adresse:port`, "
              "virgules). Absente = aucune exception : fail-closed, jamais un défaut "

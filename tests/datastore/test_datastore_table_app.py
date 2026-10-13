@@ -214,3 +214,56 @@ def test_avec_bundle_un_seul_data_app_et_c_est_le_sien(monkeypatch):
     assert len(avec) == 1 and avec[0].meta["ui"]["resourceUri"] == "ui://oto/data-table.html"
     sans = data_app_de(None)
     assert len(sans) == 1 and sans[0].meta["ui"]["resourceUri"] != "ui://oto/data-table.html"
+
+
+def test_row_montre_une_fiche_comme_la_carte_prefab(monkeypatch):
+    """`row` ouvre UNE fiche, cherchée comme la carte Prefab (`_id`, clé métier, titre) :
+    une procédure qui l'appelle ne casse pas sur l'instance qui déclare un bundle."""
+    m, store = _banc(monkeypatch)
+    vue = _appel(m, {"datastore": 7, "row": "r2"}).structured_content
+    assert vue["view"] == "table" and vue["row"] == "r2"
+    assert [r["nom"] for r in vue["rows"]] == ["Beta"] and vue["total"] == 1
+    assert vue["next_cursor"] is None
+    # Cherchée sur les lignes ENTIÈRES (le titre n'est pas parmi `fields`), puis coupée.
+    vue = _appel(m, {"datastore": 7, "row": "Alpha", "fields": ["statut"]}).structured_content
+    assert vue["rows"] == [{"_id": "r1", "statut": "nouveau"}]
+    assert store.appels[-1].get("fields") is None and store.appels[-1]["limit"] == 200
+    assert _appel(m, {"datastore": 7, "row": "beta.example"}).structured_content["rows"][0]["_id"] == "r2"
+
+
+def test_row_introuvable_une_note_qui_le_nomme(monkeypatch):
+    m, _ = _banc(monkeypatch)
+    r = _appel(m, {"datastore": 7, "row": "zeta"})
+    assert r.structured_content["view"] == "note"
+    assert "zeta" in _texte(r) and "leads" in _texte(r)
+
+
+def test_row_pour_un_client_texte(monkeypatch):
+    m, _ = _banc(monkeypatch, ui=False)
+    texte = _texte(_appel(m, {"datastore": 7, "row": "r1"}))
+    assert "Alpha" in texte and "Beta" not in texte
+
+
+def test_bundle_pose_sans_l_extra_apps_leve_au_demarrage(monkeypatch):
+    """La carte Prefab s'est déjà retirée pour ce bundle : se taire laisserait l'instance
+    sans aucun `data_app`."""
+    monkeypatch.setenv("OTO_DATA_APP_BUNDLE", BUNDLE)
+    ta = _module(monkeypatch)
+    monkeypatch.setitem(sys.modules, "fastmcp.apps", None)
+    with pytest.raises(RuntimeError, match="OTO_DATA_APP_BUNDLE"):
+        ta.register(FastMCP("banc"))
+
+
+def test_une_seule_regle_pour_les_bundles_des_deux_apps(monkeypatch, caplog):
+    from oto_mcp import procedure_diagram
+    pas_un_script = "https://app.example.com/mcp-app/"
+    monkeypatch.setenv("OTO_DATA_APP_BUNDLE", pas_un_script)
+    monkeypatch.setenv("OTO_PROCEDURE_APP_BUNDLE", pas_un_script)
+    with caplog.at_level("ERROR"):
+        assert _module(monkeypatch).bundle() is None
+        assert procedure_diagram.bundle_du_graphe() is None
+    nommees = [r.getMessage() for r in caplog.records]
+    assert any("OTO_DATA_APP_BUNDLE" in t and "Prefab" in t for t in nommees)
+    assert any("OTO_PROCEDURE_APP_BUNDLE" in t for t in nommees)
+    monkeypatch.setenv("OTO_DATA_APP_BUNDLE", BUNDLE)
+    assert _module(monkeypatch).bundle() == BUNDLE

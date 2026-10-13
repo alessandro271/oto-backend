@@ -25,10 +25,8 @@ from __future__ import annotations
 
 import html
 import json
-import logging
 import os
 from typing import Optional
-from urllib.parse import urlsplit
 
 from fastmcp import FastMCP
 from fastmcp.tools import ToolResult
@@ -45,19 +43,12 @@ MAX_LIMIT = 200
 # text face (no view) keeps it.
 _META = ("_id", "_created_at", "_updated_at")
 
-log = logging.getLogger(__name__)
-
 
 def bundle() -> str | None:
-    """The bundle's URL, or `None`: absent, or not a script's URL — a refusal that is
-    logged, since the tool itself does not register without a word."""
-    url = (os.environ.get(ENV_BUNDLE) or "").strip()
-    if not url:
-        return None
-    if url.endswith(".js") and urlsplit(url).scheme in ("https", "http"):
-        return url
-    log.error("%s n'est pas l'URL d'un bundle .js — data_app reste la carte Prefab", ENV_BUNDLE)
-    return None
+    """The bundle's URL, or `None` — the rule shared with `oto_procedure_app`
+    (`procedure_diagram.bundle_d_app`)."""
+    from ..procedure_diagram import bundle_d_app
+    return bundle_d_app(os.environ.get(ENV_BUNDLE), ENV_BUNDLE, "data_app reste la carte Prefab")
 
 
 def _text(result: dict, line: str) -> ToolResult:
@@ -93,14 +84,18 @@ def register(mcp: FastMCP) -> None:
         return
     try:
         from fastmcp.apps import AppConfig, ResourceCSP, UI_MIME_TYPE
-    # noqa: SILENT — extra `apps` absent ⇒ no app, data_rows is enough
-    except Exception:  # pragma: no cover - extra `apps` absent
-        return
+    except ImportError as e:
+        # The Prefab card already stood down for this bundle (`tools/datastore.py`):
+        # returning here would leave the instance with NO `data_app`, without a word.
+        raise RuntimeError(
+            f"{ENV_BUNDLE} is set but fastmcp's `apps` extra is not installed: data_app "
+            "can be drawn neither by the bundle nor by the Prefab card. Install the "
+            f"extra, or unset {ENV_BUNDLE}.") from e
 
     from .. import access
     from ..datastore.core import DatastoreNotFound, InvalidCursor
     from ..procedure_diagram import client_affiche_les_apps
-    from .datastore import _ns, _store_for
+    from .datastore import _ns, _store_for, pick_fiche
     from .procedure_app import _LOGO_DOMAINS, _SHELL, _origin
 
     page = _SHELL.format(js=html.escape(url, quote=True),
@@ -124,6 +119,7 @@ def register(mcp: FastMCP) -> None:
         limit: int = DEFAULT_LIMIT,
         cursor: Optional[str] = None,
         show_meta: bool = False,
+        row: Optional[str] = None,
     ) -> ToolResult:
         """SHOW a table to the user: draws its rows INLINE in the conversation, in the
         app's own table look (typed cells, select colours, links). READ-ONLY.
@@ -151,6 +147,8 @@ def register(mcp: FastMCP) -> None:
             limit: rows shown (default 25, max 200).
             cursor: `next_cursor` of the previous call, for the next page.
             show_meta: also show `_id`/`_created_at`/`_updated_at`.
+            row: show ONE record — matched against `_id`, the declared business key,
+                or the title field value, among the rows `filter`/`q` select.
         """
         sub = access.current_user_sub_or_raise()
         store = _store_for(sub)
@@ -179,9 +177,15 @@ def register(mcp: FastMCP) -> None:
                 projection += [k for k in _META if k not in projection]
         try:
             schema, hidden = store.schema_servi_et_masquees(ref)
-            page_ = store.cursor_rows(ref, filter=filter, limit=limit, cursor=cursor, q=q,
-                                      order_by=order_by, order_dir=order_dir,
-                                      fields=projection)
+            if row is not None:
+                # The record is looked up on WHOLE rows (its business key or title may
+                # not be among `fields`), then cut to the columns asked for.
+                page_ = store.cursor_rows(ref, filter=filter, limit=MAX_LIMIT, q=q,
+                                          order_by=order_by, order_dir=order_dir)
+            else:
+                page_ = store.cursor_rows(ref, filter=filter, limit=limit, cursor=cursor,
+                                          q=q, order_by=order_by, order_dir=order_dir,
+                                          fields=projection)
             numero = dict(store.dernier_tableau or {})
             total = store.count_rows(ref, filter=filter, q=q)
             table_url = store.get_url(ref)
@@ -195,16 +199,24 @@ def register(mcp: FastMCP) -> None:
             raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
 
         rows = page_["rows"]
+        name = numero.get("datastore") or str(datastore)
+        if row is not None:
+            fiche = pick_fiche(rows, schema, row)
+            if fiche is None:
+                message = f"No record “{row}” in “{name}”."
+                return _text({"view": "note", "message": message, "origin": origin}, message)
+            if projection:
+                fiche = {k: v for k, v in fiche.items() if k in projection or k == "_id"}
+            rows, total, page_ = [fiche], 1, {"next_cursor": None}
         if not show_meta:
             rows = [{k: v for k, v in r.items() if k not in _META or k == "_id"} for r in rows]
-        name = numero.get("datastore") or str(datastore)
         columns = _columns(schema, rows, fields, show_meta)
         result = {
             "view": "table", "ns_id": numero.get("ns_id"), "name": name,
             "columns": columns, "rows": rows, "count": len(rows), "total": total,
             "next_cursor": page_.get("next_cursor"), "hidden_columns": hidden,
             "filter": filter, "q": q, "order_by": order_by, "order_dir": order_dir,
-            "table_url": table_url, "origin": origin,
+            "table_url": table_url, "origin": origin, "row": row,
         }
         if not affiche:
             # No view to draw them: the rows ARE the answer.

@@ -416,20 +416,27 @@ def diagram_check(body_md: str, *, marqueur_perdu: bool = False) -> dict:
 ENV_BUNDLE = "OTO_PROCEDURE_APP_BUNDLE"
 
 
-def bundle_du_graphe() -> str | None:
-    """L'URL du bundle qui peint le graphe, ou `None` : absente, ou pas l'URL d'un
-    script — refus journalisé, puisque l'outil, lui, ne s'enregistre pas sans un mot."""
+def bundle_d_app(valeur: str | None, env: str, sinon: str) -> str | None:
+    """L'URL du bundle d'un front qui peint une app MCP, ou `None` : absente, ou pas
+    l'URL d'un script — refus journalisé (`sinon` dit ce qui en découle), puisque l'outil,
+    lui, ne s'enregistre pas sans un mot. RÈGLE UNIQUE des apps peintes par un front
+    (`oto_procedure_app`, `data_app`) ; `valeur` est lue par l'appelant dans `env`, sous
+    son nom littéral (l'inventaire des variables d'env lit les sites de lecture)."""
     import logging
-    import os
     from urllib.parse import urlsplit
-    bundle = (os.environ.get(ENV_BUNDLE) or "").strip()
+    bundle = (valeur or "").strip()
     if not bundle:
         return None
     if bundle.endswith(".js") and urlsplit(bundle).scheme in ("https", "http"):
         return bundle
-    logging.getLogger(__name__).error(
-        "%s n'est pas l'URL d'un bundle .js — oto_procedure_app non enregistré", ENV_BUNDLE)
+    logging.getLogger(__name__).error("%s n'est pas l'URL d'un bundle .js — %s", env, sinon)
     return None
+
+
+def bundle_du_graphe() -> str | None:
+    """L'URL du bundle qui peint le graphe, ou `None` (cf. `bundle_d_app`)."""
+    import os
+    return bundle_d_app(os.environ.get(ENV_BUNDLE), ENV_BUNDLE, "oto_procedure_app non enregistré")
 
 
 def dessin_tague(body_md: str) -> str | None:
