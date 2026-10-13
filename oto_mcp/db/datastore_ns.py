@@ -516,6 +516,26 @@ def get_resource_grant(
         return dict(row) if row else None
 
 
+def best_resource_grants(resource_type: str, resource_ids: list[str],
+                         principals: list[tuple[str, str]]) -> dict[str, str]:
+    """`{resource_id: meilleure permission}` des partages VIVANTS de ces ressources à ces
+    principals (`write` > `read`) — `get_resource_grant` pour une LISTE, en une requête.
+    Une ressource sans partage n'a pas d'entrée."""
+    if not resource_ids or not principals:
+        return {}
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT g.resource_id, MAX(g.permission) AS permission FROM resource_grants g "
+            "JOIN unnest(%s::text[], %s::text[]) AS pr(t, i) "
+            "  ON g.principal_type = pr.t AND g.principal_id = pr.i "
+            "WHERE g.resource_type = %s AND g.resource_id = ANY(%s) "
+            f"AND {PARTAGE_VIVANT_G} GROUP BY g.resource_id",
+            ([p[0] for p in principals], [str(p[1]) for p in principals], resource_type,
+             [str(r) for r in resource_ids]),
+        ).fetchall()
+    return {str(r["resource_id"]): r["permission"] for r in rows}
+
+
 def principals_with_live_grant(resource_type: str, resource_id: str) -> set[tuple[str, str]]:
     """Les principals `(type, id)` qui tiennent un partage VIVANT de cette ressource —
     ce que l'héritage des clés d'un projet (`access/heritage.evaluer`) croise avec ses

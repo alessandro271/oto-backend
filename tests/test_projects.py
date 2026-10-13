@@ -59,12 +59,17 @@ def seams(monkeypatch):
     monkeypatch.setattr(P.db, "add_project_link", _add_link)
     monkeypatch.setattr(P.db, "remove_project_link",
                         lambda pid, tt, tr, identity_ref=None: rec["unlink"].append((pid, tt, tr, identity_ref)) or 1)
-    monkeypatch.setattr(P.db, "list_project_links",
-                        lambda pid: [{"target_type": "tableau", "target_ref": "7", "label": "Leads",
-                                      "role": "vivier de leads", "config": {}, "cross_project": False}])
+    def _liens(pid):
+        return [{"target_type": "tableau", "target_ref": "7", "label": "Leads",
+                 "role": "vivier de leads", "config": {}, "cross_project": False}]
+    monkeypatch.setattr(P.db, "list_project_links", _liens)
+    monkeypatch.setattr(P.db, "list_project_links_many",
+                        lambda pids: {int(p): _liens(p) for p in pids})
     monkeypatch.setattr(P.ownership, "accessor_scope",
                         lambda sub: types.SimpleNamespace(owner_pairs=lambda: [("user", sub)]))
     monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": True)
+    monkeypatch.setattr(P.ownership, "can_access_many",
+                        lambda sub, t, owners, want="read": {r: True for r in owners})
     monkeypatch.setattr(P.ownership, "can_govern", lambda sub, t, rid: True)
     monkeypatch.setattr(P.roles, "is_org_member", lambda sub, oid: True)
     # Garde de portée d'`op=link` : tout identifiant passe (ce banc décrit autre chose).

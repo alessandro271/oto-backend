@@ -30,18 +30,20 @@ _HORS_PORTEE = ("hors de la portée du projet — rien ne le sert ; retire ce li
                 "(`op=unlink`)")
 
 
-def _resolved_procedure(link: dict):
-    """L'instruction d'un lien `procedure`, ou None (réf non numérique legacy /
-    guide disparu). Import paresseux (pas de cycle au boot)."""
+def _resolved_procedures(links: list[dict]) -> dict[int, dict]:
+    """Les instructions des liens `procedure`, par `procedure_id`, en une requête. Un
+    lien sans `procedure_id` (réf non numérique legacy, guide disparu) n'y est pas.
+    Import paresseux (pas de cycle au boot)."""
     from . import org_store
     # `procedure_id` = résolue DANS LA PORTÉE du projet (`db.list_project_links`) ;
     # sans elle, le lien est mort pour l'audit — et son slug ne se lit pas.
-    if link.get("procedure_id") is None:
-        return None
-    return org_store.get_instruction_by_id(int(link["procedure_id"]))
+    return org_store.get_instructions_by_ids(
+        [int(l["procedure_id"]) for l in links
+         if l.get("target_type") == "procedure" and l.get("procedure_id") is not None])
 
 
-def _unresolvable_connector_why(name: str, org_id: int, link: dict) -> Optional[str]:
+def _unresolvable_connector_why(name: str, org_id: int, link: dict,
+                                groups: Optional[list[dict]] = None) -> Optional[str]:
     """Un lien connecteur d'un projet ORG-owned est-il « aveugle » (#218/#219) ? — le
     credential n'existe qu'au niveau d'une ÉQUIPE de l'org, donc il ne résout PAS en
     contexte projet (un projet org-owned ne co-pose pas de groupe ; seul un projet
@@ -50,14 +52,17 @@ def _unresolvable_connector_why(name: str, org_id: int, link: dict) -> Optional[
     Conservateur (pas de faux positif sur les connecteurs BYO par-membre — ceux-là
     n'ont pas non plus de secret d'équipe → non signalés) : on ne signale QUE la forme
     exacte de #218 = secret présent au niveau d'un groupe, absent au niveau org.
-    Un `instance_ref` épinglé (intention déclarée, RBAC gère) lève le signal."""
+    Un `instance_ref` épinglé (intention déclarée, RBAC gère) lève le signal.
+    `groups` = les équipes de l'org, déjà lues par l'appelant (une lecture par audit,
+    pas par lien)."""
     from . import access, group_store
     if (link.get("config") or {}).get("instance_ref"):
         return None
     if access.connector_resolvable_for_org(name, org_id):
         return None
-    if not any(group_store.has_group_secret(int(g["id"]), name)
-               for g in group_store.list_groups(org_id)):
+    if groups is None:
+        groups = group_store.list_groups(org_id)
+    if not any(group_store.has_group_secret(int(g["id"]), name) for g in groups):
         return None
     return (f"le credential `{name}` n'existe qu'au niveau d'une équipe de l'org — un "
             "projet d'org ne le résout pas en contexte projet. Transfère le projet à "
@@ -80,6 +85,9 @@ def audit_project(project_id: int, links: Optional[list[dict]] = None, *,
     (`db.list_project_links`, qui résout namespace/title), sinon rechargés.
     Best-effort : toute erreur ⇒ audit partiel, jamais d'exception.
 
+    L'audit COMPLET lit en lot (incident du 13/10/2026) : les procédures liées en une
+    requête, les équipes de l'org une fois — pas une lecture par lien.
+
     `light=True` (oto/#6 A7 — perf du LISTING) : ne fait que les checks EN MÉMOIRE
     (tableau dont le namespace ne résout plus, connecteur hors registre) → ZÉRO
     requête supplémentaire par projet. Coupe les vérifications coûteuses par-lien
@@ -93,6 +101,10 @@ def audit_project(project_id: int, links: Optional[list[dict]] = None, *,
     # Org propriétaire (le signal `unresolvable_connector` ne vaut que pour un projet
     # ORG-owned). Résolu seulement en audit COMPLET (une requête par projet).
     project_org: Optional[int] = None
+    # None : la lecture des procédures a échoué (journalisée) — leurs liens ne sont
+    # alors pas jugés, plutôt que déclarés morts à tort.
+    instrs: Optional[dict[int, dict]] = {}
+    groups: Optional[list[dict]] = None
     if not light:
         try:
             proj = db.get_project_by_id(int(project_id))
@@ -100,6 +112,11 @@ def audit_project(project_id: int, links: Optional[list[dict]] = None, *,
                 project_org = int(proj["owner_id"])
         except Exception as e:  # noqa: BLE001
             logger.warning("audit_project(%s) owner: %s", project_id, e)
+        try:
+            instrs = _resolved_procedures(links)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("audit_project(%s) procédures: %s", project_id, e)
+            instrs = None
     dead: list[dict] = []
     unbound: list[dict] = []
     unresolvable: list[dict] = []
@@ -127,9 +144,10 @@ def audit_project(project_id: int, links: Optional[list[dict]] = None, *,
                                  "slot": l.get("slot"),
                                  "why": "le tableau pointé n'existe plus"})
             elif t == "procedure":
-                if light:
+                if light or instrs is None:
                     continue   # la résolution de procédure est une requête → COMPLET seul
-                instr = _resolved_procedure(l)
+                instr = (instrs.get(int(l["procedure_id"]))
+                         if l.get("procedure_id") is not None else None)
                 if instr is None:
                     dead.append({"target_type": t, "target_ref": l.get("target_ref"),
                                  "why": (_HORS_PORTEE if l.get("hors_portee")
@@ -147,7 +165,10 @@ def audit_project(project_id: int, links: Optional[list[dict]] = None, *,
                     dead.append({"target_type": t, "target_ref": ref,
                                  "why": "connecteur inconnu du registre"})
                 elif not light and project_org is not None:
-                    why = _unresolvable_connector_why(str(ref), project_org, l)
+                    if groups is None and not (l.get("config") or {}).get("instance_ref"):
+                        from . import group_store
+                        groups = group_store.list_groups(project_org)
+                    why = _unresolvable_connector_why(str(ref), project_org, l, groups)
                     if why:
                         unresolvable.append({"target_ref": ref, "why": why})
         except Exception as e:  # noqa: BLE001 — un lien pourri n'avale pas l'audit

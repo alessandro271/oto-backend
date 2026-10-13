@@ -349,11 +349,11 @@ def test_audit_project(monkeypatch):
         {"target_type": "procedure", "target_ref": "43"},                          # morte
         {"target_type": "connecteur", "target_ref": "nexiste"},                    # mort
     ]
-    monkeypatch.setattr(org_store_mod, "get_instruction_by_id",
-                        lambda iid: ({"slug": "prospection",
-                                      "slots": [{"name": "sortie", "type": "tableau"},
-                                                {"name": "crm", "type": "connecteur"}]}
-                                     if iid == 42 else None))
+    monkeypatch.setattr(org_store_mod, "get_instructions_by_ids",
+                        lambda ids: {i: {"slug": "prospection",
+                                         "slots": [{"name": "sortie", "type": "tableau"},
+                                                   {"name": "crm", "type": "connecteur"}]}
+                                     for i in ids if i == 42})
     monkeypatch.setattr(providers_mod, "REGISTRY", {"folk": object()})
     monkeypatch.setattr(db_mod, "project_run_stats",
                         lambda pid: {"runs": 3, "doctrines": ["autre-doctrine"]})

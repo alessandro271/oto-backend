@@ -626,10 +626,20 @@ def _marquer_hors_portee(conn, links: list[dict], target_type: str, ids: set) ->
             l["hors_portee"] = True
 
 
-_PROPRIO_SQL = ("SELECT p.owner_type, p.owner_id, p.context_org_id, g.org_id AS group_org_id "
-                "FROM projects p LEFT JOIN org_groups g "
-                "  ON p.owner_type = 'group' AND g.id::text = p.owner_id "
-                "WHERE p.id = %s")
+_PROPRIOS_SQL = ("SELECT p.id, p.owner_type, p.owner_id, p.context_org_id, "
+                 "       g.org_id AS group_org_id "
+                 "FROM projects p LEFT JOIN org_groups g "
+                 "  ON p.owner_type = 'group' AND g.id::text = p.owner_id "
+                 "WHERE p.id = ANY(%s)")
+
+
+def _cle_du_proprio(proprio: Optional[dict]) -> Optional[tuple]:
+    """Ce qui fixe la portée d'un projet (`_portee_du_projet`) : deux projets de même clé
+    résolvent leurs liens dans la même portée. None : projet introuvable."""
+    if proprio is None:
+        return None
+    return (proprio["owner_type"], str(proprio["owner_id"]), proprio.get("context_org_id"),
+            proprio.get("group_org_id"))
 
 
 def refs_dans_la_portee(project_id: int, target_type: str, refs: list) -> set[int]:
@@ -645,7 +655,7 @@ def refs_dans_la_portee(project_id: int, target_type: str, refs: list) -> set[in
     if not ids:
         return set()
     with _connect() as conn:
-        proprio = conn.execute(_PROPRIO_SQL, (int(project_id),)).fetchone()
+        proprio = conn.execute(_PROPRIOS_SQL, ([int(project_id)],)).fetchone()
         return _ids_dans_la_portee(conn, proprio, target_type, ids)
 
 
@@ -711,71 +721,112 @@ def list_project_links(project_id: int) -> list[dict]:
     nom en dur (ADR 0032 §6, adressage par rôle après provisioning template→instance).
     Les liens `procedure` sont enrichis du **titre** de leur guide (`title`), même
     logique : `target_ref` est un id stable, un lien sans `label` doit rester lisible."""
+    return list_project_links_many([int(project_id)])[int(project_id)]
+
+
+def _ids_de_type(links: list[dict], target_type: str) -> list[int]:
+    return [int(l["target_ref"]) for l in links
+            if l.get("target_type") == target_type and str(l.get("target_ref", "")).isdigit()]
+
+
+def list_project_links_many(project_ids: list[int]) -> dict[int, list[dict]]:
+    """Les liens de PLUSIEURS projets (`list_project_links`, mêmes enrichissements), en
+    un nombre de requêtes qui ne dépend pas du nombre de projets : `{id: liens}`, une
+    entrée par id demandé (liste vide s'il n'a aucun lien).
+
+    ⚠️ **Une liste de projets ne lit pas ses liens projet par projet** (incident du
+    13/10/2026). La liste d'une org de vingt projets faisait plus de deux cents requêtes
+    et environ 1,1 s par appel à vide ; un écran qui demandait le détail de chaque
+    projet en parallèle saturait le serveur. Ici : une requête pour tous les liens, une
+    pour les propriétaires, et la PORTÉE se calcule une fois par propriétaire distinct
+    — un lien se résout dans la portée du propriétaire de SON projet (`_portee_du_projet`),
+    jamais dans celle d'un voisin de liste : les libellés et titres ne se posent que sur
+    les identifiants de la portée de chaque groupe."""
+    ids_projets = sorted({int(p) for p in project_ids})
+    out: dict[int, list[dict]] = {pid: [] for pid in ids_projets}
+    if not ids_projets:
+        return out
+    groupes: dict[Optional[tuple], list[int]] = {}
+    proprios: dict[Optional[tuple], Optional[dict]] = {}
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT pl.target_type, pl.target_ref, pl.identity_ref, pl.label, pl.role, pl.slot, pl.config, pl.created_at, "
+            "SELECT pl.project_id, pl.target_type, pl.target_ref, pl.identity_ref, pl.label, pl.role, pl.slot, pl.config, pl.created_at, "
             "       EXISTS(SELECT 1 FROM project_links o "
             "              WHERE o.target_type = pl.target_type "
             "                AND o.target_ref = pl.target_ref "
             "                AND o.project_id <> pl.project_id) AS cross_project "
-            "FROM project_links pl WHERE pl.project_id = %s "
-            "ORDER BY pl.target_type, pl.label NULLS LAST, pl.target_ref, pl.identity_ref NULLS FIRST",
-            (project_id,),
+            "FROM project_links pl WHERE pl.project_id = ANY(%s) "
+            "ORDER BY pl.project_id, pl.target_type, pl.label NULLS LAST, pl.target_ref, pl.identity_ref NULLS FIRST",
+            (ids_projets,),
         ).fetchall()
-        out = []
         for r in rows:
             d = dict(r)
+            pid = int(d.pop("project_id"))
             # Mirror back-compat (B3) : l'identité vit dans `identity_ref` (source de vérité),
             # mais les lecteurs legacy (front actuel) lisent encore config.identity_id → on le
             # re-dérive. La résolution (project_pinned_identity) lit identity_ref directement.
             if d.get("target_type") == "connecteur" and d.get("identity_ref"):
                 d["config"] = {**(d.get("config") or {}), "identity_id": d["identity_ref"]}
-            out.append(d)
-        # Le propriétaire du projet : la portée où se résout CHAQUE lien, par nom comme
-        # par identifiant — une requête, et seulement s'il y a un lien à résoudre.
-        a_resoudre = any(l.get("target_type") in ("tableau", "procedure") for l in out)
-        proprio = conn.execute(_PROPRIO_SQL, (project_id,)).fetchone() if a_resoudre else None
-        # Résolution des noms de namespace des tableaux, en UNE requête (même connexion).
+            out[pid].append(d)
+        # Le propriétaire de chaque projet : la portée où se résout CHAQUE lien, par nom
+        # comme par identifiant — une requête, et seulement s'il y a un lien à résoudre.
+        a_resoudre = [pid for pid, links in out.items()
+                      if any(l.get("target_type") in ("tableau", "procedure") for l in links)]
+        par_id = ({int(r["id"]): r for r in conn.execute(_PROPRIOS_SQL, (a_resoudre,)).fetchall()}
+                  if a_resoudre else {})
+        for pid in a_resoudre:
+            cle = _cle_du_proprio(par_id.get(pid))
+            groupes.setdefault(cle, []).append(pid)
+            proprios[cle] = par_id.get(pid)
         # ⚠️ Seuls les identifiants DANS LA PORTÉE du projet (`_ids_dans_la_portee`) :
-        # un identifiant pris ailleurs ne reçoit ni libellé ni `datastore_id`, donc rien
-        # de ce qui lit ce dernier (page publiée, copie, `slot:`) ne l'ouvre.
-        ids_bruts = [int(l["target_ref"]) for l in out
-                     if l.get("target_type") == "tableau"
-                     and str(l.get("target_ref", "")).isdigit()]
-        ids = sorted(_ids_dans_la_portee(conn, proprio, "tableau", ids_bruts))
-        _marquer_hors_portee(conn, out, "tableau", set(ids_bruts) - set(ids))
-        if ids:
-            nrows = conn.execute(
-                "SELECT id, namespace FROM user_datastores WHERE id = ANY(%s)", (ids,),
-            ).fetchall()
-            _apply_tableau_names(out, {r["id"]: r["namespace"] for r in nrows})
-        # Un lien tableau peut porter target_ref = NOM (créé par l'agent, #117) et non
-        # un id (dashboard). Son IDENTIFIANT se résout dans la portée du PROPRIÉTAIRE du
-        # projet (oto#160) — jamais par la simple existence du nom ailleurs (#365) : la
-        # résolution est faite ici pour qu'elle soit la MÊME chez tous les lecteurs.
-        name_refs = [l["target_ref"] for l in out
-                     if l.get("target_type") == "tableau" and not l.get("datastore")
-                     and l.get("target_ref") and not str(l["target_ref"]).isdigit()]
-        # Idem pour les titres de guide des procédures (id stable, ADR 0032) — même
-        # portée : une procédure d'ailleurs ne reçoit ni titre ni `procedure_id`.
-        doc_bruts = [int(l["target_ref"]) for l in out
-                     if l.get("target_type") == "procedure"
-                     and str(l.get("target_ref", "")).isdigit()]
-        doc_ids = sorted(_ids_dans_la_portee(conn, proprio, "procedure", doc_bruts))
-        _marquer_hors_portee(conn, out, "procedure", set(doc_bruts) - set(doc_ids))
-        if doc_ids:
-            drows = conn.execute(
-                "SELECT id, title FROM org_instructions WHERE id = ANY(%s)", (doc_ids,),
-            ).fetchall()
-            _apply_procedure_titles(out, {r["id"]: r["title"] for r in drows})
+        # un identifiant pris ailleurs ne reçoit ni libellé ni `datastore_id`/`procedure_id`,
+        # donc rien de ce qui les lit (page publiée, copie, `slot:`) ne l'ouvre.
+        dans: dict[tuple, set[int]] = {}
+        hors: dict[str, list[dict]] = {"tableau": [], "procedure": []}
+        for cle, pids in groupes.items():
+            links = [l for pid in pids for l in out[pid]]
+            for t in ("tableau", "procedure"):
+                bruts = _ids_de_type(links, t)
+                dans[(cle, t)] = _ids_dans_la_portee(conn, proprios[cle], t, bruts)
+                hors[t] += [l for l in links if l.get("target_type") == t
+                            and str(l.get("target_ref", "")).isdigit()
+                            and int(l["target_ref"]) not in dans[(cle, t)]]
+        for t, links in hors.items():
+            _marquer_hors_portee(conn, links, t, set(_ids_de_type(links, t)))
+        # Libellés des tableaux et titres de guide (ADR 0032, id stable) : une requête
+        # chacun pour tous les groupes, posés groupe par groupe sur SA portée.
+        ids_t = sorted(set().union(*(v for (c, t), v in dans.items() if t == "tableau")))
+        noms = ({r["id"]: r["namespace"] for r in conn.execute(
+                    "SELECT id, namespace FROM user_datastores WHERE id = ANY(%s)", (ids_t,),
+                ).fetchall()} if ids_t else {})
+        ids_p = sorted(set().union(*(v for (c, t), v in dans.items() if t == "procedure")))
+        titres = ({r["id"]: r["title"] for r in conn.execute(
+                      "SELECT id, title FROM org_instructions WHERE id = ANY(%s)", (ids_p,),
+                  ).fetchall()} if ids_p else {})
+        for cle, pids in groupes.items():
+            links = [l for pid in pids for l in out[pid]]
+            _apply_tableau_names(links, {i: noms[i] for i in dans[(cle, "tableau")] if i in noms})
+            _apply_procedure_titles(links, {i: titres[i] for i in dans[(cle, "procedure")]
+                                            if i in titres})
         # (Le type de lien `doc` — pointeur manuel vers une page — a été RETIRÉ, lot 3
         # chantier 0.4 : relier des pages = les backlinks `[[…]]` de Ship 4, pas un
         # pointeur de rail. Les liens existants ont été purgés en migration.)
-    # Hors de la connexion ci-dessus : le résolveur ouvre la sienne, et deux
-    # acquisitions imbriquées sur le pool s'interbloquent quand il est étroit.
-    if name_refs and proprio is not None:
-        _apply_tableau_name_ids(out, *resolve_datastore_ids_by_name(
-            name_refs, **_portee_du_projet(proprio)))
+    # Un lien tableau peut porter target_ref = NOM (créé par l'agent, #117) et non un id
+    # (dashboard). Son IDENTIFIANT se résout dans la portée du PROPRIÉTAIRE du projet
+    # (oto#160) — jamais par la simple existence du nom ailleurs (#365) : la résolution
+    # est faite ici pour qu'elle soit la MÊME chez tous les lecteurs. Hors de la
+    # connexion ci-dessus : le résolveur ouvre la sienne, et deux acquisitions
+    # imbriquées sur le pool s'interbloquent quand il est étroit.
+    for cle, pids in groupes.items():
+        if proprios[cle] is None:
+            continue
+        links = [l for pid in pids for l in out[pid]]
+        name_refs = [l["target_ref"] for l in links
+                     if l.get("target_type") == "tableau" and not l.get("datastore")
+                     and l.get("target_ref") and not str(l["target_ref"]).isdigit()]
+        if name_refs:
+            _apply_tableau_name_ids(links, *resolve_datastore_ids_by_name(
+                name_refs, **_portee_du_projet(proprios[cle])))
     return out
 
 

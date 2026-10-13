@@ -89,9 +89,15 @@ class ProjectInput(BaseModel):
     target_type: Optional[Literal["tableau", "procedure", "connecteur"]] = None
     # Opt-ins d'op=get, cumulables : 'spine' (l'arbre des pages, Ship 2 lot 3, +
     # drill/bornage ci-dessous) · 'procedures' (le CORPS des procédures liées, #313).
+    # Opt-in d'op=list : 'links' (les liens de chaque projet, ceux d'op=get — un écran
+    # qui cherche quels projets lient une cible lit UNE liste, pas un op=get par
+    # projet ; incident du 13/10/2026).
     # Une valeur inconnue est ignorée en silence — l'absence d'un champ optionnel se
     # lit dans la réponse, et refuser ferait d'un ajout futur une rupture de contrat.
-    include: Optional[list[str]] = None
+    include: Optional[list[str]] = Field(default=None, description=(
+        "get: `spine` (page tree) and/or `procedures` (bodies of linked procedures). "
+        "list: `links` adds each project's links, as op=get serves them — to find which "
+        "projects link a target in ONE call instead of one op=get per project."))
     from_doc: Optional[int] = None     # enraciner l'épine sur un nœud (drill)
     depth: Optional[int] = None        # profondeur (défaut 2)
     target_ref: Optional[str] = None   # datastore.id | guide slug | connecteur name | doc.id (page Documents)
@@ -764,34 +770,51 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
     if inp.op == "list":
         from .. import project_audit
         # Pastilles d'ÉTAT de l'index (refonte UX, ADR 0032) : nb d'entités liées +
-        # partagé + « à vérifier » (audit). Le nb de grants est batché (1 requête) ; les
-        # liens/audit sont par projet (les listes d'org sont petites) et best-effort.
+        # partagé + « à vérifier » (audit) + droit d'écriture. Tout se lit EN LOT, pour
+        # tous les projets de la liste à la fois : le nombre de requêtes ne dépend pas
+        # du nombre de projets (incident du 13/10/2026 — par projet, la liste d'une org
+        # de vingt projets faisait plus de deux cents requêtes).
+        # `include=["links"]` rend en plus les liens de chaque projet, ceux d'op=get :
+        # un écran qui cherche quels projets lient une cible lit UNE liste, au lieu d'un
+        # op=get par projet.
+        avec_liens = bool(inp.include and "links" in inp.include)
         grant_counts: dict[int, int] = {}
 
-        def _enrich(r: dict, shared: bool) -> dict:
-            links = db.list_project_links(r["id"])
-            # LISTE : audit LÉGER (checks en mémoire seuls) — l'audit complet par projet
-            # (résolution procédures + résolvabilité connecteur + run_stats) produisait un
-            # N+1 → timeout 180 s (oto/#6 A7). Le badge « à vérifier » reste sur les liens
-            # morts détectables sans requête ; le détail complet est servi par op=get.
-            aud = project_audit.audit_project(r["id"], links, light=True)
-            has_audit = bool(aud.get("dead_links") or aud.get("unbound_slots")
-                             or aud.get("inert_procedures"))
-            return {**_view(r, sub, grant_counts.get(r["id"], 0)), "entity_count": len(links),
+        def _enrich(rows: list[dict], shared: bool) -> list[dict]:
+            liens = db.list_project_links_many([r["id"] for r in rows])
+            ecriture = ownership.can_access_many(
+                sub, RTYPE, {str(r["id"]): (r["owner_type"], str(r["owner_id"])) for r in rows},
+                "write")
+            out = []
+            for r in rows:
+                links = liens[int(r["id"])]
+                # LISTE : audit LÉGER (checks en mémoire seuls) — l'audit complet par
+                # projet (résolution procédures + résolvabilité connecteur + run_stats)
+                # produisait un N+1 → timeout 180 s (oto/#6 A7). Le badge « à vérifier »
+                # reste sur les liens morts détectables sans requête ; le détail complet
+                # est servi par op=get.
+                aud = project_audit.audit_project(r["id"], links, light=True)
+                has_audit = bool(aud.get("dead_links") or aud.get("unbound_slots")
+                                 or aud.get("inert_procedures"))
+                out.append({
+                    **_view(r, sub, grant_counts.get(r["id"], 0)), "entity_count": len(links),
                     "has_audit": has_audit,
                     "shared": shared or grant_counts.get(r["id"], 0) > 0,
-                    # `can_write` sur la LISTE (pastille « lecture ») — même source que op=get :
-                    # un projet partagé en lecture seule remonte false. Own = accès effectif.
-                    "can_write": ownership.can_access(sub, RTYPE, str(r["id"]), "write")}
+                    # `can_write` sur la LISTE (pastille « lecture ») — même règle qu'op=get :
+                    # un projet partagé en lecture seule remonte false.
+                    "can_write": ecriture[str(r["id"])],
+                    **({"links": links} if avec_liens else {})})
+            return out
 
         def _received(principals: list[tuple[str, str]], seen: set) -> list[dict]:
             # Vue bornée (oto#270) : un partage reçu ne passe que visible dans O.
             recus = ownership.borner_a_la_vue(sub, RTYPE,
                                               db.list_projects_granted_to(principals),
                                               rid=lambda r: r["id"])
+            recus = [r for r in recus if r["id"] not in seen]
             grant_counts.update(db.project_grant_counts([r["id"] for r in recus]))
-            return [{**_enrich(r, True), "permission": r.get("permission")}
-                    for r in recus if r["id"] not in seen]
+            return [{**v, "permission": r.get("permission")}
+                    for r, v in zip(recus, _enrich(recus, True))]
 
         if inp.archived:
             _require(inp.scope != "me", "unsupported_scope",
@@ -821,7 +844,7 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         own_rows = ownership.projets_possedes_ici(sub, ctx.org_id)
         grant_counts.update(db.project_grant_counts([r["id"] for r in own_rows]))
 
-        own = [_enrich(r, False) for r in own_rows]
+        own = _enrich(own_rows, False)
         shared = _received(ownership.principaux_de_liste(sub, ctx.org_id),
                            {p["id"] for p in own})
         return _projected(own + shared, inp.fields)
@@ -1666,7 +1689,8 @@ CAPABILITIES += [
             "`org=<id>` to see another org's; "
             "`scope=\"me\"` lists only the projects shared with you as a person, in any "
             "org; every response echoes the effective org in `_org`. An INDEX: names and `brief_md_length`, NOT the briefs — "
-            'read one with op=get, or pass `fields=["*"]` for whole records) / '
+            'read one with op=get, or pass `fields=["*"]` for whole records; '
+            '`include=["links"]` adds every project\'s links in the same call) / '
             "list_templates (published MODEL projects you can copy, from the ACTIVE org "
             "and the platform library) / "
             "get (project + its links + an `audit` of those links: dead_links / unbound_slots / "

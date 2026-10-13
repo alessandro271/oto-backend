@@ -39,18 +39,33 @@ from ..db import _connect
 from ..db.guides import exiger_aucun_guide, guide_du_slug, verrouiller_le_slug
 
 
+_COLONNES_PAR_ID = ("id, org_id, owner_type, owner_id, slug, title, description, body_md, "
+                    "slots, version, set_by, created_at, updated_at, archived_at")
+
+
 def get_instruction_by_id(instruction_id: int) -> Optional[dict]:
     """Une instruction par son id surrogate (identité publique). None si absente.
     Porte `archived_at` comme la lecture par slug (#857) : cette lecture ne filtre pas
     l'archivage non plus, donc elle doit pouvoir dire l'état."""
     with _connect() as conn:
         row = conn.execute(
-            "SELECT id, org_id, owner_type, owner_id, slug, title, description, body_md, "
-            "slots, version, set_by, created_at, updated_at, archived_at "
-            "FROM org_instructions WHERE id = %s",
+            f"SELECT {_COLONNES_PAR_ID} FROM org_instructions WHERE id = %s",
             (instruction_id,),
         ).fetchone()
         return dict(row) if row else None
+
+
+def get_instructions_by_ids(instruction_ids: list[int]) -> dict[int, dict]:
+    """`get_instruction_by_id` pour plusieurs ids, en une requête : `{id: instruction}`,
+    les absentes n'ont pas d'entrée."""
+    if not instruction_ids:
+        return {}
+    with _connect() as conn:
+        rows = conn.execute(
+            f"SELECT {_COLONNES_PAR_ID} FROM org_instructions WHERE id = ANY(%s)",
+            (sorted({int(i) for i in instruction_ids}),),
+        ).fetchall()
+    return {int(r["id"]): dict(r) for r in rows}
 
 
 def _free_instruction_slug(conn, owner_type: str, owner_id: int | str, slug: str) -> str:

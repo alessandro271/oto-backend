@@ -506,6 +506,45 @@ def can_access(sub: str, resource_type: str, resource_id: str, want: str = "read
     return want == "read" or best == "write"
 
 
+def can_access_many(sub: str, resource_type: str, owners: dict[str, tuple[str, str]],
+                    want: str = "read") -> dict[str, bool]:
+    """`can_access` pour une LISTE dont le propriétaire est DÉJÀ lu : `owners` =
+    `{resource_id: (owner_type, owner_id)}`, rend `{resource_id: bool}`. Même règle,
+    dans le même ordre ; ce qui ne dépend que du propriétaire se décide une fois par
+    propriétaire distinct, et les partages se lisent en une requête.
+
+    ⚠️ Pourquoi elle existe (incident du 13/10/2026) : la liste des projets appelait
+    `can_access` projet par projet — trois requêtes chacun, dont la relecture d'une
+    ligne qu'elle venait de lire. En vue bornée, la visibilité dans O reste vérifiée
+    ressource par ressource (`visible_in_org`) : c'est la vue d'un admin, pas le chemin
+    courant."""
+    borne = vue_bornee(sub)
+    out: dict[str, bool] = {}
+    par_proprio: dict[tuple[str, str], bool] = {}
+    a_lire: list[str] = []
+    for rid, owner in owners.items():
+        rid = str(rid)
+        if borne is not None and not visible_in_org(sub, borne, resource_type, rid):
+            out[rid] = False
+            continue
+        if owner[0] == "platform" and want == "read":
+            out[rid] = True
+            continue
+        cle = (str(owner[0]), str(owner[1]))
+        if cle not in par_proprio:
+            par_proprio[cle] = _owner_match_content(sub, *cle)
+        if par_proprio[cle]:
+            out[rid] = True
+        else:
+            a_lire.append(rid)
+    if a_lire:
+        best = db.best_resource_grants(resource_type, a_lire,
+                                       accessor_scope(sub).principal_pairs())
+        for rid in a_lire:
+            out[rid] = rid in best and (want == "read" or best[rid] == "write")
+    return out
+
+
 def owns(sub: str, resource_type: str, resource_id: str) -> bool:
     """L'acteur est-il PROPRIÉTAIRE du contenu — lui, son org, son équipe — par
     opposition à un tiers qui n'y accède que par un GRANT ?
