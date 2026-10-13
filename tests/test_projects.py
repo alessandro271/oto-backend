@@ -43,7 +43,7 @@ def seams(monkeypatch):
     # elle a été faite, sans y être partagée. Le stub le RETIENT — un seam qui accepte
     # le paramètre et l'avale ne prouverait plus que la copie est bien perso.
     monkeypatch.setattr(P.db, "duplicate_project",
-                        lambda src, name, ot, oid, copied_by=None, context_org_id=None:
+                        lambda src, name, ot, oid, copied_by=None, context_org_id=None, **k:
                         rec["copy"].append((src, name, ot, oid, copied_by, context_org_id))
                         or (8, []))
     monkeypatch.setattr(P.db, "archive_project", lambda pid: rec["archive"].append(pid))
@@ -67,6 +67,12 @@ def seams(monkeypatch):
     monkeypatch.setattr(P.ownership, "can_access", lambda sub, t, rid, want="read": True)
     monkeypatch.setattr(P.ownership, "can_govern", lambda sub, t, rid: True)
     monkeypatch.setattr(P.roles, "is_org_member", lambda sub, oid: True)
+    # Garde de portée d'`op=link` : tout identifiant passe (ce banc décrit autre chose).
+    monkeypatch.setattr(P.db, "refs_dans_la_portee",
+                        lambda pid, t, refs: {int(r) for r in refs if str(r).isdigit()})
+    _owner_of = P.ownership.owner_of
+    monkeypatch.setattr(P.ownership, "owner_of", lambda t, rid: None if t in (
+        "datastore_namespace", "doctrine") else _owner_of(t, rid))
     # ADR 0049 : défauts neutres — pas d'escalade admin, membre des équipes qu'il vise,
     # aucun groupe dans l'org active. Les tests dédiés surchargent.
     monkeypatch.setattr(P.roles, "is_org_admin", lambda sub, oid: False)

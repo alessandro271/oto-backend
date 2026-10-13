@@ -12,7 +12,8 @@ _PROJECT = {"id": 5, "name": "Projet démo", "brief_md": "Un projet de démonstr
             "mcp_access": "secret", "mcp_expose_datastore": True, "mcp_expose_docs": True}
 
 _LINKS = [
-    {"target_type": "procedure", "target_ref": "11", "label": "Enrichir", "title": "Enrichissement"},
+    {"target_type": "procedure", "target_ref": "11", "label": "Enrichir", "title": "Enrichissement",
+     "procedure_id": 11},
     # La forme RÉELLE de `db.list_project_links` : un lien tableau résolu porte son
     # `datastore_id` — la seule clé que la page lit (#365).
     {"target_type": "tableau", "target_ref": "22", "label": "Prospects", "datastore": "prospects",
@@ -355,7 +356,7 @@ def test_cell_td_wraps_and_marks_rich():
 
 _LINKS_WITH_ROLE = [
     {"target_type": "procedure", "target_ref": "11", "label": "Enrichir",
-     "title": "Enrichissement", "role": "Ce que chaque agent worker exécute, une ligne à la fois."},
+     "title": "Enrichissement", "procedure_id": 11, "role": "Ce que chaque agent worker exécute, une ligne à la fois."},
     {"target_type": "tableau", "target_ref": "22", "label": "Prospects",
      "datastore": "prospects", "datastore_id": 22,
      "role": "Périmètre sourcé par convention collective."},
@@ -379,7 +380,7 @@ def test_the_label_still_wins_over_the_procedure_title(monkeypatch):
 
 def test_a_link_without_role_renders_no_empty_line(monkeypatch):
     _wire(monkeypatch, links=[{"target_type": "procedure", "target_ref": "11",
-                               "label": "Enrichir", "role": None}])
+                               "procedure_id": 11, "label": "Enrichir", "role": None}])
     html, _ = share_ui.build_page(_PROJECT, "/", connect_url="https://x/mcp")
     assert "class=r" not in html
 
@@ -387,7 +388,7 @@ def test_a_link_without_role_renders_no_empty_line(monkeypatch):
 def test_the_role_is_escaped(monkeypatch):
     """Le `role` est saisi par un humain et rendu sur une page PUBLIQUE."""
     _wire(monkeypatch, links=[{"target_type": "procedure", "target_ref": "11",
-                               "label": "P", "role": "<script>alert(1)</script>"}])
+                               "procedure_id": 11, "label": "P", "role": "<script>alert(1)</script>"}])
     html, _ = share_ui.build_page(_PROJECT, "/", connect_url="https://x/mcp")
     assert "<script>" not in html and "&lt;script&gt;" in html
 
@@ -419,7 +420,8 @@ def test_procedure_page_shows_the_project_label_and_role(monkeypatch):
 
 def test_procedure_page_falls_back_to_the_guide_title(monkeypatch):
     """Un lien posé sans label (l'agent lie souvent ainsi) doit rester lisible."""
-    _wire(monkeypatch, links=[{"target_type": "procedure", "target_ref": "11"}])
+    _wire(monkeypatch, links=[{"target_type": "procedure", "target_ref": "11",
+                               "procedure_id": 11}])
     monkeypatch.setattr(org_store, "get_instruction_by_id",
                         lambda i: {"title": "Titre canonique", "body_md": "x"})
     html, _ = share_ui.build_page(_PROJECT, "/procedures/11", connect_url="https://x/mcp")

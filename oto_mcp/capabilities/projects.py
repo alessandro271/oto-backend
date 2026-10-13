@@ -12,6 +12,7 @@ les **liens** vers tableaux/procédures/connecteurs/bases, et le **Doc arboresce
 """
 from __future__ import annotations
 
+import logging
 import re
 import secrets
 from typing import Literal, Optional
@@ -24,6 +25,8 @@ from ._authz import SUB_ONLY, refus_hors_vue
 from . import _portee, _publication
 from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
+
+logger = logging.getLogger(__name__)
 
 RTYPE = "project"
 
@@ -495,6 +498,65 @@ def _resolve_tableau_id(row: dict, ref: str) -> Optional[str]:
     return None
 
 
+#: Le type de ressource (ownership) de chaque cible de lien qu'on désigne par numéro.
+_RTYPE_CIBLE = {"tableau": ownership.TYPE_RESSOURCE_DATASTORE,
+                "procedure": ownership.TYPE_RESSOURCE_PROCEDURE}
+
+
+def _exiger_cible_dans_la_portee(sub: str, row: dict, target_type: str, ref: str) -> None:
+    """Un lien `tableau`/`procedure` ne se POSE que vers une cible que le projet a le
+    droit de désigner — la règle qui sert ensuite le lien (`db.refs_dans_la_portee`,
+    celle de `list_project_links`) — ET que le lieur LIT : on ne range pas dans un projet
+    ce qu'on ne voit pas (le tableau perso d'un autre membre, la procédure d'une équipe
+    dont on n'est pas).
+
+    ⚠️ **Aucune exemption pour une cible du propriétaire du projet.** Écrire un projet
+    n'est pas en être membre : un bénéficiaire d'un partage en écriture, extérieur à
+    l'org, liait n'importe quel tableau de cette org par son numéro, puis le recopiait
+    chez lui (`op=copy`, gardé par la seule lecture du projet). Membres, objets à soi,
+    bibliothèque plateforme et partages reçus par l'org passent tous `can_access`.
+
+    ⚠️ **Le numéro ne prouvait rien** (avant ce correctif) : nom et slug se résolvaient
+    dans la portée du projet, mais un identifiant était stocké tel quel — et servi tel
+    quel : libellé et titre dans les liens, lignes et corps sur la page publiée, lignes
+    recopiées par `op=copy`, schéma posé par un slot. N'importe quel tableau ou
+    procédure de la plateforme, pour qui en devinait le numéro.
+
+    Refus 404, MÊME message pour « n'existe pas » et « existe ailleurs » : distinguer
+    les deux dirait qu'il existe. Seule exception : une cible que le lieur LIT déjà
+    (typiquement, celle d'une autre org dont il est aussi membre) — son existence ne
+    lui apprend rien ; on lui dit pourquoi le lien est refusé et quoi faire à la place
+    (la copier dans l'org du projet, ou la partager à cette org), en 403
+    `target_out_of_scope`."""
+    if not str(ref).isdigit():
+        return
+    rtype = _RTYPE_CIBLE[target_type]
+    dans_la_portee = int(ref) in db.refs_dans_la_portee(int(row["id"]), target_type, [ref])
+    try:
+        lisible = ownership.can_access(sub, rtype, str(ref), "read")
+    except ValueError as e:
+        # Une procédure sans propriétaire (`ownership._guide_owner`) est une
+        # incohérence de données : elle se signale, et ne se lie pas — refus 404
+        # comme une cible inconnue, pas une 500.
+        logger.warning("link %s #%s : propriétaire illisible (%s)", target_type, ref, e)
+        lisible = False
+    if dans_la_portee and lisible:
+        return
+    if lisible:
+        quoi = "Ce tableau" if target_type == "tableau" else "Cette procédure"
+        _require(False, "target_out_of_scope",
+                 f"{quoi} (#{ref}) n'appartient pas à l'org du projet : un lien le "
+                 "montrerait à tout le projet, y compris à qui ne le lit pas. "
+                 "Copie-le dans cette org, ou partage-le à l'org du projet "
+                 "(`oto_resource op=share audience=org`), puis lie la copie ou le partage.",
+                 403)
+    if target_type == "tableau":
+        _require(False, "unknown_tableau",
+                 f"Aucun tableau « {ref} » dans le datastore du projet.", 404)
+    _require(False, "unknown_procedure",
+             f"Aucune procédure « {ref} » dans la portée du projet.", 404)
+
+
 def _mcp_unresolvable_tools(row: dict, tools: list[str],
                             expose_datastore: bool = False) -> list[str]:
     """Sonde de publication SANS LOGIN (anonymous/secret, ADR 0032) : un endpoint sans
@@ -892,7 +954,10 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
             if l["target_type"] != "procedure":
                 continue
             ref = str(l["target_ref"])
-            instr = org_store.get_instruction_by_id(int(ref)) if ref.isdigit() else None
+            # `procedure_id` : dans la portée du projet (`db.list_project_links`) ; une
+            # procédure d'ailleurs ne livre ni son slug ni ses outils.
+            instr = (org_store.get_instruction_by_id(int(l["procedure_id"]))
+                     if l.get("procedure_id") is not None else None)
             if not instr:
                 procedures.append({"ref": ref, "resolved": False})
                 continue
@@ -1031,7 +1096,9 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
             cible = ("user", sub, int(ctx.org_id))
         new_id, warnings = db.duplicate_project(int(inp.project_id), inp.name.strip(),
                                                 cible[0], cible[1], copied_by=sub,
-                                                context_org_id=cible[2])
+                                                context_org_id=cible[2],
+                                                lisible=lambda t, rid: ownership.can_access(
+                                                    sub, t, rid, "read"))
         if cible[0] != "user":
             _portee.observer(ctx, ressource_type="project", ressource_id=new_id,
                              ressource_nom=inp.name.strip(), vers=cible[0],
@@ -1113,6 +1180,8 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
                 if len(existing) == 1 and existing[0].get("identity_ref") != identity_ref:
                     db.remove_project_link(int(inp.project_id), "connecteur", target_ref,
                                            identity_ref=existing[0].get("identity_ref"))
+        if inp.op == "link" and inp.target_type in _RTYPE_CIBLE:
+            _exiger_cible_dans_la_portee(sub, row, inp.target_type, str(target_ref))
         # ADR 0035 (B2) : nom de slot bindé par ce lien — validé (hygiène de clé) puis
         # unicité (projet, slot) imposée par la DB (ValueError slot_taken → 409).
         slot = None
@@ -1201,7 +1270,8 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
                 from .. import slots as slots_mod
                 target = slots_mod.target_schema_for(slot, out["links"])
                 if target is not None:
-                    res = slots_mod.provision_tableau_schema(int(target_ref), target)
+                    res = slots_mod.provision_tableau_schema(
+                        int(target_ref), target, project_id=int(inp.project_id))
                     out["slot_schema"] = res["status"]
                     if res.get("warning"):
                         out["warning"] = res["warning"]
@@ -1235,7 +1305,9 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
             try:
                 from .. import org_store, project_audit
                 instr = (org_store.get_instruction_by_id(int(target_ref))
-                         if str(target_ref).isdigit() else None)
+                         if any(l.get("procedure_id") == int(target_ref)
+                                for l in out["links"] if str(target_ref).isdigit())
+                         else None)
                 missing = project_audit.unbound_slots_for(instr, out["links"]) if instr else []
                 if missing:
                     out["unbound_slots"] = missing
