@@ -1276,7 +1276,14 @@ def register(mcp: FastMCP) -> None:
                 followers | following | endorse | action.
             identifier: public slug or URN of the member / company. Required
                 except op="me"; optional for followers/following (default = you).
-            sections: op="person" — sections to include ("*" = all).
+            sections: op="person" — sections to include ("*" = all), comma
+                separated: experience, education, languages, skills,
+                certifications, volunteer_experience, projects, recommendations,
+                interests, recruiting_activity (Recruiter only). `<name>_preview`
+                = its first entries only (lighter, less throttling), `*_preview`
+                = every section that way. Any other name is refused, naming
+                these. The About text is NOT a section: it always comes back,
+                as `bio`.
             cursor: pagination (posts, comments, reactions, followers, following).
             limit: page size.
             fields: op="posts"/"comments" — field projection (slims heavily).
