@@ -543,40 +543,51 @@ def _paires_et_orgs_du_projet(proprio: dict) -> tuple[list[str], list[int]]:
     return paires, orgs
 
 
-#: Ce qu'un lien par IDENTIFIANT a le droit de désigner, par type de cible : la table,
-#: la colonne de l'org où la cible se range, et le type de ressource de ses partages.
-_PORTEE_SQL = {
-    "tableau": (
-        "SELECT t.id FROM user_datastores t "
-        "LEFT JOIN org_groups tg ON t.owner_type = 'group' AND tg.id::text = t.owner_id "
-        "WHERE t.id = ANY(%(ids)s) AND ("
-        "     t.owner_type = 'platform'"
-        "  OR (t.owner_type || ':' || t.owner_id) = ANY(%(paires)s)"
-        "  OR (t.owner_type = 'org' AND t.owner_id = ANY(%(orgs_txt)s))"
-        "  OR (t.owner_type = 'group' AND tg.org_id = ANY(%(orgs)s))"
-        "  OR (t.owner_type = 'user' AND t.context_org_id = ANY(%(orgs)s))"
-        "  OR EXISTS (SELECT 1 FROM resource_grants g "
-        "             WHERE g.resource_type = 'datastore_namespace' "
-        "               AND g.resource_id = t.id::text "
-        "               AND (g.principal_type || ':' || g.principal_id) = ANY(%(paires)s) "
-        f"              AND {PARTAGE_VIVANT_G}))"),
-    "procedure": (
-        "SELECT t.id FROM org_instructions t "
-        "WHERE t.id = ANY(%(ids)s) AND ("
-        "     t.owner_type = 'platform'"
-        "  OR (t.owner_type || ':' || t.owner_id) = ANY(%(paires)s)"
-        "  OR t.org_id = ANY(%(orgs)s)"
-        # Une procédure PERSONNELLE ne se range dans aucune org (`org_id` NULL, ADR
-        # 0068) : celle d'un MEMBRE de l'org du projet en relève — c'est ainsi qu'un
-        # membre range sa procédure perso dans un projet de son org.
-        "  OR (t.owner_type = 'user' AND EXISTS (SELECT 1 FROM org_members om "
-        "        WHERE om.sub = t.owner_id AND om.org_id = ANY(%(orgs)s)))"
-        "  OR EXISTS (SELECT 1 FROM resource_grants g "
-        "             WHERE g.resource_type = 'doctrine' "
-        "               AND g.resource_id = t.id::text "
-        "               AND (g.principal_type || ':' || g.principal_id) = ANY(%(paires)s) "
-        f"              AND {PARTAGE_VIVANT_G}))"),
-}
+def _portee_sql(target_type: str) -> str:
+    """Ce qu'un lien par IDENTIFIANT a le droit de désigner, par type de cible : la table,
+    la colonne de l'org où la cible se range, et ses partages VIVANTS (`%(type_partage)s`,
+    le type de ressource stocké de la cible). Une fonction, pas une constante de module :
+    la garde des partages échus (oto#39) attribue chaque lecture de `resource_grants` à
+    la fonction qui la porte."""
+    return {
+        "tableau": (
+            "SELECT t.id FROM user_datastores t "
+            "LEFT JOIN org_groups tg ON t.owner_type = 'group' AND tg.id::text = t.owner_id "
+            "WHERE t.id = ANY(%(ids)s) AND ("
+            "     t.owner_type = 'platform'"
+            "  OR (t.owner_type || ':' || t.owner_id) = ANY(%(paires)s)"
+            "  OR (t.owner_type = 'org' AND t.owner_id = ANY(%(orgs_txt)s))"
+            "  OR (t.owner_type = 'group' AND tg.org_id = ANY(%(orgs)s))"
+            "  OR (t.owner_type = 'user' AND t.context_org_id = ANY(%(orgs)s))"
+            "  OR EXISTS (SELECT 1 FROM resource_grants g "
+            "             WHERE g.resource_type = %(type_partage)s "
+            "               AND g.resource_id = t.id::text "
+            "               AND (g.principal_type || ':' || g.principal_id) = ANY(%(paires)s) "
+            f"              AND {PARTAGE_VIVANT_G}))"),
+        "procedure": (
+            "SELECT t.id FROM org_instructions t "
+            "WHERE t.id = ANY(%(ids)s) AND ("
+            "     t.owner_type = 'platform'"
+            "  OR (t.owner_type || ':' || t.owner_id) = ANY(%(paires)s)"
+            "  OR t.org_id = ANY(%(orgs)s)"
+            # Une procédure PERSONNELLE ne se range dans aucune org (`org_id` NULL, ADR
+            # 0068) : celle d'un MEMBRE de l'org du projet en relève — c'est ainsi qu'un
+            # membre range sa procédure perso dans un projet de son org.
+            "  OR (t.owner_type = 'user' AND EXISTS (SELECT 1 FROM org_members om "
+            "        WHERE om.sub = t.owner_id AND om.org_id = ANY(%(orgs)s)))"
+            "  OR EXISTS (SELECT 1 FROM resource_grants g "
+            "             WHERE g.resource_type = %(type_partage)s "
+            "               AND g.resource_id = t.id::text "
+            "               AND (g.principal_type || ':' || g.principal_id) = ANY(%(paires)s) "
+            f"              AND {PARTAGE_VIVANT_G}))"),
+    }[target_type]
+
+
+def _type_partage(target_type: str) -> str:
+    """Le type de ressource STOCKÉ d'une cible de lien (`ownership`, seul à le nommer)."""
+    from .. import ownership
+    return {"tableau": ownership.TYPE_RESSOURCE_DATASTORE,
+            "procedure": ownership.TYPE_RESSOURCE_PROCEDURE}[target_type]
 
 
 def _ids_dans_la_portee(conn, proprio: Optional[dict], target_type: str,
@@ -588,8 +599,9 @@ def _ids_dans_la_portee(conn, proprio: Optional[dict], target_type: str,
     if not ids or proprio is None:
         return set()
     paires, orgs = _paires_et_orgs_du_projet(proprio)
-    rows = conn.execute(_PORTEE_SQL[target_type], {
+    rows = conn.execute(_portee_sql(target_type), {
         "ids": list(ids), "paires": paires, "orgs": orgs,
+        "type_partage": _type_partage(target_type),
         "orgs_txt": [str(o) for o in orgs]}).fetchall()
     return {int(r["id"]) for r in rows}
 
@@ -1690,7 +1702,7 @@ def duplicate_project(src_id: int, new_name: str, owner_type: str, owner_id: str
             # lire ses tableaux : sans cette garde, `seeded` versait chez le copieur
             # les lignes d'un tableau qu'il ne voit pas, et `empty`/le re-provisionnement
             # son schéma. Le lien est écarté, la copie continue.
-            if not lisible("datastore_namespace", str(target_ref)):
+            if not lisible(_type_partage("tableau"), str(target_ref)):
                 warnings.append(f"tableau « {label} » : lien ignoré (source illisible pour toi).")
                 continue
             if mode in ("empty", "seeded"):
@@ -1733,7 +1745,7 @@ def duplicate_project(src_id: int, new_name: str, owner_type: str, owner_id: str
             if (str(src_instr["owner_type"]), str(src_instr["owner_id"])) != ("org", str(owner_id)):
                 # Même garde que les tableaux : on ne recopie pas le corps d'une
                 # procédure que le copieur ne lit pas.
-                if not lisible("doctrine", str(target_ref)):
+                if not lisible(_type_partage("procedure"), str(target_ref)):
                     warnings.append(f"procédure « {label} » : lien ignoré (source illisible pour toi).")
                     continue
                 try:

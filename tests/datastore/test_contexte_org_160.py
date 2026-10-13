@@ -91,14 +91,15 @@ def test_face_rest_post_api_datastores(orgs):
 
 
 def test_face_vivier_provisionne_par_la_copie_d_un_projet(orgs):
-    from oto_mcp import db
+    from oto_mcp import db, ownership
     source = db.create_datastore("user", SUB, _nom(), context_org_id=orgs[0])
     projet = db.create_project("user", SUB, "Modèle 160", created_by=SUB,
                                context_org_id=orgs[0])
     db.add_project_link(projet, "tableau", str(source), label="vivier",
                         config={"provision": "empty"})
     copie, _ = db.duplicate_project(projet, "Copie 160", "user", SUB, copied_by=SUB,
-                                    context_org_id=orgs[1])
+                                    context_org_id=orgs[1],
+                                    lisible=lambda t, rid: ownership.can_access(SUB, t, rid, "read"))
     [lien] = [l for l in db.list_project_links(copie) if l["target_type"] == "tableau"]
     assert int(lien["target_ref"]) != source, "un vivier frais, pas le pointeur"
     assert _contexte(int(lien["target_ref"])) == orgs[1], "l'org où la copie est rangée"
