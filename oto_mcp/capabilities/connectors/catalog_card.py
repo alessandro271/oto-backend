@@ -153,6 +153,9 @@ class ConnectFlow(BaseModel):
     answer to whoever asks, which an anonymous catalog cannot do."""
     label: str
     params: list[ConnectParam] = []
+    # Can the gesture be undone generically — `DELETE /api/me/connectors/{name}/oauth`
+    # (`me.connector_disconnect`)? `false` = no "Disconnect" button to show.
+    disconnect: bool = False
     # The consent return URL to register with the provider, DERIVED from the
     # environment (never hard-coded: a URL in prose lies as soon as it is read
     # from preprod, and consent fails on an incomprehensible `redirect_uri_mismatch`).

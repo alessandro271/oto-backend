@@ -330,12 +330,19 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
   — **le statut et la déconnexion OAuth GÉNÉRIQUES**, capacités
   `me.connector_status`/`me.connector_disconnect` (`capabilities/connectors/oauth_status.py`,
   depuis le 2026-09-04, oto-dashboard#125 items 2/3) : le chemin fixe qui ne nomme pas
-  le connecteur, symétrique de `me.connector_connect` — `{name}` ∈ **google, et personne
-  d'autre** ; un autre nom rend `400 no_oauth_status`. ⚠️ Ils étaient **trois** jusqu'au
-  2026-09-09 (atlassian, folkmcp, google) ; **le chemin est resté GÉNÉRIQUE alors qu'il
-  ne sert plus qu'un connecteur**, et c'est délibéré — `/api/me/connectors/{name}/…` est
-  le contrat que le dashboard appelle, il ne se replie pas sur `/api/google/…` parce que
-  la liste a rétréci. Un second connecteur OAuth y entre par un simple `declare_status`.
+  le connecteur, symétrique de `me.connector_connect` — `{name}` ∈ **google, meta_ads,
+  instagram_meta** (les deux derniers depuis le 2026-10-13, oto-backend#1241) ; un autre
+  nom rend `400 no_oauth_status`. ⚠️ Ils étaient **trois** jusqu'au 2026-09-09
+  (atlassian, folkmcp, google) ; le chemin est resté GÉNÉRIQUE quand la liste a rétréci,
+  et c'est par un simple `declare_status` que meta_ads et instagram_meta y sont entrés.
+  **Le catalogue le dit** : `connect.disconnect` (booléen, `GET /api/connectors` et
+  `GET /api/me/connectors?verbose=true`) vaut `true` pour un connecteur dont la
+  déconnexion générique est déclarée — c'est ce que lit un front pour afficher
+  « Déconnecter ». **Révocation chez Meta** : meta_ads révoque par
+  `DELETE /{user-id}/permissions` (Graph API) puis retire la ligne MEMBRE ; un échec de
+  révocation est JOURNALISÉ et la ligne part quand même. instagram_meta n'a pas de
+  révocation documentée (API Instagram Login) : la ligne est retirée, le jeton reste
+  valable chez Meta jusqu'à son expiration.
   ⚠️ **`me.federation.google.*` ci-dessus RESTE en place** : son retrait est un lot
   séparé, une fois le dashboard basculé sur ces deux-là (même discipline que #519/#670).
   **Contrainte 1** (bloquante) : `me.connector_status` dérive `{connected, set_at,

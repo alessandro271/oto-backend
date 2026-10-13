@@ -4,7 +4,7 @@ a fixed path that does not name the connector, symmetric to `me.connector_connec
 built `/api/${name}/oauth/status` and `DELETE /api/${name}/oauth`, the last
 two places where a connector name traveled in a URL.
 
-**Scope: google, wired HERE.** ⚠️ There were THREE until 2026-09-09 — atlassian
+**Scope: google, meta_ads and instagram_meta, wired HERE.** ⚠️ There were THREE until 2026-09-09 — atlassian
 and folkmcp left with the MCP federation (ADR 0069). A connector outside this
 list answers `400 no_oauth_status`: this is not a gratuitous defensive guard, it is
 the same principle as `connector_flow.supports()` — a gesture that is not declared
@@ -77,13 +77,14 @@ class ConnectorOAuthStatus(BaseModel):
 
 def _require_oauth(name: str) -> None:
     """A connector that has not declared its verbs here is not silently mimicked —
-    same principle as `connector_flow.supports()`. Today: google, and nobody
-    else (atlassian and folkmcp left with the federation, ADR 0069)."""
+    same principle as `connector_flow.supports()`. Today: google, meta_ads and
+    instagram_meta (atlassian and folkmcp left with the federation, ADR 0069)."""
     if not flow_status.supports(name):
         raise AuthzDenied(
             400, "no_oauth_status",
             f"“{name}” has no generic OAuth state: it is not one of the "
-            "covered connectors (google). Its credential is read through "
+            "covered connectors (google, meta_ads, instagram_meta). Its credential "
+            "is read through "
             "`connectors.me` like the others.")
 
 
@@ -122,6 +123,21 @@ def _google_disconnect(ctx: ResolvedCtx) -> dict:
 flow_status.declare_status("google", disconnect=_google_disconnect)
 
 
+def _meta_disconnect(module: str):
+    """meta_ads / instagram_meta: one vault row per member, removed by
+    `auth.<module>.disconnect` (revocation at Meta when the API allows it).
+    `disconnected` says whether there was a row — idempotent like google."""
+    def _disconnect(ctx: ResolvedCtx) -> dict:
+        import importlib
+        auth = importlib.import_module(f"oto_mcp.auth.{module}")
+        return {"ok": True, "disconnected": auth.disconnect(ctx.sub)}
+    return _disconnect
+
+
+for _nom in ("meta_ads", "instagram_meta"):
+    flow_status.declare_status(_nom, disconnect=_meta_disconnect(_nom))
+
+
 CAPABILITIES += [
     Capability(
         key="me.connector_status",
@@ -132,9 +148,10 @@ CAPABILITIES += [
         mcp=None,     # screen read gesture (dashboard); no useful agent counterpart
         errors=(DeclaredError(400, "no_oauth_status",
                               "this connector has no generic OAuth state "
-                              "(other than google)"),),
+                              "(other than google, meta_ads, instagram_meta)"),),
         rest=RestBinding("GET", "/api/me/connectors/{name}/oauth-status"),
-        description=("Is my OAuth consent for this connector (google) set, "
+        description=("Is my OAuth consent for this connector (google, meta_ads, "
+                     "instagram_meta) set, "
                      "and since when — derived from the same source as `/api/me`. "
                      "`connected: false` with `set_at: null` is the normal state of an "
                      "account that was never connected."),
@@ -148,9 +165,10 @@ CAPABILITIES += [
         mcp=None,
         errors=(DeclaredError(400, "no_oauth_status",
                               "this connector has no generic OAuth state "
-                              "(other than google)"),),
+                              "(other than google, meta_ads, instagram_meta)"),),
         rest=RestBinding("DELETE", "/api/me/connectors/{name}/oauth"),
-        description=("Revokes my OAuth consent for this connector (google) — "
+        description=("Revokes my OAuth consent for this connector (google, "
+                     "meta_ads, instagram_meta — `connect.disconnect` in the catalog) — "
                      "at the provider when the mechanism "
                      "allows it, and in all cases removes the local row. A SINGLE "
                      "call, irreversible: never an intermediate state waiting for "

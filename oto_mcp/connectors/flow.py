@@ -137,7 +137,9 @@ def describe(connector: str) -> Optional[dict]:
     f = _FLOWS.get(connector)
     if f is None:
         return None
-    return {"label": f.label, "params": [p.describe() for p in f.params]}
+    from . import flow_status  # same package, no import-time side effect
+    return {"label": f.label, "params": [p.describe() for p in f.params],
+            "disconnect": flow_status.supports(connector)}
 
 
 async def start(connector: str, ctx, values: dict) -> FlowStart:

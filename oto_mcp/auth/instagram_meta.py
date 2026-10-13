@@ -267,6 +267,24 @@ def _row(org_id: int, sub: str) -> Optional[dict]:
     return credentials_store.get_credential_with_meta(entity_type, entity_id, CONNECTOR)
 
 
+# --- disconnection -------------------------------------------------------------
+
+def disconnect(sub: str) -> bool:
+    """The "disconnect" gesture (`me.connector_disconnect`): removes this person's
+    vault row. **No revocation at Meta**: the Instagram Login API
+    (`graph.instagram.com`) documents none — the token stays valid there until it
+    expires (60 days at most), unless the person removes the app from their Instagram
+    settings. oto no longer holds it, so no oto call can use it.
+    `False` = nothing to remove (idempotent)."""
+    from .. import access  # lazy
+
+    org = access.current_org(sub)
+    if org is None:
+        return False
+    entity_type, entity_id = _scope(org, sub)
+    return credentials_store.clear_credential(entity_type, entity_id, CONNECTOR)
+
+
 # --- what the card displays ----------------------------------------------------
 
 def _link_state(sub: str) -> connector_link.LinkState:

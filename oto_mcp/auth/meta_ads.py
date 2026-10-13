@@ -189,6 +189,47 @@ def _row(org_id: int, sub: str) -> Optional[dict]:
     return credentials_store.get_credential_with_meta(entity_type, entity_id, CONNECTOR)
 
 
+# --- disconnection -------------------------------------------------------------
+
+#: Graph's revocation timeout — a cold gesture, never on a tool call's path.
+_REVOCATION_TIMEOUT = 10
+
+
+def _revoquer_chez_meta(token: str, user_id: str) -> None:
+    """`DELETE /{user-id}/permissions` (Graph API): removes ALL the permissions the
+    person granted the application — the token no longer serves anything at Meta.
+    The token goes in a header, never in the URL (cf. `MetaAdsClient._entetes`)."""
+    import requests
+
+    r = requests.delete(
+        f"https://graph.facebook.com/{_coeur().GRAPH_API_VERSION}/{user_id}/permissions",
+        headers={"Authorization": f"Bearer {token}"}, timeout=_REVOCATION_TIMEOUT)
+    r.raise_for_status()
+
+
+def disconnect(sub: str) -> bool:
+    """The "disconnect" gesture (`me.connector_disconnect`): revokes at Meta, then
+    removes this person's vault row IN ALL CASES — same contract as google
+    (`capabilities/connectors/oauth_status.py`, constraint 2). A failed revocation does
+    not keep the row: it is LOGGED, never silent, and the person can still remove
+    the app from their Facebook settings. `False` = nothing to remove (idempotent)."""
+    from .. import access  # lazy
+
+    org = access.current_org(sub)
+    if org is None:
+        return False
+    entity_type, entity_id = _scope(org, sub)
+    try:
+        row = _row(org, sub)
+        user_id = ((row or {}).get("meta") or {}).get("user_id")
+        if row and row.get("secret") and user_id:
+            _revoquer_chez_meta(row["secret"], str(user_id))
+    except Exception as e:  # noqa: BLE001 — logged, the local removal happens anyway
+        logger.warning("meta_ads: Meta-side revocation failed (org=%s, %s) — the vault "
+                       "row is removed anyway", org, type(e).__name__)
+    return credentials_store.clear_credential(entity_type, entity_id, CONNECTOR)
+
+
 # --- what the card displays --------------------------------------------------
 
 def _link_state(sub: str) -> connector_link.LinkState:

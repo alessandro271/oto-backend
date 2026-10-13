@@ -36,11 +36,12 @@ def _cap(key: str):
 
 # --- Inventaire du registre --------------------------------------------------
 
-def test_seul_google_est_couvert():
+def test_les_connecteurs_couverts_sont_exactement_ceux_declares():
     """⚠️ La liste a RÉTRÉCI le 2026-09-09 : atlassian et folkmcp sont partis avec la
-    fédération MCP (ADR 0069). Ce test est ce qui empêche l'un des deux de revenir
+    fédération MCP (ADR 0069). Elle a repris meta_ads et instagram_meta le 2026-10-13
+    (oto-backend#1241). Ce test est ce qui empêche un connecteur d'entrer ou de revenir
     par une déclaration oubliée."""
-    assert set(flow_status.entries()) == {"google"}
+    assert set(flow_status.entries()) == {"google", "meta_ads", "instagram_meta"}
 
 
 def test_aucun_verbe_status_nest_cable_ici():
