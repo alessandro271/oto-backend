@@ -72,11 +72,15 @@ def _garde(app=None, mode=ld.ENFORCE, horloge=None, exemptees=(), publiees=None,
                                    else (lambda lignes: None)))
 
 
-def _app_par_jeton(statuts: dict, defaut: int = 401):
-    """Rend le statut associé au jeton porté (`defaut` sinon)."""
+def _app_par_jeton(statuts: dict, defaut: int = 401, *, verifie: bool = True):
+    """Rend le statut associé au jeton porté (`defaut` sinon). `verifie` : joue la
+    couche d'auth — un statut < 400 publie le principal dans le scope, comme
+    `api.base` ; `False` = une route publique qui répond sans rien vérifier."""
     async def app(scope, receive, send):
         auth = dict(scope["headers"]).get(b"authorization", b"").decode()
         statut = statuts.get(auth.removeprefix("Bearer "), defaut)
+        if verifie and statut < 400:
+            scope["oto_principal"] = {"sub": "s"}
         await send({"type": "http.response.start", "status": statut, "headers": []})
         await send({"type": "http.response.body", "body": b""})
     return app
@@ -468,3 +472,25 @@ def test_un_echec_decriture_de_la_mesure_ne_leve_pas(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING, logger="oto_mcp.limite_debit_mesure"):
         mesure.publier([{"tool": "debit:anonyme"}])
     assert any("en échec" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_un_2xx_sur_une_route_publique_ne_reconnait_pas_le_jeton():
+    # Revue F-025 : un bearer inventé qui obtient 200 sur `/api/version` (aucune
+    # vérification) ne doit pas devenir « reconnu » — sinon ses 401 sur `/mcp`
+    # ne coûteraient plus rien au budget d'échecs de son adresse.
+    statuts = {"invente": 200}
+    publique = _garde(app=_app_par_jeton(statuts, verifie=False), echecs=4, jeton=600)
+    assert _statut(await _appel(publique, _scope(jeton="invente"))) == 200
+    statuts["invente"] = 401
+    vus = [_statut(await _appel(publique, _scope(jeton="invente"))) for _ in range(10)]
+    assert 429 in vus
+
+
+def test_jeton_valide_lit_le_principal_rest_ou_l_utilisateur_mcp():
+    from types import SimpleNamespace
+    from oto_mcp.limite_debit import _jeton_valide
+    assert not _jeton_valide({})
+    assert _jeton_valide({"oto_principal": {"sub": "s"}})
+    assert _jeton_valide({"user": SimpleNamespace(is_authenticated=True)})
+    assert not _jeton_valide({"user": SimpleNamespace(is_authenticated=False)})

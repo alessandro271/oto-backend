@@ -228,6 +228,19 @@ def classer(methode: str, chemin: str, porte_jeton: bool) -> Optional[str]:
     return "anonyme"
 
 
+def _jeton_valide(scope) -> bool:
+    """Le bearer a-t-il été VÉRIFIÉ par la couche d'auth pendant cette requête ? Seul
+    un jeton vérifié devient « reconnu » : un 2xx sur une route publique
+    (`/api/version`, `/.well-known/*`…) ne vérifie rien, et reconnaître le jeton là
+    laissait un scanner contourner le budget d'échecs à une requête par jeton
+    inventé. REST : `api.base` publie le principal sous `oto_principal` ;
+    MCP : l'`AuthenticationMiddleware` pose `scope["user"]`. Les deux écrivent dans
+    le MÊME scope (Starlette le met à jour en place), relu ici après la réponse."""
+    if scope.get("oto_principal"):
+        return True
+    return bool(getattr(scope.get("user"), "is_authenticated", False))
+
+
 def _empreinte(valeur: bytes) -> str:
     return hashlib.sha256(valeur).hexdigest()[:32]
 
@@ -358,7 +371,8 @@ class LimiteDebit:
 
         async def envoyer(message):
             if message.get("type") == "http.response.start":
-                self._constater(int(message.get("status") or 0), echecs, ip, jeton)
+                self._constater(int(message.get("status") or 0), echecs, ip, jeton,
+                                valide=_jeton_valide(scope))
             await send(message)
 
         await self.app(scope, receive, envoyer)
@@ -389,14 +403,14 @@ class LimiteDebit:
         return None if attente is None else (classe, cle, attente)
 
     def _constater(self, statut: int, echecs: frozenset, ip: str,
-                   jeton: Optional[str]) -> None:
+                   jeton: Optional[str], *, valide: bool = False) -> None:
         maintenant = self._horloge()
         reconnu = jeton is not None and jeton in self._reconnus
         if statut in echecs and not reconnu:
             seaux = self._seaux.get("echecs")
             if seaux is not None:
                 self._mesure.noter_usage("echecs", seaux.debiter(ip, maintenant))
-        elif jeton is not None and statut < 400:
+        elif jeton is not None and statut < 400 and valide:
             self._reconnus.pop(jeton, None)
             self._reconnus[jeton] = maintenant
             while len(self._reconnus) > _RECONNUS_MAX:

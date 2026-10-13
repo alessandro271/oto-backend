@@ -2167,7 +2167,7 @@ def transport_refusal_stats(since_days: int = 7) -> dict:
             SELECT COALESCE(l.args->>'env', 'inconnu')            AS env,
                    substring(l.tool from 7)                       AS classe,
                    COALESCE(l.args->>'mode', 'inconnu')           AS mode,
-                   COUNT(*)                                       AS minutes,
+                   COUNT(DISTINCT l.args->>'minute')              AS minutes,
                    SUM((l.args->>'allowed')::bigint)              AS allowed,
                    SUM((l.args->>'would_refuse')::bigint)         AS would_refuse,
                    SUM((l.args->>'refused')::bigint)              AS refused,
