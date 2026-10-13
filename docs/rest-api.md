@@ -1200,10 +1200,29 @@ lire en base, et lui fait payer un seau à jetons (débit régulier, rafale = la
 - ⚠️ Compteurs **par processus** (bleu/vert, canari : chacun les siens) : une protection
   du service, pas un quota.
 - **Réglages, lus au DÉMARRAGE — en changer demande un redémarrage** : `OTO_DEBIT_MODE`
-  = `report` (défaut, et toute valeur inconnue) | `enforce` | `off` ;
+  = `report` (défaut) | `enforce` | `off` ;
   `OTO_DEBIT_{JETON,ANONYME,SENSIBLE,WEBHOOK,ECHECS}_PAR_MIN`, `0` désarme la classe ;
-  `OTO_DEBIT_ADRESSES_EXEMPTEES`. Preuves : `tests/test_limite_debit.py`,
-  `tests/test_transport_refusals_db.py`.
+  `OTO_DEBIT_ADRESSES_EXEMPTEES`. **Un réglage illisible empêche le démarrage**
+  (`ReglageDebitInvalide`) : un mode inconnu, une borne non numérique ou négative, une
+  adresse exemptée qui n'est ni une adresse ni un CIDR — jamais un défaut deviné.
+  Preuves : `tests/test_limite_debit.py`, `tests/test_transport_refusals_db.py`.
+
+### Deux couches : le proxy, puis l'application (décision du 13/10/2026)
+
+La limite de débit vit à deux endroits, chacun pour ce qu'il sait faire :
+
+| couche | où | ce qu'elle arrête | ce qu'elle ne sait pas faire |
+|---|---|---|---|
+| **proxy** | le Caddy devant chaque instance, dans la configuration de l'infra de l'instance | les inondations par adresse, toutes instances et couleurs confondues ; les corps trop gros, avant qu'ils n'atteignent le processus | compter par jeton, distinguer une route sensible d'une autre, savoir qu'une réponse est un 401/403 |
+| **application** | `LimiteDebit`, ci-dessus | les quotas par jeton, le seuil serré des routes sensibles, le budget d'échecs 401/403 par adresse | voir une inondation dans son ensemble : ses compteurs sont par processus |
+
+- **Mise en service** : l'application tourne en **`report`** (elle mesure, ne refuse
+  rien). On ne passe une instance en `enforce` qu'après une semaine de mesures
+  (`would_refuse` par classe, `oto_admin_monitoring op=transport`), et seulement derrière
+  un proxy qui écrase les en-têtes d'adresse.
+- **Ni l'une ni l'autre ne remplace l'autre** : retirer le proxy laisserait passer une
+  inondation répartie sur les processus ; retirer l'application perdrait tout ce qui se
+  compte par jeton.
 
 ## CORS — les origines se DÉCLARENT, il n'y a plus de liste dans le code
 

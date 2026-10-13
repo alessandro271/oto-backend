@@ -89,9 +89,14 @@ PLUS (`routes_lourdes`, relais, projets publiés).
 
 **Réglages** (`env_inventory`), lus UNE fois au démarrage — en changer demande un
 redémarrage : `OTO_DEBIT_MODE` = `report` (défaut : mesure et journalise ce qui serait
-refusé, ne refuse rien) | `enforce` | `off`, une valeur inconnue vaut `report` ; un
-débit par classe, `OTO_DEBIT_<CLASSE>_PAR_MIN`, `0` désarme la classe ;
-`OTO_DEBIT_ADRESSES_EXEMPTEES`.
+refusé, ne refuse rien) | `enforce` | `off` ; un débit par classe,
+`OTO_DEBIT_<CLASSE>_PAR_MIN`, `0` désarme la classe ; `OTO_DEBIT_ADRESSES_EXEMPTEES`.
+Un réglage illisible LÈVE au démarrage (`ReglageDebitInvalide`) : jamais un défaut
+deviné, qui ferait tourner une instance sur une borne que personne n'a posée.
+
+Couche applicative d'un dispositif à DEUX couches (cf. `docs/rest-api.md` §Deux couches) : le
+proxy devant l'instance arrête les inondations et les corps trop gros ; ici, ce que
+seule l'application sait compter (jeton, routes sensibles, budget d'échecs).
 """
 from __future__ import annotations
 
@@ -161,17 +166,26 @@ class Borne:
         return self.par_minute / 60.0
 
 
+class ReglageDebitInvalide(RuntimeError):
+    """Un réglage `OTO_DEBIT_*` illisible : levé à la construction de la garde, donc au
+    démarrage — l'instance ne sert pas sur un réglage qu'elle n'a pas compris."""
+
+
 def mode_depuis_env() -> str:
-    """`report` (défaut) | `enforce` | `off` ; une valeur inconnue vaut `report` : la
-    même image tourne sur des instances dont le proxy n'écrase pas les en-têtes
-    d'adresse, et `enforce` s'y contournerait (cf. la docstring du module)."""
+    """`report` (défaut, absent ou vide) | `enforce` | `off`. Le défaut est `report` :
+    la même image tourne sur des instances dont le proxy n'écrase pas les en-têtes
+    d'adresse, et `enforce` s'y contournerait (cf. la docstring du module). Une valeur
+    inconnue LÈVE : `enforced` pour `enforce` ne doit pas tourner en mesure sans bruit."""
     brut = (os.environ.get("OTO_DEBIT_MODE") or REPORT).strip().lower()
-    return brut if brut in (ENFORCE, REPORT, OFF) else REPORT
+    if brut not in (ENFORCE, REPORT, OFF):
+        raise ReglageDebitInvalide(
+            f"OTO_DEBIT_MODE={brut!r} inconnu : `report`, `enforce` ou `off`.")
+    return brut
 
 
 def adresses_exemptees_depuis_env() -> tuple:
-    """Les réseaux exemptés, lus UNE fois au démarrage. Une entrée illisible est
-    ignorée en le disant — jamais une exemption devinée."""
+    """Les réseaux exemptés, lus UNE fois au démarrage. Une entrée illisible LÈVE :
+    ni exemption devinée, ni machine à nous bornée sans qu'on le sache."""
     reseaux = []
     for brut in (os.environ.get("OTO_DEBIT_ADRESSES_EXEMPTEES") or "").split(","):
         brut = brut.strip()
@@ -180,12 +194,14 @@ def adresses_exemptees_depuis_env() -> tuple:
         try:
             reseaux.append(ipaddress.ip_network(brut, strict=False))
         except ValueError:
-            logger.warning("OTO_DEBIT_ADRESSES_EXEMPTEES : %r illisible, ignorée", brut)
+            raise ReglageDebitInvalide(
+                f"OTO_DEBIT_ADRESSES_EXEMPTEES : {brut!r} n'est ni une adresse ni un "
+                "CIDR.") from None
     return tuple(reseaux)
 
 
 def _borne(nom: str, brut: Optional[str], defaut: float) -> Borne:
-    """Une valeur illisible ou négative retombe sur le défaut, en le disant."""
+    """Absente ou vide : le défaut. Illisible ou négative : LÈVE."""
     if brut in (None, ""):
         return Borne(defaut)
     try:
@@ -193,8 +209,8 @@ def _borne(nom: str, brut: Optional[str], defaut: float) -> Borne:
     except ValueError:
         valeur = -1.0
     if valeur < 0:
-        logger.warning("%s=%r illisible : défaut %s/min", nom, brut, defaut)
-        return Borne(defaut)
+        raise ReglageDebitInvalide(
+            f"{nom}={brut!r} illisible : un débit par minute positif, `0` désarme.")
     return Borne(valeur)
 
 

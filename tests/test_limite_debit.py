@@ -293,15 +293,19 @@ async def test_une_adresse_exemptee_ne_paie_que_ses_jetons():
     assert _statut(await _appel(garde, _scope(ip=B))) == 429
 
 
-def test_adresses_exemptees_lues_dans_lenv(monkeypatch, caplog):
-    monkeypatch.setenv("OTO_DEBIT_ADRESSES_EXEMPTEES",
-                       " 192.0.2.7, 198.51.100.0/24 ,pas-une-adresse,")
-    with caplog.at_level(logging.WARNING, logger="oto_mcp.limite_debit"):
-        reseaux = ld.adresses_exemptees_depuis_env()
+def test_adresses_exemptees_lues_dans_lenv(monkeypatch):
+    monkeypatch.setenv("OTO_DEBIT_ADRESSES_EXEMPTEES", " 192.0.2.7, 198.51.100.0/24 ,")
+    reseaux = ld.adresses_exemptees_depuis_env()
     assert [str(r) for r in reseaux] == ["192.0.2.7/32", "198.51.100.0/24"]
-    assert any("pas-une-adresse" in r.getMessage() for r in caplog.records)
     monkeypatch.delenv("OTO_DEBIT_ADRESSES_EXEMPTEES")
     assert ld.adresses_exemptees_depuis_env() == ()
+
+
+def test_une_adresse_exemptee_illisible_leve(monkeypatch):
+    """Ni exemption devinée, ni machine à nous bornée sans qu'on le sache."""
+    monkeypatch.setenv("OTO_DEBIT_ADRESSES_EXEMPTEES", "192.0.2.7,pas-une-adresse")
+    with pytest.raises(ld.ReglageDebitInvalide, match="pas-une-adresse"):
+        ld.adresses_exemptees_depuis_env()
 
 
 # ── modes, transport ───────────────────────────────────────────────────────
@@ -358,12 +362,12 @@ async def test_hors_http_rien_nest_touche():
 
 # ── réglages ───────────────────────────────────────────────────────────────
 
-def test_le_defaut_est_report_et_linconnu_aussi(monkeypatch):
+def test_le_defaut_est_report(monkeypatch):
     """La même image tourne derrière des proxys qui n'écrasent pas les en-têtes
     d'adresse : `enforce` se pose instance par instance, jamais par défaut."""
     monkeypatch.delenv("OTO_DEBIT_MODE", raising=False)
     assert ld.mode_depuis_env() == ld.REPORT
-    monkeypatch.setenv("OTO_DEBIT_MODE", "enforced")
+    monkeypatch.setenv("OTO_DEBIT_MODE", "")
     assert ld.mode_depuis_env() == ld.REPORT
     monkeypatch.setenv("OTO_DEBIT_MODE", " Enforce ")
     assert ld.mode_depuis_env() == ld.ENFORCE
@@ -371,9 +375,19 @@ def test_le_defaut_est_report_et_linconnu_aussi(monkeypatch):
     assert ld.mode_depuis_env() == ld.OFF
 
 
+def test_un_mode_inconnu_empeche_le_demarrage(monkeypatch):
+    """`enforced` pour `enforce` ne tourne pas en mesure sans bruit : la garde ne se
+    construit pas, donc le serveur ne démarre pas."""
+    monkeypatch.setenv("OTO_DEBIT_MODE", "enforced")
+    with pytest.raises(ld.ReglageDebitInvalide, match="enforced"):
+        ld.mode_depuis_env()
+    with pytest.raises(ld.ReglageDebitInvalide):
+        ld.LimiteDebit(lambda scope, receive, send: None)
+
+
 def test_bornes_lues_dans_lenv(monkeypatch):
     monkeypatch.setenv("OTO_DEBIT_JETON_PAR_MIN", "30")
-    monkeypatch.setenv("OTO_DEBIT_ANONYME_PAR_MIN", "beaucoup")
+    monkeypatch.setenv("OTO_DEBIT_ANONYME_PAR_MIN", "")
     monkeypatch.setenv("OTO_DEBIT_SENSIBLE_PAR_MIN", "0")
     monkeypatch.delenv("OTO_DEBIT_WEBHOOK_PAR_MIN", raising=False)
     b = ld.bornes_depuis_env()
@@ -381,6 +395,13 @@ def test_bornes_lues_dans_lenv(monkeypatch):
     assert b["anonyme"].par_minute == ld.DEFAUTS["anonyme"]
     assert b["sensible"].par_minute == 0
     assert b["webhook"].par_minute == ld.DEFAUTS["webhook"]
+
+
+@pytest.mark.parametrize("brut", ["beaucoup", "-5"])
+def test_une_borne_illisible_leve(monkeypatch, brut):
+    monkeypatch.setenv("OTO_DEBIT_ANONYME_PAR_MIN", brut)
+    with pytest.raises(ld.ReglageDebitInvalide, match="OTO_DEBIT_ANONYME_PAR_MIN"):
+        ld.bornes_depuis_env()
 
 
 def test_le_debit_par_jeton_couvre_la_minute_de_chaque_route_lourde():
