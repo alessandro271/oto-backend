@@ -241,6 +241,23 @@ def _scope_refusal(e, object_type) -> Optional[McpError]:
     return missing_scopes_refusal(e, object_type=object_type)
 
 
+#: What `GET /account-info/v3/details` says of the account, under the names we
+#: serve. `ui_domain` is what tells an EU portal (`app-eu1.hubspot.com`) from a US one.
+_ACCOUNT_KEYS = {"portalId": "portal_id", "accountType": "account_type",
+                 "uiDomain": "ui_domain",
+                 "dataHostingLocation": "data_hosting_location",
+                 "timeZone": "time_zone"}
+
+
+def _account(infos: dict) -> dict:
+    """WHICH portal the key reads, reduced to what HubSpot actually returned.
+
+    A key authenticates the same whichever portal it belongs to: without this, the
+    only place the portal id showed was the `url` of a record already read."""
+    return {ours: infos[theirs] for theirs, ours in _ACCOUNT_KEYS.items()
+            if infos.get(theirs) not in (None, "")}
+
+
 def _verify(fields: dict, config: dict | None = None) -> dict:
     """"Test the connection" probe — otomata-tech/oto#69. Covers `auth+scopes`.
 
@@ -253,6 +270,8 @@ def _verify(fields: dict, config: dict | None = None) -> dict:
        is RETURNED as a measurement, per family (`hubspot_scopes.measure_scopes`):
        read from the token itself when HubSpot answers, else one minimal read per
        family. Bounded, read-only, and `unknown` for what it could not settle.
+    3. **identity** — which portal answered (`portal_id`, region, account type),
+       from the read of step 1: no extra call.
     """
     from oto.tools.hubspot.client import HubSpotClient
 
@@ -262,7 +281,8 @@ def _verify(fields: dict, config: dict | None = None) -> dict:
         raise RuntimeError(
             "HubSpot answered without identifying an account for this key — "
             f"unexpected response: {str(infos)[:200]}")
-    return {"scopes": measure_scopes(client, fields["key"])}
+    return {"scopes": measure_scopes(client, fields["key"]),
+            "identity": _account(infos)}
 
 
 def register(mcp: FastMCP) -> None:
@@ -308,6 +328,27 @@ def register(mcp: FastMCP) -> None:
                 "names is the form of the read ops")
         return value
 
+    def _sorts(value, op: str) -> Optional[list]:
+        """`sorts` for a search: a list of {propertyName, direction}, and ONE rule.
+
+        HubSpot applies a single sorting rule per search. A second one is refused
+        here rather than sent: whichever HubSpot kept, the caller would read an
+        order it did not ask for."""
+        if value is None:
+            return None
+        if op != "search":
+            raise _bad(f"op='{op}' does not accept sorts: only op='search' orders "
+                       "its results")
+        if not isinstance(value, list) or not all(
+                isinstance(v, dict) and v.get("propertyName") for v in value):
+            raise _bad(
+                "sorts = [{\"propertyName\": \"<internal name>\", \"direction\": "
+                "\"DESCENDING\"}] (or \"ASCENDING\")")
+        if len(value) > 1:
+            raise _bad("sorts takes ONE rule: HubSpot applies a single sorting rule "
+                       "per search")
+        return value or None
+
     def _assoc_objects(value, op: str) -> Optional[list]:
         """WRITE form of `associations`: HubSpot v3 association objects."""
         if value is None:
@@ -333,6 +374,7 @@ def register(mcp: FastMCP) -> None:
         limit: int = 100,
         after: Optional[str] = None,
         resolve_labels: bool = False,
+        sorts: Optional[list[dict]] = None,
     ) -> dict:
         """HubSpot CRM objects — one tool, the verb in `op`.
 
@@ -341,7 +383,8 @@ def register(mcp: FastMCP) -> None:
 
         Ops:
         - **"search"** (default) : Search CRM objects. Full-text via `query`,
-          structured via `filters`. Paginated (`limit`, `after`).
+          structured via `filters`, ordered via `sorts`. Paginated (`limit`,
+          `after`).
         - **"list"** : List CRM objects of a type (paginated via `after`).
         - **"get"** : Fetch one CRM object by id. Requires `object_id`.
         - **"create"** : Create a CRM object. Requires `properties` (dict).
@@ -396,8 +439,15 @@ def register(mcp: FastMCP) -> None:
                 `dealstage_label` / `pipeline_label` (`hs_pipeline_stage_label` /
                 `hs_pipeline_label` on tickets) NEXT TO the raw ids, which stay
                 (writes need them). One pipelines read per call.
+            sorts: op="search" — ONE rule, passed to HubSpot verbatim:
+                [{"propertyName": "createdate", "direction": "DESCENDING"}]
+                (or "ASCENDING"). HubSpot applies a single sorting rule per
+                search and serves at most 10 000 results per query: to walk
+                further, narrow the `filters` instead of paging. Website
+                visitors, latest first: hubspot_visits.
         """
         c = _client()
+        ordre = _sorts(sorts, op)
 
         def _labelled(result):
             # Opt-in, and only ever ADDS sibling keys: without the flag the client's
@@ -412,7 +462,7 @@ def register(mcp: FastMCP) -> None:
                     _need(object_type, "object_type", op),
                     query=query, filters=filters,
                     properties=_names(properties, "properties", op),
-                    limit=limit, after=after))
+                    limit=limit, after=after, sorts=ordre))
 
             if op == "list":
                 return _labelled(c.list_objects(
@@ -543,6 +593,19 @@ def register(mcp: FastMCP) -> None:
                 "(op='update' with filter_branch), not its members.")
         return info
 
+    _PROCESSING_TYPES = ("MANUAL", "DYNAMIC", "SNAPSHOT")
+
+    def _processing_types(value) -> Optional[list]:
+        """The kinds a list search keeps — upper-cased, and only HubSpot's three."""
+        if value is None:
+            return None
+        kinds = [str(v).strip().upper() for v in value] \
+            if isinstance(value, list) else None
+        if not kinds or any(k not in _PROCESSING_TYPES for k in kinds):
+            raise _bad("processing_types = non-empty list among MANUAL, DYNAMIC, "
+                       "SNAPSHOT")
+        return kinds
+
     @mcp.tool()
     def hubspot_list(
         op: Literal["search", "get", "create", "update", "delete", "restore",
@@ -563,6 +626,9 @@ def register(mcp: FastMCP) -> None:
         after: Optional[str] = None,
         properties: Optional[list[str]] = None,
         dry_run: bool = False,
+        offset: Optional[int] = None,
+        count: Optional[int] = None,
+        processing_types: Optional[list[str]] = None,
     ) -> dict:
         """HubSpot lists — the segments of a HubSpot portal. One tool, verb in `op`.
 
@@ -579,7 +645,9 @@ def register(mcp: FastMCP) -> None:
 
         Ops:
         - **"search"** (default) : find lists by `name` fragment via `query`,
-          optionally narrowed by `object_type`.
+          optionally narrowed by `object_type` and `processing_types`. HubSpot
+          serves 20 lists per page: when the answer says `hasMore`, pass its
+          `offset` back to read the next page (`count` widens the page).
         - **"get"** : one list, by `list_id` — or by `name` + `object_type`.
           `include_filters=true` also returns its criteria tree.
         - **"create"** : create a list. Requires `name` + `object_type`. For a
@@ -657,8 +725,21 @@ def register(mcp: FastMCP) -> None:
             dry_run: op="delete"/"clear_members"/"remove_members" — validate and
                 report what WOULD change (with the list's current state), without
                 writing.
+            offset: op="search" — where the page starts: the `offset` of the
+                previous answer, while it says `hasMore`.
+            count: op="search" — page size (HubSpot serves 20 by default).
+            processing_types: op="search" — only these kinds: any of MANUAL,
+                DYNAMIC, SNAPSHOT.
         """
         c = _client()
+        # Same rule for the search-only arguments: read on another op, they would
+        # be dropped without a word.
+        if op != "search" and (offset is not None or count is not None
+                               or processing_types is not None):
+            raise _bad(
+                f"op='{op}' does not accept offset, count or processing_types: "
+                "they page and filter op='search' (members are paged with "
+                "limit/after)")
         try:
             # `properties` means nothing anywhere but on op='members': silencing it
             # would be a MUTE divergence — the caller would believe they asked for
@@ -687,7 +768,9 @@ def register(mcp: FastMCP) -> None:
                 return c.search_lists(
                     query=query,
                     object_type_id=(_object_type_id(object_type, op)
-                                    if object_type else None))
+                                    if object_type else None),
+                    processing_types=_processing_types(processing_types),
+                    count=count, offset=offset)
 
             if op == "get":
                 if list_id:

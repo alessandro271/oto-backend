@@ -105,7 +105,8 @@ def test_search_forwards_query_filters_projection_and_pagination(client):
     args, kw = client.search_objects.call_args
     assert args[0] == "contacts"
     assert kw == {"query": "acme", "filters": filters,
-                  "properties": ["email", "firstname"], "limit": 25, "after": "cur"}
+                  "properties": ["email", "firstname"], "limit": 25, "after": "cur",
+                  "sorts": None}
 
 
 def test_list_forwards_projection_and_pagination(client):

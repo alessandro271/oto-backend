@@ -97,6 +97,8 @@ class VerifyResult(BaseModel):
     # Today Slack: `{"bot": {app_id, bot_id, team, team_id, url, user,
     # user_id}, "user": {...}}`, one block per token set, reduced to what the
     # provider actually returned.
+    # HubSpot: WHICH portal the key reads — `{portal_id, account_type, ui_domain,
+    # data_hosting_location, time_zone}`, same rule (only what HubSpot returned).
     #
     # ⚠️ This field answers "is it still the same application as yesterday?", and
     # nothing else. The platform compares NOTHING: it never kept yesterday's value.
@@ -323,13 +325,16 @@ CAP_DOC = (
     "balance is empty: top up, do NOT reconnect), or `unknown` (the probe failed "
     "without saying why — read `error` as it stands). `next_step` spells out the move. "
     "⚠️ `unknown` means 'I do not know', never 'nothing serious'. "
-    "⚠️ `identity` (Slack today) names WHO the key authenticates as at the provider — "
-    "app_id / bot_id / team / user, one block per token posed. It exists to answer "
+    "⚠️ `identity` (Slack, HubSpot) names WHO the key authenticates as at the provider — "
+    "on Slack app_id / bot_id / team / user, one block per token posed. It exists to answer "
     "'is this still the same app as yesterday?', because a key swapped for ANOTHER "
     "app's tokens authenticates fine and starts with none of the channel memberships "
     "the previous one had — the vault only ever sees a healthy key. **oto compares "
     "nothing and keeps no history**: record this value yourself if you want to notice "
-    "the change. Its absence means this connector does not expose it, never 'unchanged'."
+    "the change. Its absence means this connector does not expose it, never 'unchanged'. "
+    "On HubSpot it names the PORTAL the key reads (`portal_id`, `ui_domain`, "
+    "`data_hosting_location`, `account_type`): a private app token says nothing of "
+    "its portal otherwise."
 )
 
 class EffectForMemberInput(BaseModel):

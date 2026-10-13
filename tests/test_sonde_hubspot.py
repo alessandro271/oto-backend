@@ -72,6 +72,26 @@ def test_un_compte_identifie_passe_et_mesure_ses_scopes(monkeypatch):
     assert [m for m, _ in cli.session.appels] == ["POST"], "les scopes : une lecture"
 
 
+def test_la_sonde_nomme_le_portail_qu_elle_a_lu(monkeypatch):
+    """Une clé s'authentifie pareil quel que soit son portail : sans `identity`,
+    l'id du portail ne se lisait que dans l'`url` d'un enregistrement déjà lu. Ce
+    que HubSpot n'a pas rendu n'est pas inventé, et aucun appel ne s'ajoute."""
+    cli = _brancher(monkeypatch, _FauxClient(
+        {"portalId": 123456, "accountType": "STANDARD", "timeZone": "Europe/Paris",
+         "uiDomain": "app-eu1.hubspot.com", "dataHostingLocation": "eu1",
+         "companyCurrency": "EUR"}))
+    rendu = H._verify(_fields("k"))
+    assert rendu["identity"] == {
+        "portal_id": 123456, "account_type": "STANDARD",
+        "ui_domain": "app-eu1.hubspot.com", "data_hosting_location": "eu1",
+        "time_zone": "Europe/Paris"}
+    assert cli.appels == [("GET", "/account-info/v3/details")]
+    assert cv._mesures(rendu).keys() == {"scopes", "identity"}
+
+    cli = _brancher(monkeypatch, _FauxClient({"portalId": 9}))
+    assert H._verify(_fields("k"))["identity"] == {"portal_id": 9}
+
+
 def test_une_cle_refusee_leve(monkeypatch):
     cli = _brancher(monkeypatch, _FauxClient(boom=RuntimeError("HTTP 401: invalid token")))
     with pytest.raises(RuntimeError, match="401"):
