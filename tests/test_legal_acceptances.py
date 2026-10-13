@@ -98,13 +98,28 @@ def test_accept_situe_l_acte_et_n_ecrase_jamais(store):
 # `client_trace` est posé par l'adaptateur REST : un appel direct au handler ne peut
 # pas le prouver (il rendrait deux `None`, et le test serait d'accord avec lui-même).
 
-def _accepte_par_la_route(monkeypatch, headers, contexte="purchase"):
+_BOX = ("127.0.0.1", 50000)   # le proxy de la box, pair TCP du backend
+
+
+def _proxies(monkeypatch, valeur="127.0.0.1/32,::1/128"):
+    """`OTO_PROXIES_DE_CONFIANCE` (#1232) ; `None` = réglage absent."""
+    from oto_mcp import client_trace
+    if valeur is None:
+        monkeypatch.delenv("OTO_PROXIES_DE_CONFIANCE", raising=False)
+    else:
+        monkeypatch.setenv("OTO_PROXIES_DE_CONFIANCE", valeur)
+    monkeypatch.setattr(client_trace, "_RESEAUX", None)
+
+
+def _accepte_par_la_route(monkeypatch, headers, contexte="purchase", client=_BOX):
     from _datastore_rest import call, stub_authz
     stub_authz(monkeypatch, org_id=219)
-    return call("me.legal.accept", body={"context": contexte}, headers=headers)
+    return call("me.legal.accept", body={"context": contexte}, headers=headers,
+                client=client)
 
 
 def test_l_ip_reelle_est_celle_de_cloudflare_pas_celle_du_relais(store, monkeypatch):
+    _proxies(monkeypatch)
     code, corps = _accepte_par_la_route(monkeypatch, [
         (b"cf-connecting-ip", b"203.0.113.7"),
         (b"x-forwarded-for", b"198.51.100.9, 10.0.0.1"),
@@ -119,16 +134,30 @@ def test_l_ip_reelle_est_celle_de_cloudflare_pas_celle_du_relais(store, monkeypa
     assert corps["contexts"]["purchase"]["outstanding"] == []
 
 
-def test_sans_cloudflare_c_est_le_premier_hop_du_x_forwarded_for(store, monkeypatch):
-    """La liste se lit client → relais : prendre la fin rendrait l'adresse de notre
-    propre reverse proxy."""
+def test_sans_cloudflare_c_est_le_saut_le_plus_a_droite_hors_des_relais(store, monkeypatch):
+    """La liste se lit client → relais, chaque relais ajoutant en queue : on remonte
+    depuis la droite les relais déclarés de confiance (ici un second, `10.0.0.0/8`), et
+    le premier saut qui n'en est pas un est le client. Plus à gauche, c'est le client
+    qui a écrit."""
+    _proxies(monkeypatch, "127.0.0.1/32,10.0.0.0/8")
     _accepte_par_la_route(monkeypatch, [
-        (b"x-forwarded-for", b"198.51.100.9, 10.0.0.1"),
+        (b"x-forwarded-for", b"192.0.2.66, 198.51.100.9, 10.0.0.1"),
     ], contexte="access")
     assert {l["ip"] for l in store} == {"198.51.100.9"}
 
 
+def test_sans_proxy_declare_les_en_tetes_ne_situent_rien(store, monkeypatch):
+    """#1232 : sans `OTO_PROXIES_DE_CONFIANCE`, un en-tête d'adresse est écrit par qui
+    veut — la trace porte le pair TCP, jamais une adresse choisie par le client."""
+    _proxies(monkeypatch, None)
+    _accepte_par_la_route(monkeypatch, [
+        (b"cf-connecting-ip", b"203.0.113.7"),
+        (b"x-forwarded-for", b"198.51.100.9"),
+    ], contexte="access", client=("192.0.2.44", 50000))
+    assert {l["ip"] for l in store} == {"192.0.2.44"}
+
+
 def test_une_requete_sans_en_tete_trace_des_nuls_pas_des_inventions(store, monkeypatch):
-    _accepte_par_la_route(monkeypatch, [], contexte="access")
+    _accepte_par_la_route(monkeypatch, [], contexte="access", client=None)
     assert {l["ip"] for l in store} == {None}
     assert {l["user_agent"] for l in store} == {None}

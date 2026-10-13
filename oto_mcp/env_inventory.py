@@ -452,6 +452,13 @@ _REGLAGES: tuple[Variable, ...] = (
              "toujours la classe par jeton. Vide par défaut ; une entrée illisible "
              "empêche le démarrage. Lue au démarrage.",
              ("oto_mcp/limite_debit.py:190",)),
+    Variable("OTO_PROXIES_DE_CONFIANCE", Classe.REGLAGE, "",
+             "Adresses ou CIDR (séparés par des virgules) des proxies dont on croit les "
+             "en-têtes d'adresse (`CF-Connecting-IP`, `X-Forwarded-For`) : lus seulement "
+             "si le pair TCP en fait partie. Vide par défaut : on lit le pair TCP — derrière "
+             "un proxy, TOUT le trafic aurait alors son adresse. Une entrée illisible "
+             "empêche le démarrage. Lue au démarrage.",
+             ("oto_mcp/client_trace.py:56",)),
     Variable("OTO_DEBIT_JETON_PAR_MIN", Classe.REGLAGE, "1200",
              "Débit (req/min) par jeton porté (`Authorization`), rafale = la moitié ; "
              "`0` désarme la classe.",

@@ -1174,10 +1174,13 @@ lire en base, et lui fait payer un seau à jetons (débit régulier, rafale = la
   l'adresse de mille autres clients), une adresse exemptée. ⚠️ Prix assumé : depuis une
   adresse au budget épuisé, le premier appel d'un jeton tout juste émis est refusé
   jusqu'à ce que le budget remonte.
-- **L'adresse** est la règle unique du dépôt (`client_trace.pick_ip` :
-  `CF-Connecting-IP` > premier saut de `X-Forwarded-For` > pair TCP). ⚠️⚠️ Elle ne vaut
-  que ce que vaut le proxy : derrière un proxy qui n'ÉCRASE pas ces deux en-têtes avec
-  le pair qu'il a vu, un client choisit son seau. D'où le défaut **`report`** :
+- **L'adresse** est la règle unique du dépôt (`client_trace.pick_ip`) : le pair TCP ;
+  les en-têtes seulement si ce pair est un proxy déclaré dans `OTO_PROXIES_DE_CONFIANCE`
+  (adresses ou CIDR, lu au démarrage, illisible = refus de démarrer), et alors
+  `CF-Connecting-IP` > adresse la plus à droite de `X-Forwarded-For` hors des réseaux de
+  confiance. ⚠️ Sans ce réglage, derrière un proxy, TOUT le trafic a l'adresse du proxy.
+  ⚠️⚠️ Elle ne vaut que ce que vaut le proxy : derrière un proxy déclaré qui n'ÉCRASE pas
+  ces deux en-têtes avec le pair qu'il a vu, un client choisit son seau. D'où le défaut **`report`** :
   **`enforce` ne se pose QUE derrière un proxy qui écrase les deux en-têtes** (nos boxes
   depuis F-024), instance par instance, dans sa configuration.
 - **Adresses exemptées** (`OTO_DEBIT_ADRESSES_EXEMPTEES`, adresses ou CIDR) : nos propres

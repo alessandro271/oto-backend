@@ -10,9 +10,18 @@ import logging
 
 import pytest
 
+from oto_mcp import client_trace
 from oto_mcp import limite_debit as ld
 
 A, B = "192.0.2.10", "198.51.100.20"
+
+
+@pytest.fixture(autouse=True)
+def _proxy_de_la_box(monkeypatch):
+    """Les requêtes de ce banc arrivent du proxy de la box (pair `127.0.0.1`), déclaré
+    de confiance : son `CF-Connecting-IP` est l'adresse du client (#1232)."""
+    monkeypatch.setenv("OTO_PROXIES_DE_CONFIANCE", "127.0.0.1/32,::1/128")
+    monkeypatch.setattr(client_trace, "_RESEAUX", None)
 
 
 class Horloge:
@@ -160,6 +169,17 @@ async def test_ladresse_suit_la_regle_unique_du_depot():
     assert s["client"][0] == "127.0.0.1"
     assert _statut(await _appel(garde, s)) == 200
     assert _statut(await _appel(garde, _scope(ip=B))) == 200
+
+
+@pytest.mark.asyncio
+async def test_sans_proxy_declare_len_tete_ne_choisit_pas_le_seau(monkeypatch):
+    """#1232 : sans `OTO_PROXIES_DE_CONFIANCE`, `CF-Connecting-IP` est ignoré — changer
+    l'en-tête à chaque requête ne rend pas un seau neuf."""
+    monkeypatch.delenv("OTO_PROXIES_DE_CONFIANCE")
+    monkeypatch.setattr(client_trace, "_RESEAUX", None)
+    garde = _garde(anonyme=2)
+    assert _statut(await _appel(garde, _scope(ip=A))) == 200
+    assert _statut(await _appel(garde, _scope(ip=B))) == 429
 
 
 @pytest.mark.asyncio

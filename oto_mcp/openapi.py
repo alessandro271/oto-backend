@@ -60,8 +60,9 @@ _TAG_NATURE = "_nature"
 # Les exemples notent `$OTO` l'adresse du serveur, que `servers` porte.
 _DESCRIPTION = """\
 API REST de la plateforme Oto. Deux faces servent le même métier (ADR 0009) : le
-MCP (`/mcp`, JWT Logto) et ce REST. Ce document est **dérivé du serveur** à chaque
-requête — il décrit ce qui tourne, pas une intention.
+MCP (`/mcp`, JWT Logto) et ce REST. Ce document est **dérivé du serveur** : construit
+une fois par processus, au premier appel, puis servi depuis la mémoire avec un `ETag`
+— il décrit ce qui tourne, pas une intention.
 
 ## Démarrer
 
@@ -669,7 +670,7 @@ def build(routes: Optional[Iterable] = None, *, server_url: Optional[str] = None
     doc = {
         "openapi": "3.1.0",
         # `version` = la version SERVIE (oto#33), pas un numéro de contrat. Le
-        # document est dérivé du serveur à chaque requête : le figer à « 1 » revenait
+        # document est dérivé du serveur qui le sert : le figer à « 1 » revenait
         # à publier une carte sans dire de quel jour elle date — et un intégrateur
         # qui constate une dérive de forme n'avait rien pour la situer. Même
         # étiquette que l'en-tête `X-Oto-Version` et que `GET /api/version`, pour

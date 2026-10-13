@@ -31,7 +31,7 @@ la main, soit le problème d'origine.
 | Surface | Pour qui |
 |---|---|
 | `GET /api/version` — **sans auth** | Qui pense à demander : un contrôle externe (Uptime Kuma, un script de déploiement), un agent, un intégrateur. Sans auth parce que dater une dérive ne doit rien exiger d'autre. |
-| `info.version` du document OpenAPI | L'intégrateur qui constate une dérive de forme et veut la situer. Le document est dérivé du serveur à chaque requête ; le figer à « 1 » revenait à publier une carte sans dire de quel jour elle date. |
+| `info.version` du document OpenAPI | L'intégrateur qui constate une dérive de forme et veut la situer. Le document est dérivé du serveur qui le sert ; le figer à « 1 » revenait à publier une carte sans dire de quel jour elle date. |
 | En-tête `X-Oto-Version` sur **chaque** réponse | **Le cas qui a mordu** : qui n'a rien demandé, et relit son journal après coup. C'est la seule forme qui date une mesure **rétrospectivement**, sans instrumentation préalable. |
 
 ⚠️ L'en-tête est exposé au navigateur (`Access-Control-Expose-Headers`) : sans cela

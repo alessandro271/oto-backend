@@ -168,8 +168,9 @@ def _check_bucket(key: tuple[str, int], now: float) -> bool:
 def _client_ip(scope, headers: dict) -> str:
     """IP réelle du client derrière Cloudflare/Caddy, pour la clé de rate-limit.
 
-    La RÈGLE (ordre des en-têtes) vit dans `client_trace.pick_ip` — partagée avec la
-    trace de consentement, qui répond à la même question depuis un autre transport.
+    La RÈGLE (proxies de confiance, ordre des en-têtes) vit dans `client_trace.pick_ip`
+    — partagée avec la trace de consentement et le relais d'autorisation, qui répondent
+    à la même question depuis un autre transport.
     Ici on ne fait que traduire les en-têtes ASGI (octets) et donner à l'absence son
     nom local : `"unknown"`, une clé de seau comme une autre, jamais `None`.
     """

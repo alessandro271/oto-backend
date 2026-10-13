@@ -36,6 +36,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
+from .. import client_trace
 from . import facade
 from .authorize_consent import redirection
 from .relay_seals import (CODE_MARQUE, lire_code, marquer_code, ouvrir_etat, sceller_etat,
@@ -61,8 +62,6 @@ _CLES_DE_REPONSE = frozenset({"code", "state", "iss", "error", "error_descriptio
 # vol, qui garde le client HTTP partagé disponible pour les vrais rafraîchissements.
 _SEAU_PAR_MIN, _SEAU_RAFALE, _SEAUX_MAX = 120.0, 60.0, 50_000
 _EN_VOL_MAX = 32
-# Le seul proxy dont on lit `X-Forwarded-For` : celui de la box, qui écoute en boucle locale.
-_PROXIES_DE_CONFIANCE = frozenset({"127.0.0.1", "::1"})
 _seaux: dict = {}
 _rappels: dict = {}
 _en_vol = 0
@@ -239,19 +238,10 @@ async def _poster(url: str, corps: bytes, headers: dict) -> httpx.Response:
 
 
 def ip_observee(request: Request) -> str:
-    """L'adresse qu'a VUE le proxy de la box, jamais une valeur que le client écrit.
-
-    `X-Forwarded-For` n'est lu que si le pair TCP est un proxy de confiance (la boucle
-    locale : Caddy sur la box), et seulement son DERNIER segment — celui que ce proxy a posé.
-    Tout autre pair est pris tel quel. Jamais `CF-Connecting-IP` : sur un host qui n'est pas
-    derrière Cloudflare, personne ne l'écrase, et un seau clefé dessus ne freine rien."""
-    pair = request.client.host if request.client else ""
-    if pair in _PROXIES_DE_CONFIANCE:
-        xff = request.headers.get("x-forwarded-for", "")
-        dernier = xff.split(",")[-1].strip() if xff else ""
-        if dernier:
-            return dernier
-    return pair or "unknown"
+    """L'adresse qu'a VUE le proxy de la box, jamais une valeur que le client écrit : la
+    règle unique du dépôt (`client_trace.pick_ip`) — les en-têtes ne sont lus que si le
+    pair TCP est un proxy déclaré dans `OTO_PROXIES_DE_CONFIANCE`."""
+    return client_trace.ip_de_requete(request) or "unknown"
 
 
 def _seau_ok(cle: str, maintenant: float) -> bool:

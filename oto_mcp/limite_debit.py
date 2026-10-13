@@ -52,9 +52,12 @@ requêtes `sensible`. Elle ne touche JAMAIS :
 tout juste émis est refusé jusqu'à ce que le budget remonte (`Retry-After`).
 
 **L'adresse** est celle de la règle unique du dépôt (`subdomain_project._client_ip`,
-c'est-à-dire `client_trace.pick_ip`) : `CF-Connecting-IP`, puis le premier saut de
-`X-Forwarded-For`, puis le pair TCP. ⚠️⚠️ **Elle ne vaut que ce que vaut le proxy** :
-servie sans un proxy qui ÉCRASE ces DEUX en-têtes avec le pair qu'il a vu (le Caddy de
+c'est-à-dire `client_trace.pick_ip`) : le pair TCP ; les en-têtes seulement si ce pair
+est un proxy déclaré dans `OTO_PROXIES_DE_CONFIANCE`, et alors `CF-Connecting-IP`, puis
+l'adresse la plus à droite de `X-Forwarded-For` hors des réseaux de confiance. ⚠️ Sans ce
+réglage, derrière un proxy, tout le trafic partage l'adresse du proxy.
+⚠️⚠️ **Elle ne vaut que ce que vaut le proxy** :
+servie derrière un proxy déclaré qui n'ÉCRASE pas ces DEUX en-têtes avec le pair qu'il a vu (le Caddy de
 nos boxes depuis F-024), une instance laisse le client les écrire et choisir son seau —
 les classes par adresse et le budget d'échecs y sont alors contournables. D'où le
 défaut `report` : **`enforce` ne se pose QUE derrière un proxy qui écrase les deux

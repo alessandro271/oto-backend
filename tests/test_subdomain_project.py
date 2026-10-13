@@ -496,10 +496,17 @@ def test_rate_limit_bucket(monkeypatch):
     assert sp._check_bucket(("5.6.7.8", 7), 1000.0) is True
 
 
-def test_client_ip_priority():
-    assert sp._client_ip({}, {b"cf-connecting-ip": b"9.9.9.9"}) == "9.9.9.9"
-    assert sp._client_ip({}, {b"x-forwarded-for": b"8.8.8.8, 1.1.1.1"}) == "8.8.8.8"
-    assert sp._client_ip({"client": ("7.7.7.7", 5)}, {}) == "7.7.7.7"
+def test_client_ip_priority(monkeypatch):
+    from oto_mcp import client_trace
+    monkeypatch.setenv("OTO_PROXIES_DE_CONFIANCE", "127.0.0.1")
+    monkeypatch.setattr(client_trace, "_RESEAUX", None)
+    box = {"client": ("127.0.0.1", 5)}
+    assert sp._client_ip(box, {b"cf-connecting-ip": b"9.9.9.9"}) == "9.9.9.9"
+    assert sp._client_ip(box, {b"x-forwarded-for": b"8.8.8.8, 1.1.1.1"}) == "1.1.1.1"
+    # un pair hors des proxies déclarés : ses en-têtes ne comptent pas (#1232)
+    assert sp._client_ip({"client": ("7.7.7.7", 5)},
+                         {b"cf-connecting-ip": b"9.9.9.9"}) == "7.7.7.7"
+    assert sp._client_ip({}, {b"cf-connecting-ip": b"9.9.9.9"}) == "unknown"
     assert sp._client_ip({}, {}) == "unknown"
 
 

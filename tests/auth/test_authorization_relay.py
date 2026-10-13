@@ -33,7 +33,7 @@ import pytest
 from starlette.applications import Starlette
 from starlette.testclient import TestClient
 
-from oto_mcp import tenancy
+from oto_mcp import client_trace, tenancy
 from oto_mcp.auth import facade, relay, relay_maintenance, relay_seals
 
 _SECRET = b"secret-de-banc"
@@ -503,13 +503,29 @@ def test_une_panne_amont_rend_une_erreur_json_nommee(client, annuaire, reponse, 
     assert (r.status_code, r.json()["error"]) == (statut, "server_error")
 
 
-@pytest.mark.parametrize("pair, xff", [
-    ("testclient", "198.51.100.{i}"),                 # pair quelconque : l'en-tête ne compte pas
-    ("127.0.0.1", "198.51.100.{i}, 203.0.113.9"),     # proxy de la box : son dernier segment
-], ids=["pair_non_approuve", "proxy_de_la_box"])
+def _proxies(monkeypatch, valeur="127.0.0.1/32,::1/128"):
+    """`OTO_PROXIES_DE_CONFIANCE` (#1232) ; `None` = réglage absent."""
+    if valeur is None:
+        monkeypatch.delenv("OTO_PROXIES_DE_CONFIANCE", raising=False)
+    else:
+        monkeypatch.setenv("OTO_PROXIES_DE_CONFIANCE", valeur)
+    monkeypatch.setattr(client_trace, "_RESEAUX", None)
+
+
+@pytest.mark.parametrize("pair, proxies, entetes", [
+    # pair quelconque : les en-têtes ne comptent pas
+    ("testclient", "127.0.0.1", {"cf-connecting-ip": "192.0.2.{i}",
+                                 "x-forwarded-for": "198.51.100.{i}"}),
+    # proxy de la box : ce que le client a écrit à gauche du dernier saut ne compte pas
+    ("127.0.0.1", "127.0.0.1", {"x-forwarded-for": "198.51.100.{i}, 203.0.113.9"}),
+    # proxy non déclaré : on ne croit personne, le pair TCP fait la clé
+    ("127.0.0.1", None, {"cf-connecting-ip": "192.0.2.{i}",
+                         "x-forwarded-for": "198.51.100.{i}"}),
+], ids=["pair_non_approuve", "proxy_de_la_box", "proxy_non_declare"])
 def test_le_seau_par_ip_arrete_une_rafale_et_ne_se_contourne_pas(monkeypatch, annuaire, registre,
-                                                                  pair, xff):
+                                                                  pair, proxies, entetes):
     _env(monkeypatch)
+    _proxies(monkeypatch, proxies)
     # Horloge GELÉE, pour `relay` seul : `_seau_ok` recharge le seau au prorata du temps
     # RÉEL écoulé entre deux appels (`time.monotonic()`). Sur une machine chargée, le simple
     # aller-retour des 65 requêtes de cette rafale laisse passer assez de secondes pour
@@ -521,14 +537,15 @@ def test_le_seau_par_ip_arrete_une_rafale_et_ne_se_contourne_pas(monkeypatch, an
     # devient exact, plus seulement une borne basse.
     monkeypatch.setattr(relay, "time", types.SimpleNamespace(monotonic=lambda: 1_000_000.0))
     c = TestClient(_app(), client=(pair, 50000))
-    statuts = [_echanger(c, _RAFRAICHIR, **{"cf-connecting-ip": f"192.0.2.{i}",
-                                            "x-forwarded-for": xff.format(i=i)}).status_code
+    statuts = [_echanger(c, _RAFRAICHIR,
+                         **{k: v.format(i=i) for k, v in entetes.items()}).status_code
                for i in range(int(relay._SEAU_RAFALE) + 5)]
     assert statuts.count(429) == 5, statuts
 
 
 def test_le_proxy_de_la_box_distingue_ses_clients(monkeypatch, annuaire, registre):
     _env(monkeypatch)
+    _proxies(monkeypatch)
     c = TestClient(_app(), client=("127.0.0.1", 50000))
     statuts = [_echanger(c, _RAFRAICHIR, **{"x-forwarded-for": f"198.51.100.{i}"}).status_code
                for i in range(int(relay._SEAU_RAFALE) + 5)]

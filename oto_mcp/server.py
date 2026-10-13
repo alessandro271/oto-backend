@@ -1047,6 +1047,10 @@ def main():
     # INCOMPLÈTE — refuser de démarrer en la nommant, avant d'avoir rien écrit.
     from .auth import relay as oauth_relay
     oauth_relay.verifier_configuration()
+    # Proxies de confiance (#1232) : lus UNE fois ici ; un réglage illisible refuse de
+    # démarrer — jamais des en-têtes d'adresse crus (ou ignorés) sans décision.
+    from . import client_trace
+    client_trace.verifier_configuration()
     # Le journal d'accès d'uvicorn n'écrit en clair ni un jeton porté DANS le chemin
     # (`{token}`, `{code}` des routes servies : leur masque), ni la valeur d'une clé de
     # query secrète (`code`/`state` d'un retour OAuth, `*token*`, `key`… : `***`), sur
