@@ -81,6 +81,12 @@ def test_la_liste_ne_coute_pas_une_requete_par_projet(live, requetes):
     assert len(out["projects"]) == 12
     assert n_grande == n_petite, (
         f"op=list : {n_petite} requêtes pour 3 projets, {n_grande} pour 12")
+    # Les liens et l'audit léger sont déjà chargés pour les pastilles : les rendre ne
+    # coûte aucune requête.
+    out, n_tout = _appel(requetes, *grande[:2], op="list", include=["links", "audit"])
+    assert all("links" in p and "audit" in p for p in out["projects"])
+    assert n_tout == n_grande, (
+        f"op=list : {n_grande} requêtes, {n_tout} avec include=links,audit")
 
 
 def test_lire_un_projet_ne_coute_pas_une_requete_par_lien(live, requetes):
@@ -135,3 +141,34 @@ def test_en_lot_chaque_lien_garde_la_portee_de_son_projet(live):
     assert not ({"datastore", "datastore_id"} & set(du_sien)) and du_sien["hors_portee"]
     assert par_id[mien]["can_write"] is True and par_id[sien]["can_write"] is False
 
+
+
+def test_la_liste_rend_l_audit_leger_d_op_get_sur_demande(live):
+    """Un tableau mort et un connecteur hors registre : la liste les dit comme op=get.
+    Une procédure morte : op=get seul la dit (une requête par lien), et l'audit de la
+    liste se marque léger pour qu'on ne lise pas son absence comme une santé."""
+    from oto_mcp import db
+    from oto_mcp.capabilities import projects as P
+    from oto_mcp.capabilities._types import ResolvedCtx
+    moi, org, (pid,) = _moi_dans_une_org(1)
+    db.add_project_link(pid, "tableau", "2000000000", None)
+    db.add_project_link(pid, "connecteur", "connecteur_inexistant", None)
+    db.add_project_link(pid, "procedure", "2000000001", None)
+    ctx = ResolvedCtx(sub=moi, org_id=org)
+
+    sans = P._project(ctx, P.ProjectInput(op="list"))
+    assert all("audit" not in p for p in sans["projects"])
+    (projet,) = P._project(ctx, P.ProjectInput(op="list", include=["audit"]))["projects"]
+    assert "links" not in projet
+    leger = projet["audit"]
+    complet = P._project(ctx, P.ProjectInput(op="get", project_id=pid))["audit"]
+
+    assert leger["light"] is True and "light" not in complet
+    assert set(leger) - {"light"} == set(complet)
+    assert leger["dead_links"] == [d for d in complet["dead_links"]
+                                   if d["target_type"] != "procedure"]
+    assert {(d["target_type"], str(d["target_ref"])) for d in leger["dead_links"]} == {
+        ("tableau", "2000000000"), ("connecteur", "connecteur_inexistant")}
+    assert ("procedure", "2000000001") in {
+        (d["target_type"], str(d["target_ref"])) for d in complet["dead_links"]}
+    assert projet["has_audit"] is True

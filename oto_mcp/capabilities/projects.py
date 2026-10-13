@@ -89,15 +89,19 @@ class ProjectInput(BaseModel):
     target_type: Optional[Literal["tableau", "procedure", "connecteur"]] = None
     # Opt-ins d'op=get, cumulables : 'spine' (l'arbre des pages, Ship 2 lot 3, +
     # drill/bornage ci-dessous) · 'procedures' (le CORPS des procédures liées, #313).
-    # Opt-in d'op=list : 'links' (les liens de chaque projet, ceux d'op=get — un écran
-    # qui cherche quels projets lient une cible lit UNE liste, pas un op=get par
-    # projet ; incident du 13/10/2026).
+    # Opt-ins d'op=list, cumulables : 'links' (les liens de chaque projet, ceux d'op=get
+    # — un écran qui cherche quels projets lient une cible lit UNE liste, pas un op=get
+    # par projet ; incident du 13/10/2026) · 'audit' (l'audit LÉGER de chaque projet,
+    # mêmes clés que celui d'op=get plus `light: true`).
     # Une valeur inconnue est ignorée en silence — l'absence d'un champ optionnel se
     # lit dans la réponse, et refuser ferait d'un ajout futur une rupture de contrat.
     include: Optional[list[str]] = Field(default=None, description=(
         "get: `spine` (page tree) and/or `procedures` (bodies of linked procedures). "
         "list: `links` adds each project's links, as op=get serves them — to find which "
-        "projects link a target in ONE call instead of one op=get per project."))
+        "projects link a target in ONE call instead of one op=get per project; `audit` "
+        "adds each project's LIGHT audit — op=get's keys plus `light: true`: dead "
+        "tableaux and connectors missing from the registry only; dead procedures and "
+        "unresolvable connectors are checked by op=get alone."))
     from_doc: Optional[int] = None     # enraciner l'épine sur un nœud (drill)
     depth: Optional[int] = None        # profondeur (défaut 2)
     target_ref: Optional[str] = None   # datastore.id | guide slug | connecteur name | doc.id (page Documents)
@@ -778,6 +782,11 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         # un écran qui cherche quels projets lient une cible lit UNE liste, au lieu d'un
         # op=get par projet.
         avec_liens = bool(inp.include and "links" in inp.include)
+        # `include=["audit"]` rend l'audit LÉGER de chaque projet, déjà calculé pour
+        # `has_audit` : sans requête de plus. Mêmes clés que l'audit d'op=get, plus
+        # `light: true` — ni procédure morte ni connecteur non résolvable n'y figurent
+        # (leur vérification est une requête par lien : op=get seul).
+        avec_audit = bool(inp.include and "audit" in inp.include)
         grant_counts: dict[int, int] = {}
 
         def _enrich(rows: list[dict], shared: bool) -> list[dict]:
@@ -803,7 +812,8 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
                     # `can_write` sur la LISTE (pastille « lecture ») — même règle qu'op=get :
                     # un projet partagé en lecture seule remonte false.
                     "can_write": ecriture[str(r["id"])],
-                    **({"links": links} if avec_liens else {})})
+                    **({"links": links} if avec_liens else {}),
+                    **({"audit": {**aud, "light": True}} if avec_audit else {})})
             return out
 
         def _received(principals: list[tuple[str, str]], seen: set) -> list[dict]:
@@ -1532,7 +1542,8 @@ class ProjectAudit(BaseModel):
     ⚠️ Ce modèle décrit l'audit COMPLET, celui de la lecture par id. La LISTE de
     projets sert le même nom sous une forme allégée (checks en mémoire seuls, pour
     éviter un N+1) : `inert_procedures` y est toujours vide et les procédures
-    cassées n'y remontent pas. Deux payloads, deux profondeurs."""
+    cassées n'y remontent pas. Deux payloads, deux profondeurs : celui de la liste
+    (`include=["audit"]`) porte en plus `light: true`."""
     # Lien dont la cible n'existe plus : namespace de tableau disparu (ou nom de tableau
     # AMBIGU dans la portée du projet, #365), procédure qui ne résout plus, connecteur
     # absent du registre. `{target_type, target_ref, why}`.
@@ -1690,7 +1701,8 @@ CAPABILITIES += [
             "`scope=\"me\"` lists only the projects shared with you as a person, in any "
             "org; every response echoes the effective org in `_org`. An INDEX: names and `brief_md_length`, NOT the briefs — "
             'read one with op=get, or pass `fields=["*"]` for whole records; '
-            '`include=["links"]` adds every project\'s links in the same call) / '
+            '`include=["links"]` adds every project\'s links in the same call, '
+            '`include=["audit"]` its LIGHT audit, flagged `light: true`) / '
             "list_templates (published MODEL projects you can copy, from the ACTIVE org "
             "and the platform library) / "
             "get (project + its links + an `audit` of those links: dead_links / unbound_slots / "
