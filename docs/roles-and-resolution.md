@@ -250,7 +250,9 @@ posée par une commande explicite — `scripts/seed_everyone_edges.py`, dry-run 
 chaîne : `grants_chain.platform_rung`, qui décide encore aujourd'hui pour les
 connecteurs basculés de L5, reste aveugle à elle — sans quoi un accès individuel révoqué
 sur une clé ouverte serait ressuscité. Et sous la chaîne, **une arête qui NOMME
-l'appelant prime, révoquée comprise** : c'est ce qui garde « la révocation est vraie ».
+l'appelant prime sur « tout le monde »**, et une révocation prime sur tout (règle
+ci-dessous) : une clé ouverte posée après une révocation, avec son arête « tout le
+monde », ne sert pas l'appelant révoqué.
 
 Quota daily per-grant : colonne `user_grants.daily_quota` (posé par l'admin
 au moment du grant). Si NULL, fallback sur env `OTO_MCP_QUOTA_<PROVIDER>_DAILY`
@@ -277,7 +279,17 @@ prime sur tout (`access.platform_grant._platform_denied` — palier ouvert, `sha
 liste ne coupait pas ; seul `platform_grant` l'efface, et sur une clé ouverte à tous il
 n'y pose que le quota, sans la fermer. Retirer le dernier bénéficiaire d'une clé `open` à
 liste la passe `closed`, jamais « ouverte à tous ». Côté chaîne, révoquer un scope sans
-arête pose une arête aussitôt archivée (la chaîne refuse au lieu de se taire). Une
+arête pose une arête née archivée (la chaîne refuse au lieu de se taire), et révoquer
+sans libellé archive les arêtes du scope sur **toutes** les clés du connecteur.
+**La révocation prime sur tout accord, quel que soit le grain** — chemin non chaîné
+(`_platform_denied`), L5 (`grants_chain.platform_rung`) et L7
+(`chain_resolution._platform_pick`) : un scope de l'appelant (`user:<sub>` ou
+`org:<org active>`) révoqué sur le connecteur le refuse, même s'il a un accord vivant
+sur l'autre scope. Côté chaîne, « révoqué » = des arêtes du scope, **aucune vivante**,
+sur l'ensemble des clés (`grants_chain.revoked_scopes`) : un `grant` archive l'arête
+qu'il remplace mais en pose une vivante du même scope, donc un remplacement n'est
+jamais lu comme une révocation, et seul un `grant` sur ce même scope lève le refus.
+La priorité `user:` > `org:` ne sert qu'à choisir le **quota** de l'arête gagnante. Une
 re-pose sous le même libellé est une **rotation** : `share_mode` et les clés d'accord de
 `meta` (`rate_limit`, `rate_limit_by`, `share_denied`) restent ; seule une clé NEUVE
 payante naît `closed`.

@@ -104,9 +104,17 @@ def _platform_pick(sub: str, provider: str, org: Optional[int]) -> "tuple[Option
     the old path: we look at what the instance IS, not who it authorizes."""
     nominatifs = grants_chain.grantee_scopes(sub, org)
     hors_modele = None
+    par_cle = []
     for inst in credentials_store.list_platform_instances(provider):
         ref = grants_chain.instance_ref(inst["label"], provider)
-        edges = db_grants.edges_for(ref, nominatifs + [grants_chain.EVERYONE])
+        par_cle.append((inst, db_grants.edges_for(ref, nominatifs + [grants_chain.EVERYONE])))
+    # The revocation wins over any grant, whatever the grain and whichever key carries
+    # it (same rule as `grants_chain.platform_rung`): a scope of the caller revoked on
+    # the connector refuses, even with a live edge on the other scope or an "everyone"
+    # edge on a key set after the revocation. Refused, not a hole of the model.
+    if grants_chain.revoked_scopes([e for _, edges in par_cle for e in edges], nominatifs):
+        return (None, None)
+    for inst, edges in par_cle:
         nomme = [e for e in edges
                  if (e["grantee_kind"], e["grantee_id"]) != grants_chain.EVERYONE]
         tous = [e for e in edges
@@ -122,16 +130,12 @@ def _platform_pick(sub: str, provider: str, org: Optional[int]) -> "tuple[Option
                 hors_modele = (FREE_TIER_HORS_MODELE if ouverte
                                else PARTAGE_HORS_MODELE)
             continue
-        # An edge that NAMES the caller takes precedence over "everyone", live or not:
-        # without this priority, revoking a person's access on an open key would
-        # cut nothing (the "everyone" edge would immediately re-grant it) — the
-        # exact failure mode L5 had eliminated by refusing without fallback.
-        if nomme:
-            if any(e.get("revoked_at") is None for e in nomme):
-                return (ChainPick("platform", credentials_store.PLATFORM,
-                                  inst["label"], via="grant"), hors_modele)
-            # All revoked: the chain REFUSES this instance, without fallback (D6).
-            return (None, hors_modele)
+        # An edge that NAMES the caller takes precedence over "everyone". Revoked
+        # named edges were handled above (connector-wide refusal); one archived here
+        # was REPLACED by a live edge of the same scope, possibly on another key.
+        if any(e.get("revoked_at") is None for e in nomme):
+            return (ChainPick("platform", credentials_store.PLATFORM,
+                              inst["label"], via="grant"), hors_modele)
         if tous:
             return (ChainPick("platform", credentials_store.PLATFORM, inst["label"],
                               via="tout_le_monde"), hors_modele)

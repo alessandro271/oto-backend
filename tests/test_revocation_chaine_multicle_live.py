@@ -52,3 +52,21 @@ def test_une_cle_posee_apres_la_revocation_ne_la_leve_pas(base):
 
     credentials_store.platform_grant("serper", "org:42")
     assert _platform_grant_meta("membre", "serper", 42) is not None
+
+
+def test_un_accord_individuel_ne_rouvre_pas_la_revocation_de_l_org(base):
+    """La révocation prime sur tout accord, quel que soit le grain (comme
+    `_platform_denied`) ; seul un grant sur le scope révoqué la lève."""
+    from oto_mcp import credentials_store
+    from oto_mcp.access.platform_grant import _platform_grant_meta
+
+    credentials_store.set_platform_key("commune", "serper", "sk-1", set_by="op")
+    credentials_store.platform_grant("serper", "user:membre", daily_quota=500)
+    credentials_store.platform_revoke("serper", "org:42")
+
+    assert _platform_grant_meta("membre", "serper", 42) is None
+    assert _platform_grant_meta("membre", "serper", 77) == {
+        "label": "commune", "daily_quota": 500}
+
+    credentials_store.platform_grant("serper", "org:42")
+    assert _platform_grant_meta("membre", "serper", 42) is not None

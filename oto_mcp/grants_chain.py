@@ -196,12 +196,35 @@ class ChainVerdict:
     grantee: Optional[tuple[str, str]] = None
 
 
+def revoked_scopes(edges: list[dict], scopes: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Les scopes de l'appelant RÉVOQUÉS sur le connecteur : des arêtes, aucune vivante.
+
+    `edges` = les arêtes de TOUTES les clés du connecteur. Une arête archivée n'est pas
+    forcément une révocation : `grant` archive la précédente avant de poser la neuve.
+    Mais un remplacement laisse toujours une arête VIVANTE du même scope, et une
+    révocation (sans libellé) archive celles de toutes les clés : « des arêtes, aucune
+    vivante » est donc exactement « révoqué, et aucun grant ne l'a levé depuis ».
+    Aucune marque de plus, aucune comparaison de dates."""
+    out = []
+    for sc in scopes:
+        mine = [e for e in edges if (e["grantee_kind"], e["grantee_id"]) == sc]
+        if mine and all(e.get("revoked_at") is not None for e in mine):
+            out.append(sc)
+    return out
+
+
 def platform_rung(sub: Optional[str], provider: str,
                   active_org: Optional[int], *,
                   instances: "list[dict] | None" = None) -> Optional[ChainVerdict]:
     """Le barreau plateforme, vu par la chaîne. `None` = la chaîne n'a pas d'avis
     (connecteur non basculé, ou aucune arête n'a jamais visé cet appelant) ⟹
     l'appelant retombe sur l'ancien chemin, à l'identique.
+
+    **La révocation prime sur tout accord, quel que soit le grain** (même règle que
+    `access.platform_grant._platform_denied`) : un scope de l'appelant révoqué sur le
+    connecteur (`revoked_scopes`) le refuse, même s'il a une arête vivante sur l'autre
+    scope — sinon un accord individuel rouvrait le blocage de crédit de son org. La
+    priorité `user:` > `org:` ne sert qu'à choisir le QUOTA de l'arête gagnante.
 
     Profondeur 1 : toutes les arêtes de ce lot sont des racines (`parent_id IS NULL`)
     posées par le propriétaire plateforme. Le « min des contraintes le long de la
@@ -218,19 +241,22 @@ def platform_rung(sub: Optional[str], provider: str,
     scopes = grantee_scopes(sub, active_org)
     if not scopes:
         return None
-    revoked_seen: Optional[ChainVerdict] = None
     # Ordre des instances = celui de l'ancien chemin (récente d'abord), pour que la
     # clé gagnante soit la même des deux côtés.
+    par_cle = []
     for inst in (instances if instances is not None
                  else credentials_store.list_platform_instances(provider)):
         ref = instance_ref(inst["label"], provider)
-        edges = db_grants.edges_for(ref, scopes)
-        if not edges:
-            continue
+        par_cle.append((inst, ref, db_grants.edges_for(ref, scopes)))
+    revoques = revoked_scopes([e for _, _, edges in par_cle for e in edges], scopes)
+    if revoques:
+        inst, ref = next((i, r) for i, r, edges in par_cle
+                         if any((e["grantee_kind"], e["grantee_id"]) == revoques[0]
+                                for e in edges))
+        return ChainVerdict(False, inst["label"], resource_id=ref, grantee=revoques[0])
+    for inst, ref, edges in par_cle:
         live = [e for e in edges if e.get("revoked_at") is None]
         if not live:
-            revoked_seen = revoked_seen or ChainVerdict(
-                False, inst["label"], resource_id=ref)
             continue
         # Plusieurs voies vers la MÊME instance (0053-D5) : la plus favorable
         # s'applique. `grantee_scopes` est ordonné du plus spécifique au moins ;
@@ -239,7 +265,7 @@ def platform_rung(sub: Optional[str], provider: str,
                    if (e["grantee_kind"], e["grantee_id"]) in scopes else len(scopes))
         return ChainVerdict(True, inst["label"], quota_of(best), int(best["id"]), ref,
                             (best["grantee_kind"], best["grantee_id"]))
-    return revoked_seen
+    return None
 
 
 # ── L'arête tenant→org (L-clés PR 2, 0053-D3 : « le tenant s'insère dans la même chaîne ») ──
