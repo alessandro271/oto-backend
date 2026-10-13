@@ -1,7 +1,7 @@
 """`DelaiOutilMiddleware` — le DÉLAI d'un appel d'outil MCP, borne globale (#1232, lot 4).
 
 Une borne du processus (`bornes_processus`), uniforme, `OTO_BORNE_OUTIL_S` (120 s) : la
-même pour tous les outils — aucune borne propre à un outil (doctrine du 13/10/2026 : un
+même pour tous les outils — aucune borne propre à un outil (règle du 13/10/2026 : un
 outil lourd ne se plafonne pas, on l'allège ; la mesure dit lequel).
 
 - **Mesure** (`report`, défaut) : l'appel n'est pas touché ; s'il a duré plus que la

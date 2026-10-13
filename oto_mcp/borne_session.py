@@ -2,7 +2,7 @@
 
 Une borne GLOBALE du processus (`bornes_processus`), `OTO_BORNE_SESSION_INACTIVE_S`
 (30 min) : une session MCP sans requête depuis ce délai est fermée, et sa mémoire rendue.
-Aucun état par principal, aucun plafond de nombre : la doctrine du 13/10/2026 n'en veut
+Aucun état par principal, aucun plafond de nombre : la règle du 13/10/2026 n'en veut
 pas.
 
 **En application** (`OTO_DEBIT_MODE=enforce`), c'est la borne de l'SDK `mcp` lui-même,

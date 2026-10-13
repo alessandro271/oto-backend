@@ -117,6 +117,9 @@ chemins = [
   "oto_mcp/limite_debit.py",
   "oto_mcp/limite_debit_mesure.py",
   "oto_mcp/limite_refus_top.py",
+  "oto_mcp/bornes_processus.py",
+  "oto_mcp/borne_corps.py",
+  "oto_mcp/borne_session.py",
   "oto_mcp/egress.py",
   "oto_mcp/crypto.py",
   "oto_mcp/env_inventory.py",
@@ -233,6 +236,7 @@ chemins = [
   # La base : connexion, schéma assemblé, migrations, tables partagées.
   "oto_mcp/db/__init__.py",
   "oto_mcp/db/_*.py",
+  "oto_mcp/db/borne_sql.py",
   "oto_mcp/db/migrations/**",
   "oto_mcp/db/schema/__init__.py",
   "oto_mcp/db/schema/alertes.py",

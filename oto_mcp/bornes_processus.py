@@ -1,6 +1,6 @@
 """Les BORNES GLOBALES du processus (#1232, lot 4) — uniformes, en mode mesure d'abord.
 
-**Doctrine (13/10/2026).** Aucune protection par route ni par outil : une route lourde
+**Règle (13/10/2026).** Aucune protection par route ni par outil : une route lourde
 ne se plafonne pas, on l'allège. Ce qui reste, ce sont quatre bornes qui valent pour
 TOUT ce que sert le processus :
 
