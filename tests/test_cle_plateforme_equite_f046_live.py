@@ -206,3 +206,110 @@ def test_une_cle_neuve_payante_nait_toujours_fermee(base):
     credentials_store.set_platform_key("neuve", "aiark", "k", set_by="op")
     assert _instance("aiark")["share_mode"] == "closed"
     assert _platform_grant_meta("quelconque", "aiark", 77) is None
+
+
+# ── 3. Révoquer coupe sur TOUTES les clés plateforme du connecteur ─────────────
+
+def _deux_cles_ouvertes(provider: str = "aiark") -> None:
+    """Deux clés plateforme du même connecteur, ouvertes à tous : une ancienne et une
+    récente (une rotation sous un nouveau libellé, ou une clé de secours)."""
+    from oto_mcp import credentials_store
+
+    for label in ("ancienne", "recente"):
+        credentials_store.set_credential(credentials_store.PLATFORM, label, provider,
+                                         f"k-{label}", set_by="op")
+
+
+def test_revoquer_coupe_aussi_l_autre_cle_du_connecteur(base):
+    """Révoquer marquait la seule clé la plus récente : l'ancienne, ouverte à tous,
+    servait l'org bloquée au tour suivant de la boucle de résolution."""
+    from oto_mcp import credentials_store
+    from oto_mcp.access.platform_grant import _platform_grant_meta
+
+    _deux_cles_ouvertes()
+    credentials_store.platform_revoke("aiark", "org:42")
+
+    assert _platform_grant_meta("membre", "aiark", 42) is None
+    assert _platform_grant_meta("autre", "aiark", 77) is not None
+
+
+def test_une_cle_posee_apres_la_revocation_ne_la_leve_pas(base):
+    """Un connecteur à palier gratuit pose sa clé ouverte : une clé neuve, sans la
+    révocation, servait de nouveau l'org bloquée."""
+    from oto_mcp import credentials_store, grants_chain, providers
+    from oto_mcp.access.platform_grant import _platform_grant_meta
+
+    assert not grants_chain.is_chained("sirene")
+    assert providers.REGISTRY["sirene"].platform_key_open
+    credentials_store.set_platform_key("ancienne", "sirene", "s-1", set_by="op")
+    credentials_store.platform_revoke("sirene", "org:42")
+    credentials_store.set_platform_key("recente", "sirene", "s-2", set_by="op")
+
+    assert _platform_grant_meta("membre", "sirene", 42) is None
+    assert _platform_grant_meta("autre", "sirene", 77) is not None
+
+
+def test_lever_le_blocage_rouvre_toutes_les_cles(base):
+    from oto_mcp import credentials_store
+    from oto_mcp.access.platform_grant import _platform_grant_meta
+
+    _deux_cles_ouvertes()
+    credentials_store.platform_revoke("aiark", "org:42")
+    credentials_store.platform_grant("aiark", "org:42")
+
+    assert _platform_grant_meta("membre", "aiark", 42) is not None
+    for inst in credentials_store.list_platform_instances("aiark"):
+        assert not inst["meta"].get("share_denied"), inst["label"]
+
+
+def test_un_accord_concurrent_n_efface_pas_la_revocation(base, monkeypatch):
+    """Accorder et révoquer relisent puis réécrivent `meta` : sans verrou de ligne,
+    l'accord à l'org 43, lu avant la révocation de l'org 42 et écrit après, effaçait le
+    refus. On met l'accord en pause entre sa lecture et son écriture, et on révoque
+    pendant ce temps."""
+    import threading
+    from contextlib import contextmanager
+
+    from oto_mcp import credentials_store
+    from oto_mcp.access.platform_grant import _platform_grant_meta
+
+    _cle_payante_ouverte_a_tous()
+    vrai_connect = credentials_store._connect
+    accord_a_lu, revocation_finie = threading.Event(), threading.Event()
+    fil_accord: list[threading.Thread] = []
+
+    class _Pause:
+        def __init__(self, conn):
+            self._conn = conn
+
+        def execute(self, sql, *a, **k):
+            cur = self._conn.execute(sql, *a, **k)
+            if (threading.current_thread() in fil_accord
+                    and sql.lstrip().startswith("SELECT") and "share_mode" in sql):
+                accord_a_lu.set()
+                # Avec le verrou, la révocation attend la fin de l'accord : on ne
+                # l'attend donc qu'un temps, puis l'accord écrit et libère la ligne.
+                revocation_finie.wait(2)
+            return cur
+
+        def __getattr__(self, nom):
+            return getattr(self._conn, nom)
+
+    @contextmanager
+    def _connect_avec_pause(*a, **k):
+        with vrai_connect(*a, **k) as conn:
+            yield _Pause(conn)
+
+    monkeypatch.setattr(credentials_store, "_connect", _connect_avec_pause)
+    accord = threading.Thread(
+        target=credentials_store.platform_grant, args=("aiark", "org:43", 10))
+    fil_accord.append(accord)
+    accord.start()
+    assert accord_a_lu.wait(10)
+    credentials_store.platform_revoke("aiark", "org:42")
+    revocation_finie.set()
+    accord.join(10)
+    assert not accord.is_alive()
+
+    assert _platform_grant_meta("membre", "aiark", 42) is None
+    assert _instance("aiark")["meta"]["rate_limit_by"] == {"org:43": 10}

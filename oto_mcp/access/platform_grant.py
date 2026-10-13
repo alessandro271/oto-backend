@@ -89,9 +89,16 @@ def _legacy_platform_grant_meta(sub, provider, active_org, *,
     beneficiary the chain does not know. The `_legacy_` prefix does not deprecate it —
     it names one of the two paths of the double-read window.
 
-    `instances`: read in advance (cf. `cascade.preloaded_presence_probe`) — `None` rereads."""
-    for inst in (instances if instances is not None
-                 else credentials_store.list_platform_instances(provider)):
+    `instances`: read in advance (cf. `cascade.preloaded_presence_probe`) — `None` rereads.
+
+    A revocation holds for the CONNECTOR, not for one of its keys: as soon as one
+    instance denies the caller, none serves it. Otherwise an older key open to all, or
+    a key set after the revocation, served the revoked caller again."""
+    insts = (instances if instances is not None
+             else credentials_store.list_platform_instances(provider))
+    if any(_platform_denied(sub, active_org, inst) for inst in insts):
+        return None
+    for inst in insts:
         if _platform_instance_usable(sub, active_org, inst):
             return {"label": inst["label"],
                     "daily_quota": _platform_quota(sub, active_org, inst.get("meta"))}

@@ -234,11 +234,26 @@ _REVOQUES = "share_denied"
 _META_DES_ACCORDS = ("rate_limit", "rate_limit_by", _REVOQUES)
 
 
-def _latest_platform_label(conn, provider: str) -> "str | None":
-    r = conn.execute(
-        "SELECT entity_id FROM connector_credentials WHERE entity_type=%s AND connector=%s "
-        "ORDER BY set_at DESC LIMIT 1", (PLATFORM, provider)).fetchone()
-    return r["entity_id"] if r else None
+def _lignes_plateforme_verrouillees(conn, provider: str) -> list[dict]:
+    """Les lignes PLATEFORME de `provider`, récente d'abord, VERROUILLÉES jusqu'à la fin
+    de la transaction. Accorder, révoquer et re-poser relisent `meta` puis la
+    réécrivent : sans verrou, deux gestes concurrents se croisent et le dernier écrit
+    efface l'autre — une révocation perdue sans un mot."""
+    return conn.execute(
+        "SELECT entity_id AS label, share_mode, share_down, meta FROM connector_credentials "
+        "WHERE entity_type=%s AND connector=%s AND account='' ORDER BY set_at DESC "
+        "FOR UPDATE", (PLATFORM, provider)).fetchall()
+
+
+def _sans_refus(meta: dict, scope: str) -> dict:
+    """`meta` dont le refus de `scope` est levé (`share_denied` retiré s'il se vide)."""
+    meta = dict(meta)
+    refus = [s for s in (meta.get(_REVOQUES) or []) if s != scope]
+    if refus:
+        meta[_REVOQUES] = refus
+    else:
+        meta.pop(_REVOQUES, None)
+    return meta
 
 
 def platform_grant(provider: str, scope: str, daily_quota: "int | None" = None,
@@ -261,13 +276,23 @@ def platform_grant(provider: str, scope: str, daily_quota: "int | None" = None,
     con = providers.REGISTRY.get(provider)
     free_tier = bool(con and getattr(con, "platform_key_open", False))
     with _connect() as conn:
-        label = label or _latest_platform_label(conn, provider)
+        lignes = _lignes_plateforme_verrouillees(conn, provider)
+        label = label or (lignes[0]["label"] if lignes else None)
         if label is None:
             raise ValueError(f"aucune instance plateforme pour {provider!r}")
-        row = conn.execute(
-            "SELECT share_mode, share_down, meta FROM connector_credentials "
-            "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=''",
-            (PLATFORM, label, provider)).fetchone()
+        # Le refus se lit sur toutes les clés du connecteur (`platform_revoke`) : lever le
+        # blocage le lève sur chacune, sinon une autre clé refuserait encore.
+        for autre in lignes:
+            refus = (autre["meta"] or {}).get(_REVOQUES) or []
+            if autre["label"] != label and scope in refus:
+                conn.execute(
+                    "UPDATE connector_credentials SET meta=%s::jsonb, version=version+1 "
+                    "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=''",
+                    (json.dumps(_sans_refus(autre["meta"] or {}, scope)), PLATFORM,
+                     autre["label"], provider))
+        row = next((r for r in lignes if r["label"] == label), None)
+        if row is None:
+            raise ValueError(f"aucune instance plateforme {label!r} pour {provider!r}")
         down, meta, mode = list(row["share_down"] or []), dict(row["meta"] or {}), row["share_mode"]
         # F-046 : une clé payante OUVERTE À TOUS (`open`, `share_down` vide) le reste.
         # Accorder y ajoutait le scope au `share_down` en la FERMANT : lever le blocage
@@ -279,11 +304,7 @@ def platform_grant(provider: str, scope: str, daily_quota: "int | None" = None,
             if scope not in down:
                 down.append(scope)
         # Accorder lève la révocation de CE scope (`access.platform_grant._platform_denied`).
-        refus = [s for s in (meta.get(_REVOQUES) or []) if s != scope]
-        if refus:
-            meta[_REVOQUES] = refus
-        else:
-            meta.pop(_REVOQUES, None)
+        meta = _sans_refus(meta, scope)
         rlb = dict(meta.get("rate_limit_by") or {})
         if daily_quota is not None:
             rlb[scope] = daily_quota
@@ -304,7 +325,12 @@ def platform_revoke(provider: str, scope: str, label: "str | None" = None) -> No
     INSCRIT comme révoqué (`meta.share_denied`), refus qui prime sur tout le reste à la
     lecture (`access.platform_grant._platform_denied`) ; seul `platform_grant` l'efface.
     Et retirer le DERNIER bénéficiaire d'une clé `open` à liste ne la rend plus
-    ouverte à tous : elle passe `closed` (liste vide = personne), ce qu'elle disait."""
+    ouverte à tous : elle passe `closed` (liste vide = personne), ce qu'elle disait.
+
+    Sans `label`, le refus s'inscrit sur TOUTES les clés plateforme du connecteur : en
+    ne marquant que la plus récente, une autre clé ouverte servait l'appelant révoqué
+    au tour suivant de la résolution. La lecture, elle, refuse dès qu'une clé du
+    connecteur porte le refus — une clé posée après la révocation ne la lève pas."""
     from . import grants_chain  # import tardif (grants_chain lit ce module)
 
     if grants_chain.is_chained(provider):
@@ -314,36 +340,36 @@ def platform_revoke(provider: str, scope: str, label: "str | None" = None) -> No
         grants_chain.revoke(provider, scope, label=label)
         return
     with _connect() as conn:
-        label = label or _latest_platform_label(conn, provider)
-        if label is None:
-            return
-        row = conn.execute(
-            "SELECT share_mode, share_down, meta FROM connector_credentials "
-            "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=''",
-            (PLATFORM, label, provider)).fetchone()
-        if not row:
-            return
-        avant = list(row["share_down"] or [])
-        down = [s for s in avant if s != scope]
-        mode = row["share_mode"]
-        if mode != "closed" and avant and not down:
-            mode = "closed"
-        meta = dict(row["meta"] or {})
-        rlb = dict(meta.get("rate_limit_by") or {})
-        rlb.pop(scope, None)
-        if rlb:
-            meta["rate_limit_by"] = rlb
-        else:
-            meta.pop("rate_limit_by", None)
-        refus = list(meta.get(_REVOQUES) or [])
-        if scope not in refus:
-            refus.append(scope)
-        meta[_REVOQUES] = refus
-        conn.execute(
-            "UPDATE connector_credentials SET share_mode=%s, share_down=%s::jsonb, "
-            "meta=%s::jsonb, version=version+1 "
-            "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=''",
-            (mode, json.dumps(down), json.dumps(meta), PLATFORM, label, provider))
+        lignes = _lignes_plateforme_verrouillees(conn, provider)
+        for row in lignes:
+            if label is None or row["label"] == label:
+                _revoquer_ligne(conn, provider, scope, row)
+
+
+def _revoquer_ligne(conn, provider: str, scope: str, row: dict) -> None:
+    """Retire `scope` d'UNE ligne plateforme (verrouillée par l'appelant) et l'inscrit
+    révoqué (`meta.share_denied`)."""
+    avant = list(row["share_down"] or [])
+    down = [s for s in avant if s != scope]
+    mode = row["share_mode"]
+    if mode != "closed" and avant and not down:
+        mode = "closed"
+    meta = dict(row["meta"] or {})
+    rlb = dict(meta.get("rate_limit_by") or {})
+    rlb.pop(scope, None)
+    if rlb:
+        meta["rate_limit_by"] = rlb
+    else:
+        meta.pop("rate_limit_by", None)
+    refus = list(meta.get(_REVOQUES) or [])
+    if scope not in refus:
+        refus.append(scope)
+    meta[_REVOQUES] = refus
+    conn.execute(
+        "UPDATE connector_credentials SET share_mode=%s, share_down=%s::jsonb, "
+        "meta=%s::jsonb, version=version+1 "
+        "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=''",
+        (mode, json.dumps(down), json.dumps(meta), PLATFORM, row["label"], provider))
 
 
 # --- app OAuth de l'ÉDITEUR ---------------------------------------------------
@@ -1209,9 +1235,11 @@ def set_platform_key(label: str, connector: str, secret: str,
         # `share_mode` reste le sien (`share_down`/`share_side` ne sont pas dans le
         # SET de l'upsert) et les clés d'accord de `meta` sont reportées, sauf si la
         # pose les nomme elle-même.
+        # Verrouillée : un accord ou une révocation entre cette lecture et l'upsert
+        # serait écrasé par le `meta` relu ici.
         existante = conn.execute(
             "SELECT meta FROM connector_credentials WHERE entity_type = %s "
-            "AND entity_id = %s AND connector = %s AND account = ''",
+            "AND entity_id = %s AND connector = %s AND account = '' FOR UPDATE",
             (PLATFORM, label, connector)).fetchone()
         if existante is not None:
             reportee = dict(meta or {})

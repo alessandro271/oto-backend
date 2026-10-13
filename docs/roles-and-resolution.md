@@ -267,7 +267,11 @@ inclut `platform` : `serper/hunter/sirene/kaspr`) peuvent avoir une clé
 plateforme** — `resolve_api_key` **gate** le chemin platform-grant sur
 `auth_modes` (audit 2026-06-11).
 **Révoquer COUPE, re-poser ne touche pas aux accords (F-046).** `platform_revoke` inscrit
-le scope (`org:<id>` | `user:<sub>`) dans `meta.share_denied` de l'instance : le refus
+le scope (`org:<id>` | `user:<sub>`) dans `meta.share_denied` de **chaque** clé
+plateforme du connecteur, et la lecture refuse dès qu'**une** clé porte le refus : une
+autre clé ouverte, ou une clé posée après la révocation, ne sert pas l'appelant révoqué.
+Accorder, révoquer et re-poser verrouillent les lignes lues (`FOR UPDATE`) : deux gestes
+concurrents ne s'effacent plus. Le refus
 prime sur tout (`access.platform_grant._platform_denied` — palier ouvert, `share_down`,
 `share_side`), y compris sur une clé `open` à `share_down` vide qu'un simple retrait de
 liste ne coupait pas ; seul `platform_grant` l'efface, et sur une clé ouverte à tous il
