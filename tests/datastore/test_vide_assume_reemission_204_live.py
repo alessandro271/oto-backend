@@ -423,8 +423,16 @@ def test_aucune_fuite_au_defaut_ni_sur_la_page_publique(client, base, monkeypatc
     monkeypatch.setattr(db, "get_datastore_by_id",
                         lambda _rid: {"datastore": ns, "schema": SCHEMA})
     monkeypatch.setattr(db, "datastore_count_rows", lambda _rid: 1)
-    monkeypatch.setattr(db, "datastore_list_rows", lambda _rid, **kw: [{"data": stockee}])
-    html, status = share_ui.build_page(projet, "/data/22", connect_url="u")
+    monkeypatch.setattr(db, "datastore_list_rows", lambda _rid, **kw: [{
+        "row_id": "r1", "created_at": "2026-10-01 10:00:00",
+        "updated_at": "2026-10-01 10:00:00", "rev": 1, "data": stockee}])
+    # La page se lit sous le contexte de son endpoint (`HostDispatch`).
+    from oto_mcp import subdomain_project as sp
+    tok = sp._CTX.set(sp.AnonContext(5, None, frozenset(), datastore_exposed=True))
+    try:
+        html, status = share_ui.build_page(projet, "/data/22", connect_url="u")
+    finally:
+        sp._CTX.reset(tok)
     assert status == 200 and "ACME" in html
     assert "@empty" not in html and "vide_assume" not in html
 

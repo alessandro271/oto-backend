@@ -18,6 +18,10 @@ Les tableaux et les pages sont en OUTRE gatés par les opt-ins du propriétaire,
 absente de l'index ET la page directe rend 404, exactement comme la face MCP retire le tool
 de sa liste et refuse l'appel.
 
+Les LIGNES d'un tableau sortent comme `data_rows` les sert (`_lignes_servies`) : même
+projection, même politique de rédaction de l'org propriétaire, lues sous le contexte de
+l'endpoint que `HostDispatch` pose avant d'appeler cette page.
+
 Auto-portée (tokens Otomata inline + Google Fonts), aucune dépendance front. Tout contenu
 utilisateur est ÉCHAPPÉ ; la prose markdown est rendue en mode sûr (`html=False` → HTML brut
 échappé, `javascript:` neutralisé), même posture que `public_doc_page`.
@@ -39,6 +43,7 @@ from markdown_it import MarkdownIt
 from . import brand
 from . import config
 from . import project_exposure
+from . import redaction
 
 # Rendu CommonMark SÛR (html=False = HTML brut échappé, pas exécuté), réutilisé (stateless).
 _MD = MarkdownIt("commonmark", {"html": False})
@@ -383,8 +388,7 @@ def render_data(*, name: str, namespace: str, columns: list[str], rows: list[dic
         head = "".join(head_cells)
         body_rows = []
         for r in rows:
-            data = r.get("data") or {}
-            cells = "".join(_cell_td(data.get(c)) for c in columns)
+            cells = "".join(_cell_td(r.get(c)) for c in columns)
             body_rows.append(f"<tr>{cells}</tr>")
         table = (
             '<div class=dtoolbar>'
@@ -411,6 +415,17 @@ def render_data(*, name: str, namespace: str, columns: list[str], rows: list[dic
              f'  <h1>{html.escape(namespace)}</h1>\n  {table}\n  {pager}')
     return _shell(title=namespace, inner=inner, home_url="/", wide=True,
                   extra_body=script, marque=marque)
+
+
+def render_retenu(*, marque=None) -> str:
+    """La politique de rédaction de l'org n'a pas pu s'appliquer : la page n'est pas
+    servie (fail-closed, comme la face MCP). Le porteur est un tiers sans compte : ni
+    la cause ni le remède ne lui sont dus."""
+    _nom = brand.nom_de(marque)
+    inner = (f'  <div class=eyebrow>{html.escape(_nom)}</div>\n  <h1>Indisponible</h1>\n'
+             '  <div class=card><p class="empty">Ce tableau ne peut pas être affiché pour '
+             'le moment.</p></div>')
+    return _shell(title="Indisponible", inner=inner, home_url="/", marque=marque)
 
 
 def render_not_found(*, name: str = "", marque=None) -> str:
@@ -720,8 +735,13 @@ def build_page(project: dict, path: str, *, offset: int = 0,
             ns = db.get_datastore_by_id(rid) if (show_data and rid in allowed) else None
             if not ns:
                 return render_not_found(marque=marque), 404
+            _exiger_le_contexte(pid)
             total = db.datastore_count_rows(rid)
-            rows = db.datastore_list_rows(rid, offset=max(0, offset), limit=_DATA_PAGE)
+            lignes = db.datastore_list_rows(rid, offset=max(0, offset), limit=_DATA_PAGE)
+            try:
+                rows = _lignes_servies(ns.get("schema"), lignes)
+            except redaction.RedactionWithheld:
+                return render_retenu(marque=marque), 503
             columns = _derive_columns(ns.get("schema"), rows)
             return render_data(name=project.get("name") or "", namespace=ns.get("datastore") or "tableau",
                                columns=columns, rows=rows, total=total, offset=max(0, offset), marque=marque), 200
@@ -742,19 +762,49 @@ def build_page(project: dict, path: str, *, offset: int = 0,
     return None, 0
 
 
+def _exiger_le_contexte(pid: int) -> None:
+    """La page d'un tableau se lit SOUS le contexte de son endpoint
+    (`subdomain_project.HostDispatch`) : c'est lui qui désigne l'org propriétaire dont la
+    politique de rédaction s'applique. Sans lui — ou sous celui d'un autre projet — la
+    rédaction ne saurait pas quelle org lire et laisserait tout passer : on lève."""
+    from . import subdomain_project
+    if subdomain_project.current_anon_project_id() != pid:
+        raise RuntimeError(f"share_ui : tableau du projet {pid} lu hors du contexte de "
+                           "son endpoint — la politique de rédaction n'aurait pas d'org")
+
+
+def _lignes_servies(schema: object, lignes: list[dict]) -> list[dict]:
+    """Les lignes TELLES QUE `data_rows` les sert, par les deux fonctions de la lecture
+    d'outil et aucune copie de leur règle :
+
+    - `DatastorePg._row_to_dict` — la projection par laquelle passe TOUTE ligne servie
+      par le store (colonnes déclarées complétées à `null`, couches aplaties, valeurs
+      servies) ;
+    - `redaction.redact_payload` — la politique de rédaction de l'org propriétaire,
+      celle que `FieldRedactionMiddleware` applique au résultat de `data_rows`, sous le
+      même nom de service. Fail-closed : `RedactionWithheld` remonte.
+
+    Cette page lisait la base et rendait les cellules brutes : une colonne que l'org
+    fait retirer à tout lecteur d'outil sortait en clair chez quiconque tenait le lien."""
+    from .datastore.core import DatastorePg
+    from .tool_visibility import namespace_of
+
+    servies = [DatastorePg._row_to_dict(l, schema) for l in lignes]
+    red = redaction.redact_payload(namespace_of("data_rows"), {"rows": servies})
+    return servies if red is redaction.PASSTHROUGH else list(red.get("rows") or [])
+
+
 def _derive_columns(schema: object, rows: list[dict]) -> list[str]:
-    """Colonnes du tableau : celles du schéma typé si présent, sinon l'union des clés des
-    rows (ordre de première apparition). Défensif — le schéma peut manquer/varier."""
-    if isinstance(schema, dict):
-        fields = schema.get("fields") or schema.get("columns")
-        if isinstance(fields, list) and fields:
-            cols = [f.get("name") if isinstance(f, dict) else f for f in fields]
-            cols = [c for c in cols if isinstance(c, str) and c]
-            if cols:
-                return cols
-    cols: list[str] = []
+    """Colonnes affichées = les clés des lignes SERVIES (`_lignes_servies`), hors
+    métadonnées `_…` : une colonne retirée par la rédaction n'a pas d'en-tête. Les
+    colonnes déclarées viennent d'abord, dans l'ordre du schéma (`cles_declarees`, qui
+    les lit par `key`), puis les autres par ordre de première apparition."""
+    from .datastore import schema as dsv2
+
+    presentes: list[str] = []
     for r in rows:
-        for k in (r.get("data") or {}).keys():
-            if k not in cols:
-                cols.append(k)
-    return cols
+        for k in r:
+            if isinstance(k, str) and not k.startswith("_") and k not in presentes:
+                presentes.append(k)
+    declarees = [k for k in dsv2.cles_declarees(schema) if k in presentes]
+    return declarees + [k for k in presentes if k not in declarees]

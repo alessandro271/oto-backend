@@ -324,12 +324,14 @@ def reachable_instances_map(sub: str, org: Optional[int]) -> dict[str, list[dict
 def resolve_org_field_policy(service: str) -> Optional[dict]:
     """La politique de rédaction que l'**org active** de l'appelant a posée pour
     `service`, telle que stockée (`rules`, `salt`, `unmask`, `documents`), ou None si
-    elle n'en a pas posé (ou sans appelant, ou sans org active). Ce n'est PAS ce qui
-    s'applique : la cascade est `field_filter_defaults.bloc_effectif`. Une erreur DB
-    LÈVE."""
+    elle n'en a pas posé (ou sans org active). Ce n'est PAS ce qui s'applique : la
+    cascade est `field_filter_defaults.bloc_effectif`. Une erreur DB LÈVE.
+
+    Sans `sub`, l'org est celle que `scope.current_org(None)` résout : l'org
+    PROPRIÉTAIRE d'un projet publié sans login (`subdomain_project`), qui sert ses
+    outils et ses tableaux à un tiers sans compte. C'est elle qui a posé la
+    politique, et c'est là qu'elle compte le plus. Hors d'un tel endpoint, None."""
     sub = current_user_sub_from_token()
-    if not sub:
-        return None
     active_org = scope.current_org(sub)
     if active_org is None:
         return None

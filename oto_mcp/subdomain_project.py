@@ -444,18 +444,6 @@ class HostDispatch:
             ds_exposed = project_exposure.datastore_exposed(proj)
             ds_writable = project_exposure.datastore_writable(proj)
             docs_exposed = project_exposure.docs_exposed(proj)
-            # Navigateur (GET, Accept: text/html) → UI NAVIGABLE server-side (lecture seule) :
-            # la MÊME URL sert l'UI (racine + /procedures//data//docs) ET le serveur MCP.
-            # `build_page` fait des lectures DB SYNC → threadpool (serveur mono-loop). Il rend
-            # `(None, 0)` pour un path non-UI (ex. GET /mcp) → on retombe sur le MCP ci-dessous.
-            if (scope.get("method") == "GET"
-                    and b"text/html" in headers.get(b"accept", b"").lower()):
-                from . import share_ui
-                html_out, status = await run_in_threadpool(
-                    share_ui.build_page, proj, scope.get("path") or "/",
-                    offset=_offset_from_query(scope), connect_url=_connect_url(host))
-                if html_out is not None:
-                    return await _send_html(send, html_out, status)
             ctx = AnonContext(int(proj["id"]), org_id,
                               frozenset(proj.get("mcp_tools") or []),
                               # opt-in datastore : honoré uniquement en `secret` (jamais
@@ -463,10 +451,27 @@ class HostDispatch:
                               datastore_exposed=ds_exposed,
                               datastore_writable=ds_writable,
                               docs_exposed=docs_exposed)
+            # Le contexte est posé AVANT la face web : elle lit sous l'org propriétaire,
+            # comme la face MCP (la politique de rédaction de cette org s'y applique, cf.
+            # `share_ui._lignes_servies`). Rendue avant lui, la page lisait sans org et
+            # servait en clair ce que l'org fait retirer.
             tok = _CTX.set(ctx)
-            if sid:
-                _store_ctx(sid, ctx)
             try:
+                # Navigateur (GET, Accept: text/html) → UI NAVIGABLE server-side (lecture
+                # seule) : la MÊME URL sert l'UI (racine + /procedures//data//docs) ET le
+                # serveur MCP. `build_page` fait des lectures DB SYNC → threadpool (serveur
+                # mono-loop ; le contexte y est copié). Il rend `(None, 0)` pour un path
+                # non-UI (ex. GET /mcp) → on retombe sur le MCP ci-dessous.
+                if (scope.get("method") == "GET"
+                        and b"text/html" in headers.get(b"accept", b"").lower()):
+                    from . import share_ui
+                    html_out, status = await run_in_threadpool(
+                        share_ui.build_page, proj, scope.get("path") or "/",
+                        offset=_offset_from_query(scope), connect_url=_connect_url(host))
+                    if html_out is not None:
+                        return await _send_html(send, html_out, status)
+                if sid:
+                    _store_ctx(sid, ctx)
                 # Sur un sous-domaine DÉDIÉ, le MCP est servi à la RACINE : claude.ai/
                 # Mistral POSTent l'initialize sur l'URL nue (`…mcp.oto.cx`, sans `/mcp`)
                 # → on réécrit `/`→`/mcp`. Les routes OAuth/well-known (chemins propres)

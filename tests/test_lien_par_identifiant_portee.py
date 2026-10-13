@@ -124,9 +124,17 @@ def test_la_liste_ne_resout_pas_un_numero_hors_portee(monde):
 
 def _page(monde, chemin: str):
     from oto_mcp import db, share_ui
+    from oto_mcp import subdomain_project as sp
     projet = {**db.get_project_by_id(monde["piege"]), "mcp_access": "secret",
               "mcp_expose_datastore": True, "mcp_expose_docs": True}
-    return share_ui.build_page(projet, chemin, connect_url="https://x/mcp")
+    # La page se lit sous le contexte que `HostDispatch` pose pour son endpoint.
+    org = int(projet["owner_id"]) if projet.get("owner_type") == "org" else None
+    tok = sp._CTX.set(sp.AnonContext(int(projet["id"]), org, frozenset(),
+                                     datastore_exposed=True))
+    try:
+        return share_ui.build_page(projet, chemin, connect_url="https://x/mcp")
+    finally:
+        sp._CTX.reset(tok)
 
 
 def test_la_page_publiee_ne_sert_ni_le_corps_ni_les_lignes_d_ailleurs(monde):
