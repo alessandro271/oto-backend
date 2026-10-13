@@ -450,9 +450,10 @@ def revoke(provider: str, scope: str, label: Optional[str] = None) -> int:
     restait MUETTE (`platform_rung` → None) et l'appelant retombait sur l'ancien chemin —
     une clé ouverte le servait comme avant. Révoquer sur une clé ouverte jamais accordée
     (le blocage de crédit d'une org gratuite) ne coupait rien. On pose alors une arête
-    aussitôt archivée : la chaîne a un avis (« révoqué ») et refuse sans repli. Un
-    `grant` ultérieur la remplace, comme toute arête. Pose puis archive ne sont pas
-    atomiques : l'écart est un accès que l'appelant avait déjà par le chemin ouvert."""
+    née archivée : la chaîne a un avis (« révoqué ») et refuse sans repli. Un `grant`
+    ultérieur la remplace, comme toute arête. Une seule écriture : posée vivante puis
+    archivée, elle accordait la clé sans quota entre les deux — sur une clé fermée
+    comme ouverte — et pour toujours si l'archivage échouait."""
     grantee = _parse_scope(scope)
     if grantee is None:
         return 0
@@ -465,8 +466,8 @@ def revoke(provider: str, scope: str, label: Optional[str] = None) -> int:
         db_grants.insert_grant(
             resource_id=ref, grantor_kind=PLATFORM_SCOPE[0], grantor_id=PLATFORM_SCOPE[1],
             grantee_kind=grantee[0], grantee_id=grantee[1], constraints={},
-            source="manual", created_by=None)
-        n = db_grants.revoke_edges(ref, *grantee)
+            source="manual", created_by=None, revoked=True)
+        n = 1
     return n
 
 

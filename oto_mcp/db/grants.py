@@ -77,16 +77,20 @@ def insert_grant(*, resource_id: str, grantor_kind: str, grantor_id: str,
                  constraints: Optional[dict] = None,
                  resource_kind: str = "connector_instance",
                  parent_id: Optional[int] = None, source: str = "manual",
-                 created_by: Optional[str] = None, conn=None) -> int:
+                 created_by: Optional[str] = None, revoked: bool = False,
+                 conn=None) -> int:
     """Pose une arête et rend son id. `conn` = connexion existante (la migration de
-    boot tourne DANS la transaction de schéma) ; None = connexion du pool."""
+    boot tourne DANS la transaction de schéma) ; None = connexion du pool.
+    `revoked` = l'arête naît ARCHIVÉE, dans la même écriture : elle n'est jamais lue
+    vivante, pas même entre deux requêtes."""
     sql = (
         "INSERT INTO grants (resource_kind, resource_id, grantor_kind, grantor_id, "
-        "grantee_kind, grantee_id, constraints, parent_id, source, created_by) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s) RETURNING id")
+        "grantee_kind, grantee_id, constraints, parent_id, source, created_by, "
+        "revoked_at) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, "
+        "CASE WHEN %s THEN NOW() END) RETURNING id")
     params = (resource_kind, resource_id, grantor_kind, str(grantor_id),
               grantee_kind, str(grantee_id), json.dumps(constraints or {}),
-              parent_id, source, created_by)
+              parent_id, source, created_by, revoked)
     if conn is not None:
         return int(conn.execute(sql, params).fetchone()["id"])
     with _connect() as c:
