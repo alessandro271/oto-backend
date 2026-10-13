@@ -240,6 +240,9 @@ _DECLARATIONS: tuple[str, ...] = (
     # Neighbour of `ahrefs` by trade (SEO), but signed in like `sharepoint`: each
     # person connects their own Ubersuggest account (OAuth, public client).
     "ubersuggest",
+    # Neighbour of `ahrefs` and `ubersuggest` by trade (SEO), but pay-as-you-go:
+    # the only one of the three with a platform key.
+    "dataforseo",
     "granola",
     "grain",
     "linear",

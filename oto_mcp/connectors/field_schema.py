@@ -86,6 +86,12 @@ CONNECTOR_FIELD_SCHEMA: dict[str, list[dict]] = {
         {"name": "photo", "label": "photo", "type": "string", "sensitive": True},
         {"name": "headline", "label": "headline", "type": "string", "sensitive": False},
     ],
+    # DataForSEO: `dataforseo_technologies` returns the contact details found on
+    # a website (`domain`, `domains_using`), as lists.
+    "dataforseo": [
+        {"name": "emails", "label": "emails", "type": "list", "sensitive": True},
+        {"name": "phone_numbers", "label": "phone numbers", "type": "list", "sensitive": True},
+    ],
     # Pennylane (FR accounting). Third parties & addresses.
     "pennylane": [
         {"name": "name", "label": "third-party name", "type": "string", "sensitive": True},
