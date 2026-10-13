@@ -352,3 +352,29 @@ CREATE TABLE IF NOT EXISTS platform_key_rate (
     PRIMARY KEY (scope, connector)
 );
 """
+
+# #1232 (lot 1) : le palmarès quotidien des refus des limiteurs
+# (`limite_refus_top.py`). Bornée par la purge du fil d'écriture
+# (`limite_refus_top.RETENTION_JOURS`).
+LIMITE_REFUS_JOUR = """
+-- QUI les limiteurs auraient coupé (#1232) : la limite de débit applicative
+-- (`limiteur='debit'`, la classe est celle du seau) et l'équité d'une clé plateforme
+-- (`limiteur='platform_rate'`, la classe est le connecteur). Une ligne par jour UTC,
+-- environnement, limiteur, classe et clé ; `refus` cumule les décisions qu'`enforce`
+-- refuse ou refuserait ce jour-là. `cle` est une EMPREINTE (sha256 tronqué) du jeton,
+-- de l'adresse ou du porteur `org:<id>`/`user:<sub>` — jamais la valeur en clair ;
+-- `*` reçoit les refus des clés au-delà de la borne en mémoire. `env` sépare
+-- préproduction et production, qui écrivent dans la même base.
+CREATE TABLE IF NOT EXISTS limite_refus_jour (
+    jour DATE NOT NULL,
+    env TEXT NOT NULL,
+    limiteur TEXT NOT NULL,
+    classe TEXT NOT NULL,
+    cle TEXT NOT NULL,
+    refus BIGINT NOT NULL,
+    mode TEXT NOT NULL,
+    premier_at TIMESTAMPTZ NOT NULL,
+    dernier_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (jour, env, limiteur, classe, cle)
+);
+"""

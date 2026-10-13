@@ -13,7 +13,7 @@ déjà leur console (`oto_admin_signal`) — pas dupliqués ici.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Literal, Optional
 
 from pydantic import BaseModel, field_validator
@@ -92,6 +92,20 @@ class RateLimitRow(BaseModel):
     last_at: Optional[datetime] = None
 
 
+class RateLimitTopRow(BaseModel):
+    """Une clé HACHÉE que `enforce` refuse ou refuserait, un jour donné (#1232)."""
+    jour: date                    # jour UTC
+    env: str                      # `production` | `canari` | `inconnu`
+    limiteur: str                 # debit | platform_rate
+    classe: str                   # debit : la classe du seau ; platform_rate : le connecteur
+    cle: str                      # empreinte (sha256 tronqué) ; `*` = clés au-delà de la borne
+    rang: int                     # 1 = la clé la plus refusée du (jour, env, limiteur)
+    refus: int
+    mode: str                     # report | enforce — le dernier vu ce jour-là
+    premier_at: Optional[datetime] = None
+    dernier_at: Optional[datetime] = None
+
+
 class TransportRefusals(BaseModel):
     """Ce que le transport refuse avant tout dispatch, ventilé par cause, et la mesure
     de la limite de débit applicative."""
@@ -105,6 +119,9 @@ class TransportRefusals(BaseModel):
     # (environnement, classe, mode), sommée sur la fenêtre. De quoi régler les bornes
     # sur le trafic réel avant de passer `OTO_DEBIT_MODE` en `enforce`.
     rate_limit: list[RateLimitRow] = []
+    # QUI serait coupé (#1232, `limite_refus_top`) : les premières clés hachées par
+    # (jour, environnement, limiteur), limite de débit et clé plateforme.
+    rate_limit_top: list[RateLimitTopRow] = []
 
 
 class FunnelInput(BaseModel):
@@ -216,7 +233,11 @@ def _transport_stats(ctx: ResolvedCtx, inp: TransportInput) -> dict:
     `rate_limit` porte la mesure de la limite de débit applicative (F-025) : par
     environnement, classe et mode, les décisions qui passent, celles qu'`enforce`
     refuserait (`would_refuse`, mode `report`) ou a refusées, et le plus haut usage
-    d'un seau. Cf. `oto_mcp/limite_debit_mesure.py`."""
+    d'un seau. Cf. `oto_mcp/limite_debit_mesure.py`.
+
+    `rate_limit_top` dit QUI : par jour, environnement et limiteur (`debit`,
+    `platform_rate`), les clés HACHÉES les plus refusées. Cf.
+    `oto_mcp/limite_refus_top.py`."""
     return db.transport_refusal_stats(since_days=inp.days)
 
 
@@ -494,7 +515,9 @@ CAPABILITIES += [
             "connectors (credential resolution failures; optional `org_id`) / transport "
             "(MCP transport refusals by cause, plus `rate_limit`: the app rate limiter "
             "per env/class/mode — `would_refuse` is what `enforce` would cut, "
-            "`peak_pct` the fullest bucket; `days`) / funnel "
+            "`peak_pct` the fullest bucket; and `rate_limit_top`: per day, env and "
+            "limiter (`debit` | `platform_rate`), the top hashed keys `enforce` would "
+            "cut; `days`) / funnel "
             "(accounts vs real usage) / gaps · tool_quality (aggregated usage signals) / "
             "agents_en_echec (hosted agents whose JOBS are dying, grouped by agent AND "
             "by reason — `days` (default 1), optional `org_id`; each row carries "

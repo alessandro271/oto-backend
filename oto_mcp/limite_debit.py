@@ -77,7 +77,8 @@ décidé AVANT d'appeler la suite — rien n'est lu du corps, rien n'est mis en 
 SSE de `/mcp` passe intact) ; seule la ligne de statut de la réponse est lue, pour
 `echecs`. Un refus n'écrit RIEN en base sur son chemin : une ligne de journal par clé et
 par minute au plus, et la mesure (`limite_debit_mesure`) agrège en mémoire et n'écrit
-qu'une ligne par classe et par minute, en tâche de fond.
+qu'une ligne par classe et par minute, en tâche de fond ; le palmarès des clés
+HACHÉES refusées (`limite_refus_top`, #1232) agrège de même et s'écrit hors de la boucle.
 
 **Où il est posé** (`server.build_root_app`) : sous la garde de déconnexion, AU-DESSUS du
 compteur des refus du transport — un 429 de débit n'est pas un refus du transport, et
@@ -264,6 +265,15 @@ def _empreinte(valeur: bytes) -> str:
     return hashlib.sha256(valeur).hexdigest()[:32]
 
 
+def _empreinte_refus(classe: str, cle) -> str:
+    """La clé d'un refus pour le palmarès (`limite_refus_top`) : celle de `jeton` est
+    déjà une empreinte (gardée telle quelle, pour qu'elle recoupe le journal) ; une
+    adresse, ou (adresse, chemin) d'un crochet, est hachée ici."""
+    if classe == "jeton":
+        return cle
+    return _empreinte((" ".join(cle) if isinstance(cle, tuple) else cle).encode())
+
+
 class _Seaux:
     """Seaux à jetons d'une classe : clé -> (jetons, instant). Remplissage continu,
     plafonné à la rafale ; borné en nombre de clés (le plus ancien sort)."""
@@ -318,8 +328,8 @@ class LimiteDebit:
     def __init__(self, app, mode: Optional[str] = None,
                  bornes: Optional[dict[str, Borne]] = None, horloge=time.monotonic,
                  exemptees: Optional[tuple] = None, horloge_murale=time.time,
-                 publier=None):
-        from . import limite_debit_mesure, version, version_header
+                 publier=None, publier_refus=None):
+        from . import limite_debit_mesure, limite_refus_top, version, version_header
         from .subdomain_project import _client_ip
         self.app = app
         self._ip = _client_ip
@@ -338,6 +348,10 @@ class LimiteDebit:
         self._horloge_murale = horloge_murale
         self._mesure = limite_debit_mesure.Mesure(self.mode)
         self._publier = publier or limite_debit_mesure.publier
+        # QUI serait refusé (#1232) : le palmarès des clés hachées, par jour.
+        self._palmares = limite_refus_top.Palmares(limite_refus_top.DEBIT)
+        self._palmares_plateforme = limite_refus_top.PALMARES_PLATEFORME
+        self._publier_refus = publier_refus or limite_refus_top.publier
         self._par_minute = {c: s.borne.par_minute for c, s in self._seaux.items()}
         self._version = (b"x-oto-version",
                          version_header.valeur_entete(version.version_servie()))
@@ -354,9 +368,14 @@ class LimiteDebit:
     def _basculer_minute(self) -> None:
         """Ferme la minute murale écoulée : ses lignes partent en tâche de fond, au plus
         une par classe — jamais sur le chemin d'une décision."""
-        lignes = self._mesure.basculer(int(self._horloge_murale() // 60), self._par_minute)
+        murale = self._horloge_murale()
+        lignes = self._mesure.basculer(int(murale // 60), self._par_minute)
         if lignes:
             self._publier(lignes)
+        # Les palmarès des refus aussi — celui de la clé plateforme compris, qui sinon
+        # n'écrirait sa minute close qu'à son prochain refus.
+        for palmares in (self._palmares, self._palmares_plateforme):
+            self._publier_refus(palmares.basculer(murale))
 
     async def __call__(self, scope, receive, send):
         if scope.get("type") != "http" or self.mode == OFF:
@@ -380,6 +399,9 @@ class LimiteDebit:
             classe_refus, cle, attente = refus
             self._mesure.noter_decision(
                 classe_refus, "refused" if self.mode == ENFORCE else "would_refuse")
+            self._publier_refus(self._palmares.noter(
+                classe_refus, _empreinte_refus(classe_refus, cle), self.mode,
+                self._horloge_murale()))
             self._journaliser(classe_refus, cle, ip, chemin, maintenant)
             if self.mode == ENFORCE:
                 return await self._refuser(scope, send, classe_refus, attente)

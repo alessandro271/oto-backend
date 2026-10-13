@@ -335,6 +335,17 @@ ni un jeton), en tâche de fond. En mode `report`, `would_refuse` est ce qu'`enf
 couperait : c'est le chiffre sur lequel on règle les bornes avant de basculer
 (`docs/rest-api.md` §Limite de débit applicative).
 
+**Et QUI serait coupé** (#1232, champ `rate_limit_top`) : `oto_mcp/limite_refus_top.py`
+cumule, par jour UTC, environnement, limiteur (`debit` = la limite de débit ci-dessus,
+`platform_rate` = l'équité d'une clé plateforme, F-051) et classe (le seau, ou le
+connecteur), les refus qu'`enforce` servirait, par clé HACHÉE — empreinte du jeton
+(celle des lignes de journal `jeton abcd1234…`), de l'adresse, ou du porteur
+`org:<id>` / `user:<sub>` ; jamais la valeur en clair. On identifie une clé en calculant
+l'empreinte d'un candidat (`limite_refus_top.empreinte("org:42")`). Table
+`limite_refus_jour`, écrite une fois par minute close sur un fil à part, au plus 1 000
+clés par limiteur et par minute (au-delà, la ligne `*`), purgée au-delà de trente jours.
+La lecture rend les dix premières clés par (jour, environnement, limiteur).
+
 Pas la connexion d'un connecteur, pas le `tools/list`. (Ce paragraphe disait « uniquement
 les invocations d'outils » jusqu'au 2026-08-29 : les appels `/api/*` y sont écrits depuis
 `RestCallLogger`, et le handshake depuis `on_initialize` — c'est cet angle mort de lecture

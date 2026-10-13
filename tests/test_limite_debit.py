@@ -72,13 +72,15 @@ def _entetes(msgs):
 
 
 def _garde(app=None, mode=ld.ENFORCE, horloge=None, exemptees=(), publiees=None,
-           murale=None, **par_minute):
+           murale=None, refus=None, **par_minute):
     bornes = {c: ld.Borne(par_minute.get(c, d)) for c, d in ld.DEFAUTS.items()}
     return ld.LimiteDebit(app or _app_qui_rend(), mode=mode, bornes=bornes,
                           horloge=horloge or Horloge(), exemptees=exemptees,
                           horloge_murale=murale or (lambda: 60_000.0),
                           publier=(publiees.extend if publiees is not None
-                                   else (lambda lignes: None)))
+                                   else (lambda lignes: None)),
+                          publier_refus=(refus.extend if refus is not None
+                                         else (lambda lignes: None)))
 
 
 def _app_par_jeton(statuts: dict, defaut: int = 401, *, verifie: bool = True):

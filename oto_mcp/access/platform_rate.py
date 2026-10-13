@@ -30,16 +30,21 @@ processes that share the database and nothing else.
   read as the default in silence.
 
 The counter failing never refuses a call: it is logged, and the call goes through.
+
+**Who would be cut** (#1232): every call past the limit, in `report` as in `enforce`,
+is added in memory to the daily top of hashed carriers (`limite_refus_top`), written
+off the request's thread.
 """
 from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Callable, Optional
 
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import providers
+from .. import limite_refus_top, providers
 from ..db import platform_key_rate as db_rate
 from ..mcp_errors import McpError
 
@@ -169,6 +174,8 @@ def enforce(provider: str, sub: Optional[str], org: Optional[int], *,
         return
     if used <= limit:
         return
+    # QUI serait refusé (#1232) : le palmarès des porteurs hachés, par jour.
+    limite_refus_top.noter_plateforme(carrier, qui, m, time.time())
     if used == limit + 1:   # once per window and per org, not once per call
         logger.warning("platform-key rate (%s): %s crossed %d calls/%ds on `%s`",
                        m, qui, limit, window, carrier)

@@ -2135,6 +2135,8 @@ def transport_refusal_stats(since_days: int = 7) -> dict:
     La cause vit dans `tool`, préfixée `refus:` — un `GROUP BY` la rend directement,
     sans toucher au JSON. Aucune ligne ne porte de `sub` : à cette couche il n'y a pas
     encore d'identité."""
+    from . import limite_refus_jour
+    from ..limite_refus_top import TOP_N
     since_days = max(1, min(int(since_days), 365))
     with _agregat("refus du transport") as conn:
         par_cause = conn.execute(
@@ -2193,12 +2195,16 @@ def transport_refusal_stats(since_days: int = 7) -> dict:
             """,
             (since_days,),
         ).fetchall()
+        # QUI serait coupé (#1232, `limite_refus_top`) : les `TOP_N` clés hachées par
+        # jour, environnement et limiteur.
+        palmares = limite_refus_jour.top(conn, since_days, TOP_N)
     return {
         "since_days": since_days,
         "total": sum(int(r["n"]) for r in par_cause),
         "by_cause": list(par_cause),
         "protocol_versions_refused": list(versions),
         "rate_limit": list(debit),
+        "rate_limit_top": list(palmares),
     }
 
 
