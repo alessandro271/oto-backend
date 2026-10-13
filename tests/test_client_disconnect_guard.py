@@ -271,13 +271,14 @@ def test_lapp_racine_servie_par_uvicorn_est_gardee():
     """Une garde qu'on peut retirer sans faire rougir la suite n'est pas une garde.
     `build_root_app` est le point d'assemblage exact ; on vérifie que la garde y est la
     couche la plus EXTERNE (elle doit voir ce que voit uvicorn, dispatch par Host
-    compris) — et que le compteur de refus du transport, l'étiquetage de version
+    compris) — et que la limite de débit (F-025), le compteur de refus du transport, l'étiquetage de version
     (oto#33) puis celui du charset (#472) s'intercalent SOUS elle, au-dessus du
     dispatch, donc sur les deux instances à la fois.
 
     Le compteur est SOUS la garde, délibérément : la garde synthétise une réponse
     quand le client est parti en cours de route, et cette réponse-là n'est pas un
     refus. Posé au-dessus, il la compterait."""
+    from oto_mcp.limite_debit import LimiteDebit
     from oto_mcp.response_charset import ResponseCharset
     from oto_mcp.server import build_root_app
     from oto_mcp.subdomain_project import HostDispatch
@@ -286,10 +287,11 @@ def test_lapp_racine_servie_par_uvicorn_est_gardee():
 
     racine = build_root_app(object(), object())
     assert isinstance(racine, ClientDisconnectGuard)
-    assert isinstance(racine.app, TransportRefusalCounter)
-    assert isinstance(racine.app.app, VersionHeader)
-    assert isinstance(racine.app.app.app, ResponseCharset)
-    assert isinstance(racine.app.app.app.app, HostDispatch)
+    assert isinstance(racine.app, LimiteDebit)
+    assert isinstance(racine.app.app, TransportRefusalCounter)
+    assert isinstance(racine.app.app.app, VersionHeader)
+    assert isinstance(racine.app.app.app.app, ResponseCharset)
+    assert isinstance(racine.app.app.app.app.app, HostDispatch)
 
 
 # --- le warning de visibilité (2e moitié de #352) ----------------------------

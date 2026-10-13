@@ -418,6 +418,43 @@ _REGLAGES: tuple[Variable, ...] = (
     Variable("OTO_ANON_RATE_BURST", Classe.REGLAGE, "60",
              "Rafale anonyme autorisée en plus du débit régulier.",
              ("oto_mcp/subdomain_project.py:139",)),
+    Variable("OTO_DEBIT_MODE", Classe.REGLAGE, "report",
+             "Limite de débit applicative (`limite_debit.py`, F-025) : `report` (défaut) "
+             "mesure et journalise ce qui serait refusé sans rien refuser, `enforce` "
+             "refuse en 429, `off` la coupe ; une valeur inconnue empêche le démarrage. "
+             "`enforce` SEULEMENT derrière un proxy qui écrase `CF-Connecting-IP` et "
+             "`X-Forwarded-For` (sinon les classes par adresse se contournent). Lue au "
+             "démarrage : en changer demande un redémarrage.",
+             ("oto_mcp/limite_debit.py:179",)),
+    Variable("OTO_DEBIT_ADRESSES_EXEMPTEES", Classe.REGLAGE, "",
+             "Adresses ou CIDR (séparés par des virgules) de NOS machines, exemptés des "
+             "classes de débit par adresse et du budget d'échecs ; leurs jetons paient "
+             "toujours la classe par jeton. Vide par défaut ; une entrée illisible "
+             "empêche le démarrage. Lue au démarrage.",
+             ("oto_mcp/limite_debit.py:190",)),
+    Variable("OTO_DEBIT_JETON_PAR_MIN", Classe.REGLAGE, "1200",
+             "Débit (req/min) par jeton porté (`Authorization`), rafale = la moitié ; "
+             "`0` désarme la classe.",
+             ("oto_mcp/limite_debit.py:221",)),
+    Variable("OTO_DEBIT_ANONYME_PAR_MIN", Classe.REGLAGE, "600",
+             "Débit (req/min) par adresse d'une requête sans jeton, hors routes "
+             "sensibles et webhooks (DCR compris) ; rafale = la moitié ; `0` désarme.",
+             ("oto_mcp/limite_debit.py:223",)),
+    Variable("OTO_DEBIT_SENSIBLE_PAR_MIN", Classe.REGLAGE, "60",
+             "Débit (req/min) par adresse sur les routes à secret dans le chemin et les "
+             "gestes d'authentification interactifs (invitation, partage public, "
+             "autorisation, retours OAuth) ; rafale = la moitié ; `0` désarme.",
+             ("oto_mcp/limite_debit.py:225",)),
+    Variable("OTO_DEBIT_WEBHOOK_PAR_MIN", Classe.REGLAGE, "300",
+             "Débit (req/min) par (adresse, chemin) des webhooks entrants, plus un "
+             "plafond par adresse à dix fois ce débit ; rafale = la moitié ; `0` désarme.",
+             ("oto_mcp/limite_debit.py:227",)),
+    Variable("OTO_DEBIT_ECHECS_PAR_MIN", Classe.REGLAGE, "120",
+             "Budget (par min) de réponses 401/403 (et 404 sur routes à secret) par "
+             "adresse ; épuisé, l'adresse voit refuser ses jetons inconnus et ses routes "
+             "à secret — jamais un jeton déjà accepté, ni l'anonyme, ni un webhook ; "
+             "`0` désarme ce budget.",
+             ("oto_mcp/limite_debit.py:228",)),
     Variable("OTO_MCP_MAX_ORGS_PER_USER", Classe.REGLAGE, "10",
              "Plafond d'orgs créées par un même compte (hors super_admin et admin de son tenant).",
              ("oto_mcp/capabilities/orgs/core.py:19",)),

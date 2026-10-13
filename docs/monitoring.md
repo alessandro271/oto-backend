@@ -327,6 +327,14 @@ Lecture : `oto_admin_monitoring op=transport` / `GET /api/admin/monitoring/trans
 sources mesurées le 11/09/2026 étaient dans `160.79.106.0/24`, la plage de sortie de
 claude.ai — aucune de nos machines. Ce sont des clients tiers qui parlent mal.
 
+**La même lecture porte la limite de débit applicative** (F-025, champ `rate_limit`) :
+`oto_mcp/limite_debit_mesure.py` écrit AU PLUS une ligne par classe et par minute
+(`kind='debit'`, `tool='debit:<classe>'`, compteurs `allowed` / `would_refuse` /
+`refused` et `peak_pct` dans `args`, environnement comme ci-dessus, jamais une adresse
+ni un jeton), en tâche de fond. En mode `report`, `would_refuse` est ce qu'`enforce`
+couperait : c'est le chiffre sur lequel on règle les bornes avant de basculer
+(`docs/rest-api.md` §Limite de débit applicative).
+
 Pas la connexion d'un connecteur, pas le `tools/list`. (Ce paragraphe disait « uniquement
 les invocations d'outils » jusqu'au 2026-08-29 : les appels `/api/*` y sont écrits depuis
 `RestCallLogger`, et le handshake depuis `on_initialize` — c'est cet angle mort de lecture
