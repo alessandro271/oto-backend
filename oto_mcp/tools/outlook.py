@@ -8,13 +8,21 @@ permissions) that has authorized THIS service (scopes `MAIL`), acquired and rene
 - `outlook_message` (search/get/attachment/drafts/folders/archive/trash/move) —
   everything that designates a message in the mailbox, by query or by id;
 - `outlook_compose` — write a new message or a reply: a DRAFT by default, sent only
-  with `mode="send"`, which goes through the draft (`create_draft` then `send_draft`).
+  with `mode="send"`, which goes through the draft (`create_draft` then `send_draft`,
+  then `sent_message`: the draft's immutable id designates its copy in Sent Items,
+  read back for its `webLink` — sending is asynchronous, the copy may not be there yet).
+  The body is markdown (`body`, rendered as `gmail_compose` renders it) or HTML sent
+  AS IS (`html`, or `html_source` — a `file_source` ref whose content is the HTML):
+  nothing rewrites or cleans an HTML body here, what Outlook shows is what was given.
 
 Protocol facts the tools carry (`oto.tools.microsoft.mail`): `$search` and `$filter`
-exclude each other (`query` and `unread` are not combined); `move` returns a NEW id
-(archive, trash and move all go through it — the answer gives both ids); an attachment
-travels inline up to 3 MB; Graph does not expose the Outlook signature, so nothing is
-appended to a body.
+exclude each other (`query` and `unread` are not combined); every id is IMMUTABLE
+(the client asks Graph for them on every call): it survives a move to another folder
+(archive, trash and move all go through `move`) and a draft's move to Sent Items once
+sent — the answer of a move still gives both ids, `new_id` being the stable form of an
+id given in Outlook's older format; an attachment
+travels inline up to 3 MB, and one with a `content_id` is an inline image (`cid:`);
+Graph does not expose the Outlook signature, so nothing is appended to a body.
 
 ⚠️ This module WRITES to the person's mailbox: archive/trash/move, and
 `outlook_compose` (a draft, or a real send). The default of `outlook_message` is
@@ -42,6 +50,9 @@ _OPS_ERROR = ("op must be 'search', 'get', 'attachment', 'drafts', 'folders', "
               "'archive', 'trash' or 'move'")
 #: The well-known folders the moving ops go to (`mail.py`: id or well-known name).
 _DESTINATIONS = {"archive": "archive", "trash": "deleteditems"}
+#: Ceiling of an HTML body read from `html_source` — far above any real email, far
+#: below Graph's 4 MB request.
+_HTML_MAX_BYTES = 1024 * 1024
 
 
 def _adresse(r: Optional[dict]) -> Optional[str]:
@@ -85,7 +96,8 @@ def _dossier(f: dict) -> dict:
 def _attachments(sources: Optional[list], plafond: int) -> list[dict]:
     """The `source` refs (`file_source`: drive, gmail, url, project_file) as the bytes
     `MailClient.create_draft` takes — resolved server-side, each bounded to what Graph
-    accepts inline, BEFORE anything is written."""
+    accepts inline, BEFORE anything is written. A ref's `content_id` goes to the lib,
+    which makes it an inline attachment and checks it (before any write too)."""
     out = []
     for i, src in enumerate(sources or ()):
         try:
@@ -94,9 +106,48 @@ def _attachments(sources: Optional[list], plafond: int) -> list[dict]:
             raise bad(f"attachment #{i + 1} could not be read ({e}). Outlook attaches "
                       f"files up to {plafond // (1024 * 1024)} MB each. Nothing was "
                       "written.")
-        out.append({"name": os.path.basename(rf.filename or "") or f"attachment-{i + 1}",
-                    "content_type": rf.mime, "content_bytes": rf.data})
+        piece = {"name": os.path.basename(rf.filename or "") or f"attachment-{i + 1}",
+                 "content_type": rf.mime, "content_bytes": rf.data}
+        if src.get("content_id") is not None:
+            piece["content_id"] = src["content_id"]
+        out.append(piece)
     return out
+
+
+def _check_one_body(body: Optional[str], html: Optional[str],
+                    html_source: Optional[dict]) -> None:
+    """Exactly one of the three ways to give the body — two would leave one unsaid."""
+    donnes = [nom for nom, v in (("body", body), ("html", html),
+                                 ("html_source", html_source)) if v is not None]
+    if len(donnes) != 1:
+        raise bad("Give exactly one of `body` (markdown), `html` (HTML sent as is) or "
+                  f"`html_source` (a ref to an HTML file) — got "
+                  f"{', '.join(f'`{n}`' for n in donnes) or 'none'}. Nothing was written.")
+    if html is not None and not html.strip():
+        raise bad("`html` is empty. Nothing was written.")
+
+
+def _body_html(body: Optional[str], html: Optional[str],
+               html_source: Optional[dict]) -> str:
+    """The HTML that goes to Graph: `body` rendered from markdown, `html` untouched,
+    or the UTF-8 text of `html_source`, untouched."""
+    if body is not None:
+        return markdown_html(body)
+    if html is not None:
+        return html
+    try:
+        rf = file_source.resolve(html_source, max_bytes=_HTML_MAX_BYTES)
+    except file_source.FileSourceError as e:
+        raise bad(f"`html_source` could not be read ({e}). An HTML body is limited to "
+                  f"{_HTML_MAX_BYTES // (1024 * 1024)} MB. Nothing was written.")
+    try:
+        texte = rf.data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise bad(f"`html_source` ({rf.filename}, {rf.mime}) is not UTF-8 text: give the "
+                  "HTML file itself, encoded in UTF-8. Nothing was written.") from None
+    if not texte.strip():
+        raise bad(f"`html_source` ({rf.filename}) is empty. Nothing was written.")
+    return texte
 
 
 def register(mcp: FastMCP) -> None:
@@ -174,8 +225,9 @@ def register(mcp: FastMCP) -> None:
           (recoverable).
         - **"move"** — ⚠️ WRITES: moves `message_ids` to `destination` (a folder id,
           or `inbox`, `archive`, `deleteditems`, `junkemail`…).
-        ⚠️ A moved message gets a NEW id: the answer gives `{id, new_id}` for each —
-        use `new_id` afterwards, the old one no longer exists.
+        A moved message KEEPS its id (oto asks Outlook for immutable ids): the answer
+        gives `{id, new_id}` for each, equal — unless `id` came in Outlook's older
+        format, then `new_id` is its stable form: use `new_id` afterwards.
 
         Writing an email (draft, reply, send) is `outlook_compose`.
 
@@ -282,7 +334,7 @@ def register(mcp: FastMCP) -> None:
             except (file_content.MediaUnavailable, file_content.SpreadsheetError) as e:
                 raise bad(str(e)) from None
 
-        # ---- writes: every one is a move, which gives a new id ------------------
+        # ---- writes: every one is a move (the id is immutable) -------------------
         refuse_ignored(op, query=query, folder=folder, unread=unread,
                        message_id=message_id, attachment_id=attachment_id,
                        filename=filename)
@@ -296,7 +348,9 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def outlook_compose(
-        body: str,
+        body: Optional[str] = None,
+        html: Optional[str] = None,
+        html_source: Optional[dict] = None,
         mode: Literal["draft", "send"] = "draft",
         to: Optional[list[str]] = None,
         cc: Optional[list[str]] = None,
@@ -316,15 +370,41 @@ def register(mcp: FastMCP) -> None:
 
         A new message needs `to` (and usually `subject`). A reply is `reply_to=<message
         id>`: Outlook sets the recipients and the subject itself and quotes the original
-        below your text; `reply_all=True` answers every recipient. `to`, `cc`, `bcc`,
-        `subject` and `attachments` are refused on a reply.
+        below your text; `reply_all=True` answers every recipient. `to`, `cc`, `bcc` and
+        `subject` are refused on a reply; `attachments` (inline images included) are
+        accepted.
 
-        `body` is written in markdown and sent as HTML (the `gmail_compose` rendering).
+        **The body — exactly one of three.** `body` is markdown, rendered as HTML (the
+        `gmail_compose` rendering): the choice for an ordinary message. `html` is an
+        HTML body sent AS IS — no markdown pass, no rewriting, no cleanup: use it when
+        the layout matters (a branded email, a newsletter, styled tables), or to send
+        an HTML file someone prepared. `html_source` is the same, read from a file: a
+        `source` ref (same kinds as `attachments`) whose content is the HTML, UTF-8, up
+        to 1 MB. ⚠️ Outlook renders HTML with Word's engine, which ignores much modern
+        CSS: before writing HTML for Outlook, read the oto guide "Mails HTML compatibles
+        Outlook" (`oto_guide op=read slug=outlook-html`).
+
+        **Images in the body**: an attachment with a `content_id` (e.g.
+        `{"kind":"project_file","project_id":…,"file_id":…,"content_id":"logo"}`) is an
+        INLINE image, shown where the HTML says `<img src="cid:logo">` — not a link to a
+        file; the id is unique in the message, without `<>` or spaces. A PDF or any other
+        file stays an ordinary attachment (no `content_id`).
+
         **No signature is appended**: Microsoft Graph does not expose the Outlook
-        signature — write the sign-off in `body` if one is wanted.
+        signature — write the sign-off in the body if one is wanted.
+
+        The answer gives `kind`, the message's `id` and its `webLink` (opens it in
+        Outlook on the web): the draft's, for the person to review; once sent, the copy
+        in Sent Items, which keeps the same `id`. Sending is asynchronous: when that copy
+        is not visible yet, `webLink` is null and `note` says so — the mail still LEFT.
 
         Args:
-            body: the message, in markdown.
+            body: the message, in markdown — or `html` / `html_source`, not several.
+            html: the message as HTML, sent exactly as given (a reply too: it goes
+                above the quoted message).
+            html_source: a `source` ref to the HTML file (`{"kind":"project_file",
+                "project_id":…,"file_id":…}`, `{"kind":"url","url":…}`, drive,
+                gmail), UTF-8, ≤ 1 MB, sent exactly as read.
             mode: "draft" (default) saves for human review; "send" delivers it now.
             to: recipient addresses — a new message only.
             cc: carbon-copy addresses — a new message only.
@@ -332,35 +412,38 @@ def register(mcp: FastMCP) -> None:
             subject: the subject line — a new message only.
             reply_to: id of the message to reply to (from outlook_message).
             reply_all: with `reply_to`, answer every recipient (default False).
-            attachments: files to attach to a new message, as `source` refs oto
+            attachments: files to attach (a new message or a reply), as `source` refs oto
                 resolves server-side, up to 3 MB each: `{"kind":"drive","file_id":…}`,
                 `{"kind":"gmail","message_id":…,"filename":…}`, `{"kind":"url","url":…}`
                 (e.g. a signed URL from `oto_upload_url`), `{"kind":"project_file",
-                "project_id":…,"file_id":…}`.
+                "project_id":…,"file_id":…}`. Add `"content_id":"<id>"` to make one an
+                inline image of the body (`<img src="cid:<id>">`).
         """
         if mode not in ("draft", "send"):
             raise bad("mode must be 'draft' or 'send'.")
-        html = markdown_html(body)
+        _check_one_body(body, html, html_source)
         if reply_to:
-            for nom, valeur in (("to", to), ("cc", cc), ("bcc", bcc), ("subject", subject),
-                                ("attachments", attachments)):
+            for nom, valeur in (("to", to), ("cc", cc), ("bcc", bcc), ("subject", subject)):
                 if valeur:
                     raise bad(f"`{nom}` is not accepted on a reply: Outlook sets the "
-                              "recipients and the subject of a reply itself, and "
-                              "attachments go on a new message only. Nothing was written.")
+                              "recipients and the subject of a reply itself. Nothing "
+                              "was written.")
+            contenu = _body_html(body, html, html_source)
+            pieces = _attachments(attachments, MAX_INLINE_ATTACHMENT)
             c = _client()
-            brouillon = _run(lambda: c.create_reply_draft(reply_to, body_html=html,
-                                                          reply_all=reply_all))
+            brouillon = _run(lambda: c.create_reply_draft(
+                reply_to, body_html=contenu, reply_all=reply_all, attachments=pieces))
         else:
             if reply_all:
                 raise bad("`reply_all` goes with `reply_to` (the message to answer).")
             if not to:
                 raise bad("`to` is required for a new message (or `reply_to` to answer "
                           "one). Nothing was written.")
+            contenu = _body_html(body, html, html_source)
             pieces = _attachments(attachments, MAX_INLINE_ATTACHMENT)
             c = _client()
             brouillon = _run(lambda: c.create_draft(
-                to=to, subject=subject or "", body_html=html, cc=cc or (),
+                to=to, subject=subject or "", body_html=contenu, cc=cc or (),
                 bcc=bcc or (), attachments=pieces))
         out = {"id": brouillon.get("id"), "subject": brouillon.get("subject"),
                "to": [_adresse(r) for r in brouillon.get("toRecipients") or []],
@@ -374,6 +457,18 @@ def register(mcp: FastMCP) -> None:
             raise bad(f"The draft {brouillon.get('id')} was SAVED but sending it "
                       f"failed: {e}. Nothing left the mailbox; retry the send, or "
                       "leave the draft for the person.") from e
-        # The draft has moved to Sent Items: its id and link no longer designate it.
-        return {"kind": "sent", "draft_id": envoye, "subject": out["subject"],
-                "to": out["to"], "cc": out["cc"]}
+        envoi = {"kind": "sent", "id": envoye, "subject": out["subject"],
+                 "to": out["to"], "cc": out["cc"]}
+        # The draft's immutable id designates its copy in Sent Items, once it is there.
+        try:
+            copie = _run(lambda: c.sent_message(envoye))
+        except Exception as e:  # noqa: BLE001 — the mail LEFT: said, not raised
+            return {**envoi, "webLink": None,
+                    "note": f"The mail LEFT, but reading its copy in Sent Items failed "
+                            f"({e}): no link to give."}
+        if copie is None:
+            return {**envoi, "webLink": None,
+                    "note": "The mail LEFT; its copy in Sent Items was not visible yet "
+                            "(sending is asynchronous), hence no link. It keeps this `id`."}
+        return {**envoi, "webLink": copie.get("webLink"),
+                "sentDateTime": copie.get("sentDateTime")}
