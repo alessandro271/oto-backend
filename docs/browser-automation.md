@@ -42,7 +42,10 @@ connecteur d'**API privée cookie-bound**. État réel (2026-06-24) :
   login à moitié taille, illisible ; appel sans taille ⇒ `LIVE_VIEW_VIEWPORT` (1280×800).
   **Sécu** : la session émise est liée au `sub`
   (`_PENDING`, anti-IDOR — `finalize` refuse un Context tiers) et **aucune exception
-  brute n'est renvoyée** (l'URL CDP porte `?apiKey=…` → loggué, message propre). L'état
+  brute n'est renvoyée** (l'URL CDP porte `?apiKey=…` → loggué, message propre). ⚠️ Tout
+  branchement CDP passe par `browserbase.connect_cdp` (F-049) : Playwright recopie l'URL
+  entière dans son message d'échec, `connect_cdp` relève une `BrowserbaseError` masquée,
+  sans chaînage — jamais `p.chromium.connect_over_cdp` nu. L'état
   (`configured` + `session_set_at`) sort dans `me.providers[name]` via `status_for`
   (les connecteurs `secret_kind="cookie"`) — ADR 0026 avait retiré `me.crunchbase` sans
   jamais câbler ce relais (UX cassée bout-en-bout, corrigé 2026-06-30). Déconnexion =

@@ -35,6 +35,8 @@ blue
 dependencies = [
     "oto-core[anonymize] @ git+https://github.com/otomata-tech/oto-core.git@v9.9.9",
 ]
+--- /opt/oto-mcp-blue/scripts/installer_bac_a_sable.py
+# installateur du tag
 --- /opt/oto-mcp-blue/start-encrypted.sh
 #!/bin/bash
 exec /opt/oto-mcp-blue/.venv/bin/oto-mcp
@@ -46,6 +48,8 @@ exec /opt/oto-mcp-blue/.venv/bin/oto-mcp
 dependencies = [
     "oto-core[anonymize] @ git+https://github.com/otomata-tech/oto-core.git@v9.9.9",
 ]
+--- /opt/oto-mcp-green/scripts/installer_bac_a_sable.py
+# installateur du tag
 --- /opt/oto-mcp-green/start-encrypted.sh
 #!/bin/bash
 exec /opt/oto-mcp-blue/.venv/bin/oto-mcp

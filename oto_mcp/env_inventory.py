@@ -259,10 +259,11 @@ _REGLAGES: tuple[Variable, ...] = (
              ("oto_mcp/config.py:108",)),
     Variable("OTO_FUNCTIONS_SANDBOX_DIR", Classe.REGLAGE, "",
              "Répertoire du bac à sable des fonctions (ADR 0073), posé par "
-             "`scripts/installer_bac_a_sable.py`. Absente : l'instance n'exécute pas de "
-             "fonction — `oto_function` op=run/test/publish rend 503 "
-             "`sandbox_unavailable`, le reste répond.",
-             ("oto_mcp/functions/executor.py:60",)),
+             "`scripts/installer_bac_a_sable.py`. Absente : `<arbre>/.bac-a-sable`, que le "
+             "déploiement bleu/vert pose dans l'arbre de chaque couleur ; s'il n'existe "
+             "pas non plus, l'instance n'exécute pas de fonction — `oto_function` et les "
+             "recettes-code rendent 503 `sandbox_unavailable`, le reste répond.",
+             ("oto_mcp/functions/executor.py:66",)),
     Variable("OTO_ABONNEMENT_OUVERT_A_TOUS", Classe.REGLAGE, "",
              "Agents sur l'abonnement Claude de la personne : ouverts à TOUT compte "
              "de l'instance (`1`, `true`, `yes`, `on`). Absente, vide ou un non = "

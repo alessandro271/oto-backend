@@ -19,6 +19,7 @@ import psycopg
 logger = logging.getLogger(__name__)
 
 from .. import deprecations
+from ..journal_secrets import masquer_urls
 from . import journal_calls, journal_jour
 from ._conn import _connect
 from .index_releve import PREDICAT_OUVERTURE
@@ -65,7 +66,16 @@ def insert_tool_call(row: dict) -> None:
     args, ok, error, duration_ms) + corrélation OTO-LOCALE (session_id, run_id ;
     ADR 0017, absents du contrat canonique → enrichis par le sink). `kind` discrimine
     l'événement ('mcp' défaut / 'rest' / 'connector', ADR 0017 « un seul flux »).
-    Best-effort côté middleware — jamais bloquant."""
+    Best-effort côté middleware — jamais bloquant.
+
+    `error` passe par `journal_secrets.masquer_urls` ICI, au seul point d'écriture
+    commun à tous les écrivains (middleware MCP, gestes REST, worker…) : un texte
+    d'erreur amont recopie parfois une URL avec sa clé (F-049 : Playwright et la
+    `connectUrl` Browserbase `?apiKey=…`), et `tool_calls.error` est lu par les
+    admins d'org."""
+    error = row.get("error")
+    if error:
+        error = masquer_urls(str(error))
     with _connect() as conn:
         conn.execute(
             """
@@ -82,7 +92,7 @@ def insert_tool_call(row: dict) -> None:
                 row.get("server") or "oto", row.get("kind") or "mcp",
                 row.get("sub"), row.get("email"),
                 row["tool"], json.dumps(row.get("args")) if row.get("args") is not None else None,
-                bool(row.get("ok")), row.get("error"), row.get("duration_ms"),
+                bool(row.get("ok")), error, row.get("duration_ms"),
                 row.get("session_id"), row.get("run_id"), row.get("org_id"),
                 row.get("client_id"), row.get("sentry_event_id"),
                 # #117 — discriminant par appel. `request_id` et `effective_sub` sont

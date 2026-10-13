@@ -210,6 +210,20 @@ bg_install() {
   fi
   UV_PYTHON_DOWNLOADS=never uv sync --frozen --quiet || return 1
   bg_log "installé par le verrou : uv.lock $(sha256sum uv.lock | cut -c1-12)"
+  # Le bac à sable des fonctions et des recettes-code (ADR 0073, #1202), dans l'arbre de
+  # la couleur : il suit le tag comme le code (`executor.DEFAUT`). Versions épinglées et
+  # vérifiées par empreinte ; rejouable — une pièce conforme déjà posée n'est pas
+  # retéléchargée, le réseau ne sert donc qu'à la première pose et à un changement de
+  # version. Se termine par une exécution de contrôle. Un échec arrête l'installation :
+  # une couleur qui servirait `sandbox_unavailable` en silence est une divergence muette.
+  # Le service ne l'écrit jamais (l'arbre appartient à root) : elle reste en lecture seule.
+  if [ -f scripts/installer_bac_a_sable.py ]; then
+    .venv/bin/python scripts/installer_bac_a_sable.py "${tree}/.bac-a-sable" || {
+      bg_log "ERREUR : pose du bac à sable dans ${tree}/.bac-a-sable en échec"
+      return 1
+    }
+    bg_log "bac à sable posé : ${tree}/.bac-a-sable"
+  fi
   BG_HEAD=$(git -C "$tree" rev-parse HEAD)
   # --- Coordonnée de ce qui va TOURNER (oto#33). Écrite par celui qui installe,
   # --- dans l'arbre qu'il vient d'écrire, AVANT que le processus ne démarre : le

@@ -10,12 +10,22 @@ model": a model connector (jev, lighton) reads, but a recipe does not call it
 **What reads it**: `oto_recipe`. A "pull" recipe calls ONLY tools declared
 here — an undeclared tool is refused, never presumed a reader: the default is refusal.
 A tool multiplexed by `op` is only declared if ALL its ops read.
+
+**Its counterpart, `ENVOI`**: a tool that acts AT A THIRD PARTY or in the person's name
+(a message, an invitation, a publication) declares it too. An MCP client authorizes
+TOOLS, not operations: "always allow" on a reader must never allow a send — which is
+why such a send lives in its own tool, never as an `op` of a reader (oto-backend#1189).
+Until `deprecations.RETRAIT_OPS_ENVOI`, a reader that still serves its old send ops is
+itself declared `ENVOI`: it sends.
+`destructiveHint`/`openWorldHint` are the protocol's defaults for a tool that is not
+read-only; they are WRITTEN here so that the client reads them, not infers them.
 """
 from __future__ import annotations
 
 from mcp.types import ToolAnnotations
 
 LECTURE = ToolAnnotations(readOnlyHint=True)
+ENVOI = ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=True)
 
 
 def en_lecture(tool) -> bool:

@@ -119,8 +119,11 @@ code (#1202) : `oto_recipe` le sert aux recettes `kind: "code"` (`docs/recettes.
   sont attendus sur la boucle, sans fil ni SQL dans ce module.
 
 ⚠️ **Auteur ≠ appelant** : le code d'une recette publiée tourne avec les droits de qui
-l'exécute, pas de qui l'a écrite. Tant que la règle de publication n'est pas tranchée
-(#1202), le pont n'appelle que des outils en lecture.
+l'exécute, pas de qui l'a écrite. C'est pourquoi l'épreuve et la publication d'une
+recette-code restent à la plateforme (#1202). Le pont en lecture
+(`appeleur_en_lecture`) n'appelle que des outils en lecture ; une recette-code y ajoute
+les tableaux et, depuis le lot 3, les écritures chez un tiers qu'elle DÉCLARE, par une
+liste fermée (`recipes/ecritures.py`, `docs/recettes.md`).
 
 ## Où vit le bac à sable
 
@@ -130,8 +133,23 @@ l'exécute, pas de qui l'a écrite. Tant que la règle de publication n'est pas 
 ne sert qu'à l'installation ; le répertoire peut ensuite passer en lecture seule.
 L'installation se termine par une exécution de contrôle.
 
-Absente, l'instance n'exécute pas de fonction : `run`/`test`/`publish` rendent 503
-`sandbox_unavailable`, le reste répond. La CI l'installe avant la suite (sinon les bancs
+**En production, c'est le déploiement qui le pose** : `bg_install`
+(`deploy/oto-mcp-bluegreen.sh`, commun à notre box et aux instances cibles) lance
+l'installateur dans l'arbre de la couleur qu'il installe, `<arbre>/.bac-a-sable`, après
+`uv sync`. Le bac à sable suit donc le TAG, comme le code : une couleur porte le Pyodide
+de son `deno.lock`, et un retour arrière retrouve le sien. Sans `OTO_FUNCTIONS_SANDBOX_DIR`,
+l'exécuteur prend ce répertoire s'il existe (`executor.DEFAUT`). Rejouable : le réseau ne
+sert qu'à la première pose dans une couleur et à un changement de version. Un échec
+(réseau, empreinte, exécution de contrôle) **arrête l'installation** — la couleur n'est
+pas démarrée, l'ancienne reste en service : une couleur qui rendrait
+`sandbox_unavailable` en silence est une divergence muette. L'arbre appartient à root,
+le service le lit sans pouvoir l'écrire (vérifié : le bac à sable s'exécute en lecture
+seule). ⚠️ La box doit joindre `github.com` (Deno), `registry.npmjs.org` (Pyodide) et
+`files.pythonhosted.org` (roues) au moment du déploiement, et être en `x86_64`.
+
+Absent (ni variable ni `<arbre>/.bac-a-sable`), l'instance n'exécute pas de fonction :
+`run`/`test`/`publish` d'une fonction et l'épreuve, la publication et l'exécution d'une
+recette-code rendent 503 `sandbox_unavailable`, le reste répond. La CI l'installe avant la suite (sinon les bancs
 de l'exécuteur ÉCHOUENT en CI ; sur un poste sans bac à sable ils sont passés en le
 disant).
 

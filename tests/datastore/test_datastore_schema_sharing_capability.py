@@ -233,3 +233,21 @@ def test_le_datastore_na_plus_aucune_route_ecrite_a_la_main():
     routes = ard.make_routes(None, _noop, lambda *a, **k: None, lambda *a, **k: None,
                              lambda o: {}, _noop)
     assert not [r for r in routes if r.path.startswith("/api/datastore/")]
+
+
+# --- F-016 : pas d'oracle d'existence de compte -----------------------------------
+
+@pytest.mark.parametrize("cle", ["me.datastore.share", "me.datastore.unshare"])
+def test_sans_gouvernance_le_refus_ne_dit_pas_si_ladresse_a_un_compte(
+        monkeypatch, gouvernance, cle):
+    """F-016 : le destinataire se résolvait AVANT la gouvernance. Un appelant sans
+    droit sur le tableau lisait `forbidden` pour une adresse qui porte un compte et
+    un 404 « no oto user with email … » pour une autre — un oracle d'existence de
+    compte sur toute la plateforme. Même refus pour les deux, désormais."""
+    gouvernance["can_govern"] = False
+    monkeypatch.setattr(dsh.ownership, "grant", lambda *a, **k: pytest.fail("accordé !"))
+    monkeypatch.setattr(dsh.ownership, "revoke", lambda *a: pytest.fail("retiré !"))
+    avec_compte = call(cle, path_params=NS, body={"email": "sarah@x.fr"})
+    sans_compte = call(cle, path_params=NS, body={"email": "inconnu@x.fr"})
+    assert avec_compte == sans_compte
+    assert avec_compte[0] == 403 and avec_compte[1]["error"] == "forbidden"

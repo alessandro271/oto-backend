@@ -90,11 +90,11 @@ class Unshared(BaseModel):
 def _recipient(email: str) -> dict:
     """Le destinataire, ou le refus tel quel.
 
-    ⚠️ L'ordre des gardes est celui de la route d'avant : le destinataire est résolu
-    AVANT la vérification de gouvernance. Un appelant sans droit sur le tableau peut
-    donc distinguer « cet email a un compte oto » de « il n'en a pas ». Conservé à
-    l'identique — une migration de plomberie ne change pas le comportement observable ;
-    l'inversion est un correctif à part, à trancher pour ses propres raisons.
+    ⚠️ Appelée APRÈS la vérification de gouvernance (`govern_ns`), jamais avant. La
+    route d'avant résolvait le destinataire d'abord : un appelant sans aucun droit sur
+    le tableau distinguait « cet email a un compte oto » de « il n'en a pas » (F-016,
+    oracle d'existence de compte). Le refus nommé ci-dessous ne parle plus qu'à qui
+    gouverne le tableau — celui-là doit savoir à qui il partage.
     """
     porteurs = db.get_users_by_email(email)
     if not porteurs:
@@ -138,9 +138,11 @@ def _share(ctx: ResolvedCtx, inp: ShareInput) -> dict:
     if permission not in ("read", "write"):
         # Le message EST le code ici — forme héritée de la route, gardée telle quelle.
         raise AuthzDenied(400, "permission must be 'read' or 'write'")
+    # Gouvernance AVANT le destinataire (F-016) : sans droit sur le tableau, le même
+    # refus quelle que soit l'adresse — sinon la route dit si elle porte un compte.
+    ns_id = govern_ns(ctx.sub, inp.datastore)
     recipient = _destinataire(inp.email, inp.sub)
     email = (inp.email or "").strip() or recipient["sub"]
-    ns_id = govern_ns(ctx.sub, inp.datastore)
     ownership.grant(ownership.TYPE_RESSOURCE_DATASTORE, str(ns_id), "user", recipient["sub"],
                     permission, granted_by=ctx.sub)
     return {"ok": True, "datastore": inp.datastore, "shared_with": email,
@@ -148,9 +150,9 @@ def _share(ctx: ResolvedCtx, inp: ShareInput) -> dict:
 
 
 def _unshare(ctx: ResolvedCtx, inp: UnshareInput) -> dict:
+    ns_id = govern_ns(ctx.sub, inp.datastore)  # avant le destinataire (F-016)
     recipient = _destinataire(inp.email, inp.sub)
     email = (inp.email or "").strip() or recipient["sub"]
-    ns_id = govern_ns(ctx.sub, inp.datastore)
     if not ownership.revoke(ownership.TYPE_RESSOURCE_DATASTORE, str(ns_id), "user", recipient["sub"]):
         raise AuthzDenied(404, f"no active share for {email} on {inp.datastore}")
     return {"ok": True, "datastore": inp.datastore, "removed": email}

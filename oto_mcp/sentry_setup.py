@@ -84,7 +84,29 @@ def _before_send(event, hint):
         return None
     _redact_sensitive_query(event)
     _redact_hook_request(event)
+    _redact_urls_in_messages(event)
     return event
+
+
+def _redact_urls_in_messages(event) -> None:
+    """Le message d'une exception (et d'une ligne de journal relayée) peut recopier
+    une URL avec sa clé — Playwright y écrit la `connectUrl` Browserbase
+    `?apiKey=…` (F-049). Même masque que `tool_calls.error`
+    (`journal_secrets.masquer_urls`)."""
+    from .journal_secrets import masquer_urls
+
+    if not isinstance(event, dict):
+        return
+    for exc in ((event.get("exception") or {}).get("values") or []):
+        if isinstance(exc, dict) and isinstance(exc.get("value"), str):
+            exc["value"] = masquer_urls(exc["value"])
+    logentry = event.get("logentry")
+    if isinstance(logentry, dict):
+        for champ in ("message", "formatted"):
+            if isinstance(logentry.get(champ), str):
+                logentry[champ] = masquer_urls(logentry[champ])
+    if isinstance(event.get("message"), str):
+        event["message"] = masquer_urls(event["message"])
 
 
 def _before_send_transaction(event, hint):
