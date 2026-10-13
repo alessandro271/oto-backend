@@ -304,6 +304,14 @@ def empreinte_de_couche(title: str, description: str, body_md: str) -> str:
     return hashlib.sha256(brut.encode("utf-8")).hexdigest()
 
 
+def guide_rev(title: Optional[str], description: Optional[str],
+              body_md: Optional[str]) -> str:
+    """Jeton de version d'un guide, dérivé de son CONTENU — l'ETag que `doc_rev` rend
+    pour une page, sur les trois champs qu'une écriture de guide pose. Ni colonne de
+    version ni migration ; deux écritures au même contenu = même rev."""
+    return empreinte_de_couche(title or "", description or "", body_md or "")[:16]
+
+
 class SemisConflitDeLivraison(ValueError):
     """Le slug d'un guide plateforme est occupé par une couche `init` (readme injecté).
 
@@ -413,6 +421,55 @@ def aligner_guide_db(scope: str, owner_id: str, slug: str, body_md: str,
             return False
         _ecrire_le_semis(conn, courant["id"], title, description, body_md, seed_sha256)
         return True
+
+
+class GuideConflict(Exception):
+    """L'édition optimiste d'un guide a échoué : il a changé depuis la lecture de
+    l'appelant (rev attendue ≠ rev courante) — le pendant de `DocConflict`."""
+    def __init__(self, current_rev: str):
+        self.current_rev = current_rev
+        super().__init__("guide modifié depuis la lecture")
+
+
+def patch_guide_db(scope: str, owner_id: str, slug: str, appliquer, *,
+                   expected_rev: Optional[str] = None) -> Optional[dict]:
+    """Réécrit le CORPS d'un guide ON-DEMAND existant à partir de son corps actuel :
+    `appliquer(corps actuel) -> nouveau corps`. Titre et description ne bougent pas.
+
+    Lecture et écriture dans la MÊME transaction, ligne verrouillée (`FOR UPDATE`) :
+    l'édition partielle d'un guide est un lire-modifier-écrire, et deux ajouts
+    simultanés au même journal ne doivent pas se perdre l'un l'autre — le second
+    attend le premier et s'applique à ce qu'il a écrit. `expected_rev` (le `rev` lu
+    par l'appelant) ajoute le contrôle optimiste : `GuideConflict` si le guide a
+    changé depuis, sous le même verrou, donc sans fenêtre entre contrôle et écriture.
+
+    `appliquer` peut lever (cible introuvable, corps trop lourd…) : rien n'est alors
+    écrit. Renvoie la ligne écrite, ou **`None` s'il n'y a pas de guide on-demand à
+    cette clé** — jamais de création ici, et une couche `init` n'est pas touchée."""
+    with _connect() as conn:
+        courant = conn.execute(
+            f"SELECT {_COLS} FROM nodes WHERE public_id = {_PID} "
+            "AND props->>'delivery' = 'on-demand' FOR UPDATE",
+            (scope, str(owner_id), slug),
+        ).fetchone()
+        if courant is None:
+            return None
+        rev = guide_rev(courant["title"], courant["description"], courant["body_md"])
+        if expected_rev is not None and expected_rev != rev:
+            raise GuideConflict(rev)
+        body_md = appliquer(courant["body_md"])
+        # La prose seule, comme `set_guide_db` à la mise à jour : `embed_dirty` suit
+        # le corps, les projections sont refaites dans la transaction.
+        row = conn.execute(
+            "UPDATE nodes SET props = props || jsonb_build_object("
+            "      'body_md', %s::text, 'embed_dirty', TRUE), "
+            "  updated_at = NOW() "
+            f"WHERE id = %s RETURNING {_COLS}",
+            (body_md, courant["id"]),
+        ).fetchone()
+        _maintain_projections(conn, row,
+                              body_md if body_md != courant["body_md"] else None)
+        return dict(row)
 
 
 def delete_guide_db(scope: str, owner_id: str, slug: str) -> bool:
