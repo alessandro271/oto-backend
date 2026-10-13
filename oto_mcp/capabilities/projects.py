@@ -523,22 +523,33 @@ def _exiger_cible_dans_la_portee(sub: str, row: dict, target_type: str, ref: str
     procédure de la plateforme, pour qui en devinait le numéro.
 
     Refus 404, MÊME message pour « n'existe pas » et « existe ailleurs » : distinguer
-    les deux dirait qu'il existe."""
+    les deux dirait qu'il existe. Seule exception : une cible que le lieur LIT déjà
+    (typiquement, celle d'une autre org dont il est aussi membre) — son existence ne
+    lui apprend rien ; on lui dit pourquoi le lien est refusé et quoi faire à la place
+    (la copier dans l'org du projet, ou la partager à cette org), en 403
+    `target_out_of_scope`."""
     if not str(ref).isdigit():
         return
     rtype = _RTYPE_CIBLE[target_type]
-    ok = int(ref) in db.refs_dans_la_portee(int(row["id"]), target_type, [ref])
-    if ok:
-        try:
-            ok = ownership.can_access(sub, rtype, str(ref), "read")
-        except ValueError as e:
-            # Une procédure sans propriétaire (`ownership._guide_owner`) est une
-            # incohérence de données : elle se signale, et ne se lie pas — refus 404
-            # comme une cible inconnue, pas une 500.
-            logger.warning("link %s #%s : propriétaire illisible (%s)", target_type, ref, e)
-            ok = False
-    if ok:
+    dans_la_portee = int(ref) in db.refs_dans_la_portee(int(row["id"]), target_type, [ref])
+    try:
+        lisible = ownership.can_access(sub, rtype, str(ref), "read")
+    except ValueError as e:
+        # Une procédure sans propriétaire (`ownership._guide_owner`) est une
+        # incohérence de données : elle se signale, et ne se lie pas — refus 404
+        # comme une cible inconnue, pas une 500.
+        logger.warning("link %s #%s : propriétaire illisible (%s)", target_type, ref, e)
+        lisible = False
+    if dans_la_portee and lisible:
         return
+    if lisible:
+        quoi = "Ce tableau" if target_type == "tableau" else "Cette procédure"
+        _require(False, "target_out_of_scope",
+                 f"{quoi} (#{ref}) n'appartient pas à l'org du projet : un lien le "
+                 "montrerait à tout le projet, y compris à qui ne le lit pas. "
+                 "Copie-le dans cette org, ou partage-le à l'org du projet "
+                 "(`oto_resource op=share audience=org`), puis lie la copie ou le partage.",
+                 403)
     if target_type == "tableau":
         _require(False, "unknown_tableau",
                  f"Aucun tableau « {ref} » dans le datastore du projet.", 404)

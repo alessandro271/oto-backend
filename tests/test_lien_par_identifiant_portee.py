@@ -347,3 +347,18 @@ def test_le_slot_par_le_vrai_chemin_ne_lie_ni_ne_schematise_un_tableau_d_ailleur
     assert (e.value.status, e.value.code) == (404, "unknown_tableau")
     assert db.get_datastore_by_id(monde["ns_v"])["schema"] in (None, {})
     assert not any(l.get("slot") == "vivier" for l in db.list_project_links(monde["projet"]))
+
+
+def test_une_cible_lisible_d_une_autre_org_est_refusee_en_disant_quoi_faire(monde):
+    """Membre de deux orgs : lier le tableau de l'autre org reste refusé (un lien le
+    montrerait à tout le projet), mais le refus le dit et propose de copier ou de
+    partager — il ne fait pas croire que le tableau n'existe pas."""
+    from oto_mcp import db, org_store
+    from oto_mcp.capabilities._types import AuthzDenied
+    org_c = org_store.create_org(f"c_{uuid.uuid4().hex[:8]}", created_by=monde["moi"])
+    org_store.add_org_member(org_c, monde["moi"])
+    ns_c = db.create_datastore("org", str(org_c), "a-moi-ailleurs")
+    with pytest.raises(AuthzDenied) as e:
+        _link(monde, "tableau", ns_c)
+    assert (e.value.status, e.value.code) == (403, "target_out_of_scope")
+    assert "Copie" in str(e.value) and "partage" in str(e.value)

@@ -144,7 +144,11 @@ Partage/transfert via **`oto_resource`** (resource_type=`project` ajouté au dis
 > même message que pour un numéro inexistant) une cible hors de cette portée, ET une
 > cible que le lieur ne LIT pas — même quand elle appartient au propriétaire du projet :
 > écrire un projet n'est pas en être membre (un bénéficiaire extérieur d'un partage en
-> écriture liait les tableaux de l'org, puis les recopiait chez lui). Un lien posé avant
+> écriture liait les tableaux de l'org, puis les recopiait chez lui). Exception au même
+> message : une cible que le lieur LIT mais hors de la portée (le tableau d'une autre org
+> dont il est aussi membre) est refusée en 403 `target_out_of_scope`, qui dit quoi faire —
+> la copier dans l'org du projet, ou la partager à cette org ; l'existence ne lui apprend rien.
+> Un lien posé avant
 > la garde vers une cible qui existe ailleurs porte `hors_portee: true`, et l'audit le
 > dit « hors de la portée du projet » plutôt que « n'existe plus ». **La copie** (`op=copy`)
 > écarte, en le disant, tout tableau ou procédure que le COPIEUR ne lit pas
