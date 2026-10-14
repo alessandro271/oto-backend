@@ -20,6 +20,7 @@ from pydantic import BaseModel, field_validator
 
 from .. import db
 from . import usage
+from ..connectors import orphelins as connecteurs_orphelins
 from ._authz import PLATFORM_ADMIN
 from ._types import cap_limit, AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
@@ -337,7 +338,8 @@ def _call(ctx: ResolvedCtx, inp: CallInput) -> dict:
 
 class MonitoringInput(BaseModel):
     op: Literal["summary", "rest", "rest_calls", "connectors", "transport", "funnel",
-                "calls", "call", "runs", "run", "gaps", "tool_quality", "agents_en_echec"]
+                "calls", "call", "runs", "run", "gaps", "tool_quality", "agents_en_echec",
+                "connecteurs_orphelins"]
     days: Optional[int] = None            # fenêtre (défaut : 7 ; funnel/gaps/tool_quality : 30)
     limit: Optional[int] = None           # calls/rest_calls (défaut = plafond 200) / runs (défaut 100)
     sub: Optional[str] = None             # summary/rest/rest_calls/calls : appelant (email ou sub)
@@ -387,6 +389,8 @@ _CHAMPS_LUS: dict[str, set[str]] = {
     "gaps": {"days"},
     "tool_quality": {"days"},
     "agents_en_echec": {"days", "org_id"},
+    # Un état présent de la base, pas une fenêtre : aucun filtre (#905).
+    "connecteurs_orphelins": set(),
 }
 
 
@@ -452,6 +456,8 @@ def _monitoring(ctx: ResolvedCtx, inp: MonitoringInput) -> dict:
         return {"agents": db.agents_en_echec(inp.days or 1, org_id=inp.org_id)}
     if inp.op == "gaps":
         return usage._gaps(ctx, usage.DaysInput(days=inp.days or 30))
+    if inp.op == "connecteurs_orphelins":
+        return connecteurs_orphelins.constat()
     return usage._tool_quality(ctx, usage.DaysInput(days=inp.days or 30))  # tool_quality
 
 
@@ -531,7 +537,13 @@ CAPABILITIES += [
             "green. Grouped by reason because three times the same fault is a bug to "
             "fix, while three different ones is a misconfigured agent — one count would "
             "read them alike. This is the lens a nightly report reads to say it in one "
-            "line. "
+            "line. / connecteurs_orphelins (no filter): the rows that NAME a connector "
+            "absent from the served catalog — member installations, removals, "
+            "activations, credentials, settings, live instances, org kits — per table "
+            "and per name (`lignes`). Such a row resolves nothing: an installation that "
+            "mounts no tool, a key nobody reads. Every table is listed, an empty one "
+            "included, so a zero reads as checked; `total` = 0 is the healthy state. "
+            "Read only: nothing is moved or deleted here. "
             "For raw signals use oto_admin_signal."),
         mcp="oto_admin_monitoring",
     ),

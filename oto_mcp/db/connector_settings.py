@@ -54,9 +54,21 @@ def list_connector_settings(key: Optional[str] = None, conn=None) -> list[dict]:
         params = (key,)
     sql += " ORDER BY scope_type, scope_id, connector, key"
     if conn is not None:
-        return [dict(r) for r in conn.execute(sql, params).fetchall()]
-    with _connect() as c:
-        return [dict(r) for r in c.execute(sql, params).fetchall()]
+        rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
+    else:
+        with _connect() as c:
+            rows = [dict(r) for r in c.execute(sql, params).fetchall()]
+    _signaler_orphelins(r["connector"] for r in rows)
+    return rows
+
+
+def _signaler_orphelins(noms) -> None:
+    """Un réglage qui nomme un connecteur absent du catalogue servi ne règle plus rien :
+    journalisé en erreur, jamais écarté en silence (#905). Les lignes restent telles
+    quelles."""
+    from ..connectors import orphelins
+
+    orphelins.signaler("connector_settings", noms)
 
 
 def set_connector_setting(scope_type: str, scope_id: str, connector: str, key: str,
@@ -119,6 +131,7 @@ def org_settings_for_key(org_id: str, key: str) -> dict:
         rows = conn.execute(
             "SELECT connector, value FROM connector_settings WHERE scope_type = 'org' "
             "AND scope_id = %s AND key = %s", (str(org_id), key)).fetchall()
+    _signaler_orphelins(r["connector"] for r in rows)
     return {r["connector"]: r["value"] for r in rows}
 
 

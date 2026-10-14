@@ -262,6 +262,10 @@ def exposed_connectors(org_id: Optional[int] = None) -> set[str]:
             "   OR (scope_type = 'tenant' AND scope_id = %s)",
             (str(org_id) if org_id is not None else "", slug or ""),
         ).fetchall()
+    # An activation naming a connector absent from the served catalog exposes nothing
+    # that exists: logged as an error, never dropped in silence (#905).
+    from . import orphelins
+    orphelins.signaler("connector_availability", (r["connector"] for r in rows))
     global_map: dict[str, bool] = {}
     override_map: dict[str, bool] = {}
     tenant_map: dict[str, bool] = {}

@@ -94,6 +94,10 @@ _LECTEURS_ADMIS = {
     # Ne résout rien : il lit l'instance d'une ligne tenant pour archiver les arêtes qui
     # la désignent, et vérifie que la ligne plateforme posée par le coffre est nommée.
     "export_perimetre/cles_du_primaire.py",
+    # #905 — le constat des références orphelines COMPTE les instances vivantes qui
+    # nomment un connecteur absent du catalogue (lecture seule, admin plateforme). Il ne
+    # résout rien : aucune cascade, aucun coffre, aucune autorisation ne passe par lui.
+    "connectors/orphelins.py",
 }
 
 # Dans le coffre, les SEULES fonctions admises à nommer une instance. Ce sont les

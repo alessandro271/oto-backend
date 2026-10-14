@@ -109,6 +109,7 @@ def list_selection(sub: str, org_id: int = 0) -> dict[str, str]:
             "SELECT connector, state FROM user_selected_connectors WHERE sub = %s AND org_id = %s",
             (sub, org_id),
         ).fetchall()
+    _signaler_orphelins(rows)
     return {r["connector"]: r["state"] for r in rows}
 
 
@@ -123,7 +124,16 @@ def list_selection_detail(sub: str, org_id: int = 0) -> dict[str, dict]:
             "WHERE sub = %s AND org_id = %s",
             (sub, org_id),
         ).fetchall()
+    _signaler_orphelins(rows)
     return {r["connector"]: {"state": r["state"], "origin": r["origin"]} for r in rows}
+
+
+def _signaler_orphelins(rows) -> None:
+    """A selection naming a connector absent from the served catalog mounts no tool:
+    logged as an error, never dropped in silence (#905). The rows are returned as read."""
+    from . import orphelins
+
+    orphelins.signaler("user_selected_connectors", (r["connector"] for r in rows))
 
 
 def list_removed(sub: str, org_id: int = 0) -> dict:

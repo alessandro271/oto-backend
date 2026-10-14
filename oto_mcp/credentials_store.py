@@ -1396,7 +1396,14 @@ def list_credentials(entity_type: str, entity_id: str) -> list[dict]:
             "WHERE entity_type = %s AND entity_id = %s ORDER BY connector, account",
             (entity_type, entity_id),
         ).fetchall()
-        return [{**dict(r), "meta": _public_meta(r["meta"])} for r in rows]
+    # Un credential qui nomme un connecteur absent du catalogue servi ne se résout plus :
+    # journalisé en erreur, jamais écarté en silence (#905). Un remote se définit par sa
+    # donnée (`meta.base_url`, cf. `set_credential`), pas par le registre : hors du compte.
+    from .connectors import orphelins
+    orphelins.signaler("connector_credentials",
+                       (r["connector"] for r in rows
+                        if not (r["meta"] or {}).get("base_url")))
+    return [{**dict(r), "meta": _public_meta(r["meta"])} for r in rows]
 
 
 def scan_vault_health() -> dict:
