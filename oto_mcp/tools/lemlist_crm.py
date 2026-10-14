@@ -28,6 +28,8 @@ THEIR data, so a user key is required, no platform quota.
 """
 from __future__ import annotations
 
+import html
+import re
 from typing import Literal, Optional
 
 from fastmcp import FastMCP
@@ -46,6 +48,57 @@ def _need(**kwargs) -> None:
     missing = [k for k, v in kwargs.items() if not v]
     if missing:
         raise _bad(f"{', '.join('`%s`' % m for m in missing)} required")
+
+
+# --- Inbox messages: plain text and a size cap -----------------------------------
+# One HTML email with a pasted signature image (base64 inside an <img>) weighs
+# 300 000+ characters: a single message read with `limit=1` was more than an
+# agent's whole tool-result budget, with no way to get at the text. Opt-in, so
+# callers that read the raw HTML keep it.
+
+_DATA_URI = re.compile(r"data:[\w/+.-]+;base64,[A-Za-z0-9+/=\s]+")
+_BASE64_BLOB = re.compile(r"^[A-Za-z0-9+/=\s]{2000,}$")
+_LOOKS_HTML = re.compile(r"<\s*/?\s*[a-zA-Z][^>]*>")
+_INVISIBLE = re.compile(r"<(style|script|head)\b.*?</\1\s*>", re.I | re.S)
+_LINE_BREAK = re.compile(r"<\s*(br|/p|/div|/li|/tr|/h[1-6]|/blockquote)\b[^>]*>", re.I)
+_TAG = re.compile(r"<[^>]+>")
+
+
+def _plain_text(value: str) -> str:
+    """HTML (or text with inline images) to readable plain text."""
+    value = _DATA_URI.sub("[image]", value)
+    if _BASE64_BLOB.match(value):
+        return f"[binary, {len(value)} characters omitted]"
+    if not _LOOKS_HTML.search(value):
+        return value
+    value = _INVISIBLE.sub("", value)
+    value = _LINE_BREAK.sub("\n", value)
+    value = html.unescape(_TAG.sub("", value))
+    value = re.sub(r"[ \t\u00a0]+", " ", value)
+    return re.sub(r"\s*\n\s*(\n\s*)+", "\n\n", value).strip()
+
+
+def _readable_messages(value, text_only: bool, max_chars: Optional[int]):
+    """Walk the messages payload, whatever its shape, and return it with every
+    string made plain text (`text_only`) and cut at `max_chars`, plus the number
+    of strings that were cut — so a cut text is never mistaken for a whole one."""
+    cut = 0
+
+    def walk(v):
+        nonlocal cut
+        if isinstance(v, dict):
+            return {k: walk(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return [walk(x) for x in v]
+        if isinstance(v, str):
+            if text_only:
+                v = _plain_text(v)
+            if max_chars and len(v) > max_chars:
+                cut += 1
+                v = v[:max_chars] + f" [... truncated, {len(v) - max_chars} more characters]"
+        return v
+
+    return walk(value), cut
 
 
 def register(mcp: FastMCP) -> None:
@@ -224,6 +277,8 @@ def register(mcp: FastMCP) -> None:
         source_metadata: Optional[dict] = None,
         draft: Optional[dict] = None,
         mark_as_read: Optional[bool] = None,
+        text_only: bool = False,
+        max_chars: Optional[int] = None,
         limit: Optional[int] = None,
         skip: Optional[int] = None,
         page: Optional[int] = None,
@@ -238,6 +293,11 @@ def register(mcp: FastMCP) -> None:
           `limit`.
         - `messages`: `contact_id` + optional `user_id`, `limit`, `skip`.
           ⚠️ `mark_as_read=True` MUTATES on a read call.
+          ⚠️ One HTML email can weigh 300 000+ characters (images pasted as
+          base64): to read what was SAID, pass `text_only=True` (HTML turned
+          to plain text, inline images dropped) and `max_chars` (each text cut
+          there). The answer then carries `truncated_fields`, the number of
+          texts that were cut — 0 means you have them whole.
         - `labels` / `label_get` (`label_id`) / `label_create` (`label_name`).
         - `labels_attach`: `contact_id` + `label_ids`; `append=False` REPLACES
           the conversation's labels. `labels_remove`: same minus `append`.
@@ -256,9 +316,16 @@ def register(mcp: FastMCP) -> None:
                 user_id, page=page, limit=limit)}
         elif op == "messages":
             _need(contact_id=contact_id)
-            result = {"messages": client.get_contact_messages(
+            messages = client.get_contact_messages(
                 contact_id, user_id=user_id, limit=limit, skip=skip,
-                mark_as_read=mark_as_read)}
+                mark_as_read=mark_as_read)
+            if text_only or max_chars:
+                if max_chars is not None and max_chars < 1:
+                    raise _bad("`max_chars` must be at least 1")
+                messages, cut = _readable_messages(messages, text_only, max_chars)
+                result = {"messages": messages, "truncated_fields": cut}
+            else:
+                result = {"messages": messages}
         elif op == "labels":
             result = {"labels": client.list_inbox_labels()}
         elif op == "label_get":
