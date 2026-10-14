@@ -795,6 +795,32 @@ ne disait pas, ou disait faux**. Tout est additif ; rien n'a changé de comporte
   partage échu reste listé, marqué, et ne donne plus aucun accès. Règles complètes :
   `docs/ownership.md` § « L'échéance d'un partage ».
 
+## Le détail de tous les connecteurs en un appel — `GET /api/me/connectors?include=card` (#1245)
+
+Trois projections d'une même route, du plus léger au plus lourd :
+
+| requête | ce que porte chaque ligne | mesuré (145 connecteurs, 14/10/2026) |
+|---|---|---|
+| `GET /api/me/connectors` | la ligne compacte : identité, axes de tri, `secret_kind`, état du membre | ~66 Ko |
+| `GET /api/me/connectors?include=card` | la ligne compacte **+ la carte sans `doc_sections`** : `auth`, `credential_fields`, `connect` (avec `callback_url` et `app_ready`), `namespaces`, `description`, `publisher`, `auth_modes`, `personal_session`, `free_tier`, `identities`, `verifiable`, `href` | ~235 Ko |
+| `GET /api/me/connectors?include=card,docs` ou `?verbose=true` | la carte complète, mode d'emploi markdown (`doc_sections`) compris | ~745 Ko |
+
+Le nombre de requêtes SQL est le même pour les trois (≈ 50, borné depuis #1148) : ce
+qui distingue la carte complète, c'est son **poids**, dont 72 % de `doc_sections`. Une
+page qui affiche le détail de chaque connecteur lit `include=card` **une fois**, au lieu
+d'un `?verbose=true&name=<x>` par carte : ce dernier calcule en plus l'aptitude du
+connecteur (`ready`, `not_ready`, `next_step`), ~47 requêtes par carte. Le mode
+d'emploi d'un connecteur se lit à l'ouverture de son panneau
+(`?verbose=true&name=<x>`), ou avec la liste (`include=card,docs`).
+
+- `include` accepte `card` et `docs`, séparés par une virgule ou répétés
+  (`?include=card&include=docs`). Une valeur inconnue rend `400`, jamais ignorée.
+- `include` et `verbose=true` ensemble rendent `400` : le second EST déjà la carte
+  complète, et l'un des deux serait ignoré en silence.
+- L'enveloppe renvoie `include` (liste vide par défaut), comme elle renvoie `verbose`.
+- Pour un champ repris, `include=card` sert **exactement** la valeur de la carte
+  verbeuse (`tests/test_connecteurs_include_card_1245.py`).
+
 ## Une adresse web ne transporte pas de liste (#367, garde posée le 28/08)
 
 L'adaptateur verse la query string telle quelle — `dict(request.query_params)`, donc **des

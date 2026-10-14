@@ -63,6 +63,9 @@ EXEMPLES: dict[tuple[str, str], str] = {
     # Le relevé agrégé de PLUSIEURS outils en une lecture (#1145) — ce que le
     # consommateur demandait outil par outil.
     ("org.usage.tools", "tool"): "linkedin_aiark_search,fullenrich_result",
+    # #1245 — le détail de tous les connecteurs en un appel, mode d'emploi compris :
+    # l'URL qu'une page Connecteurs tape au lieu d'une lecture par carte.
+    ("connectors.me", "include"): "card,docs",
 }
 
 # Le reste d'un appel MINIMAL, quand aucun champ n'est requis SEUL mais qu'un parmi

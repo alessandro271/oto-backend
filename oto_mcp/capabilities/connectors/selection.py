@@ -24,7 +24,7 @@ import re
 import unicodedata
 from typing import Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator, model_validator
 
 from ... import access, db, org_store, providers, session_org, tool_registry
 from ...connectors import activation as connector_activation
@@ -64,6 +64,40 @@ class MyConnectorsInput(BaseModel):
     # word of the name (#1112: "linkedin" finds `linkedin_unipile` AND `aiark`, whose
     # tools are `linkedin_aiark_*`) — several candidates are ALL returned.
     name: Optional[str] = None
+    # Card blocks added to the COMPACT row, for a LIST that renders the detail of every
+    # connector in ONE call (#1245). `card` = the whole catalog card EXCEPT
+    # `doc_sections`; `docs` = `doc_sections`. `card` + `docs` = the verbose row. Why
+    # split: on the served catalog (145 connectors, 13/10/2026) the verbose list weighs
+    # ~710 KB, 72 % of it the markdown how-to that a front only shows in the panel of an
+    # unconfigured connector — and reading card by card instead cost one call per
+    # connector, each paying a readiness diagnosis the list does not need. An URL
+    # carries no list: `?include=card,docs` and `?include=card&include=docs` both work
+    # (#367). An unknown value is REFUSED, never ignored.
+    include: Optional[list[str] | str] = None
+
+    @field_validator("include", mode="after")
+    @classmethod
+    def _include_en_liste(cls, v):
+        """Same pattern as `projects.include` (#367): normalised ONCE, here."""
+        if v is None:
+            return None
+        # Each entry split in turn: `?include=card,docs&include=…` combines both forms.
+        brut = [p for x in (v if isinstance(v, list) else [v]) for p in str(x).split(",")]
+        valeurs = [m for m in (x.strip() for x in brut) if m]
+        inconnues = sorted(set(valeurs) - set(_INCLUDE_BLOCKS))
+        if inconnues:
+            raise ValueError(f"include: unknown value(s) {inconnues} — accepted: "
+                             f"{list(_INCLUDE_BLOCKS)}")
+        return valeurs
+
+    @model_validator(mode="after")
+    def _verbose_ou_include(self):
+        # `verbose=true` already IS the whole card: combining it with `include` would let
+        # one of the two be silently ignored.
+        if self.verbose and self.include:
+            raise ValueError("pass either verbose=true (the whole card) or include=… "
+                             "(card blocks on the compact row), not both")
+        return self
 
 
 class ConnectorActionInput(BaseModel):
@@ -89,6 +123,9 @@ class MyConnectorRow(BaseModel):
     - `verbose=true` — the same row PLUS the whole public catalog card,
       "card" section below. This is what a CARD reads, and what the credential form
       depends on.
+    - `include=card` (#1245) — the compact row PLUS the card WITHOUT `doc_sections`:
+      the detail of every connector in ONE list call, at a third of the verbose weight.
+      `include=card,docs` is the verbose row.
 
     A card field is therefore `Optional` because it is absent in compact, not
     because it would sometimes be null in verbose: with `verbose=true` all thirteen are
@@ -221,6 +258,9 @@ class MyConnectors(BaseModel):
     # Echo of the requested projection — tells the client whether the rows carry the
     # full card or the compact view (both shapes come out of the SAME field).
     verbose: bool
+    # Echo of `include` (#1245): the card blocks added to the compact rows — `card`
+    # (the card without `doc_sections`), `docs` (`doc_sections`). Empty = none.
+    include: list[str] = []
     # `computed` (targeted `name=` read) | `not_computed` (catalog: too expensive,
     # cf. `connectors/readiness.py`) | `unavailable` (reading the layers failed).
     # ALWAYS says something: a mute absence of `ready` read as "nothing to
@@ -305,6 +345,23 @@ def _guide_refs_by_ns(org_id: int | None) -> dict[str, set]:
 # for their lists, not for a single word.
 _COMPACT_KEYS = ("name", "label", "help", "family", "category", "availability",
                  "logo_url", "secret_kind")
+
+# `include` blocks (#1245): `docs` is the how-to, `card` everything else on the card.
+_INCLUDE_BLOCKS = ("card", "docs")
+
+
+def _projection(c: dict, inp: "MyConnectorsInput") -> dict:
+    """The catalog row as the request asks for it: compact, verbose, or compact plus
+    `include` blocks. `card` + `docs` gives exactly the verbose row."""
+    if inp.verbose:
+        return c
+    blocs = set(inp.include or ())
+    if not blocs:
+        return {k: c.get(k) for k in _COMPACT_KEYS}
+    return {k: v for k, v in c.items()
+            if k in _COMPACT_KEYS
+            or (k == "doc_sections" and "docs" in blocs)
+            or (k != "doc_sections" and "card" in blocs)}
 
 
 def _toolbox_scope(sub: str) -> Optional[dict]:
@@ -538,7 +595,7 @@ def _me_projection(ctx: ResolvedCtx, inp: MyConnectorsInput) -> dict:
         refset: set = set()
         for ns in c.get("namespaces") or []:
             refset |= doc_refs.get(ns, set())
-        base = c if inp.verbose else {k: c.get(k) for k in _COMPACT_KEYS}
+        base = _projection(c, inp)
         # Consent return URL — on the AUTHENTICATED projection only.
         # `providers.public_catalog()` also feeds `/api/connectors`, served without
         # auth: the public descriptor stays without a URL (cf. `connector_flow.describe`).
@@ -551,7 +608,7 @@ def _me_projection(ctx: ResolvedCtx, inp: MyConnectorsInput) -> dict:
         # being able to consent. Without it, the connection screen promised the worst case to
         # everyone — "first set the application's credentials", including to whoever has nothing left to set
         # since oto publishes its own.
-        if inp.verbose and base.get("connect"):
+        if base.get("connect"):
             from ...connectors import flow as connector_flow
             base = {**base, "connect": {
                 **base["connect"],
@@ -592,6 +649,7 @@ def _me_projection(ctx: ResolvedCtx, inp: MyConnectorsInput) -> dict:
             row["removed_at"] = str(removed[c["name"]])
         connectors.append(row)
     out: dict = {"connectors": connectors, "verbose": inp.verbose,
+                 "include": inp.include or [],
                  "credentials": credentials}
     if name_match is not None:
         out["name_match"] = name_match
@@ -718,7 +776,10 @@ CAPABILITIES += [
                     "full card (doc, auth descriptor, credential fields). Filter with state="
                     "active|paused|not_selected, or with name=<connector> to read the state of "
                     "a SINGLE connector (pair it with verbose=true instead of pulling the whole "
-                    "catalog). `name` also accepts a label or a tool namespace (\"linkedin\" "
+                    "catalog). To render the detail of EVERY connector in one call, pass "
+                    "include=card (the card without its markdown how-to `doc_sections`; "
+                    "include=card,docs adds it) instead of reading card by card. "
+                    "`name` also accepts a label or a tool namespace (\"linkedin\" "
                     "finds every LinkedIn connector, all returned); an unmatched name is refused "
                     "with the closest names. ⚠️ `state` is only YOUR SELECTION in the toolbox — "
                     "`not_selected` does NOT mean not connected. `credential` (on every row, even "
