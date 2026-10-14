@@ -49,7 +49,8 @@ par id (réservé platform_admin). Autz conditionnelle dans `tools/orgs.py`
   cascade « ma copie perso EN SERVICE, puis l'org ». Une copie perso **archivée ne masque plus**
   (décision du 14/10/2026) : la cascade la saute et sert l'org ; elle reste lisible sur
   `scope='user'`, et la désarchiver la remet en tête (`org_store.get_instruction_en_service`,
-  même règle pour l'app de procédure). La cascade se dit : la
+  même règle pour l'app de procédure et l'empreinte d'un run, qui journalise le palier
+  exécuté, `guide_scope`). La cascade se dit : la
   lecture (par slug, par `guide_id`, et `GET /api/me/instructions/{slug}`) et l'écriture rendent
   **`other_scopes`** (les autres paliers de l'appelant qui portent ce slug : palier, `guide_id`,
   version, date) et, quand une copie perso masque celle de l'org pour une lecture par nom,

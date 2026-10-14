@@ -18,6 +18,7 @@ from fastmcp import Client, FastMCP
 BUNDLE = "https://app.example.com/mcp-app/process-graph.js"
 
 from oto_mcp.procedure_diagram import client_affiche_les_apps as _VRAIE_DETECTION  # noqa: E402
+from oto_mcp.tools.guide_run import procedure_servie  # noqa: E402
 
 TRACE = """┌──────────────────┐
 │ 1. Trigger       │
@@ -137,33 +138,27 @@ def test_bout_en_bout_la_vue_recoit_le_trace_et_le_modele_une_ligne(monkeypatch)
 
 
 def test_l_equipe_active_complete_l_org(monkeypatch):
-    pytest.importorskip("fastmcp.apps")
-    monkeypatch.setenv("OTO_PROCEDURE_APP_BUNDLE", BUNDLE)
-    pa = _module(monkeypatch)
     _stub_backend(monkeypatch, {("group", 7, "veille"): {
         "slug": "veille", "title": "Veille d'équipe", "version": 1, "body_md": CORPS}})
     from oto_mcp import access
     monkeypatch.setattr(access, "current_group", lambda sub: 7)
-    row, scope = pa._lire("sub1", "veille")
+    row, scope = procedure_servie("sub1", "veille")
     assert row["title"] == "Veille d'équipe" and scope == "group"
 
 
 def test_une_copie_perso_archivee_ne_masque_plus_l_org(monkeypatch):
     """#1156, décision du 14/10/2026 : la cascade par nom saute une copie perso
     ARCHIVÉE et sert l'org — ici comme dans `oto_procedure op=get`."""
-    pytest.importorskip("fastmcp.apps")
-    monkeypatch.setenv("OTO_PROCEDURE_APP_BUNDLE", BUNDLE)
-    pa = _module(monkeypatch)
     perso = {"slug": "veille", "title": "Veille perso", "version": 3, "body_md": CORPS,
              "archived_at": "2026-10-14 09:00:00+00"}
     org = {"slug": "veille", "title": "Veille d'org", "version": 5, "body_md": CORPS,
            "archived_at": None}
     procedures = {("user", "sub1", "veille"): perso, ("org", 42, "veille"): org}
     _stub_backend(monkeypatch, procedures)
-    row, scope = pa._lire("sub1", "veille")
+    row, scope = procedure_servie("sub1", "veille")
     assert row["title"] == "Veille d'org" and scope == "org"
     perso["archived_at"] = None                     # désarchivée : elle revient en tête
-    row, scope = pa._lire("sub1", "veille")
+    row, scope = procedure_servie("sub1", "veille")
     assert row["title"] == "Veille perso" and scope == "user"
 
 

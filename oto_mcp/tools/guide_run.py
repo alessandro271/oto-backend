@@ -63,25 +63,52 @@ def _run_d_autrui(run_id: str) -> bool:
     return head is not None and head.get("sub") != sub
 
 
-def version_de_procedure(sub: str | None, slug: str) -> int | None:
-    """CURRENT version of the procedure `slug`, read in the order
-    `oto_procedure(op='get')` serves it: the active org first, the active team as a
-    complement. None if the slug designates no procedure — an ad-hoc run, a
-    guide from another household, or an invented slug.
+def procedure_servie(sub: str, slug: str) -> tuple[dict, str] | None:
+    """The procedure a read BY NAME serves this account, and the tier it lives at
+    (`user`|`org`|`group`) — the copy a run executes, and the one a write must target.
+    The order of `oto_procedure(op='get')`'s cascade: MY copy first (the default write
+    scope, ADR 0068) when it is IN SERVICE — an archived personal copy masks nothing
+    (#1156, decision of 14/10/2026) —, then the active org; the active team as a
+    complement. None if the slug designates nothing readable here.
 
     DB read ⇒ called OUTSIDE the loop (`asyncio.to_thread`)."""
     from .. import access, org_store
-    org_id = access.current_org(sub) if sub else None
+    mine = org_store.get_instruction_en_service("user", str(sub), slug)
+    if mine:
+        return mine, "user"
+    org_id = access.current_org(sub)
     if org_id is not None:
         row = org_store.get_instruction("org", org_id, slug)
-        if row and row.get("version") is not None:
-            return int(row["version"])
-    gid = access.current_group(sub) if sub else None
+        if row:
+            return row, "org"
+    gid = access.current_group(sub)
     if gid is not None:
         row = org_store.get_instruction("group", gid, slug)
-        if row and row.get("version") is not None:
-            return int(row["version"])
+        if row:
+            return row, "group"
     return None
+
+
+def empreinte_de_procedure(sub: str | None, slug: str) -> tuple[int, str] | None:
+    """CURRENT version of the procedure `slug` and the TIER it was read at
+    (`user`|`org`|`group`) — the copy a read by name serves, so the one the run
+    executes (`procedure_servie`). None if the slug designates no procedure — an
+    ad-hoc run, a guide from another household, or an invented slug.
+
+    ⚠️ (#1156) It read the org, then the team, but NEVER my personal copy: a run that
+    executed a personal copy masking the org's logged the ORG's version — a
+    fingerprint of a text the run never walked through. The tier travels with the
+    version: two tiers carry the same slug, and a version number alone does not say
+    which one.
+
+    DB read ⇒ called OUTSIDE the loop (`asyncio.to_thread`)."""
+    if not sub:
+        return None
+    lu = procedure_servie(sub, slug)
+    if lu is None or lu[0].get("version") is None:
+        return None
+    row, palier = lu
+    return int(row["version"]), palier
 
 
 async def _note_procedure_version(guide: str | None) -> int | None:
@@ -106,12 +133,16 @@ async def _note_procedure_version(guide: str | None) -> int | None:
         from .. import session_org
         from ..auth.hooks import current_user_sub_from_token
         sub = current_user_sub_from_token()
-        version = await asyncio.to_thread(version_de_procedure, sub, guide)
+        empreinte = await asyncio.to_thread(empreinte_de_procedure, sub, guide)
     except Exception:
         logger.warning("procedure version unavailable for %r (best-effort)",
                        guide, exc_info=True)
         return None
-    session_org.note_call_trace(doctrine_version=version)
+    if empreinte is None:
+        return None
+    version, palier = empreinte
+    # The TIER executed rides along (`guide_scope`, declared in `server._TRACED_ARGS`).
+    session_org.note_call_trace(doctrine_version=version, guide_scope=palier)
     return version
 
 

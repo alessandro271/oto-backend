@@ -78,29 +78,6 @@ def _connectors_named(trace: str, org_id: int | None) -> list[dict]:
     return retenus
 
 
-def _lire(sub: str, slug: str) -> tuple[dict, str] | None:
-    """The procedure `slug` and the scope it was read at (`user`|`org`|`group`) — the
-    one a write must target. The order of `oto_procedure(op='get')`'s cascade: MINE
-    first (the default write scope, ADR 0068) when it is IN SERVICE — an archived
-    personal copy masks nothing (#1156, decision of 14/10/2026) —, then the active org;
-    the active team as a complement (`guide_run.version_de_procedure`)."""
-    from .. import access, org_store
-    mine = org_store.get_instruction_en_service("user", str(sub), slug)
-    if mine:
-        return mine, "user"
-    org_id = access.current_org(sub)
-    if org_id is not None:
-        row = org_store.get_instruction("org", org_id, slug)
-        if row:
-            return row, "org"
-    gid = access.current_group(sub)
-    if gid is not None:
-        row = org_store.get_instruction("group", gid, slug)
-        if row:
-            return row, "group"
-    return None
-
-
 def _peut_ecrire(sub: str, scope: str) -> bool:
     """Would `oto_procedure op=set` at this scope be allowed? The same rule as its
     guard (`procedure_console._ECRIRE`): mine always, the team as a member (it was read
@@ -225,8 +202,9 @@ def register(mcp: FastMCP) -> None:
         from ..procedure_diagram import (DOUBLE, client_affiche_les_apps, dessin_hors_fence,
                                          dessin_tague, diagram_check, le_trace,
                                          reparer_les_bords)
+        from .guide_run import procedure_servie
         sub = access.current_user_sub_or_raise()
-        lu = _lire(sub, slug)
+        lu = procedure_servie(sub, slug)
         if lu is None:
             message = _aux_noms_du_produit(
                 sub, f"No procedure `{slug}` of yours, in your active org or in your team — list them with oto_procedure op=list.")

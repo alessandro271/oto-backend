@@ -59,7 +59,7 @@ def run_start_fn():
 
 
 def _wire(monkeypatch, *, sub="u1", org=35, group=None,
-          org_procedures=None, group_procedures=None) -> dict:
+          org_procedures=None, group_procedures=None, user_procedures=None) -> dict:
     """Rend le relevé de ce que les doublures ont VU. Un test qui affirme une absence
     (« pas de version ») le lit : la résolution de version est best-effort, donc une
     doublure que rien n'atteint — base absente, refus d'identité — rend la même
@@ -72,7 +72,9 @@ def _wire(monkeypatch, *, sub="u1", org=35, group=None,
 
     def _procedure(otype, oid, slug):
         lus["procedures"].append((otype, oid, slug))
-        return ((org_procedures if otype == "org" else group_procedures) or {}).get(slug)
+        par_palier = {"user": user_procedures, "org": org_procedures,
+                      "group": group_procedures}
+        return (par_palier[otype] or {}).get(slug)
 
     monkeypatch.setattr(call_axes, "current_user_sub_from_token", lambda: sub)
     monkeypatch.setattr(auth_hooks, "current_user_sub_from_token", lambda: sub)
@@ -112,7 +114,7 @@ async def test_le_run_enregistre_la_version_de_la_procedure(monkeypatch, run_sta
     _wire(monkeypatch, org_procedures={"prospection": {"version": 7}})
     out, trace = await _start(run_start_fn, label="prospection Q3", doctrine="prospection")
     # Dans la ligne de journal (via le relevé) …
-    assert trace["doctrine_version"] == 7
+    assert trace["doctrine_version"] == 7 and trace["guide_scope"] == "org"
     # … et rendue à l'agent, qui sait donc ce qu'il déroule.
     assert out["doctrine"] == "prospection" and out["doctrine_version"] == 7
 
@@ -123,7 +125,7 @@ async def test_la_procedure_dequipe_compte_comme_celle_de_lorg(monkeypatch, run_
     suivre le même ordre, sinon une procédure d'équipe se déroule sans version."""
     _wire(monkeypatch, group=12, group_procedures={"relance": {"version": 2}})
     _, trace = await _start(run_start_fn, label="relances", doctrine="relance")
-    assert trace["doctrine_version"] == 2
+    assert trace["doctrine_version"] == 2 and trace["guide_scope"] == "group"
 
 
 @pytest.mark.asyncio
@@ -139,6 +141,7 @@ async def test_un_run_ad_hoc_ne_prétend_à_aucune_version(monkeypatch, run_star
     lus = _wire(monkeypatch, org_procedures={"prospection": {"version": 7}})
     out, trace = await _start(run_start_fn, label="un truc vite fait")
     assert out["doctrine_version"] is None and "doctrine_version" not in trace
+    assert "guide_scope" not in trace
     assert lus["org"], "l'org du run n'a pas été lue : l'absence ne prouve rien"
     assert lus["procedures"] == [], "un run ad hoc ne cherche aucune procédure"
 
@@ -176,6 +179,52 @@ async def test_une_lecture_de_version_en_panne_nempeche_pas_le_run(monkeypatch,
     assert pannes, "la lecture de version n'a jamais été tentée"
 
 
+# ── #1156 : l'empreinte suit la lecture servie, copie perso comprise ─────────
+
+@pytest.mark.asyncio
+async def test_la_copie_perso_qui_masque_lorg_est_celle_que_le_run_journalise(
+        monkeypatch, run_start_fn):
+    """Le bug : l'empreinte lisait l'org puis l'équipe, jamais la copie perso. Un run
+    qui exécutait la copie perso masquant celle de l'org journalisait la version de
+    l'ORG — l'empreinte d'un texte que le run n'avait pas parcouru."""
+    _wire(monkeypatch, org_procedures={"campagne": {"version": 9, "archived_at": None}},
+          user_procedures={"campagne": {"version": 2, "archived_at": None}})
+    out, trace = await _start(run_start_fn, label="campagne", guide="campagne")
+    assert trace["doctrine_version"] == 2 and trace["guide_scope"] == "user"
+    assert out["guide_version"] == 2
+
+
+@pytest.mark.asyncio
+async def test_une_copie_perso_archivee_laisse_lempreinte_a_lorg(monkeypatch,
+                                                                 run_start_fn):
+    """Même règle que la lecture par nom (décision du 14/10/2026) : une copie perso
+    archivée ne masque plus, le run exécute — et journalise — celle de l'org."""
+    _wire(monkeypatch, org_procedures={"campagne": {"version": 9, "archived_at": None}},
+          user_procedures={"campagne": {"version": 2,
+                                        "archived_at": "2026-10-14 09:00:00+00"}})
+    _, trace = await _start(run_start_fn, label="campagne", guide="campagne")
+    assert trace["doctrine_version"] == 9 and trace["guide_scope"] == "org"
+
+
+def test_la_face_rest_journalise_le_meme_palier(monkeypatch):
+    """`POST /api/me/runs` écrit son fait `run_start` elle-même : même résolution, même
+    clé que la face MCP."""
+    from oto_mcp.capabilities import run_thread
+    from oto_mcp.capabilities._types import ResolvedCtx
+    _wire(monkeypatch, org_procedures={"campagne": {"version": 9, "archived_at": None}},
+          user_procedures={"campagne": {"version": 2, "archived_at": None}})
+    faits: list = []
+    monkeypatch.setattr(db, "insert_tool_call", faits.append)
+    out = run_thread._ouvrir(ResolvedCtx(sub="u1", org_id=35),
+                             run_thread.RunOuvertureInput(label="campagne",
+                                                          guide="campagne"))
+    assert out["guide_version"] == 2
+    [fait] = faits
+    assert fait["tool"] == "run_start"
+    assert fait["args"]["doctrine_version"] == 2
+    assert fait["args"]["guide_scope"] == "user"
+
+
 # ── Le relevé d'appel, et ce qu'il laisse passer ────────────────────────────
 
 def test_lempreinte_passe_lallowlist_du_journal():
@@ -183,14 +232,16 @@ def test_lempreinte_passe_lallowlist_du_journal():
     l'allowlist est silencieusement jetée. Les deux moitiés de l'empreinte doivent y
     être — sinon `run_start` calcule une version que personne n'écrit."""
     assert "doctrine_version" in server._TRACED_ARGS
+    assert "guide_scope" in server._TRACED_ARGS
     assert "instance" in server._TRACED_ARGS
 
 
 def test_seule_lallowlist_atteint_les_args_de_la_ligne():
     """Reproduit le filtre du sink : ce qui est déclaré passe, le reste tombe."""
-    trace = {"doctrine_version": 7, "instance": "org:35:pennylane", "ns_id": 160,
+    trace = {"doctrine_version": 7, "guide_scope": "user",
+             "instance": "org:35:pennylane", "ns_id": 160,
              "secret_interne": "à ne jamais journaliser"}
     args = {**{"label": "prospection Q3"},
             **{k: v for k, v in trace.items() if k in server._TRACED_ARGS}}
     assert args == {"label": "prospection Q3", "doctrine_version": 7,
-                    "instance": "org:35:pennylane", "ns_id": 160}
+                    "guide_scope": "user", "instance": "org:35:pennylane", "ns_id": 160}

@@ -947,7 +947,10 @@ PATCH /api/me/runs/{run_id} {outcome, note?}       → {outcome, rows_released}
   changent pas : elles lisent le contexte.
 - **Le run existe par ses FAITS** : ouvrir et clore écrivent les faits `run_start` et
   `run_finish` au journal, comme le MCP — un run se reconstruit du journal, jamais de
-  `runs`. Clore rend les lignes que le run tenait encore (`rows_released`, `0` écrit), et
+  `runs`. Le fait `run_start` porte l'EMPREINTE de la procédure exécutée : sa version et
+  son palier (`guide_scope` : `user`, `org` ou `group`), résolus comme la lecture par nom
+  — ma copie perso en service d'abord, puis l'org, l'équipe active en complément
+  (`tools/guide_run.empreinte_de_procedure`, #1156). Clore rend les lignes que le run tenait encore (`rows_released`, `0` écrit), et
   seul le propriétaire clôt.
 - **L'issue** vaut `done` · `partial` · `failed` · `blocked` (`run_status.OUTCOMES`, même
   règle que `run_finish` : `run_status.refus_de_cloture`). `partial` = terminé proprement

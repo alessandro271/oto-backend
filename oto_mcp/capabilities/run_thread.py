@@ -268,12 +268,15 @@ def _ouvrir(ctx: ResolvedCtx, inp: RunOuvertureInput) -> dict:
     if not label:
         raise AuthzDenied(400, "missing_fields", "`label` dit ce que fait le run")
     run_id = pile.new_run_id()
-    version = outils_run.version_de_procedure(ctx.sub, inp.guide) if inp.guide else None
+    empreinte = (outils_run.empreinte_de_procedure(ctx.sub, inp.guide) if inp.guide
+                 else None)
+    version, palier = empreinte if empreinte is not None else (None, None)
     # Les clés sont celles que lit la reconstruction du run (`db.usage`), prises à sa
-    # constante plutôt que réécrites : elles voyagent dans le journal.
+    # constante plutôt que réécrites : elles voyagent dans le journal. `guide_scope` est
+    # le palier EXÉCUTÉ (#1156), même clé que la face MCP (`server._TRACED_ARGS`).
     _fait(ctx.sub, "run_start", run_id, ctx.org_id,
           {"label": label, db_usage._ARG_PROCEDURE: inp.guide,
-           db_usage._ARG_PROCEDURE + "_version": version})
+           db_usage._ARG_PROCEDURE + "_version": version, "guide_scope": palier})
     # L'index APRÈS le fait : c'est lui que lit l'en-tête `X-Oto-Run`, et un run sans fait
     # serait un titulaire que le suivi ne montrerait jamais.
     db.insert_run(run_id, sub=ctx.sub, org_id=ctx.org_id, label=label, guide=inp.guide)
