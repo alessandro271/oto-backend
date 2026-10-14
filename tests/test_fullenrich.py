@@ -14,6 +14,8 @@ from unittest.mock import patch
 
 import pytest
 
+from oto_mcp.tools.fullenrich import _solde as _SOLDE_REEL
+
 
 def _tool(name):
     from fastmcp import FastMCP
@@ -52,6 +54,25 @@ def test_un_compte_A_SEC_est_refuse_AVANT_de_soumettre(monkeypatch):
     client_cls.return_value.submit.assert_not_called()
     trace.assert_not_called()
     assert error_taxonomy.classify(exc.value).code == "quota_exhausted"
+
+
+@pytest.mark.parametrize("solde", [5404.75, "5404.75", 0.5])
+def test_un_solde_DECIMAL_laisse_soumettre(monkeypatch, solde):
+    """Signal #1442 (14/10/2026) : un solde décimal était lu « illisible » et chaque
+    soumission échouait avant l'envoi. Passe par la VRAIE lecture du solde, que la
+    fixture remplace partout ailleurs."""
+    import requests
+    from oto_mcp.tools import fullenrich
+    monkeypatch.setattr(fullenrich, "_solde", _SOLDE_REEL)
+    monkeypatch.setattr(requests, "get", lambda url, headers=None, timeout=None: SimpleNamespace(
+        raise_for_status=lambda: None, json=lambda: {"balance": solde}))
+    with patch("oto_mcp.access.resolve_api_key", return_value=("k", False)), \
+         patch("oto_mcp.tools.fullenrich.session_org.note_call_trace"), \
+         patch("oto.tools.fullenrich.client.FullenrichClient") as client_cls:
+        client_cls.return_value.submit.return_value = "enr_789"
+        out = _tool("fullenrich_enrich_linkedin").fn(contacts=_contacts(1))
+    client_cls.return_value.submit.assert_called_once()
+    assert out["enrichment_id"] == "enr_789"
 
 
 @pytest.mark.parametrize("is_platform", [True, False])
