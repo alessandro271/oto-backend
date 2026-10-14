@@ -101,6 +101,78 @@ def test_sans_sub_rien_n_est_garde(contexte, monkeypatch):
     _appel("zoho_record", {"module": "Leads", "op": "delete"})
 
 
+# --- le contexte qui POSSÈDE la clé servie, pas seulement celui de l'appel ----------
+#
+# L'appel se juge sous (org, équipe active) ; or trois chemins servent la clé d'une
+# AUTRE équipe que l'active : l'équipe propriétaire d'un projet partagé prêtée par
+# héritage (`groupe_herite`, #480), l'instance épinglée par `_instance=`, l'instance liée
+# par le projet. Sous l'org au niveau `full`, l'équipe propriétaire au niveau `read` :
+# la clé de cette équipe ne doit pas écrire.
+
+PROPRIO = 33          # l'équipe qui a restreint, et dont la clé serait servie
+
+
+@pytest.fixture
+def equipe_restreinte(contexte, monkeypatch):
+    """L'appel se résout au niveau de l'org (aucune équipe active), org `full` ; seule
+    l'équipe PROPRIO a posé `read` pour zoho."""
+    from oto_mcp import group_store
+    monkeypatch.setattr(access, "current_group", lambda sub: None)
+    monkeypatch.setattr(al, "settings", lambda org, group: (
+        {"zoho": {"org": None, "group": "read"}} if group == PROPRIO else {}))
+    monkeypatch.setattr(group_store, "get_group",
+                        lambda gid: {"id": gid, "org_id": ORG})
+    _appel("zoho_record", {"module": "Leads", "op": "delete"})   # témoin : l'org passe
+
+
+def _avec(setter, resetter, valeur, fn):
+    tok = setter(valeur)
+    try:
+        return fn()
+    finally:
+        resetter(tok)
+
+
+def _refus_d_ecriture():
+    with pytest.raises(McpError) as e:
+        _appel("zoho_record", {"module": "Leads", "op": "delete"})
+    data = e.value.error.data
+    assert (data["code"], data["scope"], data["group_id"]) == (
+        "access_level_denied", "group", PROPRIO), data
+    _appel("zoho_record", {"module": "Leads", "op": "get"})       # la lecture, servie
+
+
+def test_la_cle_d_equipe_pretee_par_heritage_garde_son_niveau(equipe_restreinte):
+    from oto_mcp import session_org
+    from oto_mcp.access.heritage import ClesDuProjet
+    cles = ClesDuProjet(sub="sub-x", projet=7, org=ORG, membre=True, org_heritee=False,
+                        groupe_herite=PROPRIO)
+    _avec(session_org.set_call_cles, session_org.reset_call_cles, cles, _refus_d_ecriture)
+
+
+def test_l_instance_d_equipe_epinglee_garde_son_niveau(equipe_restreinte):
+    from oto_mcp import instance_refs, session_org
+    ref = instance_refs.parse_ref(f"group:{PROPRIO}:zoho")
+    _avec(session_org.set_call_instance, session_org.reset_call_instance, ref,
+          _refus_d_ecriture)
+
+
+def test_l_instance_d_equipe_liee_au_projet_garde_son_niveau(equipe_restreinte,
+                                                              monkeypatch):
+    from oto_mcp import instance_refs
+    ref = instance_refs.parse_ref(f"group:{PROPRIO}:zoho")
+    monkeypatch.setattr(access, "project_pinned_instance",
+                        lambda provider, project_id=None: ref if provider == "zoho" else None)
+    _refus_d_ecriture()
+
+
+def test_une_instance_d_un_autre_connecteur_ne_juge_rien(equipe_restreinte):
+    from oto_mcp import instance_refs, session_org
+    ref = instance_refs.parse_ref(f"group:{PROPRIO}:zohodesk")
+    _avec(session_org.set_call_instance, session_org.reset_call_instance, ref,
+          lambda: _appel("zoho_record", {"module": "Leads", "op": "delete"}))
+
+
 # --- visibilité et schéma servi -----------------------------------------------------
 
 NOMS = {"zoho_record", "zoho_note", "zoho_modules", "zoho_connect", "zohodesk_tickets",

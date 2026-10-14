@@ -147,6 +147,25 @@ def test_au_niveau_full_rien_n_est_refuse(etat, chemin):
     assert SONDE in texte, texte
 
 
+@pytest.mark.parametrize("chemin", CHEMINS)
+def test_la_cle_d_une_equipe_restreinte_epinglee_hors_d_elle_est_refusee(etat, chemin):
+    """L'équipe pose `read`, l'org reste `full`, l'appel se résout au niveau de l'org (pas
+    d'équipe active) : `_instance=` épingle la clé de L'ÉQUIPE — c'est elle qui serait
+    servie, c'est son niveau qui juge."""
+    from oto_mcp.connectors import access_levels
+    access_levels.set_level("group", etat["equipe"], "zoho", "read", SUB,
+                            org_id=etat["org"])
+    epingle = {"_instance": f"group:{etat['equipe']}:zoho"}
+    refus = _appeler(chemin, "zoho_record", {"module": "Leads", "op": "delete",
+                                             "record_id": "1", **epingle})
+    assert "access_level_denied" in refus and SONDE not in refus, refus
+    # Témoins : la lecture par la même clé est servie ; sans épingle, l'org `full` décide.
+    assert SONDE in _appeler(chemin, "zoho_record", {"module": "Leads", "op": "get",
+                                                     "record_id": "1", **epingle})
+    assert SONDE in _appeler(chemin, "zoho_record", {"module": "Leads", "op": "delete",
+                                                     "record_id": "1"})
+
+
 # --- 3. ce que voit l'agent -------------------------------------------------------
 
 def _enum_op(outil) -> list:

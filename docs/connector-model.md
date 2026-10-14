@@ -249,6 +249,11 @@ si chacun de ses scopes est dans la fermeture des scopes du niveau par `scope_im
   (`docs/tool-visibility.md`), ops non couvertes retirées de l'enum `op` servi, garde d'appel
   fail-closed `access_level_denied` aux deux sites (middleware de contexte, `oto_call`) —
   `connectors/access_level_gate.py`.
+- ⚠️ **La garde juge aussi le contexte qui POSSÈDE la clé servie**, pas seulement l'org et
+  l'équipe de l'appel : l'équipe propriétaire prêtée par l'héritage d'un projet partagé
+  (`groupe_herite`), l'instance épinglée par `_instance=` ou liée par le projet (équipe →
+  son niveau sous son org ; org ou membre → l'org). Chacun doit couvrir l'appel. Sans cela,
+  la clé d'une équipe restreinte s'atteignait depuis un contexte jugé `full`.
 - **Consentement** : les scopes du niveau en vigueur pour l'org et l'équipe du contexte,
   niveau et équipe signés dans le state, rejoués au retour ; le credential garde en meta le
   niveau (`access_level`) et le `scope` que Zoho dit avoir accordé

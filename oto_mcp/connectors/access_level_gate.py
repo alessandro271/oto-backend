@@ -2,7 +2,7 @@
 
 `connectors.access_levels` says what a level covers; this module applies it, and only
 when the level in force RESTRICTS (`full` filters nothing — not one query beyond the
-reading of the setting, not one byte of schema changed):
+reading of the setting and of the key's owner, not one byte of schema changed):
 
 - **visibility** (`hidden_tools`, a layer of `session_visibility`): a tool none of whose
   scopes or ops the level covers leaves the toolbox. Display governance, fail-open like
@@ -15,7 +15,10 @@ reading of the setting, not one byte of schema changed):
   the recipes), right after the activation guard — same seam, same context: the org and
   the team the call resolves under, axes and the run's org included. It receives the
   arguments, so it judges the `op`; a call without `op` is judged as the tool's default.
-  An undeclared tool or op of a leveled connector is refused, never let through.
+  An undeclared tool or op of a leveled connector is refused, never let through. It
+  judges EVERY context whose key the call can be served from (`_judged_contexts`): the
+  call's own, plus the team a shared project lends by inheritance and the owner of an
+  instance pinned (`_instance=`) or bound by the project — each must cover the call.
 
 Without a sub (local stdio) nothing is guarded, like activation: only the multi-user
 surface is targeted.
@@ -28,7 +31,8 @@ from typing import Awaitable, Callable, Optional
 from mcp.types import INVALID_PARAMS, ErrorData
 from starlette.concurrency import run_in_threadpool
 
-from .. import access, call_axes
+from .. import access, call_axes, group_store, providers, session_org
+from ..access import heritage
 from ..mcp_errors import McpError
 from . import access_levels
 
@@ -37,6 +41,41 @@ CODE = "access_level_denied"
 
 def _context(sub: str) -> tuple[Optional[int], Optional[int]]:
     return access.current_org(sub), access.current_group(sub)
+
+
+def _owner_context(ref) -> Optional[tuple[Optional[int], Optional[int]]]:
+    """`(org, team)` whose level governs the vault row an instance ref names: a team's
+    key is governed by that team (under its org), an org's or a member's key by its org.
+    Tenant and platform rows carry no org: None (the call's context alone judges)."""
+    level = getattr(ref, "level", None)
+    if level == "group" and ref.group_id is not None:
+        g = group_store.get_group(int(ref.group_id))
+        return (g.get("org_id") if g else None), int(ref.group_id)
+    if level in ("org", "member") and ref.org_id is not None:
+        return int(ref.org_id), None
+    return None
+
+
+def _judged_contexts(sub: str, connector: str) -> list[tuple[Optional[int], Optional[int]]]:
+    """Every `(org, team)` whose level this call must satisfy: the call's context, AND the
+    context that OWNS a key the call can be served from outside it — the owning team a
+    shared project lends by inheritance (`groupe_herite`, walked by the cascade after the
+    active team), and the instance pinned by `_instance=` or bound by the project (which
+    `resolve_credential` serves before any cascade). Without them, a team's restriction
+    was crossed by serving that team's key under a context judged `full`."""
+    org, group = _context(sub)
+    out = [(org, group)]
+    cles = heritage.du_contexte(sub, org)
+    if cles is not None and cles.groupe_herite is not None:
+        out.append((cles.org, cles.groupe_herite))
+    carrier = providers.credential_provider(connector)
+    ref = session_org.current_call_instance()
+    if ref is None or getattr(ref, "connector", None) != carrier:
+        ref = access.project_pinned_instance(carrier)
+    owner = _owner_context(ref) if ref is not None else None
+    if owner is not None:
+        out.append(owner)
+    return list(dict.fromkeys(out))
 
 
 # --- the call guard --------------------------------------------------------------
@@ -76,16 +115,14 @@ def _verdict(tool: str, args: dict, default_op: Optional[str]) -> Optional[Error
     sub = call_axes.current_user_sub_from_token()
     if not sub:
         return None
-    org, group = _context(sub)
-    level, source = access_levels.resolve(decl.connector, org, group)
-    if not access_levels.restricts(level):
-        return None
     op = None
     if decl.is_op_tool(tool):
         op = args.get(access_levels.OP_PARAM, default_op)
-    if decl.covers(level, tool, op):
-        return None
-    return refusal(decl, level, source, tool, op, org, group)
+    for org, group in _judged_contexts(sub, decl.connector):
+        level, source = access_levels.resolve(decl.connector, org, group)
+        if access_levels.restricts(level) and not decl.covers(level, tool, op):
+            return refusal(decl, level, source, tool, op, org, group)
+    return None
 
 
 def default_op(parameters: Optional[dict]) -> Optional[str]:
