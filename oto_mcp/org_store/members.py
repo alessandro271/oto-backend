@@ -305,14 +305,19 @@ def set_active_org(sub: str, org_id: int) -> bool:
 
 
 def list_orgs_for_user(sub: str) -> list[dict]:
+    """Orgs non archivées du compte. `personal` = étiquette d'espace personnel
+    (`personal_of` renseigné), même source que `is_personal_org`, lue dans la même
+    requête : la liste ne fait aucune lecture par org pour la servir (#1216)."""
     with _connect() as conn:
         rows = conn.execute(
             """
-            SELECT m.org_id, o.name, o.logo_url, o.domain, m.org_role, m.is_active, m.joined_at
+            SELECT m.org_id, o.name, o.logo_url, o.domain, m.org_role, m.is_active, m.joined_at,
+                   (o.personal_of IS NOT NULL) AS personal
               FROM org_members m JOIN orgs o ON o.id = m.org_id
              WHERE m.sub = %s AND o.archived_at IS NULL
             UNION ALL
-            SELECT s.org_id, o.name, o.logo_url, o.domain, 'org_member', TRUE, s.created_at
+            SELECT s.org_id, o.name, o.logo_url, o.domain, 'org_member', TRUE, s.created_at,
+                   (o.personal_of IS NOT NULL)
               FROM org_service_accounts s JOIN orgs o ON o.id = s.org_id
              WHERE s.sub = %s AND o.archived_at IS NULL
              ORDER BY joined_at ASC

@@ -20,8 +20,10 @@ def _stub_orgs(monkeypatch, rows):
 
 def test_beta_est_calcule_par_org_avec_org_explicite(monkeypatch):
     rows = [
-        {"org_id": 9196, "name": "Partenaire", "org_role": "org_admin", "is_active": True},
-        {"org_id": 269, "name": "Client", "org_role": "org_member", "is_active": False},
+        {"org_id": 9196, "name": "Partenaire", "org_role": "org_admin", "is_active": True,
+         "personal": False},
+        {"org_id": 269, "name": "Client", "org_role": "org_member", "is_active": False,
+         "personal": False},
     ]
     _stub_orgs(monkeypatch, rows)
     vus = []

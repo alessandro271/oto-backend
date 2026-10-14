@@ -74,6 +74,12 @@ class MyOrgEntry(BaseModel):
     # cette liste ; sans ce champ il ne peut que tout montrer ou rien. ⚠️ Il ne décide
     # PLUS des Agents (flottes, déclencheurs) : ouverts à toute org depuis le 24/09/2026.
     beta: bool = False
+    # `true` = l'espace PERSONNEL posé d'office à l'inscription d'un compte
+    # (`orgs.personal_of`, même source que `OrgBrief.personal` de la fiche), QUEL QUE
+    # SOIT son nom : une org créée à la main et nommée « Perso » reste `false` (#1216).
+    # ⚠️ L'étiquette est celle de l'org, pas « la mienne » : si un collègue t'a invité
+    # dans son espace personnel, il figure ici avec `true` lui aussi.
+    personal: bool
 
 
 class OrgQuota(BaseModel):
@@ -271,6 +277,9 @@ def _list_my_orgs(ctx: ResolvedCtx, inp: NoInput) -> dict:
             # `org=` EXPLICITE : calcul contre CETTE org, jamais contre current_org
             # (le seam le prévoit pour la fiche admin — même besoin ici).
             "beta": _beta_dans(ctx.sub, o["org_id"]),
+            # Lu dans la même requête que la liste (`list_orgs_for_user`), jamais
+            # par org : même étiquette que la fiche (`is_personal_org`).
+            "personal": o["personal"],
         })
     # Le quota voyage avec la liste : c'est l'outil par lequel un agent regarde ses
     # espaces, donc le seul endroit où il peut apprendre qu'il approche du mur sans
@@ -326,7 +335,12 @@ def _org_detail(ctx: ResolvedCtx, inp: OrgIdInput) -> dict:
 CAPABILITIES += [
     Capability(key="org.list", handler=_list_my_orgs, Input=NoInput, authz=SUB_ONLY,
                Output=MyOrgs,
-               description="List the organizations you belong to and which one is active.",
+               description=(
+                   "List the organizations you belong to and which one is active. "
+                   "`personal: true` marks an automatic personal space, created at "
+                   "sign-up for one account, whatever its name: an org someone named "
+                   "\"Perso\" by hand stays `personal: false`. It is normally yours; a "
+                   "teammate's personal space you were invited into is `true` too."),
                mcp="oto_list_orgs", rest=RestBinding("GET", "/api/me/orgs")),
     # MCP fusionné dans oto_admin_org(op=list). REST conservé (dashboard).
     Capability(key="org.admin.list", handler=_list_all_orgs, Input=NoInput, authz=PLATFORM_ADMIN,

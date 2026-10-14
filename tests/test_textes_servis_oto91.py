@@ -71,3 +71,13 @@ def test_l_audit_de_projet_annonce_ses_quatre_listes():
 ])
 def test_les_guides_ne_disent_plus_ce_que_le_code_ne_fait_pas(guide, faux):
     assert faux not in (_GUIDES / guide).read_text(encoding="utf-8")
+
+
+def test_la_liste_des_orgs_dit_ce_que_designe_personal():
+    """#1216 : une org nommée « Perso » à la main et l'org perso posée d'office étaient
+    confondues. La description servie dit que `personal` désigne la seconde, quel que
+    soit son nom — et que le champ est bien dans la réponse déclarée."""
+    from oto_mcp.capabilities.orgs.reads import MyOrgEntry
+    d = _capacite("org.list")
+    assert "`personal: true`" in d and "whatever its name" in d
+    assert "personal" in MyOrgEntry.model_fields
