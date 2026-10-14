@@ -22,7 +22,7 @@ from starlette.concurrency import run_in_threadpool
 from .. import (access, call_axes, calllog, db, deprecations, error_taxonomy, guide_run,
                 outils_retires, redaction, run_org, session_org, tool_alias)
 from ..auth.hooks import current_user_sub_from_token
-from ..connectors import activation_gate
+from ..connectors import access_level_gate, activation_gate
 from ..connectors import health as connector_health
 from ..tool_visibility import namespace_of
 
@@ -156,6 +156,10 @@ async def _resolve_tool(ctx: Context, name: str):
     return await resoudre_outil(ctx.fastmcp, name)
 
 
+async def _parameters_of(tool) -> Optional[dict]:
+    return getattr(tool, "parameters", None)
+
+
 @dataclass
 class IssueCible:
     """What a tool run by `executer_cible` returned.
@@ -204,6 +208,10 @@ async def executer_cible(tool, sub: Optional[str], name: str, demande: str,
         # (#1064). Here rather than at visibility: the latter is a display filter,
         # which `oto_call` crosses by construction.
         await activation_gate.require_active(name)
+        # The access level of the TARGET's connector, on its arguments (its `op`) — same
+        # guard, same place, as the context middleware (`access_level_denied`).
+        await access_level_gate.require_covered(
+            name, args, lambda: _parameters_of(tool))
     except BaseException:
         for _reset, _tok in reversed(undo):
             _reset(_tok)

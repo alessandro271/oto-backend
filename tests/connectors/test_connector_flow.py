@@ -264,6 +264,9 @@ async def _both_flows(monkeypatch) -> dict[str, dict]:
     from oto_mcp.auth import salesforce as salesforce_oauth
     from oto_mcp.auth import zoho as zoho_oauth
     monkeypatch.setattr(zoho_oauth, "app_fields", lambda *a, **k: {})
+    # L'équipe active et le niveau d'accès du départ se lisent en base : hors sujet ici.
+    monkeypatch.setattr(access, "current_group", lambda sub: None)
+    monkeypatch.setattr(zoho_oauth, "consent_level", lambda *a: "full")
     monkeypatch.setattr(zoho_oauth, "build_auth_url",
                         lambda *a, **k: "https://accounts.zoho.eu/oauth/v2/auth?x=1")
     monkeypatch.setattr(salesforce_oauth, "build_auth_url",

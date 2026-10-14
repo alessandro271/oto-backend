@@ -1495,6 +1495,10 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # seulement s'il a changé (`_poser_domaine`), sans parcours de table au rejeu.
     _poser_domaine(conn, "connector_availability", "connector_availability_scope_type_check",
                    "scope_type", ("platform", "org", "tenant", "group"))
+    # Le cran ÉQUIPE des propriétés de connecteur (14/10/2026 : le niveau d'accès d'une
+    # équipe, `connectors.access_levels`) — même geste, reposé seulement s'il a changé.
+    _poser_domaine(conn, "connector_settings", "connector_settings_scope_type_check",
+                   "scope_type", ("platform", "org", "group"))
     _conn_act.seed_initial(conn)
     # Chantier ACL B2 : les 4 tables legacy ne sont plus lues par aucun code — DROP.
     # (La table qui les avait remplacées, `connector_acl`, part par la révision

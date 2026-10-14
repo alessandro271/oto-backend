@@ -44,3 +44,29 @@ DESCRIPTION = (
     "OAuth2 self-client, shareable by a whole team; the Zoho region "
     "(com/eu/in…) is chosen at connection time."
 )
+
+# Access levels (connectors repo, `docs/conception/niveaux-d-acces.md`) — DATA, read and
+# validated by `connectors.access_levels`. `full` is the scope list the consent asked
+# for before levels existed, byte for byte: at `full` nothing is filtered. A tool (or an
+# `op` of a multiplexed tool) declares the scopes it REQUIRES; it is served at a level
+# when each of them is in the closure of the level's scopes by `scope_implies` — an
+# implication the provider documents, never a rule guessed from the scope names.
+_READ, _CREATE = "ZohoCRM.modules.READ", "ZohoCRM.modules.CREATE"
+_UPDATE, _DELETE = "ZohoCRM.modules.UPDATE", "ZohoCRM.modules.DELETE"
+_SETTINGS_MODULES = "ZohoCRM.settings.modules.READ"
+ACCESS_LEVELS = {
+    "levels": {
+        "read": (_READ, _SETTINGS_MODULES),
+        "full": ("ZohoCRM.modules.ALL", _SETTINGS_MODULES,
+                 "ZohoCRM.settings.fields.READ", "ZohoCRM.users.READ"),
+    },
+    "scope_implies": {"ZohoCRM.modules.ALL": (_READ, _CREATE, _UPDATE, _DELETE)},
+    "tools": {
+        "zoho_modules": (_SETTINGS_MODULES,),
+        "zoho_record": {"list": (_READ,), "get": (_READ,), "search": (_READ,),
+                        "create": (_CREATE,), "update": (_UPDATE,), "delete": (_DELETE,)},
+        "zoho_note": {"list": (_READ,), "create": (_CREATE,)},
+        # The consent verb itself requires nothing: it is how a level gets its token.
+        "zoho_connect": (),
+    },
+}

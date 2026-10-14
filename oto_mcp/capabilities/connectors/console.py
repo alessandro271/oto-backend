@@ -20,7 +20,8 @@ from typing import Literal, Optional
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
-from . import (account_grants as connectors_account_grants,
+from . import (access_level as connectors_access_level,
+               account_grants as connectors_account_grants,
                activation as connectors_activation,
                force as connectors_force,
                identities as connectors_identities,
@@ -78,6 +79,37 @@ def _activation(ctx: ResolvedCtx, inp: ActivationInput) -> dict:
             raise AuthzDenied(400, "missing_enabled", "`enabled` is required for set.")
         return a._group_set(ctx, a.GroupActivationSetInput(group_id=gid, name=name, enabled=inp.enabled))
     return a._group_clear(ctx, a.GroupActivationClearInput(group_id=gid, name=name))
+
+
+# ── oto_connector_access_level : get / set / clear · scope org|group ─────────
+class AccessLevelInput(BaseModel):
+    op: Literal["get", "set", "clear"]
+    scope: Literal["org", "group"] = "org"
+    name: str                          # connector
+    org_id: Optional[int] = None       # scope=org
+    group_id: Optional[int] = None     # scope=group
+    level: Optional[str] = None        # set
+
+
+def _access_level(ctx: ResolvedCtx, inp: AccessLevelInput) -> dict:
+    a = connectors_access_level
+    if inp.op == "set" and inp.level is None:
+        raise AuthzDenied(400, "missing_level", "`level` is required for set.")
+    if inp.scope == "org":
+        oid = _need(inp.org_id, "missing_org", "`org_id` is required for scope=org.")
+        if inp.op == "get":
+            return a._org_get(ctx, a.OrgAccessLevelInput(org_id=oid, name=inp.name))
+        if inp.op == "set":
+            return a._org_set(ctx, a.OrgAccessLevelSetInput(
+                org_id=oid, name=inp.name, level=inp.level))
+        return a._org_clear(ctx, a.OrgAccessLevelInput(org_id=oid, name=inp.name))
+    gid = _need(inp.group_id, "missing_group", "`group_id` is required for scope=group.")
+    if inp.op == "get":
+        return a._group_get(ctx, a.GroupAccessLevelInput(group_id=gid, name=inp.name))
+    if inp.op == "set":
+        return a._group_set(ctx, a.GroupAccessLevelSetInput(
+            group_id=gid, name=inp.name, level=inp.level))
+    return a._group_clear(ctx, a.GroupAccessLevelInput(group_id=gid, name=inp.name))
 
 
 # ── oto_connector : list / select / pause / unselect · force / recommend ─────
@@ -221,6 +253,29 @@ CAPABILITIES += [
             "back to the level above). scope=org (`org_id`; list=member, set/clear=org admin) "
             "| group (`group_id`; list=member, set/clear=team lead). Takes effect next session."),
         mcp="oto_connector_activation",
+    ),
+    Capability(
+        key="connectors.console.access_level", handler=_access_level,
+        Input=AccessLevelInput, Output=connectors_access_level.AccessLevelState,
+        authz=BY_OP({
+            ("get", "org"): ORG_ADMIN_OF("org_id"),
+            ("set", "org"): ORG_ADMIN_OF("org_id"),
+            ("clear", "org"): ORG_ADMIN_OF("org_id"),
+            ("get", "group"): GROUP_ADMIN_OF("group_id"),
+            ("set", "group"): GROUP_ADMIN_OF("group_id"),
+            ("clear", "group"): GROUP_ADMIN_OF("group_id"),
+        }, fields=("op", "scope")),
+        refresh_visibility=True,
+        description=(
+            "Access level of an OAuth connector that declares levels (e.g. zoho, zohodesk: "
+            "`read`, `full`). op=get (the level set at this scope, the one in force, the "
+            "declared levels and their scopes) / set (`name`, `level`) / clear (back to the "
+            "level above). scope=org (`org_id`, org admin) | group (`group_id`, team lead; "
+            "restrict-only, a level wider than the org's is refused). Under a level other "
+            "than `full`, the tools and ops it does not cover are hidden and refused "
+            "(`access_level_denied`), and the consent asks only for its scopes; widening "
+            "needs a new consent."),
+        mcp="oto_connector_access_level",
     ),
     Capability(
         key="connectors.console.connector", handler=_connector, Input=ConnectorInput,

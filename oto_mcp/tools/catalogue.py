@@ -47,9 +47,10 @@ LEGENDE = {
                    "durably: oto_connector(op='select', name=<connector>) — or "
                    "oto_enable_tool(name) if you were the one who hid it.",
     "not_exposed": "NOT callable: the connector is not open to your organization, or "
-                   "reserved for other members, or the tool exceeds your role — an org "
-                   "admin opens it (oto_connector_activation); it is not a missing "
-                   "capability.",
+                   "reserved for other members, or the tool exceeds your role, or the "
+                   "access level your organization or team set for the connector does "
+                   "not cover it — an org admin opens it (oto_connector_activation, "
+                   "oto_connector_access_level); it is not a missing capability.",
 }
 
 

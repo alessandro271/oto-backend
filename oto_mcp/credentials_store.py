@@ -527,6 +527,89 @@ def clear_editor_app(connector: str, data_center: str) -> bool:
         return _delete(conn, PLATFORM, editor_label(data_center), connector, "")
 
 
+# --- app OAuth DÉDIÉE d'une org ou d'une équipe ---------------------------------
+#
+# L'app d'éditeur, un cran plus bas : l'application OAuth (`client_id`/`client_secret`,
+# et pour zoho sa RÉGION, qui fait partie de l'app) qu'une org ou une équipe pose POUR
+# le consentement de ses membres — sans la poser comme credential d'appel. Posée en BYO
+# au palier org, elle était résolue par la cascade comme un credential (une app NUE, sans
+# `refresh_token`, servie à qui n'avait pas consenti) ; rangée ici, elle ne l'est jamais.
+#
+# Même rangement et même invariant que l'app d'éditeur : scope `PLATFORM`, `entity_id`
+# `app:org:<id>` / `app:group:<id>` — préfixe distinct de `editor:`, donc invisible de
+# `list_editor_apps` — et `walk_cascade` ne propose le palier plateforme qu'aux
+# connecteurs qui déclarent `auth_modes ∋ 'platform'`, ce que les connecteurs à
+# consentement ne font pas (figé par `tests/test_editor_app.py`). Seul le flux de
+# consentement la lit (`zoho_oauth.app_fields`).
+#
+# ⚠️ Rangée au palier plateforme, elle ne part pas avec un export de périmètre de son
+# org (`export_perimetre` ne prend jamais `platform`) : une org exportée la repose.
+
+DEDICATED_APP_PREFIX = "app:"
+DEDICATED_APP_OWNERS = ("org", "group")
+
+
+def dedicated_app_label(owner_type: str, owner_id: int) -> str:
+    """`entity_id` de l'app dédiée d'une org ou d'une équipe (`app:org:12`)."""
+    if owner_type not in DEDICATED_APP_OWNERS:
+        raise ValueError(f"propriétaire d'app dédiée {owner_type!r} : org ou group")
+    return f"{DEDICATED_APP_PREFIX}{owner_type}:{int(owner_id)}"
+
+
+def set_dedicated_app(owner_type: str, owner_id: int, connector: str, fields: dict,
+                      set_by: Optional[str] = None) -> None:
+    """Pose/rote l'app dédiée. `fields` = `client_id` + `client_secret` + la config non
+    secrète que le flux du connecteur exige (zoho : `data_center`) — JSON explicite, comme
+    l'app d'éditeur, indépendant du schéma du connecteur. `_upsert` en direct, pour la même
+    raison que `set_editor_app`."""
+    if not (fields.get("client_id") and fields.get("client_secret")):
+        raise ValueError("client_id et client_secret requis")
+    with _connect() as conn:
+        _upsert(conn, PLATFORM, dedicated_app_label(owner_type, owner_id), connector, "",
+                json.dumps(fields), set_by, None)
+
+
+def get_dedicated_app(owner_type: str, owner_id: int, connector: str) -> Optional[dict]:
+    """`{fields, set_at, set_by}` de l'app dédiée, ou None. Un blob illisible LÈVE
+    (`SecretUnpackError`) : le taire ferait consentir avec une autre app sans le dire."""
+    label = dedicated_app_label(owner_type, owner_id)
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT secret_enc, set_at, set_by FROM connector_credentials "
+            "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=''",
+            (PLATFORM, label, connector)).fetchone()
+    if not row:
+        return None
+    return {"fields": _unpack_editor_app(_reveal(row, PLATFORM, label, connector, "") or ""),
+            "set_at": row["set_at"], "set_by": row["set_by"]}
+
+
+@lecture_d_appel
+def dedicated_app_owners(connector: str, org_id: Optional[int],
+                         group_id: Optional[int]) -> list[str]:
+    """Les propriétaires (`org`, `group`) qui ont posé une app dédiée pour `connector`,
+    sans déchiffrer — la promesse « une app est prête » d'une liste de connecteurs."""
+    labels = [dedicated_app_label(t, i) for t, i in (("org", org_id), ("group", group_id))
+              if i is not None]
+    if not labels:
+        return []
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT entity_id FROM connector_credentials WHERE entity_type=%s "
+            "AND connector=%s AND account='' AND entity_id = ANY(%s)",
+            (PLATFORM, connector, labels)).fetchall()
+    return [r["entity_id"].split(":")[1] for r in rows]
+
+
+def clear_dedicated_app(owner_type: str, owner_id: int, connector: str) -> bool:
+    """Retire l'app dédiée. Les credentials déjà obtenus en gardent une copie (`persist`) :
+    ils marchent jusqu'au refresh qui échouera si l'app est aussi retirée chez le
+    fournisseur ; les nouveaux consentements retombent sur la cascade."""
+    with _connect() as conn:
+        return _delete(conn, PLATFORM, dedicated_app_label(owner_type, owner_id),
+                       connector, "")
+
+
 # `meta` JSONB porte aussi des satellites SECRETS (audit 2026-06-13, otomata#29) :
 # l'`access_token` bearer dérivé d'OAuth (google) y vit en clair (le
 # refresh_token, lui, est chiffré dans `secret_enc`). Les surfaces « statut /

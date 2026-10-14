@@ -28,6 +28,11 @@ l'APPEL, dans la traversée des clés (`org_settings_for_key`) — une lecture i
 org, seulement quand une clé perso existe, mémorisée pour tout l'appel (`status_for`
 traverse chaque connecteur), sur le chemin de résolution qui lit déjà le coffre. Sans instantané, exprès : une politique de sécurité posée sur une couleur doit
 valoir sur toutes dès l'appel suivant, ce que l'instantané par process ne donne pas.
+
+Le NIVEAU D'ACCÈS d'un connecteur (`connectors.access_levels`, scopes `org` et `group`)
+suit la même règle, pour la même raison : une lecture par appel d'un outil d'un connecteur
+à niveaux (org et équipe en une requête, `scoped_settings_for_key`), hors boucle,
+mémorisée pour l'appel — et rien pour les autres connecteurs.
 """
 from __future__ import annotations
 
@@ -133,6 +138,26 @@ def org_settings_for_key(org_id: str, key: str) -> dict:
             "AND scope_id = %s AND key = %s", (str(org_id), key)).fetchall()
     _signaler_orphelins(r["connector"] for r in rows)
     return {r["connector"]: r["value"] for r in rows}
+
+
+@lecture_d_appel
+def scoped_settings_for_key(key: str, org_id: Optional[str],
+                            group_id: Optional[str]) -> dict:
+    """`{connecteur: {"org": valeur, "group": valeur}}` des surcharges `key` posées par UNE
+    org et/ou UNE équipe — une requête pour tous leurs connecteurs, mémorisée par appel.
+    Premier lecteur : le niveau d'accès (`connectors.access_levels`), lu à l'APPEL d'un
+    outil d'un connecteur à niveaux, à la visibilité et au schéma servi — hors boucle."""
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT scope_type, connector, value FROM connector_settings WHERE key = %s "
+            "AND ((scope_type = 'org' AND scope_id = %s) "
+            "     OR (scope_type = 'group' AND scope_id = %s))",
+            (key, org_id, group_id)).fetchall()
+    _signaler_orphelins(r["connector"] for r in rows)
+    out: dict = {}
+    for r in rows:
+        out.setdefault(r["connector"], {})[r["scope_type"]] = r["value"]
+    return out
 
 
 def get_connector_setting(scope_type: str, scope_id: str, connector: str,

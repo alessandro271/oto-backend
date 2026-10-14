@@ -98,10 +98,10 @@ INSTANCES = """
 -- Alexis le 2026-08-27 — « la base peut primer sur le défaut du code », pour qu'un
 -- élargissement ne demande pas un déploiement.
 --
--- Une seule `key` aujourd'hui : `cardinality` (`mono` | `multi`). La table est
--- générique parce que la décision l'est (« les propriétés de connecteur »), pas parce
--- qu'on anticipe : une colonne `cardinality` aurait fait une migration au deuxième
--- besoin, et le registre en a une douzaine de candidates.
+-- Première `key` : `cardinality` (`mono` | `multi`) ; d'autres l'ont rejointe depuis
+-- (`personal_key`, `access_level`…). La table est générique parce que la décision
+-- l'est (« les propriétés de connecteur »), pas parce qu'on anticipait : une colonne
+-- `cardinality` aurait fait une migration au deuxième besoin.
 --
 -- ⚠️ Ce qu'elle protège : **aucune lecture sur le chemin CHAUD d'un appel d'outil**.
 -- La cardinalité est consultée jusqu'à quatre fois par appel, sur un serveur
@@ -117,21 +117,27 @@ INSTANCES = """
 -- toutes les couleurs déployées voient sans `op=reload` chacune.
 --
 -- La question à se poser en ajoutant un lecteur n'est donc pas « boot ou appel ? »
--- mais **« à quelle fréquence, et dans la boucle ? »**.
+-- mais **« à quelle fréquence, et dans la boucle ? »**. Deux politiques se lisent à
+-- l'APPEL, hors boucle et mémorisées pour l'appel (`personal_key`, `access_level`) :
+-- une restriction posée sur une couleur doit valoir sur toutes au prochain appel.
 CREATE TABLE IF NOT EXISTS connector_settings (
     -- Le scope de la surcharge. `platform` vaut pour tout le monde ; `org` ne vaut que
     -- dans le contexte de CETTE org — la même lecture que partout ailleurs, l'org du
-    -- REQUÉRANT, jamais son appartenance.
+    -- REQUÉRANT, jamais son appartenance ; `group` ne vaut que sous CETTE équipe active
+    -- (le niveau d'accès, `connectors.access_levels`, qui ne fait que restreindre l'org).
     scope_type TEXT NOT NULL,
-    scope_id TEXT NOT NULL,          -- 'platform' (convention maison) | id d'org
+    scope_id TEXT NOT NULL,          -- 'platform' (convention maison) | id d'org | id d'équipe
     connector TEXT NOT NULL,         -- le nom du PORTEUR du credential (délégation résolue)
-    key TEXT NOT NULL,               -- 'cardinality'
-    value TEXT NOT NULL,             -- 'mono' | 'multi'
+    key TEXT NOT NULL,               -- 'cardinality' | 'personal_key' | 'access_level' | …
+    value TEXT NOT NULL,             -- son sens appartient au module qui lit la clé
     set_by TEXT,
     set_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     -- Contraintes NOMMÉES (docs/live-migrations.md).
+    -- Domaine ouvert à `group` le 14/10/2026 : une base existante le reçoit par
+    -- `_poser_domaine` au boot (`db/_init.py`), le CREATE TABLE ne touchant pas une table
+    -- déjà là.
     CONSTRAINT connector_settings_scope_type_check
-        CHECK (scope_type IN ('platform', 'org')),
+        CHECK (scope_type IN ('platform', 'org', 'group')),
     CONSTRAINT connector_settings_pkey
         PRIMARY KEY (scope_type, scope_id, connector, key)
 );

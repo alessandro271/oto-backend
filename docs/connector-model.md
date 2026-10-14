@@ -220,6 +220,47 @@ commercial, seul « Created By » reste le compte de service). Attribution **nat
 ⇒ il faut du **per-user** (BYO user, ou credential OAuth per-user — google, zoho, salesforce), pas un secret
 partagé. (Noté 2026-06-24 — pertinent pour l'automatisation d'écriture Zoho (CRM client).)
 
+### Niveau d'accès d'un connecteur OAuth — ce que l'hôte laisse faire (14/10/2026)
+
+Conception validée : dépôt `connectors`, `docs/conception/niveaux-d-acces.md`. Un connecteur
+à consentement OAuth peut déclarer des **niveaux nommés** (`full` obligatoire, ici `read`),
+chacun avec les scopes que son consentement demande ; une `scope_implies` (une donnée du
+fournisseur, jamais une règle devinée) ; et, pour chaque outil — ou chaque `op` d'un outil
+multiplexé — les scopes qu'il **exige**. Un outil ou une op est **couvert** par un niveau
+si chacun de ses scopes est dans la fermeture des scopes du niveau par `scope_implies`.
+
+- **Déclaration** : `ACCESS_LEVELS` dans `providers/<nom>.py` (donnée pure, agrégée par
+  `providers._ACCESS_LEVELS_BY_CONNECTOR`), validée et lue par `connectors/access_levels.py`.
+  Premiers déclarants : `zoho` (`read` = `ZohoCRM.modules.READ` + `ZohoCRM.settings.modules.READ`,
+  `ZohoCRM.modules.ALL` implique les quatre verbes) et `zohodesk` (`read` =
+  `Desk.articles.READ` + `Desk.search.READ`). `zohoanalytics` n'en déclare pas.
+  `auth/zoho.SCOPES` **dérive** de `full` (source unique) ; cliquets :
+  `tests/connectors/test_access_levels.py` (`full` == le consentement d'avant, à l'octet) et
+  `tests/connectors/test_access_levels_declares.py` (tout outil SERVI d'un connecteur à
+  niveaux a sa déclaration, ses ops sont celles du schéma servi — population tirée du montage).
+- **`full` ne filtre rien** : visibilité, schéma servi, garde et consentement y sont
+  exactement ceux d'un connecteur sans niveaux.
+- **Réglage** : `connector_settings`, clé `access_level`, scope `org` puis `group` (le
+  porteur du credential en `connector`), lu **à l'appel** — pas l'instantané de cardinalité.
+  Résolution : l'équipe active si elle a une valeur, sinon l'org, sinon `full`. Monotone
+  (ADR 0012) : une équipe restreint, n'élargit jamais (`docs/groups-and-roles.md`). Une valeur
+  en base qui n'est pas un niveau déclaré **lève**.
+- **Application** (seulement sous un niveau ≠ `full`) : couche `access_level` de la visibilité
+  (`docs/tool-visibility.md`), ops non couvertes retirées de l'enum `op` servi, garde d'appel
+  fail-closed `access_level_denied` aux deux sites (middleware de contexte, `oto_call`) —
+  `connectors/access_level_gate.py`.
+- **Consentement** : les scopes du niveau en vigueur pour l'org et l'équipe du contexte,
+  niveau et équipe signés dans le state, rejoués au retour ; le credential garde en meta le
+  niveau (`access_level`) et le `scope` que Zoho dit avoir accordé
+  (`docs/connector-vault.md` §Application ≠ jeton).
+- ⚠️ **Le niveau est une politique, pas une propriété du jeton** : un ancien jeton `full`
+  n'écrit pas sous `read` ; à l'inverse, élargir le niveau n'élargit pas un jeton obtenu
+  pour `read` — il faut un nouveau consentement.
+- ⚠️ Le `full` du Desk n'accorde **aucun** scope d'écriture (consentement historique) :
+  `zohodesk_create_ticket`, `zohodesk_update_ticket` et `zohodesk_create_contact` ne sont
+  couverts par aucun niveau. Servis à `full` (rien n'y est filtré), refusés par Zoho comme
+  avant ; nommés par le cliquet plutôt que tus.
+
 ## Couche 3 — Option de connecteur (unipile, linkedin hébergé)
 
 Certains connecteurs (messagerie hébergée) sont **gatés par une option** : ils consomment des

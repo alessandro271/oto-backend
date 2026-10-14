@@ -60,7 +60,7 @@ def test_app_fields_prefers_byo_over_editor(monkeypatch):
                         lambda *a, **k: _FakeCred({"client_id": "byo", "client_secret": "s"}))
     monkeypatch.setattr(credentials_store, "get_editor_app",
                         lambda *a, **k: {"client_id": "oto", "client_secret": "s2"})
-    assert zoho_oauth.app_fields("zoho", "sub-x", "eu")["client_id"] == "byo"
+    assert zoho_oauth.app_fields("zoho", "sub-x", "eu", org=None, group=None)["client_id"] == "byo"
 
 
 def test_app_fields_falls_back_to_editor_app(monkeypatch):
@@ -70,10 +70,10 @@ def test_app_fields_falls_back_to_editor_app(monkeypatch):
     monkeypatch.setattr(credentials_store, "get_editor_app",
                         lambda c, dc: {"client_id": f"oto-{dc}", "client_secret": "s"}
                         if dc == "eu" else None)
-    assert zoho_oauth.app_fields("zoho", "sub-x", "eu")["client_id"] == "oto-eu"
+    assert zoho_oauth.app_fields("zoho", "sub-x", "eu", org=None, group=None)["client_id"] == "oto-eu"
     # Une autre région ne tombe PAS sur l'app EU (un client `.eu` sur accounts.zoho.com
     # est rejeté par un `invalid_client` opaque — le silence coûterait un diagnostic).
-    assert zoho_oauth.app_fields("zoho", "sub-x", "com") == {}
+    assert zoho_oauth.app_fields("zoho", "sub-x", "com", org=None, group=None) == {}
 
 
 def test_app_fields_ignores_editor_app_without_region(monkeypatch):
@@ -81,7 +81,7 @@ def test_app_fields_ignores_editor_app_without_region(monkeypatch):
     monkeypatch.setattr(access, "resolve_credential", lambda *a, **k: _FakeCred({}))
     monkeypatch.setattr(credentials_store, "get_editor_app",
                         lambda *a, **k: {"client_id": "oto", "client_secret": "s"})
-    assert zoho_oauth.app_fields("zoho", "sub-x") == {}
+    assert zoho_oauth.app_fields("zoho", "sub-x", org=None, group=None) == {}
 
 
 def test_build_auth_url_uses_editor_app(monkeypatch):
@@ -89,10 +89,11 @@ def test_build_auth_url_uses_editor_app(monkeypatch):
     monkeypatch.setattr(access, "resolve_credential", lambda *a, **k: _FakeCred({}))
     monkeypatch.setattr(credentials_store, "get_editor_app",
                         lambda c, dc: {"client_id": "1000.OTO", "client_secret": "s"})
+    monkeypatch.setattr(credentials_store, "get_dedicated_app", lambda *a: None)
     monkeypatch.setattr(zoho_oauth, "redirect_uri",
                         lambda: "https://mcp.oto.cx/api/zoho/oauth/callback")
     monkeypatch.setenv("OTO_MCP_OAUTH_STATE_SECRET", "test-secret")
-    url = zoho_oauth.build_auth_url("sub-x", 1, "zoho", "eu")
+    url = zoho_oauth.build_auth_url("sub-x", 1, "zoho", "eu", group_id=None, level="full")
     assert url.startswith("https://accounts.zoho.eu/oauth/v2/auth?")
     assert "client_id=1000.OTO" in url
 
@@ -134,7 +135,7 @@ def test_persisted_fields_match_what_persist_writes(monkeypatch):
     monkeypatch.setattr(credentials_store, "member_id", lambda o, s: f"{o}:{s}")
     monkeypatch.setattr(credentials_store, "set_credential", lambda *a, **k: None)
     zoho_oauth.persist("sub-x", 1, "zoho", "eu", {"refresh_token": "rt"},
-                       app={"client_id": "cid", "client_secret": "sec"})
+                       app={"client_id": "cid", "client_secret": "sec"}, level="full")
     assert set(ecrit) == set(zoho_oauth.PERSISTED_FIELDS)
 
 

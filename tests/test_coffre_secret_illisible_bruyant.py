@@ -80,7 +80,7 @@ def test_pas_encore_de_credential_reste_le_cas_nominal(editeur, monkeypatch):
     def _rien(*a, **k):
         raise McpError(ErrorData(code=INVALID_PARAMS, message="Aucune clé zoho"))
     monkeypatch.setattr(zoho_oauth.access, "resolve_credential", _rien)
-    assert zoho_oauth.app_fields("zoho", "u1", "eu")["client_id"] == "APP-OTO"
+    assert zoho_oauth.app_fields("zoho", "u1", "eu", org=None, group=None)["client_id"] == "APP-OTO"
 
 
 def test_erreur_de_coffre_refuse_au_lieu_de_basculer(editeur, monkeypatch):
@@ -92,4 +92,4 @@ def test_erreur_de_coffre_refuse_au_lieu_de_basculer(editeur, monkeypatch):
         raise InvalidTag()
     monkeypatch.setattr(zoho_oauth.access, "resolve_credential", _coffre_casse)
     with pytest.raises(InvalidTag):
-        zoho_oauth.app_fields("zoho", "u1", "eu")
+        zoho_oauth.app_fields("zoho", "u1", "eu", org=None, group=None)

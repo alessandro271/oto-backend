@@ -79,6 +79,10 @@ from . import browser_sessions  # noqa: F401 — me.browser_session.{start,final
 # Plafond DUR d'org (ADR 0022) — override d'activation per-org, éditable org_admin.
 import oto_mcp.capabilities.connectors.activation  # noqa: F401 — connectors.activation.{org_list,set_org,clear_org}
 import oto_mcp.capabilities.connectors.cle_perso  # noqa: F401 — connectors.personal_key_policy.{org_list,set_org} (#1239)
+# Niveau d'accès d'un connecteur OAuth (org puis équipe, restrict-only) et l'app OAuth
+# dédiée d'une org ou d'une équipe (REST seule : un secret brut).
+import oto_mcp.capabilities.connectors.access_level  # noqa: F401 — connectors.access_level.{org_get,set_org,clear_org,group_get,set_group,clear_group}
+import oto_mcp.capabilities.connectors.oauth_app  # noqa: F401 — connectors.oauth_app.{org_get,set_org,clear_org,group_get,set_group,clear_group}
 # Palier PLATEFORME de la même famille (#121) — cran d'activation global + accès
 # plateforme (ADR 0010 B4, ADR 0044 §H). Ex-routes écrites à la main : les paliers org
 # et équipe étaient déjà des capacités, c'est l'étage qui manquait.
@@ -127,7 +131,7 @@ from . import admin_console  # noqa: F401 — admin.{org,org_member,user,key_gra
 # Console connecteurs consolidée (ADR 0047 B1, fusion *_op) — porte les 6 tools MCP de la
 # famille (activation/access/connector/instance/identity/account_access) ; les modules
 # ci-dessus gardent leurs faces REST. À importer APRÈS eux.
-import oto_mcp.capabilities.connectors.console  # noqa: F401 — connectors.console.{activation,access,connector,instance,identity,account_access}
+import oto_mcp.capabilities.connectors.console  # noqa: F401 — connectors.console.{activation,access_level,access,connector,instance,identity,account_access}
 # Partage d'une procédure par lien (/p/<token>) et ses lecteurs — AVANT la console
 # procédures, qui en reprend les handlers en op=share_*.
 from . import partages_procedure  # noqa: F401 — org.instruction.share.{get,write,readers} + me.process_share.{read,copy}

@@ -45,7 +45,7 @@ def test_app_fields_reads_the_cascade(monkeypatch):
                         lambda con, want=None, sub=None, emit_on_failure=True, **kw:
                         seen.update(con=con, want=want, sub=sub,
                                     emit=emit_on_failure) or _Resolved(APP))
-    assert z.app_fields("zohodesk", "u1") == APP
+    assert z.app_fields("zohodesk", "u1", org=None, group=None) == APP
     # sub EXPLICITE (route REST, hors contexte MCP) + sonde silencieuse
     assert seen == {"con": "zohodesk", "want": "byo", "sub": "u1", "emit": False}
 
@@ -68,8 +68,8 @@ def test_app_fields_is_empty_before_any_credential(monkeypatch):
         raise McpError(ErrorData(code=INVALID_PARAMS, message="Aucune clé zoho posée"))
 
     monkeypatch.setattr(z.access, "resolve_credential", _aucun_credential)
-    assert z.app_fields("zoho", "u1") == {}
-    assert z.has_app("zoho", "u1") is False
+    assert z.app_fields("zoho", "u1", org=None, group=None) == {}
+    assert z.has_app("zoho", "u1", org=None, group=None) is False
 
 
 def test_we_call_an_api_that_actually_accepts_sub():
@@ -88,16 +88,16 @@ def test_we_call_an_api_that_actually_accepts_sub():
 # --- state signé -------------------------------------------------------------
 
 def test_state_roundtrip():
-    st = z.make_state("u1", 35, "zohodesk", DC)
-    assert z.verify_state(st) == {"sub": "u1", "org": 35,
+    st = z.make_state("u1", 35, "zohodesk", DC, group_id=7, level="read")
+    assert z.verify_state(st) == {"sub": "u1", "org": 35, "group": 7,
                                   "connector": "zohodesk", "data_center": DC,
-                                  "return_app": ""}
+                                  "level": "read", "return_app": ""}
 
 
 def test_state_carries_the_front_that_asked():
     """Le callback est appelé par Zoho, sans session : le state est la SEULE mémoire
     du demandeur qui survit à l'aller-retour."""
-    st = z.make_state("u1", 35, "zoho", DC, "acme")
+    st = z.make_state("u1", 35, "zoho", DC, "acme", group_id=None, level="full")
     assert z.verify_state(st)["return_app"] == "acme"
 
 
@@ -105,26 +105,42 @@ def test_state_signed_before_the_field_still_verifies():
     """Tolérance aux states émis AVANT `return_app` et encore vivants dans la fenêtre
     du TTL : on dégrade vers le défaut, on ne casse pas un consentement en cours."""
     from oto_mcp.auth import flow as oauth_flow
-    st = oauth_flow.sign_state(z._AUDIENCE, {"sub": "u1", "org": 35,
-                                             "c": "zoho", "dc": DC})
+    st = oauth_flow.sign_state(z._AUDIENCE, {"sub": "u1", "org": 35, "g": None,
+                                             "c": "zoho", "dc": DC, "l": "full"})
     assert z.verify_state(st)["return_app"] == ""
 
 
+@pytest.mark.parametrize("manque", ["g", "l"])
+def test_state_without_team_or_level_is_refused(manque):
+    """Sans l'équipe ni le niveau, le retour ne peut pas rejouer la résolution de l'aller
+    (l'app d'une équipe, les scopes demandés) : refusé, on ne devine pas."""
+    from oto_mcp.auth import flow as oauth_flow
+    charge = {"sub": "u1", "org": 35, "g": 3, "c": "zoho", "dc": DC, "l": "read"}
+    del charge[manque]
+    assert z.verify_state(oauth_flow.sign_state(z._AUDIENCE, charge)) is None
+
+
+@pytest.mark.parametrize("connector, level", [("zoho", "admin"), ("zohoanalytics", "read")])
+def test_state_with_an_undeclared_level_is_refused(connector, level):
+    st = z.make_state("u1", 35, connector, DC, group_id=None, level=level)
+    assert z.verify_state(st) is None
+
+
 def test_forged_state_is_rejected():
-    st = z.make_state("u1", 35, "zohodesk", DC)
+    st = z.make_state("u1", 35, "zohodesk", DC, group_id=None, level="full")
     payload, _sig = st.split(".", 1)
     assert z.verify_state(f"{payload}.{'A' * 43}") is None
 
 
 def test_state_from_another_secret_is_rejected(monkeypatch):
-    st = z.make_state("u1", 35, "zohodesk", DC)
+    st = z.make_state("u1", 35, "zohodesk", DC, group_id=None, level="full")
     monkeypatch.setenv("OTO_MCP_OAUTH_STATE_SECRET", "autre-secret")
     assert z.verify_state(st) is None
 
 
 def test_expired_state_is_rejected(monkeypatch):
     monkeypatch.setattr(time, "time", lambda: 1_000_000)
-    st = z.make_state("u1", 35, "zohodesk", DC)
+    st = z.make_state("u1", 35, "zohodesk", DC, group_id=None, level="full")
     monkeypatch.setattr(time, "time", lambda: 1_000_000 + z._STATE_TTL + 1)
     assert z.verify_state(st) is None
 
@@ -139,7 +155,7 @@ def test_malformed_state_is_rejected(bad):
 def test_auth_url_declares_our_scopes():
     """LE bénéfice du mode : les scopes viennent de NOUS, plus de l'utilisateur —
     trois incidents de scope venaient de là (#190, #202, Desk articles-only)."""
-    url = z.build_auth_url("u1", 35, "zohodesk", DC, app=APP)
+    url = z.build_auth_url("u1", 35, "zohodesk", DC, app=APP, group_id=None, level="full")
     assert "accounts.zoho.eu/oauth/v2/auth" in url
     assert "Desk.search.READ" in url and "Desk.articles.READ" in url
 
@@ -147,15 +163,15 @@ def test_auth_url_declares_our_scopes():
 def test_auth_url_asks_for_offline_access():
     """Sans `access_type=offline` + `prompt=consent`, Zoho ne renvoie PAS de
     refresh_token → la connexion mourrait au bout d'une heure."""
-    url = z.build_auth_url("u1", 35, "zoho", DC, app=APP)
+    url = z.build_auth_url("u1", 35, "zoho", DC, app=APP, group_id=None, level="full")
     assert "access_type=offline" in url and "prompt=consent" in url
 
 
 def test_auth_url_uses_the_single_redirect_uri():
     """Une seule URI pour les 3 connecteurs (le connecteur voyage dans le state) :
     une URI doit être enregistrée au byte près côté Zoho."""
-    a = z.build_auth_url("u1", 35, "zoho", DC, app=APP)
-    b = z.build_auth_url("u1", 35, "zohodesk", DC, app=APP)
+    a = z.build_auth_url("u1", 35, "zoho", DC, app=APP, group_id=None, level="full")
+    b = z.build_auth_url("u1", 35, "zohodesk", DC, app=APP, group_id=None, level="full")
     assert z.redirect_uri() == "https://mcp.oto.cx/api/zoho/oauth/callback"
     for u in (a, b):
         assert "mcp.oto.cx%2Fapi%2Fzoho%2Foauth%2Fcallback" in u
@@ -163,12 +179,12 @@ def test_auth_url_uses_the_single_redirect_uri():
 
 def test_unknown_region_is_refused():
     with pytest.raises(z.ZohoOAuthError, match="data center"):
-        z.build_auth_url("u1", 35, "zoho", "xx", app=APP)
+        z.build_auth_url("u1", 35, "zoho", "xx", app=APP, group_id=None, level="full")
 
 
 def test_unknown_connector_is_refused():
     with pytest.raises(z.ZohoOAuthError):
-        z.build_auth_url("u1", 35, "salesforce", DC, app=APP)
+        z.build_auth_url("u1", 35, "salesforce", DC, app=APP, group_id=None, level="full")
 
 
 # --- échange du code ---------------------------------------------------------
@@ -210,7 +226,8 @@ def test_persist_writes_the_same_fields_as_self_client(monkeypatch):
                             entity_type=et, entity_id=eid, connector=con,
                             secret=secret, meta=kw.get("meta")))
     z.persist("u1", 35, "zohodesk", DC,
-              {"refresh_token": "1000.rt"}, app=APP)
+              {"refresh_token": "1000.rt", "scope": "Desk.articles.READ"}, app=APP,
+              level="read")
     fields = z.credentials_store.unpack_secret("zohodesk", written["secret"])
     assert fields == {"client_id": "1000.ORGAPP", "client_secret": "org-secret",
                       "refresh_token": "1000.rt", "data_center": "eu"}
@@ -220,6 +237,9 @@ def test_persist_writes_the_same_fields_as_self_client(monkeypatch):
     assert written["entity_type"] == "member"
     assert written["entity_id"] == _cs.member_id(35, "u1") == "35:u1"
     assert written["meta"]["acquired_via"] == "oauth"
+    # Le niveau demandé et les scopes que Zoho dit avoir accordés restent avec le compte.
+    assert written["meta"]["access_level"] == "read"
+    assert written["meta"]["scope"] == "Desk.articles.READ"
 
 
 def test_supports_only_the_three_zoho_connectors():
@@ -342,7 +362,7 @@ def test_persist_uses_the_canonical_member_id(monkeypatch):
     seen = {}
     monkeypatch.setattr(z.credentials_store, "set_credential",
                         lambda et, eid, con, secret, **kw: seen.update(eid=eid))
-    z.persist("bn01", 2, "zohodesk", "eu", {"refresh_token": "rt"}, app=APP)
+    z.persist("bn01", 2, "zohodesk", "eu", {"refresh_token": "rt"}, app=APP, level="full")
     assert seen["eid"] == cs.member_id(2, "bn01")
     assert seen["eid"].startswith("2:"), "org d'abord, pas le sub"
 
@@ -396,3 +416,103 @@ def test_incomplete_credential_skips_the_probe_and_is_persisted():
     complete = {**app_only, "refresh_token": "1000.rt"}
     st2 = status_hints.credential_state("zohodesk", complete)
     assert st2 is not None and st2.complete, "un credential complet reste sondé"
+
+
+# --- niveaux d'accès : le consentement demande les scopes du niveau en vigueur ------
+
+def test_le_consentement_read_ne_demande_que_la_lecture():
+    import urllib.parse
+    url = z.build_auth_url("u1", 35, "zoho", DC, app=APP, group_id=4, level="read")
+    q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+    assert q["scope"] == ["ZohoCRM.modules.READ,ZohoCRM.settings.modules.READ"]
+    # Le niveau et l'équipe sont SIGNÉS : le retour ne peut ni l'élargir ni changer d'app.
+    etat = z.verify_state(q["state"][0])
+    assert (etat["level"], etat["group"], etat["org"]) == ("read", 4, 35)
+
+
+def test_au_niveau_full_l_url_est_celle_d_avant():
+    import urllib.parse
+    url = z.build_auth_url("u1", 35, "zohodesk", DC, app=APP, group_id=None, level="full")
+    q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+    assert q["scope"] == [",".join(z.SCOPES["zohodesk"])]
+
+
+# --- l'app : dédiée par l'équipe > dédiée par l'org > BYO > éditeur ------------------
+
+def _apps(monkeypatch, **par_proprietaire):
+    monkeypatch.setattr(z.credentials_store, "get_dedicated_app",
+                        lambda t, i, c: ({"fields": par_proprietaire[t]}
+                                         if t in par_proprietaire else None))
+
+
+def test_l_app_dediee_de_l_equipe_prime_puis_celle_de_l_org(monkeypatch):
+    def _jamais(*a, **k):
+        raise AssertionError("une app dédiée trouvée : la cascade n'est pas lue")
+    monkeypatch.setattr(z.access, "resolve_credential", _jamais)
+    equipe = {"client_id": "1000.EQ", "client_secret": "s", "data_center": "com"}
+    org = {"client_id": "1000.ORG", "client_secret": "s", "data_center": "eu"}
+    _apps(monkeypatch, group=equipe, org=org)
+    assert z.app_fields("zoho", "u1", "", org=35, group=4) == equipe
+    assert isinstance(z.app_fields("zoho", "u1", "", org=35, group=4), z.DedicatedApp)
+    assert z.app_fields("zoho", "u1", "", org=35, group=None) == org
+
+
+def test_sans_app_dediee_le_byo_puis_l_editeur(monkeypatch):
+    _apps(monkeypatch)
+    monkeypatch.setattr(z.access, "resolve_credential", lambda *a, **k: _Resolved(APP))
+    assert z.app_fields("zoho", "u1", "eu", org=35, group=4) == APP
+
+
+def test_le_byo_se_resout_sous_l_org_et_l_equipe_demandees(monkeypatch):
+    """Le retour n'a pas de session : la cascade du BYO doit voir l'org et l'équipe du
+    state, pas l'équipe maison du compte."""
+    from oto_mcp import access as acces
+    _apps(monkeypatch)
+    vu = {}
+    monkeypatch.setattr(z.access, "resolve_credential", lambda *a, **k: vu.update(
+        org=z.session_org.current_view_org(), group=z.session_org.current_view_group())
+        or _Resolved({}))
+    monkeypatch.setattr(z.credentials_store, "get_editor_app", lambda *a: None)
+    z.app_fields("zoho", "u1", "eu", org=35, group=4)
+    assert vu == {"org": 35, "group": 4}
+    z.app_fields("zoho", "u1", "eu", org=35, group=None)
+    assert vu == {"org": 35, "group": 0}, "sans équipe : le niveau org, pas la maison"
+    assert z.session_org.current_view_org() is None, "le contexte est rendu"
+    assert acces is z.access
+
+
+def test_la_region_est_celle_de_l_app_dediee():
+    app = z.DedicatedApp({"client_id": "a", "client_secret": "b", "data_center": "com"})
+    assert z.consent_region(app, "") == "com"
+    assert z.consent_region(app, "COM") == "com"
+    with pytest.raises(z.ZohoOAuthError, match="data_center=com"):
+        z.consent_region(app, "eu")
+    # Un credential APPORTÉ garde la règle d'avant : la région demandée, sa `data_center`
+    # n'y change rien.
+    byo = {**APP, "data_center": "com", "refresh_token": "rt"}
+    assert z.consent_region(byo, "eu") == "eu"
+    with pytest.raises(z.ZohoOAuthError):
+        z.consent_region(byo, "")
+
+
+def test_le_depart_signe_le_niveau_et_l_equipe_du_contexte(monkeypatch):
+    """`start_for` (MCP `zoho_connect`, carte, flux commun) résout le niveau sous l'org
+    ET l'équipe active, et l'URL comme le state le portent."""
+    import urllib.parse
+    from types import SimpleNamespace
+    from oto_mcp.capabilities import zoho_connect
+    from oto_mcp.connectors import activation_gate
+    monkeypatch.setattr(activation_gate, "exiger_connectable_capacite", lambda *a, **k: None)
+    monkeypatch.setattr(zoho_connect.access, "current_group", lambda sub: 4)
+    vu = {}
+    monkeypatch.setattr(z, "consent_level",
+                        lambda c, org, group: vu.update(niveau=(c, org, group)) or "read")
+    monkeypatch.setattr(z, "app_fields", lambda c, sub, dc, *, org, group:
+                        vu.update(app=(org, group)) or APP)
+    url = zoho_connect.start_for(SimpleNamespace(sub="u1", org_id=35), "zohodesk",
+                                 "eu").auth_url
+    q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+    assert q["scope"] == ["Desk.articles.READ,Desk.search.READ"]
+    etat = z.verify_state(q["state"][0])
+    assert (etat["level"], etat["group"], etat["org"]) == ("read", 4, 35)
+    assert vu == {"niveau": ("zohodesk", 35, 4), "app": (35, 4)}

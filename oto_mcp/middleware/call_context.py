@@ -8,7 +8,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .. import call_axes, guide_run, redaction, run_org, session_org
 from ..auth.hooks import current_user_sub_from_token
-from ..connectors import activation_gate
+from ..connectors import access_level_gate, activation_gate
 from ..tool_visibility import namespace_of
 
 logger = logging.getLogger(__name__)
@@ -100,12 +100,18 @@ class CallContextMiddleware(Middleware):
         # Un échec d'identité n'est pas une absence de jeton : il monte (#464).
         sub = current_user_sub_from_token()
         advertised = await run_in_threadpool(call_axes.account_axis_advertised_for, sub)
+        # Access level (`connectors/access_level_gate.py`): under a RESTRICTING level, the
+        # ops it does not cover leave the `op` enum of a multiplexed tool. `full` = {}.
+        ops_couvertes = await run_in_threadpool(access_level_gate.restricted_ops, sub)
         out = []
         for t in tools:
             axes = call_axes.axes_for_listing(t.name, advertised)
             if axes:
                 t = t.model_copy(update={
                     "parameters": call_axes.inject_schema(t.parameters, axes)})
+            if t.name in ops_couvertes:
+                t = t.model_copy(update={"parameters": access_level_gate.restrict_schema(
+                    t.parameters, ops_couvertes[t.name])})
             out.append(t)
         return out
 
@@ -190,10 +196,19 @@ class CallContextMiddleware(Middleware):
             # L'activation du connecteur, contre l'org et l'équipe que le contexte vient
             # de poser — même garde, même place, que dans `oto_call` (#1064).
             await activation_gate.require_active(name)
+            # The access level of the connector, same context, fail-closed — it reads the
+            # `op` of the arguments (same guard, same place, as in `oto_call`).
+            await access_level_gate.require_covered(
+                name, args, lambda: self._schema_of(context, name))
             return _echo_account(await call_next(context), _cible(name, args))
         finally:
             for reset, tok in reversed(undo):
                 reset(tok)
+
+    @staticmethod
+    async def _schema_of(context, name: str):
+        outil = await context.fastmcp_context.fastmcp.get_tool(name)
+        return getattr(outil, "parameters", None)
 
     @staticmethod
     async def _pin_org(org):

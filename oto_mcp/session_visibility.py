@@ -20,6 +20,7 @@ from fastmcp.server.transforms.visibility import disable_components, reset_visib
 from starlette.concurrency import run_in_threadpool
 
 from . import access, providers, credentials_store, db, org_store
+from .connectors import access_level_gate
 from .connectors import activation as connector_activation
 from .connectors import orphelins as connector_orphelins
 from .connectors import selection as connector_selection
@@ -51,6 +52,7 @@ COUCHE_ACTIVATION = "activation"      # connecteur non exposé à l'org (ou coup
 COUCHE_SELECTION = "selection"        # connecteur non installé / en pause dans la boîte
 COUCHE_BETA = "beta"                  # surface bêta sans l'option
 COUCHE_HORS_DE_PORTEE = "hors_de_portee"   # plancher de rôle plateforme non atteint
+COUCHE_NIVEAU = "access_level"        # niveau d'accès org/équipe qui ne couvre pas l'outil
 #: Les couches qui ne masquent que l'AFFICHAGE : l'outil y reste appelable.
 COUCHES_INSTALLABLES = frozenset({COUCHE_TOGGLE, COUCHE_SELECTION})
 
@@ -182,6 +184,16 @@ def _compute_couches(sub: str, active_org, prof_org, role_plateforme: str,
         }
     except Exception as e:
         logger.warning("activation visibility skipped for %s (fail-open): %s", sub, e)
+    # Niveau d'accès (connectors/access_levels.py) : un outil qu'un niveau RESTREINT
+    # (posé par l'org, ou l'équipe active qui ne fait que restreindre) ne couvre en rien
+    # sort de la boîte ; les ops non couvertes d'un outil multiplexé sortent de son schéma
+    # (`CallContextMiddleware.on_list_tools`). Au niveau `full`, rien. Fail-OPEN comme
+    # l'activation : la barrière est la garde d'appel `access_level_denied`.
+    try:
+        couches[COUCHE_NIVEAU] = access_level_gate.hidden_tools(
+            all_names, active_org, access.current_group(sub))
+    except Exception as e:
+        logger.warning("access level visibility skipped for %s (fail-open): %s", sub, e)
     # (La règle dédiée « bridges remote per-namespace » a été retirée — ADR 0034 B4 :
     # le connecteur `bridge` universel suit le régime commun ci-dessus ; sans
     # credential, l'exécution lève proprement.)

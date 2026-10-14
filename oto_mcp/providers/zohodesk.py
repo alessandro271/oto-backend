@@ -44,3 +44,32 @@ DESCRIPTION = (
     "Customer support in Zoho Desk: tickets, conversation threads, contacts "
     "and knowledge-base articles."
 )
+
+# Access levels — same contract as `providers/zoho.py`. Required scopes follow the
+# endpoint → scope table of the oto-core client (`oto.tools.zohodesk.client`,
+# `_SCOPE_BY_PREFIX`): `tickets/search` → `Desk.search.READ`, `tickets` / `contacts` →
+# `.READ` on GET and `.WRITE` otherwise, `articles` → `Desk.articles.READ`,
+# `departments` → `Desk.basic.READ`. ⚠️ `full` (the historical consent) grants no WRITE
+# scope: the three write tools are not covered by it — served at `full` all the same
+# (nothing is filtered there), and refused by Zoho as before.
+ACCESS_LEVELS = {
+    "levels": {
+        "read": ("Desk.articles.READ", "Desk.search.READ"),
+        "full": ("Desk.articles.READ", "Desk.basic.READ", "Desk.search.READ",
+                 "Desk.tickets.READ", "Desk.contacts.READ"),
+    },
+    "scope_implies": {},
+    "tools": {
+        "zohodesk_tickets": ("Desk.tickets.READ",),
+        "zohodesk_ticket": ("Desk.tickets.READ",),
+        "zohodesk_ticket_threads": ("Desk.tickets.READ",),
+        "zohodesk_search_tickets": ("Desk.search.READ",),
+        "zohodesk_create_ticket": ("Desk.tickets.WRITE",),
+        "zohodesk_update_ticket": ("Desk.tickets.WRITE",),
+        "zohodesk_contacts": ("Desk.contacts.READ",),
+        "zohodesk_create_contact": ("Desk.contacts.WRITE",),
+        "zohodesk_departments": ("Desk.basic.READ",),
+        "zohodesk_articles": ("Desk.articles.READ",),
+        "zohodesk_article": ("Desk.articles.READ",),
+    },
+}

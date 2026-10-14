@@ -31,7 +31,8 @@ class ZohoConnectInput(BaseModel):
     connector: str                      # zoho | zohodesk | zohoanalytics
     # Region of the Zoho account — REQUIRED for `start`: the OAuth app and the token are
     # tied to their data center, an `.eu` client on `accounts.zoho.com` is rejected
-    # with an opaque `invalid_client`. Unguessable, hence explicit.
+    # with an opaque `invalid_client`. Unguessable, hence explicit — except under an app
+    # dedicated by the org or the team, which carries its own (`consent_region`).
     data_center: Optional[str] = None
 
 
@@ -43,24 +44,32 @@ def _guard(inp: ZohoConnectInput) -> None:
 
 def _modes(ctx: ResolvedCtx, inp: ZohoConnectInput) -> dict:
     """What the front end (or the agent) uses to decide what to display: does the connector support
-    server-based, and is an app ALREADY available (mine, my team's,
-    my org's or the platform's — usual cascade)?"""
+    server-based, is an app ALREADY available (dedicated by my team or org, mine, my
+    team's, my org's or the platform's), and which scopes the consent will ask for — those
+    of the access level in force (`access_level`)."""
     _guard(inp)
+    group = access.current_group(ctx.sub)
+    level = zoho_oauth.consent_level(inp.connector, ctx.org_id, group)
     return {
         "connector": inp.connector,
         "self_client": True,            # always available
         "server_based": True,
-        "has_app": zoho_oauth.has_app(inp.connector, ctx.sub, inp.data_center or ""),
-        "scopes": list(zoho_oauth.SCOPES[inp.connector]),
+        "has_app": zoho_oauth.has_app(inp.connector, ctx.sub, inp.data_center or "",
+                                      org=ctx.org_id, group=group),
+        "access_level": level,
+        "scopes": list(zoho_oauth.consent_scopes(inp.connector, level)),
     }
 
 
 def start_for(ctx: ResolvedCtx, connector: str, data_center: str,
               return_app: str = "") -> connector_flow.FlowStart:
     """Consent URL to open. The app (client_id/secret) comes from the VAULT — never
-    from an env variable: the org that brings its own wins, otherwise we take the
-    region's PUBLISHER app (`credentials_store` §publisher app), which gives everyone
-    the "one click".
+    from an env variable: the app dedicated by the team or the org wins, then the one
+    brought as a credential, otherwise we take the region's PUBLISHER app
+    (`credentials_store` §publisher app), which gives everyone the "one click". The
+    scopes are those of the access level in force for the org and the active team;
+    org, team and level are signed in the state, and the callback replays the same
+    resolution.
 
     Shared with the generic flow (`connector_flow`, declared in tools/zoho.py): there
     must be only ONE way to start a Zoho consent, otherwise the two
@@ -70,11 +79,14 @@ def start_for(ctx: ResolvedCtx, connector: str, data_center: str,
     from ..connectors.activation_gate import exiger_connectable_capacite
     exiger_connectable_capacite(connector, ctx.sub)
     try:
-        dc = (data_center or "").lower()
+        org = ctx.org_id or 0
+        group = access.current_group(ctx.sub)
+        app = zoho_oauth.app_fields(connector, ctx.sub, data_center or "",
+                                    org=org, group=group)
         url = zoho_oauth.build_auth_url(
-            ctx.sub, ctx.org_id or 0, connector, dc,
-            app=zoho_oauth.app_fields(connector, ctx.sub, dc),
-            return_app=return_app)
+            ctx.sub, org, connector, zoho_oauth.consent_region(app, data_center),
+            app=app, return_app=return_app, group_id=group,
+            level=zoho_oauth.consent_level(connector, org, group))
     except zoho_oauth.ZohoOAuthError as e:
         raise AuthzDenied(400, "zoho_oauth_unavailable", str(e))
     # The connector echo is SPECIFIC to Zoho (three connectors share this flow):
@@ -157,10 +169,12 @@ CAPABILITIES += [
         description=(
             "Zoho \"server-based\" connection (CRM / Desk / Analytics): op='modes' "
             "says whether an OAuth app is already available and which scopes oto will request; "
-            "op='start' (with `data_center`: eu, com, in, au, jp, ca) returns the consent "
-            "URL to OPEN in a browser — on return, the refresh token "
-            "is stored in the vault. Prerequisite: client_id + client_secret of the Zoho app "
-            "set on the connector card (or shared by the org)."),
+            "op='start' (with `data_center`: eu, com, in, au, jp, ca — optional when your "
+            "org or team dedicated an app, which carries its region) returns the consent "
+            "URL to OPEN in a browser — it asks for the scopes of the access level in "
+            "force (`access_level` in op='modes'); on return, the refresh token "
+            "is stored in the vault. Prerequisite: a Zoho app — dedicated by your org or "
+            "team, set on the connector card, or published by oto for the region."),
     ),
     Capability(
         key="me.zoho_analytics_orgs",

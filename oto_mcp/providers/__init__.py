@@ -339,6 +339,10 @@ _CATEGORY_BY_CONNECTOR: dict = _curee("CATEGORY")
 _PUBLISHER_BY_CONNECTOR: dict = _curee("PUBLISHER")
 _DESCRIPTION_BY_CONNECTOR: dict = _curee("DESCRIPTION")
 _LOGO_DOMAIN_BY_CONNECTOR: dict = _curee("LOGO_DOMAIN")
+# Access levels of an OAuth consent connector (raw DATA: levels, `scope_implies`,
+# required scopes per tool or per op) — validated and read by `connectors.access_levels`,
+# never here: this module stays pure.
+_ACCESS_LEVELS_BY_CONNECTOR: dict = _curee("ACCESS_LEVELS")
 # Connectors WITHOUT a brand logo, on purpose: either generic (the connector
 # is not a brand — `http`, `browser`), or in-house (`gr`), or made of
 # heterogeneous public sources (`infosec`). The UI renders a monogram there. Declared

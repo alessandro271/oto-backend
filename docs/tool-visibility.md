@@ -147,6 +147,34 @@ surface. Il se referme quand la surface cesse d'être provisoire. Sur une surfac
 l'opt-in, personne n'y arrive par accident — au contraire d'un verbe qui apparaîtrait
 dans une toolbox sans avoir été demandé.
 
+## Niveau d'accès d'un connecteur : la couche `access_level` (14/10/2026)
+
+Un connecteur OAuth qui déclare des niveaux (`docs/connector-model.md` §Niveau d'accès)
+peut être restreint par l'org, puis par l'équipe active (`read` pour `zoho`, `zohodesk`).
+**Sous un niveau autre que `full`, et seulement là** :
+
+- **couche `access_level`** de `session_visibility` (`access_level_gate.hidden_tools`) : un
+  outil que le niveau ne couvre EN RIEN sort de la boîte — un outil simple dont il n'a pas
+  les scopes, un outil multiplexé dont aucune op n'est couverte, un outil du connecteur
+  sans déclaration. Fail-open comme l'activation ; ce n'est **pas** une couche
+  d'installation (`COUCHES_INSTALLABLES`) : le catalogue le dit `not_exposed` ;
+- **schéma servi par appelant** : `CallContextMiddleware.on_list_tools` retire de l'enum
+  `op` les ops non couvertes (`restricted_ops` + `restrict_schema`) ; un défaut qui n'est
+  plus couvert est retiré et `op` devient requis ;
+- **garde d'appel fail-closed** `access_level_denied` (`access_level_gate.require_covered`),
+  aux DEUX sites, juste après la garde d'activation et sur le même contexte : le middleware
+  de contexte (appel direct) et `tools/meta.executer_cible` (`oto_call`, recettes). Elle
+  lit les arguments : une op non couverte est refusée, un appel sans `op` est jugé sur l'op
+  par défaut du schéma, une op ou un outil non déclaré est refusé. Le refus nomme le
+  niveau, l'outil, l'op, les scopes exigés, qui l'a posé et le geste qui le lève.
+
+Au niveau `full` — le défaut — rien ne change : aucun outil masqué, aucun octet de schéma
+touché, aucune garde qui morde. Un connecteur sans niveaux ne coûte aucune lecture.
+`oto_tool_schema` sert le schéma brut (toutes les ops) : la garde d'appel reste la barrière.
+Le réglage se pose par `oto_connector_access_level` (`refresh_visibility` : la session
+courante se recharge, celles des autres membres à leur prochaine session — la garde, elle,
+vaut dès leur prochain appel).
+
 ## Méta-tools et `PROTECTED_TOOLS`
 
 Méta-tools exposés : `oto_call` et `oto_tool_schema` (`tools/meta.py`, MCP-only par nature) ; la toolbox du membre est une capacité (`capabilities/tools_me.py`, #429) — `oto_disable_tool`/`oto_enable_tool` sont la face MCP des mêmes capacités que `POST|DELETE /api/me/tools/{name}`, `oto_list_my_tools` une capacité MCP-only (`me.tools.search`) sur le noyau `tools/catalogue.py`, que la grille du dashboard (`GET /api/me/tools`) ne partage pas : elle pose une autre question. **`PROTECTED_TOOLS`** (`tool_visibility.py`, source unique) = quatre familles jamais masquables (default-hidden inclus) **ni désactivables** : méta-toolset + identité (`oto_list_my_tools`/`oto_enable_tool`/`oto_whoami`/`oto_profile`), échappatoires de contexte (`oto_use_org`/`oto_clear_org`/`oto_list_orgs`/`oto_use_group`/`oto_clear_group` — anti-lockout, vécu Sentry 2026-06-30), boucle d'usage (`feedback`/`run_start`/`run_finish` — mandatés par les instructions plateforme ADR 0017 : un toggle qui les masque rend le gap invisible), **dispatch universel** (`oto_call`/`oto_tool_schema` — ADR 0036 : appeler par son nom un outil NON listé (FOD, connecteur non installé) le temps d'un appel, sans muter la visibilité ; exécution par `Tool.run` HORS middleware → gates call-time intactes + rédaction ré-appliquée via `redaction.py`. Un connecteur COUPÉ — master plateforme, override d'org, coupure d'équipe — n'est pas « non listé » : refus `connector_disabled` sur les deux chemins, joué par `connectors/activation_gate.py` après la pose du contexte d'appel, #1064). Garde des deux faces, désormais un seul handler : masquer un outil protégé → 400 `protected_tool`, un nom inconnu → 404 `unknown_tool` ; `GET /api/me/tools` expose `protected:bool` (toggle inerte dashboard).

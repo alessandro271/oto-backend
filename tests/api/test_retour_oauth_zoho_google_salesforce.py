@@ -77,9 +77,10 @@ def test_zoho_state_illisible_double_zoho_error(monkeypatch):
 def test_zoho_succes_ne_sert_que_la_forme_neuve(monkeypatch):
     """Succès sur `zohodesk` (pas `zoho`) : seule la forme neuve est servie,
     portant le connecteur RÉEL."""
-    parsed = {"sub": "u1", "org": 5, "connector": "zohodesk",
-             "data_center": "eu", "return_app": ""}
+    parsed = {"sub": "u1", "org": 5, "group": None, "connector": "zohodesk",
+             "data_center": "eu", "level": "full", "return_app": ""}
     monkeypatch.setattr(zoho_routes.zoho_oauth, "verify_state", lambda s: parsed)
+    monkeypatch.setattr(zoho_routes.roles, "is_org_member", lambda sub, org: True)
     monkeypatch.setattr(zoho_routes.zoho_oauth, "app_fields", lambda *a, **k: {})
     monkeypatch.setattr(zoho_routes.zoho_oauth, "exchange_code",
                         lambda *a, **k: {"refresh_token": "rt"})
@@ -91,12 +92,50 @@ def test_zoho_succes_ne_sert_que_la_forme_neuve(monkeypatch):
     assert q["connector"] == ["zohodesk"] and q["connect"] == ["connected"]
 
 
+def test_zoho_retour_rejoue_l_org_l_equipe_et_le_niveau_du_state(monkeypatch):
+    """Le retour, appelé par Zoho sans session, résout l'app sous l'org ET l'équipe
+    SIGNÉES au départ — pas sous l'équipe maison du compte — et range le niveau demandé :
+    le code s'échange avec l'app pour laquelle il a été émis."""
+    parsed = {"sub": "u1", "org": 5, "group": 9, "connector": "zoho",
+              "data_center": "eu", "level": "read", "return_app": ""}
+    vu = {}
+    monkeypatch.setattr(zoho_routes.zoho_oauth, "verify_state", lambda s: parsed)
+    monkeypatch.setattr(zoho_routes.roles, "is_org_member", lambda sub, org: True)
+    monkeypatch.setattr(zoho_routes.zoho_oauth, "app_fields",
+                        lambda c, sub, dc, *, org, group: vu.update(app=(org, group, dc))
+                        or {"client_id": "a", "client_secret": "b"})
+    monkeypatch.setattr(zoho_routes.zoho_oauth, "exchange_code",
+                        lambda *a, **k: {"refresh_token": "rt"})
+    monkeypatch.setattr(zoho_routes.zoho_oauth, "persist",
+                        lambda *a, level, **k: vu.update(level=level))
+    handler = _endpoint(zoho_routes, ZOHO_CALLBACK)
+    resp = asyncio.run(handler(_get(ZOHO_CALLBACK, "code=c&state=s")))
+    assert _qs(_location(resp))["connect"] == ["connected"]
+    assert vu == {"app": (5, 9, "eu"), "level": "read"}
+
+
+def test_zoho_retour_hors_de_l_org_du_depart_echoue(monkeypatch):
+    """Sorti de l'org entre l'aller et le retour : rien n'est échangé ni rangé."""
+    parsed = {"sub": "u1", "org": 5, "group": None, "connector": "zoho",
+              "data_center": "eu", "level": "full", "return_app": ""}
+    monkeypatch.setattr(zoho_routes.zoho_oauth, "verify_state", lambda s: parsed)
+    monkeypatch.setattr(zoho_routes.roles, "is_org_member", lambda sub, org: False)
+
+    def _jamais(*a, **k):
+        raise AssertionError("aucun échange hors de l'org du départ")
+    monkeypatch.setattr(zoho_routes.zoho_oauth, "exchange_code", _jamais)
+    handler = _endpoint(zoho_routes, ZOHO_CALLBACK)
+    resp = asyncio.run(handler(_get(ZOHO_CALLBACK, "code=c&state=s")))
+    assert _qs(_location(resp))["connect"] == ["error"]
+
+
 def test_zoho_echange_echoue_ne_sert_que_la_forme_neuve(monkeypatch):
     """La forme neuve porte le connecteur réellement visé, y compris pour
     zohodesk/zohoanalytics ; plus aucune ancienne forme à côté."""
-    parsed = {"sub": "u1", "org": 5, "connector": "zohoanalytics",
-             "data_center": "eu", "return_app": ""}
+    parsed = {"sub": "u1", "org": 5, "group": None, "connector": "zohoanalytics",
+             "data_center": "eu", "level": "full", "return_app": ""}
     monkeypatch.setattr(zoho_routes.zoho_oauth, "verify_state", lambda s: parsed)
+    monkeypatch.setattr(zoho_routes.roles, "is_org_member", lambda sub, org: True)
     monkeypatch.setattr(zoho_routes.zoho_oauth, "app_fields", lambda *a, **k: {})
 
     def _boom(*a, **k):

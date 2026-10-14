@@ -211,6 +211,17 @@ capacités n'a pas sa place dans un index.
   #1064).
   Capacités `connectors.activation.{group_list,set_group,clear_group}` (GROUP_*). REST
   `/api/groups/{id}/connectors[/{name}]/activation`.
+  **Même monotonie pour le NIVEAU D'ACCÈS d'un connecteur OAuth** (14/10/2026,
+  `connectors/access_levels.py`, `docs/connector-model.md` §Niveau d'accès) : le chef
+  d'équipe peut poser un niveau plus ÉTROIT que celui de l'org (fermeture des scopes
+  incluse), jamais plus large — refusé à la pose (409 `access_level_wider_than_org`), et
+  si l'org restreint après coup, son niveau est le plafond (une valeur d'équipe plus large
+  ne s'applique pas). L'équipe ACTIVE décide, sinon l'org, sinon `full`. Capacités
+  `connectors.access_level.{group_get,set_group,clear_group}` (GROUP_ADMIN_OF), REST
+  `/api/groups/{id}/connectors/{name}/access-level`, MCP `oto_connector_access_level
+  scope=group`. L'équipe peut aussi DÉDIER son app OAuth au consentement, qui prime sur
+  celle de l'org (`/api/groups/{id}/connectors/{name}/oauth-app`, REST seule,
+  `docs/connector-vault.md` §App DÉDIÉE).
   **Réserver un connecteur à des membres (ex-ADR 0012 B2) n'existe plus depuis le
   24/09/2026** (ADR 0053 D1) : on pose la clé au niveau de l'équipe, ou en clé perso.
 

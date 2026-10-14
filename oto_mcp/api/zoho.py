@@ -26,7 +26,7 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 
 from ..auth import zoho as zoho_oauth
-from .. import config
+from .. import config, roles
 
 logger = logging.getLogger(__name__)
 
@@ -81,15 +81,20 @@ def make_routes(
                                     status_code=302)
 
         def _finish() -> None:
-            # ⚠️ The REGION must be passed again: the publisher app is keyed by data
-            # center. Without it, `app_fields` would only see the BYO and the code
-            # exchange would fail for every user who came through oto's app — even
-            # though the consent itself succeeded.
+            # The SAME resolution as the start, from the signed state: org AND team
+            # (the dedicated app of a team, the BYO of its cascade), and the REGION —
+            # the publisher app is keyed by data center. Re-resolved from the ambient
+            # context, the callback (no session) saw the HOME team, not the start's: the
+            # code was then exchanged with another app than the one it was issued for.
+            if parsed["org"] and not roles.is_org_member(parsed["sub"], parsed["org"]):
+                raise zoho_oauth.ZohoOAuthError("no longer a member of the start's org")
             app = zoho_oauth.app_fields(parsed["connector"], parsed["sub"],
-                                        parsed["data_center"])
+                                        parsed["data_center"], org=parsed["org"],
+                                        group=parsed["group"])
             tokens = zoho_oauth.exchange_code(code, parsed["data_center"], app=app)
             zoho_oauth.persist(parsed["sub"], parsed["org"], parsed["connector"],
-                               parsed["data_center"], tokens, app=app)
+                               parsed["data_center"], tokens, app=app,
+                               level=parsed["level"])
 
         try:
             await run_in_threadpool(_finish)   # sync DB + HTTP → off the event loop

@@ -642,6 +642,15 @@ adossée aux identifiants d'une personne.
 **même** règle : un code d'autorisation est émis pour un `client_id` précis, l'échanger
 avec un autre échoue — après le consentement de l'utilisateur, au pire moment.
 
+**Zoho, même règle avec les MÊMES entrées.** Le retour est appelé par Zoho, sans session :
+re-résolu depuis le contexte ambiant, il voyait l'équipe MAISON du compte, pas celle de
+l'aller — donc potentiellement une autre app. Depuis le 14/10/2026 l'aller signe dans le
+state l'org, **l'équipe** et le **niveau d'accès** (`make_state`, refusé sans eux), et le
+retour rejoue `zoho_oauth.app_fields(…, org=, group=)` avec ces valeurs — la cascade du
+BYO résolue sous cette org et cette équipe (`_under`), refusée si l'appelant a quitté l'org
+entre-temps. `persist` range en meta le niveau demandé et le `scope` que Zoho dit avoir
+accordé (`docs/connector-model.md` §Niveau d'accès).
+
 ### App d'ÉDITEUR — le cran au-dessus de l'org
 
 Prolongement direct d'« Application ≠ jeton » : si l'application est une infrastructure,
@@ -654,9 +663,10 @@ articles-only). Avec, il ne reste que le geste utile : consentir.
   app OAuth est enregistrée dans **sa** région (`accounts.zoho.eu` rejette un client
   `.com`), donc la région fait partie de la clé. Accesseurs
   `credentials_store.{set,get,list,clear}_editor_app`.
-- **Ordre de lecture** (`auth.zoho.app_fields`) : le BYO **prime** (membre > équipe >
-  org) — une org qui veut voir SON app dans ses logs la pose et rien ne change pour
-  elle ; l'app d'éditeur n'est le repli que si personne n'a rien apporté.
+- **Ordre de lecture** (`auth.zoho.app_fields`) : l'app **dédiée** de l'équipe, puis
+  celle de l'org (§App DÉDIÉE ci-dessous), puis le BYO (membre > équipe > org) — une org
+  qui veut voir SON app dans ses logs la pose et rien ne change pour elle ; l'app
+  d'éditeur n'est le repli que si personne n'a rien apporté.
 - ⚠️ **Invariant qui rend le rangement sûr** : `walk_cascade` ne propose le palier
   plateforme que si le connecteur déclare `auth_modes ∋ 'platform'`. Les connecteurs à
   consentement ne le déclarent pas ⟹ l'app d'éditeur n'est **jamais** servie comme
@@ -698,6 +708,34 @@ articles-only). Avec, il ne reste que le geste utile : consentir.
 - **Conséquence de rotation** : `persist()` range une COPIE de l'app dans le credential
   né du consentement. Roter l'app d'éditeur ne casse donc pas les connexions déjà
   établies… jusqu'à leur prochain refresh, qui échouera avec l'ancien `client_secret`.
+
+### App DÉDIÉE d'une org ou d'une équipe — l'app sans le jeton (14/10/2026)
+
+L'app d'éditeur un cran plus bas. Posée en BYO au palier org, l'app d'une org (ses
+`client_id`/`client_secret`) était un **credential d'appel** : la cascade la servait NUE,
+sans `refresh_token`, à qui n'avait pas consenti. Rangée à part, elle n'est lue que par le
+consentement.
+
+- **Rangement** : scope `PLATFORM`, `entity_id = app:org:<id>` / `app:group:<id>`, blob JSON
+  explicite `{client_id, client_secret, data_center}` — pour Zoho, la **région fait partie de
+  l'app** (une app est enregistrée dans un data center). Préfixe distinct d'`editor:`, donc
+  absent de `list_editor_apps`. Accesseurs `credentials_store.{set,get,clear}_dedicated_app`,
+  `dedicated_app_owners` (présence sans déchiffrer, pour `app_ready`).
+- **Même invariant que l'app d'éditeur** : `walk_cascade` ne propose le palier plateforme
+  qu'aux connecteurs `auth_modes ∋ 'platform'` ; les connecteurs à consentement ne le
+  déclarent pas ⟹ jamais servie comme credential d'appel (`tests/test_editor_app.py`,
+  prouvé en SQL par `tests/connectors/test_access_level_live.py`).
+- **Ordre de lecture du consentement** : app dédiée de l'équipe > app dédiée de l'org >
+  credential BYO existant (comportement d'avant conservé) > app d'éditeur. Une app dédiée
+  impose sa région : un départ qui en nomme une autre est refusé (`consent_region`).
+- **Pose : REST seule** (secret brut), `ORG_ADMIN_OF` / `GROUP_ADMIN_OF`,
+  `PUT|GET|DELETE /api/{orgs,groups}/{id}/connectors/{name}/oauth-app`
+  (`capabilities/connectors/oauth_app.py`). Le `GET` rend `configured`, la région, la date
+  et l'auteur de la pose et `read_fingerprints` (4 caractères HMAC par champ secret, liés à
+  la ligne) — jamais le secret ni le `client_id` (contrat de `me.credential`, #671). Liste
+  FERMÉE : seuls les connecteurs dont le flux lit une app dédiée (les trois Zoho).
+- ⚠️ Rangée au palier plateforme, elle **ne part pas** avec un export de périmètre de son
+  org (`export_perimetre` ne prend jamais `platform`) : l'org importée la repose.
 
 ### Grant mort : marquer, plus jamais purger (oto#25 lot a, 2026-09-04)
 
