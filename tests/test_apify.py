@@ -354,16 +354,46 @@ def test_run_sync_out_of_budget_names_the_run_bills_nothing_and_aborts_nothing()
 
 
 @pytest.mark.parametrize("status", ["FAILED", "TIMED-OUT", "ABORTED"])
-def test_run_sync_on_a_run_that_did_not_succeed_points_to_its_status(status):
-    """Un run en échec a coûté — mais une erreur n'est pas un appel facturé : l'erreur
-    nomme le run, et `apify_run_status` (état terminal) relève son coût."""
-    from oto_mcp.mcp_errors import McpError
+def test_run_sync_on_a_run_that_did_not_succeed_is_billed_and_answered(status):
+    """Un run en échec a coûté, et une erreur n'est pas un appel facturé : il est
+    relevé ICI et RENDU (pas levé), avec ce qu'il a produit et son run id."""
+    out, traces, inst = _sync(_r(status), items=[{"partiel": 1}])
+    assert out["run_id"] == RUN and out["status"] == status
+    assert RUN in out["error"] and "apify_run_status" in out["error"]
+    assert out["items"] == [{"partiel": 1}]
+    assert traces == [{"quantity": 42100, "apify_run_id": RUN}]
+    inst.dataset_items.assert_called_once()
 
-    out, traces, inst = _sync(_r(status))
-    assert isinstance(out, McpError)
-    assert RUN in str(out) and status in str(out) and "apify_run_status" in str(out)
-    assert traces == [{"quantity": 0}]
-    inst.dataset_items.assert_not_called()
+
+def _ppe(usd, comptes, reserves):
+    """Un run pay-per-event : `usageTotalUsd` ne compte que les événements RÉSERVÉS."""
+    run = _r("SUCCEEDED", usd=usd)
+    run["data"].update({
+        "chargedEventCounts": comptes,
+        "accountedChargedEventCounts": reserves,
+        "pricingInfo": {"pricingModel": "PAY_PER_EVENT", "pricingPerEvent": {
+            "actorChargeEvents": {
+                "place-scraped": {"eventPriceUsd": 0.003},
+                "filter-applied": {"eventPriceUsd": 0.001},
+                "apify-actor-start": {"eventPriceUsd": 0.00005}}}}})
+    return run
+
+
+def test_events_counted_but_not_yet_booked_are_billed_at_their_price():
+    """Mesuré le 14/10/2026 (run Dlvmeb19jTs5K0k1a, Google Maps, 3 lieux) : $0.0002 à
+    SUCCEEDED (le démarrage seul), $0.0122 neuf secondes plus tard. Le facturier garde
+    le PREMIER chiffre d'un job : l'écart se chiffre ici, au prix de l'acteur."""
+    tot = {"place-scraped": 3, "filter-applied": 3, "apify-actor-start": 4}
+    tot_0 = {"place-scraped": 0, "filter-applied": 0, "apify-actor-start": 4}
+    _, avant, _ = _sync(_ppe(0.0002, tot, tot_0))
+    _, apres, _ = _sync(_ppe(0.0122, tot, tot))
+    assert avant == apres == [{"quantity": 12200, "apify_run_id": RUN}]
+
+
+def test_a_run_without_event_counts_bills_its_usage_total():
+    """Un acteur payé à l'usage (pas d'événements) : `usageTotalUsd` seul, inchangé."""
+    _, traces, _ = _sync(_r("SUCCEEDED", usd=0.0421))
+    assert traces == [{"quantity": 42100, "apify_run_id": RUN}]
 
 
 @pytest.mark.parametrize("reponse", [{}, {"data": {"status": "READY"}}, None])

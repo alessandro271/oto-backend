@@ -61,7 +61,7 @@ def _upstream_message(e) -> str:
     return f"Apify refused the request (HTTP {status}): {e.body}"
 
 
-# The states a run never leaves: its `usageTotalUsd` is final there, and only there.
+# The states a run never leaves. Its cost is not final there yet: see `_cout`.
 _TERMINAL = frozenset({"SUCCEEDED", "FAILED", "TIMED-OUT", "ABORTED"})
 
 # `apify_run_sync` waits this long in all, by slices of at most `_WAIT_SLICE_S` —
@@ -98,6 +98,45 @@ def _gratuit() -> None:
     session_org.note_call_trace(quantity=0)
 
 
+def _usd(v: Any) -> Optional[float]:
+    """A dollar amount Apify served, or None when it is not a finite, positive number."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)) \
+            or not math.isfinite(v) or v < 0:
+        return None
+    return float(v)
+
+
+def _cout(run: dict) -> Optional[float]:
+    """What a FINISHED run costs: `usageTotalUsd` plus the events Apify has counted but
+    not yet booked.
+
+    ⚠️ A pay-per-event actor (Google Maps, most of the Store) reaches SUCCEEDED before
+    Apify books its events: measured on 14/10/2026, run Dlvmeb19jTs5K0k1a read $0.0002
+    at SUCCEEDED (the actor start alone) and $0.0122 nine seconds later, once
+    `accountedChargedEventCounts` caught up with `chargedEventCounts`. The biller keeps
+    the first figure of a job, so the gap is priced here from the actor's own event
+    prices — once booked, the gap is 0 and the figure is the same. None when
+    `usageTotalUsd` cannot be read."""
+    total = _usd(run.get("usageTotalUsd"))
+    if total is None:
+        return None
+    comptes = run.get("chargedEventCounts")
+    reserves = run.get("accountedChargedEventCounts")
+    prix = (((run.get("pricingInfo") or {}).get("pricingPerEvent") or {})
+            .get("actorChargeEvents") or {})
+    if not isinstance(comptes, dict) or not isinstance(prix, dict):
+        return total
+    reserves = reserves if isinstance(reserves, dict) else {}
+    for evenement, n in comptes.items():
+        unitaire = _usd((prix.get(evenement) or {}).get("eventPriceUsd"))
+        deja = reserves.get(evenement, 0)
+        if unitaire is None or isinstance(n, bool) or not isinstance(n, int) \
+                or isinstance(deja, bool) or not isinstance(deja, int):
+            continue
+        total += max(0, n - deja) * unitaire
+    return total
+
+
 def _releve(out: Any, run_id: str) -> None:
     """Record a FINISHED run's real cost on the current call's trace: `quantity` in
     micro-dollars, and the run as the JOB of the line (`apify_run_id`, served as
@@ -126,9 +165,8 @@ def _releve(out: Any, run_id: str) -> None:
     if status not in _TERMINAL:
         _gratuit()
         return
-    cout = run.get("usageTotalUsd")
-    if (isinstance(cout, bool) or not isinstance(cout, (int, float))
-            or not math.isfinite(cout) or cout < 0):
+    cout = _cout(run)
+    if cout is None:
         logger.warning("apify_run_status %s: finished (%s) without a readable cost "
                        "(%s), cost not recorded", run_id, status, type(cout).__name__)
         _gratuit()
@@ -269,7 +307,8 @@ def register(mcp: FastMCP) -> None:
         stopped: the error names its run id — continue with `apify_run_status` then
         `apify_dataset_items`. For a scrape you know is long, use `apify_run`.
 
-        Returns: the LIST of dataset items.
+        Returns: the LIST of dataset items — or, for a run that ended FAILED, TIMED-OUT
+        or ABORTED, `{error, run_id, status, items}` (that run is billed too).
 
         Args:
             actor_id: `username/actor-name` or id.
@@ -315,17 +354,15 @@ def register(mcp: FastMCP) -> None:
                     run_id, wait_for_finish=min(_WAIT_SLICE_S, int(reste)))
                 run = _run_of(out) or {}
             status = run.get("status")
-            if status != "SUCCEEDED":
-                # A failed or aborted run cost too — but an error is not a billed
-                # call: `apify_run_status` on it records the cost.
-                _gratuit()
-                raise _bad(
-                    f"Apify run {run_id} ({actor_id}) ended {status}. Its cost and "
-                    f"log: `apify_run_status(run_id=\"{run_id}\")`; what it produced: "
-                    "`apify_dataset_items`.")
             items = client.dataset_items(
                 run.get("defaultDatasetId"), limit=limit, fields=fields)
+        # A failed or aborted run cost too, and an error is not a billed call: it is
+        # billed here and ANSWERED, with what it produced, never raised.
         _releve(out, run_id)
+        if status != "SUCCEEDED":
+            return {"error": f"Apify run {run_id} ({actor_id}) ended {status}. Its log: "
+                             f"`apify_run_status(run_id=\"{run_id}\")`.",
+                    "run_id": run_id, "status": status, "items": items}
         return items
 
     @mcp.tool()
