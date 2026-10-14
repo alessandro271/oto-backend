@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 from contextlib import contextmanager
 from typing import Any, Optional
 
@@ -60,8 +61,27 @@ def _upstream_message(e) -> str:
     return f"Apify refused the request (HTTP {status}): {e.body}"
 
 
-# The states a run never leaves: its `usageTotalUsd` is final there, and only there.
+# The states a run never leaves. Its cost is not final there yet: see `_cout`.
 _TERMINAL = frozenset({"SUCCEEDED", "FAILED", "TIMED-OUT", "ABORTED"})
+
+# `apify_run_sync` waits this long in all, by slices of at most `_WAIT_SLICE_S` —
+# Apify's own cap on `waitForFinish`, and the 300 s the synchronous endpoint used to hold.
+_SYNC_BUDGET_S = 300
+_WAIT_SLICE_S = 60
+
+
+def _maintenant() -> float:
+    """The clock of `apify_run_sync`'s budget — a seam, so a test can drive it."""
+    return time.monotonic()
+
+
+def _run_of(out: Any) -> Optional[dict]:
+    """The run object of a `run` / `run_status` answer — the `{data: …}` envelope of
+    the API v2, or a flat body read as the run itself."""
+    run = out.get("data") if isinstance(out, dict) else None
+    if not isinstance(run, dict):
+        run = out if isinstance(out, dict) else None
+    return run
 
 
 def _microdollars(cout: float) -> int:
@@ -78,7 +98,57 @@ def _gratuit() -> None:
     session_org.note_call_trace(quantity=0)
 
 
-def _releve(out: Any, run_id: str) -> None:
+def _usd(v: Any) -> Optional[float]:
+    """A dollar amount Apify served, or None when it is not a finite, positive number."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)) \
+            or not math.isfinite(v) or v < 0:
+        return None
+    return float(v)
+
+
+def _cout(run: dict, run_id: str, outil: str) -> Optional[float]:
+    """What a FINISHED run costs: `usageTotalUsd` plus the events Apify has counted but
+    not yet booked.
+
+    ⚠️ A pay-per-event actor (Google Maps, most of the Store) reaches SUCCEEDED before
+    Apify books its events: measured on 14/10/2026, run Dlvmeb19jTs5K0k1a read $0.0002
+    at SUCCEEDED (the actor start alone) and $0.0122 nine seconds later, once
+    `accountedChargedEventCounts` caught up with `chargedEventCounts`. The biller keeps
+    the first figure of a job, so the gap is priced here from the actor's own event
+    prices — once booked, the gap is 0 and the figure is the same. None when
+    `usageTotalUsd` cannot be read.
+
+    Nothing is guessed: without the booked counts, the gap cannot be told from what
+    `usageTotalUsd` already holds — adding every counted event could bill it twice —
+    so the figure is `usageTotalUsd` alone, and the log SAYS the gap was not priced.
+    An event whose price or counts cannot be read is left out the same way, said."""
+    total = _usd(run.get("usageTotalUsd"))
+    if total is None:
+        return None
+    comptes = run.get("chargedEventCounts")
+    if not isinstance(comptes, dict) or not comptes:
+        return total
+    reserves = run.get("accountedChargedEventCounts")
+    prix = (((run.get("pricingInfo") or {}).get("pricingPerEvent") or {})
+            .get("actorChargeEvents"))
+    if not isinstance(reserves, dict) or not isinstance(prix, dict):
+        logger.warning("%s %s: counted events without readable booked counts or prices "
+                       "(%s, %s), the not-yet-booked gap is not priced",
+                       outil, run_id, type(reserves).__name__, type(prix).__name__)
+        return total
+    for evenement, n in comptes.items():
+        unitaire = _usd((prix.get(evenement) or {}).get("eventPriceUsd"))
+        deja = reserves.get(evenement, 0)
+        if unitaire is None or isinstance(n, bool) or not isinstance(n, int) \
+                or isinstance(deja, bool) or not isinstance(deja, int):
+            logger.warning("%s %s: event %r has no readable price or counts, its "
+                           "not-yet-booked part is not priced", outil, run_id, evenement)
+            continue
+        total += max(0, n - deja) * unitaire
+    return total
+
+
+def _releve(out: Any, run_id: str, outil: str = "apify_run_status") -> None:
     """Record a FINISHED run's real cost on the current call's trace: `quantity` in
     micro-dollars, and the run as the JOB of the line (`apify_run_id`, served as
     `job_id` by the billing lens) — a finished run polled N times traces N times the
@@ -91,29 +161,26 @@ def _releve(out: Any, run_id: str) -> None:
     the log (run id and type only): an absent figure is not a zero, a guessed one would
     be billed, and a silent one would be lost. A terminal run at 0 traces 0 with its
     job — measured, nothing to bill."""
-    run = out.get("data") if isinstance(out, dict) else None
-    if not isinstance(run, dict):
-        # A flat body (no `data` envelope) is read as the run itself.
-        run = out if isinstance(out, dict) else None
+    run = _run_of(out)
     if run is None:
-        logger.warning("apify_run_status %s: unreadable response (%s), cost not recorded",
-                       run_id, type(out).__name__)
+        logger.warning("%s %s: unreadable response (%s), cost not recorded",
+                       outil, run_id, type(out).__name__)
         _gratuit()
         return
     status = run.get("status")
     if not isinstance(status, str):
-        logger.warning("apify_run_status %s: unreadable status (%s), cost not recorded",
-                       run_id, type(status).__name__)
+        logger.warning("%s %s: unreadable status (%s), cost not recorded",
+                       outil, run_id, type(status).__name__)
         _gratuit()
         return
     if status not in _TERMINAL:
         _gratuit()
         return
-    cout = run.get("usageTotalUsd")
-    if (isinstance(cout, bool) or not isinstance(cout, (int, float))
-            or not math.isfinite(cout) or cout < 0):
-        logger.warning("apify_run_status %s: finished (%s) without a readable cost "
-                       "(%s), cost not recorded", run_id, status, type(cout).__name__)
+    cout = _cout(run, run_id, outil)
+    if cout is None:
+        logger.warning("%s %s: finished (%s) without a readable cost (%s), cost not "
+                       "recorded", outil, run_id, status,
+                       type(run.get("usageTotalUsd")).__name__)
         _gratuit()
         return
     rid = run.get("id")
@@ -179,6 +246,19 @@ def register(mcp: FastMCP) -> None:
             raise _bad(str(e))
         except UpstreamHTTPError as e:
             raise _bad(_upstream_message(e))
+
+    @contextmanager
+    def _upstream_du_run(run_id: str):
+        """`_upstream` for a run that already exists: the refusal names the run, and
+        says how to pick it up — never a bare error that leads to a second launch."""
+        reprise = (f" Apify run {run_id} was started: pick it up with "
+                   f"`apify_run_status(run_id=\"{run_id}\")`, then `apify_dataset_items`.")
+        try:
+            yield
+        except ValueError as e:
+            raise _bad(str(e) + reprise)
+        except UpstreamHTTPError as e:
+            raise _bad(_upstream_message(e) + reprise)
 
     # --- find the actor -----------------------------------------------------
 
@@ -248,10 +328,12 @@ def register(mcp: FastMCP) -> None:
     ) -> Any:
         """Run an actor and return its results in one call. Waits up to 300 s.
 
-        The normal path for a bounded scrape. Beyond 300 s Apify answers 408 — use
-        `apify_run` then `apify_run_status`/`apify_dataset_items` instead.
+        The normal path for a bounded scrape. A run still going after 300 s is NOT
+        stopped: the error names its run id — continue with `apify_run_status` then
+        `apify_dataset_items`. For a scrape you know is long, use `apify_run`.
 
-        Returns: the LIST of dataset items.
+        Returns: the LIST of dataset items — or, for a run that ended FAILED, TIMED-OUT
+        or ABORTED, `{error, run_id, status, items}` (that run is billed too).
 
         Args:
             actor_id: `username/actor-name` or id.
@@ -265,19 +347,63 @@ def register(mcp: FastMCP) -> None:
             timeout_secs / memory_mbytes: run budget on Apify's side.
             max_total_charge_usd: hard cost ceiling for this run.
         """
+        # Not the synchronous endpoint: it answers with the items only — no run id,
+        # no cost — so a run through it could never be billed. Start the run, wait
+        # for it by slices, then read its dataset: the finished run carries its cost.
+        debut = _maintenant()
+        client = _client()
         with _upstream():
-            out = _client().run_sync_dataset_items(
-                actor_id, run_input=run_input, max_items=max_items, limit=limit,
-                fields=fields, timeout_secs=timeout_secs,
-                memory_mbytes=memory_mbytes,
-                max_total_charge_usd=max_total_charge_usd)
-        # The synchronous endpoint answers with the dataset items only — no run id,
-        # no cost, and the client keeps no header: the run's cost cannot be read back.
-        # Traced 0 and SAID, never NULL (read 1) nor a guessed figure.
-        logger.warning("apify_run_sync %s: the synchronous endpoint returns no run id "
-                       "nor cost, run cost not recorded", actor_id)
-        _gratuit()
-        return out
+            out = client.run(
+                actor_id, run_input=run_input, max_items=max_items,
+                timeout_secs=timeout_secs, memory_mbytes=memory_mbytes,
+                max_total_charge_usd=max_total_charge_usd,
+                wait_for_finish=_WAIT_SLICE_S)
+        run = _run_of(out)
+        run_id = run.get("id") if run else None
+        if not isinstance(run_id, str) or not run_id:
+            raise _bad(f"Apify started {actor_id} without a readable run id — "
+                       "find the run with `apify_actors` / the Apify console.")
+        # From here the run EXISTS: every refusal names it, so the agent can pick it
+        # up with `apify_run_status` instead of launching (and paying for) it again.
+        with _upstream_du_run(run_id):
+            while run.get("status") not in _TERMINAL:
+                reste = _SYNC_BUDGET_S - (_maintenant() - debut)
+                if reste < 1:
+                    # Never aborted behind the agent's back, never billed here: the
+                    # run is still going, `apify_run_status` records its cost once
+                    # it has finished.
+                    _gratuit()
+                    raise _bad(
+                        f"Apify run {run_id} ({actor_id}) is still {run.get('status')} "
+                        f"after {_SYNC_BUDGET_S} s. It keeps running: poll it with "
+                        f"`apify_run_status(run_id=\"{run_id}\")`, then read its output "
+                        "with `apify_dataset_items`.")
+                out = client.run_status(
+                    run_id, wait_for_finish=min(_WAIT_SLICE_S, int(reste)))
+                run = _run_of(out) or {}
+        # Finished: billed NOW, before reading the output — a dataset that cannot be
+        # read must not leave a finished run unbilled. Only an ANSWERED call is billed
+        # (`tool_calls.ok`), so from here nothing is raised: a failed run or an
+        # unreadable dataset is answered, with the run, never thrown.
+        _releve(out, run_id, outil="apify_run_sync")
+        status = run.get("status")
+        dataset_id = run.get("defaultDatasetId")
+        try:
+            items = client.dataset_items(dataset_id, limit=limit, fields=fields)
+        except (ValueError, UpstreamHTTPError) as e:
+            detail = (_upstream_message(e) if isinstance(e, UpstreamHTTPError)
+                      else str(e))
+            return {"error": f"Apify run {run_id} ({actor_id}) ended {status}, but its "
+                             f"output could not be read: {detail} Read it with "
+                             f"`apify_dataset_items(dataset_id=\"{dataset_id}\")` — the "
+                             "run is billed, do not launch it again.",
+                    "run_id": run_id, "status": status, "dataset_id": dataset_id,
+                    "items": None}
+        if status != "SUCCEEDED":
+            return {"error": f"Apify run {run_id} ({actor_id}) ended {status}. Its log: "
+                             f"`apify_run_status(run_id=\"{run_id}\")`.",
+                    "run_id": run_id, "status": status, "items": items}
+        return items
 
     @mcp.tool()
     def apify_run(

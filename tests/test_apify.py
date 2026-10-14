@@ -7,6 +7,7 @@ protège l'utilisateur : le 408 du mode synchrone doit ORIENTER vers le mode
 asynchrone, et les garde-fous de coût doivent atteindre le client.
 """
 import asyncio
+from contextlib import ExitStack
 from unittest.mock import patch
 
 import pytest
@@ -80,7 +81,7 @@ def test_verify_probe_registered(all_tools):
 
 def test_client_exposes_methods_called_by_tools():
     from oto.tools.apify.client import ApifyClient
-    for meth in ("store_search", "actors", "actor", "run_sync_dataset_items",
+    for meth in ("store_search", "actors", "actor",
                  "run", "run_status", "abort_run", "dataset_items"):
         assert callable(getattr(ApifyClient, meth, None)), f"ApifyClient.{meth} manquant"
 
@@ -97,25 +98,30 @@ def test_run_sync_forwards_cost_guards():
     key, cls = _with_fake_client()
     with key, cls as client_cls:
         inst = client_cls.return_value
+        inst.run.return_value = {"data": {"id": "r1", "status": "SUCCEEDED",
+                                          "usageTotalUsd": 0.01,
+                                          "defaultDatasetId": "ds1"}}
+        inst.dataset_items.return_value = []
         _tool("apify_run_sync").fn(
             actor_id="apify/google-maps-scraper",
             run_input={"searchStringsArray": ["boulangerie Marseille"]},
             max_items=20, max_total_charge_usd=1.5,
         )
 
-        kwargs = inst.run_sync_dataset_items.call_args.kwargs
+        kwargs = inst.run.call_args.kwargs
         assert kwargs["max_items"] == 20
         assert kwargs["max_total_charge_usd"] == 1.5
+        assert kwargs["wait_for_finish"] == 60, "Apify plafonne waitForFinish à 60 s"
 
 
 def test_sync_timeout_points_to_the_async_path():
-    """408 = le run dépasse 300 s : le message doit nommer la sortie de secours."""
+    """Un 408 amont (ex. au lancement) garde son orientation vers le mode asynchrone."""
     from oto_mcp.mcp_errors import McpError
     from oto.tools.common.errors import UpstreamHTTPError
 
     key, cls = _with_fake_client()
     with key, cls as client_cls:
-        client_cls.return_value.run_sync_dataset_items.side_effect = UpstreamHTTPError(
+        client_cls.return_value.run.side_effect = UpstreamHTTPError(
             408, {"error": "timeout"}, service="apify")
         with pytest.raises(McpError, match="apify_run_status"):
             _tool("apify_run_sync").fn(actor_id="apify/x")
@@ -251,19 +257,19 @@ def test_every_other_apify_tool_traces_a_free_call():
     """Lancer, arrêter, lire : chacun trace 0 — jamais NULL, que le registre lirait 1 —
     même quand l'amont rend un run TERMINÉ avec son coût (`apify_run` avec
     `wait_for_finish`, `apify_abort_run`). Le coût d'un run se relève par
-    `apify_run_status`, et par lui seul."""
+    `apify_run_status` — et par `apify_run_sync` pour le run qu'il a lui-même mené à
+    terme (tests plus bas)."""
     fini = {"data": {"id": RUN, "status": "SUCCEEDED", "usageTotalUsd": 0.5,
                      "defaultDatasetId": "ds1"}}
     appels = {
         "apify_run": ("run", {"actor_id": "apify/x", "wait_for_finish": 60}),
         "apify_abort_run": ("abort_run", {"run_id": RUN}),
-        "apify_run_sync": ("run_sync_dataset_items", {"actor_id": "apify/x"}),
         "apify_dataset_items": ("dataset_items", {"dataset_id": "ds1"}),
         "apify_actor": ("actor", {"actor_id": "apify/x"}),
         "apify_actors": ("actors", {}),
         "apify_store_search": ("store_search", {"search": "maps"}),
     }
-    assert set(appels) == EXPECTED_TOOLS - {"apify_run_status"}
+    assert set(appels) == EXPECTED_TOOLS - {"apify_run_status", "apify_run_sync"}
     for outil, (methode, kwargs) in appels.items():
         key, cls = _with_fake_client()
         with key, cls as client_cls, \
@@ -273,20 +279,196 @@ def test_every_other_apify_tool_traces_a_free_call():
         assert [c.kwargs for c in trace.call_args_list] == [{"quantity": 0}], outil
 
 
-def test_run_sync_says_its_run_cost_is_not_recorded(caplog):
-    """L'appel synchrone ne rend que les éléments du dataset — ni id de run ni coût,
-    et le client ne garde aucun en-tête : le coût n'est pas relevé, et le journal le
-    DIT à chaque appel plutôt qu'un NULL facturé 1."""
+# --- apify_run_sync : lancer, attendre par tranches, relever le coût du run --------
+#
+# Le point d'entrée synchrone d'Apify ne rend que les éléments (ni id de run ni coût) :
+# un run passé par lui n'était JAMAIS facturé. L'outil lance donc le run, l'attend par
+# tranches de 60 s (plafond de `waitForFinish`) dans 300 s au total, lit son dataset, et
+# trace le coût du run TERMINÉ comme `apify_run_status` — même unité, même job.
+
+def _sync(run_reponse, statuts=(), items=None, horloge=None, **kwargs):
+    """Appelle `apify_run_sync` : `run` rend `run_reponse`, chaque `run_status` le
+    statut suivant de `statuts` (une exception y est levée), `dataset_items` rend
+    `items` (ou la lève si c'en est une). Rend `(sortie | exception, traces, client)`."""
+    from oto_mcp.mcp_errors import McpError
+
     key, cls = _with_fake_client()
-    with key, cls as client_cls, \
-            patch("oto_mcp.tools.apify.session_org.note_call_trace") as trace, \
-            caplog.at_level("WARNING", logger="oto_mcp.tools.apify"):
-        client_cls.return_value.run_sync_dataset_items.return_value = [{"a": 1}]
-        out = _tool("apify_run_sync").fn(actor_id="apify/x")
+    with ExitStack() as pile:
+        pile.enter_context(key)
+        inst = pile.enter_context(cls).return_value
+        trace = pile.enter_context(
+            patch("oto_mcp.tools.apify.session_org.note_call_trace"))
+        if horloge is not None:
+            pile.enter_context(
+                patch("oto_mcp.tools.apify._maintenant", side_effect=horloge))
+        inst.run.return_value = run_reponse
+        inst.run_status.side_effect = list(statuts)
+        if isinstance(items, Exception):
+            inst.dataset_items.side_effect = items
+        else:
+            inst.dataset_items.return_value = [{"a": 1}] if items is None else items
+        try:
+            out = _tool("apify_run_sync").fn(actor_id="apify/x", **kwargs)
+        except McpError as e:
+            out = e
+    return out, [c.kwargs for c in trace.call_args_list], inst
+
+
+def _r(status, usd=0.0421):
+    return {"data": {"id": RUN, "status": status, "usageTotalUsd": usd,
+                     "defaultDatasetId": "ds1"}}
+
+
+def test_run_sync_finished_at_once_returns_the_items_and_bills_the_run():
+    out, traces, inst = _sync(_r("SUCCEEDED"), limit=5, fields=["title"])
+    assert out == [{"a": 1}], "même forme qu'avant : la LISTE des éléments"
+    assert traces == [{"quantity": 42100, "apify_run_id": RUN}]
+    inst.run_status.assert_not_called()
+    inst.dataset_items.assert_called_once_with("ds1", limit=5, fields=["title"])
+
+
+def test_run_sync_waits_by_slices_until_the_run_finishes_then_bills_once():
+    out, traces, inst = _sync(_r("RUNNING", 0.01),
+                              statuts=[_r("RUNNING", 0.02), _r("SUCCEEDED", 0.03)],
+                              horloge=[0, 70, 140])
     assert out == [{"a": 1}]
-    assert [c.kwargs for c in trace.call_args_list] == [{"quantity": 0}]
-    assert any("apify_run_sync" in r.getMessage() and "not recorded" in r.getMessage()
-               for r in caplog.records)
+    assert traces == [{"quantity": 30000, "apify_run_id": RUN}], \
+        "seul le coût FINAL est tracé, une fois — jamais un partiel"
+    waits = [c.kwargs["wait_for_finish"] for c in inst.run_status.call_args_list]
+    assert waits == [60, 60]
+
+
+def test_run_sync_never_waits_past_300_s_in_all():
+    _, _, inst = _sync(_r("RUNNING"), statuts=[_r("SUCCEEDED")], horloge=[0, 270])
+    assert inst.run_status.call_args.kwargs["wait_for_finish"] == 30
+
+
+def test_run_sync_out_of_budget_names_the_run_bills_nothing_and_aborts_nothing():
+    """Le run continue chez Apify : l'erreur le nomme pour `apify_run_status`, qui
+    relèvera son coût une fois terminé — rien n'est tracé ici, donc rien deux fois."""
+    from oto_mcp.mcp_errors import McpError
+
+    out, traces, inst = _sync(_r("RUNNING"), statuts=[_r("RUNNING")] * 5,
+                              horloge=[0, 100, 200, 299.5])
+    assert isinstance(out, McpError)
+    assert RUN in str(out) and "apify_run_status" in str(out)
+    assert traces == [{"quantity": 0}]
+    inst.abort_run.assert_not_called()
+    inst.dataset_items.assert_not_called()
+
+
+@pytest.mark.parametrize("status", ["FAILED", "TIMED-OUT", "ABORTED"])
+def test_run_sync_on_a_run_that_did_not_succeed_is_billed_and_answered(status):
+    """Un run en échec a coûté, et une erreur n'est pas un appel facturé : il est
+    relevé ICI et RENDU (pas levé), avec ce qu'il a produit et son run id."""
+    out, traces, inst = _sync(_r(status), items=[{"partiel": 1}])
+    assert out["run_id"] == RUN and out["status"] == status
+    assert RUN in out["error"] and "apify_run_status" in out["error"]
+    assert out["items"] == [{"partiel": 1}]
+    assert traces == [{"quantity": 42100, "apify_run_id": RUN}]
+    inst.dataset_items.assert_called_once()
+
+
+def _ppe(usd, comptes, reserves):
+    """Un run pay-per-event : `usageTotalUsd` ne compte que les événements RÉSERVÉS."""
+    run = _r("SUCCEEDED", usd=usd)
+    run["data"].update({
+        "chargedEventCounts": comptes,
+        "accountedChargedEventCounts": reserves,
+        "pricingInfo": {"pricingModel": "PAY_PER_EVENT", "pricingPerEvent": {
+            "actorChargeEvents": {
+                "place-scraped": {"eventPriceUsd": 0.003},
+                "filter-applied": {"eventPriceUsd": 0.001},
+                "apify-actor-start": {"eventPriceUsd": 0.00005}}}}})
+    return run
+
+
+def test_events_counted_but_not_yet_booked_are_billed_at_their_price():
+    """Mesuré le 14/10/2026 (run Dlvmeb19jTs5K0k1a, Google Maps, 3 lieux) : $0.0002 à
+    SUCCEEDED (le démarrage seul), $0.0122 neuf secondes plus tard. Le facturier garde
+    le PREMIER chiffre d'un job : l'écart se chiffre ici, au prix de l'acteur."""
+    tot = {"place-scraped": 3, "filter-applied": 3, "apify-actor-start": 4}
+    tot_0 = {"place-scraped": 0, "filter-applied": 0, "apify-actor-start": 4}
+    _, avant, _ = _sync(_ppe(0.0002, tot, tot_0))
+    _, apres, _ = _sync(_ppe(0.0122, tot, tot))
+    assert avant == apres == [{"quantity": 12200, "apify_run_id": RUN}]
+
+
+def test_a_run_without_event_counts_bills_its_usage_total():
+    """Un acteur payé à l'usage (pas d'événements) : `usageTotalUsd` seul, inchangé."""
+    _, traces, _ = _sync(_r("SUCCEEDED", usd=0.0421))
+    assert traces == [{"quantity": 42100, "apify_run_id": RUN}]
+
+
+def test_without_booked_counts_the_gap_is_not_guessed_and_it_is_said(caplog):
+    """Sans `accountedChargedEventCounts`, rien ne dit ce que `usageTotalUsd` contient
+    déjà : ajouter tous les événements comptés pourrait les facturer deux fois. Le
+    chiffre est `usageTotalUsd` seul, et le journal dit que l'écart n'est pas chiffré."""
+    run = _ppe(0.0122, {"place-scraped": 3, "filter-applied": 3}, None)
+    del run["data"]["accountedChargedEventCounts"]
+    with caplog.at_level("WARNING", logger="oto_mcp.tools.apify"):
+        _, traces, _ = _sync(run)
+    assert traces == [{"quantity": 12200, "apify_run_id": RUN}], "pas 0.0244 : aucun doublon"
+    assert len(caplog.records) == 1
+    assert RUN in caplog.records[0].getMessage()
+    assert "apify_run_sync" in caplog.records[0].getMessage()
+
+
+def test_an_event_without_a_readable_price_is_left_out_and_it_is_said(caplog):
+    run = _ppe(0.0002, {"place-scraped": 3, "mystery-event": 5},
+               {"place-scraped": 0, "mystery-event": 0})
+    with caplog.at_level("WARNING", logger="oto_mcp.tools.apify"):
+        _, traces, _ = _sync(run)
+    # 0.0002 + 3 × 0.003 ; « mystery-event » n'a pas de prix : laissé hors du chiffre, DIT.
+    assert traces == [{"quantity": 9200, "apify_run_id": RUN}]
+    assert len(caplog.records) == 1
+    assert "mystery-event" in caplog.records[0].getMessage()
+    assert RUN in caplog.records[0].getMessage()
+
+
+def test_run_sync_bills_a_finished_run_even_when_its_output_cannot_be_read():
+    """Le run est terminé, donc il a coûté : il est relevé AVANT la lecture du
+    dataset, et l'échec de lecture est RENDU (seul un appel répondu est facturé),
+    avec le run et le dataset pour la reprise — jamais un second lancement."""
+    from oto.tools.common.errors import UpstreamHTTPError
+
+    erreur = UpstreamHTTPError(503, "unavailable", service="apify")
+    out, traces, inst = _sync(_r("SUCCEEDED"), items=erreur)
+    assert traces == [{"quantity": 42100, "apify_run_id": RUN}]
+    assert out["run_id"] == RUN and out["status"] == "SUCCEEDED"
+    assert out["dataset_id"] == "ds1" and out["items"] is None
+    assert RUN in out["error"] and "apify_dataset_items" in out["error"]
+
+
+def test_run_sync_names_the_run_when_waiting_for_it_fails():
+    """Une panne PENDANT l'attente : le run existe et tourne encore — l'erreur le
+    nomme pour `apify_run_status`, rien n'est facturé ici (son coût n'est pas final)."""
+    from oto.tools.common.errors import UpstreamHTTPError
+    from oto_mcp.mcp_errors import McpError
+
+    erreur = UpstreamHTTPError(503, "unavailable", service="apify")
+    out, traces, inst = _sync(_r("RUNNING"), statuts=[erreur], horloge=[0, 10])
+    assert isinstance(out, McpError)
+    assert RUN in str(out) and "apify_run_status" in str(out)
+    assert traces == []
+    inst.dataset_items.assert_not_called()
+
+
+def test_a_cost_warning_names_the_tool_that_read_it(caplog):
+    run = _r("SUCCEEDED", usd=None)
+    with caplog.at_level("WARNING", logger="oto_mcp.tools.apify"):
+        _sync(run)
+        _statut(run)
+    noms = [r.getMessage().split(" ")[0] for r in caplog.records]
+    assert noms == ["apify_run_sync", "apify_run_status"]
+
+
+@pytest.mark.parametrize("reponse", [{}, {"data": {"status": "READY"}}, None])
+def test_run_sync_without_a_run_id_fails_loudly(reponse):
+    from oto_mcp.mcp_errors import McpError
+
+    out, _, _ = _sync(reponse)
+    assert isinstance(out, McpError) and "run id" in str(out)
 
 
 def test_the_run_reaches_the_journal_as_the_job_of_the_billed_line():
