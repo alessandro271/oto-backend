@@ -106,7 +106,7 @@ def _usd(v: Any) -> Optional[float]:
     return float(v)
 
 
-def _cout(run: dict) -> Optional[float]:
+def _cout(run: dict, run_id: str, outil: str) -> Optional[float]:
     """What a FINISHED run costs: `usageTotalUsd` plus the events Apify has counted but
     not yet booked.
 
@@ -116,28 +116,39 @@ def _cout(run: dict) -> Optional[float]:
     `accountedChargedEventCounts` caught up with `chargedEventCounts`. The biller keeps
     the first figure of a job, so the gap is priced here from the actor's own event
     prices — once booked, the gap is 0 and the figure is the same. None when
-    `usageTotalUsd` cannot be read."""
+    `usageTotalUsd` cannot be read.
+
+    Nothing is guessed: without the booked counts, the gap cannot be told from what
+    `usageTotalUsd` already holds — adding every counted event could bill it twice —
+    so the figure is `usageTotalUsd` alone, and the log SAYS the gap was not priced.
+    An event whose price or counts cannot be read is left out the same way, said."""
     total = _usd(run.get("usageTotalUsd"))
     if total is None:
         return None
     comptes = run.get("chargedEventCounts")
+    if not isinstance(comptes, dict) or not comptes:
+        return total
     reserves = run.get("accountedChargedEventCounts")
     prix = (((run.get("pricingInfo") or {}).get("pricingPerEvent") or {})
-            .get("actorChargeEvents") or {})
-    if not isinstance(comptes, dict) or not isinstance(prix, dict):
+            .get("actorChargeEvents"))
+    if not isinstance(reserves, dict) or not isinstance(prix, dict):
+        logger.warning("%s %s: counted events without readable booked counts or prices "
+                       "(%s, %s), the not-yet-booked gap is not priced",
+                       outil, run_id, type(reserves).__name__, type(prix).__name__)
         return total
-    reserves = reserves if isinstance(reserves, dict) else {}
     for evenement, n in comptes.items():
         unitaire = _usd((prix.get(evenement) or {}).get("eventPriceUsd"))
         deja = reserves.get(evenement, 0)
         if unitaire is None or isinstance(n, bool) or not isinstance(n, int) \
                 or isinstance(deja, bool) or not isinstance(deja, int):
+            logger.warning("%s %s: event %r has no readable price or counts, its "
+                           "not-yet-booked part is not priced", outil, run_id, evenement)
             continue
         total += max(0, n - deja) * unitaire
     return total
 
 
-def _releve(out: Any, run_id: str) -> None:
+def _releve(out: Any, run_id: str, outil: str = "apify_run_status") -> None:
     """Record a FINISHED run's real cost on the current call's trace: `quantity` in
     micro-dollars, and the run as the JOB of the line (`apify_run_id`, served as
     `job_id` by the billing lens) — a finished run polled N times traces N times the
@@ -152,23 +163,24 @@ def _releve(out: Any, run_id: str) -> None:
     job — measured, nothing to bill."""
     run = _run_of(out)
     if run is None:
-        logger.warning("apify_run_status %s: unreadable response (%s), cost not recorded",
-                       run_id, type(out).__name__)
+        logger.warning("%s %s: unreadable response (%s), cost not recorded",
+                       outil, run_id, type(out).__name__)
         _gratuit()
         return
     status = run.get("status")
     if not isinstance(status, str):
-        logger.warning("apify_run_status %s: unreadable status (%s), cost not recorded",
-                       run_id, type(status).__name__)
+        logger.warning("%s %s: unreadable status (%s), cost not recorded",
+                       outil, run_id, type(status).__name__)
         _gratuit()
         return
     if status not in _TERMINAL:
         _gratuit()
         return
-    cout = _cout(run)
+    cout = _cout(run, run_id, outil)
     if cout is None:
-        logger.warning("apify_run_status %s: finished (%s) without a readable cost "
-                       "(%s), cost not recorded", run_id, status, type(cout).__name__)
+        logger.warning("%s %s: finished (%s) without a readable cost (%s), cost not "
+                       "recorded", outil, run_id, status,
+                       type(run.get("usageTotalUsd")).__name__)
         _gratuit()
         return
     rid = run.get("id")
@@ -234,6 +246,19 @@ def register(mcp: FastMCP) -> None:
             raise _bad(str(e))
         except UpstreamHTTPError as e:
             raise _bad(_upstream_message(e))
+
+    @contextmanager
+    def _upstream_du_run(run_id: str):
+        """`_upstream` for a run that already exists: the refusal names the run, and
+        says how to pick it up — never a bare error that leads to a second launch."""
+        reprise = (f" Apify run {run_id} was started: pick it up with "
+                   f"`apify_run_status(run_id=\"{run_id}\")`, then `apify_dataset_items`.")
+        try:
+            yield
+        except ValueError as e:
+            raise _bad(str(e) + reprise)
+        except UpstreamHTTPError as e:
+            raise _bad(_upstream_message(e) + reprise)
 
     # --- find the actor -----------------------------------------------------
 
@@ -333,11 +358,14 @@ def register(mcp: FastMCP) -> None:
                 timeout_secs=timeout_secs, memory_mbytes=memory_mbytes,
                 max_total_charge_usd=max_total_charge_usd,
                 wait_for_finish=_WAIT_SLICE_S)
-            run = _run_of(out)
-            run_id = run.get("id") if run else None
-            if not isinstance(run_id, str) or not run_id:
-                raise _bad(f"Apify started {actor_id} without a readable run id — "
-                           "find the run with `apify_actors` / the Apify console.")
+        run = _run_of(out)
+        run_id = run.get("id") if run else None
+        if not isinstance(run_id, str) or not run_id:
+            raise _bad(f"Apify started {actor_id} without a readable run id — "
+                       "find the run with `apify_actors` / the Apify console.")
+        # From here the run EXISTS: every refusal names it, so the agent can pick it
+        # up with `apify_run_status` instead of launching (and paying for) it again.
+        with _upstream_du_run(run_id):
             while run.get("status") not in _TERMINAL:
                 reste = _SYNC_BUDGET_S - (_maintenant() - debut)
                 if reste < 1:
@@ -353,12 +381,24 @@ def register(mcp: FastMCP) -> None:
                 out = client.run_status(
                     run_id, wait_for_finish=min(_WAIT_SLICE_S, int(reste)))
                 run = _run_of(out) or {}
-            status = run.get("status")
-            items = client.dataset_items(
-                run.get("defaultDatasetId"), limit=limit, fields=fields)
-        # A failed or aborted run cost too, and an error is not a billed call: it is
-        # billed here and ANSWERED, with what it produced, never raised.
-        _releve(out, run_id)
+        # Finished: billed NOW, before reading the output — a dataset that cannot be
+        # read must not leave a finished run unbilled. Only an ANSWERED call is billed
+        # (`tool_calls.ok`), so from here nothing is raised: a failed run or an
+        # unreadable dataset is answered, with the run, never thrown.
+        _releve(out, run_id, outil="apify_run_sync")
+        status = run.get("status")
+        dataset_id = run.get("defaultDatasetId")
+        try:
+            items = client.dataset_items(dataset_id, limit=limit, fields=fields)
+        except (ValueError, UpstreamHTTPError) as e:
+            detail = (_upstream_message(e) if isinstance(e, UpstreamHTTPError)
+                      else str(e))
+            return {"error": f"Apify run {run_id} ({actor_id}) ended {status}, but its "
+                             f"output could not be read: {detail} Read it with "
+                             f"`apify_dataset_items(dataset_id=\"{dataset_id}\")` — the "
+                             "run is billed, do not launch it again.",
+                    "run_id": run_id, "status": status, "dataset_id": dataset_id,
+                    "items": None}
         if status != "SUCCEEDED":
             return {"error": f"Apify run {run_id} ({actor_id}) ended {status}. Its log: "
                              f"`apify_run_status(run_id=\"{run_id}\")`.",
