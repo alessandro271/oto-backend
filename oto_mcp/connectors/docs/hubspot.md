@@ -6,7 +6,7 @@ hubspot authenticates via a **private app token**. in your [hubspot account sett
 - `crm.schemas.contacts.read`, `crm.schemas.companies.read`, `crm.schemas.deals.read` (+ `crm.schemas.tickets.read` if offered) — to discover an object's properties
 - `crm.lists.read` + `crm.lists.write` — for **lists (= segments)**
 - `crm.objects.owners.read` — to list owners
-- `business-intelligence` — optional, only for the **pages a contact read** (`hubspot_visits`, op `page_views`). the connection test does not ask for it
+- `business-intelligence` — optional, only for the **pages a contact read** (`hubspot_visits`, op `page_views`). the connection test does not ask for it. ⚠️ it may not be enough: see *website visitors* below
 
 there is no `crm.objects.tickets` scope (without `.read`/`.write`): if a guide told you to tick it, tick `crm.objects.tickets.read` instead.
 
@@ -70,7 +70,7 @@ hubspot internal names are not the interface labels (`dealstage`, not "Deal Stag
 what hubspot needs on its side, per its own documentation (we have not yet read a portal with tracking on):
 - **the tracking code** installed on the site
 - for op `companies`: companies **tracked in buyer intent**. hubspot only writes the visit on the companies it tracks — in buyer intent, a saved view with **add new companies** and **tracking intent signals** turned on does it for every company entering the view from then on. tracking is paid in **hubspot credits**: 10 per company and per month, against the credits a plan includes (500 a month on starter, 3,000 on professional, 5,000 on enterprise) — hubspot's figures as of october 2026, check its catalog
-- for op `page_views`: the `business-intelligence` scope on the private app, and a **professional or enterprise** plan
+- for op `page_views`: hubspot's reference asks for the `business-intelligence` scope and a **professional or enterprise** plan. ⚠️ on a portal read in october 2026, a private app holding that scope was still refused — hubspot asked for `event-detail-read`, which is in no published scope list. until a private app is seen passing, treat a contact's page views as unavailable; the first page, last page and last session (op `contacts`) always work
 
 what hubspot does **not** expose: the pages a *company* read. the buyer intent card shows them in hubspot; the api only carries the two 30-day counts. on a company, page paths need a visitor-identification tool that writes them.
 

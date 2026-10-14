@@ -138,6 +138,19 @@ def scopes_in_body(body) -> list[str]:
     return found
 
 
+def permissions_in_message(message) -> list[str]:
+    """The permission names HubSpot puts in a refusal MESSAGE, outside the
+    MISSING_SCOPES body: "Insufficient scopes, requires one of:
+    [event-detail-read,[id]]" → ["event-detail-read"]. Bracketed items (`[id]`) are
+    placeholders, not names. Empty when the message carries no such list."""
+    import re
+    found = re.search(r"requires one of:\s*\[(.*)\]", str(message or ""))
+    if not found:
+        return []
+    items = [i.strip() for i in found.group(1).split(",")]
+    return [i for i in items if i and not i.startswith("[") and not i.endswith("]")]
+
+
 def family_of(object_type=None, family=None) -> Optional[str]:
     if family:
         return family
@@ -255,10 +268,29 @@ def translate(e, *, object_type=None, object_id=None, family=None,
     if refus is not None:
         return refus
     if code == 403 and family == "events":
-        # Not a missing scope, so not a checkbox. HubSpot's reference lists the events
-        # API for Professional and Enterprise only: we say what its documentation
-        # says and quote its own words — the cause is theirs to name, not ours.
         said = body.get("message") if isinstance(body, dict) else None
+        asks = permissions_in_message(said)
+        if asks or "scope" in str(said or "").lower():
+            # Read on a real portal, 2026-10-14: a private app token HOLDING
+            # `business-intelligence` — the scope HubSpot's reference names — was
+            # refused with "Insufficient scopes, requires one of:
+            # [event-detail-read,[id]]", outside the MISSING_SCOPES category.
+            # `event-detail-read` is in no published scope list: there is nothing
+            # we know of to tick, so the refusal must not send anyone looking.
+            named = ", ".join(f"`{a}`" for a in asks) or "a permission it does not name"
+            return _upstream_refusal(
+                e, f"HubSpot refuses the events API with this token (403): it asks for "
+                f"{named}, which is not in HubSpot's published scope list — there is "
+                "nothing known to tick on the private app, and `business-intelligence`, "
+                "the scope HubSpot's reference names, is not enough. Treat a contact's "
+                "page views as not readable with this token; its first page, last page "
+                "and last session stay readable as properties (op='contacts')."
+                + (f" HubSpot's words: {str(said)[:200]}" if said else ""),
+                reason="permission_not_grantable", status=403, family="events",
+                hubspot_asks=asks or None)
+        # No scope in HubSpot's words. Its reference lists the events API for
+        # Professional and Enterprise only: we say what its documentation says and
+        # quote its own words — the cause is theirs to name, not ours.
         return _upstream_refusal(
             e, "HubSpot refuses the events API on this portal (403), and not for a "
             "missing scope. Its documentation lists this API for Professional and "
