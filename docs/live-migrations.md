@@ -166,9 +166,14 @@ retrouver sur la base remise à niveau. Un `ALTER` qui pose la colonne sans la c
 que le `CREATE TABLE` déclare inline (PK, UNIQUE, CHECK, FK) donne une base neuve avec la
 contrainte et une production sans : la FK ne mord pas, l'unicité n'unifie pas, et **rien
 ne rougit jamais** puisque les deux « marchent ». Huit divergences de cette famille
-existaient au 01/09 ; elles sont nommées dans `_DIVERGENCES_CONNUES` (les réparer demande
-un `DROP CONSTRAINT`, donc un ACTE sur base partagée, pas une ligne de boot) et **le
-cliquet refuse la neuvième**.
+étaient nommées dans `_DIVERGENCES_CONNUES` au 01/09 ; la liste est **vide** depuis le
+14/10 (#786) et le cliquet refuse donc toute divergence. Six étaient réelles (UNIQUE de
+`projects.mcp_slug`, clés primaires d'`org_instructions` et de ses révisions, CHECK de
+`resource_grants.role`) : la révision 0057 les pose sur une base servie, sans verrou long,
+et le cliquet rejoue sa logique après le boot. Deux n'existaient qu'au banc (clé
+d'`unipile_accounts`) : elle appartient à `backfill_unipile_member_scope`, que le boot joue
+après `init_db` et que le rejeu ne jouait pas. Le remède d'une divergence est une
+**révision**, jamais une ligne de boot : c'est un acte sur une base partagée.
 
 Trois violations de la règle dormaient sur le tronc, inertes seulement parce que la
 production a ces colonnes depuis longtemps — corrigées dans le même lot : l'index

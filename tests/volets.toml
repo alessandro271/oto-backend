@@ -257,6 +257,9 @@ chemins = [
   "oto_mcp/db/connector_grants.py",
   "oto_mcp/db/connector_instances.py",
   "oto_mcp/db/connector_settings.py",
+  # Les contraintes du CREATE TABLE remises à une base servie (#786) : lues par la révision
+  # 0057 et par le rejeu du démarrage, comme `index_concurrent`.
+  "oto_mcp/db/contraintes_create_table.py",
   "oto_mcp/db/doc_grants.py",
   "oto_mcp/db/entitlements.py",
   "oto_mcp/db/estampille.py",

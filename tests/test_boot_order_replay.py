@@ -198,30 +198,55 @@ _ADD_COLUMN = re.compile(
     r"ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?\"?(\w+)\"?",
     re.IGNORECASE | re.DOTALL)
 
-# Ce qu'une base D'AVANT ne retrouve PAS en se remettant à niveau, au 2026-09-01.
-# Toutes de la même famille : une contrainte déclarée **inline dans le CREATE
-# TABLE** (PK, UNIQUE, CHECK, FK) portant une colonne que le boot pose AUSSI par
-# `ALTER`. Sur une base existante le CREATE TABLE est sauté, l'ALTER rend la
-# colonne mais pas la contrainte — la base neuve a la contrainte, la production
-# ne l'a pas, et **rien ne rougit jamais**, puisque les deux « marchent ».
+# Ce qu'une base D'AVANT ne retrouve PAS en se remettant à niveau. VIDE depuis le
+# 14/10/2026 (#786) — et c'est le cliquet : toute divergence rougit désormais.
 #
-# Elles ne sont pas corrigées ici, et c'est délibéré : reposer une PK ou un NOT
-# NULL est un ordre NON additif (`DROP CONSTRAINT`) sur une base partagée
-# prod/preprod — un ACTE, pas une ligne de boot (cf. le commentaire d'
-# `unipile_accounts` dans `_init.py`, et `docs/live-migrations.md`). Ce qui est
-# fait ici, c'est de les NOMMER et de les compter : le cliquet ci-dessous refuse
-# la NEUVIÈME. Cette liste ne doit que RÉTRÉCIR — une entrée s'en retire quand la
-# divergence est réellement réparée, à la main, dans le commit qui la répare.
-_DIVERGENCES_CONNUES = frozenset({
-    "projects.mcp_slug",                    # UNIQUE (mcp_slug)
-    "org_instructions.owner_type",          # PRIMARY KEY (owner_type, owner_id, slug)
-    "org_instructions.owner_id",            # idem
-    "org_instruction_revisions.owner_type",  # PK (owner_type, owner_id, slug, version)
-    "org_instruction_revisions.owner_id",   # idem
-    "unipile_accounts.org_id",              # PK + FK ON DELETE CASCADE + NOT NULL
-    "unipile_accounts.provider",            # PRIMARY KEY (sub, org_id, provider)
-    "resource_grants.role",                 # CHECK (role IN (…))
-})
+# Elle en a porté huit, toutes de la même famille : une contrainte déclarée **inline
+# dans le CREATE TABLE** (PK, UNIQUE, CHECK, FK) portant une colonne que le boot pose
+# AUSSI par `ALTER`. Sur une base existante le CREATE TABLE est sauté, l'ALTER rend la
+# colonne mais pas la contrainte. Leur sort, une à une :
+#
+# - `projects.mcp_slug` (UNIQUE), `org_instructions.owner_type|owner_id` (PK),
+#   `org_instruction_revisions.owner_type|owner_id` (PK), `resource_grants.role`
+#   (CHECK) : RÉELLES — l'instance principale ne les avait pas (mesuré le 14/10).
+#   Posées par la révision 0057 (`db/contraintes_create_table.py`), que la remise à
+#   niveau ci-dessous rejoue après le démarrage, dans la transaction.
+# - `unipile_accounts.org_id|provider` (PK (sub, org_id, provider), FK CASCADE, NOT
+#   NULL) : JAMAIS réelles — présentes des deux côtés au 14/10. Leur cycle de vie
+#   appartient à `db.backfill_unipile_member_scope()`, que le boot joue APRÈS
+#   `init_db` (`server._prepare_database`) ; le rejeu ne jouait que
+#   `apply_boot_schema`, il ne pouvait donc pas les voir revenir. Il joue maintenant
+#   les deux, comme le boot.
+#
+# Une entrée ne s'ajoute ici qu'avec sa raison et son issue : une divergence nommée
+# reste une garde absente de la base servie.
+_DIVERGENCES_CONNUES: frozenset[str] = frozenset()
+
+
+def _remettre_a_niveau(conn) -> None:
+    """Ce qu'une base servie reçoit pour rejoindre le tronc, dans la transaction de
+    `conn` : le schéma du démarrage, le backfill qui possède la clé d'`unipile_accounts`
+    (joué par le boot juste après `init_db`), puis les contraintes du CREATE TABLE que
+    pose la révision 0057 — sans CONCURRENTLY, le rejeu étant transactionnel."""
+    from contextlib import contextmanager
+
+    from oto_mcp.db import contraintes_create_table, index_concurrent
+    from oto_mcp.db import unipile as db_unipile
+    from oto_mcp.db._init import apply_boot_schema
+
+    apply_boot_schema(conn)
+
+    @contextmanager
+    def _meme_connexion():
+        yield conn
+
+    with pytest.MonkeyPatch.context() as mp:
+        # Le backfill ouvre ses propres connexions : sur une autre que `conn`, il ne
+        # verrait pas la colonne retirée dans la transaction en cours.
+        mp.setattr(db_unipile, "_connect", _meme_connexion)
+        db_unipile.backfill_unipile_member_scope()
+    contraintes_create_table.poser_dans_la_transaction(
+        conn, index_concurrent.scalaire_de(conn))
 
 
 @pytest.fixture(scope="module")
@@ -275,8 +300,6 @@ def rejeu_sans_chaque_colonne(base_bootee, colonnes_posees_par_alter):
 
     Tout se joue en transaction ANNULÉE : la base neuve du module en ressort
     intacte, et les tests d'idempotence qui la partagent ne voient rien passer."""
-    from oto_mcp.db._init import apply_boot_schema
-
     neuve = _empreinte(base_bootee)
     rouges: list[tuple[str, str]] = []
     divergentes: dict[str, list[str]] = {}
@@ -289,7 +312,7 @@ def rejeu_sans_chaque_colonne(base_bootee, colonnes_posees_par_alter):
                 # l'a jamais eue.
                 base_bootee.execute(
                     f'ALTER TABLE "{table}" DROP COLUMN "{colonne}" CASCADE')
-                apply_boot_schema(base_bootee)
+                _remettre_a_niveau(base_bootee)
                 apres = _empreinte(base_bootee)
         except AssertionError:
             raise

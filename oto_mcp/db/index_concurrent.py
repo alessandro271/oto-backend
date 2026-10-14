@@ -261,9 +261,10 @@ def declares() -> tuple[IndexConcurrent, ...]:
     pas le poser : un banc compare cette liste aux déclarations du code.
 
     Import tardif : les modules déclarants importent celui-ci."""
-    from . import access_shadow, index_releve, search
+    from . import access_shadow, contraintes_create_table, index_releve, search
     return (index_releve.RELEVE, *index_releve.OUVERTURES, index_releve.GESTES_DE_LIGNE,
-            *search.INDEX_VALEURS, access_shadow.CLE_ORIGINE)
+            *search.INDEX_VALEURS, access_shadow.CLE_ORIGINE,
+            *(cle.index for cle in contraintes_create_table.CLES))
 
 
 class RevisionSansIndex(ValueError):
