@@ -7,7 +7,7 @@ value TEXT NOT NULL,
 set_by TEXT,
 set_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 CONSTRAINT connector_settings_scope_type_check
-CHECK (scope_type IN ('platform', 'org')),
+CHECK (scope_type IN ('platform', 'org', 'group')),
 CONSTRAINT connector_settings_pkey
 PRIMARY KEY (scope_type, scope_id, connector, key)
 );

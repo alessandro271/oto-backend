@@ -197,6 +197,7 @@ def test_l_app_zoho_promise_est_celle_de_la_resolution(jeu, apportee):
     """`connect.app_ready` d'un connecteur Zoho : la présence répond d'abord, la
     résolution seulement si un credential est à portée — et la réponse est STRICTEMENT
     celle de `has_app`, sans app apportée comme avec une app apportée au palier membre."""
+    from oto_mcp import access
     from oto_mcp import credentials_store as cs
     from oto_mcp import db
     from oto_mcp.auth import zoho as zoho_oauth
@@ -208,7 +209,9 @@ def test_l_app_zoho_promise_est_celle_de_la_resolution(jeu, apportee):
         for nom in ("zoho", "zohodesk", "zohoanalytics"):
             with db.reuse_connection():
                 promise = zoho_oauth.app_ready(nom, jeu.sub)
-            assert promise is zoho_oauth.has_app(nom, jeu.sub), nom
+            assert promise is zoho_oauth.has_app(
+                nom, jeu.sub, org=access.current_org(jeu.sub),
+                group=access.current_group(jeu.sub)), nom
         if apportee:
             with db.reuse_connection():
                 assert zoho_oauth.app_ready("zohodesk", jeu.sub) is True

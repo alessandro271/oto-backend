@@ -720,7 +720,8 @@ consentement.
   explicite `{client_id, client_secret, data_center}` — pour Zoho, la **région fait partie de
   l'app** (une app est enregistrée dans un data center). Préfixe distinct d'`editor:`, donc
   absent de `list_editor_apps`. Accesseurs `credentials_store.{set,get,clear}_dedicated_app`,
-  `dedicated_app_owners` (présence sans déchiffrer, pour `app_ready`).
+  `dedicated_app_owners` (présence sans déchiffrer, pour `app_ready` : une lecture par
+  appel pour tous les connecteurs, `dedicated_apps`, mémoïsée par `lecture_d_appel`).
 - **Même invariant que l'app d'éditeur** : `walk_cascade` ne propose le palier plateforme
   qu'aux connecteurs `auth_modes ∋ 'platform'` ; les connecteurs à consentement ne le
   déclarent pas ⟹ jamais servie comme credential d'appel (`tests/test_editor_app.py`,

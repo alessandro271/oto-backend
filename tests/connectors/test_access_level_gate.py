@@ -192,11 +192,21 @@ def test_read_masque_ce_qu_il_ne_couvre_en_rien(contexte):
 
 def test_les_ops_servies_suivent_le_niveau(contexte):
     regler, _ = contexte
-    assert gate.restricted_ops("sub-x") == {}
+    assert gate.restricted_ops("sub-x", NOMS) == {}
     regler(zoho={"org": "read"})
-    assert gate.restricted_ops("sub-x") == {
+    assert gate.restricted_ops("sub-x", NOMS) == {
         "zoho_record": {"list", "get", "search"}, "zoho_note": {"list"}}
-    assert gate.restricted_ops(None) == {}
+    assert gate.restricted_ops("sub-x", {"zoho_record"}) == {
+        "zoho_record": {"list", "get", "search"}}
+    assert gate.restricted_ops(None, NOMS) == {}
+
+
+def test_une_liste_sans_outil_a_niveaux_ne_lit_rien(contexte):
+    """`tools/list` d'une boîte sans outil multiplexé d'un connecteur à niveaux : ni le
+    contexte ni le réglage ne sont lus (le chemin reste pur, sans base)."""
+    _regler, lus = contexte
+    assert gate.restricted_ops("sub-x", {"serper_search", "oto_doc", "zohodesk_tickets"}) == {}
+    assert lus == []
 
 
 def test_le_schema_ne_garde_que_les_ops_couvertes():

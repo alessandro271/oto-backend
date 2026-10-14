@@ -107,20 +107,22 @@ def refusal(decl: access_levels.AccessLevels, level: str, source: str, tool: str
               "org_id": org, "group_id": group})
 
 
-def _verdict(tool: str, args: dict, default_op: Optional[str]) -> Optional[ErrorData]:
-    """Sync (threadpool): the refusal for this call, or None."""
-    decl = access_levels.for_tool(tool)
-    if decl is None:
-        return None
-    sub = call_axes.current_user_sub_from_token()
-    if not sub:
-        return None
-    op = None
-    if decl.is_op_tool(tool):
-        op = args.get(access_levels.OP_PARAM, default_op)
-    for org, group in _judged_contexts(sub, decl.connector):
-        level, source = access_levels.resolve(decl.connector, org, group)
-        if access_levels.restricts(level) and not decl.covers(level, tool, op):
+def _restricting_contexts(sub: str, connector: str) -> list[tuple]:
+    """Sync (threadpool): `(org, team, level, source)` for every judged context whose
+    level RESTRICTS — empty when every context is `full`."""
+    out = []
+    for org, group in _judged_contexts(sub, connector):
+        level, source = access_levels.resolve(connector, org, group)
+        if access_levels.restricts(level):
+            out.append((org, group, level, source))
+    return out
+
+
+def _verdict(decl: access_levels.AccessLevels, tool: str, op: Optional[str],
+             restricting: list[tuple]) -> Optional[ErrorData]:
+    """Pure: the refusal for this call under the restricting contexts, or None."""
+    for org, group, level, source in restricting:
+        if not decl.covers(level, tool, op):
             return refusal(decl, level, source, tool, op, org, group)
     return None
 
@@ -134,15 +136,24 @@ def default_op(parameters: Optional[dict]) -> Optional[str]:
 async def require_covered(tool: str, args: dict,
                           tool_schema: Callable[[], Awaitable[Optional[dict]]]) -> None:
     """Raises `access_level_denied` if the level in force does not cover this call.
-    `tool_schema` gives the tool's input schema — awaited only for a multiplexed tool
-    called WITHOUT `op` under a restricting level (its default op is then judged)."""
+    Nothing is read for a tool of an unleveled connector or without a sub; the
+    settings, for a leveled one; `tool_schema` (the tool's input schema) is awaited
+    only for a multiplexed tool called WITHOUT `op` under a restricting level (its
+    default op is then judged)."""
     decl = access_levels.for_tool(tool)
     if decl is None:
         return
-    defaut = None
-    if decl.is_op_tool(tool) and access_levels.OP_PARAM not in args:
-        defaut = default_op(await tool_schema())
-    refus = await run_in_threadpool(_verdict, tool, args, defaut)
+    sub = call_axes.current_user_sub_from_token()
+    if not sub:
+        return
+    restricting = await run_in_threadpool(_restricting_contexts, sub, decl.connector)
+    if not restricting:
+        return
+    op = None
+    if decl.is_op_tool(tool):
+        op = (args[access_levels.OP_PARAM] if access_levels.OP_PARAM in args
+              else default_op(await tool_schema()))
+    refus = _verdict(decl, tool, op, restricting)
     if refus is not None:
         raise McpError(refus)
 
@@ -184,15 +195,22 @@ def hidden_tools(all_names: set[str], org: Optional[int],
     return caches
 
 
-def restricted_ops(sub: Optional[str]) -> dict[str, frozenset[str]]:
-    """`{tool: covered ops}` for the multiplexed tools whose level restricts, under the
-    caller's org and active team. Sync (threadpool). Empty without a sub."""
+def restricted_ops(sub: Optional[str], names: set[str]) -> dict[str, frozenset[str]]:
+    """`{tool: covered ops}` for the multiplexed tools of `names` whose level restricts,
+    under the caller's org and active team. Sync (threadpool). Reads nothing without a
+    sub or when `names` holds no multiplexed tool of a leveled connector — the listing
+    of a toolbox without one stays free of any query."""
     if not sub:
         return {}
+    concernes = {nom: [t for t in decl.tools if t in names and decl.is_op_tool(t)]
+                 for nom, decl in access_levels.DECLARED.items()}
+    concernes = {nom: outils for nom, outils in concernes.items() if outils}
+    if not concernes:
+        return {}
     niveaux = _restricting(*_context(sub))
-    return {tool: decl.covered_ops(niveaux[nom], tool)
-            for nom, decl in access_levels.DECLARED.items() if nom in niveaux
-            for tool in decl.tools if decl.is_op_tool(tool)}
+    return {tool: access_levels.DECLARED[nom].covered_ops(niveaux[nom], tool)
+            for nom, outils in concernes.items() if nom in niveaux
+            for tool in outils}
 
 
 def restrict_schema(parameters: Optional[dict], ops: frozenset[str]) -> dict:

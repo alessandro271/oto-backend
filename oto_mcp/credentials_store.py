@@ -585,20 +585,34 @@ def get_dedicated_app(owner_type: str, owner_id: int, connector: str) -> Optiona
 
 
 @lecture_d_appel
-def dedicated_app_owners(connector: str, org_id: Optional[int],
-                         group_id: Optional[int]) -> list[str]:
-    """Les propriétaires (`org`, `group`) qui ont posé une app dédiée pour `connector`,
-    sans déchiffrer — la promesse « une app est prête » d'une liste de connecteurs."""
-    labels = [dedicated_app_label(t, i) for t, i in (("org", org_id), ("group", group_id))
-              if i is not None]
-    if not labels:
-        return []
+def dedicated_apps(org_id: Optional[int], group_id: Optional[int]) -> dict[str, list[str]]:
+    """`{connector: [owners]}` — the owners (`org`, `group`) that set a dedicated app,
+    for EVERY connector, without decrypting: one read per call for the whole listing
+    (the three Zoho connectors of `GET /api/me/connectors` share it), not one per
+    connector."""
+    # Le propriétaire se relit par le label qu'on a construit, jamais en redécoupant
+    # `entity_id` (un découpage d'`entity_id` est réservé au scope membre,
+    # `tests/test_tenant_l2_sub_opaque.py`).
+    owners = {dedicated_app_label(t, i): t
+              for t, i in (("org", org_id), ("group", group_id)) if i is not None}
+    if not owners:
+        return {}
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT entity_id FROM connector_credentials WHERE entity_type=%s "
-            "AND connector=%s AND account='' AND entity_id = ANY(%s)",
-            (PLATFORM, connector, labels)).fetchall()
-    return [r["entity_id"].split(":")[1] for r in rows]
+            "SELECT connector, entity_id FROM connector_credentials WHERE entity_type=%s "
+            "AND account='' AND entity_id = ANY(%s)",
+            (PLATFORM, list(owners))).fetchall()
+    out: dict[str, list[str]] = {}
+    for r in rows:
+        out.setdefault(r["connector"], []).append(owners[r["entity_id"]])
+    return out
+
+
+def dedicated_app_owners(connector: str, org_id: Optional[int],
+                         group_id: Optional[int]) -> list[str]:
+    """The owners (`org`, `group`) that set a dedicated app for `connector` — the
+    promise "an app is ready" of a connector listing."""
+    return dedicated_apps(org_id, group_id).get(connector, [])
 
 
 def clear_dedicated_app(owner_type: str, owner_id: int, connector: str) -> bool:

@@ -102,7 +102,8 @@ class CallContextMiddleware(Middleware):
         advertised = await run_in_threadpool(call_axes.account_axis_advertised_for, sub)
         # Access level (`connectors/access_level_gate.py`): under a RESTRICTING level, the
         # ops it does not cover leave the `op` enum of a multiplexed tool. `full` = {}.
-        ops_couvertes = await run_in_threadpool(access_level_gate.restricted_ops, sub)
+        ops_couvertes = await run_in_threadpool(
+            access_level_gate.restricted_ops, sub, {t.name for t in tools})
         out = []
         for t in tools:
             axes = call_axes.axes_for_listing(t.name, advertised)

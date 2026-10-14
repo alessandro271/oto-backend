@@ -160,7 +160,8 @@ peut être restreint par l'org, puis par l'équipe active (`read` pour `zoho`, `
   d'installation (`COUCHES_INSTALLABLES`) : le catalogue le dit `not_exposed` ;
 - **schéma servi par appelant** : `CallContextMiddleware.on_list_tools` retire de l'enum
   `op` les ops non couvertes (`restricted_ops` + `restrict_schema`) ; un défaut qui n'est
-  plus couvert est retiré et `op` devient requis ;
+  plus couvert est retiré et `op` devient requis. Une liste sans outil multiplexé d'un
+  connecteur à niveaux ne lit rien (ni contexte ni réglage) ;
 - **garde d'appel fail-closed** `access_level_denied` (`access_level_gate.require_covered`),
   aux DEUX sites, juste après la garde d'activation et sur le même contexte : le middleware
   de contexte (appel direct) et `tools/meta.executer_cible` (`oto_call`, recettes). Elle
