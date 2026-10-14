@@ -21,6 +21,7 @@ from starlette.concurrency import run_in_threadpool
 
 from . import access, providers, credentials_store, db, org_store
 from .connectors import activation as connector_activation
+from .connectors import orphelins as connector_orphelins
 from .connectors import selection as connector_selection
 from .error_taxonomy import _is_client_disconnect
 from .tool_visibility import (
@@ -203,6 +204,10 @@ def _compute_couches(sub: str, active_org, prof_org, role_plateforme: str,
         # lecture (#959).
         if active_org is not None and not connector_selection.is_seeded(sub, prof_org):
             org_defaults = set(org_store.get_org_default_connectors(active_org) or []) if active_org else set()
+            # Un nom du kit absent du catalogue servi ne s'installe pour rien : journalisé
+            # en erreur, une fois par (table, nom) et par processus, et semé tel quel —
+            # ni écarté en silence, ni corrigé ici (#905).
+            connector_orphelins.signaler("orgs.default_connectors", org_defaults)
             exposed_now = connector_activation.exposed_connectors(active_org)
             socle = providers.DEFAULT_ACTIVE_CONNECTORS & exposed_now
             # Le KIT n'est plus filtré par l'exposition (ADR 0050 §E2, oto#166) : un

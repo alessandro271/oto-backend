@@ -8,7 +8,8 @@ ne met donc rien à jour, et une installation qui ne résout plus se taisait au 
 Ce module ne répare rien, il SIGNALE :
 
 - `signaler(table, noms)` : appelé par les lectures qui CHARGENT des références (la
-  sélection d'un membre, l'exposition, les credentials d'une entité, les réglages). Un nom
+  sélection d'un membre, l'exposition, les credentials d'une entité, les réglages, le kit
+  d'une org quand il équipe un nouveau membre). Un nom
   absent du catalogue est journalisé en ERREUR, une fois par (table, nom) et par
   processus, en nommant le connecteur et la table. La lecture rend ses lignes telles
   quelles : pas de repli, pas de suppression ; un nom orphelin ne monte toujours aucun

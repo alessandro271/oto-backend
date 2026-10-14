@@ -136,6 +136,29 @@ def test_les_reglages_charges_signalent(monkeypatch, caplog):
     assert "connector_settings" in message
 
 
+def test_le_kit_qui_equipe_un_nouveau_membre_signale_et_seme_tout(monkeypatch, caplog):
+    """Le kit (`orgs.default_connectors`) est lu au semis de la première session d'un
+    membre : un nom orphelin y est signalé, et semé tel quel."""
+    from oto_mcp import access, org_store, session_visibility as sv
+    semes = {}
+    monkeypatch.setattr(access, "org_admin_hidden_tools", lambda *_a: set())
+    monkeypatch.setattr(access, "group_admin_hidden_tools", lambda *_a: set())
+    monkeypatch.setattr(access, "current_group", lambda *_a: None)
+    monkeypatch.setattr(access, "has_option", lambda *_a, **_k: False)
+    monkeypatch.setattr(activation, "exposed_for", lambda *_a: set())
+    monkeypatch.setattr(activation, "exposed_connectors", lambda *_a: set())
+    monkeypatch.setattr(org_store, "get_org_default_connectors", lambda _o: [CONNU, FANTOME])
+    monkeypatch.setattr(selection, "is_seeded", lambda *_a: False)
+    monkeypatch.setattr(selection, "seed_active",
+                        lambda _s, origins, _o: semes.update(origins))
+    monkeypatch.setattr(selection, "list_selection", lambda *_a: {})
+    with caplog.at_level(logging.ERROR, logger=orphelins.__name__):
+        sv._compute_couches("sub-x", 7, 7, "member", set(), set(), set())
+    assert set(semes) == {CONNU, FANTOME}
+    (message,) = _erreurs(caplog)
+    assert "orgs.default_connectors" in message and repr(FANTOME) in message
+
+
 # ── le constat : une op de la console admin, sans filtre ──────────────────────
 
 def test_l_op_rend_le_constat(monkeypatch):
