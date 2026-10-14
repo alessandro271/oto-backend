@@ -398,6 +398,17 @@ def test_unipile_rend_la_piece_du_compte_opere(unipile):
     assert url == PIECE and kw["allow_redirects"] is False and kw["stream"] is True
 
 
+@pytest.mark.parametrize("disposition", [
+    'attachment; filename="ACF0.ogg; codecs=opus"',
+    "attachment; filename*=UTF-8''ACF0.ogg%3B%20codecs%3Dopus",
+])
+def test_unipile_nom_servi_sans_les_parametres_du_type(unipile, disposition):
+    """Unipile nomme la pièce d'après le type MIME complet (`….ogg; codecs=opus`) :
+    les paramètres du type ne font pas partie du nom de fichier."""
+    unipile["client"] = _Client(_Reponse(entetes={"content-disposition": disposition}))
+    assert fs.resolve(_src()).filename == "ACF0.ogg"
+
+
 def test_unipile_sans_nom_servi_nomme_par_le_canal_et_le_type(unipile):
     assert fs.resolve(_src()).filename.startswith("whatsapp-att_1")
 

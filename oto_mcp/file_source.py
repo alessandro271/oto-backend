@@ -348,6 +348,10 @@ def _from_unipile(src: dict, max_bytes: int) -> ResolvedFile:
             mime = (r.headers.get("content-type")
                     or "application/octet-stream").split(";")[0].strip()
             nom = _nom_de_disposition(r.headers.get("content-disposition"))
+            if nom:
+                # Unipile builds the name from the full MIME type, parameters included
+                # (`ACF0….ogg; codecs=opus`): they are not part of a file name.
+                nom = nom.split(";", 1)[0].strip() or None
     except requests.RequestException as e:
         # The type only: the text of a network error carries the URL, and the URL the
         # operated account.
