@@ -69,6 +69,33 @@ def test_un_solde_ILLISIBLE_ne_fabrique_pas_de_quota_mais_echoue(monkeypatch):
         FE._verify(_fields("k"))
 
 
+@pytest.mark.parametrize("brut, attendu", [
+    (42, 42), (5404.75, 5404.75), ("5404.75", 5404.75), ("5404", 5404), (0.5, 0.5)])
+def test_un_solde_DECIMAL_ou_en_texte_est_lu_tel_quel(monkeypatch, brut, attendu):
+    """Signal #1442 (14/10/2026) : FullEnrich rend un solde décimal (5404.75), que le
+    contrôle « entier seulement » lisait illisible. Rien n'est tronqué : 0.5 crédit
+    n'est pas un compte à sec."""
+    _brancher(monkeypatch, {"balance": brut})
+    assert FE._verify(_fields("k"))["quota"]["restant"] == attendu
+
+
+@pytest.mark.parametrize("brut", [0, 0.0, "0", -3.5])
+def test_un_solde_nul_ou_negatif_reste_un_compte_a_sec(monkeypatch, brut):
+    _brancher(monkeypatch, {"balance": brut})
+    with pytest.raises(cv.QuotaEpuise):
+        FE._verify(_fields("k"))
+
+
+@pytest.mark.parametrize("body", [
+    {}, {"balance": None}, {"balance": True}, {"balance": ""}, {"balance": "abc"},
+    {"balance": "nan"}, {"balance": float("nan")}, {"balance": "inf"}, {"balance": [5]}])
+def test_un_solde_absent_ou_non_numerique_reste_illisible(monkeypatch, body):
+    """NaN surtout : il compare faux à `<= 0` et passerait pour un compte approvisionné."""
+    _brancher(monkeypatch, body)
+    with pytest.raises(RuntimeError, match="without a readable credit balance"):
+        FE._verify(_fields("k"))
+
+
 def test_la_sonde_est_enregistree_avec_la_couverture_auth_quota():
     from fastmcp import FastMCP
 
