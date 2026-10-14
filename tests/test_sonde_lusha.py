@@ -69,3 +69,16 @@ def test_la_sonde_est_enregistree_avec_la_couverture_auth_quota():
     L.register(FastMCP("t"))
     assert cv.supports("lusha")
     assert cv.couverture("lusha") == cv.AUTH_QUOTA
+
+
+def test_un_solde_DECIMAL_est_un_solde(monkeypatch):
+    """Un solde décimal était lu « illisible » : la sonde échouait sur un compte approvisionné."""
+    _brancher(monkeypatch, _FauxClient({"remaining": 120.5}))
+    assert L._verify(_fields("k"))["quota"]["restant"] == 120.5
+
+
+def test_un_solde_booleen_est_illisible(monkeypatch):
+    """`True` est un int en Python : il passait pour un compte approvisionné."""
+    _brancher(monkeypatch, _FauxClient({"remaining": True}))
+    with pytest.raises(RuntimeError, match="without a readable credit balance"):
+        L._verify(_fields("k"))

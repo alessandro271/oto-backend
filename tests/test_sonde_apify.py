@@ -82,3 +82,14 @@ def test_la_sonde_est_enregistree_avec_la_couverture_auth_quota():
     A.register(FastMCP("t"))
     assert cv.supports("apify")
     assert cv.couverture("apify") == cv.AUTH_QUOTA
+
+
+@pytest.mark.parametrize("plafond, consomme", [(float("nan"), 1.0), (10.0, float("nan")),
+                                                (True, 1.0)])
+def test_un_usage_NaN_ou_booleen_est_illisible(monkeypatch, plafond, consomme):
+    """NaN compare faux à `<= 0` : un usage NaN passait pour un mois disponible."""
+    _brancher(monkeypatch, _Reponse(body={"data": {
+        "limits": {"maxMonthlyUsageUsd": plafond},
+        "current": {"monthlyUsageUsd": consomme}}}))
+    with pytest.raises(RuntimeError, match="without a readable monthly usage"):
+        A._verify(_fields("k"))

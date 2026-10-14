@@ -328,3 +328,28 @@ def test_une_page_vide_sur_cle_plateforme_ne_debite_rien(monkeypatch):
     rec, trace = _search_returning(0, monkeypatch, is_platform=True)
     rec.assert_called_once_with("theirstack", 0)
     trace.assert_called_once_with(quantity=0)   # 0 TRACÉ ≠ non tracé
+
+
+def test_verify_probe_counts_a_decimal_usage():
+    """Un usage décimal était IGNORÉ : le solde se lisait comme l'allocation entière."""
+    with patch("oto.tools.theirstack.client.TheirStackClient") as cls:
+        cls.return_value.credit_balance.return_value = {"api_credits": 10,
+                                                        "used_api_credits": 2.5}
+        from oto_mcp.tools import theirstack
+        assert theirstack._verify({"key": "k"}, {})["quota"]["restant"] == 7.5
+
+
+def test_verify_probe_refuses_an_unreadable_usage():
+    with patch("oto.tools.theirstack.client.TheirStackClient") as cls:
+        cls.return_value.credit_balance.return_value = {"api_credits": 10,
+                                                        "used_api_credits": "n/a"}
+        from oto_mcp.tools import theirstack
+        with pytest.raises(RuntimeError, match="readable API credit balance"):
+            theirstack._verify({"key": "k"}, {})
+
+
+def test_verify_probe_without_usage_reads_the_allocation():
+    with patch("oto.tools.theirstack.client.TheirStackClient") as cls:
+        cls.return_value.credit_balance.return_value = {"api_credits": 10}
+        from oto_mcp.tools import theirstack
+        assert theirstack._verify({"key": "k"}, {})["quota"]["restant"] == 10

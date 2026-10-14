@@ -212,10 +212,9 @@ def _verify(fields: dict, config: dict | None = None) -> dict:  # noqa: ARG001
             f"Apify refused the token (HTTP {r.status_code}).")
     r.raise_for_status()
     data = (r.json() or {}).get("data") or {}
-    plafond = (data.get("limits") or {}).get("maxMonthlyUsageUsd")
-    consomme = (data.get("current") or {}).get("monthlyUsageUsd")
-    if not all(isinstance(v, (int, float)) and not isinstance(v, bool)
-               for v in (plafond, consomme)):
+    plafond = connector_verify.nombre_lu((data.get("limits") or {}).get("maxMonthlyUsageUsd"))
+    consomme = connector_verify.nombre_lu((data.get("current") or {}).get("monthlyUsageUsd"))
+    if plafond is None or consomme is None:
         raise RuntimeError(
             f"Apify answered without a readable monthly usage: {str(data)[:200]}")
     restant = round(plafond - consomme, 2)

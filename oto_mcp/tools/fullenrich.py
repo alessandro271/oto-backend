@@ -23,7 +23,6 @@ consumer counts it once by its `enrichment_id` (the `job_id` of the
 from __future__ import annotations
 
 import datetime as _dt
-import math
 from typing import Optional
 
 from fastmcp import FastMCP
@@ -77,25 +76,6 @@ class FullenrichASec(RuntimeError):
     status_code = 402
 
 
-def _nombre(valeur) -> int | float | None:
-    """A balance as FullEnrich may write it: an int, a float or a numeric string —
-    kept as is, never truncated (0.5 credit left is not an empty account). Anything
-    else is `None`, unreadable: missing, a bool, text, and NaN/infinity too — NaN
-    compares false to `<= 0` and would pass for a funded account."""
-    if isinstance(valeur, bool):
-        return None
-    if isinstance(valeur, str):
-        try:
-            valeur = float(valeur)
-        except ValueError:
-            return None
-    if not isinstance(valeur, (int, float)):
-        return None
-    if isinstance(valeur, float) and not math.isfinite(valeur):
-        return None
-    return valeur
-
-
 def _solde(headers: dict) -> int | float:
     """The account's credit balance: `GET /api/v1/account/credits` (⚠️ v1, NOT the v2
     of the rest of the client — two distinct version prefixes at FullEnrich, verified).
@@ -106,10 +86,8 @@ def _solde(headers: dict) -> int | float:
     r = requests.get(_CREDITS_URL, headers=headers, timeout=15)
     r.raise_for_status()
     infos = r.json() or {}
-    # FullEnrich now answers a DECIMAL balance (5404.75 seen on 14/10/2026, signal
-    # #1442): the int-only check read a funded account as "unreadable" and refused
-    # every submission. Same change as AI Ark's on 07/10 (`aiark.py`).
-    restant = _nombre(infos.get("balance"))
+    # FullEnrich answers a DECIMAL balance since 14/10/2026 (5404.75, signal #1442).
+    restant = connector_verify.nombre_lu(infos.get("balance"))
     if restant is None:
         raise RuntimeError(
             "FullEnrich answered without a readable credit balance: "

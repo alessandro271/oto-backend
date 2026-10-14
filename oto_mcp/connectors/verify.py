@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import math
 from typing import Awaitable, Callable, Optional, Union
 
 from .. import providers
@@ -87,6 +88,32 @@ UNAUTHORIZED = "unauthorized"
 NO_QUOTA = "no_quota"
 UNKNOWN = "unknown"
 VERDICTS = (OK, UNAUTHORIZED, NO_QUOTA, UNKNOWN)
+
+
+def nombre_lu(valeur) -> Union[int, float, None]:
+    """A count a provider WRITES in its response — a balance, credits left, a usage —
+    read as it is written: an int, a float or a numeric string, kept as is and never
+    truncated (0.5 credit left is not an empty account). Anything else is `None`,
+    unreadable: missing, a bool, empty or other text, and NaN/infinity too — NaN
+    compares false to `<= 0` and would pass for a funded account. The caller decides
+    what `None` means (raise, or "not measured"); this never guesses a number.
+
+    Why one reading for all: providers move from integers to decimals without
+    notice. AI Ark started answering 39519.7 (07/10/2026), FullEnrich 5404.75
+    (14/10/2026); each time an int-only check read a funded account as "unreadable"
+    and refused every call, and each was fixed in its own connector."""
+    if isinstance(valeur, bool):
+        return None
+    if isinstance(valeur, str):
+        try:
+            valeur = float(valeur)
+        except ValueError:
+            return None
+    if not isinstance(valeur, (int, float)):
+        return None
+    if isinstance(valeur, float) and not math.isfinite(valeur):
+        return None
+    return valeur
 
 
 class SondeRefusee(Exception):

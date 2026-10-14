@@ -255,12 +255,12 @@ def _verify(fields: dict, config: dict | None = None) -> dict:  # noqa: ARG001 (
     """
     from oto.tools.aiark.client import AiArkClient
 
-    restant = AiArkClient(api_key=fields["key"]).verify_key().get("credits")
-    # AI Ark now answers a DECIMAL balance (39519.7 seen on 07/10/2026): an int-only
-    # check read a healthy account as "unreadable". A bool is not a balance.
-    if not isinstance(restant, (int, float)) or isinstance(restant, bool):
+    brut = AiArkClient(api_key=fields["key"]).verify_key().get("credits")
+    # AI Ark answers a DECIMAL balance since 07/10/2026 (39519.7).
+    restant = connector_verify.nombre_lu(brut)
+    if restant is None:
         raise RuntimeError(
-            f"AI Ark answered without a readable credit balance: {str(restant)[:200]}")
+            f"AI Ark answered without a readable credit balance: {str(brut)[:200]}")
     if restant <= 0:
         raise connector_verify.QuotaEpuise(
             "The AI Ark key is good, but the account is drained (0 credits left). "

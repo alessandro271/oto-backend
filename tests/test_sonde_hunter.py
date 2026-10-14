@@ -112,3 +112,15 @@ def test_une_sonde_qui_ne_mesure_rien_rend_un_dict_vide():
     import asyncio
 
     assert asyncio.run(cv.executer(lambda f, c: None, {}, {})) == {}
+
+
+def test_un_solde_DECIMAL_est_mesure(monkeypatch):
+    """Un compte décimal était rendu « non mesuré » ({}), comme si Hunter n'avait rien dit."""
+    _brancher(monkeypatch, _compte(50.5, 10))
+    assert H._verify(_fields("k"))["quota"]["restant"] == 40.5
+
+
+def test_un_compteur_booleen_n_est_pas_un_solde(monkeypatch):
+    """`True` est un int en Python : il passait pour 1 recherche disponible."""
+    _brancher(monkeypatch, _compte(True, 0))
+    assert H._verify(_fields("k")) == {}

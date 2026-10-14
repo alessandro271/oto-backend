@@ -92,16 +92,19 @@ def _verify(fields: dict, config: dict | None = None) -> dict:  # noqa: ARG001
     from oto.tools.theirstack.client import TheirStackClient
 
     solde = TheirStackClient(api_key=fields["key"]).credit_balance()
-    api = solde.get("api_credits") if isinstance(solde, dict) else None
-    used = solde.get("used_api_credits") if isinstance(solde, dict) else None
-    if not isinstance(api, int):
+    brut = solde if isinstance(solde, dict) else {}
+    api = connector_verify.nombre_lu(brut.get("api_credits"))
+    used = connector_verify.nombre_lu(brut.get("used_api_credits"))
+    # A MISSING usage leaves the allocation as the balance; a usage that is THERE but
+    # unreadable must not be dropped silently — the balance would read as untouched.
+    if api is None or (used is None and brut.get("used_api_credits") is not None):
         raise RuntimeError(
             f"TheirStack answered without a readable API credit balance: {str(solde)[:200]}")
-    restant = api - used if isinstance(used, int) else api
+    restant = api - used if used is not None else api
     if restant <= 0:
         raise connector_verify.QuotaEpuise(
             "The TheirStack key is good, but the account has no API credits left "
-            f"({used if isinstance(used, int) else '?'} used out of {api}). "
+            f"({used if used is not None else '?'} used out of {api}). "
             "Top up the account at TheirStack — reconnecting would change nothing.")
     return {"quota": {"api_credits": api,
                       "used_api_credits": used,

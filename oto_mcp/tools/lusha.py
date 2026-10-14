@@ -45,8 +45,8 @@ def _verify(fields: dict, config: dict | None = None) -> dict:
     from oto.tools.lusha.client import LushaClient
 
     infos = LushaClient(api_key=fields["key"])._request("GET", "/account/usage") or {}
-    restant = infos.get("remaining")
-    if not isinstance(restant, int):
+    restant = connector_verify.nombre_lu(infos.get("remaining"))
+    if restant is None:
         raise RuntimeError(
             f"Lusha answered without a readable credit balance: {str(infos)[:200]}")
     if restant <= 0:

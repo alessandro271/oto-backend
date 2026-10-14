@@ -81,3 +81,16 @@ def test_la_sonde_est_enregistree_avec_la_couverture_auth_quota():
     A.register(FastMCP("t"))
     assert cv.supports("aiark")
     assert cv.couverture("aiark") == cv.AUTH_QUOTA
+
+
+@pytest.mark.parametrize("brut", [float("nan"), float("inf"), True])
+def test_un_solde_NaN_infini_ou_booleen_est_illisible(monkeypatch, brut):
+    """NaN compare faux à `<= 0` : il passait pour un compte approvisionné."""
+    _brancher(monkeypatch, _FauxClient(credits=brut))
+    with pytest.raises(RuntimeError, match="without a readable credit balance"):
+        A._verify(_fields("k"))
+
+
+def test_un_solde_en_texte_numerique_est_lu(monkeypatch):
+    _brancher(monkeypatch, _FauxClient(credits="39519.7"))
+    assert A._verify(_fields("k"))["quota"]["restant"] == 39519.7

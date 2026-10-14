@@ -53,8 +53,9 @@ def _verify(fields: dict, config: dict | None = None) -> dict:
             f"Hunter answered without account information: {str(infos)[:200]}")
 
     requetes = (data.get("requests") or {}).get("searches") or {}
-    disponible, utilise = requetes.get("available"), requetes.get("used")
-    if isinstance(disponible, int) and isinstance(utilise, int):
+    disponible = connector_verify.nombre_lu(requetes.get("available"))
+    utilise = connector_verify.nombre_lu(requetes.get("used"))
+    if disponible is not None and utilise is not None:
         restant = disponible - utilise
         if restant <= 0:
             raise connector_verify.QuotaEpuise(
