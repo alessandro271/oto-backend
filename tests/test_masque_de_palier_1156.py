@@ -97,7 +97,8 @@ def test_lecriture_perso_qui_masque_lorg_le_dit_et_la_nomme(campagne):
     assert "MASQUE" in alerte and "PERSONNELLE" in alerte
     assert f"`guide_id` {org['guide_id']}" in alerte and f"v{org['version']}" in alerte
     assert "scope='org'" in alerte                       # le geste qui écrit celle de l'org
-    assert "op=delete scope='user'" in alerte            # et celui qui lève le masque
+    assert "op=archive scope='user'" in alerte           # le geste qui lève le masque
+    assert "op=delete scope='user'" in alerte            # et celui qui le lève en détruisant
 
 
 def test_lecriture_dorg_masquee_par_ma_copie_perso_le_dit(campagne):
@@ -198,3 +199,52 @@ def test_la_face_admin_na_pas_de_cascade_donc_rien_a_dire(monde, campagne):
     lu = _appel("u-admin", "org.guide.admin_get", org_id=monde["org"], slug="campagne")
     assert lu["scope"] == "org"
     assert "other_scopes" not in lu and "shadow_warning" not in lu
+
+
+# ── Décision du 14/10/2026 : une copie perso ARCHIVÉE ne masque plus ─────────────
+
+def test_une_copie_perso_archivee_ne_masque_plus_lorg(campagne):
+    """Archiver la copie perso lève le masque : la lecture par nom sert l'org, et ne
+    dit plus de masque. La copie archivée reste NOMMÉE (elle existe, avec sa date)."""
+    _appel("u-admin", op="archive", slug="campagne", scope="user")
+    lu = _appel("u-admin", op="get", slug="campagne")
+    assert lu["scope"] == "org" and "Étapes d'org" in lu["body_md"]
+    assert lu["version"] == campagne["org"]["version"]
+    assert "shadow_warning" not in lu
+    [perso] = lu["other_scopes"]
+    assert perso["scope"] == "user" and perso["guide_id"] == campagne["perso"]["guide_id"]
+    assert perso["archived_at"]
+
+
+def test_une_copie_perso_archivee_reste_lisible_explicitement(campagne):
+    _appel("u-admin", op="archive", slug="campagne", scope="user")
+    lu = _appel("u-admin", op="get", slug="campagne", scope="user")
+    assert lu["scope"] == "user" and "Étapes perso" in lu["body_md"]
+    assert lu["archived_at"]
+    assert "shadow_warning" not in lu                     # elle ne masque rien
+    assert [a["scope"] for a in lu["other_scopes"]] == ["org"]
+    # Par identifiant stable, même chose.
+    par_id = _appel("u-admin", op="get", guide_id=campagne["perso"]["guide_id"])
+    assert par_id["scope"] == "user" and "shadow_warning" not in par_id
+
+
+def test_lorg_ecrite_ou_lue_nest_plus_dite_masquee_par_une_archivee(campagne):
+    """Même règle à l'écriture qu'à la lecture : la procédure de l'org que masquait la
+    copie perso ne l'est plus une fois celle-ci archivée."""
+    _appel("u-admin", op="archive", slug="campagne", scope="user")
+    ack = _appel("u-admin", op="set", scope="org", slug="campagne", body_md=_ORG + "v3\n")
+    assert [a["scope"] for a in ack["other_scopes"]] == ["user"]
+    assert "shadow_warning" not in ack
+    lu = _appel("u-admin", op="get", slug="campagne", scope="org")
+    assert "shadow_warning" not in lu
+    rest = _appel("u-admin", "org.instruction.get", slug="campagne")
+    assert "shadow_warning" not in rest
+
+
+def test_desarchiver_la_copie_perso_la_remet_en_tete(campagne):
+    _appel("u-admin", op="archive", slug="campagne", scope="user")
+    assert _appel("u-admin", op="get", slug="campagne")["scope"] == "org"
+    _appel("u-admin", op="unarchive", slug="campagne", scope="user")
+    lu = _appel("u-admin", op="get", slug="campagne")
+    assert lu["scope"] == "user" and "Étapes perso" in lu["body_md"]
+    assert "Tu lis ta copie PERSONNELLE" in lu["shadow_warning"]

@@ -81,10 +81,11 @@ def _connectors_named(trace: str, org_id: int | None) -> list[dict]:
 def _lire(sub: str, slug: str) -> tuple[dict, str] | None:
     """The procedure `slug` and the scope it was read at (`user`|`org`|`group`) — the
     one a write must target. The order of `oto_procedure(op='get')`'s cascade: MINE
-    first (the default write scope, ADR 0068), then the active org; the active team as
-    a complement (`guide_run.version_de_procedure`)."""
+    first (the default write scope, ADR 0068) when it is IN SERVICE — an archived
+    personal copy masks nothing (#1156, decision of 14/10/2026) —, then the active org;
+    the active team as a complement (`guide_run.version_de_procedure`)."""
     from .. import access, org_store
-    mine = org_store.get_instruction("user", str(sub), slug)
+    mine = org_store.get_instruction_en_service("user", str(sub), slug)
     if mine:
         return mine, "user"
     org_id = access.current_org(sub)

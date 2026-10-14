@@ -46,12 +46,15 @@ par id (réservé platform_admin). Autz conditionnelle dans `tools/orgs.py`
   200 caractères, `verbose=true` la rend entière. Scopés à l'**org active** (+ groupe actif) — servis aux seuls
   membres. **Vide sans erreur** si pas d'org active (`_SERVER_INSTRUCTIONS` invite à `oto_procedure(op='get')`).
 - **Un palier en masque un autre, et le DIT** (#1156) : `op=get slug=…` sans `scope` suit la
-  cascade « ma copie perso, puis l'org » — inchangée. Ce qui change, c'est qu'elle se dit : la
+  cascade « ma copie perso EN SERVICE, puis l'org ». Une copie perso **archivée ne masque plus**
+  (décision du 14/10/2026) : la cascade la saute et sert l'org ; elle reste lisible sur
+  `scope='user'`, et la désarchiver la remet en tête (`org_store.get_instruction_en_service`,
+  même règle pour l'app de procédure). La cascade se dit : la
   lecture (par slug, par `guide_id`, et `GET /api/me/instructions/{slug}`) et l'écriture rendent
   **`other_scopes`** (les autres paliers de l'appelant qui portent ce slug : palier, `guide_id`,
   version, date) et, quand une copie perso masque celle de l'org pour une lecture par nom,
   **`shadow_warning`** (laquelle est servie, laquelle est écartée, comment lever le masque :
-  `op=delete scope='user'` — archiver ne suffit pas, la cascade lit aussi une archivée). Les
+  `op=archive scope='user'`, réversible, ou `op=delete scope='user'`). Les
   deux clés sont ABSENTES quand il n'y a rien à dire. L'équipe, hors cascade, n'est nommée que
   quand le geste la vise, jamais dite masquée. Seul le palier perso de l'appelant se voit.
   Né de 210 travaux de production servis plus d'un jour sur la copie perso, sans un signal

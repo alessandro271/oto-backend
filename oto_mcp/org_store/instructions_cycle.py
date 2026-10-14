@@ -79,6 +79,21 @@ def unarchive_instruction(owner_type: str, owner_id: int | str,
         return None if row is None else row["avant"]
 
 
+def get_instruction_en_service(owner_type: str, owner_id: int | str,
+                               slug: str) -> Optional[dict]:
+    """La procédure COURANTE de ce palier si elle est EN SERVICE ; None si elle est
+    absente OU archivée.
+
+    C'est ce que lit la cascade par nom au palier PERSONNEL (`op=get` sans `scope`,
+    l'empreinte d'un run, l'app de procédure) : décision du 14/10/2026 (#1156), une
+    copie perso ARCHIVÉE ne masque plus la procédure de l'org, la cascade passe au
+    palier suivant. `get_instruction` reste sans filtre, et c'est voulu : la lecture
+    EXPLICITE (`scope='user'`, `guide_id`) sert une archivée avec son `archived_at`,
+    et le désarchivage la remet en tête de la cascade sans autre geste."""
+    row = instructions.get_instruction(owner_type, owner_id, slug)
+    return row if row and row.get("archived_at") is None else None
+
+
 def list_archived_instructions(owner_type: str, owner_id: int | str) -> list[dict]:
     """Les procédures RETIRÉES du service, la plus récemment archivée d'abord — ce que
     `list_instructions` exclut toujours, et la seule façon de les retrouver par liste.
