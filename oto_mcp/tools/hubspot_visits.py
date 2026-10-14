@@ -24,8 +24,10 @@ why. `op="companies"` therefore answers its own emptiness (`diagnosis`).
    cookie matched to a record) and their last session. Free on every plan, and
    blind to anonymous visitors.
 3. `op="page_views"` — the pages ONE contact read, with their times, from the
-   events API. That API needs the `business-intelligence` scope and, per HubSpot's
-   reference, a Professional or Enterprise plan.
+   events API. HubSpot's reference asks for the `business-intelligence` scope and a
+   Professional or Enterprise plan. ⚠️ On the one portal read (2026-10-14), a private
+   app token HOLDING that scope was refused: HubSpot asked for `event-detail-read`,
+   which is in no published scope list. Unproven to work with a private app.
 
 ⚠️ **Not exercised against a portal that tracks companies.** The property names
 come from a portal's schema; the events parameters and response shape from HubSpot's
@@ -272,9 +274,11 @@ def register(mcp: FastMCP) -> None:
           and page-view counts. Free on every plan; anonymous visitors are not
           contacts and are not here.
         - **"page_views"** : the pages ONE record read, with their times.
-          Requires `object_id`. Needs the `business-intelligence` scope on the
-          private app and, per HubSpot's documentation, a Professional or
-          Enterprise plan.
+          Requires `object_id`. ⚠️ HubSpot may refuse it to a private app
+          token even with the `business-intelligence` scope its reference
+          names (seen: it asked for `event-detail-read`, which no published
+          scope list offers). Then the refusal says so, and op="contacts"
+          still gives the first page, last page and last session.
         - **"event_types"** : the event types this portal defines — what
           `event_type` accepts.
 

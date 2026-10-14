@@ -293,6 +293,72 @@ def test_a_missing_companies_scope_still_names_the_companies_scope(client):
     assert e.value.oto_detail["scope_to_add"] == "crm.objects.companies.read"
 
 
+def test_a_scope_refusal_outside_missing_scopes_names_what_hubspot_asks(client):
+    """Served on a real portal, 2026-10-14, to a private app token that HOLDS
+    `business-intelligence`: the message verbatim (the rest of the body was not
+    kept). The first version read it as "not a scope, so the plan" — wrong on both
+    counts, and it sent the reader to check a plan."""
+    from oto.tools.common.errors import UpstreamHTTPError
+
+    client._request.side_effect = _upstream(403, {
+        "status": "error", "category": "FORBIDDEN",
+        "message": "Insufficient scopes, requires one of: [event-detail-read,[id]]"})
+    with pytest.raises(UpstreamHTTPError) as e:
+        _tool()(op="page_views", object_id="42")
+    msg = str(e.value)
+    assert e.value.status_code == 403
+    assert "`event-detail-read`" in msg and "published scope list" in msg
+    assert "Professional" not in msg, "a scope refusal is not a plan refusal"
+    assert "op='contacts'" in msg
+    assert e.value.oto_detail["reason"] == "permission_not_grantable"
+    assert e.value.oto_detail["hubspot_asks"] == ["event-detail-read"]
+
+
+def test_a_scope_refusal_naming_a_known_scope_says_which_one_to_tick(client):
+    """HubSpot names a scope a private app CAN tick: a checkbox, not "nothing to
+    tick" — whatever category it filed the 403 under."""
+    client._request.side_effect = _upstream(403, {
+        "status": "error", "category": "FORBIDDEN",
+        "message": "Insufficient scopes, requires one of: [business-intelligence]"})
+    with pytest.raises(McpError) as e:
+        _tool()(op="page_views", object_id="42")
+    msg = str(e.value)
+    assert "Scope to add: `business-intelligence`" in msg
+    assert "published scope list" not in msg and "not enough" not in msg
+    assert e.value.oto_detail["reason"] == "missing_scopes"
+    assert e.value.oto_detail["scope_to_add"] == "business-intelligence"
+    assert e.value.oto_detail["scopes_source"] == "hubspot"
+
+
+def test_a_scope_refusal_naming_nothing_makes_no_claim_about_the_list(client):
+    """"Scope" in HubSpot's words, no name: nothing to point at, and nothing allows
+    saying the permission is outside the published list."""
+    from oto.tools.common.errors import UpstreamHTTPError
+
+    client._request.side_effect = _upstream(403, {
+        "status": "error", "category": "FORBIDDEN",
+        "message": "This token does not have the required scopes."})
+    with pytest.raises(UpstreamHTTPError) as e:
+        _tool()(op="page_views", object_id="42")
+    msg = str(e.value)
+    assert e.value.status_code == 403
+    assert "scope reason it does not name" in msg
+    assert "published scope list" not in msg and "Professional" not in msg
+    assert "required scopes" in msg, "HubSpot's own words are quoted"
+    assert e.value.oto_detail["reason"] == "scope_refused"
+
+
+@pytest.mark.parametrize("message,expected", [
+    ("Insufficient scopes, requires one of: [event-detail-read,[id]]",
+     ["event-detail-read"]),
+    ("Insufficient scopes, requires one of: [a.read, b-read]", ["a.read", "b-read"]),
+    ("This account is not allowed here.", []),
+    (None, []),
+])
+def test_permissions_are_read_from_the_message_placeholders_left_out(message, expected):
+    assert S.permissions_in_message(message) == expected
+
+
 def test_the_events_scope_is_named_but_never_measured():
     """Measured, `business-intelligence` would read "events scope missing" on the
     connection test of every portal that never asked for page views."""
