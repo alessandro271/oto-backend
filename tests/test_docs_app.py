@@ -17,6 +17,7 @@ import sys
 import types
 
 import pytest
+from _modules_recharges import recharger_module
 # Importé ICI, avant tout stub : FastMCP fige `_HAS_PREFAB` à son premier import. Chargé
 # pour la première fois sous le stub de la fixture, il croirait prefab_ui absent — les
 # apps perdraient leur ressource d'UI et le test bout en bout jugerait un autre serveur.
@@ -145,8 +146,7 @@ def _stub_backend(monkeypatch, da):
 def doc_app(monkeypatch):
     _install_prefab_stub(monkeypatch)
     _STACK.clear()
-    monkeypatch.delitem(sys.modules, "oto_mcp.tools.docs_app", raising=False)
-    import oto_mcp.tools.docs_app as da
+    da = recharger_module(monkeypatch, "oto_mcp.tools.docs_app")
 
     captured = {}
 
@@ -250,8 +250,7 @@ def test_bout_en_bout_le_modele_lit_la_page_et_la_carte_a_son_contenu(monkeypatc
 
     from oto_mcp.middleware import un_seul_canal
 
-    monkeypatch.delitem(sys.modules, "oto_mcp.tools.docs_app", raising=False)
-    import oto_mcp.tools.docs_app as da
+    da = recharger_module(monkeypatch, "oto_mcp.tools.docs_app")
 
     m = FastMCP("banc")
     for mw in static_mcp().middleware:

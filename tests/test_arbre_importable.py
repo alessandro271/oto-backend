@@ -15,6 +15,7 @@ import subprocess
 import sys
 
 import pytest
+from _modules_recharges import oublier_module
 
 RACINE = pathlib.Path(__file__).resolve().parent.parent
 SCRIPT = RACINE / "scripts" / "arbre-importable.py"
@@ -51,7 +52,7 @@ def test_les_trois_formes_d_import_nomment_le_module_absent(tmp_path, module, mo
     _paquet_jouet(tmp_path)
     monkeypatch.syspath_prepend(str(tmp_path))
     for charge in [k for k in sys.modules if k == "pk" or k.startswith("pk.")]:
-        del sys.modules[charge]
+        oublier_module(monkeypatch, charge)
 
     with pytest.raises(ImportError) as leve:
         importlib.import_module(module)
@@ -87,7 +88,7 @@ def test_le_recit_nomme_le_geste_et_pas_seulement_l_erreur(tmp_path, monkeypatch
     monkeypatch.syspath_prepend(str(tmp_path))
     monkeypatch.setattr(garde, "PAQUET", "pk")
     for charge in [k for k in sys.modules if k == "pk" or k.startswith("pk.")]:
-        del sys.modules[charge]
+        oublier_module(monkeypatch, charge)
 
     try:
         importlib.import_module("pk.depuis_le_paquet")

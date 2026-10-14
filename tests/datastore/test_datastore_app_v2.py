@@ -11,6 +11,7 @@ import sys
 import types
 
 import pytest
+from _modules_recharges import recharger_module
 
 
 # ── stub prefab_ui.components : composants enregistreurs (pile de contexte) ─────
@@ -136,15 +137,9 @@ def data_app(monkeypatch):
     _install_prefab_stub(monkeypatch)
     _STACK.clear()
     # (ré)importe le module APRÈS le stub pour que l'import gardé réussisse — et
-    # rend le module d'origine après le test. L'import pose aussi l'attribut
-    # `oto_mcp.tools.datastore` du paquet : sans le rendre lui aussi, le paquet
-    # garderait le module rechargé quand `sys.modules` rend l'ancien, et un test
-    # suivant qui patche `from oto_mcp.tools import datastore` (le paquet) patcherait
-    # un autre module que celui qu'importe le code servi (`from .datastore import …`).
-    import oto_mcp.tools as tools_pkg
-    monkeypatch.delitem(sys.modules, "oto_mcp.tools.datastore", raising=False)
-    monkeypatch.delattr(tools_pkg, "datastore", raising=False)
-    import oto_mcp.tools.datastore as ds
+    # rend le module d'origine après le test, dans `sys.modules` ET dans le paquet
+    # (pourquoi les deux : tests/_modules_recharges.py)
+    ds = recharger_module(monkeypatch, "oto_mcp.tools.datastore")
 
     captured = {}
 

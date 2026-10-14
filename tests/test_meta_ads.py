@@ -16,6 +16,7 @@ import types
 from unittest.mock import MagicMock
 
 import pytest
+from _modules_recharges import oublier_module
 import requests
 
 from oto_mcp import providers
@@ -350,7 +351,7 @@ def test_panne_inconnue_ne_laisse_pas_fuir_le_message(env):
 
 
 def test_sans_coeur_installe_refuse_en_le_disant(env, monkeypatch):
-    monkeypatch.delitem(sys.modules, "oto.tools.meta_ads")
+    oublier_module(monkeypatch, "oto.tools.meta_ads")
     monkeypatch.setattr(
         "importlib.import_module",
         lambda nom, *a, **k: (_ for _ in ()).throw(ImportError("absent")))

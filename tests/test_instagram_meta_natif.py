@@ -26,6 +26,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 
 import pytest
+from _modules_recharges import oublier_module
 
 from oto_mcp import providers
 
@@ -468,7 +469,7 @@ def test_la_passe_sans_coeur_le_dit_au_lieu_de_rendre_un_zero(env, monkeypatch):
     """C'est l'état de la PROD entre le déploiement du backend et le tag oto-core
     qui porte le cœur — donc le premier comportement réel de ce travail. Un `{}`
     silencieux s'y lirait « rien à renouveler », c'est-à-dire tout va bien."""
-    monkeypatch.delitem(sys.modules, "oto.tools.instagram_meta")
+    oublier_module(monkeypatch, "oto.tools.instagram_meta")
     monkeypatch.setattr(
         "importlib.import_module",
         lambda nom, *a, **k: (_ for _ in ()).throw(ImportError("absent")))
@@ -568,7 +569,7 @@ def test_un_outil_sans_coeur_installe_refuse_en_le_disant(env, monkeypatch):
     """Le connecteur reste MONTÉ quand oto-core est trop ancien : visible,
     sélectionnable, et il refuse en nommant ce qui manque. Un connecteur qui
     disparaît du catalogue ne se remarque pas et ne s'explique pas."""
-    monkeypatch.delitem(sys.modules, "oto.tools.instagram_meta")
+    oublier_module(monkeypatch, "oto.tools.instagram_meta")
     monkeypatch.setattr(
         "importlib.import_module",
         lambda nom, *a, **k: (_ for _ in ()).throw(ImportError("absent")))

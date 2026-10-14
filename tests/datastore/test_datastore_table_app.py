@@ -15,6 +15,7 @@ import json
 import sys
 
 import pytest
+from _modules_recharges import recharger_module
 from fastmcp import Client, FastMCP
 
 BUNDLE = "https://app.example.com/mcp-app/process-graph.js"
@@ -63,9 +64,7 @@ class _Store:
 
 
 def _module(monkeypatch):
-    monkeypatch.delitem(sys.modules, "oto_mcp.tools.datastore_table_app", raising=False)
-    import oto_mcp.tools.datastore_table_app as ta
-    return ta
+    return recharger_module(monkeypatch, "oto_mcp.tools.datastore_table_app")
 
 
 def _banc(monkeypatch, *, ui: bool = True):

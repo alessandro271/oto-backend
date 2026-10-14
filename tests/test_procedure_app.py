@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
 
 import pytest
+from _modules_recharges import recharger_module
 from fastmcp import Client, FastMCP
 
 BUNDLE = "https://app.example.com/mcp-app/process-graph.js"
@@ -31,9 +31,7 @@ CORPS = f"# Veille\n\nLe déroulé.\n\n```\n{TRACE}\n```\n\n## Étapes\n\n1. Che
 
 
 def _module(monkeypatch):
-    monkeypatch.delitem(sys.modules, "oto_mcp.tools.procedure_app", raising=False)
-    import oto_mcp.tools.procedure_app as pa
-    return pa
+    return recharger_module(monkeypatch, "oto_mcp.tools.procedure_app")
 
 
 def _stub_backend(monkeypatch, procedures: dict, *, admin: bool = True, worker: bool = False,
