@@ -24,6 +24,7 @@ Its names come from HubSpot's own scope list (links in `connectors/docs/hubspot.
 """
 from __future__ import annotations
 
+import re
 import time
 from typing import Optional
 
@@ -143,7 +144,6 @@ def permissions_in_message(message) -> list[str]:
     MISSING_SCOPES body: "Insufficient scopes, requires one of:
     [event-detail-read,[id]]" → ["event-detail-read"]. Bracketed items (`[id]`) are
     placeholders, not names. Empty when the message carries no such list."""
-    import re
     found = re.search(r"requires one of:\s*\[(.*)\]", str(message or ""))
     if not found:
         return []
@@ -161,6 +161,14 @@ def _reference(family: Optional[str]) -> tuple[str, ...]:
     """The read scopes of a family, measured by the probe or not."""
     entry = SCOPES.get(family) or OPTIONAL_SCOPES.get(family)
     return entry[0] if entry else ()
+
+
+def known_scope(name: str) -> bool:
+    """Is `name` a scope this module knows — one HubSpot publishes and a private app
+    can tick (`SCOPES`, `OPTIONAL_SCOPES`, `_PROPERTY_SCOPES`)?"""
+    tables = [*SCOPES.values(), *OPTIONAL_SCOPES.values()]
+    return any(name in read or name in write for read, write in tables) or \
+        any(name in scopes for scopes in _PROPERTY_SCOPES.values())
 
 
 def needed_scopes(e, family: Optional[str],
@@ -232,22 +240,29 @@ def _upstream_refusal(e, message: str, *, retryable=None, **data):
     return err
 
 
+def _scope_to_tick(names: list[str], source: str, fam: Optional[str], *,
+                   object_type=None, cause: str, note: str = "") -> McpError:
+    """The refusal that names the ONE scope to tick on the private app."""
+    pick = recommended(names, fam, object_type)
+    which = f"`{pick}`" if pick else "the read scope of this object"
+    target = f"object_type={object_type!r}" if object_type else f"family={fam!r}"
+    return _refusal(
+        f"HubSpot refuses this call: the private app token lacks a scope "
+        f"(403 {cause}, {target}). Scope to add: {which}. {_REMEDY}{note}",
+        reason="missing_scopes", status=403, family=fam, scope_to_add=pick,
+        accepted_scopes=names, scopes_source=source, remedy=_REMEDY)
+
+
 def missing_scopes_refusal(e, *, object_type=None, family=None) -> Optional[McpError]:
     """The MISSING_SCOPES 403 as an actionable refusal, or None for anything else."""
     if not is_missing_scopes(e):
         return None
     fam = family_of(object_type, family)
     names, source = needed_scopes(e, fam, object_type)
-    pick = recommended(names, fam, object_type)
-    which = f"`{pick}`" if pick else "the read scope of this object"
-    target = f"object_type={object_type!r}" if object_type else f"family={fam!r}"
-    return _refusal(
-        f"HubSpot refuses this call: the private app token lacks a scope "
-        f"(403 MISSING_SCOPES, {target}). Scope to add: {which}. {_REMEDY} "
-        "(HubSpot's own wording, \"isn't available for public use\", is misleading: "
-        "the scope exists and can be ticked.)",
-        reason="missing_scopes", status=403, family=fam, scope_to_add=pick,
-        accepted_scopes=names, scopes_source=source, remedy=_REMEDY)
+    return _scope_to_tick(
+        names, source, fam, object_type=object_type, cause="MISSING_SCOPES",
+        note=" (HubSpot's own wording, \"isn't available for public use\", is "
+             "misleading: the scope exists and can be ticked.)")
 
 
 def _is_html(body) -> bool:
@@ -269,25 +284,40 @@ def translate(e, *, object_type=None, object_id=None, family=None,
         return refus
     if code == 403 and family == "events":
         said = body.get("message") if isinstance(body, dict) else None
+        words = f" HubSpot's words: {str(said)[:200]}" if said else ""
         asks = permissions_in_message(said)
-        if asks or "scope" in str(said or "").lower():
+        known = [a for a in asks if known_scope(a)]
+        if known:
+            # HubSpot names a scope a private app CAN tick: a checkbox, like
+            # MISSING_SCOPES, whatever the category it filed the refusal under.
+            return _scope_to_tick(known, "hubspot", "events", cause="scope refusal",
+                                  note=words)
+        if asks:
             # Read on a real portal, 2026-10-14: a private app token HOLDING
             # `business-intelligence` — the scope HubSpot's reference names — was
             # refused with "Insufficient scopes, requires one of:
             # [event-detail-read,[id]]", outside the MISSING_SCOPES category.
             # `event-detail-read` is in no published scope list: there is nothing
             # we know of to tick, so the refusal must not send anyone looking.
-            named = ", ".join(f"`{a}`" for a in asks) or "a permission it does not name"
+            named = ", ".join(f"`{a}`" for a in asks)
             return _upstream_refusal(
                 e, f"HubSpot refuses the events API with this token (403): it asks for "
                 f"{named}, which is not in HubSpot's published scope list — there is "
                 "nothing known to tick on the private app, and `business-intelligence`, "
                 "the scope HubSpot's reference names, is not enough. Treat a contact's "
                 "page views as not readable with this token; its first page, last page "
-                "and last session stay readable as properties (op='contacts')."
-                + (f" HubSpot's words: {str(said)[:200]}" if said else ""),
+                "and last session stay readable as properties (op='contacts')." + words,
                 reason="permission_not_grantable", status=403, family="events",
-                hubspot_asks=asks or None)
+                hubspot_asks=asks)
+        if "scope" in str(said or "").lower():
+            # A scope reason, but no name: neither a checkbox we could point at nor
+            # a claim about HubSpot's published list — its own words, nothing more.
+            return _upstream_refusal(
+                e, "HubSpot refuses the events API with this token (403) for a scope "
+                "reason it does not name. Treat a contact's page views as not readable "
+                "with this token; its first page, last page and last session stay "
+                "readable as properties (op='contacts')." + words,
+                reason="scope_refused", status=403, family="events")
         # No scope in HubSpot's words. Its reference lists the events API for
         # Professional and Enterprise only: we say what its documentation says and
         # quote its own words — the cause is theirs to name, not ours.
@@ -297,8 +327,7 @@ def translate(e, *, object_type=None, object_id=None, family=None,
             "Enterprise plans only (Marketing, Sales, Service, Content or Data Hub): "
             "the portal's plan is the likely cause. Page views of a contact are not "
             "readable here; its first page, last page and last session stay readable "
-            "as properties (op='contacts')."
-            + (f" HubSpot's words: {str(said)[:200]}" if said else ""),
+            "as properties (op='contacts')." + words,
             reason="forbidden", status=403, family="events")
     if code == 401:
         return _upstream_refusal(
