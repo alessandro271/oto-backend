@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 from contextlib import contextmanager
 from typing import Any, Optional
 
@@ -63,6 +64,25 @@ def _upstream_message(e) -> str:
 # The states a run never leaves: its `usageTotalUsd` is final there, and only there.
 _TERMINAL = frozenset({"SUCCEEDED", "FAILED", "TIMED-OUT", "ABORTED"})
 
+# `apify_run_sync` waits this long in all, by slices of at most `_WAIT_SLICE_S` —
+# Apify's own cap on `waitForFinish`, and the 300 s the synchronous endpoint used to hold.
+_SYNC_BUDGET_S = 300
+_WAIT_SLICE_S = 60
+
+
+def _maintenant() -> float:
+    """The clock of `apify_run_sync`'s budget — a seam, so a test can drive it."""
+    return time.monotonic()
+
+
+def _run_of(out: Any) -> Optional[dict]:
+    """The run object of a `run` / `run_status` answer — the `{data: …}` envelope of
+    the API v2, or a flat body read as the run itself."""
+    run = out.get("data") if isinstance(out, dict) else None
+    if not isinstance(run, dict):
+        run = out if isinstance(out, dict) else None
+    return run
+
 
 def _microdollars(cout: float) -> int:
     """Run cost in micro-dollars, rounded UP — the unit and the rounding of Jev
@@ -91,10 +111,7 @@ def _releve(out: Any, run_id: str) -> None:
     the log (run id and type only): an absent figure is not a zero, a guessed one would
     be billed, and a silent one would be lost. A terminal run at 0 traces 0 with its
     job — measured, nothing to bill."""
-    run = out.get("data") if isinstance(out, dict) else None
-    if not isinstance(run, dict):
-        # A flat body (no `data` envelope) is read as the run itself.
-        run = out if isinstance(out, dict) else None
+    run = _run_of(out)
     if run is None:
         logger.warning("apify_run_status %s: unreadable response (%s), cost not recorded",
                        run_id, type(out).__name__)
@@ -248,8 +265,9 @@ def register(mcp: FastMCP) -> None:
     ) -> Any:
         """Run an actor and return its results in one call. Waits up to 300 s.
 
-        The normal path for a bounded scrape. Beyond 300 s Apify answers 408 — use
-        `apify_run` then `apify_run_status`/`apify_dataset_items` instead.
+        The normal path for a bounded scrape. A run still going after 300 s is NOT
+        stopped: the error names its run id — continue with `apify_run_status` then
+        `apify_dataset_items`. For a scrape you know is long, use `apify_run`.
 
         Returns: the LIST of dataset items.
 
@@ -265,19 +283,50 @@ def register(mcp: FastMCP) -> None:
             timeout_secs / memory_mbytes: run budget on Apify's side.
             max_total_charge_usd: hard cost ceiling for this run.
         """
+        # Not the synchronous endpoint: it answers with the items only — no run id,
+        # no cost — so a run through it could never be billed. Start the run, wait
+        # for it by slices, then read its dataset: the finished run carries its cost.
+        debut = _maintenant()
+        client = _client()
         with _upstream():
-            out = _client().run_sync_dataset_items(
-                actor_id, run_input=run_input, max_items=max_items, limit=limit,
-                fields=fields, timeout_secs=timeout_secs,
-                memory_mbytes=memory_mbytes,
-                max_total_charge_usd=max_total_charge_usd)
-        # The synchronous endpoint answers with the dataset items only — no run id,
-        # no cost, and the client keeps no header: the run's cost cannot be read back.
-        # Traced 0 and SAID, never NULL (read 1) nor a guessed figure.
-        logger.warning("apify_run_sync %s: the synchronous endpoint returns no run id "
-                       "nor cost, run cost not recorded", actor_id)
-        _gratuit()
-        return out
+            out = client.run(
+                actor_id, run_input=run_input, max_items=max_items,
+                timeout_secs=timeout_secs, memory_mbytes=memory_mbytes,
+                max_total_charge_usd=max_total_charge_usd,
+                wait_for_finish=_WAIT_SLICE_S)
+            run = _run_of(out)
+            run_id = run.get("id") if run else None
+            if not isinstance(run_id, str) or not run_id:
+                raise _bad(f"Apify started {actor_id} without a readable run id — "
+                           "find the run with `apify_actors` / the Apify console.")
+            while run.get("status") not in _TERMINAL:
+                reste = _SYNC_BUDGET_S - (_maintenant() - debut)
+                if reste < 1:
+                    # Never aborted behind the agent's back, never billed here: the
+                    # run is still going, `apify_run_status` records its cost once
+                    # it has finished.
+                    _gratuit()
+                    raise _bad(
+                        f"Apify run {run_id} ({actor_id}) is still {run.get('status')} "
+                        f"after {_SYNC_BUDGET_S} s. It keeps running: poll it with "
+                        f"`apify_run_status(run_id=\"{run_id}\")`, then read its output "
+                        "with `apify_dataset_items`.")
+                out = client.run_status(
+                    run_id, wait_for_finish=min(_WAIT_SLICE_S, int(reste)))
+                run = _run_of(out) or {}
+            status = run.get("status")
+            if status != "SUCCEEDED":
+                # A failed or aborted run cost too — but an error is not a billed
+                # call: `apify_run_status` on it records the cost.
+                _gratuit()
+                raise _bad(
+                    f"Apify run {run_id} ({actor_id}) ended {status}. Its cost and "
+                    f"log: `apify_run_status(run_id=\"{run_id}\")`; what it produced: "
+                    "`apify_dataset_items`.")
+            items = client.dataset_items(
+                run.get("defaultDatasetId"), limit=limit, fields=fields)
+        _releve(out, run_id)
+        return items
 
     @mcp.tool()
     def apify_run(
