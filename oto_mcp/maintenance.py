@@ -44,6 +44,12 @@ Ils sont ici, chacun nommé, chacun jouable seul :
                                             d'une révision que sa migration refuse de
                                             construire (docs/migrations-versionnees.md
                                             §5.1) — PAS un travail : voir plus bas
+    oto-mcp maintenance orphelins [--appliquer]
+                                            retire les références à un connecteur absent
+                                            du catalogue servi (#905) — À BLANC par
+                                            défaut ; jamais les credentials sans
+                                            `--credentials --preavis-echu AAAA-MM-JJ`
+                                            échu — PAS un travail : voir plus bas
     oto-mcp maintenance key-index-rebuild   (#421 — voir plus bas, PAS dans `all`)
     oto-mcp maintenance journal-tokens      purge rétroactive des jetons écrits en
                                             clair dans le journal (#558) — À BLANC
@@ -713,10 +719,56 @@ def index_concurrents(argv: list[str]) -> int:
     return INDEX_POSES
 
 
+# Codes de sortie d'`orphelins`. Pas un travail non plus : un geste d'exploitant, joué
+# une fois depuis le commit, dont le refus (préavis non échu) doit se lire au code.
+ORPHELINS_FAIT = 0
+ORPHELINS_REFUS = 1     # `--credentials` sans préavis échu : rien n'est lu ni écrit
+ORPHELINS_ERREUR = 2    # base injoignable, écriture en échec (les tables déjà faites restent)
+ORPHELINS_RESTE = 3     # appliqué, mais la relecture trouve encore un orphelin : relancer
+
+
+def orphelins(argv: list[str]) -> int:
+    """`oto-mcp maintenance orphelins` : retire les références à un connecteur absent du
+    catalogue servi (#905, `connectors/orphelins_nettoyage.py`). À blanc par défaut."""
+    from datetime import date
+    p = argparse.ArgumentParser(
+        prog="oto-mcp maintenance orphelins",
+        description=("Retire les références à un connecteur absent du catalogue servi : "
+                     "installations, retraits, activations, kits d'org. À blanc par défaut."))
+    p.add_argument("--appliquer", action="store_true",
+                   help="écrit ; sans lui, imprime ce qui serait retiré et ne touche à rien")
+    p.add_argument("--credentials", action="store_true",
+                   help=("traite aussi les credentials orphelins (et archive leurs "
+                         "instances) — exige --preavis-echu"))
+    p.add_argument("--preavis-echu", type=date.fromisoformat, metavar="AAAA-MM-JJ",
+                   help="fin du préavis aux propriétaires des clés, antérieure à aujourd'hui")
+    args = p.parse_args(argv)
+    if args.preavis_echu is not None and not args.credentials:
+        p.error("--preavis-echu ne vaut qu'avec --credentials")
+    logging.basicConfig(
+        level=os.environ.get("LOG_LEVEL", "INFO"),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    from .connectors import orphelins_nettoyage as on
+    try:
+        rapport = on.nettoyer(appliquer=args.appliquer, credentials=args.credentials,
+                              preavis_echu=args.preavis_echu)
+    except on.PreavisNonEchu as e:
+        print(f"REFUS : {e}", file=sys.stderr)
+        return ORPHELINS_REFUS
+    except Exception:
+        logger.error("orphelins : ERREUR — les tables déjà traitées le restent ; relancer "
+                     "à blanc pour voir ce qui reste", exc_info=True)
+        return ORPHELINS_ERREUR
+    print("\n".join(on.lignes_du_rapport(rapport)))
+    return ORPHELINS_RESTE if on.reste(rapport) else ORPHELINS_FAIT
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if argv and argv[0] == "index-concurrents":
         return index_concurrents(argv[1:])
+    if argv and argv[0] == "orphelins":
+        return orphelins(argv[1:])
     p = argparse.ArgumentParser(
         prog="oto-mcp maintenance",
         description="Les travaux de maintenance du backend (ADR 0065, lot 0).")

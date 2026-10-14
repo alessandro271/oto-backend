@@ -355,6 +355,38 @@ sudo -E env $(cat /opt/oto-mcp/.env | xargs) \
 main, jamais en crontab) : prod et preprod partagent la base, deux exécutants se
 disputeraient les mêmes lignes.
 
+### Retirer les références orphelines — `oto-mcp maintenance orphelins` (#905)
+
+Les lignes qui nomment un connecteur absent du catalogue servi (constat :
+`oto_admin_monitoring op=connecteurs_orphelins`) ne résolvent rien. La commande les
+retire : installations, retraits et activations supprimés, noms retirés du kit des orgs
+(`array_remove`, les autres noms restent). **À blanc par défaut**, `--appliquer` pour
+écrire ; une transaction courte par table (15 s / 5 s de verrou), relue après coup,
+idempotente. **Jamais les credentials ni leurs instances** sans `--credentials`, refusé
+(code 1) tant que `--preavis-echu AAAA-MM-JJ` n'est pas une date passée : le préavis à
+leurs propriétaires d'abord. Les réglages (`connector_settings`) sont lus, jamais retirés.
+Sorties : 0 fait, 1 refus, 2 erreur, 3 un orphelin reste à la relecture (relancer).
+
+Le catalogue est le registre du code qui tourne : lancée depuis un commit, la commande
+juge avec SON registre. Le rapport à blanc doit nommer les mêmes connecteurs que le
+constat servi avant tout `--appliquer`. Depuis le commit, sans tag (la base est partagée
+prod/preprod : une seule exécution) :
+
+```bash
+SHA=<commit> A=/opt/oto-mcp-$(cat /etc/oto-mcp/active-prod) T=/tmp/orphelins-$SHA
+sudo git -C "$A" fetch -q origin && sudo mkdir -p "$T" \
+  && sudo git -C "$A" archive "$SHA" | sudo tar -x -C "$T" && sudo ln -sfn "$A/.venv" "$T/.venv"
+orphelins() {   # le lanceur de l'arbre extrait ; PYTHONPATH : `oto_mcp` est celui du commit
+  sudo systemd-run --pipe --wait --quiet --collect -p WorkingDirectory="$T" \
+    -p Environment=PYTHONPATH="$T" \
+    -p EnvironmentFile=/opt/oto-mcp/.env -p EnvironmentFile=/etc/oto-mcp/lanceur-prod.env \
+    -p LoadCredential=scw:/etc/oto-mcp/scw.key \
+    "$T/.venv/bin/python" "$T/deploy/lanceur_secrets.py" maintenance orphelins "$@"
+}
+orphelins                 # à blanc : comparer au constat servi
+orphelins --appliquer     # écrit ; relancer à blanc ensuite : « aucun » partout
+```
+
 ## Pin oto-core — une version déployée = une coordonnée reproductible
 
 - **`oto-core` PINNÉ sur un tag git** (`oto-core[anonymize] @ git+…@vX.Y.Z` dans `pyproject.toml` — l'extra est `anonymize`, `browser` a été retiré côté backend et n'est resté que sur le CLI local ; plus `@main` flottant ni dép `oto-cli`) : une version déployée = coordonnée reproductible. ⚠️ **`pip` ne réinstalle PAS une dép VCS déjà présente** (`oto-core` "satisfait" quelle que soit sa version) → `pip install -e .` seul ne monte JAMAIS oto-core au tag bumpé. Le deploy installe **par le verrou** (`uv sync --frozen`, #932) : oto-core au commit que `uv.lock` désigne, plus de force-reinstall. Bump connecteurs = tag oto-core + édit du pin **+ `uv lock` dans le même commit** (le verrou est versionné, la CI installe par lui et refuse un verrou en retard — `docs/verrou-dependances.md`) + deploy (PAS de `git pull` box). Cf. ADR 0020. ⚠️ **Symptôme trompeur en LOCAL** : des tests rouges peuvent être un venv en retard sur le pin, pas du code cassé (05/08 : 17 rouges sur un connecteur neuf ; 26/08 : 48 ; 01/09 : 28) → **sous-section ci-dessous**, qui porte la trace exacte à reconnaître et la recette. (⚠️ box `otomata-0` a un VIEUX oto-mcp décommissionné/stoppé avec un editable legacy `oto-cli` pré-split — ne pas s'y fier, le runtime live est la box dédiée.) ⚠️ **Le pin est un champ que TOUTES les sessions // éditent → régressions silencieuses récurrentes** : vécu 2026-07-07, un commit concurrent a réécrit le pin `v1.18.0→v1.17.0` et **cassé un tool déployé SANS erreur** (le tool était enregistré, sa méthode absente de l'ancien oto-core → `AttributeError` seulement à l'appel). Toujours bumper en **superset** (tag haut ⊇ tags bas) ; à la moindre divergence de pin en merge/rebase, **garder la version haute**.

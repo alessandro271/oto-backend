@@ -47,6 +47,13 @@ _VERROU = threading.Lock()
 # Un credential remote se définit par sa donnée, pas par le registre (cf. l'en-tête).
 _PAS_REMOTE = "COALESCE(meta->>'base_url', '') = ''"
 
+# Les tables qu'un autre module NOMME (le nettoyage, `orphelins_nettoyage`) : le nom de la
+# table des instances ne s'écrit que dans un module admis à la connaître (garde L6,
+# `tests/test_connector_instances_l6.py`).
+CREDENTIALS = "connector_credentials"
+INSTANCES = "connector_instances"
+KIT = "orgs.default_connectors"
+
 # Les références vivantes à un connecteur : (table, SQL du constat). Chaque requête rend
 # `connecteur, lignes` pour les noms absents de `%(catalogue)s`, et ne lit que sa table.
 REFERENCES: tuple[tuple[str, str], ...] = (
@@ -59,13 +66,13 @@ REFERENCES: tuple[tuple[str, str], ...] = (
     ("connector_availability",
      "SELECT connector AS connecteur, count(*) AS lignes FROM connector_availability "
      "WHERE connector <> ALL(%(catalogue)s) GROUP BY connector"),
-    ("connector_credentials",
+    (CREDENTIALS,
      "SELECT connector AS connecteur, count(*) AS lignes FROM connector_credentials "
      f"WHERE connector <> ALL(%(catalogue)s) AND {_PAS_REMOTE} GROUP BY connector"),
     ("connector_settings",
      "SELECT connector AS connecteur, count(*) AS lignes FROM connector_settings "
      "WHERE connector <> ALL(%(catalogue)s) GROUP BY connector"),
-    ("connector_instances",
+    (INSTANCES,
      "SELECT i.connector AS connecteur, count(*) AS lignes FROM connector_instances i "
      "WHERE i.revoked_at IS NULL AND i.connector <> ALL(%(catalogue)s) "
      "AND NOT EXISTS (SELECT 1 FROM connector_credentials c "
@@ -73,7 +80,7 @@ REFERENCES: tuple[tuple[str, str], ...] = (
      "                   AND c.connector = i.connector AND c.account = i.account "
      "                   AND COALESCE(c.meta->>'base_url', '') <> '') "
      "GROUP BY i.connector"),
-    ("orgs.default_connectors",
+    (KIT,
      "SELECT k AS connecteur, count(*) AS lignes "
      "FROM orgs, unnest(default_connectors) AS k "
      "WHERE k <> ALL(%(catalogue)s) GROUP BY k"),
