@@ -79,6 +79,7 @@ def test_le_detecteur_nexiste_plus():
 class _Ctx:
     sub = "u1"
     org_id = 7
+    group_id = None     # comme un `ResolvedCtx` hors équipe (#1156 lit ce champ)
 
 
 class _Inp:

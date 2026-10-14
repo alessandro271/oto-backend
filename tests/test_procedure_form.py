@@ -102,6 +102,7 @@ def test_deux_dessins_sont_annonces():
 class _Ctx:
     sub = "u1"
     org_id = 7
+    group_id = None     # comme un `ResolvedCtx` hors équipe (#1156 lit ce champ)
 
 
 class _Inp:

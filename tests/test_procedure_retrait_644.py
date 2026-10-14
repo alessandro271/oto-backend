@@ -110,6 +110,7 @@ from oto_mcp.capabilities.orgs import instructions as oi  # noqa: E402
 class _Ctx:
     sub = "u1"
     org_id = 7
+    group_id = None     # comme un `ResolvedCtx` hors équipe (#1156 lit ce champ)
 
 
 class _Inp:

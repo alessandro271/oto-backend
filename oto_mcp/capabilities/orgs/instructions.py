@@ -114,6 +114,24 @@ class ReferencedTool(BaseModel):
     status: str
 
 
+class OtherScope(BaseModel):
+    """Un AUTRE palier qui porte le même slug que la procédure lue ou écrite (#1156) :
+    le slug ne désigne pas une ligne, il en désigne une par palier."""
+    scope: str = Field(description="`user` (ta copie perso), `org` ou `group` (l'équipe visée).")
+    guide_id: Optional[int] = Field(default=None, description=(
+        "Son identifiant STABLE : `op=get guide_id=…` la relit sans ambiguïté de palier."))
+    version: int
+    updated_at: Optional[str] = None
+    archived_at: Optional[str] = None
+
+
+_OTHER_SCOPES = ("Les AUTRES paliers qui portent ce slug (palier, `guide_id`, version, "
+                 "date) — absent quand il n'y en a aucun.")
+_SHADOW_WARNING = ("Présent quand une copie en MASQUE une autre pour une lecture par nom "
+                   "(`op=get` sans `scope` : ta copie perso d'abord, puis l'org) : dit "
+                   "laquelle est servie, laquelle est écartée, et comment lever le masque.")
+
+
 class GuideView(BaseModel):
     """⚠️ **Trois formes derrière une capacité**, choisies par l'ENTRÉE :
 
@@ -179,6 +197,10 @@ class GuideView(BaseModel):
     project_instance: Optional[dict] = None
     # Forme 3 avec `with_history=true` (org comme équipe depuis #681).
     versions: Optional[list[dict]] = None
+    # Formes 1 et 3, surface membre (#1156) : ce que la cascade a écarté, ou ce qui masque
+    # la copie lue.
+    other_scopes: Optional[list[OtherScope]] = Field(default=None, description=_OTHER_SCOPES)
+    shadow_warning: Optional[str] = Field(default=None, description=_SHADOW_WARNING)
 
 
 class GuideMeta(BaseModel):
@@ -280,6 +302,8 @@ class InstructionView(BaseModel):
         "ici exprès, pour qu'on puisse la relire et décider, pas pour l'exécuter. "
         "La remettre en service est un geste explicite, depuis l'écran qui l'a "
         "retirée."))
+    other_scopes: Optional[list[OtherScope]] = Field(default=None, description=_OTHER_SCOPES)
+    shadow_warning: Optional[str] = Field(default=None, description=_SHADOW_WARNING)
 
 
 class InstructionUnarchived(BaseModel):
@@ -430,6 +454,9 @@ class InstructionWritten(BaseModel):
     # À comparer au SHA-256 de ce qu'on a envoyé, blancs de tête et de fin retirés :
     # un écart = la base porte autre chose (cf. `procedure_empreinte`).
     body_sha256: str
+    # #1156 — l'écriture qui crée un masque (ou écrit une procédure masquée) le dit.
+    other_scopes: Optional[list[OtherScope]] = Field(default=None, description=_OTHER_SCOPES)
+    shadow_warning: Optional[str] = Field(default=None, description=_SHADOW_WARNING)
 
 
 class InstructionDescribed(BaseModel):
@@ -945,6 +972,115 @@ def _note_de_portee(owner: tuple[str, str]) -> dict:
         "repasse-la avec `scope='org'` (réservé aux admins de l'org).")}
 
 
+# ── Un palier en MASQUE un autre : le dire là où il agit (#1156) ────────────────
+#
+# Du 09 au 10/09/2026, deux procédures PERSONNELLES portant le slug de deux procédures
+# de l'org ont été servies à la place de celles-ci à chaque chargement par nom : 210
+# travaux de production ont tourné sur la mauvaise copie. La cascade de lecture
+# (`_read_guide`, la mienne d'abord) faisait ce qu'elle dit ; c'est le SILENCE qui a
+# coûté — la réponse disait `scope: "user"` comme un champ parmi d'autres, rien n'y
+# nommait la copie de l'org écartée, et l'écriture qui avait créé le masque ne l'avait
+# pas dit non plus. La cascade n'est pas remise en cause : on la rend LISIBLE.
+#
+# ⚠️ L'ordre est celui d'`op=get` sans `scope` : le palier personnel, puis l'org.
+# L'ÉQUIPE n'y est pas (elle se lit sur `scope='group'` explicite) : une copie d'équipe
+# n'est donc jamais masquée par une copie perso, ni ne masque celle de l'org. Quand le
+# geste la vise, les autres paliers du slug sont NOMMÉS dans `other_scopes` ; jamais
+# dans un avertissement de masque, qui serait faux.
+# ⚠️ Seul le palier personnel de L'APPELANT se voit : celui d'un autre compte est
+# inaccessible par construction (ADR 0068), et c'est aussi le seul qui change ce que
+# l'appelant — ou un agent qui tourne sous son compte — reçoit.
+
+
+def _paliers_de(ctx: ResolvedCtx) -> list[tuple[str, str]]:
+    """Les paliers que la surface MEMBRE atteint pour cet appelant : le sien, son org
+    (épinglée ou active, celle que l'autz a résolue) — la cascade par nom —, et
+    l'équipe quand le geste la VISE (`scope='group'`, que l'autz a vérifiée).
+
+    ⚠️ Pas l'équipe ACTIVE relue ici : hors de la cascade, elle ne change rien à ce
+    qu'une lecture par nom sert, et la relire coûterait une requête de plus à chaque
+    chargement de procédure pour un fait qui ne masque rien."""
+    paliers = []
+    if ctx.sub is not None:
+        paliers.append(("user", str(ctx.sub)))
+    if ctx.org_id is not None:
+        paliers.append(("org", str(ctx.org_id)))
+    if ctx.group_id is not None:
+        paliers.append(("group", str(ctx.group_id)))
+    return paliers
+
+
+def _autres_paliers(ctx: ResolvedCtx, slug: str, servi: tuple[str, str]) -> list[dict]:
+    """Les AUTRES paliers de l'appelant qui portent ce slug — palier, identifiant stable,
+    version, date — archivées comprises (une lecture par slug les sert aussi)."""
+    autres = []
+    for owner in _paliers_de(ctx):
+        if owner == servi:
+            continue
+        row = org_store.get_instruction(*owner, slug)
+        if not row:
+            continue
+        retrait = row.get("archived_at")
+        autres.append({"scope": owner[0], "guide_id": row.get("id"),
+                       "version": row.get("version"),
+                       "updated_at": (str(row["updated_at"])
+                                      if row.get("updated_at") is not None else None),
+                       **({"archived_at": str(retrait)} if retrait is not None else {})})
+    return autres
+
+
+def _designe(entree: dict) -> str:
+    date = (entree.get("updated_at") or "")[:10]
+    return (f"v{entree['version']}, `guide_id` {entree['guide_id']}"
+            + (f", modifiée le {date}" if date else "")
+            + (", ARCHIVÉE" if entree.get("archived_at") else ""))
+
+
+def _masque(servi: str, autres: list[dict], geste: str) -> Optional[str]:
+    """La phrase qui dit QUELLE copie en masque une autre pour une lecture par nom, ou
+    None. `geste` : `lecture` (ce qu'on vient de lire) ou `ecriture` (ce qu'on vient
+    d'écrire) — le fait est le même, ce qu'on en fait diffère."""
+    par_palier = {a["scope"]: a for a in autres}
+    # ⚠️ SUPPRIMER, pas archiver : la cascade lit aussi une copie archivée (elle sert
+    # une procédure retirée, avec `archived_at`) — une copie perso archivée masque donc
+    # toujours celle de l'org.
+    retirer = ("Si ta copie perso n'a pas lieu d'être, supprime-la "
+               "(`oto_procedure op=delete scope='user'`) : l'archiver ne lève pas le "
+               "masque.")
+    if servi == "user" and "org" in par_palier:
+        org = _designe(par_palier["org"])
+        if geste == "lecture":
+            return ("Tu lis ta copie PERSONNELLE. L'org porte une procédure du même slug "
+                    f"({org}), que cette lecture a ÉCARTÉE : `op=get` sans `scope` sert "
+                    "la tienne d'abord, pour toi comme pour un agent qui tourne sous ton "
+                    "compte. Celle de l'org se lit avec `scope='org'`. " + retirer)
+        return ("Cette procédure PERSONNELLE porte le slug d'une procédure de l'ORG "
+                f"({org}) et la MASQUE : tant qu'elle existe, `op=get` sans `scope` sert "
+                "ta copie et écarte celle de l'org, pour toi comme pour un agent qui "
+                "tourne sous ton compte. Pour modifier celle de l'org, écris avec "
+                "`scope='org'` (admin de l'org). " + retirer)
+    if servi == "org" and "user" in par_palier:
+        perso = _designe(par_palier["user"])
+        quoi = "Tu lis" if geste == "lecture" else "Tu viens d'écrire"
+        return (f"{quoi} la procédure de l'ORG, mais ta copie PERSONNELLE du même slug "
+                f"({perso}) la MASQUE : `op=get` sans `scope` sert ta copie, pas "
+                "celle-ci, pour toi comme pour un agent qui tourne sous ton compte. "
+                + retirer)
+    return None
+
+
+def _paliers_du_slug(ctx: ResolvedCtx, slug: str, servi: tuple[str, str],
+                     geste: str) -> dict:
+    """`other_scopes` (les autres paliers du slug) et `shadow_warning` (qui masque qui),
+    ABSENTS quand il n'y a rien à dire : une procédure se relit à chaque run, et un
+    champ vide servi à chaque fois serait du bruit qu'on apprend à ignorer."""
+    autres = _autres_paliers(ctx, slug, servi)
+    if not autres:
+        return {}
+    alerte = _masque(servi[0], autres, geste)
+    return {"other_scopes": autres, **({"shadow_warning": alerte} if alerte else {})}
+
+
 # ── Handlers (core ; owner depuis ctx → partagés membre/admin) ──────────────
 def _read_guide(ctx: ResolvedCtx, inp) -> tuple[dict, tuple[str, ...] | None]:
     """Bundle session-start (slug omis) OU un guide nommé. En mode membre
@@ -994,13 +1130,21 @@ def _read_guide(ctx: ResolvedCtx, inp) -> tuple[dict, tuple[str, ...] | None]:
         auteur = (nommer_l_auteur(instr) if (
             (parent_org is not None and parent_org == org_id)
             or (owner_type == "user" and owner_id == str(ctx.sub))) else {})
+        # #1156 — la lecture par id STABLE disait « bon texte » pendant que l'agent, qui
+        # charge PAR NOM, en recevait un autre : elle nomme désormais la copie qui la
+        # masque. Seulement pour une procédure de SES paliers — une procédure partagée
+        # d'une autre org n'est dans aucune cascade de l'appelant.
+        servi = (owner_type, owner_id)
+        paliers = (_paliers_du_slug(ctx, instr["slug"], servi, "lecture")
+                   if member_mode and servi in _paliers_de(ctx) else {})
         return deprecations.avec_les_deux_noms({
             "org_id": parent_org, "guide_id": int(guide_id),
             "scope": owner_type, "slug": instr["slug"], "title": instr["title"],
             "description": instr["description"], "version": instr["version"],
             "body_md": instr["body_md"], "slots": instr.get("slots") or [],
             **{k: auteur[k] for k in ("set_by", "set_by_name") if k in auteur},
-            "archived_at": str(archivee) if archivee is not None else None}), (instr["body_md"],)
+            "archived_at": str(archivee) if archivee is not None else None,
+            **paliers}), (instr["body_md"],)
 
     if slug is None:
         # Début de session : guide de base + index (vide gracieux si pas d'org).
@@ -1101,6 +1245,10 @@ def _read_guide(ctx: ResolvedCtx, inp) -> tuple[dict, tuple[str, ...] | None]:
     if "archived_at" in instr:
         v = instr["archived_at"]
         out["archived_at"] = str(v) if v is not None else None
+    # #1156 — la portée qui a répondu est `scope` ; ce qu'elle a ÉCARTÉ (ou ce qui la
+    # masque) se dit ici. Surface membre seulement : c'est elle qui porte la cascade.
+    if member_mode:
+        out.update(_paliers_du_slug(ctx, instr["slug"], owner, "lecture"))
     pi = _project_instance(member_mode)
     if pi:
         out["project_instance"] = pi
@@ -1353,10 +1501,15 @@ def _write_instruction(ctx: ResolvedCtx, inp, must_create: bool = False) -> tupl
     # orgs, un même slug de campagne existe en `user` ET en `org`).
     ecrite = org_store.get_instruction(*owner, norm) or {}
     effective_slots = slots_in if slots_in is not None else (ecrite.get("slots") or [])
+    # #1156 — l'écriture qui CRÉE un masque (ou qui écrit une procédure masquée) le dit,
+    # en nommant l'autre copie. Pas un refus : la cascade reste, il l'a peut-être voulu.
+    # Surface membre seulement — la face admin (`org_id` ciblé) n'a pas de cascade.
+    paliers = (_paliers_du_slug(ctx, norm, owner, "ecriture")
+               if getattr(inp, "org_id", None) is None else {})
     return {"ok": True, **_scope_ref(owner), "slug": norm,
             **procedure_empreinte.empreinte_check(*owner, norm, version),
             **({"guide_id": ecrite["id"]} if ecrite.get("id") is not None else {}),
-            **_note_de_portee(owner), "version": version, "set": True,
+            **_note_de_portee(owner), **paliers, "version": version, "set": True,
             **({"reverted_from": from_version} if from_version is not None else {}),
             **slots_mod.slots_check(body_md, effective_slots),
             **procedure_diagram.diagram_check(body_md, marqueur_perdu=marqueur_perdu),
@@ -1562,6 +1715,9 @@ def _instruction_get(ctx: ResolvedCtx, inp: InstrGetInput) -> dict:
         # Absent de la forme d'une VERSION précise, et c'est juste : une version
         # n'est pas archivée, la procédure l'est.
         "archived_at": instr.get("archived_at"),
+        # #1156 — l'écran lit la procédure de l'org ; si une copie perso de l'appelant
+        # la masque pour ses lectures par nom, il le dit.
+        **_paliers_du_slug(ctx, instr["slug"], ("org", str(ctx.org_id)), "lecture"),
     }
 
 
