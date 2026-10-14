@@ -136,8 +136,14 @@ def data_app(monkeypatch):
     _install_prefab_stub(monkeypatch)
     _STACK.clear()
     # (ré)importe le module APRÈS le stub pour que l'import gardé réussisse — et
-    # rend le module d'origine après le test
+    # rend le module d'origine après le test. L'import pose aussi l'attribut
+    # `oto_mcp.tools.datastore` du paquet : sans le rendre lui aussi, le paquet
+    # garderait le module rechargé quand `sys.modules` rend l'ancien, et un test
+    # suivant qui patche `from oto_mcp.tools import datastore` (le paquet) patcherait
+    # un autre module que celui qu'importe le code servi (`from .datastore import …`).
+    import oto_mcp.tools as tools_pkg
     monkeypatch.delitem(sys.modules, "oto_mcp.tools.datastore", raising=False)
+    monkeypatch.delattr(tools_pkg, "datastore", raising=False)
     import oto_mcp.tools.datastore as ds
 
     captured = {}

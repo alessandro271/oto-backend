@@ -58,6 +58,15 @@ SCOPES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "pipelines_tickets": (("tickets", "crm.schemas.tickets.read"), ()),
 }
 
+#: Families a refusal can NAME but the connection probe does not measure. The events
+#: API (`hubspot_visits` op="page_views") asks for `business-intelligence`, a scope
+#: no CRM private app ticks by default: measured, it would read "events scope
+#: missing" on the connection test of every portal that never asked for page views.
+#: Same shape as `SCOPES`; looked up after it (`_reference`).
+OPTIONAL_SCOPES: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "events": (("business-intelligence",), ()),
+}
+
 #: Reading the PROPERTIES of an object type: its schema scope, or its object scope
 #: (HubSpot accepts either) — tickets: the legacy `tickets` only.
 _PROPERTY_SCOPES = {
@@ -135,6 +144,12 @@ def family_of(object_type=None, family=None) -> Optional[str]:
     return _FAMILY_OF.get(str(object_type or "").strip().lower())
 
 
+def _reference(family: Optional[str]) -> tuple[str, ...]:
+    """The read scopes of a family, measured by the probe or not."""
+    entry = SCOPES.get(family) or OPTIONAL_SCOPES.get(family)
+    return entry[0] if entry else ()
+
+
 def needed_scopes(e, family: Optional[str],
                   object_type=None) -> tuple[list[str], str]:
     """(scope names, source): from HubSpot's body when it names them, else from
@@ -146,8 +161,8 @@ def needed_scopes(e, family: Optional[str],
     otype = str(object_type or "").strip().lower()
     if family == "properties" and otype in _PROPERTY_SCOPES:
         return list(_PROPERTY_SCOPES[otype]), "reference"
-    if family in SCOPES:
-        return list(SCOPES[family][0]), "reference"
+    if _reference(family):
+        return list(_reference(family)), "reference"
     return [], "unknown"
 
 
@@ -157,7 +172,7 @@ def recommended(names: list[str], family: Optional[str], object_type=None) -> Op
     reference scope when HubSpot accepts it, else its first plain one."""
     otype = str(object_type or "").strip().lower()
     ours = (_PROPERTY_SCOPES.get(otype) if family == "properties" else None) or \
-        (SCOPES[family][0] if family in SCOPES else ())
+        _reference(family)
     for s in ours:
         if s in names:
             return s
@@ -239,6 +254,20 @@ def translate(e, *, object_type=None, object_id=None, family=None,
     refus = missing_scopes_refusal(e, object_type=object_type, family=family)
     if refus is not None:
         return refus
+    if code == 403 and family == "events":
+        # Not a missing scope, so not a checkbox. HubSpot's reference lists the events
+        # API for Professional and Enterprise only: we say what its documentation
+        # says and quote its own words — the cause is theirs to name, not ours.
+        said = body.get("message") if isinstance(body, dict) else None
+        return _upstream_refusal(
+            e, "HubSpot refuses the events API on this portal (403), and not for a "
+            "missing scope. Its documentation lists this API for Professional and "
+            "Enterprise plans only (Marketing, Sales, Service, Content or Data Hub): "
+            "the portal's plan is the likely cause. Page views of a contact are not "
+            "readable here; its first page, last page and last session stay readable "
+            "as properties (op='contacts')."
+            + (f" HubSpot's words: {str(said)[:200]}" if said else ""),
+            reason="forbidden", status=403, family="events")
     if code == 401:
         return _upstream_refusal(
             e, "HubSpot rejects the token (401). The expected token is the private "
