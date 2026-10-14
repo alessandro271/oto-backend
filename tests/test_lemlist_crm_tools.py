@@ -131,6 +131,32 @@ def test_les_trois_listes_de_desinscription_ne_se_confondent_pas():
         inst.unsubscribe_contact.assert_called_once_with("ctc_1")
 
 
+@pytest.mark.parametrize("op,method,key", [
+    ("list", "list_unsubscribes", "unsubscribes"),
+    ("var_list", "list_unsubscribed_variables", "variables"),
+])
+def test_une_liste_de_desinscription_omise_ne_rend_quune_page(op, method, key):
+    """Sans `limit`, lemlist rend la liste ENTIÈRE (2 439 lignes, 325 Ko vus sur
+    un compte réel) : l'agent qui la lit pour vérifier une valeur se noie. Le
+    tool sert une page de 100 et dit où reprendre."""
+    key_patch, cls = _with_fake_client()
+    with key_patch, cls as client_cls:
+        inst = client_cls.return_value
+        tool = _tool("lemlist_unsubscribe")
+
+        getattr(inst, method).return_value = [{"value": f"v{i}"} for i in range(100)]
+        out = tool.fn(op=op)
+        assert getattr(inst, method).call_args.kwargs == {"offset": None, "limit": 100}
+        assert len(out[key]) == 100
+        assert (out["limit"], out["offset"], out["next_offset"]) == (100, 0, 100)
+
+        # Une page incomplète est la dernière ; un `limit` explicite est tenu.
+        getattr(inst, method).return_value = [{"value": "v"}] * 3
+        out = tool.fn(op=op, limit=20, offset=40)
+        assert getattr(inst, method).call_args.kwargs == {"offset": 40, "limit": 20}
+        assert (out["limit"], out["offset"], out["next_offset"]) == (20, 40, None)
+
+
 def test_ajouter_ou_retirer_dune_liste_de_contacts_partage_une_route():
     key, cls = _with_fake_client()
     with key, cls as client_cls:
