@@ -28,23 +28,25 @@ class ScheduledEmail(BaseModel):
     id: int
     to_email: str
     cc: Optional[list[str]] = None
-    subject: Optional[str] = None
+    # `subject`, `transport`, `scheduled_at` et `created_at` sont NOT NULL en base et lus
+    # tels quels par `list_scheduled_emails` : jamais absents ni nuls (#437).
+    subject: str
     from_email: Optional[str] = None
     from_name: Optional[str] = None
     # Dérivé du CONNECTEUR au moment de la composition (scaleway→TEM, resend→resend) :
     # figé sur la ligne, il ne suit pas un changement de config ultérieur.
-    transport: Optional[str] = None
+    transport: str
     # Les quatre seules valeurs qu'écrit `db/emails.py` (défaut, envoi, échec, annulation)
     # depuis la création de la table (#437).
     status: Literal["pending", "sent", "failed", "cancelled"]
     # Instant d'envoi prévu. ⚠️ "YYYY-MM-DD HH:MM:SS" **sans fuseau** (le tzinfo est
     # retiré par le row factory, pas converti) — alors que la fenêtre calme qui l'a
     # calculé, elle, est exprimée dans le fuseau de l'org.
-    scheduled_at: Optional[str] = None
+    scheduled_at: str
     attempts: int
     sent_at: Optional[str] = None
     error: Optional[str] = None
-    created_at: Optional[str] = None
+    created_at: str
     created_by: Optional[str] = None
 
 

@@ -124,7 +124,9 @@ class InvitationEntry(BaseModel):
     """Une invitation en attente."""
     id: int
     email: Optional[str] = None
-    org_role: Optional[str] = None
+    # NOT NULL en base (défaut `org_member`), lu tel quel par les deux listes (#437) —
+    # même sur une invitation d'équipe, où c'est le rôle d'org qu'elle donnera.
+    org_role: str
     group_role: Optional[str] = None
     org_id: Optional[int] = None
     group_id: Optional[int] = None

@@ -343,15 +343,17 @@ class RunCall(BaseModel):
     timeline et la fiche d'un appel lisent la même colonne, le handler (`_run`) retire
     `args` du dict pour la même raison que `_call`.
     """
-    id: Optional[int] = Field(default=None, description=(
+    # `id`, `created_at`, `tool` et `ok` sont NOT NULL dans `tool_calls` et lus tels quels
+    # par `get_run` : jamais absents ni nuls, comme sur `CallRow` (#437).
+    id: int = Field(description=(
         "L'identifiant de CET appel — celui que prend `GET …/monitoring/calls/"
         "{call_id}` et `op=call`. ⚠️ Sans lui, une ligne de la timeline était une "
         "impasse : on voyait qu'un appel avait eu lieu sans pouvoir l'ouvrir. C'est "
         "le MÊME identifiant que `CallDetail.id` — la timeline et la fiche parlent de "
         "la même ligne de journal, elles la nomment donc pareil."))
-    created_at: Optional[str] = None
-    tool: Optional[str] = None
-    ok: Optional[bool] = None
+    created_at: str
+    tool: str
+    ok: bool
     error: Optional[str] = None
     duration_ms: Optional[int] = None
 
