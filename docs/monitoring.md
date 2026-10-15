@@ -35,7 +35,10 @@ l'écriture**), `ok`, `error`, `error_kind`, `duration_ms`, `created_at`.
 `error` est un texte brut tronqué (`str(e)[:500]`) : lisible par un humain, pas
 filtrable. Il passe par `journal_secrets.masquer_urls` dans `db.insert_tool_call` (seul
 point d'écriture) : identité d'URL et valeur des clés de query secrètes masquées — un
-message amont recopie parfois une URL à clé (F-049, `connectUrl` Browserbase). Sentry
+message amont recopie parfois une URL à clé (F-049, `connectUrl` Browserbase). `args`
+aussi, chaîne par chaîne (`journal_secrets.masquer_urls_des_valeurs`, 15/10/2026) : une
+URL pré-signée passée à un outil y écrivait sa signature (`X-Amz-Signature`,
+`X-Amz-Credential`, `X-Amz-Security-Token`, `sig` d'un SAS…). Sentry
 applique le même masque aux messages d'exception (`_before_send`). `error_kind` porte le `.code` que rend `error_taxonomy.classify(exc)` sur
 l'exception CAPTURÉE (ex. `not_authorized` sur un 401/403 amont, `upstream_timeout`,
 `internal`…) — écrit par `calllog._record` (via `calllog._error_kind`) sur un échec,

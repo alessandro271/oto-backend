@@ -19,7 +19,7 @@ import psycopg
 logger = logging.getLogger(__name__)
 
 from .. import deprecations
-from ..journal_secrets import masquer_urls
+from ..journal_secrets import masquer_urls, masquer_urls_des_valeurs
 from . import journal_calls, journal_jour
 from ._conn import _connect
 from .index_releve import PREDICAT_OUVERTURE
@@ -72,10 +72,12 @@ def insert_tool_call(row: dict) -> None:
     commun à tous les écrivains (middleware MCP, gestes REST, worker…) : un texte
     d'erreur amont recopie parfois une URL avec sa clé (F-049 : Playwright et la
     `connectUrl` Browserbase `?apiKey=…`), et `tool_calls.error` est lu par les
-    admins d'org."""
+    admins d'org. `args`, pareil, chaîne par chaîne (`masquer_urls_des_valeurs`) : une
+    adresse pré-signée passée à un outil y écrivait sa signature en clair."""
     error = row.get("error")
     if error:
         error = masquer_urls(str(error))
+    args = masquer_urls_des_valeurs(row.get("args"))
     with _connect() as conn:
         conn.execute(
             """
@@ -91,7 +93,7 @@ def insert_tool_call(row: dict) -> None:
             (
                 row.get("server") or "oto", row.get("kind") or "mcp",
                 row.get("sub"), row.get("email"),
-                row["tool"], json.dumps(row.get("args")) if row.get("args") is not None else None,
+                row["tool"], json.dumps(args) if args is not None else None,
                 bool(row.get("ok")), error, row.get("duration_ms"),
                 row.get("session_id"), row.get("run_id"), row.get("org_id"),
                 row.get("client_id"), row.get("sentry_event_id"),

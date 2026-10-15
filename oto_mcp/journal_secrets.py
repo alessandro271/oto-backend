@@ -296,10 +296,17 @@ CLES_DE_REQUETE_SECRETES = frozenset({
     # La `connectUrl` CDP que Browserbase rend à l'ouverture d'une session porte
     # `signingKey` (F-049) : ni « key » exact, ni un fragment de la liste ci-dessous.
     "signingkey",
+    # Les adresses PRÉ-SIGNÉES (S3 et compatibles, GCS, Azure SAS) : la signature et
+    # l'identifiant de la clé qui l'a produite valent l'accès au fichier tant qu'elles
+    # n'ont pas expiré — mesuré le 15/10/2026, une URL S3 passée à un outil de
+    # transcription restait en clair dans `tool_calls.args`. `X-Amz-Signature` et
+    # `X-Amz-Security-Token` tombent aussi par leurs fragments ; `se`/`sv` (expiration,
+    # version d'un SAS) ne sont pas des secrets et restent lisibles.
+    "x-amz-credential", "x-goog-credential", "sig",
 })
 # … et toute clé dont le nom CONTIENT l'un de ces fragments (`api_token`, `password`,
-# `app_secret`…).
-_FRAGMENTS_DE_CLE_SECRETE = ("secret", "token", "password")
+# `app_secret`, `X-Amz-Signature`, `x-api-key`…).
+_FRAGMENTS_DE_CLE_SECRETE = ("secret", "token", "password", "signature", "key")
 MASQUE_DE_REQUETE = "***"
 
 
@@ -397,11 +404,29 @@ def masquer_urls(texte: str) -> str:
     (`masquer_requetes`). Pour un texte d'ERREUR (F-049, 2026-10-12) : un client
     qui échoue à se brancher recopie souvent l'adresse ENTIÈRE dans son message
     (Playwright : `connect_over_cdp` → `wss://connect.browserbase.com?apiKey=…`), et
-    ce message part dans `tool_calls.error`, que lisent les admins d'org."""
+    ce message part dans `tool_calls.error`, que lisent les admins d'org. Pour les
+    ARGUMENTS d'un appel : `masquer_urls_des_valeurs`."""
     if not texte:
         return texte
     texte = _IDENTITE_D_URL_DANS_UN_TEXTE.sub(rf"\1{MASQUE_DE_REQUETE}@", texte)
     return masquer_requetes(texte) if "?" in texte else texte
+
+
+def masquer_urls_des_valeurs(valeur):
+    """`valeur` (les `args` d'une ligne du journal : dict, liste, scalaires, à toute
+    profondeur) où chaque CHAÎNE qui contient une adresse passe par `masquer_urls`.
+    Mesuré le 15/10/2026 : une URL S3 pré-signée passée à un outil s'écrivait entière
+    dans `tool_calls.args` — `X-Amz-Signature`, `X-Amz-Credential`,
+    `X-Amz-Security-Token`, l'accès au fichier jusqu'à l'expiration. Chaîne par chaîne
+    et non sur le JSON sérialisé : un masque posé sur le texte JSON pourrait manger
+    l'échappement d'un guillemet et rendre la ligne illisible."""
+    if isinstance(valeur, str):
+        return masquer_urls(valeur) if "://" in valeur else valeur
+    if isinstance(valeur, dict):
+        return {k: masquer_urls_des_valeurs(v) for k, v in valeur.items()}
+    if isinstance(valeur, (list, tuple)):
+        return [masquer_urls_des_valeurs(v) for v in valeur]
+    return valeur
 
 
 def _argument_masque(arg):
