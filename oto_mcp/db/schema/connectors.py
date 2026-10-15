@@ -293,4 +293,9 @@ CREATE TABLE IF NOT EXISTS connector_loan_events (
     target TEXT NOT NULL,
     action TEXT NOT NULL CHECK (action IN ('lend', 'revoke'))
 );
+-- La fusion de comptes repointe `actor_sub` d'un bloc : sans index, un balayage complet.
+CREATE INDEX IF NOT EXISTS idx_loan_events_actor ON connector_loan_events (actor_sub);
+-- La lecture par ligne du coffre (`pour_la_ligne`) et son suivi au rechiffrement.
+CREATE INDEX IF NOT EXISTS idx_loan_events_ligne
+    ON connector_loan_events (entity_type, entity_id, connector, account);
 """

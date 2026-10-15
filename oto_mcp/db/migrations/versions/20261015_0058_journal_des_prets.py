@@ -3,8 +3,9 @@
 Une table NEUVE, née entière — le DDL est le fragment
 `db/schema/connectors.py::LOAN_EVENTS`, exécuté tel quel :
 `connector_loan_events (id BIGSERIAL PK, at, actor_sub, org_id, entity_type, entity_id,
-connector, account, target, action CHECK lend|revoke)`. Append-only, sans clé étrangère
-ni index (des gestes rares, lus par ligne du coffre).
+connector, account, target, action CHECK lend|revoke)`. Append-only, sans clé étrangère ;
+deux index, posés sur la table vide : `actor_sub` (la fusion de comptes le repointe d'un
+bloc) et la ligne du coffre (lecture par ligne, suivi au rechiffrement).
 
 **Verrous.** `AccessExclusiveLock` sur la table neuve seule (vide, instantané) ; aucune
 table existante n'est touchée, aucune n'est verrouillée. `lock_timeout` 5 s quand même :
