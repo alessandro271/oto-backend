@@ -7,27 +7,37 @@ from __future__ import annotations
 
 from ._model import _c
 
-# resend: credential-only (NO tools of its own). The org's Resend key is
-# consumed by `email_send` (transport=resend) via resolve_api_key, user >
-# org cascade. Sending domain verified on the Resend side by the org; the `from` address
-# lives in orgs.email_settings, not in the credential. Outside the base (not a
-# tool to expose). tools/resend.py = no-op register() to
-# satisfy the invariant "one tools/ file per provider kind=tools".
-# resend: BYOK transactional email (the ORG's Resend key). byo_org only
-# (email is org-level); self_serve = available on request to any org. Domain
-# ownership is guaranteed by Resend (the key can only send from the
-# domains verified in the org's Resend account) → zero domain logic on the oto side.
+# resend: the ORG's Resend account, for two things.
+#
+# 1. BYOK transactional email: the key is consumed by `email_send`
+#    (transport=resend) via resolve_api_key, user > org cascade. The sending
+#    domain is verified on the Resend side by the org (the key can only send from
+#    the domains verified in the org's Resend account → zero domain logic on the
+#    oto side); the `from` address lives in orgs.email_settings, not in the
+#    credential. That routing is `EMAIL_CONNECTOR_TRANSPORT`, unchanged.
+# 2. The contact list behind Broadcasts: contacts, segments, topics — tools in
+#    `tools/resend.py` (contacts) and `tools/resend_segments.py` (segments,
+#    topics), shared base in `tools/resend_socle.py`, client in the connector
+#    library (`oto.tools.resend.ResendClient`). These routes need a key with
+#    Full access; a sending-only key keeps sending and is refused there with a
+#    message that says so.
+#
+# byo_org only (email is org-level); self_serve = available on request to any org.
 CONNECTOR = _c(
     "resend", ["resend"], auth_modes={"byo_org"}, keyed=True,
     secret_kind="api_key",
-    label="Resend", help="transactional email sending (the org's key)",
+    modules=("resend", "resend_segments"),
+    label="Resend",
+    help="the org's Resend account: contacts, segments and topics behind "
+         "Broadcasts (its key also sends `email_send`)",
     publisher="Resend", href="https://resend.com",
 )
 
 LOGO_DOMAIN = "resend.com"
 
 DESCRIPTION = (
-    "Transactional email sending through your organization's Resend key — no "
-    "tools of its own: the key is consumed by the platform's email "
-    "sending, from a domain you have verified at Resend."
+    "Your organization's Resend account. Its key sends the platform's emails "
+    "from a domain you have verified at Resend, and, with Full access, keeps "
+    "your Broadcast audience up to date: contacts, segments, and the topics "
+    "recipients subscribe to or leave."
 )

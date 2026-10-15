@@ -23,19 +23,28 @@ from oto_mcp import spine_catalog as _spine
 def test_every_registry_namespace_is_presented():
     cat = providers.render_namespace_catalog()
     for c in providers._REGISTRY_LIST:
-        if c.name in providers.EMAIL_CONNECTOR_TRANSPORT:
-            continue  # credential-only → présenté via le concept spine email_send
+        if c.name in providers.EMAIL_ONLY_CONNECTORS:
+            continue  # sans outil propre → présenté via le concept spine email_send
         for ns in c.namespaces:
             assert f"{ns}_*" in cat, f"namespace {ns}_* absent du catalogue (connecteur {c.name})"
 
 
 def test_email_transports_not_listed_as_namespaces():
     cat = providers.render_namespace_catalog()
-    # scaleway/resend = pur credential (aucun tool propre) → pas une ligne de namespace
+    # scaleway = pur credential (aucun outil propre) → pas une ligne de namespace
     assert "scaleway_*" not in cat
-    assert "resend_*" not in cat
     # …mais l'email reste présenté comme concept spine
     assert "email_send" in cat
+
+
+def test_un_transport_email_qui_sert_des_outils_est_presente():
+    """`resend` est un transport d'`email_send` ET sert ses outils (contacts,
+    segments, sujets) : il a sa ligne, comme tout connecteur. Le retirer du
+    catalogue parce qu'il route aussi l'envoi cacherait des outils servis."""
+    cat = providers.render_namespace_catalog()
+    assert "resend" in providers.EMAIL_CONNECTOR_TRANSPORT
+    assert "resend_*" in cat
+    assert providers.EMAIL_ONLY_CONNECTORS <= set(providers.EMAIL_CONNECTOR_TRANSPORT)
 
 
 def _outils_spine_montes() -> list[str]:

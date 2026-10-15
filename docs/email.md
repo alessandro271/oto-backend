@@ -80,8 +80,15 @@ champ transport sur l'expéditeur).
   `sender→connecteur→transport` ; autz dynamique (membre d'org pour une adresse
   déclarée ; super_admin pour le repli marque `oto@otomata.tech`). `email.py` =
   `send_composed_email` (mailer à `OTO_MAILER_URL`, env `OTO_MAILER_SEND_BEARER`) +
-  `send_via_resend` (httpx direct, clé org). `scaleway`/`resend` = providers
-  credential/config-only (`tools/{scaleway,resend}.py` = `register()` no-op).
+  `send_via_resend` (httpx direct, clé org). `scaleway` = provider
+  credential/config-only (`tools/scaleway.py` = `register()` no-op) ; `resend`
+  sert EN PLUS ses propres outils — la liste de contacts des Broadcasts
+  (`resend_contact`, `resend_segment`, `resend_topic`, `tools/resend*.py`), avec
+  la MÊME clé d'org, qui doit alors être en accès complet (une clé « envoi
+  seul » continue d'envoyer, et ces outils la refusent en le disant). L'envoi
+  n'en dépend pas : `email_send` garde son chemin. Le catalogue de namespaces
+  ne masque donc que `providers.EMAIL_ONLY_CONNECTORS` (`scaleway`), pas tout
+  `EMAIL_CONNECTOR_TRANSPORT`.
 - **Config = `orgs.email_settings` JSONB keyé PAR CONNECTEUR** :
   `{<connector>:{senders:[{email,name?,reply_to?}], quiet_hours?}}` (calqué sur
   `field_filters`). `org_store.get/set_org_email_settings(org, connector)`,

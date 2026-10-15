@@ -402,6 +402,11 @@ DEFAULT_ACTIVE_CONNECTORS: frozenset = frozenset(
 # connector (its config lives in orgs.email_settings keyed by connector); the
 # transport is DERIVED from it. `email_send` (spine) routes sender→connector→transport.
 EMAIL_CONNECTOR_TRANSPORT: dict = {"scaleway": "scaleway", "resend": "resend"}
+# The email connectors with NO tool of their own (credential/config only): the
+# namespace catalog presents them through the `email_send` family, never as a
+# namespace line. `resend` is a transport too, but it also serves tools (its
+# contacts, segments and topics), so it is presented like any connector.
+EMAIL_ONLY_CONNECTORS: frozenset = frozenset({"scaleway"})
 REMOTE_CONNECTORS: tuple = tuple(c for c in _REGISTRY_LIST if c.kind == "remote")
 
 
@@ -436,8 +441,8 @@ def render_namespace_catalog(spine_tools=None) -> str:
     """The "namespaces" block of the server instructions — BOTH halves derived.
 
     Connectors: one line per connector (its namespaces grouped), over all of
-    `_REGISTRY_LIST` → no omission. The pure-credential email transports
-    (scaleway/resend, no tool of their own) are presented via the `email_send` family.
+    `_REGISTRY_LIST` → no omission. The email transports with no tool of their
+    own (`EMAIL_ONLY_CONNECTORS`) are presented via the `email_send` family.
 
     Base: one line per declared family (`spine_catalog.SPINE_FAMILIES`), then one line
     per spine tool that nobody claims. `spine_tools=None` = default derivation
@@ -446,7 +451,7 @@ def render_namespace_catalog(spine_tools=None) -> str:
     mechanism without depending on what is mounted that day."""
     lines: list[str] = []
     for c in _REGISTRY_LIST:
-        if c.name in EMAIL_CONNECTOR_TRANSPORT:   # credential-only → covered by email_send
+        if c.name in EMAIL_ONLY_CONNECTORS:   # no tool of its own → covered by email_send
             continue
         ns = " / ".join(f"{n}_*" for n in c.namespaces)
         desc = f"{c.label} : {c.help}" if c.help else c.label
