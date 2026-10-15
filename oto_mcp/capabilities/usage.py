@@ -171,7 +171,8 @@ class SignalRow(BaseModel):
     body: Optional[str] = None
     session_id: Optional[str] = None
     source: Optional[str] = None     # agent | human
-    status: Optional[str] = None     # open | acknowledged | declined | resolved
+    # Domaine fermé par le CHECK `usage_signals_status` (#437).
+    status: Optional[Literal["open", "acknowledged", "declined", "resolved"]] = None
     # Le dernier ARBITRAGE, pas la seule résolution : posé aussi par `acknowledged`
     # et `declined`, effacé par un retour à `open`. Les noms datent des deux états
     # d'origine — c'est `status` qui dit l'état.

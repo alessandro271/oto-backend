@@ -157,6 +157,11 @@ class FleetInput(BaseModel):
         "its restarts, distinct from any other scheduler."))
 
 
+# Domaine fermé par le CHECK `runner_fleets_status_check` (#437).
+FleetStatus = Literal["draft", "armed", "running", "stopping", "stopped", "done",
+                      "failed"]
+
+
 class Fleet(BaseModel):
     """Une flotte telle que servie (les colonnes de `_COLS`, db/runner_fleets)."""
     id: int
@@ -185,7 +190,7 @@ class Fleet(BaseModel):
     max_tokens_per_row: Optional[int] = None
     max_run_seconds: Optional[int] = None
     descriptions_outils: Optional[dict] = None
-    status: Optional[str] = None
+    status: Optional[FleetStatus] = None
     stop_reason: Optional[str] = None
     armed_at: Optional[str] = None
     started_at: Optional[str] = None
@@ -212,7 +217,7 @@ class FleetCard(BaseModel):
     servi les annonce — les deux ne peuvent pas diverger."""
     id: int
     label: Optional[str] = None
-    status: Optional[str] = None
+    status: Optional[FleetStatus] = None
     procedure: Optional[str] = None
     namespace: Optional[str] = None
     row_filter: Optional[dict] = None

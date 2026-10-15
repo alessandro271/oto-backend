@@ -92,6 +92,11 @@ class UnpublishInput(BaseModel):
 # un slug rendu peut différer de celui demandé, et un `version` ne dit pas la même
 # chose selon qu'on publie ou qu'on forke.
 
+# Validée par l'UNIQUE écriture (`org_store.library.publish_guide`) depuis la création
+# de la table, colonne `NOT NULL DEFAULT 'public'` (#437).
+LibraryVisibility = Literal["public", "unlisted"]
+
+
 class LibraryEntrySummary(BaseModel):
     """Une entrée du CATALOGUE : métadonnées seules. Le corps markdown n'y est
     jamais — c'est library.get qui le sert, par slug."""
@@ -117,7 +122,7 @@ class LibraryEntrySummary(BaseModel):
     category: str = Field(description="Catégorie de rangement, libre ; chaîne vide si "
                                       "non classée (et non filtrable par category alors).")
     tags: list = Field(default_factory=list, description="Étiquettes libres, [] par défaut.")
-    visibility: str = Field(
+    visibility: LibraryVisibility = Field(
         description="'public' (listée) | 'unlisted' (partage par LIEN : servie par slug "
                     "exact à tout compte authentifié, mais jamais listée ici). Sur cette "
                     "liste la valeur vaut donc toujours 'public'.")
@@ -166,7 +171,7 @@ class LibraryEntry(BaseModel):
     author_display: str = Field(description="Nom d'auteur figé à la publication.")
     category: str = Field(description="Catégorie ('' si non classée).")
     tags: list = Field(default_factory=list, description="Étiquettes libres.")
-    visibility: str = Field(
+    visibility: LibraryVisibility = Field(
         description="'public' | 'unlisted'. Ici la valeur PEUT être 'unlisted' : cette "
                     "lecture sert le partage par lien. « Non listé » ≠ secret d'org — "
                     "tout compte authentifié qui connaît le slug lit l'entrée.")
@@ -206,7 +211,7 @@ class PublishResult(BaseModel):
     version: int = Field(description="Version de publication après l'opération. `1` = "
                                      "création ; ≥2 = le slug existait et vient d'être "
                                      "écrasé.")
-    visibility: str = Field(description="'public' | 'unlisted' tel qu'enregistré.")
+    visibility: LibraryVisibility = Field(description="'public' | 'unlisted' tel qu'enregistré.")
     diagram_warning: Optional[str] = Field(
         default=None,
         description="Le SCHÉMA manquant du corps publié (cf. `procedure_diagram`). "

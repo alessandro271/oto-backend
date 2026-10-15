@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
@@ -111,7 +111,8 @@ class ReferencedTool(BaseModel):
     ou non monté) : le corps n'a pas changé, sa résolution si. Une entrée `missing`
     ne porte que `name` + `status` ; une entrée `ok` porte la fiche de l'outil."""
     name: str
-    status: str
+    # Posé en dur par `tool_registry.resolve_refs`, seul émetteur (#437).
+    status: Literal["ok", "missing"]
 
 
 class OtherScope(BaseModel):

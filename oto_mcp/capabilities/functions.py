@@ -80,7 +80,8 @@ class FunctionCard(BaseModel):
 
 class FunctionVersion(BaseModel):
     version: int
-    status: str
+    # Domaine fermé par le CHECK de `function_versions.status` (#437).
+    status: Literal["proposee", "publiee", "refusee"]
     entrypoint: Optional[str] = None
     requirements: Optional[list[str]] = None
     note: Optional[str] = None

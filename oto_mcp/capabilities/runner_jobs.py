@@ -223,7 +223,8 @@ class Job(BaseModel):
             "silently drop it either: report the reason. An agent whose identity "
             "is no longer valid stops SAYING SO."))
     payload: Optional[dict[str, Any]] = None
-    status: Optional[str] = None
+    # Domaine fermé par le CHECK `runner_jobs_status_check` (#437).
+    status: Optional[Literal["pending", "held", "claimed", "done", "failed", "expired"]] = None
     attempts: Optional[int] = None
     max_attempts: Optional[int] = None
     claimed_by: Optional[str] = None
@@ -256,7 +257,8 @@ class JobsOut(BaseModel):
     # list → jobs + total + next_cursor ;
     # complete → ok/status + run_id/rows_released/release ; les autres → ok.
     id: Optional[int] = None
-    status: Optional[str] = None
+    # Relu de la colonne (`RETURNING status`), fermée par `runner_jobs_status_check`.
+    status: Optional[Literal["pending", "held", "claimed", "done", "failed", "expired"]] = None
     due_at: Optional[str] = None
     # `enqueue` le RÉPÈTE : l'appelant sait ainsi que son rattachement a été pris,
     # au lieu de le supposer et de découvrir au bilan qu'un passage est vide.

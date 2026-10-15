@@ -551,7 +551,8 @@ class OrgSignalRow(BaseModel):
     body: Optional[str] = None         # LA prose — ce que les compteurs ne disent pas
     session_id: Optional[str] = None
     source: Optional[str] = None
-    status: Optional[str] = None
+    # Domaine fermé par le CHECK `usage_signals_status` (#437).
+    status: Optional[Literal["open", "acknowledged", "declined", "resolved"]] = None
     resolved_at: Optional[str] = None
     resolution: Optional[str] = None
     notified_at: Optional[str] = None

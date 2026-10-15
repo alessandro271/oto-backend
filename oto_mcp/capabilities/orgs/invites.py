@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import os
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel
 
@@ -115,6 +115,11 @@ class InvitationEmitted(BaseModel):
     emailed: bool
 
 
+# Le palier d'une invitation, DÉRIVÉ par `org_store.invitations._scope_of` (seul
+# émetteur, quatre branches) — pas une colonne (#437).
+InvitationScope = Literal["platform", "org", "team", "resource"]
+
+
 class InvitationEntry(BaseModel):
     """Une invitation en attente."""
     id: int
@@ -131,7 +136,7 @@ class InvitationEntry(BaseModel):
     group_name: Optional[str] = None
     # Dérivé (team si group_id, sinon org si org_id, sinon platform). Sur CETTE
     # capacité il vaut toujours "org" — les invitations d'équipe en sont exclues.
-    scope: str
+    scope: InvitationScope
 
 
 class Invitations(BaseModel):
@@ -172,7 +177,7 @@ class InvitationDeclined(BaseModel):
     Re-refuser la même invitation est idempotent (même réponse)."""
     ok: bool
     declined: bool
-    scope: str                                  # platform | org | team | resource
+    scope: InvitationScope
     org_id: Optional[int] = None
     group_id: Optional[int] = None
     name: Optional[str] = None                  # nom de l'org qu'on ne rejoindra pas

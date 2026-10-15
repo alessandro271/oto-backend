@@ -244,7 +244,10 @@ def _init_ref(ctx: ResolvedCtx, scope: str, slug: str, *, write: bool,
 class GuideRef(BaseModel):
     """Entrée de catalogue : de quoi CHOISIR un guide, sans en charger le corps."""
     slug: str
-    scope: str                                   # platform | org | user
+    # Le palier qui SERT ce guide, posé en dur par `guide_store.list_guides_for` — seul
+    # émetteur. `tenant` = le guide du partenaire, qui REMPLACE celui de la plateforme
+    # de même slug (#437 : le commentaire disait « platform | org | user »).
+    scope: Literal["platform", "tenant", "org", "user"]
     title: str = ""
     description: str = ""
 

@@ -27,7 +27,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-from typing import NamedTuple, Optional
+from typing import Literal, NamedTuple, Optional
 
 from pydantic import BaseModel, ConfigDict
 from starlette.concurrency import run_in_threadpool
@@ -133,7 +133,8 @@ class CredentialCleared(BaseModel):
     ok: bool
     provider: str
     account: str
-    scope: str
+    # Le palier EFFECTIF : hors de `_PALIERS`, l'entrée est ramenée à `member` (#437).
+    scope: Literal["member", "group", "org"]
     # Ce que ce retrait CASSE, dit à celui qui le fait (oto#59). Le retrait a eu lieu :
     # c'est un avertissement, jamais un refus — retirer sa propre clé est un droit.
     #

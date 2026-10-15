@@ -28,7 +28,7 @@ là où la route rend 400 depuis toujours. Même choix, même raison, que
 from __future__ import annotations
 
 import asyncio
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel
 
@@ -90,7 +90,8 @@ class SessionFinalized(BaseModel):
     session vit toujours, l'utilisateur n'a simplement pas fini de se connecter, et
     l'appelant peut réessayer. Rien n'a été écrit au coffre dans ce cas."""
     connected: bool
-    scope: str
+    # Écho de l'entrée, refusée (400 `invalid_scope`) hors de `_SCOPES` (#437).
+    scope: Literal[_SCOPES]
     account: str
     # Non vide = session PERSISTÉE alors que la sonde de login n'a pas pu se prononcer
     # (son endpoint a bougé, cf. `browser_session.ProbeUnavailable`). À afficher : la

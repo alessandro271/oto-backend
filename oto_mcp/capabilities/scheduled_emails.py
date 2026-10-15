@@ -9,7 +9,7 @@ Pattern de référence : `orgs/invites.py` (list + action par id).
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel
 
@@ -34,8 +34,9 @@ class ScheduledEmail(BaseModel):
     # Dérivé du CONNECTEUR au moment de la composition (scaleway→TEM, resend→resend) :
     # figé sur la ligne, il ne suit pas un changement de config ultérieur.
     transport: Optional[str] = None
-    # pending | sent | failed | cancelled.
-    status: str
+    # Les quatre seules valeurs qu'écrit `db/emails.py` (défaut, envoi, échec, annulation)
+    # depuis la création de la table (#437).
+    status: Literal["pending", "sent", "failed", "cancelled"]
     # Instant d'envoi prévu. ⚠️ "YYYY-MM-DD HH:MM:SS" **sans fuseau** (le tzinfo est
     # retiré par le row factory, pas converti) — alors que la fenêtre calme qui l'a
     # calculé, elle, est exprimée dans le fuseau de l'org.

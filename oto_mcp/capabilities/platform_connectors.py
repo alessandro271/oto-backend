@@ -31,7 +31,7 @@ for the readability of the contract, not for publication.
 """
 from __future__ import annotations
 
-from typing import Optional, Union
+from typing import Literal, Optional, Union
 
 from pydantic import BaseModel, StrictBool, StrictInt
 
@@ -140,7 +140,8 @@ class Beneficiary(BaseModel):
     moved to the chain model (`grants_chain.CHAIN_CONNECTORS`), the grant is a live
     EDGE and its quota the edge's constraint: both are reported here too — see
     `PlatformAccessView.chain_grants`."""
-    scope: str                         # 'org' | 'user'
+    # Seuls `user` et `org` passent les trois gardes de `touch` (#437).
+    scope: Literal["org", "user"]
     id: str
     has_key: bool
     has_option: bool
@@ -178,7 +179,8 @@ class PlatformAccessSetView(BaseModel):
     one exists). `paid_option`/`platform_key` say what was actually touched."""
     ok: bool
     connector: str
-    scope: str
+    # Écho de l'entrée, refusée (400) hors de ces deux valeurs (#437).
+    scope: Literal["org", "user"]
     id: str
     on: bool
     paid_option: Optional[str] = None
