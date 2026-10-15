@@ -101,6 +101,25 @@ def _readable_messages(value, text_only: bool, max_chars: Optional[int]):
     return walk(value), cut
 
 
+# Page servie par les deux listes de désinscription quand `limit` est omis. Sans
+# elle, lemlist rend TOUT : 2 439 lignes et 325 Ko en un appel sur un compte
+# client réel (14/10/2026), d'où une session d'agent qui se noie au premier
+# appel — et qui, relancée par son cron, refait le même appel. C'est aussi le
+# plafond que la doc lemlist donne à la liste v2 (`limit` max 100).
+_UNSUB_DEFAULT_PAGE = 100
+
+
+def _unsub_page(rows, limit: int, offset: Optional[int]) -> dict:
+    """La page, plus `next_offset` quand elle est pleine (il peut en rester).
+
+    Pleine se juge contre le plafond documenté aussi : un `limit=500` que lemlist
+    ramène à 100 lignes n'est pas la dernière page. `next_offset` suit les lignes
+    reçues, pas le `limit` demandé."""
+    full = isinstance(rows, list) and len(rows) >= min(limit, _UNSUB_DEFAULT_PAGE)
+    return {"limit": limit, "offset": offset or 0,
+            "next_offset": (offset or 0) + len(rows) if full else None}
+
+
 def register(mcp: FastMCP) -> None:
     from oto.tools.lemlist import LemlistClient
 
@@ -451,14 +470,21 @@ def register(mcp: FastMCP) -> None:
         - v2 `contact_*` — the do-not-contact flag on a CRM contact, which rides
           the CONTACT rather than one of its values.
 
+        To check ONE value, use `get` (v1) or `var_get` (v2): a listing can hold
+        thousands of rows. `list` and `var_list` are paged: 100 rows when
+        `limit` is omitted (lemlist caps `var_list` at 100 anyway), and
+        `next_offset` says where the next page starts (null on the last one).
+
         Args: `email` (v1), `value` / `values` (variables), `contact_id`
         (contacts), `limit`/`offset` on the two listings. The `*_export` ops
         return CSV text.
         """
         client, is_platform = _client()
+        if op in ("list", "var_list") and limit is None:
+            limit = _UNSUB_DEFAULT_PAGE
         if op == "list":
-            result = {"unsubscribes": client.list_unsubscribes(
-                offset=offset, limit=limit)}
+            rows = client.list_unsubscribes(offset=offset, limit=limit)
+            result = {"unsubscribes": rows, **_unsub_page(rows, limit, offset)}
         elif op in ("get", "add", "delete"):
             _need(email=email)
             result = {"get": client.get_unsubscribe, "add": client.add_unsubscribe,
@@ -466,8 +492,8 @@ def register(mcp: FastMCP) -> None:
         elif op == "export":
             result = {"csv": client.export_unsubscribes()}
         elif op == "var_list":
-            result = {"variables": client.list_unsubscribed_variables(
-                offset=offset, limit=limit)}
+            rows = client.list_unsubscribed_variables(offset=offset, limit=limit)
+            result = {"variables": rows, **_unsub_page(rows, limit, offset)}
         elif op in ("var_get", "var_add", "var_remove"):
             _need(value=value)
             result = {"var_get": client.get_unsubscribed_variable,
