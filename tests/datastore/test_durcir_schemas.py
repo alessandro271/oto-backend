@@ -78,6 +78,17 @@ def test_le_reste_va_dans_meta_au_MEME_niveau_et_reste_inerte():
     assert M.durcir(t).vide, "idempotent"
 
 
+def test_unknown_columns_en_tete_reste_pour_son_propre_retrait():
+    """`retirer_unknown_columns` (après le 21/10/2026) le cherche EN TÊTE : rangé dans
+    `meta`, il y resterait mort."""
+    plan = M.durcir({"unknown_columns": "reject", "fields": [{"key": "a"}]})
+    assert plan.vide
+    assert plan.schema == {"unknown_columns": "reject", "fields": [{"key": "a"}]}
+    plan = M.durcir({"unknown_columns": "report", "stricte": True})
+    assert plan.schema == {"unknown_columns": "report", "meta": {"stricte": True}}
+    assert plan.deplacees == [("", ["stricte"])]
+
+
 def test_un_schema_propre_n_a_rien_a_faire():
     assert M.durcir({"fields": [{"key": "a", "label": "A"}]}).vide
     assert M.durcir(None).vide
