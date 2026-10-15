@@ -440,3 +440,36 @@ def test_la_recherche_sans_terme_est_refusee():
     with _with("oto.tools.github.client.GitHubClient", _Fake()):
         with pytest.raises(McpError, match="`q` required"):
             _call("github", "github_search", op="code")
+
+
+# --- un brouillon de doc lit `kind` là où la signature le montre ------------------
+
+def test_le_kind_dun_brouillon_passe_en_argument_de_premier_niveau_atteint_le_corps():
+    """`kind` (et `article_id`, `group_id`) sont des arguments de l'outil, mais
+    Productlane les lit dans le corps du brouillon : passés là où la signature
+    les montre, ils étaient perdus et l'appel répondait « kind is required »."""
+    fake = _Fake(retour={"id": "d1"})
+    with _with("oto.tools.productlane.client.ProductlaneClient", fake):
+        _call("productlane", "productlane_docs", op="create_draft", kind="edit",
+              article_id="a1", fields={"title": "T", "content": "x"})
+    nom, args, _ = fake.calls[-1]
+    assert nom == "create_draft"
+    assert args[0] == {"title": "T", "content": "x", "kind": "edit",
+                       "article_id": "a1"}
+
+
+def test_un_kind_contradictoire_entre_argument_et_fields_est_refuse():
+    fake = _Fake(retour={"id": "d1"})
+    with _with("oto.tools.productlane.client.ProductlaneClient", fake):
+        with pytest.raises(McpError, match="`kind` given twice"):
+            _call("productlane", "productlane_docs", op="create_draft",
+                  kind="edit", fields={"kind": "create", "title": "T"})
+    assert not fake.calls
+
+
+def test_un_kind_identique_dans_les_deux_places_passe():
+    fake = _Fake(retour={"id": "d1"})
+    with _with("oto.tools.productlane.client.ProductlaneClient", fake):
+        _call("productlane", "productlane_docs", op="create_draft", kind="edit",
+              fields={"kind": "edit", "title": "T"})
+    assert fake.calls[-1][1][0] == {"kind": "edit", "title": "T"}

@@ -711,7 +711,10 @@ def register(mcp: FastMCP) -> None:
             published: op='articles' — filter published / unpublished.
             title_contains: op='articles' — filter by partial title.
             language: serves or writes a translation row.
-            fields: creation or update body (content in markdown).
+            fields: creation or update body (content in markdown). For
+                op='create_draft', `kind`, `article_id` and `group_id` may be
+                passed either here or as top-level args (not both with
+                different values).
             cursor: next page.
             limit: rows per page (1-200, default 50).
         """
@@ -760,7 +763,21 @@ def register(mcp: FastMCP) -> None:
             return _run(lambda: c.get_draft(draft_id))
         if op == "create_draft":
             _need(fields, "fields", op)
-            return _run(lambda: c.create_draft(fields))
+            # `kind`, `article_id` and `group_id` are top-level args of this tool,
+            # but Productlane reads them from the draft body: fold them in, or a
+            # caller who passed them where the signature shows them gets « kind is
+            # required ». Two different values for the same key are refused.
+            body = dict(fields)
+            for name, value in (("kind", kind), ("article_id", article_id),
+                                ("group_id", group_id)):
+                if value is None:
+                    continue
+                if name in body and body[name] != value:
+                    raise _bad(f"op='create_draft': `{name}` given twice with "
+                               f"different values ({value!r} as an argument, "
+                               f"{body[name]!r} in `fields`).")
+                body[name] = value
+            return _run(lambda: c.create_draft(body))
         if op == "accept":
             _need(draft_id, "draft_id", op)
             return _run(lambda: c.accept_draft(draft_id))
