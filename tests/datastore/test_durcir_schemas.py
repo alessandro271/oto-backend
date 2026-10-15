@@ -394,3 +394,56 @@ def test_le_refus_de_slots_ne_parle_qu_APRES_l_appartenance(live):
         org_store.publish_guide(
             slug=e["slug"], body_md="x", author_kind="org", author_org_id=1,
             slots=copy.deepcopy(SLOTS_ANCIENS))
+
+
+# ── une clé admise rangée dans `meta` (cas du 14/10/2026) ────────────────
+
+def test_options_dans_meta_est_SORTIE_a_cote():
+    """Le cas du 14/10/2026 : la liste d'une colonne `enum` rangée dans `meta`."""
+    schema = {"fields": [{"key": "status", "type": "enum", "role": "status",
+                          "meta": {"options": ["kept", "rejected"]}},
+                         {"key": "tier", "type": "enum",
+                          "meta": {"options": ["a"], "depends_on": "x"}}]}
+    plan = M.durcir(schema)
+    t = plan.schema
+    assert t["fields"][0] == {"key": "status", "type": "enum", "role": "status",
+                              "options": ["kept", "rejected"]}, "meta vidé est retiré"
+    assert t["fields"][1]["options"] == ["a"]
+    assert t["fields"][1]["meta"] == {"depends_on": "x"}, "l'annotation reste"
+    assert plan.sorties == [("fields.status", ["options"]), ("fields.tier", ["options"])]
+    assert validate_schema_def(t) == []
+    assert M.durcir(t).vide, "idempotent"
+
+
+def test_ombre_IDENTIQUE_a_la_cle_posee_est_retiree_de_meta():
+    schema = {"fields": [{"key": "s", "type": "enum", "options": ["a"],
+                          "meta": {"options": ["a"]}}]}
+    t = M.durcir(schema).schema
+    assert t["fields"][0] == {"key": "s", "type": "enum", "options": ["a"]}
+
+
+def test_ombre_DIFFERENTE_de_la_cle_posee_est_inmigrable():
+    schema = {"fields": [{"key": "s", "type": "enum", "options": ["a"],
+                          "meta": {"options": ["b"]}}]}
+    with pytest.raises(M.Inmigrable, match="meta.options"):
+        M.durcir(schema)
+
+
+def test_une_GARDE_dans_meta_reste_et_est_listee():
+    """Sortir `readonly` verrouillerait la colonne, `new_rows` fermerait le tableau :
+    ce n'est pas au rangement de le décider."""
+    schema = {"meta": {"new_rows": "reject"},
+              "fields": [{"key": "s", "type": "enum",
+                          "meta": {"options": ["a"], "readonly": True, "label": "S"}}]}
+    plan = M.durcir(schema)
+    f = plan.schema["fields"][0]
+    assert f["options"] == ["a"] and f["label"] == "S"
+    assert f["meta"] == {"readonly": True}, "la garde reste dans meta"
+    assert plan.schema["meta"] == {"new_rows": "reject"}
+    assert plan.a_arbitrer == [("", ["new_rows"]), ("fields.s", ["readonly"])]
+
+
+def test_des_gardes_seules_ne_rendent_pas_le_plan_non_vide():
+    plan = M.durcir({"fields": [{"key": "s", "type": "text",
+                                 "meta": {"required": True}}]})
+    assert plan.vide and plan.a_arbitrer == [("fields.s", ["required"])]

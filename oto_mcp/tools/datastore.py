@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Optional
+from typing import Annotated, Optional
+
+from pydantic import WithJsonSchema
 
 from fastmcp import FastMCP
 from ..mcp_errors import McpError
@@ -29,6 +31,7 @@ from ..datastore import forcage as fcg
 from ..datastore import layers as dsl
 from ..datastore import versions as dsver
 from ..datastore.identite import AdresseJson as Adresse
+from ..datastore.schema_keys import forme_schema
 from ..datastore.outils import _current_run, adresse_servie
 from ..datastore import schema as dsv2
 from ..datastore.errors import RevisionConflict
@@ -57,6 +60,11 @@ _MARQUE_CLE_METIER = "<<cle_metier>>"
 _MARQUE_COLONNES = "<<colonnes_non_declarees>>"
 _MARQUE_Q = "<<recherche_q>>"
 _MARQUE_Q_SCOPE = "<<recherche_q_scope>>"
+
+#: Le paramètre `schema` porte sa FORME (cas du 14/10/2026) : le client passe au modèle les
+#: clés admises nommées — `options` sur une colonne, jamais dans `meta`. Décrit, pas
+#: analysé : le handler reçoit le même `dict`, `validate_schema_def` reste le seul juge.
+_SchemaDeclare = Annotated[dict, WithJsonSchema(forme_schema())]
 
 
 def _inserer(fn, phrases: dict):
@@ -639,7 +647,8 @@ def register(mcp: FastMCP) -> None:
     # refused to turn green when the default changed, before this text moved.
     @mcp.tool()
     @_avec_la_creation
-    def data_create_datastore(datastore: Adresse, schema: Optional[dict] = None) -> dict:
+    def data_create_datastore(datastore: Adresse,
+                              schema: Optional[_SchemaDeclare] = None) -> dict:
         """Create a new datastore (PG-backed), optionally WITH its typed schema.
 
         <<colonnes_non_declarees>>
@@ -744,17 +753,22 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     @_avec_la_regle_de_cle
-    def data_set_schema(datastore: Adresse, schema: Optional[dict] = None,
+    def data_set_schema(datastore: Adresse, schema: Optional[_SchemaDeclare] = None,
                         semantic_search: Optional[bool] = None) -> dict:
         """Declare (or clear with schema=null) a datastore's TYPED schema (ADR 0032 §6).
 
         A typed datastore renders as readable cards/records instead of a flat table.
         `schema` = {"fields": [{"key": str, "label"?: str, "type"?: "text|number|date|
         datetime|bool|json|object|list|url|email|phone|enum",
-        "display"?: "title", "role"?: "status|metric|note|qualif",
+        "options"?: [str], "display"?: "title", "role"?: "status|metric|note|qualif",
         "description"?: str, "meta"?: {…}}],
         "key"?: str, "new_rows"?: "create|reject", "description"?: str,
         "meta"?: {…}}.
+        An `enum` column's allowed values go in `options`, ON the field
+        (`{"key": "status", "type": "enum", "options": ["kept", "rejected"]}`) —
+        that is what constrains the values and what a board groups on. Never in
+        `meta`: a key the field admits is REFUSED there (stored, it would do
+        nothing).
         ⚠️ **The vocabulary is CLOSED: a key its level does not admit is REFUSED** —
         at the head, on a field, on a sub-field, in `of`, in `lifecycle`. The refusal
         names the path, the key and the closest known one (`read_only` → `readonly`),

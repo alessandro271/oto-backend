@@ -117,7 +117,10 @@ def _deja_stockee(ancien_noeud: Optional[dict], cle: str, valeur: Any) -> bool:
         and ancien_noeud[cle] == valeur
 
 
-def erreurs_meta(chemin: tuple, valeur: Any) -> list[str]:
+def erreurs_meta(chemin: tuple, valeur: Any, niveau: Optional[str] = None,
+                 ancien: Any = None) -> list[str]:
+    """`ancien` = le `meta` en place au même chemin : une clé d'ombre qui y figure avec
+    la même valeur n'est pas posée par le geste, elle passe (même parti que `refus`)."""
     lieu = nom_du_chemin(chemin)
     if not isinstance(valeur, dict):
         return [f"{lieu}.meta doit être un objet {{…}} — reçu {type(valeur).__name__}. "
@@ -129,7 +132,20 @@ def erreurs_meta(chemin: tuple, valeur: Any) -> list[str]:
                 f"{sk.META_MAX_OCTETS} — c'est une annotation du format, relue à chaque "
                 f"écriture de ligne ; ce qui est volumineux va dans les données ou dans "
                 f"un document"]
-    return []
+    # ⚠️ Le cas du 14/10/2026 : `meta: {"options": [...]}` sur trois
+    # colonnes `enum`. Accepté sans un mot, puisque `meta` n'est pas lu — et c'est
+    # bien le problème : la liste ne contraignait rien, le Kanban ne la voyait pas,
+    # et l'auteur la croyait déclarée. Une clé que CE niveau admet n'a rien à faire
+    # dans `meta` : rangée là, elle a l'air posée et ne l'est pas. Refusée, avec le
+    # renvoi au bon endroit.
+    if niveau is None:
+        return []
+    ombres = [c for c in sorted(set(valeur) & (sk.ADMISES[niveau] - {sk.META}))
+              if not _deja_stockee(ancien, c, valeur[c])]
+    return [f"{lieu}.meta.{c} : `{c}` est une clé admise {sk.NOMS_DE_NIVEAU[niveau]} — "
+            f"rangée dans `meta`, elle est stockée et SANS EFFET (personne ne lit "
+            f"`meta`). Pose-la à côté de `meta`, pas dedans"
+            for c in ombres]
 
 
 def refus(schema: Any, ancien: Any = None) -> list[str]:
@@ -152,7 +168,9 @@ def refus(schema: Any, ancien: Any = None) -> list[str]:
             if cle not in anciens:
                 out.append(phrase(niveau, chemin, cle, noeud[cle]))
         if sk.META in noeud and not _deja_stockee(avant, sk.META, noeud[sk.META]):
-            out.extend(erreurs_meta(chemin, noeud[sk.META]))
+            out.extend(erreurs_meta(chemin, noeud[sk.META], niveau,
+                                    avant.get(sk.META) if isinstance(avant, dict)
+                                    else None))
     return out
 
 
@@ -213,7 +231,7 @@ def residus_warning(schema: Any) -> Optional[str]:
     vocabulaire, donc toléré tant qu'on n'y touche pas. Dit au lecteur comme à
     l'auteur : le lecteur doit savoir laquelle de deux clés fait foi (`options`, pas
     l'`enum` d'à côté), l'auteur que la modifier sera refusé."""
-    trouvees, font_foi = [], set()
+    trouvees, font_foi, ombres = [], set(), []
     # oto#124 : `unknown_columns` stocké a sa propre phrase — il est encore LU jusqu'au
     # 21/10/2026 et la plateforme le retire elle-même (`scripts/retirer_unknown_columns`).
     retire = (isinstance(schema, dict) and reglages.UNKNOWN_COLUMNS in schema)
@@ -226,9 +244,21 @@ def residus_warning(schema: Any) -> Optional[str]:
             # Ce qui fait foi : la cousine admise, quand elle est posée À CÔTÉ.
             if sk.FAUTES_CONNUES.get(cle) in noeud:
                 font_foi.add(sk.FAUTES_CONNUES[cle])
+        # Cas du 14/10/2026 : une clé ADMISE rangée dans `meta` a l'air posée et ne l'est pas.
+        meta = noeud.get(sk.META)
+        if isinstance(meta, dict):
+            ombres.extend(f"`{nom_du_chemin(chemin)}.meta.{c}`" if chemin
+                          else f"`meta.{c}` (tête)"
+                          for c in sorted(set(meta) & (sk.ADMISES[niveau] - {sk.META})))
+    phrase_ombres = (
+        f"ce schéma range dans `meta` des clés que leur niveau admet : "
+        f"{', '.join(ombres[:8])}{', …' if len(ombres) > 8 else ''}. Dans `meta`, "
+        f"elles sont SANS EFFET (personne ne le lit) — une `options` ainsi rangée ne "
+        f"contraint rien. Pose-les à côté de `meta`." if ombres else None)
     if not trouvees:
-        return (reglages.residu_unknown_columns(schema[reglages.UNKNOWN_COLUMNS]) + "."
-                if retire else None)
+        fin = (reglages.residu_unknown_columns(schema[reglages.UNKNOWN_COLUMNS]) + "."
+               if retire else None)
+        return " ".join(p for p in (phrase_ombres, fin) if p) or None
     anciens = [k for k in reglages.ANCIENS if isinstance(schema, dict) and k in schema]
     msg = (f"ce schéma porte des clés qu'aucun niveau n'admet, posées avant la "
            f"fermeture du vocabulaire (01/10/2026) : {', '.join(trouvees[:8])}"
@@ -243,4 +273,6 @@ def residus_warning(schema: Any) -> Optional[str]:
         msg += f" Pour {', '.join(f'`{k}`' for k in anciens)} : {reglages.residu(schema)}."
     if retire:
         msg += " " + reglages.residu_unknown_columns(schema[reglages.UNKNOWN_COLUMNS]) + "."
+    if phrase_ombres:
+        msg += " " + phrase_ombres
     return msg
