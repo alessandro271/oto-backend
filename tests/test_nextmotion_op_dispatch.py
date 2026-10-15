@@ -367,6 +367,25 @@ def test_fields_ne_garde_que_les_colonnes_demandees_et_l_id(client):
     assert out["count"] == 1 and out["has_more"] is False
 
 
+def test_fields_inconnu_est_nomme_avec_les_cles_servies(client):
+    # Le libellé d'un type de visite est `subject`, sa durée `duration_minutes` :
+    # `name` et `duration` demandés disparaissaient sans un mot.
+    client.list_visit_types.return_value = {"count": 1, "next": None, "data": [
+        {"id": X, "subject": "Consultation", "duration_minutes": 30, "price": "50.00"}]}
+    out = _tool("nextmotion_catalog")(kind="visit_type", clinic_id=C,
+                                      fields=["id", "name", "duration", "price"])
+    assert out["visit_types"] == [{"id": X, "price": "50.00"}]
+    assert out["missing_fields"] == ["name", "duration"]
+    assert "subject" in out["missing_fields_hint"]
+    assert "duration_minutes" in out["missing_fields_hint"]
+
+
+def test_fields_tous_connus_ne_dit_rien(client):
+    client.list_clinics.return_value = {"count": 1, "next": None, "data": [
+        {"id": C, "name": SENTINEL}]}
+    assert "missing_fields" not in _tool("nextmotion_clinic")(fields=["name"])
+
+
 def test_fields_etoile_rend_la_liste_blanche_jamais_le_brut(client):
     client.list_appointments.return_value = {"count": 1, "next": None, "data": [
         {"id": X, "status": 1, "patient": {"id": X, "last_name": "SENTINELLE-NOM",

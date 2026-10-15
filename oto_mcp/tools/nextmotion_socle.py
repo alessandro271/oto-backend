@@ -251,9 +251,12 @@ def _project(value: Any, spec: tuple) -> Any:
 
 
 def _shape(spec: tuple) -> Callable[[Any], Any]:
-    """The projection function of an allowlist (a top-level resource)."""
+    """The projection function of an allowlist (a top-level resource). It carries the
+    allowlist's top-level names (`shape.keys`), which a list names back when a
+    requested `fields` key matches none of them."""
     def shape(obj: Any) -> Any:
         return _project(obj, spec) if isinstance(obj, dict) else obj
+    shape.keys = tuple(f if isinstance(f, str) else f[0] for f in spec)
     return shape
 
 
@@ -277,7 +280,19 @@ def _page(env: Any, key: str, shape=None, fields: Optional[list] = None,
         rows = [shape(r) for r in rows]
     out = {"count": env.get("count"), "has_more": env.get("next") is not None, key: rows}
     if fields is not None and output_projection.RAW not in fields:
+        missing = output_projection.missing_fields(out, items_paths=(key,), fields=fields)
         out = output_projection.project(out, items_path=key, fields=set(fields) | {"id"})
+        if missing:
+            # A key no row carries used to vanish without a word (the agent asked for
+            # `name` on a visit type, whose label is `subject`): name it, and the keys
+            # this list does serve.
+            served = getattr(shape, "keys", None) or sorted({k for r in rows
+                                                              if isinstance(r, dict)
+                                                              for k in r})
+            out["missing_fields"] = missing
+            out["missing_fields_hint"] = (
+                "No row carries these keys. Keys served by this list: "
+                + ", ".join(served) + ".")
     if shape is not None and withheld:
         out["withheld"] = withheld
     return out
