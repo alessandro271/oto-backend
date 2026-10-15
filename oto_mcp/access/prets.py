@@ -15,15 +15,17 @@ it, with no signal at all. Two rules close it, written once here:
    descriptor `rappel_du_compte` (`_account`, `lent_by`, `lent_via_group`), rendered by
    `middleware/call_context._echo_account`.
 
-A candidate is a dict `{account, lent_by?, via_group?, …}`: `lent_by` = the sub of the
-lender (absent = not a loan), `via_group` = `{id, name}` of the borrowing team (absent =
-lent to the caller by name). The connector keeps whatever else it needs on it.
+A candidate is a dict `{account, lent_by?, via_group?, via_org?, …}`: `lent_by` = the
+sub of the lender (absent = not a loan), `via_group` = `{id, name}` of the borrowing team,
+`via_org` = `{id, name}` of the org it is lent to as a whole (both absent = lent to the
+caller by name). The connector keeps whatever else it needs on it.
 
-Wired: Microsoft (`auth/microsoft._lent_for_call`), the cascade's team rung for every
-other connector (`access/resolve._group_fetch`: a loan to the team is never picked
-automatically), the access-level guard (`connectors/access_level_gate`: a designated
-loan is judged under its lender's org and its borrowing team) and the echo (every
-connector: the descriptor is read from the row that served).
+Wired: Microsoft (`auth/microsoft._lent_for_call`, fed by `prets_de`), the cascade's team
+and org rungs for every other connector (`access/resolve._group_fetch`/`_org_fetch`: a
+loan to the team or to the org is never picked automatically), the access-level guard
+(`connectors/access_level_gate`: a designated loan is judged under its lender's org and
+its borrowing team) and the echo (every connector: the descriptor is read from the row
+that served).
 """
 from __future__ import annotations
 
@@ -54,10 +56,12 @@ def libelles_preteurs(subs: Iterable[str]) -> dict[str, str]:
 
 
 def etiquette_du_pret(candidat: dict, libelles: dict) -> str:
-    """"lent by <e-mail>[ via the team <name>]" — how a refusal names a loan."""
-    via = candidat.get("via_group")
+    """"lent by <e-mail>[ via the team <name>| to the whole org <name>]" — how a refusal
+    names a loan."""
+    via, org = candidat.get("via_group"), candidat.get("via_org")
     return (f"lent by {libelles[candidat['lent_by']]}"
-            + (f" via the team {via.get('name') or '#' + str(via['id'])}" if via else ""))
+            + (f" via the team {via.get('name') or '#' + str(via['id'])}" if via else "")
+            + (f" to the whole org {org.get('name') or '#' + str(org['id'])}" if org else ""))
 
 
 def pret_a_servir(candidats: list[dict], nom: Optional[str], *, quoi: str) -> Optional[dict]:
@@ -111,34 +115,57 @@ def pret_a_servir(candidats: list[dict], nom: Optional[str], *, quoi: str) -> Op
                                  "lent_by": libelles[c["lent_by"]],
                                  **({"via_group": c["via_group"]}
                                     if c.get("via_group") else {}),
+                                 **({"via_org": c["via_org"]} if c.get("via_org") else {}),
                                  **({"instance": c["ref"]} if not c["account"] else {})}
                                 for c in pretes]}))
 
 
-def prets_de_l_equipe(group_id: int, porteur: str) -> list[dict]:
-    """The live loans of `porteur` to a team (`group_store.lent_instances`: same org,
-    lender still a member and awake, instance not suspended, personal key not forbidden)
-    as candidates of the rule: `{account, lent_by, lender_org, entity_id, ref,
-    via_group}`. Reads the team's name only when a loan exists."""
-    from .. import group_store
-    lents = group_store.lent_instances(group_id, porteur)
-    if not lents:
-        return []
-    equipe = {"id": int(group_id), "name": (group_store.get_group(group_id) or {}).get("name")}
+def _candidats(lents: list[dict], porteur: str, voie: dict) -> list[dict]:
+    """Live loans (`group_store.lent_instances`/`live_loans`) as candidates of the rule:
+    `{account, lent_by, lender_org, entity_id, ref, meta}` plus the way (`voie`)."""
     return [{"account": i["account"], "lent_by": i["lender"],
              "lender_org": int(str(i["entity_id"]).partition(":")[0]),
-             "entity_id": i["entity_id"], "via_group": equipe,
+             "entity_id": i["entity_id"], "meta": i["meta"], **voie,
              "ref": instance_refs.ref_for_credential(
                  credentials_store.MEMBER, i["entity_id"], porteur, i["account"])}
             for i in lents]
 
 
+def prets_de_l_equipe(group_id: int, porteur: str) -> list[dict]:
+    """The live loans of `porteur` to a team (`group_store.lent_instances`: same org,
+    lender still a member and awake, instance not suspended, personal key not forbidden)
+    as candidates of the rule, with `via_group`. Reads the team's name only when a loan
+    exists."""
+    from .. import group_store
+    lents = group_store.lent_instances(group_id, porteur)
+    if not lents:
+        return []
+    equipe = {"id": int(group_id), "name": (group_store.get_group(group_id) or {}).get("name")}
+    return _candidats(lents, porteur, {"via_group": equipe})
+
+
+def prets_de_l_org(org_id: int, porteur: str, sub: str) -> list[dict]:
+    """The live loans of `porteur` to the whole org (`share_side` `org:<id>`, same
+    liveness as a team loan) that serve `sub`: a member of that org, her own row
+    excepted. Candidates with `via_org`; membership and the org's name are read only when
+    a loan exists."""
+    from .. import group_store, org_store, roles
+    mien = credentials_store.member_id(org_id, sub)
+    lents = [i for i in group_store.live_loans(f"org:{org_id}", int(org_id), porteur)
+             if i["entity_id"] != mien]
+    if not lents or not roles.is_org_member(sub, int(org_id)):
+        return []
+    org = {"id": int(org_id), "name": (org_store.get_org(int(org_id)) or {}).get("name")}
+    return _candidats(lents, porteur, {"via_org": org})
+
+
 def prets_de(sub: str, porteur: str) -> list[dict]:
     """Every loan of `porteur` to `sub`, as candidates of the rule (same shape as
-    `prets_de_l_equipe`, `via_group` only for a team loan): lent to her by name (any org,
-    the named loan is the consent) or to a team of hers in her context org. A row lent to
-    her AND to her team reads as lent to her. Same reach as the Microsoft resolver
-    (`auth/microsoft.lent_accounts`)."""
+    `prets_de_l_equipe`, `via_group`/`via_org` only for a loan to a team or to the org):
+    lent to her by name (any org, the named loan is the consent; `set_at` of the row), to
+    a team of hers or to the whole of her context org. A row lent to her reads as lent to
+    her, then to her team, then to the org. The reach of the Microsoft resolver
+    (`auth/microsoft.lent_accounts`) and of the access-level guard."""
     from .. import group_store
     from . import scope
     org = scope.current_org(sub)
@@ -154,11 +181,17 @@ def prets_de(sub: str, porteur: str) -> list[dict]:
         vus.add((r["entity_id"], r["account"] or ""))
         out.append({"account": r["account"] or "", "lent_by": lender,
                     "lender_org": int(lender_org), "entity_id": r["entity_id"],
+                    "meta": dict(r.get("meta") or {}), "set_at": r.get("set_at"),
                     "ref": instance_refs.ref_for_credential(
                         credentials_store.MEMBER, r["entity_id"], porteur,
                         r["account"] or "")})
-    for g in (group_store.list_groups_for_user(sub, org) if org is not None else []):
-        for c in prets_de_l_equipe(int(g["group_id"]), porteur):
+    partages = [prets_de_l_equipe(int(g["group_id"]), porteur)
+                for g in (group_store.list_groups_for_user(sub, org) if org is not None
+                          else [])]
+    if org is not None:
+        partages.append(prets_de_l_org(org, porteur, sub))
+    for candidats in partages:
+        for c in candidats:
             if c["entity_id"] == mien or (c["entity_id"], c["account"]) in vus:
                 continue
             vus.add((c["entity_id"], c["account"]))
@@ -182,42 +215,55 @@ def preteur_de_la_ligne(sub: Optional[str], row) -> Optional[str]:
     return proprietaire if proprietaire and proprietaire != sub else None
 
 
-def equipe_du_pret(sub: str, row) -> Optional[dict]:
-    """The team (`{id, name}`) through which the row is lent to `sub` — None when it is
-    lent to her by name (`user:<sub>`), which prevails."""
-    from .. import group_store, providers
+def voie_du_pret(sub: str, row) -> Optional[tuple[str, dict]]:
+    """How the row is lent to `sub`: `("group", {id, name})` through a team of hers,
+    `("org", {id, name})` to the whole of an org of hers, None when it is lent to her by
+    name (`user:<sub>`), which prevails — then a team, then the org."""
+    from .. import group_store, org_store, providers, roles
     entity_type, entity_id, connector, account = row
     _, side = credentials_store.get_instance_sharing(
         entity_type, entity_id, providers.credential_provider(connector), account)
     if f"user:{sub}" in (side or []):
         return None
-    for s in side or []:
-        kind, _, gid = str(s).partition(":")
+    cibles = [str(s).partition(":") for s in side or []]
+    for kind, _, gid in cibles:
         if kind == "group" and gid.isdigit() and group_store.is_group_member(sub, int(gid)):
             g = group_store.get_group(int(gid)) or {}
-            return {"id": int(gid), "name": g.get("name")}
+            return "group", {"id": int(gid), "name": g.get("name")}
+    for kind, _, oid in cibles:
+        if kind == "org" and oid.isdigit() and roles.is_org_member(sub, int(oid)):
+            o = org_store.get_org(int(oid)) or {}
+            return "org", {"id": int(oid), "name": o.get("name")}
     return None
+
+
+def equipe_du_pret(sub: str, row) -> Optional[dict]:
+    """The team (`{id, name}`) through which the row is lent to `sub` — None when it is
+    lent to her by name or to the whole org (`voie_du_pret`)."""
+    voie = voie_du_pret(sub, row)
+    return voie[1] if voie and voie[0] == "group" else None
 
 
 def rappel_du_compte(sub: Optional[str], account: str, row) -> dict:
     """The descriptor a response carries: `{_account}` for an account of one's own (or
     of the org, of the team), plus `lent_by` (the lender's label) and, for a loan to a
-    team, `lent_via_group` (`{id, name}`). Reads the base only for a loan."""
+    team, `lent_via_group` (`{id, name}`), to the whole org, `lent_via_org`. Reads the
+    base only for a loan."""
     out = {"_account": account}
     preteur = preteur_de_la_ligne(sub, row)
     if preteur is None:
         return out
     out["lent_by"] = libelles_preteurs([preteur])[preteur]
-    equipe = equipe_du_pret(sub, row)
-    if equipe:
-        out["lent_via_group"] = equipe
+    voie = voie_du_pret(sub, row)
+    if voie:
+        out["lent_via_group" if voie[0] == "group" else "lent_via_org"] = voie[1]
     return out
 
 
 class PretsDuParcours:
     """The rule along ONE walk of the cascade (`access/resolve`), for every connector the
-    team rung serves: what the team rungs set aside without a name, and the loan a name
-    served. Created per resolution, never shared."""
+    team and org rungs serve: what those rungs set aside without a name, and the loan a
+    name served. Created per resolution, never shared."""
 
     def __init__(self):
         self.ecartes: dict = {}
@@ -225,19 +271,30 @@ class PretsDuParcours:
 
     def au_palier_equipe(self, group_id: int, porteur: str, nom: Optional[str], *,
                          multi: bool) -> tuple[bool, Optional[tuple]]:
-        """`(decided, hit)` at a team's rung. Not decided: no loan, or the team's own
-        accounts resolve as before (a loan is never picked automatically). Decided: the
-        named loan, `(key, account)`, or None — unnamed loans set aside when the team
-        holds nothing of its own, the hand passing to the next rung."""
-        pretes = prets_de_l_equipe(group_id, porteur)
+        """`(decided, hit)` at a team's rung (`_au_palier`)."""
+        return self._au_palier("group", str(group_id), prets_de_l_equipe(group_id, porteur),
+                               porteur, nom, multi=multi)
+
+    def au_palier_org(self, org_id: int, porteur: str, sub: str, nom: Optional[str], *,
+                      multi: bool) -> tuple[bool, Optional[tuple]]:
+        """`(decided, hit)` at the org's rung, for the loans to the whole org that serve
+        `sub` (`_au_palier`)."""
+        return self._au_palier("org", str(org_id), prets_de_l_org(org_id, porteur, sub),
+                               porteur, nom, multi=multi)
+
+    def _au_palier(self, palier: str, eid: str, pretes: list[dict], porteur: str,
+                   nom: Optional[str], *, multi: bool) -> tuple[bool, Optional[tuple]]:
+        """Not decided: no loan, or the tier's own accounts resolve as before (a loan is
+        never picked automatically). Decided: the named loan, `(key, account)`, or None —
+        unnamed loans set aside when the tier holds nothing of its own, the hand passing
+        to the next rung."""
         if not pretes:
             return False, None
         if multi:
             propres = [a["account"] for a in credentials_store.list_accounts(
-                "group", str(group_id), porteur)]
+                palier, eid, porteur)]
         else:
-            propres = [""] if credentials_store.has_credential(
-                "group", str(group_id), porteur) else []
+            propres = [""] if credentials_store.has_credential(palier, eid, porteur) else []
         if not nom:
             if propres:
                 return False, None
@@ -251,7 +308,7 @@ class PretsDuParcours:
                                                porteur, pret["account"])
         if not key:
             return True, None
-        self.servis[(str(group_id), pret["account"])] = pret
+        self.servis[(palier, eid, pret["account"])] = pret
         return True, (key, pret["account"])
 
     def refuser_si_seuls(self, win, porteur: str) -> None:
@@ -263,9 +320,8 @@ class PretsDuParcours:
 
     def ligne_servie(self, win) -> tuple:
         """`(entity_type, entity_id)` of the row that served the winning rung: the
-        LENDER's when a named loan won the team rung — the trace, the echo (`lent_by`)
-        and a token rotation name it, not the team's."""
-        pret = self.servis.get((win.entity_id, win.account or "")) if win.mode == "group" \
-            else None
+        LENDER's when a named loan won the team or org rung — the trace, the echo
+        (`lent_by`) and a token rotation name it, not the team's or the org's."""
+        pret = self.servis.get((win.mode, win.entity_id, win.account or ""))
         return ((credentials_store.MEMBER, pret["entity_id"]) if pret
                 else (win.entity_type, win.entity_id))

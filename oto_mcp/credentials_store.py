@@ -152,11 +152,13 @@ def list_shared_with(scopes: list) -> list[dict]:
 
 
 def set_instance_sharing(entity_type: str, entity_id: str, connector: str,
-                         account: str = "", *, share_down=None, share_side=None) -> bool:
+                         account: str = "", *, share_down=None, share_side=None,
+                         journal: Sequence[dict] = ()) -> bool:
     """Met à jour `share_down`/`share_side` d'une instance EXISTANTE (ADR 0044) sans
     toucher au secret ; bump `version`. Ne met à jour que les champs fournis (non
     None). Renvoie False si aucune ligne (⟹ pas d'instance à partager — l'appelant
-    lève actionnable). Le partage présuppose que la clé existe."""
+    lève actionnable). Le partage présuppose que la clé existe. `journal` : les gestes
+    de prêt à noter (`db.loan_events.noter`), dans la même transaction."""
     sets, params = ["version = version + 1"], []
     if share_down is not None:
         sets.append("share_down = %s::jsonb"); params.append(json.dumps(share_down))
@@ -165,12 +167,18 @@ def set_instance_sharing(entity_type: str, entity_id: str, connector: str,
     if len(sets) == 1:
         return True  # rien à changer
     params += [entity_type, entity_id, connector, account]
-    with _connect() as conn:
+    from .db import loan_events
+    with _connect() as conn, conn.transaction():
         cur = conn.execute(
             f"UPDATE connector_credentials SET {', '.join(sets)} "
             "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=%s",
             tuple(params))
-    return (cur.rowcount or 0) > 0
+        if (cur.rowcount or 0) == 0:
+            return False
+        for geste in journal:
+            loan_events.noter(conn, entity_type=entity_type, entity_id=entity_id,
+                              connector=connector, account=account, **geste)
+    return True
 
 
 def list_platform_instances(provider: str) -> list[dict]:

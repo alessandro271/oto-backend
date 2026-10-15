@@ -34,8 +34,8 @@ def _cible(name: str, args: dict) -> str:
 def _echo_account(result, tool_name: str, rappel: Optional[dict] = None):
     """Dit à l'agent SOUS QUEL COMPTE l'appel est parti, quand il en a plusieurs — et,
     pour un compte PRÊTÉ, à qui il est : `rappel` = le descripteur de la règle commune
-    (`access.rappel_du_compte` : `_account`, `lent_by`, `lent_via_group`), par défaut
-    `{_account}` seul.
+    (`access.rappel_du_compte` : `_account`, `lent_by`, `lent_via_group` ou
+    `lent_via_org`), par défaut `{_account}` seul.
 
     Un agent qui détient deux workspaces Slack en visait un — par défaut posé, par
     épinglage de projet ou par `_account=` — sans que rien ne le lui confirme :

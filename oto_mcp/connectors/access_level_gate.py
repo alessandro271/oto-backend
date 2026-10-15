@@ -61,11 +61,12 @@ def _owner_context(ref) -> Optional[tuple[Optional[int], Optional[int]]]:
 def _loan_contexts(sub: str, connector: str, carrier: str,
                    ref) -> list[tuple[Optional[int], Optional[int]]]:
     """The `(org, team)` of a LOAN the call designates: the team a pinned member row of
-    another person is lent to (none when it is lent to her by name), or, without a pin,
-    the lender's org and the borrowing team of every loan that `_account=` (or the
-    project's pinned identity) names — Microsoft and the cascade's team rung serve a
-    loan only so. Judged before the resolution: a loan named like an own account is
-    judged too, which can only restrict."""
+    another person is lent to (none when it is lent to her by name or to the whole org:
+    the owner's org already judges it), or, without a pin, the lender's org and the
+    borrowing team of every loan that `_account=` (or the project's pinned identity)
+    names — Microsoft and the cascade's team and org rungs serve a loan only so. Judged
+    before the resolution: a loan named like an own account is judged too, which can
+    only restrict."""
     if ref is not None:
         if getattr(ref, "level", None) != "member" or ref.sub == sub:
             return []

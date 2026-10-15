@@ -110,13 +110,15 @@ class _Coffre:
     def __init__(self):
         self.lignes: dict[tuple, dict] = {}
         self.prets: dict[tuple, list] = {}     # (entité, compte) → share_side (ADR 0044)
+        self.journal: list[dict] = []          # les gestes notés avec un `share_side`
 
-    def poser_chez(self, membre, account, secret, meta=None, prete_a=()):
-        """Une ligne d'un AUTRE membre (`org:sub`), prêtée à `prete_a` (subs)."""
+    def poser_chez(self, membre, account, secret, meta=None, prete_a=(), cibles=()):
+        """Une ligne d'un AUTRE membre (`org:sub`), prêtée à `prete_a` (subs) et aux
+        `cibles` brutes du `share_side` (`group:<id>`, `org:<id>`)."""
         self.lignes[("member", membre, account)] = {
             "secret": secret, "meta": {"scopes": SCOPE_FICHIERS, **(meta or {})},
             "set_by": membre.partition(":")[2], "set_at": "2026-10-05T00:00:00Z"}
-        self.prets[(membre, account)] = [f"user:{s}" for s in prete_a]
+        self.prets[(membre, account)] = [f"user:{s}" for s in prete_a] + list(cibles)
 
     def list_shared_with(self, scopes):
         return [{"entity_type": et, "entity_id": eid, "connector": PORTEUR, "account": a,
@@ -130,11 +132,12 @@ class _Coffre:
         return [], list(self.prets.get((entity_id, account), []))
 
     def set_instance_sharing(self, entity_type, entity_id, connector, account="", *,
-                             share_down=None, share_side=None):
+                             share_down=None, share_side=None, journal=()):
         assert connector == PORTEUR
         if (entity_type, entity_id, account) not in self.lignes:
             return False
         self.prets[(entity_id, account)] = list(share_side or [])
+        self.journal += [{**g, "entity_id": entity_id, "account": account} for g in journal]
         return True
 
     def poser(self, account, secret, meta=None):
@@ -1228,3 +1231,83 @@ def test_preter_a_une_equipe_microsoft_est_servi_donc_accepte(pret_equipe, monke
     assert "`_account=jane@contoso.example`" in out["note"]
     assert pret_equipe.sous_compte("jane@contoso.example")(
         pret_equipe.auth.access_token_for, EMPRUNTEUSE, "outlook") == "AT:RT-JANE"
+
+
+# ── Le prêt à TOUTE L'ORG (`oto_instance op=lend to_org=true`) ──────────────────────
+#
+# Même règle qu'un prêt à une équipe : servi aux membres de l'org du prêt, seulement sur
+# `_account` explicite, jugé UNE fois (le résolveur Microsoft, nourri par la portée
+# commune `access.prets_de`), un seul `lent_by`.
+
+@pytest.fixture
+def pret_org(pret, monkeypatch):
+    from oto_mcp import org_store, roles
+    membres = {PRETEUSE, EMPRUNTEUSE}
+    monkeypatch.setattr(roles, "is_org_member", lambda sub, org: org == ORG and sub in membres)
+    monkeypatch.setattr(org_store, "get_org", lambda oid: {"id": oid, "name": "Contoso"})
+    pret.coffre.poser_chez(CHEZ_PRETEUSE, "jane@contoso.example", "RT-JANE",
+                           {"scopes": SCOPE_COURRIER}, cibles=[f"org:{ORG}"])
+    return pret
+
+
+def test_pret_a_l_org_servi_au_membre_sur_account_et_juge_une_fois(pret_org, trace,
+                                                                  monkeypatch):
+    from oto_mcp import access
+    vus, regle = [], access.pret_a_servir
+    monkeypatch.setattr(access, "pret_a_servir", lambda candidats, nom, *, quoi: (
+        vus.append(nom), regle(candidats, nom, quoi=quoi))[1])
+    jane = pret_org.sous_compte("jane@contoso.example")
+    assert jane(pret_org.auth.access_token_for, EMPRUNTEUSE, "outlook") == "AT:RT-JANE"
+    assert vus == ["jane@contoso.example"]
+    assert _repondre("outlook_message") == {
+        "ok": True, "_account": "jane@contoso.example",
+        "lent_by": "preteuse@contoso.example",
+        "lent_via_org": {"id": ORG, "name": "Contoso"}}
+
+
+def test_pret_a_l_org_sans_account_refus_qui_le_nomme(pret_org):
+    with pytest.raises(McpError) as e:
+        pret_org.auth.access_token_for(EMPRUNTEUSE, "outlook")
+    err = e.value.error
+    assert err.data["code"] == "account_required"
+    assert ("`jane@contoso.example` (lent by preteuse@contoso.example to the whole org "
+            "Contoso)" in err.message)
+    assert err.data["lent_accounts"][0]["via_org"] == {"id": ORG, "name": "Contoso"}
+    pret_org.coeur.auth.refresh.assert_not_called()
+
+
+def test_pret_a_l_org_invisible_pour_un_non_membre(pret_org):
+    autre = "hors-org"
+    with pytest.raises(McpError):
+        pret_org.sous_compte("jane@contoso.example")(
+            pret_org.auth.access_token_for, autre, "outlook")
+    assert pret_org.auth.accounts_for(autre) == []
+
+
+def test_pret_a_l_org_liste_dans_microsoft_accounts(pret_org, monkeypatch):
+    from fastmcp import FastMCP
+
+    from oto_mcp import access
+    from oto_mcp.tools import microsoft as outils
+    monkeypatch.setattr(access, "current_user_sub_or_raise", lambda: EMPRUNTEUSE)
+    m = FastMCP("t")
+    outils.register(m)
+    (compte,) = asyncio.run(m.get_tool("microsoft_accounts")).fn()["accounts"]
+    assert compte["lent_by"] == "preteuse@contoso.example"
+    assert compte["lent_via_org"] == {"id": ORG, "name": "Contoso"}
+
+
+def test_preter_outlook_a_toute_l_org_est_servi_donc_accepte_et_journalise(pret_org):
+    import types as _t
+
+    from oto_mcp.capabilities.connectors import sharing
+    pret_org.coffre.prets[(CHEZ_PRETEUSE, "jane@contoso.example")] = []
+    out = sharing._lend_instance(_t.SimpleNamespace(sub=PRETEUSE), sharing.LendInstanceInput(
+        connector="outlook", to_org=True))
+    assert out["lent_to_org"] is True and out["connector"] == PORTEUR
+    assert "`_account=jane@contoso.example`" in out["note"]
+    assert pret_org.coffre.journal == [{
+        "actor_sub": PRETEUSE, "org_id": ORG, "target": f"org:{ORG}", "action": "lend",
+        "entity_id": CHEZ_PRETEUSE, "account": "jane@contoso.example"}]
+    assert pret_org.sous_compte("jane@contoso.example")(
+        pret_org.auth.access_token_for, EMPRUNTEUSE, "outlook") == "AT:RT-JANE"

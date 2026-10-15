@@ -481,14 +481,15 @@ def _list_instances(ctx: ResolvedCtx, inp: ListInstancesInput) -> dict:
             {"set_at": k.get("set_at")}))
 
     # 5. SHARED WITH ME (ADR 0044 share_side): instances of OTHERS whose
-    # share_side targets me (named `user:` or via one of my groups). Cross-org
-    # possible (the named loan = consent). The pin resolves the owner's key.
-    # Dedup by ref (a group instance already listed in §2 does not
+    # share_side targets me (named `user:`, via one of my groups, or my whole active
+    # org `org:`). Cross-org possible (the named loan = consent). The pin resolves the
+    # owner's key. Dedup by ref (a group instance already listed in §2 does not
     # reappear).
     my_scopes = [f"user:{sub}"]
     if org is not None:
         for g in group_store.list_groups_for_user(sub, org):
             my_scopes.append(f"group:{g.get('group_id') or g.get('id')}")
+        my_scopes.append(f"org:{org}")
     my_eids = {credentials_store.member_id(org, sub)} if org is not None else set()
     existing_refs = {i["ref"] for i in out}
     try:

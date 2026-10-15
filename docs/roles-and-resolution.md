@@ -194,19 +194,23 @@ se rejoue en remplaçant la règle d'écriture de la façade, pas en lisant le c
 >   Microsoft prêté, résolu sous `microsoft` pour un outil `outlook_*`), payload dict.
 >   Un compte **prêté** par un pair (ligne membre d'un autre sub, lue dans le relevé
 >   `credential_row`) ajoute `lent_by` = e-mail (ou nom) du prêteur, et `lent_via_group`
->   pour un prêt à une équipe (`access.rappel_du_compte`, `access/prets.py`). L'écho est injecté **au-dessus de
+>   pour un prêt à une équipe, `lent_via_org` pour un prêt à toute l'org
+>   (`access.rappel_du_compte`, `access/prets.py`). L'écho est injecté **au-dessus de
 >   la rédaction** — sinon il serait redacté, et la capture passive de schéma
 >   l'enregistrerait comme un champ du connecteur.
 > - **le prêt ne sert que nommé** (15/10/2026) — un compte prêté ne sert que si
 >   `_account=` (ou `_instance=`) le nomme ; sans nom ni compte propre, refus
 >   `account_required` qui liste les prêts et leur prêteur — règle COMMUNE
->   `access.pret_a_servir` (`access/prets.py`), appliquée par Microsoft et par la sonde
->   équipe de la résolution pour tout autre connecteur (`PretsDuParcours` : un prêt à
->   l'équipe n'est jamais choisi d'office, ni remplacé par la clé plateforme) ; les
+>   `access.pret_a_servir` (`access/prets.py`), appliquée par Microsoft et par les sondes
+>   équipe et org de la résolution pour tout autre connecteur (`PretsDuParcours` : un
+>   prêt à l'équipe ou à l'org n'est jamais choisi d'office, ni remplacé par la clé
+>   plateforme) ; les
 >   comptes de l'org ou de l'équipe ELLES-MÊMES ne sont pas des prêts et servent sans nom.
 >   Un prêt à une ÉQUIPE (`group:<id>`) est servi à ses membres, dans l'org du prêt ; une
 >   équipe à qui rien ne servirait le prêt (porteur non org-partageable hors Microsoft)
->   est refusée à la pose (`team_loan_not_served`).
+>   est refusée à la pose (`team_loan_not_served`). Un prêt à TOUTE L'ORG (`org:<id>`,
+>   `to_org`) suit la même règle pour les membres de l'org, la ligne du prêteur exceptée
+>   (`org_loan_not_served` à la pose dans le même cas).
 >   Mesuré : une emprunteuse sans compte propre opérait la boîte d'une collègue sans le
 >   savoir, puis la sienne dès qu'elle l'a connectée, sans un signal. `_account` est annoncé
 >   STATIQUEMENT sur les cartes Microsoft (porteur + services, comme Google) : l'annonce

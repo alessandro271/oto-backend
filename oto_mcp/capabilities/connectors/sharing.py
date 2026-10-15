@@ -1,12 +1,15 @@
 """Instance SHARING capability (ADR 0044) — WRITE surface of `share_side`.
 
 `share_side` = EXTENSION: a member lends THEIR instance (their key in the current org)
-to a named peer, or to a team of that org. A lent account serves only when the call
-NAMES it (`access/prets.py`): a peer pins the instance (`_instance=`), a team's members
-name the account (`_account=`, the team rung of the cascade) or pin it. For a peer, the
-guard `access.guard_instance_access` authorizes the beneficiary (borrows the key, keeps
+to a named peer, to a team of that org, or to the whole of that org. A lent account
+serves only when the call NAMES it (`access/prets.py`): a peer pins the instance
+(`_instance=`), the members of a team or of the org name the account (`_account=`, the
+team or org rung of the cascade) or pin it. For a peer, the guard
+`access.guard_instance_access` authorizes the beneficiary (borrows the key, keeps
 their OWN org context — cross-org OK, the named loan is the consent). Refused at the
-pose: a team nothing would serve it to, and a personal key the org forbids (#1239).
+pose: a team or an org nothing would serve it to, and a personal key the org forbids
+(#1239). Every effective pose and withdrawal is journaled (`db/loan_events`), in the
+transaction that writes the `share_side`.
 Owner-scoped: `SUB_ONLY`, the handler touches ONLY the caller's vault row
 (`member_id(current org, sub)`) → you only ever lend your own key.
 
@@ -21,6 +24,7 @@ from pydantic import BaseModel, Field
 
 from ... import access, credentials_store, db, group_store, instance_refs, org_store, providers
 from ...connectors import cle_perso
+from ...db import loan_events
 from .._authz import SUB_ONLY
 from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from ..registry import CAPABILITIES
@@ -37,6 +41,10 @@ class LendInstanceInput(BaseModel):
                                                       "to lend to (or to revoke the loan "
                                                       "from) — its members use the key "
                                                       "only by naming it (`_account=`)")
+    to_org: bool = Field(False, description="true = lend to (or revoke the loan from) "
+                                            "every member of your current org — they use "
+                                            "the key only by naming it (`_account=`); "
+                                            "instead of `to` and `to_group`")
     account: str = Field("", description="which of your accounts — optional when you "
                                          "have only one")
     revoke: bool = False
@@ -57,6 +65,7 @@ class LendInstanceResult(BaseModel):
     # `revoke` therefore returns non-empty lists if other loans remained.
     lent_to: list[str]                      # borrowers' subs (`user:` entries)
     lent_to_groups: list[int] = []          # borrowing teams (`group:` entries)
+    lent_to_org: bool = False               # lent to the whole current org (`org:` entry)
 
 
 _ACCEPTED_TO = "`to` = the email or the sub of a member of your organization"
@@ -104,21 +113,21 @@ def _lent_account(eid: str, connector: str, account: str) -> str:
                       f"{listed}.")
 
 
-def _team_loan_served(carrier: str) -> bool:
-    """Does anything SERVE a loan to a team of this carrier to the team's members?
-    The team rung of the cascade, for an org-shareable carrier (`walk_cascade`); the
-    loan resolver of the Microsoft account (`auth/microsoft._lent_for_call`, on an
+def _shared_loan_served(carrier: str) -> bool:
+    """Does anything SERVE a loan of this carrier to a team or to the whole org? The
+    team and org rungs of the cascade, for an org-shareable carrier (`walk_cascade`);
+    the loan resolver of the Microsoft account (`auth/microsoft._lent_for_call`, on an
     explicit `_account=`). Otherwise the loan would be written and never served —
     an "ok" for an inert loan: refused at the pose instead."""
     from ...auth import microsoft as ms_auth
     return providers.is_org_shareable(carrier) or carrier == ms_auth.CONNECTOR
 
 
-def _designation(carrier: str, eid: str, account: str, to_group: Optional[int]) -> str:
+def _designation(carrier: str, eid: str, account: str, partage: bool) -> str:
     """How the borrower names the loan: `_account=` where a name is served (the team
-    rung, the Microsoft resolver), otherwise the instance ref (`_instance=`)."""
+    and org rungs, the Microsoft resolver), otherwise the instance ref (`_instance=`)."""
     from ...auth import microsoft as ms_auth
-    if account and (to_group is not None or carrier == ms_auth.CONNECTOR):
+    if account and (partage or carrier == ms_auth.CONNECTOR):
         return f"`_account={account}`"
     ref = instance_refs.ref_for_credential(credentials_store.MEMBER, eid, carrier, account)
     return f"`_instance={ref}`"
@@ -141,10 +150,11 @@ def _reach_note(named: str, carrier: str, account: str) -> Optional[str]:
 def _lend_instance(ctx: ResolvedCtx, inp: LendInstanceInput) -> dict:
     if providers.connector_for_provider(inp.connector) is None:
         raise AuthzDenied(400, "unknown_connector", f"Unknown connector `{inp.connector}`.")
-    if (inp.to is None) == (inp.to_group is None):
+    if (inp.to is not None) + (inp.to_group is not None) + bool(inp.to_org) != 1:
         raise AuthzDenied(400, "one_borrower",
-                          "Name exactly one borrower: `to` (a member's email or sub) or "
-                          "`to_group` (a team of your current org).")
+                          "Name exactly one borrower: `to` (a member's email or sub), "
+                          "`to_group` (a team of your current org) or `to_org=true` (your "
+                          "whole current org).")
     # A service card owns no vault row: the loan is the carrier's (`credential_of`).
     connector = providers.credential_provider(inp.connector)
     org = access.current_org(ctx.sub)
@@ -159,8 +169,16 @@ def _lend_instance(ctx: ResolvedCtx, inp: LendInstanceInput) -> dict:
         if to == ctx.sub:
             raise AuthzDenied(400, "self_lend", "Lending to yourself makes no sense.")
         entry = f"user:{to}"
+    elif inp.to_org:
+        if not inp.revoke and not _shared_loan_served(connector):
+            raise AuthzDenied(400, "org_loan_not_served",
+                              f"A `{connector}` instance cannot be lent to the whole org: "
+                              "nothing would serve it to its members. Lend it to each "
+                              "member with `to` (they use it with `_instance=`). Nothing "
+                              "was lent.")
+        entry = f"org:{org}"
     else:
-        if not inp.revoke and not _team_loan_served(connector):
+        if not inp.revoke and not _shared_loan_served(connector):
             raise AuthzDenied(400, "team_loan_not_served",
                               f"A `{connector}` instance cannot be lent to a team: nothing "
                               "would serve it to the team's members. Lend it to each "
@@ -177,12 +195,17 @@ def _lend_instance(ctx: ResolvedCtx, inp: LendInstanceInput) -> dict:
     _, side = credentials_store.get_instance_sharing(
         credentials_store.MEMBER, eid, connector, account)
     side = list(side or [])
+    avant = list(side)
     if inp.revoke:
         side = [s for s in side if s != entry]
     elif entry not in side:
         side.append(entry)
+    # Only an effective change is journaled: a repeated gesture changes nobody's access.
+    journal = ([{"actor_sub": ctx.sub, "org_id": org, "target": entry,
+                 "action": loan_events.REVOKE if inp.revoke else loan_events.LEND}]
+               if side != avant else [])
     ok = credentials_store.set_instance_sharing(
-        credentials_store.MEMBER, eid, connector, account, share_side=side)
+        credentials_store.MEMBER, eid, connector, account, share_side=side, journal=journal)
     if not ok:   # removed between the listing and this write
         raise AuthzDenied(404, "no_instance",
                           f"No `{connector}` instance set in this org — "
@@ -191,13 +214,14 @@ def _lend_instance(ctx: ResolvedCtx, inp: LendInstanceInput) -> dict:
     if not inp.revoke:
         note = (f"{note} " if note else "") + (
             "The borrower uses it only by naming it: "
-            f"{_designation(connector, eid, account, inp.to_group)}.")
+            f"{_designation(connector, eid, account, inp.to is None)}.")
     return {"ok": True, "connector": connector, "account": account,
             "note": note,
             "revoked": inp.revoke,
             "lent_to": [s[len("user:"):] for s in side if s.startswith("user:")],
             "lent_to_groups": [int(s[len("group:"):]) for s in side
-                               if s.startswith("group:") and s[len("group:"):].isdigit()]}
+                               if s.startswith("group:") and s[len("group:"):].isdigit()],
+            "lent_to_org": f"org:{org}" in side}
 
 
 CAPABILITIES += [
@@ -207,14 +231,17 @@ CAPABILITIES += [
         description=("Lend YOUR connector instance (your key in your current org) to a "
                      "peer, who uses it by pinning it (instance=) — `to` = the email or the "
                      "sub of a member of your organization — or to a team of your org — "
-                     "`to_group` = its id; its members then use it only by naming it "
-                     "(`_account=`), never by default (a connector nothing serves to a "
-                     "team is refused, and so is a personal key your org forbids for this "
+                     "`to_group` = its id — or to your whole org — `to_org=true`; their "
+                     "members then use it only by naming it (`_account=`), never by "
+                     "default (a connector nothing serves to a team or to the org is "
+                     "refused, and so is a personal key your org forbids for this "
                      "connector). `account` is optional "
                      "when you have only one. A "
                      "service card (`outlook`, `gmail`…) lends the account it borrows — "
                      "with every service that account authorized; "
-                     "`revoke=true` takes it back. You only ever share your OWN key; the "
+                     "`revoke=true` takes it back. The response is the loan's complete state "
+                     "afterwards (`lent_to`, `lent_to_groups`, `lent_to_org`); every lend "
+                     "and revoke is journaled. You only ever share your OWN key; the "
                      "borrower operates under THEIR own org context (ADR 0044 share_side)."),
         rest=RestBinding("POST", "/api/me/connectors/{connector}/lend", {"connector": "connector"}),
     ),

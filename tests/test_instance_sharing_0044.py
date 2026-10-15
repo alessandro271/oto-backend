@@ -120,8 +120,9 @@ def _lend_wiring(monkeypatch, *, existing_side=None, write_ok=True, accounts=(""
     monkeypatch.setattr(db, "get_user", lambda sub: {"sub": sub})
     monkeypatch.setattr(credentials_store, "get_instance_sharing",
                         lambda et, eid, conn, acct="": ([], list(existing_side or [])))
-    def _set(et, eid, conn, acct="", *, share_down=None, share_side=None):
+    def _set(et, eid, conn, acct="", *, share_down=None, share_side=None, journal=()):
         captured["share_side"] = share_side
+        captured["journal"] = list(journal)
         captured["eid"] = eid
         captured["row"] = (conn, acct)
         return write_ok

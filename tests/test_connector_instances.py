@@ -444,7 +444,21 @@ def test_shared_with_me_scopes_include_my_groups(seams):
     seams.monkeypatch.setattr(ci.credentials_store, "list_shared_with",
                               lambda scopes: captured.setdefault("scopes", scopes) and [])
     _run()
-    assert captured["scopes"] == [f"user:{SUB}", "group:2"]
+    assert captured["scopes"] == [f"user:{SUB}", "group:2", f"org:{ORG}"]
+
+
+def test_shared_with_me_surfaces_a_loan_to_my_whole_org(seams):
+    """Un prêt à toute l'org (`org:<id>`, `to_org`) est listé à ses membres comme un
+    prêt reçu, la ligne de la prêteuse avec sa réf épinglable."""
+    lent = {"entity_type": "member", "entity_id": f"{ORG}:usr_owner",
+            "connector": "zoho", "account": "jane", "secret_kind": "api_key",
+            "set_by": "usr_owner", "set_at": "2026-07-01 10:00:00", "meta": {}}
+    seams.monkeypatch.setattr(ci.credentials_store, "list_shared_with",
+                              lambda scopes: [lent] if f"org:{ORG}" in scopes else [])
+    (inst,) = _run()["instances"]
+    assert inst["via"] == "shared_with_me"
+    assert inst["ref"] == f"member:{ORG}:usr_owner:zoho:jane"
+    assert inst["owner"] == {"type": "user", "id": "usr_owner"}
 
 
 # ─── 6. Lot L6 — l'identifiant stable servi à côté du ref ────────────────────
@@ -525,6 +539,14 @@ def test_r9_le_pret_nominatif_elargit_l_audience_servie(seams):
     seams.instances[cle] = 1
     seams.partages[cle] = ("open", [], ["user:usr_pair"])
     assert _run()["instances"][0]["visible_to"] == ["user:usr_pair", f"user:{SUB}"]
+
+
+def test_r9_le_pret_a_toute_l_org_est_dans_l_audience_du_preteur(seams):
+    seams.vault[_member_key()] = [_row("zoho")]
+    cle = (credentials_store.MEMBER, credentials_store.member_id(ORG, SUB), "zoho", "")
+    seams.instances[cle] = 1
+    seams.partages[cle] = ("open", [], [f"org:{ORG}"])
+    assert _run()["instances"][0]["visible_to"] == [f"org:{ORG}", f"user:{SUB}"]
 
 
 def test_r9_la_surcharge_du_proprietaire_prime_sur_la_derivation(seams):

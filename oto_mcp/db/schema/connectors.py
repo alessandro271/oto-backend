@@ -272,3 +272,25 @@ CREATE INDEX IF NOT EXISTS idx_apollo_phone_reveals_request
 CREATE INDEX IF NOT EXISTS idx_apollo_phone_reveals_expires
     ON apollo_phone_reveals(expires_at);
 """
+
+# le journal des prêts de compte (`oto_instance op=lend`, docs/partage-de-compte.md)
+LOAN_EVENTS = """
+-- Qui a prêté quel compte, à qui, quand — et qui l'a repris. Une ligne par pose ou
+-- retrait EFFECTIF d'une cible du `share_side` (ADR 0044), append-only : rien ne la
+-- modifie ni ne la supprime. Le compte est désigné par sa ligne du coffre (celle du
+-- prêteur : `entity_type`, `entity_id`, `connector`, `account`), jamais par son secret ;
+-- `target` est la cible telle que le `share_side` l'écrit : `user:<sub>`, `group:<id>`
+-- ou `org:<id>`. Aucune clé étrangère : une FK vers `orgs` y prendrait un verrou.
+CREATE TABLE IF NOT EXISTS connector_loan_events (
+    id BIGSERIAL PRIMARY KEY,
+    at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    actor_sub TEXT NOT NULL,
+    org_id BIGINT NOT NULL,
+    entity_type TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    connector TEXT NOT NULL,
+    account TEXT NOT NULL DEFAULT '',
+    target TEXT NOT NULL,
+    action TEXT NOT NULL CHECK (action IN ('lend', 'revoke'))
+);
+"""

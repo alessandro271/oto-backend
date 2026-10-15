@@ -484,6 +484,27 @@ masque le prêt ; l'équipe ne le renomme pas et n'en fait pas son défaut
 niveaux d'accès juge un prêt désigné sous l'org du prêteur et sous l'équipe emprunteuse
 (`connectors/access_level_gate._loan_contexts`).
 
+**Prêter une instance à TOUTE L'ORG** (`oto_instance op=lend to_org=true`, REST
+`POST /api/me/connectors/{connector}/lend` `{"to_org": true}`, `org:<id>` de l'org COURANTE
+dans `share_side` ; la réponse dit `lent_to_org`) : même règle qu'un prêt à une équipe,
+décidée dans la sonde org de la résolution (`access.resolve._org_fetch` →
+`PretsDuParcours.au_palier_org`), pour les membres de cette org seulement, la ligne du
+prêteur exceptée — sans nom, le compte de l'org elle-même sert ; nommé, le prêt sert et
+l'écho dit `lent_by`/`lent_via_org`. Mêmes conditions de vie (`group_store.live_loans` :
+même org, prêteur membre et pas en pause, instance non suspendue, clé perso non
+interdite) ; même refus à la pose d'un porteur que rien ne servirait
+(`org_loan_not_served`, Microsoft servi par son résolveur). Listé aux membres
+(`via=shared_with_me`) ; `visible_to` du prêteur contient `org:<id>`.
+
+**Le journal des prêts** (`connector_loan_events`, révision `0058_journal_des_prets`,
+`db/loan_events`) : chaque pose et chaque retrait EFFECTIF d'une cible (`user:`, `group:`,
+`org:`) y laisse une ligne — qui (`actor_sub`), quel compte (la ligne du coffre du
+prêteur : `entity_type`, `entity_id`, `connector`, `account`), vers qui (`target`), quand
+(`at`), quel geste (`lend`/`revoke`) —, écrite dans la transaction du `share_side`
+(`credentials_store.set_instance_sharing(journal=…)`). Append-only, jamais de secret. Un
+geste répété qui ne change rien n'y entre pas. ⚠️ **Aucune surface ne le lit encore** :
+la lecture par le propriétaire (`db.loan_events.pour_la_ligne`) reste à exposer.
+
 Le palier plateforme est le seul dont l'audience n'est pas structurelle. Trois issues,
 dans l'ordre où la résolution les prend : la **chaîne accorde** (0053, L5) ⟹ les
 bénéficiaires des arêtes vivantes ; la **chaîne refuse** (des arêtes existent, toutes

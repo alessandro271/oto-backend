@@ -28,7 +28,8 @@ def register(mcp: FastMCP) -> None:
         account signs in to (a guest account), null for its home directory.
         `lent_by` (present only then) = the e-mail (or name) of the colleague who LENT you
         that account: not yours to revoke; `lent_via_group` ({id, name}) when it is lent to
-        a team of yours rather than to you.
+        a team of yours rather than to you, `lent_via_org` ({id, name}) when it is lent to
+        your whole organization.
         Pass `account` as `_account` to the service tools; omitted, the project's
         pinned account, else your only one, else your default one. A lent account is
         used ONLY when `_account` names it: with no account of your own, a call without
@@ -48,7 +49,8 @@ def register(mcp: FastMCP) -> None:
                  # Lent by a peer (`oto_instance op=lend`): used only when `_account`
                  # names it, not yours to revoke.
                  **({"lent_by": preteurs[c["lent_by"]]} if c.get("lent_by") else {}),
-                 **({"lent_via_group": c["via_group"]} if c.get("via_group") else {})}
+                 **({"lent_via_group": c["via_group"]} if c.get("via_group") else {}),
+                 **({"lent_via_org": c["via_org"]} if c.get("via_org") else {})}
                 for c in comptes
             ]
         }

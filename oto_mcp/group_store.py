@@ -273,22 +273,31 @@ def clear_active_group(sub: str) -> None:
 def lent_instances(group_id: int, provider: Optional[str] = None) -> list[dict]:
     """MEMBER instances lent to the team (`share_side` ∋ `group:<id>`, ADR 0044):
     `{connector, account, lender, entity_id, meta}` (no secret). A lent instance reads as a team key —
-    but it stays its lender's, who takes it back in one gesture.
-
-    Only live instances count: same org as the team (a loan never crosses orgs),
-    lender still a member of that org and not paused (#898), instance not suspended,
-    personal key not forbidden by the org for this connector (#1239 — a loan made
-    before the policy stops with it). The rest is skipped, never an error: a key
-    listing does not fail for a loan that lapsed."""
-    from . import account_suspension, roles
-    from .connectors import cle_perso
+    but it stays its lender's, who takes it back in one gesture. Only live loans count
+    (`_vivants`, in the team's org: a loan never crosses orgs)."""
     shared = credentials_store.list_shared_with([f"group:{group_id}"])
     if not shared:
         return []
     g = get_group(group_id)
     if g is None:
         return []
-    org = int(g["org_id"])
+    return _vivants(shared, int(g["org_id"]), provider)
+
+
+def live_loans(target: str, org: int, provider: Optional[str] = None) -> list[dict]:
+    """The live member instances of `org` whose `share_side` holds `target` — same
+    shape and same liveness as `lent_instances`; `org:<id>` = lent to the whole org."""
+    return _vivants(credentials_store.list_shared_with([target]), org, provider)
+
+
+def _vivants(shared: list[dict], org: int, provider: Optional[str]) -> list[dict]:
+    """Live = a member row of `org` (a loan never crosses orgs), lender still a member
+    of that org and not paused (#898), instance not suspended, personal key not
+    forbidden by the org for this connector (#1239 — a loan made before the policy
+    stops with it). The rest is skipped, never an error: a key listing does not fail
+    for a loan that lapsed."""
+    from . import account_suspension, roles
+    from .connectors import cle_perso
     out = []
     for r in shared:
         if r["entity_type"] != credentials_store.MEMBER:

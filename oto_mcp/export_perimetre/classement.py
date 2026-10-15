@@ -191,6 +191,8 @@ CLASSEMENT: dict[str, Table] = {
     "connector_credentials": possedee(ParEntite("entity_type", "entity_id"),
                                       secrets=("secret_enc",)),
     "connector_instances": possedee(ParEntite()),
+    "connector_loan_events": possedee(ParEntite("entity_type", "entity_id"),
+                                      "le journal des prêts suit la ligne du coffre prêtée"),
     "connector_availability": possedee(ParEntite("scope_type", "scope_id"),
                                        "les lignes `platform` (semées par `init_db`) et "
                                        "`tenant` sont celles de l'instance",

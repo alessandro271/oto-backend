@@ -593,43 +593,19 @@ def _ranger_rotation(ligne: tuple, lu: str, nouveau: str) -> None:
 
 def lent_accounts(sub: str) -> list[dict]:
     """The Microsoft accounts a PEER lent to `sub` (`oto_instance op=lend`, ADR 0044):
-    rows of the carrier at another member's tier, lent to the person (`share_side`
-    `user:<sub>`) or to a TEAM she belongs to in her context org (`group:<id>`, through
-    `group_store.lent_instances`: same org as the team, lender still a member and awake).
+    the common reach of a loan (`access.prets_de`) — lent to the person (`user:<sub>`,
+    any org: the named loan is the consent), to a TEAM she belongs to or to the whole of
+    her context org (`group:<id>`/`org:<id>`: same org, lender still a member and awake).
     Same shape as `_comptes` (no secret), plus `lent_by` (the lender's sub),
-    `lender_org` and, for a team loan, `via_group` (`{id, name}`); never the person's
-    default. One entry per row: a row lent to her AND to her team reads as lent to her.
-    A personal loan crosses orgs (the named loan is the consent); a team loan never does.
+    `lender_org` and `via_group`/`via_org` (`{id, name}`); never the person's default.
+    One entry per row: lent to her prevails over her team, her team over the org.
 
-    A team loan was accepted and never served (the cascade's team rung skips this
-    carrier, which is not org-shareable): it is served here, like a personal loan —
-    only when the call names it."""
-    from .. import access, group_store  # lazy
-    org = access.current_org(sub)
-    mien = credentials_store.member_id(org, sub) if org is not None else None
-    out, vus = [], set()
-    for r in credentials_store.list_shared_with([f"user:{sub}"]):
-        if (r["connector"] != CONNECTOR or r["entity_type"] != credentials_store.MEMBER
-                or r["entity_id"] == mien):
-            continue
-        lender_org, _, lender = r["entity_id"].partition(":")
-        if not (lender_org.isdigit() and lender):
-            continue
-        vus.add((r["entity_id"], r["account"]))
-        out.append({"account": r["account"],
-                    "meta": {**(r.get("meta") or {}), "is_default": False},
-                    "set_at": r.get("set_at"), "lent_by": lender,
-                    "lender_org": int(lender_org)})
-    for g in (group_store.list_groups_for_user(sub, org) if org is not None else []):
-        for i in group_store.lent_instances(int(g["group_id"]), CONNECTOR):
-            if i["entity_id"] == mien or (i["entity_id"], i["account"]) in vus:
-                continue
-            vus.add((i["entity_id"], i["account"]))
-            out.append({"account": i["account"],
-                        "meta": {**i["meta"], "is_default": False},
-                        "set_at": None, "lent_by": i["lender"], "lender_org": int(org),
-                        "via_group": {"id": int(g["group_id"]), "name": g.get("name")}})
-    return out
+    The cascade's team and org rungs skip this carrier (not org-shareable): a loan to a
+    team or to the org is served here, like a personal loan — only when the call names
+    it."""
+    from .. import access  # lazy
+    return [{**c, "meta": {**c["meta"], "is_default": False}, "set_at": c.get("set_at")}
+            for c in access.prets_de(sub, CONNECTOR)]
 
 
 def _lent_for_call(sub: str, service: str, account: Optional[str]):

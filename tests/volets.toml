@@ -276,6 +276,7 @@ chemins = [
   "oto_mcp/db/lecture_bornee.py",
   "oto_mcp/db/lecture_d_appel.py",
   "oto_mcp/db/limite_refus_jour.py",
+  "oto_mcp/db/loan_events.py",
   "oto_mcp/db/node_tables.py",
   "oto_mcp/db/node_view.py",
   "oto_mcp/db/nodes.py",

@@ -286,8 +286,14 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
         """ORG fetch probe: same account selection as the member (Phase 2).
         A NAMED account absent here hands over like the other tiers — it is
         the post-walk guard that raises (the walker may never reach this
-        rung: context org None, non-org-shareable connector)."""
-        if not cascade._is_multi_account(mprov, oid):
+        rung: context org None, non-org-shareable connector). A loan to the
+        whole org, only NAMED (`prets`)."""
+        multi = cascade._is_multi_account(mprov, oid)
+        decide, hit = prets_vus.au_palier_org(oid, mprov, sub, named_account if multi else None,
+                                              multi=multi)
+        if decide:
+            return hit
+        if not multi:
             return org_store.get_org_secret(oid, mprov)
         eff, explicit = _pick_account("org", str(oid), mprov, "for your org",
                                       scope="org")

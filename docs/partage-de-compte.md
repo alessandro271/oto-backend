@@ -36,9 +36,10 @@ lui seul le partage et le reprend, il s'éteint avec lui. Un seul stockage, `sha
 sur la ligne de coffre du propriétaire (`user:<sub>`, `group:<id>`, `org:<id>`), et un
 seul geste :
 
-- MCP : `oto_instance op=lend` (`to` = personne, `to_group` = équipe, `to_org` = l'org
-  courante ; `account` ; `revoke`) ;
-- REST : `POST /api/me/connectors/{connector}/lend`, même contrat ;
+- MCP : `oto_instance op=lend` (`to` = personne, `to_group` = équipe, `to_org=true` = l'org
+  courante, exactement un des trois ; `account` ; `revoke`) ;
+- REST : `POST /api/me/connectors/{connector}/lend`, même contrat ; la réponse dit l'état
+  complet après le geste (`lent_to`, `lent_to_groups`, `lent_to_org`) ;
 - dashboard : « Partager » sur la carte du compte, avec la liste de qui y a accès
   (`visible_to` de `GET /api/me/connector-instances`) et le retrait.
 
@@ -60,11 +61,14 @@ fois ; écrire au nom de quelqu'un par surprise ne se rattrape pas.
 
 Les comptes du concept 1 (ceux de l'org ou de l'équipe elles-mêmes) restent servis sans
 désignation. La règle s'écrit **une fois**, sous `oto_mcp/access/` (`prets.py`), et chaque
-chemin de résolution s'y branche : Microsoft (`auth/microsoft._lent_for_call`), puis la
-cascade — palier équipe nourri par `group_store.lent_instances`, décidé dans sa sonde
-(`PretsDuParcours`) ; le palier org s'y branchera avec la cible `to_org`. Dans la cascade,
-sans désignation, le compte de l'équipe elle-même sert, sinon celui de l'org ; si seuls des
-prêts auraient servi, le refus les nomme, jamais la clé plateforme à leur place.
+chemin de résolution s'y branche : Microsoft (`auth/microsoft._lent_for_call`, nourri par
+`prets.prets_de` — personne, équipe, org), puis la cascade — paliers équipe et org, nourris
+par `group_store.lent_instances` et `live_loans`, décidés dans leur sonde
+(`PretsDuParcours.au_palier_equipe`, `au_palier_org`). Dans la cascade, sans désignation,
+le compte de l'équipe elle-même sert, sinon celui de l'org ; si seuls des prêts auraient
+servi, le refus les nomme (avec « via the team … » ou « to the whole org … »), jamais la
+clé plateforme à leur place. Un prêt à l'org ne sert que les membres de cette org, la ligne
+du prêteur exceptée ; l'écho dit `lent_by` et `lent_via_org`.
 
 *Ce qui change pour qui s'en servait* : un membre d'équipe qui utilisait un prêt à son
 équipe sans le nommer reçoit `account_required` à son prochain appel, et le rejoue avec
@@ -91,7 +95,10 @@ d'un refus d'ambiguïté.
   `lender_suspended`) ; quand le propriétaire quitte l'org, ses prêts nés dans cette org
   cessent, à une personne comme à une équipe (refus nommé `lender_left_org` à l'épinglage,
   prêt à une équipe ignoré) — lu à chaque appel, rien n'est détaché du coffre.
-- **La pose et le retrait se journalisent** : qui, quoi, vers qui, quand.
+- **La pose et le retrait se journalisent** : qui, quoi, vers qui, quand
+  (`connector_loan_events`, révision `0058_journal_des_prets`), dans la transaction qui
+  écrit le `share_side` ; seul un geste qui change l'état y entre, jamais un secret. La
+  lecture par le propriétaire reste à exposer (lot 4, avec l'écran).
 
 ## Ce que deviennent les chemins d'avant
 
@@ -108,8 +115,9 @@ d'un refus d'ambiguïté.
 2. Règle de service partagée et prêts Microsoft à une équipe — lot de la session Microsoft.
 3. Backend : cible `to_org`, règle de service étendue à la cascade, fin du prêt au départ
    de l'org, politique « clé perso interdite » lue par les prêts, journal. *3a* : la
-   cascade (palier équipe), le départ, la politique, la garde des niveaux d'accès ; restent
-   `to_org` et le journal.
+   cascade (palier équipe), le départ, la politique, la garde des niveaux d'accès. *3b* :
+   `to_org` (palier org, Microsoft, listing) et le journal, écrit ; sa lecture reste à
+   exposer.
 4. Dashboard : « Partager » sur la carte du compte.
 5. Microsoft connectable au nom de l'org ou d'une équipe.
 6. Délégation des messageries ramenée au même geste (écran, outil), cible équipe à
