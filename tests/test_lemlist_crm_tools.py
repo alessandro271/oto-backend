@@ -156,6 +156,12 @@ def test_une_liste_de_desinscription_omise_ne_rend_quune_page(op, method, key):
         assert getattr(inst, method).call_args.kwargs == {"offset": 40, "limit": 20}
         assert (out["limit"], out["offset"], out["next_offset"]) == (20, 40, None)
 
+        # Un `limit` au-delà du plafond lemlist (100) peut revenir écrêté : la
+        # page pleine n'est pas la dernière, et la suite part des lignes reçues.
+        getattr(inst, method).return_value = [{"value": "v"}] * 100
+        out = tool.fn(op=op, limit=500, offset=200)
+        assert (out["limit"], out["offset"], out["next_offset"]) == (500, 200, 300)
+
 
 def test_ajouter_ou_retirer_dune_liste_de_contacts_partage_une_route():
     key, cls = _with_fake_client()
