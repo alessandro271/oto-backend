@@ -7,7 +7,8 @@ clinic (ADR 0047); each `kind` carries at most one filter of its own, refused to
 The read ops beyond list/get, on the object they detail:
 - `items` — a package's treatments (`treatment_package`), paginated;
 - `distributions` — the per-user accounting split of a pricing
-  (`treatment_pricing`) or of a package, not paginated;
+  (`treatment_pricing`) or of a package, not paginated; with `treatment_type_id`
+  instead of an id, the split of EVERY pricing of that treatment type;
 - `post_treatment` — a treatment type's post-treatment configuration (follow-up and
   reminder emails, their questionnaire model, delays): configuration, not patient
   data.
@@ -17,7 +18,9 @@ allowlist (`nextmotion_entrees`): `create` | `update` | `delete` on visit
 types, their categories, treatment types (pricings included, as a COMPLETE list), packages
 and accounting distributions; `reorder` of visit types and
 categories; `add_item` | `set_items` on a package and `update` | `delete` of a package
-line (`treatment_package_item`); `set_distributions` of a pricing or a package;
+line (`treatment_package_item`); `set_distributions` of a pricing or a package, and
+`assign_distribution` | `unassign_distribution` of ONE practitioner on many of them
+(`nextmotion_repartition`);
 `update_post_treatment` of a treatment type. Variants (`sub_visit_type`) are written
 through their visit type, pricings through their treatment type; extracting a package to a
 consultation is not served (medical).
@@ -32,13 +35,14 @@ from typing import Literal, Optional, Union
 
 from fastmcp import FastMCP
 
+from . import nextmotion_repartition as repartition
 from .nextmotion_entrees import (_IN_ACCOUNTING_DISTRIBUTION, _IN_CATEGORY, _IN_PACKAGE,
                                  _IN_PACKAGE_ITEM, _IN_PACKAGE_ITEMS, _IN_POST_TREATMENT,
                                  _IN_REORDER, _IN_TREATMENT_TYPE_CREATE,
                                  _IN_TREATMENT_TYPE_UPDATE, _IN_USER_DISTRIBUTION,
                                  _IN_VISIT_TYPE_CREATE, _IN_VISIT_TYPE_UPDATE)
 from .nextmotion_garde import (Kind, Write, _bad, _client, _crud, _need, _paging,
-                               _refuse_ignored, _run, _serve)
+                               _refuse_ignored, _run, _serve, _uuid)
 from .nextmotion_socle import (_ACCOUNTING_DISTRIBUTION, _CATEGORY, _GLOBAL_PRODUCT,
                                _PACKAGE, _PACKAGE_ITEM, _POST_TREATMENT_CONFIG, _PRICING,
                                _SUB_VISIT_TYPE, _TREATMENT_TYPE, _USER_DISTRIBUTION,
@@ -52,6 +56,11 @@ _DISTRIBUTIONS = {
     "treatment_pricing": lambda c, i: c.list_treatment_pricing_distributions(i),
     "treatment_package": lambda c, i: c.list_treatment_package_distributions(i),
 }
+_SET_DISTRIBUTIONS = {
+    "treatment_pricing": lambda c, i, b: c.set_treatment_pricing_distributions(i, items=b),
+    "treatment_package": lambda c, i, b: c.set_treatment_package_distributions(i, items=b),
+}
+_ASSIGN = {"assign_distribution": "assign", "unassign_distribution": "unassign"}
 
 
 def _distributions_now(kind: str):
@@ -137,7 +146,7 @@ _KINDS = {
             cid, treatment_type_id=treatment_type_id, **p),
         lambda c, i: c.get_treatment_pricing(i), ("treatment_type_id",),
         writes={"set_distributions": _set_distributions(
-            lambda c, i, b: c.set_treatment_pricing_distributions(i, items=b))}),
+            _SET_DISTRIBUTIONS["treatment_pricing"])}),
     "treatment_package": Kind(
         "treatment_packages", _shape(_PACKAGE),
         lambda c, cid, search, **p: c.list_treatment_packages(cid, search=search, **p),
@@ -155,7 +164,7 @@ _KINDS = {
                     _IN_PACKAGE_ITEMS, ("pricing",), many=True, current=_items_now,
                     key="items", shape=_package_item, withheld=None),
                 "set_distributions": _set_distributions(
-                    lambda c, i, b: c.set_treatment_package_distributions(i, items=b))}),
+                    _SET_DISTRIBUTIONS["treatment_package"])}),
     "treatment_package_item": Kind(
         "items", _package_item,
         writes={"update": Write(lambda c, i, b: c.update_treatment_package_item(i, body=b),
@@ -178,6 +187,52 @@ _KINDS = {
 _READS = ("items", "distributions", "post_treatment")
 
 
+def _pricings_of_type(c, op: str, clinic_id: Optional[str],
+                      treatment_type_id: str) -> list:
+    _need(op, clinic_id=clinic_id)
+    _uuid(op, "clinic_id", clinic_id)
+    _uuid(op, "treatment_type_id", treatment_type_id)
+    return repartition.pricings_of_type(lambda o: _run(lambda: c.list_treatment_pricings(
+        clinic_id, treatment_type_id=treatment_type_id, limit=repartition.PAGE, offset=o)))
+
+
+def _distributions_of_type(clinic_id: Optional[str], treatment_type_id: str) -> dict:
+    """op='distributions' over a treatment type: each pricing with its per-user split."""
+    clients = [_client() for _ in range(repartition.WORKERS)]
+    rows = _pricings_of_type(clients[0], "distributions", clinic_id, treatment_type_id)
+    split = repartition.read_all([r["id"] for r in rows], clients=clients,
+                                 read=_DISTRIBUTIONS["treatment_pricing"])
+    return {"treatment_type_id": treatment_type_id, "count": len(rows),
+            "pricings": [{"id": r["id"], "details": r.get("details"),
+                          "price": r.get("price"), "distributions": split[r["id"]]}
+                         for r in rows]}
+
+
+def _assign(kind: str, op: str, *, clinic_id: Optional[str], item_id: Optional[str],
+            treatment_type_id: Optional[str], data, dry_run: Optional[bool],
+            unused: dict) -> dict:
+    """assign_distribution | unassign_distribution: one practitioner on many items."""
+    if kind not in _DISTRIBUTIONS:
+        raise _bad(f"op={op!r} only applies to kind='treatment_pricing' or "
+                   "'treatment_package'.")
+    _refuse_ignored(op, item_id=item_id, **unused)
+    by_type = treatment_type_id is not None
+    if by_type and kind != "treatment_pricing":
+        raise _bad(f"op={op!r}: `treatment_type_id` only applies to kind='treatment_pricing'.")
+    if not by_type:
+        _refuse_ignored(op, clinic_id=clinic_id)
+    user, targets = repartition.plan(_ASSIGN[op], data, by_type=by_type)
+    clients = [_client() for _ in range(repartition.WORKERS)]
+    if by_type:
+        dist = data.get("accounting_distribution")
+        targets = {r["id"]: dist for r in _pricings_of_type(clients[0], op, clinic_id,
+                                                            treatment_type_id)}
+    out = repartition.run(targets, user, clients=clients, read=_DISTRIBUTIONS[kind],
+                          write=_SET_DISTRIBUTIONS[kind], dry_run=dry_run is None or dry_run)
+    scope = {"treatment_type_id": treatment_type_id} if by_type else {}
+    return {"kind": kind, "op": op, **scope, **out}
+
+
 def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
@@ -188,7 +243,8 @@ def register(mcp: FastMCP) -> None:
                       "global_product"],
         op: Literal["list", "get", "items", "distributions", "post_treatment", "create",
                     "update", "delete", "reorder", "add_item", "set_items",
-                    "set_distributions", "update_post_treatment"] = "list",
+                    "set_distributions", "assign_distribution", "unassign_distribution",
+                    "update_post_treatment"] = "list",
         clinic_id: Optional[str] = None,
         item_id: Optional[str] = None,
         visit_type_category_id: Optional[str] = None,
@@ -221,6 +277,18 @@ def register(mcp: FastMCP) -> None:
         "update_post_treatment" (treatment_type).
         ⚠️ These lists REPLACE everything, an omitted element is deleted:
         `sub_visit_types`, `pricings`, set_items, set_distributions.
+
+        ONE practitioner on many pricings or packages, the others untouched:
+        "assign_distribution" — `data` = `{user, accounting_distribution, items: [ids]}`
+        (same split everywhere), or `{user, items: [{id, accounting_distribution}]}` (one
+        split per item: a treatment type often mixes differently split lines), or, on
+        pricings, `{user, accounting_distribution}` + `clinic_id` + `treatment_type_id`
+        (every pricing of the type); "unassign_distribution" — `{user, items: [ids]}`
+        or the same treatment type form. At most 500 items; the preview lists each
+        item's change (add | update | remove | unchanged), the write touches only the
+        changed ones and reports `failed` items by name.
+        "distributions" with `clinic_id` + `treatment_type_id` instead of `item_id`:
+        every pricing of the type with its split, to audit before assigning.
         `data` takes the fields the Nextmotion spec accepts for the op; any other field is refused.
 
         ⚠️ Writes DEFAULT to `dry_run=True`: `data` is checked, the current object and
@@ -240,6 +308,20 @@ def register(mcp: FastMCP) -> None:
         filters = {"visit_type_category_id": visit_type_category_id,
                    "visit_type_id": visit_type_id,
                    "treatment_type_id": treatment_type_id, "search": search}
+        if op in _ASSIGN:
+            return _assign(kind, op, clinic_id=clinic_id, item_id=item_id,
+                           treatment_type_id=treatment_type_id, data=data, dry_run=dry_run,
+                           unused={"visit_type_category_id": visit_type_category_id,
+                                   "visit_type_id": visit_type_id, "search": search,
+                                   "limit": limit, "offset": offset, "fields": fields})
+        if op == "distributions" and item_id is None and treatment_type_id is not None:
+            if kind != "treatment_pricing":
+                raise _bad("op='distributions' by `treatment_type_id` only applies to "
+                           "kind='treatment_pricing'.")
+            _refuse_ignored(op, data=data, dry_run=dry_run, limit=limit, offset=offset,
+                            fields=fields, visit_type_category_id=visit_type_category_id,
+                            visit_type_id=visit_type_id, search=search)
+            return _distributions_of_type(clinic_id, treatment_type_id)
         if op not in _READS:
             if kind == "treatment_package_item" and op in ("list", "get"):
                 raise _bad("kind='treatment_package_item' is read through op='items' on "
