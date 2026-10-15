@@ -226,6 +226,8 @@ avatars/logos · ⚠️ **PROD et PREPROD partagent la MÊME base** : ce qu'on �
 - `architecture.md` — l'arbre des modules, les 4 couches
 - `couches-et-capacites.md` — ADR 0004 + capacités
 - `connector-vault.md` — registre, coffre, instances, **garde d'egress** (`OTO_EGRESS_ALLOW`)
+- `partage-de-compte.md` — un seul geste « partager » (personne, équipe, org) ; le compte de l'org vs le compte
+  prêté, qui ne sert que désigné explicitement ; ce que deviennent les chemins d'avant
 - `roles-and-resolution.md` — paliers, cascade de clé
 - `groups-and-roles.md` — hiérarchie de droits
 - `org-context.md` — session / maison / consultation ; jeton de délégation borné à l'org de son travail
