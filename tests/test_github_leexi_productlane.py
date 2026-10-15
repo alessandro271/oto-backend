@@ -458,9 +458,18 @@ def test_le_kind_dun_brouillon_passe_en_argument_de_premier_niveau_atteint_le_co
                        "article_id": "a1"}
 
 
-def test_le_kind_ecrit_dans_fields_lemporte_sur_largument():
+def test_un_kind_contradictoire_entre_argument_et_fields_est_refuse():
+    fake = _Fake(retour={"id": "d1"})
+    with _with("oto.tools.productlane.client.ProductlaneClient", fake):
+        with pytest.raises(McpError, match="`kind` given twice"):
+            _call("productlane", "productlane_docs", op="create_draft",
+                  kind="edit", fields={"kind": "create", "title": "T"})
+    assert not fake.calls
+
+
+def test_un_kind_identique_dans_les_deux_places_passe():
     fake = _Fake(retour={"id": "d1"})
     with _with("oto.tools.productlane.client.ProductlaneClient", fake):
         _call("productlane", "productlane_docs", op="create_draft", kind="edit",
-              fields={"kind": "create", "title": "T"})
-    assert fake.calls[-1][1][0] == {"kind": "create", "title": "T"}
+              fields={"kind": "edit", "title": "T"})
+    assert fake.calls[-1][1][0] == {"kind": "edit", "title": "T"}
