@@ -139,6 +139,11 @@ def test_migrate_sub_sub_bearing_columns_are_triaged():
         # la version précédente de ce commentaire proposait de le faire. Le compte
         # migré repose ses clés : ce sont des instances neuves, nommées à la pose.
         ("connector_instances", "owner_id"),
+        # Le journal des prêts nomme sa ligne du coffre par son entité : il la SUIT quand
+        # elle se rechiffre (`loan_events.suivre_la_ligne`, appelé par
+        # `rekey_personal_credentials`) et reste avec elle quand elle reste en place —
+        # un UPDATE nu d'inventaire le détacherait de sa ligne, comme l'instance.
+        ("connector_loan_events", "entity_id"),
         # Repointée par l'étape 3 bis de migrate_sub, FILTRÉE sur grantee_kind='user'
         # (la colonne porte aussi des ids d'org) — pas un UPDATE nu d'inventaire.
         ("grants", "grantee_id"),

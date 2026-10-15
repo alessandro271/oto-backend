@@ -576,6 +576,9 @@ _SUB_COLUMNS = [
     #   personne » se lit par son sub (`idx_portee_proprietaire`).
     ("credential_disparitions", "acteur_sub"),
     ("portee_elargissements", "acteur_sub"), ("portee_elargissements", "proprietaire_sub"),
+    # - le journal des prêts : qui a prêté ou repris est une personne, comme l'acteur
+    #   des relevés ci-dessus (l'adresse de la ligne prêtée suit, elle, le rechiffrement).
+    ("connector_loan_events", "actor_sub"),
 ]
 
 

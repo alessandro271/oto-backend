@@ -28,6 +28,17 @@ def noter(conn, *, actor_sub: str, org_id: int, entity_type: str, entity_id: str
                           "target": target, "action": action})
 
 
+def suivre_la_ligne(conn, entity_type: str, ancien: str, nouveau: str, connector: str,
+                    account: str) -> None:
+    """Le journal suit SA ligne du coffre quand une fusion de comptes la rechiffre sous un
+    nouveau nom (`credentials_store.rekey_personal_credentials`) : la lecture par ligne
+    (`pour_la_ligne`) garde son historique. Une ligne laissée en place garde le sien."""
+    conn.execute(
+        "UPDATE connector_loan_events SET entity_id = %s WHERE entity_type = %s "
+        "AND entity_id = %s AND connector = %s AND account = %s",
+        (nouveau, entity_type, ancien, connector, account or ""))
+
+
 def pour_la_ligne(entity_type: str, entity_id: str, connector: str,
                   account: str = "", limit: int = 50) -> list[dict]:
     """Les gestes sur UNE ligne du coffre, du plus récent au plus ancien."""

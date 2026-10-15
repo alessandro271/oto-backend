@@ -1657,6 +1657,7 @@ def rekey_personal_credentials(conn, old_sub: str, new_sub: str) -> dict:
 
     Idempotent : rejoué, il ne trouve plus rien sous l'ancien sub (hors cas laissés).
     Ne journalise jamais un secret — des connecteurs, des comptes et des entités."""
+    from .db import loan_events
     bilan = {"rekeyed": 0, "collisions": 0, "illisibles": 0}
     if not old_sub or not new_sub or old_sub == new_sub:
         return bilan
@@ -1706,6 +1707,7 @@ def rekey_personal_credentials(conn, old_sub: str, new_sub: str) -> dict:
              etype, ancien, connector, account))
         connector_instances.move_instance_to_owner(conn, etype, ancien, nouveau,
                                                    connector, account)
+        loan_events.suivre_la_ligne(conn, etype, ancien, nouveau, connector, account)
         bilan["rekeyed"] += 1
     if rows:
         logger.info("rekey clés personnelles %s → %s : %s", old_sub, new_sub, bilan)

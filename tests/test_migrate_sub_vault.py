@@ -73,10 +73,11 @@ class _Coffre:
     """Une table `connector_credentials` + `connector_instances` en mémoire, qui ne
     comprend QUE les requêtes du rechiffrement — un SQL imprévu lève."""
 
-    def __init__(self, lignes, instances):
+    def __init__(self, lignes, instances, journal=None):
         self.lignes = {(l["entity_type"], l["entity_id"], l["connector"], l["account"]): l
                        for l in lignes}
         self.instances = instances   # {id: (owner_type, owner_id, connector, account)}
+        self.journal = journal or []  # [(entity_type, entity_id, connector, account)]
 
     def execute(self, sql, params=()):
         sql = " ".join(sql.split())
@@ -98,6 +99,11 @@ class _Coffre:
             self.lignes[(et, nouveau, con, acc)] = {**ligne, "entity_id": nouveau,
                                                     "secret_enc": enc}
             return _Res(rowcount=1)
+        if sql.startswith("UPDATE connector_loan_events SET entity_id"):
+            nouveau, et, ancien, con, acc = params
+            self.journal = [(e, nouveau if (e, i, c, a) == (et, ancien, con, acc) else i, c, a)
+                            for e, i, c, a in self.journal]
+            return _Res()
         if sql.startswith("UPDATE connector_instances SET owner_id"):
             nouveau, ot, ancien, con, acc = params
             for i, q in self.instances.items():
@@ -133,6 +139,20 @@ def test_une_cle_membre_suit_la_personne_et_se_dechiffre_sous_son_nouveau_nom(cl
     assert ("member", "12:ancien", "apollo", "") not in coffre.lignes
     assert coffre.instances[7] == ("member", "12:nouveau", "apollo", "")
     assert ("member", "12:quelquun", "apollo", "") in coffre.lignes
+
+
+def test_le_journal_des_prets_suit_sa_ligne_et_reste_avec_une_ligne_laissee(cle):
+    """Le journal nomme sa ligne par son entité : il la suit quand elle se rechiffre,
+    et reste avec elle quand une collision la laisse en place."""
+    coffre = _Coffre([_ligne("member", "12:ancien", "apollo", "k"),
+                      _ligne("member", "12:ancien", "hunter", "vieille"),
+                      _ligne("member", "12:nouveau", "hunter", "reposee")], {},
+                     journal=[("member", "12:ancien", "apollo", ""),
+                              ("member", "12:ancien", "hunter", "")])
+    bilan = cs.rekey_personal_credentials(coffre, "ancien", "nouveau")
+    assert bilan == {"rekeyed": 1, "collisions": 1, "illisibles": 0}
+    assert coffre.journal == [("member", "12:nouveau", "apollo", ""),
+                              ("member", "12:ancien", "hunter", "")]
 
 
 def test_un_sub_qui_en_suffixe_un_autre_ne_se_confond_pas(cle):
