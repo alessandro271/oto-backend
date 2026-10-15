@@ -131,6 +131,38 @@ def test_les_trois_listes_de_desinscription_ne_se_confondent_pas():
         inst.unsubscribe_contact.assert_called_once_with("ctc_1")
 
 
+@pytest.mark.parametrize("op,method,key", [
+    ("list", "list_unsubscribes", "unsubscribes"),
+    ("var_list", "list_unsubscribed_variables", "variables"),
+])
+def test_une_liste_de_desinscription_omise_ne_rend_quune_page(op, method, key):
+    """Sans `limit`, lemlist rend la liste ENTIÈRE (2 439 lignes, 325 Ko vus sur
+    un compte réel) : l'agent qui la lit pour vérifier une valeur se noie. Le
+    tool sert une page de 100 et dit où reprendre."""
+    key_patch, cls = _with_fake_client()
+    with key_patch, cls as client_cls:
+        inst = client_cls.return_value
+        tool = _tool("lemlist_unsubscribe")
+
+        getattr(inst, method).return_value = [{"value": f"v{i}"} for i in range(100)]
+        out = tool.fn(op=op)
+        assert getattr(inst, method).call_args.kwargs == {"offset": None, "limit": 100}
+        assert len(out[key]) == 100
+        assert (out["limit"], out["offset"], out["next_offset"]) == (100, 0, 100)
+
+        # Une page incomplète est la dernière ; un `limit` explicite est tenu.
+        getattr(inst, method).return_value = [{"value": "v"}] * 3
+        out = tool.fn(op=op, limit=20, offset=40)
+        assert getattr(inst, method).call_args.kwargs == {"offset": 40, "limit": 20}
+        assert (out["limit"], out["offset"], out["next_offset"]) == (20, 40, None)
+
+        # Un `limit` au-delà du plafond lemlist (100) peut revenir écrêté : la
+        # page pleine n'est pas la dernière, et la suite part des lignes reçues.
+        getattr(inst, method).return_value = [{"value": "v"}] * 100
+        out = tool.fn(op=op, limit=500, offset=200)
+        assert (out["limit"], out["offset"], out["next_offset"]) == (500, 200, 300)
+
+
 def test_ajouter_ou_retirer_dune_liste_de_contacts_partage_une_route():
     key, cls = _with_fake_client()
     with key, cls as client_cls:
@@ -345,3 +377,58 @@ def test_exporter_les_leads_nenvoie_pas_state_None():
         _tool("lemlist_campaign", "lemlist").fn(
             op="export_leads", campaign_id="cam_1", state="scanned")
         assert inst.export_campaign_leads.call_args.kwargs == {"state": "scanned"}
+
+
+# --- Un message trop lourd pour être lu se lit en texte -------------------------
+
+_IMAGE = "data:image/png;base64," + "iVBORw0KGgo" * 30000
+
+
+def test_les_messages_bruts_sont_rendus_tels_quels_par_defaut():
+    """Opt-in : qui lit le HTML brut aujourd'hui le garde."""
+    key, cls = _with_fake_client()
+    brut = [{"html": f"<p>Bonjour</p><img src=\"{_IMAGE}\">"}]
+    with key, cls as client_cls:
+        client_cls.return_value.get_contact_messages.return_value = brut
+        out = _tool("lemlist_inbox").fn(op="messages", contact_id="ctc_1")
+    assert out == {"messages": brut}
+
+
+def test_text_only_rend_le_texte_sans_les_images_collees():
+    """Un email avec une signature en base64 pesait 300 000 caractères pour une
+    ligne de texte : c'est ce texte que l'agent venait chercher."""
+    key, cls = _with_fake_client()
+    brut = [{"id": "m1", "html": "<html><head><style>p{}</style></head><body>"
+             "<p>Bonjour,</p><p>Oui, appelons-nous jeudi&nbsp;!</p>"
+             f"<img src=\"{_IMAGE}\"></body></html>"}]
+    with key, cls as client_cls:
+        client_cls.return_value.get_contact_messages.return_value = brut
+        out = _tool("lemlist_inbox").fn(op="messages", contact_id="ctc_1",
+                                        text_only=True)
+    assert out["messages"] == [{"id": "m1",
+                                "html": "Bonjour,\nOui, appelons-nous jeudi !"}]
+    assert out["truncated_fields"] == 0
+
+
+def test_max_chars_coupe_et_dit_combien_de_textes_sont_coupes():
+    key, cls = _with_fake_client()
+    brut = [{"id": "m1", "text": "a" * 50}, {"id": "m2", "text": "court"}]
+    with key, cls as client_cls:
+        client_cls.return_value.get_contact_messages.return_value = brut
+        out = _tool("lemlist_inbox").fn(op="messages", contact_id="ctc_1",
+                                        max_chars=10)
+    assert out["messages"][0]["text"].startswith("a" * 10 + " [... truncated, 40")
+    assert out["messages"][1]["text"] == "court"
+    assert out["truncated_fields"] == 1
+
+
+@pytest.mark.parametrize("max_chars", [0, -5])
+def test_max_chars_nul_est_refuse(max_chars):
+    """0 n'est pas « pas de limite » : rendu brut sans un mot, l'agent croirait
+    avoir demandé une coupe."""
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        client_cls.return_value.get_contact_messages.return_value = []
+        with pytest.raises(Exception, match="max_chars"):
+            _tool("lemlist_inbox").fn(op="messages", contact_id="ctc_1",
+                                      max_chars=max_chars)
