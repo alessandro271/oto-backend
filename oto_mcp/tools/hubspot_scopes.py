@@ -151,6 +151,57 @@ def permissions_in_message(message) -> list[str]:
     return [i for i in items if i and not i.startswith("[") and not i.endswith("]")]
 
 
+_UNKNOWN_PROPERTY = re.compile(r'Property "([^"]+)" does not exist')
+
+
+def unknown_properties(e) -> list[str]:
+    """The property names a 400 `PROPERTY_DOESNT_EXIST` says this portal does not
+    have — every one of them, an update can name two. HubSpot files each under
+    `errors[]` with that `code`; the name is read from its own sentence
+    (`Property "x" does not exist`, the form seen in full), or else from a
+    `context` key that names a property — never from any other list there
+    (`objectType: ["0-2"]` is not a property). Empty for any other refusal."""
+    body = getattr(e, "body", None)
+    if _status(e) != 400 or not isinstance(body, dict):
+        return []
+    found: list[str] = []
+    for err in body.get("errors") or []:
+        if not isinstance(err, dict) or err.get("code") != "PROPERTY_DOESNT_EXIST":
+            continue
+        ctx = err.get("context") if isinstance(err.get("context"), dict) else {}
+        names = _UNKNOWN_PROPERTY.findall(str(err.get("message") or "")) or [
+            v for k, vals in ctx.items() if "propert" in str(k).lower()
+            and isinstance(vals, list) for v in vals if isinstance(v, str)]
+        found += [n for n in names if n not in found]
+    return found
+
+
+def unknown_property_refusal(e, *, object_type=None) -> Optional[McpError]:
+    """The 400 PROPERTY_DOESNT_EXIST as an actionable refusal, or None for anything else.
+
+    Seen on a real portal, 2026-10-15: an update of a company with `linkedin_url`
+    went to the agent as HubSpot's raw body — a JSON list stuffed in a string —
+    and read as a HubSpot failure to report, not as a name to correct. The way
+    out is on the caller's side: the real internal name, or a property to create."""
+    names = unknown_properties(e)
+    if not names:
+        return None
+    listed = ", ".join(f"`{n}`" for n in names)
+    of = f" of {object_type}" if object_type else ""
+    otype = f" object_type={object_type!r}" if object_type else ""
+    verb = "is not a property" if len(names) == 1 else "are not properties"
+    return _refusal(
+        f"HubSpot refuses this call: {listed} {verb}{of} on this portal "
+        "(400 PROPERTY_DOESNT_EXIST) — the call was refused as a whole, nothing was "
+        "written. Internal names are not the labels shown in HubSpot, and custom "
+        f"properties differ from one portal to the next: read the real names with "
+        f"hubspot_property op='list'{otype} and retry with the right one. If the "
+        "property should exist, create it first (hubspot_property op='create', or "
+        "on the HubSpot side). Retrying the same call unchanged fails the same way.",
+        reason="property_doesnt_exist", status=400, object_type=object_type,
+        properties=names)
+
+
 def family_of(object_type=None, family=None) -> Optional[str]:
     if family:
         return family
@@ -274,12 +325,16 @@ def translate(e, *, object_type=None, object_id=None, family=None,
     """Any HubSpot refusal worth rewriting, as an exception to raise in its place;
     None to let the original travel with its shape and its trace.
 
-    403 MISSING_SCOPES → curated `McpError` naming the scope. 401 / 404 / 429 / an
+    403 MISSING_SCOPES → curated `McpError` naming the scope; 400
+    PROPERTY_DOESNT_EXIST → curated `McpError` naming the properties. 401 / 404 / 429 / an
     HTML body → the same upstream status with a clean message (`_upstream_refusal`).
     Only refusals are rewritten: an empty result is a normal `results: []` and never
     reaches this function."""
     code, body = _status(e), getattr(e, "body", None)
     refus = missing_scopes_refusal(e, object_type=object_type, family=family)
+    if refus is not None:
+        return refus
+    refus = unknown_property_refusal(e, object_type=object_type)
     if refus is not None:
         return refus
     if code == 403 and family == "events":

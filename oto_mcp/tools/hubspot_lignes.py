@@ -30,6 +30,7 @@ from .. import access, session_org
 from ..datastore import par_reference as pr
 from ..datastore.identite import AdresseJson as Adresse
 from .hubspot import _scope_refusal
+from .hubspot_scopes import unknown_properties
 
 #: The property that says "it's the same record", per object type.
 CLE_PAR_DEFAUT = {"contacts": "email", "companies": "domain"}
@@ -258,6 +259,7 @@ def register(mcp: FastMCP) -> None:
         # is in the first, never in the second.
         pousses: list[str] = []
         ecrits = 0
+        proprietes_inconnues: list[str] = []
         try:
             if c is not None and list_id:
                 fiche = c.get_list(list_id) or {}
@@ -328,6 +330,13 @@ def register(mcp: FastMCP) -> None:
                 if _scope_refusal(e, object_type) is not None:
                     recu.arret, traitees = "hubspot_missing_scopes", traitees - 1
                     break
+                inconnues = unknown_properties(e)
+                if inconnues:
+                    # A mapped column HubSpot does not have: every row carries it,
+                    # every row would fail the same way — one stop, named.
+                    recu.arret, traitees = "hubspot_property_doesnt_exist", traitees - 1
+                    proprietes_inconnues = inconnues
+                    break
                 if statut in (401, 429):
                     recu.arret = "rate_limited" if statut == 429 else "hubspot_http_401"
                     traitees -= 1
@@ -364,4 +373,6 @@ def register(mcp: FastMCP) -> None:
                            match_property=prop_cle, on_existing=on_existing,
                            written_back={"id_column": id_column,
                                          "status_column": status_column},
-                           **_avis_existants(recu.comptes.get(EXISTE, 0), on_existing))
+                           **_avis_existants(recu.comptes.get(EXISTE, 0), on_existing),
+                           **({"unknown_properties": proprietes_inconnues}
+                              if proprietes_inconnues else {}))

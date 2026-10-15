@@ -166,6 +166,28 @@ def test_echec_partiel_une_ligne_refusee_les_autres_passent(banc):
     _sans_donnee_personnelle(out)
 
 
+def test_une_propriete_inconnue_arrete_le_lot_au_lieu_d_echouer_chaque_ligne(banc):
+    """Une colonne mappée vers une propriété que le portail n'a pas : TOUTES les
+    lignes échoueraient pareil. Un arrêt, qui nomme la propriété — pas N
+    `hubspot_http_400` muets."""
+    from oto.tools.common.errors import UpstreamHTTPError
+    fn, client = banc
+    client.search_objects.return_value = {"results": []}
+    client.create_object.side_effect = UpstreamHTTPError(400, {
+        "status": "error", "category": "VALIDATION_ERROR",
+        "errors": [{"code": "PROPERTY_DOESNT_EXIST",
+                    "message": 'Property "firstname" does not exist'}]},
+        service="hubspot")
+
+    ns, ids = _table()
+    out = fn(datastore=ns, object_type="contacts", field_mapping=_MAPPING, row_ids=ids)
+    assert out["stopped"] == "hubspot_property_doesnt_exist"
+    assert out["unknown_properties"] == ["firstname"]
+    assert client.create_object.call_count == 1, "arrêté à la première ligne"
+    assert out["errors"] == [] and "failed" not in out
+    _sans_donnee_personnelle(out)
+
+
 def test_la_propriete_de_rapprochement_doit_etre_mappee(banc):
     from oto_mcp.mcp_errors import McpError
     fn, client = banc
