@@ -295,6 +295,11 @@ _DECLARATIONS: tuple[str, ...] = (
     # data (NIR, IBAN, medical absence reasons), served through an allowlist,
     # see `tools/payfit.py`.
     "payfit",
+    # --- staff scheduling and time-and-attendance, read-only — wired 2026-10-15 ---
+    # Neighbour of `payfit`/`lucca` by trade (HR / personnel): Sivan is a staff
+    # scheduling and time-clock product. A GROUP-level API key reads every company
+    # of the group; read-only.
+    "sivan",
     # --- a project audio becomes a project page — ADR 0074, #674 ------------
     "transcription",
     # --- US occupations reference — wired 2026-09-22 --------------------------
