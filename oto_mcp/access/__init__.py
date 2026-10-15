@@ -113,10 +113,10 @@ import sys
 import types
 
 from . import (scope, quotas, cascade, platform_grant, rbac, indices, resolved_credential,
-               tenant_budget, resolve_anon, resolve, views, status, entitlements)
+               tenant_budget, resolve_anon, resolve, views, status, entitlements, prets)
 
 _MODULES = (scope, quotas, cascade, platform_grant, rbac, indices, resolved_credential,
-            tenant_budget, resolve_anon, resolve, views, status, entitlements)
+            tenant_budget, resolve_anon, resolve, views, status, entitlements, prets)
 
 # Flat re-export (public + single-underscore privates; dunders stay with the
 # package) + `name -> modules that define it` map, which serves the propagation

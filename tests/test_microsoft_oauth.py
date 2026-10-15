@@ -203,6 +203,9 @@ def env(monkeypatch):
     monkeypatch.setattr(credentials_store, "set_instance_sharing", coffre.set_instance_sharing)
     monkeypatch.setattr(db, "member_instance_suspended", lambda *a, **k: False)
     monkeypatch.setattr(db, "insert_tool_call", lambda *a, **k: None)
+    # Les équipes de la personne (prêts à une équipe) : aucune, sauf banc qui en pose.
+    from oto_mcp import group_store
+    monkeypatch.setattr(group_store, "list_groups_for_user", lambda sub, org_id=None: [])
     # La mesure à côté de la résolution (L7) lit la base : hors sujet ici.
     monkeypatch.setenv("OTO_L7_SHADOW", "0")
     monkeypatch.setattr(access, "current_org", lambda sub: ORG)
@@ -922,16 +925,17 @@ def pret(env, monkeypatch):
 
 def test_un_pret_deja_enregistre_sert_l_emprunteuse_sur_outlook(pret):
     """La forme exacte du prêt en base (share_side `user:<sub>` sur la ligne du porteur,
-    posé avant ce correctif) : visible et utilisable sans le refaire."""
+    posé avant ce correctif) : visible et utilisable sans le refaire — NOMMÉ."""
     pret.coffre.poser_chez(CHEZ_PRETEUSE, "jane@contoso.example", "RT-JANE",
                            {"scopes": SCOPE_COURRIER}, prete_a=[EMPRUNTEUSE])
-    assert pret.auth.access_token_for(EMPRUNTEUSE, "outlook") == "AT:RT-JANE"
+    jane = pret.sous_compte("jane@contoso.example")
+    assert jane(pret.auth.access_token_for, EMPRUNTEUSE, "outlook") == "AT:RT-JANE"
     # Le service que le compte n'a pas autorisé reste refusé en nommant la carte.
-    with pytest.raises(McpError):
-        pret.auth.access_token_for(EMPRUNTEUSE, "sharepoint")
+    with pytest.raises((McpError, RuntimeError)):
+        jane(pret.auth.access_token_for, EMPRUNTEUSE, "sharepoint")
     # Personne d'autre : le prêt est nominatif.
     with pytest.raises(McpError):
-        pret.auth.access_token_for("quelqu-un-d-autre", "outlook")
+        jane(pret.auth.access_token_for, "quelqu-un-d-autre", "outlook")
 
 
 def test_le_compte_prete_apparait_marque_et_relie_la_carte(pret, monkeypatch):
@@ -954,7 +958,9 @@ def test_le_compte_prete_apparait_marque_et_relie_la_carte(pret, monkeypatch):
     m = FastMCP("t")
     outils.register(m)
     (compte,) = asyncio.run(m.get_tool("microsoft_accounts")).fn()["accounts"]
-    assert compte["account"] == "jane@contoso.example" and compte["lent_by"] == PRETEUSE
+    # La prêteuse se nomme par son adresse, jamais par son sub brut.
+    assert compte["account"] == "jane@contoso.example"
+    assert compte["lent_by"] == "preteuse@contoso.example"
     assert compte["is_default"] is False and compte["services"] == ["outlook"]
 
 
@@ -1003,4 +1009,196 @@ def test_bout_en_bout_preter_outlook_puis_l_emprunteuse_l_emploie(pret, monkeypa
                                  sharing.LendInstanceInput(connector="outlook", to=EMPRUNTEUSE))
     assert (out["connector"], out["account"], out["lent_to"]) == (
         "microsoft", "jane@contoso.example", [EMPRUNTEUSE])
-    assert pret.auth.access_token_for(EMPRUNTEUSE, "outlook") == "AT:RT-JANE"
+    assert pret.sous_compte("jane@contoso.example")(
+        pret.auth.access_token_for, EMPRUNTEUSE, "outlook") == "AT:RT-JANE"
+
+
+# ── L'incident : un compte prêté ne sert jamais en silence ───────────────────────────
+#
+# Mesuré en prod : une emprunteuse sans compte Microsoft propre s'est vu servir, sans le
+# savoir, le compte qu'une collègue lui avait prêté (recherche, brouillon, corbeille dans
+# la boîte de la collègue) ; dès qu'elle a connecté le sien, la même conversation a
+# basculé sur sa boîte, sans aucun signal.
+
+def _repondre(outil, payload=None):
+    """Ce que l'agent reçoit : la réponse de l'outil passée par l'écho du middleware,
+    avec le relevé de résolution que le vrai résolveur vient de remplir."""
+    from oto_mcp import redaction
+    from oto_mcp.middleware import call_context
+
+    class _R:
+        def __init__(self, p):
+            self.structured_content, self.content, self.is_error = p, [], False
+
+    from oto_mcp import session_org
+    trace = session_org.current_call_trace()
+    out = call_context._echo_account(
+        _R(payload or {"ok": True}), outil,
+        rappel=call_context._rappel_hors_boucle(trace["resolved_account"],
+                                                trace["credential_row"]))
+    return redaction.extract_payload(out)
+
+
+@pytest.fixture
+def trace(monkeypatch):
+    from oto_mcp import session_org
+    from oto_mcp.middleware import call_context
+    monkeypatch.setattr(call_context, "current_user_sub_from_token", lambda: EMPRUNTEUSE)
+    tok = session_org.set_call_trace({})
+    yield
+    session_org.reset_call_trace(tok)
+
+
+def test_incident_sans_compte_propre_refus_qui_nomme_le_pret(pret, trace):
+    pret.coffre.poser_chez(CHEZ_PRETEUSE, "jane@contoso.example", "RT-JANE",
+                           {"scopes": SCOPE_COURRIER}, prete_a=[EMPRUNTEUSE])
+    with pytest.raises(McpError) as e:
+        pret.auth.access_token_for(EMPRUNTEUSE, "outlook")
+    err = e.value.error
+    assert err.data["code"] == "account_required"
+    assert "`_account=`" in err.message and "`jane@contoso.example`" in err.message
+    assert "lent by preteuse@contoso.example" in err.message
+    assert err.data["lent_accounts"] == [{"account": "jane@contoso.example",
+                                          "lent_by": "preteuse@contoso.example"}]
+    pret.coeur.auth.refresh.assert_not_called()      # rien n'est parti chez Microsoft
+
+
+def test_incident_avec_account_du_pret_servi_et_la_reponse_le_dit(pret, trace):
+    pret.coffre.poser_chez(CHEZ_PRETEUSE, "jane@contoso.example", "RT-JANE",
+                           {"scopes": SCOPE_COURRIER}, prete_a=[EMPRUNTEUSE])
+    assert pret.sous_compte("jane@contoso.example")(
+        pret.auth.access_token_for, EMPRUNTEUSE, "outlook") == "AT:RT-JANE"
+    assert _repondre("outlook_message") == {
+        "ok": True, "_account": "jane@contoso.example",
+        "lent_by": "preteuse@contoso.example"}
+
+
+def test_incident_avec_compte_propre_sans_account_le_sien_et_la_reponse_le_nomme(pret, trace):
+    pret.coffre.lignes[("member", f"{ORG}:{EMPRUNTEUSE}", "moi@fabrikam.example")] = {
+        "secret": "RT-MOI", "meta": {"scopes": SCOPE_COURRIER}, "set_by": EMPRUNTEUSE,
+        "set_at": "2026-10-05T00:00:00Z"}
+    pret.coffre.poser_chez(CHEZ_PRETEUSE, "jane@contoso.example", "RT-JANE",
+                           {"scopes": SCOPE_COURRIER}, prete_a=[EMPRUNTEUSE])
+    assert pret.auth.access_token_for(EMPRUNTEUSE, "outlook") == "AT:RT-MOI"
+    assert _repondre("outlook_message") == {"ok": True, "_account": "moi@fabrikam.example"}
+
+
+def test_un_pret_qui_ne_couvre_pas_le_service_ne_change_pas_le_refus(pret):
+    """Un prêt qui n'a pas autorisé CE service n'est pas proposé : le refus reste celui
+    d'aucun compte (rien à nommer)."""
+    pret.coffre.poser_chez(CHEZ_PRETEUSE, "jane@contoso.example", "RT-JANE",
+                           {"scopes": SCOPE_COURRIER}, prete_a=[EMPRUNTEUSE])
+    with pytest.raises(McpError) as e:
+        pret.auth.access_token_for(EMPRUNTEUSE, "sharepoint")
+    assert (getattr(e.value.error, "data", None) or {}).get("code") != "account_required"
+
+
+def test_le_schema_annonce_account_sur_toutes_les_cartes_microsoft():
+    """Annonce STATIQUE, comme Google : l'annonce dynamique compte les lignes sous le
+    porteur et ne voit pas les prêts — l'emprunteuse ne verrait jamais l'axe qu'elle doit
+    passer pour nommer le prêt."""
+    from oto_mcp import call_axes
+
+    for outil in ("microsoft_accounts", "sharepoint_file", "sharepoint_site",
+                  "outlook_message", "outlook_compose", "outlook_calendar_calendars",
+                  "outlook_calendar_event", "teams_spaces", "teams_message", "teams_send"):
+        assert "_account" in {a.param for a in call_axes.axes_for(outil)}, outil
+    for carte in (PORTEUR, "sharepoint", "outlook", "outlook_calendar", "teams"):
+        assert providers.REGISTRY[carte].account_axis_static, carte
+
+
+# ── Le prêt à une ÉQUIPE (`oto_instance op=lend to_group=<id>`) ─────────────────────
+#
+# Mesuré en prod : `lend connector=microsoft to_group=<id>` répondait ok, mais seuls les
+# prêts `user:<sub>` étaient lus — un prêt à une équipe accepté puis jamais servi, sans
+# refus. Il est servi aux membres de l'équipe, dans l'org du prêt, avec la règle du prêt
+# nommé : seulement sur `_account` explicite.
+
+EQUIPE = 49
+
+
+@pytest.fixture
+def pret_equipe(pret, monkeypatch):
+    """La forme exacte posée en prod : share_side `group:<id>` sur la ligne du porteur."""
+    from oto_mcp import group_store, roles
+    membres = {EMPRUNTEUSE}
+    monkeypatch.setattr(group_store, "list_groups_for_user", lambda sub, org_id=None: (
+        [{"group_id": EQUIPE, "org_id": ORG, "name": "Ventes"}]
+        if sub in membres and org_id == ORG else []))
+    monkeypatch.setattr(group_store, "get_group",
+                        lambda gid: {"id": gid, "org_id": ORG, "name": "Ventes"}
+                        if gid == EQUIPE else None)
+    monkeypatch.setattr(group_store, "is_group_member",
+                        lambda sub, gid: gid == EQUIPE and sub in membres)
+    monkeypatch.setattr(roles, "is_org_member", lambda sub, org: org == ORG)
+    pret.coffre.poser_chez(CHEZ_PRETEUSE, "jane@contoso.example", "RT-JANE",
+                           {"scopes": SCOPE_COURRIER})
+    pret.coffre.prets[(CHEZ_PRETEUSE, "jane@contoso.example")] = [f"group:{EQUIPE}"]
+    return pret
+
+
+def test_pret_a_l_equipe_servi_au_membre_sur_account(pret_equipe, trace):
+    jane = pret_equipe.sous_compte("jane@contoso.example")
+    assert jane(pret_equipe.auth.access_token_for, EMPRUNTEUSE, "outlook") == "AT:RT-JANE"
+    assert _repondre("outlook_message") == {
+        "ok": True, "_account": "jane@contoso.example",
+        "lent_by": "preteuse@contoso.example",
+        "lent_via_group": {"id": EQUIPE, "name": "Ventes"}}
+
+
+def test_pret_a_l_equipe_sans_account_refus_qui_le_nomme(pret_equipe):
+    with pytest.raises(McpError) as e:
+        pret_equipe.auth.access_token_for(EMPRUNTEUSE, "outlook")
+    err = e.value.error
+    assert err.data["code"] == "account_required"
+    assert ("`jane@contoso.example` (lent by preteuse@contoso.example via the team Ventes)"
+            in err.message)
+    assert err.data["lent_accounts"][0]["via_group"] == {"id": EQUIPE, "name": "Ventes"}
+    pret_equipe.coeur.auth.refresh.assert_not_called()
+
+
+def test_pret_a_l_equipe_invisible_pour_un_non_membre(pret_equipe):
+    autre = "hors-equipe"
+    with pytest.raises(McpError):
+        pret_equipe.sous_compte("jane@contoso.example")(
+            pret_equipe.auth.access_token_for, autre, "outlook")
+    assert pret_equipe.auth.accounts_for(autre) == []
+
+
+def test_pret_a_l_equipe_liste_dans_microsoft_accounts_et_les_identites(pret_equipe,
+                                                                        monkeypatch):
+    from fastmcp import FastMCP
+
+    from oto_mcp import access
+    from oto_mcp.connectors import identities
+    from oto_mcp.tools import microsoft as outils
+
+    (ident,) = identities.list_identities(EMPRUNTEUSE, "outlook")
+    assert ident["granted"] is True and ident["via_group"] == {"id": EQUIPE, "name": "Ventes"}
+    monkeypatch.setattr(access, "current_user_sub_or_raise", lambda: EMPRUNTEUSE)
+    m = FastMCP("t")
+    outils.register(m)
+    (compte,) = asyncio.run(m.get_tool("microsoft_accounts")).fn()["accounts"]
+    assert compte["lent_by"] == "preteuse@contoso.example"
+    assert compte["lent_via_group"] == {"id": EQUIPE, "name": "Ventes"}
+
+
+def test_un_pret_nominatif_et_a_l_equipe_ne_compte_qu_une_fois(pret_equipe):
+    pret_equipe.coffre.prets[(CHEZ_PRETEUSE, "jane@contoso.example")] = [
+        f"user:{EMPRUNTEUSE}", f"group:{EQUIPE}"]
+    (c,) = pret_equipe.auth.lent_accounts(EMPRUNTEUSE)
+    assert "via_group" not in c
+
+
+def test_preter_a_une_equipe_microsoft_est_servi_donc_accepte(pret_equipe, monkeypatch):
+    import types as _t
+
+    from oto_mcp import db
+    from oto_mcp.capabilities.connectors import sharing
+    pret_equipe.coffre.prets[(CHEZ_PRETEUSE, "jane@contoso.example")] = []
+    out = sharing._lend_instance(_t.SimpleNamespace(sub=PRETEUSE), sharing.LendInstanceInput(
+        connector="outlook", to_group=EQUIPE))
+    assert out["lent_to_groups"] == [EQUIPE]
+    assert "`_account=jane@contoso.example`" in out["note"]
+    assert pret_equipe.sous_compte("jane@contoso.example")(
+        pret_equipe.auth.access_token_for, EMPRUNTEUSE, "outlook") == "AT:RT-JANE"

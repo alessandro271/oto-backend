@@ -26,13 +26,18 @@ def register(mcp: FastMCP) -> None:
         A service missing from the list has not been authorised on that account yet:
         connect it from its own connector card. `directory` is the client's directory the
         account signs in to (a guest account), null for its home directory.
-        `lent_by` (present only then) = the sub of the colleague who LENT you that
-        account: usable like yours, not yours to revoke.
+        `lent_by` (present only then) = the e-mail (or name) of the colleague who LENT you
+        that account: not yours to revoke; `lent_via_group` ({id, name}) when it is lent to
+        a team of yours rather than to you.
         Pass `account` as `_account` to the service tools; omitted, the project's
-        pinned account, else the only one, else the default one — and with no account
-        of your own, the only account lent to you for that service.
+        pinned account, else your only one, else your default one. A lent account is
+        used ONLY when `_account` names it: with no account of your own, a call without
+        `_account` is refused and lists the lent accounts.
         """
         sub = access.current_user_sub_or_raise()
+        comptes = ms_auth.accounts_for(sub)
+        preteurs = access.libelles_preteurs(c["lent_by"] for c in comptes
+                                            if c.get("lent_by"))
         return {
             "accounts": [
                 {"account": c["account"],
@@ -40,9 +45,10 @@ def register(mcp: FastMCP) -> None:
                  "is_default": bool((c.get("meta") or {}).get("is_default")),
                  "services": ms_auth.services_granted((c.get("meta") or {}).get("scopes")),
                  "directory": (c.get("meta") or {}).get("tenant"),
-                 # Lent by a peer (`oto_instance op=lend`): usable via `_account`,
-                 # not yours to revoke.
-                 **({"lent_by": c["lent_by"]} if c.get("lent_by") else {})}
-                for c in ms_auth.accounts_for(sub)
+                 # Lent by a peer (`oto_instance op=lend`): used only when `_account`
+                 # names it, not yours to revoke.
+                 **({"lent_by": preteurs[c["lent_by"]]} if c.get("lent_by") else {}),
+                 **({"lent_via_group": c["via_group"]} if c.get("via_group") else {})}
+                for c in comptes
             ]
         }

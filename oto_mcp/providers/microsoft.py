@@ -30,7 +30,11 @@ CONNECTOR = _c(
     # OAuth ⟹ the derivation would say single; yet a person links several Microsoft
     # accounts (their directory, a client's) and the vault holds one row per account
     # (`auth/microsoft.persist_grant`). Same provider reason as google.
-    cardinality="multi",
+    # `_account` announced STATICALLY, on the carrier and on every service (`service`
+    # below), like google: the dynamic announcement counts vault rows under the carrier
+    # and never sees a loan, so a borrower — whose lent account serves ONLY when
+    # `_account` names it — would never see the axis to name it.
+    cardinality="multi", account_axis_static=True,
     label="Microsoft 365 account",
     help="the Microsoft 365 account that the Microsoft services borrow — each service "
          "connects from its own card",
@@ -53,7 +57,8 @@ def service(name: str, *, label: str, help: str, href: str,
     """A Microsoft SERVICE connector — one card per service, on the shared account.
 
     What it shares with the other services — the auth mode, the credential delegation,
-    the multi-account cardinality, the publisher — is described HERE, at the account
+    the multi-account cardinality and its static `_account` axis, the publisher — is
+    described HERE, at the account
     carrier, because it is a property of the ACCOUNT, not of the service (same reason
     as `google.service`).
 
@@ -66,7 +71,7 @@ def service(name: str, *, label: str, help: str, href: str,
         auth_modes={"byo_user"},
         personal_session=True, secret_kind="oauth",
         credential_of="microsoft",
-        cardinality="multi",
+        cardinality="multi", account_axis_static=True,
         publisher="Microsoft",
         label=label, help=help, href=href,
         modules=modules or (name,),

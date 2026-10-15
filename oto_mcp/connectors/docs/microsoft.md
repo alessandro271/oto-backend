@@ -2,6 +2,7 @@
 
 this connector is the **account**: the Microsoft address, its token, the directory it signs in to, the default account. each Microsoft service — SharePoint & OneDrive, Outlook, Outlook Calendar, Teams — is a connector in its own right, with **its own** consent (its permissions only): authorise it from its card, on the same account. Microsoft adds each new consent to the ones already given: one account, one connection, several services.
 - you can link **several** Microsoft accounts; each service tool acts on the one the call names with `_account=<name>`, otherwise the one the project pins — on the service's card, otherwise on this one —, otherwise the only one, otherwise the default. an unknown name is refused, never replaced by another
+- an account a colleague **lent** you is used **only** when the call names it with `_account=<name>`: with no account of your own, a call without it is refused and lists the lent accounts and who lent them. every response says which account served (`_account`) and, for a lent one, whose it is (`lent_by`)
 - "linking an account" here only asks for your identity: the services add their permissions from their cards
 - work or school accounts only, on the directory of their organization (personal Microsoft accounts have no SharePoint, Outlook for business or Teams of their own)
 

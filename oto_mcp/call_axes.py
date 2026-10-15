@@ -157,8 +157,8 @@ async def resolve_org_guarded(org: object) -> int:
 def _has_account_axis(name: str) -> bool:
     """Le tool ADVERTISE-t-il l'axe compte dans son schéma, STATIQUEMENT ? Deux familles
     (ADR 0024/0051), toutes deux CURÉES :
-    - **annonce statique déclarée** (`Connector.account_axis_static` : google
-      « N comptes OAuth », zoho « 2 Zoho », browser, folk) — depuis le 29/08 c'est un
+    - **annonce statique déclarée** (`Connector.account_axis_static` : google et
+      microsoft « N comptes OAuth », porteurs ET services, zoho « 2 Zoho », browser, folk) — depuis le 29/08 c'est un
       champ de l'entrée du connecteur, plus la liste transverse
       `MULTI_ACCOUNT_PROVIDERS`, qui mélangeait cette annonce et la cardinalité ;
     - **porteur d'identités** (`personal_cross_org`) : 1 clé → N identités opérées
@@ -603,7 +603,7 @@ def _is_instance_scopable_tool(name: str) -> bool:
 async def _pin_instance(value: object, tool_name: str) -> list[UndoEntry]:
     """Épingle l'instance explicite de l'appel (§C : `_instance=` prime sur la
     préférence de proximité, jamais de fallback si elle ne résout pas) + co-pose
-    son org. Gardes : ref bien formé, connecteur du ref = connecteur du TOOL
+    son org. Gardes : ref bien formé, PORTEUR du ref = porteur du connecteur du TOOL
     (anti-confusion), accès par niveau."""
     if value is None or value == "":
         return []
@@ -617,11 +617,20 @@ async def _pin_instance(value: object, tool_name: str) -> list[UndoEntry]:
                      "via oto_instance(op='list') (opaque, à repasser tel quel).")))
     sub = require_axis_sub("_instance")
     con = providers.connector_for_namespace(namespace_of(tool_name))
-    if con is not None and ref.connector is not None and ref.connector != con.name:
-        raise McpError(ErrorData(
-            code=INVALID_PARAMS,
-            message=(f"Paramètre `_instance` refusé : ce ref est une instance "
-                     f"`{ref.connector}`, pas `{con.name}` (le connecteur de ce tool).")))
+    if ref.connector is not None:
+        # A ref names a VAULT row, so it is compared under the CARRIER, on both sides:
+        # the ref of a Microsoft account (`…:microsoft:…`, what `oto_instance op=list`
+        # gives) serves an `outlook_*` tool, and a ref written under the service card
+        # (`…:outlook:…`) is the same row — canonicalized to the carrier's ref here, the
+        # one the guard and the resolution read (`access/resolve.py`).
+        porteur = providers.credential_provider(ref.connector)
+        if con is not None and porteur != providers.credential_provider(con.name):
+            raise McpError(ErrorData(
+                code=INVALID_PARAMS,
+                message=(f"`_instance` refused: this ref is a `{ref.connector}` instance, "
+                         f"not `{con.name}` (this tool's connector).")))
+        if porteur != ref.connector:
+            ref = dataclasses.replace(ref, connector=porteur)
     from . import access
     org = await run_in_threadpool(access.guard_instance_access, sub, ref)
     undo: list[UndoEntry] = []

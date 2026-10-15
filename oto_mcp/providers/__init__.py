@@ -546,7 +546,9 @@ def credential_provider(name: str) -> str:
     **THE seam of delegation** (`Connector.credential_of`): everything that touches the
     vault, the cascade, the quota, the platform key or the layer-3 option asks
     its question through it; everything that GATES (activation, ACL, selection,
-    visibility, `_instance=` pin) keeps the BARE name. The two questions look alike
+    visibility) keeps the BARE name. An instance ref names a VAULT row, so the
+    `_instance=` pin is compared under the carrier (`call_axes._pin_instance`,
+    `access/resolve.py`). The two questions look alike
     and are not the same — exactly the confusion that produced, on
     2026-07-07, a green "org key" card next to a red "Blocked".
 

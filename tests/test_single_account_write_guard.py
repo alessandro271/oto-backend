@@ -218,7 +218,10 @@ def test_l_annonce_STATIQUE_de_l_axe_compte_n_est_plus_la_cardinalite():
     handshake, donc curé), la cardinalité parle du COFFRE. Quatre connecteurs annoncent
     statiquement ; 74 sont multi-compte."""
     statiques = sorted(c.name for c in providers._REGISTRY_LIST if c.account_axis_static)
+    # + microsoft et ses services (15/10/2026) : un compte prêté ne sert que nommé par
+    # `_account`, que l'annonce dynamique ne montrait jamais à l'emprunteuse.
     assert statiques == ["bigquery", "browser", "calendar", "chat", "drive", "folk", "gmail",
-                         "google", "google_ads", "sheets", "tasks", "zoho"]
+                         "google", "google_ads", "microsoft", "outlook", "outlook_calendar",
+                         "sharepoint", "sheets", "tasks", "teams", "zoho"]
     multi = [c.name for c in providers._REGISTRY_LIST if c.auth_multi_account]
     assert set(statiques) < set(multi) and len(multi) > len(statiques)

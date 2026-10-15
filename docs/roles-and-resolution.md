@@ -189,10 +189,28 @@ se rejoue en remplaçant la règle d'écriture de la façade, pas en lisant le c
 >   (`middleware.call_context._echo_account`, posé par `CallContextMiddleware` au retour). Sans lui,
 >   l'agent postait sur l'un de ses deux workspaces sans jamais savoir lequel : l'identité
 >   effective ne vivait que dans le journal, qu'il ne lit pas. Trois gardes : compte nommé
->   seulement (mono ⟹ aucun bruit), même connecteur que l'outil appelé (un tool composite
->   résout des credentials auxiliaires), payload dict. L'écho est injecté **au-dessus de
+>   seulement (mono ⟹ aucun bruit), même **porteur** que l'outil appelé (un tool composite
+>   résout des credentials auxiliaires ; comparer les noms nus taisait l'écho d'un compte
+>   Microsoft prêté, résolu sous `microsoft` pour un outil `outlook_*`), payload dict.
+>   Un compte **prêté** par un pair (ligne membre d'un autre sub, lue dans le relevé
+>   `credential_row`) ajoute `lent_by` = e-mail (ou nom) du prêteur, et `lent_via_group`
+>   pour un prêt à une équipe (`access.rappel_du_compte`, `access/prets.py`). L'écho est injecté **au-dessus de
 >   la rédaction** — sinon il serait redacté, et la capture passive de schéma
 >   l'enregistrerait comme un champ du connecteur.
+> - **le prêt ne sert que nommé** (Microsoft, 15/10/2026) — un compte prêté ne sert que si
+>   `_account=` (ou `_instance=`) le nomme ; sans nom ni compte propre, refus
+>   `account_required` qui liste les prêts et leur prêteur — règle COMMUNE
+>   `access.pret_a_servir` (`access/prets.py`), Microsoft son premier utilisateur ; les
+>   comptes de l'org ou de l'équipe ELLES-MÊMES ne sont pas des prêts et servent sans nom.
+>   Un prêt à une ÉQUIPE (`group:<id>`) est servi à ses membres, dans l'org du prêt ; une
+>   équipe à qui rien ne servirait le prêt (porteur non org-partageable hors Microsoft)
+>   est refusée à la pose (`team_loan_not_served`).
+>   Mesuré : une emprunteuse sans compte propre opérait la boîte d'une collègue sans le
+>   savoir, puis la sienne dès qu'elle l'a connectée, sans un signal. `_account` est annoncé
+>   STATIQUEMENT sur les cartes Microsoft (porteur + services, comme Google) : l'annonce
+>   dynamique ne voit pas les prêts. Une même ligne du coffre a UNE réf d'instance, celle
+>   du porteur, qu'on l'atteigne par la carte ou par le porteur (`_pin_instance` et la
+>   résolution comparent les porteurs, la trace du journal l'écrit sous le porteur).
 > - `oto_identity` porte enfin `scope` côté agent (member/org/group), comme la face REST.
 
 ## Walker de cascade — source unique (2026-07-16, `access/cascade.py`)

@@ -699,6 +699,8 @@ def _microsoft_list(sub: str, service: str) -> list[dict]:
             ident.update(granted=True, is_default=False,
                          owner={"sub": c["lent_by"], "email": emails.get(c["lent_by"]),
                                 "org": c.get("lender_org")})
+            if c.get("via_group"):          # lent to a team of hers (`via_group`, #55)
+                ident["via_group"] = c["via_group"]
         out.append(ident)
     return out
 

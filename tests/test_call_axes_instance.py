@@ -240,3 +240,107 @@ def test_resolution_foreign_provider_ref_ignored(resolution, monkeypatch):
     finally:
         session_org.reset_call_instance(tok)
     assert "no longer resolves" not in str(ei.value)   # erreur cascade, pas instance
+
+
+# ─── 3. Un porteur, une réf : la carte de service et le porteur (Microsoft, Google) ──
+#
+# Une ligne du coffre Microsoft vit sous le PORTEUR `microsoft` ; ses outils s'appellent
+# `outlook_*`, `sharepoint_*`… La réf rendue par `oto_instance op=list` est celle du
+# porteur : elle était REFUSÉE sur un outil `outlook_*` (comparaison des noms nus), et une
+# réf écrite sous la carte (`…:outlook:…`) passait la pose puis était IGNORÉE à la
+# résolution, qui compare au porteur — l'appel retombait sur la cascade, donc
+# potentiellement sur un AUTRE compte que celui demandé.
+
+def test_pin_instance_ref_du_porteur_sert_l_outil_du_service(monkeypatch):
+    monkeypatch.setattr(roles, "is_org_member", lambda sub, org: True)
+    ref = instance_refs.make_member_ref(8, "u", "microsoft", "jane@contoso.example")
+
+    async def _scenario():
+        undo = await call_axes._pin_instance(ref, "outlook_message")
+        try:
+            pinned = session_org.current_call_instance()
+            assert (pinned.connector, pinned.account) == ("microsoft", "jane@contoso.example")
+        finally:
+            _unpin(undo)
+
+    asyncio.run(_scenario())
+
+
+def test_pin_instance_ref_de_la_carte_est_ramenee_au_porteur(monkeypatch):
+    """Même ligne, même réf : la réf écrite sous la carte est canonisée en celle du
+    porteur AVANT la garde et la résolution (qui lisent le coffre sous lui)."""
+    monkeypatch.setattr(roles, "is_org_member", lambda sub, org: True)
+    vu = []
+    real_guard = access.guard_instance_access
+    monkeypatch.setattr(access, "guard_instance_access",
+                        lambda sub, r: (vu.append(r.connector), real_guard(sub, r))[1])
+    ref = instance_refs.make_member_ref(8, "u", "outlook", "jane@contoso.example")
+
+    async def _scenario():
+        undo = await call_axes._pin_instance(ref, "outlook_message")
+        try:
+            pinned = session_org.current_call_instance()
+            assert instance_refs.format_ref(pinned) == instance_refs.make_member_ref(
+                8, "u", "microsoft", "jane@contoso.example")
+        finally:
+            _unpin(undo)
+
+    asyncio.run(_scenario())
+    assert vu == ["microsoft"]
+
+
+def test_pin_instance_google_ref_du_porteur_sert_gmail(monkeypatch):
+    monkeypatch.setattr(roles, "is_org_member", lambda sub, org: True)
+    ref = instance_refs.make_member_ref(8, "u", "google", "moi@exemple.test")
+
+    async def _scenario():
+        undo = await call_axes._pin_instance(ref, "gmail_message")
+        _unpin(undo)
+
+    asyncio.run(_scenario())
+
+
+def test_pin_instance_porteur_etranger_reste_refuse():
+    ref = instance_refs.make_org_ref(8, "microsoft", "jane@contoso.example")
+    with pytest.raises(McpError, match="gmail"):
+        asyncio.run(call_axes._pin_instance(ref, "gmail_message"))
+
+
+@pytest.mark.parametrize("connecteur_du_ref", ["microsoft", "outlook"])
+def test_resolution_instance_microsoft_par_la_carte_ou_le_porteur(resolution, monkeypatch,
+                                                                   connecteur_du_ref):
+    """La résolution compare les PORTEURS des deux côtés : la ligne `microsoft` est lue,
+    jamais la cascade (le palier membre n'est pas consulté)."""
+    from oto_mcp import db
+    monkeypatch.setattr(db, "get_member_api_key",
+                        lambda *a, **k: pytest.fail("cascade consultée"))
+    eid = credentials_store.member_id(8, "boss")
+    resolution[(credentials_store.MEMBER, eid, "microsoft", "jane@contoso.example")] = "RT"
+    tok = _pin(instance_refs.make_member_ref(8, "boss", connecteur_du_ref,
+                                             "jane@contoso.example"))
+    try:
+        rc = access._resolve_credential_impl("outlook", "byo", "u")
+    finally:
+        session_org.reset_call_instance(tok)
+    assert rc.secret == "RT" and rc.account == "jane@contoso.example"
+    assert (rc.entity_type, rc.entity_id) == (credentials_store.MEMBER, eid)
+
+
+def test_la_trace_ecrit_la_ref_du_porteur(monkeypatch):
+    """Le journal (`instance`) nomme la ligne sous son porteur, qu'elle ait été atteinte
+    par la carte du service (`outlook`) ou par le porteur : UNE réf par ligne, celle
+    qu'`oto_instance op=list` rend et qu'`_instance=` accepte."""
+    from oto_mcp.access import resolve
+    from oto_mcp.access.resolved_credential import ResolvedCredential
+    eid = credentials_store.member_id(8, "u")
+    tok = session_org.set_call_trace({})
+    try:
+        resolve._note_resolved_instance(ResolvedCredential(
+            "outlook", "RT", False, "user", credentials_store.MEMBER, eid,
+            account="jane@contoso.example"))
+        trace = session_org.current_call_trace()
+    finally:
+        session_org.reset_call_trace(tok)
+    assert trace["instance"] == instance_refs.make_member_ref(
+        8, "u", "microsoft", "jane@contoso.example")
+    assert trace["resolved_connector"] == "outlook"

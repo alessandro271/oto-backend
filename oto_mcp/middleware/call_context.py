@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 import logging
+from typing import Optional
 
 from fastmcp.server.middleware import Middleware
 from starlette.concurrency import run_in_threadpool
 
-from .. import call_axes, guide_run, redaction, run_org, session_org
+from .. import access, call_axes, guide_run, providers, redaction, run_org, session_org
 from ..auth.hooks import current_user_sub_from_token
 from ..connectors import access_level_gate, activation_gate
 from ..tool_visibility import namespace_of
@@ -30,19 +31,27 @@ def _cible(name: str, args: dict) -> str:
     return vise if isinstance(vise, str) and vise else name
 
 
-def _echo_account(result, tool_name: str):
-    """Dit à l'agent SOUS QUEL COMPTE l'appel est parti, quand il en a plusieurs.
+def _echo_account(result, tool_name: str, rappel: Optional[dict] = None):
+    """Dit à l'agent SOUS QUEL COMPTE l'appel est parti, quand il en a plusieurs — et,
+    pour un compte PRÊTÉ, à qui il est : `rappel` = le descripteur de la règle commune
+    (`access.rappel_du_compte` : `_account`, `lent_by`, `lent_via_group`), par défaut
+    `{_account}` seul.
 
     Un agent qui détient deux workspaces Slack en visait un — par défaut posé, par
     épinglage de projet ou par `_account=` — sans que rien ne le lui confirme :
     l'identité effective ne vivait que dans le journal, qu'il ne lit pas. Un envoi
-    sous la mauvaise identité ne se rattrape pas ; le minimum est de la nommer.
+    sous la mauvaise identité ne se rattrape pas ; le minimum est de la nommer. Même
+    leçon pour un prêt : une emprunteuse a opéré la boîte d'une collègue sans le savoir,
+    puis la sienne dès qu'elle l'a connectée, dans la même conversation, sans un signal.
 
     Trois gardes, dans cet ordre :
     - **compte NOMMÉ seulement** : en mono-compte la ligne du coffre est anonyme
       (`account=''`) ⟹ aucun écho, aucun bruit ajouté à 99 % des réponses ;
-    - **même connecteur que l'outil appelé** : un outil composite peut résoudre un
-      credential auxiliaire, et annoncer CE compte-là serait un mensonge ;
+    - **même PORTEUR que l'outil appelé** : un outil composite peut résoudre un
+      credential auxiliaire, et annoncer CE compte-là serait un mensonge. La comparaison
+      se fait sous le porteur (`providers.credential_provider`) : un compte propre se
+      résout sous la carte du service (`outlook`), un prêt sous la ligne du porteur
+      (`microsoft`) — comparer les noms nus taisait l'écho précisément pour le prêt ;
     - **payload dict** : une liste ou du texte est rendu tel quel.
 
     Posé ici plutôt que dans un middleware de plus : c'est le pendant naturel de ce
@@ -56,15 +65,48 @@ def _echo_account(result, tool_name: str):
             return result
         trace = session_org.current_call_trace() or {}
         account = trace.get("resolved_account") or ""
-        if not account or trace.get("resolved_connector") != namespace_of(tool_name):
+        if not account or (providers.credential_provider(trace.get("resolved_connector") or "")
+                           != providers.credential_provider(namespace_of(tool_name))):
             return result
         payload = redaction.extract_payload(result)
         if not isinstance(payload, dict) or "_account" in payload:
             return result
-        return redaction.rebuild_result(result, {**payload, "_account": account})
+        echo = rappel or {"_account": account}
+        return redaction.rebuild_result(result, {**payload, **echo})
     except Exception:  # noqa: BLE001 — un écho ne casse pas un appel réussi
         logger.debug("écho du compte impossible", exc_info=True)
         return result
+
+
+def _rappel_hors_boucle(account: str, row) -> dict:
+    """The descriptor of a MEMBER row that served: the caller's identity, the lender's
+    label and the sharing all read the base — off-loop. A failed lookup still says the
+    account is LENT (by the lender's sub): the signal matters more than the label."""
+    sub = current_user_sub_from_token()
+    try:
+        return access.rappel_du_compte(sub, account, row)
+    except Exception:  # noqa: BLE001 — le prêt reste signalé, par son sub
+        logger.warning("loan descriptor unreadable", exc_info=True)
+        preteur = access.preteur_de_la_ligne(sub, row)
+        return {"_account": account, **({"lent_by": preteur} if preteur else {})}
+
+
+async def _rappel_de_l_appel() -> Optional[dict]:
+    """The echo's descriptor. Nothing at all (no hop, no query) unless a MEMBER row
+    served — the only kind a person lends. Never raises: it runs after a call that
+    succeeded."""
+    trace = session_org.current_call_trace() or {}
+    account = trace.get("resolved_account") or ""
+    if not account:
+        return None
+    row = trace.get("credential_row")
+    if not access.ligne_d_un_membre(row):
+        return {"_account": account}
+    try:
+        return await run_in_threadpool(_rappel_hors_boucle, account, row)
+    except Exception:  # noqa: BLE001 — un écho ne casse pas un appel réussi
+        logger.warning("loan descriptor unreadable", exc_info=True)
+        return {"_account": account}
 
 
 class CallContextMiddleware(Middleware):
@@ -201,7 +243,9 @@ class CallContextMiddleware(Middleware):
             # `op` of the arguments (same guard, same place, as in `oto_call`).
             await access_level_gate.require_covered(
                 name, args, lambda: self._schema_of(context, name))
-            return _echo_account(await call_next(context), _cible(name, args))
+            result = await call_next(context)
+            return _echo_account(result, _cible(name, args),
+                                 rappel=await _rappel_de_l_appel())
         finally:
             for reset, tok in reversed(undo):
                 reset(tok)

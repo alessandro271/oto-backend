@@ -165,3 +165,25 @@ def test_identities_list_a_lent_account_as_granted(team_ctx):
 def test_the_team_cannot_rename_or_default_a_lent_account(team_ctx, call):
     with pytest.raises(ValueError, match="lent to the team"):
         call()
+
+
+def test_a_team_loan_nothing_serves_is_refused_at_the_pose(lend, monkeypatch):
+    """Aucun « ok » pour un prêt inerte : un porteur que le palier équipe ne visite pas
+    (non org-partageable) et qu'aucun résolveur de prêt ne sert est refusé à la pose."""
+    from oto_mcp import providers
+    monkeypatch.setattr(providers, "is_org_shareable", lambda name: False)
+    with pytest.raises(AuthzDenied) as e:
+        sharing._lend_instance(CTX, sharing.LendInstanceInput(connector="zoho",
+                                                              to_group=GID))
+    assert e.value.code == "team_loan_not_served"
+    assert "side" not in lend                     # rien d'écrit
+
+
+def test_revoking_a_team_loan_stays_possible_even_when_not_served(lend, monkeypatch):
+    from oto_mcp import providers
+    monkeypatch.setattr(providers, "is_org_shareable", lambda name: False)
+    monkeypatch.setattr(credentials_store, "get_instance_sharing",
+                        lambda *a, **k: (None, [f"group:{GID}"]))
+    out = sharing._lend_instance(CTX, sharing.LendInstanceInput(
+        connector="zoho", to_group=GID, revoke=True))
+    assert out["lent_to_groups"] == []

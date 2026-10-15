@@ -319,3 +319,18 @@ def test_no_pin_and_two_defaults_still_raises(monkeypatch):
         {"boulot": "K_BOULOT", "perso": "K_PERSO"})
     with pytest.raises(McpError, match="Multiple comptes"):
         access.resolve_credential("folk", want="auto", sub="u")
+
+
+def test_un_service_d_un_porteur_multi_compte_annonce_account_statiquement():
+    """Garde de CLASSE : l'annonce dynamique (`account_axis_advertised_for`) compte les
+    lignes du coffre sous le PORTEUR (`microsoft`) puis cherche la carte du service
+    (`outlook`) — jamais égales — et ne voit pas les prêts. Un service qui emprunte le
+    credential d'un porteur multi-compte n'a donc d'annonce que STATIQUE : sans elle,
+    l'axe qui nomme le compte (le seul qui fait servir un prêt) n'apparaît jamais."""
+    from oto_mcp import providers
+    manquants = sorted(
+        c.name for c in providers._REGISTRY_LIST
+        if c.credential_of
+        and providers.REGISTRY[c.credential_of].auth_multi_account
+        and not (c.account_axis_static or c.personal_cross_org))
+    assert manquants == [], manquants

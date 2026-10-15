@@ -105,3 +105,94 @@ def test_oto_call_sans_cible_lisible_reste_lui_meme(trace):
 
 def test_un_outil_direct_n_est_pas_reinterprete(trace):
     assert call_context._cible("slack_post_message", {"name": "autre_chose"}) == "slack_post_message"
+
+
+# --- Le porteur et le compte PRÊTÉ (Microsoft) --------------------------------
+#
+# Mesuré : une emprunteuse opérait la boîte d'une collègue sans le savoir. Le compte
+# propre se résout sous la carte du service (`outlook`), le prêt sous la ligne du porteur
+# (`microsoft`) : l'égalité des noms nus taisait l'écho précisément pour le prêt.
+
+def test_un_compte_resolu_sous_le_porteur_est_annonce_sur_l_outil_du_service(trace):
+    session_org.note_call_trace(resolved_connector="microsoft",
+                                resolved_account="jane@contoso.example")
+    out = call_context._echo_account(_Result({"ok": True}), "outlook_message",
+                                     rappel={"_account": "jane@contoso.example",
+                                             "lent_by": "preteuse@contoso.example"})
+    assert _payload(out) == {"ok": True, "_account": "jane@contoso.example",
+                             "lent_by": "preteuse@contoso.example"}
+
+
+def test_un_compte_propre_sous_la_carte_n_a_pas_de_lent_by(trace):
+    session_org.note_call_trace(resolved_connector="outlook",
+                                resolved_account="moi@fabrikam.example")
+    out = call_context._echo_account(_Result({"ok": True}), "outlook_calendar_event")
+    assert _payload(out) == {"ok": True, "_account": "moi@fabrikam.example"}
+
+
+def test_un_porteur_etranger_reste_tu(trace):
+    session_org.note_call_trace(resolved_connector="microsoft", resolved_account="jane")
+    out = call_context._echo_account(_Result({"ok": True}), "gmail_message",
+                                     rappel={"_account": "jane@contoso.example",
+                                             "lent_by": "preteuse@contoso.example"})
+    assert _payload(out) == {"ok": True}
+
+
+def test_le_preteur_est_lu_dans_la_ligne_qui_a_servi():
+    """La ligne MEMBRE d'un autre sub = un prêt ; la sienne (même dans une autre org),
+    une clé d'équipe ou d'org = pas de prêteur."""
+    from oto_mcp import access
+    pret = ("member", "8:preteuse", "microsoft", "j")
+    assert access.preteur_de_la_ligne("emprunteuse", pret) == "preteuse"
+    assert access.preteur_de_la_ligne("preteuse", pret) is None
+    assert access.preteur_de_la_ligne("emprunteuse",
+                                      ("member", "9:emprunteuse", "unipile", "")) is None
+    assert access.preteur_de_la_ligne("emprunteuse", ("org", "8", "slack", "x")) is None
+
+
+def _rappel(monkeypatch, sub, side, groupes=()):
+    import asyncio
+
+    from oto_mcp import credentials_store, db, group_store
+    monkeypatch.setattr(call_context, "current_user_sub_from_token", lambda: sub)
+    monkeypatch.setattr(db, "emails_by_subs",
+                        lambda subs: {"preteuse": "preteuse@contoso.example"})
+    monkeypatch.setattr(credentials_store, "get_instance_sharing", lambda *a, **k: ([], side))
+    monkeypatch.setattr(group_store, "is_group_member", lambda s, gid: gid in groupes)
+    monkeypatch.setattr(group_store, "get_group", lambda gid: {"id": gid, "name": "Ventes"})
+    return asyncio.run(call_context._rappel_de_l_appel())
+
+
+def test_le_rappel_d_un_pret_nomme_le_preteur_par_son_email(trace, monkeypatch):
+    session_org.note_call_trace(resolved_account="j",
+                                credential_row=("member", "8:preteuse", "microsoft", "j"))
+    assert _rappel(monkeypatch, "emprunteuse", ["user:emprunteuse"]) == {
+        "_account": "j", "lent_by": "preteuse@contoso.example"}
+
+
+def test_le_rappel_d_un_pret_a_une_equipe_nomme_l_equipe(trace, monkeypatch):
+    session_org.note_call_trace(resolved_account="j",
+                                credential_row=("member", "8:preteuse", "microsoft", "j"))
+    assert _rappel(monkeypatch, "emprunteuse", ["group:3", "group:49"], groupes={49}) == {
+        "_account": "j", "lent_by": "preteuse@contoso.example",
+        "lent_via_group": {"id": 49, "name": "Ventes"}}
+
+
+def test_le_rappel_d_un_compte_propre_ne_lit_rien(trace, monkeypatch):
+    import asyncio
+
+    from oto_mcp import db
+    monkeypatch.setattr(call_context, "current_user_sub_from_token", lambda: "moi")
+    monkeypatch.setattr(db, "emails_by_subs", lambda subs: pytest.fail("requête inutile"))
+    session_org.note_call_trace(resolved_account="j",
+                                credential_row=("member", "8:moi", "microsoft", "j"))
+    assert asyncio.run(call_context._rappel_de_l_appel()) == {"_account": "j"}
+
+
+def test_une_cle_d_org_ne_fait_aucun_saut(trace, monkeypatch):
+    import asyncio
+    monkeypatch.setattr(call_context, "run_in_threadpool",
+                        lambda *a, **k: pytest.fail("saut inutile"))
+    session_org.note_call_trace(resolved_account="client-x",
+                                credential_row=("org", "8", "slack", "client-x"))
+    assert asyncio.run(call_context._rappel_de_l_appel()) == {"_account": "client-x"}

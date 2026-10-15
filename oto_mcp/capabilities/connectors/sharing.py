@@ -102,6 +102,16 @@ def _lent_account(eid: str, connector: str, account: str) -> str:
                       f"{listed}.")
 
 
+def _team_loan_served(carrier: str) -> bool:
+    """Does anything SERVE a loan to a team of this carrier to the team's members?
+    The team rung of the cascade, for an org-shareable carrier (`walk_cascade`); the
+    loan resolver of the Microsoft account (`auth/microsoft._lent_for_call`, on an
+    explicit `_account=`). Otherwise the loan would be written and never served —
+    an "ok" for an inert loan: refused at the pose instead."""
+    from ...auth import microsoft as ms_auth
+    return providers.is_org_shareable(carrier) or carrier == ms_auth.CONNECTOR
+
+
 def _reach_note(named: str, carrier: str, account: str) -> Optional[str]:
     """What the loan really covers, when it is more than the named card: the row of a
     carrier serves every service that borrows it (`credential_of`)."""
@@ -135,6 +145,12 @@ def _lend_instance(ctx: ResolvedCtx, inp: LendInstanceInput) -> dict:
             raise AuthzDenied(400, "self_lend", "Lending to yourself makes no sense.")
         entry = f"user:{to}"
     else:
+        if not inp.revoke and not _team_loan_served(connector):
+            raise AuthzDenied(400, "team_loan_not_served",
+                              f"A `{connector}` instance cannot be lent to a team: nothing "
+                              "would serve it to the team's members. Lend it to each "
+                              "member with `to` (they use it with `_instance=`). Nothing "
+                              "was lent.")
         # A loan to a team never crosses orgs: the team must belong to the key's org.
         g = group_store.get_group(inp.to_group)
         if g is None or int(g["org_id"]) != int(org):
@@ -156,8 +172,14 @@ def _lend_instance(ctx: ResolvedCtx, inp: LendInstanceInput) -> dict:
         raise AuthzDenied(404, "no_instance",
                           f"No `{connector}` instance set in this org — "
                           f"nothing to lend (configure your key first).")
+    note = _reach_note(inp.connector, connector, account)
+    from ...auth import microsoft as ms_auth
+    if connector == ms_auth.CONNECTOR and not inp.revoke:
+        # A lent Microsoft account serves ONLY when the borrower's call names it.
+        note = (f"{note} " if note else "") + (
+            f"The borrower uses it only by naming it: `_account={account}`.")
     return {"ok": True, "connector": connector, "account": account,
-            "note": _reach_note(inp.connector, connector, account),
+            "note": note,
             "revoked": inp.revoke,
             "lent_to": [s[len("user:"):] for s in side if s.startswith("user:")],
             "lent_to_groups": [int(s[len("group:"):]) for s in side
@@ -172,7 +194,9 @@ CAPABILITIES += [
                      "peer, who uses it by pinning it (instance=) — `to` = the email or the "
                      "sub of a member of your organization — or to a team of your org — "
                      "`to_group` = its id; its members then resolve it by account name like "
-                     "a team key, no pin. `account` is optional when you have only one. A "
+                     "a team key, no pin (a Microsoft account: only on `_account=`; a "
+                     "connector nothing serves to a team is refused). `account` is optional "
+                     "when you have only one. A "
                      "service card (`outlook`, `gmail`…) lends the account it borrows — "
                      "with every service that account authorized; "
                      "`revoke=true` takes it back. You only ever share your OWN key; the "

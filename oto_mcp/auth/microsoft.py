@@ -50,6 +50,15 @@ GENERIC mechanics of multi-account connectors (`cardinality="multi"`): choice vi
 accounts (`access.resolve_credential`), removal via
 `DELETE /api/settings/api-keys/microsoft?account=…`.
 
+**A LENT account serves only when the call names it** (`_account=`, or an explicit
+`_instance=`): never implicitly. A borrower with no account of her own was served a
+colleague's mailbox without knowing it, then switched to her own the moment she linked
+one, in the same conversation, with no signal. Without a name and without an own
+account, the call is refused (`account_required`) and names the lent accounts with
+their owner; every response says which account served and, for a loan, whose it is
+(`_account` + `lent_by`, `middleware/call_context._echo_account`). The rule is the
+COMMON one (`access/prets.py`), Microsoft its first user.
+
 **Administrator approval.** Many organizations forbid a person to consent alone:
 `admin_consent_url` builds the link that a client's administrator opens to approve
 oto's permissions for their whole directory (state of a dedicated audience, valid
@@ -583,15 +592,22 @@ def _ranger_rotation(ligne: tuple, lu: str, nouveau: str) -> None:
 
 
 def lent_accounts(sub: str) -> list[dict]:
-    """The Microsoft accounts a PEER lent to `sub` (`oto_instance op=lend`, ADR 0044
-    `share_side` naming `user:<sub>`): rows of the carrier at another member's tier.
-    Same shape as `_comptes` (no secret), plus `lent_by` (the lender's sub) and
-    `lender_org`; never the person's default. A loan crosses orgs (the named loan is
-    the consent): the row is the lender's, wherever they set it."""
-    from .. import access  # lazy
+    """The Microsoft accounts a PEER lent to `sub` (`oto_instance op=lend`, ADR 0044):
+    rows of the carrier at another member's tier, lent to the person (`share_side`
+    `user:<sub>`) or to a TEAM she belongs to in her context org (`group:<id>`, through
+    `group_store.lent_instances`: same org as the team, lender still a member and awake).
+    Same shape as `_comptes` (no secret), plus `lent_by` (the lender's sub),
+    `lender_org` and, for a team loan, `via_group` (`{id, name}`); never the person's
+    default. One entry per row: a row lent to her AND to her team reads as lent to her.
+    A personal loan crosses orgs (the named loan is the consent); a team loan never does.
+
+    A team loan was accepted and never served (the cascade's team rung skips this
+    carrier, which is not org-shareable): it is served here, like a personal loan —
+    only when the call names it."""
+    from .. import access, group_store  # lazy
     org = access.current_org(sub)
     mien = credentials_store.member_id(org, sub) if org is not None else None
-    out = []
+    out, vus = [], set()
     for r in credentials_store.list_shared_with([f"user:{sub}"]):
         if (r["connector"] != CONNECTOR or r["entity_type"] != credentials_store.MEMBER
                 or r["entity_id"] == mien):
@@ -599,39 +615,40 @@ def lent_accounts(sub: str) -> list[dict]:
         lender_org, _, lender = r["entity_id"].partition(":")
         if not (lender_org.isdigit() and lender):
             continue
+        vus.add((r["entity_id"], r["account"]))
         out.append({"account": r["account"],
                     "meta": {**(r.get("meta") or {}), "is_default": False},
                     "set_at": r.get("set_at"), "lent_by": lender,
                     "lender_org": int(lender_org)})
+    for g in (group_store.list_groups_for_user(sub, org) if org is not None else []):
+        for i in group_store.lent_instances(int(g["group_id"]), CONNECTOR):
+            if i["entity_id"] == mien or (i["entity_id"], i["account"]) in vus:
+                continue
+            vus.add((i["entity_id"], i["account"]))
+            out.append({"account": i["account"],
+                        "meta": {**i["meta"], "is_default": False},
+                        "set_at": None, "lent_by": i["lender"], "lender_org": int(org),
+                        "via_group": {"id": int(g["group_id"]), "name": g.get("name")}})
     return out
 
 
 def _lent_for_call(sub: str, service: str, account: Optional[str]):
     """The resolution of a LENT account, when the person's own accounts resolve nothing
-    for this call: the account named (`account`, `_account=`) among the loans, otherwise
-    the only loan that authorized `service`. Several = a refusal that names them. The
-    loan is re-guarded (`guard_instance_access`: still lent, lender not paused) and the
-    row read by the instance path (`_instance=`), the one an explicit pin takes."""
+    for this call — under the COMMON rule (`access.pret_a_servir`): a loan serves ONLY
+    when the call NAMES it (`account`, `_account=`), never the only loan by default;
+    no name and a loan that covers `service` = a refusal (`account_required`) that names
+    the lent accounts, their lender and team. The loan is re-guarded
+    (`guard_instance_access`: still lent, lender not paused) and the row read by the
+    instance path (`_instance=`), the one an explicit pin takes."""
     from .. import access, instance_refs, session_org
-    from ..mcp_errors import McpError
-    from mcp.types import ErrorData, INVALID_PARAMS
     nom = account or session_org.current_call_account()
     pretes = lent_accounts(sub)
-    if nom:
-        choix = [c for c in pretes if c["account"] == nom]
-    else:
-        choix = [c for c in pretes
-                 if service in services_granted((c.get("meta") or {}).get("scopes"))]
-    if not choix:
+    if not nom:   # the refusal only lists the loans that would serve THIS service
+        pretes = [c for c in pretes
+                  if service in services_granted((c.get("meta") or {}).get("scopes"))]
+    c = access.pret_a_servir(pretes, nom, quoi=SERVICE_LABELS[service])
+    if c is None:
         return None
-    if len(choix) > 1:
-        raise McpError(ErrorData(
-            code=INVALID_PARAMS,
-            message=(f"Several Microsoft accounts are lent to you for "
-                     f"{SERVICE_LABELS[service]}: pass `_account=`: one of "
-                     + ", ".join(f"`{c['account']}`" for c in choix) + ". Nothing was done."),
-            data={"code": "account_required", "retryable": False}))
-    c = choix[0]
     ref = instance_refs.parse_ref(instance_refs.make_member_ref(
         c["lender_org"], c["lent_by"], CONNECTOR, c["account"]))
     access.guard_instance_access(sub, ref)
@@ -651,7 +668,8 @@ def resolve_account(sub: str, service: str, account: Optional[str] = None):
     otherwise on the account's), otherwise the only linked account, otherwise the
     default account, otherwise a refusal that names the accounts (`McpError`).
     The person's OWN accounts first; when they resolve nothing (none, or the named
-    account is not theirs), an account LENT by a peer (`_lent_for_call`)."""
+    account is not theirs), an account LENT by a peer — only the one the call NAMES
+    (`_lent_for_call`)."""
     from .. import access  # lazy: avoids any import cycle at boot
 
     if service not in SERVICE_SCOPES:

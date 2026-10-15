@@ -272,7 +272,7 @@ def clear_active_group(sub: str) -> None:
 
 def lent_instances(group_id: int, provider: Optional[str] = None) -> list[dict]:
     """MEMBER instances lent to the team (`share_side` ∋ `group:<id>`, ADR 0044):
-    `{connector, account, lender, entity_id}`. A lent instance reads as a team key —
+    `{connector, account, lender, entity_id, meta}` (no secret). A lent instance reads as a team key —
     but it stays its lender's, who takes it back in one gesture.
 
     Only live instances count: same org as the team (a loan never crosses orgs),
@@ -303,7 +303,8 @@ def lent_instances(group_id: int, provider: Optional[str] = None) -> list[dict]:
         if account_suspension.refus_preteur(lender, f"The `{r['connector']}` key") is not None:
             continue
         out.append({"connector": r["connector"], "account": r["account"] or "",
-                    "lender": lender, "entity_id": r["entity_id"]})
+                    "lender": lender, "entity_id": r["entity_id"],
+                    "meta": dict(r.get("meta") or {})})
     return out
 
 

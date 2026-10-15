@@ -87,8 +87,9 @@ def _note_resolved_instance(rc: ResolvedCredential) -> ResolvedCredential:
     ("which instance was called?"). Best-effort and no-op outside an MCP call: a
     trace never makes a resolution fail."""
     try:
-        ref = instance_refs.ref_for_credential(
-            rc.entity_type or "", rc.entity_id or "", rc.provider, rc.account)
+        ref = instance_refs.ref_for_credential(   # ONE ref per row: its CARRIER's
+            rc.entity_type or "", rc.entity_id or "",
+            providers.credential_provider(rc.provider), rc.account)
         # `instance` = the fingerprint for the JOURNAL. `resolved_*` = what lets us tell
         # the AGENT on return from the call (`_account` echo, `CallContextMiddleware`):
         # without it, it posts to one of its two workspaces without ever knowing which.
@@ -157,14 +158,13 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
     # fallback (a requested instance that does not resolve = actionable error, not
     # another identity). A ref for ANOTHER provider is ignored here (it did not target
     # this resolution — e.g. auxiliary resolution of a composite tool).
-    # ⚠️ The comparison is made on the credential's CARRIER (delegation): an
-    # instance ref names a VAULT row, and the six unipile channels have none —
-    # their keys live under `unipile`. Comparing against the bare name would silently
-    # ignore the pin on every channel call (the call would fall back to the cascade, thus
-    # potentially onto ANOTHER key than the one requested).
+    # ⚠️ Compared on the CARRIER, both sides (a `…:outlook:…` ref is the `microsoft`
+    # row): a ref names a VAULT row, and the six unipile channels have none (their keys
+    # live under `unipile`). The bare name would silently ignore the pin (the call would
+    # fall back to the cascade, thus potentially onto ANOTHER key than the one requested).
     porteur = providers.credential_provider(provider)
     pinned = session_org.current_call_instance()
-    if pinned is not None and getattr(pinned, "connector", None) == porteur:
+    if pinned is not None and providers.credential_provider(pinned.connector or "") == porteur:
         # The vault READ names the carrier, like the comparison above:
         # the pinned row is stored under it, and `require_credential` REFUSES a
         # delegator's name. Passing the bare name here raised a raw `ValueError` on
