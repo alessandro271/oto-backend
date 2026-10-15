@@ -1,7 +1,7 @@
 """Envoi d'email transactionnel (invitations d'org) via **otomata-mailer**.
 
 Standard Otomata : on n'utilise plus Resend per-app — l'endpoint générique
-`POST mailer.oto.zone/api/send` (Scaleway TEM, brand Otomata, domaines from
+`POST <OTO_MAILER_URL>`, endpoint `/api/send` du mailer (Scaleway TEM, brand Otomata, domaines from
 vérifiés DKIM/SPF) sert les emails métier de toutes les apps. Bearer
 `OTO_MAILER_SEND_BEARER`. **Best-effort** : sans bearer configuré ou en cas
 d'échec, on ne lève pas — on renvoie False et l'appelant expose l'`invite_url`
@@ -76,7 +76,7 @@ def _relais_refuse(url: str, depuis: str, detail: str) -> None:
 def _send(to: str, subject: str, html: str, reply_to: str | None = None,
           from_email: str | None = None, cc: list[str] | None = None,
           mailer_url: str | None = None, bearer: str | None = None) -> bool:
-    """Envoi via mailer.oto.zone (Scaleway TEM). `from_email` = adresse expéditrice
+    """Envoi via le mailer à `OTO_MAILER_URL` (Scaleway TEM). `from_email` = adresse expéditrice
     (défaut marque `_mail_from()`) — le service refuse (403) un domaine hors allowlist
     `MAILER_FROM_DOMAINS`. Best-effort (False si pas de bearer ou échec) — mais
     `OTO_MAILER_URL`/`OTO_MAIL_FROM` sont REQUISES dès qu'un envoi est tenté (#968) :

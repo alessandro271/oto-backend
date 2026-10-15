@@ -14,8 +14,12 @@ celle d'un connecteur, pas une page à part). **Deux connecteurs** (déclarés d
 `providers.EMAIL_CONNECTOR_TRANSPORT`) :
 `scaleway` (**BYO-org depuis le 2026-07-01** : `auth_modes={byo_org}`,
 `secret_kind="fields"` — `secret_key`+`project_id`+`region` du compte Scaleway TEM
-de L'ORG ; transport = API TEM en direct `email.send_via_scaleway_tem`, plus de
-service mailer ni de clé plateforme ; master ON **sûr** car la propriété du domaine
+de L'ORG ; transport = API TEM en direct `email.send_via_scaleway_tem` : CE
+connecteur, et lui seul, se passe du service mailer et de la clé plateforme. Le mode
+par défaut passe bien par le mailer — emails de la plateforme (invitations, digests,
+alertes) et envoi sous l'adresse de l'instance par `email_send` :
+`email.send_composed_email` → `OTO_MAILER_URL` (endpoint `/api/send` du mailer) ;
+master ON **sûr** car la propriété du domaine
 est garantie PAR Scaleway — l'API refuse un `from` dont le domaine n'est pas vérifié
 dans le compte de l'org, ce qui rend #64 caduque) + `resend` (BYOK,
 `auth_modes={byo_org}`). **Le transport DÉRIVE du connecteur** :
@@ -75,7 +79,7 @@ champ transport sur l'expéditeur).
 - `email_send` (`tools/email.py`) = **spine** (pas un connecteur) : route
   `sender→connecteur→transport` ; autz dynamique (membre d'org pour une adresse
   déclarée ; super_admin pour le repli marque `oto@otomata.tech`). `email.py` =
-  `send_composed_email` (mailer.oto.zone, env `OTO_MAILER_SEND_BEARER`) +
+  `send_composed_email` (mailer à `OTO_MAILER_URL`, env `OTO_MAILER_SEND_BEARER`) +
   `send_via_resend` (httpx direct, clé org). `scaleway`/`resend` = providers
   credential/config-only (`tools/{scaleway,resend}.py` = `register()` no-op).
 - **Config = `orgs.email_settings` JSONB keyé PAR CONNECTEUR** :
