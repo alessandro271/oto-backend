@@ -278,10 +278,15 @@ class InstructionView(BaseModel):
     """Une procédure, corps compris. `slug` est le slug NORMALISÉ (l'entrée est
     tolérante).
 
-    ⚠️ **`updated_at: null` ne veut pas dire « jamais modifiée »** : c'est le signe
-    qu'on lit une VERSION ARCHIVÉE (`?version=N`), servie depuis la table des
-    révisions, qui ne porte pas cette colonne. Sur la version courante, elle est
-    toujours renseignée."""
+    ⚠️ **`id` et `updated_at` à `null` ne veulent dire ni « sans identité » ni « jamais
+    modifiée »** : c'est le signe qu'on lit une VERSION ARCHIVÉE (`?version=N`), servie
+    depuis la table des révisions, qui ne porte pas ces colonnes. Sur la version
+    courante, ils sont toujours renseignés.
+
+    Même forme que la vue d'équipe (`GroupInstructionView`) — `id` et `slots` des deux
+    côtés (#437) : un front n'a qu'un type pour les deux."""
+    # L'identifiant STABLE de la procédure, celui que prend `GET /api/me/guides/{guide_id}`.
+    id: Optional[int] = None
     slug: str
     title: Optional[str] = None
     description: Optional[str] = None
@@ -1722,6 +1727,7 @@ def _instruction_get(ctx: ResolvedCtx, inp: InstrGetInput) -> dict:
     if not instr:
         raise AuthzDenied(404, "not_found", f"Instruction `{org_store.normalize_slug(inp.slug)}` absente.")
     return {
+        "id": instr.get("id"),
         "slug": instr["slug"], "title": instr["title"], "description": instr["description"],
         "version": instr["version"], "body_md": instr["body_md"],
         "slots": instr.get("slots") or [], "set_by": instr.get("set_by"),

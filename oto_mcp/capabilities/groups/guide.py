@@ -27,7 +27,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from ... import (deprecations, guide_store, org_store, procedure_diagram,
-                 procedure_empreinte, roles, tool_alias)
+                 procedure_empreinte, roles, slots as slots_mod, tool_alias)
 from .._auteurs import nommer_l_auteur, nommer_les_auteurs
 from .._authz import GROUP_ADMIN_OF, GROUP_MEMBER_OF, capacite_autorise
 from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
@@ -189,8 +189,10 @@ class GroupInstructionView(BaseModel):
     # ADR 0035 : entités requises déclarées. Servi depuis #681 — jusque-là le store
     # d'équipe écrivait `[]` en dur et ne les relisait pas ; une procédure d'équipe peut
     # désormais en porter (écriture par `oto_procedure op=set scope=group`), et une vue
-    # qui les tairait laisserait croire qu'elle n'en a pas.
-    slots: list = []
+    # qui les tairait laisserait croire qu'elle n'en a pas. Même forme et même
+    # garantie qu'`InstructionView` (même table, même `validate_slots` à l'écriture) :
+    # toujours servi, `[]` quand la procédure n'en déclare aucun (#437).
+    slots: list[slots_mod.SlotDecl]
     set_by: Optional[str] = None
     set_by_name: Optional[str] = None
     created_at: Optional[str] = None
