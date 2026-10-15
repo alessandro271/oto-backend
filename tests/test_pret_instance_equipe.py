@@ -1,9 +1,10 @@
 """Lending a member instance to a TEAM (ADR 0044 share_side, `group:<id>`).
 
-The loan reads as a team key: its members resolve it at the team tier, by account
-name, with no pin. It stays its lender's: same org only, gone when the lender leaves
-the org, pauses, or suspends the instance; the team can neither rename it nor make it
-its default. All values are fictitious.
+The loan is listed with the team's keys, but it serves its members only when the call
+names it (`_account=`, `access/prets.py`), never picked automatically. It stays its
+lender's: same org only, gone when the lender leaves the org, pauses, or suspends the
+instance, or when the org forbids personal keys for the connector; the team can neither
+rename it nor make it its default. All values are fictitious.
 """
 import pytest
 
@@ -83,9 +84,22 @@ def test_team_accounts_merge_own_then_lent_and_never_inherit_a_default(vault):
     assert lent["meta"] == {"lent_by": LENDER}                       # no is_default
 
 
-def test_a_single_lent_account_is_picked_automatically(vault):
+def test_a_lent_account_is_never_picked_automatically(vault):
     assert cascade._shared_auto_account("group", str(GID), "zoho", "for your team",
-                                        scope="group") == "filiale-a"
+                                        scope="group") == ""
+    vault["own"] = [{"account": "siege", "meta": {}, "set_at": None}]
+    assert cascade._shared_auto_account("group", str(GID), "zoho", "for your team",
+                                        scope="group") == "siege"
+
+
+def test_a_loan_of_a_personal_key_the_org_forbids_serves_nothing(vault, monkeypatch):
+    """A loan made BEFORE the org forbade personal keys for the connector stops with
+    the policy (#1239) — nothing is detached, the loan comes back if it is lifted."""
+    from oto_mcp.connectors import cle_perso
+    monkeypatch.setattr(cle_perso, "interdite", lambda org, con: (org, con) == (ORG, "zoho"))
+    assert group_store.lent_instances(GID, "zoho") == []
+    assert not group_store.has_group_secret(GID, "zoho")
+    assert vault["shared"]                                      # still written
 
 
 def test_team_secrets_listing_names_the_lender(vault):
@@ -165,6 +179,36 @@ def test_identities_list_a_lent_account_as_granted(team_ctx):
 def test_the_team_cannot_rename_or_default_a_lent_account(team_ctx, call):
     with pytest.raises(ValueError, match="lent to the team"):
         call()
+
+
+@pytest.mark.parametrize("kw", [{"to_group": GID}, {"to": "peer"}])
+def test_lending_a_personal_key_the_org_forbids_is_refused_at_the_pose(lend, monkeypatch,
+                                                                       kw):
+    from oto_mcp.connectors import cle_perso
+    monkeypatch.setattr(cle_perso, "interdite", lambda org, con: (org, con) == (ORG, "zoho"))
+    from oto_mcp import org_store
+    monkeypatch.setattr(org_store, "get_org", lambda oid: {"name": "Acme"})
+    with pytest.raises(AuthzDenied) as e:
+        sharing._lend_instance(CTX, sharing.LendInstanceInput(connector="zoho", **kw))
+    assert e.value.code == "personal_key_forbidden" and e.value.status == 403
+    assert "no personal key can be lent" in e.value.message
+    assert "side" not in lend                     # nothing written
+
+
+def test_revoking_a_loan_stays_possible_under_the_policy(lend, monkeypatch):
+    from oto_mcp.connectors import cle_perso
+    monkeypatch.setattr(cle_perso, "interdite", lambda org, con: True)
+    monkeypatch.setattr(credentials_store, "get_instance_sharing",
+                        lambda *a, **k: (None, [f"group:{GID}"]))
+    out = sharing._lend_instance(CTX, sharing.LendInstanceInput(
+        connector="zoho", to_group=GID, revoke=True))
+    assert out["lent_to_groups"] == []
+
+
+def test_the_pose_says_how_the_borrower_names_the_loan(lend):
+    out = sharing._lend_instance(CTX, sharing.LendInstanceInput(
+        connector="zoho", to_group=GID, account="filiale-a"))
+    assert "only by naming it: `_account=filiale-a`" in out["note"]
 
 
 def test_a_team_loan_nothing_serves_is_refused_at_the_pose(lend, monkeypatch):

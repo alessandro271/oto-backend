@@ -89,10 +89,8 @@ def _shared_auto_account(entity_type: str, entity_id: str, provider: str,
     (`ensure_named_coexistence` migrates the `''` row to "principal" at the first
     named account — review #399 F3). `scope` non-None ⇒ the `oto_identity` refs in the
     ambiguity message carry the tier's scope (org/group)."""
-    # At the team tier, instances LENT to the team count as its accounts.
-    accts = (group_store.list_group_accounts(int(entity_id), provider)
-             if entity_type == "group" else
-             credentials_store.list_accounts(entity_type, entity_id, provider))
+    # A loan to the team is never picked automatically (`access/prets.py`): its own only.
+    accts = credentials_store.list_accounts(entity_type, entity_id, provider)
     if len(accts) == 1:
         return accts[0]["account"]
     if not accts:

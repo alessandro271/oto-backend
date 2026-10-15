@@ -910,11 +910,13 @@ CHEZ_PRETEUSE = f"{ORG}:{PRETEUSE}"
 
 @pytest.fixture
 def pret(env, monkeypatch):
-    from oto_mcp import access, account_suspension, db
+    from oto_mcp import access, account_suspension, db, roles
 
     for indice in ("_revoked_hint", "_reachable_hint"):
         monkeypatch.setattr(access, indice, lambda *a, **k: "")
     monkeypatch.setattr(account_suspension, "refus_preteur", lambda *a, **k: None)
+    # La prêteuse est toujours membre de l'org du prêt (un départ arrête le prêt).
+    monkeypatch.setattr(roles, "is_org_member", lambda sub, org: org == ORG)
     monkeypatch.setattr(db, "emails_by_subs",
                         lambda subs: {PRETEUSE: "preteuse@contoso.example"})
     # Entra rend au renouvellement ce que le compte a consenti : le courrier seulement.
@@ -1155,6 +1157,30 @@ def test_pret_a_l_equipe_sans_account_refus_qui_le_nomme(pret_equipe):
             in err.message)
     assert err.data["lent_accounts"][0]["via_group"] == {"id": EQUIPE, "name": "Ventes"}
     pret_equipe.coeur.auth.refresh.assert_not_called()
+
+
+def test_un_pret_microsoft_a_l_equipe_active_n_est_juge_qu_une_fois(pret_equipe, trace,
+                                                                    monkeypatch):
+    """La règle du prêt branchée sur la cascade ne rejuge pas Microsoft (non
+    org-partageable : le palier équipe ne le visite pas, son résolveur le juge) — un seul
+    refus sans nom, un seul jugement et un seul `lent_by` avec le nom, même quand
+    l'équipe emprunteuse est l'équipe ACTIVE."""
+    from oto_mcp import access
+    monkeypatch.setattr(access, "current_group", lambda sub: EQUIPE)
+    vus, regle = [], access.pret_a_servir
+    monkeypatch.setattr(access, "pret_a_servir", lambda candidats, nom, *, quoi: (
+        vus.append(nom), regle(candidats, nom, quoi=quoi))[1])
+    with pytest.raises(McpError) as e:
+        pret_equipe.auth.access_token_for(EMPRUNTEUSE, "outlook")
+    assert e.value.error.data["code"] == "account_required" and vus == [None]
+    vus.clear()
+    jane = pret_equipe.sous_compte("jane@contoso.example")
+    assert jane(pret_equipe.auth.access_token_for, EMPRUNTEUSE, "outlook") == "AT:RT-JANE"
+    assert vus == ["jane@contoso.example"]
+    assert _repondre("outlook_message") == {
+        "ok": True, "_account": "jane@contoso.example",
+        "lent_by": "preteuse@contoso.example",
+        "lent_via_group": {"id": EQUIPE, "name": "Ventes"}}
 
 
 def test_pret_a_l_equipe_invisible_pour_un_non_membre(pret_equipe):

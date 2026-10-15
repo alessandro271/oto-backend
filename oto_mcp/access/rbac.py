@@ -88,6 +88,20 @@ def _refuser_si_preteur_en_pause(ref) -> None:
                                  data={"code": refus.code, "retryable": False}))
 
 
+def _refuser_si_preteur_parti(ref) -> None:
+    """A loan stops when its lender leaves the org it was made in — to a person as to a
+    team; nothing is detached, the row and its `share_side` stay (ADR 0062-D4)."""
+    from .. import roles
+    if not roles.is_org_member(ref.sub, ref.org_id):
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS,
+            message=(f"Instance refused: the member who lent this `{ref.connector}` key is "
+                     f"no longer a member of org #{ref.org_id}, where the loan was made — "
+                     "it no longer serves. Use an account of your own, or ask them to lend "
+                     "one again from an org they belong to. Nothing was done."),
+            data={"code": "lender_left_org", "retryable": False}))
+
+
 def guard_instance_access(sub: str, ref) -> Optional[int]:
     """Access guard for a connector instance by LEVEL (ADR 0038 B6) — same
     semantics as the B4 projection: member = MY row in an org I am a member of;
@@ -123,6 +137,7 @@ def guard_instance_access(sub: str, ref) -> Optional[int]:
             credentials_store.MEMBER, credentials_store.member_id(ref.org_id, ref.sub),
             ref.connector, ref.account)
         if scope._sub_matches_scopes(sub, side):
+            _refuser_si_preteur_parti(ref)
             _refuser_si_preteur_en_pause(ref)
             return scope.current_org(sub)
         raise McpError(ErrorData(

@@ -344,3 +344,34 @@ def test_la_trace_ecrit_la_ref_du_porteur(monkeypatch):
     assert trace["instance"] == instance_refs.make_member_ref(
         8, "u", "microsoft", "jane@contoso.example")
     assert trace["resolved_connector"] == "outlook"
+
+
+@pytest.mark.parametrize("carte", ["google", "gmail"])
+def test_un_pret_google_epingle_par_la_carte_ou_le_porteur_designe_la_meme_ligne(
+        resolution, monkeypatch, carte):
+    """Un prêt se désigne par sa réf : écrite sous la carte (`gmail`) ou sous le porteur
+    (`google`), c'est la MÊME ligne du coffre de la prêteuse, gardée puis lue."""
+    from oto_mcp import account_suspension
+    monkeypatch.setattr(roles, "is_org_member", lambda sub, org: True)
+    monkeypatch.setattr(account_suspension, "refus_preteur", lambda *a, **k: None)
+    monkeypatch.setattr(access, "current_org", lambda sub: 99)
+    eid = credentials_store.member_id(8, "boss")
+    monkeypatch.setattr(credentials_store, "get_instance_sharing",
+                        lambda et, e, con, acc="": (None, ["user:u"])
+                        if (e, con) == (eid, "google") else (None, []))
+    resolution[(credentials_store.MEMBER, eid, "google", "jane@exemple.test")] = "RT"
+
+    async def _scenario():
+        undo = await call_axes._pin_instance(
+            instance_refs.make_member_ref(8, "boss", carte, "jane@exemple.test"),
+            "gmail_message")
+        try:
+            assert instance_refs.format_ref(session_org.current_call_instance()) == \
+                instance_refs.make_member_ref(8, "boss", "google", "jane@exemple.test")
+            return access._resolve_credential_impl("gmail", "byo", "u")
+        finally:
+            _unpin(undo)
+
+    rc = asyncio.run(_scenario())
+    assert rc.secret == "RT" and (rc.entity_type, rc.entity_id) == (credentials_store.MEMBER,
+                                                                    eid)

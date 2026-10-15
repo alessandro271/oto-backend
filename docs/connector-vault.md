@@ -464,14 +464,25 @@ une fois pour toutes dans `access.cascade.walk_cascade` ; la dérivation l'**inv
 | *tous* | + `share_side` (prêts nominatifs, ADR 0044) — une **extension**, jamais une allowlist ; peut viser hors de l'org | — |
 
 **Prêter une instance à une ÉQUIPE** (`oto_instance op=lend to_group=<id>`, `group:<id>` dans
-`share_side`) : le prêt se lit comme une clé de l'équipe. `group_store.lent_instances` le
-verse au palier équipe — `has/get_group_secret`, `list_group_accounts` (sélection du
-compte, `_account`), `group_secret_map` (état servi) —, donc ses membres le résolvent
-**par nom de compte, sans épinglage**, là où un prêt à une personne s'épingle
-(`_instance=`). Il reste au prêteur : même org que l'équipe seulement (un prêt à une
-équipe ne traverse pas d'org), ignoré dès que le prêteur quitte l'org, se met en pause ou
-suspend l'instance ; un nom de compte que l'équipe détient déjà masque le prêt ; l'équipe
-ne le renomme pas et n'en fait pas son défaut (`connectors.identities._refuse_lent`).
+`share_side`) : `group_store.lent_instances` verse le prêt au palier équipe — listé avec
+ses clés (`has_group_secret`, `list_group_secrets`, `group_secret_map`, identités) —, mais
+il ne sert ses membres **que nommé** (`_account=`, ou `_instance=` pour un connecteur
+mono-compte), jamais choisi d'office (`docs/partage-de-compte.md`). La règle se décide dans
+la sonde équipe de la résolution (`access.resolve._group_fetch` →
+`access.prets.PretsDuParcours`), pas dans le walker, qui n'est pas recopié : sans nom, le
+compte de l'équipe elle-même sert, sinon le palier suivant (org, tenant) ; si seuls des
+prêts auraient servi, refus `account_required` qui les nomme avec leur prêteur — jamais la
+clé plateforme à leur place. Le prêt servi est la ligne du PRÊTEUR (trace du journal, écho
+`lent_by`/`lent_via_group`, rotation d'un jeton). Il reste au prêteur : même org que
+l'équipe seulement (un prêt à une équipe ne traverse pas d'org), ignoré dès que le prêteur
+quitte l'org, se met en pause, suspend l'instance, ou que l'org interdit la clé perso pour
+ce connecteur (#1239, refusé aussi à la pose) ; un nom de compte que l'équipe détient déjà
+masque le prêt ; l'équipe ne le renomme pas et n'en fait pas son défaut
+(`connectors.identities._refuse_lent`). Un prêt à une PERSONNE (`user:<sub>`) s'épingle
+(`_instance=`) et cesse de même quand son prêteur quitte l'org où il est né (refus
+`lender_left_org`, `access.guard_instance_access`) — rien n'est détaché. La garde des
+niveaux d'accès juge un prêt désigné sous l'org du prêteur et sous l'équipe emprunteuse
+(`connectors/access_level_gate._loan_contexts`).
 
 Le palier plateforme est le seul dont l'audience n'est pas structurelle. Trois issues,
 dans l'ordre où la résolution les prend : la **chaîne accorde** (0053, L5) ⟹ les

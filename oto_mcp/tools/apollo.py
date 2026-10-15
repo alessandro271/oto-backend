@@ -15,7 +15,7 @@ endpoint queries, NOT on read/write:
   (oto-backend#710, signals #311/#312/#313): `resolve_api_key` raises a McpError
   that states the counter (`used/limit`) and that it resets at midnight — and
   `apollo_match_person`, the only debtor of this quota, echoes `platform_quota`
-  (`access.platform_quota_hint`, `oto_mcp/access/resolve.py`) in its response
+  (`access.platform_quota_hint`, `oto_mcp/access/views.py`) in its response
   WHEN the key is the platform key, so that a batch worker can decide BEFORE the refusal
   instead of discovering it in the middle of a lead.
 - **The key OWNER's WORKSPACE** (contacts, sequences, emails,

@@ -161,12 +161,13 @@ def cle_pretee(live):
     for sub in (preteur, emprunteur):
         db.upsert_user(sub, email=f"{sub}@exemple.test")
     org = org_store.create_org(f"cle_org_{u}", created_by=preteur)
+    org_store.add_org_member(org, preteur)
     db.set_member_api_key(preteur, org, "hunter", "sk_" + u)
     assert credentials_store.set_instance_sharing(
         credentials_store.MEMBER, credentials_store.member_id(org, preteur), "hunter",
         "", share_side=[f"user:{emprunteur}"])
     ref = instance_refs.parse_ref(instance_refs.make_member_ref(org, preteur, "hunter"))
-    return {"preteur": preteur, "emprunteur": emprunteur, "ref": ref}
+    return {"preteur": preteur, "emprunteur": emprunteur, "ref": ref, "org": org}
 
 
 def test_la_cle_pretee_sarrete_avec_la_pause_et_revient_au_reveil(cle_pretee, monkeypatch):
@@ -186,3 +187,22 @@ def test_la_cle_pretee_sarrete_avec_la_pause_et_revient_au_reveil(cle_pretee, mo
 
     _reveil(cle_pretee["preteur"])
     assert access.guard_instance_access(qui, ref) == 777
+
+
+def test_la_cle_pretee_cesse_quand_le_preteur_quitte_l_org(cle_pretee, monkeypatch):
+    """Le prêt né dans une org cesse quand son prêteur la quitte : refus NOMMÉ
+    `lender_left_org`, et rien n'est détaché (la ligne et son `share_side` restent)."""
+    from oto_mcp import access, credentials_store, org_store
+    from oto_mcp.mcp_errors import McpError
+    monkeypatch.setattr(access, "current_org", lambda sub: 777)
+    qui, ref, org = cle_pretee["emprunteur"], cle_pretee["ref"], cle_pretee["org"]
+    assert access.guard_instance_access(qui, ref) == 777
+
+    org_store.remove_org_member(org, cle_pretee["preteur"])
+    with pytest.raises(McpError) as e:
+        access.guard_instance_access(qui, ref)
+    assert e.value.error.data == {"code": "lender_left_org", "retryable": False}
+    _, side = credentials_store.get_instance_sharing(
+        credentials_store.MEMBER, credentials_store.member_id(org, cle_pretee["preteur"]),
+        "hunter", "")
+    assert side == [f"user:{qui}"]

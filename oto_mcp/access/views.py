@@ -2,9 +2,10 @@
 
 A keyed tool wants a key (`resolve_api_key`), a multi-secret client wants its
 fields (`resolve_credential_fields`), the dashboard wants to know UNDER WHICH ORIGIN
-it would resolve without decrypting anything (`credential_mode_for`), and the
+it would resolve without decrypting anything (`credential_mode_for`), the
 published endpoint wants to know whether an org can resolve on its own
-(`connector_resolvable_for_org`).
+(`connector_resolvable_for_org`), and a batch tool what remains of today's platform
+quota (`platform_quota_hint`).
 
 ⚠️ `resolve_mount_token` lived here until 2026-09-09: it was the view of the
 per-user OAuth token of a federated MCP, and it left with the mechanism (ADR 0069).
@@ -163,3 +164,38 @@ def connector_resolvable_for_org(provider: str, org_id: int) -> bool:
     # §F R3: 'open' free-tier instance, or 'closed' targeting `org:<org_id>`).
     return cascade.cascade_winner(None, provider, org=org_id, group=None,
                           probe=cascade.PRESENCE_PROBE) is not None
+
+
+def platform_quota_hint(provider: str, sub: Optional[str] = None) -> Optional[dict]:
+    """READ-ONLY snapshot of today's platform quota for `provider` —
+    decrypts nothing (PRESENCE probe, like `status_for`/`GET /api/me`) and consumes
+    nothing. For a connector that debits this quota ON SPEND
+    (`record_platform_usage`, e.g. `apollo_match_person`), this is what lets
+    a caller know what remains WITHOUT waiting for the bare refusal — a batch
+    worker can arbitrate its calls instead of discovering the limit in the middle of a
+    lead (oto-backend#710, signals #311/#312/#313).
+
+    Walks the cascade as a presence probe for a SINGLE provider — `status_for`
+    does the same for the WHOLE registry (acceptable cost once per
+    dashboard load); a tool that may run hundreds of times
+    in a batch only needs ONE walk, on THIS provider.
+
+    `None`: either this provider would not resolve in platform mode for this sub
+    (a BYO key wins before, or no grant — the question does not arise),
+    or no ceiling (unlimited, or quotas lifted by `platform_unmetered`, ADR 0070 §7)."""
+    sub = sub or scope.current_user_sub_or_raise()
+    active_org = scope.current_org(sub)
+    active_group = scope.current_group(sub)
+    hits = list(chain_shadow.resolution_rungs(sub, provider, org=active_org, group=active_group,
+                                     probe=cascade.PRESENCE_PROBE, want="auto"))
+    winner = hits[0] if hits else None
+    if winner is None or winner.mode != "platform":
+        return None
+    used, limit = resolve._win_quota(winner, sub, provider, active_org)
+    if not limit:
+        return None
+    # `kind` says WHAT this counts: oto's daily allowance on the shared platform key (as
+    # `oto_whoami`'s `platform_quotas`), never the provider's balance — which can be empty
+    # while this reads 200 left (#1066: `remaining: 200`, then "Not enough credits").
+    return {"kind": "oto_daily_allowance", "used": used, "limit": limit,
+            "remaining": max(0, limit - used)}

@@ -1,11 +1,12 @@
 """Instance SHARING capability (ADR 0044) — WRITE surface of `share_side`.
 
 `share_side` = EXTENSION: a member lends THEIR instance (their key in the current org)
-to a named peer, or to a team of that org. A peer uses it by pinning the instance
-(`_instance=`); a team's members resolve it like a team key, by account name
-(`group_store.lent_instances` feeds the team tier). For a peer, the
+to a named peer, or to a team of that org. A lent account serves only when the call
+NAMES it (`access/prets.py`): a peer pins the instance (`_instance=`), a team's members
+name the account (`_account=`, the team rung of the cascade) or pin it. For a peer, the
 guard `access.guard_instance_access` authorizes the beneficiary (borrows the key, keeps
-their OWN org context — cross-org OK, the named loan is the consent).
+their OWN org context — cross-org OK, the named loan is the consent). Refused at the
+pose: a team nothing would serve it to, and a personal key the org forbids (#1239).
 Owner-scoped: `SUB_ONLY`, the handler touches ONLY the caller's vault row
 (`member_id(current org, sub)`) → you only ever lend your own key.
 
@@ -18,7 +19,8 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from ... import access, credentials_store, db, group_store, org_store, providers
+from ... import access, credentials_store, db, group_store, instance_refs, org_store, providers
+from ...connectors import cle_perso
 from .._authz import SUB_ONLY
 from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from ..registry import CAPABILITIES
@@ -33,8 +35,8 @@ class LendInstanceInput(BaseModel):
                                                 "organization")
     to_group: Optional[int] = Field(None, description="id of a team of your current org "
                                                       "to lend to (or to revoke the loan "
-                                                      "from) — its members resolve the key "
-                                                      "like a team key, by account name")
+                                                      "from) — its members use the key "
+                                                      "only by naming it (`_account=`)")
     account: str = Field("", description="which of your accounts — optional when you "
                                          "have only one")
     revoke: bool = False
@@ -112,6 +114,16 @@ def _team_loan_served(carrier: str) -> bool:
     return providers.is_org_shareable(carrier) or carrier == ms_auth.CONNECTOR
 
 
+def _designation(carrier: str, eid: str, account: str, to_group: Optional[int]) -> str:
+    """How the borrower names the loan: `_account=` where a name is served (the team
+    rung, the Microsoft resolver), otherwise the instance ref (`_instance=`)."""
+    from ...auth import microsoft as ms_auth
+    if account and (to_group is not None or carrier == ms_auth.CONNECTOR):
+        return f"`_account={account}`"
+    ref = instance_refs.ref_for_credential(credentials_store.MEMBER, eid, carrier, account)
+    return f"`_instance={ref}`"
+
+
 def _reach_note(named: str, carrier: str, account: str) -> Optional[str]:
     """What the loan really covers, when it is more than the named card: the row of a
     carrier serves every service that borrows it (`credential_of`)."""
@@ -139,6 +151,9 @@ def _lend_instance(ctx: ResolvedCtx, inp: LendInstanceInput) -> dict:
     if org is None:
         raise AuthzDenied(400, "no_active_org",
                           "No active org — unable to lend an instance.")
+    if not inp.revoke and cle_perso.interdite(org, connector):
+        raise AuthzDenied(403, cle_perso.CODE, cle_perso.texte_refus(
+            org, connector, cle_perso.AU_PRET))
     if inp.to is not None:
         to = _borrower_sub(org, inp.to)
         if to == ctx.sub:
@@ -173,11 +188,10 @@ def _lend_instance(ctx: ResolvedCtx, inp: LendInstanceInput) -> dict:
                           f"No `{connector}` instance set in this org — "
                           f"nothing to lend (configure your key first).")
     note = _reach_note(inp.connector, connector, account)
-    from ...auth import microsoft as ms_auth
-    if connector == ms_auth.CONNECTOR and not inp.revoke:
-        # A lent Microsoft account serves ONLY when the borrower's call names it.
+    if not inp.revoke:
         note = (f"{note} " if note else "") + (
-            f"The borrower uses it only by naming it: `_account={account}`.")
+            "The borrower uses it only by naming it: "
+            f"{_designation(connector, eid, account, inp.to_group)}.")
     return {"ok": True, "connector": connector, "account": account,
             "note": note,
             "revoked": inp.revoke,
@@ -193,9 +207,10 @@ CAPABILITIES += [
         description=("Lend YOUR connector instance (your key in your current org) to a "
                      "peer, who uses it by pinning it (instance=) — `to` = the email or the "
                      "sub of a member of your organization — or to a team of your org — "
-                     "`to_group` = its id; its members then resolve it by account name like "
-                     "a team key, no pin (a Microsoft account: only on `_account=`; a "
-                     "connector nothing serves to a team is refused). `account` is optional "
+                     "`to_group` = its id; its members then use it only by naming it "
+                     "(`_account=`), never by default (a connector nothing serves to a "
+                     "team is refused, and so is a personal key your org forbids for this "
+                     "connector). `account` is optional "
                      "when you have only one. A "
                      "service card (`outlook`, `gmail`…) lends the account it borrows — "
                      "with every service that account authorized; "

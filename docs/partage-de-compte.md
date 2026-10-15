@@ -59,9 +59,17 @@ collègue qui la lui avait prêtée, sans le savoir. Désigner coûte un aller-r
 fois ; écrire au nom de quelqu'un par surprise ne se rattrape pas.
 
 Les comptes du concept 1 (ceux de l'org ou de l'équipe elles-mêmes) restent servis sans
-désignation. La règle s'écrit **une fois**, sous `oto_mcp/access/`, et chaque chemin de
-résolution s'y branche : Microsoft d'abord, puis la cascade (palier équipe nourri par
-`group_store.lent_instances`, palier org).
+désignation. La règle s'écrit **une fois**, sous `oto_mcp/access/` (`prets.py`), et chaque
+chemin de résolution s'y branche : Microsoft (`auth/microsoft._lent_for_call`), puis la
+cascade — palier équipe nourri par `group_store.lent_instances`, décidé dans sa sonde
+(`PretsDuParcours`) ; le palier org s'y branchera avec la cible `to_org`. Dans la cascade,
+sans désignation, le compte de l'équipe elle-même sert, sinon celui de l'org ; si seuls des
+prêts auraient servi, le refus les nomme, jamais la clé plateforme à leur place.
+
+*Ce qui change pour qui s'en servait* : un membre d'équipe qui utilisait un prêt à son
+équipe sans le nommer reçoit `account_required` à son prochain appel, et le rejoue avec
+`_account=` ; une équipe qui a son propre compte ET un prêt sert désormais le sien, au lieu
+d'un refus d'ambiguïté.
 
 ## Invariants
 
@@ -73,12 +81,16 @@ résolution s'y branche : Microsoft d'abord, puis la cascade (palier équipe nou
 - **La garde des niveaux d'accès juge le propriétaire de la clé servie**
   (`connectors/access_level_gate.py`, `_judged_contexts`) : tout chemin qui sert la clé
   d'un autre propriétaire y est ajouté, sinon une équipe réglée en lecture se fait écrire
-  dessus.
+  dessus. Un prêt ne servant que désigné, la désignation (`_instance=`, `_account=`) suffit
+  à juger, avant la résolution, l'org du prêteur et l'équipe emprunteuse (`_loan_contexts`).
 - **Une politique d'org qui interdit la clé perso** pour un connecteur interdit aussi
-  d'en prêter une dans cette org.
+  d'en prêter une dans cette org : refus `personal_key_forbidden` à la pose ; un prêt posé
+  avant la politique cesse de servir (prêt à une équipe : `lent_instances` l'ignore ; prêt
+  épinglé : refus de l'instance perso désignée).
 - **Le prêt suit son propriétaire** : en pause, il est suspendu (refus nommé
   `lender_suspended`) ; quand le propriétaire quitte l'org, ses prêts nés dans cette org
-  cessent, à une personne comme à une équipe.
+  cessent, à une personne comme à une équipe (refus nommé `lender_left_org` à l'épinglage,
+  prêt à une équipe ignoré) — lu à chaque appel, rien n'est détaché du coffre.
 - **La pose et le retrait se journalisent** : qui, quoi, vers qui, quand.
 
 ## Ce que deviennent les chemins d'avant
@@ -95,7 +107,9 @@ résolution s'y branche : Microsoft d'abord, puis la cascade (palier équipe nou
 1. Ce document.
 2. Règle de service partagée et prêts Microsoft à une équipe — lot de la session Microsoft.
 3. Backend : cible `to_org`, règle de service étendue à la cascade, fin du prêt au départ
-   de l'org, politique « clé perso interdite » lue par les prêts, journal.
+   de l'org, politique « clé perso interdite » lue par les prêts, journal. *3a* : la
+   cascade (palier équipe), le départ, la politique, la garde des niveaux d'accès ; restent
+   `to_org` et le journal.
 4. Dashboard : « Partager » sur la carte du compte.
 5. Microsoft connectable au nom de l'org ou d'une équipe.
 6. Délégation des messageries ramenée au même geste (écran, outil), cible équipe à

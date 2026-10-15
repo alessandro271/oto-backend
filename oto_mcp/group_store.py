@@ -276,10 +276,12 @@ def lent_instances(group_id: int, provider: Optional[str] = None) -> list[dict]:
     but it stays its lender's, who takes it back in one gesture.
 
     Only live instances count: same org as the team (a loan never crosses orgs),
-    lender still a member of that org and not paused (#898), instance not suspended.
-    The rest is skipped, never an error: a key listing does not fail for a loan that
-    lapsed."""
+    lender still a member of that org and not paused (#898), instance not suspended,
+    personal key not forbidden by the org for this connector (#1239 — a loan made
+    before the policy stops with it). The rest is skipped, never an error: a key
+    listing does not fail for a loan that lapsed."""
     from . import account_suspension, roles
+    from .connectors import cle_perso
     shared = credentials_store.list_shared_with([f"group:{group_id}"])
     if not shared:
         return []
@@ -299,6 +301,8 @@ def lent_instances(group_id: int, provider: Optional[str] = None) -> list[dict]:
         if (r.get("meta") or {}).get("suspended") in (True, "true"):
             continue
         if not roles.is_org_member(lender, org):
+            continue
+        if cle_perso.interdite(org, r["connector"]):
             continue
         if account_suspension.refus_preteur(lender, f"The `{r['connector']}` key") is not None:
             continue

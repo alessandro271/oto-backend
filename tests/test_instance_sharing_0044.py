@@ -76,10 +76,26 @@ def test_guard_member_share_side_allows_beneficiary(monkeypatch):
     # tests/test_account_suspension_prets.py)
     _mock_sharing(monkeypatch, [], ["user:bob"])
     monkeypatch.setattr(db, "get_suspension", lambda sub: None)
+    monkeypatch.setattr(roles, "is_org_member", lambda sub, org: (sub, org) == ("owner", 8))
     monkeypatch.setattr(access, "current_org", lambda sub: 99)  # org de l'APPELANT
     ref = instance_refs.parse_ref(instance_refs.make_member_ref(8, "owner", "zoho"))
     # bob emprunte : autorisé, co-pose SON org (99), pas celle de l'owner (8)
     assert access.guard_instance_access("bob", ref) == 99
+
+
+@pytest.mark.parametrize("side", [["user:bob"], ["group:5"]])
+def test_guard_member_share_side_stops_when_the_lender_left_the_org(monkeypatch, side):
+    """Le prêt né dans l'org 8 cesse quand son prêteur la quitte — à une personne comme
+    à une équipe ; rien n'est détaché (la ligne et son `share_side` restent)."""
+    _mock_sharing(monkeypatch, [], side)
+    monkeypatch.setattr(group_store, "is_group_member", lambda s, g: (s, g) == ("bob", 5))
+    monkeypatch.setattr(db, "get_suspension", lambda sub: None)
+    monkeypatch.setattr(roles, "is_org_member", lambda sub, org: False)
+    ref = instance_refs.parse_ref(instance_refs.make_member_ref(8, "owner", "zoho"))
+    with pytest.raises(McpError) as e:
+        access.guard_instance_access("bob", ref)
+    assert e.value.error.data == {"code": "lender_left_org", "retryable": False}
+    assert "org #8" in e.value.error.message
 
 def test_guard_member_share_side_rejects_non_beneficiary(monkeypatch):
     _mock_sharing(monkeypatch, [], ["user:bob"])

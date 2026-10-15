@@ -13,7 +13,8 @@ taken; the returned type lives in `resolved_credential` (both extracted from her
 Depends on everything below it: `scope` (context, project pins),
 `rbac` (instance guard, error hint), `cascade` (the walker),
 `quotas` (the platform tier's ceiling). The thin views built on top of it
-(`resolve_api_key`, `resolve_credential_fields`…) live in `views`.
+(`resolve_api_key`, `resolve_credential_fields`, `platform_quota_hint`…) live in
+`views`.
 """
 from __future__ import annotations
 
@@ -29,7 +30,7 @@ from .. import links
 from .. import (providers, credentials_store, db, group_store, instance_refs, org_store,
                 session_org, tenant_vault)
 from ..connectors import cle_perso
-from . import (cascade, chain_shadow, heritage, indices, platform_rate, quotas, rbac,
+from . import (cascade, chain_shadow, heritage, indices, platform_rate, prets, quotas, rbac,
                resolve_anon, scope, tenant_budget)
 from .resolved_credential import ResolvedCredential
 
@@ -260,12 +261,19 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
         # hand over, never taking another account at this tier.
         return (key, eff) if key else None
 
+    prets_vus = prets.PretsDuParcours()   # the lent rule along this walk
+
     def _group_fetch(gid: int, mprov: str):
         """TEAM fetch probe: same account selection as the member (Phase 2).
-        Mono-account → the historical read (account='')."""
+        Mono-account → the historical read (account=''); a loan, only NAMED (`prets`)."""
         # The CONTEXT org, not the group's: an override is read on the
         # requester (same seam as everywhere else).
-        if not cascade._is_multi_account(mprov, active_org):
+        multi = cascade._is_multi_account(mprov, active_org)
+        decide, hit = prets_vus.au_palier_equipe(gid, mprov, named_account if multi else None,
+                                                 multi=multi)
+        if decide:
+            return hit
+        if not multi:
             return group_store.get_group_secret(gid, mprov)
         eff, explicit = _pick_account("group", str(gid), mprov, "for your team",
                                       scope="group")
@@ -312,6 +320,7 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
         provider, sub, active_org, probe=probe, want=want,
         group=lambda: scope.current_group(sub))
 
+    prets_vus.refuser_si_seuls(win, porteur)
     # The org forbids personal keys here (#1239) and nothing shared serves: say so.
     if win is None or (named_account and win.mode == "platform"):
         cle_perso.refuser_si_interdite(active_org, porteur, cle_perso.A_L_APPEL)
@@ -363,7 +372,7 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
                               heritage.org_des_cles(sub, active_org))
     if win.mode != "platform":
         return ResolvedCredential(provider, win.payload, False, win.mode,
-                                  win.entity_type, win.entity_id, account=win.account)
+                                  *prets_vus.ligne_servie(win), account=win.account)
     if check_usage:  # paid option RE-READ on every use (ADR 0070 §7), no fallback
         quotas.exiger_option_payante(provider, sub, active_org)
         platform_rate.enforce(provider, sub, heritage.org_des_cles(sub, active_org),
@@ -417,41 +426,6 @@ def _win_quota(win, sub: str, provider: str,
     limit = quotas.plafond_du_jour(win.payload, provider,
                                    lambda: quotas.quotas_leves(sub, active_org))
     return used, limit
-
-
-def platform_quota_hint(provider: str, sub: Optional[str] = None) -> Optional[dict]:
-    """READ-ONLY snapshot of today's platform quota for `provider` —
-    decrypts nothing (PRESENCE probe, like `status_for`/`GET /api/me`) and consumes
-    nothing. For a connector that debits this quota ON SPEND
-    (`record_platform_usage`, e.g. `apollo_match_person`), this is what lets
-    a caller know what remains WITHOUT waiting for the bare refusal — a batch
-    worker can arbitrate its calls instead of discovering the limit in the middle of a
-    lead (oto-backend#710, signals #311/#312/#313).
-
-    Walks the cascade as a presence probe for a SINGLE provider — `status_for`
-    does the same for the WHOLE registry (acceptable cost once per
-    dashboard load); a tool that may run hundreds of times
-    in a batch only needs ONE walk, on THIS provider.
-
-    `None`: either this provider would not resolve in platform mode for this sub
-    (a BYO key wins before, or no grant — the question does not arise),
-    or no ceiling (unlimited, or quotas lifted by `platform_unmetered`, ADR 0070 §7)."""
-    sub = sub or scope.current_user_sub_or_raise()
-    active_org = scope.current_org(sub)
-    active_group = scope.current_group(sub)
-    hits = list(chain_shadow.resolution_rungs(sub, provider, org=active_org, group=active_group,
-                                     probe=cascade.PRESENCE_PROBE, want="auto"))
-    winner = hits[0] if hits else None
-    if winner is None or winner.mode != "platform":
-        return None
-    used, limit = _win_quota(winner, sub, provider, active_org)
-    if not limit:
-        return None
-    # `kind` says WHAT this counts: oto's daily allowance on the shared platform key (as
-    # `oto_whoami`'s `platform_quotas`), never the provider's balance — which can be empty
-    # while this reads 200 left (#1066: `remaining: 200`, then "Not enough credits").
-    return {"kind": "oto_daily_allowance", "used": used, "limit": limit,
-            "remaining": max(0, limit - used)}
 
 
 def _resolve_pinned_instance(provider: str, sub: str, ref) -> ResolvedCredential:
