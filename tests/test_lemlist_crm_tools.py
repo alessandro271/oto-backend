@@ -390,10 +390,13 @@ def test_max_chars_coupe_et_dit_combien_de_textes_sont_coupes():
     assert out["truncated_fields"] == 1
 
 
-def test_max_chars_nul_est_refuse():
+@pytest.mark.parametrize("max_chars", [0, -5])
+def test_max_chars_nul_est_refuse(max_chars):
+    """0 n'est pas « pas de limite » : rendu brut sans un mot, l'agent croirait
+    avoir demandé une coupe."""
     key, cls = _with_fake_client()
     with key, cls as client_cls:
         client_cls.return_value.get_contact_messages.return_value = []
         with pytest.raises(Exception, match="max_chars"):
             _tool("lemlist_inbox").fn(op="messages", contact_id="ctc_1",
-                                      max_chars=-5)
+                                      max_chars=max_chars)

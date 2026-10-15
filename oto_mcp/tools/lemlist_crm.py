@@ -319,9 +319,9 @@ def register(mcp: FastMCP) -> None:
             messages = client.get_contact_messages(
                 contact_id, user_id=user_id, limit=limit, skip=skip,
                 mark_as_read=mark_as_read)
+            if max_chars is not None and max_chars < 1:
+                raise _bad("`max_chars` must be at least 1")
             if text_only or max_chars:
-                if max_chars is not None and max_chars < 1:
-                    raise _bad("`max_chars` must be at least 1")
                 messages, cut = _readable_messages(messages, text_only, max_chars)
                 result = {"messages": messages, "truncated_fields": cut}
             else:
