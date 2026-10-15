@@ -107,9 +107,14 @@ def refusal(decl: access_levels.AccessLevels, level: str, source: str, tool: str
               "org_id": org, "group_id": group})
 
 
-def _restricting_contexts(sub: str, connector: str) -> list[tuple]:
+def _restricting_contexts(connector: str) -> list[tuple]:
     """Sync (threadpool): `(org, team, level, source)` for every judged context whose
-    level RESTRICTS — empty when every context is `full`."""
+    level RESTRICTS — empty when every context is `full`, or without a sub. The identity
+    is read here, not in the loop: canonicalizing it may touch the database (alias
+    drain), like `activation_gate._refus`."""
+    sub = call_axes.current_user_sub_from_token()
+    if not sub:
+        return []
     out = []
     for org, group in _judged_contexts(sub, connector):
         level, source = access_levels.resolve(connector, org, group)
@@ -143,10 +148,7 @@ async def require_covered(tool: str, args: dict,
     decl = access_levels.for_tool(tool)
     if decl is None:
         return
-    sub = call_axes.current_user_sub_from_token()
-    if not sub:
-        return
-    restricting = await run_in_threadpool(_restricting_contexts, sub, decl.connector)
+    restricting = await run_in_threadpool(_restricting_contexts, decl.connector)
     if not restricting:
         return
     op = None
