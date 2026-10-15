@@ -32,6 +32,18 @@ query and edit your hubspot crm (contacts, companies, deals, tickets) from claud
 - "the deals associated with this contact" → `hubspot_object` (op `associations`)
 - "add a note on this contact" → `hubspot_object` (op `add_note`)
 
+### merging duplicates — irreversible
+
+- "merge these two acme companies into this one" → `hubspot_object` (op `merge`, object_type `companies`, `object_id` = the record that survives, `merge_ids` = the duplicates)
+
+⚠️ a hubspot merge **cannot be undone**. always run it first with `dry_run=true`: it reads the survivor and each duplicate (name and domain, or email; how many contacts and deals each one carries) and tells you what would happen, without writing anything.
+
+- the survivor **keeps its own values**; only its empty properties are filled from a duplicate. its associations (contacts, deals…) gather on it
+- companies, contacts, deals and tickets only; at most **10 duplicates per call**
+- each duplicate gets its own result — `merged`, `already_merged` (its id already leads to another record: hubspot keeps answering a merged id with its survivor), `not_found`, or `error` with hubspot's status and message — and one failure never stops the others
+- hubspot can give the survivor a **new id**: read `survivor_id` in the answer, not the id you passed
+- a recipe can never merge, like it can never delete
+
 ### segments = lists
 
 in hubspot, a "segment" is a **list**: there is no separate segments api. `hubspot_list` covers them.

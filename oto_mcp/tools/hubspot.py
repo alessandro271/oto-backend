@@ -10,6 +10,7 @@ Generic surface: `object_type` = contacts | companies | deals | tickets
 **Consolidated surface (ADR 0047 §Amendment)**: 9 tools → 2. The EIGHT verbs that
 carried `object_type` (`search`/`get`/`list`/`create`/`update`/`delete`/
 `associations`/`create_note`) live in **`hubspot_object`**, the verb in `op` —
+joined since by `merge` (`hubspot_merge`, irreversible) —
 they already shared their parameters (`object_type`, `object_id`, `properties`),
 and THAT is the merge criterion, not the count. **`hubspot_owners` stays ALONE**:
 it takes no CRM object parameter (no `object_type`, no `object_id`, no
@@ -70,6 +71,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access
 from ..connectors import verify as connector_verify
+from . import hubspot_merge
 from .hubspot_pipelines import (
     add_labels, compact_property, fill_pipeline_options, filter_properties)
 from .hubspot_scopes import measure_scopes, missing_scopes_refusal, translate
@@ -362,7 +364,7 @@ def register(mcp: FastMCP) -> None:
     @mcp.tool()
     def hubspot_object(
         op: Literal["search", "list", "get", "create", "update", "delete",
-                    "associations", "add_note"] = "search",
+                    "associations", "add_note", "merge"] = "search",
         object_type: Optional[str] = None,
         object_id: Optional[str] = None,
         properties: Optional[Union[list[str], dict]] = None,
@@ -375,6 +377,8 @@ def register(mcp: FastMCP) -> None:
         after: Optional[str] = None,
         resolve_labels: bool = False,
         sorts: Optional[list[dict]] = None,
+        merge_ids: Optional[list[str]] = None,
+        dry_run: bool = False,
     ) -> dict:
         """HubSpot CRM objects — one tool, the verb in `op`.
 
@@ -397,6 +401,20 @@ def register(mcp: FastMCP) -> None:
           to_object_type="deals". Requires `object_id` + `to_object_type`.
         - **"add_note"** : Attach a note to a CRM object (contacts/companies/deals/
           tickets). Requires `body` + `object_id` (the object the note hangs on).
+        - **"merge"** : ⚠️ IRREVERSIBLE (no unmerge). Folds duplicate records
+          (`merge_ids`, the losers) into ONE survivor (`object_id`, the primary),
+          one HubSpot merge per loser, in order — companies, contacts, deals,
+          tickets only. Use it to dedupe once the duplicates have been reviewed.
+          ALWAYS call it first with `dry_run=true`: it reads the primary and each
+          loser (name/domain or email, associated contact/deal counts) and says
+          what would happen, writing nothing. Rules: the survivor KEEPS its own
+          values, only its empty properties are filled from a loser; the losers'
+          associations move to it. At most 10 merge_ids per call. Each loser gets
+          its own `status` — merged | already_merged (its id already resolves to
+          another record, `resolves_to`; nothing done) | not_found | error
+          (`http_status` + `message`) — and one failure never stops the others.
+          HubSpot can give the survivor a NEW id: read `survivor_id` in the
+          answer, not the id you passed (`survivor_id_changed`).
 
         ⚠️ `properties` and `associations` are HOMONYMS whose expected type depends
         on `op` (read = list of names, write = dict / association objects) — see the
@@ -406,12 +424,12 @@ def register(mcp: FastMCP) -> None:
 
         Args:
             op: search | list | get | create | update | delete | associations |
-                add_note.
+                add_note | merge.
             object_type: contacts | companies | deals | tickets (or custom).
                 Required for every op ; on op="add_note" it is the type of the
                 object the note is attached to.
             object_id: id of the object — required for get, update, delete,
-                associations and add_note.
+                associations and add_note ; on op="merge", the PRIMARY (survivor).
             properties:
                 - READ (search, list, get) : property names to return (list[str]).
                 - WRITE (create, update) : object properties (dict), e.g.
@@ -445,9 +463,18 @@ def register(mcp: FastMCP) -> None:
                 search and serves at most 10 000 results per query: to walk
                 further, narrow the `filters` instead of paging. Website
                 visitors, latest first: hubspot_visits.
+            merge_ids: op="merge" ONLY — the ids to fold into `object_id`
+                (1 to 10, without the primary).
+            dry_run: op="merge" ONLY — read and report, write nothing. Do it
+                first.
         """
         c = _client()
         ordre = _sorts(sorts, op)
+        # Read on another op they would be dropped without a word — and a
+        # `dry_run=true` ignored by op="delete" deletes for real.
+        if op != "merge" and (merge_ids is not None or dry_run):
+            raise _bad(f"op='{op}' does not accept merge_ids or dry_run: they belong "
+                       "to op='merge'")
 
         def _labelled(result):
             # Opt-in, and only ever ADDS sibling keys: without the flag the client's
@@ -506,8 +533,12 @@ def register(mcp: FastMCP) -> None:
                     _need(object_type, "object_type", op),
                     _need(object_id, "object_id", op))
 
+            if op == "merge":
+                return hubspot_merge.merge(c, object_type, object_id, merge_ids,
+                                           dry_run=dry_run)
+
             raise _bad("op must be 'search', 'list', 'get', 'create', 'update', "
-                       "'delete', 'associations' or 'add_note'")
+                       "'delete', 'associations', 'add_note' or 'merge'")
         except UpstreamHTTPError as e:
             refus = translate(e, object_type=object_type, object_id=object_id)
             if refus is None:
