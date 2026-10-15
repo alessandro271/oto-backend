@@ -52,7 +52,7 @@ dependencies = [
     # Le mainteneur bump ici, puis `update-branch` la PR. L'atomicité du revert cède
     # devant ça. Cf. docs/contributions-forks.md (amendement du 2026-09-01).
     # v1.177.0 = resend : contacts, segments et sujets d'une liste de diffusion
-    # (connectors#131, contribution Tulina) ; sert `resend_contact`, `resend_segment`,
+    # (connectors#131, contribution externe) ; sert `resend_contact`, `resend_segment`,
     # `resend_topic` (oto-backend#1252). Aucun extra.
     # v1.175.0 = microsoft mail : ids immuables sur tous les appels, copie envoyée
     # relue (`sent_message`, ~10 s bornées) pour son `webLink` ; pièces jointes d'un
@@ -70,7 +70,7 @@ dependencies = [
     # `Authorization` ; sheets (onglets, lignes, formats, export xlsx), bodacc (le BODACC
     # entier), pennylane analytique, urbanisme (open data IGN), whatsapp (un fil se nomme
     # par son objet `user`), apollo (compte à sec nommé). Aucun extra.
-    # v1.169.0 = luma : client Luma (lu.ma, contribution Tulina, connectors#125) ; une
+    # v1.169.0 = luma : client Luma (lu.ma, contribution externe, connectors#125) ; une
     # redirection est refusée, la clé ne part pas vers un autre hôte. Aucun extra.
     # v1.168.1 = silae : en-tête `dossiers` posé sur tous les appels (vide hors dossier),
     # exigé par la passerelle de l API (403 sinon). Aucun extra.
