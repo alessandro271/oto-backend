@@ -2232,18 +2232,40 @@ fonction porte `SET jit = off` : sans lui, le JIT recompilait son corps à chaqu
 appel (200 ms par ligne, donc par écriture). Les deux GIN doublent à peu près le coût
 d'une insertion (5 000 lignes : 1,9 s → 4,1 s).
 
-⚠️ **Le coût de `values` suit le nombre de lignes TROUVÉES, pas `limit`** (mesuré le
-16/10/2026). Les deux GIN trouvent les candidats en moins d'une milliseconde, mais
-l'index trigramme exige de REVÉRIFIER chaque candidat, ce qui recalcule
-`datastore_valeurs_texte_v1(data)` ligne à ligne. Le classement (`ts_rank_cd`) la
-recalcule une deuxième fois, et le `COUNT` du total une troisième. Seule la moitié
-lexicale, seule, s'en passe : 4 ms pour 1 243 lignes, contre 268 ms pour la moitié
-fragment. Sur un tableau large (~260 colonnes), cela a donné 19 à 22 s en prod pour un
-mot présent dans 1 243 lignes sur 9 200, avec `limit=8`. **`total_max`** (`/rows`)
-borne le compte : au-delà, `total` vaut `total_max` et `total_capped: true` le dit ;
-absent, le total reste exact (le dashboard pagine et exporte sur lui). La page, elle,
-reste proportionnelle aux lignes trouvées tant que le texte des valeurs servies n'est
-pas MATÉRIALISÉ par ligne (comme `search_vec` l'est pour `all`).
+⚠️ **Le coût de `values` suivait le nombre de lignes TROUVÉES, pas `limit`** (mesuré le
+16/10/2026). Les deux GIN d'expression trouvent les candidats en moins d'une
+milliseconde, mais l'index trigramme exige de REVÉRIFIER chaque candidat, ce qui
+recalcule `datastore_valeurs_texte_v1(data)` ligne à ligne ; le classement
+(`ts_rank_cd`) la recalcule une deuxième fois, le `COUNT` du total une troisième. Sur un
+tableau large (~260 colonnes) : 19 à 22 s en prod pour un mot présent dans 1 243 lignes
+sur 9 200, avec `limit=8`.
+
+**Le texte est donc MATÉRIALISÉ par ligne** (`db/valeurs_servies.py`, révision 0061) :
+`valeurs_texte` (le texte replié) et `valeurs_vec` (son vecteur), deux colonnes
+nullables remplies par le déclencheur `datastore_rows_25_valeurs` à chaque écriture de
+`data` — quel que soit le code qui écrit, l'ancien compris pendant la bascule —, et leurs
+deux GIN (`idx_datastore_rows_valeurs_vec`, `idx_datastore_rows_valeurs_texte_trgm`). La
+revérification et le classement relisent une colonne. Banc de 9 200 lignes larges (~110
+colonnes), `limit=8` : un mot présent dans 1 243 lignes passe de 5,4 s à 29 ms (6 en
+parallèle : 5,6 s → 53 ms).
+- **Lues seulement quand leurs deux index sont valides** (`valeurs_servies.pretes`, relu
+  au plus toutes les 60 s) ; avant, l'ancien chemin, à l'identique.
+- **Une ligne pas encore remplie n'est jamais perdue** : chaque mot se cherche dans les
+  colonnes, OU, pour une ligne dont `valeurs_texte` est NULL, par l'ancien prédicat sur
+  le GIN d'expression. Elle coûte l'ancien prix, les autres le nouveau.
+- **Le rattrapage** des lignes nées avant : `scripts/remplir_valeurs_servies.py` (à blanc
+  par défaut), par `SET data = data` — le déclencheur calcule, la révision et le journal
+  de la ligne n'avancent pas.
+- **Le schéma du tableau n'y entre pas** : le texte ne dépend que de `data`. Un
+  changement de schéma qui ne réécrit pas `data` ne change aucun texte servi ; celui qui
+  le réécrit (renommage, retrait de colonne) passe par le déclencheur.
+- Le prix : une écriture calcule le texte une fois de plus (le déclencheur, en plus des
+  deux GIN d'expression). Une fois le rattrapage fini partout, retirer l'ancien
+  prédicat ET ses deux GIN (révision dédiée) rendra une écriture moins chère qu'avant.
+
+**`total_max`** (`/rows`) borne en plus le compte : au-delà, `total` vaut `total_max` et
+`total_capped: true` le dit ; absent, le total reste exact (le dashboard pagine et
+exporte sur lui).
 
 ## Interroger PLUSIEURS colonnes à la fois (oto#22 barreau 1)
 

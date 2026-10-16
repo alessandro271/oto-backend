@@ -483,7 +483,8 @@ def _ds_where(ns_id: int, q: Optional["Recherche"], filters: Optional[list]
     params: list = [ns_id]
     if q:
         from .search import lignes_trouvees_sql  # lazy : search → projects → datastore
-        clause, qparams = lignes_trouvees_sql(q)
+        from .valeurs_servies import lit_les_colonnes
+        clause, qparams = lignes_trouvees_sql(q, materialisee=lit_les_colonnes(q))
         where += f" AND {clause}"
         params.extend(qparams)
     fclauses, fparams = _ds_filter_clauses(filters)

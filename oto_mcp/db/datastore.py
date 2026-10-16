@@ -832,7 +832,8 @@ def datastore_list_rows(ns_id: int, *, offset: int = 0, limit: Optional[int] = N
     where, params = _ds_where(ns_id, q, filters)
     if order_by in (None, "") and q:
         from .search import rang_des_lignes_sql  # lazy : search → projects → datastore
-        rang, rparams = rang_des_lignes_sql(q)
+        from .valeurs_servies import lit_les_colonnes
+        rang, rparams = rang_des_lignes_sql(q, materialisee=lit_les_colonnes(q))
         order_sql = f"{rang} DESC, created_at {direction}, row_id {direction}"
         params.extend(rparams)
     elif order_by in (None, "", "_created_at"):

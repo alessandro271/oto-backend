@@ -22,6 +22,7 @@ from typing import Optional
 
 from ._conn import _connect
 from .index_concurrent import IndexConcurrent
+from . import valeurs_servies as vs
 from .paths import ROW_SERVED_VALUES_TEXT_SQL
 from .projects import _fold
 
@@ -351,29 +352,47 @@ def _tsquery_mot() -> str:
     return f"plainto_tsquery('french', {_fold('%s')})"
 
 
-def lignes_trouvees_sql(recherche) -> tuple[str, list]:
+def lignes_trouvees_sql(recherche, materialisee: bool = False) -> tuple[str, list]:
     """`(clause, params)` : la ligne contient CHAQUE mot, par le sens ou par fragment.
 
-    `recherche` est une `datastore.recherche.Recherche` (validée en amont)."""
+    `recherche` est une `datastore.recherche.Recherche` (validée en amont).
+
+    `materialisee` (portée `values`, `valeurs_servies.lit_les_colonnes`) : le mot se
+    cherche dans les colonnes de la ligne (`valeurs_vec`, `valeurs_texte`, leurs GIN),
+    dont la revérification relit une colonne au lieu de recalculer la fonction ; une
+    ligne pas encore remplie (`valeurs_texte` NULL) se cherche par l'ancien prédicat,
+    sur le GIN d'expression — jamais perdue pendant le rattrapage."""
     texte = TEXTE_DES_LIGNES[recherche.portee]
     # `values` : l'expression même de son GIN (le vecteur par défaut) ; `all` : le
     # vecteur matérialisé, la requête lisant de toute façon ligne à ligne.
     vecteur = None if recherche.portee == "values" else _vecteur_des_lignes("all")
     un_mot = _lexical_ou_fragment(texte, _tsquery_mot(), _fold("%s"), vecteur)
+    par_mot = 2
+    if materialisee:
+        if recherche.portee != "values":
+            raise ValueError(f"portée {recherche.portee!r} : seule `values` a ses "
+                             "colonnes matérialisées")
+        un_mot = (f"({vs.COLONNE_VECTEUR} @@ {_tsquery_mot()} "
+                  f"OR {vs.COLONNE_TEXTE} ILIKE '%%' || {_fold('%s')} || '%%' "
+                  f"OR ({vs.COLONNE_TEXTE} IS NULL AND {un_mot}))")
+        par_mot = 4
     clause = " AND ".join([un_mot] * len(recherche.mots))
-    return f"({clause})", [p for mot in recherche.mots for p in (mot, mot)]
+    return f"({clause})", [mot for mot in recherche.mots for _ in range(par_mot)]
 
 
-def rang_des_lignes_sql(recherche) -> tuple[str, list]:
+def rang_des_lignes_sql(recherche, materialisee: bool = False) -> tuple[str, list]:
     """`(expression, params)` du CLASSEMENT : `ts_rank_cd` normalisé (|32), comme
     `oto_search`, contre l'union (`||`) des tsqueries des mots — une ligne qui en
     porte davantage par le sens passe devant. Une ligne trouvée seulement par fragment
     vaut 0 : elle vient après toutes celles que le sens a trouvées.
 
     Portée `all` : le vecteur matérialisé de la ligne (`rank_expr`, #318) — c'est
-    exactement le texte de cette portée. Portée `values` : calculé sur les seules
-    lignes trouvées, faute de colonne matérialisée pour ce texte."""
+    exactement le texte de cette portée. Portée `values` : sa colonne `valeurs_vec`
+    quand elle se lit (`materialisee`), recalculé pour une ligne pas encore remplie ;
+    sinon recalculé sur chaque ligne trouvée — le coût qui suivait leur nombre."""
     vec = _vecteur_des_lignes(recherche.portee)
+    if materialisee:
+        vec = f"COALESCE({vs.COLONNE_VECTEUR}, {vec})"
     tsq = " || ".join([_tsquery_mot()] * len(recherche.mots))
     return _rang(vec, tsq), list(recherche.mots)
 

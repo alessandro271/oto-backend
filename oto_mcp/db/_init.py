@@ -14,7 +14,7 @@ import time
 import psycopg
 
 from . import (_prerequis, access_shadow, index_concurrent, index_releve, _tenant_primaire, _version_alembic, connector_instances, datastore_ns, journal_revisions,
-               revision, rowlock, transcription, user_subscriptions)
+               revision, rowlock, transcription, user_subscriptions, valeurs_servies)
 from ._conn import _connect
 from ._ddl_garde import GardeDdl, ddl_a_faire
 from ._schema import _SCHEMA
@@ -706,6 +706,12 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
         conn.execute(_paths.DDL_FONCTION_VALEURS_TEXTE)
     for index in _search.INDEX_VALEURS:
         index_concurrent.poser_au_demarrage(conn, index)
+    # Le texte des valeurs servies MATÉRIALISÉ par ligne (16/10/2026) : colonnes,
+    # déclencheur qui les remplit à chaque écriture de `data` (ancien code compris,
+    # bleu/vert sur base partagée), et leurs deux GIN sous le même verdict CONCURRENTLY.
+    # Chacun posé seulement s'il manque — cf. `db/valeurs_servies.py`. APRÈS la
+    # fonction des valeurs, que le déclencheur appelle.
+    valeurs_servies.poser(conn)
     # Lot 3 chantier 0.4 : purge du type de lien `doc` (pointeur
     # manuel vers une page, subsumé par les backlinks [[…]] de Ship 4). 4 liens en
     # prod au comptage du 17/07. Idempotent (0 row ensuite).
