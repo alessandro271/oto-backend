@@ -6,7 +6,7 @@ A single, read-only tool: `google_accounts` — the connected accounts and, for
 each, the services it has AUTHORISED. This is the question that did not exist before the
 split (one consent = the six scopes) and that each service now raises:
 `drive_file` on an account that only authorised Gmail is refused, naming the card
-to open. `gmail_list_accounts` stays (compat with written procedures); this is where
+to open. `gmail(op="accounts")` lists the Gmail mailboxes; this is where
 "which accounts, with which rights?" is now asked — accounts SHARED by
 the team or org included, since a call can name them in `account`.
 """

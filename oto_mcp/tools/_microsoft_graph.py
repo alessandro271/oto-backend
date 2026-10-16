@@ -105,7 +105,7 @@ def run(fn: Callable[[], T], label: str, conflict: Optional[str] = None) -> T:
 
 
 def markdown_html(text: str) -> str:
-    """A body written in markdown, as HTML — the very renderer of `gmail_compose`
+    """A body written in markdown, as HTML — the very renderer of `gmail` (op=draft)
     (tables, fenced code, lists), so that an agent writes the same way everywhere."""
     from oto.tools.google.gmail.lib.gmail_client import _markdown_to_html_fragment
 

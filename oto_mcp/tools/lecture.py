@@ -33,6 +33,28 @@ from .. import deprecations
 LECTURE = ToolAnnotations(readOnlyHint=True)
 ENVOI = ToolAnnotations(readOnlyHint=False, destructiveHint=True, openWorldHint=True)
 
+# --- a connector's TWO tools: `<ns>` reads or simulates, `<ns>_act` acts (17/10/2026) ---
+# Alexis's decision, for security: one pair per connector, never a send or a delete as an
+# `op` of the tool that reads. `<ns>` declares `LECTURE` when it only reads, `SIMULATION`
+# when it also prepares something nobody sees and nothing destroys (a draft): it writes in
+# the person's own space, so it is not read-only, but it neither reaches a third party nor
+# deletes. `<ns>_act` declares `ACTE`: it sends, deletes or changes — the tool an MCP client
+# asks to confirm. Guarded by `tests/test_convention_act.py`; the old names are refused by
+# `outils_retires.RENOMMAGES_ACT`.
+SIMULATION = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False)
+ACTE = ENVOI
+
+
+def documente(texte: str):
+    """Give a tool function its docstring from a COMPOSED text — when two tools of a pair
+    share a passage (the composition arguments of `<ns>` and `<ns>_act`), it is written
+    once. A docstring, not `description=`: FastMCP parses its `Args:` into the parameter
+    descriptions, as for any other tool."""
+    def poser(fn):
+        fn.__doc__ = texte
+        return fn
+    return poser
+
 
 def en_lecture(tool) -> bool:
     """Has the tool (FastMCP object) declared itself read-only?"""

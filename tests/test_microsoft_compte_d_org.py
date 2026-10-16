@@ -126,7 +126,7 @@ def test_le_compte_de_l_org_sert_le_membre_sans_designation_et_n_est_pas_un_pret
                                                                                 trace):
     _poser(org, "org", ORG, BOITE_ORG, "RT-ORG")
     assert org.auth.access_token_for(EMPRUNTEUSE, "outlook") == "AT:RT-ORG"
-    assert _repondre("outlook_message") == {"ok": True, "_account": BOITE_ORG}
+    assert _repondre("outlook") == {"ok": True, "_account": BOITE_ORG}
 
 
 def test_l_ordre_propre_puis_equipe_puis_org(org):
@@ -163,7 +163,7 @@ def test_le_compte_de_l_org_avant_les_prets_le_pret_seulement_nomme(org, trace):
     assert org.auth.access_token_for(EMPRUNTEUSE, "outlook") == "AT:RT-ORG"
     assert org.sous_compte(JANE)(
         org.auth.access_token_for, EMPRUNTEUSE, "outlook") == "AT:RT-JANE"
-    assert _repondre("outlook_message")["lent_by"] == "preteuse@contoso.example"
+    assert _repondre("outlook")["lent_by"] == "preteuse@contoso.example"
 
 
 def test_un_pret_a_l_equipe_active_n_est_juge_qu_une_fois_et_jamais_par_le_palier(
@@ -190,7 +190,7 @@ def test_un_pret_a_l_equipe_active_n_est_juge_qu_une_fois_et_jamais_par_le_palie
     assert org.sous_compte(JANE)(
         org.auth.access_token_for, EMPRUNTEUSE, "outlook") == "AT:RT-JANE"
     assert vus == [JANE]
-    assert _repondre("outlook_message") == {
+    assert _repondre("outlook") == {
         "ok": True, "_account": JANE, "lent_by": "preteuse@contoso.example",
         "lent_via_group": {"id": EQUIPE, "name": "Ventes"}}
     # Avec un compte de l'org : il sert sans nom, aucun prêt n'est jugé.
@@ -288,7 +288,7 @@ def test_une_equipe_en_lecture_ne_se_fait_pas_ecrire_par_le_compte_de_l_org(org,
     decl = al._valider("outlook", {
         "levels": {"full": ("Mail.ReadWrite",), "read": ("Mail.Read",)},
         "scope_implies": {"Mail.ReadWrite": ("Mail.Read",)},
-        "tools": {"outlook_message": {"get": ("Mail.Read",), "delete": ("Mail.ReadWrite",)}}})
+        "tools": {"outlook": {"get": ("Mail.Read",), "delete": ("Mail.ReadWrite",)}}})
     monkeypatch.setitem(al.DECLARED, "outlook", decl)
     monkeypatch.setattr(al, "settings", lambda o, g: (
         {PORTEUR: {"org": None, "group": "read"}} if g == EQUIPE else {}))
@@ -300,7 +300,7 @@ def test_une_equipe_en_lecture_ne_se_fait_pas_ecrire_par_le_compte_de_l_org(org,
         return {}
 
     with pytest.raises(McpError) as e:
-        asyncio.run(gate.require_covered("outlook_message", {"op": "delete"}, schema))
+        asyncio.run(gate.require_covered("outlook", {"op": "delete"}, schema))
     assert (e.value.error.data["scope"], e.value.error.data["group_id"]) == (
         "group", EQUIPE)
-    asyncio.run(gate.require_covered("outlook_message", {"op": "get"}, schema))
+    asyncio.run(gate.require_covered("outlook", {"op": "get"}, schema))

@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import logging
 
-from . import ownership, providers, run_status, tool_alias
+from . import outils_retires, ownership, providers, run_status, tool_alias
 
 logger = logging.getLogger(__name__)
 
@@ -250,6 +250,9 @@ def _format_context(ctx: dict) -> str:
             # handshake et croyait reprendre un travail que personne ne menait plus.
             bits.append(f"{label}{doc} {run_status.describe(r)}")
         lines.append(f"- Derniers déroulés : {' · '.join(bits)}")
+    annonce = outils_retires.annonce_act_du_jour()
+    if annonce:
+        lines.append(f"- {annonce}")
     return "\n".join(lines)
 
 

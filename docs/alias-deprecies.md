@@ -236,6 +236,31 @@ Comme pour #1189, **les lecteurs restent déclarés `ENVOI` pendant la transitio
 repassent `LECTURE` au retrait. La garde datée `tests/test_chat_teams_transition_envoi_1231.py`
 rougit à partir du 11/12/2026 tant qu'une de ces ops est servie.
 
+### Gmail et Outlook : lire ou simuler, agir — deux outils (17/10/2026, retrait IMMÉDIAT)
+
+**Retrait SANS préavis, exception à l'Art 8.2, décidée par Alexis le 17/10/2026 pour la
+sécurité.** Un client MCP autorise des outils, pas des arguments :
+`gmail_compose(mode="send")` envoyait sous l'autorisation donnée au brouillon, et
+`gmail_message(op="trash")` vidait une boîte sous celle donnée à la lecture. L'ancien nom
+étant lui-même la faille, il n'est pas servi pendant un préavis : il refuse tout de suite,
+en nommant l'appel à faire (`oto_mcp/outils_retires.py`, `RENOMMAGES_ACT`, la table de
+correspondance dont dérivent le refus, la migration 0062 des listes d'outils enregistrées
+et l'annonce servie aux agents jusqu'au 17/12/2026). Convention : chaque connecteur sert
+`<ns>` (lit ou simule ; un brouillon est une simulation) et `<ns>_act` (envoie, supprime,
+déplace — le client le fait confirmer), gardée par `tests/test_convention_act.py`.
+
+| Ancien appel (refusé depuis le 17/10/2026) | Nouvel appel |
+| --- | --- |
+| `gmail_list_accounts` | `gmail(op="accounts")` |
+| `gmail_message(op=search/get/attachment/drafts)` | `gmail(op=…)`, mêmes arguments |
+| `gmail_message(op=archive/trash)` | `gmail_act(op=…)`, mêmes arguments |
+| `gmail_compose` (brouillon) | `gmail(op="draft")`, mêmes arguments sans `mode` |
+| `gmail_compose(mode="send")` | `gmail_act(op="send")` : un brouillon par `draft_id`, ou le message complet |
+| `outlook_message(op=search/get/attachment/drafts/folders)` | `outlook(op=…)` |
+| `outlook_message(op=archive/trash/move)` | `outlook_act(op=…)` |
+| `outlook_compose` (brouillon) | `outlook(op="draft")` |
+| `outlook_compose(mode="send")` | `outlook_act(op="send")` : un brouillon par `draft_id`, ou le message complet |
+
 ### Pourquoi les clés de capacité n'ont pas d'alias
 
 Une clé de capacité ne sort du serveur qu'à deux endroits : `/api/admin/capabilities`

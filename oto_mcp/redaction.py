@@ -194,7 +194,7 @@ EMPTY_MESSAGES: dict[str, str] = {
 #                              `{"data": rows, "pages": …, "truncated": …}`)
 #   result                   — l'enveloppe fastmcp d'un retour `list` (98 outils)
 #   records                  — airtable (clé DYNAMIQUE `{key: items}`), salesforce
-#   files/messages/events    — `drive_file`, `gmail_message`/`messenger_chat`, `calendar_event`
+#   files/messages/events    — `drive_file`, `gmail`/`messenger_chat`, `calendar_event`
 #   calls/jobs/documents/hits — `oto_admin_monitoring`, `runner_jobs`, `me_legal`, `oto_search`
 #   matches/entries          — AUCUNE occurrence relevée ; conservées du contrat arbitré.
 # ⚠️ Ce backend ne nomme PAS ses collections de façon uniforme : les capacités à elles

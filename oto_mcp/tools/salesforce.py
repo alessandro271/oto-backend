@@ -30,7 +30,7 @@ a record). The two scoping decisions:
 `salesforce_describe` stays **ALONE**: it describes a TYPE, not a record;
 its output is a projected schema (not rows), its `verbose` has no counterpart
 anywhere, and it is what enumerates the `fields` the others consume — same
-discovery role as `zoho_modules` / `gmail_list_accounts`.
+discovery role as `zoho_modules`.
 
 ⚠️ **This module WRITES to the customer's CRM**: `salesforce_record` op=create /
 update / delete / upsert / bulk_create / bulk_update, and `salesforce_note`

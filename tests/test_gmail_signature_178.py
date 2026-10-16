@@ -1,4 +1,4 @@
-"""`gmail_compose` appose la signature Gmail du compte émetteur (otomata-tech/oto#178).
+"""`gmail(op="draft")` et `gmail_act(op="send")` apposent la signature Gmail du compte émetteur (otomata-tech/oto#178).
 
 L'API Gmail n'appose JAMAIS la signature : c'est le client web qui l'ajoute à la
 composition. La CLI la posait (`--sign`, défaut), le tool non — retours 794 et 795
@@ -52,8 +52,12 @@ def _compose(monkeypatch, client, **kw):
     monkeypatch.setattr("oto_mcp.access.current_user_sub_or_raise", lambda: "sub-1")
     m = FastMCP("t")
     G.register(m)
-    fn = asyncio.run(m.get_tool("gmail_compose")).fn
-    return asyncio.run(fn(**kw))
+    mode = kw.pop("mode", "draft")
+    if mode == "send":
+        fn = asyncio.run(m.get_tool("gmail_act")).fn
+        return asyncio.run(fn(op="send", **kw))
+    fn = asyncio.run(m.get_tool("gmail")).fn
+    return asyncio.run(fn(op="draft", **kw))
 
 
 @pytest.mark.parametrize("mode,reply_to,methode", [
@@ -107,7 +111,7 @@ def test_une_signature_illisible_refuse_et_n_envoie_rien(monkeypatch):
     with pytest.raises(McpError) as e:
         _compose(monkeypatch, cli, body="x", mode="send", to="j@x.fr")
     assert "sign=False" in e.value.error.message
-    assert "nothing was sent" in e.value.error.message
+    assert "nothing was written" in e.value.error.message
     assert cli.appels == []
 
 
@@ -117,7 +121,8 @@ def test_le_texte_servi_annonce_la_signature():
 
     m = FastMCP("t")
     G.register(m)
-    t = asyncio.run(m.get_tool("gmail_compose"))
-    assert "signature" in t.description and "none_configured" in t.description
-    assert t.parameters["properties"]["sign"]["default"] is True
-    assert "signature" in t.parameters["properties"]["sign"]["description"]
+    for nom in ("gmail", "gmail_act"):
+        t = asyncio.run(m.get_tool(nom))
+        assert "signature" in t.description and "none_configured" in t.description, nom
+        assert t.parameters["properties"]["sign"]["default"] is True, nom
+        assert "signature" in t.parameters["properties"]["sign"]["description"], nom

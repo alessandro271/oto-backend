@@ -1,4 +1,4 @@
-"""oto-backend#867 lot 2 — la résolution des pièces jointes de `gmail_compose` ne
+"""oto-backend#867 lot 2 — la résolution des pièces jointes d'un mail composé (`gmail` op=draft, `gmail_act` op=send) ne
 bloque plus la boucle d'événements, et une source lente rend une erreur nommée.
 
 `file_source.resolve` (drive/gmail/url) fait un appel HTTP synchrone par pièce
@@ -56,9 +56,9 @@ def test_attachments_tournent_hors_boucle(monkeypatch, wired):
         return ResolvedFile(b"x", "a.pdf", "application/pdf")
 
     monkeypatch.setattr(wired.file_source, "resolve", _resolve)
-    fn = _tool("gmail_compose")
+    fn = _tool("gmail")
     boucle, result, err = _joue(fn(
-        body="hi", to="a@b.com",
+        op="draft", body="hi", to="a@b.com",
         attachments=[{"kind": "url", "url": "https://example.invalid/x"}]))
     assert err is None, err
     assert vu["thread"] is not boucle, (
@@ -75,9 +75,9 @@ def test_attachments_lentes_rendent_une_erreur_nommee(monkeypatch, wired):
         time.sleep(1)
 
     monkeypatch.setattr(wired.file_source, "resolve", _lent)
-    fn = _tool("gmail_compose")
+    fn = _tool("gmail")
     _, _, err = _joue(fn(
-        body="hi", to="a@b.com",
+        op="draft", body="hi", to="a@b.com",
         attachments=[{"kind": "url", "url": "https://example.invalid/x"}]))
     assert err is not None and "too long" in err.error.message, (
         f"une pièce jointe lente doit rendre une McpError nommée, pas un gel — reçu {err!r}")

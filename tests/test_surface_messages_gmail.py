@@ -72,7 +72,7 @@ def test_un_nom_retire_rend_les_verbes_survivants_du_domaine(monkeypatch):
 def test_un_outil_qui_EXISTE_mais_n_est_pas_monte_garde_son_message(monkeypatch):
     monkeypatch.setattr(T, "_surviving_siblings", lambda n: None)
     monkeypatch.setattr(T, "_connector_of_tool", lambda n: "google")
-    info = T.classify(T.NotFoundError("Unknown tool: 'gmail_message'"))
+    info = T.classify(T.NotFoundError("Unknown tool: 'gmail'"))
     assert info.code == "tool_not_mounted"
     assert "is not mounted in your session" in info.message
     # oto#91 (retour 382) : il affirmait « le connecteur n'est pas installé » — faux
@@ -159,8 +159,8 @@ def test_le_retour_nomme_l_acte(mode, attendu):
 
 
 # ── ④ le défaut ne sort plus vers l'extérieur ───────────────────────────────────
-def _schema_compose() -> tuple[dict, str]:
-    """Le schéma SERVI de `gmail_compose` + sa description — ce que le client voit.
+def _servis() -> dict:
+    """Les outils gmail SERVIS — ce que le client voit.
 
     On interroge `list_tools`, pas la fonction Python : un test qui lit la signature
     décrirait notre intention, pas le document que le modèle reçoit.
@@ -173,28 +173,30 @@ def _schema_compose() -> tuple[dict, str]:
 
     m = FastMCP("t")
     gmail.register(m)
-    t = next(x for x in asyncio.run(m.list_tools(run_middleware=False))
-             if x.name == "gmail_compose")
-    return t.parameters["properties"]["mode"], (t.description or "")
+    return {t.name: t for t in asyncio.run(m.list_tools(run_middleware=False))}
 
 
-def test_le_defaut_de_gmail_compose_est_BROUILLON():
+def test_rediger_et_envoyer_sont_deux_outils():
     """Le chemin paresseux ne doit pas être celui qui envoie à un tiers.
 
-    Avant : oublier `mode` suffisait à expédier un mail — c'est exactement ce qui est
-    arrivé le 14/08, trois fois, chez une cliente. La règle maison (« aucun défaut ne doit
-    écrire », a fortiori dehors) tranche : on rédige, et envoyer devient un acte déclaré.
-    Rupture de comportement assumée — une procédure qui envoie vraiment passe `mode="send"`.
+    Avant le 14/08 : oublier `mode` suffisait à expédier un mail — trois fois, chez une
+    cliente. Le défaut est alors passé au brouillon ; mais un client MCP autorise des
+    OUTILS : « toujours autoriser » le brouillon autorisait aussi `mode="send"`. Depuis le
+    17/10/2026, l'outil qui rédige (`gmail`) n'a plus aucun moyen d'envoyer, et l'envoi
+    est un outil à part (`gmail_act`) dont l'`op` n'a pas de défaut.
     """
-    mode, _ = _schema_compose()
-    assert mode["default"] == "draft"
-    assert set(mode["enum"]) == {"send", "draft"}      # envoyer reste possible
-    assert "(default)" in mode["description"] and "draft" in mode["description"]
+    servis = _servis()
+    lit = servis["gmail"].parameters
+    assert "mode" not in lit["properties"]
+    assert "send" not in lit["properties"]["op"]["enum"]
+    agit = servis["gmail_act"].parameters
+    assert "send" in agit["properties"]["op"]["enum"]
+    assert "op" in agit.get("required", []), "l'acte se nomme, il n'a pas de défaut"
 
 
-def test_le_contrat_ANNONCE_que_l_envoi_est_explicite():
-    # La description EST le contrat lu par le modèle : si elle ne dit pas que le défaut
-    # ne part pas, le changement de défaut ne protège que ceux qui l'ont deviné.
-    _, doc = _schema_compose()
-    assert "DRAFT by default" in doc
-    assert '`mode="send"` is required' in doc
+def test_le_contrat_ANNONCE_qui_envoie():
+    # La description EST le contrat lu par le modèle : elle dit lequel des deux part.
+    servis = _servis()
+    assert "does NOT leave the mailbox" in servis["gmail"].description
+    assert "`gmail_act`" in servis["gmail"].description
+    assert "LEAVES" in servis["gmail_act"].description

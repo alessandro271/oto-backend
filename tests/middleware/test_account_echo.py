@@ -116,7 +116,7 @@ def test_un_outil_direct_n_est_pas_reinterprete(trace):
 def test_un_compte_resolu_sous_le_porteur_est_annonce_sur_l_outil_du_service(trace):
     session_org.note_call_trace(resolved_connector="microsoft",
                                 resolved_account="jane@contoso.example")
-    out = call_context._echo_account(_Result({"ok": True}), "outlook_message",
+    out = call_context._echo_account(_Result({"ok": True}), "outlook",
                                      rappel={"_account": "jane@contoso.example",
                                              "lent_by": "preteuse@contoso.example"})
     assert _payload(out) == {"ok": True, "_account": "jane@contoso.example",
@@ -132,7 +132,7 @@ def test_un_compte_propre_sous_la_carte_n_a_pas_de_lent_by(trace):
 
 def test_un_porteur_etranger_reste_tu(trace):
     session_org.note_call_trace(resolved_connector="microsoft", resolved_account="jane")
-    out = call_context._echo_account(_Result({"ok": True}), "gmail_message",
+    out = call_context._echo_account(_Result({"ok": True}), "gmail",
                                      rappel={"_account": "jane@contoso.example",
                                              "lent_by": "preteuse@contoso.example"})
     assert _payload(out) == {"ok": True}

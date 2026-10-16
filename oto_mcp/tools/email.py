@@ -15,7 +15,7 @@ per connector in `orgs.email_settings`); the **transport derives from it**
 - **brand** fallback = the instance's sender (`OTO_MAIL_FROM`; org with no configured address, `from` omitted) →
   reserved to **super_admin** (it is the platform's brand identity).
 
-To be distinguished from `gmail_compose`, which writes from the user's Gmail mailbox
+To be distinguished from `gmail_act` (op=send), which sends from the user's Gmail mailbox
 (and which drafts a DRAFT by default — sending there is explicit).
 
 Spine: loaded explicitly in `register_all`, outside the activation gate, hidden
@@ -217,8 +217,8 @@ def register(mcp: FastMCP) -> None:
         via the org's Resend key. Typical use — onboarding sequences driven
         by the agent: read the target account's state, write a TAILORED message, send,
         then record it in the datastore so as not to follow up twice. To send
-        from the user's Gmail mailbox, use `gmail_compose` — note that it
-        drafts a DRAFT by default, you need `mode="send"` for it to go out.
+        from the user's Gmail mailbox, use `gmail_act(op="send")` — a draft written with
+        `gmail(op="draft")`, by its `draft_id`, or a full message.
 
         Scheduled send: by default the org has a "quiet hours" window (e.g. 8pm–8am);
         if you compose inside it, the send is AUTO-shifted to the next open slot —

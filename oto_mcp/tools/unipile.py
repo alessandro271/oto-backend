@@ -936,8 +936,8 @@ def _verify(fields: dict, config: dict | None = None) -> None:
 # An MCP client (claude.ai, ChatGPT) authorizes TOOLS, never operations: "always allow"
 # on `whatsapp_chat` to read used to allow sending a message to a third party too,
 # without a confirmation. So everything that acts AT a third party or IN THE PERSON'S
-# NAME has a tool of its own (Gmail's shape: `gmail_message` reads, `gmail_compose`
-# writes), declared `ENVOI`. The transition of the old ops (`OpsDepreciees`,
+# NAME has a tool of its own (Gmail's shape: `gmail` reads or drafts, `gmail_act`
+# acts), declared `ENVOI`. The transition of the old ops (`OpsDepreciees`,
 # `en_transition`) is shared with the other messaging readers: `tools/lecture.py`.
 
 

@@ -59,6 +59,7 @@ tests = [
   "tests/test_org_store_surface_frozen.py",
   "tests/test_tenant_ne_s_etend_plus.py",
   "tests/test_selection_tests.py",
+  "tests/test_convention_act.py",
 ]
 
 [complete]

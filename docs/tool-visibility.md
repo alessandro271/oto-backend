@@ -176,6 +176,26 @@ Le réglage se pose par `oto_connector_access_level` (`refresh_visibility` : la 
 courante se recharge, celles des autres membres à leur prochaine session — la garde, elle,
 vaut dès leur prochain appel).
 
+## Lire ou simuler, agir : deux outils par connecteur (17/10/2026)
+
+Un client MCP autorise des OUTILS, jamais des arguments : « toujours autoriser » un outil
+autorise toutes ses ops. Décision d'Alexis, pour la sécurité : un connecteur sert **une
+paire**, `<ns>` et `<ns>_act`.
+
+- `<ns>` lit ou simule. Annoté `lecture.LECTURE` s'il ne fait que lire, `lecture.SIMULATION`
+  (`readOnlyHint=False`, `destructiveHint=False`, `openWorldHint=False`) s'il prépare
+  aussi ce que personne ne voit et que rien ne détruit — un brouillon.
+- `<ns>_act` engage ou détruit : envoyer, mettre à la corbeille, archiver, déplacer,
+  supprimer, publier. Annoté `lecture.ACTE` (`destructiveHint` et `openWorldHint` écrits,
+  pas déduits) : c'est l'outil que le client fait confirmer.
+
+Garde : `tests/test_convention_act.py` — une op à effet hors d'un `*_act` rougit, un
+`*_act` sans son annotation aussi ; les connecteurs pas encore migrés sont dans sa liste
+fermée `A_MIGRER`, qui ne peut que rétrécir. Les anciens noms d'une migration refusent en
+nommant l'appel à faire (`outils_retires.RENOMMAGES_ACT`) ; les listes d'outils
+enregistrées (presets de projet, flottes, déclencheurs, masquages) sont réécrites par
+migration en gardant leur sens. Premier lot : Gmail et Outlook.
+
 ## Méta-tools et `PROTECTED_TOOLS`
 
 Méta-tools exposés : `oto_call` et `oto_tool_schema` (`tools/meta.py`, MCP-only par nature) ; la toolbox du membre est une capacité (`capabilities/tools_me.py`, #429) — `oto_disable_tool`/`oto_enable_tool` sont la face MCP des mêmes capacités que `POST|DELETE /api/me/tools/{name}`, `oto_list_my_tools` une capacité MCP-only (`me.tools.search`) sur le noyau `tools/catalogue.py`, que la grille du dashboard (`GET /api/me/tools`) ne partage pas : elle pose une autre question. **`PROTECTED_TOOLS`** (`tool_visibility.py`, source unique) = quatre familles jamais masquables (default-hidden inclus) **ni désactivables** : méta-toolset + identité (`oto_list_my_tools`/`oto_enable_tool`/`oto_whoami`/`oto_profile`), échappatoires de contexte (`oto_use_org`/`oto_clear_org`/`oto_list_orgs`/`oto_use_group`/`oto_clear_group` — anti-lockout, vécu Sentry 2026-06-30), boucle d'usage (`feedback`/`run_start`/`run_finish` — mandatés par les instructions plateforme ADR 0017 : un toggle qui les masque rend le gap invisible), **dispatch universel** (`oto_call`/`oto_tool_schema` — ADR 0036 : appeler par son nom un outil NON listé (FOD, connecteur non installé) le temps d'un appel, sans muter la visibilité ; exécution par `Tool.run` HORS middleware → gates call-time intactes + rédaction ré-appliquée via `redaction.py`. Un connecteur COUPÉ — master plateforme, override d'org, coupure d'équipe — n'est pas « non listé » : refus `connector_disabled` sur les deux chemins, joué par `connectors/activation_gate.py` après la pose du contexte d'appel, #1064). Garde des deux faces, désormais un seul handler : masquer un outil protégé → 400 `protected_tool`, un nom inconnu → 404 `unknown_tool` ; `GET /api/me/tools` expose `protected:bool` (toggle inerte dashboard).

@@ -9,22 +9,14 @@ the project pins, otherwise the default: `auth/google.credentials_for`.
 No platform key: access is strictly per-user via OAuth (like the
 datastore and WhatsApp), so no `resolve_api_key` here.
 
-**Consolidated surface (ADR 0047 §Amendment, applied to the gmail product)**: one tool
-per business OBJECT, the verb as an `op` parameter — `gmail_message` (search/get/
-attachment/drafts/archive/trash: everything that designates a message in the mailbox, by
-query or by id). Two tools stay ALONE:
-- `gmail_list_accounts`: no parameter (it enumerates the `account` values the others
-  consume) — same case as `zoho_modules`, merging pure discovery
-  homogenizes nothing;
-- `gmail_compose`: its ~12 composition parameters (body/to/subject/reply_to/cc/
-  bcc/html/from_name/markdown/attachments/mode/sign) overlap NONE of the parameters of
-  the ops above — it is a disjoint variant, which would weigh in the schema
-  exactly what it weighs today separate (criterion = parameter
-  homogeneity, not counting).
-
-⚠️ This module WRITES to the user's mailbox: `op="archive"`/`op="trash"`
-(gmail_message) and `gmail_compose` (real send). The default of `gmail_message` is
-`op="search"` — a READ: a call without `op` can neither write nor delete.
+**Two tools (17/10/2026, Alexis's decision, for security)** — an MCP client authorizes
+TOOLS, not arguments, so what reads never sends nor deletes:
+- `gmail` reads or simulates: accounts, search, get, attachment, drafts, and `op="draft"`
+  (writes a draft: nothing leaves, nothing is destroyed) — `lecture.SIMULATION`;
+- `gmail_act` acts: `op="send"` (an existing draft by `draft_id`, or a full message),
+  `op="archive"`, `op="trash"` — `lecture.ACTE`, the tool the client asks to confirm.
+The old names (`gmail_message`, `gmail_compose`, `gmail_list_accounts`) refuse by naming
+the call to make (`outils_retires.RENOMMAGES_ACT`).
 """
 from __future__ import annotations
 
@@ -39,16 +31,17 @@ from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import access, file_content, file_source
+from .lecture import ACTE, SIMULATION, documente
 from ..auth import google as google_oauth
 
-# Ops of `gmail_message`, in reads → writes order. Single source: input
-# validation AND the refusal message derive from it, so an added op
-# cannot be accepted without being announced (nor the reverse).
-_MESSAGE_READ_OPS = ("search", "get", "attachment", "drafts")
-_MESSAGE_WRITE_OPS = ("archive", "trash")
-_MESSAGE_OPS = _MESSAGE_READ_OPS + _MESSAGE_WRITE_OPS
-_MESSAGE_OPS_ERROR = (
-    "op must be 'search', 'get', 'attachment', 'drafts', 'archive' or 'trash'")
+# The ops of each tool. Single source: input validation AND the refusal message derive
+# from it, so an added op cannot be accepted without being announced (nor the reverse).
+_OPS = ("search", "get", "attachment", "drafts", "draft", "accounts")
+_ACT_OPS = ("send", "archive", "trash")
+
+
+def _ops_error(ops: tuple) -> str:
+    return "op must be " + ", ".join(f"'{o}'" for o in ops[:-1]) + f" or '{ops[-1]}'"
 
 
 def _bad(msg: str) -> McpError:
@@ -151,112 +144,251 @@ def _signed_html(body: str, html: Optional[str], markdown: bool, signature: str)
     return f"{corps}<br>--<br>{signature}"
 
 
+# The composition arguments, shared by `gmail(op="draft")` and `gmail_act(op="send")`:
+# written once, served in both descriptions.
+_COMPOSITION_ARGS = """\
+    body: the message, rendered from markdown to HTML by default.
+    to: recipient(s), comma-separated. REQUIRED for a new message (omit when replying).
+    subject: subject line (new message only; a reply keeps the thread's subject).
+    reply_to: id of the message to reply to. When set, this is a threaded REPLY
+        (subject/thread preserved) and `to`/`subject` are ignored.
+    cc: carbon-copy recipient(s), comma-separated.
+    bcc: blind-copy recipient(s), comma-separated — a new message only.
+    html: explicit HTML body (bypasses markdown rendering).
+    from_name: optional display name for the From header.
+    markdown: render `body` from markdown when `html` is absent (default True).
+    sign: append the account's Gmail signature (default True); False writes
+        the body alone.
+    attachments: files to attach, as `source` refs oto resolves server-side
+        (the agent has no local disk). Each item — `kind` selects the origin:
+        - Drive: `{"kind":"drive","file_id":"<id>"}` (id from drive_list/metadata)
+        - Gmail: `{"kind":"gmail","message_id":"<id>","filename":"<name>"}`
+        - URL:   `{"kind":"url","url":"https://…"}` — e.g. a signed URL from
+          `oto_upload_url` (upload a local PDF first) or drive_download.
+        - Project file: `{"kind":"project_file","project_id":<id>,"file_id":<id>}`
+          (ids from oto_project_files op=list)
+    account: email of the Google account to use — same choice as `_account`."""
+
+_SIGNATURE_DOC = """\
+The sending account's Gmail signature is appended by default, after `--`, like the Gmail
+web client does (the API never adds it on its own) — so do NOT write a sign-off block of
+your own in `body`. `signature` in the answer says what happened: "appended",
+"none_configured" (the account has no signature — nothing was added), or "disabled"
+(`sign=False`)."""
+
+_GMAIL_DOC = f"""The user's Gmail mailbox — READ it, or prepare a DRAFT. Nothing here sends,
+archives or deletes: that is `gmail_act`, the tool your client asks you to confirm.
+
+`op`:
+- **"search"** (default): search with Gmail query syntax. `query` e.g.
+  `from:foo@bar.com is:unread newer_than:7d`. Returns
+  {{messages: [{{id, threadId, from, subject, date, snippet, labelIds}}], count}}.
+- **"get"**: a full message (headers, body, attachment metadata) by `message_id`.
+- **"attachment"**: the CONTENT of an attachment of `message_id`, by `filename` (from
+  op="get"; `index` breaks a tie between same-named ones). Small text (JSON/CSV/Markdown/
+  plain, ≤256 KB) comes back inline as `{{encoding: "text", content}}`; a PDF as its
+  extracted text plus `raw_url`, a short-lived signed URL to the original (a scanned or
+  protected PDF has no text: `text_unavailable` says why); an .xlsx as CSV per sheet
+  (`sheet`, `max_rows` — default 200, max 5000; if `truncated`, ask one sheet or raise
+  `max_rows`, and `raw_url` gives the full file); anything else as a short-lived signed
+  URL `{{encoding: "url", url, expires_in}}`.
+- **"drafts"**: the drafts. Returns {{drafts: [{{id, message_id, to, subject, date,
+  snippet}}], count}} — a draft `id` is what `gmail_act(op="send", draft_id=…)` sends.
+- **"draft"**: WRITE A DRAFT — a new message (`to`, `subject`, `body`) or a threaded reply
+  (`reply_to`). It does NOT leave the mailbox. Returns `kind: "draft"` and its `id`: send
+  it with `gmail_act(op="send", draft_id=<id>)` once the person agrees.
+  ⚠️ A fresh draft can be MISSING from an already-open Gmail tab for a while (the API has
+  it, the client view lags): tell the person to reload or search `in:drafts`.
+- **"accounts"**: the Gmail accounts this call can use — the user's own, then the
+  mailboxes an admin shared with their team or organization. Returns {{accounts:
+  [{{email, is_default, shared}}]}}; pass an `email` as `_account` to act on that mailbox.
+  An unknown email is refused, never replaced.
+
+{_SIGNATURE_DOC}
+
+Args:
+    op: search (default) | get | attachment | drafts | draft | accounts.
+    query: op="search" — Gmail search query.
+    message_id: op="get"/"attachment" — the message id (from op="search").
+    filename: op="attachment" — name of the attachment (e.g. "Contrat.pdf").
+    index: op="attachment" — 0-based tiebreaker between same-named attachments.
+    max_results: op="search"/"drafts" — max items to return (default 20).
+    sheet: op="attachment" of an .xlsx — sheet name or 0-based index.
+    max_rows: op="attachment" of an .xlsx — rows per sheet (default 200, max 5000).
+    For op="draft":
+{_COMPOSITION_ARGS}
+"""
+
+_GMAIL_ACT_DOC = f"""ACT on the user's Gmail mailbox — ⚠️ every op here takes effect: a mail
+LEAVES, a message moves. Reading and drafting are `gmail`.
+
+`op` (required):
+- **"send"**: send a mail, the mail LEAVES. Either an existing draft, as it stands:
+  `draft_id` (from `gmail(op="draft")` or `gmail(op="drafts")`) — the usual path, the
+  person could read it first; or a full message: `to`, `subject`, `body` (or `reply_to`
+  for a threaded reply), the same arguments as `gmail(op="draft")`. Returns `kind:
+  "sent"`, the message `id` and `threadId`. Never report "sent" without reading `kind`.
+- **"archive"**: removes the INBOX label from `message_ids`.
+- **"trash"**: moves `message_ids` to the trash (Gmail deletes them after 30 days). One
+  call per message: a PARTIAL trash is possible and is named — replay only what was not
+  attempted.
+
+{_SIGNATURE_DOC} (A draft is sent as it stands: its signature was added when it was
+written.)
+
+Args:
+    op: send | archive | trash.
+    draft_id: op="send" — the draft to send, as it stands (no other argument).
+    message_ids: op="archive"/"trash" — the message ids to act on.
+    For op="send" without `draft_id`:
+{_COMPOSITION_ARGS}
+"""
+
+#: The arguments that only make sense when composing — refused elsewhere, never ignored.
+_COMPOSITION_KEYS = ("body", "to", "subject", "reply_to", "cc", "bcc", "html",
+                     "from_name", "attachments")
+
+
+def _refuse_composition(op: str, **valeurs) -> None:
+    donnes = [k for k, v in valeurs.items() if v is not None]
+    if donnes:
+        raise _bad(f"{', '.join(f'`{k}`' for k in donnes)} only apply when composing "
+                   f"(gmail op='draft', gmail_act op='send'), not op='{op}'. Nothing was "
+                   "done.")
+
+
+async def _composer(client, *, envoyer: bool, body, to, subject, reply_to, cc, bcc, html,
+                    from_name, markdown, attachments, sign) -> dict:
+    """Write a draft (`envoyer=False`) or send (`True`) — the ONE composition path of both
+    tools: signature, attachments, reply or new message."""
+    if not body:
+        raise _bad("`body` is required to compose a message. Nothing was written.")
+    signature_etat = "disabled"
+    if sign:
+        try:
+            signature = await asyncio.to_thread(client.get_signature)
+        except Exception as e:
+            # No send WITHOUT the signature silently expected: named refusal,
+            # with the gesture that works if the caller accepts doing without it.
+            raise _bad(f"Could not read the Gmail signature ({e}) — nothing "
+                       "was written. Retry, or pass `sign=False` to "
+                       "compose without a signature.")
+        if signature:
+            html = _signed_html(body, html, markdown, signature)
+            signature_etat = "appended"
+        else:
+            signature_etat = "none_configured"
+    if not reply_to and not to:
+        raise _bad("`to` is required for a new message (or provide `reply_to` to reply).")
+    try:
+        # oto-backend#867 lot 2 — each attachment (drive/gmail/url) is
+        # resolved by a synchronous HTTP call (file_source.resolve), in series:
+        # off the loop + bounded, same method as the token refresh
+        # above. 90s and not 20s: a send tolerates waiting for real
+        # attachments (up to 25 MB each) — what must not happen
+        # is freezing the whole process in the meantime.
+        att = await asyncio.wait_for(
+            asyncio.to_thread(_resolve_attachments, attachments),
+            timeout=_ATTACHMENTS_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        raise _bad(f"Fetching the attachments took too long "
+                   f"(> {_ATTACHMENTS_TIMEOUT_S}s) — retry.")
+    except file_source.FileSourceError as e:
+        raise _bad(str(e))
+    att_paths, _cleanup = att
+
+    def _acte(res: object) -> dict:
+        """The return NAMES the act. Without this field, "sent" and "draft" can only
+        be told apart by the NUMBER of keys returned (3 vs 2) — a difference you
+        must already know about to read it. An agent that reports "draft created" after
+        a real send did not lie: it had nothing to read that said so.
+        Paid for on 14/08: three emails sent to a client."""
+        out = dict(res) if isinstance(res, dict) else {"result": res}
+        out["kind"] = "sent" if envoyer else "draft"
+        out["signature"] = signature_etat
+        return out
+
+    try:
+        if reply_to:
+            if not envoyer:
+                return _acte(await asyncio.to_thread(
+                    lambda: client.create_draft_reply(
+                        message_id=reply_to, body=body, html=html, cc=cc, markdown=markdown,
+                        attachments=att_paths,
+                    )
+                ))
+            return _acte(await asyncio.to_thread(
+                lambda: client.reply(
+                    message_id=reply_to, body=body, html=html, cc=cc,
+                    from_name=from_name, markdown=markdown, attachments=att_paths,
+                )
+            ))
+        if not envoyer:
+            return _acte(await asyncio.to_thread(
+                lambda: client.create_draft(
+                    to=to, subject=subject or "", body=body, html=html, cc=cc, bcc=bcc,
+                    markdown=markdown, attachments=att_paths,
+                )
+            ))
+        return _acte(await asyncio.to_thread(
+            lambda: client.send(
+                to=to, subject=subject or "", body=body, html=html,
+                cc=cc, bcc=bcc, from_name=from_name, markdown=markdown, attachments=att_paths,
+            )
+        ))
+    finally:
+        _cleanup()
+
+
 def register(mcp: FastMCP) -> None:
 
-    @mcp.tool()
-    def gmail_list_accounts() -> dict:
-        """List the Gmail accounts this call can use: the user's own, then the
-        mailboxes an admin shared with their team or the whole organization.
-
-        Returns {accounts: [{email, is_default, shared}]}. `shared` is null for
-        the user's own account, "group" or "org" for a shared mailbox. Pass an
-        `email` as `_account` to the other gmail_* tools to act on that mailbox —
-        shared ones included; omitted, the project's pinned account, else the
-        default (`is_default`). An unknown email is refused, never replaced.
-        """
-        sub = access.current_user_sub_or_raise()
-        accounts = google_oauth.reachable_accounts(sub, service="gmail")
-        return {
-            "accounts": [
-                {"email": a.get("google_email"), "is_default": a.get("is_default", False),
-                 "shared": a.get("shared")}
-                for a in accounts
-            ]
-        }
-
-    @mcp.tool()
-    async def gmail_message(
-        op: Literal["search", "get", "attachment", "drafts", "archive",
-                    "trash"] = "search",
+    @mcp.tool(name="gmail", annotations=SIMULATION)
+    @documente(_GMAIL_DOC)
+    async def gmail(
+        op: Literal["search", "get", "attachment", "drafts", "draft",
+                    "accounts"] = "search",
         query: Optional[str] = None,
         message_id: Optional[str] = None,
-        message_ids: Optional[list[str]] = None,
         filename: Optional[str] = None,
         index: int = 0,
         max_results: int = 20,
         sheet: Optional[Union[int, str]] = None,
         max_rows: Optional[int] = None,
+        body: Optional[str] = None,
+        to: Optional[str] = None,
+        subject: Optional[str] = None,
+        reply_to: Optional[str] = None,
+        cc: Optional[str] = None,
+        bcc: Optional[str] = None,
+        html: Optional[str] = None,
+        from_name: Optional[str] = None,
+        markdown: bool = True,
+        attachments: Optional[list[dict]] = None,
+        sign: bool = True,
         account: Optional[str] = None,
     ) -> dict:
-        """A message in the user's mailbox — search, read, fetch an attachment,
-        list drafts, archive, trash.
-
-        `op`:
-        - **"search"** (default): search the user's Gmail with Gmail query syntax.
-          `query` e.g. `from:foo@bar.com is:unread newer_than:7d`. Returns
-          {messages: [{id, threadId, from, subject, date, snippet, labelIds}], count}.
-        - **"get"**: fetch a full message (headers, body, attachment metadata) by
-          `message_id`.
-        - **"attachment"**: fetch the CONTENT of a Gmail attachment, by filename.
-          Identify the attachment by its `filename` (from the `attachments` list of
-          `op="get"`). The response depends on the file:
-          - **small text** (JSON/CSV/Markdown/plain, ≤256 KB) → returned INLINE:
-            `{encoding: "text", content: "<decoded text>"}` — read it directly.
-          - **PDF** → its extracted TEXT returned INLINE: `{encoding: "text",
-            format: "pdf-text", content, pages, truncated}` plus `raw_url` (+
-            `raw_expires_in`), a short-lived signed URL to the original PDF
-            (layout, images). A scanned or protected PDF has no text: it comes
-            back as a URL, with `text_unavailable` saying why.
-          - **binary or large** (image, archive, big file) → uploaded to temporary
-            storage and returned as a short-lived signed URL: `{encoding: "url",
-            url, expires_in}` (seconds). Fetch the URL to get the bytes.
-          - **spreadsheet (.xlsx)** → returned INLINE as CSV, one section per
-            sheet: `{encoding: "text", format: "csv", content, sheets,
-            sheet_names, truncated}`. Each section starts with `# sheet=<index>
-            name="…" rows_total=… rows_rendered=… truncated=…` then the CSV rows
-            (computed values, not formulas; dates ISO 8601). All sheets by
-            default, `max_rows` rows each (default 200, max 5000), size-capped:
-            if `truncated`, ask one sheet with `sheet` and/or raise `max_rows`;
-            a truncated render also carries `raw_url` (+ `raw_expires_in`, seconds):
-            a short-lived signed URL to the FULL original file, e.g. to load it
-            into a table or store it.
-          Returns {filename, mimeType, size, encoding, content|url, expires_in?}.
-        - **"drafts"**: list the user's Gmail drafts. Returns
-          {drafts: [{id, message_id, to, subject, date, snippet}], count}.
-        - **"archive"** — ⚠️ WRITES: removes the INBOX label from `message_ids`.
-        - **"trash"** — ⚠️ WRITES: moves `message_ids` to the trash.
-
-        Writing an email (send or save a draft, new message or reply) is a
-        different tool: `gmail_compose`.
-
-        Args:
-            op: search (default) | get | attachment | drafts | archive | trash.
-            query: op="search" — Gmail search query (e.g.
-                `from:foo@bar.com is:unread newer_than:7d`).
-            message_id: op="get"/"attachment" — Gmail message id (the one returned
-                by op="search").
-            message_ids: op="archive"/"trash" — Gmail message ids to act on.
-            filename: op="attachment" — name of the attachment to fetch
-                (e.g. "Contrat.pdf").
-            index: op="attachment" — 0-based tiebreaker if several attachments
-                share that name (e.g. inline images); default 0 = the first one.
-            max_results: op="search"/"drafts" — max items to return (default 20).
-            sheet: op="attachment" of an .xlsx — the sheet to read, by name or
-                0-based index (see `sheet_names`). Omit for all sheets.
-            max_rows: op="attachment" of an .xlsx — rows per sheet (default 200,
-                max 5000).
-            account: email of the Google account to use — same choice as `_account`.
-        """
-        # Refusal BEFORE any credential resolution: an unknown op never reaches
-        # the client — hence never, by a derived path, a write.
-        if op not in _MESSAGE_OPS:
-            raise _bad(_MESSAGE_OPS_ERROR)
+        # Refusal BEFORE any credential resolution: an unknown op never reaches the client.
+        if op not in _OPS:
+            raise _bad(_ops_error(_OPS))
         if (sheet is not None or max_rows is not None) and op != "attachment":
             raise _bad(f"`sheet`/`max_rows` only apply to op='attachment' of an "
                        f".xlsx spreadsheet (got op='{op}').")
+        if op != "draft":
+            _refuse_composition(op, body=body, to=to, subject=subject, reply_to=reply_to,
+                                cc=cc, bcc=bcc, html=html, from_name=from_name,
+                                attachments=attachments)
+
+        if op == "accounts":
+            sub = access.current_user_sub_or_raise()
+            accounts = await asyncio.to_thread(
+                google_oauth.reachable_accounts, sub, service="gmail")
+            return {"accounts": [
+                {"email": a.get("google_email"), "is_default": a.get("is_default", False),
+                 "shared": a.get("shared")}
+                for a in accounts]}
+
         client = await _client_for_user_async(account)
 
-        # ---- reads -----------------------------------------------------------
         if op == "search":
             messages = await asyncio.to_thread(
                 client.search, _need(query, "query", op), max_results)
@@ -286,49 +418,19 @@ def register(mcp: FastMCP) -> None:
             drafts = await asyncio.to_thread(client.list_drafts, max_results)
             return {"drafts": drafts, "count": len(drafts)}
 
-        # ---- writes ----------------------------------------------------------
-        if op == "archive":
-            results = await asyncio.to_thread(
-                client.archive_messages, _need(message_ids, "message_ids", op))
-            return {"archived": results}
+        # op == "draft" — the only one left (input guard above).
+        return await _composer(
+            client, envoyer=False, body=body, to=to, subject=subject, reply_to=reply_to,
+            cc=cc, bcc=bcc, html=html, from_name=from_name, markdown=markdown,
+            attachments=attachments, sign=sign)
 
-        if op == "trash":
-            # Gmail has no batch trash: it is one call per message,
-            # hence a loop — and hence a PARTIAL write is possible. If the
-            # 3rd fails, the first two ARE in the trash; letting the bare
-            # exception bubble up would only tell the agent "failed", it would
-            # conclude "nothing went through" and replay a write already
-            # done. That is the defect described by signal #227 (an applied
-            # action the caller learns nothing about), and the same fault as
-            # #600: announcing a failure on a success. We name the three batches.
-            ids = list(_need(message_ids, "message_ids", op))
-            trashed: list = []
-            for i, mid in enumerate(ids):
-                try:
-                    res = await asyncio.to_thread(client.trash_message, mid)
-                except Exception as e:  # noqa: BLE001 — re-raised named, with the real state
-                    restants = ids[i + 1:]
-                    raise _bad(
-                        "PARTIAL trash — the write stops at the first "
-                        "failure, but what precedes did happen. "
-                        f"ALREADY in the trash ({len(trashed)}): {trashed}. "
-                        f"FAILED on `{mid}`: {type(e).__name__}: {e}. "
-                        f"NOT ATTEMPTED ({len(restants)}): {restants}. "
-                        "Only replay the not-attempted ones — retrying the first "
-                        "ones is not necessary."
-                    ) from e
-                trashed.append(res.get("id", mid))
-            return {"trashed": trashed}
-
-        # Structurally unreachable (input guard above) — a safety net against
-        # an implicit `return None` if an op were added to `_MESSAGE_OPS` without
-        # its branch: better to refuse than to return "nothing" as a success.
-        raise _bad(_MESSAGE_OPS_ERROR)
-
-    @mcp.tool()
-    async def gmail_compose(
-        body: str,
-        mode: Literal["send", "draft"] = "draft",
+    @mcp.tool(name="gmail_act", annotations=ACTE)
+    @documente(_GMAIL_ACT_DOC)
+    async def gmail_act(
+        op: Literal["send", "archive", "trash"],
+        draft_id: Optional[str] = None,
+        message_ids: Optional[list[str]] = None,
+        body: Optional[str] = None,
         to: Optional[str] = None,
         subject: Optional[str] = None,
         reply_to: Optional[str] = None,
@@ -337,132 +439,63 @@ def register(mcp: FastMCP) -> None:
         html: Optional[str] = None,
         from_name: Optional[str] = None,
         markdown: bool = True,
-        account: Optional[str] = None,
         attachments: Optional[list[dict]] = None,
         sign: bool = True,
+        account: Optional[str] = None,
     ) -> dict:
-        """Compose an email — **saved as a DRAFT by default**, or sent explicitly.
+        if op not in _ACT_OPS:
+            raise _bad(_ops_error(_ACT_OPS))
+        if op != "send":
+            if draft_id is not None:
+                raise _bad(f"`draft_id` only applies to op='send', not op='{op}'. "
+                           "Nothing was done.")
+            _refuse_composition(op, body=body, to=to, subject=subject, reply_to=reply_to,
+                                cc=cc, bcc=bcc, html=html, from_name=from_name,
+                                attachments=attachments)
+        elif message_ids is not None:
+            raise _bad("`message_ids` only applies to op='archive'/'trash', not "
+                       "op='send'. Nothing was sent.")
+        elif draft_id is not None:
+            # A draft is sent AS IT STANDS: an argument beside it would be silently
+            # ignored — and the person would believe it was applied.
+            _refuse_composition("send with draft_id", body=body, to=to, subject=subject,
+                                reply_to=reply_to, cc=cc, bcc=bcc, html=html,
+                                from_name=from_name, attachments=attachments)
 
-        ⚠️ **`mode="send"` is required to actually send.** Omitting `mode` writes a draft
-        the user can review; it does NOT leave the mailbox. Say plainly which one you did
-        (read `kind` in the answer) — never report "sent" for a draft, or the reverse.
-
-        ⚠️ **A freshly created draft can be MISSING from an already-open Gmail tab**,
-        for an indeterminate time. The write is fine and the API lists it; it is the
-        client view that lags. Measured 2026-09-04: the API confirmed the draft, three
-        reads found it, and the person staring at their Drafts folder saw one older
-        draft and nothing else — a full diagnosis was spent before the cause was found.
-        So `kind: "draft"` means SAVED, not VISIBLE: tell the person to reload the tab
-        or search `in:drafts` rather than to look again.
-
-        Returns `kind` — **"sent" (the mail LEFT) or "draft" (saved, not sent)** — plus
-        the message ids. Always read `kind` before reporting what you did: it is the
-        only field that states the act.
-
-        The sending account's Gmail signature is appended by default, after `--`,
-        like the Gmail web client does (the API never adds it on its own) — so do
-        NOT write a sign-off block of your own in `body`. `signature` in the answer
-        says what happened: "appended", "none_configured" (the account has no
-        signature — nothing was added), or "disabled" (`sign=False`).
-
-        Args:
-            body: message body (rendered from markdown to HTML by default).
-            mode: "draft" (default) saves for human review; "send" delivers it now.
-            to: recipient(s), comma-separated. REQUIRED for a new message (omit when replying).
-            subject: subject line (new message only; a reply keeps the thread's subject).
-            reply_to: id of the message to reply to. When set, this is a threaded REPLY
-                (subject/thread preserved) and `to`/`subject` are ignored.
-            cc / bcc: optional carbon copy (bcc: new message only).
-            html: explicit HTML body (bypasses markdown rendering).
-            from_name: optional display name for the From header.
-            markdown: render `body` from markdown when `html` is absent (default True).
-            account: email of the Google account to use — same choice as `_account`.
-            sign: append the account's Gmail signature (default True); False sends
-                the body alone.
-            attachments: files to attach, as `source` refs oto resolves server-side
-                (the agent has no local disk). Each item — `kind` selects the origin:
-                - Drive: `{"kind":"drive","file_id":"<id>"}` (id from drive_list/metadata)
-                - Gmail: `{"kind":"gmail","message_id":"<id>","filename":"<name>"}`
-                - URL:   `{"kind":"url","url":"https://…"}` — e.g. a signed URL from
-                  `oto_upload_url` (upload a local PDF first) or drive_download.
-                - Project file: `{"kind":"project_file","project_id":<id>,"file_id":<id>}`
-                  (ids from oto_project_files op=list)
-        """
-        if mode not in ("send", "draft"):
-            raise _bad("mode must be 'send' or 'draft'.")
         client = await _client_for_user_async(account)
-        signature_etat = "disabled"
-        if sign:
+
+        if op == "send":
+            if draft_id is not None:
+                sent = await asyncio.to_thread(client.send_draft, draft_id)
+                return {**sent, "kind": "sent", "draft_id": draft_id}
+            return await _composer(
+                client, envoyer=True, body=body, to=to, subject=subject,
+                reply_to=reply_to, cc=cc, bcc=bcc, html=html, from_name=from_name,
+                markdown=markdown, attachments=attachments, sign=sign)
+
+        ids = list(_need(message_ids, "message_ids", op))
+        if op == "archive":
+            return {"archived": await asyncio.to_thread(client.archive_messages, ids)}
+
+        # op == "trash". Gmail has no batch trash: it is one call per message, hence a
+        # loop — and hence a PARTIAL write is possible. If the 3rd fails, the first two
+        # ARE in the trash; letting the bare exception bubble up would only tell the agent
+        # "failed", it would conclude "nothing went through" and replay a write already
+        # done (signal #227, same fault as #600). We name the three batches.
+        trashed: list = []
+        for i, mid in enumerate(ids):
             try:
-                signature = await asyncio.to_thread(client.get_signature)
-            except Exception as e:
-                # No send WITHOUT the signature silently expected: named refusal,
-                # with the gesture that works if the caller accepts doing without it.
-                raise _bad(f"Could not read the Gmail signature ({e}) — nothing "
-                           "was sent. Retry, or pass `sign=False` to "
-                           "compose without a signature.")
-            if signature:
-                html = _signed_html(body, html, markdown, signature)
-                signature_etat = "appended"
-            else:
-                signature_etat = "none_configured"
-        try:
-            # oto-backend#867 lot 2 — each attachment (drive/gmail/url) is
-            # resolved by a synchronous HTTP call (file_source.resolve), in series:
-            # off the loop + bounded, same method as the token refresh
-            # above. 90s and not 20s: a send tolerates waiting for real
-            # attachments (up to 25 MB each) — what must not happen
-            # is freezing the whole process in the meantime.
-            att = await asyncio.wait_for(
-                asyncio.to_thread(_resolve_attachments, attachments),
-                timeout=_ATTACHMENTS_TIMEOUT_S)
-        except asyncio.TimeoutError:
-            raise _bad(f"Fetching the attachments took too long "
-                      f"(> {_ATTACHMENTS_TIMEOUT_S}s) — retry.")
-        except file_source.FileSourceError as e:
-            raise _bad(str(e))
-        att_paths, _cleanup = att
-
-        def _acte(res: object) -> dict:
-            """The return NAMES the act. Without this field, "sent" and "draft" can only
-            be told apart by the NUMBER of keys returned (3 vs 2) — a difference you
-            must already know about to read it. An agent that reports "draft created" after
-            a real send did not lie: it had nothing to read that said so.
-            Paid for on 14/08: three emails sent to a client."""
-            out = dict(res) if isinstance(res, dict) else {"result": res}
-            out["kind"] = "draft" if mode == "draft" else "sent"
-            out["signature"] = signature_etat
-            return out
-
-        try:
-            if reply_to:
-                if mode == "draft":
-                    return _acte(await asyncio.to_thread(
-                        lambda: client.create_draft_reply(
-                            message_id=reply_to, body=body, html=html, cc=cc, markdown=markdown,
-                            attachments=att_paths,
-                        )
-                    ))
-                return _acte(await asyncio.to_thread(
-                    lambda: client.reply(
-                        message_id=reply_to, body=body, html=html, cc=cc,
-                        from_name=from_name, markdown=markdown, attachments=att_paths,
-                    )
-                ))
-            if not to:
-                raise _bad("`to` is required for a new message (or provide `reply_to` to reply).")
-            if mode == "draft":
-                return _acte(await asyncio.to_thread(
-                    lambda: client.create_draft(
-                        to=to, subject=subject or "", body=body, html=html, cc=cc, bcc=bcc,
-                        markdown=markdown, attachments=att_paths,
-                    )
-                ))
-            return _acte(await asyncio.to_thread(
-                lambda: client.send(
-                    to=to, subject=subject or "", body=body, html=html,
-                    cc=cc, bcc=bcc, from_name=from_name, markdown=markdown, attachments=att_paths,
-                )
-            ))
-        finally:
-            _cleanup()
+                res = await asyncio.to_thread(client.trash_message, mid)
+            except Exception as e:  # noqa: BLE001 — re-raised named, with the real state
+                restants = ids[i + 1:]
+                raise _bad(
+                    "PARTIAL trash — the write stops at the first "
+                    "failure, but what precedes did happen. "
+                    f"ALREADY in the trash ({len(trashed)}): {trashed}. "
+                    f"FAILED on `{mid}`: {type(e).__name__}: {e}. "
+                    f"NOT ATTEMPTED ({len(restants)}): {restants}. "
+                    "Only replay the not-attempted ones — retrying the first "
+                    "ones is not necessary."
+                ) from e
+            trashed.append(res.get("id", mid))
+        return {"trashed": trashed}

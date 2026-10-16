@@ -906,8 +906,8 @@ def test_microsoft_accounts_dit_les_services_de_chaque_compte(env, monkeypatch):
 def test_l_axe_account_est_accepte_sur_les_outils(env):
     from oto_mcp import call_axes
 
-    for outil in ("sharepoint_file", "sharepoint_site", "outlook_message",
-                  "outlook_compose", "outlook_calendar_calendars", "outlook_calendar_event",
+    for outil in ("sharepoint_file", "sharepoint_site", "outlook",
+                  "outlook_act", "outlook_calendar_calendars", "outlook_calendar_event",
                   "teams_spaces", "teams_message", "teams_send"):
         assert "_account" in {a.param for a in call_axes.axes_for_call(outil)}, outil
 
@@ -1093,7 +1093,7 @@ def test_incident_avec_account_du_pret_servi_et_la_reponse_le_dit(pret, trace):
                            {"scopes": SCOPE_COURRIER}, prete_a=[EMPRUNTEUSE])
     assert pret.sous_compte("jane@contoso.example")(
         pret.auth.access_token_for, EMPRUNTEUSE, "outlook") == "AT:RT-JANE"
-    assert _repondre("outlook_message") == {
+    assert _repondre("outlook") == {
         "ok": True, "_account": "jane@contoso.example",
         "lent_by": "preteuse@contoso.example"}
 
@@ -1105,7 +1105,7 @@ def test_incident_avec_compte_propre_sans_account_le_sien_et_la_reponse_le_nomme
     pret.coffre.poser_chez(CHEZ_PRETEUSE, "jane@contoso.example", "RT-JANE",
                            {"scopes": SCOPE_COURRIER}, prete_a=[EMPRUNTEUSE])
     assert pret.auth.access_token_for(EMPRUNTEUSE, "outlook") == "AT:RT-MOI"
-    assert _repondre("outlook_message") == {"ok": True, "_account": "moi@fabrikam.example"}
+    assert _repondre("outlook") == {"ok": True, "_account": "moi@fabrikam.example"}
 
 
 def test_un_pret_qui_ne_couvre_pas_le_service_ne_change_pas_le_refus(pret):
@@ -1125,7 +1125,7 @@ def test_le_schema_annonce_account_sur_toutes_les_cartes_microsoft():
     from oto_mcp import call_axes
 
     for outil in ("microsoft_accounts", "sharepoint_file", "sharepoint_site",
-                  "outlook_message", "outlook_compose", "outlook_calendar_calendars",
+                  "outlook", "outlook_act", "outlook_calendar_calendars",
                   "outlook_calendar_event", "teams_spaces", "teams_message", "teams_send"):
         assert "_account" in {a.param for a in call_axes.axes_for(outil)}, outil
     for carte in (PORTEUR, "sharepoint", "outlook", "outlook_calendar", "teams"):
@@ -1167,7 +1167,7 @@ def pret_equipe(pret, monkeypatch):
 def test_pret_a_l_equipe_servi_au_membre_sur_account(pret_equipe, trace):
     jane = pret_equipe.sous_compte("jane@contoso.example")
     assert jane(pret_equipe.auth.access_token_for, EMPRUNTEUSE, "outlook") == "AT:RT-JANE"
-    assert _repondre("outlook_message") == {
+    assert _repondre("outlook") == {
         "ok": True, "_account": "jane@contoso.example",
         "lent_by": "preteuse@contoso.example",
         "lent_via_group": {"id": EQUIPE, "name": "Ventes"}}
@@ -1202,7 +1202,7 @@ def test_un_pret_microsoft_a_l_equipe_active_n_est_juge_qu_une_fois(pret_equipe,
     jane = pret_equipe.sous_compte("jane@contoso.example")
     assert jane(pret_equipe.auth.access_token_for, EMPRUNTEUSE, "outlook") == "AT:RT-JANE"
     assert vus == ["jane@contoso.example"]
-    assert _repondre("outlook_message") == {
+    assert _repondre("outlook") == {
         "ok": True, "_account": "jane@contoso.example",
         "lent_by": "preteuse@contoso.example",
         "lent_via_group": {"id": EQUIPE, "name": "Ventes"}}
@@ -1281,7 +1281,7 @@ def test_pret_a_l_org_servi_au_membre_sur_account_et_juge_une_fois(pret_org, tra
     jane = pret_org.sous_compte("jane@contoso.example")
     assert jane(pret_org.auth.access_token_for, EMPRUNTEUSE, "outlook") == "AT:RT-JANE"
     assert vus == ["jane@contoso.example"]
-    assert _repondre("outlook_message") == {
+    assert _repondre("outlook") == {
         "ok": True, "_account": "jane@contoso.example",
         "lent_by": "preteuse@contoso.example",
         "lent_via_org": {"id": ORG, "name": "Contoso"}}

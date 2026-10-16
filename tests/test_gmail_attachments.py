@@ -1,4 +1,4 @@
-"""Pièces jointes de gmail_compose (#206/#226/#235).
+"""Pièces jointes d'un mail Gmail composé (`gmail` op=draft, `gmail_act` op=send) (#206/#226/#235).
 
 Le GmailClient attend des CHEMINS locaux ; le serveur MCP n'a pas le disque de
 l'utilisateur → `_resolve_attachments` résout des refs `file_source` (drive/gmail/

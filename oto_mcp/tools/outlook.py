@@ -4,16 +4,20 @@ Credential = the PERSON's Microsoft 365 account (carrier `microsoft`, OAuth, del
 permissions) that has authorized THIS service (scopes `MAIL`), acquired and renewed by
 `auth/microsoft.py`; several linked accounts are chosen by the generic `_account=` axis.
 
-**Surface** — the Gmail shape (`tools/gmail.py`), one tool per object:
-- `outlook_message` (search/get/attachment/drafts/folders/archive/trash/move) —
-  everything that designates a message in the mailbox, by query or by id;
-- `outlook_compose` — write a new message or a reply: a DRAFT by default, sent only
-  with `mode="send"`, which goes through the draft (`create_draft` then `send_draft`,
-  then `sent_message`: the draft's immutable id designates its copy in Sent Items,
-  read back for its `webLink` — sending is asynchronous, the copy may not be there yet).
-  The body is markdown (`body`, rendered as `gmail_compose` renders it) or HTML sent
+**Surface** — the Gmail shape (`tools/gmail.py`), two tools (17/10/2026, Alexis's
+decision, for security: an MCP client authorizes TOOLS, not arguments):
+- `outlook` reads or simulates (search/get/attachment/drafts/folders, and `op="draft"`,
+  which writes a draft: nothing leaves, nothing is destroyed) — `lecture.SIMULATION`;
+- `outlook_act` acts (send/archive/trash/move) — `lecture.ACTE`, the tool the client asks
+  to confirm. `op="send"` sends an existing draft by `draft_id`, or a full message, which
+  goes through a draft (`create_draft` then `send_draft`, then `sent_message`: the draft's
+  immutable id designates its copy in Sent Items, read back for its `webLink` — sending is
+  asynchronous, the copy may not be there yet).
+  The body is markdown (`body`, rendered as `gmail` renders it) or HTML sent
   AS IS (`html`, or `html_source` — a `file_source` ref whose content is the HTML):
   nothing rewrites or cleans an HTML body here, what Outlook shows is what was given.
+The old names (`outlook_message`, `outlook_compose`) refuse by naming the call to make
+(`outils_retires.RENOMMAGES_ACT`).
 
 Protocol facts the tools carry (`oto.tools.microsoft.mail`): `$search` and `$filter`
 exclude each other (`query` and `unread` are not combined); every id is IMMUTABLE
@@ -24,9 +28,8 @@ id given in Outlook's older format; an attachment
 travels inline up to 3 MB, and one with a `content_id` is an inline image (`cid:`);
 Graph does not expose the Outlook signature, so nothing is appended to a body.
 
-⚠️ This module WRITES to the person's mailbox: archive/trash/move, and
-`outlook_compose` (a draft, or a real send). The default of `outlook_message` is
-`op="search"` — a READ.
+⚠️ `outlook_act` WRITES to the person's mailbox: send, archive, trash, move. `outlook`
+writes only drafts; its default is `op="search"` — a READ.
 """
 from __future__ import annotations
 
@@ -39,6 +42,7 @@ from fastmcp import FastMCP
 
 from .. import access, file_content, file_source, output_projection
 from ._microsoft_graph import bad, markdown_html, need, raw, refuse_ignored, run, token
+from .lecture import ACTE, SIMULATION, documente
 
 logger = logging.getLogger(__name__)
 
@@ -46,11 +50,13 @@ logger = logging.getLogger(__name__)
 _SERVICE = "outlook"
 _LABEL = "Outlook"
 
-_READ_OPS = ("search", "get", "attachment", "drafts", "folders")
-_WRITE_OPS = ("archive", "trash", "move")
-_OPS = _READ_OPS + _WRITE_OPS
-_OPS_ERROR = ("op must be 'search', 'get', 'attachment', 'drafts', 'folders', "
-              "'archive', 'trash' or 'move'")
+_OPS = ("search", "get", "attachment", "drafts", "folders", "draft")
+_ACT_OPS = ("send", "archive", "trash", "move")
+
+
+def _ops_error(ops: tuple) -> str:
+    return "op must be " + ", ".join(f"'{o}'" for o in ops[:-1]) + f" or '{ops[-1]}'"
+
 #: The well-known folders the moving ops go to (`mail.py`: id or well-known name).
 _DESTINATIONS = {"archive": "archive", "trash": "deleteditems"}
 #: Ceiling of an HTML body read from `html_source` — far above any real email, far
@@ -153,6 +159,130 @@ def _body_html(body: Optional[str], html: Optional[str],
     return texte
 
 
+# The composition arguments, shared by `outlook(op="draft")` and `outlook_act(op="send")`:
+# written once, served in both descriptions.
+_COMPOSITION_DOC = """\
+A new message needs `to` (and usually `subject`). A reply is `reply_to=<message id>`:
+Outlook sets the recipients and the subject itself and quotes the original below your
+text; `reply_all=True` answers every recipient. `to`, `cc`, `bcc` and `subject` are
+refused on a reply; `attachments` (inline images included) are accepted.
+
+**The body — exactly one of three.** `body` is markdown, rendered as HTML (the `gmail`
+rendering): the choice for an ordinary message. `html` is an HTML body sent AS IS — no
+markdown pass, no rewriting, no cleanup: use it when the layout matters (a branded email,
+a newsletter, styled tables), or to send an HTML file someone prepared. `html_source` is
+the same, read from a file: a `source` ref (same kinds as `attachments`) whose content is
+the HTML, UTF-8, up to 1 MB. ⚠️ Outlook renders HTML with Word's engine, which ignores
+much modern CSS: before writing HTML for Outlook, read the oto guide "Mails HTML
+compatibles Outlook" (`oto_guide op=read slug=outlook-html`).
+
+**Images in the body**: an attachment with a `content_id` (e.g.
+`{"kind":"project_file","project_id":…,"file_id":…,"content_id":"logo"}`) is an INLINE
+image, shown where the HTML says `<img src="cid:logo">` — not a link to a file; the id is
+unique in the message, without `<>` or spaces. A PDF or any other file stays an ordinary
+attachment (no `content_id`).
+
+**No signature is appended**: Microsoft Graph does not expose the Outlook signature —
+write the sign-off in the body if one is wanted."""
+
+_COMPOSITION_ARGS = """\
+    body: the message, in markdown — or `html` / `html_source`, not several.
+    html: the message as HTML, sent exactly as given (a reply too: it goes above the
+        quoted message).
+    html_source: a `source` ref to the HTML file (`{"kind":"project_file",
+        "project_id":…,"file_id":…}`, `{"kind":"url","url":…}`, drive, gmail), UTF-8,
+        ≤ 1 MB, sent exactly as read.
+    to: recipient addresses — a new message only.
+    cc: carbon-copy addresses — a new message only.
+    bcc: blind-copy addresses — a new message only.
+    subject: the subject line — a new message only.
+    reply_to: id of the message to reply to (from `outlook`).
+    reply_all: with `reply_to`, answer every recipient (default False).
+    attachments: files to attach (a new message or a reply), as `source` refs oto
+        resolves server-side, up to 3 MB each: `{"kind":"drive","file_id":…}`,
+        `{"kind":"gmail","message_id":…,"filename":…}`, `{"kind":"url","url":…}`
+        (e.g. a signed URL from `oto_upload_url`), `{"kind":"project_file",
+        "project_id":…,"file_id":…}`. Add `"content_id":"<id>"` to make one an
+        inline image of the body (`<img src="cid:<id>">`)."""
+
+_OUTLOOK_DOC = f"""The person's Outlook mailbox — READ it, or prepare a DRAFT. Nothing here
+sends, archives, trashes or moves: that is `outlook_act`, the tool your client asks you to
+confirm.
+
+`op`:
+- **"search"** (default): messages, most recent first, without their body (`preview`
+  only). `query` is an Outlook (KQL) search — `from:jane subject:invoice`, plain words;
+  `folder` narrows to one folder; `unread` True/False keeps unread/read ones. ⚠️ `unread`
+  cannot be combined with `query` (Microsoft refuses it): put the condition in the query,
+  or list without one. Returns {{messages: [{{id, subject, from, to, cc, date, isRead,
+  hasAttachments, preview, conversationId, folder_id, webLink}}], count}}.
+- **"get"**: one message by `message_id`, its body as text, and its attachments (`id`,
+  `name`, `contentType`, `size`).
+- **"attachment"**: the CONTENT of an attachment of `message_id`, by `attachment_id` or
+  `filename` (from op="get"). Small text and PDF come back as text inline, a spreadsheet
+  as CSV per sheet (`sheet`, `max_rows`), anything else as a short-lived signed URL.
+- **"drafts"**: the drafts, most recent first — a draft `id` is what
+  `outlook_act(op="send", draft_id=…)` sends.
+- **"folders"**: the top-level mail folders (`id`, `displayName`, counts) — a folder id
+  goes in `folder`, or in `destination` of `outlook_act(op="move")`.
+- **"draft"**: WRITE A DRAFT in the Drafts folder — a new message or a reply. It does NOT
+  leave the mailbox. Returns `kind: "draft"`, its `id` and its `webLink` (opens it in
+  Outlook on the web, for the person to review): send it with
+  `outlook_act(op="send", draft_id=<id>)` once the person agrees.
+
+{_COMPOSITION_DOC}
+
+Args:
+    op: search (default) | get | attachment | drafts | folders | draft.
+    query: op="search" — Outlook (KQL) search, e.g. `from:jane invoice`.
+    folder: op="search" — a folder id or a well-known name (`inbox`, `sentitems`,
+        `archive`…); every folder when omitted.
+    unread: op="search" — True: unread only, False: read only.
+    message_id: op="get"/"attachment" — the message id.
+    attachment_id: op="attachment" — the attachment id (from op="get").
+    filename: op="attachment" — the attachment by name, instead.
+    limit: op="search"/"drafts"/"folders" — max items (default 25).
+    sheet: op="attachment" of an .xlsx — sheet name or 0-based index.
+    max_rows: op="attachment" of an .xlsx — rows per sheet (default 200).
+    full: return Graph's raw objects instead of the trimmed view.
+    fields: op="search"/"drafts" — keep only these keys of each message.
+    For op="draft":
+{_COMPOSITION_ARGS}
+"""
+
+_OUTLOOK_ACT_DOC = f"""ACT on the person's Outlook mailbox — ⚠️ every op here takes effect: a
+mail LEAVES, a message moves. Reading and drafting are `outlook`.
+
+`op` (required):
+- **"send"**: send a mail, the mail LEAVES. Either an existing draft, as it stands:
+  `draft_id` (from `outlook(op="draft")` or `outlook(op="drafts")`) — the usual path, the
+  person could read it first; or a full message, the same arguments as
+  `outlook(op="draft")`: it is written as a draft, then sent. Read `kind` — "sent" — before
+  reporting. The answer gives the message's `id` and its `webLink`: the copy in Sent
+  Items, which keeps the same `id`. Sending is asynchronous: when that copy is not
+  visible yet, `webLink` is null and `note` says so — the mail still LEFT.
+- **"archive"**: moves `message_ids` to the Archive folder.
+- **"trash"**: moves `message_ids` to Deleted Items (recoverable).
+- **"move"**: moves `message_ids` to `destination` (a folder id, or `inbox`, `archive`,
+  `deleteditems`, `junkemail`…).
+A moved message KEEPS its id (oto asks Outlook for immutable ids): the answer gives
+`{{id, new_id}}` for each, equal — unless `id` came in Outlook's older format, then
+`new_id` is its stable form: use `new_id` afterwards.
+
+A full message follows the rules of `outlook(op="draft")`: a reply sets its own recipients
+and subject, exactly one body (`body`, `html` or `html_source`), inline images by
+`content_id`, no signature appended.
+
+Args:
+    op: send | archive | trash | move.
+    draft_id: op="send" — the draft to send, as it stands (no other argument).
+    message_ids: op="archive"/"trash"/"move" — the messages to move.
+    destination: op="move" — the target folder (id or well-known name).
+    For op="send" without `draft_id`:
+{_COMPOSITION_ARGS}
+"""
+
+
 def register(mcp: FastMCP) -> None:
     from oto.tools.microsoft import MailClient
     from oto.tools.microsoft.mail import MAX_INLINE_ATTACHMENT
@@ -166,7 +296,7 @@ def register(mcp: FastMCP) -> None:
 
     def _deplacer(c: MailClient, ids: list[str], destination: str) -> list[dict]:
         """One `move` per message: a PARTIAL move is possible, and is named — what
-        went through, where it failed, what was not attempted (the `gmail_message`
+        went through, where it failed, what was not attempted (the `gmail_act`
         trash rule: an applied write the caller learns nothing about gets replayed)."""
         faits: list[dict] = []
         for i, mid in enumerate(ids):
@@ -185,81 +315,125 @@ def register(mcp: FastMCP) -> None:
             faits.append({"id": mid, "new_id": (moved or {}).get("id")})
         return faits
 
-    @mcp.tool()
-    def outlook_message(
-        op: Literal["search", "get", "attachment", "drafts", "folders", "archive",
-                    "trash", "move"] = "search",
+    def _composer(*, envoyer: bool, body, html, html_source, to, cc, bcc, subject,
+                  reply_to, reply_all, attachments) -> dict:
+        """Write a draft, then send it when `envoyer` — the ONE composition path of
+        `outlook(op="draft")` and `outlook_act(op="send")`."""
+        _check_one_body(body, html, html_source)
+        if reply_to:
+            for nom, valeur in (("to", to), ("cc", cc), ("bcc", bcc), ("subject", subject)):
+                if valeur:
+                    raise bad(f"`{nom}` is not accepted on a reply: Outlook sets the "
+                              "recipients and the subject of a reply itself. Nothing "
+                              "was written.")
+            contenu = _body_html(body, html, html_source)
+            pieces = _attachments(attachments, MAX_INLINE_ATTACHMENT)
+            c = _client()
+            brouillon = _run(lambda: c.create_reply_draft(
+                reply_to, body_html=contenu, reply_all=reply_all, attachments=pieces))
+        else:
+            if reply_all:
+                raise bad("`reply_all` goes with `reply_to` (the message to answer).")
+            if not to:
+                raise bad("`to` is required for a new message (or `reply_to` to answer "
+                          "one). Nothing was written.")
+            contenu = _body_html(body, html, html_source)
+            pieces = _attachments(attachments, MAX_INLINE_ATTACHMENT)
+            c = _client()
+            brouillon = _run(lambda: c.create_draft(
+                to=to, subject=subject or "", body_html=contenu, cc=cc or (),
+                bcc=bcc or (), attachments=pieces))
+        out = {"id": brouillon.get("id"), "subject": brouillon.get("subject"),
+               "to": [_adresse(r) for r in brouillon.get("toRecipients") or []],
+               "cc": [_adresse(r) for r in brouillon.get("ccRecipients") or []],
+               "webLink": brouillon.get("webLink")}
+        if not envoyer:
+            return {"kind": "draft", **out}
+        return _envoyer(c, brouillon["id"], out, ecrit_a_l_instant=True)
+
+    def _envoyer(c: MailClient, draft_id: str, out: dict, *, ecrit_a_l_instant: bool) -> dict:
+        """Send the draft `draft_id`, then read its copy in Sent Items for its link."""
+        try:
+            envoye = _run(lambda: c.send_draft(draft_id))
+        except Exception as e:  # noqa: BLE001 — re-raised named, with the real state
+            if not ecrit_a_l_instant:
+                raise
+            raise bad(f"The draft {draft_id} was SAVED but sending it "
+                      f"failed: {e}. Nothing left the mailbox; retry the send, or "
+                      "leave the draft for the person.") from e
+        envoi = {"kind": "sent", "id": envoye, "subject": out.get("subject"),
+                 "to": out.get("to"), "cc": out.get("cc")}
+        # The draft's immutable id designates its copy in Sent Items, once it is there.
+        try:
+            copie = _run(lambda: c.sent_message(envoye))
+        except Exception as e:  # noqa: BLE001 — the mail LEFT: said, not raised
+            logger.warning("outlook: mail %s sent, reading its Sent Items copy failed: %s",
+                           envoye, type(e).__name__)
+            return {**envoi, "webLink": None,
+                    "note": f"The mail LEFT, but reading its copy in Sent Items failed "
+                            f"({e}): no link to give."}
+        if copie is None:
+            return {**envoi, "webLink": None,
+                    "note": "The mail LEFT; its copy in Sent Items was not visible yet "
+                            "(sending is asynchronous), hence no link. It keeps this `id`."}
+        return {**envoi, "webLink": copie.get("webLink"),
+                "sentDateTime": copie.get("sentDateTime"),
+                **({} if out.get("subject") is not None else
+                   {"subject": copie.get("subject"),
+                    "to": [_adresse(r) for r in copie.get("toRecipients") or []],
+                    "cc": [_adresse(r) for r in copie.get("ccRecipients") or []]})}
+
+    def _refuse_composition(op: str, **valeurs) -> None:
+        donnes = [k for k, v in valeurs.items() if v not in (None, False)]
+        if donnes:
+            raise bad(f"{', '.join(f'`{k}`' for k in donnes)} only apply when composing "
+                      f"(outlook op='draft', outlook_act op='send'), not op='{op}'. "
+                      "Nothing was done.")
+
+    @mcp.tool(name="outlook", annotations=SIMULATION)
+    @documente(_OUTLOOK_DOC)
+    def outlook(
+        op: Literal["search", "get", "attachment", "drafts", "folders",
+                    "draft"] = "search",
         query: Optional[str] = None,
         folder: Optional[str] = None,
         unread: Optional[bool] = None,
         message_id: Optional[str] = None,
-        message_ids: Optional[list[str]] = None,
         attachment_id: Optional[str] = None,
         filename: Optional[str] = None,
-        destination: Optional[str] = None,
         limit: int = 25,
         sheet: Optional[Union[int, str]] = None,
         max_rows: Optional[int] = None,
         full: bool = False,
         fields: Optional[list[str]] = None,
+        body: Optional[str] = None,
+        html: Optional[str] = None,
+        html_source: Optional[dict] = None,
+        to: Optional[list[str]] = None,
+        cc: Optional[list[str]] = None,
+        bcc: Optional[list[str]] = None,
+        subject: Optional[str] = None,
+        reply_to: Optional[str] = None,
+        reply_all: bool = False,
+        attachments: Optional[list[dict]] = None,
     ) -> dict:
-        """A message in the person's Outlook mailbox — search, read, fetch an
-        attachment, list drafts or folders, archive, trash, move.
-
-        `op`:
-        - **"search"** (default): messages, most recent first, without their body
-          (`preview` only). `query` is an Outlook (KQL) search — `from:jane
-          subject:invoice`, plain words; `folder` narrows to one folder; `unread`
-          True/False keeps unread/read ones. ⚠️ `unread` cannot be combined with
-          `query` (Microsoft refuses it): put the condition in the query, or list
-          without one. Returns {messages: [{id, subject, from, to, cc, date, isRead,
-          hasAttachments, preview, conversationId, folder_id, webLink}], count}.
-        - **"get"**: one message by `message_id`, its body as text, and its
-          attachments (`id`, `name`, `contentType`, `size`).
-        - **"attachment"**: the CONTENT of an attachment of `message_id`, by
-          `attachment_id` or `filename` (from op="get"). Small text and PDF come back
-          as text inline, a spreadsheet as CSV per sheet (`sheet`, `max_rows`),
-          anything else as a short-lived signed URL.
-        - **"drafts"**: the drafts, most recent first.
-        - **"folders"**: the top-level mail folders (`id`, `displayName`, counts) —
-          a folder id goes in `folder` or `destination`.
-        - **"archive"** — ⚠️ WRITES: moves `message_ids` to the Archive folder.
-        - **"trash"** — ⚠️ WRITES: moves `message_ids` to Deleted Items
-          (recoverable).
-        - **"move"** — ⚠️ WRITES: moves `message_ids` to `destination` (a folder id,
-          or `inbox`, `archive`, `deleteditems`, `junkemail`…).
-        A moved message KEEPS its id (oto asks Outlook for immutable ids): the answer
-        gives `{id, new_id}` for each, equal — unless `id` came in Outlook's older
-        format, then `new_id` is its stable form: use `new_id` afterwards.
-
-        Writing an email (draft, reply, send) is `outlook_compose`.
-
-        Args:
-            op: search (default) | get | attachment | drafts | folders | archive |
-                trash | move.
-            query: op="search" — Outlook (KQL) search, e.g. `from:jane invoice`.
-            folder: op="search" — a folder id or a well-known name (`inbox`,
-                `sentitems`, `archive`…); every folder when omitted.
-            unread: op="search" — True: unread only, False: read only.
-            message_id: op="get"/"attachment" — the message id.
-            message_ids: op="archive"/"trash"/"move" — the messages to move.
-            attachment_id: op="attachment" — the attachment id (from op="get").
-            filename: op="attachment" — the attachment by name, instead.
-            destination: op="move" — the target folder (id or well-known name).
-            limit: op="search"/"drafts"/"folders" — max items (default 25).
-            sheet: op="attachment" of an .xlsx — sheet name or 0-based index.
-            max_rows: op="attachment" of an .xlsx — rows per sheet (default 200).
-            full: return Graph's raw objects instead of the trimmed view.
-            fields: op="search"/"drafts" — keep only these keys of each message.
-        """
-        # Refusal BEFORE any credential resolution: an unknown op never reaches the
-        # client — hence never, by a derived path, a write.
+        # Refusal BEFORE any credential resolution: an unknown op never reaches the client.
         if op not in _OPS:
-            raise bad(_OPS_ERROR)
+            raise bad(_ops_error(_OPS))
         if (sheet is not None or max_rows is not None) and op != "attachment":
             raise bad(f"`sheet`/`max_rows` only apply to op='attachment' (got op='{op}').")
         if fields is not None and op not in ("search", "drafts"):
             raise bad(f"`fields` only applies to op='search'/'drafts' (got op='{op}').")
+        if op == "draft":
+            refuse_ignored(op, query=query, folder=folder, unread=unread,
+                           message_id=message_id, attachment_id=attachment_id,
+                           filename=filename)
+            return _composer(envoyer=False, body=body, html=html, html_source=html_source,
+                             to=to, cc=cc, bcc=bcc, subject=subject, reply_to=reply_to,
+                             reply_all=reply_all, attachments=attachments)
+        _refuse_composition(op, body=body, html=html, html_source=html_source, to=to,
+                            cc=cc, bcc=bcc, subject=subject, reply_to=reply_to,
+                            reply_all=reply_all, attachments=attachments)
         vue = raw if full else _message
         c = _client()
 
@@ -268,9 +442,8 @@ def register(mcp: FastMCP) -> None:
             return output_projection.project(out, items_path="messages", fields=fields)
 
         if op == "search":
-            refuse_ignored(op, message_id=message_id, message_ids=message_ids,
-                           attachment_id=attachment_id, filename=filename,
-                           destination=destination)
+            refuse_ignored(op, message_id=message_id, attachment_id=attachment_id,
+                           filename=filename)
             if query is not None and not query.strip():
                 raise bad("`query` is empty — omit it to list the most recent messages.")
             return _liste(_run(lambda: c.search_messages(query, folder=folder, top=limit,
@@ -278,24 +451,21 @@ def register(mcp: FastMCP) -> None:
 
         if op == "drafts":
             refuse_ignored(op, query=query, folder=folder, unread=unread,
-                           message_id=message_id, message_ids=message_ids,
-                           attachment_id=attachment_id, filename=filename,
-                           destination=destination)
+                           message_id=message_id, attachment_id=attachment_id,
+                           filename=filename)
             return _liste(_run(lambda: c.search_messages(folder="drafts", top=limit)))
 
         if op == "folders":
             refuse_ignored(op, query=query, folder=folder, unread=unread,
-                           message_id=message_id, message_ids=message_ids,
-                           attachment_id=attachment_id, filename=filename,
-                           destination=destination)
+                           message_id=message_id, attachment_id=attachment_id,
+                           filename=filename)
             dossiers = _run(lambda: c.list_folders(limit=limit))
             return {"folders": [raw(f) if full else _dossier(f) for f in dossiers],
                     "count": len(dossiers)}
 
         if op == "get":
             refuse_ignored(op, query=query, folder=folder, unread=unread,
-                           message_ids=message_ids, attachment_id=attachment_id,
-                           filename=filename, destination=destination)
+                           attachment_id=attachment_id, filename=filename)
             mid = need(message_id, "message_id", op)
             m = _run(lambda: c.get_message(mid))
             pieces = _run(lambda: c.list_attachments(mid)) if m.get("hasAttachments") else []
@@ -306,8 +476,7 @@ def register(mcp: FastMCP) -> None:
                     "attachments": [_piece(a) for a in pieces]}
 
         if op == "attachment":
-            refuse_ignored(op, query=query, folder=folder, unread=unread,
-                           message_ids=message_ids, destination=destination)
+            refuse_ignored(op, query=query, folder=folder, unread=unread)
             mid = need(message_id, "message_id", op)
             if (attachment_id is None) == (filename is None):
                 raise bad("op='attachment' requires `attachment_id` OR `filename` "
@@ -337,24 +506,19 @@ def register(mcp: FastMCP) -> None:
             except (file_content.MediaUnavailable, file_content.SpreadsheetError) as e:
                 raise bad(str(e)) from None
 
-        # ---- writes: every one is a move (the id is immutable) -------------------
-        refuse_ignored(op, query=query, folder=folder, unread=unread,
-                       message_id=message_id, attachment_id=attachment_id,
-                       filename=filename)
-        ids = list(need(message_ids, "message_ids", op))
-        if op == "move":
-            cible = need(destination, "destination", op)
-        else:
-            refuse_ignored(op, destination=destination)
-            cible = _DESTINATIONS[op]
-        return {"moved": _deplacer(c, ids, cible), "destination": cible}
+        # Structurally unreachable (input guard above).
+        raise bad(_ops_error(_OPS))
 
-    @mcp.tool()
-    def outlook_compose(
+    @mcp.tool(name="outlook_act", annotations=ACTE)
+    @documente(_OUTLOOK_ACT_DOC)
+    def outlook_act(
+        op: Literal["send", "archive", "trash", "move"],
+        draft_id: Optional[str] = None,
+        message_ids: Optional[list[str]] = None,
+        destination: Optional[str] = None,
         body: Optional[str] = None,
         html: Optional[str] = None,
         html_source: Optional[dict] = None,
-        mode: Literal["draft", "send"] = "draft",
         to: Optional[list[str]] = None,
         cc: Optional[list[str]] = None,
         bcc: Optional[list[str]] = None,
@@ -363,117 +527,32 @@ def register(mcp: FastMCP) -> None:
         reply_all: bool = False,
         attachments: Optional[list[dict]] = None,
     ) -> dict:
-        """Compose an Outlook email — **saved as a DRAFT by default**, or sent explicitly.
+        if op not in _ACT_OPS:
+            raise bad(_ops_error(_ACT_OPS))
+        if op == "send":
+            refuse_ignored(op, message_ids=message_ids, destination=destination)
+            if draft_id is None:
+                return _composer(envoyer=True, body=body, html=html,
+                                 html_source=html_source, to=to, cc=cc, bcc=bcc,
+                                 subject=subject, reply_to=reply_to, reply_all=reply_all,
+                                 attachments=attachments)
+            # A draft is sent AS IT STANDS: an argument beside it would be silently
+            # ignored — and the person would believe it was applied.
+            _refuse_composition("send with draft_id", body=body, html=html,
+                                html_source=html_source, to=to, cc=cc, bcc=bcc,
+                                subject=subject, reply_to=reply_to, reply_all=reply_all,
+                                attachments=attachments)
+            return _envoyer(_client(), draft_id, {}, ecrit_a_l_instant=False)
 
-        ⚠️ **`mode="send"` is required to actually send.** Omitting `mode` writes a draft
-        in the Drafts folder that the person can review; it does NOT leave the mailbox.
-        Sending goes through that same draft (written, then sent). Read `kind` in the
-        answer — **"sent" (the mail LEFT) or "draft" (saved, not sent)** — before
-        reporting what you did: never report "sent" for a draft, or the reverse.
-
-        A new message needs `to` (and usually `subject`). A reply is `reply_to=<message
-        id>`: Outlook sets the recipients and the subject itself and quotes the original
-        below your text; `reply_all=True` answers every recipient. `to`, `cc`, `bcc` and
-        `subject` are refused on a reply; `attachments` (inline images included) are
-        accepted.
-
-        **The body — exactly one of three.** `body` is markdown, rendered as HTML (the
-        `gmail_compose` rendering): the choice for an ordinary message. `html` is an
-        HTML body sent AS IS — no markdown pass, no rewriting, no cleanup: use it when
-        the layout matters (a branded email, a newsletter, styled tables), or to send
-        an HTML file someone prepared. `html_source` is the same, read from a file: a
-        `source` ref (same kinds as `attachments`) whose content is the HTML, UTF-8, up
-        to 1 MB. ⚠️ Outlook renders HTML with Word's engine, which ignores much modern
-        CSS: before writing HTML for Outlook, read the oto guide "Mails HTML compatibles
-        Outlook" (`oto_guide op=read slug=outlook-html`).
-
-        **Images in the body**: an attachment with a `content_id` (e.g.
-        `{"kind":"project_file","project_id":…,"file_id":…,"content_id":"logo"}`) is an
-        INLINE image, shown where the HTML says `<img src="cid:logo">` — not a link to a
-        file; the id is unique in the message, without `<>` or spaces. A PDF or any other
-        file stays an ordinary attachment (no `content_id`).
-
-        **No signature is appended**: Microsoft Graph does not expose the Outlook
-        signature — write the sign-off in the body if one is wanted.
-
-        The answer gives `kind`, the message's `id` and its `webLink` (opens it in
-        Outlook on the web): the draft's, for the person to review; once sent, the copy
-        in Sent Items, which keeps the same `id`. Sending is asynchronous: when that copy
-        is not visible yet, `webLink` is null and `note` says so — the mail still LEFT.
-
-        Args:
-            body: the message, in markdown — or `html` / `html_source`, not several.
-            html: the message as HTML, sent exactly as given (a reply too: it goes
-                above the quoted message).
-            html_source: a `source` ref to the HTML file (`{"kind":"project_file",
-                "project_id":…,"file_id":…}`, `{"kind":"url","url":…}`, drive,
-                gmail), UTF-8, ≤ 1 MB, sent exactly as read.
-            mode: "draft" (default) saves for human review; "send" delivers it now.
-            to: recipient addresses — a new message only.
-            cc: carbon-copy addresses — a new message only.
-            bcc: blind-copy addresses — a new message only.
-            subject: the subject line — a new message only.
-            reply_to: id of the message to reply to (from outlook_message).
-            reply_all: with `reply_to`, answer every recipient (default False).
-            attachments: files to attach (a new message or a reply), as `source` refs oto
-                resolves server-side, up to 3 MB each: `{"kind":"drive","file_id":…}`,
-                `{"kind":"gmail","message_id":…,"filename":…}`, `{"kind":"url","url":…}`
-                (e.g. a signed URL from `oto_upload_url`), `{"kind":"project_file",
-                "project_id":…,"file_id":…}`. Add `"content_id":"<id>"` to make one an
-                inline image of the body (`<img src="cid:<id>">`).
-        """
-        if mode not in ("draft", "send"):
-            raise bad("mode must be 'draft' or 'send'.")
-        _check_one_body(body, html, html_source)
-        if reply_to:
-            for nom, valeur in (("to", to), ("cc", cc), ("bcc", bcc), ("subject", subject)):
-                if valeur:
-                    raise bad(f"`{nom}` is not accepted on a reply: Outlook sets the "
-                              "recipients and the subject of a reply itself. Nothing "
-                              "was written.")
-            contenu = _body_html(body, html, html_source)
-            pieces = _attachments(attachments, MAX_INLINE_ATTACHMENT)
-            c = _client()
-            brouillon = _run(lambda: c.create_reply_draft(
-                reply_to, body_html=contenu, reply_all=reply_all, attachments=pieces))
+        # ---- moves: every one is a move (the id is immutable) --------------------
+        refuse_ignored(op, draft_id=draft_id)
+        _refuse_composition(op, body=body, html=html, html_source=html_source, to=to,
+                            cc=cc, bcc=bcc, subject=subject, reply_to=reply_to,
+                            reply_all=reply_all, attachments=attachments)
+        ids = list(need(message_ids, "message_ids", op))
+        if op == "move":
+            cible = need(destination, "destination", op)
         else:
-            if reply_all:
-                raise bad("`reply_all` goes with `reply_to` (the message to answer).")
-            if not to:
-                raise bad("`to` is required for a new message (or `reply_to` to answer "
-                          "one). Nothing was written.")
-            contenu = _body_html(body, html, html_source)
-            pieces = _attachments(attachments, MAX_INLINE_ATTACHMENT)
-            c = _client()
-            brouillon = _run(lambda: c.create_draft(
-                to=to, subject=subject or "", body_html=contenu, cc=cc or (),
-                bcc=bcc or (), attachments=pieces))
-        out = {"id": brouillon.get("id"), "subject": brouillon.get("subject"),
-               "to": [_adresse(r) for r in brouillon.get("toRecipients") or []],
-               "cc": [_adresse(r) for r in brouillon.get("ccRecipients") or []],
-               "webLink": brouillon.get("webLink")}
-        if mode == "draft":
-            return {"kind": "draft", **out}
-        try:
-            envoye = _run(lambda: c.send_draft(brouillon["id"]))
-        except Exception as e:  # noqa: BLE001 — re-raised named, with the real state
-            raise bad(f"The draft {brouillon.get('id')} was SAVED but sending it "
-                      f"failed: {e}. Nothing left the mailbox; retry the send, or "
-                      "leave the draft for the person.") from e
-        envoi = {"kind": "sent", "id": envoye, "subject": out["subject"],
-                 "to": out["to"], "cc": out["cc"]}
-        # The draft's immutable id designates its copy in Sent Items, once it is there.
-        try:
-            copie = _run(lambda: c.sent_message(envoye))
-        except Exception as e:  # noqa: BLE001 — the mail LEFT: said, not raised
-            logger.warning("outlook: mail %s sent, reading its Sent Items copy failed: %s",
-                           envoye, type(e).__name__)
-            return {**envoi, "webLink": None,
-                    "note": f"The mail LEFT, but reading its copy in Sent Items failed "
-                            f"({e}): no link to give."}
-        if copie is None:
-            return {**envoi, "webLink": None,
-                    "note": "The mail LEFT; its copy in Sent Items was not visible yet "
-                            "(sending is asynchronous), hence no link. It keeps this `id`."}
-        return {**envoi, "webLink": copie.get("webLink"),
-                "sentDateTime": copie.get("sentDateTime")}
+            refuse_ignored(op, destination=destination)
+            cible = _DESTINATIONS[op]
+        return {"moved": _deplacer(_client(), ids, cible), "destination": cible}

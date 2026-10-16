@@ -408,7 +408,7 @@ def register(mcp: FastMCP) -> None:
         - Drive: `{"kind":"drive","file_id":"<id>"}` (id from drive_file op=list/metadata)
         - Gmail attachment: `{"kind":"gmail","message_id":"<id>","filename":"<name>"}`
         - URL: `{"kind":"url","url":"https://…"}` (e.g. a signed URL from
-          drive_file op="download" / gmail_message op="attachment")
+          drive_file op="download" / gmail op="attachment")
         - Project file: `{"kind":"project_file","project_id":<id>,"file_id":<id>}`
           (ids from oto_project_files op=list)
         Optional `account` (email) targets a specific Google account for drive/gmail.

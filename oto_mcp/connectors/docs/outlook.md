@@ -9,18 +9,18 @@ on the "Outlook" card, click **Authorize Outlook** and choose your work account.
 
 ## usage — search, read, draft, send
 
-`outlook_message(op=search|get|attachment|drafts|folders|archive|trash|move)` and `outlook_compose`, under the account the call names (`_account="me@fabrikam.com"`), otherwise the default one.
-- "this week's unread emails" → `outlook_message(unread=true)`; "the invoices from Jane" → `outlook_message(query="from:jane invoice")`
-- "read this email" → `outlook_message(op="get", message_id="…")`: its text and its attachments; "open the PDF attached" → `op="attachment"` with `attachment_id` or `filename` — a PDF or a text comes back as text, an Excel as CSV
-- "draft a reply" → `outlook_compose(reply_to="…", body="…")`, attachments and inline images accepted; "send it" → the same with `mode="send"`
-- "write to Marc with the contract" → `outlook_compose(to=["marc@…"], subject="…", body="…", attachments=[{"kind":"drive","file_id":"…"}])` — a draft unless `mode="send"`
-- "send this HTML newsletter" → `outlook_compose(to=[…], subject="…", html="<html>…")`, or `html_source={"kind":"project_file",…}` for an HTML file: sent exactly as given, nothing rewritten. An image shown in it is an attachment with `"content_id":"logo"`, referenced as `<img src="cid:logo">`; Outlook's rendering has its limits, see the oto guide "Mails HTML compatibles Outlook" (`outlook-html`)
-- "archive the newsletters" → `outlook_message(op="archive", message_ids=[…])`; `op="trash"` moves to Deleted Items, `op="move"` to any folder (`op="folders"` lists them)
+Two tools, under the account the call names (`_account="me@fabrikam.com"`), otherwise the default one: `outlook(op=search|get|attachment|drafts|folders|draft)` reads or prepares a draft — nothing leaves, nothing moves; `outlook_act(op=send|archive|trash|move)` acts, and your client asks you to confirm it.
+- "this week's unread emails" → `outlook(unread=true)`; "the invoices from Jane" → `outlook(query="from:jane invoice")`
+- "read this email" → `outlook(op="get", message_id="…")`: its text and its attachments; "open the PDF attached" → `op="attachment"` with `attachment_id` or `filename` — a PDF or a text comes back as text, an Excel as CSV
+- "draft a reply" → `outlook(op="draft", reply_to="…", body="…")`, attachments and inline images accepted; "send it" → `outlook_act(op="send", draft_id="…")`, the draft as it stands
+- "write to Marc with the contract" → `outlook(op="draft", to=["marc@…"], subject="…", body="…", attachments=[{"kind":"drive","file_id":"…"}])`, then `outlook_act(op="send", draft_id="…")`
+- "send this HTML newsletter" → `outlook_act(op="send", to=[…], subject="…", html="<html>…")`, or `html_source={"kind":"project_file",…}` for an HTML file: sent exactly as given, nothing rewritten. An image shown in it is an attachment with `"content_id":"logo"`, referenced as `<img src="cid:logo">`; Outlook's rendering has its limits, see the oto guide "Mails HTML compatibles Outlook" (`outlook-html`)
+- "archive the newsletters" → `outlook_act(op="archive", message_ids=[…])`; `op="trash"` moves to Deleted Items, `op="move"` to any folder (`outlook(op="folders")` lists them)
 - each response is a trimmed view; `full=true` returns the complete Microsoft Graph object, `fields=[…]` keeps only some keys of each message
 
 ## note — what is misleading
 
-- ⚠️ **a draft is the default**: `outlook_compose` sends only with `mode="send"`. Its answer says `kind`: `draft` (saved in Drafts, nothing left) or `sent` — with the link of the sent message, unless Microsoft has not filed it in Sent Items yet (`webLink` null and a `note`: the mail did leave)
+- ⚠️ **only `outlook_act` sends**: `outlook(op="draft")` saves a draft, `outlook_act(op="send")` sends it. The answer says `kind`: `draft` (saved in Drafts, nothing left) or `sent` — with the link of the sent message, unless Microsoft has not filed it in Sent Items yet (`webLink` null and a `note`: the mail did leave)
 - ⚠️ **no signature is added**: Microsoft does not let an application read your Outlook signature. Write the sign-off in the body
 - a message keeps its id when it is moved (archive, trash, move) or sent: the id an answer gives stays valid
 - a search (`query`) cannot be combined with `unread`: Microsoft refuses it. Put the condition in the query, or list without one

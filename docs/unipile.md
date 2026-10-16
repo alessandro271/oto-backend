@@ -268,7 +268,7 @@ de paiement).
 un tiers, sans confirmation — le seul garde-fou par `op` vivait dans le hook du plugin
 Claude Code, qui ne protège aucun autre client. Décision d'Alexis le 09/10/2026 : tout ce
 qui agit CHEZ un tiers ou EN SON NOM sort des lecteurs, dans un outil dédié, sur le
-patron Gmail (`gmail_message` lit, `gmail_compose` écrit).
+patron Gmail (`gmail` lit ou simule, `gmail_act` agit — depuis le 17/10/2026, une paire par connecteur).
 
 | lecteur | ops de lecture | écrivain (`ENVOI`, `destructiveHint` + `openWorldHint`) | ops déplacées (dépréciées dans le lecteur jusqu'au 10/12/2026) |
 |---|---|---|---|

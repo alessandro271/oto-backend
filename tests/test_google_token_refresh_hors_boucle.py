@@ -4,7 +4,7 @@ bloque plus la boucle d'événements, et un Google lent rend une erreur nommée.
 `_client_for_user` peut déclencher `google_oauth.credentials_for` →
 `_refresh_access_token` (HTTP synchrone, 15s) quand l'access token stocké est
 expiré. Les appels à l'API Google, eux, étaient déjà en `asyncio.to_thread` dans
-chacun des 12 tools (`gmail_message`/`gmail_compose`, `drive_*`×2, `sheets_*`×2,
+chacun des 12 tools (`gmail`/`gmail_act`, `drive_*`×2, `sheets_*`×2,
 `tasks_*`×2, `calendar_*`×2, `chat_*`×2) — seule la CONSTRUCTION du client (donc
 le refresh) tournait encore nûment dans la boucle.
 

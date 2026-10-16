@@ -163,7 +163,7 @@ def test_les_deux_noms_divergents_sont_un_refus_nomme(env, service):
 
 
 def test_le_compte_d_une_piece_jointe_peut_differer_de_celui_de_l_appel(env):
-    """`gmail_compose(_account=B, attachments=[{kind: drive, account: A}])` : envoyer
+    """`gmail_act(op="send", _account=B, attachments=[{kind: drive, account: A}])` : envoyer
     depuis B un fichier du Drive de A. Le compte d'une SOURCE n'est pas le paramètre
     de l'outil — aucun conflit."""
     _deux_comptes(env)
@@ -271,7 +271,7 @@ def test_l_echo_nomme_le_compte_sur_la_reponse_d_un_outil_gmail():
         call_context.redaction.extract_payload = lambda r: r.structured_content
         call_context.redaction.rebuild_result = lambda r, p: vu.setdefault("payload", p)
         try:
-            call_context._echo_account(resultat, "gmail_message")
+            call_context._echo_account(resultat, "gmail")
         finally:
             call_context.redaction.extract_payload = orig_extract
             call_context.redaction.rebuild_result = orig_rebuild

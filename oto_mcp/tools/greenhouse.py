@@ -15,7 +15,7 @@ one tool per business OBJECT, the verb as an `op` parameter — `greenhouse_cand
 - **`greenhouse_users` stays ALONE**: it is the connector's only "user" object,
   it has a single verb (list) and serves as the DIRECTORY for the other tools'
   writes (`on_behalf_of` / `user_id`). A single-valued `op=` would homogenize
-  nothing — same case as `zoho_modules` / `gmail_list_accounts`.
+  nothing — same case as `zoho_modules`.
 - **job and application do not merge with each other** despite almost identical
   parameters (`per_page`/`page`/`job_id`/`status`): they are two distinct business
   objects (`/jobs` vs `/applications`, and `status` doesn't even have the same

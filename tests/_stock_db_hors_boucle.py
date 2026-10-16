@@ -108,7 +108,7 @@ STOCK: dict[str, str] = {
         "[dormant] _sub",
     "oto_mcp.tools.drive::register.<locals>.drive_file":
         "[dormant] access.current_user_sub_or_raise",
-    "oto_mcp.tools.gmail::register.<locals>.gmail_message":
+    "oto_mcp.tools.gmail::register.<locals>.gmail":
         "[dormant] access.current_user_sub_or_raise",
     "oto_mcp.tools.guide_run::_note_procedure_version":
         "[dormant] current_user_sub_from_token",

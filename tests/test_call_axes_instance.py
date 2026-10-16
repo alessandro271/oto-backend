@@ -256,7 +256,7 @@ def test_pin_instance_ref_du_porteur_sert_l_outil_du_service(monkeypatch):
     ref = instance_refs.make_member_ref(8, "u", "microsoft", "jane@contoso.example")
 
     async def _scenario():
-        undo = await call_axes._pin_instance(ref, "outlook_message")
+        undo = await call_axes._pin_instance(ref, "outlook")
         try:
             pinned = session_org.current_call_instance()
             assert (pinned.connector, pinned.account) == ("microsoft", "jane@contoso.example")
@@ -277,7 +277,7 @@ def test_pin_instance_ref_de_la_carte_est_ramenee_au_porteur(monkeypatch):
     ref = instance_refs.make_member_ref(8, "u", "outlook", "jane@contoso.example")
 
     async def _scenario():
-        undo = await call_axes._pin_instance(ref, "outlook_message")
+        undo = await call_axes._pin_instance(ref, "outlook")
         try:
             pinned = session_org.current_call_instance()
             assert instance_refs.format_ref(pinned) == instance_refs.make_member_ref(
@@ -294,7 +294,7 @@ def test_pin_instance_google_ref_du_porteur_sert_gmail(monkeypatch):
     ref = instance_refs.make_member_ref(8, "u", "google", "moi@exemple.test")
 
     async def _scenario():
-        undo = await call_axes._pin_instance(ref, "gmail_message")
+        undo = await call_axes._pin_instance(ref, "gmail")
         _unpin(undo)
 
     asyncio.run(_scenario())
@@ -303,7 +303,7 @@ def test_pin_instance_google_ref_du_porteur_sert_gmail(monkeypatch):
 def test_pin_instance_porteur_etranger_reste_refuse():
     ref = instance_refs.make_org_ref(8, "microsoft", "jane@contoso.example")
     with pytest.raises(McpError, match="gmail"):
-        asyncio.run(call_axes._pin_instance(ref, "gmail_message"))
+        asyncio.run(call_axes._pin_instance(ref, "gmail"))
 
 
 @pytest.mark.parametrize("connecteur_du_ref", ["microsoft", "outlook"])
@@ -364,7 +364,7 @@ def test_un_pret_google_epingle_par_la_carte_ou_le_porteur_designe_la_meme_ligne
     async def _scenario():
         undo = await call_axes._pin_instance(
             instance_refs.make_member_ref(8, "boss", carte, "jane@exemple.test"),
-            "gmail_message")
+            "gmail")
         try:
             assert instance_refs.format_ref(session_org.current_call_instance()) == \
                 instance_refs.make_member_ref(8, "boss", "google", "jane@exemple.test")

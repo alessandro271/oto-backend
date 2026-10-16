@@ -6,12 +6,12 @@ From this card, click **connect**: Google asks you to authorize **Gmail only** (
 
 ## usage — search, read, draft, send
 
-`gmail_message(op=search|get|attachment|drafts|archive|trash)` and `gmail_compose` — under the chosen account.
-- "find this week's unread emails and archive the newsletters"
-- "draft a reply to this email" or "send it"
-- `gmail_compose` appends the sending account's **Gmail signature** (after `--`), like the web client — the Gmail API never does it on its own. `sign=False` composes without it; the response reports `signature`: `appended`, `none_configured` or `disabled`
+Two tools, under the chosen account: `gmail(op=search|get|attachment|drafts|draft|accounts)` reads or prepares a draft — nothing leaves, nothing is deleted; `gmail_act(op=send|archive|trash)` acts, and your client asks you to confirm it.
+- "find this week's unread emails" → `gmail(query="is:unread newer_than:7d")`; "archive the newsletters" → `gmail_act(op="archive", message_ids=[…])`
+- "draft a reply to this email" → `gmail(op="draft", reply_to="…", body="…")`; "send it" → `gmail_act(op="send", draft_id="…")`, the draft as it stands
+- composing (`gmail` op=draft, or `gmail_act` op=send with a full message) appends the sending account's **Gmail signature** (after `--`), like the web client — the Gmail API never does it on its own. `sign=False` composes without it; the response reports `signature`: `appended`, `none_configured` or `disabled`
 - "read the `.xlsx` spreadsheet attached to this email, `devis` sheet" — an attachment (`op=attachment`) comes back as CSV per sheet, truncated
 
 ## note — project scope (#605)
 
-A `{kind: "url"}` attachment in `gmail_compose` is read server-side: under a project with `excluded_url_prefixes`, a matching url is refused, naming the pattern (`file_source` seam). Details: `docs/projects.md`.
+A `{kind: "url"}` attachment of a composed mail is read server-side: under a project with `excluded_url_prefixes`, a matching url is refused, naming the pattern (`file_source` seam). Details: `docs/projects.md`.

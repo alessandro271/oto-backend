@@ -1,5 +1,6 @@
-"""Dispatch `op=` de `gmail_message` (ADR 0047 §Amendement, appliqué au produit
-gmail le 2026-08-11 : 7 tools → 3).
+"""Dispatch `op=` de `gmail` et `gmail_act` (ADR 0047 §Amendement, appliqué au produit
+gmail le 2026-08-11 : 7 tools → 3 ; puis le 17/10/2026, deux outils : `gmail` lit ou
+simule, `gmail_act` agit — un client MCP autorise des OUTILS, pas des arguments).
 
 Ce que ce fichier verrouille, et que `test_gmail_attachments.py` ne couvrait PAS :
 celui-ci exerce un helper pur (`_resolve_attachments`), aucun ne touchait la
@@ -64,7 +65,7 @@ def client(monkeypatch):
 def test_ops_route_to_the_right_client_method(client, monkeypatch, op, kwargs, method):
     if op == "attachment":
         _stub_attachment(client, monkeypatch)
-    _call("gmail_message", op=op, **kwargs)
+    _call("gmail_act" if op in ("archive", "trash") else "gmail", op=op, **kwargs)
     getattr(client, method).assert_called_once()
 
 
@@ -80,7 +81,7 @@ def test_read_ops_never_touch_a_destructive_method(client, monkeypatch, op, kwar
     pas un bug d'affichage."""
     if op == "attachment":
         _stub_attachment(client, monkeypatch)
-    _call("gmail_message", op=op, **kwargs)
+    _call("gmail", op=op, **kwargs)
     for m in _DESTRUCTIVE:
         getattr(client, m).assert_not_called()
 
@@ -89,20 +90,20 @@ def test_read_ops_never_touch_a_destructive_method(client, monkeypatch, op, kwar
 
 def test_search_passes_query_and_max_results_and_counts(client):
     client.search.return_value = [{"id": "a"}, {"id": "b"}]
-    out = _call("gmail_message", op="search", query="from:x is:unread", max_results=5)
+    out = _call("gmail", op="search", query="from:x is:unread", max_results=5)
     assert client.search.call_args.args == ("from:x is:unread", 5)
     assert out == {"messages": [{"id": "a"}, {"id": "b"}], "count": 2}
 
 
 def test_get_returns_the_raw_message(client):
     client.get_message.return_value = {"id": "m1", "subject": "Devis"}
-    assert _call("gmail_message", op="get", message_id="m1") == {"id": "m1",
+    assert _call("gmail", op="get", message_id="m1") == {"id": "m1",
                                                                  "subject": "Devis"}
 
 
 def test_drafts_returns_drafts_and_count(client):
     client.list_drafts.return_value = [{"id": "d1"}]
-    out = _call("gmail_message", op="drafts", max_results=7)
+    out = _call("gmail", op="drafts", max_results=7)
     assert client.list_drafts.call_args.args == (7,)
     assert out == {"drafts": [{"id": "d1"}], "count": 1}
 
@@ -122,7 +123,7 @@ def test_attachment_passes_filename_and_index_tiebreaker(client, monkeypatch):
     """`index` départage plusieurs pièces jointes de MÊME nom (images inline) —
     il doit arriver au client, pas être avalé par le dispatch."""
     _stub_attachment(client, monkeypatch)
-    out = _call("gmail_message", op="attachment", message_id="m1",
+    out = _call("gmail", op="attachment", message_id="m1",
                 filename="Contrat.pdf", index=2)
     assert client.get_attachment.call_args.args == ("m1", "Contrat.pdf", 2)
     assert out["encoding"] == "url"
@@ -138,7 +139,7 @@ def test_attachment_media_unavailable_is_actionable(client, monkeypatch):
         raise G.file_content.MediaUnavailable("stockage temporaire indisponible")
     monkeypatch.setattr(G.file_content, "render_for_agent", _boom)
     with pytest.raises(McpError, match="stockage temporaire"):
-        _call("gmail_message", op="attachment", message_id="m1", filename="a.pdf")
+        _call("gmail", op="attachment", message_id="m1", filename="a.pdf")
 
 
 # --- écritures : un cas par op, et les voisines muettes ------------------------
@@ -147,7 +148,7 @@ def test_archive_calls_archive_only_and_never_trashes(client):
     """`archive` = retirer le label INBOX. Si cette op atteignait `trash_message`,
     l'utilisateur retrouverait ses messages à la corbeille : cas dédié."""
     client.archive_messages.return_value = [{"id": "m1"}]
-    out = _call("gmail_message", op="archive", message_ids=["m1", "m2"])
+    out = _call("gmail_act", op="archive", message_ids=["m1", "m2"])
     assert client.archive_messages.call_args.args == (["m1", "m2"],)
     assert out == {"archived": [{"id": "m1"}]}
     client.trash_message.assert_not_called()
@@ -159,7 +160,7 @@ def test_trash_calls_trash_per_message_and_never_archives(client):
     """`trash` = mise à la corbeille, message par message (pas de batch amont).
     Aucune autre méthode mutante ne doit partir au passage."""
     client.trash_message.side_effect = [{"id": "m1"}, {"id": "m2"}]
-    out = _call("gmail_message", op="trash", message_ids=["m1", "m2"])
+    out = _call("gmail_act", op="trash", message_ids=["m1", "m2"])
     assert [c.args[0] for c in client.trash_message.call_args_list] == ["m1", "m2"]
     assert out == {"trashed": ["m1", "m2"]}
     client.archive_messages.assert_not_called()
@@ -167,7 +168,7 @@ def test_trash_calls_trash_per_message_and_never_archives(client):
 
 def test_trash_falls_back_to_the_requested_id_when_the_api_omits_it(client):
     client.trash_message.return_value = {}
-    assert _call("gmail_message", op="trash", message_ids=["m9"]) == {"trashed": ["m9"]}
+    assert _call("gmail_act", op="trash", message_ids=["m9"]) == {"trashed": ["m9"]}
 
 
 @pytest.mark.parametrize("op", ["archive", "trash"])
@@ -175,9 +176,9 @@ def test_write_ops_refuse_an_empty_id_list(client, op):
     """`message_ids=[]` ne doit PAS rendre un succès vide : un no-op silencieux
     laisserait croire à l'agent que l'action a eu lieu."""
     with pytest.raises(McpError, match="message_ids"):
-        _call("gmail_message", op=op, message_ids=[])
+        _call("gmail_act", op=op, message_ids=[])
     with pytest.raises(McpError, match="message_ids"):
-        _call("gmail_message", op=op)
+        _call("gmail_act", op=op)
     for m in _DESTRUCTIVE:
         getattr(client, m).assert_not_called()
 
@@ -188,7 +189,7 @@ def test_default_op_is_a_read_and_writes_nothing(client):
     """Un appel sans `op` ne doit ni écrire ni supprimer : le défaut est
     `op='search'`, et sans `query` il refuse plutôt que d'agir."""
     with pytest.raises(McpError, match="query"):
-        _call("gmail_message")
+        _call("gmail")
     for m in _DESTRUCTIVE:
         getattr(client, m).assert_not_called()
 
@@ -203,10 +204,11 @@ def test_the_declared_default_op_is_declared_as_a_read():
 
     m = FastMCP("t")
     G.register(m)
-    default = inspect.signature(asyncio.run(m.get_tool("gmail_message")).fn) \
+    default = inspect.signature(asyncio.run(m.get_tool("gmail")).fn) \
         .parameters["op"].default
-    assert default in G._MESSAGE_READ_OPS
-    assert set(G._MESSAGE_WRITE_OPS) == {"archive", "trash"}
+    assert default == "search"
+    assert set(G._ACT_OPS) == {"send", "archive", "trash"}
+    assert not set(G._ACT_OPS) & set(G._OPS), "une op qui agit ne vit QUE dans gmail_act"
     assert set(_DESTRUCTIVE) <= set(dir(_pinned_client_class()))
 
 
@@ -218,7 +220,7 @@ def _pinned_client_class():
 
 
 def test_default_op_dispatches_to_search(client):
-    _call("gmail_message", query="is:unread")
+    _call("gmail", query="is:unread")
     client.search.assert_called_once()
     for m in _DESTRUCTIVE:
         getattr(client, m).assert_not_called()
@@ -230,16 +232,18 @@ def test_unknown_op_is_refused_with_the_allowed_list(client):
     """Une op inconnue doit lever en NOMMANT les ops valides — jamais retomber
     silencieusement sur le défaut (l'agent croirait sa demande honorée)."""
     with pytest.raises(McpError, match="op must be"):
-        _call("gmail_message", op="nope")
-    with pytest.raises(McpError, match=r"'search'.*'archive'.*'trash'"):
-        _call("gmail_message", op="delete")
+        _call("gmail", op="nope")
+    with pytest.raises(McpError, match=r"'search'.*'draft'.*'accounts'"):
+        _call("gmail", op="delete")
+    with pytest.raises(McpError, match=r"'send'.*'archive'.*'trash'"):
+        _call("gmail_act", op="delete")
 
 
 def test_unknown_op_never_reaches_the_client_nor_the_credential(client):
     """La garde est AVANT `_client_for_user` : une op inconnue ne déchiffre même
     pas le credential Google, donc aucun chemin dérivé ne peut agir."""
     with pytest.raises(McpError, match="op must be"):
-        _call("gmail_message", op="metadata", message_ids=["m1"])
+        _call("gmail_act", op="metadata", message_ids=["m1"])
     client._factory.assert_not_called()
     assert not client.method_calls
 
@@ -254,7 +258,7 @@ def test_unknown_op_never_reaches_the_client_nor_the_credential(client):
 ])
 def test_missing_required_arg_names_the_op_and_the_arg(client, op, kwargs, missing):
     with pytest.raises(McpError, match=missing) as e:
-        _call("gmail_message", op=op, **kwargs)
+        _call("gmail_act" if op in ("archive", "trash") else "gmail", op=op, **kwargs)
     assert f"op='{op}'" in str(e.value)
 
 
@@ -262,7 +266,7 @@ def test_empty_query_is_refused(client):
     """`query=""` ratisserait la boîte entière : une valeur vide compte comme
     absente, pas comme « tout »."""
     with pytest.raises(McpError, match="query"):
-        _call("gmail_message", op="search", query="")
+        _call("gmail", op="search", query="")
     client.search.assert_not_called()
 
 
@@ -277,79 +281,94 @@ def _tool_names():
     return {t.name for t in asyncio.run(m.list_tools())}
 
 
-def test_surface_is_the_consolidated_one():
-    """7 → 3. Rupture assumée sans alias (ADR 0047) : les anciens noms ne
-    répondent plus, ils n'ont pas été gardés en doublon silencieux."""
-    assert _tool_names() == {"gmail_list_accounts", "gmail_message", "gmail_compose"}
+def test_surface_is_one_reader_and_one_actor():
+    """Deux outils (17/10/2026) : `gmail` lit ou simule, `gmail_act` agit. Les anciens
+    noms ne sont PAS servis en doublon : ils refusent (`outils_retires`)."""
+    assert _tool_names() == {"gmail", "gmail_act"}
 
 
-def test_list_accounts_stays_alone_because_it_has_no_parameter():
-    """Découverte pure : `gmail_list_accounts` ne prend AUCUN paramètre (il énumère
-    les `account` que les autres consomment). Le fusionner n'homogénéiserait rien —
-    même arbitrage que `zoho_modules`."""
-    from fastmcp import FastMCP
-    from oto_mcp.tools import gmail as G
-
-    m = FastMCP("t")
-    G.register(m)
-    schema = asyncio.run(m.get_tool("gmail_list_accounts")).parameters
-    assert not (schema.get("properties") or {})
-
-
-def test_compose_stays_alone_with_its_disjoint_parameters(client):
-    """`gmail_compose` garde ses paramètres de rédaction, qui ne recouvrent aucun
-    de ceux de `gmail_message` — variante disjointe, laissée seule (sur-fusionner
-    est pire que sous-fusionner). Son axe reste `mode`, validé strictement."""
-    from fastmcp import FastMCP
-    from oto_mcp.tools import gmail as G
-
-    m = FastMCP("t")
-    G.register(m)
-    params = set(asyncio.run(m.get_tool("gmail_compose")).parameters["properties"])
-    msg_params = set(asyncio.run(m.get_tool("gmail_message")).parameters["properties"])
-    assert params & msg_params == {"account"}
-
-    with pytest.raises(McpError, match="mode must be"):
-        asyncio.run(_tool("gmail_compose")(body="hi", mode="nope", to="a@b.c"))
+def test_reading_and_drafting_never_send(client):
+    """`gmail(op="draft")` écrit un brouillon et RIEN d'autre : ni envoi, ni réponse."""
+    _call("gmail", op="draft", body="hi", to="a@b.c", subject="s")
+    client.create_draft.assert_called_once()
     client.send.assert_not_called()
+    client.reply.assert_not_called()
+    client.send_draft.assert_not_called()
+
+
+def test_send_routes_a_full_message_to_send(client):
+    out = _call("gmail_act", op="send", body="hi", to="a@b.c", subject="s")
+    client.send.assert_called_once()
     client.create_draft.assert_not_called()
+    assert out["kind"] == "sent"
 
 
-@pytest.mark.parametrize("mode,method", [("send", "send"), ("draft", "create_draft")])
-def test_compose_modes_route_to_the_right_client_method(client, mode, method):
-    """Envoi RÉEL vs brouillon : deux méthodes distinctes, et l'autre reste muette."""
-    _call("gmail_compose", body="hi", to="a@b.c", subject="s", mode=mode)
+def test_send_a_draft_by_id_sends_it_as_it_stands(client):
+    """Envoyer un brouillon existant : `send_draft`, sans le recomposer ni lire la
+    signature (elle y est depuis son écriture)."""
+    client.send_draft.return_value = {"id": "m9", "threadId": "t9"}
+    out = _call("gmail_act", op="send", draft_id="r-1")
+    client.send_draft.assert_called_once_with("r-1")
+    client.send.assert_not_called()
+    client.get_signature.assert_not_called()
+    assert out == {"id": "m9", "threadId": "t9", "kind": "sent", "draft_id": "r-1"}
+
+
+@pytest.mark.parametrize("extra", [{"body": "x"}, {"to": "a@b.c"}, {"subject": "s"},
+                                   {"attachments": [{"kind": "url", "url": "https://x"}]}])
+def test_a_draft_is_sent_as_it_stands_and_an_extra_argument_is_refused(client, extra):
+    """Un argument de rédaction à côté de `draft_id` serait ignoré — et la personne le
+    croirait appliqué. Refus nommé, rien ne part."""
+    with pytest.raises(McpError, match="only apply when composing"):
+        _call("gmail_act", op="send", draft_id="r-1", **extra)
+    client._factory.assert_not_called()
+
+
+@pytest.mark.parametrize("op", ["search", "get", "attachment", "drafts", "accounts"])
+def test_composition_arguments_are_refused_outside_draft(client, op):
+    with pytest.raises(McpError, match="only apply when composing"):
+        _call("gmail", op=op, to="a@b.c")
+    client._factory.assert_not_called()
+
+
+def test_accounts_lists_the_reachable_mailboxes(client, monkeypatch):
+    from oto_mcp.tools import gmail as G
+
+    monkeypatch.setattr(G.google_oauth, "reachable_accounts", lambda sub, service: [
+        {"google_email": "a@x.fr", "is_default": True, "shared": None}])
+    assert _call("gmail", op="accounts") == {
+        "accounts": [{"email": "a@x.fr", "is_default": True, "shared": None}]}
+    client._factory.assert_not_called()
+
+
+@pytest.mark.parametrize("act,method", [(False, "create_draft"), (True, "send")])
+def test_composition_routes_to_the_right_client_method(client, act, method):
+    """Envoi RÉEL vs brouillon : deux outils, deux méthodes, et l'autre reste muette."""
+    if act:
+        _call("gmail_act", op="send", body="hi", to="a@b.c", subject="s")
+    else:
+        _call("gmail", op="draft", body="hi", to="a@b.c", subject="s")
     getattr(client, method).assert_called_once()
     other = "create_draft" if method == "send" else "send"
     getattr(client, other).assert_not_called()
 
 
-@pytest.mark.parametrize("mode,method", [("send", "reply"), ("draft", "create_draft_reply")])
-def test_compose_reply_never_starts_a_new_thread(client, mode, method):
-    """Une réponse reste DANS son fil — dans les deux modes.
-
-    Le test passait `mode` implicitement et figeait donc le défaut d'alors (`send`).
-    Depuis que le défaut est `draft` (#345 ④, l'oubli d'un paramètre ne doit pas expédier
-    un mail dehors), un test qui repose sur le défaut ne prouve plus ce qu'il annonce :
-    il aurait suivi le changement au lieu de le contrôler. Les deux modes sont donc
-    exercés explicitement — la propriété gardée est le FIL, pas le défaut.
-    """
-    _call("gmail_compose", body="hi", reply_to="m1", mode=mode)
+@pytest.mark.parametrize("act,method", [(True, "reply"), (False, "create_draft_reply")])
+def test_a_reply_never_starts_a_new_thread(client, act, method):
+    """Une réponse reste DANS son fil — brouillon comme envoi."""
+    if act:
+        _call("gmail_act", op="send", body="hi", reply_to="m1")
+    else:
+        _call("gmail", op="draft", body="hi", reply_to="m1")
     getattr(client, method).assert_called_once()
     # Aucun chemin « nouveau message » : c'est ce qui casserait le fil.
     client.send.assert_not_called()
     client.create_draft.assert_not_called()
 
 
-def test_le_defaut_d_une_reponse_est_lui_aussi_un_brouillon(client):
-    _call("gmail_compose", body="hi", reply_to="m1")
-    client.create_draft_reply.assert_called_once()
-    client.reply.assert_not_called()
-
-
-def test_compose_refuses_a_new_message_without_a_recipient(client):
+def test_a_new_message_without_a_recipient_is_refused(client):
     with pytest.raises(McpError, match="`to` is required"):
-        _call("gmail_compose", body="hi")
+        _call("gmail_act", op="send", body="hi")
     client.send.assert_not_called()
 
 
@@ -358,7 +377,7 @@ def test_compose_refuses_a_new_message_without_a_recipient(client):
 # Signal #227 (16/07) : « `gmail_modify` (action=trash sur un draft) : aucun
 # retour pendant 300 s → abort côté client, **alors que l'action a bien été
 # exécutée** ». L'enquête du 28/08 a écarté la cause telle qu'elle est décrite :
-# `gmail_modify` n'existe plus (consolidé en `gmail_message`, ADR 0047), ses 10
+# `gmail_modify` n'existe plus (consolidé en `gmail_message`, ADR 0047, puis `gmail_act`), ses 10
 # appels journalisés plafonnent à 661 ms, aucun tool `gmail_*` n'a jamais dépassé
 # 8,7 s sur 399 appels, et chaque appel client part déjà en `asyncio.to_thread`
 # (donc hors de la boucle). Rien ici ne pouvait pendre 300 s.
@@ -383,7 +402,7 @@ def test_une_corbeille_partielle_dit_ce_qui_est_deja_parti(client):
 
     client.trash_message.side_effect = _trash
     with pytest.raises(McpError) as e:
-        _call("gmail_message", op="trash", message_ids=["m1", "m2", "m3", "m4"])
+        _call("gmail_act", op="trash", message_ids=["m1", "m2", "m3", "m4"])
     msg = str(e.value)
     assert faits == ["m1", "m2"], "on s'arrête au premier échec, sans rejouer"
     assert "m1" in msg and "m2" in msg, "ce qui est DÉJÀ à la corbeille est nommé"
@@ -396,5 +415,5 @@ def test_une_corbeille_entierement_reussie_ne_change_pas_de_forme(client):
     """Le chemin nominal garde son contrat : `{'trashed': [...]}` — la
     correction de #227 ne doit se voir que sur l'échec partiel."""
     client.trash_message.side_effect = lambda mid: {"id": mid}
-    assert _call("gmail_message", op="trash", message_ids=["m1", "m2"]) == \
+    assert _call("gmail_act", op="trash", message_ids=["m1", "m2"]) == \
         {"trashed": ["m1", "m2"]}

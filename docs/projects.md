@@ -194,7 +194,7 @@ Partage/transfert via **`oto_resource`** (resource_type=`project` ajouté au dis
 
 > **Désigner un fichier du projet au lieu de le transporter (ADR 0074, étape 1).**
 > `file_source.resolve` (le résolveur « fichier côté oto » des outils qui prennent une
-> `source` : `lighton_*`, `pennylane_upload_file`, `gmail_compose` `attachments`,
+> `source` : `lighton_*`, `pennylane_upload_file`, `gmail`/`gmail_act` `attachments`,
 > `lemlist_lead op=upload_audio`) connaît le kind `{"kind":"project_file","project_id":…,
 > "file_id":…}` (ids rendus par `oto_project_files op=list`) : les octets sont lus côté
 > serveur dans le stockage objet (`media_store.fetch_object`), jamais par le contexte de
@@ -473,7 +473,7 @@ d'URL. Le cliquet `test_every_covered_module_calls_the_seam` fige la liste des c
 | `cloro_google` (serp, news), `cloro_ask` (sources) | sortie | couvert (la réponse IA = prose) |
 | `web_read` | entrée + URL finale observée | couvert |
 | `browser_fetch`, `browser_eval` | entrée (+ URL finale pour `fetch`) | couvert |
-| `lighton_parse`, `pennylane_upload_file`, `gmail_compose` (`{kind:"url"}`) | entrée, via `file_source.resolve` | couvert |
+| `lighton_parse`, `pennylane_upload_file`, `gmail`/`gmail_act` (`{kind:"url"}`) | entrée, via `file_source.resolve` | couvert |
 | `serper_maps_sample/census`, `serper_reviews`, `serpapi_jobs/trends/finance/flights/hotels` | — | non couvert : lieux, offres, séries — pas des pages ; `website` d'un lieu n'est pas un résultat |
 | `firecrawl_extract_status` | — | non couvert : données au schéma de l'appelant, pas des pages (l'entrée l'est) |
 | `reddit_search`, `reddit_post`, `linkedin_unipile_*`, `linkedin_aiark_*` | — | non couvert : objets d'une plateforme propre ; exclure = ne pas activer le connecteur |
