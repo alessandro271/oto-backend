@@ -55,6 +55,9 @@ EXEMPLES: dict[tuple[str, str], str] = {
     # pour exercer la reconnaissance du suffixe (`champ.origine`) dans la projection
     # en amont de `flat_layers`, pas juste une liste de noms de colonnes plates.
     ("me.datastore.list_rows", "fields"): "email,email.origine",
+    # Les compteurs de plusieurs colonnes en un appel — l'URL d'une barre de filtres
+    # qui compte ses colonnes au-dessus de la vue.
+    ("me.datastore.counts", "fields"): "statut,ville",
     # Les crédits de deux runs d'un agent hébergé en une lecture — des ids tels que
     # `guide_run.new_run_id` les frappe (uuid4 hex).
     ("org.usage.calls", "run_id"): "3f2b9c0e8a7d4e6b9c1f2a3b4c5d6e7f,9a8b7c6d5e4f40312a1b0c9d8e7f6a5b",
