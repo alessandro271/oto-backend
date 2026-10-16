@@ -39,8 +39,10 @@ from urllib.parse import urljoin, urlsplit
 
 import requests
 from fastmcp import FastMCP
+from fastmcp.tools.tool import ToolResult
+from fastmcp.utilities.types import Image
 from ..mcp_errors import McpError
-from mcp.types import INVALID_REQUEST, ErrorData
+from mcp.types import INVALID_REQUEST, ErrorData, TextContent
 
 from . import cesures
 
@@ -144,6 +146,25 @@ def check_url_public(url: str) -> None:
                          exceptions_declarees=False)
     except egress.EgressRefused as e:
         raise _bad(str(e)) from None
+
+
+# ── image recognition (web_image) ────────────────────────────────────────────
+def image_format(octets: bytes) -> Optional[str]:
+    """`png` | `jpeg` | `gif` | `webp` read from the MAGIC BYTES, else None.
+
+    The `Content-Type` header is not trusted: a server can label anything
+    `image/png`, and an HTML error page served 200 must not reach the model as an
+    image. SVG is deliberately absent: it is XML (scripts, external references),
+    and the MCP clients render only raster formats."""
+    if octets.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if octets.startswith(b"\xff\xd8\xff"):
+        return "jpeg"
+    if octets[:6] in (b"GIF87a", b"GIF89a"):
+        return "gif"
+    if octets[:4] == b"RIFF" and octets[8:12] == b"WEBP":
+        return "webp"
+    return None
 
 
 # ── text extraction (stdlib — no dependency needed to strip tags) ────────────
@@ -266,7 +287,11 @@ def _fetch_http(url: str, deadline_s: float = _DEADLINE_S) -> dict:
                     return _delai("while reading the body")
             brut = b"".join(morceaux)
             html_str = brut.decode(r.encoding or "utf-8", errors="replace")
+            # `body`/`content_type`/`capped` serve `web_image`: an image is read as
+            # bytes, and one that reached the cap is REFUSED there, never served cut.
             return {"ok": True, "status": r.status_code, "html": html_str,
+                    "body": brut, "content_type": r.headers.get("Content-Type", ""),
+                    "capped": total >= _MAX_FETCH_BYTES,
                     "final_url": courante, "verdict": "read"}
         finally:
             r.close()
@@ -478,3 +503,47 @@ def register(mcp: FastMCP) -> None:
         tentatives.append({"cran": "browser", "verdict": "read"})
         return _sortie("browser", contenu, page.get("title") or "",
                        page.get("final_url") or None)
+
+    @mcp.tool()
+    async def web_image(url: str) -> ToolResult:
+        """VIEW a public image from its URL (png, jpeg, gif, webp) — e.g. a
+        product photo whose address `serper_scrape` or `web_read` returned. The
+        image comes back as image content you can look at, after one text line
+        giving the URL actually served, the format and the size.
+
+        Plain HTTP fetch only (free, no scraper, no browser). Same guard as
+        `web_read`: internal addresses and the project's `excluded_url_prefixes`
+        are refused, redirects included. Refused, never cut or converted: an
+        image over 3 MB, an SVG, or an answer that is not an image (format read
+        from the bytes, not from the Content-Type) — for a page, use `web_read`.
+
+        Args:
+            url: absolute public URL (http/https) of the image itself.
+        """
+        per = await asyncio.to_thread(url_perimeter.perimeter_of_call)
+        url_perimeter.refuse_if_excluded(url, per)
+        # `requests` is synchronous: outside the loop, as in `web_read` (#491).
+        res = await asyncio.to_thread(_fetch_http, url)
+        if not res.get("ok"):
+            raise _bad(f"Image unreadable at {url}: {res['verdict']}.")
+        final_url = res.get("final_url") or url
+        url_perimeter.refuse_if_excluded(final_url, per)
+        if res.get("capped"):
+            raise _bad(
+                f"Image at {final_url} is over {_MAX_FETCH_BYTES // 1_000_000} MB: "
+                "not served (never cut, no resizing available). Look for a "
+                "smaller rendition of it (thumbnail URL, `srcset` of the page).")
+        octets = res.get("body") or b""
+        fmt = image_format(octets)
+        if fmt is None:
+            type_annonce = res.get("content_type") or "none"
+            raise _bad(
+                f"{final_url} is not a png/jpeg/gif/webp image (Content-Type: "
+                f"{type_annonce}). SVG is not supported; for a web page, use web_read.")
+        ligne = f"Image from {final_url} — {fmt}, {len(octets)} bytes."
+        if final_url != url:
+            ligne += f" Requested: {url} (redirect followed)."
+        # Plain text, not JSON: no field to redact, and the image block is never
+        # rebuilt away by a middleware that re-serialises a JSON payload.
+        return ToolResult(content=[TextContent(type="text", text=ligne),
+                                   Image(data=octets, format=fmt).to_image_content()])

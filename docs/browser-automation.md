@@ -94,9 +94,17 @@ qui expose le substrat tel quel.
   `browser_connect_status(context_id, session_id, site, force?)` → `browser_sites()` ;
   lecture `browser_fetch(url, as_html?, max_chars?)` ; échappatoire `browser_eval(url, js)`.
 - **Périmètre de projet (#605, 2026-08-29)** : sous un projet à `excluded_url_prefixes`,
-  `browser_fetch`, `browser_eval` et `web_read` **refusent** une URL correspondante — demandée,
+  `browser_fetch`, `browser_eval`, `web_read` et `web_image` **refusent** une URL correspondante — demandée,
   ou atteinte par redirection (`final_url` observée) — en nommant le motif et le projet. Sans
   projet ou sans option, rien ne change. Détail : `docs/projects.md`.
+- **`web_image(url)` montre une image publique** (signaux du 12 et du 14/10/2026 : le scraping
+  rend l'adresse d'une photo, rien ne la montrait). Même fetch gardé que le cran ① de `web_read`
+  (garde d'egress à chaque saut, plafond de 3 Mo compté pendant la lecture), aucun cran payant.
+  Le format se lit dans les **octets** (png, jpeg, gif, webp ; le `Content-Type` ne fait pas
+  foi, SVG refusé) ; au plafond, l'image est **refusée**, jamais coupée ni convertie. La sortie
+  est une ligne de TEXTE simple (pas du JSON) puis un bloc image, sans canal structuré : la
+  rédaction n'a rien à réémettre, et aucun middleware ne reconstruit une sortie texte seule qui
+  perdrait l'image.
 - **`browser_fetch` ≠ `run_fetch`.** `run_fetch` vise une API JSON et **tronque son repli
   texte à 400 caractères** — inutilisable pour lire une page. `browserbase.fetch_page()`
   charge l'URL et renvoie le contenu **complet** (`innerText` rendu, ou DOM si `as_html`),

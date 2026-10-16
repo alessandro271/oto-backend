@@ -16,7 +16,8 @@ CONNECTOR = _c(
     "web", ["web"], secret_kind="none",
     label="Web page reader",
     help="read a public web page, even when it resists — fetch, then "
-         "scraper, then disposable browser (paid, on request)",
+         "scraper, then disposable browser (paid, on request) — or view a "
+         "public image from its URL",
 )
 
 CATEGORY = "Web"
@@ -29,6 +30,6 @@ SANS_LOGO_DE_MARQUE = True
 DESCRIPTION = (
     "Read a public web page, even when it resists a simple fetch: the "
     "reader escalates on its own — bare fetch, then scraper, then disposable "
-    "browser as a last resort (paid, on explicit request). Not a search "
-    "engine: give it a URL, not a query."
+    "browser as a last resort (paid, on explicit request). Also shows a "
+    "public image from its URL. Not a search engine: give it a URL, not a query."
 )
