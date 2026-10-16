@@ -1,25 +1,73 @@
-"""Envoi d'email transactionnel (invitations d'org) via **otomata-mailer**.
+"""Envoi d'email transactionnel : le TRANSPORT des mails de plateforme et des envois BYO.
 
-Standard Otomata : on n'utilise plus Resend per-app — l'endpoint générique
-`POST <OTO_MAILER_URL>`, endpoint `/api/send` du mailer (Scaleway TEM, brand Otomata, domaines from
-vérifiés DKIM/SPF) sert les emails métier de toutes les apps. Bearer
-`OTO_MAILER_SEND_BEARER`. **Best-effort** : sans bearer configuré ou en cas
-d'échec, on ne lève pas — on renvoie False et l'appelant expose l'`invite_url`
-pour un partage manuel.
+Les mails de plateforme (invitations, notifications, digests, contact, `email_send`
+sous l'adresse de l'instance) passent tous par `_send`, sur le transport que
+l'instance DÉCLARE (`transport_plateforme`) — l'un ou l'autre, jamais les deux :
+
+- **un relais mailer** : `OTO_MAILER_URL` (endpoint `/api/send`) + bearer
+  `OTO_MAILER_SEND_BEARER` ;
+- **l'API Scaleway TEM de l'instance, en direct** : `OTO_TEM_SECRET_KEY`,
+  `OTO_TEM_PROJECT_ID`, `OTO_TEM_REGION`, les trois ensemble — le même transport
+  (`send_via_scaleway_tem`) que celui d'une org qui apporte sa clé.
+
+**Best-effort** : un échec d'envoi (réseau, refus du service) rend False et l'appelant
+expose l'`invite_url` pour un partage manuel. Une configuration absente, ambiguë ou
+incomplète LÈVE, elle (#968).
 """
 from __future__ import annotations
 
 import html as _html
 import logging
 import os
+from dataclasses import dataclass, field
+from email.utils import parseaddr
 
 from .config import require_env
 
 log = logging.getLogger("oto_mcp.email")
 
+_TEM_INSTANCE = ("OTO_TEM_SECRET_KEY", "OTO_TEM_PROJECT_ID", "OTO_TEM_REGION")
 
-def _mailer_url() -> str:
-    return require_env("OTO_MAILER_URL")
+
+@dataclass(frozen=True)
+class TemInstance:
+    """Les identifiants Scaleway TEM de l'instance — jamais ceux d'une org."""
+    secret_key: str = field(repr=False)
+    project_id: str
+    region: str
+
+
+def transport_plateforme() -> "str | TemInstance":
+    """Le transport des mails de plateforme de CETTE instance : l'URL du relais mailer,
+    ou les identifiants TEM de l'instance. Un choix de configuration, jamais deviné :
+    LÈVE (`RuntimeError`, comme `require_env`) si aucun n'est déclaré, si les deux le
+    sont, ou si TEM l'est à moitié. Relu à chaque envoi ; rejoué au démarrage par
+    `identite_instance.verifier`.
+
+    Avec TEM, l'expéditeur reste `OTO_MAIL_FROM`, sur un domaine vérifié dans le projet
+    TEM de l'instance : Scaleway refuse sinon — aucune logique de domaine ici."""
+    url = os.environ.get("OTO_MAILER_URL") or None
+    tem = (os.environ.get("OTO_TEM_SECRET_KEY") or None,
+           os.environ.get("OTO_TEM_PROJECT_ID") or None,
+           os.environ.get("OTO_TEM_REGION") or None)
+    if url and any(tem):
+        raise RuntimeError(
+            "transport des emails de plateforme ambigu : OTO_MAILER_URL et "
+            f"{', '.join(n for n, v in zip(_TEM_INSTANCE, tem) if v)} sont déclarées "
+            "ensemble — l'instance envoie par son relais mailer OU par son API Scaleway "
+            "TEM, n'en déclarer qu'un.")
+    if any(tem):
+        manquent = [n for n, v in zip(_TEM_INSTANCE, tem) if not v]
+        if manquent:
+            raise RuntimeError(
+                f"transport Scaleway TEM de l'instance déclaré à moitié : il manque "
+                f"{', '.join(manquent)} ({', '.join(_TEM_INSTANCE)} vont ensemble).")
+        return TemInstance(*tem)
+    if url:
+        return url
+    raise RuntimeError(
+        "aucun transport des emails de plateforme : déclarer OTO_MAILER_URL (relais "
+        f"mailer) ou {', '.join(_TEM_INSTANCE)} (API Scaleway TEM de l'instance).")
 
 
 def _mail_from() -> str:
@@ -76,31 +124,59 @@ def _relais_refuse(url: str, depuis: str, detail: str) -> None:
 def _send(to: str, subject: str, html: str, reply_to: str | None = None,
           from_email: str | None = None, cc: list[str] | None = None,
           mailer_url: str | None = None, bearer: str | None = None) -> bool:
-    """Envoi via le mailer à `OTO_MAILER_URL` (Scaleway TEM). `from_email` = adresse expéditrice
-    (défaut marque `_mail_from()`) — le service refuse (403) un domaine hors allowlist
-    `MAILER_FROM_DOMAINS`. Best-effort (False si pas de bearer ou échec) — mais
-    `OTO_MAILER_URL`/`OTO_MAIL_FROM` sont REQUISES dès qu'un envoi est tenté (#968) :
-    sans elles, un envoi partirait en silence sous NOTRE relais et NOTRE adresse.
+    """Le choke-point des mails de plateforme : part sur le transport de l'instance
+    (`transport_plateforme`, qui LÈVE sans transport déclaré, #968). `from_email` =
+    adresse expéditrice, `Nom <adresse>` accepté (défaut `_mail_from()`) : le relais la
+    refuse (403) hors de son allowlist `MAILER_FROM_DOMAINS`, Scaleway hors des domaines
+    vérifiés du projet TEM. Best-effort : False si pas de bearer (relais) ou si l'envoi
+    échoue.
 
-    `cc` = copies VISIBLES (le service lit `cc`). `mailer_url`/`bearer` = un relais
-    déclaré par l'appelant (l'email d'activation d'un tenant part par SON instance du
-    mailer, dont le domaine expéditeur est vérifié chez elle) — les deux ensemble, sinon
-    le relais de l'instance."""
-    if mailer_url and not bearer:
-        return False
+    `cc` = copies VISIBLES. `mailer_url`/`bearer` = un relais déclaré par l'appelant
+    (l'email d'activation d'un tenant part par SON instance du mailer, dont le domaine
+    expéditeur est vérifié chez elle) — les deux ensemble, et alors le transport de
+    l'instance n'intervient pas. CR/LF neutralisés sur chaque en-tête, quel que soit le
+    transport (le corps `html` n'est pas un en-tête, et les gabarits l'échappent)."""
+    if mailer_url:
+        if not bearer:
+            return False
+        return _par_relais(mailer_url, bearer, to, subject, html,
+                           from_email or _mail_from(), reply_to, cc)
+    # Résolu AVANT tout bloc best-effort : un transport manquant est une erreur de
+    # CONFIGURATION, pas un aléa réseau — elle ne doit pas se perdre dans le même
+    # `except` qu'un timeout httpx (#968).
+    transport = transport_plateforme()
+    if isinstance(transport, TemInstance):
+        return _par_tem(transport, to, subject, html, from_email or _mail_from(),
+                        reply_to, cc)
     bearer = bearer or os.environ.get("OTO_MAILER_SEND_BEARER")
     if not bearer:
         return False
-    # Résolues AVANT le bloc best-effort : une variable manquante est une erreur de
-    # CONFIGURATION, pas un aléa réseau — elle ne doit pas se perdre dans le même
-    # `except` qu'un timeout httpx (#968).
-    url = mailer_url or _mailer_url()
-    depuis = from_email or _mail_from()
+    return _par_relais(transport, bearer, to, subject, html,
+                       from_email or _mail_from(), reply_to, cc)
+
+
+def _par_tem(tem: TemInstance, to: str, subject: str, html: str, depuis: str,
+             reply_to: str | None, cc: list[str] | None) -> bool:
+    """Envoi par l'API Scaleway TEM de l'instance — `send_via_scaleway_tem`, le transport
+    d'une org qui apporte sa clé, avec les identifiants de l'instance. TEM prend le nom
+    et l'adresse de l'expéditeur séparément : `Nom <adresse>` est décomposé ici, et une
+    valeur sans adresse lisible LÈVE (c'est la configuration, pas un aléa)."""
+    nom, adresse = parseaddr(_no_crlf(depuis))
+    if "@" not in adresse:
+        raise RuntimeError(f"expéditeur {depuis!r} illisible pour Scaleway TEM : "
+                           "« adresse » ou « Nom <adresse> » attendu (OTO_MAIL_FROM).")
+    return send_via_scaleway_tem(
+        _no_crlf(to), _no_crlf(subject), html, secret_key=tem.secret_key,
+        project_id=tem.project_id, region=tem.region, from_email=adresse,
+        from_name=nom or None, reply_to=_no_crlf(reply_to),
+        cc=[_no_crlf(a) for a in cc] if cc else None)
+
+
+def _par_relais(url: str, bearer: str, to: str, subject: str, html: str, depuis: str,
+                reply_to: str | None, cc: list[str] | None) -> bool:
+    """Envoi par un relais mailer (`/api/send`, Scaleway TEM derrière lui)."""
     try:
         import httpx
-        # Anti-injection d'en-tête : neutralise CR/LF sur TOUS les champs d'en-tête
-        # (choke-point unique → couvre tous les templates). Le corps `html` n'est pas
-        # un en-tête (et déjà échappé par les templates via _esc).
         payload = {"from": _no_crlf(depuis), "to": _no_crlf(to),
                    "subject": _no_crlf(subject), "html": html}
         if reply_to:

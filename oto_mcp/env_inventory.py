@@ -208,14 +208,19 @@ _IDENTITE: tuple[Variable, ...] = (
              "poste. Un env-liste s'ÉTEND, ne se remplace jamais (docs/auth-logto.md).",
              ("oto_mcp/config.py:255",)),
     Variable("OTO_MAILER_URL", Classe.IDENTITE, None,
-             "Relais d'envoi d'email (TEM).", ("oto_mcp/email.py:22",)),
+             "Relais mailer des emails de plateforme (endpoint `/api/send`, bearer "
+             "`OTO_MAILER_SEND_BEARER`). Un des deux transports de l'instance : laissée "
+             "vide quand elle envoie par son API Scaleway TEM (`OTO_TEM_SECRET_KEY`, "
+             "`OTO_TEM_PROJECT_ID`, `OTO_TEM_REGION`). Aucun des deux, ou les deux : "
+             "refus de démarrer (`email.transport_plateforme`).",
+             ("oto_mcp/email.py:49",)),
     Variable("OTO_MAIL_FROM", Classe.IDENTITE, None,
              "Expéditeur par défaut des emails composés.",
-             ("oto_mcp/email.py:26", "oto_mcp/scheduler.py:99",
+             ("oto_mcp/email.py:74", "oto_mcp/scheduler.py:99",
               "oto_mcp/tools/email.py:228")),
     Variable("OTO_CONTACT_TO", Classe.IDENTITE, None,
              "Boîte de réception (reply-to) d'un email composé sans `reply_to` "
-             "explicite.", ("oto_mcp/email.py:31",)),
+             "explicite.", ("oto_mcp/email.py:79",)),
     Variable("OTO_LEGAL_DOCS", Classe.IDENTITE, None,
              "Les documents légaux que l'instance fait accepter, en JSON — un objet par "
              "slug de `legal_docs.CONTEXTS` : "
@@ -702,7 +707,21 @@ _REGLAGES: tuple[Variable, ...] = (
              ("oto_mcp/embeddings.py:62",)),
     Variable("OTO_MAILER_SEND_BEARER", Classe.REGLAGE, None,
              "Bearer du relais mailer commun (byo-org a le sien en coffre).",
-             ("oto_mcp/email.py:48",)),
+             ("oto_mcp/email.py:151",)),
+    Variable("OTO_TEM_SECRET_KEY", Classe.REGLAGE, None,
+             "Clé d'API Scaleway TEM de l'instance : ses emails de plateforme partent "
+             "en direct par l'API TEM, sans relais mailer. Va avec `OTO_TEM_PROJECT_ID` "
+             "et `OTO_TEM_REGION`, les trois ou aucune, et exclut `OTO_MAILER_URL`. "
+             "Le domaine de `OTO_MAIL_FROM` doit être vérifié dans ce projet TEM : "
+             "Scaleway refuse l'envoi sinon.",
+             ("oto_mcp/email.py:50",)),
+    Variable("OTO_TEM_PROJECT_ID", Classe.REGLAGE, None,
+             "Projet Scaleway du TEM de l'instance — voir `OTO_TEM_SECRET_KEY`.",
+             ("oto_mcp/email.py:51",)),
+    Variable("OTO_TEM_REGION", Classe.REGLAGE, None,
+             "Région Scaleway du TEM de l'instance (`fr-par`) — voir "
+             "`OTO_TEM_SECRET_KEY`.",
+             ("oto_mcp/email.py:52",)),
     Variable("MOLLIE_API_KEY", Classe.REGLAGE, None,
              "Clé Mollie plateforme (ADR 0043).", ("oto_mcp/mollie_client.py:58",)),
     Variable("OTO_MCP_S3_PUBLIC_BASE_URL", Classe.REGLAGE, None,

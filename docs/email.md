@@ -14,11 +14,11 @@ celle d'un connecteur, pas une page à part). **Deux connecteurs** (déclarés d
 `providers.EMAIL_CONNECTOR_TRANSPORT`) :
 `scaleway` (**BYO-org depuis le 2026-07-01** : `auth_modes={byo_org}`,
 `secret_kind="fields"` — `secret_key`+`project_id`+`region` du compte Scaleway TEM
-de L'ORG ; transport = API TEM en direct `email.send_via_scaleway_tem` : CE
-connecteur, et lui seul, se passe du service mailer et de la clé plateforme. Le mode
-par défaut passe bien par le mailer — emails de la plateforme (invitations, digests,
-alertes) et envoi sous l'adresse de l'instance par `email_send` :
-`email.send_composed_email` → `OTO_MAILER_URL` (endpoint `/api/send` du mailer) ;
+de L'ORG ; transport = API TEM en direct `email.send_via_scaleway_tem`, sans service
+mailer ni clé plateforme. Le mode par défaut — emails de la plateforme (invitations,
+digests, alertes) et envoi sous l'adresse de l'instance par `email_send` :
+`email.send_composed_email` → `email._send` — part sur le **transport de l'instance**
+(voir « Transport des mails de plateforme » ci-dessous) ;
 master ON **sûr** car la propriété du domaine
 est garantie PAR Scaleway — l'API refuse un `from` dont le domaine n'est pas vérifié
 dans le compte de l'org, ce qui rend #64 caduque) + `resend` (BYOK,
@@ -79,7 +79,7 @@ champ transport sur l'expéditeur).
 - `email_send` (`tools/email.py`) = **spine** (pas un connecteur) : route
   `sender→connecteur→transport` ; autz dynamique (membre d'org pour une adresse
   déclarée ; super_admin pour le repli marque `oto@otomata.tech`). `email.py` =
-  `send_composed_email` (mailer à `OTO_MAILER_URL`, env `OTO_MAILER_SEND_BEARER`) +
+  `send_composed_email` (transport de l'instance : relais `OTO_MAILER_URL` ou API TEM `OTO_TEM_*`) +
   `send_via_resend` (httpx direct, clé org). `scaleway` = provider
   credential/config-only (`tools/scaleway.py` = `register()` no-op) ; `resend`
   sert EN PLUS ses propres outils — la liste de contacts des Broadcasts
@@ -107,6 +107,35 @@ champ transport sur l'expéditeur).
   compte de l'org → pas de vérif côté oto (#64 sans objet depuis le passage BYO).
   Otomata (l'org maison) envoie avec sa clé TEM dédiée (app IAM `oto-email-scaleway`,
   vault `SCW_TEM_*`).
+
+## Transport des mails de plateforme (relais mailer ou API TEM de l'instance)
+
+Tout mail de plateforme passe par `email._send`, qui part sur le transport que
+l'instance **déclare** (`email.transport_plateforme`, relu à chaque envoi et rejoué au
+démarrage par `identite_instance.verifier`) — l'un ou l'autre, jamais les deux :
+
+| transport | variables | quand |
+|---|---|---|
+| relais mailer | `OTO_MAILER_URL` (+ bearer `OTO_MAILER_SEND_BEARER`, secret) | notre production |
+| API Scaleway TEM en direct | `OTO_TEM_SECRET_KEY` (secret), `OTO_TEM_PROJECT_ID`, `OTO_TEM_REGION` — les trois ensemble | une instance sans mailer |
+
+- **Aucun, les deux, ou TEM à moitié ⟹ `RuntimeError`**, au démarrage comme à l'envoi —
+  jamais de repli de l'un sur l'autre (même régime que `require_env`, #968). Une
+  instance TEM déclare `OTO_MAILER_URL` **vide** (la variable reste de la classe
+  identité, la déclaration de déploiement en exige la clé).
+- **Le transport TEM réutilise `send_via_scaleway_tem`**, celui d'une org qui apporte sa
+  clé, avec les identifiants de l'instance. L'expéditeur reste `OTO_MAIL_FROM`
+  (`Nom <adresse>` décomposé en nom + adresse pour l'API) : son domaine doit être
+  **vérifié dans le projet TEM de l'instance**, c'est Scaleway qui refuse sinon — aucune
+  logique de domaine côté oto. Un expéditeur sans adresse lisible lève.
+- **Mêmes garanties** sur les deux transports : CR/LF neutralisés sur chaque en-tête
+  (to, sujet, from, reply-to, cc), `cc` et `reply_to` portés (TEM : `Reply-To` en
+  en-tête additionnel). Le refus d'expéditeur signalé en erreur (`_relais_refuse`) est
+  propre au relais (son allowlist `MAILER_FROM_DOMAINS`) ; un refus TEM se journalise
+  comme celui d'une org (`send_via_scaleway_tem`), best-effort.
+- Un relais déclaré **par l'appelant** (`mailer_url` + `bearer`, l'activation d'un
+  tenant) passe toujours par ce relais : le transport de l'instance n'intervient pas.
+- Banc : `tests/test_email_transport_instance.py`.
 
 > **Invariant connecteurs (corrigé 2026-06-24)** : `_org_list` (vue ORG
 > `/org/connectors`) ne liste QUE les connecteurs **activés par la plateforme**

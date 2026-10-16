@@ -39,6 +39,7 @@ SECRETS: frozenset[str] = frozenset({
     "MISTRAL_API_KEY",
     "OTO_SCRUB_MODEL_KEY",
     "OTO_MAILER_SEND_BEARER",
+    "OTO_TEM_SECRET_KEY",
     "MOLLIE_API_KEY",
     "OTO_SENTRY_DSN",
     "OTO_EXPORT_CLE_CIBLE",

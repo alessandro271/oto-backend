@@ -62,7 +62,8 @@ _ADRESSE_RE = re.compile(
     r"@(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}")
 
 # Daily cap of RECIPIENTS (`to` + `cc`) per org on the COMMON transport — the
-# instance's relay, under ITS key and ITS domain (`OTO_MAILER_URL`). Alexis's decision
+# instance's transport, under ITS key and ITS domain (`email.transport_plateforme`:
+# its mailer relay or its own Scaleway TEM API). Alexis's decision
 # of 04/10/2026: cc is allowed, but a send on the common key puts the reputation of ALL
 # the instance's sends at stake (activation, reminders, summaries); an
 # org that sends with ITS key (Resend, Scaleway TEM) has no platform cap.

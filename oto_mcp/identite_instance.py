@@ -36,7 +36,7 @@ def _lectures() -> tuple[tuple[str, Callable[[], object]], ...]:
         ("adresse du tableau de bord", config.dashboard_url),
         ("base des liens d'invitation", config.invite_base_url),
         ("origines CORS", config.cors_origins),
-        ("relais d'email", email._mailer_url),
+        ("transport des emails", email.transport_plateforme),
         ("expéditeur des emails", email._mail_from),
         ("boîte de contact", email._contact_to),
         ("documents légaux", legal_docs.current_docs),
