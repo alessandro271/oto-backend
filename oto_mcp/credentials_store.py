@@ -1177,6 +1177,13 @@ def statuts_mono_compte(entity_type: str, entity_id: str) -> dict[str, dict]:
             for r in list_credentials(entity_type, entity_id) if r["account"] == ""}
 
 
+def comptes_du_palier(entity_type: str, entity_id: str, connector: str) -> list[dict]:
+    """`list_accounts` projected from the entity's inventory (`list_credentials`, read once
+    per call): a shared tier's accounts cost no query of their own on a listing (#1148)."""
+    return [{"account": r["account"], "meta": r["meta"], "set_at": r["set_at"]}
+            for r in list_credentials(entity_type, entity_id) if r["connector"] == connector]
+
+
 @lecture_d_appel
 def has_credential(entity_type: str, entity_id: str, connector: str, account: Optional[str] = None) -> bool:
     """Présence d'un secret SANS déchiffrer (pour status_for / surface d'attaque

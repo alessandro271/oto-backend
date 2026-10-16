@@ -215,6 +215,7 @@ def env(monkeypatch):
     monkeypatch.setattr(credentials_store, "get_credential", coffre.get)
     monkeypatch.setattr(credentials_store, "set_credential", coffre.set)
     monkeypatch.setattr(credentials_store, "list_accounts", coffre.list_accounts)
+    monkeypatch.setattr(credentials_store, "comptes_du_palier", coffre.list_accounts)
     monkeypatch.setattr(credentials_store, "update_meta", coffre.update_meta)
     monkeypatch.setattr(credentials_store, "list_shared_with", coffre.list_shared_with)
     monkeypatch.setattr(credentials_store, "get_instance_sharing", coffre.get_instance_sharing)

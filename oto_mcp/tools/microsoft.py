@@ -41,7 +41,7 @@ def register(mcp: FastMCP) -> None:
         `_account` is refused and lists the lent accounts.
         """
         sub = access.current_user_sub_or_raise()
-        comptes = ms_auth.accounts_for(sub)
+        comptes = ms_auth.avec_noms(ms_auth.accounts_for(sub))
         preteurs = access.libelles_preteurs(c["lent_by"] for c in comptes
                                             if c.get("lent_by"))
         return {

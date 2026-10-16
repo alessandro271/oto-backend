@@ -133,6 +133,11 @@ def peupler() -> Jeu:
     ms = auth_microsoft.service_scopes(auth_microsoft.SERVICES[0])
     _cle("member", moi, auth_microsoft.CONNECTOR, account="moi@example.invalid",
          meta={"scopes": " ".join(ms), "is_default": True})
+    # Et un compte Microsoft de l'org et de l'équipe active : leurs paliers se lisent aussi.
+    _cle("org", org, auth_microsoft.CONNECTOR, account="boite-org@example.invalid",
+         meta={"scopes": " ".join(ms), "connected_by": SUB})
+    _cle("group", equipe, auth_microsoft.CONNECTOR, account="boite-equipe@example.invalid",
+         meta={"scopes": " ".join(ms), "connected_by": SUB})
     # Session navigateur (connecteur à cookie) : perso.
     sessions = [c.name for c in providers.REGISTRY.values()
                 if c.secret_kind == "cookie" and c.name in perso]

@@ -820,22 +820,33 @@ def access_token_for(sub: str, service: str, account: Optional[str] = None, *,
 def shared_accounts(sub: str, org: Optional[int]) -> list[dict]:
     """The accounts of the person's active team, of a team a shared project lends, then
     of her org — the cascade's order (`heritage.paliers_partages`) — with `shared`
-    (`group`/`org`) and `shared_owner` (`{id, name}`); never her default."""
-    from .. import access, group_store, org_store  # lazy
+    (`group`/`org`) and `shared_owner` (`{id}`, named by `avec_noms` where shown);
+    never her default."""
+    from .. import access  # lazy
     from ..access import heritage
     if org is None:
         return []
     out = []
     for palier, cible in heritage.paliers_partages(org, access.current_group(sub),
                                                    heritage.du_contexte(sub, org)):
-        lignes = credentials_store.list_accounts(palier, str(cible), CONNECTOR)
-        if not lignes:
-            continue
-        fiche = (group_store.get_group(cible) if palier == "group"
-                 else org_store.get_org(cible)) or {}
         out += [{**c, "meta": {**(c.get("meta") or {}), "is_default": False},
-                 "shared": palier, "shared_owner": {"id": cible, "name": fiche.get("name")}}
-                for c in lignes]
+                 "shared": palier, "shared_owner": {"id": cible}}
+                for c in credentials_store.comptes_du_palier(palier, str(cible), CONNECTOR)]
+    return out
+
+
+def avec_noms(comptes: list[dict]) -> list[dict]:
+    """`shared_owner` named (`{id, name}`) — only on the surfaces that show it, so that
+    resolution and presence read no team or org name (#1148)."""
+    from .. import group_store, org_store  # lazy
+    out = []
+    for c in comptes:
+        if c.get("shared"):
+            cible = c["shared_owner"]["id"]
+            nom = ((group_store.get_group(cible) or {}).get("name") if c["shared"] == "group"
+                   else org_store.nom_d_org(cible))
+            c = {**c, "shared_owner": {"id": cible, "name": nom}}
+        out.append(c)
     return out
 
 

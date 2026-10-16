@@ -685,7 +685,7 @@ def _microsoft_list(sub: str, service: "str | None") -> list[dict]:
     Google account (`shared`, `shared_scope`) plus `shared_owner` ({id, name})."""
     from .. import db
     from ..auth import microsoft as ms_auth
-    comptes = ms_auth.accounts_for(sub, service)
+    comptes = ms_auth.avec_noms(ms_auth.accounts_for(sub, service))
     # An account LENT by a peer (`oto_instance op=lend`) is operable through `_account=`
     # and marked `granted` + `owner`, like a granted Unipile account: not the borrower's
     # to revoke nor to make their default.

@@ -39,6 +39,7 @@ def org(pret, monkeypatch):
     monkeypatch.setattr(group_store, "get_group", lambda gid: (
         {"id": gid, "org_id": ORG, "name": "Ventes"} if gid == EQUIPE else None))
     monkeypatch.setattr(org_store, "get_org", lambda oid: {"id": oid, "name": "Contoso"})
+    monkeypatch.setattr(org_store, "nom_d_org", lambda oid: "Contoso")
     return pret
 
 
