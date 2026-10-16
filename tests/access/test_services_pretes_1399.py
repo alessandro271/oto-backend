@@ -107,6 +107,35 @@ def test_une_cle_sans_services_se_prete_entiere(coffre, monkeypatch):
     assert _preter("zoho")["services"] is None
 
 
+# ── l'état du prêt, lu par l'écran ───────────────────────────────────────────
+
+def test_la_pose_et_la_lecture_rendent_le_meme_etat(coffre):
+    out = _preter("google_ads")
+    assert out["services_by_borrower"] == {f"user:{PAIR}": ["google_ads"]}
+    assert out["services_lendable"] == ["gmail", "google_ads"]
+    assert out["service_labels"]["google_ads"] == "Google Ads"
+    lu = sharing._get_loan_state(CTX, sharing.LoanStateInput(connector="gmail"))
+    assert lu == {k: out[k] for k in sharing.LoanState.model_fields}
+    assert lu["connector"] == "google" and lu["lent_to"] == [PAIR]
+
+
+def test_la_lecture_d_une_cible_sans_liste_dit_aucun_service(coffre):
+    coffre["side"] = ["group:3"]
+    lu = sharing._get_loan_state(CTX, sharing.LoanStateInput(connector="google"))
+    assert (lu["lent_to_groups"], lu["services_by_borrower"]) == ([3], {"group:3": []})
+
+
+def test_la_lecture_d_une_cle_entiere_ne_dit_pas_de_services(coffre, monkeypatch):
+    monkeypatch.setattr(credentials_store, "list_accounts",
+                        lambda et, eid, con: [{"account": "", "meta": {}}])
+    coffre["side"] = [f"user:{PAIR}"]
+    lu = sharing.LoanState.model_validate(
+        sharing._get_loan_state(CTX, sharing.LoanStateInput(connector="zoho")))
+    assert lu.lent_to == [PAIR]
+    assert lu.services_by_borrower is None and lu.services_lendable is None
+    assert lu.service_labels is None
+
+
 # ── à l'usage ────────────────────────────────────────────────────────────────
 
 def _servi(entity_type, entity_id, account):
@@ -146,6 +175,7 @@ def test_un_service_non_prete_est_refuse_en_nommant_le_pret(pret):
     assert (data["code"], data["services_lent"], data["lent_by"]) == (
         "service_not_lent", ["drive", "google_ads"], f"{PRETEUSE}@exemple.test")
     assert "Nothing was done" in refus.value.error.message
+    assert "card in the console" in refus.value.error.message
 
 
 def test_une_cible_sans_liste_ne_prete_aucun_service(pret):

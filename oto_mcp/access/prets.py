@@ -297,9 +297,10 @@ def exiger_service_prete(sub: Optional[str], service: str, servi) -> None:
         message=(f"The {label} account `{account}` lent to you by {qui} does not lend "
                  f"`{service}`: this loan covers "
                  + (", ".join(f"`{s}`" for s in couverts) if couverts else "no service")
-                 + f". Ask {qui} to extend it (oto_instance op='lend', connector="
-                 f"'{porteur}', the same borrower, `services` with `{service}` added). "
-                 "Nothing was done."),
+                 + f". Ask {qui} to extend it: from the account's card in the console "
+                 f"(Share, then the services of this loan), or oto_instance op='lend', "
+                 f"connector='{porteur}', the same borrower, `services` with `{service}` "
+                 "added. Nothing was done."),
         data={"code": CODE_SERVICE_NON_PRETE, "retryable": False, "service": service,
               "lent_by": qui, "services_lent": couverts}))
 

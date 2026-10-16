@@ -56,22 +56,41 @@ class LendInstanceInput(BaseModel):
     revoke: bool = False
 
 
-class LendInstanceResult(BaseModel):
-    """State of the loan AFTER the operation — not just an acknowledgment of the action."""
-    ok: bool
+class LoanStateInput(BaseModel):
+    connector: str = Field(description="the connector — a service card (`outlook`, "
+                                       "`gmail`…) reads the loans of the account it "
+                                       "borrows")
+    account: str = Field("", description="which of your accounts — optional when you "
+                                         "have only one")
+
+
+class LoanState(BaseModel):
+    """Who one of MY accounts is lent to, and for which services."""
     # The connector whose vault row is lent: the CARRIER when a service card was named
     # (`outlook` → `microsoft`), since a service owns no instance (`credential_of`).
     connector: str
     account: str = ""                       # the account lent (`""` = single-key connector)
+    # ⚠️ The COMPLETE lists of borrowers, not just one: after a `revoke`, non-empty
+    # lists if other loans remained.
+    lent_to: list[str]                      # borrowers' subs (`user:` entries)
+    lent_to_groups: list[int] = []          # borrowing teams (`group:` entries)
+    lent_to_org: bool = False               # lent to the whole current org (`org:` entry)
+    # Google/Microsoft account: the services lent, per borrower (`user:<sub>`,
+    # `group:<id>`, `org:<id>`; a borrower without a list is lent none), and those the
+    # account authorized — what a loan may lend. Null for a key lent whole.
+    services_by_borrower: Optional[dict[str, list[str]]] = None
+    services_lendable: Optional[list[str]] = None
+    # How a person reads each service of this account (`gmail` → `Gmail`).
+    service_labels: Optional[dict[str, str]] = None
+
+
+class LendInstanceResult(LoanState):
+    """State of the loan AFTER the operation — not just an acknowledgment of the action."""
+    ok: bool
     # Present when the loan reaches beyond the named card: lending a carrier's account
     # lends every service that account authorized — said, never implied.
     note: Optional[str] = None
     revoked: bool                           # echo of the intent (`revoke` from the input)
-    # ⚠️ The COMPLETE lists of borrowers afterwards, not just the targeted one: a
-    # `revoke` therefore returns non-empty lists if other loans remained.
-    lent_to: list[str]                      # borrowers' subs (`user:` entries)
-    lent_to_groups: list[int] = []          # borrowing teams (`group:` entries)
-    lent_to_org: bool = False               # lent to the whole current org (`org:` entry)
     # Google/Microsoft account: the services lent to THIS borrower after the operation
     # (`[]` after a revoke); null for a key that has no services of its own.
     services: Optional[list[str]] = None
@@ -142,14 +161,19 @@ def _designation(carrier: str, eid: str, account: str, partage: bool) -> str:
     return f"`_instance={ref}`"
 
 
+def _services_autorises(carrier: str, eid: str, account: str) -> list:
+    """The services the lender's Google or Microsoft account has authorized."""
+    meta = next((r.get("meta") or {} for r in credentials_store.list_accounts(
+        credentials_store.MEMBER, eid, carrier) if r["account"] == account), {})
+    return services_accordes.services_autorises(carrier, meta)
+
+
 def _services_du_pret(inp: LendInstanceInput, carrier: str, eid: str, account: str) -> list:
     """The services a loan of a Google or Microsoft account lends: `services` as given,
     otherwise the service card named, otherwise those the account authorized TODAY —
     each one a service of this account that it has authorized. Frozen in the loan: a
     service authorized later is not lent until the lender says so."""
-    meta = next((r.get("meta") or {} for r in credentials_store.list_accounts(
-        credentials_store.MEMBER, eid, carrier) if r["account"] == account), {})
-    autorises = services_accordes.services_autorises(carrier, meta)
+    autorises = _services_autorises(carrier, eid, account)
     label = providers.REGISTRY[carrier].label
     if inp.services is not None:
         demandes = list(dict.fromkeys(inp.services))
@@ -178,6 +202,46 @@ def _services_du_pret(inp: LendInstanceInput, carrier: str, eid: str, account: s
     return [x for x in connus if x in demandes]
 
 
+def _etat_du_pret(org: int, connector: str, eid: str, account: str, side: list,
+                  par_cible: dict) -> dict:
+    """The loan state of a row (`LoanState`) — what the lend gesture returns and what
+    reading it serves: one projection, so the screen reads the same thing both ways."""
+    etat = {"connector": connector, "account": account,
+            "lent_to": [s[len("user:"):] for s in side if s.startswith("user:")],
+            "lent_to_groups": [int(s[len("group:"):]) for s in side
+                               if s.startswith("group:") and s[len("group:"):].isdigit()],
+            "lent_to_org": f"org:{org}" in side}
+    if connector in access.PORTEURS_A_SERVICES:
+        etat["services_by_borrower"] = {s: list(par_cible.get(s, [])) for s in side}
+        etat["services_lendable"] = _services_autorises(connector, eid, account)
+        etat["service_labels"] = {
+            x: providers.REGISTRY[x].label or x
+            for x in services_accordes.services_du_porteur(connector)}
+    return etat
+
+
+def _active_org(ctx: ResolvedCtx, what: str) -> int:
+    org = access.current_org(ctx.sub)
+    if org is None:
+        raise AuthzDenied(400, "no_active_org", f"No active org — unable to {what}.")
+    return org
+
+
+def _get_loan_state(ctx: ResolvedCtx, inp: LoanStateInput) -> dict:
+    if providers.connector_for_provider(inp.connector) is None:
+        raise AuthzDenied(400, "unknown_connector", f"Unknown connector `{inp.connector}`.")
+    connector = providers.credential_provider(inp.connector)
+    org = _active_org(ctx, "read a loan")
+    eid = credentials_store.member_id(org, ctx.sub)
+    account = _lent_account(eid, connector, inp.account)
+    _, side = credentials_store.get_instance_sharing(
+        credentials_store.MEMBER, eid, connector, account)
+    par_cible = (credentials_store.services_pretes(
+        credentials_store.MEMBER, eid, connector, account)
+        if connector in access.PORTEURS_A_SERVICES else {})
+    return _etat_du_pret(org, connector, eid, account, list(side or []), par_cible)
+
+
 def _lend_instance(ctx: ResolvedCtx, inp: LendInstanceInput) -> dict:
     if providers.connector_for_provider(inp.connector) is None:
         raise AuthzDenied(400, "unknown_connector", f"Unknown connector `{inp.connector}`.")
@@ -188,10 +252,7 @@ def _lend_instance(ctx: ResolvedCtx, inp: LendInstanceInput) -> dict:
                           "whole current org).")
     # A service card owns no vault row: the loan is the carrier's (`credential_of`).
     connector = providers.credential_provider(inp.connector)
-    org = access.current_org(ctx.sub)
-    if org is None:
-        raise AuthzDenied(400, "no_active_org",
-                          "No active org — unable to lend an instance.")
+    org = _active_org(ctx, "lend an instance")
     if not inp.revoke and cle_perso.interdite(org, connector):
         raise AuthzDenied(403, cle_perso.CODE, cle_perso.texte_refus(
             org, connector, cle_perso.AU_PRET))
@@ -268,14 +329,8 @@ def _lend_instance(ctx: ResolvedCtx, inp: LendInstanceInput) -> dict:
         note = (f"{note} " if note else "") + (
             "The borrower uses it only by naming it: "
             f"{_designation(connector, eid, account, inp.to is None)}.")
-    return {"ok": True, "connector": connector, "account": account,
-            "note": note,
-            "revoked": inp.revoke,
-            "lent_to": [s[len("user:"):] for s in side if s.startswith("user:")],
-            "lent_to_groups": [int(s[len("group:"):]) for s in side
-                               if s.startswith("group:") and s[len("group:"):].isdigit()],
-            "lent_to_org": f"org:{org}" in side,
-            "services": services}
+    return {**_etat_du_pret(org, connector, eid, account, side, par_cible),
+            "ok": True, "note": note, "revoked": inp.revoke, "services": services}
 
 
 CAPABILITIES += [
@@ -300,6 +355,18 @@ CAPABILITIES += [
                      "and revoke is journaled. You only ever share your OWN key; the "
                      "borrower operates under THEIR own org context (ADR 0044 share_side)."),
         rest=RestBinding("POST", "/api/me/connectors/{connector}/lend", {"connector": "connector"}),
+    ),
+    Capability(
+        key="connectors.lend_state", handler=_get_loan_state, Input=LoanStateInput,
+        authz=SUB_ONLY, Output=LoanState,
+        description=("Who YOUR connector instance (your key in your current org) is lent "
+                     "to — members (`lent_to`), teams (`lent_to_groups`), the whole org "
+                     "(`lent_to_org`) — and, for a Google or Microsoft account, the "
+                     "services lent to each (`services_by_borrower`) and those the "
+                     "account authorized, which a loan may lend (`services_lendable`), "
+                     "with their names (`service_labels`). "
+                     "The state the lend gesture returns, read without changing it."),
+        rest=RestBinding("GET", "/api/me/connectors/{connector}/lend", {"connector": "connector"}),
     ),
 ]
 
