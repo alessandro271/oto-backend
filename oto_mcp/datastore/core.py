@@ -318,7 +318,8 @@ class DatastorePg(SchemaOpsMixin, RegistreMixin, LectureMixin, EcritureMixin,
                      bail_echu: str = "taire", layers: str = dsl.DEFAUT,
                      versions: tuple = dsver.DEFAUT,
                      empties: str = dsl.EMPTIES_DEFAUT,
-                     fields: Optional[frozenset] = None) -> dict:
+                     fields: Optional[frozenset] = None,
+                     declarees: Optional[list] = None) -> dict:
         """Ligne `datastore_rows` → row API (`_id`/`_created_at`/`_updated_at` à
         plat + champs user). Le bail de claim (ADR 0046 D) n'apparaît que s'il est
         posé (une ligne libre n'a aucune des trois clés `_claimed_*` → absentes,
@@ -363,7 +364,12 @@ class DatastorePg(SchemaOpsMixin, RegistreMixin, LectureMixin, EcritureMixin,
         Retirées **avant** la projection, pas après : leurs couches (`champ.origine`) et
         leurs alias plats (`contact1_nom`) ne sont donc jamais fabriqués, plutôt que
         fabriqués puis rattrapés par un filtre de noms qu'on oublierait d'étendre.
-        Inerte hors face agent — le tableau de bord de son propriétaire voit tout."""
+        Inerte hors face agent — le tableau de bord de son propriétaire voit tout.
+
+        `declarees` : `dsv2.cles_declarees(schema)`, calculé UNE fois par page par
+        l'appelant qui sert une page (16/10/2026, profil d'une page de 500 lignes à 260
+        colonnes : recalculé à chaque ligne, il pesait ~20 % du temps de la page).
+        `None` = calculé ici, comportement inchangé pour les lectures d'une ligne."""
         data = row.get("data") or {}
         # Lu une fois par ligne. Le prédicat court-circuite sur la face REST, où les
         # pages sont les plus grosses : rien n'est parcouru là où rien n'est masqué.
@@ -420,8 +426,8 @@ class DatastorePg(SchemaOpsMixin, RegistreMixin, LectureMixin, EcritureMixin,
         # `fields` (`"email.origine"` → base `"email"`) ne changent pas d'une clé à
         # l'autre : les calculer UNE FOIS par ligne, puis tester l'appartenance à cet
         # ensemble, passe de O(clés × champs) à O(clés + champs).
-        bases_demandees = (frozenset(f.split(".", 1)[0] for f in fields)
-                            if projette else frozenset())
+        bases_demandees, bases_a_couches = (_bases_projetees(fields) if projette
+                                            else (frozenset(), frozenset()))
 
         def _pertinente(k: str) -> bool:
             """`k` (ou une de ses couches, `k.origine`…) est demandée — seul cas où
@@ -466,6 +472,11 @@ class DatastorePg(SchemaOpsMixin, RegistreMixin, LectureMixin, EcritureMixin,
                 out[k] = servie
             # Les couches s'exposent dès qu'il y en a — même sans `valeur` posée
             # (import de socle sur un champ pas encore renseigné).
+            if projette and k not in bases_a_couches:
+                # Aucune couche de `k` n'est demandée : rien à aplatir. C'est ce qui
+                # rend une projection sur des noms NUS moins chère que la ligne
+                # complète — `flat_layers` était payé pour chaque colonne puis jeté.
+                continue
             plat = dsv2.flat_layers(k, v, origine=sert_origine)
             if projette:
                 # Une couche ne survit que NOMMÉE elle-même — demander `email` ne
@@ -477,7 +488,7 @@ class DatastorePg(SchemaOpsMixin, RegistreMixin, LectureMixin, EcritureMixin,
         # en place : une clé absente se lisait « cette colonne n'existe pas » et l'agent
         # fabriquait la valeur. Rien n'est écrit ; une valeur présente (même `""`, `null`
         # ou une couche seule) n'est pas touchée ; une colonne masquée reste absente.
-        for k in dsv2.cles_declarees(schema):
+        for k in (dsv2.cles_declarees(schema) if declarees is None else declarees):
             if (k not in data and k not in out and k not in cachees
                     and not k.startswith("_") and (not projette or k in fields)):
                 out[k] = None
@@ -571,6 +582,19 @@ class DatastorePg(SchemaOpsMixin, RegistreMixin, LectureMixin, EcritureMixin,
     def _declared_key_of(schema: Optional[dict]) -> Optional[str]:
         k = (schema or {}).get("key")
         return k if isinstance(k, str) and k else None
+
+
+def _bases_projetees(fields: frozenset) -> tuple[frozenset, frozenset]:
+    """`(bases, bases à couches)` d'une projection : les colonnes que `fields` vise
+    (`"email.origine"` → `"email"`), et celles dont une COUCHE est nommée — en UN
+    parcours de `fields` par ligne, jamais un par clé de la ligne (oto-backend#980)."""
+    bases, a_couches = set(), set()
+    for f in fields:
+        base, point, _ = f.partition(".")
+        bases.add(base)
+        if point:
+            a_couches.add(base)
+    return frozenset(bases), frozenset(a_couches)
 
 
 def make_store(sub: str) -> "DatastorePg":

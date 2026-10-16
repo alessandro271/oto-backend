@@ -88,7 +88,8 @@ class LectureMixin:
         if not rows:
             return []
         sch = self._schema_of(ns_id)
-        return [self._row_to_dict(r, sch, versions=versions) for r in rows]
+        decl = dsv2.cles_declarees(sch)
+        return [self._row_to_dict(r, sch, versions=versions, declarees=decl) for r in rows]
 
     def cursor_rows(
         self,
@@ -150,8 +151,10 @@ class LectureMixin:
                            if len(rows) == limit else None)
             if sch is None and rows:
                 sch = self._schema_of(ns_id)
+            decl = dsv2.cles_declarees(sch)
             out = {"rows": [self._row_to_dict(r, sch, layers=layers, versions=versions,
-                                              empties=empties, fields=proj) for r in rows],
+                                              empties=empties, fields=proj,
+                                              declarees=decl) for r in rows],
                    "next_cursor": next_cursor,
             # ⚠️ La réponse DÉCLARE ce qu'elle sert (oto#140). Sans elle, « je ne
             # l'ai pas demandée » et « elle n'existe pas sur cette case » se lisent
@@ -170,8 +173,9 @@ class LectureMixin:
             ns_id, after_row_id=after, limit=limit, filters=filters)
         if sch is None and rows:
             sch = self._schema_of(ns_id)
+        decl = dsv2.cles_declarees(sch)
         out = [self._row_to_dict(r, sch, layers=layers, versions=versions, empties=empties,
-                                 fields=proj)
+                                 fields=proj, declarees=decl)
                for r in rows]
         next_cursor = _encode_cursor(rows[-1]["row_id"]) if len(rows) == limit else None
         # ⚠️ SECOND retour de cette méthode — le chemin du curseur simple. Le premier
@@ -299,9 +303,11 @@ class LectureMixin:
                 jusqua=None if total_max is None else total_max + 1)
             health = self._order_health(ns_id, order_by, otype, oopts, cherche, clauses)
         capped = total_max is not None and total > total_max
+        decl = dsv2.cles_declarees(sch)
         out = {
             "rows": [self._row_to_dict(r, sch, layers=layers, versions=versions,
-                                       empties=empties, fields=proj) for r in rows],
+                                       empties=empties, fields=proj, declarees=decl)
+                     for r in rows],
             # Le total doit décrire le MÊME jeu que la page : filtré aussi, sinon la
             # pagination du dashboard annonce des lignes qu'elle ne servira jamais.
             "total": total_max if capped else total,

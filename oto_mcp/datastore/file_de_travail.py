@@ -341,7 +341,8 @@ class FileDeTravailMixin:
         seule (aucun droit d'écriture requis)."""
         ns_id = self._resolve(datastore)
         sch = self._schema_of(ns_id)
-        return [self._row_to_dict(r, sch, bail_echu="servir")
+        decl = dsv2.cles_declarees(sch)
+        return [self._row_to_dict(r, sch, bail_echu="servir", declarees=decl)
                 for r in db.datastore_claimed_rows(ns_id)]
 
     def force_release(self, datastore: str, row_id: str, *,

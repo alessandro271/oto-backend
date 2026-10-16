@@ -123,10 +123,21 @@ def test_ordre_la_projection_doit_operer_AVANT_l_aplatissement():
     réintroduit ce chemin."""
     reel = dsv2.flat_layers
     with patch.object(dsv2, "flat_layers", wraps=reel) as espion:
-        row_to_dict_avec_origine(_ROW, _SCHEMA, fields=frozenset({"c0"}))
+        row_to_dict_avec_origine(_ROW, _SCHEMA, fields=frozenset({"c0.comment"}))
     assert espion.call_count == 1, (
         "flat_layers a été appelée pour des colonnes non demandées : "
         "la projection est appliquée APRÈS l'aplatissement, pas avant")
+
+
+def test_une_projection_sur_des_noms_nus_n_aplatit_rien():
+    """16/10/2026 : demander `c0` NU ne sert aucune couche de `c0` — `flat_layers`
+    n'a rien à fabriquer. Payée puis jetée pour chaque colonne, elle rendait une
+    projection sur 260 noms nus plus chère que la ligne complète."""
+    reel = dsv2.flat_layers
+    with patch.object(dsv2, "flat_layers", wraps=reel) as espion:
+        out = row_to_dict_avec_origine(_ROW, _SCHEMA, fields=frozenset(_ROW["data"]))
+    assert espion.call_count == 0
+    assert {k: out[k] for k in _ROW["data"]} == _ROW["data"]
 
 
 # ── quadratique en clés-de-ligne × colonnes-de-fields, corrigé le 18/09/2026 ──

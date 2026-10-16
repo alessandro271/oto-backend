@@ -2294,6 +2294,12 @@ retenue (`count` = les contacts, `count_rows` = les fiches), et `sum`/`avg`/`min
 sur `contacts[].<attribut>` portent sur tous les items. Le tri reste refusé. Détail :
 `datastore-colonne-tableau.md` §5.1.
 
+**Projeter coûte moins que tout lire** (`fields`, même date). Sous projection, les
+couches d'une colonne ne sont aplaties que si l'une d'elles est NOMMÉE (`ville.comment`) :
+`flat_layers` était payé pour chaque colonne puis jeté, et une projection sur 260 noms
+nus coûtait plus cher que la ligne complète. Les bases d'une projection et les colonnes
+déclarées se calculent une fois par page, plus une fois par ligne.
+
 ## Setup GCP (one-shot, par projet)
 
 1. **Console GCP** → choisir/créer un projet (peut être le même que celui
