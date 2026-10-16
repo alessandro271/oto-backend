@@ -111,17 +111,22 @@ def test_guard_member_owner_still_works(monkeypatch):
 
 
 # ── oto_lend_instance : write path de share_side ──────────────────────────────
-def _lend_wiring(monkeypatch, *, existing_side=None, write_ok=True, accounts=("",)):
+def _lend_wiring(monkeypatch, *, existing_side=None, write_ok=True, accounts=("",),
+                 meta=None):
     captured = {}
     monkeypatch.setattr(providers, "connector_for_provider", lambda c: object())
     monkeypatch.setattr(credentials_store, "list_accounts",
-                        lambda et, eid, conn: [{"account": a, "meta": {}} for a in accounts])
+                        lambda et, eid, conn: [{"account": a, "meta": dict(meta or {})}
+                                               for a in accounts])
+    monkeypatch.setattr(credentials_store, "services_pretes", lambda *a, **k: {})
     monkeypatch.setattr(access, "current_org", lambda sub: 35)
     monkeypatch.setattr(db, "get_user", lambda sub: {"sub": sub})
     monkeypatch.setattr(credentials_store, "get_instance_sharing",
                         lambda et, eid, conn, acct="": ([], list(existing_side or [])))
-    def _set(et, eid, conn, acct="", *, share_down=None, share_side=None, journal=()):
+    def _set(et, eid, conn, acct="", *, share_down=None, share_side=None,
+             share_services=None, journal=()):
         captured["share_side"] = share_side
+        captured["share_services"] = share_services
         captured["journal"] = list(journal)
         captured["eid"] = eid
         captured["row"] = (conn, acct)
@@ -265,11 +270,17 @@ def test_lend_sans_aucune_ligne_dit_no_instance(monkeypatch):
 
 @pytest.mark.parametrize("carte", ["outlook", "microsoft"])
 def test_lend_d_une_carte_service_prete_le_porteur_et_le_dit(monkeypatch, carte):
-    cap = _lend_wiring(monkeypatch, accounts=("jane@contoso.example",))
+    """La ligne prêtée est celle du PORTEUR ; ce qui est prêté, ses SERVICES : la carte
+    nommée seule, ou ce que le compte a autorisé ce jour-là (signal 1399)."""
+    from oto_mcp.auth import microsoft as ms_auth
+    scopes = " ".join(ms_auth.service_scopes("outlook") + ms_auth.service_scopes("sharepoint"))
+    cap = _lend_wiring(monkeypatch, accounts=("jane@contoso.example",),
+                       meta={"scopes": scopes})
     out = connectors_sharing._lend_instance(
         _ctx("alice"), connectors_sharing.LendInstanceInput(connector=carte, to="bob"))
     assert cap["row"] == ("microsoft", "jane@contoso.example"), "la ligne du PORTEUR"
     assert out["connector"] == "microsoft"
-    assert "jane@contoso.example" in out["note"] and "every service it authorized" in out["note"]
-    assert "outlook_calendar" in out["note"] and "sharepoint" in out["note"]
-    assert ("has no instance of its own" in out["note"]) is (carte == "outlook")
+    attendus = ["outlook"] if carte == "outlook" else ["outlook", "sharepoint"]
+    assert out["services"] == attendus
+    assert cap["share_services"] == {"user:bob": attendus}
+    assert "jane@contoso.example" in out["note"] and "only" in out["note"]

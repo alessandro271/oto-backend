@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS connector_credentials (
     share_down  JSONB NOT NULL DEFAULT '[]',  -- grantees des instances PLATFORM uniquement (§F) — le cran BYO « restreindre sous le niveau » est RETIRÉ (2026-07-08 : restreindre = poser l'instance au bon niveau)
     share_side  JSONB NOT NULL DEFAULT '[]',  -- EXTENSION : prêts NOMINATIFS à des pairs (liste de refs de principaux)
     share_mode  TEXT NOT NULL DEFAULT 'open', -- ADR 0044 §F : polarité du vide de share_down. 'open' = vide→sous-arbre (BYO) ; 'closed' = vide→personne (plateforme)
+    share_services JSONB NOT NULL DEFAULT '{}', -- les SERVICES prêtés, par cible du share_side (`{"user:<sub>": ["google_ads"]}`) — compte Google ou Microsoft seulement (access/prets.PORTEURS_A_SERVICES)
     PRIMARY KEY (entity_type, entity_id, connector, account)
 );
 CREATE INDEX IF NOT EXISTS idx_conn_cred_entity ON connector_credentials(entity_type, entity_id);

@@ -110,6 +110,7 @@ class _Coffre:
     def __init__(self):
         self.lignes: dict[tuple, dict] = {}
         self.prets: dict[tuple, list] = {}     # (entité, compte) → share_side (ADR 0044)
+        self.services: dict[tuple, dict] = {}  # (entité, compte) → share_services
         self.journal: list[dict] = []          # les gestes notés avec un `share_side`
 
     def poser_chez(self, membre, account, secret, meta=None, prete_a=(), cibles=()):
@@ -119,6 +120,12 @@ class _Coffre:
             "secret": secret, "meta": {"scopes": SCOPE_FICHIERS, **(meta or {})},
             "set_by": membre.partition(":")[2], "set_at": "2026-10-05T00:00:00Z"}
         self.prets[(membre, account)] = [f"user:{s}" for s in prete_a] + list(cibles)
+        # Un prêt déjà en base : la révision 0059 l'a figé sur ce que le compte autorisait.
+        from oto_mcp.auth import microsoft as ms_auth
+        autorises = ms_auth.services_granted(
+            self.lignes[("member", membre, account)]["meta"]["scopes"])
+        self.services[(membre, account)] = {c: list(autorises)
+                                            for c in self.prets[(membre, account)]}
 
     def list_shared_with(self, scopes):
         return [{"entity_type": et, "entity_id": eid, "connector": PORTEUR, "account": a,
@@ -131,12 +138,20 @@ class _Coffre:
         assert connector == PORTEUR
         return [], list(self.prets.get((entity_id, account), []))
 
+    def services_pretes(self, entity_type, entity_id, connector, account=""):
+        assert connector == PORTEUR
+        return {c: list(v) for c, v in self.services.get((entity_id, account), {}).items()}
+
     def set_instance_sharing(self, entity_type, entity_id, connector, account="", *,
-                             share_down=None, share_side=None, journal=()):
+                             share_down=None, share_side=None, share_services=None,
+                             journal=()):
         assert connector == PORTEUR
         if (entity_type, entity_id, account) not in self.lignes:
             return False
         self.prets[(entity_id, account)] = list(share_side or [])
+        if share_services is not None:
+            self.services[(entity_id, account)] = {c: list(v)
+                                                   for c, v in share_services.items()}
         self.journal += [{**g, "entity_id": entity_id, "account": account} for g in journal]
         return True
 
@@ -204,6 +219,7 @@ def env(monkeypatch):
     monkeypatch.setattr(credentials_store, "list_shared_with", coffre.list_shared_with)
     monkeypatch.setattr(credentials_store, "get_instance_sharing", coffre.get_instance_sharing)
     monkeypatch.setattr(credentials_store, "set_instance_sharing", coffre.set_instance_sharing)
+    monkeypatch.setattr(credentials_store, "services_pretes", coffre.services_pretes)
     monkeypatch.setattr(db, "member_instance_suspended", lambda *a, **k: False)
     monkeypatch.setattr(db, "insert_tool_call", lambda *a, **k: None)
     # Les équipes de la personne (prêts à une équipe) : aucune, sauf banc qui en pose.
@@ -1139,6 +1155,8 @@ def pret_equipe(pret, monkeypatch):
     pret.coffre.poser_chez(CHEZ_PRETEUSE, "jane@contoso.example", "RT-JANE",
                            {"scopes": SCOPE_COURRIER})
     pret.coffre.prets[(CHEZ_PRETEUSE, "jane@contoso.example")] = [f"group:{EQUIPE}"]
+    pret.coffre.services[(CHEZ_PRETEUSE, "jane@contoso.example")] = {
+        f"group:{EQUIPE}": ["outlook"]}
     return pret
 
 

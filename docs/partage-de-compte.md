@@ -44,8 +44,39 @@ seul geste :
   (`visible_to` de `GET /api/me/connector-instances`) et le retrait.
 
 Une carte service (`outlook`, `gmail`…) prête le compte de son porteur
-(`credential_of`), et la réponse le dit : prêter un compte prête tous les services qu'il
-a autorisés.
+(`credential_of`), mais **pas tous ses services** (décision du 16/10/2026, signal 1399) :
+voir « Les services prêtés » ci-dessous.
+
+## Les services prêtés (décision du 16/10/2026)
+
+Un compte Google ou Microsoft autorise ses services un par un (Gmail, Drive, Google Ads,
+Outlook…), sur la même ligne de coffre. Le prêter prêtait la ligne, donc **tous** ses
+services, et chaque service que le prêteur autorisait ensuite devenait accessible à
+l'emprunteur, sans nouvel avertissement. On ne pouvait pas prêter Google Ads seul.
+
+**Le prêt d'un compte Google ou Microsoft retient la liste des services prêtés**, par
+emprunteur (`connector_credentials.share_services`, `{cible: [services]}`,
+`access/prets.PORTEURS_A_SERVICES`) :
+
+- à la pose, `services` donné, sinon la carte nommée (`connector='google_ads'`), sinon les
+  services que le compte a autorisés **ce jour-là** — chacun doit être un service du compte
+  qu'il a autorisé (`connectors/services_accordes`) ; la réponse dit la liste (`services`) ;
+- **un service autorisé plus tard n'est jamais prêté implicitement** ; le prêteur étend ou
+  réduit en prêtant à nouveau au même emprunteur avec `services` (la liste remplace la
+  précédente, et le geste se journalise comme une pose) ;
+- à l'usage, au résolveur unique (`access/resolve.resolve_credential` →
+  `prets.exiger_service_prete`), un service hors de la liste est refusé
+  `service_not_lent`, en nommant le prêteur, les services couverts et le geste qui étend ;
+  les services prêtés à une personne sont l'union des listes de toutes les cibles qui
+  l'atteignent (elle, ses équipes, son org) ; **une cible sans liste n'a aucun service
+  prêté**, jamais « tous » ;
+- un appel au compte lui-même (`google`, `microsoft` : l'identité seule) n'est pas un
+  service et n'est pas filtré ; une clé sans services propres (Unipile, une clé d'API) se
+  prête entière, et la réponse le dit.
+
+Les prêts posés avant cette règle ont été **figés** par la révision
+`0060_services_pretes` : chaque cible a reçu les services que le compte avait autorisés au
+moment de la révision. Rien n'a cassé, rien ne s'élargit ensuite.
 
 ## La règle de service (décision du 15/10/2026)
 
@@ -97,8 +128,11 @@ d'un refus d'ambiguïté.
   prêt à une équipe ignoré) — lu à chaque appel, rien n'est détaché du coffre.
 - **La pose et le retrait se journalisent** : qui, quoi, vers qui, quand
   (`connector_loan_events`, révision `0058_journal_des_prets`), dans la transaction qui
-  écrit le `share_side` ; seul un geste qui change l'état y entre, jamais un secret. La
-  lecture par le propriétaire reste à exposer (lot 4, avec l'écran).
+  écrit le `share_side` ; seul un geste qui change l'état y entre, jamais un secret.
+  L'admin d'une org lit les prêts actifs de son org (`oto_org op=list_loans`,
+  `GET /api/orgs/{id}/loans`) : prêteur, compte, emprunteur, services, date de la dernière
+  pose journalisée (`since: null` pour un prêt antérieur au journal). La lecture par le
+  propriétaire reste à exposer (lot 4, avec l'écran).
 
 ## Ce que deviennent les chemins d'avant
 
@@ -122,3 +156,7 @@ d'un refus d'ambiguïté.
 5. Microsoft connectable au nom de l'org ou d'une équipe.
 6. Délégation des messageries ramenée au même geste (écran, outil), cible équipe à
    l'écran.
+7. Services prêtés (signal 1399). *7a*, backend : la liste par emprunteur, figée à la pose,
+   exigée à l'usage, révision `0060_services_pretes` qui fige l'existant. *7b*, console :
+   choisir les services au partage, les afficher sur la carte du compte et dans la liste des
+   prêts de l'org, étendre ou réduire d'un geste.

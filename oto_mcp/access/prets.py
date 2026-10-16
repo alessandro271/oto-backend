@@ -33,8 +33,16 @@ from typing import Iterable, Optional
 
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import credentials_store, db, instance_refs
+from .. import credentials_store, db, instance_refs, providers
 from ..mcp_errors import McpError
+
+#: The carriers whose account AUTHORIZES its services one by one (incremental consent):
+#: a loan of their account lends a LIST of services, frozen at the lend
+#: (`connector_credentials.share_services`, per borrower). A service the lender
+#: authorizes later is never lent implicitly; a borrower with no list for it is
+#: refused, never served "everything" (`exiger_service_prete`).
+PORTEURS_A_SERVICES = frozenset({"google", "microsoft"})
+CODE_SERVICE_NON_PRETE = "service_not_lent"
 
 
 def libelles_preteurs(subs: Iterable[str]) -> dict[str, str]:
@@ -215,26 +223,80 @@ def preteur_de_la_ligne(sub: Optional[str], row) -> Optional[str]:
     return proprietaire if proprietaire and proprietaire != sub else None
 
 
+def cibles_qui_servent(sub: str, side) -> list[str]:
+    """The entries of a `share_side` through which the row is lent to `sub`, in the
+    order that prevails: to her by name (`user:<sub>`), then a team of hers, then the
+    whole of an org of hers."""
+    from .. import group_store, roles
+    side = [str(s) for s in side or []]
+    out = [s for s in side if s == f"user:{sub}"]
+    for s in side:
+        kind, _, ident = s.partition(":")
+        if kind == "group" and ident.isdigit() and group_store.is_group_member(sub, int(ident)):
+            out.append(s)
+    for s in side:
+        kind, _, ident = s.partition(":")
+        if kind == "org" and ident.isdigit() and roles.is_org_member(sub, int(ident)):
+            out.append(s)
+    return out
+
+
 def voie_du_pret(sub: str, row) -> Optional[tuple[str, dict]]:
     """How the row is lent to `sub`: `("group", {id, name})` through a team of hers,
     `("org", {id, name})` to the whole of an org of hers, None when it is lent to her by
     name (`user:<sub>`), which prevails — then a team, then the org."""
-    from .. import group_store, org_store, providers, roles
+    from .. import group_store, org_store
     entity_type, entity_id, connector, account = row
     _, side = credentials_store.get_instance_sharing(
         entity_type, entity_id, providers.credential_provider(connector), account)
-    if f"user:{sub}" in (side or []):
+    cibles = cibles_qui_servent(sub, side)
+    if not cibles or cibles[0] == f"user:{sub}":
         return None
-    cibles = [str(s).partition(":") for s in side or []]
-    for kind, _, gid in cibles:
-        if kind == "group" and gid.isdigit() and group_store.is_group_member(sub, int(gid)):
-            g = group_store.get_group(int(gid)) or {}
-            return "group", {"id": int(gid), "name": g.get("name")}
-    for kind, _, oid in cibles:
-        if kind == "org" and oid.isdigit() and roles.is_org_member(sub, int(oid)):
-            o = org_store.get_org(int(oid)) or {}
-            return "org", {"id": int(oid), "name": o.get("name")}
-    return None
+    kind, _, ident = cibles[0].partition(":")
+    if kind == "group":
+        g = group_store.get_group(int(ident)) or {}
+        return "group", {"id": int(ident), "name": g.get("name")}
+    o = org_store.get_org(int(ident)) or {}
+    return "org", {"id": int(ident), "name": o.get("name")}
+
+
+def exiger_service_prete(sub: Optional[str], service: str, servi) -> None:
+    """A LENT Google or Microsoft account serves `service` only if the loan lends it.
+
+    `servi` = the resolution that served (`entity_type`, `entity_id`, `account` of its
+    row), read only for a service of such an account. No-op for one's
+    own row, a team or org key, a carrier outside `PORTEURS_A_SERVICES`, and a call to
+    the account itself (`google`, `microsoft`: identity only). The services lent to
+    `sub` are the union of the lists of every entry that reaches her
+    (`cibles_qui_servent`); an entry without a list lends none. Refused, naming the
+    lender, the services the loan covers and how to ask for more — nothing is
+    served instead."""
+    porteur = providers.credential_provider(service)
+    if porteur not in PORTEURS_A_SERVICES or service == porteur:
+        return
+    entity_type, entity_id, account = servi.entity_type, servi.entity_id, servi.account or ""
+    preteur = preteur_de_la_ligne(sub, (entity_type, entity_id))
+    if preteur is None:
+        return
+    _, side = credentials_store.get_instance_sharing(entity_type, entity_id, porteur,
+                                                     account or "")
+    par_cible = credentials_store.services_pretes(entity_type, entity_id, porteur,
+                                                  account or "")
+    couverts = sorted({s for c in cibles_qui_servent(sub, side) for s in par_cible.get(c, [])})
+    if service in couverts:
+        return
+    qui = libelles_preteurs([preteur])[preteur]
+    label = providers.REGISTRY[porteur].label
+    raise McpError(ErrorData(
+        code=INVALID_PARAMS,
+        message=(f"The {label} account `{account}` lent to you by {qui} does not lend "
+                 f"`{service}`: this loan covers "
+                 + (", ".join(f"`{s}`" for s in couverts) if couverts else "no service")
+                 + f". Ask {qui} to extend it (oto_instance op='lend', connector="
+                 f"'{porteur}', the same borrower, `services` with `{service}` added). "
+                 "Nothing was done."),
+        data={"code": CODE_SERVICE_NON_PRETE, "retryable": False, "service": service,
+              "lent_by": qui, "services_lent": couverts}))
 
 
 def equipe_du_pret(sub: str, row) -> Optional[dict]:

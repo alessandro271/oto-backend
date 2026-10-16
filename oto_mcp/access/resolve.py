@@ -71,6 +71,10 @@ def resolve_credential(provider: str, want: str = "auto",
     try:
         resolved = _resolve_credential_impl(provider, want, sub, account=account,
                                             check_usage=check_usage, units=units)
+        # A lent Google/Microsoft account serves only the services its loan lends —
+        # checked HERE, at the single resolver, whatever path served the loan (`_account=`
+        # at a team or org rung, `_instance=`, the Microsoft loan resolver).
+        prets.exiger_service_prete(sub, provider, resolved)
     except McpError:
         if emit_on_failure:
             _emit_connector_failure(provider, sub)

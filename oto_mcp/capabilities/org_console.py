@@ -288,7 +288,7 @@ CAPABILITIES += [
             "accept_invite (`token`) / reject_invite (`token` — declines it without "
             "joining; only the invited address may decline). Org admin, on `org_id`: "
             "list_invites (pending invitations) / list_loans (accounts members lend: "
-            "who, which account, to whom, since when). "
+            "who, which account and services, to whom, since when). "
             "To switch org, use oto_use_org."),
         mcp="oto_org",
     ),

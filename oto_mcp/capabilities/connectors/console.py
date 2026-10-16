@@ -163,6 +163,7 @@ class InstanceInput(BaseModel):
     to_group: Optional[int] = None             # lend: team id (instead of `to`)
     to_org: bool = False                       # lend: the whole current org (instead of `to`)
     account: str = ""                          # lend
+    services: Optional[list[str]] = None       # lend: Google/Microsoft — the services lent
     revoke: bool = False                       # lend: True = take the loan back
 
 
@@ -182,7 +183,7 @@ async def _instance(ctx: ResolvedCtx, inp: InstanceInput) -> dict:
                                                  "required for lend.")
         return connectors_sharing._lend_instance(ctx, connectors_sharing.LendInstanceInput(
             connector=connector, to=inp.to, to_group=inp.to_group, to_org=inp.to_org,
-            account=inp.account, revoke=inp.revoke))
+            account=inp.account, services=inp.services, revoke=inp.revoke))
     if inp.level not in (None, "auto", "org"):
         raise AuthzDenied(400, "invalid_level", "op=verify: `level` ∈ auto|org.")
     return await connectors_verify._verify(
@@ -318,7 +319,10 @@ CAPABILITIES += [
             "/ lend (lend YOUR instance of `connector` to a peer — `to` = the email or the "
             "sub of a member of your organization, who pins it — or to a team of your org — "
             "`to_group` = its id — or to your whole current org — `to_org=true`; their "
-            "members use it only by naming it (`_account=`); revoke=true takes it back, "
+            "members use it only by naming it (`_account=`); a Google or Microsoft account "
+            "is lent for a list of `services` (default: the card named, e.g. `google_ads`, "
+            "or what it authorized today; a later one is never lent implicitly; lend again "
+            "to extend or reduce); revoke=true takes it back, "
             "and both are journaled — ADR 0044 "
             "share_side) / verify (side-effect-free credential probe of "
             "`connector` → {ok, error}; level=auto tests the credential that resolves for "

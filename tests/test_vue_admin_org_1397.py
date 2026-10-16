@@ -64,9 +64,10 @@ def test_group_get_et_list_invites_branchent_les_handlers_de_la_console(monkeypa
 def parc(monkeypatch):
     lignes = [
         {"entity_id": f"{ORG}:alice", "connector": "google", "account": "alice@exemple.test",
-         "share_side": ["user:bob", "group:3"]},
+         "share_side": ["user:bob", "group:3"],
+         "share_services": {"user:bob": ["google_ads"], "group:3": ["drive", "gmail"]}},
         {"entity_id": f"{ORG}:carol", "connector": "zoho", "account": "",
-         "share_side": [f"org:{ORG}"]},
+         "share_side": [f"org:{ORG}"], "share_services": {}},
     ]
     monkeypatch.setattr(credentials_store, "prets_de_l_org",
                         lambda org: lignes if org == ORG else [])
@@ -90,6 +91,9 @@ def test_list_loans_dit_qui_prete_quoi_a_qui_et_depuis_quand(parc):
         "alice@exemple.test", "google", "alice@exemple.test", "user", "bob",
         "bob@exemple.test")
     assert a_bob["since"] == parc.isoformat()
+    # Les services prêtés, par emprunteur ; une clé sans services se prête entière.
+    assert (a_bob["services"], a_equipe["services"], a_org["services"]) == (
+        ["google_ads"], ["drive", "gmail"], None)
     assert (a_equipe["to"], a_equipe["to_group"], a_equipe["to_label"]) == ("group", 3, "Ventes")
     # Prêté avant que le journal n'existe : la date n'est pas connue, et ça se dit.
     assert a_equipe["since"] is None

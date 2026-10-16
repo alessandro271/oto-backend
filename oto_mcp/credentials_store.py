@@ -151,13 +151,27 @@ def list_shared_with(scopes: list) -> list[dict]:
             (list(scopes),)).fetchall()
 
 
+def services_pretes(entity_type: str, entity_id: str, connector: str,
+                    account: str = "") -> dict[str, list]:
+    """`{cible: [services]}` — les services qu'un prêt couvre, par cible du `share_side`
+    (`access/prets.PORTEURS_A_SERVICES`). `{}` si la ligne n'existe pas ou ne prête
+    aucun service : une cible absente n'a AUCUN service prêté, jamais « tous »."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT share_services FROM connector_credentials "
+            "WHERE entity_type=%s AND entity_id=%s AND connector=%s AND account=%s",
+            (entity_type, entity_id, connector, account)).fetchone()
+    return dict(row["share_services"] or {}) if row else {}
+
+
 def prets_de_l_org(org_id: int) -> list[dict]:
     """Les comptes que des MEMBRES de `org_id` prêtent : leurs lignes du coffre dont le
     `share_side` n'est pas vide (ADR 0044). Métadonnées seulement, le secret n'est
     jamais lu. Sert la vue d'admin des prêts de l'org (`org.loans.list`)."""
     with _connect() as conn:
         return conn.execute(
-            "SELECT entity_id, connector, account, share_side FROM connector_credentials "
+            "SELECT entity_id, connector, account, share_side, share_services "
+            "FROM connector_credentials "
             "WHERE entity_type = %s AND entity_id LIKE %s AND share_side <> '[]'::jsonb "
             "ORDER BY entity_id, connector, account",
             (MEMBER, f"{int(org_id)}:%")).fetchall()
@@ -165,8 +179,8 @@ def prets_de_l_org(org_id: int) -> list[dict]:
 
 def set_instance_sharing(entity_type: str, entity_id: str, connector: str,
                          account: str = "", *, share_down=None, share_side=None,
-                         journal: Sequence[dict] = ()) -> bool:
-    """Met à jour `share_down`/`share_side` d'une instance EXISTANTE (ADR 0044) sans
+                         share_services=None, journal: Sequence[dict] = ()) -> bool:
+    """Met à jour `share_down`/`share_side`/`share_services` d'une instance EXISTANTE (ADR 0044) sans
     toucher au secret ; bump `version`. Ne met à jour que les champs fournis (non
     None). Renvoie False si aucune ligne (⟹ pas d'instance à partager — l'appelant
     lève actionnable). Le partage présuppose que la clé existe. `journal` : les gestes
@@ -176,6 +190,8 @@ def set_instance_sharing(entity_type: str, entity_id: str, connector: str,
         sets.append("share_down = %s::jsonb"); params.append(json.dumps(share_down))
     if share_side is not None:
         sets.append("share_side = %s::jsonb"); params.append(json.dumps(share_side))
+    if share_services is not None:
+        sets.append("share_services = %s::jsonb"); params.append(json.dumps(share_services))
     if len(sets) == 1:
         return True  # rien à changer
     params += [entity_type, entity_id, connector, account]
