@@ -110,7 +110,8 @@ def deposer(sub: str, pid: int, lire: Callable[[], file_source.ResolvedFile], *,
         project_id=pid, sub=sub, audio_key=audio_key, filename=fichier.filename,
         mime=fichier.mime, language=_langue(creds),
         vocabulary=_vocabulaire(creds.get("vocabulary"), vocabulary, vocabulary_replace),
-        api_key_enc=_encrypt(api_key, f"transcription_jobs:{audio_key}"))
+        api_key_enc=_encrypt(api_key, f"transcription_jobs:{audio_key}"),
+        key_mode=rc.mode)
     return {"job_id": job_id, "status": "pending"}
 
 

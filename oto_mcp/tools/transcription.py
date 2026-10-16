@@ -19,7 +19,7 @@ from __future__ import annotations
 from fastmcp import FastMCP
 from mcp.types import INVALID_PARAMS, ErrorData
 
-from .. import access, file_source
+from .. import access, file_source, session_org
 from ..capabilities import transcription as _transcription
 from ..capabilities._types import AuthzDenied
 from ..connectors import verify as connector_verify
@@ -76,6 +76,10 @@ def register(mcp: FastMCP) -> None:
             if isinstance(e.__cause__, McpError):
                 raise e.__cause__ from None
             raise _refus(str(e)) from None
+        # Dropping off costs nothing: the billed duration is journaled by the worker, on
+        # a row of its own (`transcription_worker._facturer`). Never NULL, which the
+        # ledger would read as 1.
+        session_org.note_call_trace(quantity=0)
         return {**ref, "note": "Re-read with transcription_status(job_id)."}
 
     @mcp.tool()

@@ -141,14 +141,15 @@ def monde(monkeypatch):
     `get_job`/`claim_next_job` sous une forme différente dans le même namespace plat
     `db.*` — un nom nu écraserait l'un des deux à l'import (#674)."""
     from oto.tools.mistral import client as mistral_client
-    from oto_mcp import access, db, file_source, media_store, ownership
+    from oto_mcp import access, db, file_source, media_store, ownership, session_org
 
     monkeypatch.setenv("OTO_MCP_MASTER_KEY", "4" * 64)  # chiffrement réel du job
 
     etat = {"envois": [], "pages": [], "activite": [], "droits": [], "jobs": {},
             "creds": {"api_key": "k-test", "language": "", "vocabulary":
                       "pompe à chaleur, Placo\nBA13"},
-            "reponse": _Resp(REPONSE_MISTRAL), "projet": 42}
+            "reponse": _Resp(REPONSE_MISTRAL), "projet": 42, "journal": [],
+            "traces": []}
     s3 = _S3({FICHIER["s3_key"]: AUDIO})
     etat["s3"] = s3
 
@@ -158,6 +159,7 @@ def monde(monkeypatch):
     monkeypatch.setattr(file_source.access, "current_org", lambda sub: 3)
     class _Cred:
         is_platform = False
+        mode = "org"
         secret = "unused"
 
         @property
@@ -168,6 +170,7 @@ def monde(monkeypatch):
         """Le secret plateforme est le pack JSON, comme une clé d'org : `.secret`
         n'est pas la clé."""
         is_platform = True
+        mode = "platform"
         secret = json.dumps({"api_key": "k-plateforme"})
 
         @property
@@ -208,12 +211,13 @@ def monde(monkeypatch):
 
     # --- la file de travaux, en mémoire -------------------------------------------
     def _create_job(*, project_id, sub, audio_key, filename, mime, language,
-                    vocabulary, api_key_enc):
+                    vocabulary, api_key_enc, key_mode):
         jid = 1 + len(etat["jobs"])
         etat["jobs"][jid] = {"id": jid, "project_id": project_id, "sub": sub,
                              "status": "pending", "audio_key": audio_key,
                              "filename": filename, "mime": mime, "language": language,
                              "vocabulary": vocabulary, "api_key_enc": api_key_enc,
+                             "key_mode": key_mode, "org_id": 3,
                              "page_id": None, "result": None, "transcript": None,
                              "error": None}
         return jid
@@ -241,6 +245,9 @@ def monde(monkeypatch):
     monkeypatch.setattr(db, "get_transcription_job", _get_job)
     monkeypatch.setattr(db, "mark_transcription_job_done", _mark_done)
     monkeypatch.setattr(db, "mark_transcription_job_failed", _mark_failed)
+    monkeypatch.setattr(db, "insert_tool_call", lambda row: etat["journal"].append(row))
+    monkeypatch.setattr(session_org, "note_call_trace",
+                        lambda **kw: etat["traces"].append(kw))
     monkeypatch.setattr(db, "transcription_queue",
                         lambda jid: etat.get("file", {"ahead": 0, "finishes": []}))
 
@@ -398,6 +405,40 @@ def test_aucune_parole_aucune_page(all_tools, monde):
     assert monde["pages"] == []
     out = _statut(all_tools, ref["job_id"])
     assert out["status"] == "failed" and "Aucune parole" in out["error"]
+    # Sans durée facturée lue, rien n'est journalisé : jamais une durée inventée.
+    assert monde["journal"] == []
+
+
+def test_la_duree_facturee_est_journalisee_le_depot_ne_coute_rien(all_tools, monde):
+    """Signal oto 1400 : la durée facturée par Mistral rejoint le journal des appels,
+    une ligne par travail, sous le mode de la clé résolue au dépôt ; l'appel qui
+    dépose le travail est tracé à 0 (NULL se lirait 1)."""
+    monde["plateforme"] = True
+    ref = _appeler(all_tools, source=_pf())
+    assert {"quantity": 0} in monde["traces"]
+    assert monde["journal"] == []
+    _tourner(monde)
+    (ligne,) = monde["journal"]
+    assert ligne["tool"] == "transcription_create" and ligne["kind"] == "mcp"
+    assert ligne["quantity"] == 1800                 # secondes, `usage.prompt_audio_seconds`
+    assert ligne["key_mode"] == "platform" and ligne["org_id"] == 3
+    assert ligne["sub"] == "u1" and ligne["ok"] is True
+    assert ligne["args"]["transcription_job_id"] == ref["job_id"]
+
+
+def test_une_duree_fractionnaire_s_arrondit_au_dessus(all_tools, monde):
+    monde["reponse"] = _Resp({**REPONSE_MISTRAL, "usage": {"prompt_audio_seconds": 61.2}})
+    _appeler(all_tools, source=_pf())
+    _tourner(monde)
+    (ligne,) = monde["journal"]
+    assert ligne["quantity"] == 62 and ligne["key_mode"] == "org"
+
+
+def test_un_refus_de_mistral_ne_journalise_aucune_duree(all_tools, monde):
+    monde["reponse"] = _Resp({"message": "Unauthorized"}, status_code=401)
+    _appeler(all_tools, source=_pf())
+    _tourner(monde)
+    assert monde["journal"] == []
 
 
 def test_le_statut_dun_travail_dun_autre_projet_est_introuvable(all_tools, monde, monkeypatch):

@@ -28,6 +28,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
+import time
 from datetime import datetime, timezone
 
 from starlette.concurrency import run_in_threadpool
@@ -91,6 +93,35 @@ def _purger(audio_key: str, jid: int) -> None:
         logger.warning("transcription_worker: purge de l'audio #%s échouée.", jid)
 
 
+def _facturer(job: dict, duree_s, debut: float) -> None:
+    """La durée FACTURÉE par Mistral (`usage.prompt_audio_seconds`) au journal des
+    appels, en secondes arrondies au-dessus : ce que lit le service d'usage. Une ligne
+    `transcription_create` par travail, comme une tranche de `jev_rows`
+    (`jev_jobs_worker._facturer`) — l'appel qui a déposé le travail, lui, est tracé à
+    `quantity=0`. Écrite dès que Mistral a répondu : l'audio est facturé même si la
+    page échoue ensuite. Sans durée lisible, rien n'est inventé : pas de ligne, une
+    erreur au journal."""
+    if isinstance(duree_s, bool) or not isinstance(duree_s, (int, float)) \
+            or not math.isfinite(duree_s) or duree_s < 0:
+        logger.error("transcription_worker: travail #%s sans durée facturée lisible "
+                     "(%s) — durée NON journalisée", job["id"], type(duree_s).__name__)
+        return
+    from .calllog import truncated_args
+    row = {
+        "server": "oto", "kind": "mcp", "sub": job["sub"], "tool": "transcription_create",
+        "args": truncated_args({"transcription_job_id": int(job["id"]), "background": True},
+                               tool="transcription_create"),
+        "ok": True, "duration_ms": int((time.monotonic() - debut) * 1000),
+        "org_id": job.get("org_id"), "quantity": math.ceil(duree_s),
+        "key_mode": job.get("key_mode"),
+    }
+    try:
+        db.insert_tool_call(row)
+    except Exception:  # noqa: BLE001 — journalisé ; le travail continue quoi qu'il arrive
+        logger.error("transcription_worker: travail #%s, durée NON journalisée "
+                     "(quantity=%s)", job["id"], row["quantity"], exc_info=True)
+
+
 def _transcribe_one(job: dict) -> str:
     """Un travail : relire l'audio, appeler Mistral, écrire la page. Rend le
     statut obtenu (`done`/`failed`). Ne lève jamais — le résultat, succès comme
@@ -111,6 +142,7 @@ def _transcribe_one(job: dict) -> str:
     import requests
     from oto.tools.common.errors import UpstreamHTTPError
     from oto.tools.mistral import MistralClient
+    debut = time.monotonic()
     try:
         api_key = _decrypt(job["api_key_enc"], _aad(job["audio_key"]))
         brut = MistralClient(api_key=api_key).transcribe(
@@ -131,6 +163,7 @@ def _transcribe_one(job: dict) -> str:
     finally:
         _purger(job["audio_key"], jid)
 
+    _facturer(job, brut.get("duration_s"), debut)
     tours = transcript.process(brut["segments"])
     if not tours and brut["text"].strip():
         tours = [{"speaker": None, "start": None, "end": None, "text": brut["text"].strip()}]

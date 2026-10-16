@@ -647,6 +647,10 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # `0026` : ordre indifférent entre elles.
     if _colonne_absente(conn, "transcription_jobs", transcription.COLONNE_TRANSCRIPT):
         conn.execute(transcription.DDL_COLONNE_TRANSCRIPT)
+    # Le mode de la clé d'un travail, pour journaliser sa durée facturée — la même que
+    # pose la révision `0059` : ordre indifférent entre elles.
+    if _colonne_absente(conn, "transcription_jobs", transcription.COLONNE_KEY_MODE):
+        conn.execute(transcription.DDL_COLONNE_KEY_MODE)
     # Lot 3 Ship 3 : propositions de CRÉATION (doc_id nullable + project_id +
     # emplacement proposé + CHECK). Le CHECK valide sur l'existant (toutes les
     # lignes ont doc_id). Idempotent.

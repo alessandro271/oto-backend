@@ -20,20 +20,30 @@ from ._conn import _connect
 COLONNE_TRANSCRIPT = "transcript"
 DDL_COLONNE_TRANSCRIPT = (f"ALTER TABLE transcription_jobs ADD COLUMN IF NOT EXISTS "
                           f"{COLONNE_TRANSCRIPT} JSONB")
+# Le mode de la clé résolue au dépôt (`user|group|org|tenant|platform`, celui de
+# `tool_calls.key_mode`) : le worker journalise la durée facturée hors de tout contexte
+# d'appel, il ne peut plus le résoudre. NULL sur les travaux d'avant la colonne.
+# Posée par la révision `0059_transcription_key_mode` et par le démarrage (même DDL).
+COLONNE_KEY_MODE = "key_mode"
+DDL_COLONNE_KEY_MODE = (f"ALTER TABLE transcription_jobs ADD COLUMN IF NOT EXISTS "
+                        f"{COLONNE_KEY_MODE} TEXT")
 
 
 def create_transcription_job(*, project_id: int, sub: str, audio_key: str,
                              filename: str, mime: Optional[str], language: Optional[str],
-                             vocabulary: Optional[str], api_key_enc: str) -> int:
+                             vocabulary: Optional[str], api_key_enc: str,
+                             key_mode: Optional[str]) -> int:
     """Crée le travail `pending` et rend son id. Posée dans le contexte de
     l'appel MCP (seul endroit où le fichier source et le credential résolvent) ;
     le worker n'a plus besoin de ce contexte ensuite."""
     with _connect() as conn:
         row = conn.execute(
             "INSERT INTO transcription_jobs "
-            "  (project_id, sub, audio_key, filename, mime, language, vocabulary, api_key_enc) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
-            (project_id, sub, audio_key, filename, mime, language, vocabulary, api_key_enc),
+            "  (project_id, sub, audio_key, filename, mime, language, vocabulary, api_key_enc, "
+            "   key_mode) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            (project_id, sub, audio_key, filename, mime, language, vocabulary, api_key_enc,
+             key_mode),
         ).fetchone()
         return int(row["id"])
 
@@ -66,7 +76,9 @@ def claim_next_transcription_job() -> Optional[dict]:
                SET status = 'running', attempts = attempts + 1, updated_at = NOW()
               FROM pris WHERE j.id = pris.id
             RETURNING j.id, j.project_id, j.sub, j.audio_key, j.filename, j.mime,
-                      j.language, j.vocabulary, j.api_key_enc
+                      j.language, j.vocabulary, j.api_key_enc, j.key_mode,
+                      (SELECT CASE WHEN p.owner_type = 'org' THEN p.owner_id::bigint END
+                         FROM projects p WHERE p.id = j.project_id) AS org_id
             """,
         ).fetchone()
         return dict(row) if row else None
