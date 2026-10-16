@@ -18,11 +18,13 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel
 
 from . import scheduled_emails
+from .connectors import sharing as connectors_sharing
 from .groups import core as groups, guide as groups_guide, invites as groups_invites, members as groups_members
 from .orgs import core as orgs, email_settings as orgs_email_settings, field_filters as orgs_field_filters, invites as orgs_invites, mfa as orgs_mfa, model_subscriptions as orgs_model_subscriptions, update as orgs_update
 from ._authz import (
     BY_OP,
     GROUP_ADMIN_OF,
+    GROUP_MEMBER_OF,
     ORG_ADMIN_OF,
     ORG_MEMBER_OF,
     SUB_ONLY,
@@ -41,8 +43,8 @@ def _need(val, code: str, msg: str):
 # ── oto_org : create / update / archive / invite / accept_invite / reject_invite ─
 class OrgInput(BaseModel):
     op: Literal["create", "update", "archive", "invite",
-                "accept_invite", "reject_invite"]
-    org_id: Optional[int] = None           # update/archive/invite
+                "accept_invite", "reject_invite", "list_invites", "list_loans"]
+    org_id: Optional[int] = None           # update/archive/invite/list_invites/list_loans
     name: Optional[str] = None             # create/update
     description: Optional[str] = None      # update
     domain: Optional[str] = None           # update : domaine de marque (logo dérivé)
@@ -74,6 +76,11 @@ def _org(ctx: ResolvedCtx, inp: OrgInput) -> dict:
             domain=inp.domain, industry=inp.industry, location=inp.location))
     if inp.op == "archive":
         return orgs_update._archive_org(ctx, orgs_update.OrgIdInput(org_id=oid))
+    if inp.op == "list_invites":
+        return orgs_invites._invite_list(ctx, orgs_invites.InviteListInput(org_id=oid))
+    if inp.op == "list_loans":
+        return connectors_sharing._list_org_loans(
+            ctx, connectors_sharing.OrgLoansInput(org_id=oid))
     return orgs_invites._invite_create(ctx, orgs_invites.InviteCreateInput(
         org_id=oid, email=inp.email, role=inp.role or "org_member",
         send_email=inp.send_email))
@@ -189,9 +196,10 @@ def _plafond_abonnements(ctx: ResolvedCtx, inp: OrgSettingsInput) -> dict:
 
 # ── oto_group : create / list / add_member / remove_member / set_instruction ─
 class GroupInput(BaseModel):
-    op: Literal["create", "list", "add_member", "remove_member", "set_instruction", "invite"]
+    op: Literal["create", "list", "get", "add_member", "remove_member", "set_instruction",
+                "invite", "list_invites"]
     org_id: Optional[int] = None           # create
-    group_id: Optional[int] = None         # add/remove/set_instruction/invite
+    group_id: Optional[int] = None         # get/add/remove/set_instruction/invite/list_invites
     name: Optional[str] = None             # create
     description: Optional[str] = None      # create / set_instruction
     target: Optional[str] = None           # add/remove : sub ou email
@@ -214,6 +222,13 @@ def _group(ctx: ResolvedCtx, inp: GroupInput) -> dict:
         # active + ton rôle. La lecture par org_id explicite reste REST (dashboard).
         return groups._list_my_groups(ctx, groups.NoInput())
     gid = _need(inp.group_id, "missing_group", f"`group_id` requis pour {inp.op}.")
+    if inp.op == "get":
+        # La fiche que sert la console (`GET /api/groups/{id}`) : membres et comptes
+        # partagés ou prêtés à l'équipe — le même handler, pas une copie.
+        return groups._group_detail(ctx, groups.GroupIdInput(group_id=gid))
+    if inp.op == "list_invites":
+        return groups_invites._invite_list(
+            ctx, groups_invites.GroupInviteListInput(group_id=gid))
     if inp.op == "add_member":
         return groups_members._add_member(ctx, groups_members.AddGroupMemberInput(
             group_id=gid,
@@ -262,6 +277,7 @@ CAPABILITIES += [
             "reject_invite": SUB_ONLY,
             "update": ORG_ADMIN_OF("org_id"), "archive": ORG_ADMIN_OF("org_id"),
             "invite": ORG_ADMIN_OF("org_id"),
+            "list_invites": ORG_ADMIN_OF("org_id"), "list_loans": ORG_ADMIN_OF("org_id"),
         }),
         refresh_visibility=True,   # create/archive changent l'org effective → toolbox
         description=(
@@ -270,7 +286,9 @@ CAPABILITIES += [
             "clears a field) / archive (`org_id`) / invite (`org_id`, optional `email` + "
             "`role` org_member|org_admin, send_email=false returns the link only) / "
             "accept_invite (`token`) / reject_invite (`token` — declines it without "
-            "joining; only the invited address may decline). "
+            "joining; only the invited address may decline). Org admin, on `org_id`: "
+            "list_invites (pending invitations) / list_loans (accounts members lend: "
+            "who, which account, to whom, since when). "
             "To switch org, use oto_use_org."),
         mcp="oto_org",
     ),
@@ -311,6 +329,8 @@ CAPABILITIES += [
         key="group.console", handler=_group, Input=GroupInput,
         authz=BY_OP({
             "create": ORG_ADMIN_OF("org_id"), "list": SUB_ONLY,
+            "get": GROUP_MEMBER_OF("group_id"),
+            "list_invites": GROUP_ADMIN_OF("group_id"),
             "add_member": GROUP_ADMIN_OF("group_id"),
             "remove_member": GROUP_ADMIN_OF("group_id"),
             "invite": GROUP_ADMIN_OF("group_id"),
@@ -318,7 +338,9 @@ CAPABILITIES += [
         }),
         description=(
             "Teams (departments) of an org. op=create (`org_id`, `name`; org admin) / list "
-            "(the teams of your active org + your role in each) / add_member (`group_id`, `target` sub|email, optional "
+            "(the teams of your active org + your role in each) / get (`group_id`: its "
+            "members and the accounts shared or lent to the team; a member, or an org "
+            "admin) / list_invites (`group_id`, pending invitations; team lead) / add_member (`group_id`, `target` sub|email, optional "
             "`role` group_member|group_admin; team lead — target must already be in the org) / "
             "invite (`group_id`, optional `email` + `role` group_member|group_admin, "
             "send_email=false returns the link — invites a NEW person into the team, joining "

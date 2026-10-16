@@ -50,3 +50,25 @@ def pour_la_ligne(entity_type: str, entity_id: str, connector: str,
             "AND entity_id = %s AND connector = %s AND account = %s "
             "ORDER BY id DESC LIMIT %s",
             (entity_type, entity_id, connector, account or "", int(limit))).fetchall()
+
+
+def dernieres_poses(lignes: list[tuple[str, str, str, str]]) -> dict[tuple, object]:
+    """`{(entity_type, entity_id, connector, account, target): at}` — la date de la
+    DERNIÈRE pose de chaque cible, pour un lot de lignes du coffre, en une requête (index
+    `idx_loan_events_ligne`). Une cible absente n'a pas de pose journalisée : le journal
+    est né après elle, sa date n'est pas connue."""
+    uniques = sorted({(t, str(i), c, a or "") for t, i, c, a in lignes})
+    if not uniques:
+        return {}
+    from ._conn import _connect
+    clause = ", ".join(["(%s, %s, %s, %s)"] * len(uniques))
+    params: list = [v for ligne in uniques for v in ligne]
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT entity_type, entity_id, connector, account, target, MAX(at) AS at "
+            "FROM connector_loan_events WHERE action = 'lend' AND "
+            f"(entity_type, entity_id, connector, account) IN ({clause}) "
+            "GROUP BY entity_type, entity_id, connector, account, target",
+            params).fetchall()
+    return {(r["entity_type"], r["entity_id"], r["connector"], r["account"], r["target"]):
+            r["at"] for r in rows}

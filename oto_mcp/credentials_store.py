@@ -151,6 +151,18 @@ def list_shared_with(scopes: list) -> list[dict]:
             (list(scopes),)).fetchall()
 
 
+def prets_de_l_org(org_id: int) -> list[dict]:
+    """Les comptes que des MEMBRES de `org_id` prêtent : leurs lignes du coffre dont le
+    `share_side` n'est pas vide (ADR 0044). Métadonnées seulement, le secret n'est
+    jamais lu. Sert la vue d'admin des prêts de l'org (`org.loans.list`)."""
+    with _connect() as conn:
+        return conn.execute(
+            "SELECT entity_id, connector, account, share_side FROM connector_credentials "
+            "WHERE entity_type = %s AND entity_id LIKE %s AND share_side <> '[]'::jsonb "
+            "ORDER BY entity_id, connector, account",
+            (MEMBER, f"{int(org_id)}:%")).fetchall()
+
+
 def set_instance_sharing(entity_type: str, entity_id: str, connector: str,
                          account: str = "", *, share_down=None, share_side=None,
                          journal: Sequence[dict] = ()) -> bool:

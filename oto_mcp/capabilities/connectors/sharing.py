@@ -18,14 +18,15 @@ default) — distinct write surface, not exposed here.
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
 from ... import access, credentials_store, db, group_store, instance_refs, org_store, providers
 from ...connectors import cle_perso
+from ...access import prets
 from ...db import loan_events
-from .._authz import SUB_ONLY
+from .._authz import ORG_ADMIN_OF, SUB_ONLY
 from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
 from ..registry import CAPABILITIES
 
@@ -244,5 +245,75 @@ CAPABILITIES += [
                      "and revoke is journaled. You only ever share your OWN key; the "
                      "borrower operates under THEIR own org context (ADR 0044 share_side)."),
         rest=RestBinding("POST", "/api/me/connectors/{connector}/lend", {"connector": "connector"}),
+    ),
+]
+
+
+# ── The loans of an org, seen by its admin (signal 1397) ─────────────────────
+class OrgLoansInput(BaseModel):
+    org_id: int
+
+
+class OrgLoan(BaseModel):
+    """One ACTIVE loan: an account a member of the org lends, and to whom."""
+    lender_sub: str
+    lender: str                             # their e-mail (else their name)
+    connector: str                          # the vault row lent — the carrier (`google`)
+    account: str = ""                       # `""` = single-key connector
+    to: Literal["user", "group", "org"]
+    to_sub: Optional[str] = None            # to=user
+    to_group: Optional[int] = None          # to=group
+    to_label: str                           # the borrower, as a person reads it
+    # ⚠️ The date of the LAST journaled lend to this borrower; null = lent before the
+    # loan journal existed, its date is not known — never "today", never a guess.
+    since: Optional[str] = None
+
+
+class OrgLoans(BaseModel):
+    org_id: int
+    loans: list[OrgLoan]
+    count: int
+
+
+def _list_org_loans(ctx: ResolvedCtx, inp: OrgLoansInput) -> dict:
+    org = int(inp.org_id)
+    rows = credentials_store.prets_de_l_org(org)
+    lignes = [(credentials_store.MEMBER, r["entity_id"], r["connector"], r["account"] or "")
+              for r in rows]
+    poses = loan_events.dernieres_poses(lignes)
+    entries = [(ligne, r["entity_id"].split(":", 1)[1], cible)
+               for ligne, r in zip(lignes, rows) for cible in (r["share_side"] or [])]
+    libelles = prets.libelles_preteurs(
+        [preteur for _, preteur, _ in entries]
+        + [c[len("user:"):] for _, _, c in entries if c.startswith("user:")])
+    groupes: dict = {}
+    loans = []
+    for ligne, preteur, cible in entries:
+        kind, _, ident = cible.partition(":")
+        loan = {"lender_sub": preteur, "lender": libelles[preteur], "connector": ligne[2],
+                "account": ligne[3], "to": kind}
+        if kind == "user":
+            loan.update(to_sub=ident, to_label=libelles[ident])
+        elif kind == "group":
+            if ident not in groupes:
+                groupes[ident] = group_store.get_group(int(ident)) or {}
+            loan.update(to_group=int(ident),
+                        to_label=groupes[ident].get("name") or f"team #{ident}")
+        else:
+            loan.update(to_label="the whole org")
+        at = poses.get(ligne + (cible,))
+        loan["since"] = at.isoformat() if at is not None else None
+        loans.append(loan)
+    return {"org_id": org, "loans": loans, "count": len(loans)}
+
+
+CAPABILITIES += [
+    Capability(
+        key="org.loans.list", handler=_list_org_loans, Input=OrgLoansInput,
+        authz=ORG_ADMIN_OF("org_id"), Output=OrgLoans,
+        description=("The ACTIVE loans of an org you administer: which member lends "
+                     "which account, to whom (a member, a team, the whole org), since "
+                     "when (`since` null = lent before the loan journal existed)."),
+        rest=RestBinding("GET", "/api/orgs/{id}/loans", {"id": "org_id"}),
     ),
 ]

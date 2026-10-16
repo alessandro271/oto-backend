@@ -567,6 +567,8 @@ DELETE /api/groups/{id}/tools/{name}/hidden -> _handler
 OPTIONS /api/groups/{id}/tools/{name}/hidden -> options_handler
 POST /api/me/connectors/{connector}/lend -> _handler
 OPTIONS /api/me/connectors/{connector}/lend -> options_handler
+GET,HEAD /api/orgs/{id}/loans -> _handler
+OPTIONS /api/orgs/{id}/loans -> options_handler
 GET,HEAD /api/me/connector-accounts/grants -> _handler
 OPTIONS /api/me/connector-accounts/grants -> options_handler
 POST /api/me/connector-accounts/{channel}/grants -> _handler
