@@ -6,7 +6,7 @@ Zoho Desk uses an **oauth2 self-client** with 4 secrets. In the [Zoho API develo
 - **org_id** — the id of your desk organization (`orgId` header) — **optional**: a single-portal token resolves the portal on its own, only fill it in if a call asks for it
 
 **scopes per surface** — a token can authenticate with PARTIAL scopes (articles respond while tickets return `SCOPE_MISMATCH`). Request the ones you need:
-- tickets → `Desk.tickets.READ` (+ `.WRITE` to create/edit) · search → `Desk.search.READ`
+- tickets → `Desk.tickets.READ` (+ `.WRITE` to create/edit) · ticket search → `Desk.search.READ` + `Desk.tickets.READ`
 - contacts → `Desk.contacts.READ` (+ `.WRITE`) · departments → `Desk.basic.READ` · articles (KB) → `Desk.articles.READ` (+ `Desk.search.READ` to search them)
 
 Fill in these fields in oto on your account (`/account`), connector **zohodesk**. byo only.

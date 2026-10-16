@@ -66,10 +66,13 @@ def test_read_ne_couvre_que_la_lecture_du_crm():
         "list", "get", "search", "create", "update", "delete"}
 
 
-def test_read_du_desk_sert_les_articles_et_la_recherche():
+def test_read_du_desk_ne_sert_que_les_articles():
+    """`Desk.search.READ` n'est pas borné aux articles : au niveau `read`, aucun outil
+    de tickets, recherche comprise."""
     couverts = {t for t in DESK.tools if DESK.covers("read", t)}
-    assert couverts == {"zohodesk_articles", "zohodesk_article", "zohodesk_search_tickets",
-                        "zohodesk_search_articles"}
+    assert couverts == {"zohodesk_articles", "zohodesk_article", "zohodesk_search_articles"}
+    assert not DESK.covers("read", "zohodesk_search_tickets")
+    assert DESK.covers(al.FULL, "zohodesk_search_tickets")
 
 
 def test_une_op_ou_un_outil_non_declare_n_est_pas_couvert():

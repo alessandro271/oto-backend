@@ -49,7 +49,9 @@ DESCRIPTION = (
 # endpoint → scope table of the oto-core client (`oto.tools.zohodesk.client`,
 # `_SCOPE_BY_PREFIX`): `tickets/search` → `Desk.search.READ`, `tickets` / `contacts` →
 # `.READ` on GET and `.WRITE` otherwise, `articles` → `Desk.articles.READ`,
-# `departments` → `Desk.basic.READ`. ⚠️ `full` (the historical consent) grants no WRITE
+# `departments` → `Desk.basic.READ`. Ticket search also requires `Desk.tickets.READ`:
+# `Desk.search.READ` is not bounded to articles, and a level that serves the article
+# search (`read`) must never reach a ticket. ⚠️ `full` (the historical consent) grants no WRITE
 # scope: the three write tools are not covered by it — served at `full` all the same
 # (nothing is filtered there), and refused by Zoho as before.
 ACCESS_LEVELS = {
@@ -63,7 +65,7 @@ ACCESS_LEVELS = {
         "zohodesk_tickets": ("Desk.tickets.READ",),
         "zohodesk_ticket": ("Desk.tickets.READ",),
         "zohodesk_ticket_threads": ("Desk.tickets.READ",),
-        "zohodesk_search_tickets": ("Desk.search.READ",),
+        "zohodesk_search_tickets": ("Desk.search.READ", "Desk.tickets.READ"),
         "zohodesk_create_ticket": ("Desk.tickets.WRITE",),
         "zohodesk_update_ticket": ("Desk.tickets.WRITE",),
         "zohodesk_contacts": ("Desk.contacts.READ",),
