@@ -1007,7 +1007,8 @@ def datastore_order_health(ns_id: int, *, order_by: str, order_type: str,
 
 def datastore_count_rows(ns_id: int, q: Optional["Recherche"] = None,
                          filters: Optional[list] = None,
-                         after_row_id: Optional[str] = None) -> int:
+                         after_row_id: Optional[str] = None,
+                         jusqua: Optional[int] = None) -> int:
     """Nombre total de rows d'un namespace (pour la pagination), filtré par `q` et
     les filtres par colonne — même clause que `datastore_list_rows` → total cohérent
     avec la page affichée.
@@ -1018,14 +1019,24 @@ def datastore_count_rows(ns_id: int, q: Optional["Recherche"] = None,
     s'y prête (`thin_read_cte_sql`).
 
     `after_row_id` = ne compter qu'APRÈS cette ligne (borne exclusive, keyset de
-    `datastore_list_rows_after`) : le reste d'un geste repris par curseur."""
+    `datastore_list_rows_after`) : le reste d'un geste repris par curseur.
+
+    `jusqua` = ne compter qu'AU PLUS ce nombre de lignes (le compte s'arrête là).
+    ⚠️ Avec `q`, chaque ligne trouvée coûte : l'index trigramme de la portée
+    `values` exige de revérifier chaque candidat, donc de recalculer ses valeurs
+    servies (`datastore_valeurs_texte_v1`) — un compte exact paie autant d'appels que
+    de lignes trouvées (19-22 s mesurés en prod pour 1 243 lignes d'un tableau
+    large). Borné, il en paie au plus `jusqua`."""
+    borne = " LIMIT %s" if jusqua is not None else ""
+    bparams = [jusqua] if jusqua is not None else []
     thin = None if after_row_id else thin_read_cte_sql(ns_id, q, filters)
     if thin is not None:
         cte_sql, cte_params, where_sql, where_params = thin
         with _connect() as conn:
             row = conn.execute(
-                f"WITH {cte_sql} SELECT COUNT(*) AS n FROM s {where_sql}",
-                tuple(cte_params + where_params),
+                f"WITH {cte_sql} SELECT COUNT(*) AS n FROM "
+                f"(SELECT 1 FROM s {where_sql}{borne}) c",
+                tuple(cte_params + where_params + bparams),
             ).fetchone()
             return int(row["n"]) if row else 0
     where, params = _ds_where(ns_id, q, filters)
@@ -1034,7 +1045,8 @@ def datastore_count_rows(ns_id: int, q: Optional["Recherche"] = None,
         params.append(after_row_id)
     with _connect() as conn:
         row = conn.execute(
-            f"SELECT COUNT(*) AS n FROM datastore_rows {where}", tuple(params)
+            f"SELECT COUNT(*) AS n FROM (SELECT 1 FROM datastore_rows {where}{borne}) c",
+            tuple(params + bparams)
         ).fetchone()
         return int(row["n"]) if row else 0
 

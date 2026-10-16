@@ -128,6 +128,16 @@ class ListRowsInput(EntreeDatastore):
     # gardées + `_id` toujours présent, `["*"]` ou absent = ligne complète (contrat
     # inchangé). Comma-separated pour la MÊME raison que `versions` juste au-dessus.
     fields: Optional[list[str] | str] = None
+    # Compte borné (barre de recherche) : avec `q`, un total exact coûte autant que de
+    # lignes trouvées (`datastore.lecture.page_rows`). Absent = total exact, inchangé.
+    # Typé strict (pas `_tolerant_int`) : une borne illisible retomberait en silence sur
+    # le compte exact, celui-là même qu'elle devait éviter — `400`, pas un repli.
+    total_max: Optional[int] = Field(
+        default=None, ge=1,
+        description=("Count `total` only up to this number. Beyond it, `total` equals "
+                     "`total_max` and `total_capped` is true. Omit it for the exact "
+                     "total — with `q`, an exact total costs as much as the number of "
+                     "matching rows."))
 
     _coerce = field_validator("offset", "limit", mode="before")(_tolerant_int)
 
@@ -615,7 +625,8 @@ def _list_rows(ctx: ResolvedCtx, inp: ListRowsInput) -> dict:
             order_by=inp.order_by or None, order_dir=inp.order_dir,
             q=inp.q or None, q_scope=inp.q_scope, filter=filter_eq,
             filters=filters, layers=layers,
-            versions=_versions(inp.versions), fields=inp.fields, **empties)
+            versions=_versions(inp.versions), fields=inp.fields,
+            total_max=inp.total_max, **empties)
         return {**page, **identite.numero(store.dernier_tableau)}
     except DatastoreNotFound:
         raise ns_not_found(ctx.sub, ns)

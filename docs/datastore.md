@@ -2232,6 +2232,19 @@ fonction porte `SET jit = off` : sans lui, le JIT recompilait son corps à chaqu
 appel (200 ms par ligne, donc par écriture). Les deux GIN doublent à peu près le coût
 d'une insertion (5 000 lignes : 1,9 s → 4,1 s).
 
+⚠️ **Le coût de `values` suit le nombre de lignes TROUVÉES, pas `limit`** (mesuré le
+16/10/2026). Les deux GIN trouvent les candidats en moins d'une milliseconde, mais
+l'index trigramme exige de REVÉRIFIER chaque candidat, ce qui recalcule
+`datastore_valeurs_texte_v1(data)` ligne à ligne. Le classement (`ts_rank_cd`) la
+recalcule une deuxième fois, et le `COUNT` du total une troisième. Seule la moitié
+lexicale, seule, s'en passe : 4 ms pour 1 243 lignes, contre 268 ms pour la moitié
+fragment. Sur un tableau large (~260 colonnes), cela a donné 19 à 22 s en prod pour un
+mot présent dans 1 243 lignes sur 9 200, avec `limit=8`. **`total_max`** (`/rows`)
+borne le compte : au-delà, `total` vaut `total_max` et `total_capped: true` le dit ;
+absent, le total reste exact (le dashboard pagine et exporte sur lui). La page, elle,
+reste proportionnelle aux lignes trouvées tant que le texte des valeurs servies n'est
+pas MATÉRIALISÉ par ligne (comme `search_vec` l'est pour `all`).
+
 ## Interroger PLUSIEURS colonnes à la fois (oto#22 barreau 1)
 
 Une notion vit souvent sur des colonnes numérotées (`contact1_fonction`…). Un filtre

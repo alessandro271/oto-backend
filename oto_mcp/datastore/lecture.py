@@ -229,6 +229,7 @@ class LectureMixin:
         versions: tuple = dsver.DEFAUT,
         empties: str = dsl.EMPTIES_DEFAUT,
         fields: Optional[list[str]] = None,
+        total_max: Optional[int] = None,
     ) -> dict:
         """Page server-side (tri/recherche/filtres SQL) + total — pour le dashboard.
         Deux formes de filtre CUMULABLES, comme `aggregate` : `filter` exact
@@ -256,7 +257,17 @@ class LectureMixin:
         Absent (ou `["*"]`) = même payload qu'avant ce lot.
 
         `q`/`q_scope` (#307) : même recherche que `cursor_rows` ; sans `order_by`, les
-        meilleures correspondances d'abord (`db.datastore_list_rows`)."""
+        meilleures correspondances d'abord (`db.datastore_list_rows`).
+
+        `total_max` : le total n'est compté qu'AU PLUS jusqu'à ce nombre — une barre de
+        recherche qui n'affiche que les premières lignes n'a pas à payer le compte
+        exact d'une recherche `q`, qui coûte autant que de lignes trouvées
+        (`db.datastore_count_rows`). Au-delà, `total` vaut `total_max` et
+        `total_capped` le DIT : jamais un total tronqué qui se lirait exact. Absent =
+        total exact, sans `total_capped` (contrat inchangé : le dashboard pagine et
+        exporte sur ce total)."""
+        if total_max is not None and total_max < 1:
+            raise ValueError(f"total_max={total_max} : un entier ≥ 1 est attendu.")
         cherche = recherche(q, q_scope)
         ns_id = self._resolve(datastore)
         proj = None if not fields or "*" in fields else frozenset(fields)
@@ -282,14 +293,17 @@ class LectureMixin:
                 ns_id, offset=offset, limit=limit, order_by=order_by,
                 order_dir=order_dir, q=cherche, filters=clauses,
                 order_type=otype, order_options=oopts)
-            total = db.datastore_count_rows(ns_id, q=cherche, filters=clauses)
+            total = db.datastore_count_rows(
+                ns_id, q=cherche, filters=clauses,
+                jusqua=None if total_max is None else total_max + 1)
             health = self._order_health(ns_id, order_by, otype, oopts, cherche, clauses)
+        capped = total_max is not None and total > total_max
         out = {
             "rows": [self._row_to_dict(r, sch, layers=layers, versions=versions,
                                        empties=empties, fields=proj) for r in rows],
             # Le total doit décrire le MÊME jeu que la page : filtré aussi, sinon la
             # pagination du dashboard annonce des lignes qu'elle ne servira jamais.
-            "total": total,
+            "total": total_max if capped else total,
             "offset": offset, "limit": limit,
             # ⚠️ La réponse DÉCLARE ce qu'elle sert (oto#140). Sans elle, « je ne
             # l'ai pas demandée » et « elle n'existe pas sur cette case » se lisent
@@ -298,6 +312,8 @@ class LectureMixin:
             # coût nul par ligne, et l'enveloppe devient autoportante.
             "versions_servies": list(versions),
         }
+        if total_max is not None:
+            out["total_capped"] = capped
         if health:
             out["order_health"] = health
         return out
