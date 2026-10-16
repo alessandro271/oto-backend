@@ -322,7 +322,22 @@ def test_create_invites_the_attendees_and_mails_nobody_by_default(client):
     _call("calendar_event", op="create", summary="Point",
           start="2026-09-12T10:00:00Z", attendees=["a@x.fr"])
     assert client.create_event.call_args.kwargs == {
-        "attendees": ["a@x.fr"], "send_updates": "none"}
+        "attendees": ["a@x.fr"], "send_updates": "none", "meet": False}
+
+
+def test_create_attaches_a_meet_link_only_when_asked(client):
+    """Signal 1396 — impossible de joindre un lien Meet à la création."""
+    _call("calendar_event", op="create", summary="Point",
+          start="2026-09-12T10:00:00Z", meet=True)
+    assert client.create_event.call_args.kwargs["meet"] is True
+
+
+@pytest.mark.parametrize("op,kwargs", [("update", {"event_id": "e1"}), ("list", {})])
+def test_meet_outside_create_is_refused_without_calling_google(client, op, kwargs):
+    with pytest.raises(McpError, match="does not use `meet`"):
+        _call("calendar_event", op=op, meet=True, **kwargs)
+    client.update_event.assert_not_called()
+    client.list_events.assert_not_called()
 
 
 def test_update_replaces_the_guests_only_when_attendees_is_given(client):

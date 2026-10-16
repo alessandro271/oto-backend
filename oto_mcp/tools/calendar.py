@@ -113,6 +113,7 @@ def register(mcp: FastMCP) -> None:
         attendees: Optional[list[str]] = None,
         all_day: bool = False,
         send_updates: Literal["none", "all", "externalOnly"] = "none",
+        meet: bool = False,
         account: Optional[str] = None,
     ) -> dict:
         """An event in a calendar — list, read, create, fix or delete one.
@@ -126,7 +127,8 @@ def register(mcp: FastMCP) -> None:
         - **"create"**: create a calendar event (`summary` + `start`, optional
           `attendees` = guest emails). ⚠️ **Writes into a real calendar.** With
           `send_updates="none"` (default) the guests are added but nobody is
-          emailed — pass "all" to send the invitations.
+          emailed — pass "all" to send the invitations. `meet=True` attaches a
+          Google Meet link (returned as `hangoutLink`).
         - **"update"**: fix an existing event (`event_id` + what changes). PATCHES —
           only the fields you pass are touched, everything else (attendees,
           recurrence, reminders, meeting link) is left alone. Use this instead of
@@ -166,8 +168,14 @@ def register(mcp: FastMCP) -> None:
             send_updates: op="create"/"update"/"rm" — whether attendees get an email.
                 Default **"none"**: fixing a typo must not mail twelve people, and
                 cancelling silently is the lesser surprise. Pass "all" deliberately.
+            meet: op="create" — True attaches a Google Meet link, returned as
+                `hangoutLink`; `meet_status="pending"` means Google is still
+                creating it (read the event again with op="get").
             account: email of the Google account to use — same choice as `_account`.
         """
+        if meet and op != "create":
+            raise _bad(f"op='{op}' does not use `meet` — a Meet link is attached "
+                       "at creation (op='create').")
         client = await _client_for_user_async(account)
 
         if op == "list":
@@ -187,6 +195,7 @@ def register(mcp: FastMCP) -> None:
                 client.create_event, _need(summary, "summary", op),
                 _need(start, "start", op), end, description, location, all_day,
                 calendar_id, attendees=attendees, send_updates=send_updates,
+                meet=meet,
             )
         if op == "update":
             # The client REFUSES an empty patch: with no field, the call would spend a
