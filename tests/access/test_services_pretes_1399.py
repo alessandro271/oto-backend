@@ -7,13 +7,12 @@ autorisé plus tard n'est jamais prêté implicitement. Toutes les valeurs sont 
 from types import SimpleNamespace
 
 import pytest
-from mcp.shared.exceptions import McpError
 
-from oto_mcp import credentials_store
-from oto_mcp.access import prets
+from oto_mcp import access, credentials_store
 from oto_mcp.auth import google as google_auth
 from oto_mcp.capabilities._types import AuthzDenied, ResolvedCtx
 from oto_mcp.capabilities.connectors import sharing
+from oto_mcp.mcp_errors import McpError
 
 ORG, PRETEUSE, PAIR = 7, "preteuse", "pair"
 CTX = ResolvedCtx(sub=PRETEUSE, org_id=ORG)
@@ -130,19 +129,19 @@ def pret(monkeypatch):
     monkeypatch.setattr(group_store, "is_group_member",
                         lambda sub, gid: gid in etat["equipes"])
     monkeypatch.setattr(roles, "is_org_member", lambda sub, org: False)
-    monkeypatch.setattr(prets, "libelles_preteurs",
+    monkeypatch.setattr(access, "libelles_preteurs",
                         lambda subs: {s: f"{s}@exemple.test" for s in subs})
     return etat
 
 
 def test_un_service_prete_sert_par_la_personne_ou_par_son_equipe(pret):
-    prets.exiger_service_prete(PAIR, "google_ads", LIGNE)
-    prets.exiger_service_prete(PAIR, "drive", LIGNE)
+    access.exiger_service_prete(PAIR, "google_ads", LIGNE)
+    access.exiger_service_prete(PAIR, "drive", LIGNE)
 
 
 def test_un_service_non_prete_est_refuse_en_nommant_le_pret(pret):
     with pytest.raises(McpError) as refus:
-        prets.exiger_service_prete(PAIR, "gmail", LIGNE)
+        access.exiger_service_prete(PAIR, "gmail", LIGNE)
     data = refus.value.error.data
     assert (data["code"], data["services_lent"], data["lent_by"]) == (
         "service_not_lent", ["drive", "google_ads"], f"{PRETEUSE}@exemple.test")
@@ -152,7 +151,7 @@ def test_un_service_non_prete_est_refuse_en_nommant_le_pret(pret):
 def test_une_cible_sans_liste_ne_prete_aucun_service(pret):
     pret["services"] = {}
     with pytest.raises(McpError) as refus:
-        prets.exiger_service_prete(PAIR, "google_ads", LIGNE)
+        access.exiger_service_prete(PAIR, "google_ads", LIGNE)
     assert refus.value.error.data["services_lent"] == []
 
 
@@ -163,15 +162,14 @@ def test_une_cible_sans_liste_ne_prete_aucun_service(pret):
     (PAIR, "hunter", object()),                               # clé entière : rien n'est lu
 ])
 def test_ce_qui_n_est_pas_un_service_prete_n_est_pas_filtre(pret, sub, service, ligne):
-    prets.exiger_service_prete(sub, service, ligne)
+    access.exiger_service_prete(sub, service, ligne)
 
 
 def test_le_resolveur_unique_exige_le_service_prete(pret, monkeypatch):
-    from oto_mcp.access import resolve
     servie = LIGNE
-    monkeypatch.setattr(resolve, "_resolve_credential_impl", lambda *a, **k: servie)
-    monkeypatch.setattr(resolve, "_emit_connector_failure", lambda *a: None)
-    monkeypatch.setattr(resolve, "_note_resolved_instance", lambda rc: rc)
-    assert resolve.resolve_credential("google_ads", sub=PAIR) is servie
+    monkeypatch.setattr(access, "_resolve_credential_impl", lambda *a, **k: servie)
+    monkeypatch.setattr(access, "_emit_connector_failure", lambda *a: None)
+    monkeypatch.setattr(access, "_note_resolved_instance", lambda rc: rc)
+    assert access.resolve_credential("google_ads", sub=PAIR) is servie
     with pytest.raises(McpError):
-        resolve.resolve_credential("gmail", sub=PAIR)
+        access.resolve_credential("gmail", sub=PAIR)

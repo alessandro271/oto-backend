@@ -24,7 +24,6 @@ from pydantic import BaseModel, Field
 
 from ... import access, credentials_store, db, group_store, instance_refs, org_store, providers
 from ...connectors import cle_perso, services_accordes
-from ...access import prets
 from ...db import loan_events
 from .._authz import ORG_ADMIN_OF, SUB_ONLY
 from .._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
@@ -228,7 +227,7 @@ def _lend_instance(ctx: ResolvedCtx, inp: LendInstanceInput) -> dict:
         credentials_store.MEMBER, eid, connector, account)
     side = list(side or [])
     avant = list(side)
-    a_services = connector in prets.PORTEURS_A_SERVICES
+    a_services = connector in access.PORTEURS_A_SERVICES
     if inp.services is not None and not a_services:
         raise AuthzDenied(400, "services_not_applicable",
                           f"`services` applies to a Google or Microsoft account only: a "
@@ -342,7 +341,7 @@ def _list_org_loans(ctx: ResolvedCtx, inp: OrgLoansInput) -> dict:
     poses = loan_events.dernieres_poses(lignes)
     entries = [(ligne, r["entity_id"].split(":", 1)[1], cible, r["share_services"] or {})
                for ligne, r in zip(lignes, rows) for cible in (r["share_side"] or [])]
-    libelles = prets.libelles_preteurs(
+    libelles = access.libelles_preteurs(
         [preteur for _, preteur, _, _ in entries]
         + [c[len("user:"):] for _, _, c, _ in entries if c.startswith("user:")])
     groupes: dict = {}
@@ -352,7 +351,7 @@ def _list_org_loans(ctx: ResolvedCtx, inp: OrgLoansInput) -> dict:
         loan = {"lender_sub": preteur, "lender": libelles[preteur], "connector": ligne[2],
                 "account": ligne[3], "to": kind,
                 "services": (list(par_cible.get(cible, []))
-                             if ligne[2] in prets.PORTEURS_A_SERVICES else None)}
+                             if ligne[2] in access.PORTEURS_A_SERVICES else None)}
         if kind == "user":
             loan.update(to_sub=ident, to_label=libelles[ident])
         elif kind == "group":

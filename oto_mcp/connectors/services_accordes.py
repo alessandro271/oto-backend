@@ -10,7 +10,7 @@ before that list existed (`db/migrations/versions/…_0060_services_pretes`).
 from __future__ import annotations
 
 from .. import providers
-from ..access.prets import PORTEURS_A_SERVICES
+from ..access import PORTEURS_A_SERVICES
 
 
 def services_du_porteur(porteur: str) -> list[str]:

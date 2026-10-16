@@ -75,7 +75,7 @@ def parc(monkeypatch):
     monkeypatch.setattr(sharing.loan_events, "dernieres_poses", lambda ls: {
         (credentials_store.MEMBER, f"{ORG}:alice", "google", "alice@exemple.test",
          "user:bob"): pose})
-    monkeypatch.setattr(sharing.prets, "libelles_preteurs",
+    monkeypatch.setattr(sharing.access, "libelles_preteurs",
                         lambda subs: {s: f"{s}@exemple.test" for s in subs})
     monkeypatch.setattr(sharing.group_store, "get_group",
                         lambda gid: {"id": gid, "name": "Ventes"})

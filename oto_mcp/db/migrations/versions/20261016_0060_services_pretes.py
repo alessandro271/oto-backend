@@ -54,7 +54,7 @@ logger = logging.getLogger("alembic.runtime.migration")
 
 
 def upgrade() -> None:
-    from oto_mcp.access.prets import PORTEURS_A_SERVICES
+    from oto_mcp.access import PORTEURS_A_SERVICES
     from oto_mcp.connectors.services_accordes import services_autorises
 
     op.execute(_ATTENTE_MAX)
