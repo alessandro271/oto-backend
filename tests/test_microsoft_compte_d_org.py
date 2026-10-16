@@ -239,6 +239,14 @@ def test_microsoft_accounts_et_identites_disent_le_niveau(org, monkeypatch):
                 for i in idents] == [(BOITE_EQUIPE, True, "team", False),
                                      (BOITE_ORG, True, "org", False)], carte
         assert not any(i.get("granted") for i in idents)
+    # `shared_owner` traverse le modèle de sortie REST (il le supprimait) : l'écran nomme
+    # l'équipe ou l'org qui possède le compte.
+    from oto_mcp.capabilities.connectors.identities import ConnectorIdentities
+    servi = ConnectorIdentities(connector="outlook", supported=True,
+                                identities=identities.list_identities(EMPRUNTEUSE, "outlook")
+                                ).model_dump(mode="json")
+    assert [i["shared_owner"] for i in servi["identities"]] == [
+        {"id": EQUIPE, "name": "Ventes"}, {"id": ORG, "name": "Contoso"}]
     assert identities.list_identities(EMPRUNTEUSE, "sharepoint") == []
     # Le palier org de la carte du porteur : les comptes de l'org (admin, générique).
     assert [i["id"] for i in identities.list_identities(ADMIN, PORTEUR, "org")] == [

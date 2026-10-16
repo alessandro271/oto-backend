@@ -56,6 +56,12 @@ class IdentityOwner(BaseModel):
     org_name: Optional[str] = None
 
 
+class IdentitySharedOwner(BaseModel):
+    """The team or org whose OWN account this is — present with `shared`."""
+    id: int
+    name: Optional[str] = None
+
+
 class Identity(BaseModel):
     """Common `Identity` contract of the three backends (Google = vault accounts,
     Unipile = remote identities of a key, generic keyed = vault rows).
@@ -77,13 +83,14 @@ class Identity(BaseModel):
     channel: Optional[str] = None
     granted: Optional[bool] = None          # present (true) if the account is GRANTED (#55)
     owner: Optional[IdentityOwner] = None   # the lender, present with `granted`
-    # `true` = an account SHARED by the caller's team or org (Google, 2026-09-27),
-    # reachable via `_account=` but not theirs: the member cannot revoke it (a team or
-    # org admin does, from the shared tier). Always served, `false` by default — every
-    # other backend (Microsoft included) lists the member's own accounts.
+    # `true` = an account OWNED by the caller's team or org (Google, Microsoft), reachable
+    # via `_account=` but not theirs: the member cannot revoke it (a team or org admin
+    # does, from the shared tier). Always served, `false` by default.
     shared: bool = False
     # The tier that shares it — `team` | `org` — present with `shared`, `null` otherwise.
     shared_scope: Optional[Literal["team", "org"]] = None
+    # Which team or org, named — present with `shared` when the backend knows it.
+    shared_owner: Optional[IdentitySharedOwner] = None
 
 
 class ConnectorIdentities(BaseModel):
