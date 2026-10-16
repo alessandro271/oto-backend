@@ -70,6 +70,7 @@ ACCESS_LEVELS = {
         "zohodesk_create_contact": ("Desk.contacts.WRITE",),
         "zohodesk_departments": ("Desk.basic.READ",),
         "zohodesk_articles": ("Desk.articles.READ",),
+        "zohodesk_search_articles": ("Desk.search.READ", "Desk.articles.READ"),
         "zohodesk_article": ("Desk.articles.READ",),
     },
 }

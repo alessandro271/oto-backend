@@ -248,7 +248,6 @@ webflow_forms
 webflow_pages
 webflow_submissions
 whatsapp_chat
-zohodesk_articles
 zohodesk_contacts
 zohodesk_search_tickets
 zohodesk_tickets

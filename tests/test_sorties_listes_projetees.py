@@ -69,7 +69,9 @@ _PROJECTION_APPELS = ("output_projection", "_shape(", "summarize(", "_project(",
 # recherche sont désormais nommés dans la dette (cf. `_fields_projette`).
 # 213 → 210 le même jour : github_repos, github_issues, github_pulls payés (index par
 # défaut, `full=True` le brut — `tools/github_index.py`).
-_PLAFOND = 210
+# 210 → 209 le 2026-10-16 : zohodesk_articles payé (vue légère par défaut, `full=True`
+# le brut — `tools/zohodesk.py`).
+_PLAFOND = 209
 
 
 def _debt() -> set[str]:

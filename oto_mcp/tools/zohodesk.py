@@ -115,6 +115,34 @@ def _verify(fields: dict, config: dict | None = None) -> None:  # noqa: ARG001 (
                      "(wrong org_id, or departments/tickets inaccessible).")
 
 
+# Help Center articles — the DEFAULT of a listing or a search is a light view: Zoho
+# answers each article with its owner, author, translations, counters… several
+# hundred characters an agent never reads, times 50 per page. What stays is what is
+# needed to pick an article; Zoho's own `summary` is its excerpt of the body. The
+# full HTML body is never in a listing, at any level: it comes from
+# `zohodesk_article`, and each description says so.
+_ARTICLE_KEYS = ("id", "title", "status", "summary", "modifiedTime", "webUrl",
+                 "portalUrl")
+
+
+def _slim_article(article: dict) -> dict:
+    out = {k: article[k] for k in _ARTICLE_KEYS if k in article}
+    category = article.get("category")
+    if isinstance(category, dict):
+        out["category"] = category.get("name")
+    return out
+
+
+def _shape(page: object, full: bool) -> object:
+    """The light page (`full=True` = Zoho's raw records). The envelope (`count`…)
+    is kept: without it the agent thinks it has seen everything."""
+    if full or not isinstance(page, dict) or not isinstance(page.get("data"), list):
+        return page
+    out = dict(page)
+    out["data"] = [_slim_article(a) if isinstance(a, dict) else a for a in page["data"]]
+    return out
+
+
 def register(mcp: FastMCP) -> None:
     connector_verify.register("zohodesk", _verify)
     from oto.tools.zohodesk.client import ZohoDeskClient
@@ -199,17 +227,62 @@ def register(mcp: FastMCP) -> None:
         category_id: Optional[str] = None,
         status: Optional[str] = None,
         sort_by: Optional[str] = None,
+        full: bool = False,
     ) -> dict:
-        """List Help Center (KB) articles — metadata only (the HTML body comes
-        from `zohodesk_article`).
+        """List Help Center (KB) articles, page by page. To find an article on a
+        subject, use `zohodesk_search_articles` instead of paging through the base.
+
+        Each article is a light view: id, title, status, category, summary (Zoho's
+        excerpt), modifiedTime, webUrl, portalUrl. The full HTML body is never
+        listed: read it with `zohodesk_article`.
 
         Args:
+            limit: 1-50.
             status: Published | Draft | Review | Expired.
             sort_by: a field name (e.g. modifiedTime, viewCount; prefix "-" for desc).
+            full: True = Zoho's raw records (owner, author, translations, counters).
         """
-        return _client().list_articles(
+        return _shape(_client().list_articles(
             from_index=from_index, limit=limit, department_id=department_id,
-            category_id=category_id, status=status, sort_by=sort_by)
+            category_id=category_id, status=status, sort_by=sort_by), full)
+
+    @mcp.tool()
+    def zohodesk_search_articles(
+        query: Optional[str] = None,
+        title: Optional[str] = None,
+        tag: Optional[str] = None,
+        category_id: Optional[str] = None,
+        department_id: Optional[str] = None,
+        from_index: int = 0,
+        limit: int = 10,
+        sort_by: Optional[str] = None,
+        full: bool = False,
+    ) -> dict:
+        """Search Help Center (KB) articles by keyword. Returns `data` (light view
+        per article: id, title, status, category, summary — Zoho's excerpt —,
+        modifiedTime, webUrl, portalUrl) and `count`, the total number of matches.
+        The full HTML body: `zohodesk_article`.
+
+        Args:
+            query: words searched across every field of the article (title, body,
+                tags…).
+            title: searched in the title only.
+            tag: searched in the tags only.
+            category_id: restricts to one category. At least one of query, title,
+                tag or category_id.
+            from_index: 0-based start (max 4999).
+            limit: 1-100.
+            sort_by: relevance | modifiedTime | createdTime (prefix "-" for desc).
+            full: True = Zoho's raw records.
+        """
+        if not (query or title or tag or category_id):
+            raise McpError(ErrorData(code=INVALID_PARAMS, message=(
+                "Pass at least one search criterion: query (every field), title, tag "
+                "or category_id. To browse the whole base, use zohodesk_articles.")))
+        return _shape(_client().search_articles(
+            query=query, title=title, tag=tag, category_id=category_id,
+            department_id=department_id, from_index=from_index, limit=limit,
+            sort_by=sort_by), full)
 
     @mcp.tool()
     def zohodesk_article(article_id: str) -> dict:
