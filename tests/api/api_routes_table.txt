@@ -773,6 +773,8 @@ GET,HEAD /api/datastores/{datastore}/queue -> _handler
 OPTIONS /api/datastores/{datastore}/queue -> options_handler
 GET,HEAD /api/datastores/{datastore}/aggregate -> _handler
 OPTIONS /api/datastores/{datastore}/aggregate -> options_handler
+GET,HEAD /api/datastores/{datastore}/counts -> _handler
+OPTIONS /api/datastores/{datastore}/counts -> options_handler
 POST /api/datastores/{datastore}/drop_column -> _handler
 OPTIONS /api/datastores/{datastore}/drop_column -> options_handler
 PATCH /api/datastores/{datastore}/schema -> _handler
@@ -839,6 +841,8 @@ PUT /api/datastore/namespaces/{namespace}/schema -> alias_deprecie
 OPTIONS /api/datastore/namespaces/{namespace}/schema -> options_handler
 GET,HEAD /api/datastore/namespaces/{namespace}/schema -> alias_deprecie
 OPTIONS /api/datastore/namespaces/{namespace}/schema -> options_handler
+GET,HEAD /api/datastore/namespaces/{namespace}/counts -> alias_deprecie
+OPTIONS /api/datastore/namespaces/{namespace}/counts -> options_handler
 PATCH /api/datastore/namespaces/{namespace}/schema -> alias_deprecie
 OPTIONS /api/datastore/namespaces/{namespace}/schema -> options_handler
 GET,HEAD /api/datastore/namespaces/{namespace}/activity -> alias_deprecie

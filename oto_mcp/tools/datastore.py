@@ -1852,6 +1852,8 @@ def register(mcp: FastMCP) -> None:
         filters: Optional[list[dict]] = None,
         q: str | None = None,
         q_scope: recherche.PorteeRecherche | None = None,
+        count_by: list[str] | None = None,
+        values_limit: int | None = None,
     ) -> dict:
         """Aggregate rows SERVER-SIDE — stats over a whole (optionally filtered) table
         WITHOUT pulling the rows into context (feedback #191). Use this for totals and
@@ -1898,6 +1900,11 @@ def register(mcp: FastMCP) -> None:
         Returns `{results: [...]}` — each entry carries the `group_by` value (when set)
         plus one key per metric (`count`, `sum_<field>`, `avg_<field>`, or `label`).
 
+        `count_by` = a list of columns to profile in ONE call (not with `group_by`
+        or `metrics`): returns `{counts: {column: {values: [{value, count}], empty,
+        distinct, total, truncated}}}` — most frequent values first, at most
+        `values_limit` (default 50, max 500) per column; `truncated` says more exist.
+
         Examples —
             - total rows matching a filter: metrics omitted, filter={"statut":"qualified"}
             - MWc by department: group_by="departement",
@@ -1929,11 +1936,23 @@ def register(mcp: FastMCP) -> None:
             q: <<recherche_q>> Aggregates the same set a `data_rows` search
                 shows (ranking aside).
             q_scope: <<recherche_q_scope>>
+            count_by: columns to count values and empties of, in one call.
+            values_limit: with `count_by`, values kept per column (1-500).
         """
         store = _acting_store()
         datastore, _ = _adresse(datastore)
         try:
             jetons.verifier_champs(filter=filter, filters=filters)
+            if count_by is not None:
+                if group_by or metrics:
+                    raise ValueError("`count_by` does not combine with `group_by` or "
+                                     "`metrics`: one call counts columns, the other "
+                                     "aggregates")
+                return {"counts": store.count_by(
+                    datastore, count_by, filter=filter, filters=filters, q=q,
+                    q_scope=q_scope, values_limit=values_limit)}
+            if values_limit is not None:
+                raise ValueError("`values_limit` only applies with `count_by`")
             results = store.aggregate(
                 datastore, group_by=group_by, metrics=metrics, filter=filter,
                 filters=filters, q=q, q_scope=q_scope)

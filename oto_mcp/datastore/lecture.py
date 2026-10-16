@@ -11,6 +11,7 @@ from typing import Optional
 
 from .. import db
 from ..db import valeurs_servies
+from . import acces_agent as aga
 from . import layers as dsl
 from . import versions as dsver
 from . import schema as dsv2
@@ -217,6 +218,43 @@ class LectureMixin:
         _refuse_group_by_compose(group_by)
         return db.datastore_aggregate(
             ns_id, group_by=group_by, metrics=metrics, q=cherche, filters=clauses)
+
+    def count_by(self, datastore: str, fields: list, *, filter: Optional[dict] = None,
+                 filters: Optional[list] = None, q: Optional[str] = None,
+                 q_scope: Optional[str] = None,
+                 values_limit: Optional[int] = None) -> dict:
+        """Compteurs de N colonnes en UN appel (`db.datastore_count_by`) : par colonne,
+        les valeurs les plus fréquentes, les vides, les distinctes et le total, sous les
+        MÊMES `filter`/`filters`/`q` que `page_rows` — ce qu'un écran affiche au-dessus
+        de sa vue filtrée, sans N appels qui relisent chacun tout le jeu.
+
+        Une colonne inconnue du schéma déclaré est REFUSÉE : comptée, elle rendrait
+        « tout est vide », une réponse qui a l'air d'en être une. Une colonne masquée
+        aux agents (`agent_access: "none"`, oto#83) l'est aussi sur la face agent —
+        ses valeurs ne sortent pas plus en compteurs qu'en lignes."""
+        cherche = valeurs_servies.resoudre(recherche(q, q_scope))
+        ns_id = self._resolve(datastore)
+        sch = self._schema_of(ns_id)
+        declarees = set(dsv2.cles_declarees(sch))
+        champs = list(fields) if isinstance(fields, (list, tuple)) else fields
+        if declarees and isinstance(champs, list):
+            inconnues = [k for k in champs if isinstance(k, str) and "." not in k
+                         and "[" not in k and k not in declarees]
+            if inconnues:
+                raise ValueError(
+                    f"`count_by` : colonne(s) non déclarée(s) dans ce tableau : "
+                    f"{', '.join(inconnues)} — `data_get_schema` les liste")
+        if aga.appel_d_agent() and isinstance(champs, list):
+            cachees = [k for k in champs if k in aga.masquees(sch)]
+            if cachees:
+                raise ValueError(
+                    f"`count_by` : {', '.join(cachees)} n'est pas lisible par un "
+                    f"agent sur ce tableau (`agent_access: \"none\"`)")
+        clauses = self._clauses(ns_id, filter, filters)
+        return db.datastore_count_by(
+            ns_id, champs, q=cherche, filters=clauses,
+            values_limit=(db.COUNT_BY_VALUES_DEFAUT if values_limit is None
+                          else values_limit))
 
     def page_rows(
         self,

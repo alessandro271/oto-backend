@@ -79,7 +79,10 @@ from .rowlock import (  # noqa: F401
     datastore_row_within,
 )
 from .query import (  # noqa: F401
+    COUNT_BY_VALUES_DEFAUT,
+    COUNT_BY_VALUES_MAX,
     _build_aggregate,
+    _build_count_by,
     _NUMERIC_RE,
     _ds_filter_clauses,
     _ds_meta_ts_clause,
@@ -1198,6 +1201,33 @@ def datastore_aggregate(ns_id: int, *, group_by: Optional[str] = None,
             v = r[alias]
             d[name] = float(v) if isinstance(v, Decimal) else v
         out.append(d)
+    return out
+
+
+def datastore_count_by(ns_id: int, fields: list, *, q: Optional["Recherche"] = None,
+                       filters: Optional[list] = None,
+                       values_limit: int = COUNT_BY_VALUES_DEFAUT) -> dict:
+    """Compteurs de N colonnes en UNE requête (`_build_count_by`) : par colonne,
+    `{values: [{value, count}], empty, distinct, total, truncated}` — `values` trié
+    du plus fréquent au moins fréquent, `truncated` vrai quand des valeurs distinctes
+    restent au-delà de `values_limit` (la liste n'est alors pas complète, et le dit)."""
+    if not isinstance(values_limit, int) or not 1 <= values_limit <= COUNT_BY_VALUES_MAX:
+        raise ValueError(f"`values_limit` : entier de 1 à {COUNT_BY_VALUES_MAX} "
+                         f"(reçu {values_limit!r})")
+    sql, params, champs = _build_count_by(ns_id, fields, q, filters, values_limit)
+    with _connect() as conn:
+        rows = conn.execute(sql, tuple(params)).fetchall()
+    out = {k: {"values": [], "empty": 0, "distinct": 0, "total": 0, "truncated": False}
+           for k in champs}
+    for r in rows:
+        c = out[champs[r["i"]]]
+        c["distinct"], c["total"] = int(r["distinct_n"]), int(r["total_n"])
+        if r["v"] is None:
+            c["empty"] = int(r["n"])
+        else:
+            c["values"].append({"value": r["v"], "count": int(r["n"])})
+    for c in out.values():
+        c["truncated"] = c["distinct"] > len(c["values"])
     return out
 
 

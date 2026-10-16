@@ -182,6 +182,28 @@ class AggregateInput(EntreeDatastore):
     filters: Optional[str] = None
 
 
+class CountsInput(EntreeDatastore):
+    """Les compteurs de N colonnes en UN appel — ce qu'un écran affiche au-dessus de sa
+    vue filtrée (valeurs, vides, distinctes), sans un `/aggregate` par colonne."""
+    datastore: Adresse
+    # Comma-separated pour la MÊME raison que `ListRowsInput.fields` (#367).
+    fields: list[str] | str
+    filter: Optional[str] = None
+    filters: Optional[str] = None
+    q: Optional[str] = _Q
+    q_scope: Optional[recherche.PorteeRecherche] = _Q_SCOPE
+    values_limit: Optional[int] = None
+
+    _coerce = field_validator("values_limit", mode="before")(_tolerant_int)
+
+    @field_validator("fields", mode="after")
+    @classmethod
+    def _fields_en_liste(cls, v):
+        """Même patron que `ListRowsInput._fields_en_liste` (#367)."""
+        brut = v if isinstance(v, list) else str(v).split(",")
+        return [m for m in (str(x).strip() for x in brut) if m]
+
+
 class DatastoreRefInput(EntreeDatastore):
     datastore: Adresse
 
@@ -533,6 +555,22 @@ class AggregateResult(BaseModel):
     groups: list[dict]
 
 
+class ColumnCounts(BaseModel):
+    # Les valeurs les plus fréquentes d'abord, `{value, count}`.
+    values: list[dict]
+    # Lignes où la colonne est absente, `null` ou `""`.
+    empty: int
+    # Valeurs distinctes non vides — au-delà de `values`, `truncated` est vrai.
+    distinct: int
+    # Lignes du jeu filtré : `empty` + la somme de TOUTES les valeurs.
+    total: int
+    truncated: bool
+
+
+class CountsResult(BaseModel):
+    counts: dict[str, ColumnCounts]
+
+
 class DeletedRow(BaseModel):
     ok: bool
     id: str
@@ -656,6 +694,23 @@ def _aggregate(ctx: ResolvedCtx, inp: AggregateInput) -> dict:
     except ValueError as e:
         raise AuthzDenied(400, "invalid_aggregate", str(e))
     return {"groups": groups}
+
+
+def _counts(ctx: ResolvedCtx, inp: CountsInput) -> dict:
+    """Compteurs de N colonnes en une passe SQL (`DatastorePg.count_by`), sous les
+    mêmes `filter`/`filters`/`q` que `/rows`."""
+    ns, _ = _adresse(inp.datastore)
+    filter_eq = _json_param(inp.filter, "invalid_filter", expect=dict)
+    filters = _json_param(inp.filters, "invalid_filters", expect=list)
+    try:
+        counts = make_store(ctx.sub).count_by(
+            ns, inp.fields, filter=filter_eq, filters=filters, q=inp.q or None,
+            q_scope=inp.q_scope, values_limit=inp.values_limit)
+    except DatastoreNotFound:
+        raise ns_not_found(ctx.sub, ns)
+    except ValueError as e:
+        raise AuthzDenied(400, "invalid_counts", str(e))
+    return {"counts": counts}
 
 
 def _queue(ctx: ResolvedCtx, inp: DatastoreRefInput) -> dict:
@@ -1151,5 +1206,17 @@ CAPABILITIES += [
         mcp=None,
         rest=RestBinding(verb="GET", path=_NS + "/aggregate"),
         description="Agrégat serveur d'un tableau (COUNT/SUM/AVG/MIN/MAX, groupé).",
+    ),
+    Capability(
+        key="me.datastore.counts",
+        handler=_counts,
+        Input=CountsInput,
+        Output=CountsResult,
+        authz=SUB_ONLY,
+        mcp=None,
+        rest=RestBinding(verb="GET", path=_NS + "/counts"),
+        description=("Compteurs de N colonnes en un appel : valeurs les plus "
+                     "fréquentes, vides, distinctes et total, sous les filtres de "
+                     "`/rows`."),
     ),
 ]

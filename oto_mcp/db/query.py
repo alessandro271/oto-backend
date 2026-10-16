@@ -776,6 +776,78 @@ def _metric_across_items(op: str, colonne: str, attribut: str,
     return f"{op.upper()}({sub}){fsql}", sp + fparams
 
 
+#: `count_by` : valeurs servies par colonne, par défaut et au plus. Au-delà, la colonne
+#: le dit (`truncated`) — jamais une liste coupée qui aurait l'air complète.
+COUNT_BY_VALUES_DEFAUT = 50
+COUNT_BY_VALUES_MAX = 500
+
+
+def _build_count_by(ns_id: int, fields, q: Optional["Recherche"],
+                    filters: Optional[list], values_limit: int
+                    ) -> tuple[str, list, list[str]]:
+    """Construit `(sql, params, champs)` du comptage de N colonnes en UNE passe — PUR.
+
+    Le besoin mesuré : un écran qui affiche les compteurs de 20 à 30 colonnes (valeurs
+    et vides, sous les filtres de la vue) les demandait un `group_by` à la fois, et
+    chaque appel relisait tout le jeu filtré — en détoastant `data` à chaque référence
+    (`field_read_sql` la lit 7 fois, cf. `thin_read_cte_sql`).
+
+    Ici `data` est lue UNE fois par ligne, amincie aux colonnes comptées (et à celles
+    des filtres) dans une CTE `MATERIALIZED` — le mécanisme de `thin_read_cte_sql` —,
+    puis chaque ligne est déroulée en (colonne, valeur) par un `LATERAL (VALUES …)`,
+    comme l'union de `group_by`, et le regroupement se fait sur la paire. `q` lit
+    `data` entière : il filtre DANS la CTE, avant l'amincissement ; un filtre qui
+    n'est pas amincissable (couche, chemin de liste) aussi.
+
+    Par colonne : les `values_limit` valeurs les plus fréquentes, le nombre de vides
+    (absente, `null` ou `""` — un vide est un vide, quelle que soit sa forme stockée),
+    le nombre de valeurs DISTINCTES et le total, qui vaut le nombre de lignes du jeu
+    filtré. `champs` donne l'ordre : la colonne `i` du résultat est `champs[i]`.
+
+    Une colonne se nomme NUE : une couche (`champ.comment`) ou un chemin de liste
+    (`contacts[].x`) ne désigne pas « la valeur de la colonne » — refusés en le
+    disant, plutôt que comptés sous une forme que personne n'a demandée."""
+    champs = _ds_named_fields(fields, "count_by")
+    for k in champs:
+        if "." in k or "[" in k:
+            raise ValueError(
+                f"`count_by` : `{k}` n'est pas un nom de colonne nu — on compte les "
+                f"valeurs d'une colonne, pas d'une couche ni des items d'une liste "
+                f"(pour ceux-là : `group_by`, une colonne par appel)")
+    if len(set(champs)) != len(champs):
+        doublons = sorted({k for k in champs if champs.count(k) > 1})
+        raise ValueError(f"`count_by` nomme deux fois {', '.join(doublons)} — "
+                         f"une colonne se compte une fois")
+    fkeys = thinnable_read_keys(None, filters) if filters else set()
+    dedans, apres = (filters, None) if fkeys is None else (None, filters)
+    keys = set(champs) | (fkeys or set())
+    where_in, wparams_in = _ds_where(ns_id, q, dedans)
+    cte = ("s AS MATERIALIZED (SELECT row_id, created_at, updated_at, "
+           "(SELECT COALESCE(jsonb_object_agg(e.key, e.value), '{}'::jsonb) "
+           " FROM jsonb_each(data) e WHERE e.key = ANY(%s)) AS data "
+           f"FROM datastore_rows {where_in})")
+    fclauses, fparams = _ds_filter_clauses(apres)
+    where_apres = ("WHERE " + " AND ".join(fclauses)) if fclauses else ""
+    vals, lparams = [], []
+    for i, k in enumerate(champs):
+        _v, _vp = field_read_sql(k)
+        vals.append(f"({i}, {_v})")
+        lparams.extend(_vp)
+    sql = (
+        f"WITH {cte}, "
+        "u AS (SELECT _u.i, NULLIF(_u.v, '') AS v FROM s, "
+        f"LATERAL (VALUES {', '.join(vals)}) AS _u(i, v) {where_apres}), "
+        "g AS (SELECT i, v, COUNT(*) AS n FROM u GROUP BY i, v), "
+        "r AS (SELECT i, v, n, "
+        "row_number() OVER (PARTITION BY i, (v IS NULL) ORDER BY n DESC, v ASC) AS rk, "
+        "COUNT(*) FILTER (WHERE v IS NOT NULL) OVER (PARTITION BY i) AS distinct_n, "
+        "SUM(n) OVER (PARTITION BY i) AS total_n FROM g) "
+        "SELECT i, v, n, distinct_n, total_n FROM r WHERE v IS NULL OR rk <= %s "
+        "ORDER BY i, (v IS NULL), n DESC, v ASC")
+    params = [sorted(keys)] + wparams_in + lparams + fparams + [values_limit]
+    return sql, params, champs
+
+
 def _build_aggregate(ns_id: int, group_by, metrics: Optional[list],
                      q: Optional["Recherche"], filters: Optional[list],
                      limit: int) -> tuple[str, list, list]:

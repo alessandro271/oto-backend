@@ -2294,6 +2294,21 @@ retenue (`count` = les contacts, `count_rows` = les fiches), et `sum`/`avg`/`min
 sur `contacts[].<attribut>` portent sur tous les items. Le tri reste refusé. Détail :
 `datastore-colonne-tableau.md` §5.1.
 
+**Les compteurs de N colonnes en un appel** (`GET …/counts?fields=a,b,c`,
+`data_aggregate(count_by=[…])`, 16/10/2026). Un écran qui affiche au-dessus de sa vue
+filtrée les compteurs de 20 à 30 colonnes les demandait un `…/aggregate` par colonne,
+et chaque appel relisait tout le jeu filtré. `count_by` lit `data` UNE fois par ligne,
+amincie aux colonnes comptées et filtrées (le mécanisme de `thin_read_cte_sql`), puis
+déroule chaque ligne en (colonne, valeur). Par colonne : `values` (les plus fréquentes
+d'abord, `values_limit` = 50 par défaut, 500 au plus), `empty` (absente, `null`, `""`,
+ou couche sans valeur : un vide est un vide), `distinct`, `total` (= lignes du jeu
+filtré) et `truncated` — vrai quand des valeurs restent au-delà de la liste, jamais une
+liste coupée qui aurait l'air complète. Mêmes `filter`/`filters`/`q` que `…/rows`.
+Refusés en le disant : une colonne non déclarée (comptée, elle rendrait « tout est
+vide »), une couche ou un chemin de liste (`group_by` les sert, une colonne par appel),
+un doublon, et une colonne masquée aux agents sur la face agent. Mesuré sur un banc de
+10 000 lignes à 260 colonnes : 25 colonnes en 1,1 s, contre 7,6 s en 25 `group_by`.
+
 **Projeter coûte moins que tout lire** (`fields`, même date). Sous projection, les
 couches d'une colonne ne sont aplaties que si l'une d'elles est NOMMÉE (`ville.comment`) :
 `flat_layers` était payé pour chaque colonne puis jeté, et une projection sur 260 noms
