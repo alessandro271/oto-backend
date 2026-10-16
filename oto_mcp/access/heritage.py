@@ -160,6 +160,21 @@ def org_partagee(org: Optional[int], cles: Optional[ClesDuProjet]) -> Optional[i
     return org
 
 
+def paliers_partages(org: Optional[int], groupe: Optional[int],
+                     cles: Optional[ClesDuProjet]) -> list[tuple[str, int]]:
+    """The shared tiers whose OWN accounts serve a member, nearest first — the cascade's
+    rungs: the active team (`groupe`), the owning team a shared project lends, then the
+    org (`org_partagee`). Pure: the caller reads the active team and the verdict."""
+    out = [("group", int(groupe))] if groupe is not None else []
+    herite = cles.groupe_herite if cles is not None else None
+    if herite is not None and herite != groupe:
+        out.append(("group", int(herite)))
+    org_cles = org_partagee(org, cles)
+    if org_cles is not None:
+        out.append(("org", int(org_cles)))
+    return out
+
+
 def org_des_cles(sub: Optional[str], org: Optional[int]) -> Optional[int]:
     """`org_partagee` for THIS call's verdict: the org whose shared rights `sub`
     consumes in the context `org` — None for a beneficiary outside it, nothing lent."""

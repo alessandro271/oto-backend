@@ -205,7 +205,9 @@ se rejoue en remplaçant la règle d'écriture de la façade, pas en lisant le c
 >   équipe et org de la résolution pour tout autre connecteur (`PretsDuParcours` : un
 >   prêt à l'équipe ou à l'org n'est jamais choisi d'office, ni remplacé par la clé
 >   plateforme) ; les
->   comptes de l'org ou de l'équipe ELLES-MÊMES ne sont pas des prêts et servent sans nom.
+>   comptes de l'org ou de l'équipe ELLES-MÊMES ne sont pas des prêts et servent sans nom
+>   (Microsoft compris depuis le lot 5 : ses paliers équipe et org ne lisent que ces
+>   comptes-là, ses prêts restent à son résolveur, `prets.RESOLVEUR_PROPRE`).
 >   Un prêt à une ÉQUIPE (`group:<id>`) est servi à ses membres, dans l'org du prêt ; une
 >   équipe à qui rien ne servirait le prêt (porteur non org-partageable hors Microsoft)
 >   est refusée à la pose (`team_loan_not_served`). Un prêt à TOUTE L'ORG (`org:<id>`,

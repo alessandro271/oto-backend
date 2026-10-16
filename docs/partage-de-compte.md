@@ -12,7 +12,7 @@ Six chemins permettaient d'ouvrir un compte à quelqu'un d'autre, nés un par un
 
 | Chemin | Couvre | Écran |
 |---|---|---|
-| Compte posé au palier org ou équipe à la connexion OAuth | Google, Salesforce, WordPress — pas Microsoft | oui (« Autoriser » côté org/équipe) |
+| Compte posé au palier org ou équipe à la connexion OAuth | Google, Salesforce, WordPress ; Microsoft depuis le lot 5 | oui (« Autoriser » côté org/équipe ; Microsoft : backend seul, voir lot 5) |
 | Clé d'org ou d'équipe | connecteurs `org_shareable` | oui |
 | Prêt d'instance (`share_side`, ADR 0044) | tous, Microsoft depuis le 09/10 | **non**, agent seulement |
 | Délégation « opérer mon compte » (#55) | messageries Unipile | oui, personnes seulement |
@@ -95,7 +95,10 @@ désignation. La règle s'écrit **une fois**, sous `oto_mcp/access/` (`prets.py
 chemin de résolution s'y branche : Microsoft (`auth/microsoft._lent_for_call`, nourri par
 `prets.prets_de` — personne, équipe, org), puis la cascade — paliers équipe et org, nourris
 par `group_store.lent_instances` et `live_loans`, décidés dans leur sonde
-(`PretsDuParcours.au_palier_equipe`, `au_palier_org`). Dans la cascade, sans désignation,
+(`PretsDuParcours.au_palier_equipe`, `au_palier_org`). Un seul juge par appel : les paliers
+équipe et org de la cascade, qui servent aussi Microsoft depuis le lot 5, n'y lisent que les
+comptes de l'équipe et de l'org elles-mêmes et laissent ses prêts à son résolveur
+(`prets.RESOLVEUR_PROPRE`). Dans la cascade, sans désignation,
 le compte de l'équipe elle-même sert, sinon celui de l'org ; si seuls des prêts auraient
 servi, le refus les nomme (avec « via the team … » ou « to the whole org … »), jamais la
 clé plateforme à leur place. Un prêt à l'org ne sert que les membres de cette org, la ligne
@@ -138,7 +141,7 @@ d'un refus d'ambiguïté.
 
 | Chemin | Devient |
 |---|---|
-| Compte posé au palier org/équipe à la connexion | Concept 1, inchangé ; **ouvert à Microsoft** (lot 5) |
+| Compte posé au palier org/équipe à la connexion | Concept 1, inchangé ; **ouvert à Microsoft** (lot 5, livré) |
 | Clé d'org ou d'équipe | Concept 1, inchangé |
 | Prêt d'instance | Le geste unique (concept 2), étendu à l'org, avec écran |
 | Délégation des messageries | Même geste à l'écran et dans l'agent ; stockage propre conservé, car le compte opéré n'est pas une ligne de coffre (le bénéficiaire l'atteint avec sa propre clé Unipile) |
@@ -153,7 +156,34 @@ d'un refus d'ambiguïté.
    `to_org` (palier org, Microsoft, listing) et le journal, écrit ; sa lecture reste à
    exposer.
 4. Dashboard : « Partager » sur la carte du compte.
-5. Microsoft connectable au nom de l'org ou d'une équipe.
+5. Microsoft connectable au nom de l'org ou d'une équipe — *livré côté backend* (décision du
+   15/10) :
+   - connexion : `POST /api/me/connectors/{outlook|sharepoint|…|microsoft}/connect` avec
+     `params.scope` = `org` (admin d'org) ou `group` (chef de l'équipe ACTIVE ; sans équipe
+     active, refus), comme Google ; refus `403 scope_forbidden`, `400 invalid_scope`. Le
+     state porte le palier, le droit est revérifié au retour. La ligne est posée sous
+     `microsoft` à l'entité `org`/`group`, un compte par adresse Microsoft, avec les scopes
+     du service demandé ; elle ne garde que ce que SES consentements ont demandé (plus le
+     palier administrateur de ces services), au retour comme à chaque renouvellement — le
+     jeton d'Entra porte aussi les consentements personnels du titulaire. Aucun défaut posé
+     d'office : l'admin le choisit (`oto_identity op=set scope=org|group`) ;
+   - service : compte propre → équipe active (puis équipe d'un projet partagé) → org, sans
+     désignation, par les paliers de la cascade (`byo_org`) ; deux comptes au même palier
+     sans `_account` ni défaut = refus d'ambiguïté qui les nomme ; puis les prêts, règle
+     inchangée. Pas de `lent_by` : ce n'est pas un prêt ;
+   - listing : `microsoft_accounts` (`shared` = `group`/`org`, `shared_owner`) et
+     `GET /api/connectors/{connector}/identities` (`shared`, `shared_scope`, `shared_owner`,
+     jamais `is_default`), carte du porteur comprise ;
+   - retrait : `DELETE /api/settings/api-keys/microsoft?scope=org|group&account=…`, admin
+     d'org ou chef de l'équipe active — la même règle que le compte partagé Google
+     (`DELETE /api/google/oauth?scope=…`), sur la surface de retrait de Microsoft ;
+   - niveaux d'accès : jugés sous l'org et l'équipe active de l'appel, qui sont les
+     propriétaires des comptes que ces paliers servent ;
+   - le consentement administrateur (`microsoft_admin_consent`) n'écrit rien et ne change
+     pas : il ouvre le tenant Microsoft du client, chaque compte (d'une personne, de l'org
+     ou d'une équipe) se connecte ensuite par sa carte.
+   Reste au dashboard : proposer « Autoriser » côté org et équipe pour Microsoft sans
+   application d'org posée (l'application est celle de la plateforme).
 6. Délégation des messageries ramenée au même geste (écran, outil), cible équipe à
    l'écran.
 7. Services prêtés (signal 1399). *7a*, backend : la liste par emprunteur, figée à la pose,

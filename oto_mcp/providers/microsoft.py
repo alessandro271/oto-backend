@@ -11,7 +11,8 @@ consent: its scopes only, added to the same Entra consent of the account) and bo
 the account from here (`credential_of="microsoft"`, see `service` below).
 
 What the account keeps for itself: the vault (one row per linked Microsoft account,
-the refresh token, the directory it signs in to), the `/api/microsoft/oauth/callback`
+the refresh token, the directory it signs in to — a person's, or the org's or a team's when
+an admin connected it on their behalf), the `/api/microsoft/oauth/callback`
 callback, the coordinates of oto's Entra application (`connector_settings`, platform
 scope), the list of accounts and the default account. Its own consent requests the
 identity only: each service adds its scopes from its card (`auth/microsoft.scopes_for`).
@@ -24,8 +25,9 @@ from ._model import _c
 
 CONNECTOR = _c(
     "microsoft", ["microsoft"],
-    auth_modes={"byo_user"},
-    # Consent comes from the person's Microsoft account, not from their org.
+    # `byo_org`: an org admin or a team lead connects an account ON BEHALF of the org or
+    # team (`auth/microsoft.scope_target`), served to its members after their own.
+    auth_modes={"byo_user", "byo_org"},
     personal_session=True, secret_kind="oauth",
     # OAuth ⟹ the derivation would say single; yet a person links several Microsoft
     # accounts (their directory, a client's) and the vault holds one row per account
@@ -48,7 +50,8 @@ LOGO_DOMAIN = "microsoft.com"
 DESCRIPTION = (
     "Your Microsoft 365 account, via OAuth: the carrier that the Microsoft services "
     "borrow. Each linked Microsoft account is a distinct account in the vault, and each "
-    "service is authorised from its own card, with only its permissions."
+    "service is authorised from its own card, with only its permissions. An org admin or "
+    "a team lead can connect one on behalf of the whole org or team."
 )
 
 
@@ -68,7 +71,7 @@ def service(name: str, *, label: str, help: str, href: str,
     `auth/microsoft.SERVICE_SCOPES[name]`, and nothing else."""
     return _c(
         name, [name],
-        auth_modes={"byo_user"},
+        auth_modes={"byo_user", "byo_org"},
         personal_session=True, secret_kind="oauth",
         credential_of="microsoft",
         cardinality="multi", account_axis_static=True,

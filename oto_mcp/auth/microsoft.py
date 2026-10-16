@@ -1,4 +1,5 @@
-"""Microsoft 365 — a PERSON's connection (OAuth 2.0, delegated permissions).
+"""Microsoft 365 — a person's connection, or the org's or a team's (OAuth 2.0, delegated
+permissions).
 
 The ACCOUNT carrier `microsoft` (`providers/microsoft.py`) holds the vault, the
 callback and the application's coordinates; each SERVICE (`SERVICE_SCOPES`: `sharepoint`,
@@ -10,11 +11,26 @@ Flow hosted by oto, on the common pattern (`connectors/flow` + `auth/flow`):
 
 1. "Sign in" on a card → `_start_flow_for(card)` returns the Microsoft dialog URL,
    asking for the identity plus the card's scopes (`scopes_for`), with a signed
-   `state` that carries the identity, the card (`c`) and the directory (`t`);
+   `state` that carries the identity, the card (`c`), the directory (`t`) and the tier
+   (`s`, `g`: member, org or team);
 2. Microsoft sends the browser back to `/api/microsoft/oauth/callback`
    (`api/microsoft.py`); the code there becomes a refresh token;
-3. the refresh token goes to the vault under `microsoft`, MEMBER tier: the person
-   acts with THEIR Microsoft 365 rights, no more and no less.
+3. the refresh token goes to the vault under `microsoft`, MEMBER tier by default: the
+   person acts with THEIR Microsoft 365 rights, no more and no less.
+
+**An account of the org or of a team** (decision of 15/10/2026,
+`docs/partage-de-compte.md` concept 1): an org admin (`scope=org`) or the lead of the
+ACTIVE team (`scope=group`) connects an account ON BEHALF of it (`scope_target`, checked at
+the start and again at the return). The row lives at the org or team tier, survives the
+departure of whoever connected it, and serves the members WITHOUT being named, after their
+own accounts: the cascade's team then org rungs (`byo_org`), where an account is never a
+loan (no `lent_by`). Two accounts at the same tier and no `_account` = the cascade's named
+ambiguity — no default is set by itself there, an admin picks one
+(`oto_identity op=set scope=org|group`). The token carries every consent this Microsoft
+account gave oto, the holder's personal ones included: the row keeps only what ITS
+consents asked for, plus the administrator tier of those services (`_borne_partagee`),
+and so does every renewal. Removed by its admin:
+`DELETE /api/settings/api-keys/microsoft?scope=org|group&account=…`.
 
 **Incremental consent.** Entra ACCUMULATES the consents of one account for one
 application: authorizing Outlook after SharePoint yields ONE refresh token that
@@ -300,12 +316,14 @@ def app_disponible(sub: str) -> bool:
 # --- the signed state --------------------------------------------------------
 
 class EtatConnexion(NamedTuple):
-    """What a person's state carries to the callback."""
+    """What a person's state carries to the callback; `scope`/`group` = the tier written."""
     sub: str
     org: int
     app: str
     connector: str
     tenant: Optional[str]
+    scope: str = "member"
+    group: Optional[int] = None
 
 
 class EtatApprobation(NamedTuple):
@@ -333,12 +351,15 @@ def _ctx_org(sub: str) -> int:
 
 
 def make_state(sub: str, org_id: int, return_app: str = "", connector: str = CONNECTOR,
-               tenant: Optional[str] = None) -> str:
+               tenant: Optional[str] = None, scope: str = "member",
+               group: Optional[int] = None) -> str:
     """`connector` (`c`): WHICH card requested the consent — the callback returns
     there. `tenant` (`t`): the directory the dialog signed in to — the code is
-    exchanged there, and the vault keeps it for the renewal."""
+    exchanged there, and the vault keeps it for the renewal. `scope` (`s`) and `group`
+    (`g`): the tier the account is written at."""
     return oauth_flow.sign_state(_AUD, {"sub": sub, "org": org_id, "app": return_app,
-                                        "c": connector, "t": tenant})
+                                        "c": connector, "t": tenant, "s": scope,
+                                        "g": group})
 
 
 def verify_state(state: Optional[str]) -> Optional[EtatConnexion]:
@@ -352,8 +373,12 @@ def verify_state(state: Optional[str]) -> Optional[EtatConnexion]:
         return None
     if tenant is not None and not isinstance(tenant, str):
         return None
+    scope, group = data.get("s") or "member", data.get("g")
+    if scope not in _PALIERS or (scope == "group" and not isinstance(group, int)):
+        return None
     return EtatConnexion(sub, org, oauth_flow.resolve_return_app(
-        return_app if isinstance(return_app, str) else ""), connector, tenant)
+        return_app if isinstance(return_app, str) else ""), connector, tenant, scope,
+        group if scope == "group" else None)
 
 
 def verify_admin_state(state: Optional[str]) -> Optional[EtatApprobation]:
@@ -374,15 +399,47 @@ def verify_admin_state(state: Optional[str]) -> Optional[EtatApprobation]:
 # --- starting the flow -------------------------------------------------------
 
 def build_auth_url(sub: str, return_app: str = "", connector: str = CONNECTOR,
-                   tenant: Optional[str] = None) -> str:
+                   tenant: Optional[str] = None, scope: str = "member") -> str:
     """The Microsoft dialog URL — for the account, or for ONE service (identity +
-    its scopes, `scopes_for`), on the directory `tenant` (already normalized)."""
+    its scopes, `scopes_for`), on the directory `tenant` (already normalized), for the
+    tier `scope` (`scope_target`: raises `PermissionError`/`ValueError`)."""
+    group = scope_target(sub, scope)
     org_id = _ctx_org(sub)
     return _coeur().auth.authorize_url(
         app()["client_id"], oauth_flow.redirect_uri(_CALLBACK_PATH),
         make_state(sub, org_id, oauth_flow.resolve_return_app(return_app), connector,
-                   tenant),
+                   tenant, scope, group),
         scopes=scopes_for(connector), tenant=annuaire(tenant))
+
+
+_PALIERS = ("member", "org", "group")
+
+
+def scope_target(sub: str, scope: str) -> Optional[int]:
+    """The team a connection at `scope` is written for (None for the person or the org).
+    Raises `ValueError` for an unknown tier, `PermissionError` unless `sub` administers
+    it: org admin for the org, lead of the ACTIVE team for the team (Google's rule)."""
+    from .. import access
+    if scope not in _PALIERS:
+        raise ValueError(f"invalid scope: {scope!r} (expected 'member', 'org' or 'group')")
+    if scope == "member":
+        return None
+    group = access.current_group(sub) if scope == "group" else None
+    if scope == "group" and group is None:
+        raise PermissionError("No active team: choose the team before connecting a "
+                              "Microsoft account on its behalf.")
+    _exiger_admin(sub, _ctx_org(sub), scope, group)
+    return group
+
+
+def _exiger_admin(sub: str, org_id: int, scope: str, group: Optional[int]) -> None:
+    from .. import roles
+    if scope == "org" and not roles.is_org_admin(sub, org_id):
+        raise PermissionError("Only an organization admin connects a Microsoft account "
+                              "on behalf of the whole organization.")
+    if scope == "group" and not roles.can_admin_group(sub, int(group)):
+        raise PermissionError("Only a team lead connects a Microsoft account on behalf "
+                              "of the team.")
 
 
 def admin_consent_url(sub: str, services: tuple[str, ...], tenant: Optional[str] = None,
@@ -447,8 +504,14 @@ def _start_flow_for(connector: str):
         except ValueError as e:
             raise AuthzDenied(400, "invalid_tenant", str(e))
         try:
+            # `scope` is a HIDDEN key like `app` (Google, Salesforce): never a form field.
             return connector_flow.FlowStart(auth_url=build_auth_url(
-                ctx.sub, values.get("app") or "", connector, tenant))
+                ctx.sub, values.get("app") or "", connector, tenant,
+                values.get("scope") or "member"))
+        except PermissionError as e:
+            raise AuthzDenied(403, "scope_forbidden", str(e))
+        except ValueError as e:
+            raise AuthzDenied(400, "invalid_scope", str(e))
         except RuntimeError as e:
             raise AuthzDenied(503, "oauth_misconfigured", str(e))
     return start
@@ -487,8 +550,9 @@ def _iso(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _scope(org_id: int, sub: str) -> tuple[str, str]:
-    return credentials_store.MEMBER, credentials_store.member_id(org_id, sub)
+def _scope(org_id: int, sub: str, scope: str = "member",
+           group: Optional[int] = None) -> tuple[str, str]:
+    return credentials_store.entity_for_scope(scope, org_id, sub, group)
 
 
 def _cle(ligne: tuple, refresh_token: str) -> str:
@@ -512,16 +576,32 @@ def _comptes(org_id: int, sub: str) -> list[dict]:
 
 def finish_connection(etat: EtatConnexion, code: str) -> dict:
     """The callback's work: the code against a grant, on the state's directory and
-    with the card's scopes, then the vault. Synchronous (DB + HTTP)."""
+    with the card's scopes, then the vault at the state's tier. Synchronous (DB + HTTP).
+    A shared tier is re-checked here: a right lost since the start writes nothing."""
+    if etat.scope != "member":
+        _exiger_admin(etat.sub, etat.org, etat.scope, etat.group)
     coordonnees = app()
     grant = _coeur().auth.exchange_code(
         coordonnees["client_id"], coordonnees["client_secret"], code,
         oauth_flow.redirect_uri(_CALLBACK_PATH),
         scopes=scopes_for(etat.connector), tenant=annuaire(etat.tenant))
-    return persist_grant(etat.sub, etat.org, grant, tenant=etat.tenant)
+    return persist_grant(etat.sub, etat.org, grant, tenant=etat.tenant, scope=etat.scope,
+                         group=etat.group, connector=etat.connector)
 
 
-def persist_grant(sub: str, org_id: int, grant, tenant: Optional[str] = None) -> dict:
+def _borne_partagee(scopes, connector: Optional[str] = None) -> frozenset:
+    """What a row of the org or a team may hold: its scopes, what THIS consent asks
+    (`connector`), and the administrator tier of those services — never the holder's
+    other consents, which the Entra token carries too."""
+    permis = _normalises(scopes) | (_scopes().short(scopes_for(connector))
+                                    if connector else frozenset())
+    tiers = tuple(s for svc in services_granted(" ".join(permis)) for s in admin_scopes(svc))
+    return permis | _scopes().short(tiers)
+
+
+def persist_grant(sub: str, org_id: int, grant, tenant: Optional[str] = None,
+                  scope: str = "member", group: Optional[int] = None,
+                  connector: str = CONNECTOR) -> dict:
     """Stores the account that has just connected, ALONGSIDE the others: the refresh
     token is the secret (`secret_kind="oauth"`), the identity read from `/me` goes into
     `meta`, with the union of the granted scopes and the directory (`tenant`).
@@ -531,8 +611,9 @@ def persist_grant(sub: str, org_id: int, grant, tenant: Optional[str] = None) ->
     (`oto_identity(op='rename')`); another account creates one, named by its
     lowercase address — followed by the directory in brackets on a client's directory
     (a guest's address is often the one of their own linked account). The first
-    linked account is the default (Google rule); a reconnection keeps the row's default
-    status and clears its health mark."""
+    linked account is the default (Google rule) — not at the org or team tier, where an
+    admin picks it; a reconnection keeps the row's default status and clears its health
+    mark. `scope`/`group`: the tier written (`connector` bounds a shared row's scopes)."""
     me = _coeur().FilesClient(grant.access_token).get_me() or {}
     microsoft_id = me.get("id")
     adresse = (me.get("mail") or me.get("userPrincipalName") or "").strip()
@@ -540,8 +621,8 @@ def persist_grant(sub: str, org_id: int, grant, tenant: Optional[str] = None) ->
         raise RuntimeError(
             "Microsoft did not say which account just connected (`/me` without `id` "
             "or without address): nothing was saved.")
-    entity_type, entity_id = _scope(org_id, sub)
-    comptes = _comptes(org_id, sub)
+    entity_type, entity_id = _scope(org_id, sub, scope, group)
+    comptes = credentials_store.list_accounts(entity_type, entity_id, CONNECTOR)
     deja = next((c for c in comptes
                  if (c.get("meta") or {}).get("microsoft_id") == microsoft_id), None)
     if deja is not None:
@@ -556,23 +637,29 @@ def persist_grant(sub: str, org_id: int, grant, tenant: Optional[str] = None) ->
                 "rename it (oto_identity op='rename', connector='microsoft') then "
                 "reconnect this one. Nothing was saved.")
     ancien = (deja or {}).get("meta") or {}
+    partage = scope != "member"
+    # Entra accumulates the consents: what this grant says, plus what was known.
+    scopes = _union(ancien.get("scopes"), grant.scope)
+    if partage:
+        scopes = " ".join(sorted(_normalises(scopes)
+                                 & _borne_partagee(ancien.get("scopes"), connector)))
     meta = {**{k: v for k, v in ancien.items()
                if not k.startswith("health_") and k != "tenant"},
             "email": adresse,
             "name": me.get("displayName"),
             "microsoft_id": microsoft_id,
-            # Entra accumulates the consents: what this grant says, plus what was known.
-            "scopes": _union(ancien.get("scopes"), grant.scope),
+            "scopes": scopes,
             "connected_at": _iso(datetime.now(timezone.utc)),
-            "is_default": bool(ancien.get("is_default")) if deja else not comptes}
+            "is_default": (bool(ancien.get("is_default")) if deja
+                           else not comptes and not partage)}
     if tenant:
         meta["tenant"] = tenant
     credentials_store.set_credential(entity_type, entity_id, CONNECTOR,
                                      grant.refresh_token, set_by=sub, meta=meta,
                                      account=account)
     _garder((entity_type, entity_id, account), grant)
-    logger.info("microsoft: account %s (org=%s)",
-                "reconnected" if deja else "added", org_id)
+    logger.info("microsoft: account %s (org=%s, tier=%s)",
+                "reconnected" if deja else "added", org_id, scope)
     return {"account": account, "email": adresse, "name": meta["name"]}
 
 
@@ -600,9 +687,9 @@ def lent_accounts(sub: str) -> list[dict]:
     `lender_org` and `via_group`/`via_org` (`{id, name}`); never the person's default.
     One entry per row: lent to her prevails over her team, her team over the org.
 
-    The cascade's team and org rungs skip this carrier (not org-shareable): a loan to a
-    team or to the org is served here, like a personal loan — only when the call names
-    it."""
+    The cascade's team and org rungs leave this carrier's loans alone
+    (`prets.RESOLVEUR_PROPRE`): a loan to a team or to the org is served here, like a
+    personal loan — only when the call names it."""
     from .. import access  # lazy
     return [{**c, "meta": {**c["meta"], "is_default": False}, "set_at": c.get("set_at")}
             for c in access.prets_de(sub, CONNECTOR)]
@@ -643,9 +730,10 @@ def resolve_account(sub: str, service: str, account: Optional[str] = None):
     `_account=`, otherwise the account pinned by the project (on the service's card,
     otherwise on the account's), otherwise the only linked account, otherwise the
     default account, otherwise a refusal that names the accounts (`McpError`).
-    The person's OWN accounts first; when they resolve nothing (none, or the named
-    account is not theirs), an account LENT by a peer — only the one the call NAMES
-    (`_lent_for_call`)."""
+    The person's OWN accounts first, then those of her active team, then of her org (the
+    cascade's rungs, unnamed); when they resolve nothing (none, or the named account is
+    none of theirs), an account LENT by a peer — only the one the call NAMES
+    (`_lent_for_call`), the single judge of Microsoft loans (`prets.RESOLVEUR_PROPRE`)."""
     from .. import access  # lazy: avoids any import cycle at boot
 
     if service not in SERVICE_SCOPES:
@@ -714,7 +802,10 @@ def access_token_for(sub: str, service: str, account: Optional[str] = None, *,
     # `.default` returns everything consented TODAY: an administrator's approval given
     # since the connection appears here, with no reconnection.
     if grant.scope:
-        connus = " ".join(sorted(_normalises(grant.scope)))
+        connus = _normalises(grant.scope)
+        if rc.entity_type != credentials_store.MEMBER:
+            connus &= _borne_partagee(meta.get("scopes"))
+        connus = " ".join(sorted(connus))
         if connus != meta.get("scopes"):
             credentials_store.update_meta(rc.entity_type, rc.entity_id, CONNECTOR,
                                           rc.account, {"scopes": connus})
@@ -726,19 +817,43 @@ def access_token_for(sub: str, service: str, account: Optional[str] = None, *,
 
 # --- what the cards display --------------------------------------------------
 
+def shared_accounts(sub: str, org: Optional[int]) -> list[dict]:
+    """The accounts of the person's active team, of a team a shared project lends, then
+    of her org — the cascade's order (`heritage.paliers_partages`) — with `shared`
+    (`group`/`org`) and `shared_owner` (`{id, name}`); never her default."""
+    from .. import access, group_store, org_store  # lazy
+    from ..access import heritage
+    if org is None:
+        return []
+    out = []
+    for palier, cible in heritage.paliers_partages(org, access.current_group(sub),
+                                                   heritage.du_contexte(sub, org)):
+        lignes = credentials_store.list_accounts(palier, str(cible), CONNECTOR)
+        if not lignes:
+            continue
+        fiche = (group_store.get_group(cible) if palier == "group"
+                 else org_store.get_org(cible)) or {}
+        out += [{**c, "meta": {**(c.get("meta") or {}), "is_default": False},
+                 "shared": palier, "shared_owner": {"id": cible, "name": fiche.get("name")}}
+                for c in lignes]
+    return out
+
+
 def accounts_for(sub: str, service: Optional[str] = None) -> list[dict]:
-    """The Microsoft accounts of the person in their context org, then those LENT to
-    them (`lent_by`, `lent_accounts`) — ALL of them for the account, those that
-    AUTHORIZED `service` for a service's card. Vault rows (`account`, `meta`,
-    `set_at`), no secret."""
+    """The Microsoft accounts of the person in their context org, then those of her team
+    and org (`shared`, `shared_accounts`), then those LENT to her (`lent_by`,
+    `lent_accounts`) — ALL of them for the account, those that AUTHORIZED `service` for a
+    service's card. Vault rows (`account`, `meta`, `set_at`), no secret. A name appears
+    once, at the nearest level: the one a call naming it resolves."""
     from .. import access  # lazy
 
     org = access.current_org(sub)
     comptes = _comptes(org, sub) if org is not None else []
-    # The accounts a peer LENT (`lent_by`): reachable like one's own, never revocable
-    # by the borrower. An own account of the same name wins (it is what resolves).
-    siens = {c["account"] for c in comptes}
-    comptes += [c for c in lent_accounts(sub) if c["account"] not in siens]
+    vus = {c["account"] for c in comptes}
+    for c in shared_accounts(sub, org) + lent_accounts(sub):
+        if c["account"] not in vus:
+            vus.add(c["account"])
+            comptes.append(c)
     if service is None:
         return comptes
     return [c for c in comptes

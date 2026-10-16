@@ -64,7 +64,8 @@ La plupart des connecteurs n'ont que **1 + 2**. Seuls les **connecteurs à optio
 > la carte qui en a besoin — un tenant ne fait vérifier que ce qu'il offre.
 >
 > **Troisième porteur depuis le 2026-10-08 : `microsoft`** (le compte Microsoft 365,
-> OAuth délégué par personne). `sharepoint` en devient le premier service
+> OAuth délégué par personne, ou au nom de l'org ou d'une équipe : `docs/partage-de-compte.md`
+> lot 5). `sharepoint` en devient le premier service
 > (`credential_of="microsoft"`), `outlook`, `outlook_calendar` et `teams` les suivants,
 > chacun né avec ses outils (une carte sans outil se présenterait comme un connecteur
 > sans en avoir les effets) — flux, lien, indice et identités se DÉRIVENT du registre

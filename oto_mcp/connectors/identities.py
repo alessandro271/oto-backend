@@ -677,10 +677,12 @@ def _register_google_services() -> None:
         _SELECTORS[con.name] = _google_select
 
 
-def _microsoft_list(sub: str, service: str) -> list[dict]:
-    """The member's Microsoft accounts that AUTHORIZED `service` — same shape as the
-    generic keyed backend, filtered like a Google service: `oto_identity(
-    connector='sharepoint')` must not offer an account that `sharepoint_file` will refuse."""
+def _microsoft_list(sub: str, service: "str | None") -> list[dict]:
+    """The member's Microsoft accounts that AUTHORIZED `service` (all of them for the
+    carrier, `service=None`) — same shape as the generic keyed backend, filtered like a
+    Google service: `oto_identity(connector='sharepoint')` must not offer an account that
+    `sharepoint_file` will refuse. An account of her team or org is marked like a shared
+    Google account (`shared`, `shared_scope`) plus `shared_owner` ({id, name})."""
     from .. import db
     from ..auth import microsoft as ms_auth
     comptes = ms_auth.accounts_for(sub, service)
@@ -695,6 +697,9 @@ def _microsoft_list(sub: str, service: str) -> list[dict]:
         ident = {"id": c["account"], "label": meta.get("label") or c["account"],
                  "status": "ok", "is_default": bool(meta.get("is_default")),
                  "channel": None}
+        if c.get("shared"):
+            ident.update(shared=True, shared_owner=c["shared_owner"],
+                         shared_scope="team" if c["shared"] == "group" else "org")
         if c.get("lent_by"):
             ident.update(granted=True, is_default=False,
                          owner={"sub": c["lent_by"], "email": emails.get(c["lent_by"]),
@@ -711,7 +716,8 @@ def _register_microsoft_services() -> None:
     shared by the services, as for Google). Registered BEFORE the generic keyed backend —
     which would otherwise take these multi-account connectors for vault keys under their
     name (no row lives there). The carrier itself goes through the generic backend
-    (list, default, rename). Population derived from the registry."""
+    (default, rename, the org and team tiers) except its member list, which says what a
+    call reaches (`_register_microsoft_carrier`). Population derived from the registry."""
     from .. import providers
     for con in providers._REGISTRY_LIST:
         if con.credential_of != "microsoft":
@@ -722,7 +728,17 @@ def _register_microsoft_services() -> None:
             lambda sub, iid, scope="member": _keyed_select(sub, "microsoft", iid))
 
 
+def _register_microsoft_carrier() -> None:
+    """The carrier's member list = the one of its services, unfiltered: her accounts,
+    her team's and org's (`shared`), the loans (`granted`) — the generic keyed list
+    only knows her own rows. Its org and team lists stay the generic ones."""
+    keyed = _LISTERS["microsoft"]
+    _LISTERS["microsoft"] = lambda sub, scope="member": (
+        _microsoft_list(sub, None) if scope == "member" else keyed(sub, scope))
+
+
 _register_google_services()
 _register_microsoft_services()
 _register_keyed_multi_account()
+_register_microsoft_carrier()
 _register_hosted_channels()

@@ -496,6 +496,15 @@ interdite) ; même refus à la pose d'un porteur que rien ne servirait
 (`org_loan_not_served`, Microsoft servi par son résolveur). Listé aux membres
 (`via=shared_with_me`) ; `visible_to` du prêteur contient `org:<id>`.
 
+**Un compte Microsoft de l'org ou d'une équipe** (lot 5 de `docs/partage-de-compte.md`) : le
+porteur `microsoft` est org-partageable (`byo_org`), un admin d'org ou le chef de l'équipe
+active le connecte au nom de l'une ou de l'autre (`scope=org|group` du flux), la ligne vit à
+l'entité `org`/`group` sous `microsoft` (pas de clé collée : `org_secret_meta` refuse un
+OAuth). Les paliers équipe et org de la résolution la servent aux membres sans nom, et la
+listent dans leurs instances (`visible_to` = l'équipe ou l'org). Ces paliers n'y lisent que
+les lignes de l'équipe et de l'org elles-mêmes : les prêts Microsoft restent jugés par son
+résolveur seul (`access.prets.RESOLVEUR_PROPRE`, `PretsDuParcours.cle_de_l_equipe`).
+
 **Le journal des prêts** (`connector_loan_events`, révision `0058_journal_des_prets`,
 `db/loan_events`) : chaque pose et chaque retrait EFFECTIF d'une cible (`user:`, `group:`,
 `org:`) y laisse une ligne — qui (`actor_sub`), quel compte (la ligne du coffre du

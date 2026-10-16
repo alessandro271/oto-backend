@@ -256,7 +256,8 @@ def env(monkeypatch):
 def test_registre_porteur_et_service():
     porteur, service = providers.REGISTRY[PORTEUR], providers.REGISTRY[SERVICE]
     for c in (porteur, service):
-        assert c.secret_kind == "oauth" and c.auth_modes == frozenset({"byo_user"})
+        # `byo_org` : un compte de l'org ou d'une équipe (lot 5 du partage de compte).
+        assert c.secret_kind == "oauth" and c.auth_modes == frozenset({"byo_user", "byo_org"})
         # Multi-compte DÉCLARÉ (OAuth ⟹ la dérivation dirait mono) : c'est ce qui branche
         # la mécanique commune — axe `_account=`, `oto_identity`, refus d'ambiguïté.
         assert c.cardinality == "multi" and c.auth_multi_account
@@ -267,6 +268,7 @@ def test_registre_porteur_et_service():
     # Le service n'a AUCUN credential à lui : coffre et comptes sont ceux du porteur.
     assert service.credential_of == PORTEUR
     assert providers.credential_provider(SERVICE) == PORTEUR
+    assert porteur.org_shareable and not service.org_shareable
 
 
 # ── Scopes par carte ────────────────────────────────────────────────────────
@@ -313,7 +315,8 @@ def test_state_ne_vaut_que_pour_ce_flux(env):
     from oto_mcp.auth import flow as oauth_flow
 
     etat = env.auth.make_state(SUB, ORG, "", SERVICE, "contoso.onmicrosoft.com")
-    assert env.auth.verify_state(etat) == (SUB, ORG, "", SERVICE, "contoso.onmicrosoft.com")
+    assert env.auth.verify_state(etat) == (SUB, ORG, "", SERVICE, "contoso.onmicrosoft.com",
+                                            "member", None)
     assert env.auth.verify_state(oauth_flow.sign_state(
         "meta_ads", {"sub": SUB, "org": ORG, "c": SERVICE})) is None
     # Une carte inconnue n'est pas une carte de retour.
@@ -342,7 +345,7 @@ def test_le_dialogue_d_un_service_demande_ses_scopes(env):
     assert client_id == "app-id-fictif" and retour == _RETOUR
     assert appel.kwargs == {"scopes": env.coeur.scopes.IDENTITY + env.coeur.scopes.FILES,
                             "tenant": "organizations"}
-    assert env.auth.verify_state(etat) == (SUB, ORG, "", SERVICE, None)
+    assert env.auth.verify_state(etat) == (SUB, ORG, "", SERVICE, None, "member", None)
 
 
 def test_le_flux_porte_l_annuaire_du_client(env):

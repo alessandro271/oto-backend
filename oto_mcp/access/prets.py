@@ -22,7 +22,8 @@ caller by name). The connector keeps whatever else it needs on it.
 
 Wired: Microsoft (`auth/microsoft._lent_for_call`, fed by `prets_de`), the cascade's team
 and org rungs for every other connector (`access/resolve._group_fetch`/`_org_fetch`: a
-loan to the team or to the org is never picked automatically), the access-level guard
+loan to the team or to the org is never picked automatically; for a carrier of
+`RESOLVEUR_PROPRE` they serve only the team's or the org's own accounts), the access-level guard
 (`connectors/access_level_gate`: a designated loan is judged under its lender's org and
 its borrowing team) and the echo (every connector: the descriptor is read from the row
 that served).
@@ -35,6 +36,10 @@ from mcp.types import ErrorData, INVALID_PARAMS
 
 from .. import credentials_store, db, instance_refs, providers
 from ..mcp_errors import McpError
+
+#: Carriers whose own resolver judges every loan (`auth/microsoft._lent_for_call`, fed by
+#: `prets_de`): the cascade's team and org rungs leave their loans alone — one judgment.
+RESOLVEUR_PROPRE = frozenset({"microsoft"})
 
 #: The carriers whose account AUTHORIZES its services one by one (incremental consent):
 #: a loan of their account lends a LIST of services, frozen at the lend
@@ -334,6 +339,8 @@ class PretsDuParcours:
     def au_palier_equipe(self, group_id: int, porteur: str, nom: Optional[str], *,
                          multi: bool) -> tuple[bool, Optional[tuple]]:
         """`(decided, hit)` at a team's rung (`_au_palier`)."""
+        if porteur in RESOLVEUR_PROPRE:
+            return False, None
         return self._au_palier("group", str(group_id), prets_de_l_equipe(group_id, porteur),
                                porteur, nom, multi=multi)
 
@@ -341,8 +348,20 @@ class PretsDuParcours:
                       multi: bool) -> tuple[bool, Optional[tuple]]:
         """`(decided, hit)` at the org's rung, for the loans to the whole org that serve
         `sub` (`_au_palier`)."""
+        if porteur in RESOLVEUR_PROPRE:
+            return False, None
         return self._au_palier("org", str(org_id), prets_de_l_org(org_id, porteur, sub),
                                porteur, nom, multi=multi)
+
+    @staticmethod
+    def cle_de_l_equipe(group_id: int, porteur: str, account: str) -> Optional[str]:
+        """The key a multi-account team rung reads: its own row only for a carrier of
+        `RESOLVEUR_PROPRE` (whose loans its resolver judges), else with the loans
+        `group_store` reads as team keys."""
+        from .. import group_store
+        if porteur in RESOLVEUR_PROPRE:
+            return credentials_store.get_credential("group", str(group_id), porteur, account)
+        return group_store.get_group_secret(group_id, porteur, account)
 
     def _au_palier(self, palier: str, eid: str, pretes: list[dict], porteur: str,
                    nom: Optional[str], *, multi: bool) -> tuple[bool, Optional[tuple]]:

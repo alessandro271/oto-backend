@@ -281,7 +281,7 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
             return group_store.get_group_secret(gid, mprov)
         eff, explicit = _pick_account("group", str(gid), mprov, "for your team",
                                       scope="group")
-        key = group_store.get_group_secret(gid, mprov, eff)
+        key = prets_vus.cle_de_l_equipe(gid, mprov, eff)
         if eff and not key and not explicit:
             raise _not_found(eff, mprov)
         return (key, eff) if key else None

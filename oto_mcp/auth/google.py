@@ -733,18 +733,8 @@ def _shared_targets(sub: str, org_id: int) -> list:
     beneficiary read and sent from the org's shared mailbox."""
     from .. import access
     from ..access import heritage
-    out = []
-    group = access.current_group(sub)
-    if group is not None:
-        out.append(("group", int(group)))
-    cles = heritage.du_contexte(sub, org_id)
-    herite = cles.groupe_herite if cles is not None else None
-    if herite is not None and herite != group:
-        out.append(("group", int(herite)))
-    org_cles = heritage.org_partagee(org_id, cles)
-    if org_cles is not None:
-        out.append(("org", int(org_cles)))
-    return out
+    return heritage.paliers_partages(org_id, access.current_group(sub),
+                                     heritage.du_contexte(sub, org_id))
 
 
 def scope_target(sub: str, scope: str) -> tuple:

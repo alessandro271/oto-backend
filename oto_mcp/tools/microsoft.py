@@ -26,13 +26,18 @@ def register(mcp: FastMCP) -> None:
         A service missing from the list has not been authorised on that account yet:
         connect it from its own connector card. `directory` is the client's directory the
         account signs in to (a guest account), null for its home directory.
+        `shared` (present only then) = "group" or "org": an account an admin connected on
+        behalf of your team or your whole organization, `shared_owner` ({id, name}) that
+        team or org — not yours to revoke.
         `lent_by` (present only then) = the e-mail (or name) of the colleague who LENT you
         that account: not yours to revoke; `lent_via_group` ({id, name}) when it is lent to
         a team of yours rather than to you, `lent_via_org` ({id, name}) when it is lent to
         your whole organization.
         Pass `account` as `_account` to the service tools; omitted, the project's
-        pinned account, else your only one, else your default one. A lent account is
-        used ONLY when `_account` names it: with no account of your own, a call without
+        pinned account, else your only one, else your default one, else your team's
+        account, else your organization's (several at one of these levels and no default:
+        refused, naming them). A lent account is used ONLY when `_account` names it: with
+        no account of your own, your team's or your organization's, a call without
         `_account` is refused and lists the lent accounts.
         """
         sub = access.current_user_sub_or_raise()
@@ -46,6 +51,8 @@ def register(mcp: FastMCP) -> None:
                  "is_default": bool((c.get("meta") or {}).get("is_default")),
                  "services": ms_auth.services_granted((c.get("meta") or {}).get("scopes")),
                  "directory": (c.get("meta") or {}).get("tenant"),
+                 **({"shared": c["shared"], "shared_owner": c["shared_owner"]}
+                    if c.get("shared") else {}),
                  # Lent by a peer (`oto_instance op=lend`): used only when `_account`
                  # names it, not yours to revoke.
                  **({"lent_by": preteurs[c["lent_by"]]} if c.get("lent_by") else {}),
