@@ -14,7 +14,8 @@ answers `{page, size, total}`, never the next page: every list here adds
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable
+from datetime import date, datetime, timezone
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Optional
 
 from mcp.types import ErrorData, INVALID_PARAMS
 
@@ -58,6 +59,31 @@ def hors_op(op: str, permis: Iterable[str], **fournis: Any) -> None:
     for name, value in fournis.items():
         if value is not None and value is not False and name not in permis:
             raise _bad(f"op={op!r} does not use `{name}`.")
+
+
+def instant_utc(value: Optional[str], name: str) -> Optional[str]:
+    """An ISO 8601 date-time for Modjo, in UTC with `Z`: Modjo refuses an offset
+    (`+02:00` → 400) and accepts only `Z`. A date-time with an offset is converted
+    (same instant); a date alone is midnight UTC; a date-time WITHOUT offset is
+    refused — its time zone would be a guess."""
+    if value is None:
+        return None
+    text = value.strip()
+    try:
+        if "T" not in text and " " not in text:
+            d = date.fromisoformat(text)
+            return f"{d.isoformat()}T00:00:00Z"
+        moment = datetime.fromisoformat(text[:-1] + "+00:00"
+                                        if text.endswith(("Z", "z")) else text)
+    except ValueError:
+        raise _bad(f"`{name}`: {value!r} is not an ISO 8601 date or date-time "
+                   "(e.g. 2026-10-01 or 2026-10-01T08:00:00+02:00).") from None
+    if moment.tzinfo is None:
+        raise _bad(f"`{name}`: {value!r} has no time zone. Add `Z` (UTC) or an "
+                   "offset (e.g. +02:00); it is converted to UTC.")
+    moment = moment.astimezone(timezone.utc)
+    spec = "milliseconds" if moment.microsecond else "seconds"
+    return moment.replace(tzinfo=None).isoformat(timespec=spec) + "Z"
 
 
 def need(op: str, **requis: Any) -> None:

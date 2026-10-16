@@ -31,7 +31,7 @@ from fastmcp import FastMCP
 
 from .. import output_projection
 from .lecture import LECTURE
-from .modjo_socle import _bad, _client, hors_op, need, paged, run
+from .modjo_socle import _bad, _client, hors_op, instant_utc, need, paged, run
 
 _WORKSPACE_PERMIS = {
     "tags": ("page", "size", "full"), "topics": ("page", "size", "full"),
@@ -122,13 +122,16 @@ def register(mcp: FastMCP) -> None:
         `full=True` returns the reviews as Modjo sends them.
 
         Args:
-            start_date_time: reviews created from this ISO 8601 date-time.
+            start_date_time: reviews created from this ISO 8601 date-time (with `Z`
+                or an offset, sent in UTC; a date alone = midnight UTC).
             end_date_time: reviews created until this date-time.
             order: asc | desc (default desc).
             page: page number, from 1.
             size: items per page, 1-100 (default 25).
             full: True = the raw reviews (answer ids and positions, template id).
         """
+        start_date_time = instant_utc(start_date_time, "start_date_time")
+        end_date_time = instant_utc(end_date_time, "end_date_time")
         return _shape(paged(run(lambda: _client().list_call_reviews(
             start_date_time=start_date_time, end_date_time=end_date_time,
             order=order, page=page, size=size))), "reviews", full)

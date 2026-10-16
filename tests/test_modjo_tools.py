@@ -107,6 +107,36 @@ def test_la_liste_passe_ses_filtres_et_dit_la_page_suivante(banc):
     assert kw["expand"] == ["contacts", "deal"]
 
 
+@pytest.mark.parametrize("donnee,envoyee", [
+    ("2026-10-05T08:00:00+02:00", "2026-10-05T06:00:00Z"),
+    ("2026-10-05T06:00:00Z", "2026-10-05T06:00:00Z"),
+    ("2026-10-05T06:00:00.250-01:00", "2026-10-05T07:00:00.250Z"),
+    ("2026-10-05", "2026-10-05T00:00:00Z"),
+])
+def test_une_date_part_en_utc_z_modjo_refuse_un_decalage(banc, donnee, envoyee):
+    """Modjo refuse `+02:00` (400) et n'accepte que `Z` : l'instant est converti."""
+    _appeler(banc, "modjo_calls", date_from=donnee, created_to=donnee)
+    _, _, kw = _appels(banc)[0]
+    assert kw["date_from"] == envoyee and kw["created_to"] == envoyee
+
+
+def test_une_date_heure_sans_fuseau_est_refusee(banc):
+    msg = _refus(banc, "modjo_calls", date_to="2026-10-05T08:00:00")
+    assert "date_to" in msg and "no time zone" in msg
+    assert "not an ISO 8601" in _refus(banc, "modjo_reviews",
+                                       start_date_time="05/10/2026")
+    assert _appels(banc) == []
+
+
+def test_revues_et_import_en_utc(banc):
+    _appeler(banc, "modjo_reviews", start_date_time="2026-10-01T00:00:00+02:00")
+    _appeler(banc, "modjo_calls", **{**_IMPORT, "date": "2026-10-12T11:30:00+02:00"},
+             confirm=True)
+    revues, imp = _appels(banc)
+    assert revues[2]["start_date_time"] == "2026-09-30T22:00:00Z"
+    assert imp[1][1] == "2026-10-12T09:30:00Z"
+
+
 def test_la_derniere_page_n_a_pas_de_suivante(banc):
     banc.prepare = _rendre("list_calls", {"data": [], "pagination": {"page": 2, "size": 25, "total": 50}})
     assert _appeler(banc, "modjo_calls")["pagination"]["next_page"] is None

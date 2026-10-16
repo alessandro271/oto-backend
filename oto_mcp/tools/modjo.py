@@ -39,7 +39,7 @@ from typing import Any, Dict, List, Literal, Optional
 from fastmcp import FastMCP
 
 from ..connectors import verify as connector_verify
-from .modjo_socle import _bad, _client, _verify, hors_op, need, paged, run
+from .modjo_socle import _bad, _client, _verify, hors_op, instant_utc, need, paged, run
 
 #: A transcript is served by slices of at most this many characters.
 TRANSCRIPT_MAX_CHARS = 30_000
@@ -181,7 +181,8 @@ def register(mcp: FastMCP) -> None:
             ids: list — only these numeric call ids (100 at most).
             title: list — case-insensitive substring of the title.
             min_duration: list — minimum duration, seconds.
-            date_from: list — calls that took place from this ISO 8601 date-time.
+            date_from: list — calls that took place from this ISO 8601 date-time
+                (with `Z` or an offset, sent in UTC; a date alone = midnight UTC).
             date_to: list — … until this date-time.
             created_from: list — created in Modjo from this date-time.
             created_to: list — … until this date-time.
@@ -196,7 +197,7 @@ def register(mcp: FastMCP) -> None:
             full: transcript — timed JSON blocks instead of text.
             tag_id: add_tag / remove_tag — the tag id.
             media_url: upload — REQUIRED, public https URL of the audio or video.
-            date: upload — REQUIRED, start of the call, ISO 8601.
+            date: upload — REQUIRED, start of the call, ISO 8601 date-time with `Z` or an offset.
             participants: upload — REQUIRED, [{"email", "type": "user"|"contact", "name"?}].
             name: upload — call title (generated from participants when omitted).
             direction: upload — inbound | outbound (default outbound).
@@ -223,6 +224,10 @@ def register(mcp: FastMCP) -> None:
         hors_op(op, _PERMIS[op], **fournis)
 
         if op == "list":
+            date_from, date_to = (instant_utc(date_from, "date_from"),
+                                  instant_utc(date_to, "date_to"))
+            created_from, created_to = (instant_utc(created_from, "created_from"),
+                                        instant_utc(created_to, "created_to"))
             return paged(run(lambda: _client().list_calls(
                 ids=ids, title=title, min_duration=min_duration, date_from=date_from,
                 date_to=date_to, created_from=created_from, created_to=created_to,
@@ -232,6 +237,7 @@ def register(mcp: FastMCP) -> None:
 
         if op == "upload":
             need(op, media_url=media_url, date=date, participants=participants)
+            date = instant_utc(date, "date")
             if dry_run or not confirm:
                 members = _member_check(participants)
                 return {"dry_run": True, "would_import": {
