@@ -45,6 +45,18 @@ MISSING_SANS_NOM = {
     "message": "The scope needed for this API call isn't available for public use.",
     "category": "MISSING_SCOPES",
 }
+#: Forme relevée sur un vrai portail (update d'une company, 15/10) : le `message`
+#: est une liste JSON dans une chaîne ; le nom vit sous `errors[]`. Portail fictif.
+PROPRIETE_INCONNUE = {
+    "status": "error",
+    "message": ('Property values were not valid: [{"isValid":false,"message":"Property '
+                '\\"linkedin_url\\" does not exist","error":"PROPERTY_DOESNT_EXIST",'
+                '"name":"linkedin_url","portalId":1234567}]'),
+    "errors": [{"message": 'Property "linkedin_url" does not exist',
+                "code": "PROPERTY_DOESNT_EXIST",
+                "context": {"propertyName": ["linkedin_url"]}}],
+    "category": "VALIDATION_ERROR",
+}
 HTML_404 = "<html><head><title>404</title></head><body>Not Found</body></html>"
 
 DEAL_PIPELINES = {"results": [
@@ -224,8 +236,47 @@ def test_401_keeps_the_token_guidance_and_still_marks_the_key():
     assert error_taxonomy.credential_rejected_in_chain(err)
 
 
+def test_400_unknown_property_names_it_and_points_at_hubspot_property():
+    from oto_mcp import error_taxonomy
+
+    err = S.translate(_http(400, PROPRIETE_INCONNUE), object_type="companies")
+    assert isinstance(err, McpError)
+    msg = err.error.message
+    assert "`linkedin_url` is not a property of companies" in msg
+    assert "nothing was written" in msg and "hubspot_property op='list'" in msg
+    assert "isValid" not in msg, "le corps brut de HubSpot ne passe plus"
+    assert "other_errors" not in err.oto_detail and "also refuses" not in msg
+    assert err.oto_detail["reason"] == "property_doesnt_exist"
+    assert err.oto_detail["properties"] == ["linkedin_url"]
+    info = error_taxonomy.classify(err)
+    assert info.code == "invalid_input" and not info.retryable
+
+
+def test_400_unknown_properties_all_named_even_without_context():
+    body = {"status": "error", "category": "VALIDATION_ERROR", "errors": [
+        {"code": "PROPERTY_DOESNT_EXIST", "message": 'Property "a_b" does not exist'},
+        {"code": "PROPERTY_DOESNT_EXIST", "message": 'Property "c_d" does not exist'},
+        {"code": "INVALID_EMAIL", "message": "Email address x is invalid"}]}
+    err = S.translate(_http(400, body), object_type="contacts")
+    assert err.oto_detail["properties"] == ["a_b", "c_d"]
+    assert "are not properties of contacts" in err.error.message
+    # L'autre refus du même 400 n'est pas avalé : il attendrait sinon le retry.
+    assert err.oto_detail["other_errors"] == ["Email address x is invalid"]
+    assert "HubSpot also refuses: Email address x is invalid." in err.error.message
+
+
+def test_400_unknown_property_never_reads_another_context_list_as_a_name():
+    body = {"status": "error", "category": "VALIDATION_ERROR", "errors": [
+        {"code": "PROPERTY_DOESNT_EXIST", "message": "invalid",
+         "context": {"propertyName": ["x_y"], "objectType": ["0-2"]}}]}
+    err = S.translate(_http(400, body), object_type="companies")
+    assert err.oto_detail["properties"] == ["x_y"]
+
+
 def test_other_refusals_are_left_alone():
     assert S.translate(_http(400, {"category": "VALIDATION_ERROR"})) is None
+    assert S.translate(_http(400, {"category": "VALIDATION_ERROR", "errors": [
+        {"code": "INVALID_OPTION", "message": "x is not a valid option"}]})) is None
     assert S.translate(_http(403, {"category": "BANNED"})) is None
 
 
@@ -372,6 +423,14 @@ def test_hubspot_object_404_html_is_clean(client):
     with pytest.raises(Exception) as e:
         _tool("hubspot_object")(op="get", object_type="tickets", object_id="42")
     assert "<html" not in str(e.value) and "not found" in str(e.value)
+
+
+def test_hubspot_object_update_with_an_unknown_property_is_a_named_refusal(client):
+    client.update_object.side_effect = _http(400, PROPRIETE_INCONNUE)
+    with pytest.raises(McpError) as e:
+        _tool("hubspot_object")(op="update", object_type="companies", object_id="9",
+                                properties={"linkedin_url": "https://example.test/x"})
+    assert e.value.oto_detail["properties"] == ["linkedin_url"]
 
 
 def test_empty_results_are_not_an_error(client):

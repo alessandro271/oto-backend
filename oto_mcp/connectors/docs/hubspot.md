@@ -24,6 +24,10 @@ there is no `crm.objects.tickets` scope (without `.read`/`.write`): if a guide t
 
 contacts and deals answer, but tickets (or lists, or pipelines) answer **403 `MISSING_SCOPES`**, with hubspot's message "the scope needed for this api call isn't available for public use". that message is misleading: the scope exists, it is just not ticked on your private app. the refusal oto returns names the scope to add — tick it in the private app's **scopes** tab and save. the token does not change, nothing to update in oto.
 
+### troubleshooting — 400 `PROPERTY_DOESNT_EXIST` on a write
+
+a create or update names a property your portal does not have (e.g. `linkedin_url` on a company, where hubspot's own property is `linkedin_company_page`). hubspot refuses the whole call, nothing is written. the refusal oto returns names the unknown properties: read the real internal names with `hubspot_property` (op `list`) and fix the procedure, or create the property (op `create`) if it should exist. in `hubspot_push_rows`, the batch stops at the first row (`stopped: hubspot_property_doesnt_exist`, `unknown_properties`) instead of failing every row the same way.
+
 ## usage — what you can do
 
 query and edit your hubspot crm (contacts, companies, deals, tickets) from claude.
