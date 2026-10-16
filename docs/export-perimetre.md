@@ -306,7 +306,12 @@ Ce qui change en chemin est `transformation.Transformation`, rien d'autre :
   et toute clé vers `tenants(id)` vaut 1 ;
 - **les comptes** perdent le préfixe `<slug>:` (validé le 28/09/2026) : toute VALEUR
   exactement égale à un sub du périmètre, ou à sa forme membre `<org>:<sub>`, est
-  remplacée, à toute profondeur d'un JSON.
+  remplacée, à toute profondeur d'un JSON ;
+- **le texte des valeurs servies** (`datastore_rows.valeurs_texte`/`valeurs_vec`,
+  `db/valeurs_servies.py`) part VIDE : il recopie les valeurs de `data` en un seul texte,
+  subs compris, que la règle des comptes ne sait pas réécrire. Après l'import, la cible
+  le recalcule par `scripts/remplir_valeurs_servies.py --appliquer` ; d'ici là, ses
+  lignes se cherchent par l'ancien prédicat — trouvées, à l'ancien prix.
 
 L'écriture se fait par lots (`TAILLE_LOT` lignes par aller-retour, `executemany`) : un
 journal d'appels complet compte des centaines de milliers de lignes.

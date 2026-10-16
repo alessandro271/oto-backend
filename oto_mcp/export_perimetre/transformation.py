@@ -12,6 +12,11 @@ Ce qu'elle change, et rien d'autre :
 - **le tenant** devient la ligne 1 de la cible : sa ligne prend l'id 1, toute clé
   étrangère vers `tenants(id)` vaut 1, et sa désactivation éventuelle ne le suit pas,
   ni les suspensions qu'elle a posées sur ses orgs (`orgs.suspended_tenant_id`) ;
+- **le texte des valeurs servies** (`datastore_rows.valeurs_texte`/`valeurs_vec`) part
+  VIDE : il recopie les valeurs de `data` — subs et URL compris — en un seul texte, que
+  la règle des comptes (valeur ÉGALE à un sub) ne sait pas réécrire. La cible le
+  recalcule (`scripts/remplir_valeurs_servies.py`) et cherche d'ici là ces lignes par
+  l'ancien prédicat ; aucune n'est perdue ;
 - **les URL de notre stockage public** (décision du 28/09/2026) : dans toute valeur
   texte, colonne ou contenu (page, JSON), `<base source>/` devient `<base cible>/` ; les
   objets, eux, gardent leur clé (`objets`). Seul l'import connaît la base cible, que la
@@ -22,6 +27,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ..db import valeurs_servies
 from .decouverte import Schema
 
 
@@ -60,6 +66,10 @@ class Transformation:
         for c in self.vers_tenant.get(table, ()):
             if cible[c] is not None:
                 cible[c] = 1
+        if table == valeurs_servies.TABLE:
+            for c in valeurs_servies.COLONNES:
+                if c in cible:
+                    cible[c] = None
         if table == "tenants":
             cible["id"] = 1
             # Une instance ne naît pas désactivée (#1165) : un tenant désactivé ICI au

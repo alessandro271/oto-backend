@@ -37,7 +37,8 @@ n'avance ni la révision ni le journal, tous deux conditionnés à un `data` dif
 ligne est vide, la requête la cherche par l'ancien prédicat (le GIN d'expression,
 inchangé) ; remplie, par ses colonnes. Pas d'instant de bascule à ne pas rater.
 
-**Lues seulement quand leurs index sont valides** (`pretes`). Avant — base servie dont
+**Lues seulement quand leurs index sont valides** (`pretes`, lu par `resoudre` au moment
+d'exécuter ; la construction du SQL, elle, reste pure). Avant — base servie dont
 les index attendent leur construction manuelle —, la requête garde exactement l'ancien
 chemin : un prédicat sur des colonnes sans index ferait parcourir tout le tableau.
 """
@@ -45,6 +46,7 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import replace
 
 from ._conn import _connect
 from .index_concurrent import IndexConcurrent, poser_au_demarrage, scalaire_de
@@ -57,6 +59,12 @@ TABLE = "datastore_rows"
 COLONNE_TEXTE = "valeurs_texte"
 COLONNE_VECTEUR = "valeurs_vec"
 REVISION = "0061_valeurs_materialisees"
+#: Les colonnes DÉRIVÉES de `data` : une copie qui ne se transporte pas. L'export de
+#: périmètre les laisse VIDES (`export_perimetre.transformation`) — il réécrit `data`
+#: (comptes dénudés, URL de stockage) sans pouvoir réécrire un texte qui en recopie les
+#: valeurs ; la cible les recalcule par le rattrapage, et les cherche d'ici là par
+#: l'ancien prédicat.
+COLONNES = (COLONNE_TEXTE, COLONNE_VECTEUR)
 
 
 def texte_de(data: str) -> str:
@@ -172,10 +180,14 @@ def pretes() -> bool:
     return _cache["pretes"]
 
 
-def lit_les_colonnes(recherche) -> bool:
-    """La recherche `recherche` lit-elle les colonnes ? Portée `values`, index prêts.
-    La portée `all` a son propre vecteur matérialisé (`search_vec`, #318)."""
-    return recherche.portee == "values" and pretes()
+def resoudre(recherche):
+    """La recherche telle qu'elle s'EXÉCUTE : `colonnes=True` quand elle est de portée
+    `values` et que les index des colonnes sont prêts. Appelée par le store au moment
+    d'exécuter — jamais par la construction du SQL, qui reste pure et lit ce champ. La
+    portée `all` a son propre vecteur matérialisé (`search_vec`, #318)."""
+    if recherche is None or recherche.portee != "values" or recherche.colonnes:
+        return recherche
+    return replace(recherche, colonnes=True) if pretes() else recherche
 
 
 def oublier() -> None:

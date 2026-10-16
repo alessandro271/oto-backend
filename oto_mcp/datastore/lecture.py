@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Optional
 
 from .. import db
+from ..db import valeurs_servies
 from . import layers as dsl
 from . import versions as dsver
 from . import schema as dsv2
@@ -128,7 +129,7 @@ class LectureMixin:
         `fields` (oto-backend#980, lot 2) : projette CHAQUE ligne dès sa fabrication
         (`_row_to_dict`), pas après coup — `["*"]` ou `None` = pas de projection,
         la page sort inchangée."""
-        cherche = recherche(q, q_scope)
+        cherche = valeurs_servies.resoudre(recherche(q, q_scope))
         ns_id = self._resolve(datastore)
         proj = None if not fields or "*" in fields else frozenset(fields)
         filters = self._clauses(ns_id, filter, filters)
@@ -185,7 +186,7 @@ class LectureMixin:
         """Nombre de lignes (mêmes `filter`/`filters`/`q`/`q_scope` que `cursor_rows`),
         poussé en SQL (`COUNT(*)`) — sans rapatrier les lignes (feedback #191 : stats
         d'un gros vivier sans charger 300+ lignes en contexte)."""
-        cherche = recherche(q, q_scope)
+        cherche = valeurs_servies.resoudre(recherche(q, q_scope))
         ns_id = self._resolve(datastore)
         clauses = self._clauses(ns_id, filter, filters)
         return db.datastore_count_rows(ns_id, q=cherche, filters=clauses)
@@ -203,7 +204,7 @@ class LectureMixin:
 
         `group_by` accepte une LISTE de colonnes (oto#22) : leurs valeurs sont mises en
         commun, une ligne comptant une occurrence par colonne renseignée."""
-        cherche = recherche(q, q_scope)
+        cherche = valeurs_servies.resoudre(recherche(q, q_scope))
         ns_id = self._resolve(datastore)
         clauses = self._clauses(
             ns_id, filter, filters,
@@ -268,7 +269,7 @@ class LectureMixin:
         exporte sur ce total)."""
         if total_max is not None and total_max < 1:
             raise ValueError(f"total_max={total_max} : un entier ≥ 1 est attendu.")
-        cherche = recherche(q, q_scope)
+        cherche = valeurs_servies.resoudre(recherche(q, q_scope))
         ns_id = self._resolve(datastore)
         proj = None if not fields or "*" in fields else frozenset(fields)
         clauses = self._clauses(ns_id, filter, filters) or None

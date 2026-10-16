@@ -61,10 +61,16 @@ class PorteeInconnue(ValueError):
 
 @dataclass(frozen=True)
 class Recherche:
-    """Une recherche validée : ses mots, et le texte où les chercher."""
+    """Une recherche validée : ses mots, et le texte où les chercher.
+
+    `colonnes` : la portée `values` se lit dans le texte MATÉRIALISÉ de la ligne
+    (`db/valeurs_servies.py`). Décidé au moment d'EXÉCUTER, par le store
+    (`valeurs_servies.resoudre`), jamais par la construction du SQL — qui reste pure,
+    et lit ce champ. Faux par défaut : l'ancien chemin, toujours juste."""
 
     mots: tuple[str, ...]
     portee: PorteeRecherche
+    colonnes: bool = False
 
 
 def recherche(q: Optional[str], q_scope: Optional[str] = None) -> Optional[Recherche]:

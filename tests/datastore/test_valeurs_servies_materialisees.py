@@ -20,10 +20,11 @@ import json
 import pathlib
 import sys
 import uuid
+from dataclasses import replace
 
 import pytest
 
-from oto_mcp.datastore.recherche import recherche
+from oto_mcp.datastore.recherche import Recherche, recherche
 from oto_mcp.db import search, valeurs_servies as vs
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
@@ -180,18 +181,37 @@ def test_une_ligne_vide_reste_trouvee(tableau, lecture):
     assert store.count_rows(ns, q="acme", q_scope="values") == 2
 
 
-def test_la_portee_all_ne_lit_pas_ces_colonnes():
+def test_la_portee_all_ne_lit_pas_ces_colonnes(monkeypatch):
     with pytest.raises(ValueError, match="values"):
-        search.lignes_trouvees_sql(recherche("x", "all"), materialisee=True)
-    assert not vs.lit_les_colonnes(recherche("x", "all"))
+        search.lignes_trouvees_sql(Recherche(("x",), "all", colonnes=True))
+    monkeypatch.setattr(vs, "pretes", lambda: True)
+    assert vs.resoudre(recherche("x", "all")).colonnes is False
+    assert vs.resoudre(recherche("x", "values")).colonnes is True
+    assert vs.resoudre(None) is None
+
+
+def test_construire_la_clause_ne_lit_pas_la_base(monkeypatch):
+    """La construction du SQL est PURE : l'état des index se lit à l'exécution, par
+    le store (`resoudre`), et voyage dans la recherche. Un test sans base construit
+    la clause d'une recherche `values` sans jamais toucher PostgreSQL."""
+    from oto_mcp import db
+
+    def interdit():
+        raise AssertionError("la construction du SQL a lu la base")
+    monkeypatch.setattr(vs, "pretes", interdit)
+    where, _ = db._ds_where(7, recherche("x", "values"), None)
+    assert f"{vs.COLONNE_VECTEUR} @@" not in where, "sans résolution : l'ancien chemin"
+    where, _ = db._ds_where(7, Recherche(("x",), "values", colonnes=True), None)
+    assert f"{vs.COLONNE_TEXTE} IS NULL AND" in where
 
 
 def test_le_predicat_lit_les_colonnes_puis_l_ancien():
-    clause, params = search.lignes_trouvees_sql(recherche("a b", "values"), materialisee=True)
+    clause, params = search.lignes_trouvees_sql(
+        replace(recherche("a b", "values"), colonnes=True))
     assert f"{vs.COLONNE_VECTEUR} @@" in clause and f"{vs.COLONNE_TEXTE} ILIKE" in clause
     assert f"{vs.COLONNE_TEXTE} IS NULL AND" in clause
     assert params == ["a"] * 4 + ["b"] * 4 and clause.count("%s") == len(params)
-    rang, _ = search.rang_des_lignes_sql(recherche("a", "values"), materialisee=True)
+    rang, _ = search.rang_des_lignes_sql(replace(recherche("a", "values"), colonnes=True))
     assert rang.startswith(f"ts_rank_cd(COALESCE({vs.COLONNE_VECTEUR}, ")
 
 
@@ -245,3 +265,44 @@ def test_la_pose_est_idempotente(live):
         assert vs.ordres_a_jouer(scalaire_de(conn)) == [vs.DDL_FONCTION]
     assert set(vs.INDEX) <= set(__import__("oto_mcp.db.index_concurrent",
                                            fromlist=["declares"]).declares())
+
+
+# ── les subs : fusion de comptes et export de périmètre ───────────────────────
+
+def test_la_fusion_de_comptes_garde_le_texte_aligne_sur_data(live):
+    """`migrate_sub` repointe les colonnes de sub inventoriées (propriétaire du
+    tableau, bail…) ; il ne réécrit JAMAIS `data`, contenu de l'utilisateur. Le texte
+    matérialisé, qui ne dépend que de `data`, reste donc celui de la ligne — vérifié
+    après une vraie fusion, sur un tableau du compte fusionné dont une valeur EST son
+    sub. Une réécriture de `data`, elle, passe par le déclencheur (plus haut)."""
+    from oto_mcp import db
+    from oto_mcp.db._conn import _connect
+
+    ancien, neuf = (f"sub-fusion-{x}-{uuid.uuid4().hex[:6]}" for x in ("a", "b"))
+    for sub in (ancien, neuf):
+        db.upsert_user(sub, email=f"{sub}@valeurs.invalid", name=sub)
+    ns_id = db.create_datastore("user", ancien, "tvs-fusion-" + uuid.uuid4().hex[:6])
+    _sql("INSERT INTO datastore_rows (ns_id, row_id, data) VALUES (%s, 'r', %s::jsonb)",
+         ns_id, json.dumps({"responsable": ancien, "note": "suivi"}))
+    assert db.migrate_sub(ancien, neuf, operator_source="banc valeurs servies")
+    with _connect() as conn:
+        assert conn.execute("SELECT owner_id FROM user_datastores WHERE id = %s",
+                            (ns_id,)).fetchone()["owner_id"] == neuf
+    c = _colonnes(ns_id, "r")
+    assert c["data"]["responsable"] == ancien, "data n'est pas réécrit par la fusion"
+    assert c["t"] == _texte_attendu(c["data"]) and ancien.lower() in c["t"].lower()
+
+
+def test_l_export_de_perimetre_laisse_le_texte_vide():
+    """Le texte recopie les valeurs de `data` en un seul blob : la règle des comptes
+    (valeur ÉGALE à un sub) ne sait pas l'y réécrire. Il part vide, la cible le
+    recalcule ; `data`, lui, est dénudé comme avant."""
+    from oto_mcp.export_perimetre.transformation import Transformation
+
+    t = Transformation(comptes={"t1:alice": "alice"}, vers_tenant={})
+    ligne = {"ns_id": 1, "row_id": "r", "data": {"qui": "t1:alice"},
+             vs.COLONNE_TEXTE: "t1:alice suivi", vs.COLONNE_VECTEUR: "'alice':2 't1':1"}
+    cible = t.appliquer(vs.TABLE, ligne)
+    assert cible["data"] == {"qui": "alice"}
+    assert cible[vs.COLONNE_TEXTE] is None and cible[vs.COLONNE_VECTEUR] is None
+    assert t.appliquer("docs", {"x": "t1:alice suivi"}) == {"x": "t1:alice suivi"}
