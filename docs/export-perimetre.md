@@ -307,11 +307,31 @@ Ce qui change en chemin est `transformation.Transformation`, rien d'autre :
 - **les comptes** perdent le préfixe `<slug>:` (validé le 28/09/2026) : toute VALEUR
   exactement égale à un sub du périmètre, ou à sa forme membre `<org>:<sub>`, est
   remplacée, à toute profondeur d'un JSON ;
-- **le texte des valeurs servies** (`datastore_rows.valeurs_texte`/`valeurs_vec`,
-  `db/valeurs_servies.py`) part VIDE : il recopie les valeurs de `data` en un seul texte,
-  subs compris, que la règle des comptes ne sait pas réécrire. Après l'import, la cible
-  le recalcule par `scripts/remplir_valeurs_servies.py --appliquer` ; d'ici là, ses
-  lignes se cherchent par l'ancien prédicat — trouvées, à l'ancien prix.
+- **les colonnes dérivées partent VIDES** (`transformation.DERIVEES`) : le vecteur de
+  classement `search_vec` de chaque source classée (`docs`, `projects`,
+  `org_instructions`, `nodes`, `datastore_rows`, `project_file_texts`, #318) et le texte
+  des valeurs servies (`datastore_rows.valeurs_texte`/`valeurs_vec`,
+  `db/valeurs_servies.py`). Ils recopient le contenu — sub qualifié et URL de notre
+  stockage compris — en un vecteur ou un texte d'un seul tenant, que les deux règles
+  ci-dessus ne savent pas réécrire : transportés tels quels, ils gardaient sur la cible
+  la trace de l'ancien compte et décrivaient un contenu qui n'y est plus. La cible les
+  reconstruit sur le contenu RÉÉCRIT, sans geste pour `search_vec` :
+  - **à la lecture**, tout de suite : la recherche et le classement lisent
+    `COALESCE(search_vec, <vecteur calculé>)` (`search.rank_expr`) — une ligne vide se
+    trouve et se classe, au prix du calcul ;
+  - **par la boucle `rank_backfill`**, au démarrage de l'instance : déclarée sans action
+    chez un tiers (`boucles_de_fond`), elle tourne sur TOUTE instance, armée par défaut
+    (`OTO_RANK_BACKFILL_ENABLED`), et remplit par tranches les vecteurs vides
+    (`search.rank_backfill_sql`) ;
+  - le texte des valeurs servies, lui, se recalcule par
+    `scripts/remplir_valeurs_servies.py --appliquer` après l'import ; d'ici là, ces
+    lignes se cherchent par l'ancien prédicat — trouvées, à l'ancien prix.
+
+  Prouvé par `test_import_bout_en_bout.py::test_aucun_vecteur_de_classement_ne_survit_au_contenu_reecrit` :
+  la source porte des vecteurs remplis où se lisent le slug du compte qualifié et l'hôte
+  de notre stockage ; sur la cible, aucun vecteur n'a voyagé, la ligne se trouve quand
+  même, et la requête de la boucle reconstruit des vecteurs égaux au calcul sur le
+  contenu réécrit, sans ces deux traces.
 
 L'écriture se fait par lots (`TAILLE_LOT` lignes par aller-retour, `executemany`) : un
 journal d'appels complet compte des centaines de milliers de lignes.

@@ -12,11 +12,12 @@ Ce qu'elle change, et rien d'autre :
 - **le tenant** devient la ligne 1 de la cible : sa ligne prend l'id 1, toute clé
   étrangère vers `tenants(id)` vaut 1, et sa désactivation éventuelle ne le suit pas,
   ni les suspensions qu'elle a posées sur ses orgs (`orgs.suspended_tenant_id`) ;
-- **le texte des valeurs servies** (`datastore_rows.valeurs_texte`/`valeurs_vec`) part
-  VIDE : il recopie les valeurs de `data` — subs et URL compris — en un seul texte, que
-  la règle des comptes (valeur ÉGALE à un sub) ne sait pas réécrire. La cible le
-  recalcule (`scripts/remplir_valeurs_servies.py`) et cherche d'ici là ces lignes par
-  l'ancien prédicat ; aucune n'est perdue ;
+- **les colonnes dérivées** (`DERIVEES`) partent VIDES : le vecteur de classement
+  `search_vec` de chaque source classée (#318) et le texte des valeurs servies
+  (`datastore_rows.valeurs_texte`/`valeurs_vec`). Ils recopient le contenu — subs et
+  URL compris — en un seul vecteur ou texte, que les deux règles ci-dessus ne savent pas
+  réécrire. La cible les recalcule sur le contenu réécrit ; d'ici là, une ligne se
+  trouve et se classe par le calcul (`COALESCE`, ancien prédicat), aucune n'est perdue ;
 - **les URL de notre stockage public** (décision du 28/09/2026) : dans toute valeur
   texte, colonne ou contenu (page, JSON), `<base source>/` devient `<base cible>/` ; les
   objets, eux, gardent leur clé (`objets`). Seul l'import connaît la base cible, que la
@@ -27,8 +28,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..db import valeurs_servies
+from ..db import search, valeurs_servies
 from .decouverte import Schema
+
+#: Les colonnes DÉRIVÉES du contenu d'une ligne, par table : une copie de ses valeurs,
+#: subs et URL compris, que la règle des comptes (valeur ÉGALE à un sub) et celle des
+#: URL ne savent pas réécrire dans un vecteur ou un texte d'un seul tenant. Elles partent
+#: VIDES ; la cible les recalcule (à la lecture faute de valeur, puis par sa boucle ou
+#: son rattrapage) sur le contenu déjà réécrit.
+DERIVEES: dict[str, tuple[str, ...]] = {t: (search.RANK_VECTOR_COLUMN,)
+                                        for t in search.RANKED_SOURCES}
+DERIVEES[valeurs_servies.TABLE] = (*DERIVEES.get(valeurs_servies.TABLE, ()),
+                                   *valeurs_servies.COLONNES)
 
 
 @dataclass(frozen=True)
@@ -66,10 +77,9 @@ class Transformation:
         for c in self.vers_tenant.get(table, ()):
             if cible[c] is not None:
                 cible[c] = 1
-        if table == valeurs_servies.TABLE:
-            for c in valeurs_servies.COLONNES:
-                if c in cible:
-                    cible[c] = None
+        for c in DERIVEES.get(table, ()):
+            if c in cible:
+                cible[c] = None
         if table == "tenants":
             cible["id"] = 1
             # Une instance ne naît pas désactivée (#1165) : un tenant désactivé ICI au

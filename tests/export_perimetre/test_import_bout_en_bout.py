@@ -42,6 +42,9 @@ from oto_mcp.export_perimetre.importation import (  # noqa: E402
     TAILLE_LOT, ImportRefuse, importer)
 from oto_mcp.export_perimetre.rechiffrement import AAD, empreinte_cle  # noqa: E402
 from oto_mcp.export_perimetre.transformation import Transformation  # noqa: E402
+from oto_mcp.db.search import RANKED_SOURCES, _vec, rank_backfill_sql  # noqa: E402
+from oto_mcp.datastore.recherche import recherche  # noqa: E402
+from oto_mcp.db.search import lignes_trouvees_sql  # noqa: E402
 from oto_mcp.export_perimetre.objets import StockageS3  # noqa: E402
 from perimetre_banc import (  # noqa: E402
     A, B, BASE_CIBLE, BASE_SOURCE, SECRET, FauxS3, _credential, _sur, base_vide, demarrer,
@@ -87,6 +90,11 @@ def _marquees(dsn: str, marqueur: str) -> dict[str, int]:
 def source(live, pg_module_dsn):
     with psycopg.connect(pg_module_dsn, autocommit=True, row_factory=dict_row) as c:
         a, b = semer(c, A, cle=CLE_SOURCE), semer(c, B, cle=CLE_SOURCE)
+        # Les vecteurs de classement remplis, comme la boucle de fond le fait sur toute
+        # instance (`rank_backfill`, #318) : sans eux, l'export n'en transporterait aucun.
+        for t in RANKED_SOURCES:
+            while c.execute(rank_backfill_sql(t, 1000)).rowcount:
+                pass
         # Un journal qui dépasse plusieurs lots d'écriture (`importation.TAILLE_LOT`).
         c.execute("INSERT INTO tool_calls (server, kind, sub, tool, org_id, args) "
                   "SELECT 'oto', 'tool', %s, 'oto_doc', %s, "
@@ -875,3 +883,45 @@ def test_un_compte_d_un_autre_tenant_refuse_a_l_export_en_se_nommant(anciens, tm
     assert refus.value.comptes == {"tool_calls.sub": 1, "connector_selection_seeded.sub": 1}
     assert "tool_calls.sub : 1 ligne(s)" in str(refus.value)
     assert not chemin.exists()
+
+
+def test_aucun_vecteur_de_classement_ne_survit_au_contenu_reecrit(source, cible):
+    """`search_vec` recopie le contenu d'une ligne — sub qualifié et URL de notre
+    stockage compris — en un vecteur que les règles de l'export (valeur ÉGALE à un sub,
+    URL dans un texte) ne réécrivent pas. Transporté tel quel, il garderait sur la cible
+    la trace de l'ancien compte et décrirait un contenu qui n'y est plus. Il part vide,
+    et la cible le reconstruit sur le contenu réécrit — par le calcul à la lecture,
+    puis par la boucle qui tourne sur toute instance."""
+    slug, hote = slug_de(A), BASE_SOURCE.split("//", 1)[1]
+    trace = f"(search_vec @@ '{slug}'::tsquery OR search_vec @@ '{hote}'::tsquery)"
+    with psycopg.connect(source["dsn"], row_factory=dict_row) as c:
+        assert c.execute(f"SELECT count(*) AS n FROM datastore_rows WHERE {trace}"
+                         ).fetchone()["n"], "le banc voit la trace à la source"
+    with psycopg.connect(cible["dsn"], row_factory=dict_row) as c:
+        for t, expr in RANKED_SOURCES.items():
+            perimes = c.execute(
+                f"SELECT count(*) AS n FROM {t} WHERE search_vec IS NOT NULL "
+                f"AND search_vec IS DISTINCT FROM {_vec(expr)}").fetchone()["n"]
+            assert perimes == 0, f"{t} : un vecteur décrit un contenu qui n'est plus là"
+            assert c.execute(f"SELECT count(*) AS n FROM {t} WHERE search_vec IS NOT NULL"
+                             ).fetchone()["n"] == 0, f"{t} : le vecteur a voyagé"
+        assert not c.execute(f"SELECT count(*) AS n FROM datastore_rows WHERE {trace}"
+                             ).fetchone()["n"]
+        # ① Vide, la ligne se TROUVE et se classe quand même : le vecteur se calcule à
+        # la lecture (`rank_expr`, `COALESCE(search_vec, …)`).
+        clause, params = lignes_trouvees_sql(recherche("ligne", "all"))
+        trouvees = c.execute(f"SELECT count(*) AS n FROM datastore_rows WHERE {clause}",
+                             params).fetchone()["n"]
+        assert trouvees == c.execute("SELECT count(*) AS n FROM datastore_rows"
+                                     ).fetchone()["n"] > 0
+        # ② La boucle de la cible (sa requête, `rank_backfill_sql`) le reconstruit, et
+        # sur le contenu RÉÉCRIT : plus aucune trace de l'ancien compte ni de l'URL.
+        for t in RANKED_SOURCES:
+            while c.execute(rank_backfill_sql(t, 1000)).rowcount:
+                pass
+            assert c.execute(f"SELECT count(*) AS n FROM {t} WHERE search_vec IS NULL "
+                             f"OR search_vec IS DISTINCT FROM {_vec(RANKED_SOURCES[t])}"
+                             ).fetchone()["n"] == 0
+        assert not c.execute(f"SELECT count(*) AS n FROM datastore_rows WHERE {trace}"
+                             ).fetchone()["n"]
+        c.rollback()
