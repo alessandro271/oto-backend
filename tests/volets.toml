@@ -161,6 +161,7 @@ chemins = [
   "oto_mcp/roles.py",
   "oto_mcp/ownership.py",
   "oto_mcp/verrou_org.py",
+  "oto_mcp/outils_du_travail.py",  # liste d'outils du travail hébergé, tenue à chaque appel
   "oto_mcp/url_perimeter.py",
   "oto_mcp/anon_visibility.py",
   "oto_mcp/activation.py",
