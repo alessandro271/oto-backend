@@ -153,8 +153,12 @@ def seams(monkeypatch):
     monkeypatch.setattr(ci.access, "is_super_admin", lambda sub: False)
     import oto_mcp.roles as roles_mod
     monkeypatch.setattr(roles_mod, "is_org_admin", lambda sub, org: False)
+    # The carrier translation stays the REAL one: a fake would hide the very seam the
+    # `connector=` filter shares with the loan.
+    from oto_mcp import providers as vrais_providers
     monkeypatch.setattr(ci, "providers", SimpleNamespace(
-        REGISTRY=_FAKE_REGISTRY, PERSONAL_CROSS_ORG_PROVIDERS=frozenset()))
+        REGISTRY=_FAKE_REGISTRY, PERSONAL_CROSS_ORG_PROVIDERS=frozenset(),
+        credential_provider=vrais_providers.credential_provider))
     return SimpleNamespace(vault=vault, instances=instances, partages=partages,
                            visibilites=visibilites, monkeypatch=monkeypatch)
 
@@ -338,6 +342,17 @@ def test_sort_and_filters(seams):
     assert {i["connector"] for i in _run(connector="hunter")["instances"]} == {"hunter"}
     assert {i["level"] for i in _run(level="member")["instances"]} == {"member"}
     assert _run(connector="hunter", level="member")["count"] == 0
+
+
+def test_filtre_par_service_retrouve_le_compte_qui_le_porte(seams):
+    """Signal 1399 : `google_ads` n'a pas de ligne de coffre, il emprunte le compte
+    `google`. Filtrer sur le service retrouve ce compte (même traduction que le prêt),
+    jamais une liste vide."""
+    seams.vault[_member_key()] = [_row("google", "moi@exemple.test"), _row("zoho")]
+    for service in ("google_ads", "gmail", "google"):
+        out = _run(connector=service)["instances"]
+        assert [(i["connector"], i["account"]) for i in out] == [
+            ("google", "moi@exemple.test")], service
 
 
 def test_level_invalid_rejected_by_pydantic():

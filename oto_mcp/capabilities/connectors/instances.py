@@ -553,9 +553,11 @@ def _list_instances(ctx: ResolvedCtx, inp: ListInstancesInput) -> dict:
         logger.warning("instances: 'personal cross-org' unavailable (fail-open)",
                        exc_info=True)
 
-    # Input filters.
+    # Input filters. A service card (`google_ads`, `gmail`…) owns no vault row: it is
+    # filtered under its carrier, the same translation as the loan (`credential_provider`).
     if inp.connector:
-        out = [i for i in out if i["connector"] == inp.connector]
+        carrier = providers.credential_provider(inp.connector)
+        out = [i for i in out if providers.credential_provider(i["connector"]) == carrier]
     if inp.level:
         out = [i for i in out if i["level"] == inp.level]
 

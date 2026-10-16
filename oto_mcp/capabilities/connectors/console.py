@@ -311,7 +311,7 @@ CAPABILITIES += [
         description=(
             "Connector INSTANCES (connector x auth/config; the secret is never returned). "
             "op=list (instances visible to you by proximity — member/group/org/tenant/platform, "
-            "optional filters `connector`, `level`; `id` = `inst:<n>`, the instance's stable "
+            "optional filters `connector` — a service card such as `google_ads` finds the account it borrows — and `level`; `id` = `inst:<n>`, the instance's stable "
             "identifier — may be missing, and `ref` stays the pin handle for instance=; "
             "`visible_to` = the scopes that can DISCOVER it, derived from the access chain — "
             "descriptive, it does not filter this list) "
