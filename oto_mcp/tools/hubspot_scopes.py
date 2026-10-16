@@ -176,6 +176,18 @@ def unknown_properties(e) -> list[str]:
     return found
 
 
+def other_errors(e) -> list[str]:
+    """The messages of the OTHER entries of a 400's `errors[]` — an update can be
+    refused for an unknown property AND an invalid value at once. A refusal that
+    names only the first would hide the second until the retry."""
+    body = getattr(e, "body", None)
+    if _status(e) != 400 or not isinstance(body, dict):
+        return []
+    return [str(err.get("message") or err.get("code"))
+            for err in body.get("errors") or []
+            if isinstance(err, dict) and err.get("code") != "PROPERTY_DOESNT_EXIST"]
+
+
 def unknown_property_refusal(e, *, object_type=None) -> Optional[McpError]:
     """The 400 PROPERTY_DOESNT_EXIST as an actionable refusal, or None for anything else.
 
@@ -190,6 +202,8 @@ def unknown_property_refusal(e, *, object_type=None) -> Optional[McpError]:
     of = f" of {object_type}" if object_type else ""
     otype = f" object_type={object_type!r}" if object_type else ""
     verb = "is not a property" if len(names) == 1 else "are not properties"
+    autres = other_errors(e)
+    also = (" HubSpot also refuses: " + "; ".join(autres) + ".") if autres else ""
     return _refusal(
         f"HubSpot refuses this call: {listed} {verb}{of} on this portal "
         "(400 PROPERTY_DOESNT_EXIST) — the call was refused as a whole, nothing was "
@@ -197,9 +211,10 @@ def unknown_property_refusal(e, *, object_type=None) -> Optional[McpError]:
         f"properties differ from one portal to the next: read the real names with "
         f"hubspot_property op='list'{otype} and retry with the right one. If the "
         "property should exist, create it first (hubspot_property op='create', or "
-        "on the HubSpot side). Retrying the same call unchanged fails the same way.",
+        "on the HubSpot side). Retrying the same call unchanged fails the same way."
+        + also,
         reason="property_doesnt_exist", status=400, object_type=object_type,
-        properties=names)
+        properties=names, other_errors=autres or None)
 
 
 def family_of(object_type=None, family=None) -> Optional[str]:

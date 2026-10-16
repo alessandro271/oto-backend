@@ -245,6 +245,7 @@ def test_400_unknown_property_names_it_and_points_at_hubspot_property():
     assert "`linkedin_url` is not a property of companies" in msg
     assert "nothing was written" in msg and "hubspot_property op='list'" in msg
     assert "isValid" not in msg, "le corps brut de HubSpot ne passe plus"
+    assert "other_errors" not in err.oto_detail and "also refuses" not in msg
     assert err.oto_detail["reason"] == "property_doesnt_exist"
     assert err.oto_detail["properties"] == ["linkedin_url"]
     info = error_taxonomy.classify(err)
@@ -259,6 +260,9 @@ def test_400_unknown_properties_all_named_even_without_context():
     err = S.translate(_http(400, body), object_type="contacts")
     assert err.oto_detail["properties"] == ["a_b", "c_d"]
     assert "are not properties of contacts" in err.error.message
+    # L'autre refus du même 400 n'est pas avalé : il attendrait sinon le retry.
+    assert err.oto_detail["other_errors"] == ["Email address x is invalid"]
+    assert "HubSpot also refuses: Email address x is invalid." in err.error.message
 
 
 def test_400_unknown_property_never_reads_another_context_list_as_a_name():
