@@ -191,7 +191,7 @@ def store(monkeypatch):
                    q=None, filters=None, order_type=None, order_options=None):
         return rows[offset:offset + limit]
 
-    def _fake_count(ns_id, *, q=None, filters=None):
+    def _fake_count(ns_id, *, q=None, filters=None, jusqua=None):
         return len(rows)
 
     monkeypatch.setattr(D.db, "datastore_list_rows", _fake_page)

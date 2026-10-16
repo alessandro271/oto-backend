@@ -73,7 +73,7 @@ def test_filter_pushed_to_sql(store):
 
 def test_count_rows_pushes_filter_to_sql(monkeypatch):
     seen = {}
-    def _fake_count(ns_id, q=None, filters=None):
+    def _fake_count(ns_id, q=None, filters=None, jusqua=None):
         seen["filters"] = filters
         return 301
     monkeypatch.setattr(D.db, "datastore_count_rows", _fake_count)
