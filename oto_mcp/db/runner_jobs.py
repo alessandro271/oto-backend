@@ -1186,6 +1186,17 @@ def repli_disponible(org_id: Optional[int], org_ids: Optional[list], worker_sub:
     return None
 
 
+def charge_du_travail(job_id: int) -> Optional[dict]:
+    """La charge STOCKÉE d'un travail (`payload`), ou None s'il n'existe pas — ce que la
+    liste d'outils d'un travail hébergé lit à chaque appel (`outils_du_travail`). Sans
+    filtre d'org : le travail est celui du jeton de la requête, pas un nom passé par
+    l'appelant."""
+    with _connect() as conn:
+        row = conn.execute("SELECT payload FROM runner_jobs WHERE id = %s",
+                           (job_id,)).fetchone()
+    return row["payload"] if row else None
+
+
 def porteur_et_famille(job_id: int) -> Optional[dict]:
     """`{sub, org_id, model_family, abonnement}` d'un travail — de quoi adresser le
     rapport de forfait à la conclusion (OTO-130) à l'abonnement qui l'a SERVI

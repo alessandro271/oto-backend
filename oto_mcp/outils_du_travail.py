@@ -1,0 +1,101 @@
+"""La liste d'outils d'un travail hébergé, tenue PAR LE SERVEUR sur chaque chemin d'appel (#1256).
+
+Un travail du runner déclare ses outils (`payload.tools`, au canonique). Jusqu'ici, la seule
+borne était celle du worker : il ne sert au modèle que ces outils (`tools/list` filtré) et
+refuse un `tools/call` hors liste. Mais le jeton de délégation que le serveur lui remet
+(`capabilities/runner_jobs._delegue`) ouvre TOUT le catalogue du porteur, et un outil de la
+liste qui en appelle d'autres côté serveur les appelait sans que personne regarde la liste :
+`oto_call`, `oto_recipe` (recette déclarative, `for_each`, échantillon, recette en code et son
+pont). Vécu le 11/10/2026 : un `oto_recipe op=test` lancé par un travail a appelé `fr_siret`,
+absent de sa liste — l'appel n'a échoué que faute de clé du fournisseur.
+
+**Tout outil hors de la liste du travail est refusé, quel que soit le chemin** (code
+`tool_not_in_job`). Les points de passage sont ceux de l'activation d'un connecteur
+(`connectors/activation_gate.py`) :
+
+- l'appel DIRECT (`middleware/call_context.CallContextMiddleware`) — le worker filtre déjà,
+  mais une borne qui ne vit que chez le client n'en est pas une ;
+- tout appel lancé DEPUIS le serveur (`tools/meta.executer_cible`, le corps d'`oto_call`, des
+  pages d'une recette et des appels du pont d'une recette en code) ;
+- et, pour une recette, son jugement AVANT tout effet (`recipes/moteur._outil`) : refusée
+  avant d'ouvrir un tableau ou de déclarer une colonne, pas à la première page.
+
+**La source** : le travail porté par le jeton de la requête (`verrou_org.travail_de_la_requete`,
+posé au bord MCP et au bord REST), et sa charge EN BASE — jamais un argument de l'appel. La liste
+est celle que le worker SERT (`outils_servis`, partagée avec la réservation) : un écart entre les
+deux refuserait un outil que l'agent voit, ou laisserait passer un outil qu'il ne voit pas.
+
+**Fail-closed** : une liste illisible ou qui n'en est pas une ne permet rien ; un travail
+introuvable non plus. Seuls passent en plus les outils que l'HÔTE appelle lui-même avec le jeton
+pour encadrer le travail (`OUTILS_DE_L_HOTE`) — jamais un outil de connecteur.
+
+Hors jeton de délégation (une personne, une clé d'API, une clé d'org), rien ne change.
+"""
+from __future__ import annotations
+
+from typing import Optional
+
+from mcp.types import INVALID_PARAMS, ErrorData
+from starlette.concurrency import run_in_threadpool
+
+from . import db, deprecations, verrou_org
+from .mcp_errors import McpError
+
+#: Le code nommé d'un refus. Testé par les appelants, jamais la phrase.
+CODE = "tool_not_in_job"
+
+#: L'outil par lequel l'agent lit la procédure que son instruction lui désigne : ajouté à la
+#: liste SERVIE d'un travail qui porte une procédure (`outils_servis`).
+OUTIL_DE_LECTURE = "oto_procedure"
+
+#: Ce que le WORKER appelle lui-même avec le jeton délégué, hors de la boucle du modèle :
+#: ouvrir le run technique du travail et le conclure (oto-runner `worker.py`,
+#: `conclusion.py`). Le modèle ne les reçoit que si la liste les nomme.
+OUTILS_DE_L_HOTE = frozenset({"run_start", "run_finish"})
+
+
+def outils_servis(charge: dict):
+    """La liste d'outils que le worker SERT pour cette charge : `tools`, plus l'outil de
+    lecture de la procédure quand le travail en porte une (`runner_jobs._charge_servie`).
+    Une liste qui n'est pas une liste est rendue telle quelle : la réparer ici en
+    inventerait une."""
+    outils = charge.get("tools") if "tools" in charge else []
+    if charge.get("procedure") and isinstance(outils, list) \
+            and OUTIL_DE_LECTURE not in outils:
+        return [*outils, OUTIL_DE_LECTURE]
+    return outils
+
+
+def _permis(job_id: Optional[int]) -> frozenset:
+    """Sync (base) : les outils que ce travail permet, au canonique. Vide si le travail est
+    introuvable ou si sa liste n'en est pas une."""
+    charge = db.charge_du_travail(int(job_id)) if job_id is not None else None
+    outils = outils_servis(charge) if isinstance(charge, dict) else None
+    if not isinstance(outils, list):
+        return frozenset()
+    return frozenset(deprecations.tool_canonique(n) for n in outils if isinstance(n, str))
+
+
+def refus(name: str) -> Optional[str]:
+    """Sync (base) : le message du refus si `name` est hors de la liste du travail de la
+    requête — None si l'appel passe (outil de la liste, outil de l'hôte, ou requête qui
+    n'est pas un travail hébergé)."""
+    verrou = verrou_org.travail_de_la_requete()
+    if verrou is None:
+        return None
+    nom = deprecations.tool_canonique(name)
+    if nom in OUTILS_DE_L_HOTE or nom in _permis(verrou.job_id):
+        return None
+    return (f"`{name}` is not in this hosted agent's tool list (job {verrou.job_id}). "
+            "A job only calls the tools it declares, on every path — directly, through "
+            "`oto_call`, or from a recipe. Add the tool to the agent's `tools` to allow it.")
+
+
+async def exiger(name: str) -> None:
+    """Lève le refus nommé `tool_not_in_job` si `name` est hors de la liste du travail.
+    Hors boucle : la liste se lit en base."""
+    message = await run_in_threadpool(refus, name)
+    if message is not None:
+        raise McpError(ErrorData(
+            code=INVALID_PARAMS, message=f"Refusal `{CODE}`: {message}",
+            data={"code": CODE, "retryable": False, "tool": name}))

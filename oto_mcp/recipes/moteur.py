@@ -29,7 +29,7 @@ from typing import Any, Optional
 
 from starlette.concurrency import run_in_threadpool
 
-from .. import redaction
+from .. import outils_du_travail, redaction
 from ..datastore import par_reference as pr
 from ..mcp_errors import McpError
 from ..tool_visibility import namespace_of
@@ -132,6 +132,11 @@ async def _outil(fastmcp, outil: str):
     tool = await meta.resoudre_outil(fastmcp, outil)
     if tool is None:
         raise RecetteRefusee("unknown_tool", f"Unknown tool `{outil}`.")
+    # Lancée par un travail hébergé, une recette n'appelle que les outils de sa liste —
+    # jugé ici, avant tout effet ; `executer_cible` le rejoue à chaque page.
+    hors_liste = await run_in_threadpool(outils_du_travail.refus, outil)
+    if hors_liste:
+        raise RecetteRefusee(outils_du_travail.CODE, f"{hors_liste} Nothing was called.")
     if not lecture.en_lecture(tool):
         raise RecetteRefusee("recipe_tool_not_read_only",
                              f"`{outil}` is not declared read-only: a recipe only calls tools "

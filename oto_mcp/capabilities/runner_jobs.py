@@ -27,7 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from . import (_abonnement, _acces_agent, _cle_exigee, _limites_du_run,
                _lignes_reservables, _modele, _ordre_de_service)
-from .. import db, runner_consigne, runner_models, tool_alias
+from .. import db, outils_du_travail, runner_consigne, runner_models, tool_alias
 from ._authz import WORKER_OR_ORG_MEMBER
 from ._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx,
                      RestBinding, cap_limit)
@@ -474,10 +474,6 @@ def _depot_pose(org_id: int, depot: str) -> bool:
         return False
 
 
-#: L'outil par lequel l'agent lit la procédure que son instruction lui désigne.
-_OUTIL_DE_LECTURE = "oto_procedure"
-
-
 def _charge_servie(job: dict) -> dict:
     """Le travail SERVI : sa charge, complétée du contexte d'exécution que l'agent
     ne peut pas déduire. Une COPIE — le travail stocké ne change jamais.
@@ -510,9 +506,9 @@ def _charge_servie(job: dict) -> dict:
         logger.warning("travail %s : `payload.org_id` %r contredit l'org du travail %s — "
                        "servi avec celle du travail", job.get("id"), p["org_id"], org_id)
     p["org_id"] = org_id
-    outils = p.get("tools") if "tools" in p else []
-    if p.get("procedure") and isinstance(outils, list) and _OUTIL_DE_LECTURE not in outils:
-        p["tools"] = [*outils, _OUTIL_DE_LECTURE]
+    # La MÊME liste que celle que le serveur tient à chaque appel (`outils_du_travail`).
+    if "tools" in p or p.get("procedure"):
+        p["tools"] = outils_du_travail.outils_servis(p)
     return {**job, "payload": p}
 
 

@@ -20,7 +20,8 @@ from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from .. import (access, call_axes, calllog, db, deprecations, error_taxonomy, guide_run,
-                outils_retires, redaction, run_org, session_org, tool_alias)
+                outils_du_travail, outils_retires, redaction, run_org, session_org,
+                tool_alias)
 from ..auth.hooks import current_user_sub_from_token
 from ..connectors import access_level_gate, activation_gate
 from ..connectors import health as connector_health
@@ -203,6 +204,10 @@ async def executer_cible(tool, sub: Optional[str], name: str, demande: str,
         # The RUN's org (#639), after the axes — same rule as the middleware:
         # without `_org=`, the target resolves in the run's org, membership guarded.
         undo.extend(await run_org.pin_for_call())
+        # A hosted job's tool list, held by the server: the TARGET must be in it, whichever
+        # tool dispatched it (`oto_call`, a recipe page, a code recipe's bridge) — same
+        # guard, same place, as the context middleware for a direct call.
+        await outils_du_travail.exiger(name)
         # Activation of the TARGET's connector, against the org and team the axes
         # just set — same guard, same place, as the context middleware for a direct call
         # (#1064). Here rather than at visibility: the latter is a display filter,

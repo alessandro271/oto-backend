@@ -7,7 +7,8 @@ from typing import Optional
 from fastmcp.server.middleware import Middleware
 from starlette.concurrency import run_in_threadpool
 
-from .. import access, call_axes, guide_run, providers, redaction, run_org, session_org
+from .. import (access, call_axes, guide_run, outils_du_travail, providers, redaction,
+               run_org, session_org)
 from ..auth.hooks import current_user_sub_from_token
 from ..connectors import access_level_gate, activation_gate
 from ..tool_visibility import namespace_of
@@ -236,6 +237,9 @@ class CallContextMiddleware(Middleware):
             # résout dans l'org du run, appartenance gardée (refus nommé, jamais un
             # repli sur la maison). Une lecture par run, hors boucle.
             undo.extend(await run_org.pin_for_call())
+            # La liste d'outils d'un travail hébergé, tenue par le serveur et pas
+            # seulement par le worker — même garde, même place, que dans `oto_call`.
+            await outils_du_travail.exiger(name)
             # L'activation du connecteur, contre l'org et l'équipe que le contexte vient
             # de poser — même garde, même place, que dans `oto_call` (#1064).
             await activation_gate.require_active(name)

@@ -120,6 +120,13 @@ def courant() -> Optional[Verrou]:
     return v
 
 
+def travail_de_la_requete() -> Optional[Verrou]:
+    """Le verrou posé pour la requête, QUEL QUE SOIT le mode du verrou d'org : il dit quel
+    travail porte le jeton. La liste d'outils de ce travail (`outils_du_travail`) n'est pas
+    le verrou d'org et ne se coupe pas avec lui (`OTO_VERROU_ORG_DELEGATION=off`)."""
+    return _COURANT.get()
+
+
 def borne(sub: object, *, route: str, ecart: bool) -> Optional[Verrou]:
     """Le verrou à APPLIQUER pour ce porteur — None pour un tiers, sans verrou, ou hors
     `enforce`. Pour les points qui bornent au lieu de refuser (`current_org`,

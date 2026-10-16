@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from .. import redaction
+from .. import outils_du_travail, redaction
 from ..mcp_errors import McpError
 from . import ecritures as ec
 from . import moteur
@@ -45,8 +45,12 @@ async def _executer(tool, sub: Optional[str], outil: str, arguments: dict) -> di
         issue = await moteur._appeler(tool, sub, outil, dict(arguments))
     except McpError as e:
         # Arguments refusés par le schéma de l'outil, garde d'activation ou de
-        # suspension : rien n'a été appelé.
-        return {"ok": False, "code": "call_refused", "message": str(e.error.message)[:500]}
+        # suspension : rien n'a été appelé. Un outil hors de la liste du travail hébergé
+        # garde son code nommé : le code de la recette doit pouvoir le distinguer.
+        data = e.error.data if isinstance(e.error.data, dict) else {}
+        hors_liste = data.get("code") == outils_du_travail.CODE
+        code = outils_du_travail.CODE if hors_liste else "call_refused"
+        return {"ok": False, "code": code, "message": str(e.error.message)[:500]}
     return _reponse(issue)
 
 
