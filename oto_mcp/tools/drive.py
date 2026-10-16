@@ -5,7 +5,10 @@ rename, folders), delete, share. **Full** `/auth/drive` scope
 (restricted) — to see/manage ALL files, not only those created by
 oto. Default account or targeted by `account`. Per-user via OAuth.
 
-Local→Drive **upload** stays on the CLI side (no server FS). READING, however, is
+A LOCAL file's upload stays on the CLI side (no server FS) ; `op="upload"` deposits a
+file REFERENCE oto resolves itself (`source`: http, url, project_file, drive…), and
+can convert it to its Google-native type (an .xlsx becomes a Google Sheet, formatting
+kept). READING is
 fully exposed and diskless: `op="download"` for binary/uploaded files,
 `op="export"` for Google-native ones (Docs/Sheets/Slides — their content
 cannot be downloaded, it is converted). Both return the content to the agent
@@ -15,7 +18,7 @@ impossible to ingest Gemini meeting notes other than by copy-paste).
 
 **Consolidated surface (ADR 0047 §Amendment, applied to the `drive` product of the
 `google` connector)**: one tool per business OBJECT, the verb as an `op` parameter —
-`drive_file` (list/metadata/download/export/create_folder/update/delete), all
+`drive_file` (list/metadata/download/export/upload/create_folder/update/delete), all
 scoped by the same file/folder (`file_id`) and the same `account`.
 `drive_access` stays ALONE: its vocabulary (`email`/`role`/`remove`/`notify`)
 is that of ANOTHER object — the permission — and overlaps no parameter of
@@ -92,6 +95,15 @@ def _xlsx_url(data: bytes, filename: str, sub: str) -> dict:
             "encoding": "url", "url": url, "expires_in": media_store.presign_expiry()}
 
 
+def _resolve_upload(source: dict):
+    """The bytes of an `op="upload"` source, resolved server-side (off the loop)."""
+    from .. import file_source
+    try:
+        return file_source.resolve(source)
+    except file_source.FileSourceError as e:
+        raise _bad(f"source: {e}") from None
+
+
 def _client_for_user(account: Optional[str] = None):
     sub = access.current_user_sub_or_raise()
     try:
@@ -118,7 +130,7 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     async def drive_file(
-        op: Literal["list", "metadata", "download", "export", "create_folder",
+        op: Literal["list", "metadata", "download", "export", "upload", "create_folder",
                     "update", "delete"] = "list",
         file_id: Optional[str] = None,
         folder_id: Optional[str] = None,
@@ -131,6 +143,8 @@ def register(mcp: FastMCP) -> None:
         move_to_folder: Optional[str] = None,
         sheet: Optional[Union[int, str]] = None,
         max_rows: Optional[int] = None,
+        source: Optional[dict] = None,
+        convert: bool = False,
         account: Optional[str] = None,
     ) -> dict:
         """A file (or folder) in the user's Drive — list, read, organise, delete.
@@ -178,9 +192,16 @@ def register(mcp: FastMCP) -> None:
           sensible default per type (Doc→markdown, Sheet→csv (first sheet),
           Slides→text). Returns {filename, mimeType, encoding, content|url, …}:
           text formats come back INLINE, `pdf` as its extracted text + `raw_url`.
+        - **"upload"**: Deposit a file oto fetches itself from `source` (e.g.
+          `{"kind": "http", "path": "/export.xlsx"}` through your `http` connector,
+          `{"kind": "url", "url": …}`, `{"kind": "project_file", …}`) — the bytes
+          never go through you. `name` = its name in Drive (the source's by default),
+          `parent_folder_id` = its folder. `convert=true` turns it into its
+          Google-native type, formatting kept: .xlsx/.xls/.ods/.csv → Google Sheets,
+          .docx/.odt/.rtf/.txt/.html → Google Docs, .pptx/.odp → Google Slides ;
+          another type is refused. Returns {id, name, mimeType, webViewLink}.
         - **"create_folder"**: Create a folder (`name`), optionally inside a parent
-          folder (`parent_folder_id`). Returns the folder metadata. Folders only —
-          uploading a local FILE to Drive stays on the CLI side (no server FS).
+          folder (`parent_folder_id`). Returns the folder metadata.
         - **"update"**: Rename and/or move a file/folder. `new_name` = new name
           (rename) ; `move_to_folder` = destination folder id (move). You can do
           both at once ; at least one of the two is required.
@@ -191,8 +212,8 @@ def register(mcp: FastMCP) -> None:
         or revoke), a separate tool on purpose.
 
         Args:
-            op: list (default) | metadata | download | export | create_folder |
-                update | delete. The default is a READ — an omitted `op` never
+            op: list (default) | metadata | download | export | upload |
+                create_folder | update | delete. The default is a READ — an omitted `op` never
                 writes and never deletes.
             file_id: op="metadata"/"download"/"export"/"update"/"delete" — the
                 file (or folder) id, from op="list".
@@ -203,19 +224,28 @@ def register(mcp: FastMCP) -> None:
             format: op="export" — markdown | text | html | pdf | csv | xlsx. Omit for a
                 sensible default per type (Doc→markdown, Sheet→csv (first sheet),
                 Slides→text).
-            name: op="create_folder" — the folder name.
-            parent_folder_id: op="create_folder" — create it inside this folder.
+            name: op="create_folder" — the folder name ; op="upload" — the file's
+                name in Drive (the source's if omitted).
+            parent_folder_id: op="create_folder"/"upload" — create it inside this
+                folder.
             new_name: op="update" — new name (rename).
             move_to_folder: op="update" — destination folder id (move).
             sheet: op="download" of an .xlsx — the sheet to read, by name or
                 0-based index (see `sheet_names`). Omit for all sheets.
             max_rows: op="download" of an .xlsx — rows per sheet (default 200,
                 max 5000).
+            source: op="upload" — the file reference oto fetches: `{"kind": "http",
+                "path": "/…", "params": {…}}`, `{"kind": "url", "url": …}`,
+                `{"kind": "project_file", "project_id": …, "file_id": …}`,
+                `{"kind": "drive", "file_id": …}`. ≤ 25 MB.
+            convert: op="upload" — true converts to the Google-native type.
             account: email of the Google account to use — same choice as `_account`.
         """
         if (sheet is not None or max_rows is not None) and op != "download":
             raise _bad(f"`sheet`/`max_rows` only apply to op='download' of an "
                        f".xlsx spreadsheet (received op='{op}').")
+        if (source is not None or convert) and op != "upload":
+            raise _bad(f"`source`/`convert` only apply to op='upload' (received op='{op}').")
         client = await _client_for_user_async(account)
 
         if op == "list":
@@ -274,6 +304,16 @@ def register(mcp: FastMCP) -> None:
             except file_content.MediaUnavailable as e:
                 raise _bad(str(e))
 
+        if op == "upload":
+            rf = await asyncio.to_thread(_resolve_upload, _need(source, "source", op))
+            from oto.tools.google.drive.lib.drive_client import DriveClientError
+            try:
+                return await asyncio.to_thread(
+                    client.upload_bytes, rf.data, name or rf.filename, rf.mime,
+                    parent_folder_id, convert)
+            except DriveClientError as e:
+                raise _bad(str(e)) from None
+
         if op == "create_folder":
             return await asyncio.to_thread(client.create_folder,
                                            _need(name, "name", op),
@@ -297,7 +337,7 @@ def register(mcp: FastMCP) -> None:
             return await asyncio.to_thread(client.delete_file,
                                            _need(file_id, "file_id", op))
 
-        raise _bad("op must be 'list', 'metadata', 'download', 'export', "
+        raise _bad("op must be 'list', 'metadata', 'download', 'export', 'upload', "
                    "'create_folder', 'update' or 'delete'")
 
     @mcp.tool()

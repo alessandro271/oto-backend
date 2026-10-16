@@ -68,7 +68,44 @@ def test_number_format_atteint_sa_methode_avec_le_type(client):
     _untouched(client, *DESTRUCTIVE)
 
 
+def test_copy_sheet_atteint_sa_methode_avec_la_destination(client):
+    _call("sheets_spreadsheet", spreadsheet_id="modele", op="copy_sheet", sheet="Octobre",
+          to_spreadsheet_id="produit", title="Suivi", index=0)
+    client.copy_sheet.assert_called_once_with("modele", "Octobre", "produit", "Suivi", 0)
+    _untouched(client, *DESTRUCTIVE)
+
+
+def test_les_ops_de_mise_en_forme_atteignent_leur_methode(client):
+    style = {"background": "#d9d9d9", "wrap": True}
+    _call("sheets_spreadsheet", spreadsheet_id="sid", op="format", range="A1:Z1", style=style)
+    client.format.assert_called_once_with("sid", "A1:Z1", style)
+    _call("sheets_spreadsheet", spreadsheet_id="sid", op="column_width", range="B:D", width=140)
+    client.column_width.assert_called_once_with("sid", "B:D", 140)
+    _call("sheets_spreadsheet", spreadsheet_id="sid", op="freeze", sheet="Suivi", frozen_rows=1)
+    client.freeze.assert_called_once_with("sid", "Suivi", 1, None)
+    _call("sheets_spreadsheet", spreadsheet_id="sid", op="dropdown", range="F2:F",
+          options=["Payé", "À relancer"])
+    client.dropdown.assert_called_once_with("sid", "F2:F", ["Payé", "À relancer"])
+    _untouched(client, *DESTRUCTIVE)
+
+
+def test_un_style_refuse_par_le_client_est_une_erreur_lisible(client):
+    from oto.tools.google.sheets.lib.sheets_client import SheetsClientError
+
+    client.format.side_effect = SheetsClientError("style: unknown key(s) fond")
+    msg = _raises("sheets_spreadsheet", spreadsheet_id="sid", op="format", range="A1",
+                  style={"fond": "#fff"})
+    assert "unknown key(s) fond" in msg
+
+
 @pytest.mark.parametrize("op,kwargs,missing", [
+    ("copy_sheet", {}, "sheet"),
+    ("format", {"range": "A1"}, "style"),
+    ("format", {"style": {"bold": True}}, "range"),
+    ("column_width", {"range": "B:D"}, "width"),
+    ("freeze", {"frozen_rows": 1}, "sheet"),
+    ("freeze", {"sheet": "A"}, "frozen_rows"),
+    ("dropdown", {"range": "F2:F"}, "options"),
     ("add_sheet", {}, "title"),
     ("rename_sheet", {"sheet": "A"}, "title"),
     ("rename_sheet", {"title": "B"}, "sheet"),
@@ -80,7 +117,8 @@ def test_number_format_atteint_sa_methode_avec_le_type(client):
 def test_un_argument_obligatoire_absent_est_refuse_sans_toucher_le_client(client, op, kwargs, missing):
     msg = _raises("sheets_spreadsheet", spreadsheet_id="sid", op=op, **kwargs)
     assert missing in msg and op in msg
-    for m in ("add_sheet", "rename_sheet", "delete_sheet", "delete_rows", "number_format"):
+    for m in ("add_sheet", "rename_sheet", "delete_sheet", "delete_rows", "number_format",
+              "copy_sheet", "format", "column_width", "freeze", "dropdown"):
         getattr(client, m).assert_not_called()
 
 

@@ -37,9 +37,11 @@ from ..auth import google as google_oauth
 # Ops of `sheets_spreadsheet`. Checked BEFORE any client is built: an unknown op
 # must reach no client method, never fall back on a default.
 _SPREADSHEET_OPS = ("metadata", "read", "write", "clear", "add_sheet", "rename_sheet",
-                    "delete_sheet", "delete_rows", "number_format")
+                    "delete_sheet", "delete_rows", "number_format", "copy_sheet", "format",
+                    "column_width", "freeze", "dropdown")
 _SPREADSHEET_OPS_HINT = ("op must be 'metadata', 'read', 'write', 'clear', 'add_sheet', "
-                        "'rename_sheet', 'delete_sheet', 'delete_rows' or 'number_format'")
+                        "'rename_sheet', 'delete_sheet', 'delete_rows', 'number_format', "
+                        "'copy_sheet', 'format', 'column_width', 'freeze' or 'dropdown'")
 
 # The two ops that DESTROY data (a tab and everything in it ; rows, the ones below
 # moving up) are dry-run by default (signals #1384/#1386, 10/10/2026): the call says
@@ -137,7 +139,8 @@ def register(mcp: FastMCP) -> None:
     async def sheets_spreadsheet(
         spreadsheet_id: str,
         op: Literal["metadata", "read", "write", "clear", "add_sheet", "rename_sheet",
-                    "delete_sheet", "delete_rows", "number_format"] = "metadata",
+                    "delete_sheet", "delete_rows", "number_format", "copy_sheet", "format",
+                    "column_width", "freeze", "dropdown"] = "metadata",
         range: Optional[str] = None,
         values: Optional[list[list[Any]]] = None,
         formatted: bool = True,
@@ -151,11 +154,17 @@ def register(mcp: FastMCP) -> None:
         end_row: Optional[int] = None,
         pattern: Optional[str] = None,
         type: str = "NUMBER",
+        to_spreadsheet_id: Optional[str] = None,
+        style: Optional[dict] = None,
+        width: Optional[int] = None,
+        frozen_rows: Optional[int] = None,
+        frozen_cols: Optional[int] = None,
+        options: Optional[list[str]] = None,
         dry_run: bool = True,
         account: Optional[str] = None,
     ) -> dict:
-        """An existing spreadsheet: its cells (describe, read, write, clear) and its
-        tabs, rows and number formats.
+        """An existing spreadsheet: its cells (describe, read, write, clear), its tabs
+        and rows, and their formatting.
 
         `op`:
         - **"metadata"** (default): get a spreadsheet's metadata: title + the
@@ -178,13 +187,29 @@ def register(mcp: FastMCP) -> None:
           default** — the call says what would go ; `dry_run=false` does it.
         - **"number_format"**: `pattern` (`#,##0.00`, `0.0%`, `dd/mm/yyyy`) and
           `type` applied to every cell of `range` (e.g. `'P&L'!B2:D`).
+        - **"copy_sheet"**: copy the tab `sheet` of this spreadsheet — values AND
+          formatting (widths, frozen rows, colours, drop-downs, conditional formats) —
+          into `to_spreadsheet_id` (this spreadsheet if omitted), named `title`, at
+          `index`. The source is only read: copy a user's template tab into the file
+          you produce, then write your data into the copy, to get their exact layout.
+        - **"format"**: `style` applied to every cell of `range`; only the keys given
+          change — `background`/`color` (`#rrggbb`), `bold`, `italic`, `font_size`,
+          `wrap` (true = wrap text), `align` (left|center|right), `valign`
+          (top|middle|bottom). E.g. a grey wrapped header: `range="'Suivi'!A1:Z1"`,
+          `style={"background": "#d9d9d9", "bold": true, "wrap": true}`.
+        - **"column_width"**: `width` in pixels for the columns of `range` (`'Suivi'!B:D`).
+        - **"freeze"**: freeze the first `frozen_rows` rows and/or `frozen_cols`
+          columns of `sheet` (0 unfreezes).
+        - **"dropdown"**: a drop-down list of `options` on every cell of `range`, other
+          values rejected ; `options=[]` removes it.
         An unknown tab is refused, naming the existing ones.
 
         Args:
             spreadsheet_id: the spreadsheet to act on (every op).
-            op: metadata (default) | read | write | clear.
+            op: the verb, listed above ; metadata (default).
             range: A1 notation, e.g. 'Sheet1!A1:D20' or 'A:ZZ'. op="read" — optional
-                ('A:ZZ' if omitted) ; op="write"/"clear" — REQUIRED.
+                ('A:ZZ' if omitted) ; op="write"/"clear"/"number_format"/"format"/
+                "column_width"/"dropdown" — REQUIRED.
             values: op="write" — the 2-D array of values to write. Exclusive with
                 `source`.
             source: op="write" — a CSV fetched server-side instead of `values`:
@@ -199,16 +224,25 @@ def register(mcp: FastMCP) -> None:
             append: op="write" — False (default) OVERWRITES the range ; True appends
                 rows after the existing data (no overwrite), from the range's first
                 column.
-            sheet: op="rename_sheet"/"delete_sheet"/"delete_rows" — the tab, by title
-                or numeric id.
+            sheet: op="rename_sheet"/"delete_sheet"/"delete_rows"/"copy_sheet"/
+                "freeze" — the tab, by title or numeric id.
             title: op="add_sheet" — the new tab's title ; op="rename_sheet" — the new
-                title.
-            index: op="add_sheet" — 0-based position of the new tab (end by default).
+                title ; op="copy_sheet" — the copy's title (Google's `Copy of …` if
+                omitted).
+            index: op="add_sheet"/"copy_sheet" — 0-based position of the new tab (end
+                by default).
             start_row: op="delete_rows" — first row to delete (1-based, as displayed).
             end_row: op="delete_rows" — last row to delete, inclusive.
             pattern: op="number_format" — the format pattern, as in the sheet UI.
             type: op="number_format" — NUMBER (default) | CURRENCY | PERCENT | DATE |
                 TIME | DATE_TIME | SCIENTIFIC | TEXT.
+            to_spreadsheet_id: op="copy_sheet" — the spreadsheet receiving the copy
+                (this one if omitted).
+            style: op="format" — the cell style, keys as listed above.
+            width: op="column_width" — pixels.
+            frozen_rows: op="freeze" — rows frozen at the top (0 = none).
+            frozen_cols: op="freeze" — columns frozen at the left (0 = none).
+            options: op="dropdown" — the choices of the list ; [] removes it.
             dry_run: op="delete_sheet"/"delete_rows" — True (default) only says what
                 would be deleted ; False deletes.
             account: Google account (email) to act as — same choice as `_account`.
@@ -256,6 +290,29 @@ def register(mcp: FastMCP) -> None:
             return await asyncio.to_thread(
                 _structurel, client.number_format, spreadsheet_id,
                 _need(range, "range", op), _need(pattern, "pattern", op), type)
+
+        if op == "copy_sheet":
+            return await asyncio.to_thread(
+                _structurel, client.copy_sheet, spreadsheet_id, _need(sheet, "sheet", op),
+                to_spreadsheet_id, title, index)
+        if op == "format":
+            return await asyncio.to_thread(
+                _structurel, client.format, spreadsheet_id, _need(range, "range", op),
+                _need(style, "style", op))
+        if op == "column_width":
+            return await asyncio.to_thread(
+                _structurel, client.column_width, spreadsheet_id,
+                _need(range, "range", op), _need(width, "width", op))
+        if op == "freeze":
+            if frozen_rows is None and frozen_cols is None:
+                raise _bad("op='freeze' requires frozen_rows and/or frozen_cols")
+            return await asyncio.to_thread(
+                _structurel, client.freeze, spreadsheet_id, _need(sheet, "sheet", op),
+                frozen_rows, frozen_cols)
+        if op == "dropdown":
+            return await asyncio.to_thread(
+                _structurel, client.dropdown, spreadsheet_id, _need(range, "range", op),
+                _need(options, "options", op))
 
         if op == "metadata":
             return await asyncio.to_thread(client.get_metadata, spreadsheet_id)

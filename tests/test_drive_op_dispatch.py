@@ -31,7 +31,7 @@ EXPECTED_TOOLS = {"drive_file", "drive_access"}
 # Les méthodes qu'on ne veut JAMAIS voir appelées par erreur : elles écrivent,
 # suppriment ou changent le partage.
 DANGEROUS = ("delete_file", "rename_file", "move_file", "create_folder",
-             "share", "unshare")
+             "upload_bytes", "share", "unshare")
 
 
 def _register():
@@ -264,8 +264,8 @@ def test_delete_deletes_exactly_the_file_it_was_given(client):
 
 
 @pytest.mark.parametrize("op", ["list", "metadata", "download", "export",
-                                "create_folder", "update"])
-def test_no_read_or_write_op_ever_deletes(client, op):
+                                "create_folder", "update", "upload"])
+def test_no_read_or_write_op_ever_deletes(client, monkeypatch, op):
     """Le scénario redouté d'une consolidation : une op inoffensive qui atteint
     `delete`. On l'interdit op par op, pas par relecture."""
     kwargs = {"file_id": "f1"}
@@ -275,8 +275,58 @@ def test_no_read_or_write_op_ever_deletes(client, op):
         kwargs = {"file_id": "f1", "new_name": "n"}
     elif op == "list":
         kwargs = {}
+    elif op == "upload":
+        _resolved(monkeypatch)
+        kwargs = {"source": {"kind": "url", "url": "https://x/f.xlsx"}}
     _call("drive_file", op=op, **kwargs)
     client.delete_file.assert_not_called()
+
+
+# --- dépôt depuis une source ------------------------------------------------------
+
+def _resolved(monkeypatch, filename="Suivi.xlsx", mime="application/octet-stream"):
+    from oto_mcp import file_source
+    seen = {}
+
+    def resolve(source, **kw):
+        seen["source"] = source
+        return file_source.ResolvedFile(data=b"PK..", filename=filename, mime=mime)
+
+    monkeypatch.setattr(file_source, "resolve", resolve)
+    return seen
+
+
+def test_upload_resolves_the_source_and_converts_under_the_given_name(client, monkeypatch):
+    seen = _resolved(monkeypatch)
+    src = {"kind": "http", "path": "/export.xlsx"}
+    _call("drive_file", op="upload", source=src, name="Suivi octobre",
+          parent_folder_id="fold", convert=True)
+    assert seen["source"] == src
+    client.upload_bytes.assert_called_once_with(
+        b"PK..", "Suivi octobre", "application/octet-stream", "fold", True)
+    _assert_untouched(client, "delete_file", "rename_file", "move_file", "share")
+
+
+def test_upload_keeps_the_source_name_and_does_not_convert_by_default(client, monkeypatch):
+    _resolved(monkeypatch, filename="note.pdf", mime="application/pdf")
+    _call("drive_file", op="upload", source={"kind": "url", "url": "https://x/note.pdf"})
+    client.upload_bytes.assert_called_once_with(b"PK..", "note.pdf", "application/pdf",
+                                                None, False)
+
+
+def test_upload_refusal_of_the_client_is_readable(client, monkeypatch):
+    from oto.tools.google.drive.lib.drive_client import DriveClientError
+    _resolved(monkeypatch, filename="note.pdf", mime="application/pdf")
+    client.upload_bytes.side_effect = DriveClientError("no Google-native counterpart")
+    with pytest.raises(McpError, match="no Google-native counterpart"):
+        _call("drive_file", op="upload", source={"kind": "url", "url": "https://x/n.pdf"},
+              convert=True)
+
+
+def test_source_and_convert_are_refused_outside_upload(client):
+    with pytest.raises(McpError, match="only apply to op='upload'"):
+        _call("drive_file", op="list", convert=True)
+    _assert_untouched(client, *DANGEROUS)
 
 
 # --- refus ---------------------------------------------------------------------
@@ -285,7 +335,7 @@ def test_unknown_op_is_refused_with_the_allowed_list(client):
     with pytest.raises(McpError, match="op must be") as e:
         _call("drive_file", op="nope")
     msg = e.value.error.message
-    for op in ("list", "metadata", "download", "export", "create_folder",
+    for op in ("list", "metadata", "download", "export", "upload", "create_folder",
                "update", "delete"):
         assert f"'{op}'" in msg
     _assert_untouched(client, *DANGEROUS)
@@ -317,6 +367,7 @@ def test_drive_file_carries_no_sharing_vocabulary():
     ("delete", {}, "file_id"),
     ("update", {"new_name": "n"}, "file_id"),
     ("create_folder", {}, "name"),
+    ("upload", {"convert": True}, "source"),
 ])
 def test_missing_required_arg_names_the_op_and_the_arg(client, op, kwargs, missing):
     with pytest.raises(McpError, match=missing) as e:
