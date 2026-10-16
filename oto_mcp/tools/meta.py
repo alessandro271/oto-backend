@@ -304,18 +304,15 @@ async def executer_cible(tool, sub: Optional[str], name: str, demande: str,
     # otherwise a PII connector surfaced by oto_call would leak (the middleware saw
     # the "oto" service, not the target namespace).
     service = namespace_of(name)
-    payload = redaction.extract_payload(result)
     quantite = target_trace.get("quantity")
     quantite = quantite if isinstance(quantite, (int, float)) \
         and not isinstance(quantite, bool) else None
     try:
-        red = await run_in_threadpool(redaction.redact_payload, service, payload)
+        servi = await run_in_threadpool(redaction.redact_result, service, result)
     except redaction.RedactionWithheld:
         return IssueCible(ok=True, result=redaction.withheld_result(name), retenu=True,
                           quantity=quantite)
-    return IssueCible(ok=True, result=(result if red is redaction.PASSTHROUGH
-                                       else redaction.rebuild_result(result, red)),
-                      quantity=quantite)
+    return IssueCible(ok=True, result=servi, quantity=quantite)
 
 
 def register(mcp: FastMCP) -> None:

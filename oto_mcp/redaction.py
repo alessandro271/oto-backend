@@ -110,6 +110,40 @@ def redact_payload(service: str, payload):
         raise RedactionWithheld(service)
 
 
+def redact_result(service: str, result):
+    """Le `ToolResult` de `service` tel que la politique de l'org le laisse servir :
+    `result` lui-même si rien ne s'applique, un résultat réémis sinon. Lève
+    `RedactionWithheld` comme `redact_payload`.
+
+    Un résultat sans JSON (texte libre) n'est touché que par une règle `scrub` sur
+    `["*"]` — les autres règles visent des clés, qu'un texte n'a pas — mais il L'EST :
+    la promesse « tout le texte est nettoyé » ne laisse pas passer le canal texte.
+
+    Synchrone, et peut attendre un modèle (`scrub`) : un appelant de la boucle passe par
+    un fil (`run_in_threadpool`)."""
+    payload = extract_payload(result)
+    if payload is not None:
+        red = redact_payload(service, payload)
+        return result if red is PASSTHROUGH else rebuild_result(result, red)
+    blocs = getattr(result, "content", None) or []
+    textes = [b.text for b in blocs if isinstance(getattr(b, "text", None), str)]
+    if not textes:
+        return result
+    red = redact_payload(service, textes)
+    if red is PASSTHROUGH or red == textes:
+        return result
+    from fastmcp.tools.tool import ToolResult
+    from mcp.types import TextContent
+    suite = iter(red)
+    return ToolResult(
+        content=[TextContent(type="text", text=next(suite))
+                 if isinstance(getattr(b, "text", None), str) else b for b in blocs],
+        structured_content=None,
+        meta=getattr(result, "meta", None),
+        is_error=False,
+    )
+
+
 def rebuild_result(result, redacted):
     """Réémet un `ToolResult` avec `redacted` sur les DEUX canaux : texte JSON +
     `structured_content` (seulement si l'original en portait un dict — sinon la

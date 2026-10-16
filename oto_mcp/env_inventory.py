@@ -685,6 +685,18 @@ _REGLAGES: tuple[Variable, ...] = (
              ("oto_mcp/browserbase.py:36",)),
     Variable("BROWSERBASE_PROJECT_ID", Classe.REGLAGE, None,
              "Projet Browserbase.", ("oto_mcp/browserbase.py:43",)),
+    Variable("OTO_SCRUB_MODEL_URL", Classe.REGLAGE, None,
+             "Racine (sans `/chat/completions`) du point d'accès compatible OpenAI du modèle "
+             "qui désigne noms, adresses et identifiants dans le texte (action `scrub`). "
+             "Va avec `OTO_SCRUB_MODEL` et `OTO_SCRUB_MODEL_KEY`, les trois ou aucune : "
+             "absentes, une règle qui demande le modèle est refusée à la pose.",
+             ("oto_mcp/scrub_model.py:23",)),
+    Variable("OTO_SCRUB_MODEL", Classe.REGLAGE, None,
+             "Nom du modèle servi par `OTO_SCRUB_MODEL_URL` (action `scrub`).",
+             ("oto_mcp/scrub_model.py:24",)),
+    Variable("OTO_SCRUB_MODEL_KEY", Classe.REGLAGE, None,
+             "Clé du point d'accès `OTO_SCRUB_MODEL_URL` (action `scrub`).",
+             ("oto_mcp/scrub_model.py:25",)),
     Variable("MISTRAL_API_KEY", Classe.REGLAGE, None,
              "Clé Mistral — absente, le worker d'embeddings ne tourne pas.",
              ("oto_mcp/embeddings.py:62",)),

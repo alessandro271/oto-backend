@@ -126,6 +126,16 @@ TEMPLATES: dict[str, dict] = {
         "hint": "masque IBAN/BIC/RIB (garde les 4 derniers).",
         "rules": [{"fields": ["iban", "bic", "rib"], "action": "mask", "keep_last": 4}],
     },
+    "free_text": {
+        "label": "données sensibles dans le texte",
+        "hint": "remplace, dans TOUT le texte des réponses (tickets, fils, notes), les "
+                "valeurs sensibles par un jeton stable ([NIR-3f2a9c]) : NIR, IBAN, carte, "
+                "e-mail, téléphone, secret annoncé, et — modèle de l'instance — noms, "
+                "adresses, identifiants dits dans une phrase.",
+        "rules": [{"fields": ["*"], "action": "scrub",
+                   "detect": ["nir", "iban", "card", "email", "phone", "secret",
+                              "person", "address", "credential"]}],
+    },
 }
 
 
@@ -200,6 +210,12 @@ def filtre(bloc: dict | None):
     """Le `FieldFilter` d'un bloc (vide si le bloc est vide ou absent)."""
     from oto.tools.common import FieldFilter
 
+    from . import scrub_model
+
     if not bloc:
         return FieldFilter()
-    return FieldFilter(rules=bloc.get("rules", []), salt=bloc.get("salt"))
+    regles = bloc.get("rules", [])
+    # Le modèle n'est construit que pour une règle `scrub` qui le demande : une
+    # déclaration d'instance bancale ne retient que les politiques qui s'en servent.
+    detecteur = scrub_model.detecteur() if scrub_model.sortes_de_modele(regles) else None
+    return FieldFilter(rules=regles, salt=bloc.get("salt"), detector=detecteur)

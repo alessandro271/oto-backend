@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from fastmcp.server.middleware import Middleware
+from starlette.concurrency import run_in_threadpool
 
 from .. import redaction
 from ..tool_visibility import namespace_of
@@ -26,8 +27,12 @@ class FieldRedactionMiddleware(Middleware):
     `content`).
 
     **Fail-closed** : si l'application de la rédaction lève alors qu'une politique
-    existe (ex. Faker absent pour `pseudonym`), on RETIENT la sortie plutôt que de
-    laisser fuiter le brut. Une simple absence de policy (`is_empty`) = passe-through.
+    existe (ex. Faker absent pour `pseudonym`, modèle de `scrub` injoignable), on
+    RETIENT la sortie plutôt que de laisser fuiter le brut. Une simple absence de
+    policy (`is_empty`) = passe-through.
+
+    La rédaction tourne dans un fil : elle lit la politique en base, et une règle
+    `scrub` peut attendre un modèle plusieurs secondes — jamais dans la boucle.
     """
 
     async def on_call_tool(self, context, call_next):
@@ -46,12 +51,9 @@ class FieldRedactionMiddleware(Middleware):
         # Rédaction déléguée à la logique PARTAGÉE (`redaction.py`) — même chemin que
         # `oto_call` (ADR 0036), pour qu'un outil dispatché soit redacté à l'identique.
         try:
-            red = redaction.redact_payload(service, payload)
+            return await run_in_threadpool(redaction.redact_result, service, result)
         except redaction.RedactionWithheld:
             return redaction.withheld_result(name)
-        if red is redaction.PASSTHROUGH:
-            return result
-        return redaction.rebuild_result(result, red)
 
 
 # Spine / méta : pas de capture de schéma (pas des connecteurs ; `data` =

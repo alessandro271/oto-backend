@@ -95,6 +95,7 @@ chemins = [
   "oto_mcp/output_projection.py",
   "oto_mcp/field_filter_defaults.py",
   "oto_mcp/redaction.py",
+  "oto_mcp/scrub_model.py",
   "oto_mcp/refus_journal.py",
   "oto_mcp/texte_tiers.py",
   "oto_mcp/links.py",

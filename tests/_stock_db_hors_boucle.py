@@ -85,7 +85,7 @@ STOCK: dict[str, str] = {
     "oto_mcp.middleware.dynamic_instructions::DynamicInstructionsMiddleware.on_list_tools":
         "[dormant] current_user_sub_from_token",
     "oto_mcp.middleware.field_redaction::FieldRedactionMiddleware.on_call_tool":
-        "_observe_schema, redaction.redact_payload",
+        "_observe_schema",
     "oto_mcp.run_org::pin_for_call":
         "[dormant] call_axes.current_user_sub_from_token",
     "oto_mcp.sentry_setup::SentryToolErrorMiddleware.on_call_tool":

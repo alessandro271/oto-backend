@@ -15,7 +15,7 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
-from ... import db, field_filter_defaults, org_store
+from ... import db, field_filter_defaults, org_store, scrub_model
 from ...connectors import field_schema as connector_field_schema
 from ...connectors import schema_store as connector_schema_store
 from .._authz import ORG_ADMIN_OF, ORG_MEMBER_OF
@@ -27,7 +27,7 @@ _ID = {"id": "org_id"}
 
 # Actions reconnues par le moteur FieldFilter (oto-core). Rejette tout le reste à
 # l'écriture (le moteur fail-safe en masque total, mais autant le dire à l'org).
-_ACTIONS = {"mask", "drop", "remove", "pseudonym", "generalize", "hash", "anonymize"}
+_ACTIONS = {"mask", "drop", "remove", "pseudonym", "generalize", "hash", "anonymize", "scrub"}
 
 # Schéma des modes pour piloter le formulaire dashboard (action + sous-options).
 _ACTION_SCHEMA = [
@@ -50,6 +50,11 @@ _ACTION_SCHEMA = [
     {"action": "hash", "label": "Hacher (SHA-256)", "params": []},
     {"action": "anonymize", "label": "Anonymiser (person_…)", "params": []},
     {"action": "drop", "label": "Supprimer le champ", "params": []},
+    {"action": "scrub", "label": "Pseudonymiser dans le texte", "params": [
+        {"key": "detect", "type": "multiselect", "label": "Valeurs à trouver",
+         "options": ["nir", "iban", "card", "email", "phone", "secret",
+                     "person", "address", "credential"]},
+    ]},
 ]
 
 
@@ -173,6 +178,30 @@ def _validate_rules(rules: list[dict]) -> None:
         if action not in _ACTIONS:
             raise AuthzDenied(400, "unknown_action",
                               f"Action inconnue : {action!r} (attendu {sorted(_ACTIONS)}).")
+        if action == "scrub":
+            _validate_scrub(rule)
+
+
+def _validate_scrub(rule: dict) -> None:
+    """`detect` nomme des sortes connues ; une sorte de modèle exige le modèle de
+    l'instance — sans lui, la politique retiendrait toutes les sorties du connecteur."""
+    from oto.tools.common.scrub import KINDS
+
+    detect = rule.get("detect")
+    if not isinstance(detect, list) or not detect:
+        raise AuthzDenied(400, "scrub_without_detect",
+                          f"Une règle `scrub` nomme ce qu'elle cherche : `detect` parmi {list(KINDS)}.")
+    inconnues = sorted(set(detect) - set(KINDS))
+    if inconnues:
+        raise AuthzDenied(400, "unknown_scrub_kind",
+                          f"Sortes inconnues : {inconnues} (attendu {list(KINDS)}).")
+    sortes = scrub_model.sortes_de_modele([rule])
+    if sortes and not scrub_model.declare():
+        raise AuthzDenied(409, "scrub_model_unconfigured",
+                          f"{sortes} se cherchent par un modèle, et cette instance n'en déclare "
+                          f"pas : retirer ces sortes, ou faire déclarer le modèle par "
+                          f"l'exploitant (`OTO_SCRUB_MODEL_URL`, `OTO_SCRUB_MODEL`, "
+                          f"`OTO_SCRUB_MODEL_KEY`).")
 
 
 def _plancher_et_documents(service: str, inp: SetFieldFilterInput) -> dict:
@@ -293,8 +322,16 @@ def _preview_field_filter(ctx: ResolvedCtx, inp: PreviewFieldFilterInput) -> dic
     else:
         block = org_store.get_org_field_filters(inp.org_id).get(service)
 
+    from oto.tools.common.scrub import ModelDetectionError
+
     ff = field_filter_defaults.filtre(field_filter_defaults.bloc_effectif(service, block))
-    return {"org_id": inp.org_id, "service": service, "redacted": ff.apply(inp.payload)}
+    try:
+        redacted = ff.apply(inp.payload)
+    except ModelDetectionError as e:
+        raise AuthzDenied(502, "scrub_model_failed",
+                          f"Le modèle de rédaction n'a pas répondu ({e}) : en service, la "
+                          f"sortie serait retenue.")
+    return {"org_id": inp.org_id, "service": service, "redacted": redacted}
 
 
 CAPABILITIES += [

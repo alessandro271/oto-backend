@@ -140,6 +140,42 @@ Actions : `mask` (preserve email/phone/iban, keep_first/last), `pseudonym` (kind
 matchée à valeur **liste de scalaires** (`emails: [...]`) est masquée **élément par
 élément** (corrigé v1.10.0/1.10.1 — sinon fuite ; couvre aussi les listes mixtes).
 
+## Dans le texte libre : l'action `scrub`
+
+Les actions ci-dessus visent un champ par son **nom** : un NIR ou un mot de passe écrit
+dans la description d'un ticket passait tel quel. `scrub` cherche les valeurs **dans** les
+chaînes et remplace chacune par un **jeton stable** (`[NIR-3f2a9c]`) : même valeur, même
+jeton, dans une réponse et d'un appel à l'autre — l'agent relie deux tickets de la même
+personne sans lire son numéro. Le jeton est un condensé à clé (`salt` de la politique)
+tronqué : beaucoup de valeurs le partagent, on ne remonte pas à la valeur en essayant
+tous les NIR.
+
+- **Règle** : `{"fields": ["*"], "action": "scrub", "detect": [...]}` — `"*"` = toutes
+  les chaînes de la réponse ; un nom de champ = les chaînes sous ce champ seulement.
+  `detect` est obligatoire (refus `scrub_without_detect`, `unknown_scrub_kind`). Appliquée
+  **après** les autres actions, sur ce qu'elles ont laissé. Template `free_text`.
+- **Par la forme, en local** (oto-core, `scrub/patterns.py`) : `nir` (clé vérifiée, Corse
+  comprise), `iban` (mod 97), `card` (Luhn), `email`, `phone`, `secret` (valeur annoncée
+  par « mot de passe : », « mdp= »…, ou format connu : `sk-`, `ghp_`, JWT, clé privée).
+  Séparateurs et `&nbsp;` tolérés ; la prose (« le token est expiré ») reste.
+- **Par un modèle** (`person`, `address`, `credential`) : ce que seule une lecture trouve.
+  Le modèle **désigne** les passages, il ne réécrit jamais le texte ; oto-core les
+  remplace, écarte un passage absent du texte et ne prend qu'un mot entier. Point
+  d'accès compatible OpenAI déclaré par l'instance (`scrub_model.py` :
+  `OTO_SCRUB_MODEL_URL`, `OTO_SCRUB_MODEL`, `OTO_SCRUB_MODEL_KEY`, les trois ou aucune).
+  Sans modèle déclaré, une règle qui en demande un est **refusée à la pose**
+  (`scrub_model_unconfigured`) ; déjà posée, elle **retient** la sortie — jamais une
+  passe réduite aux formes.
+- **Le texte libre aussi** : un résultat sans JSON passe par `redaction.redact_result`,
+  et une règle `scrub` sur `["*"]` le nettoie (les autres règles visent des clés, qu'un
+  texte n'a pas).
+- **Hors de la boucle** : la rédaction (middleware et `oto_call`) tourne dans un fil — elle
+  lit la politique en base, et le modèle répond en 0,5 à 3 s.
+- **Limites** : le rappel n'est pas de 100 % — un mot de passe nu, sans libellé ni phrase
+  qui le dise, passe ; un texte qui cherche à détourner le modèle peut lui faire manquer
+  un passage (les formes ne dépendent pas de lui). Rien n'est masqué à la source : le
+  service tiers garde ses données, seul ce qui transite par oto est nettoyé.
+
 ## Le VIDE se sert en PHRASE, jamais en structure nue
 
 **Règle** (2026-08-27, `otomata-tech/oto#32`) : un résultat d'outil qui ne porte
@@ -412,7 +448,8 @@ dans ce lot (hors périmètre demandé) ; à nommer si un prochain audit y revie
   `field_filter_defaults.py` (SERVER_DEFAULTS — plancher `payfit` seul — + TEMPLATES), `connectors/field_schema.py`
   (curé, libellés), `capabilities/orgs/field_filters.py` (get/set/preview), `db.py`
   (`connector_schemas`).
-- oto-core : `oto/tools/common/field_filter.py`.
+- oto-core : `oto/tools/common/field_filter.py`, `oto/tools/common/scrub/` (action `scrub`).
+- backend, `scrub` : `scrub_model.py` (le modèle déclaré par l'instance).
 - dashboard : `ConnectorTransforms.vue`, **lecture seule** depuis oto#192 (schéma observé
   + politique en place, aucun geste d'écriture ; `FieldRuleDialog.vue` et
   `RedactionPreview.vue` retirés).
