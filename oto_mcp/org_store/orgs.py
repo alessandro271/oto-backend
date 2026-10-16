@@ -16,7 +16,6 @@ from typing import Optional
 from .. import config
 from .. import logodev
 from ..db import _connect
-from ..db.lecture_d_appel import lecture_d_appel
 from ..db.billing import ABONNEMENT_QUI_PRELEVE
 from ..db.tenants import TenantDesactive, tenant_desactive_de_l_org
 from ..tenancy import primary_slug
@@ -154,15 +153,6 @@ def resume_org(org_id: int) -> bool:
             "  suspended_reason = NULL, suspended_tenant_id = NULL WHERE id = %s",
             (org_id,))
     return True
-
-
-@lecture_d_appel
-def nom_d_org(org_id: int) -> Optional[str]:
-    """The org's name alone, read once per call: how a listing names the org that owns
-    an account, without rereading the org per connector (#1148)."""
-    with _connect() as conn:
-        row = conn.execute("SELECT name FROM orgs WHERE id = %s", (org_id,)).fetchone()
-    return row["name"] if row else None
 
 
 def get_org(org_id: int) -> Optional[dict]:

@@ -26,6 +26,15 @@ ORG_ROLES = ("org_admin", "org_member")
 # --- reads consommés par la résolution de clé (barreau 2) -------------------
 
 @lecture_d_appel
+def nom_d_org(org_id: int) -> Optional[str]:
+    """The org's name alone, read once per call: how a listing names the org that owns
+    an account, without rereading the org per connector (#1148)."""
+    with _connect() as conn:
+        row = conn.execute("SELECT name FROM orgs WHERE id = %s", (org_id,)).fetchone()
+    return row["name"] if row else None
+
+
+@lecture_d_appel
 def get_active_org(sub: str) -> Optional[int]:
     """org_id de l'organisation active du `sub`, ou None s'il n'en a aucune.
 
