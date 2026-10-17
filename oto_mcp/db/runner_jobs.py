@@ -1756,3 +1756,78 @@ def resume_des_declencheurs(org_id: int, jours: int) -> tuple[list[dict], list[d
     # `~ '^[0-9]+$'` garantit qu'elle se convertit, côté Python.
     return ([{**r, "trigger_id": int(r["trigger_id"])} for r in cases],
             [{**r, "trigger_id": int(r["trigger_id"])} for r in pannes])
+
+
+# --- Le temps gagné des agents : les surcharges d'une org (`time_saved.py`) -----
+# Posée par la révision `0066_orgs_time_saved_minutes` ET par le démarrage, sous
+# garde de catalogue — même DDL.
+COLONNE_TEMPS_GAGNE = "time_saved_minutes"
+DDL_COLONNE_TEMPS_GAGNE = f"ALTER TABLE orgs ADD COLUMN IF NOT EXISTS {COLONNE_TEMPS_GAGNE} JSONB"
+
+
+def minutes_gagnees_de_l_org(org_id: int) -> dict:
+    """Les surcharges de l'org, `{}` quand elle n'en pose aucune (ou est inconnue)."""
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT {COLONNE_TEMPS_GAGNE} AS v FROM orgs WHERE id = %s", (org_id,)
+        ).fetchone()
+    v = row["v"] if row else None
+    return v if isinstance(v, dict) else {}
+
+
+def poser_minutes_gagnees(org_id: int, minutes: Optional[dict]) -> bool:
+    """Pose (ou retire, `None`/`{}`) les surcharges de l'org. False si l'org est absente."""
+    with _connect() as conn:
+        row = conn.execute(
+            f"UPDATE orgs SET {COLONNE_TEMPS_GAGNE} = %s::jsonb WHERE id = %s RETURNING id",
+            (json.dumps(minutes) if minutes else None, org_id),
+        ).fetchone()
+    return row is not None
+
+
+def outils_des_runs_conclus(org_id: int, jours: int) -> list[dict]:
+    """Les runs d'agents CONCLUS `done` sur la fenêtre — la matière du temps gagné,
+    dans l'ordre où ils sont tombés dus. Une ligne par run : `{trigger_id, run_id}`
+    (`trigger_id` en TEXTE, tel que le payload le porte : la clé n'est jamais castée
+    en SQL ; `run_id` mène à ses appels dans le journal, None quand le run n'y est
+    pas lié — il n'est alors pas compté)."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT payload->>'trigger_id' AS trigger_id, run_id
+              FROM runner_jobs
+             WHERE org_id = %s AND status = 'done'
+               AND due_at >= NOW() - make_interval(days => %s)
+               AND payload->>'trigger_id' ~ '^[0-9]+$'
+             ORDER BY due_at
+            """,
+            (org_id, int(jours)),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+#: Les arguments qui NOMMENT l'enregistrement touché, dans l'ordre où on les essaie —
+#: pour « un même enregistrement compte une fois par jour ».
+CLES_D_ENREGISTREMENT = ("id", "record_id", "person_id", "contact_id", "company_id",
+                         "lead_id", "issue_id", "row_id", "email", "linkedin_url", "url")
+
+
+def appels_des_runs(run_ids: list[str]) -> list[dict]:
+    """Les appels d'outils MCP de ces runs, dans l'ordre (`tool_calls`, par
+    `idx_tool_calls_run`) : outil, `op`, réussite, l'enregistrement nommé et le jour.
+    Rien d'autre des arguments n'est lu — ni corps, ni lignes, ni contenu."""
+    if not run_ids:
+        return []
+    cle = "COALESCE(" + ", ".join(f"args->>'{k}'" for k in CLES_D_ENREGISTREMENT) + ")"
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT run_id, tool, args->>'op' AS op, ok, {cle} AS cle,
+                   to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS jour
+              FROM tool_calls
+             WHERE run_id = ANY(%s) AND kind = 'mcp'
+             ORDER BY run_id, created_at
+            """,
+            (list(run_ids),),
+        ).fetchall()
+    return [dict(r) for r in rows]

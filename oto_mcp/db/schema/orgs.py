@@ -40,7 +40,11 @@ CREATE TABLE IF NOT EXISTS orgs (
     -- Fin d'essai de l'org, poussée par le commerce (`service.org.trial`) — lue,
     -- jamais appliquée par le cœur. NULL = pas d'essai en cours. Base existante :
     -- révision `0064_orgs_trial_ends_at`.
-    trial_ends_at TIMESTAMPTZ
+    trial_ends_at TIMESTAMPTZ,
+    -- Les minutes par type de résultat que l'org substitue aux défauts du temps
+    -- gagné des agents (`time_saved.py`) : `{"record": 2, …}`. NULL = les défauts.
+    -- Base existante : révision `0066_orgs_time_saved_minutes`.
+    time_saved_minutes JSONB
 );
 """
 

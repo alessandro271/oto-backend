@@ -12,5 +12,6 @@ suspended_at TIMESTAMPTZ,
 suspended_by TEXT,
 suspended_reason TEXT,
 suspended_tenant_id BIGINT,
-trial_ends_at TIMESTAMPTZ
+trial_ends_at TIMESTAMPTZ,
+time_saved_minutes JSONB
 );

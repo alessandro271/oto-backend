@@ -2215,3 +2215,49 @@ jamais castée en SQL : une seule ligne non numérique ferait tomber la lecture 
 de l'org. À mesurer en production (`EXPLAIN (ANALYZE, BUFFERS)` sur l'org la plus
 chargée) avant de servir l'écran ; à poser par `index_concurrent` si la mesure le
 demande.
+
+## Temps gagné des agents — `time_saved.py` (2026-10-17)
+
+**Le besoin.** Montrer ce qu'un agent rapporte sans rien demander à personne : ni
+saisie à la création, ni question, ni table à tenir.
+
+**La règle (décision d'Alexis, 17/10/2026) : SEUL ce qu'un outil DÉCLARE compte.**
+Temps gagné d'un run = Σ résultats × minutes par type. Le TYPE vient de l'annotation que
+l'outil porte (`tools/lecture.py`, mise en cache au boot par `tool_registry.effet_de`) :
+- `LECTURE` → recherche ;
+- `SIMULATION` (`gmail`, `outlook`) → ses `op` qui lisent (`time_saved.READ_OPS`) sont
+  des recherches ; préparer un brouillon ne compte pas (c'est l'envoi qui compte) ;
+- `ACTE` / `ENVOI` → sans `op`, un message ou une action ; avec une `op`, seule une `op`
+  qui atteint un tiers (`time_saved.SEND_OPS` : send, reply, publish, invite…) est un
+  envoi — archiver, mettre à la corbeille, déplacer ne rapportent rien ;
+- un outil qui ne déclare RIEN ne rapporte RIEN : on ne déduit jamais une écriture de
+  l'absence d'annotation, ni un type du nom de l'outil. Le chiffre grandit à mesure que
+  les connecteurs déclarent ce qu'ils font (`<ns>` / `<ns>_act`) ;
+- les écritures du tableau de l'agent (`data_write`, `data_update_where`) sont des
+  enregistrements écrits : les capacités de la plateforme ne portent pas d'annotation
+  MCP, la liste `_DATA_WRITES` est leur déclaration.
+
+Défauts : rapport 15 min, message/action 4, écriture 1,5, recherche 2 — **plafonnée à
+10 min par run**. Ces minutes sont des **estimations** (des points de départ prudents,
+pas des mesures) : chaque org les surcharge. Servi par `runner.jobs op=summary`
+(`time_saved_minutes`, `time_saved` par type, `time_saved_not_counted`,
+`time_standards`).
+
+**La matière : le journal.** Les appels des runs conclus `done` (`tool_calls` par
+`run_id`, `db.appels_des_runs`) : l'`op`, la réussite, et l'enregistrement nommé
+(`CLES_D_ENREGISTREMENT` : id, email, url… — rien d'autre des arguments n'est lu). Un
+run sans appel au journal n'est **pas compté** : il est rendu dans
+`time_saved_not_counted` (`reason: no_logged_calls`, `runs`), jamais estimé depuis ses
+`tool_counts`.
+
+**Revu sur des agents réels (17/10/2026)**, qui surcomptaient :
+- un balayage qui ne PRODUIT rien de neuf ne gagne rien — sa recherche ne compte que
+  dans un run productif ;
+- un même enregistrement compte UNE fois par jour et par agent ;
+- un appel refusé ne compte pas ;
+- chercher puis seulement ENVOYER (un résumé, une alerte) est UN rapport par run.
+
+**Surcharge d'org.** `oto_org_settings domain=time_saved` : `get` (membre) rend défauts et
+minutes appliquées ; `set` (admin) prend `minutes` `{type: 0..240 | null}` — null rend le
+défaut, `{}` les rend tous. Colonne `orgs.time_saved_minutes` (révision
+`0066_orgs_time_saved_minutes` + démarrage). Jamais par agent : c'est un réglage, pas une étape.
