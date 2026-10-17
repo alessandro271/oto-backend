@@ -1748,6 +1748,66 @@ def rekey_personal_credentials(conn, old_sub: str, new_sub: str) -> dict:
         logger.info("rekey clés personnelles %s → %s : %s", old_sub, new_sub, bilan)
     return bilan
 
+
+def suivre_les_prets_recus(conn, old_sub: str, new_sub: str) -> int:
+    """Les prêts faits À une personne la suivent quand ses comptes fusionnent (#1251).
+
+    Un prêt nominatif est une entrée `user:<sub>` du `share_side` de la ligne du
+    PRÊTEUR, et, pour un compte Google ou Microsoft, la clé de la même cible dans
+    `share_services`. Sans ce repointage, l'entrée visait un sub qui n'a plus de ligne
+    `users` : le compte prêté cessait de servir l'emprunteur fusionné, sans refus qui
+    l'explique. Chaque `user:<old_sub>` devient `user:<new_sub>`, à sa place dans la
+    liste ; si le canonique y figure déjà, l'entrée de l'ancien disparaît (pas de
+    doublon) et ses services s'ajoutent aux siens (c'est la même personne : l'union est
+    ce que `access.prets.exiger_service_prete` lui servait déjà avant la fusion). Les
+    entrées `group:` et `org:` ne portent pas de sub : intactes.
+
+    `share_side` et `share_services` sont HORS de l'AAD (`_aad` : entité, connecteur,
+    compte) : un UPDATE de ces colonnes laisse la ligne déchiffrable, sans rechiffrer.
+    Les lignes se lisent par `share_side ? 'user:<old>'` (index GIN `share_side`) :
+    `share_services` n'a de clé que pour une cible du `share_side` (écrits ensemble,
+    `capabilities/connectors/sharing`).
+
+    ⚠️ Le journal des prêts (`connector_loan_events.target`) n'est PAS réécrit : c'est
+    un journal, il garde la cible telle qu'elle a été nommée au geste. Conséquence
+    assumée : la date de dernière pose (`loan_events.dernieres_poses`) d'un prêt repointé
+    n'est plus connue sous la nouvelle cible.
+
+    Dans la transaction de l'appelant (`conn`), lignes verrouillées. Rend le nombre de
+    lignes du coffre réécrites."""
+    if not old_sub or not new_sub or old_sub == new_sub:
+        return 0
+    ancien, nouveau = f"user:{old_sub}", f"user:{new_sub}"
+    rows = conn.execute(
+        "SELECT entity_type, entity_id, connector, account, share_side, share_services "
+        "FROM connector_credentials WHERE share_side ? %s "
+        "ORDER BY entity_type, entity_id, connector, account FOR UPDATE",
+        (ancien,)).fetchall()
+    for r in rows:
+        side: list = []
+        for cible in r["share_side"] or []:
+            cible = nouveau if cible == ancien else cible
+            if cible == nouveau and nouveau in side:
+                continue
+            side.append(cible)
+        services = dict(r["share_services"] or {})
+        if ancien in services:
+            herites = services.pop(ancien) or []
+            siens = list(services.get(nouveau) or [])
+            services[nouveau] = siens + [s for s in herites if s not in siens]
+        conn.execute(
+            "UPDATE connector_credentials SET share_side = %s::jsonb, "
+            "share_services = %s::jsonb, version = version + 1 "
+            "WHERE entity_type = %s AND entity_id = %s AND connector = %s "
+            "AND account = %s",
+            (json.dumps(side), json.dumps(services), r["entity_type"], r["entity_id"],
+             r["connector"], r["account"]))
+    if rows:
+        logger.info("prêts reçus %s → %s : %d ligne(s) du coffre repointée(s)",
+                    old_sub, new_sub, len(rows))
+    return len(rows)
+
+
 def copy_connector_rows(old: str, new: str) -> dict:
     """COPIES every vault row of connector `old` to connector `new` — when a card hands
     its credential over to a carrier (`sharepoint` → `microsoft`).

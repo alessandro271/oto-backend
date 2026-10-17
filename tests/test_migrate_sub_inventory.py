@@ -355,3 +355,102 @@ def test_toute_colonne_sub_sous_index_unique_est_pre_traitee():
         "`_SUB_COLUMNS`, son index unique a disparu, ou elle est désormais "
         "PRÉ-TRAITÉE. Retirer l'entrée : une exception qui survit à sa raison finit "
         "par couvrir un trou qu'on croit fermé.")
+
+
+def _colonnes_jsonb() -> set[tuple[str, str]]:
+    """{(table, colonne)} de type JSONB : blocs CREATE de `_SCHEMA`, et les
+    `ALTER TABLE … ADD COLUMN IF NOT EXISTS … JSONB` de `_SCHEMA` et de `_init.py`."""
+    cols: set[tuple[str, str]] = set()
+    for m in re.finditer(r"CREATE TABLE IF NOT EXISTS (\w+)\s*\((.*?)\n\);",
+                         _SCHEMA, re.S):
+        for lm in re.finditer(r"^\s*(\w+)\s+JSONB\b", m.group(2), re.M):
+            cols.add((m.group(1), lm.group(1)))
+    for source in (_SCHEMA, _INIT_SRC):
+        for am in re.finditer(
+                r"ALTER TABLE (\w+) ADD COLUMN IF NOT EXISTS (\w+)\s+JSONB\b", source):
+            cols.add((am.group(1), am.group(2)))
+    return cols
+
+
+def test_toute_colonne_jsonb_est_triee_pour_la_fusion():
+    """Le tripwire des subs DANS un JSONB (#1251). `test_migrate_sub_sub_bearing_columns
+    _are_triaged` lit les NOMS de colonnes TEXT : une liste de principaux en JSONB
+    (`share_side` = `["user:<sub>", "group:3"]`) lui échappait — et la fusion la laissait
+    sur l'ancien sub : le compte prêté par son nom cessait de servir l'emprunteur
+    fusionné, sans refus qui l'explique.
+
+    Le nom d'une colonne JSONB ne dit pas ce qu'elle contient : TOUTE colonne JSONB du
+    DDL est donc triée — suivie par la fusion (`_JSONB_SUB_COLUMNS`), ou rangée ci-dessous
+    AVEC sa raison. Une colonne JSONB neuve arrive ROUGE."""
+    import inspect
+
+    from oto_mcp import credentials_store
+    from oto_mcp.db.users import _JSONB_SUB_COLUMNS
+
+    jsonb = _colonnes_jsonb()
+    assert ("connector_credentials", "share_side") in jsonb, (
+        "le parse du DDL ne trouve plus `share_side` — test à réparer")
+
+    # Ne nomme personne : configuration, structure, contenu opaque des utilisateurs ou
+    # d'un tiers. Le code n'y lit aucune référence de principal.
+    sans_personne = {
+        ("apollo_phone_reveals", "payload"), ("blocks", "props"),
+        ("connector_instances", "config"), ("connector_schemas", "schema"),
+        ("datastore_rows", "data"), ("datastore_row_revisions", "diff"),
+        ("doctrine_library", "slots"), ("function_versions", "sources"),
+        ("function_versions", "test_report"), ("grants", "constraints"),
+        ("jev_jobs", "counters"), ("jev_jobs", "errors"), ("jev_jobs", "params"),
+        ("nodes", "data"), ("nodes", "props"), ("org_instructions", "slots"),
+        ("org_instruction_revisions", "slots"), ("orgs", "email_settings"),
+        ("orgs", "field_filters"), ("process_shares", "preview_shape"),
+        ("process_shares", "preview_views"), ("project_links", "config"),
+        ("recipe_versions", "body"), ("recipe_versions", "test_report"),
+        ("runner_fleets", "descriptions_outils"), ("runner_fleets", "row_filter"),
+        ("runner_fleets", "tools"), ("runner_triggers", "payload_fields"),
+        ("runner_triggers", "tools"), ("tenants", "brand"), ("tenants", "hosts"),
+        ("tenants", "link_paths"), ("tenants", "logto_mgmt"),
+        ("transcription_jobs", "result"), ("transcription_jobs", "transcript"),
+        ("user_api_tokens", "scopes"), ("user_datastores", "schema"),
+        # Le profil de la personne : il suit SA ligne (étape 2), rien à réécrire dedans.
+        ("user_account_profile", "profile"),
+    }
+    # Journaux et instantanés : une trace historique garde ce qui a été dit au moment
+    # du geste — on ne la réécrit pas (même règle que `connector_loan_events.target`).
+    # `portee_elargissements.destinataires` porte des subs nus : qui AURAIT été prévenu.
+    journaux = {
+        ("tool_calls", "args"), ("run_messages", "content"),
+        ("run_messages", "provider_raw"), ("runner_jobs", "payload"),
+        ("runner_jobs", "result"), ("runner_jobs", "attempt_errors"),
+        ("access_shadow_l7", "sample"), ("credential_disparitions", "agents"),
+        ("portee_elargissements", "destinataires"),
+    }
+    # ⚠️ ÉCARTS CONNUS, pas des exceptions de confort (relevés avec #1251, non traités
+    # par ce lot) : les accords d'une clé PLATEFORME nomment `user:<sub>` — `share_down`
+    # (bénéficiaires) et `meta` (`rate_limit_by`, `share_denied`). La fusion ne les
+    # réécrit pas : un accord nominatif ou un refus (F-046) ne suit pas la personne. À
+    # trancher, puis passer dans `_JSONB_SUB_COLUMNS` et retirer l'entrée.
+    ecarts_connus = {
+        ("connector_credentials", "share_down"), ("connector_credentials", "meta"),
+    }
+    allow = sans_personne | journaux | ecarts_connus
+
+    manquantes = jsonb - set(_JSONB_SUB_COLUMNS) - allow
+    assert not manquantes, (
+        "colonnes JSONB NON triées pour la fusion de comptes :\n  "
+        + "\n  ".join(f"{t}.{c}" for t, c in sorted(manquantes))
+        + "\nSi elles portent un sub (`user:<sub>`, un sub nu), les faire suivre "
+          "(`_JSONB_SUB_COLUMNS` + étape 3 quater de `repointer_patrimoine`) ; sinon "
+          "les ranger ici AVEC leur raison.")
+    mortes = (allow | set(_JSONB_SUB_COLUMNS)) - jsonb
+    assert not mortes, (
+        f"entrées sans colonne JSONB dans le DDL : {sorted(mortes)} — retirer l'entrée "
+        "(la colonne a disparu) ou réparer le parse.")
+    doubles = allow & set(_JSONB_SUB_COLUMNS)
+    assert not doubles, f"suivies ET allowlistées : {sorted(doubles)}"
+    # Déclarer une colonne suivie ne suffit pas : l'étape qui la réécrit doit la nommer.
+    ecrit = inspect.getsource(credentials_store.suivre_les_prets_recus)
+    non_ecrites = [f"{t}.{c}" for t, c in _JSONB_SUB_COLUMNS
+                   if not re.search(rf"\bUPDATE {t} SET\b.*\b{c} = ", ecrit, re.S)]
+    assert not non_ecrites, (
+        f"déclarées suivies mais jamais réécrites par `suivre_les_prets_recus` : "
+        f"{non_ecrites}")

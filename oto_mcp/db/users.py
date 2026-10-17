@@ -384,6 +384,16 @@ _UNIQUE_INDEX_SUB_TABLES = (
     ("org_entitlements", "sub", ("org_id", "right_key", "source"), None),
 )
 
+# Colonnes JSONB qui NOMMENT une personne (`user:<sub>`) et la SUIVENT à la fusion :
+# étape 3 quater de `repointer_patrimoine`, `credentials_store.suivre_les_prets_recus`
+# (#1251). Hors AAD du coffre, donc un UPDATE suffit. Toute colonne JSONB du DDL est
+# triée — ici, ou dans l'allowlist motivée du garde-fou
+# `test_migrate_sub_inventory.py::test_toute_colonne_jsonb_est_triee_pour_la_fusion`.
+_JSONB_SUB_COLUMNS = (
+    ("connector_credentials", "share_side"),
+    ("connector_credentials", "share_services"),
+)
+
 # Inventaire des colonnes keyed-by-sub à repointer (issue oto-backend#56). Plain
 # UPDATE : le nouveau sub est frais → aucun conflit de PK, SAUF user_account_profile
 # (PK sub), les appartenances ci-dessus et connector_credentials (coffre user),
@@ -602,7 +612,7 @@ def _stronger_role(a: Optional[str], b: Optional[str]) -> str:
 
 def repointer_patrimoine(conn, old_sub: str, new_sub: str, *,
                          sauf: frozenset = frozenset()) -> dict:
-    """Repointe TOUT ce qui porte `old_sub` vers `new_sub` — étapes 2 à 3 ter de
+    """Repointe TOUT ce qui porte `old_sub` vers `new_sub` — étapes 2 à 3 quater de
     `migrate_sub`, dans la transaction de l'appelant. Rend le bilan du coffre.
 
     Sortie de `migrate_sub` pour avoir DEUX appelants et une seule écriture
@@ -755,7 +765,16 @@ def repointer_patrimoine(conn, old_sub: str, new_sub: str, *,
     #    identifiant pré-alias. Le rechiffrement lève l'obstacle au lieu de le
     #    contourner ; une collision ou une ligne illisible reste en place, et le dit.
     from .. import credentials_store
-    return credentials_store.rekey_personal_credentials(conn, old_sub, new_sub)
+    bilan = credentials_store.rekey_personal_credentials(conn, old_sub, new_sub)
+    # 3 quater. Les PRÊTS faits À la personne (#1251) : `user:<old_sub>` dans le
+    #    `share_side` (et `share_services`) de la ligne d'un PRÊTEUR devient
+    #    `user:<new_sub>`, sans doublon, `group:`/`org:` intacts — colonnes hors AAD,
+    #    un UPDATE suffit (`_JSONB_SUB_COLUMNS`). Sans lui, le compte prêté par son nom
+    #    cessait de servir l'emprunteur fusionné, sans refus qui l'explique.
+    #    ⚠️ Le journal des prêts (`connector_loan_events.target`) garde la cible TELLE
+    #    QU'ELLE a été nommée : c'est un journal, on ne le réécrit pas.
+    credentials_store.suivre_les_prets_recus(conn, old_sub, new_sub)
+    return bilan
 
 
 def migrate_sub(old_sub: str, new_sub: str, *, operator_source: str = "") -> bool:
