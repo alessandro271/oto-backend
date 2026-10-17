@@ -1784,12 +1784,7 @@ def suivre_les_prets_recus(conn, old_sub: str, new_sub: str) -> int:
         "ORDER BY entity_type, entity_id, connector, account FOR UPDATE",
         (ancien,)).fetchall()
     for r in rows:
-        side: list = []
-        for cible in r["share_side"] or []:
-            cible = nouveau if cible == ancien else cible
-            if cible == nouveau and nouveau in side:
-                continue
-            side.append(cible)
+        side = _repointer_la_cible(r["share_side"], ancien, nouveau)
         services = dict(r["share_services"] or {})
         if ancien in services:
             herites = services.pop(ancien) or []
@@ -1804,6 +1799,85 @@ def suivre_les_prets_recus(conn, old_sub: str, new_sub: str) -> int:
              r["connector"], r["account"]))
     if rows:
         logger.info("prêts reçus %s → %s : %d ligne(s) du coffre repointée(s)",
+                    old_sub, new_sub, len(rows))
+    return len(rows)
+
+
+def _repointer_la_cible(cibles, ancien: str, nouveau: str) -> list:
+    """`cibles` (liste de principaux) où `ancien` devient `nouveau`, à sa place ; si
+    `nouveau` y figure déjà, l'entrée en trop disparaît (pas de doublon). Les autres
+    entrées (`group:`, `org:`, un tiers) ne bougent pas."""
+    out: list = []
+    for cible in cibles or []:
+        cible = nouveau if cible == ancien else cible
+        if cible == nouveau and nouveau in out:
+            continue
+        out.append(cible)
+    return out
+
+
+def _quota_le_plus_strict(a: "int | None", b: "int | None") -> "int | None":
+    """Le plus restrictif de deux quotas journaliers ; `None` = sans plafond
+    (`access.platform_grant._platform_quota` le sert tel quel)."""
+    bornes = [q for q in (a, b) if q is not None]
+    return min(bornes) if bornes else None
+
+
+def suivre_les_accords_recus(conn, old_sub: str, new_sub: str) -> int:
+    """Les ACCORDS et les REFUS nominatifs d'une clé plateforme suivent la personne quand
+    ses comptes fusionnent (#1258). Trois endroits nomment `user:<sub>` sur une ligne du
+    coffre, hors du `share_side` (`suivre_les_prets_recus`) :
+
+    - `share_denied` dans `meta` (F-046) : la RÉVOCATION. C'est le point de sécurité :
+      sans repointage, le refus visait un sub sans ligne `users`, et le compte fusionné
+      était servi à nouveau (`access.platform_grant._platform_denied` lit `user:<sub>`).
+      `user:<old>` devient `user:<new>`, sans doublon ;
+    - `share_down` : les bénéficiaires d'une clé plateforme fermée, même règle ;
+    - `rate_limit_by` dans `meta` (`{scope: quota journalier}`, écrit par
+      `platform_grant`, lu par `_platform_quota`) : la clé `user:<old>` devient
+      `user:<new>`. Si le canonique a déjà son quota, on garde le PLUS RESTRICTIF
+      (`_quota_le_plus_strict`) : un quota plafonne la dépense d'une clé payante, posé
+      par un admin pour UN bénéficiaire ; la somme ouvrirait à la personne fusionnée un
+      plafond que personne n'a accordé, le minimum ne dépasse jamais ce qu'un admin a
+      décidé pour l'une ou l'autre de ses identités.
+
+    Conséquence assumée : un refus de l'ancien et un accord du canonique (ou l'inverse)
+    se retrouvent sur la même personne, et le refus prime à la lecture — la règle de
+    F-046, la plus prudente. Seul `platform_grant` le lève.
+
+    `meta` et `share_down` sont HORS de l'AAD (`_aad` : entité, connecteur, compte) : un
+    UPDATE laisse la ligne déchiffrable. Pas d'index sur ces deux colonnes : la lecture
+    balaie `connector_credentials`, une fois par fusion. Dans la transaction de
+    l'appelant (`conn`), lignes verrouillées. Rend le nombre de lignes réécrites."""
+    if not old_sub or not new_sub or old_sub == new_sub:
+        return 0
+    ancien, nouveau = f"user:{old_sub}", f"user:{new_sub}"
+    rows = conn.execute(
+        "SELECT entity_type, entity_id, connector, account, share_down, meta "
+        "FROM connector_credentials WHERE share_down ? %s "
+        "OR meta -> 'share_denied' ? %s OR meta -> 'rate_limit_by' ? %s "
+        "ORDER BY entity_type, entity_id, connector, account FOR UPDATE",
+        (ancien, ancien, ancien)).fetchall()
+    for r in rows:
+        down = _repointer_la_cible(r["share_down"], ancien, nouveau)
+        meta = dict(r["meta"] or {})
+        if ancien in (meta.get(_REVOQUES) or []):
+            meta[_REVOQUES] = _repointer_la_cible(meta[_REVOQUES], ancien, nouveau)
+        rlb = dict(meta.get("rate_limit_by") or {})
+        if ancien in rlb:
+            herite = rlb.pop(ancien)
+            rlb[nouveau] = (_quota_le_plus_strict(herite, rlb[nouveau])
+                            if nouveau in rlb else herite)
+            meta["rate_limit_by"] = rlb
+        conn.execute(
+            "UPDATE connector_credentials SET share_down = %s::jsonb, "
+            "meta = %s::jsonb, version = version + 1 "
+            "WHERE entity_type = %s AND entity_id = %s AND connector = %s "
+            "AND account = %s",
+            (json.dumps(down), json.dumps(meta), r["entity_type"], r["entity_id"],
+             r["connector"], r["account"]))
+    if rows:
+        logger.info("accords reçus %s → %s : %d ligne(s) du coffre repointée(s)",
                     old_sub, new_sub, len(rows))
     return len(rows)
 

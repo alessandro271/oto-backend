@@ -385,13 +385,17 @@ _UNIQUE_INDEX_SUB_TABLES = (
 )
 
 # Colonnes JSONB qui NOMMENT une personne (`user:<sub>`) et la SUIVENT à la fusion :
-# étape 3 quater de `repointer_patrimoine`, `credentials_store.suivre_les_prets_recus`
-# (#1251). Hors AAD du coffre, donc un UPDATE suffit. Toute colonne JSONB du DDL est
-# triée — ici, ou dans l'allowlist motivée du garde-fou
+# étape 3 quater de `repointer_patrimoine` — `credentials_store.suivre_les_prets_recus`
+# (prêts, #1251) et `credentials_store.suivre_les_accords_recus` (accords et refus d'une
+# clé plateforme, #1258 : `share_down`, et dans `meta` les seules clés `share_denied` et
+# `rate_limit_by`). Hors AAD du coffre, donc un UPDATE suffit. Toute colonne JSONB du
+# DDL est triée — ici, ou dans l'allowlist motivée du garde-fou
 # `test_migrate_sub_inventory.py::test_toute_colonne_jsonb_est_triee_pour_la_fusion`.
 _JSONB_SUB_COLUMNS = (
     ("connector_credentials", "share_side"),
     ("connector_credentials", "share_services"),
+    ("connector_credentials", "share_down"),
+    ("connector_credentials", "meta"),
 )
 
 # Inventaire des colonnes keyed-by-sub à repointer (issue oto-backend#56). Plain
@@ -774,6 +778,10 @@ def repointer_patrimoine(conn, old_sub: str, new_sub: str, *,
     #    ⚠️ Le journal des prêts (`connector_loan_events.target`) garde la cible TELLE
     #    QU'ELLE a été nommée : c'est un journal, on ne le réécrit pas.
     credentials_store.suivre_les_prets_recus(conn, old_sub, new_sub)
+    #    Et les ACCORDS d'une clé plateforme (#1258) : `share_down`, `meta.share_denied`
+    #    (la révocation F-046 — sans elle, le compte fusionné était servi à nouveau) et
+    #    `meta.rate_limit_by` (deux quotas qui se rencontrent : le plus restrictif).
+    credentials_store.suivre_les_accords_recus(conn, old_sub, new_sub)
     return bilan
 
 
