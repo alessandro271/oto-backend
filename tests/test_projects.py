@@ -404,7 +404,7 @@ def test_update_folder_trop_long(seams):
     """Un libellé, pas une phrase : refus nommé, et rien n'est écrit."""
     with pytest.raises(AuthzDenied) as e:
         P._project(CTX, P.ProjectInput(op="update", project_id=7, name="New",
-                                       folder="x" * (P._FOLDER_MAX + 1)))
+                                       folder="x" * (P.FOLDER_MAX + 1)))
     assert (e.value.status, e.value.code) == (400, "folder_too_long")
     assert seams["update"] == []
 

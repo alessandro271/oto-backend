@@ -23,6 +23,7 @@ from .. import (config, db, deprecations, group_store, org_store, output_project
                 ownership, roles, session_org, url_perimeter)
 from ._authz import SUB_ONLY, refus_hors_vue
 from . import _portee, _publication
+from ._dossier import FOLDER_MAX, dossier_valide
 from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
 
@@ -36,9 +37,6 @@ RTYPE = "project"
 _LINK_TYPES = ("tableau", "procedure", "connecteur")
 
 
-# Dossier d'affichage d'un projet : un libellé libre que les listes regroupent.
-# Borné pour rester un libellé — une phrase n'est pas un nom de dossier.
-_FOLDER_MAX = 80
 
 
 class ProjectInput(BaseModel):
@@ -65,7 +63,7 @@ class ProjectInput(BaseModel):
         "update: emoji shown in lists and headers. `\"\"` clears it."))
     folder: Optional[str] = Field(default=None, description=(
         "update: the folder the project is shown under in lists — a free label "
-        f"(≤ {_FOLDER_MAX} characters), shared by every project that carries the "
+        f"(≤ {FOLDER_MAX} characters), shared by every project that carries the "
         "same one. Display only: no hierarchy, no access rule. `\"\"` clears it."))
     brief_md: Optional[str] = None
     is_template: Optional[bool] = None   # update : publier/retirer le projet comme MODÈLE (ADR 0032 §7 B5a)
@@ -1088,10 +1086,7 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
                  "le reste se redéclare par `op=publish_mcp`.")
         # Avant toute écriture, comme les refus au-dessus : le périmètre d'URL plus bas
         # s'écrit seul, et « rien n'a été modifié » doit rester vrai.
-        folder = inp.folder.strip() if inp.folder is not None else None
-        _require(folder is None or len(folder) <= _FOLDER_MAX, "folder_too_long",
-                 f"`folder` est un libellé d'au plus {_FOLDER_MAX} caractères, et rien "
-                 "n'a été modifié.")
+        folder = dossier_valide(inp.folder)
         # Ce que l'agent d'un TIERS lit au branchement : même autorité que la
         # publication elle-même, pas un simple write.
         if inp.mcp_instructions_md is not None:
