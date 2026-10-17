@@ -36,7 +36,7 @@ from ... import (access, db, deprecations, group_store, guide_store, org_store,
                 slots as slots_mod, tool_alias, tool_registry)
 from .._auteurs import nommer_l_auteur, nommer_les_auteurs
 from .._lecture_bornee import bornee
-from .._authz import (ORG_ADMIN, ORG_ADMIN_OF, ORG_ADMIN_OPT, ORG_MEMBER,
+from .._authz import (BY_OP, ORG_ADMIN, ORG_ADMIN_OF, ORG_ADMIN_OPT, ORG_MEMBER,
                       ORG_MEMBER_OF, SUB_ONLY, capacite_autorise,
                       refus_de_famille)
 from .._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx,
@@ -132,6 +132,16 @@ _SHADOW_WARNING = ("Présent quand une copie en MASQUE une autre pour une lectur
                    "(`op=get` sans `scope` : ta copie perso en service d'abord, puis "
                    "l'org) : dit "
                    "laquelle est servie, laquelle est écartée, et comment lever le masque.")
+_SHADOW_LIFTED = ("Présent quand ce geste retire du service ta copie PERSONNELLE qui "
+                  "masquait la procédure de l'org du même slug : une lecture par nom sert "
+                  "désormais celle de l'org — dit laquelle.")
+# Le palier d'une route `/api/me/instructions*` (#1156, exigence 7). Absent = l'org,
+# comme avant ; `user` = TON palier personnel, et seulement le tien. Pas `group` : le
+# palier équipe a ses propres routes (`/api/groups/{id}/instructions*`).
+_SCOPE_REST = ("Palier visé : absent ou `org` = la procédure de l'org active (le "
+               "comportement historique) ; `user` = TA procédure personnelle, et "
+               "seulement la tienne — celle d'un autre compte n'est jamais atteignable.")
+_SCOPE_ECHO = "Écho du palier demandé (`?scope=`) ; absent quand la requête n'en passe pas."
 
 
 class GuideView(BaseModel):
@@ -224,6 +234,11 @@ class InstructionIndexEntry(BaseModel):
     description: Optional[str] = None
     version: int
     updated_at: Optional[str] = None
+    # #1156 — servis sur la liste PERSONNELLE (`?scope=user`) seulement : quelle copie
+    # perso masque une procédure de l'org. La liste de l'org ne les calcule pas (une
+    # lecture de plus par ligne, sur la liste la plus lue de l'écran).
+    other_scopes: Optional[list[OtherScope]] = Field(default=None, description=_OTHER_SCOPES)
+    shadow_warning: Optional[str] = Field(default=None, description=_SHADOW_WARNING)
 
 
 class ArchivedInstructionIndexEntry(InstructionIndexEntry):
@@ -273,6 +288,17 @@ class InstructionsBundle(BaseModel):
         "offrir leur remise en service (`POST …/{slug}/unarchive`). Servie à qui peut les "
         "désarchiver (org_admin), VIDE pour les autres. Jamais dans `instructions`, et "
         "jamais dans l'index que lit l'IA."))
+    # #1156, exigence 7 : la même liste au palier PERSONNEL, sur la même route.
+    scope: Optional[Literal["org", "user"]] = Field(default=None, description=(
+        "Écho de `?scope=`, absent sans lui. `user` : `instructions` et `archived` sont "
+        "TES procédures personnelles (archivées toujours servies : tu peux remettre les "
+        "tiennes en service), chacune avec `other_scopes`/`shadow_warning` quand elle "
+        "porte le slug d'une procédure de l'org ; `can_write_instructions` et "
+        "`can_delete_instructions` disent alors ce que CETTE face te permet sur ton palier "
+        "(supprimer : oui ; écrire : non tant que `PUT …/{slug}` ne prend pas `scope` — "
+        "le palier perso s'écrit par `oto_procedure scope='user'`). `org_id`, "
+        "`org_name`, `can_edit` et `guide` restent ceux de l'org active, à vide sans "
+        "org active."))
 
 
 class InstructionView(BaseModel):
@@ -309,6 +335,7 @@ class InstructionView(BaseModel):
         "ici exprès, pour qu'on puisse la relire et décider, pas pour l'exécuter. "
         "La remettre en service est un geste explicite, depuis l'écran qui l'a "
         "retirée."))
+    scope: Optional[Literal["org", "user"]] = Field(default=None, description=_SCOPE_ECHO)
     other_scopes: Optional[list[OtherScope]] = Field(default=None, description=_OTHER_SCOPES)
     shadow_warning: Optional[str] = Field(default=None, description=_SHADOW_WARNING)
 
@@ -323,12 +350,18 @@ class InstructionUnarchived(BaseModel):
     ok: bool
     org_id: Optional[int] = None
     group_id: Optional[int] = None
+    # Palier PERSONNEL (#1156, `?scope=user`) : la clé de scope est `user_id`.
+    user_id: Optional[str] = None
     scope: Optional[str] = None
     slug: str
     unarchived: bool
     was_archived_at: Optional[str] = Field(default=None, description=(
         "Date de retrait que ce geste vient d'annuler, ou null si la procédure "
         "était déjà en service."))
+    # #1156 — remettre en service une copie perso la remet EN TÊTE de la cascade : si
+    # l'org porte le même slug, elle la masque de nouveau, et la réponse le dit.
+    other_scopes: Optional[list[OtherScope]] = Field(default=None, description=_OTHER_SCOPES)
+    shadow_warning: Optional[str] = Field(default=None, description=_SHADOW_WARNING)
 
 
 class InstructionVersion(BaseModel):
@@ -503,9 +536,14 @@ class InstructionDeleted(BaseModel):
     ok: bool
     org_id: Optional[int] = None
     group_id: Optional[int] = None
+    # Palier PERSONNEL (#1156, `?scope=user`) : la clé de scope est `user_id`.
+    user_id: Optional[str] = None
     scope: Optional[str] = None
     slug: str
     deleted: bool
+    # #1156 — ce qui reste sous ce slug, et le masque que la suppression vient de lever.
+    other_scopes: Optional[list[OtherScope]] = Field(default=None, description=_OTHER_SCOPES)
+    shadow_lifted: Optional[str] = Field(default=None, description=_SHADOW_LIFTED)
 
 
 class RunnerRepointed(BaseModel):
@@ -560,11 +598,13 @@ class InstructionArchived(BaseModel):
     laisserait la suppression pour seule sortie, donc la destruction de l'historique
     que l'archivage existe pour préserver.
 
-    ⚠️ Comme à l'écriture, la clé de scope change de nom (#681) — ici toujours
-    `org_id` : l'archivage n'est pas servi au palier équipe."""
+    ⚠️ Comme à l'écriture, la clé de scope change de nom (#681) : `org_id`, `group_id`
+    (console seulement) ou `user_id` (`?scope=user`, #1156)."""
     ok: bool
     org_id: Optional[int] = None
     group_id: Optional[int] = None
+    # Palier PERSONNEL (#1156, `?scope=user`) : la clé de scope est `user_id`.
+    user_id: Optional[str] = None
     scope: Optional[str] = None
     slug: str
     archived: bool
@@ -574,6 +614,9 @@ class InstructionArchived(BaseModel):
         "When the procedure left service — on a second archive, the date of the first."))
     already_archived: Optional[bool] = Field(default=None, description=(
         "true when the procedure was already archived: nothing changed."))
+    # #1156 — archiver une copie perso EN SERVICE lève le masque qu'elle posait.
+    other_scopes: Optional[list[OtherScope]] = Field(default=None, description=_OTHER_SCOPES)
+    shadow_lifted: Optional[str] = Field(default=None, description=_SHADOW_LIFTED)
 
 
 class InstructionReverted(BaseModel):
@@ -596,6 +639,23 @@ _FAMILLE = DeclaredError(409, "family_conflict",
                          "(oto#100) — une procédure neuve ne s'y crée pas, un "
                          "renommage n'y va pas ; le refus nomme le guide, rien n'est "
                          "écrit")
+
+# #1156, exigence 7 — le palier PERSONNEL sur les routes `/api/me/instructions*`. La
+# règle suit `scope`, comme sur la console (`procedure_console._LIRE`/`_ECRIRE`) : absent
+# ou `org` = la garde d'avant, inchangée ; `user` = être authentifié, puisque le palier
+# visé est le SIEN (`_owner_of` en tire l'identité du contexte, jamais d'un champ
+# client — la copie perso d'un autre compte n'est pas nommable).
+_LIRE_SON_PALIER = BY_OP({None: ORG_MEMBER, "org": ORG_MEMBER, "user": SUB_ONLY},
+                         fields=("scope",))
+_ADMIN_ORG_OPT = ORG_ADMIN_OPT("org")
+_GERER_SON_PALIER = BY_OP({None: _ADMIN_ORG_OPT, "org": _ADMIN_ORG_OPT,
+                           "user": SUB_ONLY}, fields=("scope",))
+_ABSENTE = DeclaredError(404, "not_found",
+                         "aucune procédure de ce slug au palier visé — au palier `user`, "
+                         "aucune À TOI : la copie perso d'un autre compte répond ce même "
+                         "404, elle n'est jamais atteignable")
+_PERSO_REST = (" `?scope=user` targets YOUR personal copy instead (any signed-in "
+               "account, yours only — another account's copy is a 404).")
 
 
 def _inconnu(message: str) -> AuthzDenied:
@@ -642,9 +702,16 @@ class GuideListInput(BaseModel):
     include_archived: bool = False
 
 
+class InstrListInput(BaseModel):
+    """`GET /api/me/instructions` — l'org active par défaut, ton palier perso sur
+    `?scope=user` (#1156)."""
+    scope: Optional[Literal["org", "user"]] = Field(default=None, description=_SCOPE_REST)
+
+
 class InstrGetInput(BaseModel):
     slug: str
     version: Optional[int] = None
+    scope: Optional[Literal["org", "user"]] = Field(default=None, description=_SCOPE_REST)
 
 
 class SlugInput(BaseModel):
@@ -749,6 +816,15 @@ class GuideDeleteInput(BaseModel):
     org: Optional[int] = None
 
 
+class PalierSlugInput(GuideDeleteInput):
+    """`GuideDeleteInput` + le palier PERSONNEL de la face REST (#1156, exigence 7) :
+    `DELETE …/{slug}`, `POST …/{slug}/archive` et `…/unarchive` agissent sur TA copie
+    perso avec `?scope=user`. L'identité vient du contexte d'autz (`_owner_of`), jamais
+    d'un champ client : la copie d'un autre compte n'est pas nommable ici. `org` est
+    sans effet au palier perso."""
+    scope: Optional[Literal["org", "user"]] = Field(default=None, description=_SCOPE_REST)
+
+
 class InstrRenameInput(BaseModel):
     """RENOMMER une procédure : `slug` (l'actuel) → `new_slug` (issue `oto`#261).
 
@@ -761,10 +837,12 @@ class InstrRenameInput(BaseModel):
 
 
 # … et les porter sur les entrées de la CONSOLE seule (#681). Les faces REST
-# `/api/me/instructions/*` gardent leur palier org : le palier équipe y a déjà ses
-# propres routes (`/api/groups/{id}/instructions/*`, `groups/guide.py`). Publier
-# `scope`/`group` dans le corps d'une route qui les refuserait décrirait une porte
-# qui n'existe pas.
+# `/api/me/instructions/*` n'ont pas le palier équipe : il y a ses propres routes
+# (`/api/groups/{id}/instructions/*`, `groups/guide.py`). Publier `scope='group'` ou
+# `group` sur une route qui les refuserait décrirait une porte qui n'existe pas.
+# Le palier PERSONNEL, lui, y est ouvert en lecture, suppression et (dés)archivage
+# depuis #1156 (exigence 7) : `scope` y vaut `org` ou `user`, rien d'autre
+# (`InstrListInput`, `InstrGetInput`, `PalierSlugInput`), et l'autz s'y branche.
 class ConsoleInstrSetInput(InstrSetInput):
     """`InstrSetInput` + l'axe de PALIER de la console `oto_procedure`.
 
@@ -1099,6 +1177,28 @@ def _paliers_du_slug(ctx: ResolvedCtx, slug: str, servi: tuple[str, str],
         return {}
     alerte = _masque(servi[0], servi_archive_le is not None, autres, geste)
     return {"other_scopes": autres, **({"shadow_warning": alerte} if alerte else {})}
+
+
+def _paliers_apres_retrait(ctx: ResolvedCtx, slug: str, retiree: tuple[str, str],
+                           retiree_archive_le) -> dict:
+    """Après un RETRAIT (suppression, archivage) de la copie `retiree` : `other_scopes`
+    (ce qui reste sous ce slug) et `shadow_lifted` quand le geste vient de LEVER le
+    masque — la copie retirée était personnelle et EN SERVICE, et l'org porte le même
+    slug : une lecture par nom sert désormais celle de l'org (#1156, exigence 7 : le
+    masque se retire depuis l'écran, et l'écran doit savoir qu'il l'a retiré).
+
+    `retiree_archive_le` : son `archived_at` AVANT le geste. Une copie déjà archivée ne
+    masquait plus rien (décision du 14/10/2026) : la retirer ne lève rien."""
+    autres = _autres_paliers(ctx, slug, retiree)
+    if not autres:
+        return {}
+    org = next((a for a in autres if a["scope"] == "org"), None)
+    leve = retiree[0] == "user" and retiree_archive_le is None and org is not None
+    return {"other_scopes": autres, **({"shadow_lifted": (
+        "Ta copie PERSONNELLE masquait la procédure de l'ORG du même slug "
+        f"({_designe(org)}) : une lecture par nom (`op=get` sans `scope`) sert désormais "
+        "celle de l'org, pour toi comme pour un agent qui tourne sous ton compte.")}
+        if leve else {})}
 
 
 # ── Handlers (core ; owner depuis ctx → partagés membre/admin) ──────────────
@@ -1609,10 +1709,17 @@ def _delete_instruction(ctx: ResolvedCtx, inp) -> dict:
     norm = org_store.normalize_slug(inp.slug)
     if not norm:
         raise AuthzDenied(400, "invalid_slug", "slug requis.")
+    # #1156 — surface membre : l'état d'AVANT dit si la copie supprimée masquait l'org.
+    # La face admin (`org_id` ciblé) n'a pas de cascade, donc rien à en dire.
+    membre = getattr(inp, "org_id", None) is None
+    avant = org_store.get_instruction(*owner, norm) if membre else None
     deleted = org_store.delete_instruction(*owner, norm)
     if not deleted:
-        raise AuthzDenied(404, "not_found", f"Instruction `{norm}` absente.")
-    return {"ok": True, **_scope_ref(owner), "slug": norm, "deleted": True}
+        raise AuthzDenied(404, "not_found", f"Instruction `{norm}` absente"
+                          + (" de ton palier personnel." if owner[0] == "user" else "."))
+    return {"ok": True, **_scope_ref(owner), "slug": norm, "deleted": True,
+            **(_paliers_apres_retrait(ctx, norm, owner, (avant or {}).get("archived_at"))
+               if membre else {})}
 
 
 def _archive_instruction(ctx: ResolvedCtx, inp) -> dict:
@@ -1625,7 +1732,8 @@ def _archive_instruction(ctx: ResolvedCtx, inp) -> dict:
         raise AuthzDenied(400, "invalid_slug", "slug requis.")
     avant = org_store.get_instruction(*owner, norm)
     if not avant:
-        raise AuthzDenied(404, "not_found", f"Instruction `{norm}` absente.")
+        raise AuthzDenied(404, "not_found", f"Instruction `{norm}` absente"
+                          + (" de ton palier personnel." if owner[0] == "user" else "."))
     deja = avant.get("archived_at")
     if deja is None:
         org_store.archive_instruction(*owner, norm)
@@ -1634,7 +1742,10 @@ def _archive_instruction(ctx: ResolvedCtx, inp) -> dict:
         date = deja
     return {"ok": True, **_scope_ref(owner), "slug": norm, "archived": True,
             "archived_at": str(date) if date is not None else None,
-            "already_archived": deja is not None}
+            "already_archived": deja is not None,
+            # #1156 — archiver une copie perso EN SERVICE lève le masque : le dire.
+            **(_paliers_apres_retrait(ctx, norm, owner, deja)
+               if getattr(inp, "org_id", None) is None else {})}
 
 
 def _rename_instruction(ctx: ResolvedCtx, inp) -> dict:
@@ -1681,10 +1792,57 @@ def _rename_instruction(ctx: ResolvedCtx, inp) -> dict:
 
 
 # ── Handlers REST-only (org active) ─────────────────────────────────────────
-def _instructions_list(ctx: ResolvedCtx, inp: EmptyInput) -> dict:
+def _droits_au_palier_perso(sub: str) -> dict:
+    """Les droits servis par la liste PERSONNELLE (`?scope=user`, #1156) : pour chaque
+    drapeau, la règle de la capacité de SON verbe, exécutée au palier `user` — et
+    seulement si cette capacité ACCEPTE ce palier (`scope` dans son entrée). Sinon le
+    drapeau annoncerait le droit de l'ORG pour un geste que la route refuse au palier
+    perso (`PUT …/{slug}` n'a pas de `scope` : le palier perso s'écrit par
+    `oto_procedure`)."""
+    caps = {c.key: c for c in CAPABILITIES}
+    return {nom: ("scope" in caps[cle].Input.model_fields
+                  and capacite_autorise(cle, sub, scope="user"))
+            for nom, cle in _DROITS_SERVIS.items()}
+
+
+def _instructions_perso(ctx: ResolvedCtx, bundle: dict) -> dict:
+    """La liste au palier PERSONNEL (#1156, exigence 7) : tes procédures, en service et
+    archivées, chacune avec ce qu'elle masque — de quoi voir un masque depuis l'écran et
+    le lever (`DELETE …/{slug}?scope=user`, `POST …/{slug}/archive?scope=user`).
+
+    Une lecture de plus par ligne (`_paliers_du_slug`, le palier de l'org) : une liste
+    personnelle est courte, et c'est la seule façon de la dire avec les mots de la
+    lecture par nom plutôt que d'en recopier la règle."""
+    owner = ("user", str(ctx.sub))
+
+    def _avec_ses_paliers(rows: list[dict]) -> list[dict]:
+        return [{**r, **_paliers_du_slug(ctx, r["slug"], owner, "lecture",
+                                         r.get("archived_at"))} for r in rows]
+
+    return {**bundle, **_droits_au_palier_perso(ctx.sub),
+            "instructions": _avec_ses_paliers(org_store.list_instructions(*owner)),
+            "archived": (_avec_ses_paliers(org_store.list_archived_instructions(*owner))
+                         if capacite_autorise("org.instruction.unarchive", ctx.sub,
+                                              scope="user")
+                         else [])}
+
+
+def _instructions_list(ctx: ResolvedCtx, inp: InstrListInput) -> dict:
     """Guide de base (meta) + index des instructions nommées de l'org active.
-    Bundle vide en 200 si pas d'org active (consommé par l'overview)."""
+    Bundle vide en 200 si pas d'org active (consommé par l'overview).
+
+    `?scope=user` (#1156) : la même forme, mais `instructions`/`archived` sont celles
+    de TON palier personnel — servies aussi sans org active (elles ne dépendent pas
+    d'elle)."""
     org_id = ctx.org_id
+    if inp.scope == "user":
+        if org_id is None:
+            org_part = {"org_id": None, "org_name": None, "can_edit": False,
+                        "guide": {"exists": False, "version": 0, "updated_at": None}}
+        else:
+            org_part = _readme_de_l_org(ctx, org_id)
+        return deprecations.avec_les_deux_noms(
+            {**_instructions_perso(ctx, org_part), "scope": "user"})
     if org_id is None:
         # Sans org active, aucun geste n'aboutit : tous les droits à faux — et TOUS
         # ceux que le modèle déclare, pas seulement `can_edit` (un drapeau absent d'une
@@ -1695,24 +1853,13 @@ def _instructions_list(ctx: ResolvedCtx, inp: EmptyInput) -> dict:
             **{nom: False for nom in _DROITS_SERVIS},
             "guide": {"exists": False, "version": 0, "updated_at": None},
             "instructions": [], "archived": []})
-    o = org_store.get_org(org_id)
-    base = guide_store.get_init_guide("org", org_id)      # readme = guide init (ADR 0042)
-    has_readme = bool((base["body_md"] or "").strip())
     return deprecations.avec_les_deux_noms({
-        "org_id": org_id,
-        "org_name": o["name"] if o else None,
-        # Droit d'ADMINISTRER l'org — inchangé.
-        "can_edit": roles.is_org_admin(ctx.sub, org_id),
+        **_readme_de_l_org(ctx, org_id),
         # Droits sur les PROCÉDURES, rendus par les règles d'autz déclarées.
         # `org=` épingle CETTE org : la règle a une branche self-service qui relirait
         # l'org active, et le bundle doit parler de l'org qu'il affiche.
         **{nom: capacite_autorise(cle, ctx.sub, org=org_id)
            for nom, cle in _DROITS_SERVIS.items()},
-        "guide": {
-            "exists": has_readme,
-            "version": 1 if has_readme else 0,        # prose plate : pas d'historique
-            "updated_at": base["updated_at"] if has_readme else None,
-        },
         "instructions": org_store.list_instructions("org", org_id),
         # Les retirées, à part — pour qu'on puisse les remettre en service sans connaître
         # déjà leur slug. Même règle que le geste qu'elles servent : la capacité
@@ -1720,13 +1867,38 @@ def _instructions_list(ctx: ResolvedCtx, inp: EmptyInput) -> dict:
         "archived": (org_store.list_archived_instructions("org", org_id)
                      if capacite_autorise("org.instruction.unarchive", ctx.sub, org=org_id)
                      else []),
+        **({"scope": inp.scope} if inp.scope else {}),
     })
 
 
+def _readme_de_l_org(ctx: ResolvedCtx, org_id: int) -> dict:
+    """La part ORG du bundle — l'org, le droit de l'administrer, l'état de son readme —
+    commune aux deux paliers de la liste."""
+    o = org_store.get_org(org_id)
+    base = guide_store.get_init_guide("org", org_id)      # readme = guide init (ADR 0042)
+    has_readme = bool((base["body_md"] or "").strip())
+    return {
+        "org_id": org_id,
+        "org_name": o["name"] if o else None,
+        # Droit d'ADMINISTRER l'org — inchangé.
+        "can_edit": roles.is_org_admin(ctx.sub, org_id),
+        "guide": {
+            "exists": has_readme,
+            "version": 1 if has_readme else 0,        # prose plate : pas d'historique
+            "updated_at": base["updated_at"] if has_readme else None,
+        },
+    }
+
+
 def _instruction_get(ctx: ResolvedCtx, inp: InstrGetInput) -> dict:
-    instr = org_store.get_instruction("org", ctx.org_id, inp.slug, version=inp.version)
+    # Le palier vient de `inp.scope` (`org` par défaut, `user` = le sien, #1156) ;
+    # l'identité, du contexte d'autz — jamais d'un champ client (`_owner_of`).
+    owner = _owner_of(ctx, inp)
+    instr = org_store.get_instruction(*owner, inp.slug, version=inp.version)
     if not instr:
-        raise AuthzDenied(404, "not_found", f"Instruction `{org_store.normalize_slug(inp.slug)}` absente.")
+        raise AuthzDenied(404, "not_found",
+                          f"Instruction `{org_store.normalize_slug(inp.slug)}` absente"
+                          + (" de ton palier personnel." if owner[0] == "user" else "."))
     return {
         "id": instr.get("id"),
         "slug": instr["slug"], "title": instr["title"], "description": instr["description"],
@@ -1744,9 +1916,11 @@ def _instruction_get(ctx: ResolvedCtx, inp: InstrGetInput) -> dict:
         # n'est pas archivée, la procédure l'est.
         "archived_at": instr.get("archived_at"),
         # #1156 — l'écran lit la procédure de l'org ; si une copie perso de l'appelant
-        # la masque pour ses lectures par nom, il le dit.
-        **_paliers_du_slug(ctx, instr["slug"], ("org", str(ctx.org_id)), "lecture",
+        # la masque pour ses lectures par nom, il le dit. Sur `?scope=user`, il lit la
+        # copie perso, et dit de même la procédure de l'org qu'elle écarte.
+        **_paliers_du_slug(ctx, instr["slug"], owner, "lecture",
                            instr.get("archived_at")),
+        **({"scope": inp.scope} if inp.scope else {}),
     }
 
 
@@ -1760,10 +1934,15 @@ def _unarchive_instruction(ctx: ResolvedCtx, inp) -> dict:
         raise AuthzDenied(400, "invalid_slug", "slug requis.")
     avant = org_store.unarchive_instruction(*owner, norm)
     if avant is None and org_store.get_instruction(owner[0], owner[1], norm) is None:
-        raise AuthzDenied(404, "not_found", f"Instruction `{norm}` absente.")
+        raise AuthzDenied(404, "not_found", f"Instruction `{norm}` absente"
+                          + (" de ton palier personnel." if owner[0] == "user" else "."))
     return {"ok": True, **_scope_ref(owner), "slug": norm,
             "unarchived": avant is not None,
-            "was_archived_at": str(avant) if avant is not None else None}
+            "was_archived_at": str(avant) if avant is not None else None,
+            # #1156 — en service désormais : si c'est une copie perso et que l'org porte
+            # le même slug, elle la masque de nouveau ; le dire comme à l'écriture.
+            **(_paliers_du_slug(ctx, norm, owner, "ecriture", None)
+               if getattr(inp, "org_id", None) is None else {})}
 
 
 def _instruction_versions(ctx: ResolvedCtx, inp: SlugInput) -> dict:
@@ -1860,13 +2039,22 @@ CAPABILITIES += [
         rest=RestBinding("GET", "/api/me/guides/{guide_id}"),
     ),
     Capability(
-        key="org.instruction.list", handler=_instructions_list, Input=EmptyInput,
+        key="org.instruction.list", handler=_instructions_list, Input=InstrListInput,
         authz=SUB_ONLY, Output=InstructionsBundle,
+        description=("Readme state + index of your active org's procedures, archived "
+                     "ones apart. `?scope=user` lists YOUR personal procedures instead "
+                     "(also without an active org), each with `other_scopes` and "
+                     "`shadow_warning` when it carries the slug of an org procedure — "
+                     "i.e. when it masks it for reads by name."),
         rest=RestBinding("GET", "/api/me/instructions"),
     ),
     Capability(
         key="org.instruction.get", handler=_instruction_get, Input=InstrGetInput,
-        authz=ORG_MEMBER, Output=InstructionView,
+        authz=_LIRE_SON_PALIER, Output=InstructionView,
+        description=("One procedure of your active org, body included (`version` reads "
+                     "a past one). `other_scopes`/`shadow_warning` say when your personal "
+                     "copy of the same slug masks it." + _PERSO_REST),
+        errors=(_ABSENTE,),
         rest=RestBinding("GET", "/api/me/instructions/{slug}"),
     ),
     Capability(
@@ -1965,27 +2153,32 @@ CAPABILITIES += [
         rest=RestBinding("PATCH", "/api/me/instructions/{slug}"),
     ),
     Capability(
-        key="org.instruction.delete", handler=_delete_instruction, Input=GuideDeleteInput,
-        authz=ORG_ADMIN_OPT("org"), Output=InstructionDeleted,
+        key="org.instruction.delete", handler=_delete_instruction, Input=PalierSlugInput,
+        authz=_GERER_SON_PALIER, Output=InstructionDeleted,
         description=("Delete a guide and its history (org_admin). Pass the EXACT slug. "
                      "`org` pins to an explicit org id (default = active org; must be "
-                     "org_admin of it)."),
+                     "org_admin of it)." + _PERSO_REST + " Deleting a personal copy that "
+                     "masked the org's procedure says so (`shadow_lifted`)."),
+        errors=(_ABSENTE,),
         rest=RestBinding("DELETE", "/api/me/instructions/{slug}"),
     ),
     Capability(
-        key="org.instruction.archive", handler=_archive_instruction, Input=GuideDeleteInput,
-        authz=ORG_ADMIN_OPT("org"), Output=InstructionArchived,
+        key="org.instruction.archive", handler=_archive_instruction, Input=PalierSlugInput,
+        authz=_GERER_SON_PALIER, Output=InstructionArchived,
         description=("Retire a guide WITHOUT destroying it (org_admin) — prefer this "
                      "to `delete` whenever the point is 'stop using it', not 'erase it'. "
                      "The procedure and its whole version history stay in place; it simply "
                      "leaves every listing, including the skills index you read, so it "
                      "stops being offered and followed. Pass the EXACT slug. `org` pins to "
-                     "an explicit org id (default = active org; must be org_admin of it)."),
+                     "an explicit org id (default = active org; must be org_admin of it)."
+                     + _PERSO_REST + " Archiving a personal copy that masked the org's "
+                     "procedure lifts the mask and says so (`shadow_lifted`)."),
+        errors=(_ABSENTE,),
         rest=RestBinding("POST", "/api/me/instructions/{slug}/archive"),
     ),
     Capability(
         key="org.instruction.unarchive", handler=_unarchive_instruction,
-        Input=GuideDeleteInput, authz=ORG_ADMIN_OPT("org"),
+        Input=PalierSlugInput, authz=_GERER_SON_PALIER,
         Output=InstructionUnarchived,
         description=("Put an archived guide BACK IN SERVICE (org_admin) — the exact "
                      "inverse of `archive`, on the same face, because whoever "
@@ -1997,7 +2190,10 @@ CAPABILITIES += [
                      "answers `unarchived: false` and is NOT an error — an unknown "
                      "slug is the 404. Pass the EXACT slug. `org` pins to an "
                      "explicit org id (default = active org; must be org_admin of "
-                     "it)."),
+                     "it)." + _PERSO_REST + " A personal copy back in service masks "
+                     "the org's procedure of the same slug again: `shadow_warning` "
+                     "says so."),
+        errors=(_ABSENTE,),
         rest=RestBinding("POST", "/api/me/instructions/{slug}/unarchive"),
     ),
     # Le RENOMMAGE (issue `oto`#261) : l'identité reste, seul le slug change.

@@ -185,9 +185,12 @@ def test_archive_handler_marks_and_404s(monkeypatch):
         etat[slug] = "2026-10-10 09:00:00+00"
         return True
     monkeypatch.setattr(oi.org_store, "archive_instruction", _archive)
+    # Le store ne porte que la procédure de l'ORG 7 : l'archivage relit aussi les autres
+    # paliers de l'appelant (#1156), qui n'ont rien sous ce slug.
     monkeypatch.setattr(oi.org_store, "get_instruction",
                         lambda otype, oid, slug, version=None: (
-                            {"slug": slug, "archived_at": etat[slug]} if slug in etat else None))
+                            {"slug": slug, "archived_at": etat[slug]}
+                            if (otype, str(oid)) == ("org", "7") and slug in etat else None))
     out = oi._archive_instruction(ResolvedCtx(sub="u1", org_id=7), _Slug(slug="Daily-Digest"))
     assert seen == [("org", "7", "daily-digest")], "le slug doit être normalisé avant l'écriture"
     # `scope` dit quel palier a été écrit — la clé d'identité change de nom avec lui
