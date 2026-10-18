@@ -2211,10 +2211,13 @@ rafraîchit avec son sondage ; le détail d'un travail se lit toujours par `list
 La clé `trigger_id` est lue en TEXTE (filtrée `~ '^[0-9]+$'`) et convertie côté Python,
 jamais castée en SQL : une seule ligne non numérique ferait tomber la lecture entière.
 
-**À suivre.** Aucun index ne porte `(org_id, due_at)` : la lecture parcourt la file
-de l'org. À mesurer en production (`EXPLAIN (ANALYZE, BUFFERS)` sur l'org la plus
-chargée) avant de servir l'écran ; à poser par `index_concurrent` si la mesure le
-demande.
+**L'index.** Mesuré en production le 18/10/2026 sur l'org la plus chargée : un
+parcours complet de la file, 775 ms à froid (42 ms à chaud), 86 616 lignes écartées —
+ses travaux viennent tous de flottes et ne portent pas la clé. D'où
+`idx_runner_jobs_declencheurs (org_id, due_at)`, partiel sur le prédicat des requêtes
+(`runner_jobs.PREDICAT_DECLENCHEUR`, partagé avec le temps gagné) : il ne garde que
+les travaux d'un déclencheur. Révision `0067_runner_jobs_declencheurs`, CONCURRENTLY
+sous le verdict commun (`index_concurrent`) ; le démarrage d'une base neuve le pose.
 
 ## Temps gagné des agents — `time_saved.py` (2026-10-17)
 

@@ -24,6 +24,7 @@ from typing import Any, Optional
 
 from .. import runner_models
 from ._conn import _connect
+from .index_concurrent import IndexConcurrent
 
 logger = logging.getLogger(__name__)
 
@@ -1716,6 +1717,30 @@ def runner_arme(org_id: int) -> dict:
             "farm_routed": bool(routee)}
 
 
+# --- Les travaux d'un DÉCLENCHEUR : le prédicat et l'index qui le servent ---------
+# Le résumé de la page Agents et le temps gagné lisent les travaux d'une org sur une
+# fenêtre, qui portent une clé `trigger_id`. Sans index, chaque lecture balaye toute la
+# file : mesuré en production le 18/10/2026, 775 ms à froid (42 ms à chaud) et 86 616
+# lignes écartées, pour l'org la plus chargée, dont tous les travaux viennent de
+# flottes. L'index ne garde que les travaux d'un déclencheur (une fraction de la file :
+# les flottes n'en portent pas), rangés par (org, échéance). Son prédicat est celui des
+# requêtes, mot pour mot : un prédicat d'index que la requête n'implique pas ne sert
+# aucune lecture.
+PREDICAT_DECLENCHEUR = "payload->>'trigger_id' ~ '^[0-9]+$'"
+
+#: La révision qui pose l'index des travaux d'un déclencheur.
+REVISION_DECLENCHEURS = "0067_runner_jobs_declencheurs"
+
+#: Posé CONCURRENTLY par sa révision, ou par le démarrage d'une base neuve (`_init.py`),
+#: sous le verdict commun (`index_concurrent`).
+INDEX_DECLENCHEURS = IndexConcurrent(
+    nom="idx_runner_jobs_declencheurs",
+    table="runner_jobs",
+    forme=f"(org_id, due_at) WHERE {PREDICAT_DECLENCHEUR}",
+    revision=REVISION_DECLENCHEURS,
+)
+
+
 def resume_des_declencheurs(org_id: int, jours: int) -> tuple[list[dict], list[dict]]:
     """Ce que la page Agents DESSINE, en deux lectures pour toute l'org : par
     déclencheur, combien de travaux de chaque statut sont tombés dus à chaque
@@ -1730,24 +1755,24 @@ def resume_des_declencheurs(org_id: int, jours: int) -> tuple[list[dict], list[d
     cases et un total."""
     with _connect() as conn:
         cases = conn.execute(
-            """
+            f"""
             SELECT payload->>'trigger_id' AS trigger_id,
                    date_trunc('hour', due_at) AS heure, status, COUNT(*)::int AS n
               FROM runner_jobs
              WHERE org_id = %s AND due_at >= NOW() - make_interval(days => %s)
-               AND payload->>'trigger_id' ~ '^[0-9]+$'
+               AND {PREDICAT_DECLENCHEUR}
              GROUP BY 1, 2, 3
             """,
             (org_id, int(jours)),
         ).fetchall()
         pannes = conn.execute(
-            """
+            f"""
             SELECT DISTINCT ON (payload->>'trigger_id')
                    payload->>'trigger_id' AS trigger_id, due_at, last_error
               FROM runner_jobs
              WHERE org_id = %s AND status = 'failed'
                AND due_at >= NOW() - make_interval(days => %s)
-               AND payload->>'trigger_id' ~ '^[0-9]+$'
+               AND {PREDICAT_DECLENCHEUR}
              ORDER BY payload->>'trigger_id', due_at DESC
             """,
             (org_id, int(jours)),
@@ -1793,12 +1818,12 @@ def outils_des_runs_conclus(org_id: int, jours: int) -> list[dict]:
     pas lié — il n'est alors pas compté)."""
     with _connect() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT payload->>'trigger_id' AS trigger_id, run_id
               FROM runner_jobs
              WHERE org_id = %s AND status = 'done'
                AND due_at >= NOW() - make_interval(days => %s)
-               AND payload->>'trigger_id' ~ '^[0-9]+$'
+               AND {PREDICAT_DECLENCHEUR}
              ORDER BY due_at
             """,
             (org_id, int(jours)),
