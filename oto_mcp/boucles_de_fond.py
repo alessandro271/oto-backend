@@ -105,6 +105,11 @@ def _jev_jobs() -> Fonction:
     return jev_jobs_worker.run_jev_jobs_loop
 
 
+def _credits_echeances() -> Fonction:
+    from . import credits_echeances
+    return credits_echeances.run_credits_echeances_loop
+
+
 def _runner_tick_arme() -> bool:
     from . import runner_tick
     return runner_tick.enabled()
@@ -173,6 +178,12 @@ BOUCLES: tuple[Boucle, ...] = (
     # le doublon, pas la divergence : seule la prod draine.
     Boucle(nom="jev_jobs_worker", tiers=True,
            armee=_interrupteur("OTO_JEV_JOBS_WORKER_ENABLED"), fonction=_jev_jobs),
+    # Échéances du budget d'unités (`credits_echeances.py`) : règle au montant réservé
+    # les réservations jamais réglées. N'écrit qu'en base ; deux processus sur la même
+    # échéance, un seul la règle (état `open` dans l'écriture) : `tiers=False`.
+    Boucle(nom="credits_echeances", tiers=False,
+           armee=_interrupteur("OTO_CREDITS_ECHEANCES_ENABLED"),
+           fonction=_credits_echeances),
     # Horloge des déclencheurs du runner (R3) : ENFILE un job, n'exécute rien, c'est
     # oto-runner qui agit. Deux ticks sur la même base, un seul gagne chaque échéance
     # (CAS sur `next_due`) : aucun doublon possible, d'où `tiers=False`.

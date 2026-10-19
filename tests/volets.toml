@@ -249,6 +249,7 @@ chemins = [
   "oto_mcp/db/schema/credits.py",
   "oto_mcp/db/credits.py",
   "oto_mcp/capabilities/service_credits.py",
+  "oto_mcp/credits_echeances.py",
   "oto_mcp/db/schema/entitlements.py",
   "oto_mcp/db/schema/grants.py",
   "oto_mcp/db/schema/nodes.py",

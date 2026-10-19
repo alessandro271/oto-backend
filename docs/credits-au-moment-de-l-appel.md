@@ -163,6 +163,13 @@ l'opérateur de l'instance. Un outil du périmètre dit quand il ENVOIE la requ�
 Un réglage illisible refuse le démarrage (`credits.verifier_reglages`). Un règlement qui
 échoue ne défait jamais l'appel : la réservation reste ouverte, et son échéance la règle.
 
+**Les échéances** (`credits_echeances.py`, boucle de fond, `OTO_CREDITS_ECHEANCES_ENABLED`) :
+toutes les 60 s, les réservations ouvertes passées leur échéance se règlent au montant
+réservé, état `expired`, mouvement marqué `hold_expired: true` — un processus arrêté en
+plein appel, un travail asynchrone dont personne n'a relevé le résultat. La boucle
+n'écrit qu'en base et tourne dans tous les environnements : deux processus sur la même
+échéance, un seul la règle.
+
 ## Limites assumées
 
 - **Sous une arête d'org ou de groupe, le refus reste lu dans `usage`**, compté par

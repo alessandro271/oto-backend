@@ -409,3 +409,18 @@ def _apres_echeance(uid: str, montant: int) -> None:
                        "à l'échéance au montant réservé %s ; le règlement réel (%s) n'est "
                        "que journalisé", uid, hold["connector"], hold["function"],
                        hold["payer"], hold["reserved"], montant)
+
+
+def echoir(limite: int = 100) -> int:
+    """Settles, at the reserved amount and marked `hold_expired`, the holds past their
+    deadline (`credits_echeances`). Returns how many were settled here — a hold settled
+    meanwhile by its call, or by another process, is skipped."""
+    n = 0
+    for uid in db_credits.reservations_echues(limite):
+        if db_credits.regler(uid, montant=None, quantite=None,
+                             meta={"from": "hold_expired", "exceeded": False,
+                                   "hold_expired": True}, etat=db_credits.ECHUE):
+            n += 1
+    if n:
+        logger.info("crédits : %d réservation(s) échue(s) réglée(s) au montant réservé", n)
+    return n

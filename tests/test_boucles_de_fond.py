@@ -16,7 +16,7 @@ _INTERRUPTEURS = ("OTO_SCHEDULER_ENABLED", "OTO_EMBED_WORKER_ENABLED",
                   "OTO_FILE_EXTRACT_WORKER_ENABLED", "OTO_RANK_BACKFILL_ENABLED",
                   "OTO_FORMULA_BACKFILL_ENABLED", "OTO_TRANSCRIPTION_WORKER_ENABLED",
                   "OTO_RUNNER_TICK_ENABLED", "OTO_BILLING_RUNNER_ENABLED",
-                  "OTO_HANG_WATCH_ENABLED")
+                  "OTO_HANG_WATCH_ENABLED", "OTO_CREDITS_ECHEANCES_ENABLED")
 _PROD, _PREPROD = config.PROD, config.PREPROD
 
 
@@ -53,11 +53,11 @@ def test_la_preprod_ne_compose_aucune_boucle_tierce(env):
     assert set(composees) == _toutes(tiers=False)
 
 
-def test_la_production_compose_les_dix(env):
+def test_la_production_compose_les_onze(env):
     env.setenv("OTO_ENV", _PROD)
     env.setenv("OTO_SENTRY_ENV", "production")
     composees = boucles_de_fond.composer()
-    assert len(composees) == len(boucles_de_fond.BOUCLES) == 10
+    assert len(composees) == len(boucles_de_fond.BOUCLES) == 11
     assert set(composees) == _toutes()
 
 

@@ -212,20 +212,25 @@ def reserver(*, call_uid: str, payer: str, connector: str, function: str, unit: 
     return Reservation(posee=True, deja=False, insuffisant=insuffisant, disponible=disponible)
 
 
-def regler(call_uid: str, *, montant: int, quantite: Optional[int],
+def regler(call_uid: str, *, montant: Optional[int], quantite: Optional[int],
            meta: dict, etat: str = REGLEE) -> Optional[dict]:
-    """Règle la réservation ouverte `call_uid` à `montant` unités : la réservation se
-    ferme (`etat`), le solde perd `montant` et libère le réservé, un mouvement `settle`
-    le dit. Rend la réservation close, ou None si elle n'était plus ouverte (déjà
-    réglée, libérée ou échue : rien n'a bougé)."""
+    """Règle la réservation ouverte `call_uid` à `montant` unités (None : au montant
+    réservé, et `quantite` None : à la quantité réservée) : la réservation se ferme
+    (`etat`), le solde perd `montant` et libère le réservé, un mouvement `settle` le
+    dit. Rend la réservation close, ou None si elle n'était plus ouverte (déjà réglée,
+    libérée ou échue : rien n'a bougé)."""
     with _connect() as conn, conn.transaction():
         hold = conn.execute(
             "UPDATE credit_holds SET state = %s, closed_at = NOW() "
             "WHERE call_uid = %s AND state = 'open' "
-            "RETURNING payer, connector, function, unit, reserved, scale_version",
+            "RETURNING payer, connector, function, unit, quantity, reserved, scale_version",
             (etat, call_uid)).fetchone()
         if hold is None:
             return None
+        if montant is None:
+            montant = int(hold["reserved"])
+        if quantite is None:
+            quantite = int(hold["quantity"])
         conn.execute(
             "UPDATE credit_balances SET balance = balance - %s, "
             "holds_open = holds_open - %s, updated_at = NOW() WHERE payer = %s",
@@ -278,6 +283,15 @@ def attendre_la_releve(call_uid: str, job: dict, deadline_s: int) -> bool:
             "WHERE call_uid = %s AND state = 'open' RETURNING call_uid",
             (json.dumps(job), deadline_s, call_uid)).fetchone()
     return row is not None
+
+
+def reservations_echues(limite: int) -> list[str]:
+    """Les `call_uid` des réservations ouvertes passées leur échéance, les plus
+    anciennes d'abord."""
+    with _connect() as conn:
+        return [r["call_uid"] for r in conn.execute(
+            "SELECT call_uid FROM credit_holds WHERE state = 'open' AND deadline < NOW() "
+            "ORDER BY deadline LIMIT %s", (limite,)).fetchall()]
 
 
 # ── deux comptes d'une même personne ─────────────────────────────────────────
