@@ -310,6 +310,12 @@ _DECLARATIONS: tuple[str, ...] = (
     # of `transcription` by SITUATION: an inference service whose key is
     # never an org's — here the tenant's, never ours.
     "jev",
+    # --- audio and video media — wired 2026-10-19 ----------------------------
+    # Voice, music and sound generated with the customer's ElevenLabs credits.
+    "elevenlabs",
+    # Neighbour of `elevenlabs` by situation (media production): video hosting
+    # and streaming on the customer's Mux account.
+    "mux",
     # --- KEY carriers, no tools (kind="credential") --------------------------
     # The model key an org deposits for its scheduled agents. They serve
     # no tool: the worker consumes it on the org's behalf.
