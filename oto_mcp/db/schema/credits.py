@@ -68,6 +68,10 @@ CREATE TABLE IF NOT EXISTS credit_holds (
 );
 CREATE INDEX IF NOT EXISTS idx_credit_holds_ouvertes
     ON credit_holds(deadline) WHERE state = 'open';
+-- La réservation qu'attend la relève d'un travail asynchrone (`job`).
+CREATE INDEX IF NOT EXISTS idx_credit_holds_releve
+    ON credit_holds((job->>'function'), (job->'args'))
+    WHERE state = 'open' AND job IS NOT NULL;
 
 -- Les MOUVEMENTS, tous payeurs : versements du commerce, règlements (une échéance
 -- est un règlement marqué) et transferts (deux comptes d'une même personne fusionnés :

@@ -163,6 +163,20 @@ l'opérateur de l'instance. Un outil du périmètre dit quand il ENVOIE la requ�
 Un réglage illisible refuse le démarrage (`credits.verifier_reglages`). Un règlement qui
 échoue ne défait jamais l'appel : la réservation reste ouverte, et son échéance la règle.
 
+**Un travail asynchrone** : la soumission réussie laisse sa réservation ouverte, avec sa
+relève (`credit_holds.job` : la fonction de relève et l'identifiant du travail). L'outil
+de relève, quand le travail est fini, règle la réservation au réel
+(`credits.regler_releve`, le chemin `settle` déclaré, sous la ligne du barème de la
+réservation) ; quand le fournisseur dit qu'aucun résultat ne viendra, il la libère
+(`credits.liberer_releve`). Un outil dont le client refuse la requête AVANT de l'envoyer,
+alors que l'envoi était annoncé, le dit (`credits.rien_envoye`) : l'échec libère.
+
+**Le périmètre aujourd'hui** :
+
+| outil | fonction | pire cas | réglé à |
+| --- | --- | --- | --- |
+| `fullenrich_enrich_linkedin` | `fullenrich.submit` | poids de FullEnrich par champ demandé (1 e-mail pro, 3 e-mail perso, 10 téléphone) × contacts | la relève `fullenrich_result` finie : `cost.credits` ; annulée : libérée |
+
 **Les échéances** (`credits_echeances.py`, boucle de fond, `OTO_CREDITS_ECHEANCES_ENABLED`) :
 toutes les 60 s, les réservations ouvertes passées leur échéance se règlent au montant
 réservé, état `expired`, mouvement marqué `hold_expired: true` — un processus arrêté en

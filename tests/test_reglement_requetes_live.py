@@ -99,3 +99,44 @@ def test_un_appel_non_chaine_ne_touche_que_l_historique(live):
 ])
 def test_un_appel_qui_ne_debite_rien_ne_touche_pas_la_base(live, outil, releve):
     assert _compter(lambda: access.regler_appel(SUB, outil, releve)) == 0
+
+
+# ── le budget d'unités sur le chemin d'un appel (#1148) ──────────────────────
+# Relevé du 19/10/2026 : la réservation, que la résolution de la clé plateforme fait
+# pour un outil du périmètre (`resolve.py` → `credits.reserver`), coûte 2 requêtes (la
+# réservation, puis le solde), barème et modes de payeur en mémoire ; hors du
+# périmètre, aucune.
+_RESERVATION = 2
+
+
+def test_la_reservation_coute_deux_ecritures_sur_le_chemin_d_un_appel(live, monkeypatch):
+    from oto_mcp import session_org
+    from oto_mcp.access import credits as budget
+    from oto_mcp.db import credits as db_credits
+    from oto_mcp.tools import fullenrich
+
+    monkeypatch.setenv("OTO_CREDITS_MODE", "report")
+    monkeypatch.setattr(budget, "_PERIMETRE", {})
+    budget.declarer("fullenrich_enrich_linkedin", "fullenrich", "submit",
+                    fullenrich._arguments_de_soumission)
+    db_credits.poser_bareme(1, [{"connector": "fullenrich", "function": "submit",
+                                 "unit": "credits", "budget": 1, "per_n": 1}])
+    budget.oublier()
+    contacts = {"contacts": [{"first_name": "a", "last_name": "b", "domain": "x.fr"}]}
+
+    def _reserver(outil: str) -> dict:
+        releve: dict = {}
+        jeton = session_org.set_call_trace(releve)
+        try:
+            budget.ouvrir_appel(outil, contacts)
+            budget.reserver(SUB, None)
+        finally:
+            session_org.reset_call_trace(jeton)
+        return releve
+
+    _reserver("fullenrich_enrich_linkedin")          # barème et modes mis en mémoire
+    assert _compter(lambda: _reserver("serper_search")) == 0
+    assert _compter(lambda: _reserver("fullenrich_enrich_linkedin")) == _RESERVATION
+    releve = _reserver("fullenrich_enrich_linkedin")
+    assert releve[budget.CLE]["hold"]["reserved"] == 11, "1 contact : e-mail pro + téléphone"
+    budget.oublier()

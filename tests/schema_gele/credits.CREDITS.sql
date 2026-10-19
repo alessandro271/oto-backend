@@ -40,6 +40,9 @@ closed_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_credit_holds_ouvertes
 ON credit_holds(deadline) WHERE state = 'open';
+CREATE INDEX IF NOT EXISTS idx_credit_holds_releve
+ON credit_holds((job->>'function'), (job->'args'))
+WHERE state = 'open' AND job IS NOT NULL;
 CREATE TABLE IF NOT EXISTS credit_movements (
 id BIGSERIAL PRIMARY KEY,
 xid XID8 NOT NULL DEFAULT pg_current_xact_id(),

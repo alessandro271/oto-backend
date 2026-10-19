@@ -40,6 +40,18 @@ def _compte_approvisionne(monkeypatch):
     monkeypatch.setattr(fullenrich, "_solde", lambda headers: 100)
 
 
+@pytest.fixture(autouse=True)
+def releves(monkeypatch):
+    """Le budget d'unités doublé : ce que la relève règle ou libère, sans base."""
+    from oto_mcp.access import credits as budget
+    vus = {"regler": [], "liberer": []}
+    monkeypatch.setattr(budget, "regler_releve",
+                        lambda f, a, r: vus["regler"].append((f, a, r)) or True)
+    monkeypatch.setattr(budget, "liberer_releve",
+                        lambda f, a: vus["liberer"].append((f, a)) or True)
+    return vus
+
+
 def test_un_compte_A_SEC_est_refuse_AVANT_de_soumettre(monkeypatch):
     """Signaux oto #1276, #1280, #1340 : FullEnrich acceptait un lot qu'il ne pouvait
     pas payer, et l'échec n'apparaissait qu'au relevé. Le refus est un 402, que la
@@ -310,3 +322,111 @@ def test_une_heure_de_soumission_illisible_est_refusee():
     from oto_mcp.mcp_errors import McpError
     with pytest.raises(McpError, match="submitted_at"):
         _result(_en_cours(), submitted_at="hier")
+
+
+# ── le budget d'unités (`access/credits.py`) ─────────────────────────────────
+
+def test_la_soumission_est_au_perimetre_avec_son_pire_cas():
+    """Les poids de FullEnrich par champ demandé (`fullenrich.submit` dans la
+    bibliothèque des connecteurs), fois les contacts ; les champs par défaut du client
+    quand l'agent n'en demande pas."""
+    from oto.connectors import cost
+    from oto_mcp.access import credits as budget
+    _tool("fullenrich_enrich_linkedin")
+    c = budget.perimetre()["fullenrich_enrich_linkedin"]
+    assert (c.connector, c.function) == ("fullenrich", "submit")
+    pire = cost.worst_case(c.connector, c.function, c.arguments({"contacts": _contacts(2)}))
+    assert pire == {"quantity": 22, "unit": "credits"}, "2 × (1 e-mail pro + 10 téléphone)"
+    pire = cost.worst_case(c.connector, c.function, c.arguments(
+        {"contacts": _contacts(3), "enrich_fields": ["contact.personal_emails"]}))
+    assert pire["quantity"] == 9
+
+
+def test_la_soumission_dit_son_envoi_et_sa_reponse(monkeypatch):
+    from oto_mcp import session_org
+    from oto_mcp.access import credits as budget
+    _tool("fullenrich_enrich_linkedin")   # au périmètre ; le client se lie à l'enregistrement
+    releve: dict = {}
+    jeton = session_org.set_call_trace(releve)
+    try:
+        budget.ouvrir_appel("fullenrich_enrich_linkedin", {"contacts": _contacts(1)})
+        with patch("oto_mcp.access.resolve_api_key", return_value=("k", True)), \
+             patch("oto.tools.fullenrich.client.FullenrichClient") as client_cls:
+            client_cls.return_value.submit.return_value = "enr_1"
+            _tool("fullenrich_enrich_linkedin").fn(contacts=_contacts(1))
+        appel = releve[budget.CLE]
+        assert appel["envoye"] is True and "net" not in appel
+        assert appel["reponses"] == [{"enrichment_id": "enr_1"}]
+        budget.ouvrir_appel("fullenrich_enrich_linkedin", {"contacts": _contacts(1)})
+        with patch("oto_mcp.access.resolve_api_key", return_value=("k", True)), \
+             patch("oto.tools.fullenrich.client.FullenrichClient") as client_cls:
+            client_cls.return_value.submit.side_effect = ValueError("domain requis")
+            with pytest.raises(Exception):
+                _tool("fullenrich_enrich_linkedin").fn(contacts=_contacts(1))
+        assert releve[budget.CLE]["net"] is True, "refusée par le client avant l'envoi"
+    finally:
+        session_org.reset_call_trace(jeton)
+
+
+@pytest.mark.parametrize("is_platform", [True, False])
+def test_la_releve_finie_regle_la_reservation_a_ce_que_fullenrich_a_deduit(releves,
+                                                                           is_platform):
+    _result({"status": "FINISHED", "profiles": [], "cost_credits": 14},
+            is_platform=is_platform)
+    attendu = [("fullenrich.fetch", {"enrichment_id": "enr_789"},
+                [{"cost": {"credits": 14}}])]
+    assert releves["regler"] == (attendu if is_platform else [])
+
+
+def test_une_releve_sans_cout_declare_regle_au_montant_reserve(releves):
+    _result({"status": "FINISHED", "profiles": [], "cost_credits": None})
+    assert releves["regler"] == [("fullenrich.fetch", {"enrichment_id": "enr_789"}, [])]
+
+
+def test_un_travail_annule_libere_sa_reservation_les_autres_attendent(releves):
+    with pytest.raises(Exception):
+        _result({"status": "CANCELED", "profiles": None, "cost_credits": None})
+    with pytest.raises(Exception):
+        _result({"status": "NOT_FOUND", "profiles": None, "cost_credits": None})
+    _result({"status": "IN_PROGRESS", "profiles": None, "cost_credits": None})
+    assert releves["liberer"] == [("fullenrich.fetch", {"enrichment_id": "enr_789"})]
+    assert releves["regler"] == []
+
+
+@pytest.mark.parametrize("statut, solde", [(400, "liberer"), (422, "liberer"),
+                                            (429, "regler"), (500, "regler")])
+def test_un_post_refuse_par_fullenrich_libere_sa_reservation(monkeypatch, statut, solde):
+    """Un POST que l'API FullEnrich refuse (4xx autre que 408 et 429) n'a rien consommé :
+    le client d'oto-core lève `UpstreamHTTPError` avec son statut, le refus net le lit,
+    et l'échec LIBÈRE la réservation. Un 429 (rejouable) ou un 5xx se règle au montant
+    réservé. Le vrai client : seul le transport HTTP est doublé."""
+    import requests
+    from oto_mcp import session_org
+    from oto_mcp.access import credits as budget
+    from oto_mcp.db import credits as db_credits
+    from oto_mcp.tools import fullenrich
+    monkeypatch.setattr(fullenrich, "_solde", lambda headers: 10_000)
+    _tool("fullenrich_enrich_linkedin")   # au périmètre ; le client se lie à l'enregistrement
+    reponse = requests.Response()
+    reponse.status_code = statut
+    reponse._content = b'{"code": "error.enrichment.refused", "message": "refused"}'
+    reponse.headers["Content-Type"] = "application/json"
+    monkeypatch.setattr("oto.tools.fullenrich.client.requests.post",
+                        lambda *a, **k: reponse)
+    vus = []
+    monkeypatch.setattr(db_credits, "liberer", lambda uid: vus.append("liberer"))
+    monkeypatch.setattr(db_credits, "regler",
+                        lambda uid, **k: vus.append("regler") or {"ok": 1})
+    releve: dict = {}
+    jeton = session_org.set_call_trace(releve)
+    try:
+        budget.ouvrir_appel("fullenrich_enrich_linkedin", {"contacts": _contacts(1)})
+        with patch("oto_mcp.access.resolve_api_key", return_value=("k", True)):
+            with pytest.raises(Exception) as e:
+                _tool("fullenrich_enrich_linkedin").fn(contacts=_contacts(1))
+    finally:
+        session_org.reset_call_trace(jeton)
+    assert getattr(e.value, "status_code", None) == statut, "l'erreur du vrai client"
+    releve[budget.CLE]["hold"] = {"reserved": 11, "quantity": 11, "payer": "org:1"}
+    budget.solder_echec(releve, e.value)
+    assert vus == [solde]

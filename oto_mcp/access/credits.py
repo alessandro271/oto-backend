@@ -204,6 +204,14 @@ def envoi() -> None:
         appel["envoye"] = True
 
 
+def rien_envoye() -> None:
+    """The tool KNOWS its failure consumed nothing although it was past `envoi` (its
+    client refused the request before sending it): the failure releases the hold."""
+    appel = _appel()
+    if appel is not None:
+        appel["net"] = True
+
+
 def reponses(answers: list) -> None:
     """The provider's JSON answers to the billed request(s), for the settlement."""
     appel = _appel()
@@ -333,7 +341,7 @@ def reserver(sub: str, org: Optional[int]) -> None:
 def refus_net(appel: dict, exc: BaseException) -> bool:
     """A failure that consumed nothing: raised before the billed request was sent, or a
     4xx from the provider other than 408 and 429."""
-    if not appel.get("envoye"):
+    if appel.get("net") or not appel.get("envoye"):
         return True
     statut = error_taxonomy.upstream_status_in_chain(exc)
     return statut is not None and 400 <= statut < 500 and statut not in (408, 429)
@@ -409,6 +417,56 @@ def _apres_echeance(uid: str, montant: int) -> None:
                        "à l'échéance au montant réservé %s ; le règlement réel (%s) n'est "
                        "que journalisé", uid, hold["connector"], hold["function"],
                        hold["payer"], hold["reserved"], montant)
+
+
+def regler_releve(function: str, args: dict, answers: list) -> bool:
+    """The collection `function(args)` of an asynchronous job came back FINISHED: settles
+    the hold that awaited it, from the collection's answers (the declared `settle` path,
+    as `cost.settled_quantity` reads it), under the scale line it was reserved with.
+    Returns False when no hold awaited this collection (the customer's own key, already
+    settled, expired). Never raises: the read was served."""
+    try:
+        hold = db_credits.reservation_de_la_releve(function, args)
+        if hold is None:
+            return False
+        from oto.connectors import cost
+        chemin = _declare(hold["connector"], hold["function"])["cost"]["settle"]["path"]
+        lu = next((v for v in (cost.value_at(a, chemin) for a in answers)
+                   if isinstance(v, (int, float)) and not isinstance(v, bool)
+                   and math.isfinite(v) and v >= 0), None)
+        if lu is None:
+            db_credits.regler(hold["call_uid"], montant=None, quantite=None,
+                              meta={"from": "unreadable", "exceeded": False})
+            return True
+        budget, per_n = _ligne_de(hold)
+        _regler(hold["call_uid"], {**hold, "budget": budget, "per_n": per_n}, lu,
+                {"from": "response", "exceeded": lu > int(hold["quantity"])})
+        return True
+    except Exception:  # noqa: BLE001 — the hold stays open; its deadline settles it
+        logger.warning("crédits : relève %s %s non réglée (la réservation reste ouverte : "
+                       "son échéance la règle)", function, args, exc_info=True)
+        return False
+
+
+def liberer_releve(function: str, args: dict) -> bool:
+    """The asynchronous job ended WITHOUT a result (the provider says so): the hold that
+    awaited its collection is released. Never raises."""
+    try:
+        hold = db_credits.reservation_de_la_releve(function, args)
+        return hold is not None and db_credits.liberer(hold["call_uid"]) is not None
+    except Exception:  # noqa: BLE001 — the hold stays open; its deadline settles it
+        logger.warning("crédits : relève %s %s non libérée", function, args, exc_info=True)
+        return False
+
+
+def _ligne_de(hold: dict) -> tuple[int, int]:
+    """The scale line the hold was reserved under (its version, not today's)."""
+    for l in db_credits.lignes_du_bareme(int(hold["scale_version"])):
+        if (l["connector"], l["function"], l["unit"]) == (hold["connector"],
+                                                          hold["function"], hold["unit"]):
+            return int(l["budget"]), int(l["per_n"])
+    raise LookupError(f"credit scale v{hold['scale_version']} has no line for "
+                      f"{hold['connector']}.{hold['function']} ({hold['unit']})")
 
 
 def echoir(limite: int = 100) -> int:

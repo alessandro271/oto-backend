@@ -285,6 +285,17 @@ def attendre_la_releve(call_uid: str, job: dict, deadline_s: int) -> bool:
     return row is not None
 
 
+def reservation_de_la_releve(function: str, args: dict) -> Optional[dict]:
+    """La réservation OUVERTE dont la relève est `function(args)`, ou None."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT call_uid, payer, connector, function, unit, quantity, reserved, "
+            "scale_version FROM credit_holds WHERE state = 'open' "
+            "AND job->>'function' = %s AND job->'args' = %s::jsonb",
+            (function, json.dumps(args))).fetchone()
+    return dict(row) if row else None
+
+
 def reservations_echues(limite: int) -> list[str]:
     """Les `call_uid` des réservations ouvertes passées leur échéance, les plus
     anciennes d'abord."""

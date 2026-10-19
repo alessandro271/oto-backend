@@ -19,6 +19,12 @@ An unfinished read traces 0 and no counts. The backend carries no rate card and
 deduplicates nothing: a job read twice traces its figures twice, and the
 consumer counts it once by its `enrichment_id` (the `job_id` of the
 `org.usage.calls` lens, which also returns the counts as `found`).
+
+Units budget (`access/credits.py`): the submission is in the perimeter, as the
+connectors library's `fullenrich.submit` — its worst case (FullEnrich's own weights per
+field asked, times the contacts) is reserved on the platform key before the job is
+sent; the read that finds the job FINISHED settles it at the credits FullEnrich
+deducted (`cost.credits`), a CANCELED job releases it.
 """
 from __future__ import annotations
 
@@ -31,6 +37,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 from oto.tools.common.errors import UpstreamHTTPError
 
 from .. import access, session_org
+from ..access import credits as budget
 from ..connectors import verify as connector_verify
 
 _CREDITS_URL = "https://app.fullenrich.com/api/v1/account/credits"
@@ -47,6 +54,19 @@ _TERMINAUX = {
     "NOT_FOUND": ("fullenrich_job_not_found",
                   "FullEnrich does not know (or no longer knows) this job — wrong id or expired job."),
 }
+
+
+def _arguments_de_soumission(args: dict) -> dict:
+    """The tool's arguments read as `fullenrich.submit`'s: the fields asked (or the
+    client's default) on every contact."""
+    from oto.tools.fullenrich.client import DEFAULT_ENRICH_FIELDS
+    champs = list(args.get("enrich_fields") or DEFAULT_ENRICH_FIELDS)
+    return {"contacts": [{**c, "enrich_fields": champs} for c in args["contacts"]]}
+
+
+def _releve(enrichment_id: str) -> tuple[str, dict]:
+    """The collection of a submitted job, as `cost.collection_of` names it."""
+    return "fullenrich.fetch", {"enrichment_id": enrichment_id}
 
 
 def _refus(code: str, message: str, **data) -> McpError:
@@ -121,6 +141,8 @@ def register(mcp: FastMCP) -> None:
     from oto.tools.fullenrich.client import FullenrichClient
 
     connector_verify.register("fullenrich", _verify, couvre=connector_verify.AUTH_QUOTA)
+    budget.declarer("fullenrich_enrich_linkedin", "fullenrich", "submit",
+                    _arguments_de_soumission)
 
     def _client(units: int = 1) -> tuple[FullenrichClient, bool]:
         key, is_platform = access.resolve_api_key("fullenrich", units=units)
@@ -160,10 +182,14 @@ def register(mcp: FastMCP) -> None:
             raise FullenrichASec(
                 "FullEnrich: the account of the key used is empty (0 credits left). "
                 "The call was correct: do not fix it and do not retry it.")
+        budget.envoi()
         try:
             enrichment_id = client.submit(contacts, enrich_fields=enrich_fields)
         except ValueError as e:
+            # The client's own checks, before anything is sent: nothing consumed.
+            budget.rien_envoye()
             raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
+        budget.reponses([{"enrichment_id": enrichment_id}])
         if is_platform:
             # One job = one contact billed per contact: consumption is the
             # NUMBER of contacts, counted in a single operation (the old loop made
@@ -228,6 +254,9 @@ def register(mcp: FastMCP) -> None:
             # not an absence — a metering consumer reads absence as 1.
             session_org.note_call_trace(quantity=0)
             if status not in _REPASSER_S:
+                if status == "CANCELED" and rc.is_platform:
+                    # No result will come: what the submission reserved is released.
+                    budget.liberer_releve(*_releve(enrichment_id))
                 code, pourquoi = _TERMINAUX.get(status, (
                     "fullenrich_job_status_unknown",
                     f"FullEnrich returns the status \"{status}\", which does not lead to a result."))
@@ -273,6 +302,12 @@ def register(mcp: FastMCP) -> None:
         if isinstance(cost, int) and not isinstance(cost, bool) and cost >= 0:
             trace["quantity"] = cost
         session_org.note_call_trace(**trace)
+        # The units budget: the hold of a submission on the platform key settles at
+        # what FullEnrich deducted — its `cost.credits`, the path the connectors library
+        # declares (none declared: at the amount reserved).
+        if rc.is_platform:
+            budget.regler_releve(*_releve(enrichment_id),
+                                 [{"cost": {"credits": cost}}] if cost is not None else [])
         return {
             "done": True,
             "status": "FINISHED",
