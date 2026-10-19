@@ -273,3 +273,28 @@ def test_probe_empty_account(monkeypatch):
 def test_probe_coverage_is_auth_and_quota(client):
     _mcp()
     assert cv.couverture("elevenlabs") == cv.AUTH_QUOTA
+
+
+# --- tightened lists ----------------------------------------------------------------
+
+def test_voice_list_is_tightened_by_default_and_says_so(client):
+    raw = {"voices": [{"voice_id": "v1", "name": "A", "samples": [{"x": 1}],
+                       "fine_tuning": {"state": {}}, "labels": {"accent": "us"}}],
+           "has_more": False}
+    client.list_voices.return_value = raw
+    out = _tool("elevenlabs")(op="list_voices")
+    assert out["voices"] == [{"voice_id": "v1", "name": "A", "labels": {"accent": "us"}}]
+    assert out["projection"]["omitted"] == ["fine_tuning", "samples"]
+    assert _tool("elevenlabs")(op="list_voices", full=True) == raw
+
+
+def test_model_list_is_a_list_and_stays_one_under_projection(client):
+    client.list_models.return_value = [{"model_id": "m1", "languages": [{"x": 1}]}]
+    out = _tool("elevenlabs")(op="list_models")
+    assert out == {"items": [{"model_id": "m1"}],
+                   "projection": {"omitted": ["languages"], "hint": "full=true returns the raw records."}}
+
+
+def test_full_belongs_to_the_lists(client):
+    with pytest.raises(McpError, match="does not use `full`"):
+        _tool("elevenlabs")(op="get_subscription", full=True)

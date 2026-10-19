@@ -34,9 +34,47 @@ _ACT_OPS = ("create_upload", "create_asset")
 
 STREAM = "https://stream.mux.com/{}.m3u8"
 
+# Keys removed from the asset LIST by default, at any depth: the per-track details,
+# the rendition and master-file settings, the encoder's input diagnostics.
+# `get_asset` keeps everything.
+_DROP_ASSETS = frozenset({
+    "tracks", "master_access", "mp4_support", "static_renditions", "encoding_tier",
+    "non_standard_input_reasons", "ingest_type", "recording_times", "source_asset_id",
+    "master",
+})
+_HINT = "full=true returns the raw records."
+
 
 def _bad(msg: str) -> McpError:
     return McpError(ErrorData(code=INVALID_PARAMS, message=msg))
+
+
+def _slim(value: Any, drop: frozenset, dropped: set) -> Any:
+    """Copy of `value` without the keys in `drop`, at any depth."""
+    if isinstance(value, dict):
+        out = {}
+        for k, v in value.items():
+            if k in drop:
+                dropped.add(k)
+                continue
+            out[k] = _slim(v, drop, dropped)
+        return out
+    if isinstance(value, list):
+        return [_slim(v, drop, dropped) for v in value]
+    return value
+
+
+def _view(payload: Any, full: bool, drop: frozenset) -> Any:
+    """Tightened view of a list (unless `full`); the answer NAMES what it removed."""
+    if full:
+        return payload
+    dropped: set = set()
+    out = _slim(payload, drop, dropped)
+    if dropped and isinstance(out, dict):
+        out["projection"] = {"omitted": sorted(dropped), "hint": _HINT}
+    elif dropped and isinstance(out, list):
+        out = {"items": out, "projection": {"omitted": sorted(dropped), "hint": _HINT}}
+    return out
 
 
 def _upstream_message(e) -> str:
@@ -129,6 +167,7 @@ def register(mcp: FastMCP) -> None:
         upload_id: Optional[str] = None,
         limit: Optional[int] = None,
         cursor: Optional[str] = None,
+        full: bool = False,
     ) -> Any:
         """Mux Video, read-only: the videos (assets) of the token's environment, and
         the direct uploads that make them.
@@ -137,7 +176,9 @@ def register(mcp: FastMCP) -> None:
         - `list_assets` — newest first: id, `status`, `duration` (seconds),
           resolution, playback ids, `passthrough`, title. `limit` 1-100 (default
           25), `next_cursor` in the answer goes into `cursor`. With `upload_id`:
-          the asset that upload made.
+          the asset that upload made. Tightened by default (tracks, rendition and
+          master-file settings, input diagnostics), the answer's `projection`
+          naming what was removed: `full=true` returns the raw records.
         - `get_asset` — one asset (`asset_id`). `status` is `preparing` until Mux
           has processed the file (about the film's length), then `ready` or
           `errored` (with `errors`).
@@ -155,14 +196,15 @@ def register(mcp: FastMCP) -> None:
             upload_id: The direct upload, for `get_ingest`; or, with `list_assets`, the upload whose asset to find.
             limit: Assets per page, 1 to 100 (`list_assets`).
             cursor: `next_cursor` of the previous page (`list_assets`).
+            full: `list_assets`: the raw records instead of the tightened view.
         """
         if op not in _READ_OPS:
             raise _bad(f"Unknown op {op!r}: expected one of {', '.join(_READ_OPS)}.")
         if op == "list_assets":
             _refuse_ignored(op, asset_id=asset_id)
-            return with_stream_urls(_run(lambda: _client().list_assets(
-                limit=limit, cursor=cursor, upload_id=upload_id)))
-        _refuse_ignored(op, limit=limit, cursor=cursor)
+            return _view(with_stream_urls(_run(lambda: _client().list_assets(
+                limit=limit, cursor=cursor, upload_id=upload_id))), full, _DROP_ASSETS)
+        _refuse_ignored(op, limit=limit, cursor=cursor, full=full)
         if op == "get_asset":
             _refuse_ignored(op, upload_id=upload_id)
             aid = _need(asset_id, "asset_id", op)

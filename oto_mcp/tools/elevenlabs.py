@@ -36,6 +36,18 @@ _PREFIX = "elevenlabs-audio"
 _READ_OPS = ("get_subscription", "list_voices", "get_voice", "list_models")
 _ACT_OPS = ("create_speech", "create_music", "create_sound", "create_voice_design")
 
+# Keys removed from the LISTS by default, at any depth: a voice's training data
+# (samples, fine-tuning state), its library sharing record, verification and safety
+# details, the per-tier and per-language matrices. `get_voice` keeps everything.
+_DROP_VOICES = frozenset({
+    "samples", "fine_tuning", "sharing", "verified_languages", "voice_verification",
+    "high_quality_base_model_ids", "safety_control", "permission_on_resource",
+    "available_for_tiers", "favorited_at_unix", "is_bookmarked",
+})
+_DROP_MODELS = frozenset({"languages", "concurrency_group", "model_rates",
+                          "requires_alpha_access", "serves_pro_voices"})
+_HINT = "full=true returns the raw records."
+
 
 class ElevenLabsASec(RuntimeError):
     """The ElevenLabs account is out of credits. ElevenLabs says so with a 401
@@ -47,6 +59,34 @@ class ElevenLabsASec(RuntimeError):
 
 def _bad(msg: str) -> McpError:
     return McpError(ErrorData(code=INVALID_PARAMS, message=msg))
+
+
+def _slim(value: Any, drop: frozenset, dropped: set) -> Any:
+    """Copy of `value` without the keys in `drop`, at any depth."""
+    if isinstance(value, dict):
+        out = {}
+        for k, v in value.items():
+            if k in drop:
+                dropped.add(k)
+                continue
+            out[k] = _slim(v, drop, dropped)
+        return out
+    if isinstance(value, list):
+        return [_slim(v, drop, dropped) for v in value]
+    return value
+
+
+def _view(payload: Any, full: bool, drop: frozenset) -> Any:
+    """Tightened view of a list (unless `full`); the answer NAMES what it removed."""
+    if full:
+        return payload
+    dropped: set = set()
+    out = _slim(payload, drop, dropped)
+    if dropped and isinstance(out, dict):
+        out["projection"] = {"omitted": sorted(dropped), "hint": _HINT}
+    elif dropped and isinstance(out, list):
+        out = {"items": out, "projection": {"omitted": sorted(dropped), "hint": _HINT}}
+    return out
 
 
 def _detail_status(e) -> str:
@@ -221,6 +261,7 @@ def register(mcp: FastMCP) -> None:
         category: Optional[Literal["premade", "cloned", "generated", "professional"]] = None,
         page_size: Optional[int] = None,
         next_page_token: Optional[str] = None,
+        full: bool = False,
     ) -> Any:
         """ElevenLabs account, read-only: credits, voices and models. Nothing here
         spends credits; the generations are `elevenlabs_act`.
@@ -237,6 +278,11 @@ def register(mcp: FastMCP) -> None:
         - `list_models` — the models and what each can do (languages, maximum
           characters per request). A model id is what `create_speech` takes.
 
+        The two lists are tightened by default (a voice's samples, fine-tuning,
+        sharing and verification records; a model's language and rate matrices),
+        and the answer's `projection` names what was removed: `full=true` returns
+        the raw records.
+
         A restricted key may lack the permission a read needs (`user_read`,
         `voices_read`, `models_read`) even when it can generate.
 
@@ -248,6 +294,7 @@ def register(mcp: FastMCP) -> None:
             category: `premade`, `cloned`, `generated` or `professional` (`list_voices`).
             page_size: Voices per page, 1 to 100, default 10 (`list_voices`).
             next_page_token: From the previous page of `list_voices`.
+            full: `list_voices` / `list_models`: the raw records instead of the tightened view.
         """
         if op not in _READ_OPS:
             raise _bad(f"Unknown op {op!r}: expected one of {', '.join(_READ_OPS)}.")
@@ -256,16 +303,18 @@ def register(mcp: FastMCP) -> None:
                             page_size=page_size, next_page_token=next_page_token)
         if op != "get_voice":
             _refuse_ignored(op, voice_id=voice_id)
+        if op not in ("list_voices", "list_models"):
+            _refuse_ignored(op, full=full)
         if op == "get_subscription":
             return _run(lambda: _client().get_subscription())
         if op == "list_models":
-            return _run(lambda: _client().list_models())
+            return _view(_run(lambda: _client().list_models()), full, _DROP_MODELS)
         if op == "get_voice":
             vid = _need(voice_id, "voice_id", op)
             return _run(lambda: _client().get_voice(vid))
-        return _run(lambda: _client().list_voices(
+        return _view(_run(lambda: _client().list_voices(
             search=search, voice_type=voice_type, category=category,
-            page_size=page_size, next_page_token=next_page_token))
+            page_size=page_size, next_page_token=next_page_token)), full, _DROP_VOICES)
 
     @mcp.tool(name="elevenlabs_act", annotations=ACTE)
     def elevenlabs_act(

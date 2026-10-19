@@ -182,3 +182,24 @@ def test_probe_refused(monkeypatch, status):
 def test_probe_other_error_unclassified(monkeypatch):
     with pytest.raises(RuntimeError):
         _probe_with(monkeypatch, _upstream(500))(dict(_CREDS))
+
+
+# --- tightened list -----------------------------------------------------------------
+
+def test_asset_list_is_tightened_by_default_and_says_so(client):
+    raw = {"data": [{"id": "a1", "status": "ready", "duration": 56.0,
+                     "tracks": [{"type": "video"}], "master_access": "none",
+                     "playback_ids": [{"id": "p", "policy": "public"}]}]}
+    client.list_assets.return_value = raw
+    out = _tool("mux")(op="list_assets")
+    assert out["data"] == [{"id": "a1", "status": "ready", "duration": 56.0,
+                            "playback_ids": [{"id": "p", "policy": "public",
+                                              "stream_url": "https://stream.mux.com/p.m3u8"}]}]
+    assert out["projection"]["omitted"] == ["master_access", "tracks"]
+    client.list_assets.return_value = {"data": [{"id": "a1", "tracks": [{"type": "video"}]}]}
+    assert _tool("mux")(op="list_assets", full=True)["data"][0]["tracks"] == [{"type": "video"}]
+
+
+def test_full_belongs_to_the_list(client):
+    with pytest.raises(McpError, match="does not use `full`"):
+        _tool("mux")(op="get_asset", asset_id="a1", full=True)
