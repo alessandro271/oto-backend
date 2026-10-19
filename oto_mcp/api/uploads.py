@@ -6,8 +6,9 @@ usage unique, `upload_tokens.py`). Trois voies pour le même jeton :
 - `PUT`  → un agent qui a un shell y pousse le corps brut (`curl --data-binary`)
 - `POST` → multipart `file`, le formulaire humain (fallback quand l'agent n'a pas
            de shell : claude.ai transmet le lien à la personne)
-- `GET`  → la page HTML d'upload, autoportée (aucun asset externe) ; le jeton n'y
-           est PAS consommé, seulement au POST du fichier
+- `GET`  → la page HTML d'upload, autoportée (aucun asset externe,
+           `api/upload_page.py`) ; le jeton n'y est PAS consommé, seulement au
+           POST du fichier
 
 La matérialisation RÉAPPLIQUE l'autz de la cible (`check_target_access`), borne la
 taille, puis consomme le jeton AVANT d'écrire — anti-rejeu et anti-double-écriture.
@@ -29,7 +30,6 @@ voyait une souche « écrite à la main », sans corps ni accusé ni refus.
 """
 from __future__ import annotations
 
-import html as _html
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -39,53 +39,8 @@ from starlette.responses import HTMLResponse, JSONResponse, Response
 
 from .. import db, geste, upload_tokens
 from ..capabilities._types import ContratDeRoute, DeclaredError
-from .base import _json, _json_error
-
-
-# Le seul script de la page, en constante : la CSP l'autorise par son EMPREINTE
-# (`entetes_securite.csp_upload`), calculée sur cette chaîne même — le modifier sans
-# que la politique suive est impossible.
-_SCRIPT_UPLOAD = (
-    'const f=document.getElementById("f"),m=document.getElementById("msg");'
-    'f.addEventListener("submit",async e=>{e.preventDefault();'
-    'const fi=document.getElementById("file");'
-    'if(!fi.files.length){return}'
-    'const fd=new FormData();fd.append("file",fi.files[0]);'
-    'm.textContent="Envoi…";m.className="msg";'
-    'try{const r=await fetch(location.href,{method:"POST",body:fd});'
-    'const j=await r.json().catch(()=>({}));'
-    'if(r.ok){f.style.display="none";m.textContent="✓ Reçu. Tu peux fermer cette page."+(j.url?" URL publique : "+j.url:"");m.className="msg ok"}'
-    'else{m.textContent="Échec : "+(j.error||r.status)+(j.detail?" — "+j.detail:"");m.className="msg err"}'
-    '}catch(err){m.textContent="Erreur réseau.";m.className="msg err"}});'
-)
-
-
-def _upload_page_html(label: str | None) -> str:
-    """Page d'upload autoportée d'un lien signé (#105, fallback humain). `label` None
-    = lien invalide/expiré (message, sans formulaire). Le POST du fichier se fait vers
-    la MÊME URL (multipart `file`), en fetch, avec accusé/erreur affiché."""
-    if label is None:
-        body = ('<h1>Lien d’upload invalide ou expiré</h1>'
-                '<p>Demande à l’assistant de régénérer un lien.</p>')
-    else:
-        safe = _html.escape(label)
-        body = (
-            f'<h1>Déposer un fichier</h1><p class="tgt">Destination : <b>{safe}</b></p>'
-            '<form id="f"><input type="file" name="file" id="file" required>'
-            '<button type="submit">Envoyer</button></form>'
-            '<p id="msg" class="msg"></p>'
-            f'<script>{_SCRIPT_UPLOAD}</script>')
-    return (
-        '<!doctype html><html lang="fr"><head><meta charset="utf-8">'
-        '<meta name="viewport" content="width=device-width,initial-scale=1">'
-        '<title>Upload — oto</title><style>'
-        ':root{color-scheme:light dark}'
-        'body{font:16px/1.5 system-ui,sans-serif;max-width:34rem;margin:12vh auto;padding:0 1.2rem}'
-        'h1{font-size:1.5rem;margin:0 0 .6rem}.tgt{color:#666}'
-        'form{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center;margin:1.4rem 0}'
-        'button{padding:.55rem 1.1rem;border:0;border-radius:.5rem;background:#4f46e5;color:#fff;font:inherit;cursor:pointer}'
-        'button:hover{background:#4338ca}.msg{min-height:1.5rem}.ok{color:#16a34a}.err{color:#dc2626}'
-        '</style></head><body>' + body + '</body></html>')
+from .base import _json, _json_error, _locale_from_accept_language
+from .upload_page import SCRIPT_UPLOAD, upload_page_html
 
 
 # Ce que l'enveloppe multipart ajoute autour du fichier (frontières, en-têtes de
@@ -231,11 +186,13 @@ async def upload_form(request: Request) -> Response:
     payload = upload_tokens.verify(request.path_params.get("token", ""))
     from ..entetes_securite import csp_upload
     headers = {"Cache-Control": "private", "Referrer-Policy": "no-referrer",
-               "Content-Security-Policy": csp_upload(_SCRIPT_UPLOAD)}
+               "Content-Security-Policy": csp_upload(SCRIPT_UPLOAD)}
+    lang = _locale_from_accept_language(request.headers.get("accept-language")) or "en"
+    headers["Vary"] = "Accept-Language"
     if payload is None:
-        return HTMLResponse(_upload_page_html(None), status_code=401, headers=headers)
+        return HTMLResponse(upload_page_html(None, lang), status_code=401, headers=headers)
     return HTMLResponse(
-        _upload_page_html(upload_tokens.target_label(payload["target"])),
+        upload_page_html(upload_tokens.target_label(payload["target"], lang), lang),
         headers=headers
     )
 

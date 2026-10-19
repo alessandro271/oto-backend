@@ -367,8 +367,23 @@ def test_un_lien_invalide_rend_une_page_sans_formulaire(client, journal):
     r = client.get("/api/upload/pas-un-jeton")
     assert r.status_code == 401
     assert "<form" not in r.text, "un formulaire sur un lien mort fait poster dans le vide"
-    assert "invalide ou expiré" in r.text
+    assert "Invalid or expired link" in r.text   # l'anglais par défaut
     assert journal["consommes"] == []
+
+
+@pytest.mark.parametrize("entete, lang, attendu", [
+    (None, "en", "Invalid or expired link"),           # aucun en-tête : l'anglais
+    ("fr-FR,fr;q=0.9,en;q=0.8", "fr", "Lien invalide ou expiré"),
+    ("de-DE,de;q=0.9", "en", "Invalid or expired link"),  # ni fr ni en : l'anglais
+])
+def test_la_page_suit_accept_language_et_le_dit_aux_caches(client, entete, lang, attendu):
+    """Même règle que le tableau de bord : `fr` si la 1re langue commence par `fr`,
+    sinon l'anglais. La page change avec l'en-tête : `Vary` le dit à tout cache
+    intermédiaire, sinon une version française servirait à un lecteur anglais."""
+    r = client.get("/api/upload/pas-un-jeton",
+                   headers={"Accept-Language": entete} if entete else {})
+    assert f'<html lang="{lang}">' in r.text and attendu in r.text
+    assert r.headers.get("vary") == "Accept-Language"
 
 
 def test_le_GET_ne_consomme_PAS_le_jeton(client, journal):

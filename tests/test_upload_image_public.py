@@ -21,7 +21,7 @@ import pytest
 
 
 from oto_mcp import media_store, upload_tokens as ut
-from oto_mcp.api import uploads as api_uploads
+from oto_mcp.api import upload_page
 from oto_mcp.capabilities import uploads as U
 from oto_mcp.capabilities._types import ResolvedCtx
 
@@ -157,5 +157,22 @@ def test_la_cle_est_le_hash_du_contenu_jamais_un_nom_choisi(s3):
 def test_la_page_d_upload_affiche_l_url_rendue_par_l_accuse():
     """Sans ça, le dépôt par formulaire serait un succès inerte : l'URL n'arriverait
     nulle part, et personne ne pourrait la donner à `email_send`."""
-    page = api_uploads._upload_page_html(ut.target_label({"kind": "image"}))
-    assert "j.url" in page and "image publique" in page
+    page = upload_page.upload_page_html(ut.target_label({"kind": "image"}))
+    assert "j.url" in page and "public image" in page
+
+
+def test_la_page_d_upload_est_en_anglais_par_defaut_et_en_francais_sur_demande():
+    cible = {"kind": "project_file", "filename": "r.pdf"}
+    en = upload_page.upload_page_html(ut.target_label(cible))
+    assert '<html lang="en">' in en and "Upload a file" in en and "file “r.pdf”" in en
+    fr = upload_page.upload_page_html(ut.target_label(cible, "fr"), "fr")
+    assert '<html lang="fr">' in fr and "Déposer un fichier" in fr and "fichier « r.pdf »" in fr
+    assert "Invalid or expired link" in upload_page.upload_page_html(None)
+
+
+def test_une_langue_sans_textes_leve_au_lieu_de_replier():
+    """La page ne connaît que `en` et `fr`, les deux seules valeurs que rend
+    `_locale_from_accept_language`. Une autre est un bug de l'appelant : elle lève, au
+    lieu d'être servie en anglais sans que personne le voie."""
+    with pytest.raises(KeyError):
+        upload_page.upload_page_html(None, "de")

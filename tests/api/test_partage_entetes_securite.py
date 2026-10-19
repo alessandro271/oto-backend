@@ -189,10 +189,10 @@ def test_les_pages_du_projet_publie_tiennent_sous_leur_politique():
 
 
 def test_le_formulaire_d_upload_tient_sous_sa_politique_et_son_script_passe():
-    from oto_mcp.api import uploads as U
+    from oto_mcp.api import upload_page as P
     from oto_mcp.entetes_securite import csp_upload
-    csp = csp_upload(U._SCRIPT_UPLOAD)
-    for page in (U._upload_page_html("Projet 59 / devis.pdf"), U._upload_page_html(None)):
+    csp = csp_upload(P.SCRIPT_UPLOAD)
+    for page in (P.upload_page_html("Projet 59 / devis.pdf"), P.upload_page_html(None)):
         assert _ecarts(page, csp) == []
     # Le script est admis par son EMPREINTE, pas par `'unsafe-inline'`.
     assert "'unsafe-inline'" not in _directives(csp)["script-src"]
@@ -244,15 +244,15 @@ async def test_la_page_du_projet_publie_SERVIE_porte_sa_politique():
 @pytest.mark.parametrize("valide", [True, False])
 def test_le_formulaire_d_upload_SERVI_porte_sa_politique(monkeypatch, valide):
     from oto_mcp import upload_tokens
-    from oto_mcp.api import uploads as U
+    from oto_mcp.api import upload_page, uploads as U
     from oto_mcp.entetes_securite import csp_upload
     monkeypatch.setattr(upload_tokens, "verify",
                         lambda t: {"target": {"kind": "x"}} if valide else None)
-    monkeypatch.setattr(upload_tokens, "target_label", lambda t: "cible")
+    monkeypatch.setattr(upload_tokens, "target_label", lambda t, lang="en": "cible")
     req = Request({"type": "http", "method": "GET", "path": "/u/jeton", "query_string": b"",
                    "root_path": "", "scheme": "https", "server": ("test", 443),
                    "http_version": "1.1", "headers": [], "path_params": {"token": "jeton"}},
                   _receive)
     resp = asyncio.run(U.upload_form(req))
-    assert resp.headers.get("content-security-policy") == csp_upload(U._SCRIPT_UPLOAD)
+    assert resp.headers.get("content-security-policy") == csp_upload(upload_page.SCRIPT_UPLOAD)
     assert resp.headers.get("referrer-policy") == "no-referrer"

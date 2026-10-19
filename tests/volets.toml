@@ -595,6 +595,7 @@ sources = [
   "oto_mcp/upload_tokens.py",
   "oto_mcp/capabilities/uploads.py",
   "oto_mcp/api/uploads.py",
+  "oto_mcp/api/upload_page.py",
   "oto_mcp/api/media.py",
   "oto_mcp/db/upload_tokens.py",
   "oto_mcp/tools/lecture.py",
