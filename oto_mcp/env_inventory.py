@@ -339,6 +339,24 @@ _REGLAGES: tuple[Variable, ...] = (
              "journalise ce qui serait retiré et ne retire rien, `off` le coupe. Une "
              "valeur inconnue vaut `report`. Indépendant d'`OTO_VERROU_ORG_DELEGATION`.",
              ("oto_mcp/verrou_org.py:188",)),
+    Variable("OTO_CREDITS_MODE", Classe.REGLAGE, "report",
+             "Budget d'unités au moment de l'appel (`access/credits.py`) : `report` "
+             "(défaut) réserve et règle sans jamais refuser, et journalise ce "
+             "qu'`enforce` refuserait ; `enforce` refuse (`insufficient_credits`, "
+             "`credits_unpriced`, `spend_ledger_unavailable`) ; `off` ne réserve rien. "
+             "Illisible : LÈVE au boot.",
+             ("oto_mcp/access/credits.py:83",)),
+    Variable("OTO_CREDITS_HOLD_MAX_S", Classe.REGLAGE, None,
+             "Durée maximale d'une réservation sans échéance connue (travail "
+             "asynchrone sans `within_s`, tranche de fond `jev_rows`, appel synchrone "
+             "quand OTO_BORNE_OUTIL_S=0 et sans `timeout_s`), en secondes (défaut 86400 "
+             "dans le code, 1 au moins). Illisible : LÈVE au boot.",
+             ("oto_mcp/access/credits.py:107",)),
+    Variable("OTO_CREDITS_SYNC_MARGIN_S", Classe.REGLAGE, None,
+             "Marge de l'échéance d'un appel synchrone : max(OTO_BORNE_OUTIL_S, "
+             "`timeout_s` déclaré) + cette marge, en secondes (défaut 60 dans le code, 1 "
+             "au moins). Illisible : LÈVE au boot.",
+             ("oto_mcp/access/credits.py:113",)),
     Variable("OTO_PLATFORM_KEY_ORG_RATE", Classe.REGLAGE, "report",
              "Équité d'une clé PLATEFORME partagée entre orgs (F-051, "
              "`access/platform_rate.py`) : `enforce` refuse l'appel d'une org au-delà "

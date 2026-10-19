@@ -22,6 +22,7 @@ from starlette.concurrency import run_in_threadpool
 from .. import (access, call_axes, calllog, db, deprecations, error_taxonomy, guide_run,
                 outils_du_travail, outils_retires, redaction, run_org, session_org,
                 tool_alias)
+from ..access import credits as budget
 from ..auth.hooks import current_user_sub_from_token
 from ..connectors import access_level_gate, activation_gate
 from ..connectors import health as connector_health
@@ -236,8 +237,10 @@ async def executer_cible(tool, sub: Optional[str], name: str, demande: str,
     outer_trace = session_org.current_call_trace()
     target_trace: dict = {}
     trace_tok = session_org.set_call_trace(target_trace)
+    budget.ouvrir_appel(name, args)
     started = time.monotonic()
     ok, err = True, None
+    echec: Optional[BaseException] = None
     try:
         # `Tool.run`: `ctx` injection, schema validation, execution — but
         # OUTSIDE the middleware chain (hence outside redaction): we re-apply it further
@@ -245,7 +248,7 @@ async def executer_cible(tool, sub: Optional[str], name: str, demande: str,
         # denylist only blocks the `tools/call` protocol path).
         result = await tool.run(args)
     except ValidationError as e:
-        ok, err = False, "invalid_arguments"
+        ok, err, echec = False, "invalid_arguments", e
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
             message=f"Invalid arguments for `{demande}` — see `input_schema`.",
@@ -262,7 +265,7 @@ async def executer_cible(tool, sub: Optional[str], name: str, demande: str,
         # path, upstream URL fragment, technical id) went up as is to the
         # agent, whereas the same tool called normally sees its message
         # scrubbed (oto-backend#566).
-        ok, err = False, str(e)[:calllog.MAX_ERROR_CHARS]
+        ok, err, echec = False, str(e)[:calllog.MAX_ERROR_CHARS], e
         info = error_taxonomy.classify(e)
         message = info.message
         # Same health tracking as the envelope (`ErrorEnvelopeMiddleware`), which this
@@ -284,10 +287,12 @@ async def executer_cible(tool, sub: Optional[str], name: str, demande: str,
         except Exception:
             pass
         target_run = session_org.current_call_run()
-        # The target's settlement (L8), on SUCCESS only, under the target's context
-        # (its axes are undone below): what it noted on ITS record, debited once.
+        # The target's settlement (L8), under the target's context (its axes are undone
+        # below): what it noted on ITS record, settled once — its failure too.
         if ok:
             await run_in_threadpool(access.regler_appel, sub, name, target_trace)
+        elif echec is not None:
+            await run_in_threadpool(access.regler_echec, sub, name, target_trace, echec)
         session_org.reset_call_trace(trace_tok)
         # The echo returned to the agent (`resolved_account`/`resolved_connector`, read by
         # `CallContextMiddleware` in the ENVELOPE record) must survive; only

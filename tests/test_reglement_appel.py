@@ -8,7 +8,8 @@ Ce que ces tests tiennent, dans l'ordre de ce qui coûterait cher :
    ailleurs compterait deux fois.
 2. **Rien en silence.** Chaque outil d'un connecteur qui peut servir une clé plateforme
    pose `units` ou est déclaré dans `SANS_DEBIT` — et la déclaration ne ment pas.
-3. **Succès seulement, et sans défaire un appel servi.**
+3. **Le quota au succès seulement, le budget d'unités au succès comme à l'échec, et
+   sans défaire un appel servi.**
 """
 from __future__ import annotations
 
@@ -59,6 +60,13 @@ def test_le_debit_plateforme_n_a_que_le_reglement_pour_appelant():
 
 def test_le_reglement_n_est_appele_que_par_les_trois_bords():
     assert set(_appels("regler_appel")) == BORDS
+
+
+def test_l_echec_se_regle_aux_memes_trois_bords_et_nulle_part_ailleurs():
+    """Le budget d'unités se règle aussi à l'échec (`regler_echec`) : chaque bord qui
+    règle une réussite règle l'échec, et ouvre l'appel avant (`ouvrir_appel`)."""
+    assert set(_appels("regler_echec")) == BORDS
+    assert set(_appels("ouvrir_appel")) == BORDS
 
 
 # ── 2. Rien en silence ────────────────────────────────────────────────────────
@@ -250,4 +258,5 @@ def test_la_cible_d_oto_call_garde_les_cles_du_reglement():
     sans quoi le middleware les réglerait une seconde fois sur la ligne `oto_call`."""
     src = (RACINE / "tools/meta.py").read_text(encoding="utf-8")
     assert "k not in access.CLES_REGLEMENT" in src
-    assert set(reglement.CLES_REGLEMENT) == {"units", "platform_carrier", "tenant_grant_ids"}
+    assert set(reglement.CLES_REGLEMENT) == {"units", "platform_carrier", "tenant_grant_ids",
+                                             "credits_appel"}

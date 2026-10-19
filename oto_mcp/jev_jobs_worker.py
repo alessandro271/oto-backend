@@ -98,6 +98,7 @@ def _tranche(job: dict) -> str:
     """One slice of `job`, under its caller. Returns the job's status afterwards.
     Never raises: every outcome is written on the job."""
     from . import access, geste, session_org
+    from .access import credits as budget
     from .auth import hooks as auth_hooks
     from .db import jev_jobs as db_jev
     from .mcp_errors import McpError
@@ -122,7 +123,9 @@ def _tranche(job: dict) -> str:
         with auth_hooks.sub_override(job["sub"]), \
                 geste.portee(geste.AGENT, job["sub"], geste_id):
             axes = [(session_org.reset_call_trace, session_org.set_call_trace(trace))]
+            echec: Optional[BaseException] = None
             try:
+                budget.ouvrir_appel("jev_rows", job["params"], hors_borne=True)
                 if job.get("org_id") is not None:
                     axes.append((session_org.reset_call_org,
                                  session_org.set_call_org(int(job["org_id"]))))
@@ -136,11 +139,19 @@ def _tranche(job: dict) -> str:
                 out, panne = jev.qualifier(plan, cursor=cursor, limite=jr.MAX_ROWS,
                                            fenetre_s=TRANCHE_S, relever=jev.releve,
                                            passer_les_echecs=True)
-                # The slice's settlement (L8), on success only and under its axes:
-                # this worker sets the call record, so it is the edge that settles it.
+                # The slice's settlement (L8), under its axes: this worker sets the
+                # call record, so it is the edge that settles it — the success, or the
+                # upstream refusal that stopped the batch.
                 if panne is None:
                     access.regler_appel(job["sub"], "jev_rows", trace)
+                else:
+                    echec = panne
+            except Exception as e:
+                echec = e
+                raise
             finally:
+                if echec is not None:
+                    access.regler_echec(job["sub"], "jev_rows", trace, echec)
                 for reset, jeton in reversed(axes):
                     reset(jeton)
     except McpError as e:

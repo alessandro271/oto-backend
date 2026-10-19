@@ -16,7 +16,7 @@ Trois étapes :
    versés à un payeur, une réservation au pire cas avant l'appel et un règlement au réel
    après. Il suppose les deux formes de `cost` du format des connecteurs (pire cas par
    élément de lot, quantité relue dans la réponse) et le délai de relève d'un travail
-   asynchrone. Modes `off | report | enforce`, `off` par défaut.
+   asynchrone. Modes `off | report | enforce`, `report` par défaut.
 
 ## L8 : le règlement d'un appel (`access/reglement.py`)
 
@@ -94,10 +94,74 @@ REST seule) ; le stockage est `db/credits.py`, sur les tables de `db/schema/cred
   n'importe quelle base de l'instance, retarde le curseur — un retard, jamais une perte.
 - Le curseur porte les règlements (échéances comprises), les versements et les transferts.
   Les réservations en cours se lisent dans le solde (`holds_open`).
+- **Un règlement réel après l'échéance** : une réservation échue se règle au montant
+  réservé ; le règlement réel qui arrive ensuite est seulement journalisé
+  (`credits_hold_expired_before_settle`), sans remboursement. Au commerce de verser un
+  ajustement s'il le veut.
 - **Deux comptes d'une même personne fusionnés** : le solde `user:<ancien>` passe à
   `user:<nouveau>` par deux mouvements `transfer` (`users.repointer_patrimoine`) ; le
   journal ne se réécrit pas.
 - **Rétention** : tout est gardé.
+
+## Le budget d'unités : réserver, régler (`access/credits.py`)
+
+**Le périmètre est déclaré**, à l'enregistrement de l'outil : `credits.declarer(outil,
+connector, function, arguments)` nomme la fonction de la bibliothèque des connecteurs
+dont l'outil paie le coût déclaré (`oto.connectors.declared`), et comment ses arguments
+se lisent comme ceux de la fonction. Une fonction sans coût déclaré lève à
+l'enregistrement. Seul un appel servi par une clé PLATEFORME réserve : la clé de
+l'opérateur de l'instance. Un outil du périmètre dit quand il ENVOIE la requête facturée
+(`credits.envoi()`) et ce qu'il a reçu (`credits.reponses([...])`) — la garde
+`test_credits_appel.py` l'exige.
+
+| qui | quoi | où |
+| --- | --- | --- |
+| le bord | ouvre l'appel (identifiant, outil, arguments) au relevé | `credits.ouvrir_appel`, aux trois bords de L8 |
+| le résolveur | réserve, sur la clé plateforme, après toutes les autres gardes | `credits.reserver` dans `resolve.py` |
+| l'outil | dit l'envoi, puis les réponses | `credits.envoi`, `credits.reponses` |
+| le bord | règle la réussite, ou l'échec | `regler_appel`, `regler_echec` |
+
+- **Réserver** : `cost.worst_case` × la ligne du barème, au paquet `per_n` supérieur,
+  sous la version du barème qui fait foi. **Échéance** d'un appel synchrone :
+  max(`OTO_BORNE_OUTIL_S`, `timeout_s` déclaré) + `OTO_CREDITS_SYNC_MARGIN_S` — la borne
+  d'un appel d'outil (#1232) est lue quel que soit `OTO_DEBIT_MODE` : mesurée ou
+  appliquée, c'est la durée qu'un appel est censé tenir. Borne désarmée (`0`) et sans
+  `timeout_s` : `OTO_CREDITS_HOLD_MAX_S`, et le démarrage le dit
+  (`credits.verifier_reglages`). Une soumission asynchrone et une tranche de fond
+  (`jev_rows`, hors de la borne MCP) : `OTO_CREDITS_HOLD_MAX_S` (24 h).
+  Une transaction de 2 écritures ; le barème et les modes de payeur sont relus au plus
+  toutes les 30 s.
+- **Qui paie** : `org:<id>` (l'org des clés de l'appel), `user:<sub>` si l'org est en
+  `payer_mode=person` ou s'il n'y a pas d'org.
+- **Régler la réussite** : `cost.settled_quantity` sur les réponses dites (relue dans la
+  réponse, requêtes envoyées, ou pire cas par élément), au paquet supérieur ; le surplus
+  réservé revient au solde. Au-delà du pire cas : réglé tel quel, `exceeded: true`, et
+  le solde peut passer sous zéro — jamais à la réservation. Un outil qui n'a pas dit ses
+  réponses est réglé au pire cas (`from: unreported`, journalisé). Une soumission
+  ASYNCHRONE ne se règle pas : la réservation attend sa relève (`cost.collection_of`),
+  échéance `within_s` ou `OTO_CREDITS_HOLD_MAX_S`.
+- **Régler l'échec** : un refus NET libère — levé avant l'envoi, ou un 4xx du
+  fournisseur autre que 408 et 429 (`error_taxonomy.upstream_status_in_chain`) ; tout
+  autre échec se règle au montant réservé (`from: failure`).
+- **Le quota de L8 ne change pas** : il compte les réussites, à côté.
+- **Le relevé du jour** : le palmarès des limiteurs (`limite_refus_top`, table
+  `limite_refus_jour`, lu par `oto_admin_monitoring op=transport`, champ
+  `rate_limit_top`), sous le limiteur `credits`, clé = empreinte du payeur. Deux classes,
+  qui sont des SIGNAUX : `unpriced:<connector>.<function>` — une fonction du périmètre
+  absente du barème (refusée en `enforce`, servie sans réservation en `report`) ;
+  `unreported:<outil>` — un outil du périmètre réglé au pire cas faute d'avoir dit ses
+  réponses (jamais un refus). Pas de table neuve.
+
+**Modes** (`OTO_CREDITS_MODE`) :
+
+| mode | réserve et règle | refuse |
+| --- | --- | --- |
+| `report` (défaut) | oui ; la réservation est posée même au-delà du disponible | jamais : journalise ce qu'`enforce` refuserait |
+| `enforce` | oui | `insufficient_credits` (non rejouable), `credits_unpriced` (fonction sans ligne au barème, non rejouable), `spend_ledger_unavailable` (registre illisible ou non écrit, rejouable) |
+| `off` | non | jamais |
+
+Un réglage illisible refuse le démarrage (`credits.verifier_reglages`). Un règlement qui
+échoue ne défait jamais l'appel : la réservation reste ouverte, et son échéance la règle.
 
 ## Limites assumées
 

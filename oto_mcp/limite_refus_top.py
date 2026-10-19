@@ -22,7 +22,12 @@ semaine, qui aurait été coupé, combien de fois, par jour et par limiteur.
   borne : `corps` (classe `defaut` | `upload`, clé = empreinte du jeton ou de
   l'adresse), `outil` (classe = l'outil, clé = empreinte de `user:<sub>`), `sql`
   (classe = la fonction appelante, clé = empreinte du texte SQL), `session` (classe
-  `mcp`, clé = empreinte du jeton ou de l'adresse).
+  `mcp`, clé = empreinte du jeton ou de l'adresse) ;
+- `credits` — le relevé du budget d'unités (`access/credits.py`), des SIGNAUX plutôt que
+  des refus : `unpriced:<connector>.<function>` (une fonction du périmètre absente du
+  barème : refusée en `enforce`, servie en `report`) et `unreported:<outil>` (un outil
+  réglé au pire cas faute d'avoir dit ses réponses : jamais un refus) ; clé = empreinte
+  du payeur `org:<id>` ou `user:<sub>`. Le compte `refus` y compte les signaux.
 
 Jamais un jeton, une adresse, un e-mail ni un identifiant en clair : une empreinte se
 VÉRIFIE (on calcule celle d'un candidat, `empreinte("org:42")`), elle ne se lit pas.
@@ -61,6 +66,8 @@ logger = logging.getLogger(__name__)
 DEBIT, PLATEFORME = "debit", "platform_rate"
 #: Les limiteurs des bornes globales du processus (`bornes_processus`).
 CORPS, OUTIL, SQL, SESSION = "corps", "outil", "sql", "session"
+#: Le relevé du budget d'unités : des signaux, pas des refus de limiteur.
+CREDITS = "credits"
 #: Clés distinctes retenues par limiteur et par minute ; au-delà, `DEBORDEMENT`.
 MAX_CLES = 1000
 #: La clé qui reçoit les refus des clés au-delà de `MAX_CLES` (jamais une empreinte).
@@ -137,6 +144,8 @@ PALMARES_PLATEFORME = Palmares(PLATEFORME)
 #: Ceux des bornes globales du processus (#1232, lot 4) : un par borne, par processus.
 PALMARES_BORNES = {limiteur: Palmares(limiteur)
                    for limiteur in (CORPS, OUTIL, SQL, SESSION)}
+#: Celui du budget d'unités, par processus.
+PALMARES_CREDITS = Palmares(CREDITS)
 
 _FILE: queue.Queue = queue.Queue(maxsize=FILE_MAX)
 _FIL: Optional[threading.Thread] = None
@@ -196,3 +205,10 @@ def noter_plateforme(connecteur: str, porteur: str, mode: str,
     """Un appel qu'`enforce` refuse ou refuserait sur la clé plateforme `connecteur`,
     pour `porteur` (`org:<id>` | `user:<sub>`, haché ici)."""
     publier(PALMARES_PLATEFORME.noter(connecteur, empreinte(porteur), mode, maintenant))
+
+
+def noter_credits(classe: str, payeur: str, mode: str, maintenant: float) -> None:
+    """Un signal du budget d'unités (`unpriced:<connector>.<function>`,
+    `unreported:<outil>`) pour `payeur` (`org:<id>` | `user:<sub>`, haché ici), sous le
+    mode du budget (`OTO_CREDITS_MODE`)."""
+    publier(PALMARES_CREDITS.noter(classe, empreinte(payeur), mode, maintenant))

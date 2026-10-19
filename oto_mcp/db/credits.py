@@ -1,12 +1,18 @@
 """Le stockage du budget d'unités : barème, modes de payeur, soldes, réservations et
 mouvements (`db/schema/credits.py`).
 
-Ce module ne fait qu'écrire et relire, en transactions courtes ; la règle n'est pas
-ici.
+La règle (qui paie, combien réserver, quand refuser, quel mode) vit dans
+`access/credits.py` ; ce module ne fait qu'écrire et relire, en transactions courtes.
 Une unité est un ENTIER : rien ici ne connaît de monnaie.
 
 - **Verser** (commerce) : un mouvement idempotent par `(payeur, clé)` ; la même clé avec
   un autre contenu lève `CleEnConflit`.
+- **Réserver** (moteur) : 2 écritures, une transaction — la réservation (`call_uid`
+  unique, idempotente), puis le solde, verrouillé par sa ligne. En application, le solde
+  n'est jamais engagé au-delà du disponible : la réservation qui ne tient pas est
+  annulée en entier.
+- **Régler** : 3 écritures — la réservation close, le solde, le mouvement `settle`.
+- **Libérer** : 2 écritures, sans mouvement (rien n'a été consommé).
 - **Curseur** (commerce) : les mouvements validés sous l'horizon
   `pg_snapshot_xmin(pg_current_snapshot())`, par `(xid, id)` : une transaction encore
   ouverte ne peut plus valider un mouvement EN DESSOUS de ce qui a été servi.
@@ -14,9 +20,13 @@ Une unité est un ENTIER : rien ici ne connaît de monnaie.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Optional
 
 from ._conn import _connect
+
+# Les états d'une réservation.
+OUVERTE, REGLEE, LIBEREE, ECHUE = "open", "settled", "released", "expired"
 
 # Les colonnes d'un mouvement rendues au commerce (`xid` en texte : un xid8 dépasse le
 # JSON d'un entier signé sur 53 bits).
@@ -31,6 +41,19 @@ class CleEnConflit(ValueError):
 class BaremeEnConflit(ValueError):
     """Une version de barème déjà posée, avec d'autres lignes : une version ne se
     réécrit pas."""
+
+
+@dataclass(frozen=True)
+class Reservation:
+    """L'issue d'une réservation. `posee` = cette demande a créé la réservation ;
+    `deja` = une réservation existait déjà pour ce `call_uid` (rien n'a bougé) ;
+    `insuffisant` = le disponible ne couvrait pas `reserved` (en application, rien n'a
+    été écrit ; forcée, la réservation est posée quand même). `disponible` = balance −
+    holds_open AVANT la réservation."""
+    posee: bool
+    deja: bool
+    insuffisant: bool
+    disponible: int
 
 
 # ── le barème ────────────────────────────────────────────────────────────────
@@ -147,6 +170,114 @@ def mouvements_apres(xid: int, id_: int, limite: int) -> list[dict]:
             "WHERE xid < pg_snapshot_xmin(pg_current_snapshot()) "
             "AND (xid, id) > (%s::text::xid8, %s) ORDER BY xid, id LIMIT %s",
             (str(xid), id_, limite)).fetchall()]
+
+
+# ── le moteur réserve, règle, libère ─────────────────────────────────────────
+
+class _Annuler(Exception):
+    """Sort de la transaction de réservation sans rien écrire."""
+
+
+def reserver(*, call_uid: str, payer: str, connector: str, function: str, unit: str,
+             scale_version: int, quantity: int, reserved: int, deadline_s: int,
+             forcer: bool) -> Reservation:
+    """Réserve `reserved` unités pour l'appel `call_uid`, échéance dans `deadline_s`.
+
+    `forcer=False` (application) : refuse — sans rien écrire — ce que le disponible ne
+    couvre pas. `forcer=True` (mesure) : pose la réservation quand même, et dit
+    `insuffisant`."""
+    disponible = 0
+    try:
+        with _connect() as conn, conn.transaction():
+            neuve = conn.execute(
+                "INSERT INTO credit_holds (call_uid, payer, connector, function, unit, "
+                "scale_version, quantity, reserved, deadline) VALUES "
+                "(%s, %s, %s, %s, %s, %s, %s, %s, NOW() + make_interval(secs => %s)) "
+                "ON CONFLICT (call_uid) DO NOTHING RETURNING call_uid",
+                (call_uid, payer, connector, function, unit, scale_version, quantity,
+                 reserved, deadline_s)).fetchone()
+            if neuve is None:
+                return Reservation(posee=False, deja=True, insuffisant=False, disponible=0)
+            row = conn.execute(
+                "INSERT INTO credit_balances (payer, holds_open) VALUES (%s, %s) "
+                "ON CONFLICT (payer) DO UPDATE SET holds_open = credit_balances.holds_open "
+                "+ EXCLUDED.holds_open, updated_at = NOW() "
+                "RETURNING balance, holds_open", (payer, reserved)).fetchone()
+            disponible = int(row["balance"]) - int(row["holds_open"]) + reserved
+            insuffisant = disponible < reserved
+            if insuffisant and not forcer:
+                raise _Annuler()
+    except _Annuler:
+        return Reservation(posee=False, deja=False, insuffisant=True, disponible=disponible)
+    return Reservation(posee=True, deja=False, insuffisant=insuffisant, disponible=disponible)
+
+
+def regler(call_uid: str, *, montant: int, quantite: Optional[int],
+           meta: dict, etat: str = REGLEE) -> Optional[dict]:
+    """Règle la réservation ouverte `call_uid` à `montant` unités : la réservation se
+    ferme (`etat`), le solde perd `montant` et libère le réservé, un mouvement `settle`
+    le dit. Rend la réservation close, ou None si elle n'était plus ouverte (déjà
+    réglée, libérée ou échue : rien n'a bougé)."""
+    with _connect() as conn, conn.transaction():
+        hold = conn.execute(
+            "UPDATE credit_holds SET state = %s, closed_at = NOW() "
+            "WHERE call_uid = %s AND state = 'open' "
+            "RETURNING payer, connector, function, unit, reserved, scale_version",
+            (etat, call_uid)).fetchone()
+        if hold is None:
+            return None
+        conn.execute(
+            "UPDATE credit_balances SET balance = balance - %s, "
+            "holds_open = holds_open - %s, updated_at = NOW() WHERE payer = %s",
+            (montant, hold["reserved"], hold["payer"]))
+        conn.execute(
+            "INSERT INTO credit_movements (payer, kind, amount, held, call_uid, connector, "
+            "function, quantity, meta, idempotency_key) VALUES "
+            "(%s, 'settle', %s, %s, %s, %s, %s, %s, %s::jsonb, %s)",
+            (hold["payer"], -montant, -int(hold["reserved"]), call_uid, hold["connector"],
+             hold["function"], quantite,
+             json.dumps({**meta, "scale_version": hold["scale_version"]}),
+             f"settle:{call_uid}"))
+    return dict(hold)
+
+
+def liberer(call_uid: str) -> Optional[dict]:
+    """Libère la réservation ouverte `call_uid` sans rien consommer. Rend la réservation
+    close, ou None si elle n'était plus ouverte."""
+    with _connect() as conn, conn.transaction():
+        hold = conn.execute(
+            "UPDATE credit_holds SET state = 'released', closed_at = NOW() "
+            "WHERE call_uid = %s AND state = 'open' RETURNING payer, reserved",
+            (call_uid,)).fetchone()
+        if hold is None:
+            return None
+        conn.execute(
+            "UPDATE credit_balances SET holds_open = holds_open - %s, updated_at = NOW() "
+            "WHERE payer = %s", (hold["reserved"], hold["payer"]))
+    return dict(hold)
+
+
+def reservation(call_uid: str) -> Optional[dict]:
+    """La réservation `call_uid`, quel que soit son état, ou None."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT call_uid, payer, connector, function, unit, quantity, reserved, "
+            "scale_version, state FROM credit_holds WHERE call_uid = %s",
+            (call_uid,)).fetchone()
+    return dict(row) if row else None
+
+
+def attendre_la_releve(call_uid: str, job: dict, deadline_s: int) -> bool:
+    """Un travail ASYNCHRONE soumis : la réservation reste ouverte, avec sa relève
+    (`job` : fonction de relève, ses arguments, son délai) et une échéance neuve.
+    Rend False si elle n'était plus ouverte."""
+    with _connect() as conn:
+        row = conn.execute(
+            "UPDATE credit_holds SET job = %s::jsonb, "
+            "deadline = NOW() + make_interval(secs => %s) "
+            "WHERE call_uid = %s AND state = 'open' RETURNING call_uid",
+            (json.dumps(job), deadline_s, call_uid)).fetchone()
+    return row is not None
 
 
 # ── deux comptes d'une même personne ─────────────────────────────────────────

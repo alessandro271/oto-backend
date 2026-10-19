@@ -97,10 +97,11 @@ class RateLimitTopRow(BaseModel):
     """Une clé HACHÉE que `enforce` refuse ou refuserait, un jour donné (#1232)."""
     jour: date                    # jour UTC
     env: str                      # `production` | `canari` | `inconnu`
-    limiteur: str                 # debit | platform_rate | corps | outil | sql | session
+    limiteur: str                 # debit | platform_rate | corps | outil | sql | session | credits
     # debit : la classe du seau ; platform_rate : le connecteur ; bornes du processus
     # (`bornes_processus`) : corps → defaut|upload, outil → l'outil, sql → la fonction
-    # appelante, session → mcp
+    # appelante, session → mcp ; credits (budget d'unités, des SIGNAUX : `refus` y
+    # compte les signaux) → unpriced:<connector>.<function> | unreported:<outil>
     classe: str
     cle: str                      # empreinte (sha256 tronqué) ; `*` = clés au-delà de la borne
     rang: int                     # 1 = la clé la plus refusée du (jour, env, limiteur)
@@ -241,8 +242,9 @@ def _transport_stats(ctx: ResolvedCtx, inp: TransportInput) -> dict:
     d'un seau. Cf. `oto_mcp/limite_debit_mesure.py`.
 
     `rate_limit_top` dit QUI : par jour, environnement et limiteur (`debit`,
-    `platform_rate`), les clés HACHÉES les plus refusées. Cf.
-    `oto_mcp/limite_refus_top.py`."""
+    `platform_rate`, les bornes du processus), les clés HACHÉES les plus refusées ; et,
+    sous `credits`, les signaux du budget d'unités (`unpriced:`, `unreported:`), qui ne
+    sont pas des refus. Cf. `oto_mcp/limite_refus_top.py`."""
     return db.transport_refusal_stats(since_days=inp.days)
 
 
@@ -526,8 +528,10 @@ CAPABILITIES += [
             "(MCP transport refusals by cause, plus `rate_limit`: the app rate limiter "
             "per env/class/mode — `would_refuse` is what `enforce` would cut, "
             "`peak_pct` the fullest bucket; and `rate_limit_top`: per day, env and "
-            "limiter (`debit` | `platform_rate`), the top hashed keys `enforce` would "
-            "cut; `days`) / funnel "
+            "limiter (`debit` | `platform_rate` | the process bounds), the top hashed keys "
+            "`enforce` would cut — and under `credits`, the units-budget SIGNALS "
+            "`unpriced:<connector.function>` / `unreported:<tool>`, not refusals; "
+            "`days`) / funnel "
             "(accounts vs real usage) / gaps · tool_quality (aggregated usage signals) / "
             "agents_en_echec (hosted agents whose JOBS are dying, grouped by agent AND "
             "by reason — `days` (default 1), optional `org_id`; each row carries "

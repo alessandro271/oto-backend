@@ -30,8 +30,8 @@ from .. import links
 from .. import (providers, credentials_store, db, group_store, instance_refs, org_store,
                 session_org, tenant_vault)
 from ..connectors import cle_perso
-from . import (cascade, chain_shadow, heritage, indices, platform_rate, prets, quotas, rbac,
-               resolve_anon, scope, tenant_budget)
+from . import (cascade, chain_shadow, credits, heritage, indices, platform_rate, prets,
+               quotas, rbac, resolve_anon, scope, tenant_budget)
 from .resolved_credential import ResolvedCredential
 
 logger = logging.getLogger(__name__)
@@ -423,6 +423,10 @@ def _resolve_credential_impl(provider: str, want: str, sub: str,
         raise quotas.refus_lot(provider, win.payload["label"], used, limit, units,
                                links.ou_poser_la_cle(sub, org=active_org))
 
+    if check_usage:
+        # The units budget: a tool of the perimeter reserves its worst case on the
+        # operator's key, after every other guard — a refusal above leaves no hold.
+        credits.reserver(sub, heritage.org_des_cles(sub, active_org))
     return ResolvedCredential(provider, win.payload["secret"], True, "platform",
                               credentials_store.PLATFORM, win.payload["label"])
 

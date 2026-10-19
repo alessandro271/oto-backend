@@ -9,6 +9,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .. import (access, call_axes, guide_run, outils_du_travail, providers, redaction,
                run_org, session_org)
+from ..access import credits as budget
 from ..auth.hooks import current_user_sub_from_token
 from ..connectors import access_level_gate, activation_gate
 from ..tool_visibility import namespace_of
@@ -247,9 +248,19 @@ class CallContextMiddleware(Middleware):
             # `op` of the arguments (same guard, same place, as in `oto_call`).
             await access_level_gate.require_covered(
                 name, args, lambda: self._schema_of(context, name))
-            result = await call_next(context)
-            # Le règlement de l'appel (L8), au SUCCÈS seulement, tant que son contexte
-            # (org, équipe) est encore posé — hors boucle : il écrit les compteurs.
+            # Le budget d'unités : un outil du périmètre reçoit son relevé (identifiant,
+            # arguments) avant de partir, la résolution de la clé plateforme y réserve.
+            budget.ouvrir_appel(name, args)
+            try:
+                result = await call_next(context)
+            except Exception as e:
+                # L'échec se règle aussi (budget seulement) : un refus net libère, le
+                # reste se règle au montant réservé — puis l'erreur de l'appel repart.
+                await run_in_threadpool(access.regler_echec, current_user_sub_from_token(),
+                                        name, session_org.current_call_trace(), e)
+                raise
+            # Le règlement de l'appel (L8), tant que son contexte (org, équipe) est
+            # encore posé — hors boucle : il écrit les compteurs.
             await run_in_threadpool(access.regler_appel, current_user_sub_from_token(),
                                     name, session_org.current_call_trace())
             return _echo_account(result, _cible(name, args),

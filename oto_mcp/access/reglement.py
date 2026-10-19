@@ -1,5 +1,5 @@
-"""The settlement of a call — the single point where a call that SUCCEEDED debits what it
-consumed on a shared key (L8, `docs/credits-au-moment-de-l-appel.md`).
+"""The settlement of a call — the single point where a call debits what it consumed on a
+shared key (L8, `docs/credits-au-moment-de-l-appel.md`).
 
 A tool no longer debits anything itself. It SAYS what it consumes, on the call record
 (`session_org.note_call_trace(units=N)`); the resolver SAYS under which key the call went
@@ -16,7 +16,10 @@ Rules:
 
 - `units` is the QUOTA axis, not `quantity` — the partner billing axis (provider
   credits, set on the call's own key too). The two differ on purpose on several tools.
-- Success only: a call that raised settles nothing.
+- The quota on success only: a call that raised debits no quota.
+- The units budget (`access/credits.py`) on success AND on failure: a call that raised
+  releases its hold on a net refusal, and settles it at the reserved amount otherwise
+  (`regler_echec`).
 - A platform resolution without `units` is never settled silently: the tool is either
   declared free here (`SANS_DEBIT`), or the gap is journaled (`units_absentes`) and
   nothing is debited. `tests/test_reglement_appel.py` keeps every tool of a connector
@@ -29,13 +32,13 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from . import quotas, tenant_budget
+from . import credits, quotas, tenant_budget
 
 logger = logging.getLogger(__name__)
 
 # The keys of the call record that the settlement reads. Never copied from a target's
 # record into the envelope's: the target settles them, the envelope would do it twice.
-CLES_REGLEMENT = ("units", "platform_carrier", "tenant_grant_ids")
+CLES_REGLEMENT = ("units", "platform_carrier", "tenant_grant_ids", credits.CLE)
 
 # Tools of a connector that can serve a PLATFORM key, and that debit NOTHING on it —
 # declared, not inferred: a tool missing from here and that notes no `units` is
@@ -102,6 +105,22 @@ def regler_appel(sub: Optional[str], outil: str, releve: Optional[dict]) -> None
     Never raises: the call was served, a counting failure must not undo that."""
     if not releve:
         return
+    _debiter_le_quota(sub, outil, releve)
+    _regler_le_budget(outil, releve, credits.solder_reussite, releve)
+
+
+def regler_echec(sub: Optional[str], outil: str, releve: Optional[dict],
+                 exc: BaseException) -> None:
+    """Settles the call `outil` that RAISED `exc`: its units budget only — the quota
+    counts successes. Called by the three edges only, off the event loop.
+
+    Never raises: the edge re-raises the call's own error."""
+    if not releve:
+        return
+    _regler_le_budget(outil, releve, credits.solder_echec, releve, exc)
+
+
+def _debiter_le_quota(sub: Optional[str], outil: str, releve: dict) -> None:
     try:
         aretes = releve.get("tenant_grant_ids")
         if aretes:
@@ -126,3 +145,14 @@ def regler_appel(sub: Optional[str], outil: str, releve: Optional[dict]) -> None
             "(l'appel a réussi, le compteur n'a PAS bougé)",
             outil, sub, releve.get("platform_carrier"), releve.get("units"),
             releve.get("tenant_grant_ids"), exc_info=True)
+
+
+def _regler_le_budget(outil: str, releve: dict, regle, *args) -> None:
+    try:
+        regle(*args)
+    except Exception:  # noqa: BLE001 — the hold stays open; its deadline settles it
+        appel = releve.get(credits.CLE) or {}
+        logger.warning(
+            "règlement du budget ÉCHOUÉ — outil=%s réservation=%s (elle reste ouverte : "
+            "son échéance la règle au montant réservé)", outil, appel.get("uid"),
+            exc_info=True)
