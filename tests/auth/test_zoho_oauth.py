@@ -487,12 +487,47 @@ def test_la_region_est_celle_de_l_app_dediee():
     assert z.consent_region(app, "COM") == "com"
     with pytest.raises(z.ZohoOAuthError, match="data_center=com"):
         z.consent_region(app, "eu")
-    # Un credential APPORTÉ garde la règle d'avant : la région demandée, sa `data_center`
-    # n'y change rien.
-    byo = {**APP, "data_center": "com", "refresh_token": "rt"}
-    assert z.consent_region(byo, "eu") == "eu"
-    with pytest.raises(z.ZohoOAuthError):
-        z.consent_region(byo, "")
+
+
+def test_la_region_de_la_cle_d_equipe_part_avec_le_clic():
+    """L'app posée comme CLÉ (membre, équipe, org) lie la région comme l'app dédiée : le
+    membre qui clique « connecter » sans région part dans celle de l'app de son équipe,
+    et une autre région est refusée au lieu d'échouer chez Zoho en `invalid_client`."""
+    byo = {**APP, "data_center": "eu"}
+    assert z.consent_region(byo, "") == "eu"
+    assert z.consent_region(byo, "EU") == "eu"
+    with pytest.raises(z.ZohoOAuthError, match="data_center=eu"):
+        z.consent_region(byo, "com")
+
+
+def test_sans_region_nulle_part_le_refus_est_nomme():
+    """Ni l'app ni la demande ne portent de région : refus NOMMÉ qui dit quoi renseigner,
+    jamais une région par défaut."""
+    with pytest.raises(z.ZohoRegionMissing, match="Data center"):
+        z.consent_region(dict(APP), "")
+    # Sans app du tout (l'app d'éditeur se choisit par région) : c'est la région du
+    # compte qu'il faut choisir.
+    with pytest.raises(z.ZohoRegionMissing, match="Choose the region"):
+        z.consent_region({}, "")
+    # L'app d'éditeur ne porte pas de région : la demandée.
+    assert z.consent_region(dict(APP), "jp") == "jp"
+
+
+def test_le_depart_sans_region_rend_zoho_region_missing(monkeypatch):
+    """La face REST/MCP rend le code nommé, pas `zoho_oauth_unavailable`."""
+    from oto_mcp.capabilities import zoho_connect
+    from oto_mcp.capabilities._types import AuthzDenied
+    from oto_mcp.connectors import activation_gate
+    monkeypatch.setattr(activation_gate, "exiger_connectable_capacite", lambda *a, **k: None)
+    monkeypatch.setattr(zoho_connect.access, "current_group", lambda sub: 4)
+    monkeypatch.setattr(z, "app_fields", lambda *a, **k: dict(APP))
+    monkeypatch.setattr(z, "consent_level", lambda *a, **k: "full")
+
+    class _Ctx:
+        sub, org_id = "u1", 7
+    with pytest.raises(AuthzDenied) as e:
+        zoho_connect.start_for(_Ctx(), "zoho", "")
+    assert e.value.code == "zoho_region_missing"
 
 
 def test_le_depart_signe_le_niveau_et_l_equipe_du_contexte(monkeypatch):

@@ -768,8 +768,12 @@ consentement.
   déclarent pas ⟹ jamais servie comme credential d'appel (`tests/test_editor_app.py`,
   prouvé en SQL par `tests/connectors/test_access_level_live.py`).
 - **Ordre de lecture du consentement** : app dédiée de l'équipe > app dédiée de l'org >
-  credential BYO existant (comportement d'avant conservé) > app d'éditeur. Une app dédiée
-  impose sa région : un départ qui en nomme une autre est refusé (`consent_region`).
+  credential BYO existant > app d'éditeur. Une app qui porte sa région l'impose (`consent_region`) :
+  l'app dédiée, et aussi la clé posée sur la carte, par son champ `data_center`. Un départ
+  qui en nomme une autre est refusé ; un départ sans région prend la sienne, ce qui permet
+  à un membre de cliquer « connecter » sans connaître la région de l'app de son équipe.
+  Sans région nulle part, le refus est nommé `zoho_region_missing` et dit quoi renseigner :
+  aucune région par défaut.
 - **Pose : REST seule** (secret brut), `ORG_ADMIN_OF` / `GROUP_ADMIN_OF`,
   `PUT|GET|DELETE /api/{orgs,groups}/{id}/connectors/{name}/oauth-app`
   (`capabilities/connectors/oauth_app.py`). Le `GET` rend `configured`, la région, la date

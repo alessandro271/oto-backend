@@ -123,6 +123,12 @@ class ZohoOAuthError(ValueError):
     """Acquisition failure — message WITHOUT secrets (cf. `zoho.auth`, incident #284)."""
 
 
+class ZohoRegionMissing(ZohoOAuthError):
+    """No region for the consent: neither the app nor the request carries one. Named
+    (`zoho_region_missing`) because the fix is a gesture — fill in the region —, never
+    a default region chosen for the user."""
+
+
 # --- app (client_id / client_secret) ----------------------------------------
 
 def editor_app(connector: str, data_center: str) -> dict:
@@ -141,8 +147,7 @@ def editor_app(connector: str, data_center: str) -> dict:
 class DedicatedApp(dict):
     """The fields of a DEDICATED app — a dict that says where it comes from: its
     `data_center` is the app's own region, which binds the consent (`consent_region`).
-    A brought credential also carries a `data_center`; it keeps the behaviour of before
-    (the requested region wins)."""
+    A brought credential's `data_center` binds it the same way."""
 
 
 def dedicated_app(connector: str, org_id: Optional[int],
@@ -228,17 +233,31 @@ def resolve_app(fields: Optional[dict]) -> tuple[str, str]:
 
 
 def consent_region(app: dict, data_center: Optional[str]) -> str:
-    """The region of the consent. A dedicated app carries its own: a request naming
-    ANOTHER one is refused (an app registered in one data center is rejected by the
-    others), an empty request takes it. Any other app: the requested region."""
+    """The region of the consent. An app that carries its region binds it — the app
+    dedicated by the team or the org, AND the app set as a key on the connector's card
+    (its `data_center` field): a request naming ANOTHER region is refused (an app
+    registered in one data center is rejected by the others), an empty request takes
+    it. That is what lets a member click "connect" without knowing the region of their
+    team's app. An app without a region (oto's publisher app, keyed by the requested
+    region): the requested region.
+
+    Neither: `ZohoRegionMissing`, which says who sets it — never a default region."""
     demande = (data_center or "").strip().lower()
-    propre = ((app.get("data_center") or "").strip().lower()
-              if isinstance(app, DedicatedApp) else "")
+    propre = (app.get("data_center") or "").strip().lower()
     if propre and demande and propre != demande:
         raise ZohoOAuthError(
-            f"The Zoho app of your organization or team is registered in the "
-            f"`{propre}` data center: restart the connection with data_center={propre}.")
-    return normalize_region(propre or demande)
+            f"The Zoho app used for this connection is registered in the `{propre}` "
+            f"data center: restart the connection with data_center={propre}.")
+    if propre or demande:
+        return normalize_region(propre or demande)
+    if app.get("client_id"):
+        raise ZohoRegionMissing(
+            "The Zoho app set on the connector's card (yours, your team's or your "
+            "org's) has no region: whoever set it fills in its \"Data center\" field "
+            f"({', '.join(_ACCOUNTS)}), then restart the connection.")
+    raise ZohoRegionMissing(
+        f"Choose the region of your Zoho account (data_center: {', '.join(_ACCOUNTS)}) "
+        "to start the connection.")
 
 
 def has_app(connector: str, sub: str, data_center: str = "", *,
@@ -249,7 +268,8 @@ def has_app(connector: str, sub: str, data_center: str = "", *,
     shows the button, the region only being chosen on click)."""
     if data_center:
         f = app_fields(connector, sub, data_center, org=org, group=group)
-        if isinstance(f, DedicatedApp) and f.get("data_center") != data_center.strip().lower():
+        propre = (f.get("data_center") or "").strip().lower()
+        if propre and propre != data_center.strip().lower():
             return False
         return bool(f.get("client_id") and f.get("client_secret"))
     # Without a region, `app_fields` only consults the dedicated app and the BYO (the
