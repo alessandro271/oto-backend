@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from oto.tools.common.errors import UpstreamHTTPError
 
 from oto_mcp.tools.fullenrich import _solde as _SOLDE_REEL
 
@@ -257,17 +258,26 @@ def test_un_statut_terminal_est_un_refus_nomme_pas_un_en_cours(status, code):
     assert code in e.value.error.message
 
 
-def test_une_erreur_de_l_amont_est_nommee_pas_interne():
+@pytest.mark.parametrize("erreur, attendu", [
+    # Toute réponse non 2xx que le client ne lit pas comme un statut.
+    (UpstreamHTTPError(502, "bad gateway", service="fullenrich", method="GET",
+                       url="https://app.fullenrich.com/api/v2/contact/enrich/bulk/enr_789"),
+     "502"),
+    # Un 200 dont le corps dit `CREDITS_INSUFFICIENT` : le client lève un RuntimeError.
+    (RuntimeError("FullEnrich: insufficient credits. Top up at app.fullenrich.com."),
+     "insufficient credits"),
+])
+def test_une_erreur_de_l_amont_est_nommee_pas_interne(erreur, attendu):
     from oto_mcp.mcp_errors import McpError
     rc = SimpleNamespace(key="fake-key", is_platform=False)
     with patch("oto_mcp.access.resolve_credential", return_value=rc), \
          patch("oto_mcp.tools.fullenrich.session_org.note_call_trace"), \
          patch("oto.tools.fullenrich.client.FullenrichClient") as client_cls:
-        client_cls.return_value.fetch.side_effect = RuntimeError("FullEnrich GET 502: bad gateway")
+        client_cls.return_value.fetch.side_effect = erreur
         with pytest.raises(McpError) as e:
             _tool("fullenrich_result").fn(enrichment_id="enr_789")
     assert e.value.error.data["code"] == "fullenrich_upstream_error"
-    assert "502" in e.value.error.message
+    assert attendu in e.value.error.message
 
 
 def test_la_soumission_rend_son_heure():

@@ -28,6 +28,7 @@ from typing import Optional
 from fastmcp import FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
+from oto.tools.common.errors import UpstreamHTTPError
 
 from .. import access, session_org
 from ..connectors import verify as connector_verify
@@ -214,7 +215,9 @@ def register(mcp: FastMCP) -> None:
         rc = access.resolve_credential("fullenrich", check_usage=False)
         try:
             res = FullenrichClient(api_key=rc.key).fetch(enrichment_id)
-        except RuntimeError as e:
+        # `UpstreamHTTPError`: any non-2xx answer the client does not read as a status.
+        # `RuntimeError`: a 200 whose body says `CREDITS_INSUFFICIENT`.
+        except (UpstreamHTTPError, RuntimeError) as e:
             raise McpError(ErrorData(
                 code=INVALID_PARAMS,
                 message=f"Refusal `fullenrich_upstream_error`: {e}",

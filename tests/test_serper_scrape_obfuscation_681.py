@@ -29,6 +29,7 @@ contact (#662 — ce qu'une attente emporte coûte plus cher que la page).
 from __future__ import annotations
 
 import pytest
+from oto.tools.common.errors import UpstreamHTTPError
 from mcp.types import ErrorData as _ErrorData
 from oto_mcp.mcp_errors import McpError
 from oto_mcp.tools import mail_obfuscation as M
@@ -318,7 +319,7 @@ def test_refus_du_fournisseur_declenche_une_lecture_directe(monte):
     du texte, pas du markdown : il n'y a pas de convertisseur ici, et prétendre
     le contraire serait pire que le dire)."""
     fn, etat = monte
-    etat["scrape"] = RuntimeError("Serper scrape 500: Scraping failed.")
+    etat["scrape"] = UpstreamHTTPError(500, "Scraping failed.", service="serper")
     etat["html"] = ("<h1>Gorge bleue</h1><p>" + "Nature et patrimoine. " * 20
                     + "</p>" + HTML_ENTITES)
 
@@ -334,7 +335,7 @@ def test_repli_qui_echoue_aussi_nomme_les_deux_echecs(monte):
     """Quand les deux chemins tombent, le message nomme les deux — sinon
     l'agent croit n'avoir essayé qu'une fois et rejoue la même URL."""
     fn, etat = monte
-    etat["scrape"] = RuntimeError("Serper scrape 404: Page not found.")
+    etat["scrape"] = UpstreamHTTPError(404, "Page not found.", service="serper")
     etat["html"] = None
 
     with pytest.raises(McpError) as ei:
@@ -350,7 +351,7 @@ def test_repli_sur_une_coquille_vide_ne_se_fait_pas_passer_pour_une_lecture(mont
     """Une page lue en direct mais sans texte utile n'est pas un succès : la
     servir ferait croire à une entreprise sans contenu."""
     fn, etat = monte
-    etat["scrape"] = RuntimeError("Serper scrape 503: Scraping failed.")
+    etat["scrape"] = UpstreamHTTPError(503, "Scraping failed.", service="serper")
     etat["html"] = "<html><body><div id=app></div></body></html>"
 
     with pytest.raises(McpError) as ei:
@@ -384,7 +385,7 @@ def test_le_budget_serre_par_l_appelant_vaut_aussi_pour_notre_lecture(monte):
     """Un agent qui a demandé 3 s ne veut pas en attendre 20 de plus parce que
     le fournisseur a refusé : notre propre lecture hérite de sa contrainte."""
     fn, etat = monte
-    etat["scrape"] = RuntimeError("Serper scrape 500: Scraping failed.")
+    etat["scrape"] = UpstreamHTTPError(500, "Scraping failed.", service="serper")
     etat["html"] = None
 
     with pytest.raises(McpError):

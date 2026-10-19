@@ -16,6 +16,7 @@ import requests
 from fastmcp import FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS, INVALID_REQUEST
+from oto.tools.common.errors import UpstreamHTTPError
 
 from .. import access, output_projection, session_org, url_perimeter
 from .lecture import LECTURE
@@ -106,10 +107,10 @@ def client_for(key: str):
         return client
 
 
-# Serper returns `Serper <method> <status>: <msg>` (bare RuntimeError). Two classes
-# of failure are invalid INPUTS, not backend bugs — we convert them into a
-# HANDLED McpError (actionable message for the agent + not reported to Sentry, the
-# taxonomy drops input McpErrors):
+# The Serper client raises `UpstreamHTTPError` (service `serper`, `status_code`, `body` =
+# Serper's message) on any answer >= 400. Two classes of failure are invalid INPUTS,
+# not backend bugs — we convert them into a HANDLED McpError (actionable message for the
+# agent + not reported to Sentry, the taxonomy drops input McpErrors):
 #  - **400** (generic, in `_run`): invalid request/URL — missing place param
 #    (`Missing fid/cid/placeId`), non-scrapable URL (`Content-Type application/json`)…;
 #  - **404 and 5xx** from scrape (in `serper_scrape`): the URL leads nowhere (dead
@@ -118,15 +119,22 @@ def client_for(key: str):
 #    which is an invalid input, not an outage.
 # 401/403/429 (key/rate) stay propagated: real config problems. The EMPTY
 # account (400 "Not enough credits", or 402) is translated separately, see `a_sec`.
-_SERPER_STATUS = re.compile(r"Serper \w+ (\d{3}):")
+
+
+def _serper_status(erreur: BaseException) -> "int | None":
+    """Status of a refusal answered by Serper, `None` for anything else (a refusal before
+    any call, a bug of ours)."""
+    if isinstance(erreur, UpstreamHTTPError) and erreur.service == "serper":
+        return erreur.status_code
+    return None
+
 
 # ⚠️ Serper says "empty account" with a **400** "Not enough credits", not a 402
 # (measured on signals #1045, #1046, #1066): read like the other 400s, it returned
 # `invalid_input` — "fix your call", on a correct call and an empty account — and the
 # connector card stayed green. THIS signature alone is an empty balance; any
-# other 400 stays an invalid input. A possible Serper 402 is read the same way: its
-# client raises a BARE `RuntimeError`, without `.status_code`, which the taxonomy did not see.
-_A_SEC = re.compile(r"Serper \w+ (?:400:.*not enough credits|402:)", re.I | re.S)
+# other 400 stays an invalid input. A possible Serper 402 is read the same way.
+_A_SEC = re.compile(r"not enough credits", re.I)
 
 #: The refusal served to the agent when the Serper account is empty.
 MSG_A_SEC = ("Serper: the account behind the served key is out of credits (\"Not enough credits\"). "
@@ -145,7 +153,7 @@ class SerperASec(RuntimeError):
 # signal #654 (`Serper search 403: Unauthorized` on every call of an org, three days) and
 # reproduced by the connection probe. THIS signature alone is a dead key; any other 403
 # is left unmarked (`error_taxonomy`: a 403 alone does not paint a key red).
-_CLE_REFUSEE = re.compile(r"Serper \w+ 403:\s*Unauthorized", re.I)
+_CLE_REFUSEE = re.compile(r"\s*Unauthorized", re.I)
 
 
 class SerperCleRefusee(RuntimeError):
@@ -159,13 +167,18 @@ class SerperCleRefusee(RuntimeError):
 
 def cle_refusee(erreur: BaseException) -> "SerperCleRefusee | None":
     """`SerperCleRefusee` if `erreur` is Serper's refusal of the key, otherwise None."""
-    return SerperCleRefusee(str(erreur)) if _CLE_REFUSEE.search(str(erreur)) else None
+    if _serper_status(erreur) == 403 and _CLE_REFUSEE.match(str(erreur.body)):
+        return SerperCleRefusee(str(erreur))
+    return None
 
 
 def a_sec(erreur: BaseException) -> "SerperASec | None":
     """`SerperASec` if `erreur` is Serper's "Not enough credits" refusal, otherwise
     None. PUBLIC: `web_read` (step ②) is the backend's second serper mouth."""
-    return SerperASec(str(erreur)) if _A_SEC.search(str(erreur)) else None
+    statut = _serper_status(erreur)
+    if statut == 402 or (statut == 400 and _A_SEC.search(str(erreur.body))):
+        return SerperASec(str(erreur))
+    return None
 
 
 def _verify(fields: dict, config: dict | None = None) -> None:  # noqa: ARG001 (config: probe contract, unused here)
@@ -185,7 +198,7 @@ def _verify(fields: dict, config: dict | None = None) -> None:  # noqa: ARG001 (
     # Outside the `client_for` cache on purpose: the probed key is only a CANDIDATE.
     try:
         SerperClient(api_key=fields["key"]).search("oto", num=1)
-    except RuntimeError as e:
+    except UpstreamHTTPError as e:
         sec = a_sec(e)
         if sec is not None:     # `no_quota` verdict, not `unknown`
             raise sec from e
@@ -242,14 +255,13 @@ def register(mcp: FastMCP) -> None:
         client, is_platform = _client()
         try:
             result = getattr(client, method)(**kwargs)
-        except RuntimeError as e:
+        except UpstreamHTTPError as e:
             sec = a_sec(e)
             if sec is not None:
                 # The 402 carried by the CAUSE does the job: `quota_exhausted` and
                 # marking of the served key (`error_taxonomy`, step 0).
                 raise McpError(ErrorData(code=INVALID_REQUEST, message=MSG_A_SEC)) from sec
-            m = _SERPER_STATUS.search(str(e))
-            if m and int(m.group(1)) == 400:
+            if _serper_status(e) == 400:
                 raise McpError(ErrorData(code=INVALID_REQUEST, message=str(e))) from None
             refusee = cle_refusee(e)
             if refusee is not None:
@@ -677,9 +689,8 @@ def register(mcp: FastMCP) -> None:
                          f"answer within {_delai_scrape(timeout_s)} s. A timeout is a "
                          "normal failure, not an outage: do not retry this address."),
             )) from None
-        except RuntimeError as e:
-            m = _SERPER_STATUS.search(str(e))
-            code = int(m.group(1)) if m else None
+        except UpstreamHTTPError as e:
+            code = _serper_status(e)
             if code == 404 or (code is not None and 500 <= code < 600):
                 # The provider refused — before handing back, we re-read the
                 # page OURSELVES with a browser UA. On the 09-03 tier,

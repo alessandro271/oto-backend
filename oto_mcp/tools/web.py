@@ -43,6 +43,7 @@ from fastmcp.tools.tool import ToolResult
 from fastmcp.utilities.types import Image
 from ..mcp_errors import McpError
 from mcp.types import INVALID_REQUEST, ErrorData, TextContent
+from oto.tools.common.errors import UpstreamHTTPError
 
 from . import cesures
 
@@ -313,7 +314,7 @@ def register(mcp: FastMCP) -> None:
         # The client SHARED with the `serper_*` tools: a single limiter per key (oto#115).
         try:
             res = client_for(key).scrape_page(url, include_markdown=True)
-        except RuntimeError as e:
+        except UpstreamHTTPError as e:
             if a_sec(e) is None:
                 raise
             # The tier is SKIPPED (the others can still read the page), so

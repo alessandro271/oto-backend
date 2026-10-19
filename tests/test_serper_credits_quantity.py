@@ -15,6 +15,7 @@ import asyncio
 from unittest.mock import MagicMock
 
 import pytest
+from oto.tools.common.errors import UpstreamHTTPError
 
 
 def _tool(name: str):
@@ -132,7 +133,7 @@ def test_a_rejected_input_is_neither_metered_nor_counted(serper):
     from oto_mcp.mcp_errors import McpError
 
     inst, traced, used, _ = serper
-    inst.search.side_effect = RuntimeError("Serper search 400: Missing query")
+    inst.search.side_effect = UpstreamHTTPError(400, "Missing query", service="serper")
     with pytest.raises(McpError):
         _tool("serper_search")(query="x")
     assert traced == [] and used == []

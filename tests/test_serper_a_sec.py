@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from oto.tools.common.errors import UpstreamHTTPError
 
 from oto_mcp import credentials_store, error_taxonomy, session_org
 from oto_mcp.connectors import health
@@ -27,7 +28,7 @@ from oto_mcp.connectors import verify as connector_verify
 from oto_mcp.mcp_errors import McpError
 from oto_mcp.middleware.error_envelope import ErrorEnvelopeMiddleware
 
-A_SEC = RuntimeError("Serper search 400: Not enough credits")
+A_SEC = UpstreamHTTPError(400, "Not enough credits", service="serper")
 BYO = ("org", "7", "serper", "")
 PLATEFORME = ("platform", "defaut", "serper", "")
 
@@ -107,7 +108,7 @@ def test_un_400_not_enough_credits_est_quota_exhausted(outils):
 
 def test_un_402_nu_de_serper_est_quota_exhausted(outils):
     fns, etat = outils
-    etat["exc"] = RuntimeError("Serper scrape 402: Payment required")
+    etat["exc"] = UpstreamHTTPError(402, "Payment required", service="serper")
     with pytest.raises(McpError) as exc:
         fns["serper_scrape"]("https://example.com/page")
     assert error_taxonomy.classify(exc.value).code == "quota_exhausted"
@@ -115,7 +116,7 @@ def test_un_402_nu_de_serper_est_quota_exhausted(outils):
 
 def test_un_autre_400_reste_une_entree_invalide(outils):
     fns, etat = outils
-    etat["exc"] = RuntimeError("Serper search 400: Missing fid/cid/placeId")
+    etat["exc"] = UpstreamHTTPError(400, "Missing fid/cid/placeId", service="serper")
     with pytest.raises(McpError) as exc:
         fns["serper_search"](query="acme")
     info = error_taxonomy.classify(exc.value)

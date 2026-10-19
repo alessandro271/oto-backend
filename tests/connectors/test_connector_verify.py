@@ -7,6 +7,7 @@ import asyncio
 import types
 
 import pytest
+from oto.tools.common.errors import UpstreamHTTPError
 from oto_mcp.mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
 
@@ -304,8 +305,11 @@ def test_serper_probe_surfaces_the_refusal(monkeypatch):
             pass
 
         def search(self, query, **kw):
-            raise RuntimeError("Serper search 403: Unauthorized.")
+            raise UpstreamHTTPError(403, "Unauthorized.", service="serper")
 
     monkeypatch.setattr("oto.tools.serper.SerperClient", _Client)
-    with pytest.raises(RuntimeError, match="403"):
+    with pytest.raises(UpstreamHTTPError, match="403") as ei:
         serper._verify({"key": "revoquee"}, {})
+    # Le statut porté par l'erreur suffit au verdict : `unauthorized`, pas `unknown`.
+    from oto_mcp.connectors import verify as cv
+    assert cv.classer(ei.value) == cv.UNAUTHORIZED

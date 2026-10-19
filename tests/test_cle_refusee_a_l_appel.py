@@ -289,19 +289,22 @@ def test_snitcher_403_sur_une_ressource_ne_marque_pas(_cle_servie):
     assert error_taxonomy.credential_rejected_in_chain(exc.value) is False
 
 
-@pytest.mark.parametrize("message, refusee", [
-    ("Serper search 403: Unauthorized.", True),
-    ("Serper scrape 403: Unauthorized", True),
-    ("Serper search 403: Forbidden", False),      # un autre 403 : pas la signature
-    ("Serper search 500: Internal error", False),
+@pytest.mark.parametrize("statut, corps, service, refusee", [
+    (403, "Unauthorized.", "serper", True),
+    (403, "Unauthorized", "serper", True),
+    (403, "Forbidden", "serper", False),         # un autre 403 : pas la signature
+    (500, "Internal error", "serper", False),
+    (403, "Unauthorized", "folk", False),        # le 403 d'un autre service
 ])
-def test_serper_declare_son_403_unauthorized_et_lui_seul(message, refusee):
+def test_serper_declare_son_403_unauthorized_et_lui_seul(statut, corps, service, refusee):
+    from oto.tools.common.errors import UpstreamHTTPError
     from oto_mcp.tools import serper
 
-    trouve = serper.cle_refusee(RuntimeError(message))
+    erreur = UpstreamHTTPError(statut, corps, service=service)
+    trouve = serper.cle_refusee(erreur)
     assert (trouve is not None) is refusee
     if refusee:
-        # Toujours une RuntimeError au même message : les appelants qui laissent
-        # remonter un problème de clé le font comme avant.
-        assert isinstance(trouve, RuntimeError) and str(trouve) == message
+        # Une RuntimeError au même message : les appelants qui laissent remonter un
+        # problème de clé le font comme avant.
+        assert isinstance(trouve, RuntimeError) and str(trouve) == str(erreur)
         assert error_taxonomy.credential_rejected_in_chain(trouve) is True

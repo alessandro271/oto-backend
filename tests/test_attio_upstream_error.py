@@ -1,16 +1,19 @@
 """Ce qu'Attio a REFUSÉ doit atteindre l'agent — borné (signal #610, oto#42).
 
-`AttioClient._request` (oto-core) reçoit le corps d'erreur d'Attio et le range dans
-le message d'une `Exception` NUE. La taxonomie du backend cherche le statut amont sur
-un ATTRIBUT : elle n'en trouve aucun, tombe en « interne » et n'écho rien. Résultat
-mesuré en prod le 2026-08-28 : trois créations de company refusées en **400 `uniqueness_conflict`** — Attio nommait le champ (« slug "domains" »)
+`AttioClient._request` (oto-core) rangeait le corps d'erreur d'Attio dans le message
+d'une `Exception` NUE, sans statut : la taxonomie tombait en « interne » et n'écho
+rien. Résultat mesuré en prod le 2026-08-28 : trois créations de company refusées en **400 `uniqueness_conflict`** — Attio nommait le champ (« slug "domains" »)
 et l'enregistrement déjà porteur du domaine — rendues à l'agent en « Erreur interne du
 serveur. », `retryable: false`. L'agent a conclu à un bug de suffixe `.co.uk` (faux) et
 dépensé quatre appels de plus à isoler une cause qui n'existait pas.
 
+Depuis, oto-core lève `UpstreamHTTPError` (statut, méthode, URL, `retry_after`) avec
+l'enveloppe ENTIÈRE d'Attio dans `body` : ce qui reste au backend, c'est de la borner
+(liste blanche) avant qu'elle n'atteigne l'agent.
+
 **Le banc exerce la chaîne RÉELLE et lit ce que la SURFACE expose.** Rien n'est
 doublé sauf le socket : le vrai tool MCP, la vraie fabrique `_client()`, le vrai
-`AttioClient` d'oto-core qui compose le message, puis `error_taxonomy.classify` —
+`AttioClient` d'oto-core qui lève l'erreur, puis `error_taxonomy.classify` —
 c'est-à-dire exactement ce qu'`ErrorEnvelopeMiddleware` sert dans `data.oto`. Un banc
 qui n'appellerait que les helpers du module passerait au vert si l'enveloppe était
 retirée de `_client()`, et un banc qui s'arrêterait avant `classify` ne verrait pas
@@ -23,6 +26,7 @@ import asyncio
 import json
 
 import pytest
+from oto.tools.common.errors import UpstreamHTTPError
 
 from oto_mcp import error_taxonomy
 from oto_mcp.tools import attio
@@ -59,11 +63,12 @@ AMONT_CASSE = "Service Unavailable"          # 503, corps NON JSON
 class _Reponse:
     """Ce que `requests.request` rend — la seule pièce doublée de tout le banc."""
 
-    def __init__(self, status: int, texte: str):
+    def __init__(self, status: int, texte: str, headers: dict | None = None):
         self.status_code = status
         self.ok = status < 400
         self.text = texte
         self.content = texte.encode()
+        self.headers = headers or {}
 
     def json(self):
         return json.loads(self.text)
@@ -73,7 +78,7 @@ class _Reponse:
 def amont(monkeypatch):
     """Fait répondre Attio ce qu'on veut, et rend l'appelant des vrais tools.
 
-    On ne double NI `AttioClient` (c'est lui qui compose le message dont tout ce lot
+    On ne double NI `AttioClient` (c'est lui qui lève l'erreur dont tout ce lot
     dépend) NI `_client()` (c'est là qu'est posée l'enveloppe) : seul le transport
     est substitué.
     """
@@ -118,16 +123,27 @@ def _creation_refusee(amont, status, corps):
                              "domains": [{"domain": "acme.example"}]})
 
 
-# --- Le socle : ce que l'agent lisait AVANT -------------------------------------
+# --- Le socle : ce que l'agent lirait SANS re-typage ---------------------------
 
-@pytest.mark.parametrize("corps", [CONFLIT, SCOPE_MANQUANT, INTROUVABLE])
-def test_sans_retypage_chaque_refus_amont_se_rend_erreur_interne(corps):
-    """Le défaut qu'on ferme, épinglé sur l'exception NUE que compose oto-core : la
-    mesure d'avant doit rester vraie, sinon les tests suivants ne prouvent plus rien."""
-    nue = Exception(f"Attio API 400 on POST /objects/companies/records: {corps}")
-    avant = error_taxonomy.classify(nue)
-    assert avant.code == "internal"
-    assert avant.message == "Internal server error."
+#: Une enveloppe d'erreur qui porte, hors liste blanche, des données du workspace.
+ENVELOPPE_BAVARDE = {
+    "status_code": 400, "type": "invalid_request_error",
+    "code": "validation", "message": "Champ refusé.",
+    # ce qu'on ne veut voir NULLE PART dans ce qui est servi
+    "record": {"values": {"emails": ["contact@exemple-workspace.invalid"]}},
+    "debug_trace": "internal-attio-stack-frame",
+}
+
+
+def test_sans_retypage_l_enveloppe_entiere_atteindrait_l_agent():
+    """Ce qu'on ferme, épinglé sur l'erreur que lève oto-core : son message porte
+    l'enveloppe ENTIÈRE, et la taxonomie la sert. Cette mesure doit rester vraie, sinon
+    le test de la liste blanche ne prouve plus rien."""
+    brute = UpstreamHTTPError(400, ENVELOPPE_BAVARDE, service="attio", method="POST",
+                              url="https://api.attio.com/v2/objects/companies/records")
+    avant = error_taxonomy.classify(brute)
+    assert avant.code == "upstream_4xx"
+    assert "exemple-workspace" in avant.message
 
 
 # --- Ce que l'agent lit maintenant ----------------------------------------------
@@ -191,11 +207,21 @@ def test_une_panne_amont_devient_reessayable(amont):
 
 
 def test_une_limite_de_debit_dit_de_reessayer(amont):
-    """oto-core lève « Rate limit exceeded » AVANT de composer le message à statut :
-    sans son cas, une limite de débit se rendait « interne, ne réessaie pas »."""
+    """Une limite de débit rendue « interne, ne réessaie pas » fait abandonner l'agent."""
     info = amont(429, "", "attio_record", op="list", object="companies")
     assert info.code == "rate_limited"
     assert info.retryable is True
+
+
+def test_le_re_typage_garde_statut_methode_url_et_retry_after():
+    """Le corps est réduit ; le reste de ce que porte l'erreur d'oto-core traverse
+    tel quel — un appelant qui réserve avant l'appel lit `retry_after` et le statut."""
+    brute = UpstreamHTTPError(429, "", service="attio", method="GET",
+                              url="https://api.attio.com/v2/objects/companies/records",
+                              retry_after=7.0)
+    retype = attio._as_upstream(brute)
+    assert (retype.status_code, retype.method, retype.retry_after) == (429, "GET", 7.0)
+    assert retype.url == "https://api.attio.com/v2/objects/companies/records"
 
 
 # --- Ce qui NE doit PAS traverser -----------------------------------------------
@@ -204,14 +230,7 @@ def test_seuls_code_path_et_message_traversent(amont):
     """Un corps d'erreur amont peut porter des données du workspace : on ne le relaie
     jamais en bloc. La liste blanche est la garantie — une clé qu'Attio ajouterait
     demain ne passe pas, parce qu'elle n'y est pas."""
-    corps = {
-        "status_code": 400, "type": "invalid_request_error",
-        "code": "validation", "message": "Champ refusé.",
-        # ce qu'on ne veut voir NULLE PART dans ce qui est servi
-        "record": {"values": {"emails": ["contact@exemple-workspace.invalid"]}},
-        "debug_trace": "internal-attio-stack-frame",
-    }
-    info = _creation_refusee(amont, 400, json.dumps(corps))
+    info = _creation_refusee(amont, 400, json.dumps(ENVELOPPE_BAVARDE))
     assert "validation" in info.message and "Champ refusé." in info.message
     assert "exemple-workspace" not in info.message
     assert "debug_trace" not in info.message and "stack-frame" not in info.message
@@ -219,24 +238,15 @@ def test_seuls_code_path_et_message_traversent(amont):
         assert f'"{interdit}"' not in info.message
 
 
-def test_une_phrase_amont_trop_longue_est_tronquee_et_le_dit(amont):
-    """Notre borne à nous : une phrase de 1 500 c. arrive entière jusqu'ici (le corps
-    entier fait moins que la coupe d'oto-core) et c'est `_MAX_MESSAGE` qui la coupe."""
+@pytest.mark.parametrize("longueur", [1500, 5000])
+def test_une_phrase_amont_trop_longue_est_tronquee_et_le_dit(amont, longueur):
+    """Notre borne à nous : la phrase arrive entière jusqu'ici, même au-delà de 2 000 c.
+    (oto-core ne coupe plus qu'un corps non JSON), et c'est `_MAX_MESSAGE` qui la coupe."""
     info = _creation_refusee(
-        amont, 400, json.dumps({"code": "x", "message": "A" * 1500}))
+        amont, 400, json.dumps({"code": "x", "message": "A" * longueur}))
     assert "(truncated)" in info.message
-    assert len(info.message) < 700           # borne tenue, pas 1 500 caractères
+    assert len(info.message) < 700           # borne tenue, pas la phrase entière
     assert "A" * (attio._MAX_MESSAGE + 1) not in info.message
-
-
-def test_un_corps_coupe_par_oto_core_accuse_la_bonne_piece(amont):
-    """⚠️ oto-core coupe `response.text[:2000]` AVANT de composer son message : au-delà,
-    l'enveloppe JSON d'Attio nous arrive non refermée, donc illisible. On ne peut pas
-    la réparer d'ici (le reste n'a jamais traversé) — mais on doit dire QUI a coupé,
-    sinon l'agent va enquêter chez Attio sur une amputation qui est la nôtre."""
-    info = _creation_refusee(amont, 400, json.dumps({"code": "x", "message": "A" * 5000}))
-    assert "truncated at 2000 c. upstream" in info.message
-    assert len(info.message) < attio._MAX_OPAQUE + 200
 
 
 def test_un_corps_non_json_n_est_relaye_qu_en_amorce(amont):
@@ -252,6 +262,8 @@ def test_une_erreur_qui_n_est_pas_un_refus_amont_remonte_inchangee():
     interne = ValueError("Nothing to update — pass at least one updatable field")
     assert attio._as_upstream(interne) is None
     assert error_taxonomy.classify(interne).code == "internal"
+    # Le refus d'un AUTRE service n'est pas réécrit en refus d'Attio.
+    assert attio._as_upstream(UpstreamHTTPError(400, "x", service="folk")) is None
 
 
 # --- Le seam et l'alarme de dérive ----------------------------------------------
@@ -265,17 +277,18 @@ def test_un_client_sans__request_est_rendu_tel_quel():
     assert attio._rendre_le_refus_lisible(nu) is nu
 
 
-def test_le_format_compose_par_oto_core_est_celui_qu_on_relit():
-    """Tout ce lot repose sur deux faits d'oto-core : `AttioClient._request` existe,
-    et il compose « Attio API <code> on <VERBE> /<endpoint>: <corps> ». Le statut
-    n'existe NULLE PART ailleurs que dans ce texte. Sans ce test, un renommage ou une
-    reformulation rendrait le re-typage inerte **en silence** — l'agent reviendrait à
-    « Erreur interne du serveur. » sans qu'aucun autre banc ne bouge."""
+def test_l_erreur_levee_par_oto_core_est_celle_qu_on_relit():
+    """Tout ce lot repose sur deux faits d'oto-core : `AttioClient._request` existe, et il
+    lève `UpstreamHTTPError` du service `attio` avec la méthode et l'URL de la requête.
+    Sans ce test, un renommage rendrait le re-typage inerte **en silence** — l'enveloppe
+    entière d'Attio reviendrait à l'agent sans qu'aucun autre banc ne bouge."""
     from oto.tools.attio.client import AttioClient
 
     assert callable(getattr(AttioClient, "_request", None)), \
         "oto-core a renommé AttioClient._request — l'enveloppe ne se pose plus"
-    retype = attio._as_upstream(Exception(
-        f"Attio API 422 on PATCH /objects/companies/records/r1: {CONFLIT}"))
-    assert retype is not None, "le format composé par oto-core n'est plus celui qu'on relit"
+    retype = attio._as_upstream(UpstreamHTTPError(
+        422, json.loads(CONFLIT), service="attio", method="PATCH",
+        url=f"{AttioClient.BASE_URL}/objects/companies/records/r1"))
+    assert retype is not None, "l'erreur levée par oto-core n'est plus celle qu'on relit"
     assert retype.status_code == 422
+    assert str(retype).endswith("(on PATCH /objects/companies/records/r1)")

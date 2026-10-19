@@ -8,6 +8,7 @@ gestion, pas de retrieval facturé (search/ask). Credential à 3 champs (ADR
 from __future__ import annotations
 
 import pytest
+from oto.tools.common.errors import UpstreamHTTPError
 
 from oto_mcp import credentials_store
 from oto_mcp.connectors import verify as cv
@@ -45,14 +46,14 @@ def test_un_credential_valide_passe(monkeypatch):
     assert cli.appels == ["list_workspaces"]
 
 
-def test_LE_POINT__un_refus_leve_mais_pas_type(monkeypatch):
-    """`LightOnClient._request` lève un `RuntimeError` NU — la sonde ne peut
-    PAS viser `unauthorized` (aucun `status_code` sur l'exception)."""
-    _brancher(monkeypatch, _FauxClient(boom=RuntimeError("LightOn 401: invalid key")))
-    with pytest.raises(RuntimeError) as e:
+def test_LE_POINT__un_refus_porte_son_statut(monkeypatch):
+    """`LightOnClient._request` lève `UpstreamHTTPError` : la sonde lit son
+    `status_code` et vise `unauthorized` sur un 401, sans relire le message."""
+    _brancher(monkeypatch, _FauxClient(
+        boom=UpstreamHTTPError(401, "invalid key", service="lighton")))
+    with pytest.raises(UpstreamHTTPError) as e:
         L._verify(_fields())
-    assert not isinstance(e.value, cv.SondeRefusee)
-    assert cv.classer(e.value) == cv.UNKNOWN
+    assert cv.classer(e.value) == cv.UNAUTHORIZED
 
 
 def test_la_sonde_est_enregistree_avec_la_couverture_auth():

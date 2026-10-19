@@ -85,6 +85,7 @@ from __future__ import annotations
 import json
 import re
 from typing import Literal, Optional, get_args
+from urllib.parse import urlsplit
 
 from fastmcp import FastMCP
 from ..mcp_errors import McpError
@@ -160,37 +161,31 @@ def _need(value, name: str, op: str):
     return value
 
 
-# --- What Attio said, the agent must read it (oto#42) -------------------------
+# --- What Attio said, the agent must read it — bounded (oto#42) ---------------
 #
-# `AttioClient._request` (oto-core) RECEIVES Attio's error body and puts it in
-# the message of a BARE `Exception`:
-#     Exception(f"Attio API {status} on {method} /{endpoint}: {response.text[:2000]}")
-# The backend taxonomy, for its part, looks for the upstream status on an ATTRIBUTE of the exception
-# (`error_taxonomy._upstream_status`: `.status_code` / `.status` / `.response.status_code`).
-# A bare exception carries none ⟹ Attio's refusal is recognized at NO step and
-# falls into (5) "internal", the only branch that echoes NOTHING of the message (anti-leak).
-# The agent reads "Erreur interne du serveur.", `retryable: false`, and Sentry opens an
-# backend bug issue for a perfectly normal third-party 4xx.
+# `AttioClient._request` (oto-core) raises `UpstreamHTTPError` (service `attio`) on any
+# non-2xx answer, 429 included: `status_code`, `method`, `url` (without query),
+# `retry_after` on a 429, and `body` = Attio's whole JSON envelope (or the raw text cut
+# at 2000 c. when it is not JSON). The taxonomy reads the status from it.
 #
-# Measured on signal #610 (2026-08-28): three company creations refused with 400
-# `uniqueness_conflict`, Attio naming the field ("slug "domains"") AND the record
-# already holding the domain. None of that came out; the agent concluded a bug with the
-# `.co.uk` public suffix and spent four calls isolating a cause that did not exist.
+# Measured on signal #610 (2026-08-28), when the client still raised a bare `Exception`:
+# three company creations refused with 400 `uniqueness_conflict`, Attio naming the field
+# ("slug "domains"") AND the record already holding the domain, served as "internal
+# error"; the agent concluded a bug with the `.co.uk` public suffix and spent four calls
+# isolating a cause that did not exist.
 #
-# So we re-type at the only point where the backend touches this client. Not as `McpError`: it
-# would overwrite the machine verdict (`code` / `retryable`) that the taxonomy can derive from the
-# status — curated message and correct verdict are mutually exclusive on that path.
-# `UpstreamHTTPError` is oto-core's canonical carrier, already honored by the taxonomy.
-_UPSTREAM_RE = re.compile(r"\AAttio API (\d{3}) on ([A-Z]+) /(\S*?): (.*)\Z", re.S)
-# oto-core raises this text BEFORE composing the status message (dedicated 429 branch).
-_RATE_LIMITED = "Rate limit exceeded"
+# What stays ours: the BODY. oto-core's message is "attio HTTP <code>: <whole envelope>",
+# and a third-party error body can carry workspace data. So we re-type at the only point
+# where the backend touches this client, with the body reduced by whitelist. Not as
+# `McpError`: it would overwrite the machine verdict (`code` / `retryable`) that the
+# taxonomy derives from the status — curated message and correct verdict are mutually
+# exclusive on that path.
 
 # Bounds on what we let through of the upstream body. A third-party error body can
 # carry workspace data: we NEVER relay it wholesale.
 _BODY_KEEP = ("code", "path", "message")   # and nothing else
 _MAX_MESSAGE = 400                         # characters of Attio's sentence
 _MAX_OPAQUE = 120                          # characters of a non-JSON body
-_CUT_OTO_CORE = 2000                       # `response.text[:2000]` in oto-core
 # ⚠️ DECLARED coupling (and enforced by the test bench) with `error_taxonomy._LONG_ID`, which
 # replaces any token of ≥ 20 characters with `[id]`: `unknown_filter_attribute_slug`
 # (29 c.) would render as "attio HTTP 400: [id] — …", i.e. an `[id]` at the head of the
@@ -198,9 +193,11 @@ _CUT_OTO_CORE = 2000                       # `response.text[:2000]` in oto-core
 # A code that is too long is therefore omitted rather than served unrecognizable — Attio's sentence,
 # for its part, always restates it in clear ("Unknown attribute slug: …").
 _MAX_CODE = 19
+# Where Attio's endpoints start in the URL the error carries (`AttioClient.BASE_URL`).
+_API_PREFIX = "/v2/"
 
 
-def _upstream_body(raw: str) -> str:
+def _upstream_body(body) -> str:
     """Attio's error body reduced to what an agent can USE, bounded.
 
     Attio answers with a JSON envelope `{status_code, type, code, message, path?}`. We
@@ -216,30 +213,18 @@ def _upstream_body(raw: str) -> str:
     any token of ≥ 20 characters with `[id]` — identifiers therefore do not reach
     the agent readable, the field and the reason do.
 
-    Non-JSON body (a front end's error page, "Service Unavailable"): we only
-    return a one-line snippet of `_MAX_OPAQUE` characters — enough to see that
-    upstream did not answer as an API, never an entire document.
+    Any other body (a front end's error page, "Service Unavailable", JSON that is not an
+    object): we only return a one-line snippet of `_MAX_OPAQUE` characters — enough to
+    see that upstream did not answer as an API, never an entire document.
     """
-    try:
-        data = json.loads(raw)
-    # noqa: SILENT — a non-JSON body is not a failure: we say so and bound it
-    except Exception:
-        data = None
-    if not isinstance(data, dict):
-        amorce = " ".join(raw.split())[:_MAX_OPAQUE]
-        if not amorce:
-            return "empty error body"
-        # A body that STARTS like JSON without closing is not a malformed Attio
-        # body: it is oto-core cutting at `response.text[:2000]` before
-        # composing its message. Say so, otherwise we send the agent investigating
-        # upstream over an amputation that is ours.
-        if raw.lstrip().startswith(("{", "[")):
-            return f"JSON body truncated at {_CUT_OTO_CORE} c. upstream: {amorce}…"
-        return f"non-JSON body: {amorce}"
+    if not isinstance(body, dict):
+        brut = body if isinstance(body, str) else json.dumps(body, default=str)
+        amorce = " ".join(brut.split())[:_MAX_OPAQUE]
+        return f"non-JSON body: {amorce}" if amorce else "empty error body"
 
     # The whitelist SELECTS: what is not in it no longer exists after this
     # line, without any branch below having to remember it.
-    retenu = {cle: data.get(cle) for cle in _BODY_KEEP}
+    retenu = {cle: body.get(cle) for cle in _BODY_KEEP}
 
     bouts: list[str] = []
     code = retenu["code"]
@@ -257,29 +242,29 @@ def _upstream_body(raw: str) -> str:
     return " — ".join(bouts) or "error body with no usable field"
 
 
-def _as_upstream(exc: Exception) -> Optional[UpstreamHTTPError]:
-    """Equivalent `UpstreamHTTPError` if `exc` is an Attio refusal, else `None`.
+def _endpoint(url: Optional[str]) -> str:
+    """The Attio endpoint of the refused request, as the agent named it through the tool
+    (`objects/companies/records`), read from the URL the error carries."""
+    chemin = urlsplit(url or "").path
+    return chemin.partition(_API_PREFIX)[2] if _API_PREFIX in chemin else chemin.lstrip("/")
 
-    The status exists ONLY in the text composed by oto-core: we re-read it. A format
-    that has drifted no longer matches ⟹ `None` ⟹ the original exception bubbles up
-    unchanged (never worse than today), and the test
-    `test_le_format_compose_par_oto_core_est_celui_qu_on_relit` goes red to say so —
-    it is THE drift alarm, not a silence in prod.
+
+def _as_upstream(exc: Exception) -> Optional[UpstreamHTTPError]:
+    """The same Attio refusal with its body reduced (`_upstream_body`), else `None`.
+
+    Status, method, URL and `retry_after` are carried over unchanged. Anything that is not
+    an `UpstreamHTTPError` of the `attio` service (a bug of ours, a refusal before any
+    call) gives `None` and bubbles up unchanged: we never fabricate a status.
     """
-    texte = str(exc)
-    if texte.strip() == _RATE_LIMITED:
-        # Without this case, an Attio rate limit renders as "internal, do not retry"
-        # — the exact opposite of what is needed.
-        return UpstreamHTTPError(429, "Attio rate-limited the request.", service="attio")
-    trouve = _UPSTREAM_RE.match(texte)
-    if trouve is None:
+    if not isinstance(exc, UpstreamHTTPError) or exc.service != "attio":
         return None
-    status, method, endpoint, corps = trouve.groups()
-    return UpstreamHTTPError(
-        int(status),
-        f"{_upstream_body(corps)} (on {method} /{endpoint})",
-        service="attio",
-    )
+    if exc.status_code == 429:
+        # Attio's 429 body says nothing more than the status; `retry_after` says how long.
+        corps = "Attio rate-limited the request."
+    else:
+        corps = f"{_upstream_body(exc.body)} (on {exc.method} /{_endpoint(exc.url)})"
+    return UpstreamHTTPError(exc.status_code, corps, service="attio", method=exc.method,
+                             url=exc.url, retry_after=exc.retry_after)
 
 
 def _rendre_le_refus_lisible(client):
@@ -290,9 +275,9 @@ def _rendre_le_refus_lisible(client):
     in one gesture — instead of fifty-odd call sites of which a single forgotten one
     would stay silent exactly as today.
 
-    If oto-core renamed `_request`, we return the client as is: we fall back to the
-    behavior from before this batch, never to an outage of all Attio calls. The
-    test bench, for its part, requires the method to exist — drift is loud where we read it.
+    If oto-core renamed `_request`, we return the client as is: its refusals then keep
+    oto-core's whole envelope, never an outage of all Attio calls. The test bench, for
+    its part, requires the method to exist — drift is loud where we read it.
     """
     interne = getattr(client, "_request", None)
     if not callable(interne):

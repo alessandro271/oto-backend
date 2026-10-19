@@ -8,6 +8,7 @@ sec est traduit à part (`test_serper_a_sec.py`)."""
 from __future__ import annotations
 
 import pytest
+from oto.tools.common.errors import UpstreamHTTPError
 from oto_mcp.mcp_errors import McpError
 from oto_mcp.error_taxonomy import _is_expected_error
 
@@ -74,7 +75,7 @@ def scrape(tools):
 
 def test_scrape_5xx_becomes_managed_mcp_error(scrape):
     fn, calls = scrape
-    calls["exc"] = RuntimeError("Serper scrape 500: Scraping failed.")
+    calls["exc"] = UpstreamHTTPError(500, "Scraping failed.", service="serper")
     with pytest.raises(McpError) as ei:
         fn("https://example.com/page")
     # message actionnable, pas un stacktrace ; et droppé par la taxonomie Sentry
@@ -87,7 +88,7 @@ def test_scrape_404_becomes_managed_mcp_error(scrape):
     # 404 = l'URL ne mène à rien (page morte) → entrée invalide, pas un incident.
     # 1ᵉʳ contributeur de bruit Sentry avant ce mapping (37 événements).
     fn, calls = scrape
-    calls["exc"] = RuntimeError("Serper scrape 404: Page not found.")
+    calls["exc"] = UpstreamHTTPError(404, "Page not found.", service="serper")
     with pytest.raises(McpError) as ei:
         fn("https://example.com/page-morte")
     assert "does not exist" in ei.value.error.message
@@ -99,7 +100,7 @@ def test_scrape_4xx_propagates_unchanged(scrape):
     # 403 (clé invalide) = vrai problème de config, pas un échec d'URL → on ne le
     # masque PAS derrière « URL non scrapable ».
     fn, calls = scrape
-    calls["exc"] = RuntimeError("Serper scrape 403: Unauthorized")
+    calls["exc"] = UpstreamHTTPError(403, "Unauthorized", service="serper")
     with pytest.raises(RuntimeError) as ei:
         fn("https://example.com/page")
     assert not isinstance(ei.value, McpError)
@@ -111,7 +112,7 @@ def test_scrape_402_n_est_pas_masque_en_url_non_scrapable(scrape):
     # `quota_exhausted` (cf. `test_serper_a_sec.py`).
     from oto_mcp import error_taxonomy
     fn, calls = scrape
-    calls["exc"] = RuntimeError("Serper scrape 402: Not enough credits")
+    calls["exc"] = UpstreamHTTPError(402, "Not enough credits", service="serper")
     with pytest.raises(McpError) as ei:
         fn("https://example.com/page")
     assert "Cannot scrape this URL" not in ei.value.error.message
@@ -121,8 +122,7 @@ def test_scrape_402_n_est_pas_masque_en_url_non_scrapable(scrape):
 def test_scrape_400_becomes_managed_mcp_error(scrape):
     # 400 = URL non scrapable (JSON, page invalide) → entrée actionnable, pas un 500.
     fn, calls = scrape
-    calls["exc"] = RuntimeError(
-        'Serper scrape 400: URLs with Content-Type "application/json" currently not supported.')
+    calls["exc"] = UpstreamHTTPError(400, 'URLs with Content-Type "application/json" currently not supported.', service="serper")
     with pytest.raises(McpError) as ei:
         fn("https://api.example.com/data.json")
     assert "application/json" in ei.value.error.message
@@ -136,7 +136,7 @@ def test_reviews_400_becomes_managed_mcp_error(tools, op):
     # doivent rendre la même erreur gérée — sinon le défaut consolidé ferait
     # remonter un RuntimeError nu à Sentry.
     fns, calls = tools
-    calls["exc"] = RuntimeError("Serper reviews 400: Missing \"fid\", \"cid\" or \"placeId\" parameter")
+    calls["exc"] = UpstreamHTTPError(400, "Missing \"fid\", \"cid\" or \"placeId\" parameter", service="serper")
     with pytest.raises(McpError) as ei:
         fns["serper_reviews"](op=op, query="test")
     assert "placeId" in ei.value.error.message

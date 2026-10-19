@@ -23,6 +23,7 @@ from typing import Optional
 from fastmcp import FastMCP
 from ..mcp_errors import McpError
 from mcp.types import ErrorData, INVALID_PARAMS
+from oto.tools.common.errors import UpstreamHTTPError
 
 from .. import access, egress, file_source
 from ..connectors import verify as connector_verify
@@ -88,14 +89,14 @@ def register(mcp: FastMCP) -> None:
             return fn(client, _default_workspace(creds))
         except McpError:
             raise
-        except RuntimeError as e:
+        except UpstreamHTTPError as e:
             msg = str(e)
-            if msg.startswith("LightOn 401"):
+            if e.status_code == 401:
                 msg = "LightOn key invalid or revoked (401). Check the key you set."
-            elif msg.startswith("LightOn 403"):
+            elif e.status_code == 403:
                 msg = ("The LightOn account for this key has no access to this "
                        f"resource/operation (403). {msg}")
-            elif msg.startswith("LightOn 5"):
+            elif e.is_server_error:
                 msg = (f"LightOn is temporarily unavailable ({msg}). "
                        "Try again in a moment.")
             raise McpError(ErrorData(code=INVALID_PARAMS, message=msg))
