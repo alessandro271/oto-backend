@@ -305,6 +305,33 @@ def reservations_echues(limite: int) -> list[str]:
             "ORDER BY deadline LIMIT %s", (limite,)).fetchall()]
 
 
+def reservations_ouvertes(prefixe: str) -> list[str]:
+    """Les `call_uid` des réservations ouvertes qui commencent par `prefixe` (les tours
+    d'une tentative d'un travail du runner)."""
+    with _connect() as conn:
+        return [r["call_uid"] for r in conn.execute(
+            "SELECT call_uid FROM credit_holds WHERE state = 'open' "
+            "AND left(call_uid, length(%s)) = %s ORDER BY call_uid",
+            (prefixe, prefixe)).fetchall()]
+
+
+def jetons_du_jour(connector: str, function: str, key_mode: str, jour,
+                   unites: tuple[str, ...]) -> dict[str, int]:
+    """La somme, par unité, des jetons que les règlements de `connector.function` ont
+    portés (`meta.tokens`) pour un jour UTC, sous un rang de clé (`meta.key_mode`)."""
+    from datetime import datetime, time, timedelta, timezone
+    debut = datetime.combine(jour, time(0), tzinfo=timezone.utc)
+    colonnes = ", ".join(f"COALESCE(SUM((meta->'tokens'->>'{u}')::bigint), 0) AS \"{u}\""
+                         for u in unites)
+    with _connect() as conn:
+        row = conn.execute(
+            f"SELECT {colonnes} FROM credit_movements WHERE kind = 'settle' "
+            "AND connector = %s AND function = %s AND meta->>'key_mode' = %s "
+            "AND created_at >= %s AND created_at < %s",
+            (connector, function, key_mode, debut, debut + timedelta(days=1))).fetchone()
+    return {u: int(row[u]) for u in unites}
+
+
 # ── deux comptes d'une même personne ─────────────────────────────────────────
 
 def suivre_le_solde(conn, old_sub: str, new_sub: str) -> bool:

@@ -1001,11 +1001,73 @@ ce refus parle d'identité ; la raison qu'il affiche, elle, dit la clé.
 orgs, relever les orgs clientes qui ont des agents vivants sans clé, puis poser
 `value=true` sur la plateforme.
 
-**Ce qui n'est pas ici** : les clés de la PLATEFORME consommées comme crédits. La remise
-lit l'org seule (`credentials_store.get_credential("org", …)`), alors que le coffre a un
-barreau tenant (`credentials_store.TENANT`) — une clé posée sur un tenant n'atteindrait
-aucun run. Ce lot-là demandera un repli org → tenant à la remise, et l'estampille de la
-clé qui a payé chaque travail.
+### La clé PARTAGÉE : plateforme ou tenant, accordée puis refacturée (18/10/2026)
+
+Une org qui n'a rien déposé peut tourner sur une clé `anthropic` posée au rang
+**plateforme** de l'instance (ou par son **tenant**), si elle lui est **accordée** :
+le connecteur déclare `platform` dans ses `auth_modes` et une clé **fermée**
+(`platform_key_open=False`) — le grant de l'org est le droit, et le retirer coupe
+l'org à la réservation suivante, ses agents compris.
+
+- **L'ordre à la remise** : repli d'abonnement (jamais sur notre clé) → clé de l'org →
+  clé partagée → refus « clés d'org seules » → garde `runner.org_key_required` → le
+  comportement d'avant. La résolution est la cascade ordinaire, au nom du demandeur et
+  dans l'org du travail (`_cle_exigee.cle_partagee`), et seuls les rangs `tenant` et
+  `platform` y comptent.
+- ⚠️ **Une org qui a DÉPOSÉ une clé que le coffre ne rend pas ne bascule PAS** sur la
+  clé partagée : elle paie déjà son fournisseur, et la facturer sur la nôtre pour un
+  hoquet du coffre la ferait payer deux fois.
+- **L'estampille** : avant de partir, le travail porte `payload._plateforme.cle_partagee`
+  = `{depot, mode, tentative}` (`db.estampiller_cle_partagee`). Une estampille qui ne
+  s'écrit pas ne sert rien.
+- **Le budget, À CHAQUE APPEL au modèle** : seul un worker qui le PROMET au claim
+  (`meters_usage`, oto-runner `OTO_RUNNER_METERS_USAGE=1`) reçoit une clé partagée ; le
+  travail lui revient avec `meter_usage: true`. Chaque appel est un TOUR, identifié au
+  budget d'unités par `runner:<travail>:<tentative>:<tour>` (`access/credits.py`) :
+  - **avant l'appel**, `op=reserve` (`turn`, `max_tokens`) réserve son `max_tokens` de
+    SORTIE sous la ligne `anthropic.messages` / `output_tokens` du barème — la seule
+    borne connue avant l'appel ; l'entrée et le cache ne se réservent pas (pas de
+    comptage préalable). Refus en `enforce` : `insufficient_credits` (402),
+    `credits_unpriced` (422, une des quatre lignes manque), `spend_ledger_unavailable`
+    (503, rejouable) ; le worker s'ARRÊTE. `report` réserve quand même et le journalise ;
+  - **après l'appel, avant d'en exécuter les outils**, `op=meter` (`turn`, l'usage du
+    tour) le règle à ses quatre comptes de jetons (`input_tokens`, `output_tokens`,
+    `cache_creation_input_tokens`, `cache_read_input_tokens`), chacun sous sa ligne du
+    barème de la version réservée ; au-delà de la réservation (l'entrée, le cache) :
+    `exceeded: true`. Le mouvement porte `meta.tokens`, `model`, `runner_job_id`,
+    `attempt`, `turn` et `key_mode` (le rang). **Refusé** (422 `usage_unmeasured`) si
+    l'entrée ou la sortie manque : le worker s'arrête. **Idempotent** : un tour déjà
+    réglé rend `duplicate: true`. Un tour jamais réservé se réserve au règlement (il a
+    consommé) ;
+  - **à la conclusion** (même un échec : la dépense est réelle), les tours réservés et
+    jamais rapportés — l'appel qui a coupé la boucle, un rapport perdu — se règlent au
+    montant réservé (`from: unreported`). L'échéance (`OTO_CREDITS_HOLD_MAX_S`) règle
+    ce qu'un worker mort a laissé ouvert.
+  **Le prix n'est pas ici** : le barème est en unités, le commerce le pose et facture.
+- **Ce qui ne reçoit JAMAIS la clé partagée** : un worker qui ne promet pas la mesure
+  (le travail retourne à la file sans compter la tentative, `rendre_a_la_file`) ; la
+  ferme (Claude Code, dont on ne voit pas chaque appel : arrêt nommé, l'org dépose sa
+  clé).
+- **Une org sans clé ni accès ne tourne plus sur la clé du worker** dès que l'instance a
+  POSÉ une clé partagée de ce fournisseur (`_cle_exigee.cle_de_plateforme_posee`) :
+  arrêt nommé, qui dit les deux issues (déposer sa clé, demander l'accès).
+- **La garde d'argent compte la clé partagée comme une clé** : `manquantes` (pose d'un
+  agent, catalogue) ne dit pas « manquante » une clé accordée.
+- ⚠️ **Ce qui reste côté exploitation** : sur une instance SANS clé partagée posée, un
+  worker de plateforme sert encore une org sans clé ni exigence sur la clé de SON
+  environnement. Aucun worker de plateforme ne devrait porter `ANTHROPIC_API_KEY`
+  (oto-runner `OTO_RUNNER_ORG_KEYS_ONLY=1`).
+- **Le contrôle qui ne fait pas confiance à la mesure** : `oto_admin_model_spend`
+  (`GET /api/admin/platform-keys/model-spend?day=`, admin plateforme) lit le relevé
+  d'usage d'Anthropic pour un jour UTC (clé d'admin `OTO_ANTHROPIC_ADMIN_KEY`) et le
+  rapproche, EN JETONS et unité par unité, des règlements `anthropic.messages` du rang
+  plateforme (`meta.tokens`). Il rend l'écart par unité et les jetons de toute AUTRE clé
+  de l'organisation Anthropic (un worker sur sa clé d'environnement, la Console) ;
+  aucun tarif. La clé de plateforme est reconnue par son
+  `partial_key_hint`, sans réglage ; une ligne qu'aucun indice ne désigne, ou que deux
+  désignent, n'est jamais devinée. Il ne dit pas quelle org doit un écart, ne lit pas
+  le rang tenant, n'alerte personne : qui facture décide (`anthropic_reconcile.py`
+  côté service d'usage).
 ### Le coup d'envoi peut être un ÉVÉNEMENT, pas seulement une horloge (12/09/2026)
 
 Un agent hébergé ne partait que sur un **cadencement**. Beaucoup de travail utile

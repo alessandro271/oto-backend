@@ -177,6 +177,21 @@ alors que l'envoi était annoncé, le dit (`credits.rien_envoye`) : l'échec lib
 | --- | --- | --- | --- |
 | `fullenrich_enrich_linkedin` | `fullenrich.submit` | poids de FullEnrich par champ demandé (1 e-mail pro, 3 e-mail perso, 10 téléphone) × contacts | la relève `fullenrich_result` finie : `cost.credits` ; annulée : libérée |
 
+**Les appels au modèle d'un agent hébergé, sur une clé PARTAGÉE** (plateforme ou
+tenant, `capabilities/runner_jobs.py`) : pas un outil, le worker du runner appelle le
+modèle lui-même. Chaque appel est un tour (`runner:<travail>:<tentative>:<tour>`) :
+`op=reserve` réserve son `max_tokens` de sortie (`credits_tours.reserver_tour`), `op=meter`
+le règle à ses quatre comptes de jetons (`credits_tours.regler_tour`), la conclusion règle au
+montant réservé les tours jamais rapportés (`credits_tours.clore_les_tours`). Le barème porte
+quatre lignes `anthropic` / `messages`, une par unité : `input_tokens`,
+`output_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens` ; qu'une
+manque, et l'appel est `credits_unpriced` (au relevé du jour sous
+`unpriced:anthropic.messages`). L'entrée et le cache ne se réservent pas (aucun
+comptage avant l'appel) : ils se règlent `exceeded: true`. Échéance :
+`OTO_CREDITS_HOLD_MAX_S` (le runner n'est pas sous la borne d'un appel d'outil MCP).
+Le rapprochement avec le relevé d'Anthropic se fait en jetons
+(`oto_admin_model_spend`).
+
 **Les échéances** (`credits_echeances.py`, boucle de fond, `OTO_CREDITS_ECHEANCES_ENABLED`) :
 toutes les 60 s, les réservations ouvertes passées leur échéance se règlent au montant
 réservé, état `expired`, mouvement marqué `hold_expired: true` — un processus arrêté en

@@ -961,6 +961,51 @@ def _cle_ok_pour_repli(org_id: int, famille: str) -> bool:
     return bool(ligne and ligne.get("secret"))
 
 
+def estampiller_cle_partagee(job_id: int, worker_sub: str, depot: str,
+                             mode: str) -> bool:
+    """Écrit sur le travail QUI paie cette tentative : la clé PARTAGÉE `depot`,
+    servie depuis le rang `mode` (`tenant` | `platform`), et le numéro de la
+    tentative. C'est ce que la réservation et le règlement de chaque appel au modèle
+    relisent, et la conclusion pour clore les tours
+    (`capabilities.runner_jobs._clore_la_tentative`).
+
+    ⚠️ La tentative fait partie de l'estampille : un travail re-filé puis repris
+    sur la clé de SON org garderait sinon l'estampille d'avant, et serait facturé
+    pour une clé qui ne l'a pas servi. Un appel ne se règle au budget que si la
+    tentative estampillée est celle en cours.
+
+    Faux si le travail n'est plus à ce worker : rien n'est alors servi."""
+    with _connect() as conn:
+        cur = conn.execute(
+            """
+            UPDATE runner_jobs j
+               SET payload = jsonb_set(
+                       COALESCE(j.payload, '{}'::jsonb), '{_plateforme}',
+                       COALESCE(j.payload->'_plateforme', '{}'::jsonb)
+                       || jsonb_build_object('cle_partagee', jsonb_build_object(
+                              'depot', %s::text, 'mode', %s::text,
+                              'tentative', j.attempts)))
+             WHERE j.id = %s AND j.claimed_by = %s AND j.status = 'claimed'
+            """,
+            (depot, mode, job_id, worker_sub))
+        return bool(cur.rowcount)
+
+
+def tentative_en_cours(job_id: int, worker_sub: str) -> Optional[dict]:
+    """La tentative en cours d'un travail réservé par ce worker : `org_id`, `sub`,
+    `attempts` et l'estampille `cle_partagee` (ou None) — de quoi réserver et régler un
+    appel au modèle au budget d'unités. None si le travail n'est plus à ce worker."""
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            SELECT org_id, sub, attempts,
+                   payload->'_plateforme'->'cle_partagee' AS cle_partagee
+              FROM runner_jobs
+             WHERE id = %s AND claimed_by = %s AND status = 'claimed'
+            """, (job_id, worker_sub)).fetchone()
+    return dict(row) if row else None
+
+
 def defaire_le_repli(job_id: int, worker_sub: str, raison: str,
                      delai_s: int = 60) -> bool:
     """Un travail REPLIÉ que la remise n'a finalement pas pu payer sur la clé de son
@@ -1456,7 +1501,9 @@ def complete_job(job_id: int, worker_sub: str, ok: bool,
     sinon None) : c'est la clé de la libération des baux du datastore (#633),
     lue par la capacité sans second aller-retour — ou None si le job n'est pas
     au claimant (déjà re-claimé après bail mort, ou jamais à lui) : l'appelant
-    ne conclut pas ce qui ne lui appartient plus."""
+    ne conclut pas ce qui ne lui appartient plus. Rend aussi `org_id`, `sub`,
+    `attempts` et l'estampille `cle_partagee` (ou None) : de quoi clore, sans
+    relire le travail, ce qu'une clé partagée a payé."""
     with _connect() as conn:
         if ok:
             row = conn.execute(
@@ -1466,7 +1513,8 @@ def complete_job(job_id: int, worker_sub: str, ok: bool,
                        run_id = COALESCE(%s, run_id), last_error = NULL,
                        result = COALESCE(%s::jsonb, result)
                  WHERE id = %s AND claimed_by = %s AND status = 'claimed'
-                RETURNING status, run_id
+                RETURNING status, run_id, org_id, sub, attempts,
+                          payload->'_plateforme'->'cle_partagee' AS cle_partagee
                 """,
                 (run_id, json.dumps(result) if result is not None else None,
                  job_id, worker_sub),
@@ -1500,7 +1548,8 @@ def complete_job(job_id: int, worker_sub: str, ok: bool,
                                                'error', %s::text)),
                        result = COALESCE(%s::jsonb, result)
                  WHERE id = %s AND claimed_by = %s AND status = 'claimed'
-                RETURNING status, run_id
+                RETURNING status, run_id, org_id, sub, attempts,
+                          payload->'_plateforme'->'cle_partagee' AS cle_partagee
                 """,
                 (_BACKOFF_S, motif, motif,
                  json.dumps(result) if result is not None else None,
