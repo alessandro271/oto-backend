@@ -1,11 +1,11 @@
 """Ce que coûte, en requêtes SQL, le règlement d'un appel (L8, `access/reglement.py`).
 
 Le règlement remplace le débit que chaque outil faisait lui-même (`record_platform_usage`)
-par un seul point, au bord de l'appel. Il ne doit rien coûter de plus : le relevé du
-19/10/2026, contre une vraie base et le vrai schéma, donne le MÊME compte avant et après
-pour un appel sous la clé plateforme d'un connecteur chaîné (`grants_chain`) — 7
-requêtes : l'historique `usage`, l'org active, la chaîne relue (`platform_rung`), le
-compteur d'arête, le journal de la fenêtre de double lecture.
+par un seul point, au bord de l'appel. Il ne coûte rien de plus : le relevé du
+19/10/2026, contre une vraie base et le vrai schéma, donnait le MÊME compte avant et
+après L8 pour un appel sous l'arête `user` d'un connecteur chaîné (`grants_chain`) — 7
+requêtes. R6 en retire 2, la comparaison des deux compteurs : restent 5, l'historique
+`usage`, l'org active, la chaîne relue (`platform_rung`) et le compteur d'arête.
 
 Ce que ce fichier tient : le compte de chaque cas, au plus juste ; un appel qui ne
 débite rien (outil sans débit, zéro unité, clé propre) ne touche pas la base ; et ce qui
@@ -20,9 +20,9 @@ from oto_mcp import access
 
 SUB = "granted-sub"
 
-# Relevé du 19/10/2026 (identique avant L8, `record_platform_usage`). Un écart est une
-# régression du chemin chaud, ou une économie à graver ici.
-_CHAINE = 7
+# Relevé du 19/10/2026 : 7 avant et après L8, 5 après R6. Un écart est une régression
+# du chemin chaud, ou une économie à graver ici.
+_CHAINE = 5
 _NON_CHAINE = 1
 
 

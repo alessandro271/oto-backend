@@ -438,7 +438,7 @@ def _win_quota(win, sub: str, provider: str,
     all go through it. The ceiling itself comes from `quotas.plafond_du_jour`, which the
     `/api/me` snapshot also reads. The same number computed in two places ends up diverging —
     that is why the `cascade` walker exists (seen 2026-07-07, option rule copied 3×)."""
-    used = quotas.usage_today(sub, provider)
+    used = quotas.platform_used_today(sub, provider, win.payload.get("edge_counter"))
     limit = quotas.plafond_du_jour(win.payload, provider,
                                    lambda: quotas.quotas_leves(sub, active_org))
     return used, limit

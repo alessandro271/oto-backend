@@ -9,10 +9,9 @@ devise, ni facture, ni moyen de paiement (#1104) : seulement des unités.
 Trois étapes :
 
 1. **L8 — le règlement unique** (fait) : un seul point débite, au bord de l'appel.
-2. **R6 — l'autorité du refus** passe au compteur d'arête (`grant_counters`) pour les
-   connecteurs chaînés (`grants_chain.CHAIN_CONNECTORS`). En attente d'un arbitrage : une
-   arête d'org compte pour toute l'org, là où `usage` compte par personne, donc basculer
-   change le plafond des bénéficiaires d'une arête d'org (`grants_chain._journal_counters`).
+2. **R6 — l'autorité du refus** (fait) : sous une arête `user` d'un connecteur chaîné
+   (`grants_chain.CHAIN_CONNECTORS`), le refus lit le compteur d'arête (`grant_counters`).
+   La fenêtre de double lecture est close là où la chaîne a un avis.
 3. **Le budget d'unités** : un barème posé par le commerce, des mouvements idempotents
    versés à un payeur, une réservation au pire cas avant l'appel et un règlement au réel
    après. Il suppose les deux formes de `cost` du format des connecteurs (pire cas par
@@ -52,6 +51,28 @@ son propre relevé ; l'enveloppe ne reçoit jamais `CLES_REGLEMENT`) et `jev_job
 - **L'arête de tenant** est vérifiée à la résolution et débitée au succès, au même point.
   Hors relevé d'appel (face REST, maintenance), il n'y a pas de bord : elle est débitée à
   la résolution, comme avant.
+
+## R6 : le compte que lit le refus (`quotas.platform_used_today`)
+
+| l'arête qui sert | le compte du refus |
+| --- | --- |
+| `user` (connecteur chaîné) | son compteur d'arête, arêtes archivées comprises |
+| `org` ou `group` | `usage(sub, tool, day)`, par personne |
+| aucune (chaîne muette, connecteur non chaîné) | `usage(sub, tool, day)`, par personne |
+
+Le refus, la sonde (`platform_quota_hint`), le mode affiché et l'instantané `/api/me`
+lisent ce même nombre. Là où la chaîne accorde ou refuse, l'ancien chemin n'est plus lu,
+et le journal d'écart (accès, quota, compteur) disparaît avec lui. Le compteur d'une
+arête d'org continue d'être débité : c'est la consommation de l'org entière, lue par
+l'administration des arêtes.
+
+## Limites assumées
+
+- **Sous une arête d'org ou de groupe, le refus reste lu dans `usage`**, compté par
+  personne, comme avant : un compteur d'arête compte pour tous ses bénéficiaires, et le
+  plafond d'une arête d'org est un plafond par personne. `grant_counters` n'a pas de
+  colonne de bénéficiaire (`sub`) et n'en reçoit pas : le pot commun des crédits (étape 3)
+  remplacera ce compte.
 
 ## Écarts connus, laissés pour l'étape 3
 
