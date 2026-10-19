@@ -36,6 +36,11 @@ from .users import upsert_user
 # `0063_projects_folder` ET par le démarrage, sous garde de catalogue — même DDL.
 COLONNE_FOLDER = "folder"
 DDL_COLONNE_FOLDER = f"ALTER TABLE projects ADD COLUMN IF NOT EXISTS {COLONNE_FOLDER} TEXT"
+# Rang d'affichage (docs/projects.md §Rang d'affichage) : posé par la révision
+# `0068_projects_position` ET par le démarrage, sous garde de catalogue — même DDL.
+COLONNE_POSITION = "position"
+DDL_COLONNE_POSITION = (f"ALTER TABLE projects ADD COLUMN IF NOT EXISTS {COLONNE_POSITION} "
+                        "DOUBLE PRECISION")
 # ⚠️ Cette liste est le SEUL chemin de lecture d'un projet (`get_project_by_id`,
 # `get_project_by_mcp_slug`, listes…). Une colonne écrite mais absente d'ici est une
 # colonne MORTE : la valeur part en base et ne revient jamais. Vécu — `mcp_expose_docs`
@@ -45,7 +50,7 @@ DDL_COLONNE_FOLDER = f"ALTER TABLE projects ADD COLUMN IF NOT EXISTS {COLONNE_FO
 # destinataire recevant le préambule générique ; l'avertissement « aucune instruction
 # publiée » émis même après en avoir publié). Tenu par
 # `tests/test_project_columns_are_read.py`, qui croise le DDL.
-_PROJECT_COLS = ("id, owner_type, owner_id, context_org_id, name, icon, folder, brief_md, created_by, "
+_PROJECT_COLS = ("id, owner_type, owner_id, context_org_id, name, icon, folder, position, brief_md, created_by, "
                  "is_template, mcp_slug, mcp_access, mcp_tools, mcp_expose_datastore, "
                  "mcp_expose_datastore_write, mcp_expose_docs, mcp_instructions_md, "
                  "excluded_url_prefixes, archived_at, created_at, updated_at")
@@ -170,7 +175,8 @@ def update_project(project_id: int, *, name: Optional[str] = None,
                    brief_md: Optional[str] = None,
                    is_template: Optional[bool] = None,
                    icon: Optional[str] = None,
-                   folder: Optional[str] = None) -> None:
+                   folder: Optional[str] = None,
+                   position: Optional[float] = None) -> None:
     sets: list[str] = []
     params: list = []
     if name is not None:
@@ -191,9 +197,17 @@ def update_project(project_id: int, *, name: Optional[str] = None,
     if is_template is not None:
         sets.append("is_template = %s")
         params.append(is_template)
+    # Le rang seul ne touche pas `updated_at` : ranger la sidebar n'est pas modifier le
+    # projet, et les listes « récemment modifiés » le remonteraient à chaque glisser.
+    # Posé APRÈS cette décision : `updated_at` ne prend pas de paramètre, l'ordre des
+    # valeurs reste celui des colonnes.
+    if sets:
+        sets.append("updated_at = NOW()")
+    if position is not None:
+        sets.append("position = %s")
+        params.append(position)
     if not sets:
         return
-    sets.append("updated_at = NOW()")
     params.append(project_id)
     with _connect() as conn:
         conn.execute(f"UPDATE projects SET {', '.join(sets)} WHERE id = %s", tuple(params))
