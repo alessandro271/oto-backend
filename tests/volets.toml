@@ -247,6 +247,8 @@ chemins = [
   "oto_mcp/db/schema/connectors.py",
   # Le budget d'unités : réservé et réglé sur le chemin de chaque appel payant.
   "oto_mcp/db/schema/credits.py",
+  "oto_mcp/db/credits.py",
+  "oto_mcp/capabilities/service_credits.py",
   "oto_mcp/db/schema/entitlements.py",
   "oto_mcp/db/schema/grants.py",
   "oto_mcp/db/schema/nodes.py",

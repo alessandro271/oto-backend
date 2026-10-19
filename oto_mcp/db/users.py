@@ -782,6 +782,11 @@ def repointer_patrimoine(conn, old_sub: str, new_sub: str, *,
     #    (la révocation F-046 — sans elle, le compte fusionné était servi à nouveau) et
     #    `meta.rate_limit_by` (deux quotas qui se rencontrent : le plus restrictif).
     credentials_store.suivre_les_accords_recus(conn, old_sub, new_sub)
+    # 3 quinquies. Le SOLDE personnel du budget d'unités (`user:<sub>`) : versé par le
+    #    commerce à la personne, il la suit, réservations ouvertes comprises. Deux
+    #    mouvements `transfer` le disent ; le journal des mouvements ne se réécrit pas.
+    from . import credits
+    credits.suivre_le_solde(conn, old_sub, new_sub)
     return bilan
 
 

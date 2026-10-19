@@ -66,6 +66,39 @@ et le journal d'écart (accès, quota, compteur) disparaît avec lui. Le compteu
 arête d'org continue d'être débité : c'est la consommation de l'org entière, lue par
 l'administration des arêtes.
 
+## Le budget d'unités : le port du commerce (`capabilities/service_credits.py`)
+
+Le commerce écrit et relit par l'API de service (`/api/service/…`, identité commerce,
+REST seule) ; le stockage est `db/credits.py`, sur les tables de `db/schema/credits.py`
+(révision `0068_credits`).
+
+| route | ce qu'elle fait |
+| --- | --- |
+| `PUT /api/service/credits/scales/{version}` | pose une version du barème, d'un bloc ; une version ne se réécrit pas (409 `scale_version_conflict`), la plus haute fait foi |
+| `GET /api/service/credits/scales/current` | la version qui fait foi et ses lignes |
+| `PUT /api/service/orgs/{id}/credits/payer-mode` | qui paie dans l'org : `org` (défaut) ou `person` |
+| `POST /api/service/credits/movements` | verse un montant signé à un payeur, une fois par `(payeur, idempotency_key)` ; même clé, autre contenu : 409 `idempotency_conflict` |
+| `GET /api/service/credits/balance?payer=` | `balance` (versé − réglé), `holds_open` (réservé, pas encore réglé), `available` |
+| `GET /api/service/credits/movements?after=&limit=` | les mouvements de tous les payeurs, 500 par défaut, 1 000 au plus |
+
+- **Une ligne de barème** : `(connector, function, unit)` → `budget` unités par paquet de
+  `per_n` unités de la fonction. Réservation et règlement s'arrondissent au paquet
+  supérieur.
+- **Un payeur** : `org:<id>` ou `user:<sub>`, qui doit exister.
+- **Le curseur** est opaque (`<xid>.<id>`). Un mouvement porte l'identifiant de la
+  transaction qui l'a écrit (`xid8`), et la route ne sert que ce qui est sous l'horizon
+  `pg_snapshot_xmin(pg_current_snapshot())`, trié par `(xid, id)` : une transaction
+  encore ouverte retient tout ce qui suit, et rien ne peut plus être validé en dessous
+  d'un curseur servi. Relu jusqu'à `next_cursor == after`, il n'en manque aucun.
+  L'horizon est celui de TOUT le serveur PostgreSQL : une transaction longue, dans
+  n'importe quelle base de l'instance, retarde le curseur — un retard, jamais une perte.
+- Le curseur porte les règlements (échéances comprises), les versements et les transferts.
+  Les réservations en cours se lisent dans le solde (`holds_open`).
+- **Deux comptes d'une même personne fusionnés** : le solde `user:<ancien>` passe à
+  `user:<nouveau>` par deux mouvements `transfer` (`users.repointer_patrimoine`) ; le
+  journal ne se réécrit pas.
+- **Rétention** : tout est gardé.
+
 ## Limites assumées
 
 - **Sous une arête d'org ou de groupe, le refus reste lu dans `usage`**, compté par

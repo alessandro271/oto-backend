@@ -1,0 +1,182 @@
+"""Le stockage du budget d'unités : barème, modes de payeur, soldes, réservations et
+mouvements (`db/schema/credits.py`).
+
+Ce module ne fait qu'écrire et relire, en transactions courtes ; la règle n'est pas
+ici.
+Une unité est un ENTIER : rien ici ne connaît de monnaie.
+
+- **Verser** (commerce) : un mouvement idempotent par `(payeur, clé)` ; la même clé avec
+  un autre contenu lève `CleEnConflit`.
+- **Curseur** (commerce) : les mouvements validés sous l'horizon
+  `pg_snapshot_xmin(pg_current_snapshot())`, par `(xid, id)` : une transaction encore
+  ouverte ne peut plus valider un mouvement EN DESSOUS de ce qui a été servi.
+"""
+from __future__ import annotations
+
+import json
+from typing import Optional
+
+from ._conn import _connect
+
+# Les colonnes d'un mouvement rendues au commerce (`xid` en texte : un xid8 dépasse le
+# JSON d'un entier signé sur 53 bits).
+_MOUVEMENT = ("id, xid::text AS xid, payer, kind, amount, held, reason, idempotency_key, "
+              "call_uid, connector, function, quantity, meta, created_at")
+
+
+class CleEnConflit(ValueError):
+    """La même clé d'idempotence, pour le même payeur, avec un autre contenu."""
+
+
+class BaremeEnConflit(ValueError):
+    """Une version de barème déjà posée, avec d'autres lignes : une version ne se
+    réécrit pas."""
+
+
+# ── le barème ────────────────────────────────────────────────────────────────
+
+def poser_bareme(version: int, lignes: list[dict]) -> bool:
+    """Pose la version `version` du barème, d'un bloc. Rend True si elle est neuve,
+    False si la même version portait déjà exactement ces lignes. Lève `BaremeEnConflit`
+    si elle en portait d'autres."""
+    cles = sorted((l["connector"], l["function"], l["unit"], int(l["budget"]),
+                   int(l["per_n"])) for l in lignes)
+    with _connect() as conn, conn.transaction():
+        neuve = conn.execute(
+            "INSERT INTO credit_scales (version) VALUES (%s) ON CONFLICT DO NOTHING "
+            "RETURNING version", (version,)).fetchone()
+        if not neuve:
+            existantes = sorted(
+                (r["connector"], r["function"], r["unit"], int(r["budget"]),
+                 int(r["per_n"])) for r in conn.execute(
+                    "SELECT connector, function, unit, budget, per_n FROM credit_scale_lines "
+                    "WHERE version = %s", (version,)).fetchall())
+            if existantes != cles:
+                raise BaremeEnConflit(f"la version {version} du barème est déjà posée, "
+                                      "avec d'autres lignes")
+            return False
+        with conn.cursor() as cur:
+            cur.executemany(
+                "INSERT INTO credit_scale_lines (version, connector, function, unit, "
+                "budget, per_n) VALUES (%s, %s, %s, %s, %s, %s)",
+                [(version, *c) for c in cles])
+    return True
+
+
+def version_du_bareme() -> Optional[int]:
+    """La version qui fait foi (la plus haute), ou None sans barème."""
+    with _connect() as conn:
+        row = conn.execute("SELECT max(version) AS v FROM credit_scales").fetchone()
+    return int(row["v"]) if row and row["v"] is not None else None
+
+
+def lignes_du_bareme(version: int) -> list[dict]:
+    with _connect() as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT connector, function, unit, budget, per_n FROM credit_scale_lines "
+            "WHERE version = %s ORDER BY connector, function, unit", (version,)).fetchall()]
+
+
+# ── qui paie ─────────────────────────────────────────────────────────────────
+
+def poser_mode(org_id: int, mode: str) -> None:
+    """`org` retire la ligne (le défaut), `person` la pose."""
+    with _connect() as conn:
+        if mode == "org":
+            conn.execute("DELETE FROM credit_payer_modes WHERE org_id = %s", (org_id,))
+        else:
+            conn.execute(
+                "INSERT INTO credit_payer_modes (org_id, mode) VALUES (%s, %s) "
+                "ON CONFLICT (org_id) DO UPDATE SET mode = EXCLUDED.mode, set_at = NOW()",
+                (org_id, mode))
+
+
+def orgs_en_mode_personne() -> set[int]:
+    with _connect() as conn:
+        return {int(r["org_id"]) for r in conn.execute(
+            "SELECT org_id FROM credit_payer_modes WHERE mode = 'person'").fetchall()}
+
+
+# ── le commerce verse, relit ─────────────────────────────────────────────────
+
+def verser(payer: str, amount: int, reason: str, idempotency_key: str) -> tuple[dict, bool]:
+    """Verse un mouvement `deposit` (signé) au payeur, une fois par clé. Rend
+    `(mouvement, neuf)` ; la même clé avec le même contenu rend le mouvement d'origine,
+    `neuf=False`. Lève `CleEnConflit` si son contenu diffère."""
+    with _connect() as conn, conn.transaction():
+        row = conn.execute(
+            "INSERT INTO credit_movements (payer, kind, amount, reason, idempotency_key) "
+            "VALUES (%s, 'deposit', %s, %s, %s) "
+            "ON CONFLICT (payer, idempotency_key) WHERE idempotency_key IS NOT NULL "
+            f"DO NOTHING RETURNING {_MOUVEMENT}",
+            (payer, amount, reason, idempotency_key)).fetchone()
+        if row is None:
+            deja = conn.execute(
+                f"SELECT {_MOUVEMENT} FROM credit_movements "
+                "WHERE payer = %s AND idempotency_key = %s",
+                (payer, idempotency_key)).fetchone()
+            if (deja["kind"], int(deja["amount"]), deja["reason"]) != ("deposit", amount,
+                                                                       reason):
+                raise CleEnConflit(f"la clé {idempotency_key!r} a déjà servi pour {payer}, "
+                                   "avec un autre mouvement")
+            return dict(deja), False
+        conn.execute(
+            "INSERT INTO credit_balances (payer, balance) VALUES (%s, %s) "
+            "ON CONFLICT (payer) DO UPDATE SET balance = credit_balances.balance + "
+            "EXCLUDED.balance, updated_at = NOW()", (payer, amount))
+    return dict(row), True
+
+
+def solde(payer: str) -> dict:
+    """`{balance, holds_open, as_of}` ; un payeur sans ligne a un solde nul."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT balance, holds_open, NOW() AS as_of FROM credit_balances "
+            "WHERE payer = %s", (payer,)).fetchone()
+        if row is None:
+            row = conn.execute("SELECT 0 AS balance, 0 AS holds_open, NOW() AS as_of"
+                               ).fetchone()
+    return dict(row)
+
+
+def mouvements_apres(xid: int, id_: int, limite: int) -> list[dict]:
+    """Les mouvements d'après `(xid, id)`, validés sous l'horizon, par `(xid, id)`."""
+    with _connect() as conn:
+        return [dict(r) for r in conn.execute(
+            f"SELECT {_MOUVEMENT} FROM credit_movements "
+            "WHERE xid < pg_snapshot_xmin(pg_current_snapshot()) "
+            "AND (xid, id) > (%s::text::xid8, %s) ORDER BY xid, id LIMIT %s",
+            (str(xid), id_, limite)).fetchall()]
+
+
+# ── deux comptes d'une même personne ─────────────────────────────────────────
+
+def suivre_le_solde(conn, old_sub: str, new_sub: str) -> bool:
+    """Le solde personnel `user:<old_sub>` passe à `user:<new_sub>` quand les deux
+    comptes fusionnent (`users.repointer_patrimoine`) : deux mouvements `transfer` le
+    disent, et les réservations ouvertes suivent leur payeur. Le journal des mouvements
+    ne se réécrit pas. Dans la transaction de l'appelant (`conn`). Rend True si un solde
+    a bougé."""
+    ancien, nouveau = f"user:{old_sub}", f"user:{new_sub}"
+    row = conn.execute(
+        "SELECT balance, holds_open FROM credit_balances WHERE payer = %s FOR UPDATE",
+        (ancien,)).fetchone()
+    if row is None or (not row["balance"] and not row["holds_open"]):
+        return False
+    b, h = int(row["balance"]), int(row["holds_open"])
+    conn.execute("UPDATE credit_balances SET balance = 0, holds_open = 0, "
+                 "updated_at = NOW() WHERE payer = %s", (ancien,))
+    conn.execute(
+        "INSERT INTO credit_balances (payer, balance, holds_open) VALUES (%s, %s, %s) "
+        "ON CONFLICT (payer) DO UPDATE SET balance = credit_balances.balance + "
+        "EXCLUDED.balance, holds_open = credit_balances.holds_open + EXCLUDED.holds_open, "
+        "updated_at = NOW()", (nouveau, b, h))
+    conn.execute("UPDATE credit_holds SET payer = %s WHERE payer = %s AND state = 'open'",
+                 (nouveau, ancien))
+    with conn.cursor() as cur:
+        cur.executemany(
+            "INSERT INTO credit_movements (payer, kind, amount, held, reason, meta) "
+            "VALUES (%s, 'transfer', %s, %s, 'account_merge', %s::jsonb)",
+            [(ancien, -b, -h, json.dumps({"to": nouveau})),
+             (nouveau, b, h, json.dumps({"from": ancien}))])
+    return True
