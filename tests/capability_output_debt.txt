@@ -68,7 +68,6 @@ monitoring.rest
 monitoring.summary
 org.admin.archive
 org.admin.create
-org.admin.get
 org.admin.list
 org.console
 org.guide.admin_get

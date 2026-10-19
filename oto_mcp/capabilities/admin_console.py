@@ -14,12 +14,13 @@ pose de secret brut (`set_org_secret`/`set_platform_key`) = dashboard-only.
 """
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal, Optional
 
 from pydantic import BaseModel
 
 from .. import credentials_store, db
-from . import platform_invites, unipile_seats, users_admin
+from . import droits_admin, platform_invites, unipile_seats, users_admin
 from .orgs import (admin as orgs_admin, members as orgs_members,
                    reads as orgs_reads)
 from ._authz import (ADMIN_BY_OP, ORG_ADMIN_OF, ORG_ADMIN_OF_OR_OPERATOR, ORG_MEMBER_OF,
@@ -35,12 +36,28 @@ def _need(val, code: str, msg: str):
     return val
 
 
-# ── oto_admin_org : create / archive / list / get ────────────────────────────
+# ── oto_admin_org : create / archive / list / get / entitlements ─────────────
+#
+# `op=entitlements` = la lecture transversale des droits déclarés (oto-app#13), sur
+# CETTE console plutôt qu'un outil neuf : un droit vit dans une org ou sur une personne
+# de la plateforme, c'est la lecture que la fiche d'org (`op=get`) ne donne qu'org par
+# org. Pas dans `op=list`, qui rend des ORGS (même forme que `GET /api/admin/orgs`) :
+# une ligne de personne partout n'a pas d'org, et un verbe ne rend qu'une forme.
 class OrgAdminInput(BaseModel):
-    op: Literal["create", "archive", "list", "get"]
+    op: Literal["create", "archive", "list", "get", "entitlements"]
     name: Optional[str] = None        # create
     admin: Optional[str] = None       # create : responsable (email|sub|"me"), défaut = toi
-    org_id: Optional[int] = None      # archive / get
+    org_id: Optional[int] = None      # archive / get ; entitlements : filtre
+    # entitlements : les filtres et la page de `admin.entitlement.list`.
+    right: Optional[str] = None
+    source: Optional[str] = None
+    scope: Optional[droits_admin.PorteeFiltre] = None
+    active: Optional[bool] = None
+    expires_before: Optional[datetime] = None
+    org_created_after: Optional[datetime] = None
+    cursor: Optional[str] = None
+    limit: Optional[int] = None
+    full: bool = False
 
 
 def _org(ctx: ResolvedCtx, inp: OrgAdminInput) -> dict:
@@ -50,10 +67,16 @@ def _org(ctx: ResolvedCtx, inp: OrgAdminInput) -> dict:
             admin=inp.admin))
     if inp.op == "list":
         return orgs_reads._list_all_orgs(ctx, orgs_reads.NoInput())
+    if inp.op == "entitlements":
+        # Le modèle du verbe REST est l'unique validation métier : ses défauts (page)
+        # s'appliquent aux champs absents, ses conversions (dates en UTC) aux autres.
+        champs = set(droits_admin.EntitlementsListInput.model_fields)
+        data = {k: v for k, v in inp.model_dump(include=champs).items() if v is not None}
+        return droits_admin._lister(ctx, droits_admin.EntitlementsListInput(**data))
     oid = _need(inp.org_id, "missing_org", f"`org_id` requis pour {inp.op}.")
     if inp.op == "archive":
         return orgs_admin._archive_org(ctx, orgs_admin.OrgIdInput(org_id=oid))
-    return orgs_reads._org_detail(ctx, orgs_reads.OrgIdInput(org_id=oid))  # get
+    return orgs_reads._org_admin_detail(ctx, orgs_reads.OrgIdInput(org_id=oid))  # get
 
 
 # ── oto_admin_org_member : add / remove / set_role / list / events ───────────
@@ -336,14 +359,24 @@ CAPABILITIES += [
     Capability(
         key="admin.org", handler=_org, Input=OrgAdminInput,
         authz=ADMIN_BY_OP({"create": SUPER_ADMIN, "archive": SUPER_ADMIN,
-                           "list": PLATFORM_ADMIN, "get": PLATFORM_ADMIN}),
+                           "list": PLATFORM_ADMIN, "get": PLATFORM_ADMIN,
+                           "entitlements": PLATFORM_ADMIN}),
+        errors=droits_admin.ERREURS_LISTE,
         description=("Manage organizations. op=create (`name` + `admin` = email|sub of "
                      "the person who will run it, or \"me\"/omitted for yourself; super "
                      "admin) / archive (`org_id`, super admin; an org already archived answers "
                      "`already_archived: true`, nothing done) / list (all orgs, platform admin) / get "
                      "(`org_id` → full fiche: org (with `trial_ends_at`, the trial end pushed by "
-                     "commerce, null = no trial), members, secrets, option_comps, billing; "
-                     "platform admin)."),
+                     "commerce, null = no trial), members, secrets, option_comps, billing, and "
+                     "`entitlements` = the org's declared rights (org rows and rows of a person "
+                     "in the org, expired included, with source, dates and who set them); "
+                     "platform admin) / entitlements (declared rights across the platform, "
+                     "gifts to a person everywhere included; platform admin; filters "
+                     "`right`, `source`, `scope` org|personne_dans_org|personne_partout|"
+                     "personne, `active` true = valid now / false = expired or not started / "
+                     "omitted = all, `expires_before`, `org_created_after`, `org_id`; page "
+                     "`limit` (100, max 500) + `cursor` = previous `next_cursor`; compact "
+                     "rows, `full=true` adds names, email and who set them)."),
         mcp="oto_admin_org",
     ),
     Capability(
@@ -411,7 +444,9 @@ CAPABILITIES += [
                      "for (super admin). op=list (each seat + `state`: bound in service | "
                      "disconnected, owner unhooked it on oto but it still bills | orphan, "
                      "nobody claims it; `entitled` = its org still has the `unipile` "
-                     "right, else `entitlement_lost_at` and `deletion_scheduled_at` say "
+                     "right, `entitled_by` = what opens it (declared rows with scope, "
+                     "source and deadline, or the instance default), else "
+                     "`entitlement_lost_at` and `deletion_scheduled_at` say "
                      "when the account gets deleted on unipile; `reclaimable_count` = "
                      "what you can stop paying) / release (`account_id` — deletes it on "
                      "unipile. IRREVERSIBLE; refuses a seat in service whose org still "

@@ -48,9 +48,13 @@ def _setup(monkeypatch, *, accounts, rows, has_key=True):
                                                   if r["disconnected_at"] is None]
 
     monkeypatch.setattr(us.db, "unipile_account_owners", owners)
-    # Sans base : le titulaire a le droit `unipile` (#806). Le cas « droit perdu » se
-    # joue sur vraie base, dans `test_unipile_fin_de_droit.py`.
-    monkeypatch.setattr(us.access, "has_right", lambda sub, org_id, key: True)
+    # Sans base : le titulaire a le droit `unipile` (#806), ouvert par une ligne d'org
+    # (oto-app#13). Le cas « droit perdu » se joue sur vraie base, dans
+    # `test_unipile_fin_de_droit.py` ; ce qui ouvre le droit, dans
+    # `test_droits_admin_live.py`.
+    from oto_mcp.db.entitlements import LigneValide
+    ouvert = us.access.ValeurExpliquee(1, (LigneValide("org", "subscription", 1, None),), False)
+    monkeypatch.setattr(us.access, "valeur_expliquee", lambda sub, org_id, key: ouvert)
     deleted: list[str] = []
     monkeypatch.setattr(us, "_platform_client",
                         lambda: (FakeClient(accounts, deleted) if has_key else None))
@@ -80,6 +84,12 @@ def test_inventaire_classe_les_trois_etats(monkeypatch):
     assert by["acc_off"]["owner_email"] == "u2@x.io"
     assert by["acc_none"]["state"] == "orphan"
     assert by["acc_none"]["owner_email"] is None
+    # Ce qui ouvre le droit du siège en service : la ligne lue, pour son titulaire.
+    assert by["acc_live"]["entitled_by"] == {
+        "sub": "u1", "org_id": 7, "instance_default": False,
+        "rows": [{"scope": "org", "source": "subscription", "value": 1,
+                  "expires_at": None}]}
+    assert by["acc_none"]["entitled_by"] is None, "un orphelin n'a aucun titulaire"
     # `orphan` ne compte que les sièges que PERSONNE ne réclame ; `reclaimable` chiffre
     # l'économie réelle (déconnectés compris).
     assert out["orphan_count"] == 1

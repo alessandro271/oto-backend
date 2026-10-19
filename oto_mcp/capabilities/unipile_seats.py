@@ -15,8 +15,9 @@ no oto user".
 irreversible. No secret leaves (the key is used to call unipile, never returned).
 
 **The holder's `unipile` right** (oto-backend#806): the inventory says, per seat, whether
-a binding holding it in service still has the right (`entitled`), since when it lost
-it (`entitlement_lost_at`) and when the account will be deleted (`deletion_scheduled_at`).
+a binding holding it in service still has the right (`entitled`), what opens it
+(`entitled_by`: the declared rows, or the instance default — oto-app#13), since when it
+lost it (`entitlement_lost_at`) and when the account will be deleted (`deletion_scheduled_at`).
 The right is read for the binding's HOLDER (`sub` of the row) in the binding's org:
 the org's, or a row set on the person (in the org or everywhere) — never for
 the admin who is looking. The release accepts a seat in service for which NO holder
@@ -31,7 +32,7 @@ from datetime import datetime, timedelta
 import logging
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .. import access, db
 from ._authz import SUPER_ADMIN
@@ -51,6 +52,28 @@ class SeatReleaseInput(BaseModel):
     # who uses it without their having asked must be an EXPLICIT action, never the
     # default behaviour of a malformed call.
     force: bool = False
+
+
+class SeatEntitlementRow(BaseModel):
+    """A valid `org_entitlements` row that opens the `unipile` right (value >= 1)."""
+    scope: str = Field(description="org | personne_dans_org | personne_partout")
+    source: str
+    value: int
+    # None = no deadline; otherwise the row stops counting at this instant.
+    expires_at: Optional[str] = None
+
+
+class SeatEntitlement(BaseModel):
+    """WHY a seat is entitled: the binding holder whose right was read, in which org,
+    and what opened it — read by the same path as `access.has_right`
+    (`access.valeur_expliquee`), never a second implementation."""
+    sub: str
+    org_id: int
+    # The valid rows that open it, org first, then the person in the org, then the
+    # person everywhere. Empty when only the instance default opens it.
+    rows: list[SeatEntitlementRow] = []
+    # True = the default declared by the instance opens it (no valid org row).
+    instance_default: bool = False
 
 
 class Seat(BaseModel):
@@ -78,6 +101,8 @@ class Seat(BaseModel):
     # `entitlement_lost_at` + the delay (`OTO_UNIPILE_FIN_DE_DROIT_DELAI_JOURS`);
     # None if a holder has the right or the seat is not marked.
     deletion_scheduled_at: Optional[str] = None
+    # What opens the right when `entitled` (source, scope, deadline); None otherwise.
+    entitled_by: Optional[SeatEntitlement] = None
 
 
 class SeatsView(BaseModel):
@@ -128,15 +153,22 @@ def _rows_for(account_id: str) -> list[dict]:
             if r["account_id"] == account_id]
 
 
-def _droit_vivant(rows: list[dict], droits: Optional[dict] = None) -> bool:
-    """Does a binding holding this seat IN SERVICE still have the `unipile` right?
+_DROIT = "unipile"
+
+
+def _ouverture(rows: list[dict], droits: Optional[dict] = None) -> Optional[dict]:
+    """What opens the `unipile` right for a binding holding this seat IN SERVICE
+    (a `SeatEntitlement`), or None if no such binding has it.
 
     The right is that of the row's HOLDER (`r["sub"]`) in the row's org —
     the org's right, or a row set on the person —, never the caller's
     (an admin doing the cleanup is not the holder). Only live bindings
     count: an account adopted in two orgs stays due as long as just one of the two has
-    the right. `droits` = `(sub, org_id) → bool` cache of one inventory, so that each
-    holder is read in each org only once."""
+    the right; the first one that has it answers. Read by `access.valeur_expliquee`,
+    the rule `access.has_right` applies (`access.est_ouvert` of its value), so
+    `entitled` cannot differ from the usage points. `droits` = `(sub, org_id) →
+    ValeurExpliquee` cache of one inventory, so that each holder is read in each org
+    only once."""
     droits = {} if droits is None else droits
     for r in rows:
         org = r.get("org_id")
@@ -144,10 +176,23 @@ def _droit_vivant(rows: list[dict], droits: Optional[dict] = None) -> bool:
             continue
         cle = (r["sub"], int(org))
         if cle not in droits:
-            droits[cle] = access.has_right(r["sub"], int(org), "unipile")
-        if droits[cle]:
-            return True
-    return False
+            droits[cle] = access.valeur_expliquee(r["sub"], int(org), _DROIT)
+        lu = droits[cle]
+        if not access.est_ouvert(lu.valeur):
+            continue
+        return {"sub": r["sub"], "org_id": int(org),
+                "rows": [{"scope": l.portee, "source": l.source, "value": l.valeur,
+                          "expires_at": l.expires_at}
+                         for l in lu.par if access.est_ouvert(l.valeur)],
+                "instance_default": bool(
+                    lu.defaut and access.est_ouvert(access.defaut_du_droit(_DROIT)))}
+    return None
+
+
+def _droit_vivant(rows: list[dict], droits: Optional[dict] = None) -> bool:
+    """Does a binding holding this seat IN SERVICE still have the `unipile` right?
+    (`_ouverture`, which also says what opens it.)"""
+    return _ouverture(rows, droits) is not None
 
 
 def liberer(client, account_id: str, rows: list[dict]) -> int:
@@ -202,7 +247,8 @@ async def _list_seats(ctx: ResolvedCtx, inp: SeatsListInput) -> dict:
         # Out of service, the org of the last known binding answers.
         vus = rows if state == "bound" else ([{**best, "disconnected_at": None}]
                                               if best else [])
-        entitled = await asyncio.to_thread(_droit_vivant, vus, droits)
+        ouverture = await asyncio.to_thread(_ouverture, vus, droits)
+        entitled = ouverture is not None
         pertes = [r["entitlement_lost_at"] for r in rows if r.get("entitlement_lost_at")]
         perte = max(pertes) if pertes else None
         srcs = a.get("sources") or []
@@ -227,6 +273,7 @@ async def _list_seats(ctx: ResolvedCtx, inp: SeatsListInput) -> dict:
             "deletion_scheduled_at": (
                 (datetime.fromisoformat(perte) + delai).isoformat(sep=" ")
                 if perte is not None and not entitled else None),
+            "entitled_by": ouverture,
         })
     return {
         "configured": True,
@@ -275,6 +322,8 @@ CAPABILITIES += [
             "with their oto bindings. `state`: bound (in service) | disconnected (owner "
             "unhooked it on oto, the seat still bills) | orphan (nobody claims it). "
             "`entitled` = an org holding the seat still has the `unipile` right; "
+            "`entitled_by` = what opens it (holder, org, the declared rows with scope, "
+            "source and deadline, or the instance default); "
             "`entitlement_lost_at` / `deletion_scheduled_at` = when it lost it, and "
             "when the account will be deleted on unipile if it does not come back. "
             "`reclaimable_count` = what you can stop paying for. No secret returned."),

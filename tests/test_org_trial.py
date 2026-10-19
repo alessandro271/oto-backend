@@ -163,6 +163,10 @@ def _fiche(monkeypatch, fin):
     monkeypatch.setattr(access, "is_platform_operator", lambda sub: True)
     monkeypatch.setattr(db, "list_option_comps", lambda *a: [])
     monkeypatch.setattr(billing, "status", lambda i: {"subscribed": False})
+    # La fiche ADMIN porte aussi les droits déclarés de l'org (oto-app#13) : sans base,
+    # aucune ligne.
+    from oto_mcp.db import entitlements as db_entitlements
+    monkeypatch.setattr(db_entitlements, "lignes_filtrees", lambda **_kw: [])
     return reads
 
 

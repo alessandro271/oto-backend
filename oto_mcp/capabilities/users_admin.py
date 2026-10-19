@@ -21,6 +21,7 @@ from .. import (access, billing_grants, providers, credentials_store, db,
                 entitlements_catalogue as catalogue, group_store, org_store)
 from . import _facturation_externe as facturation_externe
 from . import _identite
+from . import droits_admin
 from ._authz import PLATFORM_ADMIN, SUPER_ADMIN
 from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
 from .registry import CAPABILITIES
@@ -197,7 +198,15 @@ def _user_detail(ctx: ResolvedCtx, inp: UserGetInput) -> dict:
         "orgs": orgs,
         "providers": status["providers"],
         "grants": db.list_grants_for_user(target),
+        # Drapeaux posés sur le compte (`beta`, `claude_subscription`… : ceux que pose
+        # `oto_admin_set_option`), par leur seul nom. Un nom d'une clé du catalogue y est
+        # un don HÉRITÉ qui n'ouvre plus rien (#1097) : ce qui est ouvert se lit dans
+        # `entitlements`. Part avec le retrait de la facturation du cœur (#1104).
         "option_comps": db.list_option_comps("user", target),  # couche 3 (comp user)
+        # Les droits DÉCLARÉS posés sur la personne — dans chacune de ses orgs et
+        # partout —, datés et signés, échus compris (oto-app#13). Ceux de ses orgs
+        # (portée org) sont sur la fiche de l'org.
+        "entitlements": droits_admin.droits_de_la_personne(target),
         "unipile_orgs": unipile_orgs,   # état messagerie par org (b)
     }
 
@@ -468,7 +477,10 @@ CAPABILITIES += [
         key="platform.user.get", handler=_user_detail, Input=UserGetInput,
         authz=PLATFORM_ADMIN,
         description="[platform admin] Full account fiche by email or sub: identity, effective "
-                    "per-provider access, platform-key grants, unlocked namespaces, paid-option comps.",
+                    "per-provider access, platform-key grants, unlocked namespaces, option flags "
+                    "set on the account (`option_comps`, names only), and `entitlements` = the "
+                    "declared rights set on the person (in each of their orgs and everywhere), "
+                    "expired included, with source, dates and who set them.",
         rest=RestBinding("GET", "/api/admin/users/{sub}", _SUB),
     ),
     Capability(

@@ -481,7 +481,7 @@ il devient impossible d'ajouter une route à la main sans le déclarer.
       son index restent en base non écrits/non lus (boot additif seulement, jamais de
       DROP — `docs/live-migrations.md`).
   - **fiche admin user** : `GET /api/admin/users/{sub}` = identité + accès effectif par provider (`status_for`) + grants + datastores + orgs (membership).
-  - platform admin : `GET|POST /api/admin/orgs`, `GET /api/admin/orgs/{id}` (+ entitlements), `…/members*`, `…/secrets/{provider}`, `POST|DELETE /api/admin/orgs/{id}/entitlements/{datastore}`, `GET /api/admin/datastore-grants`, `POST|DELETE /api/admin/users/{sub}/datastore-grants/{datastore}`
+  - platform admin : `GET|POST /api/admin/orgs`, `GET /api/admin/orgs/{id}` (+ entitlements), `GET /api/admin/entitlements` (droits déclarés de toute la plateforme, filtrés et paginés — `docs/droits-declares.md`), `…/members*`, `…/secrets/{provider}`, `POST|DELETE /api/admin/orgs/{id}/entitlements/{datastore}`, `GET /api/admin/datastore-grants`, `POST|DELETE /api/admin/users/{sub}/datastore-grants/{datastore}`
   - secrets : jamais la clé en réponse (provider/base_url/set_at/set_by) ; providers per-user (slack/linkedin/google/whatsapp) refusés en `400` ; listing lu du coffre canonique `credentials_store` (legacy `org_secrets` plus dual-written sous chiffrement). Gating org_admin/membre via `org_store.get_org_role` (platform admin toujours autorisé). Révocation lazy sur sessions MCP ouvertes. Contrat front : `oto-app/docs/ORG_API_CONTRACT.md`.
 - **Bibliothèque publique de guides** (marketplace de skills, table `doctrine_library`) :
   capacités `library.*` (`capabilities/guide_library.py`, montage auto MCP+REST) —

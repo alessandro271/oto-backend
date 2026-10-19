@@ -24,11 +24,15 @@ def test_org_routes(monkeypatch):
     monkeypatch.setattr(orgs_admin, "_create_org", _tag("create"))
     monkeypatch.setattr(orgs_admin, "_archive_org", _tag("archive"))
     monkeypatch.setattr(orgs_reads, "_list_all_orgs", _tag("list"))
-    monkeypatch.setattr(orgs_reads, "_org_detail", _tag("get"))
+    # `get` = la fiche ADMIN (fiche + droits déclarés, oto-app#13), pas celle d'un membre.
+    monkeypatch.setattr(orgs_reads, "_org_admin_detail", _tag("get"))
+    monkeypatch.setattr(ac.droits_admin, "_lister", _tag("entitlements"))
     assert ac._org(CTX, ac.OrgAdminInput(op="create", name="Acme"))["called"] == "create"
     assert ac._org(CTX, ac.OrgAdminInput(op="archive", org_id=5))["called"] == "archive"
     assert ac._org(CTX, ac.OrgAdminInput(op="list"))["called"] == "list"
     assert ac._org(CTX, ac.OrgAdminInput(op="get", org_id=5))["called"] == "get"
+    assert ac._org(CTX, ac.OrgAdminInput(op="entitlements", right="unipile"))[
+        "called"] == "entitlements"
 
 
 def test_org_required_fields():

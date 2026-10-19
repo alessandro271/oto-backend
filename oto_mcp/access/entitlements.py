@@ -148,11 +148,18 @@ def value_for(sub: Optional[str], org_id: Optional[int], key: str,
     return valeur_expliquee(sub, org_id, key, now).valeur
 
 
+def est_ouvert(valeur: int) -> bool:
+    """Does this value OPEN a yes/no right (or a non-zero quota)? The threshold of
+    `has_right`, named so that a reader of `valeur_expliquee` (the seat inventory, which
+    also says which rows open the right) applies the same one."""
+    return valeur >= 1
+
+
 def has_right(sub: Optional[str], org_id: Optional[int], right_key: str) -> bool:
     """True if person `sub`, acting in `org_id`, has this yes/no right (or a
     non-zero value): `value_for`, including the person's rows and the instance default.
     This is the question of a USAGE point, which knows the person."""
-    return value_for(sub, org_id, right_key) >= 1
+    return est_ouvert(value_for(sub, org_id, right_key))
 
 
 def org_has(org_id: int, right_key: str) -> bool:

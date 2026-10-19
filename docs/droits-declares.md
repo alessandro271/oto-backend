@@ -196,6 +196,31 @@ console doit voir un droit échu), `list_for_person_everywhere` (la personne par
 `list_for_person` (toutes les lignes de la personne, partout en dernier),
 `list_for_right` (« quelles orgs ou personnes ont X », vivantes par défaut).
 
+## La lecture d'administration — `capabilities/droits_admin.py` (oto-app#13)
+
+Un admin plateforme lit les droits sans ouvrir les orgs une par une. Trois lectures,
+une seule requête chacune (`db/entitlements.lignes_filtrees`, jointe aux orgs et aux
+comptes pour leurs libellés), une seule forme de ligne (`EntitlementRow` : `org_id`,
+`sub`, `scope`, `right_key`, `value`, `source`, `starts_at`, `expires_at`, `active`,
+et en vue complète `org_name`, `org_created_at`, `email`, `granted_by`, `granted_at`) :
+
+| lecture | où | ce qu'elle rend |
+|---|---|---|
+| liste transversale | `GET /api/admin/entitlements`, `oto_admin_org op=entitlements` | les trois portées, dons à une personne partout compris ; filtres `right`, `source`, `scope` (`org`, `personne_dans_org`, `personne_partout`, `personne` = les deux portées d'une personne), `active` (vrai = valides maintenant, faux = échues ou à venir, omis = toutes), `expires_before`, `org_created_after` (une ligne sans org n'y passe jamais), `org_id` ; page `limit` (100, max 500) + `cursor` ; vue resserrée par défaut, `full=true` la complète |
+| fiche d'org admin | `GET /api/admin/orgs/{id}`, `oto_admin_org op=get` | `entitlements` : les lignes posées dans l'org (org et personnes dans l'org), échues comprises, vue complète — **à côté** de `billing`, jamais dedans. La fiche d'un membre (`GET /api/orgs/{id}`) n'en dit rien |
+| fiche de compte | `GET /api/admin/users/{sub}`, `oto_admin_user op=get` | `entitlements` : les lignes posées sur la personne, dans ses orgs et partout, échues comprises, vue complète |
+
+Même contrôle d'accès que la fiche d'org : admin plateforme. ⚠️ **Rien ne lit
+`option_comps`, `org_subscriptions` ni `billing*`** — ils partent du cœur avec le lot 6
+(oto-backend#1104) ; le banc `tests/test_droits_admin_live.py` le juge sur le SQL
+réellement exécuté, et y borne le nombre de requêtes. Ces lectures n'appliquent rien.
+
+L'inventaire des sièges unipile (`oto_admin_unipile_seat op=list`) dit aussi **ce qui
+ouvre** le droit d'un siège (`entitled_by` : titulaire, org, lignes valides qui ouvrent
+avec portée, source et échéance, ou le défaut d'instance), lu par
+`access.valeur_expliquee` au seuil de `has_right` (`access.est_ouvert`) : `entitled` ne
+peut pas différer des points d'usage.
+
 ## L'API du commerce — `capabilities/service_commerce.py` (#1069)
 
 Un service de commerce pose et retire des droits **par l'API**, jamais en SQL, sous son

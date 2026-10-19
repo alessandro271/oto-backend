@@ -97,10 +97,12 @@ PORTEE_PERSONNE_PARTOUT = "personne_partout"
 
 class LigneValide(NamedTuple):
     """Une ligne VALIDE lue pour (org, personne, droit) : sa portée, sa source, sa
-    valeur."""
+    valeur, et son échéance (`None` = sans échéance) — de quoi dire QUELLE ligne ouvre
+    un droit et jusqu'à quand (`capabilities/unipile_seats`, oto-app#13)."""
     portee: str
     source: str
     valeur: int
+    expires_at: Optional[str] = None
 
 
 class Posees(NamedTuple):
@@ -113,7 +115,8 @@ class Posees(NamedTuple):
     lignes: tuple[LigneValide, ...] = ()
 
 
-def _portee_de(r: dict) -> str:
+def portee_de(r: dict) -> str:
+    """La portée d'une ligne lue : `org`, `personne_dans_org` ou `personne_partout`."""
     if r["sub"] is None:
         return PORTEE_ORG
     return PORTEE_PERSONNE_PARTOUT if r["org_id"] is None else PORTEE_PERSONNE_DANS_ORG
@@ -134,14 +137,15 @@ def valeurs_posees(org_id: Optional[int], sub: Optional[str], right_key: str,
     _portee(org_id, sub)
     with _connect() as conn:
         rows = conn.execute(
-            "SELECT org_id, sub, source, value FROM org_entitlements "
+            "SELECT org_id, sub, source, value, expires_at FROM org_entitlements "
             "WHERE right_key = %(cle)s "
             "AND ((org_id = %(org)s AND (sub IS NULL OR sub = %(sub)s)) "
             "     OR (org_id IS NULL AND sub = %(sub)s)) "
             f"AND {_VIVANT_A}",
             {"org": org_id, "cle": right_key, "sub": sub, "t": now},
         ).fetchall()
-    lignes = tuple(sorted((LigneValide(_portee_de(r), r["source"], r["value"]) for r in rows),
+    lignes = tuple(sorted((LigneValide(portee_de(r), r["source"], r["value"], r["expires_at"])
+                           for r in rows),
                           key=lambda l: (_ORDRE_PORTEES.index(l.portee), l.source)))
     de_l_org = [l.valeur for l in lignes if l.portee == PORTEE_ORG]
     de_la_personne = [l.valeur for l in lignes if l.portee != PORTEE_ORG]
@@ -196,4 +200,113 @@ def list_for_right(right_key: str, *, live_only: bool = True) -> list[dict[str, 
             f"SELECT {_COLONNES} FROM org_entitlements WHERE right_key = %s{filtre} "
             "ORDER BY org_id, sub NULLS FIRST, source",
             (right_key,),
+        ).fetchall())
+
+
+# ── La lecture d'administration, transversale (oto-app#13) ─────────────────────
+#
+# « Quels droits, posés où, par qui, jusqu'à quand ? » sur toute la plateforme, sans
+# ouvrir les orgs une par une. Une seule requête par page, jointe aux orgs et aux
+# comptes pour leurs libellés : jamais une lecture par ligne. Elle ne lit QUE
+# `org_entitlements`, `orgs` et `users` — ni dons d'option, ni abonnements, ni
+# facturation, qui partent du cœur (oto-backend#1104) ; un banc le tient
+# (`tests/test_droits_admin_live.py`).
+
+#: `personne` = les deux portées d'une personne (dans une org, et partout).
+PORTEE_PERSONNE = "personne"
+PORTEES_FILTRABLES = (PORTEE_ORG, PORTEE_PERSONNE_DANS_ORG, PORTEE_PERSONNE_PARTOUT,
+                      PORTEE_PERSONNE)
+
+_FILTRE_PORTEE = {
+    PORTEE_ORG: "e.sub IS NULL",
+    PORTEE_PERSONNE_DANS_ORG: "e.sub IS NOT NULL AND e.org_id IS NOT NULL",
+    PORTEE_PERSONNE_PARTOUT: "e.org_id IS NULL",
+    PORTEE_PERSONNE: "e.sub IS NOT NULL",
+}
+
+# `_VIVANT`, qualifié pour la jointure (`orgs` et `users` ont leurs propres dates).
+_VIVANT_E = "e.starts_at <= NOW() AND (e.expires_at IS NULL OR e.expires_at > NOW())"
+
+# L'ordre TOTAL de la lecture, et donc la clé du curseur : l'unicité de la table est
+# (org, personne, droit, source), nuls compris (`NULLS NOT DISTINCT`). `0` et `''` ne
+# désignent aucune org ni aucun compte réels : ils rangent les nuls sans collision.
+_CLE = "(COALESCE(e.org_id, 0), COALESCE(e.sub, ''), e.right_key, e.source)"
+
+
+class Curseur(NamedTuple):
+    """La dernière ligne rendue, dans l'ordre de `_CLE` : la page suivante commence
+    strictement après elle."""
+    org_id: int
+    sub: str
+    right_key: str
+    source: str
+
+
+def curseur_de(ligne: dict) -> Curseur:
+    """Le curseur qui reprend APRÈS `ligne` (une ligne rendue par `lignes_filtrees`)."""
+    return Curseur(ligne["org_id"] or 0, ligne["sub"] or "", ligne["right_key"],
+                   ligne["source"])
+
+
+def lignes_filtrees(*, org_id: Optional[int] = None, sub: Optional[str] = None,
+           right_key: Optional[str] = None, source: Optional[str] = None,
+           portee: Optional[str] = None, actives: Optional[bool] = None,
+           expires_before: Optional[datetime] = None,
+           org_created_after: Optional[datetime] = None,
+           apres: Optional[Curseur] = None,
+           limite: Optional[int] = None) -> list[dict[str, Any]]:
+    """Les lignes de droit qui passent TOUS les filtres donnés, dans l'ordre de `_CLE`,
+    en UNE requête. Chaque ligne porte ses colonnes, `active` (valide à l'instant de
+    la base), et les libellés joints `org_name`, `org_created_at`, `email`.
+
+    - `org_id` : les lignes posées DANS cette org (org et personnes dans l'org) — celles
+      de `list_for_org` ; `sub` : celles posées sur cette personne, dans ses orgs et
+      partout — celles de `list_for_person` ;
+    - `portee` : une de `PORTEES_FILTRABLES` (`personne` = les deux portées d'une
+      personne) ; une autre lève `ValueError` ;
+    - `actives` : `True` = valides maintenant, `False` = échues ou à venir, `None` =
+      toutes, échues comprises ;
+    - `expires_before` : échéance posée et antérieure (une ligne sans échéance n'y est
+      jamais) ; `org_created_after` : org créée après — une ligne de personne partout,
+      sans org, n'y est donc jamais ;
+    - `apres` / `limite` : la page (curseur exclusif) ; `limite` None = tout."""
+    if portee is not None and portee not in _FILTRE_PORTEE:
+        raise ValueError(f"entitlement_scope_unknown: {portee!r} — attendu "
+                         f"{', '.join(PORTEES_FILTRABLES)}")
+    clauses, params = [], {}
+    for valeur, clause, nom in (
+            (org_id, "e.org_id = %(org_id)s", "org_id"),
+            (sub, "e.sub = %(sub)s", "sub"),
+            (right_key, "e.right_key = %(right_key)s", "right_key"),
+            (source, "e.source = %(source)s", "source"),
+            (expires_before, "e.expires_at < %(expires_before)s", "expires_before"),
+            (org_created_after, "o.created_at > %(org_created_after)s",
+             "org_created_after")):
+        if valeur is not None:
+            clauses.append(clause)
+            params[nom] = valeur
+    if portee is not None:
+        clauses.append(_FILTRE_PORTEE[portee])
+    if actives is not None:
+        clauses.append(_VIVANT_E if actives else f"NOT ({_VIVANT_E})")
+    if apres is not None:
+        clauses.append(f"{_CLE} > (%(a_org)s, %(a_sub)s, %(a_cle)s, %(a_source)s)")
+        params.update(a_org=apres.org_id, a_sub=apres.sub, a_cle=apres.right_key,
+                      a_source=apres.source)
+    where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
+    borne = ""
+    if limite is not None:
+        borne = "LIMIT %(limite)s"
+        params["limite"] = limite
+    with _connect() as conn:
+        return list(conn.execute(
+            "SELECT e.org_id, e.sub, e.right_key, e.value, e.source, e.starts_at, "
+            "e.expires_at, e.granted_by, e.granted_at, "
+            f"({_VIVANT_E}) AS active, "
+            "o.name AS org_name, o.created_at AS org_created_at, u.email AS email "
+            "FROM org_entitlements e "
+            "LEFT JOIN orgs o ON o.id = e.org_id "
+            "LEFT JOIN users u ON u.sub = e.sub "
+            f"{where}ORDER BY {_CLE} {borne}",
+            params,
         ).fetchall())

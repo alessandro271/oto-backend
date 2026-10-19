@@ -6,7 +6,8 @@ que chaque face consommait → ni le dashboard ni les agents MCP ne cassent.
 
 Surfaces asymétriques préservées : `org.get` est REST-only (le MCP n'avait pas
 d'agrégat, mais des tools list séparés, conservés MCP-only). `org.get` (membre)
-et `org.admin.get` (platform) partagent le handler, diffèrent par autz+path.
+et `org.admin.get` (platform) partagent la fiche, diffèrent par autz+path — et la
+fiche admin y ajoute les droits déclarés de l'org (`_org_admin_detail`).
 """
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ import logging
 from ... import access, billing, db, org_store, session_org
 from ...org_store import ORG_ROLES
 from ...tool_visibility import BETA_OPTION
+from .. import droits_admin
 from .._authz import ORG_MEMBER_OF, PLATFORM_ADMIN, SUB_ONLY
 # Le quota de création vit avec la capacité qui REFUSE (`org.create`) : le lire ici
 # plutôt que le recalculer est ce qui garantit que la liste et le refus ne pourront
@@ -223,6 +225,17 @@ class OrgDetail(BaseModel):
     billing: OrgBilling
 
 
+class OrgAdminDetail(OrgDetail):
+    """La fiche d'org vue par un admin plateforme : celle des membres, plus les DROITS
+    déclarés de l'org (oto-app#13). ⚠️ `entitlements` est à côté de `billing`, pas
+    dedans : `billing` et `option_comps` sont hérités et partent avec le retrait de la
+    facturation du cœur (oto-backend#1104) ; les droits restent."""
+    # Toutes les lignes posées DANS l'org — portée org et personnes dans l'org — échues
+    # et à venir comprises (une console doit voir un droit échu). Les dons faits à une
+    # personne PARTOUT sont sur sa fiche, ou dans `GET /api/admin/entitlements`.
+    entitlements: list[droits_admin.EntitlementRow]
+
+
 def _members(org_id: int, *, exposer_operateur: bool) -> list[dict]:
     """`exposer_operateur` : servir `is_platform_operator` (org_admin ou opérateur
     plateforme qui lit cette fiche) ou le taire (`None`, simple membre — cf. le
@@ -337,6 +350,13 @@ def _org_detail(ctx: ResolvedCtx, inp: OrgIdInput) -> dict:
     }
 
 
+def _org_admin_detail(ctx: ResolvedCtx, inp: OrgIdInput) -> dict:
+    """La fiche d'org, plus ses droits déclarés : servie au SEUL admin plateforme
+    (`org.admin.get`, `oto_admin_org op=get`) — la fiche d'un membre n'en dit rien."""
+    fiche = _org_detail(ctx, inp)
+    return {**fiche, "entitlements": droits_admin.droits_de_l_org(inp.org_id)}
+
+
 CAPABILITIES += [
     Capability(key="org.list", handler=_list_my_orgs, Input=NoInput, authz=SUB_ONLY,
                Output=MyOrgs,
@@ -355,12 +375,14 @@ CAPABILITIES += [
     Capability(key="org.get", handler=_org_detail, Input=OrgIdInput, authz=ORG_MEMBER_OF("org_id"),
                Output=OrgDetail,
                rest=RestBinding("GET", "/api/orgs/{id}", _ID)),
-    Capability(key="org.admin.get", handler=_org_detail, Input=OrgIdInput, authz=PLATFORM_ADMIN,
+    Capability(key="org.admin.get", handler=_org_admin_detail, Input=OrgIdInput,
+               authz=PLATFORM_ADMIN, Output=OrgAdminDetail,
                rest=RestBinding("GET", "/api/admin/orgs/{id}", _ID)),
     # org.member.list (MCP-only) fusionné dans oto_admin_org_member(op=list).
     # org.secret.list (MCP-only) retiré du MCP (2026-06-25) : le dashboard lit les
     # secrets via la fiche org (org.admin.get → _org_detail). Pose = dashboard-only.
     # org.entitlement.list (MCP-only) fusionné dans oto_admin_namespace_access(op=list, scope=org).
-    # La fiche org (`_org_detail`) ne porte PAS d'entitlements : org, members, secrets,
-    # option_comps, billing (#437).
+    # La fiche org d'un MEMBRE (`_org_detail`) ne porte PAS de droits : org, members,
+    # secrets, option_comps, billing (#437). La fiche ADMIN les ajoute
+    # (`_org_admin_detail`, oto-app#13).
 ]

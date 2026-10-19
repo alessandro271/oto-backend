@@ -424,7 +424,11 @@ def _user_effective(ctx: ResolvedCtx, inp: ServiceEffectiveInput) -> dict:
     lu = access.valeur_expliquee(inp.sub, inp.org_id, inp.right_key)
     return {"sub": inp.sub, "org_id": inp.org_id, "right_key": inp.right_key,
             "valeur": lu.valeur, "defaut": lu.defaut,
-            "par": [l._asdict() for l in lu.par],
+            # Les trois champs du contrat (`ServiceEffectiveRow`), nommés : une ligne
+            # lue en porte davantage (son échéance, oto-app#13), que ce contrat ne
+            # sert pas.
+            "par": [{"portee": l.portee, "source": l.source, "valeur": l.valeur}
+                    for l in lu.par],
             "lecture_directe": _lecture_directe(inp.sub, inp.org_id, inp.right_key)}
 
 

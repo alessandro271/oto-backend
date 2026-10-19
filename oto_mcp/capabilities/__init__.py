@@ -9,6 +9,9 @@ import oto_mcp.capabilities.orgs.members  # noqa: F401 — org.member.{add,set_r
 import oto_mcp.capabilities.orgs.secrets  # noqa: F401 — org.secret.{set,delete}
 import oto_mcp.capabilities.orgs.update  # noqa: F401 — org.update (rename / re-describe)
 import oto_mcp.capabilities.orgs.admin  # noqa: F401 — org.admin.create + org.entitlement.{grant,revoke}
+# Avant `orgs.reads`, qui s'en sert pour la fiche admin : l'ordre de la table de routes
+# se lit ici, pas dans un import de module.
+import oto_mcp.capabilities.droits_admin  # noqa: F401 — admin.entitlement.list (droits déclarés, oto-app#13)
 import oto_mcp.capabilities.orgs.reads  # noqa: F401 — org.list/get/admin.list/get + member/secret/entitlement.list
 import oto_mcp.capabilities.orgs.field_filters  # noqa: F401 — org.field_filters.{get,set} (ADR 0015)
 import oto_mcp.capabilities.orgs.email_settings  # noqa: F401 — org.email_settings.{get,set} (envoi per-org)

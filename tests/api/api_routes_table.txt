@@ -103,6 +103,8 @@ POST /api/admin/orgs -> _handler
 OPTIONS /api/admin/orgs -> options_handler
 DELETE /api/admin/orgs/{id} -> _handler
 OPTIONS /api/admin/orgs/{id} -> options_handler
+GET,HEAD /api/admin/entitlements -> _handler
+OPTIONS /api/admin/entitlements -> options_handler
 GET,HEAD /api/me/orgs -> _handler
 OPTIONS /api/me/orgs -> options_handler
 GET,HEAD /api/admin/orgs -> _handler
