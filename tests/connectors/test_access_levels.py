@@ -28,17 +28,44 @@ def test_full_est_exactement_le_consentement_d_avant():
                      "Desk.tickets.READ", "Desk.contacts.READ"),
         "zohoanalytics": ("ZohoAnalytics.data.read", "ZohoAnalytics.metadata.read"),
     }
-    # Une seule source : les scopes `full` du consentement SONT ceux de la déclaration.
+    # Une seule source : les scopes `full` des OUTILS sont ceux de la déclaration ; le
+    # consentement y ajoute les scopes de vérification (cf. le banc figé ci-dessous).
     for c in ("zoho", "zohodesk"):
         assert zoho_oauth.SCOPES[c] is al.DECLARED[c].levels[al.FULL]
-        assert zoho_oauth.consent_scopes(c, al.FULL) == zoho_oauth.SCOPES[c]
+        assert zoho_oauth.consent_scopes(c, al.FULL)[:len(zoho_oauth.SCOPES[c])] \
+            == zoho_oauth.SCOPES[c]
 
 
-def test_read_demande_les_scopes_decides():
-    assert zoho_oauth.consent_scopes("zoho", "read") == (
-        "ZohoCRM.modules.READ", "ZohoCRM.settings.modules.READ")
-    assert zoho_oauth.consent_scopes("zohodesk", "read") == (
-        "Desk.articles.READ", "Desk.search.READ")
+def test_les_scopes_du_consentement_sont_figes():
+    """CLIQUET. Ce que l'écran de consentement de Zoho demande, connecteur par connecteur
+    et niveau par niveau, est ce qui est ANNONCÉ à l'admin d'un client — rien de plus. Les
+    scopes de vérification de l'organisation consentie (`VERIFICATION_SCOPES`) :
+    `ZohoCRM.org.READ` aux deux niveaux du CRM, `Desk.basic.READ` au niveau `read` de Desk
+    (`full` l'a déjà), aucun pour Analytics (`metadata.read` liste ses orgs). Toute
+    évolution de cette liste passe par ce banc, et par une annonce aux admins."""
+    assert {(c, n): zoho_oauth.consent_scopes(c, n) for c, n in (
+        ("zoho", "read"), ("zoho", "full"), ("zohodesk", "read"), ("zohodesk", "full"),
+        ("zohoanalytics", "full"))} == {
+        ("zoho", "read"): ("ZohoCRM.modules.READ", "ZohoCRM.settings.modules.READ",
+                           "ZohoCRM.org.READ"),
+        ("zoho", "full"): ("ZohoCRM.modules.ALL", "ZohoCRM.settings.modules.READ",
+                           "ZohoCRM.settings.fields.READ", "ZohoCRM.users.READ",
+                           "ZohoCRM.org.READ"),
+        ("zohodesk", "read"): ("Desk.articles.READ", "Desk.search.READ",
+                               "Desk.basic.READ"),
+        ("zohodesk", "full"): ("Desk.articles.READ", "Desk.basic.READ", "Desk.search.READ",
+                               "Desk.tickets.READ", "Desk.contacts.READ"),
+        ("zohoanalytics", "full"): ("ZohoAnalytics.data.read",
+                                    "ZohoAnalytics.metadata.read"),
+    }
+
+
+def test_la_verification_n_ouvre_aucun_outil():
+    """Les scopes de vérification restent HORS des niveaux : `Desk.basic.READ` dans
+    `read` y servirait `zohodesk_departments`. Le niveau `read` de Desk ne le porte pas."""
+    assert "Desk.basic.READ" not in al.DECLARED["zohodesk"].levels["read"]
+    assert "ZohoCRM.org.READ" not in al.DECLARED["zoho"].levels["read"]
+    assert "ZohoCRM.org.READ" not in al.DECLARED["zoho"].levels[al.FULL]
 
 
 def test_analytics_n_a_pas_de_niveaux():

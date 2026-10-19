@@ -626,7 +626,8 @@ def _me_projection(ctx: ResolvedCtx, inp: MyConnectorsInput) -> dict:
                 **base["connect"],
                 "callback_url": connector_flow.callback_url(c["name"]),
                 "app_ready": connector_flow.app_ready(c["name"], ctx.sub),
-                "fixed": connector_flow.fixed(c["name"], ctx.sub)}}
+                "fixed": connector_flow.fixed(c["name"], ctx.sub),
+                "warnings": connector_flow.warnings(c["name"], ctx.sub)}}
         # Layer 3 (paid option) on the USER surface — without it the front end cannot
         # say WHICH of the 3 conditions is missing (the "State for you" banner, ADR 0044):
         # `mode==forbidden` conflates option/activation/RBAC. `option_ok=True` if no

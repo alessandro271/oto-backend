@@ -835,6 +835,16 @@ consentement.
   une — le front montre la région au lieu du choix. Lu dans le même passage qu'`app_ready`
   (`auth/zoho.py::_applicable_app`, une fois par appel), sans secret ; vide pour l'app
   d'éditeur, qui se choisit par région au clic.
+- **Organisation consentie** (`zoho_org_id`, champ non secret, optionnel, de la clé et de
+  l'app dédiée) : n'importe quel compte Zoho peut consentir à une app server-based. Au retour,
+  AVANT de ranger, `check_org` lit l'organisation que le jeton neuf atteint (CRM `GET
+  /crm/v7/org` : `id`, `zgid` ou `domain_name` ; Desk `GET /api/v1/organizations` ;
+  Analytics, ses orgs) et la compare. Écart : jeton **révoqué** chez Zoho (un échec de
+  révocation se journalise `zoho_revocation_failed`), rien de rangé, retour
+  `connect=zoho_org_mismatch&consented_org=<nom>`. Organisation illisible alors qu'elle est
+  attendue : même refus (`connect=error`). App apportée SANS `zoho_org_id` : le consentement
+  passe, SIGNALÉ (`warning=zoho_org_unverified` au retour, `connect.warnings` sur la carte).
+  L'app d'éditeur d'oto n'est jamais comparée : tout compte y consent, par construction.
 - **Pose : REST seule** (secret brut), `ORG_ADMIN_OF` / `GROUP_ADMIN_OF`,
   `PUT|GET|DELETE /api/{orgs,groups}/{id}/connectors/{name}/oauth-app`
   (`capabilities/connectors/oauth_app.py`). Le `GET` rend `configured`, la région, la date

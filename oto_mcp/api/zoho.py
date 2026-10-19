@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
+import urllib.parse
 from typing import Awaitable, Callable
 
 from fastmcp.server.auth.providers.jwt import JWTVerifier
@@ -46,7 +47,7 @@ def make_routes(
         return config.dashboard_url()
 
     def _retour(etat: str, return_app: str = "", org_id: "int | None" = None,
-               connector: str = "zoho") -> str:
+               connector: str = "zoho", extra: "dict | None" = None) -> str:
         """Where to send the browser back after the Zoho consent.
 
         `return_app` = the front that REQUESTED the connection, read back from the signed
@@ -66,6 +67,10 @@ def make_routes(
         dashboard has read `connect=` since 04/09, and no Zoho connection exists
         at the only partner concerned, Tulina)."""
         suffix = oauth_flow.connector_return_suffix(connector, etat)
+        if extra:
+            # What the dashboard SAYS on return (`warning=`, `consented_org=`): named
+            # codes and the member's own Zoho organization name, never an upstream message.
+            suffix += "&" + urllib.parse.urlencode(extra)
         if oauth_flow.resolve_return_app(return_app):
             return oauth_flow.return_url(return_app, suffix, org=org_id)
         return f"{_app_url()}/console/connectors{suffix}"
@@ -91,7 +96,7 @@ def make_routes(
                         parsed["org"], parsed["connector"]),
                 status_code=302)
 
-        def _finish() -> None:
+        def _finish() -> "str | None":
             # The SAME resolution as the start, from the signed state: org AND team
             # (the dedicated app of a team, the BYO of its cascade), and the REGION —
             # the publisher app is keyed by data center. Re-resolved from the ambient
@@ -103,12 +108,24 @@ def make_routes(
                                         parsed["data_center"], org=parsed["org"],
                                         group=parsed["group"])
             tokens = zoho_oauth.exchange_code(code, parsed["data_center"], app=app)
+            # BEFORE storing: the consented Zoho organization against the one the app
+            # expects. A mismatch revokes the token and raises — nothing is stored.
+            avertissement = zoho_oauth.check_org(parsed["connector"],
+                                                 parsed["data_center"], tokens, app)
             zoho_oauth.persist(parsed["sub"], parsed["org"], parsed["connector"],
                                parsed["data_center"], tokens, app=app,
                                level=parsed["level"])
+            return avertissement
 
         try:
-            await run_in_threadpool(_finish)   # sync DB + HTTP → off the event loop
+            # sync DB + HTTP → off the event loop
+            avertissement = await run_in_threadpool(_finish)
+        except zoho_oauth.ZohoOrgMismatch as e:
+            logger.warning("zoho oauth callback refused: zoho_org_mismatch")
+            return RedirectResponse(
+                _retour("zoho_org_mismatch", parsed["return_app"], parsed["org"],
+                        parsed["connector"], {"consented_org": e.consented}),
+                status_code=302)
         except Exception as e:  # noqa: BLE001
             # Never the detail in the URL (it could carry an upstream message);
             # the diagnosis goes to the log, without secrets (#284).
@@ -119,7 +136,8 @@ def make_routes(
                 status_code=302)
         return RedirectResponse(
             _retour("connected", parsed["return_app"], parsed["org"],
-                    parsed["connector"]),
+                    parsed["connector"],
+                    {"warning": avertissement} if avertissement else None),
             status_code=302)
 
     return [Route("/api/zoho/oauth/callback", callback, methods=["GET"])]

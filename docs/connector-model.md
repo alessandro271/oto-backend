@@ -235,7 +235,11 @@ si chacun de ses scopes est dans la fermeture des scopes du niveau par `scope_im
   Premiers déclarants : `zoho` (`read` = `ZohoCRM.modules.READ` + `ZohoCRM.settings.modules.READ`,
   `ZohoCRM.modules.ALL` implique les quatre verbes) et `zohodesk` (`read` =
   `Desk.articles.READ` + `Desk.search.READ`). `zohoanalytics` n'en déclare pas.
-  `auth/zoho.SCOPES` **dérive** de `full` (source unique) ; cliquets :
+  `auth/zoho.SCOPES` **dérive** de `full` (source unique). Le consentement y ajoute les
+  scopes de **vérification** de l'organisation consentie (`auth/zoho.VERIFICATION_SCOPES` :
+  `ZohoCRM.org.READ` au CRM, `Desk.basic.READ` à Desk) — HORS des niveaux, qui disent quels
+  outils sont servis ; la liste exacte demandée est figée par
+  `test_les_scopes_du_consentement_sont_figes`. Cliquets :
   `tests/connectors/test_access_levels.py` (`full` == le consentement d'avant, à l'octet) et
   `tests/connectors/test_access_levels_declares.py` (tout outil SERVI d'un connecteur à
   niveaux a sa déclaration, ses ops sont celles du schéma servi — population tirée du montage).
