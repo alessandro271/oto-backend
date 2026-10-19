@@ -438,21 +438,19 @@ def test_a_bulk_debits_both_counters_once(monkeypatch):
     métrage se compte en unités consommées : ce n'était pas une propriété à tenir, c'était
     un manque figé."""
     legacy, edge = [], []
-    monkeypatch.setattr(access, "current_user_sub_from_token", lambda: "s")
     monkeypatch.setattr(access, "current_org", lambda sub: None)
     monkeypatch.setattr(access.db, "increment_usage",
                         lambda sub, p, amount=1: legacy.append((p, amount)))
     monkeypatch.setattr(grants_chain, "record_usage",
                         lambda sub, p, org, calls: edge.append(calls))
-    access.record_platform_usage("fullenrich", 100)
+    access.debiter_plateforme("s", "fullenrich", 100)
     assert legacy == [("fullenrich", 100)], (
         "l'historique est débité UNE fois, du montant exact — pas 100 fois de 1")
     assert edge == [100], "l'arête est débitée une fois, du bon montant"
 
 
 def test_a_non_migrated_connector_never_reaches_the_chain_counter(monkeypatch):
-    monkeypatch.setattr(access, "current_user_sub_from_token", lambda: "s")
     monkeypatch.setattr(access.db, "increment_usage", lambda sub, p, amount=1: None)
     monkeypatch.setattr(grants_chain, "record_usage",
                         lambda *a, **k: pytest.fail("connecteur non basculé compté"))
-    access.record_platform_usage("unipile", 3)
+    access.debiter_plateforme("s", "unipile", 3)

@@ -79,6 +79,12 @@ def resolve_credential(provider: str, want: str = "auto",
         if emit_on_failure:
             _emit_connector_failure(provider, sub)
         raise
+    if check_usage and resolved.is_platform:
+        # The call goes through a PLATFORM key it is about to consume: the edge of the
+        # call settles it (`reglement.regler_appel`) with the `units` the tool notes.
+        # Not on a connection (`check_usage=False`), which consumes nothing — nor on
+        # the anonymous path above, which has no sub to meter.
+        session_org.note_call_trace(platform_carrier=providers.credential_provider(provider))
     return _note_resolved_instance(resolved)
 
 

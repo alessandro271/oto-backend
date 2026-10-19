@@ -597,12 +597,12 @@ et passe au palier suivant sur REFUSE comme lui : aucun `inconnu` créé (gardé
 `test_tenant_edge_chain.py`). L'arête n'est lue qu'APRÈS que la sonde a trouvé une clé —
 sans clé de tenant, zéro lecture.
 
-⚠️ **Le budget est débité à la RÉSOLUTION, pas au succès de l'appel** — à la différence du
-compteur plateforme, que chaque outil débite lui-même après un appel réussi
-(`record_platform_usage`, ~10 sites). Une clé de tenant n'a pas ces sites ; en ajouter un par
-outil serait la copie que le walker unique existe pour éviter, et une borne posée que personne
-ne débite est le défaut de #409. Un appel qui échoue chez le fournisseur compte donc. Le
-déplacement vers « au succès » passe par le relevé d'appel du middleware, avec L8.
+⚠️ **Le budget est vérifié à la RÉSOLUTION et débité au SUCCÈS de l'appel** (L8) : la
+résolution refuse une journée épuisée et note l'arête au relevé d'appel
+(`tenant_grant_ids`) ; le bord de l'appel la débite une fois l'outil revenu sans erreur
+(`access.reglement`), au même point que le compteur plateforme. Un appel qui échoue chez le
+fournisseur ne compte plus. Hors relevé d'appel (face REST, commande de maintenance), il n'y a
+pas de bord pour régler : le débit se fait à la résolution, comme avant L8.
 
 **L'anonyme** (`<slug>.mcp.oto.cx`, ADR 0032) n'a pas d'identité : il n'obtient l'étage tenant
 que par une **arête vivante** tenant→org (`grants_chain.tenant_for_org`), jamais par le
