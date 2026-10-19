@@ -397,6 +397,9 @@ def test_toute_colonne_jsonb_est_triee_pour_la_fusion():
     sans_personne = {
         ("apollo_phone_reveals", "payload"), ("blocks", "props"),
         ("connector_instances", "config"), ("connector_schemas", "schema"),
+        # La relève d'un travail asynchrone : sa fonction et l'id du travail chez le
+        # fournisseur.
+        ("credit_holds", "job"),
         ("datastore_rows", "data"), ("datastore_row_revisions", "diff"),
         ("doctrine_library", "slots"), ("function_versions", "sources"),
         ("function_versions", "test_report"), ("grants", "constraints"),
@@ -425,6 +428,8 @@ def test_toute_colonne_jsonb_est_triee_pour_la_fusion():
         ("runner_jobs", "result"), ("runner_jobs", "attempt_errors"),
         ("access_shadow_l7", "sample"), ("credential_disparitions", "agents"),
         ("portee_elargissements", "destinataires"),
+        # Un transfert de solde entre deux comptes fusionnés nomme les deux payeurs.
+        ("credit_movements", "meta"),
     }
     allow = sans_personne | journaux
 

@@ -25,6 +25,9 @@ Exclus du constat, et pourquoi :
   par le registre (`credentials_store.set_credential`) : il n'a pas de carte à résoudre ;
 - les JOURNAUX qui nomment un connecteur (`credential_disparitions`, `platform_key_rate`,
   `access_shadow_l7`, `tool_calls`) : une trace du passé, pas une référence à résoudre ;
+- le budget d'unités (`credit_scale_lines`, `credit_holds`, `credit_movements`) : un
+  barème versé par le commerce et ses traces ; une ligne sans connecteur servi ne
+  s'applique simplement à aucun appel ;
 - `connector_account_grants.provider` : un CANAL de messagerie (`LINKEDIN`…), pas un nom
   du registre.
 

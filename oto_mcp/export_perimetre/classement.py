@@ -261,6 +261,15 @@ CLASSEMENT: dict[str, Table] = {
                                   "journal de l'instance, qui les recalcule"),
     "platform_key_rate": instance("fenêtre de débit des clés plateforme de "
                                   "l'instance (F-051) : éphémère, une minute"),
+    "credit_scales": instance("barème du budget d'unités, versé par le commerce de "
+                              "l'instance"),
+    "credit_scale_lines": instance("lignes du barème du budget d'unités, versé par le "
+                                   "commerce de l'instance"),
+    "credit_balances": instance("soldes du budget d'unités : la cible reçoit un solde "
+                                "d'ouverture de son commerce"),
+    "credit_holds": instance("réservations en vol du budget d'unités de l'instance"),
+    "credit_movements": instance("mouvements du budget d'unités de l'instance, relus par "
+                                 "son commerce"),
     "limite_refus_jour": instance("palmarès des refus des limiteurs de l'instance "
                                   "(#1232) : empreintes, trente jours"),
     "usage": possedee(ParSub(), "compteurs par compte, sans org"),
@@ -295,6 +304,11 @@ CLASSEMENT: dict[str, Table] = {
                                       "légaux"),
     "outreach_sends": exclue(ParSub(), "nos relances de plateforme"),
     "outreach_optouts": exclue(ParSub(), "nos relances de plateforme"),
+    # Le budget d'unités (`docs/credits-au-moment-de-l-appel.md`) est VERSÉ par le
+    # commerce de l'instance, qui le relit par son curseur : la cible reçoit le sien de
+    # son propre commerce (un solde d'ouverture), jamais une copie de celui-ci.
+    "credit_payer_modes": exclue(ParOrg(), "qui paie dans une org : versé par le commerce "
+                                 "de l'instance"),
     # ── l'instance ─────────────────────────────────────────────────────────────
     "alembic_version": instance("la version du schéma : la cible pose la sienne à sa "
                                 "naissance (#969)"),
