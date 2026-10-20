@@ -294,7 +294,7 @@ class Trigger(BaseModel):
     #: L'URL à donner à la source. Servie sur un déclencheur webhook, jamais le
     #: secret — celui-ci n'existe en clair qu'au retour de `create`/`rotate_secret`.
     hook_url: Optional[str] = None
-    #: Le PRÉRÉGLAGE — `bearer` | `standard_webhooks` | `lemlist` | `none` (la
+    #: Le PRÉRÉGLAGE — `bearer` | `standard_webhooks` | `body_secret` | `none` (la
     #: preuve que la source doit apporter, `runner_hook.PREREGLAGES`). En `none`,
     #: `hook_url` est servie MASQUÉE : l'adresse y est le credential.
     hook_auth: Optional[str] = None
@@ -1382,7 +1382,10 @@ def _partager(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
 
 class HookAuthInput(BaseModel):
     trigger_id: int
-    hook_auth: Literal["bearer", "standard_webhooks", "lemlist", "none"] = Field(
+    # `lemlist` : l'ANCIEN nom de `body_secret`, admis par le schéma pour être
+    # REFUSÉ en le nommant (`hook_auth_renamed`), jamais traduit en silence.
+    hook_auth: Literal["bearer", "standard_webhooks", "body_secret", "lemlist",
+                       "none"] = Field(
         description=(
         "How the sender proves who it is. `bearer`: the sender posts "
         "`Authorization: Bearer otoh_…`, a secret the platform generates. "
@@ -1390,10 +1393,13 @@ class HookAuthInput(BaseModel):
         "(`whsec_…` — Granola, Svix, Resend, Clerk…) in the headers `webhook-id`, "
         "`webhook-timestamp`, `webhook-signature`; the bearer is then REFUSED for "
         "this agent, and a retry of an already-accepted `webhook-id` does not "
-        "start a second run. `lemlist`: Lemlist cannot set a header; give it the "
-        "agent's `otoh_…` token as the hook's `secret` — it comes back in every "
-        "body, is checked, and is REMOVED before the agent sees the body; a retry "
-        "of the same activity `_id` does not start a second run. `none`: NO proof "
+        "start a second run. `body_secret`: for a sender that can neither set a "
+        "header nor sign (Lemlist, cal.com, no-code forms…): it puts the agent's "
+        "`otoh_…` token in a top-level `secret` field of each JSON body — in "
+        "Lemlist, the hook's `secret`. It is checked, then REMOVED before the "
+        "agent sees the body; when the body carries a top-level `_id`, a retry of "
+        "the same `_id` does not start a second run. `lemlist` is its former name "
+        "and is REFUSED (`hook_auth_renamed`): ask for `body_secret`. `none`: NO proof "
         "at all — anyone who has the agent's private address can start it. Needs a "
         "`max_per_day` cap; mints a NEW private address, returned once as "
         "`hook_url` (served masked everywhere else); the agent is told its input "
@@ -1441,6 +1447,13 @@ def _valide_l_authentification(inp: HookAuthInput, actuel: Optional[dict]) -> No
     """Refusé à la POSE plutôt qu'accepté inerte : un secret sur un agent au
     porteur ne servirait à rien, et un agent en mode signature SANS secret aurait
     l'air branché en refusant tout."""
+    if inp.hook_auth == runner_hook.ANCIEN_NOM_BODY_SECRET:
+        raise AuthzDenied(
+            400, "hook_auth_renamed",
+            f"`{runner_hook.ANCIEN_NOM_BODY_SECRET}` s'appelle désormais "
+            f"`{runner_hook.BODY_SECRET}` : même preuve (le porteur `otoh_` dans le "
+            f"champ `secret` du corps), nom générique. Pose "
+            f"`hook_auth={runner_hook.BODY_SECRET}`.")
     if not actuel or (actuel.get("kind") or "schedule") != "webhook":
         # Même 404 qu'un agent inconnu : un agent programmé n'a pas de porte.
         raise AuthzDenied(404, "trigger_not_found", "automatisation inconnue")
@@ -1494,15 +1507,16 @@ def _hook_auth_sync(ctx: ResolvedCtx, inp: HookAuthInput) -> dict:
     _valide_l_authentification(inp, actuel)
     _exiger_la_porte(ctx, actuel)
     mode_avant = actuel.get("hook_auth") or runner_hook.BEARER
+    mode = inp.hook_auth
     porteur = adresse_neuve = None
-    vise = runner_hook.prereglage(inp.hook_auth)
+    vise = runner_hook.prereglage(mode)
     if vise.schema == runner_hook.STANDARD_WEBHOOKS:
         enveloppe = (runner_hook.chiffrer_secret_de_signature(
                          inp.trigger_id, inp.signing_secret)
                      if inp.signing_secret else None)
-        db.poser_auth_de_hook(inp.trigger_id, ctx.org_id, inp.hook_auth,
+        db.poser_auth_de_hook(inp.trigger_id, ctx.org_id, mode,
                               secret_enc=enveloppe)
-        if mode_avant != inp.hook_auth:
+        if mode_avant != mode:
             db.poser_secret_de_hook(inp.trigger_id, ctx.org_id, None)
         logger.warning("webhook %s (org %s) : authentification par SIGNATURE posée "
                        "par %s%s", inp.trigger_id, ctx.org_id, ctx.sub,
@@ -1520,25 +1534,25 @@ def _hook_auth_sync(ctx: ResolvedCtx, inp: HookAuthInput) -> dict:
         # l'adresse déjà servie en clair.
         adresse = runner_hook.nouvelle_adresse()
         db.poser_adresse_de_hook(inp.trigger_id, ctx.org_id, adresse)
-        if mode_avant != inp.hook_auth:
-            db.poser_auth_de_hook(inp.trigger_id, ctx.org_id, inp.hook_auth,
+        if mode_avant != mode:
+            db.poser_auth_de_hook(inp.trigger_id, ctx.org_id, mode,
                                   effacer_le_secret=True)
             db.poser_secret_de_hook(inp.trigger_id, ctx.org_id, None)
         adresse_neuve = _url_du_hook(adresse)
         logger.warning("webhook %s (org %s) : SANS PREUVE (`none`) par %s — porteur "
                        "et secret de signature effacés, adresse neuve émise",
                        inp.trigger_id, ctx.org_id, ctx.sub)
-    elif mode_avant != inp.hook_auth:
+    elif mode_avant != mode:
         # Vers un préréglage qui s'ouvre avec NOTRE porteur (en-tête ou corps) : un
         # porteur NEUF à chaque changement — l'ancien n'a été montré qu'une fois,
         # et la source devra de toute façon recevoir celui-ci.
-        db.poser_auth_de_hook(inp.trigger_id, ctx.org_id, inp.hook_auth,
+        db.poser_auth_de_hook(inp.trigger_id, ctx.org_id, mode,
                               effacer_le_secret=True)
         porteur, hache = runner_hook.nouveau_secret()
         db.poser_secret_de_hook(inp.trigger_id, ctx.org_id, hache)
         logger.warning("webhook %s (org %s) : passé en `%s` par %s — secret de "
                        "signature effacé, porteur neuf émis", inp.trigger_id,
-                       ctx.org_id, inp.hook_auth, ctx.sub)
+                       ctx.org_id, mode, ctx.sub)
     t = db.get_trigger(inp.trigger_id, ctx.org_id) or actuel
     return _avec_mon_acces(ctx, {"trigger": _avec_hook(ctx.org_id, _avec_pertes(ctx.org_id, t)),
                                  "hook_secret": porteur, "hook_url": adresse_neuve})
@@ -1824,6 +1838,9 @@ CAPABILITIES += [
         authz=ORG_MEMBER,
         mcp=None,   # un secret ne passe pas en argument d'outil
         errors=(
+            DeclaredError(400, "hook_auth_renamed",
+                          "`lemlist`, l'ancien nom de `body_secret` : refusé, poser "
+                          "`body_secret`"),
             DeclaredError(400, "invalid_signing_secret",
                           "le secret n'a pas la forme `whsec_` + base64"),
             DeclaredError(400, "not_signature_mode",
@@ -1846,11 +1863,13 @@ CAPABILITIES += [
             "`Authorization: Bearer otoh_…`, generated by the platform. "
             "`standard_webhooks`: the sender signs with its own `whsec_…` secret "
             "(Granola, Svix, Resend, Clerk…); the bearer is then refused and "
-            "retries of an accepted `webhook-id` are deduplicated. `lemlist`: the "
-            "`otoh_…` token travels as the `secret` field of the body (Lemlist "
-            "cannot set headers) and is stripped before the agent sees it. `none`: "
+            "retries of an accepted `webhook-id` are deduplicated. `body_secret`: the "
+            "`otoh_…` token travels as the top-level `secret` field of the body (for "
+            "a sender that can neither set a header nor sign: Lemlist, cal.com, "
+            "no-code forms…) and is stripped before the agent sees it; `lemlist`, "
+            "its former name, is refused (`hook_auth_renamed`). `none`: "
             "no proof, opt-in, only with a `max_per_day` cap; it mints a new "
-            "private address, returned once. Switching to `bearer` or `lemlist` erases the signing secret and "
+            "private address, returned once. Switching to `bearer` or `body_secret` erases the signing secret and "
             "returns a fresh `hook_secret`, once. REST only: a raw secret never goes through a "
             "tool call. Only the agent's owner or an org admin may change it: the "
             "agent runs as its owner."),

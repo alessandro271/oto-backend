@@ -170,7 +170,7 @@ vient de la doc lemlist, pas d'un essai.
    `visitorWebsite`, `visitorCountry`, `visitorDuration` (secondes) ; `contact`
    seulement quand lemlist a nommé le visiteur.
 5. **Ou à chaque visite** : `lemlist_webhook(op="add", event_type="signalRegistered")`
-   vers l'adresse d'un agent dont l'authentification webhook est `lemlist`, avec
+   vers l'adresse d'un agent dont l'authentification webhook est `body_secret`, avec
    son jeton `otoh_` en `secret`. `signalRegistered` part pour TOUTES les watch lists
    de l'équipe : vérifie le type avant d'agir.
 6. **Pousser vers une campagne** : `push_to_campaign` + `campaign_id` + `persona_id`

@@ -186,7 +186,7 @@ class Prereglage:
       - `bearer` : l'en-tête `Authorization: Bearer otoh_…` ;
       - `standard_webhooks` : la source SIGNE (`whsec_…`, en-têtes `webhook-*`) ;
       - `body_secret` : la source ne sait ni poser un en-tête ni signer ; elle
-        RENVOIE dans son corps JSON un secret qu'on lui a donné (Lemlist). Ce
+        RENVOIE dans son corps JSON un secret qu'on lui a donné (Lemlist, cal.com…). Ce
         secret est NOTRE porteur `otoh_`, posé dans la clé de PREMIER niveau
         `champ_secret` (pas un chemin : c'est elle qui est retirée du corps) ;
       - `none` : AUCUNE preuve, choix explicite du propriétaire. L'adresse privée
@@ -208,13 +208,21 @@ class Prereglage:
 PREREGLAGES: dict[str, Prereglage] = {p.nom: p for p in (
     Prereglage(BEARER, BEARER),
     Prereglage(STANDARD_WEBHOOKS, STANDARD_WEBHOOKS),
-    # Lemlist (`POST /api/hooks` côté Lemlist) : « secret » est renvoyé tel quel
-    # dans le corps de chaque appel ; `_id` est l'identifiant de l'activité.
+    # Le jeton dans le corps, pour TOUTE source qui sait mettre un champ de
+    # premier niveau `secret` dans son JSON (Lemlist, cal.com, un formulaire
+    # no-code…). `_id` ne déduplique que si la source en envoie un : Lemlist y met
+    # l'identifiant de l'activité ; une source sans `_id` n'a pas de déduplication.
     # https://developer.lemlist.com/api-reference/endpoints/webhooks/add-webhook
-    Prereglage("lemlist", BODY_SECRET, champ_secret="secret", chemin_id="_id"),
+    Prereglage(BODY_SECRET, BODY_SECRET, champ_secret="secret", chemin_id="_id"),
     Prereglage(NONE, NONE),
 )}
 HOOK_AUTHS = tuple(PREREGLAGES)
+
+#: L'ANCIEN nom de `body_secret` (06/10 → 20/10/2026), le nom d'une marque pour un
+#: schéma générique. Plus aucun préréglage ne le porte : les lignes stockées sont
+#: réécrites par la révision `0071_hook_auth_body_secret`, et une pose qui le
+#: demande encore est refusée en le nommant (`hook_auth_renamed`), jamais traduite.
+ANCIEN_NOM_BODY_SECRET = "lemlist"
 
 #: Le plafond journalier d'un agent SANS preuve dont le propriétaire n'en a pas
 #: déclaré (la pose l'exige, mais une ligne ne doit jamais dépendre d'une seule
