@@ -32,7 +32,7 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from . import (_abonnement, _acces_agent, _cle_exigee, _instruction, _limites_du_run,
-               _modele)
+               _modele, _source_du_hook)
 from .. import (db, org_store, ownership, roles, runner_hook, runner_models, runner_tick,
                 session_visibility, tool_alias, tool_registry)
 from ..tools import catalogue as tool_catalogue
@@ -86,7 +86,12 @@ class TriggerInput(BaseModel):
                 # PARTAGER un agent avec des membres de son org (`_acces_agent`) :
                 # le lister, l'accorder, le retirer. Réservé au propriétaire et aux
                 # admins ; `shares` se lit par quiconque voit l'agent.
-                "shares", "share", "unshare"]
+                "shares", "share", "unshare",
+                # BRANCHER une source (Lemlist) : le serveur fabrique le porteur et
+                # l'inscrit lui-même chez la source, avec la clé de la source dans
+                # l'org — il ne passe par personne (`_source_du_hook`). Le débrancher
+                # retire ces inscriptions chez la source (20/10/2026).
+                "connect_source", "disconnect_source"]
     trigger_id: Optional[int] = None
     trigger_ids: Optional[list[int]] = Field(None, description=(
         f"update, IN BULK (≤ {_LOT_MAX}): file these agents under `folder` in one call — "
@@ -195,6 +200,25 @@ class TriggerInput(BaseModel):
         "op=share: `editor` (default) may change, enable, disable the agent and "
         "clear its queue; `viewer` only reads it. Neither may delete it, share it "
         "or change its webhook door — owner and org admins only."))
+    # connect_source —
+    source: Optional[Literal["lemlist"]] = Field(default=None, description=(
+        "op=connect_source: the sender to wire to this webhook agent. oto mints the "
+        "agent's token and registers the webhook AT the sender itself, with the "
+        "sender's key that resolves for you in this org (yours, your team's or the "
+        "org's — never a shared platform key) — the token is never "
+        "returned, logged or passed to anyone. Switches the agent to "
+        "`hook_auth=body_secret` and gives it a private address if it has none."))
+    events: Optional[list[str]] = Field(default=None, description=(
+        "op=connect_source: the sender's event names, one webhook each (Lemlist: "
+        "`emailsReplied`, `linkedinReplied`, `linkedinInviteAccepted`…). Required: "
+        "no default, subscribing to everything would start the agent on every "
+        "email open. At most 10."))
+    campaign_id: Optional[str] = Field(default=None, description=(
+        "op=connect_source, optional: only this campaign's events (Lemlist "
+        "`cam_…`). Omitted = every campaign."))
+    is_first: Optional[bool] = Field(default=None, description=(
+        "op=connect_source, optional: only the first occurrence of each event per "
+        "lead."))
     #: `deliveries` : combien de livraisons rendre.
     limit: Optional[int] = None
     with_input: Optional[bool] = Field(
@@ -304,6 +328,9 @@ class Trigger(BaseModel):
     max_per_day: Optional[int] = None
     #: L'agent a-t-il une adresse privée ? (Elle est dans `hook_url`.)
     private_address: Optional[bool] = None
+    #: Les webhooks qu'oto a inscrits chez la source (`connect_source`) :
+    #: `[{source, remote_id, event, campaign_id}]`. Jamais le porteur.
+    hook_sources: Optional[list[dict]] = None
     #: Ce que ce déclencheur a reçu sur 24 h : reçues, refusées, la dernière.
     #: `0` est un vrai zéro, jamais une absence de mesure.
     deliveries_24h: Optional[int] = None
@@ -444,6 +471,12 @@ class TriggerOut(BaseModel):
     #: `rotate_secret`, et par RIEN D'AUTRE. Il n'est pas stocké : seul son haché
     #: l'est. Perdu, il se remplace ; il ne se relit jamais.
     hook_secret: Optional[str] = None
+    #: `connect_source` / `disconnect_source` / `delete` : les webhooks inscrits ou
+    #: retirés chez la source, et ceux qu'oto n'a PAS pu retirer (à retirer chez
+    #: la source à la main, ou à rejouer). Jamais le porteur.
+    connected: Optional[list[dict]] = None
+    disconnected: Optional[list[dict]] = None
+    remote_cleanup_failed: Optional[list[dict]] = None
     #: `take_over` seulement : qui possédait l'agent avant la reprise, et combien
     #: de travaux en attente sont passés au nouveau propriétaire.
     previous_owner: Optional[str] = None
@@ -925,6 +958,7 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         if not t or (t.get("kind") or "schedule") != "webhook":
             raise AuthzDenied(404, "trigger_not_found", "automatisation inconnue")
         _exiger_la_porte(ctx, t)
+        _source_du_hook.exiger_aucune_source(t)
         if runner_hook.prereglage(t.get("hook_auth")).schema == runner_hook.NONE:
             # Sans preuve, l'adresse EST le credential : la neuve ne doit pas
             # passer par un outil. Elle se renouvelle sur l'écran de l'agent.
@@ -952,6 +986,7 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
             # genre » pour un appelant qui n'a pas à le savoir.
             raise AuthzDenied(404, "trigger_not_found", "automatisation inconnue")
         _exiger_la_porte(ctx, t)
+        _source_du_hook.exiger_aucune_source(t)
         if not runner_hook.prereglage(t.get("hook_auth")).porte_le_porteur:
             # Un porteur neuf sur un agent en mode signature (ou sans preuve)
             # serait refusé à la porte : le fabriquer ferait croire à une rotation
@@ -970,6 +1005,22 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
         return {"trigger": _avec_hook(ctx.org_id,
                                       db.get_trigger(inp.trigger_id, ctx.org_id)),
                 "hook_secret": secret}
+
+    if inp.op in ("connect_source", "disconnect_source"):
+        t = db.get_trigger(inp.trigger_id, ctx.org_id)
+        if not t or (t.get("kind") or "schedule") != "webhook":
+            raise AuthzDenied(404, "trigger_not_found", "automatisation inconnue")
+        # Brancher CHANGE la porte (mode, porteur, adresse) : propriétaire ou admin.
+        _exiger_la_porte(ctx, t)
+        if inp.op == "connect_source":
+            rendu = _source_du_hook.connecter(
+                ctx, t, source=inp.source, events=inp.events,
+                campaign_id=inp.campaign_id, is_first=inp.is_first)
+        else:
+            rendu = _source_du_hook.deconnecter(ctx, t)
+        return {"trigger": _avec_hook(ctx.org_id,
+                                      db.get_trigger(inp.trigger_id, ctx.org_id)),
+                **rendu}
 
     if inp.op == "deliveries":
         # Org-scopé par la requête : un déclencheur d'une autre org rend une liste
@@ -1060,11 +1111,18 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
     if inp.op == "delete":
         # Supprimer est un geste de PROPRIÉTAIRE : un éditeur le modifie, il ne le
         # fait pas disparaître.
-        _acces_agent.exiger(ctx, db.get_trigger(inp.trigger_id, ctx.org_id),
-                            _acces_agent.GOUVERNER)
+        t = db.get_trigger(inp.trigger_id, ctx.org_id)
+        _acces_agent.exiger(ctx, t, _acces_agent.GOUVERNER)
+        # Une source branchée garderait sinon un webhook vers une adresse morte —
+        # que plus personne ne saurait retirer, puisque la ligne disparaît. Ce qui
+        # résiste est RENDU : à retirer chez la source.
+        restees = (_source_du_hook.deconnecter(ctx, t)["remote_cleanup_failed"]
+                   if t and t.get("hook_sources") else None)
         if not db.delete_trigger(inp.trigger_id, ctx.org_id):
             raise AuthzDenied(404, "trigger_not_found", "automatisation inconnue")
-        return {"ok": True}
+        # Le reçu d'avant (`{"ok": true}`) ne change pas pour un agent jamais branché.
+        return {"ok": True, **({"remote_cleanup_failed": restees}
+                               if restees is not None else {})}
 
     # update — partiel ; toute retouche du cadencement (cron OU tz) revalide et
     # recalcule l'échéance avec les valeurs EFFECTIVES (jamais l'une sans l'autre).
@@ -1506,6 +1564,7 @@ def _hook_auth_sync(ctx: ResolvedCtx, inp: HookAuthInput) -> dict:
     actuel = db.get_trigger(inp.trigger_id, ctx.org_id)
     _valide_l_authentification(inp, actuel)
     _exiger_la_porte(ctx, actuel)
+    _source_du_hook.exiger_aucune_source(actuel)
     mode_avant = actuel.get("hook_auth") or runner_hook.BEARER
     mode = inp.hook_auth
     porteur = adresse_neuve = None
@@ -1742,6 +1801,27 @@ CAPABILITIES += [
             DeclaredError(403, "trigger_owner_or_admin_required",
                           "`rotate_secret`, `rotate_address` ou `private_address=true` "
                           "sur le webhook d'un autre, sans être admin de l'org"),
+            DeclaredError(409, "source_connected",
+                          "`rotate_secret` or `rotate_address` on an agent a sender is "
+                          "wired to: re-run `connect_source`, or `disconnect_source` first"),
+            DeclaredError(400, "unknown_source", "`connect_source` without a known `source`"),
+            DeclaredError(400, "events_required", "`connect_source` without `events`"),
+            DeclaredError(400, "too_many_events", "`connect_source` with more than 10 `events`"),
+            DeclaredError(400, "credential_unavailable",
+                          "`connect_source`: no key of the sender resolves for the caller "
+                          "in this org"),
+            DeclaredError(503, "public_url_unset",
+                          "`connect_source`: the server does not know its public address, "
+                          "the sender could not reach the agent"),
+            DeclaredError(502, "source_registration_failed",
+                          "the sender refused a registration: nothing changed on the agent"),
+            DeclaredError(502, "source_cleanup_failed",
+                          "`connect_source` failed after registering, and the sender "
+                          "refused to remove what was registered: the message names the "
+                          "webhook ids to remove by hand"),
+            DeclaredError(409, "trigger_changed",
+                          "`connect_source`/`disconnect_source`: the agent changed or was "
+                          "deleted meanwhile; nothing kept, retry"),
             DeclaredError(403, "trigger_edit_forbidden",
                           "l'agent est visible mais pas à toi de le modifier (partagé en "
                           "lecture), ou de le supprimer/partager (propriétaire et admins)"),
@@ -1784,6 +1864,16 @@ CAPABILITIES += [
             "org becomes the owner — the agent then acts as THEM, and its queued jobs "
             "move with it; an agent switched ON on your personal subscription is "
             "refused unless they can run it — disable it first, they re-enable it). "
+            "op=connect_source (webhook agent, owner or org admin; `source=lemlist`, "
+            "`events=[…]`, optional `campaign_id`, `is_first`): oto registers the "
+            "webhook AT the sender with a fresh token it never returns — the agent "
+            "is wired end to end in one call, no secret pasted anywhere. Calling it "
+            "again re-wires (new token, new registrations, old ones removed): that is "
+            "how a wired agent rotates. While wired, `rotate_secret`, "
+            "`rotate_address` and an auth-mode change are REFUSED "
+            "(`source_connected`). op=disconnect_source removes the registrations at "
+            "the sender; `delete` does it too. Both return `remote_cleanup_failed` "
+            "for any the sender would not remove. "
             "ACCESS: an agent belongs to its owner and runs AS them. list/get only "
             "return agents you own, that are shared with you, or all of them for an "
             "org admin; each carries `my_access` (owner/admin/editor/viewer), "
@@ -1838,6 +1928,9 @@ CAPABILITIES += [
         authz=ORG_MEMBER,
         mcp=None,   # un secret ne passe pas en argument d'outil
         errors=(
+            DeclaredError(409, "source_connected",
+                          "a sender is wired to the agent (`connect_source`): changing "
+                          "its auth mode would cut it off — `disconnect_source` first"),
             DeclaredError(400, "hook_auth_renamed",
                           "`lemlist`, l'ancien nom de `body_secret` : refusé, poser "
                           "`body_secret`"),
