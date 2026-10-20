@@ -32,6 +32,8 @@ def _step_row(step: Step, mode: Optional[str] = None) -> dict:
            # card), not the vault carrier (`fr_get` → `sirene`, aiark → `aiark`).
            "connector": con.name if con is not None else None,
            "label": step.label or (con.label if con is not None else step.key),
+           # What the step brings, in one line (`Step.explains`).
+           "explains": step.explains,
            "needs": _missing(step),
            # The same thing, as data: alternative groups of input keys (`fr` = a French
            # company) — what a screen translates, where `needs` is a sentence for agents.

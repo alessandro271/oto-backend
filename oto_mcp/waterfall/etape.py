@@ -39,6 +39,11 @@ class Step:
     # What a screen calls the step, when the connector's own label would not tell two
     # steps apart (the French registry by SIREN, and by name).
     label: str = ""
+    # What the step brings, in one line, for a screen and a person choosing their order:
+    # what its source sees, and when it is worth its place. Facts the receipts taught,
+    # never a price (that is the instance's own). Every row of every table has one
+    # (`tests/waterfall/test_waterfall_plan.py`); the plan serves it as `explains`.
+    explains: str = ""
     # A COMPLETION step: it does not compete for the find, it fills ONE field the find
     # still lacks (`linkedin_url`), after the cascade — see `moteur._run_cascade`.
     fills: str = ""

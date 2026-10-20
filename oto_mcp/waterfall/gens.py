@@ -179,7 +179,10 @@ PEOPLE_STEPS: tuple[Step, ...] = (
          reveal="apollo_match_person",
          # Masked last names only: a fallback, never the answer while a source that
          # names people fully is left to try.
-         weak=lambda found: all(p.get("name_obfuscated") for p in found["people"])),
+         weak=lambda found: all(p.get("name_obfuscated") for p in found["people"]),
+         explains=(
+             "Apollo's free people search — titles for everyone, names masked; only the "
+             "ones you keep are revealed (paid).")),
     # Then full names, by provider cost: google (a search, names + LinkedIn URLs, low
     # recall) → aiark (per profile) → the page's LinkedIn employees (an Apify run).
     Step("google", "serper_search", (("company_name",), ("domain",)),
@@ -188,14 +191,18 @@ PEOPLE_STEPS: tuple[Step, ...] = (
                     "site_filter": "linkedin.com/in", "num": 10, "country": None,
                     "language": None},
          _serper_people, "1 Serper search", label="Google — LinkedIn profiles",
-         pages=("page", 1)),
+         pages=("page", 1),
+         explains=(
+             "LinkedIn profiles found on Google — full names and titles, kept only when "
+             "they name the company.")),
     Step("aiark", "linkedin_aiark_search", (("domain",),),
          lambda i: {"op": "people",
                     "account": {"domain": {"any": {"include": [i["domain"]]}}},
                     # Billed PER PROFILE returned: ask what the call keeps, not 3×.
                     "size": i["limit"]},
          _aiark_people, "AI Ark credits per person returned", pages=("page", 0),
-         per_item=True),
+         per_item=True,
+         explains="LinkedIn-sourced people at the domain — billed per person returned."),
     Step("linkedin_employees", "apify_run_sync", (("company_linkedin_url",),),
          lambda i: {"actor_id": "harvestapi/linkedin-company-employees",
                     "run_input": {"companies": [i["company_linkedin_url"]],
@@ -203,5 +210,8 @@ PEOPLE_STEPS: tuple[Step, ...] = (
                     "max_items": i["limit"],
                     "timeout_secs": _APIFY_EMPLOYEES_TIMEOUT_S},
          _employees, "Apify, ~$0.003-0.008 per profile",
-         label="LinkedIn employees", per_item=True),
+         label="LinkedIn employees", per_item=True,
+         explains=(
+             "The company page's employees, straight from LinkedIn — the freshest titles; "
+             "needs the page URL.")),
 )

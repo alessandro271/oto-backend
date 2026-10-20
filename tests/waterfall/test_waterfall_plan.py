@@ -88,3 +88,10 @@ def test_le_plan_montre_la_qualification_jev_hors_des_etapes(calls):
     q = plan.plan("waterfall_company", "sub-test")["qualification"]
     assert q["usable"] is False and q["shadowed"] is True
     assert "qualification" not in plan.plan("waterfall_email", "sub-test")
+
+
+def test_chaque_etape_de_chaque_cascade_s_explique():
+    """Un écran qui laisse choisir l'ordre dit ce que chaque étape apporte (`Step.explains`)."""
+    sans = [(ns, s.key) for ns, steps in plan.STEPS_BY_NAMESPACE.items() for s in steps
+            if not s.explains.strip()]
+    assert not sans, sans

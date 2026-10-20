@@ -81,39 +81,60 @@ EMAIL_STEPS: tuple[Step, ...] = (
     Step("hunter", "hunter_email_finder", (_NAMES_AND_DOMAIN,),
          lambda i: {"domain": i["domain"], "first_name": i["first_name"],
                     "last_name": i["last_name"]},
-         _hunter_email, "1 Hunter credit"),
+         _hunter_email, "1 Hunter credit",
+         explains=(
+             "Finds the address from the name and the company's domain, and says how sure "
+             "it is — strongest where the company has a public email pattern.")),
     # AI Ark before Apollo: on a real list both found the same emails, AI Ark with the
     # whole profile — and Apollo bills its match even without an email.
     Step("aiark", "linkedin_aiark_person", (("linkedin_url",),),
          lambda i: {"op": "export", "url": i["linkedin_url"]},
-         _aiark_email, "AI Ark export credits"),
+         _aiark_email, "AI Ark export credits",
+         explains=(
+             "Reads the email attached to a LinkedIn profile — on a real list, mostly the "
+             "same emails as Apollo.")),
     Step("apollo", "apollo_match_person", _PERSON_IDS,
-         _apollo_args, _apollo_email, "1 Apollo credit"),
+         _apollo_args, _apollo_email, "1 Apollo credit",
+         explains=(
+             "Apollo's contact database — wide coverage; its match is billed even when it "
+             "has no email.")),
     Step("kaspr", "kaspr_enrich_linkedin", (("linkedin_url",),),
          lambda i: {"linkedin_id": i["linkedin_url"], "data_to_get": ["workEmail"],
                     **({"name": i["full_name"]} if i.get("full_name") else {})},
-         _kaspr_email, "1 Kaspr credit per email"),
+         _kaspr_email, "1 Kaspr credit per email",
+         explains="Kaspr's database, from a LinkedIn profile."),
     Step("lusha", "lusha_search_and_enrich", _PERSON_IDS,
          lambda i: {"contacts": [_lusha_contact(i)], "reveal": ["emails"]},
-         _lusha_email, "Lusha credits per revealed email"),
+         _lusha_email, "Lusha credits per revealed email",
+         explains="Lusha's database — from a LinkedIn profile, or name and company."),
     # The shared key serves Forager's phone lookups only: an email lookup is the
     # caller's own key's (`providers/forager.py`).
     Step("forager", "forager_person", (("linkedin_url",),),
          lambda i: {"op": "work_emails",
                     "linkedin_public_identifier": _slug(i["linkedin_url"])},
          _forager_email, "1 Forager credit (own key only)", own_key_only=True,
-         asks="work_emails"),
+         asks="work_emails",
+         explains="Forager's database, from a LinkedIn profile — your own key only."),
     # The asynchronous ones: each may wait up to `appel.POLL_BUDGET_S` for its answer.
     Step("dropcontact", "dropcontact_enrich", _DROPCONTACT_IDS,
          _dropcontact_args, _dropcontact_email,
          "1 Dropcontact credit per email found (own key only; asynchronous)",
-         collect=_DROPCONTACT_COLLECT),
+         collect=_DROPCONTACT_COLLECT,
+         explains=(
+             "Dropcontact finds and qualifies the address — answers late, so often "
+             "collected after the call.")),
     Step("lemlist", "lemlist_enrich", (("linkedin_url",), _NAMES_AND_DOMAIN),
          lambda i: _lemlist_args(i, find_email=True),
          _lemlist_email, "lemlist credits per email found (own key only; asynchronous)",
-         collect=_LEMLIST_COLLECT),
+         collect=_LEMLIST_COLLECT,
+         explains=(
+             "lemlist's own enrichment behind one call — your key only; answers within ~25 "
+             "s.")),
     Step("fullenrich", "fullenrich_enrich_linkedin", _FULLENRICH_IDS,
          lambda i: _fullenrich_args(i, "contact.work_emails"), _fullenrich_email,
          "1 FullEnrich credit per work email found (asynchronous, ~30 s to 4 min)",
-         collect=_FULLENRICH_COLLECT, asks="work_emails"),
+         collect=_FULLENRICH_COLLECT, asks="work_emails",
+         explains=(
+             "FullEnrich runs its own waterfall of providers — slow (30 s to 4 min), "
+             "usually collected later.")),
 )

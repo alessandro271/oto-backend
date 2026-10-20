@@ -31,7 +31,10 @@ le moteur, l'ordre, l'appel d'une étape, la qualification, le vivier des gens, 
 d'étapes par cascade, le plan) servi par deux modules d'outils
 (`Connector.modules=("waterfall", "waterfall_lignes")`, que `register_all` ne charge
 qu'une fois chacun). Une étape = un outil de connecteur existant,
-les entrées qu'il exige, la façon de construire ses arguments et de lire sa réponse. La
+les entrées qu'il exige, la façon de construire ses arguments et de lire sa réponse, et
+une ligne qui dit ce qu'elle apporte (`Step.explains`, en anglais : ce que sa source voit et
+quand elle vaut sa place, jamais un prix), que le plan sert en `explains` — un test exige
+cette ligne de chaque étape de chaque table. La
 cascade s'arrête au **premier** trouvé (choix produit : le moins cher, pas le plus sûr —
 l'email n'est pas vérifié ici).
 
@@ -188,11 +191,18 @@ Deux sortes de sources, mesurées sur un même domaine (20/10/2026) : ce que le 
 tourner (CMS, framework, hébergement, analytics — l'index DataForSEO, ou un crawl) — 6 à
 7 noms ; et ce que les OFFRES D'EMPLOI nomment (CRM, ERP, pile data, outils internes —
 TheirStack) — une centaine de slugs, mais plus cher et maigre sur les petites sociétés.
-D'où l'ordre : dataforseo (~0,01-0,02 \$) → website (`kfirs/tech-stack-detector`,
+D'où l'ordre : dataforseo (~0,01-0,02 \$) → apify (`kfirs/tech-stack-detector`,
 HTTP simple sans navigateur, ~0,01 \$ par site analysé, un site en échec n'est pas
-facturé ; une URL par exécution, sans `max_items` — même raison que la page LinkedIn) →
+facturé ; une URL par exécution, sans `max_items` — même raison que la page LinkedIn ;
+une ligne par fournisseur, chacune avec son logo, pour qu'un écran dise QUI regarde) →
+apollo puis aiark (la fiche société de chaque fournisseur de données, mesurée le 20/10 :
+~100 technologies catégorisées chacune, site ET outils métier — CRM, pile data, paiement ;
+source `vendor_database` ; une fiche par domaine, `max_units=1`) →
 theirstack (~3 crédits par société ; par domaine `limit=1`, par nom `limit=3` et la garde
-d'homonyme). Le reçu dit `source` : `website` ou `job_postings`.
+d'homonyme). Le reçu dit `source` : `website`, `vendor_database` ou `job_postings`.
+⚠️ L'étape du crawl s'appelait `website` jusqu'au 20/10/2026 : aucun alias, un réglage
+`steps` qui la nomme encore la voit ignorée (`ignored_steps`), un appel qui la passe en
+`providers` est refusé — l'écrire `apify`.
 
 ⚠️ **`technologies=[…]` change ce qu'est un trouvé** : une source qui ne détecte aucune
 des technologies demandées n'arrête PAS la cascade (la suivante voit autre chose — le site

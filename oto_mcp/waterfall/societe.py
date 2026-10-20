@@ -180,7 +180,8 @@ def _search_linkedin(res, inputs):
     return None
 
 
-def _one_row(key: str, label: str, cost: str, *variants: Step, fills: str = "") -> Step:
+def _one_row(key: str, label: str, cost: str, *variants: Step, explains: str,
+             fills: str = "") -> Step:
     """One row of the table made of several ways in (`Step.variants`): what a screen
     shows and a setting names once."""
     groups: list[tuple[str, ...]] = []
@@ -188,8 +189,8 @@ def _one_row(key: str, label: str, cost: str, *variants: Step, fills: str = "") 
         groups += [g for g in v.requires if g not in groups]
     first = variants[0]
     return Step(key, first.tool, tuple(groups), first.build, first.extract, cost,
-                free=all(v.free for v in variants), label=label, fills=fills,
-                variants=variants)
+                free=all(v.free for v in variants), label=label, explains=explains,
+                fills=fills, variants=variants)
 
 
 COMPANY_STEPS: tuple[Step, ...] = (
@@ -203,20 +204,33 @@ COMPANY_STEPS: tuple[Step, ...] = (
              _fr_search_company, "free (French open data)",
              needs="company_name, and a French company (country omitted or FR)",
              free=True),
+        explains=(
+            "The French company registry — legal name, SIREN, address, NAF code, size "
+            "band; free, France only."),
     ),
     Step("aiark", "linkedin_aiark_search", (("domain",), ("company_name",)),
          _aiark_company_args, _aiark_company, "AI Ark credits per company returned",
-         max_units=3),
+         max_units=3,
+         explains=(
+             "LinkedIn-sourced company profile — industry, headcount, revenue range, "
+             "phone.")),
     Step("apollo", "apollo_enrich_organization", (("domain",),),
-         lambda i: {"domain": i["domain"]}, _apollo_company, "1 Apollo credit"),
+         lambda i: {"domain": i["domain"]}, _apollo_company, "1 Apollo credit",
+         explains=(
+             "Apollo's company record — headcount, revenue, industry, LinkedIn page; needs "
+             "the domain.")),
     Step("theirstack", "theirstack_companies_search", (("domain",),),
          # Billed PER COMPANY returned: the domain names one — never ask 3.
          lambda i: {"extra": {"company_domain_or": [i["domain"]]}, "limit": 1},
-         _theirstack_company, "~3 TheirStack credits per company"),
+         _theirstack_company, "~3 TheirStack credits per company",
+         explains=(
+             "Company record built from its job ads — size, industry, and the technologies "
+             "the ads name.")),
     Step("cognism", "cognism_enrich_account", (("domain",), ("company_name",)),
          lambda i: {k: v for k, v in {"name": i.get("company_name"),
                                       "domain": i.get("domain")}.items() if v},
-         _cognism_company, "Cognism credits (per its contract)"),
+         _cognism_company, "Cognism credits (per its contract)",
+         explains="Cognism's company data — billed per your Cognism contract."),
     # Completion: the LinkedIn page, when no source above returned it — from the
     # company's own website first, then by a search on its name.
     _one_row(
@@ -237,5 +251,8 @@ COMPANY_STEPS: tuple[Step, ...] = (
                         "max_items": 3, "timeout_secs": _APIFY_TIMEOUT_S},
              _search_linkedin, "a few cents of Apify per search"),
         fills="linkedin_url",
+        explains=(
+            "Finds the LinkedIn page when no source gave it — from the company's own "
+            "website, else a search checked against the domain."),
     ),
 )

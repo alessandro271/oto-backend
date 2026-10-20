@@ -417,8 +417,8 @@ _CHAMPS = {
                         "`company_linkedin_url`, `linkedin_url`, `seniority`, `city`, "
                         "`country`",
     "waterfall_people": "`people` (a list: name, title, profile, Jev's answers), `count`",
-    "waterfall_tech": "`technologies`, `count`, `source` (website | job_postings), "
-                      "`by_category`, `matched` (with `technologies`)",
+    "waterfall_tech": "`technologies`, `count`, `source` (website | vendor_database | "
+                      "job_postings), `by_category`, `matched` (with `technologies`)",
 }
 _LABELS = {"waterfall_email": "email", "waterfall_phone": "phone",
            "waterfall_company": "company", "waterfall_person": "person",
