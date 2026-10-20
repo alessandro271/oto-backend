@@ -30,6 +30,12 @@ SA vue, périmée d'au plus 15 s. Un cache partagé a été écarté — une dé
 pour gagner une fenêtre que le système tolère déjà. Ne pas le « corriger » sans
 rouvrir cet arbitrage.
 
+⚠️ **Un seul calcul par campagne et par processus** (#1108). Les sondages arrivent par
+les fils du pool : à l'échéance, 8 à 14 fils recalculaient la MÊME campagne en même
+temps, et ce convoi tenait le GIL jusqu'à geler la boucle (1 à 2,2 s). Un verrou de
+processus par campagne (`threading`) laisse UN fil compter ; les autres l'attendent,
+relisent le cache une fois le verrou pris, et repartent avec son compte.
+
 Une campagne dont le compte ÉCHOUE (tableau introuvable, schéma illisible) n'est pas
 servie, et la cause est journalisée : la servir fabriquerait des travaux dont la
 réservation échouerait de la même façon.
@@ -38,6 +44,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from typing import Callable, Optional
 
@@ -58,6 +65,10 @@ _ECHEC = object()
 
 #: `{fleet_id: (cause, instant)}` — la dernière cause journalisée par campagne.
 _SIGNALE: dict[int, tuple[str, float]] = {}
+
+#: `{fleet_id: verrou}` — un seul fil calcule le compte d'une campagne (#1108).
+_VERROUS: dict[int, threading.Lock] = {}
+_VERROUS_GARDE = threading.Lock()
 
 
 class TableauAmbigu(LookupError):
@@ -194,6 +205,19 @@ def _signature(f: dict) -> str:
                       sort_keys=True, default=str)
 
 
+def _verrou(fid: int) -> threading.Lock:
+    with _VERROUS_GARDE:
+        return _VERROUS.setdefault(fid, threading.Lock())
+
+
+def _garde(fid: int, sig: str, maintenant: float) -> Optional[tuple]:
+    """L'entrée encore valable du cache pour cette déclaration, ou `None`."""
+    garde = _CACHE.get(fid)
+    if garde is None or garde[1] != sig or garde[0] <= maintenant:
+        return None
+    return garde
+
+
 def _echec(fid: int, sig: str, e: Exception, maintenant: float) -> bool:
     """Garde l'échec pour la fenêtre, et dit s'il faut le journaliser (cause neuve ou rappel)."""
     _CACHE[fid] = (maintenant + TTL_S, sig, _ECHEC)
@@ -229,18 +253,48 @@ def lignes_reservables(candidates: list[dict], *,
     - `None` : la campagne ne vise aucun tableau, il n'y a rien à compter ;
     - **absente** : son compte a échoué — elle ne doit pas être servie."""
     maintenant = horloge()
-    for fid in [k for k, (echeance, _, _) in _CACHE.items() if echeance <= maintenant]:
-        del _CACHE[fid]
+    for fid in [k for k, (echeance, _, _) in list(_CACHE.items()) if echeance <= maintenant]:
+        _CACHE.pop(fid, None)
     comptes: dict[int, Optional[int]] = {}
-    par_tableau: dict[int, dict[int, list]] = {}
-    signatures: dict[int, str] = {}
+    a_calculer: dict[int, tuple[dict, str]] = {}
     for f in candidates:
         fid, sig = int(f["id"]), _signature(f)
-        garde = _CACHE.get(fid)
-        if garde is not None and garde[1] == sig:
-            if garde[2] is not _ECHEC:
-                comptes[fid] = garde[2]
-            continue
+        garde = _garde(fid, sig, maintenant)
+        if garde is None:
+            a_calculer.setdefault(fid, (f, sig))    # deux fois le même verrou : interblocage
+        elif garde[2] is not _ECHEC:
+            comptes[fid] = garde[2]
+    # Les verrous se prennent dans l'ordre des identifiants : deux sondages qui
+    # partagent des campagnes ne s'attendent jamais l'un l'autre en cercle.
+    tenus: list[threading.Lock] = []
+    try:
+        restants: list[tuple[dict, str]] = []
+        for fid in sorted(a_calculer):
+            f, sig = a_calculer[fid]
+            verrou = _verrou(fid)
+            verrou.acquire()
+            garde = _garde(fid, sig, maintenant)
+            if garde is not None:       # un autre fil vient de le calculer
+                verrou.release()
+                if garde[2] is not _ECHEC:
+                    comptes[fid] = garde[2]
+                continue
+            tenus.append(verrou)
+            restants.append((f, sig))
+        _calculer(restants, comptes, maintenant)
+    finally:
+        for verrou in tenus:
+            verrou.release()
+    return comptes
+
+
+def _calculer(candidates: list[tuple[dict, str]], comptes: dict[int, Optional[int]],
+              maintenant: float) -> None:
+    """Compte les campagnes absentes du cache et l'y pose — sous leurs verrous."""
+    par_tableau: dict[int, dict[int, list]] = {}
+    signatures: dict[int, str] = {}
+    for f, sig in candidates:
+        fid = int(f["id"])
         signatures[fid] = sig
         if not (f.get("namespace") or "").strip():
             comptes[fid] = None
@@ -270,4 +324,3 @@ def lignes_reservables(candidates: list[dict], *,
         for fid, n in lus.items():
             comptes[fid] = n
             _CACHE[fid] = (maintenant + TTL_S, signatures[fid], n)
-    return comptes

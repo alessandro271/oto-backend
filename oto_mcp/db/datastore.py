@@ -49,6 +49,7 @@ from .datastore_ns import (  # noqa: F401
     delete_datastore_by_id,
     get_datastore,
     get_datastore_by_id,
+    get_datastore_owner,
     get_resource_grant,
     grant_resource,
     list_all_datastores,

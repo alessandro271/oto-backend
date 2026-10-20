@@ -98,6 +98,18 @@ def get_datastore_by_id(ns_id: int) -> Optional[dict]:
         return dict(row) if row else None
 
 
+def get_datastore_owner(ns_id: int) -> Optional[dict]:
+    """`{owner_type, owner_id}` d'un tableau, ou `None` s'il n'existe pas — la lecture
+    d'appartenance (`ownership.owner_of`), sans le `schema` jsonb que relisait et
+    décodait `get_datastore_by_id` à chaque contrôle d'accès (#1108)."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT owner_type, owner_id FROM user_datastores WHERE id = %s",
+            (ns_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
 def set_datastore_schema(ns_id: int, schema: Optional[dict]) -> None:
     """Pose (ou retire si None) le schéma typé d'un namespace (ADR 0032 §6 / 0029, B6).
     Soft : aucune validation des rows existantes — c'est un schéma de rendu, pas une

@@ -356,3 +356,56 @@ def test_visible_in_org_platform_everywhere(monkeypatch):
     _wire_groups(monkeypatch)
     assert ownership.visible_in_org("anyone", 42, RT, RID)
     assert ownership.visible_in_org("anyone", 7, RT, RID)
+
+
+# --- L'appartenance d'un tableau : lue sans son schéma (#1108) -------------------
+# `owner_of` est appelé à chaque contrôle d'accès ; il relisait la ligne entière, `schema`
+# jsonb compris, et la décodait — 8 à 14 fils à la fois dans les gels relevés.
+
+def _lecture_d_appartenance(monkeypatch, row):
+    lus = []
+    monkeypatch.setattr(ownership.db, "get_datastore_owner",
+                        lambda ns_id: lus.append(ns_id) or row)
+    monkeypatch.setattr(ownership.db, "get_datastore_by_id", lambda ns_id: pytest.fail(
+        "l'appartenance relit la ligne entière, schéma compris"))
+    return lus
+
+
+@pytest.mark.parametrize("row,attendu", [
+    ({"owner_type": "org", "owner_id": "35"}, ("org", "35")),
+    ({"owner_type": "user", "owner_id": "u1"}, ("user", "u1")),
+    ({"owner_type": "group", "owner_id": "4"}, ("group", "4")),
+    (None, None),                                       # tableau introuvable
+    ({"owner_type": "user", "owner_id": None}, None),   # propriétaire nul
+])
+def test_datastore_owner_ne_lit_que_l_appartenance(monkeypatch, row, attendu):
+    lus = _lecture_d_appartenance(monkeypatch, row)
+    assert ownership.owner_of(ownership.TYPE_RESSOURCE_DATASTORE, "7") == attendu
+    assert lus == [7]
+
+
+def test_la_lecture_d_appartenance_ne_selectionne_pas_le_schema(monkeypatch):
+    from contextlib import contextmanager
+
+    from oto_mcp.db import datastore_ns
+    requetes = []
+
+    class _Conn:
+        def execute(self, sql, params):
+            requetes.append((sql, params))
+            return self
+
+        def fetchone(self):
+            return {"owner_type": "org", "owner_id": "35"}
+
+    @contextmanager
+    def _connect():
+        yield _Conn()
+
+    monkeypatch.setattr(datastore_ns, "_connect", _connect)
+    assert datastore_ns.get_datastore_owner(7) == {"owner_type": "org", "owner_id": "35"}
+    [(sql, params)] = requetes
+    assert params == (7,)
+    selection = sql.split("FROM")[0]
+    assert "owner_type" in selection and "owner_id" in selection
+    assert "schema" not in selection and "*" not in selection

@@ -769,7 +769,7 @@ def transfer(
 # --- Enregistrement du kind `datastore_namespace` (pilote ADR 0030) ----------
 
 def _datastore_owner(rid: str) -> Optional[tuple[str, str]]:
-    row = db.get_datastore_by_id(int(rid))
+    row = db.get_datastore_owner(int(rid))
     if row is None or row.get("owner_id") is None:
         return None
     return (row["owner_type"], row["owner_id"])

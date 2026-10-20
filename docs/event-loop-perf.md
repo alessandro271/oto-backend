@@ -1321,3 +1321,30 @@ Mesuré sur le jeu, aller-retour simulé à 3,14 ms, médiane de 20 appels : lis
 199 requêtes et 773 ms → 44 et 180 ms ; `status_for` (le chemin commun de `/api/me`,
 `oto_connector op=list` et `oto_list_my_tools`) 159 et 617 ms → 25 et 102 ms. Réponses
 identiques octet pour octet. Preuves : `tests/test_connecteurs_me_rapide_1148.py`.
+
+## Le convoi du GIL, encore : douze fils sur le même compte (#1108, 20/10/2026)
+
+Une semaine de relevés (la pile de tous les fils, ci-dessus) : 850 gels de 1 à 2,2 s, la
+boucle au repos dans `select`, le processus à 1,5 cœur. Dans 83 % d'entre eux, **8 à 14
+fils du pool** exécutent la MÊME chaîne : le sondage de l'ordonnanceur
+(`runner_jobs` → `db/runner_fleets.campagne_a_servir` → `_ordre_de_service.ordonner` →
+`_lignes_reservables.lignes_reservables` → `tableau_vise`), puis le contrôle d'accès
+(`ownership.visible_in_org` → `owner_of` → `_datastore_owner`), qui relisait la ligne
+entière du tableau et décodait son `schema` jsonb. Rien n'est dans la boucle ; c'est le
+convoi : douze fils qui calculent la même chose se disputent le GIL, et la boucle attend
+son tour.
+
+Lot au plus petit (Alexis, 20/10) :
+- **un seul calcul par campagne** — le cache de 15 s n'avait pas de verrou : à
+  l'échéance, chaque fil recalculait. Un verrou de processus par campagne (`threading`,
+  les appels venant des fils du pool) ; le cache est relu une fois le verrou pris, les
+  autres fils repartent avec le compte du premier. TTL, échec gardé (`_ECHEC`) et
+  signature inchangés. Les verrous se prennent dans l'ordre des identifiants (deux
+  sondages aux listes croisées ne s'attendent pas en cercle) ;
+- **l'appartenance sans le schéma** — `_datastore_owner` lit `db.get_datastore_owner`
+  (`owner_type`, `owner_id`), plus `get_datastore_by_id`.
+
+Critère d'observation après la prod : plus aucun relevé de gel où 8 fils ou plus portent
+cette chaîne. Preuves : `tests/test_lignes_reservables_un_seul_calcul_1108.py` (douze fils
+ratent le cache ensemble, un seul calcul — douze sans le verrou), et
+`tests/test_ownership.py` (l'appartenance ne lit ni ne sélectionne le schéma).

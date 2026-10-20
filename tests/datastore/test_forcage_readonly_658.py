@@ -65,6 +65,9 @@ def acteurs(monkeypatch):
                                        "owner_type": "org",
                                        "owner_id": str(ORG_PROPRIETAIRE),
                                        "schema": SCHEMA})
+    monkeypatch.setattr(dsm.db, "get_datastore_owner",
+                        lambda ns_id: {"owner_type": "org",
+                                       "owner_id": str(ORG_PROPRIETAIRE)})
     monkeypatch.setattr(roles, "is_org_member",
                         lambda sub, org: org == ORG_PROPRIETAIRE
                         and sub in ("membre", "org_admin"))

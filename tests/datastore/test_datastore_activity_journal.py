@@ -134,6 +134,8 @@ def _wire_journal(monkeypatch) -> list[dict]:
     monkeypatch.setattr(datastore_journal.db, "get_datastore_by_id",
                         lambda ns_id: {"datastore": _FakeStore.NAME, "schema": SCHEMA,
                                        "owner_type": "org", "owner_id": "35"})
+    monkeypatch.setattr(datastore_journal.db, "get_datastore_owner",
+                        lambda ns_id: {"owner_type": "org", "owner_id": "35"})
 
     def _insert(row):
         written.append(row)
