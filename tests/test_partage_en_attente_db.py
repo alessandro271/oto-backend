@@ -21,10 +21,10 @@ def monde(live, monkeypatch):
     """L'org A : son admin (propriétaire d'un projet de l'org et d'un second projet
     que personne ne partage). L'invitée n'a PAS de compte."""
     from oto_mcp import db, org_store
-    from oto_mcp.auth import facade
+    from oto_mcp.auth import annuaire
     from oto_mcp.capabilities import resources as R
     monkeypatch.setenv("OTO_INVITE_BASE_URL", "https://front.example.test")
-    monkeypatch.setattr(facade, "magic_url", lambda url, email, **_: url)
+    monkeypatch.setattr(annuaire, "magic_url", lambda url, email, **_: url)
     envois: list[dict] = []
     monkeypatch.setattr(R.email, "send_resource_shared_email",
                         lambda to, **kw: envois.append({"to": to, **kw}) or True)

@@ -39,7 +39,7 @@ dérivent, pour qu'il n'existe jamais deux listes qui divergent :
 
 Deux endroits construisent un nom de variable au runtime (`f"{x}_ID"`, jamais un
 littéral) : le quota par provider (`access/quotas.py`) et le credential de management
-par annuaire tenant (`auth/facade.py`, dont `OTO_MCP_LOGTO_M2M_ID`/`_SECRET` est
+par annuaire tenant (`auth/annuaire.py`, dont `OTO_MCP_LOGTO_M2M_ID`/`_SECRET` est
 l'instance du tenant PRIMAIRE — les autres viennent de `tenants.logto_mgmt.credential`
 en base). Le walker les reconnaît par la FORME de la construction (préfixe/suffixe
 littéral autour d'un segment dynamique), jamais par une énumération de noms.
@@ -103,9 +103,11 @@ _REQUISES: tuple[Variable, ...] = (
              "nommé plutôt qu'une erreur psycopg opaque).",
              ("oto_mcp/db/_conn.py:57", "oto_mcp/db/migrations/env.py:51")),
     Variable("LOGTO_ENDPOINT", Classe.REQUISE, None,
-             "Émetteur Logto qui SIGNE (vérification JWT ES384) — distinct de "
-             "l'endpoint ANNONCÉ (`LOGTO_PUBLIC_ENDPOINT`).",
-             ("oto_mcp/server.py:226", "oto_mcp/auth/facade.py:50")),
+             "Émetteur Logto qui SIGNE (vérification JWT ES384), et que la découverte "
+             "ANNONCE comme serveur d'autorisation (+ `/oidc`) : une seule adresse, "
+             "celle de l'`issuer`. Le Logto doit avoir CIMD activé.",
+             ("oto_mcp/server.py:243", "oto_mcp/auth/decouverte.py:35",
+              "oto_mcp/auth/annuaire.py:70")),
     Variable("MCP_AUDIENCE", Classe.REQUISE, None,
              "Audience RFC 9728 canonique vérifiée sur chaque jeton.",
              ("oto_mcp/server.py:290",)),
@@ -130,11 +132,6 @@ _REQUISES: tuple[Variable, ...] = (
              "reste correct et cesse seulement d'être corrélable entre deux boots.",
              ("oto_mcp/auth/flow.py:66", "oto_mcp/auth/google.py:87",
               "oto_mcp/outreach_optout.py:57", "oto_mcp/upload_tokens.py:72")),
-    Variable("OTO_MCP_OAUTH_RELAY_HOSTS", Classe.REGLAGE, "",
-             "Hosts déclarés du relais d'autorisation OAuth (RFC 9207, "
-             "`oto_mcp/auth/relay.py`), séparés par des virgules. Absente : aucun "
-             "relais actif, comportement d'origine — un opt-in par host, pas un "
-             "défaut qui pointerait chez nous.", ("oto_mcp/auth/relay.py:73",)),
     Variable("GOOGLE_ACCOUNT_SERVICES", Classe.REGLAGE, "",
              "Services Google que demande la carte du COMPTE sous notre app, sur cette "
              "instance : sous-ensemble séparé par des virgules de sheets, drive, gmail, "
@@ -617,8 +614,9 @@ _REGLAGES: tuple[Variable, ...] = (
              "séparée par des virgules. Vide = no-op.",
              ("oto_mcp/config.py:197",)),
     Variable("OTO_MCP_DCR_ALLOWED_REDIRECTS", Classe.REGLAGE, None,
-             "Redirect URIs supplémentaires tolérés par la façade DCR.",
-             ("oto_mcp/auth/facade.py:162",)),
+             "Hôtes https de rappel supplémentaires tolérés par le shim OAuth "
+             "anonyme des projets publiés, séparés par des virgules.",
+             ("oto_mcp/auth/anon.py:59",)),
     # -- interrupteurs booléens (défaut neutre = comportement historique) -----
     Variable("OTO_HANG_WATCH_ENABLED", Classe.REGLAGE, "1",
              "Surveillance des callbacks lents de l'event loop.",
@@ -792,10 +790,6 @@ _REGLAGES: tuple[Variable, ...] = (
     Variable("OTO_MCP_TENANT_MIGRATION_ISS", Classe.REGLAGE, None,
              "Issuer additionnel toléré pendant une migration de tenant.",
              ("oto_mcp/tenant_migration.py:60", "oto_mcp/tenant_migration.py:71")),
-    Variable("OTO_MCP_CLAUDE_APP_ID", Classe.REGLAGE, None,
-             "App ID Claude — posé, active la façade DCR (PRM → nous plutôt que "
-             "Logto direct).",
-             ("oto_mcp/server.py:401",)),
     Variable("OTO_MCP_ADMIN_SUB", Classe.REGLAGE, None,
              "Sub d'un compte admin plateforme, pour des scripts hors requête.",
              ("oto_mcp/access/scope.py:47",)),
@@ -807,10 +801,6 @@ _REGLAGES: tuple[Variable, ...] = (
              "Second émetteur Logto toléré (coexistence multi-domaine), pour les "
              "personnes comme pour les services.",
              ("oto_mcp/server.py:228", "oto_mcp/auth/service_identity.py:91")),
-    Variable("LOGTO_PUBLIC_ENDPOINT", Classe.REGLAGE, "",
-             "Endpoint Logto ANNONCÉ aux clients — distinct de celui qui SIGNE "
-             "(`LOGTO_ENDPOINT`). Vide, on annonce celui qui signe.",
-             ("oto_mcp/auth/facade.py:68",)),
     Variable("OTO_EXPORT_CLE_CIBLE", Classe.REGLAGE, None,
              "Clé maîtresse (hex 64 ou base64) de l'instance CIBLE d'un export par "
              "périmètre, pour cette seule exécution de `oto-mcp perimetre export` : les "
@@ -867,8 +857,7 @@ FAMILLES_DYNAMIQUES: tuple[FamilleDynamique, ...] = (
                      "`OTO_MCP_LOGTO_M2M_ID`, les autres viennent de "
                      "`tenants.logto_mgmt.credential` en base. Obligatoire DE FAIT "
                      "pour l'annuaire visé : `_mgmt_token()` lève nommé si absent.",
-        refs=("oto_mcp/auth/facade.py:253", "oto_mcp/auth/facade.py:327",
-              "oto_mcp/auth/facade.py:334"),
+        refs=("oto_mcp/auth/annuaire.py:98", "oto_mcp/auth/annuaire.py:105"),
     ),
     FamilleDynamique(
         nom="credential_management_annuaire_secret",
@@ -876,8 +865,7 @@ FAMILLES_DYNAMIQUES: tuple[FamilleDynamique, ...] = (
         classe=Classe.REQUISE,
         description="Moitié `_SECRET` du même credential — voir "
                      "`credential_management_annuaire`.",
-        refs=("oto_mcp/auth/facade.py:253", "oto_mcp/auth/facade.py:328",
-              "oto_mcp/auth/facade.py:335"),
+        refs=("oto_mcp/auth/annuaire.py:99", "oto_mcp/auth/annuaire.py:106"),
     ),
 )
 

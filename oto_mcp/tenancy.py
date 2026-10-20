@@ -46,7 +46,6 @@ import os
 import re
 from dataclasses import dataclass
 from typing import Iterable, Mapping, Optional, Any
-from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
 
@@ -128,10 +127,6 @@ class TenantIssuer:
     jwks_uri: str
     name: str = ""
     hosts: tuple = ()
-    # Client OAuth servi par la façade d'enregistrement sur les hosts de ce tenant
-    # (cf. `oauth_facade`). Sans lui, un host déclaré enverrait le client demander un
-    # enregistrement automatique à un annuaire qui n'en fait pas.
-    oauth_client_id: str = ""
     # Adresse du tableau de bord de ce tenant. Vide = la nôtre (cf. `config`).
     dashboard_url: str = ""
     # Accès d'ADMINISTRATION de l'annuaire de ce tenant, quand c'est nous qui
@@ -157,30 +152,6 @@ class TenantIssuer:
     # déploiement. Les teintes sont validées à la LECTURE, pas ici : le registre
     # transporte ce qui est déclaré, il ne juge pas des couleurs.
     brand: Any = None
-    # Rappels OAuth EXACTS que la façade d'enregistrement (`auth/facade.py`) accepte EN
-    # PLUS de sa liste globale, **sur les hosts de ce tenant et nulle part ailleurs** :
-    # l'URL complète d'un client hébergé que son exploitant a choisi, jamais un motif.
-    # Déclarés dans `logto_mgmt.redirect_uris` : ils n'ont d'effet que si la façade sait
-    # les poser dans l'annuaire du tenant, donc avec ces accès. Vide = la liste globale
-    # seule, l'état d'avant à l'octet près.
-    dcr_redirects: tuple = ()
-    # OPT-IN de ce tenant aux jetons de rafraîchissement pour les clients qui passent par le
-    # RELAIS de la façade (`auth/relay.py`) : déclaré dans `logto_mgmt.refresh_tokens`, éteint
-    # par défaut. Allumé, l'autorisation relayée sur les hosts de CE tenant ajoute `consent` à
-    # `prompt` quand `offline_access` est demandé (`authorize_consent`, oto#202) — sans quoi
-    # Logto ne délivre aucun jeton de rafraîchissement et un client comme Codex, qui n'envoie
-    # pas `prompt`, perd sa connexion à chaque expiration du jeton d'accès. C'est SA décision,
-    # jamais la nôtre : durée et rotation se règlent dans SON annuaire. Ne vaut que sur un
-    # host relayé ; sur un autre, le client s'autorise chez l'annuaire du tenant et la
-    # plateforme ne voit pas la demande.
-    refresh_tokens: bool = False
-    # DÉSACTIVÉ (`tenants.disabled_at`, oto-backend#1165), tel que lu au chargement du
-    # registre. Sert la FAÇADE OAuth de ses hosts (aucun enregistrement, aucune
-    # autorisation, aucun rafraîchissement) — jamais la vérification d'un jeton : celle-ci
-    # lit l'état dans la BASE à chaque requête (`garde_identite`), sur toutes les
-    # instances, sans attendre un rechargement. L'entrée reste dans le registre : son
-    # émetteur sert à reconnaître — et refuser nommément — les jetons du tenant.
-    disabled: bool = False
 
 
 def qualify(slug: Optional[str], sub: Optional[str]) -> Optional[str]:
@@ -250,8 +221,8 @@ def build(primary_issuer: str, drain_issuers: Iterable[str] = (),
     entries: dict[str, TenantIssuer] = {}
 
     def _put(slug: str, issuer, jwks_uri=None, name="", hosts=(),
-             oauth_client_id="", dashboard_url="", link_paths=None,
-             tool_prefix="", brand=None, logto_mgmt=None, disabled=False) -> None:
+             dashboard_url="", link_paths=None,
+             tool_prefix="", brand=None, logto_mgmt=None) -> None:
         iss = normalize_issuer(issuer)
         if not iss:
             return
@@ -259,17 +230,13 @@ def build(primary_issuer: str, drain_issuers: Iterable[str] = (),
         entries[iss] = TenantIssuer(slug=slug, issuer=iss,
                                     jwks_uri=jwks or f"{iss}/jwks",
                                     name=name or "", hosts=tuple(hosts or ()),
-                                    oauth_client_id=str(oauth_client_id or ""),
                                     dashboard_url=str(dashboard_url or "").rstrip("/"),
                                     link_paths=_normalize_paths(link_paths),
                                     # Tel que DÉCLARÉ (cf. le slug juste au-dessus) :
                                     # `tool_alias.normalize_prefix` juge, il ne répare pas.
                                     tool_prefix=str(tool_prefix or ""),
                                     brand=brand if isinstance(brand, dict) else None,
-                                    logto_mgmt=_normalize_mgmt(logto_mgmt, slug),
-                                    dcr_redirects=_normalize_redirects(logto_mgmt, slug),
-                                    refresh_tokens=_normalize_refresh_tokens(logto_mgmt, slug),
-                                    disabled=bool(disabled))
+                                    logto_mgmt=_normalize_mgmt(logto_mgmt, slug))
 
     primaire = primary_slug()
     _put(primaire, primary_issuer)
@@ -304,13 +271,11 @@ def build(primary_issuer: str, drain_issuers: Iterable[str] = (),
         _put(slug, iss, (row or {}).get("jwks_uri"),
              name=str((row or {}).get("name") or ""),
              hosts=normalize_hosts((row or {}).get("hosts")),
-             oauth_client_id=str((row or {}).get("oauth_client_id") or ""),
              dashboard_url=str((row or {}).get("dashboard_url") or ""),
              link_paths=(row or {}).get("link_paths"),
              tool_prefix=(row or {}).get("tool_prefix"),
              brand=(row or {}).get("brand"),
-             logto_mgmt=(row or {}).get("logto_mgmt"),
-             disabled=(row or {}).get("disabled_at") is not None)
+             logto_mgmt=(row or {}).get("logto_mgmt"))
     return entries
 
 
@@ -331,9 +296,8 @@ def _normalize_mgmt(valeur, slug: str = "") -> Optional[dict]:
     endpoint à la place du partenaire.
 
     Une déclaration incomplète ou illisible est REFUSÉE bruyamment (`_refus`) plutôt
-    que rabotée : silencieuse, elle ferait retomber la façade d'enregistrement sur
-    « annuaire non administrable » — c'est-à-dire exactement le défaut qu'elle vient
-    corriger (oto-backend#909), et sans destinataire.
+    que rabotée : silencieuse, elle ferait passer l'annuaire pour « non administrable »,
+    sans destinataire (oto-backend#909).
     """
     if valeur in (None, "", {}):
         return None
@@ -359,88 +323,6 @@ def _normalize_mgmt(valeur, slug: str = "") -> Optional[dict]:
                slug, ", ".join(manque))
         return None
     return {"token_endpoint": tok, "api_endpoint": api, "credential": cred}
-
-
-_REDIRECT_MAX = 512
-
-
-def _rappel_declarable(uri) -> bool:
-    """Une URL de rappel qu'un tenant peut DÉCLARER : https, complète, et rien qui
-    ressemble à un motif. Ce n'est pas la garde d'acceptation (`facade`, qui exige en
-    plus l'ÉGALITÉ avec une déclaration et la lecture canonique de l'URL demandée) : ici on
-    refuse ce qu'aucune requête légitime n'écrirait, pour que la faute se voie au
-    chargement plutôt qu'à l'autorisation d'un client."""
-    if not isinstance(uri, str) or not (len(uri) <= _REDIRECT_MAX
-                                        and uri.startswith("https://")):
-        return False
-    if any(c <= " " or c > "~" or c in "\\*?#" for c in uri):
-        return False
-    try:
-        p = urlsplit(uri)
-        p.port  # un port hors bornes lève
-    # noqa: SILENT — fail-closed : une déclaration douteuse est refusée par l'appelant
-    except ValueError:
-        return False
-    return bool(p.hostname) and "@" not in p.netloc and p.path.startswith("/")
-
-
-def _normalize_redirects(valeur, slug: str = "") -> tuple:
-    """Les rappels EXACTS déclarés par un tenant (`logto_mgmt.redirect_uris`), en tuple.
-
-    ⚠️ **Fail-closed, entrée par entrée** : une entrée qui n'est pas une URL https
-    complète (joker, requête, identité, fragment…) est ÉCARTÉE et alertée, les autres
-    restent. Contrairement aux accès d'annuaire (`_normalize_mgmt`, tout ou rien), ici
-    une ligne écartée ne peut que RÉDUIRE ce qui est accepté — jamais l'élargir."""
-    if isinstance(valeur, str):
-        try:
-            valeur = json.loads(valeur)
-        except ValueError:
-            return ()
-    if not isinstance(valeur, dict):
-        return ()
-    brut = valeur.get("redirect_uris")
-    if brut in (None, [], ()):
-        return ()
-    if not isinstance(brut, (list, tuple)):
-        _refus("registre d'émetteurs : `logto_mgmt.redirect_uris` du tenant %r n'est pas "
-               "une liste — aucun rappel déclaré", slug)
-        return ()
-    retenus: list = []
-    for uri in brut:
-        if not _rappel_declarable(uri):
-            _refus("registre d'émetteurs : rappel %r du tenant %r refusé (une URL https "
-                   "EXACTE est attendue : ni joker, ni requête, ni fragment, ni identité) "
-                   "— écarté", uri, slug)
-        elif uri not in retenus:
-            retenus.append(uri)
-    return tuple(retenus)
-
-
-def _normalize_refresh_tokens(valeur, slug: str = "") -> bool:
-    """L'opt-in d'un tenant aux jetons de rafraîchissement (`logto_mgmt.refresh_tokens`).
-
-    ⚠️ **Fail-closed** : seul le booléen JSON `true` allume. `"true"`, `"yes"`, `1`, une
-    liste, un objet, une chaîne vide : écartés en alertant, drapeau ÉTEINT — une faute de
-    frappe ne doit jamais délivrer des jetons de longue durée à des clients publics. Absent,
-    `null` et `false` sont l'état d'avant, sans alerte. Le drapeau ne se lit qu'ici, dans la
-    déclaration posée par l'administrateur de la plateforme : aucune requête, aucun en-tête,
-    aucun corps de DCR n'y touche."""
-    if isinstance(valeur, str):
-        try:
-            valeur = json.loads(valeur)
-        except ValueError:
-            return False
-    if not isinstance(valeur, dict):
-        return False
-    brut = valeur.get("refresh_tokens")
-    if brut is None or brut is False:
-        return False
-    if brut is True:
-        return True
-    _refus("registre d'émetteurs : `logto_mgmt.refresh_tokens` du tenant %r vaut %r — le "
-           "booléen JSON `true` est seul accepté ; drapeau ÉTEINT (aucun jeton de "
-           "rafraîchissement délivré)", slug, brut)
-    return False
 
 
 def _normalize_paths(valeur) -> dict:
@@ -629,9 +511,8 @@ class ForeignTenantDirectory(RuntimeError):
     partenaire (oto-backend#274).
 
     ⚠️ **`logto_mgmt` n'ouvre pas cette porte-là.** Un tenant dont NOUS hébergeons
-    l'annuaire peut déclarer des accès d'administration, et la façade
-    d'enregistrement s'en sert — mais pour poser un rappel sur une APPLICATION, un
-    objet qui n'appartient à aucun compte. Router un acte qui vise un UTILISATEUR
+    l'annuaire peut déclarer des accès d'administration, mais aucun acte qui vise un
+    compte ne s'en sert. Router un acte qui vise un UTILISATEUR
     (email autoritatif, MFA) vers l'annuaire d'un tenant est une autre décision, que
     personne n'a prise : ces chemins restent fermés, et disent pourquoi.
 

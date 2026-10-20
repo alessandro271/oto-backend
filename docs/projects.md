@@ -371,7 +371,7 @@ Partage/transfert via **`oto_resource`** (resource_type=`project` ajouté au dis
 >   le slug existant (ne casse pas l'URL déjà distribuée). Le dispatch traite `anonymous`/`secret` sur le même
 >   chemin (`access_mode in ("anonymous","secret")`).
 > - **`org`** : JWT Logto, **épingle l'org** ; le sous-domaine est enregistré comme **resource Logto**
->   (`auth.facade.ensure_api_resource`) + verifier **multi-audience** + PRM **host-aware**.
+>   (`auth.annuaire.ensure_api_resource`) + verifier **multi-audience** + PRM **host-aware**.
 >
 > **Host-routing** (`subdomain_project.HostDispatch`, monté `root_app` dans `server.main`) : une **2ᵉ app
 > FastMCP sans auth** (`anon_mcp = mcp`, **réutilise l'instance no-auth module-level** — ne PAS en

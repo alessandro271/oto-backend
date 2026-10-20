@@ -24,7 +24,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel
 
 from ... import config, db, org_store
-from ...auth import facade as oauth_facade
+from ...auth import annuaire
 from ... import email as email_mod  # alias : le param `email` d'emit_invitation masquerait le module
 from .._authz import ORG_ADMIN_OF, SUB_ONLY
 from .._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
@@ -56,7 +56,7 @@ def _nominal_url(token: str, email_addr: str | None = None, *,
     est le nôtre » — dont la présence d'un front tiers n'est ici qu'un proxy."""
     url = f"{_invite_base(front_base)}/invitation/{token}"
     if email_addr and not front_base:
-        return oauth_facade.magic_url(url, email_addr.strip())
+        return annuaire.magic_url(url, email_addr.strip())
     return url
 
 

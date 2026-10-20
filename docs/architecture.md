@@ -30,8 +30,9 @@ oto_mcp/
 │                     #   puis un module de handlers par domaine. ⚠️ Une route neuve
 │                     #   naît CAPACITÉ, pas ici : la dette REST vaut ZÉRO.
 ├── auth/             # QUI parle au serveur, et comment un credential s'ACQUIERT.
-│                     #   Entrant : hooks (le sub du jeton), facade (façade DCR devant
-│                     #   Logto), token_scopes (portée d'un jeton `oto_…`), anon (shim
+│                     #   Entrant : hooks (le sub du jeton), decouverte (le PRM, qui
+│                     #   annonce Logto), annuaire (administration de l'annuaire Logto),
+│                     #   token_scopes (portée d'un jeton `oto_…`), anon (shim
 │                     #   OAuth des endpoints publics). Sortant : flow (la danse
 │                     #   `authorization_code`, écrite UNE fois), pkce, puis un module
 │                     #   par fournisseur — google, salesforce, zoho (atlassian et folk

@@ -13,9 +13,7 @@ qualifié (`sub_aliases`, drain d'alias) ne passent jamais par cet émetteur
 
 1. pose l'état (`tenants.disabled_at|_by|_reason`), lu à CHAQUE vérification d'identité
    d'un compte qualifié sous le tenant (`garde_identite`) — REST, MCP, lien d'upload —
-   sur toutes les instances, sans rechargement ; et recharge le registre du processus,
-   dont la façade OAuth refuse alors sur les hosts du tenant tout enregistrement,
-   autorisation ou rafraîchissement (les autres processus : à leur `op=reload`) ;
+   sur toutes les instances, sans rechargement ;
 2. révoque les jetons que NOUS stockons pour TOUS ses comptes (jetons d'API et de
    délégation, `user_api_tokens.revoked_*`). Les jetons signés par son annuaire
    (session de tableau de bord, accès et rafraîchissement OAuth du MCP) n'existent pas
@@ -99,12 +97,6 @@ class TenantDisablementOut(BaseModel):
         default=0, description="Orgs rouvertes par `enable` : celles que la désactivation "
                                "avait suspendues, et elles seules.")
     orgs_resumed_ids: list[int] = Field(default_factory=list)
-    registry_reloaded: bool = Field(
-        default=False,
-        description="Le registre d'émetteurs de CE processus a été relu : la façade OAuth "
-                    "des hosts du tenant suit l'état. Un autre processus le suit à son "
-                    "`op=reload` ou à son démarrage — ses jetons, eux, sont refusés "
-                    "partout dès le geste.")
     refused_not_stored: list[str] = Field(
         default_factory=list,
         description="Porteurs que la plateforme ne STOCKE pas, donc ne peut ni compter ni "
@@ -141,21 +133,6 @@ def _vue(slug: str, etat: Optional[dict], *, changed: bool, **coupe) -> dict:
             "disabled_reason": (etat or {}).get("disabled_reason"), **coupe}
 
 
-def _relire_registre(slug: str) -> bool:
-    """Fait relire au registre de CE processus l'état qu'on vient d'écrire (la façade
-    OAuth le lit là). L'état est déjà ÉCRIT et la garde d'identité le lit en base : un
-    échec ici ne défait rien et ne rouvre rien — il se dit (journal, `registry_reloaded`)
-    pour que l'opérateur relance `op=reload`."""
-    from .. import server
-    try:
-        server.reload_tenant_registry()
-        return True
-    except Exception:
-        logger.exception("tenant %s : état écrit, mais le registre de ce processus n'a pas "
-                         "pu être relu — relancer oto_admin_tenant op=reload", slug)
-        return False
-
-
 def _disablement(ctx: ResolvedCtx, inp: TenantDisablementInput) -> dict:
     slug = _tenant_cible(inp.slug)
 
@@ -169,8 +146,7 @@ def _disablement(ctx: ResolvedCtx, inp: TenantDisablementInput) -> dict:
                        slug, ctx.sub, fait["changed"], fait["orgs_resumed"])
         return _vue(slug, None, changed=fait["changed"],
                     orgs_resumed=len(fait["orgs_resumed"]),
-                    orgs_resumed_ids=fait["orgs_resumed"],
-                    registry_reloaded=_relire_registre(slug))
+                    orgs_resumed_ids=fait["orgs_resumed"])
 
     motif = (inp.reason or "").strip()
     if not motif:
@@ -203,7 +179,6 @@ def _disablement(ctx: ResolvedCtx, inp: TenantDisablementInput) -> dict:
                 orgs_suspended=len(fait["orgs_suspended"]),
                 orgs_suspended_ids=fait["orgs_suspended"],
                 orgs_already_suspended=fait["orgs_already_suspended"],
-                registry_reloaded=_relire_registre(slug),
                 refused_not_stored=list(_SANS_ETAT))
 
 

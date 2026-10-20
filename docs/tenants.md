@@ -90,16 +90,11 @@ cache, dans la base — donc sur toutes les instances, dès le geste, sans recha
 | MCP, toute requête (JWT OAuth ou `oto_`) | `AccountSuspendedMiddleware.on_request` | `McpError`, `data.code=tenant_disabled` |
 | lien d'upload signé (sub scellé, sans jeton) | `api.uploads._do_signed_upload` | `403 tenant_disabled` |
 | naissance d'un compte du tenant | `db.upsert_user` (gate `inserted`) | `TenantDesactive` → `tenant_disabled` |
-| enregistrement, autorisation relayée, échange de code et **rafraîchissement** sur ses hosts | `auth.facade.refus_tenant_desactive` (DCR, relais), sur l'entrée du **registre** | `403 tenant_disabled` |
 
-La façade OAuth est la seule porte qui lit l'état dans le **registre** (`TenantIssuer.disabled`,
-chargé avec l'émetteur) plutôt qu'en base : ses routes restent indépendantes de la base,
-comme l'authentification canonique. Le geste recharge le registre du processus qui le
-traite (`registry_reloaded` dans la réponse) ; un autre processus le suit à son
-`op=reload` ou à son démarrage — et d'ici là, tout jeton qu'il laisserait obtenir est
-refusé à chaque requête, partout, par la garde d'identité, qui lit la base. L'entrée d'un
-tenant désactivé **reste** dans le registre : son émetteur sert à reconnaître ses jetons
-pour les refuser nommément, et ses comptes restent classés sous lui.
+L'inscription, l'autorisation et le rafraîchissement OAuth se font chez l'annuaire du
+tenant (CIMD) : la plateforme ne les voit pas, et refuse à chaque requête le jeton qui en
+sort. L'entrée d'un tenant désactivé **reste** dans le registre : son émetteur sert à
+reconnaître ses jetons pour les refuser nommément, et ses comptes restent classés sous lui.
 
 La même garde porte la **pause de compte** (`docs/comptes-en-pause.md`) : le tenant est
 jugé d'abord, la personne ensuite. Les deux prédicats ne s'appellent nulle part
@@ -119,8 +114,7 @@ la date ni le motif), et ce que le geste a coupé :
 - `refused_not_stored` — ce que nous **ne stockons pas** et ne pouvons donc ni compter
   ni révoquer à la source : session de tableau de bord (JWT), jetons d'accès et de
   rafraîchissement OAuth du MCP (émis par l'annuaire du tenant), liens d'upload signés.
-  Ils restent signés jusqu'à expiration et sont refusés à chaque présentation ; un
-  rafraîchissement par le relais de la façade est refusé à la source.
+  Ils restent signés jusqu'à expiration et sont refusés à chaque présentation.
 
 Le geste est journalisé (`warning` + le journal des appels, auteur et arguments).
 
@@ -167,42 +161,19 @@ l'administrons) est une autre décision non prise (`tenancy.ForeignTenantDirecto
 > **Un tenant tiers est SERVI, depuis le 13/08 (oto-private#83).** Le premier partenaire a
 > son émetteur, son host, son client OAuth et ses 10 comptes qualifiés. Trois règles en
 > sont sorties, toutes contre-intuitives, toutes payées en prod :
-> - ⚠️ **La découverte annonce la FAÇADE sur le host du tenant, JAMAIS son émetteur en
->   direct.** Annoncer l'émetteur paraît plus honnête et retire `auth.facade` du chemin —
->   or elle existe parce que Logto self-hosted **ne fait pas de DCR** : le client échoue sur
->   « l'enregistrement automatique n'est pas pris en charge ». La façade s'annonce comme
->   serveur (issuer = le host) et route autorisation/jeton/clés vers l'annuaire du tenant.
->   Elle rend `tenants.oauth_client_id` — le client de l'annuaire VISÉ, sinon le client se
->   présente chez l'un avec l'identité de l'autre.
-> - ⚠️ **Rendre le bon client ne suffisait pas : il fallait ENREGISTRER le rappel chez
->   lui** (oto-backend#909, mesuré le 08/09). `_register_redirects` n'était appelé que sur
->   le host de la plateforme : sur le host d'un tenant la façade rendait **201 sans rien
->   poser**, puis `oidc.invalid_redirect_uri` deux secondes plus tard à l'`/authorize` —
->   un succès annoncé, un échec ailleurs, aucun indice. Un tenant dont NOUS hébergeons
->   l'annuaire déclare donc ses accès dans **`tenants.logto_mgmt`** (JSONB) :
->   `{"token_endpoint", "api_endpoint", "credential"}` (+ `redirect_uris`, optionnel : les
->   URLs de rappel EXACTES d'un client hébergé, valables sur les hosts de CE tenant seulement,
->   jamais un motif — `docs/auth-logto.md` §« Le rappel d'un client hébergé »).
->   ⚠️ **Aucun secret en base** —
->   `credential` est le NOM d'un couple de variables d'environnement
->   (`<credential>_ID`/`_SECRET`), même convention que le primaire. ⚠️ **Les deux
->   endpoints sont un COUPLE** : chez Logto le jeton se prend sur l'endpoint
->   d'administration et les appels `/api` vont sur l'endpoint principal, l'inverse rend
->   `401 aud check_failed`. Sans déclaration — ou avec une clé absente du process — la
->   façade **refuse en 503 et nomme sa destination** au lieu de promettre. L'écran
->   `/platform/tenants` nomme l'écart `logto_mgmt` (déclaré) vs `directory_admin`
->   (déclaré ET clé présente ici). ⚠️ **L'ordre compte** : injecter le credential dans
->   l'environnement AVANT de poser la colonne, sinon la façade refuse pendant la fenêtre
->   — et comme prod et preprod partagent la base (§Infra), la colonne posée vaut pour les
->   deux d'un coup.
-> - ⚠️ **Enregistré ne suffisait pas non plus : la réponse portait l'`iss` de SON annuaire**
->   (mesuré le 08/09). La façade s'annonce `issuer` = le host, Logto estampille le sien : un
->   client RFC 9207 (SDK MCP Python 2.0) refuse le flux après la connexion. Un host déclaré
->   dans `OTO_MCP_OAUTH_RELAY_HOSTS` fait passer autorisation, retour et jeton par le relais
->   de la façade (`auth/relay.py`), qui rend `iss` = le host — sans `consent` ajouté pour un
->   tenant (sauf opt-in `logto_mgmt.refresh_tokens`, éteint par défaut, `docs/auth-logto.md`), et **seulement si nous administrons son annuaire** (`logto_mgmt`) : le relais compare
->   le rappel du client aux rappels relus sur SON application, à l'octet près. Mise en service,
->   refus nommés et limites : `docs/auth-logto.md` §relais.
+> - ⚠️ **La découverte annonce l'ÉMETTEUR du tenant, en direct** (depuis le 20/10/2026,
+>   `auth/decouverte.py`). Du 13/08 au 20/10 elle annonçait une FAÇADE sur le host du
+>   tenant, parce que Logto self-hosted ne savait inscrire aucun client à la volée : la
+>   façade rendait un client préparé (`tenants.oauth_client_id`), posait le rappel du
+>   client dans SON annuaire (`tenants.logto_mgmt`, oto-backend#909) et, sur un host
+>   relayé, réécrivait l'`iss` de la réponse (RFC 9207). Avec CIMD (Logto ≥ 1.44), le
+>   client s'inscrit chez l'annuaire du tenant lui-même : l'annuaire d'un tenant servi
+>   par cette instance DOIT avoir CIMD activé. `tenants.oauth_client_id` n'a plus de
+>   lecteur (affiché seulement, suppression par une révision) ; `tenants.logto_mgmt`
+>   (accès d'administration de son annuaire, jamais un secret : `credential` est le NOM
+>   d'un couple de variables d'environnement) reste déclaré et lisible
+>   (`logto_mgmt` vs `directory_admin` sur `/platform/tenants`), sans geste qui s'en serve
+>   (`docs/auth-logto.md`).
 > - ⚠️ **Pas de patron, pas de lien** (`links.py`, `tenants.link_paths`). Les chemins d'un
 >   partenaire ne ressemblent pas aux nôtres et certaines de nos vues n'ont **aucun**
 >   équivalent chez lui : coller nos chemins sous son domaine fabrique des liens morts, pire
@@ -289,8 +260,7 @@ l'administrons) est une autre décision non prise (`tenancy.ForeignTenantDirecto
 >   REFUSÉ (l'alias éclipserait un vrai outil) ; rien n'est réparé au passage (`Acme` est
 >   refusé, pas abaissé — cf. le slug). Poser = `UPDATE tenants SET tool_prefix=…` **+
 >   restart** (le registre est bâti au boot) ; l'écran `/platform/tenants` nomme l'écart
->   `tool_prefix` (déclaré) vs `tool_prefix_effectif` (appliqué) ; de même
->   `logto_mgmt.refresh_tokens` (déclaré) vs `refresh_tokens_effectif` (appliqué). ⚠️ **Pas de canari
+>   `tool_prefix` (déclaré) vs `tool_prefix_effectif` (appliqué). ⚠️ **Pas de canari
 >   possible** : prod et preprod partagent la base (§Infra), donc la colonne posée vaut
 >   pour les deux — la seule fenêtre de test est le décalage des redémarrages. La face
 >   REST reste en canonique : ses écritures sont keyées par nom, et le dashboard d'un

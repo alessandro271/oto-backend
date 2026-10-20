@@ -23,10 +23,6 @@ Ils sont ici, chacun nommé, chacun jouable seul :
                                           À BLANC tant que OTO_UNIPILE_FIN_DE_DROIT
                                           n'est pas posé
     oto-mcp maintenance check-boot    rejoue l'ordre du boot en transaction ANNULÉE
-    oto-mcp maintenance oauth-relay-callbacks  constate (À BLANC) ou pose (`--apply`) le
-                                          rappel du relais d'autorisation sur les hosts
-                                          DÉJÀ inscrits dans OTO_MCP_OAUTH_RELAY_HOSTS,
-                                          avant de redémarrer le service
     oto-mcp maintenance apollo-phones retire les reveals de téléphone Apollo reçus
                                           au-delà de trente jours
     oto-mcp maintenance digest-lecteurs  résumé quotidien des lecteurs d'une procédure
@@ -556,15 +552,6 @@ def activation(*, dry_run: bool = False) -> dict:
     return activation.balayer(dry_run=dry_run)
 
 
-def oauth_relay_callbacks(*, dry_run: bool = False) -> dict:
-    """Constate, ou pose avec `--apply`, le rappel du relais d'autorisation sur les hosts
-    déjà inscrits dans `OTO_MCP_OAUTH_RELAY_HOSTS` — cf. `auth.relay_maintenance`.
-    Un ACTE (il écrit dans l'application Logto que prod et preprod partagent) : à blanc par
-    défaut, hors `all`, hors timer."""
-    from .auth import relay_maintenance
-    return relay_maintenance.poser_les_rappels(dry_run=dry_run)
-
-
 def cles_plateforme_au_format(*, dry_run: bool = True) -> dict:
     """Réécrit au format du coffre les clés plateforme posées BRUTES avant que leur pose
     passe par `preparer_pose` (`cles_plateforme_format`). Le rapport ne porte que
@@ -626,15 +613,13 @@ _TRAVAUX: dict[str, Callable[..., dict]] = {
     "alertes-credential": alertes_credential,
     "instagram-tokens": instagram_tokens,
     "unipile-fin-de-droit": unipile_fin_de_droit,
-    "oauth-relay-callbacks": oauth_relay_callbacks,
     "apollo-phones": apollo_phones,
     "activation": activation,
     "digest-lecteurs": digest_lecteurs,
 }
 # Travaux dont l'écriture est un ACTE, pas une routine : à blanc par défaut, et
 # c'est `--apply` qui écrit. Ils ne sont dans aucun timer et jamais dans `all`.
-_ACTES = ("journal-tokens", "residu-projete", "oauth-relay-callbacks",
-          "cles-plateforme-au-format")
+_ACTES = ("journal-tokens", "residu-projete", "cles-plateforme-au-format")
 # ⚠️ `alertes-credential` est dans `_ALL` — donc dans le timer quotidien — ET son
 # envoi est fermé par `OTO_ALERTE_CREDENTIAL`. Les deux ensemble sont le dispositif :
 # le mécanisme tourne dès le tag (on voit ce qui partirait), l'effet attend une

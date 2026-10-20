@@ -100,10 +100,8 @@ def test_on_ne_desactive_pas_son_propre_tenant(tenants):
 def test_desactiver_rend_les_compteurs_par_type(tenants):
     out = td._disablement(_ctx(), td.TenantDisablementInput(
         slug="acme", op="disable", reason="contrat terminé"))
-    assert tenants == [("disable", "acme", "op-1", "contrat terminé"), ("invalider",),
-                       ("reload",)]
+    assert tenants == [("disable", "acme", "op-1", "contrat terminé"), ("invalider",)]
     assert out["disabled"] is True and out["changed"] is True
-    assert out["registry_reloaded"] is True
     assert out["revoked"] == {"user": 2, "delegation": 1}
     assert out["accounts_cut"] == 3 and out["aliases_cut"] == 1
     # Le nombre d'orgs suspendues par CE geste, leurs ids, et celles qu'il n'a pas touchées.
@@ -117,7 +115,7 @@ def test_desactiver_rend_les_compteurs_par_type(tenants):
 
 def test_reactiver_ne_rend_aucun_jeton(tenants):
     out = td._disablement(_ctx(), td.TenantDisablementInput(slug="acme", op="enable"))
-    assert tenants == [("enable", "acme"), ("invalider",), ("reload",)]
+    assert tenants == [("enable", "acme"), ("invalider",)]
     assert out["disabled"] is False and out["changed"] is True
     assert out.get("revoked", {}) == {}
     assert out["orgs_resumed"] == 2 and out["orgs_resumed_ids"] == [11, 12]
@@ -131,21 +129,7 @@ def test_la_console_mcp_et_la_route_rest_partagent_le_handler(tenants):
     out = tenants_admin._console(_ctx(), tenants_admin.TenantConsoleInput(
         op="enable", slug="acme"))
     assert out["disablement"]["disabled"] is False
-    assert [g[0] for g in tenants] == ["disable", "invalider", "reload",
-                                       "enable", "invalider", "reload"]
-
-
-def test_un_registre_illisible_ne_defait_pas_le_geste_et_le_dit(tenants, monkeypatch):
-    """L'état est écrit et la garde d'identité le lit en BASE : un rechargement raté ne
-    rouvre rien. Il est DIT (`registry_reloaded=false`), pas avalé."""
-    from oto_mcp import server
-
-    def _boum():
-        raise RuntimeError("base illisible")
-    monkeypatch.setattr(server, "reload_tenant_registry", _boum)
-    out = td._disablement(_ctx(), td.TenantDisablementInput(
-        slug="acme", op="disable", reason="contrat terminé"))
-    assert out["disabled"] is True and out["registry_reloaded"] is False
+    assert [g[0] for g in tenants] == ["disable", "invalider", "enable", "invalider"]
 
 
 def test_le_palier_est_super_admin_sur_les_deux_faces():

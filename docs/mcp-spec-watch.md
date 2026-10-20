@@ -44,9 +44,10 @@ jamais la partager) — ⚠️ **et la même exigence vaut pour `server/discover
 l'exemple de la spec — un intermédiaire servirait le readme d'une org à une autre. Le
 point ① ne visait que `tools/list` ; il vise les deux ; ② suppression de la résumabilité SSE ⟹ un stream cassé se rejoue
 en requête neuve : les outils longs (browser, INPI, fullenrich) doivent être
-**idempotents** ; ③ DCR déprécié au profit des Client ID Metadata Documents — notre
-façade DCR (`auth/facade.py`, palliatif du Logto self-hosted sans DCR) a une date de
-péremption → épic sécurité auth/MCP #35 ; ④ MRTR (`resultType: "input_required"`)
+**idempotents** ; ③ DCR déprécié au profit des Client ID Metadata Documents — **fait le 20/10/2026** :
+la façade DCR (palliatif du Logto self-hosted sans DCR) est retirée, le client s'inscrit
+chez Logto (≥ 1.44) par CIMD et la découverte annonce l'émetteur Logto
+(`auth/decouverte.py`, `docs/auth-logto.md`) ; ④ MRTR (`resultType: "input_required"`)
 remplace elicitation/sampling : **pas une dette** ici (nos `*_connect_start` /
 `*_connect_status` sont déjà des handles), une standardisation possible.
 

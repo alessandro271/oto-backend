@@ -51,10 +51,11 @@ def test_l_exemple_est_conforme(doc):
     (lambda d: d["roles"]["prod"]["env"].update(OTO_ENV="a\nb"), "chaîne sur une ligne"),
     (lambda d: d["roles"]["prod"]["env"].pop("OTO_BRAND_NAME"),
      "OTO_BRAND_NAME : exigée par l'inventaire"),
-    (lambda d: d["roles"]["prod"]["env"].pop("OTO_MCP_CLAUDE_APP_ID"),
-     "OTO_MCP_CLAUDE_APP_ID : exigée non vide par le bleu/vert"),
-    (lambda d: d["roles"]["preprod"]["env"].update(OTO_MCP_CLAUDE_APP_ID=""),
-     "roles.preprod.env.OTO_MCP_CLAUDE_APP_ID : exigée non vide par le bleu/vert"),
+    # Retirée avec le relais d'autorisation : une déclaration qui la porte encore est
+    # refusée en la nommant, avant le déploiement. (`OTO_MCP_CLAUDE_APP_ID`, elle, a la
+    # forme `<credential>_ID` d'une famille dynamique de l'inventaire : elle passe.)
+    (lambda d: d["roles"]["prod"]["env"].update(OTO_MCP_OAUTH_RELAY_HOSTS="mcp.x.test"),
+     "OTO_MCP_OAUTH_RELAY_HOSTS : variable absente de l'inventaire"),
     (lambda d: d["roles"]["prod"].update(secrets_optionnels=["OTO_ENV"]),
      "OTO_ENV n'est pas un secret facultatif"),
     (lambda d: d["roles"]["prod"].update(secrets_optionnels=["DATABASE_URL"]),
@@ -73,46 +74,27 @@ def test_tous_les_ecarts_sont_nommes_d_un_coup(doc):
     assert len(_refus(doc)) == 2
 
 
-# --- la santé du bleu/vert lit un chemin que seule la façade DCR sert ---------------
-def test_sans_la_facade_le_refus_dit_pourquoi(doc):
-    for r in doc["roles"].values():
-        del r["env"]["OTO_MCP_CLAUDE_APP_ID"]
-    ecarts = [e for e in _refus(doc) if "OTO_MCP_CLAUDE_APP_ID" in e]
-    assert [e.split(" :")[0] for e in ecarts] == ["roles.preprod.env.OTO_MCP_CLAUDE_APP_ID",
-                                                  "roles.prod.env.OTO_MCP_CLAUDE_APP_ID"]
-    for e in ecarts:
-        assert "/.well-known/oauth-authorization-server" in e
-        assert "seule la façade DCR" in e and "404" in e
-        assert "couleur pas devenue saine" in e
+# --- la santé du bleu/vert lit un chemin que tout serveur sert -------------------
+def test_le_chemin_de_sante_est_servi_sans_condition():
+    """La santé lit la métadonnée de ressource protégée : la découverte la déclare, et le
+    serveur la monte sans interrupteur — aucune variable n'est exigée pour devenir sain."""
+    assert decl.chemin_de_sante() == "/.well-known/oauth-protected-resource"
+    decouverte = (DEPOT / "oto_mcp/auth/decouverte.py").read_text(encoding="utf-8")
+    serveur = (DEPOT / "oto_mcp/server.py").read_text(encoding="utf-8")
+    assert f'Route("{decl.chemin_de_sante()}"' in decouverte
+    assert "for route in reversed(decouverte.make_routes(" in serveur
 
 
-def test_la_regle_suit_le_chemin_de_sante_de_la_bibliotheque(doc, tmp_path, monkeypatch):
-    # Aujourd'hui, la bibliothèque du dépôt juge la santé sur le chemin de la façade.
-    assert decl.chemin_de_sante() == decl.CHEMIN_DE_LA_FACADE
-    assert decl.exigees_par_la_sante() == ("OTO_MCP_CLAUDE_APP_ID",)
-    # Que la santé change de chemin, et la règle tombe d'elle-même — BG_PUBLIC suit.
+def test_bg_public_suit_le_chemin_de_sante_de_la_bibliotheque(doc, tmp_path, monkeypatch):
     autre = tmp_path / "oto-mcp-bluegreen.sh"
     autre.write_text('#!/bin/bash\nHEALTH_PATH="/api/version"\n')
     monkeypatch.setattr(decl, "BIBLIOTHEQUE_BLEU_VERT", autre)
-    assert decl.exigees_par_la_sante() == ()
-    for r in doc["roles"].values():
-        del r["env"]["OTO_MCP_CLAUDE_APP_ID"]
     decl.valider(doc)
     assert decl.variables(doc, "prod")["BG_PUBLIC"] == "https://mcp.exemple.test/api/version"
     # Une bibliothèque sans HEALTH_PATH est une panne, pas une règle muette.
     autre.write_text("#!/bin/bash\n")
     with pytest.raises(RuntimeError, match="HEALTH_PATH"):
-        decl.exigees_par_la_sante()
-
-
-def test_le_chemin_de_la_facade_est_bien_celui_qu_elle_sert():
-    """Les deux constantes de la règle disent vrai : la façade sert ce chemin, et le
-    serveur ne la monte que sur son interrupteur."""
-    facade = (DEPOT / "oto_mcp/auth/facade.py").read_text(encoding="utf-8")
-    serveur = (DEPOT / "oto_mcp/server.py").read_text(encoding="utf-8")
-    assert f'Route("{decl.CHEMIN_DE_LA_FACADE}"' in facade
-    assert f'os.environ.get("{decl.INTERRUPTEUR_DE_LA_FACADE}")' in serveur
-    assert "from .auth import facade" in serveur
+        decl.chemin_de_sante()
 
 
 def test_tout_se_derive_du_nom_et_du_role(doc):
@@ -121,7 +103,7 @@ def test_tout_se_derive_du_nom_et_du_role(doc):
     assert v["BG_TREE"] == "/opt/exemple/preprod"
     assert v["BG_UPSTREAM"] == "/etc/caddy/upstream-exemple-preprod.conf"
     assert v["BG_ACTIVE"] == "/etc/exemple/preprod/active"
-    assert v["BG_PUBLIC"] == "https://mcp-preprod.exemple.test/.well-known/oauth-authorization-server"
+    assert v["BG_PUBLIC"] == "https://mcp-preprod.exemple.test/.well-known/oauth-protected-resource"
     assert v["BG_ASK"] == "" and v["BG_LANCEUR"] == "versionne"
     assert (v["BG_PORT_blue"], v["BG_PORT_green"]) == ("9205", "9206")
     # Chaque chemin est sous un préfixe fixe, jamais une valeur de la déclaration.

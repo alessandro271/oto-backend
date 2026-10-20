@@ -418,9 +418,10 @@ def _call_prm(host, valid, monkeypatch):
     import asyncio
     import json as _json
     from starlette.requests import Request
-    from oto_mcp.auth import facade as oauth_facade
+    from oto_mcp.auth import decouverte
     monkeypatch.setattr(sp, "valid_org_audience", lambda a: valid)
-    routes = oauth_facade.make_routes("https://mcp.oto.ninja", "appid")
+    monkeypatch.setenv("LOGTO_ENDPOINT", "https://auth.oto.ninja")
+    routes = decouverte.make_routes("https://mcp.oto.ninja")
     prm = next(r for r in routes if r.path == "/.well-known/oauth-protected-resource/mcp")
     scope = {"type": "http", "method": "GET",
              "path": "/.well-known/oauth-protected-resource/mcp",
@@ -432,7 +433,7 @@ def _call_prm(host, valid, monkeypatch):
 def test_prm_canonical(monkeypatch):
     md = _call_prm("mcp.oto.ninja", False, monkeypatch)
     assert md["resource"] == "https://mcp.oto.ninja/mcp"
-    assert md["authorization_servers"] == ["https://mcp.oto.ninja/"]
+    assert md["authorization_servers"] == ["https://auth.oto.ninja/oidc"]
     assert md["resource_name"] == "oto MCP"
     assert md["bearer_methods_supported"] == ["header"]
 
@@ -440,7 +441,7 @@ def test_prm_canonical(monkeypatch):
 def test_prm_subdomain_org(monkeypatch):
     md = _call_prm("acme.mcp.oto.cx", True, monkeypatch)
     assert md["resource"] == "https://acme.mcp.oto.cx/mcp"
-    assert md["authorization_servers"] == ["https://mcp.oto.ninja/"]   # AS reste canonique
+    assert md["authorization_servers"] == ["https://auth.oto.ninja/oidc"]   # l'émetteur, pas le sous-domaine
 
 
 def test_prm_unpublished_subdomain_falls_back(monkeypatch):
@@ -449,7 +450,7 @@ def test_prm_unpublished_subdomain_falls_back(monkeypatch):
 
 
 def test_ensure_api_resource_idempotent(monkeypatch):
-    from oto_mcp.auth import facade as oauth_facade
+    from oto_mcp.auth import annuaire
     calls = {"post": 0}
 
     class _Resp:
@@ -457,8 +458,8 @@ def test_ensure_api_resource_idempotent(monkeypatch):
         def raise_for_status(self): pass
         def json(self): return self._data
 
-    monkeypatch.setattr(oauth_facade, "_mgmt_token", lambda: "TOK")
-    monkeypatch.setattr(oauth_facade, "_logto_base", lambda: "https://auth.x")
+    monkeypatch.setattr(annuaire, "_mgmt_token", lambda: "TOK")
+    monkeypatch.setattr(annuaire, "_logto_base", lambda: "https://auth.x")
     import requests
 
     def _get(url, **kw): return _Resp([{"indicator": "https://acme.mcp.oto.cx/mcp"}])
@@ -470,10 +471,10 @@ def test_ensure_api_resource_idempotent(monkeypatch):
     monkeypatch.setattr(requests, "get", _get)
     monkeypatch.setattr(requests, "post", _post)
     # déjà présent → pas de POST
-    oauth_facade.ensure_api_resource("https://acme.mcp.oto.cx/mcp")
+    annuaire.ensure_api_resource("https://acme.mcp.oto.cx/mcp")
     assert calls["post"] == 0
     # absent → POST
-    oauth_facade.ensure_api_resource("https://new.mcp.oto.cx/mcp")
+    annuaire.ensure_api_resource("https://new.mcp.oto.cx/mcp")
     assert calls["post"] == 1
 
 

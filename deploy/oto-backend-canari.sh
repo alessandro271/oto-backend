@@ -40,7 +40,7 @@ BG_SNIPPET=oto_canari
 BG_DOCSHARE_HOST=mcp.oto.ninja
 BG_ASK=                      # l'on-demand TLS est porté par la prod uniquement
 BG_ACTIVE=/etc/oto-mcp/active-canari
-BG_PUBLIC="https://mcp-canari.oto.ninja/.well-known/oauth-authorization-server"
+BG_PUBLIC="https://mcp-canari.oto.ninja/.well-known/oauth-protected-resource"
 # Même plafond qu'en prod (cf. oto-backend.sh) : la vidange couvre les requêtes en
 # cours, pas les sessions — inutile de laisser deux versions coexister plus longtemps.
 BG_DRAIN_MAX=120

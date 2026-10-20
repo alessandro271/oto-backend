@@ -1222,9 +1222,9 @@ lire en base, et lui fait payer un seau à jetons (débit régulier, rafale = la
 | classe | quand | clé | défaut / min |
 |---|---|---|---|
 | `jeton` | la requête porte `Authorization` | empreinte du jeton | 1 200 |
-| `sensible` | sans jeton : secret dans le chemin (`/api/invitations/*`, `/api/public/*`, `/p/d/*`, `/o/{u,d,r}/*`) ou geste d'auth interactif (`/oauth/authorize`, `/oauth/relay/authorize`, `/oauth/callback`, `/api/mcp/auth_callback`, `*/oauth/callback`) | adresse | 60 |
+| `sensible` | sans jeton : secret dans le chemin (`/api/invitations/*`, `/api/public/*`, `/p/d/*`, `/o/{u,d,r}/*`) ou geste d'auth interactif (`/api/mcp/auth_callback`, `*/oauth/callback`) | adresse | 60 |
 | `webhook` | `/api/hooks/*`, `/api/receivers/*`, `/api/billing/webhook` | (adresse, chemin), plus un plafond par adresse à 10 × ce débit (`webhook_adresse`) | 300 |
-| `anonyme` | tout le reste sans jeton (`/.well-known/*`, `/oauth/register` — un client hébergé enregistre un client par connexion, depuis sa sortie partagée —, `/mcp` avant connexion, upload signé, relais, `/oauth/token`) | adresse | 600 |
+| `anonyme` | tout le reste sans jeton (`/.well-known/*`, inscription du shim anonyme d'un projet publié — un client hébergé s'inscrit à chaque connexion, depuis sa sortie partagée —, `/mcp` avant connexion, upload signé, relais) | adresse | 600 |
 | `echecs` | chaque 401/403 (et 404 sur `sensible`) en consomme un ; épuisé, l'adresse voit refuser ses jetons **inconnus** et ses requêtes `sensible` | adresse | 120 |
 
 - **Pourquoi un principal, et pas une adresse, pour le trafic authentifié** : un client

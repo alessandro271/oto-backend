@@ -146,8 +146,9 @@ def prime_identity() -> None:
 def current_client_id_from_token() -> Optional[str]:
     """`azp`/`client_id` du bearer JWT — l'application OAuth CLIENTE qui porte le
     grant (claude.ai, Claude Code, ChatGPT…), PAS l'utilisateur (`sub`). Axe de
-    télémétrie/UX seulement : la façade DCR laisse un client choisir son nom →
-    identification fiable, jamais une frontière d'autz. NULL en REST/dev local."""
+    télémétrie/UX seulement : sous CIMD, c'est l'URL du document de métadonnées que le
+    client publie lui-même → identification lisible, jamais une frontière d'autz. NULL
+    en REST/dev local."""
     try:
         from fastmcp.server.dependencies import get_access_token  # type: ignore
         token = get_access_token()

@@ -30,6 +30,11 @@ scénarios neufs : `prod-bac-a-sable-ko` (la pose échoue : rien ne démarre, l'
 couleur reste) et `prod-tag-sans-bac-a-sable` (un tag sans installateur : les gestes
 d'avant, à l'identique).
 
+Retrait de la façade d'enregistrement (inscription des clients MCP par CIMD, chez Logto) :
+la santé lit `/.well-known/oauth-protected-resource`, que le serveur monte sans
+interrupteur, au lieu de la métadonnée d'autorisation que seule la façade servait. Les
+références n'ont changé que de ce chemin, dans le `curl` local et dans `BG_PUBLIC`.
+
 La trace contient : chaque commande externe et ses arguments, dans l'ordre ; ce que
 le script écrit sur sa sortie ; son code de sortie ; et l'état final des fichiers
 qu'il écrit (amont Caddy, pointeur de couleur, coordonnée de version, unités posées).

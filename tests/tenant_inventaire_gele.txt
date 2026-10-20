@@ -56,16 +56,12 @@ colonne tenants.slug
 colonne tenants.tool_prefix
 declaration brand
 declaration dashboard_url
-declaration dcr_redirects
-declaration disabled
 declaration hosts
 declaration issuer
 declaration jwks_uri
 declaration link_paths
 declaration logto_mgmt
 declaration name
-declaration oauth_client_id
-declaration refresh_tokens
 declaration slug
 declaration tool_prefix
 domaine connector_availability.scope_type

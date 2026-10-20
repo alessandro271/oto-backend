@@ -695,8 +695,8 @@ def publish_project_mcp(sub: str, row: dict, *, access_mode: str,
     resource_registered = None
     if access_mode == "org":
         try:
-            from ..auth import facade as oauth_facade
-            oauth_facade.ensure_api_resource(
+            from ..auth import annuaire
+            annuaire.ensure_api_resource(
                 f"https://{slug}.mcp.{config.project_domain()}/mcp",
                 name=f"oto MCP — {row.get('name') or slug}")
             resource_registered = True

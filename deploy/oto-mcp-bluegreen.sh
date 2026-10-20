@@ -78,7 +78,7 @@ set -uo pipefail
 # de Caddy lui-même (`deploy-caddy.sh` d'infra).
 bg_caddy() { echo "${BG_CADDY:-$(command -v caddy-custom || command -v caddy)}"; }
 
-HEALTH_PATH="/.well-known/oauth-authorization-server"
+HEALTH_PATH="/.well-known/oauth-protected-resource"
 # Attente du trafic public après le reload de Caddy (bg_public_ok) : un essai toutes
 # les PUBLIC_PAS secondes, au plus PUBLIC_ESSAIS essais et jamais au-delà de
 # PUBLIC_ATTENTE_MAX secondes — puis échec net. Pourquoi : au premier déploiement sur un

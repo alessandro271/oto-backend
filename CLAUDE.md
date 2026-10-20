@@ -52,13 +52,12 @@ argument MCP** ; la table de routes est **figée** (`docs/architecture.md`, `doc
 
 ## Auth, rôles, coffre, REST & version servie
 
-JWT Logto **ES384**, discovery RFC 9728, façade DCR ; au-dessus des orgs, l'étage **tenant** (ADR 0052 : un partenaire
+JWT Logto **ES384**, discovery RFC 9728 qui annonce l'émetteur Logto, client MCP inscrit chez Logto par **CIMD** (Logto ≥ 1.44 exigé) ; au-dessus des orgs, l'étage **tenant** (ADR 0052 : un partenaire
 sert oto sous sa marque) · ⚠️ **on n'étend plus le tenant** : ni capacité, route, table,
 colonne, rang de cascade, marque ou réglage par tenant neufs — un besoin « par tenant » se traite par instance ou
-par org, retirer reste permis ; gelé par `tests/test_tenant_ne_s_etend_plus.py` (`docs/tenants.md` §Convention). ⚠️ Logto prod/preprod = **`auth.oto.ninja`**, pas `.zone` · ⚠️ **ce qui SIGNE n'est pas ce qu'on
-ANNONCE** : l'`issuer` (donc `LOGTO_ENDPOINT`, donc la vérification) est gravé sur `.ninja`, mais les endpoints
-publiés aux clients suivent `LOGTO_PUBLIC_ENDPOINT` — `auth.oto.cx` en prod, sinon un utilisateur autorisé sur
-`mcp.oto.cx` se connecte sur `.ninja` (`docs/auth-logto.md`) · ⚠️ **un env-liste s'ÉTEND, ne se
+par org, retirer reste permis ; gelé par `tests/test_tenant_ne_s_etend_plus.py` (`docs/tenants.md` §Convention). ⚠️ Logto prod/preprod = **`auth.oto.ninja`**, pas `.zone` · ⚠️ **on n'annonce que ce qui SIGNE** :
+le PRM porte l'`issuer` (`LOGTO_ENDPOINT` + `/oidc`), jamais un autre domaine du même Logto — l'`iss` de RFC 9207
+et la métadonnée RFC 8414 divergeraient sinon ; « openid » sans `resource` = jeton opaque, 401 (`docs/auth-logto.md`) · ⚠️ **un env-liste s'ÉTEND, ne se
 remplace jamais** (`MCP_AUDIENCE_ALT`, `OTO_MCP_CORS_ORIGINS`, `MAILER_FROM_DOMAINS`, SPF, redirect URIs), chaque env
 ayant la sienne (`docs/auth-logto.md`, `docs/tenants.md`).
 Paliers `member < admin < super_admin` ; clé résolue à chaque appel par le **walker unique** `access.walk_cascade`
@@ -78,8 +77,7 @@ bougent pas parce qu'il n'y en a aucun** (forfaits plats par org) · ⚠️ **pa
 pas à une org ; c'est l'admin de **tenant**, sur les comptes du sien (`docs/comptes-en-pause.md`).
 **Désactiver un tenant** = `oto_admin_tenant op=disable` (REST `POST /api/admin/tenants/{slug}/disablement`),
 **jamais** vider son `issuer` : l'état `tenants.disabled_at` est lu à chaque requête par la garde d'identité unique
-(`garde_identite.refus`, sub canonique, toutes portes : REST, MCP, upload signé ; la façade OAuth lit le registre,
-rechargé par le geste), et le geste révoque les jetons `oto_` de ses comptes et suspend ses orgs (origine marquée, `enable` ne lève que celles-là) · ⚠️ un ancien identifiant de NOTRE annuaire redirigé vers un compte du tenant est
+(`garde_identite.refus`, sub canonique, toutes portes : REST, MCP, upload signé), et le geste révoque les jetons `oto_` de ses comptes et suspend ses orgs (origine marquée, `enable` ne lève que celles-là) · ⚠️ un ancien identifiant de NOTRE annuaire redirigé vers un compte du tenant est
 coupé aussi — retirer l'émetteur ne le voyait pas (`docs/tenants.md` §Désactiver un tenant).
 `/api/*` sous le même `JWTVerifier` que `/mcp` ; `GET /openapi.json` **dérivé** du registre de capacités ; un jeton
 `oto_` peut naître **porté** · ⚠️ **CORS : aucune liste dans le code**, chaque instance déclare `OTO_MCP_CORS_ORIGINS`
@@ -233,7 +231,7 @@ avatars/logos · ⚠️ **PROD et PREPROD partagent la MÊME base** : ce qu'on �
 - `org-context.md` — session / maison / consultation ; jeton de délégation borné à l'org de son travail
 - `ownership.md` — `can_access`/`can_govern`, partages
 - `tool-visibility.md` — denylist, `PROTECTED_TOOLS`
-- `auth-logto.md` — Logto, DCR, jetons `oto_`
+- `auth-logto.md` — Logto, inscription CIMD, jetons `oto_`
 - `tenants.md` — l'identité au-dessus des orgs
 - `comptes-en-pause.md` — neutraliser un compte sans le détruire : un seul état, aucune
   résurrection automatique

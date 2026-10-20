@@ -202,7 +202,7 @@ uv pip install --python .venv/bin/python "pytest>=8.0" "pytest-asyncio>=0.24"
 # Le deploy (les deux) = SSH box dédiée via runner self-hosted : reset au ref +
 # **`uv sync --frozen`** (le jeu exact de `uv.lock` ; un ref sans verrou est refusé,
 # docs/verrou-dependances.md) + restart + **smoke HTTP**
-# (GET 200 /.well-known/oauth-authorization-server) + **rollback auto** si
+# (GET 200 /.well-known/oauth-protected-resource) + **rollback auto** si
 # install/restart/smoke échoue. La couleur démarre par deploy/lanceur_secrets.py, celui
 # du tag (secrets tirés par nom, #967 lot 5, depuis le 30/09/2026).
 #
@@ -329,11 +329,6 @@ sudo -E env $(cat /opt/oto-mcp/.env | xargs) \
 #                                               Le timer ne tourne qu'en PROD :
 #                                               une connexion posée en preprod
 #                                               n'est renouvelée qu'à l'usage.
-#   oauth-relay-callbacks [--apply]             ACTE, à blanc par défaut : constate, ou
-#                                               pose avec --apply, le rappel du relais
-#                                               d'autorisation sur les hosts DÉJÀ inscrits
-#                                               dans OTO_MCP_OAUTH_RELAY_HOSTS — avant de
-#                                               redémarrer (docs/auth-logto.md §relais)
 #   check-boot                                  rejoue l'ORDRE du boot en transaction
 #                                               ANNULÉE — un diagnostic sans effet,
 #                                               jouable contre la base servie
