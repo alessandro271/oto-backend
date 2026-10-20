@@ -587,6 +587,8 @@ def register(mcp: FastMCP) -> None:
         activate: Optional[bool] = None,
         segment_type: Optional[str] = None,
         opportunity_template: Optional[dict] = None,
+        persona_id: Optional[str] = None,
+        campaign_id: Optional[str] = None,
         sort_by: Optional[str] = None,
         sort_order: Optional[str] = None,
         received_from: Optional[str] = None,
@@ -613,7 +615,8 @@ def register(mcp: FastMCP) -> None:
         - `list`: `watch_type`, `status`, `page`, `limit`.
         - `create`: `name` + `watch_type` (`companyIsHiring`,
           `companyRaisedFunds`, `jobChange`, `newHire`, `technologyChange`,
-          `buyingIntent`…), then `filters`. Read `op="filters"` for that type
+          `buyingIntent`, `companyEmployeeVisitedMyWebsite`…), then `filters`.
+          Read `op="filters"` for that type
           FIRST: each type has its own REQUIRED filters (`companyIsHiring`
           needs `title`, `location` and `maxIdentificationsPerDay`), the values
           must be the canonical ones `op="filter_values"` returns — a free
@@ -623,7 +626,10 @@ def register(mcp: FastMCP) -> None:
           `create_opportunity`, `push_to_campaign`), `activate` (default False
           — the list is created as a draft), `segment_type`,
           `opportunity_template` (what `create_opportunity` builds: owner,
-          channel, priority).
+          channel, priority), and with `push_to_campaign` only:
+          `campaign_id` (the campaign fed) and `persona_id` (`pdp_…`, from
+          `lemlist_database op="personas"`: who to push when a signal names
+          a company and no person).
         - `update`: `watch_list_id` + `settings` (raw PATCH body).
           `delete`: `watch_list_id`.
         - `filters` (optional `watch_type`) / `filter_values` (`filter_id`,
@@ -634,6 +640,26 @@ def register(mcp: FastMCP) -> None:
         - `push_signals`: `watch_list_id` + `contact` (needs `linkedinUrl`) +
           `company` (needs `domain` and `name`), optional `custom_fields` —
           feed a signal detected OUTSIDE lemlist.
+
+        Website visitors (`companyEmployeeVisitedMyWebsite`), lemlist's own
+        visitor identification:
+        - Needs lemlist's tracking script on the site, installed from the
+          lemlist app (Signal agents ▸ Create ▸ Website visitors) — no API
+          call installs it.
+        - ⚠️ An ACTIVE list spends 20 lemlist credits per visit caught: set
+          the `maxIdentificationsPerDay` filter, and confirm before `activate`.
+        - Filters: `website`, `pagesTracked`, `minVisitDuration`,
+          `minPageViewed`, `visitLocation`, `internalTraffic`,
+          `excludedVisitorIps`, `maxIdentificationsPerDay`.
+        - Each signal carries `company` (name, domain, linkedinUrl, industry)
+          and `signalData` (`websiteVisited` = the page, `visitorWebsite`,
+          `visitorCountry`, `visitorDuration` in seconds); `contact` only when
+          lemlist could name the visitor (some US traffic).
+        - Read them on a schedule: `op="signals"`,
+          `watch_type="companyEmployeeVisitedMyWebsite"`, `received_from`.
+          Or on each visit: `lemlist_webhook op="add"` with
+          `event_type="signalRegistered"` (fires for EVERY watch list — check
+          the type).
         """
         client, is_platform = _client()
         if op == "list":
@@ -641,6 +667,12 @@ def register(mcp: FastMCP) -> None:
                 page=page, limit=limit, type=watch_type, status=status)}
         elif op == "create":
             _need(name=name, watch_type=watch_type)
+            if (persona_id is not None or campaign_id is not None) and \
+                    signal_processing_type != "push_to_campaign":
+                # The client refuses it too (ValueError), but that would reach the
+                # agent as an internal error: refused here, as a bad parameter.
+                raise _bad("`persona_id` and `campaign_id` need "
+                           "`signal_processing_type=\"push_to_campaign\"`")
             # Same precautions: `segment_type`, `signal_processing_type` and
             # `activate` have defaults on the client side because the API REQUIRES them
             # (see the gaps found live). Passing them as None would cause
@@ -651,6 +683,7 @@ def register(mcp: FastMCP) -> None:
                     ("signal_processing_type", signal_processing_type),
                     ("activate", activate), ("segment_type", segment_type),
                     ("signal_opportunity_template", opportunity_template),
+                    ("persona_id", persona_id), ("campaign_id", campaign_id),
                 ) if v is not None})
         elif op == "update":
             _need(watch_list_id=watch_list_id, settings=settings)

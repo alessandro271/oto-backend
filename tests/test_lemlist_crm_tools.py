@@ -362,6 +362,74 @@ def test_creer_une_watchlist_minimale_nenvoie_pas_de_None():
         assert kwargs == {"type": "companyRaisedFunds"}
 
 
+def test_une_watchlist_visiteurs_transmet_persona_et_campagne():
+    """Un visiteur du site arrive surtout comme ENTREPRISE : pour alimenter une
+    campagne, lemlist veut le persona et la campagne dès la création."""
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        _tool("lemlist_watchlist").fn(
+            op="create", name="Visiteurs",
+            watch_type="companyEmployeeVisitedMyWebsite",
+            signal_processing_type="push_to_campaign",
+            persona_id="pdp_1", campaign_id="cam_1")
+
+        kwargs = inst.create_watch_list.call_args.kwargs
+        assert kwargs["persona_id"] == "pdp_1"
+        assert kwargs["campaign_id"] == "cam_1"
+        assert "activate" not in kwargs
+
+
+def test_une_watchlist_visiteurs_atteint_le_vrai_client(monkeypatch):
+    """Le VRAI client d'oto-core, seul `requests` doublé : le test ci-dessus double
+    le client et ne voyait pas qu'un oto-core qui ignore `persona_id` lève
+    `TypeError` au premier vrai appel."""
+    import requests
+
+    sent = {}
+
+    class _Rep:
+        status_code = 200
+        ok = True
+        headers = {}
+        text = '{"_id": "wat_1"}'
+        content = text.encode()
+
+        def json(self):
+            return {"_id": "wat_1"}
+
+    def _request(method, url, **kw):
+        sent.update(method=method, url=url, json=kw.get("json"))
+        return _Rep()
+
+    monkeypatch.setattr(requests, "request", _request)
+    with patch("oto_mcp.access.resolve_api_key", return_value=("fake-key", False)):
+        _tool("lemlist_watchlist").fn(
+            op="create", name="Visiteurs",
+            watch_type="companyEmployeeVisitedMyWebsite",
+            signal_processing_type="push_to_campaign",
+            persona_id="pdp_1", campaign_id="cam_1")
+
+    assert sent["method"] == "POST"
+    assert sent["json"]["personaId"] == "pdp_1"
+    assert sent["json"]["campaignId"] == "cam_1"
+
+
+@pytest.mark.parametrize("extra", [{"persona_id": "pdp_1"}, {"campaign_id": "cam_1"}])
+def test_persona_ou_campagne_hors_push_to_campaign_refuse_au_bord(extra):
+    """Le client lève `ValueError`, qui arriverait à l'agent en erreur interne :
+    le tool refuse avant, en paramètre invalide, sans aller-retour."""
+    from oto_mcp.mcp_errors import McpError
+
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        with pytest.raises(McpError, match="push_to_campaign"):
+            _tool("lemlist_watchlist").fn(
+                op="create", name="Visiteurs",
+                watch_type="companyEmployeeVisitedMyWebsite", **extra)
+        client_cls.return_value.create_watch_list.assert_not_called()
+
+
 def test_exporter_les_leads_nenvoie_pas_state_None():
     """Même piège : `state=None` écraserait le défaut `all` du client, et
     l'export rendrait la liste vide qui se lit « pas de leads »."""
