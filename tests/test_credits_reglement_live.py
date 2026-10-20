@@ -17,6 +17,7 @@ import uuid
 import psycopg
 import pytest
 
+from _credits_horizon import mouvements_sous_l_horizon
 from oto_mcp.db import credits as db_credits
 
 _RESERVER, _REGLER, _LIBERER = 2, 3, 2
@@ -158,7 +159,7 @@ def test_le_reglement_se_lit_au_curseur(live):
     _reserver(p, 4, uid=uid)
     db_credits.regler(uid, montant=3, quantite=3,
                       meta={"from": "response", "exceeded": False})
-    lus = [m for m in db_credits.mouvements_apres(0, 0, 1000) if m["payer"] == p]
+    lus = mouvements_sous_l_horizon(lambda m: m["payer"] == p, 2)
     assert [(m["kind"], m["amount"], m["held"]) for m in lus] == [
         ("deposit", 10, 0), ("settle", -3, -4)]
     assert lus[1]["meta"] == {"from": "response", "exceeded": False, "scale_version": 1}

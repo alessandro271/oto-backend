@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import uuid
 
+from _credits_horizon import mouvements_sous_l_horizon
 from oto_mcp import boucles_de_fond
 from oto_mcp.access import credits
 from oto_mcp.db import credits as db_credits
@@ -45,8 +46,7 @@ def test_une_reservation_echue_se_regle_au_montant_reserve_une_fois(live):
     assert (_etat(echue), _etat(reglee), _etat(en_cours)) == ("expired", "settled", "open")
     s = db_credits.solde(payeur)
     assert (s["balance"], s["holds_open"]) == (50 - 4 - 10, 3)
-    mouvement = [m for m in db_credits.mouvements_apres(0, 0, 1000)
-                 if m["call_uid"] == echue]
+    mouvement = mouvements_sous_l_horizon(lambda m: m["call_uid"] == echue, 1)
     assert [(m["kind"], m["amount"], m["quantity"], m["meta"]["hold_expired"])
             for m in mouvement] == [("settle", -10, 2, True)]
 
