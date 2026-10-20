@@ -85,6 +85,24 @@ REST seule) ; le stockage est `db/credits.py`, sur les tables de `db/schema/cred
   `per_n` unités de la fonction. Réservation et règlement s'arrondissent au paquet
   supérieur.
 - **Un payeur** : `org:<id>` ou `user:<sub>`, qui doit exister.
+- **Les clés du barème que le cœur lit aujourd'hui**, `(connector, function, unit)`, en
+  texte exact. Une clé absente rend la fonction `credits_unpriced` :
+
+  | connector | function | unit | ce qu'une unité compte |
+  | --- | --- | --- | --- |
+  | `fullenrich` | `submit` | `work_emails` | un contact pour qui un e-mail pro est TROUVÉ |
+  | `fullenrich` | `submit` | `personal_emails` | un contact pour qui un e-mail perso est trouvé |
+  | `fullenrich` | `submit` | `phones` | un contact pour qui un téléphone est trouvé |
+  | `anthropic` | `messages:<modèle>` | `input_tokens` | un jeton d'entrée hors cache |
+  | `anthropic` | `messages:<modèle>` | `output_tokens` | un jeton de sortie |
+  | `anthropic` | `messages:<modèle>` | `cache_creation_input_tokens` | un jeton écrit au cache (5 min et 1 h ensemble) |
+  | `anthropic` | `messages:<modèle>` | `cache_read_input_tokens` | un jeton lu au cache |
+
+  `<modèle>` est l'identifiant SANS date de version du catalogue des agents hébergés
+  (`runner_models`) : aujourd'hui `claude-sonnet-5`, `claude-opus-5`, `claude-haiku-4-5`,
+  soit douze lignes `anthropic`. Un identifiant daté (`…-20261001`) se lit sans sa date :
+  un instantané garde le prix de son modèle, un modèle nouveau est un identifiant
+  nouveau, donc des lignes nouvelles.
 - **Le curseur** est opaque (`<xid>.<id>`). Un mouvement porte l'identifiant de la
   transaction qui l'a écrit (`xid8`), et la route ne sert que ce qui est sous l'horizon
   `pg_snapshot_xmin(pg_current_snapshot())`, trié par `(xid, id)` : une transaction
@@ -122,7 +140,11 @@ l'opérateur de l'instance. Un outil du périmètre dit quand il ENVOIE la requ�
 | le bord | règle la réussite, ou l'échec | `regler_appel`, `regler_echec` |
 
 - **Réserver** : `cost.worst_case` × la ligne du barème, au paquet `per_n` supérieur,
-  sous la version du barème qui fait foi. **Échéance** d'un appel synchrone :
+  sous la version du barème qui fait foi. Une fonction **tarifée par unité trouvée**
+  (asynchrone seulement : `credits.declarer(..., unites=…)`) réserve, unité par unité, son
+  pire cas lu dans les arguments de l'outil, et la somme des paquets ; sa réservation
+  note ses unités jointes par `+` (`work_emails+phones`). Qu'une ligne manque, et
+  l'appel est `credits_unpriced`. **Échéance** d'un appel synchrone :
   max(`OTO_BORNE_OUTIL_S`, `timeout_s` déclaré) + `OTO_CREDITS_SYNC_MARGIN_S` — la borne
   d'un appel d'outil (#1232) est lue quel que soit `OTO_DEBIT_MODE` : mesurée ou
   appliquée, c'est la durée qu'un appel est censé tenir. Borne désarmée (`0`) et sans
@@ -165,32 +187,42 @@ Un réglage illisible refuse le démarrage (`credits.verifier_reglages`). Un rè
 
 **Un travail asynchrone** : la soumission réussie laisse sa réservation ouverte, avec sa
 relève (`credit_holds.job` : la fonction de relève et l'identifiant du travail). L'outil
-de relève, quand le travail est fini, règle la réservation au réel
-(`credits.regler_releve`, le chemin `settle` déclaré, sous la ligne du barème de la
-réservation) ; quand le fournisseur dit qu'aucun résultat ne viendra, il la libère
-(`credits.liberer_releve`). Un outil dont le client refuse la requête AVANT de l'envoyer,
+de relève, quand le travail est fini, règle la réservation au réel, unité par unité
+(`credits_releve.regler_releve`, sous les lignes du barème de la réservation ; une unité
+lue que la réservation n'a pas prise n'est pas réglée : elle n'était pas demandée) ;
+quand le fournisseur dit qu'aucun résultat ne viendra, il la libère
+(`credits_releve.liberer_releve`). Un outil dont le client refuse la requête AVANT de l'envoyer,
 alors que l'envoi était annoncé, le dit (`credits.rien_envoye`) : l'échec libère.
 
 **Le périmètre aujourd'hui** :
 
 | outil | fonction | pire cas | réglé à |
 | --- | --- | --- | --- |
-| `fullenrich_enrich_linkedin` | `fullenrich.submit` | poids de FullEnrich par champ demandé (1 e-mail pro, 3 e-mail perso, 10 téléphone) × contacts | la relève `fullenrich_result` finie : `cost.credits` ; annulée : libérée |
+| `fullenrich_enrich_linkedin` | `fullenrich.submit`, par nature | par nature demandée (`enrich_fields`, ou le défaut du client) : tous les contacts | la relève `fullenrich_result` finie : par nature, les contacts où elle est TROUVÉE (`found_work_emails`, `found_personal_emails`, `found_phones`) ; annulée : libérée ; refusée net (400, 422) : libérée |
+
+FullEnrich se tarife par nature trouvée, pas aux crédits qu'il décompte lui-même (1, 3,
+10) : un prix par résultat n'en est pas un multiple. La bibliothèque des connecteurs
+garde sa déclaration (`fullenrich.submit`, en crédits FullEnrich, et sa relève) ; le
+budget n'en lit que la relève. Les crédits de FullEnrich restent tracés (`quantity`
+de la relève) pour le rapprochement.
 
 **Les appels au modèle d'un agent hébergé, sur une clé PARTAGÉE** (plateforme ou
 tenant, `capabilities/runner_jobs.py`) : pas un outil, le worker du runner appelle le
 modèle lui-même. Chaque appel est un tour (`runner:<travail>:<tentative>:<tour>`) :
 `op=reserve` réserve son `max_tokens` de sortie (`credits_tours.reserver_tour`), `op=meter`
 le règle à ses quatre comptes de jetons (`credits_tours.regler_tour`), la conclusion règle au
-montant réservé les tours jamais rapportés (`credits_tours.clore_les_tours`). Le barème porte
-quatre lignes `anthropic` / `messages`, une par unité : `input_tokens`,
-`output_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens` ; qu'une
-manque, et l'appel est `credits_unpriced` (au relevé du jour sous
-`unpriced:anthropic.messages`). L'entrée et le cache ne se réservent pas (aucun
+montant réservé les tours jamais rapportés (`credits_tours.clore_les_tours`). **Le modèle
+est dans la clé** : le barème porte, PAR MODÈLE, quatre lignes `anthropic` /
+`messages:<modèle>`, une par unité (`input_tokens`, `output_tokens`,
+`cache_creation_input_tokens`, `cache_read_input_tokens`). Le modèle est celui que nomme
+la charge du travail (`payload.model`, lu par le cœur : le worker n'a pas à le redire) ;
+le règlement suit la fonction de la réservation. Qu'une ligne manque, ou que le travail
+ne nomme aucun modèle, et l'appel est `credits_unpriced` (au relevé du jour sous
+`unpriced:anthropic.messages:<modèle>`). L'entrée et le cache ne se réservent pas (aucun
 comptage avant l'appel) : ils se règlent `exceeded: true`. Échéance :
 `OTO_CREDITS_HOLD_MAX_S` (le runner n'est pas sous la borne d'un appel d'outil MCP).
-Le rapprochement avec le relevé d'Anthropic se fait en jetons
-(`oto_admin_model_spend`).
+Le rapprochement avec le relevé d'Anthropic se fait en jetons, au total et par modèle
+(`oto_admin_model_spend`, `by_model`).
 
 **Les échéances** (`credits_echeances.py`, boucle de fond, `OTO_CREDITS_ECHEANCES_ENABLED`) :
 toutes les 60 s, les réservations ouvertes passées leur échéance se règlent au montant

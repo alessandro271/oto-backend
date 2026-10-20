@@ -315,21 +315,24 @@ def reservations_ouvertes(prefixe: str) -> list[str]:
             (prefixe, prefixe)).fetchall()]
 
 
-def jetons_du_jour(connector: str, function: str, key_mode: str, jour,
-                   unites: tuple[str, ...]) -> dict[str, int]:
-    """La somme, par unité, des jetons que les règlements de `connector.function` ont
-    portés (`meta.tokens`) pour un jour UTC, sous un rang de clé (`meta.key_mode`)."""
+def jetons_du_jour(connector: str, prefixe: str, key_mode: str, jour,
+                   unites: tuple[str, ...]) -> dict[str, dict[str, int]]:
+    """Par fonction de `connector` qui commence par `prefixe` (`messages:<modèle>`), la
+    somme, par unité, des jetons que ses règlements ont portés (`meta.tokens`) pour un
+    jour UTC, sous un rang de clé (`meta.key_mode`)."""
     from datetime import datetime, time, timedelta, timezone
     debut = datetime.combine(jour, time(0), tzinfo=timezone.utc)
     colonnes = ", ".join(f"COALESCE(SUM((meta->'tokens'->>'{u}')::bigint), 0) AS \"{u}\""
                          for u in unites)
     with _connect() as conn:
-        row = conn.execute(
-            f"SELECT {colonnes} FROM credit_movements WHERE kind = 'settle' "
-            "AND connector = %s AND function = %s AND meta->>'key_mode' = %s "
-            "AND created_at >= %s AND created_at < %s",
-            (connector, function, key_mode, debut, debut + timedelta(days=1))).fetchone()
-    return {u: int(row[u]) for u in unites}
+        rows = conn.execute(
+            f"SELECT function, {colonnes} FROM credit_movements WHERE kind = 'settle' "
+            "AND connector = %s AND left(function, length(%s)) = %s "
+            "AND meta->>'key_mode' = %s AND created_at >= %s AND created_at < %s "
+            "GROUP BY function",
+            (connector, prefixe, prefixe, key_mode, debut,
+             debut + timedelta(days=1))).fetchall()
+    return {r["function"]: {u: int(r[u]) for u in unites} for r in rows}
 
 
 # ── deux comptes d'une même personne ─────────────────────────────────────────

@@ -806,7 +806,8 @@ _REFUS_DU_TOUR = {budget.INSUFFISANT: 402, budget.SANS_BAREME: 422, budget.INDIS
 
 def _reserver_un_tour(ctx: ResolvedCtx, job_id: int, tour: int, max_tokens: int) -> dict:
     """UN appel au modèle, payé par une clé PARTAGÉE, réservé AVANT d'être envoyé : son
-    `max_tokens` de sortie, au barème (`access/credits_tours.reserver_tour`). Le worker
+    `max_tokens` de sortie, au barème du modèle que nomme sa charge
+    (`access/credits_tours.reserver_tour` : le worker n'a pas à le redire). Le worker
     s'ARRÊTE sur un refus : un travail n'appelle pas le modèle sur notre clé sans que
     le budget le couvre.
 
@@ -819,7 +820,7 @@ def _reserver_un_tour(ctx: ResolvedCtx, job_id: int, tour: int, max_tokens: int)
         return {"ok": True, "held": False}
     try:
         r = tours.reserver_tour(_tour(job_id, prise["attempts"], tour), prise["sub"],
-                                 prise["org_id"], max_tokens)
+                                 prise["org_id"], max_tokens, prise.get("model"))
     except tours.TourRefuse as e:
         raise AuthzDenied(_REFUS_DU_TOUR[e.code], e.code, str(e)) from None
     return {"ok": True, **r}
@@ -859,7 +860,8 @@ def _regler_un_tour(ctx: ResolvedCtx, job_id: int, tour: int, usage: dict) -> di
             {k: (v or 0) for k, v in postes.items()},
             {"runner_job_id": int(job_id), "attempt": prise["attempts"], "turn": int(tour),
              "model": usage.get("model"), "key_mode": est.get("mode"),
-             **({"cache_non_declare": True} if cache_non_declare else {})})
+             **({"cache_non_declare": True} if cache_non_declare else {})},
+            prise.get("model"))
     except Exception:
         enforce = budget.mode() == "enforce"
         logger.exception("travail %s : tour %s NON réglé (clé partagée `%s`) — %s", job_id,

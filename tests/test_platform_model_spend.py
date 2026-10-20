@@ -33,6 +33,10 @@ def _jetons(entree=0, sortie=0, ecriture=0, lu=0):
             "cache_creation_input_tokens": ecriture, "cache_read_input_tokens": lu}
 
 
+#: Les règlements d'un jour, par fonction du barème : `messages:<modèle>`.
+_S = "messages:claude-sonnet-5"
+
+
 def _rapprocher(usage, regle, plateforme=(("principale", SECRET),), cles=CLES):
     return PMS.rapprocher(JOUR, usage=usage, cles=cles, plateforme=list(plateforme),
                           regle=regle)
@@ -59,7 +63,7 @@ def test_un_indice_designe_un_secret_par_sa_tete_et_sa_queue(indice, attendu):
 # ── le rapprochement ─────────────────────────────────────────────────────────
 
 def test_un_jour_entierement_regle_n_a_pas_d_ecart():
-    out = _rapprocher([_res("apikey_plateforme", sortie=10)], _jetons(1_000_000, 10))
+    out = _rapprocher([_res("apikey_plateforme", sortie=10)], {_S: _jetons(1_000_000, 10)})
     assert out["anthropic_tokens"] == out["settled_tokens"] == _jetons(1_000_000, 10)
     assert out["gap_tokens"] == _jetons()
     assert out["platform_keys"] == [{"label": "principale", "api_key_id": "apikey_plateforme",
@@ -69,12 +73,12 @@ def test_un_jour_entierement_regle_n_a_pas_d_ecart():
 
 
 def test_ce_qu_aucun_reglement_ne_porte_est_l_ecart_unite_par_unite():
-    out = _rapprocher([_res("apikey_plateforme", lu=500)], _jetons(750_000))
+    out = _rapprocher([_res("apikey_plateforme", lu=500)], {_S: _jetons(750_000)})
     assert out["gap_tokens"] == _jetons(entree=250_000, lu=500)
 
 
 def test_un_reglement_au_dessus_d_anthropic_est_un_ecart_negatif():
-    out = _rapprocher([_res("apikey_plateforme")], _jetons(1_200_000))
+    out = _rapprocher([_res("apikey_plateforme")], {_S: _jetons(1_200_000)})
     assert out["gap_tokens"]["input_tokens"] == -200_000
 
 
@@ -82,7 +86,7 @@ def test_les_jetons_d_une_AUTRE_cle_sont_rendus_a_part():
     """Le trou de la clé d'environnement : un worker qui tourne sur la sienne n'est
     réglé nulle part. `null` = la Console."""
     out = _rapprocher([_res("apikey_plateforme"), _res("apikey_poste", entree=500_000),
-                       _res(None, entree=250_000)], _jetons(1_000_000))
+                       _res(None, entree=250_000)], {_S: _jetons(1_000_000)})
     assert out["gap_tokens"] == _jetons()
     assert out["other_keys"] == [
         {"api_key_id": "apikey_poste", "name": "poste de dev", "tokens": _jetons(500_000)},
@@ -105,7 +109,25 @@ def test_la_sortie_ne_porte_ni_secret_ni_indice():
 
 
 def test_la_sortie_tient_son_contrat():
-    PMS.ModelSpend(**_rapprocher([_res("apikey_plateforme"), _res(None)], _jetons(5)))
+    PMS.ModelSpend(**_rapprocher([_res("apikey_plateforme"), _res(None)], {_S: _jetons(5)}))
+
+
+def test_le_rapprochement_se_fait_aussi_par_modele_sans_la_date():
+    """Chaque modèle a ses lignes au barème : l'écart se lit par modèle, l'id daté
+    d'Anthropic réduit à l'id sans date que règle le budget. Une autre clé n'y entre
+    pas."""
+    usage = [_res("apikey_plateforme", model="claude-sonnet-5-20261001"),
+             _res("apikey_plateforme", model="claude-opus-5", entree=0, sortie=10),
+             _res("apikey_poste", model="claude-haiku-4-5")]
+    out = _rapprocher(usage, {_S: _jetons(1_000_000),
+                              "messages:claude-opus-5": _jetons(sortie=4)})
+    assert out["by_model"] == [
+        {"model": "claude-opus-5", "anthropic_tokens": _jetons(sortie=10),
+         "settled_tokens": _jetons(sortie=4), "gap_tokens": _jetons(sortie=6)},
+        {"model": "claude-sonnet-5", "anthropic_tokens": _jetons(1_000_000),
+         "settled_tokens": _jetons(1_000_000), "gap_tokens": _jetons()}]
+    assert out["settled_tokens"] == _jetons(1_000_000, 4)
+    assert out["gap_tokens"] == _jetons(sortie=6)
 
 
 # ── l'Admin API ──────────────────────────────────────────────────────────────
@@ -173,10 +195,11 @@ def test_la_capacite_rapproche_le_jour_demande(monkeypatch):
     vu = {}
     monkeypatch.setattr(PMS.db_credits, "jetons_du_jour",
                         lambda c, f, mode, jour, unites: vu.update(q=(c, f, mode, jour))
-                        or _jetons(1_000_000))
+                        or {_S: _jetons(1_000_000)})
     out = _appel(day=JOUR)
     assert out["gap_tokens"] == _jetons() and out["day"] == "2026-10-18"
-    assert vu["q"] == ("anthropic", "messages", "platform", JOUR), "le rang plateforme seul"
+    assert vu["q"] == ("anthropic", "messages:", "platform", JOUR), \
+        "toutes les fonctions `messages:<modèle>`, au rang plateforme seul"
 
 
 def test_une_admin_api_muette_est_un_refus_nomme(monkeypatch):

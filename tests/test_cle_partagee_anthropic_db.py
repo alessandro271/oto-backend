@@ -29,7 +29,8 @@ def travail(live, monkeypatch):
     from oto_mcp.db import credits as db_credits
     from oto_mcp.db._conn import _connect
     monkeypatch.setenv("OTO_CREDITS_MODE", "enforce")
-    db_credits.poser_bareme(1, [{"connector": "anthropic", "function": "messages",
+    db_credits.poser_bareme(1, [{"connector": "anthropic",
+                                 "function": "messages:claude-sonnet-5",
                                  "unit": u, "budget": b, "per_n": n} for u, b, n in LIGNES])
     credits.oublier()
     org = 42
@@ -40,7 +41,9 @@ def travail(live, monkeypatch):
         jid = c.execute(
             """INSERT INTO runner_jobs (org_id, kind, payload, status, claimed_by, attempts,
                                         sub, run_id)
-               VALUES (%s, 'start', '{"model_family": "anthropic"}', 'claimed', %s, 1,
+               VALUES (%s, 'start',
+                       '{"model": "claude-sonnet-5", "model_family": "anthropic"}',
+                       'claimed', %s, 1,
                        'alexis', %s) RETURNING id""", (org, PORTEUR, run_id)).fetchone()["id"]
     db_credits.verser(f"org:{org}", 1000, "banc", f"banc-{jid}")
     yield jid
@@ -107,7 +110,8 @@ def test_chaque_tour_se_reserve_puis_se_regle_une_fois(travail):
 
 def test_le_rapprochement_lit_les_jetons_regles_du_rang(travail):
     """Ce que `admin.model_spend` compare au relevé d'Anthropic : la somme des jetons des
-    règlements `anthropic.messages` du jour, sous le rang plateforme seul."""
+    règlements `anthropic.messages:<modèle>` du jour, par modèle, sous le rang
+    plateforme seul."""
     from datetime import datetime, timezone
 
     from oto_mcp import db
@@ -115,10 +119,12 @@ def test_le_rapprochement_lit_les_jetons_regles_du_rang(travail):
     from oto_mcp.db import credits as db_credits
     jid = travail
 
+    zero = {u: 0 for u in credits_tours.UNITES_DU_MODELE}
+
     def _lu(rang):
-        return db_credits.jetons_du_jour("anthropic", "messages", rang,
-                                         datetime.now(timezone.utc).date(),
-                                         credits_tours.UNITES_DU_MODELE)
+        return db_credits.jetons_du_jour(
+            "anthropic", "messages:", rang, datetime.now(timezone.utc).date(),
+            credits_tours.UNITES_DU_MODELE).get("messages:claude-sonnet-5", zero)
     avant = _lu("platform")
     db.estampiller_cle_partagee(jid, PORTEUR, "anthropic", "platform")
     _jobs("meter", jid, turn=0, result=TOUR)       # un tour jamais réservé se règle aussi
@@ -126,7 +132,7 @@ def test_le_rapprochement_lit_les_jetons_regles_du_rang(travail):
     assert {u: apres[u] - avant[u] for u in apres} == {
         "input_tokens": 100, "output_tokens": 50, "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 1000}
-    assert _lu("tenant") == {u: 0 for u in credits_tours.UNITES_DU_MODELE}
+    assert _lu("tenant") == zero
 
 
 def test_un_tour_au_dela_du_solde_est_refuse_en_application(travail):
@@ -137,6 +143,26 @@ def test_un_tour_au_dela_du_solde_est_refuse_en_application(travail):
     with pytest.raises(AuthzDenied) as e:
         _jobs("reserve", jid, turn=0, max_tokens=10 ** 6)
     assert (e.value.status, e.value.code) == (402, "insufficient_credits")
+
+
+def test_le_tour_porte_le_modele_du_travail_et_un_modele_sans_ligne_est_refuse(travail):
+    """La réservation est sous `messages:<modèle>` — le modèle de la charge du travail ;
+    un travail sur un modèle que le barème ne prix pas est `credits_unpriced`."""
+    from oto_mcp import db
+    from oto_mcp.capabilities._types import AuthzDenied
+    from oto_mcp.db._conn import _connect
+    jid = travail
+    db.estampiller_cle_partagee(jid, PORTEUR, "anthropic", "platform")
+    _jobs("reserve", jid, turn=0, max_tokens=100)
+    with _connect() as c:
+        fonction = c.execute("SELECT function FROM credit_holds WHERE call_uid = %s",
+                             (f"runner:{jid}:1:0",)).fetchone()["function"]
+        c.execute("UPDATE runner_jobs SET payload = jsonb_set(payload, '{model}', "
+                  "'\"claude-opus-5\"') WHERE id = %s", (jid,))
+    assert fonction == "messages:claude-sonnet-5"
+    with pytest.raises(AuthzDenied) as e:
+        _jobs("reserve", jid, turn=1, max_tokens=100)
+    assert (e.value.status, e.value.code) == (422, "credits_unpriced")
 
 
 def test_la_conclusion_regle_les_tours_jamais_rapportes(travail):

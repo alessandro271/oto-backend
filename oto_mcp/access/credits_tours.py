@@ -5,12 +5,15 @@ tenant pays (`capabilities/runner_jobs`). Each call is a TURN: reserved before i
 sent, at its `max_tokens` of output — the only bound known before the call; the input
 and the cache are not reserved (no token count before the call) and settle as
 `exceeded` — then settled at the four token counts the provider answered, under the
-scale lines of `anthropic.messages`, one per unit. The mode, the scale and the payer
-are the budget's (`access/credits`).
+scale lines of `anthropic.messages:<model>`, one per unit. The MODEL is in the scale
+key: models are not priced alike, and a turn is reserved at the price of the model its
+job names (`fonction_du_modele`). The mode, the scale and the payer are the budget's
+(`access/credits`).
 """
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Optional
 
@@ -20,7 +23,10 @@ from . import credits as budget
 
 logger = logging.getLogger(__name__)
 
-MODELE_CONNECTOR, MODELE_FUNCTION = "anthropic", "messages"
+MODELE_CONNECTOR = "anthropic"
+#: The scale function of a model call: `messages:<model>`.
+PREFIXE_DES_MODELES = "messages:"
+_DATE = re.compile(r"-\d{8}$")
 #: The units of a model call, under the provider's own usage names.
 UNITES_DU_MODELE = ("input_tokens", "output_tokens", "cache_creation_input_tokens",
                     "cache_read_input_tokens")
@@ -36,39 +42,62 @@ class TourRefuse(Exception):
         self.code, self.retryable, self.data = code, retryable, data
 
 
-def _lignes_du_modele(lignes: dict) -> Optional[dict]:
-    """`{unit: (budget, per_n)}` for the four units, or None if one is missing."""
-    out = {u: lignes.get((MODELE_CONNECTOR, MODELE_FUNCTION, u)) for u in UNITES_DU_MODELE}
+def cle_du_modele(model: str) -> str:
+    """The model as the scale names it: its id WITHOUT a snapshot date
+    (`claude-sonnet-5-20261001` → `claude-sonnet-5`). The catalogue a job names its model
+    from (`runner_models`) has no date already; a dated id the provider answers or
+    reports reduces to it. A snapshot keeps its model's price; a new model is a new id,
+    hence new lines in the scale."""
+    return _DATE.sub("", model.strip())
+
+
+def fonction_du_modele(model: Optional[str]) -> Optional[str]:
+    """`messages:<model>`, the scale function of a call to `model`; None without one."""
+    if not model or not model.strip():
+        return None
+    return f"{PREFIXE_DES_MODELES}{cle_du_modele(model)}"
+
+
+def _lignes_du_modele(lignes: dict, fonction: Optional[str]) -> Optional[dict]:
+    """`{unit: (budget, per_n)}` for the four units, or None if one is missing (or the
+    job names no model)."""
+    if fonction is None:
+        return None
+    out = {u: lignes.get((MODELE_CONNECTOR, fonction, u)) for u in UNITES_DU_MODELE}
     return None if any(v is None for v in out.values()) else out
 
 
-def reserver_tour(uid: str, sub: str, org: Optional[int], max_tokens: int) -> dict:
-    """Reserves one model call before it is sent: `max_tokens` of output, rounded up to
-    the scale's packages. Idempotent on `uid` (a worker that asks again gets the same
-    answer). Returns `{held, reserved}`; `enforce` raises `TourRefuse`, `report`
-    reserves anyway (forced) and logs what it would refuse, `off` holds nothing."""
+def reserver_tour(uid: str, sub: str, org: Optional[int], max_tokens: int,
+                  model: Optional[str]) -> dict:
+    """Reserves one model call to `model` before it is sent: `max_tokens` of output, at
+    that model's line, rounded up to the scale's packages. Idempotent on `uid` (a
+    worker that asks again gets the same answer). Returns `{held, reserved}`; `enforce`
+    raises `TourRefuse`, `report` reserves anyway (forced) and logs what it would refuse
+    — a model without its four lines is `credits_unpriced` —, `off` holds nothing."""
     m = budget.mode()
     if m == "off":
         return {"held": False, "reserved": 0}
     try:
         lu = budget._relire()
-        lignes = _lignes_du_modele(lu["lignes"])
+        fonction = fonction_du_modele(model)
+        lignes = _lignes_du_modele(lu["lignes"], fonction)
         if lignes is None:
+            nom = fonction or f"{PREFIXE_DES_MODELES}(no model)"
             limite_refus_top.noter_credits(
-                f"unpriced:{MODELE_CONNECTOR}.{MODELE_FUNCTION}",
+                f"unpriced:{MODELE_CONNECTOR}.{nom}",
                 budget.payeur(sub, org, lu["personnes"]), m, time.time())
-            logger.warning("crédits (%s) : %s.%s sans ses quatre lignes au barème v%s — %s",
-                           m, MODELE_CONNECTOR, MODELE_FUNCTION, lu["version"],
+            logger.warning("crédits (%s) : %s.%s sans ses quatre lignes au barème v%s "
+                           "— %s", m, MODELE_CONNECTOR, nom, lu["version"],
                            "refusé" if m == "enforce" else "servi sans réservation")
             if m == "enforce":
-                raise TourRefuse(budget.SANS_BAREME, "model calls have no price in this "
-                                 "instance's credit scale yet: the shared key cannot be "
-                                 "used.", False)
+                raise TourRefuse(budget.SANS_BAREME, f"calls to the model `{model}` have "
+                                 "no price in this instance's credit scale yet: the "
+                                 "shared key cannot be used for it.", False, model=model)
             return {"held": False, "reserved": 0}
         reserve = budget._paquets(max_tokens, *lignes[_UNITE_RESERVEE])
         qui = budget.payeur(sub, org, lu["personnes"])
         r = db_credits.reserver(
-            call_uid=uid, payer=qui, connector=MODELE_CONNECTOR, function=MODELE_FUNCTION,
+            call_uid=uid, payer=qui, connector=MODELE_CONNECTOR, function=fonction,
             unit=_UNITE_RESERVEE, scale_version=lu["version"], quantity=max_tokens,
             reserved=reserve, deadline_s=budget.hold_max_s(), forcer=(m == "report"))
     except TourRefuse:
@@ -93,12 +122,13 @@ def reserver_tour(uid: str, sub: str, org: Optional[int], max_tokens: int) -> di
 
 
 def regler_tour(uid: str, sub: str, org: Optional[int], tokens: dict,
-                meta: dict) -> Optional[dict]:
-    """Settles one model call at the four token counts the provider answered. A call
-    that was not reserved (a worker that skipped the reservation) is reserved now,
-    forced: it has been consumed. Returns `{settled, amount, exceeded}`, `settled:
-    False` when the turn was already settled (a report replayed), or None when the
-    scale has no price for model calls (nothing is written, it is logged), or in `off`
+                meta: dict, model: Optional[str]) -> Optional[dict]:
+    """Settles one model call at the four token counts the provider answered, under the
+    lines of the model it was reserved for (the hold's function), or of `model` for a
+    call that was not reserved (a worker that skipped the reservation): that one is
+    reserved now, forced — it has been consumed. Returns `{settled, amount, exceeded}`,
+    `settled: False` when the turn was already settled (a report replayed), or None when
+    the scale has no price for the model (nothing is written, it is logged), or in `off`
     for a turn it never reserved (nothing is written: `off` only closes what is open).
     Raises when the ledger cannot be written (the caller decides, by mode)."""
     hold = db_credits.reservation(uid)
@@ -109,19 +139,20 @@ def regler_tour(uid: str, sub: str, org: Optional[int], tokens: dict,
     lu = budget._relire()
     # The lines of the version the turn was reserved under, not today's.
     version = lu["version"] if hold is None else int(hold["scale_version"])
+    fonction = fonction_du_modele(model) if hold is None else hold["function"]
     hold_lignes = _lignes_du_modele(lu["lignes"] if version == lu["version"] else {
         (l["connector"], l["function"], l["unit"]): (int(l["budget"]), int(l["per_n"]))
-        for l in db_credits.lignes_du_bareme(version)})
+        for l in db_credits.lignes_du_bareme(version)}, fonction)
     if hold_lignes is None:
         logger.warning("crédits : tour %s non réglé — %s.%s sans ses quatre lignes au "
-                       "barème v%s", uid, MODELE_CONNECTOR, MODELE_FUNCTION, version)
+                       "barème v%s", uid, MODELE_CONNECTOR, fonction, version)
         return None
     if hold is None:
         sortie = int(tokens[_UNITE_RESERVEE])
         hold = {"reserved": budget._paquets(sortie, *hold_lignes[_UNITE_RESERVEE])}
         db_credits.reserver(
             call_uid=uid, payer=budget.payeur(sub, org, lu["personnes"]),
-            connector=MODELE_CONNECTOR, function=MODELE_FUNCTION, unit=_UNITE_RESERVEE,
+            connector=MODELE_CONNECTOR, function=fonction, unit=_UNITE_RESERVEE,
             scale_version=version, quantity=sortie, reserved=hold["reserved"],
             deadline_s=budget.hold_max_s(), forcer=True)
     montant = sum(budget._paquets(int(tokens[u]), *hold_lignes[u])

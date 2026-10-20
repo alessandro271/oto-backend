@@ -43,11 +43,11 @@ def _compte_approvisionne(monkeypatch):
 @pytest.fixture(autouse=True)
 def releves(monkeypatch):
     """Le budget d'unités doublé : ce que la relève règle ou libère, sans base."""
-    from oto_mcp.access import credits as budget
+    from oto_mcp.access import credits_releve
     vus = {"regler": [], "liberer": []}
-    monkeypatch.setattr(budget, "regler_releve",
-                        lambda f, a, r: vus["regler"].append((f, a, r)) or True)
-    monkeypatch.setattr(budget, "liberer_releve",
+    monkeypatch.setattr(credits_releve, "regler_releve",
+                        lambda f, a, q: vus["regler"].append((f, a, q)) or True)
+    monkeypatch.setattr(credits_releve, "liberer_releve",
                         lambda f, a: vus["liberer"].append((f, a)) or True)
     return vus
 
@@ -326,20 +326,33 @@ def test_une_heure_de_soumission_illisible_est_refusee():
 
 # ── le budget d'unités (`access/credits.py`) ─────────────────────────────────
 
-def test_la_soumission_est_au_perimetre_avec_son_pire_cas():
-    """Les poids de FullEnrich par champ demandé (`fullenrich.submit` dans la
-    bibliothèque des connecteurs), fois les contacts ; les champs par défaut du client
-    quand l'agent n'en demande pas."""
-    from oto.connectors import cost
+def test_la_soumission_est_au_perimetre_avec_son_pire_cas_par_nature():
+    """Tarifée PAR NATURE TROUVÉE (unités `work_emails`, `personal_emails`, `phones`) :
+    le pire cas, c'est chaque contact trouvé sur chaque nature demandée — les champs
+    par défaut du client quand l'agent n'en demande pas. Pas les poids de FullEnrich."""
+    from oto.tools.fullenrich.client import DEFAULT_ENRICH_FIELDS
     from oto_mcp.access import credits as budget
     _tool("fullenrich_enrich_linkedin")
     c = budget.perimetre()["fullenrich_enrich_linkedin"]
     assert (c.connector, c.function) == ("fullenrich", "submit")
-    pire = cost.worst_case(c.connector, c.function, c.arguments({"contacts": _contacts(2)}))
-    assert pire == {"quantity": 22, "unit": "credits"}, "2 × (1 e-mail pro + 10 téléphone)"
-    pire = cost.worst_case(c.connector, c.function, c.arguments(
-        {"contacts": _contacts(3), "enrich_fields": ["contact.personal_emails"]}))
-    assert pire["quantity"] == 9
+    defaut = {f.split(".")[1]: 2 for f in DEFAULT_ENRICH_FIELDS}
+    assert c.unites({"contacts": _contacts(2)}) == defaut
+    assert c.unites({"contacts": _contacts(3), "enrich_fields": [
+        "contact.phones", "contact.personal_emails", "contact.work_emails"]}) == {
+        "work_emails": 3, "personal_emails": 3, "phones": 3}
+    seul = c.unites({"contacts": _contacts(1), "enrich_fields": ["contact.personal_emails"]})
+    assert seul == {"personal_emails": 1}
+
+
+@pytest.mark.parametrize("args", [{"contacts": []},
+                                  {"contacts": [{"first_name": "a"}],
+                                   "enrich_fields": ["contact.fax"]}])
+def test_un_pire_cas_illisible_est_une_erreur_de_cout(args):
+    from oto.connectors.cost import CostError
+    from oto_mcp.access import credits as budget
+    _tool("fullenrich_enrich_linkedin")
+    with pytest.raises(CostError):
+        budget.perimetre()["fullenrich_enrich_linkedin"].unites(args)
 
 
 def test_la_soumission_dit_son_envoi_et_sa_reponse(monkeypatch):
@@ -369,18 +382,22 @@ def test_la_soumission_dit_son_envoi_et_sa_reponse(monkeypatch):
 
 
 @pytest.mark.parametrize("is_platform", [True, False])
-def test_la_releve_finie_regle_la_reservation_a_ce_que_fullenrich_a_deduit(releves,
-                                                                           is_platform):
-    _result({"status": "FINISHED", "profiles": [], "cost_credits": 14},
+def test_la_releve_finie_regle_par_nature_ce_qui_est_trouve(releves, is_platform):
+    """Les contacts où chaque nature est TROUVÉE (un contact à deux e-mails compte une
+    fois, un contact vide nulle part) — pas les crédits que FullEnrich a décomptés."""
+    profils = [_profile(work_emails=["a@x", "b@x"], phones=["+33"]),
+               _profile(personal_emails=["c@y"]), _profile()]
+    _result({"status": "FINISHED", "profiles": profils, "cost_credits": 14},
             is_platform=is_platform)
     attendu = [("fullenrich.fetch", {"enrichment_id": "enr_789"},
-                [{"cost": {"credits": 14}}])]
+                {"work_emails": 1, "personal_emails": 1, "phones": 1})]
     assert releves["regler"] == (attendu if is_platform else [])
 
 
-def test_une_releve_sans_cout_declare_regle_au_montant_reserve(releves):
+def test_une_releve_sans_rien_trouve_regle_zero_par_nature(releves):
     _result({"status": "FINISHED", "profiles": [], "cost_credits": None})
-    assert releves["regler"] == [("fullenrich.fetch", {"enrichment_id": "enr_789"}, [])]
+    assert releves["regler"] == [("fullenrich.fetch", {"enrichment_id": "enr_789"},
+                                  {"work_emails": 0, "personal_emails": 0, "phones": 0})]
 
 
 def test_un_travail_annule_libere_sa_reservation_les_autres_attendent(releves):

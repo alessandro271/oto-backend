@@ -118,9 +118,11 @@ def test_la_reservation_coute_deux_ecritures_sur_le_chemin_d_un_appel(live, monk
     monkeypatch.setenv("OTO_CREDITS_MODE", "report")
     monkeypatch.setattr(budget, "_PERIMETRE", {})
     budget.declarer("fullenrich_enrich_linkedin", "fullenrich", "submit",
-                    fullenrich._arguments_de_soumission)
+                    unites=fullenrich._pire_par_nature)
     db_credits.poser_bareme(1, [{"connector": "fullenrich", "function": "submit",
-                                 "unit": "credits", "budget": 1, "per_n": 1}])
+                                 "unit": u, "budget": b, "per_n": 1}
+                                for u, b in (("work_emails", 5), ("personal_emails", 20),
+                                             ("phones", 60))])
     budget.oublier()
     contacts = {"contacts": [{"first_name": "a", "last_name": "b", "domain": "x.fr"}]}
 
@@ -138,5 +140,6 @@ def test_la_reservation_coute_deux_ecritures_sur_le_chemin_d_un_appel(live, monk
     assert _compter(lambda: _reserver("serper_search")) == 0
     assert _compter(lambda: _reserver("fullenrich_enrich_linkedin")) == _RESERVATION
     releve = _reserver("fullenrich_enrich_linkedin")
-    assert releve[budget.CLE]["hold"]["reserved"] == 11, "1 contact : e-mail pro + téléphone"
+    assert releve[budget.CLE]["hold"]["reserved"] == 65, \
+        "1 contact, par nature : e-mail pro (5) + téléphone (60)"
     budget.oublier()

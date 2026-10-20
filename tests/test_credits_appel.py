@@ -33,7 +33,11 @@ def stock(monkeypatch):
         {"connector": "fullenrich", "function": "submit", "unit": "credits", "budget": 2,
          "per_n": 1},
         {"connector": "pennylane", "function": "get_quote", "unit": "requests",
-         "budget": 5, "per_n": 10}],
+         "budget": 5, "per_n": 10}] + [
+        # La même fonction, tarifée PAR UNITÉ trouvée (`outil_nature`).
+        {"connector": "fullenrich", "function": "submit", "unit": u, "budget": b,
+         "per_n": 1} for u, b in (("work_emails", 5), ("personal_emails", 20),
+                                  ("phones", 60))],
         "personnes": set(), "disponible": 1000, "panne": False}
 
     def reserver(**k):
@@ -65,7 +69,14 @@ def perimetre(monkeypatch):
     monkeypatch.setattr(credits, "_PERIMETRE", {})
     credits.declarer("outil_async", *ASYNC)
     credits.declarer("outil_sync", *SYNC)
+    credits.declarer("outil_nature", *ASYNC, unites=_par_nature)
     return credits._PERIMETRE
+
+
+def _par_nature(args: dict) -> dict:
+    """Le pire cas par unité d'un outil tarifé par nature trouvée : chaque contact, sur
+    chaque nature demandée."""
+    return {u: len(args["contacts"]) for u in args["natures"]}
 
 
 @pytest.fixture
@@ -555,3 +566,84 @@ def test_en_report_aucun_appel_n_est_jamais_refuse(monkeypatch, stock, perimetre
     if cas in ("solde_nul", "solde_negatif"):
         # La réservation est posée quand même : le registre reste complet.
         assert [r["forcer"] for r in ecrit["reserver"]] == [True, True]
+
+
+# ── tarifé PAR UNITÉ trouvée ─────────────────────────────────────────────────
+
+def test_seul_un_asynchrone_se_tarife_par_unite(monkeypatch):
+    monkeypatch.setattr(credits, "_PERIMETRE", {})
+    with pytest.raises(ValueError, match="not asynchronous"):
+        credits.declarer("x", *SYNC, unites=_par_nature)
+
+
+def test_par_unite_la_reservation_somme_les_paquets_de_chaque_unite(stock, perimetre,
+                                                                     appel):
+    """Deux contacts, deux natures : 2 × 5 (e-mail pro) + 2 × 60 (téléphone). La
+    réservation note ses unités jointes par `+`."""
+    _, ecrit = stock
+    _ouvrir("outil_nature", {"contacts": [{}, {}], "natures": ["work_emails", "phones"]})
+    credits.reserver("u1", 7)
+    r = ecrit["reserver"][-1]
+    assert (r["unit"], r["quantity"], r["reserved"]) == ("work_emails+phones", 4, 130)
+    assert appel[credits.CLE]["hold"]["reserved"] == 130
+
+
+@pytest.mark.parametrize("mode, refuse", [("enforce", True), ("report", False)])
+def test_par_unite_une_ligne_qui_manque_est_sans_bareme(monkeypatch, stock, perimetre,
+                                                        appel, mode, refuse):
+    etat, ecrit = stock
+    etat["lignes"] = [l for l in etat["lignes"] if l["unit"] != "phones"]
+    monkeypatch.setenv("OTO_CREDITS_MODE", mode)
+    _ouvrir("outil_nature", {"contacts": [{}], "natures": ["work_emails", "phones"]})
+    if refuse:
+        with pytest.raises(McpError) as e:
+            credits.reserver("u1", 7)
+        assert _code(e.value) == "credits_unpriced"
+    else:
+        credits.reserver("u1", 7)      # `report` : servi, au relevé du jour
+    assert ecrit["reserver"] == []
+
+
+@pytest.fixture
+def releve_attendue(stock, monkeypatch):
+    """Une réservation par unité qui attend sa relève (e-mail pro + téléphone)."""
+    hold = {"call_uid": "u-42", "connector": "fullenrich", "function": "submit",
+            "unit": "work_emails+phones", "scale_version": 3, "quantity": 4,
+            "reserved": 130}
+    monkeypatch.setattr(db_credits, "reservation_de_la_releve", lambda f, a: hold)
+    return stock
+
+
+def test_la_releve_regle_chaque_unite_reservee_a_ce_qui_est_trouve(releve_attendue):
+    """Une unité lue que la réservation n'a pas prise (`personal_emails`) n'est pas
+    réglée : elle n'était pas demandée."""
+    from oto_mcp.access import credits_releve
+    _, ecrit = releve_attendue
+    assert credits_releve.regler_releve("fullenrich.fetch", {"enrichment_id": "e"}, {
+        "work_emails": 1, "personal_emails": 5, "phones": 2}) is True
+    uid, k = ecrit["regler"][-1]
+    assert (uid, k["montant"], k["quantite"]) == ("u-42", 1 * 5 + 2 * 60, 3)
+    assert k["meta"] == {"from": "response", "exceeded": False,
+                         "units": {"work_emails": 1, "phones": 2}}
+
+
+def test_une_releve_sans_chiffre_se_regle_au_montant_reserve(releve_attendue):
+    from oto_mcp.access import credits_releve
+    _, ecrit = releve_attendue
+    assert credits_releve.regler_releve("fullenrich.fetch", {"enrichment_id": "e"}, None)
+    assert ecrit["regler"][-1][1] == {"montant": None, "quantite": None,
+                                      "meta": {"from": "unreadable", "exceeded": False}}
+
+
+@pytest.mark.parametrize("panne", ["ligne_manquante", "quantite_illisible"])
+def test_une_releve_illisible_laisse_la_reservation_a_son_echeance(releve_attendue, panne):
+    from oto_mcp.access import credits_releve
+    etat, ecrit = releve_attendue
+    quantites = {"work_emails": 1, "phones": 2}
+    if panne == "ligne_manquante":
+        etat["lignes"] = [l for l in etat["lignes"] if l["unit"] != "phones"]
+    else:
+        quantites["phones"] = -1
+    assert credits_releve.regler_releve("fullenrich.fetch", {"enrichment_id": "e"},
+                                        quantites) is False
+    assert ecrit["regler"] == []

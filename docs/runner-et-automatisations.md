@@ -1023,17 +1023,19 @@ l'org à la réservation suivante, ses agents compris.
 - **Le budget, À CHAQUE APPEL au modèle** : seul un worker qui le PROMET au claim
   (`meters_usage`, oto-runner `OTO_RUNNER_METERS_USAGE=1`) reçoit une clé partagée ; le
   travail lui revient avec `meter_usage: true`. Chaque appel est un TOUR, identifié au
-  budget d'unités par `runner:<travail>:<tentative>:<tour>` (`access/credits.py`) :
+  budget d'unités par `runner:<travail>:<tentative>:<tour>` (`access/credits_tours.py`),
+  au prix du MODÈLE que nomme la charge du travail (`payload.model`, lu par le cœur) :
   - **avant l'appel**, `op=reserve` (`turn`, `max_tokens`) réserve son `max_tokens` de
-    SORTIE sous la ligne `anthropic.messages` / `output_tokens` du barème — la seule
-    borne connue avant l'appel ; l'entrée et le cache ne se réservent pas (pas de
-    comptage préalable). Refus en `enforce` : `insufficient_credits` (402),
-    `credits_unpriced` (422, une des quatre lignes manque), `spend_ledger_unavailable`
+    SORTIE sous la ligne `anthropic` / `messages:<modèle>` / `output_tokens` du barème
+    (le modèle sans sa date de version) — la seule borne connue avant l'appel ; l'entrée
+    et le cache ne se réservent pas (pas de comptage préalable). Refus en `enforce` :
+    `insufficient_credits` (402), `credits_unpriced` (422, une des quatre lignes du
+    modèle manque, ou le travail ne nomme aucun modèle), `spend_ledger_unavailable`
     (503, rejouable) ; le worker s'ARRÊTE. `report` réserve quand même et le journalise ;
   - **après l'appel, avant d'en exécuter les outils**, `op=meter` (`turn`, l'usage du
     tour) le règle à ses quatre comptes de jetons (`input_tokens`, `output_tokens`,
     `cache_creation_input_tokens`, `cache_read_input_tokens`), chacun sous sa ligne du
-    barème de la version réservée ; au-delà de la réservation (l'entrée, le cache) :
+    barème de la version et du modèle réservés ; au-delà de la réservation (l'entrée, le cache) :
     `exceeded: true`. Le mouvement porte `meta.tokens`, `model`, `runner_job_id`,
     `attempt`, `turn` et `key_mode` (le rang). **Refusé** (422 `usage_unmeasured`) si
     l'entrée ou la sortie manque : le worker s'arrête. **Idempotent** : un tour déjà
@@ -1060,8 +1062,9 @@ l'org à la réservation suivante, ses agents compris.
 - **Le contrôle qui ne fait pas confiance à la mesure** : `oto_admin_model_spend`
   (`GET /api/admin/platform-keys/model-spend?day=`, admin plateforme) lit le relevé
   d'usage d'Anthropic pour un jour UTC (clé d'admin `OTO_ANTHROPIC_ADMIN_KEY`) et le
-  rapproche, EN JETONS et unité par unité, des règlements `anthropic.messages` du rang
-  plateforme (`meta.tokens`). Il rend l'écart par unité et les jetons de toute AUTRE clé
+  rapproche, EN JETONS et unité par unité, des règlements `anthropic.messages:<modèle>`
+  du rang plateforme (`meta.tokens`). Il rend l'écart par unité, au total et par modèle
+  (`by_model`, le modèle sans sa date des deux côtés), et les jetons de toute AUTRE clé
   de l'organisation Anthropic (un worker sur sa clé d'environnement, la Console) ;
   aucun tarif. La clé de plateforme est reconnue par son
   `partial_key_hint`, sans réglage ; une ligne qu'aucun indice ne désigne, ou que deux

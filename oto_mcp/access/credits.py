@@ -26,6 +26,12 @@ the instance pays for); a call on the customer's own key is the customer's busin
 A settlement above the worst case is settled as is, with `exceeded: true`: the balance
 may go negative there, never at reservation.
 
+**Priced per unit**: an asynchronous function the commerce prices by what the job FOUND,
+kind by kind, rather than at the library's single unit, is declared with `unites` — its
+worst case per unit, read from the tool's arguments. The hold reserves the sum over the
+units' scale lines (its `unit` lists them, joined by `+`), and the collection settles
+each unit at what was found (`credits_releve.regler_releve`).
+
 **Modes** (`OTO_CREDITS_MODE`): `report` (DEFAULT) runs the whole ledger and refuses
 nothing — it logs what `enforce` would refuse; `enforce` refuses with a named code;
 `off` reserves nothing. Named refusals: `insufficient_credits`, `credits_unpriced`
@@ -149,6 +155,8 @@ class Correspondance:
     connector: str
     function: str
     arguments: Callable[[dict], dict]
+    #: Priced per unit: the worst case `{unit: quantity}` from the tool's arguments.
+    unites: Optional[Callable[[dict], dict]] = None
 
 
 _PERIMETRE: dict[str, Correspondance] = {}
@@ -160,18 +168,24 @@ def _declare(connector: str, function: str) -> dict:
 
 
 def declarer(outil: str, connector: str, function: str,
-             arguments: Callable[[dict], dict] = dict) -> None:
+             arguments: Callable[[dict], dict] = dict,
+             unites: Optional[Callable[[dict], dict]] = None) -> None:
     """Puts `outil` in the perimeter, at its registration. Raises if the connectors
     library declares no cost for `connector.function`: a tool cannot pay a cost
-    nobody declared."""
-    if "cost" not in _declare(connector, function):
+    nobody declared. `unites`: priced per unit, which only an asynchronous function
+    can be (its collection reads what was found)."""
+    declare = _declare(connector, function)
+    if "cost" not in declare:
         raise ValueError(f"{outil}: {connector}.{function} has no declared cost in "
                          "oto.connectors.declared")
+    if unites is not None and "async" not in declare:
+        raise ValueError(f"{outil}: {connector}.{function} is not asynchronous, it "
+                         "cannot be priced per unit found")
     deja = _PERIMETRE.get(outil)
     if deja is not None and (deja.connector, deja.function) != (connector, function):
         raise ValueError(f"{outil} is already declared as {deja.connector}."
                          f"{deja.function}")
-    _PERIMETRE[outil] = Correspondance(outil, connector, function, arguments)
+    _PERIMETRE[outil] = Correspondance(outil, connector, function, arguments, unites)
 
 
 def perimetre() -> dict[str, Correspondance]:
@@ -277,7 +291,13 @@ def reserver(sub: str, org: Optional[int]) -> None:
     c = _PERIMETRE[appel["outil"]]
     from oto.connectors import cost
     try:
-        pire = cost.worst_case(c.connector, c.function, c.arguments(appel["args"]))
+        if c.unites is not None:
+            pire = dict(c.unites(appel["args"]))
+        else:
+            lib = cost.worst_case(c.connector, c.function, c.arguments(appel["args"]))
+            pire = {lib["unit"]: lib["quantity"]}
+        if not pire:
+            raise cost.CostError(f"{c.outil}: no unit to reserve")
     except cost.CostError:
         # The tool's arguments do not read as the function's: a perimeter declaration
         # to fix, never a refusal the caller could act on.
@@ -288,13 +308,14 @@ def reserver(sub: str, org: Optional[int]) -> None:
         return
     try:
         lu = _relire()
-        ligne = lu["lignes"].get((c.connector, c.function, pire["unit"]))
-        if ligne is None:
+        lignes = {u: lu["lignes"].get((c.connector, c.function, u)) for u in pire}
+        manquent = [u for u, ligne in lignes.items() if ligne is None]
+        if manquent:
             appel["refus"] = SANS_BAREME
             limite_refus_top.noter_credits(f"unpriced:{c.connector}.{c.function}",
                                            payeur(sub, org, lu["personnes"]), m, time.time())
             logger.warning("crédits (%s) : %s.%s (%s) sans ligne au barème v%s — %s",
-                           m, c.connector, c.function, pire["unit"], lu["version"],
+                           m, c.connector, c.function, ", ".join(manquent), lu["version"],
                            "refusé" if m == "enforce" else "servi sans réservation")
             if m == "enforce":
                 raise _refus(SANS_BAREME, f"`{c.outil}` has no price in this instance's "
@@ -302,13 +323,13 @@ def reserver(sub: str, org: Optional[int]) -> None:
                              "Use your own key, or ask the instance's operator.", False,
                              tool=c.outil)
             return
-        budget, per_n = ligne
-        reserve = _paquets(pire["quantity"], budget, per_n)
+        reserve = sum(_paquets(q, *lignes[u]) for u, q in pire.items())
+        unite, quantite = "+".join(pire), sum(pire.values())
         qui = payeur(sub, org, lu["personnes"])
         delai = _echeance(_declare(c.connector, c.function), appel)
         r = db_credits.reserver(
             call_uid=appel["uid"], payer=qui, connector=c.connector, function=c.function,
-            unit=pire["unit"], scale_version=lu["version"], quantity=pire["quantity"],
+            unit=unite, scale_version=lu["version"], quantity=quantite,
             reserved=reserve, deadline_s=delai, forcer=(m == "report"))
     except McpError:
         raise
@@ -332,8 +353,8 @@ def reserver(sub: str, org: Optional[int]) -> None:
                          "top up, or use your own key.", False,
                          tool=c.outil, needed=reserve, available=max(0, r.disponible))
     appel["hold"] = {"payer": qui, "connector": c.connector, "function": c.function,
-                     "unit": pire["unit"], "quantity": pire["quantity"],
-                     "reserved": reserve, "budget": budget, "per_n": per_n}
+                     "unit": unite, "quantity": quantite, "reserved": reserve,
+                     "lignes": lignes}
 
 
 # ── settle (the edges) ───────────────────────────────────────────────────────
@@ -396,7 +417,8 @@ def solder_echec(releve: Optional[dict], exc: BaseException) -> None:
 
 
 def _regler(uid: str, hold: dict, quantite, meta: dict) -> None:
-    montant = _paquets(quantite, hold["budget"], hold["per_n"])
+    """A synchronous call, at its single unit (only an asynchronous one is per unit)."""
+    montant = _paquets(quantite, *hold["lignes"][hold["unit"]])
     if meta.get("exceeded"):
         logger.warning("crédits : %s.%s a consommé %s %s au-delà du pire cas %s (%s)",
                        hold["connector"], hold["function"], quantite, hold["unit"],
@@ -417,56 +439,6 @@ def _apres_echeance(uid: str, montant: int) -> None:
                        "à l'échéance au montant réservé %s ; le règlement réel (%s) n'est "
                        "que journalisé", uid, hold["connector"], hold["function"],
                        hold["payer"], hold["reserved"], montant)
-
-
-def regler_releve(function: str, args: dict, answers: list) -> bool:
-    """The collection `function(args)` of an asynchronous job came back FINISHED: settles
-    the hold that awaited it, from the collection's answers (the declared `settle` path,
-    as `cost.settled_quantity` reads it), under the scale line it was reserved with.
-    Returns False when no hold awaited this collection (the customer's own key, already
-    settled, expired). Never raises: the read was served."""
-    try:
-        hold = db_credits.reservation_de_la_releve(function, args)
-        if hold is None:
-            return False
-        from oto.connectors import cost
-        chemin = _declare(hold["connector"], hold["function"])["cost"]["settle"]["path"]
-        lu = next((v for v in (cost.value_at(a, chemin) for a in answers)
-                   if isinstance(v, (int, float)) and not isinstance(v, bool)
-                   and math.isfinite(v) and v >= 0), None)
-        if lu is None:
-            db_credits.regler(hold["call_uid"], montant=None, quantite=None,
-                              meta={"from": "unreadable", "exceeded": False})
-            return True
-        budget, per_n = _ligne_de(hold)
-        _regler(hold["call_uid"], {**hold, "budget": budget, "per_n": per_n}, lu,
-                {"from": "response", "exceeded": lu > int(hold["quantity"])})
-        return True
-    except Exception:  # noqa: BLE001 — the hold stays open; its deadline settles it
-        logger.warning("crédits : relève %s %s non réglée (la réservation reste ouverte : "
-                       "son échéance la règle)", function, args, exc_info=True)
-        return False
-
-
-def liberer_releve(function: str, args: dict) -> bool:
-    """The asynchronous job ended WITHOUT a result (the provider says so): the hold that
-    awaited its collection is released. Never raises."""
-    try:
-        hold = db_credits.reservation_de_la_releve(function, args)
-        return hold is not None and db_credits.liberer(hold["call_uid"]) is not None
-    except Exception:  # noqa: BLE001 — the hold stays open; its deadline settles it
-        logger.warning("crédits : relève %s %s non libérée", function, args, exc_info=True)
-        return False
-
-
-def _ligne_de(hold: dict) -> tuple[int, int]:
-    """The scale line the hold was reserved under (its version, not today's)."""
-    for l in db_credits.lignes_du_bareme(int(hold["scale_version"])):
-        if (l["connector"], l["function"], l["unit"]) == (hold["connector"],
-                                                          hold["function"], hold["unit"]):
-            return int(l["budget"]), int(l["per_n"])
-    raise LookupError(f"credit scale v{hold['scale_version']} has no line for "
-                      f"{hold['connector']}.{hold['function']} ({hold['unit']})")
 
 
 def echoir(limite: int = 100) -> int:

@@ -5,7 +5,9 @@ A platform `anthropic` key served to granted orgs meters itself: each model call
 reserved then settled in the units budget, in tokens (`runner_jobs._regler_un_tour`,
 `credit_movements.meta.tokens`, `key_mode='platform'`). That is our code reporting on
 itself. This reads Anthropic's own usage report for one UTC day and compares it, unit
-by unit (`credits_tours.UNITES_DU_MODELE`), with what the budget settled. Tokens only: no
+by unit (`credits_tours.UNITES_DU_MODELE`), with what the budget settled — in total and
+PER MODEL (`by_model`), since each model has its own lines in the scale
+(`messages:<model>`, the id without its snapshot date on both sides). Tokens only: no
 tariff and no money here — pricing is the commerce's.
 
 ## What it catches
@@ -87,6 +89,14 @@ class OtherKeySpend(BaseModel):
     tokens: Tokens
 
 
+class ModelTokens(BaseModel):
+    """One model (`credits_tours.cle_du_modele`; null = Anthropic named none)."""
+    model: Optional[str] = None
+    anthropic_tokens: Tokens
+    settled_tokens: Tokens
+    gap_tokens: Tokens
+
+
 class ModelSpend(BaseModel):
     day: str
     platform_keys: list[PlatformKeySpend]
@@ -94,6 +104,7 @@ class ModelSpend(BaseModel):
     settled_tokens: Tokens
     # Anthropic minus settled, per unit: positive = tokens no settlement carries.
     gap_tokens: Tokens
+    by_model: list[ModelTokens]
     other_keys: list[OtherKeySpend]
     unmatched_platform_rows: list[str]
 
@@ -113,9 +124,14 @@ def _somme(a: dict, b: dict) -> dict:
     return {u: a.get(u, 0) + b.get(u, 0) for u in tours.UNITES_DU_MODELE}
 
 
+def _ecart(a: dict, b: dict) -> dict:
+    return {u: a[u] - b[u] for u in tours.UNITES_DU_MODELE}
+
+
 def rapprocher(jour: date, *, usage: list[dict], cles: list[dict],
                plateforme: list[tuple[str, str]], regle: dict) -> dict:
-    """Le rapprochement d'un jour, en jetons — pur, chaque entrée injectable."""
+    """Le rapprochement d'un jour, en jetons — pur, chaque entrée injectable. `regle` :
+    les jetons réglés par fonction du barème (`messages:<modèle>`)."""
     noms = {c.get("id"): c.get("name") for c in cles}
     par_ligne, ids_plateforme = [], set()
     for label, secret in plateforme:
@@ -130,21 +146,35 @@ def rapprocher(jour: date, *, usage: list[dict], cles: list[dict],
                               "ambiguous" if trouvees else "unmatched"})
     plat: dict[str, dict] = {}
     autres: dict[Optional[str], dict] = {}
+    par_modele: dict[Optional[str], dict] = {}
     for res in usage:
-        cle = res.get("api_key_id")
+        cle, t = res.get("api_key_id"), anthropic_usage.jetons(res)
         cible = plat if cle in ids_plateforme else autres
-        cible[cle] = _somme(cible.get(cle, {}), anthropic_usage.jetons(res))
+        cible[cle] = _somme(cible.get(cle, {}), t)
+        if cle in ids_plateforme:
+            m = tours.cle_du_modele(res["model"]) if res.get("model") else None
+            par_modele[m] = _somme(par_modele.get(m, {}), t)
     zero = {u: 0 for u in tours.UNITES_DU_MODELE}
+    regle_par_modele = {f[len(tours.PREFIXE_DES_MODELES):]: _somme(zero, t)
+                        for f, t in regle.items()}
     for ligne in par_ligne:
         ligne["anthropic_tokens"] = plat.get(ligne.get("api_key_id"), zero)
     anthropic = zero
     for t in plat.values():
         anthropic = _somme(anthropic, t)
-    regle = {u: int(regle.get(u, 0)) for u in tours.UNITES_DU_MODELE}
+    total = zero
+    for t in regle_par_modele.values():
+        total = _somme(total, t)
+    modeles = sorted(set(par_modele) | set(regle_par_modele), key=lambda m: m or "")
     return {
         "day": jour.isoformat(), "platform_keys": par_ligne,
-        "anthropic_tokens": anthropic, "settled_tokens": regle,
-        "gap_tokens": {u: anthropic[u] - regle[u] for u in tours.UNITES_DU_MODELE},
+        "anthropic_tokens": anthropic, "settled_tokens": total,
+        "gap_tokens": _ecart(anthropic, total),
+        "by_model": [{"model": m, "anthropic_tokens": par_modele.get(m, zero),
+                      "settled_tokens": regle_par_modele.get(m, zero),
+                      "gap_tokens": _ecart(par_modele.get(m, zero),
+                                           regle_par_modele.get(m, zero))}
+                     for m in modeles],
         "other_keys": [{"api_key_id": k, "name": noms.get(k), "tokens": t}
                        for k, t in sorted(autres.items(), key=lambda kv: -sum(kv[1].values()))
                        if sum(t.values()) > 0],
@@ -157,7 +187,7 @@ def _lire(jour: date, key: str) -> dict:
     return rapprocher(jour, usage=anthropic_usage.usage_du_jour(jour, key),
                       cles=anthropic_usage.cles_d_api(key), plateforme=_cles_plateforme(),
                       regle=db_credits.jetons_du_jour(
-                          tours.MODELE_CONNECTOR, tours.MODELE_FUNCTION,
+                          tours.MODELE_CONNECTOR, tours.PREFIXE_DES_MODELES,
                           credentials_store.PLATFORM, jour, tours.UNITES_DU_MODELE))
 
 
@@ -191,9 +221,10 @@ CAPABILITIES += [
             "[platform admin] Reconciles one UTC day (default: yesterday), in TOKENS, "
             "of what ANTHROPIC counted on this instance's platform `anthropic` keys — "
             "its own usage report — against what the units budget settled for model "
-            "calls on the platform rung (`anthropic.messages`). Per unit (input, output, "
-            "cache write, cache read): per platform key its Anthropic tokens, the "
-            "totals, `gap_tokens` (positive = tokens no settlement carries), "
+            "calls on the platform rung (`anthropic.messages:<model>`). Per unit (input, "
+            "output, cache write, cache read): per platform key its Anthropic tokens, the "
+            "totals, `gap_tokens` (positive = tokens no settlement carries), `by_model` "
+            "(the same per model, snapshot date dropped), "
             "`other_keys` (tokens on any other key of the Anthropic organization: "
             "unmetered by construction; null id = Console) and "
             "`unmatched_platform_rows`. No tariff, no money. Platform keys are matched "

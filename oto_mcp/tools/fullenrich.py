@@ -21,10 +21,12 @@ consumer counts it once by its `enrichment_id` (the `job_id` of the
 `org.usage.calls` lens, which also returns the counts as `found`).
 
 Units budget (`access/credits.py`): the submission is in the perimeter, as the
-connectors library's `fullenrich.submit` — its worst case (FullEnrich's own weights per
-field asked, times the contacts) is reserved on the platform key before the job is
-sent; the read that finds the job FINISHED settles it at the credits FullEnrich
-deducted (`cost.credits`), a CANCELED job releases it.
+connectors library's `fullenrich.submit`, PRICED PER KIND FOUND — the units
+`work_emails`, `personal_emails` and `phones`, each with its own scale line, because a
+per-result price is not a multiple of FullEnrich's own weights. Its worst case, every
+contact found on every kind it asks, is reserved on the platform key before the job is
+sent; the read that finds the job FINISHED settles each kind at its `found_*` count
+(`credits_releve.regler_releve`), a CANCELED job releases it.
 """
 from __future__ import annotations
 
@@ -38,6 +40,7 @@ from oto.tools.common.errors import UpstreamHTTPError
 
 from .. import access, session_org
 from ..access import credits as budget
+from ..access import credits_releve
 from ..connectors import verify as connector_verify
 
 _CREDITS_URL = "https://app.fullenrich.com/api/v1/account/credits"
@@ -56,12 +59,30 @@ _TERMINAUX = {
 }
 
 
-def _arguments_de_soumission(args: dict) -> dict:
-    """The tool's arguments read as `fullenrich.submit`'s: the fields asked (or the
-    client's default) on every contact."""
+#: The kinds a submission may ask (`enrich_fields`), as the budget's units: what is
+#: priced per contact FOUND, kind by kind (the `found_*` counts of a finished job).
+_NATURES = {"contact.work_emails": "work_emails",
+            "contact.personal_emails": "personal_emails",
+            "contact.phones": "phones"}
+
+
+def _pire_par_nature(args: dict) -> dict:
+    """The worst case of a submission, per kind asked (or the client's default): every
+    contact found on that kind."""
+    from oto.connectors.cost import CostError
     from oto.tools.fullenrich.client import DEFAULT_ENRICH_FIELDS
+    contacts = args.get("contacts")
     champs = list(args.get("enrich_fields") or DEFAULT_ENRICH_FIELDS)
-    return {"contacts": [{**c, "enrich_fields": champs} for c in args["contacts"]]}
+    if not isinstance(contacts, list) or not contacts or not champs \
+            or any(c not in _NATURES for c in champs):
+        raise CostError(f"fullenrich_enrich_linkedin: no contact, or a field without a "
+                        f"unit in {champs!r}")
+    return {u: len(contacts) for c, u in _NATURES.items() if c in champs}
+
+
+def _trouves(profiles: list) -> dict:
+    """How many CONTACTS of a finished job have at least one value of each kind."""
+    return {u: sum(1 for p in profiles if getattr(p, u, None)) for u in _NATURES.values()}
 
 
 def _releve(enrichment_id: str) -> tuple[str, dict]:
@@ -142,7 +163,7 @@ def register(mcp: FastMCP) -> None:
 
     connector_verify.register("fullenrich", _verify, couvre=connector_verify.AUTH_QUOTA)
     budget.declarer("fullenrich_enrich_linkedin", "fullenrich", "submit",
-                    _arguments_de_soumission)
+                    unites=_pire_par_nature)
 
     def _client(units: int = 1) -> tuple[FullenrichClient, bool]:
         key, is_platform = access.resolve_api_key("fullenrich", units=units)
@@ -256,7 +277,7 @@ def register(mcp: FastMCP) -> None:
             if status not in _REPASSER_S:
                 if status == "CANCELED" and rc.is_platform:
                     # No result will come: what the submission reserved is released.
-                    budget.liberer_releve(*_releve(enrichment_id))
+                    credits_releve.liberer_releve(*_releve(enrichment_id))
                 code, pourquoi = _TERMINAUX.get(status, (
                     "fullenrich_job_status_unknown",
                     f"FullEnrich returns the status \"{status}\", which does not lead to a result."))
@@ -291,23 +312,16 @@ def register(mcp: FastMCP) -> None:
         # decision. ⚠️ Every FINISHED read of the same job traces the same
         # figures: counting a job once (by its `enrichment_id`, which the billing lens
         # returns as `job_id`) is the consumer's business, not the backend's.
-        profiles = res.get("profiles") or []
-        trace = {
-            "found_work_emails": sum(1 for p in profiles if getattr(p, "work_emails", None)),
-            "found_personal_emails": sum(1 for p in profiles
-                                         if getattr(p, "personal_emails", None)),
-            "found_phones": sum(1 for p in profiles if getattr(p, "phones", None)),
-        }
+        trouves = _trouves(res.get("profiles") or [])
+        trace = {f"found_{u}": n for u, n in trouves.items()}
         cost = res.get("cost_credits")
         if isinstance(cost, int) and not isinstance(cost, bool) and cost >= 0:
             trace["quantity"] = cost
         session_org.note_call_trace(**trace)
-        # The units budget: the hold of a submission on the platform key settles at
-        # what FullEnrich deducted — its `cost.credits`, the path the connectors library
-        # declares (none declared: at the amount reserved).
+        # The units budget: the hold of a submission on the platform key settles kind by
+        # kind at what was FOUND — the same counts, under each kind's scale line.
         if rc.is_platform:
-            budget.regler_releve(*_releve(enrichment_id),
-                                 [{"cost": {"credits": cost}}] if cost is not None else [])
+            credits_releve.regler_releve(*_releve(enrichment_id), trouves)
         return {
             "done": True,
             "status": "FINISHED",
