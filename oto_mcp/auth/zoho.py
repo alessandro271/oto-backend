@@ -40,7 +40,7 @@ from __future__ import annotations
 import logging
 import urllib.parse
 from contextlib import contextmanager
-from typing import Optional
+from typing import NamedTuple, Optional
 
 import requests
 
@@ -394,16 +394,38 @@ def expected_org(app: dict) -> str:
     return str(app.get("zoho_org_id") or "").strip()
 
 
-def check_org(connector: str, data_center: str, tokens: dict, app: dict) -> Optional[str]:
-    """Before anything is stored. `None` = nothing to compare (oto's publisher app) or the
-    expected organization is among those consented; `ORG_UNVERIFIED` = a brought app that
-    names none — the consent goes through, SIGNALED. Mismatch or unreadable: the token is
-    REVOKED at Zoho and `ZohoOrgMismatch` / `ZohoOrgUnverifiable` is raised."""
+class ConsentedOrg(NamedTuple):
+    """A Zoho organization the new token reaches. `ids` = every identifier COMPARED to
+    `zoho_org_id` (any of them is accepted); `shown_id` = the ONE shown to an admin, the
+    identifier the field's help has them look up — CRM: the `zgid`, the "Org ID" of
+    Setup → Company Details (the number after `org` in the CRM URL, `domain_name` without
+    its prefix), `id` if Zoho sends no `zgid`; Desk: `id`; Analytics: `org_id`."""
+    ids: frozenset[str]
+    name: str
+    shown_id: str
+
+
+class OrgCheck(NamedTuple):
+    """What `check_org` says of a consent that may be stored. `warning` = `None` or
+    `ORG_UNVERIFIED`; `consented` = the organizations read in warning mode, so the return
+    of the consent SHOWS which one was consented (nothing of it is kept) — empty when
+    nothing was read (publisher app, expected org found, or a read that failed)."""
+    warning: Optional[str] = None
+    consented: tuple[ConsentedOrg, ...] = ()
+
+
+def check_org(connector: str, data_center: str, tokens: dict, app: dict) -> OrgCheck:
+    """Before anything is stored. Publisher app (oto's): nothing to compare, nothing read.
+    A brought app that names no organization: the consent goes through, SIGNALED
+    (`ORG_UNVERIFIED`), with the organizations the token reaches when they can be read
+    (`_read_to_show`: a failed read refuses nothing). Expected organization among those
+    consented: `OrgCheck()`. Mismatch or unreadable: the token is REVOKED at Zoho and
+    `ZohoOrgMismatch` / `ZohoOrgUnverifiable` is raised."""
     if isinstance(app, EditorApp):
-        return None
+        return OrgCheck()
     attendue = expected_org(app)
     if not attendue:
-        return ORG_UNVERIFIED
+        return OrgCheck(ORG_UNVERIFIED, _read_to_show(connector, data_center, tokens, app))
     try:
         orgs = consented_orgs(connector, data_center, tokens, app)
     except Exception as e:  # noqa: BLE001 — network, scope, unexpected shape
@@ -411,31 +433,48 @@ def check_org(connector: str, data_center: str, tokens: dict, app: dict) -> Opti
         raise ZohoOrgUnverifiable(
             "The consented Zoho organization could not be read "
             f"({type(e).__name__}): nothing was stored, restart the connection.") from e
-    if any(attendue in ids for ids, _ in orgs):
-        return None
+    if any(attendue in o.ids for o in orgs):
+        return OrgCheck()
     revoke(data_center, tokens)
-    raise ZohoOrgMismatch(", ".join(nom for _, nom in orgs if nom) or "unknown")
+    raise ZohoOrgMismatch(", ".join(o.name for o in orgs if o.name) or "unknown")
+
+
+def _read_to_show(connector: str, data_center: str, tokens: dict,
+                  app: dict) -> tuple[ConsentedOrg, ...]:
+    """Warning mode: the consented organizations, read only to SHOW them — no admin of
+    the app has an account in the member's Zoho organization to look its ID up. Nothing
+    hangs on this read: a failure revokes nothing, refuses nothing, keeps the warning
+    alone, and is LOGGED under its name (`zoho_consented_org_unread`, exception type
+    only — never a token nor a response body)."""
+    try:
+        return tuple(consented_orgs(connector, data_center, tokens, app))
+    except Exception as e:  # noqa: BLE001 — logged, the consent goes on with its warning
+        logger.warning("zoho_consented_org_unread: %s (connector=%s)",
+                       type(e).__name__, connector)
+        return ()
 
 
 def consented_orgs(connector: str, data_center: str, tokens: dict,
-                   app: dict) -> list[tuple[set[str], str]]:
-    """`[(identifiers, name)]` of the organizations the new token reaches. Every
-    identifier Zoho shows an admin counts (CRM: `id`, `zgid`, `domain_name`)."""
+                   app: dict) -> list[ConsentedOrg]:
+    """The organizations the new token reaches (`ConsentedOrg`). Every identifier Zoho
+    shows an admin counts (CRM: `id`, `zgid`, `domain_name`)."""
     dc = normalize_region(data_center)
     if connector == "zohoanalytics":
-        return [({o["org_id"]}, o.get("name") or "")
+        return [ConsentedOrg(frozenset({o["org_id"]}), o.get("name") or "", str(o["org_id"]))
                 for o in analytics_orgs({**app, **tokens, "data_center": dc})]
     entete = {"Authorization": f"Zoho-oauthtoken {tokens['access_token']}"}
     if connector == "zoho":
         from ..tools.zoho import _DC_DOMAINS as crm
         r = requests.get(f"{crm[dc][0]}/crm/v7/org", headers=entete, timeout=20)
         r.raise_for_status()
-        return [({str(o.get(k)) for k in ("id", "zgid", "domain_name") if o.get(k)},
-                 o.get("company_name") or "") for o in r.json().get("org") or []]
+        return [ConsentedOrg(
+                    frozenset(str(o.get(k)) for k in ("id", "zgid", "domain_name") if o.get(k)),
+                    o.get("company_name") or "", str(o.get("zgid") or o.get("id") or ""))
+                for o in r.json().get("org") or []]
     from ..tools.zohodesk import _DC_DOMAINS as desk
     r = requests.get(f"{desk[dc][0]}/api/v1/organizations", headers=entete, timeout=20)
     r.raise_for_status()
-    return [({str(o["id"])}, o.get("companyName") or "")
+    return [ConsentedOrg(frozenset({str(o["id"])}), o.get("companyName") or "", str(o["id"]))
             for o in r.json().get("data") or [] if o.get("id")]
 
 

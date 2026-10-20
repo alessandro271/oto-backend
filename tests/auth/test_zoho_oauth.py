@@ -661,22 +661,73 @@ def _zoho_http(monkeypatch, lu: dict, revoque: int = 200):
 def test_l_app_d_editeur_ne_verifie_rien(monkeypatch):
     """N'importe quel compte consent à l'app d'oto, c'est voulu : rien à comparer."""
     vu = _zoho_http(monkeypatch, {})
-    assert z.check_org("zoho", "eu", TOKENS, z.EditorApp(APP)) is None
-    assert vu == {"get": [], "revoke": []}
+    assert z.check_org("zoho", "eu", TOKENS, z.EditorApp(APP)) == z.OrgCheck()
+    assert vu == {"get": [], "revoke": []}, "l'app d'éditeur ne lit RIEN, même pour montrer"
 
 
-def test_une_app_apportee_sans_org_passe_et_le_signale(monkeypatch):
-    vu = _zoho_http(monkeypatch, {})
-    assert z.check_org("zoho", "eu", TOKENS, {**APP, "data_center": "eu"}) \
-        == z.ORG_UNVERIFIED
-    assert vu == {"get": [], "revoke": []}, "rien à comparer : aucun appel, aucune révocation"
+SANS_ORG = {**APP, "data_center": "eu"}
+
+
+def test_une_app_apportee_sans_org_passe_le_signale_et_montre_l_org(monkeypatch):
+    """Aucune org attendue : rien à comparer, mais l'org consentie est LUE pour être
+    montrée — l'identifiant affiché est le `zgid` (l'« Org ID » de Company Details)."""
+    vu = _zoho_http(monkeypatch, {"org": [{"id": "5725767000000020005", "zgid": "808232144",
+                                           "domain_name": "org808232144",
+                                           "company_name": "Équipe"}]})
+    verdict = z.check_org("zoho", "eu", TOKENS, SANS_ORG)
+    assert verdict.warning == z.ORG_UNVERIFIED
+    assert [(o.name, o.shown_id) for o in verdict.consented] == [("Équipe", "808232144")]
+    assert verdict.consented[0].ids == {"5725767000000020005", "808232144", "org808232144"}
+    assert vu["get"][0][0] == "https://www.zohoapis.eu/crm/v7/org"
+    assert vu["revoke"] == [], "un avertissement ne révoque rien"
+
+
+def test_le_crm_sans_zgid_montre_son_id(monkeypatch):
+    _zoho_http(monkeypatch, {"org": [{"id": "57", "company_name": "Équipe"}]})
+    (org,) = z.check_org("zoho", "eu", TOKENS, SANS_ORG).consented
+    assert org.shown_id == "57"
+
+
+def test_desk_sans_org_montre_chaque_organisation(monkeypatch):
+    vu = _zoho_http(monkeypatch, {"data": [{"id": 111, "companyName": "A"},
+                                           {"id": 222, "companyName": "B"}]})
+    verdict = z.check_org("zohodesk", "eu", TOKENS, SANS_ORG)
+    assert verdict.warning == z.ORG_UNVERIFIED
+    assert [(o.name, o.shown_id) for o in verdict.consented] == [("A", "111"), ("B", "222")]
+    assert vu["revoke"] == []
+
+
+def test_analytics_sans_org_montre_son_org_id(monkeypatch):
+    _zoho_http(monkeypatch, {})
+    monkeypatch.setattr(z, "analytics_orgs", lambda f: [
+        {"org_id": "60012345", "name": "B", "role": "Admin"}])
+    (org,) = z.check_org("zohoanalytics", "eu", TOKENS, SANS_ORG).consented
+    assert (org.name, org.shown_id) == ("B", "60012345")
+
+
+@pytest.mark.parametrize("panne", ["http", "reseau"])
+def test_une_lecture_en_echec_garde_l_avertissement_seul(monkeypatch, caplog, panne):
+    """Mode avertissement : lire n'est que MONTRER — un échec ne révoque rien, ne refuse
+    rien, garde l'avertissement seul, et se journalise sous son nom, sans jeton ni corps."""
+    vu = _zoho_http(monkeypatch, _Rep({"detail": "corps-amont"}, 401))
+    if panne == "reseau":
+        def _coupe(url, headers=None, timeout=None):
+            raise z.requests.ConnectionError(f"{url} {headers}")
+        monkeypatch.setattr(z.requests, "get", _coupe)
+    with caplog.at_level("WARNING", logger=z.logger.name):
+        verdict = z.check_org("zoho", "eu", TOKENS, SANS_ORG)
+    assert verdict == z.OrgCheck(z.ORG_UNVERIFIED, ())
+    assert vu["revoke"] == []
+    assert "zoho_consented_org_unread" in caplog.text
+    assert "Zoho-oauthtoken" not in caplog.text and "corps-amont" not in caplog.text
 
 
 @pytest.mark.parametrize("champ", ["id", "zgid", "domain_name"])
 def test_le_crm_reconnait_chaque_identifiant_que_zoho_montre(monkeypatch, champ):
     org = {"id": "1", "zgid": "2", "domain_name": "org3", "company_name": "Équipe"}
     vu = _zoho_http(monkeypatch, {"org": [org]})
-    assert z.check_org("zoho", "eu", TOKENS, {**EQUIPE, "zoho_org_id": org[champ]}) is None
+    assert z.check_org("zoho", "eu", TOKENS, {**EQUIPE, "zoho_org_id": org[champ]}) \
+        == z.OrgCheck()
     url, entete = vu["get"][0]
     assert url == "https://www.zohoapis.eu/crm/v7/org"
     assert entete == {"Authorization": "Zoho-oauthtoken at"}
@@ -705,7 +756,7 @@ def test_une_org_illisible_est_refusee_et_revoquee(monkeypatch):
 def test_desk_compare_les_organisations_du_compte(monkeypatch):
     vu = _zoho_http(monkeypatch, {"data": [{"id": 111, "companyName": "A"},
                                            {"id": 20071234, "companyName": "B"}]})
-    assert z.check_org("zohodesk", "eu", TOKENS, EQUIPE) is None
+    assert z.check_org("zohodesk", "eu", TOKENS, EQUIPE) == z.OrgCheck()
     assert vu["get"][0][0] == "https://desk.zoho.eu/api/v1/organizations"
 
 
@@ -714,7 +765,7 @@ def test_analytics_compare_ses_organisations(monkeypatch):
     vues = {}
     monkeypatch.setattr(z, "analytics_orgs", lambda f: vues.update(f) or [
         {"org_id": "20071234", "name": "B", "role": "Admin"}])
-    assert z.check_org("zohoanalytics", "eu", TOKENS, EQUIPE) is None
+    assert z.check_org("zohoanalytics", "eu", TOKENS, EQUIPE) == z.OrgCheck()
     assert vues["refresh_token"] == "rt" and vues["client_id"] == APP["client_id"]
     assert vu["get"] == []
 
@@ -758,14 +809,18 @@ def test_l_app_d_editeur_porte_sa_marque(monkeypatch):
 
 # --- le retour du consentement : refus nommé, avertissement nommé -----------------
 
-def _retour(monkeypatch, verdict):
+_REEL = object()
+
+
+def _retour(monkeypatch, verdict, app=EQUIPE, connector="zoho"):
     """La route de retour, avec un état signé et un échange stubé ; `verdict` = ce que
-    rend (ou lève) `check_org`. Rend (Location, persisté ?)."""
+    rend (ou lève) `check_org`, `_REEL` = le vrai `check_org` (HTTP Zoho stubé par
+    l'appelant). Rend (Location, persisté ?)."""
     import asyncio
     from starlette.requests import Request
     from oto_mcp.api import zoho as route
     ecrit = []
-    monkeypatch.setattr(z, "app_fields", lambda *a, **k: dict(EQUIPE))
+    monkeypatch.setattr(z, "app_fields", lambda *a, **k: dict(app))
     monkeypatch.setattr(z, "exchange_code", lambda *a, **k: dict(TOKENS))
     monkeypatch.setattr(z, "persist", lambda *a, **k: ecrit.append(1))
     monkeypatch.setattr(route.roles, "is_org_member", lambda sub, org: True)
@@ -774,8 +829,9 @@ def _retour(monkeypatch, verdict):
         if isinstance(verdict, Exception):
             raise verdict
         return verdict
-    monkeypatch.setattr(z, "check_org", _verdict)
-    etat = z.make_state("u1", 35, "zoho", "eu", group_id=4, level="read")
+    if verdict is not _REEL:
+        monkeypatch.setattr(z, "check_org", _verdict)
+    etat = z.make_state("u1", 35, connector, "eu", group_id=4, level="read")
     (cb,) = route.make_routes(None, None, None, None, None)
     req = Request({"type": "http", "method": "GET", "path": cb.path, "headers": [],
                    "query_string": f"code=c&state={etat}".encode()})
@@ -788,16 +844,55 @@ def test_le_retour_d_une_autre_org_ne_range_rien_et_la_nomme(monkeypatch):
     assert not range_
     assert "connect=zoho_org_mismatch" in lieu
     assert "consented_org=Autre+soci%C3%A9t%C3%A9" in lieu
+    assert "consented_org_id" not in lieu, "le refus nomme, il ne montre pas d'identifiant"
 
 
 def test_le_retour_sans_org_attendue_range_et_previent(monkeypatch):
-    lieu, range_ = _retour(monkeypatch, z.ORG_UNVERIFIED)
+    lieu, range_ = _retour(monkeypatch, z.OrgCheck(z.ORG_UNVERIFIED))
     assert range_
     assert "connect=connected" in lieu and "warning=zoho_org_unverified" in lieu
+    assert "consented_org" not in lieu, "rien de lu : l'avertissement seul"
+
+
+def _requete(lieu: str) -> list:
+    from urllib.parse import parse_qsl, urlsplit
+    return parse_qsl(urlsplit(lieu).query, keep_blank_values=True)
+
+
+def test_le_retour_sans_org_attendue_montre_l_org_consentie_du_crm(monkeypatch):
+    """De bout en bout (vrai `check_org`, HTTP Zoho stubé) : le retour MONTRE le nom et
+    l'identifiant à recopier dans `zoho_org_id` — rien n'en est retenu."""
+    vu = _zoho_http(monkeypatch, {"org": [{"id": "5725767000000020005", "zgid": "808232144",
+                                           "domain_name": "org808232144",
+                                           "company_name": "Équipe Démo"}]})
+    lieu, range_ = _retour(monkeypatch, _REEL, app=SANS_ORG)
+    assert range_ and vu["revoke"] == []
+    q = _requete(lieu)
+    assert ("connect", "connected") in q and ("warning", "zoho_org_unverified") in q
+    assert [v for k, v in q if k == "consented_org"] == ["Équipe Démo"]
+    assert [v for k, v in q if k == "consented_org_id"] == ["808232144"]
+
+
+def test_le_retour_montre_chaque_org_de_desk_par_paires(monkeypatch):
+    _zoho_http(monkeypatch, {"data": [{"id": 111, "companyName": "A"},
+                                      {"id": 222, "companyName": "B"}]})
+    lieu, range_ = _retour(monkeypatch, _REEL, app=SANS_ORG, connector="zohodesk")
+    q = _requete(lieu)
+    assert range_ and ("warning", "zoho_org_unverified") in q
+    assert [v for k, v in q if k == "consented_org"] == ["A", "B"]
+    assert [v for k, v in q if k == "consented_org_id"] == ["111", "222"]
+
+
+def test_le_retour_dont_la_lecture_echoue_range_avec_l_avertissement_seul(monkeypatch):
+    vu = _zoho_http(monkeypatch, _Rep({}, 500))
+    lieu, range_ = _retour(monkeypatch, _REEL, app=SANS_ORG)
+    assert range_ and vu["revoke"] == []
+    assert "connect=connected" in lieu and "warning=zoho_org_unverified" in lieu
+    assert "consented_org" not in lieu
 
 
 def test_le_retour_verifie_ne_porte_aucun_avertissement(monkeypatch):
-    lieu, range_ = _retour(monkeypatch, None)
+    lieu, range_ = _retour(monkeypatch, z.OrgCheck())
     assert range_ and "connect=connected" in lieu and "warning" not in lieu
 
 

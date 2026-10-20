@@ -68,12 +68,26 @@ def make_routes(
         at the only partner concerned, Tulina)."""
         suffix = oauth_flow.connector_return_suffix(connector, etat)
         if extra:
-            # What the dashboard SAYS on return (`warning=`, `consented_org=`): named
-            # codes and the member's own Zoho organization name, never an upstream message.
-            suffix += "&" + urllib.parse.urlencode(extra)
+            # What the dashboard SAYS on return (`warning=`, `consented_org=`,
+            # `consented_org_id=`): named codes and the member's own Zoho organization,
+            # never an upstream message. A list value repeats its parameter (`doseq`).
+            suffix += "&" + urllib.parse.urlencode(extra, doseq=True)
         if oauth_flow.resolve_return_app(return_app):
             return oauth_flow.return_url(return_app, suffix, org=org_id)
         return f"{_app_url()}/console/connectors{suffix}"
+
+    def _avertissement(verdict: "zoho_oauth.OrgCheck") -> "dict | None":
+        """The warning of a stored consent, and — `zoho_org_unverified` — the Zoho
+        organization(s) consented, SHOWN so an admin can copy the ID into the key's
+        `zoho_org_id`: `consented_org` / `consented_org_id`, repeated per organization and
+        paired by position. Nothing of it is kept. Read failed: the warning alone."""
+        if not verdict.warning:
+            return None
+        extra: dict = {"warning": verdict.warning}
+        if verdict.consented:
+            extra["consented_org"] = [o.name for o in verdict.consented]
+            extra["consented_org_id"] = [o.shown_id for o in verdict.consented]
+        return extra
 
     async def callback(request: Request) -> Response:
         code = request.query_params.get("code")
@@ -96,7 +110,7 @@ def make_routes(
                         parsed["org"], parsed["connector"]),
                 status_code=302)
 
-        def _finish() -> "str | None":
+        def _finish() -> "zoho_oauth.OrgCheck":
             # The SAME resolution as the start, from the signed state: org AND team
             # (the dedicated app of a team, the BYO of its cascade), and the REGION —
             # the publisher app is keyed by data center. Re-resolved from the ambient
@@ -110,16 +124,16 @@ def make_routes(
             tokens = zoho_oauth.exchange_code(code, parsed["data_center"], app=app)
             # BEFORE storing: the consented Zoho organization against the one the app
             # expects. A mismatch revokes the token and raises — nothing is stored.
-            avertissement = zoho_oauth.check_org(parsed["connector"],
-                                                 parsed["data_center"], tokens, app)
+            verdict = zoho_oauth.check_org(parsed["connector"],
+                                           parsed["data_center"], tokens, app)
             zoho_oauth.persist(parsed["sub"], parsed["org"], parsed["connector"],
                                parsed["data_center"], tokens, app=app,
                                level=parsed["level"])
-            return avertissement
+            return verdict
 
         try:
             # sync DB + HTTP → off the event loop
-            avertissement = await run_in_threadpool(_finish)
+            verdict = await run_in_threadpool(_finish)
         except zoho_oauth.ZohoOrgMismatch as e:
             logger.warning("zoho oauth callback refused: zoho_org_mismatch")
             return RedirectResponse(
@@ -136,8 +150,7 @@ def make_routes(
                 status_code=302)
         return RedirectResponse(
             _retour("connected", parsed["return_app"], parsed["org"],
-                    parsed["connector"],
-                    {"warning": avertissement} if avertissement else None),
+                    parsed["connector"], _avertissement(verdict)),
             status_code=302)
 
     return [Route("/api/zoho/oauth/callback", callback, methods=["GET"])]

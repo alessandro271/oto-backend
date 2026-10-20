@@ -844,7 +844,17 @@ consentement.
   `connect=zoho_org_mismatch&consented_org=<nom>`. Organisation illisible alors qu'elle est
   attendue : même refus (`connect=error`). App apportée SANS `zoho_org_id` : le consentement
   passe, SIGNALÉ (`warning=zoho_org_unverified` au retour, `connect.warnings` sur la carte).
-  L'app d'éditeur d'oto n'est jamais comparée : tout compte y consent, par construction.
+  Personne côté admin n'a de compte dans l'org Zoho du membre pour y lire son identifiant :
+  le retour MONTRE donc l'org consentie — `consented_org=<nom>&consented_org_id=<id>`,
+  répétés par org (appariés par position) —, l'identifiant affiché étant celui que l'aide du
+  champ fait saisir (CRM : `zgid`, l'« Org ID » de Company Details, le nombre après `org`
+  dans l'URL du CRM ; `id` si Zoho n'envoie pas de `zgid` ; Desk : `id` ; Analytics :
+  `org_id`). Rien n'en est retenu : l'admin le recopie dans `zoho_org_id` s'il le veut. Cette
+  lecture ne fait que montrer : un échec ne révoque ni ne refuse rien, garde l'avertissement
+  seul et se journalise `zoho_consented_org_unread` (type d'exception seul, ni jeton ni
+  corps). La carte (`connect.warnings`) n'en porte rien : seul le retour connaît l'org.
+  L'app d'éditeur d'oto n'est jamais comparée ni lue : tout compte y consent, par
+  construction.
 - **Pose : REST seule** (secret brut), `ORG_ADMIN_OF` / `GROUP_ADMIN_OF`,
   `PUT|GET|DELETE /api/{orgs,groups}/{id}/connectors/{name}/oauth-app`
   (`capabilities/connectors/oauth_app.py`). Le `GET` rend `configured`, la région, la date
