@@ -31,6 +31,7 @@ from mcp.types import ErrorData, INVALID_PARAMS
 from oto.tools.http import HttpConnectorClient
 
 from .. import access, egress
+from ..connectors import http_operations
 from ..texte_tiers import cloture
 from ..auth.hooks import current_user_sub_from_token
 
@@ -69,6 +70,8 @@ def register(mcp: FastMCP) -> None:
         client = _client()
         try:
             return client.get(path, params)
+        except requests.JSONDecodeError as e:
+            return non_json_success(e)
         except ValueError as e:
             raise _value_error(e)
         except requests.HTTPError as e:
@@ -95,6 +98,8 @@ def register(mcp: FastMCP) -> None:
         client = _client()
         try:
             return client.post(path, json=body, params=params)
+        except requests.JSONDecodeError as e:
+            return non_json_success(e)
         except ValueError as e:
             raise _value_error(e)
         except requests.HTTPError as e:
@@ -115,6 +120,8 @@ def register(mcp: FastMCP) -> None:
         doc_path = _require_doc_path(_resolve_fields())
         try:
             return client.get(doc_path)
+        except requests.JSONDecodeError as e:
+            return non_json_success(e)
         except ValueError as e:
             raise _value_error(e)
         except requests.HTTPError as e:
@@ -165,32 +172,65 @@ def _client() -> HttpConnectorClient:
             code=INVALID_PARAMS,
             message="http connector unavailable in local stdio (org credential required).",
         ))
-    f = _resolve_fields()
-    base_url = (f.get("base_url") or "").strip()
-    mode = (f.get("auth_mode") or "").strip()
+    return client_from_fields(_resolve_fields())
+
+
+def client_for(fields: dict, headers: dict | None = None) -> HttpConnectorClient:
+    """THE oto-core client for these credential fields — the only place one is built,
+    for the agent's calls (`client_from_fields`) as for the REST import of a `doc_path`
+    (`connectors/http_operations.fetch_doc_path_document`). The TWO destinations a
+    card carries are guarded: the called base, and — in oauth2 mode — the token
+    server, which goes out via `requests.post` from oto-core without passing through
+    `base_url`. Guarding only the first would leave an entire outbound path outside the
+    guard. `headers` = the saved definition's constant headers. Raises
+    `egress.EgressRefused` or `ValueError` (incomplete or invalid config): each caller
+    translates them for its face."""
+    base_url = (fields.get("base_url") or "").strip()
+    mode = (fields.get("auth_mode") or "").strip()
     if not base_url or not mode:
+        raise ValueError("http connector not configured: `base_url` and `auth_mode` "
+                         "are required on the Custom API card")
+    egress.check_url(base_url, connector="http", field="base_url")
+    token_url = (fields.get("token_url") or "").strip()
+    if mode.lower() == "oauth2" and token_url:
+        egress.check_url(token_url, connector="http", field="token_url")
+    return http_operations.with_constant_headers(
+        HttpConnectorClient(base_url, mode, fields, timeout=TIMEOUT), headers)
+
+
+def client_from_fields(f: dict, headers: dict | None = None) -> HttpConnectorClient:
+    """The client for these credential fields, refusals translated into actionable
+    McpErrors — `_client()` for the call's credential, `http_act` for the row it
+    resolved. Built by the single constructor, `client_for`; only the translation
+    lives here."""
+    if not (f.get("base_url") or "").strip() or not (f.get("auth_mode") or "").strip():
         raise McpError(ErrorData(
             code=INVALID_PARAMS,
             message=(
                 "http connector not configured for your org: set `base_url` + "
-                "`auth_mode` (+ the mode's secret) on the dashboard's HTTP card."
+                "`auth_mode` (+ the mode's secret) on the dashboard's Custom API card."
             ),
         ))
-    # The TWO destinations the card carries: the called base, and — in oauth2
-    # mode — the token server, which goes out via `requests.post` from oto-core
-    # without passing through `base_url`. Guarding only the first would leave an
-    # entire outbound path outside the guard.
     try:
-        egress.check_url(base_url, connector="http", field="base_url")
-        token_url = (f.get("token_url") or "").strip()
-        if mode.lower() == "oauth2" and token_url:
-            egress.check_url(token_url, connector="http", field="token_url")
+        return client_for(f, headers)
     except egress.EgressRefused as e:
         raise McpError(ErrorData(code=INVALID_PARAMS, message=str(e)))
-    try:
-        return HttpConnectorClient(base_url, mode, f, timeout=TIMEOUT)
     except ValueError as e:
         raise McpError(ErrorData(code=INVALID_PARAMS, message=f"http connector: {e}"))
+
+
+# A non-JSON success body, returned as text up to this size.
+NON_JSON_MAX = 2000
+
+
+def non_json_success(e: "requests.JSONDecodeError") -> dict:
+    """A 2xx whose body is not JSON (e.g. `"Pet deleted"` under a JSON content type,
+    seen live on a public API): the call SUCCEEDED upstream — said as such, never as a
+    failure, or the agent retries a write that already went through. A JSON body keeps
+    its shape untouched; only this case returns `{ok, non_json_body, truncated}`."""
+    texte = e.doc or ""
+    return {"ok": True, "non_json_body": texte[:NON_JSON_MAX],
+            "truncated": len(texte) > NON_JSON_MAX}
 
 
 def _excerpt(response) -> str:

@@ -448,3 +448,52 @@ def name_vault_rows_as_instances(conn, batch: int = BACKFILL_BATCH) -> int:
             "(hors du vocabulaire de propriétaire %s) — les inventer serait décider "
             "à la place du modèle", r["n"], r["entity_type"], list(OWNER_KINDS))
     return total
+
+
+# ── La config possédée, une CLÉ à la fois (jamais le document entier). Premier écrivain :
+# le connecteur `http` (`connectors/http_operations.py`). Aucune résolution n'en dépend.
+
+
+def live_instance_configs(owner_type: str, owner_id: str, connector: str,
+                          account: Optional[str] = None) -> list[dict]:
+    """`[{id, account, config}]` des instances VIVANTES de ce propriétaire pour ce
+    connecteur — un compte si `account` est donné, tous sinon. Une requête."""
+    sql = ("SELECT id, account, config FROM connector_instances WHERE owner_type = %s "
+           "AND owner_id = %s AND connector = %s AND revoked_at IS NULL")
+    params: list = [owner_type, str(owner_id), connector]
+    if account is not None:
+        sql, params = sql + " AND account = %s", params + [account]
+    with _connect() as c:
+        rows = c.execute(sql + " ORDER BY account", params).fetchall()
+    return [{"id": r["id"], "account": r["account"], "config": r["config"] or {}}
+            for r in rows]
+
+
+def live_instance_config(owner_type: str, owner_id: str, connector: str,
+                         account: str = "") -> Optional[dict]:
+    """`{id, config}` de l'instance VIVANTE de cette ligne de coffre, ou None."""
+    rows = live_instance_configs(owner_type, owner_id, connector, account or "")
+    return {"id": rows[0]["id"], "config": rows[0]["config"]} if rows else None
+
+
+def merge_instance_config(instance_id: int, patch: dict) -> bool:
+    """Pose les CLÉS de `patch` dans `config` d'une instance vivante (les autres
+    restent). False si elle n'existe pas ou est archivée."""
+    from psycopg.types.json import Jsonb
+    with _connect() as c:
+        row = c.execute(
+            "UPDATE connector_instances SET config = config || %s::jsonb "
+            "WHERE id = %s AND revoked_at IS NULL RETURNING id",
+            (Jsonb(patch), instance_id)).fetchone()
+    return row is not None
+
+
+def configs_for_instance_ids(ids: Sequence[int]) -> dict[int, dict]:
+    """`{id: config}` des instances VIVANTES demandées — une requête."""
+    if not ids:
+        return {}
+    with _connect() as c:
+        rows = c.execute("SELECT id, config FROM connector_instances "
+                         "WHERE id = ANY(%s) AND revoked_at IS NULL",
+                         (list(ids),)).fetchall()
+    return {r["id"]: r["config"] or {} for r in rows}

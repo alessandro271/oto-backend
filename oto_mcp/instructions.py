@@ -144,6 +144,9 @@ def _resolve_context(sub: str | None, org_id: int) -> dict:
         except Exception:
             pass
 
+    from .connectors import http_operations     # les connecteurs PERSONNALISÉS de l'org
+    custom = http_operations.for_context(org_id, connectors)
+
     projects: list[str] = []
     try:
         # L'org et mes projets PERSONNELS créés dans cette org (décision du 29/09/2026,
@@ -187,7 +190,7 @@ def _resolve_context(sub: str | None, org_id: int) -> dict:
     return {
         "org_name": org_name, "user_name": user_name, "role": role,
         "group_name": group_name, "group_id": group_id, "connectors": connectors,
-        "projects": projects, "runs": runs, "profile": profile,
+        "custom_connectors": custom, "projects": projects, "runs": runs, "profile": profile,
     }
 
 
@@ -237,6 +240,8 @@ def _format_context(ctx: dict) -> str:
         lines.append(f"- Active team: {ctx['group_name']}")
     if ctx["connectors"]:
         lines.append(f"- Active connectors: {', '.join(ctx['connectors'])}")
+    from .connectors.http_operations import context_line
+    lines += [context_line(c) for c in ctx.get("custom_connectors") or []]
     if ctx["projects"]:
         lines.append(f"- Recent projects: {' · '.join(ctx['projects'])}")
     if ctx["runs"]:

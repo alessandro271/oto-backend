@@ -36,6 +36,7 @@ from ...connectors import selection as connector_selection
 from .._authz import ORG_ADMIN_OF, SUB_ONLY
 from .._types import (AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding)
 from ..registry import CAPABILITIES
+from . import custom_api
 from .kit import (BulkSelectInput, BulkSelectResult,  # noqa: F401 — re-exported
                   OrgRecommendedConnectors, RecommendInput, UnsetDefaultInput,
                   UnsetDefaultResult, _bulk_select, _recommend, _unset_default)
@@ -273,6 +274,9 @@ class MyConnectors(BaseModel):
     credentials: str = "computed"
     name_match: Optional[NameMatch] = None
     toolbox_scope: Optional[ToolboxScope] = None
+    # `name=` designates one of the org's custom connectors (`custom_api.py`): that one,
+    # and `connectors` is empty.
+    custom_connector: Optional[dict] = None
 
 
 class ConnectorSelectionState(BaseModel):
@@ -478,8 +482,10 @@ def _suggestions(catalog: list[dict], demande: str, n: int = 5) -> list[str]:
     return list(dict.fromkeys(proches))[:n]
 
 
-def _refus_nom_inconnu(catalog: list[dict], demande: str) -> AuthzDenied:
-    """The refusal of a name that designates nothing — NAMED and offering suggestions (#1112)."""
+def _refus_nom_inconnu(catalog: list[dict], demande: str,
+                       ctx: Optional[ResolvedCtx] = None) -> AuthzDenied:
+    """The refusal of a name that designates nothing — NAMED and offering suggestions
+    (#1112), and the Custom API way out when the org can reach it."""
     proches = _suggestions(catalog, demande)
     if proches:
         suite = (f" Close names: {', '.join(f'`{n}`' for n in proches)} — retry with "
@@ -487,12 +493,13 @@ def _refus_nom_inconnu(catalog: list[dict], demande: str) -> AuthzDenied:
     else:
         suite = (" No close name: `oto_connector(op='list')` without `name` returns the "
                  "compact catalog with the exact names.")
+    repli, extra = custom_api.repli(catalog, demande, ctx)
     return AuthzDenied(
         404, "unknown_connector",
         f"No connector available to your active org is named `{demande}` or carries "
-        f"this label (or it is not open to your org).{suite} This refusal says "
+        f"this label (or it is not open to your org).{suite}{repli} This refusal says "
         f"NOTHING about your connections: it concerns the name.",
-        details={"query": demande, "suggestions": proches})
+        details={"query": demande, "suggestions": proches, **extra})
 
 
 def _with_readiness(ctx: ResolvedCtx, row: dict) -> dict:
@@ -559,7 +566,11 @@ def _me_projection(ctx: ResolvedCtx, inp: MyConnectorsInput) -> dict:
             # Not exposed for the active org, restricted by the org RBAC, or unknown name
             # — indistinguishable on the member side (same verdict as `_require_exposed`). But
             # the refusal OFFERS suggestions: a curt "unknown" was read as "not connected" (#1112).
-            raise _refus_nom_inconnu(catalog, inp.name)
+            perso = custom_api.projection_for_name(ctx, catalog, inp.name,
+                                                   verbose=inp.verbose, include=inp.include)
+            if perso is not None:
+                return perso
+            raise _refus_nom_inconnu(catalog, inp.name, ctx)
         if [c["name"] for c in trouves] != [inp.name]:
             name_match = {
                 "query": inp.name,
@@ -688,7 +699,7 @@ def _require_exposed(ctx: ResolvedCtx, name: str) -> None:
     if name not in connector_activation.exposed_connectors(ctx.org_id):
         # A gesture is NOT resolved by label (it writes): it requires the exact name, but
         # its refusal offers the close names, like the read (#1112).
-        raise _refus_nom_inconnu(_visible_catalog(ctx), name)
+        raise _refus_nom_inconnu(_visible_catalog(ctx), name, ctx)
 
 
 # Post-activation guidance (oto-backend#111). An MCP session's tool registry is

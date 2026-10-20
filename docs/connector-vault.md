@@ -613,6 +613,62 @@ l'intérieur du coffre, un relevé AST par FONCTION qui n'admet que les cinq pri
 d'écriture. Un lecteur de credential qui se mettrait à lire les instances ferait dépendre
 la désignation d'une clé d'autre chose que du quadruplet ; c'est le lot L7, avec sa revue.
 
+### La `config` d'une instance — premier écrivain : les opérations d'un « Custom API » (17/10/2026)
+
+Le connecteur `http` se présente comme **« Custom API »** (catégorie `Custom`) : c'est la
+carte qu'on cherche quand l'outil d'un client (une paie, un ERP) n'a pas de connecteur.
+Une org y **décrit en données** les opérations qu'elle appelle (nom, description, méthode,
+gabarit de chemin, schéma d'entrée — format de `oto_mcp/custom_ops.py`, sous-ensemble à plat
+de `connector.schema.json` d'oto-core), et l'agent les appelle par leur nom (`http_act(op="call")`).
+La liste vit dans **`connector_instances.config["operations"]`** de l'instance qui nomme la
+ligne du coffre — désignée par le quadruplet, jamais autrement
+(`connectors/http_operations.py`, seul module admis à cette clé, cf. l'allowlist de
+`tests/test_connector_instances_l6.py`). Conséquences assumées : une **rotation** de la clé
+garde la liste (l'instance survit à l'`_upsert`), un **renommage** de compte la fait
+suivre (`move_instance_to_account`), un **retrait** de la clé l'archive avec l'instance.
+Écriture = les **clés données** de `config` remplacées (`merge_instance_config`),
+jamais le document entier. Droits : ceux de la pose de la clé (`ORG_ADMIN_OF` pour un compte d'org, chef
+d'équipe pour un compte d'équipe) ; la lecture est ouverte aux membres. Faces : REST
+`/api/orgs/{id}/connectors/http/operations` (+ `/import`, conversion OpenAPI sans
+écriture), MCP en paire (`tests/test_convention_act.py`) : `http` lit — `op=list` (les connecteurs
+personnalisés de l'org, ou la définition d'un compte) et `op=setup_link` (le lien de la carte pré-remplie **sans** secret, la clé se saisit
+dans le formulaire, jamais dans une conversation) ; `http_act` agit — `op=call` (une
+action par son nom ; même un GET : le client ne peut pas savoir ce qu'une action décrite
+fait chez le tiers), `op=request` (appel brut), `op=import` (conversion OpenAPI, sans
+écriture mais préparant une écriture) et `op=set_definition`. Les outils d'avant la paire
+(`http_get`/`http_post`/`http_doc`) restent servis ; `http` reste dans `A_MIGRER` tant
+qu'ils n'ont pas rejoint la paire.
+
+**Configuré une fois, servi à tous** : la `config` porte aussi la **définition** du
+connecteur personnalisé (`oto_mcp/custom_ops_definition.py`) — `label`, `description`,
+`logo_domain`, `headers` constants NON secrets (un en-tête qui authentifie ou route est
+refusé, celui de la carte compris), `variables` (valeurs non secrètes qui remplissent un
+argument d'action du même nom). Les en-têtes constants passent par la session du client
+oto-core après sa préparation (`with_constant_headers`, accroché à `_ready` — suite
+attendue : un paramètre `headers=` côté oto-core). Le nom affiché de la carte
+(`label`) vit en clair dans `meta` (`in_meta`, 17/10/2026) : la liste des connecteurs
+personnalisés de l'org (`connectors/http_operations.org_connectors`), le refus
+`oto_connector(name=…)` (qui rend le connecteur au lieu de « inconnu »), le contexte
+de l'agent (une ligne par connecteur) et le roster `/api/me/connector-instances`
+(`custom_api`) le lisent sans déchiffrer. Export/pose : `GET|PUT
+/api/orgs/{id}/connectors/http/definition` — l'export ne porte aucun champ `secret`.
+
+**Rapport à `otomata-tech/oto-pkg#60`** (le connecteur privé décrit en données, repris
+d'oto-backend#808 pour oto 2). Le Custom API est la forme d'**oto 1** de ce besoin, livrée
+ici sans attendre oto 2 ; il ne fixe rien pour oto 2. Point par point :
+
+| #60 demande | Ici | |
+| --- | --- | --- |
+| le format au grain de l'opération, textes compris (nom, description, verbe, chemin, paramètres typés) | `custom_ops.py` — sous-ensemble à plat de `function` (`name`, `description`, `input`, `call.method`, `call.path`) | ✓ |
+| la forme de la sortie (`function.output.schema`, déclarable côté `connectors`) | absente : la réponse du tiers est rendue telle quelle | ✗ — à ajouter avec le même nom de clé, `output`, si oto 1 en a besoin |
+| un verbe générique : lister les méthodes d'une instance, en appeler une par son nom | `http(op="list")`, `http_act(op="call", operation=…)` — deux noms d'outils fixes, la liste vient de l'instance | ✓ |
+| la garde de destination dès le départ | `egress.check_url` à chaque appel (base, serveur de jeton, document importé), aucune redirection suivie | ✓ |
+| le jeton de rafraîchissement | absent (`oauth2` = client credentials seulement) | ✗ |
+| le repli hébergé chez le tiers | hors périmètre | ✗ |
+
+Le jour où oto 2 sert les connecteurs privés, une définition d'ici s'y convertit champ à champ
+(`GET …/http/definition`, sans secret) : ses champs sont ceux de `function`, à plat.
+
 ### `inst:{id}` — la forme de fil
 
 `instance_refs.make_instance_ref(id)` rend `inst:{id}`, et `parse_ref` accepte désormais

@@ -56,7 +56,7 @@ from pydantic import BaseModel, ConfigDict, Field
 # list_platform_keys (which decrypts), never the impoverished forms
 # list_org_secrets/list_group_secrets (they overwrite account/meta/secret_kind).
 from ... import access, credentials_store, db, group_store, instance_refs, providers
-from . import instances_tenant
+from . import custom_api, instances_tenant
 from ._level_doc import DOC_LEVEL as _DOC_LEVEL, DOC_OWNER_TYPE as _DOC_OWNER_TYPE
 from ...connectors import instance_visibility
 from .._authz import SUB_ONLY
@@ -187,6 +187,8 @@ class ConnectorInstance(BaseModel):
     # filed by R9 under an opt-in org setting.
     # ⚠️ **May be absent** — same fail-open as `id`.
     visible_to: Optional[list[str]] = None
+    # `http` instances only: the custom connector's card (`custom_api.py`). May be absent.
+    custom_api: Optional[dict] = None
 
 
 class ConnectorInstances(BaseModel):
@@ -374,6 +376,7 @@ def _stamp_instance_identity(out: list[dict]) -> None:
             cle[0], cle[1], cle[2], account=cle[3],
             visibility=ligne["visibility"], share_mode=mode,
             share_down=down, share_side=side)
+    custom_api.stamp_instances(out, connues, cles)
 
 
 def _list_instances(ctx: ResolvedCtx, inp: ListInstancesInput) -> dict:
