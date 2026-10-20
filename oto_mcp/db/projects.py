@@ -37,7 +37,7 @@ from .users import upsert_user
 COLONNE_FOLDER = "folder"
 DDL_COLONNE_FOLDER = f"ALTER TABLE projects ADD COLUMN IF NOT EXISTS {COLONNE_FOLDER} TEXT"
 # Rang d'affichage (docs/projects.md §Rang d'affichage) : posé par la révision
-# `0068_projects_position` ET par le démarrage, sous garde de catalogue — même DDL.
+# `0069_projects_position` ET par le démarrage, sous garde de catalogue — même DDL.
 COLONNE_POSITION = "position"
 DDL_COLONNE_POSITION = (f"ALTER TABLE projects ADD COLUMN IF NOT EXISTS {COLONNE_POSITION} "
                         "DOUBLE PRECISION")

@@ -658,7 +658,7 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # indifférent entre elles.
     if _colonne_absente(conn, "projects", projects.COLONNE_FOLDER):
         conn.execute(projects.DDL_COLONNE_FOLDER)
-    # Le rang d'affichage d'un projet — le même que pose la révision `0068` : ordre
+    # Le rang d'affichage d'un projet — le même que pose la révision `0069` : ordre
     # indifférent entre elles.
     if _colonne_absente(conn, "projects", projects.COLONNE_POSITION):
         conn.execute(projects.DDL_COLONNE_POSITION)

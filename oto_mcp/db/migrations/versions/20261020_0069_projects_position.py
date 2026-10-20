@@ -17,8 +17,8 @@ EXISTS`, même DDL, sous garde de catalogue) ; l'ancien code l'ignore.
 Retour arrière : retire la colonne (les rangs posés se perdent, les listes reviennent à
 l'ordre des noms).
 
-Révision : 0068_projects_position
-Précédente : 0067_runner_jobs_declencheurs
+Révision : 0069_projects_position
+Précédente : 0068_credits
 """
 from __future__ import annotations
 
@@ -26,8 +26,8 @@ from alembic import op
 
 from oto_mcp.db.projects import COLONNE_POSITION, DDL_COLONNE_POSITION
 
-revision = "0068_projects_position"
-down_revision = "0067_runner_jobs_declencheurs"
+revision = "0069_projects_position"
+down_revision = "0068_credits"
 branch_labels = None
 depends_on = None
 
