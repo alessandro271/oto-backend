@@ -153,17 +153,31 @@ def test_un_payeur_sans_ligne_a_un_solde_nul(live):
 
 # ── le curseur ───────────────────────────────────────────────────────────────
 
-def _tout_lire(apres=None, payeur=None) -> tuple[list[dict], str]:
-    """Tout ce qui est servi après `apres` ; avec `payeur`, ses seuls mouvements. Les
-    bancs voisins écrivent dans la même table, et l'horizon peut retenir les leurs
-    au-delà d'un curseur pris avant : ils sortent alors après lui."""
+def _tout_lire(apres=None, garder=None) -> tuple[list[dict], str]:
+    """Tout ce qui est servi après `apres` ; avec `garder`, les seuls mouvements qu'il
+    retient. Les bancs voisins écrivent dans la même table, et l'horizon peut retenir
+    les leurs au-delà d'un curseur pris avant : ils sortent alors après lui."""
     lus = []
     while True:
         page = _appel("service.credits.movements", after=apres, limit=2)
-        lus += [m for m in page["movements"] if payeur is None or m["payer"] == payeur]
+        lus += [m for m in page["movements"] if garder is None or garder(m)]
         if page["next_cursor"] == apres:
             return lus, apres
         apres = page["next_cursor"]
+
+
+def _lire_jusqu_a(n: int, garder, apres=None) -> tuple[list[dict], str]:
+    """Relit, borné, jusqu'à `n` mouvements retenus par `garder`. L'horizon est celui
+    de tout le serveur : sur le serveur de test partagé, une transaction d'une AUTRE
+    base (une suite voisine) le retient aussi. Un retard, jamais une perte ni un
+    désordre."""
+    lus, fin = [], time.monotonic() + 120
+    while True:
+        page, apres = _tout_lire(apres, garder)
+        lus += page
+        if len(lus) >= n or time.monotonic() >= fin:
+            return lus, apres
+        time.sleep(0.5)
 
 
 def test_le_curseur_ne_sert_pas_au_dela_d_une_transaction_encore_ouverte(live):
@@ -174,6 +188,10 @@ def test_le_curseur_ne_sert_pas_au_dela_d_une_transaction_encore_ouverte(live):
     import psycopg
 
     payeur = f"org:{_org()}"
+
+    def du_payeur(m):
+        return m["payer"] == payeur
+
     _, depart = _tout_lire()
     lente = psycopg.connect(_dsn())
     try:
@@ -181,20 +199,12 @@ def test_le_curseur_ne_sert_pas_au_dela_d_une_transaction_encore_ouverte(live):
                       "VALUES (%s, 'deposit', 1, 'lente')", (payeur,))
         _appel("service.credits.movement.post", payer=payeur, amount=2, reason="r",
                idempotency_key="rapide")
-        lus, apres = _tout_lire(depart, payeur)
+        lus, apres = _tout_lire(depart, du_payeur)
         assert [m["idempotency_key"] for m in lus] == []
         lente.commit()
     finally:
         lente.close()
-    # L'horizon est celui de tout le serveur : sur le serveur de test partagé, une
-    # transaction d'une AUTRE base (une suite voisine) le retient aussi. On relit donc,
-    # borné, jusqu'à ce qu'il passe : un retard, jamais une perte ni un désordre.
-    lus, fin = [], time.monotonic() + 120
-    while len(lus) < 2 and time.monotonic() < fin:
-        page, apres = _tout_lire(apres, payeur)
-        lus += page
-        if len(lus) < 2:
-            time.sleep(0.5)
+    lus, _ = _lire_jusqu_a(2, du_payeur, apres)
     assert [m["idempotency_key"] for m in lus] == ["lente", "rapide"]
 
 
@@ -224,6 +234,8 @@ def test_le_solde_personnel_suit_la_fusion_des_comptes(live):
         users.repointer_patrimoine(conn, vieux, neuf)
     assert _appel("service.credits.balance", payer=f"user:{vieux}")["balance"] == 0
     assert _appel("service.credits.balance", payer=f"user:{neuf}")["balance"] == 42
-    lus, _ = _tout_lire()
-    transferts = [(m["payer"], m["amount"]) for m in lus if m["kind"] == "transfer"]
+    payeurs = {f"user:{vieux}", f"user:{neuf}"}
+    lus, _ = _lire_jusqu_a(
+        2, lambda m: m["kind"] == "transfer" and m["payer"] in payeurs)
+    transferts = [(m["payer"], m["amount"]) for m in lus]
     assert transferts == [(f"user:{vieux}", -40), (f"user:{neuf}", 40)]
