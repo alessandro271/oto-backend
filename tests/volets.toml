@@ -681,3 +681,11 @@ tests = ["tests/**/test_apollo*.py"]
 nom = "procédure de diagramme"
 sources = ["oto_mcp/procedure_diagram.py", "oto_mcp/tools/procedure_app.py"]
 tests = ["tests/**/test_procedure_diagram*.py", "tests/test_procedure_app.py"]
+
+[[volet]]
+nom = "waterfalls"
+# Un domaine pour six connecteurs (`waterfall_email|phone|company|person|people|tech`) : la
+# famille « connecteur » le rate, son nom n'est celui d'aucun.
+sources = ["oto_mcp/waterfall/**", "oto_mcp/tools/waterfall.py",
+           "oto_mcp/tools/waterfall_lignes.py"]
+tests = ["tests/**/test_waterfall*.py"]
