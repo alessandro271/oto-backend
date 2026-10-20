@@ -804,8 +804,9 @@ _REGLAGES: tuple[Variable, ...] = (
              "avec `LOGTO_ENDPOINT` (`verifier_repli_identite_dev`).",
              ("oto_mcp/auth/hooks.py:164", "oto_mcp/config.py:179")),
     Variable("LOGTO_ENDPOINT_ALT", Classe.REGLAGE, "",
-             "Second émetteur Logto toléré (coexistence multi-domaine).",
-             ("oto_mcp/server.py:228",)),
+             "Second émetteur Logto toléré (coexistence multi-domaine), pour les "
+             "personnes comme pour les services.",
+             ("oto_mcp/server.py:228", "oto_mcp/auth/service_identity.py:91")),
     Variable("LOGTO_PUBLIC_ENDPOINT", Classe.REGLAGE, "",
              "Endpoint Logto ANNONCÉ aux clients — distinct de celui qui SIGNE "
              "(`LOGTO_ENDPOINT`). Vide, on annonce celui qui signe.",

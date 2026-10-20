@@ -267,7 +267,9 @@ l'annuaire. Code : `oto_mcp/auth/service_identity.py`.
   service n'existe.
 - **Reconnu à l'audience, vérifié pour de vrai** : `_authenticate` lit l'`aud` non
   vérifié pour choisir, puis le verifier des services revalide signature, émetteur
-  (primaire seulement), audience stricte et expiration. Le jeton doit être celui d'une
+  (le primaire, plus `LOGTO_ENDPOINT_ALT` pendant la fenêtre de drain d'une bascule de
+  domaine, comme pour les personnes — sinon le service tombe entre la bascule de l'annuaire
+  et celle du cœur ; jamais l'émetteur d'un tenant tiers), audience stricte et expiration. Le jeton doit être celui d'une
   machine (`sub == client_id`) et porter un rôle du catalogue (`ROLES`) dans `scope`.
   Le verifier des personnes (audience MCP) refuse ce jeton : un service n'entre
   jamais par la face agent.
