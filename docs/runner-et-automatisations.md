@@ -1349,12 +1349,30 @@ Banc : `tests/test_webhook_slack.py`, dont le **vecteur publié par Slack**.
   écoute se redéclencherait à chaque message qu'il écrit. Ce qui est écarté rend
   **200 `ignored`**, jamais un refus — Slack retenterait, puis couperait l'abonnement —
   et ne s'écrit pas au journal (un canal actif en produit à chaque message).
-- **Déduplication** : `event_id` (corps signé) est l'identifiant de livraison ; Slack
-  retente sous 3 s (`X-Slack-Retry-Num`), la retentative d'un événement accepté rend
-  `duplicate` (un `event_id` par enveloppe, un événement par POST).
-- ⚠️ Un agent **en pause** rend 409 : Slack le compte comme un échec, et désactive
-  l'abonnement au-delà d'un seuil d'échecs sur une heure. Assumé, comme pour une
-  source Standard Webhooks.
+- **Ce que fait NOTRE app** ne relance pas l'agent non plus, même sans `bot_id` : un
+  message posté avec un jeton **utilisateur** porte l'`app_id` de l'app (égal à
+  l'`api_app_id` de l'enveloppe), et un geste de son utilisateur-bot (une réaction)
+  porte son `user` (listé dans `authorizations[].is_bot`) — `own_app`.
+- **Ce que l'agent ne reçoit pas** : le *Verification Token* historique (`token`) et
+  `authorizations`, retirés après le classement et le filtre et avant l'enfilage
+  (`hook_slack.corps_pour_l_agent`) — la règle de `corps_sans_secret` pour Lemlist.
+- **Déduplication** : `event_id` (corps signé) est l'identifiant de livraison. Slack
+  attend un 2xx sous 3 s, puis retente trois fois (presque aussitôt, ~1 min, ~5 min ;
+  `X-Slack-Retry-Num`) ; la retentative d'un événement accepté rend `duplicate`.
+- **Un refus 409 (pause, org suspendue, procédure archivée) est rendu en 200** pour un
+  agent `slack`, journalisé une fois : Slack lit tout non-2xx comme un échec, retente,
+  puis **coupe l'abonnement** de l'app au-delà d'un seuil d'échecs sur une heure —
+  mettre l'agent en pause casserait son branchement. L'événement est perdu, comme
+  pour une source qui signe et lit un 4xx comme définitif.
+- ⚠️ **Limites connues.** Ce qui est écarté (bruit, filtre) n'est ni journalisé ni
+  compté : un filtre qui ne correspond jamais ressemble à « Slack n'envoie rien »
+  (vérifier qu'il nomme des **ids** de canal, pas des noms). Un même message peut
+  arriver deux fois sous deux `event_id` si l'app est abonnée à `app_mention` ET
+  aux messages. Le limiteur applicatif des webhooks (`docs/rest-api.md`) s'applique
+  avant le filtre. La pose du mode (`_hook_auth_sync`) lit puis écrit sans
+  condition sur le mode courant : deux bascules concurrentes entre modes signés
+  pourraient laisser un secret sous le mauvais mode (agent qui refuse tout,
+  rattrapé en reposant le secret).
 
 #### Le FILTRE de livraison : écarter à la porte, sans run (20/10/2026)
 

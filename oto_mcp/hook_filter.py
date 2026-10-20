@@ -28,6 +28,7 @@ retente, et finit par désactiver le hook). Il ne remplace pas `max_per_day`.
 from __future__ import annotations
 
 import json
+import math
 from typing import Any, Optional
 
 #: Bornes de POSE. Un filtre est une donnée de réglage, pas une liste de clients.
@@ -99,6 +100,10 @@ def probleme(filtre: Any) -> Optional[str]:
             if not (v is None or isinstance(v, (str, int, float, bool))):
                 return (f"`{chemin}` : des valeurs simples seulement (texte, nombre, "
                         "booléen, null) — un objet ne se compare pas")
+            if isinstance(v, float) and not math.isfinite(v):
+                # `NaN` passerait pydantic et `json.loads`, puis serait refusé
+                # par PostgreSQL à l'écriture — une 500 au lieu d'un refus nommé.
+                return f"`{chemin}` : un nombre fini (ni NaN ni infini)"
             if isinstance(v, str) and len(v) > MAX_VALEUR:
                 return f"`{chemin}` : une valeur dépasse {MAX_VALEUR} caractères"
     if len(json.dumps(filtre, ensure_ascii=False)) > 8_192:

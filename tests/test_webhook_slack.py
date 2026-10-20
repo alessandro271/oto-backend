@@ -280,12 +280,52 @@ def test_une_RETENTATIVE_du_meme_event_id_ne_refait_pas_de_deroule(slack):
     assert out["duplicate"] is True and "enfile" not in slack
 
 
-def test_un_agent_slack_en_PAUSE_repond_409_a_un_evenement(slack):
+def test_un_agent_slack_en_PAUSE_journalise_et_ACQUITTE_en_200(slack):
+    """Slack lit tout non-2xx comme un échec : retenté trois fois, puis
+    l'abonnement coupé. Mettre l'agent en pause ne doit pas casser son
+    branchement — le refus est journalisé UNE fois et rendu en 200."""
     slack["trigger"]["enabled"] = False
     with pytest.raises(runner_hook.HookRefus) as e:
         _declencher(*_recue(_evt()))
-    assert e.value.statut == 409
+    assert (e.value.statut, e.value.code) == (200, "trigger_paused")
     assert slack["livraisons"] == [(runner_hook.db.REFUSE_PAUSED, "Ev001")]
+
+
+def test_le_Verification_Token_et_les_installations_n_atteignent_PAS_l_agent(slack):
+    corps = _evt(token="legacy-verification-token-xyz",
+                 authorizations=[{"team_id": "T0001", "user_id": "U0BOT", "is_bot": True}])
+    out = _declencher(*_recue(corps))
+    assert out["job_id"] == 900
+    entree = slack["enfile"]["payload"]["input"]
+    assert "legacy-verification-token-xyz" not in entree
+    assert "authorizations" not in entree and "bonjour" in entree
+
+
+def test_le_filtre_lit_l_enveloppe_ENTIERE_avant_le_retrait(slack):
+    slack["trigger"]["hook_filter"] = {"authorizations.0.is_bot": [True]}
+    corps = _evt(authorizations=[{"user_id": "U0BOT", "is_bot": True}])
+    assert _declencher(*_recue(corps))["job_id"] == 900
+
+
+@pytest.mark.parametrize("evenement,enveloppe", [
+    # posté par NOTRE app avec un jeton utilisateur : pas de `bot_id`
+    ({"type": "message", "user": "U0HUMAIN", "app_id": "A0APP", "text": "réponse"},
+     {"api_app_id": "A0APP"}),
+    # une réaction posée par l'utilisateur-bot de l'app
+    ({"type": "reaction_added", "user": "U0BOT", "reaction": "eyes"},
+     {"authorizations": [{"user_id": "U0BOT", "is_bot": True}]}),
+    # un message de bot qui ne porte que `bot_profile`
+    ({"type": "message", "user": "U0X", "bot_profile": {"id": "B1"}, "text": "x"}, {}),
+])
+def test_ce_que_NOTRE_app_fait_ne_relance_jamais_l_agent(slack, evenement, enveloppe):
+    out = _declencher(*_recue(_evt(evenement, **enveloppe)))
+    assert out.get("ignored") in ("own_app", "bot_message") and "enfile" not in slack
+
+
+def test_le_message_d_une_AUTRE_app_par_un_humain_passe(slack):
+    out = _declencher(*_recue(_evt({"type": "message", "user": "U0H", "text": "x",
+                                    "app_id": "A0AUTRE"}, api_app_id="A0APP")))
+    assert out["job_id"] == 900
 
 
 # ── 3. le FILTRE ──────────────────────────────────────────────────────────────
@@ -299,13 +339,17 @@ def test_le_filtre_ECARTE_sans_travail_et_laisse_passer_le_reste(slack):
     assert out["job_id"] == 900
 
 
-def test_le_filtre_s_applique_a_TOUT_prereglage(monkeypatch):
-    t = {"id": 5, "org_id": ORG, "hook_auth": "bearer", "enabled": True,
-         "hook_filter": {"data.kind": ["lead"]}}
+def test_le_filtre_s_applique_a_TOUT_prereglage(slack, monkeypatch):
+    """Un agent au PORTEUR : le filtre écarte ce qui ne correspond pas, et laisse
+    partir ce qui correspond (les deux sens, sinon le test ne prouve rien)."""
+    t = dict(slack["trigger"], hook_auth="bearer",
+             hook_filter={"data.kind": ["lead"]})
     monkeypatch.setattr(runner_hook, "_authentifier",
-                        lambda *a, **k: (t, None, a[4] if len(a) > 4 else k.get("corps")))
+                        lambda tid, s, sig, src, adr=False, corps=None: (t, None, corps))
     out = runner_hook.declencher(5, "otoh_x", {"data": {"kind": "invoice"}}, "x")
-    assert out["ignored"] == "filtered"
+    assert out["ignored"] == "filtered" and "enfile" not in slack
+    out = runner_hook.declencher(5, "otoh_x", {"data": {"kind": "lead"}}, "x")
+    assert out["job_id"] == 900 and not out.get("ignored")
 
 
 @pytest.mark.parametrize("filtre,corps,passe", [
@@ -327,6 +371,7 @@ def test_la_correspondance_du_filtre(filtre, corps, passe):
 @pytest.mark.parametrize("filtre", [
     [], {"a": []}, {"a": "x"}, {"": ["x"]}, {"a": [{"b": 1}]},
     {f"k{i}": ["x"] for i in range(11)}, {"a": ["x" * 201]},
+    {"a": [float("nan")]}, {"a": [float("inf")]},
 ])
 def test_un_filtre_MAL_FORME_est_refuse(filtre):
     assert hook_filter.probleme(filtre)

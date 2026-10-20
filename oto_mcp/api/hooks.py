@@ -77,7 +77,8 @@ async def fire(request: Request) -> JSONResponse:
           VALIDE dont l'horodatage sort de la fenêtre de 5 min
       404 identifiant inconnu, OU secret faux, OU signature fausse, OU preuve
           de l'autre mode — délibérément indistinguables
-      409 l'agent est en pause
+      409 l'agent est en pause (agent `slack` : 200 portant le même refus —
+          Slack couperait l'abonnement sur des non-2xx répétés)
       413 le corps dépasse le plafond
       429 la file dépasse déjà sa fraîcheur, OU (`hook_daily_cap`) le plafond
           journalier déclaré par le propriétaire est atteint (avec `Retry-After`)

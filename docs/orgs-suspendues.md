@@ -30,7 +30,7 @@ seulement lui.
 | outils de connecteur, directs et via `oto_call` | `activation_gate._refus`, avant l'activation | `org_suspended` (`ErrorData.data.code`) |
 | outils de plateforme écrits à la main (`data_*`, `run_*`, `oto_doc_app`…), directs et via `oto_call` | `activation_gate.require_active` (`org_suspension.outil_garde`) | `org_suspended` (`ErrorData.data.code`) |
 | travaux d'agent | `claim_next_job` / `claim_fallback_job` : `NOT EXISTS` sur `orgs.suspended_at` | non réservés, restent en file |
-| webhooks entrants | `runner_hook.declencher` | 409 `org_suspended`, journalisé `refused_suspended` |
+| webhooks entrants | `runner_hook.declencher` | 409 `org_suspended`, journalisé `refused_suspended` (agent `slack` : le même refus rendu en 200, sans quoi Slack couperait l'abonnement ; sa poignée de main et son bruit écarté, sans travail ni journal, restent répondus) |
 | cron | `runner_tick._tick` : échéance consommée, rien d'enfilé | journalisé, et livraison `refused_suspended` sur la page de l'agent |
 | projet publié sans login (`anonymous`, `secret` : MCP et UI navigable) | `subdomain_project.HostDispatch`, avant tout travail — l'appel n'a pas de `sub`, aucune garde d'appel ne le verrait | 403 `org_suspended` ; retiré de l'annuaire public |
 

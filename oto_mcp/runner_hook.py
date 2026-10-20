@@ -707,7 +707,8 @@ def declencher(trigger_id: int, secret: Optional[str], corps: Any,
     # (pause comprise) : ce n'est pas un refus, c'est « rien pour cet agent ».
     # Rendu comme un succès — une source qui reçoit un refus retente, puis coupe
     # le hook — et jamais journalisé : un canal actif en produit à chaque message.
-    if prereglage(t.get("hook_auth")).schema == hook_slack.SCHEMA:
+    slack = prereglage(t.get("hook_auth")).schema == hook_slack.SCHEMA
+    if slack:
         classe = hook_slack.classer(corps)
         if classe.challenge is not None:
             return {"ok": True, "trigger_id": trigger_id, "challenge": classe.challenge}
@@ -717,6 +718,9 @@ def declencher(trigger_id: int, secret: Optional[str], corps: Any,
     if not hook_filter.correspond(t.get("hook_filter"), corps):
         return {"ok": True, "trigger_id": trigger_id, "job_id": None,
                 "ignored": "filtered"}
+    if slack:
+        # Le Verification Token de l'app ne voyage pas jusqu'à l'agent.
+        corps = hook_slack.corps_pour_l_agent(corps)
 
     # ⚠️ UNE transaction, et le refus est levé APRÈS elle. Lever DANS le bloc
     # ferait rouler la transaction en arrière — la livraison refusée disparaîtrait
@@ -859,6 +863,14 @@ def declencher(trigger_id: int, secret: Optional[str], corps: Any,
                                    due_at=job.get("due_at"))
 
     if refus is not None:
+        if slack and refus.statut == 409:
+            # ⚠️ Slack lit tout non-2xx comme un échec : il retente l'événement
+            # trois fois (quatre lignes au journal pour un message), puis COUPE
+            # l'abonnement de l'app au-delà d'un seuil d'échecs sur une heure —
+            # mettre l'agent en pause casserait donc son branchement. Le refus est
+            # journalisé ci-dessus et rendu en 200 : l'événement est perdu, comme
+            # pour une source qui signe et lit un 4xx comme définitif.
+            refus.statut = 200
         raise refus
 
     if retard_s:

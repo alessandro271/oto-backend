@@ -21,8 +21,8 @@ schémas (`runner_hook.PREREGLAGES`).
    signature valide : sinon la route servirait d'écho à n'importe qui, et
    confirmerait qu'une adresse existe.
 
-3. **Les retentatives** — Slack retente un événement sans réponse 2xx en 3 s
-   (jusqu'à trois fois, `X-Slack-Retry-Num`). Chaque événement porte un
+3. **Les retentatives** — Slack attend un 2xx sous 3 s, puis retente
+   l'événement trois fois (presque aussitôt, ~1 min, ~5 min ; `X-Slack-Retry-Num`). Chaque événement porte un
    `event_id` dans son corps SIGNÉ : c'est l'identifiant de livraison, donc la
    déduplication de `runner_hook.declencher` s'applique sans rien ajouter.
 
@@ -31,10 +31,19 @@ schémas (`runner_hook.PREREGLAGES`).
 Une app reçoit TOUS les messages des canaux où elle est, y compris les siens.
 Un agent qui poste dans un canal où son app écoute se redéclencherait lui-même,
 en boucle, à chaque message qu'il écrit. `classer` écarte donc, SANS enfiler :
-les enveloppes qui ne sont pas des événements, les messages de bots (le sien
-compris), et les sous-types qui ne sont pas un humain qui écrit (édition,
+les enveloppes qui ne sont pas des événements, les messages de bots, ce que
+NOTRE app a produit — même posté avec un jeton utilisateur (`app_id` égal à
+l'`api_app_id` de l'enveloppe), ou par son utilisateur-bot (une réaction posée
+par l'agent) —, et les sous-types qui ne sont pas un humain qui écrit (édition,
 suppression, arrivée dans un canal…). Ce qui est écarté rend 200 — un refus
 ferait retenter Slack, puis désactiver l'abonnement.
+
+## Ce que l'agent ne reçoit pas
+
+L'enveloppe porte le *Verification Token* historique de l'app (`token`) et la
+liste de ses installations (`authorizations`) : `corps_pour_l_agent` les retire
+avant l'enfilage, comme `runner_hook.corps_sans_secret` retire le secret de
+Lemlist — en `inline` le corps devient l'entrée de l'agent, donc son transcript.
 """
 from __future__ import annotations
 
@@ -145,13 +154,47 @@ def classer(corps: Any) -> Classement:
     # ⚠️ AVANT tout le reste : le message d'un bot — le nôtre compris — ne lance
     # jamais d'agent. C'est la garde contre la boucle d'un agent qui poste dans
     # un canal où son app écoute.
-    if evt.get("bot_id") or evt.get("subtype") == "bot_message":
+    if (evt.get("bot_id") or evt.get("bot_profile")
+            or evt.get("subtype") == "bot_message"):
         return Classement(ignore="bot_message")
+    # Ce que NOTRE app a fait sans passer pour un bot : un message posté avec un
+    # jeton UTILISATEUR (il porte l'`app_id` de l'app, pas de `bot_id`), ou un
+    # geste de son utilisateur-bot (une réaction posée par l'agent).
+    app = corps.get("api_app_id")
+    if app and evt.get("app_id") == app:
+        return Classement(ignore="own_app")
+    if evt.get("user") and evt.get("user") in _utilisateurs_bot(corps):
+        return Classement(ignore="own_app")
     if evt.get("hidden"):
         return Classement(ignore="hidden")
     if evt.get("type") == "message" and evt.get("subtype") not in SOUS_TYPES_HUMAINS:
         return Classement(ignore="not_a_new_message")
     return Classement()
+
+
+def _utilisateurs_bot(corps: dict) -> set:
+    """Les utilisateurs-bots de NOTRE app, tels que l'enveloppe les déclare."""
+    auths = corps.get("authorizations")
+    if not isinstance(auths, list):
+        return set()
+    return {a.get("user_id") for a in auths
+            if isinstance(a, dict) and a.get("is_bot") and a.get("user_id")}
+
+
+#: Les clés de l'enveloppe que l'agent ne reçoit JAMAIS : le Verification Token
+#: historique de l'app et la liste de ses installations.
+CLES_RETIREES = ("token", "authorizations")
+
+
+def corps_pour_l_agent(corps: Any) -> Any:
+    """Le corps, AMPUTÉ de ce qui est un credential ou ne regarde pas l'agent.
+
+    ⚠️ Fait APRÈS le classement et le filtre (qui peuvent lire l'enveloppe
+    entière) et AVANT l'enfilage : en `inline` le corps devient l'entrée de
+    l'agent, donc son transcript et `deliveries with_input`."""
+    if not isinstance(corps, dict):
+        return corps
+    return {k: v for k, v in corps.items() if k not in CLES_RETIREES}
 
 
 def identifiant(corps: Any) -> Optional[str]:
