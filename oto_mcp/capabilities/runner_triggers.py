@@ -33,8 +33,9 @@ from starlette.concurrency import run_in_threadpool
 
 from . import (_abonnement, _acces_agent, _cle_exigee, _instruction, _limites_du_run,
                _modele)
-from .. import (db, org_store, ownership, roles, runner_hook, runner_models, runner_tick,
-                session_visibility, tool_alias, tool_registry)
+from .. import (db, hook_filter, hook_slack, org_store, ownership, roles, runner_hook,
+                runner_models, runner_tick, session_visibility, tool_alias,
+                tool_registry)
 from ..tools import catalogue as tool_catalogue
 from ._authz import ORG_MEMBER
 from ._dossier import FOLDER_MAX, dossier_valide
@@ -180,6 +181,17 @@ class TriggerInput(BaseModel):
             "replace a leaked address, `op=rotate_address`. Like `rotate_secret` "
             "and `rotate_address`, this changes the agent's door: only its owner "
             "or an org admin may (`trigger_owner_or_admin_required`)."))
+    #: Le FILTRE de livraison (`hook_filter.py`). Absent = on ne touche à rien ;
+    #: `{}` = le retirer (tout passe, le défaut).
+    hook_filter: Optional[dict[str, list]] = Field(
+        default=None,
+        description=(
+            "Webhook only, optional. Deliveries that must NOT start a run are "
+            "dropped at the door: `{path: [accepted values]}`, every path must hold "
+            "one of its values (paths read like `payload_fields`). A dropped "
+            "delivery gets a 2xx and costs no run. E.g. a Slack app reacting only to "
+            "channels shared with customers: `{\"is_ext_shared_channel\": [true]}`. "
+            "`{}` removes the filter."))
     # share / unshare / give — UN bénéficiaire, membre de l'org de l'agent.
     share_with_sub: Optional[str] = Field(default=None, description=(
         "op=share/unshare: the org member to share with, by account id. "
@@ -294,7 +306,7 @@ class Trigger(BaseModel):
     #: L'URL à donner à la source. Servie sur un déclencheur webhook, jamais le
     #: secret — celui-ci n'existe en clair qu'au retour de `create`/`rotate_secret`.
     hook_url: Optional[str] = None
-    #: Le PRÉRÉGLAGE — `bearer` | `standard_webhooks` | `lemlist` | `none` (la
+    #: Le PRÉRÉGLAGE — `bearer` | `standard_webhooks` | `lemlist` | `slack` | `none` (la
     #: preuve que la source doit apporter, `runner_hook.PREREGLAGES`). En `none`,
     #: `hook_url` est servie MASQUÉE : l'adresse y est le credential.
     hook_auth: Optional[str] = None
@@ -302,6 +314,8 @@ class Trigger(BaseModel):
     signing_secret_set: Optional[bool] = None
     #: Le plafond journalier déclaré, `null` = aucun.
     max_per_day: Optional[int] = None
+    #: Le filtre de livraison, `null` = tout passe.
+    hook_filter: Optional[dict] = None
     #: L'agent a-t-il une adresse privée ? (Elle est dans `hook_url`.)
     private_address: Optional[bool] = None
     #: Ce que ce déclencheur a reçu sur 24 h : reçues, refusées, la dernière.
@@ -487,7 +501,8 @@ def _outils_de_la_procedure(ctx: ResolvedCtx, slug: str) -> list[str]:
 
 
 _REGLAGES_WEBHOOK = ("payload_mode", "payload_fields", "max_per_hour",
-                     "freshness_seconds", "max_per_day", "private_address")
+                     "freshness_seconds", "max_per_day", "private_address",
+                     "hook_filter")
 
 
 def _exiger_projet_de_l_org(ctx: ResolvedCtx, project_id: Optional[int]) -> None:
@@ -561,6 +576,13 @@ def _valide_le_webhook(inp: TriggerInput, actuel: Optional[dict] = None) -> None
             400, "not_a_webhook",
             f"`payload_fields` n'est lu qu'en `payload_mode=fields` (effectif : "
             f"`{mode}`) — posé ici, il serait inerte.")
+    if inp.hook_filter:
+        # `{}` est une VALEUR (« retirer le filtre »), jugée à l'écriture, pas ici.
+        motif = hook_filter.probleme(inp.hook_filter)
+        if motif:
+            raise AuthzDenied(400, "invalid_hook_filter",
+                              f"`hook_filter` : {motif}. Forme attendue : "
+                              "`{\"event.type\": [\"message\"]}`.")
     for champ, valeur in (("max_per_hour", inp.max_per_hour),
                           ("freshness_seconds", inp.freshness_seconds),
                           ("max_per_day", inp.max_per_day)):
@@ -867,6 +889,7 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
             fraicheur_s=inp.freshness_seconds,
             # `0` = aucun plafond : stocké NULL, comme un agent qui n'en a jamais eu.
             max_per_day=inp.max_per_day or None,
+            hook_filter=inp.hook_filter or None,
             # ⚠️ `enabled=false` à la création était IGNORÉ (feedback 1297) : l'agent
             # naissait allumé, et la seule façon de le poser éteint était un
             # `update` juste après — donc une fenêtre où il pouvait tourner.
@@ -1142,12 +1165,15 @@ def _triggers_sync(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
                        ("payload_fields", "payload_fields"),
                        ("max_per_hour", "max_per_hour"),
                        ("freshness_seconds", "fraicheur_s"),
-                       ("max_per_day", "max_per_day")):
+                       ("max_per_day", "max_per_day"),
+                       ("hook_filter", "hook_filter")):
             v = getattr(inp, c)
             if v is not None:
                 # `max_per_day=0` RETIRE le plafond : stocké NULL, pas 0 — un 0
-                # stocké se lirait « aucune livraison acceptée ».
-                champs[col] = (v or None) if c == "max_per_day" else v
+                # stocké se lirait « aucune livraison acceptée ». Même règle pour
+                # `hook_filter={}` : NULL, « tout passe ».
+                champs[col] = ((v or None) if c in ("max_per_day", "hook_filter")
+                               else v)
         if (champs.get("max_per_day", 1) is None
                 and runner_hook.prereglage(_actuel().get("hook_auth")).schema
                 == runner_hook.NONE):
@@ -1382,7 +1408,7 @@ def _partager(ctx: ResolvedCtx, inp: TriggerInput) -> dict:
 
 class HookAuthInput(BaseModel):
     trigger_id: int
-    hook_auth: Literal["bearer", "standard_webhooks", "lemlist", "none"] = Field(
+    hook_auth: Literal["bearer", "standard_webhooks", "lemlist", "slack", "none"] = Field(
         description=(
         "How the sender proves who it is. `bearer`: the sender posts "
         "`Authorization: Bearer otoh_…`, a secret the platform generates. "
@@ -1393,16 +1419,22 @@ class HookAuthInput(BaseModel):
         "start a second run. `lemlist`: Lemlist cannot set a header; give it the "
         "agent's `otoh_…` token as the hook's `secret` — it comes back in every "
         "body, is checked, and is REMOVED before the agent sees the body; a retry "
-        "of the same activity `_id` does not start a second run. `none`: NO proof "
+        "of the same activity `_id` does not start a second run. `slack`: the "
+        "Request URL of a Slack app's Event Subscriptions — Slack signs with the "
+        "app's Signing Secret (`X-Slack-Signature`); the `url_verification` "
+        "challenge is answered, bot messages (the agent's own included), edits "
+        "and joins start no run, and a retried `event_id` does not start a second "
+        "one. `none`: NO proof "
         "at all — anyone who has the agent's private address can start it. Needs a "
         "`max_per_day` cap; mints a NEW private address, returned once as "
         "`hook_url` (served masked everywhere else); the agent is told its input "
         "is unauthenticated."))
     signing_secret: Optional[str] = Field(default=None, description=(
-        "`standard_webhooks` only: the signing secret the SENDER generated "
-        "(starts with `whsec_`). Required when switching to `standard_webhooks`; "
-        "optional afterwards (a new one replaces the old one). Write-only: stored "
-        "encrypted, never returned."))
+        "`standard_webhooks` and `slack` only: the signing secret the SENDER "
+        "generated — `whsec_…` for Standard Webhooks, the app's Signing Secret "
+        "(hexadecimal, Slack app page › Basic Information) for Slack. Required "
+        "when switching to one of these; optional afterwards (a new one replaces "
+        "the old one). Write-only: stored encrypted, never returned."))
 
 
 class HookAuthOut(BaseModel):
@@ -1445,7 +1477,15 @@ def _valide_l_authentification(inp: HookAuthInput, actuel: Optional[dict]) -> No
         # Même 404 qu'un agent inconnu : un agent programmé n'a pas de porte.
         raise AuthzDenied(404, "trigger_not_found", "automatisation inconnue")
     secret = inp.signing_secret
-    if secret is not None and runner_hook.cle_de_signature(secret) is None:
+    vise = runner_hook.prereglage(inp.hook_auth)
+    if secret is not None and vise.schema == hook_slack.SCHEMA:
+        if not hook_slack.secret_valide(secret):
+            raise AuthzDenied(
+                400, "invalid_signing_secret",
+                "le secret de signature Slack est le *Signing Secret* de l'app "
+                "(Basic Information › App Credentials) : de l'hexadécimal. Un "
+                "jeton `xoxb-`/`xoxp-`, un `whsec_` ou un `otoh_` n'en sont pas.")
+    elif secret is not None and runner_hook.cle_de_signature(secret) is None:
         raise AuthzDenied(
             400, "invalid_signing_secret",
             "le secret de signature doit être celui que la SOURCE a généré : "
@@ -1460,17 +1500,23 @@ def _valide_l_authentification(inp: HookAuthInput, actuel: Optional[dict]) -> No
                 400, "daily_cap_required",
                 "`none` exige un plafond `max_per_day` : quiconque voit l'adresse "
                 "peut déclencher l'agent. Pose-le d'abord (op=update).")
-    if secret is not None and inp.hook_auth != runner_hook.STANDARD_WEBHOOKS:
+    if secret is not None and not vise.signe:
         raise AuthzDenied(
             400, "not_signature_mode",
-            "`signing_secret` n'est lu qu'en `hook_auth=standard_webhooks` — posé "
-            "avec le porteur, il serait inerte.")
-    if (inp.hook_auth == runner_hook.STANDARD_WEBHOOKS and not secret
-            and not actuel.get("signing_secret_set")):
+            "`signing_secret` n'est lu qu'en `hook_auth=standard_webhooks` ou "
+            "`slack` — posé avec le porteur, il serait inerte.")
+    # ⚠️ Un secret déjà posé ne vaut que pour SON mode : un `whsec_` gardé ne
+    # vérifie pas une signature Slack, et l'inverse. Changer de mode signé exige
+    # donc le secret du nouveau.
+    garde = (actuel.get("signing_secret_set")
+             and (actuel.get("hook_auth") or runner_hook.BEARER) == inp.hook_auth)
+    if vise.signe and not secret and not garde:
         raise AuthzDenied(
             400, "missing_signing_secret",
-            "`standard_webhooks` exige `signing_secret` — le secret `whsec_…` que la "
-            "source affiche. Sans lui, aucune livraison ne pourrait être vérifiée.")
+            f"`{inp.hook_auth}` exige `signing_secret` — le secret que la source "
+            "affiche (`whsec_…` pour Standard Webhooks, le *Signing Secret* de "
+            "l'app pour Slack). Sans lui, aucune livraison ne pourrait être "
+            "vérifiée.")
     if secret is not None:
         from .. import crypto
         if not crypto.encryption_enabled():
@@ -1496,7 +1542,7 @@ def _hook_auth_sync(ctx: ResolvedCtx, inp: HookAuthInput) -> dict:
     mode_avant = actuel.get("hook_auth") or runner_hook.BEARER
     porteur = adresse_neuve = None
     vise = runner_hook.prereglage(inp.hook_auth)
-    if vise.schema == runner_hook.STANDARD_WEBHOOKS:
+    if vise.signe:
         enveloppe = (runner_hook.chiffrer_secret_de_signature(
                          inp.trigger_id, inp.signing_secret)
                      if inp.signing_secret else None)
@@ -1709,6 +1755,9 @@ CAPABILITIES += [
             DeclaredError(400, "daily_cap_required",
                           "`max_per_day=0` sur un webhook SANS preuve (`none`) : son "
                           "plafond ne se retire pas"),
+            DeclaredError(400, "invalid_hook_filter",
+                          "`hook_filter` mal formé : `{chemin: [valeurs simples]}`, "
+                          "listes non vides, bornes de taille"),
             DeclaredError(400, "no_auth_address",
                           "`rotate_address` sur un webhook SANS preuve : son adresse "
                           "est son credential, elle se renouvelle par l'écran (REST)"),
@@ -1825,11 +1874,13 @@ CAPABILITIES += [
         mcp=None,   # un secret ne passe pas en argument d'outil
         errors=(
             DeclaredError(400, "invalid_signing_secret",
-                          "le secret n'a pas la forme `whsec_` + base64"),
+                          "le secret n'a pas la forme attendue par le mode "
+                          "(`whsec_` + base64, ou l'hexadécimal d'un Signing Secret Slack)"),
             DeclaredError(400, "not_signature_mode",
                           "`signing_secret` avec `hook_auth=bearer` — il serait inerte"),
             DeclaredError(400, "missing_signing_secret",
-                          "`standard_webhooks` sans secret, ni fourni ni déjà posé"),
+                          "mode signé (`standard_webhooks`, `slack`) sans secret, ni "
+                          "fourni ni déjà posé pour ce mode"),
             DeclaredError(400, "daily_cap_required",
                           "`none` sans plafond `max_per_day`"),
             DeclaredError(503, "encryption_unavailable",
@@ -1846,7 +1897,10 @@ CAPABILITIES += [
             "`Authorization: Bearer otoh_…`, generated by the platform. "
             "`standard_webhooks`: the sender signs with its own `whsec_…` secret "
             "(Granola, Svix, Resend, Clerk…); the bearer is then refused and "
-            "retries of an accepted `webhook-id` are deduplicated. `lemlist`: the "
+            "retries of an accepted `webhook-id` are deduplicated. `slack`: the "
+            "agent is a Slack app's Event Subscriptions Request URL, verified with "
+            "the app's Signing Secret; the challenge is answered and bot messages, "
+            "edits and joins start no run. `lemlist`: the "
             "`otoh_…` token travels as the `secret` field of the body (Lemlist "
             "cannot set headers) and is stripped before the agent sees it. `none`: "
             "no proof, opt-in, only with a `max_per_day` cap; it mints a new "

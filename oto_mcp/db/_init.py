@@ -429,6 +429,9 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # comportement d'avant pour tout agent existant).
     conn.execute("ALTER TABLE runner_triggers ADD COLUMN IF NOT EXISTS max_per_day INT")
     conn.execute("ALTER TABLE runner_triggers ADD COLUMN IF NOT EXISTS hook_slug TEXT")
+    # Le FILTRE de livraison d'un webhook (`hook_filter.py`) : `{chemin: [valeurs]}`
+    # qu'une livraison authentifiée doit porter pour lancer un run. NULL = tout passe.
+    conn.execute("ALTER TABLE runner_triggers ADD COLUMN IF NOT EXISTS hook_filter JSONB")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_runner_triggers_hook_slug "
                  "ON runner_triggers(hook_slug) WHERE hook_slug IS NOT NULL")
     # La DÉDUPLICATION : au plus UNE livraison ACCEPTÉE par identifiant et par

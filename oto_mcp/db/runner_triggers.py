@@ -34,7 +34,7 @@ _COLS = ("id, org_id, sub, label, folder, procedure, project_id, tools, "
          "max_tokens, max_run_seconds, model, kind, payload_mode, payload_fields, max_per_hour, fraicheur_s, "
          "cron, tz, enabled, next_due, last_enqueued_at, created_at, hook_auth, "
          "(hook_signing_secret_enc IS NOT NULL) AS signing_secret_set, "
-         "max_per_day, hook_slug")
+         "max_per_day, hook_slug, hook_filter")
 
 #: ⚠️ `hook_secret_hash` n'est PAS dans `_COLS`, et c'est la garde : un haché servi
 #: à une lecture partirait dans la réponse de `op=list`, donc dans un transcript
@@ -59,6 +59,7 @@ def create_trigger(org_id: int, sub: str, *, procedure: str, tz: str,
                    max_per_hour: Optional[int] = None,
                    fraicheur_s: Optional[int] = None,
                    max_per_day: Optional[int] = None,
+                   hook_filter: Optional[dict] = None,
                    enabled: bool = True) -> dict:
     """Pose un déclencheur — programmé (`cron` + `next_due`) ou par webhook.
 
@@ -73,16 +74,18 @@ def create_trigger(org_id: int, sub: str, *, procedure: str, tz: str,
                    (org_id, sub, label, procedure, project_id, tools, input,
                     max_steps, max_tokens, max_run_seconds, model, kind, payload_mode,
                     payload_fields, max_per_hour, fraicheur_s, cron, tz, next_due,
-                    max_per_day, enabled)
+                    max_per_day, hook_filter, enabled)
             VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s,
-                    %s::jsonb, %s, %s, %s, %s, %s, %s, %s)
+                    %s::jsonb, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
             RETURNING {_COLS}
             """,
             (org_id, sub, label, procedure, project_id,
              json.dumps(list(tools), ensure_ascii=False), input, max_steps,
              max_tokens, max_run_seconds, model, kind, payload_mode,
              json.dumps(payload_fields, ensure_ascii=False) if payload_fields else None,
-             max_per_hour, fraicheur_s, cron, tz, next_due, max_per_day, enabled),
+             max_per_hour, fraicheur_s, cron, tz, next_due, max_per_day,
+             json.dumps(hook_filter, ensure_ascii=False) if hook_filter else None,
+             enabled),
         ).fetchone()
     return dict(row)
 
@@ -272,7 +275,9 @@ def update_trigger(trigger_id: int, org_id: int, champs: dict[str, Any], *,
                  # Le PLAFOND journalier (NULL = aucun). L'adresse privée
                  # (`hook_slug`) n'y est PAS : elle se pose par son verbe,
                  # `poser_adresse_de_hook`, jamais par une retouche générique.
-                 "max_per_day"}
+                 "max_per_day",
+                 # Le FILTRE de livraison (`hook_filter`, NULL = tout passe).
+                 "hook_filter"}
     inconnu = set(champs) - autorises
     if inconnu:
         raise ValueError(f"colonnes hors contrat : {sorted(inconnu)}")
@@ -283,10 +288,10 @@ def update_trigger(trigger_id: int, org_id: int, champs: dict[str, Any], *,
         if k in ("tools", "outils_plateforme"):
             sets.append(f"{k} = %s::jsonb")
             vals.append(json.dumps(list(v), ensure_ascii=False))
-        elif k == "payload_fields":
+        elif k in ("payload_fields", "hook_filter"):
             # Un dict nu ne s'adapte pas en jsonb (psycopg refuse `dict`) : le
             # passer tel quel faisait échouer TOUTE mise à jour qui le portait.
-            sets.append("payload_fields = %s::jsonb")
+            sets.append(f"{k} = %s::jsonb")
             vals.append(json.dumps(v, ensure_ascii=False) if v else None)
         else:
             sets.append(f"{k} = %s")
@@ -364,9 +369,17 @@ def trigger_par_secret(trigger_id: int, secret_hash: str,
     return dict(row) if row else None
 
 
-def trigger_signe(trigger_id: int) -> Optional[dict]:
+#: Les préréglages dont la source SIGNE avec un secret qu'elle a généré — les
+#: seuls que `trigger_signe` sait chercher. Une liste fermée : le mode est
+#: interpolé dans aucune requête, mais il ne doit pas non plus pouvoir désigner
+#: un agent au porteur.
+_MODES_SIGNES = ("standard_webhooks", "slack")
+
+
+def trigger_signe(trigger_id: int, hook_auth: str = "standard_webhooks") -> Optional[dict]:
     """Le déclencheur webhook en mode SIGNATURE d'un id, avec son secret CHIFFRÉ —
-    pour la route, et pour elle seule.
+    pour la route, et pour elle seule. `hook_auth` : le préréglage signé attendu
+    (`standard_webhooks` ou `slack`) — chaque signature n'ouvre que le sien.
 
     ⚠️ Trouvé par son SEUL id, et c'est la différence de nature avec le porteur :
     une signature se vérifie AVEC le secret, donc il faut lire la ligne avant de
@@ -377,11 +390,13 @@ def trigger_signe(trigger_id: int) -> Optional[dict]:
     `enabled` n'est pas filtré, pour la même raison que `trigger_par_secret` : une
     source qui a prouvé qui elle est a droit au 409 « en pause ».
     """
+    if hook_auth not in _MODES_SIGNES:
+        return None
     with _connect() as conn:
         row = conn.execute(
             f"SELECT {_COLS}, hook_signing_secret_enc FROM runner_triggers "
-            f"WHERE id = %s AND kind = 'webhook' AND hook_auth = 'standard_webhooks'",
-            (trigger_id,),
+            f"WHERE id = %s AND kind = 'webhook' AND hook_auth = %s",
+            (trigger_id, hook_auth),
         ).fetchone()
     return dict(row) if row else None
 

@@ -66,6 +66,23 @@ Slack reference: [create an app from a manifest](https://api.slack.com/reference
 
 a Slack token is issued **per installation**: two workspaces = two independent sets of tokens. Redo the installation in the second workspace (same manifest), then set its tokens as a second workspace of the connector (section "several workspaces").
 
+## setup — start an agent on every Slack message (Event Subscriptions)
+
+the same app can **start a hosted agent** each time someone writes in a channel it is in — no relay, no polling. Slack posts each event to the agent's address and signs it with the app's **Signing Secret**.
+1. create a **webhook** agent (`oto_trigger op=create kind=webhook`, usually `payload_mode="inline"` so it sees the channel and message); copy its `hook_url`
+2. on the agent's page, set **how the sender proves who it is** to **Slack** and paste the app's **Signing Secret** (api.slack.com/apps → your app → **Basic Information** → App Credentials — *not* the `xoxb-` token). It is stored encrypted and never shown again; it is set on the screen, never through a tool
+3. in the app: **Event Subscriptions** → **Enable Events** → **Request URL** = the agent's `hook_url`. Slack shows **Verified** within seconds: the agent answers Slack's challenge once the signature checks out
+4. **Subscribe to bot events**: `message.channels` (public channels), `message.groups` (private channels, Slack Connect included), optionally `message.im` — the manifest above already has the matching `*:history` scopes. **Save Changes**, and reinstall the app if Slack asks
+5. optional but recommended, a **filter** so internal chatter costs no run: `oto_trigger op=update hook_filter={"is_ext_shared_channel": [true]}` (only channels shared with another company), or `{"event.channel": ["C…", "C…"]}` (only those channels). A filtered event gets a success and starts nothing
+
+what never starts a run, whatever the filter: messages from bots — **the agent's own posts included**, so an agent that writes in a channel its app listens to does not trigger itself —, edits, deletions, joins, and Slack's retries of an event already accepted (same `event_id`).
+
+⚠️ **one Request URL per app**: every subscribed event goes to that one agent. Two agents on the same events = two Slack apps, or one agent whose procedure routes.
+⚠️ **a paused agent answers 409**, which Slack counts as a failure: after many failures in an hour Slack turns the subscription off (it says so on the Event Subscriptions page — switch it back on there).
+⚠️ the app only receives events of channels it is a **member** of: `/invite` it in each private or Slack Connect channel, as above.
+
+Slack reference: [Events API](https://api.slack.com/apis/events-api) · [verifying requests from Slack](https://api.slack.com/authentication/verifying-requests-from-slack)
+
 ## usage — what you can do
 
 send and read slack messages from claude — in your name or under the app's, depending on the tokens set.

@@ -1238,6 +1238,7 @@ change** et aucune colonne n'est ajoutée.
 | `bearer` (défaut) | `bearer` | en-tête `Authorization: Bearer otoh_…` | — |
 | `standard_webhooks` | `standard_webhooks` | signature `webhook-*` (ci-dessus) | `webhook-id`, signé |
 | `lemlist` | `body_secret` | le **même** `otoh_`, renvoyé par la source dans le champ `secret` de son corps JSON | `_id` du corps |
+| `slack` | `slack_signature` | `X-Slack-Signature: v0=<hex>` + `X-Slack-Request-Timestamp` — HMAC-SHA256 de `v0:{ts}:{corps brut}`, clé = le *Signing Secret* de l'app tel quel (`hook_slack`) | `event_id` du corps, signé |
 | `none` | `none` | **aucune** — choix explicite du propriétaire | — |
 
 - **`body_secret`, pour une source qui ne sait ni poser un en-tête ni signer.**
@@ -1303,7 +1304,8 @@ change** et aucune colonne n'est ajoutée.
   `PREREGLAGES` + son banc (le vecteur publié par la source quand elle en a un).
   `test_l_API_de_pose_sert_EXACTEMENT_le_registre` garde la pose et le registre
   alignés. Un **nouveau schéma** (HMAC d'en-tête à la Stripe/GitHub/Slack, poignée
-  de main de vérification) reste du code — une fois par schéma, pas par source.
+  de main de vérification) reste du code — une fois par schéma, pas par source
+  (Slack l'a été le 20/10/2026, voir plus bas).
 - ⚠️ **Base partagée, fenêtre de déploiement** : l'ancien code ne connaît pas
   `lemlist` ni `none`. Il les traite en **fermé** — son porteur filtre `bearer`, sa
   signature filtre `standard_webhooks` : 404, rien n'enfile. Une ligne posée
@@ -1314,6 +1316,68 @@ change** et aucune colonne n'est ajoutée.
   (`oto_trigger op=get`), son `rotate_address` la renouvelle par un outil. ⚠️ **Ne
   poser aucun `none` avant que la prod porte ce lot**, et renouveler l'adresse
   (`hook_auth=none` redemandé) de tout agent posé pendant la fenêtre.
+
+#### Slack (Events API) : un schéma signé de plus, une poignée de main, du bruit (20/10/2026)
+
+Une app Slack abonnée à l'Events API POSTe chaque événement à **une** adresse — la
+*Request URL* de son écran *Event Subscriptions*. Un agent `hook_auth=slack` est
+cette adresse, sans relais. Le code propre au schéma vit dans `oto_mcp/hook_slack.py`
+(`runner_hook` est déjà au-delà du plafond de lignes, il n'en garde que l'aiguillage).
+Banc : `tests/test_webhook_slack.py`, dont le **vecteur publié par Slack**.
+
+- **Les règles de la signature Standard Webhooks, à l'identique** : octets reçus,
+  temps constant, ±5 min, `stale` seul nommé et journalisé, tout autre échec = le
+  404 commun non journalisé, et un id inconnu paie le même calcul (clé leurre).
+  `trigger_signe(id, hook_auth)` porte le mode dans son WHERE, sur une liste
+  fermée (`_MODES_SIGNES`) : une signature Slack n'ouvre pas un agent
+  `standard_webhooks`, ni l'inverse, et aucune des deux n'ouvre un agent au porteur.
+- **Le secret** est le *Signing Secret* de l'app, de l'hexadécimal : la pose refuse un
+  `xoxb-`, un `whsec_` ou un `otoh_` collés au mauvais endroit
+  (`hook_slack.secret_valide`). Même stockage que le `whsec_`
+  (`hook_signing_secret_enc`, chiffré, AAD liée à la ligne). ⚠️ Un secret posé ne vaut
+  que pour SON mode : passer de `standard_webhooks` à `slack` (ou l'inverse) exige le
+  secret du nouveau — un `whsec_` gardé ferait un agent branché qui refuse tout.
+- **La poignée de main** (`type: url_verification`) : `{challenge}` renvoyé en 200,
+  **après** la signature (sinon la route serait un écho qui confirme qu'une adresse
+  existe) et **avant** la pause (sinon un agent posé éteint ne se brancherait jamais).
+  Aucun travail, rien au journal.
+- **Le bruit ne lance jamais de travail** (`hook_slack.classer`) : enveloppe qui n'est
+  pas un `event_callback`, message de **bot** (`bot_id`, `bot_message`), message
+  `hidden`, et tout sous-type de `message` hors `SOUS_TYPES_HUMAINS` (liste FERMÉE :
+  un sous-type nouveau chez Slack est écarté tant que personne n'a décidé qu'il
+  méritait un agent). ⚠️ Le bot d'abord : un agent qui poste dans un canal où son app
+  écoute se redéclencherait à chaque message qu'il écrit. Ce qui est écarté rend
+  **200 `ignored`**, jamais un refus — Slack retenterait, puis couperait l'abonnement —
+  et ne s'écrit pas au journal (un canal actif en produit à chaque message).
+- **Déduplication** : `event_id` (corps signé) est l'identifiant de livraison ; Slack
+  retente sous 3 s (`X-Slack-Retry-Num`), la retentative d'un événement accepté rend
+  `duplicate` (un `event_id` par enveloppe, un événement par POST).
+- ⚠️ Un agent **en pause** rend 409 : Slack le compte comme un échec, et désactive
+  l'abonnement au-delà d'un seuil d'échecs sur une heure. Assumé, comme pour une
+  source Standard Webhooks.
+
+#### Le FILTRE de livraison : écarter à la porte, sans run (20/10/2026)
+
+Une source branchée une fois envoie TOUT ce qu'elle sait envoyer — une app Slack,
+chaque message de chaque canal où elle est. Sans filtre, le tri coûtait un run entier
+(modèle compris) pour conclure « pas pour moi ». `runner_triggers.hook_filter`
+(JSONB, `oto_mcp/hook_filter.py`), posé par `oto_trigger op=create|update` :
+
+- forme `{chemin: [valeurs]}` — ET entre les chemins, OU dans une liste, chemin
+  absent = pas de correspondance ; chemins lus comme `payload_fields`. Pas
+  d'opérateur, pas d'expression (la ligne de `_extraire`).
+- comparaison sur la valeur **brute** : `true` n'est ni `"true"` ni `1` (en Python
+  `True == 1`, d'où le contrôle de type dans `_egal`).
+- jugé **après** la preuve (un inconnu ne sonde pas le filtre), pour **tout**
+  préréglage ; ce qu'il écarte rend 200 `ignored: filtered`, sans journal.
+- refusé mal formé **à la pose** (`invalid_hook_filter` : liste vide, valeur non
+  scalaire, bornes) — un filtre qui ne correspond jamais éteindrait l'agent sans que
+  personne ne le voie. `{}` le retire (stocké NULL, comme `max_per_day=0`).
+- ⚠️ **Fenêtre de déploiement** (base partagée) : l'ancien code ne lit pas
+  `hook_filter` et traite `slack` en **fermé** (son porteur filtre `bearer`, sa
+  signature `standard_webhooks` : 404, rien n'enfile). Un filtre posé avant que la
+  prod porte ce lot n'y est donc pas appliqué — sans danger pour un agent `slack`,
+  qui n'ouvre pas du tout côté ancien code.
 
 #### Deux protections réglées par l'utilisateur
 

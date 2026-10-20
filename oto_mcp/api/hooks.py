@@ -68,6 +68,11 @@ async def fire(request: Request) -> JSONResponse:
       202 le travail est enfilé (`delayed_seconds` s'il a été lissé)
       202 `duplicate: true` — cette livraison (même `webhook-id` signé) a déjà
           été acceptée : aucun second travail
+      200 `{challenge}` — la poignée de main Slack (`url_verification`), rendue
+          seulement après une signature valide
+      200 `ignored: <motif>` — authentifiée, mais rien pour cet agent (bruit
+          Slack, `hook_filter`) : aucun travail, et un SUCCÈS pour la source —
+          un refus la ferait retenter, puis couper le hook
       400 le corps n'est pas du JSON — ou (`hook_stale_timestamp`) une signature
           VALIDE dont l'horodatage sort de la fenêtre de 5 min
       404 identifiant inconnu, OU secret faux, OU signature fausse, OU preuve
@@ -114,7 +119,7 @@ async def fire(request: Request) -> JSONResponse:
                           "The body is not JSON. Send a JSON object, or nothing "
                           "at all if the agent does not need one.")
 
-    # La preuve SIGNÉE (Standard Webhooks), jugée sur les octets REÇUS (`brut`),
+    # La preuve SIGNÉE (Standard Webhooks, Slack), jugée sur les octets REÇUS (`brut`),
     # jamais sur le JSON re-sérialisé : un espace ou un ordre de clés différent
     # suffirait à refuser une livraison légitime.
     signature = runner_hook.signature_des_entetes(request.headers, brut)
@@ -142,6 +147,11 @@ async def fire(request: Request) -> JSONResponse:
                       "The trigger failed on our side. Retry: no job was "
                       "queued.")
 
+    if "challenge" in rendu:
+        # Slack attend `{"challenge": …}` et rien d'autre, en 200.
+        return JSONResponse({"challenge": rendu["challenge"]}, status_code=200)
+    if rendu.get("ignored"):
+        return JSONResponse(rendu, status_code=200)
     return JSONResponse(rendu, status_code=202)
 
 

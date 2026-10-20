@@ -43,7 +43,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Literal, Optional
 
-from . import db, org_suspension, procedure_retiree, runner_models
+from . import db, hook_filter, hook_slack, org_suspension, procedure_retiree, runner_models
 from .capabilities import _limites_du_run
 
 logger = logging.getLogger(__name__)
@@ -165,6 +165,10 @@ def secret_du_porteur(entete: Optional[str]) -> Optional[str]:
 # mode signature ÉTEINT le porteur pour cet agent-là.
 
 BEARER, STANDARD_WEBHOOKS = "bearer", "standard_webhooks"
+#: Le préréglage Slack (Events API) : signature `v0` propre à Slack, poignée de
+#: main `url_verification`, bruit écarté sans run — tout son code vit dans
+#: `hook_slack`, ici ne reste que l'aiguillage.
+SLACK = "slack"
 BODY_SECRET, NONE = "body_secret", "none"
 
 
@@ -191,6 +195,9 @@ class Prereglage:
         `champ_secret` (pas un chemin : c'est elle qui est retirée du corps) ;
       - `none` : AUCUNE preuve, choix explicite du propriétaire. L'adresse privée
         (`h_`, 128 bits) est alors le seul secret — voir `_sans_signature`.
+      - `slack_signature` : la source SIGNE à la façon de Slack (`X-Slack-*`,
+        `hook_slack`), avec un secret qu'ELLE a généré — comme `standard_webhooks`,
+        le porteur est alors refusé.
     `chemin_id` : le CHEMIN (`a.b`) du corps qui identifie la livraison, pour ne pas
     rejouer une retentative (NON signé : seul qui détient le secret peut le poser).
     """
@@ -204,6 +211,11 @@ class Prereglage:
         """Ce préréglage s'ouvre-t-il avec NOTRE `otoh_` (en-tête ou corps) ?"""
         return self.schema in (BEARER, BODY_SECRET)
 
+    @property
+    def signe(self) -> bool:
+        """La source SIGNE-t-elle avec un secret qu'elle a généré (stocké chiffré) ?"""
+        return self.schema in (STANDARD_WEBHOOKS, hook_slack.SCHEMA)
+
 
 PREREGLAGES: dict[str, Prereglage] = {p.nom: p for p in (
     Prereglage(BEARER, BEARER),
@@ -212,6 +224,10 @@ PREREGLAGES: dict[str, Prereglage] = {p.nom: p for p in (
     # dans le corps de chaque appel ; `_id` est l'identifiant de l'activité.
     # https://developer.lemlist.com/api-reference/endpoints/webhooks/add-webhook
     Prereglage("lemlist", BODY_SECRET, champ_secret="secret", chemin_id="_id"),
+    # Slack (Events API) : signé avec le *Signing Secret* de l'app ; `event_id`,
+    # dans le corps SIGNÉ, identifie la livraison (Slack retente sous 3 s).
+    # https://api.slack.com/authentication/verifying-requests-from-slack
+    Prereglage(SLACK, hook_slack.SCHEMA, chemin_id="event_id"),
     Prereglage(NONE, NONE),
 )}
 HOOK_AUTHS = tuple(PREREGLAGES)
@@ -261,6 +277,7 @@ _ID_MAX = 256
 #: Une clé jetable, pour que le refus d'un id inconnu coûte le même calcul qu'une
 #: vraie vérification (voir `_authentifier`). Ne valide rien : personne ne la connaît.
 _SECRET_LEURRE = SIGNING_SECRET_PREFIX + base64.b64encode(secrets.token_bytes(24)).decode()
+_SECRET_LEURRE_SLACK = secrets.token_hex(16)
 
 
 @dataclass(frozen=True)
@@ -277,16 +294,18 @@ class SignatureRecue:
     brut: bytes
 
 
-def signature_des_entetes(entetes, brut: bytes) -> Optional[SignatureRecue]:
-    """La signature d'une requête, ou None si elle n'en porte pas.
+def signature_des_entetes(entetes, brut: bytes):
+    """La signature d'une requête — `SignatureRecue` (Standard Webhooks),
+    `hook_slack.SignatureSlack` (Slack) — ou None si elle n'en porte pas.
 
     Les trois en-têtes, ou rien : une requête qui n'en porte que deux n'est pas
-    « presque signée », elle n'est pas signée."""
+    « presque signée », elle n'est pas signée. Le MODE reste celui de l'agent
+    (`_authentifier`) : ce qui est lu ici ne dit que quelle preuve est présentée."""
     msg_id = entetes.get("webhook-id")
     horodatage = entetes.get("webhook-timestamp")
     signatures = entetes.get("webhook-signature")
     if not (msg_id and horodatage and signatures):
-        return None
+        return hook_slack.signature_des_entetes(entetes, brut)
     # ⚠️ PAS tronqué ici : l'identifiant fait partie de ce qui est SIGNÉ. Le
     # couper avant la vérification ferait échouer la signature d'un id long ;
     # il n'est borné qu'au STOCKAGE (`declencher`).
@@ -535,6 +554,9 @@ def _authentifier(trigger_id: int, secret: Optional[str],
     mauvais mode, secret faux, signature fausse. Un seul refus parle : `stale`,
     rendu seulement quand la signature est VALIDE (cf. `verifier_signature`).
     """
+    if isinstance(signature, hook_slack.SignatureSlack):
+        return _par_signature_slack(trigger_id, secret, signature, source,
+                                    par_adresse_privee, corps)
     if signature is not None:
         t = db.trigger_signe(trigger_id)
         enveloppe = (t or {}).get("hook_signing_secret_enc")
@@ -578,6 +600,44 @@ def _authentifier(trigger_id: int, secret: Optional[str],
         # passer une livraison pour le doublon d'une autre.
         return t, signature.msg_id[:_ID_MAX], corps
     return _sans_signature(trigger_id, secret, corps, par_adresse_privee)
+
+
+def _par_signature_slack(trigger_id: int, secret: Optional[str],
+                         signature: "hook_slack.SignatureSlack",
+                         source: Optional[str], par_adresse_privee: bool,
+                         corps: Any) -> tuple[dict, Optional[str], Any]:
+    """La porte d'un agent `slack` — les mêmes règles que la signature Standard
+    Webhooks juste au-dessus : la garde du mode dans le WHERE, le même 404 sans
+    journal pour tout échec d'identité, un calcul leurre pour un id inconnu, et
+    `stale` seul nommé (la source a prouvé qu'elle détient le secret)."""
+    t = db.trigger_signe(trigger_id, SLACK)
+    enveloppe = (t or {}).get("hook_signing_secret_enc")
+    if not t or not enveloppe:
+        hook_slack.verifier(_SECRET_LEURRE_SLACK, signature)
+        return _sans_signature(trigger_id, secret, corps, par_adresse_privee)
+    try:
+        cle = _dechiffrer_secret_de_signature(trigger_id, enveloppe)
+    except Exception:  # noqa: BLE001 — journalisé, et c'est une panne de NOTRE côté
+        logger.exception("webhook %s : secret de signature Slack indéchiffrable",
+                         trigger_id)
+        raise
+    verdict = hook_slack.verifier(cle, signature)
+    if verdict == "invalid":
+        raise HookRefus(404, "hook_not_found", HOOK_INCONNU)
+    externe = hook_slack.identifiant(corps)
+    externe = externe[:_ID_MAX] if externe else None
+    if verdict == "stale":
+        with db._connect() as conn:
+            db.enregistrer(conn, trigger_id, t["org_id"], db.REFUSE_STALE,
+                           source=source, external_id=externe)
+        raise HookRefus(
+            400, "hook_stale_timestamp",
+            f"The signed `X-Slack-Request-Timestamp` is more than "
+            f"{hook_slack.TOLERANCE_HORODATAGE_S} s away from our clock. A "
+            "delivery is only accepted within that window: it cannot be replayed "
+            "later.")
+    _exiger_l_adresse(t, par_adresse_privee)
+    return t, externe, corps
 
 
 def _sans_signature(trigger_id: int, secret: Optional[str], corps: Any,
@@ -642,6 +702,21 @@ def declencher(trigger_id: int, secret: Optional[str], corps: Any,
     # Posé seulement quand il existe : le chemin du porteur écrit exactement ce
     # qu'il écrivait avant ce lot.
     marque = {"external_id": externe} if externe else {}
+
+    # Ce qui n'appelle AUCUN travail, jugé après la preuve et avant tout le reste
+    # (pause comprise) : ce n'est pas un refus, c'est « rien pour cet agent ».
+    # Rendu comme un succès — une source qui reçoit un refus retente, puis coupe
+    # le hook — et jamais journalisé : un canal actif en produit à chaque message.
+    if prereglage(t.get("hook_auth")).schema == hook_slack.SCHEMA:
+        classe = hook_slack.classer(corps)
+        if classe.challenge is not None:
+            return {"ok": True, "trigger_id": trigger_id, "challenge": classe.challenge}
+        if classe.ignore:
+            return {"ok": True, "trigger_id": trigger_id, "job_id": None,
+                    "ignored": classe.ignore}
+    if not hook_filter.correspond(t.get("hook_filter"), corps):
+        return {"ok": True, "trigger_id": trigger_id, "job_id": None,
+                "ignored": "filtered"}
 
     # ⚠️ UNE transaction, et le refus est levé APRÈS elle. Lever DANS le bloc
     # ferait rouler la transaction en arrière — la livraison refusée disparaîtrait
