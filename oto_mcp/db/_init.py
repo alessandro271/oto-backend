@@ -670,6 +670,10 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # indifférent entre elles.
     if _colonne_absente(conn, "runner_triggers", runner_triggers.COLONNE_OUTILS_PLATEFORME):
         conn.execute(runner_triggers.DDL_COLONNE_OUTILS_PLATEFORME)
+    # Les webhooks qu'oto a inscrits chez la source d'un agent — la même que pose la
+    # révision `0072` : ordre indifférent entre elles.
+    if _colonne_absente(conn, "runner_triggers", runner_triggers.COLONNE_HOOK_SOURCES):
+        conn.execute(runner_triggers.DDL_COLONNE_HOOK_SOURCES)
     # Les surcharges du temps gagné d'une org — la même que pose la révision `0066` :
     # ordre indifférent entre elles.
     if _colonne_absente(conn, "orgs", runner_jobs.COLONNE_TEMPS_GAGNE):

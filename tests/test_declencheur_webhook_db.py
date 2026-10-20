@@ -917,3 +917,68 @@ def test_none_ne_se_trouve_QU_avec_une_adresse_privee_EN_SQL(live):
     au_porteur, _ = _webhook(db, procedure="prereglage-none-porteur")
     assert db.trigger_sans_preuve(au_porteur["id"]) is None, \
         "un agent qui exige une preuve ne s'ouvre jamais sans"
+
+
+# ── brancher une source (`connect_source`) : l'écriture conditionnelle ──────────
+
+def test_brancher_la_source_ecrit_TOUT_en_une_fois_et_rend_hook_sources(live):
+    """Adresse, mode, haché, inscriptions : une seule écriture. `hook_sources` se lit
+    (c'est servi), le haché ne se lit pas."""
+    from oto_mcp import db, runner_hook
+    t, _ = _webhook(db)
+    porteur, hache = runner_hook.nouveau_secret()
+    slug = runner_hook.nouvelle_adresse()
+    inscrites = [{"source": "lemlist", "remote_id": "hoo_a", "event": "emailsReplied",
+                  "campaign_id": None}]
+    assert db.brancher_la_source(t["id"], ORG, hook_auth=runner_hook.BODY_SECRET,
+                                 secret_hash=hache, hook_slug=slug, sources=inscrites,
+                                 sources_avant=None)
+    lu = db.get_trigger(t["id"], ORG)
+    assert lu["hook_sources"] == inscrites and lu["hook_slug"] == slug
+    assert lu["hook_auth"] == runner_hook.BODY_SECRET and "hook_secret_hash" not in lu
+    assert db.trigger_par_secret(t["id"], hache, runner_hook.BODY_SECRET)
+
+
+def test_brancher_sur_une_ligne_qui_a_CHANGE_n_ecrit_rien(live):
+    """La garde du branchement concurrent : la ligne ne porte plus ce que le geste a
+    lu → `False`, et rien ne bouge (ni porteur, ni adresse, ni inscriptions)."""
+    from oto_mcp import db, runner_hook
+    t, secret = _webhook(db)
+    premiere = [{"source": "lemlist", "remote_id": "hoo_1", "event": "e",
+                 "campaign_id": None}]
+    _, h1 = runner_hook.nouveau_secret()
+    assert db.brancher_la_source(t["id"], ORG, hook_auth=runner_hook.BODY_SECRET,
+                                 secret_hash=h1, hook_slug=runner_hook.nouvelle_adresse(),
+                                 sources=premiere, sources_avant=None)
+    avant = db.get_trigger(t["id"], ORG)
+    _, h2 = runner_hook.nouveau_secret()
+    # Un second geste qui a lu la ligne AVANT la première écriture (rien d'inscrit).
+    assert not db.brancher_la_source(
+        t["id"], ORG, hook_auth=runner_hook.BODY_SECRET, secret_hash=h2,
+        hook_slug=runner_hook.nouvelle_adresse(),
+        sources=[{"source": "lemlist", "remote_id": "hoo_2", "event": "e",
+                  "campaign_id": None}], sources_avant=None)
+    assert db.get_trigger(t["id"], ORG) == avant
+    assert db.trigger_par_secret(t["id"], h1, runner_hook.BODY_SECRET)
+    assert not db.trigger_par_secret(t["id"], h2, runner_hook.BODY_SECRET)
+    # Avec ce que la ligne porte vraiment, il écrit.
+    assert db.brancher_la_source(t["id"], ORG, hook_auth=runner_hook.BODY_SECRET,
+                                 secret_hash=h2, hook_slug=avant["hook_slug"],
+                                 sources=[], sources_avant=premiere)
+
+
+def test_poser_les_sources_est_conditionnel_et_vider_rend_NULL(live):
+    from oto_mcp import db, runner_hook
+    t, _ = _webhook(db)
+    deux = [{"source": "lemlist", "remote_id": f"hoo_{i}", "event": "e",
+             "campaign_id": None} for i in (1, 2)]
+    _, h = runner_hook.nouveau_secret()
+    assert db.brancher_la_source(t["id"], ORG, hook_auth=runner_hook.BODY_SECRET,
+                                 secret_hash=h, hook_slug=runner_hook.nouvelle_adresse(),
+                                 sources=deux, sources_avant=[])
+    assert not db.poser_sources_de_hook(t["id"], ORG, deux[1:], sources_avant=deux[:1])
+    assert db.poser_sources_de_hook(t["id"], ORG, deux[1:], sources_avant=deux)
+    assert db.get_trigger(t["id"], ORG)["hook_sources"] == deux[1:]
+    assert db.poser_sources_de_hook(t["id"], ORG, [], sources_avant=deux[1:])
+    assert db.get_trigger(t["id"], ORG)["hook_sources"] is None
+    assert not db.poser_sources_de_hook(t["id"] + 10_000, ORG, [], sources_avant=None)
