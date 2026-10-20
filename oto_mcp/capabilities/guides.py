@@ -26,7 +26,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from .. import db, group_store, guide_store, session_org, tool_alias
+from .. import db, group_store, guide_store, ownership, session_org, tool_alias
 from ._authz import SUB_ONLY, refus_de_famille, refus_hors_vue
 from ._types import AuthzDenied, Capability, DeclaredError, ResolvedCtx, RestBinding
 from .docs import region
@@ -381,6 +381,10 @@ def _set(ctx: ResolvedCtx, inp: GuideSetInput) -> dict:
         raise AuthzDenied(400, "missing_slug", "`slug` is required for an on-demand guide.")
     if not body.strip():
         raise AuthzDenied(400, "missing_body", "`body_md` requis.")
+    if inp.scope == "user":
+        # Un guide personnel n'a pas d'org de création : il ne se liste et ne se cherche
+        # que dans la maison de son auteur, créée ici s'il n'en a pas (l'invité).
+        ownership.maison_de(str(owner_id))
     try:
         return guide_store.set_guide(inp.scope, owner_id, inp.slug, body,
                                      inp.title or "", inp.description or "")

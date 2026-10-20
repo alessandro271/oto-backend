@@ -170,6 +170,7 @@ def test_un_guide_relu_puis_reecrit_garde_le_canonique(tenant_acme, registre, mo
         return {"slug": slug}
 
     monkeypatch.setattr(guides.guide_store, "set_guide", _set_guide)
+    monkeypatch.setattr(guides.ownership, "maison_de", lambda sub: 1)
     guides._set(ResolvedCtx(sub=_SUB_TENANT),
                 guides.GuideSetInput(scope="user", slug="notes", body_md="Range avec `acme_doc`."))
     assert ecrit["body"] == "Range avec `oto_doc`."

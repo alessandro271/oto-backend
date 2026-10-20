@@ -139,7 +139,13 @@ def org_perso_de(sub: str, org_id: Optional[int]) -> bool:
     comme une autre ; l'étiquette ne sert plus qu'à désigner la MAISON de ce qui n'a pas
     d'org de création (`perso_de_la_liste`, le `sans_org` de `mes_objets_ici`) et à
     interdire à son propriétaire de la quitter. Même source que
-    `me.active_org_is_personal` (`org_store`)."""
+    `me.active_org_is_personal` (`org_store`).
+
+    La maison est FIXE et EXPLICITE : l'org qui porte l'étiquette, et elle seule. Un
+    compte sans org perso (l'invité, qui n'en reçoit pas à l'inscription) n'a de maison
+    nulle part — jamais son org active, qui le ferait déborder dans l'org d'entreprise
+    et changer de maison à chaque bascule. Ce qui a besoin d'une maison la crée à la
+    demande (`maison_du_partage` pour un partage nominatif, `ensure_personal_org`)."""
     return org_id is not None and org_store.get_personal_org(sub) == int(org_id)
 
 
@@ -693,6 +699,49 @@ def can_publish(sub: str, resource_type: str, resource_id: str) -> bool:
 
 # --- Mutations ----------------------------------------------------------------
 
+#: Les kinds dont un partage nominatif se liste dans l'org de la ressource, pas dans la
+#: maison du destinataire : un agent se partage entre membres de l'org où il tourne
+#: (`capabilities/_acces_agent.lister`). Un tel partage ne crée pas d'org perso.
+_PARTAGES_LISTES_DANS_L_ORG = frozenset({"runner_trigger"})
+
+
+def maison_du_partage(resource_type: str, principal_type: str, principal_id: str
+                      ) -> Optional[int]:
+    """Garantit au destinataire PERSONNEL d'un partage la maison où il le retrouvera :
+    son org perso (`org_perso_de`), créée à la demande s'il n'en a pas — l'invité, qui
+    n'en reçoit pas à l'inscription. Sans elle, le partage ne sortirait dans aucune
+    liste. Rend l'org perso, ou None quand le partage n'en demande pas (équipe, org,
+    kind listé dans l'org de la ressource). Un échec LÈVE : le partage n'est pas posé
+    sans sa maison."""
+    if principal_type != "user" or resource_type in _PARTAGES_LISTES_DANS_L_ORG:
+        return None
+    return maison_de(principal_id)
+
+
+def maison_de(sub: str) -> int:
+    """L'org perso de `sub` — sa MAISON (`org_perso_de`) —, créée à la demande s'il n'en
+    a pas : l'invité n'en reçoit pas à l'inscription. Le geste de ce qui ne se range que
+    là : un partage nominatif reçu (`maison_du_partage`) et un objet personnel créé sans
+    org de création — guide personnel, procédure personnelle, nœud hors projet. Sans
+    elle, l'objet ne sortirait dans aucune liste ni aucune recherche. Une lecture quand
+    la maison existe ; un échec LÈVE : l'objet n'est pas posé sans sa maison."""
+    pid = org_store.get_personal_org(sub)
+    if pid is not None:
+        return pid
+    u = db.get_user(sub)
+    if u is None:
+        # Un compte sans sa ligne `users` naît D'ABORD : `ensure_personal_org` la ferait
+        # naître au milieu de sa propre création (`add_org_member` → `upsert_user`),
+        # dont l'effet de naissance pose déjà une maison — deux maisons, et
+        # l'étiquette de la seconde casse `uq_orgs_personal_of`.
+        db.upsert_user(sub)
+        pid = org_store.get_personal_org(sub)
+        if pid is not None:
+            return pid
+        u = {}
+    return org_store.ensure_personal_org(sub, email=u.get("email"), name=u.get("name"))
+
+
 def grant(
     resource_type: str, resource_id: str, principal_type: str, principal_id: str,
     permission: Optional[str] = None, *, role: Optional[str] = None,
@@ -701,7 +750,9 @@ def grant(
     """Accorde un RÔLE (ADR 0048) à un principal. `role` ∈ {viewer, editor, manager}
     prime ; à défaut `permission` read/write est mappé (rétro-compat). `ttl_days` pose
     l'échéance (otomata-tech/oto#39, règle d'omission : `db.grant_resource`). Rend
-    l'échéance écrite, None = sans échéance."""
+    l'échéance écrite, None = sans échéance. Un partage à une PERSONNE lui garantit
+    d'abord sa maison (`maison_du_partage`)."""
+    maison_du_partage(resource_type, principal_type, principal_id)
     return db.grant_resource(resource_type, resource_id, principal_type, principal_id,
                              permission=permission, granted_by=granted_by, role=role,
                              ttl_days=ttl_days)
@@ -763,6 +814,7 @@ def transfer(
     db.revoke_resource_grant(resource_type, resource_id, new_owner_type, new_owner_id)
     # L'ancien propriétaire user conserve un accès write (« tu passes en partagé »).
     if prev is not None and prev[0] == "user" and prev != (new_owner_type, new_owner_id):
+        maison_du_partage(resource_type, "user", prev[1])
         db.grant_resource(resource_type, resource_id, "user", prev[1], "write")
 
 

@@ -32,7 +32,7 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from ... import (access, db, deprecations, group_store, guide_store, org_store,
-                procedure_diagram, procedure_empreinte, procedure_retrait, roles,
+                ownership, procedure_diagram, procedure_empreinte, procedure_retrait, roles,
                 slots as slots_mod, tool_alias, tool_registry)
 from .._auteurs import nommer_l_auteur, nommer_les_auteurs
 from .._lecture_bornee import bornee
@@ -1582,6 +1582,11 @@ def _write_instruction(ctx: ResolvedCtx, inp, must_create: bool = False) -> tupl
                           f"(scope='{owner[0]}', delivery='init').")
     # L'entrée de CRÉATION n'a pas de verrou optimiste (rien à verrouiller).
     expected_version = getattr(inp, "expected_version", None)
+    if owner[0] == "user" and not ancien_md:
+        # Une procédure personnelle n'a pas d'org de création : elle ne se cherche que
+        # dans la maison de son auteur, créée ici s'il n'en a pas (l'invité). À la
+        # création seulement — une édition trouve la maison déjà posée.
+        ownership.maison_de(owner[1])
     try:
         version = org_store.set_instruction(
             *owner, norm, body_md, title=title, description=description,

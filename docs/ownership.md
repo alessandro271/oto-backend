@@ -154,8 +154,34 @@ Fonctionnellement, une org perso est une org : on y invite, on y crée des équi
 l'archive par la même règle (`ORG_ADMIN_OF`). **Deux exceptions seulement** : elle est
 **créée à l'inscription** (`ensure_personal_org`), et **son propriétaire ne peut pas la
 quitter** (`me.leave_org`). L'étiquette reste posée quand d'autres y entrent
-(`add_org_member`, ffbe1c64) ; sans étiquette, le boot réclame la plus ancienne org que le
-compte a créée et dont il est membre, quel que soit son nombre de membres.
+(`add_org_member`, ffbe1c64) ; sans étiquette, `ensure_personal_org` réclame la plus
+ancienne org que le compte a créée et dont il est membre, quel que soit son nombre de
+membres.
+
+**Un invité n'en reçoit pas.** L'inscription ne la crée que pour un compte membre d'AUCUNE
+org : celui que la réconciliation d'invitation (`reconcile_signup_with_invitation`) vient
+de faire entrer dans une org n'a pas besoin d'un second espace. L'invité **par lien** la
+reçoit encore au premier appel authentifié (le jeton n'arrive qu'après, par
+`org.invite.accept`) : l'acceptation la relâche si elle est **vierge**
+(`org_store.liberer_perso_vierge` — née il y a moins d'une heure, seul membre, rien dedans
+que le projet « Découverte », ni clé déposée au coffre (org ou membre),
+ni compte connecté, même déconnecté, ni partage nominatif reçu), par `archive_org` ; un
+échec lève, l'acceptation ne le tait pas. Le boot (`backfill_personal_orgs`) ne
+rattrape que les comptes **sans org active vivante** : membre d'une org, la plus ancienne
+redevient maison ; d'aucune, l'org perso est créée. Un compte sans org perso en obtient une
+**à la demande** là où un espace perso est nécessaire (`ensure_personal_org` : `org.clear`
+REST, copie d'une procédure partagée, projet qui devient perso hors de ses orgs, **partage
+nominatif reçu** — `ownership.maison_du_partage`, appelé par `grant` et par le droit que
+`transfer` laisse à l'ancien propriétaire ; un agent, listé dans l'org où il tourne, n'en
+crée pas). Sorti de sa dernière org, il en retrouve une tout de suite
+(`members._rendre_un_espace`) ; un échec lève.
+
+**La maison est fixe et explicite** (revue du 19/10/2026) : c'est l'org qui porte
+l'étiquette `personal_of`, et elle seule (`ownership.org_perso_de`). Un compte sans org
+perso n'a de maison nulle part — jamais son org active, qui ferait apparaître ses partages
+nominatifs et ses objets sans org de création dans l'org d'entreprise, et déplacerait sa
+maison à chaque bascule. D'où la création à la demande ci-dessus : ce qui a besoin d'une
+maison la crée avant d'être posé.
 
 **Un objet appartient à qui le crée et vit dans l'org où il l'a créé** : son
 propriétaire l'y voit TOUJOURS (projets et tableaux, `ownership.mes_objets_ici` /

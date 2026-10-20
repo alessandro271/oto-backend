@@ -27,6 +27,9 @@ def store(monkeypatch):
     import oto_mcp.roles as roles
     monkeypatch.setattr(roles, "is_org_admin", lambda sub, org: sub == "admin")
     monkeypatch.setattr(roles, "is_platform_admin", lambda sub: sub == "superadmin")
+    # Un guide PERSONNEL pose d'abord la maison de son auteur (`ownership.maison_de`).
+    monkeypatch.setattr(G.ownership, "maison_de",
+                        lambda sub: calls.setdefault("maison", []).append(sub))
     return calls
 
 
@@ -49,6 +52,7 @@ def test_get_found_and_404(store):
 def test_set_user_is_self(store):
     G._set(_ctx(sub="u1"), G.GuideSetInput(scope="user", slug="s", body_md="b"))
     assert store["set"][:3] == ("user", "u1", "s")           # owner = sub
+    assert store["maison"] == ["u1"]                          # sa maison, d'abord
 
 
 def test_set_org_requires_admin(store):

@@ -303,16 +303,26 @@ def _hors_de_la_vue(sub: str, borne: int, fiche: dict, chaine: list[dict]) -> bo
     props = fiche.get("props") or {}
     if "delivery" in props or props.get("legacy") == "prc":
         return False
+    porteur = rangement(props, chaine)
+    if porteur is not None:
+        return not ownership.visible_in_org(sub, borne, *porteur)
+    return not ownership.org_perso_de(sub, borne)
+
+
+def rangement(props: dict, chaine: list[dict]) -> Optional[tuple[str, str]]:
+    """Ce qui RANGE un nœud, lu sur le fil du plus proche au plus loin : `("project",
+    id)`, puis un tableau recopié `(TYPE_RESSOURCE_DATASTORE, id)`. `None` : rien ne le
+    range — il n'a pas d'org de création, et sa maison est l'org perso de son
+    propriétaire (`_hors_de_la_vue` pour la lecture, `node_edit` pour la création)."""
     _, project_id = _source(props, chaine)
     if project_id is not None:
-        return not ownership.visible_in_org(sub, borne, "project", str(project_id))
+        return ("project", str(project_id))
     for maillon in reversed(chaine):
         p = maillon.get("props") or {}
         ds_id = datastore_de(p.get("legacy"), p.get("legacy_id"))
         if ds_id is not None:
-            return not ownership.visible_in_org(
-                sub, borne, ownership.TYPE_RESSOURCE_DATASTORE, str(ds_id))
-    return not ownership.org_perso_de(sub, borne)
+            return (ownership.TYPE_RESSOURCE_DATASTORE, str(ds_id))
+    return None
 
 
 def _source(props: dict, chaine: list[dict]) -> tuple[Optional[int], Optional[int]]:

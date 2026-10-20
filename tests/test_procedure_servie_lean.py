@@ -247,6 +247,7 @@ def test_un_scope_omis_ecrit_ailleurs_et_perd_le_dessin(monkeypatch):
         return None                       # rien de stocké au palier personnel
     monkeypatch.setattr(oi.org_store, "get_instruction", _get_instruction)
     monkeypatch.setattr(oi.org_store, "set_instruction", lambda *a, **k: 1)
+    monkeypatch.setattr(oi.ownership, "maison_de", lambda sub: 1)   # palier personnel
     relu = procedure_diagram.sans_le_dessin(_CORPS, 7)          # lu chez l'org
     out = oi._write_instruction(ResolvedCtx(sub="u1", org_id=3),
                                 oi.ConsoleInstrSetInput(slug="p", body_md=relu,

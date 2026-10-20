@@ -34,6 +34,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
+from .. import ownership
 from ..db import node_tables as db_node_tables, nodes as db_nodes, node_view as db_node
 from ._authz import ORG_MEMBER
 from ._types import AuthzDenied, Capability, ResolvedCtx, RestBinding
@@ -176,6 +177,21 @@ def _mien(ctx: ResolvedCtx, fiche: dict) -> None:
     _s_ecrit_ici(fiche)
 
 
+def _maison_hors_projet(sub: str, parent: Optional[int]) -> None:
+    """Un nœud PERSONNEL que rien ne range — ni projet ni tableau sur son fil — n'a pas
+    d'org de création : il ne sort que dans la maison de son propriétaire
+    (`node_view._hors_de_la_vue`, `perso_de_la_liste`). Elle est créée ici s'il n'en a
+    pas (l'invité, qui n'en reçoit pas à l'inscription) ; un échec lève, et le nœud
+    n'est pas créé."""
+    # Importé ici : `node_view` enregistre sa capacité à l'import, et l'importer en tête
+    # changerait l'ordre des routes servies (`tests/api/test_api_routes_table_frozen.py`).
+    from . import node_view
+    chaine = (db_node.ancestors_of(parent, max_depth=node_view._PROFONDEUR_FIL)
+              if parent is not None else [])
+    if node_view.rangement({}, chaine) is None:
+        ownership.maison_de(sub)
+
+
 def _create(ctx: ResolvedCtx, inp: NodeEditInput) -> dict:
     """Les trois genres passent par le MÊME verbe, et c'est le modèle qui le veut.
 
@@ -223,6 +239,8 @@ def _create(ctx: ResolvedCtx, inp: NodeEditInput) -> dict:
     if not (inp.title or "").strip():
         raise AuthzDenied(400, "missing_title",
                           f"`title` requis pour créer un nœud de genre {genre}.")
+    if scope == "user":
+        _maison_hors_projet(str(owner_id), parent)
     if genre == "tableau":
         row = db_node_tables.create_table(owner_type=scope, owner_id=owner_id,
                                           title=inp.title, columns=inp.columns,

@@ -172,6 +172,18 @@ def _set_member_role(ctx: ResolvedCtx, inp: SetMemberRoleInput) -> dict:
                               actor=ctx.sub)
 
 
+def _rendre_un_espace(sub: str) -> None:
+    """Un invité n'a pas d'org perso : sorti de sa dernière org, il retrouve tout de
+    suite un espace (même geste que l'archivage, `update._archive_org`) au lieu de
+    traverser le système sans org. Un échec LÈVE : le retrait est déjà fait, mais
+    l'appelant doit l'apprendre plutôt que de croire le compte servi — le backfill du
+    boot n'est pas une excuse pour taire la panne."""
+    if org_store.list_orgs_for_user(sub):
+        return
+    u = db.get_user(sub) or {}
+    org_store.ensure_personal_org(sub, email=u.get("email"), name=u.get("name"))
+
+
 def _remove_member(ctx: ResolvedCtx, inp: RemoveMemberInput) -> dict:
     target_sub = _resolve_target(inp.target)
     # Anti-lockout : ne pas retirer le dernier org_admin.
@@ -179,13 +191,15 @@ def _remove_member(ctx: ResolvedCtx, inp: RemoveMemberInput) -> dict:
         raise AuthzDenied(409, "last_org_admin", "Impossible de retirer le dernier org_admin.")
     if not org_store.remove_org_member(inp.org_id, target_sub, actor=ctx.sub):
         raise AuthzDenied(404, "not_a_member", "Cible non-membre de l'org.")
+    _rendre_un_espace(target_sub)
     return {"ok": True, "org_id": inp.org_id, "sub": target_sub, "removed": True}
 
 
 def _leave_org(ctx: ResolvedCtx, inp: LeaveOrgInput) -> dict:
     """Auto-retrait : l'appelant quitte une org dont il est membre (SUB_ONLY). Distinct
     de `org.member.remove` (org_admin retire un TIERS). L'org active bascule côté store
-    (`remove_org_member` promeut la plus ancienne restante ; l'org perso est le repli).
+    (`remove_org_member` promeut la plus ancienne restante ; sans org restante, un
+    espace perso est rendu tout de suite, `_rendre_un_espace`).
 
     Sous le jeton d'un agent hébergé, refusé d'emblée (`verrou_org.py`) : quitter une
     org déplace la maison de la personne, et le jeton ne porte que l'org de son travail."""
@@ -205,6 +219,7 @@ def _leave_org(ctx: ResolvedCtx, inp: LeaveOrgInput) -> dict:
                           "Tu es le dernier admin — nomme un autre admin avant de quitter l'org.")
     if not org_store.remove_org_member(inp.org_id, ctx.sub, actor=ctx.sub):
         raise AuthzDenied(404, "not_a_member", "Tu n'es pas membre de cette org.")
+    _rendre_un_espace(ctx.sub)
     return {"ok": True, "org_id": inp.org_id, "left": True}
 
 

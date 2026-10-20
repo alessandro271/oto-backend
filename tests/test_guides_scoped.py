@@ -88,6 +88,8 @@ def tool(monkeypatch):
     import oto_mcp.roles as roles
     monkeypatch.setattr(roles, "is_org_admin", lambda sub, org: sub == "admin")
     monkeypatch.setattr(roles, "is_platform_admin", lambda sub: False)
+    # Un guide PERSONNEL pose d'abord la maison de son auteur (`ownership.maison_de`).
+    monkeypatch.setattr(C.ownership, "maison_de", lambda sub: 1)
     calls = {}
     monkeypatch.setattr(G, "list_guides_for", lambda sub, org: [{"slug": "z", "scope": "user"}])
 

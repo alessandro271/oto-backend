@@ -349,6 +349,12 @@ def _invite_accept(ctx: ResolvedCtx, inp: InviteAcceptInput) -> dict:
                 "name": res.get("resource_name"),
                 "active_org": org_store.get_active_org(ctx.sub)}
     org = org_store.get_org(res["org_id"]) if res.get("org_id") else None
+    if res.get("org_id"):
+        # L'invité par lien a reçu une org perso au premier appel, avant que le jeton
+        # n'arrive : vierge, elle est relâchée (une org rejointe suffit de maison).
+        # Un échec lève : l'adhésion est faite, mais taire la panne laisserait à
+        # l'invité un second espace sans que personne ne l'apprenne.
+        org_store.liberer_perso_vierge(ctx.sub, int(res["org_id"]))
     return {"ok": True, "org_id": res.get("org_id"), "org_role": res.get("org_role"),
             "group_id": res.get("group_id"), "group_role": res.get("group_role"),
             "active_org": org_store.get_active_org(ctx.sub),
