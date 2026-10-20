@@ -1,0 +1,63 @@
+"""Les outils d'admin qu'un agent hébergé exerce avec le rôle plateforme de son porteur
+(`platform_tools`, revue de #1274) : qui peut poser la liste, et ce qu'elle peut nommer.
+
+Sorti de `runner_triggers` : la capacité des agents dépassait 1 900 lignes, et cette
+règle est un tout — les quatre refus d'auteur et de contenu, avec leur borne."""
+from __future__ import annotations
+
+import logging
+from typing import Optional
+
+from .. import access, verrou_org
+from ._types import AuthzDenied, ResolvedCtx
+
+logger = logging.getLogger(__name__)
+
+#: La borne de `platform_tools` : une liste d'outils d'admin NOMMÉS, jamais tout l'admin.
+PLATFORM_TOOLS_MAX = 10
+
+
+def outils_plateforme_valides(ctx: ResolvedCtx, noms: list[str], actuel: dict,
+                              outils: Optional[list[str]]) -> list[str]:
+    """La liste BORNÉE des `oto_admin_*` qu'un agent exerce avec le rôle plateforme de
+    son porteur sous le verrou des rôles (`verrou_org.outils_permis`, revue de #1274).
+
+    ⚠️ Elle ne se pose que par une PERSONNE : sous un jeton de délégation, un agent qui a
+    `oto_trigger` dans sa liste élargirait la sienne — une injection de prompt suffirait.
+    Seul le PROPRIÉTAIRE la pose (c'est son rôle qu'elle prête), et une liste non vide
+    exige qu'il soit opérateur plateforme : un membre n'a rien à prêter, et une liste
+    posée d'avance s'armerait le jour où il le devient. Chaque nom est un `oto_admin_*`
+    déjà dans les outils de l'agent (`outils`, sinon ceux stockés) : la liste ne sort pas
+    de la liste d'outils, que le serveur tient de toute façon (`outils_du_travail`)."""
+    if verrou_org.travail_de_la_requete() is not None:
+        raise AuthzDenied(403, "platform_tools_human_only",
+                          "`platform_tools` ne se pose pas depuis un agent hébergé : "
+                          "c'est son propriétaire qui la pose, depuis son compte.")
+    if str(actuel.get("sub")) != str(ctx.sub):
+        raise AuthzDenied(403, "platform_tools_owner_only",
+                          "`platform_tools` prête le rôle plateforme du propriétaire : "
+                          "lui seul la pose.")
+    liste = list(dict.fromkeys(n.strip() for n in noms if isinstance(n, str) and n.strip()))
+    if not liste:
+        return []
+    if not access.is_platform_operator(ctx.sub):
+        raise AuthzDenied(403, "platform_tools_operator_only",
+                          "`platform_tools` ne vaut que pour un opérateur plateforme : "
+                          "un membre n'a aucun rôle plateforme à prêter.")
+    if len(liste) > PLATFORM_TOOLS_MAX:
+        raise AuthzDenied(400, "platform_tools_too_many",
+                          f"`platform_tools` : au plus {PLATFORM_TOOLS_MAX} outils — une "
+                          "liste BORNÉE, pas tout l'admin.")
+    hors = [n for n in liste if not n.startswith(verrou_org.PREFIXE_ADMIN)]
+    if hors:
+        raise AuthzDenied(400, "platform_tools_not_admin",
+                          f"`platform_tools` ne nomme que des `oto_admin_*` : {hors}.")
+    declares = set(outils if outils is not None else (actuel.get("tools") or []))
+    absents = [n for n in liste if n not in declares]
+    if absents:
+        raise AuthzDenied(400, "platform_tools_not_in_tools",
+                          f"`platform_tools` : {absents} absents des `tools` de l'agent — "
+                          "ajoute-les d'abord à sa liste d'outils.")
+    logger.warning("agent %s (org %s) : %s pose ses outils d'admin au rôle plateforme %s",
+                   actuel.get("id"), ctx.org_id, ctx.sub, liste)
+    return liste

@@ -331,14 +331,15 @@ _REGLAGES: tuple[Variable, ...] = (
              "(défaut) refuse toute résolution du porteur hors de l'org de son travail, "
              "`report` la journalise et la laisse passer, `off` le coupe. Une valeur "
              "inconnue vaut `enforce`.",
-             ("oto_mcp/verrou_org.py:111",)),
+             ("oto_mcp/verrou_org.py:141",)),
     Variable("OTO_VERROU_ROLES_PLATEFORME", Classe.REGLAGE, "report",
              "Verrou des rôles PLATEFORME des jetons de délégation (`verrou_org.py`) : "
              "`enforce` lit `member` le porteur `admin`/`super_admin` d'un travail du "
-             "runner (aucune garde plateforme, aucun `oto_admin_*`), `report` (défaut) "
+             "runner (aucune garde plateforme, aucun `oto_admin_*` — sauf, pendant leur "
+             "appel, ceux que son agent nomme : `platform_tools`), `report` (défaut) "
              "journalise ce qui serait retiré et ne retire rien, `off` le coupe. Une "
              "valeur inconnue vaut `report`. Indépendant d'`OTO_VERROU_ORG_DELEGATION`.",
-             ("oto_mcp/verrou_org.py:188",)),
+             ("oto_mcp/verrou_org.py:226",)),
     Variable("OTO_CREDITS_MODE", Classe.REGLAGE, "report",
              "Budget d'unités au moment de l'appel (`access/credits.py`) : `report` "
              "(défaut) réserve et règle sans jamais refuser, et journalise ce "

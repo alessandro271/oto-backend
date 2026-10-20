@@ -151,6 +151,28 @@ rien) ou `off`. Il ne suit pas `OTO_VERROU_ORG_DELEGATION` : couper l'un ne rend
 l'autre. ⚠️ Avant `enforce`, relever au journal (`verrou des rôles plateforme (report)`)
 les travaux qui agissent avec un rôle plateforme : sous `enforce`, leurs `oto_admin_*`
 disparaissent de `tools/list` et toute garde plateforme les refuse.
+**Les outils d'admin d'un agent** (revue de #1274) : sous `enforce`, un agent hébergé ne
+garde le rôle plateforme de son porteur QUE pendant l'appel d'un des `oto_admin_*` que son
+agent nomme — `runner_triggers.outils_plateforme`, posé par `oto_trigger op=update
+platform_tools=[…]` (≤ 10, chacun déjà dans `tools`). Tout autre appel du même travail est
+lu `member` : un agent qui lit du contenu extérieur (tri des retours) n'expose à une
+injection de prompt que les outils nommés, pas tout l'admin. L'outil en cours est posé là
+où la liste du travail est tenue (`CallContextMiddleware`, `meta.executer_cible` pour la
+cible d'`oto_call` ou d'une recette) ; `tools/list` juge ces outils au rôle qu'ils auront à
+l'appel (`session_visibility._roles_des_outils_permis`), sinon ils seraient masqués donc
+injoignables. Sans outil posé (face REST), rien n'est permis.
+⚠️ **Seulement pour un agent que son porteur SEUL peut changer**
+(`db.outils_plateforme_du_travail`, lu une fois par requête) : posé sur son abonnement
+personnel et prêté à aucun éditeur nommé — un admin de l'org ou un partage à l'org entière
+ne peuvent alors que l'éteindre (`capabilities/_acces_agent.py`). Un agent tourne sous son
+propriétaire quel que soit celui qui l'a modifié : la liste d'un agent qu'un autre retouche
+(clé d'org, éditeur nommé) prêterait le rôle plateforme à cet autre, elle ne vaut donc rien.
+Un travail enfilé à la main ou d'une flotte n'en a pas. La liste se pose par une PERSONNE
+(refusée sous un jeton de délégation : un agent qui a `oto_trigger` élargirait la sienne),
+par le PROPRIÉTAIRE, opérateur plateforme pour une liste non vide ; elle s'éteint à `give`
+et `take_over`. **La trace reste** : chaque outil d'admin exercé ainsi, et chaque
+`oto_admin_*` hors liste lu `member` en `enforce`, laisse une ligne au journal
+(`verrou des rôles plateforme (…)`), une par outil et par requête, quel que soit le mode.
 
 Le verrou ne vise que le porteur : une lecture sur un tiers garde son chemin. Il est posé
 pour la requête par le bord — l'authentification REST et `middleware/verrou_org.py` côté
