@@ -60,10 +60,11 @@ async def _run_step(mcp: FastMCP, sub, step: Step, mode: str, inputs: dict,
         attempt.update(status="skipped", code="missing_input",
                        message=f"needs {_missing(step)}")
         return None
-    if step.own_key_only and mode not in ordre._OWN_KEY and mode != "unknown":
-        attempt.update(status="skipped", code="own_key_required",
-                       message="this step needs your own key for this provider — the "
-                               "shared key does not serve it")
+    if ordre.own_key_missing(step, mode):
+        attempt.update(status="skipped", code="own_key_required", message=(
+            "this step needs your own key for this provider — the shared key does not "
+            "serve it" if mode != "unknown" else "this step needs your own key for this "
+            "provider, and which key would serve it could not be read"))
         return None
     if mode in ordre._NO_KEY:
         attempt.update(status="skipped", code="no_key", message=(

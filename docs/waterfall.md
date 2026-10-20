@@ -88,14 +88,22 @@ Sur l'ordre PAR DÉFAUT seulement, **les fournisseurs pour lesquels l'appelant d
 clé passent devant**, avec les étapes GRATUITES (`Step.free` : registre français, session
 LinkedIn de l'appelant — que `credential_mode_for` dit `platform` et qu'un tri par clé
 aurait placées derrière une clé payante)
-(utilisateur, équipe, org, tenant — `access.credential_mode_for`, lu une fois par
-porteur et par appel, AVANT toute dépense), les clés partagées de la plateforme ensuite,
+(utilisateur, équipe, org — `access.credential_mode_for`, lu une fois par
+porteur et par appel, AVANT toute dépense), les clés partagées ensuite — celle du tenant
+comprise : du point de vue de l'org, c'est une clé payée par l'opérateur de l'instance, et
+refacturée sur le tenant primaire, pas la sienne,
 chaque groupe dans l'ordre de la table (tri stable). Un ordre ÉCRIT — celui de l'appel ou
 du réglage — est gardé tel quel : quelqu'un l'a choisi. Un fournisseur sans clé utilisable
 (`forbidden`, `over_quota`) est sauté sans être appelé. ⚠️ Ce mode est une lecture
 proche de la résolution réelle, pas exacte (il ignore un `_instance` épinglé, un compte
 nommé, l'option payante) : il ORDONNE, il ne garde rien — la garde reste l'appel de
 l'étape.
+
+Une étape « clé de l'appelant seulement » (`Step.own_key_only` : Forager pour l'email et le
+profil, la révélation de téléphone Apollo) ne part que sur une clé PROUVÉE de l'appelant —
+utilisateur, équipe ou org. Ni la clé du tenant, ni celle de la plateforme, ni un mode
+illisible (`unknown` : pas d'appelant, ou la lecture a échoué) : l'étape est sautée sans
+appel (`own_key_required`), et le plan la dit `usable: false`.
 
 ## Ce qu'une étape qui échoue fait : rien d'autre que passer la main
 

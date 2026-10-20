@@ -50,8 +50,7 @@ def _step_row(step: Step, mode: Optional[str] = None) -> dict:
            "per_item": step.per_item}
     if mode is not None:
         row["key_mode"] = mode
-        row["usable"] = mode not in ordre._NO_KEY and not (
-            step.own_key_only and mode not in ordre._OWN_KEY and mode != "unknown")
+        row["usable"] = mode not in ordre._NO_KEY and not ordre.own_key_missing(step, mode)
     if step.own_key_only:
         row["own_key_only"] = True
     return row

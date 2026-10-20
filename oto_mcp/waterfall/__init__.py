@@ -32,9 +32,10 @@ provider's row, never on the waterfall's), and ITS namespace's redaction policy.
 3. the default table (`email.EMAIL_STEPS`…): provider cost and yield, the synchronous
    steps before the asynchronous ones.
 On the DEFAULT order only, **the providers the caller holds their OWN key for run first**
-(user, team, org or tenant key — `access.credential_mode_for`, read once per call, before
+(user, team or org key — `access.credential_mode_for`, read once per call, before
 spending anything) together with the FREE steps (French registry, the caller's own
-LinkedIn session), the shared keys next, each group in the table's order. An order
+LinkedIn session), the shared keys next — the tenant's included —, each group in the
+table's order. An order
 someone WROTE (the call's, the setting's) is kept as written. Either way, a provider with
 no key at all is skipped without being called.
 

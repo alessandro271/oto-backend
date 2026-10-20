@@ -13,8 +13,12 @@ from .valeurs import _bad
 
 logger = logging.getLogger(__name__)
 
-#: Key modes that mean "the caller's OWN key" (`access.views.BYO_MODES`).
-_OWN_KEY = ("user", "group", "org", "tenant")
+#: Key modes that mean "the caller's OWN key": theirs, their team's, their org's. NOT
+#: `access.views.BYO_MODES`, which counts `tenant` too: from an org's side the tenant's
+#: key is a SHARED key — the instance's operator pays it, and on the primary tenant it is
+#: rebilled like the platform's (`credits.rang_refacture`). A step that the shared key must
+#: not serve (`Step.own_key_only`) never runs on it, and the default order puts it behind.
+_OWN_KEY = ("user", "group", "org")
 #: …and those that mean "no usable key": the step is skipped without a call.
 _NO_KEY = ("forbidden", "over_quota")
 
@@ -96,3 +100,10 @@ def _plan(ns: str, steps: tuple[Step, ...], providers_arg: Optional[list[str]],
         # group keeps the table's order. A WRITTEN order is not re-sorted.
         ordered.sort(key=lambda s: 0 if s.free or modes.get(s.tool) in _OWN_KEY else 1)
     return ordered, ignored, source, modes
+
+
+def own_key_missing(step: Step, mode: str) -> bool:
+    """A step that only the caller's own key may serve, on any other key — or on a key
+    mode that could not be read (`unknown`: no caller, or the probe failed). Only a key
+    PROVEN to be the caller's lets it run: an unread mode is not a proof."""
+    return step.own_key_only and mode not in _OWN_KEY
