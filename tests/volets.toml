@@ -426,6 +426,9 @@ tests = ["tests/**/test_billing*.py", "tests/**/test_*factur*.py"]
 nom = "runner et automatisations"
 sources = [
   "oto_mcp/runner_*.py",
+  # Les schémas de preuve et le filtre de livraison d'un webhook (runner_hook).
+  "oto_mcp/hook_slack.py",
+  "oto_mcp/hook_filter.py",
   "oto_mcp/run_*.py",
   "oto_mcp/routine_fire.py",
   "oto_mcp/anthropic_usage.py",
@@ -446,6 +449,7 @@ tests = [
   "tests/**/test_routine*.py",
   "tests/**/test_*abonnement*.py",
   "tests/**/test_declencheur*.py",
+  "tests/**/test_webhook*.py",
   "tests/**/test_portee_runner.py",
   "tests/**/test_trigger*.py",
   "tests/**/test_time_saved.py",

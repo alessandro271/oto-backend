@@ -102,8 +102,10 @@ def verifier(secret: str, recue: SignatureSlack,
     except ValueError:
         return "invalid"
     base = f"v0:{recue.horodatage}:".encode() + recue.brut
-    attendue = "v0=" + hmac.new(secret.strip().encode(), base,
-                                hashlib.sha256).hexdigest()
+    # `hmac.digest` (une passe) : la vérification d'un webhook, pas une signature de
+    # state OAuth — celle-là passe par `oauth_flow` (cliquet de test_oauth_flow).
+    attendue = "v0=" + hmac.digest(secret.strip().encode(), base,
+                                   hashlib.sha256).hex()
     if not hmac.compare_digest(recue.signature.encode(), attendue.encode()):
         return "invalid"
     maintenant = time.time() if maintenant is None else maintenant

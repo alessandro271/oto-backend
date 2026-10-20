@@ -89,8 +89,9 @@ def _lemlist(secret=JETON, _id="act_1"):
 # ── 0. le REGISTRE ────────────────────────────────────────────────────────────
 
 def test_chaque_preregle_nomme_un_schema_CONNU():
+    from oto_mcp import hook_slack
     connus = {runner_hook.BEARER, runner_hook.STANDARD_WEBHOOKS,
-              runner_hook.BODY_SECRET, runner_hook.NONE}
+              runner_hook.BODY_SECRET, runner_hook.NONE, hook_slack.SCHEMA}
     for p in runner_hook.PREREGLAGES.values():
         assert p.schema in connus, p
         if p.schema == runner_hook.BODY_SECRET:

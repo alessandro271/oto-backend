@@ -413,6 +413,8 @@ def test_toute_colonne_jsonb_est_triee_pour_la_fusion():
         ("runner_fleets", "descriptions_outils"), ("runner_fleets", "row_filter"),
         ("runner_fleets", "tools"), ("runner_triggers", "payload_fields"),
         ("runner_triggers", "tools"), ("runner_triggers", "outils_plateforme"),
+        # Le filtre de livraison : des chemins du corps reçu et des valeurs attendues.
+        ("runner_triggers", "hook_filter"),
         ("tenants", "brand"), ("tenants", "hosts"),
         ("tenants", "link_paths"), ("tenants", "logto_mgmt"),
         ("transcription_jobs", "result"), ("transcription_jobs", "transcript"),
