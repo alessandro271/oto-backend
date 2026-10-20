@@ -320,6 +320,10 @@ _DECLARATIONS: tuple[str, ...] = (
     # Neighbour of `elevenlabs` by situation (media production): video hosting
     # and streaming on the customer's Mux account.
     "mux",
+    # --- document management (GED), read-only — wired 2026-10-20 -------------
+    # The documents a company keeps indexed in Zeendoc (supplier invoices…): a
+    # Zeendoc user's login and password and the cabinet id travel together.
+    "zeendoc",
     # --- KEY carriers, no tools (kind="credential") --------------------------
     # The model key an org deposits for its scheduled agents. They serve
     # no tool: the worker consumes it on the org's behalf.

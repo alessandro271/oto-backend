@@ -266,6 +266,9 @@ _HORS_PORTEE = {
     ("pipedrive", "company_domain"):
         "ce n'est pas une URL : le client compose `https://{valeur}.pipedrive.com`, "
         "donc l'hôte reste sous pipedrive.com quoi qu'on saisisse",
+    ("zeendoc", "url_client"):
+        "ce n'est pas une URL : un segment de chemin, validé par le client (lettres, "
+        "chiffres, `-`, `_`), sous l'hôte fixe `armoires.zeendoc.com`",
 }
 
 
