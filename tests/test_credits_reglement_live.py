@@ -164,3 +164,26 @@ def test_le_reglement_se_lit_au_curseur(live):
         ("deposit", 10, 0), ("settle", -3, -4)]
     assert lus[1]["meta"] == {"from": "response", "exceeded": False, "scale_version": 1}
     assert lus[1]["call_uid"] == uid
+
+
+def test_la_meta_gardee_avec_la_releve_entre_au_mouvement(live):
+    """L'appariement d'un travail asynchrone (l'appel, le rang de la clé, le travail)
+    voyage avec sa relève : qui que ce soit qui règle — la relève, l'échéance —, le
+    mouvement le dit. Même nombre de requêtes."""
+    p = _payeur()
+    _verser(p, 10)
+    uid = uuid.uuid4().hex
+    _reserver(p, 4, uid=uid)
+    job = {"function": "fullenrich.fetch", "args": {"enrichment_id": "e-1"},
+           "within_s": None, "no_deadline": True,
+           "meta": {"call_id": uid, "key_mode": "tenant", "job_id": "e-1"}}
+    assert db_credits.attendre_la_releve(uid, job, 3600)
+    assert db_credits.reservation_de_la_releve("fullenrich.fetch",
+                                               {"enrichment_id": "e-1"})["call_uid"] == uid
+    _, n = _compter(lambda: db_credits.regler(uid, montant=None, quantite=None,
+                                              meta={"from": "hold_expired"}))
+    assert n == _REGLER
+    (m,) = mouvements_sous_l_horizon(lambda m: m["payer"] == p and m["kind"] == "settle",
+                                     1)
+    assert m["meta"] == {"call_id": uid, "key_mode": "tenant", "job_id": "e-1",
+                         "from": "hold_expired", "scale_version": 1}

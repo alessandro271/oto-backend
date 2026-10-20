@@ -24,8 +24,8 @@ Units budget (`access/credits.py`): the submission is in the perimeter, as the
 connectors library's `fullenrich.submit`, PRICED PER KIND FOUND — the units
 `work_emails`, `personal_emails` and `phones`, each with its own scale line, because a
 per-result price is not a multiple of FullEnrich's own weights. Its worst case, every
-contact found on every kind it asks, is reserved on the platform key before the job is
-sent; the read that finds the job FINISHED settles each kind at its `found_*` count
+contact found on every kind it asks, is reserved on a re-billed key (the platform's, or
+the primary tenant's) before the job is sent; the read that finds the job FINISHED settles each kind at its `found_*` count
 (`credits_releve.regler_releve`), a CANCELED job releases it.
 """
 from __future__ import annotations
@@ -275,7 +275,7 @@ def register(mcp: FastMCP) -> None:
             # not an absence — a metering consumer reads absence as 1.
             session_org.note_call_trace(quantity=0)
             if status not in _REPASSER_S:
-                if status == "CANCELED" and rc.is_platform:
+                if status == "CANCELED" and budget.rang_refacture(rc.mode, rc.entity_id):
                     # No result will come: what the submission reserved is released.
                     credits_releve.liberer_releve(*_releve(enrichment_id))
                 code, pourquoi = _TERMINAUX.get(status, (
@@ -318,9 +318,9 @@ def register(mcp: FastMCP) -> None:
         if isinstance(cost, int) and not isinstance(cost, bool) and cost >= 0:
             trace["quantity"] = cost
         session_org.note_call_trace(**trace)
-        # The units budget: the hold of a submission on the platform key settles kind by
+        # The units budget: the hold of a submission on a re-billed key settles kind by
         # kind at what was FOUND — the same counts, under each kind's scale line.
-        if rc.is_platform:
+        if budget.rang_refacture(rc.mode, rc.entity_id):
             credits_releve.regler_releve(*_releve(enrichment_id), trouves)
         return {
             "done": True,

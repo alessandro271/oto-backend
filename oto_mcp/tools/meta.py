@@ -19,9 +19,9 @@ from mcp.types import ErrorData, INVALID_PARAMS
 from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
-from .. import (access, call_axes, calllog, db, deprecations, error_taxonomy, guide_run,
-                outils_du_travail, outils_retires, redaction, run_org, session_org,
-                tool_alias)
+from .. import (access, call_axes, calllog, db, deprecations, error_taxonomy, geste,
+                guide_run, outils_du_travail, outils_retires, redaction, run_org,
+                session_org, tool_alias)
 from ..access import credits as budget
 from ..auth.hooks import current_user_sub_from_token
 from ..connectors import access_level_gate, activation_gate
@@ -107,7 +107,8 @@ async def _trace_target_call(sub: Optional[str], name: str, args: dict, ok: bool
                              error: Optional[str], duration_ms: int, *,
                              trace: Optional[dict] = None,
                              org_id: object = _UNSET,
-                             run_id: Optional[str] = None) -> None:
+                             run_id: Optional[str] = None,
+                             call_uid: Optional[str] = None) -> None:
     """Logs the dispatched call UNDER THE TARGET NAME (ADR 0036 §5 / 0017): without this
     only `oto_call` shows up in `tool_calls` and the usage inventory goes blind
     to the latent catalog. Best-effort — never blocking.
@@ -138,6 +139,8 @@ async def _trace_target_call(sub: Optional[str], name: str, args: dict, ok: bool
             # The org UNDER WHICH THE TARGET RESOLVED, read by `oto_call` before undoing
             # its axes — not the home org we would re-read afterwards.
             "org_id": access.current_org(sub) if org_id is _UNSET else org_id,
+            # The target's own call: what its credit hold is keyed by.
+            "call_uid": call_uid,
         }
         # The declared issuer (client + named token), same rule as the envelope
         # row: without it, a dispatch's target would have no issuer.
@@ -237,7 +240,10 @@ async def executer_cible(tool, sub: Optional[str], name: str, demande: str,
     outer_trace = session_org.current_call_trace()
     target_trace: dict = {}
     trace_tok = session_org.set_call_trace(target_trace)
-    budget.ouvrir_appel(name, args)
+    # The target's OWN `call_uid`, on its row and its credit hold: under one gesture (the
+    # envelope's), a recipe runs several targets, each its own call.
+    cible_uid = geste.nouvel_identifiant()
+    budget.ouvrir_appel(name, args, call_uid=cible_uid)
     started = time.monotonic()
     ok, err = True, None
     echec: Optional[BaseException] = None
@@ -311,7 +317,7 @@ async def executer_cible(tool, sub: Optional[str], name: str, demande: str,
         await _trace_target_call(sub, name, args, ok, err,
                                  int((time.monotonic() - started) * 1000),
                                  trace=target_trace, org_id=target_org,
-                                 run_id=target_run)
+                                 run_id=target_run, call_uid=cible_uid)
 
     # Target success: a "credits exhausted" mark on ITS key is lifted.
     await connector_health.suivre_appel(target_trace, None)

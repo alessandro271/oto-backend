@@ -112,6 +112,20 @@ REST seule) ; le stockage est `db/credits.py`, sur les tables de `db/schema/cred
   n'importe quelle base de l'instance, retarde le curseur — un retard, jamais une perte.
 - Le curseur porte les règlements (échéances comprises), les versements et les transferts.
   Les réservations en cours se lisent dans le solde (`holds_open`).
+- **Rapprocher un règlement de ce qui a consommé** : le `call_uid` d'un mouvement `settle`
+  est la clé de sa réservation, et sa `meta` le redit :
+
+  | champ de `meta` | quand | ce que c'est |
+  | --- | --- | --- |
+  | `call_id` | tout appel d'outil | le `tool_calls.call_uid` de l'appel (la cible elle-même pour `oto_call` et une recette, sa tranche pour un travail de fond) ; égal au `call_uid` du mouvement |
+  | `key_mode` | tout règlement, sauf l'échéance d'une réservation SYNCHRONE | le rang de la clé refacturée : `platform` ou `tenant` |
+  | `job_id` | un travail asynchrone (FullEnrich : l'`enrichment_id`) | l'identifiant du travail chez le fournisseur, gardé avec la relève |
+  | `runner_job_id`, `attempt`, `turn` | un tour d'agent hébergé | le travail, la tentative, le tour ; la clé du mouvement est `runner:<travail>:<tentative>:<tour>`, sans ligne `tool_calls` |
+  | `from`, `exceeded`, `hold_expired`, `units`, `tokens`, `model`, `scale_version` | comme avant | d'où vient le montant, et sous quelle version |
+
+  L'échéance d'une réservation synchrone ne dit pas `key_mode` : rien ne le garde sans
+  colonne, et une réservation synchrone n'a pas de `job` (il entrerait dans l'index de
+  la relève). Son `call_id` reste lu dans sa clé.
 - **Un règlement réel après l'échéance** : une réservation échue se règle au montant
   réservé ; le règlement réel qui arrive ensuite est seulement journalisé
   (`credits_hold_expired_before_settle`), sans remboursement. Au commerce de verser un
@@ -127,15 +141,19 @@ REST seule) ; le stockage est `db/credits.py`, sur les tables de `db/schema/cred
 connector, function, arguments)` nomme la fonction de la bibliothèque des connecteurs
 dont l'outil paie le coût déclaré (`oto.connectors.declared`), et comment ses arguments
 se lisent comme ceux de la fonction. Une fonction sans coût déclaré lève à
-l'enregistrement. Seul un appel servi par une clé PLATEFORME réserve : la clé de
-l'opérateur de l'instance. Un outil du périmètre dit quand il ENVOIE la requête facturée
+l'enregistrement. Seul un appel servi par une clé REFACTURÉE réserve
+(`credits.rang_refacture`, le même prédicat au résolveur et au runner) : celle de la
+plateforme, ou celle du tenant PRIMAIRE de l'instance (`tenancy.primary_slug()`) — toutes
+deux payées par l'opérateur. Un tenant non primaire paie sa propre clé, comme une org la
+sienne : jamais de réservation dessus. Sur la clé du tenant primaire, l'arête
+tenant→org (son quota) est vérifiée d'abord : son refus ne laisse aucune réservation. Un outil du périmètre dit quand il ENVOIE la requête facturée
 (`credits.envoi()`) et ce qu'il a reçu (`credits.reponses([...])`) — la garde
 `test_credits_appel.py` l'exige.
 
 | qui | quoi | où |
 | --- | --- | --- |
-| le bord | ouvre l'appel (identifiant, outil, arguments) au relevé | `credits.ouvrir_appel`, aux trois bords de L8 |
-| le résolveur | réserve, sur la clé plateforme, après toutes les autres gardes | `credits.reserver` dans `resolve.py` |
+| le bord | ouvre l'appel (outil, arguments ; le `call_uid` d'une cible) au relevé | `credits.ouvrir_appel`, aux trois bords de L8 |
+| le résolveur | réserve, sur une clé refacturée, après toutes les autres gardes, sous le `call_uid` de l'appel | `credits.reserver` dans `resolve.py` |
 | l'outil | dit l'envoi, puis les réponses | `credits.envoi`, `credits.reponses` |
 | le bord | règle la réussite, ou l'échec | `regler_appel`, `regler_echec` |
 
@@ -153,6 +171,14 @@ l'opérateur de l'instance. Un outil du périmètre dit quand il ENVOIE la requ�
   (`jev_rows`, hors de la borne MCP) : `OTO_CREDITS_HOLD_MAX_S` (24 h).
   Une transaction de 2 écritures ; le barème et les modes de payeur sont relus au plus
   toutes les 30 s.
+- **La clé de la réservation** est le `tool_calls.call_uid` de l'appel, lu au geste à la
+  réservation : le bord MCP direct (`call_context`) est plus externe que le journal
+  d'appels qui frappe ce `call_uid`, et ne l'a pas encore ; l'outil, lui, tourne dessous.
+  Une tranche de fond a le sien (son geste). Une cible d'`oto_call` ou d'une recette
+  frappe le sien (`executer_cible`) et le pose sur sa ligne : sous le geste de
+  l'enveloppe, une recette joue plusieurs cibles, chacune sa réservation. Sans geste, ou
+  sous un `call_uid` qui tient déjà une réservation, rien n'est posé
+  (`spend_ledger_unavailable`, journalisé) : jamais un identifiant inventé.
 - **Qui paie** : `org:<id>` (l'org des clés de l'appel), `user:<sub>` si l'org est en
   `payer_mode=person` ou s'il n'y a pas d'org.
 - **Régler la réussite** : `cost.settled_quantity` sur les réponses dites (relue dans la
@@ -186,7 +212,9 @@ Un réglage illisible refuse le démarrage (`credits.verifier_reglages`). Un rè
 échoue ne défait jamais l'appel : la réservation reste ouverte, et son échéance la règle.
 
 **Un travail asynchrone** : la soumission réussie laisse sa réservation ouverte, avec sa
-relève (`credit_holds.job` : la fonction de relève et l'identifiant du travail). L'outil
+relève (`credit_holds.job` : la fonction de relève, ses arguments, et la `meta`
+d'appariement — `call_id`, `key_mode`, `job_id` — que tout règlement de la réservation, la
+relève comme l'échéance, verse au mouvement). L'outil
 de relève, quand le travail est fini, règle la réservation au réel, unité par unité
 (`credits_releve.regler_releve`, sous les lignes du barème de la réservation ; une unité
 lue que la réservation n'a pas prise n'est pas réglée : elle n'était pas demandée) ;
@@ -206,8 +234,10 @@ garde sa déclaration (`fullenrich.submit`, en crédits FullEnrich, et sa relèv
 budget n'en lit que la relève. Les crédits de FullEnrich restent tracés (`quantity`
 de la relève) pour le rapprochement.
 
-**Les appels au modèle d'un agent hébergé, sur une clé PARTAGÉE** (plateforme ou
-tenant, `capabilities/runner_jobs.py`) : pas un outil, le worker du runner appelle le
+**Les appels au modèle d'un agent hébergé, sur une clé REFACTURÉE** (plateforme ou
+tenant PRIMAIRE, `credits.rang_refacture` ; `capabilities/runner_jobs.py`. Depuis le
+20/10/2026, la clé d'un tenant non primaire n'est plus refacturée : elle est servie sans
+mesure, à tout worker, comme la clé de l'org) : pas un outil, le worker du runner appelle le
 modèle lui-même. Chaque appel est un tour (`runner:<travail>:<tentative>:<tour>`) :
 `op=reserve` réserve son `max_tokens` de sortie (`credits_tours.reserver_tour`), `op=meter`
 le règle à ses quatre comptes de jetons (`credits_tours.regler_tour`), la conclusion règle au

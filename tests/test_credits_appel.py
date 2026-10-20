@@ -13,7 +13,7 @@ import pathlib
 
 import pytest
 
-from oto_mcp import access, session_org
+from oto_mcp import access, geste, session_org
 from oto_mcp.access import credits
 from oto_mcp.db import credits as db_credits
 from oto_mcp.mcp_errors import McpError
@@ -79,12 +79,17 @@ def _par_nature(args: dict) -> dict:
     return {u: len(args["contacts"]) for u in args["natures"]}
 
 
+# Le `tool_calls.call_uid` de l'appel servi : le geste que pose le journal d'appels.
+CALL = "c0ffee"
+
+
 @pytest.fixture
 def appel():
-    """Un relevé d'appel posé, comme par un bord."""
+    """Un relevé d'appel posé, comme par un bord, sous le geste de l'appel."""
     releve: dict = {}
     jeton = session_org.set_call_trace(releve)
-    yield releve
+    with geste.portee(geste.AGENT, "u1", CALL):
+        yield releve
     session_org.reset_call_trace(jeton)
 
 
@@ -189,22 +194,22 @@ def test_le_pire_cas_fois_le_bareme_au_paquet_superieur(monkeypatch, stock, peri
     monkeypatch.setenv("OTO_CREDITS_MODE", "enforce")
     _ouvrir("outil_async", _contacts(["contact.phones", "contact.work_emails"],
                                      ["contact.personal_emails"]))
-    credits.reserver("u1", 7)
+    credits.reserver("u1", 7, "platform")
     r = ecrit["reserver"][-1]
     assert (r["quantity"], r["reserved"], r["unit"]) == (14, 28, "credits"), \
         "10 + 1 + 3 crédits du fournisseur, 2 unités de budget chacun"
     assert (r["payer"], r["scale_version"], r["forcer"]) == ("org:7", 3, False)
     assert r["deadline_s"] == credits.hold_max_s(), "asynchrone : sa relève a son échéance"
     _ouvrir("outil_sync", {})
-    credits.reserver("u1", 7)
+    credits.reserver("u1", 7, "platform")
     assert ecrit["reserver"][-1]["reserved"] == 5, "1 requête, paquet de 10 → 1 paquet"
 
 
 def test_la_reservation_est_faite_une_fois_par_appel(stock, perimetre, appel):
     _, ecrit = stock
     _ouvrir("outil_sync", {})
-    credits.reserver("u1", 7)
-    credits.reserver("u1", 7)
+    credits.reserver("u1", 7, "platform")
+    credits.reserver("u1", 7, "platform")
     assert len(ecrit["reserver"]) == 1
 
 
@@ -214,22 +219,22 @@ def test_qui_paie(stock, perimetre, appel, org, personnes, attendu):
     etat, ecrit = stock
     etat["personnes"] = personnes
     _ouvrir("outil_sync", {})
-    credits.reserver("u1", org)
+    credits.reserver("u1", org, "platform")
     assert ecrit["reserver"][-1]["payer"] == attendu
 
 
 def test_hors_perimetre_ou_hors_appel_rien_n_est_reserve(stock, perimetre, appel):
     _, ecrit = stock
-    credits.reserver("u1", 7)
+    credits.reserver("u1", 7, "platform")
     credits.ouvrir_appel("serper_search", {})
-    credits.reserver("u1", 7)
+    credits.reserver("u1", 7, "platform")
     assert ecrit["reserver"] == []
 
 
 def test_off_ne_reserve_rien(monkeypatch, stock, perimetre, appel):
     monkeypatch.setenv("OTO_CREDITS_MODE", "off")
     _ouvrir("outil_sync", {})
-    credits.reserver("u1", 7)
+    credits.reserver("u1", 7, "platform")
     assert stock[1]["reserver"] == []
 
 
@@ -244,7 +249,7 @@ def test_enforce_refuse_un_solde_insuffisant_sans_rien_retenir(monkeypatch, stoc
     monkeypatch.setenv("OTO_CREDITS_MODE", "enforce")
     _ouvrir("outil_sync", {})
     with pytest.raises(McpError) as e:
-        credits.reserver("u1", 7)
+        credits.reserver("u1", 7, "platform")
     assert _code(e.value) == "insufficient_credits"
     assert e.value.error.data["retryable"] is False
     assert (e.value.error.data["needed"], e.value.error.data["available"]) == (5, 3)
@@ -257,7 +262,7 @@ def test_report_reserve_quand_meme_et_le_dit(monkeypatch, stock, perimetre, appe
     etat["disponible"] = 3
     monkeypatch.setenv("OTO_CREDITS_MODE", "report")
     _ouvrir("outil_sync", {})
-    credits.reserver("u1", 7)
+    credits.reserver("u1", 7, "platform")
     assert ecrit["reserver"][-1]["forcer"] is True
     assert appel[credits.CLE]["hold"]["reserved"] == 5
     assert "servi" in caplog.text
@@ -272,11 +277,11 @@ def test_une_fonction_sans_ligne_au_bareme(monkeypatch, stock, perimetre, appel,
     _ouvrir("outil_sync", {})
     if refuse:
         with pytest.raises(McpError) as e:
-            credits.reserver("u1", 7)
+            credits.reserver("u1", 7, "platform")
         assert _code(e.value) == "credits_unpriced"
         assert e.value.error.data["retryable"] is False
     else:
-        credits.reserver("u1", 7)
+        credits.reserver("u1", 7, "platform")
     assert ecrit["reserver"] == []
 
 
@@ -288,11 +293,11 @@ def test_un_registre_en_panne(monkeypatch, stock, perimetre, appel, mode, refuse
     _ouvrir("outil_sync", {})
     if refuse:
         with pytest.raises(McpError) as e:
-            credits.reserver("u1", 7)
+            credits.reserver("u1", 7, "platform")
         assert _code(e.value) == "spend_ledger_unavailable"
         assert e.value.error.data["retryable"] is True
     else:
-        credits.reserver("u1", 7)
+        credits.reserver("u1", 7, "platform")
     assert "hold" not in appel[credits.CLE]
 
 
@@ -300,7 +305,7 @@ def test_un_registre_en_panne(monkeypatch, stock, perimetre, appel, mode, refuse
 
 def _reserve(outil, args):
     _ouvrir(outil, args)
-    credits.reserver("u1", 7)
+    credits.reserver("u1", 7, "platform")
     return session_org.current_call_trace()
 
 
@@ -310,9 +315,10 @@ def test_un_appel_synchrone_se_regle_au_reel(stock, perimetre, appel):
     credits.reponses([{"id": 1}])
     credits.solder_reussite(releve)
     uid, k = ecrit["regler"][-1]
-    assert uid == releve[credits.CLE]["uid"]
+    assert uid == releve[credits.CLE]["uid"] == CALL
     assert (k["montant"], k["quantite"], k["meta"]) == (
-        5, 1, {"from": "requests", "exceeded": False})
+        5, 1, {"call_id": CALL, "key_mode": "platform", "from": "requests",
+               "exceeded": False})
 
 
 def test_un_appel_qui_ne_dit_pas_ses_reponses_se_regle_au_pire_cas(stock, perimetre, appel,
@@ -334,6 +340,8 @@ def test_une_soumission_asynchrone_attend_sa_releve(stock, perimetre, appel):
     assert job["function"] == "fullenrich.fetch"
     assert job["args"] == {"enrichment_id": "e-42"}
     assert delai == credits.hold_max_s(), "`no_deadline` : la borne de l'instance"
+    # Ce que la relève, ou l'échéance, versera au mouvement : la réservation le garde.
+    assert job["meta"] == {"call_id": CALL, "key_mode": "platform", "job_id": "e-42"}
 
 
 def test_sans_reservation_rien_ne_se_regle(stock, perimetre, appel):
@@ -372,7 +380,8 @@ def test_un_echec_libere_s_il_est_net_et_se_regle_sinon(stock, perimetre, appel,
     else:
         assert ecrit["liberer"] == []
         assert ecrit["regler"][-1][1] == {"montant": 5, "quantite": 1,
-                                          "meta": {"from": "failure", "exceeded": False}}
+                                          "meta": {"call_id": CALL, "key_mode": "platform",
+                                                   "from": "failure", "exceeded": False}}
 
 
 def test_le_statut_amont_est_lu_comme_ailleurs():
@@ -427,7 +436,7 @@ def test_asynchrone_et_tranche_de_fond_tiennent_hold_max(monkeypatch):
 def test_la_tranche_de_fond_ouvre_hors_de_la_borne(stock, perimetre, appel, monkeypatch):
     _borne(monkeypatch, 120)
     credits.ouvrir_appel("outil_sync", {}, hors_borne=True)
-    credits.reserver("u1", 7)
+    credits.reserver("u1", 7, "platform")
     assert stock[1]["reserver"][-1]["deadline_s"] == credits.hold_max_s()
     src = (pathlib.Path(credits.__file__).parents[1] / "jev_jobs_worker.py").read_text()
     assert 'ouvrir_appel("jev_rows", job["params"], hors_borne=True)' in src
@@ -437,7 +446,7 @@ def test_une_reservation_synchrone_tient_la_borne_et_la_marge(stock, perimetre, 
                                                               monkeypatch):
     _borne(monkeypatch, 120)
     _ouvrir("outil_sync", {})
-    credits.reserver("u1", 7)
+    credits.reserver("u1", 7, "platform")
     assert stock[1]["reserver"][-1]["deadline_s"] == 120 + credits.marge_sync_s()
 
 
@@ -464,7 +473,7 @@ def test_une_fonction_sans_bareme_va_au_releve_du_jour(monkeypatch, stock, perim
     monkeypatch.setenv("OTO_CREDITS_MODE", mode)
     _ouvrir("outil_sync", {})
     try:
-        credits.reserver("u1", 7)
+        credits.reserver("u1", 7, "platform")
     except McpError:
         pass
     assert signaux == [("unpriced:pennylane.get_quote", "org:7", mode)]
@@ -561,7 +570,7 @@ def test_en_report_aucun_appel_n_est_jamais_refuse(monkeypatch, stock, perimetre
         monkeypatch.setattr(db_credits, "version_du_bareme", lambda: 1 / 0)
     for outil, args in (("outil_sync", {}), ("outil_async", _contacts(["contact.phones"]))):
         _ouvrir(outil, args)
-        credits.reserver("u1", 7)            # ne lève pas : l'appel part
+        credits.reserver("u1", 7, "platform")            # ne lève pas : l'appel part
         assert credits.CLE in session_org.current_call_trace()
     if cas in ("solde_nul", "solde_negatif"):
         # La réservation est posée quand même : le registre reste complet.
@@ -582,7 +591,7 @@ def test_par_unite_la_reservation_somme_les_paquets_de_chaque_unite(stock, perim
     réservation note ses unités jointes par `+`."""
     _, ecrit = stock
     _ouvrir("outil_nature", {"contacts": [{}, {}], "natures": ["work_emails", "phones"]})
-    credits.reserver("u1", 7)
+    credits.reserver("u1", 7, "platform")
     r = ecrit["reserver"][-1]
     assert (r["unit"], r["quantity"], r["reserved"]) == ("work_emails+phones", 4, 130)
     assert appel[credits.CLE]["hold"]["reserved"] == 130
@@ -597,10 +606,10 @@ def test_par_unite_une_ligne_qui_manque_est_sans_bareme(monkeypatch, stock, peri
     _ouvrir("outil_nature", {"contacts": [{}], "natures": ["work_emails", "phones"]})
     if refuse:
         with pytest.raises(McpError) as e:
-            credits.reserver("u1", 7)
+            credits.reserver("u1", 7, "platform")
         assert _code(e.value) == "credits_unpriced"
     else:
-        credits.reserver("u1", 7)      # `report` : servi, au relevé du jour
+        credits.reserver("u1", 7, "platform")      # `report` : servi, au relevé du jour
     assert ecrit["reserver"] == []
 
 
@@ -647,3 +656,99 @@ def test_une_releve_illisible_laisse_la_reservation_a_son_echeance(releve_attend
     assert credits_releve.regler_releve("fullenrich.fetch", {"enrichment_id": "e"},
                                         quantites) is False
     assert ecrit["regler"] == []
+
+
+# ── l'appariement : chaque mouvement se rapproche de son appel ───────────────
+
+def test_la_reservation_porte_le_call_uid_de_l_appel(stock, perimetre, appel):
+    """La clé de la réservation est le `tool_calls.call_uid` de l'appel : le geste que
+    le journal d'appels pose, lu à la réservation (le bord, plus externe, ne l'a pas)."""
+    _, ecrit = stock
+    _reserve("outil_sync", {})
+    assert ecrit["reserver"][-1]["call_uid"] == CALL
+
+
+def test_une_cible_apporte_son_propre_call_uid(stock, perimetre, appel):
+    """N cibles d'une recette sous UN geste : N réservations distinctes."""
+    _, ecrit = stock
+    for uid in ("cible-1", "cible-2"):
+        releve: dict = {}
+        jeton = session_org.set_call_trace(releve)
+        try:
+            credits.ouvrir_appel("outil_sync", {}, call_uid=uid)
+            credits.reserver("u1", 7, "platform")
+        finally:
+            session_org.reset_call_trace(jeton)
+        assert releve[credits.CLE]["hold"]
+    assert [k["call_uid"] for k in ecrit["reserver"]] == ["cible-1", "cible-2"]
+
+
+def test_sans_geste_la_reservation_ne_se_pose_pas(stock, perimetre, monkeypatch, caplog):
+    """Une réservation qui ne saurait nommer son appel ne se pose pas : le registre la
+    refuse en `enforce`, la journalise en `report` — jamais un identifiant inventé."""
+    monkeypatch.setenv("OTO_CREDITS_MODE", "enforce")
+    _, ecrit = stock
+    releve: dict = {}
+    jeton = session_org.set_call_trace(releve)
+    try:
+        credits.ouvrir_appel("outil_sync", {})
+        with pytest.raises(McpError) as e:
+            credits.reserver("u1", 7, "platform")
+    finally:
+        session_org.reset_call_trace(jeton)
+    assert _code(e.value) == "spend_ledger_unavailable"
+    assert ecrit["reserver"] == []
+    assert "cannot name its call" in caplog.text
+
+
+def test_deux_appels_sous_un_call_uid_ne_partagent_pas_une_reservation(
+        stock, perimetre, appel, monkeypatch):
+    """Le registre dit la réservation déjà posée : la seconde ne règle jamais la
+    première."""
+    etat, ecrit = stock
+    monkeypatch.setattr(db_credits, "reserver", lambda **k: db_credits.Reservation(
+        posee=False, deja=True, insuffisant=False, disponible=0))
+    releve = _reserve("outil_sync", {})
+    assert "hold" not in releve[credits.CLE]
+    assert releve[credits.CLE]["refus"] == "spend_ledger_unavailable"
+
+
+def test_l_echeance_dit_l_appel_ou_le_tour(monkeypatch):
+    """Une réservation échue dit son appel, ou le travail, la tentative et le tour d'un
+    tour de runner ; le rang de la clé, seule une réservation asynchrone le garde."""
+    ecrit = []
+    monkeypatch.setattr(db_credits, "reservations_echues",
+                        lambda limite: ["c0ffee", "runner:12:3:4"])
+    monkeypatch.setattr(db_credits, "regler",
+                        lambda uid, **k: ecrit.append((uid, k["meta"])) or {"ok": 1})
+    assert credits.echoir() == 2
+    assert ecrit == [
+        ("c0ffee", {"call_id": "c0ffee", "from": "hold_expired", "exceeded": False,
+                    "hold_expired": True}),
+        ("runner:12:3:4", {"runner_job_id": 12, "attempt": 3, "turn": 4,
+                           "from": "hold_expired", "exceeded": False,
+                           "hold_expired": True})]
+
+
+@pytest.mark.parametrize("mode, entite, rang", [
+    ("platform", None, "platform"),
+    ("tenant", "oto", "tenant"),
+    ("tenant", "autre", None),
+    ("org", "7", None),
+    ("user", "u1", None),
+])
+def test_seules_la_plateforme_et_le_tenant_primaire_sont_refactures(monkeypatch, mode,
+                                                                   entite, rang):
+    """Un tenant non primaire paie sa propre clé : jamais réservée."""
+    monkeypatch.setenv("OTO_TENANT_PRIMAIRE_SLUG", "oto")
+    assert credits.rang_refacture(mode, entite) == rang
+
+
+def test_le_resolveur_reserve_sur_la_cle_du_tenant_primaire_apres_son_quota():
+    """Même prédicat qu'au runner ; l'arête du tenant d'abord : son refus ne laisse
+    aucune réservation."""
+    src = (pathlib.Path(credits.__file__).parent / "resolve.py").read_text()
+    branche = src[src.index('win.mode == "tenant":'):src.index('if win.mode != "platform":')]
+    assert branche.index("tenant_budget.enforce(") < branche.index("credits.reserver(")
+    assert "credits.rang_refacture(win.mode, win.entity_id)" in branche
+    assert 'credits.reserver(sub, heritage.org_des_cles(sub, active_org), "tenant")' in branche

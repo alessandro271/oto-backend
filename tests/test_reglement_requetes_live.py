@@ -110,7 +110,9 @@ _RESERVATION = 2
 
 
 def test_la_reservation_coute_deux_ecritures_sur_le_chemin_d_un_appel(live, monkeypatch):
-    from oto_mcp import session_org
+    import uuid
+
+    from oto_mcp import geste, session_org
     from oto_mcp.access import credits as budget
     from oto_mcp.db import credits as db_credits
     from oto_mcp.tools import fullenrich
@@ -130,8 +132,11 @@ def test_la_reservation_coute_deux_ecritures_sur_le_chemin_d_un_appel(live, monk
         releve: dict = {}
         jeton = session_org.set_call_trace(releve)
         try:
-            budget.ouvrir_appel(outil, contacts)
-            budget.reserver(SUB, None)
+            # Le geste de l'appel, comme le pose le journal d'appels : la clé de la
+            # réservation (`tool_calls.call_uid`), sans requête.
+            with geste.portee(geste.AGENT, SUB, uuid.uuid4().hex):
+                budget.ouvrir_appel(outil, contacts)
+                budget.reserver(SUB, None, "platform")
         finally:
             session_org.reset_call_trace(jeton)
         return releve

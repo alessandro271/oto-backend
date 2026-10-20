@@ -41,8 +41,8 @@ def test_le_connecteur_declare_une_cle_de_plateforme_FERMEE():
 # ── la résolution de la clé partagée ────────────────────────────────────────
 
 class _RC:
-    def __init__(self, mode, key="sk-partagee"):
-        self.mode, self.key, self.config = mode, key, {}
+    def __init__(self, mode, key="sk-partagee", entity_id=None):
+        self.mode, self.key, self.config, self.entity_id = mode, key, {}, entity_id
 
 
 def test_un_fournisseur_sans_cle_de_plateforme_n_a_pas_de_cle_partagee(monkeypatch):
@@ -187,6 +187,29 @@ def test_la_ferme_ne_recoit_jamais_la_cle_partagee(remise):
     assert remise["estampilles"] == []
 
 
+def test_la_cle_du_tenant_PRIMAIRE_se_refacture_comme_celle_de_la_plateforme(
+        remise, monkeypatch):
+    monkeypatch.setenv("OTO_TENANT_PRIMAIRE_SLUG", "oto")
+    monkeypatch.setattr(CE, "cle_partagee", lambda org, f, sub=None, strict=False:
+                        _RC(credentials_store.TENANT, entity_id="oto"))
+    rendu = _reserver()
+    assert rendu["model_key"] == "sk-partagee" and rendu["meter_usage"] is True
+    assert remise["estampilles"] == [(9, "worker:banc", "anthropic", "tenant")]
+    assert _reserver(metre=False) is None, "elle ne va qu'à un worker qui mesure"
+
+
+@pytest.mark.parametrize("kw", [{}, {"metre": False}, {"ferme": True}])
+def test_la_cle_d_un_tenant_NON_primaire_ne_se_refacture_jamais(remise, monkeypatch, kw):
+    """Ce tenant la paie, comme une org la sienne : servie sans mesure ni estampille,
+    donc sans aucune réservation — à tout worker."""
+    monkeypatch.setenv("OTO_TENANT_PRIMAIRE_SLUG", "oto")
+    monkeypatch.setattr(CE, "cle_partagee", lambda org, f, sub=None, strict=False:
+                        _RC(credentials_store.TENANT, entity_id="autre"))
+    rendu = _reserver(**kw)
+    assert rendu["model_key"] == "sk-partagee" and "meter_usage" not in rendu
+    assert remise["estampilles"] == [] and "rendu" not in remise
+
+
 def test_une_org_SANS_acces_ne_tourne_pas_sur_la_cle_du_worker(remise, monkeypatch):
     """⚠️ Le trou que la clé partagée ouvrait : l'instance paie Anthropic, l'org n'a
     ni clé ni accès (jamais accordé, ou retiré crédits épuisés) — servie sans clé,
@@ -237,8 +260,8 @@ def budget(monkeypatch):
     monkeypatch.setattr(tours, "regler_tour", lambda uid, sub, org, tokens, meta, model:
                         vu["regler"].append((uid, sub, org, tokens, meta, model))
                         or vu["rendu"])
-    monkeypatch.setattr(tours, "clore_les_tours", lambda prefixe:
-                        vu["clore"].append(prefixe) or 0)
+    monkeypatch.setattr(tours, "clore_les_tours", lambda prefixe, key_mode:
+                        vu["clore"].append((prefixe, key_mode)) or 0)
     return vu
 
 
@@ -436,12 +459,12 @@ def _conclu(**kw):
 
 def test_la_conclusion_clot_les_tours_jamais_rapportes(budget):
     RJ._clore_la_tentative(9, _conclu())
-    assert budget["clore"] == ["runner:9:2:"]
+    assert budget["clore"] == [("runner:9:2:", "platform")]
 
 
 def test_un_echec_qui_a_consomme_se_clot_aussi(budget):
     RJ._clore_la_tentative(9, _conclu(status="pending"))
-    assert budget["clore"] == ["runner:9:2:"], "la dépense est réelle"
+    assert budget["clore"] == [("runner:9:2:", "platform")], "la dépense est réelle"
 
 
 @pytest.mark.parametrize("conclu", [_conclu(cle_partagee=None), _conclu(attempts=3)])
@@ -455,7 +478,7 @@ def test_complete_clot_ce_que_la_base_a_conclu(monkeypatch, budget):
                         lambda job_id, sub, ok, error=None, run_id=None, result=None:
                         _conclu(run_id=None))
     RJ._jobs(_ctx(), RJ.JobsInput(op="complete", job_id=9, ok=True, result=_TOUR))
-    assert budget["clore"] == ["runner:9:2:"]
+    assert budget["clore"] == [("runner:9:2:", "platform")]
 
 
 # ── 6. un coffre qui ne répond pas : ni servi, ni arrêté ────────────────────
@@ -580,3 +603,20 @@ def test_le_reglement_suit_le_modele_de_la_reservation(monkeypatch, bareme_par_m
               "cache_read_input_tokens": 0}
     r = tours.regler_tour("t2", "s", ORG, jetons, {}, "claude-sonnet-5")
     assert r == {"settled": True, "amount": 5 + 100, "exceeded": True}
+
+
+def test_un_tour_clos_dit_son_travail_sa_tentative_son_tour_et_sa_cle(monkeypatch):
+    """Clos sans rapport, un tour se rapproche encore de son travail : les noms du
+    rapport du worker, et le rang de la clé estampillée."""
+    from oto_mcp.access import credits_tours as tours
+    from oto_mcp.db import credits as db_credits
+    ecrit = []
+    monkeypatch.setattr(db_credits, "reservations_ouvertes",
+                        lambda prefixe: [prefixe + "0", prefixe + "1"])
+    monkeypatch.setattr(db_credits, "regler",
+                        lambda uid, **k: ecrit.append((uid, k["meta"])) or {"ok": 1})
+    assert tours.clore_les_tours(tours.cle_du_tour(9, 2, ""), "tenant") == 2
+    assert ecrit[0] == ("runner:9:2:0", {
+        "runner_job_id": 9, "attempt": 2, "turn": 0, "key_mode": "tenant",
+        "from": "unreported", "exceeded": False})
+    assert tours.appariement("c0ffee") == {"call_id": "c0ffee"}

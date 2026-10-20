@@ -7,13 +7,14 @@ core RE-READS and settles. No money here: a budget unit is an integer.
 **The perimeter** is declared, never inferred: a tool joins it at registration with
 `declarer(tool, connector, function)` — the function whose cost the connectors library
 declares (`oto.connectors.declared`), and how to read its arguments from the tool's.
-Only a call that goes through a PLATFORM key is reserved (the operator's key, the one
-the instance pays for); a call on the customer's own key is the customer's business.
+Only a call that goes through a RE-BILLED key is reserved (`rang_refacture`): the
+platform's, or the PRIMARY tenant's — both paid by the instance's operator. A call on the
+customer's own key, or on a non-primary tenant's (that tenant pays it), is not.
 
 **The path of a call:**
 
-1. the edge opens it (`ouvrir_appel`, on the call record) — tool, arguments, an id;
-2. the resolver, on the platform key, reserves (`reserver`): the declared worst case
+1. the edge opens it (`ouvrir_appel`, on the call record) — tool, arguments;
+2. the resolver, on a re-billed key, reserves (`reserver`): the declared worst case
    (`cost.worst_case`) times the scale line, rounded up to whole packages; the payer is
    `org:<id>` (default) or `user:<sub>` (`payer_mode=person`, or no org);
 3. the tool says when it SENDS the billed request (`envoi`) and what it got back
@@ -32,6 +33,10 @@ worst case per unit, read from the tool's arguments. The hold reserves the sum o
 units' scale lines (its `unit` lists them, joined by `+`), and the collection settles
 each unit at what was found (`credits_releve.regler_releve`).
 
+**Matching**: a hold is keyed by its call's `tool_calls.call_uid`, read at reservation;
+every settlement says it (`meta.call_id`), with the key's rung (`meta.key_mode`) and,
+for an asynchronous job, the job (`meta.job_id`).
+
 **Modes** (`OTO_CREDITS_MODE`): `report` (DEFAULT) runs the whole ledger and refuses
 nothing — it logs what `enforce` would refuse; `enforce` refuses with a named code;
 `off` reserves nothing. Named refusals: `insufficient_credits`, `credits_unpriced`
@@ -49,13 +54,12 @@ import math
 import os
 import threading
 import time
-import uuid
 from dataclasses import dataclass
 from typing import Callable, Optional
 
 from mcp.types import ErrorData, INVALID_PARAMS
 
-from .. import bornes_processus, error_taxonomy, limite_refus_top, session_org
+from .. import bornes_processus, error_taxonomy, geste, limite_refus_top, session_org, tenancy
 from ..db import credits as db_credits
 from ..mcp_errors import McpError
 
@@ -194,15 +198,18 @@ def perimetre() -> dict[str, Correspondance]:
 
 # ── the call, as the edge opens it and the tool fills it ─────────────────────
 
-def ouvrir_appel(outil: str, args: Optional[dict], *, hors_borne: bool = False) -> None:
+def ouvrir_appel(outil: str, args: Optional[dict], *, hors_borne: bool = False,
+                 call_uid: Optional[str] = None) -> None:
     """Called by the edge before the tool runs: a tool of the perimeter gets its
-    record (an id, its arguments). No-op for any other tool and outside a call.
+    record (its arguments). No-op for any other tool and outside a call.
     `hors_borne`: an edge the MCP tool-call bound does not cover (a background slice):
-    its hold lasts `hold_max_s`."""
+    its hold lasts `hold_max_s`. `call_uid`: the `tool_calls.call_uid` of a call that
+    is not the gesture's own (a target of `oto_call` or of a recipe, several under one
+    gesture); otherwise the reservation reads the gesture's."""
     if outil in _PERIMETRE:
-        session_org.note_call_trace(**{CLE: {"uid": uuid.uuid4().hex, "outil": outil,
-                                             "args": dict(args or {}),
-                                             **({"hors_borne": True} if hors_borne else {})}})
+        session_org.note_call_trace(**{CLE: {"outil": outil, "args": dict(args or {}),
+                                             **({"hors_borne": True} if hors_borne else {}),
+                                             **({"call_uid": call_uid} if call_uid else {})}})
 
 
 def _appel() -> Optional[dict]:
@@ -261,6 +268,18 @@ def oublier() -> None:
         _LU.update({"a": 0.0, "version": None, "lignes": {}, "personnes": frozenset()})
 
 
+def rang_refacture(mode: str, entity_id: Optional[str]) -> Optional[str]:
+    """The rung under which a resolved key is RE-BILLED to the org (`platform` or
+    `tenant`), or None. The operator pays the platform's key and its primary tenant's;
+    a non-primary tenant pays its own, like an org — never reserved. The single
+    predicate of both edges: a tool's resolution and a hosted agent's shared key."""
+    if mode == "platform":
+        return "platform"
+    if mode == "tenant" and entity_id == tenancy.primary_slug():
+        return "tenant"
+    return None
+
+
 def payeur(sub: str, org: Optional[int], personnes: frozenset) -> str:
     if org is None or org in personnes:
         return f"user:{sub}"
@@ -278,12 +297,13 @@ def _refus(code: str, message: str, retryable: bool, **data) -> McpError:
                               data={"code": code, "retryable": retryable, **data}))
 
 
-# ── reserve (the resolver, on a platform key) ────────────────────────────────
+# ── reserve (the resolver, on a re-billed key) ───────────────────────────────
 
-def reserver(sub: str, org: Optional[int]) -> None:
+def reserver(sub: str, org: Optional[int], key_mode: str) -> None:
     """Reserves the worst case of the call in progress, if its tool is in the
-    perimeter. Called by the resolver when a PLATFORM key wins (`check_usage`), once or
-    several times per call: the reservation is made once."""
+    perimeter. Called by the resolver when a re-billed key wins (`check_usage`), once
+    or several times per call: the reservation is made once. `key_mode`: its rung
+    (`rang_refacture`)."""
     m = mode()
     appel = _appel()
     if m == "off" or appel is None or "hold" in appel or "refus" in appel:
@@ -327,10 +347,16 @@ def reserver(sub: str, org: Optional[int]) -> None:
         unite, quantite = "+".join(pire), sum(pire.values())
         qui = payeur(sub, org, lu["personnes"])
         delai = _echeance(_declare(c.connector, c.function), appel)
+        uid = appel.get("call_uid") or getattr(geste.courant(), "geste_id", None)
+        if not uid:
+            raise RuntimeError(f"{c.outil}: no gesture, the hold cannot name its call")
         r = db_credits.reserver(
-            call_uid=appel["uid"], payer=qui, connector=c.connector, function=c.function,
+            call_uid=uid, payer=qui, connector=c.connector, function=c.function,
             unit=unite, scale_version=lu["version"], quantity=quantite,
             reserved=reserve, deadline_s=delai, forcer=(m == "report"))
+        if r.deja:
+            raise RuntimeError(f"{c.outil}: the call {uid} already holds a reservation — "
+                               "two calls under one `call_uid`")
     except McpError:
         raise
     except Exception:
@@ -352,9 +378,10 @@ def reserver(sub: str, org: Optional[int]) -> None:
                          "available. The call was correct: do not retry it as is; "
                          "top up, or use your own key.", False,
                          tool=c.outil, needed=reserve, available=max(0, r.disponible))
+    appel["uid"] = uid
     appel["hold"] = {"payer": qui, "connector": c.connector, "function": c.function,
                      "unit": unite, "quantity": quantite, "reserved": reserve,
-                     "lignes": lignes}
+                     "lignes": lignes, "key_mode": key_mode}
 
 
 # ── settle (the edges) ───────────────────────────────────────────────────────
@@ -385,6 +412,9 @@ def solder_reussite(releve: Optional[dict]) -> None:
                              "its answer (`credits.reponses`), none was noted")
         releve_job = cost.collection_of(c, f, answers[0])
         delai = releve_job["within_s"] or hold_max_s()
+        # What the collection, or the deadline, settles with: the hold keeps it.
+        releve_job["meta"] = {**_appariement(appel["uid"], hold),
+                              "job_id": releve_job["args"][job["job_id"]["to"]]}
         db_credits.attendre_la_releve(appel["uid"], releve_job, delai)
         return
     if answers is None:
@@ -412,7 +442,8 @@ def solder_echec(releve: Optional[dict], exc: BaseException) -> None:
         db_credits.liberer(appel["uid"])
         return
     if db_credits.regler(appel["uid"], montant=hold["reserved"], quantite=hold["quantity"],
-                         meta={"from": "failure", "exceeded": False}) is None:
+                         meta={**_appariement(appel["uid"], hold), "from": "failure",
+                               "exceeded": False}) is None:
         _apres_echeance(appel["uid"], hold["reserved"])
 
 
@@ -424,8 +455,13 @@ def _regler(uid: str, hold: dict, quantite, meta: dict) -> None:
                        hold["connector"], hold["function"], quantite, hold["unit"],
                        hold["quantity"], uid)
     if db_credits.regler(uid, montant=montant, quantite=int(math.ceil(quantite)),
-                         meta=meta) is None:
+                         meta={**_appariement(uid, hold), **meta}) is None:
         _apres_echeance(uid, montant)
+
+
+def _appariement(uid: str, hold: dict) -> dict:
+    """What matches a settlement to its call: the call, and the key's rung."""
+    return {"call_id": uid, "key_mode": hold["key_mode"]}
 
 
 def _apres_echeance(uid: str, montant: int) -> None:
@@ -444,11 +480,15 @@ def _apres_echeance(uid: str, montant: int) -> None:
 def echoir(limite: int = 100) -> int:
     """Settles, at the reserved amount and marked `hold_expired`, the holds past their
     deadline (`credits_echeances`). Returns how many were settled here — a hold settled
-    meanwhile by its call, or by another process, is skipped."""
+    meanwhile by its call, or by another process, is skipped. The call or the turn is
+    read from the hold's key; the key's rung only an asynchronous hold keeps (its
+    `job`): a synchronous hold that expires does not say it."""
+    from .credits_tours import appariement
     n = 0
     for uid in db_credits.reservations_echues(limite):
         if db_credits.regler(uid, montant=None, quantite=None,
-                             meta={"from": "hold_expired", "exceeded": False,
+                             meta={**appariement(uid), "from": "hold_expired",
+                                   "exceeded": False,
                                    "hold_expired": True}, etat=db_credits.ECHUE):
             n += 1
     if n:

@@ -218,12 +218,15 @@ def regler(call_uid: str, *, montant: Optional[int], quantite: Optional[int],
     réservé, et `quantite` None : à la quantité réservée) : la réservation se ferme
     (`etat`), le solde perd `montant` et libère le réservé, un mouvement `settle` le
     dit. Rend la réservation close, ou None si elle n'était plus ouverte (déjà réglée,
-    libérée ou échue : rien n'a bougé)."""
+    libérée ou échue : rien n'a bougé). La `meta` d'appariement qu'une réservation
+    asynchrone garde avec sa relève (`job.meta` : l'appel, le rang de la clé, le
+    travail) entre dans celle du mouvement, quel que soit qui règle."""
     with _connect() as conn, conn.transaction():
         hold = conn.execute(
             "UPDATE credit_holds SET state = %s, closed_at = NOW() "
             "WHERE call_uid = %s AND state = 'open' "
-            "RETURNING payer, connector, function, unit, quantity, reserved, scale_version",
+            "RETURNING payer, connector, function, unit, quantity, reserved, scale_version, "
+            "job",
             (etat, call_uid)).fetchone()
         if hold is None:
             return None
@@ -241,7 +244,8 @@ def regler(call_uid: str, *, montant: Optional[int], quantite: Optional[int],
             "(%s, 'settle', %s, %s, %s, %s, %s, %s, %s::jsonb, %s)",
             (hold["payer"], -montant, -int(hold["reserved"]), call_uid, hold["connector"],
              hold["function"], quantite,
-             json.dumps({**meta, "scale_version": hold["scale_version"]}),
+             json.dumps({**((hold["job"] or {}).get("meta") or {}), **meta,
+                         "scale_version": hold["scale_version"]}),
              f"settle:{call_uid}"))
     return dict(hold)
 

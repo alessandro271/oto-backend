@@ -285,3 +285,39 @@ def test_sans_jeton_la_ligne_retombe_sur_la_pile_de_session(monkeypatch, banc):
 
     (ligne,) = banc
     assert ligne["run_id"] == "run-de-la-pile"
+
+
+def test_chaque_cible_a_son_call_uid_sur_sa_ligne_et_sa_reservation(monkeypatch, banc):
+    """Une recette joue N cibles sous UN geste (celui de l'enveloppe) : chaque cible
+    frappe son `call_uid`, le pose sur sa ligne et en fait la clé de sa réservation —
+    N réservations distinctes, chacune rapprochable de sa ligne."""
+    from oto_mcp import geste
+    from oto_mcp.access import credits
+    from oto_mcp.db import credits as db_credits
+    poses: list[str] = []
+    monkeypatch.setattr(credits, "_PERIMETRE", {})
+    credits.declarer("pennylane_quote", "pennylane", "get_quote")
+    monkeypatch.setattr(db_credits, "version_du_bareme", lambda: 1)
+    monkeypatch.setattr(db_credits, "lignes_du_bareme", lambda v: [
+        {"connector": "pennylane", "function": "get_quote", "unit": "requests",
+         "budget": 5, "per_n": 10}])
+    monkeypatch.setattr(db_credits, "orgs_en_mode_personne", lambda: set())
+    monkeypatch.setattr(db_credits, "reserver", lambda **k: poses.append(k["call_uid"])
+                        or db_credits.Reservation(posee=True, deja=False,
+                                                  insuffisant=False, disponible=100))
+    monkeypatch.setattr(db_credits, "regler", lambda uid, **k: {"ok": 1})
+    credits.oublier()
+
+    async def run(args):
+        credits.reserver("u-1", 178, "platform")
+        return {"content": []}
+
+    _cible(monkeypatch, run)
+    try:
+        with geste.portee(geste.AGENT, "u-1", "enveloppe"):
+            for _ in range(2):
+                _appeler({}, name="pennylane_quote", arguments={}, _org=178)
+    finally:
+        credits.oublier()
+    assert len(set(poses)) == 2 and "enveloppe" not in poses
+    assert [ligne["call_uid"] for ligne in banc] == poses

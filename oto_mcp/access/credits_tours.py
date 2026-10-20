@@ -1,14 +1,16 @@
 """Model calls of a hosted agent on a SHARED key, under the units budget.
 
-Not a tool: the runner worker calls the model itself, on a key the platform or the
-tenant pays (`capabilities/runner_jobs`). Each call is a TURN: reserved before it is
+Not a tool: the runner worker calls the model itself, on a key the instance re-bills —
+the platform's, or the primary tenant's (`credits.rang_refacture`,
+`capabilities/runner_jobs`). Each call is a TURN: reserved before it is
 sent, at its `max_tokens` of output — the only bound known before the call; the input
 and the cache are not reserved (no token count before the call) and settle as
 `exceeded` — then settled at the four token counts the provider answered, under the
 scale lines of `anthropic.messages:<model>`, one per unit. The MODEL is in the scale
 key: models are not priced alike, and a turn is reserved at the price of the model its
 job names (`fonction_du_modele`). The mode, the scale and the payer are the budget's
-(`access/credits`).
+(`access/credits`). A turn's hold is keyed `runner:<job>:<attempt>:<turn>`
+(`cle_du_tour`), which every settlement of it says back (`appariement`).
 """
 from __future__ import annotations
 
@@ -31,6 +33,23 @@ _DATE = re.compile(r"-\d{8}$")
 UNITES_DU_MODELE = ("input_tokens", "output_tokens", "cache_creation_input_tokens",
                     "cache_read_input_tokens")
 _UNITE_RESERVEE = "output_tokens"
+_TOUR = re.compile(r"runner:(\d+):(\d+):(\d+)")
+
+
+def cle_du_tour(job_id: int, tentative: int, tour) -> str:
+    """The hold key of one model call: the job, the attempt, the turn (`""`: the prefix
+    of every turn of the attempt)."""
+    return f"runner:{int(job_id)}:{int(tentative)}:{tour}"
+
+
+def appariement(uid: str) -> dict:
+    """What matches a settlement to what consumed: a turn's job, attempt and turn (the
+    names the runner's report uses), or the call (`tool_calls.call_uid`) of any other
+    hold."""
+    t = _TOUR.fullmatch(uid)
+    if t is None:
+        return {"call_id": uid}
+    return {"runner_job_id": int(t[1]), "attempt": int(t[2]), "turn": int(t[3])}
 
 
 class TourRefuse(Exception):
@@ -159,22 +178,25 @@ def regler_tour(uid: str, sub: str, org: Optional[int], tokens: dict,
                   for u in UNITES_DU_MODELE)
     depasse = montant > int(hold["reserved"])
     clos = db_credits.regler(uid, montant=montant, quantite=int(tokens[_UNITE_RESERVEE]),
-                             meta={**meta, "from": "response", "exceeded": depasse,
+                             meta={**appariement(uid), **meta, "from": "response",
+                                   "exceeded": depasse,
                                    "tokens": {u: int(tokens[u]) for u in UNITES_DU_MODELE}})
     if clos is None:
         return {"settled": False, "amount": 0, "exceeded": False}
     return {"settled": True, "amount": montant, "exceeded": depasse}
 
 
-def clore_les_tours(prefixe: str) -> int:
+def clore_les_tours(prefixe: str, key_mode: Optional[str]) -> int:
     """At the end of an attempt, the turns reserved and never reported (the call that
     cut the loop, a worker that died between the call and its report) settle at the
-    amount reserved, marked `unreported`. Returns how many. Never raises."""
+    amount reserved, marked `unreported`, under the rung of the attempt's key. Returns
+    how many. Never raises."""
     n = 0
     try:
         for uid in db_credits.reservations_ouvertes(prefixe):
             if db_credits.regler(uid, montant=None, quantite=None,
-                                 meta={"from": "unreported", "exceeded": False}):
+                                 meta={**appariement(uid), "key_mode": key_mode,
+                                       "from": "unreported", "exceeded": False}):
                 n += 1
     except Exception:  # noqa: BLE001 — the holds stay open; their deadline settles them
         logger.warning("crédits : tours %s* non clos (leur échéance les règle)", prefixe,

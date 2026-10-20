@@ -1014,6 +1014,13 @@ l'org à la réservation suivante, ses agents compris.
   comportement d'avant. La résolution est la cascade ordinaire, au nom du demandeur et
   dans l'org du travail (`_cle_exigee.cle_partagee`), et seuls les rangs `tenant` et
   `platform` y comptent.
+- **Refacturée, ou pas** (20/10/2026) : seule la clé de la plateforme ou du tenant
+  PRIMAIRE de l'instance (`tenancy.primary_slug()`) est refacturée — estampillée, mesurée
+  tour par tour, réservée (`credits.rang_refacture`, le même prédicat qu'au résolveur
+  des outils). L'opérateur les paie. La clé d'un tenant NON primaire, ce tenant la paie,
+  comme une org la sienne : servie comme la clé de l'org, sans estampille ni mesure, à
+  tout worker (ferme comprise), jamais réservée. Avant le 20/10, elle était refacturée
+  comme les autres.
 - ⚠️ **Une org qui a DÉPOSÉ une clé que le coffre ne rend pas ne bascule PAS** sur la
   clé partagée : elle paie déjà son fournisseur, et la facturer sur la nôtre pour un
   hoquet du coffre la ferait payer deux fois.
@@ -1037,16 +1044,18 @@ l'org à la réservation suivante, ses agents compris.
     `cache_creation_input_tokens`, `cache_read_input_tokens`), chacun sous sa ligne du
     barème de la version et du modèle réservés ; au-delà de la réservation (l'entrée, le cache) :
     `exceeded: true`. Le mouvement porte `meta.tokens`, `model`, `runner_job_id`,
-    `attempt`, `turn` et `key_mode` (le rang). **Refusé** (422 `usage_unmeasured`) si
+    `attempt`, `turn` et `key_mode` (le rang : `platform` ou `tenant`). **Refusé** (422 `usage_unmeasured`) si
     l'entrée ou la sortie manque : le worker s'arrête. **Idempotent** : un tour déjà
     réglé rend `duplicate: true`. Un tour jamais réservé se réserve au règlement (il a
     consommé) ;
   - **à la conclusion** (même un échec : la dépense est réelle), les tours réservés et
     jamais rapportés — l'appel qui a coupé la boucle, un rapport perdu — se règlent au
-    montant réservé (`from: unreported`). L'échéance (`OTO_CREDITS_HOLD_MAX_S`) règle
-    ce qu'un worker mort a laissé ouvert.
+    montant réservé (`from: unreported`), avec `runner_job_id`, `attempt`, `turn` et le
+    `key_mode` de l'estampille. L'échéance (`OTO_CREDITS_HOLD_MAX_S`) règle ce qu'un
+    worker mort a laissé ouvert : son mouvement dit le travail, la tentative et le tour
+    (lus dans la clé), pas le `key_mode`.
   **Le prix n'est pas ici** : le barème est en unités, le commerce le pose et facture.
-- **Ce qui ne reçoit JAMAIS la clé partagée** : un worker qui ne promet pas la mesure
+- **Ce qui ne reçoit JAMAIS une clé refacturée** : un worker qui ne promet pas la mesure
   (le travail retourne à la file sans compter la tentative, `rendre_a_la_file`) ; la
   ferme (Claude Code, dont on ne voit pas chaque appel : arrêt nommé, l'org dépose sa
   clé).

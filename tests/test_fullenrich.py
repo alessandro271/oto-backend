@@ -133,8 +133,12 @@ def test_enrich_linkedin_does_not_trace_on_a_rejected_submission():
 # passent par `res.get(...)` sur un client simulé : ils tiennent sur le pin actuel,
 # que le champ y soit déjà ou non.
 
-def _result(fetched: dict, *, is_platform: bool = True, **kw):
-    rc = SimpleNamespace(key="fake-key", is_platform=is_platform)
+def _result(fetched: dict, *, is_platform: bool = True, rang: tuple = (), **kw):
+    """`rang` : le rang de la clé résolue et son entité (`(mode, entity_id)`) ; par
+    défaut, la plateforme ou la clé de l'org selon `is_platform`."""
+    mode, entite = rang or (("platform", None) if is_platform else ("org", "7"))
+    rc = SimpleNamespace(key="fake-key", is_platform=mode == "platform", mode=mode,
+                         entity_id=entite)
     with patch("oto_mcp.access.resolve_credential", return_value=rc), \
          patch("oto_mcp.tools.fullenrich.session_org.note_call_trace") as trace, \
          patch("oto.tools.fullenrich.client.FullenrichClient") as client_cls:
@@ -236,7 +240,7 @@ def _en_cours(status="IN_PROGRESS"):
 def test_le_releve_ne_verifie_pas_le_quota_plateforme():
     """#943 : le quota est débité à la SOUMISSION ; le relevé ne consomme rien. Le
     vérifier rendait le résultat d'un job déjà payé illisible le jour même."""
-    rc = SimpleNamespace(key="fake-key", is_platform=True)
+    rc = SimpleNamespace(key="fake-key", is_platform=True, mode="platform", entity_id=None)
     with patch("oto_mcp.access.resolve_credential", return_value=rc) as resolve, \
          patch("oto_mcp.tools.fullenrich.session_org.note_call_trace"), \
          patch("oto.tools.fullenrich.client.FullenrichClient") as client_cls:
@@ -281,7 +285,7 @@ def test_un_statut_terminal_est_un_refus_nomme_pas_un_en_cours(status, code):
 ])
 def test_une_erreur_de_l_amont_est_nommee_pas_interne(erreur, attendu):
     from oto_mcp.mcp_errors import McpError
-    rc = SimpleNamespace(key="fake-key", is_platform=False)
+    rc = SimpleNamespace(key="fake-key", is_platform=False, mode="org", entity_id="7")
     with patch("oto_mcp.access.resolve_credential", return_value=rc), \
          patch("oto_mcp.tools.fullenrich.session_org.note_call_trace"), \
          patch("oto.tools.fullenrich.client.FullenrichClient") as client_cls:
@@ -381,17 +385,21 @@ def test_la_soumission_dit_son_envoi_et_sa_reponse(monkeypatch):
         session_org.reset_call_trace(jeton)
 
 
-@pytest.mark.parametrize("is_platform", [True, False])
-def test_la_releve_finie_regle_par_nature_ce_qui_est_trouve(releves, is_platform):
+@pytest.mark.parametrize("rang, refacturee", [
+    (("platform", None), True), (("tenant", "oto"), True),
+    (("tenant", "autre"), False), (("org", "7"), False)])
+def test_la_releve_finie_regle_par_nature_ce_qui_est_trouve(releves, monkeypatch, rang,
+                                                           refacturee):
     """Les contacts où chaque nature est TROUVÉE (un contact à deux e-mails compte une
     fois, un contact vide nulle part) — pas les crédits que FullEnrich a décomptés."""
     profils = [_profile(work_emails=["a@x", "b@x"], phones=["+33"]),
                _profile(personal_emails=["c@y"]), _profile()]
-    _result({"status": "FINISHED", "profiles": profils, "cost_credits": 14},
-            is_platform=is_platform)
+    monkeypatch.setenv("OTO_TENANT_PRIMAIRE_SLUG", "oto")
+    _result({"status": "FINISHED", "profiles": profils, "cost_credits": 14}, rang=rang)
     attendu = [("fullenrich.fetch", {"enrichment_id": "enr_789"},
                 {"work_emails": 1, "personal_emails": 1, "phones": 1})]
-    assert releves["regler"] == (attendu if is_platform else [])
+    assert releves["regler"] == (attendu if refacturee else []), \
+        "la plateforme et le tenant primaire ; jamais un tenant non primaire ni l'org"
 
 
 def test_une_releve_sans_rien_trouve_regle_zero_par_nature(releves):
@@ -444,6 +452,8 @@ def test_un_post_refuse_par_fullenrich_libere_sa_reservation(monkeypatch, statut
     finally:
         session_org.reset_call_trace(jeton)
     assert getattr(e.value, "status_code", None) == statut, "l'erreur du vrai client"
-    releve[budget.CLE]["hold"] = {"reserved": 11, "quantity": 11, "payer": "org:1"}
+    # Ce que la réservation aurait posé : sa clé (le `call_uid` de l'appel) et sa tenue.
+    releve[budget.CLE].update(uid="c-1", hold={"reserved": 11, "quantity": 11,
+                                               "payer": "org:1", "key_mode": "platform"})
     budget.solder_echec(releve, e.value)
     assert vus == [solde]

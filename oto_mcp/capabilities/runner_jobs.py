@@ -83,8 +83,9 @@ class JobsInput(BaseModel):
     meters_usage: bool = Field(False, description=(
         "claim: this worker reserves EVERY model call before sending it (`op=reserve`) "
         "and reports its usage (`op=meter`) before its next step, and stops when either "
-        "is refused. Only such a worker is served a SHARED key (platform or tenant), "
-        "whose calls are settled in the credit ledger: a worker that does not declare "
+        "is refused. Only such a worker is served a key the instance re-bills (the "
+        "platform's, or its primary tenant's), whose calls are settled in the credit "
+        "ledger: a worker that does not declare "
         "it never receives one."))
     # reserve / meter — le rang du tour dans la tentative (0, 1, 2…).
     turn: Optional[int] = Field(None, ge=0)
@@ -710,11 +711,15 @@ def _avec_cle(job: dict, depot: Optional[str], appelant: str, *,
         if partagee is None and posee is None:
             return _doute_du_coffre(job, appelant, depot)
         if partagee is not None:
-            if ferme:
+            # Refacturée : celle de la plateforme ou du tenant PRIMAIRE, que l'opérateur
+            # paie (`budget.rang_refacture`). Celle d'un tenant non primaire, ce tenant
+            # la paie comme une org la sienne : servie sans mesure, jamais réservée.
+            payeur = budget.rang_refacture(partagee.mode, partagee.entity_id)
+            if payeur is not None and ferme:
                 # La ferme fait tourner Claude Code, dont nous ne mesurons pas chaque
                 # appel : elle ne reçoit jamais une clé que nous refacturons.
                 return _refuser_sans_cle(job, appelant, _FERME_SANS_CLE_D_ORG)
-            if not metre:
+            if payeur is not None and not metre:
                 # Un worker qui ne mesure pas chaque appel ne reçoit pas notre clé —
                 # mais l'org y a droit : le travail retourne à la file, sans compter
                 # la tentative, pour un worker qui mesure.
@@ -723,13 +728,14 @@ def _avec_cle(job: dict, depot: Optional[str], appelant: str, *,
                                "qui ne mesure pas chaque appel — rendu à la file",
                                job.get("id"), job["org_id"], depot, appelant)
                 return None
-            if not db.estampiller_cle_partagee(job["id"], appelant, depot, partagee.mode):
+            if payeur is not None and not db.estampiller_cle_partagee(
+                    job["id"], appelant, depot, payeur):
                 # Plus à ce worker (course) : rien n'est servi sur une clé qu'on ne
                 # saurait pas refacturer. Le bail expirera.
                 logger.warning("travail %s : estampille de la clé partagée `%s` NON "
                                "écrite — rien n'est servi", job.get("id"), depot)
                 return None
-            cle, payeur = partagee.key, partagee.mode
+            cle = partagee.key
             # Le workspace d'une clé d'ORGANISATION Anthropic, s'il voyage avec la
             # config résolue. ⚠️ Au rang plateforme, la `meta` n'en fait pas partie :
             # la clé partagée se pose donc en clé de WORKSPACE, qui n'en a pas besoin.
@@ -767,7 +773,7 @@ def _avec_cle(job: dict, depot: Optional[str], appelant: str, *,
     # elle se verrait serait la facture de l'org.
     logger.info("clé de modèle `%s` remise à %s pour l'org %s (travail %s, %s)",
                 depot, appelant, job["org_id"], job.get("id"),
-                f"clé partagée, rang {payeur}" if payeur else "clé de l'org")
+                f"clé partagée, rang {payeur}" if payeur else "clé non refacturée")
     # Le workspace part À CÔTÉ de la clé, s'il est posé — et reste hors de la trace
     # ci-dessus comme elle.
     return {**job, "model_key": cle, **({"model_workspace": workspace} if workspace else {}),
@@ -782,11 +788,6 @@ def _postes_du_resultat(r: dict) -> dict:
     return {"input_tokens": r.get("usage_input"), "output_tokens": r.get("usage_output"),
             "cache_creation_input_tokens": r.get("usage_cache_write"),
             "cache_read_input_tokens": r.get("usage_cache_read")}
-
-
-def _tour(job_id: int, tentative: int, tour) -> str:
-    """L'identifiant d'un appel au modèle au budget : le travail, la tentative, le tour."""
-    return f"runner:{int(job_id)}:{int(tentative)}:{tour}"
 
 
 def _tentative_partagee(ctx: ResolvedCtx, job_id: int) -> Optional[dict]:
@@ -819,7 +820,7 @@ def _reserver_un_tour(ctx: ResolvedCtx, job_id: int, tour: int, max_tokens: int)
     if prise is None:
         return {"ok": True, "held": False}
     try:
-        r = tours.reserver_tour(_tour(job_id, prise["attempts"], tour), prise["sub"],
+        r = tours.reserver_tour(tours.cle_du_tour(job_id, prise["attempts"], tour), prise["sub"],
                                  prise["org_id"], max_tokens, prise.get("model"))
     except tours.TourRefuse as e:
         raise AuthzDenied(_REFUS_DU_TOUR[e.code], e.code, str(e)) from None
@@ -856,7 +857,7 @@ def _regler_un_tour(ctx: ResolvedCtx, job_id: int, tour: int, usage: dict) -> di
     est = prise["cle_partagee"]
     try:
         r = tours.regler_tour(
-            _tour(job_id, prise["attempts"], tour), prise["sub"], prise["org_id"],
+            tours.cle_du_tour(job_id, prise["attempts"], tour), prise["sub"], prise["org_id"],
             {k: (v or 0) for k, v in postes.items()},
             {"runner_job_id": int(job_id), "attempt": prise["attempts"], "turn": int(tour),
              "model": usage.get("model"), "key_mode": est.get("mode"),
@@ -885,7 +886,8 @@ def _clore_la_tentative(job_id: int, conclu: dict) -> None:
     estampille = (conclu or {}).get("cle_partagee")
     if not isinstance(estampille, dict) or estampille.get("tentative") != conclu.get("attempts"):
         return
-    tours.clore_les_tours(_tour(job_id, conclu["attempts"], ""))
+    tours.clore_les_tours(tours.cle_du_tour(job_id, conclu["attempts"], ""),
+                          estampille.get("mode"))
 
 
 def _avec_abonnement(job: dict, famille: str, appelant: str) -> dict:
