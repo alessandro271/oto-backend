@@ -421,6 +421,29 @@ effet sur le contexte MCP. Même garde que le renommage : `write` sur le projet.
 par tous ceux qui voient le projet — c'est un rangement d'équipe, pas une préférence
 personnelle.
 
+## Rang d'affichage d'un projet — `position` (2026-10-19)
+
+**Le besoin.** Une org numérote ses projets (« 00 · Contexte partagé », « 01 · Audit »…)
+et veut les lire dans cet ordre ; une autre veut le sien, sans numéros. L'ordre des
+listes (`updated_at` décroissant) rebattait la sidebar à chaque modification. Ce qui
+manquait : **ranger à la main**, par glisser-déposer.
+
+**La forme.** Colonne `projects.position` (DOUBLE PRECISION, NULL = non rangé), posée
+par `oto_project op=update position=<nombre>` — fini, sinon `invalid_position` (rien
+d'écrit) ; retiré par `clear_position=true` (retour à NULL, non rangé), jamais avec
+`position` dans le même appel (`invalid_position`). Servie par `op=get`/`list` (`ProjectRead.position`). Croissant parmi les
+projets du même dossier ; les fractions sont permises pour qu'un glisser n'écrive QUE le
+projet déplacé (le milieu entre ses deux nouveaux voisins), pas tous ses frères. Les
+non rangés viennent après les rangés ; l'ordre entre eux est celui du client (par
+exemple, par nom). Le serveur ne trie pas sur ce rang : `op=list` garde son
+ordre.
+
+**Ce que ce n'est pas.** Aucune règle d'accès, aucun effet sur le contexte MCP. Même
+garde que le dossier : `write` sur le projet ; partagé par tous ceux qui voient le
+projet. Posé SEUL, le rang ne touche ni `updated_at` ni le fil d'activité : ranger la
+sidebar n'est pas modifier le projet, et « récemment modifié » le remonterait à chaque
+glisser.
+
 ## Périmètre d'URL d'un projet — `excluded_url_prefixes` (#605, 2026-08-29)
 
 **Le besoin.** Un contrat client peut exclure la CONSULTATION de certaines pages — le cas

@@ -24,7 +24,7 @@ ROW = {"id": 7, "owner_type": "org", "owner_id": "99", "name": "Proj", "brief_md
 
 @pytest.fixture
 def seams(monkeypatch):
-    rec = {"create": [], "update": [], "archive": [], "folder": []}
+    rec = {"create": [], "update": [], "archive": [], "folder": [], "position": [], "clear_position": [], "activity": []}
     monkeypatch.setattr(P.db, "create_project",
                         lambda ot, oid, name, brief, created_by=None, context_org_id=None: rec["create"].append((ot, oid, name, brief, created_by, context_org_id)) or 7)
     monkeypatch.setattr(P.db, "get_project_by_id", lambda pid: dict(ROW, id=pid) if pid in (7, 8) else None)
@@ -37,9 +37,10 @@ def seams(monkeypatch):
                             rec["list_owners"].append(owners), rec["createurs"].append(createur))
                         and ([dict(ROW, is_template=True)] if templates_only else [ROW]))
     monkeypatch.setattr(P.db, "update_project",
-                        lambda pid, name=None, brief_md=None, is_template=None, icon=None, folder=None: (
+                        lambda pid, name=None, brief_md=None, is_template=None, icon=None, folder=None, position=None, clear_position=False: (
                             rec["update"].append((pid, name, brief_md, is_template)),
-                            rec["folder"].append(folder)))
+                            rec["folder"].append(folder), rec["position"].append(position),
+                            rec["clear_position"].append(clear_position)))
     rec["copy"] = []
     # `context_org_id` (ADR 0068) : une copie PERSONNELLE reste rangée dans l'org où
     # elle a été faite, sans y être partagée. Le stub le RETIENT — un seam qui accepte
@@ -88,7 +89,7 @@ def seams(monkeypatch):
     monkeypatch.setattr(P.group_store, "get_group",
                         lambda gid: {"id": gid, "org_id": 99, "name": "pôle"})
     monkeypatch.setattr(P.group_store, "list_groups", lambda org_id: [])
-    monkeypatch.setattr(P.db, "log_project_activity", lambda *a, **k: None)
+    monkeypatch.setattr(P.db, "log_project_activity", lambda *a, **k: rec["activity"].append(a[2]))
     monkeypatch.setattr(P.db, "list_project_activity",
                         lambda pid, limit=50: [{"sub": "u1", "action": "project.create",
                                                 "detail": "Proj", "created_at": "2026-06-30"}])
@@ -410,6 +411,62 @@ def test_update_folder_trop_long(seams):
         P._project(CTX, P.ProjectInput(op="update", project_id=7, name="New",
                                        folder="x" * (P.FOLDER_MAX + 1)))
     assert (e.value.status, e.value.code) == (400, "folder_too_long")
+    assert seams["update"] == []
+
+
+def test_update_position_seule(seams):
+    """Ranger la sidebar n'est pas modifier le projet : le rang part en base, aucune
+    ligne au fil d'activité."""
+    P._project(CTX, P.ProjectInput(op="update", project_id=7, position=1.5))
+    assert seams["position"] == [1.5]
+    assert "project.update" not in seams["activity"]
+
+
+def test_update_position_avec_dossier(seams):
+    """Déplacé dans un autre dossier ET rangé : une seule écriture, et c'est une
+    modification (le dossier change) — elle s'inscrit au fil."""
+    P._project(CTX, P.ProjectInput(op="update", project_id=7, folder="Clients", position=3.0))
+    assert (seams["folder"], seams["position"]) == (["Clients"], [3.0])
+    assert "project.update" in seams["activity"]
+
+
+def test_update_position_et_un_champ_quelconque(seams):
+    """« Seul » se dérive du modèle : n'importe quel autre champ posé (ici un champ
+    qu'`op=update` ne lit même pas) fait de l'écriture une modification."""
+    P._project(CTX, P.ProjectInput(op="update", project_id=7, position=2.0, stale_days=5))
+    assert "project.update" in seams["activity"]
+
+
+def test_update_position_seule_face_mcp(seams):
+    """Sur la face MCP, fastmcp remplit chaque champ de son défaut : tous arrivent
+    « fournis ». Le rang posé seul reste un rang seul."""
+    tous = {n: c.default for n, c in P.ProjectInput.model_fields.items() if n != "op"}
+    P._project(CTX, P.ProjectInput(**dict(tous, op="update", project_id=7, position=1.5)))
+    assert seams["position"] == [1.5]
+    assert "project.update" not in seams["activity"]
+
+
+def test_clear_position_retire_le_rang_sans_toucher_le_fil(seams):
+    """Un rang posé doit pouvoir revenir à « non rangé », comme `folder=""` sort du
+    dossier. Retirer le rang reste un rangement : aucune ligne au fil."""
+    P._project(CTX, P.ProjectInput(op="update", project_id=7, clear_position=True))
+    assert (seams["position"], seams["clear_position"]) == ([None], [True])
+    assert "project.update" not in seams["activity"]
+
+
+def test_position_et_clear_position_s_excluent(seams):
+    with pytest.raises(AuthzDenied) as e:
+        P._project(CTX, P.ProjectInput(op="update", project_id=7, position=1.0, clear_position=True))
+    assert e.value.code == "invalid_position"
+    assert seams["update"] == []
+
+
+@pytest.mark.parametrize("rang", [float("inf"), float("nan")])
+def test_update_position_non_finie(seams, rang):
+    """Un rang infini ou NaN casserait le tri de tout le dossier : refus nommé, rien d'écrit."""
+    with pytest.raises(AuthzDenied) as e:
+        P._project(CTX, P.ProjectInput(op="update", project_id=7, position=rang))
+    assert (e.value.status, e.value.code) == (400, "invalid_position")
     assert seams["update"] == []
 
 

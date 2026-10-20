@@ -30,6 +30,10 @@ CREATE TABLE IF NOT EXISTS projects (
     -- Dossier d'affichage facultatif : les listes regroupent les projets au même
     -- libellé. NULL = hors dossier. Aucune hiérarchie, aucune règle d'accès.
     folder TEXT,
+    -- Rang d'affichage facultatif parmi les projets du même dossier : croissant, les
+    -- fractions permises (un glisser n'écrit que le projet déplacé). NULL = non rangé,
+    -- après les rangés. Aucun effet hors des listes.
+    position DOUBLE PRECISION,
     brief_md TEXT NOT NULL DEFAULT '',
     created_by TEXT,
     is_template BOOLEAN NOT NULL DEFAULT FALSE,

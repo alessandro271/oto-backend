@@ -13,6 +13,7 @@ les **liens** vers tableaux/procédures/connecteurs/bases, et le **Doc arboresce
 from __future__ import annotations
 
 import logging
+import math
 import re
 import secrets
 from typing import Literal, Optional
@@ -65,6 +66,14 @@ class ProjectInput(BaseModel):
         "update: the folder the project is shown under in lists — a free label "
         f"(≤ {FOLDER_MAX} characters), shared by every project that carries the "
         "same one. Display only: no hierarchy, no access rule. `\"\"` clears it."))
+    position: Optional[float] = Field(default=None, description=(
+        "update: the project's rank among the projects of its folder in lists — lower "
+        "first, fractions allowed (place a project between two others with the midpoint). "
+        "Unranked projects come after the ranked ones. Display only; setting it alone "
+        "does not change `updated_at`."))
+    clear_position: Optional[bool] = Field(default=None, description=(
+        "update: `true` takes the project out of the ranking — `position` back to null, "
+        "after the ranked ones. Not together with `position`."))
     brief_md: Optional[str] = None
     is_template: Optional[bool] = None   # update : publier/retirer le projet comme MODÈLE (ADR 0032 §7 B5a)
     # publish_mcp : publier le projet en endpoint MCP dédié `<mcp_slug>.mcp.oto.cx` (ADR 0032, amende #44).
@@ -340,7 +349,7 @@ def _view(row: dict, sub: Optional[str] = None, nb_partages: Optional[int] = Non
     partages = None if nb_partages is not None else _partages_vivants(row["id"])
     return {
         "id": row["id"], "name": row["name"], "icon": row.get("icon"),
-        "folder": row.get("folder"),
+        "folder": row.get("folder"), "position": row.get("position"),
         # L'adresse web du projet, à côté de son id (#599).
         "url": _project_web_url(sub, row["id"]),
         "brief_md": row.get("brief_md", ""),
@@ -1089,6 +1098,21 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         # Avant toute écriture, comme les refus au-dessus : le périmètre d'URL plus bas
         # s'écrit seul, et « rien n'a été modifié » doit rester vrai.
         folder = dossier_valide(inp.folder)
+        _require(inp.position is None or math.isfinite(inp.position), "invalid_position",
+                 "`position` est un nombre fini, et rien n'a été modifié.")
+        _require(not (inp.clear_position and inp.position is not None), "invalid_position",
+                 "`position` et `clear_position` s'excluent : poser un rang ou le retirer, "
+                 "et rien n'a été modifié.")
+        # Ranger la sidebar n'est pas modifier le projet : le rang seul ne s'inscrit pas
+        # au fil d'activité (un glisser en écrirait une ligne à chaque fois). « Seul » se
+        # dérive du modèle, pas d'une liste tenue à la main : un champ ajouté demain à
+        # `ProjectInput` compte d'office comme une modification. Par la valeur, pas par
+        # `model_fields_set` : sur la face MCP, fastmcp remplit les défauts avant
+        # d'appeler le handler, et tous les champs y arrivent « fournis » (même
+        # discriminant que monitoring.py::_refuser_les_champs_muets).
+        rang_seul = (inp.position is not None or bool(inp.clear_position)) and all(
+            getattr(inp, nom) == champ.default for nom, champ in ProjectInput.model_fields.items()
+            if nom not in ("op", "project_id", "position", "clear_position"))
         # Ce que l'agent d'un TIERS lit au branchement : même autorité que la
         # publication elle-même, pas un simple write.
         if inp.mcp_instructions_md is not None:
@@ -1107,8 +1131,10 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         db.update_project(int(inp.project_id),
                           name=(inp.name.strip() if inp.name else None),
                           brief_md=inp.brief_md, is_template=inp.is_template,
-                          icon=inp.icon, folder=folder)
-        db.log_project_activity(int(inp.project_id), sub, "project.update", inp.name or None)
+                          icon=inp.icon, folder=folder, position=inp.position,
+                          clear_position=bool(inp.clear_position))
+        if not rang_seul:
+            db.log_project_activity(int(inp.project_id), sub, "project.update", inp.name or None)
         if inp.mcp_instructions_md is not None:
             # L'instruction SEULE : slug, accès, outils et opt-ins ne bougent pas.
             db.set_project_mcp_instructions(int(inp.project_id), inp.mcp_instructions_md)
@@ -1606,6 +1632,9 @@ class ProjectRead(BaseModel):
     # Dossier d'affichage : les projets au même libellé se regroupent dans les
     # listes. `null` = hors dossier. Aucune hiérarchie ni règle d'accès.
     folder: Optional[str] = None
+    # Rang d'affichage parmi les projets du même dossier : croissant, fractions permises.
+    # `null` = non rangé (après les rangés).
+    position: Optional[float] = None
     brief_md: str = ""
     owner_type: str                              # user | org | group | platform
     owner_id: str
@@ -1726,7 +1755,9 @@ CAPABILITIES += [
             "org-owned projects only, always empty otherwise) / "
             "inert_procedures — a linked entity that no longer resolves surfaces HERE, act on it) / "
             "update (name, icon = an emoji shown in the lists and headers (\"\" clears it), folder = a display "
-            "label the lists group projects under (\"\" clears it), brief_md, is_template = publish/unpublish "
+            "label the lists group projects under (\"\" clears it), position = the project's rank "
+            "within its folder in lists (lower first, fractions allowed; clear_position=true "
+            "unranks it), brief_md, is_template = publish/unpublish "
             "as a copyable model, excluded_url_prefixes = URL prefixes such as `linkedin.com/in/` "
             "that search tools drop and extraction tools refuse under this project — a whole "
             "host must be written `host/*`, `[]` clears, mcp_instructions_md = the prose "
@@ -1796,7 +1827,7 @@ CAPABILITIES += [
             "op=transfer new_owner_group=<id> hands it to a TEAM so the project and its "
             "connector credentials sit at the SAME level (the team's secrets then resolve "
             "when you open it), new_owner_org=<id> to an org, new_owner_email to a user. "
-            "(op=update only changes name/icon/folder/brief_md/is_template — never the owner; op=copy "
+            "(op=update only changes name/icon/folder/position/brief_md/is_template — never the owner; op=copy "
             "makes a NEW id.) "
             "inventory = the project's DERIVED surface (union of the linked procedures' "
             "<tool:> refs + tools actually used by the project's runs, plus connectors "
