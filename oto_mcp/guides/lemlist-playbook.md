@@ -149,6 +149,34 @@ historique de watch list (bêta non activée), A/B tests (plan Email Pro).
 Une liste naît en brouillon (`activate=False`) — c'est voulu : activée avec
 `signal_processing_type="push_to_campaign"`, elle alimente une campagne sans autre appel.
 
+## Visiteurs du site : `companyEmployeeVisitedMyWebsite`
+
+lemlist identifie les ENTREPRISES qui visitent le site du client (et la personne, pour
+une partie du trafic américain). Un client qui l'a n'a pas besoin d'un autre outil
+d'identification des visiteurs. ⚠️ Pas encore rejoué sur un site suivi : ce qui suit
+vient de la doc lemlist, pas d'un essai.
+
+1. **Le script de suivi d'abord.** Il se pose depuis l'app lemlist (Signal agents →
+   Create signal agent → Website visitors → copier le script) ; aucune route ne le
+   pose. Sans lui, la liste se crée et ne capte rien.
+2. **Les filtres** : `website`, `pagesTracked`, `minVisitDuration`, `minPageViewed`,
+   `visitLocation`, `internalTraffic`, `excludedVisitorIps`,
+   `maxIdentificationsPerDay` — lis-les avec `op="filters"` comme pour tout type.
+3. ⚠️ **Le coût** : une liste ACTIVE dépense 20 crédits lemlist par visite captée.
+   Pose `maxIdentificationsPerDay`, et fais confirmer avant `activate=True`.
+4. **Lire les visites** : `op="signals"`, `watch_type="companyEmployeeVisitedMyWebsite"`,
+   `received_from` — par routine planifiée. Chaque signal porte `company` (nom,
+   domaine, LinkedIn, secteur) et `signalData` : `websiteVisited` (la page),
+   `visitorWebsite`, `visitorCountry`, `visitorDuration` (secondes) ; `contact`
+   seulement quand lemlist a nommé le visiteur.
+5. **Ou à chaque visite** : `lemlist_webhook(op="add", event_type="signalRegistered")`
+   vers l'adresse d'un agent dont l'authentification webhook est `lemlist`, avec
+   son jeton `otoh_` en `secret`. `signalRegistered` part pour TOUTES les watch lists
+   de l'équipe : vérifie le type avant d'agir.
+6. **Pousser vers une campagne** : `push_to_campaign` + `campaign_id` + `persona_id`
+   (`lemlist_database op="personas"`) — le persona dit qui chercher dans
+   l'entreprise, puisque le signal n'en nomme en général personne.
+
 ## Désinscriptions : trois listes qui ne se parlent pas
 
 `lemlist_unsubscribe` couvre trois registres distincts, et écrire dans l'un n'écrit pas

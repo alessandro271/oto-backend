@@ -10,7 +10,8 @@ from ._model import _c
 CONNECTOR = _c(
     "lemlist", ["lemlist"], auth_modes={"byo_user", "byo_org"}, keyed=True,
     secret_kind="api_key",
-    label="Lemlist", help="cold outreach", href="https://app.lemlist.com",
+    label="Lemlist", help="cold outreach, signals and website visitors",
+    href="https://app.lemlist.com",
     # Three modules for ONE connector, for readability rather than scope:
     # `lemlist` holds the campaign and its leads, `lemlist_crm` everything else
     # (CRM, inbox, unsubscribes, signals, settings), `lemlist_lignes` the single
@@ -27,5 +28,6 @@ LOGO_DOMAIN = "lemlist.com"
 DESCRIPTION = (
     "Lemlist cold outreach campaigns: create and run a campaign, "
     "manage its leads, plus the rest of the account (native CRM, inbox, "
-    "unsubscribes, signals, settings) in a separate module."
+    "unsubscribes, signals including the companies visiting your website, "
+    "settings) in a separate module."
 )

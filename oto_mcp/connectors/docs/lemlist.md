@@ -25,8 +25,19 @@ the connector mirrors the **141 documented routes**, without exception. by famil
 
 **inbox** — `lemlist_inbox` (conversations, drafts, labels) and `lemlist_inbox_send`
 **unsubscribes** — `lemlist_unsubscribe`: ⚠️ **three distinct lists** (v1 emails/domains, v2 variables, a contact's do-not-contact flag); writing to one does not write to the others
-**signals** — `lemlist_watchlist`: companies that are hiring, fundraising, job changes…
+**signals** — `lemlist_watchlist`: companies that are hiring, fundraising, job changes, visiting your website… (website visitors: section below)
 **the rest** — `lemlist_task`, `lemlist_database` (shared base + personas), `lemlist_team`, `lemlist_mailbox` (SMTP/IMAP connection + lemwarm), `lemlist_deliverability`, `lemlist_webhook`, `lemlist_get_activities`
+
+## usage — website visitors
+
+lemlist identifies the COMPANIES visiting your site (its watch-list type `companyEmployeeVisitedMyWebsite`), and names the person for some US traffic. a client who has it does not need a separate visitor-identification tool.
+- **before anything**: lemlist's tracking script must be on the site. it is installed from the lemlist app (Signal agents → Create signal agent → Website visitors → copy the script), never through the API
+- "watch who visits our pricing page" → `lemlist_watchlist(op="filters", watch_type="companyEmployeeVisitedMyWebsite")` for the accepted filters (`website`, `pagesTracked`, `minVisitDuration`, `minPageViewed`, `visitLocation`, `internalTraffic`, `excludedVisitorIps`, `maxIdentificationsPerDay`), canonical values from `op="filter_values"`, then `op="create"` — born as a draft
+- ⚠️ **an active list spends 20 lemlist credits per visit caught**: set `maxIdentificationsPerDay`, and confirm with the user before `activate=True` (`lemlist_team(op="credits")` counts what is left)
+- "which companies visited since yesterday?" → `lemlist_watchlist(op="signals", watch_type="companyEmployeeVisitedMyWebsite", received_from="2026-08-30T00:00:00Z")` — each signal carries `company` (name, domain, linkedinUrl, industry) and `signalData`: `websiteVisited` (the page), `visitorWebsite`, `visitorCountry`, `visitorDuration` (seconds); `contact` only when lemlist named the visitor
+- to run on each visit rather than on a schedule: `lemlist_webhook(op="add", target_url=<the agent's hook URL>, event_type="signalRegistered", secret=<the agent's otoh_ token>)` on an agent whose webhook auth is `lemlist`. `signalRegistered` fires for EVERY watch list of the team: check the signal type before acting
+- "push every visiting company into campaign X" → `op="create"` with `signal_processing_type="push_to_campaign"`, `campaign_id` and `persona_id` (who to look for at the company, from `lemlist_database(op="personas")`) — ⚠️ once active, this list feeds the campaign ON ITS OWN
+- not live-tested yet on a tracked site: the shapes above are lemlist's documented ones
 
 ## note — what sends, and what is hidden by default
 

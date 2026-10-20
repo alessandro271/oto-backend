@@ -362,6 +362,24 @@ def test_creer_une_watchlist_minimale_nenvoie_pas_de_None():
         assert kwargs == {"type": "companyRaisedFunds"}
 
 
+def test_une_watchlist_visiteurs_transmet_persona_et_campagne():
+    """Un visiteur du site arrive surtout comme ENTREPRISE : pour alimenter une
+    campagne, lemlist veut le persona et la campagne dès la création."""
+    key, cls = _with_fake_client()
+    with key, cls as client_cls:
+        inst = client_cls.return_value
+        _tool("lemlist_watchlist").fn(
+            op="create", name="Visiteurs",
+            watch_type="companyEmployeeVisitedMyWebsite",
+            signal_processing_type="push_to_campaign",
+            persona_id="pdp_1", campaign_id="cam_1")
+
+        kwargs = inst.create_watch_list.call_args.kwargs
+        assert kwargs["persona_id"] == "pdp_1"
+        assert kwargs["campaign_id"] == "cam_1"
+        assert "activate" not in kwargs
+
+
 def test_exporter_les_leads_nenvoie_pas_state_None():
     """Même piège : `state=None` écraserait le défaut `all` du client, et
     l'export rendrait la liste vide qui se lit « pas de leads »."""
