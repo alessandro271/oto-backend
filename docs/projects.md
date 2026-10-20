@@ -426,15 +426,15 @@ personnelle.
 **Le besoin.** Une org numérote ses projets (« 00 · Contexte partagé », « 01 · Audit »…)
 et veut les lire dans cet ordre ; une autre veut le sien, sans numéros. L'ordre des
 listes (`updated_at` décroissant) rebattait la sidebar à chaque modification. Ce qui
-manquait : **ranger à la main**, comme on range des pages dans Notion.
+manquait : **ranger à la main**, par glisser-déposer.
 
 **La forme.** Colonne `projects.position` (DOUBLE PRECISION, NULL = non rangé), posée
 par `oto_project op=update position=<nombre>` — fini, sinon `invalid_position` (rien
 d'écrit). Servie par `op=get`/`list` (`ProjectRead.position`). Croissant parmi les
 projets du même dossier ; les fractions sont permises pour qu'un glisser n'écrive QUE le
 projet déplacé (le milieu entre ses deux nouveaux voisins), pas tous ses frères. Les
-non rangés viennent après les rangés ; l'ordre entre eux est celui du client (la
-sidebar Tulina : par nom). Le serveur ne trie pas sur ce rang : `op=list` garde son
+non rangés viennent après les rangés ; l'ordre entre eux est celui du client (par
+exemple, par nom). Le serveur ne trie pas sur ce rang : `op=list` garde son
 ordre.
 
 **Ce que ce n'est pas.** Aucune règle d'accès, aucun effet sur le contexte MCP. Même

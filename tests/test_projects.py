@@ -429,6 +429,22 @@ def test_update_position_avec_dossier(seams):
     assert "project.update" in seams["activity"]
 
 
+def test_update_position_et_un_champ_quelconque(seams):
+    """« Seul » se dérive du modèle : n'importe quel autre champ posé (ici un champ
+    qu'`op=update` ne lit même pas) fait de l'écriture une modification."""
+    P._project(CTX, P.ProjectInput(op="update", project_id=7, position=2.0, stale_days=5))
+    assert "project.update" in seams["activity"]
+
+
+def test_update_position_seule_face_mcp(seams):
+    """Sur la face MCP, fastmcp remplit chaque champ de son défaut : tous arrivent
+    « fournis ». Le rang posé seul reste un rang seul."""
+    tous = {n: c.default for n, c in P.ProjectInput.model_fields.items() if n != "op"}
+    P._project(CTX, P.ProjectInput(**dict(tous, op="update", project_id=7, position=1.5)))
+    assert seams["position"] == [1.5]
+    assert "project.update" not in seams["activity"]
+
+
 @pytest.mark.parametrize("rang", [float("inf"), float("nan")])
 def test_update_position_non_finie(seams, rang):
     """Un rang infini ou NaN casserait le tri de tout le dossier : refus nommé, rien d'écrit."""

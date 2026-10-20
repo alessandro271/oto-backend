@@ -1098,10 +1098,15 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
         _require(inp.position is None or math.isfinite(inp.position), "invalid_position",
                  "`position` est un nombre fini, et rien n'a été modifié.")
         # Ranger la sidebar n'est pas modifier le projet : le rang seul ne s'inscrit pas
-        # au fil d'activité (un glisser en écrirait une ligne à chaque fois).
+        # au fil d'activité (un glisser en écrirait une ligne à chaque fois). « Seul » se
+        # dérive du modèle, pas d'une liste tenue à la main : un champ ajouté demain à
+        # `ProjectInput` compte d'office comme une modification. Par la valeur, pas par
+        # `model_fields_set` : sur la face MCP, fastmcp remplit les défauts avant
+        # d'appeler le handler, et tous les champs y arrivent « fournis » (même
+        # discriminant que monitoring.py::_refuser_les_champs_muets).
         rang_seul = inp.position is not None and all(
-            getattr(inp, n) is None for n in ("name", "icon", "folder", "brief_md", "is_template",
-                                              "excluded_url_prefixes", "mcp_instructions_md"))
+            getattr(inp, nom) == champ.default for nom, champ in ProjectInput.model_fields.items()
+            if nom not in ("op", "project_id", "position"))
         # Ce que l'agent d'un TIERS lit au branchement : même autorité que la
         # publication elle-même, pas un simple write.
         if inp.mcp_instructions_md is not None:
