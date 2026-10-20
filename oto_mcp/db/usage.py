@@ -1483,8 +1483,8 @@ def list_billable_calls_for_org(
     1000 en silence et sans curseur — une page tronquée y a l'air complète, et
     sous-facture sans lever d'erreur. Le relevé ne doit JAMAIS repasser par là.
 
-    Projection ÉTROITE par construction : id, outil, date, quantité, mode de
-    clé, l'identité du job relevé (`job_id`, lue pour la seule liste fermée
+    Projection ÉTROITE par construction : id, `call_uid`, outil, date, quantité,
+    mode de clé, l'identité du job relevé (`job_id`, lue pour la seule liste fermée
     `BILLABLE_JOB_ARGS` — `None` pour tout autre outil) et ce qu'il a trouvé
     (`found`, contacts par sorte, lu pour `BILLABLE_FOUND_ARGS` — `None` quand
     rien n'a été tracé). Ni `sub`, ni `email`,
@@ -1529,7 +1529,7 @@ def list_billable_calls_for_org(
             page_params += [before[0], int(before[1])]
         rows = conn.execute(
             f"""
-            SELECT l.id, l.tool, l.quantity, l.key_mode, l.run_id,
+            SELECT l.id, l.call_uid, l.tool, l.quantity, l.key_mode, l.run_id,
                    {_BILLABLE_JOB_ID_SQL} AS job_id,
                    {_BILLABLE_FOUND_SQL},
                    {_AUDIT_KEYSET_AT} AS created_at

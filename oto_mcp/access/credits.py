@@ -373,10 +373,12 @@ def reserver(sub: str, org: Optional[int], key_mode: str) -> None:
                        "refusé" if m == "enforce" else "servi")
         if not r.posee:
             appel["refus"] = INSUFFISANT
-            raise _refus(INSUFFISANT, f"Not enough credits for `{c.outil}`: this call "
-                         f"may cost up to {reserve}, {max(0, r.disponible)} are "
-                         "available. The call was correct: do not retry it as is; "
-                         "top up, or use your own key.", False,
+            # No amount in the text: the budget unit is the instance's own, and a bare
+            # number would mislead the reader. The amounts stay in the data.
+            raise _refus(INSUFFISANT, f"Not enough credits for `{c.outil}`: the balance "
+                         "does not cover the worst case of this call. The call was "
+                         "correct: do not retry it as is; top up, or use your own key.",
+                         False,
                          tool=c.outil, needed=reserve, available=max(0, r.disponible))
     appel["uid"] = uid
     appel["hold"] = {"payer": qui, "connector": c.connector, "function": c.function,

@@ -133,9 +133,9 @@ def reserver_tour(uid: str, sub: str, org: Optional[int], max_tokens: int,
                        m, qui, r.disponible, reserve, uid,
                        "refusé" if m == "enforce" else "servi")
         if not r.posee:
-            raise TourRefuse(budget.INSUFFISANT, f"Not enough credits for this model call: "
-                             f"it may cost up to {reserve}, {max(0, r.disponible)} are "
-                             "available.",
+            # No amount in the text, as for a tool (`credits.reserver`).
+            raise TourRefuse(budget.INSUFFISANT, "Not enough credits for this model call: "
+                             "the balance does not cover its worst case.",
                              False, needed=reserve, available=max(0, r.disponible))
     return {"held": True, "reserved": reserve}
 

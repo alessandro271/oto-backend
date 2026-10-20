@@ -688,6 +688,11 @@ def _console(ctx: ResolvedCtx, inp: OrgMonitoringInput) -> dict:
 class BillableCallRow(BaseModel):
     """Un appel tel qu'un consommateur de FACTURATION en a besoin — et rien de plus."""
     call_id: int
+    # L'identifiant d'appel stable (`tool_calls.call_uid`) : celui que portent les
+    # mouvements de crédits d'un appel (`call_uid`, et `call_id` de leur `meta`). C'est
+    # par lui qu'un grand livre apparie un mouvement à l'appel qui l'a consommé. `None`
+    # = ligne antérieure à la colonne.
+    call_uid: Optional[str] = None
     tool: Optional[str] = None
     created_at: Optional[str] = None
     # Items réellement traités. `None` = ce tool ne trace pas de compte, à lire
@@ -834,7 +839,8 @@ def _billable_calls(ctx: ResolvedCtx, inp: OrgBillableCallsInput) -> dict:
     return {
         # Projection EXPLICITE, pas un `**row` : la lentille reste étroite même
         # si la requête gagne des colonnes demain.
-        "calls": [{"call_id": r["id"], "tool": r["tool"], "created_at": r["created_at"],
+        "calls": [{"call_id": r["id"], "call_uid": r.get("call_uid"), "tool": r["tool"],
+                   "created_at": r["created_at"],
                    "quantity": r.get("quantity"), "key_mode": r.get("key_mode"),
                    "job_id": r.get("job_id"), "found": r.get("found"),
                    "run_id": r.get("run_id")}

@@ -126,6 +126,10 @@ REST seule) ; le stockage est `db/credits.py`, sur les tables de `db/schema/cred
   L'échéance d'une réservation synchrone ne dit pas `key_mode` : rien ne le garde sans
   colonne, et une réservation synchrone n'a pas de `job` (il entrerait dans l'index de
   la relève). Son `call_id` reste lu dans sa clé.
+
+  Côté appels, la lentille du relevé `org.usage.calls` rend `call_uid` à côté de `call_id`
+  (l'`id` entier de la ligne) : c'est le `call_id` de la `meta` des mouvements, la clé par
+  laquelle le commerce apparie un mouvement à l'appel qui l'a consommé.
 - **Un règlement réel après l'échéance** : une réservation échue se règle au montant
   réservé ; le règlement réel qui arrive ensuite est seulement journalisé
   (`credits_hold_expired_before_settle`), sans remboursement. Au commerce de verser un
@@ -207,6 +211,11 @@ tenant→org (son quota) est vérifiée d'abord : son refus ne laisse aucune ré
 | `report` (défaut) | oui ; la réservation est posée même au-delà du disponible | jamais : journalise ce qu'`enforce` refuserait |
 | `enforce` | oui | `insufficient_credits` (non rejouable), `credits_unpriced` (fonction sans ligne au barème, non rejouable), `spend_ledger_unavailable` (registre illisible ou non écrit, rejouable) |
 | `off` | non | jamais |
+
+Le TEXTE de `insufficient_credits` ne porte aucun montant : l'unité de budget est celle de
+l'instance, et un nombre nu tromperait le lecteur. Le pire cas réservé et le disponible
+restent dans les données du refus (`needed`, `available`), en unités de budget, à traduire
+par l'instance.
 
 Un réglage illisible refuse le démarrage (`credits.verifier_reglages`). Un règlement qui
 échoue ne défait jamais l'appel : la réservation reste ouverte, et son échéance la règle.
