@@ -350,8 +350,7 @@ class LimiteDebit:
         self._publier = publier or limite_debit_mesure.publier
         # QUI serait refusé (#1232) : le palmarès des clés hachées, par jour.
         self._palmares = limite_refus_top.Palmares(limite_refus_top.DEBIT)
-        self._palmares_plateforme = limite_refus_top.PALMARES_PLATEFORME
-        self._palmares_bornes = tuple(limite_refus_top.PALMARES_BORNES.values())
+        self._palmares_processus = limite_refus_top.palmares_du_processus()
         self._publier_refus = publier_refus or limite_refus_top.publier
         self._par_minute = {c: s.borne.par_minute for c, s in self._seaux.items()}
 
@@ -371,11 +370,10 @@ class LimiteDebit:
         lignes = self._mesure.basculer(int(murale // 60), self._par_minute)
         if lignes:
             self._publier(lignes)
-        # Les palmarès des refus aussi — celui de la clé plateforme et ceux des bornes
-        # du processus (`bornes_processus`) compris, qui sinon n'écriraient leur
-        # minute close qu'à leur prochain dépassement.
-        for palmares in (self._palmares, self._palmares_plateforme,
-                         *self._palmares_bornes):
+        # Les palmarès des refus aussi — ceux du processus compris (clé plateforme,
+        # bornes de `bornes_processus`, budget d'unités), qui sinon n'écriraient leur
+        # minute close qu'à leur prochain signal.
+        for palmares in (self._palmares, *self._palmares_processus):
             self._publier_refus(palmares.basculer(murale))
 
     async def __call__(self, scope, receive, send):

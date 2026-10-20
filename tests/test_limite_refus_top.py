@@ -148,6 +148,41 @@ async def test_en_enforce_le_palmares_compte_les_refus_servis():
 
 
 @pytest.mark.asyncio
+async def test_un_signal_credits_isole_part_a_la_minute_suivante(monkeypatch):
+    """Un SEUL signal du budget d'unités, puis plus aucun : sa minute close part avec la
+    bascule de la limite de débit. Avant, `credits` n'était pas basculé — le signal
+    restait en mémoire et se perdait au redémarrage (vu en prod)."""
+    monkeypatch.setattr(top, "PALMARES_CREDITS", top.Palmares(top.CREDITS))
+    monkeypatch.setattr(top, "publier", lambda lignes: None)
+    refus, murale = [], {"t": T0}
+    garde = _garde(refus, murale)
+    top.noter_credits("unpriced:fullenrich.submit", "org:42", "report", T0)
+    await _appel(garde, _scope())
+    assert refus == [], "la minute du signal n'est pas close"
+    murale["t"] += 60
+    await _appel(garde, _scope())
+    assert [(l["limiteur"], l["classe"], l["cle"], l["refus"]) for l in refus] == [
+        ("credits", "unpriced:fullenrich.submit", top.empreinte("org:42"), 1)]
+
+
+def test_tout_palmares_du_module_est_bascule():
+    """Garde : chaque palmarès déclaré au niveau du module (seul, dans un dict ou un
+    tuple) est dans `palmares_du_processus`, donc basculé à chaque requête. Un palmarès
+    ajouté sans y être n'écrirait sa minute close qu'à son prochain signal."""
+    declares = []
+    for valeur in vars(top).values():
+        if isinstance(valeur, top.Palmares):
+            declares.append(valeur)
+        elif isinstance(valeur, dict):
+            declares += [v for v in valeur.values() if isinstance(v, top.Palmares)]
+        elif isinstance(valeur, (tuple, list)):
+            declares += [v for v in valeur if isinstance(v, top.Palmares)]
+    bascules = top.palmares_du_processus()
+    assert declares and {id(p) for p in declares} == {id(p) for p in bascules}, sorted(
+        p.limiteur for p in declares if all(p is not b for b in bascules))
+
+
+@pytest.mark.asyncio
 async def test_sans_refus_le_debit_n_ecrit_rien():
     refus, murale = [], {"t": T0}
     garde = _garde(refus, murale)

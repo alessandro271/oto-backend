@@ -147,6 +147,15 @@ PALMARES_BORNES = {limiteur: Palmares(limiteur)
 #: Celui du budget d'unités, par processus.
 PALMARES_CREDITS = Palmares(CREDITS)
 
+
+def palmares_du_processus() -> tuple[Palmares, ...]:
+    """Les palmarès du processus, que `limite_debit` bascule à chaque requête. Sans
+    cette bascule, un palmarès n'écrit sa minute close qu'à son PROCHAIN signal : un
+    signal isolé reste en mémoire et se perd à l'arrêt (vu en prod sur `credits`, absent
+    de cette liste jusqu'au 20/10/2026). Tout palmarès de module s'y ajoute — garde :
+    `test_tout_palmares_du_module_est_bascule`. Lu à l'appel, pas figé à l'import."""
+    return (PALMARES_PLATEFORME, *PALMARES_BORNES.values(), PALMARES_CREDITS)
+
 _FILE: queue.Queue = queue.Queue(maxsize=FILE_MAX)
 _FIL: Optional[threading.Thread] = None
 _FIL_VERROU = threading.Lock()
