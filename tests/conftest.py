@@ -216,6 +216,19 @@ def _org_active_sans_base(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def _palmares_neufs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Chaque banc part de palmarès vides. Ceux du processus
+    (`limite_refus_top.palmares_du_processus`) gardent ce qu'un banc précédent y a
+    noté, et la limite de débit les bascule à chaque requête : la minute close d'un
+    autre banc sortirait dans les refus de celui-ci, selon l'ordre des bancs."""
+    from oto_mcp import limite_refus_top as top
+    monkeypatch.setattr(top, "PALMARES_PLATEFORME", top.Palmares(top.PLATEFORME))
+    monkeypatch.setattr(top, "PALMARES_BORNES",
+                        {lim: top.Palmares(lim) for lim in top.PALMARES_BORNES})
+    monkeypatch.setattr(top, "PALMARES_CREDITS", top.Palmares(top.CREDITS))
+
+
+@pytest.fixture(autouse=True)
 def _cle_perso_permise_sans_base(monkeypatch: pytest.MonkeyPatch) -> None:
     """Sans base, aucune org n'interdit la clé perso. La traversée lit la politique
     (`connectors.cle_perso`, #1239) dès qu'une clé perso existe ; un banc qui double le

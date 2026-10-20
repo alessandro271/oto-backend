@@ -153,11 +153,14 @@ def test_un_payeur_sans_ligne_a_un_solde_nul(live):
 
 # ── le curseur ───────────────────────────────────────────────────────────────
 
-def _tout_lire(apres=None) -> tuple[list[dict], str]:
+def _tout_lire(apres=None, payeur=None) -> tuple[list[dict], str]:
+    """Tout ce qui est servi après `apres` ; avec `payeur`, ses seuls mouvements. Les
+    bancs voisins écrivent dans la même table, et l'horizon peut retenir les leurs
+    au-delà d'un curseur pris avant : ils sortent alors après lui."""
     lus = []
     while True:
         page = _appel("service.credits.movements", after=apres, limit=2)
-        lus += page["movements"]
+        lus += [m for m in page["movements"] if payeur is None or m["payer"] == payeur]
         if page["next_cursor"] == apres:
             return lus, apres
         apres = page["next_cursor"]
@@ -178,7 +181,7 @@ def test_le_curseur_ne_sert_pas_au_dela_d_une_transaction_encore_ouverte(live):
                       "VALUES (%s, 'deposit', 1, 'lente')", (payeur,))
         _appel("service.credits.movement.post", payer=payeur, amount=2, reason="r",
                idempotency_key="rapide")
-        lus, apres = _tout_lire(depart)
+        lus, apres = _tout_lire(depart, payeur)
         assert [m["idempotency_key"] for m in lus] == []
         lente.commit()
     finally:
@@ -188,7 +191,7 @@ def test_le_curseur_ne_sert_pas_au_dela_d_une_transaction_encore_ouverte(live):
     # borné, jusqu'à ce qu'il passe : un retard, jamais une perte ni un désordre.
     lus, fin = [], time.monotonic() + 120
     while len(lus) < 2 and time.monotonic() < fin:
-        page, apres = _tout_lire(apres)
+        page, apres = _tout_lire(apres, payeur)
         lus += page
         if len(lus) < 2:
             time.sleep(0.5)
