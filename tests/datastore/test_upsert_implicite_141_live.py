@@ -116,12 +116,12 @@ def test_juger_le_lot_nomme_les_doublons_et_les_lignes_en_place():
                          chercher=lambda kv: en_base.get(str(kv)), decalage=10,
                          textes=lambda vs: [str(v) for v in vs])
     msg = str(e.value)
-    assert "rien n'a été écrit" in msg
-    assert "Lignes 11 et 12 : même siren '111'." in msg
-    assert "Lignes 15 et 16 : même siren '333'." in msg
-    assert "Ligne 13 : siren '222' désigne déjà la ligne `r7`." in msg
+    assert "nothing was written" in msg
+    assert "Rows 11 and 12: same siren '111'." in msg
+    assert "Rows 15 and 16: same siren '333'." in msg
+    assert "Row 13: siren '222' already designates row `r7`." in msg
     assert "`upsert=true`" in msg and "`key='siren'`" in msg
-    assert "un doublon se retire du lot" in msg.lower()
+    assert "a duplicate is removed from the batch" in msg.lower()
     assert e.value.details == {
         "key": "siren",
         "doublons": [{"rangs": [11, 12], "valeur": "111"},
@@ -141,7 +141,7 @@ def test_un_lot_qui_designe_n_est_juge_que_sur_ses_doublons():
     with pytest.raises(upi.BusinessKeyExists) as e:
         upi.juger_le_lot([{"siren": "1"}, {"siren": "1"}], key="siren", datastore="t",
                          designation=True, chercher=_jamais, textes=texte)
-    assert "on ne désigne pas deux fois la même ligne" in str(e.value)
+    assert "the same row is not designated twice" in str(e.value)
     assert e.value.details["existantes"] == []
 
 
@@ -276,8 +276,8 @@ def test_avant_la_ligne_seule_fusionne_et_l_avertissement_est_date(client, data_
             assert r.status_code == 201, r.text
             rep = r.json()
         assert rep["_id"] == ids["222"], face
-        notice = next(n for n in rep["notices"] if "sera refusée" in n)
-        assert "À partir du 21 octobre 2026" in notice and "AJOUTE" in notice
+        notice = next(n for n in rep["notices"] if "will be refused" in n)
+        assert "From 2026-10-21 on" in notice and "ADDS" in notice
         assert f"`id={ids['222']}`" in notice and "`upsert=true`" in notice
         assert "`key='siren'`" in notice
         base = _base(ns_id)
@@ -303,7 +303,7 @@ def test_la_ligne_seule_qui_designe_par_key_modifie_sans_upsert(
     neuve = _ligne(client, ns, {"siren": "777"}, "?key=siren")
     assert neuve.status_code == 201 and neuve.json()["_id"] != ids["222"]
     autre = _ligne(client, ns, {"siren": "888", "nom": "x"}, "?key=nom")
-    assert autre.status_code == 400 and "n'a aucun effet" in autre.json()["detail"]
+    assert autre.status_code == 400 and "has no effect" in autre.json()["detail"]
     base = _base(ns_id)
     assert sorted(base) == ["222", "777"] and base["222"]["nom"] == "R"
 
@@ -319,13 +319,13 @@ def test_avant_upsert_true_fusionne_sans_avertissement(client, data_write):
             assert r.status_code == 201, r.text
             rep = r.json()
         assert rep["_id"] == ids["222"]
-        assert not any("sera refusée" in n for n in rep.get("notices") or []), face
+        assert not any("will be refused" in n for n in rep.get("notices") or []), face
         assert _base(ns_id)["222"]["nom"] == "B bis"
 
 
 @pytest.mark.parametrize("upsert, key, attendus", [
-    (False, None, {"AJOUTÉES", "même appel"}),   # ajout : la clé en base ET le doublon
-    (False, "siren", {"même appel"}),            # désignation : le doublon seul
+    (False, None, {"ADDED rows", "same call"}),   # ajout : la clé en base ET le doublon
+    (False, "siren", {"same call"}),            # désignation : le doublon seul
     (True, None, set()),
     (True, "siren", set()),
 ], ids=["ajout", "designation", "ajout-upsert", "designation-upsert"])
@@ -341,11 +341,11 @@ def test_avant_le_lot_rend_fusions_et_ids_alignes(client, data_write, upsert, ke
             assert r.status_code == 200, r.text
             rep = r.json()
         _verifier_lot_fusionne(rep, en_place, _base(ns_id))
-        avertis = [n for n in rep.get("notices") or [] if "ce lot sera refusé" in n]
-        assert {m for m in ("AJOUTÉES", "même appel")
+        avertis = [n for n in rep.get("notices") or [] if "this batch will be refused" in n]
+        assert {m for m in ("ADDED rows", "same call")
                 if any(m in n for n in avertis)} == attendus, face
         assert len(avertis) == len(attendus), face
-        assert all("21 octobre 2026" in n and "`siren`" in n for n in avertis)
+        assert all("From 2026-10-21 on" in n and "`siren`" in n for n in avertis)
 
 
 def test_avant_l_upload_signe_rend_fusions_sans_identifiant(live):
@@ -360,7 +360,7 @@ def test_avant_l_upload_signe_rend_fusions_sans_identifiant(live):
     assert (rep["inserted"], rep["updated"]) == (2, 2)
     assert rep["fusions"] == [{"rang": 2, "dans_rang": 1, "cle": {"siren": "111"}},
                               {"rang": 3, "dans_rang": None, "cle": {"siren": "222"}}]
-    assert any("ce lot sera refusé" in n for n in rep["notices"])
+    assert any("this batch will be refused" in n for n in rep["notices"])
     assert sorted(_base(ns_id)) == ["111", "222", "333"]
 
 
@@ -382,9 +382,9 @@ def test_avant_l_import_en_tranches_garde_les_rangs_du_fichier(live, monkeypatch
         {"rang": 4, "dans_rang": None, "id": en_place["222"], "cle": {"siren": "222"}}]
     # Deux phrases, une par fait, et non une par tranche : le doublon (ligne 3 → 1) et
     # l'ajout sur une clé en base (ligne 4).
-    avertis = [n for n in rep["notices"] if "ce lot sera refusé" in n]
+    avertis = [n for n in rep["notices"] if "this batch will be refused" in n]
     assert len(avertis) == 2
-    assert any("même appel" in n for n in avertis) and any("AJOUTÉES" in n for n in avertis)
+    assert any("same call" in n for n in avertis) and any("ADDED rows" in n for n in avertis)
 
 
 # ── APRÈS la date : les refus ────────────────────────────────────────────────
@@ -400,9 +400,9 @@ def test_apres_la_ligne_seule_est_refusee_et_nomme_la_ligne_en_place(
     assert corps["error"] == "business_key_exists"
     assert corps["details"] == {"key": "siren", "valeur": "222", "id": ids["222"]}
     for texte in (msg, corps["detail"]):
-        assert f"désigne déjà la ligne `{ids['222']}`" in texte
+        assert f"already designates row `{ids['222']}`" in texte
         assert f"`id={ids['222']}`" in texte and "`upsert=true`" in texte
-        assert "rien n'a été écrit" in texte
+        assert "nothing was written" in texte
     assert _base(ns_id)["222"]["nom"] == "B"
 
 
@@ -420,11 +420,11 @@ def test_apres_upsert_true_fusionne_et_une_cle_neuve_se_cree(client, data_write,
 
 @pytest.mark.parametrize("lot, key, attendu", [
     ([{"siren": "111"}, {"siren": "111"}, {"siren": "333"}], None,
-     "Lignes 1 et 2 : même siren '111'."),
+     "Rows 1 and 2: same siren '111'."),
     ([{"siren": "111"}, {"siren": "111"}, {"siren": "333"}], "siren",
-     "on ne désigne pas deux fois la même ligne"),
+     "the same row is not designated twice"),
     ([{"siren": "333"}, {"siren": "222"}], None,
-     "Ligne 2 : siren '222' désigne déjà la ligne"),
+     "Row 2: siren '222' already designates row"),
 ], ids=["doublon interne, ajout", "doublon interne, designation", "clé en base, ajout"])
 def test_apres_le_lot_est_refuse_entier_avant_sa_premiere_ligne(
         client, data_write, apres, lot, key, attendu):
@@ -435,7 +435,7 @@ def test_apres_le_lot_est_refuse_entier_avant_sa_premiere_ligne(
     corps = r.json()
     assert corps["error"] == "business_key_exists"
     for texte in (msg, corps["detail"]):
-        assert texte.startswith("lot refusé ENTIER, rien n'a été écrit") and attendu in texte
+        assert texte.startswith("batch refused ENTIRELY, nothing was written") and attendu in texte
     assert set(corps["details"]) == {"key", "doublons", "existantes"}
     # Ni la ligne neuve `333`, ni aucune autre : le lot n'a pas commencé.
     assert sorted(_base(ns_id)) == ["222"]
@@ -482,8 +482,8 @@ def test_apres_l_upload_signe_est_refuse_sans_nommer_de_ligne(live, apres):
     with pytest.raises(upload_tokens.UploadError) as e:
         upload_tokens.materialize(SUB, cible, corps, "application/x-ndjson")
     assert (e.value.status, e.value.code) == (409, "business_key_exists")
-    assert "Lignes 1 et 2 : même siren '111'." in e.value.message
-    assert "Ligne 3 : siren '222' désigne déjà une ligne du tableau." in e.value.message
+    assert "Rows 1 and 2: same siren '111'." in e.value.message
+    assert "Row 3: siren '222' already designates a row of the table." in e.value.message
     assert ids["222"] not in e.value.message
     assert e.value.details["existantes"] == [{"rang": 3, "valeur": "222"}]
     assert sorted(_base(ns_id)) == ["222"]
@@ -570,7 +570,7 @@ def test_apres_une_course_perdue_sans_upsert_est_refusee(data_write, apres, monk
 
     monkeypatch.setattr(db, "datastore_find_row_id_by_key", _aveugle_une_fois)
     msg = _refus_mcp(data_write, datastore=ns, row={"siren": "222", "nom": "course"})
-    assert f"désigne déjà la ligne `{ids['222']}`" in msg
+    assert f"already designates row `{ids['222']}`" in msg
     assert _base(ns_id)["222"]["nom"] == "B"
 
 
@@ -579,7 +579,7 @@ def test_apres_une_course_perdue_sans_upsert_est_refusee(data_write, apres, monk
 def test_upsert_sans_cle_est_refuse_sur_chaque_face(client, data_write):
     ns, ns_id, _ = _table(LIBRE)
     for kw in ({"row": {"siren": "1"}}, {"rows": [{"siren": "1"}]}):
-        assert "n'a rien sur quoi fusionner" in _refus_mcp(
+        assert "has nothing to merge on" in _refus_mcp(
             data_write, datastore=ns, upsert=True, **kw)
     assert _ligne(client, ns, {"siren": "1"}, "?upsert=true").status_code == 400
     assert _lot(client, ns, {"rows": [{"siren": "1"}], "upsert": True}).status_code == 400

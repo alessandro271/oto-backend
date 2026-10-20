@@ -41,17 +41,17 @@ SCHEMA = {"fields": [
 
 #: Une faute par famille : `(famille, colonne posée, valeur, ce que la faute dit)`.
 FAUTES = [
-    ("options d'un enum", "statut", "z", "valeur 'z' hors options (a, b)"),
-    ("options d'un texte", "etape", "w", "valeur 'w' hors options (x, y)"),
-    ("forme text", "nom", 42, "nom: attendu text, reçu int"),
-    ("forme url", "site", "www.x.fr", "site: attendu une URL http(s), reçu 'www.x.fr'"),
-    ("forme object", "fiche", "Lyon", "fiche: attendu object, reçu str"),
-    ("forme list", "tags", "a,b", "tags: attendu list, reçu str"),
-    ("forme enum", "statut", ["a"], "statut: attendu une valeur d'énumération"),
+    ("options d'un enum", "statut", "z", "value 'z' not among the options (a, b)"),
+    ("options d'un texte", "etape", "w", "value 'w' not among the options (x, y)"),
+    ("forme text", "nom", 42, "nom: expected text, got int"),
+    ("forme url", "site", "www.x.fr", "site: expected an http(s) URL, got 'www.x.fr'"),
+    ("forme object", "fiche", "Lyon", "fiche: expected object, got str"),
+    ("forme list", "tags", "a,b", "tags: expected list, got str"),
+    ("forme enum", "statut", ["a"], "statut: expected an enumeration value"),
     ("couche inconnue", "autre", {"valeur": "v", "commentaire": "c"},
-     "autre: sous-champ(s) inconnu(s) 'commentaire'"),
+     "autre: unknown sub-field(s) 'commentaire'"),
     ("sous-record fermé", "contacts", [{"nom": "A", "perso": "x"}],
-     "contacts[0].perso: attribut non déclaré"),
+     "contacts[0].perso: undeclared attribute"),
 ]
 IDS = [f[0] for f in FAUTES]
 #: La ligne qui porte TOUTES les fautes à la fois (une colonne par famille).
@@ -252,15 +252,15 @@ def _base(ns_id: int) -> list[dict]:
 
 
 def _preavis_servi(rep: dict) -> str:
-    return next(n for n in rep.get("notices") or [] if "format déclaré" in n)
+    return next(n for n in rep.get("notices") or [] if "declared format not respected" in n)
 
 
 def _toutes_dites(texte: str) -> None:
     for _, col, _, dit in FAUTES:
-        if dit.startswith("statut: attendu") or col == "autre":
+        if dit.startswith("statut: expected") or col == "autre":
             continue                  # une faute par case ; la couche, cf. EN_FAUTE
         assert dit in texte, dit
-    assert "21 octobre 2026" in texte and "data_patch_schema" in texte
+    assert "From 2026-10-21 on" in texte and "data_patch_schema" in texte
 
 
 def _sans_id(lignes: list[dict]) -> list[dict]:
@@ -288,11 +288,11 @@ def test_avant_le_lot_dit_une_seule_phrase(client, data_write):
     ns, ns_id, _ = _table()
     lot = [{"nom": "A", "statut": "z"}, {"nom": "B", "site": "www.x.fr"}]
     rep = data_write(datastore=ns, rows=lot)
-    phrases = [n for n in rep["notices"] if "format déclaré" in n]
+    phrases = [n for n in rep["notices"] if "declared format not respected" in n]
     assert len(phrases) == 1 and "'z'" in phrases[0] and "www.x.fr" in phrases[0]
     r = client.post(f"/api/datastores/{ns}/rows/batch", headers=_h(), json={"rows": lot})
     assert r.status_code == 200, r.text
-    assert len([n for n in r.json()["notices"] if "format déclaré" in n]) == 1
+    assert len([n for n in r.json()["notices"] if "declared format not respected" in n]) == 1
     assert len(_base(ns_id)) == 4
 
 
@@ -303,7 +303,7 @@ def test_avant_le_patch_par_id_est_averti(client, data_write):
     assert r.status_code == 200, r.text
     assert "www.x.fr" in _preavis_servi(r.json())
     rep = data_write(datastore=ns, id=ids[0], row={"statut": "z"})
-    assert "'z' hors options" in _preavis_servi(rep)
+    assert "'z' not among the options" in _preavis_servi(rep)
 
 
 def test_avant_l_upload_signe_et_l_import_avertissent(live, monkeypatch):
@@ -312,14 +312,14 @@ def test_avant_l_upload_signe_et_l_import_avertissent(live, monkeypatch):
     corps = b'{"nom": "A", "statut": "z"}\n{"nom": "B", "site": "www.x.fr"}\n'
     cible = {"kind": "datastore", "ns_id": ns_id, "namespace": ns, "format": "ndjson"}
     rep = upload_tokens.materialize(SUB, cible, corps, "application/x-ndjson")
-    assert rep["inserted"] == 2 and "'z' hors options" in _preavis_servi(rep)
+    assert rep["inserted"] == 2 and "'z' not among the options" in _preavis_servi(rep)
     monkeypatch.setattr(upload_tokens, "IMPORT_SLICE", 1)
     rep = upload_tokens.import_rows(SUB, cible, [{"nom": "C", "etape": "w"},
                                                  {"nom": "D", "tags": "a,b"}],
                                     deadline=time.monotonic() + 60)
-    phrases = [n for n in rep["notices"] if "format déclaré" in n]
+    phrases = [n for n in rep["notices"] if "declared format not respected" in n]
     assert rep["done"] and len(phrases) == 1
-    assert "'w' hors options" in phrases[0] and "tags: attendu list" in phrases[0]
+    assert "'w' not among the options" in phrases[0] and "tags: expected list" in phrases[0]
     assert len(_base(ns_id)) == 4
 
 
@@ -342,7 +342,7 @@ def test_au_lendemain_une_faute_est_refusee_sur_toutes_les_faces(client, data_wr
     ns, ns_id, _ = _table()
     with pytest.raises(McpError) as e:
         data_write(datastore=ns, row={"nom": "A", "site": "www.x.fr"})
-    assert "attendu une URL" in e.value.error.message
+    assert "expected an http(s) URL" in e.value.error.message
     r = client.post(f"/api/datastores/{ns}/rows", headers=_h(),
                     json={"nom": "A", "fiche": "Lyon"})
     assert r.status_code == 400 and r.json()["error"] == "row_invalid", r.text
@@ -374,7 +374,7 @@ def test_au_lendemain_la_ligne_en_faute_s_ecrit_sur_ses_autres_colonnes(
     for col in ("statut", "etape", "site", "fiche", "tags"):
         assert any(c.startswith(col) for c in signale), (col, signale)
     rep = data_write(datastore=ns, id=ids[0], row={"nom": "Acme bis"})
-    assert not any("format déclaré" in n for n in rep.get("notices") or [])
+    assert not any("declared format not respected" in n for n in rep.get("notices") or [])
     ligne = _sans_id(_base(ns_id))[0]
     assert ligne == {**EN_FAUTE, "nom": "Acme bis"}, "les données du tenant restent"
     # Réécrire la colonne fautive avec la MÊME faute, en revanche, est refusé.
@@ -388,7 +388,7 @@ def test_avant_la_ligne_en_faute_ne_preavise_pas_ce_qu_on_n_ecrit_pas(client):
     r = client.patch(f"/api/datastores/{ns}/rows/{ids[0]}", headers=_h(),
                      json={"nom": "Acme"})
     assert r.status_code == 200, r.text
-    assert not any("format déclaré" in n for n in r.json().get("notices") or [])
+    assert not any("declared format not respected" in n for n in r.json().get("notices") or [])
 
 
 # ── `unknown_columns` : refusé à la pose et au patch, sur la face REST ───────
@@ -398,7 +398,7 @@ def test_unknown_columns_est_refuse_a_la_pose_et_au_patch(client):
     r = client.put(f"/api/datastores/{ns}/schema", headers=_h(),
                    json={"schema": {**SCHEMA, "unknown_columns": "report"}})
     assert r.status_code == 400 and r.json()["error"] == "invalid_schema", r.text
-    assert "plus aucun réglage" in r.json()["detail"]
+    assert "no setting any more" in r.json()["detail"]
     r = client.patch(f"/api/datastores/{ns}/schema", headers=_h(),
                      json={"unknown_columns": "reject"})
     assert r.status_code == 400 and r.json()["error"] == "unknown_fields", r.text
@@ -416,7 +416,7 @@ def test_unknown_columns_stocke_ne_bloque_pas_le_patch(client):
     r = client.patch(f"/api/datastores/{ns}/schema", headers=_h(),
                      json={"fields": [{"key": "ville", "type": "text"}]})
     assert r.status_code == 200, r.text
-    assert "plus aucun réglage" in (r.json().get("warning") or "")
+    assert "no setting any more" in (r.json().get("warning") or "")
     assert db.get_datastore_by_id(ns_id)["schema"]["unknown_columns"] == "reject"
     r = client.get(f"/api/datastores/{ns}/schema", headers=_h())
     assert r.status_code == 200 and r.json()["reglages"] == {"new_rows": "create"}

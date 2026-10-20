@@ -63,7 +63,7 @@ def test_le_type_du_refus_le_fait_SORTIR():
     existe et meurt côté serveur."""
     src = inspect.getsource(schema_ops)
 
-    assert "SchemaDefinitionError(\"schéma invalide : \"" in src, (
+    assert "SchemaDefinitionError(\"invalid schema: \"" in src, (
         "le refus de définition doit porter le type qui le rend visible")
 
 

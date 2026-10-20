@@ -224,9 +224,9 @@ def test_two_thousand_rows_through_the_cursor(store):
 
 def test_null_and_business_key_are_refused(store):
     ns, ns_id = _table(LIGNES, schema={**SCHEMA, "key": "nom"})
-    with pytest.raises(ValueError, match="EFFACERAIT"):
+    with pytest.raises(ValueError, match="WOULD CLEAR"):
         store.update_where(ns, {"tier": None})
-    with pytest.raises(ValueError, match="clé métier"):
+    with pytest.raises(ValueError, match="business key"):
         store.update_where(ns, {"nom": "x"})
     assert all("tier" not in d for d in _base(ns_id).values())
 
@@ -235,7 +235,7 @@ def test_null_and_business_key_are_refused(store):
                                   {"valeur": "x", "comment": ""}])
 def test_every_value_that_would_erase_is_refused(store, vide):
     ns, ns_id = _table(LIGNES)
-    with pytest.raises(ValueError, match="EFFACERAIT"):
+    with pytest.raises(ValueError, match="WOULD CLEAR"):
         store.update_where(ns, {"tier": vide})
 
 
@@ -388,11 +388,11 @@ def test_append_on_a_table_without_schema_extends_the_text_in_place(store):
 
 
 @pytest.mark.parametrize("set_, kw, attendu", [
-    ({"inconnue[+]": "x"}, {}, "Déclare-la d'abord"),
+    ({"inconnue[+]": "x"}, {}, "Declare it first"),
     ({"journal[+]": "x"}, {"only_if_empty": True}, "only_if_empty"),
     ({"fige[+]": "x"}, {}, "readonly"),
-    ({"tags[0]": "x"}, {}, "RANG de liste"),
-    ({"tags[-]": "x"}, {}, "RANG de liste"),
+    ({"tags[0]": "x"}, {}, "list INDEX"),
+    ({"tags[-]": "x"}, {}, "list INDEX"),
 ])
 def test_append_rule_faults_are_refused_before_any_row(store, set_, kw, attendu):
     ns, ns_id = _table([{"nom": "a", "fit": 9, "journal": "debut"}], SCHEMA_JOURNAL)

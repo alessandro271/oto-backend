@@ -140,7 +140,7 @@ class SchemaOpsMixin:
         ancien = self._schema_of(ns_id)
         def_errors = dsv2.validate_schema_def(schema, ancien)
         if def_errors:
-            raise SchemaDefinitionError("schéma invalide : " + " ; ".join(def_errors))
+            raise SchemaDefinitionError("invalid schema: " + "; ".join(def_errors))
         new_key = (schema or {}).get("key")
         new_key = new_key if isinstance(new_key, str) and new_key else None
         ancienne_cle = (ancien or {}).get("key")

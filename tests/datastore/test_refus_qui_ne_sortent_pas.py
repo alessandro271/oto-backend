@@ -52,7 +52,7 @@ def test_le_refus_de_bail_sort_en_409_et_dit_quoi_faire():
     assert "_run_id" in refus.message, "la faute la plus fréquente, d'abord"
     assert "worker-42" not in refus.message, "on ne nomme pas le titulaire"
     assert "2026-09-05T18:00Z" in refus.message, "jusqu'à quand"
-    assert "libère" in refus.message, "le geste de sortie"
+    assert "release it" in refus.message, "le geste de sortie"
 
 
 def test_le_bail_ne_prend_pas_le_code_des_autres_refus():
@@ -72,9 +72,9 @@ def test_dans_un_LOT_le_refus_de_bail_garde_sa_classe():
     Le batch la ré-emballe désormais en gardant sa CLASSE, comme il le fait déjà pour
     la clé métier et la validation de schéma — seule la désignation de ligne change."""
     e = ds_errors.RowLocked("r0", "agent-1", "2026-09-05T18:00Z",
-                            row="ligne 1/1 du lot (siren=55111000)")
+                            row="row 1/1 of the batch (siren=55111000)")
     assert isinstance(e, ValueError)
-    assert "ligne 1/1 du lot" in str(e), "la position dans le lot"
+    assert "row 1/1 of the batch" in str(e), "la position dans le lot"
     assert "2026-09-05T18:00Z" in str(e), "…et l'échéance du bail, qui reste l'information utile"
     assert _write_refusal(e).status == 409
 
@@ -146,7 +146,7 @@ def test_une_forme_non_prevue_de_transitions_est_un_REFUS(live, forme):
     message = str(e.value)
     assert "lifecycle.transitions" in message, "le refus doit NOMMER la clé fautive"
     assert type(forme).__name__ in message, "…et dire ce qu'il a reçu"
-    assert "état" in message, "…et la forme attendue"
+    assert "state" in message, "…et la forme attendue"
 
 
 def test_la_forme_JUSTE_passe_toujours(live):
