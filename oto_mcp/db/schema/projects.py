@@ -94,6 +94,9 @@ CREATE TABLE IF NOT EXISTS project_links (
     -- (project_id, slot) via index partiel, posé dans le bloc ALTER d'init_db).
     slot TEXT,
     config JSONB NOT NULL DEFAULT '{}',
+    -- Rang d'affichage facultatif du lien parmi ceux du même type dans les listes du
+    -- projet : croissant, fractions permises. NULL = non rangé, après les rangés.
+    position DOUBLE PRECISION,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(project_id, target_type, target_ref)
 );

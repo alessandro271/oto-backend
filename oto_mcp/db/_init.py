@@ -658,6 +658,10 @@ def apply_boot_schema(conn: psycopg.Connection) -> None:
     # indifférent entre elles.
     if _colonne_absente(conn, "projects", projects.COLONNE_POSITION):
         conn.execute(projects.DDL_COLONNE_POSITION)
+    # Le rang d'affichage d'un lien de projet — le même que pose la révision `20261021_1615_links_position` : ordre
+    # indifférent entre elles.
+    if _colonne_absente(conn, "project_links", projects.COLONNE_POSITION_LIEN):
+        conn.execute(projects.DDL_COLONNE_POSITION_LIEN)
     # Le dossier d'affichage d'un agent — le même que pose la révision `0065` : ordre
     # indifférent entre elles.
     if _colonne_absente(conn, "runner_triggers", runner_triggers.COLONNE_FOLDER):

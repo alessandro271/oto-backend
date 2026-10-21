@@ -42,7 +42,7 @@ _LINK_TYPES = ("tableau", "procedure", "connecteur")
 
 class ProjectInput(BaseModel):
     op: Literal["create", "list", "list_templates", "get", "update", "archive",
-                "unarchive", "copy", "handoff", "link", "unlink", "activity", "runs", "inventory",
+                "unarchive", "copy", "handoff", "link", "unlink", "rank_link", "activity", "runs", "inventory",
                 "lint", "publish_mcp", "unpublish_mcp"] = Field(description=(
         "To CHANGE THE OWNER of an existing project (e.g. personal → org) WITHOUT "
         "duplicating it or losing its history (docs, activity, runs stay on the SAME "
@@ -70,10 +70,11 @@ class ProjectInput(BaseModel):
         "update: the project's rank among the projects of its folder in lists — lower "
         "first, fractions allowed (place a project between two others with the midpoint). "
         "Unranked projects come after the ranked ones. Display only; setting it alone "
-        "does not change `updated_at`."))
+        "does not change `updated_at`. rank_link: the same, for ONE link among the "
+        "project's links of its type."))
     clear_position: Optional[bool] = Field(default=None, description=(
-        "update: `true` takes the project out of the ranking — `position` back to null, "
-        "after the ranked ones. Not together with `position`."))
+        "update / rank_link: `true` takes the project (the link) out of the ranking — "
+        "`position` back to null, after the ranked ones. Not together with `position`."))
     brief_md: Optional[str] = None
     is_template: Optional[bool] = None   # update : publier/retirer le projet comme MODÈLE (ADR 0032 §7 B5a)
     # publish_mcp : publier le projet en endpoint MCP dédié `<mcp_slug>.mcp.oto.cx` (ADR 0032, amende #44).
@@ -1180,6 +1181,28 @@ def _project(ctx: ResolvedCtx, inp: ProjectInput) -> dict:
                 "links": db.list_project_links(new_id), "copied_from": inp.project_id,
                 "warnings": warnings}
 
+    if inp.op == "rank_link":
+        # Ranger un lien — l'ordre des tableaux d'un projet dans ses listes — n'est pas le
+        # reposer : `op=link` contrôle la portée de la cible, remonte `updated_at` du
+        # projet et écrit une ligne au fil, trois effets qu'un glisser ne doit pas avoir.
+        # Ici : `write` sur le projet, le rang du lien, rien d'autre. `target_ref` tel que
+        # stocké (op=get le rend), sans normalisation : on range un lien qui existe.
+        _require(ownership.can_access(sub, RTYPE, rid, "write"), "forbidden", "Écriture refusée.", 403)
+        _require(inp.target_type and inp.target_ref, "missing_target",
+                 "`target_type` et `target_ref` requis.")
+        _require((inp.position is not None) != bool(inp.clear_position), "invalid_position",
+                 "op=rank_link pose un rang (`position`) ou le retire (`clear_position=true`), "
+                 "l'un des deux, et rien n'a été modifié.")
+        _require(inp.position is None or math.isfinite(inp.position), "invalid_position",
+                 "`position` est un nombre fini, et rien n'a été modifié.")
+        ranges = db.rank_project_link(int(inp.project_id), inp.target_type, inp.target_ref,
+                                      identity_ref=inp.identity_ref, position=inp.position)
+        _require(ranges, "link_not_found",
+                 f"Aucun lien `{inp.target_type}:{inp.target_ref}` dans ce projet — donne "
+                 "`target_ref` tel que op=get le rend. Rien n'a été modifié.", 404)
+        return {"ok": True, "id": inp.project_id, "target_type": inp.target_type,
+                "target_ref": inp.target_ref, "position": inp.position}
+
     if inp.op in ("link", "unlink"):
         _require(ownership.can_access(sub, RTYPE, rid, "write"), "forbidden", "Écriture refusée.", 403)
         _require(inp.target_type and inp.target_ref, "missing_target",
@@ -1803,7 +1826,12 @@ CAPABILITIES += [
             "`link_status` — not `ok` — to know whether it actually acted. "
             "unlink returns `removed` = how many bindings it actually took "
             "out, and REFUSES (`link_not_found`) when it matched none — it never answers ok "
-            "on a link it did not find. Give the `target_ref` as op=get renders it: an older "
+            "on a link it did not find. rank_link (target_type + target_ref as op=get renders "
+            "it, + optional identity_ref) sets ONE link's rank among the project's links of its "
+            "type in lists — `position` (lower first, fractions allowed) or "
+            "`clear_position=true`; it changes nothing else: no `updated_at`, no activity "
+            "line, label/role/slot/config untouched; `link_not_found` when no such link. "
+            "Give the `target_ref` as op=get renders it: an older "
             "link may still carry the NAME of its tableau (or the SLUG of its procedure) "
             "instead of the id. link and unlink both recognize either spelling: link "
             "rewrites that older link to the id (`rewritten_from` = the old spelling) "
