@@ -339,6 +339,9 @@ class ImportOutput(BaseModel):
     source: dict = Field(description=(
         "`{kind, name, mime, bytes, sha256, url?}` — `url` without its query string"))
     datastore: Optional[str] = None
+    file_id: Optional[int] = Field(default=None, description=(
+        "project_file only: the file created, as `oto_project_files` lists it"))
+    project_id: Optional[int] = Field(default=None, description="project_file only")
     inserted: Optional[int] = None
     updated: Optional[int] = None
     count: Optional[int] = Field(default=None, description="rows written by this call")
@@ -436,8 +439,10 @@ def _import(ctx: ResolvedCtx, inp: ImportInput) -> dict:
         if inp.target == "project_file":
             if not inp.filename:
                 target["filename"] = rf.filename
-            return {**upload_tokens.materialize(sub, target, rf.data, rf.mime),
-                    "source": src_info}
+            row = upload_tokens.deposer_fichier_projet(sub, target, rf.data, rf.mime)
+            return {"ok": True, "kind": "project_file", "file_id": row["id"],
+                    "project_id": row["project_id"], "filename": row["filename"],
+                    "bytes": len(rf.data), "source": src_info}
         fmt = _format_of(rf, inp.format)
         _refuse_html(rf, inp.source)
         sep = _SEPARATOR.get(inp.separator or "") or (
