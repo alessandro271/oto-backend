@@ -260,7 +260,8 @@ def _row_errors(fields: list, data: dict, path: str,
                 charge: Optional[dict] = None,
                 chemin: tuple = car.RACINE,
                 cle_d_identite: Optional[str] = None,
-                ecrits_par_rang: Optional[dict] = None) -> list[str]:
+                ecrits_par_rang: Optional[dict] = None,
+                poses: Optional[dict] = None) -> list[str]:
     """Erreurs d'un (sous-)record. `written` = clés effectivement RÉÉCRITES par ce
     geste (None = toutes) : la borne de longueur, le motif, la fermeture d'un
     composite **et le TYPE** s'y restreignent — eux seuls, cf. `validate_row`. La
@@ -288,6 +289,12 @@ def _row_errors(fields: list, data: dict, path: str,
 
     `vus` = les attributs déjà nommés pour la colonne-liste courante (borne du
     refus, cf. `_type_error`).
+
+    `poses` (premier niveau) = ce que le geste nomme par colonne AVANT fusion, sur les
+    chemins qui fusionnent (`validate_row(pose=…)`). Une couche inconnue que la
+    cellule porte DÉJÀ et que le geste ne pose pas n'est pas jugée contre lui : écrite
+    par une version plus récente, elle traverse la réécriture (#326) et se dit
+    (`gelees`). Absent (création), tout ce qui est posé vient du geste.
 
     `details` (dict mutable, optionnel) = le refus STRUCTURÉ que l'appelant récupère,
     aujourd'hui `expected_column` (#545). Renseigné au PREMIER cas rencontré et jamais
@@ -337,9 +344,12 @@ def _row_errors(fields: list, data: dict, path: str,
                 + ". A layer stored without being read would give the illusion of a "
                 "filled-in provenance.")
             # oto#124 : on juge ce que le geste ÉCRIT. Une couche inconnue déjà en
-            # base sur une colonne que ce geste ne touche pas se DIT (`gelees`), elle
-            # ne refuse pas l'écriture d'une autre colonne.
-            if pose:
+            # base — sur une colonne que ce geste ne touche pas, ou que ce geste
+            # réécrit sans la poser (#326) — se DIT (`gelees`), elle ne refuse pas.
+            couche_posee = pose and (poses is None or (
+                isinstance(poses.get(key), dict)
+                and any(k in poses[key] for k in inconnues)))
+            if couche_posee:
                 errors.append(inconnue)
                 for p in proches:
                     if p:
@@ -607,7 +617,7 @@ def validate_row(schema: Optional[dict], merged: dict, *,
                                   contraignant=vc.complete(schema),
                                   details=details, hors=hors, gelees=gelees,
                                   en_place=en_place, charge=charge,
-                                  ecrits_par_rang=ecrits_par_rang))
+                                  ecrits_par_rang=ecrits_par_rang, poses=pose))
     # oto#75 barreau 1 : HORS du garde `validation_active`, comme le cycle de vie
     # ci-dessous — la déclaration `required_layers` s'arme elle-même.
     errors.extend(couches_manquantes(schema, merged, written=written, charge=charge,
