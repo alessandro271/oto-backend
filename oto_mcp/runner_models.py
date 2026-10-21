@@ -6,11 +6,9 @@ les travaux d'une famille qu'il sait servir, c'est-à-dire du dépôt de clé qu
 nomme au claim (`provider`, cf. `runner_jobs._cle_de_modele`). Les deux mots
 coïncident à dessein — la famille EST le nom du dépôt.
 
-⚠️ **Un travail SANS famille est servi par N'IMPORTE QUEL worker**, sur son propre
-modèle — c'est le comportement d'avant ce catalogue, à l'octet près, et c'est ce
-que portent tous les déclencheurs et toutes les flottes déclarés avant lui. Une
-règle stricte (« pas de famille, pas de worker ») aurait orphelin chacun d'eux le
-jour du déploiement, sans une erreur.
+⚠️ **Un travail SANS famille, un worker de plateforme l'arrête à la réservation**
+(`runner_jobs._SANS_MODELE`), et un déclencheur sans modèle n'en enfile plus — sa
+livraison est refusée sur `motif_sans_famille` (21/10/2026).
 
 ⚠️ **Le catalogue refuse à l'ÉCRITURE, jamais à la lecture.** Une valeur inconnue
 déjà en base (une flotte déclarée avec un modèle libre avant ce lot) se lit
@@ -94,6 +92,26 @@ def famille(model: Optional[str]) -> Optional[str]:
     """La famille d'un modèle du catalogue, ou None (absent, ou inconnu)."""
     m = _PAR_ID.get(model or "")
     return m.family if m else None
+
+
+#: Le motif d'une livraison REFUSÉE parce que l'agent ne déclare aucun modèle
+#: (21/10/2026) : un travail sans famille, un worker de plateforme l'arrête à la
+#: réservation (`runner_jobs._SANS_MODELE`), donc le déclencheur ne l'enfile plus.
+MOTIF_SANS_MODELE = "cet agent ne déclare aucun modèle : il ne sera pas exécuté"
+
+
+def motif_sans_famille(model: Optional[str]) -> Optional[str]:
+    """Pourquoi un travail de ce modèle ne partirait PAS, ou None s'il a une famille.
+
+    Le tick et le webhook refusent la livraison sur ce motif au lieu d'enfiler un
+    travail sans famille. Un modèle déclaré mais absent du catalogue (retiré depuis)
+    est nommé tel quel : le dire « sans modèle » enverrait chercher le mauvais geste."""
+    if famille(model):
+        return None
+    if not model:
+        return MOTIF_SANS_MODELE
+    return (f"cet agent déclare un modèle inconnu du catalogue (`{model}`) : "
+            "il ne sera pas exécuté")
 
 
 def charge(model: Optional[str]) -> dict:

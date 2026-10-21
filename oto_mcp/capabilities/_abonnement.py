@@ -326,8 +326,8 @@ def seuil(sub: str, org_id: Optional[int], famille: str) -> float:
     return pct / 100
 
 
-def raison_de_peremption(sub: Optional[str], org_id: Optional[int],
-                         famille: Optional[str], etat_runner: dict,
+def raison_de_peremption(sub: Optional[str], org_id: int,
+                         famille: str, etat_runner: dict,
                          modele: Optional[str] = None) -> str:
     """La raison SERVIE quand le tick périme une occurrence non prise DANS SON
     CYCLE (27/09/2026) — nommant la VRAIE cause plutôt que le texte générique
@@ -346,22 +346,22 @@ def raison_de_peremption(sub: Optional[str], org_id: Optional[int],
 
     `modele` = le modèle déclaré : il nomme le dépôt d'un repli sur la clé d'org
     (`runner_models.repli_api`), que le diagnostic d'un pool au plafond lit.
+
+    `famille` est toujours déclarée : un déclencheur sans modèle n'enfile rien, sa
+    livraison est refusée avant (`runner_models.motif_sans_famille`, 21/10/2026).
     """
     base = "occurrence non prise dans son cycle : le déclencheur a enfilé la suivante."
     aucun_agent = f"{base} Aucun agent ne dessert cette organisation."
-    servies = etat_runner.get("families") or []
+    if famille not in (etat_runner.get("families") or []):
+        # Aucun worker vivant ne sert cette famille pour cette org (21/10/2026) : le
+        # dire, et depuis quand. « Aucun agent ne dessert cette organisation »
+        # laissait croire à une org sans runner, quand c'est une FAMILLE qui manque.
+        return _famille_non_servie(base, org_id, famille)
     if not est_abonnement(famille):
-        if famille:
-            # Famille API déclarée : la seule distinction qu'on sait faire ici
-            # est « un worker de cette famille existe-t-il ? » — le détail
-            # d'une clé manquante appartient à `_cle_exigee`, pas à ce module.
-            return aucun_agent if famille not in servies else base
-        # Aucun modèle déclaré (agents d'avant le catalogue, ou posés sans
-        # modèle) : n'importe quel worker sert ce travail, donc la seule
-        # question qui vaille est « un runner existe-t-il pour cette org, tout
-        # court ? » — la même lecture que `_modele.exige_un_runner`.
-        return aucun_agent if not etat_runner.get("armed") else base
-    if famille not in servies or not sub:
+        # Famille API servie : le détail d'une clé manquante appartient à
+        # `_cle_exigee`, pas à ce module.
+        return base
+    if not sub:
         return aucun_agent
     if en_pool(org_id, famille):
         # ⚠️ `taille_du_pool` compte les prêteurs SERVABLES MAINTENANT — 0 y est
@@ -413,6 +413,14 @@ def _echeance_utc(v) -> Optional[datetime]:
     if v and v.tzinfo is None:
         v = v.replace(tzinfo=timezone.utc)
     return v or None
+
+
+def _famille_non_servie(base: str, org_id: int, famille: str) -> str:
+    """Aucun worker vivant ne sert `famille` pour cette org : quand en a-t-on vu un
+    pour la dernière fois (`dernier_vu_de_famille`) ? Jamais = « aucun worker vu »."""
+    vu = _echeance_utc(db_runner_jobs.dernier_vu_de_famille(org_id, famille))
+    quand = f"dernier vu le {vu:%d/%m/%Y %H:%M} UTC" if vu else "aucun worker vu"
+    return f"{base} Aucun worker ne sert la famille `{famille}` ({quand})."
 
 
 def _pool_au_plafond(base: str, org_id: int, famille: str, modele: Optional[str]) -> str:

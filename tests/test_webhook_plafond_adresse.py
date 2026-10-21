@@ -41,7 +41,7 @@ def porte(monkeypatch):
     t = {"id": 5, "org_id": ORG, "sub": "alexis", "procedure": "veille",
          "tools": ["a"], "input": "go", "enabled": True, "kind": "webhook",
          "payload_mode": "ignore", "payload_fields": None, "max_per_hour": None,
-         "fraicheur_s": None, "model": None, "project_id": None, "max_steps": None,
+         "fraicheur_s": None, "model": "claude-sonnet-5", "project_id": None, "max_steps": None,
          "label": None, "hook_auth": "bearer", "max_per_day": None, "hook_slug": None}
     vu["trigger"] = t
     monkeypatch.setattr(runner_hook.db, "trigger_par_secret", lambda i, h: dict(t))

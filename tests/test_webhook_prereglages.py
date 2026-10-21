@@ -46,7 +46,7 @@ def porte(monkeypatch):
     t = {"id": 5, "org_id": ORG, "sub": "alexis", "procedure": "lemlist-replies",
          "tools": ["a"], "input": "go", "enabled": True, "kind": "webhook",
          "payload_mode": "inline", "payload_fields": None, "max_per_hour": None,
-         "fraicheur_s": None, "model": None, "project_id": None, "max_steps": None,
+         "fraicheur_s": None, "model": "claude-sonnet-5", "project_id": None, "max_steps": None,
          "label": None, "hook_auth": "body_secret", "max_per_day": None,
          "hook_slug": "h_privee"}
     vu["trigger"] = t

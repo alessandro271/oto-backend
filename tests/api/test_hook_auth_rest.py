@@ -82,7 +82,7 @@ def agent(live):
     org_store.add_org_member(oid, membre, "org_admin")
     org_store.set_active_org(membre, oid)
     t = db.create_trigger(oid, membre, procedure="appel-vers-crm", tz="UTC",
-                          tools=["a"], kind="webhook", payload_mode="inline")
+                          model="claude-sonnet-5", tools=["a"], kind="webhook", payload_mode="inline")
     porteur, hache = runner_hook.nouveau_secret()
     db.poser_secret_de_hook(t["id"], oid, hache)
     return {"id": t["id"], "org": oid, "membre": membre, "porteur": porteur}

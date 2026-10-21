@@ -405,7 +405,8 @@ class Delivery(BaseModel):
     received_at: Optional[str] = None
     #: `queued` | `delayed` (lissé) | `refused_paused` | `refused_secret` |
     #: `refused_too_large` | `refused_stale` (signature valide, horodatage hors
-    #: fenêtre — un rejeu ou une horloge dérivée). Un refus garde son MOTIF : c'est lui qui rend une
+    #: fenêtre — un rejeu ou une horloge dérivée) | `refused_no_model` (l'agent ne
+    #: déclare aucun modèle : rien n'est enfilé). Un refus garde son MOTIF : c'est lui qui rend une
     #: source mal branchée réparable plutôt que mystérieuse.
     #: ⚠️ Figé à la RÉCEPTION : `queued` = « acceptée, travail enfilé », jamais
     #: « encore en attente ». Ce que le travail est devenu depuis, c'est `job_status`.

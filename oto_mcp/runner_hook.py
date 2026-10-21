@@ -670,6 +670,7 @@ def declencher(trigger_id: int, secret: Optional[str], corps: Any,
     except Exception as e:  # noqa: BLE001 — voir ci-dessus
         logger.warning("déclencheur %s : état de la procédure illisible (%s)", trigger_id, e)
         retiree = None
+    sans_modele = runner_models.motif_sans_famille(t.get("model"))
     with db._connect() as conn:
         if not t["enabled"]:
             db.enregistrer(conn, trigger_id, t["org_id"], db.REFUSE_PAUSED,
@@ -694,6 +695,17 @@ def declencher(trigger_id: int, secret: Optional[str], corps: Any,
                 "This agent's procedure is archived: it will not run until the procedure "
                 "is put back in service (oto_procedure op=unarchive). The delivery is "
                 "recorded and visible on its page.")
+        elif sans_modele:
+            # Agent SANS MODÈLE (21/10/2026) : son travail n'aurait aucune famille,
+            # donc aucun worker ne le servirait. Rien n'est enfilé ; le motif est
+            # sur la page de l'agent (`refused_no_model`) et dans la réponse.
+            db.enregistrer(conn, trigger_id, t["org_id"], db.REFUSE_NO_MODEL,
+                           source=source, **marque)
+            refus = HookRefus(409, "trigger_no_model", (
+                f"This agent declares a model unknown to the catalogue (`{t['model']}`): "
+                "it will not run until a catalogued model is set." if t.get("model") else
+                "This agent declares no model: it will not run until one is set.")
+                + " The delivery is recorded and visible on its page.")
         else:
             # ⚠️ AVANT de compter. Une rafale est concurrente par définition : sans
             # ce verrou, toutes les livraisons lisent le même compte et partent

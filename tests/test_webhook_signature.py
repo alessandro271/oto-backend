@@ -173,7 +173,7 @@ def signe(monkeypatch):
     t = {"id": 5, "org_id": ORG, "sub": "alexis", "procedure": "veille",
          "tools": ["a"], "input": "fais la veille", "enabled": True,
          "kind": "webhook", "payload_mode": "inline", "payload_fields": None,
-         "max_per_hour": None, "fraicheur_s": None, "model": None,
+         "max_per_hour": None, "fraicheur_s": None, "model": "claude-sonnet-5",
          "project_id": None, "max_steps": None, "label": None,
          "hook_auth": "standard_webhooks",
          "hook_signing_secret_enc": runner_hook.chiffrer_secret_de_signature(5, SECRET)}

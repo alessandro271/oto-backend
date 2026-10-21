@@ -1775,27 +1775,7 @@ def runner_arme(org_id: int) -> dict:
     routée, un worker de ferme ne la sert que si l'org a déposé SA clé (21/10/2026,
     `_servi_par_ce_worker`) : sans clé, seule la boucle la sert."""
     with _connect() as conn:
-        org = conn.execute(
-            f"SELECT {_org_routee_ferme('o')} AS r, {_cle_d_org_deposee('o')} AS c "
-            f"FROM (SELECT %s::bigint AS org_id) o",
-            (int(org_id),),
-        ).fetchone()
-        routee, cle_d_org = org["r"], org["c"]
-        familles = conn.execute(
-            """
-            SELECT COALESCE(array_agg(DISTINCT famille ORDER BY famille), '{}') AS f
-              FROM (SELECT split_part(split_part(depot, %s, 1), %s, 1) AS famille,
-                           position(%s in depot) > 0 AS de_ferme
-                      FROM runner_platform_depots
-                     WHERE last_seen_at > NOW() - make_interval(secs => %s)
-                       AND (position(%s in depot) = 0
-                            OR depot = split_part(depot, %s, 1) || %s || %s)) t
-             WHERE famille <> %s OR (CASE WHEN de_ferme THEN %s ELSE NOT %s END)
-            """,
-            (_PORTEE_ORG, _MARQUE_FERME[0], _MARQUE_FERME, ARME_FENETRE_S,
-             _PORTEE_ORG, _PORTEE_ORG, _PORTEE_ORG, str(int(org_id)),
-             FAMILLE_FERME, bool(routee or cle_d_org), bool(routee)),
-        ).fetchone()
+        routee, familles = _presences_par_famille(conn, org_id, ARME_FENETRE_S)
         row = conn.execute(
             """
             SELECT COUNT(*) FILTER (
@@ -1819,8 +1799,51 @@ def runner_arme(org_id: int) -> dict:
     return {"armed": vivants > 0,
             "workers": vivants,
             "last_seen": str(dernier) if dernier else None,
-            "families": list(familles["f"] or []) if familles else [],
+            "families": sorted(familles),
             "farm_routed": bool(routee)}
+
+
+def _presences_par_famille(conn, org_id: int,
+                           fenetre_s: Optional[int]) -> tuple[bool, dict]:
+    """`(routée vers la ferme, {famille: dernière présence})` des workers de
+    PLATEFORME qui servent cette famille POUR CETTE ORG — la règle de `families`
+    (portée `@org:`, ferme), écrite une seule fois. `fenetre_s` = ne garder que les
+    présences de cette fenêtre (`runner_arme`) ; None = toutes, jamais purgées
+    (`dernier_vu_de_famille`). Deux lectures, sur la connexion de l'appelant."""
+    org = conn.execute(
+        f"SELECT {_org_routee_ferme('o')} AS r, {_cle_d_org_deposee('o')} AS c "
+        f"FROM (SELECT %s::bigint AS org_id) o",
+        (int(org_id),),
+    ).fetchone()
+    routee, cle_d_org = org["r"], org["c"]
+    rows = conn.execute(
+        """
+        SELECT famille, MAX(last_seen_at) AS dernier
+          FROM (SELECT split_part(split_part(depot, %s, 1), %s, 1) AS famille,
+                       position(%s in depot) > 0 AS de_ferme, last_seen_at
+                  FROM runner_platform_depots
+                 WHERE (%s::int IS NULL
+                        OR last_seen_at > NOW() - make_interval(secs => %s::int))
+                   AND (position(%s in depot) = 0
+                        OR depot = split_part(depot, %s, 1) || %s || %s)) t
+         WHERE famille <> %s OR (CASE WHEN de_ferme THEN %s ELSE NOT %s END)
+         GROUP BY famille
+        """,
+        (_PORTEE_ORG, _MARQUE_FERME[0], _MARQUE_FERME, fenetre_s, fenetre_s,
+         _PORTEE_ORG, _PORTEE_ORG, _PORTEE_ORG, str(int(org_id)),
+         FAMILLE_FERME, bool(routee or cle_d_org), bool(routee)),
+    ).fetchall()
+    return bool(routee), {r["famille"]: r["dernier"] for r in rows}
+
+
+def dernier_vu_de_famille(org_id: int, famille: str) -> Optional[Any]:
+    """Quand un worker qui sert `famille` POUR CETTE ORG a été vu pour la dernière
+    fois (`runner_platform_depots.last_seen_at`, hors fenêtre), ou None s'il n'en a
+    jamais été vu. Ce que dit une péremption quand la famille n'est pas servie
+    (`_abonnement.raison_de_peremption`, 21/10/2026) : « personne n'est jamais
+    venu » et « il s'est tu le … » n'envoient pas au même geste."""
+    with _connect() as conn:
+        return _presences_par_famille(conn, org_id, None)[1].get(famille)
 
 
 # --- Les travaux d'un DÉCLENCHEUR : le prédicat et l'index qui le servent ---------

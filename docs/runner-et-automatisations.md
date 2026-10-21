@@ -851,9 +851,18 @@ puisqu'elle ne juge que la famille déclarée. Deux verrous, comme la clé exig�
 ```
 à la POSE     create (flotte, déclencheur), update enabled=true, update model="",
               launch d'un passage déclaré sans modèle   → 400 model_required, rien n'est écrit
+au DÉCLENCHEMENT (tick, webhook) d'un agent sans modèle → rien n'est enfilé, livraison
+              `refused_no_model` sur la page de l'agent (webhook : 409 `trigger_no_model`)
 à la RÉSERVATION (worker de plateforme)                  → travail `failed` pour de bon,
               raison écrite, rendu en `delegation_refusee`, jeton retiré
 ```
+
+Le verrou du DÉCLENCHEMENT (21/10/2026) : un agent sans modèle (ou au modèle sorti du
+catalogue) enfilait un travail sans famille, que la réservation arrêtait aussitôt.
+Il n'enfile plus : l'échéance est consommée, la livraison refusée avec le motif
+« cet agent ne déclare aucun modèle : il ne sera pas exécuté »
+(`runner_models.motif_sans_famille`). Le déclencheur n'est pas éteint : déclarer un
+modèle suffit pour que la prochaine échéance parte.
 
 Un agent posé sans modèle avant cette date se lit, se range et s'éteint ; il ne se
 rallume qu'en déclarant un modèle (un déclencheur le fait dans le même
@@ -2084,6 +2093,14 @@ d'exécution **qui n'existe pas**. Et purger au lieu de marquer remplacerait un
 trou silencieux par un pire — *il effacerait la preuve du premier*. Ces 41
 travaux ont été le seul indice qu'une automatisation ne tournait pas ; purgés à
 mesure, personne n'aurait jamais rien vu.
+
+**La raison nomme la cause** (`_abonnement.raison_de_peremption`), écrite dans
+`last_error` et dans `attempt_errors`. Quand aucun worker vivant ne sert la famille du
+modèle pour cette org (21/10/2026), elle le dit, avec la dernière présence d'un worker
+qui la servait (`runner_platform_depots.last_seen_at`, même règle que `families` de
+`runner_arme`, portée et ferme comprises) : « Aucun worker ne sert la famille
+`mistral` (dernier vu le 18/10/2026 09:12 UTC) », ou « (aucun worker vu) ». Le travail
+d'une famille non servie s'enfile toujours, et aucun déclencheur n'est éteint d'office.
 
 **La perte se lit sur le DÉCLENCHEUR** (`list`/`get` portent `expired_count`,
 `expired_since`, `expired_last`) — là où on la cherche, et non dans une file que

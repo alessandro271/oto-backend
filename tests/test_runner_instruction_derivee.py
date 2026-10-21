@@ -186,7 +186,7 @@ def _tick_avec(monkeypatch, **declencheur):
     t = {"id": 5, "org_id": 2, "cron": "5 6 * * *", "tz": "Europe/Paris",
          "next_due": "2026-09-12 04:05:00", "procedure": "veille-du-matin",
          "project_id": None, "tools": ["data_write"], "input": None,
-         "label": None, "max_steps": None, "model": None, **declencheur}
+         "label": None, "max_steps": None, "model": "claude-sonnet-5", **declencheur}
     monkeypatch.setattr(runner_tick.db, "due_triggers", lambda limit=50: [t])
     monkeypatch.setattr(runner_tick.db, "consume_due", lambda i, vu, p: True)
     monkeypatch.setattr(runner_tick.db, "perimer_travaux_du_declencheur",

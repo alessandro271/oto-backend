@@ -97,28 +97,20 @@ def _raison(*a, **kw):
     return _abonnement.raison_de_peremption(*a, **kw)
 
 
-# ── aucun modèle déclaré : la seule question qui vaille est « un runner existe-t-il ? »
-
-def test_sans_modele_et_sans_runner(live):
-    r = _raison(None, 1, None, {"armed": False, "families": []})
-    assert "Aucun agent ne dessert cette organisation." in r
-
-
-def test_sans_modele_mais_un_runner_existe(live):
-    r = _raison(None, 1, None, {"armed": True, "families": ["mistral"]})
-    assert "Aucun agent ne dessert cette organisation." not in r
-
-
 # ── famille API déclarée : servie ou pas ────────────────────────────────────
+#    (aucun modèle déclaré n'arrive plus ici : le déclencheur refuse la livraison,
+#    `test_declencheur_sans_modele.py`)
 
 def test_famille_api_non_servie(live):
     r = _raison("qui@x", 1, "anthropic", _servie("mistral"))
-    assert "Aucun agent ne dessert cette organisation." in r
+    assert "Aucun agent ne dessert cette organisation." not in r
+    assert "Aucun worker ne sert la famille `anthropic`" in r
 
 
 def test_famille_api_servie(live):
     r = _raison("qui@x", 1, "anthropic", _servie("anthropic"))
     assert "Aucun agent ne dessert cette organisation." not in r
+    assert "Aucun worker" not in r
 
 
 # ── abonnement personnel : la vraie cause, pas le texte générique ──────────
@@ -127,7 +119,7 @@ def test_abonnement_famille_non_servie_du_tout(live):
     oid = _org("r1", "r1-dem")
     _abonne("r1-dem", statut="needs_login")
     r = _raison("r1-dem", oid, _F, _servie())
-    assert "Aucun agent ne dessert cette organisation." in r
+    assert r.endswith(f"Aucun worker ne sert la famille `{_F}` (aucun worker vu)."), r
 
 
 def test_abonnement_doit_se_reconnecter(live):
@@ -182,7 +174,7 @@ def test_pool_en_pause(live):
 
 def test_le_socle_est_toujours_present(live):
     for r in (
-        _raison(None, 1, None, {"armed": True, "families": []}),
+        _raison("x", 1, "mistral", _servie("anthropic")),
         _raison("x", 1, "anthropic", _servie("anthropic")),
     ):
         assert r.startswith(
@@ -282,3 +274,77 @@ def test_la_raison_d_une_peremption_atterrit_aussi_dans_attempt_errors(live):
     assert row["status"] == "expired" and row["last_error"] == raison
     (t,) = row["attempt_errors"]
     assert t["error"] == raison and t["attempt"] == 0 and t["at"], t
+
+
+# ── famille NON servie : la raison la nomme, avec la dernière présence (21/10/2026) ──
+#    Les présences sont PORTÉES (`<famille>@org:<id>`) : chaque banc ne voit que les
+#    siennes, quelle que soit la base partagée par le module.
+
+def _presence(depot, quand="NOW()"):
+    from oto_mcp.db._conn import _connect
+    with _connect() as conn:
+        conn.execute(
+            f"INSERT INTO runner_platform_depots (worker_sub, depot, last_seen_at) "
+            f"VALUES (%s, %s, {quand})", (f"w-{uuid.uuid4().hex[:6]}", depot))
+
+
+def test_famille_jamais_vue_le_dit(live):
+    oid = _org("f1")
+    r = _raison("f1-admin", oid, "mistral", _servie("anthropic"))
+    assert r.endswith("Aucun worker ne sert la famille `mistral` (aucun worker vu)."), r
+
+
+def test_famille_vue_autrefois_donne_sa_derniere_presence(live):
+    oid = _org("f2")
+    _presence(f"mistral@org:{oid}", "'2026-10-18 09:12:00+00'")
+    _presence(f"mistral@org:{oid}", "'2026-10-11 07:00:00+00'")
+    from oto_mcp import db
+    etat = db.runner_arme(oid)
+    assert "mistral" not in etat["families"], etat
+    r = _raison("f2-admin", oid, "mistral", etat)
+    assert r.endswith("Aucun worker ne sert la famille `mistral` "
+                      "(dernier vu le 18/10/2026 09:12 UTC)."), r
+
+
+def test_la_presence_portee_d_une_autre_org_ne_compte_pas(live):
+    oid, autre = _org("f3"), _org("f3b")
+    _presence(f"mistral@org:{autre}", "'2026-10-18 09:12:00+00'")
+    r = _raison("f3-admin", oid, "mistral", _servie())
+    assert r.endswith("(aucun worker vu)."), r
+
+
+def test_une_presence_de_ferme_qui_ne_sert_pas_l_org_ne_compte_pas(live):
+    """La règle de `families` (ferme comprise), pas une lecture brute de la table : un
+    worker de ferme ne sert pas `anthropic` à une org non routée sans clé déposée."""
+    oid = _org("f4")
+    _presence(f"anthropic#ferme@org:{oid}", "'2026-10-18 09:12:00+00'")
+    r = _raison("f4-admin", oid, "anthropic", _servie())
+    assert r.endswith("Aucun worker ne sert la famille `anthropic` (aucun worker vu)."), r
+
+
+def test_une_famille_vivante_est_servie_et_la_raison_ne_l_accuse_pas(live):
+    oid = _org("f5")
+    _presence(f"mistral@org:{oid}")
+    from oto_mcp import db
+    etat = db.runner_arme(oid)
+    assert "mistral" in etat["families"], etat
+    assert "Aucun worker" not in _raison("f5-admin", oid, "mistral", etat)
+
+
+def test_la_famille_non_servie_atterrit_dans_last_error_et_attempt_errors(live):
+    from oto_mcp import db
+    from oto_mcp.db._conn import _connect
+    oid = _org("f6")
+    _presence(f"mistral@org:{oid}", "'2026-10-18 09:12:00+00'")
+    job = db.enqueue_job(oid, "start", sub="f6-admin",
+                         payload={"procedure": "p", "model": "mistral-large-2512",
+                                  "model_family": "mistral", "trigger_id": 997})
+    raison = _raison("f6-admin", oid, "mistral", db.runner_arme(oid))
+    assert db.perimer_travaux_du_declencheur(997, oid, raison=raison) == 1
+    with _connect() as conn:
+        row = conn.execute("SELECT status, last_error, attempt_errors FROM runner_jobs "
+                           "WHERE id = %s", (job["id"],)).fetchone()
+    assert row["status"] == "expired" and row["last_error"] == raison
+    assert "famille `mistral` (dernier vu le 18/10/2026 09:12 UTC)" in raison
+    (t,) = row["attempt_errors"]
+    assert t["error"] == raison and t["attempt"] == 0, t

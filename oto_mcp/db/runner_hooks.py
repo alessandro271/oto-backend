@@ -55,6 +55,10 @@ REFUSE_DAILY_CAP = "refused_daily_cap"
 #: La procédure que l'agent déroulerait est ARCHIVÉE (`procedure_retiree`) : retirer
 #: une procédure doit arrêter ce qui la déroule, pas seulement la sortir des listes.
 REFUSE_PROCEDURE_ARCHIVED = "refused_procedure_archived"
+#: L'agent ne déclare AUCUN modèle (ou un modèle hors catalogue) : son travail
+#: n'aurait pas de famille, donc aucun worker ne le servirait. Rien n'est enfilé
+#: (`runner_models.motif_sans_famille`, 21/10/2026).
+REFUSE_NO_MODEL = "refused_no_model"
 
 #: Ce qu'on rend du corps reçu quand on RELIT une livraison — borné parce qu'une
 #: page de livraisons en sert jusqu'à 200, et qu'un corps entier × 200 n'est plus
