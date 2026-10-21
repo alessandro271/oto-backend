@@ -516,6 +516,13 @@ def noter_rapport(conclu: dict, ok: bool, resultat: Optional[dict]) -> None:
             charges = [f["utilization"] for f in fenetres.values()
                        if isinstance(f, dict)
                        and isinstance(f.get("utilization"), (int, float))]
+            # Le rapport BRUT au journal : la ligne ne garde que la cause résumée
+            # (`limit_epuise`, `limit_utilisation`), qui ne dit ni l'état exact du
+            # fournisseur ni la fenêtre qui a mordu — sans lui, une pause douteuse ne
+            # se prouve pas.
+            logger.info("forfait en pause (famille %s, porteur %s) : etat=%r seuil=%s "
+                        "fenetres=%s → jusqu'à %s", famille, porteur, rapport.get("etat"),
+                        plafond, fenetres, quand)
             user_subscriptions.marquer_statut(
                 porteur, famille, user_subscriptions.PLAFOND, limit_reset_at=quand,
                 epuise=refuse, utilisation=max(charges) if charges else None,

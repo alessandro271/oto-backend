@@ -526,6 +526,14 @@ class TestRapport:
         assert statut == US.PLAFOND and k["epuise"] is False
         assert int(k["limit_reset_at"].timestamp()) == 1790029800
 
+    def test_une_pause_journalise_le_rapport_BRUT(self, _ecrits, caplog):
+        import logging
+        with caplog.at_level(logging.INFO, logger=_abonnement.logger.name):
+            _abonnement.noter_rapport(self._conclu(), True, {
+                "abonnement": {"etat": "rejected", "fenetres": self._fenetres()}})
+        (ligne,) = [r.getMessage() for r in caplog.records if "forfait en pause" in r.getMessage()]
+        assert "etat='rejected'" in ligne and "seven_day" in ligne
+
     def test_un_etat_inconnu_reste_un_refus(self, _ecrits):
         _abonnement.noter_rapport(self._conclu(), True, {
             "abonnement": {"etat": "quelque_chose_de_neuf",
